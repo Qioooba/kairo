@@ -456,3 +456,38 @@ func ContextCommand(dir, file string, line, before, after, timeoutSec int) (stri
 		dir, start, end, cleanFile)
 	return cmd, nil
 }
+
+// TailCommand 构造 "tail -F file" 实时跟踪命令。
+//
+// 用 -F 而不是 -f：
+//   - -F 等价于 --follow=name --retry，文件被 rotate（mv + create）后会继续追新文件；
+//   - 适合 WebSphere / catalina.out 这类按 size / date rotate 的日志。
+//
+// lines 是启动时先吐的最近行数（0 表示只追新增）。受限于安全约束，line > 1000 会被压回 1000。
+//
+// 与 ContextCommand 不同：tail 是流式命令，没有"超时"概念（一直跑直到客户端断开）；
+// Go 侧通过 ctx 取消 + ssh session kill 来停。
+func TailCommand(dir, file string, lines int) (string, error) {
+	if strings.TrimSpace(dir) == "" {
+		return "", fmt.Errorf("dir 不能为空")
+	}
+	if strings.TrimSpace(file) == "" {
+		return "", fmt.Errorf("file 不能为空")
+	}
+	if lines < 0 {
+		lines = 0
+	}
+	if lines > 1000 {
+		lines = 1000
+	}
+	if strings.ContainsAny(dir, "'`$\\;") {
+		return "", fmt.Errorf("dir 含非法字符")
+	}
+	if strings.ContainsAny(file, "'`$\\;&|><\n\r*?") {
+		return "", fmt.Errorf("file 含非法字符")
+	}
+	cleanFile := strings.ReplaceAll(file, "'", "")
+	cmd := fmt.Sprintf(`sh -c 'cd %q && tail -n %d -F %q 2>/dev/null'`,
+		dir, lines, cleanFile)
+	return cmd, nil
+}
