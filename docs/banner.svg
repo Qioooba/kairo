@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 300" width="1200" height="300" role="img" aria-label="OpsToolbox · 内网运维工具箱">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0d1117"/>
+      <stop offset="50%" stop-color="#161b22"/>
+      <stop offset="100%" stop-color="#0d1117"/>
+    </linearGradient>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#30363d" stroke-width="0.5" opacity="0.4"/>
+    </pattern>
+    <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#58a6ff" stop-opacity="0.25"/>
+      <stop offset="100%" stop-color="#58a6ff" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="1200" height="300" fill="url(#bg)"/>
+  <rect width="1200" height="300" fill="url(#grid)"/>
+  <ellipse cx="900" cy="150" rx="400" ry="200" fill="url(#glow)"/>
+
+  <line x1="0" y1="280" x2="1200" y2="20" stroke="#58a6ff" stroke-width="1" opacity="0.18"/>
+  <line x1="0" y1="250" x2="1100" y2="0" stroke="#d2a8ff" stroke-width="1" opacity="0.15"/>
+
+  <circle cx="1080" cy="60" r="80" fill="none" stroke="#58a6ff" stroke-width="1" opacity="0.3"/>
+  <circle cx="1080" cy="60" r="50" fill="none" stroke="#58a6ff" stroke-width="1" opacity="0.4"/>
+  <circle cx="1080" cy="60" r="20" fill="#58a6ff" opacity="0.5"/>
+
+  <text x="60" y="130" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="72" font-weight="800" fill="#ffffff" letter-spacing="-2">OpsToolbox</text>
+
+  <text x="60" y="170" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="22" font-weight="400" fill="#8b949e">内网运维工具箱 · Internal Ops Toolbox</text>
+
+  <text x="60" y="200" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" font-weight="600" fill="#58a6ff" letter-spacing="3">WINDOWS · GO · SINGLE-EXE · LOCAL-ONLY</text>
+
+  <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" font-weight="500">
+    <rect x="60"  y="230" width="56" height="24" rx="4" fill="#1f6feb" fill-opacity="0.2" stroke="#58a6ff" stroke-width="1"/>
+    <text x="88"  y="246" text-anchor="middle" fill="#58a6ff">Go 1.22</text>
+
+    <rect x="124" y="230" width="92" height="24" rx="4" fill="#d2a8ff" fill-opacity="0.15" stroke="#d2a8ff" stroke-width="1"/>
+    <text x="170" y="246" text-anchor="middle" fill="#d2a8ff">WebSphere</text>
+
+    <rect x="224" y="230" width="48" height="24" rx="4" fill="#3fb950" fill-opacity="0.2" stroke="#3fb950" stroke-width="1"/>
+    <text x="248" y="246" text-anchor="middle" fill="#3fb950">SSH</text>
+
+    <rect x="280" y="230" width="60" height="24" rx="4" fill="#ffa657" fill-opacity="0.2" stroke="#ffa657" stroke-width="1"/>
+    <text x="310" y="246" text-anchor="middle" fill="#ffa657">SFTP</text>
+
+    <rect x="348" y="230" width="56" height="24" rx="4" fill="#58a6ff" fill-opacity="0.2" stroke="#58a6ff" stroke-width="1"/>
+    <text x="376" y="246" text-anchor="middle" fill="#58a6ff">JSON</text>
+
+    <rect x="412" y="230" width="48" height="24" rx="4" fill="#d2a8ff" fill-opacity="0.2" stroke="#d2a8ff" stroke-width="1"/>
+    <text x="436" y="246" text-anchor="middle" fill="#d2a8ff">XML</text>
+
+    <rect x="468" y="230" width="56" height="24" rx="4" fill="#3fb950" fill-opacity="0.2" stroke="#3fb950" stroke-width="1"/>
+    <text x="496" y="246" text-anchor="middle" fill="#3fb950">GBK</text>
+
+    <rect x="532" y="230" width="64" height="24" rx="4" fill="#ffa657" fill-opacity="0.2" stroke="#ffa657" stroke-width="1"/>
+    <text x="564" y="246" text-anchor="middle" fill="#ffa657">UTF-8</text>
+  </g>
+
+  <g transform="translate(820, 50)">
+    <rect x="0" y="0" width="320" height="200" rx="8" fill="#0d1117" stroke="#30363d" stroke-width="1"/>
+    <rect x="0" y="0" width="320" height="24" rx="8" fill="#21262d"/>
+    <rect x="0" y="18" width="320" height="6" fill="#21262d"/>
+    <circle cx="14" cy="12" r="4" fill="#ff5f57"/>
+    <circle cx="30" cy="12" r="4" fill="#febc2e"/>
+    <circle cx="46" cy="12" r="4" fill="#28c840"/>
+    <text x="160" y="16" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10" fill="#8b949e">ops-toolbox — ssh</text>
+
+    <text x="14" y="50"  font-family="ui-monospace, SFMono-Regular, SF Mono, Consolas, monospace" font-size="11" fill="#7ee787">$ OpsToolbox.exe</text>
+    <text x="14" y="70"  font-family="ui-monospace, SFMono-Regular, SF Mono, Consolas, monospace" font-size="11" fill="#8b949e">[OpsToolbox] 工具箱已启动</text>
+    <text x="14" y="86"  font-family="ui-monospace, SFMono-Regular, SF Mono, Consolas, monospace" font-size="11" fill="#58a6ff">  http://127.0.0.1:18080</text>
+    <text x="14" y="112" font-family="ui-monospace, SFMono-Regular, SF Mono, Consolas, monospace" font-size="11" fill="#8b949e">[ssh.test] 信贷生产/prod-node-1</text>
+    <text x="14" y="128" font-family="ui-monospace, SFMono-Regular, SF Mono, Consolas, monospace" font-size="11" fill="#7ee787">  ok  连接成功 (12ms)</text>
+    <text x="14" y="152" font-family="ui-monospace, SFMono-Regular, SF Mono, Consolas, monospace" font-size="11" fill="#8b949e">[logs.list] /opt/IBM/.../server1</text>
+    <text x="14" y="168" font-family="ui-monospace, SFMono-Regular, SF Mono, Consolas, monospace" font-size="11" fill="#7ee787">  ok  12 个日志文件</text>
+    <text x="14" y="188" font-family="ui-monospace, SFMono-Regular, SF Mono, Consolas, monospace" font-size="11" fill="#ffa657">  最近: SystemOut.log (4.2MB)</text>
+  </g>
+
+  <line x1="60" y1="280" x2="800" y2="280" stroke="#30363d" stroke-width="1"/>
+</svg>
