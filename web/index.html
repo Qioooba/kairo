@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>内网运维工具箱</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="logo">⚙</div>
+      <div class="brand-text">
+        <div class="title">OpsToolbox</div>
+        <div class="subtitle">内网运维工具箱</div>
+      </div>
+    </div>
+    <nav id="nav" class="nav">
+      <a href="#/home" class="nav-item active" data-route="home">首页</a>
+      <a href="#/websphere" class="nav-item" data-route="websphere">WebSphere 日志</a>
+      <a href="#/formatter" class="nav-item" data-route="formatter">报文格式化</a>
+      <a href="#/datetime" class="nav-item" data-route="datetime">日期 / 日历</a>
+      <a href="#/text" class="nav-item" data-route="text">文本处理</a>
+      <a href="#/commands" class="nav-item" data-route="commands">常用命令</a>
+      <a href="#/config" class="nav-item" data-route="config">系统配置</a>
+      <a href="#/history" class="nav-item" data-route="history">操作历史</a>
+    </nav>
+    <div class="footer">
+      <div id="listen-info" class="muted">—</div>
+      <div class="muted">v0.1 · 第一阶段</div>
+    </div>
+  </aside>
+
+  <main id="main" class="main">
+    <header class="topbar">
+      <div class="crumbs" id="crumbs">首页</div>
+      <div class="topbar-right">
+        <span id="status-dot" class="dot dot-idle"></span>
+        <span id="status-text" class="muted">就绪</span>
+      </div>
+    </header>
+    <section id="view" class="view"></section>
+  </main>
+
+  <div id="toast" class="toast"></div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

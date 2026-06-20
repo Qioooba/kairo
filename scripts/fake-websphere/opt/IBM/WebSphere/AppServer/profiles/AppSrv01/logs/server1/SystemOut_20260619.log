@@ -1,0 +1,6 @@
+[2026-06-19 08:50:00.001] 00000050 com.ibm.ws.orb  W COOR0009I: 协调器初始化完成
+[2026-06-19 08:50:05.123] 00000050 com.ibm.ws.security.auth  INFO    admin user authenticated OK
+[2026-06-19 08:50:10.234] 00000050 com.ibm.ws.webcontainer  W SRVE0283E: 异常路径 /api/v1/fault (首次)
+[2026-06-19 08:51:00.000] 0000001a user.BatchJob  INFO    batch-20260619 启动 userinfo=batch-admin
+[2026-06-19 08:52:30.500] 00000050 com.ibm.ws.websvcs  ERROR   WebService fault userinfo=client-001
+[2026-06-19 08:53:00.111] 00000050 user.Service  ERROR   userinfo=client-001 ORA-12505: TNS:listener does not currently know of SID given in connect descriptor

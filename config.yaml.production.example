@@ -1,0 +1,85 @@
+# =====================================================================
+# OpsToolbox 配置文件示例
+#
+# 重要安全提示：
+#   1. 不要把 SSH 密码写在这里；密码由 Web 页面在每次操作时输入。
+#   2. log_dirs 是白名单：后端只能访问这里声明的目录。
+#   3. patterns 字段是允许的 glob 模式，禁止包含 ' ` $ \ ; 等字符。
+#   4. host 必须为 127.0.0.1，本工具只在本地监听。
+# =====================================================================
+
+app:
+  name: 内网运维工具箱
+  host: 127.0.0.1
+  port: 18080
+  auto_open_browser: true
+  download_dir: ./downloads
+  log_dir: ./logs
+  data_dir: ./data
+
+# 业务系统 -> 服务器 -> 日志目录
+systems:
+  - name: 信贷生产
+    description: WebSphere 生产集群
+    servers:
+      - name: prod-node-1
+        host: 10.10.10.11
+        port: 22
+        username: wasadmin
+        auth_type: password
+        log_dirs:
+          - name: server1日志
+            path: /opt/IBM/WebSphere/AppServer/profiles/AppSrv01/logs/server1
+            patterns:
+              - SystemOut*.log
+              - SystemErr*.log
+              - "*.log"
+      - name: prod-node-2
+        host: 10.10.10.12
+        port: 22
+        username: wasadmin
+        auth_type: password
+        log_dirs:
+          - name: server1日志
+            path: /opt/IBM/WebSphere/AppServer/profiles/AppSrv01/logs/server1
+            patterns:
+              - SystemOut*.log
+              - SystemErr*.log
+              - "*.log"
+
+  - name: 信贷测试
+    description: WebSphere 测试环境
+    servers:
+      - name: test-node-1
+        host: 10.20.20.11
+        port: 22
+        username: wasadmin
+        auth_type: password
+        log_dirs:
+          - name: server1日志
+            path: /opt/IBM/WebSphere/AppServer/profiles/AppSrv01/logs/server1
+            patterns:
+              - SystemOut*.log
+              - SystemErr*.log
+              - "*.log"
+            # encoding: utf-8   # 默认 utf-8；老 WebSphere / Oracle 中文日志建议 gbk
+      - name: legacy-node-1
+        host: 10.20.20.12
+        port: 22
+        username: wasadmin
+        auth_type: password
+        log_dirs:
+          - name: 老系统日志
+            path: /opt/IBM/WebSphere/AppServer/profiles/AppSrv01/logs/server1
+            patterns:
+              - SystemOut*.log
+              - SystemErr*.log
+            encoding: gbk
+
+# 搜索默认参数
+search:
+  default_latest_files: 3
+  max_matches: 200
+  default_context_lines: 30
+  timeout_seconds: 30
+  max_concurrency: 2

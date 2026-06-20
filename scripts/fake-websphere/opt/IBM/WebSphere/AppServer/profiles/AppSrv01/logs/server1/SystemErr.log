@@ -1,0 +1,8 @@
+[2026-06-19 09:00:00.000] 00000050 com.ibm.ws.webcontainer  E SRVE0283E: WebSphere 启动告警（示例）
+[2026-06-19 09:01:23.456] 00000050 com.ibm.ws.jdbc  W J2CA0079E: 数据源连接获取失败
+[2026-06-19 09:01:23.457] 00000050 com.ibm.ws.jdbc  W J2CA0080W: StaleConnectionException userinfo=stale-conn-001
+[2026-06-19 09:02:00.000] 00000050 user.Service  ERROR   java.lang.ClassNotFoundException: com.example.missing
+[2026-06-19 09:03:30.111] 00000050 user.ScheduleJob  ERROR   ORA-01555: snapshot too old userinfo=snapshot-001
+[2026-06-19 09:04:00.000] 00000050 user.Service  ERROR   NoSuchMethodException: user.Legacy.foo()
+[2026-06-19 09:05:00.000] 00000050 user.Service  ERROR   InvocationTargetException wrapping userinfo=inv-001
+[2026-06-19 09:06:00.000] 00000050 user.Service  ERROR   OutOfMemoryError: Java heap space

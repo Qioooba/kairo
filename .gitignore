@@ -1,0 +1,28 @@
+# ===== Go 构建产物 / 缓存 =====
+# 编译出来的二进制
+/OpsToolbox
+/OpsToolbox.exe
+/OpsToolbox_mac
+/OpsToolbox_*
+
+# Go 缓存
+/.gocache/
+/.gomodcache/
+
+# ===== 运行时生成 =====
+/logs/
+/downloads/
+/data/
+/dist/
+
+# ===== 系统/编辑器垃圾 =====
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
+*.iml
+
+# ===== debug 临时文件 =====
+/debug_run.go

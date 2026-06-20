@@ -1,0 +1,32 @@
+[2026-06-19 09:00:00.001] 00000050 com.ibm.ws.webcontainer.servlet.ServletWrapper init  SRVE0242I: 信贷系统 [wcredit.ear] 初始化。
+[2026-06-19 09:00:00.123] 00000050 com.ibm.ws.util.WSInit  INFO    WebSphere Application Server 8.5.5.20 启动完成
+[2026-06-19 09:00:01.234] 00000050 com.ibm.ws.jdbc.WSJdbcDataSource  J2CA0036I: 数据源 jdbc/creditDS 创建成功
+[2026-06-19 09:00:02.345] 00000050 user.ScheduleJob  INFO    调度任务 credit-schedule 启动，cron: 0 0/5 * * * ?
+[2026-06-19 09:00:05.000] 0000001a com.ibm.ws.webcontainer.servlet.ServletWrapper service  INFO    用户查询 userinfo=张三 订单=ORD20260618001 成功
+[2026-06-19 09:01:00.000] 0000001b user.ScheduleJob  DEBUG   credit-schedule tick begin
+[2026-06-19 09:01:00.012] 0000001b user.ScheduleJob  INFO    credit-schedule tick 命中 0 条
+[2026-06-19 09:01:30.001] 00000050 com.ibm.ws.webcontainer.filter.FilterChainImpl doFilter  INFO    /api/v1/query?userinfo=李四 命中缓存
+[2026-06-19 09:02:15.123] 00000050 user.Service  INFO    收到支付请求 amount=99.00 userinfo=王五
+[2026-06-19 09:02:15.234] 00000050 user.Service  INFO    支付成功 userinfo=王五 order=ORD20260618002
+[2026-06-19 09:03:01.001] 0000001c com.ibm.ws.webcontainer.servlet.ServletWrapper service  INFO    触发异常路径 userinfo=赵六
+[2026-06-19 09:03:01.234] 0000001c user.Service  ERROR   查询失败 userinfo=赵六
+java.lang.NullPointerException
+	at user.Service.query(Service.java:120)
+	at sun.reflect.NativeMethodAccessorImpl.invoke0(Native Method)
+	at sun.reflect.DelegatingMethodAccessorImpl.invoke(DelegatingMethodAccessorImpl.java:43)
+	at java.lang.reflect.Method.invoke(Method.java:498)
+[2026-06-19 09:03:01.456] 0000001c user.Service  WARN    userinfo=赵六 触发降级逻辑
+[2026-06-19 09:04:00.000] 0000001b user.ScheduleJob  DEBUG   credit-schedule tick begin
+[2026-06-19 09:04:30.789] 00000050 com.ibm.ws.websvcs.transport.http.WSServlet doPost  INFO    WebService 调用 userinfo=孙七 入参=<soap>...</soap>
+[2026-06-19 09:05:10.012] 00000050 user.ScheduleJob  ERROR   ORA-00060: deadlock detected while waiting for resource
+	at oracle.jdbc.driver.T4CConnection.logon(T4CConnection.java:789)
+	at user.ScheduleJob.tick(ScheduleJob.java:88)
+[2026-06-19 09:05:30.345] 00000050 user.ScheduleJob  ERROR   ORA-00060: deadlock detected while waiting for resource (userinfo=周八)
+[2026-06-19 09:06:00.111] 00000050 user.Service  ERROR   SocketTimeoutException: Read timed out after 30s userinfo=吴九
+[2026-06-19 09:06:30.222] 00000050 user.Service  ERROR   No more data to read from socket userinfo=郑十
+[2026-06-19 09:07:00.001] 0000001c user.ScheduleJob  INFO    修复 deadlock 完成
+[2026-06-19 09:07:30.123] 00000050 user.Service  INFO    userinfo=冯十一 正常
+[2026-06-19 09:08:00.456] 00000050 com.ibm.ws.webcontainer.filter.FilterChainImpl doFilter  DEBUG   请求路径 /health 200[2026-06-19 09:10:00.001] 00000050 user.Service  ERROR   java.lang.RuntimeException: 测试 UTF-8 复合 userinfo=utf8-user-1
+[2026-06-19 09:10:30.123] 00000050 user.ScheduleJob  INFO    信贷系统 启动完成 DEBUG=off
+[2026-06-19 09:11:00.456] 00000050 user.Service  INFO    ORA-00060 触发 utf8-user-2
+[2026-06-19 09:12:00.789] 00000050 user.ScheduleJob  INFO    信贷系统 正常轮询 DEBUG=on
