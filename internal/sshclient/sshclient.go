@@ -11,6 +11,7 @@
 package sshclient
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -194,6 +195,74 @@ func decodeBytes(b []byte, encoding string) string {
 	default:
 		// 默认当 UTF-8
 		return string(b)
+	}
+}
+
+// Stream 在远程执行一条长连接命令（典型用途：tail -F /path/to/log），
+// 把 stdout 按行回调给 onLine。命令自然结束 / ctx 取消 / 写错误都会停。
+//
+// 设计要点：
+//   - 一行一回调，按 \n 切（byte 0x0a），行尾的 \r 保留给前端；
+//   - GBK 安全性：GBK 编码里 0x0a 不出现在多字节字符中，所以按 byte 切行不会切碎汉字；
+//     切完后再整行按目标编码解到 UTF-8（前端拿到的是干净的字符串）；
+//   - onLine 必须是非阻塞的：建议内部 chan 缓冲；阻塞会导致 SSH 接收阻塞、session 挂掉；
+//   - 启动一个新 ssh.Session，每条流独立一个 session；session 自然退出（EOF 或 exit code）
+//     或 ctx 取消，都会返回。
+func (c *Client) Stream(ctx context.Context, command string, encoding string, onLine func(line string)) (exitCode int, err error) {
+	if c == nil || c.conn == nil {
+		return -1, errors.New("ssh 客户端未连接")
+	}
+	sess, e := c.conn.NewSession()
+	if e != nil {
+		return -1, fmt.Errorf("创建 session 失败: %w", e)
+	}
+	// stderr 单独读：错误时能拿到原因；正常命令 stderr 通常是空的
+	stderrBuf := &safeWriter{w: &strings.Builder{}}
+	sess.Stderr = stderrBuf
+
+	pr, pw := io.Pipe()
+	sess.Stdout = pw
+
+	type result struct {
+		code int
+		err  error
+	}
+	done := make(chan result, 1)
+
+	// 行切 + 解码协程
+	go func() {
+		defer pr.Close()
+		defer pw.Close()
+		scanner := bufio.NewScanner(pr)
+		// 单行最大 1MB，避免单条超长日志爆内存
+		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+		for scanner.Scan() {
+			lineBytes := scanner.Bytes()
+			// 转 UTF-8 字符串：GBK 模式下整行解码；UTF-8 模式直接当字节
+			line := decodeBytes(lineBytes, encoding)
+			onLine(line)
+		}
+	}()
+
+	// Run 命令本身
+	go func() {
+		e := sess.Run(command)
+		_ = pw.Close() // 让 scanner 退出
+		code := 0
+		var exitErr *ssh.ExitError
+		if errors.As(e, &exitErr) {
+			code = exitErr.ExitStatus()
+			e = nil
+		}
+		done <- result{code: code, err: e}
+	}()
+
+	select {
+	case <-ctx.Done():
+		c.killSession(sess)
+		return -1, ctx.Err()
+	case r := <-done:
+		return r.code, r.err
 	}
 }
 
