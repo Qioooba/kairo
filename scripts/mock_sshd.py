@@ -103,11 +103,11 @@ class MockServer(paramiko.ServerInterface):
             return paramiko.OPEN_SUCCEEDED
         return paramiko.OPEN_FAILED_ADMINISTRATIVELY_PROHIBITED
 
-    def check_channel_subsystem_request(self, channel, name):
-        # 只放行 sftp，其它 subsystem 一律拒。
-        if name == "sftp" and SFTPServer is not None:
-            return paramiko.OPEN_SUCCEEDED
-        return paramiko.OPEN_FAILED_ADMINISTRATIVELY_PROHIBITED
+    # 注意：不要 override check_channel_subsystem_request！
+    # ServerInterface 默认实现会查 transport.subsystem_table，
+    # 如果有 set_subsystem_handler 注册的 handler，会自动起 SFTPServer 线程处理。
+    # 之前 mock 自己 override 只返回 OPEN_SUCCEEDED 而没启动 SFTP server，
+    # 导致客户端 invoke_subsystem("sftp") 后等不到 SFTP 协议响应、channel 关闭。
 
     def check_channel_shell_request(self, channel):
         # 模拟环境不开交互 shell，exec channel 就够用。
@@ -194,46 +194,52 @@ class ReadOnlySFTPServer(SFTPServerInterface):
     def list_folder(self, path):
         real = self._resolve(path)
         if real is None or not os.path.isdir(real):
-            return SFTP_PERMISSION_DENIED, []
+            return SFTP_PERMISSION_DENIED
         try:
             entries = []
             for name in os.listdir(real):
                 full = os.path.join(real, name)
                 attr = SFTPAttributes.from_stat(os.stat(full)) if SFTPAttributes else None
                 entries.append((name, attr) if attr else name)
-            return SFTP_OK, entries
+            return entries
         except Exception as e:
             print(f"  sftp list_folder {path} err: {e}", file=sys.stderr)
-            return SFTP_PERMISSION_DENIED, []
+            return SFTP_PERMISSION_DENIED
 
     def stat(self, path):
         real = self._resolve(path)
         if real is None or not os.path.exists(real):
-            return SFTP_PERMISSION_DENIED, SFTPAttributes()
+            return SFTP_PERMISSION_DENIED
         try:
-            return SFTP_OK, SFTPAttributes.from_stat(os.stat(real))
+            return SFTPAttributes.from_stat(os.stat(real))
         except Exception:
-            return SFTP_PERMISSION_DENIED, SFTPAttributes()
+            return SFTP_PERMISSION_DENIED
 
     lstat = stat
 
     def open(self, path, flags, attr):
         real = self._resolve(path)
         if real is None or not os.path.isfile(real):
-            return SFTP_NO_SUCH_FILE, SFTPHandle(None)
-        # 只允许读。flags 是 paramiko 内部位运算位掩码；含 0x1 表示 O_WRONLY，0x2 表示 O_RDWR，含其一就拒。
-        is_write = bool(flags & (paramiko.sftp.O_WRONLY | paramiko.sftp.O_RDWR | paramiko.sftp.O_CREAT | paramiko.sftp.O_TRUNC))
-        if is_write:
-            return SFTP_PERMISSION_DENIED, SFTPHandle(None)
+            return SFTP_NO_SUCH_FILE
+        # 只允许读。flags 是 paramiko 内部 SFTP_FLAG_* 位掩码；
+        # 旧版 paramiko 有 paramiko.sftp.O_WRONLY 等 os.O_* 常量，新版（5.x）已删除，只能用 SFTP_FLAG_*。
+        flag_mask = (
+            getattr(paramiko.sftp, "SFTP_FLAG_WRITE", 0x2)
+            | getattr(paramiko.sftp, "SFTP_FLAG_CREATE", 0x4)
+            | getattr(paramiko.sftp, "SFTP_FLAG_TRUNC", 0x8)
+            | getattr(paramiko.sftp, "SFTP_FLAG_APPEND", 0x10)
+        )
+        if flags & flag_mask:
+            return SFTP_PERMISSION_DENIED
         try:
             f = open(real, "rb")
             handle = SFTPHandle(flags)
             handle.filename = real
             handle.readfile = f
-            return SFTP_OK, handle
+            return handle
         except Exception as e:
             print(f"  sftp open {path} err: {e}", file=sys.stderr)
-            return SFTP_NO_SUCH_FILE, SFTPHandle(None)
+            return SFTP_NO_SUCH_FILE
 
     def remove(self, path):
         return SFTP_PERMISSION_DENIED
@@ -255,7 +261,9 @@ def handle_client(client_socket):
     # 提前注册 sftp subsystem handler：客户端请求 sftp 时 paramiko 会自动起 SFTPServer
     if SFTPServer is not None:
         try:
-            transport.set_subsystem_handler("sftp", SFTPServer, ReadOnlySFTPServer)
+            # 关键：必须用 sftp_si= 关键字参数，否则 ReadOnlySFTPServer 被当成 *args 传进去，
+            # paramiko 在构造时拿不到正确的 SFTPServerInterface，所有 SFTP 调用都会返回 SSH_FX_FAILURE。
+            transport.set_subsystem_handler("sftp", SFTPServer, sftp_si=ReadOnlySFTPServer)
         except Exception as e:
             print(f"  set_subsystem_handler 失败: {e}", file=sys.stderr)
     server = MockServer()
