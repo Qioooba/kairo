@@ -69,8 +69,11 @@ func main() {
 		log.Fatalf("加载 web 资源失败: %v", err)
 	}
 
-	// 7. 构造 HTTP 服务
-	srv := httpserver.New(cfg, auditLog, webSubFS)
+	// 7. 构造可热替换的配置 Manager
+	cfgMgr := config.NewManager(cfg, cfgPath)
+
+	// 8. 构造 HTTP 服务
+	srv := httpserver.New(cfgMgr, auditLog, webSubFS)
 
 	httpSrv := &http.Server{
 		Addr:              cfg.App.ListenAddr(),
@@ -81,13 +84,13 @@ func main() {
 		IdleTimeout:       120 * time.Second,
 	}
 
-	// 8. 监听 127.0.0.1
+	// 9. 监听 127.0.0.1
 	ln, err := net.Listen("tcp", cfg.App.ListenAddr())
 	if err != nil {
 		log.Fatalf("监听 %s 失败: %v", cfg.App.ListenAddr(), err)
 	}
 
-	// 9. 优雅退出
+	// 10. 优雅退出
 	ctx, stop := signal.NotifyContext(context.Background(),
 		os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -100,7 +103,7 @@ func main() {
 		_ = httpSrv.Shutdown(shutdownCtx)
 	}()
 
-	// 10. 启动并自动打开浏览器
+	// 11. 启动并自动打开浏览器
 	url := fmt.Sprintf("http://%s", cfg.App.ListenAddr())
 	log.Printf("工具箱已启动: %s", url)
 	log.Printf("工作目录: %s", exeDir)
