@@ -7,10 +7,10 @@
 //	POST /api/logs/tail/{id}/stop    → 显式停止
 //
 // 设计要点：
-//   - 一个 tail 会话有一个 SSH 客户端 + 一个后台 goroutine 跑 Stream；
+//   - 一个 tail 会话有一个 Streamer（生产是 *sshclient.Client，测试可注入 mock）
+//     + 一个后台 goroutine 跑 Stream；
 //   - 任意时刻可以挂多个 SSE 订阅者，新行通过 chan 广播；
-//   - 最后一个订阅者断开后，等 idleTimeout 自动 kill SSH（防止客户端崩溃留僵尸）；
-//   - 显式 stop 立即 kill SSH；再次 start 用同 id 会失败（id 不复用）。
+//   - 显式 stop 立即 cancel ctx；session 自然退出也会走完收尾；
 //   - 所有 SSH 凭据 / 路径都已在 handler 校验，manager 只负责生命周期。
 package tailmgr
 
@@ -22,10 +22,18 @@ import (
 	"fmt"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"ops-toolbox/internal/logquery"
-	"ops-toolbox/internal/sshclient"
 )
+
+// Streamer 是 tailmgr 对底层 SSH 客户端的最小依赖抽象。
+//
+// 生产环境用 *sshclient.Client（已满足）；测试里可以注入 mock，
+// 不需要拉起真 SSH。
+type Streamer interface {
+	Stream(ctx context.Context, command, encoding string, onLine func(line string)) (exitCode int, err error)
+}
 
 // Session 一个 tail 会话
 type Session struct {
@@ -112,21 +120,25 @@ type Manager struct {
 	mu        sync.RWMutex
 	sessions  map[string]*Session
 	idleAfter time.Duration
-	stopAll   context.CancelFunc
+	// GCInterval 是 idleGC 的巡检周期。默认 15s；测试里调短。
+	// 0 走默认值。
+	GCInterval time.Duration
 }
 
 // NewManager 创建 Manager
 func NewManager() *Manager {
 	return &Manager{
-		sessions:  make(map[string]*Session),
-		idleAfter: 5 * time.Minute,
+		sessions:   make(map[string]*Session),
+		idleAfter:  5 * time.Minute,
+		GCInterval: 15 * time.Second,
 	}
 }
 
 // Start 开一个新 tail 会话
 //
-// cli / dir / file / encoding 都需要由调用方校验（白名单目录、文件名来自 ls）。
-func (m *Manager) Start(cli *sshclient.Client, serverName, serverHost, dir, file, encoding string, lines int) (*Session, error) {
+// cli（生产是 *sshclient.Client，测试可以是 mock Streamer）必须非空；
+// dir / file / encoding 由调用方校验（白名单目录、文件名来自 ls）。
+func (m *Manager) Start(cli Streamer, serverName, serverHost, dir, file, encoding string, lines int) (*Session, error) {
 	if cli == nil {
 		return nil, errors.New("ssh 客户端为空")
 	}
@@ -211,7 +223,11 @@ func (m *Manager) ShutdownAll() {
 
 // idleGC 定期清理已结束且无订阅者的会话
 func (m *Manager) idleGC(s *Session) {
-	ticker := time.NewTicker(15 * time.Second)
+	interval := m.GCInterval
+	if interval <= 0 {
+		interval = 15 * time.Second
+	}
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		<-ticker.C
@@ -249,7 +265,7 @@ func formatOutput(o Output) []byte {
 }
 
 func jsonString(s string) string {
-	// 最小化 JSON 字符串转义：\" \\ \n \r \t
+	// 最小化 JSON 字符串转义：\" \\ \n \r \t；多字节 rune 走 utf8 编码
 	out := make([]byte, 0, len(s)+2)
 	out = append(out, '"')
 	for _, r := range s {
@@ -268,7 +284,9 @@ func jsonString(s string) string {
 			if r < 0x20 {
 				out = append(out, []byte(fmt.Sprintf(`\u%04x`, r))...)
 			} else {
-				out = append(out, byte(r))
+				var buf [4]byte
+				n := utf8.EncodeRune(buf[:], r)
+				out = append(out, buf[:n]...)
 			}
 		}
 	}
