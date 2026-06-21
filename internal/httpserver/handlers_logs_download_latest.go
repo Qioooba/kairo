@@ -74,14 +74,14 @@ func (s *Server) handleDownloadLatest(w http.ResponseWriter, r *http.Request) {
 	}, sshclient.Credentials{Password: creds.Password}, 10*time.Second)
 	if err != nil {
 		auditErr(w, s.audit, "logs.download", "system", req.System, "server", req.Server, "dir", ld.Path, "result", "fail", err)
-		writeErr(w, 502, err)
+		writeErrSanitized(w, 502, err)
 		return
 	}
 	defer cli.Close()
 
 	sftpCli, err := sftpDialer(cli)
 	if err != nil {
-		writeErr(w, 502, err)
+		writeErrSanitized(w, 502, err)
 		return
 	}
 	defer sftpCli.Close()
@@ -89,18 +89,18 @@ func (s *Server) handleDownloadLatest(w http.ResponseWriter, r *http.Request) {
 	// 列文件
 	cmd, err := logquery.ListCommand(ld.Path, ld.Patterns, latest)
 	if err != nil {
-		writeErr(w, 500, err)
+		writeErrSanitized(w, 500, err)
 		return
 	}
 	stdout, stderr, code, err := cli.Run(ctx, cmd, s.cur().SearchTimeout(), ld.Encoding)
 	if err != nil || code != 0 {
 		s.audit.Write("logs.download", "system", req.System, "server", req.Server, "dir", ld.Path, "result", "fail", "err", trim(stderr, 200))
-		writeErr(w, 502, fmt.Errorf("列文件失败: %v / %s", err, trim(stderr, 200)))
+		writeErrSanitized(w, 502, fmt.Errorf("列文件失败: %v / %s", err, trim(stderr, 200)))
 		return
 	}
 	files, err := logquery.ParseListOutput(stdout)
 	if err != nil {
-		writeErr(w, 500, err)
+		writeErrSanitized(w, 500, err)
 		return
 	}
 	if len(files) == 0 {
@@ -131,7 +131,7 @@ func (s *Server) handleDownloadLatest(w http.ResponseWriter, r *http.Request) {
 		bytes, err := sftpCli.DownloadFile(remote, localPath)
 		if err != nil {
 			s.audit.Write("logs.download", "system", req.System, "server", req.Server, "dir", ld.Path, "file", f.Name, "result", "fail", "err", err.Error())
-			writeErr(w, 502, fmt.Errorf("下载 %s 失败: %w", f.Name, err))
+			writeErrSanitized(w, 502, fmt.Errorf("下载 %s 失败: %w", f.Name, err))
 			return
 		}
 		results = append(results, dlmanager.Item{
@@ -167,7 +167,7 @@ func (s *Server) handleDownloadLatest(w http.ResponseWriter, r *http.Request) {
 		zipPath := filepath.Join(targetDir, zipName)
 		if err := zipFiles(localPaths, zipPath); err != nil {
 			s.audit.Write("logs.download", "system", req.System, "server", req.Server, "dir", ld.Path, "result", "fail", "stage", "zip", "err", err.Error())
-			writeErr(w, 502, fmt.Errorf("打包 zip 失败: %w", err))
+			writeErrSanitized(w, 502, fmt.Errorf("打包 zip 失败: %w", err))
 			return
 		}
 		st, statErr := os.Stat(zipPath)

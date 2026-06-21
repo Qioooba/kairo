@@ -3,6 +3,8 @@ package httpserver
 import (
 	"encoding/json"
 	"net/http"
+
+	"ops-toolbox/internal/sshclient"
 )
 
 // writeJSON 把 v 序列化成 JSON 写到 w，状态码 code。
@@ -14,6 +16,18 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 }
 
 // writeErr 写一个统一的 {"error": msg} 响应。
+//
+// 注意：err 字符串原样写到响应。错误信息可能含"password"字面量（来自
+// x/crypto/ssh 握手失败的错误信息），所以含用户凭据的 err 必须走
+// writeErrSanitized，避免泄到前端 / 浏览器 devtools。
 func writeErr(w http.ResponseWriter, code int, err error) {
 	writeJSON(w, code, map[string]string{"error": err.Error()})
+}
+
+// writeErrSanitized 写错误响应但 err 字符串先过 sshclient.SanitizeError。
+//
+// 适用范围：所有 5xx 响应，特别是 SSH / SFTP / tail 流错路径。
+// 因为这些 err 直接来自 x/crypto/ssh 包，可能含明文密码或私钥路径字面量。
+func writeErrSanitized(w http.ResponseWriter, code int, err error) {
+	writeJSON(w, code, map[string]string{"error": sshclient.SanitizeError(err.Error())})
 }

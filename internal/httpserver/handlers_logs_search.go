@@ -77,7 +77,7 @@ func (s *Server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 	}, sshclient.Credentials{Password: creds.Password}, 10*time.Second)
 	if err != nil {
 		auditErr(w, s.audit, "logs.search", "system", req.System, "server", req.Server, "dir", ld.Path, "query", req.Query, "result", "fail", err)
-		writeErr(w, 502, err)
+		writeErrSanitized(w, 502, err)
 		return
 	}
 	defer cli.Close()
@@ -85,12 +85,12 @@ func (s *Server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 	// 列 N 个最新文件，再过滤 pattern 匹配的
 	cmd, err := logquery.ListCommand(ld.Path, ld.Patterns, filesN)
 	if err != nil {
-		writeErr(w, 500, err)
+		writeErrSanitized(w, 500, err)
 		return
 	}
 	stdout, stderr, code, err := cli.Run(ctx, cmd, s.cur().SearchTimeout(), ld.Encoding)
 	if err != nil || code != 0 {
-		writeErr(w, 502, fmt.Errorf("列文件失败: %v", err))
+		writeErrSanitized(w, 502, fmt.Errorf("列文件失败: %v", err))
 		return
 	}
 	files, err := logquery.ParseListOutput(stdout)
@@ -111,7 +111,7 @@ func (s *Server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 	stdout, stderr, code, err = cli.Run(ctx, cmd, s.cur().SearchTimeout()+5*time.Second, ld.Encoding)
 	if err != nil {
 		s.audit.Write("logs.search", "system", req.System, "server", req.Server, "dir", ld.Path, "query", req.Query, "result", "fail", "err", err.Error())
-		writeErr(w, 502, err)
+		writeErrSanitized(w, 502, err)
 		return
 	}
 	if code != 0 {
@@ -121,7 +121,7 @@ func (s *Server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.audit.Write("logs.search", "system", req.System, "server", req.Server, "dir", ld.Path, "query", req.Query, "result", "fail", "err", "exit="+strconv.Itoa(code), "stderr", trim(stderr, 200))
-		writeErr(w, 502, fmt.Errorf("搜索失败: exit=%d %s", code, trim(stderr, 200)))
+		writeErrSanitized(w, 502, fmt.Errorf("搜索失败: exit=%d %s", code, trim(stderr, 200)))
 		return
 	}
 
@@ -245,18 +245,18 @@ func (s *Server) handleLogsContext(w http.ResponseWriter, r *http.Request) {
 	}, sshclient.Credentials{Password: creds.Password}, 10*time.Second)
 	if err != nil {
 		auditErr(w, s.audit, "logs.context", "system", req.System, "server", req.Server, "dir", ld.Path, "file", req.File, "line", req.Line, "result", "fail", err)
-		writeErr(w, 502, err)
+		writeErrSanitized(w, 502, err)
 		return
 	}
 	defer cli.Close()
 
 	stdout, stderr, code, err := cli.Run(ctx, cmd, s.cur().SearchTimeout(), ld.Encoding)
 	if err != nil {
-		writeErr(w, 502, err)
+		writeErrSanitized(w, 502, err)
 		return
 	}
 	if code != 0 {
-		writeErr(w, 502, fmt.Errorf("sed 退出码 %d: %s", code, trim(stderr, 200)))
+		writeErrSanitized(w, 502, fmt.Errorf("sed 退出码 %d: %s", code, trim(stderr, 200)))
 		return
 	}
 	lines := parseContextOutput(stdout, req.Line, before)

@@ -21,7 +21,7 @@ func (s *Server) handleDownloadsList(w http.ResponseWriter, r *http.Request) {
 
 	entries, err := downloads.List(s.cur().DownloadDir())
 	if err != nil {
-		writeErr(w, 500, err)
+		writeErrSanitized(w, 500, err)
 		return
 	}
 	out := make([]map[string]any, 0, len(entries))
@@ -84,7 +84,7 @@ func (s *Server) handleDownloadsItem(w http.ResponseWriter, r *http.Request) {
 		}
 		n, err := downloads.DeleteAll(s.cur().DownloadDir())
 		if err != nil {
-			writeErr(w, 500, err)
+			writeErrSanitized(w, 500, err)
 			return
 		}
 		s.audit.Write("downloads.clear", "result", "ok", "count", n)

@@ -29,7 +29,7 @@ func (s *Server) handleAuditRecent(w http.ResponseWriter, r *http.Request) {
 	}
 	recs, err := s.audit.Recent(limit, f)
 	if err != nil {
-		writeErr(w, 500, err)
+		writeErrSanitized(w, 500, err)
 		return
 	}
 	out := make([]map[string]any, 0, len(recs))

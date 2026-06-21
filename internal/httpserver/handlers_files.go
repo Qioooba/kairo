@@ -107,14 +107,14 @@ func (s *Server) handleFilesList(w http.ResponseWriter, r *http.Request) {
 	}, sshclient.Credentials{Password: creds.Password}, 10*time.Second)
 	if err != nil {
 		s.audit.Write("files.list", "system", req.System, "server", req.Server, "path", req.Path, "result", "fail", "stage", "dial", "err", err.Error())
-		writeErr(w, 502, err)
+		writeErrSanitized(w, 502, err)
 		return
 	}
 	defer cli.Close()
 
 	sftpCli, err := sftpDialer(cli)
 	if err != nil {
-		writeErr(w, 502, err)
+		writeErrSanitized(w, 502, err)
 		return
 	}
 	defer sftpCli.Close()
@@ -122,7 +122,7 @@ func (s *Server) handleFilesList(w http.ResponseWriter, r *http.Request) {
 	infos, err := sftpCli.ReadDir(req.Path)
 	if err != nil {
 		s.audit.Write("files.list", "system", req.System, "server", req.Server, "path", req.Path, "result", "fail", "err", err.Error())
-		writeErr(w, 502, fmt.Errorf("列出目录失败: %w", err))
+		writeErrSanitized(w, 502, fmt.Errorf("列出目录失败: %w", err))
 		return
 	}
 
@@ -445,7 +445,7 @@ func (s *Server) streamDownloadEvents(w http.ResponseWriter, r *http.Request, id
 		w.Header().Set("X-Accel-Buffering", "no")
 		flusher, ok := w.(http.Flusher)
 		if !ok {
-			writeErr(w, 500, errors.New("response writer 不支持 flush"))
+			writeErrSanitized(w, 500, errors.New("response writer 不支持 flush"))
 			return
 		}
 		var ev []byte
@@ -467,7 +467,7 @@ func (s *Server) streamDownloadEvents(w http.ResponseWriter, r *http.Request, id
 	w.Header().Set("X-Accel-Buffering", "no")
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		writeErr(w, 500, errors.New("response writer 不支持 flush"))
+		writeErrSanitized(w, 500, errors.New("response writer 不支持 flush"))
 		return
 	}
 

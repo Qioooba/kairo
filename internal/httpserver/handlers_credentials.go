@@ -43,7 +43,7 @@ func (s *Server) handleCredSave(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, 503, err)
 			return
 		}
-		writeErr(w, 500, err)
+		writeErrSanitized(w, 500, err)
 		return
 	}
 	s.audit.Write("credentials.save",
@@ -76,7 +76,7 @@ func (s *Server) handleCredHas(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, 200, map[string]any{"ok": true, "has": false, "available": false, "err": err.Error()})
 			return
 		}
-		writeErr(w, 500, err)
+		writeErrSanitized(w, 500, err)
 		return
 	}
 	writeJSON(w, 200, map[string]any{"ok": true, "has": has, "available": true})
@@ -106,7 +106,7 @@ func (s *Server) handleCredClear(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, 503, err)
 			return
 		}
-		writeErr(w, 500, err)
+		writeErrSanitized(w, 500, err)
 		return
 	}
 	s.audit.Write("credentials.clear",

@@ -71,14 +71,14 @@ func (s *Server) handleTailStart(w http.ResponseWriter, r *http.Request) {
 	}, sshclient.Credentials{Password: creds.Password}, 15*time.Second)
 	if err != nil {
 		auditErr(w, s.audit, "logs.tail", "system", req.System, "server", req.Server, "dir", ld.Path, "file", req.File, "result", "fail", err)
-		writeErr(w, 502, err)
+		writeErrSanitized(w, 502, err)
 		return
 	}
 	// 不要在这里 Close — tail session 接管 client 生命周期
 	sess, err := s.tails.Start(cli, srv.Name, srv.Host, ld.Path, req.File, ld.Encoding, req.Lines)
 	if err != nil {
 		_ = cli.Close()
-		writeErr(w, 500, err)
+		writeErrSanitized(w, 500, err)
 		return
 	}
 	s.audit.Write("logs.tail", "system", req.System, "server", req.Server, "dir", ld.Path, "file", req.File, "result", "ok", "id", sess.ID, "lines", req.Lines)
@@ -131,7 +131,7 @@ func (s *Server) streamTailEvents(w http.ResponseWriter, r *http.Request, id str
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		writeErr(w, 500, errors.New("response writer 不支持 flush"))
+		writeErrSanitized(w, 500, errors.New("response writer 不支持 flush"))
 		return
 	}
 

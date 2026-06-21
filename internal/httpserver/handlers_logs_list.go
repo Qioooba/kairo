@@ -67,30 +67,30 @@ func (s *Server) handleLogsList(w http.ResponseWriter, r *http.Request) {
 	}, sshclient.Credentials{Password: creds.Password}, 10*time.Second)
 	if err != nil {
 		auditErr(w, s.audit, "logs.list", "system", req.System, "server", req.Server, "dir", ld.Path, "result", "fail", err)
-		writeErr(w, 502, err)
+		writeErrSanitized(w, 502, err)
 		return
 	}
 	defer cli.Close()
 
 	cmd, err := logquery.ListCommand(ld.Path, ld.Patterns, 100)
 	if err != nil {
-		writeErr(w, 500, err)
+		writeErrSanitized(w, 500, err)
 		return
 	}
 	stdout, stderr, code, err := cli.Run(ctx, cmd, s.cur().SearchTimeout(), ld.Encoding)
 	if err != nil {
 		auditErr(w, s.audit, "logs.list", "system", req.System, "server", req.Server, "dir", ld.Path, "result", "fail", err)
-		writeErr(w, 502, err)
+		writeErrSanitized(w, 502, err)
 		return
 	}
 	if code != 0 {
 		s.audit.Write("logs.list", "system", req.System, "server", req.Server, "dir", ld.Path, "result", "fail", "err", "remote exit="+strconv.Itoa(code), "stderr", trim(stderr, 200))
-		writeErr(w, 502, fmt.Errorf("远程命令退出码 %d: %s", code, trim(stderr, 200)))
+		writeErrSanitized(w, 502, fmt.Errorf("远程命令退出码 %d: %s", code, trim(stderr, 200)))
 		return
 	}
 	files, err := logquery.ParseListOutput(stdout)
 	if err != nil {
-		writeErr(w, 500, err)
+		writeErrSanitized(w, 500, err)
 		return
 	}
 	// 补全 FullPath

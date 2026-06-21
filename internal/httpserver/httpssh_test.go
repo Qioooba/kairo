@@ -186,6 +186,10 @@ func TestSSHTest_BadPassword(t *testing.T) {
 	if w.Code != 502 {
 		t.Errorf("expected 502, got %d body=%s", w.Code, w.Body.String())
 	}
+	// 5xx 响应不应含 password 字面量（P2-5）
+	if strings.Contains(w.Body.String(), "password") {
+		t.Errorf("502 响应泄漏 password 字面量: %s", w.Body.String())
+	}
 }
 
 func TestLogsList_WithFakeSSH(t *testing.T) {
