@@ -99,6 +99,7 @@
   const routes = {
     home: renderHome,
     websphere: renderWebsphere,
+    files: renderFiles,
     formatter: renderFormatter,
     commands: renderPlaceholder,
     config: renderConfig,
@@ -109,6 +110,7 @@
   const routeNames = {
     home: '首页',
     websphere: 'WebSphere 日志助手',
+    files: '文件下载（FTP 风格）',
     formatter: '报文格式化',
     commands: '常用命令',
     config: '系统配置',
@@ -122,9 +124,23 @@
     history: '审计日志（按操作类型 / 状态 / 关键字过滤；最近 N 条）'
   };
 
+  // 全局进行中的下载任务（用于 navigate 清理）
+  // 引用挂这里而不是闭包里，是因为 renderWebsphere 重建后旧 EventSource 没人能关。
+  window.__opsActiveDL = null;
+
   function navigate() {
     const hash = (location.hash || '#/home').replace(/^#\//, '');
     const name = routes[hash] ? hash : 'home';
+    // 离开 websphere 页面前：清理进行中的下载（关闭 SSE + 通知后端取消）
+    if (window.__opsActiveDL) {
+      const dl = window.__opsActiveDL;
+      window.__opsActiveDL = null;
+      try { dl.evtsrc && dl.evtsrc.close(); } catch (e) { /* ignore */ }
+      if (dl.id) {
+        // 异步取消，不阻塞 navigate
+        api('POST', '/api/files/download/' + dl.id + '/cancel', {}).catch(() => {});
+      }
+    }
     const view = $('#view');
     view.innerHTML = '';
     try {
@@ -161,6 +177,7 @@
 
     const tools = [
       { id: 'websphere', name: 'WebSphere 日志助手', desc: '多服务器日志并行搜索、上下文查看、日志下载', icon: '📜', tag: 'ready', tagText: '已就绪' },
+      { id: 'files', name: '文件下载', desc: '按 SSH 账号权限浏览任意目录，像 FTP 一样层层进入并下载', icon: '📁', tag: 'ready', tagText: 'v0.3 新增' },
       { id: 'formatter', name: '报文格式化', desc: 'JSON / XML 格式化、压缩、校验', icon: '⌗', tag: 'ready', tagText: '已就绪' },
       { id: 'commands', name: '常用命令', desc: 'grep / find / tail / WebSphere 排查模板', icon: '$_', tag: 'placeholder', tagText: '规划中' },
       { id: 'config', name: '系统配置', desc: '在线编辑业务系统/服务器/日志目录,改完点保存即生效', icon: '⚙', tag: 'ready', tagText: '可视化' },
@@ -185,7 +202,13 @@
   // WebSphere 日志助手 —— 多服务器并行版
   function renderWebsphere(view) {
     let cfg = null;
-    let listState = { files: [] };
+    // listState: 当前已列文件 + 下载任务状态
+    //   files:    FileEntry[]
+    //   serverName: 哪台服务器
+    //   dlId:     当前进行中的下载任务 id（null = 无）
+    //   dlEvtSrc: 当前 SSE 订阅句柄
+    //   fileStates: { [name]: { status, written, total, error } }
+    let listState = { files: [], serverName: '', dlId: null, dlEvtSrc: null, fileStates: {} };
     // 每台服务器的状态：'idle' | 'ok' | 'fail' | 'busy'
     const srvStatus = {}; // key: server name, value: { state, err }
 
@@ -249,6 +272,8 @@
       refreshCredStatus();
     }
     function renderSrvPick() {
+      // 重渲染前先记住已勾选的服务器，重建后恢复，避免"测试连接后勾选丢失"的回归。
+      const prevChecked = getCheckedServers();
       srvPickWrap.innerHTML = '';
       const sysName = sysSel.value;
       const sys = cfg && cfg.systems.find(s => s.name === sysName);
@@ -260,6 +285,10 @@
         const st = srvStatus[s.name] || { state: 'idle' };
         const dotCls = 'dot dot-' + (st.state === 'idle' ? 'idle' : st.state);
         const cb = el('input', { type: 'checkbox', 'data-srv': s.name, value: s.name });
+        // 恢复勾选：之前勾过的、或当前状态是 ok（测通过的默认保留）
+        if (prevChecked.indexOf(s.name) !== -1 || st.state === 'ok') {
+          cb.checked = true;
+        }
         cb.addEventListener('change', refreshCredStatus);
         const item = el('label', { class: 'srv-pick-item' }, [
           cb,
@@ -429,25 +458,244 @@
         fileTableWrap.appendChild(el('div', { class: 'text-dim', text: '暂无文件，先点击"列出文件"。' }));
         return;
       }
+
+      // 工具条：全选/反选/选前 N 个 + 下载选中 + 停止
+      const btnPickAll = el('button', { class: 'btn btn-sm', text: '全选', onclick: () => pickAll(true) });
+      const btnPickNone = el('button', { class: 'btn btn-sm', text: '全不选', onclick: () => pickAll(false) });
+      const btnPickTop = el('button', { class: 'btn btn-sm', text: '选前 ' + (dlNSel.value) + ' 个', onclick: () => pickTop(Number(dlNSel.value) || 1) });
+      const btnDownloadSel = el('button', { class: 'btn btn-primary', text: '下载选中', onclick: doDownloadSelected });
+      const btnCancel = el('button', { class: 'btn', text: '停止', onclick: doCancelDownload, disabled: true });
+      const summary = el('div', { class: 'text-dim', text: '已选 0 个' });
+      const toolbar = el('div', { class: 'file-toolbar' }, [
+        btnPickAll, btnPickNone, btnPickTop, btnDownloadSel, btnCancel, summary
+      ]);
+      fileTableWrap.appendChild(toolbar);
+
       const tbl = el('table', { class: 'table' });
       const thead = el('thead', null, el('tr', null, [
+        el('th', { class: 'col-check' }, [el('input', { type: 'checkbox', id: 'ws-file-checkall', onchange: (e) => pickAll(e.target.checked) })]),
         el('th', { text: '文件名' }),
         el('th', { text: '大小' }),
         el('th', { text: '修改时间' }),
-        el('th', { text: '路径' })
+        el('th', { text: '路径' }),
+        el('th', { class: 'col-status', text: '状态' })
       ]));
       tbl.appendChild(thead);
       const tbody = el('tbody');
       listState.files.forEach(f => {
-        tbody.appendChild(el('tr', null, [
-          el('td', null, f.name),
-          el('td', { class: 'num', text: formatBytes(f.size) }),
-          el('td', { class: 'muted', text: formatTime(f.mod_time) }),
-          el('td', { class: 'muted', text: f.full_path })
-        ]));
+        const row = el('tr', { 'data-file': f.name });
+        const cb = el('input', { type: 'checkbox', 'data-file': f.name, onchange: refreshSummary });
+        const statusCell = el('td', { class: 'col-status', 'data-status': f.name });
+        row.appendChild(el('td', { class: 'col-check' }, [cb]));
+        row.appendChild(el('td', null, f.name));
+        row.appendChild(el('td', { class: 'num', text: formatBytes(f.size) }));
+        row.appendChild(el('td', { class: 'muted', text: formatTime(f.mod_time) }));
+        row.appendChild(el('td', { class: 'muted', text: f.full_path }));
+        row.appendChild(statusCell);
+        tbody.appendChild(row);
       });
       tbl.appendChild(tbody);
       fileTableWrap.appendChild(tbl);
+
+      // 缓存工具条节点到 fileTableWrap，方便后面改 summary 和按钮 disabled
+      fileTableWrap._toolbar = { summary, btnDownloadSel, btnCancel, btnPickAll, btnPickNone, btnPickTop };
+      refreshSummary();
+      // 重新列出后清空旧状态
+      listState.fileStates = {};
+    }
+
+    function pickAll(on) {
+      fileTableWrap.querySelectorAll('input[type="checkbox"][data-file]').forEach(cb => { cb.checked = on; });
+      refreshSummary();
+    }
+    function pickTop(n) {
+      const cbs = fileTableWrap.querySelectorAll('input[type="checkbox"][data-file]');
+      cbs.forEach((cb, i) => { cb.checked = i < n; });
+      refreshSummary();
+    }
+    function getSelectedFiles() {
+      const out = [];
+      fileTableWrap.querySelectorAll('input[type="checkbox"][data-file]').forEach(cb => {
+        if (cb.checked) out.push(cb.getAttribute('data-file'));
+      });
+      return out;
+    }
+    function refreshSummary() {
+      const tb = fileTableWrap._toolbar;
+      if (!tb) return;
+      const sel = getSelectedFiles();
+      tb.summary.textContent = '已选 ' + sel.length + ' / ' + listState.files.length + ' 个';
+      // 全选 checkbox 状态同步
+      const checkAll = fileTableWrap.querySelector('#ws-file-checkall');
+      if (checkAll) {
+        checkAll.checked = listState.files.length > 0 && sel.length === listState.files.length;
+        checkAll.indeterminate = sel.length > 0 && sel.length < listState.files.length;
+      }
+    }
+
+    // 找到对应行的状态单元格，更新进度 / 状态文字
+    function setRowStatus(name, html, rowClass) {
+      const cell = fileTableWrap.querySelector('[data-status="' + cssEscape(name) + '"]');
+      if (cell) cell.innerHTML = html;
+      const row = fileTableWrap.querySelector('tr[data-file="' + cssEscape(name) + '"]');
+      if (row && rowClass) {
+        row.classList.remove('row-done', 'row-fail', 'row-active');
+        row.classList.add(rowClass);
+      }
+    }
+    function cssEscape(s) {
+      return String(s).replace(/[\\"]/g, '\\$&');
+    }
+    // 后端 SSE 事件里 file 是完整远端路径，DOM 行用 basename 做 key，
+    // 这里转一下。失败回退原值（罕见：basename 冲突时按原值也查不到，靠 rowClass 标记）。
+    function basenameOf(p) {
+      if (!p) return p;
+      const s = String(p);
+      const i = Math.max(s.lastIndexOf('/'), s.lastIndexOf('\\'));
+      return i >= 0 ? s.substring(i + 1) : s;
+    }
+    function pctText(w, t) {
+      if (t > 0) return ((w / t) * 100).toFixed(1) + '%';
+      if (w > 0) return formatBytes(w) + ' / ?';
+      return '0%';
+    }
+
+    async function doDownloadSelected() {
+      const srvs = getCheckedServers();
+      if (!srvs.length) { toast('请先勾选服务器', 'warn'); return; }
+      const files = getSelectedFiles();
+      if (!files.length) { toast('请先勾选要下载的文件', 'warn'); return; }
+      if (listState.dlId) { toast('已有下载任务在进行中', 'warn'); return; }
+      const srvName = srvs[0]; // 跟 doList 一致，只支持单服务器
+      // 把选中文件名映射成完整远端路径（/api/files/download 需要绝对路径）
+      const paths = files.map(name => {
+        const ent = listState.files.find(f => f.name === name);
+        return (ent && ent.full_path) ? ent.full_path : (dirSel.value + '/' + name);
+      });
+      const wantZip = dlZipChk.checked;
+      const zip = wantZip && files.length >= 2;
+      if (wantZip && files.length < 2) {
+        toast('zip 打包需要 ≥ 2 个文件，已仅返回原始文件', 'warn');
+      }
+      // 重置 fileStates
+      listState.fileStates = {};
+      files.forEach(name => {
+        listState.fileStates[name] = { status: 'pending' };
+        setRowStatus(name, '<span class="dl-pct">等待…</span>');
+      });
+      const tb = fileTableWrap._toolbar;
+      if (tb) { tb.btnDownloadSel.disabled = true; tb.btnCancel.disabled = false; }
+      setStatus('busy', '下载中…');
+      let dlId;
+      try {
+        const r = await api('POST', '/api/files/download', Object.assign({}, credsOne(srvName), {
+          paths: paths, zip: zip
+        }));
+        dlId = r.id;
+        listState.dlId = dlId;
+        // 订阅 SSE
+        if (!window.EventSource) { toast('浏览器不支持 EventSource', 'err'); return; }
+        const es = new EventSource('/api/files/download/' + dlId + '/events');
+        listState.dlEvtSrc = es;
+        // 也挂到全局，navigate 切走时能清理（renderWebsphere 重建后会丢闭包引用）
+        window.__opsActiveDL = { id: dlId, evtsrc: es };
+        es.onmessage = (ev) => {
+          let o; try { o = JSON.parse(ev.data); } catch (e) { return; }
+          handleDownloadEvent(o, files);
+        };
+        es.addEventListener('done', () => { closeDownloadStream('done'); });
+        es.onerror = () => {
+          // 网络异常：等 onmessage 推 done 收尾；这里只做兜底
+          setTimeout(() => {
+            if (listState.dlId === dlId && listState.dlEvtSrc === es) {
+              closeDownloadStream('error');
+              toast('SSE 连接异常', 'err');
+            }
+          }, 2000);
+        };
+      } catch (e) {
+        toast('启动下载失败：' + e.message, 'err');
+        setStatus('err', '失败');
+        setTimeout(() => setStatus('idle'), 1500);
+        if (tb) { tb.btnDownloadSel.disabled = false; tb.btnCancel.disabled = true; }
+        files.forEach(name => {
+          setRowStatus(name, '<span class="dl-pct" style="color:#ef4444">启动失败</span>', 'row-fail');
+        });
+        listState.dlId = null;
+        listState.dlEvtSrc = null;
+      }
+    }
+
+    function handleDownloadEvent(o, files) {
+      // 后端 SSE 事件 file 字段是完整远端路径；行用 basename 做 key，转一下。
+      const key = basenameOf(o.file);
+      if (o.kind === 'file_start') {
+        listState.fileStates[key] = { status: 'downloading', written: 0, total: o.total || -1 };
+        setRowStatus(key,
+          '<div class="dl-bar"><div class="dl-bar-fill indeterminate"></div></div><span class="dl-pct">0%</span>',
+          'row-active');
+      } else if (o.kind === 'progress') {
+        const st = listState.fileStates[key] || {};
+        st.status = 'downloading'; st.written = o.written; st.total = o.total;
+        listState.fileStates[key] = st;
+        const pct = o.total > 0 ? Math.min(100, (o.written / o.total) * 100) : 0;
+        const fillClass = o.total > 0 ? '' : 'indeterminate';
+        setRowStatus(key,
+          '<div class="dl-bar"><div class="dl-bar-fill ' + fillClass + '" style="width:' + pct + '%"></div></div>'
+          + '<span class="dl-pct">' + pctText(o.written, o.total) + '</span>',
+          'row-active');
+      } else if (o.kind === 'file_done') {
+        listState.fileStates[key] = { status: 'done', bytes: o.bytes };
+        setRowStatus(key,
+          '<span class="dl-pct" style="color:#10b981">✓ 完成 · ' + formatBytes(o.bytes || 0) + '</span>',
+          'row-done');
+      } else if (o.kind === 'done') {
+        // 终态
+        const tb = fileTableWrap._toolbar;
+        if (tb) { tb.btnDownloadSel.disabled = false; tb.btnCancel.disabled = true; }
+        listState.dlId = null;
+        if (o.ok) {
+          toast('下载完成：' + (o.downloads || []).length + ' 个产物', 'ok');
+          // 渲染结果卡（复用现有 renderDownloadResults）
+          renderDownloadResults([{ server: listState.serverName, downloads: o.downloads, folder: o.folder }]);
+        } else {
+          toast('下载失败：' + (o.error || '未知错误'), 'err');
+          // 把还没标的行标失败
+          files.forEach(name => {
+            const st = listState.fileStates[name];
+            if (!st || st.status === 'pending' || st.status === 'downloading') {
+              setRowStatus(name, '<span class="dl-pct" style="color:#ef4444">✗ ' + (o.error || '') + '</span>', 'row-fail');
+            }
+          });
+        }
+        setStatus('idle');
+        listState.dlEvtSrc = null;
+      }
+    }
+
+    function closeDownloadStream(reason) {
+      if (listState.dlEvtSrc) {
+        listState.dlEvtSrc.close();
+        listState.dlEvtSrc = null;
+      }
+      // 任务正常结束 / 取消 / 出错 都清掉全局引用
+      if (window.__opsActiveDL) {
+        try { window.__opsActiveDL.evtsrc && window.__opsActiveDL.evtsrc.close(); } catch (e) { /* ignore */ }
+        window.__opsActiveDL = null;
+      }
+      const tb = fileTableWrap._toolbar;
+      if (tb) { tb.btnDownloadSel.disabled = false; tb.btnCancel.disabled = true; }
+      if (reason === 'cancel') {
+        toast('已停止下载', 'warn');
+      }
+      setStatus('idle');
+    }
+
+    async function doCancelDownload() {
+      if (!listState.dlId) return;
+      try { await api('POST', '/api/files/download/' + listState.dlId + '/cancel', {}); }
+      catch (e) { /* ignore */ }
+      closeDownloadStream('cancel');
     }
 
     async function doDownload() {
@@ -517,7 +765,8 @@
         }
         wrap.appendChild(grp);
       });
-      wrap.appendChild(el('div', { class: 'text-dim mt-2', text: '本地保存目录：' + (allResults.find(r => r.folder) || {}).folder || '-' }));
+      const folder = (allResults.find(r => r.folder) || {}).folder || '-';
+      wrap.appendChild(el('div', { class: 'text-dim mt-2', text: '本地保存目录：' + folder }));
       fileTableWrap.parentNode.insertBefore(wrap, fileTableWrap.nextSibling);
     }
 
@@ -561,14 +810,18 @@
 
       r.servers.forEach(srv => {
         const grp = el('div', { class: 'server-group ' + (srv.ok ? 'ok' : 'fail') });
-        const head = el('div', { class: 'server-group-head' }, [
+        const headChildren = [
           el('span', { class: 'dot dot-' + (srv.ok ? (srv.hits_count > 0 ? 'ok' : 'idle') : 'err') }),
-          el('span', { class: 'name', text: srv.server + (srv.host ? '  ·  ' + srv.host : '') }),
-          el('span', { class: 'meta', text:
-            (srv.ok
-              ? (srv.hits_count + ' 命中 / ' + (srv.files || []).length + ' 文件 / ' + srv.elapsed_ms + 'ms')
-              : '失败 / ' + srv.elapsed_ms + 'ms') })
-        ]);
+          el('span', { class: 'name', text: srv.server + (srv.host ? '  ·  ' + srv.host : '') })
+        ];
+        if (srv.ok && srv.encoding) {
+          headChildren.push(el('span', { class: 'tag tag-enc', title: '当前目录编码（影响中文显示）', text: srv.encoding }));
+        }
+        headChildren.push(el('span', { class: 'meta', text:
+          (srv.ok
+            ? (srv.hits_count + ' 命中 / ' + (srv.files || []).length + ' 文件 / ' + srv.elapsed_ms + 'ms')
+            : '失败 / ' + srv.elapsed_ms + 'ms') }));
+        const head = el('div', { class: 'server-group-head' }, headChildren);
         grp.appendChild(head);
         if (!srv.ok) {
           grp.appendChild(el('div', { class: 'err-msg', text: srv.error || '未知错误' }));
@@ -585,20 +838,36 @@
           tbl.appendChild(thead);
           const tbody = el('tbody');
           srv.hits.forEach(h => {
-            tbody.appendChild(el('tr', null, [
+            const content = trimMiddle(h.content, 280);
+            const cells = [
               el('td', { class: 'muted', text: h.file }),
-              el('td', { class: 'num', text: h.line_no }),
-              el('td', { class: 'hit-line', text: trimMiddle(h.content, 280) }),
-              el('td', { class: 'actions' }, [
-                el('button', { class: 'btn btn-sm', text: '上下文', onclick: () => doContext(h) })
-              ])
+              el('td', { class: 'num', text: h.line_no })
+            ];
+            const contentCell = el('td', { class: 'hit-line', text: content });
+            if (looksMojibake(content)) {
+              contentCell.appendChild(el('span', { class: 'tag tag-warn', title: '当前目录编码与文件实际编码不一致，中文可能错位。试试切换到「GBK」目录。', text: '⚠ 解码可能有误' }));
+            }
+            cells.push(contentCell);
+            cells.push(el('td', { class: 'actions' }, [
+              el('button', { class: 'btn btn-sm', text: '上下文', onclick: () => doContext(h) })
             ]));
+            tbody.appendChild(el('tr', null, cells));
           });
           tbl.appendChild(tbody);
           grp.appendChild(tbl);
         }
         hitTableWrap.appendChild(grp);
       });
+    }
+
+    // 简易乱码检测：U+FFFD (�) 出现 ≥2 次，或连续控制字符过多。基本够用，避免引入完整启发式。
+    function looksMojibake(s) {
+      if (!s) return false;
+      let bad = 0;
+      for (let i = 0; i < s.length; i++) {
+        if (s.charCodeAt(i) === 0xFFFD) bad++;
+      }
+      return bad >= 2;
     }
 
     function trimMiddle(s, max) {
@@ -793,6 +1062,497 @@
       refreshDirs();
       refreshCredStatus();
     }).catch(e => toast('配置加载失败：' + e.message, 'err'));
+  }
+
+  // 文件下载（v0.3）：按 SSH 账号权限浏览任意目录并下载。
+  //
+  // 设计要点：
+  //   - 顶部连接区：系统 / 服务器 / 用户名 / 密码（keyring 复用）；
+  //   - 中部路径区：面包屑（可点击）+ 返回上级 + 手动输入路径跳转；
+  //   - 主体：目录列表，目录可点击进入，文件可勾选；
+  //   - 多选下载：复用现有 /api/files/download + SSE 进度机制。
+  function renderFiles(view) {
+    // state：当前连接的服务器 + 当前路径 + 当前目录条目 + 下载任务状态
+    const state = {
+      cfg: null,                  // /api/config 返回的完整配置
+      currentSys: '',             // 选中的系统名
+      currentSrv: '',             // 选中的服务器名
+      currentPath: '/',           // 当前绝对路径
+      parent: '',                 // 上级绝对路径（null = 已在根）
+      entries: [],                // 当前目录条目
+      selected: new Set(),        // 选中的文件 basename 集合
+      sortKey: 'name',            // 'name' | 'size' | 'mtime'
+      sortDesc: false,
+      dlId: null,                 // 当前下载任务 id
+      dlEvtSrc: null,             // 当前 SSE 句柄
+      fileStates: {},             // { [path]: { status, written, total, bytes, error } }
+    };
+
+    // ---- 连接区 ----
+    const sysSel = el('select', { id: 'files-sys' });
+    const srvSel = el('select', { id: 'files-srv' });
+    srvSel.appendChild(el('option', { value: '', text: '（先选系统）' }));
+    srvSel.disabled = true;
+    const userInp = el('input', { type: 'text', id: 'files-user', placeholder: 'SSH 用户名（可留空用配置默认）' });
+    const passInp = el('input', { type: 'password', id: 'files-pass', placeholder: 'SSH 密码' });
+    const rememberChk = el('input', { type: 'checkbox', id: 'files-remember' });
+    const rememberLabel = el('label', { class: 'inline' }, [rememberChk, document.createTextNode('记住密码')]);
+    const btnConnect = el('button', { class: 'btn btn-primary', text: '连接并浏览' });
+
+    const connCard = el('div', { class: 'card' });
+    connCard.appendChild(el('h3', { text: '1. 选择目标服务器' }));
+    connCard.appendChild(el('div', { class: 'card-desc', text: '支持任意路径浏览；下载权限以 SSH 账号实际权限为准（v0.3 自由模式）。' }));
+    connCard.appendChild(el('div', { class: 'grid-3' }, [
+      el('label', null, [el('span', { class: 'lbl', text: '业务系统' }), sysSel]),
+      el('label', null, [el('span', { class: 'lbl', text: '服务器' }), srvSel]),
+      el('label', null, [el('span', { class: 'lbl', text: '用户名' }), userInp])
+    ]));
+    connCard.appendChild(el('div', { class: 'grid-2 mt-2' }, [
+      el('label', null, [el('span', { class: 'lbl', text: '密码' }), passInp]),
+      el('div', { style: 'display:flex;align-items:flex-end;gap:10px' }, [rememberLabel, btnConnect])
+    ]));
+
+    // ---- 路径区 ----
+    const crumbsEl = el('div', { class: 'file-crumbs', style: 'font-family: ui-monospace, monospace; font-size: 13px;' });
+    const pathInp = el('input', { type: 'text', placeholder: '输入绝对路径后回车跳转（例 /var/log）' });
+    const btnParent = el('button', { class: 'btn btn-sm', text: '← 上级' });
+    const btnRefresh = el('button', { class: 'btn btn-sm', text: '刷新' });
+
+    const pathCard = el('div', { class: 'card' });
+    pathCard.appendChild(el('h3', { text: '2. 浏览目录' }));
+    pathCard.appendChild(el('div', { class: 'card-desc' }, [
+      document.createTextNode('面包屑可点击跳转；点目录名进入子目录；勾选文件后下载。')
+    ]));
+    pathCard.appendChild(el('div', { class: 'row gap-2 mb-2' }, [btnParent, btnRefresh, crumbsEl]));
+    pathCard.appendChild(pathInp);
+
+    // ---- 文件列表区 ----
+    const tableWrap = el('div', { class: 'file-table-wrap' });
+
+    // 工具栏：全选 / 取消 / 已选 N 个 / 下载选中
+    const btnSelAll = el('button', { class: 'btn btn-sm', text: '全选', onclick: () => toggleAllFiles(true) });
+    const btnSelNone = el('button', { class: 'btn btn-sm', text: '取消选中', onclick: () => toggleAllFiles(false) });
+    const selCount = el('span', { class: 'text-dim', text: '已选 0 个' });
+    const dlZipChk = el('input', { type: 'checkbox', id: 'files-zip' });
+    const dlZipLabel = el('label', { class: 'inline' }, [dlZipChk, document.createTextNode('多文件打包 zip')]);
+    const btnDownload = el('button', { class: 'btn btn-primary', text: '下载选中', onclick: doDownload });
+    const btnCancel = el('button', { class: 'btn btn-danger', text: '取消下载', onclick: doCancelDownload });
+    btnDownload.disabled = true;
+    btnCancel.disabled = true;
+
+    const fileCard = el('div', { class: 'card' });
+    fileCard.appendChild(el('h3', { text: '3. 选择并下载' }));
+    fileCard.appendChild(el('div', { class: 'file-toolbar' }, [
+      btnSelAll, btnSelNone, selCount, dlZipLabel, btnDownload, btnCancel
+    ]));
+    fileCard.appendChild(tableWrap);
+
+    view.appendChild(connCard);
+    view.appendChild(pathCard);
+    view.appendChild(fileCard);
+
+    // =================== 行为 ===================
+
+    function loadCfg() {
+      return api('GET', '/api/config').then(info => {
+        state.cfg = info;
+        // 填系统下拉
+        sysSel.innerHTML = '';
+        sysSel.appendChild(el('option', { value: '', text: '（请选择）' }));
+        (info.systems || []).forEach(sys => {
+          sysSel.appendChild(el('option', { value: sys.name, text: sys.name + (sys.description ? ' · ' + sys.description : '') }));
+        });
+      });
+    }
+
+    function refreshCredStatus() {
+      if (!state.currentSys || !state.currentSrv) {
+        rememberChk.checked = false;
+        rememberChk.disabled = true;
+        return;
+      }
+      rememberChk.disabled = false;
+      api('GET', '/api/credentials/has?system=' + encodeURIComponent(state.currentSys) + '&server=' + encodeURIComponent(state.currentSrv))
+        .then(r => { rememberChk.checked = !!r.has; })
+        .catch(() => { rememberChk.checked = false; });
+    }
+
+    function creds() {
+      const u = userInp.value.trim();
+      return {
+        username: u,
+        password: passInp.value,
+        remember: rememberChk.checked
+      };
+    }
+
+    function setSystem(name) {
+      state.currentSys = name;
+      state.currentSrv = '';
+      srvSel.innerHTML = '';
+      srvSel.appendChild(el('option', { value: '', text: '（请选择）' }));
+      const sys = (state.cfg.systems || []).find(s => s.name === name);
+      if (!sys) { srvSel.disabled = true; return; }
+      (sys.servers || []).forEach(srv => {
+        srvSel.appendChild(el('option', { value: srv.name, text: srv.name + ' · ' + srv.host + ':' + srv.port }));
+      });
+      srvSel.disabled = false;
+      // 默认用户名
+      userInp.value = (sys.servers && sys.servers[0] && sys.servers[0].username) || '';
+      refreshCredStatus();
+    }
+
+    function setServer(name) {
+      state.currentSrv = name;
+      const sys = (state.cfg.systems || []).find(s => s.name === state.currentSys);
+      const srv = sys && (sys.servers || []).find(s => s.name === name);
+      if (srv && srv.username && !userInp.value) {
+        userInp.value = srv.username;
+      }
+      refreshCredStatus();
+    }
+
+    sysSel.addEventListener('change', () => setSystem(sysSel.value));
+    srvSel.addEventListener('change', () => setServer(srvSel.value));
+
+    btnConnect.addEventListener('click', async () => {
+      if (!state.currentSys || !state.currentSrv) {
+        toast('请先选系统和服务器', 'warn'); return;
+      }
+      const c = creds();
+      if (!c.username) { toast('请输入 SSH 用户名', 'warn'); return; }
+      // 记住密码：先调一次保存接口（如果勾选）
+      if (c.remember && c.password) {
+        try {
+          await api('POST', '/api/credentials/save', {
+            system: state.currentSys, server: state.currentSrv, username: c.username, password: c.password
+          });
+        } catch (e) { /* 忽略，下载时再 fallback */ }
+      }
+      // 默认进 $HOME（很多服务器 /home/user 就是 SSH 用户的 home）
+      // 先试 stat $HOME；如果失败就退回 /
+      await doListDir(c.username ? ('/home/' + c.username) : '/', c);
+    });
+
+    btnParent.addEventListener('click', () => {
+      if (state.parent && state.parent !== state.currentPath) {
+        const c = creds();
+        doListDir(state.parent, c);
+      }
+    });
+    btnRefresh.addEventListener('click', () => {
+      const c = creds();
+      doListDir(state.currentPath, c);
+    });
+    pathInp.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        const p = pathInp.value.trim();
+        if (p && p.startsWith('/')) {
+          const c = creds();
+          doListDir(p, c);
+        } else {
+          toast('路径必须是绝对路径（以 / 开头）', 'warn');
+        }
+      }
+    });
+
+    // ---- 列目录 ----
+    async function doListDir(path, c) {
+      try {
+        const r = await api('POST', '/api/files/list', {
+          system: state.currentSys, server: state.currentSrv,
+          username: c.username, password: c.password, path: path
+        });
+        state.currentPath = r.path;
+        state.parent = r.parent || '';
+        state.entries = r.entries || [];
+        state.selected.clear();
+        renderCrumbs();
+        renderTable();
+      } catch (e) {
+        // 列目录失败时，给个空状态 + 错误提示
+        state.entries = [];
+        state.selected.clear();
+        renderCrumbs();
+        renderTable();
+        toast('列出目录失败：' + e.message, 'err');
+      }
+    }
+
+    function renderCrumbs() {
+      crumbsEl.innerHTML = '';
+      const parts = state.currentPath.split('/').filter(Boolean);
+      const head = el('a', { href: '#', text: '/', onclick: (e) => {
+        e.preventDefault(); doListDir('/', creds());
+      }});
+      crumbsEl.appendChild(head);
+      let acc = '';
+      parts.forEach((seg, i) => {
+        crumbsEl.appendChild(document.createTextNode(' / '));
+        acc += '/' + seg;
+        const target = acc;
+        crumbsEl.appendChild(el('a', { href: '#', text: seg, onclick: (e) => {
+          e.preventDefault(); doListDir(target, creds());
+        }}));
+      });
+      pathInp.value = state.currentPath;
+    }
+
+    function sortedEntries() {
+      const arr = state.entries.slice();
+      const k = state.sortKey;
+      const desc = state.sortDesc;
+      arr.sort((a, b) => {
+        // 目录优先
+        if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
+        let av, bv;
+        if (k === 'size') { av = a.size; bv = b.size; }
+        else if (k === 'mtime') { av = a.mtime || ''; bv = b.mtime || ''; }
+        else { av = (a.name || '').toLowerCase(); bv = (b.name || '').toLowerCase(); }
+        if (av < bv) return desc ? 1 : -1;
+        if (av > bv) return desc ? -1 : 1;
+        return 0;
+      });
+      return arr;
+    }
+
+    function renderTable() {
+      tableWrap.innerHTML = '';
+      if (!state.entries.length) {
+        tableWrap.appendChild(el('div', { class: 'text-dim', text: '（目录为空，或列表失败 — 看上面的提示）' }));
+        return;
+      }
+      const tbl = el('table', { class: 'table' });
+      const thead = el('thead');
+      const sortLink = (label, key) => {
+        const isActive = state.sortKey === key;
+        const arrow = isActive ? (state.sortDesc ? ' ↓' : ' ↑') : '';
+        return el('a', { href: '#', text: label + arrow, onclick: (e) => {
+          e.preventDefault();
+          if (state.sortKey === key) state.sortDesc = !state.sortDesc;
+          else { state.sortKey = key; state.sortDesc = false; }
+          renderTable();
+        }});
+      };
+      thead.appendChild(el('tr', null, [
+        el('th', { class: 'col-check' }),
+        el('th', null, [sortLink('名称', 'name')]),
+        el('th', null, [sortLink('大小', 'size')]),
+        el('th', null, [sortLink('修改时间', 'mtime')]),
+        el('th', null, [document.createTextNode('权限')]),
+        el('th', { class: 'col-status' }, [document.createTextNode('状态')])
+      ]));
+      tbl.appendChild(thead);
+
+      const tbody = el('tbody');
+      sortedEntries().forEach(entry => {
+        const fullPath = (state.currentPath === '/' ? '' : state.currentPath) + '/' + entry.name;
+        const tr = el('tr', { 'data-path': fullPath, 'data-name': entry.name });
+        const cb = el('input', { type: 'checkbox' });
+        cb.checked = state.selected.has(entry.name);
+        cb.disabled = entry.isDir; // 目录不能直接下载（要先进去选文件）
+        cb.addEventListener('change', () => {
+          if (cb.checked) state.selected.add(entry.name);
+          else state.selected.delete(entry.name);
+          updateSelCount();
+        });
+        tr.appendChild(el('td', { class: 'col-check' }, [cb]));
+
+        // 名称：目录可点击进入，文件显示图标
+        const icon = entry.isDir ? '📁' : '📄';
+        const nameCell = el('td');
+        if (entry.isDir) {
+          nameCell.appendChild(el('a', { href: '#', text: entry.name, onclick: (e) => {
+            e.preventDefault(); doListDir(fullPath, creds());
+          }}));
+        } else {
+          nameCell.appendChild(document.createTextNode(entry.name));
+        }
+        nameCell.insertBefore(document.createTextNode(icon + ' '), nameCell.firstChild);
+        tr.appendChild(nameCell);
+
+        tr.appendChild(el('td', { class: 'num' }, [document.createTextNode(entry.isDir ? '—' : formatBytes(entry.size))]));
+        tr.appendChild(el('td', null, [document.createTextNode(entry.mtime ? formatTime(entry.mtime) : '-')]));
+        tr.appendChild(el('td', null, [document.createTextNode(entry.mode || '-')]));
+        // 状态列：先留空，下载时由 SSE 填充
+        tr.appendChild(el('td', { class: 'col-status status-cell', 'data-name': entry.name }, [document.createTextNode('')]));
+
+        tbody.appendChild(tr);
+      });
+      tbl.appendChild(tbody);
+      tableWrap.appendChild(tbl);
+      updateSelCount();
+      // 恢复下载进行中的进度条（刷新列表后）
+      Object.keys(state.fileStates).forEach(p => {
+        const st = state.fileStates[p];
+        if (!st) return;
+        const base = p.split('/').pop();
+        setRowStatusByName(base, statusHtml(st));
+      });
+    }
+
+    function updateSelCount() {
+      const n = state.selected.size;
+      selCount.textContent = '已选 ' + n + ' 个';
+      btnDownload.disabled = n === 0 || !!state.dlId;
+      btnDownload.textContent = n > 1 ? ('下载选中 (' + n + ')') : '下载选中';
+    }
+
+    function toggleAllFiles(on) {
+      state.selected.clear();
+      if (on) {
+        state.entries.forEach(e => { if (!e.isDir) state.selected.add(e.name); });
+      }
+      renderTable();
+    }
+
+    function setRowStatusByName(name, html) {
+      const cell = tableWrap.querySelector('tr[data-name="' + cssEscape(name) + '"] .status-cell')
+                || tableWrap.querySelector('tr .status-cell[data-name="' + cssEscape(name) + '"]');
+      if (cell) cell.innerHTML = html;
+    }
+
+    function statusHtml(st) {
+      if (!st) return '';
+      if (st.status === 'pending') return '<span class="dl-pct">等待…</span>';
+      if (st.status === 'downloading') {
+        if (st.total > 0) {
+          const pct = Math.min(100, (st.written / st.total) * 100);
+          return '<div class="dl-bar"><div class="dl-bar-fill" style="width:' + pct + '%"></div></div>'
+               + '<span class="dl-pct">' + pctText(st.written, st.total) + '</span>';
+        }
+        return '<div class="dl-bar"><div class="dl-bar-fill indeterminate"></div></div><span class="dl-pct">下载中</span>';
+      }
+      if (st.status === 'done') return '<span class="dl-pct" style="color:#10b981">✓ 完成 · ' + formatBytes(st.bytes || 0) + '</span>';
+      if (st.status === 'fail') return '<span class="dl-pct" style="color:#ef4444">✗ ' + (st.error || '失败') + '</span>';
+      return '';
+    }
+
+    // ---- 下载 ----
+    async function doDownload() {
+      if (state.dlId) { toast('已有下载任务在进行中', 'warn'); return; }
+      const c = creds();
+      if (!c.username) { toast('请输入 SSH 用户名', 'warn'); return; }
+      const names = Array.from(state.selected);
+      if (!names.length) { toast('请先勾选文件', 'warn'); return; }
+      const paths = names.map(n => (state.currentPath === '/' ? '' : state.currentPath) + '/' + n);
+      const wantZip = dlZipChk.checked;
+      const zip = wantZip && paths.length >= 2;
+      if (wantZip && paths.length < 2) {
+        toast('zip 打包需要 ≥ 2 个文件，已仅返回原始文件', 'warn');
+      }
+      // 重置 fileStates
+      state.fileStates = {};
+      paths.forEach(p => {
+        state.fileStates[p] = { status: 'pending' };
+        setRowStatusByName(p.split('/').pop(), '<span class="dl-pct">等待…</span>');
+      });
+      btnDownload.disabled = true;
+      btnCancel.disabled = false;
+      setStatus('busy', '下载中…');
+      try {
+        const r = await api('POST', '/api/files/download', {
+          system: state.currentSys, server: state.currentSrv,
+          username: c.username, password: c.password,
+          paths: paths, zip: zip
+        });
+        state.dlId = r.id;
+        if (!window.EventSource) { toast('浏览器不支持 EventSource', 'err'); return; }
+        const es = new EventSource('/api/files/download/' + r.id + '/events');
+        state.dlEvtSrc = es;
+        es.onmessage = (ev) => {
+          let o; try { o = JSON.parse(ev.data); } catch (e) { return; }
+          handleDownloadEvent(o);
+        };
+        es.addEventListener('done', () => { closeDownloadStream('done'); });
+        es.onerror = () => {
+          setTimeout(() => {
+            if (state.dlId && state.dlEvtSrc === es) {
+              closeDownloadStream('error');
+              toast('SSE 连接异常', 'err');
+            }
+          }, 2000);
+        };
+      } catch (e) {
+        toast('启动下载失败：' + e.message, 'err');
+        paths.forEach(p => {
+          state.fileStates[p] = { status: 'fail', error: e.message };
+          setRowStatusByName(p.split('/').pop(), statusHtml(state.fileStates[p]));
+        });
+        btnDownload.disabled = false;
+        btnCancel.disabled = true;
+        setStatus('err', '失败');
+        setTimeout(() => setStatus('idle'), 1500);
+      }
+    }
+
+    function handleDownloadEvent(o) {
+      if (o.kind === 'file_start') {
+        state.fileStates[o.file] = { status: 'downloading', written: 0, total: o.total || -1 };
+        setRowStatusByName(o.file.split('/').pop(), statusHtml(state.fileStates[o.file]));
+      } else if (o.kind === 'progress') {
+        const st = state.fileStates[o.file] || {};
+        st.status = 'downloading'; st.written = o.written; st.total = o.total;
+        state.fileStates[o.file] = st;
+        setRowStatusByName(o.file.split('/').pop(), statusHtml(st));
+      } else if (o.kind === 'file_done') {
+        state.fileStates[o.file] = { status: 'done', bytes: o.bytes };
+        setRowStatusByName(o.file.split('/').pop(), statusHtml(state.fileStates[o.file]));
+      } else if (o.kind === 'done') {
+        btnDownload.disabled = state.selected.size === 0;
+        btnCancel.disabled = true;
+        state.dlId = null;
+        if (o.ok) {
+          toast('下载完成：' + (o.downloads || []).length + ' 个产物（去「下载历史」页打开/管理）', 'ok');
+        } else {
+          toast('下载失败：' + (o.error || '未知错误'), 'err');
+          // 把还没标的标失败
+          Object.keys(state.fileStates).forEach(p => {
+            const st = state.fileStates[p];
+            if (st.status === 'pending' || st.status === 'downloading') {
+              st.status = 'fail'; st.error = o.error || '';
+              setRowStatusByName(p.split('/').pop(), statusHtml(st));
+            }
+          });
+        }
+        setStatus('idle');
+        state.dlEvtSrc = null;
+      }
+    }
+
+    function closeDownloadStream(reason) {
+      if (state.dlEvtSrc) {
+        state.dlEvtSrc.close();
+        state.dlEvtSrc = null;
+      }
+      btnDownload.disabled = state.selected.size === 0;
+      btnCancel.disabled = true;
+      if (reason === 'cancel') toast('已停止下载', 'warn');
+      setStatus('idle');
+    }
+
+    async function doCancelDownload() {
+      if (!state.dlId) return;
+      try { await api('POST', '/api/files/download/' + state.dlId + '/cancel', {}); }
+      catch (e) { /* ignore */ }
+      closeDownloadStream('cancel');
+    }
+
+    // ---- 启动 ----
+    loadCfg().then(refreshCredStatus).catch(e => toast('配置加载失败：' + e.message, 'err'));
+  }
+
+  // 简单的 CSS.escape polyfill（用于 selector 转义）
+  function cssEscape(s) {
+    if (window.CSS && CSS.escape) return CSS.escape(s);
+    return String(s).replace(/[^a-zA-Z0-9_-]/g, c => '\\' + c);
+  }
+
+  // 简单的百分比文本
+  function pctText(written, total) {
+    if (!total || total < 0) return formatBytes(written || 0);
+    const pct = Math.min(100, Math.round((written / total) * 100));
+    return pct + '% · ' + formatBytes(written) + ' / ' + formatBytes(total);
   }
 
   // 报文格式化

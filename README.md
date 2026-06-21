@@ -8,7 +8,12 @@
 
 一个面向内网运维场景的本地工具箱。
 
-**v0.2（当前）** 在第一阶段基础上新增：
+**v0.3（当前）** 在 v0.2 基础上新增：
+
+- **文件浏览器（任意路径下载）**：左侧菜单「文件下载」，按 SSH 账号权限浏览任意目录，像 FTP 一样层层进入、勾选下载；多文件支持打包 zip；保留审计 + 进度条 + 取消
+- **WebSphere 日志助手 · 指定文件下载**：在 v0.2 「下载最新 N 个」基础上，新增「勾选指定文件下载」，多文件带进度和 zip
+
+**v0.2** 已包含：
 
 - **系统配置可视化编辑器**：在「系统配置」页直接增删改业务系统 / 服务器 / 日志目录，保存后原子改写 `config.yaml`，无需重启
 - **多服务器并行搜索**：在 WebSphere 日志页勾选多台服务器，1~16 路并发搜索，结果按服务器分组、显示命中数+耗时
@@ -17,7 +22,7 @@
 - 报文格式化：JSON / XML 格式化、压缩、校验
 - 本地审计日志（`logs/audit.log`，不写密码）
 
-> 第一阶段（v0.1）已验收：首页导航、单服务器 WebSphere 助手、报文格式化、系统配置只读展示、审计日志。
+> v0.1 / v0.2 已验收；v0.3 重点是「文件下载」菜单。
 > 验收清单见 [`docs/ACCEPTANCE.md`](docs/ACCEPTANCE.md)。
 
 ---
@@ -235,10 +240,17 @@ log_dirs:
 | POST | `/api/ssh/test` | 测试 SSH 连接（password 可为空，自动从 keyring 读） |
 | POST | `/api/logs/list` | 列出日志目录下的文件 |
 | POST | `/api/logs/download-latest` | 下载最近 1~5 个日志文件（写 sidecar 元数据） |
+| POST | `/api/logs/download` | 启动「指定文件下载」任务，立即返回 `{id}` |
+| GET  | `/api/logs/download/{id}/events` | SSE 进度流（文件开始 / 进度 / 完成） |
+| POST | `/api/logs/download/{id}/cancel` | 取消进行中的下载任务 |
 | POST | `/api/logs/search` | 关键词搜索 |
 | POST | `/api/logs/search/multi` | 多服务器并行搜索 |
 | POST | `/api/logs/context` | 查看某行的上下文 |
 | POST | `/api/logs/tail/start` | 启动实时 tail（SSE 流） |
+| POST | `/api/files/list` | **v0.3** 列任意远端目录（按 SSH 账号权限放行） |
+| POST | `/api/files/download` | **v0.3** 启动「任意路径下载」任务，立即返回 `{id}` |
+| GET  | `/api/files/download/{id}/events` | **v0.3** SSE 进度流 |
+| POST | `/api/files/download/{id}/cancel` | **v0.3** 取消进行中的下载任务 |
 | GET  | `/api/audit/recent` | 操作历史（按 op / system / server / result 过滤） |
 | POST | `/api/credentials/save` | 保存 SSH 密码到系统钥匙串 |
 | GET  | `/api/credentials/has` | 检查是否已保存密码（不返回密码本身） |
@@ -313,22 +325,68 @@ ts=2026-06-19 10:30:12.000 op=logs.download system=信贷生产 server=prod-node
 1. HTTP 服务只监听 `127.0.0.1`（`0.0.0.0` 会被配置校验拒绝）
 2. 不允许用户输入任意 shell 命令
 3. 所有远程命令由后端固定模板生成（`find` / `grep` / `sed` / `sort` / `head` 组合）
-4. 目录必须来自配置白名单，文件名只能来自 `find` 列出结果
+4. **WebSphere 日志助手**（`/api/logs/*`）的目录必须来自配置白名单 `log_dirs`，文件名只能来自 `find` 列出结果；**文件浏览器**（`/api/files/*`）按 v0.3 用户决策改为按 SSH 账号实际权限放行（不引白名单）
 5. 搜索关键词做严格转义 + 白名单校验，禁止 ` ' \` $ ; & | < > ( ) { } [ ]` 等
 6. 密码不会写入审计日志，也不会出现在错误信息中
-7. 不提供删除 / 修改 / 上传远程文件的能力
+7. **不提供删除 / 修改 / 上传远程文件的能力**（v0.3 文件浏览器依然只读 + 下载）
 8. 下载文件只保存到 `downloads/`，URL 路径穿越会被拒绝
 9. 命令超时由客户端 ctx + SIGTERM/SIGKILL 控制，不依赖服务器端 `timeout`
+10. 任意路径下载做基础校验（路径必须绝对、不含 NUL/换行、单次最多 100 个文件、单任务 30 分钟硬超时）
 
 ---
 
-## 11. 第一阶段未做
+## 11. 文件浏览器（v0.3 新增）
+
+左侧菜单「文件下载」，提供类似 FTP 的目录浏览 + 下载能力。
+
+### 11.1 与「WebSphere 日志助手」的区别
+
+| 维度 | WebSphere 日志助手 | 文件浏览器（v0.3） |
+|---|---|---|
+| 路径 | 只能浏览 `log_dirs` 白名单内的目录 | **任意绝对路径**，按 SSH 账号实际权限放行 |
+| 用途 | 排查日志、搜索、上下文 | 拿任意文件（properties、xml、sql、bundle、jar 等）|
+| 写权限 | 无 | 无（依然只读 + 下载） |
+| 审计 | `op=logs.list / logs.download` | `op=files.list / files.download` |
+| 入口 | 顶部菜单「WebSphere 日志」 | 顶部菜单「文件下载」 |
+
+### 11.2 使用流程
+
+1. 顶部菜单 → 「文件下载」
+2. 选业务系统 + 服务器 + 输入 SSH 用户名 + 密码
+3. 默认进入 `/home/<user>`；用面包屑跳转、点目录名进入子目录，或直接在路径框输入绝对路径后回车
+4. 勾选文件（目录不可下载，必须先进去选文件）→ 点「下载选中」
+5. 多文件可勾选「打包 zip」；下载有进度条，可取消
+6. 完成后到「下载历史」页打开 / 删除 / 重新下载
+
+### 11.3 硬约束（防误操作 / 连接卡死）
+
+- 单次下载最多 **100** 个文件
+- 单个下载任务超过 **30 分钟**自动 cancel
+- 路径必须以 `/` 开头；不接受 `..` 穿越（依赖 SFTP 协议的 server 端实现）
+- 所有列目录 / 下载进 `audit.log`，含 system / server / path / count / bytes
+
+### 11.4 安全设计取舍
+
+v0.3 之前，工具箱坚持「目录来自配置白名单」（v0.1 README 第 4 条安全设计）。
+v0.3 应实际运维需求（同一台 WebSphere 服务器的 `logs/` `properties/` `config/` `installedApps/` 都要看），文件浏览器改为**按 SSH 账号实际权限放行**：
+
+- 工具箱不做白名单限制；
+- 真实访问控制交给 SSH 服务器端（账号 + 文件系统权限 + sshd_config）；
+- 工具箱只做基础格式校验 + 审计 + 进度 / 取消。
+
+写权限（上传、删除、改权限）依然全部禁止。
+
+---
+
+## 12. 第一阶段未做
 
 - 密码本地保存（已做：macOS Keychain / Windows DPAPI / Linux Secret Service）
 - 多文件 zip 打包下载（已做）
 - 实时 tail（已做）
 - 任意命令执行（设计为禁止）
 - 多服务器并发搜索（v0.2 已完成，页面勾选+并行返回）
+- 文件浏览器（v0.3 已做：任意路径浏览 + 下载）
+- WebSphere 日志助手 · 指定文件下载（v0.3 已做）
 - 数据库连接
 - 常用命令模块（占位页面）
 
@@ -336,7 +394,7 @@ ts=2026-06-19 10:30:12.000 op=logs.download system=信贷生产 server=prod-node
 
 ---
 
-## 12. 常见问题
+## 13. 常见问题
 
 **Q: 启动后浏览器没自动打开？**
 A: 检查 `config.yaml` 的 `auto_open_browser: true`；或者手动访问 `http://127.0.0.1:18080`。
@@ -355,6 +413,9 @@ A: v0.2 起在「系统配置」页直接编辑保存即可，无需重启。仍
 
 **Q: 想在多台服务器上并发搜索？**
 A: v0.2 已支持。在 WebSphere 日志页勾选多台服务器（最多 16 路并发），点「搜索」会按服务器分组返回结果，每台独立显示命中数+耗时。
+
+**Q: 想下载白名单目录之外的文件（比如 properties / xml / jar）？**
+A: v0.3 新增「文件下载」菜单，按 SSH 账号权限浏览任意目录并下载，写操作依然禁止。详见 [§11 文件浏览器](#11-文件浏览器v03-新增)。
 
 **Q: Win7 上跑不起来？**
 A: 必须用 Go 1.20.x 编译的 `OpsToolbox_win7.exe`，主版本 `OpsToolbox.exe` 在 Win7 上跑不起来（Go 1.21+ 不再支持 Win7）。

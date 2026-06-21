@@ -9,6 +9,8 @@ package httpserver
 import (
 	"archive/zip"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -33,17 +35,18 @@ import (
 	"ops-toolbox/internal/tailmgr"
 )
 
-// Server 持有配置（线程安全 Manager）、审计日志、嵌入式静态资源、tail 会话池
+// Server 持有配置（线程安全 Manager）、审计日志、嵌入式静态资源、tail 会话池、下载任务池
 type Server struct {
-	cfg     *config.Manager
-	audit   *audit.Logger
-	webRoot fs.FS
-	tails   *tailmgr.Manager
+	cfg      *config.Manager
+	audit    *audit.Logger
+	webRoot  fs.FS
+	tails    *tailmgr.Manager
+	downloads *dlManager
 }
 
 // New 构造一个 Server
 func New(cfg *config.Manager, a *audit.Logger, webRoot fs.FS, tails *tailmgr.Manager) *Server {
-	return &Server{cfg: cfg, audit: a, webRoot: webRoot, tails: tails}
+	return &Server{cfg: cfg, audit: a, webRoot: webRoot, tails: tails, downloads: newDownloadMgr()}
 }
 
 // cur 拿一份当前 Config 的只读快照。
@@ -98,6 +101,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleFormatXML(w, r)
 	case path == "/api/admin/servers":
 		s.handleAdminServers(w, r)
+	case path == "/api/files/list":
+		s.handleFilesList(w, r)
+	case path == "/api/files/download":
+		s.handleFilesDownload(w, r)
+	case strings.HasPrefix(path, "/api/files/download/"):
+		s.handleFilesDownloadEventsOrCancel(w, r)
 	case strings.HasPrefix(path, "/api/logs/tail/"):
 		s.handleTailEventsOrStop(w, r)
 	case strings.HasPrefix(path, "/downloads/"):
@@ -547,6 +556,7 @@ func (s *Server) handleDownloadLatest(w http.ResponseWriter, r *http.Request) {
 		"folder":    s.cur().DownloadDir(),
 	})
 }
+
 
 // zipFiles 把若干已下载的本地文件打包成单个 zip。
 //
@@ -1083,14 +1093,15 @@ type logsSearchMultiReq struct {
 }
 
 type logsSearchMultiServerResult struct {
-	Server string               `json:"server"`
-	Host   string               `json:"host"`
-	OK     bool                 `json:"ok"`
-	Error  string               `json:"error,omitempty"`
-	Hits   []logquery.SearchHit `json:"hits,omitempty"`
-	Files  []string             `json:"files,omitempty"`
-	HitsN  int                  `json:"hits_count"`
-	Ms     int64                `json:"elapsed_ms"`
+	Server   string               `json:"server"`
+	Host     string               `json:"host"`
+	Encoding string               `json:"encoding,omitempty"`
+	OK       bool                 `json:"ok"`
+	Error    string               `json:"error,omitempty"`
+	Hits     []logquery.SearchHit `json:"hits,omitempty"`
+	Files    []string             `json:"files,omitempty"`
+	HitsN    int                  `json:"hits_count"`
+	Ms       int64                `json:"elapsed_ms"`
 }
 
 func (s *Server) handleLogsSearchMulti(w http.ResponseWriter, r *http.Request) {
@@ -1250,7 +1261,7 @@ func (s *Server) runOneServerSearch(
 ) logsSearchMultiServerResult {
 	start := time.Now()
 	res := logsSearchMultiServerResult{
-		Server: srv.Name, Host: srv.Host,
+		Server: srv.Name, Host: srv.Host, Encoding: ld.Encoding,
 	}
 
 	// 单独给 Dial 一个短超时（10s），但仍受总 ctx 控制
@@ -1903,4 +1914,749 @@ func humanBytes(n int64) string {
 		return fmt.Sprintf("%.1f MB", float64(n)/(k*k))
 	}
 	return fmt.Sprintf("%.2f GB", float64(n)/(k*k*k))
+}
+
+// ---------- 下载任务池（带 SSE 进度）----------
+//
+// 模型：
+//
+//	POST /api/logs/download                   → 创建任务（启动后台下载），立即返回 {id}
+//	GET  /api/logs/download/{id}/events       → SSE 进度流
+//	POST /api/logs/download/{id}/cancel       → 取消
+//
+// 设计要点：
+//   - session 持有一个 cancel ctx；cancel 时 SSH/SFTP 流被中断，下载协程退出；
+//   - 进度通过 broadcast 推给所有订阅者；
+//   - 多文件串行下载（一次一个 SFTP 流）；进度事件里带当前文件名，
+//     前端可按 file 字段找到表格行并更新行内进度条；
+//   - 全部完成 / 失败 / 取消都广播一条 done 事件，订阅者据此关闭 SSE。
+
+// dlSession 一个下载任务
+//
+// Kind 用于区分审计 op 与路由命名空间：
+//   - "logs"：走 /api/logs/download/*（白名单日志目录下，审计 op=logs.download）
+//   - "files"：走 /api/files/download/*（任意路径，审计 op=files.download）
+// 复用同一个 dlManager，ID 全局唯一（newDLID）。
+
+// newDLID 构造下载任务 ID（带前缀便于排查）
+func newDLID() string {
+	var b [8]byte
+	_, _ = rand.Read(b[:])
+	return "dl-" + hex.EncodeToString(b[:])
+}
+type dlSession struct {
+	ID        string
+	Kind      string // "logs" | "files"
+	System    string
+	Server    string
+	Dir       string // 仅 logs 模式使用，files 模式为空
+	Files     []string
+	Paths     []string // 仅 files 模式使用：完整远端路径
+	Zip       bool
+	Folder    string // 本地下载根目录（带进 done 事件，前端"本地保存目录"显示用）
+	CreatedAt time.Time
+
+	mu          sync.RWMutex
+	subscribers map[chan []byte]struct{}
+	cancel      context.CancelFunc
+	finished    bool
+	result      []downloadItem
+	finalErr    error
+}
+
+// dlManager 全局下载任务池
+type dlManager struct {
+	mu       sync.RWMutex
+	sessions map[string]*dlSession
+}
+
+func newDownloadMgr() *dlManager {
+	return &dlManager{sessions: make(map[string]*dlSession)}
+}
+
+// create 建一个空 session（不启动下载）。调用方拿到 id 后再异步启动 SSH + 下载。
+func (m *dlManager) create(s *dlSession) string {
+	m.mu.Lock()
+	m.sessions[s.ID] = s
+	m.mu.Unlock()
+	return s.ID
+}
+
+func (m *dlManager) get(id string) (*dlSession, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	s, ok := m.sessions[id]
+	return s, ok
+}
+
+func (m *dlManager) cancel(id string) bool {
+	m.mu.RLock()
+	s, ok := m.sessions[id]
+	m.mu.RUnlock()
+	if !ok {
+		return false
+	}
+	if s.cancel != nil {
+		s.cancel()
+	}
+	return true
+}
+
+// idleGC 清理已结束且无订阅者的 session
+func (m *dlManager) idleGC(s *dlSession) {
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+	for {
+		<-ticker.C
+		s.mu.RLock()
+		finished := s.finished
+		subs := len(s.subscribers)
+		s.mu.RUnlock()
+		if finished && subs == 0 {
+			m.mu.Lock()
+			// 二次检查（避免 cancel 时机竞争）
+			s.mu.RLock()
+			still := s.finished && len(s.subscribers) == 0
+			s.mu.RUnlock()
+			if still {
+				delete(m.sessions, s.ID)
+			}
+			m.mu.Unlock()
+			return
+		}
+		// 兜底：超过 30 分钟没结束就强制 cancel
+		if time.Since(s.CreatedAt) > 30*time.Minute {
+			if s.cancel != nil {
+				s.cancel()
+			}
+		}
+	}
+}
+
+// Subscribe 注册订阅者。channel 在 markFinished 时会被 close，
+// 订阅者用 <-ch 的第二个返回值判断是否已结束（与 tailmgr 一致）。
+func (s *dlSession) Subscribe() (<-chan []byte, func()) {
+	ch := make(chan []byte, 128)
+	s.mu.Lock()
+	already := s.finished
+	if s.subscribers == nil {
+		s.subscribers = make(map[chan []byte]struct{})
+	}
+	if !already {
+		s.subscribers[ch] = struct{}{}
+	}
+	s.mu.Unlock()
+	if already {
+		// session 已结束，新订阅者拿到的 ch 立即关闭
+		close(ch)
+	} else {
+		// 安全检查：双重 finished 之间的竞争（markFinished 已经 close 了所有旧 ch）
+		// 这里只有已经 finish 后才 close(ch)，不重复
+	}
+	cancel := func() {
+		s.mu.Lock()
+		if _, ok := s.subscribers[ch]; ok {
+			delete(s.subscribers, ch)
+			close(ch)
+		}
+		s.mu.Unlock()
+	}
+	return ch, cancel
+}
+
+// broadcast 推一条事件给所有订阅者
+func (s *dlSession) broadcast(line []byte) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for ch := range s.subscribers {
+		select {
+		case ch <- line:
+		default:
+			// 订阅者处理慢，丢这一帧（前端会被后续 done 事件收尾）
+		}
+	}
+}
+
+// markFinished 标记 session 结束，阻塞推 done 给所有订阅者，再 close channel。
+//
+// 为什么走阻塞推：进度事件可丢（前端会被下一次更新覆盖），但 done 事件
+// 必到——否则前端不知道"任务结束 vs 网络断"，会卡在 99% 假死。
+func (s *dlSession) markFinished(result []downloadItem, finalErr error) {
+	s.mu.Lock()
+	s.finished = true
+	s.result = result
+	s.finalErr = finalErr
+	subs := s.subscribers
+	s.subscribers = nil
+	s.mu.Unlock()
+
+	var ev []byte
+	if finalErr != nil {
+		ev = formatDLEvent("done", map[string]any{
+			"ok":    false,
+			"error": finalErr.Error(),
+		})
+	} else {
+		ev = formatDLEvent("done", map[string]any{
+			"ok":        true,
+			"downloads": result,
+			"folder":    s.Folder, // 前端下载结果卡显示用
+		})
+	}
+	// 阻塞推 done；订阅者必然能收到
+	for ch := range subs {
+		ch <- ev
+	}
+	for ch := range subs {
+		close(ch)
+	}
+}
+
+// formatDLEvent 构造 SSE data: 字段（手写 JSON，避免引号转义麻烦）
+func formatDLEvent(kind string, kv map[string]any) []byte {
+	var b strings.Builder
+	b.WriteString(`{"kind":"`)
+	b.WriteString(kind)
+	b.WriteString(`"`)
+	for k, v := range kv {
+		b.WriteString(`,"`)
+		b.WriteString(k)
+		b.WriteString(`":`)
+		b.WriteString(jsonValue(v))
+	}
+	b.WriteString("}\n")
+	return []byte(b.String())
+}
+
+// jsonValue 把 Go 值序列化成最小 JSON
+func jsonValue(v any) string {
+	switch x := v.(type) {
+	case string:
+		return jsonStringVal(x)
+	case bool:
+		if x {
+			return "true"
+		}
+		return "false"
+	case int:
+		return strconv.Itoa(x)
+	case int64:
+		return strconv.FormatInt(x, 10)
+	case float64:
+		return strconv.FormatFloat(x, 'f', -1, 64)
+	case []downloadItem:
+		// 复用 downloadItem 的 JSON 序列化（保证字段一致）
+		b, _ := json.Marshal(x)
+		return string(b)
+	case nil:
+		return "null"
+	default:
+		b, _ := json.Marshal(x)
+		return string(b)
+	}
+}
+
+func jsonStringVal(s string) string {
+	out := make([]byte, 0, len(s)+2)
+	out = append(out, '"')
+	for _, r := range s {
+		switch r {
+		case '"':
+			out = append(out, '\\', '"')
+		case '\\':
+			out = append(out, '\\', '\\')
+		case '\n':
+			out = append(out, '\\', 'n')
+		case '\r':
+			out = append(out, '\\', 'r')
+		case '\t':
+			out = append(out, '\\', 't')
+		default:
+			if r < 0x20 {
+				out = append(out, []byte(fmt.Sprintf(`\u%04x`, r))...)
+			} else {
+				out = append(out, byte(r))
+			}
+		}
+	}
+	out = append(out, '"')
+	return string(out)
+}
+
+// ============================================================================
+// v0.3：文件浏览器（任意路径浏览 + 下载，按 SSH 账号权限放行）
+// ============================================================================
+
+// filesListReq 列目录请求体
+type filesListReq struct {
+	System   string `json:"system"`
+	Server   string `json:"server"`
+	Username string `json:"username"`
+	Password string `json:"password"`
+	Path     string `json:"path"` // 必须以 "/" 开头的绝对路径
+}
+
+// filesEntry 目录条目（用于前端表格）
+type filesEntry struct {
+	Name  string `json:"name"`
+	Size  int64  `json:"size"`
+	IsDir bool   `json:"isDir"`
+	Mode  string `json:"mode"`  // 例如 "drwxr-xr-x"，便于 UI 显示
+	MTime string `json:"mtime"` // RFC3339
+}
+
+// handleFilesList 列远端目录（任意路径）。
+//
+// 与 /api/logs/list 的差别：
+//   - 不做白名单校验，按用户 SSH 账号的实际权限放行（v0.3 自由模式）；
+//   - 返回完整目录条目（含 size/mode/mtime），UI 可直接做表格；
+//   - parent 字段给出"上一级"绝对路径，没有则 null（根目录就是 null）。
+func (s *Server) handleFilesList(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeErr(w, 405, errors.New("仅支持 POST"))
+		return
+	}
+	var req filesListReq
+	if err := json.NewDecoder(io.LimitReader(r.Body, 32*1024)).Decode(&req); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	if req.Path == "" {
+		writeErr(w, 400, errors.New("path 不能为空"))
+		return
+	}
+	if !strings.HasPrefix(req.Path, "/") {
+		writeErr(w, 400, errors.New("path 必须是绝对路径（以 / 开头）"))
+		return
+	}
+	_, srv, ok := s.cur().FindServer(req.System, req.Server)
+	if !ok {
+		writeErr(w, 400, errors.New("系统或服务器不存在"))
+		return
+	}
+	creds, err := s.resolveCreds(req.Username, req.Password, req.System, req.Server, srv.Username)
+	if err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	if creds.Password == "" {
+		writeErr(w, 400, errors.New("缺少密码（输入或勾选「记住密码」）"))
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	cli, err := sshclient.Dial(ctx, sshclient.Server{
+		Name: srv.Name, Host: srv.Host, Port: srv.Port, Username: creds.Username,
+	}, sshclient.Credentials{Password: creds.Password}, 10*time.Second)
+	if err != nil {
+		s.audit.Write("files.list", "system", req.System, "server", req.Server, "path", req.Path, "result", "fail", "stage", "dial", "err", err.Error())
+		writeErr(w, 502, err)
+		return
+	}
+	defer cli.Close()
+
+	sftpCli, err := sftpclient.New(cli.RawConn())
+	if err != nil {
+		writeErr(w, 502, err)
+		return
+	}
+	defer sftpCli.Close()
+
+	infos, err := sftpCli.ReadDir(req.Path)
+	if err != nil {
+		s.audit.Write("files.list", "system", req.System, "server", req.Server, "path", req.Path, "result", "fail", "err", err.Error())
+		writeErr(w, 502, fmt.Errorf("列出目录失败: %w", err))
+		return
+	}
+
+	entries := make([]filesEntry, 0, len(infos))
+	for _, info := range infos {
+		entries = append(entries, filesEntry{
+			Name:  info.Name(),
+			Size:  info.Size(),
+			IsDir: info.IsDir(),
+			Mode:  info.Mode().String(),
+			MTime: info.ModTime().UTC().Format(time.RFC3339),
+		})
+	}
+
+	// parent：根目录的 parent 是 null
+	parent := ""
+	cleaned := filepath.ToSlash(filepath.Clean(req.Path))
+	if cleaned != "/" && cleaned != "." {
+		parent = filepath.ToSlash(filepath.Dir(cleaned))
+	}
+
+	s.audit.Write("files.list", "system", req.System, "server", req.Server, "path", req.Path, "result", "ok", "count", len(entries))
+	writeJSON(w, 200, map[string]any{
+		"path":    cleaned,
+		"parent":  parent,
+		"entries": entries,
+	})
+}
+
+// filesDownloadReq 下载请求体（任意路径）
+type filesDownloadReq struct {
+	System   string   `json:"system"`
+	Server   string   `json:"server"`
+	Username string   `json:"username"`
+	Password string   `json:"password"`
+	Paths    []string `json:"paths"` // 完整远端路径（绝对路径）
+	Zip      bool     `json:"zip"`   // 多文件时是否额外打 zip
+}
+
+// filesDownloadLimits 下载任务的硬约束（避免误操作 / 连接卡死）
+const (
+	filesMaxFilesPerTask = 100              // 单次最多 100 个文件
+	filesDownloadTimeout = 30 * time.Minute // 单个下载任务总超时（dlSession idleGC 也是 30min）
+)
+
+// handleFilesDownload 启动一个"任意路径下载"任务，立即返回 id。
+//
+// 路径不做白名单校验（v0.3 自由模式）；只校验：
+//   - 每个 path 非空、以 "/" 开头；
+//   - 不含 NUL/换行等控制字符；
+//   - 总数 ≤ filesMaxFilesPerTask；
+// 真实访问控制由 SSH 服务器端承担。
+//
+// 下载机制复用 dlSession + dlManager（ID 全局唯一）。
+func (s *Server) handleFilesDownload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeErr(w, 405, errors.New("仅支持 POST"))
+		return
+	}
+	var req filesDownloadReq
+	if err := json.NewDecoder(io.LimitReader(r.Body, 64*1024)).Decode(&req); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	if len(req.Paths) == 0 {
+		writeErr(w, 400, errors.New("paths 不能为空"))
+		return
+	}
+	if len(req.Paths) > filesMaxFilesPerTask {
+		writeErr(w, 400, fmt.Errorf("单次最多下载 %d 个文件", filesMaxFilesPerTask))
+		return
+	}
+	for _, p := range req.Paths {
+		if p == "" {
+			writeErr(w, 400, errors.New("path 不能为空"))
+			return
+		}
+		if !strings.HasPrefix(p, "/") {
+			writeErr(w, 400, fmt.Errorf("path 必须是绝对路径: %q", p))
+			return
+		}
+		if strings.ContainsAny(p, "\x00\n\r") {
+			writeErr(w, 400, fmt.Errorf("path 含非法字符: %q", p))
+			return
+		}
+	}
+	_, srv, ok := s.cur().FindServer(req.System, req.Server)
+	if !ok {
+		writeErr(w, 400, errors.New("系统或服务器不存在"))
+		return
+	}
+	creds, err := s.resolveCreds(req.Username, req.Password, req.System, req.Server, srv.Username)
+	if err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	if creds.Password == "" {
+		writeErr(w, 400, errors.New("缺少密码（输入或勾选「记住密码」）"))
+		return
+	}
+
+	id := newDLID()
+	sessCtx, cancel := context.WithCancel(context.Background())
+	sess := &dlSession{
+		ID:        id,
+		Kind:      "files",
+		System:    req.System,
+		Server:    req.Server,
+		Paths:     append([]string(nil), req.Paths...),
+		Zip:       req.Zip,
+		Folder:    s.cur().DownloadDir(),
+		CreatedAt: time.Now(),
+		cancel:    cancel,
+	}
+	s.downloads.create(sess)
+	go s.downloads.idleGC(sess)
+
+	writeJSON(w, 200, map[string]any{"id": id})
+
+	// 异步执行；用独立 ctx，不依赖 r.Context()（请求结束就断开）
+	go s.runFilesDownloadTask(sessCtx, sess, srv, creds.Username, creds.Password)
+}
+
+// runFilesDownloadTask 后台执行：Dial SSH → 开 SFTP → 串行下每个路径 → （可选）打 zip
+func (s *Server) runFilesDownloadTask(
+	ctx context.Context,
+	sess *dlSession,
+	srv *config.ServerConfig,
+	username, password string,
+) {
+	dialCtx, cancelDial := context.WithTimeout(ctx, 10*time.Second)
+	cli, err := sshclient.Dial(dialCtx, sshclient.Server{
+		Name: srv.Name, Host: srv.Host, Port: srv.Port, Username: username,
+	}, sshclient.Credentials{Password: password}, 10*time.Second)
+	cancelDial()
+	if err != nil {
+		s.audit.Write("files.download", "system", sess.System, "server", sess.Server, "result", "fail", "stage", "dial", "err", err.Error())
+		sess.markFinished(nil, fmt.Errorf("SSH 连接失败: %w", err))
+		return
+	}
+	defer cli.Close()
+
+	sftpCli, err := sftpclient.New(cli.RawConn())
+	if err != nil {
+		sess.markFinished(nil, fmt.Errorf("SFTP 打开失败: %w", err))
+		return
+	}
+	defer sftpCli.Close()
+
+	results, err := s.downloadSeriesFree(ctx, srv, sess.Paths, sftpCli, sess)
+	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			s.audit.Write("files.download", "system", sess.System, "server", sess.Server, "result", "fail", "stage", "cancel")
+			sess.markFinished(results, fmt.Errorf("已取消"))
+			return
+		}
+		s.audit.Write("files.download", "system", sess.System, "server", sess.Server, "result", "fail", "stage", "download", "err", err.Error())
+		sess.markFinished(results, err)
+		return
+	}
+
+	// 可选 zip（>= 2 个文件才打）
+	if sess.Zip && len(results) >= 2 {
+		zipName := fmt.Sprintf("%s_files_%s.zip",
+			sanitize(srv.Name), time.Now().Format("150405"))
+		zipPath := filepath.Join(s.cur().DownloadDir(), results[0].Date, zipName)
+		localPaths := make([]string, 0, len(results))
+		remoteNames := make([]string, 0, len(results))
+		for _, it := range results {
+			p := filepath.Join(s.cur().DownloadDir(), it.Date, it.Local)
+			localPaths = append(localPaths, p)
+			remoteNames = append(remoteNames, it.Remote)
+		}
+		if err := zipFiles(localPaths, zipPath); err != nil {
+			s.audit.Write("files.download", "system", sess.System, "server", sess.Server, "result", "fail", "stage", "zip", "err", err.Error())
+			sess.markFinished(results, fmt.Errorf("打包 zip 失败: %w", err))
+			return
+		}
+		st, _ := os.Stat(zipPath)
+		var size int64
+		if st != nil {
+			size = st.Size()
+		}
+		results = append(results, downloadItem{
+			Local: zipName,
+			Bytes: strconv.FormatInt(size, 10),
+			Date:  results[0].Date,
+			Kind:  "zip",
+		})
+		_ = downloads.WriteMeta(zipPath, downloads.Meta{
+			System: sess.System,
+			Server: srv.Name,
+			Host:   fmt.Sprintf("%s:%d", srv.Host, srv.Port),
+			Files:  remoteNames,
+			Kind:   "zip",
+		})
+	}
+
+	s.audit.Write("files.download", "system", sess.System, "server", sess.Server, "result", "ok", "files", len(results), "selected", len(sess.Paths))
+	sess.markFinished(results, nil)
+}
+
+// downloadSeriesFree 串行下多个"完整路径"文件，进度通过 session 广播。
+//
+// 任何一个文件失败立刻返回（已下完的文件留在本地，不删）。
+// 本地落点：downloads/YYYYMMDD/server_basename_HHMMSS
+//   - 用远端路径 basename 当主名，保留原始文件名信息；
+//   - 加 _HHMMSS 防止同一文件短时间内重复下载互相覆盖；
+//   - 不强加 .log 后缀：浏览器下载任意文件都该是原始名+扩展名。
+func (s *Server) downloadSeriesFree(
+	ctx context.Context,
+	srv *config.ServerConfig,
+	paths []string,
+	sftpCli *sftpclient.Client,
+	sess *dlSession,
+) ([]downloadItem, error) {
+	now := time.Now()
+	dateDir := now.Format("20060102")
+	hhmm := now.Format("150405")
+	targetDir := filepath.Join(s.cur().DownloadDir(), dateDir)
+
+	results := make([]downloadItem, 0, len(paths))
+	localPaths := make([]string, 0, len(paths))
+	emittedPaths := make(map[string]bool, len(paths))
+
+	for idx, remote := range paths {
+		if err := ctx.Err(); err != nil {
+			return results, err
+		}
+		if emittedPaths[remote] {
+			continue
+		}
+		emittedPaths[remote] = true
+
+		base := filepath.Base(remote)
+		sess.broadcast(formatDLEvent("file_start", map[string]any{
+			"file":  remote,
+			"index": idx,
+			"total": len(paths),
+		}))
+
+		localName := fmt.Sprintf("%s_%s_%s",
+			sanitize(srv.Name), sanitize(base), hhmm)
+		localPath := filepath.Join(targetDir, localName)
+
+		progress := func(w, t int64) {
+			sess.broadcast(formatDLEvent("progress", map[string]any{
+				"file":    remote,
+				"written": w,
+				"total":   t,
+			}))
+		}
+
+		bytes, err := sftpCli.DownloadFileWithProgress(remote, localPath, progress)
+		if err != nil {
+			_ = os.Remove(localPath)
+			return results, fmt.Errorf("下载 %s 失败: %w", remote, err)
+		}
+
+		results = append(results, downloadItem{
+			File:   base,
+			Local:  localName,
+			Bytes:  strconv.FormatInt(bytes, 10),
+			Remote: remote,
+			Date:   dateDir,
+			Kind:   "file",
+		})
+		localPaths = append(localPaths, localPath)
+		_ = downloads.WriteMeta(localPath, downloads.Meta{
+			System: sess.System,
+			Server: srv.Name,
+			Host:   fmt.Sprintf("%s:%d", srv.Host, srv.Port),
+			File:   base,
+			Files:  []string{remote},
+			Kind:   "file",
+		})
+		s.audit.Write("files.download", "system", sess.System, "server", srv.Name, "path", remote, "result", "ok", "bytes", bytes)
+
+		sess.broadcast(formatDLEvent("file_done", map[string]any{
+			"file":  remote,
+			"bytes": bytes,
+		}))
+	}
+	return results, nil
+}
+
+// handleFilesDownloadEventsOrCancel 分发 events / cancel 子路径
+func (s *Server) handleFilesDownloadEventsOrCancel(w http.ResponseWriter, r *http.Request) {
+	rest := strings.TrimPrefix(r.URL.Path, "/api/files/download/")
+	parts := strings.Split(rest, "/")
+	if len(parts) != 2 {
+		http.NotFound(w, r)
+		return
+	}
+	id := parts[0]
+	action := parts[1]
+	switch action {
+	case "events":
+		s.streamDownloadEvents(w, r, id)
+	case "cancel":
+		s.cancelDownload(w, r, id)
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+// streamDownloadEvents 把下载进度 / 状态通过 SSE 推给前端（复用 dlSession 订阅模型）
+func (s *Server) streamDownloadEvents(w http.ResponseWriter, r *http.Request, id string) {
+	sess, ok := s.downloads.get(id)
+	if !ok {
+		writeErr(w, 404, errors.New("下载任务不存在"))
+		return
+	}
+	// 已经结束：直接返回最终结果
+	sess.mu.RLock()
+	already := sess.finished
+	sess.mu.RUnlock()
+	if already {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		w.Header().Set("X-Accel-Buffering", "no")
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			writeErr(w, 500, errors.New("response writer 不支持 flush"))
+			return
+		}
+		var ev []byte
+		sess.mu.RLock()
+		finalErr := sess.finalErr
+		result := sess.result
+		sess.mu.RUnlock()
+		if finalErr != nil {
+			ev = formatDLEvent("done", map[string]any{"ok": false, "error": finalErr.Error()})
+		} else {
+			ev = formatDLEvent("done", map[string]any{"ok": true, "downloads": result, "folder": sess.Folder})
+		}
+		_, _ = fmt.Fprintf(w, "data: %s\n\n", ev)
+		_, _ = fmt.Fprintf(w, "event: done\ndata: {}\n\n")
+		flusher.Flush()
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeErr(w, 500, errors.New("response writer 不支持 flush"))
+		return
+	}
+
+	ch, unsub := sess.Subscribe()
+	defer unsub()
+
+	keepalive := time.NewTicker(15 * time.Second)
+	defer keepalive.Stop()
+
+	ctx := r.Context()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case line, open := <-ch:
+			if !open {
+				_, _ = fmt.Fprintf(w, "event: done\ndata: {}\n\n")
+				flusher.Flush()
+				return
+			}
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", line)
+			flusher.Flush()
+		case <-keepalive.C:
+			_, _ = fmt.Fprintf(w, ": keepalive\n\n")
+			flusher.Flush()
+		}
+	}
+}
+
+// cancelDownload 显式取消下载（logs 和 files 共用）
+func (s *Server) cancelDownload(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodPost {
+		writeErr(w, 405, errors.New("仅支持 POST"))
+		return
+	}
+	if !s.downloads.cancel(id) {
+		writeErr(w, 404, errors.New("下载任务不存在"))
+		return
+	}
+	s.audit.Write("files.download", "id", id, "result", "ok", "stage", "cancel")
+	writeJSON(w, 200, map[string]any{"ok": true, "id": id})
 }

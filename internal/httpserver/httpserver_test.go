@@ -1054,3 +1054,183 @@ func TestNotFound(t *testing.T) {
 
 // ---------- 防止编译期 unused 警告：fstest ----------
 var _ fs.FS = fstest.MapFS{}
+
+// ---------- v0.3 文件浏览器 ----------
+
+func TestFilesList_WrongMethod(t *testing.T) {
+	srv, _, _, _ := newTestServer(t)
+	w := doRequest(srv, "GET", "/api/files/list", nil)
+	if w.Code != 405 {
+		t.Errorf("expected 405 for GET, got %d", w.Code)
+	}
+}
+
+func TestFilesList_BadJSON(t *testing.T) {
+	srv, _, _, _ := newTestServer(t)
+	r := httptest.NewRequest("POST", "/api/files/list", strings.NewReader("{garbage"))
+	r.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, r)
+	if w.Code != 400 {
+		t.Errorf("expected 400 for bad JSON, got %d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestFilesList_EmptyPath(t *testing.T) {
+	srv, _, _, _ := newTestServer(t)
+	w := doRequest(srv, "POST", "/api/files/list", map[string]any{
+		"system": "信贷生产", "server": "mock-1", "username": "ops", "password": "x",
+	})
+	if w.Code != 400 {
+		t.Errorf("expected 400 for empty path, got %d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestFilesList_RelativePath(t *testing.T) {
+	srv, _, _, _ := newTestServer(t)
+	w := doRequest(srv, "POST", "/api/files/list", map[string]any{
+		"system": "信贷生产", "server": "mock-1", "username": "ops", "password": "x",
+		"path": "opt/logs",
+	})
+	if w.Code != 400 {
+		t.Errorf("expected 400 for relative path, got %d body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "绝对路径") {
+		t.Errorf("error msg should mention 绝对路径: %s", w.Body.String())
+	}
+}
+
+func TestFilesList_BadSystem(t *testing.T) {
+	srv, _, _, _ := newTestServer(t)
+	w := doRequest(srv, "POST", "/api/files/list", map[string]any{
+		"system": "不存在", "server": "mock-1", "username": "ops", "password": "x",
+		"path": "/opt",
+	})
+	if w.Code != 400 {
+		t.Errorf("expected 400 for bad system, got %d", w.Code)
+	}
+}
+
+func TestFilesList_BadServer(t *testing.T) {
+	srv, _, _, _ := newTestServer(t)
+	w := doRequest(srv, "POST", "/api/files/list", map[string]any{
+		"system": "信贷生产", "server": "不存在", "username": "ops", "password": "x",
+		"path": "/opt",
+	})
+	if w.Code != 400 {
+		t.Errorf("expected 400 for bad server, got %d", w.Code)
+	}
+}
+
+func TestFilesList_MissingPassword(t *testing.T) {
+	srv, _, _, _ := newTestServer(t)
+	w := doRequest(srv, "POST", "/api/files/list", map[string]any{
+		"system": "信贷生产", "server": "mock-1", "username": "ops",
+		"path": "/opt",
+	})
+	if w.Code != 400 {
+		t.Errorf("expected 400 for missing password, got %d body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "密码") {
+		t.Errorf("error msg should mention 密码: %s", w.Body.String())
+	}
+}
+
+func TestFilesDownload_WrongMethod(t *testing.T) {
+	srv, _, _, _ := newTestServer(t)
+	w := doRequest(srv, "GET", "/api/files/download", nil)
+	if w.Code != 405 {
+		t.Errorf("expected 405 for GET, got %d", w.Code)
+	}
+}
+
+func TestFilesDownload_EmptyPaths(t *testing.T) {
+	srv, _, _, _ := newTestServer(t)
+	w := doRequest(srv, "POST", "/api/files/download", map[string]any{
+		"system": "信贷生产", "server": "mock-1", "username": "ops", "password": "x",
+		"paths": []string{},
+	})
+	if w.Code != 400 {
+		t.Errorf("expected 400 for empty paths, got %d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestFilesDownload_RelativePath(t *testing.T) {
+	srv, _, _, _ := newTestServer(t)
+	w := doRequest(srv, "POST", "/api/files/download", map[string]any{
+		"system": "信贷生产", "server": "mock-1", "username": "ops", "password": "x",
+		"paths": []string{"opt/a.log"},
+	})
+	if w.Code != 400 {
+		t.Errorf("expected 400 for relative path, got %d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestFilesDownload_PathWithControlChar(t *testing.T) {
+	srv, _, _, _ := newTestServer(t)
+	w := doRequest(srv, "POST", "/api/files/download", map[string]any{
+		"system": "信贷生产", "server": "mock-1", "username": "ops", "password": "x",
+		"paths": []string{"/opt/a\nb.log"},
+	})
+	if w.Code != 400 {
+		t.Errorf("expected 400 for control char in path, got %d", w.Code)
+	}
+}
+
+func TestFilesDownload_TooManyFiles(t *testing.T) {
+	srv, _, _, _ := newTestServer(t)
+	paths := make([]string, filesMaxFilesPerTask+1)
+	for i := range paths {
+		paths[i] = "/opt/file" + itoa(i) + ".log"
+	}
+	w := doRequest(srv, "POST", "/api/files/download", map[string]any{
+		"system": "信贷生产", "server": "mock-1", "username": "ops", "password": "x",
+		"paths": paths,
+	})
+	if w.Code != 400 {
+		t.Errorf("expected 400 for too many files, got %d body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "100") {
+		t.Errorf("error msg should mention 100: %s", w.Body.String())
+	}
+}
+
+func TestFilesDownload_Events_BadID(t *testing.T) {
+	srv, _, _, _ := newTestServer(t)
+	w := doRequest(srv, "GET", "/api/files/download/nonexistent/events", nil)
+	if w.Code != 404 {
+		t.Errorf("expected 404 for unknown id, got %d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestFilesDownload_Cancel_BadID(t *testing.T) {
+	srv, _, _, _ := newTestServer(t)
+	w := doRequest(srv, "POST", "/api/files/download/nonexistent/cancel", nil)
+	if w.Code != 404 {
+		t.Errorf("expected 404 for unknown id, got %d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestFilesDownload_EventsOrCancel_BadPath(t *testing.T) {
+	srv, _, _, _ := newTestServer(t)
+	w := doRequest(srv, "GET", "/api/files/download/dl-abc/garbage", nil)
+	if w.Code != 404 {
+		t.Errorf("expected 404 for garbage subpath, got %d", w.Code)
+	}
+}
+
+// itoa 是 fmt.Sprintf("%d", i) 的简化版，避免引入 fmt 仅测试用
+func itoa(i int) string {
+	if i == 0 { return "0" }
+	neg := i < 0
+	if neg { i = -i }
+	var b [20]byte
+	pos := len(b)
+	for i > 0 {
+		pos--
+		b[pos] = byte('0' + i%10)
+		i /= 10
+	}
+	if neg { pos--; b[pos] = '-' }
+	return string(b[pos:])
+}

@@ -88,6 +88,67 @@ def main():
     run("T15 download latest=1", dict(CRED, latest=1), "/api/logs/download-latest")
     run("T16 context line=13", dict(CRED, file="SystemOut.log", line=13, before=5, after=5), "/api/logs/context")
 
+    # /api/files/download（多选 + SSE 进度）
+    # 先 list 拿到完整远端路径
+    code, pl = http_post("/api/logs/list", CRED)
+    files = (pl.get("files") or [])[:2]
+    paths = [f["full_path"] for f in files if f.get("full_path")]
+    if paths:
+        run("T25 files.download 单个", dict(CRED, paths=[paths[0]], zip=False), "/api/files/download")
+        run("T26 files.download 多个+zip", dict(CRED, paths=paths, zip=True), "/api/files/download")
+        # 验证空 paths
+        run("T27 files.download 空", dict(CRED, paths=[]), "/api/files/download")
+        # 非法路径
+        run("T28 files.download 相对路径", dict(CRED, paths=["etc/passwd"]), "/api/files/download")
+
+        # 端到端：发起下载 → 订阅 SSE → 等到 done 事件 → 检查 downloads 数组
+        import urllib.request
+        print("===== T29 files.download 端到端 (SSE 拉取) =====")
+        code, payload = http_post("/api/files/download", dict(CRED, paths=paths[:1], zip=False))
+        if code == 200 and payload.get("id"):
+            dl_id = payload["id"]
+            req = urllib.request.Request(f"http://127.0.0.1:{APP_PORT}/api/files/download/{dl_id}/events")
+            try:
+                with urllib.request.urlopen(req, timeout=8) as r:
+                    events = []
+                    for raw in r:
+                        line = raw.decode("utf-8", errors="replace").rstrip()
+                        if not line or line.startswith(":"):  # keepalive / 空
+                            continue
+                        if line.startswith("data: "):
+                            try:
+                                ev = json.loads(line[6:])
+                                events.append(ev)
+                                kind = ev.get("kind", "?")
+                                if kind == "progress":
+                                    print(f"  progress file={ev.get('file')} written={ev.get('written')} total={ev.get('total')}")
+                                elif kind == "file_done":
+                                    print(f"  file_done file={ev.get('file')} bytes={ev.get('bytes')}")
+                                elif kind == "file_start":
+                                    print(f"  file_start file={ev.get('file')} index={ev.get('index')}")
+                                elif kind == "done":
+                                    print(f"  done ok={ev.get('ok')} downloads={len(ev.get('downloads') or [])}")
+                                    if not ev.get("ok"):
+                                        print(f"    error: {ev.get('error')}")
+                                    break
+                            except Exception as e:
+                                pass
+                kinds = [e.get("kind") for e in events]
+                assert "file_start" in kinds, f"缺 file_start: {kinds}"
+                assert "progress" in kinds, f"缺 progress: {kinds}"
+                assert "file_done" in kinds, f"缺 file_done: {kinds}"
+                assert "done" in kinds, f"缺 done: {kinds}"
+                done_ev = next(e for e in events if e.get("kind") == "done")
+                assert done_ev.get("ok") is True, f"done.ok != true: {done_ev}"
+                assert done_ev.get("downloads") and len(done_ev["downloads"]) >= 1
+                print(f"  ✓ 收到 {len(events)} 个事件，端到端通过\n")
+            except Exception as e:
+                print(f"  FAIL SSE 异常: {e}\n")
+        else:
+            print(f"  跳过（启动失败 code={code}）\n")
+    else:
+        print("(no files to test T25-T28)")
+
     # 报文
     run("T17 JSON format", {"input": '{"a":1,"b":[1,2,3]}', "mode": "format", "indent": "  "}, "/api/format/json")
     run("T18 JSON minify", {"input": "{\n  \"a\": 1\n}", "mode": "minify"}, "/api/format/json")

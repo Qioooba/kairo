@@ -258,6 +258,10 @@ class ReadOnlySFTPServer(SFTPServerInterface):
 
     lstat = stat
 
+    def fstat(self, handle):
+        # 实际不被 paramiko 调用（它调 handle.stat()），但留着保持完整性。
+        return handle.stat()
+
     def open(self, path, flags, attr):
         real = self._resolve(path)
         if real is None or not os.path.isfile(real):
@@ -277,6 +281,17 @@ class ReadOnlySFTPServer(SFTPServerInterface):
             handle = SFTPHandle(flags)
             handle.filename = real
             handle.readfile = f
+            # paramiko 处理 SSH_FXP_FSTAT 时调 handle.stat()，默认返回 OP_UNSUPPORTED。
+            # 我们 override 成查 .filename 对应的实际 stat。
+            def _stat(self=handle):
+                real_path = getattr(self, "filename", None)
+                if not real_path or not os.path.exists(real_path):
+                    return SFTP_PERMISSION_DENIED
+                try:
+                    return SFTPAttributes.from_stat(os.stat(real_path))
+                except Exception:
+                    return SFTP_PERMISSION_DENIED
+            handle.stat = _stat
             return handle
         except Exception as e:
             print(f"  sftp open {path} err: {e}", file=sys.stderr)
