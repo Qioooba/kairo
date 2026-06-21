@@ -232,16 +232,64 @@ log_dirs:
 | Method | Path | 用途 |
 | --- | --- | --- |
 | GET  | `/api/config` | 读取配置（不返回密码） |
-| POST | `/api/ssh/test` | 测试 SSH 连接 |
+| POST | `/api/ssh/test` | 测试 SSH 连接（password 可为空，自动从 keyring 读） |
 | POST | `/api/logs/list` | 列出日志目录下的文件 |
-| POST | `/api/logs/download-latest` | 下载最近 1~5 个日志文件 |
+| POST | `/api/logs/download-latest` | 下载最近 1~5 个日志文件（写 sidecar 元数据） |
 | POST | `/api/logs/search` | 关键词搜索 |
+| POST | `/api/logs/search/multi` | 多服务器并行搜索 |
 | POST | `/api/logs/context` | 查看某行的上下文 |
+| POST | `/api/logs/tail/start` | 启动实时 tail（SSE 流） |
+| GET  | `/api/audit/recent` | 操作历史（按 op / system / server / result 过滤） |
+| POST | `/api/credentials/save` | 保存 SSH 密码到系统钥匙串 |
+| GET  | `/api/credentials/has` | 检查是否已保存密码（不返回密码本身） |
+| POST | `/api/credentials/clear` | 删除已保存的密码 |
+| GET  | `/api/downloads/list` | 列出 downloads/ 目录里所有已下载文件 + 元数据 |
+| DELETE | `/api/downloads/<name>` | 删除单个下载文件 |
+| POST | `/api/downloads/all` | 清空 downloads/ 里所有文件 |
 | POST | `/api/format/json` | JSON 格式化 / 压缩 / 校验 |
 | POST | `/api/format/xml` | XML 格式化 / 压缩 |
 | GET  | `/downloads/<file>` | 下载本地 downloads/ 中的文件 |
 
 所有接口都只允许本机访问（`127.0.0.1`）。
+
+### 8.1 密码本地保存（keyring）
+
+每次操作时，Web 页面可以勾选"记住密码"，后端会调用 `/api/credentials/save`
+把密码存到 OS 钥匙串：
+
+- **macOS** → Keychain
+- **Windows** → DPAPI（wincred）
+- **Linux** → Secret Service / D-Bus（libsecret 守护进程）
+
+存储策略：
+- 按 (system, server, username) 三元组存；
+- 永远不写进 `audit.log`、URL、错误信息；
+- 后续调用时如果请求里没传 `password`，后端会从 keyring 读；
+- 页面有"忘记"按钮调用 `/api/credentials/clear` 删除。
+
+如果当前平台没有可用的 keyring（比如 Linux 容器里没装 D-Bus），后端返回 503，
+页面会显示"⚠ 系统钥匙串不可用"，密码需要每次手动输入。
+
+### 8.2 下载历史（sidecar 元数据）
+
+每次成功下载，文件旁边会写一个 `.meta` JSON，记录来源（系统 / 服务器 / 远端目录 / 原始文件名 / 编码 / 下载时间）：
+
+```json
+{
+  "system": "信贷生产",
+  "server": "prod-node-1",
+  "host": "10.10.10.11:22",
+  "dir": "/opt/IBM/WebSphere/AppServer/profiles/AppSrv01/logs/server1",
+  "dir_alias": "server1",
+  "file": "SystemOut.log",
+  "encoding": "utf-8",
+  "kind": "file",
+  "downloaded_at": "2026-06-21T15:25:37.724668+08:00"
+}
+```
+
+zip 的元数据里 `files` 字段记录包含的所有远端文件名。
+「下载历史」页（侧栏）调用 `/api/downloads/list` 展示，删除/清空会同时移除数据文件和 sidecar。
 
 ---
 
@@ -276,14 +324,15 @@ ts=2026-06-19 10:30:12.000 op=logs.download system=信贷生产 server=prod-node
 
 ## 11. 第一阶段未做
 
-- 密码本地保存（后续可考虑 Windows DPAPI）
-- 多文件 zip 打包下载
-- 实时 tail
+- 密码本地保存（已做：macOS Keychain / Windows DPAPI / Linux Secret Service）
+- 多文件 zip 打包下载（已做）
+- 实时 tail（已做）
 - 任意命令执行（设计为禁止）
 - 多服务器并发搜索（v0.2 已完成，页面勾选+并行返回）
-- 复杂日历（工作日 / 节假日）
 - 数据库连接
-- 文本处理 / 常用命令模块（占位页面）
+- 常用命令模块（占位页面）
+
+> 日期 / 日历、文本处理两个模块已从导航和首页移除，不规划。
 
 ---
 

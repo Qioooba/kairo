@@ -30,3 +30,6 @@ java.lang.NullPointerException
 [2026-06-19 09:10:30.123] 00000050 user.ScheduleJob  INFO    信贷系统 启动完成 DEBUG=off
 [2026-06-19 09:11:00.456] 00000050 user.Service  INFO    ORA-00060 触发 utf8-user-2
 [2026-06-19 09:12:00.789] 00000050 user.ScheduleJob  INFO    信贷系统 正常轮询 DEBUG=on
+test line Sun Jun 21 00:30:24 CST 2026
+--- another test line ---
+[new] test line Sun Jun 21 00:30:25 CST 2026

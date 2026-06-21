@@ -81,20 +81,61 @@ def translate_for_mock(command):
     return command
 
 
-def run_command(command):
-    """在 FAKE_ROOT 跑命令，返回 (stdout_bytes, stderr_bytes, exit_code)"""
+def run_command_streaming(command, on_stdout, on_stderr, timeout=600):
+    """在 FAKE_ROOT 流式跑命令：每收到 stdout/stderr 一段就回调。
+
+    返回 exit code。客户端断连/关闭 channel 后，调用方应主动取消线程或终止进程。
+    """
     try:
-        proc = subprocess.run(
+        proc = subprocess.Popen(
             ["/bin/sh", "-c", command],
             cwd=FAKE_ROOT,
-            capture_output=True,
-            timeout=60,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            bufsize=0,
         )
-        return proc.stdout, proc.stderr, proc.returncode
-    except subprocess.TimeoutExpired:
-        return b"", b"mock ssh: command timeout (60s)\n", 124
     except Exception as e:
-        return b"", f"mock ssh: exec error: {e}\n".encode(), 1
+        on_stderr(f"mock ssh: exec error: {e}\n".encode("utf-8", errors="replace"))
+        return 1
+
+    def pump(stream, cb):
+        try:
+            while True:
+                chunk = stream.readline()
+                if not chunk:
+                    return
+                try:
+                    cb(chunk)
+                except Exception:
+                    # channel 已关，杀进程走人
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+                    return
+        except Exception:
+            return
+
+    t_out = threading.Thread(target=pump, args=(proc.stdout, on_stdout), daemon=True)
+    t_err = threading.Thread(target=pump, args=(proc.stderr, on_stderr), daemon=True)
+    t_out.start()
+    t_err.start()
+
+    try:
+        code = proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        t_out.join(1)
+        t_err.join(1)
+        on_stderr(b"mock ssh: command timeout\n")
+        return 124
+    # 等读取线程收尾（process 退出会让 readline 拿到 EOF）
+    t_out.join(2)
+    t_err.join(2)
+    return code
 
 
 class MockServer(paramiko.ServerInterface):
@@ -136,18 +177,18 @@ class MockServer(paramiko.ServerInterface):
         print(f"  exec_in : {command}", file=sys.stderr)
         translated = translate_for_mock(command)
         print(f"  exec_run: {translated}", file=sys.stderr)
+
+        def on_stdout(chunk):
+            channel.sendall(chunk)
+
+        def on_stderr(chunk):
+            try:
+                channel.sendall_stderr(chunk)
+            except Exception:
+                pass
+
         try:
-            stdout, stderr, code = run_command(translated)
-            if isinstance(stdout, str):
-                stdout = stdout.encode("utf-8", errors="replace")
-            if isinstance(stderr, str):
-                stderr = stderr.encode("utf-8", errors="replace")
-            channel.sendall(stdout)
-            if stderr:
-                try:
-                    channel.sendall_stderr(stderr)
-                except Exception:
-                    pass
+            code = run_command_streaming(translated, on_stdout, on_stderr)
             channel.send_exit_status(code)
         except Exception as e:
             import traceback
