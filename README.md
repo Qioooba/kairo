@@ -378,7 +378,53 @@ v0.3 应实际运维需求（同一台 WebSphere 服务器的 `logs/` `propertie
 
 ---
 
-## 12. 第一阶段未做
+## 12. 源码目录结构（给二次开发者）
+
+```
+ops-toolbox/
+├── main.go                      # 入口：解析 -workdir、加载 config、起 HTTP server
+├── config.yaml                  # 运行时配置
+├── README.md / docs/            # 用户文档 + 验收清单
+├── scripts/                     # 交叉编译 / 打包脚本（macOS / Linux 上编 Win）
+├── web/                         # 嵌入式前端（IIFE 风格单文件）
+│   ├── index.html               # 单页应用骨架
+│   ├── app.js                   # 全部前端逻辑（含 4 个 pure 函数单测可抽）
+│   ├── app.test.js              # Node 单测：escapeHtml / formatBytes / formatTime /
+│   │                            #   trimMiddle / cssEscape / pctText / validate
+│   └── style.css
+└── internal/
+    ├── config/                  # config.yaml 加载 + 校验 + 热替换（COW Manager）
+    ├── audit/                   # audit.log 写入（线程安全、不含 password 字段）
+    ├── credentials/             # OS 钥匙串：macOS Keychain / Win DPAPI / Linux Secret Service
+    ├── sshclient/               # SSH 客户端：拨号 + Run + Stream（GBK/UTF-8 透明）
+    ├── sftpclient/              # SFTP 客户端：Open / ReadDir / Stat / DownloadFile[WithProgress]
+    ├── logquery/                # 后端命令模板（list / search / context / tail）
+    ├── tailmgr/                 # tail 会话池 + SSE 广播（Streamer 接口便于测试）
+    ├── dlmanager/               # 异步下载任务池（logs + files 共用 ID 空间 + SSE）
+    ├── formatter/               # JSON / XML 格式化（独立小工具）
+    ├── downloads/               # 下载历史 sidecar 元数据（file.meta.json）
+    └── httpserver/              # HTTP server
+        ├── httpserver.go        # 入口 + 路由表（165 行）
+        ├── response.go          # writeJSON / writeErr
+        ├── helpers.go           # zipFiles / sanitize / humanBytes / resolveCreds /
+        │                        #   auditErr
+        ├── handlers_ssh.go / handlers_logs_*.go / handlers_files.go /
+        │   handlers_tail.go / handlers_admin.go / handlers_audit.go /
+        │   handlers_credentials.go / handlers_downloads.go / handlers_format.go
+        │                        # 各路由按职责拆开
+        ├── handlers_misc.go     # /downloads/<file>（带 RFC 5987 filename*）
+        └── *_test.go            # 单测 + 集成测试（fake SSH + 注入 sftpDialer）
+```
+
+设计要点：
+- 每个内部包都有一份单测；`go test ./...` 跑全包覆盖
+- `httpserver` 抽 `sftpDialer` 包级变量，集成测试可注入 fake SFTP backend
+- `tailmgr.Start` 接受 `Streamer` 接口，单测用可控 mock 覆盖 ctx 取消 / 流错 / GC 路径
+- `dlmanager.Manager` 的 `GCInterval` 字段可调，巡检周期默认 15s、测试里调到 20ms
+
+---
+
+## 13. 第一阶段未做
 
 - 密码本地保存（已做：macOS Keychain / Windows DPAPI / Linux Secret Service）
 - 多文件 zip 打包下载（已做）
@@ -394,7 +440,7 @@ v0.3 应实际运维需求（同一台 WebSphere 服务器的 `logs/` `propertie
 
 ---
 
-## 13. 常见问题
+## 14. 常见问题
 
 **Q: 启动后浏览器没自动打开？**
 A: 检查 `config.yaml` 的 `auto_open_browser: true`；或者手动访问 `http://127.0.0.1:18080`。
