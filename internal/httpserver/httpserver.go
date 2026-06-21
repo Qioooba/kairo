@@ -145,10 +145,22 @@ func (s *Server) serveStatic(w http.ResponseWriter, r *http.Request, name string
 
 // ---------- /api/config ----------
 
+// configView 是 /api/config 的响应。
+//
+// Paths 是为前端展示而算出的绝对路径（download_dir / log_dir / data_dir），
+// 前端可在 sidebar 或下载结果卡显示"文件落到 D:\...\downloads"之类。
+// 原 App 字段保留 yaml 里的相对路径（用于配置回写）。
 type configView struct {
 	App     config.AppConfig      `json:"app"`
 	Systems []config.SystemConfig `json:"systems"`
 	Search  config.SearchConfig   `json:"search"`
+	Paths   configViewPaths       `json:"paths"`
+}
+
+type configViewPaths struct {
+	DownloadDir string `json:"download_dir"`
+	LogDir      string `json:"log_dir"`
+	DataDir     string `json:"data_dir"`
 }
 
 func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
@@ -161,5 +173,10 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		App:     cur.App,
 		Systems: cur.Systems,
 		Search:  cur.Search,
+		Paths: configViewPaths{
+			DownloadDir: cur.DownloadDir(),
+			LogDir:      cur.LogDir(),
+			DataDir:     cur.DataDir(),
+		},
 	})
 }

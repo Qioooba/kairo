@@ -265,6 +265,37 @@ func TestConfig_Get(t *testing.T) {
 	}
 }
 
+// TestConfig_Get_PathsAbsolute 验证 /api/config 暴露绝对路径供前端展示。
+func TestConfig_Get_PathsAbsolute(t *testing.T) {
+	srv, _, _, dir := newTestServer(t)
+	w := doRequest(srv, "GET", "/api/config", nil)
+	if w.Code != 200 {
+		t.Fatalf("code=%d", w.Code)
+	}
+	var got struct {
+		Paths struct {
+			DownloadDir string `json:"download_dir"`
+			LogDir      string `json:"log_dir"`
+			DataDir     string `json:"data_dir"`
+		} `json:"paths"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got.Paths.DownloadDir == "" {
+		t.Error("paths.download_dir 应非空")
+	}
+	if !filepath.IsAbs(got.Paths.DownloadDir) {
+		t.Errorf("paths.download_dir 应为绝对路径: %s", got.Paths.DownloadDir)
+	}
+	if got.Paths.DownloadDir != dir {
+		t.Errorf("paths.download_dir 应等于 cfg.DownloadDir(): want %s, got %s", dir, got.Paths.DownloadDir)
+	}
+	if got.Paths.LogDir == "" || got.Paths.DataDir == "" {
+		t.Errorf("log_dir / data_dir 也应非空: log=%s data=%s", got.Paths.LogDir, got.Paths.DataDir)
+	}
+}
+
 func TestConfig_WrongMethod(t *testing.T) {
 	srv, _, _, _ := newTestServer(t)
 	w := doRequest(srv, "POST", "/api/config", nil)

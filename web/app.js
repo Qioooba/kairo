@@ -161,7 +161,9 @@
   window.addEventListener('load', async () => {
     try {
       const info = await api('GET', '/api/config');
-      $('#listen-info').textContent = '已启动 · ' + (info.app && info.app.name || 'OpsToolbox');
+      const appName = (info.app && info.app.name) || 'OpsToolbox';
+      const dlFolder = info.paths && info.paths.download_dir;
+      $('#listen-info').textContent = '已启动 · ' + appName + (dlFolder ? ' · 保存到 ' + dlFolder : '');
     } catch (e) { /* 忽略 */ }
     navigate();
   });
