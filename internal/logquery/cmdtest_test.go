@@ -209,3 +209,45 @@ func TestSearchUTF8(t *testing.T) {
 		t.Fatalf("UTF-8 关键词应原样在命令里: %s", c)
 	}
 }
+
+func TestTailCommand(t *testing.T) {
+	c, err := TailCommand("/opt/IBM/WebSphere/AppServer/profiles/AppSrv01/logs/server1", "SystemOut.log", 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(c, "tail -n 100 -F") {
+		t.Fatalf("应包含 tail -n 100 -F: %s", c)
+	}
+	if !strings.Contains(c, "SystemOut.log") {
+		t.Fatalf("应包含文件名: %s", c)
+	}
+	if !strings.Contains(c, "2>/dev/null") {
+		t.Fatalf("stderr 应丢弃: %s", c)
+	}
+}
+
+func TestTailCommand_LinesClamp(t *testing.T) {
+	c, err := TailCommand("/dir", "a.log", 99999)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 大于 1000 会被压回 1000
+	if !strings.Contains(c, "tail -n 1000 -F") {
+		t.Fatalf("lines > 1000 应压回 1000: %s", c)
+	}
+}
+
+func TestTailCommand_RejectsEmptyFile(t *testing.T) {
+	if _, err := TailCommand("/dir", "", 10); err == nil {
+		t.Fatal("空 file 应报错")
+	}
+}
+
+func TestTailCommand_RejectsInjection(t *testing.T) {
+	if _, err := TailCommand("/dir; rm -rf /", "a.log", 10); err == nil {
+		t.Fatal("dir 注入应被拒")
+	}
+	if _, err := TailCommand("/dir", "a.log; cat /etc/passwd", 10); err == nil {
+		t.Fatal("file 注入应被拒")
+	}
+}
