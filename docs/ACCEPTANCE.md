@@ -169,6 +169,52 @@ op=logs.context
 | 5.6 | 故意构造不合法文件规则 | config 启动时被拒 |
 | 5.7 | 故意构造 `app.host=8.8.8.8` | 启动失败 |
 | 5.8 | 翻看 `logs/audit.log` | 看不到任何密码、SSH 私钥、日志正文 |
+| 5.9 | 浏览器地址栏 `http://127.0.0.1:18080/downloads/x%0D%0AX-Evil-Header: hacked` | 404，绝不出现注入的响应头 |
+| 5.10 | 浏览器下载中文文件名 `日志.zip` | `Content-Disposition` 同时含 `filename=` 和 `filename*=UTF-8''<percent-encoded>`（RFC 5987）|
+| 5.11 | 浏览器打开 `/api/config` | 返回 JSON 含 `paths.download_dir / log_dir / data_dir` 三个绝对路径字段 |
+| 5.12 | 看 sidebar footer | 应显示"已启动 · <app名> · 保存到 <绝对路径>" |
+
+---
+
+## 5b. v0.3 文件浏览器（任意路径下载）补充验收
+
+| # | 操作 | 期望 |
+| --- | --- | --- |
+| 5b.1 | 进入「文件下载」菜单 | 顶部连接区可选手系统/服务器 + 用户名 + 密码 |
+| 5b.2 | 选服务器 → 输入密码 → 默认进入 `/` | 列出该 SSH 账号能看到的目录条目（dir / size / mode / mtime） |
+| 5b.3 | 面包屑点「上级」回到上一级目录 | 路径栏同步更新 |
+| 5b.4 | 路径框输入 `/opt` 回车 | 跳到 /opt 列目录 |
+| 5b.5 | 勾选 2 个文件 → 「打包 zip」勾选 → 「下载选中」 | 进度条滚动，完成后「下载历史」里出现 .zip 文件 |
+| 5b.6 | 在「下载历史」点下载链接 | 浏览器下载文件，文件名原始名（中文也正常） |
+| 5b.7 | 在「下载历史」点删除 | 该文件从列表消失，但其他文件不受影响 |
+| 5b.8 | 故意选 101 个文件 | 400 错误 "单次最多下载 100 个文件" |
+| 5b.9 | 路径框输入 `opt/a.log`（相对路径） | 400 "path 必须是绝对路径（以 / 开头）" |
+| 5b.10 | 故意路径含换行 `\n` | 400 "path 含非法字符" |
+| 5b.11 | 下载中点「停止」 | SSE 事件流关闭，dlmanager 标记 cancelled，session 仍存在供前端拉 done |
+| 5b.12 | 切到其他 tab 再回来 | 旧 EventSource 已 close，新订阅正常 |
+
+---
+
+## 5c. tail 会话管理（v0.2 起）
+
+| # | 操作 | 期望 |
+| --- | --- | --- |
+| 5c.1 | WebSphere 日志页选文件 → 「实时跟踪」 | 返回 `tail_id`，SSE 立即开始推新行 |
+| 5c.2 | 跟踪中关闭浏览器 tab | 服务端 ctx cancel，SSH session 关闭，无 goroutine 泄漏 |
+| 5c.3 | 跟踪超过 5 分钟（默认 idleAfter） | 兜底：killSSH，session 结束 |
+| 5c.4 | 中文日志行 | SSE 收到的 JSON line 字段是 UTF-8（不是字节截断的乱码） |
+
+---
+
+## 5d. 测试与回归（保证改动不破坏既有功能）
+
+| # | 操作 | 期望 |
+| --- | --- | --- |
+| 5d.1 | 开发者本地跑 `go test ./...` | 12 个包全过；dlmanager 90%+，tailmgr 90%+，httpserver 70%+ |
+| 5d.2 | 跑 `node web/app.test.js` | 7 个前端 pure 函数全过（escapeHtml / formatBytes / formatTime / trimMiddle / cssEscape / pctText / validate） |
+| 5d.3 | 跑 `GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build` | macOS / Linux 上能交叉编译出 Windows exe |
+| 5d.4 | 跑 `./scripts/build_windows_amd64.sh v0.3.0` | 产物在 `dist/ops-toolbox-v0.3.0/OpsToolbox.exe`，`file` 命令验证是 PE32+ x86-64 |
+| 5d.5 | 跑 `./scripts/package_windows.sh v0.3.0` | `dist/ops-toolbox-v0.3.0-windows.zip` 包含 exe + config + README + 空 downloads/logs/data |
 
 ---
 
