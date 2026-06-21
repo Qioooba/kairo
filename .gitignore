@@ -26,3 +26,6 @@ Thumbs.db
 
 # ===== debug 临时文件 =====
 /debug_run.go
+
+# ===== 临时文件 =====
+*.tmp

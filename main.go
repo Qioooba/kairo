@@ -24,6 +24,7 @@ import (
 	"ops-toolbox/internal/audit"
 	"ops-toolbox/internal/config"
 	"ops-toolbox/internal/httpserver"
+	"ops-toolbox/internal/tailmgr"
 )
 
 //go:embed web
@@ -72,8 +73,12 @@ func main() {
 	// 7. 构造可热替换的配置 Manager
 	cfgMgr := config.NewManager(cfg, cfgPath)
 
+	// 7.5 构造 tail 会话池
+	tails := tailmgr.NewManager()
+	defer tails.ShutdownAll()
+
 	// 8. 构造 HTTP 服务
-	srv := httpserver.New(cfgMgr, auditLog, webSubFS)
+	srv := httpserver.New(cfgMgr, auditLog, webSubFS, tails)
 
 	httpSrv := &http.Server{
 		Addr:              cfg.App.ListenAddr(),

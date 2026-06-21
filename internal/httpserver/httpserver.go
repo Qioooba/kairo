@@ -24,22 +24,26 @@ import (
 
 	"ops-toolbox/internal/audit"
 	"ops-toolbox/internal/config"
+	"ops-toolbox/internal/credentials"
+	"ops-toolbox/internal/downloads"
 	"ops-toolbox/internal/formatter"
 	"ops-toolbox/internal/logquery"
 	"ops-toolbox/internal/sftpclient"
 	"ops-toolbox/internal/sshclient"
+	"ops-toolbox/internal/tailmgr"
 )
 
-// Server 持有配置（线程安全 Manager）、审计日志、嵌入式静态资源
+// Server 持有配置（线程安全 Manager）、审计日志、嵌入式静态资源、tail 会话池
 type Server struct {
 	cfg     *config.Manager
 	audit   *audit.Logger
 	webRoot fs.FS
+	tails   *tailmgr.Manager
 }
 
 // New 构造一个 Server
-func New(cfg *config.Manager, a *audit.Logger, webRoot fs.FS) *Server {
-	return &Server{cfg: cfg, audit: a, webRoot: webRoot}
+func New(cfg *config.Manager, a *audit.Logger, webRoot fs.FS, tails *tailmgr.Manager) *Server {
+	return &Server{cfg: cfg, audit: a, webRoot: webRoot, tails: tails}
 }
 
 // cur 拿一份当前 Config 的只读快照。
@@ -74,12 +78,28 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleLogsSearchMulti(w, r)
 	case path == "/api/logs/context":
 		s.handleLogsContext(w, r)
+	case path == "/api/logs/tail/start":
+		s.handleTailStart(w, r)
+	case path == "/api/audit/recent":
+		s.handleAuditRecent(w, r)
+	case path == "/api/credentials/save":
+		s.handleCredSave(w, r)
+	case path == "/api/credentials/has":
+		s.handleCredHas(w, r)
+	case path == "/api/credentials/clear":
+		s.handleCredClear(w, r)
+	case path == "/api/downloads/list":
+		s.handleDownloadsList(w, r)
+	case strings.HasPrefix(path, "/api/downloads/"):
+		s.handleDownloadsItem(w, r)
 	case path == "/api/format/json":
 		s.handleFormatJSON(w, r)
 	case path == "/api/format/xml":
 		s.handleFormatXML(w, r)
 	case path == "/api/admin/servers":
 		s.handleAdminServers(w, r)
+	case strings.HasPrefix(path, "/api/logs/tail/"):
+		s.handleTailEventsOrStop(w, r)
 	case strings.HasPrefix(path, "/downloads/"):
 		s.serveDownload(w, r)
 	default:
@@ -185,21 +205,23 @@ func (s *Server) handleSSHTest(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, errors.New("系统或服务器不存在"))
 		return
 	}
-	username := strings.TrimSpace(req.Username)
-	if username == "" {
-		username = srv.Username
-	}
-	if username == "" || req.Password == "" {
-		writeErr(w, 400, errors.New("缺少用户名或密码"))
+	creds, err := s.resolveCreds(req.Username, req.Password, req.System, req.Server, srv.Username)
+	if err != nil {
+		writeErr(w, 400, err)
 		return
 	}
+	if creds.Password == "" {
+		writeErr(w, 400, errors.New("缺少密码（输入或勾选「记住密码」）"))
+		return
+	}
+	username := creds.Username
 
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 
 	cli, err := sshclient.Dial(ctx, sshclient.Server{
 		Name: srv.Name, Host: srv.Host, Port: srv.Port, Username: username,
-	}, sshclient.Credentials{Password: req.Password}, 10*time.Second)
+	}, sshclient.Credentials{Password: creds.Password}, 10*time.Second)
 	if err != nil {
 		clean := sshclient.SanitizeError(err.Error())
 		s.audit.Write("ssh.test", "system", req.System, "server", req.Server, "result", "fail", "err", clean)
@@ -253,21 +275,23 @@ func (s *Server) handleLogsList(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, errors.New("目录不在白名单中"))
 		return
 	}
-	username := strings.TrimSpace(req.Username)
-	if username == "" {
-		username = srv.Username
-	}
-	if username == "" || req.Password == "" {
-		writeErr(w, 400, errors.New("缺少用户名或密码"))
+	creds, err := s.resolveCreds(req.Username, req.Password, req.System, req.Server, srv.Username)
+	if err != nil {
+		writeErr(w, 400, err)
 		return
 	}
+	if creds.Password == "" {
+		writeErr(w, 400, errors.New("缺少密码（输入或勾选「记住密码」）"))
+		return
+	}
+	username := creds.Username
 
 	ctx, cancel := context.WithTimeout(r.Context(), s.cur().SearchTimeout()+10*time.Second)
 	defer cancel()
 
 	cli, err := sshclient.Dial(ctx, sshclient.Server{
 		Name: srv.Name, Host: srv.Host, Port: srv.Port, Username: username,
-	}, sshclient.Credentials{Password: req.Password}, 10*time.Second)
+	}, sshclient.Credentials{Password: creds.Password}, 10*time.Second)
 	if err != nil {
 		auditErr(w, s.audit, "logs.list", "system", req.System, "server", req.Server, "dir", ld.Path, "result", "fail", err)
 		writeErr(w, 502, err)
@@ -366,14 +390,16 @@ func (s *Server) handleDownloadLatest(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, errors.New("目录不在白名单中"))
 		return
 	}
-	username := strings.TrimSpace(req.Username)
-	if username == "" {
-		username = srv.Username
-	}
-	if username == "" || req.Password == "" {
-		writeErr(w, 400, errors.New("缺少用户名或密码"))
+	creds, err := s.resolveCreds(req.Username, req.Password, req.System, req.Server, srv.Username)
+	if err != nil {
+		writeErr(w, 400, err)
 		return
 	}
+	if creds.Password == "" {
+		writeErr(w, 400, errors.New("缺少密码（输入或勾选「记住密码」）"))
+		return
+	}
+	username := creds.Username
 	latest := req.Latest
 	if latest <= 0 {
 		latest = 1
@@ -387,7 +413,7 @@ func (s *Server) handleDownloadLatest(w http.ResponseWriter, r *http.Request) {
 
 	cli, err := sshclient.Dial(ctx, sshclient.Server{
 		Name: srv.Name, Host: srv.Host, Port: srv.Port, Username: username,
-	}, sshclient.Credentials{Password: req.Password}, 10*time.Second)
+	}, sshclient.Credentials{Password: creds.Password}, 10*time.Second)
 	if err != nil {
 		auditErr(w, s.audit, "logs.download", "system", req.System, "server", req.Server, "dir", ld.Path, "result", "fail", err)
 		writeErr(w, 502, err)
@@ -459,6 +485,17 @@ func (s *Server) handleDownloadLatest(w http.ResponseWriter, r *http.Request) {
 			Kind:   "file",
 		})
 		localPaths = append(localPaths, localPath)
+		// 写 sidecar 元数据 — 给"下载历史"页用
+		_ = downloads.WriteMeta(localPath, downloads.Meta{
+			System:   req.System,
+			Server:   srv.Name,
+			Host:     fmt.Sprintf("%s:%d", srv.Host, srv.Port),
+			Dir:      ld.Path,
+			DirAlias: dirAlias,
+			File:     f.Name,
+			Encoding: ld.Encoding,
+			Kind:     "file",
+		})
 		s.audit.Write("logs.download", "system", req.System, "server", req.Server, "dir", ld.Path, "file", f.Name, "result", "ok", "bytes", bytes)
 	}
 	// 是否额外打 zip？
@@ -487,6 +524,21 @@ func (s *Server) handleDownloadLatest(w http.ResponseWriter, r *http.Request) {
 			Remote: "",
 			Date:   dateDir,
 			Kind:   "zip",
+		})
+		// 写 zip 的 sidecar：把包含的远端文件名记下来
+		fileNames := make([]string, 0, len(localPaths))
+		for i := 0; i < latest && i < len(files); i++ {
+			fileNames = append(fileNames, files[i].Name)
+		}
+		_ = downloads.WriteMeta(zipPath, downloads.Meta{
+			System:   req.System,
+			Server:   srv.Name,
+			Host:     fmt.Sprintf("%s:%d", srv.Host, srv.Port),
+			Dir:      ld.Path,
+			DirAlias: dirAlias,
+			Files:    fileNames,
+			Encoding: ld.Encoding,
+			Kind:     "zip",
 		})
 		s.audit.Write("logs.download", "system", req.System, "server", req.Server, "dir", ld.Path, "result", "ok", "stage", "zip", "files", latest, "bytes", size)
 	}
@@ -613,14 +665,16 @@ func (s *Server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, errors.New("目录不在白名单中"))
 		return
 	}
-	username := strings.TrimSpace(req.Username)
-	if username == "" {
-		username = srv.Username
-	}
-	if username == "" || req.Password == "" {
-		writeErr(w, 400, errors.New("缺少用户名或密码"))
+	creds, err := s.resolveCreds(req.Username, req.Password, req.System, req.Server, srv.Username)
+	if err != nil {
+		writeErr(w, 400, err)
 		return
 	}
+	if creds.Password == "" {
+		writeErr(w, 400, errors.New("缺少密码（输入或勾选「记住密码」）"))
+		return
+	}
+	username := creds.Username
 	kw, err := logquery.ParseQuery(req.Query)
 	if err != nil {
 		writeErr(w, 400, err)
@@ -639,7 +693,7 @@ func (s *Server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 
 	cli, err := sshclient.Dial(ctx, sshclient.Server{
 		Name: srv.Name, Host: srv.Host, Port: srv.Port, Username: username,
-	}, sshclient.Credentials{Password: req.Password}, 10*time.Second)
+	}, sshclient.Credentials{Password: creds.Password}, 10*time.Second)
 	if err != nil {
 		auditErr(w, s.audit, "logs.search", "system", req.System, "server", req.Server, "dir", ld.Path, "query", req.Query, "result", "fail", err)
 		writeErr(w, 502, err)
@@ -772,14 +826,16 @@ func (s *Server) handleLogsContext(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, errors.New("目录不在白名单中"))
 		return
 	}
-	username := strings.TrimSpace(req.Username)
-	if username == "" {
-		username = srv.Username
-	}
-	if username == "" || req.Password == "" {
-		writeErr(w, 400, errors.New("缺少用户名或密码"))
+	creds, err := s.resolveCreds(req.Username, req.Password, req.System, req.Server, srv.Username)
+	if err != nil {
+		writeErr(w, 400, err)
 		return
 	}
+	if creds.Password == "" {
+		writeErr(w, 400, errors.New("缺少密码（输入或勾选「记住密码」）"))
+		return
+	}
+	username := creds.Username
 	before := req.Before
 	if before <= 0 {
 		before = s.cur().Search.DefaultContextLines
@@ -805,7 +861,7 @@ func (s *Server) handleLogsContext(w http.ResponseWriter, r *http.Request) {
 
 	cli, err := sshclient.Dial(ctx, sshclient.Server{
 		Name: srv.Name, Host: srv.Host, Port: srv.Port, Username: username,
-	}, sshclient.Credentials{Password: req.Password}, 10*time.Second)
+	}, sshclient.Credentials{Password: creds.Password}, 10*time.Second)
 	if err != nil {
 		auditErr(w, s.audit, "logs.context", "system", req.System, "server", req.Server, "dir", ld.Path, "file", req.File, "line", req.Line, "result", "fail", err)
 		writeErr(w, 502, err)
@@ -1059,10 +1115,6 @@ func (s *Server) handleLogsSearchMulti(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, errors.New("dir 不能为空"))
 		return
 	}
-	if req.Password == "" {
-		writeErr(w, 400, errors.New("缺少密码"))
-		return
-	}
 	kw, err := logquery.ParseQuery(req.Query)
 	if err != nil {
 		writeErr(w, 400, err)
@@ -1139,7 +1191,20 @@ func (s *Server) handleLogsSearchMulti(w http.ResponseWriter, r *http.Request) {
 				}
 				return
 			}
-			res := s.runOneServerSearch(totalCtx, srv, ld, filesN, kw, username, req.Password)
+			// 每台服务器独立解析凭据（password 可来自请求或本机 keyring）
+			c, cErr := s.resolveCreds(req.Username, req.Password, req.System, srv.Name, srv.Username)
+			if cErr != nil {
+				results[idx] = logsSearchMultiServerResult{Server: name, Host: srv.Host, OK: false, Error: cErr.Error()}
+				return
+			}
+			if c.Password == "" {
+				results[idx] = logsSearchMultiServerResult{
+					Server: name, Host: srv.Host, OK: false,
+					Error: "缺少密码（输入或勾选「记住密码」）",
+				}
+				return
+			}
+			res := s.runOneServerSearch(totalCtx, srv, ld, filesN, kw, c.Username, c.Password)
 			results[idx] = res
 			// 审计
 			if res.OK {
@@ -1341,6 +1406,45 @@ func auditErr(w http.ResponseWriter, a *audit.Logger, op string, kv ...any) {
 	a.Write(op, kv...)
 }
 
+// resolvedCreds SSH 凭据解析结果。Password 为空表示"需要前端提示用户输入"。
+type resolvedCreds struct {
+	Username       string
+	Password       string
+	SavedByKeyring bool // true 表示 password 来自 OS 钥匙串，不回传给前端
+}
+
+// resolveCreds 把 HTTP 请求里的凭据 + OS 钥匙串合并成一个最终值。
+//   - inputUser / inputPass：HTTP 请求里的明文
+//   - system / server：钥匙串的 key（system 和 server 名称）
+//   - defaultUser：配置里的默认 SSH 用户名（inputUser 为空时使用）
+//
+// 返回规则：
+//   - err != nil：无法继续（缺用户、钥匙串不可用）
+//   - err == nil && Password != ""：可直接用
+//   - err == nil && Password == ""：前端没传、钥匙串也没存，需用户输入
+func (s *Server) resolveCreds(inputUser, inputPass, system, server, defaultUser string) (resolvedCreds, error) {
+	username := strings.TrimSpace(inputUser)
+	if username == "" {
+		username = defaultUser
+	}
+	if username == "" {
+		return resolvedCreds{}, errors.New("缺少用户名")
+	}
+	if inputPass != "" {
+		return resolvedCreds{Username: username, Password: inputPass}, nil
+	}
+	// 尝试从 keyring 读
+	pw, err := credentials.Get(system, server, username)
+	if err == nil {
+		return resolvedCreds{Username: username, Password: pw, SavedByKeyring: true}, nil
+	}
+	if errors.Is(err, credentials.ErrNotSaved) {
+		return resolvedCreds{Username: username}, nil
+	}
+	// 其它错误（钥匙串不可用等）
+	return resolvedCreds{}, fmt.Errorf("系统钥匙串不可用，请手动输入密码或检查系统配置: %w", err)
+}
+
 func trim(s string, n int) string {
 	s = strings.TrimSpace(s)
 	if len([]rune(s)) <= n {
@@ -1348,4 +1452,455 @@ func trim(s string, n int) string {
 	}
 	r := []rune(s)
 	return string(r[:n]) + "..."
+}
+
+// ---------- /api/logs/tail/* ----------
+
+type tailStartReq struct {
+	System   string `json:"system"`
+	Server   string `json:"server"`
+	Dir      string `json:"dir"`
+	File     string `json:"file"`
+	Lines    int    `json:"lines"` // 启动时先吐的最近 N 行；0 = 只追新增；最大 1000
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+// handleTailStart 创建一个 tail 会话
+//
+// 注意：返回 200 立即返回，tail 的输出通过 /api/logs/tail/{id}/events 订阅。
+func (s *Server) handleTailStart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeErr(w, 405, errors.New("仅支持 POST"))
+		return
+	}
+	var req tailStartReq
+	if err := json.NewDecoder(io.LimitReader(r.Body, 32*1024)).Decode(&req); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	_, srv, ok := s.cur().FindServer(req.System, req.Server)
+	if !ok {
+		writeErr(w, 400, errors.New("系统或服务器不存在"))
+		return
+	}
+	ld, ok := findLogDir(srv, req.Dir)
+	if !ok {
+		writeErr(w, 400, errors.New("目录不在白名单中"))
+		return
+	}
+	if strings.TrimSpace(req.File) == "" {
+		writeErr(w, 400, errors.New("file 不能为空"))
+		return
+	}
+	creds, err := s.resolveCreds(req.Username, req.Password, req.System, req.Server, srv.Username)
+	if err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	if creds.Password == "" {
+		writeErr(w, 400, errors.New("缺少密码（输入或勾选「记住密码」）"))
+		return
+	}
+	username := creds.Username
+
+	// 开 SSH（30s 超时）
+	dialCtx, dialCancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer dialCancel()
+	cli, err := sshclient.Dial(dialCtx, sshclient.Server{
+		Name: srv.Name, Host: srv.Host, Port: srv.Port, Username: username,
+	}, sshclient.Credentials{Password: creds.Password}, 15*time.Second)
+	if err != nil {
+		auditErr(w, s.audit, "logs.tail", "system", req.System, "server", req.Server, "dir", ld.Path, "file", req.File, "result", "fail", err)
+		writeErr(w, 502, err)
+		return
+	}
+	// 不要在这里 Close — tail session 接管 client 生命周期
+	sess, err := s.tails.Start(cli, srv.Name, srv.Host, ld.Path, req.File, ld.Encoding, req.Lines)
+	if err != nil {
+		_ = cli.Close()
+		writeErr(w, 500, err)
+		return
+	}
+	s.audit.Write("logs.tail", "system", req.System, "server", req.Server, "dir", ld.Path, "file", req.File, "result", "ok", "id", sess.ID, "lines", req.Lines)
+	writeJSON(w, 200, map[string]any{
+		"id":     sess.ID,
+		"server": srv.Name,
+		"dir":    ld.Path,
+		"file":   req.File,
+	})
+}
+
+// handleTailEventsOrStop 根据子路径分发：
+//   - GET  /api/logs/tail/{id}/events → SSE 流
+//   - POST /api/logs/tail/{id}/stop    → 显式停止
+func (s *Server) handleTailEventsOrStop(w http.ResponseWriter, r *http.Request) {
+	// path = /api/logs/tail/{id}/events 或 /api/logs/tail/{id}/stop
+	rest := strings.TrimPrefix(r.URL.Path, "/api/logs/tail/")
+	parts := strings.Split(rest, "/")
+	if len(parts) != 2 {
+		http.NotFound(w, r)
+		return
+	}
+	id := parts[0]
+	action := parts[1]
+	switch action {
+	case "events":
+		s.streamTailEvents(w, r, id)
+	case "stop":
+		s.stopTail(w, r, id)
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+// streamTailEvents 用 SSE 把 tail 输出推给前端
+//
+// SSE 格式：data: {json}\n\n
+// 这里不专门做 event: 分类，前端把 data 解析为 JSON 看 kind 即可。
+func (s *Server) streamTailEvents(w http.ResponseWriter, r *http.Request, id string) {
+	sess, ok := s.tails.Get(id)
+	if !ok {
+		writeErr(w, 404, errors.New("tail 会话不存在"))
+		return
+	}
+	// SSE 必备响应头
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no") // 关 nginx 缓冲（如有反代）
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeErr(w, 500, errors.New("response writer 不支持 flush"))
+		return
+	}
+
+	ch, unsub := sess.Subscribe()
+	defer unsub()
+
+	// 周期性心跳：15s 没新行就推 :keepalive
+	keepalive := time.NewTicker(15 * time.Second)
+	defer keepalive.Stop()
+
+	ctx := r.Context()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case line, open := <-ch:
+			if !open {
+				// 会话结束，发一条最终事件后退出
+				_, _ = fmt.Fprintf(w, "event: done\ndata: {}\n\n")
+				flusher.Flush()
+				return
+			}
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", line)
+			flusher.Flush()
+		case <-keepalive.C:
+			_, _ = fmt.Fprintf(w, ": keepalive\n\n")
+			flusher.Flush()
+		}
+	}
+}
+
+// stopTail 显式停止一个 tail 会话
+func (s *Server) stopTail(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodPost {
+		writeErr(w, 405, errors.New("仅支持 POST"))
+		return
+	}
+	if err := s.tails.Stop(id); err != nil {
+		writeErr(w, 404, err)
+		return
+	}
+	s.audit.Write("logs.tail", "id", id, "result", "ok", "stage", "stop")
+	writeJSON(w, 200, map[string]any{"ok": true, "id": id})
+}
+
+// ---------- /api/audit/recent ----------
+
+// handleAuditRecent 返回 audit.log 中最近的 N 条记录。
+//
+// Query 参数：
+//   - limit=N  最多返回 N 条（默认 200，上限 5000）
+//   - op=xxx   按 op= 精确过滤（如 ssh.test / logs.list / logs.search / logs.download / logs.tail）
+//   - system=xxx  按 system 包含过滤
+//   - server=xxx  按 server 包含过滤
+//   - result=ok|fail  按 result 过滤
+//
+// 返回 {records: [{ts, op, system, server, raw}], path: "..."}
+func (s *Server) handleAuditRecent(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeErr(w, 405, errors.New("仅支持 GET"))
+		return
+	}
+	q := r.URL.Query()
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	f := audit.Filter{
+		Op:     q.Get("op"),
+		System: q.Get("system"),
+		Server: q.Get("server"),
+		Result: q.Get("result"),
+	}
+	recs, err := s.audit.Recent(limit, f)
+	if err != nil {
+		writeErr(w, 500, err)
+		return
+	}
+	out := make([]map[string]any, 0, len(recs))
+	for _, rec := range recs {
+		row := map[string]any{
+			"ts":     rec.Time.Format("2006-01-02 15:04:05.000"),
+			"op":     rec.Op,
+			"system": rec.KV["system"],
+			"server": rec.KV["server"],
+			"result": rec.KV["result"],
+			"raw":    rec.Raw,
+		}
+		// 把其它常用字段也单独提出来
+		for _, k := range []string{"dir", "file", "query", "stage", "bytes", "hits", "id", "lines", "files", "err", "count"} {
+			if v, ok := rec.KV[k]; ok && v != "" {
+				row[k] = v
+			}
+		}
+		out = append(out, row)
+	}
+	writeJSON(w, 200, map[string]any{
+		"records": out,
+		"count":   len(out),
+	})
+}
+
+// ---------- /api/credentials/* ----------
+
+type credSaveReq struct {
+	System   string `json:"system"`
+	Server   string `json:"server"`
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+// handleCredSave 保存 SSH 密码到 OS 钥匙串。
+func (s *Server) handleCredSave(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeErr(w, 405, errors.New("仅支持 POST"))
+		return
+	}
+	var req credSaveReq
+	if err := json.NewDecoder(io.LimitReader(r.Body, 8*1024)).Decode(&req); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	if strings.TrimSpace(req.Password) == "" {
+		writeErr(w, 400, errors.New("password 不能为空"))
+		return
+	}
+	if err := s.credCheckSysSrv(req.System, req.Server); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	if err := credentials.Save(req.System, req.Server, strings.TrimSpace(req.Username), req.Password); err != nil {
+		if errors.Is(err, credentials.ErrUnavailable) {
+			writeErr(w, 503, err)
+			return
+		}
+		writeErr(w, 500, err)
+		return
+	}
+	s.audit.Write("credentials.save",
+		"system", req.System, "server", req.Server,
+		"username", strings.TrimSpace(req.Username), "result", "ok")
+	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
+// handleCredHas 检查指定凭据是否存在。
+//
+// Query: ?system=&server=&username=
+// 返回: {ok, has, available}
+//   - ok=true 总是
+//   - has=true 表示已保存
+//   - available=false 表示 keyring 在当前平台不可用（前端可提示"无法使用记住密码"）
+func (s *Server) handleCredHas(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeErr(w, 405, errors.New("仅支持 GET"))
+		return
+	}
+	q := r.URL.Query()
+	system, server, user := q.Get("system"), q.Get("server"), q.Get("username")
+	if err := s.credCheckSysSrv(system, server); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	has, err := credentials.Has(system, server, user)
+	if err != nil {
+		if errors.Is(err, credentials.ErrUnavailable) {
+			writeJSON(w, 200, map[string]any{"ok": true, "has": false, "available": false, "err": err.Error()})
+			return
+		}
+		writeErr(w, 500, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"ok": true, "has": has, "available": true})
+}
+
+// handleCredClear 删除指定凭据。
+func (s *Server) handleCredClear(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeErr(w, 405, errors.New("仅支持 POST"))
+		return
+	}
+	var req credSaveReq
+	if err := json.NewDecoder(io.LimitReader(r.Body, 4*1024)).Decode(&req); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	if err := s.credCheckSysSrv(req.System, req.Server); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	if err := credentials.Clear(req.System, req.Server, strings.TrimSpace(req.Username)); err != nil {
+		if errors.Is(err, credentials.ErrNotSaved) {
+			writeJSON(w, 200, map[string]any{"ok": true, "cleared": false})
+			return
+		}
+		if errors.Is(err, credentials.ErrUnavailable) {
+			writeErr(w, 503, err)
+			return
+		}
+		writeErr(w, 500, err)
+		return
+	}
+	s.audit.Write("credentials.clear",
+		"system", req.System, "server", req.Server,
+		"username", strings.TrimSpace(req.Username), "result", "ok")
+	writeJSON(w, 200, map[string]any{"ok": true, "cleared": true})
+}
+
+// credCheckSysSrv 校验 system/server 都在配置白名单里（防止前端乱传 keyring 索引）。
+func (s *Server) credCheckSysSrv(system, server string) error {
+	if strings.TrimSpace(system) == "" || strings.TrimSpace(server) == "" {
+		return errors.New("system 和 server 必填")
+	}
+	_, _, ok := s.cur().FindServer(system, server)
+	if !ok {
+		return errors.New("系统或服务器不存在")
+	}
+	return nil
+}
+
+// ---------- /api/downloads/* ----------
+
+// handleDownloadsList 列出 downloads/ 目录下的所有下载文件 + 元数据。
+//
+// GET /api/downloads/list?system=&server=
+//   - system / server 可选；只过滤元数据中匹配的（不会真的去访问 SSH）
+//   - 返回 {count, total_bytes, files: [Entry...]}
+func (s *Server) handleDownloadsList(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeErr(w, 405, errors.New("仅支持 GET"))
+		return
+	}
+	q := r.URL.Query()
+	filterSys := strings.TrimSpace(q.Get("system"))
+	filterSrv := strings.TrimSpace(q.Get("server"))
+
+	entries, err := downloads.List(s.cur().DownloadDir())
+	if err != nil {
+		writeErr(w, 500, err)
+		return
+	}
+	out := make([]map[string]any, 0, len(entries))
+	var total int64
+	for _, e := range entries {
+		if filterSys != "" && e.Meta.System != "" && e.Meta.System != filterSys {
+			continue
+		}
+		if filterSrv != "" && e.Meta.Server != "" && e.Meta.Server != filterSrv {
+			continue
+		}
+		total += e.Size
+		row := map[string]any{
+			"name":         e.Name,
+			"size":         e.Size,
+			"size_human":   humanBytes(e.Size),
+			"mod_time":     e.ModTime.Format("2006-01-02 15:04:05"),
+			"kind":         e.Kind,
+			"meta_present": e.MetaPresent,
+			"server":       e.Meta.Server,
+			"host":         e.Meta.Host,
+			"dir":          e.Meta.Dir,
+			"dir_alias":    e.Meta.DirAlias,
+			"encoding":     e.Meta.Encoding,
+		}
+		if !e.Meta.DownloadedAt.IsZero() {
+			row["downloaded_at"] = e.Meta.DownloadedAt.Format("2006-01-02 15:04:05")
+		}
+		// file（远端原始名）或 files（zip 的内容列表）
+		if e.Kind == "zip" {
+			row["files"] = e.Meta.Files
+		} else {
+			row["file"] = e.Meta.File
+		}
+		out = append(out, row)
+	}
+	writeJSON(w, 200, map[string]any{
+		"files":       out,
+		"count":       len(out),
+		"total_bytes": total,
+		"total_human": humanBytes(total),
+		"folder":      s.cur().DownloadDir(),
+	})
+}
+
+// handleDownloadsItem 路由分发：
+//   - DELETE /api/downloads/{name}  — 删除单个文件
+//   - POST   /api/downloads/all    — 清空所有
+func (s *Server) handleDownloadsItem(w http.ResponseWriter, r *http.Request) {
+	rest := strings.TrimPrefix(r.URL.Path, "/api/downloads/")
+	if rest == "" {
+		http.NotFound(w, r)
+		return
+	}
+	// 清空全部
+	if rest == "all" {
+		if r.Method != http.MethodPost {
+			writeErr(w, 405, errors.New("仅支持 POST"))
+			return
+		}
+		n, err := downloads.DeleteAll(s.cur().DownloadDir())
+		if err != nil {
+			writeErr(w, 500, err)
+			return
+		}
+		s.audit.Write("downloads.clear", "result", "ok", "count", n)
+		writeJSON(w, 200, map[string]any{"ok": true, "deleted": n})
+		return
+	}
+	// 单个删除
+	if r.Method != http.MethodDelete {
+		writeErr(w, 405, errors.New("仅支持 DELETE"))
+		return
+	}
+	if err := downloads.Delete(s.cur().DownloadDir(), rest); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	s.audit.Write("downloads.delete", "result", "ok", "name", rest)
+	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
+// humanBytes 把字节数转成"1.2 MB"这种格式
+func humanBytes(n int64) string {
+	const k = 1024
+	if n < k {
+		return strconv.FormatInt(n, 10) + " B"
+	}
+	if n < k*k {
+		return fmt.Sprintf("%.1f KB", float64(n)/k)
+	}
+	if n < k*k*k {
+		return fmt.Sprintf("%.1f MB", float64(n)/(k*k))
+	}
+	return fmt.Sprintf("%.2f GB", float64(n)/(k*k*k))
 }
