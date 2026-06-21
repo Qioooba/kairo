@@ -1,0 +1,365 @@
+// Package dlmanager 管理"异步下载任务"的会话池与 SSE 进度广播。
+//
+// 模型：
+//
+//	POST /api/{logs|files}/download                   → 创建任务（后台下载），立即返回 {id}
+//	GET  /api/{logs|files}/download/{id}/events       → SSE 进度流
+//	POST /api/{logs|files}/download/{id}/cancel       → 取消
+//
+// 设计要点：
+//   - Session 持有一个 cancel ctx；cancel 时调用方协程退出；
+//   - 进度通过 broadcast 推给所有订阅者；
+//   - 多文件串行下载（一次一个 SFTP 流）；进度事件里带当前文件名，
+//     前端可按 file 字段找到表格行并更新行内进度条；
+//   - 全部完成 / 失败 / 取消都广播一条 done 事件，订阅者据此关闭 SSE。
+//   - 30 分钟兜底：超过这个时间还在跑的 session 会被 idleGC 强制 cancel。
+//
+// Kind 用于区分审计 op 与路由命名空间：
+//   - "logs"：走 /api/logs/download/*（白名单日志目录下，审计 op=logs.download）
+//   - "files"：走 /api/files/download/*（任意路径，审计 op=files.download）
+// 复用同一个 Manager，ID 全局唯一（NewID）。
+package dlmanager
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+)
+
+// Item 一个下载产物（普通文件 或 zip）
+//
+// JSON 字段是给前端用的契约；后端 handler 在 response 里直接复用。
+type Item struct {
+	File   string `json:"file,omitempty"`   // 远端原文件名（zip 时为 ""）
+	Local  string `json:"local"`            // 本地文件名（zip 时就是 zip 的名字）
+	Bytes  string `json:"bytes"`            // 字节数（字符串形式，避免 JS 大数精度问题）
+	Remote string `json:"remote,omitempty"` // 远端路径（zip 时为 ""）
+	Date   string `json:"date"`             // YYYYMMDD，本地落点子目录
+	Kind   string `json:"kind"`             // "file" 或 "zip"
+}
+
+// Session 一个下载任务
+//
+// 调用方负责：构造 Session → Manager.Create → 异步启动下载协程 → 协程内
+// 调用 broadcast 推送进度、最后调用 markFinished 关闭。
+type Session struct {
+	ID        string
+	Kind      string // "logs" | "files"
+	System    string
+	Server    string
+	Dir       string   // 仅 logs 模式使用，files 模式为空
+	Files     []string // 仅 logs 模式使用
+	Paths     []string // 仅 files 模式使用：完整远端路径
+	Zip       bool
+	Folder    string // 本地下载根目录
+	CreatedAt time.Time
+
+	mu          sync.RWMutex
+	subscribers map[chan []byte]struct{}
+	cancel      context.CancelFunc
+	finished    bool
+	result      []Item
+	finalErr    error
+}
+
+// Manager 全局下载任务池（logs / files 共用 ID 空间）
+type Manager struct {
+	mu       sync.RWMutex
+	sessions map[string]*Session
+
+	// IdleTimeout 是 session 的兜底时长；超过这个时间还在跑的 session
+	// 会被 idleGC 强制 cancel。默认 30 分钟。
+	IdleTimeout time.Duration
+
+	// GCInterval 是 IdleGC 巡检周期。默认 15 秒；测试里可以调短。
+	GCInterval time.Duration
+}
+
+// New 构造 Manager
+func New() *Manager {
+	return &Manager{
+		sessions:    make(map[string]*Session),
+		IdleTimeout: 30 * time.Minute,
+		GCInterval:  15 * time.Second,
+	}
+}
+
+// NewID 构造下载任务 ID（带前缀便于排查）
+func NewID() string {
+	var b [8]byte
+	_, _ = rand.Read(b[:])
+	return "dl-" + hex.EncodeToString(b[:])
+}
+
+// Create 建一个空 session（不启动下载）。返回 session 指针（已被 Manager 收纳）。
+//
+// 调用方负责在新协程里跑下载逻辑，并在协程退出时调用 sess.CancelCtx()（见
+// AttachCancel）回收 ctx。新协程退出前必须调用 sess.MarkFinished 收尾。
+func (m *Manager) Create(sess *Session) *Session {
+	if sess.CreatedAt.IsZero() {
+		sess.CreatedAt = time.Now()
+	}
+	m.mu.Lock()
+	m.sessions[sess.ID] = sess
+	m.mu.Unlock()
+	return sess
+}
+
+// AttachCancel 注入 ctx 的 cancel 函数。
+//
+// 通常在 Create 之后立刻调用，模式：
+//
+//	sess, _ := mgr.Create(&dlmanager.Session{...})
+//	sessCtx, cancel := context.WithCancel(context.Background())
+//	sess.AttachCancel(cancel)
+//	go runTask(sessCtx, sess, ...)
+func (s *Session) AttachCancel(cancel context.CancelFunc) {
+	s.mu.Lock()
+	s.cancel = cancel
+	s.mu.Unlock()
+}
+
+// Get 拿一个 session（只读）
+func (m *Manager) Get(id string) (*Session, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	s, ok := m.sessions[id]
+	return s, ok
+}
+
+// Cancel 显式取消一个任务（不存在返回 false）。cancel 后 Session.cancel 被调用，
+// 调用方协程收到 ctx.Done 后应主动 markFinished 收尾。
+func (m *Manager) Cancel(id string) bool {
+	m.mu.RLock()
+	s, ok := m.sessions[id]
+	m.mu.RUnlock()
+	if !ok {
+		return false
+	}
+	if s.cancel != nil {
+		s.cancel()
+	}
+	return true
+}
+
+// Subscribe 注册订阅者。channel 在 markFinished 时会被 close，
+// 订阅者用 <-ch 的第二个返回值判断是否已结束。
+func (s *Session) Subscribe() (<-chan []byte, func()) {
+	ch := make(chan []byte, 128)
+	s.mu.Lock()
+	already := s.finished
+	if s.subscribers == nil {
+		s.subscribers = make(map[chan []byte]struct{})
+	}
+	if !already {
+		s.subscribers[ch] = struct{}{}
+	}
+	s.mu.Unlock()
+	if already {
+		// session 已结束，新订阅者拿到的 ch 立即关闭
+		close(ch)
+	}
+	cancel := func() {
+		s.mu.Lock()
+		if _, ok := s.subscribers[ch]; ok {
+			delete(s.subscribers, ch)
+			close(ch)
+		}
+		s.mu.Unlock()
+	}
+	return ch, cancel
+}
+
+// Broadcast 推一条事件给所有订阅者。满了就丢（前端会被后续进度覆盖）。
+func (s *Session) Broadcast(line []byte) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for ch := range s.subscribers {
+		select {
+		case ch <- line:
+		default:
+			// 订阅者处理慢，丢这一帧
+		}
+	}
+}
+
+// BroadcastEvent 把任意 kind + kv 序列化成 SSE data: 行并广播。
+//
+// 调用方不应直接构造 JSON；用本方法可以让 dlmanager 包统一决定序列化规则
+// （比如以后换 Protobuf 只需要改 formatEvent）。
+func (s *Session) BroadcastEvent(kind string, kv map[string]any) {
+	s.Broadcast(formatEvent(kind, kv))
+}
+
+// IsFinished 给订阅者用于"结束态快速返回"。
+func (s *Session) IsFinished() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.finished
+}
+
+// Snapshot 返回当前结束态的 (result, finalErr, folder)。
+//
+// 只在 IsFinished() == true 时才有意义；否则 result 和 finalErr 都为零值。
+// 订阅者在订阅时若发现 IsFinished，会调用本方法拿最终结果构造 SSE done 行。
+func (s *Session) Snapshot() (result []Item, finalErr error, folder string) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.result, s.finalErr, s.Folder
+}
+
+// FormatEvent 导出 formatEvent（让 HTTP 层能直接构造 done 行）。
+//
+// 大多数调用方用 Session.BroadcastEvent 即可；只有"订阅时已结束"这种
+// 边缘场景需要外部拼 done 行，才用这个。
+func FormatEvent(kind string, kv map[string]any) []byte {
+	return formatEvent(kind, kv)
+}
+
+// MarkFinished 标记 session 结束，阻塞推 done 给所有订阅者，再 close channel。
+//
+// 为什么走阻塞推：进度事件可丢（前端会被下一次更新覆盖），但 done 事件
+// 必到——否则前端不知道"任务结束 vs 网络断"，会卡在 99% 假死。
+func (s *Session) MarkFinished(result []Item, finalErr error) {
+	s.mu.Lock()
+	s.finished = true
+	s.result = result
+	s.finalErr = finalErr
+	subs := s.subscribers
+	s.subscribers = nil
+	s.mu.Unlock()
+
+	var ev []byte
+	if finalErr != nil {
+		ev = formatEvent("done", map[string]any{
+			"ok":    false,
+			"error": finalErr.Error(),
+		})
+	} else {
+		ev = formatEvent("done", map[string]any{
+			"ok":        true,
+			"downloads": result,
+			"folder":    s.Folder,
+		})
+	}
+	for ch := range subs {
+		ch <- ev
+	}
+	for ch := range subs {
+		close(ch)
+	}
+}
+
+// IdleGC 清理已结束且无订阅者的 session。
+//
+// 同时兜底：超过 IdleTimeout 还在跑的 session，强制 cancel 防止泄漏。
+// 启动方式：每个 session 创建后 `go m.IdleGC(sess)`。
+//
+// 巡检周期：默认 15s（Manager.GCInterval）；小于等于 0 走默认值。
+func (m *Manager) IdleGC(s *Session) {
+	interval := m.GCInterval
+	if interval <= 0 {
+		interval = 15 * time.Second
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		<-ticker.C
+		s.mu.RLock()
+		finished := s.finished
+		subs := len(s.subscribers)
+		s.mu.RUnlock()
+		if finished && subs == 0 {
+			m.mu.Lock()
+			s.mu.RLock()
+			still := s.finished && len(s.subscribers) == 0
+			s.mu.RUnlock()
+			if still {
+				delete(m.sessions, s.ID)
+			}
+			m.mu.Unlock()
+			return
+		}
+		if m.IdleTimeout > 0 && time.Since(s.CreatedAt) > m.IdleTimeout {
+			if s.cancel != nil {
+				s.cancel()
+			}
+		}
+	}
+}
+
+// formatEvent 构造 SSE data: 字段（手写 JSON，避免引号转义麻烦）
+func formatEvent(kind string, kv map[string]any) []byte {
+	var b strings.Builder
+	b.WriteString(`{"kind":"`)
+	b.WriteString(kind)
+	b.WriteString(`"`)
+	for k, v := range kv {
+		b.WriteString(`,"`)
+		b.WriteString(k)
+		b.WriteString(`":`)
+		b.WriteString(jsonValue(v))
+	}
+	b.WriteString("}\n")
+	return []byte(b.String())
+}
+
+// jsonValue 把 Go 值序列化成最小 JSON
+func jsonValue(v any) string {
+	switch x := v.(type) {
+	case string:
+		return jsonStringVal(x)
+	case bool:
+		if x {
+			return "true"
+		}
+		return "false"
+	case int:
+		return strconv.Itoa(x)
+	case int64:
+		return strconv.FormatInt(x, 10)
+	case float64:
+		return strconv.FormatFloat(x, 'f', -1, 64)
+	case []Item:
+		b, _ := json.Marshal(x)
+		return string(b)
+	case nil:
+		return "null"
+	default:
+		b, _ := json.Marshal(x)
+		return string(b)
+	}
+}
+
+func jsonStringVal(s string) string {
+	out := make([]byte, 0, len(s)+2)
+	out = append(out, '"')
+	for _, r := range s {
+		switch r {
+		case '"':
+			out = append(out, '\\', '"')
+		case '\\':
+			out = append(out, '\\', '\\')
+		case '\n':
+			out = append(out, '\\', 'n')
+		case '\r':
+			out = append(out, '\\', 'r')
+		case '\t':
+			out = append(out, '\\', 't')
+		default:
+			if r < 0x20 {
+				out = append(out, []byte(fmt.Sprintf(`\u%04x`, r))...)
+			} else {
+				out = append(out, byte(r))
+			}
+		}
+	}
+	out = append(out, '"')
+	return string(out)
+}
