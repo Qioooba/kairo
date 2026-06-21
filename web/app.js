@@ -31,6 +31,17 @@
     return e;
   }
 
+  // 防止 innerHTML 注入 — 简易转义
+  function escapeHtml(s) {
+    if (s == null) return '';
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
   function toast(msg, type) {
     const t = $('#toast');
     t.textContent = msg;
@@ -89,29 +100,26 @@
     home: renderHome,
     websphere: renderWebsphere,
     formatter: renderFormatter,
-    datetime: renderPlaceholder,
-    text: renderPlaceholder,
     commands: renderPlaceholder,
     config: renderConfig,
-    history: renderPlaceholder
+    downloads: renderDownloads,
+    history: renderHistory
   };
 
   const routeNames = {
     home: '首页',
     websphere: 'WebSphere 日志助手',
     formatter: '报文格式化',
-    datetime: '日期 / 日历',
-    text: '文本处理',
     commands: '常用命令',
     config: '系统配置',
+    downloads: '下载历史',
     history: '操作历史'
   };
 
   const routeSubs = {
-    datetime: '功能建设中 — 时间戳 / 日期差 / 工作日计算',
-    text: '功能建设中 — 去重 / 排序 / 批量替换 / 编码辅助',
     commands: '功能建设中 — grep / find / tail / WebSphere 排查模板',
-    history: '功能建设中 — 后续在此展示操作历史'
+    downloads: 'downloads/ 目录里所有已下载的日志（zip / 单文件）+ 来源、删除',
+    history: '审计日志（按操作类型 / 状态 / 关键字过滤；最近 N 条）'
   };
 
   function navigate() {
@@ -148,17 +156,16 @@
   function renderHome(view) {
     view.appendChild(el('div', { class: 'mb-3' }, [
       el('div', { class: 'section-title', text: '内网运维工具箱' }),
-      el('div', { class: 'section-sub', text: 'WebSphere 日志检索、报文格式化、文本处理、常用运维辅助工具。' })
+      el('div', { class: 'section-sub', text: 'WebSphere 日志检索、报文格式化、常用运维辅助工具。' })
     ]));
 
     const tools = [
       { id: 'websphere', name: 'WebSphere 日志助手', desc: '多服务器日志并行搜索、上下文查看、日志下载', icon: '📜', tag: 'ready', tagText: '已就绪' },
       { id: 'formatter', name: '报文格式化', desc: 'JSON / XML 格式化、压缩、校验', icon: '⌗', tag: 'ready', tagText: '已就绪' },
-      { id: 'datetime', name: '日期 / 日历工具', desc: '时间戳转换、日期差、工作日辅助', icon: '🗓', tag: 'placeholder', tagText: '规划中' },
-      { id: 'text', name: '文本处理', desc: '去重、排序、批量替换、编码辅助', icon: '✎', tag: 'placeholder', tagText: '规划中' },
       { id: 'commands', name: '常用命令', desc: 'grep / find / tail / WebSphere 排查模板', icon: '$_', tag: 'placeholder', tagText: '规划中' },
       { id: 'config', name: '系统配置', desc: '在线编辑业务系统/服务器/日志目录,改完点保存即生效', icon: '⚙', tag: 'ready', tagText: '可视化' },
-      { id: 'history', name: '操作历史', desc: '本地审计日志的最近记录', icon: '⏱', tag: 'placeholder', tagText: '规划中' }
+      { id: 'downloads', name: '下载历史', desc: '浏览/删除/重新下载 downloads/ 里所有已下载文件', icon: '⤓', tag: 'ready', tagText: '已就绪' },
+      { id: 'history', name: '操作历史', desc: '本地审计日志的最近记录', icon: '⏱', tag: 'ready', tagText: '已就绪' }
     ];
     const grid = el('div', { class: 'grid-4' });
     tools.forEach(t => {
@@ -233,11 +240,13 @@
     }
     function toggleAllSrv(on) {
       srvPickWrap.querySelectorAll('input[type="checkbox"][data-srv]').forEach(cb => { cb.checked = on; });
+      refreshCredStatus();
     }
     function toggleOnline() {
       srvPickWrap.querySelectorAll('input[type="checkbox"][data-srv]').forEach(cb => {
         cb.checked = srvStatus[cb.getAttribute('data-srv')] && srvStatus[cb.getAttribute('data-srv')].state === 'ok';
       });
+      refreshCredStatus();
     }
     function renderSrvPick() {
       srvPickWrap.innerHTML = '';
@@ -250,8 +259,10 @@
       sys.servers.forEach(s => {
         const st = srvStatus[s.name] || { state: 'idle' };
         const dotCls = 'dot dot-' + (st.state === 'idle' ? 'idle' : st.state);
+        const cb = el('input', { type: 'checkbox', 'data-srv': s.name, value: s.name });
+        cb.addEventListener('change', refreshCredStatus);
         const item = el('label', { class: 'srv-pick-item' }, [
-          el('input', { type: 'checkbox', 'data-srv': s.name, value: s.name }),
+          cb,
           el('span', { class: 'name', text: s.name }),
           el('span', { class: 'host', text: s.host + ':' + s.port }),
           el('span', { class: 'status' }, [
@@ -275,7 +286,9 @@
         dlTargetSel.appendChild(el('option', { value: d.path, text: (d.name || d.path) + '  ·  ' + d.path }));
       });
     }
-    sysSel.addEventListener('change', () => { renderSrvPick(); refreshDirs(); });
+    sysSel.addEventListener('change', () => { renderSrvPick(); refreshDirs(); refreshCredStatus(); });
+    userInp.addEventListener('change', refreshCredStatus);
+    userInp.addEventListener('blur', refreshCredStatus);
 
     const btnTest = el('button', { class: 'btn', text: '测试连接', onclick: doTest });
     const btnList = el('button', { class: 'btn btn-primary', text: '列出文件', onclick: doList });
@@ -296,6 +309,81 @@
                username: userInp.value, password: passInp.value };
     }
 
+    // ---- 凭据保存（OS 钥匙串）----
+    const rememberChk = el('input', { type: 'checkbox', id: 'ws-remember' });
+    const rememberLbl = el('label', { class: 'inline' }, [rememberChk, document.createTextNode('记住密码（存进系统钥匙串）')]);
+    const credStatus = el('div', { class: 'text-dim mt-1', id: 'ws-cred-status', text: '未保存密码' });
+    const btnForget = el('button', { class: 'btn btn-sm', text: '忘记', onclick: doForget, style: 'display:none' });
+    const credStatusRow = el('div', { class: 'text-dim mt-1', style: 'display:flex; gap:8px; align-items:center;' }, [
+      credStatus, btnForget
+    ]);
+
+    // 当前检查/保存的 key（system, server, username）— server 用第一台勾选的
+    function currentCredKey() {
+      const srvs = getCheckedServers();
+      const srv = srvs[0] || (sysSel.value && cfg ? (cfg.systems.find(s => s.name === sysSel.value) || {}).servers?.[0]?.name : '');
+      return { system: sysSel.value, server: srv, username: userInp.value };
+    }
+
+    async function refreshCredStatus() {
+      const k = currentCredKey();
+      if (!k.system || !k.server || !k.username) {
+        credStatus.textContent = '未保存密码';
+        btnForget.style.display = 'none';
+        return;
+      }
+      try {
+        const r = await api('GET', '/api/credentials/has?system=' + encodeURIComponent(k.system)
+          + '&server=' + encodeURIComponent(k.server)
+          + '&username=' + encodeURIComponent(k.username));
+        if (!r.ok) return;
+        if (!r.available) {
+          credStatus.textContent = '⚠ 系统钥匙串不可用 — 当前无法「记住密码」';
+          credStatus.style.color = '#c00';
+          btnForget.style.display = 'none';
+        } else if (r.has) {
+          credStatus.textContent = '✓ 已为 ' + k.username + '@' + k.server + ' 保存密码（无需再次输入）';
+          credStatus.style.color = '';
+          btnForget.style.display = '';
+        } else {
+          credStatus.textContent = '未保存密码';
+          credStatus.style.color = '';
+          btnForget.style.display = 'none';
+        }
+      } catch (e) { /* ignore */ }
+    }
+
+    async function doForget() {
+      const k = currentCredKey();
+      if (!k.system || !k.server || !k.username) return;
+      try {
+        await api('POST', '/api/credentials/clear', { system: k.system, server: k.server, username: k.username });
+        toast('已忘记 ' + k.server + ' 上的密码', 'ok');
+        await refreshCredStatus();
+      } catch (e) {
+        toast('清除失败: ' + e.message, 'err');
+      }
+    }
+
+    // 在成功的 SSH 操作后，如果勾了"记住密码"，就把当前输入的密码存起来
+    async function maybeSaveCred(srvName) {
+      if (!rememberChk.checked) return;
+      const pw = passInp.value;
+      if (!pw) return;
+      const k = currentCredKey();
+      const target = srvName || k.server;
+      if (!k.system || !target || !k.username) return;
+      try {
+        await api('POST', '/api/credentials/save', {
+          system: k.system, server: target, username: k.username, password: pw
+        });
+        await refreshCredStatus();
+      } catch (e) {
+        // 不可用时只静默提示，不阻塞主流程
+        console.warn('save credential failed:', e);
+      }
+    }
+
     async function doTest() {
       const srvs = getCheckedServers();
       if (!srvs.length) { toast('请先勾选要测试的服务器', 'warn'); return; }
@@ -306,6 +394,7 @@
         try {
           await api('POST', '/api/ssh/test', credsOne(n));
           srvStatus[n] = { state: 'ok' };
+          await maybeSaveCred(n);
         } catch (e) {
           srvStatus[n] = { state: 'fail', err: e.message };
         } finally {
@@ -314,6 +403,7 @@
       }));
       const okN = srvs.filter(n => srvStatus[n].state === 'ok').length;
       toast(okN + '/' + srvs.length + ' 台连接成功', okN === srvs.length ? 'ok' : 'warn');
+      refreshCredStatus();
     }
 
     async function doList() {
@@ -328,6 +418,7 @@
         renderFileTable();
         fileTableWrap.style.display = '';
         toast('[' + n + '] 共 ' + listState.files.length + ' 个文件', 'ok');
+        await maybeSaveCred(n);
       } catch (e) { toast('列文件失败：' + e.message, 'err'); }
     }
 
@@ -384,6 +475,11 @@
       renderDownloadResults(allResults);
       const okN = allResults.filter(x => !x.error).length;
       toast((okN === srvs.length ? '下载完成：' : '部分失败：') + okN + '/' + srvs.length, okN === srvs.length ? 'ok' : 'warn');
+      // 每台成功的服务器都尝试保存凭据
+      for (const r of allResults) {
+        if (!r.error) await maybeSaveCred(r.server);
+      }
+      refreshCredStatus();
     }
 
     function renderDownloadResults(allResults) {
@@ -441,6 +537,11 @@
         }));
         renderMultiResults(r);
         toast('命中 ' + r.total_hits + ' 条，' + r.ok_count + '/' + srvs.length + ' 成功', r.fail_count > 0 ? 'warn' : 'ok');
+        // 每台成功的服务器都尝试保存凭据
+        for (const srv of (r.servers || [])) {
+          if (srv.ok) await maybeSaveCred(srv.server);
+        }
+        refreshCredStatus();
       } catch (e) {
         hitTableWrap.innerHTML = '';
         hitTableWrap.appendChild(el('div', { class: 'text-err', text: '搜索失败：' + e.message }));
@@ -546,6 +647,7 @@
         el('div', null, [el('label', { text: 'SSH 用户名' }), userInp]),
         el('div', null, [el('label', { text: 'SSH 密码' }), passInp])
       ]),
+      el('div', { class: 'mt-1' }, [rememberLbl, credStatusRow]),
       el('div', { class: 'btn-row mt-3' }, [btnTest, btnList]),
       el('div', { class: 'mt-3' }, [
         el('div', { class: 'text-dim mb-1', text: '下载最新日志（每台服务器分别下，可选 zip）' }),
@@ -568,8 +670,116 @@
       el('div', { class: 'btn-row mt-2' }, [btnSearch])
     ]);
 
+    // ---- 实时 tail（单服务器，单文件，SSE 流）----
+    const tailFileInp = el('input', { type: 'text', id: 'ws-tail-file', placeholder: '文件名（例：SystemOut.log）', value: 'SystemOut.log' });
+    const tailLinesInp = el('input', { type: 'number', id: 'ws-tail-lines', placeholder: '起始行数', value: '100' });
+    const tailSrvSel = el('select', { id: 'ws-tail-srv' });
+    const tailOut = el('pre', { id: 'ws-tail-out', class: 'tail-out' });
+    const btnTailStart = el('button', { class: 'btn btn-primary', text: '开始跟踪', onclick: doTailStart });
+    const btnTailStop = el('button', { class: 'btn', text: '停止', onclick: doTailStop, disabled: true });
+    let tailEvtSrc = null;
+    let tailId = null;
+
+    function refreshTailServers() {
+      const sysName = sysSel.value;
+      const sys = cfg && cfg.systems.find(s => s.name === sysName);
+      tailSrvSel.innerHTML = '';
+      (sys ? sys.servers : []).forEach(s => {
+        tailSrvSel.appendChild(el('option', { value: s.name, text: s.name + '  (' + s.host + ')' }));
+      });
+    }
+    sysSel.addEventListener('change', refreshTailServers);
+
+    async function doTailStart() {
+      const file = (tailFileInp.value || '').trim();
+      if (!file) { toast('请输入文件名', 'warn'); return; }
+      const serverName = tailSrvSel.value;
+      if (!serverName) { toast('请选择服务器', 'warn'); return; }
+      if (!dirSel.value) { toast('请选择日志目录', 'warn'); return; }
+      const lines = Math.max(0, Math.min(1000, Number(tailLinesInp.value) || 0));
+      tailOut.textContent = '';
+      setStatus('busy', '跟踪中…');
+      try {
+        const r = await api('POST', '/api/logs/tail/start', Object.assign({}, creds(), {
+          file: file, lines: lines, server: serverName,
+        }));
+        tailId = r.id;
+        btnTailStart.disabled = true;
+        btnTailStop.disabled = false;
+        appendTailLine({ kind: 'info', msg: '已开启 tail，id=' + tailId });
+        // SSE 订阅
+        if (window.EventSource) {
+          tailEvtSrc = new EventSource('/api/logs/tail/' + tailId + '/events');
+          tailEvtSrc.onmessage = (ev) => {
+            try { appendTailLine(JSON.parse(ev.data)); } catch (e) { appendTailLine({ kind: 'info', msg: ev.data }); }
+          };
+          tailEvtSrc.addEventListener('done', () => {
+            appendTailLine({ kind: 'info', msg: 'SSE 通道关闭' });
+            stopTailUI();
+          });
+          tailEvtSrc.onerror = () => {
+            appendTailLine({ kind: 'error', msg: 'SSE 连接异常' });
+          };
+        } else {
+          appendTailLine({ kind: 'error', msg: '浏览器不支持 EventSource' });
+        }
+      } catch (e) {
+        toast('启动 tail 失败：' + e.message, 'err');
+        setStatus('err', '失败');
+        setTimeout(() => setStatus('idle'), 1500);
+      }
+    }
+
+    async function doTailStop() {
+      if (!tailId) return;
+      try { await api('POST', '/api/logs/tail/' + tailId + '/stop'); }
+      catch (e) { /* ignore */ }
+      stopTailUI();
+    }
+
+    function stopTailUI() {
+      if (tailEvtSrc) { tailEvtSrc.close(); tailEvtSrc = null; }
+      tailId = null;
+      btnTailStart.disabled = false;
+      btnTailStop.disabled = true;
+      setStatus('idle');
+    }
+
+    function appendTailLine(o) {
+      if (o.kind === 'line') {
+        tailOut.textContent += o.line + '\n';
+      } else if (o.kind === 'info') {
+        tailOut.textContent += '⟦info⟧ ' + o.msg + '\n';
+      } else if (o.kind === 'error') {
+        tailOut.textContent += '⟦error⟧ ' + o.msg + '\n';
+      } else if (o.kind === 'done') {
+        tailOut.textContent += '⟦done⟧ ' + o.msg + '\n';
+      }
+      // 自动滚到底部
+      tailOut.scrollTop = tailOut.scrollHeight;
+      // 限制总行数，防止前端内存爆掉
+      const MAX_LINES = 5000;
+      const lines = tailOut.textContent.split('\n');
+      if (lines.length > MAX_LINES) {
+        tailOut.textContent = lines.slice(lines.length - MAX_LINES).join('\n');
+      }
+    }
+
+    const tailCard = el('div', { class: 'card' }, [
+      el('h3', { text: '实时 tail（单文件，SSE 流式）' }),
+      el('div', { class: 'card-desc', text: '跟踪远程文件新增行（用 tail -F），关闭/刷新页面会自动停。' }),
+      el('div', { class: 'grid-3' }, [
+        el('div', null, [el('label', { text: '服务器' }), tailSrvSel]),
+        el('div', null, [el('label', { text: '文件名' }), tailFileInp]),
+        el('div', null, [el('label', { text: '起始行数（0=只追新增）' }), tailLinesInp])
+      ]),
+      el('div', { class: 'btn-row mt-2' }, [btnTailStart, btnTailStop]),
+      el('div', { class: 'mt-2' }, tailOut)
+    ]);
+
     view.appendChild(formCard);
     view.appendChild(searchCard);
+    view.appendChild(tailCard);
     view.appendChild(fileTableWrap);
     view.appendChild(hitTableWrap);
     view.appendChild(ctxCard);
@@ -581,6 +791,7 @@
       info.systems.forEach(s => sysSel.appendChild(el('option', { value: s.name, text: s.name })));
       renderSrvPick();
       refreshDirs();
+      refreshCredStatus();
     }).catch(e => toast('配置加载失败：' + e.message, 'err'));
   }
 
@@ -632,7 +843,220 @@
     ]));
   }
 
-  // 占位页
+  // 操作历史 —— 显示本地 audit.log 的最近记录
+  function renderHistory(view) {
+    const opSel = el('select', { id: 'hist-op' },
+      ['', 'ssh.test', 'logs.list', 'logs.download', 'logs.search', 'logs.context', 'logs.tail', 'admin.servers.put']
+        .map(v => el('option', { value: v, text: v || '全部操作' }, v === '' ? 'selected' : null)));
+    const resultSel = el('select', { id: 'hist-result' },
+      ['', 'ok', 'fail'].map(v => el('option', { value: v, text: v || '全部状态' }, v === '' ? 'selected' : null)));
+    const limitInp = el('input', { type: 'number', value: '100', min: '1', max: '5000', style: 'width: 100px' });
+    const sysInp = el('input', { type: 'text', placeholder: '系统（包含匹配）' });
+    const srvInp = el('input', { type: 'text', placeholder: '服务器（包含匹配）' });
+    const btnRefresh = el('button', { class: 'btn btn-primary', text: '刷新', onclick: loadHistory });
+    const btnAuto = el('button', { class: 'btn', text: '自动刷新: 关', onclick: toggleAuto });
+    const tableWrap = el('div', { class: 'card mt-3', style: 'padding: 0' });
+    let autoTimer = null;
+
+    async function loadHistory() {
+      const q = new URLSearchParams();
+      q.set('limit', String(Number(limitInp.value) || 100));
+      if (opSel.value) q.set('op', opSel.value);
+      if (resultSel.value) q.set('result', resultSel.value);
+      if (sysInp.value) q.set('system', sysInp.value);
+      if (srvInp.value) q.set('server', srvInp.value);
+      try {
+        const r = await api('GET', '/api/audit/recent?' + q.toString());
+        renderTable(r.records || []);
+      } catch (e) { toast('加载失败：' + e.message, 'err'); }
+    }
+
+    function renderTable(records) {
+      tableWrap.innerHTML = '';
+      tableWrap.appendChild(el('h3', { class: 'p-3', text: '共 ' + records.length + ' 条（按时间倒序）' }));
+      if (!records.length) {
+        tableWrap.appendChild(el('div', { class: 'text-dim p-3', text: '没有匹配记录。' }));
+        return;
+      }
+      const tbl = el('table', { class: 'table' });
+      const thead = el('thead', null, el('tr', null, [
+        el('th', { text: '时间' }),
+        el('th', { text: '操作' }),
+        el('th', { text: '系统/服务器' }),
+        el('th', { text: '详情' }),
+        el('th', { text: '结果' })
+      ]));
+      tbl.appendChild(thead);
+      const tbody = el('tbody');
+      records.forEach(r => {
+        const detail = [];
+        if (r.dir) detail.push('dir=' + r.dir);
+        if (r.file) detail.push('file=' + r.file);
+        if (r.query) detail.push('query=' + r.query);
+        if (r.id) detail.push('id=' + r.id);
+        if (r.lines) detail.push('lines=' + r.lines);
+        if (r.hits) detail.push('hits=' + r.hits);
+        if (r.bytes) detail.push('bytes=' + r.bytes);
+        if (r.stage) detail.push('stage=' + r.stage);
+        const errTxt = r.err || '';
+        const detailTxt = detail.join(' · ') + (errTxt ? '\n⟦err⟧ ' + errTxt : '');
+        const resultClass = r.result === 'ok' ? 'tag ready' : (r.result === 'fail' ? 'tag placeholder' : 'muted');
+        tbody.appendChild(el('tr', null, [
+          el('td', { class: 'muted mono', text: r.ts || '-' }),
+          el('td', null, r.op || '-'),
+          el('td', { class: 'mono', text: (r.system || '-') + (r.server ? ' · ' + r.server : '') }),
+          el('td', { class: 'muted small', text: detailTxt }),
+          el('td', null, el('span', { class: resultClass, text: r.result || '-' }))
+        ]));
+      });
+      tbl.appendChild(tbody);
+      tableWrap.appendChild(tbl);
+    }
+
+    function toggleAuto() {
+      if (autoTimer) {
+        clearInterval(autoTimer);
+        autoTimer = null;
+        btnAuto.textContent = '自动刷新: 关';
+      } else {
+        loadHistory();
+        autoTimer = setInterval(loadHistory, 3000);
+        btnAuto.textContent = '自动刷新: 开 (3s)';
+      }
+    }
+
+    view.appendChild(el('div', { class: 'card' }, [
+      el('h3', { text: '操作历史' }),
+      el('div', { class: 'card-desc', text: '读 audit.log，过滤最近 N 条；不会写任何东西，不上传。' }),
+      el('div', { class: 'grid-3' }, [
+        el('div', null, [el('label', { text: '操作类型' }), opSel]),
+        el('div', null, [el('label', { text: '结果' }), resultSel]),
+        el('div', null, [el('label', { text: '返回条数' }), limitInp])
+      ]),
+      el('div', { class: 'grid-2 mt-2' }, [
+        el('div', null, [el('label', { text: '系统（包含匹配）' }), sysInp]),
+        el('div', null, [el('label', { text: '服务器（包含匹配）' }), srvInp])
+      ]),
+      el('div', { class: 'btn-row mt-3' }, [btnRefresh, btnAuto])
+    ]));
+    view.appendChild(tableWrap);
+
+    // 首次进入自动加载
+    loadHistory();
+  }
+
+  // 下载历史页
+  function renderDownloads(view) {
+    const summaryEl = el('div', { class: 'text-dim', text: '加载中…' });
+    const sysSel = el('select', null);
+    sysSel.appendChild(el('option', { value: '', text: '全部系统' }));
+    sysSel.appendChild(el('option', { value: '信贷生产（模拟）', text: '信贷生产（模拟）' }));
+    const srvSel = el('select', null);
+    srvSel.appendChild(el('option', { value: '', text: '全部服务器' }));
+    const tableWrap = el('div', { class: 'mt-3' });
+    const btnRefresh = el('button', { class: 'btn', text: '刷新', onclick: load });
+    const btnClearAll = el('button', { class: 'btn btn-danger', text: '清空全部', onclick: doClearAll });
+
+    view.appendChild(el('h3', { text: '下载历史' }));
+    view.appendChild(el('div', { class: 'card-desc', text: 'downloads/ 目录里所有已下载的日志。点文件可重新下载，点删除可移除。' }));
+    view.appendChild(el('div', { class: 'grid-2 mt-2' }, [
+      el('div', null, [el('label', { text: '业务系统' }), sysSel]),
+      el('div', null, [el('label', { text: '服务器' }), srvSel])
+    ]));
+    view.appendChild(el('div', { class: 'btn-row mt-2' }, [btnRefresh, btnClearAll]));
+    view.appendChild(summaryEl);
+    view.appendChild(tableWrap);
+
+    sysSel.addEventListener('change', load);
+    srvSel.addEventListener('change', load);
+
+    async function load() {
+      summaryEl.textContent = '加载中…';
+      tableWrap.innerHTML = '';
+      try {
+        const qs = new URLSearchParams();
+        if (sysSel.value) qs.set('system', sysSel.value);
+        if (srvSel.value) qs.set('server', srvSel.value);
+        const r = await api('GET', '/api/downloads/list' + (qs.toString() ? '?' + qs : ''));
+        renderRows(r.files || []);
+        // 填充 server 下拉
+        const srvSet = new Set((r.files || []).map(f => f.server).filter(Boolean));
+        const curSrv = srvSel.value;
+        srvSel.innerHTML = '';
+        srvSel.appendChild(el('option', { value: '', text: '全部服务器' }));
+        Array.from(srvSet).sort().forEach(s => srvSel.appendChild(el('option', { value: s, text: s })));
+        srvSel.value = curSrv;
+        summaryEl.textContent = r.count + ' 个文件 · 占用 ' + r.total_human + ' · 目录 ' + r.folder;
+        summaryEl.className = 'text-dim mt-2';
+      } catch (e) {
+        summaryEl.textContent = '加载失败：' + e.message;
+        summaryEl.className = 'text-err mt-2';
+      }
+    }
+
+    function renderRows(files) {
+      tableWrap.innerHTML = '';
+      if (!files.length) {
+        tableWrap.appendChild(el('div', { class: 'text-dim', text: '暂无下载文件。' }));
+        return;
+      }
+      const tbl = el('table', { class: 'table' });
+      tbl.appendChild(el('thead', null, el('tr', null, [
+        el('th', { text: '文件' }),
+        el('th', { text: '大小' }),
+        el('th', { text: '下载时间' }),
+        el('th', { text: '来源' }),
+        el('th', { text: '操作' })
+      ])));
+      const tbody = el('tbody');
+      files.forEach(f => {
+        const fromServer = f.server || '（未记录）';
+        const fromDir = f.dir || '（未记录）';
+        const fromFile = f.kind === 'zip'
+          ? '📦 ' + (f.files && f.files.length ? f.files.length + ' 个文件' : 'zip')
+          : (f.file || '?');
+        const dl = el('a', { href: '/downloads/' + encodeURIComponent(f.name), text: '⤓ 下载' });
+        const del = el('button', { class: 'btn btn-sm btn-danger', text: '删除',
+          onclick: () => doDelete(f, load) });
+        tbody.appendChild(el('tr', null, [
+          el('td', { html: '<code>' + escapeHtml(f.name) + '</code>' + (f.kind === 'zip' ? ' <span class="tag">zip</span>' : '') }),
+          el('td', { class: 'num', text: f.size_human || '-' }),
+          el('td', { class: 'muted', text: f.downloaded_at || f.mod_time || '-' }),
+          el('td', { html: escapeHtml(fromServer) + '<br/><span class="text-dim">' + escapeHtml(fromDir) + '<br/>' + escapeHtml(fromFile) + '</span>' }),
+          el('td', null, [dl, document.createTextNode(' '), del])
+        ]));
+      });
+      tbl.appendChild(tbody);
+      tableWrap.appendChild(tbl);
+    }
+
+    async function doDelete(f, cb) {
+      if (!confirm('删除 ' + f.name + '？')) return;
+      try {
+        await api('DELETE', '/api/downloads/' + encodeURIComponent(f.name));
+        toast('已删除', 'ok');
+        if (cb) cb();
+      } catch (e) {
+        toast('删除失败：' + e.message, 'err');
+      }
+    }
+
+    async function doClearAll() {
+      if (!confirm('清空 downloads/ 里所有文件？此操作不可恢复。')) return;
+      try {
+        const r = await api('POST', '/api/downloads/all');
+        toast('已清空 ' + r.deleted + ' 个文件', 'ok');
+        load();
+      } catch (e) {
+        toast('清空失败：' + e.message, 'err');
+      }
+    }
+
+    // 首次进入自动加载
+    load();
+  }
+
+// 占位页
   function renderPlaceholder(view) {
     const route = (location.hash || '#/home').replace(/^#\//, '');
     const name = routeNames[route] || '此模块';
