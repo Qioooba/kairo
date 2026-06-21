@@ -24,6 +24,7 @@ type fakeSSH struct {
 	stopOnce sync.Once
 }
 
+// startFakeSSH 启一个只支持 exec 的 SSH server
 func startFakeSSH(t *testing.T, user, pass string) (addr string) {
 	t.Helper()
 	l, err := net.Listen("tcp", "127.0.0.1:0")
@@ -105,22 +106,17 @@ func (s *fakeSSH) exec(ch ssh.Channel, cmd string) {
 	sendExit := func(code uint32) {
 		_, _ = ch.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{code}))
 	}
-	// 处理所有命令，模式匹配：
 	switch {
 	case cmd == "echo ok":
 		_, _ = io.WriteString(ch, "ok\n")
 		sendExit(0)
 	case strings.HasPrefix(cmd, "ls -l "):
-		// 实际是 sh -c 'cd ... && find . -printf "..."'
-		// 格式：<size>\t<mtime>\t<name>
 		_, _ = io.WriteString(ch, "1024\t1700000000.0\t./SystemOut.log\n2048\t1699900000.0\t./SystemOut.log.20260620\n512\t1699800000.0\t./SystemOut.log.20260619\n")
 		sendExit(0)
 	case strings.HasPrefix(cmd, "sh -c") && strings.Contains(cmd, "find"):
-		// 实际是 find -printf：<size>\t<mtime>\t<name>
 		_, _ = io.WriteString(ch, "1024\t1700000000.0\t./SystemOut.log\n")
 		sendExit(0)
 	case strings.HasPrefix(cmd, "tail ") || strings.HasPrefix(cmd, "grep ") || strings.Contains(cmd, "grep"):
-		// grep 找不到匹配
 		_, _ = io.WriteString(ch, "")
 		sendExit(1)
 	case strings.HasPrefix(cmd, "sed "):
@@ -148,7 +144,6 @@ func (s *fakeSSH) Stop() {
 // newTestServerWithFakeSSH 构造一个 Server，并把配置里的 host 指向 fake SSH。
 func newTestServerWithFakeSSH(t *testing.T, port int) *Server {
 	srv, mgr, al, _ := newTestServer(t)
-	// 把 cfg 里 mock-1 的 host/port 改成 fake SSH
 	cfg := mgr.Get()
 	for si := range cfg.Systems {
 		for sj := range cfg.Systems[si].Servers {

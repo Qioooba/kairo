@@ -20,6 +20,24 @@ import (
 	"ops-toolbox/internal/sshclient"
 )
 
+// sftpDialer 把 SSH 连接变成 SFTP 客户端。
+//
+// 生产 = sftpclient.New；测试可替换。
+// 用包级变量而不是 Server 字段，是为了让 handler 直接拿到（不需要传遍所有调用点），
+// 且 override 仅在测试代码里发生。
+var sftpDialer = func(cli *sshclient.Client) (sftpClientLike, error) {
+	return sftpclient.New(cli.RawConn())
+}
+
+// sftpClientLike 是 *sftpclient.Client 的最小接口（让 handler 不直接依赖具体类型，
+// 便于测试替换）。
+type sftpClientLike interface {
+	Close() error
+	ReadDir(path string) ([]os.FileInfo, error)
+	DownloadFile(remotePath, localPath string) (int64, error)
+	DownloadFileWithProgress(remotePath, localPath string, progress func(written, total int64)) (int64, error)
+}
+
 // ============================================================================
 // v0.3：文件浏览器（任意路径浏览 + 下载，按 SSH 账号权限放行）
 // ============================================================================
@@ -94,7 +112,7 @@ func (s *Server) handleFilesList(w http.ResponseWriter, r *http.Request) {
 	}
 	defer cli.Close()
 
-	sftpCli, err := sftpclient.New(cli.RawConn())
+	sftpCli, err := sftpDialer(cli)
 	if err != nil {
 		writeErr(w, 502, err)
 		return
@@ -246,9 +264,9 @@ func (s *Server) runFilesDownloadTask(
 		sess.MarkFinished(nil, fmt.Errorf("SSH 连接失败: %w", err))
 		return
 	}
-	defer cli.Close()
+defer cli.Close()
 
-	sftpCli, err := sftpclient.New(cli.RawConn())
+	sftpCli, err := sftpDialer(cli)
 	if err != nil {
 		sess.MarkFinished(nil, fmt.Errorf("SFTP 打开失败: %w", err))
 		return
@@ -319,7 +337,7 @@ func (s *Server) downloadSeriesFree(
 	ctx context.Context,
 	srv *config.ServerConfig,
 	paths []string,
-	sftpCli *sftpclient.Client,
+	sftpCli sftpClientLike,
 	sess *dlmanager.Session,
 ) ([]dlmanager.Item, error) {
 	now := time.Now()

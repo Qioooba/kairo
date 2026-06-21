@@ -56,6 +56,12 @@ func newWithBackend(b sftpBackend) *Client {
 	return &Client{b: b}
 }
 
+// NewWithBackend 导出 newWithBackend 供跨包测试使用（如 httpserver 集成测试）。
+// 生产代码不要用；用 New。
+func NewWithBackend(b sftpBackend) *Client {
+	return newWithBackend(b)
+}
+
 // realSftpBackend 真实 *sftp.Client 的适配器
 type realSftpBackend struct {
 	c *sftp.Client

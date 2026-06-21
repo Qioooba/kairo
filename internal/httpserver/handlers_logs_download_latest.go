@@ -15,7 +15,6 @@ import (
 	"ops-toolbox/internal/dlmanager"
 	"ops-toolbox/internal/downloads"
 	"ops-toolbox/internal/logquery"
-	"ops-toolbox/internal/sftpclient"
 	"ops-toolbox/internal/sshclient"
 )
 
@@ -80,7 +79,7 @@ func (s *Server) handleDownloadLatest(w http.ResponseWriter, r *http.Request) {
 	}
 	defer cli.Close()
 
-	sftpCli, err := sftpclient.New(cli.RawConn())
+	sftpCli, err := sftpDialer(cli)
 	if err != nil {
 		writeErr(w, 502, err)
 		return
