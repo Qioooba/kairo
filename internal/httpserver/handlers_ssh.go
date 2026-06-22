@@ -54,8 +54,17 @@ func (s *Server) handleSSHTest(w http.ResponseWriter, r *http.Request) {
 	cancelDial()
 	if err != nil {
 		clean := sshclient.SanitizeError(err.Error())
-		s.audit.Write("ssh.test", "system", req.System, "server", req.Server, "result", "fail", "err", clean)
-		writeErr(w, 502, errors.New(clean))
+		diag := sshclient.Diagnose(err)
+		s.audit.Write("ssh.test", "system", req.System, "server", req.Server,
+			"result", "fail", "err", clean,
+			"category", string(diag.Category),
+			"reason", diag.Reason)
+		writeJSON(w, 502, map[string]any{
+			"error":      clean,
+			"category":   diag.Category,
+			"reason":     diag.Reason,
+			"suggestion": diag.Suggestion,
+		})
 		return
 	}
 	defer cli.Close()
