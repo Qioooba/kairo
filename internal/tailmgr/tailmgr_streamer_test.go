@@ -12,18 +12,20 @@ import (
 // fakeStreamer 是 Streamer 的可控 mock，用于 tailmgr 的单测。
 //
 // 用法：
-//   f := &fakeStreamer{}
-//   f.lines = []string{"a", "b"}
-//   f.exitCode = 0
-//   f.err = nil       // 或 f.err = ctx.Err() 模拟 ctx 取消
-//   f.delayBeforeEmit = 50 * time.Millisecond  // 控制 timing
+//
+//	f := &fakeStreamer{}
+//	f.lines = []string{"a", "b"}
+//	f.exitCode = 0
+//	f.err = nil       // 或 f.err = ctx.Err() 模拟 ctx 取消
+//	f.delayBeforeEmit = 50 * time.Millisecond  // 控制 timing
 //
 // 真实测试代码：
-//   m := NewManager()
-//   m.GCInterval = 20*time.Millisecond
-//   s, err := m.Start(f, ...)
-//   ch, _ := s.Subscribe()
-//   for line := range ch { ... }
+//
+//	m := NewManager()
+//	m.GCInterval = 20*time.Millisecond
+//	s, err := m.Start(f, ...)
+//	ch, _ := s.Subscribe()
+//	for line := range ch { ... }
 type fakeStreamer struct {
 	mu       sync.Mutex
 	lines    []string

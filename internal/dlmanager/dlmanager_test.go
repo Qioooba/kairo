@@ -310,7 +310,7 @@ func TestFormatEvent(t *testing.T) {
 // TestIdleGCFinishedAndAbandoned 验证结束且无订阅者的 session 会被回收。
 func TestIdleGCFinishedAndAbandoned(t *testing.T) {
 	m := New()
-	m.IdleTimeout = 0       // 关闭兜底超时
+	m.IdleTimeout = 0 // 关闭兜底超时
 	m.GCInterval = 20 * time.Millisecond
 	sess := &Session{ID: "gc1"}
 	m.Create(sess)
@@ -431,5 +431,73 @@ func TestUnfinishedSnapshot(t *testing.T) {
 	}
 	if res != nil {
 		t.Fatalf("result 应为零值: %+v", res)
+	}
+}
+
+// TestMarkFinishedTimeout 验证：慢订阅者不会无限阻塞 MarkFinished。
+//
+// 场景：订阅者不读 channel，channel 缓冲 128；灌满后再 MarkFinished，
+// DoneSendTimeout 设小一点（如 100ms），MarkFinished 应在超时后立即返回
+// 而不是无限等待。
+func TestMarkFinishedTimeout(t *testing.T) {
+	m := New()
+	m.DoneSendTimeout = 100 * time.Millisecond
+	sess := &Session{ID: "slow-fin", Kind: "files"}
+	m.Create(sess)
+
+	ch, unsub := sess.Subscribe()
+	defer unsub()
+
+	// 把 ch 灌满 128 帧，让后续 send 全部阻塞
+	for i := 0; i < 128; i++ {
+		sess.Broadcast([]byte("fill"))
+	}
+	// MarkFinished 应在 ~DoneSendTimeout 后返回（不是无限等待）
+	done := make(chan struct{})
+	go func() {
+		sess.MarkFinished(nil, errors.New("finish"))
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("MarkFinished 因慢订阅者卡死")
+	}
+	// channel 应已关闭。先把灌进去的 128 帧读完，再读应拿到 (zero, false)
+	for i := 0; i < 128; i++ {
+		select {
+		case <-ch:
+		case <-time.After(time.Second):
+			t.Fatalf("第 %d 帧阻塞", i)
+		}
+	}
+	_, ok := <-ch
+	if ok {
+		t.Fatal("channel 应已关闭")
+	}
+}
+
+// TestMarkFinishedFastSubscriber 验证：快订阅者能在超时内收到 done。
+func TestMarkFinishedFastSubscriber(t *testing.T) {
+	m := New()
+	m.DoneSendTimeout = 1 * time.Second
+	sess := &Session{ID: "fast-fin"}
+	m.Create(sess)
+
+	ch, unsub := sess.Subscribe()
+	defer unsub()
+
+	// 启动 reader goroutine，确保 channel 不会被填满
+	go func() {
+		for line := range ch {
+			_ = line
+		}
+	}()
+
+	start := time.Now()
+	sess.MarkFinished([]Item{{Local: "x.zip", Kind: "zip"}}, nil)
+	elapsed := time.Since(start)
+	if elapsed > 500*time.Millisecond {
+		t.Fatalf("MarkFinished 不应阻塞：%v", elapsed)
 	}
 }

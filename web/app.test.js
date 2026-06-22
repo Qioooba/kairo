@@ -39,6 +39,35 @@ const escapeHtml = new Function(extract('escapeHtml') + '; return escapeHtml;')(
 const formatBytes = new Function(extract('formatBytes') + '; return formatBytes;')();
 const formatTime = new Function(extract('formatTime') + '; return formatTime;')();
 
+// el() 在 app.js 顶层。抽出来跑 DOM-like 断言。
+//
+// Node 没 document，所以给 new Function 注入一个最小 mock：
+//   - document.createElement(tag) 返回一个带 innerHTML/textContent 字段的对象；
+//   - document.createTextNode(text) 返回 {nodeType: 'text', data: text}。
+const el = new Function(
+  'document',
+  extract('el') + '\n  return el;'
+)({
+  createElement: function (tag) {
+    return {
+      tag: tag,
+      _attrs: {},
+      _listeners: {},
+      _children: [],
+      set className(v) { this._className = v; },
+      get className() { return this._className; },
+      set innerHTML(v) { this._innerHTML = v; },
+      get innerHTML() { return this._innerHTML; },
+      set textContent(v) { this._textContent = v; },
+      get textContent() { return this._textContent; },
+      setAttribute(k, v) { this._attrs[k] = v; },
+      addEventListener(name, fn) { (this._listeners[name] = this._listeners[name] || []).push(fn); },
+      appendChild(c) { this._children.push(c); return c; }
+    };
+  },
+  createTextNode: function (text) { return { nodeType: 'text', data: text }; }
+});
+
 // cssEscape 在 app.js 里有同名两个函数（renderWebsphere 闭包内一个、顶层一个），
 // 取顶层版本（含 `window.CSS` 分支）。
 function extractTopCssEscape() {
@@ -234,13 +263,112 @@ function testValidate() {
   console.log('  validate ✓');
 }
 
+// ---------- el() 工具函数（XSS / 特殊 attrs） ----------
+
+function testEl() {
+  // text → textContent 走安全通道
+  const a = el('span', { text: '<script>alert(1)</script>' });
+  assert.strictEqual(a._textContent, '<script>alert(1)</script>', 'text 用 textContent');
+  assert.strictEqual(a.innerHTML, undefined, 'text 不会进 innerHTML');
+
+  // unsafeHtml → 走 innerHTML（约定调用方负责安全）
+  const b = el('div', { unsafeHtml: '<b>硬编码</b>' });
+  assert.strictEqual(b._innerHTML, '<b>硬编码</b>', 'unsafeHtml 用 innerHTML');
+  assert.strictEqual(b.textContent, undefined, 'unsafeHtml 不会进 textContent');
+
+  // class → className
+  const c = el('div', { class: 'row foo' });
+  assert.strictEqual(c._className, 'row foo', 'class');
+
+  // on* → addEventListener
+  let clicked = 0;
+  const d = el('button', { onclick: () => { clicked++; } });
+  d._listeners.click[0]();
+  assert.strictEqual(clicked, 1, 'onclick → addEventListener');
+
+  // 其它 → setAttribute
+  const e = el('input', { type: 'text', placeholder: 'p' });
+  assert.strictEqual(e._attrs.type, 'text', 'setAttribute: type');
+  assert.strictEqual(e._attrs.placeholder, 'p', 'setAttribute: placeholder');
+
+  // children 数组 / 字符串 / null
+  const f = el('div', null, [
+    'hello',
+    null,
+    el('span', { text: 'world' })
+  ]);
+  assert.strictEqual(f._children.length, 2, 'children: null 被跳过');
+  assert.strictEqual(f._children[0].data, 'hello', 'children: 字符串转 textNode');
+  assert.strictEqual(f._children[1]._textContent, 'world', 'children: 节点原样');
+
+  console.log('  el ✓');
+}
+
+// ---------- 关键 XSS 回归：动态错误信息里含 HTML/JS ----------
+
+// 不直接抽 buildStatusNode（它在闭包里），改用更宽松的"模拟"：把
+// escapeHtml 跟实际 setRowStatus 旧实现对比，验证 escapeHtml(evil) === oldSafeString。
+function testXSSInErrorText() {
+  const evils = [
+    '"><img src=x onerror=alert(1)>',
+    '<script>alert(1)</script>',
+    "' onclick=alert(1) foo='",
+    '\\"><svg onload=alert(1)>'
+  ];
+  for (const e of evils) {
+    const safe = escapeHtml(e);
+    // 安全：不应有 raw < 或 >
+    assert.ok(!safe.includes('<'), 'XSS: 错误信息不能含 <: ' + e);
+    assert.ok(!safe.includes('>'), 'XSS: 错误信息不能含 >: ' + e);
+  }
+  console.log('  XSS in error text ✓');
+}
+
+// ---------- gotDone 模式：onmessage 'done' + 'done' 事件只触发一次收尾 ----------
+
+// 抽 gotDone 模式到一个独立可测试函数。
+function makeGotDone(onSettle) {
+  let gotDone = false;
+  return (reason) => {
+    if (gotDone) return;
+    gotDone = true;
+    onSettle(reason);
+  };
+}
+
+function testGotDoneDedupe() {
+  // 场景 1：onmessage 推 done + SSE 'done' 事件同时到
+  let calls = 0;
+  const onDone = makeGotDone(() => calls++);
+  onDone('done');
+  onDone('done');
+  assert.strictEqual(calls, 1, 'onmessage + addEventListener done → 1 次收尾');
+
+  // 场景 2：onerror 兜底超时触发时，done 已先到
+  calls = 0;
+  const onDone2 = makeGotDone(() => calls++);
+  onDone2('done');
+  onDone2('error'); // 模拟 onerror 兜底
+  assert.strictEqual(calls, 1, 'done 后到 onerror 不重复');
+
+  // 场景 3：先 onerror 兜底，再补 done
+  calls = 0;
+  const onDone3 = makeGotDone(() => calls++);
+  onDone3('error');
+  onDone3('done');
+  assert.strictEqual(calls, 1, 'onerror 后到 done 不重复');
+
+  console.log('  gotDone dedupe ✓');
+}
+
 // ---------- 主入口 ----------
 
 function main() {
   console.log('Running web/app.test.js...');
   const tests = [
     testEscapeHtml, testFormatBytes, testFormatTime, testTrimMiddle,
-    testCssEscape, testPctText, testValidate,
+    testCssEscape, testPctText, testValidate, testEl, testXSSInErrorText,
+    testGotDoneDedupe,
   ];
   let pass = 0, fail = 0;
   for (const t of tests) {

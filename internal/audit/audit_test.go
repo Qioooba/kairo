@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseLine(t *testing.T) {
@@ -158,5 +159,205 @@ func TestParseLine_KeyWithSpaces(t *testing.T) {
 	}
 	if !strings.Contains(rec.Raw, "hello world") {
 		t.Fatalf("Raw 丢失原行: %s", rec.Raw)
+	}
+}
+
+// TestWriteAndParseJSONL 验证：写一条 audit 记录，文件是合法 JSONL。
+// 写完用 parseLine 读回来能拿到对应字段（项 15）。
+func TestWriteAndParseJSONL(t *testing.T) {
+	dir := t.TempDir()
+	l, err := New(dir, "audit.log")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+
+	l.Write("logs.search", "system", "信贷生产", "server", "mock-1", "query", "Exception", "result", "ok")
+
+	// 读文件原文应是单行 JSON
+	b, err := os.ReadFile(filepath.Join(dir, "audit.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := strings.TrimSpace(string(b))
+	if !strings.HasPrefix(raw, "{") {
+		t.Fatalf("应为 JSONL 行，实际: %s", raw)
+	}
+	if strings.Contains(raw, "ts=") || strings.Contains(raw, "op= ") {
+		t.Fatalf("不应是 K=V 格式: %s", raw)
+	}
+
+	// parseLine 应能读回
+	rec := parseLine(raw)
+	if rec == nil {
+		t.Fatalf("parseLine 失败: %s", raw)
+	}
+	if rec.Op != "logs.search" {
+		t.Errorf("op 不对: %s", rec.Op)
+	}
+	if rec.KV["system"] != "信贷生产" {
+		t.Errorf("system: %s", rec.KV["system"])
+	}
+	if rec.KV["query"] != "Exception" {
+		t.Errorf("query: %s", rec.KV["query"])
+	}
+	if rec.KV["result"] != "ok" {
+		t.Errorf("result: %s", rec.KV["result"])
+	}
+	// ts 应该是合法 RFC3339
+	if rec.Time.IsZero() {
+		t.Errorf("ts 未解析: %s", rec.KV["ts"])
+	}
+}
+
+// TestParseLine_LegacyKV 验证：老 K=V 格式仍能解析（向后兼容）。
+func TestParseLine_LegacyKV(t *testing.T) {
+	// 显式以非 { 开头 → 走 K=V 解析
+	old := "ts=2026-06-20 10:30:00.123 op=old.op system=信贷生产 result=ok"
+	rec := parseLine(old)
+	if rec == nil {
+		t.Fatal("老格式解析失败")
+	}
+	if rec.Op != "old.op" {
+		t.Errorf("op: %s", rec.Op)
+	}
+	if rec.KV["system"] != "信贷生产" {
+		t.Errorf("system: %s", rec.KV["system"])
+	}
+}
+
+// TestParseLine_SpacesInJSONValue 验证：JSONL 格式支持值里有空格。
+func TestParseLine_SpacesInJSONValue(t *testing.T) {
+	line := `{"ts":"2026-06-23T12:00:00.000+08:00","op":"x","msg":"hello world"}`
+	rec := parseLine(line)
+	if rec == nil {
+		t.Fatal("JSON 解析失败")
+	}
+	if rec.KV["msg"] != "hello world" {
+		t.Fatalf("msg 应含空格: %q", rec.KV["msg"])
+	}
+}
+
+// TestWriteCSV_Basic 基本导出：3 条记录，所有字段都能在 CSV 里找到。
+func TestWriteCSV_Basic(t *testing.T) {
+	dir := t.TempDir()
+	l, _ := New(dir, "audit.log")
+	defer l.Close()
+
+	l.Write("ssh.test", "system", "sysA", "server", "srv1", "result", "ok")
+	l.Write("logs.list", "system", "sysA", "server", "srv1", "dir", "/opt/logs", "result", "fail", "err", "permission denied")
+	l.Write("logs.search", "system", "sysB", "server", "srv2", "query", "Exception", "result", "ok", "hits", "5")
+
+	recs, err := l.Recent(100, Filter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var buf strings.Builder
+	if err := WriteCSV(&buf, recs); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+
+	// header 至少包含 ts/op/system/server/result 这 5 列
+	firstLine := strings.SplitN(out, "\n", 2)[0]
+	for _, col := range []string{"ts", "op", "system", "server", "result"} {
+		if !strings.Contains(firstLine, col) {
+			t.Errorf("header 缺少 %s: %s", col, firstLine)
+		}
+	}
+	// 第二条记录有 dir / err，CSV 应包含这些列
+	if !strings.Contains(firstLine, "dir") || !strings.Contains(firstLine, "err") {
+		t.Errorf("header 应包含 dir/err 动态列: %s", firstLine)
+	}
+	// 关键操作名都在
+	for _, op := range []string{"ssh.test", "logs.list", "logs.search"} {
+		if !strings.Contains(out, op) {
+			t.Errorf("CSV 应包含 %s", op)
+		}
+	}
+}
+
+// TestWriteCSV_Empty 空记录 → 只有 header。
+func TestWriteCSV_Empty(t *testing.T) {
+	var buf strings.Builder
+	if err := WriteCSV(&buf, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), "ts") {
+		t.Errorf("空记录也应有 header: %s", buf.String())
+	}
+	// header 行末是 \r\n，数据行也是 \r\n（csv.NewWriter 默认行为）
+	if !strings.Contains(buf.String(), "\r\n") {
+		t.Errorf("CSV 应使用 CRLF 行尾: %q", buf.String())
+	}
+}
+
+// TestWriteCSV_SortedAscByTs 验证导出按 ts 升序（Recent 返的是倒序）。
+func TestWriteCSV_SortedAscByTs(t *testing.T) {
+	dir := t.TempDir()
+	l, _ := New(dir, "audit.log")
+	defer l.Close()
+
+	// 写 3 条，间隔 1ms 让 ts 有差异
+	l.Write("first", "system", "s")
+	time.Sleep(2 * time.Millisecond)
+	l.Write("second", "system", "s")
+	time.Sleep(2 * time.Millisecond)
+	l.Write("third", "system", "s")
+
+	recs, _ := l.Recent(10, Filter{})
+	if len(recs) != 3 {
+		t.Fatalf("期望 3 条，实际 %d", len(recs))
+	}
+	if recs[0].Op != "third" {
+		t.Fatalf("Recent 应倒序：%v", recs)
+	}
+
+	var buf strings.Builder
+	if err := WriteCSV(&buf, recs); err != nil {
+		t.Fatal(err)
+	}
+	// 拿数据行（跳 header）
+	lines := strings.Split(strings.TrimRight(buf.String(), "\r\n"), "\r\n")
+	// lines[0] 是 header，1/2/3 是数据
+	if len(lines) < 4 {
+		t.Fatalf("行数不对: %d", len(lines))
+	}
+	if !strings.Contains(lines[1], "first") {
+		t.Errorf("CSV 第一行应是 first: %s", lines[1])
+	}
+	if !strings.Contains(lines[3], "third") {
+		t.Errorf("CSV 最后一行应是 third: %s", lines[3])
+	}
+}
+
+// TestWriteCSV_EscapesCommasAndQuotes 验证含逗号 / 引号 / 换行的字段会被 csv 库自动转义。
+func TestWriteCSV_EscapesCommasAndQuotes(t *testing.T) {
+	dir := t.TempDir()
+	l, _ := New(dir, "audit.log")
+	defer l.Close()
+
+	// err 含逗号 + 引号
+	l.Write("logs.search", "system", "sysA", "server", "srv1", "query", `q="x",y`, "result", "fail", "err", `boom, said "user"`)
+
+	recs, _ := l.Recent(10, Filter{})
+	var buf strings.Builder
+	if err := WriteCSV(&buf, recs); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	// encoding/csv 默认把 " 转义为 ""
+	// 所以 `boom, said "user"` 在 CSV 里应该是 `boom, said ""user""`
+	if !strings.Contains(out, `""user""`) {
+		t.Errorf("CSV 未正确转义引号: %s", out)
+	}
+}
+
+// TestCSVFilename 验证文件名格式。
+func TestCSVFilename(t *testing.T) {
+	tt := time.Date(2026, 6, 23, 2, 45, 0, 0, time.UTC)
+	if got := CSVFilename(tt); got != "audit-2026-06-23-024500.csv" {
+		t.Errorf("CSVFilename() = %q", got)
 	}
 }

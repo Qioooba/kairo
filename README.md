@@ -145,11 +145,15 @@ systems:
 ```bash
 cd ops-toolbox
 
+# 第一次 clone 后，先把依赖固化到 vendor/（保证产物的依赖版本跟仓库一致）
+go mod vendor
+
 # 主版本（Win10/11，需要 Go 1.20+ 工具链，本机默认 Go 1.22+）
-GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o OpsToolbox.exe .
+# 加 -mod=vendor 后构建脚本/手工命令都走本地 vendor，不再访问网络。
+GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -mod=vendor -trimpath -ldflags "-s -w" -o OpsToolbox.exe .
 ```
 
-或者用脚本：
+或者用脚本（脚本会自动检测 vendor/ 是否存在，存在则用 `-mod=vendor`，缺则回退并提示）：
 
 ```bash
 ./scripts/build_windows_amd64.sh v0.1.0
@@ -169,13 +173,17 @@ curl -L -o /tmp/go1.20.14.darwin-amd64.tar.gz \
 mkdir -p ~/sdk/go120
 tar -C ~/sdk/go120 -xzf /tmp/go1.20.14.darwin-amd64.tar.gz --strip-components=1
 
-# 2) 编译
+# 2) 编译（脚本同样会自动用 -mod=vendor）
 export GO120_HOME=~/sdk/go120
 ./scripts/build_windows_amd64_win7_go120.sh v0.1.0
 # → dist/ops-toolbox-v0.1.0-win7/OpsToolbox_win7.exe
 ```
 
 > `go.mod` 顶部 `go 1.20` 已设置，依赖 (`x/crypto v0.31.0`、`x/text v0.21.0`) 都是 Go 1.20 兼容版本。
+>
+> 注：`golang.org/x/crypto` ≥ v0.21.0 才实现 `diffie-hellman-group14-sha256` / `group-exchange-sha*`，是 OpenSSH 6.2p2 / 老 sshd 兼容握手的关键。
+>
+> `vendor/` 目录已 commit 进仓库；克隆后无需联网即可完成 vendor 模式构建。
 >
 > 注：`golang.org/x/crypto` ≥ v0.21.0 才实现 `diffie-hellman-group14-sha256` / `group-exchange-sha*`，是 OpenSSH 6.2p2 / 老 sshd 兼容握手的关键。
 

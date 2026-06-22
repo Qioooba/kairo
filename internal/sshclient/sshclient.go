@@ -14,6 +14,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -38,6 +40,106 @@ type Server struct {
 	Host     string
 	Port     int
 	Username string
+	// HostKeySHA256 可选：固定这台 server 的 host key 指纹（base64 SHA256）。
+	// 非空时 Dial 会用 ssh.FixedHostKey 强校验，避免中间人攻击。
+	// 空时仍走 InsecureIgnoreHostKey（内网工具默认）。
+	HostKeySHA256 string
+	// SSHProfile 可选：覆盖 app 级别的默认 profile。
+	// 取值同 AppConfig.SSHCompatProfile：modern/compat/no-ecdh/legacy/auto。
+	// 空时由 SetDefaultProfile 指定的全局默认决定；都没设就 compat。
+	SSHProfile string
+}
+
+// ---- 日志与 profile 全局配置（项 9 + 项 22）----
+
+var (
+	pkgLogMu        sync.RWMutex
+	pkgDebugEnabled bool   // 是否启用 ssh_debug.log 写入
+	pkgTrafficOn    bool   // 是否启用 ssh_traffic.log 写入
+	pkgLogMaxBytes  int64  // 单个日志文件上限（0 = 不限）
+	pkgLogKeep      int    // 轮转保留份数（0 = 不轮转，只截断）
+	pkgDefaultProf  string // 全局默认 SSH compat profile 名；空 = compat
+)
+
+// SetLogConfig 配置 SSH 日志开关（项 9）。
+//
+//   - debug=true 开启 ssh_debug.log
+//   - traffic=true 开启 ssh_traffic.log（hex dump，会写大量数据，调试老 sshd 时再开）
+//   - maxMB：单个日志文件大小上限（MB），0 = 不限
+//   - keep：超过上限时保留的轮转份数（不含当前），0 = 不轮转
+//
+// 默认全关（debug=false, traffic=false, maxMB=0, keep=0）——
+// 这是为了不在用户机器上无脑生成日志。
+func SetLogConfig(debug, traffic bool, maxMB, keep int) {
+	pkgLogMu.Lock()
+	defer pkgLogMu.Unlock()
+	pkgDebugEnabled = debug
+	pkgTrafficOn = traffic
+	if maxMB > 0 {
+		pkgLogMaxBytes = int64(maxMB) * 1024 * 1024
+	} else {
+		pkgLogMaxBytes = 0
+	}
+	pkgLogKeep = keep
+}
+
+// SetDefaultProfile 设置全局默认 SSH compat profile（项 22）。
+//
+// 取值：modern / compat / no-ecdh / legacy / auto。
+// "auto" 表示按 sshCompatProfiles() 的 3 段默认顺序（向后兼容旧行为）。
+// 任何 srv.SSHProfile 非空的连接仍走 srv 上的 profile，不被全局默认值覆盖。
+func SetDefaultProfile(name string) {
+	pkgLogMu.Lock()
+	defer pkgLogMu.Unlock()
+	pkgDefaultProf = strings.ToLower(strings.TrimSpace(name))
+}
+
+// DefaultProfileName 返回当前全局默认 SSH compat profile 名（main 启动日志用）。
+// 空 = 没显式设过，行为等同 "auto"。
+func DefaultProfileName() string {
+	pkgLogMu.RLock()
+	defer pkgLogMu.RUnlock()
+	if pkgDefaultProf == "" {
+		return "auto"
+	}
+	return pkgDefaultProf
+}
+
+// resolveProfile 根据 srv.SSHProfile 选具体 profile。
+//
+// 优先级：
+//  1. srv.SSHProfile 非空 → 直接选这个
+//  2. 否则用全局 pkgDefaultProf
+//  3. 都没设或值非法 → "auto"（走 sshCompatProfiles() 3 段顺序）
+func resolveProfile(srv Server, defaultName string) (name string, profs []sshCompatProfile) {
+	all := sshCompatProfiles()
+	wanted := strings.ToLower(strings.TrimSpace(srv.SSHProfile))
+	if wanted == "" {
+		wanted = defaultName
+	}
+	switch wanted {
+	case "", "auto":
+		return "auto", all
+	case "modern":
+		// 现代子集：仅 curve25519 + 现代 host key（避免老 sshd 不识别算法导致握手失败）
+		return "modern", all[:1]
+	case "compat":
+		return "compat", all[:1]
+	case "no-ecdh":
+		// 取 no-ecdh 那段（第 2 个）
+		if len(all) >= 2 {
+			return "no-ecdh", all[1:2]
+		}
+		return "no-ecdh", all
+	case "legacy":
+		// legacy DH-sha1 兜底（第 3 个）
+		if len(all) >= 3 {
+			return "legacy", all[2:3]
+		}
+		return "legacy", all
+	default:
+		return wanted, all
+	}
 }
 
 // sshDebugLog 把 ops-toolbox 自己的 SSH 调用细节写到独立文件
@@ -52,6 +154,13 @@ var (
 
 func openSSHDebugLog() *os.File {
 	sshDebugOnce.Do(func() {
+		// 默认关闭（项 9）：避免无脑写日志污染用户机器。
+		pkgLogMu.RLock()
+		enabled := pkgDebugEnabled
+		pkgLogMu.RUnlock()
+		if !enabled {
+			return
+		}
 		exe, err := os.Executable()
 		if err != nil {
 			return
@@ -117,6 +226,14 @@ var (
 
 func openSSHTrafficLog() *os.File {
 	sshTrafficOnce.Do(func() {
+		// 默认关闭（项 9）：traffic 日志会写大量 hex dump，没开 SSH 兼容问题时别开。
+		pkgLogMu.RLock()
+		enabled := pkgTrafficOn
+		pkgLogMu.RUnlock()
+		if !enabled {
+			sshTrafficDisabled = true
+			return
+		}
 		exe, err := os.Executable()
 		if err != nil {
 			sshTrafficDisabled = true
@@ -322,6 +439,26 @@ func passwordKeyboardInteractive(password string) ssh.KeyboardInteractiveChallen
 }
 
 func newSSHClientConfig(srv Server, cred Credentials, timeout time.Duration, p sshCompatProfile) *ssh.ClientConfig {
+	hostKeyCb := ssh.InsecureIgnoreHostKey() // 内网工具默认：信任 host key
+	// 项 10：如果用户在 server 上配了 host_key_sha256，启用强校验。
+	// 这里用 base64 SHA256 比对，远比 known_hosts 文件管理轻量，适合内网固定机器场景。
+	if hk := strings.TrimSpace(srv.HostKeySHA256); hk != "" {
+		if fp, err := base64.StdEncoding.DecodeString(hk); err == nil && len(fp) == 32 {
+			want := fp
+			hostKeyCb = func(_ string, _ net.Addr, key ssh.PublicKey) error {
+				got := key.Marshal()
+				h := sha256.Sum256(got)
+				if !bytes.Equal(h[:], want) {
+					return fmt.Errorf("host key fingerprint 不匹配: want sha256:%s, got sha256:%s",
+						base64.StdEncoding.EncodeToString(want),
+						base64.StdEncoding.EncodeToString(h[:]))
+				}
+				return nil
+			}
+		} else {
+			sshDebugLogf("HostKeySHA256=%q 不是合法的 base64 SHA256（需 32 字节），按 insecure 处理", hk)
+		}
+	}
 	return &ssh.ClientConfig{
 		User: srv.Username,
 		Auth: []ssh.AuthMethod{
@@ -330,7 +467,7 @@ func newSSHClientConfig(srv Server, cred Credentials, timeout time.Duration, p s
 			ssh.KeyboardInteractive(passwordKeyboardInteractive(cred.Password)),
 		},
 		Timeout:           timeout,
-		HostKeyCallback:   ssh.InsecureIgnoreHostKey(), // 内网工具 + 不在配置里管 known_hosts，第一版可接受
+		HostKeyCallback:   hostKeyCb,
 		HostKeyAlgorithms: p.HostKeyAlgorithms,
 		Config: ssh.Config{
 			KeyExchanges: p.KeyExchanges,
@@ -417,7 +554,10 @@ func Dial(ctx context.Context, srv Server, cred Credentials, timeout time.Durati
 
 	dialStart := time.Now()
 	var lastErr error
-	profiles := sshCompatProfiles()
+	pkgLogMu.RLock()
+	defaultProf := pkgDefaultProf
+	pkgLogMu.RUnlock()
+	_, profiles := resolveProfile(srv, defaultProf)
 	for i, p := range profiles {
 		if err := ctx.Err(); err != nil {
 			sshDebugLogf("Dial 超时/取消: %s (耗时 %s)", addr, time.Since(dialStart))

@@ -1252,9 +1252,13 @@ func TestFilesDownload_EventsOrCancel_BadPath(t *testing.T) {
 
 // itoa 是 fmt.Sprintf("%d", i) 的简化版，避免引入 fmt 仅测试用
 func itoa(i int) string {
-	if i == 0 { return "0" }
+	if i == 0 {
+		return "0"
+	}
 	neg := i < 0
-	if neg { i = -i }
+	if neg {
+		i = -i
+	}
 	var b [20]byte
 	pos := len(b)
 	for i > 0 {
@@ -1262,6 +1266,9 @@ func itoa(i int) string {
 		b[pos] = byte('0' + i%10)
 		i /= 10
 	}
-	if neg { pos--; b[pos] = '-' }
+	if neg {
+		pos--
+		b[pos] = '-'
+	}
 	return string(b[pos:])
 }

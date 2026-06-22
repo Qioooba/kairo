@@ -1,0 +1,410 @@
+version: 1
+plan:
+  name: 'OpsToolbox 代码审查 24 项修复'
+  max_concurrency: 3
+  max_consecutive_failures: 2
+  max_cycles: 8
+  auto_reject_retries: 1
+  verifier_config:
+    default_verifiers: [verifier]
+    audit_sample_rate: 0.0
+tasks:
+  - id: agent1-backend-core
+    title: 'Agent 1 - 后端核心修复（SSH/SFTP/logquery/config + vendor）'
+    assigned_to: coder
+    verified_by: verifier
+    max_retries: 2
+    prompt: |-
+      你是 OpsToolbox 后端核心修复 agent，工作目录 `/Users/qi/Documents/spaces/ops-toolbox`。
+      完整任务板在 `$MAVIS_SCRATCHPAD`，先 cat 一下看 ChatGPT 报告的核实结论（特别是 P0 编译错误是 ChatGPT 误判，不要修）。
+
+      ## 你的范围（14 项，ChatGPT 报告项号）
+
+      **打包 / 构建基础**：
+      - 项 2: vendor 模式（go mod vendor + 构建脚本 -mod=vendor + README/docs/ACCEPTANCE 更新）
+      - 项 19: gofmt -w .（必须 0 行，包括根目录 debug_run.go 临时文件）
+
+      **logquery**：
+      - 项 3: SearchCommand OR 逻辑重构（保持语义、加回归测试 TestSearchCommand_OR_IncludesFirstBranch / TestSearchCommand_OR_WithNegation）
+      - 项 4: ParseQuery 状态机校验（拒绝 `A &&`, `A ||`, `A && && B`，明确支持哪些、明确拒绝哪些）
+
+      **config**：
+      - 项 5: Defaults() 不再吞非法 encoding（保留给 Validate 报错）+ 新单测 TestLoadRejectsInvalidEncoding / TestDefaultsNormalizeEncoding
+      - 项 21: Config.Clone() DeepCopy + handlers_admin.go 走 Clone()
+      - 项 14 部分: 接受 Agent 2 加 free_file_roots 字段，但 Defaults/Validate 你来定（启动警告由 Agent 2 在前端做）
+
+      **sshclient / sftpclient**：
+      - 项 8: sftpclient ShellBackend fallback（RemoteFS 接口抽象，cat/dd/base64 三档）
+      - 项 9: SSH debug/traffic 日志加配置开关 + 大小限制 + 轮转（默认全关）
+      - 项 10: HostKeyCallback 支持 host_key_sha256 pin（默认仍允许 insecure 但 README 标红）
+      - 项 22: SSH compat profile 配置化（modern/compat/no-ecdh/legacy/auto，每台 server 可指定）
+
+      **logquery / list**：
+      - 项 6: list_mode:auto 真正 fallback（Go 侧 gnu_find 失败自动 posix_ls 后置重试）
+      - 项 7: posix_ls 解析修复（文件名空格用 fields[8:] join、mtime 年份补全、grep | head 顺序）
+
+      ## 共享契约（必须跟 Agent 2 对齐）
+
+      config 新增字段（你写在 `internal/config/config.go` 的 `App` 和 `Server` 结构体）：
+      ```go
+      // App 字段
+      SSHDebug          bool   `yaml:"ssh_debug"`
+      SSHTrafficDump    bool   `yaml:"ssh_traffic_dump"`
+      SSHLogMaxMB       int    `yaml:"ssh_log_max_mb"`
+      SSHLogKeep        int    `yaml:"ssh_log_keep"`
+      SSHCompatProfile  string `yaml:"ssh_compat_profile"`  // modern/compat/no-ecdh/legacy/auto
+      EnableFreeFileBrowser *bool `yaml:"enable_free_file_browser"`
+      FreeFileRoots     []string `yaml:"free_file_roots"`
+      CredentialStore   string   `yaml:"credential_store"`
+
+      // Server 字段
+      SSHProfile        string `yaml:"ssh_profile"`
+      HostKeySHA256     string `yaml:"host_key_sha256"`
+      ```
+
+      Audit 不要改（Agent 2 改 `internal/audit/audit.go`，但你如果需要写 audit，调 `audit.Write` 现成 API 即可）。
+
+      ## 工作要求
+
+      1. 先 `git status`、`git log -1` 看一下基线
+      2. 不要清 working tree，不要 git reset
+      3. 每修完一项，跑对应单测
+      4. 全做完跑：`gofmt -l .` (必须 0 行), `go build ./...`, `go test -mod=vendor ./...`
+      5. 写报告到 `/Users/qi/Documents/spaces/ops-toolbox/docs/REVIEW-FIX-agent1.md`，包含每项改动文件、新增测试、验证命令、ChatGPT 建议偏离说明
+      6. 不要改 web/app.js、internal/dlmanager、internal/audit、internal/downloads —— 那些是 Agent 2 的范围
+      7. 不要改 internal/sshclient.go Run() 函数的 line 520 `code := 0`（ChatGPT 误判，是 Stream() 函数的 line 622，作用域独立）
+
+      ## 关键文件路径
+
+      - sshclient: `/Users/qi/Documents/spaces/ops-toolbox/internal/sshclient/sshclient.go` (696 行)
+      - sftpclient: `/Users/qi/Documents/spaces/ops-toolbox/internal/sftpclient/sftpclient.go` (259 行)
+      - logquery: `/Users/qi/Documents/spaces/ops-toolbox/internal/logquery/logquery.go` (672 行)
+      - config: `/Users/qi/Documents/spaces/ops-toolbox/internal/config/config.go` (328 行)
+      - handlers: `/Users/qi/Documents/spaces/ops-toolbox/internal/httpserver/handlers_logs_*.go`
+      - build scripts: `/Users/qi/Documents/spaces/ops-toolbox/scripts/build_windows_amd64.sh` 等
+      - docs: `/Users/qi/Documents/spaces/ops-toolbox/docs/ACCEPTANCE.md`, `/Users/qi/Documents/spaces/ops-toolbox/README.md`
+
+      ## 测试基线（必须保持）
+
+      ```bash
+      cd /Users/qi/Documents/spaces/ops-toolbox
+      go build ./...                            # pass
+      go test -mod=vendor ./...                 # all pass
+      gofmt -l .                                # 0 行
+      ```
+
+      ## stop condition
+
+      - 14 项全部修完
+      - 上述测试基线全部通过
+      - 报告写到 docs/REVIEW-FIX-agent1.md
+      - git diff 列出（不要 commit，等 owner 统一决定）
+    verify_prompt: |-
+      你是 verifier，独立验证 Agent 1 的工作。**不要只读 producer 的报告**。
+
+      ## 必跑命令（每条都要看到 PASS 输出）
+
+      ```bash
+      cd /Users/qi/Documents/spaces/ops-toolbox
+      gofmt -l .                                # 必须 0 行
+      go build -mod=vendor ./...                # 必须成功
+      go test -mod=vendor ./...                 # 必须全部 pass
+      git status                                # 列出改动文件
+      ```
+
+      ## 14 项逐项验证
+
+      对照 `$MAVIS_SCRATCHPAD` 里的项号清单：
+
+      1. **项 2 vendor**: 检查 `vendor/` 目录存在、`go.mod`/`go.sum` 已 tidy、构建脚本加了 `-mod=vendor`、README/docs 更新
+      2. **项 19 gofmt**: `gofmt -l .` 必须 0 行（包括根目录 debug_run.go）
+      3. **项 3 OR 逻辑**: 读 `internal/logquery/logquery.go` SearchCommand，确认 OR 写法语义正确；跑 `go test -mod=vendor -run OR ./internal/logquery/...`
+      4. **项 4 ParseQuery**: 读 ParseQuery，确认状态机校验；跑 `go test -mod=vendor ./internal/logquery/...` 含拒绝测试
+      5. **项 5 config encoding**: 读 `internal/config/config.go` Defaults 和 Validate；跑 `go test -mod=vendor ./internal/config/...`
+      6. **项 21 DeepCopy**: 读 Config.Clone()，跑 `go test -mod=vendor -run Clone ./internal/config/...`
+      7. **项 8 SFTP fallback**: 读 `internal/sftpclient/sftpclient.go`，确认 RemoteFS 接口、SFTPBackend、ShellBackend；跑对应测试
+      8. **项 9 SSH 日志开关**: 读 sshclient.go openSSHTrafficLog / openSSHDebugLog，确认默认关闭 + rotate
+      9. **项 10 HostKeyCallback**: 读 sshclient.go newSSHClientConfig，确认支持 sha256 pin
+      10. **项 22 SSH profile**: 读 sshclient.go sshCompatProfiles，确认配置化；至少跑一次 `go test -mod=vendor ./internal/sshclient/...`
+      11. **项 6 list_mode auto**: 读 handlers_logs_list.go 确认有 fallback 重试
+      12. **项 7 posix_ls**: 读 logquery.go ParseListOutputPOSIX，确认 fields[8:]、mtime 年份、grep | head 顺序
+      13. **vendor 字段**: 确认 `internal/config/config.go` App 和 Server 结构体有契约字段
+
+      ## 边界检查
+
+      - Agent 1 是否误删了 sshclient.go line 520 或 622 的 `code := 0`？（不要删！）
+      - Agent 1 是否动了 web/、internal/dlmanager、internal/audit、internal/downloads？（不应该动）
+      - 新增代码是否符合现有命名风格？
+      - 是否有明显的安全回退？
+
+      ## 输出
+
+      报告 `docs/REVIEW-FIX-agent1-verify.md`，包含：
+      - 每项 PASS/FAIL
+      - 测试命令输出（精简到关键行）
+      - FAIL 时给出具体文件:行号 和重现命令
+      - 最后给一个总评
+
+  - id: agent2-frontend-ux
+    title: 'Agent 2 - 前端/下载/审计/体验修复（XSS/SSE/zip/audit/keyring）'
+    assigned_to: coder
+    verified_by: verifier
+    max_retries: 2
+    prompt: |-
+      你是 OpsToolbox 前端 + 下载 + 审计 + 体验修复 agent，工作目录 `/Users/qi/Documents/spaces/ops-toolbox`。
+      完整任务板在 `$MAVIS_SCRATCHPAD`，先 cat 一下看 ChatGPT 报告的核实结论。
+
+      ## 你的范围（12 项，ChatGPT 报告项号）
+
+      **前端安全**：
+      - 项 13: 前端 innerHTML XSS 风险（动态错误文本必须 escapeHtml 或 textContent，el() 工具函数 html: 改名 unsafeHtml）
+      - 项 20: 前端 SSE error 兜底（done/error 竞争用 gotDone 标志位）
+
+      **下载 / 审计 / dlmanager**：
+      - 项 11: dlmanager MarkFinished 发送 done 超时（避免慢 SSE 卡死）
+      - 项 12: /api/logs/download-latest 改异步 dlmanager 任务模型（SSE + 可取消），保留旧接口兼容
+      - 项 15: audit JSONL + 旧格式兼容读取
+      - 项 16: downloads 历史 sidecar 兜底（无 sidecar 但在 downloads/YYYYMMDD/ 下也列出）
+      - 项 17: zip 内文件名为远端原始文件名（重构 zipFiles 接受 ZipSource{NameInZip}）
+      - 项 18: 时间戳 `_` 分隔（150405_000 或 20060102_150405_000）
+
+      **配置 / 体验**：
+      - 项 14: file browser 启动警告 + 支持 free_file_roots（配置字段复用 Agent 1 加的）
+      - 项 23: keyring 兼容性配置化（credential_store: keyring/file/disabled）
+      - 项 24-P3: 择优做 2-3 个 —— 推荐：环境自检页（/api/diagnostics）、连接诊断模式（结构化错误分类）、操作历史 CSV 导出
+
+      ## 共享契约（必须跟 Agent 1 对齐）
+
+      Agent 1 在 `internal/config/config.go` 加这些字段，你先 cat 一下当前 config.go 确认存在：
+      ```go
+      EnableFreeFileBrowser *bool    `yaml:"enable_free_file_browser"`
+      FreeFileRoots         []string `yaml:"free_file_roots"`
+      CredentialStore       string   `yaml:"credential_store"`
+      ```
+      如果还没加，**等 Agent 1 先加**，或者你自己加（建议分工：你加、Agent 1 复用结构体）。
+
+      LogsDownloadReq（你定）：
+      ```go
+      // internal/dlmanager/dlmanager.go
+      type LogsDownloadReq struct {
+          System string   `json:"system"`
+          Server string   `json:"server"`
+          Dir    string   `json:"dir"`
+          Files  []string `json:"files"`
+          Latest int      `json:"latest"`
+          Zip    bool     `json:"zip"`
+      }
+      ```
+
+      ## 工作要求
+
+      1. 先 `git status`、`git log -1` 看一下基线
+      2. 不要清 working tree，不要 git reset
+      3. **先看一眼 Agent 1 加的 config 字段**（如果 Agent 1 已经动过），避免重复定义
+      4. 每修完一项，跑对应单测
+      5. 全做完跑：`gofmt -l .` (必须 0 行), `go build ./...`, `go test ./...`, `node web/app.test.js`
+      6. 写报告到 `/Users/qi/Documents/spaces/ops-toolbox/docs/REVIEW-FIX-agent2.md`
+      7. 不要改 internal/sshclient、internal/sftpclient、internal/logquery、scripts/build_*.sh —— 那些是 Agent 1 的范围
+      8. **不要修 vendor** —— Agent 1 做
+
+      ## 关键文件路径
+
+      - 前端: `/Users/qi/Documents/spaces/ops-toolbox/web/app.js` (2183 行)、`web/index.html`、`web/style.css`
+      - 前端测试: `/Users/qi/Documents/spaces/ops-toolbox/web/app.test.js`
+      - httpserver handlers: `/Users/qi/Documents/spaces/ops-toolbox/internal/httpserver/handlers_*.go`
+      - dlmanager: `/Users/qi/Documents/spaces/ops-toolbox/internal/dlmanager/dlmanager.go` (313 行)
+      - audit: `/Users/qi/Documents/spaces/ops-toolbox/internal/audit/audit.go` (235 行)
+      - downloads: `/Users/qi/Documents/spaces/ops-toolbox/internal/downloads/downloads.go` (297 行)
+      - credentials: `/Users/qi/Documents/spaces/ops-toolbox/internal/credentials/credentials.go` (122 行)
+      - zip helper: `/Users/qi/Documents/spaces/ops-toolbox/internal/httpserver/helpers.go`
+
+      ## 测试基线（必须保持）
+
+      ```bash
+      cd /Users/qi/Documents/spaces/ops-toolbox
+      go build ./...                            # pass
+      go test ./...                             # all pass
+      gofmt -l .                                # 0 行
+      node web/app.test.js                      # 7 pass, 0 fail
+      ```
+
+      ## stop condition
+
+      - 12 项全部修完（P3 项至少做 2 个）
+      - 上述测试基线全部通过
+      - 报告写到 docs/REVIEW-FIX-agent2.md
+      - git diff 列出（不要 commit，等 owner 统一决定）
+    verify_prompt: |-
+      你是 verifier，独立验证 Agent 2 的工作。**不要只读 producer 的报告**。
+
+      ## 必跑命令（每条都要看到 PASS 输出）
+
+      ```bash
+      cd /Users/qi/Documents/spaces/ops-toolbox
+      gofmt -l .                                # 必须 0 行
+      go build ./...                            # 必须成功
+      go test ./...                             # 必须全部 pass
+      node web/app.test.js                      # 必须 7 pass, 0 fail
+      git status                                # 列出改动文件
+      ```
+
+      ## 12 项逐项验证
+
+      1. **项 11 MarkFinished**: 读 `internal/dlmanager/dlmanager.go`，确认有超时发送逻辑；跑测试
+      2. **项 12 logs/download**: 读 `internal/httpserver/handlers_logs_download_latest.go` 或新文件，确认异步 dlmanager；测试 SSE 流程
+      3. **项 13 XSS**: 读 `web/app.js`，grep `innerHTML`、`setRowStatus`、`escapeHtml`，确认动态错误文本转义
+      4. **项 14 free_file_roots**: 读 `internal/config/config.go` 和 httpserver，确认支持；启动警告可能在 main.go 或前端
+      5. **项 15 JSONL**: 读 `internal/audit/audit.go` Write / parseLine，确认 JSONL + 兼容旧格式
+      6. **项 16 sidecar 兜底**: 读 `internal/downloads/downloads.go` isListableExt，确认 underDateDir 兜底
+      7. **项 17 zip**: 读 `internal/httpserver/helpers.go` zipFiles，确认 ZipSource 结构体 + 远端名
+      8. **项 18 时间戳**: grep `150405.000` / `150405_000`，确认已改
+      9. **项 20 SSE error**: 读 web/app.js EventSource 错误处理，确认 gotDone 标志
+      10. **项 23 keyring**: 读 `internal/credentials/credentials.go`，确认 credential_store 支持 keyring/file/disabled
+      11. **P3 自检/诊断/CSV**: 至少做了 2 个；跑 `go test ./...`
+      12. **文档更新**: README.md / docs/ACCEPTANCE.md 反映了 free_file_roots / credential_store / async download
+
+      ## 边界检查
+
+      - Agent 2 是否动了 internal/sshclient、internal/sftpclient、internal/logquery、scripts/build_*.sh？（不应该动）
+      - Agent 2 是否重复定义了 Agent 1 已经加的 config 字段？
+      - web/app.test.js 必须仍然 7 pass
+      - 新增前端代码是否破坏现有 6 个功能页面？
+
+      ## 输出
+
+      报告 `docs/REVIEW-FIX-agent2-verify.md`，包含：
+      - 每项 PASS/FAIL
+      - 测试命令输出（精简到关键行）
+      - FAIL 时给出具体文件:行号 和重现命令
+      - 最后给一个总评
+
+  - id: final-integration-gate
+    title: '最终集成验证（全部测试 + 接口 + 页面烟测）'
+    assigned_to: verifier
+    depends_on: [agent1-backend-core, agent2-frontend-ux]
+    role: verify-as-task
+    max_retries: 1
+    prompt: |-
+      你是最终关卡 verifier，整合验证 Agent 1 + Agent 2 的工作。
+      工作目录 `/Users/qi/Documents/spaces/ops-toolbox`。
+
+      ## 第一关：基础质量门
+
+      ```bash
+      cd /Users/qi/Documents/spaces/ops-toolbox
+      gofmt -l .                                # 必须 0 行
+      go build -mod=vendor ./...                # 必须成功（vendor 已提交）
+      go test -mod=vendor ./... 2>&1 | tail -40 # 必须全部 pass
+      node web/app.test.js                      # 必须 7 pass, 0 fail
+      ```
+
+      ## 第二关：单元测试覆盖率快速检查
+
+      ```bash
+      cd /Users/qi/Documents/spaces/ops-toolbox
+      go test -mod=vendor -cover ./... 2>&1 | tail -30
+      ```
+      至少确认主要包都有测试覆盖（sshclient, sftpclient, logquery, config, dlmanager, audit, downloads, httpserver）。
+
+      ## 第三关：接口烟测（用 mock_sshd + acceptance_run.py）
+
+      ```bash
+      cd /Users/qi/Documents/spaces/ops-toolbox
+
+      # 启动 mock sshd
+      python3 scripts/mock_sshd.py &
+      MOCK_PID=$!
+      sleep 2
+
+      # 启动 app（用 OPS_APP_PORT=18090 避开默认 18080）
+      OPS_APP_PORT=18090 MOCK_SSHD_PORT=2225 \
+        go run -mod=vendor . &
+      APP_PID=$!
+      sleep 5
+
+      # 跑 acceptance
+      python3 scripts/acceptance_run.py 2>&1 | tail -30
+
+      # 收尾
+      kill $APP_PID $MOCK_PID 2>/dev/null
+      ```
+
+      如果 acceptance 报错，标注 FAIL，但**不要修**，交给 owner 决定。
+
+      ## 第四关：UI 烟测（如果 playwright 可用）
+
+      ```bash
+      cd /Users/qi/Documents/spaces/ops-toolbox
+
+      # 起 mock sshd + app
+      python3 scripts/mock_sshd.py &
+      MOCK_PID=$!
+      OPS_APP_PORT=18090 MOCK_SSHD_PORT=2225 \
+        go run -mod=vendor . &
+      APP_PID=$!
+      sleep 5
+
+      # 跑 playwright（如果 docs/qa/node_modules 装了）
+      [ -d docs/qa/node_modules ] && {
+        cd docs/qa
+        OPS_APP_PORT=18090 MOCK_SSHD_PORT=2225 node playwright_smoke.js 2>&1 | tail -40
+      } || echo "playwright 未安装，跳过 UI 烟测"
+
+      kill $APP_PID $MOCK_PID 2>/dev/null
+      ```
+
+      ## 第五关：交叉项验证
+
+      - vendor/ 是否提交？
+      - docs/REVIEW-FIX-agent1.md 和 docs/REVIEW-FIX-agent2.md 是否齐全？
+      - README.md / docs/ACCEPTANCE.md 是否反映了新功能（free_file_roots / credential_store / async download / audit JSONL）？
+      - 24 项修复项是否全部覆盖？打开 ChatGPT 报告 + 两个 agent 报告逐一对照
+
+      ## 输出报告
+
+      报告写到 `/Users/qi/Documents/spaces/ops-toolbox/docs/REVIEW-FIX-FINAL.md`：
+
+      ```markdown
+      # OpsToolbox 24 项代码审查修复 - 最终验收报告
+
+      日期：2026-06-23
+      工作目录：/Users/qi/Documents/spaces/ops-toolbox
+
+      ## 24 项修复覆盖矩阵
+
+      | 项 | 标题 | Agent | 状态 | 关键改动 |
+      | --- | --- | --- | --- | --- |
+      | 1 | P0 编译错误 | - | SKIP | ChatGPT 误判，line 520/622 在不同函数 |
+      | 2 | vendor | A1 | PASS/FAIL | ... |
+      | 3 | OR 逻辑 | A1 | ... |
+      | ... | ... | ... | ... | ... |
+
+      ## 测试结果
+
+      | 关卡 | 命令 | 结果 |
+      | --- | --- | --- |
+      | 质量门 | gofmt -l . | 0 行 / FAIL |
+      | 质量门 | go build -mod=vendor ./... | pass / FAIL |
+      | 质量门 | go test -mod=vendor ./... | N/M pass |
+      | 质量门 | node web/app.test.js | 7/7 pass / FAIL |
+
+      ## 接口烟测
+
+      - acceptance_run.py: PASS/FAIL/SKIP（具体输出）
+
+      ## UI 烟测
+
+      - playwright_smoke.js: PASS/FAIL/SKIP
+
+      ## 已知遗留
+
+      1. ...
+
+      ## 总评
+
+      - 全部通过 / 大部分通过 / 关键路径通过 / 不通过
+      ```
+
+      ## stop condition
+
+      报告写完，输出 PASS 或 FAIL。

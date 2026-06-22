@@ -6,12 +6,13 @@
 // 不允许写远程文件、不允许删远程文件、不允许改权限。
 //
 // TODO(P2-12) SFTP 子系统不可用 shell fallback：
-//   老 AIX / 银行前置机 / 精简 Linux 镜像有时只开 SSH 不开 SFTP。
-//   当前 sftp.NewClient 失败直接 502，未来应 fallback 到：
-//     - 列目录：sh -c "ls -l <path>" 解析
-//     - 下载小文件：sh -c "cat <path>" 流式读
-//     - 下载大文件：dd / base64 分片
-//   这一版（v0.4 发版前修复）不动，避免和 SSH 握手修复混在一起。
+//
+//	老 AIX / 银行前置机 / 精简 Linux 镜像有时只开 SSH 不开 SFTP。
+//	当前 sftp.NewClient 失败直接 502，未来应 fallback 到：
+//	  - 列目录：sh -c "ls -l <path>" 解析
+//	  - 下载小文件：sh -c "cat <path>" 流式读
+//	  - 下载大文件：dd / base64 分片
+//	这一版（v0.4 发版前修复）不动，避免和 SSH 握手修复混在一起。
 package sftpclient
 
 import (

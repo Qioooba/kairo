@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // ---------- /api/logs/download-latest ----------
@@ -74,7 +75,8 @@ func TestLogsDownloadLatest_MissingPassword(t *testing.T) {
 func TestLogsDownloadLatest_DialFail(t *testing.T) {
 	srv, _, _, _ := newTestServer(t)
 	// 不起 fake SSH，配置里的 host=10.0.0.1 不可达
-	w := doRequest(srv, "POST", "/api/logs/download-latest", map[string]any{
+	// ?wait=1 走 sync 路径直接返回错误（默认走 async，只返回 id）
+	w := doRequest(srv, "POST", "/api/logs/download-latest?wait=1", map[string]any{
 		"system": "信贷生产", "server": "mock-1", "dir": "SystemOut",
 		"username": "ops", "password": "x",
 	})
@@ -101,7 +103,8 @@ func TestLogsDownloadLatest_HappyFlow(t *testing.T) {
 		return f
 	}())
 
-	w := doRequest(srv, "POST", "/api/logs/download-latest", map[string]any{
+	// ?wait=1 同步等结果，验整条下载链路（默认 async 只返 id）
+	w := doRequest(srv, "POST", "/api/logs/download-latest?wait=1", map[string]any{
 		"system": "信贷生产", "server": "mock-1", "dir": "SystemOut",
 		"username": "ops", "password": "testpw", "latest": 1,
 	})
@@ -134,12 +137,72 @@ func TestLogsDownloadLatest_LatestCap(t *testing.T) {
 	// 但 handler 里 cap 是在所有校验之后，因此无法在 dial 前直接验。
 	// 这里只断言"latest > 5"不会让请求挂死（dial 失败是 502，符合预期）。
 	srv, _, _, _ := newTestServer(t)
-	w := doRequest(srv, "POST", "/api/logs/download-latest", map[string]any{
+	// ?wait=1 同步拿到 dial fail 结果
+	w := doRequest(srv, "POST", "/api/logs/download-latest?wait=1", map[string]any{
 		"system": "信贷生产", "server": "mock-1", "dir": "SystemOut",
 		"username": "ops", "password": "x", "latest": 100,
 	})
 	if w.Code != 502 {
 		t.Errorf("latest=100 应 dial fail → 502，得到 %d", w.Code)
+	}
+}
+
+// TestLogsDownloadLatest_AsyncReturnsID 验证：默认（不 ?wait=1）返回 {id}，
+// 后台跑任务，可以订阅 SSE 拿到进度。
+func TestLogsDownloadLatest_AsyncReturnsID(t *testing.T) {
+	addr := startFakeSSH(t, "ops", "testpw")
+	_, portStr := splitHostPort(addr)
+	port := atoi(portStr)
+	srv := newTestServerWithFakeSSH(t, port)
+	withFakeSFTP(t, func() *fakeSftpClient {
+		f := newFakeSftpBasic()
+		f.files["/opt/logs/SystemOut/SystemOut.log"] = []byte("async content")
+		return f
+	}())
+
+	// 不带 wait=1 → 应立即返回 {id}
+	w := doRequest(srv, "POST", "/api/logs/download-latest", map[string]any{
+		"system": "信贷生产", "server": "mock-1", "dir": "SystemOut",
+		"username": "ops", "password": "testpw", "latest": 1,
+	})
+	if w.Code != 200 {
+		t.Fatalf("期望 200，得到 %d body=%s", w.Code, w.Body.String())
+	}
+	var got struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.ID == "" {
+		t.Fatalf("id 应非空：body=%s", w.Body.String())
+	}
+
+	// 订阅 SSE 拿最终结果
+	sess, ok := srv.downloads.Get(got.ID)
+	if !ok {
+		t.Fatalf("session %s 不在 pool 里", got.ID)
+	}
+	// 等 MarkFinished（最多 5s）
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if sess.IsFinished() {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !sess.IsFinished() {
+		t.Fatal("session 5s 内未结束")
+	}
+	res, finalErr, folder := sess.Snapshot()
+	if finalErr != nil {
+		t.Fatalf("finalErr 应为 nil: %v", finalErr)
+	}
+	if len(res) == 0 {
+		t.Fatal("downloads 应非空")
+	}
+	if folder == "" {
+		t.Error("folder 应有值")
 	}
 }
 

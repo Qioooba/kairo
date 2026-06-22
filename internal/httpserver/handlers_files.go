@@ -91,6 +91,11 @@ func (s *Server) handleFilesList(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, errors.New("path 必须是绝对路径（以 / 开头）"))
 		return
 	}
+	// 项 14：free_file_roots 白名单检查（仅 list 时校验；download 也复用同一逻辑）。
+	if !s.cur().App.FreeFileRootsEnabled(req.Path) {
+		writeErr(w, 403, fmt.Errorf("path %q 不在 app.free_file_roots 白名单中", req.Path))
+		return
+	}
 	_, srv, ok := s.cur().FindServer(req.System, req.Server)
 	if !ok {
 		writeErr(w, 400, errors.New("系统或服务器不存在"))
@@ -111,6 +116,7 @@ func (s *Server) handleFilesList(w http.ResponseWriter, r *http.Request) {
 
 	cli, err := sshclient.Dial(ctx, sshclient.Server{
 		Name: srv.Name, Host: srv.Host, Port: srv.Port, Username: creds.Username,
+		HostKeySHA256: srv.HostKeySHA256, SSHProfile: srv.SSHProfile,
 	}, sshclient.Credentials{Password: creds.Password}, sshAttemptTimeout)
 	if err != nil {
 		s.audit.Write("files.list", "system", req.System, "server", req.Server, "path", req.Path, "result", "fail", "stage", "dial", "err", err.Error())
@@ -221,6 +227,11 @@ func (s *Server) handleFilesDownload(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, 400, fmt.Errorf("path 含非法字符: %q", p))
 			return
 		}
+		// 项 14：free_file_roots 白名单检查
+		if !s.cur().App.FreeFileRootsEnabled(p) {
+			writeErr(w, 403, fmt.Errorf("path %q 不在 app.free_file_roots 白名单中", p))
+			return
+		}
 	}
 	_, srv, ok := s.cur().FindServer(req.System, req.Server)
 	if !ok {
@@ -269,6 +280,7 @@ func (s *Server) runFilesDownloadTask(
 	dialCtx, cancelDial := context.WithTimeout(ctx, sshDialOuterTimeout)
 	cli, err := sshclient.Dial(dialCtx, sshclient.Server{
 		Name: srv.Name, Host: srv.Host, Port: srv.Port, Username: username,
+		HostKeySHA256: srv.HostKeySHA256, SSHProfile: srv.SSHProfile,
 	}, sshclient.Credentials{Password: password}, sshAttemptTimeout)
 	cancelDial()
 	if err != nil {
@@ -315,16 +327,18 @@ func (s *Server) runFilesDownloadTask(
 	if sess.Zip && len(results) >= 2 {
 		// 跟下载文件同毫秒戳，保证 zip 命名跟里面文件保持一致。
 		zipName := fmt.Sprintf("%s_files_%s.zip",
-			sanitize(srv.Name), time.Now().Format("150405.000"))
+			sanitize(srv.Name), time.Now().Format("150405_000"))
 		zipPath := filepath.Join(s.cur().DownloadDir(), results[0].Date, zipName)
-		localPaths := make([]string, 0, len(results))
+		// 项 17：zip 内的文件名用远端原始 basename，下载时拿到的 zip
+		// 解压后能直接看到原始文件名（而不是 server_001_app.log 这种本地化文件名）。
+		sources := make([]ZipSource, 0, len(results))
 		remoteNames := make([]string, 0, len(results))
 		for _, it := range results {
 			p := filepath.Join(s.cur().DownloadDir(), it.Date, it.Local)
-			localPaths = append(localPaths, p)
+			sources = append(sources, ZipSource{Path: p, NameInZip: filepath.Base(it.Remote)})
 			remoteNames = append(remoteNames, it.Remote)
 		}
-		if err := zipFiles(localPaths, zipPath); err != nil {
+		if err := zipFilesNamed(sources, zipPath); err != nil {
 			s.audit.Write("files.download", "system", sess.System, "server", sess.Server, "result", "fail", "stage", "zip", "err", err.Error())
 			sess.MarkFinished(results, fmt.Errorf("打包 zip 失败: %w", err))
 			return
@@ -374,7 +388,7 @@ func (s *Server) downloadSeriesFree(
 	now := time.Now()
 	dateDir := now.Format("20060102")
 	// 毫秒级时间戳避免同秒内重复下载互相覆盖。
-	stamp := now.Format("150405.000")
+	stamp := now.Format("150405_000")
 	targetDir := filepath.Join(s.cur().DownloadDir(), dateDir)
 
 	results := make([]dlmanager.Item, 0, len(paths))

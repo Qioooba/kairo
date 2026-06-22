@@ -68,6 +68,7 @@ func (s *Server) handleTailStart(w http.ResponseWriter, r *http.Request) {
 	defer dialCancel()
 	cli, err := sshclient.Dial(dialCtx, sshclient.Server{
 		Name: srv.Name, Host: srv.Host, Port: srv.Port, Username: username,
+		HostKeySHA256: srv.HostKeySHA256, SSHProfile: srv.SSHProfile,
 	}, sshclient.Credentials{Password: creds.Password}, sshAttemptTimeout)
 	if err != nil {
 		auditErr(w, s.audit, "logs.tail", "system", req.System, "server", req.Server, "dir", ld.Path, "file", req.File, "result", "fail", err)

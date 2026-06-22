@@ -279,9 +279,11 @@ type cancelMockFile struct {
 	r *slowReader
 }
 
-func (f *cancelMockFile) Read(p []byte) (int, error)  { return f.r.Read(p) }
+func (f *cancelMockFile) Read(p []byte) (int, error) { return f.r.Read(p) }
 func (f *cancelMockFile) Close() error               { return f.r.Close() }
-func (f *cancelMockFile) Stat() (os.FileInfo, error) { return fakeFileInfo{name: "x", size: 1024 * 1024}, nil }
+func (f *cancelMockFile) Stat() (os.FileInfo, error) {
+	return fakeFileInfo{name: "x", size: 1024 * 1024}, nil
+}
 
 func TestDownloadFile_NotExistRemote(t *testing.T) {
 	backend := &mockBackend{files: map[string][]byte{}}

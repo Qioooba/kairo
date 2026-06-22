@@ -18,13 +18,29 @@ import (
 	"ops-toolbox/internal/sshclient"
 )
 
+// ZipSource 描述一个要打进 zip 的源文件。
+//
+//   - Path：磁盘上要读取的本地路径
+//   - NameInZip：zip 内的文件名（通常是远端原始文件名，方便用户解压后辨认）
+//
+// 项 17 修复：原 zipFiles 用本地 basename 当 zip 内的文件名，远端原始名丢了；
+// 现在允许调用方显式指定 NameInZip，本地路径跟 zip 内的"展示名"解耦。
+type ZipSource struct {
+	Path      string
+	NameInZip string
+}
+
 // zipFiles 把若干已下载的本地文件打包成单个 zip。
 //
 // 设计要点：
+//
 //   - 用 archive/zip + DEFLATE（默认级别），纯 stdlib，无新增依赖；
+//
 //   - zip 内文件名只保留"原始名"（不带 downloads/YYYYMMDD/server_dir_ 前缀），
 //     这样在 Windows 资源管理器里双击打开能直接看到干净的日志；
+//
 //   - 写入时若任一文件打开失败，整体报错，不留半截 zip；
+//
 //   - srcPaths 是后端自己下载生成的本地路径，**不是用户输入**，
 //     所以不再做路径穿越 / 反斜杠检查 —— Windows 本地路径天然含 `\`。
 //
@@ -76,6 +92,89 @@ func zipFiles(srcPaths []string, destPath string) error {
 			name = fmt.Sprintf("%s_%d%s", base, n+1, ext)
 		}
 		usedNames[filepath.Base(abs)]++
+		header := &zip.FileHeader{
+			Name:     name,
+			Method:   zip.Deflate,
+			Modified: st.ModTime(),
+		}
+		w, err := zw.CreateHeader(header)
+		if err != nil {
+			_ = f.Close()
+			return fmt.Errorf("写入 zip 头失败: %w", err)
+		}
+		if _, err := io.Copy(w, f); err != nil {
+			_ = f.Close()
+			return fmt.Errorf("写入 zip 内容失败: %w", err)
+		}
+		_ = f.Close()
+	}
+	if err := zw.Close(); err != nil {
+		return fmt.Errorf("关闭 zip writer 失败: %w", err)
+	}
+	if err := dst.Close(); err != nil {
+		return fmt.Errorf("关闭 zip 文件失败: %w", err)
+	}
+	closed = true
+	return nil
+}
+
+// zipFilesNamed 用源对象 ZipSource 指定的 NameInZip 打包（项 17 修复：保留远端原始文件名）。
+//
+// 行为跟 zipFiles 几乎一样，差别只在 zip 内文件名来源：
+//   - 优先用 NameInZip（远端原始名，更直观）；
+//   - 同名 NameInZip 第二个起加 _N 后缀防覆盖；
+//   - NameInZip 为空时回退到本地 basename（旧行为）。
+func zipFilesNamed(sources []ZipSource, destPath string) error {
+	if len(sources) == 0 {
+		return errors.New("没有可打包的文件")
+	}
+	if err := os.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
+		return fmt.Errorf("创建目标目录失败: %w", err)
+	}
+	dst, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o640)
+	if err != nil {
+		return fmt.Errorf("创建 zip 文件失败: %w", err)
+	}
+	zw := zip.NewWriter(dst)
+	closed := false
+	defer func() {
+		if !closed {
+			_ = zw.Close()
+			_ = dst.Close()
+		}
+	}()
+	usedNames := map[string]int{}
+	for _, src := range sources {
+		abs, err := filepath.Abs(src.Path)
+		if err != nil {
+			return fmt.Errorf("解析源文件路径失败: %w", err)
+		}
+		f, err := os.Open(abs)
+		if err != nil {
+			return fmt.Errorf("打开源文件 %s 失败: %w", abs, err)
+		}
+		st, err := f.Stat()
+		if err != nil {
+			_ = f.Close()
+			return fmt.Errorf("stat %s 失败: %w", abs, err)
+		}
+		if st.IsDir() {
+			_ = f.Close()
+			return fmt.Errorf("不能打包目录: %s", abs)
+		}
+		name := src.NameInZip
+		if name == "" {
+			name = filepath.Base(abs)
+		}
+		// 去掉可能混入的目录分隔符（防止解压后出现 ./ 等奇怪路径）
+		name = filepath.Base(name)
+		// 同名文件避免覆盖：第二个起加 _N 后缀
+		if n := usedNames[name]; n > 0 {
+			ext := filepath.Ext(name)
+			base := strings.TrimSuffix(name, ext)
+			name = fmt.Sprintf("%s_%d%s", base, n+1, ext)
+		}
+		usedNames[src.NameInZip]++
 		header := &zip.FileHeader{
 			Name:     name,
 			Method:   zip.Deflate,

@@ -10,13 +10,27 @@
   const $ = (sel, root) => (root || document).querySelector(sel);
   const $$ = (sel, root) => Array.from((root || document).querySelectorAll(sel));
 
+  // el(tag, attrs, children)
+  //
+  // attrs 特殊键：
+  //   - 'class'        → element.className
+  //   - 'text'         → element.textContent（**安全**，自动 escape）
+  //   - 'unsafeHtml'   → element.innerHTML（**危险**！仅用于硬编码 HTML，
+  //                      或已经过 escapeHtml 处理的用户输入；
+  //                      旧的 'html' 键名已废弃，避免误用）
+  //   - 'on*'          → addEventListener
+  //   - 其它           → setAttribute
   function el(tag, attrs, children) {
     const e = document.createElement(tag);
     if (attrs) {
       for (const k in attrs) {
         if (k === 'class') e.className = attrs[k];
-        else if (k === 'html') e.innerHTML = attrs[k];
         else if (k === 'text') e.textContent = attrs[k];
+        else if (k === 'html') {
+          // 兼容老调用：warn 但仍然执行，避免回归
+          console.warn("[ops-toolbox] el(..., { html: ... }) is deprecated; use 'unsafeHtml' to make intent explicit, or 'text' to auto-escape.");
+          e.innerHTML = attrs[k];
+        } else if (k === 'unsafeHtml') e.innerHTML = attrs[k];
         else if (k.indexOf('on') === 0) e.addEventListener(k.slice(2), attrs[k]);
         else e.setAttribute(k, attrs[k]);
       }
@@ -368,6 +382,23 @@
           + '&server=' + encodeURIComponent(k.server)
           + '&username=' + encodeURIComponent(k.username));
         if (!r.ok) return;
+        // 项 23：根据 credential_store 配置决定是否显示「记住密码」控件。
+        // mode=disabled 或 mode=file(占位) → 完全隐藏。
+        // mode=keyring 但 available=false（keyring 不可用）→ 仍显示勾选框，但提示用户不可用。
+        const mode = r.mode || 'keyring';
+        const storeDisabled = (mode === 'disabled') || (mode === 'file');
+        if (storeDisabled) {
+          rememberChk.checked = false;
+          rememberChk.disabled = true;
+          rememberLbl.style.display = 'none';
+          credStatus.textContent = r.reason || ('凭据存储=' + mode);
+          credStatus.style.color = '#999';
+          btnForget.style.display = 'none';
+          return;
+        }
+        // mode=keyring：恢复显示
+        rememberChk.disabled = false;
+        rememberLbl.style.display = '';
         if (!r.available) {
           credStatus.textContent = '⚠ 系统钥匙串不可用 — 当前无法「记住密码」';
           credStatus.style.color = '#c00';
@@ -535,14 +566,73 @@
       }
     }
 
-    // 找到对应行的状态单元格，更新进度 / 状态文字
-    function setRowStatus(name, html, rowClass) {
+    // 找到对应行的状态单元格，更新进度 / 状态文字。
+    //
+    // **XSS 安全**：所有用户可控字段（错误信息 / 文件名）都走 textContent，
+    // 不会进 innerHTML。新签名：
+    //
+    //   setRowStatus(name, status, args?, rowClass?)
+    //
+    //   status 取值：
+    //     - 'pending'      → "等待…"
+    //     - 'downloading'  → args = { written, total } 渲染进度条 + 百分比
+    //     - 'done'         → args = { bytes }            "✓ 完成 · 1.2 MB"
+    //     - 'fail'         → args = { error }            "✗ <error>"（textContent）
+    //     - 'startfail'    → "启动失败"
+    //     - 'cancel'       → "已停止"
+    function setRowStatus(name, status, args, rowClass) {
       const cell = fileTableWrap.querySelector('[data-status="' + cssEscape(name) + '"]');
-      if (cell) cell.innerHTML = html;
+      if (cell) {
+        // 清空原内容（removeChild 循环比 innerHTML="" 慢一点点但避免引入 raw HTML）
+        while (cell.firstChild) cell.removeChild(cell.firstChild);
+        const node = buildStatusNode(status, args || {});
+        if (node) cell.appendChild(node);
+      }
       const row = fileTableWrap.querySelector('tr[data-file="' + cssEscape(name) + '"]');
       if (row && rowClass) {
         row.classList.remove('row-done', 'row-fail', 'row-active');
         row.classList.add(rowClass);
+      }
+    }
+
+    // buildStatusNode 用 DOM 构造状态节点（不用 innerHTML，所以用户输入 100% 安全）。
+    function buildStatusNode(status, args) {
+      switch (status) {
+        case 'pending':
+          return el('span', { class: 'dl-pct', text: '等待…' });
+        case 'downloading': {
+          const bar = el('div', { class: 'dl-bar' });
+          const totalKnown = args.total && args.total > 0;
+          const pct = totalKnown ? Math.min(100, ((args.written || 0) / args.total) * 100) : 0;
+          const fill = el('div', {
+            class: 'dl-bar-fill' + (totalKnown ? '' : ' indeterminate'),
+            style: totalKnown ? ('width:' + pct + '%') : ''
+          });
+          bar.appendChild(fill);
+          const txt = el('span', { class: 'dl-pct', text: pctText(args.written || 0, args.total || -1) });
+          const wrap = el('span');
+          wrap.appendChild(bar);
+          wrap.appendChild(document.createTextNode(' '));
+          wrap.appendChild(txt);
+          return wrap;
+        }
+        case 'done': {
+          const span = el('span', { class: 'dl-pct', style: 'color:#10b981' });
+          span.appendChild(document.createTextNode('✓ 完成 · ' + formatBytes(args.bytes || 0)));
+          return span;
+        }
+        case 'fail': {
+          const span = el('span', { class: 'dl-pct', style: 'color:#ef4444' });
+          // 错误信息用 textContent 自动 escape（不信任后端 / SSH 服务器返回的字符串）
+          span.appendChild(document.createTextNode('✗ ' + (args.error || '失败')));
+          return span;
+        }
+        case 'startfail':
+          return el('span', { class: 'dl-pct', style: 'color:#ef4444', text: '启动失败' });
+        case 'cancel':
+          return el('span', { class: 'dl-pct', style: 'color:#999', text: '已停止' });
+        default:
+          return el('span', { class: 'dl-pct', text: String(status) });
       }
     }
     function cssEscape(s) {
@@ -583,7 +673,7 @@
       listState.fileStates = {};
       files.forEach(name => {
         listState.fileStates[name] = { status: 'pending' };
-        setRowStatus(name, '<span class="dl-pct">等待…</span>');
+        setRowStatus(name, 'pending');
       });
       const tb = fileTableWrap._toolbar;
       if (tb) { tb.btnDownloadSel.disabled = true; tb.btnCancel.disabled = false; }
@@ -601,17 +691,32 @@
         listState.dlEvtSrc = es;
         // 也挂到全局，navigate 切走时能清理（renderWebsphere 重建后会丢闭包引用）
         window.__opsActiveDL = { id: dlId, evtsrc: es };
+        // gotDone 标志位：onmessage 推 done 数据（{"kind":"done",...}）和 SSE 的 'done' 事件
+        // 都会触发收尾逻辑；用标志位保证只走一次。
+        let gotDone = false;
+        const onDoneSeen = (reason) => {
+          if (gotDone) return;
+          gotDone = true;
+          closeDownloadStream(reason);
+        };
         es.onmessage = (ev) => {
           let o; try { o = JSON.parse(ev.data); } catch (e) { return; }
+          if (o && o.kind === 'done') {
+            handleDownloadEvent(o, files);
+            onDoneSeen('done');
+            return;
+          }
           handleDownloadEvent(o, files);
         };
-        es.addEventListener('done', () => { closeDownloadStream('done'); });
+        es.addEventListener('done', () => { onDoneSeen('done'); });
         es.onerror = () => {
           // 网络异常：等 onmessage 推 done 收尾；这里只做兜底
           setTimeout(() => {
-            if (listState.dlId === dlId && listState.dlEvtSrc === es) {
-              closeDownloadStream('error');
-              toast('SSE 连接异常', 'err');
+            if (listState.dlId === dlId && listState.dlEvtSrc === es && !gotDone) {
+              // 兜底：如果 2s 内没收到 done（后端没机会发 / 网络断了），
+              // 强制标 done 收尾，避免前端卡在 99% 假死。
+              onDoneSeen('error');
+              toast('SSE 连接异常（已强制收尾）', 'err');
             }
           }, 2000);
         };
@@ -621,7 +726,7 @@
         setTimeout(() => setStatus('idle'), 1500);
         if (tb) { tb.btnDownloadSel.disabled = false; tb.btnCancel.disabled = true; }
         files.forEach(name => {
-          setRowStatus(name, '<span class="dl-pct" style="color:#ef4444">启动失败</span>', 'row-fail');
+          setRowStatus(name, 'startfail', null, 'row-fail');
         });
         listState.dlId = null;
         listState.dlEvtSrc = null;
@@ -633,24 +738,15 @@
       const key = basenameOf(o.file);
       if (o.kind === 'file_start') {
         listState.fileStates[key] = { status: 'downloading', written: 0, total: o.total || -1 };
-        setRowStatus(key,
-          '<div class="dl-bar"><div class="dl-bar-fill indeterminate"></div></div><span class="dl-pct">0%</span>',
-          'row-active');
+        setRowStatus(key, 'downloading', { written: 0, total: o.total || -1 }, 'row-active');
       } else if (o.kind === 'progress') {
         const st = listState.fileStates[key] || {};
         st.status = 'downloading'; st.written = o.written; st.total = o.total;
         listState.fileStates[key] = st;
-        const pct = o.total > 0 ? Math.min(100, (o.written / o.total) * 100) : 0;
-        const fillClass = o.total > 0 ? '' : 'indeterminate';
-        setRowStatus(key,
-          '<div class="dl-bar"><div class="dl-bar-fill ' + fillClass + '" style="width:' + pct + '%"></div></div>'
-          + '<span class="dl-pct">' + pctText(o.written, o.total) + '</span>',
-          'row-active');
+        setRowStatus(key, 'downloading', { written: o.written, total: o.total }, 'row-active');
       } else if (o.kind === 'file_done') {
         listState.fileStates[key] = { status: 'done', bytes: o.bytes };
-        setRowStatus(key,
-          '<span class="dl-pct" style="color:#10b981">✓ 完成 · ' + formatBytes(o.bytes || 0) + '</span>',
-          'row-done');
+        setRowStatus(key, 'done', { bytes: o.bytes }, 'row-done');
       } else if (o.kind === 'done') {
         // 终态
         const tb = fileTableWrap._toolbar;
@@ -666,7 +762,7 @@
           files.forEach(name => {
             const st = listState.fileStates[name];
             if (!st || st.status === 'pending' || st.status === 'downloading') {
-              setRowStatus(name, '<span class="dl-pct" style="color:#ef4444">✗ ' + (o.error || '') + '</span>', 'row-fail');
+              setRowStatus(name, 'fail', { error: o.error || '失败' }, 'row-fail');
             }
           });
         }
@@ -952,7 +1048,7 @@
 
     const searchCard = el('div', { class: 'card' }, [
       el('h3', { text: '多服务器并行搜索' }),
-      el('div', { class: 'card-desc', html: '语法：<span class="code-inline">A &amp;&amp; B</span>（同包含）、<span class="code-inline">A || B</span>（任一）、<span class="code-inline">!X</span>（排除）。结果按服务器分组。' }),
+      el('div', { class: 'card-desc', unsafeHtml: '语法：<span class="code-inline">A &amp;&amp; B</span>（同包含）、<span class="code-inline">A || B</span>（任一）、<span class="code-inline">!X</span>（排除）。结果按服务器分组。' }),
       el('div', { class: 'grid-3' }, [
         el('div', { style: 'grid-column: span 2' }, [el('label', { text: '搜索表达式' }), queryInp]),
         el('div', null, [el('label', { text: '并发' }), concSel])
@@ -1123,6 +1219,14 @@
     const rememberLabel = el('label', { class: 'inline' }, [rememberChk, document.createTextNode('记住密码')]);
     const btnConnect = el('button', { class: 'btn btn-primary', text: '连接并浏览' });
 
+    // ---- 文件浏览器启动警告（项 14）----
+    //
+    // cfg 在 loadCfg() 后才填充；这里先放占位 card，加载完后 fillWarn() 补具体内容。
+    const warnBox = el('div', { class: 'card', id: 'files-warn', style: 'display:none' });
+    warnBox.appendChild(el('h3', { id: 'files-warn-title', text: '' }));
+    const warnBody = el('div');
+    warnBox.appendChild(warnBody);
+
     const connCard = el('div', { class: 'card' });
     connCard.appendChild(el('h3', { text: '1. 选择目标服务器' }));
     connCard.appendChild(el('div', { class: 'card-desc', text: '支持任意路径浏览；下载权限以 SSH 账号实际权限为准（v0.3 自由模式）。' }));
@@ -1171,6 +1275,7 @@
     ]));
     fileCard.appendChild(tableWrap);
 
+    view.appendChild(warnBox);
     view.appendChild(connCard);
     view.appendChild(pathCard);
     view.appendChild(fileCard);
@@ -1186,7 +1291,51 @@
         (info.systems || []).forEach(sys => {
           sysSel.appendChild(el('option', { value: sys.name, text: sys.name + (sys.description ? ' · ' + sys.description : '') }));
         });
+        // 填充文件浏览器启动警告（项 14）
+        renderFileBrowserWarning(info);
       });
+    }
+
+    // renderFileBrowserWarning 根据 /api/config 返回的 app.* 字段填充顶部警告卡。
+    //
+    // 规则：
+    //   - enable_free_file_browser === false → 整个浏览器应被前端阻止访问
+    //     （目前前端只在点连接时让后端返 403；这里加一个"已关闭"横幅，提示用户）
+    //   - enable_free_file_browser !== false 且 free_file_roots 已配 → 白名单模式提示
+    //   - enable_free_file_browser !== false 且 free_file_roots 为空 → 自由模式警告
+    function renderFileBrowserWarning(info) {
+      const app = (info && info.app) || {};
+      const enabled = app.enable_free_file_browser === undefined || app.enable_free_file_browser === true;
+      const roots = Array.isArray(app.free_file_roots) ? app.free_file_roots : [];
+
+      // 清空旧内容（appendChild 循环比 innerHTML="" 安全）
+      while (warnBody.firstChild) warnBody.removeChild(warnBody.firstChild);
+      const titleEl = $('#files-warn-title');
+
+      if (!enabled) {
+        titleEl.textContent = '⛔ 文件浏览器已关闭';
+        warnBody.appendChild(el('div', { class: 'text-dim', text:
+          'config.yaml 里 app.enable_free_file_browser = false。整个文件浏览功能已停用。' }));
+        warnBox.style.display = '';
+        return;
+      }
+      if (roots.length > 0) {
+        titleEl.textContent = '✓ 文件浏览器（白名单模式）';
+        warnBody.appendChild(el('div', { class: 'text-dim', text:
+          '仅以下前缀的路径可访问（其它路径会被服务端拒绝 403）：' }));
+        const ul = el('ul', { style: 'margin: 6px 0 0 0; padding-left: 20px;' });
+        roots.forEach(r => ul.appendChild(el('li', { text: r })));
+        warnBody.appendChild(ul);
+        warnBox.style.display = '';
+        return;
+      }
+      // 自由模式：明显警告
+      titleEl.textContent = '⚠ 文件浏览器（自由模式 · 无白名单）';
+      warnBody.appendChild(el('div', { class: 'text-err', text:
+        '当前可访问任何 SSH 账号有权限的路径（包括 /etc、/root 等敏感目录）。' }));
+      warnBody.appendChild(el('div', { class: 'text-dim mt-1', style: 'font-size: 12px;', text:
+        '建议在 config.yaml 加 app.free_file_roots（如 /var/log、/opt/websphere）以缩小可访问范围。' }));
+      warnBox.style.display = '';
     }
 
     function refreshCredStatus() {
@@ -1197,7 +1346,20 @@
       }
       rememberChk.disabled = false;
       api('GET', '/api/credentials/has?system=' + encodeURIComponent(state.currentSys) + '&server=' + encodeURIComponent(state.currentSrv))
-        .then(r => { rememberChk.checked = !!r.has; })
+        .then(r => {
+          // 项 23：根据 credential_store 配置显隐「记住密码」控件
+          const mode = r.mode || 'keyring';
+          const storeDisabled = (mode === 'disabled') || (mode === 'file');
+          if (storeDisabled) {
+            rememberChk.checked = false;
+            rememberChk.disabled = true;
+            rememberLabel.style.display = 'none';
+          } else {
+            rememberChk.disabled = false;
+            rememberLabel.style.display = '';
+            rememberChk.checked = !!r.has;
+          }
+        })
         .catch(() => { rememberChk.checked = false; });
     }
 
@@ -1425,7 +1587,7 @@
         const st = state.fileStates[p];
         if (!st) return;
         const base = p.split('/').pop();
-        setRowStatusByName(base, statusHtml(st));
+        setRowStatusByName(base, st);
       });
     }
 
@@ -1444,26 +1606,58 @@
       renderTable();
     }
 
-    function setRowStatusByName(name, html) {
+    // setRowStatusByName 把状态写入"按 name 索引"的状态单元格（renderFiles 表格）。
+    //
+    // **XSS 安全**：st.error / st.file 等用户可控字段都走 textContent，
+    // 不会进 innerHTML。st 是 fileStates 的条目，结构：
+    //   { status, written?, total?, bytes?, error? }
+    function setRowStatusByName(name, st) {
       const cell = tableWrap.querySelector('tr[data-name="' + cssEscape(name) + '"] .status-cell')
                 || tableWrap.querySelector('tr .status-cell[data-name="' + cssEscape(name) + '"]');
-      if (cell) cell.innerHTML = html;
+      if (!cell) return;
+      while (cell.firstChild) cell.removeChild(cell.firstChild);
+      const node = buildStatusNodeByName(st);
+      if (node) cell.appendChild(node);
     }
 
-    function statusHtml(st) {
-      if (!st) return '';
-      if (st.status === 'pending') return '<span class="dl-pct">等待…</span>';
-      if (st.status === 'downloading') {
-        if (st.total > 0) {
-          const pct = Math.min(100, (st.written / st.total) * 100);
-          return '<div class="dl-bar"><div class="dl-bar-fill" style="width:' + pct + '%"></div></div>'
-               + '<span class="dl-pct">' + pctText(st.written, st.total) + '</span>';
-        }
-        return '<div class="dl-bar"><div class="dl-bar-fill indeterminate"></div></div><span class="dl-pct">下载中</span>';
+    // buildStatusNodeByName 把 fileStates 条目转成 DOM 节点。
+    // 状态值跟 buildStatusNode 一致（pending / downloading / done / fail / startfail / cancel）。
+    function buildStatusNodeByName(st) {
+      if (!st) return null;
+      if (st.status === 'pending') {
+        return el('span', { class: 'dl-pct', text: '等待…' });
       }
-      if (st.status === 'done') return '<span class="dl-pct" style="color:#10b981">✓ 完成 · ' + formatBytes(st.bytes || 0) + '</span>';
-      if (st.status === 'fail') return '<span class="dl-pct" style="color:#ef4444">✗ ' + (st.error || '失败') + '</span>';
-      return '';
+      if (st.status === 'downloading') {
+        const wrap = el('span');
+        const bar = el('div', { class: 'dl-bar' });
+        const totalKnown = st.total && st.total > 0;
+        const pct = totalKnown ? Math.min(100, ((st.written || 0) / st.total) * 100) : 0;
+        const fill = el('div', {
+          class: 'dl-bar-fill' + (totalKnown ? '' : ' indeterminate'),
+          style: totalKnown ? ('width:' + pct + '%') : ''
+        });
+        bar.appendChild(fill);
+        wrap.appendChild(bar);
+        if (totalKnown) {
+          wrap.appendChild(document.createTextNode(' '));
+          wrap.appendChild(el('span', { class: 'dl-pct', text: pctText(st.written || 0, st.total) }));
+        } else {
+          wrap.appendChild(document.createTextNode(' '));
+          wrap.appendChild(el('span', { class: 'dl-pct', text: '下载中' }));
+        }
+        return wrap;
+      }
+      if (st.status === 'done') {
+        const span = el('span', { class: 'dl-pct', style: 'color:#10b981' });
+        span.appendChild(document.createTextNode('✓ 完成 · ' + formatBytes(st.bytes || 0)));
+        return span;
+      }
+      if (st.status === 'fail') {
+        const span = el('span', { class: 'dl-pct', style: 'color:#ef4444' });
+        span.appendChild(document.createTextNode('✗ ' + (st.error || '失败')));
+        return span;
+      }
+      return null;
     }
 
     // ---- 下载 ----
@@ -1483,7 +1677,7 @@
       state.fileStates = {};
       paths.forEach(p => {
         state.fileStates[p] = { status: 'pending' };
-        setRowStatusByName(p.split('/').pop(), '<span class="dl-pct">等待…</span>');
+        setRowStatusByName(p.split('/').pop(), state.fileStates[p]);
       });
       btnDownload.disabled = true;
       btnCancel.disabled = false;
@@ -1498,16 +1692,29 @@
         if (!window.EventSource) { toast('浏览器不支持 EventSource', 'err'); return; }
         const es = new EventSource('/api/files/download/' + r.id + '/events');
         state.dlEvtSrc = es;
+        // gotDone 标志位：onmessage 推 done 数据（{"kind":"done",...}）和 SSE 的 'done' 事件
+        // 都会触发收尾；用标志位保证只走一次。
+        let gotDone = false;
+        const onDoneSeen = (reason) => {
+          if (gotDone) return;
+          gotDone = true;
+          closeDownloadStream(reason);
+        };
         es.onmessage = (ev) => {
           let o; try { o = JSON.parse(ev.data); } catch (e) { return; }
+          if (o && o.kind === 'done') {
+            handleDownloadEvent(o);
+            onDoneSeen('done');
+            return;
+          }
           handleDownloadEvent(o);
         };
-        es.addEventListener('done', () => { closeDownloadStream('done'); });
+        es.addEventListener('done', () => { onDoneSeen('done'); });
         es.onerror = () => {
           setTimeout(() => {
-            if (state.dlId && state.dlEvtSrc === es) {
-              closeDownloadStream('error');
-              toast('SSE 连接异常', 'err');
+            if (state.dlId && state.dlEvtSrc === es && !gotDone) {
+              onDoneSeen('error');
+              toast('SSE 连接异常（已强制收尾）', 'err');
             }
           }, 2000);
         };
@@ -1515,7 +1722,7 @@
         toast('启动下载失败：' + e.message, 'err');
         paths.forEach(p => {
           state.fileStates[p] = { status: 'fail', error: e.message };
-          setRowStatusByName(p.split('/').pop(), statusHtml(state.fileStates[p]));
+          setRowStatusByName(p.split('/').pop(), state.fileStates[p]);
         });
         btnDownload.disabled = false;
         btnCancel.disabled = true;
@@ -1527,15 +1734,15 @@
     function handleDownloadEvent(o) {
       if (o.kind === 'file_start') {
         state.fileStates[o.file] = { status: 'downloading', written: 0, total: o.total || -1 };
-        setRowStatusByName(o.file.split('/').pop(), statusHtml(state.fileStates[o.file]));
+        setRowStatusByName(o.file.split('/').pop(), state.fileStates[o.file]);
       } else if (o.kind === 'progress') {
         const st = state.fileStates[o.file] || {};
         st.status = 'downloading'; st.written = o.written; st.total = o.total;
         state.fileStates[o.file] = st;
-        setRowStatusByName(o.file.split('/').pop(), statusHtml(st));
+        setRowStatusByName(o.file.split('/').pop(), st);
       } else if (o.kind === 'file_done') {
         state.fileStates[o.file] = { status: 'done', bytes: o.bytes };
-        setRowStatusByName(o.file.split('/').pop(), statusHtml(state.fileStates[o.file]));
+        setRowStatusByName(o.file.split('/').pop(), state.fileStates[o.file]);
       } else if (o.kind === 'done') {
         btnDownload.disabled = state.selected.size === 0;
         btnCancel.disabled = true;
@@ -1549,7 +1756,7 @@
             const st = state.fileStates[p];
             if (st.status === 'pending' || st.status === 'downloading') {
               st.status = 'fail'; st.error = o.error || '';
-              setRowStatusByName(p.split('/').pop(), statusHtml(st));
+              setRowStatusByName(p.split('/').pop(), st);
             }
           });
         }
@@ -1652,7 +1859,9 @@
     const sysInp = el('input', { type: 'text', placeholder: '系统（包含匹配）' });
     const srvInp = el('input', { type: 'text', placeholder: '服务器（包含匹配）' });
     const btnRefresh = el('button', { class: 'btn btn-primary', text: '刷新', onclick: loadHistory });
+    const btnExportCSV = el('button', { class: 'btn', text: '导出 CSV', onclick: exportCSV });
     const btnAuto = el('button', { class: 'btn', text: '自动刷新: 关', onclick: toggleAuto });
+    const btnExport = el('button', { class: 'btn', text: '导出 CSV', onclick: exportCSV });
     const tableWrap = el('div', { class: 'card mt-3', style: 'padding: 0' });
     let autoTimer = null;
 
@@ -1667,6 +1876,31 @@
         const r = await api('GET', '/api/audit/recent?' + q.toString());
         renderTable(r.records || []);
       } catch (e) { toast('加载失败：' + e.message, 'err'); }
+    }
+
+    // 构造 CSV 导出 URL（同样的过滤参数），由浏览器触发下载。
+    // 不走 api()：CSV 不是 JSON，会触发 api 的 JSON parse 失败；这里直接拼 URL。
+    function buildExportCSVUrl() {
+      const q = new URLSearchParams();
+      // 导出给上限（5000），不受当前 limitInp 限制
+      q.set('limit', '5000');
+      if (opSel.value) q.set('op', opSel.value);
+      if (resultSel.value) q.set('result', resultSel.value);
+      if (sysInp.value) q.set('system', sysInp.value);
+      if (srvInp.value) q.set('server', srvInp.value);
+      return '/api/audit/export.csv?' + q.toString();
+    }
+
+    function exportCSV() {
+      const url = buildExportCSVUrl();
+      // 用 a 标签 + download 触发下载，避免 EventSource / fetch 影响
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = ''; // 让浏览器用 Content-Disposition 里的 filename
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      toast('已触发 CSV 下载', 'ok');
     }
 
     function renderTable(records) {
@@ -1735,12 +1969,41 @@
         el('div', null, [el('label', { text: '系统（包含匹配）' }), sysInp]),
         el('div', null, [el('label', { text: '服务器（包含匹配）' }), srvInp])
       ]),
-      el('div', { class: 'btn-row mt-3' }, [btnRefresh, btnAuto])
+      el('div', { class: 'btn-row mt-3' }, [btnRefresh, btnExportCSV, btnAuto])
     ]));
     view.appendChild(tableWrap);
 
     // 首次进入自动加载
     loadHistory();
+  }
+
+  // exportCSV 触发下载 CSV 文件（项 24 P3）。
+  // 直接用 window.open 让浏览器走 attachment 下载，下载完后能自动关闭。
+  function exportCSV() {
+    const q = new URLSearchParams();
+    q.set('limit', '5000');
+    if (opSel.value) q.set('op', opSel.value);
+    if (resultSel.value) q.set('result', resultSel.value);
+    if (sysInp.value) q.set('system', sysInp.value);
+    if (srvInp.value) q.set('server', srvInp.value);
+    // 静默走 fetch 拿 blob + 触发下载，避免 window.open 被弹窗拦截
+    fetch('/api/audit/export.csv?' + q.toString())
+      .then(r => {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.blob();
+      })
+      .then(blob => {
+        const a = document.createElement('a');
+        const url = URL.createObjectURL(blob);
+        a.href = url;
+        a.download = 'ops-toolbox-audit.csv';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        toast('已导出', 'ok');
+      })
+      .catch(e => toast('导出失败：' + e.message, 'err'));
   }
 
   // 下载历史页
@@ -1817,15 +2080,38 @@
         const del = el('button', { class: 'btn btn-sm btn-danger', text: '删除',
           onclick: () => doDelete(f, load) });
         tbody.appendChild(el('tr', null, [
-          el('td', { html: '<code>' + escapeHtml(f.name) + '</code>' + (f.kind === 'zip' ? ' <span class="tag">zip</span>' : '') }),
+          buildNameCell(f),
           el('td', { class: 'num', text: f.size_human || '-' }),
           el('td', { class: 'muted', text: f.downloaded_at || f.mod_time || '-' }),
-          el('td', { html: escapeHtml(fromServer) + '<br/><span class="text-dim">' + escapeHtml(fromDir) + '<br/>' + escapeHtml(fromFile) + '</span>' }),
+          buildFromCell(fromServer, fromDir, fromFile),
           el('td', null, [dl, document.createTextNode(' '), del])
         ]));
       });
       tbl.appendChild(tbody);
       tableWrap.appendChild(tbl);
+    }
+
+    // buildNameCell 构造"文件名"单元格的 DOM（避免 innerHTML 注入）。
+    //   - f.name 放进 <code> 块，textContent 安全
+    //   - zip 类型加 <span class="tag">zip</span> 标签
+    function buildNameCell(f) {
+      const td = el('td');
+      td.appendChild(el('code', { text: f.name || '' }));
+      if (f.kind === 'zip') {
+        td.appendChild(document.createTextNode(' '));
+        td.appendChild(el('span', { class: 'tag', text: 'zip' }));
+      }
+      return td;
+    }
+
+    // buildFromCell 构造"来源"单元格的 DOM：服务器（粗体）/ 远端目录 / 原始文件名。
+    // 所有用户/服务器可控字段都走 textContent，不进 innerHTML。
+    function buildFromCell(fromServer, fromDir, fromFile) {
+      const td = el('td');
+      td.appendChild(el('div', { text: fromServer }));
+      td.appendChild(el('div', { class: 'text-dim', text: fromDir }));
+      td.appendChild(el('div', { class: 'text-dim', text: fromFile }));
+      return td;
     }
 
     async function doDelete(f, cb) {

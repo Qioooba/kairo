@@ -44,10 +44,16 @@ func (s *Server) handleAdminServers(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// 用现有 App + Search + 新的 Systems 构造新 Config
+		//
+		// 必须 Clone：旧实现是 `newCfg := *cur; newCfg.Systems = req.Systems`，
+		// 浅拷贝会让 newCfg.App.FreeFileRoots / newCfg.Systems[*].Servers[*].LogDirs[*].Patterns
+		// 等 inner slice 跟老 cfg 共享底层 array。Put 后如果某处直接改
+		// newCfg.App.FreeFileRoots[0] = "/etc"，老 reader 拿到的快照会被污染。
+		// Clone() 深拷贝所有 inner slice + 指针字段，杜绝这种 aliasing。
 		cur := s.cur()
-		newCfg := *cur // 值拷贝
+		newCfg := cur.Clone()
 		newCfg.Systems = req.Systems
-		if err := s.cfg.Replace(&newCfg); err != nil {
+		if err := s.cfg.Replace(newCfg); err != nil {
 			s.audit.Write("admin.servers.put", "result", "fail", "err", err.Error())
 			writeErr(w, 400, err)
 			return

@@ -115,7 +115,8 @@ func TestDefaults_NormalizesLogDirEncoding(t *testing.T) {
 							{Path: "/a", Encoding: "GBK"},
 							{Path: "/b", Encoding: "gb18030"},
 							{Path: "/c", Encoding: "UTF-8"},
-							{Path: "/d", Encoding: "weird"},
+							{Path: "/d", Encoding: "utf8"},
+							{Path: "/e", Encoding: ""}, // 空串 → 默认 utf-8
 						},
 					},
 				},
@@ -128,12 +129,77 @@ func TestDefaults_NormalizesLogDirEncoding(t *testing.T) {
 		c.Systems[0].Servers[0].LogDirs[1].Encoding,
 		c.Systems[0].Servers[0].LogDirs[2].Encoding,
 		c.Systems[0].Servers[0].LogDirs[3].Encoding,
+		c.Systems[0].Servers[0].LogDirs[4].Encoding,
 	}
-	want := []string{"gbk", "gbk", "utf-8", "utf-8"}
+	want := []string{"gbk", "gbk", "utf-8", "utf-8", "utf-8"}
 	for i := range encs {
 		if encs[i] != want[i] {
 			t.Errorf("enc[%d]=%q, want %q", i, encs[i], want[i])
 		}
+	}
+}
+
+// TestDefaults_DoesNotSwallowInvalidEncoding 回归（P2-编码）：
+// 旧 Defaults 会把未知 encoding 静默改成 utf-8，掩盖用户配错的事实。
+// 新版 Defaults 必须保留原值，让 Validate() 显式报错。
+func TestDefaults_DoesNotSwallowInvalidEncoding(t *testing.T) {
+	c := &Config{
+		Systems: []SystemConfig{
+			{
+				Name: "s",
+				Servers: []ServerConfig{
+					{
+						Name: "sv",
+						Host: "1.2.3.4",
+						LogDirs: []LogDirEntry{
+							{Path: "/jp", Encoding: "shift-jis"},
+							{Path: "/jp2", Encoding: "EUC-JP"},
+						},
+					},
+				},
+			},
+		},
+	}
+	c.Defaults()
+	if c.Systems[0].Servers[0].LogDirs[0].Encoding != "shift-jis" {
+		t.Errorf("shift-jis 应当原样保留，得到: %q",
+			c.Systems[0].Servers[0].LogDirs[0].Encoding)
+	}
+	if c.Systems[0].Servers[0].LogDirs[1].Encoding != "EUC-JP" {
+		t.Errorf("EUC-JP 应当原样保留，得到: %q",
+			c.Systems[0].Servers[0].LogDirs[1].Encoding)
+	}
+}
+
+// TestLoadRejectsInvalidEncoding 验证 Load() 整条链：未知 encoding → Validate → error。
+//
+// 旧 Defaults 吞掉非法值时，Load 会"成功"但用户看到的是 utf-8 行为。
+// 新版要让 Load 明确报错，告诉用户哪个 encoding 写错了。
+func TestLoadRejectsInvalidEncoding(t *testing.T) {
+	yamlText := `
+app:
+  host: 127.0.0.1
+systems:
+  - name: sys
+    servers:
+      - name: sv
+        host: 1.1.1.1
+        auth_type: password
+        log_dirs:
+          - path: /jp
+            encoding: shift-jis
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "c.yaml")
+	if err := os.WriteFile(path, []byte(yamlText), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load 应该拒绝非法 encoding shift-jis")
+	}
+	if !strings.Contains(err.Error(), "encoding") {
+		t.Errorf("错误信息应提到 encoding，得到: %v", err)
 	}
 }
 
@@ -241,8 +307,7 @@ func TestValidate_RejectsIllegalPattern(t *testing.T) {
 }
 
 func TestValidate_RejectsBadEncoding(t *testing.T) {
-	// 注意：Defaults() 会先把未知 encoding 归一化为 utf-8，
-	// 所以这里跳过 Defaults，直接构造一个非法 encoding 来测 Validate 的字面校验。
+	// Defaults() 不再吞非法 encoding，所以这里跑 Defaults 后 shift-jis 仍会原样保留。
 	c := &Config{
 		App: AppConfig{Host: "127.0.0.1"},
 		Systems: []SystemConfig{
@@ -253,6 +318,7 @@ func TestValidate_RejectsBadEncoding(t *testing.T) {
 		},
 	}
 	c.Systems[0].Servers[0].LogDirs = []LogDirEntry{{Path: "/a", Encoding: "shift-jis"}}
+	c.Defaults()
 	if err := c.Validate(); err == nil {
 		t.Fatal("encoding=shift-jis should be rejected")
 	}
@@ -382,5 +448,267 @@ func TestAppConfig_ListenAddr_IPv6(t *testing.T) {
 	a := AppConfig{Host: "::1", Port: 8080}
 	if got := a.ListenAddr(); got != "[::1]:8080" {
 		t.Errorf("ListenAddr IPv6: %q", got)
+	}
+}
+
+// ---------- v0.4 新字段 + Clone 深拷贝 ----------
+
+func TestDefaults_AppliesNewFields(t *testing.T) {
+	// 不显式填新字段时，应该被 Defaults 补上合理默认。
+	c := &Config{}
+	c.Defaults()
+	if c.App.SSHLogMaxMB != 20 {
+		t.Errorf("SSHLogMaxMB default: %d, want 20", c.App.SSHLogMaxMB)
+	}
+	if c.App.SSHLogKeep != 3 {
+		t.Errorf("SSHLogKeep default: %d, want 3", c.App.SSHLogKeep)
+	}
+	if c.App.SSHDebug {
+		t.Error("SSHDebug default should be false")
+	}
+	if c.App.SSHTrafficDump {
+		t.Error("SSHTrafficDump default should be false")
+	}
+}
+
+func TestValidate_RejectsBadSSHCompatProfile(t *testing.T) {
+	c := &Config{
+		App: AppConfig{
+			Host:             "127.0.0.1",
+			SSHCompatProfile: "made-up-profile",
+		},
+		Systems: []SystemConfig{
+			{Name: "s", Servers: []ServerConfig{{Name: "sv", Host: "1.1.1.1", AuthType: "password", LogDirs: []LogDirEntry{{Path: "/a"}}}}},
+		},
+	}
+	c.Defaults()
+	if err := c.Validate(); err == nil {
+		t.Fatal("ssh_compat_profile=made-up-profile 应该被拒")
+	}
+}
+
+func TestValidate_AcceptsKnownSSHCompatProfiles(t *testing.T) {
+	for _, p := range []string{"", "modern", "compat", "no-ecdh", "legacy", "auto"} {
+		c := &Config{
+			App: AppConfig{Host: "127.0.0.1", SSHCompatProfile: p},
+			Systems: []SystemConfig{
+				{Name: "s", Servers: []ServerConfig{{Name: "sv", Host: "1.1.1.1", AuthType: "password", LogDirs: []LogDirEntry{{Path: "/a"}}}}},
+			},
+		}
+		c.Defaults()
+		if err := c.Validate(); err != nil {
+			t.Errorf("ssh_compat_profile=%q 应被接受: %v", p, err)
+		}
+	}
+}
+
+func TestValidate_RejectsBadCredentialStore(t *testing.T) {
+	c := &Config{
+		App: AppConfig{Host: "127.0.0.1", CredentialStore: "vault"},
+		Systems: []SystemConfig{
+			{Name: "s", Servers: []ServerConfig{{Name: "sv", Host: "1.1.1.1", AuthType: "password", LogDirs: []LogDirEntry{{Path: "/a"}}}}},
+		},
+	}
+	c.Defaults()
+	if err := c.Validate(); err == nil {
+		t.Fatal("credential_store=vault 应被拒")
+	}
+}
+
+func TestValidate_RejectsBadServerSSHProfile(t *testing.T) {
+	c := &Config{
+		App: AppConfig{Host: "127.0.0.1"},
+		Systems: []SystemConfig{
+			{Name: "s", Servers: []ServerConfig{
+				{Name: "sv", Host: "1.1.1.1", AuthType: "password", SSHProfile: "made-up", LogDirs: []LogDirEntry{{Path: "/a"}}},
+			}},
+		},
+	}
+	c.Defaults()
+	if err := c.Validate(); err == nil {
+		t.Fatal("server.ssh_profile=made-up 应被拒")
+	}
+}
+
+func TestValidate_RejectsBadSSHLogSettings(t *testing.T) {
+	// ssh_log_max_mb 上限 1024
+	c := &Config{
+		App: AppConfig{Host: "127.0.0.1", SSHLogMaxMB: 9999},
+		Systems: []SystemConfig{
+			{Name: "s", Servers: []ServerConfig{{Name: "sv", Host: "1.1.1.1", AuthType: "password", LogDirs: []LogDirEntry{{Path: "/a"}}}}},
+		},
+	}
+	c.Defaults()
+	if err := c.Validate(); err == nil {
+		t.Fatal("ssh_log_max_mb=9999 应被拒")
+	}
+	// ssh_log_keep 上限 100
+	c2 := &Config{
+		App: AppConfig{Host: "127.0.0.1", SSHLogKeep: 9999},
+		Systems: []SystemConfig{
+			{Name: "s", Servers: []ServerConfig{{Name: "sv", Host: "1.1.1.1", AuthType: "password", LogDirs: []LogDirEntry{{Path: "/a"}}}}},
+		},
+	}
+	c2.Defaults()
+	if err := c2.Validate(); err == nil {
+		t.Fatal("ssh_log_keep=9999 应被拒")
+	}
+}
+
+func TestConfig_Clone_DeepCopy(t *testing.T) {
+	// 准备一份"配置 A"，跑 Clone 得到"配置 B"。
+	// 修改 B 的 inner slice / pointer 字段，A 不应受影响。
+	trueVal := true
+	src := &Config{
+		App: AppConfig{
+			Name:                  "orig",
+			Host:                  "127.0.0.1",
+			EnableFreeFileBrowser: &trueVal,
+			FreeFileRoots:         []string{"/opt", "/var"},
+			SSHDebug:              true,
+			SSHCompatProfile:      "compat",
+		},
+		Systems: []SystemConfig{
+			{
+				Name: "s1",
+				Servers: []ServerConfig{
+					{
+						Name:          "srv1",
+						Host:          "1.1.1.1",
+						Port:          22,
+						AuthType:      "password",
+						SSHProfile:    "modern",
+						HostKeySHA256: "abc",
+						LogDirs: []LogDirEntry{
+							{Name: "ld1", Path: "/a", Patterns: []string{"*.log"}, Encoding: "utf-8"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	dst := src.Clone()
+	if dst == src {
+		t.Fatal("Clone 应该返回不同指针")
+	}
+
+	// 改 dst 的所有 inner slice
+	dst.Systems[0].Name = "modified"
+	dst.Systems[0].Servers[0].Host = "9.9.9.9"
+	dst.Systems[0].Servers[0].LogDirs[0].Path = "/z"
+	dst.Systems[0].Servers[0].LogDirs[0].Patterns[0] = "*.txt"
+	dst.App.FreeFileRoots[0] = "/etc"
+	*dst.App.EnableFreeFileBrowser = false
+
+	// 验证 src 完全没被改
+	if src.Systems[0].Name != "s1" {
+		t.Errorf("src.Systems[0].Name 被污染: %q", src.Systems[0].Name)
+	}
+	if src.Systems[0].Servers[0].Host != "1.1.1.1" {
+		t.Errorf("src.Servers[0].Host 被污染: %q", src.Systems[0].Servers[0].Host)
+	}
+	if src.Systems[0].Servers[0].LogDirs[0].Path != "/a" {
+		t.Errorf("src.LogDirs[0].Path 被污染: %q", src.Systems[0].Servers[0].LogDirs[0].Path)
+	}
+	if src.Systems[0].Servers[0].LogDirs[0].Patterns[0] != "*.log" {
+		t.Errorf("src.Patterns[0] 被污染: %q", src.Systems[0].Servers[0].LogDirs[0].Patterns[0])
+	}
+	if src.App.FreeFileRoots[0] != "/opt" {
+		t.Errorf("src.FreeFileRoots[0] 被污染: %q", src.App.FreeFileRoots[0])
+	}
+	if !*src.App.EnableFreeFileBrowser {
+		t.Error("src.EnableFreeFileBrowser 应该是 true，被改成了 false")
+	}
+}
+
+func TestConfig_Clone_NilSafe(t *testing.T) {
+	var c *Config
+	if got := c.Clone(); got != nil {
+		t.Errorf("nil.Clone() 应返回 nil，得到: %+v", got)
+	}
+}
+
+func TestConfig_Clone_NilInnerSlices(t *testing.T) {
+	// src 各 slice 都是 nil 时 Clone 不应 panic
+	src := &Config{App: AppConfig{Name: "x", Host: "127.0.0.1"}}
+	dst := src.Clone()
+	if dst == nil {
+		t.Fatal("Clone 返回 nil")
+	}
+	if dst.App.FreeFileRoots != nil {
+		t.Errorf("空 src 的 FreeFileRoots 应是 nil，得到: %v", dst.App.FreeFileRoots)
+	}
+	if dst.Systems != nil {
+		t.Errorf("空 src 的 Systems 应是 nil，得到: %v", dst.Systems)
+	}
+}
+
+// TestFreeFileRootsEnabled 验证 free_file_roots 白名单匹配逻辑（项 14）。
+func TestFreeFileRootsEnabled(t *testing.T) {
+	cases := []struct {
+		name  string
+		roots []string
+		path  string
+		want  bool
+	}{
+		// 空 roots = 放行
+		{"empty roots allow all", nil, "/var/log", true},
+		{"empty roots allow root", nil, "/", true},
+		// 单个 root
+		{"exact match", []string{"/var/log"}, "/var/log", true},
+		{"subpath match", []string{"/var/log"}, "/var/log/app.log", true},
+		{"deeper subpath", []string{"/var/log"}, "/var/log/sub/file", true},
+		// 边界：不能跨目录
+		{"prefix not directory boundary", []string{"/var/log"}, "/var/logs", false},
+		{"unrelated path", []string{"/var/log"}, "/etc/passwd", false},
+		// 多个 root
+		{"first root", []string{"/var/log", "/opt/was"}, "/var/log/x", true},
+		{"second root", []string{"/var/log", "/opt/was"}, "/opt/was/SystemOut.log", true},
+		{"neither", []string{"/var/log", "/opt/was"}, "/home/user", false},
+		// 大小写敏感
+		{"case sensitive", []string{"/var/log"}, "/VAR/log", false},
+		// 路径清理
+		{"trailing slash cleaned", []string{"/var/log/"}, "/var/log/x", true},
+		// 空 path
+		{"empty path with roots", []string{"/var/log"}, "", false},
+		{"empty path no roots", nil, "", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			a := &AppConfig{FreeFileRoots: c.roots}
+			if got := a.FreeFileRootsEnabled(c.path); got != c.want {
+				t.Errorf("FreeFileRootsEnabled(%q) with roots %v = %v, want %v",
+					c.path, c.roots, got, c.want)
+			}
+		})
+	}
+}
+
+// TestCredentialStoreEnabled 验证 credential_store 解析（项 23）。
+func TestCredentialStoreEnabled(t *testing.T) {
+	cases := []struct {
+		raw  string
+		want string
+	}{
+		{"", "keyring"},
+		{"keyring", "keyring"},
+		{"KEYRING", "keyring"},
+		{"  keyring  ", "keyring"},
+		{"file", "file"},
+		{"FILE", "file"},
+		{"disabled", "disabled"},
+		{"off", "disabled"},
+		{"none", "disabled"},
+		{"DISABLED", "disabled"},
+		{"unknown", "keyring"}, // 未知值兜底为 keyring
+	}
+	for _, c := range cases {
+		t.Run("raw="+c.raw, func(t *testing.T) {
+			a := &AppConfig{CredentialStore: c.raw}
+			if got := a.CredentialStoreEnabled(); got != c.want {
+				t.Errorf("CredentialStoreEnabled() with raw=%q = %q, want %q", c.raw, got, c.want)
+			}
+		})
 	}
 }

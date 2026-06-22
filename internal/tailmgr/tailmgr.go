@@ -8,7 +8,7 @@
 //
 // 设计要点：
 //   - 一个 tail 会话有一个 Streamer（生产是 *sshclient.Client，测试可注入 mock）
-//     + 一个后台 goroutine 跑 Stream；
+//   - 一个后台 goroutine 跑 Stream；
 //   - 任意时刻可以挂多个 SSE 订阅者，新行通过 chan 广播；
 //   - 显式 stop 立即 cancel ctx；session 自然退出也会走完收尾；
 //   - 所有 SSH 凭据 / 路径都已在 handler 校验，manager 只负责生命周期。
@@ -150,14 +150,14 @@ func (m *Manager) Start(cli Streamer, serverName, serverHost, dir, file, encodin
 	id := newID()
 	sessCtx, cancel := context.WithCancel(context.Background())
 	s := &Session{
-		ID:         id,
-		ServerName: serverName,
-		ServerHost: serverHost,
-		Dir:        dir,
-		File:       file,
-		Encoding:   encoding,
-		CreatedAt:  time.Now(),
-		killSSH:    cancel,
+		ID:          id,
+		ServerName:  serverName,
+		ServerHost:  serverHost,
+		Dir:         dir,
+		File:        file,
+		Encoding:    encoding,
+		CreatedAt:   time.Now(),
+		killSSH:     cancel,
 		subscribers: make(map[chan []byte]struct{}),
 	}
 

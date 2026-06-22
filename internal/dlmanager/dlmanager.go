@@ -17,6 +17,7 @@
 // Kind 用于区分审计 op 与路由命名空间：
 //   - "logs"：走 /api/logs/download/*（白名单日志目录下，审计 op=logs.download）
 //   - "files"：走 /api/files/download/*（任意路径，审计 op=files.download）
+//
 // 复用同一个 Manager，ID 全局唯一（NewID）。
 package dlmanager
 
@@ -41,6 +42,21 @@ type Item struct {
 	Kind   string `json:"kind"`             // "file" 或 "zip"
 }
 
+// LogsDownloadReq 是"按目录下载最近 N 个文件"任务的入参（同步 handler 解码用）。
+//
+// 异步入口走 /api/logs/download-latest （创建 dlmanager.Session 后立即返回 id），
+// 入参用 downloadLatestReq 即可（本文件不直接消费这个类型）；
+// 这里保留 LogsDownloadReq 是为了把 dlmanager.Session 的几种入参显式列出来，
+// 给前端 / 测试参考。
+type LogsDownloadReq struct {
+	System string   `json:"system"`
+	Server string   `json:"server"`
+	Dir    string   `json:"dir"`
+	Files  []string `json:"files"`
+	Latest int      `json:"latest"`
+	Zip    bool     `json:"zip"`
+}
+
 // Session 一个下载任务
 //
 // 调用方负责：构造 Session → Manager.Create → 异步启动下载协程 → 协程内
@@ -51,8 +67,9 @@ type Session struct {
 	System    string
 	Server    string
 	Dir       string   // 仅 logs 模式使用，files 模式为空
-	Files     []string // 仅 logs 模式使用
+	Files     []string // 仅 logs 模式使用：固定文件列表（latest 模式时为空，启动后再列）
 	Paths     []string // 仅 files 模式使用：完整远端路径
+	Latest    int      // 仅 logs 模式使用：下几个最新文件（0 = 不限）
 	Zip       bool
 	Folder    string // 本地下载根目录
 	CreatedAt time.Time
@@ -63,6 +80,7 @@ type Session struct {
 	finished    bool
 	result      []Item
 	finalErr    error
+	manager     *Manager // 创建此 session 的 Manager（MarkFinished 推 done 时查 DoneSendTimeout）
 }
 
 // Manager 全局下载任务池（logs / files 共用 ID 空间）
@@ -76,14 +94,23 @@ type Manager struct {
 
 	// GCInterval 是 IdleGC 巡检周期。默认 15 秒；测试里可以调短。
 	GCInterval time.Duration
+
+	// DoneSendTimeout 是 MarkFinished 推送 done 行的单订阅者最大等待时间。
+	// 进度事件可丢，但 done 事件应到；这里给每个订阅者一个上限（默认 3s），
+	// 超过就跳过这个订阅者、继续推下一个，避免：
+	//   - 慢 SSE 客户端卡住 MarkFinished → 后台协程泄露
+	//   - 一个慢客户端把整个收尾流程拖到几十分钟
+	// 设为 0 走默认值。
+	DoneSendTimeout time.Duration
 }
 
 // New 构造 Manager
 func New() *Manager {
 	return &Manager{
-		sessions:    make(map[string]*Session),
-		IdleTimeout: 30 * time.Minute,
-		GCInterval:  15 * time.Second,
+		sessions:        make(map[string]*Session),
+		IdleTimeout:     30 * time.Minute,
+		GCInterval:      15 * time.Second,
+		DoneSendTimeout: 3 * time.Second,
 	}
 }
 
@@ -102,6 +129,7 @@ func (m *Manager) Create(sess *Session) *Session {
 	if sess.CreatedAt.IsZero() {
 		sess.CreatedAt = time.Now()
 	}
+	sess.manager = m
 	m.mu.Lock()
 	m.sessions[sess.ID] = sess
 	m.mu.Unlock()
@@ -219,10 +247,19 @@ func FormatEvent(kind string, kv map[string]any) []byte {
 	return formatEvent(kind, kv)
 }
 
-// MarkFinished 标记 session 结束，阻塞推 done 给所有订阅者，再 close channel。
+// MarkFinished 标记 session 结束，推 done 给所有订阅者，再 close channel。
 //
-// 为什么走阻塞推：进度事件可丢（前端会被下一次更新覆盖），但 done 事件
-// 必到——否则前端不知道"任务结束 vs 网络断"，会卡在 99% 假死。
+// 推送策略：
+//   - 进度事件可丢（前端会被下一次更新覆盖），但 done 事件必到 —— 否则前端
+//     不知道"任务结束 vs 网络断"，会卡在 99% 假死。
+//   - 单订阅者推送用 mgr.DoneSendTimeout 包一层 select，避免慢 SSE 客户端
+//     卡住 MarkFinished：超过超时跳过这个订阅者（同时 close channel），
+//     不会无限阻塞后台协程。
+//   - 旧的"全阻塞"实现的风险：N 个订阅者中只要有一个慢，整个收尾流程
+//     就要等；最坏情况下后台协程长时间不退出，吃 channel buffer 和内存。
+//
+// 安全：MarkFinished 之后所有订阅者 channel 必关闭；订阅者用第二个返回值判断。
+// 这里用 defer 收尾保证即使中途 panic 也能关掉所有 channel。
 func (s *Session) MarkFinished(result []Item, finalErr error) {
 	s.mu.Lock()
 	s.finished = true
@@ -230,6 +267,7 @@ func (s *Session) MarkFinished(result []Item, finalErr error) {
 	s.finalErr = finalErr
 	subs := s.subscribers
 	s.subscribers = nil
+	mgr := s.manager
 	s.mu.Unlock()
 
 	var ev []byte
@@ -245,8 +283,19 @@ func (s *Session) MarkFinished(result []Item, finalErr error) {
 			"folder":    s.Folder,
 		})
 	}
+
+	// 每个订阅者独立的超时 timeout
+	timeout := 3 * time.Second
+	if mgr != nil && mgr.DoneSendTimeout > 0 {
+		timeout = mgr.DoneSendTimeout
+	}
 	for ch := range subs {
-		ch <- ev
+		select {
+		case ch <- ev:
+			// done 已送达
+		case <-time.After(timeout):
+			// 慢订阅者：丢这一帧 done 事件（前端 onerror 兜底会标失败）
+		}
 	}
 	for ch := range subs {
 		close(ch)

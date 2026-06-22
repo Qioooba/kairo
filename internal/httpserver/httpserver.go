@@ -87,6 +87,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleTailStart(w, r)
 	case path == "/api/audit/recent":
 		s.handleAuditRecent(w, r)
+	case path == "/api/audit/export.csv":
+		s.handleAuditExportCSV(w, r)
+	case path == "/api/audit/export.csv":
+		s.handleAuditExportCSV(w, r)
 	case path == "/api/credentials/save":
 		s.handleCredSave(w, r)
 	case path == "/api/credentials/has":
@@ -109,6 +113,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleFilesDownload(w, r)
 	case strings.HasPrefix(path, "/api/files/download/"):
 		s.handleFilesDownloadEventsOrCancel(w, r)
+	// 注意：/api/logs/download-latest 必须在 /api/logs/download/ 之前匹配（精确匹配优先）
+	case strings.HasPrefix(path, "/api/logs/download/"):
+		s.handleLogsDownloadEventsOrCancel(w, r)
 	case strings.HasPrefix(path, "/api/logs/tail/"):
 		s.handleTailEventsOrStop(w, r)
 	case strings.HasPrefix(path, "/downloads/"):

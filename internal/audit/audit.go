@@ -2,14 +2,23 @@
 //
 // 重要：不记录密码、SSH 私钥、日志正文中的敏感信息。
 // 审计文件按日滚动（audit-YYYY-MM-DD.log），方便归档。
+//
+// 格式（项 15 修复）：
+//   - v2（默认）：每行一个 JSON 对象，字段名固定（ts/op/system/.../result）。
+//     便于程序解析 / 二次处理。读取时一行 json.Unmarshal 即可。
+//   - v1（兼容）："ts=... op=... k=v k=v ..." 空格分隔的 K=V 格式。
+//     旧 audit.log 升级后第一次跑会按 v1 解析（看每行首字符是不是 '{'）。
 package audit
 
 import (
 	"bufio"
+	"encoding/csv"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -17,11 +26,11 @@ import (
 
 // Logger 简单的线程安全审计日志器
 type Logger struct {
-	dir   string
-	mu    sync.RWMutex
-	out   io.WriteCloser
-	file  *os.File
-	cur   string // 当前日期字符串
+	dir  string
+	mu   sync.RWMutex
+	out  io.WriteCloser
+	file *os.File
+	cur  string // 当前日期字符串
 }
 
 // New 在 dir 下创建/打开 audit.log（同一天复用）
@@ -48,6 +57,15 @@ func (l *Logger) Close() error {
 
 // Write 写一条审计记录。
 // fields 是 key/value 交替的扁平结构（必须偶数长度）。
+//
+// 输出格式（项 15）：每行一个 JSON 对象（JSONL 风格），
+//
+//	{"ts":"2026-06-23T12:00:00.000+08:00","op":"logs.search","system":"xxx",...}
+//
+// 比老 K=V 格式（项 15 之前的 v1）优点：
+//   - 字段名 / 值含空格 / 等号 / 引号都不需要转义（标准 json 处理）；
+//   - 解析端一行 json.Unmarshal，零正则；
+//   - 二次处理（grep 改成 jq / awk 拆字段）更稳。
 func (l *Logger) Write(op string, fields ...any) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -56,16 +74,28 @@ func (l *Logger) Write(op string, fields ...any) {
 	if today != l.cur {
 		_ = l.rotateLocked("audit.log")
 	}
-	ts := time.Now().Format("2006-01-02 15:04:05.000")
 	if len(fields)%2 != 0 {
 		fields = append(fields, "<missing>")
 	}
-	parts := make([]string, 0, 1+2+len(fields)/2)
-	parts = append(parts, fmt.Sprintf("ts=%s", ts), fmt.Sprintf("op=%s", op))
+	// 拼成 map[string]string（值走 fmt.Sprint，复合类型也能序列化）
+	rec := make(map[string]string, 2+len(fields)/2)
+	rec["ts"] = time.Now().Format(time.RFC3339Nano)
+	rec["op"] = op
 	for i := 0; i < len(fields); i += 2 {
-		parts = append(parts, fmt.Sprintf("%s=%v", fields[i], fields[i+1]))
+		k, ok := fields[i].(string)
+		if !ok {
+			k = fmt.Sprint(fields[i])
+		}
+		rec[k] = fmt.Sprint(fields[i+1])
 	}
-	_, _ = fmt.Fprintln(l.out, joinComma(parts))
+	b, err := json.Marshal(rec)
+	if err != nil {
+		// 序列化失败兜底：写一行"audit_format_error"标记
+		_, _ = fmt.Fprintln(l.out, `{"op":"audit_format_error","err":"`+err.Error()+`"}`)
+		return
+	}
+	_, _ = l.out.Write(b)
+	_, _ = l.out.Write([]byte("\n"))
 }
 
 func joinComma(parts []string) string {
@@ -185,12 +215,62 @@ func (l *Logger) Recent(limit int, f Filter) ([]Record, error) {
 	return out, nil
 }
 
-// parseLine 把 "ts=... op=... k=v k=v" 这种行解成 Record
+// parseLine 把一行审计日志解成 Record。
+//
+// 自动识别格式（项 15）：
+//   - 行首是 '{' → 当 JSONL 解析（v2）；
+//   - 否则按老 K=V 格式解析（v1，向后兼容）。
+//
+// 这样老 audit.log 文件升级后第一次跑 Recent() 也能正常返回。
+func parseLine(line string) *Record {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return nil
+	}
+	if trimmed[0] == '{' {
+		return parseJSONLine(trimmed)
+	}
+	return parseKVLine(trimmed)
+}
+
+// parseJSONLine 解析 v2 JSONL 行。
+func parseJSONLine(line string) *Record {
+	rec := &Record{KV: make(map[string]string)}
+	var m map[string]any
+	if err := json.Unmarshal([]byte(line), &m); err != nil {
+		return nil
+	}
+	rec.Raw = line
+	for k, v := range m {
+		s, ok := v.(string)
+		if !ok {
+			s = fmt.Sprint(v)
+		}
+		switch k {
+		case "ts":
+			if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
+				rec.Time = t
+			} else if t, err := time.Parse("2006-01-02T15:04:05.000Z07:00", s); err == nil {
+				rec.Time = t
+			}
+		case "op":
+			rec.Op = s
+		default:
+			rec.KV[k] = s
+		}
+	}
+	if rec.Op == "" {
+		return nil
+	}
+	return rec
+}
+
+// parseKVLine 解析 v1 老格式 "ts=... op=... k=v k=v"
 //
 // 注意：ts 形如 "ts=2026-06-20 10:30:00.123 op=..."，
 // 因为 fields 按空格切，"10:30:00.123" 和 "op=..." 会被切成两个 token。
 // 这里特判：遇到 ts= 开头的 key，把后续 token 里第一个形如 "HH:MM:SS.mmm" 的吃进来。
-func parseLine(line string) *Record {
+func parseKVLine(line string) *Record {
 	parts := strings.Fields(line)
 	if len(parts) == 0 {
 		return nil
@@ -232,4 +312,96 @@ func parseLine(line string) *Record {
 		return nil
 	}
 	return rec
+}
+
+// CSV 导出辅助（P3-3）
+//
+// 把一批 Record 序列化成 CSV。设计要点：
+//   - 列固定，前 5 列是 ts/op/system/server/result（业务必看）；
+//     其它 KV 按出现顺序拼到后面，列名就是 KV key；
+//   - 第一行 header 用 \r\n 结尾，符合 RFC 4180，Excel/Numbers 都能直接打开；
+//   - 数据行按 ts 升序输出（Recent 是倒序，导出时翻一下，读 CSV 更自然）；
+//   - ts 用 RFC3339Nano 字符串（带时区），跨时区协作时不会被误会；
+//   - 单元格里的引号 / 换行 / 逗号都让 encoding/csv 自动转义，不用我们管。
+//
+// Err 和 stage 字段是有时被审计加进来的额外 KV 字段；这里同样会被自动追加列。
+
+// defaultCSVColumns 永远出现在 CSV 前几列，业务最关心的字段。
+var defaultCSVColumns = []string{"ts", "op", "system", "server", "result"}
+
+// WriteCSV 把 records 写到 w（一般是 *http.ResponseWriter / *os.File）。
+//   - 列顺序：defaultCSVColumns 在前，其它 KV key 按字母序追加在后面；
+//   - 空记录返空 CSV（只有 header）；
+//   - 不会修改传入的 records。
+func WriteCSV(w io.Writer, records []Record) error {
+	cw := csv.NewWriter(w)
+	// RFC 4180 推荐 CRLF，Excel / Numbers / WPS 都更兼容
+	cw.UseCRLF = true
+	// 收集所有 KV key（去重 + 排序）
+	keySet := map[string]bool{}
+	for _, r := range records {
+		for k := range r.KV {
+			keySet[k] = true
+		}
+	}
+	extraKeys := make([]string, 0, len(keySet))
+	for k := range keySet {
+		// 跳过已经在 defaultCSVColumns 里的，避免重复列
+		already := false
+		for _, c := range defaultCSVColumns {
+			if c == k {
+				already = true
+				break
+			}
+		}
+		if already {
+			continue
+		}
+		extraKeys = append(extraKeys, k)
+	}
+	sort.Strings(extraKeys)
+
+	header := append([]string{}, defaultCSVColumns...)
+	header = append(header, extraKeys...)
+	if err := cw.Write(header); err != nil {
+		return fmt.Errorf("写 csv header 失败: %w", err)
+	}
+
+	// 按 ts 升序：Recent() 是倒序，翻一下。
+	sorted := make([]Record, len(records))
+	copy(sorted, records)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		return sorted[i].Time.Before(sorted[j].Time)
+	})
+
+	for _, r := range sorted {
+		row := make([]string, len(header))
+		// 前 5 列固定
+		row[0] = r.Time.Format(time.RFC3339Nano)
+		row[1] = r.Op
+		// 系统/服务器/结果可能为空（早期记录 / 自定义 op），空字符串 OK
+		// 不过 defaultCSVColumns 没把 system/server/result 单独存到 KV，
+		// 而 audit.Write 写时这些是 top-level KV key，所以要从 KV 取。
+		row[2] = r.KV["system"]
+		row[3] = r.KV["server"]
+		row[4] = r.KV["result"]
+		// extra KV
+		for i, k := range extraKeys {
+			row[len(defaultCSVColumns)+i] = r.KV[k]
+		}
+		if err := cw.Write(row); err != nil {
+			return fmt.Errorf("写 csv 行失败: %w", err)
+		}
+	}
+	cw.Flush()
+	if err := cw.Error(); err != nil {
+		return fmt.Errorf("flush csv 失败: %w", err)
+	}
+	return nil
+}
+
+// CSVFilename 构造导出文件名（含时间戳）。
+// 例：audit-2026-06-23-024500.csv
+func CSVFilename(now time.Time) string {
+	return "audit-" + now.Format("2006-01-02-150405") + ".csv"
 }

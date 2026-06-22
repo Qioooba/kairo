@@ -65,7 +65,15 @@ export GOARCH=amd64
 export CGO_ENABLED=0
 export GOTOOLCHAIN=local
 
-"${GO_BIN}" build -trimpath -ldflags "-s -w" -o "${OUT_DIR}/OpsToolbox_win7.exe" .
+# 优先用 vendor 模式编译。vendor/ 不存在则回退到 module 模式。
+GO_MOD_FLAGS=()
+if [[ -d vendor && -f vendor/modules.txt ]]; then
+  GO_MOD_FLAGS=(-mod=vendor)
+else
+  echo ">> 提示：vendor/ 目录缺失，回退到 module 模式（建议先跑 go mod vendor）"
+fi
+
+"${GO_BIN}" build "${GO_MOD_FLAGS[@]}" -trimpath -ldflags "-s -w" -o "${OUT_DIR}/OpsToolbox_win7.exe" .
 
 # config.yaml 优先，缺则回退到 config.yaml.production.example，再缺则报错。
 if [[ -f config.yaml ]]; then

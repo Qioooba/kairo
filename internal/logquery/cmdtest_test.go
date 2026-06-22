@@ -376,3 +376,172 @@ func TestParseListOutput_AutoDetectsPOSIX(t *testing.T) {
 		t.Errorf("size 解析错: %d", files[0].Size)
 	}
 }
+
+// ---------- v0.4 修复：ParseQuery 状态机校验 ----------
+
+func TestParseQuery_RejectsTrailingAndOr(t *testing.T) {
+	// v0.4 修复：尾随的 && / || 必须报错，不能默默接受。
+	cases := []string{
+		"A &&",
+		"A ||",
+		"!DEBUG &&",
+		"A && B ||",
+		"!A || !B &&",
+	}
+	for _, q := range cases {
+		if _, err := ParseQuery(q); err == nil {
+			t.Errorf("q=%q 应被拒（尾随操作符），但 ParseQuery 没报错", q)
+		}
+	}
+}
+
+func TestParseQuery_RejectsConsecutiveOps(t *testing.T) {
+	// v0.4 修复：连续操作符必须报错。
+	cases := []string{
+		"A && && B",
+		"A && || B",
+		"A || && B",
+		"A || || B",
+	}
+	for _, q := range cases {
+		if _, err := ParseQuery(q); err == nil {
+			t.Errorf("q=%q 应被拒（连续操作符），但 ParseQuery 没报错", q)
+		}
+	}
+}
+
+func TestParseQuery_RejectsLeadingOps(t *testing.T) {
+	// && / || 开头必须报错。
+	cases := []string{
+		"&& B",
+		"|| B",
+		"&&",
+		"||",
+	}
+	for _, q := range cases {
+		if _, err := ParseQuery(q); err == nil {
+			t.Errorf("q=%q 应被拒（开头操作符 / 空），但 ParseQuery 没报错", q)
+		}
+	}
+}
+
+func TestParseQuery_AcceptsNegationForms(t *testing.T) {
+	// 这些必须被接受（之前会被接受，回归测试确保修复没误伤合法用法）。
+	cases := []string{
+		"!DEBUG",
+		"Exception && !DEBUG",
+		"!A || !B",
+		"Exception && Timeout && !DEBUG",
+	}
+	for _, q := range cases {
+		if _, err := ParseQuery(q); err != nil {
+			t.Errorf("q=%q 合法，但被 ParseQuery 拒了: %v", q, err)
+		}
+	}
+}
+
+func TestParseQuery_NegateOnlyRejected(t *testing.T) {
+	// 只剩 "!" / "! !" 必须拒。
+	cases := []string{"!", "!  !"}
+	for _, q := range cases {
+		if _, err := ParseQuery(q); err == nil {
+			t.Errorf("q=%q 应被拒（只有 !），但 ParseQuery 没报错", q)
+		}
+	}
+}
+
+// ---------- v0.4 修复：SearchCommand OR 段含纯 neg ----------
+
+func TestSearchCommand_OR_IncludesFirstBranch(t *testing.T) {
+	// "A || B" 的命令结构应包含：
+	//   1. 第一段（grep A）在管道头部；
+	//   2. sort -u 用于合并去重；
+	//   3. head -n max 截断在最后；
+	//   4. 整体是 4 段管道（grep A | (grep B) | sort -u | head）。
+	kw, err := ParseQuery("Exception || Timeout")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := SearchCommand("/dir", []string{"a.log", "b.log"}, kw, 200, 30, "utf-8")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 第一个分支（grep A）必须在 head 之前的管道里出现
+	if !strings.Contains(c, "grep -HnE") {
+		t.Fatalf("缺第一段 grep -HnE: %s", c)
+	}
+	// sort -u 必须在场
+	if !strings.Contains(c, "sort -u") {
+		t.Fatalf("OR 必须用 sort -u 去重: %s", c)
+	}
+	// 管道结构：第一段 + 第二段括号 + sort -u + head -n
+	// 通过 LC_ALL=C sort -u + head -n 顺序验证
+	idxSort := strings.Index(c, "sort -u")
+	idxHead := strings.Index(c, "head -n")
+	if idxSort < 0 || idxHead < 0 || idxSort > idxHead {
+		t.Fatalf("sort -u 必须在 head -n 之前: sort=%d head=%d\ncmd=%s", idxSort, idxHead, c)
+	}
+	// head -n 200 必须存在
+	if !strings.Contains(c, "head -n 200") {
+		t.Fatalf("缺 head -n 200: %s", c)
+	}
+}
+
+func TestSearchCommand_OR_WithNegation(t *testing.T) {
+	// "A || !B" 必须：
+	//   1. 第一段（grep A）保留；
+	//   2. 第二段是纯 neg：先 `grep -HnE "^." -- files` 拿全部行，再 grep -vE B；
+	//   3. sort -u 仍然在最后（去重两条分支的输出）。
+	kw, err := ParseQuery("Exception || !DEBUG")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := SearchCommand("/dir", []string{"a.log"}, kw, 200, 30, "utf-8")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(c, "Exception") {
+		t.Fatalf("第一段缺 Exception: %s", c)
+	}
+	if !strings.Contains(c, "grep -vE") {
+		t.Fatalf("纯 neg 段缺 grep -vE: %s", c)
+	}
+	if !strings.Contains(c, "DEBUG") {
+		t.Fatalf("neg 段缺 DEBUG 关键字: %s", c)
+	}
+	// 必须有 sort -u 把两段合并去重
+	if !strings.Contains(c, "sort -u") {
+		t.Fatalf("OR + NEG 必须用 sort -u 合并: %s", c)
+	}
+	// 纯 neg 段必须用 grep -HnE "^." 而不是 cat（保留 filename:lineno: 前缀）
+	// 验证：第二段（括号内）必须含 grep -HnE "^." 然后 grep -vE DEBUG
+	if !strings.Contains(c, `grep -HnE "^."`) {
+		t.Fatalf("纯 neg 段应用 grep -HnE \"^.\" 保留前缀: %s", c)
+	}
+}
+
+func TestSearchCommand_OR_PureNegOnly(t *testing.T) {
+	// "!A || !B" 必须：
+	//   1. 第一段是 `grep -HnE "^." -- files | grep -vE A`；
+	//   2. 第二段是 `grep -HnE "^." -- files | grep -vE B`；
+	//   3. sort -u 合并。
+	kw, err := ParseQuery("!A || !B")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := SearchCommand("/dir", []string{"a.log"}, kw, 200, 30, "utf-8")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(c, "sort -u") {
+		t.Fatalf("OR 必须有 sort -u: %s", c)
+	}
+	// 第一段必须保留 grep -HnE "^." 前缀
+	if !strings.Contains(c, `grep -HnE "^." --`) {
+		t.Fatalf("第一段必须保留 grep -HnE \"^.\" 前缀: %s", c)
+	}
+	// 两个 grep -vE 都必须存在
+	if got := strings.Count(c, "grep -vE"); got < 2 {
+		t.Fatalf("!A || !B 应有 ≥ 2 个 grep -vE, 实际 %d\ncmd=%s", got, c)
+	}
+}

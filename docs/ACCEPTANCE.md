@@ -211,10 +211,12 @@ op=logs.context
 | # | 操作 | 期望 |
 | --- | --- | --- |
 | 5d.1 | 开发者本地跑 `go test ./...` | 12 个包全过；dlmanager 90%+，tailmgr 90%+，httpserver 70%+ |
-| 5d.2 | 跑 `node web/app.test.js` | 7 个前端 pure 函数全过（escapeHtml / formatBytes / formatTime / trimMiddle / cssEscape / pctText / validate） |
-| 5d.3 | 跑 `GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build` | macOS / Linux 上能交叉编译出 Windows exe |
-| 5d.4 | 跑 `./scripts/build_windows_amd64.sh v0.3.0` | 产物在 `dist/ops-toolbox-v0.3.0/OpsToolbox.exe`，`file` 命令验证是 PE32+ x86-64 |
-| 5d.5 | 跑 `./scripts/package_windows.sh v0.3.0` | `dist/ops-toolbox-v0.3.0-windows.zip` 包含 exe + config + README + 空 downloads/logs/data |
+| 5d.2 | 跑 `go test -mod=vendor ./...` | vendor 模式下全过；构建不依赖外网 |
+| 5d.3 | 跑 `node web/app.test.js` | 7 个前端 pure 函数全过（escapeHtml / formatBytes / formatTime / trimMiddle / cssEscape / pctText / validate） |
+| 5d.4 | 跑 `GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -mod=vendor` | macOS / Linux 上能交叉编译出 Windows exe，不联网 |
+| 5d.5 | 跑 `./scripts/build_windows_amd64.sh v0.3.0` | 脚本自动检测 vendor/ 并加 `-mod=vendor`，产物在 `dist/ops-toolbox-v0.3.0/OpsToolbox.exe`，`file` 命令验证是 PE32+ x86-64 |
+| 5d.6 | 跑 `./scripts/package_windows.sh v0.3.0` | `dist/ops-toolbox-v0.3.0-windows.zip` 包含 exe + config + README + 空 downloads/logs/data |
+| 5d.7 | 跑 `gofmt -l .` | 0 行（包含 `vendor/` 因为已 commit） |
 
 ---
 

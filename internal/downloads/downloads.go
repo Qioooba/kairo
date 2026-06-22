@@ -36,7 +36,7 @@ type Meta struct {
 	File         string    `json:"file,omitempty"`      // 远端原始文件名（zip 时为空）
 	Files        []string  `json:"files,omitempty"`     // zip 包含的远端文件名
 	Encoding     string    `json:"encoding,omitempty"`
-	Kind         string    `json:"kind"`                // "file" / "zip"
+	Kind         string    `json:"kind"` // "file" / "zip"
 	DownloadedAt time.Time `json:"downloaded_at"`
 	DownloadedBy string    `json:"downloaded_by,omitempty"` // 操作人（暂留字段）
 }
@@ -99,6 +99,10 @@ func ReadMeta(dataPath string) (Meta, bool, error) {
 //   - 列表策略：优先列有 sidecar 元数据的文件（确认是 ops-toolbox 下载产物）；
 //     没 sidecar 的兜底按扩展名收（.log / .zip / .txt / .gz / .tar / .properties 等常见后缀），
 //     避免 v0.3 文件浏览器下载的 .properties / .xml 等"任意文件"不显示在历史里。
+//
+// 兜底推断（项 16）：
+//   - 如果文件位于 downloads/YYYYMMDD/ 子目录但没有 sidecar，把子目录名当 Date；
+//   - 这样手动 cp 进来的文件也能在历史里看到（虽然元数据为空）。
 func List(rootDir string) ([]Entry, error) {
 	var out []Entry
 	if _, err := os.Stat(rootDir); err != nil {
@@ -145,6 +149,23 @@ func List(rootDir string) ([]Entry, error) {
 		} else {
 			kind = "file"
 		}
+		// 兜底推断：文件在 downloads/YYYYMMDD/ 子目录里但没 sidecar，
+		// 把子目录名当作 Date 填进 meta 字段（不会写回 sidecar），
+		// 让"下载历史"页能展示出来。
+		if !hasMeta {
+			dir := filepath.Dir(rel)
+			base := filepath.Base(dir)
+			// 形如 20260621 / 2026-06-21 才认；避免误把任意子目录名当日期
+			if isLikelyDateDir(base) {
+				meta.DownloadedAt = parseDateDirAsTime(base)
+				if meta.DownloadedAt.IsZero() {
+					// 解析失败就用文件 mtime
+					meta.DownloadedAt = info.ModTime()
+				}
+			} else {
+				meta.DownloadedAt = info.ModTime()
+			}
+		}
 		out = append(out, Entry{
 			Name:        filepath.ToSlash(rel),
 			Path:        path,
@@ -166,6 +187,46 @@ func List(rootDir string) ([]Entry, error) {
 	return out, nil
 }
 
+// isLikelyDateDir 判断一个目录名是否是日期格式（YYYYMMDD 或 YYYY-MM-DD）。
+func isLikelyDateDir(name string) bool {
+	if len(name) == 8 {
+		for i := 0; i < 8; i++ {
+			if name[i] < '0' || name[i] > '9' {
+				return false
+			}
+		}
+		return true
+	}
+	if len(name) == 10 && name[4] == '-' && name[7] == '-' {
+		for i := 0; i < 10; i++ {
+			if i == 4 || i == 7 {
+				continue
+			}
+			if name[i] < '0' || name[i] > '9' {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
+// parseDateDirAsTime 把 YYYYMMDD / YYYY-MM-DD 解析成 time.Time（本地时区 00:00）。
+// 解析失败返回 zero time。
+func parseDateDirAsTime(name string) time.Time {
+	if len(name) == 10 {
+		name = strings.ReplaceAll(name, "-", "")
+	}
+	if len(name) != 8 {
+		return time.Time{}
+	}
+	t, err := time.ParseInLocation("20060102", name, time.Local)
+	if err != nil {
+		return time.Time{}
+	}
+	return t
+}
+
 // isListableExt 决定"无 sidecar 时"按扩展名兜底列哪些文件。
 //
 // 设计：
@@ -181,11 +242,11 @@ func isListableExt(ext string) bool {
 	}
 	// 显式拒绝：常见的无关临时 / 系统文件
 	deny := map[string]bool{
-		".ds_store": true, // macOS 资源管理器
-		".tmp":      true,
-		".temp":     true,
-		".swp":      true, // vim swap
-		".bak":      true,
+		".ds_store":   true, // macOS 资源管理器
+		".tmp":        true,
+		".temp":       true,
+		".swp":        true, // vim swap
+		".bak":        true,
 		".crdownload": true, // Chrome 残留
 	}
 	if deny[ext] {

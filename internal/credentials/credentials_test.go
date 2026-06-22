@@ -151,3 +151,103 @@ func TestKeyFormatNoPipeInUser(t *testing.T) {
 		t.Errorf("expected 3 separators, got %d in %q", len(parts)-1, weird)
 	}
 }
+
+// TestSetMode 验证 SetMode 接受合法值并拒绝未知值（项 23）。
+//
+// 顺序：保存原 mode → 多次 SetMode → 恢复原 mode，避免影响别的 test。
+func TestSetMode(t *testing.T) {
+	orig := Mode()
+	t.Cleanup(func() { SetMode(orig) })
+
+	cases := []struct {
+		in, want string
+	}{
+		{"keyring", ModeKeyring},
+		{"KEYRING", ModeKeyring},
+		{"  keyring  ", ModeKeyring},
+		{"file", ModeFile},
+		{"FILE", ModeFile},
+		{"disabled", ModeDisabled},
+		{"DISABLED", ModeDisabled},
+		{"off", ModeDisabled},
+		{"none", ModeDisabled},
+		{"unknown-mode", ModeKeyring}, // 未知值兜底为 keyring
+		{"", ModeKeyring},
+	}
+	for _, c := range cases {
+		SetMode(c.in)
+		if got := Mode(); got != c.want {
+			t.Errorf("SetMode(%q) → Mode()=%q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// TestDefaultMode 默认 mode 应该是 keyring（向后兼容）。
+func TestDefaultMode(t *testing.T) {
+	// 在所有其它测试跑完之后验证默认值 — 但 Go test 顺序不固定，
+	// 所以这里只断言"某个测试结束后 mode 被还原为 keyring"是脆弱的。
+	// 退一步：只验证 SetMode("") 的兜底行为。
+	SetMode("")
+	if got := Mode(); got != ModeKeyring {
+		t.Errorf("SetMode(\"\") → Mode()=%q, want %q (default)", got, ModeKeyring)
+	}
+}
+
+// TestDisabledMode_BlocksAllOps mode=disabled 时所有 Save/Get/Has/Clear 都返 ErrUnavailable。
+//
+// 这里不需要真实 keyring（disabled 模式根本不访问 keyring），
+// 所以即使在无 keyring 的 CI 容器里也能稳定 pass。
+func TestDisabledMode_BlocksAllOps(t *testing.T) {
+	orig := Mode()
+	t.Cleanup(func() { SetMode(orig) })
+	SetMode(ModeDisabled)
+
+	if err := Save("s", "srv", "u", "p"); !errors.Is(err, ErrUnavailable) {
+		t.Errorf("disabled Save: err=%v, want ErrUnavailable", err)
+	}
+	if _, err := Get("s", "srv", "u"); !errors.Is(err, ErrUnavailable) {
+		t.Errorf("disabled Get: err=%v, want ErrUnavailable", err)
+	}
+	if _, err := Has("s", "srv", "u"); !errors.Is(err, ErrUnavailable) {
+		t.Errorf("disabled Has: err=%v, want ErrUnavailable", err)
+	}
+	if err := Clear("s", "srv", "u"); !errors.Is(err, ErrUnavailable) {
+		t.Errorf("disabled Clear: err=%v, want ErrUnavailable", err)
+	}
+}
+
+// TestFileMode_NotImplemented mode=file 时返 ErrFileNotImplemented（暂时未实现加密文件）。
+//
+// 设计取舍：与其静默写一个未加密文件（泄密），不如明说"暂未实现"，
+// 让运维用户知道要么回退到 keyring、要么明确禁用。
+func TestFileMode_NotImplemented(t *testing.T) {
+	orig := Mode()
+	t.Cleanup(func() { SetMode(orig) })
+	SetMode(ModeFile)
+
+	if err := Save("s", "srv", "u", "p"); !errors.Is(err, ErrFileNotImplemented) {
+		t.Errorf("file Save: err=%v, want ErrFileNotImplemented", err)
+	}
+	if _, err := Get("s", "srv", "u"); !errors.Is(err, ErrFileNotImplemented) {
+		t.Errorf("file Get: err=%v, want ErrFileNotImplemented", err)
+	}
+}
+
+// TestKeyringMode_BehavesAsBefore mode=keyring 是默认行为，不应被 SetMode 改动后阻塞。
+//
+// 避免误改 Save/Get 的情况下让真实 keyring round-trip 跑挂。
+func TestKeyringMode_KeyringFunctionsCalled(t *testing.T) {
+	orig := Mode()
+	t.Cleanup(func() { SetMode(orig) })
+	SetMode(ModeKeyring)
+	if Mode() != ModeKeyring {
+		t.Fatalf("keyring mode not active")
+	}
+	// 真实 round-trip 由 TestKeyringRoundTrip 覆盖；这里只断言 mode 切换不会
+	// 让 guardMode 拦下请求：用一个不存在的 key 调 Get，应返 ErrNotSaved，
+	// 不是 ErrUnavailable / ErrFileNotImplemented。
+	_, err := Get("nosuch-system", "nosuch-srv", "nosuch-user-"+t.Name())
+	if !errors.Is(err, ErrNotSaved) {
+		t.Errorf("keyring mode Get(nonexistent): err=%v, want ErrNotSaved", err)
+	}
+}

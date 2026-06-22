@@ -39,6 +39,29 @@ type AppConfig struct {
 	// 但若工具分发给"未严格管控的同事"，可能因安全审计被卡。
 	EnableFreeFileBrowser *bool `yaml:"enable_free_file_browser,omitempty" json:"enable_free_file_browser,omitempty"`
 
+	// FreeFileRoots v0.4 起可用：白名单"任意路径下载"允许访问的远端根路径前缀。
+	// 为空 = 行为同 v0.3（按 SSH 账号实际权限放行）；
+	// 非空 = 只允许访问以列表中某项为前缀的远端路径。
+	// Agent 2 在前端做启动警告；这里只做字段存读。
+	FreeFileRoots []string `yaml:"free_file_roots,omitempty" json:"free_file_roots,omitempty"`
+
+	// CredentialStore v0.4 起配置化：keyring / file。
+	// 空字符串 / "keyring" = 走 keyring（macOS Keychain / Windows DPAPI / Linux Secret Service）；
+	// "file" = 走文件密文（DEPRECATED，仅在内网完全无 keyring 时使用）。
+	CredentialStore string `yaml:"credential_store,omitempty" json:"credential_store,omitempty"`
+
+	// SSHDebug / SSHTrafficDump / SSHLogMaxMB / SSHLogKeep 控制 SSH debug/traffic 日志。
+	// 默认全关（false / 20 / 3）。
+	// 详见 internal/sshclient 的注释。
+	SSHDebug       bool `yaml:"ssh_debug" json:"ssh_debug"`
+	SSHTrafficDump bool `yaml:"ssh_traffic_dump" json:"ssh_traffic_dump"`
+	SSHLogMaxMB    int  `yaml:"ssh_log_max_mb" json:"ssh_log_max_mb"`
+	SSHLogKeep     int  `yaml:"ssh_log_keep" json:"ssh_log_keep"`
+
+	// SSHCompatProfile v0.4 起配置化（modern / compat / no-ecdh / legacy / auto）。
+	// "" / "auto" = 走默认重试链（保持向后兼容）。
+	SSHCompatProfile string `yaml:"ssh_compat_profile,omitempty" json:"ssh_compat_profile,omitempty"`
+
 	// 解析后的绝对路径
 	downloadDirAbs string
 	logDirAbs      string
@@ -52,6 +75,56 @@ func (a *AppConfig) FreeFileBrowserEnabled() bool {
 		return true
 	}
 	return *a.EnableFreeFileBrowser
+}
+
+// FreeFileRootsEnabled 判断 path 是否在 free_file_roots 白名单里。
+//
+// roots 为空时放行（最自由模式）；非空时要求 path 以任一 root 为前缀。
+// 匹配按 / 边界："/var/log" 匹配 "/var/log" 和 "/var/log/app.log"，但不匹配 "/var/logs"。
+// 大小写敏感（远端 Linux 系统路径区分大小写）。
+func (a *AppConfig) FreeFileRootsEnabled(path string) bool {
+	if len(a.FreeFileRoots) == 0 {
+		return true
+	}
+	if path == "" {
+		return false
+	}
+	cleaned := filepath.ToSlash(filepath.Clean(path))
+	for _, root := range a.FreeFileRoots {
+		root = filepath.ToSlash(filepath.Clean(root))
+		if cleaned == root {
+			return true
+		}
+		// 必须按目录边界匹配：cleaned 是 root 的子路径
+		if strings.HasPrefix(cleaned, root+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+// FreeFileRootsConfigured 是否有 free_file_roots 配置（非空）。
+// 用于前端判断"用户是否已限定根路径"，决定要不要显示警告。
+func (a *AppConfig) FreeFileRootsConfigured() bool {
+	return len(a.FreeFileRoots) > 0
+}
+
+// CredentialStoreEnabled 解析 credential_store 配置，返回有效后端名（"keyring"/"file"/"disabled"）。
+//   - 空字符串 / "keyring" → "keyring"（默认，向后兼容）
+//   - "file"              → "file"
+//   - "disabled"          → "disabled"（明确禁用）
+//   - 其它                → 走默认 "keyring"，调用方可记 warning
+func (a *AppConfig) CredentialStoreEnabled() string {
+	switch strings.ToLower(strings.TrimSpace(a.CredentialStore)) {
+	case "", "keyring":
+		return "keyring"
+	case "file":
+		return "file"
+	case "disabled", "off", "none":
+		return "disabled"
+	default:
+		return "keyring"
+	}
 }
 
 // ListenAddr 返回绑定地址，例如 127.0.0.1:18080
@@ -75,12 +148,22 @@ type SystemConfig struct {
 
 // ServerConfig 一台目标服务器
 type ServerConfig struct {
-	Name     string        `yaml:"name" json:"name"`
-	Host     string        `yaml:"host" json:"host"`
-	Port     int           `yaml:"port" json:"port"`
-	Username string        `yaml:"username" json:"username"`
-	AuthType string        `yaml:"auth_type" json:"auth_type"`
-	LogDirs  []LogDirEntry `yaml:"log_dirs" json:"log_dirs"`
+	Name     string `yaml:"name" json:"name"`
+	Host     string `yaml:"host" json:"host"`
+	Port     int    `yaml:"port" json:"port"`
+	Username string `yaml:"username" json:"username"`
+	AuthType string `yaml:"auth_type" json:"auth_type"`
+
+	// SSHProfile v0.4 起可单独覆盖这台 server 的 SSH compat profile；
+	// 空字符串 = 走 app.ssh_compat_profile（再空 = auto）。
+	SSHProfile string `yaml:"ssh_profile,omitempty" json:"ssh_profile,omitempty"`
+
+	// HostKeySHA256 v0.4 起可选：固定这台 server 的 host key 指纹（base64 SHA256）；
+	// 设置后即使 app 级 InsecureIgnoreHostKey 仍开，本字段也会强制做指纹校验。
+	// 留空 = 不做 pin。
+	HostKeySHA256 string `yaml:"host_key_sha256,omitempty" json:"host_key_sha256,omitempty"`
+
+	LogDirs []LogDirEntry `yaml:"log_dirs" json:"log_dirs"`
 }
 
 // LogDirEntry 一个允许访问的日志目录
@@ -125,6 +208,14 @@ type SearchConfig struct {
 }
 
 // Defaults 把缺失值填上合理默认
+//
+// 设计原则：
+//  1. 只补"用户没填"的字段；已填的合法值原样保留；
+//  2. 已知 alias 做大小写归一（gbk/gb18030 → gbk；UTF-8/utf-8 → utf-8）；
+//  3. **不再吞未知 encoding**：YAML 里写了 shift-jis 之类的非法值时，
+//     这里不动它，让 Validate() 明确报错"encoding 非法"。
+//     旧版 Defaults 会把 shift-jis 静默改 utf-8，
+//     掩盖用户配错的事实（看着像 utf-8 在跑，其实是想用 shift-jis）。
 func (c *Config) Defaults() {
 	if c.App.Name == "" {
 		c.App.Name = "内网运维工具箱"
@@ -143,6 +234,13 @@ func (c *Config) Defaults() {
 	}
 	if c.App.DataDir == "" {
 		c.App.DataDir = "./data"
+	}
+	// SSH 调试相关字段的默认值：全关，20MB / 3 份。
+	if c.App.SSHLogMaxMB <= 0 {
+		c.App.SSHLogMaxMB = 20
+	}
+	if c.App.SSHLogKeep <= 0 {
+		c.App.SSHLogKeep = 3
 	}
 	if c.Search.DefaultLatestFiles == 0 {
 		c.Search.DefaultLatestFiles = 3
@@ -180,10 +278,15 @@ func (c *Config) Defaults() {
 				if ld.Name == "" {
 					ld.Name = ld.Path
 				}
-				if strings.EqualFold(ld.Encoding, "gbk") || strings.EqualFold(ld.Encoding, "gb18030") {
+				// 只归一已知 alias，未知值原样保留给 Validate 报错。
+				switch strings.ToLower(strings.TrimSpace(ld.Encoding)) {
+				case "gbk", "gb18030":
 					ld.Encoding = "gbk"
-				} else {
+				case "", "utf-8", "utf8":
 					ld.Encoding = "utf-8"
+				default:
+					// 未知 encoding：不改原样，交给 Validate 报错。
+					// 旧版会被静默改 utf-8，掩盖用户配错。
 				}
 			}
 		}
@@ -213,6 +316,26 @@ func (c *Config) Validate() error {
 		// 安全要求：只允许本地监听
 		return fmt.Errorf("app.host 必须为 127.0.0.1 或 localhost，当前: %q", c.App.Host)
 	}
+	if c.App.SSHLogMaxMB < 0 || c.App.SSHLogMaxMB > 1024 {
+		return fmt.Errorf("app.ssh_log_max_mb 必须在 0..1024 之间，当前: %d", c.App.SSHLogMaxMB)
+	}
+	if c.App.SSHLogKeep < 0 || c.App.SSHLogKeep > 100 {
+		return fmt.Errorf("app.ssh_log_keep 必须在 0..100 之间，当前: %d", c.App.SSHLogKeep)
+	}
+	if c.App.SSHCompatProfile != "" {
+		switch strings.ToLower(strings.TrimSpace(c.App.SSHCompatProfile)) {
+		case "modern", "compat", "no-ecdh", "legacy", "auto":
+		default:
+			return fmt.Errorf("app.ssh_compat_profile 取值非法: %q（仅支持 modern / compat / no-ecdh / legacy / auto）", c.App.SSHCompatProfile)
+		}
+	}
+	if c.App.CredentialStore != "" {
+		switch strings.ToLower(strings.TrimSpace(c.App.CredentialStore)) {
+		case "keyring", "file":
+		default:
+			return fmt.Errorf("app.credential_store 取值非法: %q（仅支持 keyring / file）", c.App.CredentialStore)
+		}
+	}
 	if len(c.Systems) == 0 {
 		return fmt.Errorf("配置中没有 systems，至少需要一个")
 	}
@@ -229,6 +352,14 @@ func (c *Config) Validate() error {
 			}
 			if srv.AuthType != "password" {
 				return fmt.Errorf("系统 %q 服务器 %q auth_type 仅支持 password", sys.Name, srv.Name)
+			}
+			if srv.SSHProfile != "" {
+				switch strings.ToLower(strings.TrimSpace(srv.SSHProfile)) {
+				case "modern", "compat", "no-ecdh", "legacy", "auto":
+				default:
+					return fmt.Errorf("系统 %q 服务器 %q ssh_profile 取值非法: %q（仅支持 modern / compat / no-ecdh / legacy / auto）",
+						sys.Name, srv.Name, srv.SSHProfile)
+				}
 			}
 			if len(srv.LogDirs) == 0 {
 				return fmt.Errorf("系统 %q 服务器 %q 没有 log_dirs", sys.Name, srv.Name)
@@ -325,4 +456,65 @@ func (c *Config) FindServer(sysName, serverName string) (*SystemConfig, *ServerC
 // SearchTimeout 返回带单位的搜索超时
 func (c *Config) SearchTimeout() time.Duration {
 	return time.Duration(c.Search.TimeoutSeconds) * time.Second
+}
+
+// Clone 返回一份"配置树"的深拷贝，避免 Replace 时新老 Config 共享 inner slice。
+//
+// 为什么需要：
+//   - Config 是 struct value，但内部 []SystemConfig / []ServerConfig / []LogDirEntry
+//     是 slice header，简单 *cur 拷贝只会复用底层 array；
+//   - handlers_admin.go 的 PUT 路径如果用浅拷贝 + newCfg.Systems = req.Systems，
+//     老 cfg.Systems 不会被覆盖（OK），但如果后面 manager 内部或者别处直接改
+//     newCfg.Systems[i].Servers[0].Host，就会污染其它 reader 看到的快照；
+//   - 用 Clone 后，所有 inner slice 都重新分配，调用方随便改都不影响老 cfg。
+//
+// 注意：指针字段（如 EnableFreeFileBrowser *bool）也会被新建一份。
+func (c *Config) Clone() *Config {
+	if c == nil {
+		return nil
+	}
+	out := *c // 顶层字段值拷贝（Search / AppConfig 大部分字段）
+
+	// AppConfig.EnableFreeFileBrowser 是 *bool，需要独立复制
+	if c.App.EnableFreeFileBrowser != nil {
+		b := *c.App.EnableFreeFileBrowser
+		out.App.EnableFreeFileBrowser = &b
+	}
+	// AppConfig.FreeFileRoots 是 slice header 复用底层数组，必须新建。
+	if c.App.FreeFileRoots != nil {
+		out.App.FreeFileRoots = append([]string(nil), c.App.FreeFileRoots...)
+	}
+
+	// Systems 整树深拷贝：SystemConfig / ServerConfig / LogDirEntry 都按值拷贝，
+	// 它们内部的 slice（Servers / LogDirs / Patterns）也要新建。
+	if c.Systems != nil {
+		out.Systems = make([]SystemConfig, len(c.Systems))
+		for i := range c.Systems {
+			srcSys := &c.Systems[i]
+			dstSys := &out.Systems[i]
+			dstSys.Name = srcSys.Name
+			dstSys.Description = srcSys.Description
+			if srcSys.Servers != nil {
+				dstSys.Servers = make([]ServerConfig, len(srcSys.Servers))
+				for j := range srcSys.Servers {
+					srcSrv := &srcSys.Servers[j]
+					dstSrv := &dstSys.Servers[j]
+					*dstSrv = *srcSrv // ServerConfig 不含指针字段，值拷贝 OK
+					if srcSrv.LogDirs != nil {
+						dstSrv.LogDirs = make([]LogDirEntry, len(srcSrv.LogDirs))
+						for k := range srcSrv.LogDirs {
+							srcLd := &srcSrv.LogDirs[k]
+							dstLd := &dstSrv.LogDirs[k]
+							*dstLd = *srcLd
+							if srcLd.Patterns != nil {
+								dstLd.Patterns = append([]string(nil), srcLd.Patterns...)
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return &out
 }

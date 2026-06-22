@@ -71,7 +71,7 @@ func containsControlChar(s string) bool {
 // 规则：
 //   - ASCII 可见字符（0x21..0x7e 除 " \）：直接放进 filename="..."，并把 "
 //     转义为 \"；
-//   - 含其它字节（中文等非 ASCII）：追加 RFC 5987 filename*=UTF-8''<percent-encoded>，
+//   - 含其它字节（中文等非 ASCII）：追加 RFC 5987 filename*=UTF-8”<percent-encoded>，
 //     老旧客户端拿 filename=，新客户端拿 filename*=。
 //
 // 这样既不会被引号 / 反斜杠 / 控制字符破坏头，又能正确显示中文文件名。

@@ -111,8 +111,8 @@ func (f fakeFileInfo) Mode() os.FileMode {
 	return f.mode
 }
 func (f fakeFileInfo) ModTime() (mtime time.Time) { return }
-func (f fakeFileInfo) IsDir() bool                 { return f.isDir }
-func (f fakeFileInfo) Sys() any                    { return nil }
+func (f fakeFileInfo) IsDir() bool                { return f.isDir }
+func (f fakeFileInfo) Sys() any                   { return nil }
 
 // ---- 测试辅助 ----
 
@@ -341,7 +341,7 @@ func TestFilesDownload_ZipFlow(t *testing.T) {
 		"system": "信贷生产", "server": "mock-1",
 		"username": "ops", "password": "testpw",
 		"paths": []string{"/data/a.log", "/data/b.log"},
-		"zip": true,
+		"zip":   true,
 	})
 	if w.Code != 200 {
 		t.Fatalf("启动失败: %d body=%s", w.Code, w.Body.String())
@@ -417,7 +417,7 @@ func TestFilesList_FreeBrowserDisabled(t *testing.T) {
 	w := doRequest(srv, "POST", "/api/files/list", map[string]any{
 		"system": "信贷生产", "server": "mock-1",
 		"username": "ops", "password": "x",
-		"path":     "/data",
+		"path": "/data",
 	})
 	if w.Code != 403 {
 		t.Fatalf("文件浏览器关闭时 list 应 403，实际 %d body=%s", w.Code, w.Body.String())

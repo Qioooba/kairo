@@ -34,7 +34,18 @@ export GOARCH=amd64
 export CGO_ENABLED=0
 export GOTOOLCHAIN=local
 
-go build -trimpath -ldflags "-s -w" -o "${OUT_DIR}/OpsToolbox.exe" .
+# 优先用 vendor 模式编译：保证产物的依赖版本与仓库一致，
+# 避免"开发机 go.sum 跟生产机 GOMODCACHE 不一致"导致的构建漂移。
+# 如果 vendor/ 目录缺失（例如刚 clone 完没跑过 go mod vendor），
+# 回退到默认 module 模式，并打印一次性提示。
+GO_MOD_FLAGS=()
+if [[ -d vendor && -f vendor/modules.txt ]]; then
+  GO_MOD_FLAGS=(-mod=vendor)
+else
+  echo ">> 提示：vendor/ 目录缺失，回退到 module 模式（建议先跑 go mod vendor）"
+fi
+
+go build "${GO_MOD_FLAGS[@]}" -trimpath -ldflags "-s -w" -o "${OUT_DIR}/OpsToolbox.exe" .
 
 # 复制运行所需文件
 # config.yaml 是首选，但发布包里通常只有 config.yaml.production.example（占位 / 模板）。

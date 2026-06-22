@@ -47,7 +47,7 @@ type ContextLine struct {
 type SearchKeyword struct {
 	Op     string // "and" / "or" / "term"
 	Value  string
-	Negate bool   // true 表示这是 !term 形式，最终用 grep -v
+	Negate bool // true 表示这是 !term 形式，最终用 grep -v
 }
 
 // illegalKeyKey 决定一个 token 是否被整体拒绝。
@@ -118,11 +118,24 @@ func EscapeKeyword(s string) string {
 
 // ParseQuery 解析搜索表达式，支持 && || !
 //
+// 状态机校验（v0.4）：明确拒收"语法不完整"或"两个操作符黏在一起"的输入，
+// 不再等到 SearchCommand 阶段才"用 grep 怪招兜底"。
+//
 // 例: "Exception && userinfo" => [{term Exception}, {and}, {term userinfo}]
 // 例: "Exception || Timeout"  => [{term Exception}, {or},  {term Timeout}]
 // 例: "!DEBUG"                => [{term DEBUG, Negate: true}]
 // 例: "Exception && !DEBUG"   => [{term Exception}, {and}, {term DEBUG, Negate: true}]
 // 例: "!A || !B"              => [{term A, Negate: true}, {or}, {term B, Negate: true}]
+//
+// 拒绝的形态（之前会被静默接受 → grep 返回空结果，调试极痛苦）：
+//   - "A &&"        （尾随 && — 缺后半 term）
+//   - "A ||"        （尾随 ||）
+//   - "!DEBUG &&"   （尾随 && 在 !term 之后）
+//   - "A && && B"   （连续 &&）
+//   - "A && || B"   （&& 后面接 ||）
+//   - "&& B"        （开头 &&）
+//   - "|| B"        （开头 ||）
+//   - "A && !"      （&& 后立即 ! — 没有 term 可 negate）
 func ParseQuery(q string) ([]SearchKeyword, error) {
 	q = strings.TrimSpace(q)
 	if q == "" {
@@ -136,18 +149,67 @@ func ParseQuery(q string) ([]SearchKeyword, error) {
 	// 折叠多余空格
 	q = strings.Join(strings.Fields(q), " ")
 
+	// 三状态机：
+	//   stateStart : 还没看到任何 term（或刚吃完 !）
+	//   stateTerm  : 刚看到一个 term
+	//   stateOp    : 刚看到一个 && 或 ||
+	//
+	// 转换规则：
+	//   start + term         → term, append term
+	//   start + (&& / ||)    → error "表达式必须以关键词开头"
+	//   start + !            → stay start, 标记 negate
+	//   term  + term         → error "缺少操作符"
+	//   term  + (&& / ||)    → op,   append op
+	//   term  + !            → error "缺少操作符 before !"
+	//   op    + term         → term, append term
+	//   op    + (&& / ||)    → error "连续操作符"
+	//   op    + !            → stay op, 标记 negate
+	// 终结：
+	//   stateOp             → error "表达式以操作符结尾"
+	const (
+		stateStart = "start"
+		stateTerm  = "term"
+		stateOp    = "op"
+	)
+
 	var out []SearchKeyword
 	negateNext := false
-	for _, tok := range strings.Fields(q) {
+	state := stateStart
+	tokens := strings.Fields(q)
+	for i, tok := range tokens {
 		switch tok {
-		case "&&":
-			out = append(out, SearchKeyword{Op: "and"})
-		case "||":
-			out = append(out, SearchKeyword{Op: "or"})
+		case "&&", "||":
+			opName := tok
+			if state == stateStart {
+				return nil, fmt.Errorf("搜索表达式必须以关键词开头（位置 %d 出现 %q）", i, tok)
+			}
+			if state == stateOp {
+				return nil, fmt.Errorf("搜索表达式出现连续操作符（位置 %d 出现第二个 %q）", i, tok)
+			}
+			// state == stateTerm
+			if opName == "&&" {
+				out = append(out, SearchKeyword{Op: "and"})
+			} else {
+				out = append(out, SearchKeyword{Op: "or"})
+			}
+			state = stateOp
 		case "!":
+			if state == stateTerm {
+				return nil, fmt.Errorf("搜索表达式在关键词后再出现 '!' 却缺少操作符（位置 %d）", i)
+			}
+			// stateStart 或 stateOp 都允许 ! —— 它修饰紧跟的 term
 			negateNext = true
-			continue
+			// state 不变
 		default:
+			if state == stateOp && negateNext {
+				// 上一个 token 是操作符 + ! + term，term 是 term；这其实是合法：
+				//   "A && !B" 拆出来是 ['A','&&','!','B']，
+				//   处理 'A'（state→term）→ '&&'（state→op）→ '!'（state=op, negate=true）
+				//   → 'B'（到这里 state=op,negate=true，仍 OK，走 default 走 append）
+				//
+				// 但要注意：上面 default 分支必须先把 term append 进去，再清 negate。
+				// 所以这里不需要特殊分支，让 default 自然处理。
+			}
 			// 拒绝对搜索无意义或危险的字符。
 			if illegalKey.MatchString(tok) {
 				return nil, fmt.Errorf("关键词含非法字符: %q", tok)
@@ -162,10 +224,15 @@ func ParseQuery(q string) ([]SearchKeyword, error) {
 			}
 			out = append(out, SearchKeyword{Op: "term", Value: cleaned, Negate: negateNext})
 			negateNext = false
+			state = stateTerm
 		}
 	}
-	if len(out) == 0 || out[0].Op != "term" {
-		return nil, fmt.Errorf("搜索表达式必须以关键词开头")
+	if state == stateOp {
+		return nil, fmt.Errorf("搜索表达式以操作符结尾（缺后半关键词）")
+	}
+	if state == stateStart {
+		// 仅由 ! 组成（"!" / "! !"）的情况
+		return nil, fmt.Errorf("搜索表达式必须以关键词开头（不能只有 '!'）")
 	}
 	return out, nil
 }
@@ -250,6 +317,12 @@ func ListCommand(dir string, patterns []string, max int, listMode string) (strin
 		}
 		// 用 grep -E 在 ls 输出里按 basename 过滤名字，保留 ls 整行
 		// 给 ParseListOutputPOSIX 解析（size/mtime/name）。
+		//
+		// 顺序：ls -lt | grep -E ... | head -n max
+		// （不是 head 在前！）v0.4 修复：head 在前的话会把"还没过滤到匹配"的行
+		// 截掉，结果少几条日志。grep 在前意味着过滤后 head 按匹配行数截断，
+		// 文件再多也只用 max 行 ls 输出（小 ls 在 grep 之前已经过滤了大部分），
+		// 不会出现"head 截掉想看的行"。
 		grepExprs := make([]string, 0, len(cleanPatterns))
 		for _, p := range cleanPatterns {
 			// 把 glob * 转成正则 .*，其他字符保持字面
@@ -259,8 +332,8 @@ func ListCommand(dir string, patterns []string, max int, listMode string) (strin
 		}
 		grepExpr := strings.Join(grepExprs, " ")
 		cmd := fmt.Sprintf(
-			`sh -c 'cd %q && ls -lt 2>/dev/null | head -n %d | grep -E %s'`,
-			dir, max+1, grepExpr, // +1 是 "total N" 那行
+			`sh -c 'cd %q && ls -lt 2>/dev/null | grep -E %s | head -n %d'`,
+			dir, grepExpr, max,
 		)
 		return cmd, nil
 	default:
@@ -432,17 +505,13 @@ func SearchCommand(dir string, files []string, kw []SearchKeyword, max, timeoutS
 	}
 
 	// 拆成 OR 段；每段内是 AND
-	type group struct {
-		pos []string
-		neg []string
-	}
-	var groups []group
-	cur := group{}
+	var groups []orGroup
+	cur := orGroup{}
 	flush := func() {
 		if len(cur.pos) > 0 || len(cur.neg) > 0 {
 			groups = append(groups, cur)
 		}
-		cur = group{}
+		cur = orGroup{}
 	}
 	for _, k := range kw {
 		switch k.Op {
@@ -513,32 +582,20 @@ func SearchCommand(dir string, files []string, kw []SearchKeyword, max, timeoutS
 		pipes = append(pipes, fmt.Sprintf("grep -vE %s", pat))
 	}
 	// 后续 OR 段：每段从 files 独立 grep，再用 sort -u 合并去重
+	//
+	// v0.4 修复：原版本对 g.pos == [] 的分支直接 continue，纯 neg OR 段（"A || !B"）
+	// 会被整段丢掉。修正：纯 neg 段也要生成独立分支（先 `grep -HnE "^." -- files` 拿全部行，
+	// 再 `grep -vE B`），逻辑跟"纯 NOT"那个第一段对称。
 	if len(groups) > 1 {
 		var branches []string
 		for _, g := range groups[1:] {
-			if len(g.pos) == 0 {
-				continue
-			}
-			pat0, err := quoteForGrep(g.pos[0])
+			branch, err := buildOrBranch(g, fileList, quoteForGrep)
 			if err != nil {
 				return "", err
 			}
-			branch := fmt.Sprintf("grep -HnE %s -- %s", pat0, fileList)
-			for _, term := range g.pos[1:] {
-				pat, err := quoteForGrep(term)
-				if err != nil {
-					return "", err
-				}
-				branch += " | grep -E " + pat
+			if branch != "" {
+				branches = append(branches, branch)
 			}
-			for _, p := range g.neg {
-				pat, err := quoteForGrep(p)
-				if err != nil {
-					return "", err
-				}
-				branch += " | grep -vE " + pat
-			}
-			branches = append(branches, branch)
 		}
 		if len(branches) > 0 {
 			pipes = append(pipes,
@@ -564,6 +621,56 @@ func quoteArgs(args []string) []string {
 		out = append(out, "'"+a+"'")
 	}
 	return out
+}
+
+// orGroup 是 SearchCommand 把 kw 切分成"OR 段"时用的内部容器：
+//   - pos: 当前段里的"正"term（被 grep -E / grep -HnE 命中的）
+//   - neg: 当前段里的"负"term（被 grep -vE 排除的）
+//
+// 提升到包级类型而不是 SearchCommand 内的局部类型，是为了让 buildOrBranch 能直接复用，
+// 避免重复声明 struct shape。
+type orGroup struct {
+	pos []string
+	neg []string
+}
+
+// buildOrBranch 构造一个 OR 分支的命令片段（不含前后括号）。
+//
+// g 是经 ParseQuery 拆分后、去掉"或"操作符得到的 pos/neg 列表：
+//   - pos 非空：从 grep -HnE pos[0] 开始，正 term 串联（AND），再 neg 串联（NOT）；
+//   - pos 为空：纯 neg 分支，先 `grep -HnE "^." -- files` 拿全部行（保留 filename:lineno: 前缀），
+//     再 grep -vE neg。
+//
+// 返回空字符串说明该 group 完全是空的（不应该发生 —— ParseQuery 已经挡了，
+// 这里再做防御性检查）。
+func buildOrBranch(g orGroup, fileList string, quoteForGrep func(string) (string, error)) (string, error) {
+	var branch string
+	if len(g.pos) > 0 {
+		pat0, err := quoteForGrep(g.pos[0])
+		if err != nil {
+			return "", err
+		}
+		branch = fmt.Sprintf("grep -HnE %s -- %s", pat0, fileList)
+		for _, term := range g.pos[1:] {
+			pat, err := quoteForGrep(term)
+			if err != nil {
+				return "", err
+			}
+			branch += " | grep -E " + pat
+		}
+	} else if len(g.neg) > 0 {
+		// 纯 neg 分支：用 `grep -HnE "^." -- files` 给每行打前缀，
+		// 前端 parseSearchOutput 仍能正确解析 file:lineno:content。
+		branch = fmt.Sprintf(`grep -HnE %q -- %s`, "^.", fileList)
+	}
+	for _, p := range g.neg {
+		pat, err := quoteForGrep(p)
+		if err != nil {
+			return "", err
+		}
+		branch += " | grep -vE " + pat
+	}
+	return branch, nil
 }
 
 // ContextCommand 构造 "sed -n 'a,bp' file" 上下文查看命令

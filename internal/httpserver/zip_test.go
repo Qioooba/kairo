@@ -195,3 +195,106 @@ func TestZipFiles_NamesClean(t *testing.T) {
 		t.Fatalf("entry 不应含目录分隔符: %s", r.File[0].Name)
 	}
 }
+
+// TestZipFilesNamed_PreservesOriginalName 验证：zipFilesNamed 优先用 NameInZip（远端原始名），
+// 而不是本地 basename。模拟"下载 /var/log/app.log 落到 downloads/.../server_001_app.log_HHMMSS_mmm.log"
+// 的场景，zip 内应叫 app.log，而不是本地化后的长名。
+func TestZipFilesNamed_PreservesOriginalName(t *testing.T) {
+	dir := t.TempDir()
+	// 模拟"本地落点是带时间戳的长名"
+	src := filepath.Join(dir, "server-1_001_app.log_134512_345.log")
+	if err := os.WriteFile(src, []byte("app log content"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	dest := filepath.Join(dir, "out.zip")
+	sources := []ZipSource{
+		{Path: src, NameInZip: "app.log"},
+	}
+	if err := zipFilesNamed(sources, dest); err != nil {
+		t.Fatalf("zipFilesNamed: %v", err)
+	}
+	r, err := zip.OpenReader(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	if got := r.File[0].Name; got != "app.log" {
+		t.Fatalf("zip 内文件名应为 app.log, 实际: %s", got)
+	}
+	// 内容也要对得上
+	rc, _ := r.File[0].Open()
+	defer rc.Close()
+	b, _ := io.ReadAll(rc)
+	if string(b) != "app log content" {
+		t.Fatalf("内容错: %q", string(b))
+	}
+}
+
+// TestZipFilesNamed_FallbackToLocalBase 验证：NameInZip 为空时回退到本地 basename。
+func TestZipFilesNamed_FallbackToLocalBase(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "local-name.txt")
+	if err := os.WriteFile(src, []byte("x"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	dest := filepath.Join(dir, "out.zip")
+	if err := zipFilesNamed([]ZipSource{{Path: src, NameInZip: ""}}, dest); err != nil {
+		t.Fatal(err)
+	}
+	r, err := zip.OpenReader(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	if r.File[0].Name != "local-name.txt" {
+		t.Fatalf("NameInZip 空时回退到本地 basename, 实际: %s", r.File[0].Name)
+	}
+}
+
+// TestZipFilesNamed_SameNameDedup 验证：同名 NameInZip 加 _N 后缀，避免覆盖。
+func TestZipFilesNamed_SameNameDedup(t *testing.T) {
+	dir := t.TempDir()
+	src1 := filepath.Join(dir, "a", "x.log")
+	src2 := filepath.Join(dir, "b", "x.log")
+	if err := os.MkdirAll(filepath.Dir(src1), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(src2), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(src1, []byte("from-a"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(src2, []byte("from-b"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	dest := filepath.Join(dir, "out.zip")
+	sources := []ZipSource{
+		{Path: src1, NameInZip: "x.log"},
+		{Path: src2, NameInZip: "x.log"},
+	}
+	if err := zipFilesNamed(sources, dest); err != nil {
+		t.Fatal(err)
+	}
+	r, err := zip.OpenReader(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	if len(r.File) != 2 {
+		t.Fatalf("期望 2 entry, 实际 %d", len(r.File))
+	}
+	contents := map[string]string{}
+	for _, f := range r.File {
+		rc, _ := f.Open()
+		b, _ := io.ReadAll(rc)
+		rc.Close()
+		contents[f.Name] = string(b)
+	}
+	if contents["x.log"] != "from-a" {
+		t.Fatalf("x.log 内容错: %q", contents["x.log"])
+	}
+	if contents["x_2.log"] != "from-b" {
+		t.Fatalf("x_2.log 内容错: %q", contents["x_2.log"])
+	}
+}

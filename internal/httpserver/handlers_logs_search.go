@@ -73,6 +73,7 @@ func (s *Server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 	dialCtx, cancelDial := context.WithTimeout(r.Context(), sshDialOuterTimeout)
 	cli, err := sshclient.Dial(dialCtx, sshclient.Server{
 		Name: srv.Name, Host: srv.Host, Port: srv.Port, Username: username,
+		HostKeySHA256: srv.HostKeySHA256, SSHProfile: srv.SSHProfile,
 	}, sshclient.Credentials{Password: creds.Password}, sshAttemptTimeout)
 	cancelDial()
 	if err != nil {
@@ -259,6 +260,7 @@ func (s *Server) handleLogsContext(w http.ResponseWriter, r *http.Request) {
 	dialCtx, cancelDial := context.WithTimeout(r.Context(), sshDialOuterTimeout)
 	cli, err := sshclient.Dial(dialCtx, sshclient.Server{
 		Name: srv.Name, Host: srv.Host, Port: srv.Port, Username: username,
+		HostKeySHA256: srv.HostKeySHA256, SSHProfile: srv.SSHProfile,
 	}, sshclient.Credentials{Password: creds.Password}, sshAttemptTimeout)
 	cancelDial()
 	if err != nil {

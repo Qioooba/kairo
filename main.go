@@ -23,7 +23,9 @@ import (
 
 	"ops-toolbox/internal/audit"
 	"ops-toolbox/internal/config"
+	"ops-toolbox/internal/credentials"
 	"ops-toolbox/internal/httpserver"
+	"ops-toolbox/internal/sshclient"
 	"ops-toolbox/internal/tailmgr"
 )
 
@@ -56,6 +58,20 @@ func main() {
 	if err := cfg.EnsureDirs(); err != nil {
 		log.Fatalf("创建运行时目录失败: %v", err)
 	}
+
+	// 4.5 凭据后端模式（项 23）—— 配置加载后立即切换，handler 后续读 Mode() 就知道走哪条路。
+	// 默认值 cfg.App.CredentialStoreEnabled() = "keyring"（向后兼容）。
+	credentials.SetMode(cfg.App.CredentialStoreEnabled())
+	log.Printf("凭据后端: %s", credentials.Mode())
+
+	// 4.6 SSH 日志开关 + compat profile 默认值（项 9 + 项 22）
+	// 默认全关 —— 避免在用户机器上无脑生成日志。
+	sshclient.SetLogConfig(cfg.App.SSHDebug, cfg.App.SSHTrafficDump, cfg.App.SSHLogMaxMB, cfg.App.SSHLogKeep)
+	sshclient.SetDefaultProfile(cfg.App.SSHCompatProfile)
+	if cfg.App.SSHDebug || cfg.App.SSHTrafficDump {
+		log.Printf("SSH 日志已开启: debug=%v traffic=%v maxMB=%d keep=%d", cfg.App.SSHDebug, cfg.App.SSHTrafficDump, cfg.App.SSHLogMaxMB, cfg.App.SSHLogKeep)
+	}
+	log.Printf("SSH 默认 compat profile: %s", sshclient.DefaultProfileName())
 
 	// 5. 初始化审计日志
 	auditLog, err := audit.New(cfg.LogDir(), "audit.log")

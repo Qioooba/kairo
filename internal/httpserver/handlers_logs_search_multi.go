@@ -221,6 +221,7 @@ func (s *Server) runOneServerSearch(
 	dialCtx, cancelDial := context.WithTimeout(ctx, sshDialOuterTimeout)
 	cli, err := sshclient.Dial(dialCtx, sshclient.Server{
 		Name: srv.Name, Host: srv.Host, Port: srv.Port, Username: username,
+		HostKeySHA256: srv.HostKeySHA256, SSHProfile: srv.SSHProfile,
 	}, sshclient.Credentials{Password: password}, sshAttemptTimeout)
 	cancelDial()
 	if err != nil {
