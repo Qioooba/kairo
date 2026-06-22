@@ -7,7 +7,7 @@ import (
 
 func TestListCommand(t *testing.T) {
 	c, err := ListCommand("/opt/IBM/WebSphere/AppServer/profiles/AppSrv01/logs/server1",
-		[]string{"SystemOut*.log", "SystemErr*.log", "*.log"}, 100)
+		[]string{"SystemOut*.log", "SystemErr*.log", "*.log"}, 100, "gnu_find")
 	if err != nil {
 		t.Fatal("list:", err)
 	}
@@ -22,6 +22,31 @@ func TestListCommand(t *testing.T) {
 	}
 }
 
+func TestListCommand_POSIX_LS(t *testing.T) {
+	c, err := ListCommand("/opt/IBM/WebSphere/AppServer/profiles/AppSrv01/logs/server1",
+		[]string{"SystemOut*.log", "SystemErr*.log"}, 50, "posix_ls")
+	if err != nil {
+		t.Fatal("list posix_ls:", err)
+	}
+	// 应该用 ls -lt 而不是 find -printf
+	if !strings.Contains(c, "ls -lt") {
+		t.Fatalf("posix_ls 模式应该用 ls -lt: %s", c)
+	}
+	if strings.Contains(c, "find . -maxdepth") {
+		t.Fatalf("posix_ls 模式不应该用 find: %s", c)
+	}
+	if !strings.Contains(c, "grep -E") {
+		t.Fatalf("posix_ls 模式应该用 grep -E 过滤 pattern: %s", c)
+	}
+}
+
+func TestListCommand_UnknownListMode(t *testing.T) {
+	_, err := ListCommand("/dir", []string{"*.log"}, 10, "totally_made_up_mode")
+	if err == nil {
+		t.Fatal("未知 list_mode 应该报错")
+	}
+}
+
 func TestSearchAnd(t *testing.T) {
 	kw, err := ParseQuery("Exception && userinfo")
 	if err != nil {
@@ -31,9 +56,10 @@ func TestSearchAnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// AND 应该是两个 grep 串联（不是 | 合并到一个 pattern）
-	if !strings.Contains(c, "grep -nE") {
-		t.Fatalf("缺第一个 grep: %s", c)
+	// AND 应该是两个 grep 串联（不是 | 合并到一个 pattern）。
+	// v6 修复：第一个 grep 必须用 -HnE（单文件也能输出 filename:line: 前缀）。
+	if !strings.Contains(c, "grep -HnE") {
+		t.Fatalf("缺第一个 grep -HnE: %s", c)
 	}
 	if !strings.Contains(c, "grep -E") {
 		t.Fatalf("AND 应该用第二个 grep 串联，而不是 | 合并: %s", c)
@@ -50,8 +76,8 @@ func TestSearchAnd(t *testing.T) {
 func TestSearchOr(t *testing.T) {
 	kw, _ := ParseQuery("Exception || Timeout")
 	c, _ := SearchCommand("/dir", []string{"a.log"}, kw, 200, 30, "utf-8")
-	if !strings.Contains(c, "grep -nE") {
-		t.Fatalf("OR 缺 grep: %s", c)
+	if !strings.Contains(c, "grep -HnE") {
+		t.Fatalf("OR 缺 grep -HnE: %s", c)
 	}
 	// OR 应该用 sort -u 合并多段
 	if !strings.Contains(c, "sort -u") {
@@ -65,10 +91,10 @@ func TestSearchNot(t *testing.T) {
 		t.Fatal(err)
 	}
 	c, _ := SearchCommand("/dir", []string{"a.log"}, kw, 200, 30, "utf-8")
-	// 纯 NOT 也走 `grep -nE "^." -- file...`，保留 `file:lineno:` 前缀，
+	// 纯 NOT 也走 `grep -HnE "^." -- file...`，保留 `file:lineno:` 前缀，
 	// 这样前端解析多文件命中才不至于错位。改成 cat 会丢掉前缀。
-	if !strings.Contains(c, `grep -nE "^." --`) {
-		t.Fatalf("纯 NOT 应保留 grep -nE 前缀: %s", c)
+	if !strings.Contains(c, `grep -HnE "^." --`) {
+		t.Fatalf("纯 NOT 应保留 grep -HnE 前缀: %s", c)
 	}
 	if !strings.Contains(c, "grep -vE") || !strings.Contains(c, "DEBUG") {
 		t.Fatalf("缺 grep -v: %s", c)
@@ -111,11 +137,11 @@ func TestSearchInjection(t *testing.T) {
 }
 
 func TestListInjection(t *testing.T) {
-	bad1, err := ListCommand("/dir; rm -rf /", []string{"*.log"}, 100)
+	bad1, err := ListCommand("/dir; rm -rf /", []string{"*.log"}, 100, "gnu_find")
 	if err == nil {
 		t.Fatalf("INJECT1 未拦截: %s", bad1)
 	}
-	bad2, err := ListCommand("/dir", []string{"*.log; echo pwned"}, 100)
+	bad2, err := ListCommand("/dir", []string{"*.log; echo pwned"}, 100, "gnu_find")
 	if err == nil {
 		t.Fatalf("INJECT2 未拦截: %s", bad2)
 	}
@@ -150,7 +176,7 @@ func TestParseListOutput(t *testing.T) {
 
 func TestNoTimeoutInCommand(t *testing.T) {
 	// 服务器端 `timeout` 命令不存在时（精简镜像）也能跑
-	c, err := ListCommand("/dir", []string{"*.log"}, 10)
+	c, err := ListCommand("/dir", []string{"*.log"}, 10, "gnu_find")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,8 +215,8 @@ func TestSearchGBK(t *testing.T) {
 	if !strings.Contains(c, "printf %b") {
 		t.Fatalf("GBK 搜索应使用 printf %%b 转义，实际: %s", c)
 	}
-	if !strings.Contains(c, "grep -nE") {
-		t.Fatalf("应保留 grep -nE 结构，实际: %s", c)
+	if !strings.Contains(c, "grep -HnE") {
+		t.Fatalf("应保留 grep -HnE 结构，实际: %s", c)
 	}
 	// && || ! 仍然存在，未被转码吃掉
 }
@@ -249,5 +275,104 @@ func TestTailCommand_RejectsInjection(t *testing.T) {
 	}
 	if _, err := TailCommand("/dir", "a.log; cat /etc/passwd", 10); err == nil {
 		t.Fatal("file 注入应被拒")
+	}
+}
+
+// ---------- v6 修复：grep -H 单文件 filename 前缀 ----------
+
+func TestSearchCommand_SingleFile_Uses_GrepH(t *testing.T) {
+	// v6 修复：单文件搜索必须用 `grep -HnE`，否则 grep 输出 lineno:content
+	// （不带 filename），parseSearchOutput 解析失败整行被丢。
+	kw, _ := ParseQuery("Exception")
+	c, _ := SearchCommand("/dir", []string{"SystemOut.log"}, kw, 200, 30, "utf-8")
+	if !strings.Contains(c, "grep -HnE") {
+		t.Fatalf("单文件搜索应使用 grep -HnE（带 -H 输出 filename）: %s", c)
+	}
+	if strings.Contains(c, "grep -nE") && !strings.Contains(c, "grep -HnE") {
+		t.Fatalf("单文件搜索不能用裸 grep -nE（会丢 filename）: %s", c)
+	}
+}
+
+func TestSearchCommand_NotOnly_Uses_GrepH(t *testing.T) {
+	// 纯 NOT 也必须保留 filename:lineno: 前缀。
+	kw, _ := ParseQuery("!DEBUG")
+	c, _ := SearchCommand("/dir", []string{"a.log"}, kw, 200, 30, "utf-8")
+	if !strings.Contains(c, "grep -HnE") {
+		t.Fatalf("纯 NOT 搜索必须用 grep -HnE 保留前缀: %s", c)
+	}
+}
+
+// ---------- v6 修复：context 路径穿越防护 ----------
+
+func TestContextCommand_RejectsPathTraversal(t *testing.T) {
+	cases := []struct {
+		file string
+		why  string
+	}{
+		{"../etc/passwd", "父目录引用"},
+		{"..", "两个点"},
+		{".", "单个点"},
+		{"subdir/a.log", "子目录路径"},
+		{`back\slash.log`, "反斜杠"},
+		{"foo..bar.log", "文件名含两个点"},
+		{"/abs/path.log", "绝对路径"},
+	}
+	for _, tc := range cases {
+		if _, err := ContextCommand("/dir", tc.file, 1, 1, 1, 30); err == nil {
+			t.Errorf("file=%q (%s) 应被拒，但通过了", tc.file, tc.why)
+		}
+	}
+}
+
+func TestTailCommand_RejectsPathTraversal(t *testing.T) {
+	cases := []struct {
+		file string
+		why  string
+	}{
+		{"../etc/passwd", "父目录引用"},
+		{"subdir/a.log", "子目录路径"},
+		{"/abs/path.log", "绝对路径"},
+		{"foo..bar.log", "文件名含 .."},
+	}
+	for _, tc := range cases {
+		if _, err := TailCommand("/dir", tc.file, 10); err == nil {
+			t.Errorf("file=%q (%s) 应被 TailCommand 拒，但通过了", tc.file, tc.why)
+		}
+	}
+}
+
+// ---------- v6 修复：POSIX ls 输出解析 ----------
+
+func TestParseListOutputPOSIX_Basic(t *testing.T) {
+	in := "total 24\n" +
+		"-rw-r--r-- 1 wasuser wasgrp 12345 Jun 21 10:00 SystemOut.log\n" +
+		"-rw-r--r-- 1 wasuser wasgrp 67890 Jun 21 09:30 SystemOut_20260619.log\n"
+	files, err := ParseListOutputPOSIX(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 2 {
+		t.Fatalf("期望 2 条，得到 %d", len(files))
+	}
+	if files[0].Name != "SystemOut.log" {
+		t.Errorf("名字错: %s", files[0].Name)
+	}
+	if files[0].Size != 12345 {
+		t.Errorf("size 错: %d", files[0].Size)
+	}
+}
+
+func TestParseListOutput_AutoDetectsPOSIX(t *testing.T) {
+	// 输入像 ls -lt 的输出时，ParseListOutput 应自动走 POSIX 路径。
+	in := "total 4\n-rw-r--r-- 1 user grp 100 Jun 21 10:00 a.log\n"
+	files, err := ParseListOutput(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 1 || files[0].Name != "a.log" {
+		t.Errorf("auto-detect POSIX 失败: %+v", files)
+	}
+	if files[0].Size != 100 {
+		t.Errorf("size 解析错: %d", files[0].Size)
 	}
 }

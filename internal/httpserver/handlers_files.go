@@ -34,6 +34,7 @@ var sftpDialer = func(cli *sshclient.Client) (sftpClientLike, error) {
 type sftpClientLike interface {
 	Close() error
 	ReadDir(path string) ([]os.FileInfo, error)
+	Stat(path string) (os.FileInfo, error)
 	DownloadFile(remotePath, localPath string) (int64, error)
 	DownloadFileWithProgress(remotePath, localPath string, progress func(written, total int64)) (int64, error)
 }
@@ -71,6 +72,12 @@ func (s *Server) handleFilesList(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 405, errors.New("仅支持 POST"))
 		return
 	}
+	// 文件浏览器（任意路径下载）开关检查：
+	// 配置里显式 enable_free_file_browser: false 时，整个 /api/files/* 拒绝服务。
+	if !s.cur().App.FreeFileBrowserEnabled() {
+		writeErr(w, 403, errors.New("文件浏览器（任意路径下载）已在配置中关闭 (app.enable_free_file_browser=false)"))
+		return
+	}
 	var req filesListReq
 	if err := json.NewDecoder(io.LimitReader(r.Body, 32*1024)).Decode(&req); err != nil {
 		writeErr(w, 400, err)
@@ -99,12 +106,12 @@ func (s *Server) handleFilesList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), sshDialOuterTimeout)
 	defer cancel()
 
 	cli, err := sshclient.Dial(ctx, sshclient.Server{
 		Name: srv.Name, Host: srv.Host, Port: srv.Port, Username: creds.Username,
-	}, sshclient.Credentials{Password: creds.Password}, 10*time.Second)
+	}, sshclient.Credentials{Password: creds.Password}, sshAttemptTimeout)
 	if err != nil {
 		s.audit.Write("files.list", "system", req.System, "server", req.Server, "path", req.Path, "result", "fail", "stage", "dial", "err", err.Error())
 		writeErrSanitized(w, 502, err)
@@ -183,6 +190,11 @@ func (s *Server) handleFilesDownload(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 405, errors.New("仅支持 POST"))
 		return
 	}
+	// 文件浏览器（任意路径下载）开关检查（同 handleFilesList）
+	if !s.cur().App.FreeFileBrowserEnabled() {
+		writeErr(w, 403, errors.New("文件浏览器（任意路径下载）已在配置中关闭 (app.enable_free_file_browser=false)"))
+		return
+	}
 	var req filesDownloadReq
 	if err := json.NewDecoder(io.LimitReader(r.Body, 64*1024)).Decode(&req); err != nil {
 		writeErr(w, 400, err)
@@ -254,17 +266,17 @@ func (s *Server) runFilesDownloadTask(
 	srv *config.ServerConfig,
 	username, password string,
 ) {
-	dialCtx, cancelDial := context.WithTimeout(ctx, 10*time.Second)
+	dialCtx, cancelDial := context.WithTimeout(ctx, sshDialOuterTimeout)
 	cli, err := sshclient.Dial(dialCtx, sshclient.Server{
 		Name: srv.Name, Host: srv.Host, Port: srv.Port, Username: username,
-	}, sshclient.Credentials{Password: password}, 10*time.Second)
+	}, sshclient.Credentials{Password: password}, sshAttemptTimeout)
 	cancelDial()
 	if err != nil {
 		s.audit.Write("files.download", "system", sess.System, "server", sess.Server, "result", "fail", "stage", "dial", "err", err.Error())
 		sess.MarkFinished(nil, fmt.Errorf("SSH 连接失败: %w", err))
 		return
 	}
-defer cli.Close()
+	defer cli.Close()
 
 	sftpCli, err := sftpDialer(cli)
 	if err != nil {
@@ -272,6 +284,20 @@ defer cli.Close()
 		return
 	}
 	defer sftpCli.Close()
+
+	// 取消打断：ctx 被 cancel 时（用户点取消 / IdleGC 超时），
+	// 主动关掉 SFTP / SSH 连接，正在进行的 io.Copy 会因为底层 read 返回错误而退出。
+	// 没有这个，下大文件时取消可能要等好几秒网络读返回才生效。
+	cancelDone := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = sftpCli.Close()
+			_ = cli.Close()
+		case <-cancelDone:
+		}
+	}()
+	defer close(cancelDone)
 
 	results, err := s.downloadSeriesFree(ctx, srv, sess.Paths, sftpCli, sess)
 	if err != nil {
@@ -287,8 +313,9 @@ defer cli.Close()
 
 	// 可选 zip（>= 2 个文件才打）
 	if sess.Zip && len(results) >= 2 {
+		// 跟下载文件同毫秒戳，保证 zip 命名跟里面文件保持一致。
 		zipName := fmt.Sprintf("%s_files_%s.zip",
-			sanitize(srv.Name), time.Now().Format("150405"))
+			sanitize(srv.Name), time.Now().Format("150405.000"))
 		zipPath := filepath.Join(s.cur().DownloadDir(), results[0].Date, zipName)
 		localPaths := make([]string, 0, len(results))
 		remoteNames := make([]string, 0, len(results))
@@ -329,10 +356,14 @@ defer cli.Close()
 // downloadSeriesFree 串行下多个"完整路径"文件，进度通过 session 广播。
 //
 // 任何一个文件失败立刻返回（已下完的文件留在本地，不删）。
-// 本地落点：downloads/YYYYMMDD/server_basename_HHMMSS
+// 本地落点：downloads/YYYYMMDD/server_<idx>_basename_HHMMSS
 //   - 用远端路径 basename 当主名，保留原始文件名信息；
+//   - 加 idx 前缀（001、002、...）防止同一次任务里同名文件覆盖
+//     （如同时下 /a/app.log 和 /b/app.log）；
 //   - 加 _HHMMSS 防止同一文件短时间内重复下载互相覆盖；
 //   - 不强加 .log 后缀：浏览器下载任意文件都该是原始名+扩展名。
+//
+// 下载前先 Stat：目录直接报错，避免 SFTP Open 在不同 server 行为不一致。
 func (s *Server) downloadSeriesFree(
 	ctx context.Context,
 	srv *config.ServerConfig,
@@ -342,7 +373,8 @@ func (s *Server) downloadSeriesFree(
 ) ([]dlmanager.Item, error) {
 	now := time.Now()
 	dateDir := now.Format("20060102")
-	hhmm := now.Format("150405")
+	// 毫秒级时间戳避免同秒内重复下载互相覆盖。
+	stamp := now.Format("150405.000")
 	targetDir := filepath.Join(s.cur().DownloadDir(), dateDir)
 
 	results := make([]dlmanager.Item, 0, len(paths))
@@ -358,6 +390,15 @@ func (s *Server) downloadSeriesFree(
 		}
 		emittedPaths[remote] = true
 
+		// 下载前 Stat：目录不支持，Stat 失败也直接报错（避免 SFTP Open 半行为）
+		info, statErr := sftpCli.Stat(remote)
+		if statErr != nil {
+			return results, fmt.Errorf("stat %s 失败: %w", remote, statErr)
+		}
+		if info.IsDir() {
+			return results, fmt.Errorf("暂不支持直接下载目录: %s", remote)
+		}
+
 		base := filepath.Base(remote)
 		sess.BroadcastEvent("file_start", map[string]any{
 			"file":  remote,
@@ -365,8 +406,9 @@ func (s *Server) downloadSeriesFree(
 			"total": len(paths),
 		})
 
-		localName := fmt.Sprintf("%s_%s_%s",
-			sanitize(srv.Name), sanitize(base), hhmm)
+		// 用 idx+1 三位数（001/002/...）防止同 basename 互相覆盖
+		localName := fmt.Sprintf("%s_%03d_%s_%s",
+			sanitize(srv.Name), idx+1, sanitize(base), stamp)
 		localPath := filepath.Join(targetDir, localName)
 
 		progress := func(w, t int64) {

@@ -69,12 +69,12 @@ func (s *Server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 		filesN = 10
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), s.cur().SearchTimeout()+15*time.Second)
-	defer cancel()
-
-	cli, err := sshclient.Dial(ctx, sshclient.Server{
+	// SSH Dial 独立 ctx + 统一超时（不受 SearchTimeout 太小影响）
+	dialCtx, cancelDial := context.WithTimeout(r.Context(), sshDialOuterTimeout)
+	cli, err := sshclient.Dial(dialCtx, sshclient.Server{
 		Name: srv.Name, Host: srv.Host, Port: srv.Port, Username: username,
-	}, sshclient.Credentials{Password: creds.Password}, 10*time.Second)
+	}, sshclient.Credentials{Password: creds.Password}, sshAttemptTimeout)
+	cancelDial()
 	if err != nil {
 		auditErr(w, s.audit, "logs.search", "system", req.System, "server", req.Server, "dir", ld.Path, "query", req.Query, "result", "fail", err)
 		writeErrSanitized(w, 502, err)
@@ -83,12 +83,14 @@ func (s *Server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 	defer cli.Close()
 
 	// 列 N 个最新文件，再过滤 pattern 匹配的
-	cmd, err := logquery.ListCommand(ld.Path, ld.Patterns, filesN)
+	cmd, err := logquery.ListCommand(ld.Path, ld.Patterns, filesN, ld.ListModeFor())
 	if err != nil {
 		writeErrSanitized(w, 500, err)
 		return
 	}
-	stdout, stderr, code, err := cli.Run(ctx, cmd, s.cur().SearchTimeout(), ld.Encoding)
+	listCtx, cancelList := context.WithTimeout(r.Context(), s.cur().SearchTimeout()+5*time.Second)
+	stdout, stderr, code, err := cli.Run(listCtx, cmd, s.cur().SearchTimeout(), ld.Encoding)
+	cancelList()
 	if err != nil || code != 0 {
 		writeErrSanitized(w, 502, fmt.Errorf("列文件失败: %v", err))
 		return
@@ -108,7 +110,9 @@ func (s *Server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err)
 		return
 	}
-	stdout, stderr, code, err = cli.Run(ctx, cmd, s.cur().SearchTimeout()+5*time.Second, ld.Encoding)
+	searchCtx, cancelSearch := context.WithTimeout(r.Context(), s.cur().SearchTimeout()+15*time.Second)
+	stdout, stderr, code, err = cli.Run(searchCtx, cmd, s.cur().SearchTimeout()+5*time.Second, ld.Encoding)
+	cancelSearch()
 	if err != nil {
 		s.audit.Write("logs.search", "system", req.System, "server", req.Server, "dir", ld.Path, "query", req.Query, "result", "fail", "err", err.Error())
 		writeErrSanitized(w, 502, err)
@@ -134,11 +138,18 @@ func (s *Server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 }
 
 func parseSearchOutput(out string, server, dir string, files []logquery.FileEntry) []logquery.SearchHit {
-	// 建立 name -> file 映射（mtime 倒序）
+	// 建立 name -> file 映射（白名单），用来校验远端 grep 输出里的 filename
+	// 必须是本次搜索范围内的文件。
+	// 远端 grep 是按 fileList 跑的，正常不会出现白名单外的 file；
+	// 但如果有人改 logquery.go 的 fileList 注入，或者 grep 本身拼错，
+	// 这层校验可以兜底，避免前端解析出"看似合法但实际不在白名单"的命中。
+	//
+	// files 为 nil/空时跳过白名单校验（向后兼容旧测试 / 其他调用方）。
 	byName := make(map[string]logquery.FileEntry, len(files))
 	for _, f := range files {
 		byName[f.Name] = f
 	}
+	useWhitelist := len(byName) > 0
 	var hits []logquery.SearchHit
 	for _, line := range strings.Split(out, "\n") {
 		line = strings.TrimRight(line, "\r")
@@ -155,6 +166,13 @@ func parseSearchOutput(out string, server, dir string, files []logquery.FileEntr
 			continue
 		}
 		file := line[:idx1]
+		// 防御性校验：file 必须来自 ListCommand 返回的 files 列表
+		// （仅在 handler 提供 files 时启用）
+		if useWhitelist {
+			if _, ok := byName[file]; !ok {
+				continue
+			}
+		}
 		lineNoStr := line[idx1+1 : idx1+1+idx2]
 		content := line[idx1+1+idx2+1:]
 		ln, err := strconv.Atoi(strings.TrimSpace(lineNoStr))
@@ -237,12 +255,12 @@ func (s *Server) handleLogsContext(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), s.cur().SearchTimeout()+10*time.Second)
-	defer cancel()
-
-	cli, err := sshclient.Dial(ctx, sshclient.Server{
+	// SSH Dial 独立 ctx + 统一超时
+	dialCtx, cancelDial := context.WithTimeout(r.Context(), sshDialOuterTimeout)
+	cli, err := sshclient.Dial(dialCtx, sshclient.Server{
 		Name: srv.Name, Host: srv.Host, Port: srv.Port, Username: username,
-	}, sshclient.Credentials{Password: creds.Password}, 10*time.Second)
+	}, sshclient.Credentials{Password: creds.Password}, sshAttemptTimeout)
+	cancelDial()
 	if err != nil {
 		auditErr(w, s.audit, "logs.context", "system", req.System, "server", req.Server, "dir", ld.Path, "file", req.File, "line", req.Line, "result", "fail", err)
 		writeErrSanitized(w, 502, err)
@@ -250,16 +268,21 @@ func (s *Server) handleLogsContext(w http.ResponseWriter, r *http.Request) {
 	}
 	defer cli.Close()
 
-	stdout, stderr, code, err := cli.Run(ctx, cmd, s.cur().SearchTimeout(), ld.Encoding)
+	runCtx, cancelRun := context.WithTimeout(r.Context(), s.cur().SearchTimeout()+10*time.Second)
+	defer cancelRun()
+	stdout, stderr, code, err := cli.Run(runCtx, cmd, s.cur().SearchTimeout(), ld.Encoding)
 	if err != nil {
+		s.audit.Write("logs.context", "system", req.System, "server", req.Server, "dir", ld.Path, "file", req.File, "line", req.Line, "result", "fail", "err", err.Error())
 		writeErrSanitized(w, 502, err)
 		return
 	}
 	if code != 0 {
+		s.audit.Write("logs.context", "system", req.System, "server", req.Server, "dir", ld.Path, "file", req.File, "line", req.Line, "result", "fail", "err", "exit="+strconv.Itoa(code), "stderr", trim(stderr, 200))
 		writeErrSanitized(w, 502, fmt.Errorf("sed 退出码 %d: %s", code, trim(stderr, 200)))
 		return
 	}
 	lines := parseContextOutput(stdout, req.Line, before)
+	s.audit.Write("logs.context", "system", req.System, "server", req.Server, "dir", ld.Path, "file", req.File, "line", req.Line, "result", "ok", "lines", len(lines))
 	writeJSON(w, 200, map[string]any{
 		"lines": lines,
 		"file":  req.File,

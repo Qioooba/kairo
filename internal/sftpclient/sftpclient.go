@@ -4,9 +4,18 @@
 // v0.3 起扩展支持 ReadDir / Stat（用于"文件浏览器"页）。
 //
 // 不允许写远程文件、不允许删远程文件、不允许改权限。
+//
+// TODO(P2-12) SFTP 子系统不可用 shell fallback：
+//   老 AIX / 银行前置机 / 精简 Linux 镜像有时只开 SSH 不开 SFTP。
+//   当前 sftp.NewClient 失败直接 502，未来应 fallback 到：
+//     - 列目录：sh -c "ls -l <path>" 解析
+//     - 下载小文件：sh -c "cat <path>" 流式读
+//     - 下载大文件：dd / base64 分片
+//   这一版（v0.4 发版前修复）不动，避免和 SSH 握手修复混在一起。
 package sftpclient
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -94,8 +103,11 @@ func (c *Client) Close() error {
 // DownloadFile 把 remotePath 下载到 localPath
 //
 // remotePath 必须由调用方做过白名单校验。
+//
+// 下载前会先 Stat：远端是目录时直接报错（"暂不支持直接下载目录"），
+// 避免不同 SFTP server 对 Open(目录) 的报错/返回不一致。
 func (c *Client) DownloadFile(remotePath, localPath string) (int64, error) {
-	return c.download(remotePath, localPath, nil)
+	return c.DownloadFileContext(context.Background(), remotePath, localPath, nil)
 }
 
 // DownloadFileWithProgress 同 DownloadFile，但通过 progress 回调上报下载进度。
@@ -105,33 +117,39 @@ func (c *Client) DownloadFile(remotePath, localPath string) (int64, error) {
 // total 来自 sftpFile.Stat()，若 Stat 失败则为 -1（前端按 indeterminate 进度条处理）。
 // 回调可能在 io.Copy 路径中被并发触发，调用方需自行同步。
 func (c *Client) DownloadFileWithProgress(remotePath, localPath string, progress func(written, total int64)) (int64, error) {
-	return c.download(remotePath, localPath, progress)
+	return c.DownloadFileContext(context.Background(), remotePath, localPath, progress)
 }
 
-// progressInterval 进度回调最小间隔（字节）。64KB 对内网 SFTP
-// 来说粒度足够细，1GB 文件约 16384 次回调。配合下面的
-// progressMinInterval 时间节流，最终频率 ≈ 10 Hz，避免刷爆前端。
-const progressInterval = 64 * 1024
-
-// progressMinInterval 进度回调最小时间间隔。100ms ≈ 10 Hz，
-// 人眼能感觉到流畅但不会刷爆浏览器渲染。
-const progressMinInterval = 100 * time.Millisecond
-
-func (c *Client) download(remotePath, localPath string, progress func(written, total int64)) (int64, error) {
+// DownloadFileContext 是 DownloadFile 的 ctx 取消版本。
+//
+// ctx 取消时会立即关闭底层 sftp 连接，正在进行的 io.Copy 会因为底层 read
+// 返回错误而退出，避免下大文件时取消要等好几秒网络读返回才生效。
+// ctx 为 context.Background() 时行为与 DownloadFile 等价。
+//
+// progress 可以为 nil。
+func (c *Client) DownloadFileContext(ctx context.Context, remotePath, localPath string, progress func(written, total int64)) (int64, error) {
 	if c == nil || c.b == nil {
 		return 0, fmt.Errorf("sftp 客户端未连接")
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	// 下载前 Stat：拿 total + 提前拒绝目录，避免 Open(目录) 在不同 server 行为不一致。
+	info, statErr := c.b.Stat(remotePath)
+	if statErr != nil {
+		return 0, fmt.Errorf("stat 远程文件失败: %w", statErr)
+	}
+	if info.IsDir() {
+		return 0, fmt.Errorf("暂不支持直接下载目录: %s", remotePath)
+	}
+	total := info.Size()
+
 	src, err := c.b.Open(remotePath)
 	if err != nil {
 		return 0, fmt.Errorf("打开远程文件失败: %w", err)
 	}
 	defer src.Close()
-
-	// 优先拿 total（让前端能算百分比）。Stat 失败不致命，按 -1 走。
-	var total int64 = -1
-	if info, statErr := src.Stat(); statErr == nil {
-		total = info.Size()
-	}
 
 	if err := os.MkdirAll(filepath.Dir(localPath), 0o755); err != nil {
 		return 0, fmt.Errorf("创建本地目录失败: %w", err)
@@ -142,9 +160,26 @@ func (c *Client) download(remotePath, localPath string, progress func(written, t
 	}
 	defer dst.Close()
 
+	// ctx 取消时主动关掉 sftp 文件 + backend 连接：正在进行的 io.Copy 会因
+	// read 报错而退出。优先关 src（具体文件），backend.Close() 作为兜底（关整个会话）。
+	// 任务结束（成功 / 失败）后由 defer close(cancelDone) 关闭通道让本 goroutine 退出。
+	cancelDone := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = src.Close()
+			_ = c.b.Close()
+		case <-cancelDone:
+		}
+	}()
+	defer close(cancelDone)
+
 	pw := &progressWriter{w: dst, total: total, progress: progress}
 	n, err := io.Copy(pw, src)
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return n, fmt.Errorf("下载被取消: %w", ctxErr)
+		}
 		return n, fmt.Errorf("下载过程中断: %w", err)
 	}
 	// 收尾回调：保证 100% 状态一定会到达（最后一节可能 < 64KB 不触发中间回调）
@@ -183,6 +218,15 @@ func (c *Client) Stat(path string) (os.FileInfo, error) {
 	}
 	return info, nil
 }
+
+// progressInterval 进度回调最小间隔（字节）。64KB 对内网 SFTP
+// 来说粒度足够细，1GB 文件约 16384 次回调。配合下面的
+// progressMinInterval 时间节流，最终频率 ≈ 10 Hz，避免刷爆前端。
+const progressInterval = 64 * 1024
+
+// progressMinInterval 进度回调最小时间间隔。100ms ≈ 10 Hz，
+// 人眼能感觉到流畅但不会刷爆浏览器渲染。
+const progressMinInterval = 100 * time.Millisecond
 
 // progressWriter 包装 io.Writer，按"字节数 + 时间"双重节流回调 progress。
 //

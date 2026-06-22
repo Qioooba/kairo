@@ -144,3 +144,41 @@ func TestMinifyXML_Invalid(t *testing.T) {
 		t.Logf("MinifyXML mismatched tags err (acceptable): %v", err)
 	}
 }
+
+// ---------- trailing garbage 防护（v6 修复）----------
+
+func TestFormatJSON_TrailingGarbage_Rejected(t *testing.T) {
+	// 旧版只 Decode 一次，'{"a":1} {"b":2}' 会被误判为合法 JSON。
+	// v6 修复后必须报错。
+	if _, err := FormatJSON(`{"a":1} {"b":2}`, "  "); err == nil {
+		t.Fatal("trailing garbage JSON 应该被拒")
+	}
+}
+
+func TestMinifyJSON_TrailingGarbage_Rejected(t *testing.T) {
+	if _, err := MinifyJSON(`{"a":1} extra stuff`); err == nil {
+		t.Fatal("trailing garbage JSON 应该被拒")
+	}
+}
+
+func TestValidateJSON_TrailingGarbage_Rejected(t *testing.T) {
+	if err := ValidateJSON(`{"a":1} {"b":2}`); err == nil {
+		t.Fatal("trailing garbage JSON 应该被拒")
+	}
+}
+
+func TestFormatXML_BrokenDoc_Rejected(t *testing.T) {
+	// 旧版 MinifyXML 用 err.Error() == "EOF" 判断，遇到解析错误会被吞掉。
+	// v6 修复后用 errors.Is(err, io.EOF)，其它错误必须返回。
+	// 故意造一个真正能让 Token 报错的 XML（chardata 缺右尖括号）：
+	if _, err := FormatXML("<a>broken", "  "); err == nil {
+		t.Fatal("broken XML 应该被 FormatXML 拒")
+	}
+}
+
+func TestMinifyXML_BrokenDoc_Rejected(t *testing.T) {
+	// 同上：v6 修复后 MinifyXML 必须把非 EOF 的解析错误返回。
+	if _, err := MinifyXML("<a>broken"); err == nil {
+		t.Fatal("broken XML 应该被 MinifyXML 拒")
+	}
+}

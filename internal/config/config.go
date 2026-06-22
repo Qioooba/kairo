@@ -32,10 +32,26 @@ type AppConfig struct {
 	DownloadDir     string `yaml:"download_dir" json:"download_dir"`
 	LogDir          string `yaml:"log_dir" json:"log_dir"`
 	DataDir         string `yaml:"data_dir" json:"data_dir"`
+
+	// EnableFreeFileBrowser 控制 v0.3 文件浏览器（任意路径下载）是否可用。
+	// true / 未设置 = 启用；false = 拒绝所有 /api/files/* 请求。
+	// 关闭原因：任意路径下载 = 按 SSH 账号实际权限放行，对内网自用是好事，
+	// 但若工具分发给"未严格管控的同事"，可能因安全审计被卡。
+	EnableFreeFileBrowser *bool `yaml:"enable_free_file_browser,omitempty" json:"enable_free_file_browser,omitempty"`
+
 	// 解析后的绝对路径
 	downloadDirAbs string
 	logDirAbs      string
 	dataDirAbs     string
+}
+
+// FreeFileBrowserEnabled 返回"任意路径下载"是否启用。默认 true（向后兼容）。
+// YAML 里显式写 false 才禁用；不写 / nil 走 true。
+func (a *AppConfig) FreeFileBrowserEnabled() bool {
+	if a.EnableFreeFileBrowser == nil {
+		return true
+	}
+	return *a.EnableFreeFileBrowser
 }
 
 // ListenAddr 返回绑定地址，例如 127.0.0.1:18080
@@ -73,6 +89,30 @@ type LogDirEntry struct {
 	Path     string   `yaml:"path" json:"path"`
 	Patterns []string `yaml:"patterns" json:"patterns"`
 	Encoding string   `yaml:"encoding" json:"encoding"` // utf-8 (默认) / gbk
+
+	// ListMode 列目录命令模式：
+	//   - "" / "auto"  : 默认 gnu_find（find -printf），老 AIX 不可用
+	//   - "gnu_find"   : 用 find ... -printf（Linux / macOS）
+	//   - "posix_ls"   : 用 ls -lt，AIX / 老 Unix / WebSphere 安全模式
+	// 选 posix_ls 时 ParseListOutput 改用 ls 输出解析（牺牲精度换兼容）。
+	ListMode string `yaml:"list_mode,omitempty" json:"list_mode,omitempty"`
+}
+
+// ListModeFor 把字符串 list_mode 归一化到内部枚举值。
+// 未配置或显式 "auto" 都默认 "gnu_find"（向后兼容）。
+// "posix" / "ls" 也归到 "posix_ls" 方便用户写短。
+func (ld *LogDirEntry) ListModeFor() string {
+	switch strings.ToLower(strings.TrimSpace(ld.ListMode)) {
+	case "", "auto":
+		return "gnu_find"
+	case "gnu_find", "gnu", "find":
+		return "gnu_find"
+	case "posix_ls", "posix", "ls":
+		return "posix_ls"
+	default:
+		// 未知值保持原样，让 ListCommand 报错而不是默默降级
+		return ld.ListMode
+	}
 }
 
 // SearchConfig 搜索相关默认值

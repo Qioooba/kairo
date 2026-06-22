@@ -66,12 +66,12 @@ func (s *Server) handleDownloadLatest(w http.ResponseWriter, r *http.Request) {
 		latest = 5
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
-	defer cancel()
-
-	cli, err := sshclient.Dial(ctx, sshclient.Server{
+	// SSH Dial 独立 ctx + 统一超时
+	dialCtx, cancelDial := context.WithTimeout(r.Context(), sshDialOuterTimeout)
+	cli, err := sshclient.Dial(dialCtx, sshclient.Server{
 		Name: srv.Name, Host: srv.Host, Port: srv.Port, Username: username,
-	}, sshclient.Credentials{Password: creds.Password}, 10*time.Second)
+	}, sshclient.Credentials{Password: creds.Password}, sshAttemptTimeout)
+	cancelDial()
 	if err != nil {
 		auditErr(w, s.audit, "logs.download", "system", req.System, "server", req.Server, "dir", ld.Path, "result", "fail", err)
 		writeErrSanitized(w, 502, err)
@@ -86,13 +86,15 @@ func (s *Server) handleDownloadLatest(w http.ResponseWriter, r *http.Request) {
 	}
 	defer sftpCli.Close()
 
-	// 列文件
-	cmd, err := logquery.ListCommand(ld.Path, ld.Patterns, latest)
+	// 列文件（独立 ctx，给后续 SFTP 下载 + zip 留够时间）
+	runCtx, cancelRun := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancelRun()
+	cmd, err := logquery.ListCommand(ld.Path, ld.Patterns, latest, ld.ListModeFor())
 	if err != nil {
 		writeErrSanitized(w, 500, err)
 		return
 	}
-	stdout, stderr, code, err := cli.Run(ctx, cmd, s.cur().SearchTimeout(), ld.Encoding)
+	stdout, stderr, code, err := cli.Run(runCtx, cmd, s.cur().SearchTimeout(), ld.Encoding)
 	if err != nil || code != 0 {
 		s.audit.Write("logs.download", "system", req.System, "server", req.Server, "dir", ld.Path, "result", "fail", "err", trim(stderr, 200))
 		writeErrSanitized(w, 502, fmt.Errorf("列文件失败: %v / %s", err, trim(stderr, 200)))
@@ -114,7 +116,8 @@ func (s *Server) handleDownloadLatest(w http.ResponseWriter, r *http.Request) {
 	results := make([]dlmanager.Item, 0, latest+1)
 	now := time.Now()
 	dateDir := now.Format("20060102")
-	hhmm := now.Format("150405")
+	// 毫秒级时间戳避免同秒内重复下载互相覆盖。
+	stamp := now.Format("150405.000")
 	// 目录别名：把 log_dir.path 的最后一段当作"dirName"，让多服务器同名日志也能区分
 	dirAlias := filepath.Base(ld.Path)
 	// 下载文件落点：downloads/YYYYMMDD/serverName_dirName_originalName_HHMMSS.log
@@ -126,7 +129,7 @@ func (s *Server) handleDownloadLatest(w http.ResponseWriter, r *http.Request) {
 		f := files[i]
 		remote := filepath.ToSlash(filepath.Join(ld.Path, f.Name))
 		localName := fmt.Sprintf("%s_%s_%s_%s.log",
-			sanitize(srv.Name), sanitize(dirAlias), sanitize(f.Name), hhmm)
+			sanitize(srv.Name), sanitize(dirAlias), sanitize(f.Name), stamp)
 		localPath := filepath.Join(targetDir, localName)
 		bytes, err := sftpCli.DownloadFile(remote, localPath)
 		if err != nil {
@@ -163,7 +166,7 @@ func (s *Server) handleDownloadLatest(w http.ResponseWriter, r *http.Request) {
 	//   - zip 落点和原始文件同一个 dateDir，文件名加 _pack 后缀以示区分。
 	if req.Zip && latest >= 2 {
 		zipName := fmt.Sprintf("%s_%s_latest_%s.zip",
-			sanitize(srv.Name), sanitize(dirAlias), hhmm)
+			sanitize(srv.Name), sanitize(dirAlias), stamp)
 		zipPath := filepath.Join(targetDir, zipName)
 		if err := zipFiles(localPaths, zipPath); err != nil {
 			s.audit.Write("logs.download", "system", req.System, "server", req.Server, "dir", ld.Path, "result", "fail", "stage", "zip", "err", err.Error())

@@ -1,6 +1,7 @@
 package sftpclient
 
 import (
+	"context"
 	"errors"
 	"io"
 	"os"
@@ -125,7 +126,10 @@ func TestDownloadFile_Happy(t *testing.T) {
 }
 
 func TestDownloadFile_OpenError(t *testing.T) {
+	// Stat 成功（文件存在），但 Open 时返回错误：模拟"权限 / 文件被删"
+	// 这种情况下错误信息应该是"打开远程文件失败"，而不是 stat 错。
 	backend := &mockBackend{
+		files:   map[string][]byte{"/x": []byte("data")},
 		openErr: errors.New("boom"),
 	}
 	c := newWithBackend(backend)
@@ -139,6 +143,145 @@ func TestDownloadFile_OpenError(t *testing.T) {
 		t.Errorf("error msg: %v", err)
 	}
 }
+
+func TestDownloadFile_StatError(t *testing.T) {
+	// Stat 失败（文件根本不存在）：错误信息应该是"stat 远程文件失败"。
+	backend := &mockBackend{
+		files: map[string][]byte{},
+	}
+	c := newWithBackend(backend)
+	defer c.Close()
+
+	_, err := c.DownloadFile("/missing", "/tmp/y")
+	if err == nil {
+		t.Fatal("expected error for missing file")
+	}
+	if !strings.Contains(err.Error(), "stat 远程文件失败") {
+		t.Errorf("error msg: %v", err)
+	}
+}
+
+func TestDownloadFile_DirectoryRejected(t *testing.T) {
+	// 目录不能直接下载（避免不同 SFTP server 对 Open(目录) 行为不一致）。
+	dir := t.TempDir()
+	local := filepath.Join(dir, "out.log")
+	backend := &mockBackend{
+		dirs: map[string][]os.FileInfo{
+			"/opt": {fakeFileInfo{name: "child", isDir: true}},
+		},
+	}
+	c := newWithBackend(backend)
+	defer c.Close()
+
+	_, err := c.DownloadFile("/opt", local)
+	if err == nil {
+		t.Fatal("expected error for directory download")
+	}
+	if !strings.Contains(err.Error(), "暂不支持直接下载目录") {
+		t.Errorf("error msg: %v", err)
+	}
+	// 本地文件不应该被创建
+	if _, statErr := os.Stat(local); statErr == nil {
+		t.Errorf("local file should not exist after dir rejection: %s", local)
+	}
+}
+
+func TestDownloadFileContext_CancelStopsCopy(t *testing.T) {
+	// 准备一个慢速读取的 backend，触发 ctx 取消后 io.Copy 应该立刻退出。
+	dir := t.TempDir()
+	local := filepath.Join(dir, "out.log")
+
+	sr := newSlowReader(strings.Repeat("A", 1024*1024), 50*time.Millisecond, 4096)
+	backend := &cancelMockBackend{reader: sr}
+	c := newWithBackend(backend)
+	defer c.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(80 * time.Millisecond)
+		cancel()
+	}()
+
+	_, err := c.DownloadFileContext(ctx, "/remote/big", local, nil)
+	if err == nil {
+		t.Fatal("expected cancel error")
+	}
+	if !strings.Contains(err.Error(), "取消") && !errors.Is(err, context.Canceled) {
+		t.Errorf("error should be canceled: %v", err)
+	}
+}
+
+// slowReader 是 io.Reader 的一个慢速实现：每读 chunk 字节 sleep delay。
+// Close 会唤醒正在 sleep 的 Read，让它返回 canceled 错误，io.Copy 因此能立刻退出。
+// 用于在测试里构造一个长时间运行的 io.Copy，从而触发 ctx 取消打断。
+type slowReader struct {
+	data   string
+	pos    int
+	delay  time.Duration
+	chunk  int
+	closed chan struct{}
+	once   sync.Once
+}
+
+func newSlowReader(data string, delay time.Duration, chunk int) *slowReader {
+	return &slowReader{data: data, delay: delay, chunk: chunk, closed: make(chan struct{})}
+}
+
+func (s *slowReader) Read(p []byte) (int, error) {
+	// 优先响应 Close：用 select 让 sleep 可被打断。
+	if s.delay > 0 {
+		select {
+		case <-s.closed:
+			return 0, errors.New("slowReader closed")
+		case <-time.After(s.delay):
+		}
+	} else {
+		select {
+		case <-s.closed:
+			return 0, errors.New("slowReader closed")
+		default:
+		}
+	}
+	if s.pos >= len(s.data) {
+		return 0, io.EOF
+	}
+	n := s.chunk
+	if s.pos+n > len(s.data) {
+		n = len(s.data) - s.pos
+	}
+	copy(p, s.data[s.pos:s.pos+n])
+	s.pos += n
+	return n, nil
+}
+
+func (s *slowReader) Close() error {
+	s.once.Do(func() { close(s.closed) })
+	return nil
+}
+
+// cancelMockBackend 让 Stat 成功但 Open 返回一个可被 ctx 取消打断的 reader。
+type cancelMockBackend struct {
+	reader *slowReader
+}
+
+func (m *cancelMockBackend) Open(path string) (sftpFile, error) {
+	return &cancelMockFile{r: m.reader}, nil
+}
+func (m *cancelMockBackend) ReadDir(path string) ([]os.FileInfo, error) {
+	return nil, os.ErrNotExist
+}
+func (m *cancelMockBackend) Stat(path string) (os.FileInfo, error) {
+	return fakeFileInfo{name: filepath.Base(path), size: 1024 * 1024}, nil
+}
+func (m *cancelMockBackend) Close() error { _ = m.reader.Close(); return nil }
+
+type cancelMockFile struct {
+	r *slowReader
+}
+
+func (f *cancelMockFile) Read(p []byte) (int, error)  { return f.r.Read(p) }
+func (f *cancelMockFile) Close() error               { return f.r.Close() }
+func (f *cancelMockFile) Stat() (os.FileInfo, error) { return fakeFileInfo{name: "x", size: 1024 * 1024}, nil }
 
 func TestDownloadFile_NotExistRemote(t *testing.T) {
 	backend := &mockBackend{files: map[string][]byte{}}

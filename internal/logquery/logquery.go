@@ -172,11 +172,14 @@ func ParseQuery(q string) ([]SearchKeyword, error) {
 
 // ListCommand 构造"列出指定目录下匹配 patterns 的文件"命令
 //
-// 用 find + 多个 -name + -printf 拿 size/mtime/name。
+// 默认用 find + -printf（GNU/Linux/macOS）。
+// listMode = "posix_ls" 时改用 ls -lt（AIX / 老 Unix / WebSphere 安全模式），
+// 牺牲一些精度（mtime 精确到分钟）换兼容性。
+//
 // dir 和 pattern 都不在 shell 层做 glob 展开（用 -name 透传给 find）。
 // 整体用单引号包，避免内嵌引号转义问题。
 // 超时由 Go 客户端 ctx 控制，不依赖 Linux `timeout` 命令。
-func ListCommand(dir string, patterns []string, max int) (string, error) {
+func ListCommand(dir string, patterns []string, max int, listMode string) (string, error) {
 	if strings.TrimSpace(dir) == "" {
 		return "", fmt.Errorf("dir 不能为空")
 	}
@@ -195,22 +198,83 @@ func ListCommand(dir string, patterns []string, max int) (string, error) {
 		}
 	}
 
-	var patternExprs []string
-	for _, p := range patterns {
-		patternExprs = append(patternExprs, fmt.Sprintf(`-name %q`, p))
+	switch strings.ToLower(strings.TrimSpace(listMode)) {
+	case "", "auto", "gnu_find":
+		var patternExprs []string
+		for _, p := range patterns {
+			patternExprs = append(patternExprs, fmt.Sprintf(`-name %q`, p))
+		}
+		expr := strings.Join(patternExprs, " -o ")
+		cmd := fmt.Sprintf(
+			`sh -c 'cd %q && find . -maxdepth 1 -type f \( %s \) -printf "%%s\t%%T@\t%%p\n" | LC_ALL=C sort -k2,2nr | head -n %d'`,
+			dir, expr, max,
+		)
+		return cmd, nil
+	case "posix_ls":
+		// AIX / 老 Unix 没有 -printf。改用 ls -lt：
+		//   -l  : 长格式（含 size）
+		//   -t  : 按 mtime 倒序
+		//   -1  : 一行一个文件
+		//   -d  : 目录自身不展开
+		// 多个 pattern 用 shell case 或 awk 过滤；为了兼容最差环境，
+		// 把 pattern 透传给 grep -E（每个 pattern 转义成固定字符串）。
+		//
+		// 注意：AIX 上 ls 可能用 %y / %Y 等差异格式；这里只依赖最稳的
+		// "-l" 列：mode links owner group size month day time/year name。
+		// 解析时按"倒数第一段是 name，前面有 size"这种稳定结构切。
+		if len(patterns) == 0 {
+			return "", fmt.Errorf("posix_ls 模式需要至少一个 pattern")
+		}
+		// 把 patterns 拼成 find ... -name ... OR -name ... 的轻量过滤。
+		// 这里实际是 pipe ls 到 awk，awk 按 name 列做 glob 匹配：
+		//   { name = $NF; if (name ~ pattern) print ... }
+		// 但 awk 不直接支持多个 pattern OR；改用 grep -E 多 pattern 串。
+		// pattern 转义：只允许 glob 字符 * ? []，去掉其他特殊字符。
+		cleanPatterns := make([]string, 0, len(patterns))
+		for _, p := range patterns {
+			// 简单去掉 shell 注入风险字符；只保留 * ? [ ] 和普通字符。
+			cleaned := make([]rune, 0, len(p))
+			for _, r := range p {
+				if r == '*' || r == '?' || r == '[' || r == ']' || r == '.' || r == '-' || r == '_' ||
+					(r >= '0' && r <= '9') || (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') {
+					cleaned = append(cleaned, r)
+				}
+			}
+			if len(cleaned) == 0 {
+				continue
+			}
+			cleanPatterns = append(cleanPatterns, string(cleaned))
+		}
+		if len(cleanPatterns) == 0 {
+			return "", fmt.Errorf("posix_ls 模式所有 pattern 都非法")
+		}
+		// 用 grep -E 在 ls 输出里按 basename 过滤名字，保留 ls 整行
+		// 给 ParseListOutputPOSIX 解析（size/mtime/name）。
+		grepExprs := make([]string, 0, len(cleanPatterns))
+		for _, p := range cleanPatterns {
+			// 把 glob * 转成正则 .*，其他字符保持字面
+			re := strings.ReplaceAll(p, "*", ".*")
+			re = strings.ReplaceAll(re, "?", ".")
+			grepExprs = append(grepExprs, fmt.Sprintf("-e %q", "^.*"+re+"$"))
+		}
+		grepExpr := strings.Join(grepExprs, " ")
+		cmd := fmt.Sprintf(
+			`sh -c 'cd %q && ls -lt 2>/dev/null | head -n %d | grep -E %s'`,
+			dir, max+1, grepExpr, // +1 是 "total N" 那行
+		)
+		return cmd, nil
+	default:
+		return "", fmt.Errorf("不支持的 list_mode: %q（仅支持 gnu_find / posix_ls）", listMode)
 	}
-	expr := strings.Join(patternExprs, " -o ")
-	cmd := fmt.Sprintf(
-		`sh -c 'cd %q && find . -maxdepth 1 -type f \( %s \) -printf "%%s\t%%T@\t%%p\n" | LC_ALL=C sort -k2,2nr | head -n %d'`,
-		dir, expr, max,
-	)
-	return cmd, nil
 }
 
-// ParseListOutput 解析 find -printf 输出
-//
-// 每行: <size>\t<mtime_unix>\t<name>
+// ParseListOutput 解析远端列目录输出，自动识别格式：
+//   - gnu_find 模式（默认）：每行 <size>\t<mtime_unix>\t<name>
+//   - posix_ls 模式：ls -lt 的长格式行，由 ParseListOutputPOSIX 解析
 func ParseListOutput(out string) ([]FileEntry, error) {
+	if looksLikePOSIXLSOutput(out) {
+		return ParseListOutputPOSIX(out)
+	}
 	var list []FileEntry
 	for _, line := range strings.Split(out, "\n") {
 		line = strings.TrimRight(line, "\r")
@@ -238,6 +302,94 @@ func ParseListOutput(out string) ([]FileEntry, error) {
 			FullPath:   name,
 			Size:       size,
 			ModTime:    t.Format(time.RFC3339),
+			IsReadable: size > 0,
+		})
+	}
+	sort.SliceStable(list, func(i, j int) bool {
+		return list[i].ModTime > list[j].ModTime
+	})
+	return list, nil
+}
+
+// looksLikePOSIXLSOutput 简单判断是否是 ls -l 输出。
+// 启发式：第一行是 "total N"（除非 -A 之类），每行起始是类似 -rw-r--r-- / drwxr-xr-x。
+func looksLikePOSIXLSOutput(out string) bool {
+	lines := strings.Split(out, "\n")
+	if len(lines) == 0 {
+		return false
+	}
+	// 第一行是 "total N"
+	if strings.HasPrefix(strings.TrimSpace(lines[0]), "total ") {
+		return true
+	}
+	// 或者任何一行起始是 -rw / drw / lrw 等 mode 串
+	for _, ln := range lines {
+		ln = strings.TrimSpace(ln)
+		if len(ln) < 10 {
+			continue
+		}
+		if ln[0] == '-' || ln[0] == 'd' || ln[0] == 'l' || ln[0] == 'c' || ln[0] == 'b' || ln[0] == 'p' || ln[0] == 's' {
+			// 形如 "-rw-r--r--"
+			if ln[1] == 'r' || ln[1] == 'w' || ln[1] == '-' || ln[1] == 'x' {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// ParseListOutputPOSIX 解析 ls -lt 长格式输出。
+//
+// 形如：
+//
+//	-rw-r--r-- 1 user group 12345 Jun 21 10:00 SystemOut.log
+//	-rw-r--r-- 1 user group 67890 Jun 21 09:30 SystemOut_20260619.log
+//
+// 取 size（第 5 字段）、mtime（第 6/7/8 字段）、name（最后一字段）。
+// mtime 不能精确到秒（ls 默认不显示），所以 ModTime 用 RFC3339 字符串，
+// 排序时按字典序倒序——文件越多越不准，但能区分"今天的"和"昨天的"。
+func ParseListOutputPOSIX(out string) ([]FileEntry, error) {
+	var list []FileEntry
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimRight(line, "\r")
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		// 跳过 "total N" 头
+		if strings.HasPrefix(strings.TrimSpace(line), "total ") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 9 {
+			continue
+		}
+		// 第 5 字段是 size（mode links owner group size ...）
+		size, err := strconv.ParseInt(fields[4], 10, 64)
+		if err != nil {
+			continue
+		}
+		// mtime 在第 6/7/8 字段（month day time 或 month day year）
+		mtimeStr := fields[5] + " " + fields[6] + " " + fields[7]
+		// name 是最后一字段
+		name := fields[len(fields)-1]
+		// 把 mtimeStr 尽力解析成 RFC3339；解析失败就原样塞字符串（让排序按字典）
+		modTime := mtimeStr
+		for _, layout := range []string{
+			"Jan 2 15:04 2006",
+			"Jan 2 2006",
+			"Jan _2 15:04 2006",
+			"Jan _2 2006",
+		} {
+			if t, err := time.Parse(layout, mtimeStr); err == nil {
+				modTime = t.UTC().Format(time.RFC3339)
+				break
+			}
+		}
+		list = append(list, FileEntry{
+			Name:       name,
+			FullPath:   name,
+			Size:       size,
+			ModTime:    modTime,
 			IsReadable: size > 0,
 		})
 	}
@@ -329,15 +481,18 @@ func SearchCommand(dir string, files []string, kw []SearchKeyword, max, timeoutS
 
 	var pipes []string
 	// 第一段：对 file 操作。
-	// 关键：不管有没有正 term，第一步都要用 `grep -nE` 直接读文件列表，让 grep
-	// 给每个文件加 `filename:lineno:` 前缀。如果用 `cat -- file1 file2 file3`
-	// 拼成单流再喂给下游 grep，grep 看到单流就不再加前缀，前端解析就会错位。
+	// 关键：不管有没有正 term，第一步都要用 `grep -HnE` 直接读文件列表，让 grep
+	// 给每个文件加 `filename:lineno:` 前缀。即使只有一个文件，`-H` 也能保证
+	// 输出 filename:lineno:content 而不是只有 lineno:content，
+	// 否则 parseSearchOutput 会把 lineno 当成 filename 解析失败。
+	// 如果用 `cat -- file1 file2 file3` 拼成单流再喂给下游 grep，
+	// grep 看到单流就不再加前缀，前端解析就会错位。
 	if len(groups[0].pos) > 0 {
 		pat0, err := quoteForGrep(groups[0].pos[0])
 		if err != nil {
 			return "", err
 		}
-		pipes = append(pipes, fmt.Sprintf("grep -nE %s -- %s", pat0, fileList))
+		pipes = append(pipes, fmt.Sprintf("grep -HnE %s -- %s", pat0, fileList))
 		for _, term := range groups[0].pos[1:] {
 			pat, err := quoteForGrep(term)
 			if err != nil {
@@ -346,9 +501,9 @@ func SearchCommand(dir string, files []string, kw []SearchKeyword, max, timeoutS
 			pipes = append(pipes, fmt.Sprintf("grep -E %s", pat))
 		}
 	} else {
-		// 第一段只有 neg（例: "!DEBUG"）。直接 `grep -nE "^." -- file1 file2 file3`
+		// 第一段只有 neg（例: "!DEBUG"）。直接 `grep -HnE "^." -- file1 file2 file3`
 		// 让 grep 给每行加 `file:lineno:` 前缀，再串联 grep -vE。
-		pipes = append(pipes, fmt.Sprintf("grep -nE %q -- %s", "^.", fileList))
+		pipes = append(pipes, fmt.Sprintf("grep -HnE %q -- %s", "^.", fileList))
 	}
 	for _, p := range groups[0].neg {
 		pat, err := quoteForGrep(p)
@@ -368,7 +523,7 @@ func SearchCommand(dir string, files []string, kw []SearchKeyword, max, timeoutS
 			if err != nil {
 				return "", err
 			}
-			branch := fmt.Sprintf("grep -nE %s -- %s", pat0, fileList)
+			branch := fmt.Sprintf("grep -HnE %s -- %s", pat0, fileList)
 			for _, term := range g.pos[1:] {
 				pat, err := quoteForGrep(term)
 				if err != nil {
@@ -414,6 +569,10 @@ func quoteArgs(args []string) []string {
 // ContextCommand 构造 "sed -n 'a,bp' file" 上下文查看命令
 // 超时由 Go 客户端 ctx 控制，不依赖 Linux `timeout` 命令。
 // 注意：sed 不接受 `--` 终止符；文件名来自上一步 ls（白名单内），不需要终止符。
+//
+// 安全要点：file 必须是没有目录分隔符的纯文件名（不含 /、\、..）。
+// 防止类似 "../etc/passwd" 越过 log_dir 白名单读父目录文件。
+// 实际生产环境还是建议 handler 端再次校验 file 必须在 ListCommand 返回的 files 列表里。
 func ContextCommand(dir, file string, line, before, after, timeoutSec int) (string, error) {
 	if strings.TrimSpace(dir) == "" {
 		return "", fmt.Errorf("dir 不能为空")
@@ -444,6 +603,16 @@ func ContextCommand(dir, file string, line, before, after, timeoutSec int) (stri
 	}
 	if strings.ContainsAny(file, "'`$\\;&|><\n\r*?") {
 		return "", fmt.Errorf("file 含非法字符")
+	}
+	// 路径穿越防护：file 必须是 basename，不允许任何目录分隔符或 .. 跳出。
+	if file == "." || file == ".." {
+		return "", fmt.Errorf("file 不允许为 '.' 或 '..'")
+	}
+	if strings.ContainsAny(file, "/\\") {
+		return "", fmt.Errorf("file 不允许包含路径分隔符: %q", file)
+	}
+	if strings.Contains(file, "..") {
+		return "", fmt.Errorf("file 不允许包含 '..'")
 	}
 	start := line - before
 	if start < 1 {
@@ -485,6 +654,16 @@ func TailCommand(dir, file string, lines int) (string, error) {
 	}
 	if strings.ContainsAny(file, "'`$\\;&|><\n\r*?") {
 		return "", fmt.Errorf("file 含非法字符")
+	}
+	// 路径穿越防护：file 必须是 basename。
+	if file == "." || file == ".." {
+		return "", fmt.Errorf("file 不允许为 '.' 或 '..'")
+	}
+	if strings.ContainsAny(file, "/\\") {
+		return "", fmt.Errorf("file 不允许包含路径分隔符: %q", file)
+	}
+	if strings.Contains(file, "..") {
+		return "", fmt.Errorf("file 不允许包含 '..'")
 	}
 	cleanFile := strings.ReplaceAll(file, "'", "")
 	cmd := fmt.Sprintf(`sh -c 'cd %q && tail -n %d -F %q 2>/dev/null'`,

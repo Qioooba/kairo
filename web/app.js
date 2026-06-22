@@ -754,15 +754,37 @@
             el('span', { class: 'name', text: r.server }),
             el('span', { class: 'meta', text: files.length + ' 个文件 + ' + zips.length + ' 个 zip' })
           ]));
-          const fileLinks = files.map(d =>
-            '· ' + d.file + ' → <a href="/downloads/' + encodeURIComponent(d.local) + '">' + d.local + '</a>（' + formatBytes(d.bytes) + '）'
-          ).join('<br/>');
-          const zipLinks = zips.map(d =>
-            '· 📦 <a href="/downloads/' + encodeURIComponent(d.local) + '">' + d.local + '</a>（' + formatBytes(d.bytes) + '）'
-          ).join('<br/>');
+          // 不用 innerHTML 拼远程文件名：恶意远端文件名（含 < / > 等）会注入 HTML。
+          // 改成 DOM 创建：每个文件名用 textContent，链接 href 走 encodeURIComponent。
           const inner = el('div', { style: 'padding: 8px 12px; font-size: 12.5px;' });
-          if (fileLinks) inner.appendChild(el('div', { html: fileLinks }));
-          if (zipLinks) inner.appendChild(el('div', { class: 'mt-2', html: zipLinks }));
+          if (files.length) {
+            const block = el('div');
+            files.forEach(d => {
+              const row = el('div');
+              row.appendChild(document.createTextNode('· ' + d.file + ' → '));
+              row.appendChild(el('a', {
+                href: '/downloads/' + encodeURIComponent(d.local),
+                text: d.local,
+              }));
+              row.appendChild(document.createTextNode('（' + formatBytes(d.bytes) + '）'));
+              block.appendChild(row);
+            });
+            inner.appendChild(block);
+          }
+          if (zips.length) {
+            const block = el('div', { class: 'mt-2' });
+            zips.forEach(d => {
+              const row = el('div');
+              row.appendChild(document.createTextNode('· 📦 '));
+              row.appendChild(el('a', {
+                href: '/downloads/' + encodeURIComponent(d.local),
+                text: d.local,
+              }));
+              row.appendChild(document.createTextNode('（' + formatBytes(d.bytes) + '）'));
+              block.appendChild(row);
+            });
+            inner.appendChild(block);
+          }
           grp.appendChild(inner);
         }
         wrap.appendChild(grp);
@@ -1231,10 +1253,24 @@
           });
         } catch (e) { /* 忽略，下载时再 fallback */ }
       }
-      // 默认进 $HOME（很多服务器 /home/user 就是 SSH 用户的 home）
-      // 先试 stat $HOME；如果失败就退回 /
-      await doListDir(c.username ? ('/home/' + c.username) : '/', c);
+      // 选默认浏览路径：优先 config.yaml 里这台 server 的第一个 log_dirs[0].path
+      // （这是用户配过的白名单路径，最贴近真实运维场景），其次 SSH 用户的 home，
+      // 最后根目录。
+      const startPath = pickDefaultPath(c.username);
+      await doListDir(startPath, c);
     });
+
+    // 默认路径：config 第一个 log_dirs[0].path > /home/<user> > /
+    function pickDefaultPath(username) {
+      try {
+        const sys = (state.cfg && state.cfg.systems || []).find(s => s.name === state.currentSys);
+        const srv = sys && (sys.servers || []).find(s => s.name === state.currentSrv);
+        const ld = srv && (srv.log_dirs || [])[0];
+        if (ld && ld.path) return ld.path;
+      } catch (e) { /* ignore */ }
+      if (username) return '/home/' + username;
+      return '/';
+    }
 
     btnParent.addEventListener('click', () => {
       if (state.parent && state.parent !== state.currentPath) {
@@ -1935,9 +1971,11 @@
       ]));
 
       // 服务器列表
+      // onEdit 只触发 markDirty（不动 DOM），用于输入框这种纯文本编辑
+      // 结构变更（增删上下移）由按钮内部显式调用 markDirty + renderEditor
       const srvList = el('div', { class: 'srv-list' });
       (sys.servers || []).forEach((srv, sri) => {
-        srvList.appendChild(renderServerBlock(sys, srv, sri, () => { markDirty(); renderEditor(); }));
+        srvList.appendChild(renderServerBlock(sys, srv, sri, markDirty));
       });
       srvList.appendChild(el('div', { class: 'mt-2' }, [
         el('button', { class: 'btn btn-sm', text: '+ 新增服务器', onclick: () => { sys.servers = sys.servers || []; sys.servers.push(newServer()); markDirty(); renderEditor(); } })
@@ -1946,58 +1984,83 @@
       return wrap;
     }
 
-    function renderServerBlock(sys, srv, sri, onChange) {
+    function renderServerBlock(sys, srv, sri, onEdit) {
       const wrap = el('div', { class: 'srv-block' });
       const fields = [
         ['name', '服务器名（必填）', 'text'],
         ['host', 'IP / 主机', 'text'],
         ['port', 'SSH 端口', 'number'],
         ['username', 'SSH 用户名', 'text'],
-        ['auth_type', '认证方式（password）', 'text']
+        // auth_type 后端只接受 password（config.go:191 严格校验）。
+        // 改下拉框避免用户误填"key"/"publickey" 等被后端 reject。
+        // 等后端支持 publickey 时，把这个 select 的 options 加上。
+        ['auth_type', '认证方式', 'select', [['password', 'password（密码）']]]
       ];
       const inputMap = {};
       const fieldRow = el('div', { class: 'srv-fields' });
-      fields.forEach(([key, ph, type]) => {
-        const inp = el('input', { type: type, value: srv[key] != null ? String(srv[key]) : '', placeholder: ph });
-        inp.addEventListener('input', () => {
-          if (type === 'number') {
-            const n = parseInt(inp.value, 10);
-            srv[key] = isNaN(n) ? 0 : n;
-          } else {
-            srv[key] = inp.value;
+      fields.forEach(([key, ph, type, options]) => {
+        if (type === 'select') {
+          const sel = el('select');
+          (options || []).forEach(([v, label]) => {
+            const o = el('option', { value: v, text: label });
+            if (String(srv[key] || '') === v) o.selected = true;
+            sel.appendChild(o);
+          });
+          // 旧 config 里如果存的是别的值（理论上不可能，后端会 reject），
+          // 默认回落到 password，避免空选
+          if (!sel.value && options && options.length) {
+            sel.value = options[0][0];
+            srv[key] = sel.value;
           }
-          onChange();
-        });
-        inputMap[key] = inp;
-        fieldRow.appendChild(el('label', null, [
-          el('span', { class: 'lbl', text: ph }),
-          inp
-        ]));
+          sel.addEventListener('change', () => { srv[key] = sel.value; onEdit(); });
+          inputMap[key] = sel;
+          fieldRow.appendChild(el('label', null, [
+            el('span', { class: 'lbl', text: ph }),
+            sel
+          ]));
+        } else {
+          const inp = el('input', { type: type, value: srv[key] != null ? String(srv[key]) : '', placeholder: ph });
+          inp.addEventListener('input', () => {
+            if (type === 'number') {
+              const n = parseInt(inp.value, 10);
+              srv[key] = isNaN(n) ? 0 : n;
+            } else {
+              srv[key] = inp.value;
+            }
+            // 只更新数据 + markDirty，不重渲染 —— 否则 input 节点会被销毁，光标立刻丢失
+            onEdit();
+          });
+          inputMap[key] = inp;
+          fieldRow.appendChild(el('label', null, [
+            el('span', { class: 'lbl', text: ph }),
+            inp
+          ]));
+        }
       });
       wrap.appendChild(fieldRow);
 
       // 日志目录
       const dirList = el('div', { class: 'dir-list' });
       (srv.log_dirs || []).forEach((ld, ldi) => {
-        dirList.appendChild(renderDirBlock(srv, ld, ldi, onChange));
+        dirList.appendChild(renderDirBlock(srv, ld, ldi, onEdit));
       });
       dirList.appendChild(el('div', { class: 'mt-1' }, [
-        el('button', { class: 'btn btn-sm', text: '+ 新增日志目录', onclick: () => { srv.log_dirs = srv.log_dirs || []; srv.log_dirs.push(newLogDir()); onChange(); /* 重新渲染整块以拿到新 dir 节点 */ renderEditor(); } })
+        el('button', { class: 'btn btn-sm', text: '+ 新增日志目录', onclick: () => { srv.log_dirs = srv.log_dirs || []; srv.log_dirs.push(newLogDir()); onEdit(); /* 结构性变更需要重渲染以挂载新 dir 节点 */ renderEditor(); } })
       ]));
       wrap.appendChild(dirList);
 
-      // 服务器操作
-      const btnSrvUp = el('button', { class: 'btn btn-sm', text: '↑', onclick: () => { if (sri > 0) { [sys.servers[sri-1], sys.servers[sri]] = [sys.servers[sri], sys.servers[sri-1]]; onChange(); renderEditor(); } } });
-      const btnSrvDown = el('button', { class: 'btn btn-sm', text: '↓', onclick: () => { if (sri < sys.servers.length - 1) { [sys.servers[sri+1], sys.servers[sri]] = [sys.servers[sri], sys.servers[sri+1]]; onChange(); renderEditor(); } } });
-      const btnSrvDup = el('button', { class: 'btn btn-sm', text: '复制', onclick: () => { sys.servers.splice(sri+1, 0, JSON.parse(JSON.stringify(srv))); onChange(); renderEditor(); } });
-      const btnSrvDel = el('button', { class: 'btn btn-sm btn-danger', text: '删除服务器', onclick: () => { if (confirm('确认删除服务器 “' + (srv.name || '(未命名)') + '” 及其日志目录？')) { sys.servers.splice(sri, 1); onChange(); renderEditor(); } } });
+      // 服务器操作（结构性变更：markDirty + renderEditor）
+      const btnSrvUp = el('button', { class: 'btn btn-sm', text: '↑', onclick: () => { if (sri > 0) { [sys.servers[sri-1], sys.servers[sri]] = [sys.servers[sri], sys.servers[sri-1]]; onEdit(); renderEditor(); } } });
+      const btnSrvDown = el('button', { class: 'btn btn-sm', text: '↓', onclick: () => { if (sri < sys.servers.length - 1) { [sys.servers[sri+1], sys.servers[sri]] = [sys.servers[sri], sys.servers[sri+1]]; onEdit(); renderEditor(); } } });
+      const btnSrvDup = el('button', { class: 'btn btn-sm', text: '复制', onclick: () => { sys.servers.splice(sri+1, 0, JSON.parse(JSON.stringify(srv))); onEdit(); renderEditor(); } });
+      const btnSrvDel = el('button', { class: 'btn btn-sm btn-danger', text: '删除服务器', onclick: () => { if (confirm('确认删除服务器 “' + (srv.name || '(未命名)') + '” 及其日志目录？')) { sys.servers.splice(sri, 1); onEdit(); renderEditor(); } } });
       btnSrvUp.disabled = sri === 0; btnSrvDown.disabled = sri === sys.servers.length - 1;
       wrap.appendChild(el('div', { class: 'srv-actions' }, [btnSrvUp, btnSrvDown, btnSrvDup, btnSrvDel]));
 
       return wrap;
     }
 
-    function renderDirBlock(srv, ld, ldi, onChange) {
+    function renderDirBlock(srv, ld, ldi, onEdit) {
       const wrap = el('div', { class: 'dir-block' });
       const nameInp = el('input', { type: 'text', value: ld.name || '', placeholder: '目录别名（必填）' });
       const pathInp = el('input', { type: 'text', value: ld.path || '', placeholder: '远端绝对路径（必填）' });
@@ -2007,12 +2070,13 @@
       ].map(([v, t]) => el('option', { value: v, text: t }, (ld.encoding || 'utf-8').toLowerCase() === v ? 'selected' : null)));
       const patTa = el('textarea', { rows: '2', placeholder: '文件名规则，每行一条，例如：\nSystemOut*.log\n*.log' });
       patTa.value = (ld.patterns || []).join('\n');
-      nameInp.addEventListener('input', () => { ld.name = nameInp.value; onChange(); });
-      pathInp.addEventListener('input', () => { ld.path = pathInp.value; onChange(); });
-      encSel.addEventListener('change', () => { ld.encoding = encSel.value; onChange(); });
+      // 输入框只更新数据 + markDirty，不重渲染 —— 否则 input/textarea 会被销毁，光标立刻丢失
+      nameInp.addEventListener('input', () => { ld.name = nameInp.value; onEdit(); });
+      pathInp.addEventListener('input', () => { ld.path = pathInp.value; onEdit(); });
+      encSel.addEventListener('change', () => { ld.encoding = encSel.value; onEdit(); });
       patTa.addEventListener('input', () => {
         ld.patterns = patTa.value.split('\n').map(s => s.trim()).filter(Boolean);
-        onChange();
+        onEdit();
       });
       wrap.appendChild(el('div', { class: 'dir-fields' }, [
         el('label', null, [el('span', { class: 'lbl', text: '目录别名' }), nameInp]),
@@ -2023,9 +2087,10 @@
         el('span', { class: 'lbl', text: '文件名规则（每行一条）' }),
         patTa
       ]));
-      const btnDirUp = el('button', { class: 'btn btn-sm', text: '↑', onclick: () => { if (ldi > 0) { [srv.log_dirs[ldi-1], srv.log_dirs[ldi]] = [srv.log_dirs[ldi], srv.log_dirs[ldi-1]]; onChange(); renderEditor(); } } });
-      const btnDirDown = el('button', { class: 'btn btn-sm', text: '↓', onclick: () => { if (ldi < srv.log_dirs.length - 1) { [srv.log_dirs[ldi+1], srv.log_dirs[ldi]] = [srv.log_dirs[ldi], srv.log_dirs[ldi+1]]; onChange(); renderEditor(); } } });
-      const btnDirDel = el('button', { class: 'btn btn-sm btn-danger', text: '删除目录', onclick: () => { if (confirm('确认删除日志目录 “' + (ld.name || ld.path || '(未命名)') + '” ？')) { srv.log_dirs.splice(ldi, 1); onChange(); renderEditor(); } } });
+      // 结构性变更：markDirty + renderEditor
+      const btnDirUp = el('button', { class: 'btn btn-sm', text: '↑', onclick: () => { if (ldi > 0) { [srv.log_dirs[ldi-1], srv.log_dirs[ldi]] = [srv.log_dirs[ldi], srv.log_dirs[ldi-1]]; onEdit(); renderEditor(); } } });
+      const btnDirDown = el('button', { class: 'btn btn-sm', text: '↓', onclick: () => { if (ldi < srv.log_dirs.length - 1) { [srv.log_dirs[ldi+1], srv.log_dirs[ldi]] = [srv.log_dirs[ldi], srv.log_dirs[ldi+1]]; onEdit(); renderEditor(); } } });
+      const btnDirDel = el('button', { class: 'btn btn-sm btn-danger', text: '删除目录', onclick: () => { if (confirm('确认删除日志目录 “' + (ld.name || ld.path || '(未命名)') + '” ？')) { srv.log_dirs.splice(ldi, 1); onEdit(); renderEditor(); } } });
       btnDirUp.disabled = ldi === 0; btnDirDown.disabled = ldi === srv.log_dirs.length - 1;
       wrap.appendChild(el('div', { class: 'dir-actions' }, [btnDirUp, btnDirDown, btnDirDel]));
       return wrap;
