@@ -89,8 +89,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleAuditRecent(w, r)
 	case path == "/api/audit/export.csv":
 		s.handleAuditExportCSV(w, r)
-	case path == "/api/audit/export.csv":
-		s.handleAuditExportCSV(w, r)
+	case path == "/api/diagnostics":
+		s.handleDiagnostics(w, r)
 	case path == "/api/credentials/save":
 		s.handleCredSave(w, r)
 	case path == "/api/credentials/has":
