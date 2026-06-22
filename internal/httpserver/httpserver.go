@@ -12,11 +12,29 @@ import (
 	"io/fs"
 	"net/http"
 	"strings"
+	"time"
 
 	"ops-toolbox/internal/audit"
 	"ops-toolbox/internal/config"
 	"ops-toolbox/internal/dlmanager"
 	"ops-toolbox/internal/tailmgr"
+)
+
+// SSH Dial 超时（统一规范，所有 handler 都用这一对）
+//
+// 设计：
+//   - sshDialOuterTimeout 包住"3 套 SSH profile 全跑完"的最坏耗时。
+//     在 OpenSSH 6.2p2 + 自动 fallback 路径下，每套 profile 握手
+//     可能在 12s 量级（老弱网络 + 老 sshd），3 套串联最坏 ≈ 36s，
+//     外层给 45s 留 buffer。
+//   - sshAttemptTimeout 是单次 profile 握手 deadline，由 sshclient 内部
+//     用于 SetDeadline，握手完成后立即清掉。
+//
+// **禁止**：在 handler 里再传 ad-hoc 超时（如 15s / 30s），
+// 否则老 sshd 自动 fallback 跑到一半会被外层 ctx 干掉。
+const (
+	sshDialOuterTimeout = 45 * time.Second
+	sshAttemptTimeout   = 10 * time.Second
 )
 
 // Server 持有配置（线程安全 Manager）、审计日志、嵌入式静态资源、tail 会话池、下载任务池

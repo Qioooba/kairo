@@ -13,6 +13,22 @@
 - **文件浏览器（任意路径下载）**：左侧菜单「文件下载」，按 SSH 账号权限浏览任意目录，像 FTP 一样层层进入、勾选下载；多文件支持打包 zip；保留审计 + 进度条 + 取消
 - **WebSphere 日志助手 · 指定文件下载**：在 v0.2 「下载最新 N 个」基础上，新增「勾选指定文件下载」，多文件带进度和 zip
 
+**v0.4（发版前修复）** 在 v0.3 基础上做了一轮稳定性 + SSH 兼容性修复：
+
+- **OpenSSH 6.2p2 / 老 sshd SSH 兼容性加固**：`x/crypto` 升到 v0.31.0；3 套 SSH profile 自动 fallback（兼容 → 移除 ECDH → legacy DH-sha1），覆盖老 AIX / WebSphere / 堡垒机；加入 `keyboard-interactive` 认证；握手 deadline 与 ctx 分离；`logs/ssh_traffic.log` 区分 C→S / S→C 方向，`ssh_debug.log` 打印实际编译进去的 `x/crypto` 版本
+- **SSE 长连接不被 120s 强制断开**：`http.Server.WriteTimeout` 设成 0，保证 tail / 下载进度流不会被超时切断
+- **Windows zip 打包不再因反斜杠误判失败**：`zipFiles` 用 `filepath.Abs + os.Open + f.Stat` 校验，本地路径天然支持；同时处理 zip 内同名文件
+- **下载进度 SSE 中文 / Unicode 文件名输出合法 UTF-8**：`dlmanager.formatEvent` 改用 `encoding/json.Marshal`，不再手写 JSON 把 rune 截断为单字节
+- **safeWriter 超过 8MB 后只追加一次 truncated marker**：防止老命令疯狂输出时内存继续涨
+- **构建脚本容错**：`scripts/build_windows_amd64*.sh` 在没有 `config.yaml` 但有 `config.yaml.production.example` 时仍能打包；同时复制 `start.bat`
+- **SSH Dial 超时统一常量**：`httpserver.sshDialOuterTimeout`（45s）+ `sshAttemptTimeout`（10s），所有 handler 统一使用，老 sshd + 3 套 profile 跑得完
+- **SFTP 下载支持取消打断**：`runFilesDownloadTask` 在 ctx 取消时主动关闭 SFTP / SSH，正在下的大文件能马上停
+- **任意路径下载前 Stat 拒绝目录**：避免 SFTP Open 在不同 server 行为不一致
+- **任意路径下载同名不再覆盖**：本地文件名加 idx 前缀（001/002/...）
+- **SSH Session 显式 Close**：减少老 sshd / 堡垒机 channel 泄漏
+- **文件浏览器（任意路径下载）加配置开关**：`app.enable_free_file_browser: false` 时 `/api/files/*` 全部返回 403，方便发版给权限较宽的同事时关闭
+- **下载历史不限 .log/.zip**：v0.3 任意路径下载的 .properties / .xml / .gz 等文件也能在「下载历史」页看到
+
 **v0.2** 已包含：
 
 - **系统配置可视化编辑器**：在「系统配置」页直接增删改业务系统 / 服务器 / 日志目录，保存后原子改写 `config.yaml`，无需重启
@@ -159,7 +175,9 @@ export GO120_HOME=~/sdk/go120
 # → dist/ops-toolbox-v0.1.0-win7/OpsToolbox_win7.exe
 ```
 
-> `go.mod` 顶部 `go 1.20` 已设置，依赖 (`x/crypto v0.21`、`x/text v0.14`) 都是 Go 1.20 兼容版本。
+> `go.mod` 顶部 `go 1.20` 已设置，依赖 (`x/crypto v0.31.0`、`x/text v0.21.0`) 都是 Go 1.20 兼容版本。
+>
+> 注：`golang.org/x/crypto` ≥ v0.21.0 才实现 `diffie-hellman-group14-sha256` / `group-exchange-sha*`，是 OpenSSH 6.2p2 / 老 sshd 兼容握手的关键。
 
 ---
 
@@ -332,6 +350,7 @@ ts=2026-06-19 10:30:12.000 op=logs.download system=信贷生产 server=prod-node
 8. 下载文件只保存到 `downloads/`，URL 路径穿越会被拒绝
 9. 命令超时由客户端 ctx + SIGTERM/SIGKILL 控制，不依赖服务器端 `timeout`
 10. 任意路径下载做基础校验（路径必须绝对、不含 NUL/换行、单次最多 100 个文件、单任务 30 分钟硬超时）
+11. v0.3 文件浏览器（任意路径下载）支持配置开关 `app.enable_free_file_browser: false` 一键关闭（参见 §11.5）
 
 ---
 
@@ -375,6 +394,24 @@ v0.3 应实际运维需求（同一台 WebSphere 服务器的 `logs/` `propertie
 - 工具箱只做基础格式校验 + 审计 + 进度 / 取消。
 
 写权限（上传、删除、改权限）依然全部禁止。
+
+### 11.5 配置开关（关闭文件浏览器）
+
+v0.4 起，`config.yaml` 可通过 `app.enable_free_file_browser` 控制整个 `/api/files/*` 是否可用：
+
+```yaml
+app:
+  # 不写 / true = 启用（默认，向后兼容）
+  # false = 整个 /api/files/* 返回 403，但日志助手 / 系统配置 / 报文格式化 / SSH 测试等其它功能照常
+  enable_free_file_browser: true
+```
+
+适用场景：
+
+- 把工具箱发给权限较宽的同事，担心被安全审计卡
+- 临时下线"任意路径下载"，但保留日志助手白名单下载
+
+关闭后日志助手（`/api/logs/*`）仍可用，因为白名单模式依然严格生效。
 
 ---
 

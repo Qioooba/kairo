@@ -59,12 +59,12 @@ func (s *Server) handleLogsList(w http.ResponseWriter, r *http.Request) {
 	}
 	username := creds.Username
 
-	ctx, cancel := context.WithTimeout(r.Context(), s.cur().SearchTimeout()+10*time.Second)
-	defer cancel()
-
-	cli, err := sshclient.Dial(ctx, sshclient.Server{
+	// SSH Dial 用独立 ctx + 统一超时，避免被 SearchTimeout 太小影响 3 套 profile 跑完。
+	dialCtx, cancelDial := context.WithTimeout(r.Context(), sshDialOuterTimeout)
+	cli, err := sshclient.Dial(dialCtx, sshclient.Server{
 		Name: srv.Name, Host: srv.Host, Port: srv.Port, Username: username,
-	}, sshclient.Credentials{Password: creds.Password}, 10*time.Second)
+	}, sshclient.Credentials{Password: creds.Password}, sshAttemptTimeout)
+	cancelDial()
 	if err != nil {
 		auditErr(w, s.audit, "logs.list", "system", req.System, "server", req.Server, "dir", ld.Path, "result", "fail", err)
 		writeErrSanitized(w, 502, err)
@@ -72,12 +72,15 @@ func (s *Server) handleLogsList(w http.ResponseWriter, r *http.Request) {
 	}
 	defer cli.Close()
 
-	cmd, err := logquery.ListCommand(ld.Path, ld.Patterns, 100)
+	cmd, err := logquery.ListCommand(ld.Path, ld.Patterns, 100, ld.ListModeFor())
 	if err != nil {
 		writeErrSanitized(w, 500, err)
 		return
 	}
-	stdout, stderr, code, err := cli.Run(ctx, cmd, s.cur().SearchTimeout(), ld.Encoding)
+	// Run 用 SearchTimeout 控制（不受 Dial ctx 影响）
+	runCtx, cancelRun := context.WithTimeout(r.Context(), s.cur().SearchTimeout()+10*time.Second)
+	defer cancelRun()
+	stdout, stderr, code, err := cli.Run(runCtx, cmd, s.cur().SearchTimeout(), ld.Encoding)
 	if err != nil {
 		auditErr(w, s.audit, "logs.list", "system", req.System, "server", req.Server, "dir", ld.Path, "result", "fail", err)
 		writeErrSanitized(w, 502, err)

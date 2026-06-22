@@ -63,12 +63,12 @@ func (s *Server) handleTailStart(w http.ResponseWriter, r *http.Request) {
 	}
 	username := creds.Username
 
-	// 开 SSH（30s 超时）
-	dialCtx, dialCancel := context.WithTimeout(r.Context(), 30*time.Second)
+	// 开 SSH（统一超时：外层 45s / 单 profile 10s，给老 sshd + 3 套 profile fallback 留够时间）
+	dialCtx, dialCancel := context.WithTimeout(r.Context(), sshDialOuterTimeout)
 	defer dialCancel()
 	cli, err := sshclient.Dial(dialCtx, sshclient.Server{
 		Name: srv.Name, Host: srv.Host, Port: srv.Port, Username: username,
-	}, sshclient.Credentials{Password: creds.Password}, 15*time.Second)
+	}, sshclient.Credentials{Password: creds.Password}, sshAttemptTimeout)
 	if err != nil {
 		auditErr(w, s.audit, "logs.tail", "system", req.System, "server", req.Server, "dir", ld.Path, "file", req.File, "result", "fail", err)
 		writeErrSanitized(w, 502, err)

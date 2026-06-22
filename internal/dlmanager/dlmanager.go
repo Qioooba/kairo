@@ -25,9 +25,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 )
@@ -294,72 +291,24 @@ func (m *Manager) IdleGC(s *Session) {
 	}
 }
 
-// formatEvent 构造 SSE data: 字段（手写 JSON，避免引号转义麻烦）
+// formatEvent 构造 SSE data: 字段。
+//
+// 用 encoding/json.Marshal 序列化整张 map，确保：
+//   - 中文 / Unicode 文件名 / error 信息走 UTF-8 编码（不被截断）；
+//   - 各种边缘字符（引号、反斜杠、控制字符）由标准库正确转义；
+//   - 不会因手写 JSON 而误把 rune 转 byte。
+//
+// 测试断言只关心"包含某个 key/value"，不依赖具体顺序，所以 json.Marshal
+// 按 key 字母序输出不影响契约（type Kind 字段名固定为 "kind"）。
 func formatEvent(kind string, kv map[string]any) []byte {
-	var b strings.Builder
-	b.WriteString(`{"kind":"`)
-	b.WriteString(kind)
-	b.WriteString(`"`)
+	m := make(map[string]any, len(kv)+1)
+	m["kind"] = kind
 	for k, v := range kv {
-		b.WriteString(`,"`)
-		b.WriteString(k)
-		b.WriteString(`":`)
-		b.WriteString(jsonValue(v))
+		m[k] = v
 	}
-	b.WriteString("}\n")
-	return []byte(b.String())
-}
-
-// jsonValue 把 Go 值序列化成最小 JSON
-func jsonValue(v any) string {
-	switch x := v.(type) {
-	case string:
-		return jsonStringVal(x)
-	case bool:
-		if x {
-			return "true"
-		}
-		return "false"
-	case int:
-		return strconv.Itoa(x)
-	case int64:
-		return strconv.FormatInt(x, 10)
-	case float64:
-		return strconv.FormatFloat(x, 'f', -1, 64)
-	case []Item:
-		b, _ := json.Marshal(x)
-		return string(b)
-	case nil:
-		return "null"
-	default:
-		b, _ := json.Marshal(x)
-		return string(b)
+	b, err := json.Marshal(m)
+	if err != nil {
+		return []byte(`{"kind":"error","error":"json marshal failed"}` + "\n")
 	}
-}
-
-func jsonStringVal(s string) string {
-	out := make([]byte, 0, len(s)+2)
-	out = append(out, '"')
-	for _, r := range s {
-		switch r {
-		case '"':
-			out = append(out, '\\', '"')
-		case '\\':
-			out = append(out, '\\', '\\')
-		case '\n':
-			out = append(out, '\\', 'n')
-		case '\r':
-			out = append(out, '\\', 'r')
-		case '\t':
-			out = append(out, '\\', 't')
-		default:
-			if r < 0x20 {
-				out = append(out, []byte(fmt.Sprintf(`\u%04x`, r))...)
-			} else {
-				out = append(out, byte(r))
-			}
-		}
-	}
-	out = append(out, '"')
-	return string(out)
+	return append(b, '\n')
 }

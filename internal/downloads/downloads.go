@@ -95,7 +95,10 @@ func ReadMeta(dataPath string) (Meta, bool, error) {
 //   - 按 mtime 倒序；
 //   - 跳过隐藏文件（. 开头）和 .meta sidecar；
 //   - 子目录（如 downloads/20260621/）递归；
-//   - rootDir 不存在时返回空切片和 nil。
+//   - rootDir 不存在时返回空切片和 nil；
+//   - 列表策略：优先列有 sidecar 元数据的文件（确认是 ops-toolbox 下载产物）；
+//     没 sidecar 的兜底按扩展名收（.log / .zip / .txt / .gz / .tar / .properties 等常见后缀），
+//     避免 v0.3 文件浏览器下载的 .properties / .xml 等"任意文件"不显示在历史里。
 func List(rootDir string) ([]Entry, error) {
 	var out []Entry
 	if _, err := os.Stat(rootDir); err != nil {
@@ -119,21 +122,25 @@ func List(rootDir string) ([]Entry, error) {
 		if strings.HasSuffix(name, ".meta") {
 			return nil
 		}
-		// 跳过非日志/zip 文件（避免误列 .DS_Store、临时文件等）
-		ext := strings.ToLower(filepath.Ext(name))
-		if ext != ".log" && ext != ".zip" {
-			return nil
-		}
 		info, statErr := d.Info()
 		if statErr != nil {
 			return nil
 		}
 		rel, _ := filepath.Rel(rootDir, path)
 		meta, hasMeta, _ := ReadMeta(path)
+		// 决定是否列出 + kind 标签：
+		//   1. 有 sidecar：列出，kind 来自 meta
+		//   2. 无 sidecar：按扩展名兜底列常见文件类型，kind="file"（或 zip）
+		if !hasMeta {
+			ext := strings.ToLower(filepath.Ext(name))
+			if !isListableExt(ext) {
+				return nil
+			}
+		}
 		kind := "unknown"
 		if hasMeta && meta.Kind != "" {
 			kind = meta.Kind
-		} else if ext == ".zip" {
+		} else if strings.EqualFold(filepath.Ext(name), ".zip") {
 			kind = "zip"
 		} else {
 			kind = "file"
@@ -157,6 +164,69 @@ func List(rootDir string) ([]Entry, error) {
 		return out[i].ModTime.After(out[j].ModTime)
 	})
 	return out, nil
+}
+
+// isListableExt 决定"无 sidecar 时"按扩展名兜底列哪些文件。
+//
+// 设计：
+//   - 显式 list 常见日志/压缩/配置/包文件（运维工具常见产物）；
+//   - 显式 deny 系统临时文件（.DS_Store / 各种临时）；
+//   - 不在大名单里、也不是 deny 名单的，按 allow（白名单 + 黑名单之外的默认拒绝）。
+//
+// 用 deny + allow 两段式，避免把无关文件（如 .html / .bin）误列为"下载历史"。
+func isListableExt(ext string) bool {
+	// 无扩展名：不要（避免把 README 之类误列）
+	if ext == "" {
+		return false
+	}
+	// 显式拒绝：常见的无关临时 / 系统文件
+	deny := map[string]bool{
+		".ds_store": true, // macOS 资源管理器
+		".tmp":      true,
+		".temp":     true,
+		".swp":      true, // vim swap
+		".bak":      true,
+		".crdownload": true, // Chrome 残留
+	}
+	if deny[ext] {
+		return false
+	}
+	// 显式允许：运维 / 下载常见扩展名
+	allow := map[string]bool{
+		".log":        true,
+		".zip":        true,
+		".txt":        true,
+		".gz":         true,
+		".tar":        true,
+		".tgz":        true,
+		".tar.gz":     true, // 实际 ext 只是 .gz，已在前面覆盖
+		".bz2":        true,
+		".xz":         true,
+		".7z":         true,
+		".rar":        true,
+		".out":        true,
+		".err":        true,
+		".trace":      true,
+		".properties": true,
+		".xml":        true,
+		".json":       true,
+		".yml":        true,
+		".yaml":       true,
+		".conf":       true,
+		".cfg":        true,
+		".ini":        true,
+		".sql":        true,
+		".csv":        true,
+		".jar":        true,
+		".war":        true,
+		".ear":        true,
+		".class":      true,
+		".dump":       true,
+		".heapdump":   true,
+		".dat":        true,
+		".pid":        true,
+	}
+	return allow[ext]
 }
 
 // Delete 删除一个文件 + 它的 sidecar。

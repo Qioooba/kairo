@@ -37,8 +37,22 @@ export GOTOOLCHAIN=local
 go build -trimpath -ldflags "-s -w" -o "${OUT_DIR}/OpsToolbox.exe" .
 
 # 复制运行所需文件
-cp config.yaml  "${OUT_DIR}/"
+# config.yaml 是首选，但发布包里通常只有 config.yaml.production.example（占位 / 模板）。
+# 优先用本地 config.yaml，没有就回退到 example，再没有就报错退出。
+if [[ -f config.yaml ]]; then
+  cp config.yaml "${OUT_DIR}/config.yaml"
+elif [[ -f config.yaml.production.example ]]; then
+  echo ">> 警告：未找到 config.yaml，使用 config.yaml.production.example 复制为 config.yaml"
+  cp config.yaml.production.example "${OUT_DIR}/config.yaml"
+else
+  echo "错误：找不到 config.yaml 或 config.yaml.production.example" >&2
+  exit 1
+fi
 cp README.md    "${OUT_DIR}/"
+# 顺手复制启动脚本（README 里说可以用 start.bat）
+if [[ -f scripts/start.bat ]]; then
+  cp scripts/start.bat "${OUT_DIR}/start.bat"
+fi
 mkdir -p "${OUT_DIR}/downloads" "${OUT_DIR}/logs" "${OUT_DIR}/data"
 
 echo

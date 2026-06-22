@@ -2,6 +2,7 @@ package dlmanager
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"sync"
@@ -95,7 +96,10 @@ func TestSubscribeBroadcast(t *testing.T) {
 	}
 }
 
-// TestBroadcastEvent 验证 BroadcastEvent 用 formatEvent 输出，且 JSON 字段顺序与值正确。
+// TestBroadcastEvent 验证 BroadcastEvent 用 formatEvent 输出，且 JSON 字段值正确。
+//
+// 早期实现是手写 JSON（key 按插入顺序），现改用 encoding/json.Marshal，
+// map 的 key 会按字母序输出。所以断言只检查 Contains，不再要求特定顺序。
 func TestBroadcastEvent(t *testing.T) {
 	m := New()
 	sess := &Session{ID: "be1"}
@@ -112,21 +116,59 @@ func TestBroadcastEvent(t *testing.T) {
 	select {
 	case got := <-ch:
 		s := string(got)
-		// 手写格式，键按插入顺序追加
-		if !strings.HasPrefix(s, `{"kind":"progress"`) {
-			t.Fatalf("应从 kind=progress 开始: %s", s)
+		for _, want := range []string{
+			`"kind":"progress"`,
+			`"i":3`,
+			`"file":"a.log"`,
+			`"ok":true`,
+		} {
+			if !strings.Contains(s, want) {
+				t.Fatalf("缺少 %s: %s", want, s)
+			}
 		}
-		if !strings.Contains(s, `"i":3`) {
-			t.Fatalf("缺少 i=3: %s", s)
-		}
-		if !strings.Contains(s, `"file":"a.log"`) {
-			t.Fatalf("缺少 file=a.log: %s", s)
-		}
-		if !strings.Contains(s, `"ok":true`) {
-			t.Fatalf("缺少 ok=true: %s", s)
+		// 输出末尾应有换行（SSE 友好）
+		if !strings.HasSuffix(s, "\n") {
+			t.Fatalf("应末尾换行: %s", s)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("未收到事件")
+	}
+}
+
+// TestFormatEvent_Unicode 回归测试：中文 / Unicode 文件名、error 信息必须输出合法 UTF-8。
+//
+// 旧实现里 jsonStringVal 写的是 byte(r)，会把中文 rune 截断成单字节，
+// 生成非法的 UTF-8 字节序列。改用 encoding/json.Marshal 后必须通过。
+func TestFormatEvent_Unicode(t *testing.T) {
+	got := FormatEvent("progress", map[string]any{
+		"file":    "服务器_app.log",
+		"error":   "下载完成",
+		"raw_dir": "中文目录/2026年06月",
+	})
+	s := string(got)
+
+	// 关键断言：标准 json.Marshal 会把中文按 UTF-8 原样写到 "..." 里，
+	// 即字符串里出现原始中文（不再走 \uXXXX 转义，除非字符串里有控制字符）。
+	for _, want := range []string{
+		`服务器_app.log`,
+		`下载完成`,
+		`中文目录/2026年06月`,
+	} {
+		if !strings.Contains(s, want) {
+			t.Fatalf("应原样包含 UTF-8 中文 %q: %s", want, s)
+		}
+	}
+	// 不应再出现 \u 转义（除非是控制字符）
+	if strings.Contains(s, `\u`) {
+		t.Fatalf("不应出现 \\u 转义（旧 bug 痕迹）: %s", s)
+	}
+	// 整段应是合法 UTF-8：直接用 json.Unmarshal 反序列化回来能成功
+	var back map[string]any
+	if err := json.Unmarshal([]byte(s[:len(s)-1]), &back); err != nil { // 去掉末尾 \n
+		t.Fatalf("输出不是合法 JSON: %v\nraw=%s", err, s)
+	}
+	if back["file"] != "服务器_app.log" {
+		t.Fatalf("反序列化后 file 字段值丢失: %v", back["file"])
 	}
 }
 

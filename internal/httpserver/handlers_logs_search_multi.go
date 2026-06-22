@@ -218,10 +218,10 @@ func (s *Server) runOneServerSearch(
 	}
 
 	// 单独给 Dial 一个短超时（10s），但仍受总 ctx 控制
-	dialCtx, cancelDial := context.WithTimeout(ctx, 10*time.Second)
+	dialCtx, cancelDial := context.WithTimeout(ctx, sshDialOuterTimeout)
 	cli, err := sshclient.Dial(dialCtx, sshclient.Server{
 		Name: srv.Name, Host: srv.Host, Port: srv.Port, Username: username,
-	}, sshclient.Credentials{Password: password}, 10*time.Second)
+	}, sshclient.Credentials{Password: password}, sshAttemptTimeout)
 	cancelDial()
 	if err != nil {
 		res.OK = false
@@ -234,7 +234,7 @@ func (s *Server) runOneServerSearch(
 	cur := s.cur()
 
 	// 列 N 个最新文件
-	listCmd, err := logquery.ListCommand(ld.Path, ld.Patterns, filesN)
+	listCmd, err := logquery.ListCommand(ld.Path, ld.Patterns, filesN, ld.ListModeFor())
 	if err != nil {
 		res.OK = false
 		res.Error = err.Error()

@@ -240,8 +240,12 @@ class ReadOnlySFTPServer(SFTPServerInterface):
             entries = []
             for name in os.listdir(real):
                 full = os.path.join(real, name)
-                attr = SFTPAttributes.from_stat(os.stat(full)) if SFTPAttributes else None
-                entries.append((name, attr) if attr else name)
+                if SFTPAttributes is None:
+                    continue
+                attr = SFTPAttributes.from_stat(os.stat(full))
+                # paramiko 5.x 严格要求纯 SFTPAttributes 列表，且每个要有 .filename
+                attr.filename = name
+                entries.append(attr)
             return entries
         except Exception as e:
             print(f"  sftp list_folder {path} err: {e}", file=sys.stderr)

@@ -29,3 +29,9 @@ Thumbs.db
 
 # ===== 临时文件 =====
 *.tmp
+
+# ===== QA / 测试产物（不应入 git）=====
+# Playwright 依赖：~16MB，从 package-lock + npm install 还原
+/docs/qa/node_modules/
+# QA 截图：~4MB，CI 跑出来会变，跟 commit 绑一起没意义
+/docs/qa/screenshots/

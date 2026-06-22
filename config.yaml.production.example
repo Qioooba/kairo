@@ -17,6 +17,11 @@ app:
   log_dir: ./logs
   data_dir: ./data
 
+  # 是否启用 v0.3 文件浏览器（任意路径下载）。
+  # 默认 true（不写 / 注释掉都视为开启）。设成 false 会让 /api/files/* 全部返回 403。
+  # 关闭场景：把工具箱分发给权限较宽的同事，担心被安全审计卡。
+  # enable_free_file_browser: true
+
 # 业务系统 -> 服务器 -> 日志目录
 systems:
   - name: 信贷生产

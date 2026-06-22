@@ -24,7 +24,11 @@ import (
 //   - 用 archive/zip + DEFLATE（默认级别），纯 stdlib，无新增依赖；
 //   - zip 内文件名只保留"原始名"（不带 downloads/YYYYMMDD/server_dir_ 前缀），
 //     这样在 Windows 资源管理器里双击打开能直接看到干净的日志；
-//   - 写入时若任一文件打开失败，整体报错，不留半截 zip。
+//   - 写入时若任一文件打开失败，整体报错，不留半截 zip；
+//   - srcPaths 是后端自己下载生成的本地路径，**不是用户输入**，
+//     所以不再做路径穿越 / 反斜杠检查 —— Windows 本地路径天然含 `\`。
+//
+//   - 第二个起同名文件加 `_2`、`_3` 后缀，避免 zip 内覆盖。
 func zipFiles(srcPaths []string, destPath string) error {
 	if len(srcPaths) == 0 {
 		return errors.New("没有可打包的文件")
@@ -44,23 +48,34 @@ func zipFiles(srcPaths []string, destPath string) error {
 			_ = dst.Close()
 		}
 	}()
+	usedNames := map[string]int{}
 	for _, p := range srcPaths {
-		// 拒绝对 zip 路径外的相对穿越（其实 zip 是新文件名，不带路径，但保险起见校验一次）
-		if strings.Contains(p, "..") || strings.ContainsAny(p, "\\") {
-			return fmt.Errorf("非法源文件路径: %s", p)
-		}
-		f, err := os.Open(p)
+		abs, err := filepath.Abs(p)
 		if err != nil {
-			return fmt.Errorf("打开源文件 %s 失败: %w", p, err)
+			return fmt.Errorf("解析源文件路径失败: %w", err)
+		}
+		f, err := os.Open(abs)
+		if err != nil {
+			return fmt.Errorf("打开源文件 %s 失败: %w", abs, err)
 		}
 		st, err := f.Stat()
 		if err != nil {
 			_ = f.Close()
-			return fmt.Errorf("stat %s 失败: %w", p, err)
+			return fmt.Errorf("stat %s 失败: %w", abs, err)
+		}
+		if st.IsDir() {
+			_ = f.Close()
+			return fmt.Errorf("不能打包目录: %s", abs)
 		}
 		// zip 内只保留原始文件名（去前缀、去目录），避免解压后路径嵌套太深
-		name := filepath.Base(p)
+		name := filepath.Base(abs)
 		// 同名文件避免覆盖：第二个起加 _N 后缀
+		if n := usedNames[name]; n > 0 {
+			ext := filepath.Ext(name)
+			base := strings.TrimSuffix(name, ext)
+			name = fmt.Sprintf("%s_%d%s", base, n+1, ext)
+		}
+		usedNames[filepath.Base(abs)]++
 		header := &zip.FileHeader{
 			Name:     name,
 			Method:   zip.Deflate,

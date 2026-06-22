@@ -59,6 +59,8 @@ func (s *Server) handleCredSave(w http.ResponseWriter, r *http.Request) {
 //   - ok=true 总是
 //   - has=true 表示已保存
 //   - available=false 表示 keyring 在当前平台不可用（前端可提示"无法使用记住密码"）
+//
+// username 缺省时降级返回 has=false（避免前端还没填用户名就触发 500）。
 func (s *Server) handleCredHas(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeErr(w, 405, errors.New("仅支持 GET"))
@@ -68,6 +70,12 @@ func (s *Server) handleCredHas(w http.ResponseWriter, r *http.Request) {
 	system, server, user := q.Get("system"), q.Get("server"), q.Get("username")
 	if err := s.credCheckSysSrv(system, server); err != nil {
 		writeErr(w, 400, err)
+		return
+	}
+	if strings.TrimSpace(user) == "" {
+		// username 缺省：降级返回 has=false。
+		// 用场景：前端 onChange 时还在打字，不应该触发 500。
+		writeJSON(w, 200, map[string]any{"ok": true, "has": false, "available": true})
 		return
 	}
 	has, err := credentials.Has(system, server, user)

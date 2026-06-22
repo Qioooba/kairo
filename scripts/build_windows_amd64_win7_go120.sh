@@ -67,8 +67,20 @@ export GOTOOLCHAIN=local
 
 "${GO_BIN}" build -trimpath -ldflags "-s -w" -o "${OUT_DIR}/OpsToolbox_win7.exe" .
 
-cp config.yaml  "${OUT_DIR}/"
+# config.yaml 优先，缺则回退到 config.yaml.production.example，再缺则报错。
+if [[ -f config.yaml ]]; then
+  cp config.yaml "${OUT_DIR}/config.yaml"
+elif [[ -f config.yaml.production.example ]]; then
+  echo ">> 警告：未找到 config.yaml，使用 config.yaml.production.example 复制为 config.yaml"
+  cp config.yaml.production.example "${OUT_DIR}/config.yaml"
+else
+  echo "错误：找不到 config.yaml 或 config.yaml.production.example" >&2
+  exit 1
+fi
 cp README.md    "${OUT_DIR}/"
+if [[ -f scripts/start.bat ]]; then
+  cp scripts/start.bat "${OUT_DIR}/start.bat"
+fi
 mkdir -p "${OUT_DIR}/downloads" "${OUT_DIR}/logs" "${OUT_DIR}/data"
 
 echo

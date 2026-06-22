@@ -80,12 +80,16 @@ func main() {
 	// 8. 构造 HTTP 服务
 	srv := httpserver.New(cfgMgr, auditLog, webSubFS, tails)
 
+	// WriteTimeout 设为 0：SSE 长连接（/api/logs/tail/{id}/events、
+	// /api/files/download/{id}/events、下载进度流等）需要任意时长的写，
+	// 否则 120 秒后 server 会主动断流。
+	// 普通接口的写超时由 handler 内部用 ctx 控制，不依赖 WriteTimeout。
 	httpSrv := &http.Server{
 		Addr:              cfg.App.ListenAddr(),
 		Handler:           srv,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       60 * time.Second,
-		WriteTimeout:      120 * time.Second,
+		WriteTimeout:      0,
 		IdleTimeout:       120 * time.Second,
 	}
 

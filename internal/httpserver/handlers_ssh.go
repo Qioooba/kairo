@@ -46,12 +46,11 @@ func (s *Server) handleSSHTest(w http.ResponseWriter, r *http.Request) {
 	}
 	username := creds.Username
 
-	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
-	defer cancel()
-
-	cli, err := sshclient.Dial(ctx, sshclient.Server{
+	dialCtx, cancelDial := context.WithTimeout(r.Context(), sshDialOuterTimeout)
+	cli, err := sshclient.Dial(dialCtx, sshclient.Server{
 		Name: srv.Name, Host: srv.Host, Port: srv.Port, Username: username,
-	}, sshclient.Credentials{Password: creds.Password}, 10*time.Second)
+	}, sshclient.Credentials{Password: creds.Password}, sshAttemptTimeout)
+	cancelDial()
 	if err != nil {
 		clean := sshclient.SanitizeError(err.Error())
 		s.audit.Write("ssh.test", "system", req.System, "server", req.Server, "result", "fail", "err", clean)
@@ -59,8 +58,10 @@ func (s *Server) handleSSHTest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer cli.Close()
-	// 跑一条无害命令确认可执行
-	stdout, _, code, err := cli.Run(ctx, "echo ok", 5*time.Second, "")
+	// 跑一条无害命令确认可执行（独立 ctx，不受 dial 影响）
+	runCtx, cancelRun := context.WithTimeout(r.Context(), 10*time.Second)
+	stdout, _, code, err := cli.Run(runCtx, "echo ok", 5*time.Second, "")
+	cancelRun()
 	if err != nil || code != 0 || strings.TrimSpace(stdout) != "ok" {
 		s.audit.Write("ssh.test", "system", req.System, "server", req.Server, "result", "fail", "err", "echo failed")
 		writeErr(w, 502, fmt.Errorf("连接成功但命令执行失败: code=%d err=%v", code, err))

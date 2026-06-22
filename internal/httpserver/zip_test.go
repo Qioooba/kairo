@@ -48,11 +48,99 @@ func TestZipFiles_Basic(t *testing.T) {
 	}
 }
 
-func TestZipFiles_PathTraversal(t *testing.T) {
+// TestZipFiles_SameBasenameAreDeduped 验证：同名文件不会在 zip 内互相覆盖，
+// 而是加 _2 / _3 后缀（P1-9 修复）。
+//
+// 场景：用户在一次任务里同时下 /a/app.log 和 /b/app.log，
+// 旧实现两者都叫 app.log，zip 内第二个会覆盖第一个；
+// 新实现保留两份。
+func TestZipFiles_SameBasenameAreDeduped(t *testing.T) {
 	dir := t.TempDir()
-	bad := filepath.Join(dir, "..", "evil.log")
+	src1 := filepath.Join(dir, "sub1", "app.log")
+	src2 := filepath.Join(dir, "sub2", "app.log")
+	if err := os.MkdirAll(filepath.Dir(src1), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(src2), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(src1, []byte("from-a"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(src2, []byte("from-b"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	dest := filepath.Join(dir, "out.zip")
+	if err := zipFiles([]string{src1, src2}, dest); err != nil {
+		t.Fatalf("zipFiles: %v", err)
+	}
+	r, err := zip.OpenReader(dest)
+	if err != nil {
+		t.Fatalf("open zip: %v", err)
+	}
+	defer r.Close()
+	if len(r.File) != 2 {
+		t.Fatalf("期望 2 个 entry，实际 %d", len(r.File))
+	}
+	contents := map[string]string{}
+	for _, f := range r.File {
+		rc, err := f.Open()
+		if err != nil {
+			t.Fatalf("open %s: %v", f.Name, err)
+		}
+		b, _ := io.ReadAll(rc)
+		rc.Close()
+		contents[f.Name] = string(b)
+	}
+	// 第一个保持原名 app.log，第二个加 _2 后缀
+	if contents["app.log"] != "from-a" {
+		t.Fatalf("app.log 内容错: %q", contents["app.log"])
+	}
+	if contents["app_2.log"] != "from-b" {
+		t.Fatalf("app_2.log 内容错: %q", contents["app_2.log"])
+	}
+}
+
+// TestZipFiles_RejectNonExistent 验证：源文件不存在时 zipFiles 应报错。
+//
+// 早期实现里这个测试叫 PathTraversal（旧实现用 .. 检查拒绝）。
+// 现在 zipFiles 不做路径穿越检查（那是上层 handler 的责任），
+// 但 os.Open 失败仍要报错 —— 这一条覆盖"源文件路径无效"的所有场景。
+//
+// 注：失败时 zip 文件**可能**已经创建（OpenFile 在循环前就成功了，0 字节空 zip），
+// 这是 zip/zip.Writer 的实现细节。但 zip 里没有任何 entry，所以不是"半截 zip"。
+// 关键断言是 err != nil，调用方（handler）拿到错误后会删 zip 并报错。
+func TestZipFiles_RejectNonExistent(t *testing.T) {
+	dir := t.TempDir()
+	bad := filepath.Join(dir, "does-not-exist.log")
 	if err := zipFiles([]string{bad}, filepath.Join(dir, "out.zip")); err == nil {
-		t.Fatal("期望拒绝路径穿越")
+		t.Fatal("不存在的源文件应报错")
+	}
+	// 即便 zip 文件被创建（0 字节），里面也不应有 entry
+	dest := filepath.Join(dir, "out.zip")
+	if info, err := os.Stat(dest); err == nil {
+		r, zipErr := zip.OpenReader(dest)
+		if zipErr == nil {
+			if len(r.File) != 0 {
+				t.Fatalf("失败的 zip 里不应有任何 entry，实际 %d", len(r.File))
+			}
+			r.Close()
+		}
+		if info.Size() == 0 {
+			t.Logf("zip 大小为 0（符合预期 — OpenFile 成功后第一个源文件 Open 失败）")
+		}
+	}
+}
+
+// TestZipFiles_RejectDirectory 验证：源是目录时 zipFiles 应直接拒绝（避免 Open 后再 fail）。
+func TestZipFiles_RejectDirectory(t *testing.T) {
+	dir := t.TempDir()
+	subdir := filepath.Join(dir, "subdir")
+	if err := os.MkdirAll(subdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := zipFiles([]string{subdir}, filepath.Join(dir, "out.zip")); err == nil {
+		t.Fatal("源是目录时应报错")
 	}
 }
 
@@ -63,11 +151,24 @@ func TestZipFiles_Empty(t *testing.T) {
 	}
 }
 
-func TestZipFiles_RejectBackslash(t *testing.T) {
+// TestZipFiles_AcceptsWindowsStylePath 回归测试：Windows 本地路径（含反斜杠）应被接受。
+//
+// 早期实现的 strings.ContainsAny(p, "\\") 把任何含 \ 的本地路径都拒绝，
+// 导致 Windows 上打 zip 失败。新实现用 filepath.Abs + os.Open 校验，
+// Windows 路径天然含 \，应直接通过。
+//
+// Linux 上 dir + "\\evil.log" 是一段含字面 \ 的单文件路径，
+// 既然源文件不存在，应走 os.Open 报错路径，而不是"路径非法"提前拒绝。
+func TestZipFiles_AcceptsWindowsStylePath(t *testing.T) {
 	dir := t.TempDir()
-	bad := dir + `\evil.log`
-	if err := zipFiles([]string{bad}, filepath.Join(dir, "out.zip")); err == nil {
-		t.Fatal("含反斜杠的路径应被拒")
+	bad := dir + string(os.PathSeparator) + "sub" + string(os.PathSeparator) + "evil.log"
+	err := zipFiles([]string{bad}, filepath.Join(dir, "out.zip"))
+	if err == nil {
+		t.Fatal("不存在的源文件应报错（但不能因反斜杠提前拒绝）")
+	}
+	// 错误信息应该是 "打开源文件失败" 而不是 "非法源文件路径"
+	if strings.Contains(err.Error(), "非法源文件路径") {
+		t.Fatalf("不应再因为反斜杠拒绝：%v", err)
 	}
 }
 

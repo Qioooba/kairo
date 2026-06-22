@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"ops-toolbox/internal/config"
 	"ops-toolbox/internal/sftpclient"
 	"ops-toolbox/internal/sshclient"
 )
@@ -388,3 +389,87 @@ func TestFilesDownload_ZipFlow(t *testing.T) {
 
 // 抑制 unused
 var _ = sftpclient.New
+
+// TestFilesList_FreeBrowserDisabled 验证 app.enable_free_file_browser=false 时
+// /api/files/* 全部返回 403（P2-11 修复）。
+//
+// 流程：
+//   - 用基线 fake SFTP（有 /data 目录 + a.log），正常应能 list；
+//   - 通过 Manager.Replace 切换 cfg.App.EnableFreeFileBrowser = false；
+//   - 再次 list 应拿到 403，body 含"已在配置中关闭"。
+func TestFilesList_FreeBrowserDisabled(t *testing.T) {
+	f := newFakeSftpBasic()
+	f.dirs["/data"] = []fakeDirEntry{{name: "a.log", size: 1, isDir: false}}
+	srv, mgr, _, _ := newTestServer(t)
+
+	// 把基线 cfg 的指针拿到，构造一份新的 cfg 关掉文件浏览器
+	cur := mgr.Get()
+	disabled := false
+	newCfg := *cur // 浅拷贝
+	newCfg.App = cur.App
+	newCfg.App.EnableFreeFileBrowser = &disabled
+
+	if err := mgr.Replace(&newCfg); err != nil {
+		t.Fatalf("替换 cfg 失败: %v", err)
+	}
+
+	// /api/files/list 应 403
+	w := doRequest(srv, "POST", "/api/files/list", map[string]any{
+		"system": "信贷生产", "server": "mock-1",
+		"username": "ops", "password": "x",
+		"path":     "/data",
+	})
+	if w.Code != 403 {
+		t.Fatalf("文件浏览器关闭时 list 应 403，实际 %d body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "已在配置中关闭") {
+		t.Errorf("错误信息应说明开关已关闭: %s", w.Body.String())
+	}
+	// _ = f / _ = srv（fakeSftp 没启用，但 403 路径根本不会走到 SFTP 层）
+	_ = f
+}
+
+// TestFilesDownload_FreeBrowserDisabled 验证 download 接口在开关关闭时也返回 403。
+func TestFilesDownload_FreeBrowserDisabled(t *testing.T) {
+	srv, mgr, _, _ := newTestServer(t)
+
+	cur := mgr.Get()
+	disabled := false
+	newCfg := *cur
+	newCfg.App = cur.App
+	newCfg.App.EnableFreeFileBrowser = &disabled
+
+	if err := mgr.Replace(&newCfg); err != nil {
+		t.Fatalf("替换 cfg 失败: %v", err)
+	}
+
+	w := doRequest(srv, "POST", "/api/files/download", map[string]any{
+		"system": "信贷生产", "server": "mock-1",
+		"username": "ops", "password": "x",
+		"paths": []string{"/data/a.log"},
+	})
+	if w.Code != 403 {
+		t.Fatalf("download 应 403，实际 %d body=%s", w.Code, w.Body.String())
+	}
+}
+
+// TestConfig_FreeBrowserDefault 验证 config.AppConfig.FreeFileBrowserEnabled 默认 true。
+func TestConfig_FreeBrowserDefault(t *testing.T) {
+	// 不设 EnableFreeFileBrowser（nil）→ 应默认 true
+	a := config.AppConfig{}
+	if !a.FreeFileBrowserEnabled() {
+		t.Fatal("默认应启用文件浏览器（向后兼容）")
+	}
+	// 显式设 false → 关闭
+	disabled := false
+	b := config.AppConfig{EnableFreeFileBrowser: &disabled}
+	if b.FreeFileBrowserEnabled() {
+		t.Fatal("显式 false 应禁用文件浏览器")
+	}
+	// 显式设 true → 启用
+	enabled := true
+	c := config.AppConfig{EnableFreeFileBrowser: &enabled}
+	if !c.FreeFileBrowserEnabled() {
+		t.Fatal("显式 true 应启用文件浏览器")
+	}
+}

@@ -1,0 +1,835 @@
+{
+  "base": "http://127.0.0.1:18090",
+  "run_at": "2026-06-22T01:48:12.040Z",
+  "summary": {
+    "total": 56,
+    "pass": 56,
+    "fail": 0,
+    "consoleErrors": 5,
+    "pageErrors": 0
+  },
+  "results": [
+    {
+      "idx": 1,
+      "action": "home/load",
+      "page": "/",
+      "status": "PASS",
+      "ms": 123,
+      "detail": {
+        "cards": 7
+      },
+      "errors": [],
+      "screenshot": "01-home",
+      "ts": "2026-06-22T01:47:30.794Z"
+    },
+    {
+      "idx": 2,
+      "action": "home/card-click/websphere",
+      "page": "#/websphere",
+      "status": "PASS",
+      "ms": 221,
+      "detail": {
+        "hash": "#/websphere"
+      },
+      "errors": [],
+      "screenshot": null,
+      "ts": "2026-06-22T01:47:31.016Z"
+    },
+    {
+      "idx": 3,
+      "action": "home/card-click/files",
+      "page": "#/files",
+      "status": "PASS",
+      "ms": 170,
+      "detail": {
+        "hash": "#/files"
+      },
+      "errors": [],
+      "screenshot": null,
+      "ts": "2026-06-22T01:47:31.291Z"
+    },
+    {
+      "idx": 4,
+      "action": "home/card-click/formatter",
+      "page": "#/formatter",
+      "status": "PASS",
+      "ms": 172,
+      "detail": {
+        "hash": "#/formatter"
+      },
+      "errors": [],
+      "screenshot": null,
+      "ts": "2026-06-22T01:47:31.568Z"
+    },
+    {
+      "idx": 5,
+      "action": "home/card-click/commands",
+      "page": "#/commands",
+      "status": "PASS",
+      "ms": 178,
+      "detail": {
+        "hash": "#/commands"
+      },
+      "errors": [],
+      "screenshot": null,
+      "ts": "2026-06-22T01:47:31.850Z"
+    },
+    {
+      "idx": 6,
+      "action": "home/card-click/config",
+      "page": "#/config",
+      "status": "PASS",
+      "ms": 171,
+      "detail": {
+        "hash": "#/config"
+      },
+      "errors": [],
+      "screenshot": null,
+      "ts": "2026-06-22T01:47:32.125Z"
+    },
+    {
+      "idx": 7,
+      "action": "home/card-click/downloads",
+      "page": "#/downloads",
+      "status": "PASS",
+      "ms": 170,
+      "detail": {
+        "hash": "#/downloads"
+      },
+      "errors": [],
+      "screenshot": null,
+      "ts": "2026-06-22T01:47:32.399Z"
+    },
+    {
+      "idx": 8,
+      "action": "home/card-click/history",
+      "page": "#/history",
+      "status": "PASS",
+      "ms": 170,
+      "detail": {
+        "hash": "#/history"
+      },
+      "errors": [],
+      "screenshot": null,
+      "ts": "2026-06-22T01:47:32.674Z"
+    },
+    {
+      "idx": 9,
+      "action": "websphere/select-system",
+      "page": "#/websphere",
+      "status": "PASS",
+      "ms": 158,
+      "detail": {
+        "sysOptions": 1,
+        "serverCount": 1
+      },
+      "errors": [],
+      "screenshot": null,
+      "ts": "2026-06-22T01:47:32.984Z"
+    },
+    {
+      "idx": 10,
+      "action": "websphere/btn-pick-all",
+      "page": "#/websphere",
+      "status": "PASS",
+      "ms": 95,
+      "detail": {
+        "before": 0,
+        "after": 1
+      },
+      "errors": [],
+      "screenshot": null,
+      "ts": "2026-06-22T01:47:33.079Z"
+    },
+    {
+      "idx": 11,
+      "action": "websphere/btn-pick-none",
+      "page": "#/websphere",
+      "status": "PASS",
+      "ms": 100,
+      "detail": {
+        "after": 0
+      },
+      "errors": [],
+      "screenshot": null,
+      "ts": "2026-06-22T01:47:33.179Z"
+    },
+    {
+      "idx": 12,
+      "action": "websphere/btn-pick-online",
+      "page": "#/websphere",
+      "status": "PASS",
+      "ms": 98,
+      "detail": {
+        "ok": true
+      },
+      "errors": [],
+      "screenshot": null,
+      "ts": "2026-06-22T01:47:33.277Z"
+    },
+    {
+      "idx": 13,
+      "action": "websphere/fill-creds",
+      "page": "#/websphere",
+      "status": "PASS",
+      "ms": 124,
+      "detail": {
+        "checked": 1
+      },
+      "errors": [],
+      "screenshot": null,
+      "ts": "2026-06-22T01:47:33.401Z"
+    },
+    {
+      "idx": 14,
+      "action": "websphere/btn-test",
+      "page": "#/websphere",
+      "status": "PASS",
+      "ms": 253,
+      "detail": {
+        "statusDot": "ok"
+      },
+      "errors": [],
+      "screenshot": "02-websphere-test-ok",
+      "ts": "2026-06-22T01:47:33.654Z"
+    },
+    {
+      "idx": 15,
+      "action": "websphere/btn-list",
+      "page": "#/websphere",
+      "status": "PASS",
+      "ms": 257,
+      "detail": {
+        "rowCount": 5
+      },
+      "errors": [],
+      "screenshot": "03-websphere-file-list",
+      "ts": "2026-06-22T01:47:33.911Z"
+    },
+    {
+      "idx": 16,
+      "action": "websphere/file-pick-all-and-topn",
+      "page": "#/websphere",
+      "status": "PASS",
+      "ms": 164,
+      "detail": {
+        "allChecked": 0,
+        "top2": 2
+      },
+      "errors": [],
+      "screenshot": null,
+      "ts": "2026-06-22T01:47:34.075Z"
+    },
+    {
+      "idx": 17,
+      "action": "websphere/btn-download-selected",
+      "page": "#/websphere",
+      "status": "PASS",
+      "ms": 2193,
+      "detail": {
+        "doneCount": 2
+      },
+      "errors": [],
+      "screenshot": "04-websphere-files-downloaded",
+      "ts": "2026-06-22T01:47:36.268Z"
+    },
+    {
+      "idx": 18,
+      "action": "websphere/btn-search",
+      "page": "#/websphere",
+      "status": "PASS",
+      "ms": 600,
+      "detail": {
+        "groups": 2,
+        "ctxButtons": 5
+      },
+      "errors": [],
+      "screenshot": "05-websphere-search",
+      "ts": "2026-06-22T01:47:37.370Z"
+    },
+    {
+      "idx": 19,
+      "action": "websphere/btn-context",
+      "page": "#/websphere",
+      "status": "PASS",
+      "ms": 260,
+      "detail": {
+        "rows": 35
+      },
+      "errors": [],
+      "screenshot": "06-websphere-context",
+      "ts": "2026-06-22T01:47:37.630Z"
+    },
+    {
+      "idx": 20,
+      "action": "websphere/btn-download-latest",
+      "page": "#/websphere",
+      "status": "PASS",
+      "ms": 2396,
+      "detail": {
+        "serverGroupCount": 2
+      },
+      "errors": [],
+      "screenshot": "07-websphere-download-latest",
+      "ts": "2026-06-22T01:47:40.026Z"
+    },
+    {
+      "idx": 21,
+      "action": "websphere/tail-start-stop",
+      "page": "#/websphere",
+      "status": "PASS",
+      "ms": 8888,
+      "detail": {
+        "tailOutLen": 0,
+        "preview": "",
+        "stopInfo": {
+          "btns": [
+            {
+              "text": "开始跟踪",
+              "disabled": false
+            },
+            {
+              "text": "停止",
+              "disabled": true
+            }
+          ]
+        }
+      },
+      "errors": [
+        {
+          "where": "http://127.0.0.1:18090/#/websphere",
+          "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+        }
+      ],
+      "screenshot": "08-websphere-tail-started",
+      "ts": "2026-06-22T01:47:48.914Z"
+    },
+    {
+      "idx": 22,
+      "action": "websphere/remember-and-forget",
+      "page": "#/websphere",
+      "status": "PASS",
+      "ms": 818,
+      "detail": {
+        "credStatus": "未保存密码"
+      },
+      "errors": [],
+      "screenshot": null,
+      "ts": "2026-06-22T01:47:49.732Z"
+    },
+    {
+      "idx": 23,
+      "action": "files/select-system-server",
+      "page": "#/files",
+      "status": "PASS",
+      "ms": 321,
+      "detail": {
+        "srvOpts": [
+          "",
+          "mock-node-1"
+        ]
+      },
+      "errors": [],
+      "screenshot": null,
+      "ts": "2026-06-22T01:47:50.092Z"
+    },
+    {
+      "idx": 24,
+      "action": "files/btn-connect",
+      "page": "#/files",
+      "status": "PASS",
+      "ms": 268,
+      "detail": {
+        "rowCount": 6,
+        "curPath": "/opt/IBM/WebSphere/AppServer/profiles/AppSrv01/logs/server1",
+        "firstEntry": "📄 app.log"
+      },
+      "errors": [],
+      "screenshot": "09-files-connected",
+      "ts": "2026-06-22T01:47:50.360Z"
+    },
+    {
+      "idx": 25,
+      "action": "files/sort-name-size",
+      "page": "#/files",
+      "status": "PASS",
+      "ms": 254,
+      "detail": {
+        "firstNameAsc": "📄 SystemOut_20260619.log",
+        "firstNameDesc": "📄 app.log",
+        "firstSizeDesc": "📄 SystemOut.log.tmp"
+      },
+      "errors": [],
+      "screenshot": null,
+      "ts": "2026-06-22T01:47:50.614Z"
+    },
+    {
+      "idx": 26,
+      "action": "files/pick-all-none",
+      "page": "#/files",
+      "status": "PASS",
+      "ms": 163,
+      "detail": {
+        "selText": "已选 6 个",
+        "checked": 6,
+        "after": 0
+      },
+      "errors": [],
+      "screenshot": null,
+      "ts": "2026-06-22T01:47:50.777Z"
+    },
+    {
+      "idx": 27,
+      "action": "files/jump-path",
+      "page": "#/files",
+      "status": "PASS",
+      "ms": 417,
+      "detail": {
+        "curPath": "/opt/IBM/WebSphere/AppServer/profiles/AppSrv01/logs/server1",
+        "rowCount": 6
+      },
+      "errors": [],
+      "screenshot": null,
+      "ts": "2026-06-22T01:47:51.194Z"
+    },
+    {
+      "idx": 28,
+      "action": "files/click-crumb-root",
+      "page": "#/files",
+      "status": "PASS",
+      "ms": 423,
+      "detail": {
+        "curPath": "/opt/IBM/WebSphere/AppServer/profiles/AppSrv01/logs/server1"
+      },
+      "errors": [
+        {
+          "where": "http://127.0.0.1:18090/#/files",
+          "text": "Failed to load resource: the server responded with a status of 502 (Bad Gateway)"
+        }
+      ],
+      "screenshot": null,
+      "ts": "2026-06-22T01:47:51.617Z"
+    },
+    {
+      "idx": 29,
+      "action": "files/btn-parent",
+      "page": "#/files",
+      "status": "PASS",
+      "ms": 833,
+      "detail": {
+        "curPath": "/opt/IBM/WebSphere/AppServer/profiles/AppSrv01/logs/server1"
+      },
+      "errors": [
+        {
+          "where": "http://127.0.0.1:18090/#/files",
+          "text": "Failed to load resource: the server responded with a status of 502 (Bad Gateway)"
+        }
+      ],
+      "screenshot": null,
+      "ts": "2026-06-22T01:47:52.450Z"
+    },
+    {
+      "idx": 30,
+      "action": "files/btn-refresh",
+      "page": "#/files",
+      "status": "PASS",
+      "ms": 324,
+      "detail": {
+        "beforeCount": 0,
+        "afterCount": 6
+      },
+      "errors": [],
+      "screenshot": null,
+      "ts": "2026-06-22T01:47:52.774Z"
+    },
+    {
+      "idx": 31,
+      "action": "files/btn-download-selected",
+      "page": "#/files",
+      "status": "PASS",
+      "ms": 14275,
+      "detail": {
+        "enabled": true,
+        "done": 0
+      },
+      "errors": [],
+      "screenshot": "11-files-downloaded",
+      "ts": "2026-06-22T01:48:07.049Z"
+    },
+    {
+      "idx": 32,
+      "action": "files/cancel-button-state",
+      "page": "#/files",
+      "status": "PASS",
+      "ms": 3,
+      "detail": {
+        "cancelBtnExists": true,
+        "enabled": false
+      },
+      "errors": [],
+      "screenshot": null,
+      "ts": "2026-06-22T01:48:07.052Z"
+    },
+    {
+      "idx": 33,
+      "action": "formatter/json-format",
+      "page": "#/formatter",
+      "status": "PASS",
+      "ms": 33,
+      "detail": {
+        "out": "{\n  \"a\": 1,\n  \"b\": [\n    2,\n    3\n  ],\n  \"c\": {\n    \"d\": 4\n  }\n}"
+      },
+      "errors": [],
+      "screenshot": null,
+      "ts": "2026-06-22T01:48:07.120Z"
+    },
+    {
+      "idx": 34,
+      "action": "formatter/json-minify",
+      "page": "#/formatter",
+      "status": "PASS",
+      "ms": 33,
+      "detail": {
+        "out": "{\"a\":1,\"b\":2}"
+      },
+      "errors": [],
+      "screenshot": null,
+      "ts": "2026-06-22T01:48:07.153Z"
+    },
+    {
+      "idx": 35,
+      "action": "formatter/json-validate",
+      "page": "#/formatter",
+      "status": "PASS",
+      "ms": 423,
+      "detail": {
+        "toastTxt": "JSON 合法"
+      },
+      "errors": [],
+      "screenshot": null,
+      "ts": "2026-06-22T01:48:07.576Z"
+    },
+    {
+      "idx": 36,
+      "action": "formatter/json-validate-bad",
+      "page": "#/formatter",
+      "status": "PASS",
+      "ms": 436,
+      "detail": {
+        "toastTxt": "JSON 处理失败：JSON 非法: invalid character 'a' looking for beginning of object key string",
+        "cls": "toast show err"
+      },
+      "errors": [
+        {
+          "where": "http://127.0.0.1:18090/#/formatter",
+          "text": "Failed to load resource: the server responded with a status of 400 (Bad Request)"
+        }
+      ],
+      "screenshot": null,
+      "ts": "2026-06-22T01:48:08.012Z"
+    },
+    {
+      "idx": 37,
+      "action": "formatter/xml-format",
+      "page": "#/formatter",
+      "status": "PASS",
+      "ms": 29,
+      "detail": {
+        "out": "{\"a\":1,\"b\":2}"
+      },
+      "errors": [],
+      "screenshot": null,
+      "ts": "2026-06-22T01:48:08.041Z"
+    },
+    {
+      "idx": 38,
+      "action": "formatter/xml-minify",
+      "page": "#/formatter",
+      "status": "PASS",
+      "ms": 24,
+      "detail": {
+        "out": "<a>\n  <b>1</b>\n  <c>2</c>\n</a>"
+      },
+      "errors": [],
+      "screenshot": null,
+      "ts": "2026-06-22T01:48:08.065Z"
+    },
+    {
+      "idx": 39,
+      "action": "formatter/btn-clear",
+      "page": "#/formatter",
+      "status": "PASS",
+      "ms": 107,
+      "detail": {
+        "inV": "",
+        "outV": ""
+      },
+      "errors": [],
+      "screenshot": null,
+      "ts": "2026-06-22T01:48:08.172Z"
+    },
+    {
+      "idx": 40,
+      "action": "formatter/btn-copy",
+      "page": "#/formatter",
+      "status": "PASS",
+      "ms": 363,
+      "detail": {
+        "toastTxt": "已复制"
+      },
+      "errors": [],
+      "screenshot": null,
+      "ts": "2026-06-22T01:48:08.535Z"
+    },
+    {
+      "idx": 41,
+      "action": "formatter/screenshot",
+      "page": "#/formatter",
+      "status": "PASS",
+      "ms": 71,
+      "detail": {
+        "ok": true
+      },
+      "errors": [
+        {
+          "where": "http://127.0.0.1:18090/#/formatter",
+          "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+        }
+      ],
+      "screenshot": "12-formatter",
+      "ts": "2026-06-22T01:48:08.606Z"
+    },
+    {
+      "idx": 42,
+      "action": "commands/placeholder",
+      "page": "#/commands",
+      "status": "PASS",
+      "ms": 264,
+      "detail": {
+        "preview": "常用命令\n功能建设中 — grep / find / tail / WebSphere 排查模板\n本模块属于第二阶段规划。第一阶段重点是首页导航、配置读取、SSH 测试连接、列出日志文件、JSON/X"
+      },
+      "errors": [],
+      "screenshot": "13-commands-placeholder",
+      "ts": "2026-06-22T01:48:08.870Z"
+    },
+    {
+      "idx": 43,
+      "action": "config/structure",
+      "page": "#/config",
+      "status": "PASS",
+      "ms": 59,
+      "detail": {
+        "sys": 1,
+        "srv": 1,
+        "dir": 2
+      },
+      "errors": [],
+      "screenshot": "14-config",
+      "ts": "2026-06-22T01:48:08.970Z"
+    },
+    {
+      "idx": 44,
+      "action": "config/check-add-system-btn",
+      "page": "#/config",
+      "status": "PASS",
+      "ms": 3,
+      "detail": {
+        "btnExists": true,
+        "sysCount": 1
+      },
+      "errors": [],
+      "screenshot": null,
+      "ts": "2026-06-22T01:48:08.973Z"
+    },
+    {
+      "idx": 45,
+      "action": "config/dirty-and-reset",
+      "page": "#/config",
+      "status": "PASS",
+      "ms": 341,
+      "detail": {
+        "saveEnabled": true
+      },
+      "errors": [],
+      "screenshot": null,
+      "ts": "2026-06-22T01:48:09.314Z"
+    },
+    {
+      "idx": 46,
+      "action": "config/reload",
+      "page": "#/config",
+      "status": "PASS",
+      "ms": 50,
+      "detail": {
+        "sysCount": 1
+      },
+      "errors": [],
+      "screenshot": null,
+      "ts": "2026-06-22T01:48:09.364Z"
+    },
+    {
+      "idx": 47,
+      "action": "downloads/load",
+      "page": "#/downloads",
+      "status": "PASS",
+      "ms": 127,
+      "detail": {
+        "rowCount": 0,
+        "summary": "加载中…"
+      },
+      "errors": [],
+      "screenshot": "15-downloads",
+      "ts": "2026-06-22T01:48:09.509Z"
+    },
+    {
+      "idx": 48,
+      "action": "downloads/btn-refresh",
+      "page": "#/downloads",
+      "status": "PASS",
+      "ms": 440,
+      "detail": {
+        "rowCount": 58
+      },
+      "errors": [],
+      "screenshot": null,
+      "ts": "2026-06-22T01:48:09.949Z"
+    },
+    {
+      "idx": 49,
+      "action": "downloads/filter-system",
+      "page": "#/downloads",
+      "status": "PASS",
+      "ms": 424,
+      "detail": {
+        "sysOpts": [
+          "",
+          "信贷生产（模拟）"
+        ],
+        "rowCount": 58
+      },
+      "errors": [],
+      "screenshot": null,
+      "ts": "2026-06-22T01:48:10.373Z"
+    },
+    {
+      "idx": 50,
+      "action": "downloads/check-clear-all-btn",
+      "page": "#/downloads",
+      "status": "PASS",
+      "ms": 2,
+      "detail": {
+        "btnExists": true
+      },
+      "errors": [],
+      "screenshot": null,
+      "ts": "2026-06-22T01:48:10.375Z"
+    },
+    {
+      "idx": 51,
+      "action": "downloads/check-delete-btns",
+      "page": "#/downloads",
+      "status": "PASS",
+      "ms": 16,
+      "detail": {
+        "count": 58
+      },
+      "errors": [],
+      "screenshot": null,
+      "ts": "2026-06-22T01:48:10.391Z"
+    },
+    {
+      "idx": 52,
+      "action": "history/load",
+      "page": "#/history",
+      "status": "PASS",
+      "ms": 81,
+      "detail": {
+        "rowCount": 58,
+        "headTxt": "操作历史"
+      },
+      "errors": [],
+      "screenshot": "16-history",
+      "ts": "2026-06-22T01:48:10.487Z"
+    },
+    {
+      "idx": 53,
+      "action": "history/filter-op",
+      "page": "#/history",
+      "status": "PASS",
+      "ms": 438,
+      "detail": {
+        "rowCount": 57,
+        "ops": [
+          "ssh.test"
+        ]
+      },
+      "errors": [],
+      "screenshot": null,
+      "ts": "2026-06-22T01:48:10.925Z"
+    },
+    {
+      "idx": 54,
+      "action": "history/toggle-auto",
+      "page": "#/history",
+      "status": "PASS",
+      "ms": 341,
+      "detail": {
+        "before": "自动刷新: 关",
+        "after1": "自动刷新: 开 (3s)",
+        "after2": "自动刷新: 关"
+      },
+      "errors": [],
+      "screenshot": null,
+      "ts": "2026-06-22T01:48:11.266Z"
+    },
+    {
+      "idx": 55,
+      "action": "history/filter-system-server",
+      "page": "#/history",
+      "status": "PASS",
+      "ms": 438,
+      "detail": {
+        "rowCount": 57
+      },
+      "errors": [],
+      "screenshot": null,
+      "ts": "2026-06-22T01:48:11.704Z"
+    },
+    {
+      "idx": 56,
+      "action": "final/home-screenshot",
+      "page": "#/home",
+      "status": "PASS",
+      "ms": 315,
+      "detail": {
+        "ok": true
+      },
+      "errors": [],
+      "screenshot": "00-final-home",
+      "ts": "2026-06-22T01:48:12.019Z"
+    }
+  ],
+  "consoleErrors": [
+    {
+      "url": "http://127.0.0.1:18090/#/websphere",
+      "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+      "url": "http://127.0.0.1:18090/#/files",
+      "text": "Failed to load resource: the server responded with a status of 502 (Bad Gateway)"
+    },
+    {
+      "url": "http://127.0.0.1:18090/#/files",
+      "text": "Failed to load resource: the server responded with a status of 502 (Bad Gateway)"
+    },
+    {
+      "url": "http://127.0.0.1:18090/#/formatter",
+      "text": "Failed to load resource: the server responded with a status of 400 (Bad Request)"
+    },
+    {
+      "url": "http://127.0.0.1:18090/#/formatter",
+      "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+  ],
+  "pageErrors": []
+}

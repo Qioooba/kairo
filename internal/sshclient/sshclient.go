@@ -1,25 +1,30 @@
 // Package sshclient 提供受控的 SSH 连接与命令执行能力。
 //
 // 核心安全设计：
-//   1. 不允许用户输入任意命令；
-//   2. 所有命令由后端固定模板生成；
-//   3. 远程目录/文件名只能来自配置白名单或前一步 ls 的结果；
-//   4. 搜索关键词做严格转义，禁止 shell 元字符；
-//   5. 每次执行带超时，防止长时间挂起；
-//   6. 超时由客户端 ctx + 内部 timer 控制，不依赖服务器端 `timeout` 命令；
-//   7. 支持 UTF-8 / GBK 编码（老 WebSphere / Oracle 常见 GBK）。
+//  1. 不允许用户输入任意命令；
+//  2. 所有命令由后端固定模板生成；
+//  3. 远程目录/文件名只能来自配置白名单或前一步 ls 的结果；
+//  4. 搜索关键词做严格转义，禁止 shell 元字符；
+//  5. 每次执行带超时，防止长时间挂起；
+//  6. 超时由客户端 ctx + 内部 timer 控制，不依赖服务器端 `timeout` 命令；
+//  7. 支持 UTF-8 / GBK 编码（老 WebSphere / Oracle 常见 GBK）。
 package sshclient
 
 import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"net"
+	"os"
+	"path/filepath"
+	"runtime/debug"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -35,6 +40,150 @@ type Server struct {
 	Username string
 }
 
+// sshDebugLog 把 ops-toolbox 自己的 SSH 调用细节写到独立文件
+// （<exe 目录>/logs/ssh_debug.log），便于排查老 sshd 兼容性问题。
+// 注意：Go x/crypto/ssh 内部 KEXINIT 协商没有暴露 Logf API，
+// 这里只能记 ops-toolbox 自己的配置/调用/错误/耗时，
+// 真正的 SSH 协议包需要 ssh -vvv 或 Wireshark 抓。
+var (
+	sshDebugOnce sync.Once
+	sshDebugFile *os.File
+)
+
+func openSSHDebugLog() *os.File {
+	sshDebugOnce.Do(func() {
+		exe, err := os.Executable()
+		if err != nil {
+			return
+		}
+		real, err := filepath.EvalSymlinks(exe)
+		if err == nil && real != "" {
+			exe = real
+		}
+		logDir := filepath.Join(filepath.Dir(exe), "logs")
+		// logs/ 目录可能不存在（开发态跑 go run），尽力创建
+		_ = os.MkdirAll(logDir, 0o755)
+		f, err := os.OpenFile(filepath.Join(logDir, "ssh_debug.log"),
+			os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+		if err != nil {
+			return
+		}
+		sshDebugFile = f
+	})
+	return sshDebugFile
+}
+
+func sshDebugLogf(format string, args ...interface{}) {
+	f := openSSHDebugLog()
+	if f == nil {
+		return
+	}
+	ts := time.Now().Format("2006-01-02 15:04:05.000")
+	fmt.Fprintf(f, "[%s] %s\n", ts, fmt.Sprintf(format, args...))
+}
+
+// cryptoSSHVersion 运行时读取嵌入到二进制里的 Go module info，
+// 返回实际编译进来的 golang.org/x/crypto 版本字符串。
+// 用 runtime/debug.ReadBuildInfo 而不是 ldflags -X 注入，
+// 是因为 ReadBuildInfo 自动从 Go 编译时嵌入的 module graph 读取，
+// 不依赖编译参数，也不会因为忘加 ldflags 而拿到空字符串。
+// 也支持 Replace directive（指向 fork 版本时会同时打印原版和替换版）。
+func cryptoSSHVersion() string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return "unknown"
+	}
+	for _, dep := range info.Deps {
+		if dep.Path == "golang.org/x/crypto" {
+			if dep.Replace != nil {
+				return dep.Replace.Path + " " + dep.Replace.Version + " (replace for " + dep.Version + ")"
+			}
+			return dep.Version
+		}
+	}
+	return "not found in build info"
+}
+
+// sshTrafficLog 把 ops-toolbox 跟远端 sshd 之间的 TCP 字节流镜像到
+// <exe 目录>/logs/ssh_traffic.log（hex dump 格式）。
+// 既然不能装 ssh 客户端跑 ssh -vvv 抓真实 KEXINIT，
+// 就让 ops-toolbox 自己抓，这样能直接看到 client 发了什么 KEXINIT、
+// server 回了什么 KEXINIT、协商到哪一步 close 的。
+var (
+	sshTrafficOnce     sync.Once
+	sshTrafficFile     *os.File
+	sshTrafficDisabled bool
+)
+
+func openSSHTrafficLog() *os.File {
+	sshTrafficOnce.Do(func() {
+		exe, err := os.Executable()
+		if err != nil {
+			sshTrafficDisabled = true
+			return
+		}
+		real, err := filepath.EvalSymlinks(exe)
+		if err == nil && real != "" {
+			exe = real
+		}
+		logDir := filepath.Join(filepath.Dir(exe), "logs")
+		_ = os.MkdirAll(logDir, 0o755)
+		f, err := os.OpenFile(filepath.Join(logDir, "ssh_traffic.log"),
+			os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+		if err != nil {
+			sshTrafficDisabled = true
+			return
+		}
+		sshTrafficFile = f
+	})
+	return sshTrafficFile
+}
+
+// teedConn 包装一个 net.Conn，把所有 Read/Write 字节镜像到 hex 文件。
+// 用于在不装 Wireshark/ssh 客户端的情况下抓 SSH 协议包。
+//
+// readDir 和 writeDir 分别记录"从网络读到的字节方向"和"写到网络去的字节方向"，
+// 避免用同一个 dir 字段误导日志阅读者：
+//   - Read() 读的是 server→client 字节，所以用 readDir = "S->C"
+//   - Write() 写的是 client→server 字节，所以用 writeDir = "C->S"
+type teedConn struct {
+	conn     net.Conn
+	file     *os.File
+	mu       sync.Mutex
+	readDir  string // 通常为 "S->C"
+	writeDir string // 通常为 "C->S"
+}
+
+func (t *teedConn) Read(p []byte) (int, error) {
+	n, err := t.conn.Read(p)
+	if n > 0 && t.file != nil {
+		t.mu.Lock()
+		defer t.mu.Unlock()
+		fmt.Fprintf(t.file, "=== %s Read %d bytes @ %s ===\n",
+			t.readDir, n, time.Now().Format("15:04:05.000"))
+		t.file.Write([]byte(hex.Dump(p[:n])))
+	}
+	return n, err
+}
+
+func (t *teedConn) Write(p []byte) (int, error) {
+	if t.file != nil {
+		t.mu.Lock()
+		defer t.mu.Unlock()
+		fmt.Fprintf(t.file, "=== %s Write %d bytes @ %s ===\n",
+			t.writeDir, len(p), time.Now().Format("15:04:05.000"))
+		t.file.Write([]byte(hex.Dump(p)))
+	}
+	return t.conn.Write(p)
+}
+
+func (t *teedConn) Close() error                       { return t.conn.Close() }
+func (t *teedConn) LocalAddr() net.Addr                { return t.conn.LocalAddr() }
+func (t *teedConn) RemoteAddr() net.Addr               { return t.conn.RemoteAddr() }
+func (t *teedConn) SetDeadline(d time.Time) error      { return t.conn.SetDeadline(d) }
+func (t *teedConn) SetReadDeadline(d time.Time) error  { return t.conn.SetReadDeadline(d) }
+func (t *teedConn) SetWriteDeadline(d time.Time) error { return t.conn.SetWriteDeadline(d) }
+
 // Credentials 登录凭据（密码，每次由调用方传入）
 type Credentials struct {
 	Password string
@@ -48,6 +197,212 @@ type Client struct {
 }
 
 // Dial 连接并认证
+type sshCompatProfile struct {
+	Name              string
+	Description       string
+	KeyExchanges      []string
+	HostKeyAlgorithms []string
+	Ciphers           []string
+	MACs              []string
+}
+
+func sshCompatProfiles() []sshCompatProfile {
+	modernHostKeys := []string{
+		"rsa-sha2-512",
+		"rsa-sha2-256",
+		"ssh-rsa",
+		"ecdsa-sha2-nistp256",
+		"ecdsa-sha2-nistp384",
+		"ecdsa-sha2-nistp521",
+		"ssh-ed25519",
+	}
+	legacyHostKeys := append(append([]string{}, modernHostKeys...), "ssh-dss") // 只在 legacy 兜底里启用
+
+	wideCiphers := []string{
+		"aes128-gcm@openssh.com",
+		"aes256-gcm@openssh.com",
+		"chacha20-poly1305@openssh.com",
+		"aes128-ctr",
+		"aes192-ctr",
+		"aes256-ctr",
+		"aes128-cbc",
+		"aes192-cbc",
+		"aes256-cbc",
+		"3des-cbc",
+	}
+	wideMACs := []string{
+		"hmac-sha2-256-etm@openssh.com",
+		"hmac-sha2-512-etm@openssh.com",
+		"hmac-sha2-256",
+		"hmac-sha2-512",
+		"hmac-sha1",
+		"hmac-sha1-96",
+		"hmac-md5",
+	}
+
+	return []sshCompatProfile{
+		{
+			Name:              "compat-dh-before-ecdh",
+			Description:       "默认兼容模式：现代 server 仍优先 curve25519；老 6.2p2 优先 DH，绕开 ECDH P-256 路径",
+			HostKeyAlgorithms: modernHostKeys,
+			KeyExchanges: []string{
+				"curve25519-sha256",
+				"curve25519-sha256@libssh.org",
+				"diffie-hellman-group14-sha256",
+				"diffie-hellman-group-exchange-sha256",
+				"diffie-hellman-group14-sha1",
+				"diffie-hellman-group-exchange-sha1",
+				"ecdh-sha2-nistp256",
+				"ecdh-sha2-nistp384",
+				"ecdh-sha2-nistp521",
+				"diffie-hellman-group1-sha1",
+			},
+			Ciphers: wideCiphers,
+			MACs:    wideMACs,
+		},
+		{
+			Name:              "no-ecdh",
+			Description:       "自动回退 1：完全移除 ECDH，避免老 OpenSSL / 厂商补丁 sshd 在 ECDH_INIT 后 RST",
+			HostKeyAlgorithms: modernHostKeys,
+			KeyExchanges: []string{
+				"curve25519-sha256",
+				"curve25519-sha256@libssh.org",
+				"diffie-hellman-group14-sha256",
+				"diffie-hellman-group-exchange-sha256",
+				"diffie-hellman-group14-sha1",
+				"diffie-hellman-group-exchange-sha1",
+				"diffie-hellman-group1-sha1",
+			},
+			Ciphers: wideCiphers,
+			MACs:    wideMACs,
+		},
+		{
+			Name:              "legacy-dh-sha1-first",
+			Description:       "自动回退 2：面向 OpenSSH 5.x/6.0/6.2、AIX/老 WebSphere/老堡垒机；优先 group14-sha1，再到 group1",
+			HostKeyAlgorithms: legacyHostKeys,
+			KeyExchanges: []string{
+				"diffie-hellman-group14-sha1",
+				"diffie-hellman-group-exchange-sha1",
+				"diffie-hellman-group14-sha256",
+				"diffie-hellman-group-exchange-sha256",
+				"diffie-hellman-group1-sha1",
+			},
+			Ciphers: []string{
+				"aes128-ctr",
+				"aes192-ctr",
+				"aes256-ctr",
+				"aes128-cbc",
+				"aes192-cbc",
+				"aes256-cbc",
+				"3des-cbc",
+			},
+			MACs: []string{
+				"hmac-sha1",
+				"hmac-sha1-96",
+				"hmac-sha2-256",
+				"hmac-sha2-512",
+				"hmac-md5",
+			},
+		},
+	}
+}
+
+func passwordKeyboardInteractive(password string) ssh.KeyboardInteractiveChallenge {
+	return func(user, instruction string, questions []string, echos []bool) ([]string, error) {
+		answers := make([]string, len(questions))
+		for i := range questions {
+			// 老 sshd / PAM 有时只开放 keyboard-interactive，问题通常是 Password:。
+			// 对 echo=false 的问题返回同一个密码；echo=true 的交互问题不回显密码，避免误把密码写入日志/提示。
+			if i < len(echos) && !echos[i] {
+				answers[i] = password
+			}
+		}
+		return answers, nil
+	}
+}
+
+func newSSHClientConfig(srv Server, cred Credentials, timeout time.Duration, p sshCompatProfile) *ssh.ClientConfig {
+	return &ssh.ClientConfig{
+		User: srv.Username,
+		Auth: []ssh.AuthMethod{
+			ssh.Password(cred.Password),
+			// 兼容只开 keyboard-interactive/PAM 的老 Linux、AIX、堡垒机。
+			ssh.KeyboardInteractive(passwordKeyboardInteractive(cred.Password)),
+		},
+		Timeout:           timeout,
+		HostKeyCallback:   ssh.InsecureIgnoreHostKey(), // 内网工具 + 不在配置里管 known_hosts，第一版可接受
+		HostKeyAlgorithms: p.HostKeyAlgorithms,
+		Config: ssh.Config{
+			KeyExchanges: p.KeyExchanges,
+			Ciphers:      p.Ciphers,
+			MACs:         p.MACs,
+		},
+	}
+}
+
+func isNonRetryableSSHErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := strings.ToLower(err.Error())
+	// 认证失败不要反复重试，避免账号锁定/审计噪音。
+	for _, marker := range []string{
+		"unable to authenticate",
+		"no supported methods remain",
+		"permission denied",
+		"authentication failed",
+		"too many authentication failures",
+	} {
+		if strings.Contains(s, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func dialSSHOnce(ctx context.Context, addr string, srv Server, cred Credentials, timeout time.Duration, p sshCompatProfile, attempt int) (*ssh.Client, error) {
+	cfg := newSSHClientConfig(srv, cred, timeout, p)
+	sshDebugLogf("  attempt #%d profile : %s", attempt, p.Name)
+	sshDebugLogf("  profile desc       : %s", p.Description)
+	sshDebugLogf("  client kex         : %v", cfg.KeyExchanges)
+	sshDebugLogf("  client host_key    : %v", cfg.HostKeyAlgorithms)
+	sshDebugLogf("  client cipher      : %v", cfg.Ciphers)
+	sshDebugLogf("  client mac         : %v", cfg.MACs)
+
+	dialer := &net.Dialer{Timeout: timeout, KeepAlive: 30 * time.Second}
+	rawConn, dialErr := dialer.DialContext(ctx, "tcp", addr)
+	if dialErr != nil {
+		return nil, dialErr
+	}
+	// NewClientConn 没有 ctx 参数；设置握手 deadline，避免卡死。
+	_ = rawConn.SetDeadline(time.Now().Add(timeout))
+
+	trafficFile := openSSHTrafficLog()
+	if trafficFile != nil {
+		fmt.Fprintf(trafficFile, "\n\n========== new dial to %s @ %s | attempt=%d profile=%s ==========\n",
+			addr, time.Now().Format("2006-01-02 15:04:05.000"), attempt, p.Name)
+	}
+	teed := &teedConn{
+		conn:     rawConn,
+		file:     trafficFile,
+		readDir:  "S->C",
+		writeDir: "C->S",
+	}
+
+	sshConn, chans, reqs, err := ssh.NewClientConn(teed, addr, cfg)
+	if err != nil {
+		_ = rawConn.Close()
+		return nil, err
+	}
+	// 握手完成后清掉 deadline，避免长时间下载/实时 tail 被握手 deadline 误杀。
+	_ = rawConn.SetDeadline(time.Time{})
+	return ssh.NewClient(sshConn, chans, reqs), nil
+}
+
+// Dial 连接并认证。
+//
+// 兼容性策略：先走默认兼容算法；如果握手阶段 EOF/RST/算法无交集，则自动换无 ECDH、legacy DH 再试。
+// 认证失败不重试，避免账号锁定。这样可以减少内网反复发版成本。
 func Dial(ctx context.Context, srv Server, cred Credentials, timeout time.Duration) (*Client, error) {
 	if strings.TrimSpace(srv.Host) == "" {
 		return nil, errors.New("host 不能为空")
@@ -56,35 +411,44 @@ func Dial(ctx context.Context, srv Server, cred Credentials, timeout time.Durati
 		srv.Port = 22
 	}
 	addr := net.JoinHostPort(srv.Host, strconv.Itoa(srv.Port))
-	cfg := &ssh.ClientConfig{
-		User:            srv.Username,
-		Auth:            []ssh.AuthMethod{ssh.Password(cred.Password)},
-		Timeout:         timeout,
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(), // 内网工具 + 不在配置里管 known_hosts，第一版可接受
-	}
+	sshDebugLogf("==== Dial 开始 ====")
+	sshDebugLogf("  target       : %s (user=%s, timeout=%s)", addr, srv.Username, timeout)
+	sshDebugLogf("  x/crypto/ssh : %s", cryptoSSHVersion())
 
-	dialDone := make(chan struct {
-		c   *ssh.Client
-		err error
-	}, 1)
-	go func() {
-		// ssh.Dial 不支持 ctx，这里在另一个 goroutine 做，外部用 ctx 控制
-		c, err := ssh.Dial("tcp", addr, cfg)
-		dialDone <- struct {
-			c   *ssh.Client
-			err error
-		}{c, err}
-	}()
-
-	select {
-	case <-ctx.Done():
-		return nil, fmt.Errorf("SSH 连接 %s 超时: %s", addr, SanitizeError(ctx.Err().Error()))
-	case r := <-dialDone:
-		if r.err != nil {
-			return nil, fmt.Errorf("SSH 连接 %s 失败: %s", addr, SanitizeError(r.err.Error()))
+	dialStart := time.Now()
+	var lastErr error
+	profiles := sshCompatProfiles()
+	for i, p := range profiles {
+		if err := ctx.Err(); err != nil {
+			sshDebugLogf("Dial 超时/取消: %s (耗时 %s)", addr, time.Since(dialStart))
+			sshDebugLogf("  ctx err: %s", err.Error())
+			return nil, fmt.Errorf("SSH 连接 %s 超时: %s", addr, SanitizeError(err.Error()))
 		}
-		return &Client{srv: srv, cre: cred, conn: r.c}, nil
+		attemptStart := time.Now()
+		c, err := dialSSHOnce(ctx, addr, srv, cred, timeout, p, i+1)
+		if err == nil {
+			sshDebugLogf("Dial 成功: %s (耗时 %s, attempt=%d, profile=%s)", addr, time.Since(dialStart), i+1, p.Name)
+			sshDebugLogf("  client version: %s", string(c.Conn.ClientVersion()))
+			sshDebugLogf("  server version: %s", string(c.Conn.ServerVersion()))
+			return &Client{srv: srv, cre: cred, conn: c}, nil
+		}
+		lastErr = err
+		sshDebugLogf("Dial attempt 失败: %s (attempt=%d, profile=%s, 耗时 %s)", addr, i+1, p.Name, time.Since(attemptStart))
+		sshDebugLogf("  raw err: %s", SanitizeError(err.Error()))
+		if isNonRetryableSSHErr(err) {
+			sshDebugLogf("  不再重试：该错误看起来是认证失败/账号策略问题，不是算法兼容问题。")
+			break
+		}
+		if i < len(profiles)-1 {
+			sshDebugLogf("  准备自动切换 SSH 兼容 profile 重试。")
+		}
 	}
+	if lastErr == nil {
+		lastErr = errors.New("未知 SSH 连接错误")
+	}
+	sshDebugLogf("Dial 最终失败: %s (总耗时 %s)", addr, time.Since(dialStart))
+	sshDebugLogf("  提示: 查看 logs/ssh_traffic.log 中最后一次 attempt 的 KEXINIT/断开位置。")
+	return nil, fmt.Errorf("SSH 连接 %s 失败: %s", addr, SanitizeError(lastErr.Error()))
 }
 
 // Close 关闭底层连接
@@ -105,7 +469,9 @@ func (c *Client) RawConn() *ssh.Client {
 
 // SanitizeError 把远程错误信息里的敏感词脱敏，避免返回给前端的 err 中出现 "password"。
 // Go 的 x/crypto/ssh 在认证失败时会返回形如：
-//   "ssh: handshake failed: ssh: unable to authenticate, attempted methods [none password], no supported methods remain"
+//
+//	"ssh: handshake failed: ssh: unable to authenticate, attempted methods [none password], no supported methods remain"
+//
 // 这里把 "password" 这种字面量替换为 "***"，避免审计日志或错误响应里残留。
 func SanitizeError(s string) string {
 	if s == "" {
@@ -144,6 +510,9 @@ func (c *Client) Run(ctx context.Context, command string, timeout time.Duration,
 			done <- result{err: fmt.Errorf("创建 session 失败: %w", e)}
 			return
 		}
+		// 显式关闭 session，减少老 sshd / 堡垒机上的 channel 泄漏。
+		// Run() 会等待命令结束；本 defer 只在命令自然/异常结束后清理。
+		defer func() { _ = sess.Close() }()
 		var outBuf, errBuf strings.Builder
 		sess.Stdout = &safeWriter{w: &outBuf}
 		sess.Stderr = &safeWriter{w: &errBuf}
@@ -216,6 +585,8 @@ func (c *Client) Stream(ctx context.Context, command string, encoding string, on
 	if e != nil {
 		return -1, fmt.Errorf("创建 session 失败: %w", e)
 	}
+	// 显式关闭 session（stream 退出时），减少老 sshd channel 泄漏。
+	defer func() { _ = sess.Close() }()
 	// stderr 单独读：错误时能拿到原因；正常命令 stderr 通常是空的
 	stderrBuf := &safeWriter{w: &strings.Builder{}}
 	sess.Stderr = stderrBuf
@@ -279,23 +650,46 @@ func (c *Client) killSession(sess *ssh.Session) {
 }
 
 // safeWriter 简单的写包装，避免在错误状态下无限增长
+//
+// 行为：
+//   - 已写入字节数超过 max（或默认 8MB）时，写一次 "truncated" marker，
+//     后续 Write 直接返回 len(p) 但不再追加到 builder；
+//   - 用 truncated 标志保证 marker 只写一次，避免远端命令疯狂输出时
+//     把 "...[truncated]..." 重复追加到 builder 里继续涨内存。
 type safeWriter struct {
-	w    *strings.Builder
-	max  int
-	wrot int
+	w         *strings.Builder
+	max       int
+	wrot      int
+	truncated bool
 }
 
 func (s *safeWriter) Write(p []byte) (int, error) {
-	const cap = 8 * 1024 * 1024 // 8MB 上限，防止炸内存
-	if s.wrot+len(p) > cap {
-		remain := cap - s.wrot
+	capBytes := s.max
+	if capBytes <= 0 {
+		capBytes = 8 * 1024 * 1024 // 8MB 上限，防止炸内存
+	}
+	// 已经完全截断过：直接吞掉后续字节，不动 builder
+	if s.wrot >= capBytes {
+		if !s.truncated {
+			_, _ = s.w.Write([]byte("\n...[truncated]..."))
+			s.truncated = true
+		}
+		return len(p), nil
+	}
+	// 这一次写入会越过上限：写满到上限，再写一次 marker
+	if s.wrot+len(p) > capBytes {
+		remain := capBytes - s.wrot
 		if remain > 0 {
 			_, _ = s.w.Write(p[:remain])
 			s.wrot += remain
 		}
-		_, _ = s.w.Write([]byte("\n...[truncated]..."))
+		if !s.truncated {
+			_, _ = s.w.Write([]byte("\n...[truncated]..."))
+			s.truncated = true
+		}
 		return len(p), nil
 	}
+	// 正常写入
 	n, err := s.w.Write(p)
 	s.wrot += n
 	return n, err
