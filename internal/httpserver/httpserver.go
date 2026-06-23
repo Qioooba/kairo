@@ -121,6 +121,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleFilesDownload(w, r)
 	case path == "/api/local/reveal-file":
 		s.handleLocalReveal(w, r)
+	case path == "/api/preferences":
+		s.handlePreferences(w, r)
 	case path == "/api/local/open-folder":
 		s.handleLocalOpenFolder(w, r)
 	case strings.HasPrefix(path, "/api/files/download/"):

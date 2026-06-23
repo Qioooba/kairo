@@ -379,7 +379,10 @@ func (s *Server) listOneServer(
 
 	infos, err := sftpCli.ReadDir(path)
 	if err != nil {
-		return nil, fmt.Errorf("列出目录失败: %w", err)
+		// 注意：sftpclient.ReadDir 自己已经 wrap 过 "列出目录失败:"，
+		// 这里不要再 wrap，避免前端 toast 出现 "列出目录失败：列出目录失败: 列出目录失败: ..."
+		// 这种 3 层嵌套的难看错误信息。
+		return nil, err
 	}
 
 	entries := make([]filesEntry, 0, len(infos))
@@ -437,14 +440,14 @@ type filesPreviewReq struct {
 	Server   string `json:"server"`
 	Username string `json:"username"`
 	Password string `json:"password"`
-	Path     string `json:"path"`               // 必须以 "/" 开头的绝对路径
+	Path     string `json:"path"`                // 必须以 "/" 开头的绝对路径
 	Encoding string `json:"encoding,omitempty"`  // utf-8（默认）/ gbk / gb18030
 	MaxBytes int64  `json:"max_bytes,omitempty"` // 默认 1MB（1048576），最大 10MB
 }
 
 // filesPreviewLimits 预览的硬约束
 const (
-	filesPreviewDefaultMax = 1 << 20 // 1 MiB
+	filesPreviewDefaultMax = 1 << 20  // 1 MiB
 	filesPreviewHardMax    = 10 << 20 // 10 MiB — 超过就拒，防呆
 )
 
@@ -651,7 +654,6 @@ func (s *Server) handleFilesPreview(w http.ResponseWriter, r *http.Request) {
 	s.audit.Write("files.preview", "system", req.System, "server", req.Server, "path", req.Path, "result", "ok", "bytes", len(raw), "encoding", encoding)
 	writeJSON(w, 200, resp)
 }
-
 
 // filesDownloadLimits 下载任务的硬约束（避免误操作 / 连接卡死）
 const (

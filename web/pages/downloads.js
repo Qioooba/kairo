@@ -137,10 +137,12 @@
     }
 
     async function doOpenDir(f) {
-      // 调 /api/downloads/{name}/open-dir 让后端在系统文件管理器里打开 downloads/ 目录，
+      // 调 /api/downloads/open-dir?name=... 让后端在系统文件管理器里打开 downloads/ 目录，
       // 失败给红条 toast 提示。
+      // 注意：f.name 可能含子目录（如 "20260624/app.log"），所以放 query 参数而非 path，
+      // 避免后端 handler 把 "/" 判为非法字符。
       try {
-        await api('POST', '/api/downloads/' + encodeURIComponent(f.name) + '/open-dir');
+        await api('POST', '/api/downloads/open-dir?name=' + encodeURIComponent(f.name));
         toast('已请求在文件管理器中打开', 'ok');
       } catch (e) {
         toast('打开目录失败：' + e.message, 'err');

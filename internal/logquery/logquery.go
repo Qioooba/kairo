@@ -646,69 +646,82 @@ func SearchCommand(dir string, files []string, kw []SearchKeyword, max, timeoutS
 		return fmt.Sprintf("%q", term), nil
 	}
 
-	var pipes []string
-	// 第一段：对 file 操作。
-	// 关键：不管有没有正 term，第一步都要用 `grep -HnE` 直接读文件列表，让 grep
-	// 给每个文件加 `filename:lineno:` 前缀。即使只有一个文件，`-H` 也能保证
-	// 输出 filename:lineno:content 而不是只有 lineno:content，
-	// 否则 parseSearchOutput 会把 lineno 当成 filename 解析失败。
-	// 如果用 `cat -- file1 file2 file3` 拼成单流再喂给下游 grep，
-	// grep 看到单流就不再加前缀，前端解析就会错位。
-	if len(groups[0].pos) > 0 {
-		pat0, err := quoteForGrep(groups[0].pos[0])
-		if err != nil {
-			return "", err
-		}
-		pipes = append(pipes, fmt.Sprintf("grep -HnE %s -- %s", pat0, fileList))
-		for _, term := range groups[0].pos[1:] {
-			pat, err := quoteForGrep(term)
-			if err != nil {
-				return "", err
-			}
-			pipes = append(pipes, fmt.Sprintf("grep -E %s", pat))
-		}
-	} else {
-		// 第一段只有 neg（例: "!DEBUG"）。直接 `grep -HnE "^." -- file1 file2 file3`
-		// 让 grep 给每行加 `file:lineno:` 前缀，再串联 grep -vE。
-		pipes = append(pipes, fmt.Sprintf("grep -HnE %q -- %s", "^.", fileList))
-	}
-	for _, p := range groups[0].neg {
-		pat, err := quoteForGrep(p)
-		if err != nil {
-			return "", err
-		}
-		pipes = append(pipes, fmt.Sprintf("grep -vE %s", pat))
-	}
-	// 后续 OR 段：每段从 files 独立 grep，再用 sort -u 合并去重
+	// P0-3 修复：OR 搜索时每段都要独立读文件列表，不能把第一段结果通过管道传给子 shell。
+	// 原 bug：`grep A -- files | (grep B -- files; grep C -- files)` 里，
+	// 子 shell 的 stdin 指向管道，但 grep B/C 不读 stdin，各自重新读 files，
+	// 导致 grep A 的结果实际上被丢弃。
 	//
-	// v0.4 修复：原版本对 g.pos == [] 的分支直接 continue，纯 neg OR 段（"A || !B"）
-	// 会被整段丢掉。修正：纯 neg 段也要生成独立分支（先 `grep -HnE "^." -- files` 拿全部行，
-	// 再 `grep -vE B`），逻辑跟"纯 NOT"那个第一段对称。
-	if len(groups) > 1 {
-		var branches []string
-		for _, g := range groups[1:] {
-			branch, err := buildOrBranch(g, fileList, quoteForGrep)
+	// 正确结构：所有段（包括第一段 AND 链）全部放进统一子 shell，
+	// 每个分支独立用 grep 读 files，再 sort -u 合并。
+	// 例 A || B → `sh -c 'grep A -- files; grep B -- files' | sort -u | head -n N`
+	// 多段时：
+	//   ( grep A -- files | grep B -- files; grep C -- files ) | sort -u | head -n N
+	//
+	// buildBranch 是同一个 group 内的 AND 链构建（grep 串联 + neg 过滤），
+	// buildOrBranch 把 group 变成一个完整分支字符串（含括号外的 grep 读文件）。
+	// 我们把所有 groups（包括第一个）都作为分支，统一子 shell 合并。
+	var allBranches []string
+	for i, g := range groups {
+		var branch string
+		if len(g.pos) > 0 {
+			// AND 链：第一个 grep 读文件并加 filename:lineno: 前缀，后续 grep 串联过滤
+			pat0, err := quoteForGrep(g.pos[0])
 			if err != nil {
 				return "", err
 			}
-			if branch != "" {
-				branches = append(branches, branch)
+			// 关键：即使只有一个文件，grep -H 也要加，让输出有 filename: 前缀
+			// parseSearchOutput 按 filename: 分割，没有前缀会解析失败。
+			// 不能用 cat | grep：grep 看到 cat 的单流会去掉文件名，导致解析错位。
+			branch = fmt.Sprintf("grep -HnE %s -- %s", pat0, fileList)
+			for _, term := range g.pos[1:] {
+				pat, err := quoteForGrep(term)
+				if err != nil {
+					return "", err
+				}
+				branch += " | grep -E " + pat
 			}
+		} else {
+			// 纯 neg（例 "!DEBUG"）：用 grep -HnE "^." -- files 给所有行加前缀，再排除
+			branch = fmt.Sprintf("grep -HnE %q -- %s", "^.", fileList)
 		}
-		if len(branches) > 0 {
-			pipes = append(pipes,
-				"("+strings.Join(branches, "; ")+")",
-				"LC_ALL=C sort -u",
-			)
+		// neg 过滤（每组都适用，包括纯 neg 组）
+		for _, p := range g.neg {
+			pat, err := quoteForGrep(p)
+			if err != nil {
+				return "", err
+			}
+			branch += " | grep -vE " + pat
 		}
+		// 第一段（i==0）已经在 branch 里，不需要额外处理
+		_ = i
+		allBranches = append(allBranches, branch)
 	}
-	pipes = append(pipes, fmt.Sprintf("head -n %d", max))
 
-	cmdBody := strings.Join(pipes, " | ")
+	var cmdBody string
+	if len(allBranches) == 1 {
+		// 单一分支：不需要子 shell，直接 pipe 到 sort + head
+		cmdBody = allBranches[0] + " | LC_ALL=C sort -u | head -n " + strconv.Itoa(max)
+	} else {
+		// 多分支 OR：所有分支放进统一子 shell（每个分支独立读 files），再 sort -u + head
+		// 结构：( branch1; branch2; ... ) | LC_ALL=C sort -u | head -n N
+		cmdBody = "(" + strings.Join(allBranches, "; ") + ") | LC_ALL=C sort -u | head -n " + strconv.Itoa(max)
+	}
+
 	// 超时由 Go 客户端 ctx + 内部 timer 控制，这里不再依赖 Linux `timeout` 命令，
 	// 老 Linux / Alpine / 精简镜像也能跑。
 	cmd := fmt.Sprintf(`sh -c 'cd %q && %s'`, dir, cmdBody)
 	return cmd, nil
+}
+
+// orGroup 是 SearchCommand 把 kw 切分成"OR 段"时用的内部容器：
+//   - pos: 当前段里的"正"term（被 grep -E / grep -HnE 命中的）
+//   - neg: 当前段里的"负"term（被 grep -vE 排除的）
+//
+// 每个 group 在 SearchCommand 里会被构造成一个独立分支，
+// 所有分支放进统一子 shell 用 sort -u 合并（P0-3 修复 OR 语义）。
+type orGroup struct {
+	pos []string
+	neg []string
 }
 
 // quoteArgs 把每个 arg 包成单引号字符串
@@ -719,56 +732,6 @@ func quoteArgs(args []string) []string {
 		out = append(out, "'"+a+"'")
 	}
 	return out
-}
-
-// orGroup 是 SearchCommand 把 kw 切分成"OR 段"时用的内部容器：
-//   - pos: 当前段里的"正"term（被 grep -E / grep -HnE 命中的）
-//   - neg: 当前段里的"负"term（被 grep -vE 排除的）
-//
-// 提升到包级类型而不是 SearchCommand 内的局部类型，是为了让 buildOrBranch 能直接复用，
-// 避免重复声明 struct shape。
-type orGroup struct {
-	pos []string
-	neg []string
-}
-
-// buildOrBranch 构造一个 OR 分支的命令片段（不含前后括号）。
-//
-// g 是经 ParseQuery 拆分后、去掉"或"操作符得到的 pos/neg 列表：
-//   - pos 非空：从 grep -HnE pos[0] 开始，正 term 串联（AND），再 neg 串联（NOT）；
-//   - pos 为空：纯 neg 分支，先 `grep -HnE "^." -- files` 拿全部行（保留 filename:lineno: 前缀），
-//     再 grep -vE neg。
-//
-// 返回空字符串说明该 group 完全是空的（不应该发生 —— ParseQuery 已经挡了，
-// 这里再做防御性检查）。
-func buildOrBranch(g orGroup, fileList string, quoteForGrep func(string) (string, error)) (string, error) {
-	var branch string
-	if len(g.pos) > 0 {
-		pat0, err := quoteForGrep(g.pos[0])
-		if err != nil {
-			return "", err
-		}
-		branch = fmt.Sprintf("grep -HnE %s -- %s", pat0, fileList)
-		for _, term := range g.pos[1:] {
-			pat, err := quoteForGrep(term)
-			if err != nil {
-				return "", err
-			}
-			branch += " | grep -E " + pat
-		}
-	} else if len(g.neg) > 0 {
-		// 纯 neg 分支：用 `grep -HnE "^." -- files` 给每行打前缀，
-		// 前端 parseSearchOutput 仍能正确解析 file:lineno:content。
-		branch = fmt.Sprintf(`grep -HnE %q -- %s`, "^.", fileList)
-	}
-	for _, p := range g.neg {
-		pat, err := quoteForGrep(p)
-		if err != nil {
-			return "", err
-		}
-		branch += " | grep -vE " + pat
-	}
-	return branch, nil
 }
 
 // ContextCommand 构造 "sed -n 'a,bp' file" 上下文查看命令

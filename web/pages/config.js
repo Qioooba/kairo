@@ -173,8 +173,20 @@
       nameInp.addEventListener('input', () => { sys.name = nameInp.value; markDirty(); });
       descInp.addEventListener('input', () => { sys.description = descInp.value; markDirty(); });
       const btnUp = el('button', { class: 'btn btn-sm', text: '↑', title: '上移', onclick: () => { if (si > 0) { [state.systems[si-1], state.systems[si]] = [state.systems[si], state.systems[si-1]]; markDirty(); renderEditor(); } } });
-      const btnDown = el('button', { class: 'btn btn-sm', text: '↓', title: '下移', onclick: () => { if (si < state.systems.length - 1) { [state.systems[si+1], state.systems[si]] = [state.systems[si], state.systems[si-1]]; markDirty(); renderEditor(); } } });
-      const btnDup = el('button', { class: 'btn btn-sm', text: '复制', onclick: () => { state.systems.splice(si+1, 0, JSON.parse(JSON.stringify(sys))); markDirty(); renderEditor(); } });
+      // P0-2 修复：下移逻辑写反了（右侧用了 si-1 而非 si+1），导致数组越位破坏
+      const btnDown = el('button', { class: 'btn btn-sm', text: '↓', title: '下移', onclick: () => { if (si < state.systems.length - 1) { [state.systems[si+1], state.systems[si]] = [state.systems[si], state.systems[si+1]]; markDirty(); renderEditor(); } } });
+      const btnDup = el('button', { class: 'btn btn-sm', text: '复制', title: '复制整个业务系统（含所有服务器和日志目录），自动加 -copy 后缀避免重名',
+        onclick: () => {
+          const dup = JSON.parse(JSON.stringify(sys));
+          dup.name = (sys.name || '未命名') + '-copy';
+          // 复制里的服务器也加 -copy 后缀，保持一致性（参考 server 复制行为）
+          if (Array.isArray(dup.servers)) {
+            dup.servers.forEach(s => { if (s && s.name) s.name = s.name + '-copy'; });
+          }
+          state.systems.splice(si + 1, 0, dup);
+          markDirty();
+          renderEditor();
+        } });
       const btnDel = el('button', { class: 'btn btn-sm btn-danger', text: '删除系统', onclick: () => { if (confirm('确认删除业务系统 “' + (sys.name || '(未命名)') + '” 及其全部服务器？')) { state.systems.splice(si, 1); markDirty(); renderEditor(); } } });
       btnUp.disabled = si === 0; btnDown.disabled = si === state.systems.length - 1;
 
@@ -329,11 +341,13 @@
         el('span', { class: 'lbl', text: '文件名规则（每行一条）' }),
         patTa
       ]));
+      // P2-16：新增"复制当前日志目录"按钮
+      const btnDirDup = el('button', { class: 'btn btn-sm', text: '复制目录', title: '复制此日志目录（含别名/路径/编码/文件名规则）', onclick: () => { srv.log_dirs = srv.log_dirs || []; srv.log_dirs.splice(ldi + 1, 0, JSON.parse(JSON.stringify(ld))); onEdit(); renderEditor(); } });
       const btnDirUp = el('button', { class: 'btn btn-sm', text: '↑', onclick: () => { if (ldi > 0) { [srv.log_dirs[ldi-1], srv.log_dirs[ldi]] = [srv.log_dirs[ldi], srv.log_dirs[ldi-1]]; onEdit(); renderEditor(); } } });
       const btnDirDown = el('button', { class: 'btn btn-sm', text: '↓', onclick: () => { if (ldi < srv.log_dirs.length - 1) { [srv.log_dirs[ldi+1], srv.log_dirs[ldi]] = [srv.log_dirs[ldi], srv.log_dirs[ldi+1]]; onEdit(); renderEditor(); } } });
-      const btnDirDel = el('button', { class: 'btn btn-sm btn-danger', text: '删除目录', onclick: () => { if (confirm('确认删除日志目录 “' + (ld.name || ld.path || '(未命名)') + '” ？')) { srv.log_dirs.splice(ldi, 1); onEdit(); renderEditor(); } } });
+      const btnDirDel = el('button', { class: 'btn btn-sm btn-danger', text: '删除目录', onclick: () => { if (confirm('确认删除日志目录 "' + (ld.name || ld.path || '(未命名)') + '" ？')) { srv.log_dirs.splice(ldi, 1); onEdit(); renderEditor(); } } });
       btnDirUp.disabled = ldi === 0; btnDirDown.disabled = ldi === srv.log_dirs.length - 1;
-      wrap.appendChild(el('div', { class: 'dir-actions' }, [btnDirUp, btnDirDown, btnDirDel]));
+      wrap.appendChild(el('div', { class: 'dir-actions' }, [btnDirDup, btnDirUp, btnDirDown, btnDirDel]));
       return wrap;
     }
 
@@ -343,10 +357,21 @@
       if (err) { toast('保存失败：' + err, 'err'); return; }
       try {
         const r = await api('PUT', '/api/admin/servers', { systems: state.systems });
-        toast('已保存到 ' + r.path, 'ok');
+        // P0-5 修复：保存成功后重新 GET 后端，用后端规范化后的数据覆盖前端 state，
+        // 确保 encoding 归一等后端处理被前端确认（比如 gbk→gbk，utf-8→utf-8）。
+        // 同时 toast 里显示"后端确认"让用户知道写盘成功。
+        const info = await api('GET', '/api/admin/servers');
+        state.app = info.app;
+        state.search = info.search;
+        state.systems = JSON.parse(JSON.stringify(info.systems));
         state.dirty = false;
+        state.loaded = true;
         OTB.state.unsavedConfig = false;
         syncSaveBtns();
+        renderApp();
+        renderSearch();
+        renderEditor();
+        toast('已保存并后端确认：' + r.path, 'ok');
       } catch (e) {
         toast('保存失败：' + e.message, 'err');
       }

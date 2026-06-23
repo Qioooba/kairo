@@ -238,10 +238,14 @@
           } else {
             rememberChk.disabled = false;
             rememberLabel.style.display = '';
-            rememberChk.checked = !!r.has;
+            // P1-13 修复：不再因为"未保存密码"就取消勾选（用户可能想保存新密码）
+            // 只有 storeDisabled 时才强制取消；正常情况保持用户的选择。
+            if (!storeDisabled && !r.has) {
+              // 未保存密码时什么都不做（保持 rememberChk.checked 当前值）
+            }
           }
         })
-        .catch(() => { rememberChk.checked = false; });
+        .catch(() => { /* 凭据检查失败，保持当前状态 */ });
     }
 
     function creds() {
@@ -278,6 +282,21 @@
       renderCommonDirsBar();
     }
 
+    // P1-11：切换服务器时，把该服务器的 log_dirs 自动插入常用目录栏前面
+    function prependLogDirsToCommonDirs(srv) {
+      if (!srv || !srv.log_dirs || !srv.log_dirs.length) return;
+      const k = currentCommonDirsKey();
+      if (!k) return;
+      const existing = state.commonDirs[k] || [];
+      const logDirs = srv.log_dirs.filter(ld => {
+        // 避免重复
+        return !existing.find(e => e.path === ld.path);
+      });
+      if (!logDirs.length) return;
+      state.commonDirs[k] = [...logDirs.map(ld => ({ name: ld.name || ld.path, path: ld.path })), ...existing];
+      saveCommonDirs();
+    }
+
     function setServer(name) {
       state.currentSrv = name;
       const sys = (state.cfg.systems || []).find(s => s.name === state.currentSys);
@@ -285,6 +304,8 @@
       if (srv && srv.username && !userInp.value) {
         userInp.value = srv.username;
       }
+      // P1-11：自动把服务器配置的 log_dirs 加进常用目录
+      prependLogDirsToCommonDirs(srv);
       refreshCredStatus();
       persistSelection();
       renderCommonDirsBar();
@@ -655,9 +676,19 @@
 
     // globToRegex 把 "system*.log" / "*.log" / "log?" 这样的 glob 转成正则（已 lowercase）
     function globToRegex(glob) {
-      // 把用户输入转义正则元字符，再把 \* 和 \? 还原
-      const escaped = glob.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.');
-      return new RegExp('^' + escaped + '$', 'i');
+      // 占位符承诺"子串 / 通配符 * ?"。
+      // 含 * 或 ? → 通配语义（^...$）；否则 → 子串（去掉 ^...$）。
+      // 顺序：先把 * ? 替换为占位符，再 escape 其余元字符，
+      // 再把占位符还原为 .* / .。否则 * 会被字符类转义打乱。
+      if (glob.indexOf('*') !== -1 || glob.indexOf('?') !== -1) {
+        const wildcardsReplaced = glob.replace(/\*/g, '\u0001').replace(/\?/g, '\u0002');
+        const escaped = wildcardsReplaced.replace(/[.+^${}()|[\]\\]/g, '\\$&')
+          .replace(/\u0001/g, '.*').replace(/\u0002/g, '.');
+        return new RegExp(escaped, 'i');
+      }
+      // 纯字串 → 退化为子串匹配（直接 in 一下，避免把普通文本误当正则）
+      const lower = glob.toLowerCase();
+      return { test: (s) => (s || '').toLowerCase().indexOf(lower) !== -1 };
     }
 
     function renderTable() {
@@ -722,18 +753,18 @@
             e.preventDefault(); doListDir(fullPath, creds());
           }}));
         } else {
-          // v0.5 项 1：文件名改成可点击链接 → 弹窗预览（前 1MB 内容）
+          // P1-10 修复：点击文件名直接新窗口预览（用户原需求），
+          // Shift+点击 / Ctrl+点击才弹 modal。modal 作为备用入口。
           const link = el('a', {
             href: '#',
             text: entry.name,
-            title: '点击弹窗预览前 1MB 内容（按住 Shift 在新窗口预览）',
+            title: '点击新窗口预览前 1MB 内容（Shift+点击 弹窗预览）',
             onclick: (e) => {
               e.preventDefault();
-              if (e.shiftKey) {
-                // Shift+点击 → 直接开新窗口预览（用户原话："新开浏览器窗口预览"）
-                openPreviewInNewWindow(fullPath, entry.name);
-              } else {
+              if (e.shiftKey || e.ctrlKey || e.metaKey) {
                 openPreview(fullPath, entry.name);
+              } else {
+                openPreviewInNewWindow(fullPath, entry.name);
               }
             }
           });

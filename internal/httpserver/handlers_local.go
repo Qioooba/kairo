@@ -14,9 +14,30 @@ import (
 // 用户体验：下完文件后 → 一键跳到 Finder/Explorer 看到它，
 // 再拖到聊天工具/邮件，整个流程不用切窗口。
 //
-// 安全：path 必须以 cfg.DownloadDir() 为根（白名单），防止任意目录被 reveal。
+// 安全：path 必须以 cfg.DownloadDir() 为根（白名单），
+// 或者以请求体里 `folder` 字段（即下载任务实际落地的目录）为根，
+// 防止任意目录被 reveal。
 type localRevealReq struct {
-	Path string `json:"path"` // 绝对路径（前端从 Item.AbsPath 拿）
+	Path   string `json:"path"`   // 绝对路径（前端从 Item.AbsPath 拿）
+	Folder string `json:"folder"` // 可选：下载任务实际落地目录（自定义 target_dir 时非空）
+}
+
+// P0-4 修复：localReveal/localOpenFolder 原来只认 cfg.DownloadDir()，
+// 用户用自定义 target_dir 下载后，"打开目录"会被 403 拒绝。
+// 改为：允许 cfg.DownloadDir() 或请求体里 folder（下载任务实际目录）。
+func allowAnyRoot(allowRoot, customFolder, target string) error {
+	// 先试默认目录
+	if err := openPathAllowed(allowRoot, target); err == nil {
+		return nil
+	}
+	// 再试自定义目录（下载任务里用户指定的 target_dir）
+	if customFolder != "" {
+		if err := openPathAllowed(customFolder, target); err == nil {
+			return nil
+		}
+	}
+	// 都不行，返回默认目录的报错信息
+	return openPathAllowed(allowRoot, target)
 }
 
 func (s *Server) handleLocalReveal(w http.ResponseWriter, r *http.Request) {
@@ -33,9 +54,9 @@ func (s *Server) handleLocalReveal(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, errors.New("path 不能为空"))
 		return
 	}
-	// 路径白名单：必须以 cfg.DownloadDir() 为根
+	// 路径白名单：默认 cfg.DownloadDir() + 自定义 folder（下载任务的实际目录）
 	allowRoot := s.cur().DownloadDir()
-	if err := openPathAllowed(allowRoot, req.Path); err != nil {
+	if err := allowAnyRoot(allowRoot, req.Folder, req.Path); err != nil {
 		writeErr(w, 403, err)
 		return
 	}
@@ -51,7 +72,8 @@ func (s *Server) handleLocalReveal(w http.ResponseWriter, r *http.Request) {
 //
 // 打开目录（不选中文件）；用于"下完一组文件后 → 打开当天的 downloads/YYYYMMDD 目录"。
 type localOpenFolderReq struct {
-	Path string `json:"path"` // 绝对目录路径
+	Path   string `json:"path"`   // 绝对目录路径
+	Folder string `json:"folder"` // 可选：下载任务实际落地目录（自定义 target_dir 时非空）
 }
 
 func (s *Server) handleLocalOpenFolder(w http.ResponseWriter, r *http.Request) {
@@ -68,9 +90,9 @@ func (s *Server) handleLocalOpenFolder(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, errors.New("path 不能为空"))
 		return
 	}
-	// 路径白名单
+	// 路径白名单：默认 cfg.DownloadDir() + 自定义 folder（P0-4 修复）
 	allowRoot := s.cur().DownloadDir()
-	if err := openPathAllowed(allowRoot, req.Path); err != nil {
+	if err := allowAnyRoot(allowRoot, req.Folder, req.Path); err != nil {
 		writeErr(w, 403, err)
 		return
 	}

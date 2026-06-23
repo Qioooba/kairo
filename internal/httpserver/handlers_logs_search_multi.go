@@ -42,7 +42,7 @@ type logsSearchMultiReq struct {
 	Servers        []string           `json:"servers"`
 	Dir            string             `json:"dir"`
 	Targets        []logsSearchTarget `json:"targets"`
-	Files          int                `json:"files"`          // scope_mode=latest 时：每台搜索最近 N 个文件
+	Files          int                `json:"files"` // scope_mode=latest 时：每台搜索最近 N 个文件
 	Query          string             `json:"query"`
 	Username       string             `json:"username"`
 	Password       string             `json:"password"`
@@ -51,9 +51,17 @@ type logsSearchMultiReq struct {
 	//   - "latest"（默认）：先 ListCommand 取最近 N 个文件，再搜索
 	//   - "selected"：直接用 SelectedFiles 作为文件名列表，跳过 ListCommand
 	//   - "glob"：用 FilePatterns 作为文件名 glob（跟 latest 一样列文件，但 patterns 覆盖 ld.Patterns）
-	ScopeMode      string   `json:"scope_mode,omitempty"` // "" = latest（向后兼容）
-	SelectedFiles  []string `json:"selected_files"`       // scope_mode=selected 时：精确指定文件名
-	FilePatterns   []string `json:"file_patterns"`        // scope_mode=glob 时：文件名 glob 列表
+	ScopeMode       string             `json:"scope_mode,omitempty"`  // "" = latest（向后兼容）
+	SelectedFiles   []string           `json:"selected_files"`        // [legacy] 通用文件名列表，所有 target 共用（向后兼容）
+	SelectedTargets []logsSelectedFile `json:"selected_file_targets"` // [v0.6 P1-9] 每条带 (server, dir, file)，按 target 精确指定；优先级高于 SelectedFiles
+	FilePatterns    []string           `json:"file_patterns"`         // scope_mode=glob 时：文件名 glob 列表
+}
+
+// logsSelectedFile v0.6 P1-9：selected_files 的 per-target 形态
+type logsSelectedFile struct {
+	Server string `json:"server"`
+	Dir    string `json:"dir"`
+	File   string `json:"file"`
 }
 
 // logsSearchTarget 一个 (server, dir) 搜索目标
@@ -239,7 +247,24 @@ func (s *Server) handleLogsSearchMulti(w http.ResponseWriter, r *http.Request) {
 					scope = "latest"
 				}
 			}
-			res := s.runOneServerSearchWithScope(totalCtx, srv, ld, scope, filesN, req.SelectedFiles, req.FilePatterns, kw, c.Username, c.Password)
+			// v0.6 P1-9：按 target (server, dir) 过滤 selected_file_targets；
+			// 没匹配到再退到通用 SelectedFiles（向后兼容）。
+			perTargetFiles := filterSelectedFilesForTarget(req.SelectedTargets, target)
+			// 优先级：per-target 命中（即使空数组也算"显式空"）> 通用 SelectedFiles
+			var useFiles []string
+			hasPerTarget := false
+			for _, t := range req.SelectedTargets {
+				if t.Server == target.Server && t.Dir == target.Dir {
+					hasPerTarget = true
+					break
+				}
+			}
+			if hasPerTarget {
+				useFiles = perTargetFiles
+			} else {
+				useFiles = req.SelectedFiles
+			}
+			res := s.runOneServerSearchWithScope(totalCtx, srv, ld, scope, filesN, useFiles, req.FilePatterns, kw, c.Username, c.Password)
 			// B1：按文件 mtime 过滤命中
 			if res.OK && len(res.Hits) > 0 {
 				res.Hits = logquery.FilterHitsByTimeWindow(res.Hits, res.fileList, tw)
@@ -460,4 +485,20 @@ func (s *Server) runOneServerSearchWithScope(
 	res.Ms = time.Since(start).Milliseconds()
 	res.fileList = files // B1：保留给时间窗口过滤
 	return res
+}
+
+// filterSelectedFilesForTarget v0.6 P1-9：从 per-target 列表里筛选出匹配
+// (server, dir) 的 file 列表（不区分大小写；file 名做 trim 兜底）。
+// 调用方需先判断 hasPerTarget（命中）再决定是否使用。
+func filterSelectedFilesForTarget(items []logsSelectedFile, target logsSearchTarget) []string {
+	out := make([]string, 0, len(items))
+	for _, it := range items {
+		if it.Server == target.Server && it.Dir == target.Dir {
+			f := strings.TrimSpace(it.File)
+			if f != "" {
+				out = append(out, f)
+			}
+		}
+	}
+	return out
 }

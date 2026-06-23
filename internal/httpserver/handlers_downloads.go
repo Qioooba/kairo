@@ -75,15 +75,23 @@ func (s *Server) handleDownloadsList(w http.ResponseWriter, r *http.Request) {
 //   - DELETE /api/downloads/{name}              — 删除单个文件
 //   - POST   /api/downloads/all                 — 清空所有
 //   - POST   /api/downloads/{name}/open-dir     — 在文件管理器里 reveal 文件（B3）
+//   - POST   /api/downloads/open-dir?name=...   — v0.5 起新增：name 含 "/" 时走 query，
+//     避免 path 段 "/" 被前面 open-dir 拒。
 func (s *Server) handleDownloadsItem(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/api/downloads/")
 	if rest == "" {
 		http.NotFound(w, r)
 		return
 	}
-	// 子路径分发：{name}/open-dir
-	if strings.HasSuffix(rest, "/open-dir") {
-		name := strings.TrimSuffix(rest, "/open-dir")
+	// 子路径分发：{name}/open-dir  或  open-dir?name=...（v0.5 新接口）
+	if strings.HasSuffix(rest, "/open-dir") || rest == "open-dir" {
+		// 兼容 v0.5 新接口 /api/downloads/open-dir?name=...（用于 name 含 "/" 时）
+		var name string
+		if strings.HasSuffix(rest, "/open-dir") {
+			name = strings.TrimSuffix(rest, "/open-dir")
+		} else {
+			name = r.URL.Query().Get("name")
+		}
 		if name == "" || name == "all" {
 			writeErr(w, 400, errors.New("open-dir 需要指定文件名"))
 			return
@@ -123,6 +131,9 @@ func (s *Server) handleDownloadsItem(w http.ResponseWriter, r *http.Request) {
 //
 // 路由：POST /api/downloads/{name}/open-dir
 //
+// v0.5 起 name 可走子目录（如 "20260624/app.log"），由前端用 query 参数 ?name=...
+// 传入，避免 path 段 "/" 被这里判为非法字符。
+//
 // 行为：
 //   - macOS → Finder 里 reveal 并选中（open -R）；
 //   - Windows → Explorer 里 reveal 并选中（explorer.exe /select,...）；
@@ -143,8 +154,9 @@ func (s *Server) handleDownloadsOpenDir(w http.ResponseWriter, r *http.Request, 
 		writeErr(w, 405, errors.New("仅支持 POST"))
 		return
 	}
-	// name 反向防注入：拒绝路径分隔符 / .. / NUL
-	if strings.ContainsAny(name, "/\\\x00") || name == "." || name == ".." {
+	// name 反向防注入：拒绝 .. / 反斜杠 / NUL。
+	// 允许 "/" 因为 v0.5 起支持按日期子目录（"20260624/app.log"），但限制不能含 ".."。
+	if strings.ContainsAny(name, "\\\x00") || strings.Contains(name, "..") {
 		writeErr(w, 400, errors.New("name 含非法字符"))
 		return
 	}

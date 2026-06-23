@@ -17,7 +17,7 @@
 
   function renderWebsphere(view) {
     let cfg = null;
-    let listState = { files: [], serverName: '', dlId: null, dlEvtSrc: null, fileStates: {} };
+    let listState = { files: [], serverName: '', dlId: null, dlEvtSrc: null, fileStates: {}, lastDownloadFolder: '' };
     const srvStatus = {};
 
     const sysSel = el('select', { id: 'ws-sys' });
@@ -79,6 +79,8 @@
     }
 
     const dlNSel = el('select', { id: 'ws-dl-n' });
+    // P1-7：文件名过滤（多组文件列表实时过滤）
+    let wsFileFilter = '';
     [1, 2, 3, 4, 5].forEach(n => {
       const o = el('option', { value: String(n), text: '最近 ' + n + ' 个文件' });
       if (n === 3) o.selected = true;
@@ -171,6 +173,8 @@
         dirs: dirs,
         username: userInp.value
       });
+      // P1-8：勾选变化时实时刷新目标摘要（按 server/dir 组合显示）
+      try { updateTargetSummary(); } catch (e) { /* ignore */ }
     }
     function renderSrvPick() {
       const prevChecked = getCheckedServers();
@@ -207,6 +211,10 @@
         ]);
         srvPickWrap.appendChild(item);
       });
+      // P0-BugFix #2：初次渲染 / 切系统后必须把已勾选服务器的目录区展开，
+      // 否则 srvDirsWrap 永远停在 "勾选服务器后会展开它的日志目录，可多选"
+      // 提示语，导致「列出文件 / 搜索」拿不到 (server, dir) targets。
+      renderSrvDirs();
     }
     // renderSrvDirs v0.5：每个勾选服务器展开一个目录勾选区
     function renderSrvDirs() {
@@ -224,7 +232,8 @@
       checkedSrvs.forEach(srvName => {
         const srv = sys.servers.find(s => s.name === srvName);
         if (!srv) return;
-        const block = el('div', { class: 'srv-dirs-block' });
+        // P2-19：srv-dirs-block 加 tier 色彩，跟 sys-block/srv-block/dir-block 保持一致
+        const block = el('div', { class: 'srv-dirs-block dir-block' });
         const head = el('div', { class: 'srv-dirs-head' }, [
           el('span', { class: 'name', text: srv.name }),
           el('span', { class: 'text-dim', text: ' · ' + (srv.log_dirs || []).length + ' 个目录' })
@@ -239,7 +248,8 @@
           //   - 无上次 + dirSel 命中 → 兜底勾上
           const dirHit = lastDirs.find(x => x.srv === srv.name && x.dir === d.path);
           const fallbackHit = (lastDirs.length === 0 && dirSel.value === d.path);
-          const parentChecked = (lastDirs.length === 0 && wasChecked); // 同上：父级默认勾则目录默认全勾
+          // P0-1 修复：parentChecked 引用 renderSrvPick 里的 wasChecked 局部变量 → 改成从当前 checkedSrvs 判断
+          const parentChecked = (lastDirs.length === 0 && checkedSrvs.indexOf(srv.name) !== -1);
           if (dirHit || fallbackHit || parentChecked) cb.checked = true;
           cb.addEventListener('change', persistSelection);
           const enc = (d.encoding || 'utf-8').toLowerCase();
@@ -272,6 +282,9 @@
       });
     }
     sysSel.addEventListener('change', () => { renderSrvPick(); refreshDirs(); refreshCredStatus(); persistSelection(); });
+    // P1-8：renderSrvDirs / renderSrvPick 内部本来就会 persistSelection，所以这里
+    // 不需要再额外调 updateTargetSummary。但因为 renderSrvPick 后会重建 srvPickWrap，
+    // 摘要需要根据"新勾选列表"重新算；persistSelection 里调一次就够。
     dirSel.addEventListener('change', persistSelection);
     userInp.addEventListener('input', () => { clearTimeout(userInp._t); userInp._t = setTimeout(persistSelection, 500); });
     userInp.addEventListener('change', refreshCredStatus);
@@ -281,6 +294,15 @@
     const btnList = el('button', { class: 'btn btn-primary', text: '列出文件', onclick: doList });
     const btnDownload = el('button', { class: 'btn', text: '下载', onclick: doDownload });
     const btnSearch = el('button', { class: 'btn btn-primary', text: '搜索', onclick: doSearch });
+    // P1-12：下载最新日志也支持 target_dir（自定义本地落点）。
+    // 必须提前声明到 btnDownload 同一作用域，doDownload() 会读它的 value。
+    const dlTargetDirInp = el('input', {
+      type: 'text',
+      id: 'ws-dl-target-dir',
+      placeholder: '本地下载目录（留空走默认）',
+      style: 'min-width:180px;',
+      title: '留空 → 走 cfg.download_dir。写绝对路径 → 落到指定目录。'
+    });
 
     const fileTableWrap = el('div', { class: 'card', style: 'display:none' });
     const hitTableWrap = el('div', { class: 'card', style: 'display:none' });
@@ -405,54 +427,105 @@
     async function doList() {
       const targets = getSelectedTargets();
       if (!targets.length) { toast('请先勾选服务器 + 目录（多对多）', 'warn'); return; }
-      // 并行拉每台 (server, dir) 的文件列表，结果分组合并
+      // P1-6 修复：改用 /api/logs/list/targets 一次请求，由后端并发拉所有 targets，
+      // 避免前端 N×/api/logs/list 的 N+1 延迟问题（10+ 台时明显）。
       listState.groups = [];
       listState.files = [];
       listState.serverName = targets.length === 1 ? (targets[0].server + ' · ' + (targets[0].dir.split('/').pop() || targets[0].dir)) : (targets.length + ' 组');
       renderFileTable();
       fileTableWrap.style.display = '';
       const t0 = Date.now();
-      // 简单并发（不抢搜索的并发槽）
-      const conc = Math.min(8, targets.length);
-      const sem = new Array(conc).fill(Promise.resolve());
-      const promises = targets.map((tgt) => {
-        return new Promise((resolve) => {
-          const slot = sem.shift();
-          sem.push(slot.then(() => {
-            return api('POST', '/api/logs/list', {
-              system: sysSel.value, server: tgt.server, dir: tgt.dir,
-              username: userInp.value, password: passInp.value
-            }).then(r => {
-              const grp = { server: tgt.server, dir: tgt.dir, files: r.files || [], error: null };
-              listState.groups.push(grp);
-              resolve();
-            }).catch(e => {
-              listState.groups.push({ server: tgt.server, dir: tgt.dir, files: [], error: e.message });
-              resolve();
-            });
-          }));
+      try {
+        const r = await api('POST', '/api/logs/list/targets', {
+          system: sysSel.value,
+          targets: targets,
+          username: userInp.value,
+          password: passInp.value
         });
-      });
-      await Promise.all(promises);
+        const results = Array.isArray(r) ? r : (r.servers || r.results || []);
+        results.forEach(srv => {
+          listState.groups.push({
+            server: srv.server,
+            dir: srv.dir,
+            files: (srv.files || []).map(f => ({
+              name: f.name,
+              full_path: f.full_path,
+              size: f.size,
+              mod_time: f.mod_time
+            })),
+            error: srv.ok ? null : (srv.error || '未知错误')
+          });
+        });
+        const dt = Date.now() - t0;
+        const okN = listState.groups.filter(g => !g.error).length;
+        const totalFiles = listState.groups.reduce((a, g) => a + g.files.length, 0);
+        toast((okN === listState.groups.length ? '列出完成：' : '部分失败：') + totalFiles + ' 个文件 / ' + okN + '/' + listState.groups.length + ' 组 · ' + dt + 'ms', okN === listState.groups.length ? 'ok' : 'warn');
+        const firstOk = listState.groups.find(g => !g.error);
+        if (firstOk) await maybeSaveCred(firstOk.server);
+      } catch (e) {
+        toast('列出文件失败：' + e.message, 'err');
+      }
       renderFileTable();
-      const dt = Date.now() - t0;
-      const okN = listState.groups.filter(g => !g.error).length;
-      const totalFiles = listState.groups.reduce((a, g) => a + g.files.length, 0);
-      toast((okN === listState.groups.length ? '列出完成：' : '部分失败：') + totalFiles + ' 个文件 / ' + okN + '/' + listState.groups.length + ' 组 · ' + dt + 'ms', okN === listState.groups.length ? 'ok' : 'warn');
-      // 保存第一组成功连接的密码
-      const firstOk = listState.groups.find(g => !g.error);
-      if (firstOk) await maybeSaveCred(firstOk.server);
     }
 
     function renderFileTable() {
       fileTableWrap.innerHTML = '';
       const groups = listState.groups || [];
-      const totalFiles = groups.reduce((a, g) => a + g.files.length, 0);
-      fileTableWrap.appendChild(el('h3', { text: '文件列表 · ' + (listState.serverName || '') + (groups.length ? '（' + totalFiles + ' 个文件 / ' + groups.length + ' 组）' : '') }));
+      const q = wsFileFilter.trim().toLowerCase();
+
+      // P1-7：计算过滤后每组的文件列表
+      // 占位符承诺"子串 / 通配符 * ?"。原代码用 ^...$ 全等匹配，导致
+      // 普通子串（"System"）匹配不到文件名（SystemOut.log 等）。改成
+      // 子串匹配 + 通配符 `*`/`?` 兜底；纯字串场景保留 substring 语义。
+      function filterFiles(files) {
+        if (!q) return files;
+        // 含通配符 → 按通配语义匹配（* → 任意字符段，? → 单字符）
+        if (q.indexOf('*') !== -1 || q.indexOf('?') !== -1) {
+          // 顺序：先把 * ? 替换成正则元字符，再 escape 其余元字符。
+          // （如果先 escape，* 会被转成 \*，后续替换 \\\\*/g 找不到。
+          //  另外字符类里也不能放 *，否则会被误判为字面。）
+          const wildcardsReplaced = q.replace(/\*/g, '\u0001').replace(/\?/g, '\u0002');
+          const escaped = wildcardsReplaced.replace(/[.+^${}()|[\]\\]/g, '\\$&')
+            .replace(/\u0001/g, '.*').replace(/\u0002/g, '.');
+          try {
+            const rx = new RegExp(escaped, 'i');
+            return files.filter(f => rx.test((f.name || '').toLowerCase()));
+          } catch (e) { return files; }
+        }
+        // 纯字串 → 大小写不敏感子串匹配
+        return files.filter(f => (f.name || '').toLowerCase().indexOf(q) !== -1);
+      }
+
+      const filteredTotal = groups.reduce((a, g) => a + filterFiles(g.files || []).length, 0);
+      const allTotal = groups.reduce((a, g) => a + (g.files || []).length, 0);
+      const fileCountText = q ? ('（过滤后 ' + filteredTotal + ' / ' + allTotal + ' 个文件 / ' + groups.length + ' 组）') : ('（' + allTotal + ' 个文件 / ' + groups.length + ' 组）');
+      fileTableWrap.appendChild(el('h3', { text: '文件列表 · ' + (listState.serverName || '') + fileCountText }));
       if (!groups.length && !listState.files.length) {
         fileTableWrap.appendChild(el('div', { class: 'text-dim', text: '暂无文件，先点击「列出文件」。' }));
         return;
       }
+
+      // P1-7：文件名过滤栏
+      const filterInp = el('input', {
+        type: 'text',
+        placeholder: '过滤文件名（子串 / 通配符 * ?）',
+        style: 'min-width: 200px;'
+      });
+      filterInp.value = wsFileFilter;
+      filterInp.addEventListener('input', () => {
+        wsFileFilter = filterInp.value;
+        renderFileTable();
+      });
+      const filterClrBtn = el('button', { class: 'btn btn-sm', text: '清空', onclick: () => {
+        wsFileFilter = '';
+        filterInp.value = '';
+        renderFileTable();
+      }});
+      const filterRow = el('div', { class: 'mt-1', style: 'display:flex; gap:8px; align-items:center;' }, [
+        el('span', { class: 'lbl', text: '过滤：' }),
+        filterInp, filterClrBtn
+      ]);
+      fileTableWrap.appendChild(filterRow);
 
       const btnPickAll = el('button', { class: 'btn btn-sm', text: '全选', onclick: () => pickAll(true) });
       const btnPickNone = el('button', { class: 'btn btn-sm', text: '全不选', onclick: () => pickAll(false) });
@@ -468,14 +541,20 @@
       // 多组展示：每组一个 server-group（沿用搜索结果那套样式），组内是表格
       groups.forEach(g => {
         const grp = el('div', { class: 'server-group ' + (g.error ? 'fail' : 'ok') });
+        const filteredFiles = filterFiles(g.files || []);
         grp.appendChild(el('div', { class: 'server-group-head' }, [
           el('span', { class: 'dot dot-' + (g.error ? 'err' : 'ok') }),
           el('span', { class: 'name', text: g.server }),
           el('span', { class: 'text-dim', text: ' · ' + g.dir }),
-          el('span', { class: 'meta', text: g.error ? ('失败：' + g.error) : (g.files.length + ' 个文件') })
+          el('span', { class: 'meta', text: g.error ? ('失败：' + g.error) : ((q ? ('过滤 ' + filteredFiles.length + ' / ' + g.files.length) : g.files.length) + ' 个文件') })
         ]));
         if (g.error) {
           grp.appendChild(el('div', { class: 'err-msg', text: g.error }));
+          fileTableWrap.appendChild(grp);
+          return;
+        }
+        if (q && filteredFiles.length === 0) {
+          grp.appendChild(el('div', { class: 'text-dim', style: 'padding:6px 12px;', text: '过滤 "' + q + '" 无匹配' }));
           fileTableWrap.appendChild(grp);
           return;
         }
@@ -486,15 +565,22 @@
           el('th', { text: '大小' }),
           el('th', { text: '修改时间' }),
           el('th', { text: '路径' }),
+          el('th', { text: '操作' }),
           el('th', { class: 'col-status', text: '状态' })
         ])));
         const tbody = el('tbody');
-        // 把 listState.files 也并入（旧调用兼容）
-        const allFiles = g.files;
-        allFiles.forEach(f => {
-          const row = el('tr', { 'data-file': f.name, 'data-srv': g.server });
-          const cb = el('input', { type: 'checkbox', 'data-file': f.name, 'data-srv': g.server, onchange: refreshSummary });
-          const statusCell = el('td', { class: 'col-status', 'data-status': f.name });
+        filteredFiles.forEach(f => {
+          const key = (g.server || '') + '|' + (g.dir || '') + '|' + f.name;
+          const row = el('tr', { 'data-key': key, 'data-file': f.name, 'data-srv': g.server, 'data-dir': g.dir });
+          const cb = el('input', {
+            type: 'checkbox',
+            'data-file': f.name,
+            'data-srv': g.server,
+            'data-dir': g.dir,
+            'data-full-path': f.full_path,
+            onchange: refreshSummary
+          });
+          const statusCell = el('td', { class: 'col-status', 'data-status-key': key });
           // v0.5 #14：每行加 Tail / 新窗口 Tail 按钮（不用手输文件名）
           const tailBtn = el('button', {
             class: 'btn btn-sm',
@@ -536,33 +622,52 @@
       cbs.forEach((cb, i) => { cb.checked = i < n; });
       refreshSummary();
     }
+    // P1-9 修复：selected_files 改成 target-aware，每项带 server/dir/file/full_path，
+    // 解决多服务器多目录同名文件的歧义问题。
+    // 返回结构：[{ server, dir, file, full_path }, ...]
     function getSelectedFiles() {
       const out = [];
       fileTableWrap.querySelectorAll('input[type="checkbox"][data-file]').forEach(cb => {
-        if (cb.checked) out.push(cb.getAttribute('data-file'));
+        if (!cb.checked) return;
+        out.push({
+          server: cb.getAttribute('data-srv') || '',
+          dir: cb.getAttribute('data-dir') || '',
+          file: cb.getAttribute('data-file') || '',
+          full_path: cb.getAttribute('data-full-path') || ''
+        });
       });
       return out;
+    }
+    // 仅返回文件名（向后兼容 doSearch 等需要字符串数组的场景，且 selected 模式按
+    // "每个 target 各自取自己的 files"处理时这个辅助方法不再被使用——见 doSearch 改造）
+    function getSelectedFileNames() {
+      return getSelectedFiles().map(x => x.file);
     }
     function refreshSummary() {
       const tb = fileTableWrap._toolbar;
       if (!tb) return;
       const sel = getSelectedFiles();
-      tb.summary.textContent = '已选 ' + sel.length + ' / ' + listState.files.length + ' 个';
+      // P1-9 修复：总数按 listState.groups 汇总，不再用 listState.files（多组模式下
+      // listState.files 为空，会显示 0/x）
+      const total = (listState.groups || []).reduce(
+        (n, g) => n + ((g.files || []).length), 0
+      );
+      tb.summary.textContent = '已选 ' + sel.length + ' / ' + total + ' 个';
       const checkAll = fileTableWrap.querySelector('#ws-file-checkall');
       if (checkAll) {
-        checkAll.checked = listState.files.length > 0 && sel.length === listState.files.length;
-        checkAll.indeterminate = sel.length > 0 && sel.length < listState.files.length;
+        checkAll.checked = total > 0 && sel.length === total;
+        checkAll.indeterminate = sel.length > 0 && sel.length < total;
       }
     }
 
     function setRowStatus(name, status, args, rowClass) {
-      const cell = fileTableWrap.querySelector('[data-status="' + cssEscape(name) + '"]');
+      const cell = fileTableWrap.querySelector('[data-status-key="' + cssEscape(name) + '"]');
       if (cell) {
         while (cell.firstChild) cell.removeChild(cell.firstChild);
         const node = buildStatusNode(status, args || {});
         if (node) cell.appendChild(node);
       }
-      const row = fileTableWrap.querySelector('tr[data-file="' + cssEscape(name) + '"]');
+      const row = fileTableWrap.querySelector('tr[data-key="' + cssEscape(name) + '"]');
       if (row && rowClass) {
         row.classList.remove('row-done', 'row-fail', 'row-active');
         row.classList.add(rowClass);
@@ -609,79 +714,116 @@
     }
 
     async function doDownloadSelected() {
-      const srvs = getCheckedServers();
-      if (!srvs.length) { toast('请先勾选服务器', 'warn'); return; }
-      const files = getSelectedFiles();
-      if (!files.length) { toast('请先勾选要下载的文件', 'warn'); return; }
+      const items = getSelectedFiles(); // P1-9：target-aware [{server,dir,file,full_path}]
+      if (!items.length) { toast('请先勾选要下载的文件', 'warn'); return; }
       if (listState.dlId) { toast('已有下载任务在进行中', 'warn'); return; }
-      const srvName = srvs[0];
-      const paths = files.map(name => {
-        const ent = listState.files.find(f => f.name === name);
-        return (ent && ent.full_path) ? ent.full_path : (dirSel.value + '/' + name);
+
+      // P1-9 修复：按 (server, dir) 分组，每组起一个 download session。
+      // 这样多服务器多目录同名文件不会混。
+      const groups = new Map(); // key: server + '|' + dir
+      items.forEach(it => {
+        const k = (it.server || '') + '|' + (it.dir || '');
+        if (!groups.has(k)) groups.set(k, { server: it.server, dir: it.dir, items: [] });
+        groups.get(k).items.push(it);
       });
+
       const wantZip = dlZipChk.checked;
-      const zip = wantZip && files.length >= 2;
-      if (wantZip && files.length < 2) {
+      const totalAll = items.length;
+      const wantZipPerGroup = wantZip && totalAll >= 2;
+      if (wantZip && totalAll < 2) {
         toast('zip 打包需要 ≥ 2 个文件，已仅返回原始文件', 'warn');
       }
+
+      // 初始化所有行状态为 pending
       listState.fileStates = {};
-      files.forEach(name => {
-        listState.fileStates[name] = { status: 'pending' };
-        setRowStatus(name, 'pending');
+      items.forEach(it => {
+        const key = (it.server || '') + '|' + (it.dir || '') + '|' + it.file;
+        listState.fileStates[key] = { status: 'pending' };
+        setRowStatus(key, 'pending');
       });
       const tb = fileTableWrap._toolbar;
       if (tb) { tb.btnDownloadSel.disabled = true; tb.btnCancel.disabled = false; }
       setStatus('busy', '下载中…');
-      let dlId;
-      try {
-        const r = await api('POST', '/api/files/download', Object.assign({}, credsOne(srvName), {
-          paths: paths, zip: zip
-        }));
-        dlId = r.id;
-        listState.dlId = dlId;
-        if (!window.EventSource) { toast('浏览器不支持 EventSource', 'err'); return; }
-        const es = new EventSource('/api/files/download/' + dlId + '/events');
-        listState.dlEvtSrc = es;
-        OTB.core.setActiveDL({ id: dlId, evtsrc: es });
-        let gotDone = false;
-        const onDoneSeen = (reason) => {
-          if (gotDone) return;
-          gotDone = true;
-          closeDownloadStream(reason);
-        };
-        es.onmessage = (ev) => {
-          let o; try { o = JSON.parse(ev.data); } catch (e) { return; }
-          if (o && o.kind === 'done') {
-            handleDownloadEvent(o, files);
-            onDoneSeen('done');
-            return;
-          }
-          handleDownloadEvent(o, files);
-        };
-        es.addEventListener('done', () => { onDoneSeen('done'); });
-        es.onerror = () => {
-          setTimeout(() => {
-            if (listState.dlId === dlId && listState.dlEvtSrc === es && !gotDone) {
-              onDoneSeen('error');
-              toast('SSE 连接异常（已强制收尾）', 'err');
-            }
-          }, 2000);
-        };
-      } catch (e) {
-        toast('启动下载失败：' + e.message, 'err');
-        setStatus('err', '失败');
-        setTimeout(() => setStatus('idle'), 1500);
-        if (tb) { tb.btnDownloadSel.disabled = false; tb.btnCancel.disabled = true; }
-        files.forEach(name => {
-          setRowStatus(name, 'startfail', null, 'row-fail');
-        });
-        listState.dlId = null;
-        listState.dlEvtSrc = null;
+
+      // 当前活动 session（多组并发时只允许一个 cancel；新策略改为只支持一个 active DL，
+      // 因此改成"串行下载"——一组的 done 事件触发后再启下一组，UX 更可控）
+      listState.dlId = null;
+      listState.dlEvtSrc = null;
+      const groupsArr = Array.from(groups.values());
+      const results = [];
+      const dlResults = []; // 收集各组成功下载的 result items，for 循环结束后统一渲染
+      for (let gi = 0; gi < groupsArr.length; gi++) {
+        const g = groupsArr[gi];
+        // full_path 为空时用 dir + '/' + file 兜底
+        const paths = g.items.map(it => it.full_path || ((it.dir || '') + '/' + it.file));
+        const groupZip = wantZipPerGroup && g.items.length >= 2;
+        try {
+          const r = await api('POST', '/api/files/download', Object.assign({}, credsOne(g.server), {
+            paths: paths, zip: groupZip,
+            target_dir: (dlTargetDirInp.value || '').trim()
+          }));
+          const dlId = r.id;
+          listState.dlId = dlId;
+          if (!window.EventSource) { toast('浏览器不支持 EventSource', 'err'); return; }
+          const es = new EventSource('/api/files/download/' + dlId + '/events');
+          listState.dlEvtSrc = es;
+          OTB.core.setActiveDL({ id: dlId, evtsrc: es });
+          // 等待 done；done 事件的回调负责收集 result item，不自己渲染
+          await new Promise((resolve) => {
+            let gotDone = false;
+            const onDoneSeen = (reason) => {
+              if (gotDone) return;
+              gotDone = true;
+              closeDownloadStream(reason);
+              resolve(reason);
+            };
+            const onDone = (err, item) => {
+              if (!err && item) dlResults.push(item);
+            };
+            es.onmessage = (ev) => {
+              let o; try { o = JSON.parse(ev.data); } catch (e) { return; }
+              if (o && o.kind === 'done') {
+                handleDownloadEvent(o, g.items, g, onDone);
+                onDoneSeen('done');
+                return;
+              }
+              handleDownloadEvent(o, g.items, g, onDone);
+            };
+            es.addEventListener('done', () => { onDoneSeen('done'); });
+            es.onerror = () => {
+              setTimeout(() => {
+                if (listState.dlId === dlId && listState.dlEvtSrc === es && !gotDone) {
+                  onDoneSeen('error');
+                  toast('SSE 连接异常（已强制收尾）', 'err');
+                }
+              }, 2000);
+            };
+          });
+          results.push({ server: g.server, dir: g.dir, ok: true });
+        } catch (e) {
+          toast('下载 ' + g.server + ' / ' + g.dir + ' 失败：' + e.message, 'err');
+          g.items.forEach(it => {
+            const k = (g.server || '') + '|' + (g.dir || '') + '|' + it.file;
+            setRowStatus(k, 'startfail', null, 'row-fail');
+          });
+          results.push({ server: g.server, dir: g.dir, ok: false, error: e.message });
+        }
       }
+      if (tb) { tb.btnDownloadSel.disabled = false; tb.btnCancel.disabled = true; }
+      setStatus('idle');
+      // 所有组结束后统一渲染下载结果（不再每组 done 单独渲染）
+      if (dlResults.length) renderDownloadResults(dlResults);
+      const okGroups = results.filter(r => r.ok).length;
+      toast((okGroups === results.length ? '下载完成：' : '部分失败：') + okGroups + '/' + results.length + ' 组', okGroups === results.length ? 'ok' : 'warn');
     }
 
-    function handleDownloadEvent(o, files) {
-      const key = basenameOf(o.file);
+    function handleDownloadEvent(o, files, groupCtx, onDone) {
+      // files 是 [{server, dir, file}] 数组；用 server|dir|file 做唯一 key
+      // groupCtx 是当前组的 {server, dir}，用于构造准确的 result item label
+      // onDone 是 done 事件的回调，由调用方提供（多组下载时用于统一收集结果）
+      const fmap = {};
+      (files || []).forEach(it => { fmap[(it.server || '') + '|' + (it.dir || '') + '|' + it.file] = true; });
+      const key = (o.server || '') + '|' + (o.dir || '') + '|' + basenameOf(o.file);
       if (o.kind === 'file_start') {
         listState.fileStates[key] = { status: 'downloading', written: 0, total: o.total || -1 };
         setRowStatus(key, 'downloading', { written: 0, total: o.total || -1 }, 'row-active');
@@ -694,23 +836,30 @@
         listState.fileStates[key] = { status: 'done', bytes: o.bytes };
         setRowStatus(key, 'done', { bytes: o.bytes }, 'row-done');
       } else if (o.kind === 'done') {
-        const tb = fileTableWrap._toolbar;
-        if (tb) { tb.btnDownloadSel.disabled = false; tb.btnCancel.disabled = true; }
-        listState.dlId = null;
         if (o.ok) {
           toast('下载完成：' + (o.downloads || []).length + ' 个产物', 'ok');
-          renderDownloadResults([{ server: listState.serverName, downloads: o.downloads, folder: o.folder }]);
+          const srvLabel = groupCtx
+            ? (groupCtx.server + ' · ' + (groupCtx.dir.split('/').pop() || groupCtx.dir))
+            : listState.serverName;
+          const item = { server: srvLabel, downloads: o.downloads, folder: o.folder };
+          if (onDone) { onDone(null, item); } else { renderDownloadResults([item]); }
         } else {
           toast('下载失败：' + (o.error || '未知错误'), 'err');
-          files.forEach(name => {
-            const st = listState.fileStates[name];
-            if (!st || st.status === 'pending' || st.status === 'downloading') {
-              setRowStatus(name, 'fail', { error: o.error || '失败' }, 'row-fail');
+          Object.keys(listState.fileStates).forEach(k => {
+            if (fmap[k] || fmap[basenameOf(k)]) {
+              const st = listState.fileStates[k];
+              if (!st || st.status === 'pending' || st.status === 'downloading') {
+                setRowStatus(k, 'fail', { error: o.error || '失败' }, 'row-fail');
+              }
             }
           });
+          if (onDone) { onDone(o.error); }
         }
-        setStatus('idle');
+        listState.dlId = null;
         listState.dlEvtSrc = null;
+        setStatus('idle');
+        const tb = fileTableWrap._toolbar;
+        if (tb) { tb.btnDownloadSel.disabled = false; tb.btnCancel.disabled = true; }
       }
     }
 
@@ -757,7 +906,8 @@
             const r = await api('POST', '/api/logs/download-latest', {
               system: sysSel.value, server: tgt.server, dir: tgt.dir,
               username: userInp.value, password: passInp.value,
-              latest: latest, zip: zip
+              latest: latest, zip: zip,
+              target_dir: (dlTargetDirInp.value || '').trim()
             });
             allResults.push({ server: tgt.server, dir: tgt.dir, downloads: r.downloads || [], folder: r.folder });
           } catch (e) {
@@ -776,6 +926,9 @@
     }
 
     function renderDownloadResults(allResults) {
+      // P0-4：记录本次下载的落地目录，供 openLocalFolder/revealLocal 使用（自定义 target_dir 时需要）
+      const dlFolder = (allResults.find(r => r.folder) || {}).folder || '';
+      listState.lastDownloadFolder = dlFolder;
       const existing = $('#ws-dl-results');
       if (existing) existing.remove();
       const wrap = el('div', { id: 'ws-dl-results', class: 'card' }, [
@@ -879,16 +1032,17 @@
     }
 
     // v0.5-F P1-12：调后端 reveal / open folder 接口
+    // P0-4 修复：传 folder 字段，让后端允许自定义 target_dir 的路径
     async function revealLocal(absPath) {
       try {
-        await api('POST', '/api/local/reveal-file', { path: absPath });
+        await api('POST', '/api/local/reveal-file', { path: absPath, folder: listState.lastDownloadFolder || '' });
       } catch (e) {
         toast('打开失败：' + e.message, 'err');
       }
     }
     async function openLocalFolder(absDir) {
       try {
-        await api('POST', '/api/local/open-folder', { path: absDir });
+        await api('POST', '/api/local/open-folder', { path: absDir, folder: listState.lastDownloadFolder || '' });
       } catch (e) {
         toast('打开目录失败：' + e.message, 'err');
       }
@@ -924,8 +1078,9 @@
       if (!queryInp.value.trim()) { toast('搜索表达式不能为空', 'warn'); return; }
       // v0.5-G P1-08：根据 scope radio 决定模式
       const scope = Object.keys(scopeRadios).filter(k => !k.endsWith('Label') && scopeRadios[k].checked)[0] || 'latest';
-      const selectedFiles = (scope === 'selected') ? getSelectedFiles() : null;
-      if (scope === 'selected' && (!selectedFiles || !selectedFiles.length)) {
+      // P1-9 修复：selected 模式传 target-aware 形态 [{server,dir,file}, ...]
+      const selectedItems = (scope === 'selected') ? getSelectedFiles() : null;
+      if (scope === 'selected' && (!selectedItems || !selectedItems.length)) {
         toast('「指定文件」模式：先点「列出文件」拿到列表，再勾选要搜的文件', 'warn');
         return;
       }
@@ -954,7 +1109,13 @@
           password: passInp.value
         };
         if (filePatterns) body.file_patterns = filePatterns;
-        if (selectedFiles) body.selected_files = selectedFiles;
+        if (selectedItems) {
+          // P1-9：传 selected_file_targets（新格式），按 (server, dir) 区分
+          // 后端会优先用 per-target 列表，匹配不上再退到老的 selected_files。
+          body.selected_file_targets = selectedItems.map(x => ({
+            server: x.server, dir: x.dir, file: x.file
+          }));
+        }
         const url = '/api/logs/search/multi' + (qs.toString() ? '?' + qs : '');
         const r = await api('POST', url, body);
         renderMultiResults(r);
@@ -1077,9 +1238,12 @@
       el('div', { class: 'mt-1' }, [rememberLbl, credStatusRow]),
       el('div', { class: 'btn-row mt-3' }, [btnTest, btnList]),
       el('div', { class: 'mt-3' }, [
+        // P1-12：下载最新日志也支持 target_dir
+        // dlTargetDirInp 已在外层作用域声明（和 btnDownload 同一块），这里只引用，不再声明。
         el('div', { class: 'text-dim mb-1', text: '下载最新日志（每台服务器每个勾选目录分别下，可选 zip）' }),
-        el('div', { class: 'btn-row' }, [
-          dlNSel, dlZipLabel, btnDownload
+        el('div', { class: 'btn-row', style: 'flex-wrap:wrap; gap:8px; align-items:center;' }, [
+          dlNSel, dlZipLabel, btnDownload,
+          el('span', { class: 'lbl', text: '目录：' }), dlTargetDirInp
         ])
       ])
     ]);
@@ -1118,6 +1282,54 @@
       fileListArea.style.display = (sel === 'selected') ? '' : 'none';
     }
 
+    // P1-8：动态目标摘要（显示本次搜索将使用的 targets 数量和具体内容）。
+    // 必须提前在 searchCard 外声明，否则写在数组里就是非法 JS。
+    // 函数会引用 getSelectedTargets()，并写到 #ws-target-summary 节点（render 时挂到 searchCard）。
+    const targetSummaryEl = el('div', { id: 'ws-target-summary', class: 'text-dim', style: 'padding-top:18px;' });
+    function updateTargetSummary() {
+      const targets = getSelectedTargets();
+      if (!targets.length) {
+        targetSummaryEl.textContent = '尚未勾选任何目标（请在「目标选择」里勾选）';
+        targetSummaryEl.style.color = 'var(--text-dim)';
+        return;
+      }
+      const srvs = [...new Set(targets.map(t => t.server))];
+      const dirs = targets.length;
+      targetSummaryEl.innerHTML = '';
+      targetSummaryEl.style.color = '';
+      const badge = el('span', { class: 'tag tag-ok', text: '已选 ' + srvs.length + ' 台服务器 / ' + dirs + ' 个 targets' });
+      const expandBtn = el('button', {
+        class: 'btn btn-sm', text: '▼ 展开查看', style: 'margin-left:6px;',
+        onclick: () => {
+          const detail = $('#ws-target-detail');
+          if (detail) {
+            const shown = detail.style.display !== 'none';
+            detail.style.display = shown ? 'none' : '';
+            expandBtn.textContent = shown ? '▼ 展开查看' : '▲ 收起';
+          }
+        }
+      });
+      targetSummaryEl.appendChild(badge);
+      targetSummaryEl.appendChild(expandBtn);
+      const detail = el('div', { id: 'ws-target-detail', style: 'display:none; margin-top:6px; font-size:12px; line-height:1.6;' });
+      const srvMap = {};
+      targets.forEach(t => {
+        if (!srvMap[t.server]) srvMap[t.server] = [];
+        srvMap[t.server].push(t.dir);
+      });
+      Object.keys(srvMap).forEach(srv => {
+        srvMap[srv].forEach(dir => {
+          detail.appendChild(el('div', { style: 'color:var(--text-dim);' }, [
+            document.createTextNode('  · ' + srv + ' / ' + dir)
+          ]));
+        });
+      });
+      targetSummaryEl.appendChild(detail);
+    }
+    // 让 updateTargetSummary 在目标变化时也能调用（persistSelection 后会触发）
+    // 这里把函数挂到 window 上方便从 OTB 钩子（如果有）或调试用，不强制。
+    if (typeof window !== 'undefined') window.updateTargetSummary = updateTargetSummary;
+
     const searchCard = el('div', { class: 'card' }, [
       el('h3', { text: '多服务器并行搜索' }),
       el('div', { class: 'card-desc', unsafeHtml: '语法：<span class="code-inline">A &amp;&amp; B</span>（同包含）、<span class="code-inline">A || B</span>（任一）、<span class="code-inline">!X</span>（排除）。结果按服务器 / 目录分组。' }),
@@ -1138,10 +1350,13 @@
       el('div', { class: 'grid-3 mt-2' }, [
         el('div', null, [el('label', { text: '时间范围' }), timeSel]),
         el('div', { style: 'display:flex; gap:8px; align-items:flex-end;' }, [timeFromInp, timeToInp]),
-        el('div', null, [el('div', { class: 'text-dim', style: 'padding-top:18px;', text: '搜索作用于上方勾选的「服务器 × 目录」多对多 targets' })])
+        // P1-8：目标摘要节点（已在外层声明 + 实现 updateTargetSummary）
+        targetSummaryEl
       ]),
       el('div', { class: 'btn-row mt-2' }, [btnSearch])
     ]);
+    // searchCard 渲染完成后做一次初始摘要
+    updateTargetSummary();
 
     // ---- 实时 tail ----
     const tailFileInp = el('input', { type: 'text', id: 'ws-tail-file', placeholder: '文件名（例：SystemOut.log）', value: 'SystemOut.log' });
@@ -1338,35 +1553,43 @@
         ])
       ])
     ]);
-    // v0.5-G #13：4 个 tab 快捷跳转按钮（点 → scrollIntoView + 高亮目标卡片）
-    // 用 scrollTo 而不是真 tab 切换，避免把现有结构推倒重来。
+    // v0.5-G #13：4 个 tab 快捷跳转按钮（点 → 真 tab 切换）
+    // P2-14：真 tab 切换（show/hide 内容区），而不是 scrollIntoView
     const tabBar = el('div', { class: 'ws-tab-bar', style: 'display:flex; gap:6px; margin-bottom: 12px; flex-wrap:wrap;' });
-    function makeTab(label, targetEl, hash) {
+    let activeTab = 'target'; // 默认显示目标选择
+
+    // P2-14：把所有功能区（除目标选择外）包进 ws-tab-content div
+    const tabContents = {};
+    function makeTabContent(id, innerEl) {
+      const wrap = el('div', { id: 'ws-tab-' + id, class: 'ws-tab-content' + (id === activeTab ? ' active' : '') });
+      wrap.appendChild(innerEl);
+      tabContents[id] = wrap;
+      return wrap;
+    }
+
+    const tabBtns = {};
+    function makeTab(label, tabId, hash) {
       const btn = el('button', {
-        class: 'btn',
+        class: 'btn' + (tabId === activeTab ? ' active' : ''),
         text: label,
-        onclick: () => {
-          // scrollIntoView 目标卡片
-          if (targetEl && targetEl.scrollIntoView) {
-            targetEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
-          }
-          // 临时高亮 1.5s
-          if (targetEl) {
-            targetEl.classList.add('ws-tab-flash');
-            setTimeout(() => targetEl.classList.remove('ws-tab-flash'), 1500);
-          }
-          // 更新 hash 但不触发 navigate
-          try { history.replaceState(null, '', '#/websphere' + (hash ? '?tab=' + hash : '')); } catch (e) { /* ignore */ }
-        }
+        onclick: () => switchTab(tabId)
       });
+      tabBtns[tabId] = btn;
       return btn;
     }
-    tabBar.appendChild(makeTab('🎯 目标选择', formCard, 'target'));
-    tabBar.appendChild(makeTab('📂 文件列表', fileTableWrap, 'files'));
-    tabBar.appendChild(makeTab('🔍 搜索', searchCard, 'search'));
-    tabBar.appendChild(makeTab('📺 实时 Tail', tailCard, 'tail'));
 
-    // 给每个目标卡片加 id（scrollIntoView 用）
+    function switchTab(tabId) {
+      activeTab = tabId;
+      Object.keys(tabBtns).forEach(k => { tabBtns[k].classList.toggle('active', k === tabId); });
+      Object.keys(tabContents).forEach(k => { tabContents[k].classList.toggle('active', k === tabId); });
+      try { history.replaceState(null, '', '#/websphere' + (hash ? '?tab=' + hash : '')); } catch (e) { /* ignore */ }
+    }
+
+    tabBar.appendChild(makeTab('🎯 目标选择', 'target', 'target'));
+    tabBar.appendChild(makeTab('📂 文件列表', 'files', 'files'));
+    tabBar.appendChild(makeTab('🔍 搜索', 'search', 'search'));
+    tabBar.appendChild(makeTab('📺 实时 Tail', 'tail', 'tail'));
+
     formCard.id = 'ws-target-card';
     searchCard.id = 'ws-search-card';
     tailCard.id = 'ws-tail-card';
@@ -1374,23 +1597,21 @@
     hitTableWrap.id = 'ws-hits-card';
     ctxCard.id = 'ws-context-card';
 
+    // P2-14：目标选择永远显示；功能区包进 tab content
     view.appendChild(introCard);
     view.appendChild(tabBar);
     view.appendChild(formCard);
-    view.appendChild(searchCard);
-    view.appendChild(tailCard);
-    view.appendChild(fileTableWrap);
-    view.appendChild(hitTableWrap);
-    view.appendChild(ctxCard);
+    view.appendChild(makeTabContent('files', fileTableWrap));
+    view.appendChild(makeTabContent('search', searchCard));
+    view.appendChild(makeTabContent('tail', tailCard));
+    // 搜索结果和上下文嵌入 search tab 内（不再独立 tab）
+    searchCard.appendChild(hitTableWrap);
+    searchCard.appendChild(ctxCard);
 
-    // v0.5-G #13：处理 hash ?tab=xxx 自动滚动（深链接 / 书签）
     try {
       const params = new URLSearchParams(location.hash.split('?')[1] || '');
       const tab = params.get('tab');
-      const tabMap = { target: formCard, files: fileTableWrap, search: searchCard, tail: tailCard };
-      if (tab && tabMap[tab]) {
-        setTimeout(() => tabMap[tab].scrollIntoView({ behavior: 'instant', block: 'start' }), 50);
-      }
+      if (tab && tabBtns[tab]) { switchTab(tab); }
     } catch (e) { /* ignore */ }
 
     api('GET', '/api/config').then(info => {

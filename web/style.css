@@ -963,6 +963,7 @@ input[type="datetime-local"] {
 }
 
 /* ===== v0.5-G #13：tab 跳转高亮 + tab bar 样式 ===== */
+/* P2-14：真 tab 切换（show/hide 内容区） */
 .ws-tab-bar {
   position: sticky;
   top: 48px; /* 顶栏高度 */
@@ -974,8 +975,19 @@ input[type="datetime-local"] {
 .ws-tab-bar .btn {
   font-size: 13px;
 }
+.ws-tab-bar .btn.active {
+  background: var(--primary);
+  color: #fff;
+}
 .ws-tab-flash {
   animation: ws-tab-flash-anim 1.5s ease-out;
+}
+/* P2-14：tab 内容区默认隐藏，激活时显示 */
+.ws-tab-content {
+  display: none;
+}
+.ws-tab-content.active {
+  display: block;
 }
 @keyframes ws-tab-flash-anim {
   0%   { background: var(--primary-fade); }
