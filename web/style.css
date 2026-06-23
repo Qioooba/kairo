@@ -346,6 +346,19 @@ textarea { resize: vertical; min-height: 100px; font-family: ui-monospace, SFMon
 .btn-ghost { background: transparent; }
 .btn-row { display: flex; gap: 8px; flex-wrap: wrap; }
 
+/* v0.5 #3：底部保存按钮组 — 长表单滚到底部也能直接保存 */
+.cfg-save-footer-bar {
+  position: sticky; bottom: 0;
+  background: var(--bg-1);
+  z-index: 5;
+  margin-left: -20px; margin-right: -20px; margin-bottom: -18px;
+  padding: 12px 20px 16px;
+  border-top: 1px solid var(--line);
+  box-shadow: 0 -4px 12px rgba(0,0,0,0.05);
+}
+.cfg-save-footer-bar .btn-primary { min-width: 80px; }
+.cfg-save-footer[disabled] { opacity: 0.55; cursor: not-allowed; }
+
 /* 表格 */
 .table {
   width: 100%; border-collapse: collapse; font-size: 12.5px;
@@ -487,16 +500,20 @@ textarea { resize: vertical; min-height: 60px; font-family: ui-monospace, monosp
 }
 .sys-head {
   display: grid;
-  grid-template-columns: 36px 1.4fr 2fr auto;
+  /* v0.5 #4：把第一列从固定 36px 改 auto，让 .sys-tag 自适应内容宽度
+     （原来 min-width: 40px > 36px，文字被挤压成竖排/省略） */
+  grid-template-columns: auto 1.4fr 2fr auto;
   gap: 10px;
   align-items: center;
   margin-bottom: 8px;
 }
 .sys-tag {
+  display: inline-block;
   background: var(--accent);
   color: #fff; font-size: 11px; font-weight: 600;
   padding: 3px 10px; border-radius: 4px; text-align: center;
   white-space: nowrap; min-width: 40px;
+  box-sizing: border-box;
 }
 .sys-name-input input, .sys-desc-input input { font-weight: 500; }
 .sys-actions, .srv-actions, .dir-actions {

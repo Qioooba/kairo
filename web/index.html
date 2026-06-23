@@ -6,6 +6,18 @@
   <link rel="icon" href="data:," />
   <title>内网运维工具箱</title>
   <link rel="stylesheet" href="/static/style.css" />
+  <!-- v0.5 #19 主题切换：在 CSS 加载后立刻读 localStorage 设 data-theme，避免 FOUC -->
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem('otb_theme');
+        if (t !== 'dark' && t !== 'light') t = 'dark';
+        document.documentElement.setAttribute('data-theme', t);
+      } catch (_) {
+        document.documentElement.setAttribute('data-theme', 'dark');
+      }
+    })();
+  </script>
 </head>
 <body>
   <aside class="sidebar">
@@ -37,6 +49,7 @@
     <header class="topbar">
       <div class="crumbs" id="crumbs">首页</div>
       <div class="topbar-right">
+        <button id="theme-toggle" class="theme-toggle" type="button" title="切换主题">🌙</button>
         <span id="status-dot" class="dot dot-idle"></span>
         <span id="status-text" class="muted">就绪</span>
       </div>
@@ -46,8 +59,9 @@
 
   <div id="toast" class="toast"></div>
 
-  <!-- 模块加载顺序：core → api → state → pages → app 入口 -->
+  <!-- 模块加载顺序：core → theme → api → state → pages → app 入口 -->
   <script src="/static/core.js"></script>
+  <script src="/static/theme.js"></script>
   <script src="/static/api.js"></script>
   <script src="/static/state.js"></script>
   <script src="/static/pages/home.js"></script>
@@ -60,5 +74,13 @@
   <script src="/static/pages/downloads.js"></script>
   <script src="/static/pages/history.js"></script>
   <script src="/static/app.js"></script>
+  <script>
+    // v0.5 #19：DOM ready 后同步按钮 emoji 到当前主题
+    document.addEventListener('DOMContentLoaded', function () {
+      if (window.OTB && window.OTB.theme && window.OTB.theme.init) {
+        window.OTB.theme.init();
+      }
+    });
+  </script>
 </body>
 </html>
