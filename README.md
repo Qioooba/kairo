@@ -29,6 +29,93 @@
 - **文件浏览器（任意路径下载）加配置开关**：`app.enable_free_file_browser: false` 时 `/api/files/*` 全部返回 403，方便发版给权限较宽的同事时关闭
 - **下载历史不限 .log/.zip**：v0.3 任意路径下载的 .properties / .xml / .gz 等文件也能在「下载历史」页看到
 
+**v0.5（最新）** 在 v0.4 基础上做了一轮 P0 bug fix + UX 大改造：
+
+- **#20 修复：配置持久化**（重启 + tab 切换都不丢）
+  - 前端：`OTB.state.configEditor` 提到模块级 + `loaded` flag，切 tab 不再 GET 覆盖未保存编辑
+  - 离开页面 confirm dialog：`OTB.state.unsavedConfig` 标志 + `window.confirm`
+  - 后端 `Manager.Replace` 已验证正确（PUT→磁盘→重启读全部一致）
+  - 测试：`TestReplace_FullRestartRoundTrip` 5 阶段端到端防回归
+
+- **#6 修复：GBK 编码保存后仍显 GBK**
+  - 前端：显式 `encSel.value = 'gbk'` + `ld.encoding = encSel.value`，避免 `option.selected = true` 边角 case
+  - 后端 `Defaults()` 归一 `gbk/gb18030→gbk`，`Validate()` 拒绝 `shift-jis` 等非法值
+  - 测试：`TestReplace_GBKEncoding_Preserved` / `TestReplace_RejectsBadEncoding` 等 4 个
+
+- **#7 修复：多服务器列出文件全部展示**
+  - `/api/files/list` 支持三种模式（互斥）：单 `server`+`path` / `servers[]`+`path` / `targets[]` 每项独立 path
+  - 多 server 走 worker pool（4 路并发），失败不影响其他
+  - 响应 `{servers:[{server,ok,files,...}], ok_count, fail_count, total_count}`
+  - 测试：`TestFilesListMulti_Happy_3Servers` / `_PartialFailure` / `_EmptyServers` / `_BackwardCompat` 4 个
+
+- **#9 修复：实时 tail 卡死浏览器**
+  - `appendTailLine` 改用 `pendingTailLines` 缓冲 + `requestAnimationFrame` 批量 flush
+  - 用 `appendChild TextNode` 而非 `textContent +=`，避免整段重排
+  - 限速 5000 行，截断时才走 `textContent.split`
+  - 独立 tab `/tail.html` 同样优化
+
+- **#19 新增：背景主题切换（dark / light / green / 高对比）**
+  - CSS 变量抽取到 `:root[data-theme=...]`，`web/theme.js` 初始化 + 切换
+  - 右上角 theme 按钮 + localStorage 记忆
+
+- **#3 修复：配置页保存按钮位置** + sticky 保存栏 + 底部再加一个保存按钮
+
+- **#4 修复：紫色「系统」tag 横排显示**
+  - `.sys-tag` `writing-mode: horizontal-tb; white-space: nowrap; min-width: 36px;`
+
+- **#5 增强：配置页字段说明 + 复制服务器按钮解释**
+  - 目录别名 / 远端路径 hint、文件名规则 placeholder 示例
+  - 「📋 复制服务器（含日志目录）」按钮 + tooltip + 自动 `-copy` 后缀
+
+- **#15 增强：业务系统 / 服务器 / 日志目录 三层视觉**
+  - 三色 border-left（系统 4px primary / 服务器 3px success / 目录 2px dashed warn）
+  - 编号 badge（业务系统 1 / 服务器 1.1 / 日志目录 1.1.1）
+
+- **#11 增强：默认勾选**
+  - 「记住密码」默认勾（keyring 不可用时禁用）
+  - 目标服务器默认全选（无上次记忆时）
+
+- **#10/#12 增强：多服务器 × 多日志目录 多对多勾选**
+  - 每个服务器下面展开它自己的日志目录 checkbox
+  - 所有日志助手功能（搜索/列文件/下载/tail）统一走 `targets = server × dir`
+
+- **#1 新增：文件名点击预览**（新窗口 + modal 双模式）
+  - 后端 `POST /api/files/preview`：读文件前 N 字节（默认 1MB，上限 10MB），按 encoding 解码
+  - 编码归一 utf-8 / gbk / gb18030；二进制检测（NUL 字节）
+  - 前端：文件名变 `<a>` → 默认弹 modal 预览；Shift+点击 / modal "在新窗口打开" → 跳 `/preview.html` 独立新窗口
+  - 凭证通过 `window.opener.OTB._previewCred` 跨窗口传递
+  - 测试：8 个新 case
+
+- **#2 新增：常用目录**
+  - 文件下载页底部加按钮栏（按 system+server 分组，localStorage 持久化）
+  - 「⭐ 收藏当前路径」+ 「⚙ 管理常用目录」（弹 modal，可改别名/改路径/上下移/删除/新增）
+
+- **#17 新增：文件名模糊搜索**
+  - 文件列表上方加 filter input
+  - 支持子串（不区分大小写）/ glob 通配符（`*.log` / `SystemOut*` / `log?`）
+  - 实时「显示 X / Y」计数
+
+- **#14 增强：tail 从日志目录的文件列表选择**
+  - 文件列表每行加「📺 内嵌 Tail」「↗ 新窗口 Tail」按钮（无需手输文件名）
+
+- **#16 增强：下载完成通知 + 路径跳转**
+  - `OTB.core.notify` 右上角浮动通知栈
+  - 下载完成 → 通知（标题 + 路径 + 文件列表 + 操作按钮）
+  - 操作按钮：「📂 打开所在目录」「📋 复制路径」「📜 查看下载历史」
+  - 样式：`.otb-notify-stack` 固定右上角，slide-in 动画
+
+- **#18 增强：下载到指定本地目录**
+  - 后端 `/api/files/download` 加 `target_dir` 字段；`validateTargetDir` 校验（绝对路径 + mkdir -p + 写探针）
+  - 前端：「本地目录」输入框，留空走默认 `download_dir`
+
+- **#13 增强：日志助手页面整理**
+  - 顶部加「4 步走」说明卡（选目标 / 列文件下载 / 搜索 / Tail）
+  - 现有分卡片结构（formCard / searchCard / tailCard / fileTableWrap / hitTableWrap / ctxCard）
+
+- **#8 修复：日志搜索 stale 30s 真连 10.0.0.1:22**
+  - `TestLogsSearchMulti_Validations` 用 fake SSH server 替真 dial，case 跑得通
+  - 同时修 `c3f3b29` 引入的"servers+dir 旧模式卡 30s" 老 bug
+
 **v0.2** 已包含：
 
 - **系统配置可视化编辑器**：在「系统配置」页直接增删改业务系统 / 服务器 / 日志目录，保存后原子改写 `config.yaml`，无需重启

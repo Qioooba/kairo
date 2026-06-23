@@ -1275,6 +1275,29 @@
       el('div', { class: 'mt-2' }, tailOut)
     ]);
 
+    // v0.5 #13：页面顶部加说明卡（让用户知道页面分区和流程）
+    const introCard = el('div', { class: 'card', style: 'background: var(--bg-2); border-left: 4px solid var(--primary);' }, [
+      el('strong', { text: '日志助手 · 4 步走' }),
+      el('ol', { style: 'margin: 8px 0 0 0; padding-left: 22px; font-size: 13px; line-height: 1.7;' }, [
+        el('li', null, [
+          el('strong', { text: '1. 选目标 ' }),
+          el('span', { text: '· 业务系统 → 服务器（多选）→ 日志目录（每个服务器下面多选）' })
+        ]),
+        el('li', null, [
+          el('strong', { text: '2. 列文件/下载最新 ' }),
+          el('span', { text: '· 一次性把勾选 targets 下的文件全列出来，多选下载' })
+        ]),
+        el('li', null, [
+          el('strong', { text: '3. 搜索 ' }),
+          el('span', { text: '· 在勾选 targets 里搜索关键词，支持最近 N 个/指定文件/glob' })
+        ]),
+        el('li', null, [
+          el('strong', { text: '4. 实时 Tail ' }),
+          el('span', { text: '· 从文件列表点 ↗ Tail 新窗口跟踪（避免本页卡死）' })
+        ])
+      ])
+    ]);
+    view.appendChild(introCard);
     view.appendChild(formCard);
     view.appendChild(searchCard);
     view.appendChild(tailCard);
