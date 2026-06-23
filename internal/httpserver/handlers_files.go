@@ -14,6 +14,8 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/text/encoding/simplifiedchinese"
+
 	"ops-toolbox/internal/config"
 	"ops-toolbox/internal/dlmanager"
 	"ops-toolbox/internal/downloads"
@@ -46,6 +48,9 @@ type sftpClientLike interface {
 	Stat(path string) (os.FileInfo, error)
 	DownloadFile(remotePath, localPath string) (int64, error)
 	DownloadFileWithProgress(remotePath, localPath string, progress func(written, total int64)) (int64, error)
+	// Open（v0.5 项 1 — 文件预览）：返回的接口含 io.Reader + io.Closer + Stat，
+	// handler 用 io.LimitReader 限速读，避免一次性把大文件拖到内存。
+	Open(path string) (sftpclient.SftpFile, error)
 }
 
 // ============================================================================
@@ -400,6 +405,253 @@ type filesDownloadReq struct {
 	Zip       bool     `json:"zip"`                  // 多文件时是否额外打 zip
 	TargetDir string   `json:"target_dir,omitempty"` // v0.5 项 18：自定义本地落点（绝对路径），空 = 用 cfg.DownloadDir()
 }
+
+// ============================================================================
+// v0.5 项 1：文件预览（点击文件名新窗口打开前 maxBytes 字节）
+// ============================================================================
+//
+// 用途：日志助手 / 文件浏览器页面，点文件名不开下载、新窗口直接看前 N 字节。
+// 设计要点：
+//   - 只读前 N 字节（默认 1MB），避免 1GB 日志一口气拖到内存；
+//   - 按 encoding 解码（utf-8 / gbk / gb18030 → utf-8）；编码非法时按 utf-8 兜底；
+//   - 自动检测是否二进制（含 NUL 字节 → 标 is_binary=true，让前端提示不可预览）；
+//   - 复用 handleFilesList 的 FreeFileRoots 白名单（任意路径都能下载 = 任意路径都能预览）；
+//   - 路径必须以 "/" 开头；目录不支持（前端应只对文件调用）。
+//
+// 响应示例：
+//
+//	{
+//	  "name": "SystemOut.log",
+//	  "path": "/opt/IBM/.../SystemOut.log",
+//	  "encoding": "gbk",
+//	  "size": 12345678,
+//	  "bytes_read": 1048576,
+//	  "truncated": true,
+//	  "is_binary": false,
+//	  "content": "...前 1MB 文本..."
+//	}
+
+// filesPreviewReq 预览请求体
+type filesPreviewReq struct {
+	System   string `json:"system"`
+	Server   string `json:"server"`
+	Username string `json:"username"`
+	Password string `json:"password"`
+	Path     string `json:"path"`               // 必须以 "/" 开头的绝对路径
+	Encoding string `json:"encoding,omitempty"`  // utf-8（默认）/ gbk / gb18030
+	MaxBytes int64  `json:"max_bytes,omitempty"` // 默认 1MB（1048576），最大 10MB
+}
+
+// filesPreviewLimits 预览的硬约束
+const (
+	filesPreviewDefaultMax = 1 << 20 // 1 MiB
+	filesPreviewHardMax    = 10 << 20 // 10 MiB — 超过就拒，防呆
+)
+
+// filesPreviewResp 预览响应
+type filesPreviewResp struct {
+	Name      string `json:"name"`
+	Path      string `json:"path"`
+	Encoding  string `json:"encoding"`
+	Size      int64  `json:"size"`       // 实际文件大小（Stat 拿的）
+	BytesRead int    `json:"bytes_read"` // 实际读到的字节数
+	Truncated bool   `json:"truncated"`  // true 表示文件比 max_bytes 大，截断了
+	IsBinary  bool   `json:"is_binary"`  // 含 NUL 字节 → 前端应提示"二进制不可预览"
+	Content   string `json:"content"`    // 按 encoding 解码后的文本
+}
+
+// normalizePreviewEncoding 把 encoding 入参归一到 utf-8 / gbk / gb18030，
+// 非法值走 utf-8 兜底（前端会原样回显 encoding 字段，避免静默篡改用户输入）。
+func normalizePreviewEncoding(enc string) string {
+	enc = strings.ToLower(strings.TrimSpace(enc))
+	switch enc {
+	case "gbk", "gb18030":
+		return "gbk"
+	case "", "utf-8", "utf8":
+		return "utf-8"
+	default:
+		return "utf-8"
+	}
+}
+
+// isBinaryBytes 简单判二进制：扫前 8KB 看有没有 NUL（0x00）。
+// NUL 在 UTF-8/GBK 文本里几乎不会出现（除非是 GBK 罕见边角字符），
+// 用 8KB 窗口 + 任何 NUL 即判 binary 既不太严也不太松。
+func isBinaryBytes(b []byte) bool {
+	end := len(b)
+	if end > 8192 {
+		end = 8192
+	}
+	for i := 0; i < end; i++ {
+		if b[i] == 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// previewOneServer 实际 SSH→SFTP→Open→Read 一台 server 的文件前 N 字节。
+//
+// 返回 (rawBytes, fileSize, error)。rawBytes 是原始字节（未解码），
+// 编码转换由 caller 在错误处理完后做。
+func (s *Server) previewOneServer(
+	parentCtx context.Context,
+	srv *config.ServerConfig,
+	username, password, path string,
+	maxBytes int64,
+) ([]byte, int64, error) {
+	ctx, cancel := context.WithTimeout(parentCtx, sshDialOuterTimeout)
+	defer cancel()
+
+	cli, err := sshclient.Dial(ctx, sshclient.Server{
+		Name: srv.Name, Host: srv.Host, Port: srv.Port, Username: username,
+		HostKeySHA256: srv.HostKeySHA256, SSHProfile: srv.SSHProfile,
+	}, sshclient.Credentials{Password: password}, sshAttemptTimeout)
+	if err != nil {
+		return nil, 0, fmt.Errorf("SSH 连接失败: %w", err)
+	}
+	defer cli.Close()
+
+	sftpCli, err := sftpDialer(cli)
+	if err != nil {
+		return nil, 0, fmt.Errorf("SFTP 打开失败: %w", err)
+	}
+	defer sftpCli.Close()
+
+	info, err := sftpCli.Stat(path)
+	if err != nil {
+		return nil, 0, fmt.Errorf("stat 失败: %w", err)
+	}
+	if info.IsDir() {
+		return nil, 0, fmt.Errorf("不支持预览目录: %s", path)
+	}
+
+	f, err := sftpCli.Open(path)
+	if err != nil {
+		return nil, 0, fmt.Errorf("打开文件失败: %w", err)
+	}
+	defer f.Close()
+
+	// 限制读 maxBytes；LimitReader 会在 EOF 或 maxBytes 处停。
+	limit := maxBytes
+	if limit <= 0 {
+		limit = filesPreviewDefaultMax
+	}
+	reader := io.LimitReader(f, limit)
+	raw, err := io.ReadAll(reader)
+	if err != nil {
+		return nil, info.Size(), fmt.Errorf("读取文件失败: %w", err)
+	}
+	return raw, info.Size(), nil
+}
+
+// handleFilesPreview 读取远端文件前 N 字节，按 encoding 解码后返回。
+//
+// 复用 sftpDialer + FreeFileRoots 白名单（与 list/download 一致）；
+// 路径不在白名单 → 403；编码非法 → utf-8 兜底；max_bytes 越界 → 强制夹到 [1B, 10MB]。
+func (s *Server) handleFilesPreview(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeErr(w, 405, errors.New("仅支持 POST"))
+		return
+	}
+	if !s.cur().App.FreeFileBrowserEnabled() {
+		writeErr(w, 403, errors.New("文件浏览器（任意路径下载）已在配置中关闭 (app.enable_free_file_browser=false)"))
+		return
+	}
+	var req filesPreviewReq
+	if err := json.NewDecoder(io.LimitReader(r.Body, 32*1024)).Decode(&req); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	if strings.TrimSpace(req.Path) == "" {
+		writeErr(w, 400, errors.New("path 不能为空"))
+		return
+	}
+	if !strings.HasPrefix(req.Path, "/") {
+		writeErr(w, 400, fmt.Errorf("path 必须是绝对路径: %q", req.Path))
+		return
+	}
+	if strings.ContainsAny(req.Path, "\x00\n\r") {
+		writeErr(w, 400, fmt.Errorf("path 含非法字符: %q", req.Path))
+		return
+	}
+	// FreeFileRoots 白名单（跟 list/download 一致）
+	if !s.cur().App.FreeFileRootsEnabled(req.Path) {
+		writeErr(w, 403, fmt.Errorf("path %q 不在 app.free_file_roots 白名单中", req.Path))
+		return
+	}
+
+	_, srv, ok := s.cur().FindServer(req.System, req.Server)
+	if !ok {
+		writeErr(w, 400, errors.New("系统或服务器不存在"))
+		return
+	}
+	creds, err := s.resolveCreds(req.Username, req.Password, req.System, req.Server, srv.Username)
+	if err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	if creds.Password == "" {
+		writeErr(w, 400, errors.New("缺少密码（输入或勾选「记住密码」）"))
+		return
+	}
+
+	// 限制 max_bytes 到 [1B, 10MB]，0/负值用默认 1MB
+	maxBytes := req.MaxBytes
+	if maxBytes <= 0 {
+		maxBytes = filesPreviewDefaultMax
+	}
+	if maxBytes > filesPreviewHardMax {
+		maxBytes = filesPreviewHardMax
+	}
+	encoding := normalizePreviewEncoding(req.Encoding)
+
+	raw, fileSize, err := s.previewOneServer(r.Context(), srv, creds.Username, creds.Password, req.Path, maxBytes)
+	if err != nil {
+		s.audit.Write("files.preview", "system", req.System, "server", req.Server, "path", req.Path, "result", "fail", "err", err.Error())
+		// 目录预览 → 400；其他 → 502
+		if strings.Contains(err.Error(), "不支持预览目录") {
+			writeErr(w, 400, err)
+		} else {
+			writeErrSanitized(w, 502, err)
+		}
+		return
+	}
+
+	// 二进制检测：含 NUL 字节就标 is_binary
+	binary := isBinaryBytes(raw)
+
+	// 解码：encoding=gkb 用 GBK；其它走 utf-8（GBK 失败不回退，强制返回错误让前端知道）
+	var text string
+	if binary {
+		text = ""
+	} else if encoding == "gbk" {
+		decoded, derr := simplifiedchinese.GBK.NewDecoder().Bytes(raw)
+		if derr != nil {
+			// 解码失败：仍返回字节长度 + 错误信息，让前端知道是编码问题
+			s.audit.Write("files.preview", "system", req.System, "server", req.Server, "path", req.Path, "result", "fail", "stage", "decode", "err", derr.Error())
+			writeErr(w, 400, fmt.Errorf("GBK 解码失败（文件可能不是 GBK 编码）: %w", derr))
+			return
+		}
+		text = string(decoded)
+	} else {
+		text = string(raw) // Go 默认就是 UTF-8
+	}
+
+	resp := filesPreviewResp{
+		Name:      filepath.Base(req.Path),
+		Path:      filepath.ToSlash(filepath.Clean(req.Path)),
+		Encoding:  encoding,
+		Size:      fileSize,
+		BytesRead: len(raw),
+		Truncated: fileSize > int64(len(raw)),
+		IsBinary:  binary,
+		Content:   text,
+	}
+	s.audit.Write("files.preview", "system", req.System, "server", req.Server, "path", req.Path, "result", "ok", "bytes", len(raw), "encoding", encoding)
+	writeJSON(w, 200, resp)
+}
+
 
 // filesDownloadLimits 下载任务的硬约束（避免误操作 / 连接卡死）
 const (

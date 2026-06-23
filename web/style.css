@@ -784,3 +784,47 @@ input[type="datetime-local"] {
   padding: 1px 5px;
   border-radius: 3px;
 }
+
+/* 文件预览 modal（v0.5 项 1） */
+.preview-overlay {
+  position: fixed; inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  z-index: 1000;
+  display: flex; align-items: center; justify-content: center;
+  padding: 20px;
+}
+.preview-box {
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  width: min(960px, 96vw);
+  max-height: 88vh;
+  display: flex; flex-direction: column;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
+  overflow: hidden;
+}
+.preview-head {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-2);
+  font-size: 13px;
+  flex-wrap: wrap;
+}
+.preview-title { flex: 1; min-width: 200px; }
+.preview-title strong { font-family: ui-monospace, monospace; font-size: 13px; }
+.preview-body {
+  flex: 1; overflow: auto;
+  margin: 0;
+  padding: 12px 14px;
+  font-family: ui-monospace, monospace;
+  font-size: 12.5px;
+  line-height: 1.5;
+  background: var(--tail-out-bg);
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 70vh;
+}
+
+/* 文件名链接 hover 效果（v0.5 项 1） */
+.table td a:hover { color: var(--primary-2); text-decoration: underline; }

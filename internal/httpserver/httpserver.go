@@ -67,6 +67,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case path == "/" || path == "/index.html":
 		s.serveStatic(w, r, "index.html")
+	case path == "/preview.html":
+		s.serveStatic(w, r, "preview.html")
 	case strings.HasPrefix(path, "/static/"):
 		s.serveStatic(w, r, strings.TrimPrefix(path, "/static/"))
 	case path == "/api/config":
@@ -111,6 +113,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleAdminServers(w, r)
 	case path == "/api/files/list":
 		s.handleFilesList(w, r)
+	case path == "/api/files/preview":
+		s.handleFilesPreview(w, r)
 	case path == "/api/files/download":
 		s.handleFilesDownload(w, r)
 	case strings.HasPrefix(path, "/api/files/download/"):

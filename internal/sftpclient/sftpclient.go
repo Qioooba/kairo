@@ -31,9 +31,12 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// sftpFile 是对 *sftp.File 的最小抽象（io.Reader + io.Closer + Stat），
+// SftpFile 是对 *sftp.File 的最小抽象（io.Reader + io.Closer + Stat），
 // 方便测试时注入假实现。Stat 用于在下载开始时拿到文件总大小，便于上报进度。
-type sftpFile interface {
+//
+// v0.5 起导出（项 1 文件预览用）：之前是 lowercase sftpFile，
+// 但 httpserver 包要引用它作为 sftpClientLike.Open 的返回类型。
+type SftpFile interface {
 	io.Reader
 	io.Closer
 	Stat() (os.FileInfo, error)
@@ -47,7 +50,7 @@ type sftpFile interface {
 //
 // 加新 backend 只要再写一个 struct 实现这 4 个方法。
 type RemoteFS interface {
-	Open(path string) (sftpFile, error)
+	Open(path string) (SftpFile, error)
 	ReadDir(path string) ([]os.FileInfo, error)
 	Stat(path string) (os.FileInfo, error)
 	Close() error
@@ -59,7 +62,7 @@ type RemoteFS interface {
 // 命名上虽然保持 "sftpFile"，但 v0.3 起 ReadDir / Stat 也走这个抽象，
 // 这样 mock 时可以用 map/file 假数据完整覆盖 list / stat 路径。
 type sftpBackend interface {
-	Open(path string) (sftpFile, error)
+	Open(path string) (SftpFile, error)
 	ReadDir(path string) ([]os.FileInfo, error)
 	Stat(path string) (os.FileInfo, error)
 	Close() error
@@ -122,7 +125,7 @@ type realSftpBackend struct {
 	c *sftp.Client
 }
 
-func (r *realSftpBackend) Open(path string) (sftpFile, error) {
+func (r *realSftpBackend) Open(path string) (SftpFile, error) {
 	return r.c.Open(path)
 }
 
@@ -175,7 +178,7 @@ func (c *Client) DownloadFile(remotePath, localPath string) (int64, error) {
 //
 // 参数 progress 可以为 nil，此时行为与 DownloadFile 完全一致。
 // 回调语义：每写入 progressInterval 字节触发一次；最后完成时再补一次 (written, total) 保证前端能到 100%。
-// total 来自 sftpFile.Stat()，若 Stat 失败则为 -1（前端按 indeterminate 进度条处理）。
+// total 来自 SftpFile.Stat()，若 Stat 失败则为 -1（前端按 indeterminate 进度条处理）。
 // 回调可能在 io.Copy 路径中被并发触发，调用方需自行同步。
 func (c *Client) DownloadFileWithProgress(remotePath, localPath string, progress func(written, total int64)) (int64, error) {
 	return c.DownloadFileContext(context.Background(), remotePath, localPath, progress)
@@ -248,6 +251,24 @@ func (c *Client) DownloadFileContext(ctx context.Context, remotePath, localPath 
 		progress(n, total)
 	}
 	return n, nil
+}
+
+// Open 打开远端文件，返回 io.ReadCloser + Stat（v0.5 项 1 文件预览用）。
+//
+// 直接转发到 backend（realSftpBackend / shellBackend），
+// 调用方负责 Close + 用 io.LimitReader 限速读。
+//
+// 注意：path 不做白名单校验，调用方决定传什么路径；
+// 真实访问控制由远端 SSH 服务器的账号权限承担。
+func (c *Client) Open(path string) (SftpFile, error) {
+	if c == nil || c.b == nil {
+		return nil, fmt.Errorf("sftp 客户端未连接")
+	}
+	f, err := c.b.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("打开远端文件失败: %w", err)
+	}
+	return f, nil
 }
 
 // ReadDir 列出 path 下的所有条目（文件和目录）。
@@ -630,7 +651,7 @@ func (f *shellFile) Stat() (os.FileInfo, error) {
 // 注意：本实现限制 total 必须通过 Stat 先拿到（调用方 DownloadFileContext
 // 就是先 Stat 再 Open）。shellFile.Stat() 返回 0 size 是为了让 progress 回调
 // 也能跑（不会 panic）。
-func (s *shellBackend) Open(path string) (sftpFile, error) {
+func (s *shellBackend) Open(path string) (SftpFile, error) {
 	// 先 Stat 拿 size（cat 不会自动报大小）
 	info, err := s.Stat(path)
 	if err != nil {

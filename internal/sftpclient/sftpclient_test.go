@@ -26,7 +26,7 @@ type mockBackend struct {
 	openPath string
 }
 
-func (m *mockBackend) Open(path string) (sftpFile, error) {
+func (m *mockBackend) Open(path string) (SftpFile, error) {
 	m.openPath = path
 	if m.openErr != nil {
 		return nil, m.openErr
@@ -264,7 +264,7 @@ type cancelMockBackend struct {
 	reader *slowReader
 }
 
-func (m *cancelMockBackend) Open(path string) (sftpFile, error) {
+func (m *cancelMockBackend) Open(path string) (SftpFile, error) {
 	return &cancelMockFile{r: m.reader}, nil
 }
 func (m *cancelMockBackend) ReadDir(path string) ([]os.FileInfo, error) {

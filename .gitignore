@@ -35,3 +35,4 @@ Thumbs.db
 /docs/qa/node_modules/
 # QA 截图：~4MB，CI 跑出来会变，跟 commit 绑一起没意义
 /docs/qa/screenshots/
+.mavis/plans/

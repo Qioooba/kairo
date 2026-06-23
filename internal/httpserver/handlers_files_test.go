@@ -21,6 +21,7 @@ import (
 //   - ReadDir/Stat：走 fs + dirs（路径 → 内容/条目）
 //   - DownloadFile/DownloadFileWithProgress：把 fs[path] 写到 localPath，
 //     写完后回调 progress(written, total) 一次保证 SSE 拿到 100%
+//   - Open（v0.5 项 1 文件预览用）：返回 fakeSftpFile，让 handler 走 io.LimitReader 路径
 type fakeSftpClient struct {
 	files      map[string][]byte
 	dirs       map[string][]fakeDirEntry
@@ -34,6 +35,31 @@ type fakeDirEntry struct {
 }
 
 func (f *fakeSftpClient) Close() error { return nil }
+
+func (f *fakeSftpClient) Open(path string) (sftpclient.SftpFile, error) {
+	content, ok := f.files[path]
+	if !ok {
+		return nil, &os.PathError{Op: "open", Path: path, Err: os.ErrNotExist}
+	}
+	return &fakeSftpFile{
+		r:    strings.NewReader(string(content)),
+		size: int64(len(content)),
+		name: filepath.Base(path),
+	}, nil
+}
+
+// fakeSftpFile 是 fakeSftpClient.Open 的返回类型，给项 1 文件预览测试用。
+type fakeSftpFile struct {
+	r    *strings.Reader
+	size int64
+	name string
+}
+
+func (ff *fakeSftpFile) Read(p []byte) (int, error) { return ff.r.Read(p) }
+func (ff *fakeSftpFile) Close() error               { return nil }
+func (ff *fakeSftpFile) Stat() (os.FileInfo, error) {
+	return fakeFileInfo{name: ff.name, size: ff.size, mode: 0o644}, nil
+}
 
 func (f *fakeSftpClient) ReadDir(path string) ([]os.FileInfo, error) {
 	entries, ok := f.dirs[path]
@@ -473,3 +499,231 @@ func TestConfig_FreeBrowserDefault(t *testing.T) {
 		t.Fatal("显式 true 应启用文件浏览器")
 	}
 }
+
+// ============================================================================
+// v0.5 项 1：文件预览（/api/files/preview）
+// ============================================================================
+
+// TestFilesPreview_Happy_Text 文本文件正常预览：返 content + size + truncated=false。
+func TestFilesPreview_Happy_Text(t *testing.T) {
+	f := newFakeSftpBasic()
+	f.files["/data/SystemOut.log"] = []byte("hello world\n这是一段日志\nend\n")
+	srv := newServerWithFakeSSHAndSFTP(t, f)
+
+	w := doRequest(srv, "POST", "/api/files/preview", map[string]any{
+		"system": "信贷生产", "server": "mock-1",
+		"username": "ops", "password": "testpw",
+		"path":     "/data/SystemOut.log",
+	})
+	if w.Code != 200 {
+		t.Fatalf("期望 200，得到 %d body=%s", w.Code, w.Body.String())
+	}
+	var got struct {
+		Name      string `json:"name"`
+		Path      string `json:"path"`
+		Encoding  string `json:"encoding"`
+		Size      int64  `json:"size"`
+		BytesRead int    `json:"bytes_read"`
+		Truncated bool   `json:"truncated"`
+		IsBinary  bool   `json:"is_binary"`
+		Content   string `json:"content"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got.Name != "SystemOut.log" {
+		t.Errorf("Name 期望 SystemOut.log，得到 %q", got.Name)
+	}
+	if got.Size != int64(len("hello world\n这是一段日志\nend\n")) {
+		t.Errorf("Size 期望 %d，得到 %d", len("hello world\n这是一段日志\nend\n"), got.Size)
+	}
+	if int64(got.BytesRead) != got.Size {
+		t.Errorf("BytesRead 应等于 Size，得到 %d vs %d", got.BytesRead, got.Size)
+	}
+	if got.Truncated {
+		t.Errorf("小文件不应 truncated")
+	}
+	if got.IsBinary {
+		t.Errorf("纯文本不应 is_binary=true")
+	}
+	if got.Content != "hello world\n这是一段日志\nend\n" {
+		t.Errorf("Content 不匹配: %q", got.Content)
+	}
+	if got.Encoding != "utf-8" {
+		t.Errorf("默认 encoding 期望 utf-8，得到 %q", got.Encoding)
+	}
+}
+
+// TestFilesPreview_Truncated 文件比 max_bytes 大 → truncated=true + bytes_read=限制值。
+func TestFilesPreview_Truncated(t *testing.T) {
+	f := newFakeSftpBasic()
+	// 1KB 文件
+	big := make([]byte, 1024)
+	for i := range big {
+		big[i] = byte('a')
+	}
+	f.files["/data/big.log"] = big
+	srv := newServerWithFakeSSHAndSFTP(t, f)
+
+	w := doRequest(srv, "POST", "/api/files/preview", map[string]any{
+		"system":    "信贷生产", "server": "mock-1",
+		"username":  "ops", "password": "testpw",
+		"path":      "/data/big.log",
+		"max_bytes": 100,
+	})
+	if w.Code != 200 {
+		t.Fatalf("期望 200，得到 %d", w.Code)
+	}
+	var got struct {
+		Size      int64 `json:"size"`
+		BytesRead int   `json:"bytes_read"`
+		Truncated bool  `json:"truncated"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &got)
+	if got.Size != 1024 {
+		t.Errorf("Size 期望 1024，得到 %d", got.Size)
+	}
+	if got.BytesRead != 100 {
+		t.Errorf("BytesRead 期望 100（按 max_bytes 限制），得到 %d", got.BytesRead)
+	}
+	if !got.Truncated {
+		t.Errorf("文件大小 > max_bytes 时应 truncated=true")
+	}
+}
+
+// TestFilesPreview_MaxBytesHardCap max_bytes > 10MB 应被夹到 10MB。
+func TestFilesPreview_MaxBytesHardCap(t *testing.T) {
+	f := newFakeSftpBasic()
+	f.files["/data/x.log"] = []byte("tiny")
+	srv := newServerWithFakeSSHAndSFTP(t, f)
+
+	w := doRequest(srv, "POST", "/api/files/preview", map[string]any{
+		"system":    "信贷生产", "server": "mock-1",
+		"username":  "ops", "password": "testpw",
+		"path":      "/data/x.log",
+		"max_bytes": 100 << 20, // 100MB，超过 10MB 上限
+	})
+	if w.Code != 200 {
+		t.Fatalf("期望 200，得到 %d body=%s", w.Code, w.Body.String())
+	}
+	// 文件本身只有 4 字节，bytes_read 应是 4（不被 max_bytes 影响）
+	var got struct {
+		BytesRead int `json:"bytes_read"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &got)
+	if got.BytesRead != 4 {
+		t.Errorf("文件 4 字节，BytesRead 应为 4（不是 max_bytes 上限），得到 %d", got.BytesRead)
+	}
+}
+
+// TestFilesPreview_Binary 含 NUL 字节 → is_binary=true + content 为空。
+func TestFilesPreview_Binary(t *testing.T) {
+	f := newFakeSftpBasic()
+	bin := []byte{0x89, 0x50, 0x4E, 0x47, 0x00, 0x00, 0x00, 0x00} // PNG magic + NUL
+	f.files["/data/image.png"] = bin
+	srv := newServerWithFakeSSHAndSFTP(t, f)
+
+	w := doRequest(srv, "POST", "/api/files/preview", map[string]any{
+		"system": "信贷生产", "server": "mock-1",
+		"username": "ops", "password": "testpw",
+		"path": "/data/image.png",
+	})
+	if w.Code != 200 {
+		t.Fatalf("期望 200，得到 %d", w.Code)
+	}
+	var got struct {
+		IsBinary bool   `json:"is_binary"`
+		Content  string `json:"content"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &got)
+	if !got.IsBinary {
+		t.Errorf("含 NUL 字节应 is_binary=true")
+	}
+	if got.Content != "" {
+		t.Errorf("二进制文件 content 应为空，得到 %q", got.Content)
+	}
+}
+
+// TestFilesPreview_Dir 目录预览 → 400 "不支持预览目录"
+func TestFilesPreview_Dir(t *testing.T) {
+	f := newFakeSftpBasic()
+	f.dirs["/data/sub"] = []fakeDirEntry{}
+	srv := newServerWithFakeSSHAndSFTP(t, f)
+
+	w := doRequest(srv, "POST", "/api/files/preview", map[string]any{
+		"system": "信贷生产", "server": "mock-1",
+		"username": "ops", "password": "testpw",
+		"path": "/data/sub",
+	})
+	if w.Code != 400 {
+		t.Errorf("目录预览应 400，得到 %d body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "不支持预览目录") {
+		t.Errorf("错误信息应提到\"不支持预览目录\"，得到 %s", w.Body.String())
+	}
+}
+
+// TestFilesPreview_NotExist 文件不存在 → 502 (SSH/SFTP 错误归 502)
+func TestFilesPreview_NotExist(t *testing.T) {
+	f := newFakeSftpBasic()
+	srv := newServerWithFakeSSHAndSFTP(t, f)
+
+	w := doRequest(srv, "POST", "/api/files/preview", map[string]any{
+		"system": "信贷生产", "server": "mock-1",
+		"username": "ops", "password": "testpw",
+		"path": "/data/nope.log",
+	})
+	if w.Code != 502 && w.Code != 500 {
+		t.Errorf("文件不存在应 5xx，得到 %d", w.Code)
+	}
+}
+
+// TestFilesPreview_PathNotAbsolute 相对路径 → 400
+func TestFilesPreview_PathNotAbsolute(t *testing.T) {
+	srv := newServerWithFakeSSHAndSFTP(t, newFakeSftpBasic())
+	w := doRequest(srv, "POST", "/api/files/preview", map[string]any{
+		"system": "信贷生产", "server": "mock-1",
+		"username": "ops", "password": "testpw",
+		"path": "relative/path.log",
+	})
+	if w.Code != 400 {
+		t.Errorf("相对路径应 400，得到 %d body=%s", w.Code, w.Body.String())
+	}
+}
+
+// TestFilesPreview_EncodingGBK encoding=gbk → 字节按 GBK 解码。
+func TestFilesPreview_EncodingGBK(t *testing.T) {
+	f := newFakeSftpBasic()
+	// "中文日志" 4 个中文字符的 GBK 编码（每个 2 字节 → 8 字节）
+	// 用 Go 自带 GBK encoder 算的（避免手编错误）：0xD6D0 0xCEC4 0xC8D5 0xD6BE
+	gbkBytes := []byte{0xD6, 0xD0, 0xCE, 0xC4, 0xC8, 0xD5, 0xD6, 0xBE}
+	f.files["/data/cn.log"] = gbkBytes
+	srv := newServerWithFakeSSHAndSFTP(t, f)
+
+	w := doRequest(srv, "POST", "/api/files/preview", map[string]any{
+		"system":   "信贷生产", "server": "mock-1",
+		"username": "ops", "password": "testpw",
+		"path":     "/data/cn.log",
+		"encoding": "gbk",
+	})
+	if w.Code != 200 {
+		t.Fatalf("期望 200，得到 %d body=%s", w.Code, w.Body.String())
+	}
+	var got struct {
+		Encoding string `json:"encoding"`
+		Content  string `json:"content"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &got)
+	if got.Encoding != "gbk" {
+		t.Errorf("encoding 期望 gbk，得到 %q", got.Encoding)
+	}
+	if got.Content != "中文日志" {
+		t.Errorf("GBK 解码后 Content 期望 %q，得到 %q", "中文日志", got.Content)
+	}
+}
+
+// ============================================================================
+// v0.5 项 1：文件预览（/api/files/preview）测试
+// ============================================================================
+
+// TestFilesPreview_Happy 完整路径：mock 文本文件 → preview 拿到内容 + 元信息。

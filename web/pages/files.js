@@ -24,12 +24,20 @@
       currentPath: '/',
       parent: '',
       entries: [],
+      filteredEntries: [], // 项 17：模糊过滤后的视图（前端 filter）
       selected: new Set(),
       sortKey: 'name',
       sortDesc: false,
       dlId: null,
       dlEvtSrc: null,
       fileStates: {},
+      // 项 17：文件名模糊过滤（用户输入）
+      filter: '',
+      // 项 2：常用目录（每个 server 独立一组；存 localStorage）
+      //   结构：{ "systemA/serverA": [{ name, path }, ...], ... }
+      // 初始为空；loadCfg 完成后调 loadCommonDirs 填充。
+      commonDirs: {},
+      commonDirsKey: '', // 当前 system/server 拼出来的 key
     };
 
     // ---- 连接区 ----
@@ -76,6 +84,17 @@
     pathCard.appendChild(el('div', { class: 'row gap-2 mb-2' }, [btnParent, btnRefresh, crumbsEl]));
     pathCard.appendChild(pathInp);
 
+    // v0.5 #2：常用目录栏（点即跳转；星标加入/管理）
+    const commonDirsBar = el('div', { class: 'common-dirs-bar', style: 'margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center;' });
+    const commonDirsLabel = el('span', { class: 'lbl', text: '常用目录：' });
+    commonDirsBar.appendChild(commonDirsLabel);
+    // ★ 收藏当前路径 按钮（连同当前 system+server 存进 localStorage）
+    const btnBookmarkCurrent = el('button', { class: 'btn btn-sm', text: '⭐ 收藏当前路径', onclick: bookmarkCurrentPath });
+    // ⚙ 管理 按钮（弹简单 inline 列表，可改别名/路径/删）
+    const btnManageCommonDirs = el('button', { class: 'btn btn-sm', text: '⚙ 管理常用目录', onclick: openManageCommonDirs });
+    pathCard.appendChild(commonDirsBar);
+    pathCard.appendChild(el('div', { class: 'mt-1 row gap-2' }, [btnBookmarkCurrent, btnManageCommonDirs]));
+
     // ---- 文件列表区 ----
     const tableWrap = el('div', { class: 'file-table-wrap' });
 
@@ -94,10 +113,33 @@
 
     const fileCard = el('div', { class: 'card' });
     fileCard.appendChild(el('h3', { text: '3. 选择并下载' }));
+    // v0.5 #17：文件名模糊过滤（前端实时；支持子串 / *.log / log?）
+    const filterInp = el('input', {
+      type: 'text',
+      id: 'files-filter',
+      placeholder: '过滤文件名（子串 / 通配符 * ?, 例 SystemOut 或 *.log）',
+      style: 'min-width: 280px;'
+    });
+    filterInp.addEventListener('input', () => {
+      state.filter = filterInp.value || '';
+      OTB.core.lastSet('files', 'filter', state.filter);
+      renderTable();
+    });
+    const filterClearBtn = el('button', { class: 'btn btn-sm', text: '清空', onclick: () => {
+      filterInp.value = '';
+      state.filter = '';
+      OTB.core.lastSet('files', 'filter', '');
+      renderTable();
+    }});
+    const filterCountEl = el('span', { id: 'files-filter-count', class: 'text-dim' });
+    fileCard.appendChild(el('div', { class: 'mt-2', style: 'display:flex; gap:8px; align-items:center; flex-wrap:wrap;' }, [
+      el('span', { class: 'lbl', text: '过滤：' }),
+      filterInp, filterClearBtn, filterCountEl
+    ]));
     fileCard.appendChild(el('div', { class: 'file-toolbar' }, [
       btnSelAll, btnSelNone, selCount, dlZipLabel, btnDownload, btnCancel
     ]));
-    fileCard.appendChild(el('div', { class: 'mt-2', style: 'display:flex; gap:8px; align-items:center;' }, [
+    fileCard.appendChild(el('div', { class: 'mt-2', style: 'display:flex; gap:8px; align-items:center; flex-wrap:wrap;' }, [
       el('span', { class: 'lbl', text: '本地目录：' }),
       dlTargetDirInp
     ]));
@@ -132,6 +174,15 @@
           // 默认勾上"记住密码"（keyring 模式下由 refreshCredStatus 决定是否禁用）
           rememberChk.checked = true;
         }
+        // 恢复 filter lastGet
+        const lastFilter = OTB.core.lastGet('files', 'filter');
+        if (lastFilter) {
+          state.filter = lastFilter;
+          filterInp.value = lastFilter;
+        }
+        // 加载常用目录 + 渲染 bar
+        state.commonDirs = loadCommonDirs();
+        renderCommonDirsBar();
         renderFileBrowserWarning(info);
       });
     }
@@ -216,7 +267,7 @@
       srvSel.innerHTML = '';
       srvSel.appendChild(el('option', { value: '', text: '（请选择）' }));
       const sys = (state.cfg.systems || []).find(s => s.name === name);
-      if (!sys) { srvSel.disabled = true; persistSelection(); return; }
+      if (!sys) { srvSel.disabled = true; persistSelection(); renderCommonDirsBar(); return; }
       (sys.servers || []).forEach(srv => {
         srvSel.appendChild(el('option', { value: srv.name, text: srv.name + ' · ' + srv.host + ':' + srv.port }));
       });
@@ -224,6 +275,7 @@
       userInp.value = (sys.servers && sys.servers[0] && sys.servers[0].username) || '';
       refreshCredStatus();
       persistSelection();
+      renderCommonDirsBar();
     }
 
     function setServer(name) {
@@ -235,6 +287,7 @@
       }
       refreshCredStatus();
       persistSelection();
+      renderCommonDirsBar();
     }
 
     sysSel.addEventListener('change', () => setSystem(sysSel.value));
@@ -312,6 +365,101 @@
       }
     }
 
+    // ---- 文件预览（v0.5 项 1）----
+    // 普通点击文件名 → 弹窗显示（modal 快速看）
+    // Shift+点击 / 或显式调用 → 新窗口预览（独立页 preview.html）
+    async function openPreview(filePath, fileName) {
+      const c = creds();
+      if (!c.username) { toast('请先输入 SSH 用户名', 'warn'); return; }
+      // 拿这个 server 的目录默认 encoding
+      let encoding = 'utf-8';
+      try {
+        const sys = (state.cfg.systems || []).find(s => s.name === state.currentSys);
+        const srv = sys && (sys.servers || []).find(s => s.name === state.currentSrv);
+        const ld = srv && (srv.log_dirs || [])[0];
+        if (ld && ld.encoding) encoding = String(ld.encoding).toLowerCase();
+      } catch (e) { /* keep utf-8 */ }
+      try {
+        const r = await api('POST', '/api/files/preview', {
+          system: state.currentSys, server: state.currentSrv,
+          username: c.username, password: c.password,
+          path: filePath, encoding: encoding, max_bytes: 1048576
+        });
+        showPreviewModal(r, fileName, filePath, encoding);
+      } catch (e) {
+        toast('预览失败：' + e.message, 'err');
+      }
+    }
+
+    // openPreviewInNewWindow 开新窗口（preview.html），凭证走 OTB._previewCred 跨窗口传递
+    function openPreviewInNewWindow(filePath, fileName) {
+      const c = creds();
+      if (!c.username) { toast('请先输入 SSH 用户名', 'warn'); return; }
+      let encoding = 'utf-8';
+      try {
+        const sys = (state.cfg.systems || []).find(s => s.name === state.currentSys);
+        const srv = sys && (sys.servers || []).find(s => s.name === state.currentSrv);
+        const ld = srv && (srv.log_dirs || [])[0];
+        if (ld && ld.encoding) encoding = String(ld.encoding).toLowerCase();
+      } catch (e) { /* keep utf-8 */ }
+      // 凭证跨窗口传递（同源 opener 可直接读）
+      OTB._previewCred = OTB._previewCred || {};
+      OTB._previewCred[state.currentSys + '::' + state.currentSrv] = {
+        username: c.username, password: c.password
+      };
+      const q = new URLSearchParams({
+        system: state.currentSys, server: state.currentSrv,
+        path: filePath, encoding: encoding
+      }).toString();
+      const w = window.open('/preview.html?' + q, '_blank');
+      if (!w) {
+        toast('浏览器拦截了新窗口（请允许弹窗）', 'warn');
+        // fallback 到 modal
+        openPreview(filePath, fileName);
+      }
+    }
+
+    function showPreviewModal(r, fileName, filePath, encoding) {
+      // 关闭已有
+      const old = document.getElementById('files-preview-modal');
+      if (old) old.remove();
+      const overlay = el('div', { id: 'files-preview-modal', class: 'preview-overlay' });
+      const box = el('div', { class: 'preview-box' });
+      const head = el('div', { class: 'preview-head' });
+      head.appendChild(el('div', { class: 'preview-title' }, [
+        el('strong', { text: fileName }),
+        el('span', { class: 'text-dim', text: ' · ' + filePath + ' · ' + encoding })
+      ]));
+      const meta = [];
+      meta.push('大小 ' + formatBytes(r.size));
+      meta.push('已读 ' + formatBytes(r.bytes_read || 0));
+      if (r.truncated) meta.push('已截断（文件 > 1MB）');
+      if (r.is_binary) meta.push('二进制文件');
+      head.appendChild(el('div', { class: 'text-dim', text: meta.join('  ·  ') }));
+      // 项 1：modal 里加 "在新窗口打开" 按钮（满足用户原话 "新浏览器窗口预览"）
+      const btnOpenWin = el('button', { class: 'btn btn-sm', text: '↗ 在新窗口打开', onclick: () => {
+        overlay.remove();
+        openPreviewInNewWindow(filePath, fileName);
+      }});
+      const btnClose = el('button', { class: 'btn btn-sm', text: '关闭', onclick: () => overlay.remove() });
+      head.appendChild(el('div', { style: 'display:flex;gap:6px;' }, [btnOpenWin, btnClose]));
+      box.appendChild(head);
+      const body = el('pre', { class: 'preview-body' });
+      if (r.is_binary) {
+        body.textContent = '⟦二进制文件不可预览（共 ' + r.size + ' 字节，前 ' + r.bytes_read + ' 字节）⟧';
+        body.style.color = 'var(--text-dim)';
+      } else {
+        body.textContent = r.content || '(空)';
+      }
+      box.appendChild(body);
+      overlay.appendChild(box);
+      overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+      document.addEventListener('keydown', function onEsc(e) {
+        if (e.key === 'Escape') { overlay.remove(); document.removeEventListener('keydown', onEsc); }
+      });
+      document.body.appendChild(overlay);
+    }
+
     function renderCrumbs() {
       crumbsEl.innerHTML = '';
       const parts = state.currentPath.split('/').filter(Boolean);
@@ -331,8 +479,165 @@
       pathInp.value = state.currentPath;
     }
 
+    // ========== v0.5 项 2：常用目录（localStorage，按 system/server 分组） ==========
+    // 数据结构：
+    //   state.commonDirs = {
+    //     "systemA/serverA": [ { name: "server1 日志", path: "/opt/IBM/.../server1" }, ... ],
+    //     ...
+    //   }
+    // 持久化键：localStorage["ops.files.common_dirs"] = JSON
+    // 切换 system/server 时重新渲染 commonDirsBar
+    const COMMON_DIRS_LS_KEY = 'ops.files.common_dirs';
+
+    function loadCommonDirs() {
+      try {
+        const raw = localStorage.getItem(COMMON_DIRS_LS_KEY);
+        if (!raw) return {};
+        const obj = JSON.parse(raw);
+        return (obj && typeof obj === 'object') ? obj : {};
+      } catch (e) { return {}; }
+    }
+    function saveCommonDirs() {
+      try { localStorage.setItem(COMMON_DIRS_LS_KEY, JSON.stringify(state.commonDirs)); }
+      catch (e) { /* quota / private mode 静默 */ }
+    }
+    function currentCommonDirsKey() {
+      if (!state.currentSys || !state.currentSrv) return '';
+      return state.currentSys + '/' + state.currentSrv;
+    }
+    function getCurrentCommonDirs() {
+      const k = currentCommonDirsKey();
+      if (!k) return [];
+      return state.commonDirs[k] || [];
+    }
+    function setCurrentCommonDirs(arr) {
+      const k = currentCommonDirsKey();
+      if (!k) return;
+      state.commonDirs[k] = arr;
+      saveCommonDirs();
+    }
+
+    function renderCommonDirsBar() {
+      // 清空但保留 label（第 0 个子节点是 commonDirsLabel）
+      while (commonDirsBar.children.length > 1) {
+        commonDirsBar.removeChild(commonDirsBar.lastChild);
+      }
+      const list = getCurrentCommonDirs();
+      if (!list.length) {
+        commonDirsBar.appendChild(el('span', { class: 'text-dim', text: '（暂无，点「⭐ 收藏当前路径」添加）' }));
+        return;
+      }
+      list.forEach((item, idx) => {
+        const btn = el('button', {
+          class: 'btn btn-sm',
+          title: item.path,
+          text: '📂 ' + item.name,
+          onclick: (e) => {
+            e.preventDefault();
+            pathInp.value = item.path;
+            doListDir(item.path, creds());
+          }
+        });
+        commonDirsBar.appendChild(btn);
+      });
+    }
+
+    function bookmarkCurrentPath() {
+      if (!state.currentSys || !state.currentSrv) {
+        toast('请先选系统和服务器', 'warn'); return;
+      }
+      const path = state.currentPath || '/';
+      // 弹简单输入框：默认别名 = basename
+      const defaultName = path.split('/').filter(Boolean).pop() || path || '/';
+      const name = window.prompt('为这个常用目录起个名字（按钮显示用）:', defaultName);
+      if (!name) return;
+      const list = getCurrentCommonDirs().slice();
+      // 同 path 覆盖
+      const existIdx = list.findIndex(x => x.path === path);
+      if (existIdx >= 0) {
+        list[existIdx].name = name;
+      } else {
+        list.push({ name: name, path: path });
+      }
+      setCurrentCommonDirs(list);
+      renderCommonDirsBar();
+      toast('已收藏：' + name + ' → ' + path, 'ok');
+    }
+
+    function openManageCommonDirs() {
+      if (!state.currentSys || !state.currentSrv) {
+        toast('请先选系统和服务器', 'warn'); return;
+      }
+      const list = getCurrentCommonDirs().slice();
+      // 简单 modal：列表 + 改别名/改路径/删除/上移下移
+      const old = document.getElementById('files-common-dirs-modal');
+      if (old) old.remove();
+      const overlay = el('div', { id: 'files-common-dirs-modal', class: 'preview-overlay' });
+      const box = el('div', { class: 'preview-box', style: 'max-width: 720px;' });
+      const head = el('div', { class: 'preview-head' });
+      head.appendChild(el('strong', { text: '管理常用目录 · ' + state.currentSys + ' / ' + state.currentSrv }));
+      const btnClose = el('button', { class: 'btn btn-sm', text: '关闭', onclick: () => overlay.remove() });
+      head.appendChild(btnClose);
+      box.appendChild(head);
+
+      const listEl = el('div');
+      function rerenderList() {
+        while (listEl.firstChild) listEl.removeChild(listEl.firstChild);
+        if (!list.length) {
+          listEl.appendChild(el('div', { class: 'text-dim', text: '（暂无常用目录）' }));
+          return;
+        }
+        list.forEach((item, idx) => {
+          const row = el('div', { style: 'display:flex; gap:6px; align-items:center; padding:6px 0; border-bottom: 1px solid var(--line);' });
+          const nameInp = el('input', { type: 'text', value: item.name, style: 'flex: 0 0 200px;' });
+          nameInp.addEventListener('change', () => { list[idx].name = nameInp.value; });
+          const pathInp2 = el('input', { type: 'text', value: item.path, style: 'flex: 1 1 auto;' });
+          pathInp2.addEventListener('change', () => { list[idx].path = pathInp2.value; });
+          const upBtn = el('button', { class: 'btn btn-sm', text: '↑', disabled: idx === 0, onclick: () => {
+            if (idx > 0) { const t = list[idx - 1]; list[idx - 1] = list[idx]; list[idx] = t; rerenderList(); }
+          }});
+          const downBtn = el('button', { class: 'btn btn-sm', text: '↓', disabled: idx === list.length - 1, onclick: () => {
+            if (idx < list.length - 1) { const t = list[idx + 1]; list[idx + 1] = list[idx]; list[idx] = t; rerenderList(); }
+          }});
+          const delBtn = el('button', { class: 'btn btn-sm btn-danger', text: '删除', onclick: () => {
+            list.splice(idx, 1); rerenderList();
+          }});
+          row.appendChild(nameInp);
+          row.appendChild(pathInp2);
+          row.appendChild(upBtn);
+          row.appendChild(downBtn);
+          row.appendChild(delBtn);
+          listEl.appendChild(row);
+        });
+      }
+      rerenderList();
+      box.appendChild(listEl);
+
+      const footer = el('div', { style: 'margin-top: 12px; display: flex; gap: 8px; justify-content: flex-end;' });
+      footer.appendChild(el('button', { class: 'btn btn-sm', text: '+ 新增', onclick: () => {
+        list.push({ name: '新目录', path: '/' });
+        rerenderList();
+      }}));
+      footer.appendChild(el('button', { class: 'btn btn-primary', text: '保存', onclick: () => {
+        setCurrentCommonDirs(list);
+        renderCommonDirsBar();
+        overlay.remove();
+        toast('常用目录已保存', 'ok');
+      }}));
+      box.appendChild(footer);
+      overlay.appendChild(box);
+      overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+      document.body.appendChild(overlay);
+    }
+
     function sortedEntries() {
-      const arr = state.entries.slice();
+      const q = (state.filter || filterInp.value || '').trim().toLowerCase();
+      let arr = state.entries.slice();
+      // v0.5 #17：按文件名过滤（前端实时；支持通配符 * 和 ?）
+      if (q) {
+        const re = globToRegex(q);
+        arr = arr.filter(e => re.test((e.name || '').toLowerCase()));
+      }
       const k = state.sortKey;
       const desc = state.sortDesc;
       arr.sort((a, b) => {
@@ -348,11 +653,31 @@
       return arr;
     }
 
+    // globToRegex 把 "system*.log" / "*.log" / "log?" 这样的 glob 转成正则（已 lowercase）
+    function globToRegex(glob) {
+      // 把用户输入转义正则元字符，再把 \* 和 \? 还原
+      const escaped = glob.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.');
+      return new RegExp('^' + escaped + '$', 'i');
+    }
+
     function renderTable() {
       tableWrap.innerHTML = '';
       if (!state.entries.length) {
         tableWrap.appendChild(el('div', { class: 'text-dim', text: '（目录为空，或列表失败 — 看上面的提示）' }));
+        filterCountEl.textContent = '';
         return;
+      }
+      // v0.5 #17：过滤后数量显示
+      const filtered = sortedEntries();
+      const q = (state.filter || filterInp.value || '').trim();
+      if (q) {
+        filterCountEl.textContent = '过滤后 ' + filtered.length + ' / ' + state.entries.length;
+        if (filtered.length === 0) {
+          tableWrap.appendChild(el('div', { class: 'text-dim', text: '（过滤 "' + q + '" 无匹配项）' }));
+          return;
+        }
+      } else {
+        filterCountEl.textContent = '共 ' + state.entries.length + ' 项';
       }
       const tbl = el('table', { class: 'table' });
       const thead = el('thead');
@@ -397,7 +722,22 @@
             e.preventDefault(); doListDir(fullPath, creds());
           }}));
         } else {
-          nameCell.appendChild(document.createTextNode(entry.name));
+          // v0.5 项 1：文件名改成可点击链接 → 弹窗预览（前 1MB 内容）
+          const link = el('a', {
+            href: '#',
+            text: entry.name,
+            title: '点击弹窗预览前 1MB 内容（按住 Shift 在新窗口预览）',
+            onclick: (e) => {
+              e.preventDefault();
+              if (e.shiftKey) {
+                // Shift+点击 → 直接开新窗口预览（用户原话："新开浏览器窗口预览"）
+                openPreviewInNewWindow(fullPath, entry.name);
+              } else {
+                openPreview(fullPath, entry.name);
+              }
+            }
+          });
+          nameCell.appendChild(link);
         }
         nameCell.insertBefore(document.createTextNode(icon + ' '), nameCell.firstChild);
         tr.appendChild(nameCell);
@@ -603,7 +943,10 @@
       closeDownloadStream('cancel');
     }
 
-    loadCfg().then(refreshCredStatus).catch(e => toast('配置加载失败：' + e.message, 'err'));
+    // 启动：从 localStorage 恢复常用目录 + 渲染常用目录栏
+state.commonDirs = loadCommonDirs();
+renderCommonDirsBar();
+loadCfg().then(refreshCredStatus).catch(e => toast('配置加载失败：' + e.message, 'err'));
   }
 
   OTB.pages.files = renderFiles;

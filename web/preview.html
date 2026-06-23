@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <link rel="icon" href="data:," />
+  <title>文件预览 · 独立窗口</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <style>
+    /* preview 独立窗口：尽量窄、尽量高，避免被侧边栏挤 */
+    body { grid-template-columns: 1fr; }
+    .sidebar { display: none; }
+    .main { display: flex; flex-direction: column; height: 100vh; }
+    .topbar { padding: 8px 14px; }
+    .preview-standalone {
+      flex: 1; display: flex; flex-direction: column;
+      padding: 10px 14px; gap: 10px; min-height: 0;
+    }
+    .preview-meta {
+      display: flex; gap: 12px; flex-wrap: wrap;
+      padding: 8px 12px; background: var(--bg-2);
+      border: 1px solid var(--line); border-radius: 8px;
+      font-size: 12.5px; color: var(--text-dim);
+    }
+    .preview-meta .meta-key { color: var(--text-mute); margin-right: 4px; }
+    .preview-meta .meta-val { color: var(--text); font-family: ui-monospace, monospace; }
+    .preview-meta .badge { padding: 1px 8px; border-radius: 4px; font-weight: 600; }
+    .preview-meta .badge-ok { background: rgba(16,185,129,0.18); color: #10b981; }
+    .preview-meta .badge-warn { background: rgba(245,158,11,0.18); color: #f59e0b; }
+    .preview-meta .badge-err { background: rgba(239,68,68,0.18); color: #ef4444; }
+    .preview-out {
+      flex: 1; min-height: 0; overflow: auto;
+      background: var(--bg-2); border: 1px solid var(--line); border-radius: 8px;
+      padding: 12px 14px; font-family: ui-monospace, Menlo, Consolas, monospace;
+      font-size: 12.5px; line-height: 1.55;
+      white-space: pre-wrap; word-break: break-all; margin: 0;
+    }
+    .preview-empty { color: var(--text-dim); padding: 24px; text-align: center; }
+    .preview-err {
+      padding: 16px; color: #ef4444; background: rgba(239,68,68,0.06);
+      border: 1px solid rgba(239,68,68,0.3); border-radius: 8px;
+    }
+    .btn-row { display: flex; gap: 8px; flex-wrap: wrap; }
+  </style>
+</head>
+<body>
+  <main class="main">
+    <header class="topbar">
+      <div class="crumbs">文件预览（独立窗口）</div>
+      <div class="topbar-right">
+        <span id="conn-dot" class="dot dot-idle"></span>
+        <span id="conn-text" class="muted">加载中…</span>
+      </div>
+    </header>
+    <section class="preview-standalone">
+      <div class="preview-meta" id="meta">
+        <span><span class="meta-key">系统:</span><span class="meta-val" id="m-system">-</span></span>
+        <span><span class="meta-key">服务器:</span><span class="meta-val" id="m-server">-</span></span>
+        <span><span class="meta-key">路径:</span><span class="meta-val" id="m-path">-</span></span>
+        <span><span class="meta-key">大小:</span><span class="meta-val" id="m-size">-</span></span>
+        <span><span class="meta-key">编码:</span><span class="meta-val" id="m-encoding">-</span></span>
+        <span id="m-trunc-wrap" style="display:none"><span class="badge badge-warn" id="m-trunc">已截断</span></span>
+        <span id="m-binary-wrap" style="display:none"><span class="badge badge-warn" id="m-binary">二进制</span></span>
+      </div>
+      <div class="btn-row">
+        <button id="btn-refresh" class="btn">刷新</button>
+        <button id="btn-download" class="btn">下载完整文件</button>
+        <button id="btn-close" class="btn">关闭本页</button>
+        <span class="text-dim" id="read-info" style="margin-left:auto;"></span>
+      </div>
+      <pre id="preview-out" class="preview-out">加载中…</pre>
+    </section>
+  </main>
+
+  <div id="toast" class="toast"></div>
+  <script src="/static/api.js"></script>
+  <script>
+    // ===== preview.html 独立窗口 JS =====
+    // 从 query string 拿 system/server/path/encoding，
+    // 从 opener.OTB 拿凭据（如果开了"记住密码"已经在 opener 里），
+    // 调 /api/files/preview，显示文本 / 二进制提示。
+
+    (function () {
+      'use strict';
+      const $ = (s) => document.querySelector(s);
+      const { api } = window.OTB || { api: null };
+      const params = new URLSearchParams(location.search);
+      const system = params.get('system') || '';
+      const server = params.get('server') || '';
+      const path = params.get('path') || '';
+      const encoding = params.get('encoding') || 'utf-8';
+
+      $('#m-system').textContent = system || '?';
+      $('#m-server').textContent = server || '?';
+      $('#m-path').textContent = path || '?';
+      $('#m-encoding').textContent = encoding;
+
+      function toast(msg, type) {
+        const t = $('#toast');
+        t.textContent = msg;
+        t.className = 'toast show' + (type ? ' ' + type : '');
+        clearTimeout(toast._timer);
+        toast._timer = setTimeout(() => { t.className = 'toast'; }, 2400);
+      }
+
+      function setConn(state, text) {
+        const dot = $('#conn-dot');
+        const txt = $('#conn-text');
+        dot.className = 'dot dot-' + (state || 'idle');
+        txt.textContent = text || (state === 'busy' ? '加载中…' : state === 'ok' ? '已加载' : state === 'err' ? '失败' : '就绪');
+      }
+
+      // 拿凭据：opener window 同源直接取（用户在主页已输入）；
+      // 没 opener / 取不到 → 弹 prompt 让用户输。
+      function getCred() {
+        try {
+          const op = window.opener;
+          if (op && op.OTB && op.OTB._previewCred && op.OTB._previewCred[system + '::' + server]) {
+            return op.OTB._previewCred[system + '::' + server];
+          }
+        } catch (e) { /* ignore cross-origin */ }
+        const u = prompt('SSH 用户名：');
+        if (!u) return null;
+        const p = prompt('SSH 密码：');
+        if (p == null) return null;
+        return { username: u, password: p };
+      }
+
+      async function doPreview() {
+        if (!system || !server || !path) {
+          toast('参数缺失：system / server / path', 'err');
+          setConn('err', '参数缺失');
+          $('#preview-out').textContent = '';
+          return;
+        }
+        const cred = getCred();
+        if (!cred || !cred.username) { setConn('err', '未提供凭据'); return; }
+
+        setConn('busy', '加载中…');
+        try {
+          // 用 fetch 而不是 OTB.api（可能依赖主页面初始化）
+          const r = await fetch('/api/files/preview', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              system: system, server: server, path: path,
+              username: cred.username, password: cred.password,
+              encoding: encoding, max_bytes: 1048576
+            })
+          });
+          const data = await r.json();
+          if (!r.ok) {
+            $('#preview-out').innerHTML = '';
+            const div = document.createElement('div');
+            div.className = 'preview-err';
+            div.textContent = '预览失败：' + (data && data.error || ('HTTP ' + r.status));
+            $('#preview-out').appendChild(div);
+            setConn('err', '失败');
+            return;
+          }
+          renderPreview(data);
+          setConn('ok', '已加载');
+        } catch (e) {
+          $('#preview-out').innerHTML = '';
+          const div = document.createElement('div');
+          div.className = 'preview-err';
+          div.textContent = '请求失败：' + e.message;
+          $('#preview-out').appendChild(div);
+          setConn('err', '失败');
+        }
+      }
+
+      function renderPreview(d) {
+        $('#m-system').textContent = system;
+        $('#m-server').textContent = server;
+        $('#m-path').textContent = d.path || path;
+        $('#m-size').textContent = formatBytes(d.size || 0);
+        $('#m-encoding').textContent = d.encoding || encoding;
+        $('#read-info').textContent = '已读 ' + (d.bytes_read || 0) + ' 字节' +
+          (d.truncated ? '（文件 ' + formatBytes(d.size) + ' 更大）' : '');
+        $('#m-trunc-wrap').style.display = d.truncated ? '' : 'none';
+        $('#m-binary-wrap').style.display = d.is_binary ? '' : 'none';
+        $('#preview-out').innerHTML = '';
+        if (d.is_binary) {
+          const div = document.createElement('div');
+          div.className = 'preview-empty';
+          div.textContent = '二进制文件，前 8KB 含 NUL 字节（占比 > 5%）。请用「下载完整文件」查看。';
+          $('#preview-out').appendChild(div);
+          return;
+        }
+        // 用 textContent 自动 escape，避免渲染 XSS
+        $('#preview-out').textContent = d.content || '（文件为空）';
+      }
+
+      function formatBytes(n) {
+        n = Number(n) || 0;
+        const u = ['B', 'KB', 'MB', 'GB', 'TB'];
+        let i = 0;
+        while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+        return n.toFixed(i ? 1 : 0) + ' ' + u[i];
+      }
+
+      // 按钮事件
+      $('#btn-refresh').addEventListener('click', doPreview);
+      $('#btn-close').addEventListener('click', () => { window.close(); });
+      $('#btn-download').addEventListener('click', () => {
+        // 调 /api/files/download 把整个文件下下来（不传 target_dir → 用默认 downloads）
+        const cred = getCred();
+        if (!cred) { toast('未提供凭据', 'err'); return; }
+        fetch('/api/files/download', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            system: system, server: server, path: path,
+            username: cred.username, password: cred.password,
+            paths: [path], zip: false
+          })
+        }).then(r => r.json()).then(d => {
+          if (d && d.id) toast('下载任务已启动：' + d.id, 'ok');
+          else toast('启动失败：' + (d && d.error || '未知'), 'err');
+        }).catch(e => toast('启动失败：' + e.message, 'err'));
+      });
+
+      // 启动
+      doPreview();
+    })();
+  </script>
+</body>
+</html>
