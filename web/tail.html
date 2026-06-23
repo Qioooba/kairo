@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <link rel="icon" href="data:," />
+  <title>实时 tail · 独立窗口</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <style>
+    /* tail 独立窗口专用：尽量窄、尽量高，避免在浏览器里被挤 */
+    body { grid-template-columns: 1fr; }
+    .sidebar { display: none; }
+    .main { display: flex; flex-direction: column; height: 100vh; }
+    .topbar { padding: 8px 14px; }
+    .tail-standalone {
+      flex: 1; display: flex; flex-direction: column;
+      padding: 10px 14px; gap: 10px;
+    }
+    .tail-standalone .tail-out {
+      flex: 1; min-height: 0; max-height: none;
+      font-size: 12.5px;
+    }
+    .tail-meta {
+      display: flex; gap: 12px; flex-wrap: wrap;
+      padding: 8px 12px; background: var(--bg-2);
+      border: 1px solid var(--line); border-radius: 8px;
+      font-size: 12.5px; color: var(--text-dim);
+    }
+    .tail-meta .meta-key { color: var(--text-mute); margin-right: 4px; }
+    .tail-meta .meta-val { color: var(--text); font-family: ui-monospace, monospace; }
+    .tail-meta .badge { padding: 1px 8px; border-radius: 4px; background: rgba(79,140,255,0.15); color: var(--primary-2); font-weight: 600; }
+  </style>
+</head>
+<body>
+  <main class="main">
+    <header class="topbar">
+      <div class="crumbs">实时 tail（独立窗口）</div>
+      <div class="topbar-right">
+        <span id="conn-dot" class="dot dot-idle"></span>
+        <span id="conn-text" class="muted">连接中…</span>
+      </div>
+    </header>
+    <section class="tail-standalone">
+      <div class="tail-meta" id="meta">
+        <span><span class="meta-key">系统:</span><span class="meta-val" id="m-system">-</span></span>
+        <span><span class="meta-key">服务器:</span><span class="meta-val" id="m-server">-</span></span>
+        <span><span class="meta-key">目录:</span><span class="meta-val" id="m-dir">-</span></span>
+        <span><span class="meta-key">文件:</span><span class="meta-val" id="m-file">-</span></span>
+        <span><span class="badge" id="m-lines">0 行</span></span>
+      </div>
+      <div class="btn-row">
+        <button id="btn-pause" class="btn">暂停</button>
+        <button id="btn-clear" class="btn">清屏</button>
+        <button id="btn-stop" class="btn btn-danger">停止 tail</button>
+        <button id="btn-close" class="btn">关闭本页</button>
+        <span class="text-dim" id="rate" style="margin-left:auto;">实时显示中</span>
+      </div>
+      <pre id="tail-out" class="tail-out">等待数据…</pre>
+    </section>
+  </main>
+
+  <div id="toast" class="toast"></div>
+  <script src="/static/api.js"></script>
+  <script src="/static/tail.js"></script>
+</body>
+</html>

@@ -97,6 +97,16 @@
     const srvPickToolbar = el('div', { class: 'srv-pick-toolbar' }, [
       document.createTextNode('目标服务器:'), btnPickAll, btnPickNone, btnPickOnline
     ]);
+
+    // v0.5：每个勾选服务器下展开它的日志目录（二级勾选），用于 #10 多对多。
+    const srvDirsWrap = el('div', { class: 'srv-dirs' });
+    const srvDirsHint = el('div', { class: 'text-dim', text: '勾选服务器后会展开它的日志目录，可多选。' });
+    srvDirsWrap.appendChild(srvDirsHint);
+    const srvDirsToolbar = el('div', { class: 'srv-pick-toolbar' }, [
+      document.createTextNode('目标日志目录（多对多勾选）:'),
+      el('button', { class: 'btn btn-sm', text: '全选', onclick: () => toggleAllDirs(true) }),
+      el('button', { class: 'btn btn-sm', text: '全不选', onclick: () => toggleAllDirs(false) })
+    ]);
     const dlTargetSel = el('select', { style: 'display:none' });
 
     function getCheckedServers() {
@@ -108,16 +118,65 @@
     }
     function toggleAllSrv(on) {
       srvPickWrap.querySelectorAll('input[type="checkbox"][data-srv]').forEach(cb => { cb.checked = on; });
+      renderSrvDirs();
+      persistSelection();
       refreshCredStatus();
     }
     function toggleOnline() {
       srvPickWrap.querySelectorAll('input[type="checkbox"][data-srv]').forEach(cb => {
         cb.checked = srvStatus[cb.getAttribute('data-srv')] && srvStatus[cb.getAttribute('data-srv')].state === 'ok';
       });
+      renderSrvDirs();
+      persistSelection();
       refreshCredStatus();
+    }
+    // 当前勾选的 (server, dir) targets 列表；用于多对多搜索/列文件。
+    // 优先取二级勾选；二级都没勾时退回到 dirSel（一级单选）作为所有勾选服务器的目录。
+    function getSelectedTargets() {
+      const sysName = sysSel.value;
+      const sys = cfg && cfg.systems.find(s => s.name === sysName);
+      if (!sys) return [];
+      const out = [];
+      const explicitDirs = srvDirsWrap.querySelectorAll('input[type="checkbox"][data-srv][data-dir]:checked');
+      if (explicitDirs.length > 0) {
+        // 多对多：每条 (server, dir) 一项
+        explicitDirs.forEach(cb => {
+          out.push({ server: cb.getAttribute('data-srv'), dir: cb.getAttribute('data-dir') });
+        });
+        return out;
+      }
+      // 退回模式：每个勾选服务器用 dirSel 的目录
+      const fallbackDir = dirSel.value;
+      if (!fallbackDir) return [];
+      getCheckedServers().forEach(srvName => {
+        out.push({ server: srvName, dir: fallbackDir });
+      });
+      return out;
+    }
+    function toggleAllDirs(on) {
+      srvDirsWrap.querySelectorAll('input[type="checkbox"][data-srv][data-dir]').forEach(cb => { cb.checked = on; });
+      persistSelection();
+    }
+    // 把"系统 + 勾选服务器 + 目录（含二级）"存 localStorage，下次打开自动恢复
+    function persistSelection() {
+      if (!sysSel.value) return;
+      const checked = getCheckedServers();
+      const explicitDirs = srvDirsWrap.querySelectorAll('input[type="checkbox"][data-srv][data-dir]:checked');
+      const dirs = [];
+      explicitDirs.forEach(cb => dirs.push({ srv: cb.getAttribute('data-srv'), dir: cb.getAttribute('data-dir') }));
+      OTB.core.lastSet('websphere', 'sel', {
+        system: sysSel.value,
+        servers: checked,
+        dir: dirSel.value,
+        dirs: dirs,
+        username: userInp.value
+      });
     }
     function renderSrvPick() {
       const prevChecked = getCheckedServers();
+      // 第一次加载：尝试用上次记忆的服务器列表
+      const lastSel = OTB.core.lastGet('websphere', 'sel');
+      const lastForSys = (lastSel && lastSel.system === sysSel.value && Array.isArray(lastSel.servers)) ? lastSel.servers : null;
       srvPickWrap.innerHTML = '';
       const sysName = sysSel.value;
       const sys = cfg && cfg.systems.find(s => s.name === sysName);
@@ -129,10 +188,11 @@
         const st = srvStatus[s.name] || { state: 'idle' };
         const dotCls = 'dot dot-' + (st.state === 'idle' ? 'idle' : st.state);
         const cb = el('input', { type: 'checkbox', 'data-srv': s.name, value: s.name });
-        if (prevChecked.indexOf(s.name) !== -1 || st.state === 'ok') {
-          cb.checked = true;
-        }
-        cb.addEventListener('change', refreshCredStatus);
+        const wasChecked = prevChecked.indexOf(s.name) !== -1
+          || (lastForSys && lastForSys.indexOf(s.name) !== -1)
+          || (prevChecked.length === 0 && !lastForSys && st.state === 'ok'); // 首次加载：默认勾"已测通"那台
+        if (wasChecked) cb.checked = true;
+        cb.addEventListener('change', () => { renderSrvDirs(); persistSelection(); refreshCredStatus(); });
         const item = el('label', { class: 'srv-pick-item' }, [
           cb,
           el('span', { class: 'name', text: s.name }),
@@ -143,6 +203,52 @@
           ])
         ]);
         srvPickWrap.appendChild(item);
+      });
+    }
+    // renderSrvDirs v0.5：每个勾选服务器展开一个目录勾选区
+    function renderSrvDirs() {
+      srvDirsWrap.innerHTML = '';
+      const sysName = sysSel.value;
+      const sys = cfg && cfg.systems.find(s => s.name === sysName);
+      const lastSel = OTB.core.lastGet('websphere', 'sel');
+      const lastDirs = (lastSel && lastSel.system === sysName && Array.isArray(lastSel.dirs)) ? lastSel.dirs : [];
+      const checkedSrvs = getCheckedServers();
+      if (!checkedSrvs.length) {
+        srvDirsWrap.appendChild(el('div', { class: 'text-dim', text: '先在「目标服务器」里勾选至少一台。' }));
+        return;
+      }
+      if (!sys || !sys.servers) return;
+      checkedSrvs.forEach(srvName => {
+        const srv = sys.servers.find(s => s.name === srvName);
+        if (!srv) return;
+        const block = el('div', { class: 'srv-dirs-block' });
+        const head = el('div', { class: 'srv-dirs-head' }, [
+          el('span', { class: 'name', text: srv.name }),
+          el('span', { class: 'text-dim', text: ' · ' + (srv.log_dirs || []).length + ' 个目录' })
+        ]);
+        block.appendChild(head);
+        const list = el('div', { class: 'srv-dirs-list' });
+        (srv.log_dirs || []).forEach(d => {
+          const cb = el('input', { type: 'checkbox', 'data-srv': srv.name, 'data-dir': d.path, value: d.path });
+          // 默认勾上（dirSel 命中时或上次记忆）
+          const dirHit = lastDirs.find(x => x.srv === srv.name && x.dir === d.path);
+          const fallbackHit = (lastDirs.length === 0 && dirSel.value === d.path);
+          if (dirHit || fallbackHit) cb.checked = true;
+          cb.addEventListener('change', persistSelection);
+          const enc = (d.encoding || 'utf-8').toLowerCase();
+          const item = el('label', { class: 'srv-dirs-item' }, [
+            cb,
+            el('span', { class: 'name', text: d.name || d.path }),
+            el('span', { class: 'path', text: d.path }),
+            el('span', { class: 'enc', text: enc })
+          ]);
+          list.appendChild(item);
+        });
+        if (!(srv.log_dirs || []).length) {
+          list.appendChild(el('div', { class: 'text-dim', text: '（该服务器未配置日志目录）' }));
+        }
+        block.appendChild(list);
+        srvDirsWrap.appendChild(block);
       });
     }
     function refreshDirs() {
@@ -158,7 +264,9 @@
         dlTargetSel.appendChild(el('option', { value: d.path, text: (d.name || d.path) + '  ·  ' + d.path }));
       });
     }
-    sysSel.addEventListener('change', () => { renderSrvPick(); refreshDirs(); refreshCredStatus(); });
+    sysSel.addEventListener('change', () => { renderSrvPick(); refreshDirs(); refreshCredStatus(); persistSelection(); });
+    dirSel.addEventListener('change', persistSelection);
+    userInp.addEventListener('input', () => { clearTimeout(userInp._t); userInp._t = setTimeout(persistSelection, 500); });
     userInp.addEventListener('change', refreshCredStatus);
     userInp.addEventListener('blur', refreshCredStatus);
 
@@ -288,25 +396,54 @@
     }
 
     async function doList() {
-      const srvs = getCheckedServers();
-      if (!srvs.length) { toast('请先勾选服务器', 'warn'); return; }
-      const n = srvs[0];
-      try {
-        const r = await api('POST', '/api/logs/list', credsOne(n));
-        listState.files = r.files || [];
-        listState.serverName = n;
-        renderFileTable();
-        fileTableWrap.style.display = '';
-        toast('[' + n + '] 共 ' + listState.files.length + ' 个文件', 'ok');
-        await maybeSaveCred(n);
-      } catch (e) { toast('列文件失败：' + e.message, 'err'); }
+      const targets = getSelectedTargets();
+      if (!targets.length) { toast('请先勾选服务器 + 目录（多对多）', 'warn'); return; }
+      // 并行拉每台 (server, dir) 的文件列表，结果分组合并
+      listState.groups = [];
+      listState.files = [];
+      listState.serverName = targets.length === 1 ? (targets[0].server + ' · ' + (targets[0].dir.split('/').pop() || targets[0].dir)) : (targets.length + ' 组');
+      renderFileTable();
+      fileTableWrap.style.display = '';
+      const t0 = Date.now();
+      // 简单并发（不抢搜索的并发槽）
+      const conc = Math.min(8, targets.length);
+      const sem = new Array(conc).fill(Promise.resolve());
+      const promises = targets.map((tgt) => {
+        return new Promise((resolve) => {
+          const slot = sem.shift();
+          sem.push(slot.then(() => {
+            return api('POST', '/api/logs/list', {
+              system: sysSel.value, server: tgt.server, dir: tgt.dir,
+              username: userInp.value, password: passInp.value
+            }).then(r => {
+              const grp = { server: tgt.server, dir: tgt.dir, files: r.files || [], error: null };
+              listState.groups.push(grp);
+              resolve();
+            }).catch(e => {
+              listState.groups.push({ server: tgt.server, dir: tgt.dir, files: [], error: e.message });
+              resolve();
+            });
+          }));
+        });
+      });
+      await Promise.all(promises);
+      renderFileTable();
+      const dt = Date.now() - t0;
+      const okN = listState.groups.filter(g => !g.error).length;
+      const totalFiles = listState.groups.reduce((a, g) => a + g.files.length, 0);
+      toast((okN === listState.groups.length ? '列出完成：' : '部分失败：') + totalFiles + ' 个文件 / ' + okN + '/' + listState.groups.length + ' 组 · ' + dt + 'ms', okN === listState.groups.length ? 'ok' : 'warn');
+      // 保存第一组成功连接的密码
+      const firstOk = listState.groups.find(g => !g.error);
+      if (firstOk) await maybeSaveCred(firstOk.server);
     }
 
     function renderFileTable() {
       fileTableWrap.innerHTML = '';
-      fileTableWrap.appendChild(el('h3', { text: '文件列表 · ' + (listState.serverName || '') + '（按修改时间倒序）' }));
-      if (!listState.files.length) {
-        fileTableWrap.appendChild(el('div', { class: 'text-dim', text: '暂无文件，先点击"列出文件"。' }));
+      const groups = listState.groups || [];
+      const totalFiles = groups.reduce((a, g) => a + g.files.length, 0);
+      fileTableWrap.appendChild(el('h3', { text: '文件列表 · ' + (listState.serverName || '') + (groups.length ? '（' + totalFiles + ' 个文件 / ' + groups.length + ' 组）' : '') }));
+      if (!groups.length && !listState.files.length) {
+        fileTableWrap.appendChild(el('div', { class: 'text-dim', text: '暂无文件，先点击「列出文件」。' }));
         return;
       }
 
@@ -321,31 +458,48 @@
       ]);
       fileTableWrap.appendChild(toolbar);
 
-      const tbl = el('table', { class: 'table' });
-      const thead = el('thead', null, el('tr', null, [
-        el('th', { class: 'col-check' }, [el('input', { type: 'checkbox', id: 'ws-file-checkall', onchange: (e) => pickAll(e.target.checked) })]),
-        el('th', { text: '文件名' }),
-        el('th', { text: '大小' }),
-        el('th', { text: '修改时间' }),
-        el('th', { text: '路径' }),
-        el('th', { class: 'col-status', text: '状态' })
-      ]));
-      tbl.appendChild(thead);
-      const tbody = el('tbody');
-      listState.files.forEach(f => {
-        const row = el('tr', { 'data-file': f.name });
-        const cb = el('input', { type: 'checkbox', 'data-file': f.name, onchange: refreshSummary });
-        const statusCell = el('td', { class: 'col-status', 'data-status': f.name });
-        row.appendChild(el('td', { class: 'col-check' }, [cb]));
-        row.appendChild(el('td', null, f.name));
-        row.appendChild(el('td', { class: 'num', text: formatBytes(f.size) }));
-        row.appendChild(el('td', { class: 'muted', text: formatTime(f.mod_time) }));
-        row.appendChild(el('td', { class: 'muted', text: f.full_path }));
-        row.appendChild(statusCell);
-        tbody.appendChild(row);
+      // 多组展示：每组一个 server-group（沿用搜索结果那套样式），组内是表格
+      groups.forEach(g => {
+        const grp = el('div', { class: 'server-group ' + (g.error ? 'fail' : 'ok') });
+        grp.appendChild(el('div', { class: 'server-group-head' }, [
+          el('span', { class: 'dot dot-' + (g.error ? 'err' : 'ok') }),
+          el('span', { class: 'name', text: g.server }),
+          el('span', { class: 'text-dim', text: ' · ' + g.dir }),
+          el('span', { class: 'meta', text: g.error ? ('失败：' + g.error) : (g.files.length + ' 个文件') })
+        ]));
+        if (g.error) {
+          grp.appendChild(el('div', { class: 'err-msg', text: g.error }));
+          fileTableWrap.appendChild(grp);
+          return;
+        }
+        const tbl = el('table', { class: 'table' });
+        tbl.appendChild(el('thead', null, el('tr', null, [
+          el('th', { class: 'col-check' }),
+          el('th', { text: '文件名' }),
+          el('th', { text: '大小' }),
+          el('th', { text: '修改时间' }),
+          el('th', { text: '路径' }),
+          el('th', { class: 'col-status', text: '状态' })
+        ])));
+        const tbody = el('tbody');
+        // 把 listState.files 也并入（旧调用兼容）
+        const allFiles = g.files;
+        allFiles.forEach(f => {
+          const row = el('tr', { 'data-file': f.name, 'data-srv': g.server });
+          const cb = el('input', { type: 'checkbox', 'data-file': f.name, 'data-srv': g.server, onchange: refreshSummary });
+          const statusCell = el('td', { class: 'col-status', 'data-status': f.name });
+          row.appendChild(el('td', { class: 'col-check' }, [cb]));
+          row.appendChild(el('td', null, f.name));
+          row.appendChild(el('td', { class: 'num', text: formatBytes(f.size) }));
+          row.appendChild(el('td', { class: 'muted', text: formatTime(f.mod_time) }));
+          row.appendChild(el('td', { class: 'muted', text: f.full_path }));
+          row.appendChild(statusCell);
+          tbody.appendChild(row);
+        });
+        tbl.appendChild(tbody);
+        grp.appendChild(tbl);
+        fileTableWrap.appendChild(grp);
       });
-      tbl.appendChild(tbody);
-      fileTableWrap.appendChild(tbl);
 
       fileTableWrap._toolbar = { summary, btnDownloadSel, btnCancel, btnPickAll, btnPickNone, btnPickTop };
       refreshSummary();
@@ -561,8 +715,8 @@
     }
 
     async function doDownload() {
-      const srvs = getCheckedServers();
-      if (!srvs.length) { toast('请先勾选要下载的服务器（多台会逐个下）', 'warn'); return; }
+      const targets = getSelectedTargets();
+      if (!targets.length) { toast('请先勾选服务器 + 目录（多对多）', 'warn'); return; }
       const latest = Number(dlNSel.value) || 1;
       const wantZip = dlZipChk.checked;
       let zip = wantZip;
@@ -571,20 +725,29 @@
         zip = false;
       }
       const allResults = [];
-      let firstErr = null;
-      for (const srvName of srvs) {
-        try {
-          const r = await api('POST', '/api/logs/download-latest',
-            Object.assign({}, credsOne(srvName), { latest: latest, zip: zip }));
-          allResults.push({ server: srvName, downloads: r.downloads || [], folder: r.folder });
-        } catch (e) {
-          allResults.push({ server: srvName, error: e.message });
-          if (!firstErr) firstErr = e.message;
+      // 简单并发：每对 (server, dir) 一个请求，concurrency 上限 6
+      const conc = 6;
+      const queue = targets.slice();
+      const runners = Array.from({ length: conc }, async () => {
+        while (queue.length) {
+          const tgt = queue.shift();
+          if (!tgt) break;
+          try {
+            const r = await api('POST', '/api/logs/download-latest', {
+              system: sysSel.value, server: tgt.server, dir: tgt.dir,
+              username: userInp.value, password: passInp.value,
+              latest: latest, zip: zip
+            });
+            allResults.push({ server: tgt.server, dir: tgt.dir, downloads: r.downloads || [], folder: r.folder });
+          } catch (e) {
+            allResults.push({ server: tgt.server, dir: tgt.dir, error: e.message });
+          }
         }
-      }
+      });
+      await Promise.all(runners);
       renderDownloadResults(allResults);
       const okN = allResults.filter(x => !x.error).length;
-      toast((okN === srvs.length ? '下载完成：' : '部分失败：') + okN + '/' + srvs.length, okN === srvs.length ? 'ok' : 'warn');
+      toast((okN === targets.length ? '下载完成：' : '部分失败：') + okN + '/' + targets.length, okN === targets.length ? 'ok' : 'warn');
       for (const r of allResults) {
         if (!r.error) await maybeSaveCred(r.server);
       }
@@ -651,26 +814,39 @@
     }
 
     async function doSearch() {
-      const srvs = getCheckedServers();
-      if (!srvs.length) { toast('请先勾选要搜索的服务器', 'warn'); return; }
+      const targets = getSelectedTargets();
+      if (!targets.length) { toast('请先勾选服务器 + 目录（多对多）', 'warn'); return; }
       if (!queryInp.value.trim()) { toast('搜索表达式不能为空', 'warn'); return; }
       hitTableWrap.style.display = '';
       hitTableWrap.innerHTML = '';
       hitTableWrap.appendChild(el('h3', { text: '并行搜索中…' }));
       const conc = Number(concSel.value) || 8;
       const timeRange = buildTimeRange();
+      // v0.5 #8：文件名参数 — 单文件 / 多文件 / glob 模糊匹配
+      const filePatternsRaw = (filePatternInp.value || '').trim();
+      const filePatterns = filePatternsRaw
+        ? filePatternsRaw.split(/[,\s\n]+/).map(s => s.trim()).filter(Boolean)
+        : null;
       try {
-        const body = Object.assign({}, credsMulti(), {
+        const qs = new URLSearchParams();
+        if (timeRange.since) qs.set('since', timeRange.since);
+        if (timeRange.until) qs.set('until', timeRange.until);
+        const body = {
+          system: sysSel.value,
+          targets: targets,
           query: queryInp.value,
           files: Number(filesNSel.value),
-          max_concurrency: conc
-        }, timeRange);
-        const r = await api('POST', '/api/logs/search/multi', body);
+          max_concurrency: conc,
+          username: userInp.value,
+          password: passInp.value
+        };
+        if (filePatterns) body.file_patterns = filePatterns;
+        const url = '/api/logs/search/multi' + (qs.toString() ? '?' + qs : '');
+        const r = await api('POST', url, body);
         renderMultiResults(r);
-        let toastMsg = '命中 ' + r.total_hits + ' 条，' + r.ok_count + '/' + srvs.length + ' 成功';
-        if (timeRange.since || timeRange.until) {
-          toastMsg += '（时间范围已应用）';
-        }
+        let toastMsg = '命中 ' + r.total_hits + ' 条，' + r.ok_count + '/' + targets.length + ' 组成功';
+        if (timeRange.since || timeRange.until) toastMsg += '（时间范围已应用）';
+        if (filePatterns) toastMsg += '（文件名过滤：' + filePatterns.join(', ') + '）';
         toast(toastMsg, r.fail_count > 0 ? 'warn' : 'ok');
         for (const srv of (r.servers || [])) {
           if (srv.ok) await maybeSaveCred(srv.server);
@@ -773,12 +949,13 @@
 
     const formCard = el('div', { class: 'card' }, [
       el('h3', { text: 'WebSphere 日志助手 · 多服务器并行' }),
-      el('div', { class: 'card-desc', text: '先选业务系统 → 勾选目标服务器（可全选/全不选/只选可用的）→ 输入凭据 → 测试 / 列出 / 搜索 / 下载。' }),
+      el('div', { class: 'card-desc', text: '先选业务系统 → 勾选目标服务器（可全选/全不选/只选可用的）→ 在下面展开的日志目录里多选要操作的目录 → 输入凭据 → 测试 / 列出 / 搜索 / 下载。' }),
       el('div', { class: 'grid-2' }, [
         el('div', null, [el('label', { text: '业务系统' }), sysSel]),
-        el('div', null, [el('label', { text: '日志目录（取自第一台勾选服务器）' }), dirSel])
+        el('div', null, [el('label', { text: '默认目录（多目录勾选未选时回退到此）' }), dirSel])
       ]),
       el('div', { class: 'mt-2' }, [srvPickToolbar, srvPickWrap]),
+      el('div', { class: 'mt-2' }, [srvDirsToolbar, srvDirsWrap]),
       el('div', { class: 'grid-2 mt-2' }, [
         el('div', null, [el('label', { text: 'SSH 用户名' }), userInp]),
         el('div', null, [el('label', { text: 'SSH 密码' }), passInp])
@@ -786,24 +963,31 @@
       el('div', { class: 'mt-1' }, [rememberLbl, credStatusRow]),
       el('div', { class: 'btn-row mt-3' }, [btnTest, btnList]),
       el('div', { class: 'mt-3' }, [
-        el('div', { class: 'text-dim mb-1', text: '下载最新日志（每台服务器分别下，可选 zip）' }),
+        el('div', { class: 'text-dim mb-1', text: '下载最新日志（每台服务器每个勾选目录分别下，可选 zip）' }),
         el('div', { class: 'btn-row' }, [
           dlNSel, dlZipLabel, btnDownload
         ])
       ])
     ]);
 
+    // v0.5 #8：文件名参数 — 单文件 / 多文件 / glob 模糊匹配（空格或逗号分隔）
+    const filePatternInp = el('input', { type: 'text', id: 'ws-file-pattern', placeholder: '可选：如 SystemOut*.log 或 *.log,*.txt' });
+
     const searchCard = el('div', { class: 'card' }, [
       el('h3', { text: '多服务器并行搜索' }),
-      el('div', { class: 'card-desc', unsafeHtml: '语法：<span class="code-inline">A &amp;&amp; B</span>（同包含）、<span class="code-inline">A || B</span>（任一）、<span class="code-inline">!X</span>（排除）。结果按服务器分组。' }),
+      el('div', { class: 'card-desc', unsafeHtml: '语法：<span class="code-inline">A &amp;&amp; B</span>（同包含）、<span class="code-inline">A || B</span>（任一）、<span class="code-inline">!X</span>（排除）。结果按服务器 / 目录分组。' }),
       el('div', { class: 'grid-3' }, [
         el('div', { style: 'grid-column: span 2' }, [el('label', { text: '搜索表达式' }), queryInp]),
         el('div', null, [el('label', { text: '并发' }), concSel])
       ]),
-      el('div', { class: 'grid-3 mt-2' }, [
+      el('div', { class: 'grid-2 mt-2' }, [
         el('div', null, [el('label', { text: '搜索范围（每台）' }), filesNSel]),
+        el('div', null, [el('label', { text: '文件名（留空=走配置 patterns；填了覆盖）' }), filePatternInp])
+      ]),
+      el('div', { class: 'grid-3 mt-2' }, [
         el('div', null, [el('label', { text: '时间范围' }), timeSel]),
-        el('div', { style: 'display:flex; gap:8px; align-items:flex-end;' }, [timeFromInp, timeToInp])
+        el('div', { style: 'display:flex; gap:8px; align-items:flex-end;' }, [timeFromInp, timeToInp]),
+        el('div', null, [el('div', { class: 'text-dim', style: 'padding-top:18px;', text: '搜索作用于上方勾选的「服务器 × 目录」多对多 targets' })])
       ]),
       el('div', { class: 'btn-row mt-2' }, [btnSearch])
     ]);
@@ -811,40 +995,33 @@
     // ---- 实时 tail ----
     const tailFileInp = el('input', { type: 'text', id: 'ws-tail-file', placeholder: '文件名（例：SystemOut.log）', value: 'SystemOut.log' });
     const tailLinesInp = el('input', { type: 'number', id: 'ws-tail-lines', placeholder: '起始行数', value: '100' });
-    const tailSrvSel = el('select', { id: 'ws-tail-srv' });
     const tailOut = el('pre', { id: 'ws-tail-out', class: 'tail-out' });
     const btnTailStart = el('button', { class: 'btn btn-primary', text: '开始跟踪', onclick: doTailStart });
     const btnTailStop = el('button', { class: 'btn', text: '停止', onclick: doTailStop, disabled: true });
+    const btnTailNewTab = el('button', { class: 'btn', text: '↗ 新窗口打开', onclick: openTailInNewTab, title: '在新窗口中跟踪，避免本页卡死' });
     let tailEvtSrc = null;
     let tailId = null;
-
-    function refreshTailServers() {
-      const sysName = sysSel.value;
-      const sys = cfg && cfg.systems.find(s => s.name === sysName);
-      tailSrvSel.innerHTML = '';
-      (sys ? sys.servers : []).forEach(s => {
-        tailSrvSel.appendChild(el('option', { value: s.name, text: s.name + '  (' + s.host + ')' }));
-      });
-    }
-    sysSel.addEventListener('change', refreshTailServers);
 
     async function doTailStart() {
       const file = (tailFileInp.value || '').trim();
       if (!file) { toast('请输入文件名', 'warn'); return; }
-      const serverName = tailSrvSel.value;
-      if (!serverName) { toast('请选择服务器', 'warn'); return; }
-      if (!dirSel.value) { toast('请选择日志目录', 'warn'); return; }
+      const targets = getSelectedTargets();
+      if (!targets.length) { toast('请先勾选服务器 + 目录（多对多）', 'warn'); return; }
+      const serverName = targets[0].server;
+      const dirPath = targets[0].dir;
       const lines = Math.max(0, Math.min(1000, Number(tailLinesInp.value) || 0));
       tailOut.textContent = '';
       setStatus('busy', '跟踪中…');
       try {
-        const r = await api('POST', '/api/logs/tail/start', Object.assign({}, credsOne(serverName), {
+        const r = await api('POST', '/api/logs/tail/start', {
+          system: sysSel.value, server: serverName, dir: dirPath,
+          username: userInp.value, password: passInp.value,
           file: file, lines: lines,
-        }));
+        });
         tailId = r.id;
         btnTailStart.disabled = true;
         btnTailStop.disabled = false;
-        appendTailLine({ kind: 'info', msg: '已开启 tail，id=' + tailId });
+        appendTailLine({ kind: 'info', msg: '已开启 tail · 服务器=' + serverName + ' · 目录=' + dirPath + ' · id=' + tailId });
         if (window.EventSource) {
           tailEvtSrc = new EventSource('/api/logs/tail/' + tailId + '/events');
           tailEvtSrc.onmessage = (ev) => {
@@ -865,6 +1042,22 @@
         setStatus('err', '失败');
         setTimeout(() => setStatus('idle'), 1500);
       }
+    }
+
+    function openTailInNewTab() {
+      const file = (tailFileInp.value || '').trim();
+      if (!file) { toast('请输入文件名', 'warn'); return; }
+      const targets = getSelectedTargets();
+      if (!targets.length) { toast('请先勾选服务器 + 目录（多对多）', 'warn'); return; }
+      // 新窗口跳转到独立 tail 页（带 system/server/dir/file 参数，登录态用 cookie 维持）
+      const params = new URLSearchParams({
+        system: sysSel.value,
+        server: targets[0].server,
+        dir: targets[0].dir,
+        file: file,
+        lines: String(Math.max(0, Math.min(1000, Number(tailLinesInp.value) || 0)))
+      });
+      window.open('/static/tail.html?' + params.toString(), '_blank');
     }
 
     async function doTailStop() {
@@ -902,13 +1095,12 @@
 
     const tailCard = el('div', { class: 'card' }, [
       el('h3', { text: '实时 tail（单文件，SSE 流式）' }),
-      el('div', { class: 'card-desc', text: '跟踪远程文件新增行（用 tail -F），关闭/刷新页面会自动停。' }),
-      el('div', { class: 'grid-3' }, [
-        el('div', null, [el('label', { text: '服务器' }), tailSrvSel]),
-        el('div', null, [el('label', { text: '文件名' }), tailFileInp]),
+      el('div', { class: 'card-desc', text: '跟踪远程文件新增行（用 tail -F）。使用主表单的「目标服务器」「日志目录」选择 —— 取第一台勾选服务器。日志量大卡顿时点「↗ 新窗口打开」切到独立窗口。' }),
+      el('div', { class: 'grid-2' }, [
+        el('div', null, [el('label', { text: '文件名（相对日志目录）' }), tailFileInp]),
         el('div', null, [el('label', { text: '起始行数（0=只追新增）' }), tailLinesInp])
       ]),
-      el('div', { class: 'btn-row mt-2' }, [btnTailStart, btnTailStop]),
+      el('div', { class: 'btn-row mt-2' }, [btnTailStart, btnTailStop, btnTailNewTab]),
       el('div', { class: 'mt-2' }, tailOut)
     ]);
 
@@ -923,10 +1115,20 @@
       cfg = info;
       sysSel.innerHTML = '';
       info.systems.forEach(s => sysSel.appendChild(el('option', { value: s.name, text: s.name })));
+      // 恢复上次选择
+      const lastSel = OTB.core.lastGet('websphere', 'sel');
+      if (lastSel && lastSel.system && info.systems.find(s => s.name === lastSel.system)) {
+        sysSel.value = lastSel.system;
+        if (lastSel.username) userInp.value = lastSel.username;
+      }
       renderSrvPick();
       refreshDirs();
+      if (lastSel && lastSel.dir) dirSel.value = lastSel.dir;
       refreshCredStatus();
-      refreshTailServers();
+      // 默认勾上"记住密码"（keyring 模式下；file/disabled 时由 refreshCredStatus 强制取消）
+      rememberChk.checked = true;
+      rememberChk.disabled = false;
+      refreshCredStatus();
     }).catch(e => toast('配置加载失败：' + e.message, 'err'));
   }
 

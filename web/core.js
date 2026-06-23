@@ -233,4 +233,30 @@
   core.setActiveDL = setActiveDL;
   core.getActiveDL = getActiveDL;
   core.clearActiveDL = clearActiveDL;
+
+  // -------- "上次选择" 记忆（系统 / 服务器 / 日志目录 / 凭据） --------
+  //
+  // 用 localStorage 跨页面跨刷新记，键格式 otb:last:<page>:<key>
+  // 跨页面共享（websphere / files 都用同一份），自动 JSON 化。
+  // 写入失败（隐私模式 / quota 超）静默忽略。
+  const LAST_PREFIX = 'otb:last:';
+
+  function lastGet(page, key) {
+    try {
+      const raw = localStorage.getItem(LAST_PREFIX + page + ':' + key);
+      if (!raw) return null;
+      return JSON.parse(raw);
+    } catch (e) { return null; }
+  }
+  function lastSet(page, key, val) {
+    try {
+      if (val === null || val === undefined) {
+        localStorage.removeItem(LAST_PREFIX + page + ':' + key);
+      } else {
+        localStorage.setItem(LAST_PREFIX + page + ':' + key, JSON.stringify(val));
+      }
+    } catch (e) { /* ignore */ }
+  }
+  core.lastGet = lastGet;
+  core.lastSet = lastSet;
 })();

@@ -97,10 +97,18 @@
       tableWrap.appendChild(tbl);
     }
 
-    // buildNameCell 构造"文件名"单元格的 DOM（避免 innerHTML 注入）。
+    // buildNameCell 构造"文件名"单元格的 DOM。
+    // 默认点文件名 → 新 tab 预览（浏览器能直接显示文本/图片/日志；zip 会触发下载）。
+    // 对于 .log / .txt / .json / .xml / .csv 等纯文本，浏览器直接渲染；对于二进制或 zip，右键另存。
     function buildNameCell(f) {
       const td = el('td');
-      td.appendChild(el('code', { text: f.name || '' }));
+      const href = '/downloads/' + encodeURIComponent(f.name);
+      // 用 <a target="_blank">，浏览器会在新 tab 打开；纯文本自动渲染，二进制触发下载。
+      // rel="noopener noreferrer" 防 window.opener 漏洞。
+      const link = el('a', { href: href, target: '_blank', rel: 'noopener noreferrer', title: '点开新窗口预览（纯文本浏览器直接显示；zip/二进制会触发下载）' },
+        el('code', { text: f.name || '' })
+      );
+      td.appendChild(link);
       if (f.kind === 'zip') {
         td.appendChild(document.createTextNode(' '));
         td.appendChild(el('span', { class: 'tag', text: 'zip' }));

@@ -25,29 +25,41 @@ import (
 // 并发控制：用有缓冲的 channel 当信号量，max 默认从 Search.MaxConcurrency 取，
 // 若请求体里显式带 max_concurrency 字段则按它。
 //
-// 入参：
+// 入参（v0.5 起支持多对多勾选，targets 字段）：
 //
 //	system           — 必填，业务系统名
-//	servers          — 必填，多个 server name
-//	dir              — 必填，日志目录的 name 或 path
+//	servers          — [legacy] 多个 server name（必须配合 dir 字段，所有服务器共用同一目录）
+//	dir              — [legacy] 日志目录的 name 或 path
+//	targets          — [v0.5 新增] 多对多目标列表，元素 {server, dir}；与 servers/dir 互斥
 //	files            — 每台搜索最近 N 个文件
 //	query            — 搜索表达式
 //	username/password — SSH 凭据（必须）
 //	max_concurrency  — 可选，覆盖 Search.MaxConcurrency
+//	file_patterns    — [v0.5 新增] 文件名 glob 列表（例：["*.log","SystemOut*.log"]），
+//	                   为空时退回到按 patterns 过滤最近 N 个文件。
 type logsSearchMultiReq struct {
-	System         string   `json:"system"`
-	Servers        []string `json:"servers"`
-	Dir            string   `json:"dir"`
-	Files          int      `json:"files"`
-	Query          string   `json:"query"`
-	Username       string   `json:"username"`
-	Password       string   `json:"password"`
-	MaxConcurrency int      `json:"max_concurrency"`
+	System         string            `json:"system"`
+	Servers        []string          `json:"servers"`
+	Dir            string            `json:"dir"`
+	Targets        []logsSearchTarget `json:"targets"`
+	Files          int               `json:"files"`
+	Query          string            `json:"query"`
+	Username       string            `json:"username"`
+	Password       string            `json:"password"`
+	MaxConcurrency int               `json:"max_concurrency"`
+	FilePatterns   []string          `json:"file_patterns"`
+}
+
+// logsSearchTarget 一个 (server, dir) 搜索目标
+type logsSearchTarget struct {
+	Server string `json:"server"`
+	Dir    string `json:"dir"`
 }
 
 type logsSearchMultiServerResult struct {
 	Server   string               `json:"server"`
 	Host     string               `json:"host"`
+	Dir      string               `json:"dir,omitempty"` // v0.5：方便前端区分多目录场景
 	Encoding string               `json:"encoding,omitempty"`
 	OK       bool                 `json:"ok"`
 	Error    string               `json:"error,omitempty"`
@@ -59,6 +71,29 @@ type logsSearchMultiServerResult struct {
 	// 完整 FileEntry（带 ModTime），过滤完后再隐藏（不返给前端）。
 	// 反序列化时为空数组不影响 JSON 输出（隐藏字段不输出）。
 	fileList []logquery.FileEntry `json:"-"`
+}
+
+// expandedTargets 把请求体展开成 [(server, dir), ...] 列表。
+//   - 优先用 targets[] （v0.5 多对多）
+//   - 兼容旧版 servers[] + dir
+func (r *logsSearchMultiReq) expandedTargets() []logsSearchTarget {
+	if len(r.Targets) > 0 {
+		out := make([]logsSearchTarget, 0, len(r.Targets))
+		for _, t := range r.Targets {
+			if strings.TrimSpace(t.Server) != "" && strings.TrimSpace(t.Dir) != "" {
+				out = append(out, t)
+			}
+		}
+		return out
+	}
+	if len(r.Servers) > 0 && strings.TrimSpace(r.Dir) != "" {
+		out := make([]logsSearchTarget, 0, len(r.Servers))
+		for _, s := range r.Servers {
+			out = append(out, logsSearchTarget{Server: s, Dir: r.Dir})
+		}
+		return out
+	}
+	return nil
 }
 
 func (s *Server) handleLogsSearchMulti(w http.ResponseWriter, r *http.Request) {
@@ -75,12 +110,9 @@ func (s *Server) handleLogsSearchMulti(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, errors.New("system 不能为空"))
 		return
 	}
-	if len(req.Servers) == 0 {
-		writeErr(w, 400, errors.New("servers 至少一个"))
-		return
-	}
-	if strings.TrimSpace(req.Dir) == "" {
-		writeErr(w, 400, errors.New("dir 不能为空"))
+	targets := req.expandedTargets()
+	if len(targets) == 0 {
+		writeErr(w, 400, errors.New("targets 至少一个（或兼容模式：servers + dir）"))
 		return
 	}
 	kw, err := logquery.ParseQuery(req.Query)
@@ -115,8 +147,8 @@ func (s *Server) handleLogsSearchMulti(w http.ResponseWriter, r *http.Request) {
 	// 解析凭据的用户名（页面可留空，使用配置默认）
 	username := strings.TrimSpace(req.Username)
 	if username == "" {
-		// 优先用 servers 列表第一台的用户名作为默认值
-		if _, srv0, ok := cur.FindServer(req.System, req.Servers[0]); ok && srv0.Username != "" {
+		// 优先用 targets 列表第一个 server 的用户名作为默认值
+		if _, srv0, ok := cur.FindServer(req.System, targets[0].Server); ok && srv0.Username != "" {
 			username = srv0.Username
 		}
 	}
@@ -133,12 +165,12 @@ func (s *Server) handleLogsSearchMulti(w http.ResponseWriter, r *http.Request) {
 
 	// 信号量
 	sem := make(chan struct{}, maxConc)
-	results := make([]logsSearchMultiServerResult, len(req.Servers))
+	results := make([]logsSearchMultiServerResult, len(targets))
 	var wg sync.WaitGroup
 
-	for i, srvName := range req.Servers {
+	for i, tgt := range targets {
 		wg.Add(1)
-		go func(idx int, name string) {
+		go func(idx int, target logsSearchTarget) {
 			defer wg.Done()
 			// 取信号
 			select {
@@ -146,39 +178,46 @@ func (s *Server) handleLogsSearchMulti(w http.ResponseWriter, r *http.Request) {
 				defer func() { <-sem }()
 			case <-totalCtx.Done():
 				results[idx] = logsSearchMultiServerResult{
-					Server: name, OK: false, Error: "总超时未开始",
+					Server: target.Server, Dir: target.Dir, OK: false, Error: "总超时未开始",
 				}
 				return
 			}
 
-			_, srv, ok := cur.FindServer(req.System, name)
+			_, srv, ok := cur.FindServer(req.System, target.Server)
 			if !ok {
 				results[idx] = logsSearchMultiServerResult{
-					Server: name, OK: false, Error: "系统或服务器不存在",
+					Server: target.Server, Dir: target.Dir, OK: false, Error: "系统或服务器不存在",
 				}
 				return
 			}
-			ld, ok := findLogDir(srv, req.Dir)
+			ld, ok := findLogDir(srv, target.Dir)
 			if !ok {
 				results[idx] = logsSearchMultiServerResult{
-					Server: name, Host: srv.Host, OK: false, Error: "目录不在白名单中",
+					Server: target.Server, Dir: target.Dir, Host: srv.Host, OK: false, Error: "目录不在白名单中",
 				}
 				return
 			}
 			// 每台服务器独立解析凭据（password 可来自请求或本机 keyring）
 			c, cErr := s.resolveCreds(req.Username, req.Password, req.System, srv.Name, srv.Username)
 			if cErr != nil {
-				results[idx] = logsSearchMultiServerResult{Server: name, Host: srv.Host, OK: false, Error: cErr.Error()}
+				results[idx] = logsSearchMultiServerResult{Server: target.Server, Dir: target.Dir, Host: srv.Host, OK: false, Error: cErr.Error()}
 				return
 			}
 			if c.Password == "" {
 				results[idx] = logsSearchMultiServerResult{
-					Server: name, Host: srv.Host, OK: false,
+					Server: target.Server, Dir: target.Dir, Host: srv.Host, OK: false,
 					Error: "缺少密码（输入或勾选「记住密码」）",
 				}
 				return
 			}
-			res := s.runOneServerSearch(totalCtx, srv, ld, filesN, kw, c.Username, c.Password)
+			// v0.5：file_patterns 不为空时，覆盖 ld.Patterns 用作文件名过滤。
+			// （filesN 仍然控制最大文件数；这里我们先用 file_patterns 列所有匹配，
+			//   再取最近 N 个。如果 file_patterns 为空，走原 ld.Patterns。）
+			listPatterns := ld.Patterns
+			if len(req.FilePatterns) > 0 {
+				listPatterns = req.FilePatterns
+			}
+			res := s.runOneServerSearchWithPatterns(totalCtx, srv, ld, listPatterns, filesN, kw, c.Username, c.Password)
 			// B1：按文件 mtime 过滤命中
 			if res.OK && len(res.Hits) > 0 {
 				res.Hits = logquery.FilterHitsByTimeWindow(res.Hits, res.fileList, tw)
@@ -188,14 +227,14 @@ func (s *Server) handleLogsSearchMulti(w http.ResponseWriter, r *http.Request) {
 			// 审计
 			if res.OK {
 				s.audit.Write("logs.search.multi",
-					"system", req.System, "server", name, "dir", ld.Path,
+					"system", req.System, "server", target.Server, "dir", ld.Path,
 					"query", req.Query, "result", "ok", "hits", res.HitsN, "ms", res.Ms)
 			} else {
 				s.audit.Write("logs.search.multi",
-					"system", req.System, "server", name, "dir", ld.Path,
+					"system", req.System, "server", target.Server, "dir", ld.Path,
 					"query", req.Query, "result", "fail", "err", res.Error, "ms", res.Ms)
 			}
-		}(i, srvName)
+		}(i, tgt)
 	}
 	wg.Wait()
 
@@ -216,7 +255,7 @@ func (s *Server) handleLogsSearchMulti(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// runOneServerSearch 单台服务器的完整搜索流程：
+// runOneServerSearch 单台服务器的完整搜索流程（保留兼容旧逻辑）：
 // Dial → 列文件 → 过滤 patterns → 构造 search 命令 → Run → parse。
 // 出错时把 err 写到结果里，不 panic；ctx 取消时优雅退出。
 func (s *Server) runOneServerSearch(
@@ -227,9 +266,22 @@ func (s *Server) runOneServerSearch(
 	kw []logquery.SearchKeyword,
 	username, password string,
 ) logsSearchMultiServerResult {
+	return s.runOneServerSearchWithPatterns(ctx, srv, ld, ld.Patterns, filesN, kw, username, password)
+}
+
+// runOneServerSearchWithPatterns v0.5：支持覆盖 patterns（用于 file_patterns 字段）
+func (s *Server) runOneServerSearchWithPatterns(
+	ctx context.Context,
+	srv *config.ServerConfig,
+	ld *config.LogDirEntry,
+	patterns []string,
+	filesN int,
+	kw []logquery.SearchKeyword,
+	username, password string,
+) logsSearchMultiServerResult {
 	start := time.Now()
 	res := logsSearchMultiServerResult{
-		Server: srv.Name, Host: srv.Host, Encoding: ld.Encoding,
+		Server: srv.Name, Host: srv.Host, Dir: ld.Path, Encoding: ld.Encoding,
 	}
 
 	// 单独给 Dial 一个短超时（10s），但仍受总 ctx 控制
@@ -250,7 +302,7 @@ func (s *Server) runOneServerSearch(
 	cur := s.cur()
 
 	// 列 N 个最新文件
-	listCmd, err := logquery.ListCommand(ld.Path, ld.Patterns, filesN, ld.ListModeFor())
+	listCmd, err := logquery.ListCommand(ld.Path, patterns, filesN, ld.ListModeFor())
 	if err != nil {
 		res.OK = false
 		res.Error = err.Error()

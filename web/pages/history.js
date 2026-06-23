@@ -13,11 +13,18 @@
   const { api, triggerDownload } = OTB.api;
 
   function renderHistory(view) {
-    const opSel = el('select', { id: 'hist-op' },
-      ['', 'ssh.test', 'logs.list', 'logs.download', 'logs.search', 'logs.context', 'logs.tail', 'admin.servers.put']
-        .map(v => el('option', { value: v, text: v || '全部操作' }, v === '' ? 'selected' : null)));
-    const resultSel = el('select', { id: 'hist-result' },
-      ['', 'ok', 'fail'].map(v => el('option', { value: v, text: v || '全部状态' }, v === '' ? 'selected' : null)));
+    const opSel = el('select', { id: 'hist-op' });
+    ['', 'ssh.test', 'logs.list', 'logs.download', 'logs.search', 'logs.context', 'logs.tail', 'admin.servers.put'].forEach(v => {
+      const o = el('option', { value: v, text: v || '全部操作' });
+      if (v === '') o.selected = true;
+      opSel.appendChild(o);
+    });
+    const resultSel = el('select', { id: 'hist-result' });
+    ['', 'ok', 'fail'].forEach(v => {
+      const o = el('option', { value: v, text: v || '全部状态' });
+      if (v === '') o.selected = true;
+      resultSel.appendChild(o);
+    });
     const limitInp = el('input', { type: 'number', value: '100', min: '1', max: '5000', style: 'width: 100px' });
     const sysInp = el('input', { type: 'text', placeholder: '系统（包含匹配）' });
     const srvInp = el('input', { type: 'text', placeholder: '服务器（包含匹配）' });

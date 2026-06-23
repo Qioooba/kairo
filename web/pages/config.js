@@ -223,10 +223,15 @@
       const wrap = el('div', { class: 'dir-block' });
       const nameInp = el('input', { type: 'text', value: ld.name || '', placeholder: '目录别名（必填）' });
       const pathInp = el('input', { type: 'text', value: ld.path || '', placeholder: '远端绝对路径（必填）' });
-      const encSel = el('select', null, [
+      const encSel = el('select');
+      [
         ['utf-8', 'utf-8'],
         ['gbk', 'gbk（远程是 GBK）']
-      ].map(([v, t]) => el('option', { value: v, text: t }, (ld.encoding || 'utf-8').toLowerCase() === v ? 'selected' : null)));
+      ].forEach(([v, t]) => {
+        const o = el('option', { value: v, text: t });
+        if ((ld.encoding || 'utf-8').toLowerCase() === v) o.selected = true;
+        encSel.appendChild(o);
+      });
       const patTa = el('textarea', { rows: '2', placeholder: '文件名规则，每行一条，例如：\nSystemOut*.log\n*.log' });
       patTa.value = (ld.patterns || []).join('\n');
       nameInp.addEventListener('input', () => { ld.name = nameInp.value; onEdit(); });

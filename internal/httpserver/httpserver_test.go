@@ -849,6 +849,39 @@ func TestLogsSearchMulti_Validations(t *testing.T) {
 	}); w.Code != 400 {
 		t.Errorf("bad query: %d", w.Code)
 	}
+	// v0.5：新 targets[] 字段校验 — 空 targets 也要 400
+	if w := doRequest(srv, "POST", "/api/logs/search/multi", map[string]any{
+		"system": "信贷生产", "targets": []any{}, "query": "q",
+		"username": "u", "password": "p",
+	}); w.Code != 400 {
+		t.Errorf("empty targets: %d", w.Code)
+	}
+	// v0.5：targets 里元素 srv 或 dir 为空也要 400
+	if w := doRequest(srv, "POST", "/api/logs/search/multi", map[string]any{
+		"system": "信贷生产", "targets": []map[string]string{{"server": "mock-1", "dir": ""}},
+		"query": "q", "username": "u", "password": "p",
+	}); w.Code != 400 {
+		t.Errorf("empty dir in target: %d", w.Code)
+	}
+	// v0.5：targets 至少有一项合法元素，不为空 → 通过校验（mock sshd 会处理具体搜索）
+	if w := doRequest(srv, "POST", "/api/logs/search/multi", map[string]any{
+		"system": "信贷生产",
+		"targets": []map[string]string{
+			{"server": "mock-1", "dir": "SystemOut"},
+		},
+		"query": "Exception", "username": "u", "password": "p",
+	}); w.Code != 200 {
+		t.Errorf("valid targets expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	// v0.5：servers + dir（旧模式）仍然兼容
+	if w := doRequest(srv, "POST", "/api/logs/search/multi", map[string]any{
+		"system": "信贷生产",
+		"servers": []string{"mock-1"},
+		"dir": "SystemOut",
+		"query": "Exception", "username": "u", "password": "p",
+	}); w.Code != 200 {
+		t.Errorf("legacy mode expected 200, got %d: %s", w.Code, w.Body.String())
+	}
 }
 
 func TestTailStart_Validations(t *testing.T) {

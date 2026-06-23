@@ -111,6 +111,20 @@
         (info.systems || []).forEach(sys => {
           sysSel.appendChild(el('option', { value: sys.name, text: sys.name + (sys.description ? ' · ' + sys.description : '') }));
         });
+        // 恢复上次选择
+        const lastSel = OTB.core.lastGet('files', 'sel');
+        if (lastSel && lastSel.system && (info.systems || []).find(s => s.name === lastSel.system)) {
+          sysSel.value = lastSel.system;
+          setSystem(lastSel.system);
+          if (lastSel.server && (state.cfg.systems.find(s => s.name === lastSel.system) || {}).servers
+              && (state.cfg.systems.find(s => s.name === lastSel.system).servers || []).find(s => s.name === lastSel.server)) {
+            srvSel.value = lastSel.server;
+            setServer(lastSel.server);
+          }
+          if (lastSel.username) userInp.value = lastSel.username;
+          // 默认勾上"记住密码"（keyring 模式下由 refreshCredStatus 决定是否禁用）
+          rememberChk.checked = true;
+        }
         renderFileBrowserWarning(info);
       });
     }
@@ -181,19 +195,28 @@
       };
     }
 
+    function persistSelection() {
+      OTB.core.lastSet('files', 'sel', {
+        system: state.currentSys,
+        server: state.currentSrv,
+        username: userInp.value
+      });
+    }
+
     function setSystem(name) {
       state.currentSys = name;
       state.currentSrv = '';
       srvSel.innerHTML = '';
       srvSel.appendChild(el('option', { value: '', text: '（请选择）' }));
       const sys = (state.cfg.systems || []).find(s => s.name === name);
-      if (!sys) { srvSel.disabled = true; return; }
+      if (!sys) { srvSel.disabled = true; persistSelection(); return; }
       (sys.servers || []).forEach(srv => {
         srvSel.appendChild(el('option', { value: srv.name, text: srv.name + ' · ' + srv.host + ':' + srv.port }));
       });
       srvSel.disabled = false;
       userInp.value = (sys.servers && sys.servers[0] && sys.servers[0].username) || '';
       refreshCredStatus();
+      persistSelection();
     }
 
     function setServer(name) {
@@ -204,10 +227,12 @@
         userInp.value = srv.username;
       }
       refreshCredStatus();
+      persistSelection();
     }
 
     sysSel.addEventListener('change', () => setSystem(sysSel.value));
     srvSel.addEventListener('change', () => setServer(srvSel.value));
+    userInp.addEventListener('input', () => { clearTimeout(userInp._t); userInp._t = setTimeout(persistSelection, 500); });
 
     btnConnect.addEventListener('click', async () => {
       if (!state.currentSys || !state.currentSrv) {
