@@ -198,6 +198,22 @@ func (ld *LogDirEntry) ListModeFor() string {
 	}
 }
 
+// ListModeIsAuto 返回 list_mode 是否是"auto"（用户没明确指定模式）。
+//
+// "" 和 "auto" 都返回 true（兼容 YAML 里没写的旧配置）。
+// handler 用这个字段判断要不要"先试 gnu_find，失败再降级到 posix_ls"；
+// 显式 "gnu_find" / "posix_ls" 直接按用户指定跑，不做 fallback。
+//
+// 项 6 修复：v2 只在 ListCommand 加了 auto case 但 handler 没真的做 fallback，
+// 升级后老 AIX 用户第一次列目录还是 502。这里给 handler 一个明确信号。
+func (ld *LogDirEntry) ListModeIsAuto() bool {
+	switch strings.ToLower(strings.TrimSpace(ld.ListMode)) {
+	case "", "auto":
+		return true
+	}
+	return false
+}
+
 // SearchConfig 搜索相关默认值
 type SearchConfig struct {
 	DefaultLatestFiles  int `yaml:"default_latest_files" json:"default_latest_files"`

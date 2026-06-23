@@ -61,6 +61,13 @@ func (s *Server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err)
 		return
 	}
+	// B1：解析时间窗口过滤参数（query string 里 ?since=...&until=...）。
+	// 两个都可单独省略；都省略 = 全量。
+	tw, err := parseTimeWindow(r.URL.Query().Get("since"), r.URL.Query().Get("until"))
+	if err != nil {
+		writeErr(w, 400, err)
+		return
+	}
 	filesN := req.Files
 	if filesN <= 0 {
 		filesN = s.cur().Search.DefaultLatestFiles
@@ -131,11 +138,59 @@ func (s *Server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	hits := parseSearchOutput(stdout, srv.Name, ld.Path, files)
-	s.audit.Write("logs.search", "system", req.System, "server", req.Server, "dir", ld.Path, "query", req.Query, "result", "ok", "hits", len(hits))
+	// B1：按"文件 mtime"过滤命中（前后端都返回过滤后的 hits）
+	hits = logquery.FilterHitsByTimeWindow(hits, files, tw)
+	s.audit.Write("logs.search", "system", req.System, "server", req.Server, "dir", ld.Path, "query", req.Query, "result", "ok", "hits", len(hits), "since", tw.Start.Format(time.RFC3339), "until", tw.End.Format(time.RFC3339))
 	writeJSON(w, 200, map[string]any{
 		"hits":  hits,
 		"files": fileNames,
+		"window": map[string]any{
+			"since": timeOrEmpty(tw.Start),
+			"until": timeOrEmpty(tw.End),
+		},
 	})
+}
+
+// parseTimeWindow 解析 since/until 字符串到 SearchTimeWindow。
+//
+// 规则：
+//   - 空字符串 = 该端点不限；
+//   - 非空 = RFC3339（如 "2026-06-23T00:00:00Z" 或带时区偏移）；
+//   - 解析失败 = 400；
+//   - since > until = 400（业务上不合理）。
+//
+// 注：原样不强制 UTC，由前端传什么时区就是什么时区；落库比较时 Go 会做
+// 隐式时区换算（time.Time 是绝对时刻）。
+func parseTimeWindow(sinceStr, untilStr string) (logquery.SearchTimeWindow, error) {
+	var tw logquery.SearchTimeWindow
+	sinceStr = strings.TrimSpace(sinceStr)
+	untilStr = strings.TrimSpace(untilStr)
+	if sinceStr != "" {
+		t, err := time.Parse(time.RFC3339, sinceStr)
+		if err != nil {
+			return tw, fmt.Errorf("since 解析失败（需要 RFC3339，如 2026-06-23T00:00:00Z）: %w", err)
+		}
+		tw.Start = t
+	}
+	if untilStr != "" {
+		t, err := time.Parse(time.RFC3339, untilStr)
+		if err != nil {
+			return tw, fmt.Errorf("until 解析失败（需要 RFC3339，如 2026-06-23T23:59:59Z）: %w", err)
+		}
+		tw.End = t
+	}
+	if !tw.Start.IsZero() && !tw.End.IsZero() && tw.Start.After(tw.End) {
+		return tw, errors.New("since 必须早于 until")
+	}
+	return tw, nil
+}
+
+// timeOrEmpty 把零值 time 转空字符串，避免前端看到 "0001-01-01T00:00:00Z"。
+func timeOrEmpty(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.Format(time.RFC3339)
 }
 
 func parseSearchOutput(out string, server, dir string, files []logquery.FileEntry) []logquery.SearchHit {

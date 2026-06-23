@@ -130,12 +130,13 @@ async function shoot(page, name) {
     runner.record(page, 'home/load', r, r.ok ? '01-home' : null);
   }
 
-  // 遍历 7 个 home 卡片的跳转
+  // 遍历 8 个 home 卡片的跳转（v0.4 新增"环境自检"）
   const homeCards = [
     { sel: '.tool-card:has-text("WebSphere 日志助手")', route: 'websphere' },
     { sel: '.tool-card:has-text("文件下载")', route: 'files' },
     { sel: '.tool-card:has-text("报文格式化")', route: 'formatter' },
     { sel: '.tool-card:has-text("常用命令")', route: 'commands' },
+    { sel: '.tool-card:has-text("环境自检")', route: 'diagnostics' },
     { sel: '.tool-card:has-text("系统配置")', route: 'config' },
     { sel: '.tool-card:has-text("下载历史")', route: 'downloads' },
     { sel: '.tool-card:has-text("操作历史")', route: 'history' },

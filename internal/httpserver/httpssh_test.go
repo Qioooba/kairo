@@ -285,3 +285,10 @@ func TestLogsSearchMulti_AllBadServers(t *testing.T) {
 func jsonDecode(b []byte, v *map[string]any) error {
 	return json.Unmarshal(b, v)
 }
+
+// jsonDecodeArr 简化版（针对数组）。
+// 单独写一个是因为 Go 不支持把 []map[string]any 直接喂给 *map[string]any；
+// 测试里到处是 []map[string]any，拎出来方便。
+func jsonDecodeArr(b []byte, v *[]map[string]any) error {
+	return json.Unmarshal(b, v)
+}

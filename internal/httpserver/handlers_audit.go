@@ -59,6 +59,78 @@ func (s *Server) handleAuditRecent(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// redactRecord 把 Record 里敏感字段值替换为 "<redacted>"，
+// 返回新的 map（不修改原 Record 的 KV）。
+//
+// 与 audit.WriteJSON 共用 isSensitiveKey 规则：B2 安全要求 ——
+// password / private_key / host_key_sha256 / api_key 等任何导出渠道
+// 都必须脱敏，不能因为改了导出格式又泄露。
+func redactRecord(rec audit.Record) (cleanedKV map[string]string, redactedKeys []string) {
+	cleanedKV = make(map[string]string, len(rec.KV))
+	for k, v := range rec.KV {
+		if audit.IsSensitiveKey(k) {
+			redactedKeys = append(redactedKeys, k)
+			cleanedKV[k] = audit.JSONRedactedValue
+			continue
+		}
+		cleanedKV[k] = v
+	}
+	return cleanedKV, redactedKeys
+}
+
+// handleAuditExportJSON 把操作历史导出成 JSON 文件（B2 新功能）。
+//
+// 路由：GET /api/audit/export.json
+// 参数：跟 /api/audit/recent 一致（op/system/server/result/limit）
+// 响应：application/json 附件，文件名 ops-toolbox-audit-YYYYMMDD-HHMMSS.json
+//
+// 安全要点：
+//   - 敏感字段（password / private_key / host_key_sha256 / api_key 等）
+//     统一替换为 "<redacted>"，并在行内 redacted 数组里列出被脱敏的 key 名；
+//   - 同样适用 limit 上限（5000 行），避免大文件爆内存。
+func (s *Server) handleAuditExportJSON(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeErr(w, 405, errors.New("仅支持 GET"))
+		return
+	}
+	q := r.URL.Query()
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	if limit <= 0 {
+		limit = 5000
+	}
+	if limit > 5000 {
+		limit = 5000
+	}
+	f := audit.Filter{
+		Op:     q.Get("op"),
+		System: q.Get("system"),
+		Server: q.Get("server"),
+		Result: q.Get("result"),
+	}
+	recs, err := s.audit.Recent(limit, f)
+	if err != nil {
+		writeErrSanitized(w, 500, err)
+		return
+	}
+	// 在内存里做一次脱敏；audit.WriteJSON 会再脱一遍，但中间层
+	// 也走一次的好处：万一以后换导出格式（XML / YAML）也能直接复用。
+	cleaned := make([]audit.Record, 0, len(recs))
+	for _, rec := range recs {
+		cleanKV, _ := redactRecord(rec)
+		cleaned = append(cleaned, audit.Record{Time: rec.Time, Op: rec.Op, KV: cleanKV, Raw: rec.Raw})
+	}
+
+	filename := audit.JSONFilename(time.Now())
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="ops-toolbox-`+filename+`"`)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	if err := audit.WriteJSON(w, cleaned); err != nil {
+		// 已经写一部分了；不能改 status。仅记 server 日志。
+		// 用 stderr 兜底（前端可能拿到的是截断 JSON，浏览器会显示"解析失败"）。
+		fmt.Fprintf(w, "\n/* encode error: %v */\n", err)
+	}
+}
+
 // handleAuditExportCSV 把操作历史导出成 CSV 文件（项 24 P3）。
 //
 // 路由：GET /api/audit/export.csv
@@ -99,8 +171,9 @@ func (s *Server) handleAuditExportCSV(w http.ResponseWriter, r *http.Request) {
 	// 收集 KV 里"不在 header 里"的其它字段（保证数据完整性）
 	extraKeys := map[string]bool{}
 	for _, rec := range recs {
-		for k := range rec.KV {
-			if !containsStr(header, k) && k != "" {
+		cleanKV, _ := redactRecord(rec)
+		for k := range cleanKV {
+			if !containsStr(header, k) && k != "" && !audit.IsSensitiveKey(k) {
 				extraKeys[k] = true
 			}
 		}
@@ -124,30 +197,31 @@ func (s *Server) handleAuditExportCSV(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, rec := range recs {
+		cleanKV, _ := redactRecord(rec)
 		row := make([]string, 0, len(allCols))
 		// 标准列
 		row = append(row,
 			rec.Time.Format("2006-01-02 15:04:05.000"),
 			rec.Op,
-			rec.KV["system"],
-			rec.KV["server"],
-			rec.KV["result"],
-			rec.KV["dir"],
-			rec.KV["file"],
-			rec.KV["query"],
-			rec.KV["stage"],
-			rec.KV["bytes"],
-			rec.KV["hits"],
-			rec.KV["id"],
-			rec.KV["lines"],
-			rec.KV["files"],
-			rec.KV["count"],
-			rec.KV["err"],
+			cleanKV["system"],
+			cleanKV["server"],
+			cleanKV["result"],
+			cleanKV["dir"],
+			cleanKV["file"],
+			cleanKV["query"],
+			cleanKV["stage"],
+			cleanKV["bytes"],
+			cleanKV["hits"],
+			cleanKV["id"],
+			cleanKV["lines"],
+			cleanKV["files"],
+			cleanKV["count"],
+			cleanKV["err"],
 			rec.Raw,
 		)
 		// 其它 extras（按出现顺序补齐，确保列对齐）
 		for _, k := range extras {
-			row = append(row, rec.KV[k])
+			row = append(row, cleanKV[k])
 		}
 		if err := cw.Write(row); err != nil {
 			return

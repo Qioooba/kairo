@@ -73,6 +73,25 @@ func main() {
 	}
 	log.Printf("SSH 默认 compat profile: %s", sshclient.DefaultProfileName())
 
+	// 4.7 项 14 修复：文件浏览器（任意路径下载）开启时打 WARNING 启动日志。
+	//
+	// 之前 v0.3 默认开启 v0.4 也默认 true（向后兼容），但启动日志啥都没说，
+	// 部署到生产后管理员容易忘它开着。这次明确打 warning：
+	//   - 显式 enable_free_file_browser=true → 警告"任何路径都可下"
+	//   - 显式 enable_free_file_browser=false → 提示"已关"
+	//   - 没设（默认 true） → 同 true 也警告
+	// 同时把 free_file_roots 白名单情况也打出来，方便管理员核对。
+	if cfg.App.FreeFileBrowserEnabled() {
+		roots := cfg.App.FreeFileRoots
+		if len(roots) == 0 {
+			log.Printf("WARNING: 文件浏览器（任意路径下载）已启用，但 free_file_roots 为空 —— 实际等价于『无限制』，请尽快补白名单")
+		} else {
+			log.Printf("WARNING: 文件浏览器（任意路径下载）已启用，free_file_roots 白名单=%v（仅这些前缀可访问）", roots)
+		}
+	} else {
+		log.Printf("文件浏览器（任意路径下载）已禁用 (/api/files/* 将 403)")
+	}
+
 	// 5. 初始化审计日志
 	auditLog, err := audit.New(cfg.LogDir(), "audit.log")
 	if err != nil {

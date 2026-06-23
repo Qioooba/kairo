@@ -29,7 +29,7 @@
     </nav>
     <div class="footer">
       <div id="listen-info" class="muted">—</div>
-      <div class="muted">v0.3 · 文件浏览器 + 任意路径下载</div>
+      <div class="muted">v0.4 · 文件浏览器 + 任意路径下载</div>
     </div>
   </aside>
 
@@ -46,6 +46,19 @@
 
   <div id="toast" class="toast"></div>
 
+  <!-- 模块加载顺序：core → api → state → pages → app 入口 -->
+  <script src="/static/core.js"></script>
+  <script src="/static/api.js"></script>
+  <script src="/static/state.js"></script>
+  <script src="/static/pages/home.js"></script>
+  <script src="/static/pages/websphere.js"></script>
+  <script src="/static/pages/files.js"></script>
+  <script src="/static/pages/formatter.js"></script>
+  <script src="/static/pages/commands.js"></script>
+  <script src="/static/pages/diagnostics.js"></script>
+  <script src="/static/pages/config.js"></script>
+  <script src="/static/pages/downloads.js"></script>
+  <script src="/static/pages/history.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>

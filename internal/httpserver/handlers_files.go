@@ -22,11 +22,19 @@ import (
 
 // sftpDialer 把 SSH 连接变成 SFTP 客户端。
 //
-// 生产 = sftpclient.New；测试可替换。
+// 生产 = sftpclient.NewAuto：优先 SFTP，失败 fallback 到 shell 命令（项 8）；
+// 测试可替换。
 // 用包级变量而不是 Server 字段，是为了让 handler 直接拿到（不需要传遍所有调用点），
 // 且 override 仅在测试代码里发生。
+//
+// runFn 是 shell backend 用的命令执行器，等价于 cli.Run 的封装。
+// cli 已经传进来这里只是为了拿 RawConn + 提供 Run；直接闭包 cli.Run 即可。
 var sftpDialer = func(cli *sshclient.Client) (sftpClientLike, error) {
-	return sftpclient.New(cli.RawConn())
+	runFn := func(ctx context.Context, command string, timeout time.Duration, encoding string) (string, string, int, error) {
+		stdout, stderr, code, err := cli.Run(ctx, command, timeout, encoding)
+		return stdout, stderr, code, err
+	}
+	return sftpclient.NewAuto(cli.RawConn(), runFn)
 }
 
 // sftpClientLike 是 *sftpclient.Client 的最小接口（让 handler 不直接依赖具体类型，

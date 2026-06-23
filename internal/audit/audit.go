@@ -405,3 +405,103 @@ func WriteCSV(w io.Writer, records []Record) error {
 func CSVFilename(now time.Time) string {
 	return "audit-" + now.Format("2006-01-02-150405") + ".csv"
 }
+
+// ---------- JSON 导出（B2）----------
+
+// sensitiveKeys 包含的 key 在导出 JSON 时会被替换为 "<redacted>"，
+// 避免前端 / 二方系统拿到含 password / 私钥 / 密钥指纹的审计日志。
+//
+// 大小写不敏感（比较时统一 ToLower）。
+//
+// 为什么单独处理：
+//   - audit.Write 已经过滤密码字段（设计上不写密码），但万一未来某次
+//     handler 误把 password 拼到 fields 里，要靠这里兜住；
+//   - "host_key_sha256" / "private_key" 等是加密相关字段，通常也不应该
+//     跨系统传；统一按"敏感"处理。
+var sensitiveKeys = map[string]bool{
+	"password":        true,
+	"passwd":          true,
+	"secret":          true,
+	"private_key":     true,
+	"host_key_sha256": true,
+	"authorization":   true,
+	"credential":      true,
+	"auth_token":      true,
+	"api_key":         true,
+}
+
+// JSONRedactedValue 脱敏值常量
+const JSONRedactedValue = "<redacted>"
+
+// isSensitiveKey 大小写不敏感检查
+func isSensitiveKey(k string) bool {
+	return sensitiveKeys[strings.ToLower(strings.TrimSpace(k))]
+}
+
+// IsSensitiveKey 是 isSensitiveKey 的导出版本（handler 层用）。
+func IsSensitiveKey(k string) bool { return isSensitiveKey(k) }
+
+// jsonRecord 是导出 JSON 的行结构（给前端 / 二次处理用）。
+//
+// 设计要点：
+//   - 时间用 RFC3339Nano 字符串（带时区，跨时区协作不被误会）；
+//   - KV 字段统一压平到顶层（方便 jq 一把梭，不嵌套）；
+//   - 敏感字段被替换为 "<redacted>"（同时记到 redacted 字段让前端能看出）。
+//
+// 命名故意对齐 v2 JSONL 单行格式，方便用户拿到 JSON 后用 jq '.ts' 直接查。
+type jsonRecord struct {
+	Time     time.Time         `json:"ts"`
+	Op       string            `json:"op"`
+	KV       map[string]string `json:"-"`
+	Raw      string            `json:"-"`
+	Redacted []string          `json:"redacted,omitempty"`
+}
+
+// MarshalJSON 序列化 jsonRecord 时压平 KV 到顶层，敏感字段替换。
+//
+// 顺序：ts / op 在前（业务最关心），KV 在后按 key 字母序。
+func (r jsonRecord) MarshalJSON() ([]byte, error) {
+	out := make(map[string]any, 3+len(r.KV))
+	out["ts"] = r.Time.Format(time.RFC3339Nano)
+	out["op"] = r.Op
+	redacted := make([]string, 0)
+	for k, v := range r.KV {
+		if isSensitiveKey(k) {
+			redacted = append(redacted, k)
+			continue
+		}
+		out[k] = v
+	}
+	if len(redacted) > 0 {
+		sort.Strings(redacted)
+		out["redacted"] = redacted
+	}
+	return json.Marshal(out)
+}
+
+// WriteJSON 把 records 序列化成 JSON 数组写到 w（B2）。
+//
+// 格式：顶层是 JSON 数组，每条 record 是一个对象（ts / op / 字段）。
+// 不是 JSONL（每行一个）—— 前端 fetch 后 JSON.parse 一次就能用，
+// 跟 CSV 那种"流式追加"场景不一样。
+//
+// 不修改 records；敏感字段按 key 名替换为 "<redacted>"，
+// 不在原 Record 上做破坏性改动。
+func WriteJSON(w io.Writer, records []Record) error {
+	out := make([]jsonRecord, 0, len(records))
+	for _, r := range records {
+		out = append(out, jsonRecord{Time: r.Time, Op: r.Op, KV: r.KV, Raw: r.Raw})
+	}
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(out); err != nil {
+		return fmt.Errorf("编码 JSON 失败: %w", err)
+	}
+	return nil
+}
+
+// JSONFilename 构造导出文件名（含时间戳）。
+// 例：audit-2026-06-23-024500.json
+func JSONFilename(now time.Time) string {
+	return "audit-" + now.Format("2006-01-02-150405") + ".json"
+}

@@ -712,3 +712,63 @@ func TestCredentialStoreEnabled(t *testing.T) {
 		})
 	}
 }
+
+// TestListModeIsAuto 验证 list_mode 是否为 "auto" 的判定逻辑（项 6 修复）。
+//
+// "" 和 "auto" 都算 auto（handler 走 gnu_find → posix_ls fallback）；
+// 显式 "gnu_find" / "posix_ls" 不算 auto（handler 不做 fallback）。
+// 大小写和空格都归一化。
+func TestListModeIsAuto(t *testing.T) {
+	cases := []struct {
+		raw  string
+		want bool
+	}{
+		{"", true},
+		{"auto", true},
+		{"AUTO", true},
+		{"  auto  ", true},
+		{"gnu_find", false},
+		{"gnu", false},
+		{"find", false},
+		{"posix_ls", false},
+		{"posix", false},
+		{"ls", false},
+		{"unknown", false},
+	}
+	for _, c := range cases {
+		t.Run("raw="+c.raw, func(t *testing.T) {
+			ld := &LogDirEntry{ListMode: c.raw}
+			if got := ld.ListModeIsAuto(); got != c.want {
+				t.Errorf("ListModeIsAuto() with raw=%q = %v, want %v", c.raw, got, c.want)
+			}
+		})
+	}
+}
+
+// TestListModeFor 验证 list_mode 归一化（兼容项 6 之前的语义）。
+func TestListModeFor(t *testing.T) {
+	cases := []struct {
+		raw  string
+		want string
+	}{
+		{"", "gnu_find"},
+		{"auto", "gnu_find"},
+		{"gnu_find", "gnu_find"},
+		{"gnu", "gnu_find"},
+		{"find", "gnu_find"},
+		{"posix_ls", "posix_ls"},
+		{"posix", "posix_ls"},
+		{"ls", "posix_ls"},
+		{"GNU_FIND", "gnu_find"},
+		{"  gnu_find  ", "gnu_find"},
+		{"unknown", "unknown"}, // 未知值原样保留
+	}
+	for _, c := range cases {
+		t.Run("raw="+c.raw, func(t *testing.T) {
+			ld := &LogDirEntry{ListMode: c.raw}
+			if got := ld.ListModeFor(); got != c.want {
+				t.Errorf("ListModeFor() with raw=%q = %q, want %q", c.raw, got, c.want)
+			}
+		})
+	}
+}

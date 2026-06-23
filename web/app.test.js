@@ -1,8 +1,8 @@
 // web/app.test.js — Node 单元测试
 //
-// 测试策略：app.js 是 IIFE 风格，所有逻辑都在一个闭包里。
-// 这里用 Function + 正则把"纯函数"（无 DOM 依赖）抽出来构造，
-// 然后跑断言。覆盖范围 = app.js 里无 DOM / no state 的辅助函数。
+// 测试策略：core.js 是 IIFE，所有纯函数都挂在 window.OTB.core.* 下。
+// 这里用 Function + 正则把"无 DOM 依赖"的纯函数从 core.js 源里抽出来构造，
+// 然后跑断言。覆盖范围 = core.js 里的工具函数。
 //
 // 运行：node web/app.test.js
 // 依赖：纯 stdlib，不需要 npm install
@@ -13,10 +13,13 @@ const fs = require('fs');
 const path = require('path');
 const assert = require('assert');
 
-const APP_PATH = path.join(__dirname, 'app.js');
-const src = fs.readFileSync(APP_PATH, 'utf8');
+const SRC_PATH = path.join(__dirname, 'core.js');
+const src = fs.readFileSync(SRC_PATH, 'utf8');
 
 // 抽一个具名函数。匹配 "function NAME(...) { ... }" 块，括号配对简单实现。
+//
+// core.js 的函数定义在 IIFE 内缩进 4 空格（"    function NAME..."），
+// 所以正则用 4 空格缩进。
 function extract(name) {
   const re = new RegExp('function\\s+' + name + '\\s*\\([^)]*\\)\\s*\\{');
   const m = src.match(re);
@@ -39,7 +42,7 @@ const escapeHtml = new Function(extract('escapeHtml') + '; return escapeHtml;')(
 const formatBytes = new Function(extract('formatBytes') + '; return formatBytes;')();
 const formatTime = new Function(extract('formatTime') + '; return formatTime;')();
 
-// el() 在 app.js 顶层。抽出来跑 DOM-like 断言。
+// el() 在 core.js 里。抽出来跑 DOM-like 断言。
 //
 // Node 没 document，所以给 new Function 注入一个最小 mock：
 //   - document.createElement(tag) 返回一个带 innerHTML/textContent 字段的对象；
@@ -68,44 +71,22 @@ const el = new Function(
   createTextNode: function (text) { return { nodeType: 'text', data: text }; }
 });
 
-// cssEscape 在 app.js 里有同名两个函数（renderWebsphere 闭包内一个、顶层一个），
-// 取顶层版本（含 `window.CSS` 分支）。
-function extractTopCssEscape() {
-  const re = /\n  function cssEscape\(s\) \{[\s\S]*?\n  \}/;
-  const m = src.match(re);
-  if (!m) throw new Error('top cssEscape not found');
-  return m[0].slice(1);
-}
-// 给 new Function 提供 window mock（Node 没全局 window）
+// cssEscape 用通用 extract（4 空格缩进）。
+// core.js 里的 cssEscape 实现优先用浏览器 window.CSS，
+// Node 没全局 window，我们 mock 成 { CSS: undefined } 走 fallback。
 const cssEscape = new Function(
   'window',
-  extractTopCssEscape() + '\n  return cssEscape;'
+  extract('cssEscape') + '\n  return cssEscape;'
 )({ CSS: undefined });
 
-// pctText 在 app.js 里有同名两个函数（一个在 renderWebsphere 闭包内，一个在顶层），
-// 用更精确的正则只取顶层（2 空格缩进）的版本，并显式传入 formatBytes 引用。
-function extractTopPctText() {
-  // 顶层函数体只有 5 行（含签名），用非贪婪匹配到第一个 "^  }" 行（2 空格缩进的 }）
-  const re = /\n  function pctText\(written, total\) \{[\s\S]*?\n  \}/;
-  const m = src.match(re);
-  if (!m) throw new Error('top pctText not found');
-  return m[0].slice(1); // 去前导换行
-}
+// pctText 用通用 extract（依赖 formatBytes，传入 mock）。
 const pctText = new Function(
   'formatBytes',
-  extractTopPctText() + '\n  return pctText;'
+  extract('pctText') + '\n  return pctText;'
 )(formatBytes);
 
 const validate = new Function(extract('validate') + '; return validate;')();
-
-// trimMiddle 是内嵌在 renderMultiResults 里的，用更精确的正则：
-function extractTrimMiddle() {
-  const re = /function\s+trimMiddle\s*\([^)]*\)\s*\{[\s\S]*?\n\s{4}\}/;
-  const m = src.match(re);
-  if (!m) throw new Error('trimMiddle not found');
-  return m[0];
-}
-const trimMiddle = new Function(extractTrimMiddle() + '; return trimMiddle;')();
+const trimMiddle = new Function(extract('trimMiddle') + '; return trimMiddle;')();
 
 // ---------- escapeHtml ----------
 
@@ -173,7 +154,7 @@ function testTrimMiddle() {
 // ---------- cssEscape ----------
 
 function testCssEscape() {
-  // app.js 的 cssEscape 第一行是 `if (window.CSS && CSS.escape)`；
+  // core.js 的 cssEscape 第一行是 `if (typeof window !== 'undefined' && window.CSS && CSS.escape)`；
   // 在 Node 里 window 是 undefined（我们 mock 成 { CSS: undefined }），
   // 所以只走 fallback 分支。
   // fallback: 保留 [a-zA-Z0-9_-]，其它字节加 \
@@ -306,12 +287,11 @@ function testEl() {
 
 // ---------- 关键 XSS 回归：动态错误信息里含 HTML/JS ----------
 
-// 不直接抽 buildStatusNode（它在闭包里），改用更宽松的"模拟"：把
-// escapeHtml 跟实际 setRowStatus 旧实现对比，验证 escapeHtml(evil) === oldSafeString。
+// escapeHtml(evil) === oldSafeString。
 function testXSSInErrorText() {
   const evils = [
     '"><img src=x onerror=alert(1)>',
-    '<script>alert(1)</script>',
+    '<script>alert(alert(1))</script>',
     "' onclick=alert(1) foo='",
     '\\"><svg onload=alert(1)>'
   ];
@@ -326,7 +306,8 @@ function testXSSInErrorText() {
 
 // ---------- gotDone 模式：onmessage 'done' + 'done' 事件只触发一次收尾 ----------
 
-// 抽 gotDone 模式到一个独立可测试函数。
+// gotDone 模式的契约不在 core.js（只在 page 模块里），这里测核心模式：
+// "一个标志位 + 一次收尾"。
 function makeGotDone(onSettle) {
   let gotDone = false;
   return (reason) => {
@@ -348,7 +329,7 @@ function testGotDoneDedupe() {
   calls = 0;
   const onDone2 = makeGotDone(() => calls++);
   onDone2('done');
-  onDone2('error'); // 模拟 onerror 兜底
+  onDone2('error');
   assert.strictEqual(calls, 1, 'done 后到 onerror 不重复');
 
   // 场景 3：先 onerror 兜底，再补 done

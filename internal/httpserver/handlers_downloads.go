@@ -2,7 +2,11 @@ package httpserver
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 
 	"ops-toolbox/internal/downloads"
@@ -68,12 +72,23 @@ func (s *Server) handleDownloadsList(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleDownloadsItem 路由分发：
-//   - DELETE /api/downloads/{name}  — 删除单个文件
-//   - POST   /api/downloads/all    — 清空所有
+//   - DELETE /api/downloads/{name}              — 删除单个文件
+//   - POST   /api/downloads/all                 — 清空所有
+//   - POST   /api/downloads/{name}/open-dir     — 在文件管理器里 reveal 文件（B3）
 func (s *Server) handleDownloadsItem(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/api/downloads/")
 	if rest == "" {
 		http.NotFound(w, r)
+		return
+	}
+	// 子路径分发：{name}/open-dir
+	if strings.HasSuffix(rest, "/open-dir") {
+		name := strings.TrimSuffix(rest, "/open-dir")
+		if name == "" || name == "all" {
+			writeErr(w, 400, errors.New("open-dir 需要指定文件名"))
+			return
+		}
+		s.handleDownloadsOpenDir(w, r, name)
 		return
 	}
 	// 清空全部
@@ -102,4 +117,62 @@ func (s *Server) handleDownloadsItem(w http.ResponseWriter, r *http.Request) {
 	}
 	s.audit.Write("downloads.delete", "result", "ok", "name", rest)
 	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
+// handleDownloadsOpenDir 在系统文件管理器里 reveal 一个已下载的文件（B3 新功能）。
+//
+// 路由：POST /api/downloads/{name}/open-dir
+//
+// 行为：
+//   - macOS → Finder 里 reveal 并选中（open -R）；
+//   - Windows → Explorer 里 reveal 并选中（explorer.exe /select,...）；
+//   - Linux → 用 xdg-open 打开父目录（Linux 文件管理器没统一 reveal 协议）。
+//
+// 安全：
+//   - name 必须来自 List 返回的合法文件名；
+//   - 拼出绝对路径后做 openPathAllowed 校验：必须落在 cfg.DownloadDir() 下，
+//     否则 403 拒绝，避免越界 reveal 系统目录。
+//
+// 失败模式：
+//   - 文件不存在（用户先在 Finder 里删了）→ 404；
+//   - 越界 → 403；
+//   - exec.Command.Start 报错（命令缺失 / 权限） → 500；
+//   - 命令 fork 后不等返回，避免 GUI 程序阻塞请求。
+func (s *Server) handleDownloadsOpenDir(w http.ResponseWriter, r *http.Request, name string) {
+	if r.Method != http.MethodPost {
+		writeErr(w, 405, errors.New("仅支持 POST"))
+		return
+	}
+	// name 反向防注入：拒绝路径分隔符 / .. / NUL
+	if strings.ContainsAny(name, "/\\\x00") || name == "." || name == ".." {
+		writeErr(w, 400, errors.New("name 含非法字符"))
+		return
+	}
+	dlDir := s.cur().DownloadDir()
+	absPath := filepath.Join(dlDir, name)
+	// 文件存在性检查（不存在 → 404，避免 reveal 一个空路径触发奇怪行为）
+	if !fileExists(absPath) {
+		writeErr(w, 404, fmt.Errorf("下载文件不存在: %s", name))
+		return
+	}
+	// 越界检查
+	if err := openPathAllowed(dlDir, absPath); err != nil {
+		s.audit.Write("downloads.open_dir", "name", name, "result", "fail", "reason", err.Error())
+		writeErr(w, 403, err)
+		return
+	}
+	// 调平台命令
+	if err := revealInFileManager(absPath); err != nil {
+		s.audit.Write("downloads.open_dir", "name", name, "result", "fail", "err", err.Error())
+		writeErrSanitized(w, 500, err)
+		return
+	}
+	s.audit.Write("downloads.open_dir", "name", name, "result", "ok", "platform", runtime.GOOS)
+	writeJSON(w, 200, map[string]any{"ok": true, "platform": runtime.GOOS, "path": absPath})
+}
+
+// fileExists 简单存在性检查（不区分 file/dir；reveal 一个空目录也行）。
+func fileExists(p string) bool {
+	_, err := os.Stat(p)
+	return err == nil
 }

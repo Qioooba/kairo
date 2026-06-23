@@ -82,6 +82,22 @@ func (s *Server) handleLogsList(w http.ResponseWriter, r *http.Request) {
 	runCtx, cancelRun := context.WithTimeout(r.Context(), s.cur().SearchTimeout()+10*time.Second)
 	defer cancelRun()
 	stdout, stderr, code, err := cli.Run(runCtx, cmd, s.cur().SearchTimeout(), ld.Encoding)
+
+	// 项 6：list_mode=auto 时，先试 gnu_find；远端不是 Linux/macOS / 没装 find，
+	// 退出码非 0 或输出 "找不到命令" 时，降级到 posix_ls 再试一次。
+	//
+	// 注意：不能直接用 ListModeFor() 的归一化值判断（auto → gnu_find），
+	// 必须用 ListModeIsAuto() 看用户是否显式选了具体模式。
+	if ld.ListModeIsAuto() && shouldFallbackToPOSIX(stdout, stderr, code, err) {
+		s.audit.Write("logs.list", "system", req.System, "server", req.Server, "dir", ld.Path,
+			"stage", "fallback", "from", "gnu_find", "to", "posix_ls",
+			"reason", trim(stderr, 100))
+		fallbackCmd, ferr := logquery.ListCommand(ld.Path, ld.Patterns, 100, "posix_ls")
+		if ferr == nil {
+			stdout, stderr, code, err = cli.Run(runCtx, fallbackCmd, s.cur().SearchTimeout(), ld.Encoding)
+		}
+	}
+
 	if err != nil {
 		auditErr(w, s.audit, "logs.list", "system", req.System, "server", req.Server, "dir", ld.Path, "result", "fail", err)
 		writeErrSanitized(w, 502, err)
@@ -123,4 +139,40 @@ func findLogDir(srv *config.ServerConfig, key string) (*config.LogDirEntry, bool
 		return &srv.LogDirs[0], true
 	}
 	return nil, false
+}
+
+// shouldFallbackToPOSIX 判断 gnu_find 失败是否值得降级到 posix_ls。
+//
+// 触发条件（项 6）：
+//   - 远端退出码非 0 且 stderr 提到典型的"命令不存在 / 选项不识别"信号；
+//   - 比如 AIX 报 "0652-018" / "find: not found" / "command not found" /
+//     BSD "unknown option" —— 这些都说明远端 find 不可用或和我们假设的
+//     -printf 用法不兼容，posix_ls（ls -lt）还有救。
+//
+// 不能只看 exit != 0 —— 文件确实不存在 / 没权限时 exit 也是非 0，但那种
+// 情况下 posix_ls 也会失败，反复重试只会浪费 SSH 调用。
+// 所以"find: .: Permission denied" 这种"文件级"错误不触发 fallback。
+func shouldFallbackToPOSIX(stdout, stderr string, code int, err error) bool {
+	if code == 0 {
+		return false
+	}
+	if err != nil {
+		// 网络 / 超时类失败：不该 fallback，下一次也是同个错
+		return false
+	}
+	low := strings.ToLower(stderr)
+	for _, marker := range []string{
+		"find: not found",    // AIX / sh: find: not found
+		"0652-",              // AIX find / getopt 错误码前缀
+		"command not found",  // bash / sh 通用
+		"unknown option",     // BSD find 不支持 -printf
+		"paths must precede", // GNU find 语法错（参数顺序）
+		"invalid option",
+		"unrecognized option",
+	} {
+		if strings.Contains(low, marker) {
+			return true
+		}
+	}
+	return false
 }

@@ -55,6 +55,10 @@ type logsSearchMultiServerResult struct {
 	Files    []string             `json:"files,omitempty"`
 	HitsN    int                  `json:"hits_count"`
 	Ms       int64                `json:"elapsed_ms"`
+	// fileList 用于 B1 时间窗口过滤：保留每台服务器 ListCommand 解析出的
+	// 完整 FileEntry（带 ModTime），过滤完后再隐藏（不返给前端）。
+	// 反序列化时为空数组不影响 JSON 输出（隐藏字段不输出）。
+	fileList []logquery.FileEntry `json:"-"`
 }
 
 func (s *Server) handleLogsSearchMulti(w http.ResponseWriter, r *http.Request) {
@@ -80,6 +84,12 @@ func (s *Server) handleLogsSearchMulti(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	kw, err := logquery.ParseQuery(req.Query)
+	if err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	// B1：解析时间窗口过滤参数（query string 里 ?since=...&until=...）。
+	tw, err := parseTimeWindow(r.URL.Query().Get("since"), r.URL.Query().Get("until"))
 	if err != nil {
 		writeErr(w, 400, err)
 		return
@@ -169,6 +179,11 @@ func (s *Server) handleLogsSearchMulti(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			res := s.runOneServerSearch(totalCtx, srv, ld, filesN, kw, c.Username, c.Password)
+			// B1：按文件 mtime 过滤命中
+			if res.OK && len(res.Hits) > 0 {
+				res.Hits = logquery.FilterHitsByTimeWindow(res.Hits, res.fileList, tw)
+				res.HitsN = len(res.Hits)
+			}
 			results[idx] = res
 			// 审计
 			if res.OK {
@@ -308,5 +323,6 @@ func (s *Server) runOneServerSearch(
 	res.Files = fileNames
 	res.HitsN = len(hits)
 	res.Ms = time.Since(start).Milliseconds()
+	res.fileList = files // B1：保留给时间窗口过滤
 	return res
 }

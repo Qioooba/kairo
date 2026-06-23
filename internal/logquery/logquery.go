@@ -26,6 +26,27 @@ type FileEntry struct {
 	IsReadable bool   `json:"readable"`
 }
 
+// ModTimeParsed 把 ModTime 字符串解析回 time.Time（B1 用）。
+//
+// 解析失败返回零值；FilterHitsByTimeWindow 会通过 SearchTimeWindow.Contains
+// 看到零值 time 落不进任何有限窗口（Start 非零 + t 零值 < Start），导致被滤掉。
+// 但因为 handler 总是先按窗口判断，没有窗口时全保留，所以解析失败只在
+// 有窗口且该文件 mtime 不可解析时才有影响——直接被滤掉就行，不会 panic。
+func (f FileEntry) ModTimeParsed() time.Time {
+	if f.ModTime == "" {
+		return time.Time{}
+	}
+	// 远端 gnu_find 模式给的是浮点时间戳（"1700000000.123"），
+	// handler 那边 ParseListOutput 已经转成 RFC3339，所以这里只尝试 RFC3339。
+	if t, err := time.Parse(time.RFC3339, f.ModTime); err == nil {
+		return t
+	}
+	if t, err := time.Parse(time.RFC3339Nano, f.ModTime); err == nil {
+		return t
+	}
+	return time.Time{}
+}
+
 // SearchHit 一次搜索命中
 type SearchHit struct {
 	Server   string `json:"server"`
@@ -48,6 +69,83 @@ type SearchKeyword struct {
 	Op     string // "and" / "or" / "term"
 	Value  string
 	Negate bool // true 表示这是 !term 形式，最终用 grep -v
+}
+
+// SearchTimeWindow 是"按文件 mtime 过滤搜索命中"的时间窗口（B1 新功能）。
+//
+// 语义：
+//   - Start 零值 = 不限起点；End 零值 = 不限终点；
+//   - 包含两端（>= Start && <= End）；
+//   - 时区是 UTC；前端传 RFC3339（如 "2026-06-23T00:00:00Z"），handler 解析后
+//     转 UTC 再喂给本结构。
+//
+// 设计动机：
+//   - 用户搜"6 月 22 号 14 点 - 16 点的异常"，但远端 grep 只能对"整个文件"做匹配，
+//     不可能给每条 hit 单独知道时间；
+//   - 我们用"文件 mtime"做粗过滤：保留 mtime 在窗口内的文件的所有命中。
+//   - 这是 v0.4 P3 体验项里最简单的"时间筛选"实现方式，足够应对"看某天日志"场景。
+type SearchTimeWindow struct {
+	Start time.Time
+	End   time.Time
+}
+
+// IsZero 返回窗口是否"两个端点都没设"——handler 用这个判断要不要走全量。
+func (w SearchTimeWindow) IsZero() bool {
+	return w.Start.IsZero() && w.End.IsZero()
+}
+
+// Contains 判断 t 是否落在窗口内。
+//
+// 边界：Start 零值 = 不限起点；End 零值 = 不限终点；都零值 = 全包含。
+// 都设置时使用闭区间 [Start, End]。
+func (w SearchTimeWindow) Contains(t time.Time) bool {
+	if w.IsZero() {
+		return true
+	}
+	if !w.Start.IsZero() && t.Before(w.Start) {
+		return false
+	}
+	if !w.End.IsZero() && t.After(w.End) {
+		return false
+	}
+	return true
+}
+
+// FilterHitsByTimeWindow 按"文件 mtime"过滤 hits（B1）。
+//
+// files 是 ListCommand 解析出的文件列表（handler 调用前已拿到）。
+// 实现：建 name → FileEntry 索引 → 命中行的 file 必须存在 → 看 mtime 是否在窗口内。
+// 不在窗口内的 hit 整条跳过，不返回给前端。
+//
+// 边界：
+//   - files 为 nil / 空：保留所有 hit（向后兼容，没有 mtime 信息时不过滤）；
+//   - window.IsZero()：保留所有 hit（同上）；
+//   - hit 里的 file 在 files 里找不到：保留（防御性，避免漏数据）。
+func FilterHitsByTimeWindow(hits []SearchHit, files []FileEntry, window SearchTimeWindow) []SearchHit {
+	if len(hits) == 0 {
+		return hits
+	}
+	if len(files) == 0 || window.IsZero() {
+		return hits
+	}
+	idx := make(map[string]FileEntry, len(files))
+	for _, f := range files {
+		idx[f.Name] = f
+	}
+	out := make([]SearchHit, 0, len(hits))
+	for _, h := range hits {
+		f, ok := idx[h.File]
+		if !ok {
+			// 远端 grep 给出的 file 不在 ListCommand 返回的列表里 —— 兜底保留
+			// （理论上不应该发生，但解析层防御性写一下）。
+			out = append(out, h)
+			continue
+		}
+		if window.Contains(f.ModTimeParsed()) {
+			out = append(out, h)
+		}
+	}
+	return out
 }
 
 // illegalKeyKey 决定一个 token 是否被整体拒绝。
