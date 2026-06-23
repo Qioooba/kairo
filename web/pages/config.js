@@ -5,6 +5,13 @@
  * 用户在页面里增删改后，点"保存"整体 PUT 回去。
  *
  * 顶部：根据 app.enable_free_file_browser 决定是否显示黄色警告 banner。
+ *
+ * 【v0.5 修复 #20】state 必须放在模块级，**不能放 renderConfig 闭包里**。
+ * 原因：app.js 的 navigate() 在每次 hashchange 都会 view.innerHTML = ''
+ * 然后重新调用 routes[name](view)。如果 state 放闭包里，每次切 tab 再回来
+ * 都会被覆盖，**未保存的改动全丢**，用户报告"切 tab 内容没了/保存没写盘"。
+ * 修复后：state 挂到 OTB.state.configEditor，跨 re-render 存活；
+ * 只有"还没加载过"或"用户点放弃改动"时才重新 fetch。
  */
 
 (function () {
@@ -14,18 +21,36 @@
   const { el, $, toast, validate, newSystem, newServer, newLogDir, kvTable } = OTB.core;
   const { api } = OTB.api;
 
-  function renderConfig(view) {
-    // state.systems 是当前正在编辑的树（与后端解耦）
-    const state = { systems: [], dirty: false, app: null, search: null, freeBrowserEnabled: true };
+  // 模块级 state：跨 tab 切换 / 跨 re-render 存活
+  // 结构：{ systems, app, search, dirty, freeBrowserEnabled, loaded }
+  // loaded=true 表示已经从服务器拉过；之后切回本页不再 fetch，避免覆盖未保存改动
+  if (!OTB.state.configEditor) {
+    OTB.state.configEditor = {
+      systems: [],
+      app: null,
+      search: null,
+      dirty: false,
+      freeBrowserEnabled: true,
+      loaded: false
+    };
+  }
+  const state = OTB.state.configEditor;
 
-    // 工具：标记 dirty
+  function renderConfig(view) {
+    // 工具：标记 dirty + 通知 app.js 用于离开页面前确认
+    // 【v0.5 #3】保存按钮现在有"顶部"+"底部"两个（共享 onclick handler 和 disabled 状态），
+    // 通过 syncSaveBtns() 同步两个按钮。
     const markDirty = () => {
       state.dirty = true;
-      const btn = $('#cfg-save-btn');
-      if (btn) {
-        btn.disabled = false;
-        btn.classList.add('btn-primary');
-      }
+      syncSaveBtns();
+      OTB.state.unsavedConfig = true;
+    };
+
+    // 同步两个保存按钮（顶部 #cfg-save-btn 和底部 .cfg-save-footer）的 disabled
+    const syncSaveBtns = () => {
+      const top = $('#cfg-save-btn');
+      if (top) top.disabled = !state.dirty;
+      document.querySelectorAll('.cfg-save-footer').forEach(b => { b.disabled = !state.dirty; });
     };
 
     // ---- 顶部警告 banner（项 14）：自由文件浏览器打开时 ----
@@ -55,24 +80,44 @@
     searchCard.appendChild(searchKV);
 
     // ---- 编辑器卡（动态） ----
+    // 【v0.5 #5】编辑器卡描述：解释增删改流程 + 复制按钮的语义（之前的版本用户抱怨"复制日志目录"含义不清）。
     const editorCard = el('div', { class: 'card' });
     editorCard.appendChild(el('h3', { text: '业务系统 / 服务器 / 日志目录' }));
-    editorCard.appendChild(el('div', { class: 'card-desc', text: '增删改后点右上角"保存"才生效；保存会原子改写 config.yaml，不需要重启。' }));
+    editorCard.appendChild(el('div', { class: 'card-desc' }, [
+      el('div', { text: '增删改后点顶部或底部"保存"才生效；保存会原子改写 config.yaml，不需要重启。' }),
+      el('div', { class: 'card-desc-extra', style: 'margin-top:4px; font-size:12px; color:var(--text-dim);' }, [
+        el('strong', { text: '复制按钮说明：' }),
+        el('span', { text: '系统行的"复制"=复制整个业务系统（含所有服务器和日志目录）；' }),
+        el('span', { text: '服务器行的"复制"=复制该服务器（含其全部日志目录），方便在多台机器复用配置后再修改主机名/端口。' })
+      ])
+    ]));
 
     const editorBody = el('div');
     editorCard.appendChild(editorBody);
 
     // 顶部操作条
+    // 【v0.5 #3】btnSave 一律带 btn-primary 样式（不论 dirty 与否都明显），
+    // 用 disabled 表示"无未保存改动"。底部再放一个副本按钮处理长表单滚动到底部保存。
     const btnAddSys = el('button', { class: 'btn', text: '+ 新增业务系统', onclick: () => { state.systems.push(newSystem()); markDirty(); renderEditor(); } });
-    const btnSave = el('button', { class: 'btn', id: 'cfg-save-btn', text: '保存', onclick: doSave });
+    const btnSave = el('button', { class: 'btn btn-primary', id: 'cfg-save-btn', text: '保存', onclick: doSave });
     const btnReset = el('button', { class: 'btn', text: '放弃改动', onclick: doReset });
     btnSave.disabled = true;
     const topBar = el('div', { class: 'btn-row', style: 'justify-content: flex-end; margin-bottom: 12px;' }, [btnAddSys, btnReset, btnSave]);
+
+    // 【v0.5 #3】底部操作条：复制"放弃改动"+"保存"按钮，长表单滚到底也能直接保存。
+    // 顶部 + 底部按钮共用同一份 doSave / doReset 处理逻辑（共享 state.dirty）。
+    const btnSaveFooter = el('button', { class: 'btn btn-primary cfg-save-footer', text: '保存', onclick: doSave });
+    const btnResetFooter = el('button', { class: 'btn cfg-save-footer', text: '放弃改动', onclick: doReset });
+    btnSaveFooter.disabled = true;
+    btnResetFooter.disabled = true; // 没有改动时也禁用（避免误触重新 fetch）
+    const footerBar = el('div', { class: 'btn-row cfg-save-footer-bar', style: 'justify-content: flex-end; margin-top: 16px; padding-top: 12px; border-top: 1px dashed var(--line);' }, [btnResetFooter, btnSaveFooter]);
+
     view.appendChild(banner);
     view.appendChild(topBar);
     view.appendChild(appCard);
     view.appendChild(searchCard);
     view.appendChild(editorCard);
+    view.appendChild(footerBar);
 
     function maybeShowBanner(info) {
       // 仅当 free_file_browser === true（且 free_file_roots 为空，即"自由模式"）时显示
@@ -223,16 +268,33 @@
       const wrap = el('div', { class: 'dir-block' });
       const nameInp = el('input', { type: 'text', value: ld.name || '', placeholder: '目录别名（必填）' });
       const pathInp = el('input', { type: 'text', value: ld.path || '', placeholder: '远端绝对路径（必填）' });
+      // v0.5 #5：在 dir-block 顶部加一段字段说明，让用户不必翻文档就知道每个字段干嘛。
+      const hint = el('div', { class: 'card-desc', style: 'margin-bottom: 6px; font-size: 12px; color: var(--text-dim);' }, [
+        el('div', null, [
+          el('strong', { text: '目录别名 ' }),
+          el('span', { text: '— 页面上显示的名字（如"应用日志"/"GC 日志"）' })
+        ]),
+        el('div', null, [
+          el('strong', { text: '远端路径 ' }),
+          el('span', { text: '— 服务器上的绝对目录（如 /opt/IBM/.../logs/server1）' })
+        ])
+      ]);
+      wrap.appendChild(hint);
       const encSel = el('select');
+      encSel.title = '日志文件的字符编码：中文乱码时改 gbk。';
       [
-        ['utf-8', 'utf-8'],
+        ['utf-8', 'utf-8（默认）'],
         ['gbk', 'gbk（远程是 GBK）']
       ].forEach(([v, t]) => {
-        const o = el('option', { value: v, text: t });
-        if ((ld.encoding || 'utf-8').toLowerCase() === v) o.selected = true;
-        encSel.appendChild(o);
+        encSel.appendChild(el('option', { value: v, text: t }));
       });
-      const patTa = el('textarea', { rows: '2', placeholder: '文件名规则，每行一条，例如：\nSystemOut*.log\n*.log' });
+      // v0.5 修复 #6：显式设 encSel.value + 同步 ld.encoding，
+      // 比"option.selected = true"更可靠（避免 select.selectedIndex 不更新的边角 case）。
+      // 后端 Validate 接受 utf-8 / gbk / ""，这里统一规一到小写。
+      const wantEnc = (ld.encoding || 'utf-8').toLowerCase();
+      encSel.value = (wantEnc === 'gbk') ? 'gbk' : 'utf-8';
+      if (ld.encoding !== encSel.value) ld.encoding = encSel.value;
+      const patTa = el('textarea', { rows: '2', placeholder: '文件名规则，每行一条，支持 glob 通配符 (* ? [abc])。\n例如：\n  SystemOut*.log\n  *.log\n  error_*.txt' });
       patTa.value = (ld.patterns || []).join('\n');
       nameInp.addEventListener('input', () => { ld.name = nameInp.value; onEdit(); });
       pathInp.addEventListener('input', () => { ld.path = pathInp.value; onEdit(); });
@@ -266,8 +328,8 @@
         const r = await api('PUT', '/api/admin/servers', { systems: state.systems });
         toast('已保存到 ' + r.path, 'ok');
         state.dirty = false;
-        const btn = $('#cfg-save-btn');
-        if (btn) { btn.disabled = true; btn.classList.remove('btn-primary'); }
+        OTB.state.unsavedConfig = false;
+        syncSaveBtns();
       } catch (e) {
         toast('保存失败：' + e.message, 'err');
       }
@@ -278,21 +340,33 @@
           state.app = info.app; state.search = info.search;
           state.systems = JSON.parse(JSON.stringify(info.systems));
           state.dirty = false;
-          const btn = $('#cfg-save-btn');
-          if (btn) { btn.disabled = true; btn.classList.remove('btn-primary'); }
+          state.loaded = true;
+          OTB.state.unsavedConfig = false;
+          syncSaveBtns();
           renderApp(); renderSearch(); renderEditor();
           maybeShowBanner(info);
-        });
+        }).catch(e => toast('加载失败：' + e.message, 'err'));
       }
     }
 
     // ----- 加载 -----
-    api('GET', '/api/admin/servers').then(info => {
-      state.app = info.app; state.search = info.search;
-      state.systems = JSON.parse(JSON.stringify(info.systems));
+    //
+    // 【v0.5 修复 #20】**只在首次 / 重置后**才重新 fetch。
+    // 切 tab 再回来（navigate() 重新调用 renderConfig）时不再 fetch，
+    // 直接用内存里的 state.systems —— 这是"切 tab 内容还在"的关键。
+    if (state.loaded && state.systems) {
+      // 已加载过：直接 render，不再 fetch（除非用户点放弃改动）
       renderApp(); renderSearch(); renderEditor();
-      maybeShowBanner(info);
-    }).catch(e => toast('加载失败：' + e.message, 'err'));
+      maybeShowBanner({ app: state.app });
+    } else {
+      api('GET', '/api/admin/servers').then(info => {
+        state.app = info.app; state.search = info.search;
+        state.systems = JSON.parse(JSON.stringify(info.systems));
+        state.loaded = true;
+        renderApp(); renderSearch(); renderEditor();
+        maybeShowBanner(info);
+      }).catch(e => toast('加载失败：' + e.message, 'err'));
+    }
   }
 
   OTB.pages.config = renderConfig;
