@@ -77,6 +77,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleSSHTest(w, r)
 	case path == "/api/logs/list":
 		s.handleLogsList(w, r)
+	case path == "/api/logs/list/targets":
+		s.handleLogsListTargets(w, r)
 	case path == "/api/logs/download-latest":
 		s.handleDownloadLatest(w, r)
 	case path == "/api/logs/search":

@@ -1338,13 +1338,60 @@
         ])
       ])
     ]);
+    // v0.5-G #13：4 个 tab 快捷跳转按钮（点 → scrollIntoView + 高亮目标卡片）
+    // 用 scrollTo 而不是真 tab 切换，避免把现有结构推倒重来。
+    const tabBar = el('div', { class: 'ws-tab-bar', style: 'display:flex; gap:6px; margin-bottom: 12px; flex-wrap:wrap;' });
+    function makeTab(label, targetEl, hash) {
+      const btn = el('button', {
+        class: 'btn',
+        text: label,
+        onclick: () => {
+          // scrollIntoView 目标卡片
+          if (targetEl && targetEl.scrollIntoView) {
+            targetEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          }
+          // 临时高亮 1.5s
+          if (targetEl) {
+            targetEl.classList.add('ws-tab-flash');
+            setTimeout(() => targetEl.classList.remove('ws-tab-flash'), 1500);
+          }
+          // 更新 hash 但不触发 navigate
+          try { history.replaceState(null, '', '#/websphere' + (hash ? '?tab=' + hash : '')); } catch (e) { /* ignore */ }
+        }
+      });
+      return btn;
+    }
+    tabBar.appendChild(makeTab('🎯 目标选择', formCard, 'target'));
+    tabBar.appendChild(makeTab('📂 文件列表', fileTableWrap, 'files'));
+    tabBar.appendChild(makeTab('🔍 搜索', searchCard, 'search'));
+    tabBar.appendChild(makeTab('📺 实时 Tail', tailCard, 'tail'));
+
+    // 给每个目标卡片加 id（scrollIntoView 用）
+    formCard.id = 'ws-target-card';
+    searchCard.id = 'ws-search-card';
+    tailCard.id = 'ws-tail-card';
+    fileTableWrap.id = 'ws-files-card';
+    hitTableWrap.id = 'ws-hits-card';
+    ctxCard.id = 'ws-context-card';
+
     view.appendChild(introCard);
+    view.appendChild(tabBar);
     view.appendChild(formCard);
     view.appendChild(searchCard);
     view.appendChild(tailCard);
     view.appendChild(fileTableWrap);
     view.appendChild(hitTableWrap);
     view.appendChild(ctxCard);
+
+    // v0.5-G #13：处理 hash ?tab=xxx 自动滚动（深链接 / 书签）
+    try {
+      const params = new URLSearchParams(location.hash.split('?')[1] || '');
+      const tab = params.get('tab');
+      const tabMap = { target: formCard, files: fileTableWrap, search: searchCard, tail: tailCard };
+      if (tab && tabMap[tab]) {
+        setTimeout(() => tabMap[tab].scrollIntoView({ behavior: 'instant', block: 'start' }), 50);
+      }
+    } catch (e) { /* ignore */ }
 
     api('GET', '/api/config').then(info => {
       cfg = info;

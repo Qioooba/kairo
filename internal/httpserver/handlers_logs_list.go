@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"ops-toolbox/internal/config"
@@ -175,4 +176,210 @@ func shouldFallbackToPOSIX(stdout, stderr string, code int, err error) bool {
 		}
 	}
 	return false
+}
+
+// ---------- /api/logs/list/targets ----------
+//
+// v0.5-G 用户原话 #10："日志助手这个页面，应该是可以勾选服务器，并且多选日志路径"，
+// 多 targets 接口一次请求后端并发，避免前端 N+1 调 /api/logs/list（10+ 台时延迟明显）。
+//
+// 复用 /api/files/list 多 server 模式的 worker pool + per-server error 模式。
+
+type logsListTargetsReq struct {
+	System   string             `json:"system"`
+	Targets  []logsListListTgt   `json:"targets"`  // 每项 {server, dir}
+	Username string             `json:"username"`
+	Password string             `json:"password"`
+}
+
+type logsListListTgt struct {
+	Server string `json:"server"`
+	Dir    string `json:"dir"`
+}
+
+type logsListTargetResult struct {
+	Server string             `json:"server"`
+	Host   string             `json:"host,omitempty"`
+	Dir    string             `json:"dir"`
+	OK     bool               `json:"ok"`
+	Error  string             `json:"error,omitempty"`
+	Files  []logquery.FileEntry `json:"files,omitempty"`
+	Count  int                `json:"count"`
+	Ms     int64              `json:"elapsed_ms"`
+}
+
+func (s *Server) handleLogsListTargets(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeErr(w, 405, errors.New("仅支持 POST"))
+		return
+	}
+	var req logsListTargetsReq
+	if err := json.NewDecoder(io.LimitReader(r.Body, 32*1024)).Decode(&req); err != nil {
+		writeErr(w, 400, fmt.Errorf("请求体解析失败: %w", err))
+		return
+	}
+	if strings.TrimSpace(req.System) == "" {
+		writeErr(w, 400, errors.New("system 不能为空"))
+		return
+	}
+	if len(req.Targets) == 0 {
+		writeErr(w, 400, errors.New("targets 至少 1 个"))
+		return
+	}
+
+	cur := s.cur()
+	// 解析每个 target（找不到 server/dir → 错误结果）
+	type job struct {
+		idx    int
+		server string
+		dir    string
+		srv    *config.ServerConfig
+		ld     *config.LogDirEntry
+	}
+	results := make([]logsListTargetResult, len(req.Targets))
+	jobs := make([]job, 0, len(req.Targets))
+	for i, t := range req.Targets {
+		sn := strings.TrimSpace(t.Server)
+		dn := strings.TrimSpace(t.Dir)
+		if sn == "" || dn == "" {
+			results[i] = logsListTargetResult{
+				Server: t.Server, Dir: t.Dir, OK: false, Error: "server/dir 不能为空", Count: 0,
+			}
+			continue
+		}
+		_, sc, ok := cur.FindServer(req.System, sn)
+		if !ok {
+			results[i] = logsListTargetResult{
+				Server: sn, Dir: dn, OK: false, Error: "系统或服务器不存在", Count: 0,
+			}
+			continue
+		}
+		ld, ok := findLogDir(sc, dn)
+		if !ok {
+			results[i] = logsListTargetResult{
+				Server: sn, Dir: dn, Host: sc.Host, OK: false, Error: "目录不在白名单中", Count: 0,
+			}
+			continue
+		}
+		results[i] = logsListTargetResult{Server: sn, Dir: ld.Path, Host: sc.Host, OK: true}
+		jobs = append(jobs, job{idx: i, server: sn, dir: ld.Path, srv: sc, ld: ld})
+	}
+
+	if len(jobs) == 0 {
+		writeJSON(w, 200, map[string]any{
+			"servers": results,
+			"ok_count": 0, "fail_count": len(results), "total_count": 0,
+		})
+		return
+	}
+
+	// Worker pool（最多 4 路并发）
+	jobCh := make(chan job, len(jobs))
+	for _, j := range jobs {
+		jobCh <- j
+	}
+	close(jobCh)
+
+	concurrency := 4
+	if concurrency > len(jobs) {
+		concurrency = len(jobs)
+	}
+	var wg sync.WaitGroup
+	for w := 0; w < concurrency; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := range jobCh {
+				results[j.idx] = s.runOneLogsList(r.Context(), j.srv, j.ld, req.Username, req.Password)
+			}
+		}()
+	}
+	wg.Wait()
+
+	// 汇总
+	okCount, failCount, totalCount := 0, 0, 0
+	for _, res := range results {
+		if res.OK {
+			okCount++
+			totalCount += res.Count
+		} else {
+			failCount++
+		}
+	}
+	writeJSON(w, 200, map[string]any{
+		"servers":     results,
+		"ok_count":    okCount,
+		"fail_count":  failCount,
+		"total_count": totalCount,
+	})
+}
+
+// runOneLogsList 单 target 列文件（抽出共享函数）
+func (s *Server) runOneLogsList(parentCtx context.Context, srv *config.ServerConfig, ld *config.LogDirEntry, username, password string) logsListTargetResult {
+	start := time.Now()
+	res := logsListTargetResult{Server: srv.Name, Host: srv.Host, Dir: ld.Path, OK: true}
+
+	creds, err := s.resolveCreds(username, password, "", srv.Name, srv.Username)
+	if err != nil {
+		res.OK = false; res.Error = err.Error()
+		res.Ms = time.Since(start).Milliseconds()
+		return res
+	}
+	if creds.Password == "" {
+		res.OK = false; res.Error = "缺少密码"
+		res.Ms = time.Since(start).Milliseconds()
+		return res
+	}
+
+	dialCtx, cancelDial := context.WithTimeout(parentCtx, sshDialOuterTimeout)
+	cli, err := sshclient.Dial(dialCtx, sshclient.Server{
+		Name: srv.Name, Host: srv.Host, Port: srv.Port, Username: creds.Username,
+		HostKeySHA256: srv.HostKeySHA256, SSHProfile: srv.SSHProfile,
+	}, sshclient.Credentials{Password: creds.Password}, sshAttemptTimeout)
+	cancelDial()
+	if err != nil {
+		res.OK = false; res.Error = sshclient.SanitizeError(err.Error())
+		res.Ms = time.Since(start).Milliseconds()
+		return res
+	}
+	defer cli.Close()
+
+	cmd, err := logquery.ListCommand(ld.Path, ld.Patterns, 100, ld.ListModeFor())
+	if err != nil {
+		res.OK = false; res.Error = err.Error()
+		res.Ms = time.Since(start).Milliseconds()
+		return res
+	}
+	runCtx, cancelRun := context.WithTimeout(parentCtx, s.cur().SearchTimeout()+10*time.Second)
+	defer cancelRun()
+	stdout, stderr, code, err := cli.Run(runCtx, cmd, s.cur().SearchTimeout(), ld.Encoding)
+	if ld.ListModeIsAuto() && shouldFallbackToPOSIX(stdout, stderr, code, err) {
+		fallbackCmd, ferr := logquery.ListCommand(ld.Path, ld.Patterns, 100, "posix_ls")
+		if ferr == nil {
+			stdout, stderr, code, err = cli.Run(runCtx, fallbackCmd, s.cur().SearchTimeout(), ld.Encoding)
+		}
+	}
+	if err != nil {
+		res.OK = false; res.Error = sshclient.SanitizeError(err.Error())
+		res.Ms = time.Since(start).Milliseconds()
+		return res
+	}
+	if code != 0 {
+		res.OK = false; res.Error = "远程退出码 " + strconv.Itoa(code) + ": " + trim(stderr, 200)
+		res.Ms = time.Since(start).Milliseconds()
+		return res
+	}
+	files, err := logquery.ParseListOutput(stdout)
+	if err != nil {
+		res.OK = false; res.Error = err.Error()
+		res.Ms = time.Since(start).Milliseconds()
+		return res
+	}
+	for i := range files {
+		files[i].FullPath = filepath.ToSlash(filepath.Join(ld.Path, files[i].Name))
+	}
+	res.Files = files
+	res.Count = len(files)
+	res.Ms = time.Since(start).Milliseconds()
+	return res
 }

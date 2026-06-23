@@ -387,3 +387,65 @@ func jsonDecode(b []byte, v *map[string]any) error {
 func jsonDecodeArr(b []byte, v *[]map[string]any) error {
 	return json.Unmarshal(b, v)
 }
+
+// TestLogsListTargets_Basic v0.5-G：多目标列文件（一次请求多 target 并发）
+func TestLogsListTargets_Basic(t *testing.T) {
+	addr := startFakeSSH(t, "ops", "testpw")
+	_, portStr, _ := net.SplitHostPort(addr)
+	port, _ := strconv.Atoi(portStr)
+	srv := newTestServerWithFakeSSH(t, port)
+
+	// system 缺失 → 400
+	if w := doRequest(srv, "POST", "/api/logs/list/targets", map[string]any{
+		"targets": []map[string]string{{"server": "mock-1", "dir": "SystemOut"}},
+		"username": "ops", "password": "testpw",
+	}); w.Code != 400 {
+		t.Errorf("空 system 应 400，得到 %d", w.Code)
+	}
+
+	// targets 缺失 → 400
+	if w := doRequest(srv, "POST", "/api/logs/list/targets", map[string]any{
+		"system": "信贷生产",
+		"username": "ops", "password": "testpw",
+	}); w.Code != 400 {
+		t.Errorf("空 targets 应 400，得到 %d", w.Code)
+	}
+
+	// 合法：1 个 target
+	w := doRequest(srv, "POST", "/api/logs/list/targets", map[string]any{
+		"system": "信贷生产",
+		"targets": []map[string]string{{"server": "mock-1", "dir": "SystemOut"}},
+		"username": "ops", "password": "testpw",
+	})
+	if w.Code != 200 {
+		t.Fatalf("合法 1 target 应 200，得到 %d body=%s", w.Code, w.Body.String())
+	}
+	var got map[string]any
+	_ = jsonDecode(w.Body.Bytes(), &got)
+	if got["servers"] == nil {
+		t.Errorf("响应缺 servers: %v", got)
+	}
+	if got["ok_count"].(float64) != 1 {
+		t.Errorf("ok_count 期望 1，得到 %v", got["ok_count"])
+	}
+
+	// 部分失败：1 个合法 + 1 个不存在 server
+	w = doRequest(srv, "POST", "/api/logs/list/targets", map[string]any{
+		"system": "信贷生产",
+		"targets": []map[string]string{
+			{"server": "mock-1", "dir": "SystemOut"},
+			{"server": "nonexistent", "dir": "SystemOut"},
+		},
+		"username": "ops", "password": "testpw",
+	})
+	if w.Code != 200 {
+		t.Fatalf("部分失败应 200，得到 %d", w.Code)
+	}
+	_ = jsonDecode(w.Body.Bytes(), &got)
+	if got["ok_count"].(float64) != 1 {
+		t.Errorf("部分失败 ok_count 期望 1，得到 %v", got["ok_count"])
+	}
+	if got["fail_count"].(float64) != 1 {
+		t.Errorf("部分失败 fail_count 期望 1，得到 %v", got["fail_count"])
+	}
+}
