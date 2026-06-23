@@ -927,6 +927,10 @@ input[type="datetime-local"] {
   --error: #b04545;
   --info: #4a7e8a;
   --tail-out-bg: #f6f9ef;
+  /* v0.5-G #19 修：sidebar/topbar/body 三个容器背景在 green 主题也要覆盖，
+     否则 sidebar 沿用 dark 的 rgba(17,22,31,0.85) 黑底，跟浅绿页面冲突。 */
+  --body-bg: linear-gradient(180deg, #f3f6f0 0%, #ecf2e2 100%);
+  --sidebar-bg: rgba(255, 255, 255, 0.85);
   --topbar-bg: #ecf2e2;
 
   color-scheme: light;
@@ -950,6 +954,9 @@ input[type="datetime-local"] {
   --error: #ff5555;
   --info: #88ccff;
   --tail-out-bg: #0a0a0a;
+  /* v0.5-G #19 修：hc 主题 sidebar 用深黑 + 高对比边框，跟 dark 的透明灰不同 */
+  --body-bg: #000000;
+  --sidebar-bg: #0a0a0a;
   --topbar-bg: #161616;
 
   color-scheme: dark;
