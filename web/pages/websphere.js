@@ -1011,6 +1011,9 @@
       const dirPath = targets[0].dir;
       const lines = Math.max(0, Math.min(1000, Number(tailLinesInp.value) || 0));
       tailOut.textContent = '';
+      pendingTailLines = [];
+      tailTotalLines = 0;
+      tailFlushScheduled = false;
       setStatus('busy', '跟踪中…');
       try {
         const r = await api('POST', '/api/logs/tail/start', {
@@ -1076,21 +1079,53 @@
     }
 
     function appendTailLine(o) {
+      // v0.5 修复：实时 tail 改用 buffer + requestAnimationFrame 批量 append。
+      // 原版每行都 textContent += + 全文 split/slice/join，日志一快直接卡死浏览器。
+      // 与独立 tab tail.js 同样的优化策略：缓冲 N 行，rAF 一次性 appendChild TextNode。
       if (o.kind === 'line') {
-        tailOut.textContent += o.line + '\n';
+        pendingTailLines.push(o.line);
       } else if (o.kind === 'info') {
-        tailOut.textContent += '⟦info⟧ ' + o.msg + '\n';
+        pendingTailLines.push('⟦info⟧ ' + o.msg);
       } else if (o.kind === 'error') {
-        tailOut.textContent += '⟦error⟧ ' + o.msg + '\n';
+        pendingTailLines.push('⟦error⟧ ' + o.msg);
       } else if (o.kind === 'done') {
-        tailOut.textContent += '⟦done⟧ ' + o.msg + '\n';
+        pendingTailLines.push('⟦done⟧ ' + o.msg);
+      } else {
+        pendingTailLines.push(String(o));
+      }
+      scheduleFlushTail();
+    }
+
+    // ----- tail 缓冲 + rAF 批量刷新（v0.5 修复卡死） -----
+    const MAX_TAIL_LINES = 5000;
+    let pendingTailLines = [];
+    let tailFlushScheduled = false;
+    let tailTotalLines = 0;
+
+    function scheduleFlushTail() {
+      if (tailFlushScheduled) return;
+      tailFlushScheduled = true;
+      // 优先 rAF（16ms 一帧），没有 rAF 的环境用 setTimeout 50ms 兜底
+      const raf = typeof requestAnimationFrame === 'function' ? requestAnimationFrame : (fn) => setTimeout(fn, 50);
+      raf(flushTailBuffer);
+    }
+    function flushTailBuffer() {
+      tailFlushScheduled = false;
+      if (!pendingTailLines.length) return;
+      const chunk = pendingTailLines.join('\n') + '\n';
+      pendingTailLines = [];
+      // 用 appendChild TextNode 而非 textContent +=：避免整段重排
+      tailOut.appendChild(document.createTextNode(chunk));
+      tailTotalLines += chunk.split('\n').length - 1;
+      // 限速：超过 5000 行截断
+      const lineCount = tailTotalLines;
+      if (lineCount > MAX_TAIL_LINES) {
+        // 直接截断：拿整段 textContent 切后 5000 行重新赋值（罕见操作，可接受）
+        const arr = tailOut.textContent.split('\n');
+        tailOut.textContent = arr.slice(arr.length - MAX_TAIL_LINES).join('\n');
+        tailTotalLines = MAX_TAIL_LINES;
       }
       tailOut.scrollTop = tailOut.scrollHeight;
-      const MAX_LINES = 5000;
-      const lines = tailOut.textContent.split('\n');
-      if (lines.length > MAX_LINES) {
-        tailOut.textContent = lines.slice(lines.length - MAX_LINES).join('\n');
-      }
     }
 
     const tailCard = el('div', { class: 'card' }, [

@@ -84,6 +84,9 @@
     const selCount = el('span', { class: 'text-dim', text: '已选 0 个' });
     const dlZipChk = el('input', { type: 'checkbox', id: 'files-zip' });
     const dlZipLabel = el('label', { class: 'inline' }, [dlZipChk, document.createTextNode('多文件打包 zip')]);
+    // v0.5 #18：可选的本地下载目录。留空走默认 download_dir。
+    // 写绝对路径（如 D:\ops-downloads）落到指定位置；写相对路径（如 backups）落到默认 download_dir 同级。
+    const dlTargetDirInp = el('input', { type: 'text', id: 'files-target-dir', placeholder: '本地下载目录（留空走默认）', style: 'min-width: 240px;' });
     const btnDownload = el('button', { class: 'btn btn-primary', text: '下载选中', onclick: doDownload });
     const btnCancel = el('button', { class: 'btn btn-danger', text: '取消下载', onclick: doCancelDownload });
     btnDownload.disabled = true;
@@ -93,6 +96,10 @@
     fileCard.appendChild(el('h3', { text: '3. 选择并下载' }));
     fileCard.appendChild(el('div', { class: 'file-toolbar' }, [
       btnSelAll, btnSelNone, selCount, dlZipLabel, btnDownload, btnCancel
+    ]));
+    fileCard.appendChild(el('div', { class: 'mt-2', style: 'display:flex; gap:8px; align-items:center;' }, [
+      el('span', { class: 'lbl', text: '本地目录：' }),
+      dlTargetDirInp
     ]));
     fileCard.appendChild(tableWrap);
 
@@ -500,7 +507,8 @@
         const r = await api('POST', '/api/files/download', {
           system: state.currentSys, server: state.currentSrv,
           username: c.username, password: c.password,
-          paths: paths, zip: zip
+          paths: paths, zip: zip,
+          target_dir: (dlTargetDirInp.value || '').trim()
         });
         state.dlId = r.id;
         if (!window.EventSource) { toast('浏览器不支持 EventSource', 'err'); return; }

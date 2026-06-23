@@ -38,16 +38,16 @@ import (
 //	file_patterns    — [v0.5 新增] 文件名 glob 列表（例：["*.log","SystemOut*.log"]），
 //	                   为空时退回到按 patterns 过滤最近 N 个文件。
 type logsSearchMultiReq struct {
-	System         string            `json:"system"`
-	Servers        []string          `json:"servers"`
-	Dir            string            `json:"dir"`
+	System         string             `json:"system"`
+	Servers        []string           `json:"servers"`
+	Dir            string             `json:"dir"`
 	Targets        []logsSearchTarget `json:"targets"`
-	Files          int               `json:"files"`
-	Query          string            `json:"query"`
-	Username       string            `json:"username"`
-	Password       string            `json:"password"`
-	MaxConcurrency int               `json:"max_concurrency"`
-	FilePatterns   []string          `json:"file_patterns"`
+	Files          int                `json:"files"`
+	Query          string             `json:"query"`
+	Username       string             `json:"username"`
+	Password       string             `json:"password"`
+	MaxConcurrency int                `json:"max_concurrency"`
+	FilePatterns   []string           `json:"file_patterns"`
 }
 
 // logsSearchTarget 一个 (server, dir) 搜索目标

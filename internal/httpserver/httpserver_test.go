@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"io"
 	"io/fs"
+	"net"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -863,8 +865,21 @@ func TestLogsSearchMulti_Validations(t *testing.T) {
 	}); w.Code != 400 {
 		t.Errorf("empty dir in target: %d", w.Code)
 	}
+	// 下面是「通过校验后实际执行」的 case —— 需要 fake SSH 才能 dial 通，
+	// 否则会卡 30s 真实 dial 10.0.0.1:22 失败（c3f3b29 引入的老 bug，这里修）。
+	// 用 fake SSH server 让 dial 真正成功/失败（不是真去连外网）。
+	addr := startFakeSSH(t, "ops", "testpw")
+	_, portStr, _ := net.SplitHostPort(addr)
+	port, _ := strconv.Atoi(portStr)
+	srvReal, _, _, _ := newTestServer(t)
+	// 把 mock-1 指向 fake SSH 端口，否则会真 dial 10.0.0.1:22
+	if _, sc, ok := srvReal.cur().FindServer("信贷生产", "mock-1"); ok {
+		sc.Host = "127.0.0.1"
+		sc.Port = port
+	}
+
 	// v0.5：targets 至少有一项合法元素，不为空 → 通过校验（mock sshd 会处理具体搜索）
-	if w := doRequest(srv, "POST", "/api/logs/search/multi", map[string]any{
+	if w := doRequest(srvReal, "POST", "/api/logs/search/multi", map[string]any{
 		"system": "信贷生产",
 		"targets": []map[string]string{
 			{"server": "mock-1", "dir": "SystemOut"},
@@ -874,11 +889,11 @@ func TestLogsSearchMulti_Validations(t *testing.T) {
 		t.Errorf("valid targets expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 	// v0.5：servers + dir（旧模式）仍然兼容
-	if w := doRequest(srv, "POST", "/api/logs/search/multi", map[string]any{
-		"system": "信贷生产",
+	if w := doRequest(srvReal, "POST", "/api/logs/search/multi", map[string]any{
+		"system":  "信贷生产",
 		"servers": []string{"mock-1"},
-		"dir": "SystemOut",
-		"query": "Exception", "username": "u", "password": "p",
+		"dir":     "SystemOut",
+		"query":   "Exception", "username": "u", "password": "p",
 	}); w.Code != 200 {
 		t.Errorf("legacy mode expected 200, got %d: %s", w.Code, w.Body.String())
 	}

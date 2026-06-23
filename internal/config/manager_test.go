@@ -255,7 +255,8 @@ func TestReplace_RejectsBadEncoding(t *testing.T) {
 }
 
 // TestReplace_FullRestartRoundTrip 模拟完整生命周期：
-//   Load(初始 yaml) → Manager → 改 encoding → Replace → 重新 Load（模拟重启） → Manager → 改 host → Replace → 重新 Load
+//
+//	Load(初始 yaml) → Manager → 改 encoding → Replace → 重新 Load（模拟重启） → Manager → 改 host → Replace → 重新 Load
 //
 // 验证全程任何时刻 Get 都能拿到一致的数据，且磁盘文件始终是合法的 yaml。
 //
