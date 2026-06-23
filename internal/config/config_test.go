@@ -772,3 +772,57 @@ func TestListModeFor(t *testing.T) {
 		})
 	}
 }
+
+// v0.5-G #18：AllowCustomDownloadDirEnabled（默认 true / 显式 false 才禁用）
+func TestAllowCustomDownloadDirEnabled(t *testing.T) {
+	// nil → 默认 true
+	a := AppConfig{}
+	if !a.AllowCustomDownloadDirEnabled() {
+		t.Error("nil 应默认允许")
+	}
+	// 显式 true
+	tr := true
+	a.AllowCustomDownloadDir = &tr
+	if !a.AllowCustomDownloadDirEnabled() {
+		t.Error("显式 true 应允许")
+	}
+	// 显式 false
+	fl := false
+	a.AllowCustomDownloadDir = &fl
+	if a.AllowCustomDownloadDirEnabled() {
+		t.Error("显式 false 应拒绝")
+	}
+}
+
+// v0.5-G #18：TargetDirAllowed（按 allowed_download_roots 白名单 + 目录边界）
+func TestTargetDirAllowed(t *testing.T) {
+	// 空 roots → 全放行
+	a := AppConfig{}
+	for _, p := range []string{"/tmp/x", "D:\\Windows\\System32", "/var/log/app"} {
+		if !a.TargetDirAllowed(p) {
+			t.Errorf("空 roots 应放行 %q", p)
+		}
+	}
+	// 非空 roots + 子路径放行
+	a.AllowedDownloadRoots = []string{"/tmp", "D:/logs"}
+	for _, p := range []string{"/tmp", "/tmp/x", "/tmp/sub/y", "D:/logs", "D:/logs/2026"} {
+		if !a.TargetDirAllowed(p) {
+			t.Errorf("子路径应放行 %q", p)
+		}
+	}
+	// 越界拒绝
+	for _, p := range []string{"/etc/passwd", "/var/log", "D:\\Windows", "D:/Windows", "E:/x"} {
+		if a.TargetDirAllowed(p) {
+			t.Errorf("越界应拒绝 %q", p)
+		}
+	}
+	// 边界：恰好是 root 自身
+	if !a.TargetDirAllowed("/tmp") {
+		t.Error("/tmp 应放行（恰好是 root）")
+	}
+	// 边界：前缀相同但不是子目录（必须按目录分隔符边界）
+	// "/tmpfoo" 不应通过 "/tmp" 的匹配
+	if a.TargetDirAllowed("/tmpfoo") {
+		t.Error("/tmpfoo 不应通过 /tmp 边界匹配")
+	}
+}

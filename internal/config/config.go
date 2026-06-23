@@ -62,6 +62,20 @@ type AppConfig struct {
 	// "" / "auto" = 走默认重试链（保持向后兼容）。
 	SSHCompatProfile string `yaml:"ssh_compat_profile,omitempty" json:"ssh_compat_profile,omitempty"`
 
+	// AllowCustomDownloadDir v0.5-G 起：是否允许用户在下载请求里指定 target_dir
+	// （v0.5 项 18「FTP 下载到指定目录」）。
+	//   - true / 未设置 = 允许（默认；向后兼容）
+	//   - false         = 一律拒绝带 target_dir 的下载请求（强制走 download_dir）
+	// 默认开启原因：内网自用工具，下载到指定目录是高频需求。
+	AllowCustomDownloadDir *bool `yaml:"allow_custom_download_dir,omitempty" json:"allow_custom_download_dir,omitempty"`
+
+	// AllowedDownloadRoots v0.5-G 起：target_dir 白名单（绝对路径前缀）。
+	// 为空 = 任何绝对路径都允许；非空 = 只允许落在列表中某项前缀下的目录。
+	// 用途：限制"下载到指定目录"能写到哪些盘符/根目录，
+	// 例如 ["D:/logs", "E:/downloads"] 防止误下到 C:\Windows 等敏感位置。
+	// 匹配按平台路径分隔符边界（Windows 盘符也算边界）。
+	AllowedDownloadRoots []string `yaml:"allowed_download_roots,omitempty" json:"allowed_download_roots,omitempty"`
+
 	// 解析后的绝对路径
 	downloadDirAbs string
 	logDirAbs      string
@@ -107,6 +121,51 @@ func (a *AppConfig) FreeFileRootsEnabled(path string) bool {
 // 用于前端判断"用户是否已限定根路径"，决定要不要显示警告。
 func (a *AppConfig) FreeFileRootsConfigured() bool {
 	return len(a.FreeFileRoots) > 0
+}
+
+// AllowCustomDownloadDirEnabled 返回是否允许用户在下载请求里指定 target_dir。
+// 默认 true（向后兼容）。
+func (a *AppConfig) AllowCustomDownloadDirEnabled() bool {
+	if a.AllowCustomDownloadDir == nil {
+		return true
+	}
+	return *a.AllowCustomDownloadDir
+}
+
+// TargetDirAllowed v0.5-G #18：检查 absolutePath 是否被 allowed_download_roots 允许。
+//
+// 规则：
+//   - roots 为空 → 放行（最自由模式）
+//   - roots 非空 → absolutePath 必须以任一 root 为前缀（按 / 或 \ 边界）
+//
+// 注意：
+//   - absolutePath 必须是绝对路径（不在这里检查，由 validateTargetDir 保证）
+//   - 跨平台：Windows 用 \，Linux/Mac 用 /；本函数把 root 和 path 都做大小写不敏感比较（Windows 不区分大小写）
+//     + 双分隔符归一。
+func (a *AppConfig) TargetDirAllowed(absolutePath string) bool {
+	if len(a.AllowedDownloadRoots) == 0 {
+		return true
+	}
+	if absolutePath == "" {
+		return false
+	}
+	cleaned := filepath.Clean(absolutePath)
+	for _, root := range a.AllowedDownloadRoots {
+		rootCleaned := filepath.Clean(root)
+		if cleaned == rootCleaned {
+			return true
+		}
+		// 必须按目录边界匹配：cleaned 是 root 的子路径
+		sep := string(filepath.Separator)
+		if strings.HasPrefix(cleaned, rootCleaned+sep) {
+			return true
+		}
+		// Windows 还要兼容跨分隔符：root 用 /，cleaned 用 \
+		if strings.HasPrefix(cleaned, rootCleaned+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 // CredentialStoreEnabled 解析 credential_store 配置，返回有效后端名（"keyring"/"file"/"disabled"）。

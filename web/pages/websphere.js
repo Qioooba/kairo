@@ -922,6 +922,13 @@
       const targets = getSelectedTargets();
       if (!targets.length) { toast('请先勾选服务器 + 目录（多对多）', 'warn'); return; }
       if (!queryInp.value.trim()) { toast('搜索表达式不能为空', 'warn'); return; }
+      // v0.5-G P1-08：根据 scope radio 决定模式
+      const scope = Object.keys(scopeRadios).filter(k => !k.endsWith('Label') && scopeRadios[k].checked)[0] || 'latest';
+      const selectedFiles = (scope === 'selected') ? getSelectedFiles() : null;
+      if (scope === 'selected' && (!selectedFiles || !selectedFiles.length)) {
+        toast('「指定文件」模式：先点「列出文件」拿到列表，再勾选要搜的文件', 'warn');
+        return;
+      }
       hitTableWrap.style.display = '';
       hitTableWrap.innerHTML = '';
       hitTableWrap.appendChild(el('h3', { text: '并行搜索中…' }));
@@ -942,10 +949,12 @@
           query: queryInp.value,
           files: Number(filesNSel.value),
           max_concurrency: conc,
+          scope_mode: scope, // v0.5-G：latest/selected/glob
           username: userInp.value,
           password: passInp.value
         };
         if (filePatterns) body.file_patterns = filePatterns;
+        if (selectedFiles) body.selected_files = selectedFiles;
         const url = '/api/logs/search/multi' + (qs.toString() ? '?' + qs : '');
         const r = await api('POST', url, body);
         renderMultiResults(r);
@@ -1079,6 +1088,36 @@
     // P1-08 改进：明确语义 — 填了 glob 后就只用 glob 匹配，N 仍控制"取最新 N 个匹配上的"
     const filePatternInp = el('input', { type: 'text', id: 'ws-file-pattern', placeholder: '可选 glob（逗号/空格分隔）：例 SystemOut*.log 或 *.log,*.txt' });
 
+    // v0.5-G P1-08：搜索范围三选一（latest / selected / glob）
+    // - latest  默认，列最近 N 个
+    // - glob    用 filePatternInp 当文件名 glob
+    // - selected 用「先列文件再勾选」的多选区（listState.files 里勾）
+    const scopeRadios = {};
+    [
+      ['latest', '最近 N 个'],
+      ['glob', '按 glob 匹配'],
+      ['selected', '指定文件']
+    ].forEach(([v, lbl]) => {
+      const r = el('input', { type: 'radio', name: 'ws-scope', value: v });
+      if (v === 'latest') r.checked = true;
+      r.addEventListener('change', updateScopeVisibility);
+      scopeRadios[v] = r;
+      scopeRadios[v + 'Label'] = el('label', { class: 'inline' }, [r, document.createTextNode(' ' + lbl)]);
+    });
+    const scopeRow = el('div', { class: 'mt-2', style: 'display:flex; gap:14px; align-items:center; flex-wrap:wrap;' }, [
+      el('span', { class: 'lbl', text: '搜索文件范围：' }),
+      scopeRadios.latestLabel, scopeRadios.globLabel, scopeRadios.selectedLabel
+    ]);
+    const fileListArea = el('div', { id: 'ws-file-list-area', style: 'display:none', class: 'mt-2' }, [
+      el('div', { class: 'text-dim', text: '先点上方「列出文件」拿到文件列表（多 server × 多 dir），然后勾选要搜的文件。' })
+    ]);
+    function updateScopeVisibility() {
+      const sel = Object.keys(scopeRadios).filter(k => !k.endsWith('Label') && scopeRadios[k].checked)[0];
+      filesNSel.parentNode.parentNode.style.display = (sel === 'latest') ? '' : 'none';
+      filePatternInp.parentNode.style.display = (sel === 'glob') ? '' : 'none';
+      fileListArea.style.display = (sel === 'selected') ? '' : 'none';
+    }
+
     const searchCard = el('div', { class: 'card' }, [
       el('h3', { text: '多服务器并行搜索' }),
       el('div', { class: 'card-desc', unsafeHtml: '语法：<span class="code-inline">A &amp;&amp; B</span>（同包含）、<span class="code-inline">A || B</span>（任一）、<span class="code-inline">!X</span>（排除）。结果按服务器 / 目录分组。' }),
@@ -1086,14 +1125,16 @@
         el('div', { style: 'grid-column: span 2' }, [el('label', { text: '搜索表达式' }), queryInp]),
         el('div', null, [el('label', { text: '并发' }), concSel])
       ]),
+      scopeRow,
       el('div', { class: 'grid-2 mt-2' }, [
         el('div', null, [el('label', { text: '最近文件数（每台服务器每个目录）' }), filesNSel]),
         el('div', null, [
-          el('label', { text: '文件名 glob（留空用配置 patterns；填了只搜匹配的文件）' }),
+          el('label', { text: '文件名 glob（逗号/空格分隔）' }),
           filePatternInp,
           el('div', { class: 'text-dim', style: 'font-size:11.5px; margin-top:2px;', text: '💡 填 glob 后，N 仍限制"取匹配文件中的最新 N 个"（不是只搜 1 个）' })
         ])
       ]),
+      fileListArea,
       el('div', { class: 'grid-3 mt-2' }, [
         el('div', null, [el('label', { text: '时间范围' }), timeSel]),
         el('div', { style: 'display:flex; gap:8px; align-items:flex-end;' }, [timeFromInp, timeToInp]),

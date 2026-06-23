@@ -906,3 +906,51 @@ input[type="datetime-local"] {
 .tier-badge.tier-sys { background: rgba(99,102,241,0.15); color: var(--primary-2, #818cf8); }
 .tier-badge.tier-srv { background: rgba(16,185,129,0.15); color: var(--success); }
 .tier-badge.tier-dir { background: rgba(245,158,11,0.15); color: var(--warn); }
+
+/* ===== v0.5-G #19：护眼绿主题（green）+ 高对比（hc） ===== */
+:root[data-theme="green"] {
+  /* 护眼：低饱和、暖白底 + 深绿文字，长时间看不累 */
+  --bg-0: #f3f6f0;
+  --bg-1: #fbfdf7;
+  --bg-2: #eef3e7;
+  --bg-3: #e5edd9;
+  --line: #cfd9c0;
+  --line-2: #b8c5a3;
+  --text: #1f2a1f;
+  --text-dim: #4d5d4d;
+  --text-mute: #6b7a6b;
+  --primary: #3f7a3f;
+  --primary-2: #5fa05f;
+  --primary-fade: rgba(63, 122, 63, 0.12);
+  --success: #2d8a4e;
+  --warn: #c97a16;
+  --error: #b04545;
+  --info: #4a7e8a;
+  --tail-out-bg: #f6f9ef;
+  --topbar-bg: #ecf2e2;
+
+  color-scheme: light;
+}
+:root[data-theme="hc"] {
+  /* 高对比：纯黑底 + 亮黄文字，方便视力较弱或在强光下使用 */
+  --bg-0: #000000;
+  --bg-1: #0a0a0a;
+  --bg-2: #161616;
+  --bg-3: #1f1f1f;
+  --line: #ffffff;
+  --line-2: #cccccc;
+  --text: #ffff00;
+  --text-dim: #ffffaa;
+  --text-mute: #ccc888;
+  --primary: #00ffff;
+  --primary-2: #88ffff;
+  --primary-fade: rgba(0, 255, 255, 0.18);
+  --success: #00ff88;
+  --warn: #ffaa00;
+  --error: #ff5555;
+  --info: #88ccff;
+  --tail-out-bg: #0a0a0a;
+  --topbar-bg: #161616;
+
+  color-scheme: dark;
+}

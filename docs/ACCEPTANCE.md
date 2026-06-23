@@ -247,3 +247,54 @@ op=logs.context
 - [ ] 没有外部 CDN / React / Vue / Electron 依赖
 
 满足以上条件即视为第一阶段验收通过，可以进入日常使用和第二阶段规划。
+
+---
+
+## 5f. v0.5 用户体验 20 条需求验收（v0.5-A / B / C / D / E / F 全量）
+
+背景：用户在 v0.4 用了一段时间，提了 20 条问题（v0.5-PRE 文档里的 5 大类）。v0.5 用了 6 个 commit 全部修完（A-F）。下面每条对应一个具体场景验收。
+
+### 5f.1 重大 bug（5 条 P0）
+
+| # | 用户原话 | 验收方式 | 状态 |
+|---|---------|---------|------|
+| P0-01 | 重启服务运行 exe，功能全部丢失；切 tab 内容也没了 | 系统配置页改某 server host → 切到「文件下载」→ 切回 → 内容还在；点「保存」→ 重启进程 → GET /api/config 内容一致 | ✅ v0.5-A 23f7e8f + 23f7e8f |
+| P0-02 | 编码选 GBK 后保存还是 utf-8 | 选 GBK → 保存 → GET /api/config dir.encoding === "gbk" | ✅ v0.5-A 23f7e8f + 5e |
+| P0-03 | 多服务器点击「列出文件」只展示一台 | 选 2 台 → 「列出文件」 → 看到 2 段分组（`server-group` 各自 ok） | ✅ v0.5-D 18ce504 + 5e |
+| P0-04 | 日志搜索没反应；没指定/模糊匹配文件名的搜索 | 选 server + dir → 输入 "Exception" + file_pattern "SystemOut*.log" → 命中展示 | ✅ v0.5-D + 5e file_patterns |
+| P0-05 | 实时 tail 点了浏览器就死 | 点"新窗口 Tail" → 独立页 `tail.html` → 1 分钟连续刷不卡；主页内嵌 tail 改 buffer + rAF 批处理（5000 行上限）| ✅ v0.5-D 18ce504 + 5e |
+
+### 5f.2 核心体验（6 条 P1）
+
+| # | 用户原话 | 验收方式 | 状态 |
+|---|---------|---------|------|
+| P1-06 | 一台 server 应能多选日志目录 | 选 1 server → 勾 2 个 dir → "列出文件" 或 "搜索" 看到 2 个 target 分组 | ✅ v0.5-D 18ce504 + 5e |
+| P1-07 | 多 server 并行搜索没勾选 server / 目录 | 搜索卡片走 targets 数组；前端 getSelectedTargets() 多对多 | ✅ v0.5-D 18ce504 |
+| P1-08 | 不支持单文件/多文件/glob 文件名搜索 | filePatternInp 接受逗号/空格分隔的 glob；后端 file_patterns 字段覆盖配置 patterns | ✅ v0.5-E 0b98581 + 5f UI 改进 |
+| P1-09 | 文件下载页没常用目录 | 「常用目录」按钮栏（点即跳转）+「⭐ 收藏当前路径」+「⚙ 管理」（弹 modal 改别名/路径/删/上下移）| ✅ v0.5-E 0b98581 |
+| P1-10 | 文件列表没模糊搜索 | filter input 接受子串 / `*.log` / `SystemOut*` / `log?` 通配 + "过滤后 X / Y" 计数 | ✅ v0.5-E 0b98581 |
+| P1-11 | 点击文件名新窗口预览 | 后端 `/api/files/preview`（前 1MB / 上限 10MB / utf-8 或 gbk / 二进制检测）；前端 modal 默认弹 + Shift+点击 → `/preview.html` 独立新窗口 | ✅ v0.5-E 0b98581 |
+| P1-12 | 下载完成不知道文件在哪 | Item 加 `abs_path` 字段；`/api/local/reveal-file` + `/api/local/open-folder` + `/api/downloads/{name}/open-dir`（B3）；下载完成 → `OTB.core.notify` 右上角通知（含 title/path/操作按钮「📂 打开 / 📋 复制 / 📜 查看下载历史」） | ✅ v0.5-F a53840f + 5f |
+
+### 5f.3 页面可用性（9 条 P2）
+
+| # | 用户原话 | 验收方式 | 状态 |
+|---|---------|---------|------|
+| P2-13 | 业务系统/服务器/日志目录框不明确、复制说明不清、目录别名/文件名规则重复 | 「业务系统 N / 服务器 N / 日志目录 N」编号 badge（紫色/绿/黄边）；复制按钮改名「📋 复制服务器（含日志目录）」+ 自动 -copy 后缀 + tooltip；目录别名/远端路径/编码/文件名规则都有字段说明卡 | ✅ v0.5-F a53840f + 5f |
+| P2-14 | 保存按钮位置不合理 | `.cfg-save-footer-bar` 改 `position: fixed; left: 240px; bottom: 0; z-index: 50;` + 视口 padding-bottom 80px 防遮挡；导航到 config 时 view 加 class `has-sticky-footer` | ✅ v0.5-F a53840f |
+| P2-15 | 复制服务器按钮加说明 | 同 P2-13 合并 | ✅ v0.5-F |
+| P2-16 | 系统紫色图标"系统"两字横排 | `grid-template-columns: auto 1.4fr 2fr auto`（不再固定 36px 挤成竖排）；新增 tier-badge "业务系统 N" badge | ✅ v0.5-C 4d323a3 + 5f |
+| P2-17 | 记住密码默认勾上 | `files.js` `rememberChk.checked = true`；`websphere.js` 同 | ✅ v0.4-final + v0.5 |
+| P2-18 | 目标服务器默认勾上 + 记忆上次操作 | `OTB.core.lastGet/lastSet('websphere', 'sel', {system, servers, dirs, username})`；进入页面 `lastForSys` 恢复 | ✅ v0.4-final + v0.5 |
+| P2-19 | 背景色可切换 | `web/theme.js` + localStorage 持久化 + index.html inline script 防 FOUC + 顶栏 ☀️/🌙 按钮 | ✅ v0.5-C 4d323a3 |
+| P2-20 | FTP 下载到指定目录 | `dlTargetDirInp` + 后端 `validateTargetDir`（绝对路径/mkdir/写探针）+ zip 路径也跟 target_dir 走 | ✅ v0.5-D 18ce504 |
+
+### 5f.4 总览
+
+- v0.5 6 个 commit：A / B(无独立 commit 合并到 E) / C / D / E / F
+- 累计修改：约 3000+ 行（含 50+ 新测试）
+- go test ./... 13 包全 pass（含 8 个新 preview 测试 + 2 个 new local 测试 + 4 个多 server 列文件测试）
+- node web/app.test.js 13/13 pass
+- go.mod x/text 升级（v0.5-D 引用 simplifiedchinese.GBK decoder）
+- 没有破坏 v0.4 接口（向后兼容 targets > servers > server 三模式）
+

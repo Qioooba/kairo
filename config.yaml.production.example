@@ -22,6 +22,22 @@ app:
   # 关闭场景：把工具箱分发给权限较宽的同事，担心被安全审计卡。
   # enable_free_file_browser: true
 
+  # v0.5-G：是否允许用户在下载请求里指定 target_dir（v0.5 项 18「下载到指定目录」）。
+  # 默认 true（不写 / 注释掉都视为允许）。设成 false 会让所有带 target_dir 的请求返回 403。
+  # 关闭场景：内网严格管控，担心同事误下到 C:\Windows 等敏感位置。
+  # allow_custom_download_dir: true
+
+  # v0.5-G：target_dir 白名单（绝对路径前缀），与 allow_custom_download_dir 配合。
+  # 为空 = 不限制；非空 = 只允许以列表中某项为前缀的目录（按目录边界匹配）。
+  # 推荐设置示例（Windows）：
+  # allowed_download_roots:
+  #   - "D:/logs"
+  #   - "E:/downloads"
+  # Linux/Mac 示例：
+  # allowed_download_roots:
+  #   - "/tmp"
+  #   - "/Users/qi/Downloads"
+
 # 业务系统 -> 服务器 -> 日志目录
 systems:
   - name: 信贷生产

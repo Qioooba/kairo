@@ -42,12 +42,18 @@ type logsSearchMultiReq struct {
 	Servers        []string           `json:"servers"`
 	Dir            string             `json:"dir"`
 	Targets        []logsSearchTarget `json:"targets"`
-	Files          int                `json:"files"`
+	Files          int                `json:"files"`          // scope_mode=latest 时：每台搜索最近 N 个文件
 	Query          string             `json:"query"`
 	Username       string             `json:"username"`
 	Password       string             `json:"password"`
 	MaxConcurrency int                `json:"max_concurrency"`
-	FilePatterns   []string           `json:"file_patterns"`
+	// v0.5-G #8：搜索范围三种模式（互斥，优先级 selected > glob > latest）
+	//   - "latest"（默认）：先 ListCommand 取最近 N 个文件，再搜索
+	//   - "selected"：直接用 SelectedFiles 作为文件名列表，跳过 ListCommand
+	//   - "glob"：用 FilePatterns 作为文件名 glob（跟 latest 一样列文件，但 patterns 覆盖 ld.Patterns）
+	ScopeMode      string   `json:"scope_mode,omitempty"` // "" = latest（向后兼容）
+	SelectedFiles  []string `json:"selected_files"`       // scope_mode=selected 时：精确指定文件名
+	FilePatterns   []string `json:"file_patterns"`        // scope_mode=glob 时：文件名 glob 列表
 }
 
 // logsSearchTarget 一个 (server, dir) 搜索目标
@@ -114,6 +120,16 @@ func (s *Server) handleLogsSearchMulti(w http.ResponseWriter, r *http.Request) {
 	if len(targets) == 0 {
 		writeErr(w, 400, errors.New("targets 至少一个（或兼容模式：servers + dir）"))
 		return
+	}
+	// v0.5-G #8：scope_mode 请求级校验（不合法 → 400 整个请求）
+	if rawScope := strings.TrimSpace(req.ScopeMode); rawScope != "" {
+		switch strings.ToLower(rawScope) {
+		case "latest", "selected", "glob":
+			// ok
+		default:
+			writeErr(w, 400, errors.New("scope_mode 非法: "+rawScope+"（仅 latest / selected / glob）"))
+			return
+		}
 	}
 	kw, err := logquery.ParseQuery(req.Query)
 	if err != nil {
@@ -210,14 +226,20 @@ func (s *Server) handleLogsSearchMulti(w http.ResponseWriter, r *http.Request) {
 				}
 				return
 			}
-			// v0.5：file_patterns 不为空时，覆盖 ld.Patterns 用作文件名过滤。
-			// （filesN 仍然控制最大文件数；这里我们先用 file_patterns 列所有匹配，
-			//   再取最近 N 个。如果 file_patterns 为空，走原 ld.Patterns。）
-			listPatterns := ld.Patterns
-			if len(req.FilePatterns) > 0 {
-				listPatterns = req.FilePatterns
+			// v0.5-G #8：scope_mode 三种模式（互斥，优先级 selected > glob > latest）
+			scope := strings.ToLower(strings.TrimSpace(req.ScopeMode))
+			if scope == "" {
+				// 向后兼容：有 selected_files → selected；有 file_patterns → glob；否则 latest
+				switch {
+				case len(req.SelectedFiles) > 0:
+					scope = "selected"
+				case len(req.FilePatterns) > 0:
+					scope = "glob"
+				default:
+					scope = "latest"
+				}
 			}
-			res := s.runOneServerSearchWithPatterns(totalCtx, srv, ld, listPatterns, filesN, kw, c.Username, c.Password)
+			res := s.runOneServerSearchWithScope(totalCtx, srv, ld, scope, filesN, req.SelectedFiles, req.FilePatterns, kw, c.Username, c.Password)
 			// B1：按文件 mtime 过滤命中
 			if res.OK && len(res.Hits) > 0 {
 				res.Hits = logquery.FilterHitsByTimeWindow(res.Hits, res.fileList, tw)
@@ -279,6 +301,28 @@ func (s *Server) runOneServerSearchWithPatterns(
 	kw []logquery.SearchKeyword,
 	username, password string,
 ) logsSearchMultiServerResult {
+	return s.runOneServerSearchWithScope(ctx, srv, ld, "latest", filesN, nil, patterns, kw, username, password)
+}
+
+// runOneServerSearchWithScope v0.5-G #8：搜索范围三种模式（互斥）
+//
+//   - scope="latest"（默认）：先 ListCommand 取最近 N 个文件，再搜索
+//   - scope="selected"：直接用 selectedFiles 作为文件名列表（精确指定），跳过 ListCommand
+//   - scope="glob"：用 patterns 替换 ld.Patterns 列文件（行为跟 WithPatterns 一致）
+//
+// 安全：selected 模式下，文件名不能含路径分隔符（防止命令注入 / 路径穿越），
+// 也不能是 . / ..，否则直接返回错误。
+func (s *Server) runOneServerSearchWithScope(
+	ctx context.Context,
+	srv *config.ServerConfig,
+	ld *config.LogDirEntry,
+	scope string,
+	filesN int,
+	selectedFiles []string,
+	patterns []string,
+	kw []logquery.SearchKeyword,
+	username, password string,
+) logsSearchMultiServerResult {
 	start := time.Now()
 	res := logsSearchMultiServerResult{
 		Server: srv.Name, Host: srv.Host, Dir: ld.Path, Encoding: ld.Encoding,
@@ -301,41 +345,80 @@ func (s *Server) runOneServerSearchWithPatterns(
 
 	cur := s.cur()
 
-	// 列 N 个最新文件
-	listCmd, err := logquery.ListCommand(ld.Path, patterns, filesN, ld.ListModeFor())
-	if err != nil {
-		res.OK = false
-		res.Error = err.Error()
-		res.Ms = time.Since(start).Milliseconds()
-		return res
-	}
-	listCtx, cancelList := context.WithTimeout(ctx, cur.SearchTimeout()+5*time.Second)
-	stdout, _, code, err := cli.Run(listCtx, listCmd, cur.SearchTimeout(), ld.Encoding)
-	cancelList()
-	if err != nil {
-		res.OK = false
-		res.Error = err.Error()
-		res.Ms = time.Since(start).Milliseconds()
-		return res
-	}
-	if code != 0 {
-		res.OK = false
-		res.Error = "列文件失败 exit=" + strconv.Itoa(code)
-		res.Ms = time.Since(start).Milliseconds()
-		return res
-	}
-	files, err := logquery.ParseListOutput(stdout)
-	if err != nil || len(files) == 0 {
-		// 没文件不算错，只是没结果
-		res.OK = true
-		res.Hits = []logquery.SearchHit{}
-		res.Files = []string{}
-		res.Ms = time.Since(start).Milliseconds()
-		return res
-	}
-	fileNames := make([]string, 0, len(files))
-	for _, f := range files {
-		fileNames = append(fileNames, f.Name)
+	// 决定 fileNames：
+	//   - selected 模式：直接用 selectedFiles，跳过 ListCommand
+	//   - glob 模式：跟 latest 一样列文件，但 patterns 覆盖
+	//   - latest 模式：原行为
+	var fileNames []string
+	var files []logquery.FileEntry // for time-window filter (B1)
+
+	switch scope {
+	case "selected":
+		// 安全：拒绝路径分隔符 / 绝对路径 / . / .. / 空 / 含 NUL
+		safe := make([]string, 0, len(selectedFiles))
+		for _, n := range selectedFiles {
+			n = strings.TrimSpace(n)
+			if n == "" || n == "." || n == ".." {
+				continue
+			}
+			if strings.ContainsAny(n, "/\\\x00") || strings.HasPrefix(n, "-") {
+				res.OK = false
+				res.Error = "selected_files 含非法文件名: " + n
+				res.Ms = time.Since(start).Milliseconds()
+				return res
+			}
+			safe = append(safe, n)
+		}
+		if len(safe) == 0 {
+			res.OK = true
+			res.Hits = []logquery.SearchHit{}
+			res.Files = []string{}
+			res.Ms = time.Since(start).Milliseconds()
+			return res
+		}
+		fileNames = safe
+		// B1：selected 模式没有 mtime，跳过时间窗口过滤
+	default:
+		// latest / glob 模式：走 ListCommand
+		listPatterns := ld.Patterns
+		if scope == "glob" && len(patterns) > 0 {
+			listPatterns = patterns
+		}
+		listCmd, err := logquery.ListCommand(ld.Path, listPatterns, filesN, ld.ListModeFor())
+		if err != nil {
+			res.OK = false
+			res.Error = err.Error()
+			res.Ms = time.Since(start).Milliseconds()
+			return res
+		}
+		listCtx, cancelList := context.WithTimeout(ctx, cur.SearchTimeout()+5*time.Second)
+		stdout, _, code, err := cli.Run(listCtx, listCmd, cur.SearchTimeout(), ld.Encoding)
+		cancelList()
+		if err != nil {
+			res.OK = false
+			res.Error = err.Error()
+			res.Ms = time.Since(start).Milliseconds()
+			return res
+		}
+		if code != 0 {
+			res.OK = false
+			res.Error = "列文件失败 exit=" + strconv.Itoa(code)
+			res.Ms = time.Since(start).Milliseconds()
+			return res
+		}
+		files, err = logquery.ParseListOutput(stdout)
+		if err != nil || len(files) == 0 {
+			// 没文件不算错，只是没结果
+			res.OK = true
+			res.Hits = []logquery.SearchHit{}
+			res.Files = []string{}
+			res.Ms = time.Since(start).Milliseconds()
+			return res
+		}
+		fileNames = make([]string, 0, len(files))
+		for _, f := range files {
+			fileNames = append(fileNames, f.Name)
+		}
 	}
 
 	// 搜索

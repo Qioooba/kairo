@@ -783,6 +783,16 @@ func (s *Server) handleFilesDownload(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err)
 		return
 	}
+	// v0.5-G 项 18：app.allow_custom_download_dir 开关（默认 true）
+	if resolvedTarget != "" && !s.cur().App.AllowCustomDownloadDirEnabled() {
+		writeErr(w, 403, errors.New("自定义下载目录已被配置关闭 (app.allow_custom_download_dir=false)"))
+		return
+	}
+	// v0.5-G 项 18：app.allowed_download_roots 白名单
+	if resolvedTarget != "" && !s.cur().App.TargetDirAllowed(resolvedTarget) {
+		writeErr(w, 403, fmt.Errorf("target_dir %q 不在 app.allowed_download_roots 白名单中", resolvedTarget))
+		return
+	}
 	downloadRoot := resolvedTarget
 	if downloadRoot == "" {
 		downloadRoot = s.cur().DownloadDir()

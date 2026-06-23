@@ -105,7 +105,7 @@
     const dlZipLabel = el('label', { class: 'inline' }, [dlZipChk, document.createTextNode('多文件打包 zip')]);
     // v0.5 #18：可选的本地下载目录。留空走默认 download_dir。
     // 写绝对路径（如 D:\ops-downloads）落到指定位置；写相对路径（如 backups）落到默认 download_dir 同级。
-    const dlTargetDirInp = el('input', { type: 'text', id: 'files-target-dir', placeholder: '本地下载目录（留空走默认）', style: 'min-width: 240px;' });
+    const dlTargetDirInp = el('input', { type: 'text', id: 'files-target-dir', placeholder: '本地下载目录（留空走默认）', style: 'min-width: 240px;', title: '留空 → 走 cfg.download_dir。\n写绝对路径 → 落到指定目录（受 app.allowed_download_roots 白名单约束）。' });
     const btnDownload = el('button', { class: 'btn btn-primary', text: '下载选中', onclick: doDownload });
     const btnCancel = el('button', { class: 'btn btn-danger', text: '取消下载', onclick: doCancelDownload });
     btnDownload.disabled = true;

@@ -281,6 +281,101 @@ func TestLogsSearchMulti_AllBadServers(t *testing.T) {
 	}
 }
 
+// TestLogsSearchMulti_ScopeSelected v0.5-G #8：scope_mode=selected 精确指定文件名
+func TestLogsSearchMulti_ScopeSelected(t *testing.T) {
+	addr := startFakeSSH(t, "ops", "testpw")
+	_, portStr, _ := net.SplitHostPort(addr)
+	port, _ := strconv.Atoi(portStr)
+	srv := newTestServerWithFakeSSH(t, port)
+
+	// 非法 scope_mode → 400
+	if w := doRequest(srv, "POST", "/api/logs/search/multi", map[string]any{
+		"system": "信贷生产", "servers": []string{"mock-1"},
+		"dir": "SystemOut", "scope_mode": "bogus",
+		"query": "x", "username": "ops", "password": "testpw",
+	}); w.Code != 400 {
+		t.Errorf("非法 scope_mode 应 400，得到 %d body=%s", w.Code, w.Body.String())
+	}
+
+	// 合法 selected + 含非法文件名（路径穿越）→ 500 (per-server error)
+	w := doRequest(srv, "POST", "/api/logs/search/multi", map[string]any{
+		"system": "信贷生产", "servers": []string{"mock-1"},
+		"dir": "SystemOut",
+		"scope_mode": "selected",
+		"selected_files": []string{"../etc/passwd"},
+		"query": "x", "username": "ops", "password": "testpw",
+	})
+	if w.Code != 200 {
+		t.Errorf("selected 路径穿越应返 200 + per-server error，得到 %d body=%s", w.Code, w.Body.String())
+	}
+	var got map[string]any
+	_ = jsonDecode(w.Body.Bytes(), &got)
+	servers, _ := got["servers"].([]any)
+	if len(servers) == 1 {
+		first := servers[0].(map[string]any)
+		if first["ok"].(bool) {
+			t.Errorf("selected 含 ../ 应该 ok=false，得到 %v", first)
+		}
+		if errStr, _ := first["error"].(string); !strings.Contains(errStr, "非法") {
+			t.Errorf("error 应提到'非法'，得到 %q", errStr)
+		}
+	}
+
+	// 合法 selected + 合法文件名 → 200
+	w = doRequest(srv, "POST", "/api/logs/search/multi", map[string]any{
+		"system": "信贷生产", "servers": []string{"mock-1"},
+		"dir": "SystemOut",
+		"scope_mode": "selected",
+		"selected_files": []string{"SystemOut.log", "SystemErr.log"},
+		"query": "x", "username": "ops", "password": "testpw",
+	})
+	if w.Code != 200 {
+		t.Errorf("合法 selected 应 200，得到 %d body=%s", w.Code, w.Body.String())
+	}
+}
+
+// TestLogsSearchMulti_ScopeBackwardCompat v0.5-G #8：不传 scope_mode 时按 selected_files/file_patterns 自动判断
+func TestLogsSearchMulti_ScopeBackwardCompat(t *testing.T) {
+	addr := startFakeSSH(t, "ops", "testpw")
+	_, portStr, _ := net.SplitHostPort(addr)
+	port, _ := strconv.Atoi(portStr)
+	srv := newTestServerWithFakeSSH(t, port)
+
+	// 空 + 有 selected_files → 自动 selected 模式
+	w := doRequest(srv, "POST", "/api/logs/search/multi", map[string]any{
+		"system": "信贷生产", "servers": []string{"mock-1"},
+		"dir": "SystemOut",
+		// scope_mode 故意不传
+		"selected_files": []string{"a.log"},
+		"query": "x", "username": "ops", "password": "testpw",
+	})
+	if w.Code != 200 {
+		t.Errorf("向后兼容（自动 selected）应 200，得到 %d body=%s", w.Code, w.Body.String())
+	}
+
+	// 空 + 有 file_patterns → 自动 glob 模式
+	w = doRequest(srv, "POST", "/api/logs/search/multi", map[string]any{
+		"system": "信贷生产", "servers": []string{"mock-1"},
+		"dir": "SystemOut",
+		"file_patterns": []string{"*.log"},
+		"query": "x", "username": "ops", "password": "testpw",
+	})
+	if w.Code != 200 {
+		t.Errorf("向后兼容（自动 glob）应 200，得到 %d", w.Code)
+	}
+
+	// 空 + 空 → 自动 latest 模式（与原行为一致）
+	w = doRequest(srv, "POST", "/api/logs/search/multi", map[string]any{
+		"system": "信贷生产", "servers": []string{"mock-1"},
+		"dir": "SystemOut",
+		"files": 1, "query": "x",
+		"username": "ops", "password": "testpw",
+	})
+	if w.Code != 200 {
+		t.Errorf("向后兼容（自动 latest）应 200，得到 %d", w.Code)
+	}
+}
+
 // jsonDecode 简化版
 func jsonDecode(b []byte, v *map[string]any) error {
 	return json.Unmarshal(b, v)

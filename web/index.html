@@ -11,7 +11,7 @@
     (function () {
       try {
         var t = localStorage.getItem('otb_theme');
-        if (t !== 'dark' && t !== 'light') t = 'dark';
+        if (t !== 'dark' && t !== 'light' && t !== 'green' && t !== 'hc') t = 'dark';
         document.documentElement.setAttribute('data-theme', t);
       } catch (_) {
         document.documentElement.setAttribute('data-theme', 'dark');

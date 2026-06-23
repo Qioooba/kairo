@@ -13,7 +13,8 @@
 (function () {
   'use strict';
   const KEY = 'otb_theme';
-  const ALLOWED = ['dark', 'light'];
+  // v0.5-G #19：4 种主题（深色 / 浅色 / 护眼绿 / 高对比）
+  const ALLOWED = ['dark', 'light', 'green', 'hc'];
 
   function get() {
     try {
@@ -23,38 +24,46 @@
     return 'dark';
   }
 
+  // 切换循环：dark → light → green → hc → dark
+  const NEXT = { dark: 'light', light: 'green', green: 'hc', hc: 'dark' };
+  // 按钮 emoji / tooltip
+  const EMOJI = { dark: '🌙', light: '☀️', green: '🌿', hc: '🔆' };
+  const TIP = {
+    dark: '切换到浅色主题',
+    light: '切换到护眼绿主题',
+    green: '切换到高对比主题',
+    hc: '切换到深色主题'
+  };
+
   function set(name) {
     if (ALLOWED.indexOf(name) === -1) name = 'dark';
     try { localStorage.setItem(KEY, name); } catch (_) {}
     document.documentElement.setAttribute('data-theme', name);
-    // 通知按钮 / 其他监听者
     try {
       window.dispatchEvent(new CustomEvent('otb:themechange', { detail: { theme: name } }));
     } catch (_) {}
-    // 兜底：如果没有按钮监听，直接更新 #theme-toggle 的 emoji
     const btn = document.getElementById('theme-toggle');
     if (btn) {
       btn.setAttribute('data-theme', name);
-      btn.textContent = name === 'dark' ? '🌙' : '☀️';
-      btn.title = name === 'dark' ? '切换到亮色主题' : '切换到暗色主题';
+      btn.textContent = EMOJI[name] || EMOJI.dark;
+      btn.title = TIP[name] || TIP.dark;
     }
     return name;
   }
 
   function toggle() {
-    return set(get() === 'dark' ? 'light' : 'dark');
+    return set(NEXT[get()] || 'dark');
   }
 
-  // 初始化：用于 core.js 之后调用，保证按钮 emoji 与初始主题一致
+  // init：设置初始主题 + 按钮 emoji
   function init() {
     const name = get();
     document.documentElement.setAttribute('data-theme', name);
     const btn = document.getElementById('theme-toggle');
     if (btn) {
       btn.setAttribute('data-theme', name);
-      btn.textContent = name === 'dark' ? '🌙' : '☀️';
-      btn.title = name === 'dark' ? '切换到亮色主题' : '切换到暗色主题';
-      // 点击切换（如果 HTML 里 onclick 没绑，这里兜底）
+      btn.textContent = EMOJI[name] || EMOJI.dark;
+      btn.title = TIP[name] || TIP.dark;
       if (!btn.onclick) {
         btn.addEventListener('click', () => OTB.theme.toggle());
       }
@@ -62,6 +71,11 @@
     return name;
   }
 
+  // 列出所有可用主题（供前端下拉框用）
+  function list() {
+    return ALLOWED.slice();
+  }
+
   window.OTB = window.OTB || {};
-  window.OTB.theme = { get, set, toggle, init };
+  window.OTB.theme = { get, set, toggle, init, list };
 })();
