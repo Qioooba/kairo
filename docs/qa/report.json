@@ -1,6 +1,6 @@
 {
   "base": "http://127.0.0.1:18090",
-  "run_at": "2026-06-23T00:57:53.684Z",
+  "run_at": "2026-06-23T01:14:37.384Z",
   "summary": {
     "total": 57,
     "pass": 57,
@@ -14,237 +14,237 @@
       "action": "home/load",
       "page": "/",
       "status": "PASS",
-      "ms": 135,
+      "ms": 132,
       "detail": {
         "cards": 8
       },
       "errors": [],
       "screenshot": "01-home",
-      "ts": "2026-06-23T00:57:18.414Z"
+      "ts": "2026-06-23T01:14:01.945Z"
     },
     {
       "idx": 2,
       "action": "home/card-click/websphere",
       "page": "#/websphere",
       "status": "PASS",
-      "ms": 251,
+      "ms": 277,
       "detail": {
         "hash": "#/websphere"
       },
       "errors": [],
       "screenshot": null,
-      "ts": "2026-06-23T00:57:18.672Z"
+      "ts": "2026-06-23T01:14:02.231Z"
     },
     {
       "idx": 3,
       "action": "home/card-click/files",
       "page": "#/files",
       "status": "PASS",
-      "ms": 176,
+      "ms": 178,
       "detail": {
         "hash": "#/files"
       },
       "errors": [],
       "screenshot": null,
-      "ts": "2026-06-23T00:57:18.955Z"
+      "ts": "2026-06-23T01:14:02.515Z"
     },
     {
       "idx": 4,
       "action": "home/card-click/formatter",
       "page": "#/formatter",
       "status": "PASS",
-      "ms": 171,
+      "ms": 179,
       "detail": {
         "hash": "#/formatter"
       },
       "errors": [],
       "screenshot": null,
-      "ts": "2026-06-23T00:57:19.232Z"
+      "ts": "2026-06-23T01:14:02.800Z"
     },
     {
       "idx": 5,
       "action": "home/card-click/commands",
       "page": "#/commands",
       "status": "PASS",
-      "ms": 219,
+      "ms": 178,
       "detail": {
         "hash": "#/commands"
       },
       "errors": [],
       "screenshot": null,
-      "ts": "2026-06-23T00:57:19.556Z"
+      "ts": "2026-06-23T01:14:03.084Z"
     },
     {
       "idx": 6,
       "action": "home/card-click/diagnostics",
       "page": "#/diagnostics",
       "status": "PASS",
-      "ms": 169,
+      "ms": 168,
       "detail": {
         "hash": "#/diagnostics"
       },
       "errors": [],
       "screenshot": null,
-      "ts": "2026-06-23T00:57:19.830Z"
+      "ts": "2026-06-23T01:14:03.361Z"
     },
     {
       "idx": 7,
       "action": "home/card-click/config",
       "page": "#/config",
       "status": "PASS",
-      "ms": 170,
+      "ms": 169,
       "detail": {
         "hash": "#/config"
       },
       "errors": [],
       "screenshot": null,
-      "ts": "2026-06-23T00:57:20.105Z"
+      "ts": "2026-06-23T01:14:03.636Z"
     },
     {
       "idx": 8,
       "action": "home/card-click/downloads",
       "page": "#/downloads",
       "status": "PASS",
-      "ms": 381,
+      "ms": 172,
       "detail": {
         "hash": "#/downloads"
       },
       "errors": [],
       "screenshot": null,
-      "ts": "2026-06-23T00:57:20.591Z"
+      "ts": "2026-06-23T01:14:03.913Z"
     },
     {
       "idx": 9,
       "action": "home/card-click/history",
       "page": "#/history",
       "status": "PASS",
-      "ms": 325,
+      "ms": 175,
       "detail": {
         "hash": "#/history"
       },
       "errors": [],
       "screenshot": null,
-      "ts": "2026-06-23T00:57:21.032Z"
+      "ts": "2026-06-23T01:14:04.195Z"
     },
     {
       "idx": 10,
       "action": "websphere/select-system",
       "page": "#/websphere",
       "status": "PASS",
-      "ms": 162,
+      "ms": 169,
       "detail": {
         "sysOptions": 1,
         "serverCount": 1
       },
       "errors": [],
       "screenshot": null,
-      "ts": "2026-06-23T00:57:21.383Z"
+      "ts": "2026-06-23T01:14:04.513Z"
     },
     {
       "idx": 11,
       "action": "websphere/btn-pick-all",
       "page": "#/websphere",
       "status": "PASS",
-      "ms": 104,
+      "ms": 105,
       "detail": {
         "before": 0,
         "after": 1
       },
       "errors": [],
       "screenshot": null,
-      "ts": "2026-06-23T00:57:21.487Z"
+      "ts": "2026-06-23T01:14:04.618Z"
     },
     {
       "idx": 12,
       "action": "websphere/btn-pick-none",
       "page": "#/websphere",
       "status": "PASS",
-      "ms": 107,
+      "ms": 103,
       "detail": {
         "after": 0
       },
       "errors": [],
       "screenshot": null,
-      "ts": "2026-06-23T00:57:21.594Z"
+      "ts": "2026-06-23T01:14:04.721Z"
     },
     {
       "idx": 13,
       "action": "websphere/btn-pick-online",
       "page": "#/websphere",
       "status": "PASS",
-      "ms": 97,
+      "ms": 104,
       "detail": {
         "ok": true
       },
       "errors": [],
       "screenshot": null,
-      "ts": "2026-06-23T00:57:21.691Z"
+      "ts": "2026-06-23T01:14:04.825Z"
     },
     {
       "idx": 14,
       "action": "websphere/fill-creds",
       "page": "#/websphere",
       "status": "PASS",
-      "ms": 131,
+      "ms": 142,
       "detail": {
         "checked": 1
       },
       "errors": [],
       "screenshot": null,
-      "ts": "2026-06-23T00:57:21.822Z"
+      "ts": "2026-06-23T01:14:04.967Z"
     },
     {
       "idx": 15,
       "action": "websphere/btn-test",
       "page": "#/websphere",
       "status": "PASS",
-      "ms": 255,
+      "ms": 249,
       "detail": {
         "statusDot": "ok"
       },
       "errors": [],
       "screenshot": "02-websphere-test-ok",
-      "ts": "2026-06-23T00:57:22.077Z"
+      "ts": "2026-06-23T01:14:05.216Z"
     },
     {
       "idx": 16,
       "action": "websphere/btn-list",
       "page": "#/websphere",
       "status": "PASS",
-      "ms": 257,
+      "ms": 248,
       "detail": {
         "rowCount": 5
       },
       "errors": [],
       "screenshot": "03-websphere-file-list",
-      "ts": "2026-06-23T00:57:22.334Z"
+      "ts": "2026-06-23T01:14:05.464Z"
     },
     {
       "idx": 17,
       "action": "websphere/file-pick-all-and-topn",
       "page": "#/websphere",
       "status": "PASS",
-      "ms": 165,
+      "ms": 166,
       "detail": {
         "allChecked": 0,
         "top2": 2
       },
       "errors": [],
       "screenshot": null,
-      "ts": "2026-06-23T00:57:22.499Z"
+      "ts": "2026-06-23T01:14:05.630Z"
     },
     {
       "idx": 18,
       "action": "websphere/btn-download-selected",
       "page": "#/websphere",
       "status": "PASS",
-      "ms": 2191,
+      "ms": 2184,
       "detail": {
         "doneCount": 2
       },
       "errors": [],
       "screenshot": "04-websphere-files-downloaded",
-      "ts": "2026-06-23T00:57:24.690Z"
+      "ts": "2026-06-23T01:14:07.814Z"
     },
     {
       "idx": 19,
@@ -258,43 +258,43 @@
       },
       "errors": [],
       "screenshot": "05-websphere-search",
-      "ts": "2026-06-23T00:57:25.799Z"
+      "ts": "2026-06-23T01:14:08.924Z"
     },
     {
       "idx": 20,
       "action": "websphere/btn-context",
       "page": "#/websphere",
       "status": "PASS",
-      "ms": 277,
+      "ms": 264,
       "detail": {
         "rows": 35
       },
       "errors": [],
       "screenshot": "06-websphere-context",
-      "ts": "2026-06-23T00:57:26.076Z"
+      "ts": "2026-06-23T01:14:09.188Z"
     },
     {
       "idx": 21,
       "action": "websphere/btn-download-latest",
       "page": "#/websphere",
       "status": "PASS",
-      "ms": 2904,
+      "ms": 2391,
       "detail": {
         "serverGroupCount": 2
       },
       "errors": [],
       "screenshot": "07-websphere-download-latest",
-      "ts": "2026-06-23T00:57:28.980Z"
+      "ts": "2026-06-23T01:14:11.579Z"
     },
     {
       "idx": 22,
       "action": "websphere/tail-start-stop",
       "page": "#/websphere",
       "status": "PASS",
-      "ms": 1325,
+      "ms": 1271,
       "detail": {
         "tailOutLen": 3205,
-        "preview": "⟦info⟧ 已开启 tail，id=tail-46750f15126b55f7\n[2026-06-19 09:00:00.001] 00000050 com.ibm.ws.webcontainer.servlet.ServletWrapp",
+        "preview": "⟦info⟧ 已开启 tail，id=tail-5b6b6b9f6eff3900\n[2026-06-19 09:00:00.001] 00000050 com.ibm.ws.webcontainer.servlet.ServletWrapp",
         "stopInfo": {
           "btns": [
             {
@@ -310,27 +310,27 @@
       },
       "errors": [],
       "screenshot": "08-websphere-tail-started",
-      "ts": "2026-06-23T00:57:30.305Z"
+      "ts": "2026-06-23T01:14:12.850Z"
     },
     {
       "idx": 23,
       "action": "websphere/remember-and-forget",
       "page": "#/websphere",
       "status": "PASS",
-      "ms": 823,
+      "ms": 828,
       "detail": {
         "credStatus": "未保存密码"
       },
       "errors": [],
       "screenshot": null,
-      "ts": "2026-06-23T00:57:31.128Z"
+      "ts": "2026-06-23T01:14:13.678Z"
     },
     {
       "idx": 24,
       "action": "files/select-system-server",
       "page": "#/files",
       "status": "PASS",
-      "ms": 325,
+      "ms": 326,
       "detail": {
         "srvOpts": [
           "",
@@ -339,14 +339,14 @@
       },
       "errors": [],
       "screenshot": null,
-      "ts": "2026-06-23T00:57:31.493Z"
+      "ts": "2026-06-23T01:14:14.050Z"
     },
     {
       "idx": 25,
       "action": "files/btn-connect",
       "page": "#/files",
       "status": "PASS",
-      "ms": 265,
+      "ms": 162,
       "detail": {
         "rowCount": 6,
         "curPath": "/opt/IBM/WebSphere/AppServer/profiles/AppSrv01/logs/server1",
@@ -354,14 +354,14 @@
       },
       "errors": [],
       "screenshot": "09-files-connected",
-      "ts": "2026-06-23T00:57:31.758Z"
+      "ts": "2026-06-23T01:14:14.213Z"
     },
     {
       "idx": 26,
       "action": "files/sort-name-size",
       "page": "#/files",
       "status": "PASS",
-      "ms": 258,
+      "ms": 261,
       "detail": {
         "firstNameAsc": "📄 SystemOut_20260619.log",
         "firstNameDesc": "📄 app.log",
@@ -369,14 +369,14 @@
       },
       "errors": [],
       "screenshot": null,
-      "ts": "2026-06-23T00:57:32.016Z"
+      "ts": "2026-06-23T01:14:14.474Z"
     },
     {
       "idx": 27,
       "action": "files/pick-all-none",
       "page": "#/files",
       "status": "PASS",
-      "ms": 166,
+      "ms": 156,
       "detail": {
         "selText": "已选 6 个",
         "checked": 6,
@@ -384,28 +384,28 @@
       },
       "errors": [],
       "screenshot": null,
-      "ts": "2026-06-23T00:57:32.182Z"
+      "ts": "2026-06-23T01:14:14.630Z"
     },
     {
       "idx": 28,
       "action": "files/jump-path",
       "page": "#/files",
       "status": "PASS",
-      "ms": 421,
+      "ms": 416,
       "detail": {
         "curPath": "/opt/IBM/WebSphere/AppServer/profiles/AppSrv01/logs/server1",
         "rowCount": 6
       },
       "errors": [],
       "screenshot": null,
-      "ts": "2026-06-23T00:57:32.603Z"
+      "ts": "2026-06-23T01:14:15.046Z"
     },
     {
       "idx": 29,
       "action": "files/click-crumb-root",
       "page": "#/files",
       "status": "PASS",
-      "ms": 432,
+      "ms": 415,
       "detail": {
         "curPath": "/opt/IBM/WebSphere/AppServer/profiles/AppSrv01/logs/server1"
       },
@@ -416,14 +416,14 @@
         }
       ],
       "screenshot": null,
-      "ts": "2026-06-23T00:57:33.035Z"
+      "ts": "2026-06-23T01:14:15.461Z"
     },
     {
       "idx": 30,
       "action": "files/btn-parent",
       "page": "#/files",
       "status": "PASS",
-      "ms": 840,
+      "ms": 839,
       "detail": {
         "curPath": "/opt/IBM/WebSphere/AppServer/profiles/AppSrv01/logs/server1"
       },
@@ -434,49 +434,49 @@
         }
       ],
       "screenshot": null,
-      "ts": "2026-06-23T00:57:33.875Z"
+      "ts": "2026-06-23T01:14:16.300Z"
     },
     {
       "idx": 31,
       "action": "files/btn-refresh",
       "page": "#/files",
       "status": "PASS",
-      "ms": 322,
+      "ms": 318,
       "detail": {
         "beforeCount": 0,
         "afterCount": 6
       },
       "errors": [],
       "screenshot": null,
-      "ts": "2026-06-23T00:57:34.197Z"
+      "ts": "2026-06-23T01:14:16.619Z"
     },
     {
       "idx": 32,
       "action": "files/btn-download-selected",
       "page": "#/files",
       "status": "PASS",
-      "ms": 14280,
+      "ms": 14318,
       "detail": {
         "enabled": true,
         "done": 0
       },
       "errors": [],
       "screenshot": "11-files-downloaded",
-      "ts": "2026-06-23T00:57:48.477Z"
+      "ts": "2026-06-23T01:14:30.937Z"
     },
     {
       "idx": 33,
       "action": "files/cancel-button-state",
       "page": "#/files",
       "status": "PASS",
-      "ms": 4,
+      "ms": 3,
       "detail": {
         "cancelBtnExists": true,
         "enabled": false
       },
       "errors": [],
       "screenshot": null,
-      "ts": "2026-06-23T00:57:48.481Z"
+      "ts": "2026-06-23T01:14:30.940Z"
     },
     {
       "idx": 34,
@@ -489,20 +489,20 @@
       },
       "errors": [],
       "screenshot": null,
-      "ts": "2026-06-23T00:57:48.550Z"
+      "ts": "2026-06-23T01:14:31.006Z"
     },
     {
       "idx": 35,
       "action": "formatter/json-minify",
       "page": "#/formatter",
       "status": "PASS",
-      "ms": 41,
+      "ms": 34,
       "detail": {
         "out": "{\"a\":1,\"b\":2}"
       },
       "errors": [],
       "screenshot": null,
-      "ts": "2026-06-23T00:57:48.591Z"
+      "ts": "2026-06-23T01:14:31.040Z"
     },
     {
       "idx": 36,
@@ -515,14 +515,14 @@
       },
       "errors": [],
       "screenshot": null,
-      "ts": "2026-06-23T00:57:49.017Z"
+      "ts": "2026-06-23T01:14:31.466Z"
     },
     {
       "idx": 37,
       "action": "formatter/json-validate-bad",
       "page": "#/formatter",
       "status": "PASS",
-      "ms": 434,
+      "ms": 433,
       "detail": {
         "toastTxt": "JSON 处理失败：JSON 非法: invalid character 'a' looking for beginning of object key string",
         "cls": "toast show err"
@@ -534,33 +534,33 @@
         }
       ],
       "screenshot": null,
-      "ts": "2026-06-23T00:57:49.451Z"
+      "ts": "2026-06-23T01:14:31.899Z"
     },
     {
       "idx": 38,
       "action": "formatter/xml-format",
       "page": "#/formatter",
       "status": "PASS",
-      "ms": 28,
+      "ms": 18,
       "detail": {
         "out": "{\"a\":1,\"b\":2}"
       },
       "errors": [],
       "screenshot": null,
-      "ts": "2026-06-23T00:57:49.479Z"
+      "ts": "2026-06-23T01:14:31.917Z"
     },
     {
       "idx": 39,
       "action": "formatter/xml-minify",
       "page": "#/formatter",
       "status": "PASS",
-      "ms": 24,
+      "ms": 26,
       "detail": {
         "out": "<a>\n  <b>1</b>\n  <c>2</c>\n</a>"
       },
       "errors": [],
       "screenshot": null,
-      "ts": "2026-06-23T00:57:49.503Z"
+      "ts": "2026-06-23T01:14:31.943Z"
     },
     {
       "idx": 40,
@@ -574,46 +574,46 @@
       },
       "errors": [],
       "screenshot": null,
-      "ts": "2026-06-23T00:57:49.611Z"
+      "ts": "2026-06-23T01:14:32.051Z"
     },
     {
       "idx": 41,
       "action": "formatter/btn-copy",
       "page": "#/formatter",
       "status": "PASS",
-      "ms": 360,
+      "ms": 363,
       "detail": {
         "toastTxt": "已复制"
       },
       "errors": [],
       "screenshot": null,
-      "ts": "2026-06-23T00:57:49.971Z"
+      "ts": "2026-06-23T01:14:32.414Z"
     },
     {
       "idx": 42,
       "action": "formatter/screenshot",
       "page": "#/formatter",
       "status": "PASS",
-      "ms": 68,
+      "ms": 65,
       "detail": {
         "ok": true
       },
       "errors": [],
       "screenshot": "12-formatter",
-      "ts": "2026-06-23T00:57:50.039Z"
+      "ts": "2026-06-23T01:14:32.479Z"
     },
     {
       "idx": 43,
       "action": "commands/placeholder",
       "page": "#/commands",
       "status": "PASS",
-      "ms": 248,
+      "ms": 260,
       "detail": {
         "preview": "常用命令\ngrep / find / tail / WebSphere 排查模板\n本模块属于第二阶段规划。第一阶段重点是首页导航、配置读取、SSH 测试连接、列出日志文件、JSON/XML 格式化。"
       },
       "errors": [],
       "screenshot": "13-commands-placeholder",
-      "ts": "2026-06-23T00:57:50.287Z"
+      "ts": "2026-06-23T01:14:32.739Z"
     },
     {
       "idx": 44,
@@ -628,7 +628,7 @@
       },
       "errors": [],
       "screenshot": "14-config",
-      "ts": "2026-06-23T00:57:50.400Z"
+      "ts": "2026-06-23T01:14:32.857Z"
     },
     {
       "idx": 45,
@@ -642,140 +642,140 @@
       },
       "errors": [],
       "screenshot": null,
-      "ts": "2026-06-23T00:57:50.402Z"
+      "ts": "2026-06-23T01:14:32.859Z"
     },
     {
       "idx": 46,
       "action": "config/dirty-and-reset",
       "page": "#/config",
       "status": "PASS",
-      "ms": 342,
+      "ms": 351,
       "detail": {
         "saveEnabled": true
       },
       "errors": [],
       "screenshot": null,
-      "ts": "2026-06-23T00:57:50.744Z"
+      "ts": "2026-06-23T01:14:33.210Z"
     },
     {
       "idx": 47,
       "action": "config/reload",
       "page": "#/config",
       "status": "PASS",
-      "ms": 46,
+      "ms": 48,
       "detail": {
         "sysCount": 1
       },
       "errors": [],
       "screenshot": null,
-      "ts": "2026-06-23T00:57:50.790Z"
+      "ts": "2026-06-23T01:14:33.258Z"
     },
     {
       "idx": 48,
       "action": "downloads/load",
       "page": "#/downloads",
       "status": "PASS",
-      "ms": 108,
+      "ms": 107,
       "detail": {
         "rowCount": 11,
         "summary": "加载中…"
       },
       "errors": [],
       "screenshot": "15-downloads",
-      "ts": "2026-06-23T00:57:50.918Z"
+      "ts": "2026-06-23T01:14:33.382Z"
     },
     {
       "idx": 49,
       "action": "downloads/btn-refresh",
       "page": "#/downloads",
       "status": "PASS",
-      "ms": 489,
+      "ms": 486,
       "detail": {
-        "rowCount": 213
+        "rowCount": 218
       },
       "errors": [],
       "screenshot": null,
-      "ts": "2026-06-23T00:57:51.407Z"
+      "ts": "2026-06-23T01:14:33.868Z"
     },
     {
       "idx": 50,
       "action": "downloads/filter-system",
       "page": "#/downloads",
       "status": "PASS",
-      "ms": 464,
+      "ms": 449,
       "detail": {
         "sysOpts": [
           "",
           "信贷生产（模拟）"
         ],
-        "rowCount": 213
+        "rowCount": 218
       },
       "errors": [],
       "screenshot": null,
-      "ts": "2026-06-23T00:57:51.871Z"
+      "ts": "2026-06-23T01:14:34.317Z"
     },
     {
       "idx": 51,
       "action": "downloads/check-clear-all-btn",
       "page": "#/downloads",
       "status": "PASS",
-      "ms": 4,
+      "ms": 3,
       "detail": {
         "btnExists": true
       },
       "errors": [],
       "screenshot": null,
-      "ts": "2026-06-23T00:57:51.875Z"
+      "ts": "2026-06-23T01:14:34.320Z"
     },
     {
       "idx": 52,
       "action": "downloads/check-delete-btns",
       "page": "#/downloads",
       "status": "PASS",
-      "ms": 36,
+      "ms": 42,
       "detail": {
-        "count": 213
+        "count": 218
       },
       "errors": [],
       "screenshot": null,
-      "ts": "2026-06-23T00:57:51.911Z"
+      "ts": "2026-06-23T01:14:34.362Z"
     },
     {
       "idx": 53,
       "action": "history/load",
       "page": "#/history",
       "status": "PASS",
-      "ms": 122,
+      "ms": 66,
       "detail": {
-        "rowCount": 213,
+        "rowCount": 0,
         "headTxt": "操作历史"
       },
       "errors": [],
       "screenshot": "16-history",
-      "ts": "2026-06-23T00:57:52.051Z"
+      "ts": "2026-06-23T01:14:34.453Z"
     },
     {
       "idx": 54,
       "action": "history/filter-op",
       "page": "#/history",
       "status": "PASS",
-      "ms": 448,
+      "ms": 445,
       "detail": {
-        "rowCount": 88,
+        "rowCount": 90,
         "ops": [
           "ssh.test"
         ]
       },
       "errors": [],
       "screenshot": null,
-      "ts": "2026-06-23T00:57:52.499Z"
+      "ts": "2026-06-23T01:14:34.898Z"
     },
     {
       "idx": 55,
       "action": "history/toggle-auto",
       "page": "#/history",
       "status": "PASS",
-      "ms": 351,
+      "ms": 349,
       "detail": {
         "before": "自动刷新: 关",
         "after1": "自动刷新: 开 (3s)",
@@ -783,33 +783,33 @@
       },
       "errors": [],
       "screenshot": null,
-      "ts": "2026-06-23T00:57:52.850Z"
+      "ts": "2026-06-23T01:14:35.247Z"
     },
     {
       "idx": 56,
       "action": "history/filter-system-server",
       "page": "#/history",
       "status": "PASS",
-      "ms": 449,
+      "ms": 466,
       "detail": {
-        "rowCount": 88
+        "rowCount": 90
       },
       "errors": [],
       "screenshot": null,
-      "ts": "2026-06-23T00:57:53.299Z"
+      "ts": "2026-06-23T01:14:35.713Z"
     },
     {
       "idx": 57,
       "action": "final/home-screenshot",
       "page": "#/home",
       "status": "PASS",
-      "ms": 308,
+      "ms": 318,
       "detail": {
         "ok": true
       },
       "errors": [],
       "screenshot": "00-final-home",
-      "ts": "2026-06-23T00:57:53.607Z"
+      "ts": "2026-06-23T01:14:36.031Z"
     }
   ],
   "consoleErrors": [
