@@ -117,6 +117,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleFilesPreview(w, r)
 	case path == "/api/files/download":
 		s.handleFilesDownload(w, r)
+	case path == "/api/local/reveal-file":
+		s.handleLocalReveal(w, r)
+	case path == "/api/local/open-folder":
+		s.handleLocalOpenFolder(w, r)
 	case strings.HasPrefix(path, "/api/files/download/"):
 		s.handleFilesDownloadEventsOrCancel(w, r)
 	// 注意：/api/logs/download-latest 必须在 /api/logs/download/ 之前匹配（精确匹配优先）

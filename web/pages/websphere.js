@@ -188,9 +188,12 @@
         const st = srvStatus[s.name] || { state: 'idle' };
         const dotCls = 'dot dot-' + (st.state === 'idle' ? 'idle' : st.state);
         const cb = el('input', { type: 'checkbox', 'data-srv': s.name, value: s.name });
+        // v0.5 #11：默认勾选目标服务器
+        //   - 有上次选择 → 恢复
+        //   - 无上次 → 默认勾全部（用户开箱即用；取消勾也行）
         const wasChecked = prevChecked.indexOf(s.name) !== -1
           || (lastForSys && lastForSys.indexOf(s.name) !== -1)
-          || (prevChecked.length === 0 && !lastForSys && st.state === 'ok'); // 首次加载：默认勾"已测通"那台
+          || (prevChecked.length === 0 && !lastForSys); // ← 无上次记忆时全选
         if (wasChecked) cb.checked = true;
         cb.addEventListener('change', () => { renderSrvDirs(); persistSelection(); refreshCredStatus(); });
         const item = el('label', { class: 'srv-pick-item' }, [
@@ -230,10 +233,14 @@
         const list = el('div', { class: 'srv-dirs-list' });
         (srv.log_dirs || []).forEach(d => {
           const cb = el('input', { type: 'checkbox', 'data-srv': srv.name, 'data-dir': d.path, value: d.path });
-          // 默认勾上（dirSel 命中时或上次记忆）
+          // v0.5 #11：默认勾选日志目录
+          //   - 有上次选择 → 恢复
+          //   - 无上次 → 父级 server 勾选了 → 默认全勾这个 server 的目录
+          //   - 无上次 + dirSel 命中 → 兜底勾上
           const dirHit = lastDirs.find(x => x.srv === srv.name && x.dir === d.path);
           const fallbackHit = (lastDirs.length === 0 && dirSel.value === d.path);
-          if (dirHit || fallbackHit) cb.checked = true;
+          const parentChecked = (lastDirs.length === 0 && wasChecked); // 同上：父级默认勾则目录默认全勾
+          if (dirHit || fallbackHit || parentChecked) cb.checked = true;
           cb.addEventListener('change', persistSelection);
           const enc = (d.encoding || 'utf-8').toLowerCase();
           const item = el('label', { class: 'srv-dirs-item' }, [
@@ -488,11 +495,25 @@
           const row = el('tr', { 'data-file': f.name, 'data-srv': g.server });
           const cb = el('input', { type: 'checkbox', 'data-file': f.name, 'data-srv': g.server, onchange: refreshSummary });
           const statusCell = el('td', { class: 'col-status', 'data-status': f.name });
+          // v0.5 #14：每行加 Tail / 新窗口 Tail 按钮（不用手输文件名）
+          const tailBtn = el('button', {
+            class: 'btn btn-sm',
+            text: '📺 内嵌 Tail',
+            title: '在下方 tail 区域跟踪此文件',
+            onclick: () => startTailForFile(g.server, g.dir, f.name)
+          });
+          const tailNewWinBtn = el('button', {
+            class: 'btn btn-sm',
+            text: '↗ 新窗口 Tail',
+            title: '在新窗口中跟踪此文件（避免本页卡死）',
+            onclick: () => openTailForFileInNewTab(g.server, g.dir, f.name)
+          });
           row.appendChild(el('td', { class: 'col-check' }, [cb]));
           row.appendChild(el('td', null, f.name));
           row.appendChild(el('td', { class: 'num', text: formatBytes(f.size) }));
           row.appendChild(el('td', { class: 'muted', text: formatTime(f.mod_time) }));
           row.appendChild(el('td', { class: 'muted', text: f.full_path }));
+          row.appendChild(el('td', null, [tailBtn, ' ', tailNewWinBtn]));
           row.appendChild(statusCell);
           tbody.appendChild(row);
         });
@@ -786,6 +807,19 @@
                 text: d.local,
               }));
               row.appendChild(document.createTextNode('（' + formatBytes(d.bytes) + '）'));
+              // v0.5-F P1-12：在文件管理器中显示 + 复制绝对路径
+              if (d.abs_path) {
+                row.appendChild(el('button', {
+                  class: 'btn btn-sm', text: '📂 打开', style: 'margin-left:8px;',
+                  title: '在 Finder/Explorer 中显示（' + d.abs_path + '）',
+                  onclick: () => revealLocal(d.abs_path)
+                }));
+                row.appendChild(el('button', {
+                  class: 'btn btn-sm', text: '📋', style: 'margin-left:4px;',
+                  title: '复制绝对路径：' + d.abs_path,
+                  onclick: () => copyToClipboard(d.abs_path)
+                }));
+              }
               block.appendChild(row);
             });
             inner.appendChild(block);
@@ -800,6 +834,18 @@
                 text: d.local,
               }));
               row.appendChild(document.createTextNode('（' + formatBytes(d.bytes) + '）'));
+              if (d.abs_path) {
+                row.appendChild(el('button', {
+                  class: 'btn btn-sm', text: '📂 打开', style: 'margin-left:8px;',
+                  title: '在 Finder/Explorer 中显示（' + d.abs_path + '）',
+                  onclick: () => revealLocal(d.abs_path)
+                }));
+                row.appendChild(el('button', {
+                  class: 'btn btn-sm', text: '📋', style: 'margin-left:4px;',
+                  title: '复制绝对路径：' + d.abs_path,
+                  onclick: () => copyToClipboard(d.abs_path)
+                }));
+              }
               block.appendChild(row);
             });
             inner.appendChild(block);
@@ -808,9 +854,68 @@
         }
         wrap.appendChild(grp);
       });
+      // v0.5-F P1-12：底部明确显示保存目录 + 一键打开 + 复制
       const folder = (allResults.find(r => r.folder) || {}).folder || '-';
-      wrap.appendChild(el('div', { class: 'text-dim mt-2', text: '本地保存目录：' + folder }));
+      const folderRow = el('div', {
+        class: 'text-dim mt-2',
+        style: 'display:flex; gap:8px; align-items:center; flex-wrap:wrap;'
+      }, [
+        el('span', null, [document.createTextNode('本地保存目录：' + folder)])
+      ]);
+      if (folder && folder !== '-') {
+        folderRow.appendChild(el('button', {
+          class: 'btn btn-sm', text: '📁 打开目录',
+          title: '在 Finder/Explorer 中打开目录',
+          onclick: () => openLocalFolder(folder)
+        }));
+        folderRow.appendChild(el('button', {
+          class: 'btn btn-sm', text: '📋 复制路径',
+          title: '复制目录绝对路径到剪贴板',
+          onclick: () => copyToClipboard(folder)
+        }));
+      }
+      wrap.appendChild(folderRow);
       fileTableWrap.parentNode.insertBefore(wrap, fileTableWrap.nextSibling);
+    }
+
+    // v0.5-F P1-12：调后端 reveal / open folder 接口
+    async function revealLocal(absPath) {
+      try {
+        await api('POST', '/api/local/reveal-file', { path: absPath });
+      } catch (e) {
+        toast('打开失败：' + e.message, 'err');
+      }
+    }
+    async function openLocalFolder(absDir) {
+      try {
+        await api('POST', '/api/local/open-folder', { path: absDir });
+      } catch (e) {
+        toast('打开目录失败：' + e.message, 'err');
+      }
+    }
+    // 复制文本到剪贴板（fallback：旧浏览器走 prompt）
+    function copyToClipboard(text) {
+      if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(text).then(
+          () => toast('已复制：' + text, 'ok'),
+          () => fallbackCopy(text)
+        );
+      } else {
+        fallbackCopy(text);
+      }
+    }
+    function fallbackCopy(text) {
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        toast('已复制：' + text, 'ok');
+      } catch (e) {
+        toast('复制失败：' + e.message, 'err');
+      }
     }
 
     async function doSearch() {
@@ -971,7 +1076,8 @@
     ]);
 
     // v0.5 #8：文件名参数 — 单文件 / 多文件 / glob 模糊匹配（空格或逗号分隔）
-    const filePatternInp = el('input', { type: 'text', id: 'ws-file-pattern', placeholder: '可选：如 SystemOut*.log 或 *.log,*.txt' });
+    // P1-08 改进：明确语义 — 填了 glob 后就只用 glob 匹配，N 仍控制"取最新 N 个匹配上的"
+    const filePatternInp = el('input', { type: 'text', id: 'ws-file-pattern', placeholder: '可选 glob（逗号/空格分隔）：例 SystemOut*.log 或 *.log,*.txt' });
 
     const searchCard = el('div', { class: 'card' }, [
       el('h3', { text: '多服务器并行搜索' }),
@@ -981,8 +1087,12 @@
         el('div', null, [el('label', { text: '并发' }), concSel])
       ]),
       el('div', { class: 'grid-2 mt-2' }, [
-        el('div', null, [el('label', { text: '搜索范围（每台）' }), filesNSel]),
-        el('div', null, [el('label', { text: '文件名（留空=走配置 patterns；填了覆盖）' }), filePatternInp])
+        el('div', null, [el('label', { text: '最近文件数（每台服务器每个目录）' }), filesNSel]),
+        el('div', null, [
+          el('label', { text: '文件名 glob（留空用配置 patterns；填了只搜匹配的文件）' }),
+          filePatternInp,
+          el('div', { class: 'text-dim', style: 'font-size:11.5px; margin-top:2px;', text: '💡 填 glob 后，N 仍限制"取匹配文件中的最新 N 个"（不是只搜 1 个）' })
+        ])
       ]),
       el('div', { class: 'grid-3 mt-2' }, [
         el('div', null, [el('label', { text: '时间范围' }), timeSel]),
@@ -1052,15 +1162,41 @@
       if (!file) { toast('请输入文件名', 'warn'); return; }
       const targets = getSelectedTargets();
       if (!targets.length) { toast('请先勾选服务器 + 目录（多对多）', 'warn'); return; }
-      // 新窗口跳转到独立 tail 页（带 system/server/dir/file 参数，登录态用 cookie 维持）
+      openTailForFileInNewTab(targets[0].server, targets[0].dir, file);
+    }
+
+    // v0.5 #14：点文件列表里的文件 → 直接开新窗口 tail（无需手输文件名）
+    function openTailForFileInNewTab(serverName, dirPath, fileName) {
       const params = new URLSearchParams({
         system: sysSel.value,
-        server: targets[0].server,
-        dir: targets[0].dir,
-        file: file,
+        server: serverName,
+        dir: dirPath,
+        file: fileName,
         lines: String(Math.max(0, Math.min(1000, Number(tailLinesInp.value) || 0)))
       });
       window.open('/static/tail.html?' + params.toString(), '_blank');
+    }
+
+    // v0.5 #14：点文件列表里的文件 → 在本页 tail 区域跟踪
+    // 把 server/dir/file 推到 tail 输入区，调 doTailStart
+    async function startTailForFile(serverName, dirPath, fileName) {
+      // 同步选中状态：把"目标选择区"里这台 server+dir 的 checkbox 勾上
+      // （保证 doTailStart 里 getSelectedTargets 能拿到对应目标）
+      try {
+        // 简化做法：直接拼请求 payload，不依赖全局 getSelectedTargets
+        tailFileInp.value = fileName;
+        // 直接构造 targets（[server, dir] 一项），绕过 UI 选择
+        const targets = getSelectedTargets();
+        const wantDir = dirPath;
+        const wantSrv = serverName;
+        if (!targets.find(t => t.server === wantSrv && t.dir === wantDir)) {
+          toast('请先在「目标选择」里勾选 ' + wantSrv + ' / ' + wantDir, 'warn');
+          return;
+        }
+        await doTailStart();
+      } catch (e) {
+        toast('启动 tail 失败：' + e.message, 'err');
+      }
     }
 
     async function doTailStop() {

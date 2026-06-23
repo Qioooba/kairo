@@ -281,12 +281,13 @@ func (s *Server) runLogsDownloadOnce(
 			return results, s.cur().DownloadDir(), 502, fmt.Errorf("下载 %s 失败: %w", f.Name, err)
 		}
 		results = append(results, dlmanager.Item{
-			File:   f.Name,
-			Local:  localName,
-			Bytes:  strconv.FormatInt(bytes, 10),
-			Remote: remote,
-			Date:   dateDir,
-			Kind:   "file",
+			File:    f.Name,
+			Local:   localName,
+			Bytes:   strconv.FormatInt(bytes, 10),
+			Remote:  remote,
+			Date:    dateDir,
+			Kind:    "file",
+			AbsPath: localPath, // v0.5-F：让前端能"在文件管理器中显示"
 		})
 		localPaths = append(localPaths, localPath)
 		// 写 sidecar 元数据 — 给"下载历史"页用
@@ -339,12 +340,13 @@ func (s *Server) runLogsDownloadOnce(
 			size = st.Size()
 		}
 		results = append(results, dlmanager.Item{
-			File:   "",
-			Local:  zipName,
-			Bytes:  strconv.FormatInt(size, 10),
-			Remote: "",
-			Date:   dateDir,
-			Kind:   "zip",
+			File:    "",
+			Local:   zipName,
+			Bytes:   strconv.FormatInt(size, 10),
+			Remote:  "",
+			Date:    dateDir,
+			Kind:    "zip",
+			AbsPath: zipPath, // v0.5-F：让前端能"在文件管理器中显示"
 		})
 		// 写 zip 的 sidecar：把包含的远端文件名记下来
 		fileNames := make([]string, 0, len(localPaths))

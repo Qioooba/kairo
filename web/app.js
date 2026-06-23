@@ -52,6 +52,8 @@
     const view = $('#view');
     if (!view) return;
     view.innerHTML = '';
+    // v0.5 P2-14：配置页有 fixed 底部保存栏，给 view 留 padding-bottom 防遮挡
+    view.classList.toggle('has-sticky-footer', name === 'config');
     try {
       routes[name](view);
     } catch (e) {

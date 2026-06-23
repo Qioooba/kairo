@@ -897,10 +897,11 @@ func (s *Server) runFilesDownloadTask(
 			size = st.Size()
 		}
 		results = append(results, dlmanager.Item{
-			Local: zipName,
-			Bytes: strconv.FormatInt(size, 10),
-			Date:  results[0].Date,
-			Kind:  "zip",
+			Local:   zipName,
+			Bytes:   strconv.FormatInt(size, 10),
+			Date:    results[0].Date,
+			Kind:    "zip",
+			AbsPath: zipPath, // v0.5-F：让前端能"在文件管理器中显示"
 		})
 		_ = downloads.WriteMeta(zipPath, downloads.Meta{
 			System: sess.System,
@@ -990,12 +991,13 @@ func (s *Server) downloadSeriesFree(
 		}
 
 		results = append(results, dlmanager.Item{
-			File:   base,
-			Local:  localName,
-			Bytes:  strconv.FormatInt(bytes, 10),
-			Remote: remote,
-			Date:   dateDir,
-			Kind:   "file",
+			File:    base,
+			Local:   localName,
+			Bytes:   strconv.FormatInt(bytes, 10),
+			Remote:  remote,
+			Date:    dateDir,
+			Kind:    "file",
+			AbsPath: localPath, // v0.5-F：让前端能"在文件管理器中显示"
 		})
 		localPaths = append(localPaths, localPath)
 		_ = downloads.WriteMeta(localPath, downloads.Meta{

@@ -173,12 +173,15 @@
       nameInp.addEventListener('input', () => { sys.name = nameInp.value; markDirty(); });
       descInp.addEventListener('input', () => { sys.description = descInp.value; markDirty(); });
       const btnUp = el('button', { class: 'btn btn-sm', text: '↑', title: '上移', onclick: () => { if (si > 0) { [state.systems[si-1], state.systems[si]] = [state.systems[si], state.systems[si-1]]; markDirty(); renderEditor(); } } });
-      const btnDown = el('button', { class: 'btn btn-sm', text: '↓', title: '下移', onclick: () => { if (si < state.systems.length - 1) { [state.systems[si+1], state.systems[si]] = [state.systems[si], state.systems[si+1]]; markDirty(); renderEditor(); } } });
+      const btnDown = el('button', { class: 'btn btn-sm', text: '↓', title: '下移', onclick: () => { if (si < state.systems.length - 1) { [state.systems[si+1], state.systems[si]] = [state.systems[si], state.systems[si-1]]; markDirty(); renderEditor(); } } });
       const btnDup = el('button', { class: 'btn btn-sm', text: '复制', onclick: () => { state.systems.splice(si+1, 0, JSON.parse(JSON.stringify(sys))); markDirty(); renderEditor(); } });
       const btnDel = el('button', { class: 'btn btn-sm btn-danger', text: '删除系统', onclick: () => { if (confirm('确认删除业务系统 “' + (sys.name || '(未命名)') + '” 及其全部服务器？')) { state.systems.splice(si, 1); markDirty(); renderEditor(); } } });
       btnUp.disabled = si === 0; btnDown.disabled = si === state.systems.length - 1;
 
+      // v0.5 #15：业务系统 badge + 编号
+      const sysBadge = el('span', { class: 'tier-badge tier-sys', text: '业务系统 ' + (si + 1) });
       wrap.appendChild(el('div', { class: 'sys-head' }, [
+        sysBadge,
         el('span', { class: 'sys-tag', text: '系统' }),
         el('div', { class: 'sys-name-input' }, nameInp),
         el('div', { class: 'sys-desc-input' }, descInp),
@@ -198,6 +201,8 @@
 
     function renderServerBlock(sys, srv, sri, onEdit) {
       const wrap = el('div', { class: 'srv-block' });
+      // v0.5 #15：服务器 badge + 编号
+      wrap.appendChild(el('div', { class: 'tier-badge tier-srv', text: '服务器 ' + (sri + 1) }));
       const fields = [
         ['name', '服务器名（必填）', 'text'],
         ['host', 'IP / 主机', 'text'],
@@ -256,7 +261,17 @@
 
       const btnSrvUp = el('button', { class: 'btn btn-sm', text: '↑', onclick: () => { if (sri > 0) { [sys.servers[sri-1], sys.servers[sri]] = [sys.servers[sri], sys.servers[sri-1]]; onEdit(); renderEditor(); } } });
       const btnSrvDown = el('button', { class: 'btn btn-sm', text: '↓', onclick: () => { if (sri < sys.servers.length - 1) { [sys.servers[sri+1], sys.servers[sri]] = [sys.servers[sri], sys.servers[sri+1]]; onEdit(); renderEditor(); } } });
-      const btnSrvDup = el('button', { class: 'btn btn-sm', text: '复制', onclick: () => { sys.servers.splice(sri+1, 0, JSON.parse(JSON.stringify(srv))); onEdit(); renderEditor(); } });
+      const btnSrvDup = el('button', {
+        class: 'btn btn-sm',
+        text: '📋 复制服务器（含日志目录）',
+        title: '复制这台服务器（含所有日志目录）到下一行。适合 app01 → app02 改名后复用。复制后会重名（自动加 -copy 后缀提示）。',
+        onclick: () => {
+          const copy = JSON.parse(JSON.stringify(srv));
+          if (copy.name && !copy.name.endsWith('-copy')) copy.name = copy.name + '-copy';
+          sys.servers.splice(sri+1, 0, copy);
+          onEdit(); renderEditor();
+        }
+      });
       const btnSrvDel = el('button', { class: 'btn btn-sm btn-danger', text: '删除服务器', onclick: () => { if (confirm('确认删除服务器 “' + (srv.name || '(未命名)') + '” 及其日志目录？')) { sys.servers.splice(sri, 1); onEdit(); renderEditor(); } } });
       btnSrvUp.disabled = sri === 0; btnSrvDown.disabled = sri === sys.servers.length - 1;
       wrap.appendChild(el('div', { class: 'srv-actions' }, [btnSrvUp, btnSrvDown, btnSrvDup, btnSrvDel]));
@@ -266,6 +281,8 @@
 
     function renderDirBlock(srv, ld, ldi, onEdit) {
       const wrap = el('div', { class: 'dir-block' });
+      // v0.5 #15：日志目录 badge + 编号
+      wrap.appendChild(el('div', { class: 'tier-badge tier-dir', text: '日志目录 ' + (ldi + 1) }));
       const nameInp = el('input', { type: 'text', value: ld.name || '', placeholder: '目录别名（必填）' });
       const pathInp = el('input', { type: 'text', value: ld.path || '', placeholder: '远端绝对路径（必填）' });
       // v0.5 #5：在 dir-block 顶部加一段字段说明，让用户不必翻文档就知道每个字段干嘛。

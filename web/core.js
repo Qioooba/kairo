@@ -80,6 +80,70 @@
   }
   core.toast = toast;
 
+  // notify(opts) — 右上角持久通知（含路径 + 操作按钮），项 16 用
+  //
+  // opts:
+  //   - title       (string)   标题
+  //   - body        (string)   正文（路径 / 文件名）
+  //   - type        ('ok'|'warn'|'err'|'')  颜色
+  //   - actions     [{label, callback}]      操作按钮
+  //   - duration    (ms, 默认 6000；0 = 不自动消失)
+  //   - id          (string)   同 id 通知会替换旧的（避免堆叠）
+  //
+  // 通知堆在 body 右上角的 #otb-notify-stack 容器里，
+  // 每条是一个 .otb-notify 卡片；点 × 关闭按钮立即移除。
+  function notify(opts) {
+    opts = opts || {};
+    const stack = ensureNotifyStack();
+    const id = opts.id;
+    if (id) {
+      const old = stack.querySelector('.otb-notify[data-id="' + cssEscape(id) + '"]');
+      if (old) old.remove();
+    }
+    const card = el('div', { class: 'otb-notify' + (opts.type ? ' ' + opts.type : '') });
+    if (id) card.setAttribute('data-id', id);
+    if (opts.title) {
+      card.appendChild(el('div', { class: 'otb-notify-title', text: opts.title }));
+    }
+    if (opts.body) {
+      card.appendChild(el('div', { class: 'otb-notify-body', text: opts.body }));
+    }
+    if (opts.actions && opts.actions.length) {
+      const actionsEl = el('div', { class: 'otb-notify-actions' });
+      opts.actions.forEach(a => {
+        actionsEl.appendChild(el('button', {
+          class: 'btn btn-sm',
+          text: a.label,
+          onclick: (e) => {
+            e.preventDefault();
+            try { a.callback && a.callback(); } catch (err) { console.warn('notify action err', err); }
+          }
+        }));
+      });
+      card.appendChild(actionsEl);
+    }
+    card.appendChild(el('button', {
+      class: 'otb-notify-close',
+      text: '×',
+      title: '关闭',
+      onclick: () => card.remove()
+    }));
+    stack.appendChild(card);
+    if (opts.duration !== 0) {
+      setTimeout(() => { if (card.parentNode) card.remove(); }, opts.duration || 6000);
+    }
+    return card;
+  }
+  function ensureNotifyStack() {
+    let stack = document.getElementById('otb-notify-stack');
+    if (!stack) {
+      stack = el('div', { id: 'otb-notify-stack', class: 'otb-notify-stack' });
+      document.body.appendChild(stack);
+    }
+    return stack;
+  }
+  core.notify = notify;
+
   function setStatus(state, text) {
     const dot = $('#status-dot');
     const txt = $('#status-text');

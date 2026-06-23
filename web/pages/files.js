@@ -909,7 +909,8 @@
         btnCancel.disabled = true;
         state.dlId = null;
         if (o.ok) {
-          toast('下载完成：' + (o.downloads || []).length + ' 个产物（去「下载历史」页打开/管理）', 'ok');
+          // 项 16：下载完成用 notify 通知（标题 + 路径 + 操作按钮）
+          showDownloadDoneNotify(o);
         } else {
           toast('下载失败：' + (o.error || '未知错误'), 'err');
           Object.keys(state.fileStates).forEach(p => {
@@ -923,6 +924,60 @@
         setStatus('idle');
         state.dlEvtSrc = null;
       }
+    }
+
+    // showDownloadDoneNotify 项 16：下载完成 → 右上角通知（标题 + 路径 + 操作按钮）
+    function showDownloadDoneNotify(o) {
+      const downloads = o.downloads || [];
+      const folder = o.folder || '';
+      const firstName = downloads[0] && downloads[0].local || downloads[0] && downloads[0].name || '';
+      const fileList = downloads.slice(0, 3).map(d => d.local || d.name || '').filter(Boolean).join(', ');
+      const more = downloads.length > 3 ? (' 等 ' + downloads.length + ' 个') : '';
+      const title = '✓ 下载完成 · ' + downloads.length + ' 个文件';
+      const body = folder + (fileList ? ('\n' + fileList + more) : '');
+      const actions = [];
+      if (firstName && folder) {
+        actions.push({
+          label: '📂 打开所在目录',
+          callback: async () => {
+            try {
+              await api('POST', '/api/downloads/' + encodeURIComponent(firstName) + '/open-dir');
+            } catch (e) {
+              toast('打开目录失败：' + e.message, 'err');
+            }
+          }
+        });
+      }
+      if (folder) {
+        actions.push({
+          label: '📋 复制路径',
+          callback: () => {
+            try {
+              if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(folder);
+                toast('路径已复制', 'ok');
+              } else {
+                // fallback：弹 textarea 让用户手动复制
+                window.prompt('复制此路径：', folder);
+              }
+            } catch (e) { toast('复制失败：' + e.message, 'err'); }
+          }
+        });
+      }
+      actions.push({
+        label: '📜 查看下载历史',
+        callback: () => {
+          if (location.hash !== '#/downloads') location.hash = '#/downloads';
+        }
+      });
+      OTB.core.notify({
+        id: 'download-' + (state.dlId || Date.now()),
+        type: 'ok',
+        title: title,
+        body: body,
+        actions: actions,
+        duration: 8000
+      });
     }
 
     function closeDownloadStream(reason) {

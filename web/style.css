@@ -346,18 +346,23 @@ textarea { resize: vertical; min-height: 100px; font-family: ui-monospace, SFMon
 .btn-ghost { background: transparent; }
 .btn-row { display: flex; gap: 8px; flex-wrap: wrap; }
 
-/* v0.5 #3：底部保存按钮组 — 长表单滚到底部也能直接保存 */
+/* v0.5 #3 + P2-14：底部保存按钮组 — 固定在视口底部，长表单任何位置都能直接保存 */
 .cfg-save-footer-bar {
-  position: sticky; bottom: 0;
+  position: fixed;
+  left: 240px; /* 跟 body grid-template-columns 240px 1fr 一致（sidebar 宽 240px） */
+  right: 0; bottom: 0;
   background: var(--bg-1);
-  z-index: 5;
-  margin-left: -20px; margin-right: -20px; margin-bottom: -18px;
-  padding: 12px 20px 16px;
+  z-index: 50;
+  padding: 10px 24px 14px;
   border-top: 1px solid var(--line);
-  box-shadow: 0 -4px 12px rgba(0,0,0,0.05);
+  box-shadow: 0 -6px 16px rgba(0, 0, 0, 0.08);
+  display: flex; gap: 8px; justify-content: flex-end;
 }
 .cfg-save-footer-bar .btn-primary { min-width: 80px; }
 .cfg-save-footer[disabled] { opacity: 0.55; cursor: not-allowed; }
+
+/* v0.5 P2-14：fixed 底部栏要避免遮挡 view 最后内容 — 给 view 底部留 80px 空间 */
+.view.has-sticky-footer { padding-bottom: 80px; }
 
 /* 表格 */
 .table {
@@ -828,3 +833,76 @@ input[type="datetime-local"] {
 
 /* 文件名链接 hover 效果（v0.5 项 1） */
 .table td a:hover { color: var(--primary-2); text-decoration: underline; }
+
+/* ===== v0.5 项 16：右上角通知栈（download done / 配置错误等） ===== */
+.otb-notify-stack {
+  position: fixed;
+  top: 56px;
+  right: 16px;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: none;
+  max-width: 380px;
+}
+.otb-notify {
+  pointer-events: auto;
+  position: relative;
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  border-left-width: 4px;
+  border-left-color: var(--primary);
+  border-radius: 8px;
+  padding: 10px 36px 10px 14px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+  font-size: 13px;
+  line-height: 1.5;
+  animation: otb-notify-slide-in 0.18s ease-out;
+}
+.otb-notify.ok { border-left-color: var(--success); }
+.otb-notify.warn { border-left-color: var(--warn); }
+.otb-notify.err { border-left-color: var(--error); }
+.otb-notify-title { font-weight: 600; margin-bottom: 4px; }
+.otb-notify-body {
+  color: var(--text-dim);
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.otb-notify-actions { margin-top: 8px; display: flex; gap: 6px; flex-wrap: wrap; }
+.otb-notify-close {
+  position: absolute;
+  top: 6px; right: 6px;
+  background: transparent; border: none;
+  font-size: 18px; line-height: 1;
+  color: var(--text-dim); cursor: pointer;
+  padding: 2px 6px; border-radius: 4px;
+}
+.otb-notify-close:hover { background: var(--bg-2); color: var(--text); }
+@keyframes otb-notify-slide-in {
+  from { opacity: 0; transform: translateX(40px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+/* ===== v0.5 #15：业务系统 / 服务器 / 日志目录 三层视觉 ===== */
+:root {
+  --tier-system: 4px solid var(--primary);     /* 紫色 4px */
+  --tier-server: 3px solid var(--success);      /* 绿色 3px */
+  --tier-dir:    2px dashed var(--warn);        /* 黄色 2px 虚线 */
+  --tier-app:    4px solid var(--accent, var(--info)); /* 应用/搜索/结果区用蓝色 */
+}
+.sys-block { border-left: var(--tier-system); padding-left: 12px; margin-bottom: 10px; }
+.srv-block { border-left: var(--tier-server); padding-left: 12px; margin-bottom: 8px; }
+.dir-block { border-left: var(--tier-dir);    padding-left: 12px; margin-bottom: 6px; }
+.app-block { border-left: var(--tier-app);    padding-left: 12px; margin-bottom: 10px; }
+.tier-badge {
+  display: inline-block; padding: 1px 8px; border-radius: 4px;
+  font-size: 11px; font-weight: 600; letter-spacing: 0.5px;
+  background: var(--bg-2); color: var(--text-dim);
+  margin-right: 6px;
+}
+.tier-badge.tier-sys { background: rgba(99,102,241,0.15); color: var(--primary-2, #818cf8); }
+.tier-badge.tier-srv { background: rgba(16,185,129,0.15); color: var(--success); }
+.tier-badge.tier-dir { background: rgba(245,158,11,0.15); color: var(--warn); }
