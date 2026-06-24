@@ -24,6 +24,7 @@ import (
 	"ops-toolbox/internal/audit"
 	"ops-toolbox/internal/config"
 	"ops-toolbox/internal/credentials"
+	"ops-toolbox/internal/downloads"
 	"ops-toolbox/internal/httpserver"
 	"ops-toolbox/internal/sshclient"
 	"ops-toolbox/internal/tailmgr"
@@ -98,6 +99,14 @@ func main() {
 		log.Fatalf("初始化审计日志失败: %v", err)
 	}
 	defer auditLog.Close()
+
+	// 4.9 项 4 迁移：把历史 .meta sidecar 文件合并到单文件索引 .ops-toolbox-meta.json。
+	// 一次性操作，幂等。失败不致命（侧车丢了只是丢元数据，不影响下载文件本身）。
+	if migrated, skipped, err := downloads.MigrateSidecars(cfg.DownloadDir()); err != nil {
+		log.Printf("WARNING: .meta sidecar 迁移失败: %v", err)
+	} else if migrated > 0 {
+		log.Printf("元数据迁移完成: 合并 %d 个 .meta 文件到单文件索引（跳过 %d 个）", migrated, skipped)
+	}
 
 	// 6. 嵌入的 web 静态资源
 	webSubFS, err := fs.Sub(webFS, "web")

@@ -1,17 +1,15 @@
-// Package downloads 管理 downloads/ 目录里的日志下载文件 + 元数据 sidecar。
+// Package downloads 管理 downloads/ 目录里的日志下载文件 + 元数据。
 //
-// 设计：每个数据文件（log / zip）旁边都放一个 .meta JSON 文件，记录：
-//   - 来源服务器、远端路径、原始文件名、编码、下载时间
+// 设计：
+//   - 数据文件按日期子目录存放（downloads/YYYYMMDD/<file>），原文件名保留
+//   - 元数据统一写到 downloads/.ops-toolbox-meta.json 单文件（key 是 "YYYYMMDD/<file>"）
+//     避免在 downloads/ 目录里散一堆 .meta 副作用文件
 //
 // 这样下载历史页能直接展示"这份文件是从哪台机器、哪个目录、什么时候下来的"，
-// 不依赖解析文件名约定（更稳）。
+// 不依赖解析文件名约定（更稳），同时 downloads/ 目录干净。
 //
-// 文件名约定：
-//   - 数据文件：<name>        （如 mock-node-1_server1_SystemOut.log_133800.log）
-//   - 元数据：  <name>.meta   （如 mock-node-1_server1_SystemOut.log_133800.log.meta）
-//
-// 注意：元数据是"尽力而为"的——如果 sidecar 丢了，List 仍然能列出数据文件，
-// 只是元字段为空。删除数据文件时同时删 sidecar。
+// 元数据是"尽力而为"的——索引文件丢了/写失败，List 仍然能列出数据文件，
+// 只是元字段为空（按目录名推断日期）。
 package downloads
 
 import (
@@ -23,7 +21,28 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
+)
+
+// metaIndexFile 索引文件名（隐藏在 downloads/ 根目录里）。
+const metaIndexFile = ".ops-toolbox-meta.json"
+
+// metaIndex 是元数据索引文件的结构：
+//   - Version: 文件格式版本（未来加字段用）
+//   - Files:   key="<date>/<file>" → Meta
+type metaIndex struct {
+	Version int             `json:"version"`
+	Files   map[string]Meta `json:"files"`
+}
+
+// metaIndexCache 进程内缓存：避免每次 List 都读盘。
+// 用 mtime 失效：写完索引后通过 atomic rename 更新 mtime，下次读会重 load。
+var (
+	metaCacheMu  sync.Mutex
+	metaCacheDir string
+	metaCache    *metaIndex
+	metaCacheMT  time.Time
 )
 
 // Meta 元数据 sidecar 内容
@@ -52,9 +71,13 @@ type Entry struct {
 	MetaPresent bool      `json:"meta_present"` // sidecar 是否存在
 }
 
-// WriteMeta 把元数据写到 <dataPath>.meta。
+// WriteMeta 把元数据写到 rootDir/.ops-toolbox-meta.json（按 "YYYYMMDD/file" 或 "file" 索引）。
 // 用 0o600 权限（不准备给其它用户看）；失败不返回错误也能继续（list 仍能看到文件），
 // 所以本函数不 panic，调用方按需决定是否报错。
+//
+// dataPath 相对于 rootDir 的两种合法形态：
+//   - "<file>"：直接放 rootDir 下（兼容历史/手工拷贝）
+//   - "<date>/<file>"：按日期子目录放（项 4 新约定）
 func WriteMeta(dataPath string, m Meta) error {
 	if m.DownloadedAt.IsZero() {
 		m.DownloadedAt = time.Now()
@@ -62,46 +85,185 @@ func WriteMeta(dataPath string, m Meta) error {
 	if m.Kind == "" {
 		m.Kind = "file"
 	}
-	b, err := json.MarshalIndent(m, "", "  ")
+	rootDir, rel, err := splitDataPath(dataPath)
 	if err != nil {
-		return fmt.Errorf("序列化元数据失败: %w", err)
+		return err
 	}
-	side := sidecarPath(dataPath)
-	if err := os.WriteFile(side, b, 0o600); err != nil {
-		return fmt.Errorf("写入 sidecar 失败: %w", err)
+	idx, mtime, err := loadMetaIndex(rootDir)
+	if err != nil {
+		return err
 	}
-	return nil
+	if idx.Files == nil {
+		idx.Files = map[string]Meta{}
+	}
+	idx.Files[rel] = m
+	return saveMetaIndex(rootDir, idx, mtime)
 }
 
-// ReadMeta 读 <dataPath> 的 sidecar；不存在时返回 (zeroMeta, false, nil)。
+// ReadMeta 读 rootDir/.ops-toolbox-meta.json 里 dataPath 对应的元数据；不存在时返回 (zeroMeta, false, nil)。
 func ReadMeta(dataPath string) (Meta, bool, error) {
-	side := sidecarPath(dataPath)
-	b, err := os.ReadFile(side)
+	rootDir, rel, err := splitDataPath(dataPath)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return Meta{}, false, nil
-		}
-		return Meta{}, false, fmt.Errorf("读 sidecar 失败: %w", err)
+		return Meta{}, false, err
 	}
-	var m Meta
-	if err := json.Unmarshal(b, &m); err != nil {
-		return Meta{}, false, fmt.Errorf("解析 sidecar 失败: %w", err)
+	idx, _, err := loadMetaIndex(rootDir)
+	if err != nil {
+		return Meta{}, false, err
 	}
-	return m, true, nil
+	m, ok := idx.Files[rel]
+	return m, ok, nil
 }
 
-// List 列出 rootDir 下所有数据文件（不含 .meta）+ 它们的元数据。
+// splitDataPath 把 dataPath 拆成 (rootDir, rel)，rel 是相对 rootDir 的 "YYYYMMDD/file" 或 "file"。
+//
+// 算法：dataPath 可能是绝对路径或相对路径。我们先在 rootDir 候选里找
+// 第一个"包含 <date>/<file> 三段"的父目录；如果都没有，就把 rootDir 整个当
+// rootDir，rel = 整个相对路径。这样两种目录布局都兼容。
+//
+// 但因为 WriteMeta / ReadMeta / Delete 没有传 rootDir（只传 dataPath），
+// 我们用更简单的策略：dataPath = rootDir/<rest>，倒推 rootDir 是包含 dataPath
+// 的最大 "downloads" 目录。具体做法：把 dataPath 转为绝对路径，往上找
+// 直到找到一个含 ".ops-toolbox-meta.json" 或就是传入路径的祖父目录。
+//
+// 这里采用最稳的方案：dataPath 必须是 rootDir/<date>/<file> 或 rootDir/<file>
+// 形态，我们反推 rootDir 最多两层：
+//   - 父目录名是 YYYYMMDD 格式 → 祖父是 rootDir
+//   - 否则 父目录就是 rootDir
+func splitDataPath(dataPath string) (rootDir, rel string, err error) {
+	abs, err := filepath.Abs(dataPath)
+	if err != nil {
+		return "", "", fmt.Errorf("解析路径失败: %w", err)
+	}
+	dir := filepath.Dir(abs)             // 父目录
+	base := filepath.Base(dir)           // 父目录名
+	if isLikelyDateDir(base) {
+		// .../downloads/YYYYMMDD/<file> → rootDir=.../downloads, rel=YYYYMMDD/<file>
+		rootDir = filepath.Dir(dir)
+		rel = filepath.ToSlash(filepath.Join(base, filepath.Base(abs)))
+		return rootDir, rel, nil
+	}
+	// .../downloads/<file> → rootDir=.../downloads, rel=<file>
+	rootDir = dir
+	rel = filepath.Base(abs)
+	return rootDir, rel, nil
+}
+
+// loadMetaIndex 加载 rootDir 下的索引文件，命中 mtime 缓存。
+// 返回 (idx, mtime, error)。写回时 mtime 用于乐观锁（避免多写者互相覆盖）。
+func loadMetaIndex(rootDir string) (*metaIndex, time.Time, error) {
+	metaCacheMu.Lock()
+	defer metaCacheMu.Unlock()
+	indexPath := filepath.Join(rootDir, metaIndexFile)
+	st, statErr := os.Stat(indexPath)
+	if statErr != nil {
+		if os.IsNotExist(statErr) {
+			// 文件不存在 → 空索引；同时清掉进程缓存（rootDir 切换时）
+			if metaCacheDir == rootDir && metaCache != nil {
+				metaCache = &metaIndex{Version: 1}
+				metaCacheMT = time.Time{}
+			}
+			return &metaIndex{Version: 1}, time.Time{}, nil
+		}
+		return nil, time.Time{}, fmt.Errorf("stat 索引失败: %w", statErr)
+	}
+	// 命中缓存：rootDir 匹配 + mtime 一致
+	if metaCacheDir == rootDir && metaCache != nil && metaCacheMT.Equal(st.ModTime()) {
+		return metaCache, st.ModTime(), nil
+	}
+	// 失效 → 读盘
+	b, err := os.ReadFile(indexPath)
+	if err != nil {
+		return nil, time.Time{}, fmt.Errorf("读索引失败: %w", err)
+	}
+	var idx metaIndex
+	if err := json.Unmarshal(b, &idx); err != nil {
+		return nil, time.Time{}, fmt.Errorf("解析索引失败: %w", err)
+	}
+	if idx.Files == nil {
+		idx.Files = map[string]Meta{}
+	}
+	metaCacheDir = rootDir
+	metaCache = &idx
+	metaCacheMT = st.ModTime()
+	return metaCache, st.ModTime(), nil
+}
+
+// saveMetaIndex 原子写回索引：先写临时文件再 rename，并发安全。
+// mtimeOld 是 load 时的索引文件 mtime；如果对账时 mtime 变了（其它进程改了），
+// 我们重新读 → merge → 再写一次（最多重试 3 次，避免活锁）。
+func saveMetaIndex(rootDir string, idx *metaIndex, mtimeOld time.Time) error {
+	indexPath := filepath.Join(rootDir, metaIndexFile)
+	for attempt := 0; attempt < 3; attempt++ {
+		b, err := json.MarshalIndent(idx, "", "  ")
+		if err != nil {
+			return fmt.Errorf("序列化索引失败: %w", err)
+		}
+		// 写临时文件 + rename（atomic on POSIX / best-effort on Windows）
+		tmp, err := os.CreateTemp(rootDir, ".ops-toolbox-meta-*.tmp")
+		if err != nil {
+			return fmt.Errorf("创建临时索引失败: %w", err)
+		}
+		tmpName := tmp.Name()
+		// 0o600 权限（跟原 sidecar 一样）
+		if err := tmp.Chmod(0o600); err != nil {
+			tmp.Close()
+			os.Remove(tmpName)
+			return fmt.Errorf("设置权限失败: %w", err)
+		}
+		if _, err := tmp.Write(b); err != nil {
+			tmp.Close()
+			os.Remove(tmpName)
+			return fmt.Errorf("写临时索引失败: %w", err)
+		}
+		if err := tmp.Close(); err != nil {
+			os.Remove(tmpName)
+			return fmt.Errorf("关闭临时索引失败: %w", err)
+		}
+		// 乐观锁：先看看 mtime 是否变了
+		if !mtimeOld.IsZero() {
+			if st, err := os.Stat(indexPath); err == nil && !st.ModTime().Equal(mtimeOld) {
+				// 别人改了 → 重新读 + merge + 再写
+				_ = os.Remove(tmpName)
+				cur, _, lerr := loadMetaIndex(rootDir)
+				if lerr != nil {
+					return lerr
+				}
+				for k, v := range idx.Files {
+					cur.Files[k] = v
+				}
+				idx = cur
+				mtimeOld = st.ModTime()
+				continue
+			}
+		}
+		if err := os.Rename(tmpName, indexPath); err != nil {
+			os.Remove(tmpName)
+			return fmt.Errorf("rename 索引失败: %w", err)
+		}
+		// 失效缓存（让下次 load 重新读盘拿到新 mtime）
+		metaCacheMu.Lock()
+		if metaCacheDir == rootDir {
+			metaCache = nil
+			metaCacheMT = time.Time{}
+		}
+		metaCacheMu.Unlock()
+		return nil
+	}
+	return errors.New("saveMetaIndex: 乐观锁重试超限")
+}
+
+// List 列出 rootDir 下所有数据文件 + 它们的元数据。
 //
 //   - 按 mtime 倒序；
-//   - 跳过隐藏文件（. 开头）和 .meta sidecar；
+//   - 跳过隐藏文件（. 开头，含 .ops-toolbox-meta.json 索引文件）；
 //   - 子目录（如 downloads/20260621/）递归；
 //   - rootDir 不存在时返回空切片和 nil；
-//   - 列表策略：优先列有 sidecar 元数据的文件（确认是 ops-toolbox 下载产物）；
-//     没 sidecar 的兜底按扩展名收（.log / .zip / .txt / .gz / .tar / .properties 等常见后缀），
+//   - 列表策略：优先列有元数据的文件（确认是 ops-toolbox 下载产物）；
+//     没元数据的兜底按扩展名收（.log / .zip / .txt / .gz / .tar / .properties 等常见后缀），
 //     避免 v0.3 文件浏览器下载的 .properties / .xml 等"任意文件"不显示在历史里。
 //
 // 兜底推断（项 16）：
-//   - 如果文件位于 downloads/YYYYMMDD/ 子目录但没有 sidecar，把子目录名当 Date；
+//   - 如果文件位于 downloads/YYYYMMDD/ 子目录但没有元数据，把子目录名当 Date；
 //   - 这样手动 cp 进来的文件也能在历史里看到（虽然元数据为空）。
 func List(rootDir string) ([]Entry, error) {
 	var out []Entry
@@ -122,8 +284,8 @@ func List(rootDir string) ([]Entry, error) {
 		if strings.HasPrefix(name, ".") {
 			return nil
 		}
-		// 跳过 sidecar
-		if strings.HasSuffix(name, ".meta") {
+		// 跳过元数据索引文件（以防用户手动复制时被 WalkDir 撞到）
+		if name == metaIndexFile {
 			return nil
 		}
 		info, statErr := d.Info()
@@ -133,8 +295,8 @@ func List(rootDir string) ([]Entry, error) {
 		rel, _ := filepath.Rel(rootDir, path)
 		meta, hasMeta, _ := ReadMeta(path)
 		// 决定是否列出 + kind 标签：
-		//   1. 有 sidecar：列出，kind 来自 meta
-		//   2. 无 sidecar：按扩展名兜底列常见文件类型，kind="file"（或 zip）
+		//   1. 有元数据：列出，kind 来自 meta
+		//   2. 无元数据：按扩展名兜底列常见文件类型，kind="file"（或 zip）
 		if !hasMeta {
 			ext := strings.ToLower(filepath.Ext(name))
 			if !isListableExt(ext) {
@@ -149,8 +311,8 @@ func List(rootDir string) ([]Entry, error) {
 		} else {
 			kind = "file"
 		}
-		// 兜底推断：文件在 downloads/YYYYMMDD/ 子目录里但没 sidecar，
-		// 把子目录名当作 Date 填进 meta 字段（不会写回 sidecar），
+		// 兜底推断：文件在 downloads/YYYYMMDD/ 子目录里但没元数据，
+		// 把子目录名当作 Date 填进 meta 字段（不会写回索引），
 		// 让"下载历史"页能展示出来。
 		if !hasMeta {
 			dir := filepath.Dir(rel)
@@ -290,7 +452,7 @@ func isListableExt(ext string) bool {
 	return allow[ext]
 }
 
-// Delete 删除一个文件 + 它的 sidecar。
+// Delete 删除一个文件 + 从元数据索引里移除对应条目。
 //   - name 必须是相对 rootDir 的路径，不允许含 ".." 或绝对路径；
 //   - 删除后必须仍然在 rootDir 范围内（防穿越）。
 func Delete(rootDir, name string) error {
@@ -304,8 +466,8 @@ func Delete(rootDir, name string) error {
 		}
 		return fmt.Errorf("删除文件失败: %w", err)
 	}
-	// 删 sidecar（不存在也没关系）
-	_ = os.Remove(sidecarPath(abs))
+	// 从索引里删条目（不存在也没关系 —— 文件没了元数据也无意义）
+	removeFromIndex(rootDir, name)
 	return nil
 }
 
@@ -318,6 +480,8 @@ func DeleteAll(rootDir string) (int, error) {
 		return 0, err
 	}
 	n := 0
+	// 先把所有要删的 name 收集起来，一次性更新索引（避免每删一次都 load/save）
+	toRemove := make([]string, 0, len(entries))
 	for _, e := range entries {
 		if err := os.Remove(e.Path); err != nil {
 			if errors.Is(err, fs.ErrNotExist) {
@@ -325,14 +489,182 @@ func DeleteAll(rootDir string) (int, error) {
 			}
 			return n, fmt.Errorf("删除 %s 失败: %w", e.Name, err)
 		}
-		_ = os.Remove(sidecarPath(e.Path))
+		toRemove = append(toRemove, e.Name)
 		n++
+	}
+	if len(toRemove) > 0 {
+		removeFromIndexBulk(rootDir, toRemove)
 	}
 	return n, nil
 }
 
-// sidecarPath 返回 dataPath 对应的 sidecar 路径（<path>.meta）。
-func sidecarPath(dataPath string) string { return dataPath + ".meta" }
+// removeFromIndex 从 rootDir 的索引文件里移除单条 key。
+func removeFromIndex(rootDir, relName string) {
+	metaCacheMu.Lock()
+	defer metaCacheMu.Unlock()
+	indexPath := filepath.Join(rootDir, metaIndexFile)
+	st, err := os.Stat(indexPath)
+	if err != nil {
+		return // 索引文件不存在 → 没东西可删
+	}
+	// 命中缓存：用缓存版本（写回时一并 save）
+	if metaCacheDir == rootDir && metaCache != nil && metaCacheMT.Equal(st.ModTime()) {
+		delete(metaCache.Files, filepath.ToSlash(relName))
+		b, _ := json.MarshalIndent(metaCache, "", "  ")
+		tmp, err := os.CreateTemp(rootDir, ".ops-toolbox-meta-*.tmp")
+		if err == nil {
+			tmp.Chmod(0o600)
+			tmp.Write(b)
+			tmp.Close()
+			_ = os.Rename(tmp.Name(), indexPath)
+			metaCacheMT = time.Time{}
+			metaCache = nil
+		}
+		return
+	}
+	// 缓存失效：直接读盘 + 改 + 写
+	b, err := os.ReadFile(indexPath)
+	if err != nil {
+		return
+	}
+	var idx metaIndex
+	if err := json.Unmarshal(b, &idx); err != nil {
+		return
+	}
+	if idx.Files == nil {
+		return
+	}
+	delete(idx.Files, filepath.ToSlash(relName))
+	bb, _ := json.MarshalIndent(idx, "", "  ")
+	tmp, err := os.CreateTemp(rootDir, ".ops-toolbox-meta-*.tmp")
+	if err != nil {
+		return
+	}
+	tmp.Chmod(0o600)
+	tmp.Write(bb)
+	tmp.Close()
+	_ = os.Rename(tmp.Name(), indexPath)
+}
+
+// removeFromIndexBulk 批量删除：避免 N 次 IO 抖动。
+func removeFromIndexBulk(rootDir string, names []string) {
+	metaCacheMu.Lock()
+	defer metaCacheMu.Unlock()
+	indexPath := filepath.Join(rootDir, metaIndexFile)
+	st, err := os.Stat(indexPath)
+	if err != nil {
+		return
+	}
+	if metaCacheDir == rootDir && metaCache != nil && metaCacheMT.Equal(st.ModTime()) {
+		for _, n := range names {
+			delete(metaCache.Files, filepath.ToSlash(n))
+		}
+		b, _ := json.MarshalIndent(metaCache, "", "  ")
+		tmp, err := os.CreateTemp(rootDir, ".ops-toolbox-meta-*.tmp")
+		if err == nil {
+			tmp.Chmod(0o600)
+			tmp.Write(b)
+			tmp.Close()
+			_ = os.Rename(tmp.Name(), indexPath)
+			metaCacheMT = time.Time{}
+			metaCache = nil
+		}
+		return
+	}
+	b, err := os.ReadFile(indexPath)
+	if err != nil {
+		return
+	}
+	var idx metaIndex
+	if err := json.Unmarshal(b, &idx); err != nil {
+		return
+	}
+	if idx.Files == nil {
+		return
+	}
+	for _, n := range names {
+		delete(idx.Files, filepath.ToSlash(n))
+	}
+	bb, _ := json.MarshalIndent(idx, "", "  ")
+	tmp, err := os.CreateTemp(rootDir, ".ops-toolbox-meta-*.tmp")
+	if err != nil {
+		return
+	}
+	tmp.Chmod(0o600)
+	tmp.Write(bb)
+	tmp.Close()
+	_ = os.Rename(tmp.Name(), indexPath)
+}
+
+// MigrateSidecars 从老的 .meta sidecar 格式迁移到单文件索引。
+//
+// 一次性工具：扫描 rootDir 下所有 <name>.meta 文件，把内容合并到
+// .ops-toolbox-meta.json 索引文件，然后删掉 sidecar。
+//
+// 调用方：CLI 命令（root 启动时一次性跑一次）；或管理员手动。
+// 幂等：跑过一次后再跑没副作用（sidecar 已经删完，索引文件已存在）。
+//
+// 返回：迁移的 sidecar 数量、跳过的数量、错误。
+func MigrateSidecars(rootDir string) (migrated, skipped int, err error) {
+	idx, mtime, err := loadMetaIndex(rootDir)
+	if err != nil {
+		return 0, 0, err
+	}
+	walkErr := filepath.WalkDir(rootDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			return nil
+		}
+		name := d.Name()
+		if !strings.HasSuffix(name, ".meta") {
+			return nil
+		}
+		// 跳过 .ops-toolbox-meta.json 自身（万一以后改后缀）
+		if name == metaIndexFile {
+			return nil
+		}
+		// 读 sidecar
+		b, rerr := os.ReadFile(path)
+		if rerr != nil {
+			skipped++
+			return nil
+		}
+		var m Meta
+		if jerr := json.Unmarshal(b, &m); jerr != nil {
+			skipped++
+			return nil
+		}
+		// 算 dataPath 相对 key（"YYYYMMDD/file" 或 "file"）
+		dataPath := strings.TrimSuffix(path, ".meta")
+		rel, _ := filepath.Rel(rootDir, dataPath)
+		relSlash := filepath.ToSlash(rel)
+		// 合并到索引
+		if existing, ok := idx.Files[relSlash]; ok {
+			// 已存在 → 用更完整的（保留 DownloadedAt 早的）
+			if existing.DownloadedAt.IsZero() || (!m.DownloadedAt.IsZero() && m.DownloadedAt.Before(existing.DownloadedAt)) {
+				idx.Files[relSlash] = m
+			}
+		} else {
+			idx.Files[relSlash] = m
+		}
+		// 删 sidecar
+		if rerr := os.Remove(path); rerr == nil {
+			migrated++
+		} else {
+			skipped++
+		}
+		return nil
+	})
+	if walkErr != nil {
+		return migrated, skipped, fmt.Errorf("遍历失败: %w", walkErr)
+	}
+	if err := saveMetaIndex(rootDir, idx, mtime); err != nil {
+		return migrated, skipped, fmt.Errorf("保存索引失败: %w", err)
+	}
+	return migrated, skipped, nil
+}
 
 // safeJoin 把 name 安全拼到 rootDir 下（防 ../ 穿越）。
 func safeJoin(rootDir, name string) (string, error) {

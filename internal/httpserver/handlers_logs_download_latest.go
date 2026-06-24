@@ -219,12 +219,9 @@ func (s *Server) runLogsDownloadOnce(
 
 	now := time.Now()
 	dateDir := now.Format("20060102")
-	// 时间戳用下划线分隔（项 18）：HHMMSS_mmm，比点号在文件名里更稳。
-	stamp := now.Format("150405_000")
-	// 目录别名：把 log_dir.path 的最后一段当作"dirName"，让多服务器同名日志也能区分
-	dirAlias := filepath.Base(ld.Path)
-	// 下载文件落点：downloads/YYYYMMDD/serverName_dirName_originalName_HHMMSS_mmm.log
-	// （多台服务器同时下载同名 SystemOut.log 时不会互相覆盖）
+	// 项 4 修复：保留远端原始文件名，不再加 server/dir/timestamp 前缀。
+	// 多服务器同名日志：落到 downloads/YYYYMMDD/server_<name>__<file> 下避免覆盖。
+	// 旧行为：server_dir_file_HHMMSS_000.log  →  新行为：原始 basename
 	targetDir := filepath.Join(s.cur().DownloadDir(), dateDir)
 	// 收集已经下到本地的文件路径，zip 时按这个顺序打包
 	localPaths := make([]string, 0, latest)
@@ -245,16 +242,22 @@ func (s *Server) runLogsDownloadOnce(
 		}
 		f := files[i]
 		remote := filepath.ToSlash(filepath.Join(ld.Path, f.Name))
-		localName := fmt.Sprintf("%s_%s_%s_%s.log",
-			sanitize(srv.Name), sanitize(dirAlias), sanitize(f.Name), stamp)
-		localPath := filepath.Join(targetDir, localName)
+		// 项 4 修复：保留原始文件名 + 服务器前缀（仅当文件名会冲突时）
+		// 多台服务器同时下载同名 SystemOut.log 时加 server 前缀区分
+		localBase := uniqueLocalName(targetDir, sanitize(f.Name), sanitize(srv.Name))
+		localPath := filepath.Join(targetDir, localBase)
 
 		// 异步：广播 file_start
+		// 项 5 修复：附带 server/dir 字段，前端 websphere 的 handleDownloadEvent
+		// 按 "server|dir|basename" 拼 key 找行；不附带 → key 退化成 "undefined|undefined|..."，
+		// 永远查不到行（状态实时更新就废了）。
 		if sess != nil {
 			sess.BroadcastEvent("file_start", map[string]any{
-				"file":  remote,
-				"index": i,
-				"total": latest,
+				"file":   remote,
+				"index":  i,
+				"total":  latest,
+				"server": srv.Name,
+				"dir":    ld.Path,
 			})
 		}
 
@@ -265,6 +268,8 @@ func (s *Server) runLogsDownloadOnce(
 					"file":    remote,
 					"written": w,
 					"total":   t,
+					"server":  srv.Name,
+					"dir":     ld.Path,
 				})
 			}
 		}
@@ -274,15 +279,17 @@ func (s *Server) runLogsDownloadOnce(
 			// 异步：广播错误行让前端知道
 			if sess != nil {
 				sess.BroadcastEvent("file_fail", map[string]any{
-					"file":  remote,
-					"error": err.Error(),
+					"file":   remote,
+					"error":  err.Error(),
+					"server": srv.Name,
+					"dir":    ld.Path,
 				})
 			}
 			return results, s.cur().DownloadDir(), 502, fmt.Errorf("下载 %s 失败: %w", f.Name, err)
 		}
 		results = append(results, dlmanager.Item{
 			File:    f.Name,
-			Local:   localName,
+			Local:   localBase,
 			Bytes:   strconv.FormatInt(bytes, 10),
 			Remote:  remote,
 			Date:    dateDir,
@@ -290,13 +297,13 @@ func (s *Server) runLogsDownloadOnce(
 			AbsPath: localPath, // v0.5-F：让前端能"在文件管理器中显示"
 		})
 		localPaths = append(localPaths, localPath)
-		// 写 sidecar 元数据 — 给"下载历史"页用
+		// 写元数据索引（项 4：写到 .ops-toolbox-meta.json，避免散落 .meta 文件）
 		_ = downloads.WriteMeta(localPath, downloads.Meta{
 			System:   system,
 			Server:   srv.Name,
 			Host:     fmt.Sprintf("%s:%d", srv.Host, srv.Port),
 			Dir:      ld.Path,
-			DirAlias: dirAlias,
+			DirAlias: filepath.Base(ld.Path),
 			File:     f.Name,
 			Encoding: ld.Encoding,
 			Kind:     "file",
@@ -306,15 +313,18 @@ func (s *Server) runLogsDownloadOnce(
 		// 异步：广播 file_done
 		if sess != nil {
 			sess.BroadcastEvent("file_done", map[string]any{
-				"file":  remote,
-				"bytes": bytes,
+				"file":   remote,
+				"bytes":  bytes,
+				"server": srv.Name,
+				"dir":    ld.Path,
 			})
 		}
 	}
 	// 是否额外打 zip？
 	if zip && latest >= 2 {
-		zipName := fmt.Sprintf("%s_%s_latest_%s.zip",
-			sanitize(srv.Name), sanitize(dirAlias), stamp)
+		// 项 4 修复：zip 名也用简洁格式（不再带 HHMMSS 戳，跟 data 文件保持一致）
+		zipName := fmt.Sprintf("%s_latest_%s_%d.zip",
+			sanitize(srv.Name), dateDir, latest)
 		zipPath := filepath.Join(targetDir, zipName)
 		// 项 17：用远端原始文件名打包（传 ZipSource{NameInZip}）
 		sources := make([]ZipSource, 0, len(localPaths))
@@ -348,7 +358,7 @@ func (s *Server) runLogsDownloadOnce(
 			Kind:    "zip",
 			AbsPath: zipPath, // v0.5-F：让前端能"在文件管理器中显示"
 		})
-		// 写 zip 的 sidecar：把包含的远端文件名记下来
+		// 写 zip 的元数据索引：把包含的远端文件名记下来
 		fileNames := make([]string, 0, len(localPaths))
 		for i := 0; i < latest && i < len(files); i++ {
 			fileNames = append(fileNames, files[i].Name)
@@ -358,7 +368,7 @@ func (s *Server) runLogsDownloadOnce(
 			Server:   srv.Name,
 			Host:     fmt.Sprintf("%s:%d", srv.Host, srv.Port),
 			Dir:      ld.Path,
-			DirAlias: dirAlias,
+			DirAlias: filepath.Base(ld.Path),
 			Files:    fileNames,
 			Encoding: ld.Encoding,
 			Kind:     "zip",

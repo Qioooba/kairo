@@ -130,8 +130,9 @@ func TestDeleteRemovesSidecar(t *testing.T) {
 	if _, err := os.Stat(data); !os.IsNotExist(err) {
 		t.Errorf("data file should be gone")
 	}
-	if _, err := os.Stat(sidecarPath(data)); !os.IsNotExist(err) {
-		t.Errorf("sidecar should be gone")
+	// 项 4 修复：元数据从单文件索引读，Delete 后 ReadMeta 应该拿不到
+	if _, ok, _ := ReadMeta(data); ok {
+		t.Errorf("index should not contain deleted file")
 	}
 }
 

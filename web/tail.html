@@ -53,7 +53,13 @@
         <button id="btn-clear" class="btn">清屏</button>
         <button id="btn-stop" class="btn btn-danger">停止 tail</button>
         <button id="btn-close" class="btn">关闭本页</button>
-        <span class="text-dim" id="rate" style="margin-left:auto;">实时显示中</span>
+        <!-- 项 11 修复：可配的"最多保留 N 行"上限（默认 1000）—— 大日志场景下避免页面卡 -->
+        <label class="inline" style="margin-left:auto;">
+          <span class="text-dim">最多保留</span>
+          <input type="number" id="max-lines" min="100" max="50000" step="100" value="1000" style="width: 90px;" />
+          <span class="text-dim">行</span>
+        </label>
+        <span class="text-dim" id="rate">实时显示中</span>
       </div>
       <pre id="tail-out" class="tail-out">等待数据…</pre>
     </section>

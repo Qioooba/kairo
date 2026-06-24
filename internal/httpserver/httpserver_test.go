@@ -18,6 +18,7 @@ import (
 
 	"ops-toolbox/internal/audit"
 	"ops-toolbox/internal/config"
+	"ops-toolbox/internal/downloads"
 	"ops-toolbox/internal/logquery"
 	"ops-toolbox/internal/tailmgr"
 )
@@ -477,16 +478,21 @@ func TestDownloadsList_Empty(t *testing.T) {
 
 func TestDownloadsList_WithFiles(t *testing.T) {
 	srv, _, _, dlDir := newTestServer(t)
-	// 准备一个数据文件 + sidecar
+	// 准备一个数据文件 + 通过 WriteMeta 写元数据（项 4：单文件索引）
 	sub := filepath.Join(dlDir, time.Now().Format("20060102"))
 	_ = os.MkdirAll(sub, 0o755)
 	dataPath := filepath.Join(sub, "test.log")
 	_ = os.WriteFile(dataPath, []byte("hello"), 0o600)
-	_ = os.WriteFile(dataPath+".meta", []byte(`{
-		"system":"信贷生产","server":"mock-1","host":"10.0.0.1:22",
-		"dir":"/opt/logs/SystemOut","dir_alias":"SystemOut",
-		"file":"test.log","encoding":"utf-8","kind":"file"
-	}`), 0o600)
+	_ = downloads.WriteMeta(dataPath, downloads.Meta{
+		System:   "信贷生产",
+		Server:   "mock-1",
+		Host:     "10.0.0.1:22",
+		Dir:      "/opt/logs/SystemOut",
+		DirAlias: "SystemOut",
+		File:     "test.log",
+		Encoding: "utf-8",
+		Kind:     "file",
+	})
 
 	w := doRequest(srv, "GET", "/api/downloads/list", nil)
 	if w.Code != 200 {
@@ -517,7 +523,9 @@ func TestDownloadsList_FilterBySystem(t *testing.T) {
 	for _, sys := range []string{"sysA", "sysB"} {
 		p := filepath.Join(sub, sys+".log")
 		_ = os.WriteFile(p, []byte("x"), 0o600)
-		_ = os.WriteFile(p+".meta", []byte(`{"system":"`+sys+`","server":"s","file":"x.log","kind":"file"}`), 0o600)
+		_ = downloads.WriteMeta(p, downloads.Meta{
+			System: sys, Server: "s", File: "x.log", Kind: "file",
+		})
 	}
 	q := url.Values{}
 	q.Add("system", "sysA")

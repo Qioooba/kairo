@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"ops-toolbox/internal/audit"
 	"ops-toolbox/internal/credentials"
@@ -215,6 +216,39 @@ func sanitize(s string) string {
 		s = s[:80]
 	}
 	return s
+}
+
+// uniqueLocalName 在 targetDir 下找一个不冲突的本地文件名（项 4：保留原文件名）。
+//
+// 规则：
+//   - 如果 rawBase 在 targetDir 下不存在 → 直接用 rawBase
+//   - 否则加 "<server>__" 前缀（避免跨 server 同名冲突），还不够再降级到 _2/_3
+//
+// 设计动机：用户希望保留远端原始文件名（SystemOut.log），但多台 server 同时下
+// 同一文件时仍需区分。
+func uniqueLocalName(targetDir, rawBase, serverName string) string {
+	candidate := rawBase
+	if !fileExists(filepath.Join(targetDir, candidate)) {
+		return candidate
+	}
+	// 多 server 冲突：加 server 前缀
+	if serverName != "" {
+		candidate = sanitize(serverName) + "__" + rawBase
+		if !fileExists(filepath.Join(targetDir, candidate)) {
+			return candidate
+		}
+	}
+	// 仍冲突：拆 ext 拼 _N
+	ext := filepath.Ext(rawBase)
+	base := strings.TrimSuffix(rawBase, ext)
+	for i := 2; i < 1000; i++ {
+		candidate = fmt.Sprintf("%s_%d%s", base, i, ext)
+		if !fileExists(filepath.Join(targetDir, candidate)) {
+			return candidate
+		}
+	}
+	// 真撞了 1000 次：放弃可读性，直接用时间戳兜底
+	return fmt.Sprintf("%s_%d%s", base, time.Now().UnixNano(), ext)
 }
 
 // trim 把字符串按 rune 数截断到 n 个，加 "..."

@@ -114,16 +114,25 @@
     const fileCard = el('div', { class: 'card' });
     fileCard.appendChild(el('h3', { text: '3. 选择并下载' }));
     // v0.5 #17：文件名模糊过滤（前端实时；支持子串 / *.log / log?）
+    // 修：项 1 — input 事件**只更新数据 + markDirty**，不重建 DOM。
+    // 重建只在 debounce 后（200ms）触发一次；防 layout 抖动 + input 失焦。
     const filterInp = el('input', {
       type: 'text',
       id: 'files-filter',
       placeholder: '过滤文件名（子串 / 通配符 * ?, 例 SystemOut 或 *.log）',
-      style: 'min-width: 280px;'
+      style: 'flex: 0 1 280px; min-width: 160px;'
     });
+    let filterDebounce = null;
     filterInp.addEventListener('input', () => {
       state.filter = filterInp.value || '';
       OTB.core.lastSet('files', 'filter', state.filter);
-      renderTable();
+      // 防抖：避免每个按键都重渲染整张表 → 200ms 静默后才 render
+      if (filterDebounce) clearTimeout(filterDebounce);
+      filterDebounce = setTimeout(() => {
+        filterDebounce = null;
+        // 关键：从当前 input 取值（state.filter 已是最新），不在事件里重建 input
+        renderTable();
+      }, 180);
     });
     const filterClearBtn = el('button', { class: 'btn btn-sm', text: '清空', onclick: () => {
       filterInp.value = '';
@@ -132,9 +141,11 @@
       renderTable();
     }});
     const filterCountEl = el('span', { id: 'files-filter-count', class: 'text-dim' });
+    // 项 1 修复：filter 容器让 .lbl 用 inline-block（不撑成 block），避免 flex 里
+    // 出现"过滤"两个字被竖排 / 换行的视觉错乱。
+    const filterLabel = el('label', { class: 'inline' }, [document.createTextNode('过滤：'), filterInp]);
     fileCard.appendChild(el('div', { class: 'mt-2', style: 'display:flex; gap:8px; align-items:center; flex-wrap:wrap;' }, [
-      el('span', { class: 'lbl', text: '过滤：' }),
-      filterInp, filterClearBtn, filterCountEl
+      filterLabel, filterClearBtn, filterCountEl
     ]));
     fileCard.appendChild(el('div', { class: 'file-toolbar' }, [
       btnSelAll, btnSelNone, selCount, dlZipLabel, btnDownload, btnCancel
@@ -874,6 +885,10 @@
       btnDownload.disabled = true;
       btnCancel.disabled = false;
       setStatus('busy', '下载中…');
+      // 项 2 修复：每个下载任务开始时生成稳定的 notify id（"files-时间戳"），
+      // 同任务即便多次重推 done 事件，notify 也会去重（见 OTB.core.notify 的 id 去重逻辑）。
+      // 多任务之间也不会互相覆盖。
+      state.lastNotifyId = 'files-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
       try {
         const r = await api('POST', '/api/files/download', {
           system: state.currentSys, server: state.currentSrv,
@@ -958,6 +973,10 @@
     }
 
     // showDownloadDoneNotify 项 16：下载完成 → 右上角通知（标题 + 路径 + 操作按钮）
+    // 项 2 修复：notify id 改成"任务级别"（state.lastNotifyId，启动时生成一次）。
+    // 原版用 state.dlId，但 dlId 在 done 事件里被立刻置 null，导致 id 退化成
+    // Date.now() 随机值，同一 task 的多次 done 回调（旧连接残留 / 重连后
+    // MarkFinished 重新推 done）会堆出多条通知。
     function showDownloadDoneNotify(o) {
       const downloads = o.downloads || [];
       const folder = o.folder || '';
@@ -972,7 +991,8 @@
           label: '📂 打开所在目录',
           callback: async () => {
             try {
-              await api('POST', '/api/downloads/' + encodeURIComponent(firstName) + '/open-dir');
+              // 项 3 修复：用 query 而非 path 参数，避免 name 含 "/"（按日期子目录）时被 path 解析拒掉
+              await api('POST', '/api/downloads/open-dir?name=' + encodeURIComponent(firstName));
             } catch (e) {
               toast('打开目录失败：' + e.message, 'err');
             }
@@ -1002,7 +1022,7 @@
         }
       });
       OTB.core.notify({
-        id: 'download-' + (state.dlId || Date.now()),
+        id: state.lastNotifyId || ('download-' + Date.now()),
         type: 'ok',
         title: title,
         body: body,

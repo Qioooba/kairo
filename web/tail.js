@@ -34,9 +34,18 @@
   $('#m-file').textContent = file || '?';
 
   // 读取本地保存的密码（如果有），让用户不用再输入
+  // 优先级：opener 的 OTB._tailCred（项 9 修复）> localStorage > 弹窗 prompt
   function getStoredCred() {
+    // 1) 项 9：opener 实时传过来的当前凭据（用户在主页刚填的，最准）
     try {
-      // 同源 localStorage 共享主页面
+      const op = window.opener;
+      if (op && op.OTB && op.OTB._tailCred && op.OTB._tailCred[system + '::' + server]) {
+        const c = op.OTB._tailCred[system + '::' + server];
+        if (c && c.password) return { username: c.username || '', password: c.password };
+      }
+    } catch (e) { /* ignore (跨源 opener 会抛) */ }
+    // 2) localStorage 兜底（旧版或者用户在主页点过"记住密码"）
+    try {
       const key = 'otb:cred:' + system + '::' + server;
       const raw = localStorage.getItem(key);
       if (raw) {
@@ -71,6 +80,17 @@
   let lastRateAt = Date.now();
   let lastRateCount = 0;
   let rateEl = $('#rate');
+  // 项 11 修复：行数上限从 UI 读，可配（默认 1000）。限制至少 100，最多 50000
+  // —— 日志大场景下避免页面卡顿/内存爆。
+  const maxLinesInp = $('#max-lines');
+  function getMaxLines() {
+    const v = Math.max(100, Math.min(50000, Number(maxLinesInp && maxLinesInp.value) || 1000));
+    return v;
+  }
+  // 让 flushTail 能用：MAX_TAIL_LINES 改成动态 getter
+  // （保留同名变量以免改太多地方）— 实际上把 getMaxLines() 直接 inline 到 flushTail 里
+  // 就行，MAX_TAIL_LINES 改为 let，每次 flush 重新读。
+  let MAX_TAIL_LINES = 1000;
 
   // 批量 append 优化：每 100ms 或累积 200 行 flush 一次，避免 textContent 拼接抖动
   function scheduleFlush() {
@@ -80,19 +100,28 @@
   function flushTail() {
     flushTimer = null;
     if (paused || pendingLines.length === 0) return;
+    // 项 11 修复：每次 flush 重新读 max-lines，UI 改值立即生效
+    MAX_TAIL_LINES = getMaxLines();
     const chunk = pendingLines.join('\n') + '\n';
     pendingLines = [];
     // 用 appendChild 节点而非 textContent +=，避免整段重排
     tailOut.appendChild(document.createTextNode(chunk));
     totalLines += chunk.split('\n').length - 1;
     $('#m-lines').textContent = totalLines + ' 行';
-    // 自动滚动到底部
-    tailOut.scrollTop = tailOut.scrollHeight;
-    // 限速：5000 行上限
+    // 限速：MAX_TAIL_LINES 上限（项 11 修复：之前是 5000 写死，现在改可配）
     const linesArr = tailOut.textContent.split('\n');
-    if (linesArr.length > 5000) {
-      tailOut.textContent = linesArr.slice(linesArr.length - 5000).join('\n');
-      totalLines = 5000;
+    if (linesArr.length > MAX_TAIL_LINES) {
+      // 项 11 修复：截断后立刻滚到底（旧版截断后 scrollTop 没更新，停在中间位置）
+      tailOut.textContent = linesArr.slice(linesArr.length - MAX_TAIL_LINES).join('\n');
+      totalLines = MAX_TAIL_LINES;
+      tailOut.scrollTop = tailOut.scrollHeight;
+    } else {
+      // 自动滚动到底部（如果用户在中间看历史，就不强制滚到底 —— 通过
+      // 距离底部 < 80px 才认为"在底部"，否则保持位置）
+      const distToBottom = tailOut.scrollHeight - tailOut.clientHeight - tailOut.scrollTop;
+      if (distToBottom < 80) {
+        tailOut.scrollTop = tailOut.scrollHeight;
+      }
     }
     // 速率显示
     const now = Date.now();
@@ -120,6 +149,19 @@
     $('#m-lines').textContent = '0 行';
     rateEl.textContent = '实时显示中';
   });
+  // 项 11 修复：max-lines 改动时立即 trim 到新上限（不等下一波 flush）
+  if (maxLinesInp) {
+    maxLinesInp.addEventListener('change', () => {
+      const newMax = getMaxLines();
+      const linesArr = tailOut.textContent.split('\n');
+      if (linesArr.length > newMax) {
+        tailOut.textContent = linesArr.slice(linesArr.length - newMax).join('\n');
+        totalLines = newMax;
+        $('#m-lines').textContent = totalLines + ' 行';
+        tailOut.scrollTop = tailOut.scrollHeight;
+      }
+    });
+  }
   btnStop.addEventListener('click', async () => {
     if (tailId) {
       try { await fetch('/api/logs/tail/' + tailId + '/stop', { method: 'POST' }); } catch (e) {}

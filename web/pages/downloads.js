@@ -15,9 +15,12 @@
     const summaryEl = el('div', { class: 'text-dim', text: '加载中…' });
     const sysSel = el('select', null);
     sysSel.appendChild(el('option', { value: '', text: '全部系统' }));
-    sysSel.appendChild(el('option', { value: '信贷生产（模拟）', text: '信贷生产（模拟）' }));
     const srvSel = el('select', null);
     srvSel.appendChild(el('option', { value: '', text: '全部服务器' }));
+    // 项 16 修复：保存"所有已下过的系统/服务器"作为下拉候选项 —— 即使按系统过滤后
+    // 文件数 = 0，下拉里仍能看到所有历史值（不会因为筛掉就消失）。
+    const allSystems = new Set();
+    const allServers = new Set();
     const tableWrap = el('div', { class: 'mt-3' });
     const btnRefresh = el('button', { class: 'btn', text: '刷新', onclick: load });
     const btnClearAll = el('button', { class: 'btn btn-danger', text: '清空全部', onclick: doClearAll });
@@ -35,6 +38,17 @@
     sysSel.addEventListener('change', load);
     srvSel.addEventListener('change', load);
 
+    // 启动时主动拉 /api/config 填系统下拉（项 16 修复：之前写死"信贷生产"是 mock）
+    api('GET', '/api/config').then(info => {
+      const cur = sysSel.value;
+      (info.systems || []).forEach(s => {
+        if (s.name) {
+          sysSel.appendChild(el('option', { value: s.name, text: s.name + (s.description ? ' · ' + s.description : '') }));
+        }
+      });
+      sysSel.value = cur;
+    }).catch(() => { /* ignore — 仍可看 downloads/ 已下文件 */ });
+
     async function load() {
       summaryEl.textContent = '加载中…';
       tableWrap.innerHTML = '';
@@ -43,13 +57,28 @@
         if (sysSel.value) qs.set('system', sysSel.value);
         if (srvSel.value) qs.set('server', srvSel.value);
         const r = await api('GET', '/api/downloads/list' + (qs.toString() ? '?' + qs : ''));
-        renderRows(r.files || []);
-        // 填充 server 下拉
-        const srvSet = new Set((r.files || []).map(f => f.server).filter(Boolean));
+        const files = r.files || [];
+        renderRows(files);
+        // 项 16 修复：把这次返回的 sys/srv 也加进历史集合，下拉里始终展示所有出现过的值
+        // （之前 srvSel.innerHTML = '' 把没出现过的全删了，用户的下拉选项就丢了）
+        files.forEach(f => {
+          if (f.server) allServers.add(f.server);
+          if (f.system) allSystems.add(f.system);
+        });
+        // sysSel 选项由 /api/config 决定（业务系统列表是配置固定的，不依赖 downloads 内容），
+        // 但如果下载历史里有"配置里删了但 downloads/ 里还在"的孤儿系统（删系统后没清理 downloads），
+        // 也加进 sysSel，让用户能看到/筛
+        const curSys = sysSel.value;
+        allSystems.forEach(s => {
+          if (!Array.from(sysSel.options).find(o => o.value === s)) {
+            sysSel.appendChild(el('option', { value: s, text: s + '（已下架）' }));
+          }
+        });
+        sysSel.value = curSys;
         const curSrv = srvSel.value;
         srvSel.innerHTML = '';
         srvSel.appendChild(el('option', { value: '', text: '全部服务器' }));
-        Array.from(srvSet).sort().forEach(s => srvSel.appendChild(el('option', { value: s, text: s })));
+        Array.from(allServers).sort().forEach(s => srvSel.appendChild(el('option', { value: s, text: s })));
         srvSel.value = curSrv;
         summaryEl.textContent = r.count + ' 个文件 · 占用 ' + r.total_human + ' · 目录 ' + r.folder;
         summaryEl.className = 'text-dim mt-2';

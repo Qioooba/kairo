@@ -662,7 +662,20 @@ textarea { resize: vertical; min-height: 60px; font-family: ui-monospace, monosp
   overflow: auto;
   white-space: pre;
   margin: 0;
+  /* 项 10 修复：Webkit 浏览器（macOS Safari / Chrome）默认滚动条是浮动显示，
+     用户摸不到也看不到。改用常驻的 thin scrollbar（高度占比直观）。 */
+  scrollbar-width: thin; /* Firefox */
+  scrollbar-color: rgba(255,255,255,0.35) transparent; /* Firefox */
 }
+.tail-out::-webkit-scrollbar { width: 12px; height: 12px; } /* Chrome / Safari 滚动条更宽更明显 */
+.tail-out::-webkit-scrollbar-track { background: transparent; }
+.tail-out::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.30);
+  border-radius: 6px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+.tail-out::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.50); background-clip: padding-box; border: 2px solid transparent; }
 
 /* ===== v3 视觉优化 ===== */
 
@@ -988,6 +1001,120 @@ input[type="datetime-local"] {
 }
 .ws-tab-content.active {
   display: block;
+}
+/* v0.6-Redesign：tab badge — 显示文件数/命中数/跟踪状态 */
+.ws-tab-badge {
+  display: none;
+  font-size: 11px;
+  line-height: 1;
+  padding: 3px 7px;
+  border-radius: 10px;
+  background: var(--bg-2);
+  color: var(--text-dim);
+  border: 1px solid var(--line);
+  white-space: nowrap;
+  min-width: 18px;
+  text-align: center;
+}
+/* v0.6-fix：用 :has() 显式表达"父 tab-item 含 active btn 时给 badge 换主题色"，
+   避免依赖 btn 和 badge 的兄弟位置关系（之前用 `.btn + .ws-tab-badge` 在重构时容易踩坑）。
+   浏览器支持：Chrome 105+ / Safari 15.4+ / Firefox 121+。 */
+.ws-tab-bar .ws-tab-item:has(> .btn.active) > .ws-tab-badge {
+  background: rgba(255, 255, 255, 0.22);
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.35);
+}
+/* v0.6-fix：tail 多 target 警告条颜色用 CSS class（之前是内联硬编码 amber） */
+.ws-tail-warn {
+  padding: 8px 12px;
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  border-radius: 6px;
+  color: #f59e0b;
+  font-size: 12.5px;
+  margin-top: 8px;
+}
+/* v0.6-fix：light 主题下用深一点的 amber，确保对比度 */
+:root[data-theme="light"] .ws-tail-warn,
+:root[data-theme="hc"] .ws-tail-warn {
+  color: #b45309;
+  background: rgba(245, 158, 11, 0.18);
+  border-color: rgba(245, 158, 11, 0.5);
+}
+
+/* ===== v0.7-Redesign（第二波）：目标区可折叠摘要 ===== */
+/* 顶部摘要行：单行胶囊，显示当前 targets 一目了然。点击右侧按钮展开/收起。 */
+.ws-target-summary-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  margin-bottom: 0;
+}
+.ws-target-summary-badge {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.ws-target-toggle {
+  flex: none;
+}
+/* 主体（默认折叠时整段隐藏） */
+.ws-target-body {
+  /* 默认显示状态由 inline style 控制（折叠时 JS 设 display:none） */
+  margin-top: 10px;
+}
+/* 让 ws-target-body 内部的第一个 h3 不要重复顶部留白（外面 formCard 已经有 padding） */
+.ws-target-body > h3:first-child {
+  margin-top: 0;
+}
+
+/* ===== v0.7-Redesign（第三波）：files tab 顶部 toolbar ===== */
+/* 把原来堆在 formCard 底部的 [列出文件] [下载最新 N + zip + 目录] 移到这里。
+   按归属调整按钮：files tab 专属功能就该待在 files tab 里。 */
+.files-toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.files-toolbar-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.files-toolbar-row .lbl {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.files-toolbar-row #ws-dl-target-dir {
+  min-width: 180px;
+}
+.files-wrap > .files-toolbar:first-child {
+  /* toolbar 永远在最上面 */
+}
+.files-wrap > .card {
+  /* fileTableWrap 是 .card；让它紧跟在 toolbar 后面 */
+  margin-top: 0;
+}
+/* v0.7：files tab 初始 placeholder（"暂无文件，先点列出文件"） */
+.ws-files-placeholder {
+  padding: 16px 12px;
+  font-size: 13px;
 }
 @keyframes ws-tab-flash-anim {
   0%   { background: var(--primary-fade); }

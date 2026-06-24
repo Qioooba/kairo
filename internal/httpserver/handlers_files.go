@@ -883,9 +883,9 @@ func (s *Server) runFilesDownloadTask(
 
 	// 可选 zip（>= 2 个文件才打）
 	if sess.Zip && len(results) >= 2 {
-		// 跟下载文件同毫秒戳，保证 zip 命名跟里面文件保持一致。
+		// 项 4 修复：zip 名改成简洁的 server_files_YYYYMMDD.zip（去掉毫秒戳）
 		zipName := fmt.Sprintf("%s_files_%s.zip",
-			sanitize(srv.Name), time.Now().Format("150405_000"))
+			sanitize(srv.Name), results[0].Date)
 		// v0.5 #18：用 sess.Folder 替代硬编码 s.cur().DownloadDir()，
 		// 这样用户在请求里指定 target_dir 时 zip 也跟着落到同一目录。
 		zipPath := filepath.Join(sess.Folder, results[0].Date, zipName)
@@ -948,8 +948,6 @@ func (s *Server) downloadSeriesFree(
 ) ([]dlmanager.Item, error) {
 	now := time.Now()
 	dateDir := now.Format("20060102")
-	// 毫秒级时间戳避免同秒内重复下载互相覆盖。
-	stamp := now.Format("150405_000")
 	// v0.5 #18：用 sess.Folder 替代硬编码 s.cur().DownloadDir()，
 	// 这样用户在请求里指定 target_dir 时文件落点跟着变。
 	targetDir := filepath.Join(sess.Folder, dateDir)
@@ -977,15 +975,19 @@ func (s *Server) downloadSeriesFree(
 		}
 
 		base := filepath.Base(remote)
+		// 项 5 修复：附带 server/dir，前端 handleDownloadEvent 按
+		// "server|dir|basename" 拼 key 找行；不附 → key 退化成 "undefined|undefined|..."，永远查不到行。
 		sess.BroadcastEvent("file_start", map[string]any{
-			"file":  remote,
-			"index": idx,
-			"total": len(paths),
+			"file":   remote,
+			"index":  idx,
+			"total":  len(paths),
+			"server": srv.Name,
+			"dir":    filepath.Dir(remote),
 		})
 
-		// 用 idx+1 三位数（001/002/...）防止同 basename 互相覆盖
-		localName := fmt.Sprintf("%s_%03d_%s_%s",
-			sanitize(srv.Name), idx+1, sanitize(base), stamp)
+		// 项 4 修复：保留远端原始 basename，不再加 server_001_xxx_HHMMSS 前缀。
+		// 多 server 同名冲突由 uniqueLocalName 处理（加 server__ 前缀）。
+		localName := uniqueLocalName(targetDir, sanitize(base), sanitize(srv.Name))
 		localPath := filepath.Join(targetDir, localName)
 
 		progress := func(w, t int64) {
@@ -993,6 +995,8 @@ func (s *Server) downloadSeriesFree(
 				"file":    remote,
 				"written": w,
 				"total":   t,
+				"server":  srv.Name,
+				"dir":     filepath.Dir(remote),
 			})
 		}
 
@@ -1023,8 +1027,10 @@ func (s *Server) downloadSeriesFree(
 		s.audit.Write("files.download", "system", sess.System, "server", srv.Name, "path", remote, "result", "ok", "bytes", bytes)
 
 		sess.BroadcastEvent("file_done", map[string]any{
-			"file":  remote,
-			"bytes": bytes,
+			"file":   remote,
+			"bytes":  bytes,
+			"server": srv.Name,
+			"dir":    filepath.Dir(remote),
 		})
 	}
 	return results, nil

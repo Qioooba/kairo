@@ -175,6 +175,10 @@
       });
       // P1-8：勾选变化时实时刷新目标摘要（按 server/dir 组合显示）
       try { updateTargetSummary(); } catch (e) { /* ignore */ }
+      // v0.6-Redesign：tail tab 也要跟着 target 变化刷新（多 target 时显示警告）
+      try { refreshTailTargetSel(); } catch (e) { /* ignore */ }
+      // v0.7-Redesign（第二波）：目标区可折叠摘要行 —— 勾选变化要同步刷新单行摘要
+      try { renderTargetSummary(); } catch (e) { /* ignore */ }
     }
     function renderSrvPick() {
       const prevChecked = getCheckedServers();
@@ -280,6 +284,15 @@
         dirSel.appendChild(el('option', { value: d.path, text: (d.name || d.path) + '  ·  ' + d.path }));
         dlTargetSel.appendChild(el('option', { value: d.path, text: (d.name || d.path) + '  ·  ' + d.path }));
       });
+      // 项 7 修复：默认选第一个目录（让 getSelectedTargets 在二级目录没勾时
+      // 也能 fallback 到 dirSel 返回有效 targets）。lastSel.dir 已被 loadCfg 读进来，
+      // 如果在配置里设过就走 lastSel.dir，否则走第一个。
+      const lastSel = OTB.core.lastGet('websphere', 'sel');
+      if (lastSel && lastSel.dir && dirSel.querySelector('option[value="' + cssEscape(lastSel.dir) + '"]')) {
+        dirSel.value = lastSel.dir;
+      } else if (dirSel.options.length > 0 && !dirSel.value) {
+        dirSel.value = dirSel.options[0].value;
+      }
     }
     sysSel.addEventListener('change', () => { renderSrvPick(); refreshDirs(); refreshCredStatus(); persistSelection(); });
     // P1-8：renderSrvDirs / renderSrvPick 内部本来就会 persistSelection，所以这里
@@ -304,7 +317,87 @@
       title: '留空 → 走 cfg.download_dir。写绝对路径 → 落到指定目录。'
     });
 
-    const fileTableWrap = el('div', { class: 'card', style: 'display:none' });
+    // ===== v0.7-Redesign（第二波）：目标区可折叠摘要 =====
+    // 默认折叠：顶部一行单行摘要 + 「✏️ 修改目标」按钮。
+    // 展开后看到完整表单（业务系统/服务器/目录/凭据/测试连接）。
+    // 第三波会把 [列出文件] [下载最新 N] 等"文件 tab 专属"按钮从 formCard 挪走。
+    // 折叠状态记忆到 localStorage，跨刷新保持。
+    const targetCollapsedKey = 'websphere_target_collapsed';
+    // 项 14 修复：默认展开（v0.8 调整）。
+    // 原版默认折叠 → 用户进入页面只看到一行摘要 + "✏️ 修改目标"按钮，看不到表单。
+    // 第一次用的人会以为这是空状态、不知道要点按钮。改为默认展开：
+    //   - 旧用户 lastSet 'collapsed' → 仍然折叠（保留个人偏好）
+    //   - 旧用户 lastSet 'expanded' → 展开
+    //   - 新用户 / 未设置 → 展开
+    let targetCollapsed = false;
+    try {
+      const saved = OTB.core.lastGet('websphere', 'target_collapsed');
+      if (saved === 'collapsed') targetCollapsed = true;
+    } catch (e) { /* keep default (展开) */ }
+    const targetSummaryBadge = el('span', { class: 'ws-target-summary-badge' });
+    const targetToggleBtn = el('button', {
+      class: 'btn btn-sm ws-target-toggle',
+      id: 'ws-target-toggle',
+      text: '✏️ 修改目标',
+      title: '展开/收起目标选择区',
+      'aria-expanded': 'false',
+      'aria-controls': 'ws-target-body',
+      onclick: toggleTargetPanel
+    });
+    const targetSummaryRow = el('div', {
+      class: 'ws-target-summary-row',
+      id: 'ws-target-summary-row'
+    }, [
+      targetSummaryBadge,
+      targetToggleBtn
+    ]);
+    // 主体（默认折叠时整段隐藏）
+    const targetBody = el('div', {
+      class: 'ws-target-body',
+      id: 'ws-target-body'
+    });
+    function toggleTargetPanel() {
+      targetCollapsed = !targetCollapsed;
+      try { OTB.core.lastSet('websphere', 'target_collapsed', targetCollapsed ? 'collapsed' : 'expanded'); } catch (e) { /* ignore */ }
+      applyTargetPanelState();
+    }
+    function applyTargetPanelState() {
+      if (targetCollapsed) {
+        targetBody.style.display = 'none';
+        targetToggleBtn.textContent = '✏️ 修改目标';
+        targetToggleBtn.setAttribute('aria-expanded', 'false');
+        targetSummaryRow.style.display = '';
+      } else {
+        targetBody.style.display = '';
+        targetToggleBtn.textContent = '▲ 收起';
+        targetToggleBtn.setAttribute('aria-expanded', 'true');
+        targetSummaryRow.style.display = 'none';
+      }
+    }
+    // 单行摘要渲染：🎯 业务系统 · N 台服务器 · M 个目录 (凭据已保存)
+    function renderTargetSummary() {
+      const sysName = sysSel.value || '未选业务系统';
+      const targets = getSelectedTargets();
+      const srvs = [...new Set(targets.map(t => t.server))];
+      const srvTxt = srvs.length === 0 ? '未选服务器' : (srvs.length <= 2 ? srvs.join(', ') : (srvs.length + ' 台服务器'));
+      const dirTxt = targets.length === 0 ? '未选目录' : (targets.length + ' 个目录');
+      // 凭据状态（不阻塞渲染，没保存就显示"未保存"）
+      const credTxt = passInp.value ? '· 凭据已输入' : (credStatus.textContent && credStatus.textContent.indexOf('已为') !== -1 ? '· 已保存凭据' : '');
+      targetSummaryBadge.innerHTML = '';
+      targetSummaryBadge.appendChild(document.createTextNode('🎯 ' + sysName + '  ·  ' + srvTxt + '  ·  ' + dirTxt + (credTxt ? '  ' + credTxt : '')));
+    }
+    // 让外层钩子能拿到这两个函数（保持 v0.6 的约定）
+    if (typeof window !== 'undefined') {
+      window.toggleTargetPanel = toggleTargetPanel;
+      window.renderTargetSummary = renderTargetSummary;
+    }
+
+    // v0.6-Redesign：fileTableWrap 去掉内联 display:none —— 改由外层 ws-tab-content 控制显隐。
+    // 进入页面默认 tab=files，要让用户能看到 files tab 的初始空状态（"先点「列出文件」"）。
+    const fileTableWrap = el('div', { class: 'card' });
+    // v0.7-Redesign（第三波）：files tab 工具栏移到 fileTableWrap 之外了，
+    // fileTableWrap 现在初始就是空 card。给一个"请先点列出文件"占位，避免空白卡。
+    fileTableWrap.appendChild(el('div', { class: 'ws-files-placeholder text-dim', text: '暂无文件，先点上方「📋 列出文件」拿到列表。' }));
     const hitTableWrap = el('div', { class: 'card', style: 'display:none' });
     const ctxCard = el('div', { class: 'card', style: 'display:none' });
 
@@ -460,6 +553,8 @@
         const okN = listState.groups.filter(g => !g.error).length;
         const totalFiles = listState.groups.reduce((a, g) => a + g.files.length, 0);
         toast((okN === listState.groups.length ? '列出完成：' : '部分失败：') + totalFiles + ' 个文件 / ' + okN + '/' + listState.groups.length + ' 组 · ' + dt + 'ms', okN === listState.groups.length ? 'ok' : 'warn');
+        // v0.6：files tab badge 显示文件数
+        setTabBadge('files', totalFiles > 0 ? (totalFiles + ' 文件') : '');
         const firstOk = listState.groups.find(g => !g.error);
         if (firstOk) await maybeSaveCred(firstOk.server);
       } catch (e) {
@@ -1123,6 +1218,8 @@
         if (timeRange.since || timeRange.until) toastMsg += '（时间范围已应用）';
         if (filePatterns) toastMsg += '（文件名过滤：' + filePatterns.join(', ') + '）';
         toast(toastMsg, r.fail_count > 0 ? 'warn' : 'ok');
+        // v0.6：search tab badge 显示命中数
+        setTabBadge('search', r.total_hits > 0 ? (r.total_hits + ' 命中') : '0');
         for (const srv of (r.servers || [])) {
           if (srv.ok) await maybeSaveCred(srv.server);
         }
@@ -1222,31 +1319,32 @@
       ctxCard.appendChild(view);
     }
 
-    const formCard = el('div', { class: 'card' }, [
-      el('h3', { text: 'WebSphere 日志助手 · 多服务器并行' }),
-      el('div', { class: 'card-desc', text: '先选业务系统 → 勾选目标服务器（可全选/全不选/只选可用的）→ 在下面展开的日志目录里多选要操作的目录 → 输入凭据 → 测试 / 列出 / 搜索 / 下载。' }),
-      el('div', { class: 'grid-2' }, [
-        el('div', null, [el('label', { text: '业务系统' }), sysSel]),
-        el('div', null, [el('label', { text: '默认目录（多目录勾选未选时回退到此）' }), dirSel])
-      ]),
-      el('div', { class: 'mt-2' }, [srvPickToolbar, srvPickWrap]),
-      el('div', { class: 'mt-2' }, [srvDirsToolbar, srvDirsWrap]),
-      el('div', { class: 'grid-2 mt-2' }, [
-        el('div', null, [el('label', { text: 'SSH 用户名' }), userInp]),
-        el('div', null, [el('label', { text: 'SSH 密码' }), passInp])
-      ]),
-      el('div', { class: 'mt-1' }, [rememberLbl, credStatusRow]),
-      el('div', { class: 'btn-row mt-3' }, [btnTest, btnList]),
-      el('div', { class: 'mt-3' }, [
-        // P1-12：下载最新日志也支持 target_dir
-        // dlTargetDirInp 已在外层作用域声明（和 btnDownload 同一块），这里只引用，不再声明。
-        el('div', { class: 'text-dim mb-1', text: '下载最新日志（每台服务器每个勾选目录分别下，可选 zip）' }),
-        el('div', { class: 'btn-row', style: 'flex-wrap:wrap; gap:8px; align-items:center;' }, [
-          dlNSel, dlZipLabel, btnDownload,
-          el('span', { class: 'lbl', text: '目录：' }), dlTargetDirInp
-        ])
-      ])
+    // v0.7-Redesign（第二波+第三波）：
+//   formCard 现在只承担"目标选择 + 凭据"两件事，折叠态下只剩一行摘要。
+//   列出文件/下载最新 已经移到 files tab 顶部 toolbar。
+//   测试连接 留在 formCard 底部 —— 它是通用的前置确认动作，所有 tab 都要先看它。
+const formCard = el('div', { class: 'card' }, [
+      targetSummaryRow,
+      targetBody,
     ]);
+    // targetBody 内部是完整表单（折叠时整段隐藏）
+    targetBody.appendChild(el('h3', { text: 'WebSphere 日志助手 · 多服务器并行' }));
+    targetBody.appendChild(el('div', {
+      class: 'card-desc',
+      text: '先选业务系统 → 勾选目标服务器 → 在下面展开的日志目录里多选要操作的目录 → 输入凭据 → 点「测试连接」确认 SSH 通畅。'
+    }));
+    targetBody.appendChild(el('div', { class: 'grid-2' }, [
+      el('div', null, [el('label', { text: '业务系统' }), sysSel]),
+      el('div', null, [el('label', { text: '默认目录（多目录勾选未选时回退到此）' }), dirSel])
+    ]));
+    targetBody.appendChild(el('div', { class: 'mt-2' }, [srvPickToolbar, srvPickWrap]));
+    targetBody.appendChild(el('div', { class: 'mt-2' }, [srvDirsToolbar, srvDirsWrap]));
+    targetBody.appendChild(el('div', { class: 'grid-2 mt-2' }, [
+      el('div', null, [el('label', { text: 'SSH 用户名' }), userInp]),
+      el('div', null, [el('label', { text: 'SSH 密码' }), passInp])
+    ]));
+    targetBody.appendChild(el('div', { class: 'mt-1' }, [rememberLbl, credStatusRow]));
+    targetBody.appendChild(el('div', { class: 'btn-row mt-3' }, [btnTest]));
 
     // v0.5 #8：文件名参数 — 单文件 / 多文件 / glob 模糊匹配（空格或逗号分隔）
     // P1-08 改进：明确语义 — 填了 glob 后就只用 glob 匹配，N 仍控制"取最新 N 个匹配上的"
@@ -1273,7 +1371,17 @@
       scopeRadios.latestLabel, scopeRadios.globLabel, scopeRadios.selectedLabel
     ]);
     const fileListArea = el('div', { id: 'ws-file-list-area', style: 'display:none', class: 'mt-2' }, [
-      el('div', { class: 'text-dim', text: '先点上方「列出文件」拿到文件列表（多 server × 多 dir），然后勾选要搜的文件。' })
+      el('div', { class: 'text-dim', text: '先到「文件 / 下载」tab 点「📋 列出文件」拿到文件列表（多 server × 多 dir），然后回这里勾选要搜的文件。' }),
+      // 项 8 修复：搜「指定文件」时，列出文件按钮在另一个 tab，给一个"一键直达"按钮
+      // 避免用户找不到入口。点了切到 files tab 并自动 doList。
+      el('button', {
+        class: 'btn btn-sm mt-1',
+        text: '🚀 列出文件（自动跳到「文件 / 下载」tab）',
+        onclick: () => {
+          try { window.__otbSwitchTabAndList = true; } catch (e) { /* ignore */ }
+          switchTab('files');
+        }
+      })
     ]);
     function updateScopeVisibility() {
       const sel = Object.keys(scopeRadios).filter(k => !k.endsWith('Label') && scopeRadios[k].checked)[0];
@@ -1365,16 +1473,73 @@
     const btnTailStart = el('button', { class: 'btn btn-primary', text: '开始跟踪', onclick: doTailStart });
     const btnTailStop = el('button', { class: 'btn', text: '停止', onclick: doTailStop, disabled: true });
     const btnTailNewTab = el('button', { class: 'btn', text: '↗ 新窗口打开', onclick: openTailInNewTab, title: '在新窗口中跟踪，避免本页卡死' });
+    // 项 12 修复：实时跟踪的"选文件"按钮 —— 拉当前 server+dir 下的文件列表，
+    // 让用户点选而不是手输文件路径（避免打错字找不到文件）。
+    const btnTailPickFile = el('button', { class: 'btn btn-sm', text: '📋 选文件', onclick: openTailFilePicker, title: '列出当前服务器/目录下的文件，点选填入文件名' });
+    // v0.6-Redesign：实时 tail 严格单 target。多 target 时让用户选 1 个；
+    // 单 target 时也明确显示当前选的是哪个（避免"我以为在跟 server-a 实际在跟 server-b"）。
+    const tailTargetSel = el('select', { id: 'ws-tail-target', 'aria-label': '实时跟踪的目标服务器和目录' });
+    const tailTargetWarn = el('div', {
+      class: 'ws-tail-warn',
+      role: 'alert',
+      'aria-live': 'polite',
+      style: 'display:none;'
+    });
+    const tailTargetInfo = el('div', { class: 'text-dim', id: 'ws-tail-target-info', style: 'padding:6px 0; font-size:12px;' });
+    // 跨调用记住 tail target（仅 session 内；renderWebsphere 重新执行时重置，
+    // 切走 websphere 路由再回来 target 会被刷成第一个，这是有意的 ——
+    // "用户改完 dir 勾选自动刷新 target"是更重要的行为）
+    let lastTailTargetKey = '';
+    function refreshTailTargetSel() {
+      const targets = getSelectedTargets();
+      const prev = tailTargetSel.value || lastTailTargetKey;
+      tailTargetSel.innerHTML = '';
+      if (!targets.length) {
+        tailTargetSel.appendChild(el('option', { value: '', text: '（请先在「目标」里勾选服务器+目录）' }));
+        tailTargetSel.disabled = true;
+        tailTargetWarn.style.display = 'none';
+        tailTargetInfo.textContent = '';
+        setTabBadge('tail', '');
+        return;
+      }
+      tailTargetSel.disabled = false;
+      targets.forEach(t => {
+        const k = t.server + '|' + t.dir;
+        const opt = el('option', { value: k, text: t.server + '  ·  ' + (t.dir.split('/').pop() || t.dir) });
+        tailTargetSel.appendChild(opt);
+      });
+      if (targets.length > 1) {
+        tailTargetWarn.style.display = '';
+        tailTargetWarn.textContent = '⚠ 你已选 ' + targets.length + ' 个 targets，实时跟踪只支持单服务器单目录。请从中选 1 个。';
+      } else {
+        tailTargetWarn.style.display = 'none';
+      }
+      // 恢复上次选中的 target；没有则取第一个
+      if (prev && targets.find(t => (t.server + '|' + t.dir) === prev)) {
+        tailTargetSel.value = prev;
+      } else {
+        tailTargetSel.value = targets[0].server + '|' + targets[0].dir;
+        lastTailTargetKey = tailTargetSel.value;
+      }
+      const [s, d] = tailTargetSel.value.split('|');
+      tailTargetInfo.textContent = '当前跟踪：' + s + '  /  ' + d;
+    }
+    tailTargetSel.addEventListener('change', () => {
+      lastTailTargetKey = tailTargetSel.value;
+      const [s, d] = tailTargetSel.value.split('|');
+      tailTargetInfo.textContent = '当前跟踪：' + s + '  /  ' + d;
+    });
     let tailEvtSrc = null;
     let tailId = null;
 
     async function doTailStart() {
       const file = (tailFileInp.value || '').trim();
       if (!file) { toast('请输入文件名', 'warn'); return; }
-      const targets = getSelectedTargets();
-      if (!targets.length) { toast('请先勾选服务器 + 目录（多对多）', 'warn'); return; }
-      const serverName = targets[0].server;
-      const dirPath = targets[0].dir;
+      // v0.6-Redesign：实时 tail 严格单 target，从 tailTargetSel 选。
+      // 不再 fallback 到 targets[0] —— 让用户清楚知道自己在跟哪台机器。
+      const sel = tailTargetSel.value;
+      if (!sel) { toast('请先在「目标」里选 1 个服务器/目录', 'warn'); return; }
+      const [serverName, dirPath] = sel.split('|');
       const lines = Math.max(0, Math.min(1000, Number(tailLinesInp.value) || 0));
       tailOut.textContent = '';
       pendingTailLines = [];
@@ -1391,8 +1556,11 @@
         btnTailStart.disabled = true;
         btnTailStop.disabled = false;
         appendTailLine({ kind: 'info', msg: '已开启 tail · 服务器=' + serverName + ' · 目录=' + dirPath + ' · id=' + tailId });
+        setTabBadge('tail', '🟢');
         if (window.EventSource) {
           tailEvtSrc = new EventSource('/api/logs/tail/' + tailId + '/events');
+          // v0.6-fix：v0.5 旧 bug 修复 —— onerror 不再只是 append，必须调 stopTailUI
+          // 否则 mock_sshd tail 流立即结束 / 真实环境网络断开时，按钮会一起卡死。
           tailEvtSrc.onmessage = (ev) => {
             try { appendTailLine(JSON.parse(ev.data)); } catch (e) { appendTailLine({ kind: 'info', msg: ev.data }); }
           };
@@ -1402,6 +1570,9 @@
           });
           tailEvtSrc.onerror = () => {
             appendTailLine({ kind: 'error', msg: 'SSE 连接异常' });
+            // v0.6-fix：触发 stopTailUI 避免按钮卡死；同时给用户明确提示
+            stopTailUI();
+            toast('tail 连接已断开', 'warn');
           };
         } else {
           appendTailLine({ kind: 'error', msg: '浏览器不支持 EventSource' });
@@ -1416,9 +1587,68 @@
     function openTailInNewTab() {
       const file = (tailFileInp.value || '').trim();
       if (!file) { toast('请输入文件名', 'warn'); return; }
-      const targets = getSelectedTargets();
-      if (!targets.length) { toast('请先勾选服务器 + 目录（多对多）', 'warn'); return; }
-      openTailForFileInNewTab(targets[0].server, targets[0].dir, file);
+      const sel = tailTargetSel.value;
+      if (!sel) { toast('请先在「目标」里选 1 个服务器/目录', 'warn'); return; }
+      const [serverName, dirPath] = sel.split('|');
+      openTailForFileInNewTab(serverName, dirPath, file);
+    }
+
+    // 项 12 修复：实时跟踪"选文件"按钮 —— 拉当前 server+dir 下的文件列表，
+    // 弹 inline picker 让用户点选填入 tailFileInp。复用 /api/logs/list/targets
+    // （跟 files tab 的 doList 用同一接口，认证/并发/超时都现成）。
+    async function openTailFilePicker() {
+      const sel = tailTargetSel.value;
+      if (!sel) { toast('请先在「目标」里选 1 个服务器/目录', 'warn'); return; }
+      const [serverName, dirPath] = sel.split('|');
+      // 复用 doList 的核心：调 /api/logs/list/targets
+      // 这里 server+dir 一组，复用同样的入参
+      try {
+        const r = await api('POST', '/api/logs/list/targets', {
+          system: sysSel.value,
+          targets: [{ server: serverName, dir: dirPath }],
+          username: userInp.value,
+          password: passInp.value
+        });
+        const results = Array.isArray(r) ? r : (r.servers || r.results || []);
+        const grp = results.find(s => s.server === serverName && (!s.dir || s.dir === dirPath));
+        const files = (grp && grp.files) || [];
+        if (!files.length) {
+          toast('当前目录里没文件（先确认「开始跟踪」是否需要起 SSH + 列文件）', 'warn');
+          return;
+        }
+        // 弹 inline picker：复用 preview modal 样式
+        const old = document.getElementById('ws-tail-pick-modal');
+        if (old) old.remove();
+        const overlay = el('div', { id: 'ws-tail-pick-modal', class: 'preview-overlay' });
+        const box = el('div', { class: 'preview-box', style: 'max-width: 520px;' });
+        const head = el('div', { class: 'preview-head' });
+        head.appendChild(el('strong', { text: '选文件 · ' + serverName + ' / ' + (dirPath.split('/').pop() || dirPath) }));
+        const btnClose = el('button', { class: 'btn btn-sm', text: '关闭', onclick: () => overlay.remove() });
+        head.appendChild(btnClose);
+        box.appendChild(head);
+        const list = el('div', { style: 'max-height: 60vh; overflow:auto;' });
+        files.forEach(f => {
+          const row = el('div', {
+            class: 'srv-pick-item',
+            style: 'padding: 6px 10px; border-bottom: 1px solid var(--line); cursor: pointer;',
+            onclick: () => {
+              tailFileInp.value = f.name;
+              overlay.remove();
+              toast('已选：' + f.name, 'ok');
+            }
+          }, [
+            el('span', { text: f.name, style: 'flex: 1;' }),
+            el('span', { class: 'text-dim', style: 'font-size: 11px;', text: formatBytes(f.size || 0) + ' · ' + (f.mod_time || '') })
+          ]);
+          list.appendChild(row);
+        });
+        box.appendChild(list);
+        overlay.appendChild(box);
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+        document.body.appendChild(overlay);
+      } catch (e) {
+        toast('列文件失败：' + e.message, 'err');
+      }
     }
 
     // v0.5 #14：点文件列表里的文件 → 直接开新窗口 tail（无需手输文件名）
@@ -1430,6 +1660,15 @@
         file: fileName,
         lines: String(Math.max(0, Math.min(1000, Number(tailLinesInp.value) || 0)))
       });
+      // 项 9 修复：把当前已填的凭据存到 OTB._tailCred，tail 页面 opener 拿
+      // 避免用户每次开新窗口都被要求再输一次密码。
+      try {
+        OTB._tailCred = OTB._tailCred || {};
+        OTB._tailCred[sysSel.value + '::' + serverName] = {
+          username: userInp.value,
+          password: passInp.value
+        };
+      } catch (e) { /* ignore */ }
       window.open('/static/tail.html?' + params.toString(), '_blank');
     }
 
@@ -1468,6 +1707,7 @@
       btnTailStart.disabled = false;
       btnTailStop.disabled = true;
       setStatus('idle');
+      setTabBadge('tail', '');
     }
 
     function appendTailLine(o) {
@@ -1489,7 +1729,9 @@
     }
 
     // ----- tail 缓冲 + rAF 批量刷新（v0.5 修复卡死） -----
-    const MAX_TAIL_LINES = 5000;
+    // 项 11 修复：行数上限从 UI 读（默认 1000），跟独立 tail.html 一致。
+    // 用 let 每次 flush 重新读，UI 改值立即生效。
+    let MAX_TAIL_LINES = 1000;
     let pendingTailLines = [];
     let tailFlushScheduled = false;
     let tailTotalLines = 0;
@@ -1504,61 +1746,95 @@
     function flushTailBuffer() {
       tailFlushScheduled = false;
       if (!pendingTailLines.length) return;
+      // 项 11 修复：实时从 UI 读 max-lines 上限
+      const tailMaxInput = document.getElementById('ws-tail-max-lines');
+      if (tailMaxInput) {
+        const v = Math.max(100, Math.min(50000, Number(tailMaxInput.value) || 1000));
+        MAX_TAIL_LINES = v;
+      }
       const chunk = pendingTailLines.join('\n') + '\n';
       pendingTailLines = [];
       // 用 appendChild TextNode 而非 textContent +=：避免整段重排
       tailOut.appendChild(document.createTextNode(chunk));
       tailTotalLines += chunk.split('\n').length - 1;
-      // 限速：超过 5000 行截断
-      const lineCount = tailTotalLines;
-      if (lineCount > MAX_TAIL_LINES) {
-        // 直接截断：拿整段 textContent 切后 5000 行重新赋值（罕见操作，可接受）
-        const arr = tailOut.textContent.split('\n');
+      // 限速：超过 MAX_TAIL_LINES 行截断（保留最后 N 行）
+      const arr = tailOut.textContent.split('\n');
+      if (arr.length > MAX_TAIL_LINES) {
+        // 项 11 修复：截断后立即滚到底（旧版只 scrollTop = scrollHeight 在
+        // 截断前算的，截断后行数少了，scrollTop 可能停在中间）
         tailOut.textContent = arr.slice(arr.length - MAX_TAIL_LINES).join('\n');
         tailTotalLines = MAX_TAIL_LINES;
+        tailOut.scrollTop = tailOut.scrollHeight;
+      } else {
+        // 项 11 修复：仅在用户已经在底部时自动滚到底（避免打断用户向上翻看历史）
+        const distToBottom = tailOut.scrollHeight - tailOut.clientHeight - tailOut.scrollTop;
+        if (distToBottom < 80) {
+          tailOut.scrollTop = tailOut.scrollHeight;
+        }
       }
-      tailOut.scrollTop = tailOut.scrollHeight;
     }
 
     const tailCard = el('div', { class: 'card' }, [
-      el('h3', { text: '实时 tail（单文件，SSE 流式）' }),
-      el('div', { class: 'card-desc', text: '跟踪远程文件新增行（用 tail -F）。使用主表单的「目标服务器」「日志目录」选择 —— 取第一台勾选服务器。日志量大卡顿时点「↗ 新窗口打开」切到独立窗口。' }),
-      el('div', { class: 'grid-2' }, [
-        el('div', null, [el('label', { text: '文件名（相对日志目录）' }), tailFileInp]),
-        el('div', null, [el('label', { text: '起始行数（0=只追新增）' }), tailLinesInp])
+      el('h3', { text: '实时跟踪（单文件 SSE 流）' }),
+      el('div', { class: 'card-desc', text: '跟踪远程文件新增行（用 tail -F）。实时跟踪本质只支持单服务器单目录 —— 选错机器就看不到你要的日志。日志量大卡顿时点「↗ 新窗口打开」切到独立窗口。' }),
+      tailTargetWarn,
+      el('div', { class: 'grid-2 mt-2' }, [
+        el('div', null, [
+          el('label', { text: '目标（服务器 / 目录）' }),
+          tailTargetSel,
+          tailTargetInfo
+        ]),
+        // grid-2 第二列空 div 撑位（让 label 与 select 对齐到左半边）
+        el('div')
+      ]),
+      el('div', { class: 'grid-3 mt-2' }, [
+        el('div', null, [
+          el('label', { text: '文件名（相对日志目录）' }),
+          el('div', { style: 'display:flex; gap:6px;' }, [tailFileInp, btnTailPickFile])
+        ]),
+        el('div', null, [el('label', { text: '起始行数（0=只追新增）' }), tailLinesInp]),
+        // 项 11 修复：可配"最多保留 N 行"上限（默认 1000）
+        el('div', null, [
+          el('label', { text: '最多保留行数（超过自动截断）' }),
+          el('input', { type: 'number', id: 'ws-tail-max-lines', min: '100', max: '50000', step: '100', value: '1000' })
+        ])
       ]),
       el('div', { class: 'btn-row mt-2' }, [btnTailStart, btnTailStop, btnTailNewTab]),
       el('div', { class: 'mt-2' }, tailOut)
     ]);
 
     // v0.5 #13：页面顶部加说明卡（让用户知道页面分区和流程）
+    // 项 6 修复：去掉 <strong> 里的 1./2./3./4. 前缀 —— <ol> 会自动生成序号，
+    // 留着会变成 "1. 1. 选目标" 这种重复编号的丑陋显示。
     const introCard = el('div', { class: 'card', style: 'background: var(--bg-2); border-left: 4px solid var(--primary);' }, [
       el('strong', { text: '日志助手 · 4 步走' }),
       el('ol', { style: 'margin: 8px 0 0 0; padding-left: 22px; font-size: 13px; line-height: 1.7;' }, [
         el('li', null, [
-          el('strong', { text: '1. 选目标 ' }),
+          el('strong', { text: '选目标 ' }),
           el('span', { text: '· 业务系统 → 服务器（多选）→ 日志目录（每个服务器下面多选）' })
         ]),
         el('li', null, [
-          el('strong', { text: '2. 列文件/下载最新 ' }),
+          el('strong', { text: '列文件 / 下载最新 ' }),
           el('span', { text: '· 一次性把勾选 targets 下的文件全列出来，多选下载' })
         ]),
         el('li', null, [
-          el('strong', { text: '3. 搜索 ' }),
-          el('span', { text: '· 在勾选 targets 里搜索关键词，支持最近 N 个/指定文件/glob' })
+          el('strong', { text: '搜索 ' }),
+          el('span', { text: '· 在勾选 targets 里搜索关键词，支持最近 N 个 / 指定文件 / glob' })
         ]),
         el('li', null, [
-          el('strong', { text: '4. 实时 Tail ' }),
+          el('strong', { text: '实时 Tail ' }),
           el('span', { text: '· 从文件列表点 ↗ Tail 新窗口跟踪（避免本页卡死）' })
         ])
       ])
     ]);
     // v0.5-G #13：4 个 tab 快捷跳转按钮（点 → 真 tab 切换）
     // P2-14：真 tab 切换（show/hide 内容区），而不是 scrollIntoView
-    const tabBar = el('div', { class: 'ws-tab-bar', style: 'display:flex; gap:6px; margin-bottom: 12px; flex-wrap:wrap;' });
-    let activeTab = 'target'; // 默认显示目标选择
+    // v0.6-Redesign：tab 收编为 3 个（文件/下载 / 搜索排障 / 实时跟踪），
+    // 「目标选择」不再是 tab —— 它是所有功能的前置条件，顶部常驻。
+    const tabBar = el('div', { class: 'ws-tab-bar', style: 'display:flex; gap:6px; margin-bottom: 12px; flex-wrap:wrap; align-items:center;' });
+    let activeTab = 'files'; // 默认显示文件/下载（v0.6：'files' 替 'target'）
 
-    // P2-14：把所有功能区（除目标选择外）包进 ws-tab-content div
+    // P2-14：把所有功能区包进 ws-tab-content div
     const tabContents = {};
     function makeTabContent(id, innerEl) {
       const wrap = el('div', { id: 'ws-tab-' + id, class: 'ws-tab-content' + (id === activeTab ? ' active' : '') });
@@ -1568,27 +1844,60 @@
     }
 
     const tabBtns = {};
-    function makeTab(label, tabId, hash) {
+    const tabBadges = {};
+    // v0.6 修复：原来用 makeTab 的 hash 形参在 switchTab 里访问导致 hash is not defined
+    // —— switchTab 改用 tabHash map 显式查表。
+    const tabHash = {
+      files: 'files',
+      search: 'search',
+      tail: 'tail'
+    };
+    function makeTab(label, tabId) {
+      const tabItem = el('span', { class: 'ws-tab-item', 'data-tab-id': tabId, style: 'display:inline-flex; align-items:center; gap:6px;' });
       const btn = el('button', {
         class: 'btn' + (tabId === activeTab ? ' active' : ''),
         text: label,
         onclick: () => switchTab(tabId)
       });
+      const badge = el('span', { class: 'ws-tab-badge', 'data-tab-badge': tabId, text: '', 'aria-label': tabId + ' 状态' });
+      tabItem.appendChild(btn);
+      tabItem.appendChild(badge);
       tabBtns[tabId] = btn;
-      return btn;
+      tabBadges[tabId] = badge;
+      return tabItem;
+    }
+
+    function setTabBadge(tabId, text) {
+      const b = tabBadges[tabId];
+      if (!b) return;
+      // v0.6-fix：必须显式设 inline-block —— '' 会被 CSS 默认 .ws-tab-badge{display:none} 覆盖，
+      // 导致 badge 永远看不见。空值清空时设 'none'。
+      b.textContent = text == null ? '' : String(text);
+      b.style.display = text ? 'inline-block' : 'none';
     }
 
     function switchTab(tabId) {
+      if (!tabBtns[tabId]) return; // 防御：未知 tab 直接忽略
       activeTab = tabId;
       Object.keys(tabBtns).forEach(k => { tabBtns[k].classList.toggle('active', k === tabId); });
       Object.keys(tabContents).forEach(k => { tabContents[k].classList.toggle('active', k === tabId); });
-      try { history.replaceState(null, '', '#/websphere' + (hash ? '?tab=' + hash : '')); } catch (e) { /* ignore */ }
+      try { history.replaceState(null, '', '#/websphere?tab=' + (tabHash[tabId] || tabId)); } catch (e) { /* ignore */ }
+      // 项 8 修复：用户从「搜索排障」点"列出文件"按钮过来时，自动 doList 一次
+      if (tabId === 'files' && window.__otbSwitchTabAndList) {
+        window.__otbSwitchTabAndList = false;
+        // doList 依赖 getSelectedTargets 拿 targets；同时依赖 cfg 已加载
+        if (cfg && sysSel.value && getSelectedTargets().length > 0) {
+          // 异步触发，不阻塞 switchTab
+          setTimeout(() => { doList().catch(() => { /* toast 已在 doList 内部 */ }); }, 50);
+        } else {
+          toast('请先在「目标」里勾选服务器 + 目录', 'warn');
+        }
+      }
     }
 
-    tabBar.appendChild(makeTab('🎯 目标选择', 'target', 'target'));
-    tabBar.appendChild(makeTab('📂 文件列表', 'files', 'files'));
-    tabBar.appendChild(makeTab('🔍 搜索', 'search', 'search'));
-    tabBar.appendChild(makeTab('📺 实时 Tail', 'tail', 'tail'));
+    tabBar.appendChild(makeTab('📁 文件 / 下载', 'files'));
+    tabBar.appendChild(makeTab('🔍 搜索排障', 'search'));
+    tabBar.appendChild(makeTab('📺 实时跟踪', 'tail'));
 
     formCard.id = 'ws-target-card';
     searchCard.id = 'ws-search-card';
@@ -1597,16 +1906,42 @@
     hitTableWrap.id = 'ws-hits-card';
     ctxCard.id = 'ws-context-card';
 
+    // v0.7-Redesign（第三波）：files tab 顶部加 toolbar ——
+    // [📋 列出文件] [📥 下载最新 N + zip + 目录] 两个按钮原属 formCard 底部，
+    // 按归属改到 files tab 顶部（这是 files tab 专属功能，理应在它自己的 toolbar 里）。
+    // 项 13 修复：之前把所有按钮/label/input 拍一行，label 跟按钮混在一起，dlTargetDirInp 还
+    // 有"  目录："前缀空格（用空格硬挤很丑）。改成两组明确分组：
+    //   第一组（左侧）：列出文件
+    //   第二组（左侧后）：下载最新 [N] [zip] [下载]
+    //   第三组（右侧）：本地目录 [input]
+    const filesToolbar = el('div', { class: 'files-toolbar', id: 'ws-files-toolbar' }, [
+      el('div', { class: 'files-toolbar-row' }, [
+        btnList,
+        el('span', { class: 'lbl', text: '下载最新：' }),
+        dlNSel,
+        dlZipLabel,
+        btnDownload,
+        el('div', { style: 'flex: 1;' }),
+        el('label', { class: 'inline', style: 'gap: 6px;' }, [
+          el('span', { class: 'lbl', text: '本地目录：' }),
+          dlTargetDirInp
+        ])
+      ])
+    ]);
+    const filesWrap = el('div', { class: 'files-wrap' }, [filesToolbar, fileTableWrap]);
     // P2-14：目标选择永远显示；功能区包进 tab content
     view.appendChild(introCard);
     view.appendChild(tabBar);
     view.appendChild(formCard);
-    view.appendChild(makeTabContent('files', fileTableWrap));
+    view.appendChild(makeTabContent('files', filesWrap));
     view.appendChild(makeTabContent('search', searchCard));
     view.appendChild(makeTabContent('tail', tailCard));
     // 搜索结果和上下文嵌入 search tab 内（不再独立 tab）
     searchCard.appendChild(hitTableWrap);
     searchCard.appendChild(ctxCard);
+    // v0.7（第二波）：应用折叠状态 + 首次渲染摘要
+    applyTargetPanelState();
+    renderTargetSummary();
 
     try {
       const params = new URLSearchParams(location.hash.split('?')[1] || '');
@@ -1632,6 +1967,12 @@
       rememberChk.checked = true;
       rememberChk.disabled = false;
       refreshCredStatus();
+      // v0.6：首次加载后初始化 tail tab 的 target select（多 target 时显示警告）
+      try { refreshTailTargetSel(); } catch (e) { /* ignore */ }
+      // v0.7（第二波）：config 加载完后刷新一次目标摘要（之前 renderTargetSummary
+      // 是在 sysSel.value 仍是 '' 时调的，现在 systems 列表 + 上次选择都已恢复，
+      // 摘要才有准确内容）
+      try { renderTargetSummary(); } catch (e) { /* ignore */ }
     }).catch(e => toast('配置加载失败：' + e.message, 'err'));
   }
 
