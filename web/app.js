@@ -67,6 +67,9 @@
     Array.from(document.querySelectorAll('.nav-item')).forEach(a => {
       a.classList.toggle('active', a.getAttribute('data-route') === name);
     });
+    if (name === 'downloads' && OTB.core.clearDlBadge) {
+      OTB.core.clearDlBadge();
+    }
   }
 
   window.addEventListener('hashchange', navigate);

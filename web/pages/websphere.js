@@ -81,7 +81,8 @@
 
   function renderWebsphere(view) {
     let cfg = null;
-    let listState = { files: [], serverName: '', dlId: null, dlEvtSrc: null, fileStates: {}, lastDownloadFolder: '' };
+    let listState = { files: [], serverName: '', dlId: null, dlEvtSrc: null, fileStates: {}, lastDownloadFolder: '', dlMode: null, dlApiBase: '', dlLatestUi: null, dlAbort: null };
+    let searchSelectedFiles = [];
     const srvStatus = {};
 
     const sysSel = el('select', { id: 'ws-sys' });
@@ -1031,6 +1032,49 @@
       }
     }
 
+    function ensureDlLatestFileRow(server, dir, file) {
+      const key = (server || '') + '|' + (dir || '') + '|' + file;
+      if (fileTableWrap.querySelector('tr[data-key="' + cssEscape(key) + '"]')) return;
+      const groupKey = (server || '') + '||' + (dir || '');
+      let tbody = fileTableWrap.querySelector('tbody[data-group-key="' + cssEscape(groupKey) + '"]');
+      if (!tbody) {
+        const grp = el('div', { class: 'server-group ok' });
+        grp.appendChild(el('div', { class: 'server-group-head' }, [
+          el('span', { class: 'dot dot-ok' }),
+          el('span', { class: 'name', text: server }),
+          el('span', { class: 'text-dim', text: ' · ' + dir }),
+          el('span', { class: 'meta', text: '下载中…' })
+        ]));
+        const tbl = el('table', { class: 'table' });
+        tbl.appendChild(el('thead', null, el('tr', null, [
+          el('th', { text: '文件名' }),
+          el('th', { text: '大小' }),
+          el('th', { class: 'col-status', text: '状态' })
+        ])));
+        tbody = el('tbody', { 'data-group-key': groupKey });
+        tbl.appendChild(tbody);
+        grp.appendChild(tbl);
+        const container = fileTableWrap.querySelector('#ws-dl-latest-files');
+        if (container) container.appendChild(grp);
+      }
+      const row = el('tr', { 'data-key': key, 'data-srv': server, 'data-dir': dir });
+      row.appendChild(el('td', null, file));
+      row.appendChild(el('td', { class: 'num muted', text: '-' }));
+      row.appendChild(el('td', { class: 'col-status', 'data-status-key': key }));
+      tbody.appendChild(row);
+    }
+
+    function updateDlLatestGroupMeta(server, dir, text) {
+      const groupKey = (server || '') + '||' + (dir || '');
+      const tbody = fileTableWrap.querySelector('tbody[data-group-key="' + cssEscape(groupKey) + '"]');
+      if (!tbody) return;
+      let grp = tbody.parentNode;
+      while (grp && !grp.classList.contains('server-group')) grp = grp.parentNode;
+      if (!grp) return;
+      const meta = grp.querySelector('.server-group-head .meta');
+      if (meta) meta.textContent = text;
+    }
+
     function buildStatusNode(status, args) {
       switch (status) {
         case 'pending':
@@ -1106,6 +1150,9 @@
       // 因此改成"串行下载"——一组的 done 事件触发后再启下一组，UX 更可控）
       listState.dlId = null;
       listState.dlEvtSrc = null;
+      listState.dlMode = 'selected';
+      listState.dlApiBase = '/api/files/download/';
+      listState.dlLatestUi = null;
       const groupsArr = Array.from(groups.values());
       const results = [];
       const dlResults = []; // 收集各组成功下载的 result items，for 循环结束后统一渲染
@@ -1122,7 +1169,7 @@
           const dlId = r.id;
           listState.dlId = dlId;
           if (!window.EventSource) { toast('浏览器不支持 EventSource', 'err'); return; }
-          const es = new EventSource('/api/files/download/' + dlId + '/events');
+          const es = new EventSource(listState.dlApiBase + dlId + '/events');
           listState.dlEvtSrc = es;
           OTB.core.setActiveDL({ id: dlId, evtsrc: es });
           // 等待 done；done 事件的回调负责收集 result item，不自己渲染
@@ -1171,6 +1218,11 @@
       // 所有组结束后统一渲染下载结果（不再每组 done 单独渲染）
       if (dlResults.length) renderDownloadResults(dlResults);
       const okGroups = results.filter(r => r.ok).length;
+      if (okGroups === results.length) {
+        let totalDl = 0;
+        results.forEach(r => { totalDl += (r.downloads && r.downloads.length) || 0; });
+        if (totalDl > 0 && location.hash !== '#/downloads') OTB.core.bumpDlBadge(totalDl);
+      }
       toast((okGroups === results.length ? '下载完成：' : '部分失败：') + okGroups + '/' + results.length + ' 组', okGroups === results.length ? 'ok' : 'warn');
     }
 
@@ -1221,6 +1273,10 @@
     }
 
     function closeDownloadStream(reason) {
+      if (listState.dlAbort) {
+        try { listState.dlAbort(); } catch (_) { /* ignore */ }
+        listState.dlAbort = null;
+      }
       if (listState.dlEvtSrc) {
         listState.dlEvtSrc.close();
         listState.dlEvtSrc = null;
@@ -1228,6 +1284,15 @@
       OTB.core.clearActiveDL();
       const tb = fileTableWrap._toolbar;
       if (tb) { tb.btnDownloadSel.disabled = false; tb.btnCancel.disabled = true; }
+      if (listState.dlLatestUi) {
+        btnDownload.disabled = false;
+        if (listState.dlLatestUi.cancelBtn) listState.dlLatestUi.cancelBtn.disabled = true;
+        if (listState.dlLatestUi.summary) listState.dlLatestUi.summary.textContent = reason === 'cancel' ? '已停止' : '完成';
+      }
+      listState.dlMode = null;
+      listState.dlApiBase = '';
+      listState.dlLatestUi = null;
+      listState.dlId = null;
       if (reason === 'cancel') {
         toast('已停止下载', 'warn');
       }
@@ -1236,7 +1301,8 @@
 
     async function doCancelDownload() {
       if (!listState.dlId) return;
-      try { await api('POST', '/api/files/download/' + listState.dlId + '/cancel', {}); }
+      const base = listState.dlApiBase || '/api/files/download/';
+      try { await api('POST', base + listState.dlId + '/cancel', {}); }
       catch (e) { /* ignore */ }
       closeDownloadStream('cancel');
     }
@@ -1244,6 +1310,7 @@
     async function doDownload() {
       const targets = getSelectedTargets();
       if (!targets.length) { toast('请先勾选服务器 + 目录（多对多）', 'warn'); return; }
+      if (listState.dlId) { toast('已有下载任务在进行中', 'warn'); return; }
       const latest = Number(dlNSel.value) || 1;
       const wantZip = dlZipChk.checked;
       let zip = wantZip;
@@ -1251,35 +1318,175 @@
         toast('zip 打包需要 ≥ 2 个文件，已仅返回原始文件', 'warn');
         zip = false;
       }
-      const allResults = [];
-      // 简单并发：每对 (server, dir) 一个请求，concurrency 上限 6
-      const conc = 6;
-      const queue = targets.slice();
-      const runners = Array.from({ length: conc }, async () => {
-        while (queue.length) {
-          const tgt = queue.shift();
-          if (!tgt) break;
-          try {
-            const r = await api('POST', '/api/logs/download-latest', {
-              system: sysSel.value, server: tgt.server, dir: tgt.dir,
-              username: userInp.value, password: passInp.value,
-              latest: latest, zip: zip,
-              target_dir: (dlTargetDirInp.value || '').trim()
-            });
-            allResults.push({ server: tgt.server, dir: tgt.dir, downloads: r.downloads || [], folder: r.folder });
-          } catch (e) {
-            allResults.push({ server: tgt.server, dir: tgt.dir, error: e.message });
+
+      listState.fileStates = {};
+      fileTableWrap.innerHTML = '';
+      fileTableWrap.appendChild(el('h3', { text: '下载最新 ' + latest + ' 个文件 · 实时进度' }));
+      const cancelBtn = el('button', { class: 'btn', text: '停止下载' });
+      const summary = el('div', { class: 'text-dim', text: '准备中…' });
+      const toolbar = el('div', { class: 'file-toolbar' }, [summary, cancelBtn]);
+      fileTableWrap.appendChild(toolbar);
+      const filesContainer = el('div', { id: 'ws-dl-latest-files' });
+      fileTableWrap.appendChild(filesContainer);
+      listState.dlLatestUi = { cancelBtn: cancelBtn, summary: summary };
+      btnDownload.disabled = true;
+      setStatus('busy', '下载中…');
+
+      listState.dlMode = 'latest';
+      listState.dlApiBase = '/api/logs/download/';
+      listState.dlId = null;
+      listState.dlEvtSrc = null;
+      listState.dlAbort = null;
+
+      let cancelled = false;
+      const results = [];
+      const dlResults = [];
+
+      cancelBtn.onclick = async () => {
+        if (cancelled) return;
+        cancelled = true;
+        summary.textContent = '正在停止…';
+        cancelBtn.disabled = true;
+        if (listState.dlId) {
+          try { await api('POST', listState.dlApiBase + listState.dlId + '/cancel', {}); }
+          catch (_) { /* ignore */ }
+        }
+        if (listState.dlAbort) {
+          try { listState.dlAbort(); } catch (_) { /* ignore */ }
+        }
+        toast('已停止下载', 'warn');
+      };
+
+      for (let ti = 0; ti < targets.length; ti++) {
+        if (cancelled) break;
+        const tgt = targets[ti];
+        const groupCtx = { server: tgt.server, dir: tgt.dir };
+        const srvLabel = tgt.server + ' · ' + (tgt.dir.split('/').pop() || tgt.dir);
+        if (listState.dlLatestUi) {
+          listState.dlLatestUi.summary.textContent = '正在下载 (' + (ti + 1) + '/' + targets.length + ') · ' + srvLabel;
+        }
+        const currentGroupFiles = [];
+        let runReason = 'done';
+        try {
+          const r = await api('POST', '/api/logs/download-latest', {
+            system: sysSel.value, server: tgt.server, dir: tgt.dir,
+            username: userInp.value, password: passInp.value,
+            latest: latest, zip: zip,
+            target_dir: (dlTargetDirInp.value || '').trim()
+          });
+          if (cancelled) break;
+          const dlId = r.id;
+          listState.dlId = dlId;
+          if (!window.EventSource) { toast('浏览器不支持 EventSource', 'err'); break; }
+          const es = new EventSource(listState.dlApiBase + dlId + '/events');
+          listState.dlEvtSrc = es;
+          OTB.core.setActiveDL({ id: dlId, evtsrc: es });
+          runReason = await new Promise((resolve) => {
+            let gotDone = false;
+            let active = true;
+            const finish = (reason) => {
+              if (gotDone) return;
+              gotDone = true;
+              active = false;
+              listState.dlAbort = null;
+              try { es.close(); } catch (_) { /* ignore */ }
+              if (listState.dlEvtSrc === es) { listState.dlEvtSrc = null; }
+              OTB.core.clearActiveDL();
+              resolve(reason);
+            };
+            listState.dlAbort = () => finish('cancel');
+            const onDone = (err, item) => {
+              if (!err && item) {
+                item.server = srvLabel;
+                dlResults.push(item);
+              }
+            };
+            es.onmessage = (ev) => {
+              if (!active) return;
+              let o; try { o = JSON.parse(ev.data); } catch (e) { return; }
+              if (o.kind === 'file_start') {
+                const fileName = basenameOf(o.file);
+                ensureDlLatestFileRow(o.server || tgt.server, o.dir || tgt.dir, fileName);
+                const alreadyAdded = currentGroupFiles.some(f => f.file === fileName && f.server === (o.server || tgt.server) && f.dir === (o.dir || tgt.dir));
+                if (!alreadyAdded) {
+                  currentGroupFiles.push({ server: o.server || tgt.server, dir: o.dir || tgt.dir, file: fileName });
+                }
+              }
+              if (o.kind === 'file_done') {
+                updateDlLatestGroupMeta(o.server || tgt.server, o.dir || tgt.dir, '已完成 ' + currentGroupFiles.length + ' 个文件');
+              }
+              if (o && o.kind === 'done') {
+                handleDownloadEvent(o, currentGroupFiles, groupCtx, onDone);
+                finish('done');
+                return;
+              }
+              handleDownloadEvent(o, currentGroupFiles, groupCtx, onDone);
+            };
+            es.addEventListener('done', () => finish('done'));
+            es.onerror = () => {
+              setTimeout(() => {
+                if (active && !gotDone && !cancelled) {
+                  finish('error');
+                  toast('SSE 连接异常（已强制收尾）', 'err');
+                } else if (active && !gotDone) {
+                  finish('cancel');
+                }
+              }, 2000);
+            };
+          });
+          if (runReason !== 'cancel') {
+            results.push({ server: tgt.server, dir: tgt.dir, ok: runReason !== 'error' });
+            updateDlLatestGroupMeta(tgt.server, tgt.dir, runReason === 'done' ? '完成' : '连接异常');
+          } else {
+            cancelled = true;
+          }
+        } catch (e) {
+          if (cancelled) break;
+          toast('下载 ' + srvLabel + ' 失败：' + e.message, 'err');
+          currentGroupFiles.forEach(it => {
+            const k = (it.server || '') + '|' + (it.dir || '') + '|' + it.file;
+            setRowStatus(k, 'startfail', null, 'row-fail');
+          });
+          results.push({ server: tgt.server, dir: tgt.dir, ok: false, error: e.message });
+          updateDlLatestGroupMeta(tgt.server, tgt.dir, '失败：' + e.message);
+          const failTbody = fileTableWrap.querySelector('tbody[data-group-key="' + cssEscape(tgt.server + '||' + tgt.dir) + '"]');
+          if (failTbody) {
+            let failGrp = failTbody.parentNode;
+            while (failGrp && !failGrp.classList.contains('server-group')) failGrp = failGrp.parentNode;
+            if (failGrp) { failGrp.classList.remove('ok'); failGrp.classList.add('fail'); }
           }
         }
-      });
-      await Promise.all(runners);
-      renderDownloadResults(allResults);
-      const okN = allResults.filter(x => !x.error).length;
-      toast((okN === targets.length ? '下载完成：' : '部分失败：') + okN + '/' + targets.length, okN === targets.length ? 'ok' : 'warn');
-      for (const r of allResults) {
-        if (!r.error) await maybeSaveCred(r.server);
+        if (runReason === 'cancel' || cancelled) break;
       }
-      refreshCredStatus();
+
+      btnDownload.disabled = false;
+      if (listState.dlLatestUi) {
+        listState.dlLatestUi.cancelBtn.disabled = true;
+        listState.dlLatestUi.summary.textContent = cancelled ? '已停止' : '下载完成';
+      }
+      listState.dlMode = null;
+      listState.dlApiBase = '';
+      listState.dlId = null;
+      listState.dlEvtSrc = null;
+      listState.dlLatestUi = null;
+      listState.dlAbort = null;
+      OTB.core.clearActiveDL();
+      setStatus('idle');
+
+      if (cancelled) {
+        // 已在 cancelBtn.onclick 或 closeDownloadStream 中 toast
+      } else {
+        if (dlResults.length) renderDownloadResults(dlResults);
+        const okGroups = results.filter(r => r.ok).length;
+        let totalDl = 0;
+        dlResults.forEach(r => { totalDl += (r.downloads && r.downloads.length) || 0; });
+        if (totalDl > 0 && location.hash !== '#/downloads') OTB.core.bumpDlBadge(totalDl);
+        toast((okGroups === results.length ? '下载完成：' : '部分失败：') + okGroups + '/' + results.length + ' 组', okGroups === results.length ? 'ok' : 'warn');
+        for (const r of results) {
+          if (r.ok) await maybeSaveCred(r.server);
+        }
+        refreshCredStatus();
+      }
     }
 
     function renderDownloadResults(allResults) {
@@ -1433,17 +1640,19 @@
       const targets = getSelectedTargets();
       if (!targets.length) { toast('请先勾选服务器 + 目录（多对多）', 'warn'); return; }
       if (!queryInp.value.trim()) { toast('搜索表达式不能为空', 'warn'); return; }
-      // 记录搜索关键词历史（在校验通过、请求发起前；
-      // pushSearchHistory 内部会跳过空白 / 太短 / 默认占位符）。
-      // 不阻塞搜索主流程 —— localStorage 失败也是静默吞。
       pushSearchHistory(queryInp.value);
-      // v0.5-G P1-08：根据 scope radio 决定模式
       const scope = Object.keys(scopeRadios).filter(k => !k.endsWith('Label') && scopeRadios[k].checked)[0] || 'latest';
-      // P1-9 修复：selected 模式传 target-aware 形态 [{server,dir,file}, ...]
-      const selectedItems = (scope === 'selected') ? getSelectedFiles() : null;
-      if (scope === 'selected' && (!selectedItems || !selectedItems.length)) {
-        toast('「指定文件」模式：先点「列出文件」拿到列表，再勾选要搜的文件', 'warn');
-        return;
+      let selectedItems = null;
+      if (scope === 'selected') {
+        if (searchSelectedFiles.length > 0) {
+          selectedItems = searchSelectedFiles;
+        } else {
+          selectedItems = getSelectedFiles();
+        }
+        if (!selectedItems || !selectedItems.length) {
+          toast('「指定文件」模式：请先点击「选择文件…」按钮选定要搜索的文件', 'warn');
+          return;
+        }
       }
       hitTableWrap.style.display = '';
       hitTableWrap.innerHTML = '';
@@ -1636,24 +1845,238 @@ const formCard = el('div', { class: 'card' }, [
       el('span', { class: 'lbl', text: '搜索文件范围：' }),
       scopeRadios.latestLabel, scopeRadios.globLabel, scopeRadios.selectedLabel
     ]);
+    const searchSelSummary = el('div', { class: 'text-dim', id: 'ws-search-sel-summary', text: '尚未选择文件' });
+    const btnSearchPickFiles = el('button', {
+      class: 'btn btn-sm mt-1',
+      text: '📋 选择文件…',
+      onclick: openSearchFilePicker
+    });
+    const btnSearchClearFiles = el('button', {
+      class: 'btn btn-sm mt-1',
+      text: '✕ 清空选择',
+      style: 'display:none',
+      onclick: () => {
+        searchSelectedFiles = [];
+        updateSearchSelSummary();
+      }
+    });
     const fileListArea = el('div', { id: 'ws-file-list-area', style: 'display:none', class: 'mt-2' }, [
-      el('div', { class: 'text-dim', text: '先到「文件 / 下载」tab 点「📋 列出文件」拿到文件列表（多 server × 多 dir），然后回这里勾选要搜的文件。' }),
-      // 项 8 修复：搜「指定文件」时，列出文件按钮在另一个 tab，给一个"一键直达"按钮
-      // 避免用户找不到入口。点了切到 files tab 并自动 doList。
-      el('button', {
-        class: 'btn btn-sm mt-1',
-        text: '🚀 列出文件（自动跳到「文件 / 下载」tab）',
-        onclick: () => {
-          try { window.__otbSwitchTabAndList = true; } catch (e) { /* ignore */ }
-          switchTab('files');
-        }
-      })
+      el('div', { style: 'display:flex; gap:8px; align-items:center; flex-wrap:wrap;' }, [
+        btnSearchPickFiles,
+        btnSearchClearFiles,
+        searchSelSummary
+      ])
     ]);
+    function updateSearchSelSummary() {
+      if (!searchSelectedFiles.length) {
+        searchSelSummary.textContent = '尚未选择文件';
+        searchSelSummary.style.color = '';
+        btnSearchClearFiles.style.display = 'none';
+      } else {
+        const bySrv = {};
+        searchSelectedFiles.forEach(f => {
+          const k = f.server + ' / ' + (f.dir.split('/').pop() || f.dir);
+          bySrv[k] = (bySrv[k] || 0) + 1;
+        });
+        const parts = Object.keys(bySrv).map(k => k + ': ' + bySrv[k] + ' 个');
+        searchSelSummary.textContent = '✓ 已选 ' + searchSelectedFiles.length + ' 个文件（' + parts.join('，') + '）';
+        searchSelSummary.style.color = 'var(--success)';
+        btnSearchClearFiles.style.display = '';
+      }
+    }
     function updateScopeVisibility() {
       const sel = Object.keys(scopeRadios).filter(k => !k.endsWith('Label') && scopeRadios[k].checked)[0];
       filesNSel.parentNode.parentNode.style.display = (sel === 'latest') ? '' : 'none';
       filePatternInp.parentNode.style.display = (sel === 'glob') ? '' : 'none';
       fileListArea.style.display = (sel === 'selected') ? '' : 'none';
+    }
+
+    async function openSearchFilePicker() {
+      const targets = getSelectedTargets();
+      if (!targets.length) { toast('请先勾选服务器 + 目录（多对多）', 'warn'); return; }
+      setStatus('busy', '加载文件列表…');
+      let pickerGroups = [];
+      try {
+        const r = await api('POST', '/api/logs/list/targets', {
+          system: sysSel.value,
+          targets: targets,
+          username: userInp.value,
+          password: passInp.value
+        });
+        const results = Array.isArray(r) ? r : (r.servers || r.results || []);
+        pickerGroups = results.map(srv => ({
+          server: srv.server,
+          dir: srv.dir,
+          files: (srv.files || []).map(f => ({
+            name: f.name,
+            full_path: f.full_path,
+            size: f.size,
+            mod_time: f.mod_time
+          })),
+          error: srv.ok ? null : (srv.error || '未知错误')
+        }));
+      } catch (e) {
+        toast('列文件失败：' + e.message, 'err');
+        setStatus('idle');
+        return;
+      }
+      setStatus('idle');
+      const totalFiles = pickerGroups.reduce((a, g) => a + (g.files || []).length, 0);
+      if (!totalFiles) {
+        toast('所选目标下没有文件', 'warn');
+        return;
+      }
+
+      const old = document.getElementById('ws-search-pick-modal');
+      if (old) old.remove();
+      const overlay = el('div', { id: 'ws-search-pick-modal', class: 'preview-overlay' });
+      const box = el('div', { class: 'preview-box', style: 'width: min(860px, 94vw); max-height: 88vh;' });
+      const head = el('div', { class: 'preview-head' });
+      head.appendChild(el('strong', { text: '选择要搜索的文件 · 共 ' + totalFiles + ' 个' }));
+      const headBtns = el('div', { style: 'display:flex; gap:6px; margin-left:auto;' });
+      const btnPickAll = el('button', { class: 'btn btn-sm', text: '全选', onclick: () => togglePickerAll(true) });
+      const btnPickNone = el('button', { class: 'btn btn-sm', text: '全不选', onclick: () => togglePickerAll(false) });
+      const btnInvert = el('button', { class: 'btn btn-sm', text: '反选', onclick: togglePickerInvert });
+      const btnConfirm = el('button', { class: 'btn btn-sm btn-primary', text: '确认选择', onclick: confirmPickerSelection });
+      const btnClose = el('button', { class: 'btn btn-sm', text: '取消', onclick: () => overlay.remove() });
+      headBtns.appendChild(btnPickAll);
+      headBtns.appendChild(btnPickNone);
+      headBtns.appendChild(btnInvert);
+      headBtns.appendChild(btnConfirm);
+      headBtns.appendChild(btnClose);
+      head.appendChild(headBtns);
+      box.appendChild(head);
+
+      const filterInp = el('input', {
+        type: 'text',
+        placeholder: '过滤文件名（子串 / 通配符 * ?）',
+        style: 'margin: 8px 12px; width: calc(100% - 24px);'
+      });
+      box.appendChild(filterInp);
+
+      const pickerSummary = el('div', { class: 'text-dim', style: 'padding: 0 12px 6px; font-size:12px;', text: '已选 0 / ' + totalFiles });
+      box.appendChild(pickerSummary);
+
+      const listWrap = el('div', { style: 'max-height: calc(88vh - 160px); overflow:auto; padding: 0 8px 8px;' });
+
+      const preSelected = new Set();
+      searchSelectedFiles.forEach(f => preSelected.add(f.server + '|' + f.dir + '|' + f.file));
+
+      function getFilterQ() {
+        return (filterInp.value || '').trim().toLowerCase();
+      }
+      function matchFilter(name) {
+        const q = getFilterQ();
+        if (!q) return true;
+        const nl = (name || '').toLowerCase();
+        if (q.indexOf('*') !== -1 || q.indexOf('?') !== -1) {
+          const wildcardsReplaced = q.replace(/\*/g, '\u0001').replace(/\?/g, '\u0002');
+          const escaped = wildcardsReplaced.replace(/[.+^${}()|[\]\\]/g, '\\$&')
+            .replace(/\u0001/g, '.*').replace(/\u0002/g, '.');
+          try { return new RegExp(escaped, 'i').test(nl); } catch (e) { return true; }
+        }
+        return nl.indexOf(q) !== -1;
+      }
+      function refreshPickerSummary() {
+        const checked = listWrap.querySelectorAll('input[type="checkbox"][data-pick-file]:checked').length;
+        pickerSummary.textContent = '已选 ' + checked + ' / ' + totalFiles;
+      }
+      function togglePickerAll(on) {
+        listWrap.querySelectorAll('input[type="checkbox"][data-pick-file]').forEach(cb => {
+          const row = cb.closest('[data-pick-row]');
+          if (row && row.style.display === 'none') return;
+          cb.checked = on;
+        });
+        refreshPickerSummary();
+      }
+      function togglePickerInvert() {
+        listWrap.querySelectorAll('input[type="checkbox"][data-pick-file]').forEach(cb => {
+          const row = cb.closest('[data-pick-row]');
+          if (row && row.style.display === 'none') return;
+          cb.checked = !cb.checked;
+        });
+        refreshPickerSummary();
+      }
+      function renderPickerList() {
+        listWrap.innerHTML = '';
+        const q = getFilterQ();
+        pickerGroups.forEach(g => {
+          const grp = el('div', { class: 'server-group ' + (g.error ? 'fail' : 'ok') });
+          const filtered = (g.files || []).filter(f => matchFilter(f.name));
+          grp.appendChild(el('div', { class: 'server-group-head' }, [
+            el('span', { class: 'dot dot-' + (g.error ? 'err' : 'ok') }),
+            el('span', { class: 'name', text: g.server }),
+            el('span', { class: 'text-dim', text: ' · ' + g.dir }),
+            el('span', { class: 'meta', text: g.error ? ('失败：' + g.error) : (filtered.length + ' / ' + g.files.length + ' 个文件') })
+          ]));
+          if (g.error) {
+            grp.appendChild(el('div', { class: 'err-msg', text: g.error }));
+            listWrap.appendChild(grp);
+            return;
+          }
+          if (q && filtered.length === 0) {
+            grp.appendChild(el('div', { class: 'text-dim', style: 'padding:6px 12px;', text: '过滤 "' + q + '" 无匹配' }));
+            listWrap.appendChild(grp);
+            return;
+          }
+          const tbl = el('table', { class: 'table' });
+          tbl.appendChild(el('thead', null, el('tr', null, [
+            el('th', { class: 'col-check' }),
+            el('th', { text: '文件名' }),
+            el('th', { text: '大小' }),
+            el('th', { text: '修改时间' })
+          ])));
+          const tbody = el('tbody');
+          filtered.forEach(f => {
+            const key = g.server + '|' + g.dir + '|' + f.name;
+            const cb = el('input', {
+              type: 'checkbox',
+              'data-pick-file': f.name,
+              'data-pick-srv': g.server,
+              'data-pick-dir': g.dir,
+              onchange: refreshPickerSummary
+            });
+            if (preSelected.has(key)) cb.checked = true;
+            const row = el('tr', { 'data-pick-row': '1' });
+            row.appendChild(el('td', { class: 'col-check' }, [cb]));
+            row.appendChild(el('td', null, f.name));
+            row.appendChild(el('td', { class: 'num muted', text: formatBytes(f.size) }));
+            row.appendChild(el('td', { class: 'muted', text: formatTime(f.mod_time) }));
+            tbody.appendChild(row);
+          });
+          tbl.appendChild(tbody);
+          grp.appendChild(tbl);
+          listWrap.appendChild(grp);
+        });
+        refreshPickerSummary();
+      }
+      filterInp.addEventListener('input', renderPickerList);
+
+      function confirmPickerSelection() {
+        const selected = [];
+        listWrap.querySelectorAll('input[type="checkbox"][data-pick-file]:checked').forEach(cb => {
+          selected.push({
+            server: cb.getAttribute('data-pick-srv') || '',
+            dir: cb.getAttribute('data-pick-dir') || '',
+            file: cb.getAttribute('data-pick-file') || ''
+          });
+        });
+        if (!selected.length) {
+          toast('请至少勾选一个文件', 'warn');
+          return;
+        }
+        searchSelectedFiles = selected;
+        updateSearchSelSummary();
+        overlay.remove();
+        toast('已选择 ' + selected.length + ' 个文件', 'ok');
+      }
+
+      box.appendChild(listWrap);
+      overlay.appendChild(box);
+      overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+      document.body.appendChild(overlay);
+      renderPickerList();
+      filterInp.focus();
     }
 
     // P1-8：动态目标摘要（显示本次搜索将使用的 targets 数量和具体内容）。
@@ -1733,7 +2156,236 @@ const formCard = el('div', { class: 'card' }, [
     updateTargetSummary();
 
     // ---- 实时 tail ----
-    const tailFileInp = el('input', { type: 'text', id: 'ws-tail-file', placeholder: '文件名（例：SystemOut.log）', value: 'SystemOut.log' });
+    const tailFileInp = el('input', {
+      type: 'text', id: 'ws-tail-file', placeholder: '文件名（例：SystemOut.log）', value: 'SystemOut.log',
+      autocomplete: 'off', spellcheck: 'false',
+      role: 'combobox',
+      'aria-autocomplete': 'list',
+      'aria-haspopup': 'listbox',
+      'aria-expanded': 'false',
+      'aria-controls': 'ws-tail-file-popover',
+      'aria-activedescendant': ''
+    });
+    // ===== tail 文件路径自动补全下拉 =====
+    // 行为：
+    //   - 输入 ≥1 字符时，若已有文件列表缓存则前端过滤，否则拉取 /api/logs/list/targets；
+    //   - ↑↓ 选中、Enter 确认、Esc 收起；blur 延时收起（150ms）；mousedown preventDefault 防止 blur 抢跑；
+    //   - 切换 target（server/dir）时清空缓存，下次输入重新拉。
+    const tailFileWrap = el('div', { class: 'ws-tail-file-wrap', style: 'position:relative; flex:1;' });
+    tailFileWrap.appendChild(tailFileInp);
+    const tailFilePopover = el('div', {
+      id: 'ws-tail-file-popover',
+      class: 'ws-tail-file-popover',
+      role: 'listbox',
+      style: 'display:none; position:absolute; top:100%; left:0; right:0; z-index:50; background:var(--bg, #fff); border:1px solid var(--border, #ddd); border-top:none; max-height:260px; overflow-y:auto; box-shadow:0 4px 12px rgba(0,0,0,0.12);'
+    });
+    tailFileWrap.appendChild(tailFilePopover);
+    let tailFileCache = null; // { key: 'server|dir', files: [{name, size, mod_time, full_path}] }
+    let tailFileLoading = false;
+    let tailFileHighlightIdx = -1;
+    let tailFileBlurTimer = null;
+    let tailFileFetchTimer = null;
+
+    function getTailTargetKey() {
+      return tailTargetSel.value || '';
+    }
+
+    function isTailFilePopoverVisible() {
+      return tailFilePopover.style.display !== 'none';
+    }
+
+    function hideTailFilePopover() {
+      tailFilePopover.style.display = 'none';
+      tailFileInp.setAttribute('aria-expanded', 'false');
+      tailFileHighlightIdx = -1;
+      tailFileInp.setAttribute('aria-activedescendant', '');
+      updateTailFileHighlight();
+    }
+
+    function showTailFilePopover() {
+      tailFilePopover.style.display = '';
+      tailFileInp.setAttribute('aria-expanded', 'true');
+    }
+
+    function updateTailFileHighlight() {
+      const rows = tailFilePopover.querySelectorAll('.ws-tail-file-row');
+      rows.forEach((r, i) => {
+        if (i === tailFileHighlightIdx) {
+          r.style.background = 'var(--hover, rgba(0,0,0,0.06))';
+          r.setAttribute('aria-selected', 'true');
+        } else {
+          r.style.background = '';
+          r.setAttribute('aria-selected', 'false');
+        }
+      });
+      tailFileInp.setAttribute(
+        'aria-activedescendant',
+        tailFileHighlightIdx >= 0 ? 'ws-tail-file-option-' + tailFileHighlightIdx : ''
+      );
+      if (tailFileHighlightIdx >= 0 && rows[tailFileHighlightIdx]) {
+        rows[tailFileHighlightIdx].scrollIntoView({ block: 'nearest' });
+      }
+    }
+
+    function renderTailFileMatches(files, query) {
+      tailFilePopover.innerHTML = '';
+      tailFileHighlightIdx = -1;
+      tailFileInp.setAttribute('aria-activedescendant', '');
+      const q = (query || '').trim().toLowerCase();
+      let matched = files;
+      if (q) {
+        matched = files.filter(f => (f.name || '').toLowerCase().indexOf(q) !== -1);
+      }
+      if (!matched.length) {
+        if (tailFileLoading) {
+          tailFilePopover.appendChild(el('div', {
+            style: 'padding:8px 12px; color:var(--text-dim, #888); font-size:12.5px;',
+            text: '加载中…'
+          }));
+        } else {
+          tailFilePopover.appendChild(el('div', {
+            style: 'padding:8px 12px; color:var(--text-dim, #888); font-size:12.5px;',
+            text: q ? '无匹配文件' : '目录为空'
+          }));
+        }
+        showTailFilePopover();
+        return;
+      }
+      const maxShow = 20;
+      matched.slice(0, maxShow).forEach((f, idx) => {
+        const row = el('div', {
+          class: 'ws-tail-file-row',
+          id: 'ws-tail-file-option-' + idx,
+          role: 'option',
+          'aria-selected': 'false',
+          'data-name': f.name,
+          style: 'display:flex; justify-content:space-between; align-items:center; gap:10px; padding:6px 10px; cursor:pointer; border-bottom:1px solid var(--border, #eee);'
+        }, [
+          el('span', {
+            style: 'font-family: var(--mono, monospace); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex:1;',
+            text: f.name
+          }),
+          el('span', {
+            class: 'text-dim',
+            style: 'font-size:11.5px; white-space:nowrap;',
+            text: formatBytes(f.size || 0)
+          })
+        ]);
+        row.addEventListener('mousedown', (ev) => {
+          ev.preventDefault();
+          selectTailFile(f.name);
+        });
+        row.addEventListener('mouseenter', () => {
+          tailFileHighlightIdx = idx;
+          updateTailFileHighlight();
+        });
+        tailFilePopover.appendChild(row);
+      });
+      if (matched.length > maxShow) {
+        tailFilePopover.appendChild(el('div', {
+          style: 'padding:4px 10px; color:var(--text-dim, #aaa); font-size:11px; text-align:center;',
+          text: '…还有 ' + (matched.length - maxShow) + ' 个，继续输入以缩小范围'
+        }));
+      }
+      showTailFilePopover();
+    }
+
+    function selectTailFile(name) {
+      tailFileInp.value = name;
+      hideTailFilePopover();
+      tailFileInp.focus();
+    }
+
+    function moveTailFileHighlight(delta) {
+      const rows = tailFilePopover.querySelectorAll('.ws-tail-file-row');
+      if (!rows.length) return;
+      let next = tailFileHighlightIdx + delta;
+      if (next < 0) next = rows.length - 1;
+      if (next >= rows.length) next = 0;
+      tailFileHighlightIdx = next;
+      updateTailFileHighlight();
+    }
+
+    function confirmTailFileHighlight() {
+      if (tailFileHighlightIdx < 0) return false;
+      const rows = tailFilePopover.querySelectorAll('.ws-tail-file-row');
+      const row = rows[tailFileHighlightIdx];
+      if (row) {
+        selectTailFile(row.getAttribute('data-name') || '');
+      }
+      return true;
+    }
+
+    async function fetchTailFileList() {
+      const key = getTailTargetKey();
+      if (!key) return;
+      if (tailFileCache && tailFileCache.key === key) return;
+      const [serverName, dirPath] = key.split('|');
+      tailFileLoading = true;
+      try {
+        const r = await api('POST', '/api/logs/list/targets', {
+          system: sysSel.value,
+          targets: [{ server: serverName, dir: dirPath }],
+          username: userInp.value,
+          password: passInp.value
+        });
+        const results = Array.isArray(r) ? r : (r.servers || r.results || []);
+        const grp = results.find(s => s.server === serverName && (!s.dir || s.dir === dirPath));
+        const files = (grp && grp.files) || [];
+        tailFileCache = { key: key, files: files };
+        if (isTailFilePopoverVisible()) {
+          renderTailFileMatches(files, tailFileInp.value);
+        }
+      } catch (e) {
+        // 静默失败，用户可以继续手动输入或点击「📋 选文件」按钮
+      } finally {
+        tailFileLoading = false;
+      }
+    }
+
+    function triggerTailFileComplete() {
+      const val = tailFileInp.value;
+      if (val.length < 1) {
+        hideTailFilePopover();
+        return;
+      }
+      const key = getTailTargetKey();
+      if (!key) {
+        hideTailFilePopover();
+        return;
+      }
+      if (tailFileCache && tailFileCache.key === key) {
+        renderTailFileMatches(tailFileCache.files, val);
+      } else {
+        renderTailFileMatches([], val);
+        if (tailFileFetchTimer) clearTimeout(tailFileFetchTimer);
+        tailFileFetchTimer = setTimeout(fetchTailFileList, 200);
+      }
+    }
+
+    tailFileInp.addEventListener('input', triggerTailFileComplete);
+    tailFileInp.addEventListener('focus', triggerTailFileComplete);
+    tailFileInp.addEventListener('blur', () => {
+      if (tailFileBlurTimer) clearTimeout(tailFileBlurTimer);
+      tailFileBlurTimer = setTimeout(hideTailFilePopover, 150);
+    });
+    tailFileInp.addEventListener('keydown', (ev) => {
+      if (!isTailFilePopoverVisible()) return;
+      if (ev.key === 'ArrowDown') {
+        ev.preventDefault();
+        moveTailFileHighlight(1);
+      } else if (ev.key === 'ArrowUp') {
+        ev.preventDefault();
+        moveTailFileHighlight(-1);
+      } else if (ev.key === 'Enter') {
+        if (confirmTailFileHighlight()) {
+          ev.preventDefault();
+        }
+      } else if (ev.key === 'Escape') {
+        ev.preventDefault();
+        hideTailFilePopover();
+      }
+    });
     const tailLinesInp = el('input', { type: 'number', id: 'ws-tail-lines', placeholder: '起始行数', value: '100' });
     const tailOut = el('div', { id: 'ws-tail-out', class: 'tail-out' });
     // ---- Tail 高亮面板（共享 UI 工厂）----
@@ -1786,6 +2438,8 @@ const formCard = el('div', { class: 'card' }, [
         tailTargetSel.disabled = true;
         tailTargetWarn.style.display = 'none';
         tailTargetInfo.textContent = '';
+        tailFileCache = null;
+        hideTailFilePopover();
         setTabBadge('tail', '');
         return;
       }
@@ -1802,11 +2456,18 @@ const formCard = el('div', { class: 'card' }, [
         tailTargetWarn.style.display = 'none';
       }
       // 恢复上次选中的 target；没有则取第一个
+      let newKey = '';
       if (prev && targets.find(t => (t.server + '|' + t.dir) === prev)) {
         tailTargetSel.value = prev;
+        newKey = prev;
       } else {
-        tailTargetSel.value = targets[0].server + '|' + targets[0].dir;
-        lastTailTargetKey = tailTargetSel.value;
+        newKey = targets[0].server + '|' + targets[0].dir;
+        tailTargetSel.value = newKey;
+        lastTailTargetKey = newKey;
+      }
+      if (tailFileCache && tailFileCache.key !== newKey) {
+        tailFileCache = null;
+        hideTailFilePopover();
       }
       const [s, d] = tailTargetSel.value.split('|');
       tailTargetInfo.textContent = '当前跟踪：' + s + '  /  ' + d;
@@ -1815,6 +2476,8 @@ const formCard = el('div', { class: 'card' }, [
       lastTailTargetKey = tailTargetSel.value;
       const [s, d] = tailTargetSel.value.split('|');
       tailTargetInfo.textContent = '当前跟踪：' + s + '  /  ' + d;
+      tailFileCache = null;
+      hideTailFilePopover();
     });
     let tailEvtSrc = null;
     let tailId = null;
@@ -1899,6 +2562,7 @@ const formCard = el('div', { class: 'card' }, [
         const results = Array.isArray(r) ? r : (r.servers || r.results || []);
         const grp = results.find(s => s.server === serverName && (!s.dir || s.dir === dirPath));
         const files = (grp && grp.files) || [];
+        tailFileCache = { key: sel, files: files };
         if (!files.length) {
           toast('当前目录里没文件（先确认「开始跟踪」是否需要起 SSH + 列文件）', 'warn');
           return;
@@ -2070,7 +2734,7 @@ const formCard = el('div', { class: 'card' }, [
       el('div', { class: 'grid-3 mt-2' }, [
         el('div', null, [
           el('label', { text: '文件名（相对日志目录）' }),
-          el('div', { style: 'display:flex; gap:6px;' }, [tailFileInp, btnTailPickFile])
+          el('div', { style: 'display:flex; gap:6px;' }, [tailFileWrap, btnTailPickFile])
         ]),
         el('div', null, [el('label', { text: '起始行数（0=只追新增）' }), tailLinesInp]),
         // 项 11 修复：可配"最多保留 N 行"上限（默认 1000）

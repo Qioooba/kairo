@@ -38,6 +38,11 @@
       // 初始为空；loadCfg 完成后调 loadCommonDirs 填充。
       commonDirs: {},
       commonDirsKey: '', // 当前 system/server 拼出来的 key
+      // 右键菜单状态
+      ctxMenu: null,
+      ctxTarget: null,
+      // 已下载文件的本地路径映射：remotePath -> localName
+      downloadedFiles: {},
     };
 
     // ---- 连接区 ----
@@ -746,7 +751,13 @@
       const tbody = el('tbody');
       sortedEntries().forEach(entry => {
         const fullPath = (state.currentPath === '/' ? '' : state.currentPath) + '/' + entry.name;
-        const tr = el('tr', { 'data-path': fullPath, 'data-name': entry.name });
+        const tr = el('tr', { 'data-path': fullPath, 'data-name': entry.name, 'data-isdir': entry.isDir ? '1' : '0' });
+        if (!entry.isDir) {
+          tr.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+            showContextMenu(e, entry, fullPath);
+          });
+        }
         const cb = el('input', { type: 'checkbox' });
         cb.checked = state.selected.has(entry.name);
         cb.disabled = entry.isDir;
@@ -955,6 +966,15 @@
         btnCancel.disabled = true;
         state.dlId = null;
         if (o.ok) {
+          (o.downloads || []).forEach(d => {
+            if (d) {
+              const baseName = d.name || (d.local ? d.local.split(/[\\/]/).pop() : '');
+              if (baseName) {
+                const remotePath = (state.currentPath === '/' ? '' : state.currentPath) + '/' + baseName;
+                state.downloadedFiles[remotePath] = d.local || baseName;
+              }
+            }
+          });
           // 项 16：下载完成用 notify 通知（标题 + 路径 + 操作按钮）
           showDownloadDoneNotify(o);
         } else {
@@ -1029,6 +1049,9 @@
         actions: actions,
         duration: 8000
       });
+      if (location.hash !== '#/downloads') {
+        OTB.core.bumpDlBadge(downloads.length);
+      }
     }
 
     function closeDownloadStream(reason) {
@@ -1048,6 +1071,184 @@
       catch (e) { /* ignore */ }
       closeDownloadStream('cancel');
     }
+
+    // =================== 右键菜单 ===================
+
+    function hideContextMenu() {
+      if (state.ctxMenu) {
+        state.ctxMenu.remove();
+        state.ctxMenu = null;
+        state.ctxTarget = null;
+      }
+    }
+
+    function showContextMenu(e, entry, fullPath) {
+      hideContextMenu();
+
+      const menu = el('div', { class: 'file-context-menu' });
+      state.ctxMenu = menu;
+      state.ctxTarget = { entry, fullPath };
+
+      const isDownloaded = !!state.downloadedFiles[fullPath];
+
+      function addItem(icon, label, onClick, disabled) {
+        const item = el('div', {
+          class: 'file-context-menu-item' + (disabled ? ' disabled' : '')
+        });
+        item.appendChild(el('span', { class: 'file-context-menu-icon', text: icon }));
+        item.appendChild(el('span', { class: 'file-context-menu-label', text: label }));
+        if (!disabled) {
+          item.addEventListener('click', () => {
+            hideContextMenu();
+            onClick();
+          });
+        }
+        menu.appendChild(item);
+        return item;
+      }
+
+      function addDivider() {
+        menu.appendChild(el('div', { class: 'file-context-menu-divider' }));
+      }
+
+      addItem('📋', '复制文件路径', () => {
+        copyToClipboard(fullPath);
+      });
+
+      addItem('👁', '预览', () => {
+        openPreviewInNewWindow(fullPath, entry.name);
+      });
+
+      addItem('📥', '下载', () => {
+        doDownloadSingle(fullPath, entry.name);
+      });
+
+      const localName = state.downloadedFiles[fullPath];
+      addItem('📂', '打开所在目录（本地）', () => {
+        openLocalDir(localName);
+      }, !isDownloaded);
+
+      document.body.appendChild(menu);
+
+      const rect = menu.getBoundingClientRect();
+      let x = e.clientX;
+      let y = e.clientY;
+      if (x + rect.width > window.innerWidth - 10) {
+        x = window.innerWidth - rect.width - 10;
+      }
+      if (y + rect.height > window.innerHeight - 10) {
+        y = window.innerHeight - rect.height - 10;
+      }
+      menu.style.left = x + 'px';
+      menu.style.top = y + 'px';
+    }
+
+    function copyToClipboard(text) {
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).then(() => {
+            toast('路径已复制', 'ok');
+          }).catch(() => {
+            window.prompt('复制此路径：', text);
+          });
+        } else {
+          window.prompt('复制此路径：', text);
+        }
+      } catch (e) {
+        window.prompt('复制此路径：', text);
+      }
+    }
+
+    async function openLocalDir(localName) {
+      if (!localName) return;
+      try {
+        await api('POST', '/api/downloads/open-dir?name=' + encodeURIComponent(localName));
+      } catch (e) {
+        toast('打开目录失败：' + e.message, 'err');
+      }
+    }
+
+    async function doDownloadSingle(fullPath, fileName) {
+      if (state.dlId) { toast('已有下载任务在进行中', 'warn'); return; }
+      const c = creds();
+      if (!c.username) { toast('请先输入 SSH 用户名', 'warn'); return; }
+
+      state.fileStates = {};
+      state.fileStates[fullPath] = { status: 'pending' };
+      setRowStatusByName(fileName, state.fileStates[fullPath]);
+      btnDownload.disabled = true;
+      btnCancel.disabled = false;
+      setStatus('busy', '下载中…');
+      state.lastNotifyId = 'files-single-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+
+      try {
+        const r = await api('POST', '/api/files/download', {
+          system: state.currentSys, server: state.currentSrv,
+          username: c.username, password: c.password,
+          paths: [fullPath], zip: false,
+          target_dir: (dlTargetDirInp.value || '').trim()
+        });
+        state.dlId = r.id;
+        if (!window.EventSource) { toast('浏览器不支持 EventSource', 'err'); return; }
+        const es = new EventSource('/api/files/download/' + r.id + '/events');
+        state.dlEvtSrc = es;
+        OTB.core.setActiveDL({ id: r.id, evtsrc: es });
+        let gotDone = false;
+        const onDoneSeen = (reason) => {
+          if (gotDone) return;
+          gotDone = true;
+          closeDownloadStream(reason);
+        };
+        es.onmessage = (ev) => {
+          let o; try { o = JSON.parse(ev.data); } catch (e) { return; }
+          if (o && o.kind === 'done') {
+            handleSingleDownloadEvent(o, fullPath, fileName);
+            onDoneSeen('done');
+            return;
+          }
+          handleDownloadEvent(o);
+        };
+        es.addEventListener('done', () => { onDoneSeen('done'); });
+        es.onerror = () => {
+          setTimeout(() => {
+            if (state.dlId && state.dlEvtSrc === es && !gotDone) {
+              onDoneSeen('error');
+              toast('SSE 连接异常（已强制收尾）', 'err');
+            }
+          }, 2000);
+        };
+      } catch (e) {
+        toast('启动下载失败：' + e.message, 'err');
+        state.fileStates[fullPath] = { status: 'fail', error: e.message };
+        setRowStatusByName(fileName, state.fileStates[fullPath]);
+        btnDownload.disabled = false;
+        btnCancel.disabled = true;
+        setStatus('err', '失败');
+        setTimeout(() => setStatus('idle'), 1500);
+      }
+    }
+
+    function handleSingleDownloadEvent(o, fullPath, fileName) {
+      handleDownloadEvent(o);
+      if (o.kind === 'done' && o.ok) {
+        const downloads = o.downloads || [];
+        if (downloads.length > 0) {
+          const localName = downloads[0].local || downloads[0].name || fileName;
+          state.downloadedFiles[fullPath] = localName;
+        }
+      }
+    }
+
+    document.addEventListener('click', (e) => {
+      if (state.ctxMenu && !state.ctxMenu.contains(e.target)) {
+        hideContextMenu();
+      }
+    });
+    document.addEventListener('scroll', hideContextMenu, true);
+    window.addEventListener('resize', hideContextMenu);
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') hideContextMenu();
+    });
 
     // 启动：从 localStorage 恢复常用目录 + 渲染常用目录栏
 state.commonDirs = loadCommonDirs();

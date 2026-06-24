@@ -151,11 +151,12 @@
       class: 'otb-notify-close',
       text: '×',
       title: '关闭',
-      onclick: () => card.remove()
+      onclick: () => { card.remove(); updateClearAllBtn(); }
     }));
     stack.appendChild(card);
+    updateClearAllBtn();
     if (opts.duration !== 0) {
-      setTimeout(() => { if (card.parentNode) card.remove(); }, opts.duration || 6000);
+      setTimeout(() => { if (card.parentNode) { card.remove(); updateClearAllBtn(); } }, opts.duration || 6000);
     }
     return card;
   }
@@ -163,11 +164,51 @@
     let stack = document.getElementById('otb-notify-stack');
     if (!stack) {
       stack = el('div', { id: 'otb-notify-stack', class: 'otb-notify-stack' });
+      const clearAll = el('button', {
+        id: 'otb-notify-clearall',
+        class: 'otb-notify-clearall',
+        text: '全部清空',
+        onclick: () => {
+          const cards = stack.querySelectorAll('.otb-notify');
+          cards.forEach(c => c.remove());
+          updateClearAllBtn();
+        }
+      });
+      stack.appendChild(clearAll);
       document.body.appendChild(stack);
     }
     return stack;
   }
+  function updateClearAllBtn() {
+    const stack = document.getElementById('otb-notify-stack');
+    if (!stack) return;
+    const clearAll = document.getElementById('otb-notify-clearall');
+    if (!clearAll) return;
+    const cards = stack.querySelectorAll('.otb-notify');
+    clearAll.style.display = cards.length >= 2 ? 'block' : 'none';
+  }
   core.notify = notify;
+
+  // -------- 下载 badge（侧边栏红点） --------
+  let dlBadgeCount = 0;
+  function bumpDlBadge(n) {
+    dlBadgeCount += (n || 1);
+    const el2 = document.getElementById('dl-badge');
+    if (!el2) return;
+    if (dlBadgeCount > 0) {
+      el2.style.display = 'inline-block';
+      el2.textContent = dlBadgeCount > 99 ? '99+' : String(dlBadgeCount);
+    } else {
+      el2.style.display = 'none';
+    }
+  }
+  function clearDlBadge() {
+    dlBadgeCount = 0;
+    const el2 = document.getElementById('dl-badge');
+    if (el2) el2.style.display = 'none';
+  }
+  core.bumpDlBadge = bumpDlBadge;
+  core.clearDlBadge = clearDlBadge;
 
   function setStatus(state, text) {
     const dot = $('#status-dot');
@@ -974,5 +1015,4 @@
   }
 
   core.tailViewer = tailViewer;
-}
 })();
