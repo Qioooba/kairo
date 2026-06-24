@@ -88,6 +88,76 @@ const pctText = new Function(
 const validate = new Function(extract('validate') + '; return validate;')();
 const trimMiddle = new Function(extract('trimMiddle') + '; return trimMiddle;')();
 
+// Tail 高亮：3 个核心函数从 core.js 抽出来。
+// 它们依赖 document.createElement / document.createDocumentFragment / document.createTextNode，
+// 所以用一个最小 DOM mock 喂进去（跟 testEl 里那个差不多）。
+const hlDocMock = {
+  createElement(tag) {
+    const el = {
+      tag, _attrs: {}, _children: [],
+      _style: {},
+      set className(v) { this._className = v; },
+      get className() { return this._className; },
+      set textContent(v) { this._textContent = v; },
+      get textContent() { return this._textContent; },
+      style: null, // 下面赋值
+      setAttribute(k, v) { this._attrs[k] = v; },
+      appendChild(c) { this._children.push(c); return c; }
+    };
+    // 用一个普通对象当 style：浏览器里 el.style.background = '...' 等价于赋值
+    el.style = el._style;
+    return el;
+  },
+  createTextNode(text) { return { nodeType: 'text', data: text }; },
+  createDocumentFragment() {
+    return {
+      _children: [],
+      appendChild(c) { this._children.push(c); return c; }
+    };
+  }
+};
+// dumpFragment 把 fragment 序列化成简化字符串方便断言。
+//   - T:..  → 文本节点
+//   - S(bg/fg):..  → span（背景/前景颜色 + 文本）
+function dumpFragment(frag) {
+  return frag._children.map(c => {
+    if (c.nodeType === 'text') return 'T:' + JSON.stringify(c.data);
+    if (c.tag === 'span') {
+      const bg = (c.style && c.style.background) || '';
+      const fg = (c.style && c.style.color) || '';
+      return 'S(' + bg + '/' + fg + '):' + JSON.stringify(c._textContent);
+    }
+    return '?';
+  });
+}
+// 从 core.js 源里抽 const SAFE_COLOR_NAMES = { ... } 和 const SAFE_COLOR_RE = /.../;
+// 这俩是 normalizeHighlightColor 的闭包依赖，extract 函数体不带它们。
+const SAFE_COLOR_NAMES = (function () {
+  const m = src.match(/const\s+SAFE_COLOR_NAMES\s*=\s*\{[\s\S]*?\};/);
+  if (!m) throw new Error('SAFE_COLOR_NAMES block not found');
+  return new Function(m[0].replace('const ', 'return ') + ';')();
+})();
+const SAFE_COLOR_RE = (function () {
+  const m = src.match(/const\s+SAFE_COLOR_RE\s*=\s*\/(?:[^\n\\]|\\.)+\/;?/);
+  if (!m) throw new Error('SAFE_COLOR_RE block not found');
+  // m[0] 是 "const SAFE_COLOR_RE = /.../;" —— 改成 return RegExp
+  const expr = m[0].replace(/^const\s+\w+\s*=\s*/, '').replace(/;?\s*$/, '');
+  return new Function('return ' + expr + ';')();
+})();
+const normalizeHighlightColor = new Function(
+  'SAFE_COLOR_NAMES', 'SAFE_COLOR_RE',
+  extract('normalizeHighlightColor') + '\n  return normalizeHighlightColor;'
+)(SAFE_COLOR_NAMES, SAFE_COLOR_RE);
+const buildHighlightRegex = new Function(
+  'document', 'normalizeHighlightColor',
+  extract('buildHighlightRegex') + '\n  return buildHighlightRegex;'
+)(hlDocMock, normalizeHighlightColor);
+const renderHighlightedLine = new Function(
+  'document', 'normalizeHighlightColor', 'buildHighlightRegex',
+  extract('renderHighlightedLine') + '\n  return renderHighlightedLine;'
+)(hlDocMock, normalizeHighlightColor, buildHighlightRegex);
+const pickFgForBg = new Function(extract('pickFgForBg') + '; return pickFgForBg;')();
+
 // ---------- escapeHtml ----------
 
 function testEscapeHtml() {
@@ -342,6 +412,149 @@ function testGotDoneDedupe() {
   console.log('  gotDone dedupe ✓');
 }
 
+// ---------- Tail 高亮：normalizeHighlightColor ----------
+
+function testNormalizeHighlightColor() {
+  // 合法 hex
+  assert.strictEqual(normalizeHighlightColor('#ff0000'), '#ff0000', 'hex 6');
+  assert.strictEqual(normalizeHighlightColor('#fff'), '#fff', 'hex 3');
+  // rgb/rgba
+  assert.strictEqual(normalizeHighlightColor('rgb(255, 0, 0)'), 'rgb(255, 0, 0)', 'rgb');
+  assert.strictEqual(normalizeHighlightColor('rgba(0, 0, 0, 0.5)'), 'rgba(0, 0, 0, 0.5)', 'rgba');
+  // 命名色 → 查表替换
+  assert.strictEqual(normalizeHighlightColor('red'), '#ef4444', 'named red');
+  assert.strictEqual(normalizeHighlightColor('GREEN'), '#22c55e', 'named green 不区分大小写');
+  // 大小写归一（hex 也接受）
+  assert.strictEqual(normalizeHighlightColor('#ABCDEF'), '#ABCDEF', 'hex 保留原大小写');
+  // 非法 / 注入：兜底
+  assert.strictEqual(normalizeHighlightColor('red; background:url(javascript:alert(1))'), '#ef4444', 'css 注入兜底');
+  assert.strictEqual(normalizeHighlightColor(''), '#ef4444', '空字符串兜底');
+  assert.strictEqual(normalizeHighlightColor(null), '#ef4444', 'null 兜底');
+  assert.strictEqual(normalizeHighlightColor(undefined), '#ef4444', 'undefined 兜底');
+  // 伪装的合法 rgb（注入路径）—— 严格匹配失败
+  assert.strictEqual(normalizeHighlightColor('rgb(255,0,0); position:fixed'), '#ef4444', 'rgb 注入兜底');
+  console.log('  normalizeHighlightColor ✓');
+}
+
+// ---------- Tail 高亮：renderHighlightedLine ----------
+
+function testRenderHighlightedLine() {
+  // 1. 无高亮 → 纯 TextNode
+  const f1 = renderHighlightedLine('hello world', []);
+  const d1 = dumpFragment(f1);
+  assert.strictEqual(d1.length, 1, '无规则 → 1 节点');
+  assert.ok(d1[0].startsWith('T:'), '无规则 → TextNode');
+  assert.ok(d1[0].includes('hello world'), '无规则 → 文本完整');
+
+  // 2. 一个关键词命中
+  const f2 = renderHighlightedLine('hello ERROR foo', [
+    { keyword: 'ERROR', bg: '#ef4444', fg: '#ffffff' }
+  ]);
+  const d2 = dumpFragment(f2);
+  // 期望：T:"hello " + S("#ef4444/#ffffff"):"ERROR" + T:" foo"
+  assert.strictEqual(d2.length, 3, '一个命中 → 3 段');
+  assert.ok(d2[0].startsWith('T:') && d2[0].includes('hello'), '前导文本');
+  assert.ok(d2[1].startsWith('S(#ef4444/#ffffff):') && d2[1].includes('ERROR'), '命中段');
+  assert.ok(d2[2].startsWith('T:') && d2[2].includes('foo'), '尾部文本');
+
+  // 3. 大小写不敏感（默认）
+  const f3 = renderHighlightedLine('hello error and Error', [
+    { keyword: 'ERROR', bg: '#0000ff', fg: '#ffffff' }
+  ]);
+  const d3 = dumpFragment(f3);
+  // 'hello error and Error' → 'hello ' + S(error) + ' and ' + S(Error) = 4 段
+  assert.strictEqual(d3.length, 4, '两个命中 + 间隔 → 4 段');
+  assert.ok(d3[1].includes('error'), '小写也命中');
+  assert.ok(d3[3].includes('Error'), '混合大小写也命中');
+
+  // 4. 大小写敏感
+  const f4 = renderHighlightedLine('hello error and ERROR', [
+    { keyword: 'ERROR', bg: '#0000ff', fg: '#ffffff', caseSensitive: true }
+  ]);
+  const d4 = dumpFragment(f4);
+  // 只有 ERROR 命中（小写不命中），所以：hello error and + ERROR → 3 段
+  assert.ok(d4.some(s => s.startsWith('S(') && s.includes('ERROR')), '命中 ERROR');
+  assert.ok(!d4.some(s => s.startsWith('S(') && s.includes('error')), '不命中 error');
+
+  // 5. 多关键词：error 红 + warn 黄
+  const f5 = renderHighlightedLine('one ERROR two warn three', [
+    { keyword: 'ERROR', bg: '#ef4444', fg: '#ffffff' },
+    { keyword: 'warn', bg: '#eab308', fg: '#000000' }
+  ]);
+  const d5 = dumpFragment(f5);
+  const errorSpans = d5.filter(s => s.startsWith('S(#ef4444/'));
+  const warnSpans = d5.filter(s => s.startsWith('S(#eab308/'));
+  assert.strictEqual(errorSpans.length, 1, '1 个 ERROR 红');
+  assert.strictEqual(warnSpans.length, 1, '1 个 warn 黄');
+
+  // 6. 重叠区间合并（error 和 err 重叠 → 取首个颜色）
+  const f6 = renderHighlightedLine('xx error xx', [
+    { keyword: 'error', bg: '#ef4444', fg: '#fff' },
+    { keyword: 'err', bg: '#0000ff', fg: '#fff' }
+  ]);
+  const d6 = dumpFragment(f6);
+  // err 是 error 的前缀，会重叠。第一个 rule (error) 应该赢，
+  // 所以应该只有 1 个 span，颜色是 #ef4444。
+  const spanCount = d6.filter(s => s.startsWith('S(')).length;
+  assert.strictEqual(spanCount, 1, '重叠合并为 1 个 span');
+  assert.ok(d6.some(s => s.startsWith('S(#ef4444/') && s.includes('error')), '取首个规则的颜色');
+
+  // 7. 正则元字符按字面匹配（用户写 ".*" 不应误匹配整行）
+  const f7 = renderHighlightedLine('a.*b and a-b', [
+    { keyword: '.*', bg: '#000', fg: '#fff' }
+  ]);
+  const d7 = dumpFragment(f7);
+  const matches = d7.filter(s => s.startsWith('S('));
+  // 只匹配字面 ".*"，不匹配整行
+  assert.ok(matches.some(s => s.includes('.*')), '字面 ".*" 命中');
+  assert.ok(!matches.some(s => s.includes('a-b')), '"a-b" 不命中（不是 .*）');
+
+  // 8. 空关键词规则被跳过
+  const f8 = renderHighlightedLine('plain', [
+    { keyword: '', bg: '#000', fg: '#fff' },
+    { keyword: 'plain', bg: '#0000ff', fg: '#fff' }
+  ]);
+  const d8 = dumpFragment(f8);
+  const spanCount8 = d8.filter(s => s.startsWith('S(')).length;
+  assert.strictEqual(spanCount8, 1, '空关键词被跳过');
+
+  // 9. null / undefined 行
+  const f9a = renderHighlightedLine(null, [{ keyword: 'x', bg: '#000', fg: '#fff' }]);
+  assert.ok(f9a._children.length >= 1, 'null 行安全降级');
+  const f9b = renderHighlightedLine(undefined, []);
+  assert.ok(f9b._children.length >= 1, 'undefined 行安全降级');
+
+  // 10. 高亮 + 空 highlights 数组（边界）
+  const f10 = renderHighlightedLine('plain', null);
+  const d10 = dumpFragment(f10);
+  assert.strictEqual(d10.length, 1, 'null highlights → 纯文本');
+  assert.ok(d10[0].startsWith('T:'), 'null highlights → TextNode');
+
+  // 11. XSS 防护：关键词是 "<script>"，文本也是 "<script>"
+  //     —— 任何用户输入都不应该进 innerHTML
+  const f11 = renderHighlightedLine('<script>alert(1)</script>', [
+    { keyword: '<script>', bg: '#ff0000', fg: '#fff' }
+  ]);
+  const d11 = dumpFragment(f11);
+  // span.textContent 是 "<script>"（纯文本，不是节点），无 HTML 解析风险
+  // 这里我们的 mock 把 textContent 存到 _textContent；只要不进 innerHTML 就安全。
+  for (const seg of d11) {
+    if (seg.startsWith('S(')) {
+      assert.ok(seg.includes('<script>'), 'span 文本包含 <script>（这是 textContent 安全）');
+      assert.ok(!('_innerHTML' in f11._children.find(c => c.tag === 'span')), 'span 无 innerHTML');
+    }
+  }
+
+  // 12. pickFgForBg
+  assert.strictEqual(pickFgForBg('#ffffff'), '#000000', '白色背景 → 黑色前景');
+  assert.strictEqual(pickFgForBg('#000000'), '#ffffff', '黑色背景 → 白色前景');
+  assert.strictEqual(pickFgForBg('#888888'), '#ffffff', '灰色背景 → 白色前景（明度阈值 140）');
+  assert.strictEqual(pickFgForBg('#cccccc'), '#000000', '浅灰背景 → 黑色前景');
+  assert.strictEqual(pickFgForBg('not a color'), '#000000', '非法 hex 兜底黑');
+
+  console.log('  renderHighlightedLine + pickFgForBg ✓');
+}
+
 // ---------- config.js state 持久化 (v0.5 修复 #20) ----------
 //
 // 验证切 tab 再回来时，renderConfig 不会重新 fetch 服务器覆盖未保存的改动。
@@ -594,7 +807,7 @@ async function main() {
   const tests = [
     testEscapeHtml, testFormatBytes, testFormatTime, testTrimMiddle,
     testCssEscape, testPctText, testValidate, testEl, testXSSInErrorText,
-    testGotDoneDedupe,
+    testGotDoneDedupe, testNormalizeHighlightColor, testRenderHighlightedLine,
   ];
   let pass = 0, fail = 0;
   for (const t of tests) {

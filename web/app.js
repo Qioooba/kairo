@@ -81,6 +81,16 @@
         listenInfo.textContent = '已启动 · ' + appName + (dlFolder ? ' · 保存到 ' + dlFolder : '');
       }
     } catch (e) { /* 忽略 */ }
+    // 启动时拉一次 preferences：把用户上次保存的 tail 高亮规则放到 OTB.state.tailHighlights，
+    // 让独立 tail.html / websphere tail tab 都直接用同一份（"页面上设置过的不要再让用户重设"）。
+    // GET 失败（文件不存在 / 服务端 500）静默忽略 —— 没有高亮也能正常工作。
+    try {
+      const prefs = await api('GET', '/api/preferences');
+      if (prefs && Array.isArray(prefs.tail && prefs.tail.highlights)) {
+        state.tailHighlights = prefs.tail.highlights;
+      }
+    } catch (e) { /* ignore */ }
+    state.tailHighlights = state.tailHighlights || [];
     navigate();
   });
 })();

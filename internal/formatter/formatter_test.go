@@ -182,3 +182,302 @@ func TestMinifyXML_BrokenDoc_Rejected(t *testing.T) {
 		t.Fatal("broken XML 应该被 MinifyXML 拒")
 	}
 }
+
+// ---------- v0.8：YAML ----------
+
+func TestFormatYAML_Basic(t *testing.T) {
+	in := "a: 1\nb:\n  c: hello\n  d:\n  - 1\n  - 2\n  - 3\n"
+	out, err := FormatYAML(in, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "a: 1") || !strings.Contains(out, "c: hello") {
+		t.Fatalf("格式化结果缺字段: %s", out)
+	}
+	// indent=2 应该产生 2 空格缩进
+	if !strings.Contains(out, "  c: hello") {
+		t.Fatalf("indent=2 没生效: %q", out)
+	}
+}
+
+func TestFormatYAML_Indent(t *testing.T) {
+	in := "a:\n  b: 1\n"
+	out, err := FormatYAML(in, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "    b: 1") {
+		t.Fatalf("indent=4 没生效: %q", out)
+	}
+}
+
+func TestFormatYAML_IndentClamp(t *testing.T) {
+	in := "a: 1\n"
+	// indent > 8 应被 clamp 到 8
+	out, err := FormatYAML(in, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "a: 1") {
+		t.Fatalf("clamp 后内容丢了: %q", out)
+	}
+}
+
+func TestFormatYAML_InvalidYAML(t *testing.T) {
+	in := "a: 1\n  bad: : :\n\t- oops\n" // 故意非法：tab + 错位
+	_, err := FormatYAML(in, 2)
+	if err == nil {
+		t.Fatal("非法 YAML 应该报错")
+	}
+}
+
+func TestFormatYAML_TrailingGarbage_Rejected(t *testing.T) {
+	in := "a: 1\n---\nb: 2\n" // 多文档流应被拒
+	_, err := FormatYAML(in, 2)
+	if err == nil {
+		t.Fatal("多段 YAML 应该被拒绝")
+	}
+}
+
+func TestMinifyYAML_Basic(t *testing.T) {
+	in := "a: 1\nb:\n  c: 2\n"
+	out, err := MinifyYAML(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "a: 1") || !strings.Contains(out, "c: 2") {
+		t.Fatalf("minify 丢字段: %q", out)
+	}
+}
+
+func TestValidateYAML_Invalid(t *testing.T) {
+	if err := ValidateYAML("a: :\n  - :"); err == nil {
+		t.Fatal("非法 YAML 应该 validate 失败")
+	}
+}
+
+func TestYAMLToJSON(t *testing.T) {
+	in := "name: ops\nage: 18\ntags:\n  - a\n  - b\n"
+	out, err := YAMLToJSON(in, "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "\"name\": \"ops\"") {
+		t.Fatalf("YAML→JSON 失败: %s", out)
+	}
+}
+
+func TestYAMLToJSON_Minify(t *testing.T) {
+	in := "a: 1\nb: 2\n"
+	out, err := YAMLToJSON(in, "") // 空 indent = minify
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "\n") {
+		t.Fatalf("minify 应该无换行: %q", out)
+	}
+}
+
+func TestJSONToYAML(t *testing.T) {
+	in := `{"name":"ops","age":18,"tags":["a","b"]}`
+	out, err := JSONToYAML(in, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "name: ops") {
+		t.Fatalf("JSON→YAML 失败: %s", out)
+	}
+}
+
+func TestYAMLJSONRoundTrip(t *testing.T) {
+	in := `{"name":"运维","age":18,"tags":["a","b"]}`
+	yamlOut, err := JSONToYAML(in, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jsonOut, err := YAMLToJSON(yamlOut, "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(jsonOut, "\"name\": \"运维\"") {
+		t.Fatalf("中文没保留: %s", jsonOut)
+	}
+	if !strings.Contains(jsonOut, "\"a\"") || !strings.Contains(jsonOut, "\"b\"") {
+		t.Fatalf("数组 round-trip 失败: %s", jsonOut)
+	}
+}
+
+// ---------- v0.8：URL form ----------
+
+func TestURLFormEncode_Basic(t *testing.T) {
+	out, err := URLFormEncode(map[string]string{"a": "1", "b": "2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 按字典序排序
+	if out != "a=1&b=2" {
+		t.Fatalf("排序错: %q", out)
+	}
+}
+
+func TestURLFormEncode_ChineseAndSpecial(t *testing.T) {
+	out, err := URLFormEncode(map[string]string{"name": "上海", "q": "a b&c=d"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// name 字典序在 q 前
+	if !strings.HasPrefix(out, "name=") {
+		t.Fatalf("编码顺序错: %q", out)
+	}
+	if !strings.Contains(out, "%E4%B8%8A%E6%B5%B7") {
+		t.Fatalf("中文没编码: %q", out)
+	}
+	if !strings.Contains(out, "a+b%26c%3Dd") {
+		t.Fatalf("特殊字符没编码: %q", out)
+	}
+}
+
+func TestURLFormEncode_Empty(t *testing.T) {
+	out, err := URLFormEncode(map[string]string{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "" {
+		t.Fatalf("空 map 应该输出空: %q", out)
+	}
+}
+
+func TestURLFormDecode_Basic(t *testing.T) {
+	out, err := URLFormDecode("a=1&b=2&b=3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out["a"]) != 1 || out["a"][0] != "1" {
+		t.Fatalf("a 解析错: %v", out["a"])
+	}
+	if len(out["b"]) != 2 || out["b"][0] != "2" || out["b"][1] != "3" {
+		t.Fatalf("b 重复 key 应合并: %v", out["b"])
+	}
+}
+
+func TestURLFormDecode_Chinese(t *testing.T) {
+	out, err := URLFormDecode("name=%E4%B8%8A%E6%B5%B7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out["name"]) != 1 || out["name"][0] != "上海" {
+		t.Fatalf("中文解码失败: %v", out["name"])
+	}
+}
+
+func TestURLFormDecode_Empty(t *testing.T) {
+	out, err := URLFormDecode("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out) != 0 {
+		t.Fatalf("空输入应得到空 map: %v", out)
+	}
+}
+
+func TestURLFormRoundTrip(t *testing.T) {
+	orig := map[string]string{"a": "1", "中文": "上海"}
+	encoded, err := URLFormEncode(orig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := URLFormDecode(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded["a"][0] != "1" || decoded["中文"][0] != "上海" {
+		t.Fatalf("round-trip 失败: %v", decoded)
+	}
+}
+
+// ---------- v0.8：SQL 格式化（依赖 node + sqlfmt.mjs） ----------
+//
+// 这些测试需要外部环境（node + scripts/sqlfmt.mjs），找不到时跳过，不让单测挂掉。
+// 想跑：在仓库根目录跑 go test，内部会自动定位 ../scripts/sqlfmt.mjs。
+
+func TestFormatSQL_MySQL_Basic(t *testing.T) {
+	out, err := FormatSQL("select id,name from users where age>18", SQLFormatOptions{
+		Language:    "mysql",
+		KeywordCase: "upper",
+		TabWidth:    2,
+	}, "")
+	if err != nil {
+		t.Skipf("跳 SQL 测试（环境缺 node/sqlfmt.mjs）：%v", err)
+	}
+	if !strings.Contains(out, "SELECT") || !strings.Contains(out, "FROM") {
+		t.Fatalf("MySQL 格式化结果不像样: %s", out)
+	}
+}
+
+func TestFormatSQL_Postgres(t *testing.T) {
+	out, err := FormatSQL(`SELECT u.id, u.name FROM users u WHERE u.age > 18 AND u.city = 'SH' ORDER BY u.id`, SQLFormatOptions{
+		Language:    "postgresql",
+		KeywordCase: "upper",
+		TabWidth:    2,
+	}, "")
+	if err != nil {
+		t.Skipf("跳 SQL 测试: %v", err)
+	}
+	if !strings.Contains(out, "SELECT") {
+		t.Fatalf("PG 格式化失败: %s", out)
+	}
+}
+
+func TestFormatSQL_EmptyInput(t *testing.T) {
+	_, err := FormatSQL("   ", SQLFormatOptions{}, "")
+	if err == nil {
+		t.Fatal("空 SQL 应报错")
+	}
+}
+
+func TestFormatSQL_ScriptNotFound(t *testing.T) {
+	_, err := FormatSQL("select 1", SQLFormatOptions{}, "/nonexistent/path/sqlfmt.mjs")
+	if err == nil {
+		t.Fatal("找不到脚本时应报错")
+	}
+	if !strings.Contains(err.Error(), "找不到 sqlfmt.mjs") {
+		t.Fatalf("错误文案不对: %v", err)
+	}
+}
+
+func TestFormatSQL_ChinesePreserved(t *testing.T) {
+	out, err := FormatSQL(`SELECT * FROM users WHERE city = '上海'`, SQLFormatOptions{
+		Language:    "mysql",
+		KeywordCase: "upper",
+		TabWidth:    2,
+	}, "")
+	if err != nil {
+		t.Skipf("跳: %v", err)
+	}
+	if !strings.Contains(out, "上海") {
+		t.Fatalf("中文没保留: %s", out)
+	}
+}
+
+func TestJSONToYAML_NumberTypes(t *testing.T) {
+	// json.Number 在 decodeStrictJSON 里被保留；
+	// JSONToYAML 应该把它转成 int64 / float64，输出不带引号。
+	in := `{"int":18,"float":1.5,"big":9999999999}`
+	out, err := JSONToYAML(in, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "int: 18") {
+		t.Fatalf("int 没转成数字: %s", out)
+	}
+	if !strings.Contains(out, "float: 1.5") {
+		t.Fatalf("float 没转成数字: %s", out)
+	}
+	if !strings.Contains(out, "big: 9999999999") {
+		t.Fatalf("大整数没转成数字: %s", out)
+	}
+	// 不能有 int: "18" 这种带引号的字符串
+	if strings.Contains(out, `"18"`) {
+		t.Fatalf("int 仍带引号: %s", out)
+	}
+}

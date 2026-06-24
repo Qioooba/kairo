@@ -76,6 +76,14 @@ type AppConfig struct {
 	// 匹配按平台路径分隔符边界（Windows 盘符也算边界）。
 	AllowedDownloadRoots []string `yaml:"allowed_download_roots,omitempty" json:"allowed_download_roots,omitempty"`
 
+	// ExternalOpeners v0.8 起：用户自定义的"用外部程序打开下载文件"列表。
+	// 每个元素 {Name, Path, Icon}，Name 在 openers 间唯一，作为前端按钮标识符。
+	// Icon 是 emoji（如 "📝" / "💡"），前端拿来当按钮图标 —— 不去解析 .exe/.app 真实图标。
+	// Path 是可执行文件的绝对路径（Windows .exe / macOS .app 的可执行 / Linux ELF）。
+	// 调 /api/local/open-with 时按 Name 查表，再用 Path + 文件绝对路径 exec.Command 启动。
+	// 留空 = 不启用该功能（下载历史不会显示额外按钮）。
+	ExternalOpeners []ExternalOpener `yaml:"external_openers,omitempty" json:"external_openers,omitempty"`
+
 	// 解析后的绝对路径
 	downloadDirAbs string
 	logDirAbs      string
@@ -273,6 +281,30 @@ func (ld *LogDirEntry) ListModeIsAuto() bool {
 	return false
 }
 
+// ExternalOpener 一个用户配置的"外部打开器"——可执行文件 + 显示名 + emoji 图标。
+//
+// 设计动机：
+//   - 用户下载 .jsp / .java / .txt 等不同后缀，想用不同软件打开（Notepad++ / IDEA / VS Code）；
+//   - 不绑后缀映射——用户自己挑软件、自己点按钮，避免"系统默认打开"猜错；
+//   - 图标走 emoji 而不是解析 .exe/.app 二进制图标，避免依赖平台特定库。
+type ExternalOpener struct {
+	Name string `yaml:"name" json:"name"` // 唯一标识（前端按钮 title 也用这个），非空
+	Path string `yaml:"path" json:"path"` // 可执行文件绝对路径；留空则不显示（前端会过滤）
+	Icon string `yaml:"icon" json:"icon"` // emoji（可空，空字符串按钮显示 ⚙）
+}
+
+// FindOpener 按名字找 opener。找不到返回 nil。
+// 用于 /api/local/open-with 校验请求里的 opener 名是否在白名单里——
+// 防止恶意请求随便指定一个可执行文件路径来执行。
+func (a *AppConfig) FindOpener(name string) *ExternalOpener {
+	for i := range a.ExternalOpeners {
+		if a.ExternalOpeners[i].Name == name {
+			return &a.ExternalOpeners[i]
+		}
+	}
+	return nil
+}
+
 // SearchConfig 搜索相关默认值
 type SearchConfig struct {
 	DefaultLatestFiles  int `yaml:"default_latest_files" json:"default_latest_files"`
@@ -390,6 +422,27 @@ func (c *Config) Validate() error {
 	if c.App.Host != "127.0.0.1" && c.App.Host != "localhost" {
 		// 安全要求：只允许本地监听
 		return fmt.Errorf("app.host 必须为 127.0.0.1 或 localhost，当前: %q", c.App.Host)
+	}
+	// v0.8：external_openers 校验
+	//   - name 必填且非空白（前端靠 name 找按钮）；
+	//   - path 必填且非空白（防止有人存了个空记录却还能"打开"）；
+	//   - name 唯一（重复会让 FindOpener 拿错一个，行为不可预测）；
+	// 不在这里校验 path 是否真存在 / 是否可执行——那要看用户本机情况，
+	// 启动时 hard-fail 太重；运行时 open-with 失败由 handler 返回 500 即可。
+	if len(c.App.ExternalOpeners) > 0 {
+		seen := make(map[string]struct{}, len(c.App.ExternalOpeners))
+		for i, op := range c.App.ExternalOpeners {
+			if strings.TrimSpace(op.Name) == "" {
+				return fmt.Errorf("app.external_openers[%d].name 不能为空", i)
+			}
+			if strings.TrimSpace(op.Path) == "" {
+				return fmt.Errorf("app.external_openers[%d].path 不能为空（name=%q）", i, op.Name)
+			}
+			if _, dup := seen[op.Name]; dup {
+				return fmt.Errorf("app.external_openers[%d].name %q 重复", i, op.Name)
+			}
+			seen[op.Name] = struct{}{}
+		}
 	}
 	if c.App.SSHLogMaxMB < 0 || c.App.SSHLogMaxMB > 1024 {
 		return fmt.Errorf("app.ssh_log_max_mb 必须在 0..1024 之间，当前: %d", c.App.SSHLogMaxMB)
@@ -558,6 +611,10 @@ func (c *Config) Clone() *Config {
 	// AppConfig.FreeFileRoots 是 slice header 复用底层数组，必须新建。
 	if c.App.FreeFileRoots != nil {
 		out.App.FreeFileRoots = append([]string(nil), c.App.FreeFileRoots...)
+	}
+	// v0.8：AppConfig.ExternalOpeners 同理必须新建 slice（且每项是值拷贝 struct，无指针字段）。
+	if c.App.ExternalOpeners != nil {
+		out.App.ExternalOpeners = append([]ExternalOpener(nil), c.App.ExternalOpeners...)
 	}
 
 	// Systems 整树深拷贝：SystemConfig / ServerConfig / LogDirEntry 都按值拷贝，

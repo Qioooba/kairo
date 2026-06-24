@@ -1,0 +1,178 @@
+package httpserver
+
+// ---------- /api/http/request ----------
+//
+// 内网 HTTP 测试页：发一个 HTTP 请求，返回 status / headers / body / 耗时。
+// 用标准库 net/http 实现，零额外依赖。
+//
+// 安全约束：
+//   - Method 仅允许标准 GET/POST/PUT/DELETE/HEAD/PATCH/OPTIONS
+//   - URL 必须以 http:// 或 https:// 开头
+//   - Body 4MB 上限（与 formatter 一致）
+//   - 总超时：客户端 timeout 字段控制，0 表示 30s 默认
+//   - FollowRedirect: 默认 true，可手动 false
+
+import (
+	"bytes"
+	"context"
+	"crypto/tls"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+	"time"
+)
+
+type httpRequestReq struct {
+	Method         string            `json:"method"`
+	URL            string            `json:"url"`
+	Headers        map[string]string `json:"headers"`
+	Body           string            `json:"body"`
+	TimeoutMs      int               `json:"timeout_ms"`      // 0 = 30s
+	FollowRedirect bool              `json:"follow_redirect"` // 默认 true
+	InsecureTLS    bool              `json:"insecure_tls"`    // 跳过证书校验（内网自签用）
+}
+
+type httpRequestResp struct {
+	Ok         bool              `json:"ok"`
+	Status     int               `json:"status"`
+	StatusText string            `json:"status_text"`
+	Headers    map[string]string `json:"headers"`
+	Body       string            `json:"body"`
+	BodyBytes  int               `json:"body_bytes"`
+	ElapsedMs  int64             `json:"elapsed_ms"`
+	FinalURL   string            `json:"final_url"`
+	Truncated  bool              `json:"truncated"`
+	Error      string            `json:"error,omitempty"`
+}
+
+const (
+	httpDefaultTimeoutMs = 30_000
+	httpMaxBodyCapture   = 1 * 1024 * 1024 // 1MB
+)
+
+var allowedHTTPMethods = map[string]struct{}{
+	"GET": {}, "POST": {}, "PUT": {}, "DELETE": {},
+	"HEAD": {}, "PATCH": {}, "OPTIONS": {},
+}
+
+func (s *Server) handleHTTPRequest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeErr(w, 405, errors.New("仅支持 POST"))
+		return
+	}
+	var req httpRequestReq
+	if err := json.NewDecoder(io.LimitReader(r.Body, 4*1024*1024)).Decode(&req); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	resp, err := doHTTPRequest(req)
+	if err != nil {
+		writeJSON(w, 200, resp)
+		return
+	}
+	writeJSON(w, 200, resp)
+}
+
+func doHTTPRequest(req httpRequestReq) (httpRequestResp, error) {
+	method := strings.ToUpper(strings.TrimSpace(req.Method))
+	if method == "" {
+		method = http.MethodGet
+	}
+	if _, ok := allowedHTTPMethods[method]; !ok {
+		return httpRequestResp{Ok: false, Error: "不支持的 method: " + method}, nil
+	}
+	url := strings.TrimSpace(req.URL)
+	if url == "" {
+		return httpRequestResp{Ok: false, Error: "URL 不能为空"}, nil
+	}
+	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
+		return httpRequestResp{Ok: false, Error: "URL 必须以 http:// 或 https:// 开头"}, nil
+	}
+
+	timeoutMs := req.TimeoutMs
+	if timeoutMs <= 0 {
+		timeoutMs = httpDefaultTimeoutMs
+	}
+	if timeoutMs > 5*60_000 {
+		timeoutMs = 5 * 60_000 // 5 分钟硬上限
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutMs)*time.Millisecond)
+	defer cancel()
+
+	transport := &http.Transport{
+		TLSClientConfig:       nil,
+		MaxIdleConns:          10,
+		IdleConnTimeout:       30 * time.Second,
+		DisableCompression:    false,
+		ResponseHeaderTimeout: 0,
+	}
+	if req.InsecureTLS {
+		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+	}
+
+	client := &http.Client{
+		Transport: transport,
+		Timeout:   time.Duration(timeoutMs) * time.Millisecond,
+	}
+	if !req.FollowRedirect {
+		client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		}
+	}
+
+	var bodyReader io.Reader
+	if req.Body != "" {
+		bodyReader = bytes.NewReader([]byte(req.Body))
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, method, url, bodyReader)
+	if err != nil {
+		return httpRequestResp{Ok: false, Error: "构造请求失败: " + err.Error()}, nil
+	}
+	for k, v := range req.Headers {
+		httpReq.Header.Set(k, v)
+	}
+	if httpReq.Header.Get("User-Agent") == "" {
+		httpReq.Header.Set("User-Agent", "ops-toolbox-http-test/0.7")
+	}
+
+	start := time.Now()
+	resp, err := client.Do(httpReq)
+	elapsed := time.Since(start)
+	if err != nil {
+		return httpRequestResp{
+			Ok:        false,
+			ElapsedMs: elapsed.Milliseconds(),
+			Error:     fmt.Sprintf("请求失败: %v", err),
+		}, nil
+	}
+	defer resp.Body.Close()
+
+	limited := io.LimitReader(resp.Body, httpMaxBodyCapture+1)
+	bodyBytes, _ := io.ReadAll(limited)
+	truncated := false
+	if len(bodyBytes) > httpMaxBodyCapture {
+		bodyBytes = bodyBytes[:httpMaxBodyCapture]
+		truncated = true
+	}
+	headers := make(map[string]string, len(resp.Header))
+	for k, v := range resp.Header {
+		if len(v) > 0 {
+			headers[k] = v[0]
+		}
+	}
+
+	return httpRequestResp{
+		Ok:         true,
+		Status:     resp.StatusCode,
+		StatusText: http.StatusText(resp.StatusCode),
+		Headers:    headers,
+		Body:       string(bodyBytes),
+		BodyBytes:  len(bodyBytes),
+		ElapsedMs:  elapsed.Milliseconds(),
+		FinalURL:   resp.Request.URL.String(),
+		Truncated:  truncated,
+	}, nil
+}

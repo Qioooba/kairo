@@ -66,6 +66,35 @@ go run .
 3. 回到 **WebSphere 日志**，选目标 → 列文件 → 搜索 → Tail
 4. 需要 properties / xml / jar 等不在白名单目录的文件？用 **文件下载**
 
+### 启动时会自动恢复哪些用户偏好（不用重设）
+
+为了避免"用户设置过的下次启动又要重新搞一遍"，以下偏好会跨进程保留：
+
+| 偏好 | 存哪 | 何时回填 |
+| --- | --- | --- |
+| **Tail 高亮规则** | `data/preferences.json` 的 `tail.highlights` | 主页 `app.js` 启动时 `GET /api/preferences` 拉到 `OTB.state.tailHighlights`；websphere tail tab / 独立 tail 窗口共用 |
+| **系统配置** | `config.yaml`（COW Manager 热替换） | 启动时 Load → 立即生效；页面保存后立即写盘 |
+| **凭据模式** | `app.credential_store`（默认 keyring） | 启动时 `credentials.SetMode` |
+| **SSH 日志 / compat profile** | `app.ssh_debug` / `app.ssh_traffic_dump` / `app.ssh_compat_profile` | 启动时 `sshclient.SetLogConfig` / `SetDefaultProfile` |
+| **文件浏览器开关 + 路径白名单** | `app.enable_free_file_browser` / `app.free_file_roots` | 启动时打 WARNING（开）+ handler 即时校验 |
+| **下载到指定目录开关 + 白名单** | `app.allow_custom_download_dir` / `app.allowed_download_roots` | 启动时 `TargetDirAllowed` 立即生效 |
+
+浏览器侧（localStorage，不进文件）跨刷新保留：
+
+| 偏好 | 键 |
+| --- | --- |
+| 主题（dark / light / green / hc） | `otb_theme` |
+| WebSphere 上次选的「系统 / 服务器 / 目录 / 用户名」 | `otb:last:websphere:sel` |
+| 文件下载页「当前路径 / 过滤词」 | `otb:last:files:sel` / `otb:last:files:filter` |
+| WebSphere 目标区折叠 / 展开 | `otb:last:websphere:target_collapsed` |
+| 提示 banner 关闭状态 | `otb:dismissed:*` |
+| 实时 tail 凭据（单次内存 → opener 共享，不进 LS） | `window.opener.OTB._tailCred` |
+
+> 注意：localStorage 是浏览器本地存储，**换浏览器 / 清缓存 / 隐身模式**会丢；
+> 想跨电脑同步就走 `data/preferences.json`（tail 高亮目前走的这条路径）。
+> 如果你想把更多偏好从 localStorage 迁到 preferences.json（彻底跟浏览器解耦），
+> 在 `web/core.js` 的 `LAST_PREFIX` 相关位置加一对 GET/PUT 调用即可。
+
 ---
 
 ## 🎯 功能矩阵
@@ -82,7 +111,8 @@ go run .
 | **上下文查看** | 命中行前后各 30 行（在配置里可调），用 `sed -n a,bp` 拿，绝不下整个文件 |
 | **下载最新 N 个** | 默认最新 1 个，可配 1–5 个，带 sidecar 元数据 |
 | **指定文件下载** | 勾选任意文件 → 异步任务 + SSE 进度 + 可取消 + 多文件 zip |
-| **实时 Tail** | SSE 长连接，5000 行环形缓冲 + `requestAnimationFrame` 批量 flush，独立 `/tail.html` 全屏窗口 |
+| **实时 Tail** | SSE 长连接，可配最多保留行数（默认 1000）+ `requestAnimationFrame` 批量 flush，独立 `/tail.html` 全屏窗口 |
+| **Tail 多关键词高亮** | 在 tail 面板里加关键词 + 选颜色（12 色调色板 + 自定义 hex，支持中文 / 特殊字符），匹配段自动背景高亮；多条规则共用一套面板，规则保存到本地 `data/preferences.json`，**重启 / 刷新自动恢复**，独立 tail 窗口与主页共用同一份 |
 | **文件名模糊搜索** | 子串 / glob（`*.log` / `SystemOut*` / `log?`），实时显示 `显示 X / Y` |
 | **文件名点击预览** | 新窗口 + modal 双模式；编码自动归一（utf-8 / gbk / gb18030）；NUL 字节检测防乱码；二进制文件提示 |
 
@@ -115,7 +145,10 @@ go run .
 
 - **JSON**：格式化（2 空格 / 4 空格 / Tab / 自定义）、压缩、严格校验（多余尾随字符报错）
 - **XML**：格式化、压缩
-- 单元测试覆盖 `decodeStrictJSON` / `FormatJSON` / `MinifyJSON` / `ValidateJSON` / `FormatXML` / `MinifyXML`
+- **YAML**：格式化（缩进 1-8 空格可选）、压缩、校验、YAML ↔ JSON 互转
+- **SQL**：格式化（基于 [sql-formatter-org/sql-formatter](https://github.com/sql-formatter-org/sql-formatter)，通过本地 Node 子进程调用），支持 15+ 方言：MySQL / PostgreSQL / Oracle PL/SQL / SQL Server / SQLite / BigQuery / Snowflake / Redshift / MariaDB / DB2 / Spark SQL / N1QL / Trino / DuckDB / Standard SQL
+- **URL-encoded / form-data**：encode（map → `a=1&b=2`，按 key 字典序） / decode（`a=1&b=2` → map，重复 key 自动合并成数组）
+- 单元测试覆盖 `decodeStrictJSON` / `FormatJSON` / `MinifyJSON` / `ValidateJSON` / `FormatXML` / `MinifyXML` / `FormatYAML` / `MinifyYAML` / `ValidateYAML` / `YAMLToJSON` / `JSONToYAML` / `URLFormEncode` / `URLFormDecode` / `FormatSQL`
 
 ### 4. 系统配置（可视化编辑器）
 
@@ -186,7 +219,7 @@ go run .
 | 选型 | 说明 |
 | --- | --- |
 | **原生 JavaScript (ES2020)** | 无 React / Vue 依赖，单文件 IIFE |
-| **模块拆分** | `core.js` / `state.js` / `api.js` / `theme.js` + `pages/*.js`（home / websphere / files / formatter / commands / diagnostics / config / downloads / history） |
+| **模块拆分** | `core.js` / `state.js` / `api.js` / `theme.js` + `pages/*.js`（home / websphere / files / formatter / commands / diagnostics / config / downloads / history / jsonpath / timestamp / cron / http / compare） |
 | **CSS 变量主题** | `:root[data-theme=...]` 4 套主题（dark / light / green / hc）；inline script 在 `<head>` 提前设 `data-theme` 防 FOUC |
 | **Node 单测** | `web/app.test.js` 覆盖 `escapeHtml` / `formatBytes` / `formatTime` / `trimMiddle` / `cssEscape` / `pctText` / `validate` |
 | **go:embed** | `web/` 整个目录内嵌进二进制，无外部静态文件 |
@@ -253,7 +286,7 @@ go run .
 │  ├── dlmanager   异步下载任务池 + SSE 进度广播               │
 │  ├── tailmgr     Tail 会话池 + Streamer 接口（可 mock）      │
 │  ├── logquery    后端命令模板（find/grep/sed/sort/head）     │
-│  ├── formatter   JSON / XML 格式化（本地）                   │
+│  ├── formatter   JSON / XML / YAML / SQL / URL-form 格式化（本地）│
 │  └── diagnostics 环境自检（App/Build/Runtime/Tools/Servers）│
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -334,6 +367,9 @@ go run .
 | POST | `/api/downloads/all` | 清空 downloads/ |
 | POST | `/api/format/json` | JSON 格式化 / 压缩 / 校验 |
 | POST | `/api/format/xml` | XML 格式化 / 压缩 |
+| POST | `/api/format/yaml` | YAML 格式化 / 压缩 / 校验 / ↔ JSON 互转 |
+| POST | `/api/format/sql` | SQL 格式化（多方言） |
+| POST | `/api/format/url-form` | URL-encoded / form-data 编码 + 解码 |
 | GET | `/downloads/<file>` | 取本地下载文件（RFC 5987 `filename*`） |
 | GET | `/api/diagnostics` | 环境自检（App/Build/Runtime/Tools/Servers） |
 
@@ -376,7 +412,7 @@ go test ./...
 | `internal/sshclient` | 兼容握手 / 关键词转义 / safeWriter 截断 / 错误分类 |
 | `internal/dlmanager` | 任务生命周期 / SSE 广播 / GC 周期可调 |
 | `internal/tailmgr` | Streamer 接口 mock / ctx 取消 / 流错 / GC |
-| `internal/formatter` | JSON 严格解码 / 格式化 / 压缩 / 校验 / XML |
+| `internal/formatter` | JSON / XML / YAML / SQL / URL-form 编解码（本地）；SQL 走 Node 子进程调用 `scripts/sqlfmt.mjs`（`sql-formatter-org/sql-formatter` 库） |
 | `internal/diagnostics` | 环境收集 / 工具探测 / 服务器握手探测 |
 
 ### 前端

@@ -15,6 +15,70 @@
   const { el, $, toast, setStatus, cssEscape, pctText, formatBytes, formatTime, trimMiddle, looksMojibake, basenameOf } = OTB.core;
   const { api } = OTB.api;
 
+  // ===== 搜索关键词历史（localStorage 持久化）=====
+  // 行为：
+  //   - 提交搜索时记录表达式；空 / 纯空白 / 仅 1 字符不记录；
+  //   - 默认 placeholder 的 'Exception' 也不算历史（首次进入时不污染）；
+  //   - 严格去重：相同字符串先删旧的再 push 头部；
+  //   - 上限 20 条，超过截尾。
+  // 设计动机：日志查询是高频操作，关键词经常重复（"Exception"、"NPE"、"订单超时" 等），
+  // 鼠标点选比重新手敲快很多；localStorage 存避免改后端 schema。
+  const SEARCH_HISTORY_KEY = 'otb:websphere:search-history';
+  const SEARCH_HISTORY_MAX = 20;
+  // 用户首次进入看到的默认值（写在 queryInp.value 里）—— 不要塞进历史。
+  const SEARCH_DEFAULT_VALUE = 'Exception';
+
+  function loadSearchHistory() {
+    try {
+      const raw = localStorage.getItem(SEARCH_HISTORY_KEY);
+      if (!raw) return [];
+      const arr = JSON.parse(raw);
+      // 防御：非法数据静默回退到空
+      if (!Array.isArray(arr)) return [];
+      // 每项必须是 {q: string, ts: number}，缺字段的丢掉
+      return arr.filter(x => x && typeof x.q === 'string' && typeof x.ts === 'number').slice(0, SEARCH_HISTORY_MAX);
+    } catch (e) {
+      // localStorage 可能因隐私模式 / 配额满抛错；不阻塞 UI
+      return [];
+    }
+  }
+
+  function saveSearchHistory(arr) {
+    try {
+      localStorage.setItem(SEARCH_HISTORY_KEY, JSON.stringify(arr.slice(0, SEARCH_HISTORY_MAX)));
+    } catch (e) {
+      // ignore：localStorage 写失败不影响搜索功能本身
+    }
+  }
+
+  function pushSearchHistory(q) {
+    const trimmed = (q || '').trim();
+    // 跳过空白 / 太短 / 默认占位符
+    if (!trimmed || trimmed.length < 2 || trimmed === SEARCH_DEFAULT_VALUE) return;
+    const list = loadSearchHistory();
+    // 严格去重（先删旧的同字符串，大小写敏感——搜索语法区分大小写）
+    const filtered = list.filter(x => x.q !== trimmed);
+    filtered.unshift({ q: trimmed, ts: Date.now() });
+    saveSearchHistory(filtered);
+  }
+
+  // 把时间戳格式化成"X 分钟前 / YYYY-MM-DD HH:mm"
+  // 注意：这里不复用 core.formatTime —— core.formatTime 走 toLocaleString() 输出
+  // "2026/6/24 下午10:30:00" 这种形式，对 1 小时内的"刚刚 / N 分钟前"完全无能为力。
+  // 自写是为了支持相对时间显示；>1 天的回退到固定格式而非 locale 字符串（更紧凑）。
+  function formatHistoryTime(ts) {
+    if (!ts) return '';
+    const diff = Date.now() - Number(ts);
+    if (diff < 60 * 1000) return '刚刚';
+    if (diff < 60 * 60 * 1000) return Math.floor(diff / 60000) + ' 分钟前';
+    if (diff < 24 * 60 * 60 * 1000) return Math.floor(diff / 3600000) + ' 小时前';
+    const d = new Date(Number(ts));
+    if (isNaN(d.getTime())) return '';
+    const pad = n => (n < 10 ? '0' + n : '' + n);
+    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate())
+      + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+  }
+
   function renderWebsphere(view) {
     let cfg = null;
     let listState = { files: [], serverName: '', dlId: null, dlEvtSrc: null, fileStates: {}, lastDownloadFolder: '' };
@@ -24,7 +88,205 @@
     const dirSel = el('select', { id: 'ws-dir' });
     const userInp = el('input', { type: 'text', id: 'ws-user', placeholder: 'SSH 用户名（可留空，使用配置默认）' });
     const passInp = el('input', { type: 'password', id: 'ws-pass', placeholder: 'SSH 密码' });
-    const queryInp = el('input', { type: 'text', id: 'ws-query', placeholder: '例: Exception && userinfo   或   !DEBUG', value: 'Exception' });
+    const queryInp = el('input', {
+      type: 'text', id: 'ws-query',
+      placeholder: '例: Exception && userinfo   或   !DEBUG', value: 'Exception',
+      autocomplete: 'off', spellcheck: 'false',
+      role: 'combobox',
+      'aria-autocomplete': 'none',
+      'aria-haspopup': 'listbox',
+      'aria-expanded': 'false',
+      'aria-controls': 'ws-query-history-popover',
+      'aria-activedescendant': ''
+    });
+
+    // ===== 搜索关键词历史下拉面板 =====
+    // 行为：
+    //   - 聚焦 queryInp 时展开；blur 时延时收起（150ms 内点条目不会误关）；
+    //   - ↑↓ 选中条目；Enter 直接搜；Esc 收起；
+    //   - 点条目 = 填入 queryInp + 立即触发 doSearch；
+    //   - 底部「清空历史」按钮，一键清空 localStorage + 重新渲染；
+    //   - 历史为空时整个面板隐藏。
+    // 用一个 inline-block 的 wrapper 把 queryInp 和 popover 包一起，
+    // popover 用 position:absolute 定位到 wrapper 下方。
+    const queryWrap = el('div', { class: 'ws-query-wrap', style: 'position:relative;' });
+    queryWrap.appendChild(queryInp);
+    const queryPopover = el('div', {
+      id: 'ws-query-history-popover',
+      class: 'ws-query-popover',
+      role: 'listbox',
+      style: 'display:none; position:absolute; top:100%; left:0; right:0; z-index:50;'
+    });
+    queryWrap.appendChild(queryPopover);
+
+    // 渲染下拉面板内容（每次展开 / 历史变化时重画）
+    let queryHistHighlightIdx = -1; // 当前键盘高亮的条目索引
+    // suspendShow：选择条目 / 清空后需要临时屏蔽 focus 事件触发的 showQueryHistory。
+    // 否则 hideQueryHistory() → queryInp.focus() 会触发 focus listener 再把面板显示出来，
+    // 形成"瞬开瞬关"的闪烁。setTimeout 在 200ms 后释放锁（覆盖 blur 延时的 150ms）。
+    let queryHistorySuspendUntil = 0;
+    function isQueryHistorySuspended() {
+      return Date.now() < queryHistorySuspendUntil;
+    }
+    function suspendQueryHistoryShow(ms) {
+      queryHistorySuspendUntil = Date.now() + (ms || 200);
+    }
+
+    // 返回渲染时的 list（避免调用方再 loadSearchHistory 一次）
+    function renderQueryHistory() {
+      const list = loadSearchHistory();
+      queryPopover.innerHTML = '';
+      queryHistHighlightIdx = -1;
+      // 重置 aria-activedescendant（无高亮）
+      queryInp.setAttribute('aria-activedescendant', '');
+      if (!list.length) {
+        // 空历史：面板收起（不显示空状态，免得在 input 里第一次就弹个空框）
+        queryPopover.style.display = 'none';
+        queryInp.setAttribute('aria-expanded', 'false');
+        return list;
+      }
+      list.forEach((item, idx) => {
+        const row = el('div', {
+          class: 'ws-query-popover-row',
+          id: 'ws-query-history-option-' + idx,
+          role: 'option',
+          'aria-selected': 'false',
+          'data-idx': String(idx),
+          style: 'display:flex; justify-content:space-between; align-items:center; gap:10px; padding:6px 10px; cursor:pointer; border-bottom:1px solid var(--border, #eee);'
+        }, [
+          el('span', {
+            class: 'ws-query-popover-q',
+            style: 'font-family: var(--mono, monospace); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex:1;',
+            text: item.q
+          }),
+          el('span', {
+            class: 'ws-query-popover-ts text-dim',
+            style: 'font-size:11.5px; white-space:nowrap;',
+            text: formatHistoryTime(item.ts)
+          })
+        ]);
+        row.addEventListener('mousedown', (ev) => {
+          // 用 mousedown 而不是 click，防止 input 的 blur 先于 click 触发导致面板提前收起
+          ev.preventDefault();
+          selectHistoryItem(item.q);
+        });
+        row.addEventListener('mouseenter', () => {
+          queryHistHighlightIdx = -1;
+          updateHistoryHighlight();
+        });
+        queryPopover.appendChild(row);
+      });
+      // 「清空历史」分隔 + 按钮
+      const sep = el('div', { style: 'height:1px; background:var(--border, #eee); margin-top:2px;' });
+      queryPopover.appendChild(sep);
+      const clearBtn = el('div', {
+        class: 'ws-query-popover-clear',
+        style: 'padding:6px 10px; cursor:pointer; color:var(--text-dim, #888); font-size:12px; text-align:center;',
+        text: '🗑 清空搜索历史'
+      });
+      clearBtn.addEventListener('mousedown', (ev) => {
+        ev.preventDefault();
+        try { localStorage.removeItem(SEARCH_HISTORY_KEY); } catch (e) { /* ignore */ }
+        hideQueryHistory();
+        toast('搜索历史已清空', 'ok');
+      });
+      queryPopover.appendChild(clearBtn);
+      return list;
+    }
+
+    function showQueryHistory() {
+      // 屏蔽期（选择条目后 / 清空后）不允许重新展开
+      if (isQueryHistorySuspended()) return;
+      const list = renderQueryHistory();
+      if (!list.length) return; // renderQueryHistory 已设 display:none
+      queryPopover.style.display = '';
+      queryInp.setAttribute('aria-expanded', 'true');
+    }
+    function hideQueryHistory() {
+      queryPopover.style.display = 'none';
+      queryInp.setAttribute('aria-expanded', 'false');
+      queryHistHighlightIdx = -1;
+      queryInp.setAttribute('aria-activedescendant', '');
+      updateHistoryHighlight();
+    }
+    function isQueryHistoryVisible() {
+      return queryPopover.style.display !== 'none';
+    }
+    function updateHistoryHighlight() {
+      // -1 = 无高亮（鼠标 hover 模式）
+      const rows = queryPopover.querySelectorAll('.ws-query-popover-row');
+      rows.forEach((r, i) => {
+        if (i === queryHistHighlightIdx) {
+          r.style.background = 'var(--hover, rgba(0,0,0,0.06))';
+          r.setAttribute('aria-selected', 'true');
+        } else {
+          r.style.background = '';
+          r.setAttribute('aria-selected', 'false');
+        }
+      });
+      // 同步 aria-activedescendant 让屏幕阅读器播报当前选中条目
+      queryInp.setAttribute(
+        'aria-activedescendant',
+        queryHistHighlightIdx >= 0 ? 'ws-query-history-option-' + queryHistHighlightIdx : ''
+      );
+    }
+    function selectHistoryItem(q) {
+      queryInp.value = q;
+      // 先屏蔽 showQueryHistory，再收起面板 + 重新聚焦：
+      // 否则 hideQueryHistory() → queryInp.focus() 会触发 focus listener 把面板又显示出来。
+      suspendQueryHistoryShow(250);
+      hideQueryHistory();
+      queryInp.focus();
+      // 立即触发搜索（与点搜索按钮等价）
+      doSearch();
+    }
+    function moveHistoryHighlight(delta) {
+      const rows = queryPopover.querySelectorAll('.ws-query-popover-row');
+      if (!rows.length) return;
+      let next = queryHistHighlightIdx + delta;
+      if (next < 0) next = rows.length - 1;
+      if (next >= rows.length) next = 0;
+      queryHistHighlightIdx = next;
+      updateHistoryHighlight();
+    }
+    function confirmHistoryHighlight() {
+      if (queryHistHighlightIdx < 0) return false;
+      const list = loadSearchHistory();
+      const item = list[queryHistHighlightIdx];
+      if (item) selectHistoryItem(item.q);
+      return true;
+    }
+
+    // 事件：聚焦展开 + 展开后再渲染一次（保证最新）
+    let queryBlurTimer = null;
+    queryInp.addEventListener('focus', showQueryHistory);
+    queryInp.addEventListener('blur', () => {
+      // 延时收起：让用户有时间点条目（mousedown 的 preventDefault 不会触发 blur 后立刻 hidden）
+      // 每次 blur 先清掉上一次的 timer，避免快速 focus/blur 序列里多个 hideQueryHistory 排队触发
+      if (queryBlurTimer) clearTimeout(queryBlurTimer);
+      queryBlurTimer = setTimeout(hideQueryHistory, 150);
+    });
+    queryInp.addEventListener('keydown', (ev) => {
+      // 仅当下拉可见时响应 ↑↓ Enter Esc
+      if (!isQueryHistoryVisible()) {
+        // Esc 在面板隐藏时也无副作用，保持一致
+        return;
+      }
+      if (ev.key === 'ArrowDown') {
+        ev.preventDefault();
+        moveHistoryHighlight(1);
+      } else if (ev.key === 'ArrowUp') {
+        ev.preventDefault();
+        moveHistoryHighlight(-1);
+      } else if (ev.key === 'Enter') {
+        if (confirmHistoryHighlight()) {
+          ev.preventDefault(); // 阻止表单默认提交，避免和 doSearch 重复
+        }
+      } else if (ev.key === 'Escape') {
+        ev.preventDefault();
+        hideQueryHistory();
+      }
+    });
     const filesNSel = el('select', { id: 'ws-files-n' });
     [1, 3, 5, 10].forEach(n => {
       const o = el('option', { value: String(n), text: '最近 ' + n + '个文件' });
@@ -1171,6 +1433,10 @@
       const targets = getSelectedTargets();
       if (!targets.length) { toast('请先勾选服务器 + 目录（多对多）', 'warn'); return; }
       if (!queryInp.value.trim()) { toast('搜索表达式不能为空', 'warn'); return; }
+      // 记录搜索关键词历史（在校验通过、请求发起前；
+      // pushSearchHistory 内部会跳过空白 / 太短 / 默认占位符）。
+      // 不阻塞搜索主流程 —— localStorage 失败也是静默吞。
+      pushSearchHistory(queryInp.value);
       // v0.5-G P1-08：根据 scope radio 决定模式
       const scope = Object.keys(scopeRadios).filter(k => !k.endsWith('Label') && scopeRadios[k].checked)[0] || 'latest';
       // P1-9 修复：selected 模式传 target-aware 形态 [{server,dir,file}, ...]
@@ -1442,7 +1708,7 @@ const formCard = el('div', { class: 'card' }, [
       el('h3', { text: '多服务器并行搜索' }),
       el('div', { class: 'card-desc', unsafeHtml: '语法：<span class="code-inline">A &amp;&amp; B</span>（同包含）、<span class="code-inline">A || B</span>（任一）、<span class="code-inline">!X</span>（排除）。结果按服务器 / 目录分组。' }),
       el('div', { class: 'grid-3' }, [
-        el('div', { style: 'grid-column: span 2' }, [el('label', { text: '搜索表达式' }), queryInp]),
+        el('div', { style: 'grid-column: span 2' }, [el('label', { text: '搜索表达式' }), queryWrap]),
         el('div', null, [el('label', { text: '并发' }), concSel])
       ]),
       scopeRow,
@@ -1470,6 +1736,27 @@ const formCard = el('div', { class: 'card' }, [
     const tailFileInp = el('input', { type: 'text', id: 'ws-tail-file', placeholder: '文件名（例：SystemOut.log）', value: 'SystemOut.log' });
     const tailLinesInp = el('input', { type: 'number', id: 'ws-tail-lines', placeholder: '起始行数', value: '100' });
     const tailOut = el('pre', { id: 'ws-tail-out', class: 'tail-out' });
+    // ---- Tail 高亮面板（共享 UI 工厂）----
+    // 持久化策略：onChange 写 PUT /api/preferences，
+    //             同时同步更新 OTB.state.tailHighlights（独立 tail.html 也会读到）。
+    const tailHighlight = OTB.core.tailHighlightPanel({
+      initial: OTB.state.tailHighlights || [],
+      onChange: async (list) => {
+        // 1) 内存同步：websphere tail tab 立即用新规则渲染后续行
+        OTB.state.tailHighlights = list;
+        // 2) 落盘：放到 preferences.json 的 tail.highlights 字段
+        //    注意：PUT 是覆盖整个 prefs map，要保留其它字段（暂时没有，但留个口子）
+        try {
+          // 先 GET 一次拿到现有 prefs，避免覆盖其它未来字段
+          let cur = {};
+          try { cur = await OTB.api.api('GET', '/api/preferences') || {}; } catch (e) { /* ignore */ }
+          cur.tail = Object.assign({}, cur.tail || {}, { highlights: list });
+          await OTB.api.api('PUT', '/api/preferences', cur);
+        } catch (e) {
+          toast('保存高亮规则失败：' + e.message, 'err');
+        }
+      }
+    });
     const btnTailStart = el('button', { class: 'btn btn-primary', text: '开始跟踪', onclick: doTailStart });
     const btnTailStop = el('button', { class: 'btn', text: '停止', onclick: doTailStop, disabled: true });
     const btnTailNewTab = el('button', { class: 'btn', text: '↗ 新窗口打开', onclick: openTailInNewTab, title: '在新窗口中跟踪，避免本页卡死' });
@@ -1752,12 +2039,21 @@ const formCard = el('div', { class: 'card' }, [
         const v = Math.max(100, Math.min(50000, Number(tailMaxInput.value) || 1000));
         MAX_TAIL_LINES = v;
       }
-      const chunk = pendingTailLines.join('\n') + '\n';
+      // v0.6 起：每行按当前高亮规则渲染（无规则 → 退化成纯 TextNode，零开销）
+      const highlights = tailHighlight.enabled ? tailHighlight.list : [];
+      const lines = pendingTailLines;
       pendingTailLines = [];
-      // 用 appendChild TextNode 而非 textContent +=：避免整段重排
-      tailOut.appendChild(document.createTextNode(chunk));
-      tailTotalLines += chunk.split('\n').length - 1;
+      const frag = document.createDocumentFragment();
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        // 高亮：把一行切成 DocumentFragment（span + text）
+        frag.appendChild(OTB.core.renderHighlightedLine(line, highlights));
+        frag.appendChild(document.createTextNode('\n'));
+        tailTotalLines++;
+      }
+      tailOut.appendChild(frag);
       // 限速：超过 MAX_TAIL_LINES 行截断（保留最后 N 行）
+      // —— 截断时按 textContent 切（高亮 span 的 textContent 已带原文，无需特殊处理）
       const arr = tailOut.textContent.split('\n');
       if (arr.length > MAX_TAIL_LINES) {
         // 项 11 修复：截断后立即滚到底（旧版只 scrollTop = scrollHeight 在
@@ -1800,29 +2096,43 @@ const formCard = el('div', { class: 'card' }, [
         ])
       ]),
       el('div', { class: 'btn-row mt-2' }, [btnTailStart, btnTailStop, btnTailNewTab]),
+      tailHighlight.root,
       el('div', { class: 'mt-2' }, tailOut)
     ]);
 
     // v0.5 #13：页面顶部加说明卡（让用户知道页面分区和流程）
     // 项 6 修复：去掉 <strong> 里的 1./2./3./4. 前缀 —— <ol> 会自动生成序号，
     // 留着会变成 "1. 1. 选目标" 这种重复编号的丑陋显示。
-    const introCard = el('div', { class: 'card', style: 'background: var(--bg-2); border-left: 4px solid var(--primary);' }, [
-      el('strong', { text: '日志助手 · 4 步走' }),
-      el('ol', { style: 'margin: 8px 0 0 0; padding-left: 22px; font-size: 13px; line-height: 1.7;' }, [
+    // 层级关系说明卡：业务系统 → 1 台或多台服务器 → 每台服务器下多个日志目录
+    // 之前叫"4 步走"，但和 sticky tabBar 重叠（DOM 在前，被 sticky 浮在上面覆盖），
+    // 而且层级关系没强调，新人看不懂"为什么有 业务系统 / 服务器 / 目录 三层"。
+    // 改为：紧凑一行 + 4 步列表 + DOM 移到 tabBar 之后，避免被 sticky 覆盖。
+    const introCard = el('div', { class: 'card ws-intro-card', style: 'background: var(--bg-2); border-left: 4px solid var(--primary); padding: 14px 18px; margin-top: 68px;' }, [
+      el('div', { style: 'font-size: 13px; line-height: 1.65; color: var(--text); margin-bottom: 8px;' }, [
+        el('strong', { text: '层级关系：' }),
+        document.createTextNode('一个业务系统 '),
+        el('span', { style: 'color: var(--primary); font-weight: 600;' }, '→'),
+        document.createTextNode(' 多台服务器 '),
+        el('span', { style: 'color: var(--primary); font-weight: 600;' }, '→'),
+        document.createTextNode(' 每台服务器下多个日志目录。'),
+        el('br'),
+        el('span', { class: 'text-dim', text: '多选服务器 + 多选目录 = 一次操作多个目标（搜索/下载/Tail 全部并行）。' }),
+      ]),
+      el('ol', { style: 'margin: 4px 0 0 0; padding-left: 22px; font-size: 12.5px; line-height: 1.7; color: var(--text-dim);' }, [
         el('li', null, [
-          el('strong', { text: '选目标 ' }),
+          el('strong', { style: 'color: var(--text);', text: '选目标 ' }),
           el('span', { text: '· 业务系统 → 服务器（多选）→ 日志目录（每个服务器下面多选）' })
         ]),
         el('li', null, [
-          el('strong', { text: '列文件 / 下载最新 ' }),
+          el('strong', { style: 'color: var(--text);', text: '列文件 / 下载 ' }),
           el('span', { text: '· 一次性把勾选 targets 下的文件全列出来，多选下载' })
         ]),
         el('li', null, [
-          el('strong', { text: '搜索 ' }),
+          el('strong', { style: 'color: var(--text);', text: '搜索 ' }),
           el('span', { text: '· 在勾选 targets 里搜索关键词，支持最近 N 个 / 指定文件 / glob' })
         ]),
         el('li', null, [
-          el('strong', { text: '实时 Tail ' }),
+          el('strong', { style: 'color: var(--text);', text: '实时 Tail ' }),
           el('span', { text: '· 从文件列表点 ↗ Tail 新窗口跟踪（避免本页卡死）' })
         ])
       ])
@@ -1930,8 +2240,10 @@ const formCard = el('div', { class: 'card' }, [
     ]);
     const filesWrap = el('div', { class: 'files-wrap' }, [filesToolbar, fileTableWrap]);
     // P2-14：目标选择永远显示；功能区包进 tab content
-    view.appendChild(introCard);
+    // DOM 顺序：tabBar 必须先渲染、introCard 在它之后 —— 否则 sticky tabBar 会盖住 introCard 上半部分
+    // （sticky 元素离开原位置后，原来的位置由下方元素填充；DOM 顺序在前的内容会被 sticky 浮在上面覆盖）
     view.appendChild(tabBar);
+    view.appendChild(introCard);
     view.appendChild(formCard);
     view.appendChild(makeTabContent('files', filesWrap));
     view.appendChild(makeTabContent('search', searchCard));

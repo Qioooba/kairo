@@ -111,8 +111,20 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleFormatJSON(w, r)
 	case path == "/api/format/xml":
 		s.handleFormatXML(w, r)
+	case path == "/api/format/yaml":
+		s.handleFormatYAML(w, r)
+	case path == "/api/format/sql":
+		s.handleFormatSQL(w, r)
+	case path == "/api/format/url-form":
+		s.handleFormatURLForm(w, r)
 	case path == "/api/admin/servers":
 		s.handleAdminServers(w, r)
+	case path == "/api/http/cases":
+		s.handleHTTPCases(w, r)
+	case path == "/api/http/envs":
+		s.handleHTTPEnvs(w, r)
+	case path == "/api/http/request":
+		s.handleHTTPRequest(w, r)
 	case path == "/api/files/list":
 		s.handleFilesList(w, r)
 	case path == "/api/files/preview":
@@ -125,6 +137,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handlePreferences(w, r)
 	case path == "/api/local/open-folder":
 		s.handleLocalOpenFolder(w, r)
+	case path == "/api/local/open-with":
+		s.handleLocalOpenWith(w, r)
+	case path == "/api/admin/openers":
+		s.handleAdminOpeners(w, r)
 	case strings.HasPrefix(path, "/api/files/download/"):
 		s.handleFilesDownloadEventsOrCancel(w, r)
 	// 注意：/api/logs/download-latest 必须在 /api/logs/download/ 之前匹配（精确匹配优先）

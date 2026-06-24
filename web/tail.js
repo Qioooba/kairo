@@ -102,11 +102,17 @@
     if (paused || pendingLines.length === 0) return;
     // 项 11 修复：每次 flush 重新读 max-lines，UI 改值立即生效
     MAX_TAIL_LINES = getMaxLines();
-    const chunk = pendingLines.join('\n') + '\n';
+    // v0.6 起：每行按当前高亮规则渲染（独立窗口版）
+    const highlights = (highlightPanel && highlightPanel.enabled) ? highlightPanel.list : [];
+    const lines = pendingLines;
     pendingLines = [];
-    // 用 appendChild 节点而非 textContent +=，避免整段重排
-    tailOut.appendChild(document.createTextNode(chunk));
-    totalLines += chunk.split('\n').length - 1;
+    const frag = document.createDocumentFragment();
+    for (let i = 0; i < lines.length; i++) {
+      frag.appendChild(OTB.core.renderHighlightedLine(lines[i], highlights));
+      frag.appendChild(document.createTextNode('\n'));
+      totalLines++;
+    }
+    tailOut.appendChild(frag);
     $('#m-lines').textContent = totalLines + ' 行';
     // 限速：MAX_TAIL_LINES 上限（项 11 修复：之前是 5000 写死，现在改可配）
     const linesArr = tailOut.textContent.split('\n');
@@ -149,6 +155,54 @@
     $('#m-lines').textContent = '0 行';
     rateEl.textContent = '实时显示中';
   });
+  // ---- Tail 高亮面板（独立窗口版） ----
+  // 与 websphere.js 共享 OTB.core.tailHighlightPanel 工厂。
+  // 持久化策略：
+  //   1) 先尝试从 opener 的 OTB.state.tailHighlights 拿（项 9 修复：用户在主页刚设过）
+  //   2) 兜底：本地 fetch GET /api/preferences 读 tail.highlights
+  //   3) 都没有：空列表
+  // onChange：PUT /api/preferences + 回写 opener 的 state（同进程多窗口同步）
+  let highlightPanel = null;
+  async function initHighlightPanel() {
+    let initial = [];
+    try {
+      if (window.opener && window.opener.OTB && Array.isArray(window.opener.OTB.state && window.opener.OTB.state.tailHighlights)) {
+        initial = window.opener.OTB.state.tailHighlights;
+      }
+    } catch (e) { /* ignore (跨源 opener 会抛) */ }
+    if (!initial.length) {
+      try {
+        const prefs = await fetch('/api/preferences').then(r => r.ok ? r.json() : null);
+        if (prefs && prefs.tail && Array.isArray(prefs.tail.highlights)) initial = prefs.tail.highlights;
+      } catch (e) { /* ignore */ }
+    }
+    highlightPanel = OTB.core.tailHighlightPanel({
+      initial,
+      onChange: async (list) => {
+        try {
+          if (window.opener && window.opener.OTB) {
+            window.opener.OTB.state = window.opener.OTB.state || {};
+            window.opener.OTB.state.tailHighlights = list;
+          }
+        } catch (e) { /* ignore */ }
+        try {
+          let cur = {};
+          try { cur = await fetch('/api/preferences').then(r => r.ok ? r.json() : null) || {}; } catch (e) { /* ignore */ }
+          cur.tail = Object.assign({}, cur.tail || {}, { highlights: list });
+          await fetch('/api/preferences', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(cur)
+          });
+        } catch (e) {
+          toast('保存高亮规则失败：' + e.message, 'err');
+        }
+      }
+    });
+    const wrap = document.getElementById('tail-highlight');
+    if (wrap) wrap.appendChild(highlightPanel.root);
+  }
+  initHighlightPanel();
   // 项 11 修复：max-lines 改动时立即 trim 到新上限（不等下一波 flush）
   if (maxLinesInp) {
     maxLinesInp.addEventListener('change', () => {
