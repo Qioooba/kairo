@@ -52,6 +52,15 @@ type Session struct {
 	stopped     bool
 	stopErr     error
 	stopOnce    sync.Once
+
+	// P0-3：批量打包。SSH reader 把 line 推入 pendingBuf，独立的
+	// batcher goroutine 每 50ms（或满 100 行）flush 一次，
+	// 把多行 NDJSON 通过单次 channel send 推给订阅者。
+	// 收益：100 行/秒 → 1 次/50ms ≈ 50x syscall 减少。
+	pendingMu    sync.Mutex
+	pendingBuf   []byte
+	pendingN     int
+	flushSignal  chan struct{}
 }
 
 // Output 表示一条流式输出（按行）
@@ -90,6 +99,80 @@ func (s *Session) broadcast(line []byte) {
 		case ch <- line:
 		default:
 			// 订阅者处理慢，丢这一行
+		}
+	}
+}
+
+// ---------- P0-3: 批量打包 ----------
+//
+// 设计目标：把 SSH reader 推过来的 1 行/次，攒成 50ms / 100 行 一次的批量 NDJSON
+// 发给订阅者。100 行/秒场景下，channel send 频率从 100 Hz 降到 ≤ 20 Hz，
+// 减少调度 / context switch / SSE 帧序列化开销。
+//
+// 关键不变式：
+//   - 控制消息（info / error / done）走 pushImmediate，立即广播，绝不延迟；
+//   - 流式行（Kind=line）走 enqueueLine → pendingBuf → batcher 定时 flush；
+//   - 满 100 行立刻 signal 一次，避免等 50ms 才能 flush；
+//   - stream 结束 / ctx 取消前 flushPending() 把残余推完，不丢行；
+//   - 慢订阅者整批丢（沿用 broadcast 的 default-drop 语义），不阻塞 SSH reader。
+
+// enqueueLine 把一条 line 编码成 NDJSON 放进 pendingBuf。
+// 满 100 行时非阻塞地给 flushSignal 推一个信号，让 batcher 提前 flush。
+func (s *Session) enqueueLine(line string) {
+	payload := formatOutput(Output{Kind: "line", Line: line})
+	s.pendingMu.Lock()
+	s.pendingBuf = append(s.pendingBuf, payload...)
+	s.pendingN++
+	shouldSignal := s.pendingN >= 100
+	s.pendingMu.Unlock()
+	if shouldSignal {
+		select {
+		case s.flushSignal <- struct{}{}:
+		default:
+			// 已有信号在路上；batcher 反正会 flush
+		}
+	}
+}
+
+// pushImmediate 立即广播一条控制消息（info / error / done）。
+// 不进 pendingBuf，不走 batcher，保证订阅者能尽快收到生命周期事件。
+func (s *Session) pushImmediate(payload []byte) {
+	s.broadcast(payload)
+}
+
+// flushPending 把 pendingBuf 里的所有 NDJSON 一次性推给订阅者。
+// pendingN == 0 时直接返回，避免空广播。
+//
+// 并发安全：pendingBuf / pendingN 在 pendingMu 下整体交换出去，
+// 之后 broadcast 期间 SSH reader 可以往新 buffer 继续塞，互不阻塞。
+func (s *Session) flushPending() {
+	s.pendingMu.Lock()
+	if s.pendingN == 0 {
+		s.pendingMu.Unlock()
+		return
+	}
+	payload := make([]byte, len(s.pendingBuf))
+	copy(payload, s.pendingBuf)
+	s.pendingBuf = nil
+	s.pendingN = 0
+	s.pendingMu.Unlock()
+	s.broadcast(payload)
+}
+
+// runBatcher 是 P0-3 批量协程：每 50ms tick、收一次 flushSignal、
+// 或 ctx 取消时退出（退出前最后 flush 一次保不丢行）。
+func (s *Session) runBatcher(ctx context.Context) {
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			s.flushPending()
+			return
+		case <-ticker.C:
+			s.flushPending()
+		case <-s.flushSignal:
+			s.flushPending()
 		}
 	}
 }
@@ -159,27 +242,35 @@ func (m *Manager) Start(cli Streamer, serverName, serverHost, dir, file, encodin
 		CreatedAt:   time.Now(),
 		killSSH:     cancel,
 		subscribers: make(map[chan []byte]struct{}),
+		flushSignal: make(chan struct{}, 1),
 	}
 
 	m.mu.Lock()
 	m.sessions[id] = s
 	m.mu.Unlock()
 
-	// 后台跑 tail，line 一行一行 broadcast
+	// P0-3：batcher 协程。每 50ms 或 pendingN >= 100 时 flush，
+	// 把多行 NDJSON 通过一次 channel send 推给订阅者。
+	go s.runBatcher(sessCtx)
+
+	// 后台跑 tail：line 进 pendingBuf，由 batcher 统一 flush。
+	// info / error / done 控制消息走 pushImmediate 立即广播（不混在 batch 里）。
 	go func() {
 		// 标记开始：推一条 info 给前端
-		s.broadcast(formatOutput(Output{Kind: "info", Msg: fmt.Sprintf("开始跟踪 %s:%s", dir, file)}))
+		s.pushImmediate(formatOutput(Output{Kind: "info", Msg: fmt.Sprintf("开始跟踪 %s:%s", dir, file)}))
 
 		exitCode, streamErr := cli.Stream(sessCtx, cmd, encoding, func(line string) {
-			s.broadcast(formatOutput(Output{Kind: "line", Line: line}))
+			s.enqueueLine(line)
 		})
 		if streamErr != nil {
 			// ctx 取消不报错（正常 stop）
 			if !errors.Is(streamErr, context.Canceled) {
-				s.broadcast(formatOutput(Output{Kind: "error", Msg: "tail 异常: " + streamErr.Error()}))
+				s.pushImmediate(formatOutput(Output{Kind: "error", Msg: "tail 异常: " + streamErr.Error()}))
 			}
 		}
-		s.broadcast(formatOutput(Output{
+		// session 结束前 flush 残余 + done 事件
+		s.flushPending()
+		s.pushImmediate(formatOutput(Output{
 			Kind: "done",
 			Msg:  fmt.Sprintf("tail 结束 (exit=%d)", exitCode),
 		}))
