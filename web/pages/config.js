@@ -22,13 +22,14 @@
   const { api } = OTB.api;
 
   // 模块级 state：跨 tab 切换 / 跨 re-render 存活
-  // 结构：{ systems, app, search, dirty, freeBrowserEnabled, loaded }
+  // 结构：{ systems, app, search, openers, dirty, freeBrowserEnabled, loaded }
   // loaded=true 表示已经从服务器拉过；之后切回本页不再 fetch，避免覆盖未保存改动
   if (!OTB.state.configEditor) {
     OTB.state.configEditor = {
       systems: [],
       app: null,
       search: null,
+      openers: [],
       dirty: false,
       freeBrowserEnabled: true,
       loaded: false
@@ -112,11 +113,33 @@
     btnResetFooter.disabled = true; // 没有改动时也禁用（避免误触重新 fetch）
     const footerBar = el('div', { class: 'btn-row cfg-save-footer-bar', style: 'justify-content: flex-end; margin-top: 16px; padding-top: 12px; border-top: 1px dashed var(--line);' }, [btnResetFooter, btnSaveFooter]);
 
+    // ---- v0.8：外部打开器（external_openers）卡 ----
+    //
+    // 让用户在页面里增删常用打开器（Notepad++ / IDEA / VS Code ...），
+    // 每个 opener 含 {name, path, icon(emoji)}。
+    // 保存走独立的 PUT /api/admin/openers（不复用 admin/servers 接口，
+    // 因为后者不接收 app 段）。
+    const openersCard = el('div', { class: 'card' });
+    openersCard.appendChild(el('h3', { text: '外部打开器' }));
+    openersCard.appendChild(el('div', { class: 'card-desc', text: '配置本地软件（如 Notepad++ / IDEA / VS Code）的可执行文件路径，保存后在「下载历史」页每行会显示对应图标按钮，点一下就用该软件打开文件。' }));
+    const openersBody = el('div');
+    openersCard.appendChild(openersBody);
+    openersCard.appendChild(el('div', { class: 'mt-2' }, [
+      el('button', { class: 'btn btn-sm', text: '+ 添加打开器',
+        onclick: () => {
+          state.openers.push({ name: '', path: '', icon: '' });
+          markDirty();
+          renderOpeners();
+        }
+      })
+    ]));
+
     view.appendChild(banner);
     view.appendChild(topBar);
     view.appendChild(appCard);
     view.appendChild(searchCard);
     view.appendChild(editorCard);
+    view.appendChild(openersCard);
     view.appendChild(footerBar);
 
     function maybeShowBanner(info) {
@@ -356,7 +379,17 @@
       const err = validate(state.systems);
       if (err) { toast('保存失败：' + err, 'err'); return; }
       try {
+        // 先存 systems（用现有 admin/servers 接口）
         const r = await api('PUT', '/api/admin/servers', { systems: state.systems });
+        // 再存 openers（独立接口，因为 admin/servers 不接收 app 段）
+        // 即使 openers 失败，也要把上面的 systems 成功反馈给用户——
+        // 但要明确告诉用户"openers 部分失败"（不能吞错）。
+        let openerErr = null;
+        try {
+          await api('PUT', '/api/admin/openers', { openers: state.openers || [] });
+        } catch (e) {
+          openerErr = e;
+        }
         // P0-5 修复：保存成功后重新 GET 后端，用后端规范化后的数据覆盖前端 state，
         // 确保 encoding 归一等后端处理被前端确认（比如 gbk→gbk，utf-8→utf-8）。
         // 同时 toast 里显示"后端确认"让用户知道写盘成功。
@@ -364,6 +397,11 @@
         state.app = info.app;
         state.search = info.search;
         state.systems = JSON.parse(JSON.stringify(info.systems));
+        // 拉 openers 回填（GET /api/admin/openers，避免依赖 info.app 的字段稳定性）
+        try {
+          const opInfo = await api('GET', '/api/admin/openers');
+          state.openers = Array.isArray(opInfo.openers) ? opInfo.openers : [];
+        } catch (e) { /* 拉失败不影响主要保存提示 */ }
         state.dirty = false;
         state.loaded = true;
         OTB.state.unsavedConfig = false;
@@ -371,7 +409,12 @@
         renderApp();
         renderSearch();
         renderEditor();
-        toast('已保存并后端确认：' + r.path, 'ok');
+        renderOpeners();
+        if (openerErr) {
+          toast('systems 已保存，但打开器保存失败：' + openerErr.message, 'err');
+        } else {
+          toast('已保存并后端确认：' + r.path, 'ok');
+        }
       } catch (e) {
         toast('保存失败：' + e.message, 'err');
       }
@@ -381,11 +424,16 @@
         api('GET', '/api/admin/servers').then(info => {
           state.app = info.app; state.search = info.search;
           state.systems = JSON.parse(JSON.stringify(info.systems));
+          // 同时重拉 openers
+          api('GET', '/api/admin/openers').then(opInfo => {
+            state.openers = Array.isArray(opInfo.openers) ? opInfo.openers : [];
+            renderOpeners();
+          }).catch(() => { state.openers = []; renderOpeners(); });
           state.dirty = false;
           state.loaded = true;
           OTB.state.unsavedConfig = false;
           syncSaveBtns();
-          renderApp(); renderSearch(); renderEditor();
+          renderApp(); renderSearch(); renderEditor(); renderOpeners();
           maybeShowBanner(info);
         }).catch(e => toast('加载失败：' + e.message, 'err'));
       }
@@ -396,17 +444,31 @@
     // 【v0.5 修复 #20】**只在首次 / 重置后**才重新 fetch。
     // 切 tab 再回来（navigate() 重新调用 renderConfig）时不再 fetch，
     // 直接用内存里的 state.systems —— 这是"切 tab 内容还在"的关键。
+    // v0.8：openers 跟 systems 走相同的"首次 fetch + 切回不重 fetch"策略。
+    function ensureOpenersLoaded(cb) {
+      // 已加载过：直接 renderOpeners + cb（cb 通常是 maybeShowBanner）
+      if (state.openers && state.openers.length) {
+        renderOpeners();
+        if (cb) cb();
+        return;
+      }
+      api('GET', '/api/admin/openers').then(opInfo => {
+        state.openers = Array.isArray(opInfo.openers) ? opInfo.openers : [];
+        renderOpeners();
+        if (cb) cb();
+      }).catch(() => { state.openers = []; renderOpeners(); if (cb) cb(); });
+    }
     if (state.loaded && state.systems) {
       // 已加载过：直接 render，不再 fetch（除非用户点放弃改动）
       renderApp(); renderSearch(); renderEditor();
-      maybeShowBanner({ app: state.app });
+      ensureOpenersLoaded(() => maybeShowBanner({ app: state.app }));
     } else {
       api('GET', '/api/admin/servers').then(info => {
         state.app = info.app; state.search = info.search;
         state.systems = JSON.parse(JSON.stringify(info.systems));
         state.loaded = true;
         renderApp(); renderSearch(); renderEditor();
-        maybeShowBanner(info);
+        ensureOpenersLoaded(() => maybeShowBanner(info));
       }).catch(e => toast('加载失败：' + e.message, 'err'));
     }
   }
