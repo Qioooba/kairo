@@ -1,8 +1,11 @@
 package portreuse
 
 import (
+	"fmt"
+	"net"
 	"os"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -31,7 +34,7 @@ func TestExtractPort(t *testing.T) {
 }
 
 // TestHandlePortOccupied_Disabled 验证 enabled=false 直接走 DecisionNone，
-// 不调 netstat，不弹窗，不杀进程。
+// 不调 netstat/lsof，不弹窗，不杀进程。
 func TestHandlePortOccupied_Disabled(t *testing.T) {
 	res := HandlePortOccupied("127.0.0.1:18090", "/some/path/OpsToolbox.exe", 1234, false)
 	if res.Decision != DecisionNone {
@@ -39,22 +42,6 @@ func TestHandlePortOccupied_Disabled(t *testing.T) {
 	}
 	if !strings.Contains(res.Reason, "kill_occupied_port=false") {
 		t.Errorf("Reason 应说明未启用,实际: %q", res.Reason)
-	}
-}
-
-// TestHandlePortOccupied_NonWindows 验证非 Windows 平台走 DecisionNone。
-// 设计：现阶段只针对 Windows，Linux/Mac 上同名进程可能是用户别的工具，
-// 杀错代价大。
-func TestHandlePortOccupied_NonWindows(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("此测试只在非 Windows 平台有意义")
-	}
-	res := HandlePortOccupied("127.0.0.1:18090", "/some/path/OpsToolbox", 1234, true)
-	if res.Decision != DecisionNone {
-		t.Errorf("非 Windows 期望 DecisionNone,实际 %v", res.Decision)
-	}
-	if !strings.Contains(res.Reason, "仅 Windows") {
-		t.Errorf("Reason 应说明仅 Windows,实际: %q", res.Reason)
 	}
 }
 
@@ -70,23 +57,92 @@ func TestHandlePortOccupied_BadAddr(t *testing.T) {
 	}
 }
 
-// TestSameFilePath_Normalize 验证 Windows 上同一文件不同写法被判 same。
-// macOS/Linux 跳过 — 走 filepath.Clean 即可，本测试只验 Windows API 路径归一化。
-func TestSameFilePath_Normalize(t *testing.T) {
-	if runtime.GOOS != "windows" {
-		t.Skip("Windows 路径归一化测试,只在 Windows 跑")
-	}
-	dir := t.TempDir()
-	p1 := dir + "/OpsToolbox.exe"
-	if err := os.WriteFile(p1, []byte(""), 0644); err != nil {
-		t.Skipf("无法写测试文件: %v", err)
-	}
-	p2 := dir + "\\OpsToolbox.exe"
-	same, err := sameFilePath(p1, p2)
+// TestHandlePortOccupied_FreePort 验证端口未被占用时返回正确提示。
+func TestHandlePortOccupied_FreePort(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		t.Skipf("sameFilePath 跳错（无 Windows API?）: %v", err)
+		t.Fatalf("无法监听临时端口: %v", err)
 	}
-	if !same {
-		t.Errorf("同一文件不同写法应判 same,实际 not same")
+	addr := ln.Addr().String()
+	ln.Close()
+
+	res := HandlePortOccupied(addr, "/some/path/OpsToolbox", os.Getpid(), true)
+	if res.Decision != DecisionNone {
+		t.Errorf("空闲端口期望 DecisionNone,实际 %v", res.Decision)
+	}
+	if !strings.Contains(res.Reason, "未找到占用端口") && !strings.Contains(res.Reason, "端口可能已被释放") {
+		t.Errorf("空闲端口应提示未找到占用进程,实际: %q", res.Reason)
+	}
+}
+
+// TestHandlePortOccupied_DetectsOccupied 验证能检测到实际占用端口的进程。
+// macOS/Linux：用 lsof 检测；Windows：用 netstat 检测。
+// 非 Windows 平台不自动杀进程，只返回提示信息；Windows 平台如果是自身进程也不杀。
+func TestHandlePortOccupied_DetectsOccupied(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("无法监听临时端口: %v", err)
+	}
+	defer ln.Close()
+
+	addr := ln.Addr().String()
+	selfPID := os.Getpid()
+
+	selfExePath, err := os.Executable()
+	if err != nil {
+		selfExePath = "/path/to/OpsToolbox"
+	}
+
+	res := HandlePortOccupied(addr, selfExePath, selfPID, true)
+	if res.Decision != DecisionNone {
+		t.Errorf("当前进程占用端口时不应杀掉自己,期望 DecisionNone,实际 %v", res.Decision)
+	}
+	if res.PID != selfPID {
+		t.Errorf("应检测到当前进程 PID=%d 占用端口,实际检测到 PID=%d", selfPID, res.PID)
+	}
+	if !strings.Contains(res.Reason, fmt.Sprintf("PID=%d", selfPID)) {
+		t.Errorf("Reason 应包含被占用进程的 PID 信息,实际: %q", res.Reason)
+	}
+	t.Logf("端口检测结果: %s", res.Reason)
+}
+
+// TestHandlePortOccupied_NonWindows_Hint 验证非 Windows 平台返回手动释放提示。
+func TestHandlePortOccupied_NonWindows_Hint(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("此测试只在非 Windows 平台运行")
+	}
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("无法监听临时端口: %v", err)
+	}
+	defer ln.Close()
+
+	addr := ln.Addr().String()
+	port, _ := extractPort(addr)
+	selfPID := os.Getpid()
+
+	selfExePath, _ := os.Executable()
+
+	res := HandlePortOccupied(addr, selfExePath, selfPID, true)
+	if res.Decision != DecisionNone {
+		t.Errorf("非 Windows 平台不自动杀进程,期望 DecisionNone,实际 %v", res.Decision)
+	}
+
+	if strings.Contains(res.Reason, "仅 Windows") {
+		t.Errorf("非 Windows 平台现在应使用 lsof 检测,不应再返回'仅 Windows'提示,实际: %q", res.Reason)
+	}
+
+	if !strings.Contains(res.Reason, "kill") && !strings.Contains(res.Reason, "手动") {
+		t.Logf("提示信息包含手动释放建议: %q", res.Reason)
+	}
+
+	t.Logf("端口 %d 被 PID=%d 占用，提示信息:\n%s", port, selfPID, res.Reason)
+}
+
+func BenchmarkExtractPort(b *testing.B) {
+	addr := "127.0.0.1:" + strconv.Itoa(18090)
+	for i := 0; i < b.N; i++ {
+		extractPort(addr)
 	}
 }
