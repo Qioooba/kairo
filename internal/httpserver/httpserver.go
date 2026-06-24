@@ -113,8 +113,6 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleFormatXML(w, r)
 	case path == "/api/format/yaml":
 		s.handleFormatYAML(w, r)
-	case path == "/api/format/sql":
-		s.handleFormatSQL(w, r)
 	case path == "/api/format/url-form":
 		s.handleFormatURLForm(w, r)
 	case path == "/api/admin/servers":

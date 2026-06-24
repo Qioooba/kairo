@@ -64,16 +64,6 @@ cp README.md    "${OUT_DIR}/"
 if [[ -f scripts/start.bat ]]; then
   cp scripts/start.bat "${OUT_DIR}/start.bat"
 fi
-# SQL 格式化需要 Node + sql-formatter 库：复制 scripts/sqlfmt.mjs 和 node_modules
-# （node_modules 可能很大；如果用户不需要 SQL 功能，可以删除以减小包体积）
-if [[ -f scripts/sqlfmt.mjs ]]; then
-  mkdir -p "${OUT_DIR}/scripts"
-  cp scripts/sqlfmt.mjs "${OUT_DIR}/scripts/sqlfmt.mjs"
-fi
-if [[ -d node_modules/sql-formatter ]]; then
-  echo ">> 复制 node_modules/sql-formatter（SQL 格式化依赖）..."
-  cp -R node_modules/sql-formatter "${OUT_DIR}/node_modules/"
-fi
 mkdir -p "${OUT_DIR}/downloads" "${OUT_DIR}/logs" "${OUT_DIR}/data"
 
 echo

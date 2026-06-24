@@ -1,5 +1,5 @@
 /* ===== web/pages/formatter.js =====
- * 报文格式化：JSON / XML / YAML / SQL / URL-form
+ * 报文格式化：JSON / XML / YAML / URL-form
  */
 
 (function () {
@@ -9,28 +9,8 @@
   const { el, toast } = OTB.core;
   const { api } = OTB.api;
 
-  // SQL 方言下拉（覆盖运维常见：MySQL / PostgreSQL / Oracle / SQL Server / SQLite / 几个云数仓）
-  const SQL_LANGS = [
-    ['sql', 'Standard SQL'],
-    ['mysql', 'MySQL'],
-    ['mariadb', 'MariaDB'],
-    ['postgresql', 'PostgreSQL'],
-    ['plsql', 'Oracle PL/SQL'],
-    ['tsql', 'SQL Server (T-SQL)'],
-    ['sqlite', 'SQLite'],
-    ['db2', 'IBM DB2'],
-    ['bigquery', 'Google BigQuery'],
-    ['snowflake', 'Snowflake'],
-    ['redshift', 'Amazon Redshift'],
-    ['spark', 'Spark SQL'],
-    ['n1ql', 'Couchbase N1QL'],
-    ['trino', 'Trino / Presto'],
-    ['duckdb', 'DuckDB'],
-  ];
-  const KEYWORD_CASE = [['upper', '大写'], ['lower', '小写'], ['preserve', '保持原样']];
-
   function renderFormatter(view) {
-    const inTa = el('textarea', { id: 'fmt-in', placeholder: '在此粘贴报文（JSON / XML / YAML / SQL / form-encoded）…' });
+    const inTa = el('textarea', { id: 'fmt-in', placeholder: '在此粘贴报文（JSON / XML / YAML / form-encoded）…' });
     inTa.style.minHeight = '260px';
     const outTa = el('textarea', { id: 'fmt-out', placeholder: '结果会出现在这里', readonly: true });
     outTa.style.minHeight = '260px';
@@ -72,17 +52,6 @@
     const btnYAMLToJSON = el('button', { class: 'btn', text: 'YAML → JSON', onclick: () => doYAML('to_json') });
     const btnJSONToYAML = el('button', { class: 'btn', text: 'JSON → YAML', onclick: () => doYAML('from_json') });
 
-    // ---- SQL 组 ----
-    const sqlLangSel = el('select', { id: 'fmt-sql-lang' });
-    SQL_LANGS.forEach(([v, t]) => sqlLangSel.appendChild(el('option', { value: v, text: t })));
-    sqlLangSel.value = 'mysql';
-    sqlLangSel.style.width = '160px';
-    const sqlCaseSel = el('select', { id: 'fmt-sql-case' });
-    KEYWORD_CASE.forEach(([v, t]) => sqlCaseSel.appendChild(el('option', { value: v, text: '关键字' + t })));
-    sqlCaseSel.value = 'upper';
-    sqlCaseSel.style.width = '120px';
-    const btnFmtSQL = el('button', { class: 'btn btn-primary', text: '格式化 SQL', onclick: () => doSQL() });
-
     // ---- URL-form 组 ----
     const btnFormEnc = el('button', { class: 'btn btn-primary', text: 'encode（map → a=1&b=2）', onclick: () => doURLForm('encode') });
     const btnFormDec = el('button', { class: 'btn', text: 'decode（a=1&b=2 → map）', onclick: () => doURLForm('decode') });
@@ -111,21 +80,6 @@
         else outTa.value = r.output || '';
       } catch (e) { toast('YAML 处理失败：' + e.message, 'err'); }
     }
-    async function doSQL() {
-      try {
-        const r = await api('POST', '/api/format/sql', {
-          input: inTa.value,
-          language: sqlLangSel.value,
-          keyword_case: sqlCaseSel.value,
-          tab_width: 2,
-          indent_style: 'standard',
-          logical_operator_newline: 'before',
-          lines_between_queries: 2,
-          max_column_length: 50,
-        });
-        outTa.value = r.output || '';
-      } catch (e) { toast('SQL 处理失败：' + e.message, 'err'); }
-    }
     async function doURLForm(mode) {
       try {
         const r = await api('POST', '/api/format/url-form', { input: inTa.value, mode });
@@ -142,7 +96,7 @@
 
     view.appendChild(el('div', { class: 'card' }, [
       el('h3', { text: '报文格式化' }),
-      el('div', { class: 'card-desc', text: '纯本地处理，不上传任何内容。适合接口报文、日志报文、SQL、URL 参数。' }),
+      el('div', { class: 'card-desc', text: '纯本地处理，不上传任何内容。适合接口报文、日志报文、URL 参数。' }),
       el('div', { class: 'pane' }, [
         el('div', null, [el('label', { text: '输入' }), inTa]),
         el('div', null, [el('label', { text: '输出' }), outTa])
@@ -166,12 +120,6 @@
         btnFmtYAML, btnMinYAML, btnValYAML,
         makeSep(),
         btnYAMLToJSON, btnJSONToYAML,
-      ]),
-
-      // SQL 组
-      el('div', { class: 'btn-row mt-2' }, [
-        makeGroupTag('SQL'),
-        sqlLangSel, sqlCaseSel, btnFmtSQL,
       ]),
 
       // URL-form 组

@@ -395,69 +395,6 @@ func TestURLFormRoundTrip(t *testing.T) {
 	}
 }
 
-// ---------- v0.8：SQL 格式化（依赖 node + sqlfmt.mjs） ----------
-//
-// 这些测试需要外部环境（node + scripts/sqlfmt.mjs），找不到时跳过，不让单测挂掉。
-// 想跑：在仓库根目录跑 go test，内部会自动定位 ../scripts/sqlfmt.mjs。
-
-func TestFormatSQL_MySQL_Basic(t *testing.T) {
-	out, err := FormatSQL("select id,name from users where age>18", SQLFormatOptions{
-		Language:    "mysql",
-		KeywordCase: "upper",
-		TabWidth:    2,
-	}, "")
-	if err != nil {
-		t.Skipf("跳 SQL 测试（环境缺 node/sqlfmt.mjs）：%v", err)
-	}
-	if !strings.Contains(out, "SELECT") || !strings.Contains(out, "FROM") {
-		t.Fatalf("MySQL 格式化结果不像样: %s", out)
-	}
-}
-
-func TestFormatSQL_Postgres(t *testing.T) {
-	out, err := FormatSQL(`SELECT u.id, u.name FROM users u WHERE u.age > 18 AND u.city = 'SH' ORDER BY u.id`, SQLFormatOptions{
-		Language:    "postgresql",
-		KeywordCase: "upper",
-		TabWidth:    2,
-	}, "")
-	if err != nil {
-		t.Skipf("跳 SQL 测试: %v", err)
-	}
-	if !strings.Contains(out, "SELECT") {
-		t.Fatalf("PG 格式化失败: %s", out)
-	}
-}
-
-func TestFormatSQL_EmptyInput(t *testing.T) {
-	_, err := FormatSQL("   ", SQLFormatOptions{}, "")
-	if err == nil {
-		t.Fatal("空 SQL 应报错")
-	}
-}
-
-func TestFormatSQL_ScriptNotFound(t *testing.T) {
-	_, err := FormatSQL("select 1", SQLFormatOptions{}, "/nonexistent/path/sqlfmt.mjs")
-	if err == nil {
-		t.Fatal("找不到脚本时应报错")
-	}
-	if !strings.Contains(err.Error(), "找不到 sqlfmt.mjs") {
-		t.Fatalf("错误文案不对: %v", err)
-	}
-}
-
-func TestFormatSQL_ChinesePreserved(t *testing.T) {
-	out, err := FormatSQL(`SELECT * FROM users WHERE city = '上海'`, SQLFormatOptions{
-		Language:    "mysql",
-		KeywordCase: "upper",
-		TabWidth:    2,
-	}, "")
-	if err != nil {
-		t.Skipf("跳: %v", err)
-	}
-	if !strings.Contains(out, "上海") {
-		t.Fatalf("中文没保留: %s", out)
-	}
-}
 
 func TestJSONToYAML_NumberTypes(t *testing.T) {
 	// json.Number 在 decodeStrictJSON 里被保留；

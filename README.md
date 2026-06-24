@@ -146,9 +146,8 @@ go run .
 - **JSON**：格式化（2 空格 / 4 空格 / Tab / 自定义）、压缩、严格校验（多余尾随字符报错）
 - **XML**：格式化、压缩
 - **YAML**：格式化（缩进 1-8 空格可选）、压缩、校验、YAML ↔ JSON 互转
-- **SQL**：格式化（基于 [sql-formatter-org/sql-formatter](https://github.com/sql-formatter-org/sql-formatter)，通过本地 Node 子进程调用），支持 15+ 方言：MySQL / PostgreSQL / Oracle PL/SQL / SQL Server / SQLite / BigQuery / Snowflake / Redshift / MariaDB / DB2 / Spark SQL / N1QL / Trino / DuckDB / Standard SQL
 - **URL-encoded / form-data**：encode（map → `a=1&b=2`，按 key 字典序） / decode（`a=1&b=2` → map，重复 key 自动合并成数组）
-- 单元测试覆盖 `decodeStrictJSON` / `FormatJSON` / `MinifyJSON` / `ValidateJSON` / `FormatXML` / `MinifyXML` / `FormatYAML` / `MinifyYAML` / `ValidateYAML` / `YAMLToJSON` / `JSONToYAML` / `URLFormEncode` / `URLFormDecode` / `FormatSQL`
+- 单元测试覆盖 `decodeStrictJSON` / `FormatJSON` / `MinifyJSON` / `ValidateJSON` / `FormatXML` / `MinifyXML` / `FormatYAML` / `MinifyYAML` / `ValidateYAML` / `YAMLToJSON` / `JSONToYAML` / `URLFormEncode` / `URLFormDecode`
 
 ### 4. 系统配置（可视化编辑器）
 
@@ -286,7 +285,7 @@ go run .
 │  ├── dlmanager   异步下载任务池 + SSE 进度广播               │
 │  ├── tailmgr     Tail 会话池 + Streamer 接口（可 mock）      │
 │  ├── logquery    后端命令模板（find/grep/sed/sort/head）     │
-│  ├── formatter   JSON / XML / YAML / SQL / URL-form 格式化（本地）│
+│  ├── formatter   JSON / XML / YAML / URL-form 格式化（本地）│
 │  └── diagnostics 环境自检（App/Build/Runtime/Tools/Servers）│
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -368,7 +367,6 @@ go run .
 | POST | `/api/format/json` | JSON 格式化 / 压缩 / 校验 |
 | POST | `/api/format/xml` | XML 格式化 / 压缩 |
 | POST | `/api/format/yaml` | YAML 格式化 / 压缩 / 校验 / ↔ JSON 互转 |
-| POST | `/api/format/sql` | SQL 格式化（多方言） |
 | POST | `/api/format/url-form` | URL-encoded / form-data 编码 + 解码 |
 | GET | `/downloads/<file>` | 取本地下载文件（RFC 5987 `filename*`） |
 | GET | `/api/diagnostics` | 环境自检（App/Build/Runtime/Tools/Servers） |
@@ -412,7 +410,7 @@ go test ./...
 | `internal/sshclient` | 兼容握手 / 关键词转义 / safeWriter 截断 / 错误分类 |
 | `internal/dlmanager` | 任务生命周期 / SSE 广播 / GC 周期可调 |
 | `internal/tailmgr` | Streamer 接口 mock / ctx 取消 / 流错 / GC |
-| `internal/formatter` | JSON / XML / YAML / SQL / URL-form 编解码（本地）；SQL 走 Node 子进程调用 `scripts/sqlfmt.mjs`（`sql-formatter-org/sql-formatter` 库） |
+| `internal/formatter` | JSON / XML / YAML / URL-form 编解码（本地） |
 | `internal/diagnostics` | 环境收集 / 工具探测 / 服务器握手探测 |
 
 ### 前端

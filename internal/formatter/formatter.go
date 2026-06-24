@@ -1,4 +1,4 @@
-// Package formatter 提供 JSON / XML / YAML / SQL / URL-encoded 格式化与校验。
+// Package formatter 提供 JSON / XML / YAML / URL-encoded 格式化与校验。
 //
 // 纯前端也可以做，这里同时提供后端版本，方便后续扩展。
 //
@@ -10,20 +10,15 @@ package formatter
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
 	"net/url"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -364,123 +359,4 @@ func URLFormDecode(input string) (map[string][]string, error) {
 		out[k] = cp
 	}
 	return out, nil
-}
-
-// ---------- SQL 格式化（调本地 sqlfmt.mjs） ----------
-//
-// 为什么走 Node 子进程：Go 生态没有覆盖多方言且活跃维护的 SQL formatter，
-// 而 sql-formatter-org/sql-formatter 是这个领域事实标准（24k+ star，20+ 方言）。
-// 通过本地 node 子进程调用，完全本地，不出网络。
-//
-// 性能：单次调用 50-100ms（含 Node 启动 + sql-formatter 加载）。运维工具场景
-// 一次格式化 1-2KB SQL 完全可以接受。
-
-// SQLFormatOptions 是 SQL 格式化的可选参数。前端下拉给默认值就行。
-type SQLFormatOptions struct {
-	Language               string `json:"language"`                 // sql/mysql/postgresql/...
-	KeywordCase            string `json:"keyword_case"`             // upper | lower | preserve
-	TabWidth               int    `json:"tab_width"`                // 缩进宽度
-	IndentStyle            string `json:"indent_style"`             // standard | tabularLeft | tabularRight
-	LogicalOperatorNewline string `json:"logical_operator_newline"` // before | after
-	LinesBetweenQueries    int    `json:"lines_between_queries"`    // 多语句间隔
-	MaxColumnLength        int    `json:"max_column_length"`        // 单行最大长度
-}
-
-// FormatSQL 调 sqlfmt.mjs 格式化 SQL。scriptPath 为空时自动从工作目录下的 scripts/ 找。
-func FormatSQL(sqlInput string, opts SQLFormatOptions, scriptPath string) (string, error) {
-	if strings.TrimSpace(sqlInput) == "" {
-		return "", fmt.Errorf("SQL 输入为空")
-	}
-	path, err := resolveSQLFmtScript(scriptPath)
-	if err != nil {
-		return "", err
-	}
-	req := map[string]interface{}{"sql": sqlInput}
-	if opts.Language != "" {
-		req["language"] = opts.Language
-	}
-	if opts.KeywordCase != "" {
-		req["keyword_case"] = opts.KeywordCase
-	}
-	if opts.TabWidth > 0 {
-		req["tab_width"] = opts.TabWidth
-	}
-	if opts.IndentStyle != "" {
-		req["indent_style"] = opts.IndentStyle
-	}
-	if opts.LogicalOperatorNewline != "" {
-		req["logical_operator_newline"] = opts.LogicalOperatorNewline
-	}
-	if opts.LinesBetweenQueries > 0 {
-		req["lines_between_queries"] = opts.LinesBetweenQueries
-	}
-	if opts.MaxColumnLength > 0 {
-		req["max_column_length"] = opts.MaxColumnLength
-	}
-	reqBytes, _ := json.Marshal(req)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "node", path)
-	cmd.Stdin = bytes.NewReader(reqBytes)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		msg := strings.TrimSpace(stderr.String())
-		if msg == "" {
-			msg = err.Error()
-		}
-		return "", fmt.Errorf("SQL 格式化进程失败: %s", msg)
-	}
-
-	var resp struct {
-		OK     bool   `json:"ok"`
-		Output string `json:"output"`
-		Error  string `json:"error"`
-		Stage  string `json:"stage"`
-	}
-	if err := json.Unmarshal(stdout.Bytes(), &resp); err != nil {
-		return "", fmt.Errorf("SQL 格式化进程输出无法解析: %w", err)
-	}
-	if !resp.OK {
-		return "", fmt.Errorf("SQL 格式化失败[%s]: %s", resp.Stage, resp.Error)
-	}
-	return resp.Output, nil
-}
-
-// resolveSQLFmtScript 定位 sqlfmt.mjs 路径。
-//
-// 查找顺序（按文件是否存在）：
-//   1. 调用方显式传入的 scriptPath
-//   2. $OPSBOT_SQLFMT_PATH 环境变量
-//   3. 当前工作目录下的 scripts/sqlfmt.mjs
-//   4. 可执行文件所在目录下的 scripts/sqlfmt.mjs
-//   5. 当前工作目录的上级目录下的 scripts/sqlfmt.mjs（兼容从子目录启动的情况）
-func resolveSQLFmtScript(scriptPath string) (string, error) {
-	candidates := []string{}
-	if scriptPath != "" {
-		candidates = append(candidates, scriptPath)
-	}
-	if env := os.Getenv("OPSBOT_SQLFMT_PATH"); env != "" {
-		candidates = append(candidates, env)
-	}
-	if exe, err := os.Executable(); err == nil {
-		candidates = append(candidates, filepath.Join(filepath.Dir(exe), "scripts", "sqlfmt.mjs"))
-	}
-	if cwd, err := os.Getwd(); err == nil {
-		candidates = append(candidates, filepath.Join(cwd, "scripts", "sqlfmt.mjs"))
-		if parent := filepath.Dir(cwd); parent != "" && parent != cwd {
-			candidates = append(candidates, filepath.Join(parent, "scripts", "sqlfmt.mjs"))
-		}
-	}
-	for _, c := range candidates {
-		if c == "" {
-			continue
-		}
-		if _, err := os.Stat(c); err == nil {
-			return c, nil
-		}
-	}
-	return "", fmt.Errorf("找不到 sqlfmt.mjs（请放在 scripts/ 下或设置 OPSBOT_SQLFMT_PATH）")
 }

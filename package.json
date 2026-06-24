@@ -21,6 +21,6 @@
   },
   "homepage": "https://github.com/Qioooba/ops-toolbox#readme",
   "dependencies": {
-    "sql-formatter": "^15.8.2"
+    "playwright": "^1.61.1"
   }
 }

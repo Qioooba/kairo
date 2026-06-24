@@ -190,46 +190,6 @@ func (s *Server) handleFormatYAML(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// ---------- /api/format/sql ----------
-//
-// 模式：format 固定（sql-formatter 不支持 minify；也不支持 validate——它对未识别
-// token 走"原样保留"策略，所以合法性由数据库本身决定）。
-//
-// 入参额外字段（全部可选，sqlfmt.mjs 内部有默认值）：
-//   - language：sql / mysql / postgresql / plsql / sqlite / tsql / bigquery /
-//     snowflake / redshift / mariadb / db2 / spark / n1ql / trino / duckdb / transact
-//     默认 sql
-//   - keyword_case：upper / lower / preserve，默认 upper
-//   - tab_width：缩进空格数，默认 2
-//   - indent_style：standard / tabularLeft / tabularRight，默认 standard
-//   - logical_operator_newline：before / after，默认 before
-//   - lines_between_queries：多语句间隔，默认 2
-//   - max_column_length：单行最大长度，默认 50
-
-type formatSQLReq struct {
-	Input string `json:"input"`
-	formatter.SQLFormatOptions
-	ScriptPath string `json:"script_path,omitempty"` // 高级：自定义 sqlfmt.mjs 路径
-}
-
-func (s *Server) handleFormatSQL(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeErr(w, 405, errors.New("仅支持 POST"))
-		return
-	}
-	var req formatSQLReq
-	if err := json.NewDecoder(io.LimitReader(r.Body, 4*1024*1024)).Decode(&req); err != nil {
-		writeErr(w, 400, err)
-		return
-	}
-	out, err := formatter.FormatSQL(req.Input, req.SQLFormatOptions, req.ScriptPath)
-	if err != nil {
-		writeErr(w, 400, err)
-		return
-	}
-	writeJSON(w, 200, map[string]any{"ok": true, "output": out})
-}
-
 // ---------- /api/format/url-form ----------
 //
 // 模式：
