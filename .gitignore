@@ -26,6 +26,9 @@ Thumbs.db
 
 # ===== debug 临时文件 =====
 /debug_run.go
+dbg-*.js
+otb-snap.js
+verify-commands.js
 
 # ===== 临时文件 =====
 *.tmp
@@ -39,3 +42,7 @@ Thumbs.db
 # Playwright E2E（仓库根目录的临时安装，仅供本地调试）
 /node_modules/
 /package-lock.json
+
+# ===== E2E 测试输出目录（本地跑出来的截图/JSON，不应入 git）=====
+/e2e-*-out/
+/theme-test-out/
