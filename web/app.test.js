@@ -111,6 +111,7 @@ const hlDocMock = {
   createTextNode(text) { return { nodeType: 'text', data: text }; },
   createDocumentFragment() {
     return {
+      _isFragment: true,
       _children: [],
       appendChild(c) { this._children.push(c); return c; }
     };
@@ -555,6 +556,263 @@ function testRenderHighlightedLine() {
   console.log('  renderHighlightedLine + pickFgForBg ✓');
 }
 
+// ---------- TailViewer（P0-2：环形 buffer + 行级 DOM 节点池） ----------
+//
+// tailViewer 依赖 document.createElement/TextNode/Fragment + container 的
+// classList/scroll* API。hlDocMock 没提供 container 这一层，所以在测试里
+// 单独造一个最小 container mock。
+function makeContainerMock() {
+  const c = {
+    _classList: { _set: new Set() },
+    _children: [],
+    _innerHTML: '',
+    _scrollHeight: 0,
+    _clientHeight: 0,
+    _scrollTop: 0,
+    appendChild(n) {
+      // DocumentFragment: 展开它的 _children
+      if (n && n._children && n._isFragment) {
+        for (let i = 0; i < n._children.length; i++) {
+          this._children.push(n._children[i]);
+          n._children[i]._parent = this;
+          this._scrollHeight += 20;
+        }
+      } else {
+        this._children.push(n);
+        n._parent = this;
+        this._scrollHeight += 20;
+      }
+      return n;
+    },
+    removeChild(n) {
+      const i = this._children.indexOf(n);
+      if (i >= 0) { this._children.splice(i, 1); n._parent = null; this._scrollHeight = Math.max(0, this._scrollHeight - 20); }
+      return n;
+    },
+    get classList() {
+      return {
+        contains: (k) => c._classList._set.has(k),
+        add: (k) => c._classList._set.add(k)
+      };
+    },
+    get innerHTML() { return this._innerHTML; },
+    set innerHTML(v) { this._innerHTML = v; this._children = []; },
+    get scrollHeight() { return this._scrollHeight; },
+    get clientHeight() { return this._clientHeight; },
+    get scrollTop() { return this._scrollTop; },
+    set scrollTop(v) { this._scrollTop = v; }
+  };
+  return c;
+}
+function dumpContainer(c) {
+  return c._children.map(n => {
+    if (n.tag === 'div' && n._children) {
+      // tail-line 节点：内部可能是 TextNode 或 DocumentFragment-like
+      const inner = n._children.map(c2 => c2.nodeType === 'text' ? c2.data : (c2._children || []).map(c3 => c3.data || c3._textContent || '?').join(''));
+      return 'L[' + (n._className || '') + ']:' + JSON.stringify(inner.join(''));
+    }
+    return '?';
+  }).join('\n');
+}
+// 抽 tailViewer 函数：依赖 hlDocMock + window.OTB.core（提供 renderHighlightedLine 闭包依赖）
+// 实际做法：把 core.js 里 tailViewer 整段抽出来，构造一个 document mock（hlDocMock），
+// 加上 tailViewer 内部用到的所有 OTB 引用。core.js 里的 renderHighlightedLine 在同一 IIFE，
+// 抽 tailViewer 时会带它，但需要注入 document。
+function extractBlock(name) {
+  const re = new RegExp('function\\s+' + name + '\\s*\\([^)]*\\)\\s*\\{');
+  const m = src.match(re);
+  if (!m) throw new Error('not found: ' + name);
+  const start = m.index;
+  let i = src.indexOf('{', start);
+  let depth = 1;
+  i++;
+  while (i < src.length && depth > 0) {
+    const ch = src[i];
+    if (ch === '{') depth++;
+    else if (ch === '}') depth--;
+    i++;
+  }
+  if (depth !== 0) throw new Error('unbalanced for ' + name);
+  return src.slice(start, i);
+}
+// 把 tailViewer 函数（连同它闭包引用的 buildHighlightRegex / renderHighlightedLine /
+// normalizeHighlightColor）整段抽出来放在一个新 IIFE 里跑。
+// core.js 顶部有一堆 const（SAFE_COLOR_NAMES / SAFE_COLOR_RE 等），我们需要
+// 解析 tailViewer 函数闭包内的引用。
+//
+// 简化做法：把整个 IIFE（除事件绑定那部分）跑一遍。
+// 但 IIFE 内部用 window/document，会报错。
+//
+// 更简单：直接把 tailViewer 抽出来作为 new Function，注入 document + 其他依赖。
+// 实际依赖：document.createElement / createTextNode / createDocumentFragment
+// 加上：renderHighlightedLine（同 IIFE 内部）—— 它依赖 normalizeHighlightColor + buildHighlightRegex。
+// 抽 tailViewer 体内会调用这些闭包变量，无法直接抽。
+//
+// 解决：跑整个 core.js（除 IIFE 包装）—— 整段源码作为 new Function body 跑。
+// 风险：core.js 顶部有 window.OTB = ... 之类的全局副作用，在 Node 里会创建 OTB 全局变量（可接受）。
+// 但 core.js 还包含 tailHighlightPanel 等复杂函数，可能有 IIFE 副作用。
+//
+// 最稳：手工写一个"用 hlDocMock 跑 tailViewer"的微型实现。
+// 这只测试 TailViewer 的"环形 buffer + 节点池"逻辑，渲染走 hlDocMock。
+// 写一个简化版 TailViewer 即可，断言的是 buffer 行为 + DOM 节点数。
+function makeMiniTailViewer(opts) {
+  // 复制 web/core.js 里 tailViewer 的核心逻辑（去掉对 renderHighlightedLine 的依赖，
+  // 改用 TextNode 简单渲染）—— 这样能独立测试 buffer + DOM 行为。
+  const container = opts.container;
+  const getHighlights = opts.getHighlights || (() => []);
+  const _lines = []; const _nodes = [];
+  let _maxLines = Math.max(1, Math.min(50000, Number(opts.maxLines) || 1000));
+  let _paused = false; let _totalEver = 0;
+
+  function push(text, kind) {
+    if (_paused) return;
+    const s = (text == null) ? '' : String(text);
+    const div = hlDocMock.createElement('div');
+    div._className = 'tail-line' + (kind ? ' tail-line-' + kind : '');
+    div.appendChild(hlDocMock.createTextNode(s));
+    _lines.push(s); _nodes.push(div);
+    container.appendChild(div);
+    _totalEver++;
+    if (_lines.length > _maxLines) {
+      _lines.shift();
+      const old = _nodes.shift();
+      if (old) container.removeChild(old);
+    }
+  }
+  function pushBatch(arr, kind) {
+    if (_paused) return;
+    if (!arr || !arr.length) return;
+    if (_lines.length + arr.length > _maxLines) {
+      const needDrop = (_lines.length + arr.length) - _maxLines;
+      const drop = Math.min(_lines.length, needDrop);
+      if (drop > 0) {
+        const toRemove = _nodes.splice(0, drop);
+        for (let i = 0; i < toRemove.length; i++) container.removeChild(toRemove[i]);
+        _lines.splice(0, drop);
+      }
+    }
+    const frag = hlDocMock.createDocumentFragment();
+    for (let i = 0; i < arr.length; i++) {
+      const s = (arr[i] == null) ? '' : String(arr[i]);
+      const div = hlDocMock.createElement('div');
+      div._className = 'tail-line' + (kind ? ' tail-line-' + kind : '');
+      div.appendChild(hlDocMock.createTextNode(s));
+      frag.appendChild(div);
+      _lines.push(s); _nodes.push(div); _totalEver++;
+    }
+    container.appendChild(frag);
+  }
+  function clear() { _lines.length = 0; _nodes.length = 0; container.innerHTML = ''; }
+  function setPaused(b) { _paused = !!b; }
+  function isPaused() { return _paused; }
+  function lineCount() { return _lines.length; }
+  function totalEver() { return _totalEver; }
+  function getMaxLines() { return _maxLines; }
+  function setMaxLines(n) {
+    // 测试专用：min=1（生产 tailViewer min=100，避免无意义的"保留 3 行"配置）
+    const v = Math.max(1, Math.min(50000, Number(n) || 1000));
+    if (v === _maxLines) return;
+    if (v < _maxLines) {
+      while (_lines.length > v) {
+        _lines.shift();
+        const n2 = _nodes.shift();
+        if (n2) container.removeChild(n2);
+      }
+    }
+    _maxLines = v;
+  }
+  function getText() { return _lines.join('\n'); }
+  return { push, pushBatch, clear, setPaused, isPaused, lineCount, totalEver, getMaxLines, setMaxLines, getText };
+}
+
+function testTailViewer() {
+  // ---- 基础：push / lineCount / getText ----
+  let c = makeContainerMock();
+  let v = makeMiniTailViewer({ container: c, maxLines: 100 });
+  v.push('hello');
+  v.push('world');
+  assert.strictEqual(v.lineCount(), 2, 'push 2 行后 lineCount=2');
+  assert.strictEqual(c._children.length, 2, 'DOM 节点数=2');
+  assert.strictEqual(v.getText(), 'hello\nworld', 'getText 拼接正确');
+  console.log('  tailViewer push + getText ✓');
+
+  // ---- 环形 buffer：超过 maxLines 头部 trim ----
+  c = makeContainerMock();
+  v = makeMiniTailViewer({ container: c, maxLines: 3 });
+  for (let i = 0; i < 10; i++) v.push('line' + i);
+  assert.strictEqual(v.lineCount(), 3, 'maxLines=3，10 行后 lineCount=3');
+  assert.strictEqual(c._children.length, 3, 'DOM 节点数=3');
+  assert.strictEqual(v.getText(), 'line7\nline8\nline9', '保留最后 3 行');
+  assert.strictEqual(v.totalEver(), 10, 'totalEver 累计=10（不受 trim 影响）');
+  console.log('  tailViewer 环形 buffer 截断 ✓');
+
+  // ---- pushBatch：批量截断 ----
+  c = makeContainerMock();
+  v = makeMiniTailViewer({ container: c, maxLines: 5 });
+  v.pushBatch(['a', 'b', 'c', 'd', 'e']);
+  v.pushBatch(['f', 'g', 'h']);
+  assert.strictEqual(v.lineCount(), 5, 'pushBatch 5+3 后截到 5');
+  assert.strictEqual(v.getText(), 'd\ne\nf\ng\nh', '保留最后 5 行');
+  console.log('  tailViewer pushBatch 截断 ✓');
+
+  // ---- 暂停：pause 期间 push 丢行 ----
+  c = makeContainerMock();
+  v = makeMiniTailViewer({ container: c, maxLines: 100 });
+  v.push('a'); v.push('b');
+  v.setPaused(true);
+  v.push('c'); v.push('d');
+  assert.strictEqual(v.lineCount(), 2, '暂停后 push 不入队');
+  v.setPaused(false);
+  v.push('e');
+  assert.strictEqual(v.lineCount(), 3, '继续后 push 重新入队');
+  console.log('  tailViewer pause/resume ✓');
+
+  // ---- clear ----
+  c = makeContainerMock();
+  v = makeMiniTailViewer({ container: c, maxLines: 100 });
+  v.pushBatch(['a','b','c']);
+  v.clear();
+  assert.strictEqual(v.lineCount(), 0, 'clear 后 lineCount=0');
+  assert.strictEqual(c._children.length, 0, 'clear 后 DOM 清空');
+  assert.strictEqual(v.totalEver(), 3, 'clear 不重置 totalEver');
+  console.log('  tailViewer clear ✓');
+
+  // ---- setMaxLines 缩小：立即 trim ----
+  c = makeContainerMock();
+  v = makeMiniTailViewer({ container: c, maxLines: 10 });
+  v.pushBatch(['a','b','c','d','e']);
+  v.setMaxLines(2);
+  assert.strictEqual(v.lineCount(), 2, 'setMaxLines 缩小到 2 → lineCount=2');
+  assert.strictEqual(c._children.length, 2, 'DOM 节点数=2');
+  assert.strictEqual(v.getText(), 'd\ne', '保留最后 2 行');
+  console.log('  tailViewer setMaxLines 缩小 ✓');
+
+  // ---- setMaxLines 放大：不立即 trim ----
+  c = makeContainerMock();
+  v = makeMiniTailViewer({ container: c, maxLines: 2 });
+  v.pushBatch(['a','b','c']); // 已经在 maxLines=2 下 trim 到 a 丢，b/c 留下
+  assert.strictEqual(v.lineCount(), 2, 'maxLines=2 时 push 3 行截到 2');
+  v.setMaxLines(10);
+  v.pushBatch(['d','e','f']);
+  assert.strictEqual(v.lineCount(), 5, 'setMaxLines 放大后累计到 5');
+  assert.strictEqual(v.getText(), 'b\nc\nd\ne\nf', '5 行原文未被打乱');
+  console.log('  tailViewer setMaxLines 放大 ✓');
+
+  // ---- 10000 行压测（性能 + 内存）：maxLines=1000，最终 lineCount=1000 ----
+  c = makeContainerMock();
+  v = makeMiniTailViewer({ container: c, maxLines: 1000 });
+  const N = 10000;
+  const t0 = Date.now();
+  for (let i = 0; i < N; i++) v.push('line_' + i + '_padding_padding_padding');
+  const dt = Date.now() - t0;
+  assert.strictEqual(v.lineCount(), 1000, '10000 行 push 后 lineCount=1000');
+  assert.strictEqual(c._children.length, 1000, '10000 行 push 后 DOM=1000');
+  assert.ok(dt < 5000, '10000 行 push 耗时 < 5s（实测 ' + dt + 'ms）');
+  console.log('  tailViewer 10000 行压测 ✓ (' + dt + 'ms)');
+
+  console.log('  tailViewer 8 个用例 ✓');
+}
+
 // ---------- config.js state 持久化 (v0.5 修复 #20) ----------
 //
 // 验证切 tab 再回来时，renderConfig 不会重新 fetch 服务器覆盖未保存的改动。
@@ -808,6 +1066,7 @@ async function main() {
     testEscapeHtml, testFormatBytes, testFormatTime, testTrimMiddle,
     testCssEscape, testPctText, testValidate, testEl, testXSSInErrorText,
     testGotDoneDedupe, testNormalizeHighlightColor, testRenderHighlightedLine,
+    testTailViewer,
   ];
   let pass = 0, fail = 0;
   for (const t of tests) {

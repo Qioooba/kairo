@@ -1735,7 +1735,7 @@ const formCard = el('div', { class: 'card' }, [
     // ---- 实时 tail ----
     const tailFileInp = el('input', { type: 'text', id: 'ws-tail-file', placeholder: '文件名（例：SystemOut.log）', value: 'SystemOut.log' });
     const tailLinesInp = el('input', { type: 'number', id: 'ws-tail-lines', placeholder: '起始行数', value: '100' });
-    const tailOut = el('pre', { id: 'ws-tail-out', class: 'tail-out' });
+    const tailOut = el('div', { id: 'ws-tail-out', class: 'tail-out' });
     // ---- Tail 高亮面板（共享 UI 工厂）----
     // 持久化策略：onChange 写 PUT /api/preferences，
     //             同时同步更新 OTB.state.tailHighlights（独立 tail.html 也会读到）。
@@ -2016,12 +2016,25 @@ const formCard = el('div', { class: 'card' }, [
     }
 
     // ----- tail 缓冲 + rAF 批量刷新（v0.5 修复卡死） -----
-    // 项 11 修复：行数上限从 UI 读（默认 1000），跟独立 tail.html 一致。
-    // 用 let 每次 flush 重新读，UI 改值立即生效。
-    let MAX_TAIL_LINES = 1000;
+    // P0-2：切到 OTB.core.tailViewer（环形 buffer + 行级 DOM 节点池）。
+    // 旧版每次 flush 都用 textContent split/slice/join 重建整 <pre>，
+    // 5000 行截断一次 O(N) 字符串拷贝 + 浏览器重解析整容器。
+    // 新版只 removeChild 头节点 + append 新节点，O(1)/行。
     let pendingTailLines = [];
     let tailFlushScheduled = false;
-    let tailTotalLines = 0;
+    const tailViewer = OTB.core.tailViewer({
+      container: tailOut,
+      maxLines: 1000, // max-lines UI 改值时通过 setMaxLines 同步
+      getHighlights: () => tailHighlight.enabled ? tailHighlight.list : []
+    });
+    // 监听 max-lines UI 变化（页面已有 input id="ws-tail-max-lines"）
+    const tailMaxInputInit = document.getElementById('ws-tail-max-lines');
+    if (tailMaxInputInit) {
+      tailMaxInputInit.addEventListener('change', () => {
+        const v = Math.max(100, Math.min(50000, Number(tailMaxInputInit.value) || 1000));
+        tailViewer.setMaxLines(v);
+      });
+    }
 
     function scheduleFlushTail() {
       if (tailFlushScheduled) return;
@@ -2033,41 +2046,12 @@ const formCard = el('div', { class: 'card' }, [
     function flushTailBuffer() {
       tailFlushScheduled = false;
       if (!pendingTailLines.length) return;
-      // 项 11 修复：实时从 UI 读 max-lines 上限
-      const tailMaxInput = document.getElementById('ws-tail-max-lines');
-      if (tailMaxInput) {
-        const v = Math.max(100, Math.min(50000, Number(tailMaxInput.value) || 1000));
-        MAX_TAIL_LINES = v;
-      }
-      // v0.6 起：每行按当前高亮规则渲染（无规则 → 退化成纯 TextNode，零开销）
-      const highlights = tailHighlight.enabled ? tailHighlight.list : [];
       const lines = pendingTailLines;
       pendingTailLines = [];
-      const frag = document.createDocumentFragment();
-      for (let i = 0; i < lines.length; i++) {
-        const line = lines[i];
-        // 高亮：把一行切成 DocumentFragment（span + text）
-        frag.appendChild(OTB.core.renderHighlightedLine(line, highlights));
-        frag.appendChild(document.createTextNode('\n'));
-        tailTotalLines++;
-      }
-      tailOut.appendChild(frag);
-      // 限速：超过 MAX_TAIL_LINES 行截断（保留最后 N 行）
-      // —— 截断时按 textContent 切（高亮 span 的 textContent 已带原文，无需特殊处理）
-      const arr = tailOut.textContent.split('\n');
-      if (arr.length > MAX_TAIL_LINES) {
-        // 项 11 修复：截断后立即滚到底（旧版只 scrollTop = scrollHeight 在
-        // 截断前算的，截断后行数少了，scrollTop 可能停在中间）
-        tailOut.textContent = arr.slice(arr.length - MAX_TAIL_LINES).join('\n');
-        tailTotalLines = MAX_TAIL_LINES;
-        tailOut.scrollTop = tailOut.scrollHeight;
-      } else {
-        // 项 11 修复：仅在用户已经在底部时自动滚到底（避免打断用户向上翻看历史）
-        const distToBottom = tailOut.scrollHeight - tailOut.clientHeight - tailOut.scrollTop;
-        if (distToBottom < 80) {
-          tailOut.scrollTop = tailOut.scrollHeight;
-        }
-      }
+      // tailViewer 内部：每行一个 div，无 highlight 时退化成 TextNode。
+      // 截断：超 maxLines 时头部 removeChild + shift（O(1)/行）。
+      tailViewer.pushBatch(lines);
+      tailViewer.scrollToBottomIfNear();
     }
 
     const tailCard = el('div', { class: 'card' }, [

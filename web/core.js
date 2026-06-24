@@ -802,4 +802,177 @@
 
   core.tailHighlightPanel = tailHighlightPanel;
   core.pickFgForBg = pickFgForBg;
+
+  // -------- TailViewer（P0-2：环形 buffer + 行级 DOM 节点池） --------
+  //
+  // 旧实现问题：
+  //   - <pre> + textContent 拼接所有行；超限时 textContent = arr.slice(N).join('\n')
+  //     整字符串重建 → 5000 行截断一次 O(N) 字符串拷贝 + 浏览器重解析整 <pre>
+  //   - 高亮 span 嵌在 pre 文本里，截断时 span 边界全断
+  //
+  // 新实现：
+  //   - 容器 div，每行一个 <div class="tail-line">（不再用 <pre> 连续文本）
+  //   - 内部维护 _lines: string[] + _nodes: HTMLElement[] 平行数组
+  //   - 超 maxLines 时，**头部 removeChild + shift**（DOM 节点级 O(1)/行，
+  //     浏览器无需重解析整个容器）
+  //   - 高亮按行调 renderHighlightedLine（每行只算一次，进 DOM 后不再重算）
+  //   - 暂停：push 直接丢行（不缓冲）
+  //   - 滚动到底：追加行后检查用户是否在底部（80px 阈值），在则 scrollTop = scrollHeight
+  //
+  // 复制语义变化（取舍）：
+  //   - 旧版"在容器里 Ctrl+A 复制"能拿所有可见文本
+  //   - 新版"Ctrl+A 复制"只拿当前 DOM 里的行（最多 maxLines）
+  //   - 用 viewer.getText() + 显式"复制全部"按钮拿完整 buffer（更明确）
+  function tailViewer(opts) {
+    opts = opts || {};
+    const container = opts.container;
+    if (!container || !container.appendChild) {
+      throw new Error('tailViewer: container 必须是 DOM 元素');
+    }
+    const getHighlights = (typeof opts.getHighlights === 'function') ? opts.getHighlights : () => [];
+
+    // 内部状态
+    const _lines = [];      // 环形 buffer 的纯文本
+    const _nodes = [];      // 平行 DOM 节点数组
+    let _maxLines = Math.max(100, Math.min(50000, Number(opts.maxLines) || 1000));
+    let _paused = false;
+    let _totalEver = 0;     // 累计 push 的总行数（清屏不重置）
+    let _disposed = false;
+
+    if (!container.classList.contains('tail-out')) {
+      container.classList.add('tail-out');
+    }
+    container.innerHTML = '';
+
+    // ----- 内部：按 highlights 渲染一行 -----
+    function makeLineNode(text, kind) {
+      const div = document.createElement('div');
+      div.className = 'tail-line' + (kind ? ' tail-line-' + kind : '');
+      const highlights = getHighlights() || [];
+      if (highlights.length) {
+        div.appendChild(renderHighlightedLine(text, highlights));
+      } else {
+        div.appendChild(document.createTextNode(text));
+      }
+      return div;
+    }
+
+    // ----- 公开：推一行 -----
+    function push(text, kind) {
+      if (_disposed || _paused) return;
+      const s = (text == null) ? '' : String(text);
+      const node = makeLineNode(s, kind);
+      _lines.push(s);
+      _nodes.push(node);
+      container.appendChild(node);
+      _totalEver++;
+      if (_lines.length > _maxLines) {
+        _lines.shift();
+        const old = _nodes.shift();
+        if (old && old.parentNode) old.parentNode.removeChild(old);
+      }
+    }
+
+    // ----- 公开：批量推（一次 appendChild 调用，浏览器只 reflow 一次） -----
+    function pushBatch(arr, kind) {
+      if (_disposed || _paused) return;
+      if (!arr || !arr.length) return;
+      // 先 trim 旧：splice 出要丢的节点 + 文本，再批量 append
+      if (_lines.length + arr.length > _maxLines) {
+        const needDrop = (_lines.length + arr.length) - _maxLines;
+        const drop = Math.min(_lines.length, needDrop);
+        if (drop > 0) {
+          const toRemove = _nodes.splice(0, drop);
+          for (let i = 0; i < toRemove.length; i++) {
+            const n = toRemove[i];
+            if (n && n.parentNode) n.parentNode.removeChild(n);
+          }
+          _lines.splice(0, drop);
+        }
+      }
+      const highlights = getHighlights() || [];
+      const frag = document.createDocumentFragment();
+      for (let i = 0; i < arr.length; i++) {
+        const s = (arr[i] == null) ? '' : String(arr[i]);
+        const div = document.createElement('div');
+        div.className = 'tail-line' + (kind ? ' tail-line-' + kind : '');
+        if (highlights.length) {
+          div.appendChild(renderHighlightedLine(s, highlights));
+        } else {
+          div.appendChild(document.createTextNode(s));
+        }
+        frag.appendChild(div);
+        _lines.push(s);
+        _nodes.push(div);
+        _totalEver++;
+      }
+      container.appendChild(frag);
+    }
+
+    // ----- 公开：清屏 -----
+    function clear() {
+      _lines.length = 0;
+      _nodes.length = 0;
+      container.innerHTML = '';
+    }
+
+    // ----- 公开：暂停/继续 -----
+    function setPaused(b) { _paused = !!b; }
+    function isPaused() { return _paused; }
+
+    // ----- 公开：滚动到底（如果用户已经在底部） -----
+    function scrollToBottomIfNear() {
+      const dist = container.scrollHeight - container.clientHeight - container.scrollTop;
+      if (dist < 80) {
+        container.scrollTop = container.scrollHeight;
+      }
+    }
+    function scrollToBottom() {
+      container.scrollTop = container.scrollHeight;
+    }
+
+    // ----- 公开：拿全部纯文本（用于"复制全部"按钮） -----
+    function getText() { return _lines.join('\n'); }
+    function lineCount() { return _lines.length; }
+    function totalEver() { return _totalEver; }
+    function getMaxLines() { return _maxLines; }
+    function setMaxLines(n) {
+      const v = Math.max(100, Math.min(50000, Number(n) || 1000));
+      if (v === _maxLines) return;
+      if (v < _maxLines) {
+        // 新上限更小：立即 trim
+        while (_lines.length > v) {
+          _lines.shift();
+          const nd = _nodes.shift();
+          if (nd && nd.parentNode) nd.parentNode.removeChild(nd);
+        }
+      }
+      // 新上限更大：不动 buffer，下次 push 触顶时 trim
+      _maxLines = v;
+    }
+
+    function dispose() {
+      _disposed = true;
+      clear();
+    }
+
+    return {
+      push,
+      pushBatch,
+      clear,
+      setPaused,
+      isPaused,
+      scrollToBottomIfNear,
+      scrollToBottom,
+      getText,
+      lineCount,
+      totalEver,
+      getMaxLines,
+      setMaxLines,
+      dispose
+    };
+  }
+
+  core.tailViewer = tailViewer;
+}
 })();

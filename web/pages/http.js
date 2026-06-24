@@ -121,7 +121,9 @@
 
   // 环境变量替换
   function applyEnvs(text, envs) {
-    if (!text || !envs) return text;
+    if (text === undefined || text === null) return '';
+    text = String(text);
+    if (!envs) return text;
     return text.replace(/\{\{\s*([a-zA-Z0-9_.\-]+)\s*\}\}/g, function (m, k) {
       const v = envs[k];
       return (v === undefined || v === null) ? m : String(v);
@@ -752,7 +754,7 @@
       respBodyView.innerHTML = '';
       respBodyView.appendChild(el('div', { class: 'http2-resp-empty', text: '请求中…' }));
 
-      lastReqParams = { method, url: urlRaw, headers: hdrsArr, body, timeoutMs, followRedirect, insecureTLS, envs: envsNow };
+      lastReqParams = { method, url: urlRaw, headers: hdrs, body, timeoutMs, followRedirect, insecureTLS, envs: envsNow };
 
       const start = performance.now();
       try {

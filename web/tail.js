@@ -73,10 +73,8 @@
 
   let evtSrc = null;
   let tailId = null;
-  let paused = false;
   let pendingLines = [];
   let flushTimer = null;
-  let totalLines = 0;
   let lastRateAt = Date.now();
   let lastRateCount = 0;
   let rateEl = $('#rate');
@@ -84,77 +82,9 @@
   // —— 日志大场景下避免页面卡顿/内存爆。
   const maxLinesInp = $('#max-lines');
   function getMaxLines() {
-    const v = Math.max(100, Math.min(50000, Number(maxLinesInp && maxLinesInp.value) || 1000));
-    return v;
+    return Math.max(100, Math.min(50000, Number(maxLinesInp && maxLinesInp.value) || 1000));
   }
-  // 让 flushTail 能用：MAX_TAIL_LINES 改成动态 getter
-  // （保留同名变量以免改太多地方）— 实际上把 getMaxLines() 直接 inline 到 flushTail 里
-  // 就行，MAX_TAIL_LINES 改为 let，每次 flush 重新读。
-  let MAX_TAIL_LINES = 1000;
 
-  // 批量 append 优化：每 100ms 或累积 200 行 flush 一次，避免 textContent 拼接抖动
-  function scheduleFlush() {
-    if (flushTimer) return;
-    flushTimer = setTimeout(flushTail, 100);
-  }
-  function flushTail() {
-    flushTimer = null;
-    if (paused || pendingLines.length === 0) return;
-    // 项 11 修复：每次 flush 重新读 max-lines，UI 改值立即生效
-    MAX_TAIL_LINES = getMaxLines();
-    // v0.6 起：每行按当前高亮规则渲染（独立窗口版）
-    const highlights = (highlightPanel && highlightPanel.enabled) ? highlightPanel.list : [];
-    const lines = pendingLines;
-    pendingLines = [];
-    const frag = document.createDocumentFragment();
-    for (let i = 0; i < lines.length; i++) {
-      frag.appendChild(OTB.core.renderHighlightedLine(lines[i], highlights));
-      frag.appendChild(document.createTextNode('\n'));
-      totalLines++;
-    }
-    tailOut.appendChild(frag);
-    $('#m-lines').textContent = totalLines + ' 行';
-    // 限速：MAX_TAIL_LINES 上限（项 11 修复：之前是 5000 写死，现在改可配）
-    const linesArr = tailOut.textContent.split('\n');
-    if (linesArr.length > MAX_TAIL_LINES) {
-      // 项 11 修复：截断后立刻滚到底（旧版截断后 scrollTop 没更新，停在中间位置）
-      tailOut.textContent = linesArr.slice(linesArr.length - MAX_TAIL_LINES).join('\n');
-      totalLines = MAX_TAIL_LINES;
-      tailOut.scrollTop = tailOut.scrollHeight;
-    } else {
-      // 自动滚动到底部（如果用户在中间看历史，就不强制滚到底 —— 通过
-      // 距离底部 < 80px 才认为"在底部"，否则保持位置）
-      const distToBottom = tailOut.scrollHeight - tailOut.clientHeight - tailOut.scrollTop;
-      if (distToBottom < 80) {
-        tailOut.scrollTop = tailOut.scrollHeight;
-      }
-    }
-    // 速率显示
-    const now = Date.now();
-    if (now - lastRateAt >= 2000) {
-      const dt = (now - lastRateAt) / 1000;
-      const dn = totalLines - lastRateCount;
-      const rate = dn / dt;
-      rateEl.textContent = '实时 · ' + rate.toFixed(1) + ' 行/秒';
-      lastRateAt = now;
-      lastRateCount = totalLines;
-    }
-  }
-  setInterval(flushTail, 100);
-
-  btnPause.addEventListener('click', () => {
-    paused = !paused;
-    btnPause.textContent = paused ? '继续' : '暂停';
-    rateEl.textContent = paused ? '已暂停（缓冲 ' + pendingLines.length + ' 行）' : '实时显示中';
-    if (!paused) flushTail();
-  });
-  btnClear.addEventListener('click', () => {
-    tailOut.textContent = '';
-    pendingLines = [];
-    totalLines = 0;
-    $('#m-lines').textContent = '0 行';
-    rateEl.textContent = '实时显示中';
-  });
   // ---- Tail 高亮面板（独立窗口版） ----
   // 与 websphere.js 共享 OTB.core.tailHighlightPanel 工厂。
   // 持久化策略：
@@ -203,17 +133,66 @@
     if (wrap) wrap.appendChild(highlightPanel.root);
   }
   initHighlightPanel();
-  // 项 11 修复：max-lines 改动时立即 trim 到新上限（不等下一波 flush）
+
+  // P0-2：TailViewer（环形 buffer + 行级 DOM 节点池）
+  // viewer.pushBatch(arr) 内部会按当前 highlights 渲染每一行
+  // —— 注意：viewer 创建时 highlightPanel 还没就绪（异步 initHighlightPanel 之后），
+  // 但 getHighlights 用闭包读 highlightPanel 的 .enabled/.list，每次 push 重新读，所以没问题。
+  const viewer = OTB.core.tailViewer({
+    container: tailOut,
+    maxLines: getMaxLines(),
+    getHighlights: () => (highlightPanel && highlightPanel.enabled) ? highlightPanel.list : []
+  });
+
+  // 批量 flush：100ms / 100 行
+  function scheduleFlush() {
+    if (flushTimer) return;
+    flushTimer = setTimeout(flushTail, 100);
+  }
+  function flushTail() {
+    flushTimer = null;
+    if (viewer.isPaused() || pendingLines.length === 0) return;
+    const lines = pendingLines;
+    pendingLines = [];
+    viewer.pushBatch(lines);
+    viewer.scrollToBottomIfNear();
+    updateMeters();
+  }
+  setInterval(flushTail, 100);
+
+  function updateMeters() {
+    const total = viewer.totalEver();
+    const buf = viewer.lineCount();
+    $('#m-lines').textContent = buf + ' / ' + total + ' 行';
+    const now = Date.now();
+    if (now - lastRateAt >= 2000) {
+      const dt = (now - lastRateAt) / 1000;
+      const dn = total - lastRateCount;
+      const rate = dn / dt;
+      rateEl.textContent = viewer.isPaused()
+        ? ('已暂停（已显示 ' + buf + ' 行）')
+        : ('实时 · ' + rate.toFixed(1) + ' 行/秒');
+      lastRateAt = now;
+      lastRateCount = total;
+    }
+  }
+  setInterval(updateMeters, 1000); // 每秒刷一次 meter 兜底（rate 计算兜底）
+
+  btnPause.addEventListener('click', () => {
+    const newPaused = !viewer.isPaused();
+    viewer.setPaused(newPaused);
+    btnPause.textContent = newPaused ? '继续' : '暂停';
+    rateEl.textContent = newPaused ? '已暂停（缓冲 ' + pendingLines.length + ' 行）' : '实时显示中';
+  });
+  btnClear.addEventListener('click', () => {
+    viewer.clear();
+    pendingLines = [];
+    rateEl.textContent = '实时显示中';
+  });
+  // 项 11 修复：max-lines 改动时立即 trim 到新上限
   if (maxLinesInp) {
     maxLinesInp.addEventListener('change', () => {
-      const newMax = getMaxLines();
-      const linesArr = tailOut.textContent.split('\n');
-      if (linesArr.length > newMax) {
-        tailOut.textContent = linesArr.slice(linesArr.length - newMax).join('\n');
-        totalLines = newMax;
-        $('#m-lines').textContent = totalLines + ' 行';
-        tailOut.scrollTop = tailOut.scrollHeight;
-      }
+      viewer.setMaxLines(getMaxLines());
     });
   }
   btnStop.addEventListener('click', async () => {
@@ -257,9 +236,8 @@
       if (!r.ok) throw new Error(data && data.error || ('HTTP ' + r.status));
       tailId = data.id;
       setConn('ok', '已连接 · id=' + tailId);
-      tailOut.textContent = '';
+      viewer.clear();
       pendingLines = [];
-      totalLines = 0;
       appendInfo('已开启 tail · id=' + tailId + ' · 起始 ' + lines + ' 行');
       evtSrc = new EventSource('/api/logs/tail/' + tailId + '/events');
       evtSrc.onmessage = (ev) => {
@@ -283,13 +261,14 @@
     }
   }
 
+  // P0-2：info/error 走 viewer.push 而不是直接操作 tailOut —— viewer 管 DOM
   function appendInfo(msg) {
-    tailOut.appendChild(document.createTextNode('⟦info⟧ ' + msg + '\n'));
-    tailOut.scrollTop = tailOut.scrollHeight;
+    viewer.push('⟦info⟧ ' + msg, 'info');
+    viewer.scrollToBottomIfNear();
   }
   function appendError(msg) {
-    tailOut.appendChild(document.createTextNode('⟦error⟧ ' + msg + '\n'));
-    tailOut.scrollTop = tailOut.scrollHeight;
+    viewer.push('⟦error⟧ ' + msg, 'error');
+    viewer.scrollToBottomIfNear();
   }
 
   start();

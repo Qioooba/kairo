@@ -10,21 +10,31 @@ import (
 // TestLocalOpenWith_BadInput 验证 /api/local/open-with 的 fail-fast 分支。
 //
 // 不真起 opener 程序（测试环境没有 GUI 软件），所有 case 应在 exec.Command 之前就被拒。
+// 关键：测"name 反向注入"前必须先配置一个合法 opener，否则被 opener 白名单 404 提前拒。
 func TestLocalOpenWith_BadInput(t *testing.T) {
 	srv, _, _, tmpDir := newTestServer(t)
 
-	// 准备一个合法文件 + 一个配置的 opener（路径写不存在的程序没关系，
-	// 因为合法路径的 happy path 会试图 exec.Command.Start，要避免）。
+	// 准备一个合法文件
 	goodFile := filepath.Join(tmpDir, "test.log")
 	if err := os.WriteFile(goodFile, []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
+	}
+
+	// 先配置一个合法 opener（路径写 /tmp/不存在.sh 也行——fail-fast 用例走不到 exec）
+	w := doRequest(srv, "PUT", "/api/admin/openers", map[string]any{
+		"openers": []map[string]any{
+			{"name": "stub", "path": "/tmp/stub-opener.sh", "icon": "🧪"},
+		},
+	})
+	if w.Code != 200 {
+		t.Fatalf("配置 stub opener 失败: %d %s", w.Code, w.Body.String())
 	}
 
 	cases := []struct {
 		name    string
 		body    map[string]any
 		want    int
-		wantSub string // body 必须含这个子串（不区分大小写）
+		wantSub string
 	}{
 		{
 			name:    "opener 空",
@@ -34,7 +44,7 @@ func TestLocalOpenWith_BadInput(t *testing.T) {
 		},
 		{
 			name:    "name 空",
-			body:    map[string]any{"opener": "anything", "name": ""},
+			body:    map[string]any{"opener": "stub", "name": ""},
 			want:    400,
 			wantSub: "name 不能为空",
 		},
@@ -46,25 +56,25 @@ func TestLocalOpenWith_BadInput(t *testing.T) {
 		},
 		{
 			name:    "name 含 ..",
-			body:    map[string]any{"opener": "x", "name": "../etc/passwd"},
+			body:    map[string]any{"opener": "stub", "name": "../etc/passwd"},
 			want:    400,
 			wantSub: "name 含非法字符",
 		},
 		{
 			name:    "name 含反斜杠",
-			body:    map[string]any{"opener": "x", "name": "..\\win.ini"},
+			body:    map[string]any{"opener": "stub", "name": "..\\win.ini"},
 			want:    400,
 			wantSub: "name 含非法字符",
 		},
 		{
 			name:    "name 含 NUL",
-			body:    map[string]any{"opener": "x", "name": "x\x00.log"},
+			body:    map[string]any{"opener": "stub", "name": "x\x00.log"},
 			want:    400,
 			wantSub: "name 含非法字符",
 		},
 		{
 			name:    "name 不存在",
-			body:    map[string]any{"opener": "x", "name": "不存在.log"},
+			body:    map[string]any{"opener": "stub", "name": "不存在.log"},
 			want:    404,
 			wantSub: "下载文件不存在",
 		},

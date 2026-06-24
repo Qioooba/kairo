@@ -2,6 +2,8 @@
  * 下载历史页 — 列出 downloads/ 目录的所有已下载文件
  *
  * 项 24 P3：每行加 "📂 打开所在目录" 按钮（调 /api/downloads/{id}/open-dir）
+ * v0.8：每行再追加外部打开器按钮（来自 cfg.external_openers），
+ *       调 /api/local/open-with 用用户配置的本地软件打开文件
  */
 
 (function () {
@@ -10,6 +12,14 @@
   OTB.pages = OTB.pages || {};
   const { el, toast } = OTB.core;
   const { api } = OTB.api;
+
+  // v0.8：外部打开器缓存（module 级，跨 re-render 存活）。
+  // 理由：下载历史页频繁 render（filter 改变 / 刷新），但 openers 配置变更频率低；
+  // 拉一次缓存下来，每次 renderRows 直接读，避免 N 行 N 次重复请求。
+  // 用户保存 openers 后切回本页，缓存可能 stale——这里 fetch 失败 fallback 到 []
+  // 但不主动轮询；如果未来要做"保存后立即生效"，可加 OTB.state.events 或 storage 事件。
+  OTB.state.downloadsOpeners = OTB.state.downloadsOpeners || [];
+  let openersLoaded = false;
 
   function renderDownloads(view) {
     const summaryEl = el('div', { class: 'text-dim', text: '加载中…' });
@@ -24,6 +34,21 @@
     const tableWrap = el('div', { class: 'mt-3' });
     const btnRefresh = el('button', { class: 'btn', text: '刷新', onclick: load });
     const btnClearAll = el('button', { class: 'btn btn-danger', text: '清空全部', onclick: doClearAll });
+
+    // v0.8：拉一次外部打开器列表（缓存到 OTB.state.downloadsOpeners）。
+    // 失败不阻塞——后面 renderRows 看缓存是 [] 就不显示按钮。
+    if (!openersLoaded) {
+      api('GET', '/api/admin/openers').then(r => {
+        OTB.state.downloadsOpeners = Array.isArray(r && r.openers) ? r.openers : [];
+        openersLoaded = true;
+        // 拉到后立即重画（用户在 load 完成前就到了这一步，表格已画过空 openers 列表）
+        load();
+      }).catch(() => {
+        // 不提示，避免页面刚加载就被红条炸屏
+        OTB.state.downloadsOpeners = [];
+        openersLoaded = true;
+      });
+    }
 
     view.appendChild(el('h3', { text: '下载历史' }));
     view.appendChild(el('div', { class: 'card-desc', text: 'downloads/ 目录里所有已下载的日志。点文件可重新下载，点删除可移除。' }));

@@ -791,6 +791,21 @@ textarea { resize: vertical; min-height: 60px; font-family: ui-monospace, monosp
 .tail-out::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.65); background-clip: padding-box; border: 2px solid transparent; }
 .tail-out::-webkit-scrollbar-corner { background: transparent; }
 
+/* P0-2：tail 行级节点。TailViewer 把每行包成 <div class="tail-line">，
+   而不是 <pre> 连续文本。优点：截断到 maxLines 时只 removeChild 头节点，
+   浏览器不用重解析整个容器。 */
+.tail-line {
+  white-space: pre;        /* 保留行内空格（log 行常用对齐空格） */
+  min-height: 1.55em;      /* 与 .tail-out line-height 一致，避免抖动 */
+}
+.tail-line.tail-line-info { color: var(--text-dim); font-style: italic; }
+.tail-line.tail-line-error { color: #fca5a5; }  /* 暗主题友好；亮主题下重定义在后面 */
+.tail-line.tail-line-done { color: var(--text-dim); }
+/* 亮主题下：error 文字调深红，避免在白底上太刺眼 */
+body[data-theme="light"] .tail-line.tail-line-error { color: #b91c1c; }
+body[data-theme="green"] .tail-line.tail-line-error { color: #b91c1c; }
+body[data-theme="hc"] .tail-line.tail-line-error { color: #ff5555; }
+
 /* ===== Tail 高亮面板（实时日志页：websphere + 独立窗口共用） =====
  *
  * 设计目标：
