@@ -228,3 +228,59 @@ func TestList_DateDirFallback_DashFormat(t *testing.T) {
 		t.Error("日期应被推断")
 	}
 }
+
+// TestMigrateSidecars_EmptyDir 回归：迁移函数在 rootDir 下没有任何 .meta
+// 文件时不能 panic（之前在空目录上触发 "assignment to entry in nil map"）。
+// 启动时 main.go 会无条件调一次，必须稳。
+func TestMigrateSidecars_EmptyDir(t *testing.T) {
+	dir := setupTestDir(t)
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("MigrateSidecars 触发 panic: %v", r)
+		}
+	}()
+	migrated, skipped, err := MigrateSidecars(dir)
+	if err != nil {
+		t.Fatalf("MigrateSidecars: %v", err)
+	}
+	if migrated != 0 || skipped != 0 {
+		t.Errorf("空目录应该 0/0，实际 %d/%d", migrated, skipped)
+	}
+	// 索引文件应该被创建（空但存在）
+	if _, err := os.Stat(filepath.Join(dir, metaIndexFile)); err != nil {
+		t.Errorf("索引文件应该被创建: %v", err)
+	}
+}
+
+// TestMigrateSidecars_RealSidecar 正常迁移路径：旧 .meta → 索引文件 + 删除 sidecar
+func TestMigrateSidecars_RealSidecar(t *testing.T) {
+	dir := setupTestDir(t)
+	sub := filepath.Join(dir, "20260624")
+	_ = os.MkdirAll(sub, 0o755)
+	data := filepath.Join(sub, "app.log")
+	_ = os.WriteFile(data, []byte("x"), 0o600)
+	_ = os.WriteFile(data+".meta", []byte(`{"server":"s1","file":"app.log","kind":"file","system":"sysA"}`), 0o600)
+
+	migrated, skipped, err := MigrateSidecars(dir)
+	if err != nil {
+		t.Fatalf("MigrateSidecars: %v", err)
+	}
+	if migrated != 1 {
+		t.Errorf("期望迁移 1 个，实际 %d", migrated)
+	}
+	if skipped != 0 {
+		t.Errorf("期望跳过 0 个，实际 %d", skipped)
+	}
+	// sidecar 应该被删
+	if _, err := os.Stat(data + ".meta"); !os.IsNotExist(err) {
+		t.Errorf("sidecar 应该被删: %v", err)
+	}
+	// 索引文件应该有这条
+	m, ok, err := ReadMeta(data)
+	if err != nil || !ok {
+		t.Fatalf("ReadMeta: ok=%v err=%v", ok, err)
+	}
+	if m.Server != "s1" || m.System != "sysA" {
+		t.Errorf("迁移内容不对: %+v", m)
+	}
+}

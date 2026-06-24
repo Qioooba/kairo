@@ -159,10 +159,12 @@ func loadMetaIndex(rootDir string) (*metaIndex, time.Time, error) {
 		if os.IsNotExist(statErr) {
 			// 文件不存在 → 空索引；同时清掉进程缓存（rootDir 切换时）
 			if metaCacheDir == rootDir && metaCache != nil {
-				metaCache = &metaIndex{Version: 1}
+				metaCache = &metaIndex{Version: 1, Files: map[string]Meta{}}
 				metaCacheMT = time.Time{}
 			}
-			return &metaIndex{Version: 1}, time.Time{}, nil
+			// 项 4 修复：空索引也必须初始化 Files map（MigrateSidecars 要写入），
+			// 不然触发 "assignment to entry in nil map" panic。
+			return &metaIndex{Version: 1, Files: map[string]Meta{}}, time.Time{}, nil
 		}
 		return nil, time.Time{}, fmt.Errorf("stat 索引失败: %w", statErr)
 	}

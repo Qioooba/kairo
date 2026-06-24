@@ -36,3 +36,6 @@ Thumbs.db
 # QA 截图：~4MB，CI 跑出来会变，跟 commit 绑一起没意义
 /docs/qa/screenshots/
 .mavis/plans/
+# Playwright E2E（仓库根目录的临时安装，仅供本地调试）
+/node_modules/
+/package-lock.json
