@@ -139,12 +139,25 @@
           onclick: () => doDelete(f, load) });
         const openDir = el('button', { class: 'btn btn-sm', text: '📂 打开所在目录',
           onclick: () => doOpenDir(f) });
+        // v0.8：每行追加外部打开器按钮（来自 cfg.external_openers）。
+        // 命名按 "icon" 字段（用户可填 emoji/字母），无 icon 用 "🔗 name" fallback。
+        const openerBtns = (OTB.state.downloadsOpeners || []).map(op => {
+          const label = (op.icon && op.icon.trim()) ? op.icon.trim() : '🔗 ' + (op.name || '?');
+          const tip = (op.name || '') + (op.path ? ' — ' + op.path : '');
+          return el('button', {
+            class: 'btn btn-sm',
+            title: tip,
+            text: label,
+            onclick: () => doOpenWith(op, f)
+          });
+        });
         tbody.appendChild(el('tr', null, [
           buildNameCell(f),
           el('td', { class: 'num', text: f.size_human || '-' }),
           el('td', { class: 'muted', text: f.downloaded_at || f.mod_time || '-' }),
           buildFromCell(fromServer, fromDir, fromFile),
-          el('td', { class: 'actions', style: 'display:flex; gap:6px;' }, [dl, openDir, del])
+          el('td', { class: 'actions', style: 'display:flex; gap:6px; flex-wrap:wrap;' },
+            [dl, openDir, ...openerBtns, del])
         ]));
       });
       tbl.appendChild(tbody);
@@ -177,6 +190,25 @@
       td.appendChild(el('div', { class: 'text-dim', text: fromDir }));
       td.appendChild(el('div', { class: 'text-dim', text: fromFile }));
       return td;
+    }
+
+    async function doOpenWith(opener, f) {
+      // 调 /api/local/open-with 让后端用配的本地软件打开下载文件。
+      // opener.name 是配置白名单 key（不是路径！），后端会校验 + 用对应 path 启动。
+      // 文件不存在 / opener 没配好 → 后端返回 4xx/5xx，这里 toast 报错。
+      if (!opener || !opener.name) {
+        toast('打开器配置异常', 'err');
+        return;
+      }
+      try {
+        await api('POST', '/api/local/open-with', {
+          opener: opener.name,
+          name: f.name
+        });
+        toast('已用 ' + opener.name + ' 打开', 'ok');
+      } catch (e) {
+        toast('打开失败：' + e.message, 'err');
+      }
     }
 
     async function doDelete(f, cb) {
