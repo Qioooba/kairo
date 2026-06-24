@@ -73,6 +73,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.serveStatic(w, r, strings.TrimPrefix(path, "/static/"))
 	case path == "/api/config":
 		s.handleConfig(w, r)
+	case path == "/api/config/export":
+		s.handleConfigExport(w, r)
+	case path == "/api/config/import":
+		s.handleConfigImport(w, r)
 	case path == "/api/ssh/test":
 		s.handleSSHTest(w, r)
 	case path == "/api/logs/list":

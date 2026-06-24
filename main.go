@@ -18,6 +18,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 	"time"
 
@@ -64,6 +65,15 @@ func main() {
 	// 默认值 cfg.App.CredentialStoreEnabled() = "keyring"（向后兼容）。
 	credentials.SetMode(cfg.App.CredentialStoreEnabled())
 	log.Printf("凭据后端: %s", credentials.Mode())
+
+	// 4.5.1 file 模式初始化：设置数据目录和加密密钥。
+	// keyring/disabled 模式下 Init 是 no-op，不影响原有流程。
+	if err := credentials.Init(cfg.DataDir(), cfg.App.CredentialKey); err != nil {
+		log.Fatalf("初始化凭据后端失败: %v", err)
+	}
+	if credentials.Mode() == "file" && strings.TrimSpace(cfg.App.CredentialKey) == "" {
+		log.Printf("凭据 file 模式: 密钥已自动生成并保存到 %s（请妥善备份 .credkey 文件）", filepath.Join(cfg.DataDir(), ".credkey"))
+	}
 
 	// 4.6 SSH 日志开关 + compat profile 默认值（项 9 + 项 22）
 	// 默认全关 —— 避免在用户机器上无脑生成日志。
@@ -115,7 +125,7 @@ func main() {
 	}
 
 	// 7. 构造可热替换的配置 Manager
-	cfgMgr := config.NewManager(cfg, cfgPath)
+	cfgMgr := config.NewManager(cfg, cfgPath, exeDir)
 
 	// 7.5 构造 tail 会话池
 	tails := tailmgr.NewManager()

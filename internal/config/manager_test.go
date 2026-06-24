@@ -21,7 +21,7 @@ func newTestManager(t *testing.T) (*Manager, string) {
 		t.Fatal(err)
 	}
 	cfg.ResolvePaths(dir)
-	return NewManager(cfg, path), path
+	return NewManager(cfg, path, dir), path
 }
 
 func TestNewManager_GetPath(t *testing.T) {
@@ -273,7 +273,8 @@ func TestReplace_FullRestartRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("阶段 1 Load: %v", err)
 	}
-	m1 := NewManager(cfg1, path)
+	cfg1.ResolvePaths(dir)
+	m1 := NewManager(cfg1, path, dir)
 	if got := m1.Get().App.Name; got != "TestBox" {
 		t.Fatalf("阶段 1 name: %q", got)
 	}
@@ -291,7 +292,8 @@ func TestReplace_FullRestartRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("阶段 3 Load 失败: %v", err)
 	}
-	m2 := NewManager(cfg2, path)
+	cfg2.ResolvePaths(dir)
+	m2 := NewManager(cfg2, path, dir)
 	if got := m2.Get().Systems[0].Servers[0].LogDirs[0].Encoding; got != "gbk" {
 		t.Fatalf("阶段 3 重启后 encoding: %q, want gbk", got)
 	}

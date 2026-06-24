@@ -100,10 +100,12 @@
     // 【v0.5 #3】btnSave 一律带 btn-primary 样式（不论 dirty 与否都明显），
     // 用 disabled 表示"无未保存改动"。底部再放一个副本按钮处理长表单滚动到底部保存。
     const btnAddSys = el('button', { class: 'btn', text: '+ 新增业务系统', onclick: () => { state.systems.push(newSystem()); markDirty(); renderEditor(); } });
+    const btnExport = el('button', { class: 'btn', text: '导出配置', title: '下载当前 config.yaml 备份', onclick: doExport });
+    const btnImport = el('button', { class: 'btn', text: '导入配置', title: '从 .yaml 文件导入配置（会覆盖当前配置）', onclick: doImport });
     const btnSave = el('button', { class: 'btn btn-primary', id: 'cfg-save-btn', text: '保存', onclick: doSave });
     const btnReset = el('button', { class: 'btn', text: '放弃改动', onclick: doReset });
     btnSave.disabled = true;
-    const topBar = el('div', { class: 'btn-row', style: 'justify-content: flex-end; margin-bottom: 12px;' }, [btnAddSys, btnReset, btnSave]);
+    const topBar = el('div', { class: 'btn-row', style: 'justify-content: flex-end; margin-bottom: 12px;' }, [btnAddSys, btnExport, btnImport, btnReset, btnSave]);
 
     // 【v0.5 #3】底部操作条：复制"放弃改动"+"保存"按钮，长表单滚到底也能直接保存。
     // 顶部 + 底部按钮共用同一份 doSave / doReset 处理逻辑（共享 state.dirty）。
@@ -436,6 +438,103 @@
           renderApp(); renderSearch(); renderEditor(); renderOpeners();
           maybeShowBanner(info);
         }).catch(e => toast('加载失败：' + e.message, 'err'));
+      }
+    }
+
+    async function doExport() {
+      try {
+        const resp = await fetch('/api/config/export', { credentials: 'same-origin' });
+        if (!resp.ok) {
+          let msg = '导出失败: HTTP ' + resp.status;
+          try { const j = await resp.json(); if (j.error) msg = j.error; } catch (_) {}
+          toast(msg, 'err');
+          return;
+        }
+        const blob = await resp.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'config.yaml';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        toast('配置已导出为 config.yaml', 'ok');
+      } catch (e) {
+        toast('导出失败：' + e.message, 'err');
+      }
+    }
+
+    function doImport() {
+      if (state.dirty && !confirm('当前有未保存的改动，导入配置会丢弃这些改动。继续吗？')) {
+        return;
+      }
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = '.yaml,.yml';
+      input.onchange = () => {
+        const file = input.files && input.files[0];
+        if (!file) return;
+        if (!/\.ya?ml$/i.test(file.name)) {
+          toast('请选择 .yaml 或 .yml 文件', 'err');
+          return;
+        }
+        const reader = new FileReader();
+        reader.onload = () => {
+          const yamlText = reader.result;
+          if (!yamlText || !String(yamlText).trim()) {
+            toast('文件内容为空', 'err');
+            return;
+          }
+          const preview = String(yamlText).substring(0, 200).replace(/</g, '&lt;');
+          const confirmMsg = '确定要导入此配置文件吗？\n\n文件：' + file.name + ' (' + file.size + ' 字节)\n\n⚠ 警告：导入后将完全覆盖现有配置，旧配置会自动备份为 .bak 文件。\n\n文件预览（前200字符）：\n' + preview;
+          if (!confirm(confirmMsg)) {
+            toast('已取消导入', '');
+            return;
+          }
+          doImportUpload(String(yamlText));
+        };
+        reader.onerror = () => toast('读取文件失败', 'err');
+        reader.readAsText(file, 'utf-8');
+      };
+      input.click();
+    }
+
+    async function doImportUpload(yamlText) {
+      try {
+        const resp = await fetch('/api/config/import', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'text/yaml' },
+          body: yamlText
+        });
+        let result;
+        try { result = await resp.json(); } catch (_) { result = {}; }
+        if (!resp.ok) {
+          toast('导入失败：' + (result.error || ('HTTP ' + resp.status)), 'err');
+          return;
+        }
+        // 导入成功：重新加载完整配置
+        const info = await api('GET', '/api/admin/servers');
+        state.app = info.app;
+        state.search = info.search;
+        state.systems = JSON.parse(JSON.stringify(info.systems));
+        try {
+          const opInfo = await api('GET', '/api/admin/openers');
+          state.openers = Array.isArray(opInfo.openers) ? opInfo.openers : [];
+        } catch (_) { state.openers = []; }
+        state.dirty = false;
+        state.loaded = true;
+        OTB.state.unsavedConfig = false;
+        syncSaveBtns();
+        renderApp();
+        renderSearch();
+        renderEditor();
+        renderOpeners();
+        maybeShowBanner(info);
+        toast('配置导入成功！旧配置已自动备份。', 'ok');
+      } catch (e) {
+        toast('导入失败：' + e.message, 'err');
       }
     }
 

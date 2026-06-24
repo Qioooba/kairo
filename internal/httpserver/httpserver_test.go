@@ -77,7 +77,7 @@ func newTestServer(t *testing.T) (*Server, *config.Manager, *audit.Logger, strin
 		t.Fatal(err)
 	}
 	cfgPath := filepath.Join(tmp, "config.yaml")
-	mgr := config.NewManager(cfg, cfgPath)
+	mgr := config.NewManager(cfg, cfgPath, tmp)
 
 	al, err := audit.New(cfg.LogDir(), "audit.log")
 	if err != nil {
