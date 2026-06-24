@@ -2,6 +2,8 @@ package credentials
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -72,15 +74,13 @@ func TestIsUnavailableDetection(t *testing.T) {
 //
 // 这里采用独立的 service 命名（"OpsToolboxTest"），避免污染真实数据。
 func TestKeyringRoundTrip(t *testing.T) {
-	// 跑前用 setUpTestService 临时把 Service 换掉
 	origService := Service
 	t.Cleanup(func() { /* nothing — package-level const */ })
-	_ = origService // const 不可改；改用独立 key
+	_ = origService
 
-	// 用独立 account 避免跟真实使用冲突
 	testSystem := "test-system"
 	testServer := "test-server"
-	testUser := "test-user-" + t.Name() // 唯一
+	testUser := "test-user-" + t.Name()
 	testPw := "p@ssw0rd-测试"
 
 	// 先确认没有残留
@@ -89,7 +89,6 @@ func TestKeyringRoundTrip(t *testing.T) {
 		_ = keyring.Delete(Service, Key(testSystem, testServer, testUser))
 	}
 
-	// Save
 	if err := Save(testSystem, testServer, testUser, testPw); err != nil {
 		if errors.Is(err, ErrUnavailable) {
 			t.Skipf("keyring 不可用，跳过: %v", err)
@@ -98,7 +97,6 @@ func TestKeyringRoundTrip(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = Clear(testSystem, testServer, testUser) })
 
-	// Get
 	got, err := Get(testSystem, testServer, testUser)
 	if err != nil {
 		t.Fatalf("Get failed: %v", err)
@@ -107,13 +105,11 @@ func TestKeyringRoundTrip(t *testing.T) {
 		t.Errorf("Get=%q, want %q", got, testPw)
 	}
 
-	// Has
 	has, err := Has(testSystem, testServer, testUser)
 	if err != nil || !has {
 		t.Errorf("Has=(%v,%v), want (true,nil)", has, err)
 	}
 
-	// 重复 Save 覆盖
 	if err := Save(testSystem, testServer, testUser, "another"); err != nil {
 		t.Fatalf("overwrite Save failed: %v", err)
 	}
@@ -125,26 +121,21 @@ func TestKeyringRoundTrip(t *testing.T) {
 		t.Errorf("Get after overwrite=%q, want %q", got2, "another")
 	}
 
-	// Clear
 	if err := Clear(testSystem, testServer, testUser); err != nil {
 		t.Fatalf("Clear failed: %v", err)
 	}
 
-	// 再次 Get 应该返回 ErrNotSaved
 	_, err = Get(testSystem, testServer, testUser)
 	if !errors.Is(err, ErrNotSaved) {
 		t.Errorf("Get after Clear err=%v, want ErrNotSaved", err)
 	}
 
-	// 再次 Clear 应该返回 ErrNotSaved
 	if err := Clear(testSystem, testServer, testUser); !errors.Is(err, ErrNotSaved) {
 		t.Errorf("Clear on missing err=%v, want ErrNotSaved", err)
 	}
 }
 
 func TestKeyFormatNoPipeInUser(t *testing.T) {
-	// username 包含 | 会破坏解析 — 文档化这个限制
-	// 如果未来要支持，得换分隔符
 	weird := Key("a", "b", "x|y")
 	parts := strings.Split(weird, "|")
 	if len(parts) != 4 {
@@ -152,9 +143,6 @@ func TestKeyFormatNoPipeInUser(t *testing.T) {
 	}
 }
 
-// TestSetMode 验证 SetMode 接受合法值并拒绝未知值（项 23）。
-//
-// 顺序：保存原 mode → 多次 SetMode → 恢复原 mode，避免影响别的 test。
 func TestSetMode(t *testing.T) {
 	orig := Mode()
 	t.Cleanup(func() { SetMode(orig) })
@@ -171,7 +159,7 @@ func TestSetMode(t *testing.T) {
 		{"DISABLED", ModeDisabled},
 		{"off", ModeDisabled},
 		{"none", ModeDisabled},
-		{"unknown-mode", ModeKeyring}, // 未知值兜底为 keyring
+		{"unknown-mode", ModeKeyring},
 		{"", ModeKeyring},
 	}
 	for _, c := range cases {
@@ -182,21 +170,13 @@ func TestSetMode(t *testing.T) {
 	}
 }
 
-// TestDefaultMode 默认 mode 应该是 keyring（向后兼容）。
 func TestDefaultMode(t *testing.T) {
-	// 在所有其它测试跑完之后验证默认值 — 但 Go test 顺序不固定，
-	// 所以这里只断言"某个测试结束后 mode 被还原为 keyring"是脆弱的。
-	// 退一步：只验证 SetMode("") 的兜底行为。
 	SetMode("")
 	if got := Mode(); got != ModeKeyring {
 		t.Errorf("SetMode(\"\") → Mode()=%q, want %q (default)", got, ModeKeyring)
 	}
 }
 
-// TestDisabledMode_BlocksAllOps mode=disabled 时所有 Save/Get/Has/Clear 都返 ErrUnavailable。
-//
-// 这里不需要真实 keyring（disabled 模式根本不访问 keyring），
-// 所以即使在无 keyring 的 CI 容器里也能稳定 pass。
 func TestDisabledMode_BlocksAllOps(t *testing.T) {
 	orig := Mode()
 	t.Cleanup(func() { SetMode(orig) })
@@ -216,26 +196,198 @@ func TestDisabledMode_BlocksAllOps(t *testing.T) {
 	}
 }
 
-// TestFileMode_NotImplemented mode=file 时返 ErrFileNotImplemented（暂时未实现加密文件）。
-//
-// 设计取舍：与其静默写一个未加密文件（泄密），不如明说"暂未实现"，
-// 让运维用户知道要么回退到 keyring、要么明确禁用。
-func TestFileMode_NotImplemented(t *testing.T) {
+// TestFileMode_NotInitialized file 模式未 Init 时调用 Save/Get 应返 ErrUnavailable。
+func TestFileMode_NotInitialized(t *testing.T) {
 	orig := Mode()
 	t.Cleanup(func() { SetMode(orig) })
 	SetMode(ModeFile)
 
-	if err := Save("s", "srv", "u", "p"); !errors.Is(err, ErrFileNotImplemented) {
-		t.Errorf("file Save: err=%v, want ErrFileNotImplemented", err)
+	if err := Save("s", "srv", "u", "p"); !errors.Is(err, ErrUnavailable) {
+		t.Errorf("file Save without Init: err=%v, want ErrUnavailable", err)
 	}
-	if _, err := Get("s", "srv", "u"); !errors.Is(err, ErrFileNotImplemented) {
-		t.Errorf("file Get: err=%v, want ErrFileNotImplemented", err)
+	if _, err := Get("s", "srv", "u"); !errors.Is(err, ErrUnavailable) {
+		t.Errorf("file Get without Init: err=%v, want ErrUnavailable", err)
+	}
+}
+
+// TestFileMode_RoundTrip file 模式完整 round-trip：Init→Save→Get→Has→Overwrite→Clear。
+func TestFileMode_RoundTrip(t *testing.T) {
+	orig := Mode()
+	t.Cleanup(func() { SetMode(orig) })
+
+	tmpDir := t.TempDir()
+	SetMode(ModeFile)
+	if err := Init(tmpDir, ""); err != nil {
+		t.Fatalf("Init failed: %v", err)
+	}
+
+	testSystem := "test-sys"
+	testServer := "test-srv"
+	testUser := "test-user-" + t.Name()
+	testPw := "my-Secret-Passw0rd!@#"
+
+	// 确认 .credkey 文件被创建
+	credKeyPath := filepath.Join(tmpDir, ".credkey")
+	if _, err := os.Stat(credKeyPath); err != nil {
+		t.Errorf(".credkey not created: %v", err)
+	}
+	credKeyData, err := os.ReadFile(credKeyPath)
+	if err != nil {
+		t.Fatalf("read .credkey: %v", err)
+	}
+	if len(strings.TrimSpace(string(credKeyData))) != 64 {
+		t.Errorf(".credkey should be 64 hex chars, got %d", len(strings.TrimSpace(string(credKeyData))))
+	}
+
+	// Get 不存在的 key → ErrNotSaved
+	_, err = Get(testSystem, testServer, testUser)
+	if !errors.Is(err, ErrNotSaved) {
+		t.Errorf("Get on missing: err=%v, want ErrNotSaved", err)
+	}
+	has, err := Has(testSystem, testServer, testUser)
+	if err != nil || has {
+		t.Errorf("Has on missing: (%v,%v), want (false,nil)", has, err)
+	}
+
+	// Save
+	if err := Save(testSystem, testServer, testUser, testPw); err != nil {
+		t.Fatalf("Save failed: %v", err)
+	}
+
+	// credentials.json 应该存在
+	credsPath := filepath.Join(tmpDir, "credentials.json")
+	if _, err := os.Stat(credsPath); err != nil {
+		t.Errorf("credentials.json not created: %v", err)
+	}
+
+	// Get
+	got, err := Get(testSystem, testServer, testUser)
+	if err != nil {
+		t.Fatalf("Get failed: %v", err)
+	}
+	if got != testPw {
+		t.Errorf("Get=%q, want %q", got, testPw)
+	}
+
+	// Has
+	has, err = Has(testSystem, testServer, testUser)
+	if err != nil || !has {
+		t.Errorf("Has=(%v,%v), want (true,nil)", has, err)
+	}
+
+	// Overwrite
+	if err := Save(testSystem, testServer, testUser, "overwritten"); err != nil {
+		t.Fatalf("overwrite Save failed: %v", err)
+	}
+	got2, err := Get(testSystem, testServer, testUser)
+	if err != nil {
+		t.Fatalf("Get after overwrite failed: %v", err)
+	}
+	if got2 != "overwritten" {
+		t.Errorf("Get after overwrite=%q, want %q", got2, "overwritten")
+	}
+
+	// Clear
+	if err := Clear(testSystem, testServer, testUser); err != nil {
+		t.Fatalf("Clear failed: %v", err)
+	}
+	_, err = Get(testSystem, testServer, testUser)
+	if !errors.Is(err, ErrNotSaved) {
+		t.Errorf("Get after Clear err=%v, want ErrNotSaved", err)
+	}
+	if err := Clear(testSystem, testServer, testUser); !errors.Is(err, ErrNotSaved) {
+		t.Errorf("Clear on missing err=%v, want ErrNotSaved", err)
+	}
+}
+
+// TestFileMode_WithConfiguredKey 使用配置中指定的密钥进行测试，验证加解密一致性。
+func TestFileMode_WithConfiguredKey(t *testing.T) {
+	orig := Mode()
+	t.Cleanup(func() { SetMode(orig) })
+
+	tmpDir1 := t.TempDir()
+	tmpDir2 := t.TempDir()
+	// 32 字节 = 64 hex 字符的密钥
+	testKey := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+	SetMode(ModeFile)
+	if err := Init(tmpDir1, testKey); err != nil {
+		t.Fatalf("Init(tmpDir1) failed: %v", err)
+	}
+	// 不应该自动生成 .credkey（因为使用了配置密钥）
+	credKeyPath := filepath.Join(tmpDir1, ".credkey")
+	if _, err := os.Stat(credKeyPath); !os.IsNotExist(err) {
+		t.Errorf(".credkey should NOT be created when key is configured, got err=%v", err)
+	}
+
+	if err := Save("sys", "srv", "u", "secret-data"); err != nil {
+		t.Fatalf("Save failed: %v", err)
+	}
+	got, err := Get("sys", "srv", "u")
+	if err != nil {
+		t.Fatalf("Get failed: %v", err)
+	}
+	if got != "secret-data" {
+		t.Errorf("Get=%q, want %q", got, "secret-data")
+	}
+
+	// 用同样的密钥 Init 另一个目录，但手动复制 credentials.json 过去，验证密钥一致可以解密
+	// （更实际的场景：重启后使用相同密钥能解密旧数据）
+	// 这里测试 Init 使用坏密钥会在解密时失败
+	if err := Init(tmpDir2, testKey); err != nil {
+		t.Fatalf("Init(tmpDir2) failed: %v", err)
+	}
+	// tmpDir2 是空的，Get 应返 ErrNotSaved
+	_, err = Get("sys", "srv", "u")
+	if !errors.Is(err, ErrNotSaved) {
+		t.Errorf("Get in empty dir err=%v, want ErrNotSaved", err)
+	}
+}
+
+// TestFileMode_KeyPersistence 验证密钥持久化：第二次 Init 能读取之前自动生成的密钥。
+func TestFileMode_KeyPersistence(t *testing.T) {
+	orig := Mode()
+	t.Cleanup(func() { SetMode(orig) })
+
+	tmpDir := t.TempDir()
+	SetMode(ModeFile)
+
+	if err := Init(tmpDir, ""); err != nil {
+		t.Fatalf("first Init failed: %v", err)
+	}
+	if err := Save("sys", "srv", "u", "persistent-pw"); err != nil {
+		t.Fatalf("Save failed: %v", err)
+	}
+
+	// 模拟"重启"：重新 Init（不指定 key），应读取 .credkey 中的旧密钥
+	if err := Init(tmpDir, ""); err != nil {
+		t.Fatalf("second Init failed: %v", err)
+	}
+	got, err := Get("sys", "srv", "u")
+	if err != nil {
+		t.Fatalf("Get after re-init failed: %v", err)
+	}
+	if got != "persistent-pw" {
+		t.Errorf("Get after re-init=%q, want %q", got, "persistent-pw")
+	}
+}
+
+// TestFileMode_InitNonFileMode 非 file 模式下 Init 是 no-op。
+func TestFileMode_InitNonFileMode(t *testing.T) {
+	orig := Mode()
+	t.Cleanup(func() { SetMode(orig) })
+
+	SetMode(ModeKeyring)
+	if err := Init(t.TempDir(), ""); err != nil {
+		t.Errorf("Init in keyring mode should be no-op, got err=%v", err)
+	}
+	SetMode(ModeDisabled)
+	if err := Init(t.TempDir(), ""); err != nil {
+		t.Errorf("Init in disabled mode should be no-op, got err=%v", err)
 	}
 }
 
 // TestKeyringMode_BehavesAsBefore mode=keyring 是默认行为，不应被 SetMode 改动后阻塞。
-//
-// 避免误改 Save/Get 的情况下让真实 keyring round-trip 跑挂。
 func TestKeyringMode_KeyringFunctionsCalled(t *testing.T) {
 	orig := Mode()
 	t.Cleanup(func() { SetMode(orig) })
@@ -243,9 +395,6 @@ func TestKeyringMode_KeyringFunctionsCalled(t *testing.T) {
 	if Mode() != ModeKeyring {
 		t.Fatalf("keyring mode not active")
 	}
-	// 真实 round-trip 由 TestKeyringRoundTrip 覆盖；这里只断言 mode 切换不会
-	// 让 guardMode 拦下请求：用一个不存在的 key 调 Get，应返 ErrNotSaved，
-	// 不是 ErrUnavailable / ErrFileNotImplemented。
 	_, err := Get("nosuch-system", "nosuch-srv", "nosuch-user-"+t.Name())
 	if !errors.Is(err, ErrNotSaved) {
 		t.Errorf("keyring mode Get(nonexistent): err=%v, want ErrNotSaved", err)

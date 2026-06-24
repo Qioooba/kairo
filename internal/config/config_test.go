@@ -515,6 +515,60 @@ func TestValidate_RejectsBadCredentialStore(t *testing.T) {
 	}
 }
 
+func TestValidate_AcceptsDisabledCredentialStore(t *testing.T) {
+	for _, val := range []string{"disabled", "off", "none", "DISABLED", "  off  "} {
+		c := &Config{
+			App: AppConfig{Host: "127.0.0.1", CredentialStore: val},
+			Systems: []SystemConfig{
+				{Name: "s", Servers: []ServerConfig{{Name: "sv", Host: "1.1.1.1", AuthType: "password", LogDirs: []LogDirEntry{{Path: "/a"}}}}},
+			},
+		}
+		c.Defaults()
+		if err := c.Validate(); err != nil {
+			t.Errorf("credential_store=%q 应被接受, got: %v", val, err)
+		}
+	}
+}
+
+func TestValidate_RejectsBadCredentialKey(t *testing.T) {
+	// 长度不对（63 hex 字符）
+	c := &Config{
+		App: AppConfig{Host: "127.0.0.1", CredentialKey: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde"},
+		Systems: []SystemConfig{
+			{Name: "s", Servers: []ServerConfig{{Name: "sv", Host: "1.1.1.1", AuthType: "password", LogDirs: []LogDirEntry{{Path: "/a"}}}}},
+		},
+	}
+	c.Defaults()
+	if err := c.Validate(); err == nil {
+		t.Fatal("短 credential_key 应被拒")
+	}
+
+	// 含非 hex 字符
+	c2 := &Config{
+		App: AppConfig{Host: "127.0.0.1", CredentialKey: "g123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"},
+		Systems: []SystemConfig{
+			{Name: "s", Servers: []ServerConfig{{Name: "sv", Host: "1.1.1.1", AuthType: "password", LogDirs: []LogDirEntry{{Path: "/a"}}}}},
+		},
+	}
+	c2.Defaults()
+	if err := c2.Validate(); err == nil {
+		t.Fatal("含 g 的 credential_key 应被拒")
+	}
+
+	// 正确的 64 hex 字符密钥应通过
+	goodKey := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	c3 := &Config{
+		App: AppConfig{Host: "127.0.0.1", CredentialStore: "file", CredentialKey: goodKey},
+		Systems: []SystemConfig{
+			{Name: "s", Servers: []ServerConfig{{Name: "sv", Host: "1.1.1.1", AuthType: "password", LogDirs: []LogDirEntry{{Path: "/a"}}}}},
+		},
+	}
+	c3.Defaults()
+	if err := c3.Validate(); err != nil {
+		t.Errorf("正确 credential_key 应被接受, got: %v", err)
+	}
+}
+
 func TestValidate_RejectsBadServerSSHProfile(t *testing.T) {
 	c := &Config{
 		App: AppConfig{Host: "127.0.0.1"},

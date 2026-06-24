@@ -1,60 +1,51 @@
-// Package credentials 把 SSH 密码存进 OS 钥匙串，跨平台：
-//   - macOS   → Keychain（用 `security` CLI）
-//   - Windows → DPAPI（wincred）
-//   - Linux   → Secret Service / D-Bus
+// Package credentials 凭据存储后端，支持三种模式：
+//   - keyring（默认）→ macOS Keychain / Windows DPAPI / Linux Secret Service
+//   - file           → AES-GCM 加密本地文件 (data/credentials.json)
+//   - disabled       → 不持久化密码，每次都需要用户手动输入
 //
 // 设计要点：
 //   - Service 固定为 "OpsToolbox"，account 编码为 "system|server|username"；
 //   - 永远不会把密码写进 audit.log、URL、错误信息或前端响应；
 //   - keyring 不可用时返回 ErrUnavailable，前端提示用户"无法访问系统钥匙串"；
-//   - v0.4 起支持配置化后端（项 23）：通过 SetMode 切换。
-//     "keyring"（默认）走 OS 钥匙串；"file" 走文件密文（TODO，未实现）；
-//     "disabled" 明确禁用——所有 Save/Get/Has/Clear 一律返回 ErrUnavailable。
+//   - file 模式使用 AES-256-GCM 加密，密钥从 credential_key 配置读取，
+//     未配置则自动生成并保存到 data/.credkey（仅当前用户可读 0600）。
 package credentials
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 
 	"github.com/zalando/go-keyring"
 )
 
-// Service 是 keyring 的 service 字段，所有 OpsToolbox 存的密码都归在同一组。
 const Service = "OpsToolbox"
 
-// Mode 凭据后端模式常量（项 23）
 const (
-	ModeKeyring  = "keyring"  // 默认：OS 钥匙串
-	ModeFile     = "file"     // 本地加密文件（v0.4 起配置化占位）
-	ModeDisabled = "disabled" // 明确禁用：不持久化密码
+	ModeKeyring  = "keyring"
+	ModeFile     = "file"
+	ModeDisabled = "disabled"
 )
 
-// ErrUnavailable keyring 在当前平台不可用（比如 Linux 没装 gnome-keyring / KWallet），
-// 或当前 mode 不允许此操作（mode=disabled 时所有接口都返 ErrUnavailable）
-var ErrUnavailable = errors.New("credentials: 系统钥匙串不可用")
+var (
+	ErrUnavailable = errors.New("credentials: 凭据存储不可用")
+	ErrNotSaved    = errors.New("credentials: 未保存密码")
+)
 
-// ErrNotSaved 指定 (system, server, username) 三元组下没有保存过密码
-var ErrNotSaved = errors.New("credentials: 未保存密码")
-
-// ErrFileNotImplemented mode=file 暂未实现加密文件存储，调用方应回退到 keyring 或 disabled
-var ErrFileNotImplemented = errors.New("credentials: file 模式暂未实现（v0.4 起配置化占位）")
-
-// modeMu 保护 mode 的读写并发安全。SetMode 在 main 启动时调一次，
-// 之后 httpserver 等 handler 读 Mode() 时加 RLock。
 var (
 	modeMu sync.RWMutex
 	mode   = ModeKeyring
 )
 
-// SetMode 切换凭据后端模式。
-//
-//   - 接受 "keyring" / "file" / "disabled"（大小写、首尾空格都容忍）；
-//   - 未知值兜底为 "keyring"，保证向后兼容；
-//   - 建议在 main 启动时、配置加载后立即调一次。
-//
-// 设计上不引入 config 包依赖，避免循环依赖。
 func SetMode(m string) {
 	modeMu.Lock()
 	defer modeMu.Unlock()
@@ -68,35 +59,255 @@ func SetMode(m string) {
 	}
 }
 
-// Mode 返回当前凭据后端模式（"keyring"/"file"/"disabled"）。
-// handler 可以把这个值塞进 /api/credentials/* 响应，让前端决定是否渲染「记住密码」控件。
 func Mode() string {
 	modeMu.RLock()
 	defer modeMu.RUnlock()
 	return mode
 }
 
-// guardMode 在 disabled 模式下拦截所有凭据操作。
-// file 模式暂未实现，同样拒绝并提示 ErrFileNotImplemented，避免静默写入失败。
 func guardMode() error {
 	switch Mode() {
 	case ModeDisabled:
 		return fmt.Errorf("%w（配置 credential_store=disabled）", ErrUnavailable)
-	case ModeFile:
-		return ErrFileNotImplemented
 	default:
 		return nil
 	}
 }
 
-// Key 由 (system, server, username) 拼出的 keyring account 字符串。
-// 用 | 分隔，| 在 system/server/username 中不会出现（system/server 是配置项，
-// 配置校验已经禁了 |；username 是 SSH 用户名，不会含 |）。
 func Key(system, server, username string) string {
 	return strings.Join([]string{system, server, username}, "|")
 }
 
-// Save 把密码存到 keyring。同一个 (system, server, username) 重复保存会覆盖。
+// ---------- file backend ----------
+
+var (
+	fileMu      sync.Mutex
+	fileInit    bool
+	fileDataDir string
+	fileKey     []byte
+	filePath    string
+)
+
+// encryptedEntry 存储在 JSON 里的密文条目
+type encryptedEntry struct {
+	Nonce      string `json:"n"` // hex
+	Ciphertext string `json:"c"` // hex
+}
+
+// Init 初始化 file 后端（必须在 SetMode 之后、使用凭据功能之前调用）。
+//
+//   - dataDir: 数据目录绝对路径（cfg.DataDir()）
+//   - configuredKey: 配置文件中的 credential_key（hex 编码 64 字符），空字符串表示自动生成
+//
+// 如果当前 mode 不是 file，Init 是 no-op。
+func Init(dataDir, configuredKey string) error {
+	modeMu.RLock()
+	m := mode
+	modeMu.RUnlock()
+
+	if m != ModeFile {
+		fileMu.Lock()
+		fileInit = false
+		fileMu.Unlock()
+		return nil
+	}
+
+	fileMu.Lock()
+	defer fileMu.Unlock()
+
+	fileDataDir = dataDir
+	filePath = filepath.Join(dataDir, "credentials.json")
+
+	var key []byte
+	if strings.TrimSpace(configuredKey) != "" {
+		k, err := hex.DecodeString(strings.TrimSpace(configuredKey))
+		if err != nil {
+			return fmt.Errorf("credentials: credential_key hex 解码失败: %w", err)
+		}
+		if len(k) != 32 {
+			return fmt.Errorf("credentials: credential_key 长度必须为 32 字节（64 hex 字符），当前 %d 字节", len(k))
+		}
+		key = k
+	} else {
+		credKeyPath := filepath.Join(dataDir, ".credkey")
+		k, err := os.ReadFile(credKeyPath)
+		if err == nil {
+			kStr := strings.TrimSpace(string(k))
+			decoded, derr := hex.DecodeString(kStr)
+			if derr == nil && len(decoded) == 32 {
+				key = decoded
+			} else {
+				if err := os.Remove(credKeyPath); err != nil {
+					return fmt.Errorf("credentials: 旧 .credkey 损坏且删除失败: %w", err)
+				}
+			}
+		}
+		if key == nil {
+			key = make([]byte, 32)
+			if _, err := rand.Read(key); err != nil {
+				return fmt.Errorf("credentials: 生成随机密钥失败: %w", err)
+			}
+			if err := os.MkdirAll(dataDir, 0o755); err != nil {
+				return fmt.Errorf("credentials: 创建 data 目录失败: %w", err)
+			}
+			hexKey := hex.EncodeToString(key)
+			if err := os.WriteFile(credKeyPath, []byte(hexKey), 0o600); err != nil {
+				return fmt.Errorf("credentials: 写入 .credkey 失败: %w", err)
+			}
+		}
+	}
+
+	fileKey = key
+	fileInit = true
+
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		return fmt.Errorf("credentials: 创建 data 目录失败: %w", err)
+	}
+
+	return nil
+}
+
+func fileReady() error {
+	fileMu.Lock()
+	defer fileMu.Unlock()
+	if !fileInit || len(fileKey) != 32 {
+		return fmt.Errorf("%w: file 后端未初始化（请调 credentials.Init）", ErrUnavailable)
+	}
+	return nil
+}
+
+func encrypt(plaintext string) (*encryptedEntry, error) {
+	block, err := aes.NewCipher(fileKey)
+	if err != nil {
+		return nil, err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		return nil, err
+	}
+	ct := gcm.Seal(nil, nonce, []byte(plaintext), nil)
+	return &encryptedEntry{
+		Nonce:      hex.EncodeToString(nonce),
+		Ciphertext: hex.EncodeToString(ct),
+	}, nil
+}
+
+func decrypt(e *encryptedEntry) (string, error) {
+	nonce, err := hex.DecodeString(e.Nonce)
+	if err != nil {
+		return "", fmt.Errorf("credentials: nonce hex 解码失败: %w", err)
+	}
+	ct, err := hex.DecodeString(e.Ciphertext)
+	if err != nil {
+		return "", fmt.Errorf("credentials: ciphertext hex 解码失败: %w", err)
+	}
+	block, err := aes.NewCipher(fileKey)
+	if err != nil {
+		return "", err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", err
+	}
+	if len(nonce) != gcm.NonceSize() {
+		return "", errors.New("credentials: nonce 长度不正确")
+	}
+	pt, err := gcm.Open(nil, nonce, ct, nil)
+	if err != nil {
+		return "", fmt.Errorf("credentials: 解密失败（密钥不匹配或数据损坏）: %w", err)
+	}
+	return string(pt), nil
+}
+
+func loadFile() (map[string]encryptedEntry, error) {
+	entries := make(map[string]encryptedEntry)
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return entries, nil
+		}
+		return nil, fmt.Errorf("credentials: 读取凭据文件失败: %w", err)
+	}
+	if len(data) == 0 {
+		return entries, nil
+	}
+	var raw map[string]encryptedEntry
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, fmt.Errorf("credentials: 解析凭据文件失败: %w", err)
+	}
+	if raw != nil {
+		entries = raw
+	}
+	return entries, nil
+}
+
+func saveFile(entries map[string]encryptedEntry) error {
+	data, err := json.MarshalIndent(entries, "", "  ")
+	if err != nil {
+		return fmt.Errorf("credentials: 序列化凭据失败: %w", err)
+	}
+	tmp := filePath + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		return fmt.Errorf("credentials: 写入凭据文件失败: %w", err)
+	}
+	if err := os.Rename(tmp, filePath); err != nil {
+		return fmt.Errorf("credentials: 替换凭据文件失败: %w", err)
+	}
+	return nil
+}
+
+func fileSave(key, password string) error {
+	fileMu.Lock()
+	defer fileMu.Unlock()
+
+	entries, err := loadFile()
+	if err != nil {
+		return err
+	}
+	enc, err := encrypt(password)
+	if err != nil {
+		return fmt.Errorf("credentials: 加密失败: %w", err)
+	}
+	entries[key] = *enc
+	return saveFile(entries)
+}
+
+func fileGet(key string) (string, error) {
+	fileMu.Lock()
+	defer fileMu.Unlock()
+
+	entries, err := loadFile()
+	if err != nil {
+		return "", err
+	}
+	e, ok := entries[key]
+	if !ok {
+		return "", ErrNotSaved
+	}
+	return decrypt(&e)
+}
+
+func fileClear(key string) error {
+	fileMu.Lock()
+	defer fileMu.Unlock()
+
+	entries, err := loadFile()
+	if err != nil {
+		return err
+	}
+	if _, ok := entries[key]; !ok {
+		return ErrNotSaved
+	}
+	delete(entries, key)
+	return saveFile(entries)
+}
+
+// ---------- public API ----------
+
 func Save(system, server, username, password string) error {
 	if system == "" || server == "" || username == "" {
 		return errors.New("credentials: system/server/username 不能为空")
@@ -107,8 +318,14 @@ func Save(system, server, username, password string) error {
 	if err := guardMode(); err != nil {
 		return err
 	}
-	if err := keyring.Set(Service, Key(system, server, username), password); err != nil {
-		// 区分"keyring 不可用"和"其它错误"（前者是预期会发生的，后者是 bug）
+	k := Key(system, server, username)
+	if Mode() == ModeFile {
+		if err := fileReady(); err != nil {
+			return err
+		}
+		return fileSave(k, password)
+	}
+	if err := keyring.Set(Service, k, password); err != nil {
 		if isUnavailable(err) {
 			return fmt.Errorf("%w: %v", ErrUnavailable, err)
 		}
@@ -117,8 +334,6 @@ func Save(system, server, username, password string) error {
 	return nil
 }
 
-// Get 取出指定 (system, server, username) 对应的密码。
-// 没有时返回 ErrNotSaved；keyring 不可用时返回 ErrUnavailable。
 func Get(system, server, username string) (string, error) {
 	if system == "" || server == "" || username == "" {
 		return "", errors.New("credentials: system/server/username 不能为空")
@@ -126,9 +341,15 @@ func Get(system, server, username string) (string, error) {
 	if err := guardMode(); err != nil {
 		return "", err
 	}
-	pw, err := keyring.Get(Service, Key(system, server, username))
+	k := Key(system, server, username)
+	if Mode() == ModeFile {
+		if err := fileReady(); err != nil {
+			return "", err
+		}
+		return fileGet(k)
+	}
+	pw, err := keyring.Get(Service, k)
 	if err != nil {
-		// zalando 在没找到时返回 ErrNotFound；其它错误可能是 keychain locked 等
 		if errors.Is(err, keyring.ErrNotFound) {
 			return "", ErrNotSaved
 		}
@@ -140,7 +361,6 @@ func Get(system, server, username string) (string, error) {
 	return pw, nil
 }
 
-// Has 检查指定 (system, server, username) 是否已保存密码（不返回密码本身）。
 func Has(system, server, username string) (bool, error) {
 	_, err := Get(system, server, username)
 	if err == nil {
@@ -152,8 +372,6 @@ func Has(system, server, username string) (bool, error) {
 	return false, err
 }
 
-// Clear 删除指定 (system, server, username) 的密码。
-// 没有时返回 ErrNotSaved（前端可以用来提示"本来就没保存"）。
 func Clear(system, server, username string) error {
 	if system == "" || server == "" || username == "" {
 		return errors.New("credentials: system/server/username 不能为空")
@@ -161,7 +379,14 @@ func Clear(system, server, username string) error {
 	if err := guardMode(); err != nil {
 		return err
 	}
-	if err := keyring.Delete(Service, Key(system, server, username)); err != nil {
+	k := Key(system, server, username)
+	if Mode() == ModeFile {
+		if err := fileReady(); err != nil {
+			return err
+		}
+		return fileClear(k)
+	}
+	if err := keyring.Delete(Service, k); err != nil {
 		if errors.Is(err, keyring.ErrNotFound) {
 			return ErrNotSaved
 		}
@@ -173,8 +398,6 @@ func Clear(system, server, username string) error {
 	return nil
 }
 
-// isUnavailable 识别"keyring 不可用"的错误（DBus 没起 / Keychain 拒绝访问 / wincred 失败）。
-// 不同后端的错误信息不统一，所以用关键字兜底判断。
 func isUnavailable(err error) bool {
 	if err == nil {
 		return false
@@ -182,7 +405,7 @@ func isUnavailable(err error) bool {
 	s := strings.ToLower(err.Error())
 	for _, hint := range []string{
 		"dbus", "secret service", "no such interface",
-		"could not connect", "the user name or password is incorrect", // Windows CredUI 拒绝
+		"could not connect", "the user name or password is incorrect",
 		"keychain", "errse", "access denied",
 		"org.freedesktop.secrets", "collection",
 	} {

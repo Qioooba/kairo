@@ -295,20 +295,20 @@ func auditErr(w http.ResponseWriter, a *audit.Logger, op string, kv ...any) {
 
 // resolvedCreds SSH 凭据解析结果。Password 为空表示"需要前端提示用户输入"。
 type resolvedCreds struct {
-	Username       string
-	Password       string
-	SavedByKeyring bool // true 表示 password 来自 OS 钥匙串，不回传给前端
+	Username    string
+	Password    string
+	SavedByStore bool // true 表示 password 来自凭据存储（keyring/file），不是用户本次输入
 }
 
-// resolveCreds 把 HTTP 请求里的凭据 + OS 钥匙串合并成一个最终值。
+// resolveCreds 把 HTTP 请求里的凭据 + 凭据存储合并成一个最终值。
 //   - inputUser / inputPass：HTTP 请求里的明文
-//   - system / server：钥匙串的 key（system 和 server 名称）
+//   - system / server：凭据存储的 key（system 和 server 名称）
 //   - defaultUser：配置里的默认 SSH 用户名（inputUser 为空时使用）
 //
 // 返回规则：
-//   - err != nil：无法继续（缺用户、钥匙串不可用）
+//   - err != nil：无法继续（缺用户、keyring 不可用等配置错误）
 //   - err == nil && Password != ""：可直接用
-//   - err == nil && Password == ""：前端没传、钥匙串也没存，需用户输入
+//   - err == nil && Password == ""：前端没传、存储里也没存（或 disabled 模式），需用户输入
 func (s *Server) resolveCreds(inputUser, inputPass, system, server, defaultUser string) (resolvedCreds, error) {
 	username := strings.TrimSpace(inputUser)
 	if username == "" {
@@ -320,14 +320,21 @@ func (s *Server) resolveCreds(inputUser, inputPass, system, server, defaultUser 
 	if inputPass != "" {
 		return resolvedCreds{Username: username, Password: inputPass}, nil
 	}
-	// 尝试从 keyring 读
+
+	mode := credentials.Mode()
+	// disabled 模式：不从存储读，直接要求用户手动输入
+	if mode == credentials.ModeDisabled {
+		return resolvedCreds{Username: username}, nil
+	}
+
+	// 尝试从凭据存储读（keyring/file）
 	pw, err := credentials.Get(system, server, username)
 	if err == nil {
-		return resolvedCreds{Username: username, Password: pw, SavedByKeyring: true}, nil
+		return resolvedCreds{Username: username, Password: pw, SavedByStore: true}, nil
 	}
 	if errors.Is(err, credentials.ErrNotSaved) {
 		return resolvedCreds{Username: username}, nil
 	}
-	// 其它错误（钥匙串不可用等）
-	return resolvedCreds{}, fmt.Errorf("系统钥匙串不可用，请手动输入密码或检查系统配置: %w", err)
+	// 其它错误（keyring 不可用 / file 后端未初始化等）
+	return resolvedCreds{}, fmt.Errorf("凭据存储不可用，请手动输入密码或检查配置: %w", err)
 }

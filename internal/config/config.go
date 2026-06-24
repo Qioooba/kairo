@@ -45,10 +45,15 @@ type AppConfig struct {
 	// Agent 2 在前端做启动警告；这里只做字段存读。
 	FreeFileRoots []string `yaml:"free_file_roots,omitempty" json:"free_file_roots,omitempty"`
 
-	// CredentialStore v0.4 起配置化：keyring / file。
+	// CredentialStore v0.4 起配置化：keyring / file / disabled。
 	// 空字符串 / "keyring" = 走 keyring（macOS Keychain / Windows DPAPI / Linux Secret Service）；
-	// "file" = 走文件密文（DEPRECATED，仅在内网完全无 keyring 时使用）。
+	// "file" = 走文件密文（AES-GCM 加密，存 data/credentials.json）；
+	// "disabled" / "off" / "none" = 不保存密码，每次都需要用户手动输入。
 	CredentialStore string `yaml:"credential_store,omitempty" json:"credential_store,omitempty"`
+
+	// CredentialKey v0.4 file 模式使用的 AES-256 密钥（hex 编码，64 个十六进制字符）。
+	// 留空时自动生成并保存到 data/.credkey（自动模式）。
+	CredentialKey string `yaml:"credential_key,omitempty" json:"credential_key,omitempty"`
 
 	// SSHDebug / SSHTrafficDump / SSHLogMaxMB / SSHLogKeep 控制 SSH debug/traffic 日志。
 	// 默认全关（false / 20 / 3）。
@@ -459,9 +464,20 @@ func (c *Config) Validate() error {
 	}
 	if c.App.CredentialStore != "" {
 		switch strings.ToLower(strings.TrimSpace(c.App.CredentialStore)) {
-		case "keyring", "file":
+		case "keyring", "file", "disabled", "off", "none":
 		default:
-			return fmt.Errorf("app.credential_store 取值非法: %q（仅支持 keyring / file）", c.App.CredentialStore)
+			return fmt.Errorf("app.credential_store 取值非法: %q（仅支持 keyring / file / disabled）", c.App.CredentialStore)
+		}
+	}
+	if c.App.CredentialKey != "" {
+		key := strings.TrimSpace(c.App.CredentialKey)
+		if len(key) != 64 {
+			return fmt.Errorf("app.credential_key 必须是 64 个十六进制字符（32 字节 AES-256 密钥），当前长度: %d", len(key))
+		}
+		for _, ch := range key {
+			if !((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F')) {
+				return fmt.Errorf("app.credential_key 含有非法十六进制字符: %q", string(ch))
+			}
 		}
 	}
 	if len(c.Systems) == 0 {

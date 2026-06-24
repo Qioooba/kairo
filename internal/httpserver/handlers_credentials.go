@@ -77,26 +77,15 @@ func (s *Server) handleCredHas(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	mode := credentials.Mode()
-	// mode=disabled 或 mode=file(未实现) 时直接返 available=false，
-	// 不去真正去调 Has()。这样 1) 前端能根据 mode 决定显隐；
-	// 2) 不会被 ErrUnavailable 兜底逻辑误判（避免 ErrFileNotImplemented 也走 unavailable 路径）。
+	// mode=disabled 时直接返 available=false，不去真正调 Has()。
+	// 这样前端能根据 mode 决定显隐，不会被 ErrUnavailable 兜底逻辑误判。
 	if mode == credentials.ModeDisabled {
 		writeJSON(w, 200, map[string]any{
 			"ok":        true,
 			"has":       false,
 			"available": false,
 			"mode":      mode,
-			"reason":    "凭据存储已被配置禁用（credential_store=disabled）",
-		})
-		return
-	}
-	if mode == credentials.ModeFile {
-		writeJSON(w, 200, map[string]any{
-			"ok":        true,
-			"has":       false,
-			"available": false,
-			"mode":      mode,
-			"reason":    "凭据存储=文件模式暂未实现（v0.4 占位）",
+			"reason":    "凭据存储已被配置禁用（credential_store=disabled），密码不会被保存",
 		})
 		return
 	}
