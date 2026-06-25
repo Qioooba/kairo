@@ -1,6 +1,8 @@
 package httpserver
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -8,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -49,6 +52,8 @@ type httpCasesFile struct {
 	Envs  []HTTPEnv  `json:"envs"`
 }
 
+var httpCasesMu sync.Mutex
+
 func (s *Server) handleHTTPCases(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
@@ -65,7 +70,9 @@ func (s *Server) handleHTTPCases(w http.ResponseWriter, r *http.Request) {
 
 // GET /api/http/cases  → 返回所有用例 + env 组
 func (s *Server) handleHTTPCasesList(w http.ResponseWriter, r *http.Request) {
+	httpCasesMu.Lock()
 	f, err := s.loadHTTPCases()
+	httpCasesMu.Unlock()
 	if err != nil {
 		writeErr(w, 500, err)
 		return
@@ -115,8 +122,10 @@ func (s *Server) handleHTTPCasesCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	c.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 
+	httpCasesMu.Lock()
 	f, err := s.loadHTTPCases()
 	if err != nil {
+		httpCasesMu.Unlock()
 		writeErr(w, 500, err)
 		return
 	}
@@ -134,9 +143,11 @@ func (s *Server) handleHTTPCasesCreate(w http.ResponseWriter, r *http.Request) {
 		f.Cases = append(f.Cases, c)
 	}
 	if err := s.saveHTTPCases(f); err != nil {
+		httpCasesMu.Unlock()
 		writeErr(w, 500, err)
 		return
 	}
+	httpCasesMu.Unlock()
 	s.audit.Write("http.case.upsert", "group", c.Group, "name", c.Name)
 	writeJSON(w, 200, map[string]any{"ok": true, "case": c, "replaced": replaced})
 }
@@ -152,8 +163,10 @@ func (s *Server) handleHTTPCasesDelete(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, errors.New("id 不能为空"))
 		return
 	}
+	httpCasesMu.Lock()
 	f, err := s.loadHTTPCases()
 	if err != nil {
+		httpCasesMu.Unlock()
 		writeErr(w, 500, err)
 		return
 	}
@@ -165,14 +178,17 @@ func (s *Server) handleHTTPCasesDelete(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if idx < 0 {
+		httpCasesMu.Unlock()
 		writeErr(w, 404, errors.New("用例不存在: "+id))
 		return
 	}
 	f.Cases = append(f.Cases[:idx], f.Cases[idx+1:]...)
 	if err := s.saveHTTPCases(f); err != nil {
+		httpCasesMu.Unlock()
 		writeErr(w, 500, err)
 		return
 	}
+	httpCasesMu.Unlock()
 	s.audit.Write("http.case.delete", "id", id)
 	writeJSON(w, 200, map[string]any{"ok": true, "deleted": id})
 }
@@ -182,12 +198,26 @@ func (s *Server) handleHTTPCasesDelete(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleHTTPEnvs(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		s.handleHTTPCasesList(w, r) // 共享：envs 跟 cases 一起存
+		s.handleHTTPEnvsList(w, r)
 	case http.MethodPost:
 		s.handleHTTPEnvsSave(w, r)
 	default:
 		writeErr(w, 405, errors.New("仅支持 GET / POST"))
 	}
+}
+
+func (s *Server) handleHTTPEnvsList(w http.ResponseWriter, r *http.Request) {
+	httpCasesMu.Lock()
+	f, err := s.loadHTTPCases()
+	httpCasesMu.Unlock()
+	if err != nil {
+		writeErr(w, 500, err)
+		return
+	}
+	if f.Envs == nil {
+		f.Envs = []HTTPEnv{}
+	}
+	writeJSON(w, 200, map[string]any{"ok": true, "envs": f.Envs})
 }
 
 func (s *Server) handleHTTPEnvsSave(w http.ResponseWriter, r *http.Request) {
@@ -221,16 +251,20 @@ func (s *Server) handleHTTPEnvsSave(w http.ResponseWriter, r *http.Request) {
 		}
 		cleaned = append(cleaned, e)
 	}
+	httpCasesMu.Lock()
 	f, err := s.loadHTTPCases()
 	if err != nil {
+		httpCasesMu.Unlock()
 		writeErr(w, 500, err)
 		return
 	}
 	f.Envs = cleaned
 	if err := s.saveHTTPCases(f); err != nil {
+		httpCasesMu.Unlock()
 		writeErr(w, 500, err)
 		return
 	}
+	httpCasesMu.Unlock()
 	s.audit.Write("http.envs.save", "count", len(cleaned))
 	writeJSON(w, 200, map[string]any{"ok": true, "envs": cleaned})
 }
@@ -266,24 +300,37 @@ func (s *Server) saveHTTPCases(f httpCasesFile) error {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("创建 data 目录失败: %w", err)
 	}
-	tmp := path + ".tmp"
 	encoded, err := json.MarshalIndent(f, "", "  ")
 	if err != nil {
 		return fmt.Errorf("序列化 http_cases 失败: %w", err)
 	}
-	if err := os.WriteFile(tmp, encoded, 0644); err != nil {
+	tmpFile, err := os.CreateTemp(dir, ".http_cases-*.tmp")
+	if err != nil {
+		return fmt.Errorf("创建临时文件失败: %w", err)
+	}
+	tmp := tmpFile.Name()
+	if _, err := tmpFile.Write(encoded); err != nil {
+		_ = tmpFile.Close()
+		_ = os.Remove(tmp)
 		return fmt.Errorf("写入临时文件失败: %w", err)
 	}
+	if err := tmpFile.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("关闭临时文件失败: %w", err)
+	}
 	if err := os.Rename(tmp, path); err != nil {
-		os.Remove(tmp)
+		_ = os.Remove(tmp)
 		return fmt.Errorf("原子替换 http_cases 失败: %w", err)
 	}
 	return nil
 }
 
 // newHTTPID 生成一个简短 ID（时间戳纳秒 + 4 字符十六进制随机）
-// 不引 crypto/rand，保持简单。
 func newHTTPID() string {
 	now := time.Now().UnixNano()
-	return fmt.Sprintf("c%016x", now)
+	var b [4]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return fmt.Sprintf("c%016x", now)
+	}
+	return fmt.Sprintf("c%016x%s", now, hex.EncodeToString(b[:]))
 }

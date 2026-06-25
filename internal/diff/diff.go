@@ -269,13 +269,12 @@ func renderUnified(lines []Line, leftLabel, rightLabel string, truncated bool) s
 	closeHunk()
 
 	for _, h := range hunks {
-		// lStart/rStart 是 hunk 中第一个非上下文行（含 ctxLines 之前）的左侧/右侧行号
-		// 我们在 openWithContext 里把上下文也算进了 count，所以 start 要回退 ctxLines 个 equal。
-		lStart := h.lStart - ctxLines
+		// lStart/rStart 已经在 openWithContext 中设置为 hunk 第一行（含上下文）的行号。
+		lStart := h.lStart
 		if lStart < 1 {
 			lStart = 1
 		}
-		rStart := h.rStart - ctxLines
+		rStart := h.rStart
 		if rStart < 1 {
 			rStart = 1
 		}

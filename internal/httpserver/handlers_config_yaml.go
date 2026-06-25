@@ -10,7 +10,7 @@ import (
 )
 
 // handleConfigExport GET /api/config/export
-// 直接读取 config.yaml 文件内容并以 text/yaml 返回，触发浏览器下载。
+// 读取 config.yaml 并对常见敏感字段脱敏后以 text/yaml 返回，触发浏览器下载。
 func (s *Server) handleConfigExport(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeErr(w, 405, errors.New("仅支持 GET"))
@@ -25,7 +25,36 @@ func (s *Server) handleConfigExport(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/yaml; charset=utf-8")
 	w.Header().Set("Content-Disposition", `attachment; filename="config.yaml"`)
 	w.WriteHeader(200)
-	_, _ = w.Write(data)
+	_, _ = w.Write(redactConfigYAML(data))
+}
+
+func redactConfigYAML(data []byte) []byte {
+	lines := strings.Split(string(data), "\n")
+	sensitiveKeys := []string{"password", "passwd", "secret", "token", "api_key", "apikey", "private_key", "host_key_sha256"}
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		colon := strings.Index(trimmed, ":")
+		if colon <= 0 {
+			continue
+		}
+		key := strings.ToLower(strings.TrimSpace(trimmed[:colon]))
+		redact := false
+		for _, s := range sensitiveKeys {
+			if strings.Contains(key, s) {
+				redact = true
+				break
+			}
+		}
+		if !redact {
+			continue
+		}
+		indentLen := len(line) - len(strings.TrimLeft(line, " \t"))
+		lines[i] = line[:indentLen] + strings.TrimSpace(trimmed[:colon]) + `: "***"`
+	}
+	return []byte(strings.Join(lines, "\n"))
 }
 
 // handleConfigImport POST /api/config/import

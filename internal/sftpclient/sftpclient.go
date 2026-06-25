@@ -224,15 +224,13 @@ func (c *Client) DownloadFileContext(ctx context.Context, remotePath, localPath 
 	}
 	defer dst.Close()
 
-	// ctx 取消时主动关掉 backend：正在进行的 io.Copy 会因 read 报错而退出。
-	// SFTP backend：先关 src 再关 c.b；
-	// Shell backend：关 SSH session（让阻塞的 cat 退出）。
+	// ctx 取消时只关闭当前文件句柄：正在进行的 io.Copy 会因 read 报错而退出。
+	// 不要关闭整个 backend，否则取消单个下载会让同一个 Client 后续操作全部失效。
 	cancelDone := make(chan struct{})
 	go func() {
 		select {
 		case <-ctx.Done():
 			_ = src.Close()
-			_ = c.b.Close()
 		case <-cancelDone:
 		}
 	}()
@@ -375,18 +373,18 @@ func newShellBackend(conn *ssh.Client, runFn func(ctx context.Context, command s
 	return &shellBackend{conn: conn, run: runFn}
 }
 
-// Close 关掉 ssh 连接。
+// Close 释放 shell backend 自身资源。
+//
+// 注意：shellBackend 使用调用方传入的共享 SSH 连接创建 session，不能在这里关闭
+// s.conn，否则关闭一个文件客户端会连带中断同一 SSH 连接上的其它操作。
 func (s *shellBackend) Close() error {
-	if s.conn != nil {
-		return s.conn.Close()
-	}
 	return nil
 }
 
 // shellQuoteArg 把单个 arg 用单引号包起来（防 shell 注入）。
-// 单引号在 shell 里没有转义机制，所以 arg 里的 ' 必须先去掉。
+// shell 中单引号的正确转义方式是：结束单引号、插入转义单引号、重新开始单引号。
 func shellQuoteArg(arg string) string {
-	return "'" + strings.ReplaceAll(arg, "'", "") + "'"
+	return "'" + strings.ReplaceAll(arg, "'", `'"'"'`) + "'"
 }
 
 // shellStatInfo 是 shellBackend Stat / ReadDir 返回的最小 os.FileInfo 实现。
@@ -618,27 +616,29 @@ type shellFile struct {
 	size    int64
 	mu      sync.Mutex
 	closed  bool
+	once    sync.Once
 	closeFn func()
 }
 
 func (f *shellFile) Read(p []byte) (int, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.closed {
+	closed := f.closed
+	f.mu.Unlock()
+	if closed {
 		return 0, io.EOF
 	}
 	return f.r.Read(p)
 }
 
 func (f *shellFile) Close() error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if !f.closed {
+	f.once.Do(func() {
+		f.mu.Lock()
 		f.closed = true
+		f.mu.Unlock()
 		if f.closeFn != nil {
 			f.closeFn()
 		}
-	}
+	})
 	return nil
 }
 
@@ -657,9 +657,9 @@ func (s *shellBackend) Open(path string) (SftpFile, error) {
 	if err != nil {
 		return nil, fmt.Errorf("Open 前 Stat 失败: %w", err)
 	}
-	// 构造命令：用 sh -c 让 cat 真正跑起来
-	// 注意：sh -c + 单引号包整段，避免 path 里的特殊字符搞坏 shell
-	cmd := "sh -c " + shellQuoteArg("cat "+shellQuoteArg(path)+" 2>/dev/null")
+	// 构造命令：只对 path 做一次 shell 参数转义。
+	// 不能再用 sh -c 包裹整段命令，否则外层转义会破坏内层单引号并造成命令注入。
+	cmd := "cat " + shellQuoteArg(path)
 	// 直接调 ssh.Client 拿 session（不走 Run 回调，因为 Run 是阻塞式的，
 	// 而 Open 需要"流式"读）。
 	sess, err := s.conn.NewSession()
@@ -671,6 +671,7 @@ func (s *shellBackend) Open(path string) (SftpFile, error) {
 		_ = sess.Close()
 		return nil, fmt.Errorf("拿 stdout pipe 失败: %w", err)
 	}
+	sess.Stderr = io.Discard
 	if err := sess.Start(cmd); err != nil {
 		_ = sess.Close()
 		return nil, fmt.Errorf("启动 cat 失败: %w", err)

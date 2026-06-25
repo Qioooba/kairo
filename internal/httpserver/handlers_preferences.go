@@ -7,9 +7,12 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 )
 
 // P2-20：统一偏好存储（data/preferences.json）。
+var preferencesMu sync.Mutex
+
 func (s *Server) handlePreferences(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
@@ -23,7 +26,9 @@ func (s *Server) handlePreferences(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handlePreferencesGet(w http.ResponseWriter, r *http.Request) {
 	prefFile := s.preferencesPath()
+	preferencesMu.Lock()
 	data, err := os.ReadFile(prefFile)
+	preferencesMu.Unlock()
 	if err != nil {
 		if os.IsNotExist(err) {
 			writeJSON(w, 200, map[string]any{})
@@ -53,18 +58,32 @@ func (s *Server) handlePreferencesPut(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, fmt.Errorf("创建偏好目录失败: %w", err))
 		return
 	}
-	tmp := prefFile + ".tmp"
 	encoded, err := json.MarshalIndent(prefs, "", "  ")
 	if err != nil {
 		writeErr(w, 500, fmt.Errorf("偏好 JSON 序列化失败: %w", err))
 		return
 	}
-	if err := os.WriteFile(tmp, encoded, 0644); err != nil {
+	preferencesMu.Lock()
+	defer preferencesMu.Unlock()
+	tmpFile, err := os.CreateTemp(dir, ".preferences-*.tmp")
+	if err != nil {
+		writeErr(w, 500, fmt.Errorf("创建临时文件失败: %w", err))
+		return
+	}
+	tmp := tmpFile.Name()
+	if _, err := tmpFile.Write(encoded); err != nil {
+		_ = tmpFile.Close()
+		_ = os.Remove(tmp)
 		writeErr(w, 500, fmt.Errorf("写入临时文件失败: %w", err))
 		return
 	}
+	if err := tmpFile.Close(); err != nil {
+		_ = os.Remove(tmp)
+		writeErr(w, 500, fmt.Errorf("关闭临时文件失败: %w", err))
+		return
+	}
 	if err := os.Rename(tmp, prefFile); err != nil {
-		os.Remove(tmp)
+		_ = os.Remove(tmp)
 		writeErr(w, 500, fmt.Errorf("原子替换 preferences 失败: %w", err))
 		return
 	}

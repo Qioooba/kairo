@@ -162,7 +162,7 @@ func (a *AppConfig) AllowCustomDownloadDirEnabled() bool {
 // 注意：
 //   - absolutePath 必须是绝对路径（不在这里检查，由 validateTargetDir 保证）
 //   - 跨平台：Windows 用 \，Linux/Mac 用 /；本函数把 root 和 path 都做大小写不敏感比较（Windows 不区分大小写）
-//     + 双分隔符归一。
+//   - 双分隔符归一。
 func (a *AppConfig) TargetDirAllowed(absolutePath string) bool {
 	if len(a.AllowedDownloadRoots) == 0 {
 		return true
@@ -213,10 +213,11 @@ func (a *AppConfig) ListenAddr() string {
 	if host == "" {
 		host = "127.0.0.1"
 	}
-	if a.Port <= 0 || a.Port > 65535 {
-		a.Port = 18080
+	port := a.Port
+	if port <= 0 || port > 65535 {
+		port = 18080
 	}
-	return net.JoinHostPort(host, strconv.Itoa(a.Port))
+	return net.JoinHostPort(host, strconv.Itoa(port))
 }
 
 // SystemConfig 一个逻辑系统（业务系统）
@@ -659,6 +660,9 @@ func (c *Config) Clone() *Config {
 	// AppConfig.FreeFileRoots 是 slice header 复用底层数组，必须新建。
 	if c.App.FreeFileRoots != nil {
 		out.App.FreeFileRoots = append([]string(nil), c.App.FreeFileRoots...)
+	}
+	if c.App.AllowedDownloadRoots != nil {
+		out.App.AllowedDownloadRoots = append([]string(nil), c.App.AllowedDownloadRoots...)
 	}
 	// v0.8：AppConfig.ExternalOpeners 同理必须新建 slice（且每项是值拷贝 struct，无指针字段）。
 	if c.App.ExternalOpeners != nil {

@@ -10,7 +10,9 @@ import (
 	"errors"
 	"io"
 	"io/fs"
+	"net"
 	"net/http"
+	urlpkg "net/url"
 	"strings"
 	"sync"
 	"time"
@@ -118,6 +120,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Frame-Options", "DENY")
 
 	path := r.URL.Path
+	if strings.HasPrefix(path, "/api/") && !allowLocalOrigin(r) {
+		writeErr(w, http.StatusForbidden, errors.New("拒绝跨源请求"))
+		return
+	}
 	switch {
 	case path == "/" || path == "/index.html":
 		s.serveStatic(w, r, "index.html")
@@ -211,6 +217,41 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+func allowLocalOrigin(r *http.Request) bool {
+	origin := strings.TrimSpace(r.Header.Get("Origin"))
+	if origin != "" {
+		return isLocalOrigin(origin)
+	}
+	referer := strings.TrimSpace(r.Header.Get("Referer"))
+	if referer != "" {
+		return isLocalOrigin(referer)
+	}
+	return true
+}
+
+func isLocalOrigin(raw string) bool {
+	u, err := urlpkg.Parse(raw)
+	if err != nil {
+		return false
+	}
+	host := u.Hostname()
+	if host == "" {
+		return false
+	}
+	return isLocalWebHost(host)
+}
+
+func isLocalWebHost(host string) bool {
+	h := strings.ToLower(strings.Trim(host, "[]"))
+	if h == "localhost" {
+		return true
+	}
+	if ip := net.ParseIP(h); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
 }
 
 // ---------- 静态资源 ----------

@@ -106,7 +106,7 @@ func TestParseLsTime(t *testing.T) {
 // TestShellQuoteArg 验证 shell 单引号转义。
 //
 // 关键点：单引号字符串在 shell 里没有变量展开 / 命令替换，所以包在单引号里
-// 是绝对安全的；我们只需要去掉输入里的单引号（shell 单引号无法转义）。
+// 是安全的；输入里的单引号要用 '\” 等价形式安全保留，不能直接剥离。
 func TestShellQuoteArg(t *testing.T) {
 	cases := []struct {
 		in   string
@@ -114,7 +114,7 @@ func TestShellQuoteArg(t *testing.T) {
 	}{
 		{"foo", "'foo'"},
 		{"/var/log/app.log", "'/var/log/app.log'"},
-		{"a'b", "'ab'"}, // 单引号被剥掉（其余字符原样保留）
+		{"a'b", "'a'\"'\"'b'"}, // 单引号被安全转义并保留
 		// $(rm -rf /) 在单引号里是字面字符串，不会被 shell 解释：
 		{"$(rm -rf /)", "'$(rm -rf /)'"},
 		{"`evil`", "'`evil`'"},

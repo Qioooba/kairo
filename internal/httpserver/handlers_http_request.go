@@ -20,7 +20,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	urlpkg "net/url"
 	"strings"
 	"time"
 )
@@ -91,6 +93,9 @@ func doHTTPRequest(req httpRequestReq) (httpRequestResp, error) {
 	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
 		return httpRequestResp{Ok: false, Error: "URL 必须以 http:// 或 https:// 开头"}, nil
 	}
+	if err := validateOutboundHTTPURL(url); err != nil {
+		return httpRequestResp{Ok: false, Error: err.Error()}, nil
+	}
 
 	timeoutMs := req.TimeoutMs
 	if timeoutMs <= 0 {
@@ -108,6 +113,8 @@ func doHTTPRequest(req httpRequestReq) (httpRequestResp, error) {
 		IdleConnTimeout:       30 * time.Second,
 		DisableCompression:    false,
 		ResponseHeaderTimeout: 0,
+		Proxy:                 nil,
+		DialContext:           safeHTTPDialContext,
 	}
 	if req.InsecureTLS {
 		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
@@ -120,6 +127,13 @@ func doHTTPRequest(req httpRequestReq) (httpRequestResp, error) {
 	if !req.FollowRedirect {
 		client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
+		}
+	} else {
+		client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+			if err := validateOutboundHTTPURL(req.URL.String()); err != nil {
+				return err
+			}
+			return nil
 		}
 	}
 
@@ -175,4 +189,75 @@ func doHTTPRequest(req httpRequestReq) (httpRequestResp, error) {
 		FinalURL:   resp.Request.URL.String(),
 		Truncated:  truncated,
 	}, nil
+}
+
+func validateOutboundHTTPURL(raw string) error {
+	u, err := urlpkg.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("URL 解析失败: %w", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return errors.New("URL 必须以 http:// 或 https:// 开头")
+	}
+	host := u.Hostname()
+	if host == "" {
+		return errors.New("URL host 不能为空")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := rejectPrivateHost(ctx, host); err != nil {
+		return err
+	}
+	return nil
+}
+
+func safeHTTPDialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil, err
+	}
+	if err := rejectPrivateHost(ctx, host); err != nil {
+		return nil, err
+	}
+	ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+	if len(ips) == 0 {
+		return nil, errors.New("DNS 解析结果为空")
+	}
+	dialer := &net.Dialer{}
+	return dialer.DialContext(ctx, network, net.JoinHostPort(ips[0].IP.String(), port))
+}
+
+func rejectPrivateHost(ctx context.Context, host string) error {
+	if ip := net.ParseIP(host); ip != nil {
+		if isBlockedHTTPIP(ip) {
+			return fmt.Errorf("拒绝访问内网或本机地址: %s", host)
+		}
+		return nil
+	}
+	ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return fmt.Errorf("DNS 解析失败: %w", err)
+	}
+	if len(ips) == 0 {
+		return errors.New("DNS 解析结果为空")
+	}
+	for _, addr := range ips {
+		if isBlockedHTTPIP(addr.IP) {
+			return fmt.Errorf("拒绝访问内网或本机地址: %s", host)
+		}
+	}
+	return nil
+}
+
+func isBlockedHTTPIP(ip net.IP) bool {
+	if ip == nil {
+		return true
+	}
+	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
+		return true
+	}
+	return false
 }

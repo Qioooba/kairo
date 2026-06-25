@@ -57,10 +57,10 @@ type Session struct {
 	// batcher goroutine 每 50ms（或满 100 行）flush 一次，
 	// 把多行 NDJSON 通过单次 channel send 推给订阅者。
 	// 收益：100 行/秒 → 1 次/50ms ≈ 50x syscall 减少。
-	pendingMu    sync.Mutex
-	pendingBuf   []byte
-	pendingN     int
-	flushSignal  chan struct{}
+	pendingMu   sync.Mutex
+	pendingBuf  []byte
+	pendingN    int
+	flushSignal chan struct{}
 }
 
 // Output 表示一条流式输出（按行）
@@ -74,11 +74,18 @@ type Output struct {
 func (s *Session) Subscribe() (<-chan []byte, func()) {
 	ch := make(chan []byte, 64)
 	s.mu.Lock()
-	if s.subscribers == nil {
-		s.subscribers = make(map[chan []byte]struct{})
+	alreadyStopped := s.stopped
+	if !alreadyStopped {
+		if s.subscribers == nil {
+			s.subscribers = make(map[chan []byte]struct{})
+		}
+		s.subscribers[ch] = struct{}{}
 	}
-	s.subscribers[ch] = struct{}{}
 	s.mu.Unlock()
+	if alreadyStopped {
+		close(ch)
+		return ch, func() {}
+	}
 	cancel := func() {
 		s.mu.Lock()
 		if _, ok := s.subscribers[ch]; ok {

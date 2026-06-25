@@ -63,6 +63,7 @@ func zipFiles(srcPaths []string, destPath string) error {
 		if !closed {
 			_ = zw.Close()
 			_ = dst.Close()
+			_ = os.Remove(destPath)
 		}
 	}()
 	usedNames := map[string]int{}
@@ -142,6 +143,7 @@ func zipFilesNamed(sources []ZipSource, destPath string) error {
 		if !closed {
 			_ = zw.Close()
 			_ = dst.Close()
+			_ = os.Remove(destPath)
 		}
 	}()
 	usedNames := map[string]int{}
@@ -175,7 +177,7 @@ func zipFilesNamed(sources []ZipSource, destPath string) error {
 			base := strings.TrimSuffix(name, ext)
 			name = fmt.Sprintf("%s_%d%s", base, n+1, ext)
 		}
-		usedNames[src.NameInZip]++
+		usedNames[name]++
 		header := &zip.FileHeader{
 			Name:     name,
 			Method:   zip.Deflate,

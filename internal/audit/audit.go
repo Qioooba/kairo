@@ -72,7 +72,12 @@ func (l *Logger) Write(op string, fields ...any) {
 	// 检查是否需要按日滚动
 	today := time.Now().Format("2006-01-02")
 	if today != l.cur {
-		_ = l.rotateLocked("audit.log")
+		if err := l.rotateLocked("audit.log"); err != nil {
+			return
+		}
+	}
+	if l.out == nil {
+		return
 	}
 	if len(fields)%2 != 0 {
 		fields = append(fields, "<missing>")
@@ -121,8 +126,6 @@ func (l *Logger) rotateLocked(name string) error {
 		l.out = nil
 		l.file = nil
 	}
-	today := time.Now().Format("2006-01-02")
-	l.cur = today
 	path := filepath.Join(l.dir, name)
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o640)
 	if err != nil {
@@ -130,6 +133,7 @@ func (l *Logger) rotateLocked(name string) error {
 	}
 	l.file = f
 	l.out = f
+	l.cur = time.Now().Format("2006-01-02")
 	return nil
 }
 

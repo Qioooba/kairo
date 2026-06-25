@@ -134,8 +134,8 @@ func splitDataPath(dataPath string) (rootDir, rel string, err error) {
 	if err != nil {
 		return "", "", fmt.Errorf("解析路径失败: %w", err)
 	}
-	dir := filepath.Dir(abs)             // 父目录
-	base := filepath.Base(dir)           // 父目录名
+	dir := filepath.Dir(abs)   // 父目录
+	base := filepath.Base(dir) // 父目录名
 	if isLikelyDateDir(base) {
 		// .../downloads/YYYYMMDD/<file> → rootDir=.../downloads, rel=YYYYMMDD/<file>
 		rootDir = filepath.Dir(dir)
@@ -252,6 +252,21 @@ func saveMetaIndex(rootDir string, idx *metaIndex, mtimeOld time.Time) error {
 		return nil
 	}
 	return errors.New("saveMetaIndex: 乐观锁重试超限")
+}
+
+func cloneMetaIndex(src *metaIndex) *metaIndex {
+	dst := &metaIndex{Version: 1, Files: map[string]Meta{}}
+	if src == nil {
+		return dst
+	}
+	dst.Version = src.Version
+	if dst.Version == 0 {
+		dst.Version = 1
+	}
+	for k, v := range src.Files {
+		dst.Files[k] = v
+	}
+	return dst
 }
 
 // List 列出 rootDir 下所有数据文件 + 它们的元数据。
@@ -502,100 +517,26 @@ func DeleteAll(rootDir string) (int, error) {
 
 // removeFromIndex 从 rootDir 的索引文件里移除单条 key。
 func removeFromIndex(rootDir, relName string) {
-	metaCacheMu.Lock()
-	defer metaCacheMu.Unlock()
-	indexPath := filepath.Join(rootDir, metaIndexFile)
-	st, err := os.Stat(indexPath)
-	if err != nil {
-		return // 索引文件不存在 → 没东西可删
-	}
-	// 命中缓存：用缓存版本（写回时一并 save）
-	if metaCacheDir == rootDir && metaCache != nil && metaCacheMT.Equal(st.ModTime()) {
-		delete(metaCache.Files, filepath.ToSlash(relName))
-		b, _ := json.MarshalIndent(metaCache, "", "  ")
-		tmp, err := os.CreateTemp(rootDir, ".ops-toolbox-meta-*.tmp")
-		if err == nil {
-			tmp.Chmod(0o600)
-			tmp.Write(b)
-			tmp.Close()
-			_ = os.Rename(tmp.Name(), indexPath)
-			metaCacheMT = time.Time{}
-			metaCache = nil
-		}
+	idx, mtime, err := loadMetaIndex(rootDir)
+	if err != nil || idx == nil || len(idx.Files) == 0 {
 		return
 	}
-	// 缓存失效：直接读盘 + 改 + 写
-	b, err := os.ReadFile(indexPath)
-	if err != nil {
-		return
-	}
-	var idx metaIndex
-	if err := json.Unmarshal(b, &idx); err != nil {
-		return
-	}
-	if idx.Files == nil {
-		return
-	}
+	idx = cloneMetaIndex(idx)
 	delete(idx.Files, filepath.ToSlash(relName))
-	bb, _ := json.MarshalIndent(idx, "", "  ")
-	tmp, err := os.CreateTemp(rootDir, ".ops-toolbox-meta-*.tmp")
-	if err != nil {
-		return
-	}
-	tmp.Chmod(0o600)
-	tmp.Write(bb)
-	tmp.Close()
-	_ = os.Rename(tmp.Name(), indexPath)
+	_ = saveMetaIndex(rootDir, idx, mtime)
 }
 
 // removeFromIndexBulk 批量删除：避免 N 次 IO 抖动。
 func removeFromIndexBulk(rootDir string, names []string) {
-	metaCacheMu.Lock()
-	defer metaCacheMu.Unlock()
-	indexPath := filepath.Join(rootDir, metaIndexFile)
-	st, err := os.Stat(indexPath)
-	if err != nil {
+	idx, mtime, err := loadMetaIndex(rootDir)
+	if err != nil || idx == nil || len(idx.Files) == 0 {
 		return
 	}
-	if metaCacheDir == rootDir && metaCache != nil && metaCacheMT.Equal(st.ModTime()) {
-		for _, n := range names {
-			delete(metaCache.Files, filepath.ToSlash(n))
-		}
-		b, _ := json.MarshalIndent(metaCache, "", "  ")
-		tmp, err := os.CreateTemp(rootDir, ".ops-toolbox-meta-*.tmp")
-		if err == nil {
-			tmp.Chmod(0o600)
-			tmp.Write(b)
-			tmp.Close()
-			_ = os.Rename(tmp.Name(), indexPath)
-			metaCacheMT = time.Time{}
-			metaCache = nil
-		}
-		return
-	}
-	b, err := os.ReadFile(indexPath)
-	if err != nil {
-		return
-	}
-	var idx metaIndex
-	if err := json.Unmarshal(b, &idx); err != nil {
-		return
-	}
-	if idx.Files == nil {
-		return
-	}
+	idx = cloneMetaIndex(idx)
 	for _, n := range names {
 		delete(idx.Files, filepath.ToSlash(n))
 	}
-	bb, _ := json.MarshalIndent(idx, "", "  ")
-	tmp, err := os.CreateTemp(rootDir, ".ops-toolbox-meta-*.tmp")
-	if err != nil {
-		return
-	}
-	tmp.Chmod(0o600)
-	tmp.Write(bb)
-	tmp.Close()
-	_ = os.Rename(tmp.Name(), indexPath)
+	_ = saveMetaIndex(rootDir, idx, mtime)
 }
 
 // MigrateSidecars 从老的 .meta sidecar 格式迁移到单文件索引。
@@ -612,6 +553,7 @@ func MigrateSidecars(rootDir string) (migrated, skipped int, err error) {
 	if err != nil {
 		return 0, 0, err
 	}
+	idx = cloneMetaIndex(idx)
 	walkErr := filepath.WalkDir(rootDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
@@ -693,12 +635,12 @@ func safeJoin(rootDir, name string) (string, error) {
 
 // CleanupResult 清理结果统计
 type CleanupResult struct {
-	RetentionDays int   // 使用的保留天数配置
-	MaxCount      int   // 使用的最大记录数配置
-	DeletedByAge  int   // 按过期天数删除的数量
-	DeletedByCount int  // 按数量限制删除的数量
-	TotalDeleted  int   // 总共删除的数量
-	Errors        []error // 清理过程中遇到的错误
+	RetentionDays  int     // 使用的保留天数配置
+	MaxCount       int     // 使用的最大记录数配置
+	DeletedByAge   int     // 按过期天数删除的数量
+	DeletedByCount int     // 按数量限制删除的数量
+	TotalDeleted   int     // 总共删除的数量
+	Errors         []error // 清理过程中遇到的错误
 }
 
 // Cleanup 根据配置清理过期下载文件和记录。

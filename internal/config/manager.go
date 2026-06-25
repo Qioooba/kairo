@@ -45,14 +45,14 @@ func (m *Manager) Path() string {
 	return m.path
 }
 
-// Get 返回当前 Config 的只读快照。
+// Get 返回当前 Config 的只读快照副本。
 //
-// 注意：返回的 *Config 在 Manager 看来是 immutable 的；
-// 调用方只能读，不应该写任何字段。需要改时走 Replace。
+// 返回深拷贝可避免调用方误修改快照时污染 Manager 内部状态，也避免并发 Replace
+// 场景下多个调用方共享 inner slice/map 触发 data race。
 func (m *Manager) Get() *Config {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return m.cfg
+	return m.cfg.Clone()
 }
 
 // backupFile 备份当前配置文件到带时间戳的 .bak 文件
@@ -133,8 +133,12 @@ func (m *Manager) Replace(newCfg *Config) error {
 	if newCfg == nil {
 		return errors.New("配置为空")
 	}
+	newCfg = newCfg.Clone()
 	// 1+2. 标准化 + 校验
 	newCfg.Defaults()
+	if err := newCfg.ResolvePaths(m.baseDir); err != nil {
+		return fmt.Errorf("路径解析失败: %w", err)
+	}
 	if err := newCfg.Validate(); err != nil {
 		return fmt.Errorf("配置校验失败: %w", err)
 	}
@@ -185,16 +189,19 @@ func writeYAMLAtomic(path string, cfg *Config) error {
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("关闭临时文件失败: %w", err)
 	}
-	// Windows 上 rename 不会覆盖已有文件；先删后改。
 	if err := os.Rename(tmpPath, path); err != nil {
-		// 兼容 Windows：先删旧文件再 rename
-		if rmErr := os.Remove(path); rmErr == nil {
-			if err := os.Rename(tmpPath, path); err != nil {
-				return fmt.Errorf("rename 失败: %w", err)
-			}
-		} else {
+		// 兼容 Windows：不能先删除原文件，否则第二次 rename 失败会导致配置文件丢失。
+		// 改为 old -> backup -> new -> path；如果 new -> path 失败，尽量恢复 backup。
+		backupPath := path + ".bak"
+		_ = os.Remove(backupPath)
+		if bakErr := os.Rename(path, backupPath); bakErr != nil {
 			return fmt.Errorf("rename 失败: %w", err)
 		}
+		if renErr := os.Rename(tmpPath, path); renErr != nil {
+			_ = os.Rename(backupPath, path)
+			return fmt.Errorf("rename 失败: %w", renErr)
+		}
+		_ = os.Remove(backupPath)
 	}
 	writeOK = true
 	return nil

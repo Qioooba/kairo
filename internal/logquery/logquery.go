@@ -425,9 +425,8 @@ func ListCommand(dir string, patterns []string, max int, listMode string) (strin
 		// 不会出现"head 截掉想看的行"。
 		grepExprs := make([]string, 0, len(cleanPatterns))
 		for _, p := range cleanPatterns {
-			// 把 glob * 转成正则 .*，其他字符保持字面
-			re := strings.ReplaceAll(p, "*", ".*")
-			re = strings.ReplaceAll(re, "?", ".")
+			// 把 glob 转成正则：普通字符必须转义，避免 "." 等正则元字符误匹配任意字符。
+			re := globPatternToRegexp(p)
 			grepExprs = append(grepExprs, fmt.Sprintf("-e %q", "^.*"+re+"$"))
 		}
 		grepExpr := strings.Join(grepExprs, " ")
@@ -439,6 +438,21 @@ func ListCommand(dir string, patterns []string, max int, listMode string) (strin
 	default:
 		return "", fmt.Errorf("不支持的 list_mode: %q（仅支持 gnu_find / posix_ls）", listMode)
 	}
+}
+
+func globPatternToRegexp(p string) string {
+	var b strings.Builder
+	for _, r := range p {
+		switch r {
+		case '*':
+			b.WriteString(".*")
+		case '?':
+			b.WriteByte('.')
+		default:
+			b.WriteString(regexp.QuoteMeta(string(r)))
+		}
+	}
+	return b.String()
 }
 
 // ParseListOutput 解析远端列目录输出，自动识别格式：
@@ -683,8 +697,8 @@ func SearchCommand(dir string, files []string, kw []SearchKeyword, max, timeoutS
 				branch += " | grep -E " + pat
 			}
 		} else {
-			// 纯 neg（例 "!DEBUG"）：用 grep -HnE "^." -- files 给所有行加前缀，再排除
-			branch = fmt.Sprintf("grep -HnE %q -- %s", "^.", fileList)
+			// 纯 neg（例 "!DEBUG"）：用 "^" 匹配所有行（包括空行）并加 filename:lineno: 前缀。
+			branch = fmt.Sprintf("grep -HnE %q -- %s", "^", fileList)
 		}
 		// neg 过滤（每组都适用，包括纯 neg 组）
 		for _, p := range g.neg {

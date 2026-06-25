@@ -102,6 +102,9 @@ func FormatXML(input string, indent string) (string, error) {
 			}
 			return "", fmt.Errorf("XML 解析失败: %w", err)
 		}
+		if ch, ok := tok.(xml.CharData); ok && strings.TrimSpace(string(ch)) == "" {
+			continue
+		}
 		if err := enc.EncodeToken(tok); err != nil {
 			return "", fmt.Errorf("XML 编码失败: %w", err)
 		}

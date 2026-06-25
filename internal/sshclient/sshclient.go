@@ -642,14 +642,11 @@ func (c *Client) Run(ctx context.Context, command string, timeout time.Duration,
 		err    error
 	}
 	done := make(chan result, 1)
-	var sess *ssh.Session
+	sess, e := c.conn.NewSession()
+	if e != nil {
+		return "", "", -1, fmt.Errorf("创建 session 失败: %w", e)
+	}
 	go func() {
-		var e error
-		sess, e = c.conn.NewSession()
-		if e != nil {
-			done <- result{err: fmt.Errorf("创建 session 失败: %w", e)}
-			return
-		}
 		// 显式关闭 session，减少老 sshd / 堡垒机上的 channel 泄漏。
 		// Run() 会等待命令结束；本 defer 只在命令自然/异常结束后清理。
 		defer func() { _ = sess.Close() }()
@@ -728,20 +725,24 @@ func (c *Client) Stream(ctx context.Context, command string, encoding string, on
 	// 显式关闭 session（stream 退出时），减少老 sshd channel 泄漏。
 	defer func() { _ = sess.Close() }()
 	// stderr 单独读：错误时能拿到原因；正常命令 stderr 通常是空的
-	stderrBuf := &safeWriter{w: &strings.Builder{}}
+	var stderrBuilder strings.Builder
+	stderrBuf := &safeWriter{w: &stderrBuilder}
 	sess.Stderr = stderrBuf
 
 	pr, pw := io.Pipe()
 	sess.Stdout = pw
 
 	type result struct {
-		code int
-		err  error
+		code   int
+		stderr string
+		err    error
 	}
 	done := make(chan result, 1)
+	scanDone := make(chan struct{})
 
 	// 行切 + 解码协程
 	go func() {
+		defer close(scanDone)
 		defer pr.Close()
 		defer pw.Close()
 		scanner := bufio.NewScanner(pr)
@@ -765,14 +766,23 @@ func (c *Client) Stream(ctx context.Context, command string, encoding string, on
 			code = exitErr.ExitStatus()
 			e = nil
 		}
-		done <- result{code: code, err: e}
+		done <- result{code: code, stderr: stderrBuilder.String(), err: e}
 	}()
 
 	select {
 	case <-ctx.Done():
 		c.killSession(sess)
+		<-scanDone
 		return -1, ctx.Err()
 	case r := <-done:
+		<-scanDone
+		stderrText := strings.TrimSpace(decodeBytes([]byte(r.stderr), encoding))
+		if r.err != nil && stderrText != "" {
+			return r.code, fmt.Errorf("%w: %s", r.err, stderrText)
+		}
+		if r.code != 0 && stderrText != "" {
+			return r.code, fmt.Errorf("远程命令退出码 %d: %s", r.code, stderrText)
+		}
 		return r.code, r.err
 	}
 }

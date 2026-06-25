@@ -290,7 +290,7 @@ func (s *Server) handleLogsListTargets(w http.ResponseWriter, r *http.Request) {
 		go func() {
 			defer wg.Done()
 			for j := range jobCh {
-				results[j.idx] = s.runOneLogsList(r.Context(), j.srv, j.ld, req.Username, req.Password)
+				results[j.idx] = s.runOneLogsList(r.Context(), req.System, j.srv, j.ld, req.Username, req.Password)
 			}
 		}()
 	}
@@ -315,11 +315,11 @@ func (s *Server) handleLogsListTargets(w http.ResponseWriter, r *http.Request) {
 }
 
 // runOneLogsList 单 target 列文件（抽出共享函数）
-func (s *Server) runOneLogsList(parentCtx context.Context, srv *config.ServerConfig, ld *config.LogDirEntry, username, password string) logsListTargetResult {
+func (s *Server) runOneLogsList(parentCtx context.Context, system string, srv *config.ServerConfig, ld *config.LogDirEntry, username, password string) logsListTargetResult {
 	start := time.Now()
 	res := logsListTargetResult{Server: srv.Name, Host: srv.Host, Dir: ld.Path, OK: true}
 
-	creds, err := s.resolveCreds(username, password, "", srv.Name, srv.Username)
+	creds, err := s.resolveCreds(username, password, system, srv.Name, srv.Username)
 	if err != nil {
 		res.OK = false; res.Error = err.Error()
 		res.Ms = time.Since(start).Milliseconds()
