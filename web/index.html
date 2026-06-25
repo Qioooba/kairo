@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <link rel="icon" href="data:," />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%232563eb'/%3E%3Cpath d='M9 10h14M9 16h14M9 22h8' stroke='%23fff' stroke-width='2.5' stroke-linecap='round'/%3E%3C/svg%3E" />
   <title>内网运维工具箱</title>
   <link rel="stylesheet" href="/static/style.css" />
   <!-- v0.5 #19 主题切换：在 CSS 加载后立刻读 localStorage 设 data-theme，避免 FOUC -->
@@ -33,6 +33,7 @@
       <a href="#/websphere" class="nav-item" data-route="websphere">WebSphere 日志</a>
       <a href="#/files" class="nav-item" data-route="files">文件下载</a>
       <a href="#/formatter" class="nav-item" data-route="formatter">报文格式化</a>
+      <a href="#/http" class="nav-item" data-route="http">HTTP 测试</a>
       <a href="#/commands" class="nav-item" data-route="commands">常用命令</a>
       <a href="#/diagnostics" class="nav-item" data-route="diagnostics">环境自检</a>
       <a href="#/config" class="nav-item" data-route="config">系统配置</a>
@@ -41,6 +42,11 @@
         <span id="dl-badge" class="nav-badge" style="display:none"></span>
       </a>
       <a href="#/history" class="nav-item" data-route="history">操作历史</a>
+      <div class="nav-sep">小工具</div>
+      <a href="#/timestamp" class="nav-item small" data-route="timestamp">时间戳</a>
+      <a href="#/cron" class="nav-item small" data-route="cron">Cron 解析</a>
+      <a href="#/jsonpath" class="nav-item small" data-route="jsonpath">JSONPath</a>
+      <a href="#/compare" class="nav-item small" data-route="compare">文本比对</a>
     </nav>
     <div class="footer">
       <div id="listen-info" class="muted">—</div>

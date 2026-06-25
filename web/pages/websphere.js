@@ -1682,6 +1682,7 @@
           password: passInp.value
         };
         if (filePatterns) body.file_patterns = filePatterns;
+        if (contextN > 0) body.context = contextN;
         if (selectedItems) {
           // P1-9：传 selected_file_targets（新格式），按 (server, dir) 区分
           // 后端会优先用 per-target 列表，匹配不上再退到老的 selected_files。
@@ -1833,6 +1834,8 @@ const formCard = el('div', { class: 'card' }, [
     // v0.5 #8：文件名参数 — 单文件 / 多文件 / glob 模糊匹配（空格或逗号分隔）
     // P1-08 改进：明确语义 — 填了 glob 后就只用 glob 匹配，N 仍控制"取最新 N 个匹配上的"
     const filePatternInp = el('input', { type: 'text', id: 'ws-file-pattern', placeholder: '可选 glob（逗号/空格分隔）：例 SystemOut*.log 或 *.log,*.txt' });
+
+    const contextInp = el('input', { type: 'number', id: 'ws-context', min: '0', max: '50', value: '0', style: 'width:100%;' });
 
     // v0.5-G P1-08：搜索范围三选一（latest / selected / glob）
     // - latest  默认，列最近 N 个

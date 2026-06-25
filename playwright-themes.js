@@ -14,7 +14,7 @@ const path = require('path');
 const fs = require('fs');
 const assert = require('assert');
 
-const BASE = process.env.OPS_BASE || 'http://127.0.0.1:18999';
+const BASE = process.env.OPS_BASE || 'http://127.0.0.1:18092';
 const OUT = path.join(__dirname, 'e2e-themes-out');
 if (!fs.existsSync(OUT)) fs.mkdirSync(OUT, { recursive: true });
 
@@ -22,7 +22,7 @@ const THEMES = ['dark', 'light', 'green', 'hc'];
 const PAGES = [
   { hash: '#/timestamp', name: 'timestamp', sample: '#ts-in' },
   { hash: '#/cron',      name: 'cron',      sample: '#cron-in' },
-  { hash: '#/http',      name: 'http',      sample: '#http-url' },
+  { hash: '#/http',      name: 'http',      sample: '#http2-url' },
 ];
 
 const OK = '\x1b[32m✓\x1b[0m';
@@ -137,9 +137,9 @@ async function run() {
         const shot = path.join(OUT, theme + '-' + p.name + '.png');
         await page.screenshot({ path: shot });
         // 验证页面有可见内容（背景色已经被 CSS 变量应用）
-        // HTTP 页用 flex 布局，主体是 .http-main；其它页用 .card
+        // HTTP 页用 flex 布局，主体是 .http2-main；其它页用 .card
         const cardBg = await page.evaluate(() => {
-          const el = document.querySelector('.card') || document.querySelector('.http-main');
+          const el = document.querySelector('.card') || document.querySelector('.http2-main');
           if (!el) return null;
           return getComputedStyle(el).backgroundColor;
         });
@@ -161,16 +161,16 @@ async function run() {
     console.log('\n=== light 主题专项：HTTP 页细节 ===');
     await page.evaluate(() => window.OTB.theme.set('light'));
     await page.goto(BASE + '/#/http');
-    await page.waitForSelector('#http-url', { timeout: 5000 });
+    await page.waitForSelector('#http2-url', { timeout: 5000 });
     await page.waitForTimeout(300);
-    // 展开保存折叠区
-    await page.click('summary:has-text("保存为用例")');
+    // 展开保存区
+    await page.click('.http2-save-row');
     await page.waitForTimeout(200);
     const saveSectionBg = await page.evaluate(() => {
-      const sec = document.querySelector('.http-save-section');
+      const sec = document.querySelector('.http2-save-row');
       return sec ? getComputedStyle(sec).backgroundColor : null;
     });
-    check('[light][http] 保存折叠区背景色非空', !!saveSectionBg, 'bg=' + saveSectionBg);
+    check('[light][http] 保存行背景色非空', !!saveSectionBg, 'bg=' + saveSectionBg);
     await page.screenshot({ path: path.join(OUT, 'light-http-expanded.png'), fullPage: true });
 
     // 在 hc 主题下：所有文字都该是高对比（白底黑字 / 黑底白字，对比度高）

@@ -4,6 +4,7 @@
 /OpsToolbox.exe
 /OpsToolbox_mac
 /OpsToolbox_*
+/ops-toolbox-test
 
 # Go 缓存
 /.gocache/

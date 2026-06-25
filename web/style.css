@@ -294,6 +294,20 @@ body {
   margin-left: 6px;
   vertical-align: middle;
 }
+.nav-sep {
+  font-size: 11px;
+  color: var(--text-mute);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 14px 12px 4px;
+  margin-top: 6px;
+  border-top: 1px solid var(--line);
+}
+.nav-item.small {
+  font-size: 12.5px;
+  padding: 7px 12px 7px 20px;
+  color: var(--text-dim);
+}
 
 .footer { border-top: 1px solid var(--line); padding-top: 10px; font-size: 11.5px; }
 .muted { color: var(--text-mute); }
@@ -346,8 +360,9 @@ body {
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
 .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
-@media (max-width: 1280px) { .grid-4 { grid-template-columns: repeat(2, 1fr); } }
-@media (max-width: 900px)  { .grid-3 { grid-template-columns: 1fr; } }
+.grid-5 { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; }
+@media (max-width: 1280px) { .grid-4 { grid-template-columns: repeat(2, 1fr); } .grid-5 { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 900px)  { .grid-3 { grid-template-columns: 1fr; } .grid-5 { grid-template-columns: repeat(2, 1fr); } }
 
 /* 2026-06-24：选择目标服务器 — 业务系统/默认目录/SSH 用户名/SSH 密码/记住密码/测试连接 单行展示
    宽屏（≥1280px）：6 列一行
@@ -410,6 +425,19 @@ body {
 }
 .tool-card .tag.placeholder { background: var(--tag-placeholder-bg); color: var(--tag-placeholder-fg); }
 .tool-card .tag.ready { background: var(--tag-ready-bg); color: var(--tag-ready-fg); }
+
+.tool-card-small {
+  padding: 14px 16px;
+  min-height: 100px;
+  gap: 6px;
+}
+.tool-card-small .icon {
+  width: 30px; height: 30px;
+  font-size: 15px;
+  border-radius: 7px;
+}
+.tool-card-small .name { font-size: 13.5px; }
+.tool-card-small .desc { font-size: 11.5px; line-height: 1.5; }
 
 /* 通用 tag（搜索结果里也用到） */
 .tag {
@@ -589,7 +617,7 @@ textarea { resize: vertical; min-height: 100px; font-family: ui-monospace, SFMon
 .text-err { color: var(--error); }
 .text-ok { color: var(--success); }
 .code-inline {
-  background: #0a0e14; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--code-inline-bg, #0a0e14); border: 1px solid var(--line); border-radius: 6px;
   padding: 1px 6px; font-family: ui-monospace, monospace; font-size: 12.5px;
 }
 .section-title { font-size: 18px; font-weight: 700; margin: 0 0 6px; }
@@ -779,8 +807,8 @@ textarea { resize: vertical; min-height: 60px; font-family: ui-monospace, monosp
 }
 
 .tail-out {
-  background: #0a0e14;
-  color: #b8d4a3;
+  background: var(--tail-out-bg, #0a0e14);
+  color: var(--tail-out-fg, #b8d4a3);
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 10px 12px;
@@ -994,7 +1022,7 @@ body[data-theme="green"] .tail-out.show-line-numbers .tail-line::before {
   color: var(--text);
 }
 .warn-banner-text { flex: 1; }
-.warn-banner-text strong { display: block; font-size: 14px; margin-bottom: 4px; color: #fbbf24; }
+.warn-banner-text strong { display: block; font-size: 14px; margin-bottom: 4px; color: var(--warn); }
 .warn-banner-sub { color: var(--text-dim); font-size: 12.5px; line-height: 1.5; }
 .warn-banner-close {
   background: transparent;
@@ -1436,12 +1464,18 @@ input[type="datetime-local"] {
   font-size: 12.5px;
   margin-top: 8px;
 }
-/* v0.6-fix：light 主题下用深一点的 amber，确保对比度 */
+/* v0.6-fix：light/green 主题下用深一点的 amber，确保对比度 */
 :root[data-theme="light"] .ws-tail-warn,
-:root[data-theme="hc"] .ws-tail-warn {
+:root[data-theme="green"] .ws-tail-warn {
   color: #b45309;
   background: rgba(245, 158, 11, 0.18);
   border-color: rgba(245, 158, 11, 0.5);
+}
+/* hc 主题用亮橙色，在黑色背景上更醒目 */
+:root[data-theme="hc"] .ws-tail-warn {
+  color: #ffaa00;
+  background: rgba(255, 170, 0, 0.15);
+  border-color: rgba(255, 170, 0, 0.5);
 }
 
 /* ===== v0.7-Redesign（第二波）：目标区可折叠摘要 ===== */
@@ -1529,9 +1563,14 @@ input[type="datetime-local"] {
 
 /* tag 语义状态（HTTP 状态码 / JSONPath 类型）*/
 .tag.tag-ok   { background: var(--tag-ready-bg); color: var(--tag-ready-fg); }
-.tag.tag-err  { background: rgba(220, 60, 60, 0.18);  color: #ff8585; }
+.tag.tag-err  { background: rgba(220, 60, 60, 0.18);  color: var(--tag-err-fg, #ff8585); }
 .tag.tag-busy { background: var(--tag-enc-bg); color: var(--tag-enc-fg); }
 .tag.tag-warn { background: var(--tag-warn-bg); color: var(--tag-warn-fg); }
+
+/* hc 主题：error tag 用亮红色确保在黑色背景上可见 */
+:root[data-theme="hc"] {
+  --tag-err-fg: #ff5555;
+}
 
 /* HTTP 测试页：method / URL / 超时 / 发送 一行 */
 .http-row {
@@ -1905,6 +1944,14 @@ input[type="datetime-local"] {
 .http2-case-method.m-PATCH  { background: var(--m-patch);  color: #2e1065; }
 .http2-case-method.m-HEAD   { background: var(--m-head);   color: #0f172a; }
 .http2-case-method.m-OPTIONS{ background: var(--m-options);color: #082f49; }
+/* hc 主题：HTTP method badges 用亮色文字确保在黑色页面上可见 */
+:root[data-theme="hc"] .http2-case-method.m-GET    { color: #000000; }
+:root[data-theme="hc"] .http2-case-method.m-POST   { color: #000000; }
+:root[data-theme="hc"] .http2-case-method.m-PUT    { color: #ffffff; }
+:root[data-theme="hc"] .http2-case-method.m-DELETE { color: #ffffff; }
+:root[data-theme="hc"] .http2-case-method.m-PATCH  { color: #ffffff; }
+:root[data-theme="hc"] .http2-case-method.m-HEAD   { color: #ffffff; }
+:root[data-theme="hc"] .http2-case-method.m-OPTIONS{ color: #ffffff; }
 .http2-case-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .http2-case-name { font-size: 12.5px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .http2-case-url  { font-size: 10.5px; color: var(--text-mute); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, monospace; }
@@ -2278,7 +2325,7 @@ input[type="datetime-local"] {
   transition: border-color 0.12s, background 0.12s;
 }
 .cmd-card:hover { border-color: var(--primary-2, #4f8cff); }
-.cmd-card.is-fav { border-left: 3px solid #f0c040; }
+.cmd-card.is-fav { border-left: 3px solid var(--cmd-fav-color, #f0c040); }
 
 .cmd-head {
   display: flex; align-items: center; justify-content: space-between;
@@ -2295,8 +2342,13 @@ input[type="datetime-local"] {
   min-width: 32px; color: var(--text-dim);
   background: transparent; border: 1px solid var(--line);
 }
-.cmd-fav:hover { color: #f0c040; border-color: #f0c040; }
-.cmd-fav.is-fav { color: #f0c040; border-color: #f0c040; background: rgba(240,192,64,0.08); }
+.cmd-fav:hover { color: var(--cmd-fav-color, #f0c040); border-color: var(--cmd-fav-color, #f0c040); }
+.cmd-fav.is-fav { color: var(--cmd-fav-color, #f0c040); border-color: var(--cmd-fav-color, #f0c040); background: rgba(240,192,64,0.08); }
+
+/* hc 主题：收藏图标用亮青色，更醒目 */
+:root[data-theme="hc"] {
+  --cmd-fav-color: #00ffff;
+}
 
 .cmd-tags { display: flex; flex-wrap: wrap; gap: 4px; margin: 0 0 8px; }
 .cmd-tag {
