@@ -263,13 +263,15 @@ func normalizeJSONNumbers(v interface{}) {
 	switch x := v.(type) {
 	case map[string]interface{}:
 		for k, val := range x {
-			x[k] = normalizeJSONNumberValue(val)
-			normalizeJSONNumbers(val)
+			normalized := normalizeJSONNumberValue(val)
+			x[k] = normalized
+			normalizeJSONNumbers(normalized)
 		}
 	case []interface{}:
 		for i, val := range x {
-			x[i] = normalizeJSONNumberValue(val)
-			normalizeJSONNumbers(val)
+			normalized := normalizeJSONNumberValue(val)
+			x[i] = normalized
+			normalizeJSONNumbers(normalized)
 		}
 	}
 }

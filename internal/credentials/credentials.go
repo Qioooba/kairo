@@ -66,7 +66,11 @@ func Mode() string {
 }
 
 func guardMode() error {
-	switch Mode() {
+	return guardModeValue(Mode())
+}
+
+func guardModeValue(m string) error {
+	switch m {
 	case ModeDisabled:
 		return fmt.Errorf("%w（配置 credential_store=disabled）", ErrUnavailable)
 	default:
@@ -176,7 +180,7 @@ func fileReady() error {
 	return nil
 }
 
-func encrypt(plaintext string) (*encryptedEntry, error) {
+func encrypt(key, plaintext string) (*encryptedEntry, error) {
 	block, err := aes.NewCipher(fileKey)
 	if err != nil {
 		return nil, err
@@ -189,14 +193,14 @@ func encrypt(plaintext string) (*encryptedEntry, error) {
 	if _, err := rand.Read(nonce); err != nil {
 		return nil, err
 	}
-	ct := gcm.Seal(nil, nonce, []byte(plaintext), nil)
+	ct := gcm.Seal(nil, nonce, []byte(plaintext), []byte(key))
 	return &encryptedEntry{
 		Nonce:      hex.EncodeToString(nonce),
 		Ciphertext: hex.EncodeToString(ct),
 	}, nil
 }
 
-func decrypt(e *encryptedEntry) (string, error) {
+func decrypt(key string, e *encryptedEntry) (string, error) {
 	nonce, err := hex.DecodeString(e.Nonce)
 	if err != nil {
 		return "", fmt.Errorf("credentials: nonce hex 解码失败: %w", err)
@@ -216,9 +220,13 @@ func decrypt(e *encryptedEntry) (string, error) {
 	if len(nonce) != gcm.NonceSize() {
 		return "", errors.New("credentials: nonce 长度不正确")
 	}
-	pt, err := gcm.Open(nil, nonce, ct, nil)
+	pt, err := gcm.Open(nil, nonce, ct, []byte(key))
 	if err != nil {
-		return "", fmt.Errorf("credentials: 解密失败（密钥不匹配或数据损坏）: %w", err)
+		// 兼容旧版本：历史密文未绑定 AAD，先尝试新格式，失败后再按旧格式读取。
+		pt, err = gcm.Open(nil, nonce, ct, nil)
+		if err != nil {
+			return "", fmt.Errorf("credentials: 解密失败（密钥不匹配或数据损坏）: %w", err)
+		}
 	}
 	return string(pt), nil
 }
@@ -250,11 +258,27 @@ func saveFile(entries map[string]encryptedEntry) error {
 	if err != nil {
 		return fmt.Errorf("credentials: 序列化凭据失败: %w", err)
 	}
-	tmp := filePath + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+	tmpFile, err := os.CreateTemp(filepath.Dir(filePath), ".credentials-*.tmp")
+	if err != nil {
+		return fmt.Errorf("credentials: 创建临时文件失败: %w", err)
+	}
+	tmp := tmpFile.Name()
+	if err := tmpFile.Chmod(0o600); err != nil {
+		_ = tmpFile.Close()
+		_ = os.Remove(tmp)
+		return fmt.Errorf("credentials: 设置临时文件权限失败: %w", err)
+	}
+	if _, err := tmpFile.Write(data); err != nil {
+		_ = tmpFile.Close()
+		_ = os.Remove(tmp)
 		return fmt.Errorf("credentials: 写入凭据文件失败: %w", err)
 	}
+	if err := tmpFile.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("credentials: 关闭临时文件失败: %w", err)
+	}
 	if err := os.Rename(tmp, filePath); err != nil {
+		_ = os.Remove(tmp)
 		return fmt.Errorf("credentials: 替换凭据文件失败: %w", err)
 	}
 	return nil
@@ -268,7 +292,7 @@ func fileSave(key, password string) error {
 	if err != nil {
 		return err
 	}
-	enc, err := encrypt(password)
+	enc, err := encrypt(key, password)
 	if err != nil {
 		return fmt.Errorf("credentials: 加密失败: %w", err)
 	}
@@ -288,7 +312,7 @@ func fileGet(key string) (string, error) {
 	if !ok {
 		return "", ErrNotSaved
 	}
-	return decrypt(&e)
+	return decrypt(key, &e)
 }
 
 func fileClear(key string) error {
@@ -315,11 +339,12 @@ func Save(system, server, username, password string) error {
 	if password == "" {
 		return errors.New("credentials: 密码不能为空")
 	}
-	if err := guardMode(); err != nil {
+	currentMode := Mode()
+	if err := guardModeValue(currentMode); err != nil {
 		return err
 	}
 	k := Key(system, server, username)
-	if Mode() == ModeFile {
+	if currentMode == ModeFile {
 		if err := fileReady(); err != nil {
 			return err
 		}
@@ -338,11 +363,12 @@ func Get(system, server, username string) (string, error) {
 	if system == "" || server == "" || username == "" {
 		return "", errors.New("credentials: system/server/username 不能为空")
 	}
-	if err := guardMode(); err != nil {
+	currentMode := Mode()
+	if err := guardModeValue(currentMode); err != nil {
 		return "", err
 	}
 	k := Key(system, server, username)
-	if Mode() == ModeFile {
+	if currentMode == ModeFile {
 		if err := fileReady(); err != nil {
 			return "", err
 		}
@@ -376,11 +402,12 @@ func Clear(system, server, username string) error {
 	if system == "" || server == "" || username == "" {
 		return errors.New("credentials: system/server/username 不能为空")
 	}
-	if err := guardMode(); err != nil {
+	currentMode := Mode()
+	if err := guardModeValue(currentMode); err != nil {
 		return err
 	}
 	k := Key(system, server, username)
-	if Mode() == ModeFile {
+	if currentMode == ModeFile {
 		if err := fileReady(); err != nil {
 			return err
 		}

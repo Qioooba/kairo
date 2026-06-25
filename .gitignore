@@ -37,6 +37,8 @@ verify-commands.js
 # ===== QA / 测试产物（不应入 git）=====
 # Playwright 依赖：~16MB，从 package-lock + npm install 还原
 /docs/qa/node_modules/
+/docs/qa/package-lock.json
+/docs/qa/report.json
 # QA 截图：~4MB，CI 跑出来会变，跟 commit 绑一起没意义
 /docs/qa/screenshots/
 .mavis/plans/
@@ -47,3 +49,5 @@ verify-commands.js
 # ===== E2E 测试输出目录（本地跑出来的截图/JSON，不应入 git）=====
 /e2e-*-out/
 /theme-test-out/
+/theme-*-out/
+/playwright-*.js

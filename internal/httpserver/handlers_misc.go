@@ -37,6 +37,11 @@ func (s *Server) serveDownload(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	lst, err := os.Lstat(abs)
+	if err != nil || lst.Mode()&os.ModeSymlink != 0 {
+		http.NotFound(w, r)
+		return
+	}
 	f, err := os.Open(abs)
 	if err != nil {
 		http.NotFound(w, r)

@@ -297,8 +297,8 @@ func auditErr(w http.ResponseWriter, a *audit.Logger, op string, kv ...any) {
 
 // resolvedCreds SSH 凭据解析结果。Password 为空表示"需要前端提示用户输入"。
 type resolvedCreds struct {
-	Username    string
-	Password    string
+	Username     string
+	Password     string
 	SavedByStore bool // true 表示 password 来自凭据存储（keyring/file），不是用户本次输入
 }
 

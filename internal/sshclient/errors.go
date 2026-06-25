@@ -22,7 +22,6 @@ import (
 	"errors"
 	"net"
 	"strings"
-	"time"
 )
 
 // Category SSH 错误类别（前端可用作统计 / 筛选 / 配色）
@@ -103,7 +102,7 @@ func classify(lower string, orig error) (Category, string, string) {
 		return CatTimeout, "网络 I/O 超时", "检查网络可达性 / 防火墙；老 sshd 自动 fallback 多套算法可能需要更长超时"
 	}
 	if strings.Contains(lower, "deadline exceeded") {
-		return CatTimeout, "握手超时", "可调大 app.ssh_log_max_mb 或 ssh_compat_profile"
+		return CatTimeout, "握手超时", "可调大 SSH 握手超时，或调整 ssh_compat_profile"
 	}
 
 	// 2. host key 相关
@@ -171,7 +170,7 @@ func classify(lower string, orig error) (Category, string, string) {
 		return CatSFTP, "SFTP 子系统失败",
 			"服务端 sshd_config 可能没启用 Subsystem sftp；可改用 ShellBackend fallback（list_mode=posix_ls）"
 	}
-	if strings.Contains(lower, "exit status") || strings.Contains(lower, "command") {
+	if strings.Contains(lower, "exit status") || strings.Contains(lower, "command not found") {
 		return CatCommand, "远程命令执行失败", "检查远端命令是否合法（命令 / 路径 / 权限）"
 	}
 
@@ -184,7 +183,5 @@ func classify(lower string, orig error) (Category, string, string) {
 		return CatNetwork, "网络错误", "检查网络连通性"
 	}
 
-	// 完全未知（保留 raw 给运维排查）
-	_ = time.Now()
 	return CatUnknown, "未知 SSH 错误", "把 raw 字段贴给运维，或查看 logs/ssh_debug.log 找原因"
 }

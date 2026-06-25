@@ -5,11 +5,11 @@
 package logquery
 
 import (
+	"bytes"
 	"fmt"
 	"golang.org/x/text/encoding"
 	"golang.org/x/text/encoding/simplifiedchinese"
 	"golang.org/x/text/transform"
-	"io"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -169,25 +169,16 @@ func ToEncodingEscaped(s string, encoding string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	pr, pw := io.Pipe()
-	go func() {
-		w := transform.NewWriter(pw, enc.NewEncoder())
-		if _, err := w.Write([]byte(s)); err != nil {
-			_ = pw.CloseWithError(err)
-			return
-		}
-		if err := w.Close(); err != nil {
-			_ = pw.CloseWithError(err)
-			return
-		}
-		_ = pw.Close()
-	}()
-	out, err := io.ReadAll(pr)
-	if err != nil {
+	var buf bytes.Buffer
+	w := transform.NewWriter(&buf, enc.NewEncoder())
+	if _, err := w.Write([]byte(s)); err != nil {
+		return "", fmt.Errorf("按 %q 编码失败: %w", encoding, err)
+	}
+	if err := w.Close(); err != nil {
 		return "", fmt.Errorf("按 %q 编码失败: %w", encoding, err)
 	}
 	var sb strings.Builder
-	for _, b := range out {
+	for _, b := range buf.Bytes() {
 		fmt.Fprintf(&sb, `\x%02x`, b)
 	}
 	return sb.String(), nil
@@ -301,15 +292,6 @@ func ParseQuery(q string) ([]SearchKeyword, error) {
 			negateNext = true
 			// state 不变
 		default:
-			if state == stateOp && negateNext {
-				// 上一个 token 是操作符 + ! + term，term 是 term；这其实是合法：
-				//   "A && !B" 拆出来是 ['A','&&','!','B']，
-				//   处理 'A'（state→term）→ '&&'（state→op）→ '!'（state=op, negate=true）
-				//   → 'B'（到这里 state=op,negate=true，仍 OK，走 default 走 append）
-				//
-				// 但要注意：上面 default 分支必须先把 term append 进去，再清 negate。
-				// 所以这里不需要特殊分支，让 default 自然处理。
-			}
 			// 拒绝对搜索无意义或危险的字符。
 			if illegalKey.MatchString(tok) {
 				return nil, fmt.Errorf("关键词含非法字符: %q", tok)
@@ -677,7 +659,7 @@ func SearchCommand(dir string, files []string, kw []SearchKeyword, max, timeoutS
 	// buildOrBranch 把 group 变成一个完整分支字符串（含括号外的 grep 读文件）。
 	// 我们把所有 groups（包括第一个）都作为分支，统一子 shell 合并。
 	var allBranches []string
-	for i, g := range groups {
+	for _, g := range groups {
 		var branch string
 		if len(g.pos) > 0 {
 			// AND 链：第一个 grep 读文件并加 filename:lineno: 前缀，后续 grep 串联过滤
@@ -708,8 +690,6 @@ func SearchCommand(dir string, files []string, kw []SearchKeyword, max, timeoutS
 			}
 			branch += " | grep -vE " + pat
 		}
-		// 第一段（i==0）已经在 branch 里，不需要额外处理
-		_ = i
 		allBranches = append(allBranches, branch)
 	}
 

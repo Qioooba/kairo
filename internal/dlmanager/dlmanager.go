@@ -34,13 +34,13 @@ import (
 //
 // JSON 字段是给前端用的契约；后端 handler 在 response 里直接复用。
 type Item struct {
-	File    string `json:"file,omitempty"`    // 远端原文件名（zip 时为 ""）
-	Local   string `json:"local"`             // 本地文件名（zip 时就是 zip 的名字）
-	Bytes   string `json:"bytes"`             // 字节数（字符串形式，避免 JS 大数精度问题）
-	Remote  string `json:"remote,omitempty"`  // 远端路径（zip 时为 ""）
-	Date    string `json:"date"`              // YYYYMMDD，本地落点子目录
-	Kind    string `json:"kind"`              // "file" 或 "zip"
-	AbsPath string `json:"abs_path,omitempty"`// v0.5 v0.5-F：本地绝对路径（前端可拼"打开目录"按钮调 /api/local/reveal-file）
+	File    string `json:"file,omitempty"`     // 远端原文件名（zip 时为 ""）
+	Local   string `json:"local"`              // 本地文件名（zip 时就是 zip 的名字）
+	Bytes   string `json:"bytes"`              // 字节数（字符串形式，避免 JS 大数精度问题）
+	Remote  string `json:"remote,omitempty"`   // 远端路径（zip 时为 ""）
+	Date    string `json:"date"`               // YYYYMMDD，本地落点子目录
+	Kind    string `json:"kind"`               // "file" 或 "zip"
+	AbsPath string `json:"abs_path,omitempty"` // v0.5 v0.5-F：本地绝对路径（前端可拼"打开目录"按钮调 /api/local/reveal-file）
 }
 
 // LogsDownloadReq 是"按目录下载最近 N 个文件"任务的入参（同步 handler 解码用）。
@@ -291,10 +291,17 @@ func (s *Session) MarkFinished(result []Item, finalErr error) {
 		timeout = mgr.DoneSendTimeout
 	}
 	for ch := range subs {
+		timer := time.NewTimer(timeout)
 		select {
 		case ch <- ev:
 			// done 已送达
-		case <-time.After(timeout):
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+		case <-timer.C:
 			// 慢订阅者：丢这一帧 done 事件（前端 onerror 兜底会标失败）
 		}
 	}
@@ -324,12 +331,7 @@ func (m *Manager) IdleGC(s *Session) {
 		s.mu.RUnlock()
 		if finished && subs == 0 {
 			m.mu.Lock()
-			s.mu.RLock()
-			still := s.finished && len(s.subscribers) == 0
-			s.mu.RUnlock()
-			if still {
-				delete(m.sessions, s.ID)
-			}
+			delete(m.sessions, s.ID)
 			m.mu.Unlock()
 			return
 		}

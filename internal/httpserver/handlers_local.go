@@ -182,7 +182,7 @@ func (s *Server) handleLocalOpenWith(w http.ResponseWriter, r *http.Request) {
 	cmd := exec.Command(op.Path, absPath)
 	if err := cmd.Start(); err != nil {
 		s.audit.Write("local.open_with", "opener", req.Opener, "name", req.Name, "result", "fail", "err", err.Error())
-		writeErrSanitized(w, 500, fmt.Errorf("启动 %s 失败: %v", op.Path, err))
+		writeErrSanitized(w, 500, fmt.Errorf("启动打开器 %q 失败: %v", req.Opener, err))
 		return
 	}
 	go func() { _ = cmd.Wait() }()

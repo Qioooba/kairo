@@ -445,7 +445,6 @@ func parseLsLine(line string) (mode os.FileMode, size int64, mtime time.Time, na
 	// 跳过 "." 和 ".."
 	if name == "." || name == ".." {
 		ok = true
-		_ = ok
 		return
 	}
 	ok = true

@@ -91,9 +91,9 @@ func TestSearchNot(t *testing.T) {
 		t.Fatal(err)
 	}
 	c, _ := SearchCommand("/dir", []string{"a.log"}, kw, 200, 30, "utf-8")
-	// 纯 NOT 也走 `grep -HnE "^." -- file...`，保留 `file:lineno:` 前缀，
+	// 纯 NOT 也走 `grep -HnE "^" -- file...`，保留 `file:lineno:` 前缀，
 	// 这样前端解析多文件命中才不至于错位。改成 cat 会丢掉前缀。
-	if !strings.Contains(c, `grep -HnE "^." --`) {
+	if !strings.Contains(c, `grep -HnE "^" --`) {
 		t.Fatalf("纯 NOT 应保留 grep -HnE 前缀: %s", c)
 	}
 	if !strings.Contains(c, "grep -vE") || !strings.Contains(c, "DEBUG") {
@@ -513,17 +513,17 @@ func TestSearchCommand_OR_WithNegation(t *testing.T) {
 	if !strings.Contains(c, "sort -u") {
 		t.Fatalf("OR + NEG 必须用 sort -u 合并: %s", c)
 	}
-	// 纯 neg 段必须用 grep -HnE "^." 而不是 cat（保留 filename:lineno: 前缀）
-	// 验证：第二段（括号内）必须含 grep -HnE "^." 然后 grep -vE DEBUG
-	if !strings.Contains(c, `grep -HnE "^."`) {
-		t.Fatalf("纯 neg 段应用 grep -HnE \"^.\" 保留前缀: %s", c)
+	// 纯 neg 段必须用 grep -HnE "^" 而不是 cat（保留 filename:lineno: 前缀，且包含空行）
+	// 验证：第二段（括号内）必须含 grep -HnE "^" 然后 grep -vE DEBUG
+	if !strings.Contains(c, `grep -HnE "^"`) {
+		t.Fatalf("纯 neg 段应用 grep -HnE \"^\" 保留前缀: %s", c)
 	}
 }
 
 func TestSearchCommand_OR_PureNegOnly(t *testing.T) {
 	// "!A || !B" 必须：
-	//   1. 第一段是 `grep -HnE "^." -- files | grep -vE A`；
-	//   2. 第二段是 `grep -HnE "^." -- files | grep -vE B`；
+	//   1. 第一段是 `grep -HnE "^" -- files | grep -vE A`；
+	//   2. 第二段是 `grep -HnE "^" -- files | grep -vE B`；
 	//   3. sort -u 合并。
 	kw, err := ParseQuery("!A || !B")
 	if err != nil {
@@ -536,9 +536,9 @@ func TestSearchCommand_OR_PureNegOnly(t *testing.T) {
 	if !strings.Contains(c, "sort -u") {
 		t.Fatalf("OR 必须有 sort -u: %s", c)
 	}
-	// 第一段必须保留 grep -HnE "^." 前缀
-	if !strings.Contains(c, `grep -HnE "^." --`) {
-		t.Fatalf("第一段必须保留 grep -HnE \"^.\" 前缀: %s", c)
+	// 第一段必须保留 grep -HnE "^" 前缀
+	if !strings.Contains(c, `grep -HnE "^" --`) {
+		t.Fatalf("第一段必须保留 grep -HnE \"^\" 前缀: %s", c)
 	}
 	// 两个 grep -vE 都必须存在
 	if got := strings.Count(c, "grep -vE"); got < 2 {

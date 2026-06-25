@@ -186,10 +186,10 @@ func shouldFallbackToPOSIX(stdout, stderr string, code int, err error) bool {
 // 复用 /api/files/list 多 server 模式的 worker pool + per-server error 模式。
 
 type logsListTargetsReq struct {
-	System   string             `json:"system"`
-	Targets  []logsListListTgt   `json:"targets"`  // 每项 {server, dir}
-	Username string             `json:"username"`
-	Password string             `json:"password"`
+	System   string            `json:"system"`
+	Targets  []logsListListTgt `json:"targets"` // 每项 {server, dir}
+	Username string            `json:"username"`
+	Password string            `json:"password"`
 }
 
 type logsListListTgt struct {
@@ -198,14 +198,14 @@ type logsListListTgt struct {
 }
 
 type logsListTargetResult struct {
-	Server string             `json:"server"`
-	Host   string             `json:"host,omitempty"`
-	Dir    string             `json:"dir"`
-	OK     bool               `json:"ok"`
-	Error  string             `json:"error,omitempty"`
+	Server string               `json:"server"`
+	Host   string               `json:"host,omitempty"`
+	Dir    string               `json:"dir"`
+	OK     bool                 `json:"ok"`
+	Error  string               `json:"error,omitempty"`
 	Files  []logquery.FileEntry `json:"files,omitempty"`
-	Count  int                `json:"count"`
-	Ms     int64              `json:"elapsed_ms"`
+	Count  int                  `json:"count"`
+	Ms     int64                `json:"elapsed_ms"`
 }
 
 func (s *Server) handleLogsListTargets(w http.ResponseWriter, r *http.Request) {
@@ -267,7 +267,7 @@ func (s *Server) handleLogsListTargets(w http.ResponseWriter, r *http.Request) {
 
 	if len(jobs) == 0 {
 		writeJSON(w, 200, map[string]any{
-			"servers": results,
+			"servers":  results,
 			"ok_count": 0, "fail_count": len(results), "total_count": 0,
 		})
 		return
@@ -321,12 +321,14 @@ func (s *Server) runOneLogsList(parentCtx context.Context, system string, srv *c
 
 	creds, err := s.resolveCreds(username, password, system, srv.Name, srv.Username)
 	if err != nil {
-		res.OK = false; res.Error = err.Error()
+		res.OK = false
+		res.Error = err.Error()
 		res.Ms = time.Since(start).Milliseconds()
 		return res
 	}
 	if creds.Password == "" {
-		res.OK = false; res.Error = "缺少密码"
+		res.OK = false
+		res.Error = "缺少密码"
 		res.Ms = time.Since(start).Milliseconds()
 		return res
 	}
@@ -338,7 +340,8 @@ func (s *Server) runOneLogsList(parentCtx context.Context, system string, srv *c
 	}, sshclient.Credentials{Password: creds.Password}, sshAttemptTimeout)
 	cancelDial()
 	if err != nil {
-		res.OK = false; res.Error = sshclient.SanitizeError(err.Error())
+		res.OK = false
+		res.Error = sshclient.SanitizeError(err.Error())
 		res.Ms = time.Since(start).Milliseconds()
 		return res
 	}
@@ -346,7 +349,8 @@ func (s *Server) runOneLogsList(parentCtx context.Context, system string, srv *c
 
 	cmd, err := logquery.ListCommand(ld.Path, ld.Patterns, 100, ld.ListModeFor())
 	if err != nil {
-		res.OK = false; res.Error = err.Error()
+		res.OK = false
+		res.Error = err.Error()
 		res.Ms = time.Since(start).Milliseconds()
 		return res
 	}
@@ -360,18 +364,21 @@ func (s *Server) runOneLogsList(parentCtx context.Context, system string, srv *c
 		}
 	}
 	if err != nil {
-		res.OK = false; res.Error = sshclient.SanitizeError(err.Error())
+		res.OK = false
+		res.Error = sshclient.SanitizeError(err.Error())
 		res.Ms = time.Since(start).Milliseconds()
 		return res
 	}
 	if code != 0 {
-		res.OK = false; res.Error = "远程退出码 " + strconv.Itoa(code) + ": " + trim(stderr, 200)
+		res.OK = false
+		res.Error = "远程退出码 " + strconv.Itoa(code) + ": " + trim(stderr, 200)
 		res.Ms = time.Since(start).Milliseconds()
 		return res
 	}
 	files, err := logquery.ParseListOutput(stdout)
 	if err != nil {
-		res.OK = false; res.Error = err.Error()
+		res.OK = false
+		res.Error = err.Error()
 		res.Ms = time.Since(start).Milliseconds()
 		return res
 	}

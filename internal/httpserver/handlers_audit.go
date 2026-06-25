@@ -124,11 +124,7 @@ func (s *Server) handleAuditExportJSON(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Content-Disposition", `attachment; filename="ops-toolbox-`+filename+`"`)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	if err := audit.WriteJSON(w, cleaned); err != nil {
-		// 已经写一部分了；不能改 status。仅记 server 日志。
-		// 用 stderr 兜底（前端可能拿到的是截断 JSON，浏览器会显示"解析失败"）。
-		fmt.Fprintf(w, "\n/* encode error: %v */\n", err)
-	}
+	_ = audit.WriteJSON(w, cleaned)
 }
 
 // handleAuditExportCSV 把操作历史导出成 CSV 文件（项 24 P3）。
