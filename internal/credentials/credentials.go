@@ -408,6 +408,8 @@ func isUnavailable(err error) bool {
 		"could not connect", "the user name or password is incorrect",
 		"keychain", "errse", "access denied",
 		"org.freedesktop.secrets", "collection",
+		"exit status", "permission denied", "sandbox",
+		"restricted", "not allowed",
 	} {
 		if strings.Contains(s, hint) {
 			return true
