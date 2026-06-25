@@ -918,6 +918,10 @@
     function pushBatch(arr, kind) {
       if (_disposed || _paused) return;
       if (!arr || !arr.length) return;
+      if (arr.length > _maxLines) {
+        _totalEver += arr.length - _maxLines;
+        arr = Array.prototype.slice.call(arr, arr.length - _maxLines);
+      }
       // 先 trim 旧：splice 出要丢的节点 + 文本，再批量 append
       if (_lines.length + arr.length > _maxLines) {
         const needDrop = (_lines.length + arr.length) - _maxLines;

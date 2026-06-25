@@ -859,7 +859,7 @@ func TestTargetDirAllowed(t *testing.T) {
 	}
 	// 非空 roots + 子路径放行
 	a.AllowedDownloadRoots = []string{"/tmp", "D:/logs"}
-	for _, p := range []string{"/tmp", "/tmp/x", "/tmp/sub/y", "D:/logs", "D:/logs/2026"} {
+	for _, p := range []string{"/tmp", "/tmp/x", "/tmp/sub/y", "D:/logs", "D:/logs/2026", "D:\\logs\\2026", "d:/LOGS/2026"} {
 		if !a.TargetDirAllowed(p) {
 			t.Errorf("子路径应放行 %q", p)
 		}
@@ -878,5 +878,11 @@ func TestTargetDirAllowed(t *testing.T) {
 	// "/tmpfoo" 不应通过 "/tmp" 的匹配
 	if a.TargetDirAllowed("/tmpfoo") {
 		t.Error("/tmpfoo 不应通过 /tmp 边界匹配")
+	}
+
+	// 空白 root 应被忽略，不能意外放行相对路径或当前目录下路径。
+	a.AllowedDownloadRoots = []string{" "}
+	if a.TargetDirAllowed("/tmp/x") {
+		t.Error("空白 root 不应放行任何非空路径")
 	}
 }

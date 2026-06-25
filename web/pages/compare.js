@@ -581,8 +581,14 @@
         j--;
       }
     }
-    while (i > 0) { leftParts.unshift({ same: false, text: leftTokens[--i + 1] }); i--; }
-    while (j > 0) { rightParts.unshift({ same: false, text: rightTokens[--j + 1] }); j--; }
+    while (i > 0) {
+      i--;
+      leftParts.unshift({ same: false, text: leftTokens[i] });
+    }
+    while (j > 0) {
+      j--;
+      rightParts.unshift({ same: false, text: rightTokens[j] });
+    }
 
     return { left: leftParts, right: rightParts };
   }

@@ -236,6 +236,51 @@ func TestSearchUTF8(t *testing.T) {
 	}
 }
 
+func TestSearchCommand_TermsAreRegexEscapedLiterals(t *testing.T) {
+	kw, err := ParseQuery("com.example+svc^")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := SearchCommand("/dir", []string{"a.log"}, kw, 200, 30, "utf-8")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(c, `"com\\.example\\+svc\\^"`) {
+		t.Fatalf("关键词应按字面量搜索，不能把 . + ^ 当 grep -E 正则: %s", c)
+	}
+}
+
+func TestSearchCommand_QuotesFileWithSpacesInsideShC(t *testing.T) {
+	kw, err := ParseQuery("Exception")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := SearchCommand("/dir with space", []string{"System Out.log"}, kw, 200, 30, "utf-8")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(c, `'\''System Out.log'\''`) {
+		t.Fatalf("带空格文件名必须在内层 sh 脚本里保持引用: %s", c)
+	}
+	if !strings.Contains(c, `cd '\''/dir with space'\''`) {
+		t.Fatalf("带空格目录必须在内层 sh 脚本里保持引用: %s", c)
+	}
+}
+
+func TestSearchCommand_GBKPrintfQuotedInsideShC(t *testing.T) {
+	kw, err := ParseQuery("信贷系统")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := SearchCommand("/dir", []string{"a.log"}, kw, 200, 30, "gbk")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(c, `$(printf %b '\''\x`) {
+		t.Fatalf("GBK printf 字节串必须在外层 sh -c 中正确转义: %s", c)
+	}
+}
+
 func TestTailCommand(t *testing.T) {
 	c, err := TailCommand("/opt/IBM/WebSphere/AppServer/profiles/AppSrv01/logs/server1", "SystemOut.log", 100)
 	if err != nil {

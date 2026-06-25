@@ -179,6 +179,14 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleFormatYAML(w, r)
 	case path == "/api/format/url-form":
 		s.handleFormatURLForm(w, r)
+	case path == "/api/format/timestamp":
+		s.handleFormatTimestamp(w, r)
+	case path == "/api/format/cron-parse":
+		s.handleFormatCronParse(w, r)
+	case path == "/api/format/jsonpath":
+		s.handleFormatJSONPath(w, r)
+	case path == "/api/diff/compare":
+		s.handleDiffCompare(w, r)
 	case path == "/api/admin/servers":
 		s.handleAdminServers(w, r)
 	case path == "/api/http/cases":

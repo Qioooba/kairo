@@ -682,6 +682,10 @@ function makeMiniTailViewer(opts) {
   function pushBatch(arr, kind) {
     if (_paused) return;
     if (!arr || !arr.length) return;
+    if (arr.length > _maxLines) {
+      _totalEver += arr.length - _maxLines;
+      arr = Array.prototype.slice.call(arr, arr.length - _maxLines);
+    }
     if (_lines.length + arr.length > _maxLines) {
       const needDrop = (_lines.length + arr.length) - _maxLines;
       const drop = Math.min(_lines.length, needDrop);
@@ -836,7 +840,7 @@ function testConfigStatePersists() {
   // 2) mock 掉 OTB.core / OTB.api
   let fetchCount = 0;
   sb.window.OTB.core = {
-    el: () => ({ appendChild: () => {}, addEventListener: () => {} }),
+    el: () => ({ style: {}, appendChild: () => {}, addEventListener: () => {}, setAttribute: () => {} }),
     $: () => null, toast: () => {}, validate: () => null,
     newSystem: () => ({ name: '', servers: [] }),
     newServer: () => ({ log_dirs: [] }),
@@ -845,7 +849,10 @@ function testConfigStatePersists() {
     getActiveDL: () => null, clearActiveDL: () => {}
   };
   sb.window.OTB.api = {
-    api: (method, p) => { fetchCount++; return Promise.resolve({ app: {}, systems: [{ name: 's1', servers: [] }], search: {} }); }
+    api: (method, p) => {
+      if (method === 'GET' && p === '/api/admin/servers') fetchCount++;
+      return Promise.resolve({ app: {}, systems: [{ name: 's1', servers: [] }], search: {} });
+    }
   };
 
   // 3) 加载 config.js（IIFE 会把 routes.config 挂上）
@@ -921,7 +928,7 @@ function testConfigEncodingGBK_Preserved() {
   // 2) mock 掉 OTB.core / OTB.api；记录 PUT 请求体
   const apiCalls = [];
   sb.window.OTB.core = {
-    el: () => ({ appendChild: () => {}, addEventListener: () => {} }),
+    el: () => ({ style: {}, appendChild: () => {}, addEventListener: () => {}, setAttribute: () => {} }),
     $: () => null, toast: () => {}, validate: () => null,
     newSystem: () => ({ name: '', servers: [] }),
     newServer: () => ({ log_dirs: [] }),
@@ -959,7 +966,7 @@ function testConfigEncodingGBK_Preserved() {
         const st2 = sb.window.OTB.state.configEditor;
         assert.strictEqual(st2.systems[0].servers[0].log_dirs[0].encoding, 'utf-8', '切回后 utf-8 仍在');
         assert.strictEqual(st2.systems[0].servers[0].log_dirs[1].encoding, 'gbk', '切回后 gbk 仍在（#6 关键）');
-        assert.strictEqual(apiCalls.filter(c => c.method === 'GET').length, 1, '切回只应 fetch 1 次');
+        assert.strictEqual(apiCalls.filter(c => c.method === 'GET' && c.p === '/api/admin/servers').length, 1, '切回只应 fetch 1 次');
 
         // 6) 模拟用户编辑：把 utf-8 改成 gbk（和 select 切到 gbk 等价的 mutation）
         st2.systems[0].servers[0].log_dirs[0].encoding = 'gbk';
@@ -1005,7 +1012,7 @@ function testConfigSaveClearsDirty() {
   let getCount = 0;
   let putCount = 0;
   sb.window.OTB.core = {
-    el: () => ({ appendChild: () => {}, addEventListener: () => {} }),
+    el: () => ({ style: {}, appendChild: () => {}, addEventListener: () => {}, setAttribute: () => {} }),
     $: () => null, toast: () => {}, validate: () => null,
     newSystem: () => ({ name: '', servers: [] }),
     newServer: () => ({ log_dirs: [] }),
@@ -1015,7 +1022,10 @@ function testConfigSaveClearsDirty() {
   };
   sb.window.OTB.api = {
     api: (method, p, body) => {
-      if (method === 'GET') { getCount++; return Promise.resolve({ app: {}, systems: [{ name: 's1', servers: [] }], search: {} }); }
+      if (method === 'GET') {
+        if (p === '/api/admin/servers') getCount++;
+        return Promise.resolve({ app: {}, systems: [{ name: 's1', servers: [] }], search: {} });
+      }
       if (method === 'PUT') { putCount++; return Promise.resolve({ ok: true, path: '/x' }); }
       return Promise.resolve(null);
     }

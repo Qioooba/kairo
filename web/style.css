@@ -846,9 +846,9 @@ textarea { resize: vertical; min-height: 60px; font-family: ui-monospace, monosp
 .tail-line.tail-line-error { color: #fca5a5; }  /* 暗主题友好；亮主题下重定义在后面 */
 .tail-line.tail-line-done { color: var(--text-dim); }
 /* 亮主题下：error 文字调深红，避免在白底上太刺眼 */
-body[data-theme="light"] .tail-line.tail-line-error { color: #b91c1c; }
-body[data-theme="green"] .tail-line.tail-line-error { color: #b91c1c; }
-body[data-theme="hc"] .tail-line.tail-line-error { color: #ff5555; }
+:root[data-theme="light"] .tail-line.tail-line-error { color: #b91c1c; }
+:root[data-theme="green"] .tail-line.tail-line-error { color: #b91c1c; }
+:root[data-theme="hc"] .tail-line.tail-line-error { color: #ff5555; }
 
 /* ===== Tail 行号显示 ===== */
 .tail-out.show-line-numbers {
@@ -872,11 +872,11 @@ body[data-theme="hc"] .tail-line.tail-line-error { color: #ff5555; }
   border-right: 1px solid rgba(255,255,255,0.1);
   margin-right: 0.5em;
 }
-body[data-theme="light"] .tail-out.show-line-numbers .tail-line::before {
+:root[data-theme="light"] .tail-out.show-line-numbers .tail-line::before {
   color: rgba(0,0,0,0.3);
   border-right-color: rgba(0,0,0,0.1);
 }
-body[data-theme="green"] .tail-out.show-line-numbers .tail-line::before {
+:root[data-theme="green"] .tail-out.show-line-numbers .tail-line::before {
   color: rgba(0,0,0,0.3);
   border-right-color: rgba(0,0,0,0.1);
 }
@@ -2455,4 +2455,32 @@ input[type="datetime-local"] {
   height: 1px;
   background: var(--line);
   margin: 4px 0;
+}
+
+/* Final theme readability overrides. Keep these after component styles so the
+   theme contract wins over page-specific button defaults. */
+:root[data-theme="green"] {
+  --text-dim: #344434;
+  --text-mute: #586858;
+}
+:root[data-theme="green"] .theme-toggle,
+:root[data-theme="green"] .http2-tab,
+:root[data-theme="green"] .http2-kv-add,
+:root[data-theme="green"] .cmd-fav {
+  color: var(--text);
+}
+:root[data-theme="green"] .theme-toggle,
+:root[data-theme="green"] .cmd-fav {
+  background: rgba(63, 122, 63, 0.06);
+  border-color: var(--line-2);
+}
+:root[data-theme="green"] .http2-kv-add {
+  background: rgba(63, 122, 63, 0.04);
+}
+:root[data-theme="hc"] .btn-primary,
+:root[data-theme="hc"] .ws-tab-bar .btn.active,
+:root[data-theme="hc"] .http2-send-btn,
+:root[data-theme="hc"] .http2-save-btn {
+  color: #000000;
+  text-shadow: none;
 }

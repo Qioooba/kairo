@@ -632,8 +632,9 @@ func SearchCommand(dir string, files []string, kw []SearchKeyword, max, timeoutS
 	//   - utf-8：直接用 Go 的 %q 双引号包裹（UTF-8 字节安全）。
 	//   - gbk：用 $(printf %b '\xHH...') 展开 GBK 字节。
 	quoteForGrep := func(term string) (string, error) {
+		pattern := regexp.QuoteMeta(term)
 		if enc == "gbk" || enc == "gb18030" {
-			esc, err := ToEncodingEscaped(term, encoding)
+			esc, err := ToEncodingEscaped(pattern, encoding)
 			if err != nil {
 				return "", err
 			}
@@ -641,7 +642,7 @@ func SearchCommand(dir string, files []string, kw []SearchKeyword, max, timeoutS
 			// 整个 token 是纯 ASCII（0-9 a-f \ x ' $ ( ) ），不依赖任何外部变量。
 			return fmt.Sprintf(`$(printf %%b '%s')`, esc), nil
 		}
-		return fmt.Sprintf("%q", term), nil
+		return fmt.Sprintf("%q", pattern), nil
 	}
 
 	// P0-3 修复：OR 搜索时每段都要独立读文件列表，不能把第一段结果通过管道传给子 shell。
@@ -705,7 +706,7 @@ func SearchCommand(dir string, files []string, kw []SearchKeyword, max, timeoutS
 
 	// 超时由 Go 客户端 ctx + 内部 timer 控制，这里不再依赖 Linux `timeout` 命令，
 	// 老 Linux / Alpine / 精简镜像也能跑。
-	cmd := fmt.Sprintf(`sh -c 'cd %q && %s'`, dir, cmdBody)
+	cmd := fmt.Sprintf("sh -c %s", shellQuote("cd "+shellQuote(dir)+" && "+cmdBody))
 	return cmd, nil
 }
 
@@ -724,10 +725,14 @@ type orGroup struct {
 func quoteArgs(args []string) []string {
 	out := make([]string, 0, len(args))
 	for _, a := range args {
-		a = strings.ReplaceAll(a, "'", "")
-		out = append(out, "'"+a+"'")
+		out = append(out, shellQuote(a))
 	}
 	return out
+}
+
+// shellQuote 用 POSIX 单引号形式安全引用一个 shell token。
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // ContextCommand 构造 "sed -n 'a,bp' file" 上下文查看命令

@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -170,23 +171,41 @@ func (a *AppConfig) TargetDirAllowed(absolutePath string) bool {
 	if absolutePath == "" {
 		return false
 	}
-	cleaned := filepath.Clean(absolutePath)
+	cleaned := normalizeLocalPathForCompare(absolutePath)
 	for _, root := range a.AllowedDownloadRoots {
-		rootCleaned := filepath.Clean(root)
+		if strings.TrimSpace(root) == "" {
+			continue
+		}
+		rootCleaned := normalizeLocalPathForCompare(root)
 		if cleaned == rootCleaned {
 			return true
 		}
-		// 必须按目录边界匹配：cleaned 是 root 的子路径
-		sep := string(filepath.Separator)
-		if strings.HasPrefix(cleaned, rootCleaned+sep) {
-			return true
-		}
-		// Windows 还要兼容跨分隔符：root 用 /，cleaned 用 \
+		// 必须按目录边界匹配：cleaned 是 root 的子路径。
+		// normalizeLocalPathForCompare 已统一为 /，因此能兼容 Windows 配置里混用 \ 和 /。
 		if strings.HasPrefix(cleaned, rootCleaned+"/") {
 			return true
 		}
 	}
 	return false
+}
+
+func normalizeLocalPathForCompare(path string) string {
+	windowsPath := runtime.GOOS == "windows" || looksWindowsPath(path)
+	if windowsPath {
+		path = strings.ReplaceAll(path, "\\", "/")
+	}
+	cleaned := filepath.ToSlash(filepath.Clean(path))
+	if windowsPath {
+		cleaned = strings.ToLower(cleaned)
+	}
+	return cleaned
+}
+
+func looksWindowsPath(path string) bool {
+	if len(path) < 2 || path[1] != ':' {
+		return false
+	}
+	return (path[0] >= 'A' && path[0] <= 'Z') || (path[0] >= 'a' && path[0] <= 'z')
 }
 
 // CredentialStoreEnabled 解析 credential_store 配置，返回有效后端名（"keyring"/"file"/"disabled"）。

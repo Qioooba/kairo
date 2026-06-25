@@ -33,10 +33,9 @@
   $('#m-dir').textContent = dir || '?';
   $('#m-file').textContent = file || '?';
 
-  // 读取本地保存的密码（如果有），让用户不用再输入
-  // 优先级：opener 的 OTB._tailCred（项 9 修复）> localStorage > 弹窗 prompt
-  function getStoredCred() {
-    // 1) 项 9：opener 实时传过来的当前凭据（用户在主页刚填的，最准）
+  // 读取 opener 临时传来的当前凭据（用户在主页刚填的，最准）。
+  // 不再从 localStorage 读取旧版明文密码；记住密码统一走后端系统钥匙串。
+  function getOpenerCred() {
     try {
       const op = window.opener;
       if (op && op.OTB && op.OTB._tailCred && op.OTB._tailCred[system + '::' + server]) {
@@ -44,15 +43,6 @@
         if (c && c.password) return { username: c.username || '', password: c.password };
       }
     } catch (e) { /* ignore (跨源 opener 会抛) */ }
-    // 2) localStorage 兜底（旧版或者用户在主页点过"记住密码"）
-    try {
-      const key = 'otb:cred:' + system + '::' + server;
-      const raw = localStorage.getItem(key);
-      if (raw) {
-        const o = JSON.parse(raw);
-        if (o && o.password) return { username: o.username || '', password: o.password };
-      }
-    } catch (e) { /* ignore */ }
     return null;
   }
 
@@ -216,7 +206,7 @@
       setConn('err', '参数缺失');
       return;
     }
-    let cred = getStoredCred();
+    let cred = getOpenerCred();
     if (!cred || !cred.password) {
       cred = askCred();
       if (!cred) { setConn('err', '未提供凭据'); return; }
