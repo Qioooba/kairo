@@ -38,21 +38,19 @@ func main() {
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 	log.SetPrefix("[OpsToolbox] ")
 
-	// 1. 确定可执行文件所在目录
-	exeDir, err := exeDirectory()
+	// 1. 确定运行目录。优先用可执行文件目录；若 config.yaml 不在那，
+	// 再回退到当前工作目录，兼容 `go run .` 这类临时二进制路径。
+	runDir, cfgPath, err := resolveRunDir()
 	if err != nil {
-		log.Fatalf("无法获取可执行文件目录: %v", err)
+		log.Fatalf("定位运行目录失败: %v", err)
 	}
-
-	// 2. 加载 config.yaml
-	cfgPath := filepath.Join(exeDir, "config.yaml")
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		log.Fatalf("加载配置失败 (%s): %v", cfgPath, err)
 	}
 
 	// 3. 解析相对目录为基于 exeDir 的绝对路径
-	if err := cfg.ResolvePaths(exeDir); err != nil {
+	if err := cfg.ResolvePaths(runDir); err != nil {
 		log.Fatalf("解析目录失败: %v", err)
 	}
 
@@ -125,7 +123,7 @@ func main() {
 	}
 
 	// 7. 构造可热替换的配置 Manager
-	cfgMgr := config.NewManager(cfg, cfgPath, exeDir)
+	cfgMgr := config.NewManager(cfg, cfgPath, runDir)
 
 	// 7.5 构造 tail 会话池
 	tails := tailmgr.NewManager()
@@ -172,7 +170,7 @@ func main() {
 	// 11. 启动并自动打开浏览器
 	url := fmt.Sprintf("http://%s", cfg.App.ListenAddr())
 	log.Printf("工具箱已启动: %s", url)
-	log.Printf("工作目录: %s", exeDir)
+	log.Printf("工作目录: %s", runDir)
 	log.Printf("下载目录: %s", cfg.DownloadDir())
 	log.Printf("审计日志: %s", filepath.Join(cfg.LogDir(), "audit.log"))
 
@@ -184,6 +182,29 @@ func main() {
 		log.Fatalf("HTTP 服务异常: %v", err)
 	}
 	log.Println("服务已停止，再见。")
+}
+
+func resolveRunDir() (dir string, cfgPath string, err error) {
+	exeDir, err := exeDirectory()
+	if err != nil {
+		return "", "", err
+	}
+	exeCfg := filepath.Join(exeDir, "config.yaml")
+	if _, statErr := os.Stat(exeCfg); statErr == nil {
+		return exeDir, exeCfg, nil
+	}
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", "", err
+	}
+	cwdCfg := filepath.Join(cwd, "config.yaml")
+	if _, statErr := os.Stat(cwdCfg); statErr == nil {
+		return cwd, cwdCfg, nil
+	}
+
+	// 两边都没有时，保留原行为：优先报告可执行文件目录下的期望路径。
+	return exeDir, exeCfg, nil
 }
 
 // exeDirectory 返回可执行文件所在目录（跨平台）
