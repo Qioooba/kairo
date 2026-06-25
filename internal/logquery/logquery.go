@@ -10,6 +10,7 @@ import (
 	"golang.org/x/text/encoding/simplifiedchinese"
 	"golang.org/x/text/transform"
 	"io"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -49,12 +50,13 @@ func (f FileEntry) ModTimeParsed() time.Time {
 
 // SearchHit 一次搜索命中
 type SearchHit struct {
-	Server   string `json:"server"`
-	Dir      string `json:"dir"`
-	File     string `json:"file"`
-	FullPath string `json:"full_path"`
-	LineNo   int    `json:"line_no"`
-	Content  string `json:"content"`
+	Server    string `json:"server"`
+	Dir       string `json:"dir"`
+	File      string `json:"file"`
+	FullPath  string `json:"full_path"`
+	LineNo    int    `json:"line_no"`
+	Content   string `json:"content"`
+	IsContext bool   `json:"is_context"`
 }
 
 // ContextLine 上下文中的一行
@@ -837,4 +839,201 @@ func TailCommand(dir, file string, lines int) (string, error) {
 	cmd := fmt.Sprintf(`sh -c 'cd %q && tail -n %d -F %q 2>/dev/null'`,
 		dir, lines, cleanFile)
 	return cmd, nil
+}
+
+// ContextLinesForHitsCommand 构建一个 awk 命令，一次性输出多个命中行及其前后 N 行上下文。
+//
+// 输入：
+//   - dir: 日志目录
+//   - file: 文件名（纯 basename，无路径分隔符）
+//   - hitLines: 匹配行号集合（已去重）
+//   - ctx: 每个匹配行前后取 N 行上下文（0 表示仅返回匹配行本身）
+//
+// 输出格式（每行）：
+//   - 匹配行：filename:lineno:content  （第一个分隔符是 :）
+//   - 上下文行：filename-lineno:content （第一个分隔符是 -）
+//
+// 输出不包含重复行（同一行既是匹配又是上下文时，优先标记为匹配行）。
+// 行按行号升序输出。
+func ContextLinesForHitsCommand(dir, file string, hitLines []int, ctx int) (string, error) {
+	if strings.TrimSpace(dir) == "" {
+		return "", fmt.Errorf("dir 不能为空")
+	}
+	if strings.TrimSpace(file) == "" {
+		return "", fmt.Errorf("file 不能为空")
+	}
+	if ctx < 0 {
+		ctx = 0
+	}
+	if ctx > 50 {
+		ctx = 50
+	}
+	if strings.ContainsAny(dir, "'`$\\;") {
+		return "", fmt.Errorf("dir 含非法字符")
+	}
+	if strings.ContainsAny(file, "'`$\\;&|><\n\r*?/\\") {
+		return "", fmt.Errorf("file 含非法字符: %q", file)
+	}
+	if file == "." || file == ".." {
+		return "", fmt.Errorf("file 不允许为 '.' 或 '..'")
+	}
+	if strings.Contains(file, "..") {
+		return "", fmt.Errorf("file 不允许包含 '..'")
+	}
+
+	// 去重 + 构建 hits 行号集合
+	hitsSet := make(map[int]bool)
+	for _, ln := range hitLines {
+		if ln > 0 {
+			hitsSet[ln] = true
+		}
+	}
+	if len(hitsSet) == 0 {
+		return "", fmt.Errorf("没有有效的命中行")
+	}
+
+	// 构建 awk 脚本
+	// 策略：
+	//   1. BEGIN 块：把 hitLines 列表填进 is_hit map
+	//   2. 逐行扫描：先判断 FNR 是否在任意 [hit-ctx, hit+ctx] 窗口内（needed map）
+	//   3. 对 needed 行：按 is_hit 选择前缀分隔符（: 或 -），输出 filename SEP FNR : content
+	//
+	// 注意：awk 命令通过 -v 传入参数，hit 列表用逗号分隔字符串传入再 split。
+	hitsList := make([]string, 0, len(hitsSet))
+	for h := range hitsSet {
+		hitsList = append(hitsList, strconv.Itoa(h))
+	}
+	hitsStr := strings.Join(hitsList, ",")
+
+	cleanFile := strings.ReplaceAll(file, "'", "")
+	cleanHitsStr := strings.ReplaceAll(hitsStr, "'", "")
+	cleanCtx := strconv.Itoa(ctx)
+
+	// awk 脚本：
+	// -v hits="10,25,30" -v ctx=N -v fname="file.log"
+	// 先 split hits 到 h_arr，再标记 is_hit 和 needed
+	// 主循环只处理 needed 行，输出 fname SEP FNR : content
+	awkScript := `
+BEGIN {
+	split(hits, h_arr, ",")
+	for (i in h_arr) {
+		h = int(h_arr[i])
+		if (h <= 0) continue
+		is_hit[h] = 1
+		s = h - ctx; if (s < 1) s = 1
+		e = h + ctx
+		for (j = s; j <= e; j++) needed[j] = 1
+	}
+}
+FNR in needed {
+	sep = (FNR in is_hit) ? ":" : "-"
+	printf "%s%s%d:", fname, sep, FNR
+	print $0
+}
+`
+
+	// 压缩空白（避免多行脚本被 shell 解释问题）—— 简单替换换行和多空格
+	awkScript = strings.TrimSpace(awkScript)
+	awkScript = strings.ReplaceAll(awkScript, "\n", " ")
+	awkScript = strings.ReplaceAll(awkScript, "\t", " ")
+
+	cmd := fmt.Sprintf(
+		`sh -c 'cd %q && awk -v hits=%q -v ctx=%s -v fname=%q '"'"'%s'"'"' %q'`,
+		dir, cleanHitsStr, cleanCtx, cleanFile, awkScript, cleanFile,
+	)
+	return cmd, nil
+}
+
+// ParseContextEnrichedOutput 解析 ContextLinesForHitsCommand 的输出，返回 SearchHit 切片。
+//
+// 解析规则：
+//   - 匹配行格式：filename:lineno:content  → IsContext = false
+//   - 上下文行格式：filename-lineno:content → IsContext = true
+//   - 空行跳过
+//
+// server/dir 用于填充 SearchHit 的 Server/Dir/FullPath 字段。
+// files 用于白名单校验（可选，为 nil/空则跳过校验）。
+func ParseContextEnrichedOutput(out, server, dir string, files []FileEntry) []SearchHit {
+	byName := make(map[string]FileEntry, len(files))
+	for _, f := range files {
+		byName[f.Name] = f
+	}
+	useWhitelist := len(byName) > 0
+
+	seen := make(map[string]bool)
+	var hits []SearchHit
+
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimRight(line, "\r")
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+
+		// 找第一个分隔符：: 表示匹配行，- 表示上下文行
+		// 格式：filename X lineno : content，其中 X 是 : 或 -
+		idx1 := strings.IndexAny(line, ":-")
+		if idx1 < 0 {
+			continue
+		}
+		sep := line[idx1]
+		rest := line[idx1+1:]
+
+		// 第二个分隔符一定是 :（lineno 和 content 之间）
+		idx2 := strings.Index(rest, ":")
+		if idx2 < 0 {
+			continue
+		}
+
+		file := line[:idx1]
+		if useWhitelist {
+			if _, ok := byName[file]; !ok {
+				continue
+			}
+		}
+
+		lineNoStr := rest[:idx2]
+		content := rest[idx2+1:]
+
+		ln, err := strconv.Atoi(strings.TrimSpace(lineNoStr))
+		if err != nil {
+			continue
+		}
+
+		isContext := sep == '-'
+		key := fmt.Sprintf("%s:%d", file, ln)
+		if seen[key] {
+			// 如果已经记录过，且之前是上下文但现在是匹配行，需要更新
+			// 找到已有条目修改 IsContext
+			if !isContext {
+				for i := range hits {
+					if hits[i].File == file && hits[i].LineNo == ln {
+						hits[i].IsContext = false
+						break
+					}
+				}
+			}
+			continue
+		}
+		seen[key] = true
+
+		hits = append(hits, SearchHit{
+			Server:    server,
+			Dir:       dir,
+			File:      file,
+			FullPath:  filepath.ToSlash(filepath.Join(dir, file)),
+			LineNo:    ln,
+			Content:   content,
+			IsContext: isContext,
+		})
+	}
+
+	// 按行号升序、文件名排序（保持输出有序）
+	sort.SliceStable(hits, func(i, j int) bool {
+		if hits[i].File != hits[j].File {
+			return hits[i].File < hits[j].File
+		}
+		return hits[i].LineNo < hits[j].LineNo
+	})
+
+	return hits
 }

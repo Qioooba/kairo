@@ -44,6 +44,7 @@ type logsSearchMultiReq struct {
 	Targets        []logsSearchTarget `json:"targets"`
 	Files          int                `json:"files"` // scope_mode=latest 时：每台搜索最近 N 个文件
 	Query          string             `json:"query"`
+	Context        int                `json:"context"`
 	Username       string             `json:"username"`
 	Password       string             `json:"password"`
 	MaxConcurrency int                `json:"max_concurrency"`
@@ -158,6 +159,13 @@ func (s *Server) handleLogsSearchMulti(w http.ResponseWriter, r *http.Request) {
 	if filesN > 10 {
 		filesN = 10
 	}
+	contextN := req.Context
+	if contextN < 0 {
+		contextN = 0
+	}
+	if contextN > 50 {
+		contextN = 50
+	}
 	maxConc := req.MaxConcurrency
 	if maxConc <= 0 {
 		maxConc = cur.Search.MaxConcurrency
@@ -264,12 +272,7 @@ func (s *Server) handleLogsSearchMulti(w http.ResponseWriter, r *http.Request) {
 			} else {
 				useFiles = req.SelectedFiles
 			}
-			res := s.runOneServerSearchWithScope(totalCtx, srv, ld, scope, filesN, useFiles, req.FilePatterns, kw, c.Username, c.Password)
-			// B1：按文件 mtime 过滤命中
-			if res.OK && len(res.Hits) > 0 {
-				res.Hits = logquery.FilterHitsByTimeWindow(res.Hits, res.fileList, tw)
-				res.HitsN = len(res.Hits)
-			}
+			res := s.runOneServerSearchWithScope(totalCtx, srv, ld, scope, filesN, useFiles, req.FilePatterns, kw, c.Username, c.Password, tw, contextN)
 			results[idx] = res
 			// 审计
 			if res.OK {
@@ -326,7 +329,7 @@ func (s *Server) runOneServerSearchWithPatterns(
 	kw []logquery.SearchKeyword,
 	username, password string,
 ) logsSearchMultiServerResult {
-	return s.runOneServerSearchWithScope(ctx, srv, ld, "latest", filesN, nil, patterns, kw, username, password)
+	return s.runOneServerSearchWithScope(ctx, srv, ld, "latest", filesN, nil, patterns, kw, username, password, logquery.SearchTimeWindow{}, 0)
 }
 
 // runOneServerSearchWithScope v0.5-G #8：搜索范围三种模式（互斥）
@@ -337,6 +340,8 @@ func (s *Server) runOneServerSearchWithPatterns(
 //
 // 安全：selected 模式下，文件名不能含路径分隔符（防止命令注入 / 路径穿越），
 // 也不能是 . / ..，否则直接返回错误。
+//
+// tw 为时间窗口过滤（仅 latest/glob 模式有效）；contextN 为上下文行数（0 表示无上下文）。
 func (s *Server) runOneServerSearchWithScope(
 	ctx context.Context,
 	srv *config.ServerConfig,
@@ -347,6 +352,8 @@ func (s *Server) runOneServerSearchWithScope(
 	patterns []string,
 	kw []logquery.SearchKeyword,
 	username, password string,
+	tw logquery.SearchTimeWindow,
+	contextN int,
 ) logsSearchMultiServerResult {
 	start := time.Now()
 	res := logsSearchMultiServerResult{
@@ -478,12 +485,22 @@ func (s *Server) runOneServerSearchWithScope(
 		return res
 	}
 	hits := parseSearchOutput(stdout, srv.Name, ld.Path, files)
+	// B1：按文件 mtime 过滤命中（非 selected 模式，selected 模式无 mtime 信息）
+	if scope != "selected" && len(hits) > 0 {
+		hits = logquery.FilterHitsByTimeWindow(hits, files, tw)
+	}
+	// 上下文行：contextN > 0 时为每个匹配行获取前后 N 行
+	if contextN > 0 && len(hits) > 0 {
+		if enriched, err := s.enrichHitsWithContext(ctx, cli, ld, srv.Name, files, hits, contextN); err == nil {
+			hits = enriched
+		}
+	}
 	res.OK = true
 	res.Hits = hits
 	res.Files = fileNames
 	res.HitsN = len(hits)
 	res.Ms = time.Since(start).Milliseconds()
-	res.fileList = files // B1：保留给时间窗口过滤
+	res.fileList = files
 	return res
 }
 

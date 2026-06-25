@@ -822,6 +822,37 @@ body[data-theme="light"] .tail-line.tail-line-error { color: #b91c1c; }
 body[data-theme="green"] .tail-line.tail-line-error { color: #b91c1c; }
 body[data-theme="hc"] .tail-line.tail-line-error { color: #ff5555; }
 
+/* ===== Tail 行号显示 ===== */
+.tail-out.show-line-numbers {
+  counter-reset: tail-line;
+  padding-left: 8px;
+}
+.tail-out.show-line-numbers .tail-line {
+  position: relative;
+  padding-left: 3.5em;
+}
+.tail-out.show-line-numbers .tail-line::before {
+  counter-increment: tail-line;
+  content: counter(tail-line);
+  position: absolute;
+  left: 0;
+  width: 3em;
+  text-align: right;
+  color: rgba(255,255,255,0.3);
+  user-select: none;
+  padding-right: 0.5em;
+  border-right: 1px solid rgba(255,255,255,0.1);
+  margin-right: 0.5em;
+}
+body[data-theme="light"] .tail-out.show-line-numbers .tail-line::before {
+  color: rgba(0,0,0,0.3);
+  border-right-color: rgba(0,0,0,0.1);
+}
+body[data-theme="green"] .tail-out.show-line-numbers .tail-line::before {
+  color: rgba(0,0,0,0.3);
+  border-right-color: rgba(0,0,0,0.1);
+}
+
 /* ===== Tail 高亮面板（实时日志页：websphere + 独立窗口共用） =====
  *
  * 设计目标：

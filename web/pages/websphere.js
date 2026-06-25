@@ -1658,6 +1658,9 @@
       hitTableWrap.innerHTML = '';
       hitTableWrap.appendChild(el('h3', { text: '并行搜索中…' }));
       const conc = Number(concSel.value) || 8;
+      let contextN = Number(contextInp.value) || 0;
+      if (contextN < 0) contextN = 0;
+      if (contextN > 50) contextN = 50;
       const timeRange = buildTimeRange();
       // v0.5 #8：文件名参数 — 单文件 / 多文件 / glob 模糊匹配
       const filePatternsRaw = (filePatternInp.value || '').trim();
@@ -1746,20 +1749,26 @@
           tbl.appendChild(thead);
           const tbody = el('tbody');
           srv.hits.forEach(h => {
+            const isCtx = !!h.is_context;
             const content = trimMiddle(h.content, 280);
             const cells = [
-              el('td', { class: 'muted', text: h.file }),
-              el('td', { class: 'num', text: h.line_no })
+              el('td', { class: 'muted' + (isCtx ? ' text-dim' : ''), text: h.file }),
+              el('td', { class: 'num' + (isCtx ? ' text-dim' : ''), text: (isCtx ? '┊ ' : '') + h.line_no })
             ];
-            const contentCell = el('td', { class: 'hit-line', text: content });
-            if (looksMojibake(content)) {
+            const contentCell = el('td', { class: 'hit-line' + (isCtx ? ' ctx-line' : ''), text: (isCtx ? '┊ ' : '') + content });
+            if (!isCtx && looksMojibake(content)) {
               contentCell.appendChild(el('span', { class: 'tag tag-warn', title: '当前目录编码与文件实际编码不一致，中文可能错位。试试切换到「GBK」目录。', text: '⚠ 解码可能有误' }));
             }
             cells.push(contentCell);
-            cells.push(el('td', { class: 'actions' }, [
-              el('button', { class: 'btn btn-sm', text: '上下文', onclick: () => doContext(h) })
-            ]));
-            tbody.appendChild(el('tr', null, cells));
+            if (isCtx) {
+              cells.push(el('td', { class: 'actions text-dim', text: '' }));
+            } else {
+              cells.push(el('td', { class: 'actions' }, [
+                el('button', { class: 'btn btn-sm', text: '上下文', onclick: () => doContext(h) })
+              ]));
+            }
+            const tr = el('tr', { class: isCtx ? 'ctx-row' : '' }, cells);
+            tbody.appendChild(tr);
           });
           tbl.appendChild(tbody);
           grp.appendChild(tbl);
@@ -2135,12 +2144,17 @@ const formCard = el('div', { class: 'card' }, [
         el('div', null, [el('label', { text: '并发' }), concSel])
       ]),
       scopeRow,
-      el('div', { class: 'grid-2 mt-2' }, [
+      el('div', { class: 'grid-3 mt-2' }, [
         el('div', null, [el('label', { text: '最近文件数（每台服务器每个目录）' }), filesNSel]),
         el('div', null, [
           el('label', { text: '文件名 glob（逗号/空格分隔）' }),
           filePatternInp,
           el('div', { class: 'text-dim', style: 'font-size:11.5px; margin-top:2px;', text: '💡 填 glob 后，N 仍限制"取匹配文件中的最新 N 个"（不是只搜 1 个）' })
+        ]),
+        el('div', null, [
+          el('label', { text: '上下文行' }),
+          contextInp,
+          el('div', { class: 'text-dim', style: 'font-size:11.5px; margin-top:2px;', text: '每个匹配行前后显示 N 行（0-50）' })
         ])
       ]),
       fileListArea,
@@ -2494,6 +2508,16 @@ const formCard = el('div', { class: 'card' }, [
       tailOut.textContent = '';
       pendingTailLines = [];
       tailTotalLines = 0;
+      grepShownLines = 0;
+      grepPattern = '';
+      grepCompiled = null;
+      grepClearedNoticeShown = false;
+      grepIsRegex = false;
+      grepInp.value = '';
+      grepRegexBtn.style.background = '';
+      grepRegexBtn.style.color = '';
+      grepInp.style.borderColor = '';
+      updateGrepStatus();
       tailFlushScheduled = false;
       setStatus('busy', '跟踪中…');
       try {
@@ -2700,6 +2724,162 @@ const formCard = el('div', { class: 'card' }, [
       });
     }
 
+    // ===== Tail 工具栏：暂停/清屏/复制 + Grep 过滤 =====
+    let tailTotalLines = 0;
+    let grepPattern = '';
+    let grepIsRegex = false;
+    let grepCompiled = null;
+    let grepShownLines = 0;
+    let grepClearedNoticeShown = false;
+
+    const btnTailPause = el('button', { class: 'btn btn-sm', text: '⏸ 暂停', title: '暂停/继续接收新日志' });
+    const btnTailClear = el('button', { class: 'btn btn-sm', text: '🗑 清屏', title: '清空当前显示' });
+    const btnTailCopy = el('button', { class: 'btn btn-sm', text: '📋 复制全部', title: '复制缓冲区所有文本' });
+    const btnTailCopyShown = el('button', { class: 'btn btn-sm', text: '📋 复制显示', title: '复制过滤后显示的行', style: 'display:none' });
+
+    const grepInp = el('input', {
+      type: 'text',
+      placeholder: 'Grep 过滤... (/ 聚焦)',
+      style: 'flex: 1; min-width: 150px;',
+      autocomplete: 'off',
+      spellcheck: 'false'
+    });
+    const grepRegexBtn = el('button', {
+      class: 'btn btn-sm',
+      text: '.*',
+      title: '切换正则/纯文本模式',
+      style: 'font-family: monospace; font-weight: bold;'
+    });
+    const grepClearBtn = el('button', { class: 'btn btn-sm', text: '✕', title: '清除过滤 (Esc)' });
+    const grepStatus = el('span', { class: 'text-dim', style: 'font-size: 12px; min-width: 120px; text-align: right;', text: '' });
+
+    function updateGrepStatus() {
+      if (!grepPattern) {
+        grepStatus.textContent = tailTotalLines ? (tailTotalLines + ' 行') : '';
+        btnTailCopyShown.style.display = 'none';
+      } else {
+        grepStatus.textContent = '过滤: ' + grepShownLines + ' / ' + tailTotalLines;
+        btnTailCopyShown.style.display = '';
+      }
+    }
+
+    function clearGrep() {
+      if (grepPattern) {
+        grepPattern = '';
+        grepCompiled = null;
+        grepInp.value = '';
+        grepRegexBtn.style.background = '';
+        grepRegexBtn.style.color = '';
+        if (!grepClearedNoticeShown && tailTotalLines > 0) {
+          tailViewer.push('⟦info⟧ 过滤已清除，新内容将全部显示（之前被过滤的行不会恢复）', 'info');
+          grepClearedNoticeShown = true;
+        }
+        grepShownLines = tailTotalLines;
+        updateGrepStatus();
+        grepInp.focus();
+      }
+    }
+
+    function compileGrep() {
+      const pat = grepInp.value;
+      grepPattern = pat;
+      grepClearedNoticeShown = false;
+      if (!pat) {
+        grepCompiled = null;
+        grepShownLines = tailTotalLines;
+        updateGrepStatus();
+        return;
+      }
+      try {
+        if (grepIsRegex) {
+          grepCompiled = new RegExp(pat);
+        } else {
+          const escaped = pat.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          grepCompiled = new RegExp(escaped);
+        }
+        grepInp.style.borderColor = '';
+      } catch (e) {
+        grepCompiled = null;
+        grepInp.style.borderColor = '#ef4444';
+      }
+      updateGrepStatus();
+    }
+
+    grepInp.addEventListener('input', compileGrep);
+    grepInp.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Escape') {
+        ev.preventDefault();
+        clearGrep();
+      }
+    });
+    grepRegexBtn.addEventListener('click', () => {
+      grepIsRegex = !grepIsRegex;
+      if (grepIsRegex) {
+        grepRegexBtn.style.background = 'var(--primary)';
+        grepRegexBtn.style.color = '#fff';
+      } else {
+        grepRegexBtn.style.background = '';
+        grepRegexBtn.style.color = '';
+      }
+      compileGrep();
+    });
+    grepClearBtn.addEventListener('click', clearGrep);
+
+    btnTailPause.addEventListener('click', () => {
+      const newPaused = !tailViewer.isPaused();
+      tailViewer.setPaused(newPaused);
+      btnTailPause.textContent = newPaused ? '▶ 继续' : '⏸ 暂停';
+    });
+    btnTailClear.addEventListener('click', () => {
+      tailViewer.clear();
+      pendingTailLines = [];
+      tailTotalLines = 0;
+      grepShownLines = 0;
+      grepClearedNoticeShown = false;
+      updateGrepStatus();
+    });
+    btnTailCopy.addEventListener('click', () => {
+      const text = tailViewer.getText();
+      OTB.core.copyToClipboard(text).then(
+        () => toast('已复制 ' + tailViewer.lineCount() + ' 行', 'ok'),
+        (e) => toast('复制失败: ' + e.message, 'err')
+      );
+    });
+    btnTailCopyShown.addEventListener('click', () => {
+      const lines = [];
+      tailOut.querySelectorAll('.tail-line').forEach(n => {
+        lines.push(n.textContent);
+      });
+      OTB.core.copyToClipboard(lines.join('\n')).then(
+        () => toast('已复制显示的 ' + lines.length + ' 行', 'ok'),
+        (e) => toast('复制失败: ' + e.message, 'err')
+      );
+    });
+
+    document.addEventListener('keydown', (ev) => {
+      if (ev.key === '/' && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
+        const active = document.activeElement;
+        if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA')) return;
+        ev.preventDefault();
+        grepInp.focus();
+        grepInp.select();
+      }
+    });
+
+    const tailToolbar = el('div', {
+      class: 'tail-toolbar',
+      style: 'display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin: 8px 0; padding: 6px 8px; background: var(--bg-2); border: 1px solid var(--line); border-radius: 6px;'
+    }, [
+      btnTailPause, btnTailClear, btnTailCopy, btnTailCopyShown,
+      el('span', { style: 'width: 1px; height: 20px; background: var(--line); margin: 0 4px;' }),
+      el('span', { class: 'text-dim', style: 'font-size: 12px;', text: '🔍' }),
+      grepInp,
+      grepRegexBtn,
+      grepClearBtn,
+      el('span', { style: 'flex: 1;' }),
+      grepStatus
+    ]);
+
     function scheduleFlushTail() {
       if (tailFlushScheduled) return;
       tailFlushScheduled = true;
@@ -2712,10 +2892,28 @@ const formCard = el('div', { class: 'card' }, [
       if (!pendingTailLines.length) return;
       const lines = pendingTailLines;
       pendingTailLines = [];
-      // tailViewer 内部：每行一个 div，无 highlight 时退化成 TextNode。
-      // 截断：超 maxLines 时头部 removeChild + shift（O(1)/行）。
-      tailViewer.pushBatch(lines);
-      tailViewer.scrollToBottomIfNear();
+      // Grep 过滤：匹配的才 push 到 viewer
+      let toPush;
+      if (grepPattern && grepCompiled) {
+        toPush = [];
+        for (let i = 0; i < lines.length; i++) {
+          const line = lines[i];
+          tailTotalLines++;
+          if (grepCompiled.test(line)) {
+            toPush.push(line);
+            grepShownLines++;
+          }
+        }
+      } else {
+        toPush = lines;
+        tailTotalLines += lines.length;
+        grepShownLines += lines.length;
+      }
+      if (toPush.length > 0) {
+        tailViewer.pushBatch(toPush);
+        tailViewer.scrollToBottomIfNear();
+      }
+      updateGrepStatus();
     }
 
     const tailCard = el('div', { class: 'card' }, [
@@ -2745,6 +2943,7 @@ const formCard = el('div', { class: 'card' }, [
       ]),
       el('div', { class: 'btn-row mt-2' }, [btnTailStart, btnTailStop, btnTailNewTab]),
       tailHighlight.root,
+      tailToolbar,
       el('div', { class: 'mt-2' }, tailOut)
     ]);
 

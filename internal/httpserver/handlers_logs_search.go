@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"ops-toolbox/internal/config"
 	"ops-toolbox/internal/logquery"
 	"ops-toolbox/internal/sshclient"
 )
@@ -22,6 +23,7 @@ type logsSearchReq struct {
 	Dir      string `json:"dir"`
 	Files    int    `json:"files"` // 选最近几个文件
 	Query    string `json:"query"` // 搜索表达式
+	Context  int    `json:"context"`
 	Username string `json:"username"`
 	Password string `json:"password"`
 }
@@ -74,6 +76,13 @@ func (s *Server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 	}
 	if filesN > 10 {
 		filesN = 10
+	}
+	contextN := req.Context
+	if contextN < 0 {
+		contextN = 0
+	}
+	if contextN > 50 {
+		contextN = 50
 	}
 
 	// SSH Dial 独立 ctx + 统一超时（不受 SearchTimeout 太小影响）
@@ -140,7 +149,13 @@ func (s *Server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 	hits := parseSearchOutput(stdout, srv.Name, ld.Path, files)
 	// B1：按"文件 mtime"过滤命中（前后端都返回过滤后的 hits）
 	hits = logquery.FilterHitsByTimeWindow(hits, files, tw)
-	s.audit.Write("logs.search", "system", req.System, "server", req.Server, "dir", ld.Path, "query", req.Query, "result", "ok", "hits", len(hits), "since", tw.Start.Format(time.RFC3339), "until", tw.End.Format(time.RFC3339))
+	// 上下文行：contextN > 0 时为每个匹配行获取前后 N 行
+	if contextN > 0 && len(hits) > 0 {
+		if enriched, err := s.enrichHitsWithContext(r.Context(), cli, ld, srv.Name, files, hits, contextN); err == nil {
+			hits = enriched
+		}
+	}
+	s.audit.Write("logs.search", "system", req.System, "server", req.Server, "dir", ld.Path, "query", req.Query, "result", "ok", "hits", len(hits), "context", contextN, "since", tw.Start.Format(time.RFC3339), "until", tw.End.Format(time.RFC3339))
 	writeJSON(w, 200, map[string]any{
 		"hits":  hits,
 		"files": fileNames,
@@ -368,4 +383,68 @@ func parseContextOutput(out string, hitLine, before int) []logquery.ContextLine 
 		})
 	}
 	return result
+}
+
+// enrichHitsWithContext 为 hits 中每个匹配行获取前后 N 行上下文，合并去重后返回新的 hits 列表。
+// 匹配行 IsContext = false，上下文行 IsContext = true。同一行既是匹配又是上下文时标记为非上下文。
+func (s *Server) enrichHitsWithContext(
+	ctx context.Context,
+	cli *sshclient.Client,
+	ld *config.LogDirEntry,
+	serverName string,
+	files []logquery.FileEntry,
+	hits []logquery.SearchHit,
+	contextN int,
+) ([]logquery.SearchHit, error) {
+	if contextN <= 0 || len(hits) == 0 {
+		return hits, nil
+	}
+
+	// 按文件分组匹配行号
+	hitsByFile := make(map[string][]int)
+	for _, h := range hits {
+		if h.IsContext {
+			continue
+		}
+		hitsByFile[h.File] = append(hitsByFile[h.File], h.LineNo)
+	}
+
+	// 去重每个文件的行号
+	for f, lns := range hitsByFile {
+		seen := make(map[int]bool)
+		var deduped []int
+		for _, ln := range lns {
+			if !seen[ln] {
+				seen[ln] = true
+				deduped = append(deduped, ln)
+			}
+		}
+		hitsByFile[f] = deduped
+	}
+
+	// 对每个文件执行 awk 命令获取上下文
+	var allEnriched []logquery.SearchHit
+	cur := s.cur()
+	runTimeout := cur.SearchTimeout() + 10*time.Second
+	cmdTimeout := cur.SearchTimeout()
+
+	for file, lineNos := range hitsByFile {
+		cmd, err := logquery.ContextLinesForHitsCommand(ld.Path, file, lineNos, contextN)
+		if err != nil {
+			continue
+		}
+		runCtx, cancel := context.WithTimeout(ctx, runTimeout)
+		stdout, _, code, err := cli.Run(runCtx, cmd, cmdTimeout, ld.Encoding)
+		cancel()
+		if err != nil || code != 0 {
+			continue
+		}
+		enriched := logquery.ParseContextEnrichedOutput(stdout, serverName, ld.Path, files)
+		allEnriched = append(allEnriched, enriched...)
+	}
+
+	if len(allEnriched) == 0 {
+		return hits, nil
+	}
+	return allEnriched, nil
 }
