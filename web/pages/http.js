@@ -906,7 +906,12 @@
 
     function buildCaseRow(c) {
       const m = (c.method || 'GET').toUpperCase();
-      const row = el('div', { class: 'http2-case-row' + (c.id === lastLoadedCaseId ? ' is-loaded' : '') });
+      const row = el('div', {
+        class: 'http2-case-row' + (c.id === lastLoadedCaseId ? ' is-loaded' : ''),
+        tabindex: '0',
+        role: 'button',
+        'aria-label': c.name || c.id
+      });
       const methodChip = el('span', { class: 'http2-case-method m-' + m, text: m });
       const info = el('div', { class: 'http2-case-info' }, [
         el('div', { class: 'http2-case-name', text: c.name || c.id }),
@@ -931,6 +936,12 @@
           });
         } else {
           loadCase(c);
+        }
+      });
+      row.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          row.click();
         }
       });
       btnClone.addEventListener('click', (e) => {

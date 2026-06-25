@@ -71,6 +71,59 @@ const el = new Function(
   createTextNode: function (text) { return { nodeType: 'text', data: text }; }
 });
 
+const dialogDocMock = (function () {
+  function makeNode(tag) {
+    return {
+      tag: tag,
+      _attrs: {},
+      _listeners: {},
+      _children: [],
+      _parent: null,
+      set className(v) { this._className = v; },
+      get className() { return this._className; },
+      set innerHTML(v) { this._innerHTML = v; },
+      get innerHTML() { return this._innerHTML; },
+      set textContent(v) { this._textContent = v; },
+      get textContent() { return this._textContent; },
+      setAttribute(k, v) { this._attrs[k] = v; },
+      addEventListener(name, fn) { (this._listeners[name] = this._listeners[name] || []).push(fn); },
+      appendChild(c) { c._parent = this; this._children.push(c); return c; },
+      remove() {
+        if (!this._parent) return;
+        const i = this._parent._children.indexOf(this);
+        if (i >= 0) this._parent._children.splice(i, 1);
+        this._parent = null;
+      },
+      focus() { this._focused = true; }
+    };
+  }
+  const listeners = {};
+  return {
+    body: makeNode('body'),
+    createElement: makeNode,
+    createTextNode: function (text) { return { nodeType: 'text', data: text }; },
+    addEventListener: function (name, fn) { (listeners[name] = listeners[name] || []).push(fn); },
+    removeEventListener: function (name, fn) {
+      if (!listeners[name]) return;
+      listeners[name] = listeners[name].filter(f => f !== fn);
+    },
+    _listeners: listeners
+  };
+})();
+
+const elDialog = new Function(
+  'document',
+  extract('el') + '\n  return el;'
+)(dialogDocMock);
+const confirmDialog = new Function(
+  'document', 'window', 'el',
+  extract('confirmDialog') + '\n  return confirmDialog;'
+)(
+  dialogDocMock,
+  { confirm: () => true },
+  elDialog
+);
+
 // cssEscape 用通用 extract（4 空格缩进）。
 // core.js 里的 cssEscape 实现优先用浏览器 window.CSS，
 // Node 没全局 window，我们 mock 成 { CSS: undefined } 走 fallback。
@@ -354,6 +407,22 @@ function testEl() {
   assert.strictEqual(f._children[1]._textContent, 'world', 'children: 节点原样');
 
   console.log('  el ✓');
+}
+
+// ---------- confirmDialog ----------
+
+async function testConfirmDialog() {
+  const p = confirmDialog('是否继续？');
+  const overlay = dialogDocMock.body._children[0];
+  assert.ok(overlay, 'overlay mounted');
+  const dialog = overlay._children[0];
+  const actions = dialog._children[2];
+  const okBtn = actions._children[1];
+  okBtn._listeners.click[0]({ preventDefault: () => {} });
+  const result = await p;
+  assert.strictEqual(result, true, '点击确定应 resolve true');
+  assert.strictEqual(dialogDocMock.body._children.length, 0, '确认后 overlay 应移除');
+  console.log('  confirmDialog ✓');
 }
 
 // ---------- 关键 XSS 回归：动态错误信息里含 HTML/JS ----------
@@ -1074,7 +1143,7 @@ async function main() {
   console.log('Running web/app.test.js...');
   const tests = [
     testEscapeHtml, testFormatBytes, testFormatTime, testTrimMiddle,
-    testCssEscape, testPctText, testValidate, testEl, testXSSInErrorText,
+    testCssEscape, testPctText, testValidate, testEl, testConfirmDialog, testXSSInErrorText,
     testGotDoneDedupe, testNormalizeHighlightColor, testRenderHighlightedLine,
     testTailViewer,
   ];
