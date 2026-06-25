@@ -134,6 +134,9 @@ func main() {
 	// 8. 构造 HTTP 服务
 	srv := httpserver.New(cfgMgr, auditLog, webSubFS, tails)
 
+	// 8.5 启动下载历史定期清理（启动时清理一次 + 每小时清理一次）
+	srv.StartPeriodicCleanup()
+
 	// WriteTimeout 设为 0：SSE 长连接（/api/logs/tail/{id}/events、
 	// /api/files/download/{id}/events、下载进度流等）需要任意时长的写，
 	// 否则 120 秒后 server 会主动断流。

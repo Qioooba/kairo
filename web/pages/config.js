@@ -22,7 +22,7 @@
   const { api } = OTB.api;
 
   // 模块级 state：跨 tab 切换 / 跨 re-render 存活
-  // 结构：{ systems, app, search, openers, dirty, freeBrowserEnabled, loaded }
+  // 结构：{ systems, app, search, openers, retention, dirty, freeBrowserEnabled, loaded }
   // loaded=true 表示已经从服务器拉过；之后切回本页不再 fetch，避免覆盖未保存改动
   if (!OTB.state.configEditor) {
     OTB.state.configEditor = {
@@ -30,6 +30,8 @@
       app: null,
       search: null,
       openers: [],
+      retention: { retention_days: 7, max_count: 1000 },
+      retentionLoaded: false,
       dirty: false,
       freeBrowserEnabled: true,
       loaded: false
@@ -136,12 +138,20 @@
       })
     ]));
 
+    // ---- v0.x：下载历史清理策略卡 ----
+    const retentionCard = el('div', { class: 'card' });
+    retentionCard.appendChild(el('h3', { text: '下载历史自动清理' }));
+    retentionCard.appendChild(el('div', { class: 'card-desc', text: '配置下载文件和历史记录的自动清理策略。设为 0 表示不限制/不自动清理。' }));
+    const retentionBody = el('div');
+    retentionCard.appendChild(retentionBody);
+
     view.appendChild(banner);
     view.appendChild(topBar);
     view.appendChild(appCard);
     view.appendChild(searchCard);
     view.appendChild(editorCard);
     view.appendChild(openersCard);
+    view.appendChild(retentionCard);
     view.appendChild(footerBar);
 
     function maybeShowBanner(info) {
@@ -376,6 +386,72 @@
       return wrap;
     }
 
+    function renderOpeners() {
+      openersBody.innerHTML = '';
+      if (!state.openers || state.openers.length === 0) {
+        openersBody.appendChild(el('div', { class: 'text-dim', text: '暂无外部打开器，点下方"+ 添加打开器"按钮添加。' }));
+        return;
+      }
+      const list = el('div');
+      state.openers.forEach((op, idx) => {
+        const row = el('div', { class: 'opener-row', style: 'display:flex; gap:8px; margin-bottom:8px; align-items:center;' });
+        const nameInp = el('input', { type: 'text', value: op.name || '', placeholder: '名称（如 VS Code）', style: 'flex:1;' });
+        const iconInp = el('input', { type: 'text', value: op.icon || '', placeholder: '📝', style: 'width:60px; text-align:center;' });
+        const pathInp = el('input', { type: 'text', value: op.path || '', placeholder: '可执行文件绝对路径', style: 'flex:2;' });
+        const btnDel = el('button', { class: 'btn btn-sm btn-danger', text: '删除', onclick: () => {
+          if (confirm('确认删除打开器 "' + (op.name || '(未命名)') + '"？')) {
+            state.openers.splice(idx, 1);
+            markDirty();
+            renderOpeners();
+          }
+        }});
+        nameInp.addEventListener('input', () => { op.name = nameInp.value; markDirty(); });
+        iconInp.addEventListener('input', () => { op.icon = iconInp.value; markDirty(); });
+        pathInp.addEventListener('input', () => { op.path = pathInp.value; markDirty(); });
+        row.appendChild(nameInp);
+        row.appendChild(iconInp);
+        row.appendChild(pathInp);
+        row.appendChild(btnDel);
+        list.appendChild(row);
+      });
+      openersBody.appendChild(list);
+    }
+
+    function renderRetention() {
+      retentionBody.innerHTML = '';
+      const row = el('div', { style: 'display:flex; gap:16px; flex-wrap:wrap;' });
+
+      const daysVal = state.retention.days != null ? state.retention.days : 7;
+      const countVal = state.retention.count != null ? state.retention.count : 1000;
+
+      const daysWrap = el('label', { style: 'display:flex; flex-direction:column; gap:4px; flex:1; min-width:200px;' });
+      daysWrap.appendChild(el('span', { class: 'lbl', text: '保留天数' }));
+      const daysInp = el('input', { type: 'number', min: '0', value: String(daysVal), placeholder: '7' });
+      daysInp.addEventListener('input', () => {
+        const n = parseInt(daysInp.value, 10);
+        state.retention.days = isNaN(n) ? 0 : n;
+        markDirty();
+      });
+      daysWrap.appendChild(daysInp);
+      daysWrap.appendChild(el('span', { class: 'card-desc', style: 'font-size:12px;', text: '0 = 不按时间自动清理；默认 7 天' }));
+
+      const countWrap = el('label', { style: 'display:flex; flex-direction:column; gap:4px; flex:1; min-width:200px;' });
+      countWrap.appendChild(el('span', { class: 'lbl', text: '最大记录数' }));
+      const countInp = el('input', { type: 'number', min: '0', value: String(countVal), placeholder: '1000' });
+      countInp.addEventListener('input', () => {
+        const n = parseInt(countInp.value, 10);
+        state.retention.count = isNaN(n) ? 0 : n;
+        markDirty();
+      });
+      countWrap.appendChild(countInp);
+      countWrap.appendChild(el('span', { class: 'card-desc', style: 'font-size:12px;', text: '0 = 不限制数量；默认 1000 条' }));
+
+      row.appendChild(daysWrap);
+      row.appendChild(countWrap);
+      retentionBody.appendChild(row);
+      retentionBody.appendChild(el('div', { class: 'card-desc', style: 'margin-top:8px;', text: '提示：系统启动时会清理一次，每小时自动巡检；每次下载完成后也会触发检查。' }));
+    }
+
     // ----- 保存 / 重置 -----
     async function doSave() {
       const err = validate(state.systems);
@@ -392,6 +468,16 @@
         } catch (e) {
           openerErr = e;
         }
+        // 存下载清理策略
+        let retentionErr = null;
+        try {
+          await api('PUT', '/api/admin/download-retention', {
+            download_retention_days: state.retention.days,
+            download_max_count: state.retention.count,
+          });
+        } catch (e) {
+          retentionErr = e;
+        }
         // P0-5 修复：保存成功后重新 GET 后端，用后端规范化后的数据覆盖前端 state，
         // 确保 encoding 归一等后端处理被前端确认（比如 gbk→gbk，utf-8→utf-8）。
         // 同时 toast 里显示"后端确认"让用户知道写盘成功。
@@ -404,6 +490,12 @@
           const opInfo = await api('GET', '/api/admin/openers');
           state.openers = Array.isArray(opInfo.openers) ? opInfo.openers : [];
         } catch (e) { /* 拉失败不影响主要保存提示 */ }
+        // 拉 retention 配置回填
+        try {
+          const retInfo = await api('GET', '/api/admin/download-retention');
+          state.retention.days = retInfo.effective.retention_days;
+          state.retention.count = retInfo.effective.max_count;
+        } catch (e) { /* 拉失败不影响 */ }
         state.dirty = false;
         state.loaded = true;
         OTB.state.unsavedConfig = false;
@@ -412,8 +504,12 @@
         renderSearch();
         renderEditor();
         renderOpeners();
-        if (openerErr) {
-          toast('systems 已保存，但打开器保存失败：' + openerErr.message, 'err');
+        renderRetention();
+        let errMsg = '';
+        if (openerErr) errMsg += '打开器保存失败：' + openerErr.message + '；';
+        if (retentionErr) errMsg += '清理策略保存失败：' + retentionErr.message + '；';
+        if (errMsg) {
+          toast('systems 已保存，但' + errMsg, 'err');
         } else {
           toast('已保存并后端确认：' + r.path, 'ok');
         }
@@ -431,11 +527,17 @@
             state.openers = Array.isArray(opInfo.openers) ? opInfo.openers : [];
             renderOpeners();
           }).catch(() => { state.openers = []; renderOpeners(); });
+          // 同时重拉 retention 配置
+          api('GET', '/api/admin/download-retention').then(retInfo => {
+            state.retention.days = retInfo.effective.retention_days;
+            state.retention.count = retInfo.effective.max_count;
+            renderRetention();
+          }).catch(() => { renderRetention(); });
           state.dirty = false;
           state.loaded = true;
           OTB.state.unsavedConfig = false;
           syncSaveBtns();
-          renderApp(); renderSearch(); renderEditor(); renderOpeners();
+          renderApp(); renderSearch(); renderEditor(); renderOpeners(); renderRetention();
           maybeShowBanner(info);
         }).catch(e => toast('加载失败：' + e.message, 'err'));
       }
@@ -523,6 +625,11 @@
           const opInfo = await api('GET', '/api/admin/openers');
           state.openers = Array.isArray(opInfo.openers) ? opInfo.openers : [];
         } catch (_) { state.openers = []; }
+        try {
+          const retInfo = await api('GET', '/api/admin/download-retention');
+          state.retention.days = retInfo.effective.retention_days;
+          state.retention.count = retInfo.effective.max_count;
+        } catch (_) { /* 使用默认值 */ }
         state.dirty = false;
         state.loaded = true;
         OTB.state.unsavedConfig = false;
@@ -531,6 +638,7 @@
         renderSearch();
         renderEditor();
         renderOpeners();
+        renderRetention();
         maybeShowBanner(info);
         toast('配置导入成功！旧配置已自动备份。', 'ok');
       } catch (e) {
@@ -557,17 +665,41 @@
         if (cb) cb();
       }).catch(() => { state.openers = []; renderOpeners(); if (cb) cb(); });
     }
+    function ensureRetentionLoaded(cb) {
+      if (state.retentionLoaded) {
+        renderRetention();
+        if (cb) cb();
+        return;
+      }
+      api('GET', '/api/admin/download-retention').then(retInfo => {
+        state.retention.days = retInfo.effective.retention_days;
+        state.retention.count = retInfo.effective.max_count;
+        state.retentionLoaded = true;
+        renderRetention();
+        if (cb) cb();
+      }).catch(() => {
+        state.retention.days = 7;
+        state.retention.count = 1000;
+        state.retentionLoaded = true;
+        renderRetention();
+        if (cb) cb();
+      });
+    }
     if (state.loaded && state.systems) {
       // 已加载过：直接 render，不再 fetch（除非用户点放弃改动）
       renderApp(); renderSearch(); renderEditor();
-      ensureOpenersLoaded(() => maybeShowBanner({ app: state.app }));
+      ensureOpenersLoaded(() => {
+        ensureRetentionLoaded(() => maybeShowBanner({ app: state.app }));
+      });
     } else {
       api('GET', '/api/admin/servers').then(info => {
         state.app = info.app; state.search = info.search;
         state.systems = JSON.parse(JSON.stringify(info.systems));
         state.loaded = true;
         renderApp(); renderSearch(); renderEditor();
-        ensureOpenersLoaded(() => maybeShowBanner(info));
+        ensureOpenersLoaded(() => {
+          ensureRetentionLoaded(() => maybeShowBanner(info));
+        });
       }).catch(e => toast('加载失败：' + e.message, 'err'));
     }
   }

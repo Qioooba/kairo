@@ -12,11 +12,13 @@ import (
 	"io/fs"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"ops-toolbox/internal/audit"
 	"ops-toolbox/internal/config"
 	"ops-toolbox/internal/dlmanager"
+	"ops-toolbox/internal/downloads"
 	"ops-toolbox/internal/tailmgr"
 )
 
@@ -44,11 +46,63 @@ type Server struct {
 	webRoot   fs.FS
 	tails     *tailmgr.Manager
 	downloads *dlmanager.Manager
+
+	cleanupMu sync.Mutex // 防止并发执行清理任务
 }
 
 // New 构造一个 Server
 func New(cfg *config.Manager, a *audit.Logger, webRoot fs.FS, tails *tailmgr.Manager) *Server {
 	return &Server{cfg: cfg, audit: a, webRoot: webRoot, tails: tails, downloads: dlmanager.New()}
+}
+
+// TriggerCleanup 触发一次下载清理（同步执行）。
+// 并发安全：同一时间只有一个清理 goroutine 在跑。
+func (s *Server) TriggerCleanup() {
+	s.cleanupMu.Lock()
+	defer s.cleanupMu.Unlock()
+
+	cur := s.cur()
+	retentionDays := cur.App.DownloadRetentionDaysEffective()
+	maxCount := cur.App.DownloadMaxCountEffective()
+
+	if retentionDays == 0 && maxCount == 0 {
+		return // 两个都配 0，不清理
+	}
+
+	result := downloads.Cleanup(cur.DownloadDir(), retentionDays, maxCount)
+	if result.TotalDeleted > 0 || len(result.Errors) > 0 {
+		s.audit.Write("downloads.cleanup",
+			"result", "ok",
+			"retention_days", retentionDays,
+			"max_count", maxCount,
+			"deleted_by_age", result.DeletedByAge,
+			"deleted_by_count", result.DeletedByCount,
+			"total_deleted", result.TotalDeleted,
+			"errors", len(result.Errors),
+		)
+	}
+}
+
+// StartPeriodicCleanup 启动定期清理 goroutine：
+//   - 启动后立即清理一次
+//   - 之后每小时清理一次
+//
+// 通常在 main.go 中 HTTP 服务启动前调用。
+func (s *Server) StartPeriodicCleanup() {
+	// 启动时立即清理一次
+	go func() {
+		time.Sleep(500 * time.Millisecond) // 等服务初始化完
+		s.TriggerCleanup()
+	}()
+
+	// 每小时定期清理
+	go func() {
+		ticker := time.NewTicker(1 * time.Hour)
+		defer ticker.Stop()
+		for range ticker.C {
+			s.TriggerCleanup()
+		}
+	}()
 }
 
 // cur 拿一份当前 Config 的只读快照。
@@ -143,6 +197,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleLocalOpenWith(w, r)
 	case path == "/api/admin/openers":
 		s.handleAdminOpeners(w, r)
+	case path == "/api/admin/download-retention":
+		s.handleAdminDownloadRetention(w, r)
 	case strings.HasPrefix(path, "/api/files/download/"):
 		s.handleFilesDownloadEventsOrCancel(w, r)
 	// 注意：/api/logs/download-latest 必须在 /api/logs/download/ 之前匹配（精确匹配优先）

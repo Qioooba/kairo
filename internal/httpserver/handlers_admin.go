@@ -68,3 +68,72 @@ func (s *Server) handleAdminServers(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 405, errors.New("仅支持 GET / PUT"))
 	}
 }
+
+// ---------- /api/admin/download-retention ----------
+//
+// GET  — 返回当前生效的下载保留策略配置。
+// PUT  — 更新下载保留策略配置（download_retention_days / download_max_count）。
+type adminDownloadRetentionReq struct {
+	DownloadRetentionDays *int `json:"download_retention_days"`
+	DownloadMaxCount      *int `json:"download_max_count"`
+}
+
+func (s *Server) handleAdminDownloadRetention(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		cur := s.cur()
+		writeJSON(w, 200, map[string]any{
+			"download_retention_days": cur.App.DownloadRetentionDays,
+			"download_max_count":      cur.App.DownloadMaxCount,
+			"effective": map[string]any{
+				"retention_days": cur.App.DownloadRetentionDaysEffective(),
+				"max_count":      cur.App.DownloadMaxCountEffective(),
+			},
+		})
+	case http.MethodPut:
+		var req adminDownloadRetentionReq
+		if err := json.NewDecoder(io.LimitReader(r.Body, 64*1024)).Decode(&req); err != nil {
+			writeErr(w, 400, fmt.Errorf("请求体解析失败: %w", err))
+			return
+		}
+		// 校验：如果传了值，不能为负数
+		if req.DownloadRetentionDays != nil && *req.DownloadRetentionDays < 0 {
+			writeErr(w, 400, errors.New("download_retention_days 不能为负数"))
+			return
+		}
+		if req.DownloadMaxCount != nil && *req.DownloadMaxCount < 0 {
+			writeErr(w, 400, errors.New("download_max_count 不能为负数"))
+			return
+		}
+		cur := s.cur()
+		newCfg := cur.Clone()
+		if req.DownloadRetentionDays != nil {
+			d := *req.DownloadRetentionDays
+			newCfg.App.DownloadRetentionDays = &d
+		}
+		if req.DownloadMaxCount != nil {
+			n := *req.DownloadMaxCount
+			newCfg.App.DownloadMaxCount = &n
+		}
+		if err := s.cfg.Replace(newCfg); err != nil {
+			s.audit.Write("admin.download_retention.put", "result", "fail", "err", err.Error())
+			writeErr(w, 400, err)
+			return
+		}
+		s.audit.Write("admin.download_retention.put", "result", "ok",
+			"retention_days", newCfg.App.DownloadRetentionDaysEffective(),
+			"max_count", newCfg.App.DownloadMaxCountEffective(),
+		)
+		// 保存配置后立即触发一次清理
+		go s.TriggerCleanup()
+		writeJSON(w, 200, map[string]any{
+			"ok": true,
+			"effective": map[string]any{
+				"retention_days": newCfg.App.DownloadRetentionDaysEffective(),
+				"max_count":      newCfg.App.DownloadMaxCountEffective(),
+			},
+		})
+	default:
+		writeErr(w, 405, errors.New("仅支持 GET / PUT"))
+	}
+}

@@ -690,3 +690,144 @@ func safeJoin(rootDir, name string) (string, error) {
 	}
 	return abs, nil
 }
+
+// CleanupResult 清理结果统计
+type CleanupResult struct {
+	RetentionDays int   // 使用的保留天数配置
+	MaxCount      int   // 使用的最大记录数配置
+	DeletedByAge  int   // 按过期天数删除的数量
+	DeletedByCount int  // 按数量限制删除的数量
+	TotalDeleted  int   // 总共删除的数量
+	Errors        []error // 清理过程中遇到的错误
+}
+
+// Cleanup 根据配置清理过期下载文件和记录。
+//
+// 参数：
+//   - rootDir: 下载根目录
+//   - retentionDays: 保留天数；0 = 不按时间清理
+//   - maxCount: 最大记录数；0 = 不限制数量
+//
+// 清理策略：
+//  1. 先按 retentionDays 删除所有早于 (now - retentionDays*24h) 的记录和文件；
+//  2. 再按 maxCount 删除最旧的记录，使总数不超过 maxCount；
+//  3. 删除文件后，同步从元数据索引中移除对应条目；
+//  4. 最后尝试清理空的日期子目录。
+func Cleanup(rootDir string, retentionDays, maxCount int) CleanupResult {
+	result := CleanupResult{
+		RetentionDays: retentionDays,
+		MaxCount:      maxCount,
+	}
+
+	entries, err := List(rootDir)
+	if err != nil {
+		result.Errors = append(result.Errors, fmt.Errorf("列出下载记录失败: %w", err))
+		return result
+	}
+
+	if len(entries) == 0 {
+		return result
+	}
+
+	// 按时间从旧到新排序（List 返回的是从新到旧）
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].ModTime.Before(entries[j].ModTime)
+	})
+
+	now := time.Now()
+	cutoff := now.AddDate(0, 0, -retentionDays)
+	toDelete := make(map[string]Entry) // key 是相对路径 Name
+
+	// 1. 按过期天数清理
+	if retentionDays > 0 {
+		for _, e := range entries {
+			// 使用 Meta.DownloadedAt（如果有），否则用文件 ModTime
+			t := e.Meta.DownloadedAt
+			if t.IsZero() {
+				t = e.ModTime
+			}
+			if t.Before(cutoff) {
+				toDelete[e.Name] = e
+			}
+		}
+		result.DeletedByAge = len(toDelete)
+	}
+
+	// 2. 按数量限制清理（总数 - 已删 - 保留 = 还要删的最旧记录数）
+	if maxCount > 0 {
+		remaining := make([]Entry, 0, len(entries))
+		for _, e := range entries {
+			if _, del := toDelete[e.Name]; !del {
+				remaining = append(remaining, e)
+			}
+		}
+		if len(remaining) > maxCount {
+			// remaining 已经按时间升序（旧→新），删除前 len(remaining)-maxCount 个最旧的
+			needDelete := len(remaining) - maxCount
+			for i := 0; i < needDelete; i++ {
+				toDelete[remaining[i].Name] = remaining[i]
+				result.DeletedByCount++
+			}
+		}
+	}
+
+	if len(toDelete) == 0 {
+		return result
+	}
+
+	// 3. 执行删除：先收集所有要删除的 name，再批量更新索引
+	namesToRemove := make([]string, 0, len(toDelete))
+	for name, e := range toDelete {
+		if err := os.Remove(e.Path); err != nil {
+			if !errors.Is(err, fs.ErrNotExist) {
+				result.Errors = append(result.Errors, fmt.Errorf("删除文件 %s 失败: %w", name, err))
+				continue
+			}
+		}
+		namesToRemove = append(namesToRemove, name)
+		result.TotalDeleted++
+	}
+
+	// 4. 批量从索引中移除
+	if len(namesToRemove) > 0 {
+		removeFromIndexBulk(rootDir, namesToRemove)
+	}
+
+	// 5. 清理空的日期子目录
+	cleanupEmptyDirs(rootDir)
+
+	return result
+}
+
+// cleanupEmptyDirs 删除 rootDir 下所有空的日期子目录（YYYYMMDD / YYYY-MM-DD 格式）。
+func cleanupEmptyDirs(rootDir string) {
+	dirs, err := os.ReadDir(rootDir)
+	if err != nil {
+		return
+	}
+	for _, d := range dirs {
+		if !d.IsDir() {
+			continue
+		}
+		name := d.Name()
+		if !isLikelyDateDir(name) {
+			continue
+		}
+		dirPath := filepath.Join(rootDir, name)
+		items, err := os.ReadDir(dirPath)
+		if err != nil {
+			continue
+		}
+		hasFiles := false
+		for _, item := range items {
+			// 跳过隐藏文件和元数据索引文件（理论上索引只在 rootDir，不会在子目录）
+			if !item.IsDir() && !strings.HasPrefix(item.Name(), ".") {
+				hasFiles = true
+				break
+			}
+		}
+		if !hasFiles {
+			_ = os.Remove(dirPath)
+		}
+	}
+}

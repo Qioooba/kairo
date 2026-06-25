@@ -153,6 +153,8 @@ func (s *Server) runLogsDownloadTask(
 		return
 	}
 	sess.MarkFinished(results, nil)
+	// 下载成功完成，异步触发一次清理
+	go s.TriggerCleanup()
 }
 
 // runLogsDownloadOnce 是核心执行逻辑（被 sync 和 async 路径共用）。

@@ -89,6 +89,14 @@ type AppConfig struct {
 	// 留空 = 不启用该功能（下载历史不会显示额外按钮）。
 	ExternalOpeners []ExternalOpener `yaml:"external_openers,omitempty" json:"external_openers,omitempty"`
 
+	// DownloadRetentionDays 下载文件/记录保留天数。
+	// 默认 7 天；0 = 不自动按时间清理。
+	DownloadRetentionDays *int `yaml:"download_retention_days,omitempty" json:"download_retention_days,omitempty"`
+
+	// DownloadMaxCount 最大下载记录数。
+	// 默认 1000 条；超过则删除最旧的记录和对应文件；0 = 不限制数量。
+	DownloadMaxCount *int `yaml:"download_max_count,omitempty" json:"download_max_count,omitempty"`
+
 	// 解析后的绝对路径
 	downloadDirAbs string
 	logDirAbs      string
@@ -310,6 +318,24 @@ func (a *AppConfig) FindOpener(name string) *ExternalOpener {
 	return nil
 }
 
+// DownloadRetentionDaysEffective 返回生效的下载保留天数。
+// 未配置返回默认 7 天；配置为 0 表示不按时间清理。
+func (a *AppConfig) DownloadRetentionDaysEffective() int {
+	if a.DownloadRetentionDays == nil {
+		return 7
+	}
+	return *a.DownloadRetentionDays
+}
+
+// DownloadMaxCountEffective 返回生效的最大下载记录数。
+// 未配置返回默认 1000；配置为 0 表示不限制数量。
+func (a *AppConfig) DownloadMaxCountEffective() int {
+	if a.DownloadMaxCount == nil {
+		return 1000
+	}
+	return *a.DownloadMaxCount
+}
+
 // SearchConfig 搜索相关默认值
 type SearchConfig struct {
 	DefaultLatestFiles  int `yaml:"default_latest_files" json:"default_latest_files"`
@@ -454,6 +480,12 @@ func (c *Config) Validate() error {
 	}
 	if c.App.SSHLogKeep < 0 || c.App.SSHLogKeep > 100 {
 		return fmt.Errorf("app.ssh_log_keep 必须在 0..100 之间，当前: %d", c.App.SSHLogKeep)
+	}
+	if c.App.DownloadRetentionDays != nil && *c.App.DownloadRetentionDays < 0 {
+		return fmt.Errorf("app.download_retention_days 不能为负数，当前: %d", *c.App.DownloadRetentionDays)
+	}
+	if c.App.DownloadMaxCount != nil && *c.App.DownloadMaxCount < 0 {
+		return fmt.Errorf("app.download_max_count 不能为负数，当前: %d", *c.App.DownloadMaxCount)
 	}
 	if c.App.SSHCompatProfile != "" {
 		switch strings.ToLower(strings.TrimSpace(c.App.SSHCompatProfile)) {
@@ -631,6 +663,15 @@ func (c *Config) Clone() *Config {
 	// v0.8：AppConfig.ExternalOpeners 同理必须新建 slice（且每项是值拷贝 struct，无指针字段）。
 	if c.App.ExternalOpeners != nil {
 		out.App.ExternalOpeners = append([]ExternalOpener(nil), c.App.ExternalOpeners...)
+	}
+	// 下载保留策略指针字段独立复制
+	if c.App.DownloadRetentionDays != nil {
+		d := *c.App.DownloadRetentionDays
+		out.App.DownloadRetentionDays = &d
+	}
+	if c.App.DownloadMaxCount != nil {
+		n := *c.App.DownloadMaxCount
+		out.App.DownloadMaxCount = &n
 	}
 
 	// Systems 整树深拷贝：SystemConfig / ServerConfig / LogDirEntry 都按值拷贝，

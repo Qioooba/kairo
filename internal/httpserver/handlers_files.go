@@ -926,6 +926,8 @@ func (s *Server) runFilesDownloadTask(
 
 	s.audit.Write("files.download", "system", sess.System, "server", sess.Server, "result", "ok", "files", len(results), "selected", len(sess.Paths))
 	sess.MarkFinished(results, nil)
+	// 下载成功完成，异步触发一次清理
+	go s.TriggerCleanup()
 }
 
 // downloadSeriesFree 串行下多个"完整路径"文件，进度通过 session 广播。
