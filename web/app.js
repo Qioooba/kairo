@@ -84,7 +84,7 @@
       const dlFolder = info.paths && info.paths.download_dir;
       const listenInfo = document.getElementById('listen-info');
       if (listenInfo) {
-        listenInfo.textContent = '已启动 · ' + appName + (dlFolder ? ' · 保存到 ' + dlFolder : '');
+        listenInfo.textContent = '已启动 · ' + appName + ' v0.8' + (dlFolder ? ' · 保存到 ' + dlFolder : '');
       }
     } catch (e) { /* 忽略 */ }
     // 启动时拉一次 preferences：把用户上次保存的 tail 高亮规则放到 OTB.state.tailHighlights，

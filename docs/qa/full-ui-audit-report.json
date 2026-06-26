@@ -1,5 +1,5 @@
 {
-  "run_at": "2026-06-26T17:45:06.275Z",
+  "run_at": "2026-06-26T18:01:55.159Z",
   "routes": [
     {
       "route": "home",
@@ -25,7 +25,7 @@
         {
           "sel": "a.nav-item",
           "idx": 1,
-          "text": "WebSphere 日志",
+          "text": "日志助手",
           "tag": "a",
           "w": 211,
           "h": 38,
@@ -34,7 +34,7 @@
         {
           "sel": "a.nav-item",
           "idx": 2,
-          "text": "文件下载",
+          "text": "FTP文件下载",
           "tag": "a",
           "w": 211,
           "h": 38,
@@ -97,15 +97,6 @@
         {
           "sel": "a.nav-item",
           "idx": 9,
-          "text": "操作历史",
-          "tag": "a",
-          "w": 211,
-          "h": 38,
-          "cursor": "pointer"
-        },
-        {
-          "sel": "a.nav-item",
-          "idx": 10,
           "text": "时间戳",
           "tag": "a",
           "w": 211,
@@ -114,7 +105,7 @@
         },
         {
           "sel": "a.nav-item",
-          "idx": 11,
+          "idx": 10,
           "text": "Cron 解析",
           "tag": "a",
           "w": 211,
@@ -123,7 +114,7 @@
         },
         {
           "sel": "a.nav-item",
-          "idx": 12,
+          "idx": 11,
           "text": "JSONPath",
           "tag": "a",
           "w": 211,
@@ -132,8 +123,17 @@
         },
         {
           "sel": "a.nav-item",
+          "idx": 12,
+          "text": "代码比对",
+          "tag": "a",
+          "w": 211,
+          "h": 33,
+          "cursor": "pointer"
+        },
+        {
+          "sel": "a.nav-item",
           "idx": 13,
-          "text": "文本比对",
+          "text": "ℹ️ 关于",
           "tag": "a",
           "w": 211,
           "h": 33,
@@ -142,7 +142,7 @@
         {
           "sel": "[role=\"button\"]",
           "idx": 0,
-          "text": "📜已就绪WebSphere 日志助手多服务器日志并行搜索、上下文查看、实时 Tail、日志下载",
+          "text": "📜已就绪日志助手多服务器日志并行搜索、上下文查看、实时 Tail、日志下载",
           "tag": "div",
           "w": 276,
           "h": 158,
@@ -259,7 +259,7 @@
         {
           "sel": ".tool-card",
           "idx": 0,
-          "text": "📜已就绪WebSphere 日志助手多服务器日志并行搜索、上下文查看、实时 Tail、日志下载",
+          "text": "📜已就绪日志助手多服务器日志并行搜索、上下文查看、实时 Tail、日志下载",
           "tag": "div",
           "w": 276,
           "h": 158,
@@ -600,7 +600,7 @@
         {
           "sel": "a.nav-item",
           "idx": 1,
-          "text": "WebSphere 日志",
+          "text": "日志助手",
           "tag": "a",
           "w": 211,
           "h": 38,
@@ -609,7 +609,7 @@
         {
           "sel": "a.nav-item",
           "idx": 2,
-          "text": "文件下载",
+          "text": "FTP文件下载",
           "tag": "a",
           "w": 211,
           "h": 38,
@@ -672,15 +672,6 @@
         {
           "sel": "a.nav-item",
           "idx": 9,
-          "text": "操作历史",
-          "tag": "a",
-          "w": 211,
-          "h": 38,
-          "cursor": "pointer"
-        },
-        {
-          "sel": "a.nav-item",
-          "idx": 10,
           "text": "时间戳",
           "tag": "a",
           "w": 211,
@@ -689,7 +680,7 @@
         },
         {
           "sel": "a.nav-item",
-          "idx": 11,
+          "idx": 10,
           "text": "Cron 解析",
           "tag": "a",
           "w": 211,
@@ -698,7 +689,7 @@
         },
         {
           "sel": "a.nav-item",
-          "idx": 12,
+          "idx": 11,
           "text": "JSONPath",
           "tag": "a",
           "w": 211,
@@ -707,8 +698,17 @@
         },
         {
           "sel": "a.nav-item",
+          "idx": 12,
+          "text": "代码比对",
+          "tag": "a",
+          "w": 211,
+          "h": 33,
+          "cursor": "pointer"
+        },
+        {
+          "sel": "a.nav-item",
           "idx": 13,
-          "text": "文本比对",
+          "text": "ℹ️ 关于",
           "tag": "a",
           "w": 211,
           "h": 33,
@@ -826,31 +826,13 @@
           "idx": 0,
           "text": "",
           "tag": "input",
-          "w": 359,
-          "h": 36,
-          "cursor": "text"
-        },
-        {
-          "sel": "input",
-          "idx": 1,
-          "text": "",
-          "tag": "input",
-          "w": 547,
-          "h": 36,
-          "cursor": "text"
-        },
-        {
-          "sel": "input",
-          "idx": 2,
-          "text": "",
-          "tag": "input",
           "w": 24,
           "h": 24,
           "cursor": "default"
         },
         {
           "sel": "input",
-          "idx": 3,
+          "idx": 1,
           "text": "",
           "tag": "input",
           "w": 1110,
@@ -859,16 +841,16 @@
         },
         {
           "sel": "input",
-          "idx": 4,
+          "idx": 2,
           "text": "",
           "tag": "input",
-          "w": 179,
+          "w": 200,
           "h": 36,
           "cursor": "text"
         },
         {
           "sel": "input",
-          "idx": 5,
+          "idx": 3,
           "text": "",
           "tag": "input",
           "w": 24,
@@ -877,7 +859,7 @@
         },
         {
           "sel": "input",
-          "idx": 6,
+          "idx": 4,
           "text": "",
           "tag": "input",
           "w": 1110,
@@ -889,7 +871,7 @@
           "idx": 0,
           "text": "（请选择）信贷生产（模拟） · Mock",
           "tag": "select",
-          "w": 359,
+          "w": 547,
           "h": 36,
           "cursor": "default"
         },
@@ -898,7 +880,7 @@
           "idx": 1,
           "text": "（先选系统）",
           "tag": "select",
-          "w": 359,
+          "w": 547,
           "h": 36,
           "cursor": "default"
         },
@@ -914,7 +896,7 @@
         {
           "sel": "a.nav-item",
           "idx": 1,
-          "text": "WebSphere 日志",
+          "text": "日志助手",
           "tag": "a",
           "w": 211,
           "h": 38,
@@ -923,7 +905,7 @@
         {
           "sel": "a.nav-item",
           "idx": 2,
-          "text": "文件下载",
+          "text": "FTP文件下载",
           "tag": "a",
           "w": 211,
           "h": 38,
@@ -986,15 +968,6 @@
         {
           "sel": "a.nav-item",
           "idx": 9,
-          "text": "操作历史",
-          "tag": "a",
-          "w": 211,
-          "h": 38,
-          "cursor": "pointer"
-        },
-        {
-          "sel": "a.nav-item",
-          "idx": 10,
           "text": "时间戳",
           "tag": "a",
           "w": 211,
@@ -1003,7 +976,7 @@
         },
         {
           "sel": "a.nav-item",
-          "idx": 11,
+          "idx": 10,
           "text": "Cron 解析",
           "tag": "a",
           "w": 211,
@@ -1012,7 +985,7 @@
         },
         {
           "sel": "a.nav-item",
-          "idx": 12,
+          "idx": 11,
           "text": "JSONPath",
           "tag": "a",
           "w": 211,
@@ -1021,8 +994,17 @@
         },
         {
           "sel": "a.nav-item",
+          "idx": 12,
+          "text": "代码比对",
+          "tag": "a",
+          "w": 211,
+          "h": 33,
+          "cursor": "pointer"
+        },
+        {
+          "sel": "a.nav-item",
           "idx": 13,
-          "text": "文本比对",
+          "text": "ℹ️ 关于",
           "tag": "a",
           "w": 211,
           "h": 33,
@@ -1047,7 +1029,7 @@
         },
         {
           "sel": "button",
-          "idx": 1,
+          "idx": 3,
           "text": "格式化 JSON",
           "tag": "button",
           "w": 107,
@@ -1056,7 +1038,7 @@
         },
         {
           "sel": "button",
-          "idx": 2,
+          "idx": 4,
           "text": "压缩 JSON",
           "tag": "button",
           "w": 94,
@@ -1065,7 +1047,7 @@
         },
         {
           "sel": "button",
-          "idx": 3,
+          "idx": 5,
           "text": "校验 JSON",
           "tag": "button",
           "w": 94,
@@ -1074,7 +1056,7 @@
         },
         {
           "sel": "button",
-          "idx": 4,
+          "idx": 6,
           "text": "格式化 XML",
           "tag": "button",
           "w": 100,
@@ -1083,7 +1065,7 @@
         },
         {
           "sel": "button",
-          "idx": 5,
+          "idx": 7,
           "text": "压缩 XML",
           "tag": "button",
           "w": 87,
@@ -1092,7 +1074,7 @@
         },
         {
           "sel": "button",
-          "idx": 6,
+          "idx": 8,
           "text": "格式化 YAML",
           "tag": "button",
           "w": 107,
@@ -1101,7 +1083,7 @@
         },
         {
           "sel": "button",
-          "idx": 7,
+          "idx": 9,
           "text": "压缩 YAML",
           "tag": "button",
           "w": 94,
@@ -1110,7 +1092,7 @@
         },
         {
           "sel": "button",
-          "idx": 8,
+          "idx": 10,
           "text": "校验 YAML",
           "tag": "button",
           "w": 94,
@@ -1119,7 +1101,7 @@
         },
         {
           "sel": "button",
-          "idx": 9,
+          "idx": 11,
           "text": "YAML → JSON",
           "tag": "button",
           "w": 118,
@@ -1128,7 +1110,7 @@
         },
         {
           "sel": "button",
-          "idx": 10,
+          "idx": 12,
           "text": "JSON → YAML",
           "tag": "button",
           "w": 118,
@@ -1137,7 +1119,7 @@
         },
         {
           "sel": "button",
-          "idx": 11,
+          "idx": 13,
           "text": "encode（map → a=1&b=2）",
           "tag": "button",
           "w": 200,
@@ -1146,7 +1128,7 @@
         },
         {
           "sel": "button",
-          "idx": 12,
+          "idx": 14,
           "text": "decode（a=1&b=2 → map）",
           "tag": "button",
           "w": 200,
@@ -1155,7 +1137,7 @@
         },
         {
           "sel": "button",
-          "idx": 13,
+          "idx": 15,
           "text": "清空",
           "tag": "button",
           "w": 56,
@@ -1164,7 +1146,7 @@
         },
         {
           "sel": "button",
-          "idx": 14,
+          "idx": 16,
           "text": "复制结果",
           "tag": "button",
           "w": 82,
@@ -1177,7 +1159,7 @@
           "text": "",
           "tag": "textarea",
           "w": 548,
-          "h": 260,
+          "h": 320,
           "cursor": "text"
         },
         {
@@ -1186,7 +1168,7 @@
           "text": "",
           "tag": "textarea",
           "w": 548,
-          "h": 260,
+          "h": 320,
           "cursor": "text"
         },
         {
@@ -1201,7 +1183,7 @@
         {
           "sel": "a.nav-item",
           "idx": 1,
-          "text": "WebSphere 日志",
+          "text": "日志助手",
           "tag": "a",
           "w": 211,
           "h": 38,
@@ -1210,7 +1192,7 @@
         {
           "sel": "a.nav-item",
           "idx": 2,
-          "text": "文件下载",
+          "text": "FTP文件下载",
           "tag": "a",
           "w": 211,
           "h": 38,
@@ -1273,15 +1255,6 @@
         {
           "sel": "a.nav-item",
           "idx": 9,
-          "text": "操作历史",
-          "tag": "a",
-          "w": 211,
-          "h": 38,
-          "cursor": "pointer"
-        },
-        {
-          "sel": "a.nav-item",
-          "idx": 10,
           "text": "时间戳",
           "tag": "a",
           "w": 211,
@@ -1290,7 +1263,7 @@
         },
         {
           "sel": "a.nav-item",
-          "idx": 11,
+          "idx": 10,
           "text": "Cron 解析",
           "tag": "a",
           "w": 211,
@@ -1299,7 +1272,7 @@
         },
         {
           "sel": "a.nav-item",
-          "idx": 12,
+          "idx": 11,
           "text": "JSONPath",
           "tag": "a",
           "w": 211,
@@ -1308,8 +1281,17 @@
         },
         {
           "sel": "a.nav-item",
+          "idx": 12,
+          "text": "代码比对",
+          "tag": "a",
+          "w": 211,
+          "h": 33,
+          "cursor": "pointer"
+        },
+        {
+          "sel": "a.nav-item",
           "idx": 13,
-          "text": "文本比对",
+          "text": "ℹ️ 关于",
           "tag": "a",
           "w": 211,
           "h": 33,
@@ -1416,9 +1398,9 @@
         {
           "sel": "button",
           "idx": 10,
-          "text": "▶Send Ctrl+↵",
+          "text": "▶Send",
           "tag": "button",
-          "w": 156,
+          "w": 102,
           "h": 36,
           "cursor": "pointer"
         },
@@ -1679,7 +1661,7 @@
           "idx": 0,
           "text": "GETPOSTPUTDELETEHEADPATCHOPTIONS",
           "tag": "select",
-          "w": 650,
+          "w": 704,
           "h": 36,
           "cursor": "pointer"
         },
@@ -1716,7 +1698,7 @@
           "text": "",
           "tag": "textarea",
           "w": 826,
-          "h": 200,
+          "h": 240,
           "cursor": "text"
         },
         {
@@ -1731,7 +1713,7 @@
         {
           "sel": "a.nav-item",
           "idx": 1,
-          "text": "WebSphere 日志",
+          "text": "日志助手",
           "tag": "a",
           "w": 211,
           "h": 38,
@@ -1740,7 +1722,7 @@
         {
           "sel": "a.nav-item",
           "idx": 2,
-          "text": "文件下载",
+          "text": "FTP文件下载",
           "tag": "a",
           "w": 211,
           "h": 38,
@@ -1803,15 +1785,6 @@
         {
           "sel": "a.nav-item",
           "idx": 9,
-          "text": "操作历史",
-          "tag": "a",
-          "w": 211,
-          "h": 38,
-          "cursor": "pointer"
-        },
-        {
-          "sel": "a.nav-item",
-          "idx": 10,
           "text": "时间戳",
           "tag": "a",
           "w": 211,
@@ -1820,7 +1793,7 @@
         },
         {
           "sel": "a.nav-item",
-          "idx": 11,
+          "idx": 10,
           "text": "Cron 解析",
           "tag": "a",
           "w": 211,
@@ -1829,7 +1802,7 @@
         },
         {
           "sel": "a.nav-item",
-          "idx": 12,
+          "idx": 11,
           "text": "JSONPath",
           "tag": "a",
           "w": 211,
@@ -1838,8 +1811,17 @@
         },
         {
           "sel": "a.nav-item",
+          "idx": 12,
+          "text": "代码比对",
+          "tag": "a",
+          "w": 211,
+          "h": 33,
+          "cursor": "pointer"
+        },
+        {
+          "sel": "a.nav-item",
           "idx": 13,
-          "text": "文本比对",
+          "text": "ℹ️ 关于",
           "tag": "a",
           "w": 211,
           "h": 33,
@@ -6125,7 +6107,7 @@
           "idx": 0,
           "text": "",
           "tag": "input",
-          "w": 263,
+          "w": 240,
           "h": 36,
           "cursor": "text"
         },
@@ -6159,7 +6141,7 @@
         {
           "sel": "a.nav-item",
           "idx": 1,
-          "text": "WebSphere 日志",
+          "text": "日志助手",
           "tag": "a",
           "w": 211,
           "h": 38,
@@ -6168,7 +6150,7 @@
         {
           "sel": "a.nav-item",
           "idx": 2,
-          "text": "文件下载",
+          "text": "FTP文件下载",
           "tag": "a",
           "w": 211,
           "h": 38,
@@ -6231,15 +6213,6 @@
         {
           "sel": "a.nav-item",
           "idx": 9,
-          "text": "操作历史",
-          "tag": "a",
-          "w": 211,
-          "h": 38,
-          "cursor": "pointer"
-        },
-        {
-          "sel": "a.nav-item",
-          "idx": 10,
           "text": "时间戳",
           "tag": "a",
           "w": 211,
@@ -6248,7 +6221,7 @@
         },
         {
           "sel": "a.nav-item",
-          "idx": 11,
+          "idx": 10,
           "text": "Cron 解析",
           "tag": "a",
           "w": 211,
@@ -6257,7 +6230,7 @@
         },
         {
           "sel": "a.nav-item",
-          "idx": 12,
+          "idx": 11,
           "text": "JSONPath",
           "tag": "a",
           "w": 211,
@@ -6266,8 +6239,17 @@
         },
         {
           "sel": "a.nav-item",
+          "idx": 12,
+          "text": "代码比对",
+          "tag": "a",
+          "w": 211,
+          "h": 33,
+          "cursor": "pointer"
+        },
+        {
+          "sel": "a.nav-item",
           "idx": 13,
-          "text": "文本比对",
+          "text": "ℹ️ 关于",
           "tag": "a",
           "w": 211,
           "h": 33,
@@ -8426,7 +8408,7 @@
         {
           "sel": "a.nav-item",
           "idx": 1,
-          "text": "WebSphere 日志",
+          "text": "日志助手",
           "tag": "a",
           "w": 211,
           "h": 38,
@@ -8435,7 +8417,7 @@
         {
           "sel": "a.nav-item",
           "idx": 2,
-          "text": "文件下载",
+          "text": "FTP文件下载",
           "tag": "a",
           "w": 211,
           "h": 38,
@@ -8498,15 +8480,6 @@
         {
           "sel": "a.nav-item",
           "idx": 9,
-          "text": "操作历史",
-          "tag": "a",
-          "w": 211,
-          "h": 38,
-          "cursor": "pointer"
-        },
-        {
-          "sel": "a.nav-item",
-          "idx": 10,
           "text": "时间戳",
           "tag": "a",
           "w": 211,
@@ -8515,7 +8488,7 @@
         },
         {
           "sel": "a.nav-item",
-          "idx": 11,
+          "idx": 10,
           "text": "Cron 解析",
           "tag": "a",
           "w": 211,
@@ -8524,7 +8497,7 @@
         },
         {
           "sel": "a.nav-item",
-          "idx": 12,
+          "idx": 11,
           "text": "JSONPath",
           "tag": "a",
           "w": 211,
@@ -8533,8 +8506,17 @@
         },
         {
           "sel": "a.nav-item",
+          "idx": 12,
+          "text": "代码比对",
+          "tag": "a",
+          "w": 211,
+          "h": 33,
+          "cursor": "pointer"
+        },
+        {
+          "sel": "a.nav-item",
           "idx": 13,
-          "text": "文本比对",
+          "text": "ℹ️ 关于",
           "tag": "a",
           "w": 211,
           "h": 33,
@@ -8805,7 +8787,7 @@
           "idx": 0,
           "text": "",
           "tag": "input",
-          "w": 407,
+          "w": 460,
           "h": 36,
           "cursor": "text"
         },
@@ -8814,7 +8796,7 @@
           "idx": 1,
           "text": "",
           "tag": "input",
-          "w": 168,
+          "w": 203,
           "h": 36,
           "cursor": "text"
         },
@@ -8911,7 +8893,7 @@
         {
           "sel": "select",
           "idx": 0,
-          "text": "password（密码）",
+          "text": "密码",
           "tag": "select",
           "w": 203,
           "h": 36,
@@ -8920,7 +8902,7 @@
         {
           "sel": "select",
           "idx": 1,
-          "text": "utf-8（默认）gbk（远程是 GBK）",
+          "text": "utf-8gbk",
           "tag": "select",
           "w": 200,
           "h": 36,
@@ -8929,7 +8911,7 @@
         {
           "sel": "select",
           "idx": 2,
-          "text": "utf-8（默认）gbk（远程是 GBK）",
+          "text": "utf-8gbk",
           "tag": "select",
           "w": 200,
           "h": 36,
@@ -8941,7 +8923,7 @@
           "text": "",
           "tag": "textarea",
           "w": 1014,
-          "h": 60,
+          "h": 72,
           "cursor": "text"
         },
         {
@@ -8950,7 +8932,7 @@
           "text": "",
           "tag": "textarea",
           "w": 1014,
-          "h": 60,
+          "h": 72,
           "cursor": "text"
         },
         {
@@ -8965,7 +8947,7 @@
         {
           "sel": "a.nav-item",
           "idx": 1,
-          "text": "WebSphere 日志",
+          "text": "日志助手",
           "tag": "a",
           "w": 211,
           "h": 38,
@@ -8974,7 +8956,7 @@
         {
           "sel": "a.nav-item",
           "idx": 2,
-          "text": "文件下载",
+          "text": "FTP文件下载",
           "tag": "a",
           "w": 211,
           "h": 38,
@@ -9037,15 +9019,6 @@
         {
           "sel": "a.nav-item",
           "idx": 9,
-          "text": "操作历史",
-          "tag": "a",
-          "w": 211,
-          "h": 38,
-          "cursor": "pointer"
-        },
-        {
-          "sel": "a.nav-item",
-          "idx": 10,
           "text": "时间戳",
           "tag": "a",
           "w": 211,
@@ -9054,7 +9027,7 @@
         },
         {
           "sel": "a.nav-item",
-          "idx": 11,
+          "idx": 10,
           "text": "Cron 解析",
           "tag": "a",
           "w": 211,
@@ -9063,7 +9036,7 @@
         },
         {
           "sel": "a.nav-item",
-          "idx": 12,
+          "idx": 11,
           "text": "JSONPath",
           "tag": "a",
           "w": 211,
@@ -9072,8 +9045,17 @@
         },
         {
           "sel": "a.nav-item",
+          "idx": 12,
+          "text": "代码比对",
+          "tag": "a",
+          "w": 211,
+          "h": 33,
+          "cursor": "pointer"
+        },
+        {
+          "sel": "a.nav-item",
           "idx": 13,
-          "text": "文本比对",
+          "text": "ℹ️ 关于",
           "tag": "a",
           "w": 211,
           "h": 33,
@@ -9180,7 +9162,7 @@
         {
           "sel": "a.nav-item",
           "idx": 1,
-          "text": "WebSphere 日志",
+          "text": "日志助手",
           "tag": "a",
           "w": 211,
           "h": 38,
@@ -9189,7 +9171,7 @@
         {
           "sel": "a.nav-item",
           "idx": 2,
-          "text": "文件下载",
+          "text": "FTP文件下载",
           "tag": "a",
           "w": 211,
           "h": 38,
@@ -9252,15 +9234,6 @@
         {
           "sel": "a.nav-item",
           "idx": 9,
-          "text": "操作历史",
-          "tag": "a",
-          "w": 211,
-          "h": 38,
-          "cursor": "pointer"
-        },
-        {
-          "sel": "a.nav-item",
-          "idx": 10,
           "text": "时间戳",
           "tag": "a",
           "w": 211,
@@ -9269,7 +9242,7 @@
         },
         {
           "sel": "a.nav-item",
-          "idx": 11,
+          "idx": 10,
           "text": "Cron 解析",
           "tag": "a",
           "w": 211,
@@ -9278,7 +9251,7 @@
         },
         {
           "sel": "a.nav-item",
-          "idx": 12,
+          "idx": 11,
           "text": "JSONPath",
           "tag": "a",
           "w": 211,
@@ -9287,8 +9260,17 @@
         },
         {
           "sel": "a.nav-item",
+          "idx": 12,
+          "text": "代码比对",
+          "tag": "a",
+          "w": 211,
+          "h": 33,
+          "cursor": "pointer"
+        },
+        {
+          "sel": "a.nav-item",
           "idx": 13,
-          "text": "文本比对",
+          "text": "ℹ️ 关于",
           "tag": "a",
           "w": 211,
           "h": 33,
@@ -9404,7 +9386,7 @@
         {
           "sel": "a.nav-item",
           "idx": 1,
-          "text": "WebSphere 日志",
+          "text": "日志助手",
           "tag": "a",
           "w": 211,
           "h": 38,
@@ -9413,7 +9395,7 @@
         {
           "sel": "a.nav-item",
           "idx": 2,
-          "text": "文件下载",
+          "text": "FTP文件下载",
           "tag": "a",
           "w": 211,
           "h": 38,
@@ -9476,15 +9458,6 @@
         {
           "sel": "a.nav-item",
           "idx": 9,
-          "text": "操作历史",
-          "tag": "a",
-          "w": 211,
-          "h": 38,
-          "cursor": "pointer"
-        },
-        {
-          "sel": "a.nav-item",
-          "idx": 10,
           "text": "时间戳",
           "tag": "a",
           "w": 211,
@@ -9493,7 +9466,7 @@
         },
         {
           "sel": "a.nav-item",
-          "idx": 11,
+          "idx": 10,
           "text": "Cron 解析",
           "tag": "a",
           "w": 211,
@@ -9502,7 +9475,7 @@
         },
         {
           "sel": "a.nav-item",
-          "idx": 12,
+          "idx": 11,
           "text": "JSONPath",
           "tag": "a",
           "w": 211,
@@ -9511,8 +9484,17 @@
         },
         {
           "sel": "a.nav-item",
+          "idx": 12,
+          "text": "代码比对",
+          "tag": "a",
+          "w": 211,
+          "h": 33,
+          "cursor": "pointer"
+        },
+        {
+          "sel": "a.nav-item",
           "idx": 13,
-          "text": "文本比对",
+          "text": "ℹ️ 关于",
           "tag": "a",
           "w": 211,
           "h": 33,
@@ -9682,7 +9664,7 @@
         {
           "sel": "a.nav-item",
           "idx": 1,
-          "text": "WebSphere 日志",
+          "text": "日志助手",
           "tag": "a",
           "w": 211,
           "h": 38,
@@ -9691,7 +9673,7 @@
         {
           "sel": "a.nav-item",
           "idx": 2,
-          "text": "文件下载",
+          "text": "FTP文件下载",
           "tag": "a",
           "w": 211,
           "h": 38,
@@ -9754,15 +9736,6 @@
         {
           "sel": "a.nav-item",
           "idx": 9,
-          "text": "操作历史",
-          "tag": "a",
-          "w": 211,
-          "h": 38,
-          "cursor": "pointer"
-        },
-        {
-          "sel": "a.nav-item",
-          "idx": 10,
           "text": "时间戳",
           "tag": "a",
           "w": 211,
@@ -9771,7 +9744,7 @@
         },
         {
           "sel": "a.nav-item",
-          "idx": 11,
+          "idx": 10,
           "text": "Cron 解析",
           "tag": "a",
           "w": 211,
@@ -9780,7 +9753,7 @@
         },
         {
           "sel": "a.nav-item",
-          "idx": 12,
+          "idx": 11,
           "text": "JSONPath",
           "tag": "a",
           "w": 211,
@@ -9789,8 +9762,17 @@
         },
         {
           "sel": "a.nav-item",
+          "idx": 12,
+          "text": "代码比对",
+          "tag": "a",
+          "w": 211,
+          "h": 33,
+          "cursor": "pointer"
+        },
+        {
+          "sel": "a.nav-item",
           "idx": 13,
-          "text": "文本比对",
+          "text": "ℹ️ 关于",
           "tag": "a",
           "w": 211,
           "h": 33,
@@ -9960,7 +9942,7 @@
         {
           "sel": "a.nav-item",
           "idx": 1,
-          "text": "WebSphere 日志",
+          "text": "日志助手",
           "tag": "a",
           "w": 211,
           "h": 38,
@@ -9969,7 +9951,7 @@
         {
           "sel": "a.nav-item",
           "idx": 2,
-          "text": "文件下载",
+          "text": "FTP文件下载",
           "tag": "a",
           "w": 211,
           "h": 38,
@@ -10032,15 +10014,6 @@
         {
           "sel": "a.nav-item",
           "idx": 9,
-          "text": "操作历史",
-          "tag": "a",
-          "w": 211,
-          "h": 38,
-          "cursor": "pointer"
-        },
-        {
-          "sel": "a.nav-item",
-          "idx": 10,
           "text": "时间戳",
           "tag": "a",
           "w": 211,
@@ -10049,7 +10022,7 @@
         },
         {
           "sel": "a.nav-item",
-          "idx": 11,
+          "idx": 10,
           "text": "Cron 解析",
           "tag": "a",
           "w": 211,
@@ -10058,7 +10031,7 @@
         },
         {
           "sel": "a.nav-item",
-          "idx": 12,
+          "idx": 11,
           "text": "JSONPath",
           "tag": "a",
           "w": 211,
@@ -10067,8 +10040,17 @@
         },
         {
           "sel": "a.nav-item",
+          "idx": 12,
+          "text": "代码比对",
+          "tag": "a",
+          "w": 211,
+          "h": 33,
+          "cursor": "pointer"
+        },
+        {
+          "sel": "a.nav-item",
           "idx": 13,
-          "text": "文本比对",
+          "text": "ℹ️ 关于",
           "tag": "a",
           "w": 211,
           "h": 33,
@@ -10184,7 +10166,7 @@
         {
           "sel": "a.nav-item",
           "idx": 1,
-          "text": "WebSphere 日志",
+          "text": "日志助手",
           "tag": "a",
           "w": 211,
           "h": 38,
@@ -10193,7 +10175,7 @@
         {
           "sel": "a.nav-item",
           "idx": 2,
-          "text": "文件下载",
+          "text": "FTP文件下载",
           "tag": "a",
           "w": 211,
           "h": 38,
@@ -10256,15 +10238,6 @@
         {
           "sel": "a.nav-item",
           "idx": 9,
-          "text": "操作历史",
-          "tag": "a",
-          "w": 211,
-          "h": 38,
-          "cursor": "pointer"
-        },
-        {
-          "sel": "a.nav-item",
-          "idx": 10,
           "text": "时间戳",
           "tag": "a",
           "w": 211,
@@ -10273,7 +10246,7 @@
         },
         {
           "sel": "a.nav-item",
-          "idx": 11,
+          "idx": 10,
           "text": "Cron 解析",
           "tag": "a",
           "w": 211,
@@ -10282,7 +10255,7 @@
         },
         {
           "sel": "a.nav-item",
-          "idx": 12,
+          "idx": 11,
           "text": "JSONPath",
           "tag": "a",
           "w": 211,
@@ -10291,8 +10264,17 @@
         },
         {
           "sel": "a.nav-item",
+          "idx": 12,
+          "text": "代码比对",
+          "tag": "a",
+          "w": 211,
+          "h": 33,
+          "cursor": "pointer"
+        },
+        {
+          "sel": "a.nav-item",
           "idx": 13,
-          "text": "文本比对",
+          "text": "ℹ️ 关于",
           "tag": "a",
           "w": 211,
           "h": 33,
@@ -10318,19 +10300,19 @@
         {
           "sel": "button",
           "idx": 1,
-          "text": "选择本地文件",
+          "text": "文本比对",
           "tag": "button",
-          "w": 108,
+          "w": 82,
           "h": 36,
           "cursor": "pointer"
         },
         {
           "sel": "button",
           "idx": 2,
-          "text": "清",
+          "text": "文件夹比对",
           "tag": "button",
-          "w": 34,
-          "h": 30,
+          "w": 95,
+          "h": 36,
           "cursor": "pointer"
         },
         {
@@ -10345,15 +10327,33 @@
         {
           "sel": "button",
           "idx": 4,
-          "text": "清",
+          "text": "清空",
           "tag": "button",
-          "w": 34,
+          "w": 46,
           "h": 30,
           "cursor": "pointer"
         },
         {
           "sel": "button",
           "idx": 5,
+          "text": "选择本地文件",
+          "tag": "button",
+          "w": 108,
+          "h": 36,
+          "cursor": "pointer"
+        },
+        {
+          "sel": "button",
+          "idx": 6,
+          "text": "清空",
+          "tag": "button",
+          "w": 46,
+          "h": 30,
+          "cursor": "pointer"
+        },
+        {
+          "sel": "button",
+          "idx": 7,
           "text": "开始比对",
           "tag": "button",
           "w": 82,
@@ -10362,7 +10362,7 @@
         },
         {
           "sel": "button",
-          "idx": 6,
+          "idx": 8,
           "text": "交换左右",
           "tag": "button",
           "w": 82,
@@ -10371,7 +10371,7 @@
         },
         {
           "sel": "button",
-          "idx": 7,
+          "idx": 9,
           "text": "清空全部",
           "tag": "button",
           "w": 82,
@@ -10380,7 +10380,7 @@
         },
         {
           "sel": "button",
-          "idx": 8,
+          "idx": 10,
           "text": "复制 diff",
           "tag": "button",
           "w": 80,
@@ -10389,7 +10389,7 @@
         },
         {
           "sel": "button",
-          "idx": 9,
+          "idx": 11,
           "text": "下载 .diff 文件",
           "tag": "button",
           "w": 113,
@@ -10480,7 +10480,7 @@
         {
           "sel": "a.nav-item",
           "idx": 1,
-          "text": "WebSphere 日志",
+          "text": "日志助手",
           "tag": "a",
           "w": 211,
           "h": 38,
@@ -10489,7 +10489,7 @@
         {
           "sel": "a.nav-item",
           "idx": 2,
-          "text": "文件下载",
+          "text": "FTP文件下载",
           "tag": "a",
           "w": 211,
           "h": 38,
@@ -10552,15 +10552,6 @@
         {
           "sel": "a.nav-item",
           "idx": 9,
-          "text": "操作历史",
-          "tag": "a",
-          "w": 211,
-          "h": 38,
-          "cursor": "pointer"
-        },
-        {
-          "sel": "a.nav-item",
-          "idx": 10,
           "text": "时间戳",
           "tag": "a",
           "w": 211,
@@ -10569,7 +10560,7 @@
         },
         {
           "sel": "a.nav-item",
-          "idx": 11,
+          "idx": 10,
           "text": "Cron 解析",
           "tag": "a",
           "w": 211,
@@ -10578,7 +10569,7 @@
         },
         {
           "sel": "a.nav-item",
-          "idx": 12,
+          "idx": 11,
           "text": "JSONPath",
           "tag": "a",
           "w": 211,
@@ -10587,8 +10578,17 @@
         },
         {
           "sel": "a.nav-item",
+          "idx": 12,
+          "text": "代码比对",
+          "tag": "a",
+          "w": 211,
+          "h": 33,
+          "cursor": "pointer"
+        },
+        {
+          "sel": "a.nav-item",
           "idx": 13,
-          "text": "文本比对",
+          "text": "ℹ️ 关于",
           "tag": "a",
           "w": 211,
           "h": 33,

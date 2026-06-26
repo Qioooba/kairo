@@ -85,25 +85,15 @@ func (s *Server) TriggerCleanup() {
 	}
 }
 
-// StartPeriodicCleanup 启动定期清理 goroutine：
-//   - 启动后立即清理一次
-//   - 之后每小时清理一次
+// StartPeriodicCleanup 启动下载清理：启动时清理一次。
 //
 // 通常在 main.go 中 HTTP 服务启动前调用。
+// 每次下载完成后也会触发检查（见 TriggerCleanup）。
 func (s *Server) StartPeriodicCleanup() {
 	// 启动时立即清理一次
 	go func() {
 		time.Sleep(500 * time.Millisecond) // 等服务初始化完
 		s.TriggerCleanup()
-	}()
-
-	// 每小时定期清理
-	go func() {
-		ticker := time.NewTicker(1 * time.Hour)
-		defer ticker.Stop()
-		for range ticker.C {
-			s.TriggerCleanup()
-		}
 	}()
 }
 
@@ -209,6 +199,14 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleLocalOpenFolder(w, r)
 	case path == "/api/local/open-with":
 		s.handleLocalOpenWith(w, r)
+	case path == "/api/choose-file":
+		s.handleChooseFile(w, r)
+	case path == "/api/choose-dir":
+		s.handleChooseDir(w, r)
+	case path == "/api/compare/folder-scan":
+		s.handleCompareFolderScan(w, r)
+	case path == "/api/compare/file-diff":
+		s.handleCompareFileDiff(w, r)
 	case path == "/api/admin/openers":
 		s.handleAdminOpeners(w, r)
 	case path == "/api/admin/download-retention":

@@ -50,8 +50,6 @@
       });
     }
 
-    view.appendChild(el('h3', { text: '下载历史' }));
-    view.appendChild(el('div', { class: 'card-desc', text: 'downloads/ 目录里所有已下载的日志。点文件可重新下载，点删除可移除。' }));
     view.appendChild(el('div', { class: 'grid-2 mt-2' }, [
       el('div', null, [el('label', { text: '业务系统' }), sysSel]),
       el('div', null, [el('label', { text: '服务器' }), srvSel])
@@ -134,7 +132,6 @@
         const fromFile = f.kind === 'zip'
           ? '📦 ' + (f.files && f.files.length ? f.files.length + ' 个文件' : 'zip')
           : (f.file || '?');
-        const dl = el('a', { href: '/downloads/' + encodeURIComponent(f.name), text: '⤓ 下载' });
         const del = el('button', { class: 'btn btn-sm btn-danger', text: '删除',
           onclick: () => doDelete(f, load) });
         const openDir = el('button', { class: 'btn btn-sm', text: '📂 打开所在目录',
@@ -157,7 +154,7 @@
           el('td', { class: 'muted', text: f.downloaded_at || f.mod_time || '-' }),
           buildFromCell(fromServer, fromDir, fromFile),
           el('td', { class: 'actions', style: 'display:flex; gap:6px; flex-wrap:wrap;' },
-            [dl, openDir, ...openerBtns, del])
+            [openDir, ...openerBtns, del])
         ]));
       });
       tbl.appendChild(tbody);
@@ -169,13 +166,8 @@
     // 对于 .log / .txt / .json / .xml / .csv 等纯文本，浏览器直接渲染；对于二进制或 zip，右键另存。
     function buildNameCell(f) {
       const td = el('td');
-      const href = '/downloads/' + encodeURIComponent(f.name);
-      // 用 <a target="_blank">，浏览器会在新 tab 打开；纯文本自动渲染，二进制触发下载。
-      // rel="noopener noreferrer" 防 window.opener 漏洞。
-      const link = el('a', { href: href, target: '_blank', rel: 'noopener noreferrer', title: '点开新窗口预览（纯文本浏览器直接显示；zip/二进制会触发下载）' },
-        el('code', { text: f.name || '' })
-      );
-      td.appendChild(link);
+      const codeEl = el('code', { text: f.name || '' });
+      td.appendChild(codeEl);
       if (f.kind === 'zip') {
         td.appendChild(document.createTextNode(' '));
         td.appendChild(el('span', { class: 'tag', text: 'zip' }));

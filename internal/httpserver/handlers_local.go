@@ -195,3 +195,39 @@ func (s *Server) handleLocalOpenWith(w http.ResponseWriter, r *http.Request) {
 		"cmd":    op.Path,
 	})
 }
+
+func (s *Server) handleChooseFile(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeErr(w, 405, errors.New("仅支持 POST"))
+		return
+	}
+	path, err := chooseFile()
+	if err != nil {
+		writeErr(w, 500, err)
+		return
+	}
+	if path == "" {
+		writeJSON(w, 200, map[string]any{"ok": true, "path": ""})
+		return
+	}
+	s.audit.Write("local.choose_file", "path", path, "result", "ok")
+	writeJSON(w, 200, map[string]any{"ok": true, "path": path})
+}
+
+func (s *Server) handleChooseDir(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeErr(w, 405, errors.New("仅支持 POST"))
+		return
+	}
+	path, err := chooseDir()
+	if err != nil {
+		writeErr(w, 500, err)
+		return
+	}
+	if path == "" {
+		writeJSON(w, 200, map[string]any{"ok": true, "path": ""})
+		return
+	}
+	s.audit.Write("local.choose_dir", "path", path, "result", "ok")
+	writeJSON(w, 200, map[string]any{"ok": true, "path": path})
+}

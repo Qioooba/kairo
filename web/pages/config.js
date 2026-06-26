@@ -204,9 +204,7 @@
     function renderSystemBlock(sys, si) {
       const wrap = el('div', { class: 'sys-block' });
       const nameInp = el('input', { type: 'text', value: sys.name || '', placeholder: '业务系统名（必填）' });
-      const descInp = el('input', { type: 'text', value: sys.description || '', placeholder: '描述（可选）' });
       nameInp.addEventListener('input', () => { sys.name = nameInp.value; markDirty(); });
-      descInp.addEventListener('input', () => { sys.description = descInp.value; markDirty(); });
       const btnUp = el('button', { class: 'btn btn-sm', text: '↑', title: '上移', onclick: () => { if (si > 0) { [state.systems[si-1], state.systems[si]] = [state.systems[si], state.systems[si-1]]; markDirty(); renderEditor(); } } });
       // P0-2 修复：下移逻辑写反了（右侧用了 si-1 而非 si+1），导致数组越位破坏
       const btnDown = el('button', { class: 'btn btn-sm', text: '↓', title: '下移', onclick: () => { if (si < state.systems.length - 1) { [state.systems[si+1], state.systems[si]] = [state.systems[si], state.systems[si+1]]; markDirty(); renderEditor(); } } });
@@ -231,7 +229,6 @@
         sysBadge,
         el('span', { class: 'sys-tag', text: '系统' }),
         el('div', { class: 'sys-name-input' }, nameInp),
-        el('div', { class: 'sys-desc-input' }, descInp),
         el('div', { class: 'sys-actions' }, [btnUp, btnDown, btnDup, btnDel])
       ]));
 
@@ -255,7 +252,8 @@
         ['host', 'IP / 主机', 'text'],
         ['port', 'SSH 端口', 'number'],
         ['username', 'SSH 用户名', 'text'],
-        ['auth_type', '认证方式', 'select', [['password', 'password（密码）']]]
+        ['auth_type', '认证方式', 'select', [['password', '密码']]],
+        ['password', 'SSH密码', 'password']
       ];
       const inputMap = {};
       const fieldRow = el('div', { class: 'srv-fields' });
@@ -332,23 +330,11 @@
       wrap.appendChild(el('div', { class: 'tier-badge tier-dir', text: '日志目录 ' + (ldi + 1) }));
       const nameInp = el('input', { type: 'text', value: ld.name || '', placeholder: '目录别名（必填）' });
       const pathInp = el('input', { type: 'text', value: ld.path || '', placeholder: '远端绝对路径（必填）' });
-      // v0.5 #5：在 dir-block 顶部加一段字段说明，让用户不必翻文档就知道每个字段干嘛。
-      const hint = el('div', { class: 'card-desc', style: 'margin-bottom: 6px; font-size: 12px; color: var(--text-dim);' }, [
-        el('div', null, [
-          el('strong', { text: '目录别名 ' }),
-          el('span', { text: '— 页面上显示的名字（如"应用日志"/"GC 日志"）' })
-        ]),
-        el('div', null, [
-          el('strong', { text: '远端路径 ' }),
-          el('span', { text: '— 服务器上的绝对目录（如 /opt/IBM/.../logs/server1）' })
-        ])
-      ]);
-      wrap.appendChild(hint);
       const encSel = el('select');
       encSel.title = '日志文件的字符编码：中文乱码时改 gbk。';
       [
-        ['utf-8', 'utf-8（默认）'],
-        ['gbk', 'gbk（远程是 GBK）']
+        ['utf-8', 'utf-8'],
+        ['gbk', 'gbk']
       ].forEach(([v, t]) => {
         encSel.appendChild(el('option', { value: v, text: t }));
       });
@@ -358,15 +344,21 @@
       const wantEnc = (ld.encoding || 'utf-8').toLowerCase();
       encSel.value = (wantEnc === 'gbk') ? 'gbk' : 'utf-8';
       if (ld.encoding !== encSel.value) ld.encoding = encSel.value;
-      const patTa = el('textarea', { rows: '2', placeholder: '文件名规则，每行一条，支持 glob 通配符 (* ? [abc])。\n例如：\n  SystemOut*.log\n  *.log\n  error_*.txt' });
+      const patTa = el('textarea', { rows: '4', placeholder: '文件名规则，每行一条，支持 glob 通配符 (* ? [abc])。\n例如：\n  SystemOut*.log\n  *.log\n  error_*.txt' });
       patTa.value = (ld.patterns || []).join('\n');
-      nameInp.addEventListener('input', () => { ld.name = nameInp.value; onEdit(); });
-      pathInp.addEventListener('input', () => { ld.path = pathInp.value; onEdit(); });
-      encSel.addEventListener('change', () => { ld.encoding = encSel.value; onEdit(); });
+      function autoResizeTa() {
+        patTa.style.height = 'auto';
+        patTa.style.height = patTa.scrollHeight + 'px';
+      }
       patTa.addEventListener('input', () => {
         ld.patterns = patTa.value.split('\n').map(s => s.trim()).filter(Boolean);
         onEdit();
+        autoResizeTa();
       });
+      setTimeout(autoResizeTa, 0);
+      nameInp.addEventListener('input', () => { ld.name = nameInp.value; onEdit(); });
+      pathInp.addEventListener('input', () => { ld.path = pathInp.value; onEdit(); });
+      encSel.addEventListener('change', () => { ld.encoding = encSel.value; onEdit(); });
       wrap.appendChild(el('div', { class: 'dir-fields' }, [
         el('label', null, [el('span', { class: 'lbl', text: '目录别名' }), nameInp]),
         el('label', null, [el('span', { class: 'lbl', text: '远端路径' }), pathInp]),
@@ -386,6 +378,31 @@
       return wrap;
     }
 
+    function inferIconFromPath(path, name) {
+      const s = (path + ' ' + name).toLowerCase();
+      if (s.includes('code') || s.includes('vscode') || s.includes('vs ')) return '💙';
+      if (s.includes('notepad') || s.includes('npp')) return '📋';
+      if (s.includes('idea') || s.includes('intellij')) return '🧡';
+      if (s.includes('vim') || s.includes('nvim')) return '🖤';
+      if (s.includes('sublime')) return '🟣';
+      if (s.includes('terminal') || s.includes('cmd') || s.includes('powershell') || s.includes('iterm')) return '⌨️';
+      if (s.includes('excel') || s.includes('xlsx')) return '📊';
+      if (s.includes('word') || s.includes('docx')) return '📄';
+      return '📎';
+    }
+
+    async function saveOpenerRow(op) {
+      try {
+        await api('PUT', '/api/admin/openers', { openers: state.openers });
+        state.dirty = false;
+        OTB.state.unsavedConfig = false;
+        syncSaveBtns();
+        toast('已保存', 'ok');
+      } catch (e) {
+        toast('保存失败：' + e.message, 'err');
+      }
+    }
+
     function renderOpeners() {
       openersBody.innerHTML = '';
       if (!state.openers || state.openers.length === 0) {
@@ -394,23 +411,50 @@
       }
       const list = el('div');
       state.openers.forEach((op, idx) => {
+        if (!op.icon) op.icon = inferIconFromPath(op.path || '', op.name || '');
+        const iconSpan = el('span', { style: 'font-size:20px; width:28px; text-align:center; flex-shrink:0; cursor:default;', text: op.icon, title: '图标根据路径自动推断' });
+
         const row = el('div', { class: 'opener-row', style: 'display:flex; gap:8px; margin-bottom:8px; align-items:center;' });
-        const nameInp = el('input', { type: 'text', value: op.name || '', placeholder: '名称（如 VS Code）', style: 'flex:1;' });
-        const iconInp = el('input', { type: 'text', value: op.icon || '', placeholder: '📝', style: 'width:60px; text-align:center;' });
-        const pathInp = el('input', { type: 'text', value: op.path || '', placeholder: '可执行文件绝对路径', style: 'flex:2;' });
-        const btnDel = el('button', { class: 'btn btn-sm btn-danger', text: '删除', onclick: () => {
+        const nameInp = el('input', { type: 'text', value: op.name || '', placeholder: '名称（如 Notepad++）', style: 'flex:1;' });
+
+        const pathWrap = el('div', { style: 'flex:2; display:flex; gap:4px; position:relative;' });
+        const pathInp = el('input', { type: 'text', value: op.path || '', placeholder: '可执行文件路径（如 C:\\Windows\\notepad.exe 或 /usr/bin/code）', style: 'flex:1;' });
+        const btnBrowse = el('button', { class: 'btn btn-sm', text: '📂', title: '选择文件', type: 'button', style: 'flex-shrink:0;' });
+        btnBrowse.addEventListener('click', async () => {
+          try {
+            const r = await api('POST', '/api/choose-file');
+            if (r && r.path) {
+              pathInp.value = r.path;
+              op.path = r.path;
+              markDirty();
+              updateIcon();
+            }
+          } catch (e) { /* ignore */ }
+        });
+        pathWrap.appendChild(pathInp);
+        pathWrap.appendChild(btnBrowse);
+
+        const btnSave = el('button', { class: 'btn btn-sm', text: '💾 保存', type: 'button', onclick: () => saveOpenerRow(op) });
+        const btnDel = el('button', { class: 'btn btn-sm btn-danger', text: '删除', type: 'button', onclick: () => {
           if (confirm('确认删除打开器 "' + (op.name || '(未命名)') + '"？')) {
             state.openers.splice(idx, 1);
             markDirty();
             renderOpeners();
           }
         }});
-        nameInp.addEventListener('input', () => { op.name = nameInp.value; markDirty(); });
-        iconInp.addEventListener('input', () => { op.icon = iconInp.value; markDirty(); });
-        pathInp.addEventListener('input', () => { op.path = pathInp.value; markDirty(); });
+
+        function updateIcon() {
+          op.icon = inferIconFromPath(op.path || '', op.name || '');
+          iconSpan.textContent = op.icon;
+        }
+
+        nameInp.addEventListener('input', () => { op.name = nameInp.value; markDirty(); updateIcon(); });
+        pathInp.addEventListener('input', () => { op.path = pathInp.value; markDirty(); updateIcon(); });
+
+        row.appendChild(iconSpan);
         row.appendChild(nameInp);
-        row.appendChild(iconInp);
-        row.appendChild(pathInp);
+        row.appendChild(pathWrap);
+        row.appendChild(btnSave);
         row.appendChild(btnDel);
         list.appendChild(row);
       });
@@ -449,7 +493,7 @@
       row.appendChild(daysWrap);
       row.appendChild(countWrap);
       retentionBody.appendChild(row);
-      retentionBody.appendChild(el('div', { class: 'card-desc', style: 'margin-top:8px;', text: '提示：系统启动时会清理一次，每小时自动巡检；每次下载完成后也会触发检查。' }));
+      retentionBody.appendChild(el('div', { class: 'card-desc', style: 'margin-top:8px;', text: '提示：系统启动时自动清理一次；每次下载完成后也会触发检查。' }));
     }
 
     // ----- 保存 / 重置 -----

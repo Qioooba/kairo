@@ -35,7 +35,7 @@ func (s *Server) handleSSHTest(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, errors.New("系统或服务器不存在"))
 		return
 	}
-	creds, err := s.resolveCreds(req.Username, req.Password, req.System, req.Server, srv.Username)
+	creds, err := s.resolveCreds(req.Username, req.Password, req.System, req.Server, srv.Username, srv.Password)
 	if err != nil {
 		writeErr(w, 400, err)
 		return

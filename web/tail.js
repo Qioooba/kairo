@@ -49,14 +49,21 @@
   const loginForm = $('#tail-login');
   const userInp = $('#tail-user');
   const passInp = $('#tail-pass');
-  function showLogin() {
+  let pendingCredResolve = null;
+  function showLogin(resolve) {
     if (!loginForm) return;
+    pendingCredResolve = typeof resolve === 'function' ? resolve : null;
     loginForm.style.display = 'flex';
     setConn('idle', '等待凭据');
     setTimeout(() => userInp && userInp.focus(), 0);
   }
   function hideLogin() {
     if (loginForm) loginForm.style.display = 'none';
+  }
+
+  // keyring 没有命中时，用页面内表单兜底，避免 prompt 被嵌入式浏览器拦截。
+  function askCred() {
+    return new Promise((resolve) => showLogin(resolve));
   }
 
   const tailOut = $('#tail-out');
@@ -204,16 +211,19 @@
     }
   });
 
-  async function start(cred) {
+  async function start() {
     if (!system || !server || !dir || !file) {
       toast('参数缺失：system / server / dir / file', 'err');
       setConn('err', '参数缺失');
       return;
     }
-    if (!cred || !cred.password) {
-      showLogin();
-      return;
-    }
+    let cred = getOpenerCred();
+    // 第一次尝试：优先用 opener 传来的凭据；如果没有，先用空凭据让后端从 keyring 取
+    // 只有后端明确返回"缺少密码"时，才弹内联表单让用户输入
+    await startWithCred(cred || { username: '', password: '' }, true);
+  }
+
+  async function startWithCred(cred, allowAsk) {
     hideLogin();
     setConn('busy', '启动中…');
     try {
@@ -227,7 +237,18 @@
         })
       });
       const data = await r.json();
-      if (!r.ok) throw new Error(data && data.error || ('HTTP ' + r.status));
+      if (!r.ok) {
+        const errMsg = (data && data.error) || ('HTTP ' + r.status);
+        // 缺少密码 → 展示页面内凭据表单（如果允许）
+        if (allowAsk && /缺少密码|密码|凭据/.test(errMsg)) {
+          const newCred = await askCred();
+          if (newCred) {
+            await startWithCred(newCred, false);
+            return;
+          }
+        }
+        throw new Error(errMsg);
+      }
       tailId = data.id;
       setConn('ok', '已连接 · id=' + tailId);
       viewer.clear();
@@ -276,10 +297,15 @@
         toast('请输入 SSH 用户名和密码', 'warn');
         return;
       }
-      start(cred);
+      hideLogin();
+      if (pendingCredResolve) {
+        const resolve = pendingCredResolve;
+        pendingCredResolve = null;
+        resolve(cred);
+      } else {
+        startWithCred(cred, false);
+      }
     });
   }
-  const openerCred = getOpenerCred();
-  if (openerCred && openerCred.password) start(openerCred);
-  else showLogin();
+  start();
 })();

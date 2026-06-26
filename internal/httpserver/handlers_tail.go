@@ -52,7 +52,7 @@ func (s *Server) handleTailStart(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, errors.New("file 不能为空"))
 		return
 	}
-	creds, err := s.resolveCreds(req.Username, req.Password, req.System, req.Server, srv.Username)
+	creds, err := s.resolveCreds(req.Username, req.Password, req.System, req.Server, srv.Username, srv.Password)
 	if err != nil {
 		writeErr(w, 400, err)
 		return
@@ -155,7 +155,16 @@ func (s *Server) streamTailEvents(w http.ResponseWriter, r *http.Request, id str
 				flusher.Flush()
 				return
 			}
-			_, _ = fmt.Fprintf(w, "data: %s\n\n", line)
+			// 批量 NDJSON 可能包含多行（每行一个 JSON 对象）。
+			// SSE 协议：事件之间必须用空行分隔；多行 data 会被浏览器合并为一个事件。
+			// 我们需要把每个 JSON 对象作为独立事件发送（之间用 \n\n 分隔），
+			// 这样前端 onmessage 每次收到一个可直接 JSON.parse 的单独对象。
+			for _, l := range strings.Split(string(line), "\n") {
+				l = strings.TrimSpace(l)
+				if l != "" {
+					_, _ = fmt.Fprintf(w, "data: %s\n\n", l)
+				}
+			}
 			flusher.Flush()
 		case <-keepalive.C:
 			_, _ = fmt.Fprintf(w, ": keepalive\n\n")

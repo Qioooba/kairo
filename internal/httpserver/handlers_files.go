@@ -251,7 +251,7 @@ func (s *Server) handleFilesList(w http.ResponseWriter, r *http.Request) {
 		}
 		entry := jobs[0].srv
 		sn := jobs[0].server
-		creds, err := s.resolveCreds(req.Username, req.Password, req.System, sn, entry.Username)
+		creds, err := s.resolveCreds(req.Username, req.Password, req.System, sn, entry.Username, entry.Password)
 		if err != nil {
 			writeErr(w, 400, err)
 			return
@@ -301,7 +301,7 @@ func (s *Server) handleFilesList(w http.ResponseWriter, r *http.Request) {
 				entry := j.srv
 				pp := j.path
 				// 每台独立 resolve creds：username/password 可走默认（不填时用 server.Username）
-				creds, err := s.resolveCreds(req.Username, req.Password, req.System, sn, entry.Username)
+				creds, err := s.resolveCreds(req.Username, req.Password, req.System, sn, entry.Username, entry.Password)
 				if err != nil {
 					results[j.idx] = filesListServerResult{Server: sn, Host: entry.Host, Path: filepath.ToSlash(filepath.Clean(pp)), OK: false, Error: err.Error(), Count: 0}
 					continue
@@ -589,7 +589,7 @@ func (s *Server) handleFilesPreview(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, errors.New("系统或服务器不存在"))
 		return
 	}
-	creds, err := s.resolveCreds(req.Username, req.Password, req.System, req.Server, srv.Username)
+	creds, err := s.resolveCreds(req.Username, req.Password, req.System, req.Server, srv.Username, srv.Password)
 	if err != nil {
 		writeErr(w, 400, err)
 		return
@@ -769,7 +769,7 @@ func (s *Server) handleFilesDownload(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, errors.New("系统或服务器不存在"))
 		return
 	}
-	creds, err := s.resolveCreds(req.Username, req.Password, req.System, req.Server, srv.Username)
+	creds, err := s.resolveCreds(req.Username, req.Password, req.System, req.Server, srv.Username, srv.Password)
 	if err != nil {
 		writeErr(w, 400, err)
 		return

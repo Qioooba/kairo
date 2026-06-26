@@ -230,7 +230,7 @@ func (s *Server) handleLogsSearchMulti(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			// 每台服务器独立解析凭据（password 可来自请求或本机 keyring）
-			c, cErr := s.resolveCreds(req.Username, req.Password, req.System, srv.Name, srv.Username)
+			c, cErr := s.resolveCreds(req.Username, req.Password, req.System, srv.Name, srv.Username, srv.Password)
 			if cErr != nil {
 				results[idx] = logsSearchMultiServerResult{Server: target.Server, Dir: target.Dir, Host: srv.Host, OK: false, Error: cErr.Error()}
 				return

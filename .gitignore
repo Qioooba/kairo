@@ -51,3 +51,4 @@ verify-commands.js
 /theme-test-out/
 /theme-*-out/
 /playwright-*.js
+ops-toolbox

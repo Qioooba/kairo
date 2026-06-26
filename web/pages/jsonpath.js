@@ -151,7 +151,6 @@
     });
 
     view.appendChild(el('div', { class: 'card' }, [
-      el('h3', { text: 'JSONPath 提取' }),
       el('div', { class: 'card-desc', text: 'gjson 路径语法（user.name / items.#.id / a.b.#.c）。后端解析，纯本地不外发。' }),
       el('div', { class: 'pane' }, [
         el('div', null, [
