@@ -934,7 +934,6 @@
           el('th', { text: '文件名' }),
           el('th', { text: '大小' }),
           el('th', { text: '修改时间' }),
-          el('th', { text: '路径' }),
           el('th', { text: '操作' }),
           el('th', { class: 'col-status', text: '状态' })
         ])));
@@ -965,16 +964,23 @@
             onclick: () => openTailForFileInNewTab(g.server, g.dir, f.name)
           });
           row.appendChild(el('td', { class: 'col-check' }, [cb]));
-          row.appendChild(el('td', null, f.name));
+          row.appendChild(el('td', { title: f.full_path || f.name }, f.name));
           row.appendChild(el('td', { class: 'num', text: formatBytes(f.size) }));
           row.appendChild(el('td', { class: 'muted', text: formatTime(f.mod_time) }));
-          row.appendChild(el('td', { class: 'muted', text: f.full_path }));
-          row.appendChild(el('td', null, [tailBtn, ' ', tailNewWinBtn]));
+          row.appendChild(el('td', null, [
+            tailBtn, ' ', tailNewWinBtn, ' ',
+            el('button', {
+              class: 'btn btn-sm',
+              text: '复制路径',
+              title: f.full_path || '',
+              onclick: () => copyToClipboard(f.full_path || ((g.dir || '') + '/' + f.name))
+            })
+          ]));
           row.appendChild(statusCell);
           tbody.appendChild(row);
         });
         tbl.appendChild(tbody);
-        grp.appendChild(tbl);
+        grp.appendChild(el('div', { class: 'table-scroll' }, [tbl]));
         fileTableWrap.appendChild(grp);
       });
 
@@ -1763,28 +1769,42 @@
           const tbody = el('tbody');
           srv.hits.forEach(h => {
             const isCtx = !!h.is_context;
-            const content = trimMiddle(h.content, 280);
+            const fullContent = h.content || '';
+            const shortContent = trimMiddle(fullContent, 280);
             const cells = [
               el('td', { class: 'muted' + (isCtx ? ' text-dim' : ''), text: h.file }),
               el('td', { class: 'num' + (isCtx ? ' text-dim' : ''), text: (isCtx ? '┊ ' : '') + h.line_no })
             ];
-            const contentCell = el('td', { class: 'hit-line' + (isCtx ? ' ctx-line' : ''), text: (isCtx ? '┊ ' : '') + content });
-            if (!isCtx && looksMojibake(content)) {
+            const contentCell = el('td', { class: 'hit-line' + (isCtx ? ' ctx-line' : ''), text: (isCtx ? '┊ ' : '') + shortContent });
+            if (!isCtx && looksMojibake(shortContent)) {
               contentCell.appendChild(el('span', { class: 'tag tag-warn', title: '当前目录编码与文件实际编码不一致，中文可能错位。试试切换到「GBK」目录。', text: '⚠ 解码可能有误' }));
             }
             cells.push(contentCell);
             if (isCtx) {
               cells.push(el('td', { class: 'actions text-dim', text: '' }));
             } else {
+              const btnExpand = el('button', {
+                class: 'btn btn-sm',
+                text: '展开',
+                onclick: () => {
+                  const expanded = contentCell.getAttribute('data-expanded') === '1';
+                  contentCell.textContent = expanded ? shortContent : fullContent;
+                  contentCell.setAttribute('data-expanded', expanded ? '0' : '1');
+                  btnExpand.textContent = expanded ? '展开' : '收起';
+                }
+              });
               cells.push(el('td', { class: 'actions' }, [
-                el('button', { class: 'btn btn-sm', text: '上下文', onclick: () => doContext(h) })
+                btnExpand,
+                el('button', { class: 'btn btn-sm', text: '复制', onclick: () => copyToClipboard(fullContent) }),
+                el('button', { class: 'btn btn-sm', text: '上下文', onclick: () => doContext(h) }),
+                el('button', { class: 'btn btn-sm', text: 'Tail', onclick: () => startTailForFile(h.server, h.dir, h.file) })
               ]));
             }
             const tr = el('tr', { class: isCtx ? 'ctx-row' : '' }, cells);
             tbody.appendChild(tr);
           });
           tbl.appendChild(tbody);
-          grp.appendChild(tbl);
+          grp.appendChild(el('div', { class: 'table-scroll' }, [tbl]));
         }
         hitTableWrap.appendChild(grp);
       });
@@ -1793,6 +1813,7 @@
     async function doContext(hit) {
       const contextN = getContextLineCount();
       const body = Object.assign({}, credsOne(hit.server), {
+        dir: hit.dir || dirSel.value,
         file: hit.file, line: hit.line_no,
         before: contextN, after: contextN
       });
@@ -2435,6 +2456,7 @@ const formCard = el('div', { class: 'card' }, [
       }
     });
     const tailLinesInp = el('input', { type: 'number', id: 'ws-tail-lines', placeholder: '起始行数', value: '100' });
+    const tailMaxLinesInp = el('input', { type: 'number', id: 'ws-tail-max-lines', min: '100', max: '50000', step: '100', value: '1000' });
     const tailOut = el('div', { id: 'ws-tail-out', class: 'tail-out' });
     // ---- Tail 高亮面板（共享 UI 工厂）----
     // 持久化策略：onChange 写 PUT /api/preferences，
@@ -2684,12 +2706,8 @@ const formCard = el('div', { class: 'card' }, [
     // v0.5 #14：点文件列表里的文件 → 在本页 tail 区域跟踪
     // 把 server/dir/file 推到 tail 输入区，调 doTailStart
     async function startTailForFile(serverName, dirPath, fileName) {
-      // 同步选中状态：把"目标选择区"里这台 server+dir 的 checkbox 勾上
-      // （保证 doTailStart 里 getSelectedTargets 能拿到对应目标）
       try {
-        // 简化做法：直接拼请求 payload，不依赖全局 getSelectedTargets
         tailFileInp.value = fileName;
-        // 直接构造 targets（[server, dir] 一项），绕过 UI 选择
         const targets = getSelectedTargets();
         const wantDir = dirPath;
         const wantSrv = serverName;
@@ -2697,6 +2715,12 @@ const formCard = el('div', { class: 'card' }, [
           toast('请先在「目标选择」里勾选 ' + wantSrv + ' / ' + wantDir, 'warn');
           return;
         }
+        const key = wantSrv + '|' + wantDir;
+        lastTailTargetKey = key;
+        refreshTailTargetSel();
+        tailTargetSel.value = key;
+        tailTargetInfo.textContent = '当前跟踪：' + wantSrv + '  /  ' + wantDir;
+        switchTab('tail');
         await doTailStart();
       } catch (e) {
         toast('启动 tail 失败：' + e.message, 'err');
@@ -2750,10 +2774,9 @@ const formCard = el('div', { class: 'card' }, [
       getHighlights: () => tailHighlight.enabled ? tailHighlight.list : []
     });
     // 监听 max-lines UI 变化（页面已有 input id="ws-tail-max-lines"）
-    const tailMaxInputInit = document.getElementById('ws-tail-max-lines');
-    if (tailMaxInputInit) {
-      tailMaxInputInit.addEventListener('change', () => {
-        const v = Math.max(100, Math.min(50000, Number(tailMaxInputInit.value) || 1000));
+    if (tailMaxLinesInp) {
+      tailMaxLinesInp.addEventListener('change', () => {
+        const v = Math.max(100, Math.min(50000, Number(tailMaxLinesInp.value) || 1000));
         tailViewer.setMaxLines(v);
       });
     }
@@ -2972,7 +2995,7 @@ const formCard = el('div', { class: 'card' }, [
         // 项 11 修复：可配"最多保留 N 行"上限（默认 1000）
         el('div', null, [
           el('label', { text: '最多保留行数（超过自动截断）' }),
-          el('input', { type: 'number', id: 'ws-tail-max-lines', min: '100', max: '50000', step: '100', value: '1000' })
+          tailMaxLinesInp
         ])
       ]),
       el('div', { class: 'btn-row mt-2' }, [btnTailStart, btnTailStop, btnTailNewTab]),
