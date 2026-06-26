@@ -29,6 +29,17 @@
     .tail-meta .meta-key { color: var(--text-mute); margin-right: 4px; }
     .tail-meta .meta-val { color: var(--text); font-family: ui-monospace, monospace; }
     .tail-meta .badge { padding: 1px 8px; border-radius: 4px; background: rgba(79,140,255,0.15); color: var(--primary-2); font-weight: 600; }
+    .tail-login {
+      display: none;
+      gap: 8px;
+      align-items: flex-end;
+      flex-wrap: wrap;
+      padding: 10px 12px;
+      background: var(--bg-2);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+    .tail-login label { min-width: 180px; margin-bottom: 0; }
   </style>
 </head>
 <body>
@@ -48,6 +59,17 @@
         <span><span class="meta-key">文件:</span><span class="meta-val" id="m-file">-</span></span>
         <span><span class="badge" id="m-lines">0 行</span></span>
       </div>
+      <form class="tail-login" id="tail-login">
+        <label>
+          <span class="text-dim">SSH 用户名</span>
+          <input type="text" id="tail-user" autocomplete="username" />
+        </label>
+        <label>
+          <span class="text-dim">SSH 密码</span>
+          <input type="password" id="tail-pass" autocomplete="current-password" />
+        </label>
+        <button class="btn btn-primary" type="submit">开始跟踪</button>
+      </form>
       <div class="btn-row">
         <button id="btn-pause" class="btn">暂停</button>
         <button id="btn-clear" class="btn">清屏</button>

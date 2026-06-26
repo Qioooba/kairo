@@ -41,6 +41,17 @@
       border: 1px solid rgba(239,68,68,0.3); border-radius: 8px;
     }
     .btn-row { display: flex; gap: 8px; flex-wrap: wrap; }
+    .preview-login {
+      display: none;
+      gap: 8px;
+      align-items: flex-end;
+      flex-wrap: wrap;
+      padding: 10px 12px;
+      background: var(--bg-2);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+    .preview-login label { min-width: 180px; margin-bottom: 0; }
   </style>
 </head>
 <body>
@@ -62,6 +73,17 @@
         <span id="m-trunc-wrap" style="display:none"><span class="badge badge-warn" id="m-trunc">已截断</span></span>
         <span id="m-binary-wrap" style="display:none"><span class="badge badge-warn" id="m-binary">二进制</span></span>
       </div>
+      <form class="preview-login" id="preview-login">
+        <label>
+          <span class="text-dim">SSH 用户名</span>
+          <input type="text" id="preview-user" autocomplete="username" />
+        </label>
+        <label>
+          <span class="text-dim">SSH 密码</span>
+          <input type="password" id="preview-pass" autocomplete="current-password" />
+        </label>
+        <button class="btn btn-primary" type="submit">加载预览</button>
+      </form>
       <div class="btn-row">
         <button id="btn-refresh" class="btn">刷新</button>
         <button id="btn-download" class="btn">下载完整文件</button>
@@ -110,8 +132,12 @@
         txt.textContent = text || (state === 'busy' ? '加载中…' : state === 'ok' ? '已加载' : state === 'err' ? '失败' : '就绪');
       }
 
-      // 拿凭据：opener window 同源直接取（用户在主页已输入）；
-      // 没 opener / 取不到 → 弹 prompt 让用户输。
+      const loginForm = $('#preview-login');
+      const userInp = $('#preview-user');
+      const passInp = $('#preview-pass');
+      let activeCred = null;
+
+      // 拿凭据：opener window 同源直接取（用户在主页已输入）。
       function getCred() {
         try {
           const op = window.opener;
@@ -119,22 +145,29 @@
             return op.OTB._previewCred[system + '::' + server];
           }
         } catch (e) { /* ignore cross-origin */ }
-        const u = prompt('SSH 用户名：');
-        if (!u) return null;
-        const p = prompt('SSH 密码：');
-        if (p == null) return null;
-        return { username: u, password: p };
+        return activeCred;
+      }
+      function showLogin() {
+        if (!loginForm) return;
+        loginForm.style.display = 'flex';
+        setConn('idle', '等待凭据');
+        setTimeout(() => userInp && userInp.focus(), 0);
+      }
+      function hideLogin() {
+        if (loginForm) loginForm.style.display = 'none';
       }
 
-      async function doPreview() {
+      async function doPreview(cred) {
         if (!system || !server || !path) {
           toast('参数缺失：system / server / path', 'err');
           setConn('err', '参数缺失');
           $('#preview-out').textContent = '';
           return;
         }
-        const cred = getCred();
-        if (!cred || !cred.username) { setConn('err', '未提供凭据'); return; }
+        cred = cred || getCred();
+        if (!cred || !cred.username || !cred.password) { showLogin(); return; }
+        activeCred = cred;
+        hideLogin();
 
         setConn('busy', '加载中…');
         try {
@@ -201,12 +234,12 @@
       }
 
       // 按钮事件
-      $('#btn-refresh').addEventListener('click', doPreview);
+      $('#btn-refresh').addEventListener('click', () => doPreview(activeCred || getCred()));
       $('#btn-close').addEventListener('click', () => { window.close(); });
       $('#btn-download').addEventListener('click', () => {
         // 调 /api/files/download 把整个文件下下来（不传 target_dir → 用默认 downloads）
-        const cred = getCred();
-        if (!cred) { toast('未提供凭据', 'err'); return; }
+        const cred = activeCred || getCred();
+        if (!cred) { showLogin(); return; }
         fetch('/api/files/download', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -221,8 +254,23 @@
         }).catch(e => toast('启动失败：' + e.message, 'err'));
       });
 
+      if (loginForm) {
+        loginForm.addEventListener('submit', (ev) => {
+          ev.preventDefault();
+          const cred = {
+            username: userInp ? userInp.value : '',
+            password: passInp ? passInp.value : ''
+          };
+          if (!cred.username || !cred.password) {
+            toast('请输入 SSH 用户名和密码', 'warn');
+            return;
+          }
+          doPreview(cred);
+        });
+      }
+
       // 启动
-      doPreview();
+      doPreview(getCred());
     })();
   </script>
 </body>

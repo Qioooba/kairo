@@ -1,5 +1,5 @@
 {
-  "run_at": "2026-06-26T05:17:05.645Z",
+  "run_at": "2026-06-26T17:45:06.275Z",
   "routes": [
     {
       "route": "home",
@@ -392,30 +392,30 @@
         },
         {
           "sel": "button",
-          "idx": 1,
-          "text": "📁 文件 / 下载",
-          "tag": "button",
-          "w": 113,
-          "h": 39,
-          "cursor": "pointer"
-        },
-        {
-          "sel": "button",
           "idx": 2,
-          "text": "🔍 搜索排障",
+          "text": "全选",
           "tag": "button",
-          "w": 102,
-          "h": 39,
+          "w": 46,
+          "h": 30,
           "cursor": "pointer"
         },
         {
           "sel": "button",
           "idx": 3,
-          "text": "📺 实时跟踪",
+          "text": "全不选",
           "tag": "button",
-          "w": 102,
-          "h": 39,
+          "w": 58,
+          "h": 30,
           "cursor": "pointer"
+        },
+        {
+          "sel": "button",
+          "idx": 4,
+          "text": "只保留已测通",
+          "tag": "button",
+          "w": 94,
+          "h": 30,
+          "cursor": "not-allowed"
         },
         {
           "sel": "button",
@@ -437,38 +437,38 @@
         },
         {
           "sel": "button",
-          "idx": 7,
-          "text": "只选可用的",
+          "idx": 8,
+          "text": "测试连接",
           "tag": "button",
           "w": 82,
-          "h": 30,
-          "cursor": "pointer"
-        },
-        {
-          "sel": "button",
-          "idx": 8,
-          "text": "全选",
-          "tag": "button",
-          "w": 46,
-          "h": 30,
+          "h": 36,
           "cursor": "pointer"
         },
         {
           "sel": "button",
           "idx": 9,
-          "text": "全不选",
+          "text": "📁 文件 / 下载",
           "tag": "button",
-          "w": 58,
-          "h": 30,
+          "w": 113,
+          "h": 39,
+          "cursor": "pointer"
+        },
+        {
+          "sel": "button",
+          "idx": 10,
+          "text": "🔍 搜索排障",
+          "tag": "button",
+          "w": 102,
+          "h": 39,
           "cursor": "pointer"
         },
         {
           "sel": "button",
           "idx": 11,
-          "text": "测试连接",
+          "text": "📺 实时跟踪",
           "tag": "button",
-          "w": 82,
-          "h": 36,
+          "w": 102,
+          "h": 39,
           "cursor": "pointer"
         },
         {
@@ -483,9 +483,9 @@
         {
           "sel": "button",
           "idx": 13,
-          "text": "下载",
+          "text": "下载最新",
           "tag": "button",
-          "w": 56,
+          "w": 82,
           "h": 36,
           "cursor": "pointer"
         },

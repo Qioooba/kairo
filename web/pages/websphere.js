@@ -1848,14 +1848,14 @@ const formCard = el('div', { class: 'card' }, [
       targetBody,
     ]);
     // targetBody 内部是完整表单（折叠时整段隐藏）
-    targetBody.appendChild(el('h3', { text: 'WebSphere 日志助手 · 多服务器并行' }));
+    targetBody.appendChild(el('h3', { text: 'WebSphere 日志助手 · 多目标操作' }));
     targetBody.appendChild(el('div', {
       class: 'card-desc',
-      text: '先选业务系统 → 勾选目标服务器 → 在下面展开的日志目录里多选要操作的目录 → 输入凭据 → 点「测试连接」确认 SSH 通畅。'
+      text: '先选业务系统，再勾选要操作的服务器和日志目录；页面只会操作已勾选的目录。'
     }));
     targetBody.appendChild(el('div', { class: 'grid-2' }, [
       el('div', null, [el('label', { text: '业务系统' }), sysSel]),
-      el('div', null, [el('label', { text: '默认目录（多目录勾选未选时回退到此）' }), dirSel])
+      el('div', null, [el('label', { text: '目录预览（实际以勾选为准）' }), dirSel])
     ]));
     targetBody.appendChild(el('div', { class: 'mt-2' }, [srvPickToolbar, srvPickWrap]));
     targetBody.appendChild(el('div', { class: 'mt-2' }, [srvDirsToolbar, srvDirsWrap]));
@@ -2196,7 +2196,7 @@ const formCard = el('div', { class: 'card' }, [
     if (typeof window !== 'undefined') window.updateTargetSummary = updateTargetSummary;
 
     const searchCard = el('div', { class: 'card' }, [
-      el('h3', { text: '多服务器并行搜索' }),
+      el('h3', { text: '多目标并行搜索' }),
       el('div', { class: 'card-desc', unsafeHtml: '语法：<span class="code-inline">A &amp;&amp; B</span>（同包含）、<span class="code-inline">A || B</span>（任一）、<span class="code-inline">!X</span>（排除）。结果按服务器 / 目录分组。' }),
       el('div', { class: 'grid-3' }, [
         el('div', { style: 'grid-column: span 2' }, [el('label', { text: '搜索表达式' }), queryWrap]),

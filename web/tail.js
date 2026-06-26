@@ -46,13 +46,17 @@
     return null;
   }
 
-  // 让用户在弹窗里输入凭据（keyring 取不到密码时用）
-  function askCred() {
-    const u = prompt('SSH 用户名：');
-    if (!u) return null;
-    const p = prompt('SSH 密码（不勾"记住"则仅本次使用）：');
-    if (p == null) return null;
-    return { username: u, password: p };
+  const loginForm = $('#tail-login');
+  const userInp = $('#tail-user');
+  const passInp = $('#tail-pass');
+  function showLogin() {
+    if (!loginForm) return;
+    loginForm.style.display = 'flex';
+    setConn('idle', '等待凭据');
+    setTimeout(() => userInp && userInp.focus(), 0);
+  }
+  function hideLogin() {
+    if (loginForm) loginForm.style.display = 'none';
   }
 
   const tailOut = $('#tail-out');
@@ -200,17 +204,17 @@
     }
   });
 
-  async function start() {
+  async function start(cred) {
     if (!system || !server || !dir || !file) {
       toast('参数缺失：system / server / dir / file', 'err');
       setConn('err', '参数缺失');
       return;
     }
-    let cred = getOpenerCred();
     if (!cred || !cred.password) {
-      cred = askCred();
-      if (!cred) { setConn('err', '未提供凭据'); return; }
+      showLogin();
+      return;
     }
+    hideLogin();
     setConn('busy', '启动中…');
     try {
       const r = await fetch('/api/logs/tail/start', {
@@ -261,5 +265,21 @@
     viewer.scrollToBottomIfNear();
   }
 
-  start();
+  if (loginForm) {
+    loginForm.addEventListener('submit', (ev) => {
+      ev.preventDefault();
+      const cred = {
+        username: userInp ? userInp.value : '',
+        password: passInp ? passInp.value : ''
+      };
+      if (!cred.username || !cred.password) {
+        toast('请输入 SSH 用户名和密码', 'warn');
+        return;
+      }
+      start(cred);
+    });
+  }
+  const openerCred = getOpenerCred();
+  if (openerCred && openerCred.password) start(openerCred);
+  else showLogin();
 })();
