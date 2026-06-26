@@ -240,7 +240,8 @@ body {
   border-right: 1px solid var(--line);
   display: flex; flex-direction: column;
   padding: 20px 14px;
-  overflow: hidden;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 .brand {
   display: flex; align-items: center; gap: 10px;
@@ -1468,7 +1469,7 @@ input[type="datetime-local"] {
 /* 2026-06-24：tab bar 改为 sticky 贴顶，top:66px 对齐 .topbar 实际高度（38px logo + 14*2 padding） */
 .ws-tab-bar {
   position: sticky;
-  top: 66px;
+  top: 0;
   z-index: 5;
   background: var(--bg-0);
   padding: 8px 0;
@@ -1491,6 +1492,10 @@ input[type="datetime-local"] {
 }
 .ws-tab-content.active {
   display: block;
+}
+.ws-intro-card {
+  padding: 4px 2px 12px;
+  font-size: 12.5px;
 }
 /* v0.6-Redesign：tab badge — 显示文件数/命中数/跟踪状态 */
 .ws-tab-badge {
@@ -1593,6 +1598,11 @@ input[type="datetime-local"] {
   gap: 8px;
   flex-wrap: wrap;
 }
+.files-toolbar-title {
+  font-weight: 600;
+  color: var(--text);
+  margin-right: 4px;
+}
 .files-toolbar-row .lbl {
   font-size: 12px;
   color: var(--text-dim);
@@ -1613,6 +1623,13 @@ input[type="datetime-local"] {
 .ws-files-placeholder {
   padding: 16px 12px;
   font-size: 13px;
+}
+.table-scroll {
+  width: 100%;
+  overflow-x: auto;
+}
+.table-scroll > .table {
+  min-width: 760px;
 }
 @keyframes ws-tab-flash-anim {
   0%   { background: var(--primary-fade); }
