@@ -252,6 +252,7 @@ type ServerConfig struct {
 	Host     string `yaml:"host" json:"host"`
 	Port     int    `yaml:"port" json:"port"`
 	Username string `yaml:"username" json:"username"`
+	Password string `yaml:"password,omitempty" json:"password,omitempty"`
 	AuthType string `yaml:"auth_type" json:"auth_type"`
 
 	// SSHProfile v0.4 起可单独覆盖这台 server 的 SSH compat profile；

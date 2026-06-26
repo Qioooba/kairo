@@ -52,7 +52,7 @@ func (s *Server) handleTailStart(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, errors.New("file 不能为空"))
 		return
 	}
-	creds, err := s.resolveCreds(req.Username, req.Password, req.System, req.Server, srv.Username)
+	creds, err := s.resolveCreds(req.Username, req.Password, req.System, req.Server, srv.Username, srv.Password)
 	if err != nil {
 		writeErr(w, 400, err)
 		return

@@ -302,16 +302,17 @@ type resolvedCreds struct {
 	SavedByStore bool // true 表示 password 来自凭据存储（keyring/file），不是用户本次输入
 }
 
-// resolveCreds 把 HTTP 请求里的凭据 + 凭据存储合并成一个最终值。
+// resolveCreds 把 HTTP 请求里的凭据 + 配置里的默认密码 + 凭据存储合并成一个最终值。
 //   - inputUser / inputPass：HTTP 请求里的明文
 //   - system / server：凭据存储的 key（system 和 server 名称）
 //   - defaultUser：配置里的默认 SSH 用户名（inputUser 为空时使用）
+//   - defaultPass：配置里的 SSH 密码（inputPass 为空时使用，优先级低于 keyring）
 //
 // 返回规则：
 //   - err != nil：无法继续（缺用户、keyring 不可用等配置错误）
 //   - err == nil && Password != ""：可直接用
-//   - err == nil && Password == ""：前端没传、存储里也没存（或 disabled 模式），需用户输入
-func (s *Server) resolveCreds(inputUser, inputPass, system, server, defaultUser string) (resolvedCreds, error) {
+//   - err == nil && Password == ""：前端没传、配置里没存、存储里也没存（或 disabled 模式），需用户输入
+func (s *Server) resolveCreds(inputUser, inputPass, system, server, defaultUser, defaultPass string) (resolvedCreds, error) {
 	username := strings.TrimSpace(inputUser)
 	if username == "" {
 		username = defaultUser
@@ -324,19 +325,30 @@ func (s *Server) resolveCreds(inputUser, inputPass, system, server, defaultUser 
 	}
 
 	mode := credentials.Mode()
-	// disabled 模式：不从存储读，直接要求用户手动输入
+	// disabled 模式：不从存储读，尝试配置密码
 	if mode == credentials.ModeDisabled {
+		if defaultPass != "" {
+			return resolvedCreds{Username: username, Password: defaultPass}, nil
+		}
 		return resolvedCreds{Username: username}, nil
 	}
 
-	// 尝试从凭据存储读（keyring/file）
+	// 尝试从凭据存储读（keyring/file）—— 优先级高于配置文件密码（用户主动保存 vs 管理员默认）
 	pw, err := credentials.Get(system, server, username)
 	if err == nil {
 		return resolvedCreds{Username: username, Password: pw, SavedByStore: true}, nil
 	}
 	if errors.Is(err, credentials.ErrNotSaved) {
+		// keyring 没存 → 尝试配置文件里的默认密码
+		if defaultPass != "" {
+			return resolvedCreds{Username: username, Password: defaultPass}, nil
+		}
 		return resolvedCreds{Username: username}, nil
 	}
 	// 其它错误（keyring 不可用 / file 后端未初始化等）
+	// keyring 出错时仍可尝试配置密码
+	if defaultPass != "" {
+		return resolvedCreds{Username: username, Password: defaultPass}, nil
+	}
 	return resolvedCreds{}, fmt.Errorf("凭据存储不可用，请手动输入密码或检查配置: %w", err)
 }

@@ -50,7 +50,7 @@
   function askCred() {
     const u = prompt('SSH 用户名：');
     if (!u) return null;
-    const p = prompt('SSH 密码（不勾"记住"则仅本次使用）：');
+    const p = prompt('SSH 密码：');
     if (p == null) return null;
     return { username: u, password: p };
   }

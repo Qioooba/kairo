@@ -155,9 +155,6 @@
     }));
     stack.appendChild(card);
     updateClearAllBtn();
-    if (opts.duration !== 0) {
-      setTimeout(() => { if (card.parentNode) { card.remove(); updateClearAllBtn(); } }, opts.duration || 6000);
-    }
     return card;
   }
   function ensureNotifyStack() {

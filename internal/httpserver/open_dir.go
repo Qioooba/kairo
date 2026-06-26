@@ -1,6 +1,7 @@
 package httpserver
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os/exec"
@@ -105,4 +106,44 @@ func openPathAllowed(allowRoot, target string) error {
 		return fmt.Errorf("target 越界（%s 不在 %s 下）", absTarget, absRoot)
 	}
 	return nil
+}
+
+func chooseFile() (string, error) {
+	switch runtime.GOOS {
+	case "darwin":
+		script := `POSIX path of (choose file with prompt "选择可执行文件" of type {"APP", "APPL", "public.unix-executable", "public.executable"})`
+		cmd := exec.Command("osascript", "-e", script)
+		var out bytes.Buffer
+		cmd.Stdout = &out
+		cmd.Stderr = &out
+		if err := cmd.Run(); err != nil {
+			if strings.Contains(out.String(), "User canceled") {
+				return "", nil
+			}
+			return "", fmt.Errorf("文件选择失败: %w", err)
+		}
+		return strings.TrimSpace(out.String()), nil
+	default:
+		return "", errors.New("当前平台暂不支持文件选择对话框")
+	}
+}
+
+func chooseDir() (string, error) {
+	switch runtime.GOOS {
+	case "darwin":
+		script := `POSIX path of (choose folder with prompt "选择文件夹")`
+		cmd := exec.Command("osascript", "-e", script)
+		var out bytes.Buffer
+		cmd.Stdout = &out
+		cmd.Stderr = &out
+		if err := cmd.Run(); err != nil {
+			if strings.Contains(out.String(), "User canceled") {
+				return "", nil
+			}
+			return "", fmt.Errorf("文件夹选择失败: %w", err)
+		}
+		return strings.TrimSpace(out.String()), nil
+	default:
+		return "", errors.New("当前平台暂不支持文件夹选择对话框")
+	}
 }

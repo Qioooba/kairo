@@ -392,7 +392,6 @@
       el('span', { class: 'send-icon', text: '▶' }),
       el('span', { text: 'Send' }),
     ]);
-    btnSend.appendChild(el('span', { text: ' Ctrl+↵' }));
 
     const urlRow = el('div', { class: 'http2-url-row' }, [methodSel, urlInp, btnSend]);
 
@@ -432,6 +431,7 @@
     let bodyRawType = 'json'; // json | text | xml | html
     const bodyTa = el('textarea', { class: 'http2-raw-textarea', id: 'http2-body',
       placeholder: '{"hello":"world"}', spellcheck: 'false' });
+    bodyTa.style.minHeight = '240px';
     bodyTa.addEventListener('input', markDirty);
 
     const formdataEditor = buildKvEditor([], { keyPh: '字段名', valPh: '值' });
@@ -455,17 +455,17 @@
     bodyIndentSel.value = '2';
 
     const btnFmtBody = el('button', { class: 'btn btn-mini', text: '美化', onclick: () => {
-      const text = bodyTa.value;
+      const text = bodyTa.value.trim();
+      if (!text) { toast('请先输入要格式化的内容', 'warn'); return; }
       if (bodyRawType === 'json') {
         try { bodyTa.value = prettyJSON(text, parseInt(bodyIndentSel.value, 10)); toast('已美化 JSON', 'ok'); }
-        catch (e) { toast('JSON 解析失败：' + e.message, 'err'); }
+        catch (e) { toast('内容不是合法 JSON，请检查类型选择是否正确', 'err'); }
       } else if (bodyRawType === 'xml' || bodyRawType === 'html') {
-        // 简易 XML/HTML 美化：每行一个标签
         try {
           const pretty = text.replace(/>\s*</g, '><').replace(/></g, '>\n<');
           bodyTa.value = pretty;
           toast('已格式化', 'ok');
-        } catch (e) { /* ignore */ }
+        } catch (e) { toast('格式化失败', 'err'); }
       } else {
         toast('Text 模式不支持美化', 'warn');
       }

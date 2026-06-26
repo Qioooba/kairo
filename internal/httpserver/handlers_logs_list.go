@@ -49,7 +49,7 @@ func (s *Server) handleLogsList(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, errors.New("目录不在白名单中"))
 		return
 	}
-	creds, err := s.resolveCreds(req.Username, req.Password, req.System, req.Server, srv.Username)
+	creds, err := s.resolveCreds(req.Username, req.Password, req.System, req.Server, srv.Username, srv.Password)
 	if err != nil {
 		writeErr(w, 400, err)
 		return
@@ -319,7 +319,7 @@ func (s *Server) runOneLogsList(parentCtx context.Context, system string, srv *c
 	start := time.Now()
 	res := logsListTargetResult{Server: srv.Name, Host: srv.Host, Dir: ld.Path, OK: true}
 
-	creds, err := s.resolveCreds(username, password, system, srv.Name, srv.Username)
+	creds, err := s.resolveCreds(username, password, system, srv.Name, srv.Username, srv.Password)
 	if err != nil {
 		res.OK = false
 		res.Error = err.Error()

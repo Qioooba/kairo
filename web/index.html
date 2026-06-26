@@ -6,7 +6,7 @@
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%232563eb'/%3E%3Cpath d='M9 10h14M9 16h14M9 22h8' stroke='%23fff' stroke-width='2.5' stroke-linecap='round'/%3E%3C/svg%3E" />
   <title>内网运维工具箱</title>
   <link rel="stylesheet" href="/static/vendor/diff2html.min.css" />
-  <link rel="stylesheet" href="/static/style.css?v=20260625-ui-review" />
+  <link rel="stylesheet" href="/static/style.css?v=20260626-about-search" />
   <!-- v0.5 #19 主题切换：在 CSS 加载后立刻读 localStorage 设 data-theme，避免 FOUC -->
   <script>
     (function () {
@@ -31,8 +31,8 @@
     </div>
     <nav id="nav" class="nav">
       <a href="#/home" class="nav-item active" data-route="home">首页</a>
-      <a href="#/websphere" class="nav-item" data-route="websphere">WebSphere 日志</a>
-      <a href="#/files" class="nav-item" data-route="files">文件下载</a>
+      <a href="#/websphere" class="nav-item" data-route="websphere">日志助手</a>
+      <a href="#/files" class="nav-item" data-route="files">FTP文件下载</a>
       <a href="#/formatter" class="nav-item" data-route="formatter">报文格式化</a>
       <a href="#/http" class="nav-item" data-route="http">HTTP 测试</a>
       <a href="#/commands" class="nav-item" data-route="commands">常用命令</a>
@@ -42,12 +42,13 @@
         下载历史
         <span id="dl-badge" class="nav-badge" style="display:none"></span>
       </a>
-      <a href="#/history" class="nav-item" data-route="history">操作历史</a>
+      <!-- <a href="#/history" class="nav-item" data-route="history">操作历史</a> -->
       <div class="nav-sep">小工具</div>
       <a href="#/timestamp" class="nav-item small" data-route="timestamp">时间戳</a>
       <a href="#/cron" class="nav-item small" data-route="cron">Cron 解析</a>
       <a href="#/jsonpath" class="nav-item small" data-route="jsonpath">JSONPath</a>
-      <a href="#/compare" class="nav-item small" data-route="compare">文本比对</a>
+      <a href="#/compare" class="nav-item small" data-route="compare">代码比对</a>
+      <a href="#/about" class="nav-item small" data-route="about">ℹ️ 关于</a>
     </nav>
     <div class="footer">
       <div id="listen-info" class="muted">—</div>
@@ -90,6 +91,7 @@
   <script src="/static/pages/jsonpath.js"></script>
   <script src="/static/vendor/diff2html.min.js"></script>
   <script src="/static/pages/compare.js"></script>
+  <script src="/static/pages/about.js"></script>
   <script src="/static/app.js"></script>
   <script>
     // v0.5 #19：DOM ready 后同步按钮 emoji 到当前主题

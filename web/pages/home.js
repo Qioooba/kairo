@@ -22,11 +22,11 @@
   function renderHome(view) {
     view.appendChild(OTB.core.el('div', { class: 'mb-3' }, [
       OTB.core.el('div', { class: 'section-title', text: '内网运维工具箱' }),
-      OTB.core.el('div', { class: 'section-sub', text: 'WebSphere 日志检索、报文格式化、常用运维辅助工具。' })
+      OTB.core.el('div', { class: 'section-sub', text: '日志检索、报文格式化、常用运维辅助工具。' })
     ]));
 
     const mainTools = [
-      { id: 'websphere', name: 'WebSphere 日志助手', desc: '多服务器日志并行搜索、上下文查看、实时 Tail、日志下载', icon: '📜', tag: 'ready', tagText: '已就绪' },
+      { id: 'websphere', name: '日志助手', desc: '多服务器日志并行搜索、上下文查看、实时 Tail、日志下载', icon: '📜', tag: 'ready', tagText: '已就绪' },
       { id: 'files', name: '文件下载', desc: '按 SSH 账号权限浏览任意目录，像 FTP 一样层层进入并下载', icon: '📁', tag: 'ready', tagText: 'v0.3' },
       { id: 'formatter', name: '报文格式化', desc: 'JSON / XML / YAML / URL-form 格式化、压缩、校验、互转', icon: '⌗', tag: 'ready', tagText: '已就绪' },
       { id: 'http', name: 'HTTP 接口测试', desc: 'Postman 风格接口调试，Headers/Body/用例管理/响应高亮', icon: '🌐', tag: 'ready', tagText: 'v0.7' },

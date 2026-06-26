@@ -141,7 +141,6 @@
     locSel.addEventListener('change', doParse);
 
     view.appendChild(el('div', { class: 'card' }, [
-      el('h3', { text: 'Cron 表达式解析' }),
       el('div', { class: 'card-desc', text: '解析 5 段 / 6 段 / @ 描述符的 cron 表达式，展示未来 5 次 + 过去 3 次运行时间，按所选时区显示。' }),
       el('div', { class: 'cron-row' }, [
         inInp,

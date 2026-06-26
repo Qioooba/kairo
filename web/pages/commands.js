@@ -844,16 +844,16 @@
 
     const statSpan = el('span', { class: 'muted', id: 'cmd-stat', text: '' });
 
-    const topBar = el('div', { class: 'filter-bar' }, [
-      el('label', {}, [
+    const topBar = el('div', { class: 'filter-bar', style: 'display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-top:12px;' }, [
+      el('label', { style: 'display:inline-flex; align-items:center; gap:6px;' }, [
         el('span', { text: '搜索' }),
         searchInp
       ]),
-      el('label', {}, [
+      el('label', { style: 'display:inline-flex; align-items:center; gap:6px;' }, [
         el('span', { text: '分类' }),
         categorySel
       ]),
-      el('label', { style: 'display:flex;align-items:center;gap:6px;' }, [
+      el('label', { style: 'display:inline-flex; align-items:center; gap:6px;' }, [
         el('input', { type: 'checkbox', id: 'cmd-favonly' }),
         el('span', { text: '只看收藏' })
       ]),

@@ -50,8 +50,6 @@
     const srvSel = el('select', { id: 'files-srv' });
     srvSel.appendChild(el('option', { value: '', text: '（先选系统）' }));
     srvSel.disabled = true;
-    const userInp = el('input', { type: 'text', id: 'files-user', placeholder: 'SSH 用户名（可留空用配置默认）' });
-    const passInp = el('input', { type: 'password', id: 'files-pass', placeholder: 'SSH 密码' });
     const rememberChk = el('input', { type: 'checkbox', id: 'files-remember' });
     const rememberLabel = el('label', { class: 'inline' }, [rememberChk, document.createTextNode('记住密码')]);
     const btnConnect = el('button', { class: 'btn btn-primary', text: '连接并浏览' });
@@ -64,16 +62,12 @@
 
     const connCard = el('div', { class: 'card' });
     connCard.appendChild(el('h3', { text: '1. 选择目标服务器' }));
-    connCard.appendChild(el('div', { class: 'card-desc', text: '支持任意路径浏览；下载权限以 SSH 账号实际权限为准（v0.3 自由模式）。' }));
-    connCard.appendChild(el('div', { class: 'grid-3' }, [
+    connCard.appendChild(el('div', { class: 'card-desc', text: '支持任意路径浏览；下载权限以 SSH 账号实际权限为准。' }));
+    connCard.appendChild(el('div', { class: 'grid-2' }, [
       el('label', null, [el('span', { class: 'lbl', text: '业务系统' }), sysSel]),
-      el('label', null, [el('span', { class: 'lbl', text: '服务器' }), srvSel]),
-      el('label', null, [el('span', { class: 'lbl', text: '用户名' }), userInp])
+      el('label', null, [el('span', { class: 'lbl', text: '服务器' }), srvSel])
     ]));
-    connCard.appendChild(el('div', { class: 'grid-2 mt-2' }, [
-      el('label', null, [el('span', { class: 'lbl', text: '密码' }), passInp]),
-      el('div', { style: 'display:flex;align-items:flex-end;gap:10px' }, [rememberLabel, btnConnect])
-    ]));
+    connCard.appendChild(el('div', { class: 'mt-2', style: 'display:flex;align-items:center;gap:10px' }, [rememberLabel, btnConnect]));
 
     // ---- 路径区 ----
     const crumbsEl = el('div', { class: 'file-crumbs', style: 'font-family: ui-monospace, monospace; font-size: 13px;' });
@@ -125,7 +119,7 @@
       type: 'text',
       id: 'files-filter',
       placeholder: '过滤文件名（子串 / 通配符 * ?, 例 SystemOut 或 *.log）',
-      style: 'flex: 0 1 280px; min-width: 160px;'
+      style: 'flex: 1 1 auto; min-width: 200px; width: auto;'
     });
     let filterDebounce = null;
     filterInp.addEventListener('input', () => {
@@ -148,7 +142,7 @@
     const filterCountEl = el('span', { id: 'files-filter-count', class: 'text-dim' });
     // 项 1 修复：filter 容器让 .lbl 用 inline-block（不撑成 block），避免 flex 里
     // 出现"过滤"两个字被竖排 / 换行的视觉错乱。
-    const filterLabel = el('label', { class: 'inline' }, [document.createTextNode('过滤：'), filterInp]);
+    const filterLabel = el('label', { class: 'inline', style: 'display:inline-flex; align-items:center; gap:6px;' }, [document.createTextNode('过滤：'), filterInp]);
     fileCard.appendChild(el('div', { class: 'mt-2', style: 'display:flex; gap:8px; align-items:center; flex-wrap:wrap;' }, [
       filterLabel, filterClearBtn, filterCountEl
     ]));
@@ -161,12 +155,26 @@
     ]));
     fileCard.appendChild(tableWrap);
 
-    view.appendChild(warnBox);
     view.appendChild(connCard);
     view.appendChild(pathCard);
     view.appendChild(fileCard);
 
     // =================== 行为 ===================
+
+    function findSrv() {
+      if (!state.cfg || !state.currentSys || !state.currentSrv) return null;
+      const sys = (state.cfg.systems || []).find(s => s.name === state.currentSys);
+      if (!sys || !sys.servers) return null;
+      return sys.servers.find(s => s.name === state.currentSrv) || null;
+    }
+    function getSrvUsername() {
+      const srv = findSrv();
+      return (srv && srv.username) || '';
+    }
+    function getSrvPassword() {
+      const srv = findSrv();
+      return (srv && srv.password) || '';
+    }
 
     function loadCfg() {
       return api('GET', '/api/config').then(info => {
@@ -186,8 +194,6 @@
             srvSel.value = lastSel.server;
             setServer(lastSel.server);
           }
-          if (lastSel.username) userInp.value = lastSel.username;
-          // 默认勾上"记住密码"（keyring 模式下由 refreshCredStatus 决定是否禁用）
           rememberChk.checked = true;
         }
         // 恢复 filter lastGet
@@ -265,10 +271,9 @@
     }
 
     function creds() {
-      const u = userInp.value.trim();
       return {
-        username: u,
-        password: passInp.value,
+        username: getSrvUsername(),
+        password: getSrvPassword(),
         remember: rememberChk.checked
       };
     }
@@ -276,8 +281,7 @@
     function persistSelection() {
       OTB.core.lastSet('files', 'sel', {
         system: state.currentSys,
-        server: state.currentSrv,
-        username: userInp.value
+        server: state.currentSrv
       });
     }
 
@@ -292,7 +296,6 @@
         srvSel.appendChild(el('option', { value: srv.name, text: srv.name + ' · ' + srv.host + ':' + srv.port }));
       });
       srvSel.disabled = false;
-      userInp.value = (sys.servers && sys.servers[0] && sys.servers[0].username) || '';
       refreshCredStatus();
       persistSelection();
       renderCommonDirsBar();
@@ -317,10 +320,6 @@
       state.currentSrv = name;
       const sys = (state.cfg.systems || []).find(s => s.name === state.currentSys);
       const srv = sys && (sys.servers || []).find(s => s.name === name);
-      if (srv && srv.username && !userInp.value) {
-        userInp.value = srv.username;
-      }
-      // P1-11：自动把服务器配置的 log_dirs 加进常用目录
       prependLogDirsToCommonDirs(srv);
       refreshCredStatus();
       persistSelection();
@@ -329,14 +328,13 @@
 
     sysSel.addEventListener('change', () => setSystem(sysSel.value));
     srvSel.addEventListener('change', () => setServer(srvSel.value));
-    userInp.addEventListener('input', () => { clearTimeout(userInp._t); userInp._t = setTimeout(persistSelection, 500); });
 
     btnConnect.addEventListener('click', async () => {
       if (!state.currentSys || !state.currentSrv) {
         toast('请先选系统和服务器', 'warn'); return;
       }
       const c = creds();
-      if (!c.username) { toast('请输入 SSH 用户名', 'warn'); return; }
+      if (!c.username) { toast('请在系统配置中设置 SSH 用户名', 'warn'); return; }
       if (c.remember && c.password) {
         try {
           await api('POST', '/api/credentials/save', {
@@ -344,17 +342,18 @@
           });
         } catch (e) { /* ignore */ }
       }
-      const startPath = pickDefaultPath(c.username);
+      const startPath = pickDefaultPath();
       await doListDir(startPath, c);
     });
 
-    function pickDefaultPath(username) {
+    function pickDefaultPath() {
       try {
         const sys = (state.cfg && state.cfg.systems || []).find(s => s.name === state.currentSys);
         const srv = sys && (sys.servers || []).find(s => s.name === state.currentSrv);
         const ld = srv && (srv.log_dirs || [])[0];
         if (ld && ld.path) return ld.path;
       } catch (e) { /* ignore */ }
+      const username = getSrvUsername();
       if (username) return '/home/' + username;
       return '/';
     }
@@ -407,7 +406,7 @@
     // Shift+点击 / 或显式调用 → 新窗口预览（独立页 preview.html）
     async function openPreview(filePath, fileName) {
       const c = creds();
-      if (!c.username) { toast('请先输入 SSH 用户名', 'warn'); return; }
+      if (!c.username) { toast('请在系统配置中设置 SSH 用户名', 'warn'); return; }
       // 拿这个 server 的目录默认 encoding
       let encoding = 'utf-8';
       try {
@@ -431,7 +430,7 @@
     // openPreviewInNewWindow 开新窗口（preview.html），凭证走 OTB._previewCred 跨窗口传递
     function openPreviewInNewWindow(filePath, fileName) {
       const c = creds();
-      if (!c.username) { toast('请先输入 SSH 用户名', 'warn'); return; }
+      if (!c.username) { toast('请在系统配置中设置 SSH 用户名', 'warn'); return; }
       let encoding = 'utf-8';
       try {
         const sys = (state.cfg.systems || []).find(s => s.name === state.currentSys);
@@ -500,18 +499,24 @@
     function renderCrumbs() {
       crumbsEl.innerHTML = '';
       const parts = state.currentPath.split('/').filter(Boolean);
-      const head = el('a', { href: '#', text: '/', onclick: (e) => {
+      const rootLink = el('a', { href: '#', style: 'text-decoration:none;', onclick: (e) => {
         e.preventDefault(); doListDir('/', creds());
       }});
-      crumbsEl.appendChild(head);
+      rootLink.appendChild(el('span', { text: '📁 /' }));
+      crumbsEl.appendChild(rootLink);
       let acc = '';
       parts.forEach((seg, i) => {
-        crumbsEl.appendChild(document.createTextNode(' / '));
+        crumbsEl.appendChild(el('span', { class: 'text-dim', style: 'margin: 0 4px;', text: '›' }));
         acc += '/' + seg;
         const target = acc;
-        crumbsEl.appendChild(el('a', { href: '#', text: seg, onclick: (e) => {
-          e.preventDefault(); doListDir(target, creds());
-        }}));
+        const isLast = i === parts.length - 1;
+        if (isLast) {
+          crumbsEl.appendChild(el('span', { style: 'font-weight:600;', text: seg }));
+        } else {
+          crumbsEl.appendChild(el('a', { href: '#', style: 'text-decoration:none;', text: seg, onclick: (e) => {
+            e.preventDefault(); doListDir(target, creds());
+          }}));
+        }
       });
       pathInp.value = state.currentPath;
     }
@@ -879,7 +884,7 @@
     async function doDownload() {
       if (state.dlId) { toast('已有下载任务在进行中', 'warn'); return; }
       const c = creds();
-      if (!c.username) { toast('请输入 SSH 用户名', 'warn'); return; }
+      if (!c.username) { toast('请在系统配置中设置 SSH 用户名', 'warn'); return; }
       const names = Array.from(state.selected);
       if (!names.length) { toast('请先勾选文件', 'warn'); return; }
       const paths = names.map(n => (state.currentPath === '/' ? '' : state.currentPath) + '/' + n);
@@ -1171,7 +1176,7 @@
     async function doDownloadSingle(fullPath, fileName) {
       if (state.dlId) { toast('已有下载任务在进行中', 'warn'); return; }
       const c = creds();
-      if (!c.username) { toast('请先输入 SSH 用户名', 'warn'); return; }
+      if (!c.username) { toast('请在系统配置中设置 SSH 用户名', 'warn'); return; }
 
       state.fileStates = {};
       state.fileStates[fullPath] = { status: 'pending' };
@@ -1258,5 +1263,5 @@ loadCfg().then(refreshCredStatus).catch(e => toast('配置加载失败：' + e.m
 
   OTB.pages.files = renderFiles;
   OTB.state.routes.files = renderFiles;
-  OTB.state.routeNames.files = '文件下载（FTP 风格）';
+  OTB.state.routeNames.files = 'FTP文件下载';
 })();

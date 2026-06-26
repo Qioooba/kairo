@@ -133,7 +133,6 @@
     toSel.addEventListener('change', doConvert);
 
     view.appendChild(el('div', { class: 'card' }, [
-      el('h3', { text: '时间戳转换' }),
       el('div', { class: 'card-desc', text: '智能识别 Unix 秒/毫秒 / ISO 8601 / 人类可读 / now。from 时区 = 输入所在时区（仅 Unix 数字 / now 时生效），to 时区 = 展示时区。' }),
       el('div', { class: 'ts-row-input' }, [
         inInp,
