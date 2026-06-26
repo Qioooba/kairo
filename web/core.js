@@ -80,6 +80,69 @@
   }
   core.toast = toast;
 
+  // confirmDialog(msg, opts) → Promise<boolean>
+  //
+  // 统一替代直接调用 window.confirm 的场景，给页面提供可控、可复用的确认弹层。
+  // 如果当前环境没有可用 DOM，则退回原生 confirm。
+  function confirmDialog(msg, opts) {
+    opts = opts || {};
+    if (typeof document === 'undefined' || !document.body) {
+      return Promise.resolve(window.confirm ? window.confirm(msg) : true);
+    }
+
+    return new Promise((resolve) => {
+      const overlay = el('div', { class: 'otb-dialog-overlay' });
+      const dialog = el('div', { class: 'otb-dialog' });
+      const title = el('div', { class: 'otb-dialog-title', text: opts.title || '请确认' });
+      const body = el('div', { class: 'otb-dialog-body', text: msg });
+      const actions = el('div', { class: 'otb-dialog-actions' });
+      const cancelBtn = el('button', {
+        class: 'btn',
+        type: 'button',
+        text: opts.cancelText || '取消',
+        onclick: () => close(false)
+      });
+      const okBtn = el('button', {
+        class: 'btn btn-primary',
+        type: 'button',
+        text: opts.okText || '确定',
+        onclick: () => close(true)
+      });
+
+      let settled = false;
+      function close(ok) {
+        if (settled) return;
+        settled = true;
+        document.removeEventListener('keydown', onKeyDown, true);
+        try { overlay.remove(); } catch (e) { /* ignore */ }
+        resolve(!!ok);
+      }
+      function onKeyDown(ev) {
+        if (ev.key === 'Escape') {
+          ev.preventDefault();
+          close(false);
+        } else if (ev.key === 'Enter') {
+          ev.preventDefault();
+          close(true);
+        }
+      }
+
+      actions.appendChild(cancelBtn);
+      actions.appendChild(okBtn);
+      dialog.appendChild(title);
+      dialog.appendChild(body);
+      dialog.appendChild(actions);
+      overlay.appendChild(dialog);
+      overlay.addEventListener('click', (ev) => {
+        if (ev.target === overlay) close(false);
+      });
+      document.addEventListener('keydown', onKeyDown, true);
+      document.body.appendChild(overlay);
+      setTimeout(() => okBtn && okBtn.focus && okBtn.focus(), 0);
+    });
+  }
+  core.confirmDialog = confirmDialog;
+
   // copyToClipboard(text) → Promise
   // 优先 navigator.clipboard（HTTPS / localhost 才可用），否则走隐藏 textarea + execCommand 兜底。
   // 老 websphere.js / compare.js 自己实现了一份，现在统一到 core 里。

@@ -758,14 +758,18 @@ func TestSSHTest_NoPasswordAndNoKeyring(t *testing.T) {
 }
 
 func TestSSHTest_NoUsername(t *testing.T) {
-	srv, _, _, _ := newTestServer(t)
+	addr := startFakeSSH(t, "ops", "testpw")
+	_, portStr, _ := net.SplitHostPort(addr)
+	port, _ := strconv.Atoi(portStr)
+	srv := newTestServerWithFakeSSH(t, port)
+
 	w := doRequest(srv, "POST", "/api/ssh/test", map[string]any{
-		"system": "信贷生产", "server": "mock-1", "username": "", "password": "x",
+		"system": "信贷生产", "server": "mock-1", "username": "", "password": "testpw",
 	})
-	// server 配置里默认 username=ops，会被 resolveCreds 兜住；
-	// 然后真去连 SSH 10.0.0.1 → 失败 → 502
-	if w.Code != 502 && w.Code != 400 {
-		t.Errorf("expected 502/400, got %d body=%s", w.Code, w.Body.String())
+	// username 为空时应回退到 server 配置里的默认用户名 ops，
+	// 因而能通过 fake SSH 校验。
+	if w.Code != 200 {
+		t.Errorf("expected 200, got %d body=%s", w.Code, w.Body.String())
 	}
 }
 
@@ -879,12 +883,7 @@ func TestLogsSearchMulti_Validations(t *testing.T) {
 	addr := startFakeSSH(t, "ops", "testpw")
 	_, portStr, _ := net.SplitHostPort(addr)
 	port, _ := strconv.Atoi(portStr)
-	srvReal, _, _, _ := newTestServer(t)
-	// 把 mock-1 指向 fake SSH 端口，否则会真 dial 10.0.0.1:22
-	if _, sc, ok := srvReal.cur().FindServer("信贷生产", "mock-1"); ok {
-		sc.Host = "127.0.0.1"
-		sc.Port = port
-	}
+	srvReal := newTestServerWithFakeSSH(t, port)
 
 	// v0.5：targets 至少有一项合法元素，不为空 → 通过校验（mock sshd 会处理具体搜索）
 	if w := doRequest(srvReal, "POST", "/api/logs/search/multi", map[string]any{

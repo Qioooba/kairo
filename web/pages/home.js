@@ -9,7 +9,19 @@
 
   function makeCard(t, small) {
     const cls = 'tool-card' + (small ? ' tool-card-small' : '');
-    return OTB.core.el('div', { class: cls, onclick: () => { location.hash = '#/' + t.id; } }, [
+    return OTB.core.el('div', {
+      class: cls,
+      tabindex: '0',
+      role: 'button',
+      'aria-label': t.name,
+      onclick: () => { location.hash = '#/' + t.id; },
+      onkeydown: (ev) => {
+        if (ev.key === 'Enter' || ev.key === ' ') {
+          ev.preventDefault();
+          location.hash = '#/' + t.id;
+        }
+      }
+    }, [
       OTB.core.el('div', { class: 'row between' }, [
         OTB.core.el('div', { class: 'icon', text: t.icon }),
         t.tagText ? OTB.core.el('span', { class: 'tag ' + (t.tag || 'ready'), text: t.tagText }) : null
