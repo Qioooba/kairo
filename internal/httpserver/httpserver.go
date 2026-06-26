@@ -7,6 +7,7 @@
 package httpserver
 
 import (
+	"context"
 	"errors"
 	"io"
 	"io/fs"
@@ -40,6 +41,22 @@ const (
 	sshDialOuterTimeout = 45 * time.Second
 	sshAttemptTimeout   = 10 * time.Second
 )
+
+const (
+	authCookieName = "otb_token"
+	authCookieTTL  = 30 * 24 * time.Hour
+	authHeaderName = "Authorization"
+	authQueryParam = "token"
+)
+
+type contextKey string
+
+const authUserKey contextKey = "authUser"
+
+type authUser struct {
+	Name  string
+	Token string
+}
 
 // Server 持有配置（线程安全 Manager）、审计日志、嵌入式静态资源、tail 会话池、下载任务池
 type Server struct {
@@ -114,6 +131,40 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusForbidden, errors.New("拒绝跨源请求"))
 		return
 	}
+
+	cur := s.cur()
+	ip := clientIP(r)
+
+	if path == "/api/auth/status" {
+		s.handleAuthStatus(w, r, cur)
+		return
+	}
+	if path == "/api/auth/logout" {
+		s.handleAuthLogout(w, r)
+		return
+	}
+
+	if cur.Auth.EffectiveEnabled() && isAPIRequest(path) {
+		tokenStr := extractToken(r)
+		if tokenStr == "" {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="ops-toolbox"`)
+			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "需要认证", "auth_required": true})
+			return
+		}
+		token := cur.Auth.LookupToken(tokenStr)
+		if token == nil {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="ops-toolbox"`)
+			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "认证失败：无效的 token", "auth_required": true})
+			return
+		}
+		if !token.IPAllowed(ip) {
+			writeJSON(w, http.StatusForbidden, map[string]any{"error": "访问被拒绝：IP 不在允许列表", "auth_required": true})
+			return
+		}
+		ctx := context.WithValue(r.Context(), authUserKey, &authUser{Name: token.Name, Token: token.Token})
+		r = r.WithContext(ctx)
+	}
+
 	switch {
 	case path == "/" || path == "/index.html":
 		s.serveStatic(w, r, "index.html")
@@ -228,16 +279,16 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func allowLocalOrigin(r *http.Request) bool {
 	origin := strings.TrimSpace(r.Header.Get("Origin"))
 	if origin != "" {
-		return isLocalOrigin(origin)
+		return isAllowedOrigin(origin, r.Host)
 	}
 	referer := strings.TrimSpace(r.Header.Get("Referer"))
 	if referer != "" {
-		return isLocalOrigin(referer)
+		return isAllowedOrigin(referer, r.Host)
 	}
 	return true
 }
 
-func isLocalOrigin(raw string) bool {
+func isAllowedOrigin(raw string, requestHost string) bool {
 	u, err := urlpkg.Parse(raw)
 	if err != nil {
 		return false
@@ -246,7 +297,19 @@ func isLocalOrigin(raw string) bool {
 	if host == "" {
 		return false
 	}
-	return isLocalWebHost(host)
+	if isLocalWebHost(host) {
+		return true
+	}
+	reqHost := strings.ToLower(strings.Trim(requestHost, "[]"))
+	if reqHost != "" {
+		if h, _, err := net.SplitHostPort(reqHost); err == nil {
+			reqHost = h
+		}
+		if strings.EqualFold(host, reqHost) {
+			return true
+		}
+	}
+	return false
 }
 
 func isLocalWebHost(host string) bool {
@@ -258,6 +321,41 @@ func isLocalWebHost(host string) bool {
 		return ip.IsLoopback()
 	}
 	return false
+}
+
+func isAPIRequest(path string) bool {
+	return strings.HasPrefix(path, "/api/") || strings.HasPrefix(path, "/downloads/")
+}
+
+func extractToken(r *http.Request) string {
+	auth := r.Header.Get(authHeaderName)
+	if strings.HasPrefix(auth, "Bearer ") {
+		return strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))
+	}
+	if cookie, err := r.Cookie(authCookieName); err == nil {
+		return strings.TrimSpace(cookie.Value)
+	}
+	return strings.TrimSpace(r.URL.Query().Get(authQueryParam))
+}
+
+func clientIP(r *http.Request) string {
+	xff := r.Header.Get("X-Forwarded-For")
+	if xff != "" {
+		parts := strings.Split(xff, ",")
+		ip := strings.TrimSpace(parts[0])
+		if ip != "" {
+			return ip
+		}
+	}
+	xri := r.Header.Get("X-Real-IP")
+	if xri != "" {
+		return strings.TrimSpace(xri)
+	}
+	host, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr))
+	if err != nil {
+		return strings.TrimSpace(r.RemoteAddr)
+	}
+	return host
 }
 
 // ---------- 静态资源 ----------
@@ -314,6 +412,7 @@ type configView struct {
 	App     config.AppConfig      `json:"app"`
 	Systems []config.SystemConfig `json:"systems"`
 	Search  config.SearchConfig   `json:"search"`
+	Auth    configAuthView        `json:"auth"`
 	Paths   configViewPaths       `json:"paths"`
 }
 
@@ -323,16 +422,32 @@ type configViewPaths struct {
 	DataDir     string `json:"data_dir"`
 }
 
+type configAuthView struct {
+	Enabled bool              `json:"enabled"`
+	Users   []configAuthUser  `json:"users,omitempty"`
+}
+
+type configAuthUser struct {
+	Name string `json:"name"`
+}
+
 func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeErr(w, 405, errors.New("仅支持 GET"))
 		return
 	}
 	cur := s.cur()
+	authView := configAuthView{Enabled: cur.Auth.EffectiveEnabled()}
+	if cur.Auth.EffectiveEnabled() {
+		for _, t := range cur.Auth.Tokens {
+			authView.Users = append(authView.Users, configAuthUser{Name: t.Name})
+		}
+	}
 	writeJSON(w, 200, configView{
 		App:     cur.App,
 		Systems: cur.Systems,
 		Search:  cur.Search,
+		Auth:    authView,
 		Paths: configViewPaths{
 			DownloadDir: cur.DownloadDir(),
 			LogDir:      cur.LogDir(),

@@ -15,7 +15,7 @@
   async function api(method, path, body) {
     core.setStatus('busy');
     try {
-      const opts = { method, headers: {} };
+      const opts = { method, headers: {}, credentials: 'same-origin' };
       if (body !== undefined) {
         opts.headers['Content-Type'] = 'application/json';
         opts.body = JSON.stringify(body);
@@ -23,6 +23,15 @@
       const resp = await fetch(path, opts);
       let data = null;
       try { data = await resp.json(); } catch (e) { /* ignore */ }
+      if (resp.status === 401 && data && data.auth_required) {
+        core.setStatus('idle');
+        if (window.OTB.auth && window.OTB.auth.requireLogin) {
+          window.OTB.auth.requireLogin();
+        }
+        const err = new Error(data.error || '需要登录');
+        err.authRequired = true;
+        throw err;
+      }
       if (!resp.ok) {
         const msg = (data && data.error) ? data.error : ('HTTP ' + resp.status);
         throw new Error(msg);
@@ -31,8 +40,10 @@
       setTimeout(() => core.setStatus('idle'), 800);
       return data;
     } catch (err) {
-      core.setStatus('err', '失败');
-      setTimeout(() => core.setStatus('idle'), 1500);
+      if (!err.authRequired) {
+        core.setStatus('err', '失败');
+        setTimeout(() => core.setStatus('idle'), 1500);
+      }
       throw err;
     }
   }
@@ -51,7 +62,17 @@
   // 默认 filename 走 Content-Disposition；可显式指定 override。
   async function triggerDownload(url, overrideFilename) {
     try {
-      const r = await fetch(url);
+      const r = await fetch(url, { credentials: 'same-origin' });
+      if (r.status === 401) {
+        let data = null;
+        try { data = await r.json(); } catch (e) {}
+        if (data && data.auth_required && window.OTB.auth && window.OTB.auth.requireLogin) {
+          window.OTB.auth.requireLogin();
+          const err = new Error(data.error || '需要登录');
+          err.authRequired = true;
+          throw err;
+        }
+      }
       if (!r.ok) throw new Error('HTTP ' + r.status);
       const blob = await r.blob();
       const a = document.createElement('a');
@@ -64,7 +85,7 @@
       URL.revokeObjectURL(objUrl);
       return true;
     } catch (e) {
-      core.toast('下载失败：' + e.message, 'err');
+      if (!e.authRequired) core.toast('下载失败：' + e.message, 'err');
       throw e;
     }
   }

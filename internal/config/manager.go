@@ -99,6 +99,9 @@ func (m *Manager) ImportYAML(yamlData []byte) error {
 	if err := newCfg.Validate(); err != nil {
 		return fmt.Errorf("配置校验失败: %w", err)
 	}
+	if err := newCfg.Auth.Prepare(); err != nil {
+		return fmt.Errorf("认证配置初始化失败: %w", err)
+	}
 	if err := newCfg.ResolvePaths(m.baseDir); err != nil {
 		return fmt.Errorf("解析路径失败: %w", err)
 	}
@@ -141,6 +144,9 @@ func (m *Manager) Replace(newCfg *Config) error {
 	}
 	if err := newCfg.Validate(); err != nil {
 		return fmt.Errorf("配置校验失败: %w", err)
+	}
+	if err := newCfg.Auth.Prepare(); err != nil {
+		return fmt.Errorf("认证配置初始化失败: %w", err)
 	}
 	// 3. 写盘
 	m.mu.Lock()

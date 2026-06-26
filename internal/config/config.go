@@ -5,6 +5,7 @@
 package config
 
 import (
+	"crypto/subtle"
 	"fmt"
 	"net"
 	"os"
@@ -22,6 +23,22 @@ type Config struct {
 	App     AppConfig      `yaml:"app" json:"app"`
 	Systems []SystemConfig `yaml:"systems" json:"systems"`
 	Search  SearchConfig   `yaml:"search" json:"search"`
+	Auth    AuthConfig     `yaml:"auth,omitempty" json:"auth,omitempty"`
+}
+
+// AuthConfig Token 白名单认证配置
+type AuthConfig struct {
+	Enabled bool        `yaml:"enabled" json:"enabled"`
+	Tokens  []AuthToken `yaml:"tokens,omitempty" json:"tokens,omitempty"`
+}
+
+// AuthToken 一个认证 Token 条目
+type AuthToken struct {
+	Name       string   `yaml:"name" json:"name"`
+	Token      string   `yaml:"token" json:"token"`
+	AllowedIPs []string `yaml:"allowed_ips,omitempty" json:"allowed_ips,omitempty"`
+
+	allowednets []*net.IPNet `yaml:"-" json:"-"`
 }
 
 // AppConfig 应用自身配置
@@ -466,15 +483,72 @@ func Load(path string) (*Config, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
+	if err := cfg.Auth.Prepare(); err != nil {
+		return nil, err
+	}
 	return &cfg, nil
 }
 
 // Validate 校验关键字段
 func (c *Config) Validate() error {
-	if c.App.Host != "127.0.0.1" && c.App.Host != "localhost" {
-		// 安全要求：只允许本地监听
-		return fmt.Errorf("app.host 必须为 127.0.0.1 或 localhost，当前: %q", c.App.Host)
+	host := strings.TrimSpace(c.App.Host)
+	if host == "" {
+		host = "127.0.0.1"
 	}
+	if c.Auth.EffectiveEnabled() {
+		if host != "0.0.0.0" && host != "::" && host != "[::]" && host != "127.0.0.1" && host != "localhost" && !isPrivateIP(host) {
+			return fmt.Errorf("auth.enabled=true 时，app.host 允许为 0.0.0.0、内网IP 或 127.0.0.1/localhost，当前: %q", c.App.Host)
+		}
+	} else {
+		if host != "127.0.0.1" && host != "localhost" {
+			return fmt.Errorf("app.host 必须为 127.0.0.1 或 localhost，当前: %q（如需远程访问请配置 auth.enabled=true）", c.App.Host)
+		}
+	}
+
+	if c.Auth.Enabled {
+		if len(c.Auth.Tokens) == 0 {
+			return fmt.Errorf("auth.enabled=true 时，auth.tokens 不能为空")
+		}
+		seenNames := make(map[string]struct{}, len(c.Auth.Tokens))
+		seenTokens := make(map[string]struct{}, len(c.Auth.Tokens))
+		for i, t := range c.Auth.Tokens {
+			name := strings.TrimSpace(t.Name)
+			if name == "" {
+				return fmt.Errorf("auth.tokens[%d].name 不能为空", i)
+			}
+			if _, dup := seenNames[name]; dup {
+				return fmt.Errorf("auth.tokens[%d].name %q 重复", i, name)
+			}
+			seenNames[name] = struct{}{}
+
+			tokenStr := strings.TrimSpace(t.Token)
+			if tokenStr == "" {
+				return fmt.Errorf("auth.tokens[%d].token 不能为空（name=%q）", i, name)
+			}
+			if len(tokenStr) < 16 {
+				return fmt.Errorf("auth.tokens[%d].token 长度必须 >= 16（name=%q，当前长度: %d）", i, name, len(tokenStr))
+			}
+			if _, dup := seenTokens[tokenStr]; dup {
+				return fmt.Errorf("auth.tokens[%d].token 重复（name=%q）", i, name)
+			}
+			seenTokens[tokenStr] = struct{}{}
+
+			for j, cidr := range t.AllowedIPs {
+				cidr = strings.TrimSpace(cidr)
+				if cidr == "" {
+					continue
+				}
+				_, _, err := net.ParseCIDR(cidr)
+				if err != nil {
+					ip := net.ParseIP(normalizeIP(cidr))
+					if ip == nil {
+						return fmt.Errorf("auth.tokens[%d].allowed_ips[%d] %q 格式错误（需为 IP 或 CIDR）", i, j, cidr)
+					}
+				}
+			}
+		}
+	}
+
 	// v0.8：external_openers 校验
 	//   - name 必填且非空白（前端靠 name 找按钮）；
 	//   - path 必填且非空白（防止有人存了个空记录却还能"打开"）；
@@ -655,7 +729,98 @@ func (c *Config) SearchTimeout() time.Duration {
 	return time.Duration(c.Search.TimeoutSeconds) * time.Second
 }
 
-// Clone 返回一份"配置树"的深拷贝，避免 Replace 时新老 Config 共享 inner slice。
+// normalizeIP 处理 IPv4-mapped IPv6 地址前缀 ::ffff:
+func normalizeIP(ipStr string) string {
+	ipStr = strings.TrimSpace(ipStr)
+	if strings.HasPrefix(ipStr, "::ffff:") {
+		ipStr = strings.TrimPrefix(ipStr, "::ffff:")
+	}
+	return ipStr
+}
+
+// Prepare 解析 AllowedIPs 为 net.IPNet，供运行时 IPAllowed 快速匹配
+func (a *AuthConfig) Prepare() error {
+	for i := range a.Tokens {
+		t := &a.Tokens[i]
+		t.Name = strings.TrimSpace(t.Name)
+		t.Token = strings.TrimSpace(t.Token)
+		t.allowednets = nil
+		for _, cidr := range t.AllowedIPs {
+			cidr = strings.TrimSpace(cidr)
+			if cidr == "" {
+				continue
+			}
+			_, ipNet, err := net.ParseCIDR(cidr)
+			if err != nil {
+				ip := net.ParseIP(normalizeIP(cidr))
+				if ip != nil {
+					mask := net.CIDRMask(32, 32)
+					if ip.To4() == nil {
+						mask = net.CIDRMask(128, 128)
+					}
+					ipNet = &net.IPNet{IP: ip, Mask: mask}
+				} else {
+					return fmt.Errorf("auth.tokens[%d].allowed_ips 中 %q 格式错误", i, cidr)
+				}
+			}
+			t.allowednets = append(t.allowednets, ipNet)
+		}
+	}
+	return nil
+}
+
+// EffectiveEnabled 返回认证是否实际启用（enabled=true 且 tokens 非空）
+func (a *AuthConfig) EffectiveEnabled() bool {
+	return a.Enabled && len(a.Tokens) > 0
+}
+
+// LookupToken 使用常量时间比较查找匹配的 token
+func (a *AuthConfig) LookupToken(tokenStr string) *AuthToken {
+	if tokenStr == "" {
+		return nil
+	}
+	tokenBytes := []byte(tokenStr)
+	for i := range a.Tokens {
+		t := &a.Tokens[i]
+		if subtle.ConstantTimeCompare([]byte(t.Token), tokenBytes) == 1 {
+			return t
+		}
+	}
+	return nil
+}
+
+// IPAllowed 检查给定 IP 是否被该 token 允许
+func (t *AuthToken) IPAllowed(ipStr string) bool {
+	if len(t.allowednets) == 0 {
+		return true
+	}
+	ipStr = normalizeIP(ipStr)
+	ip := net.ParseIP(ipStr)
+	if ip == nil {
+		return false
+	}
+	for _, n := range t.allowednets {
+		if n.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// isPrivateIP 判断 IP 是否为内网/回环/链路本地地址
+func isPrivateIP(ipStr string) bool {
+	ipStr = normalizeIP(ipStr)
+	ip := net.ParseIP(ipStr)
+	if ip == nil {
+		return false
+	}
+	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+		return true
+	}
+	return false
+}
+
+// Clone 返回一份"配置树"的深拷贝，避免 Replace 时新老 Config 共享 inner slice.
 //
 // 为什么需要：
 //   - Config 是 struct value，但内部 []SystemConfig / []ServerConfig / []LogDirEntry
@@ -696,6 +861,23 @@ func (c *Config) Clone() *Config {
 	if c.App.DownloadMaxCount != nil {
 		n := *c.App.DownloadMaxCount
 		out.App.DownloadMaxCount = &n
+	}
+
+	// Auth.Tokens 深拷贝
+	if c.Auth.Tokens != nil {
+		out.Auth.Tokens = make([]AuthToken, len(c.Auth.Tokens))
+		for i := range c.Auth.Tokens {
+			src := &c.Auth.Tokens[i]
+			dst := &out.Auth.Tokens[i]
+			dst.Name = src.Name
+			dst.Token = src.Token
+			if src.AllowedIPs != nil {
+				dst.AllowedIPs = append([]string(nil), src.AllowedIPs...)
+			}
+			if src.allowednets != nil {
+				dst.allowednets = append([]*net.IPNet(nil), src.allowednets...)
+			}
+		}
 	}
 
 	// Systems 整树深拷贝：SystemConfig / ServerConfig / LogDirEntry 都按值拷贝，
