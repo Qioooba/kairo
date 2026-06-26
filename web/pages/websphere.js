@@ -1658,9 +1658,7 @@
       hitTableWrap.innerHTML = '';
       hitTableWrap.appendChild(el('h3', { text: '并行搜索中…' }));
       const conc = Number(concSel.value) || 8;
-      let contextN = Number(contextInp.value) || 0;
-      if (contextN < 0) contextN = 0;
-      if (contextN > 50) contextN = 50;
+      const contextN = getContextLineCount();
       const timeRange = buildTimeRange();
       // v0.5 #8：文件名参数 — 单文件 / 多文件 / glob 模糊匹配
       const filePatternsRaw = (filePatternInp.value || '').trim();
@@ -1779,21 +1777,23 @@
     }
 
     async function doContext(hit) {
+      const contextN = getContextLineCount();
       const body = Object.assign({}, credsOne(hit.server), {
         file: hit.file, line: hit.line_no,
-        before: 30, after: 30
+        before: contextN, after: contextN
       });
       try {
         const r = await api('POST', '/api/logs/context', body);
-        renderContext(r.lines || [], hit);
+        renderContext(r.lines || [], hit, contextN);
         ctxCard.style.display = '';
         ctxCard.scrollIntoView({ behavior: 'smooth' });
       } catch (e) { toast('上下文获取失败：' + e.message, 'err'); }
     }
 
-    function renderContext(lines, hit) {
+    function renderContext(lines, hit, contextN) {
       ctxCard.innerHTML = '';
-      ctxCard.appendChild(el('h3', { text: '上下文 · ' + hit.server + ' · ' + hit.file + ':' + hit.line_no }));
+      const rangeText = contextN > 0 ? ('前后 ' + contextN + ' 行') : '仅命中行';
+      ctxCard.appendChild(el('h3', { text: '上下文 · ' + hit.server + ' · ' + hit.file + ':' + hit.line_no + ' · ' + rangeText }));
       const view = el('div', { class: 'context-view' });
       lines.forEach(l => {
         view.appendChild(el('div', { class: 'row' + (l.hit ? ' hit' : '') }, [
@@ -1836,6 +1836,14 @@ const formCard = el('div', { class: 'card' }, [
     const filePatternInp = el('input', { type: 'text', id: 'ws-file-pattern', placeholder: '可选 glob（逗号/空格分隔）：例 SystemOut*.log 或 *.log,*.txt' });
 
     const contextInp = el('input', { type: 'number', id: 'ws-context', min: '0', max: '50', value: '0', style: 'width:100%;' });
+    function getContextLineCount() {
+      let n = Number(contextInp.value);
+      if (!Number.isFinite(n)) n = 0;
+      n = Math.floor(n);
+      if (n < 0) n = 0;
+      if (n > 50) n = 50;
+      return n;
+    }
 
     // v0.5-G P1-08：搜索范围三选一（latest / selected / glob）
     // - latest  默认，列最近 N 个
@@ -2155,9 +2163,9 @@ const formCard = el('div', { class: 'card' }, [
           el('div', { class: 'text-dim', style: 'font-size:11.5px; margin-top:2px;', text: '💡 填 glob 后，N 仍限制"取匹配文件中的最新 N 个"（不是只搜 1 个）' })
         ]),
         el('div', null, [
-          el('label', { text: '上下文行' }),
+          el('label', { text: '上下文行数（0=仅命中行）' }),
           contextInp,
-          el('div', { class: 'text-dim', style: 'font-size:11.5px; margin-top:2px;', text: '每个匹配行前后显示 N 行（0-50）' })
+          el('div', { class: 'text-dim', style: 'font-size:11.5px; margin-top:2px;', text: '每个命中行前后各 N 行，点击“上下文”也会用这里的值' })
         ])
       ]),
       fileListArea,
@@ -3125,6 +3133,9 @@ const formCard = el('div', { class: 'card' }, [
       refreshDirs();
       if (lastSel && lastSel.dir) dirSel.value = lastSel.dir;
       refreshCredStatus();
+      if (info.search && typeof info.search.default_context_lines === 'number') {
+        contextInp.value = String(Math.max(0, Math.min(50, info.search.default_context_lines)));
+      }
       // 默认勾上"记住密码"（keyring 模式下；file/disabled 时由 refreshCredStatus 强制取消）
       rememberChk.checked = true;
       rememberChk.disabled = false;
