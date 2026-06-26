@@ -47,12 +47,53 @@
   }
 
   // 让用户在弹窗里输入凭据（keyring 取不到密码时用）
+  // 使用内联表单，兼容不支持 prompt() 的环境（如 Electron embedded browser）
   function askCred() {
-    const u = prompt('SSH 用户名：');
-    if (!u) return null;
-    const p = prompt('SSH 密码：');
-    if (p == null) return null;
-    return { username: u, password: p };
+    return new Promise((resolve) => {
+      if (typeof prompt === 'function') {
+        try {
+          const u = prompt('SSH 用户名：');
+          if (!u) { resolve(null); return; }
+          const p = prompt('SSH 密码：');
+          if (p == null) { resolve(null); return; }
+          resolve({ username: u, password: p });
+          return;
+        } catch (e) { /* prompt threw, fall through to inline form */ }
+      }
+      showInlineCredForm(resolve);
+    });
+  }
+
+  function showInlineCredForm(resolve) {
+    let overlay = document.getElementById('cred-overlay');
+    if (overlay) { overlay.style.display = 'flex'; return; }
+    overlay = document.createElement('div');
+    overlay.id = 'cred-overlay';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:9999;';
+    const box = document.createElement('div');
+    box.style.cssText = 'background:var(--bg-card,#fff);color:var(--fg,#222);padding:24px;border-radius:8px;min-width:300px;box-shadow:0 8px 32px rgba(0,0,0,.3);';
+    box.innerHTML = '<h3 style="margin:0 0 12px;font-size:15px;">需要 SSH 凭据</h3>'
+      + '<p style="margin:0 0 12px;font-size:12px;color:#888;">钥匙串中未找到保存的密码，请输入：</p>'
+      + '<label style="display:block;margin-bottom:8px;font-size:13px;">用户名：<input id="cred-user" type="text" style="width:100%;padding:6px;margin-top:4px;border:1px solid #ccc;border-radius:4px;"></label>'
+      + '<label style="display:block;margin-bottom:12px;font-size:13px;">密码：<input id="cred-pass" type="password" style="width:100%;padding:6px;margin-top:4px;border:1px solid #ccc;border-radius:4px;"></label>'
+      + '<div style="text-align:right;"><button id="cred-cancel" style="margin-right:8px;padding:6px 16px;">取消</button>'
+      + '<button id="cred-ok" style="padding:6px 16px;background:#3b82f6;color:#fff;border:none;border-radius:4px;">确定</button></div>';
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+    const userInput = () => document.getElementById('cred-user');
+    const passInput = () => document.getElementById('cred-pass');
+    function done(cred) {
+      overlay.style.display = 'none';
+      resolve(cred);
+    }
+    document.getElementById('cred-ok').onclick = () => {
+      const u = (userInput().value || '').trim();
+      const p = passInput().value || '';
+      if (!u) { toast('请输入用户名', 'err'); return; }
+      done({ username: u, password: p });
+    };
+    document.getElementById('cred-cancel').onclick = () => done(null);
+    setTimeout(() => userInput().focus(), 50);
   }
 
   const tailOut = $('#tail-out');
@@ -207,10 +248,12 @@
       return;
     }
     let cred = getOpenerCred();
-    if (!cred || !cred.password) {
-      cred = askCred();
-      if (!cred) { setConn('err', '未提供凭据'); return; }
-    }
+    // 第一次尝试：优先用 opener 传来的凭据；如果没有，先用空凭据让后端从 keyring 取
+    // 只有后端明确返回"缺少密码"时，才弹内联表单让用户输入
+    await startWithCred(cred || { username: '', password: '' }, true);
+  }
+
+  async function startWithCred(cred, allowAsk) {
     setConn('busy', '启动中…');
     try {
       const r = await fetch('/api/logs/tail/start', {
@@ -223,7 +266,18 @@
         })
       });
       const data = await r.json();
-      if (!r.ok) throw new Error(data && data.error || ('HTTP ' + r.status));
+      if (!r.ok) {
+        const errMsg = (data && data.error) || ('HTTP ' + r.status);
+        // 缺少密码 → 弹凭据输入框（如果允许）
+        if (allowAsk && /缺少密码|密码|凭据/.test(errMsg)) {
+          const newCred = await askCred();
+          if (newCred) {
+            await startWithCred(newCred, false);
+            return;
+          }
+        }
+        throw new Error(errMsg);
+      }
       tailId = data.id;
       setConn('ok', '已连接 · id=' + tailId);
       viewer.clear();
