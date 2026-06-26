@@ -1679,7 +1679,7 @@
       hitTableWrap.appendChild(el('h3', { text: '并行搜索中…' }));
       const conc = Number(concSel.value) || 8;
       const contextN = getContextLineCount();
-      const timeRange = buildTimeRange();
+      const timeRange = scope === 'selected' ? {} : buildTimeRange();
       // v0.5 #8：文件名参数 — 单文件 / 多文件 / glob 模糊匹配
       const filePatternsRaw = (filePatternInp.value || '').trim();
       const filePatterns = filePatternsRaw
@@ -2221,6 +2221,7 @@ const formCard = el('div', { class: 'card' }, [
       ]),
       el('div', { class: 'btn-row mt-2' }, [btnSearch])
     ]);
+    updateScopeVisibility();
     // searchCard 渲染完成后做一次初始摘要
     updateTargetSummary();
 
@@ -2561,7 +2562,8 @@ const formCard = el('div', { class: 'card' }, [
       if (!sel) { toast('请先在「目标」里选 1 个服务器/目录', 'warn'); return; }
       const [serverName, dirPath] = sel.split('|');
       const lines = Math.max(0, Math.min(1000, Number(tailLinesInp.value) || 0));
-      tailOut.textContent = '';
+      if (tailViewer && tailViewer.clear) tailViewer.clear();
+      else tailOut.textContent = '';
       pendingTailLines = [];
       tailTotalLines = 0;
       grepShownLines = 0;
@@ -3011,35 +3013,8 @@ const formCard = el('div', { class: 'card' }, [
     // 之前叫"4 步走"，但和 sticky tabBar 重叠（DOM 在前，被 sticky 浮在上面覆盖），
     // 而且层级关系没强调，新人看不懂"为什么有 业务系统 / 服务器 / 目录 三层"。
     // 改为：紧凑一行 + 4 步列表 + DOM 移到 tabBar 之后，避免被 sticky 覆盖。
-    const introCard = el('div', { class: 'card ws-intro-card', style: 'background: var(--bg-2); border-left: 4px solid var(--primary); padding: 14px 18px; margin-top: 68px;' }, [
-      el('div', { style: 'font-size: 13px; line-height: 1.65; color: var(--text); margin-bottom: 8px;' }, [
-        el('strong', { text: '层级关系：' }),
-        document.createTextNode('一个业务系统 '),
-        el('span', { style: 'color: var(--primary); font-weight: 600;' }, '→'),
-        document.createTextNode(' 多台服务器 '),
-        el('span', { style: 'color: var(--primary); font-weight: 600;' }, '→'),
-        document.createTextNode(' 每台服务器下多个日志目录。'),
-        el('br'),
-        el('span', { class: 'text-dim', text: '多选服务器 + 多选目录 = 一次操作多个目标（搜索/下载/Tail 全部并行）。' }),
-      ]),
-      el('ol', { style: 'margin: 4px 0 0 0; padding-left: 22px; font-size: 12.5px; line-height: 1.7; color: var(--text-dim);' }, [
-        el('li', null, [
-          el('strong', { style: 'color: var(--text);', text: '选目标 ' }),
-          el('span', { text: '· 业务系统 → 服务器（多选）→ 日志目录（每个服务器下面多选）' })
-        ]),
-        el('li', null, [
-          el('strong', { style: 'color: var(--text);', text: '列文件 / 下载 ' }),
-          el('span', { text: '· 一次性把勾选 targets 下的文件全列出来，多选下载' })
-        ]),
-        el('li', null, [
-          el('strong', { style: 'color: var(--text);', text: '搜索 ' }),
-          el('span', { text: '· 在勾选 targets 里搜索关键词，支持最近 N 个 / 指定文件 / glob' })
-        ]),
-        el('li', null, [
-          el('strong', { style: 'color: var(--text);', text: '实时 Tail ' }),
-          el('span', { text: '· 从文件列表点 ↗ Tail 新窗口跟踪（避免本页卡死）' })
-        ])
-      ])
+    const introCard = el('div', { class: 'ws-intro-card text-dim' }, [
+      document.createTextNode('目标 = 业务系统 / 服务器 / 日志目录；当前操作只作用于已勾选目录。')
     ]);
     // v0.5-G #13：4 个 tab 快捷跳转按钮（点 → 真 tab 切换）
     // P2-14：真 tab 切换（show/hide 内容区），而不是 scrollIntoView
@@ -3130,25 +3105,29 @@ const formCard = el('div', { class: 'card' }, [
     //   第三组（右侧）：本地目录 [input]
     const filesToolbar = el('div', { class: 'files-toolbar', id: 'ws-files-toolbar' }, [
       el('div', { class: 'files-toolbar-row' }, [
-        btnList,
-        el('span', { class: 'lbl', text: '下载最新：' }),
+        el('span', { class: 'files-toolbar-title', text: '文件列表' }),
+        btnList
+      ]),
+      el('div', { class: 'files-toolbar-row' }, [
+        el('span', { class: 'files-toolbar-title', text: '快速下载最新日志' }),
+        el('span', { class: 'lbl', text: '范围：' }),
         dlNSel,
         dlZipLabel,
-        btnDownload,
-        el('div', { style: 'flex: 1;' }),
         el('label', { class: 'inline', style: 'gap: 6px;' }, [
           el('span', { class: 'lbl', text: '本地目录：' }),
           dlTargetDirInp
-        ])
+        ]),
+        btnDownload,
       ])
     ]);
+    btnDownload.textContent = '下载最新';
     const filesWrap = el('div', { class: 'files-wrap' }, [filesToolbar, fileTableWrap]);
     // P2-14：目标选择永远显示；功能区包进 tab content
     // DOM 顺序：tabBar 必须先渲染、introCard 在它之后 —— 否则 sticky tabBar 会盖住 introCard 上半部分
     // （sticky 元素离开原位置后，原来的位置由下方元素填充；DOM 顺序在前的内容会被 sticky 浮在上面覆盖）
+    view.appendChild(formCard);
     view.appendChild(tabBar);
     view.appendChild(introCard);
-    view.appendChild(formCard);
     view.appendChild(makeTabContent('files', filesWrap));
     view.appendChild(makeTabContent('search', searchCard));
     view.appendChild(makeTabContent('tail', tailCard));
