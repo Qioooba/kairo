@@ -312,6 +312,7 @@
     ].forEach(([v, t]) => timeSel.appendChild(el('option', { value: v, text: t })));
     const timeFromInp = el('input', { type: 'datetime-local', id: 'ws-time-from', style: 'display:none' });
     const timeToInp = el('input', { type: 'datetime-local', id: 'ws-time-to', style: 'display:none' });
+    const timeHint = el('div', { class: 'text-dim', style: 'font-size:11.5px; margin-top:2px;', text: '按文件修改时间粗筛，不按日志行时间筛选' });
 
     function updateTimeCustomVisibility() {
       const isCustom = timeSel.value === 'custom';
@@ -358,7 +359,7 @@
     srvPickWrap.appendChild(srvPickHint);
     const btnPickAll = el('button', { class: 'btn btn-sm', text: '全选', onclick: () => toggleAllSrv(true) });
     const btnPickNone = el('button', { class: 'btn btn-sm', text: '全不选', onclick: () => toggleAllSrv(false) });
-    const btnPickOnline = el('button', { class: 'btn btn-sm', text: '只选可用的', onclick: () => toggleOnline() });
+    const btnPickOnline = el('button', { class: 'btn btn-sm', text: '只保留已测通', onclick: () => toggleOnline() });
     const srvPickToolbar = el('div', { class: 'srv-pick-toolbar' }, [
       document.createTextNode('目标服务器:'), btnPickAll, btnPickNone, btnPickOnline
     ]);
@@ -388,6 +389,11 @@
       refreshCredStatus();
     }
     function toggleOnline() {
+      const hasOk = Object.keys(srvStatus).some(k => srvStatus[k] && srvStatus[k].state === 'ok');
+      if (!hasOk) {
+        toast('请先测试连接，再只保留已测通服务器', 'warn');
+        return;
+      }
       srvPickWrap.querySelectorAll('input[type="checkbox"][data-srv]').forEach(cb => {
         cb.checked = srvStatus[cb.getAttribute('data-srv')] && srvStatus[cb.getAttribute('data-srv')].state === 'ok';
       });
@@ -395,28 +401,30 @@
       persistSelection();
       refreshCredStatus();
     }
-    // 当前勾选的 (server, dir) targets 列表；用于多对多搜索/列文件。
-    // 优先取二级勾选；二级都没勾时退回到 dirSel（一级单选）作为所有勾选服务器的目录。
+    // 当前勾选的 (server, dir) targets 列表；页面已经渲染二级目录时，只认用户显式勾选。
+    // 目录全不选就返回空，避免隐藏的默认目录替用户执行生产操作。
     function getSelectedTargets() {
       const sysName = sysSel.value;
       const sys = cfg && cfg.systems.find(s => s.name === sysName);
       if (!sys) return [];
       const out = [];
       const explicitDirs = srvDirsWrap.querySelectorAll('input[type="checkbox"][data-srv][data-dir]:checked');
-      if (explicitDirs.length > 0) {
-        // 多对多：每条 (server, dir) 一项
-        explicitDirs.forEach(cb => {
-          out.push({ server: cb.getAttribute('data-srv'), dir: cb.getAttribute('data-dir') });
-        });
-        return out;
-      }
-      // 退回模式：每个勾选服务器用 dirSel 的目录
-      const fallbackDir = dirSel.value;
-      if (!fallbackDir) return [];
-      getCheckedServers().forEach(srvName => {
-        out.push({ server: srvName, dir: fallbackDir });
+      explicitDirs.forEach(cb => {
+        out.push({ server: cb.getAttribute('data-srv'), dir: cb.getAttribute('data-dir') });
       });
       return out;
+    }
+    function describeTargets(targets) {
+      const srvs = [...new Set((targets || []).map(t => t.server))];
+      return srvs.length + ' 台服务器 / ' + (targets || []).length + ' 个目录';
+    }
+    async function confirmManyTargets(targets, actionText) {
+      if (!targets || targets.length <= 5) return true;
+      if (!OTB.core.confirmDialog) return window.confirm(actionText + '将作用于 ' + describeTargets(targets) + '，是否继续？');
+      return OTB.core.confirmDialog(
+        actionText + '将作用于 ' + describeTargets(targets) + '。请确认这是你想操作的范围。',
+        { title: '确认批量操作', okText: '继续执行', cancelText: '取消' }
+      );
     }
     function toggleAllDirs(on) {
       srvDirsWrap.querySelectorAll('input[type="checkbox"][data-srv][data-dir]').forEach(cb => { cb.checked = on; });
@@ -455,16 +463,16 @@
         srvPickWrap.appendChild(el('div', { class: 'text-dim', text: '该业务系统下没有服务器。' }));
         return;
       }
-      sys.servers.forEach(s => {
+      sys.servers.forEach((s, idx) => {
         const st = srvStatus[s.name] || { state: 'idle' };
         const dotCls = 'dot dot-' + (st.state === 'idle' ? 'idle' : st.state);
         const cb = el('input', { type: 'checkbox', 'data-srv': s.name, value: s.name });
-        // v0.5 #11：默认勾选目标服务器
+        // 默认只选上次使用；没有历史时只选第一台，避免首次进入就扫全量生产节点。
         //   - 有上次选择 → 恢复
-        //   - 无上次 → 默认勾全部（用户开箱即用；取消勾也行）
+        //   - 无上次 → 默认勾第一台（用户可主动全选）
         const wasChecked = prevChecked.indexOf(s.name) !== -1
           || (lastForSys && lastForSys.indexOf(s.name) !== -1)
-          || (prevChecked.length === 0 && !lastForSys); // ← 无上次记忆时全选
+          || (prevChecked.length === 0 && !lastForSys && idx === 0);
         if (wasChecked) cb.checked = true;
         cb.addEventListener('change', () => { renderSrvDirs(); persistSelection(); refreshCredStatus(); });
         const item = el('label', { class: 'srv-pick-item' }, [
@@ -478,6 +486,9 @@
         ]);
         srvPickWrap.appendChild(item);
       });
+      const hasOk = Object.keys(srvStatus).some(k => srvStatus[k] && srvStatus[k].state === 'ok');
+      btnPickOnline.disabled = !hasOk;
+      btnPickOnline.title = hasOk ? '取消未测通或连接失败的服务器' : '请先测试连接';
       // P0-BugFix #2：初次渲染 / 切系统后必须把已勾选服务器的目录区展开，
       // 否则 srvDirsWrap 永远停在 "勾选服务器后会展开它的日志目录，可多选"
       // 提示语，导致「列出文件 / 搜索」拿不到 (server, dir) targets。
@@ -489,7 +500,8 @@
       const sysName = sysSel.value;
       const sys = cfg && cfg.systems.find(s => s.name === sysName);
       const lastSel = OTB.core.lastGet('websphere', 'sel');
-      const lastDirs = (lastSel && lastSel.system === sysName && Array.isArray(lastSel.dirs)) ? lastSel.dirs : [];
+      const hasLastForSys = !!(lastSel && lastSel.system === sysName);
+      const lastDirs = (hasLastForSys && Array.isArray(lastSel.dirs)) ? lastSel.dirs : [];
       const checkedSrvs = getCheckedServers();
       if (!checkedSrvs.length) {
         srvDirsWrap.appendChild(el('div', { class: 'text-dim', text: '先在「目标服务器」里勾选至少一台。' }));
@@ -507,17 +519,16 @@
         ]);
         block.appendChild(head);
         const list = el('div', { class: 'srv-dirs-list' });
-        (srv.log_dirs || []).forEach(d => {
+        (srv.log_dirs || []).forEach((d, di) => {
           const cb = el('input', { type: 'checkbox', 'data-srv': srv.name, 'data-dir': d.path, value: d.path });
-          // v0.5 #11：默认勾选日志目录
+          // 默认只选上次使用；没有历史时只选每台已选服务器的第一个目录。
           //   - 有上次选择 → 恢复
-          //   - 无上次 → 父级 server 勾选了 → 默认全勾这个 server 的目录
+          //   - 无上次 → 父级 server 勾选了 → 默认勾第一个目录
           //   - 无上次 + dirSel 命中 → 兜底勾上
           const dirHit = lastDirs.find(x => x.srv === srv.name && x.dir === d.path);
-          const fallbackHit = (lastDirs.length === 0 && dirSel.value === d.path);
-          // P0-1 修复：parentChecked 引用 renderSrvPick 里的 wasChecked 局部变量 → 改成从当前 checkedSrvs 判断
-          const parentChecked = (lastDirs.length === 0 && checkedSrvs.indexOf(srv.name) !== -1);
-          if (dirHit || fallbackHit || parentChecked) cb.checked = true;
+          const fallbackHit = (!hasLastForSys && dirSel.value === d.path && di === 0);
+          const parentDefault = (!hasLastForSys && checkedSrvs.indexOf(srv.name) !== -1 && di === 0);
+          if (dirHit || fallbackHit || parentDefault) cb.checked = true;
           cb.addEventListener('change', persistSelection);
           const enc = (d.encoding || 'utf-8').toLowerCase();
           const item = el('label', { class: 'srv-dirs-item' }, [
@@ -783,6 +794,7 @@
     async function doList() {
       const targets = getSelectedTargets();
       if (!targets.length) { toast('请先勾选服务器 + 目录（多对多）', 'warn'); return; }
+      if (!(await confirmManyTargets(targets, '列出文件'))) return;
       // P1-6 修复：改用 /api/logs/list/targets 一次请求，由后端并发拉所有 targets，
       // 避免前端 N×/api/logs/list 的 N+1 延迟问题（10+ 台时明显）。
       listState.groups = [];
@@ -1310,6 +1322,7 @@
     async function doDownload() {
       const targets = getSelectedTargets();
       if (!targets.length) { toast('请先勾选服务器 + 目录（多对多）', 'warn'); return; }
+      if (!(await confirmManyTargets(targets, '下载最新日志'))) return;
       if (listState.dlId) { toast('已有下载任务在进行中', 'warn'); return; }
       const latest = Number(dlNSel.value) || 1;
       const wantZip = dlZipChk.checked;
@@ -1640,6 +1653,7 @@
       const targets = getSelectedTargets();
       if (!targets.length) { toast('请先勾选服务器 + 目录（多对多）', 'warn'); return; }
       if (!queryInp.value.trim()) { toast('搜索表达式不能为空', 'warn'); return; }
+      if (!(await confirmManyTargets(targets, '搜索日志'))) return;
       pushSearchHistory(queryInp.value);
       const scope = Object.keys(scopeRadios).filter(k => !k.endsWith('Label') && scopeRadios[k].checked)[0] || 'latest';
       let selectedItems = null;
@@ -1834,6 +1848,12 @@ const formCard = el('div', { class: 'card' }, [
     // v0.5 #8：文件名参数 — 单文件 / 多文件 / glob 模糊匹配（空格或逗号分隔）
     // P1-08 改进：明确语义 — 填了 glob 后就只用 glob 匹配，N 仍控制"取最新 N 个匹配上的"
     const filePatternInp = el('input', { type: 'text', id: 'ws-file-pattern', placeholder: '可选 glob（逗号/空格分隔）：例 SystemOut*.log 或 *.log,*.txt' });
+    const latestScopeField = el('div', null, [el('label', { text: '最近文件数（每台服务器每个目录）' }), filesNSel]);
+    const globScopeField = el('div', null, [
+      el('label', { text: '文件名 glob（逗号/空格分隔）' }),
+      filePatternInp,
+      el('div', { class: 'text-dim', style: 'font-size:11.5px; margin-top:2px;', text: '填 glob 后，N 仍限制"取匹配文件中的最新 N 个"' })
+    ]);
 
     const contextInp = el('input', { type: 'number', id: 'ws-context', min: '0', max: '50', value: '0', style: 'width:100%;' });
     function getContextLineCount() {
@@ -1906,9 +1926,16 @@ const formCard = el('div', { class: 'card' }, [
     }
     function updateScopeVisibility() {
       const sel = Object.keys(scopeRadios).filter(k => !k.endsWith('Label') && scopeRadios[k].checked)[0];
-      filesNSel.parentNode.parentNode.style.display = (sel === 'latest') ? '' : 'none';
-      filePatternInp.parentNode.style.display = (sel === 'glob') ? '' : 'none';
+      latestScopeField.style.display = (sel === 'latest') ? '' : 'none';
+      globScopeField.style.display = (sel === 'glob') ? '' : 'none';
       fileListArea.style.display = (sel === 'selected') ? '' : 'none';
+      const disableTime = sel === 'selected';
+      timeSel.disabled = disableTime;
+      timeFromInp.disabled = disableTime;
+      timeToInp.disabled = disableTime;
+      timeHint.textContent = disableTime
+        ? '指定文件模式下不应用时间粗筛'
+        : '按文件修改时间粗筛，不按日志行时间筛选';
     }
 
     async function openSearchFilePicker() {
@@ -2156,12 +2183,8 @@ const formCard = el('div', { class: 'card' }, [
       ]),
       scopeRow,
       el('div', { class: 'grid-3 mt-2' }, [
-        el('div', null, [el('label', { text: '最近文件数（每台服务器每个目录）' }), filesNSel]),
-        el('div', null, [
-          el('label', { text: '文件名 glob（逗号/空格分隔）' }),
-          filePatternInp,
-          el('div', { class: 'text-dim', style: 'font-size:11.5px; margin-top:2px;', text: '💡 填 glob 后，N 仍限制"取匹配文件中的最新 N 个"（不是只搜 1 个）' })
-        ]),
+        latestScopeField,
+        globScopeField,
         el('div', null, [
           el('label', { text: '上下文行数（0=仅命中行）' }),
           contextInp,
@@ -2170,7 +2193,7 @@ const formCard = el('div', { class: 'card' }, [
       ]),
       fileListArea,
       el('div', { class: 'grid-3 mt-2' }, [
-        el('div', null, [el('label', { text: '时间范围' }), timeSel]),
+        el('div', null, [el('label', { text: '按文件修改时间粗筛' }), timeSel, timeHint]),
         el('div', { style: 'display:flex; gap:8px; align-items:flex-end;' }, [timeFromInp, timeToInp]),
         // P1-8：目标摘要节点（已在外层声明 + 实现 updateTargetSummary）
         targetSummaryEl
