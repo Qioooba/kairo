@@ -183,12 +183,17 @@ func TestSSHTest_BadPassword(t *testing.T) {
 	w := doRequest(srv, "POST", "/api/ssh/test", map[string]any{
 		"system": "信贷生产", "server": "mock-1", "username": "ops", "password": "wrong",
 	})
-	if w.Code != 502 {
-		t.Errorf("expected 502, got %d body=%s", w.Code, w.Body.String())
+	if w.Code != 401 {
+		t.Errorf("expected 401, got %d body=%s", w.Code, w.Body.String())
 	}
-	// 5xx 响应不应含 password 字面量（P2-5）
+	var got map[string]any
+	_ = jsonDecode(w.Body.Bytes(), &got)
+	if got["category"] != "auth" {
+		t.Errorf("expected category=auth, got %v body=%s", got["category"], w.Body.String())
+	}
+	// 认证失败响应不应含 password 字面量（P2-5）
 	if strings.Contains(w.Body.String(), "password") {
-		t.Errorf("502 响应泄漏 password 字面量: %s", w.Body.String())
+		t.Errorf("401 响应泄漏 password 字面量: %s", w.Body.String())
 	}
 }
 
