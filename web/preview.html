@@ -138,14 +138,17 @@
       let activeCred = null;
 
       // 拿凭据：opener window 同源直接取（用户在主页已输入）。
+      // P0-BUG-3 修复：拿不到 password 时返回 null（不是空 password），
+      // 让 doPreview 走"直接调后端"路径——后端有 keyring 兜底。
       function getCred() {
         try {
           const op = window.opener;
           if (op && op.OTB && op.OTB._previewCred && op.OTB._previewCred[system + '::' + server]) {
-            return op.OTB._previewCred[system + '::' + server];
+            const c = op.OTB._previewCred[system + '::' + server];
+            if (c && c.username && c.password) return c;
           }
         } catch (e) { /* ignore cross-origin */ }
-        return activeCred;
+        return activeCred || null;
       }
       function showLogin() {
         if (!loginForm) return;
@@ -165,8 +168,10 @@
           return;
         }
         cred = cred || getCred();
-        if (!cred || !cred.username || !cred.password) { showLogin(); return; }
-        activeCred = cred;
+        // P0-BUG-3：cred 缺失时仍然**直接调后端**——后端会走 keyring 兜底。
+        // 老逻辑是"没 password 就 showLogin 等用户输入"，但 opener 拿不到密码是常态，
+        // 导致每次预览都弹 login，纯粹多余。
+        activeCred = cred || { username: '', password: '' };
         hideLogin();
 
         setConn('busy', '加载中…');
@@ -237,15 +242,15 @@
       $('#btn-refresh').addEventListener('click', () => doPreview(activeCred || getCred()));
       $('#btn-close').addEventListener('click', () => { window.close(); });
       $('#btn-download').addEventListener('click', () => {
-        // 调 /api/files/download 把整个文件下下来（不传 target_dir → 用默认 downloads）
-        const cred = activeCred || getCred();
-        if (!cred) { showLogin(); return; }
+        // P0-BUG-3：getCred() 可能返回 {username:'', password:''}（无凭据），
+        // 但仍然发请求——后端有 keyring 兜底。
+        const cred = activeCred || getCred() || { username: '', password: '' };
         fetch('/api/files/download', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             system: system, server: server, path: path,
-            username: cred.username, password: cred.password,
+            username: cred.username || '', password: cred.password || '',
             paths: [path], zip: false
           })
         }).then(r => r.json()).then(d => {
@@ -265,6 +270,7 @@
             toast('请输入 SSH 用户名和密码', 'warn');
             return;
           }
+          activeCred = cred;
           doPreview(cred);
         });
       }

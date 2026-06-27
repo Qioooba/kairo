@@ -27,7 +27,9 @@
     const allServers = new Set();
     const tableWrap = el('div', { class: 'mt-3' });
     const btnRefresh = el('button', { class: 'btn', text: '刷新', onclick: load });
-    const btnClearAll = el('button', { class: 'btn btn-danger', text: '清空全部', onclick: doClearAll });
+    // v0.9 UI-1：原来用 .btn-danger（实心红渐变）太鲜艳，改成柔和 outline 红，
+    // 跟整体暗色协调，但仍能跟"删除单文件"的 .btn-danger 区分开。
+    const btnClearAll = el('button', { class: 'btn btn-danger-soft', text: '清空全部', onclick: doClearAll });
 
     // v0.8：拉一次外部打开器列表（缓存到 OTB.state.downloadsOpeners）。
     // 等 openers 加载完再调 load()，避免重复请求 /api/downloads/list。

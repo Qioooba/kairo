@@ -50,8 +50,15 @@
     const srvSel = el('select', { id: 'files-srv' });
     srvSel.appendChild(el('option', { value: '', text: '（先选系统）' }));
     srvSel.disabled = true;
+    // P1-BUG-6 修复：remember 初始 disabled（没选 sys/srv 时不让勾）。
     const rememberChk = el('input', { type: 'checkbox', id: 'files-remember' });
+    rememberChk.disabled = true;
     const rememberLabel = el('label', { class: 'inline' }, [rememberChk, document.createTextNode('记住密码')]);
+    // P0-BUG-2 修复：添加 SSH 用户名 / 密码 输入框。
+    // /api/config 不返回 password，所以 srv.password 永远空 → 没输入框用户没法连接。
+    // creds() 优先用用户输入，没填才回落到 srv 默认。
+    const userInput = el('input', { type: 'text', id: 'files-user-input', placeholder: 'SSH 用户名（默认取服务器配置）', autocomplete: 'username', style: 'flex: 1 1 auto; min-width: 180px;' });
+    const passInput = el('input', { type: 'password', id: 'files-pass-input', placeholder: 'SSH 密码（留空 → keyring / 临时）', autocomplete: 'current-password', style: 'flex: 1 1 auto; min-width: 180px;' });
     const btnConnect = el('button', { class: 'btn btn-primary', text: '连接并浏览' });
 
     // ---- 文件浏览器启动警告（项 14）----
@@ -67,6 +74,16 @@
       el('label', null, [el('span', { class: 'lbl', text: '业务系统' }), sysSel]),
       el('label', null, [el('span', { class: 'lbl', text: '服务器' }), srvSel])
     ]));
+    // P0-BUG-2：用户名/密码输入区。视觉上独立行，配色与主表单区分（淡蓝背景）。
+    const credRow = el('div', { class: 'files-cred-row', style: 'display:flex; gap:10px; flex-wrap:wrap; align-items:center;' }, [
+      el('label', { style: 'flex: 1 1 220px; margin: 0; display:flex; flex-direction:column; gap:4px;' }, [
+        el('span', { class: 'lbl', text: 'SSH 用户名（可覆盖服务器默认）' }), userInput
+      ]),
+      el('label', { style: 'flex: 1 1 220px; margin: 0; display:flex; flex-direction:column; gap:4px;' }, [
+        el('span', { class: 'lbl', text: 'SSH 密码（留空 → keyring / 临时）' }), passInput
+      ])
+    ]);
+    connCard.appendChild(credRow);
     connCard.appendChild(el('div', { class: 'mt-2', style: 'display:flex;align-items:center;gap:10px' }, [rememberLabel, btnConnect]));
 
     // ---- 路径区 ----
@@ -88,11 +105,16 @@
     const commonDirsLabel = el('span', { class: 'lbl', text: '常用目录：' });
     commonDirsBar.appendChild(commonDirsLabel);
     // ★ 收藏当前路径 按钮（连同当前 system+server 存进 localStorage）
-    const btnBookmarkCurrent = el('button', { class: 'btn btn-sm', text: '⭐ 收藏当前路径', onclick: bookmarkCurrentPath });
+    // UI-7 修复：加 btn-star class 提升 ⭐ 在暗背景下的对比度（淡黄底）。
+    const btnBookmarkCurrent = el('button', { class: 'btn btn-sm btn-star', text: '⭐ 收藏当前路径', onclick: bookmarkCurrentPath });
     // ⚙ 管理 按钮（弹简单 inline 列表，可改别名/路径/删）
     const btnManageCommonDirs = el('button', { class: 'btn btn-sm', text: '⚙ 管理常用目录', onclick: openManageCommonDirs });
     pathCard.appendChild(commonDirsBar);
-    pathCard.appendChild(el('div', { class: 'mt-1 row gap-2' }, [btnBookmarkCurrent, btnManageCommonDirs]));
+    // P1-BUG-7 修复：⭐ 收藏 和 ⚙ 管理 两个按钮挤一起，显式 gap:14px 把间距拉开。
+    const bookmarkRow = el('div', { class: 'mt-1', style: 'display:flex; gap:14px; align-items:center; flex-wrap:wrap;' }, [
+      btnBookmarkCurrent, btnManageCommonDirs
+    ]);
+    pathCard.appendChild(bookmarkRow);
 
     // ---- 文件列表区 ----
     const tableWrap = el('div', { class: 'file-table-wrap' });
@@ -276,9 +298,13 @@
     }
 
     function creds() {
+      // P0-BUG-2 修复：srv.password 永远是 ''（/api/config 不返回）。
+      // 优先用用户在输入框里填的值，没填才回落到 srv 默认。
+      const srvUser = getSrvUsername();
+      const srvPass = getSrvPassword();
       return {
-        username: getSrvUsername(),
-        password: getSrvPassword(),
+        username: (userInput && userInput.value && userInput.value.trim()) || srvUser,
+        password: (passInput && passInput.value) || srvPass,
         remember: rememberChk.checked
       };
     }
@@ -402,7 +428,10 @@
         state.selected.clear();
         renderCrumbs();
         renderTable();
-        toast('列出目录失败：' + e.message, 'err');
+        // P1-BUG-10 修复：后端 handlers_files.go 已经返回场景化错误信息（如
+        // "SSH 账号没有该目录访问权限" / "该路径未在白名单中"），前端不要再 wrap
+        // 一层"列出目录失败："——避免 "列出目录失败：列出目录失败: permission denied" 这种重复。
+        toast(e.message || '列出目录失败', 'err');
       }
     }
 
@@ -435,7 +464,7 @@
     // openPreviewInNewWindow 开新窗口（preview.html），凭证走 OTB._previewCred 跨窗口传递
     function openPreviewInNewWindow(filePath, fileName) {
       const c = creds();
-      if (!c.username) { toast('请在系统配置中设置 SSH 用户名', 'warn'); return; }
+      if (!c.username) { toast('请在系统配置中设置 SSH 用户名或在上方填写', 'warn'); return; }
       let encoding = 'utf-8';
       try {
         const sys = (state.cfg.systems || []).find(s => s.name === state.currentSys);
@@ -443,10 +472,13 @@
         const ld = srv && (srv.log_dirs || [])[0];
         if (ld && ld.encoding) encoding = String(ld.encoding).toLowerCase();
       } catch (e) { /* keep utf-8 */ }
-      // 凭证跨窗口传递（同源 opener 可直接读）
+      // P0-BUG-3 修复：传给 preview.html 的 password 必须是"实际能用的密码"。
+      // 优先级：用户在输入框里填的 > srv.password（通常空）> 空（让 preview.html 后端 keyring 兜底）。
       OTB._previewCred = OTB._previewCred || {};
       OTB._previewCred[state.currentSys + '::' + state.currentSrv] = {
-        username: c.username, password: c.password
+        username: c.username,
+        password: (passInput && passInput.value) || c.password || '',
+        has_keyring: !!rememberChk.checked
       };
       const q = new URLSearchParams({
         system: state.currentSys, server: state.currentSrv,
@@ -478,7 +510,9 @@
       if (r.is_binary) meta.push('二进制文件');
       head.appendChild(el('div', { class: 'text-dim', text: meta.join('  ·  ') }));
       // 项 1：modal 里加 "在新窗口打开" 按钮（满足用户原话 "新浏览器窗口预览"）
-      const btnOpenWin = el('button', { class: 'btn btn-sm', text: '↗ 在新窗口打开', onclick: () => {
+      // UI-2 修复：原文字"在新窗口打开"在 modal 上下文里有歧义（modal 本身就是窗口），
+      // 改成"独立窗口打开"以明确这是浏览器新标签/新窗口。
+      const btnOpenWin = el('button', { class: 'btn btn-sm', text: '↗ 独立窗口打开', onclick: () => {
         overlay.remove();
         openPreviewInNewWindow(filePath, fileName);
       }});
@@ -779,7 +813,11 @@
         tr.appendChild(el('td', { class: 'col-check' }, [cb]));
 
         const icon = entry.isDir ? '📁' : '📄';
-        const nameCell = el('td');
+        // UI-5 修复：nameCell 改成 flex 布局 + gap:6px，让 icon 和文字有合理间距，
+        // 不再用纯文本"📄 "+name 那种靠空格分隔。
+        const nameCell = el('td', { class: 'name-cell' });
+        const iconSpan = el('span', { class: 'name-icon', text: icon });
+        nameCell.appendChild(iconSpan);
         if (entry.isDir) {
           nameCell.appendChild(el('a', { href: '#', text: entry.name, onclick: (e) => {
             e.preventDefault(); doListDir(fullPath, creds());
@@ -802,12 +840,14 @@
           });
           nameCell.appendChild(link);
         }
-        nameCell.insertBefore(document.createTextNode(icon + ' '), nameCell.firstChild);
         tr.appendChild(nameCell);
 
         tr.appendChild(el('td', { class: 'num' }, [document.createTextNode(entry.isDir ? '—' : formatBytes(entry.size))]));
         tr.appendChild(el('td', null, [document.createTextNode(entry.mtime ? formatTime(entry.mtime) : '-')]));
-        tr.appendChild(el('td', null, [document.createTextNode(entry.mode || '-')]));
+        // P1-BUG-9：权限列显示简化形式（📄 644 / 📁 755），title 保留原始 mode 给高级用户看。
+        const modeCell = el('td', { class: 'mode-cell', title: entry.mode || '' });
+        modeCell.textContent = formatShortMode(entry.mode);
+        tr.appendChild(modeCell);
         tr.appendChild(el('td', { class: 'col-status status-cell', 'data-name': entry.name }, [document.createTextNode('')]));
 
         tbody.appendChild(tr);
@@ -837,6 +877,21 @@
         state.entries.forEach(e => { if (!e.isDir) state.selected.add(e.name); });
       }
       renderTable();
+    }
+
+    // P1-BUG-9 修复：把 "-rw-r--r--" 翻译成 "644" 这种简化形式显示给普通用户，
+    // 原始 mode 字符串放 title 里 hover 可看。
+    // 输入：标准 ls -l 风格的 10 字符串（首位 type，1-3 用户，4-6 组，7-9 其它）。
+    // 输出：'{icon} {octal}' 形式，例如 '📄 644' / '📁 755' / '🔗 777'。
+    function formatShortMode(mode) {
+      if (!mode || typeof mode !== 'string' || mode.length < 10) return mode || '-';
+      const tri = (s) => (s.charAt(0) === 'r' ? 4 : 0) + (s.charAt(1) === 'w' ? 2 : 0) + (s.charAt(2) === 'x' ? 1 : 0);
+      const u = tri(mode.slice(1, 4));
+      const g = tri(mode.slice(4, 7));
+      const o = tri(mode.slice(7, 10));
+      const typeIcon = { '-': '📄', 'd': '📁', 'l': '🔗', 'c': '🖨', 'b': '💾', 'p': '🔌', 's': '🧦' };
+      const icon = typeIcon[mode.charAt(0)] || '📄';
+      return icon + ' ' + u + g + o;
     }
 
     function setRowStatusByName(name, st) {
@@ -923,9 +978,14 @@
         state.dlEvtSrc = es;
         OTB.core.setActiveDL({ id: r.id, evtsrc: es });
         let gotDone = false;
+        // P1-BUG-4 修复：done 一旦见到，**立刻** es.close() + 清 onerror/onmessage，
+        // 防止 EventSource 自动重连把 404 刷到 network log。
         const onDoneSeen = (reason) => {
           if (gotDone) return;
           gotDone = true;
+          try { es.onerror = null; } catch (e) { /* ignore */ }
+          try { es.onmessage = null; } catch (e) { /* ignore */ }
+          try { es.close(); } catch (e) { /* ignore */ }
           closeDownloadStream(reason);
         };
         es.onmessage = (ev) => {
@@ -939,6 +999,11 @@
         };
         es.addEventListener('done', () => { onDoneSeen('done'); });
         es.onerror = () => {
+          // P1-BUG-4：已 gotDone 后再 fire 是 close 残留，忽略（不再 setTimeout）。
+          if (gotDone) {
+            try { es.close(); } catch (e) { /* ignore */ }
+            return;
+          }
           setTimeout(() => {
             if (state.dlId && state.dlEvtSrc === es && !gotDone) {
               onDoneSeen('error');
@@ -1204,9 +1269,13 @@
         state.dlEvtSrc = es;
         OTB.core.setActiveDL({ id: r.id, evtsrc: es });
         let gotDone = false;
+        // P1-BUG-4：参考上面 doDownload 的修复——done 见到立即卸监听器 + close。
         const onDoneSeen = (reason) => {
           if (gotDone) return;
           gotDone = true;
+          try { es.onerror = null; } catch (e) { /* ignore */ }
+          try { es.onmessage = null; } catch (e) { /* ignore */ }
+          try { es.close(); } catch (e) { /* ignore */ }
           closeDownloadStream(reason);
         };
         es.onmessage = (ev) => {
@@ -1220,6 +1289,11 @@
         };
         es.addEventListener('done', () => { onDoneSeen('done'); });
         es.onerror = () => {
+          // P1-BUG-4：已 gotDone 后再 fire 是 close 残留，忽略。
+          if (gotDone) {
+            try { es.close(); } catch (e) { /* ignore */ }
+            return;
+          }
           setTimeout(() => {
             if (state.dlId && state.dlEvtSrc === es && !gotDone) {
               onDoneSeen('error');

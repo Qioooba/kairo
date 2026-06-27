@@ -559,6 +559,35 @@ textarea { resize: vertical; min-height: 100px; font-family: ui-monospace, SFMon
 }
 .btn-primary:hover { filter: brightness(1.08); }
 .btn-danger { background: var(--btn-danger-grad); border-color: transparent; color: #fff; }
+/* v0.9 UI-1：清空类按钮的"软"红 — 淡红底 + 红边 + 红字，不再用 .btn-danger 那种
+   高饱和渐变实心红。和单行删除按钮 (.btn-danger.btn-sm) 区分开——一个醒目警告，一个柔和提示。 */
+.btn-danger-soft {
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.45);
+  color: #dc2626;
+}
+.btn-danger-soft:hover {
+  background: rgba(239, 68, 68, 0.16);
+  border-color: rgba(239, 68, 68, 0.7);
+  color: #b91c1c;
+}
+.btn-danger-soft:disabled {
+  background: var(--bg-2);
+  border-color: var(--line);
+  color: var(--text-dim);
+  opacity: 0.6;
+}
+/* hc 主题下用纯黑底 + 红边 + 红字，对比拉满 */
+:root[data-theme="hc"] .btn-danger-soft {
+  background: #000000;
+  border: 1px solid #ff5555;
+  color: #ff5555;
+}
+:root[data-theme="hc"] .btn-danger-soft:hover {
+  background: rgba(255, 85, 85, 0.15);
+  border-color: #ff8888;
+  color: #ff8888;
+}
 .btn-ghost { background: transparent; }
 .btn-row { display: flex; gap: 8px; flex-wrap: wrap; }
 
@@ -1250,14 +1279,16 @@ input[type="datetime-local"] {
 /* 文件名链接 hover 效果（v0.5 项 1） */
 .table td a:hover { color: var(--primary-2); text-decoration: underline; }
 
-/* ===== v0.5 项 16：右上角通知栈（download done / 配置错误等） ===== */
+/* ===== v0.5 项 16：通知栈（download done / 配置错误等） =====
+   v0.9 改：原来在 right-top，会遮住下载历史页第一行的"打开所在目录"按钮（BUG-5），
+   改成 right-bottom，不挡 sidebar 也不挡表格行；column-reverse 让新通知在栈底（IM 风格）。 */
 .otb-notify-stack {
   position: fixed;
-  top: 56px;
+  bottom: 16px;
   right: 16px;
   z-index: 9999;
   display: flex;
-  flex-direction: column;
+  flex-direction: column-reverse;
   gap: 8px;
   pointer-events: none;
   max-width: 380px;
@@ -2610,6 +2641,69 @@ input[type="datetime-local"] {
   height: 1px;
   background: var(--line);
   margin: 4px 0;
+}
+
+/* ===== fix-files-bugs 配套样式（2026-06-27） ===== */
+/* UI-5：表格文件名 cell 用 flex 让 icon 和文字有间距（替换原先 "📄 name" 纯文本拼接） */
+.table td.name-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 180px;
+}
+.table td.name-cell .name-icon {
+  flex: 0 0 auto;
+  font-size: 14px;
+  opacity: 0.92;
+}
+.table td.name-cell a {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* BUG-9：权限列简化形式（📄 644 / 📁 755）单元格样式 */
+.table td.mode-cell {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 12.5px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+/* BUG-2：用户名/密码输入区视觉与主表单区分（淡蓝背景 + 蓝左边框） */
+.files-cred-row {
+  background: rgba(79, 140, 255, 0.04);
+  border: 1px solid rgba(79, 140, 255, 0.18);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-top: 12px !important;
+}
+:root[data-theme="light"] .files-cred-row {
+  background: rgba(37, 99, 235, 0.04);
+  border-color: rgba(37, 99, 235, 0.20);
+}
+.files-cred-row .lbl {
+  color: var(--primary-2);
+  font-weight: 500;
+}
+
+/* UI-7：⭐ 收藏当前路径 按钮在暗背景下对比度提升 */
+.btn-star {
+  background: rgba(234, 179, 8, 0.12);
+  border-color: rgba(234, 179, 8, 0.35);
+  color: var(--text);
+}
+.btn-star:hover {
+  background: rgba(234, 179, 8, 0.22);
+  border-color: rgba(234, 179, 8, 0.55);
+}
+:root[data-theme="light"] .btn-star {
+  background: rgba(217, 119, 6, 0.08);
+  border-color: rgba(217, 119, 6, 0.35);
+}
+:root[data-theme="light"] .btn-star:hover {
+  background: rgba(217, 119, 6, 0.15);
 }
 
 /* Final theme readability overrides. Keep these after component styles so the
