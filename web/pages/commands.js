@@ -844,6 +844,10 @@
 
     const statSpan = el('span', { class: 'muted', id: 'cmd-stat', text: '' });
 
+    const favOnlyLabel = el('label', { style: 'display:inline-flex; align-items:center; gap:6px;' }, [
+        el('input', { type: 'checkbox', id: 'cmd-favonly' }),
+        el('span', { text: '只看收藏' })
+      ]);
     const topBar = el('div', { class: 'filter-bar', style: 'display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-top:12px;' }, [
       el('label', { style: 'display:inline-flex; align-items:center; gap:6px;' }, [
         el('span', { text: '搜索' }),
@@ -853,10 +857,7 @@
         el('span', { text: '分类' }),
         categorySel
       ]),
-      el('label', { style: 'display:inline-flex; align-items:center; gap:6px;' }, [
-        el('input', { type: 'checkbox', id: 'cmd-favonly' }),
-        el('span', { text: '只看收藏' })
-      ]),
+      favOnlyLabel,
       statSpan,
     ]);
 
@@ -1018,7 +1019,16 @@
       clearTimeout(timer);
       timer = setTimeout(renderList, 80);
     });
-    categorySel.addEventListener('change', renderList);
+
+    // 分类切换时更新"只看收藏"复选框可见性
+    function updateFavOnlyVisibility() {
+      const isFavCat = getCategory() === 'fav';
+      favOnlyLabel.style.display = isFavCat ? 'none' : 'inline-flex';
+      if (isFavCat) {
+        document.getElementById('cmd-favonly').checked = false;
+      }
+    }
+    categorySel.addEventListener('change', () => { updateFavOnlyVisibility(); renderList(); });
     document.getElementById('cmd-favonly').addEventListener('change', renderList);
 
     // 快捷键
@@ -1035,9 +1045,10 @@
           searchInp.value = '';
           renderList();
           searchInp.blur();
-        } else if (getQuery()) {
+        } else {
           searchInp.value = '';
           renderList();
+          searchInp.focus(); // 非聚焦时按 Esc 也聚焦搜索框
         }
       }
     }

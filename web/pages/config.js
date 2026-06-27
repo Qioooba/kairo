@@ -46,6 +46,16 @@
   }
   const state = OTB.state.configEditor;
 
+  // 同步两个保存按钮（顶部 #cfg-save-btn 和底部 .cfg-save-footer）的 disabled
+  // 【修复】原 syncSaveBtns 定义在 renderConfig 闭包里，而 recomputeDirty 在模块级
+  // 调用它，导致 ReferenceError: syncSaveBtns is not defined，所有按钮点击都报错。
+  // 提到模块级，用 querySelectorAll 兜底（按钮未渲染时静默跳过）。
+  const syncSaveBtns = () => {
+    const top = $('#cfg-save-btn');
+    if (top) top.disabled = !state.dirty;
+    document.querySelectorAll('.cfg-save-footer').forEach(b => { b.disabled = !state.dirty; });
+  };
+
   // 计算总 dirty + 同步给 OTB.state.unsavedConfig + 按钮 disabled
   const recomputeDirty = () => {
     const any = state.sectionsDirty.systems || state.sectionsDirty.openers || state.sectionsDirty.retention;
@@ -62,13 +72,6 @@
     const markDirty = (section = 'systems') => {
       state.sectionsDirty[section] = true;
       recomputeDirty();
-    };
-
-    // 同步两个保存按钮（顶部 #cfg-save-btn 和底部 .cfg-save-footer）的 disabled
-    const syncSaveBtns = () => {
-      const top = $('#cfg-save-btn');
-      if (top) top.disabled = !state.dirty;
-      document.querySelectorAll('.cfg-save-footer').forEach(b => { b.disabled = !state.dirty; });
     };
 
     // ---- 顶部警告 banner（项 14）：自由文件浏览器打开时 ----
@@ -295,10 +298,19 @@
           ]));
         } else {
           const inp = el('input', { type: type, value: srv[key] != null ? String(srv[key]) : '', placeholder: ph });
+          if (key === 'port') { inp.min = '1'; inp.max = '65535'; }
           inp.addEventListener('input', () => {
             if (type === 'number') {
               const n = parseInt(inp.value, 10);
-              srv[key] = isNaN(n) ? 0 : n;
+              // 端口范围校验：1-65535，非法值标红边框提示
+              if (key === 'port') {
+                const valid = !isNaN(n) && n > 0 && n < 65536;
+                inp.style.borderColor = valid || inp.value === '' ? '' : 'var(--error, #ef4444)';
+                inp.title = valid ? '' : '端口范围 1-65535';
+                srv[key] = isNaN(n) ? 0 : n;
+              } else {
+                srv[key] = isNaN(n) ? 0 : n;
+              }
             } else {
               srv[key] = inp.value;
             }
@@ -561,7 +573,15 @@
       if (state.sectionsDirty.openers) {
         tasks.push({
           name: 'openers',
-          run: async () => { await api('PUT', '/api/admin/openers', { openers: state.openers || [] }); }
+          run: async () => {
+            // 保存前过滤掉完全空的行（名称和路径都为空），避免后端校验报错
+            const cleaned = (state.openers || []).filter(o => (o.name && o.name.trim()) || (o.path && o.path.trim()));
+            if (cleaned.length !== state.openers.length) {
+              state.openers = cleaned;
+              renderOpeners();
+            }
+            await api('PUT', '/api/admin/openers', { openers: cleaned });
+          }
         });
       }
       if (state.sectionsDirty.retention) {
@@ -615,10 +635,17 @@
       }
       state.loaded = true;
 
-      // 错误汇总（不要吞错，但要明确告诉用户"哪些节失败"）
+      // 错误汇总：区分"部分失败"和"全部成功"
+      // 成功的节不展示（避免信息过载），只突出失败的节
+      const successNames = tasks.map(t => t.name).filter(n => !errs.find(e => e.name === n));
       if (errs.length) {
-        const failed = errs.map(e => e.name + '：' + e.err.message).join('；');
-        toast('部分保存失败 — ' + failed, 'err');
+        const failed = errs.map(e => {
+          // 中文名称映射，让用户更容易理解
+          const label = { systems: '业务系统', openers: '外部打开器', retention: '下载清理' }[e.name] || e.name;
+          return label + '：' + e.err.message;
+        }).join('；');
+        const okPart = successNames.length ? '（' + successNames.map(n => ({ systems: '业务系统', openers: '外部打开器', retention: '下载清理' }[n] || n)).join('、') + '已保存）' : '（无成功项）';
+        toast('部分保存失败 — ' + failed + okPart, 'err');
       } else if (path) {
         toast('已保存并后端确认：' + path, 'ok');
       } else {

@@ -10,6 +10,13 @@ app:
     ssh_traffic_dump: false
     ssh_log_max_mb: 20
     ssh_log_keep: 3
+    external_openers:
+        - name: Notepad++
+          path: C:\Windows\notepad.exe
+          icon: "\U0001F4CB"
+        - name: TestApp
+          path: /usr/bin/testapp
+          icon: "\U0001F4CE"
     download_retention_days: 7
     download_max_count: 1000
 systems:
