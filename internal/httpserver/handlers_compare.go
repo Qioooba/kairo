@@ -1,7 +1,6 @@
 package httpserver
 
 import (
-	"bytes"
 	"crypto/md5"
 	"encoding/hex"
 	"encoding/json"
@@ -11,9 +10,10 @@ import (
 	"io/fs"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"ops-toolbox/internal/diff"
 )
 
 type folderScanReq struct {
@@ -189,8 +189,14 @@ func (s *Server) handleCompareFolderScan(w http.ResponseWriter, r *http.Request)
 		allPaths[p] = true
 	}
 
+	// 注意：same/different/leftOnly/rightOnly 必须初始化为非 nil 的空 slice，
+	// 否则没有差异时会被 encoding/json 序列化成 null，导致前端 .length 访问崩溃
+	// （典型场景：左右填同一目录做"基准校验"，所有字段都为空）。
 	var leftTree, rightTree []fileEntry
-	var same, different, leftOnly, rightOnly []string
+	same := []string{}
+	different := []string{}
+	leftOnly := []string{}
+	rightOnly := []string{}
 
 	for relPath := range allPaths {
 		left, hasLeft := leftEntries[relPath]
@@ -267,29 +273,31 @@ func (s *Server) handleCompareFileDiff(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cmd := exec.CommandContext(r.Context(), "diff", "-u", req.LeftPath, req.RightPath)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	err := cmd.Run()
-
+	// 单文件 4MB 限制和文本比对保持一致；用 internal/diff.Compare 而非 exec `diff`
+	// 是为了跨平台（Windows 没有系统 diff）以及和 /api/diff/compare 行为对齐。
+	const maxBytes = 4 * 1024 * 1024
+	leftBytes, err := os.ReadFile(req.LeftPath)
 	if err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			if exitErr.ExitCode() > 1 {
-				writeErr(w, 500, fmt.Errorf("diff执行失败: %s", stderr.String()))
-				return
-			}
-		} else {
-			writeErr(w, 500, fmt.Errorf("diff执行失败: %w", err))
-			return
-		}
+		writeErr(w, 400, fmt.Errorf("读取左侧文件失败: %w", err))
+		return
+	}
+	rightBytes, err := os.ReadFile(req.RightPath)
+	if err != nil {
+		writeErr(w, 400, fmt.Errorf("读取右侧文件失败: %w", err))
+		return
+	}
+	if len(leftBytes) > maxBytes {
+		writeErr(w, 400, fmt.Errorf("左侧文件超过 4MB 上限"))
+		return
+	}
+	if len(rightBytes) > maxBytes {
+		writeErr(w, 400, fmt.Errorf("右侧文件超过 4MB 上限"))
+		return
 	}
 
-	unified := stdout.String()
-	if unified == "" {
-		unified = "--- " + req.LeftPath + "\n+++ " + req.RightPath + "\n"
-	}
+	leftLines := strings.Split(strings.ReplaceAll(string(leftBytes), "\r\n", "\n"), "\n")
+	rightLines := strings.Split(strings.ReplaceAll(string(rightBytes), "\r\n", "\n"), "\n")
 
-	writeJSON(w, 200, fileDiffResp{Unified: unified})
+	res := diff.Compare(leftLines, rightLines, req.LeftPath, req.RightPath)
+	writeJSON(w, 200, fileDiffResp{Unified: res.UnifiedDiff})
 }

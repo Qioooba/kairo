@@ -18,13 +18,15 @@
   let outputMode = 'unified';
   let hideEqualRows = false;
   let activeRenderResult = null;
-  let d2h = null;
-  let currentMode = 'text';
+  // 复用 popup 窗口（连续比对不刷窗口）。
+  // 用固定 name 让 window.open 命中已有窗口，避免开 N 个标签页。
+  const POPUP_NAME = 'otb_compare_diff';
 
   let folderScanResult = null;
   let folderExpanded = new Set();
   let folderShowOnlyDiff = false;
   let folderFilter = '';
+  let folderExpandedSnapshot = null; // 仅 diff 开关 / 搜索过滤前的快照，用于恢复
 
   const LS_IGNORE = 'otb:compare:ignore';
   const LS_MODE = 'otb:compare:mode';
@@ -153,25 +155,46 @@
     });
   }
 
-  function openDiffInNewWindow(unifiedDiff, diffTitle, stats) {
-    const win = window.open('', '_blank');
+  function openDiffInNewWindow(unifiedDiff, diffTitle, stats, opts) {
+    opts = opts || {};
+    const mode = opts.mode || outputMode;
+    const hideEq = opts.hideEqual != null ? !!opts.hideEqual : hideEqualRows;
+
+    // 复用同一个 popup 窗口：连续比对时不刷窗口，避免开 N 个标签页。
+    const win = window.open('', POPUP_NAME);
     if (!win) {
       toast('弹窗被浏览器阻止，请允许弹窗后重试', 'err');
       return null;
     }
 
-    var theme = (document.documentElement.getAttribute('data-theme') || 'dark');
-    var statsText = stats ? ('新增 ' + stats.added + ' 行·删除 ' + stats.removed + ' 行') : '';
-    var primaryColor = theme === 'light' ? '#2563eb' : theme === 'hc' ? '#00ffff' : theme === 'green' ? '#3f7a3f' : '#4f8cff';
-    var bgColor = theme === 'light' ? '#ffffff' : theme === 'hc' ? '#000000' : theme === 'green' ? '#fbfdf7' : '#11161f';
-    var bg2Color = theme === 'light' ? '#f6f8fa' : theme === 'hc' ? '#0a0a0a' : theme === 'green' ? '#eef3e7' : '#1d2532';
-    var lineColor = theme === 'light' ? '#d8dee4' : theme === 'hc' ? '#ffffff' : theme === 'green' ? '#cfd9c0' : '#232b3a';
-    var textColor = theme === 'light' ? '#1f2328' : theme === 'hc' ? '#ffff00' : theme === 'green' ? '#1f2a1f' : '#e6edf3';
-    var textDimColor = theme === 'light' ? '#5a6678' : theme === 'hc' ? '#ffffaa' : theme === 'green' ? '#4d5d4d' : '#8b97a8';
-    var textMuteColor = theme === 'light' ? '#8b97a8' : theme === 'hc' ? '#ccc888' : theme === 'green' ? '#6b7a6b' : '#5a6678';
+    const theme = (document.documentElement.getAttribute('data-theme') || 'dark');
+    const statsText = stats ? ('新增 ' + stats.added + ' 行·删除 ' + stats.removed + ' 行') : '';
+    const primaryColor = theme === 'light' ? '#2563eb' : theme === 'hc' ? '#00ffff' : theme === 'green' ? '#3f7a3f' : '#4f8cff';
+    const bgColor = theme === 'light' ? '#ffffff' : theme === 'hc' ? '#000000' : theme === 'green' ? '#fbfdf7' : '#11161f';
+    const bg2Color = theme === 'light' ? '#f6f8fa' : theme === 'hc' ? '#0a0a0a' : theme === 'green' ? '#eef3e7' : '#1d2532';
+    const lineColor = theme === 'light' ? '#d8dee4' : theme === 'hc' ? '#ffffff' : theme === 'green' ? '#cfd9c0' : '#232b3a';
+    const textColor = theme === 'light' ? '#1f2328' : theme === 'hc' ? '#ffff00' : theme === 'green' ? '#1f2a1f' : '#e6edf3';
+    const textDimColor = theme === 'light' ? '#5a6678' : theme === 'hc' ? '#ffffaa' : theme === 'green' ? '#4d5d4d' : '#8b97a8';
+    const textMuteColor = theme === 'light' ? '#8b97a8' : theme === 'hc' ? '#ccc888' : theme === 'green' ? '#6b7a6b' : '#5a6678';
 
-    var dataJson = JSON.stringify({ unified: unifiedDiff, title: diffTitle || 'left vs right', stats: stats || null, mode: outputMode });
-    dataJson = dataJson.replace(/<\//g, '<\\/');
+    // XSS 防御：diff 内容可能来自不可信输入（恶意日志 / 配置 / 用户粘贴）。
+    // 用 base64 + Blob URL 序列化 JSON 后通过 fetch 喂给弹窗，
+    // 彻底规避 `</script><script>...</script>` 注入导致的脚本执行。
+    // btoa 在 unicode 字符串上会抛 InvalidCharacterError，所以先 encodeURIComponent 转义。
+    const payload = {
+      unified: unifiedDiff || '',
+      title: diffTitle || 'left vs right',
+      stats: stats || null,
+      mode: mode,
+      hideEqual: hideEq,
+    };
+    const payloadJson = JSON.stringify(payload);
+    // XSS 防御：JSON 字符串里出现 `</script>` 会让 HTML 解析器提前关闭 <script> 标签。
+    // 把 `<` 转成 JS unicode escape `\u003c`（HTML 解析器看不到 `<`，但 JS 解析器会还原成 `<`，
+    // 接着 JSON.parse 又会把它当成 unicode escape 还原成 `<`，所以 data.unified 仍然是原值）。
+    const payloadEscaped = payloadJson.replace(/</g, '\\u003c');
+    // JSON.stringify 二次包一层是为了得到一个合法的 JS 字符串字面量（自动转义内部 `"` 和 `\`）。
+    const payloadJsLiteral = JSON.stringify(payloadEscaped);
 
     win.document.write('<!DOCTYPE html><html lang="zh-CN" data-theme="' + theme + '"><head><meta charset="utf-8"><title>Diff ' + (diffTitle || 'left vs right') + '</title>'
       + '<link rel="stylesheet" href="/static/vendor/diff2html.min.css">'
@@ -208,150 +231,157 @@
       + '</div>'
       + '</div>'
       + '<div class="diff-body" id="diffBody"></div>'
-      + '<script src="/static/vendor/diff2html.min.js"><' + '/script>'
-      + '<script id="__diff_data__" type="application/json">' + dataJson + '<' + '/script>'
-      + '<script>' + (function () {
-        var d2h = null;
-        var diffRows = [];
-        var currentIdx = -1;
-
-        function getDiffData() {
-          try {
-            var dataEl = document.getElementById('__diff_data__');
-            if (dataEl) return JSON.parse(dataEl.textContent);
-          } catch (e) {}
-          return { unified: '', title: 'diff', stats: null, mode: 'unified' };
-        }
-
-        function init() {
-          var data = getDiffData();
-          var body = document.getElementById('diffBody');
-          if (!d2h) {
-            d2h = (typeof window.Diff2Html !== 'undefined') ? window.Diff2Html : null;
-          }
-          if (!d2h) {
-            body.innerHTML = '<pre style="padding:16px;white-space:pre-wrap;word-break:break-all;">' + escapeHtml(data.unified) + '</pre>';
-            return;
-          }
-          try {
-            var fmt = (data.mode === 'side') ? 'side-by-side' : 'line-by-line';
-            var html = d2h.html(data.unified, {
-              outputFormat: fmt,
-              drawFileList: false,
-              matching: 'lines',
-              renderNothingWhenEmpty: false,
-            });
-            body.innerHTML = html;
-          } catch (e) {
-            body.innerHTML = '<pre style="padding:16px;white-space:pre-wrap;word-break:break-all;">' + escapeHtml(data.unified) + '</pre>';
-          }
-          collectDiffRows();
-          if (diffRows.length > 0) {
-            currentIdx = 0;
-            highlightCurrent();
-          }
-          updateNavPos();
-        }
-
-        function collectDiffRows() {
-          diffRows = [];
-          var all = document.querySelectorAll('.d2h-ins, .d2h-del, .d2h-cntx.d2h-change, .d2h-info');
-          var seenTrs = new Set();
-          all.forEach(function (el) {
-            var tr = el.closest('tr');
-            if (tr && !seenTrs.has(tr)) {
-              var isChanged = tr.querySelector('.d2h-ins, .d2h-del');
-              if (isChanged) {
-                seenTrs.add(tr);
-                diffRows.push(tr);
-              }
-            }
-          });
-        }
-
-        function highlightCurrent() {
-          document.querySelectorAll('.diff-current-hunk').forEach(function (el) {
-            el.classList.remove('diff-current-hunk');
-          });
-          if (currentIdx >= 0 && currentIdx < diffRows.length) {
-            var tr = diffRows[currentIdx];
-            var tds = tr.querySelectorAll('td');
-            tds.forEach(function (td) { td.classList.add('diff-current-hunk'); });
-            tr.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          }
-        }
-
-        function updateNavPos() {
-          var pos = document.getElementById('diffNavPos');
-          if (pos) {
-            if (diffRows.length === 0) pos.textContent = '无差异';
-            else pos.textContent = (currentIdx + 1) + ' / ' + diffRows.length;
-          }
-        }
-
-        function nextDiff() {
-          if (diffRows.length === 0) return;
-          currentIdx = (currentIdx + 1) % diffRows.length;
-          highlightCurrent();
-          updateNavPos();
-        }
-        function prevDiff() {
-          if (diffRows.length === 0) return;
-          currentIdx = (currentIdx - 1 + diffRows.length) % diffRows.length;
-          highlightCurrent();
-          updateNavPos();
-        }
-
-        function escapeHtml(s) {
-          var d = document.createElement('div');
-          d.textContent = s;
-          return d.innerHTML;
-        }
-
-        function copyDiff() {
-          var data = getDiffData();
-          if (navigator.clipboard && navigator.clipboard.writeText) {
-            navigator.clipboard.writeText(data.unified).then(function () {
-              showToast('已复制');
-            }, function () { showToast('复制失败'); });
-          }
-        }
-
-        function downloadDiff() {
-          var data = getDiffData();
-          var blob = new Blob([data.unified], { type: 'text/plain;charset=utf-8' });
-          var url = URL.createObjectURL(blob);
-          var a = document.createElement('a');
-          a.href = url;
-          a.download = 'diff_' + Date.now() + '.diff';
-          document.body.appendChild(a);
-          a.click();
-          setTimeout(function () { URL.revokeObjectURL(url); if (a.parentNode) a.parentNode.removeChild(a); }, 0);
-        }
-
-        function showToast(msg) {
-          var t = document.createElement('div');
-          t.textContent = msg;
-          t.style.cssText = 'position:fixed;bottom:20px;right:20px;background:rgba(0,0,0,0.8);color:#fff;padding:8px 14px;border-radius:6px;font-size:13px;z-index:9999;';
-          document.body.appendChild(t);
-          setTimeout(function () { if (t.parentNode) t.parentNode.removeChild(t); }, 1500);
-        }
-
-        document.addEventListener('DOMContentLoaded', function () {
-          init();
-          document.getElementById('btnPrev').addEventListener('click', prevDiff);
-          document.getElementById('btnNext').addEventListener('click', nextDiff);
-          document.getElementById('btnCopy').addEventListener('click', copyDiff);
-          document.getElementById('btnDownload').addEventListener('click', downloadDiff);
-          document.getElementById('btnClose').addEventListener('click', function () { window.close(); });
-          document.addEventListener('keydown', function (e) {
-            if (e.key === 'Escape') { window.close(); return; }
-            if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
-            if (e.key === 'n' || e.key === 'N' || e.key === 'ArrowDown') { e.preventDefault(); nextDiff(); }
-            else if (e.key === 'p' || e.key === 'P' || e.key === 'ArrowUp') { e.preventDefault(); prevDiff(); }
-          });
-        });
-      }).toString() + '();<' + '/script>'
+      + '<script>(function() {'
+      + 'window.PAYLOAD_JSON = ' + payloadJsLiteral + ';'
+      + 'var PAYLOAD_JSON = window.PAYLOAD_JSON;'
+      + 'var TITLE_FALLBACK = ' + JSON.stringify(diffTitle || 'left vs right') + ';'
+      + 'function decodePayload() {'
+      + '  try {'
+      + '    return JSON.parse(PAYLOAD_JSON);'
+      + '  } catch (e) {'
+      + '    return { unified: "", title: TITLE_FALLBACK, stats: null, mode: "unified", hideEqual: false };'
+      + '  }'
+      + '}'
+      + 'function escapeHtml(s) {'
+      + '  var d = document.createElement("div");'
+      + '  d.textContent = s;'
+      + '  return d.innerHTML;'
+      + '}'
+      + 'function showToast(msg) {'
+      + '  var t = document.createElement("div");'
+      + '  t.textContent = msg;'
+      + '  t.style.cssText = "position:fixed;bottom:20px;right:20px;background:rgba(0,0,0,0.8);color:#fff;padding:8px 14px;border-radius:6px;font-size:13px;z-index:9999;";'
+      + '  document.body.appendChild(t);'
+      + '  setTimeout(function () { if (t.parentNode) t.parentNode.removeChild(t); }, 1500);'
+      + '}'
+      + 'function renderUnifiedFromText(unified) {'
+      + '  return `<pre style="padding:16px;white-space:pre-wrap;word-break:break-all;">${escapeHtml(unified)}</pre>`;'
+      + '}'
+      + 'function renderChanges(unified) {'
+      + '  var lines = unified.split("\\n");'
+      + '  var html = `<pre class="cmp-changes-only" style="padding:12px;line-height:1.6;font-size:12.5px;">`;'
+      + '  for (var i = 0; i < lines.length; i++) {'
+      + '    var ln = lines[i];'
+      + '    var ch = ln.charAt(0);'
+      + '    var color = "#e6edf3";'
+      + '    var bg = "transparent";'
+      + '    if (ch === "+") { color = "#a3e3a3"; bg = "rgba(46,160,67,0.15)"; }'
+      + '    else if (ch === "-") { color = "#ffa198"; bg = "rgba(248,81,73,0.15)"; }'
+      + '    else if (ch === "@") { color = "#79c0ff"; }'
+      + '    html += `<div style="background:${bg};color:${color};padding:0 8px;">${escapeHtml(ln)}</div>`;'
+      + '  }'
+      + '  html += "</pre>";'
+      + '  return html;'
+      + '}'
+      + 'function collectDiffRows() {'
+      + '  diffRows = [];'
+      + '  var all = document.querySelectorAll(".d2h-ins, .d2h-del, .d2h-cntx.d2h-change, .d2h-info");'
+      + '  var seenTrs = new Set();'
+      + '  all.forEach(function (el) {'
+      + '    var tr = el.closest("tr");'
+      + '    if (tr && !seenTrs.has(tr)) {'
+      + '      var isChanged = tr.querySelector(".d2h-ins, .d2h-del");'
+      + '      if (isChanged) { seenTrs.add(tr); diffRows.push(tr); }'
+      + '    }'
+      + '  });'
+      + '}'
+      + 'function highlightCurrent() {'
+      + '  document.querySelectorAll(".diff-current-hunk").forEach(function (el) { el.classList.remove("diff-current-hunk"); });'
+      + '  if (currentIdx >= 0 && currentIdx < diffRows.length) {'
+      + '    var tr = diffRows[currentIdx];'
+      + '    tr.querySelectorAll("td").forEach(function (td) { td.classList.add("diff-current-hunk"); });'
+      + '    tr.scrollIntoView({ behavior: "smooth", block: "center" });'
+      + '  }'
+      + '}'
+      + 'function updateNavPos() {'
+      + '  var pos = document.getElementById("diffNavPos");'
+      + '  if (!pos) return;'
+      + '  if (diffRows.length === 0) pos.textContent = "无差异";'
+      + '  else pos.textContent = (currentIdx + 1) + " / " + diffRows.length;'
+      + '}'
+      + 'function nextDiff() {'
+      + '  if (diffRows.length === 0) return;'
+      + '  currentIdx = (currentIdx + 1) % diffRows.length;'
+      + '  highlightCurrent(); updateNavPos();'
+      + '}'
+      + 'function prevDiff() {'
+      + '  if (diffRows.length === 0) return;'
+      + '  currentIdx = (currentIdx - 1 + diffRows.length) % diffRows.length;'
+      + '  highlightCurrent(); updateNavPos();'
+      + '}'
+      + 'function copyDiff() {'
+      + '  if (navigator.clipboard && navigator.clipboard.writeText) {'
+      + '    navigator.clipboard.writeText(data.unified).then(function () { showToast("已复制"); }, function () { showToast("复制失败"); });'
+      + '  }'
+      + '}'
+      + 'function downloadDiff() {'
+      + '  var blob = new Blob([data.unified], { type: "text/plain;charset=utf-8" });'
+      + '  var url = URL.createObjectURL(blob);'
+      + '  var a = document.createElement("a");'
+      + '  a.href = url;'
+      + '  a.download = "diff_" + Date.now() + ".diff";'
+      + '  document.body.appendChild(a);'
+      + '  a.click();'
+      + '  setTimeout(function () { URL.revokeObjectURL(url); if (a.parentNode) a.parentNode.removeChild(a); }, 0);'
+      + '}'
+      + 'var data = decodePayload();'
+      + 'var diffRows = [];'
+      + 'var currentIdx = -1;'
+      + 'function init() {'
+      + '  var body = document.getElementById("diffBody");'
+      + '  var fmt = (data.mode === "side") ? "side-by-side" : "line-by-line";'
+      + '  var d2h = (typeof window.Diff2Html !== "undefined") ? window.Diff2Html : null;'
+      + '  if (!d2h || data.mode === "changes") {'
+      + '    body.innerHTML = (data.mode === "changes") ? renderChanges(data.unified) : renderUnifiedFromText(data.unified);'
+      + '    updateNavPos();'
+      + '    return;'
+      + '  }'
+      + '  try {'
+      + '    var html = d2h.html(data.unified, {'
+      + '      outputFormat: fmt,'
+      + '      drawFileList: false,'
+      + '      matching: "lines",'
+      + '      renderNothingWhenEmpty: false,'
+      + '      hideEqualRows: !!data.hideEqual'
+      + '    });'
+      + '    body.innerHTML = html;'
+      + '    collectDiffRows();'
+      + '    if (diffRows.length > 0) { currentIdx = 0; highlightCurrent(); }'
+      + '    updateNavPos();'
+      + '  } catch (e) {'
+      + '    body.innerHTML = `<pre style="padding:16px;color:#f85149;">d2h 渲染失败: ${e.message || e}</pre><pre style="padding:16px;white-space:pre-wrap;">${escapeHtml(data.unified)}</pre>`;'
+      + '    updateNavPos();'
+      + '  }'
+      + '}'
+      + 'function boot() {'
+      + '  if (typeof window.Diff2Html !== "undefined") { init(); return; }'
+      + '  var tries = 0;'
+      + '  var t = setInterval(function () {'
+      + '    if (typeof window.Diff2Html !== "undefined" || tries++ > 40) {'
+      + '      clearInterval(t);'
+      + '      init();'
+      + '    }'
+      + '  }, 25);'
+      + '}'
+      + 'document.getElementById("btnPrev").addEventListener("click", prevDiff);'
+      + 'document.getElementById("btnNext").addEventListener("click", nextDiff);'
+      + 'document.getElementById("btnCopy").addEventListener("click", copyDiff);'
+      + 'document.getElementById("btnDownload").addEventListener("click", downloadDiff);'
+      + 'document.getElementById("btnClose").addEventListener("click", function () { window.close(); });'
+      + 'document.addEventListener("keydown", function (e) {'
+      + '  if (e.key === "Escape") { window.close(); return; }'
+      + '  if (e.target && (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA")) return;'
+      + '  if (e.key === "n" || e.key === "N" || e.key === "ArrowDown") { e.preventDefault(); nextDiff(); }'
+      + '  else if (e.key === "p" || e.key === "P" || e.key === "ArrowUp") { e.preventDefault(); prevDiff(); }'
+      + '});'
+      + 'if (document.readyState === "loading") {'
+      + '  document.addEventListener("DOMContentLoaded", boot);'
+      + '} else {'
+      + '  boot();'
+      + '}'
+      + '})();<' + '/script>'
+      // 外部 diff2html 放在 IIFE 之后：boot() 会轮询等待它加载。
+      + '<script src="/static/vendor/diff2html.min.js" async onerror="document.getElementById(\'diffBody\').innerHTML=\'<pre style=&quot;padding:16px;&quot;>diff2html.min.js 加载失败，请检查 /static/vendor/ 目录</pre>\'"><' + '/script>'
       + '</body></html>');
     win.document.close();
     return win;
@@ -371,8 +401,13 @@
         ignore: ignore,
       });
       lastResult = r;
-      openDiffInNewWindow(r.unified_diff || '', 'left vs right', r.stats);
+      // 主页面 resultBox 先渲染一遍（inline fallback），保证弹窗被拦截时也能看到结果。
       if (activeRenderResult) activeRenderResult(r);
+      // 然后开 popup 显示独立窗口版本（带 prev/next 导航 + 复制/下载）。
+      openDiffInNewWindow(r.unified_diff || '', 'left vs right', r.stats, {
+        mode: outputMode,
+        hideEqual: hideEqualRows,
+      });
     } catch (e) {
       toast('比对失败：' + (e.message || e), 'err');
     }
@@ -625,10 +660,13 @@
 
     const leftCount = folderScanResult.left.tree.filter(e => !e.is_dir).length;
     const rightCount = folderScanResult.right.tree.filter(e => !e.is_dir).length;
-    const sameCount = folderScanResult.diff.same.length;
-    const diffCount = folderScanResult.diff.different.length;
-    const leftOnlyCount = folderScanResult.diff.left_only.length;
-    const rightOnlyCount = folderScanResult.diff.right_only.length;
+    // 后端可能返回 null（极端：所有 diff 字段都为空，例如左右填同一目录）。
+    // 这种情况必须 fallback 到 []，否则 .length 会抛 TypeError。
+    const diffObj = folderScanResult.diff || {};
+    const sameCount = (diffObj.same || []).length;
+    const diffCount = (diffObj.different || []).length;
+    const leftOnlyCount = (diffObj.left_only || []).length;
+    const rightOnlyCount = (diffObj.right_only || []).length;
 
     const leftHeader = el('div', { style: 'padding:8px 12px; border-bottom:1px solid var(--line); font-weight:600; display:flex; justify-content:space-between; align-items:center; background:var(--bg2,#1d2532); flex-shrink:0; gap:8px;' }, [
       el('span', { style: 'overflow:hidden; text-overflow:ellipsis; white-space:nowrap;', text: '📁 ' + folderScanResult.left.root }),
@@ -677,7 +715,8 @@
       folderScanResult = r;
       setAllExpanded(true);
       const fileCount = r.left.tree.filter(e => !e.is_dir).length + r.right.tree.filter(e => !e.is_dir).length;
-      const diffCount = r.diff.different.length + r.diff.left_only.length + r.diff.right_only.length;
+      const diffObj = r.diff || {};
+      const diffCount = (diffObj.different || []).length + (diffObj.left_only || []).length + (diffObj.right_only || []).length;
       if (progressEl) {
         progressEl.textContent = '扫描完成：共 ' + fileCount + ' 个文件，差异 ' + diffCount + ' 个';
       }
@@ -703,7 +742,10 @@
         left_path: leftPath,
         right_path: rightPath,
       });
-      openDiffInNewWindow(r.unified || '', relPath, null);
+      openDiffInNewWindow(r.unified || '', relPath, null, {
+        mode: outputMode,
+        hideEqual: hideEqualRows,
+      });
     } catch (e) {
       toast('获取diff失败：' + (e.message || e), 'err');
     }
@@ -793,7 +835,7 @@
     cbCase.addEventListener('change', syncIgnore);
 
     const rdoUnified = el('input', { type: 'radio', name: 'cmp-mode', value: 'unified' });
-    var rdoChanges = el('input', { type: 'radio', name: 'cmp-mode', value: 'changes' });
+    const rdoChanges = el('input', { type: 'radio', name: 'cmp-mode', value: 'changes' });
     const rdoSide = el('input', { type: 'radio', name: 'cmp-mode', value: 'side' });
     rdoUnified.checked = outputMode === 'unified';
     rdoChanges.checked = outputMode === 'changes';
@@ -871,10 +913,61 @@
       const s = r.stats;
       statsBar.textContent =
         '共 ' + s.left_lines + ' → ' + s.right_lines + ' 行 · ' +
-        '新增 ' + s.added + ' · 删除 ' + s.removed + ' · 共同 ' + s.common +
-        ' · 结果已在新窗口打开';
+        '新增 ' + s.added + ' · 删除 ' + s.removed + ' · 共同 ' + s.common;
 
-      resultBox.innerHTML = '<div class="muted" style="padding:16px;text-align:center;">比对完成，结果已在新窗口打开。如未看到新窗口，请检查浏览器弹窗拦截。</div>';
+      // 同步在 resultBox 里 inline 渲染 diff：即使弹窗被拦截，用户也能看到结果。
+      // 模式分支：
+      //   - 'changes'：手写只显示 +/-/@ 行（diff2html 不支持）
+      //   - 其他：用 window.Diff2Html（主页面全局可用）
+      const unified = r.unified_diff || '';
+      if (!unified.trim()) {
+        resultBox.innerHTML = '<div class="muted" style="padding:16px;text-align:center;">两侧完全一致，无差异。</div>';
+        return;
+      }
+      if (outputMode === 'changes') {
+        resultBox.innerHTML = renderChangesOnly(unified);
+        return;
+      }
+      const localD2H = (typeof window.Diff2Html !== 'undefined') ? window.Diff2Html : null;
+      if (!localD2H) {
+        resultBox.innerHTML = '<pre style="padding:16px;white-space:pre-wrap;word-break:break-all;">' + escapeHtmlInline(unified) + '</pre>';
+        return;
+      }
+      try {
+        const fmt = (outputMode === 'side') ? 'side-by-side' : 'line-by-line';
+        const html = localD2H.html(unified, {
+          outputFormat: fmt,
+          drawFileList: false,
+          matching: 'lines',
+          renderNothingWhenEmpty: false,
+          hideEqualRows: !!hideEqualRows,
+        });
+        resultBox.innerHTML = html;
+      } catch (e) {
+        resultBox.innerHTML = '<pre style="padding:16px;white-space:pre-wrap;word-break:break-all;">' + escapeHtmlInline(unified) + '</pre>';
+      }
+    }
+    function escapeHtmlInline(s) {
+      const d = document.createElement('div');
+      d.textContent = s;
+      return d.innerHTML;
+    }
+    function renderChangesOnly(unified) {
+      // '仅差异行' 模式：手写实现，diff2html 没有原生支持。
+      const lines = unified.split('\n');
+      let html = '<pre class="cmp-changes-only" style="padding:12px;line-height:1.6;font-size:12.5px;background:var(--bg2);border-radius:6px;">';
+      for (let i = 0; i < lines.length; i++) {
+        const ln = lines[i];
+        const ch = ln.charAt(0);
+        let color = 'var(--text, #e6edf3)';
+        let bg = 'transparent';
+        if (ch === '+') { color = '#3fb950'; bg = 'rgba(46,160,67,0.15)'; }
+        else if (ch === '-') { color = '#f85149'; bg = 'rgba(248,81,73,0.15)'; }
+        else if (ch === '@') { color = '#58a6ff'; }
+        html += '<div style="background:' + bg + ';color:' + color + ';padding:0 8px;">' + escapeHtmlInline(ln) + '</div>';
+      }
+      html += '</pre>';
+      return html;
     }
     activeRenderResult = renderResult;
 
@@ -904,7 +997,16 @@
       style: 'max-width:200px;',
     });
     folderSearchInput.addEventListener('input', () => {
-      folderFilter = folderSearchInput.value;
+      const newFilter = folderSearchInput.value;
+      // 进入过滤时快照当前展开状态；清空过滤时恢复，
+      // 避免污染用户手动展开/折叠的视图。
+      if (newFilter && !folderFilter) {
+        folderExpandedSnapshot = new Set(folderExpanded);
+      } else if (!newFilter && folderFilter && folderExpandedSnapshot) {
+        folderExpanded = folderExpandedSnapshot;
+        folderExpandedSnapshot = null;
+      }
+      folderFilter = newFilter;
       renderFolderTree(folderTreeContainer);
     });
 
@@ -923,8 +1025,12 @@
           if (r && r.path) {
             leftFolderPathInp.value = r.path;
             saveFolderPath('left', r.path);
+          } else {
+            toast('未选择文件夹', 'warn');
           }
-        } catch (e) { /* ignore */ }
+        } catch (e) {
+          toast('选择文件夹失败：' + (e.message || e), 'err');
+        }
       },
     });
     const btnChooseRightDir = el('button', {
@@ -936,8 +1042,12 @@
           if (r && r.path) {
             rightFolderPathInp.value = r.path;
             saveFolderPath('right', r.path);
+          } else {
+            toast('未选择文件夹', 'warn');
           }
-        } catch (e) { /* ignore */ }
+        } catch (e) {
+          toast('选择文件夹失败：' + (e.message || e), 'err');
+        }
       },
     });
     const btnClearLeftFolder = el('button', {
@@ -1036,7 +1146,6 @@
     ]);
 
     function switchMode(mode) {
-      currentMode = mode;
       const tabs = modeTabBar.querySelectorAll('.cmp-mode-tab');
       tabs.forEach((t) => {
         t.classList.toggle('active', t.getAttribute('data-mode') === mode);
@@ -1063,11 +1172,6 @@
   function makeRadio(input, label) {
     return el('label', { class: 'cmp-opt', style: 'display:flex; align-items:center; gap:4px;' }, [input, document.createTextNode(' ' + label)]);
   }
-
-  function bootstrap() {
-    d2h = (typeof window.Diff2Html !== 'undefined') ? window.Diff2Html : null;
-  }
-  bootstrap();
 
   OTB.pages.compare = renderCompare;
   OTB.state.routes.compare = renderCompare;

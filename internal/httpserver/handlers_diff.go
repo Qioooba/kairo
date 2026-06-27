@@ -30,10 +30,10 @@ type compareIgnore struct {
 
 // diffCompareResp 是 /api/diff/compare 的响应。
 type diffCompareResp struct {
-	OK         bool        `json:"ok"`
-	Stats      diff.Stats  `json:"stats"`
-	Lines      []diff.Line `json:"lines"`
-	UnifiedDiff string     `json:"unified_diff"`
+	OK          bool        `json:"ok"`
+	Stats       diff.Stats  `json:"stats"`
+	Lines       []diff.Line `json:"lines"`
+	UnifiedDiff string      `json:"unified_diff"`
 }
 
 func (s *Server) handleDiffCompare(w http.ResponseWriter, r *http.Request) {
