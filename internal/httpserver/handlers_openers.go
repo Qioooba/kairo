@@ -31,9 +31,15 @@ func (s *Server) handleAdminOpeners(w http.ResponseWriter, r *http.Request) {
 		// GET 跟 /api/config 返回的 App.ExternalOpeners 重复但有用：
 		// 下载历史页可能只想拉 openers（不要整个 config），
 		// 给个独立端点避免下载历史页依赖整个 /api/config 的字段稳定性。
+		// 【v0.x 修复 #B5】统一返回 [] 而非 null：Go 的 nil slice JSON 序列化为 null，
+		// 前端期望数组，空配置场景下语义更清晰（前端 Array.isArray 兜底可去掉）。
 		cur := s.cur()
+		openers := cur.App.ExternalOpeners
+		if openers == nil {
+			openers = []config.ExternalOpener{}
+		}
 		writeJSON(w, 200, map[string]any{
-			"openers": cur.App.ExternalOpeners,
+			"openers": openers,
 		})
 	case http.MethodPut:
 		var req adminOpenersPutReq

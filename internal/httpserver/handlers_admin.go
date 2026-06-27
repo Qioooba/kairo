@@ -81,10 +81,12 @@ type adminDownloadRetentionReq struct {
 func (s *Server) handleAdminDownloadRetention(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
+		// 【v0.x 修复 #B6】只返回 effective 字段。
+		// 旧实现同时返回外层 download_retention_days / download_max_count（*int，未配置时为 null）
+		// 和 effective（含默认值）。前端只用 effective，外层 null 容易让前端误以为"显式设为 null"。
+		// 若日后需要"区分用户未配 vs 显式置 0"，再补 effective_user_set / effective_default 双源。
 		cur := s.cur()
 		writeJSON(w, 200, map[string]any{
-			"download_retention_days": cur.App.DownloadRetentionDays,
-			"download_max_count":      cur.App.DownloadMaxCount,
 			"effective": map[string]any{
 				"retention_days": cur.App.DownloadRetentionDaysEffective(),
 				"max_count":      cur.App.DownloadMaxCountEffective(),
