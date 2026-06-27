@@ -157,39 +157,24 @@
     const win = window.open('', '_blank');
     if (!win) {
       toast('弹窗被浏览器阻止，请允许弹窗后重试', 'err');
-      return;
+      return null;
     }
 
-    let d2hCSS = '';
-    try {
-      const styles = opener.document.querySelectorAll('style, link[rel="stylesheet"]');
-      styles.forEach((s) => {
-        if (s.tagName === 'LINK') {
-          const href = s.getAttribute('href') || '';
-          if (href.includes('diff2html')) {
-            d2hCSS += '<link rel="stylesheet" href="' + href + '">';
-          }
-        } else {
-          const text = s.textContent || '';
-          if (text.includes('.d2h') || text.includes('--d2h-')) {
-            d2hCSS += '<style>' + text + '</style>';
-          }
-        }
-      });
-    } catch (e) { /* opener may be closed */ }
+    var theme = (document.documentElement.getAttribute('data-theme') || 'dark');
+    var statsText = stats ? ('新增 ' + stats.added + ' 行·删除 ' + stats.removed + ' 行') : '';
+    var primaryColor = theme === 'light' ? '#2563eb' : theme === 'hc' ? '#00ffff' : theme === 'green' ? '#3f7a3f' : '#4f8cff';
+    var bgColor = theme === 'light' ? '#ffffff' : theme === 'hc' ? '#000000' : theme === 'green' ? '#fbfdf7' : '#11161f';
+    var bg2Color = theme === 'light' ? '#f6f8fa' : theme === 'hc' ? '#0a0a0a' : theme === 'green' ? '#eef3e7' : '#1d2532';
+    var lineColor = theme === 'light' ? '#d8dee4' : theme === 'hc' ? '#ffffff' : theme === 'green' ? '#cfd9c0' : '#232b3a';
+    var textColor = theme === 'light' ? '#1f2328' : theme === 'hc' ? '#ffff00' : theme === 'green' ? '#1f2a1f' : '#e6edf3';
+    var textDimColor = theme === 'light' ? '#5a6678' : theme === 'hc' ? '#ffffaa' : theme === 'green' ? '#4d5d4d' : '#8b97a8';
+    var textMuteColor = theme === 'light' ? '#8b97a8' : theme === 'hc' ? '#ccc888' : theme === 'green' ? '#6b7a6b' : '#5a6678';
 
-    const theme = (document.documentElement.getAttribute('data-theme') || 'dark');
-    const statsText = stats ? ('新增 ' + stats.added + ' 行·删除 ' + stats.removed + ' 行') : '';
-    const primaryColor = theme === 'light' ? '#2563eb' : theme === 'hc' ? '#00ffff' : theme === 'green' ? '#3f7a3f' : '#4f8cff';
-    const bgColor = theme === 'light' ? '#ffffff' : theme === 'hc' ? '#000000' : theme === 'green' ? '#fbfdf7' : '#11161f';
-    const bg2Color = theme === 'light' ? '#f6f8fa' : theme === 'hc' ? '#0a0a0a' : theme === 'green' ? '#eef3e7' : '#1d2532';
-    const lineColor = theme === 'light' ? '#d8dee4' : theme === 'hc' ? '#ffffff' : theme === 'green' ? '#cfd9c0' : '#232b3a';
-    const textColor = theme === 'light' ? '#1f2328' : theme === 'hc' ? '#ffff00' : theme === 'green' ? '#1f2a1f' : '#e6edf3';
-    const textDimColor = theme === 'light' ? '#5a6678' : theme === 'hc' ? '#ffffaa' : theme === 'green' ? '#4d5d4d' : '#8b97a8';
-    const textMuteColor = theme === 'light' ? '#8b97a8' : theme === 'hc' ? '#ccc888' : theme === 'green' ? '#6b7a6b' : '#5a6678';
+    var dataJson = JSON.stringify({ unified: unifiedDiff, title: diffTitle || 'left vs right', stats: stats || null, mode: outputMode });
+    dataJson = dataJson.replace(/<\//g, '<\\/');
 
-    const html = '<!DOCTYPE html><html lang="zh-CN" data-theme="' + theme + '"><head><meta charset="utf-8"><title>Diff 比对结果 - ' + (diffTitle || 'left vs right') + '</title>'
-      + d2hCSS
+    win.document.write('<!DOCTYPE html><html lang="zh-CN" data-theme="' + theme + '"><head><meta charset="utf-8"><title>Diff ' + (diffTitle || 'left vs right') + '</title>'
+      + '<link rel="stylesheet" href="/static/vendor/diff2html.min.css">'
       + '<style>'
       + '*{box-sizing:border-box;margin:0;padding:0}'
       + 'html,body{height:100%;font-family:ui-monospace,SFMono-Regular,"Cascadia Mono",Menlo,Consolas,monospace;font-size:13px;background:' + bgColor + ';color:' + textColor + ';}'
@@ -223,8 +208,10 @@
       + '</div>'
       + '</div>'
       + '<div class="diff-body" id="diffBody"></div>'
-      + '<script>(' + (function () {
-        var d2h = (typeof window.Diff2Html !== 'undefined') ? window.Diff2Html : null;
+      + '<script src="/static/vendor/diff2html.min.js"><' + '/script>'
+      + '<script id="__diff_data__" type="application/json">' + dataJson + '<' + '/script>'
+      + '<script>' + (function () {
+        var d2h = null;
         var diffRows = [];
         var currentIdx = -1;
 
@@ -233,19 +220,23 @@
             var dataEl = document.getElementById('__diff_data__');
             if (dataEl) return JSON.parse(dataEl.textContent);
           } catch (e) {}
-          return { unified: '', title: 'diff', stats: null };
+          return { unified: '', title: 'diff', stats: null, mode: 'unified' };
         }
 
         function init() {
           var data = getDiffData();
           var body = document.getElementById('diffBody');
           if (!d2h) {
+            d2h = (typeof window.Diff2Html !== 'undefined') ? window.Diff2Html : null;
+          }
+          if (!d2h) {
             body.innerHTML = '<pre style="padding:16px;white-space:pre-wrap;word-break:break-all;">' + escapeHtml(data.unified) + '</pre>';
             return;
           }
           try {
+            var fmt = (data.mode === 'side') ? 'side-by-side' : 'line-by-line';
             var html = d2h.html(data.unified, {
-              outputFormat: 'side-by-side',
+              outputFormat: fmt,
               drawFileList: false,
               matching: 'lines',
               renderNothingWhenEmpty: false,
@@ -360,13 +351,10 @@
             else if (e.key === 'p' || e.key === 'P' || e.key === 'ArrowUp') { e.preventDefault(); prevDiff(); }
           });
         });
-      }).toString() + ')();</script>'
-      + '<script id="__diff_data__" type="application/json">' + JSON.stringify({ unified: unifiedDiff, title: diffTitle || 'left vs right', stats: stats || null }) + '</script>'
-      + '</body></html>';
-
-    win.document.open();
-    win.document.write(html);
+      }).toString() + '();<' + '/script>'
+      + '</body></html>');
     win.document.close();
+    return win;
   }
 
   async function doCompare(leftTa, rightTa) {
