@@ -392,10 +392,12 @@
     }
 
     async function saveOpenerRow(op) {
+      if (!op.name || !op.name.trim()) { toast('保存失败：打开器名称不能为空', 'err'); return; }
+      if (!op.path || !op.path.trim()) { toast('保存失败：打开器路径不能为空', 'err'); return; }
       try {
         await api('PUT', '/api/admin/openers', { openers: state.openers });
-        state.dirty = false;
-        OTB.state.unsavedConfig = false;
+        state.openersDirty = false;
+        if (!state.dirty) { state.dirty = false; }
         syncSaveBtns();
         toast('已保存', 'ok');
       } catch (e) {
