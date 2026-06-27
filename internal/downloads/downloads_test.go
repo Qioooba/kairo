@@ -169,7 +169,7 @@ func TestSafeJoinRejectsTraversal(t *testing.T) {
 }
 
 // TestList_DateDirFallback 验证：downloads/YYYYMMDD/ 里的文件即使没 sidecar，
-// 也能在 List 里出现，且 DownloadedAt 用子目录名推断（项 16）。
+// 也能在 List 里出现，且 DownloadedAt 用文件 mtime 推断（比目录名 00:00:00 更准）。
 func TestList_DateDirFallback(t *testing.T) {
 	dir := setupTestDir(t)
 	sub := filepath.Join(dir, "20260621")
@@ -181,6 +181,7 @@ func TestList_DateDirFallback(t *testing.T) {
 	if err := os.WriteFile(data, []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	fi, _ := os.Stat(data)
 
 	got, err := List(dir)
 	if err != nil {
@@ -194,11 +195,11 @@ func TestList_DateDirFallback(t *testing.T) {
 		t.Errorf("无 sidecar，MetaPresent 应为 false")
 	}
 	if e.Meta.DownloadedAt.IsZero() {
-		t.Errorf("DownloadedAt 应被推断为 2026-06-21，实际零值")
+		t.Errorf("DownloadedAt 应被推断为文件 mtime，实际零值")
 	} else {
-		y, m, d := e.Meta.DownloadedAt.Date()
-		if y != 2026 || m != 6 || d != 21 {
-			t.Errorf("日期不对: %v", e.Meta.DownloadedAt)
+		// DownloadedAt 应等于文件 mtime
+		if !e.Meta.DownloadedAt.Equal(fi.ModTime()) {
+			t.Errorf("DownloadedAt 应等于文件 mtime %v，实际 %v", fi.ModTime(), e.Meta.DownloadedAt)
 		}
 	}
 }

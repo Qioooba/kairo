@@ -31,10 +31,10 @@ func (s *Server) handleDownloadsList(w http.ResponseWriter, r *http.Request) {
 	out := make([]map[string]any, 0, len(entries))
 	var total int64
 	for _, e := range entries {
-		if filterSys != "" && e.Meta.System != "" && e.Meta.System != filterSys {
+		if filterSys != "" && e.Meta.System != filterSys {
 			continue
 		}
-		if filterSrv != "" && e.Meta.Server != "" && e.Meta.Server != filterSrv {
+		if filterSrv != "" && e.Meta.Server != filterSrv {
 			continue
 		}
 		total += e.Size
@@ -45,6 +45,7 @@ func (s *Server) handleDownloadsList(w http.ResponseWriter, r *http.Request) {
 			"mod_time":     e.ModTime.Format("2006-01-02 15:04:05"),
 			"kind":         e.Kind,
 			"meta_present": e.MetaPresent,
+			"system":       e.Meta.System,
 			"server":       e.Meta.Server,
 			"host":         e.Meta.Host,
 			"dir":          e.Meta.Dir,

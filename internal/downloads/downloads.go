@@ -328,22 +328,9 @@ func List(rootDir string) ([]Entry, error) {
 		} else {
 			kind = "file"
 		}
-		// 兜底推断：文件在 downloads/YYYYMMDD/ 子目录里但没元数据，
-		// 把子目录名当作 Date 填进 meta 字段（不会写回索引），
-		// 让"下载历史"页能展示出来。
+		// 兜底推断：无元数据时用文件 mtime 作为下载时间（比从目录名推断 00:00:00 更准）。
 		if !hasMeta {
-			dir := filepath.Dir(rel)
-			base := filepath.Base(dir)
-			// 形如 20260621 / 2026-06-21 才认；避免误把任意子目录名当日期
-			if isLikelyDateDir(base) {
-				meta.DownloadedAt = parseDateDirAsTime(base)
-				if meta.DownloadedAt.IsZero() {
-					// 解析失败就用文件 mtime
-					meta.DownloadedAt = info.ModTime()
-				}
-			} else {
-				meta.DownloadedAt = info.ModTime()
-			}
+			meta.DownloadedAt = info.ModTime()
 		}
 		out = append(out, Entry{
 			Name:        filepath.ToSlash(rel),

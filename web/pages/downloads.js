@@ -14,10 +14,6 @@
   const { api } = OTB.api;
 
   // v0.8：外部打开器缓存（module 级，跨 re-render 存活）。
-  // 理由：下载历史页频繁 render（filter 改变 / 刷新），但 openers 配置变更频率低；
-  // 拉一次缓存下来，每次 renderRows 直接读，避免 N 行 N 次重复请求。
-  // 用户保存 openers 后切回本页，缓存可能 stale——这里 fetch 失败 fallback 到 []
-  // 但不主动轮询；如果未来要做"保存后立即生效"，可加 OTB.state.events 或 storage 事件。
   OTB.state.downloadsOpeners = OTB.state.downloadsOpeners || [];
   let openersLoaded = false;
 
@@ -27,8 +23,6 @@
     sysSel.appendChild(el('option', { value: '', text: '全部系统' }));
     const srvSel = el('select', null);
     srvSel.appendChild(el('option', { value: '', text: '全部服务器' }));
-    // 项 16 修复：保存"所有已下过的系统/服务器"作为下拉候选项 —— 即使按系统过滤后
-    // 文件数 = 0，下拉里仍能看到所有历史值（不会因为筛掉就消失）。
     const allSystems = new Set();
     const allServers = new Set();
     const tableWrap = el('div', { class: 'mt-3' });
@@ -36,17 +30,16 @@
     const btnClearAll = el('button', { class: 'btn btn-danger', text: '清空全部', onclick: doClearAll });
 
     // v0.8：拉一次外部打开器列表（缓存到 OTB.state.downloadsOpeners）。
-    // 失败不阻塞——后面 renderRows 看缓存是 [] 就不显示按钮。
+    // 等 openers 加载完再调 load()，避免重复请求 /api/downloads/list。
     if (!openersLoaded) {
       api('GET', '/api/admin/openers').then(r => {
         OTB.state.downloadsOpeners = Array.isArray(r && r.openers) ? r.openers : [];
         openersLoaded = true;
-        // 拉到后立即重画（用户在 load 完成前就到了这一步，表格已画过空 openers 列表）
         load();
       }).catch(() => {
-        // 不提示，避免页面刚加载就被红条炸屏
         OTB.state.downloadsOpeners = [];
         openersLoaded = true;
+        load();
       });
     }
 
@@ -61,7 +54,7 @@
     sysSel.addEventListener('change', load);
     srvSel.addEventListener('change', load);
 
-    // 启动时主动拉 /api/config 填系统下拉（项 16 修复：之前写死"信贷生产"是 mock）
+    // 启动时主动拉 /api/config 填系统下拉
     api('GET', '/api/config').then(info => {
       const cur = sysSel.value;
       (info.systems || []).forEach(s => {
@@ -70,7 +63,7 @@
         }
       });
       sysSel.value = cur;
-    }).catch(() => { /* ignore — 仍可看 downloads/ 已下文件 */ });
+    }).catch(() => { /* ignore */ });
 
     async function load() {
       summaryEl.textContent = '加载中…';
@@ -82,15 +75,10 @@
         const r = await api('GET', '/api/downloads/list' + (qs.toString() ? '?' + qs : ''));
         const files = r.files || [];
         renderRows(files);
-        // 项 16 修复：把这次返回的 sys/srv 也加进历史集合，下拉里始终展示所有出现过的值
-        // （之前 srvSel.innerHTML = '' 把没出现过的全删了，用户的下拉选项就丢了）
         files.forEach(f => {
           if (f.server) allServers.add(f.server);
           if (f.system) allSystems.add(f.system);
         });
-        // sysSel 选项由 /api/config 决定（业务系统列表是配置固定的，不依赖 downloads 内容），
-        // 但如果下载历史里有"配置里删了但 downloads/ 里还在"的孤儿系统（删系统后没清理 downloads），
-        // 也加进 sysSel，让用户能看到/筛
         const curSys = sysSel.value;
         allSystems.forEach(s => {
           if (!Array.from(sysSel.options).find(o => o.value === s)) {
@@ -117,13 +105,14 @@
         tableWrap.appendChild(el('div', { class: 'text-dim', text: '暂无下载文件。' }));
         return;
       }
+      const scrollWrap = el('div', { class: 'table-scroll' });
       const tbl = el('table', { class: 'table' });
       tbl.appendChild(el('thead', null, el('tr', null, [
         el('th', { text: '文件' }),
-        el('th', { text: '大小' }),
+        el('th', { text: '大小', style: 'text-align:right;' }),
         el('th', { text: '下载时间' }),
         el('th', { text: '来源' }),
-        el('th', { text: '操作' })
+        el('th', { text: '操作', style: 'text-align:right;' })
       ])));
       const tbody = el('tbody');
       files.forEach(f => {
@@ -136,8 +125,6 @@
           onclick: () => doDelete(f, load) });
         const openDir = el('button', { class: 'btn btn-sm', text: '📂 打开所在目录',
           onclick: () => doOpenDir(f) });
-        // v0.8：每行追加外部打开器按钮（来自 cfg.external_openers）。
-        // 命名按 "icon" 字段（用户可填 emoji/字母），无 icon 用 "🔗 name" fallback。
         const openerBtns = (OTB.state.downloadsOpeners || []).map(op => {
           const label = (op.icon && op.icon.trim()) ? op.icon.trim() : '🔗 ' + (op.name || '?');
           const tip = (op.name || '') + (op.path ? ' — ' + op.path : '');
@@ -150,24 +137,30 @@
         });
         tbody.appendChild(el('tr', null, [
           buildNameCell(f),
-          el('td', { class: 'num', text: f.size_human || '-' }),
+          el('td', { class: 'num', style: 'text-align:right;', text: f.size_human || '-' }),
           el('td', { class: 'muted', text: f.downloaded_at || f.mod_time || '-' }),
           buildFromCell(fromServer, fromDir, fromFile),
-          el('td', { class: 'actions', style: 'display:flex; gap:6px; flex-wrap:wrap;' },
+          el('td', { class: 'actions', style: 'display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end;' },
             [openDir, ...openerBtns, del])
         ]));
       });
       tbl.appendChild(tbody);
-      tableWrap.appendChild(tbl);
+      scrollWrap.appendChild(tbl);
+      tableWrap.appendChild(scrollWrap);
     }
 
-    // buildNameCell 构造"文件名"单元格的 DOM。
-    // 默认点文件名 → 新 tab 预览（浏览器能直接显示文本/图片/日志；zip 会触发下载）。
-    // 对于 .log / .txt / .json / .xml / .csv 等纯文本，浏览器直接渲染；对于二进制或 zip，右键另存。
+    // buildNameCell 构造"文件名"单元格：点文件名 → 新 tab 预览/下载。
     function buildNameCell(f) {
       const td = el('td');
-      const codeEl = el('code', { text: f.name || '' });
-      td.appendChild(codeEl);
+      const safeName = encodeURIComponent(f.name || '');
+      const link = el('a', {
+        href: '/downloads/' + safeName,
+        target: '_blank',
+        title: '点击预览/下载',
+        style: 'text-decoration:none; color:inherit;'
+      });
+      link.appendChild(el('code', { text: f.name || '' }));
+      td.appendChild(link);
       if (f.kind === 'zip') {
         td.appendChild(document.createTextNode(' '));
         td.appendChild(el('span', { class: 'tag', text: 'zip' }));
@@ -175,7 +168,6 @@
       return td;
     }
 
-    // buildFromCell 构造"来源"单元格的 DOM：服务器（粗体）/ 远端目录 / 原始文件名。
     function buildFromCell(fromServer, fromDir, fromFile) {
       const td = el('td');
       td.appendChild(el('div', { text: fromServer }));
@@ -185,9 +177,6 @@
     }
 
     async function doOpenWith(opener, f) {
-      // 调 /api/local/open-with 让后端用配的本地软件打开下载文件。
-      // opener.name 是配置白名单 key（不是路径！），后端会校验 + 用对应 path 启动。
-      // 文件不存在 / opener 没配好 → 后端返回 4xx/5xx，这里 toast 报错。
       if (!opener || !opener.name) {
         toast('打开器配置异常', 'err');
         return;
@@ -215,10 +204,6 @@
     }
 
     async function doOpenDir(f) {
-      // 调 /api/downloads/open-dir?name=... 让后端在系统文件管理器里打开 downloads/ 目录，
-      // 失败给红条 toast 提示。
-      // 注意：f.name 可能含子目录（如 "20260624/app.log"），所以放 query 参数而非 path，
-      // 避免后端 handler 把 "/" 判为非法字符。
       try {
         await api('POST', '/api/downloads/open-dir?name=' + encodeURIComponent(f.name));
         toast('已请求在文件管理器中打开', 'ok');
@@ -238,8 +223,8 @@
       }
     }
 
-    // 首次进入自动加载
-    load();
+    // openers 已加载过时直接 load；否则等 openers 回来再 load
+    if (openersLoaded) load();
   }
 
   OTB.pages.downloads = renderDownloads;

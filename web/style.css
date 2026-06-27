@@ -63,6 +63,9 @@
   --tail-out-fg: #b8d4a3;
   --code-inline-bg: #0a0e14;
 
+  /* 命令速查收藏色 */
+  --cmd-fav-color: #f0c040;
+
   /* diff2html 主题（dark） */
   --d2h-bg-color: var(--bg-1);
   --d2h-color: var(--text);
@@ -1200,6 +1203,8 @@ input[type="datetime-local"] {
   padding: 1px 5px;
   border-radius: 3px;
 }
+.table td a code { cursor: pointer; }
+.table td a:hover code { background: rgba(79,140,255,0.18); text-decoration: underline; }
 
 /* 文件预览 modal（v0.5 项 1） */
 .preview-overlay {

@@ -16,7 +16,6 @@ func (s *Server) serveDownload(w http.ResponseWriter, r *http.Request) {
 	if name == "" ||
 		strings.Contains(name, "..") ||
 		strings.Contains(name, "\\") ||
-		strings.Contains(name, "/") ||
 		containsControlChar(name) {
 		http.NotFound(w, r)
 		return
