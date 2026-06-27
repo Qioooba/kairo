@@ -491,6 +491,30 @@ label.inline {
   cursor: pointer;
   color: var(--text);
 }
+/* v0.9 UI-8：files 页"记住密码"checkbox 区域加边框/底色，让小 checkbox 视觉权重
+   跟"连接并浏览"主按钮对齐。files.js 锁着不修改，用 :has() 锁定到含 #files-remember
+   的 label，避免影响其他 label.inline（如多文件打包 zip）。
+   hc 主题下用更醒目的对比边框。 */
+label.inline:has(input#files-remember) {
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg-2);
+}
+label.inline:has(input#files-remember):hover {
+  background: var(--bg-3);
+  border-color: var(--primary);
+}
+:root[data-theme="hc"] label.inline:has(input#files-remember) {
+  background: #000000;
+  border: 2px solid #ffffff;
+  color: #ffff00;
+}
+:root[data-theme="hc"] label.inline:has(input#files-remember):hover {
+  border-color: #00ffff;
+  color: #00ffff;
+}
+
 label.inline input[type=checkbox],
 label.inline input[type=radio],
 .cmp-opt input[type=checkbox],
@@ -603,7 +627,16 @@ textarea { resize: vertical; min-height: 100px; font-family: ui-monospace, SFMon
 }
 .table th { color: var(--text-dim); font-weight: 500; background: var(--bg-2); position: sticky; top: 0; }
 .table tr:hover td { background: var(--row-hover-bg); }
-.table .num { font-family: ui-monospace, monospace; color: var(--primary-2); }
+/* v0.9 UI-6：表格数字列右对齐 + tabular-nums，让 "544 B / 3.1 KB / 1.5 MB"
+   不同位数也看着齐（左对齐的话 "1.0 KB" 跟 "1023 B" 视觉上参差不齐）。
+   tabular-nums 保证等宽数字字形对齐。 */
+.table .num {
+  font-family: ui-monospace, monospace;
+  color: var(--primary-2);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
 .table .actions { white-space: nowrap; }
 .table .col-check { width: 32px; text-align: center; }
 .table .col-status { width: 180px; }
@@ -2717,4 +2750,14 @@ input[type="datetime-local"] {
 :root[data-theme="hc"] .http2-save-btn {
   color: #000000;
   text-shadow: none;
+}
+
+/* v0.9 UI-4：hc 主题下 sidebar logo 改成纯黑白（透明底 + 白边 + 白字），
+   跟"高对比"主题追求的极简黑白风格一致，不再用默认的 cyan→purple 蓝紫渐变。
+   渐变在 hc 主题下（primary=#00ffff cyan, accent=#8b5cf6 purple）显得突兀。 */
+:root[data-theme="hc"] .brand .logo {
+  background: transparent;
+  border: 2px solid #ffffff;
+  color: #ffffff;
+  box-shadow: none;
 }
