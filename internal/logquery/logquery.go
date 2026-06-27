@@ -758,11 +758,11 @@ func ContextCommand(dir, file string, line, before, after, timeoutSec int) (stri
 	if after < 0 {
 		after = 0
 	}
-	if before > 500 {
-		before = 500
+	if before > 5000 {
+		before = 5000
 	}
-	if after > 500 {
-		after = 500
+	if after > 5000 {
+		after = 5000
 	}
 	if timeoutSec <= 0 {
 		timeoutSec = 30

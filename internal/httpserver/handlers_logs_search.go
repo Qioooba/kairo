@@ -314,11 +314,11 @@ func (s *Server) handleLogsContext(w http.ResponseWriter, r *http.Request) {
 	if after <= 0 {
 		after = s.cur().Search.DefaultContextLines
 	}
-	if before > 500 {
-		before = 500
+	if before > 5000 {
+		before = 5000
 	}
-	if after > 500 {
-		after = 500
+	if after > 5000 {
+		after = 5000
 	}
 	cmd, err := logquery.ContextCommand(ld.Path, req.File, req.Line, before, after, s.cur().Search.TimeoutSeconds)
 	if err != nil {

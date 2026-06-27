@@ -1506,26 +1506,29 @@ input[type="datetime-local"] {
   font-size: 12.5px;
 }
 /* v0.6-Redesign：tab badge — 显示文件数/命中数/跟踪状态 */
+/* 修复：原 background:var(--bg-2) 与页面背景(--bg-1)色值过近，badge 融入背景看不见。
+   改用 primary 色半透明底 + primary 文字，深/浅主题下都清晰可见。 */
 .ws-tab-badge {
   display: none;
   font-size: 11px;
   line-height: 1;
   padding: 3px 7px;
   border-radius: 10px;
-  background: var(--bg-2);
-  color: var(--text-dim);
-  border: 1px solid var(--line);
+  background: rgba(79, 140, 255, 0.15);
+  color: var(--primary);
+  border: 1px solid rgba(79, 140, 255, 0.35);
   white-space: nowrap;
   min-width: 18px;
   text-align: center;
+  font-weight: 600;
 }
 /* v0.6-fix：用 :has() 显式表达"父 tab-item 含 active btn 时给 badge 换主题色"，
    避免依赖 btn 和 badge 的兄弟位置关系（之前用 `.btn + .ws-tab-badge` 在重构时容易踩坑）。
    浏览器支持：Chrome 105+ / Safari 15.4+ / Firefox 121+。 */
 .ws-tab-bar .ws-tab-item:has(> .btn.active) > .ws-tab-badge {
-  background: rgba(255, 255, 255, 0.22);
+  background: var(--primary);
   color: #fff;
-  border-color: rgba(255, 255, 255, 0.35);
+  border-color: var(--primary);
 }
 /* v0.6-fix：tail 多 target 警告条颜色用 CSS class（之前是内联硬编码 amber） */
 .ws-tail-warn {
@@ -1949,15 +1952,21 @@ input[type="datetime-local"] {
 @media (max-width: 1180px) { .http2-layout { flex-direction: column; } }
 
 .http2-sidebar {
-  width: 280px; flex: 0 0 280px;
+  width: 240px; flex: 0 0 240px; min-width: 220px;
   background: linear-gradient(180deg, var(--bg-2), var(--bg-1));
   border: 1px solid var(--line);
   border-radius: 12px;
-  padding: 10px 12px;
+  /* 对齐修复：padding-top 与右侧 .http2-card 的 12px 一致，
+     让 sidebar 内首个元素（h3）与主区首个 card 内的 urlRow 顶部齐平。 */
+  padding: 12px 12px;
   max-height: calc(100vh - 130px);
   display: flex; flex-direction: column;
   position: sticky; top: 70px;
   box-shadow: var(--shadow-sm);
+}
+/* 窄屏适配：sidebar 收窄，避免挤占主内容区 */
+@media (max-width: 900px) {
+  .http2-sidebar { width: 220px; flex: 0 0 220px; min-width: 200px; }
 }
 .http2-sidebar h3 { margin: 0 0 8px; font-size: 12px; color: var(--text-dim); letter-spacing: 0.06em; text-transform: uppercase; }
 .http2-sidebar-search {
@@ -2097,10 +2106,11 @@ input[type="datetime-local"] {
 
 .http2-method-sel {
   background: var(--bg-3); color: var(--text); border: none;
-  padding: 0 14px; font-size: 13px; font-weight: 700;
+  padding: 0 10px; font-size: 13px; font-weight: 700;
   letter-spacing: 0.06em; cursor: pointer; outline: none;
   border-right: 1px solid var(--line);
-  text-align: center; min-width: 110px;
+  text-align: center; width: 82px; min-width: 82px; max-width: 82px;
+  flex: 0 0 82px;
   font-family: ui-monospace, monospace;
 }
 .http2-method-sel option { background: var(--bg-2); color: var(--text); }
@@ -2119,7 +2129,10 @@ input[type="datetime-local"] {
   display: flex; align-items: center; gap: 6px;
   transition: filter 0.15s ease;
 }
-.http2-send-btn:hover:not(:disabled) { filter: brightness(1.1); }
+.http2-send-btn:hover:not(:disabled) {
+  background: linear-gradient(135deg, var(--primary), var(--primary-2)) !important;
+  filter: brightness(1.08);
+}
 .http2-send-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .http2-send-btn .send-icon { font-size: 14px; }
 
@@ -2206,10 +2219,12 @@ input[type="datetime-local"] {
   padding: 4px 8px; background: var(--bg-3); border-bottom: 1px solid var(--line);
   font-size: 11.5px; color: var(--text-dim);
 }
-.http2-raw-toolbar-left, .http2-raw-toolbar-right { display: flex; gap: 4px; align-items: center; }
+.http2-raw-toolbar-left, .http2-raw-toolbar-right { display: flex; gap: 4px; align-items: center; flex-wrap: nowrap; }
+.http2-raw-toolbar-left span { white-space: nowrap; font-size: 11.5px; }
 .http2-raw-toolbar select {
   background: var(--bg-2); border: 1px solid var(--line); border-radius: 4px;
   color: var(--text); padding: 1px 6px; font-size: 11px; outline: none;
+  min-width: 60px;
 }
 .http2-raw-toolbar .btn-mini { padding: 1px 8px; font-size: 11px; }
 .http2-raw-textarea {

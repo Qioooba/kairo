@@ -310,8 +310,8 @@
       ['today', '今天'],
       ['custom', '自定义…']
     ].forEach(([v, t]) => timeSel.appendChild(el('option', { value: v, text: t })));
-    const timeFromInp = el('input', { type: 'datetime-local', id: 'ws-time-from', style: 'display:none' });
-    const timeToInp = el('input', { type: 'datetime-local', id: 'ws-time-to', style: 'display:none' });
+    const timeFromInp = el('input', { type: 'datetime-local', id: 'ws-time-from', style: 'display:none; min-width:170px; flex:1 1 170px;' });
+    const timeToInp = el('input', { type: 'datetime-local', id: 'ws-time-to', style: 'display:none; min-width:170px; flex:1 1 170px;' });
     const timeHint = el('div', { class: 'text-dim', style: 'font-size:11.5px; margin-top:2px;', text: '按文件修改时间粗筛，不按日志行时间筛选' });
 
     function updateTimeCustomVisibility() {
@@ -950,16 +950,11 @@
             onchange: refreshSummary
           });
           const statusCell = el('td', { class: 'col-status', 'data-status-key': key });
-          // v0.5 #14：每行加 Tail / 新窗口 Tail 按钮（不用手输文件名）
-          const tailBtn = el('button', {
-            class: 'btn btn-sm',
-            text: '📺 内嵌 Tail',
-            title: '在下方 tail 区域跟踪此文件',
-            onclick: () => startTailForFile(g.server, g.dir, f.name)
-          });
+          // v0.5 #14：每行加「新窗口跟踪」按钮（不用手输文件名）
+          // 注：原「内嵌 Tail」按钮已按用户要求移除，仅保留新窗口跟踪入口
           const tailNewWinBtn = el('button', {
             class: 'btn btn-sm',
-            text: '↗ 新窗口 Tail',
+            text: '↗ 新窗口跟踪',
             title: '在新窗口中跟踪此文件（避免本页卡死）',
             onclick: () => openTailForFileInNewTab(g.server, g.dir, f.name)
           });
@@ -968,7 +963,7 @@
           row.appendChild(el('td', { class: 'num', text: formatBytes(f.size) }));
           row.appendChild(el('td', { class: 'muted', text: formatTime(f.mod_time) }));
           row.appendChild(el('td', null, [
-            tailBtn, ' ', tailNewWinBtn, ' ',
+            tailNewWinBtn, ' ',
             el('button', {
               class: 'btn btn-sm',
               text: '复制路径',
@@ -1797,7 +1792,7 @@
                 btnExpand,
                 el('button', { class: 'btn btn-sm', text: '复制', onclick: () => copyToClipboard(fullContent) }),
                 el('button', { class: 'btn btn-sm', text: '上下文', onclick: () => doContext(h) }),
-                el('button', { class: 'btn btn-sm', text: 'Tail', onclick: () => startTailForFile(h.server, h.dir, h.file) })
+                el('button', { class: 'btn btn-sm', text: '↗ 新窗口跟踪', onclick: () => openTailForFileInNewTab(h.server, h.dir, h.file) })
               ]));
             }
             const tr = el('tr', { class: isCtx ? 'ctx-row' : '' }, cells);
@@ -1819,10 +1814,45 @@
       });
       try {
         const r = await api('POST', '/api/logs/context', body);
-        renderContext(r.lines || [], hit, contextN);
-        ctxCard.style.display = '';
-        ctxCard.scrollIntoView({ behavior: 'smooth' });
+        openContextInNewWindow(r.lines || [], hit, contextN);
       } catch (e) { toast('上下文获取失败：' + e.message, 'err'); }
+    }
+
+    // 把上下文渲染到新窗口（避免本页 ctxCard 被滚动覆盖；多命中可并行开多个窗口对比）
+    function openContextInNewWindow(lines, hit, contextN) {
+      const w = window.open('', '_blank', 'width=900,height=700');
+      if (!w) { toast('弹窗被拦截，请允许弹窗后重试', 'err'); return; }
+      const rangeText = contextN > 0 ? ('前后 ' + contextN + ' 行') : '仅命中行';
+      const title = '上下文 · ' + hit.server + ' · ' + hit.file + ':' + hit.line_no + ' · ' + rangeText;
+      w.document.title = title;
+      w.document.body.style.fontFamily = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+      w.document.body.style.fontSize = '13px';
+      w.document.body.style.margin = '12px';
+      w.document.body.style.background = '#fff';
+      w.document.body.style.color = '#333';
+      const h = w.document.createElement('h3');
+      h.textContent = title;
+      w.document.body.appendChild(h);
+      lines.forEach(l => {
+        const row = w.document.createElement('div');
+        row.style.padding = '2px 0';
+        row.style.borderBottom = '1px solid #eee';
+        if (l.hit) { row.style.background = '#fff3cd'; row.style.fontWeight = 'bold'; }
+        const ln = w.document.createElement('span');
+        ln.textContent = l.line_no;
+        ln.style.display = 'inline-block';
+        ln.style.width = '60px';
+        ln.style.color = '#999';
+        ln.style.textAlign = 'right';
+        ln.style.marginRight = '12px';
+        const ct = w.document.createElement('span');
+        ct.style.whiteSpace = 'pre-wrap';
+        ct.style.wordBreak = 'break-all';
+        ct.textContent = l.content;
+        row.appendChild(ln);
+        row.appendChild(ct);
+        w.document.body.appendChild(row);
+      });
     }
 
     function renderContext(lines, hit, contextN) {
@@ -1876,13 +1906,13 @@ const formCard = el('div', { class: 'card' }, [
       el('div', { class: 'text-dim', style: 'font-size:11.5px; margin-top:2px;', text: '填 glob 后，N 仍限制"取匹配文件中的最新 N 个"' })
     ]);
 
-    const contextInp = el('input', { type: 'number', id: 'ws-context', min: '0', max: '50', value: '0', style: 'width:100%;' });
+    const contextInp = el('input', { type: 'number', id: 'ws-context', min: '0', max: '5000', value: '5000', style: 'width:100%;' });
     function getContextLineCount() {
       let n = Number(contextInp.value);
       if (!Number.isFinite(n)) n = 0;
       n = Math.floor(n);
       if (n < 0) n = 0;
-      if (n > 50) n = 50;
+      if (n > 5000) n = 5000;
       return n;
     }
 
@@ -2215,7 +2245,11 @@ const formCard = el('div', { class: 'card' }, [
       fileListArea,
       el('div', { class: 'grid-3 mt-2' }, [
         el('div', null, [el('label', { text: '按文件修改时间粗筛' }), timeSel, timeHint]),
-        el('div', { style: 'display:flex; gap:8px; align-items:flex-end;' }, [timeFromInp, timeToInp]),
+        // 自定义时间范围：只有 timeSel 选「自定义…」时才显示（updateTimeCustomVisibility 控制）
+        el('div', { style: 'display:flex; gap:8px; align-items:center; flex-wrap:wrap;' }, [
+          el('label', { class: 'inline', style: 'display:inline-flex; align-items:center; gap:4px; font-size:12px; color:var(--text-dim);' }, [document.createTextNode('从'), timeFromInp]),
+          el('label', { class: 'inline', style: 'display:inline-flex; align-items:center; gap:4px; font-size:12px; color:var(--text-dim);' }, [document.createTextNode('到'), timeToInp])
+        ]),
         // P1-8：目标摘要节点（已在外层声明 + 实现 updateTargetSummary）
         targetSummaryEl
       ]),
@@ -3159,7 +3193,7 @@ const formCard = el('div', { class: 'card' }, [
       if (lastSel && lastSel.dir) dirSel.value = lastSel.dir;
       refreshCredStatus();
       if (info.search && typeof info.search.default_context_lines === 'number') {
-        contextInp.value = String(Math.max(0, Math.min(50, info.search.default_context_lines)));
+        contextInp.value = String(Math.max(0, Math.min(5000, info.search.default_context_lines)));
       }
       // 默认勾上"记住密码"（keyring 模式下；file/disabled 时由 refreshCredStatus 强制取消）
       rememberChk.checked = true;

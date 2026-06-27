@@ -155,6 +155,11 @@
     ]));
     fileCard.appendChild(tableWrap);
 
+    // 修复：warnBox 必须挂到 DOM，否则 renderFileBrowserWarning 里
+    // $('#files-warn-title') 返回 null → textContent 抛异常 → 显示"配置加载失败"。
+    // warnBox 初始 display:none，挂上去不会立即显示，只有 renderFileBrowserWarning
+    // 里设置 warnBox.style.display='' 才显示。
+    view.appendChild(warnBox);
     view.appendChild(connCard);
     view.appendChild(pathCard);
     view.appendChild(fileCard);
