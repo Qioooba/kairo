@@ -261,6 +261,8 @@
       function renderRow(rowData) {
         const check = el('input', { type: 'checkbox' });
         check.checked = rowData.enabled !== false;
+        check.setAttribute('aria-label', '启用/禁用该行');
+        check.title = '启用/禁用该行';
         const keyInp = el('input', { type: 'text', placeholder: opts.keyPh || 'key', value: rowData.key || '' });
         const valInp = el('input', { type: 'text', placeholder: opts.valPh || 'value', value: rowData.value || '' });
         const delBtn = el('button', { class: 'kv-del', text: '×', title: '删除该行' });
@@ -335,6 +337,10 @@
           if (idx >= 0) {
             rows.splice(idx, 1);
             row.remove();
+            // 删除最后一行后自动补一个空行，避免编辑器被清空后无入口继续添加
+            if (rows.length === 0) {
+              renderRow({ enabled: true, key: '', value: '' });
+            }
             markDirty();
           }
         });
@@ -720,12 +726,22 @@
       let body = '';
       let contentTypeOverride = null;
       if (bodyMode === 'formdata') {
+        // 真正的 multipart/form-data：生成 boundary，按 RFC 7578 拼装 parts
         const arr = formdataEditor.getRows().filter(r => r.enabled && r.key.trim());
-        // 用 multipart/form-data 自己拼 boundary 比较麻烦；这里用最简实现：
-        // 把字段塞成 urlencoded 形式 + Content-Type=application/x-www-form-urlencoded（限制但够调试用）
-        // 真要 multipart 得后端支持，先不强求；提示用户
-        body = arr.map(r => encodeURIComponent(r.key) + '=' + encodeURIComponent(r.value || '')).join('&');
-        contentTypeOverride = 'application/x-www-form-urlencoded';
+        const boundary = '----opsFormBoundary' + Math.random().toString(36).slice(2, 12);
+        const CRLF = '\r\n';
+        const parts = arr.map(r => {
+          const name = r.key;
+          const value = r.value || '';
+          const safeName = name.replace(/"/g, '%22');
+          return '--' + boundary + CRLF
+            + 'Content-Disposition: form-data; name="' + safeName + '"' + CRLF
+            + 'Content-Type: text/plain; charset=utf-8' + CRLF
+            + CRLF
+            + value + CRLF;
+        }).join('');
+        body = parts + '--' + boundary + '--' + CRLF;
+        contentTypeOverride = 'multipart/form-data; boundary=' + boundary;
       } else if (bodyMode === 'urlencoded') {
         const arr = urlencEditor.getRows().filter(r => r.enabled && r.key.trim());
         body = arr.map(r => encodeURIComponent(r.key) + '=' + encodeURIComponent(r.value || '')).join('&');
@@ -781,6 +797,7 @@
         } else {
           respStatus.className = 'http2-resp-status s-err';
           respStatus.textContent = '错误';
+          respStatus.title = r.error || '';
           renderRespHeaders(r.headers || {});
           renderRespBody();
         }
@@ -795,6 +812,7 @@
       } catch (e) {
         respStatus.className = 'http2-resp-status s-err';
         respStatus.textContent = '错误';
+        respStatus.title = e.message || String(e);
         respBodyView.innerHTML = '';
         respBodyView.appendChild(el('div', { class: 'http2-resp-error', text: e.message || String(e) }));
         toast('请求失败：' + (e.message || e), 'err');
@@ -845,6 +863,9 @@
       setBodyMode('raw');
       bodyTypeSel.value = 'json';
       autoSetContentType();
+      // 重置保存元数据 + 清空分组/用例名输入框（避免误覆盖已有用例）
+      saveGroupInp.value = '';
+      saveNameInp.value = '';
       lastLoadedCaseId = '';
       lastLoadedCaseName = '';
       lastLoadedCaseGroup = '';

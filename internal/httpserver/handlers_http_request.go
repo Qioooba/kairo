@@ -70,11 +70,8 @@ func (s *Server) handleHTTPRequest(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err)
 		return
 	}
-	resp, err := doHTTPRequest(req)
-	if err != nil {
-		writeJSON(w, 200, resp)
-		return
-	}
+	// doHTTPRequest 永不返回 error，所有错误都封装在 resp.Error 字段里
+	resp, _ := doHTTPRequest(req)
 	writeJSON(w, 200, resp)
 }
 
@@ -174,7 +171,13 @@ func doHTTPRequest(req httpRequestReq) (httpRequestResp, error) {
 	headers := make(map[string]string, len(resp.Header))
 	for k, v := range resp.Header {
 		if len(v) > 0 {
-			headers[k] = v[0]
+			// 多值 header 用逗号拼接（RFC 7230 §3.2.2 通用规则；
+			// Set-Cookie 在 RFC 6265 中不可合并，仅保留第一个值以避免误合并破坏 cookie）
+			if k == "Set-Cookie" || k == "set-cookie" {
+				headers[k] = v[0]
+			} else {
+				headers[k] = strings.Join(v, ", ")
+			}
 		}
 	}
 
