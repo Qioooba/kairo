@@ -5,7 +5,8 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%232563eb'/%3E%3Cpath d='M9 10h14M9 16h14M9 22h8' stroke='%23fff' stroke-width='2.5' stroke-linecap='round'/%3E%3C/svg%3E" />
   <title>内网运维工具箱</title>
-  <link rel="stylesheet" href="/static/vendor/diff2html.min.css" />
+  <!-- TODO(FE-019): vendor 资源建议加 integrity（SRI）属性；内网工具低优先级，需计算文件 hash -->
+  <link rel="stylesheet" href="/static/vendor/diff2html.min.css?v=20260627" />
   <link rel="stylesheet" href="/static/style.css?v=20260627-auth" />
   <style>
     .auth-overlay{position:fixed;inset:0;background:rgba(0,0,0,.72);backdrop-filter:blur(6px);z-index:99999;display:none;align-items:center;justify-content:center;padding:20px}
@@ -49,7 +50,7 @@
     <nav id="nav" class="nav">
       <a href="#/home" class="nav-item active" data-route="home">首页</a>
       <a href="#/websphere" class="nav-item" data-route="websphere">日志助手</a>
-      <a href="#/files" class="nav-item" data-route="files">FTP文件下载</a>
+      <a href="#/files" class="nav-item" data-route="files">文件下载</a>
       <a href="#/formatter" class="nav-item" data-route="formatter">报文格式化</a>
       <a href="#/http" class="nav-item" data-route="http">HTTP 测试</a>
       <a href="#/commands" class="nav-item" data-route="commands">常用命令</a>
@@ -105,7 +106,8 @@
   <script src="/static/pages/timestamp.js"></script>
   <script src="/static/pages/cron.js"></script>
   <script src="/static/pages/jsonpath.js"></script>
-  <script src="/static/vendor/diff2html.min.js"></script>
+  <!-- TODO(FE-019): vendor 资源建议加 integrity（SRI）属性 -->
+  <script src="/static/vendor/diff2html.min.js?v=20260627"></script>
   <script src="/static/pages/compare.js"></script>
   <script src="/static/pages/about.js"></script>
   <script src="/static/app.js"></script>

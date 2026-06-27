@@ -156,7 +156,27 @@ func taskKill(pid int) error {
 	return nil
 }
 
-// promptKillOtherProcess 弹一个 Windows 消息框问用户是否杀进程。
+// MessageBox 返回值常量（vendor/golang.org/x/sys/windows 未导出 IDYES/IDNO）。
+const (
+	idYes int32 = 6
+	idNo  int32 = 7
+)
+
+// isGUIMode 检测当前进程是否在没有终端的情况下运行（GUI 双击启动场景）。
+// os.Stdin 不是字符设备（终端）时，os.Stdin.Read 会立即返回 EOF，
+// 没法用 stdin 收 Y/N，必须改用原生 MessageBox 弹窗。
+func isGUIMode() bool {
+	fi, err := os.Stdin.Stat()
+	if err != nil {
+		// Stat 失败保守按 GUI 模式处理（弹 MessageBox 比干等 stdin 安全）
+		return true
+	}
+	return fi.Mode()&os.ModeCharDevice == 0
+}
+
+// promptKillOtherProcess 弹一个对话框问用户是否杀进程。
+//   - GUI 模式（双击启动，无 stdin）：用 windows.MessageBox 原生弹窗
+//   - 终端模式：保留现有 stdin.Read Y/N 逻辑
 func promptKillOtherProcess(pid int, name string, port int) bool {
 	msg := fmt.Sprintf(
 		"OpsToolbox 想使用端口 %d，但被其它进程占用。\r\n\r\n"+
@@ -165,6 +185,14 @@ func promptKillOtherProcess(pid int, name string, port int) bool {
 			"按 N 取消，OpsToolbox 退出。\r\n",
 		port, name, pid)
 
+	// GUI 模式：双击启动时 stdin 是 EOF，os.Stdin.Read 立即返回，
+	// 没法用 stdin 收 Y/N；notifyMsg 用 msg.exe 弹的窗也没法回传用户输入。
+	// 改用 windows.MessageBox 原生对话框，阻塞等待用户点击 Yes/No。
+	if isGUIMode() {
+		return promptKillViaMessageBox(pid, name, port, msg)
+	}
+
+	// 终端模式：保留现有 stdin.Read 逻辑
 	notifyMsg(pid, name, port)
 
 	log.Printf("[portreuse] 等待用户在当前终端输入 Y/N（90 秒不输默认 N）……")
@@ -206,6 +234,41 @@ func promptKillOtherProcess(pid int, name string, port int) bool {
 		fmt.Fprintln(os.Stderr, "→ 90 秒未响应，默认不杀")
 		return false
 	}
+}
+
+// promptKillViaMessageBox 在 GUI 模式下用 windows.MessageBox 弹原生对话框。
+// 阻塞等待用户点击 Yes/No，没有超时（MessageBox 默认无限等待，符合 GUI 交互习惯）。
+func promptKillViaMessageBox(pid int, name string, port int, msg string) bool {
+	title := fmt.Sprintf("OpsToolbox - 端口 %d 被占用", port)
+	log.Printf("[portreuse] GUI 模式：弹 MessageBox 询问用户 (PID=%d name=%s)", pid, name)
+
+	// UTF16PtrFromString 在字符串含 NUL 字节时返回 error（比已废弃的
+	// StringToUTF16Ptr 安全，后者遇 NUL 会 panic）。进程名来自 tasklist 输出，
+	// 理论上可能含特殊字符，这里稳妥处理。
+	textPtr, err := windows.UTF16PtrFromString(msg)
+	if err != nil {
+		log.Printf("[portreuse] UTF16PtrFromString(msg) 失败: %v（默认不杀）", err)
+		return false
+	}
+	titlePtr, err := windows.UTF16PtrFromString(title)
+	if err != nil {
+		log.Printf("[portreuse] UTF16PtrFromString(title) 失败: %v（默认不杀）", err)
+		return false
+	}
+	// MB_SETFOREGROUND：双击启动时进程没有可见窗口，MessageBox 默认可能不
+	// 在前台，加这个 flag 确保用户能看到弹窗。
+	ret, err := windows.MessageBox(0, textPtr, titlePtr,
+		windows.MB_YESNO|windows.MB_ICONQUESTION|windows.MB_SETFOREGROUND)
+	if err != nil {
+		log.Printf("[portreuse] MessageBox 失败: %v（默认不杀）", err)
+		return false
+	}
+	if ret == idYes {
+		log.Printf("[portreuse] 用户在 MessageBox 点击了 是 (PID=%d)", pid)
+		return true
+	}
+	log.Printf("[portreuse] 用户在 MessageBox 点击了 否 (PID=%d)", pid)
+	return false
 }
 
 // notifyMsg 用 Windows msg.exe 通知其它 session。

@@ -18,8 +18,19 @@
   'use strict';
   const OTB = window.OTB = window.OTB || {};
   OTB.pages = OTB.pages || {};
-  const { el, $, toast, validate, newSystem, newServer, newLogDir, kvTable } = OTB.core;
+  const { el, $, toast, validate, newSystem, newServer, newLogDir, kvTable, confirmDialog } = OTB.core;
   const { api } = OTB.api;
+
+  // FE-004：doExport（blob 下载）/ doImportUpload（text/yaml body）必须用裸 fetch
+  // —— api() 只支持 JSON body 且只返回 JSON，无法承载 blob 或 yaml 文本。
+  // 这里统一处理 401：触发登录引导，避免 token 鉴权场景下静默失败。
+  function handleAuth401(resp) {
+    if (resp.status === 401) {
+      if (window.OTB.auth && window.OTB.auth.requireLogin) window.OTB.auth.requireLogin();
+      return true;
+    }
+    return false;
+  }
 
   // 模块级 state：跨 tab 切换 / 跨 re-render 存活
   // 结构：{ systems, app, search, openers, retention, dirty*, loaded* }
@@ -241,7 +252,7 @@
           markDirty();
           renderEditor();
         } });
-      const btnDel = el('button', { class: 'btn btn-sm btn-danger', text: '删除系统', onclick: () => { if (confirm('确认删除业务系统 “' + (sys.name || '(未命名)') + '” 及其全部服务器？')) { state.systems.splice(si, 1); markDirty(); renderEditor(); } } });
+      const btnDel = el('button', { class: 'btn btn-sm btn-danger', text: '删除系统', onclick: async () => { if (await confirmDialog('确认删除业务系统 “' + (sys.name || '(未命名)') + '” 及其全部服务器？')) { state.systems.splice(si, 1); markDirty(); renderEditor(); } } });
       btnUp.disabled = si === 0; btnDown.disabled = si === state.systems.length - 1;
 
       // v0.5 #15：业务系统 badge + 编号
@@ -347,7 +358,7 @@
           onEdit(); renderEditor();
         }
       });
-      const btnSrvDel = el('button', { class: 'btn btn-sm btn-danger', text: '删除服务器', onclick: () => { if (confirm('确认删除服务器 “' + (srv.name || '(未命名)') + '” 及其日志目录？')) { sys.servers.splice(sri, 1); onEdit(); renderEditor(); } } });
+      const btnSrvDel = el('button', { class: 'btn btn-sm btn-danger', text: '删除服务器', onclick: async () => { if (await confirmDialog('确认删除服务器 “' + (srv.name || '(未命名)') + '” 及其日志目录？')) { sys.servers.splice(sri, 1); onEdit(); renderEditor(); } } });
       btnSrvUp.disabled = sri === 0; btnSrvDown.disabled = sri === sys.servers.length - 1;
       wrap.appendChild(el('div', { class: 'srv-actions' }, [btnSrvUp, btnSrvDown, btnSrvDup, btnSrvDel]));
 
@@ -402,7 +413,7 @@
       const btnDirDup = el('button', { class: 'btn btn-sm', text: '复制目录', title: '复制此日志目录（含别名/路径/编码/文件名规则）', onclick: () => { srv.log_dirs = srv.log_dirs || []; srv.log_dirs.splice(ldi + 1, 0, JSON.parse(JSON.stringify(ld))); onEdit(); renderEditor(); } });
       const btnDirUp = el('button', { class: 'btn btn-sm', text: '↑', onclick: () => { if (ldi > 0) { [srv.log_dirs[ldi-1], srv.log_dirs[ldi]] = [srv.log_dirs[ldi], srv.log_dirs[ldi-1]]; onEdit(); renderEditor(); } } });
       const btnDirDown = el('button', { class: 'btn btn-sm', text: '↓', onclick: () => { if (ldi < srv.log_dirs.length - 1) { [srv.log_dirs[ldi+1], srv.log_dirs[ldi]] = [srv.log_dirs[ldi], srv.log_dirs[ldi+1]]; onEdit(); renderEditor(); } } });
-      const btnDirDel = el('button', { class: 'btn btn-sm btn-danger', text: '删除目录', onclick: () => { if (confirm('确认删除日志目录 "' + (ld.name || ld.path || '(未命名)') + '" ？')) { srv.log_dirs.splice(ldi, 1); onEdit(); renderEditor(); } } });
+      const btnDirDel = el('button', { class: 'btn btn-sm btn-danger', text: '删除目录', onclick: async () => { if (await confirmDialog('确认删除日志目录 "' + (ld.name || ld.path || '(未命名)') + '" ？')) { srv.log_dirs.splice(ldi, 1); onEdit(); renderEditor(); } } });
       btnDirUp.disabled = ldi === 0; btnDirDown.disabled = ldi === srv.log_dirs.length - 1;
       wrap.appendChild(el('div', { class: 'dir-actions' }, [btnDirDup, btnDirUp, btnDirDown, btnDirDel]));
       return wrap;
@@ -482,8 +493,8 @@
         pathWrap.appendChild(btnBrowse);
 
         const btnSave = el('button', { class: 'btn btn-sm', text: '💾 保存', type: 'button', onclick: () => saveOpenerRow(op) });
-        const btnDel = el('button', { class: 'btn btn-sm btn-danger', text: '删除', type: 'button', onclick: () => {
-          if (confirm('确认删除打开器 "' + (op.name || '(未命名)') + '"？')) {
+        const btnDel = el('button', { class: 'btn btn-sm btn-danger', text: '删除', type: 'button', onclick: async () => {
+          if (await confirmDialog('确认删除打开器 "' + (op.name || '(未命名)') + '"？')) {
             state.openers.splice(idx, 1);
             markDirty('openers');
             renderOpeners();
@@ -652,8 +663,8 @@
         toast('已保存', 'ok');
       }
     }
-    function doReset() {
-      if (!state.dirty || confirm('放弃所有未保存的改动？')) {
+    async function doReset() {
+      if (!state.dirty || await confirmDialog('放弃所有未保存的改动？')) {
         api('GET', '/api/admin/servers').then(info => {
           state.app = info.app; state.search = info.search;
           state.systems = JSON.parse(JSON.stringify(info.systems));
@@ -685,6 +696,7 @@
     async function doExport() {
       try {
         const resp = await fetch('/api/config/export', { credentials: 'same-origin' });
+        if (handleAuth401(resp)) { toast('需要登录', 'err'); return; }
         if (!resp.ok) {
           let msg = '导出失败: HTTP ' + resp.status;
           try { const j = await resp.json(); if (j.error) msg = j.error; } catch (_) {}
@@ -707,8 +719,8 @@
       }
     }
 
-    function doImport() {
-      if (state.dirty && !confirm('当前有未保存的改动，导入配置会丢弃这些改动。继续吗？')) {
+    async function doImport() {
+      if (state.dirty && !await confirmDialog('当前有未保存的改动，导入配置会丢弃这些改动。继续吗？')) {
         return;
       }
       const input = document.createElement('input');
@@ -722,7 +734,7 @@
           return;
         }
         const reader = new FileReader();
-        reader.onload = () => {
+        reader.onload = async () => {
           const yamlText = reader.result;
           if (!yamlText || !String(yamlText).trim()) {
             toast('文件内容为空', 'err');
@@ -734,7 +746,7 @@
           const preview = String(yamlText).substring(0, 2000).replace(/</g, '&lt;');
           const ellipsis = String(yamlText).length > 2000 ? '\n…（省略 ' + (String(yamlText).length - 2000) + ' 字符）' : '';
           const confirmMsg = '确定要导入此配置文件吗？\n\n文件：' + file.name + ' (' + file.size + ' 字节)\n\n⚠ 警告：导入后将完全覆盖现有配置，旧配置会自动备份为 .bak 文件。\n\n文件预览（前 2000 字符）：\n' + preview + ellipsis;
-          if (!confirm(confirmMsg)) {
+          if (!await confirmDialog(confirmMsg)) {
             toast('已取消导入', '');
             return;
           }
@@ -754,6 +766,7 @@
           headers: { 'Content-Type': 'text/yaml' },
           body: yamlText
         });
+        if (handleAuth401(resp)) { toast('需要登录', 'err'); return; }
         let result;
         try { result = await resp.json(); } catch (_) { result = {}; }
         if (!resp.ok) {

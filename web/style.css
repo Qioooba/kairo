@@ -18,6 +18,8 @@
   --error: #ef4444;
   --shadow: 0 10px 30px rgba(0,0,0,0.35);
   --radius: 10px;
+  /* FE-007：主侧栏宽度统一变量，body grid-template-columns 与 .cfg-save-footer-bar 等共用，避免硬编码 240px 耦合。 */
+  --sidebar-width: 240px;
 
   /* 主题色：body / sidebar / topbar / 状态色（半透明） */
   --body-bg: linear-gradient(135deg, #0a0f17 0%, #11161f 50%, #0d1117 100%);
@@ -233,7 +235,7 @@ a { color: var(--primary-2); text-decoration: none; }
 /* 布局 */
 body {
   display: grid;
-  grid-template-columns: 240px 1fr;
+  grid-template-columns: var(--sidebar-width) 1fr;
   height: 100vh;
   overflow: hidden;
 }
@@ -509,23 +511,6 @@ input[type=radio] {
   min-height: 24px;
   accent-color: var(--primary);
 }
-input[type=text], input[type=password], input[type=number], select, textarea {
-  width: 100%;
-  background: var(--bg-2);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 8px 10px;
-  min-height: 36px;
-  color: var(--text);
-  font-size: 13px;
-  font-family: inherit;
-  transition: border-color .15s, background .15s;
-}
-input:focus, select:focus, textarea:focus {
-  outline: none;
-  border-color: var(--primary);
-  background: var(--bg-3);
-}
 input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-visible {
   outline: 2px solid rgba(79,140,255,0.35);
   outline-offset: 2px;
@@ -594,7 +579,7 @@ textarea { resize: vertical; min-height: 100px; font-family: ui-monospace, SFMon
 /* v0.5 #3 + P2-14：底部保存按钮组 — 固定在视口底部，长表单任何位置都能直接保存 */
 .cfg-save-footer-bar {
   position: fixed;
-  left: 240px; /* 跟 body grid-template-columns 240px 1fr 一致（sidebar 宽 240px） */
+  left: var(--sidebar-width); /* 跟 body grid-template-columns 一致（sidebar 宽 --sidebar-width） */
   right: 0; bottom: 0;
   background: var(--bg-1);
   z-index: 50;

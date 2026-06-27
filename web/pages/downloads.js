@@ -10,7 +10,7 @@
   'use strict';
   const OTB = window.OTB = window.OTB || {};
   OTB.pages = OTB.pages || {};
-  const { el, toast } = OTB.core;
+  const { el, toast, confirmDialog } = OTB.core;
   const { api } = OTB.api;
 
   // v0.8：外部打开器缓存（module 级，跨 re-render 存活）。
@@ -195,7 +195,7 @@
     }
 
     async function doDelete(f, cb) {
-      if (!confirm('删除 ' + f.name + '？')) return;
+      if (!await confirmDialog('删除 ' + f.name + '？')) return;
       try {
         await api('DELETE', '/api/downloads/' + encodeURIComponent(f.name));
         toast('已删除', 'ok');
@@ -215,7 +215,7 @@
     }
 
     async function doClearAll() {
-      if (!confirm('清空 downloads/ 里所有文件？此操作不可恢复。')) return;
+      if (!await confirmDialog('清空 downloads/ 里所有文件？此操作不可恢复。')) return;
       try {
         const r = await api('POST', '/api/downloads/all');
         toast('已清空 ' + r.deleted + ' 个文件', 'ok');

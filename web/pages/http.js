@@ -103,6 +103,9 @@
       if (!r || !r.enabled) return;
       const k = (r.key || '').trim();
       if (!k) return;
+      if (Object.prototype.hasOwnProperty.call(m, k)) {
+        toast('检测到重复的 key："' + k + '"，后值将覆盖前值', 'warn');
+      }
       m[k] = r.value || '';
     });
     return m;
@@ -140,13 +143,13 @@
     // 先转义
     let html = escapeHtmlLocal(text);
     // 顺序：键、字符串、数字、布尔、null、标点
-    html = html.replace(/(&quot;[^&]*?&quot;)(\s*:)/g, '<span class="s-key">$1</span>$2');
-    html = html.replace(/: (&quot;[^&]*?&quot;)/g, ': <span class="s-string">$1</span>');
+    html = html.replace(/(&quot;[^"]*?&quot;)(\s*:)/g, '<span class="s-key">$1</span>$2');
+    html = html.replace(/: (&quot;[^"]*?&quot;)/g, ': <span class="s-string">$1</span>');
     html = html.replace(/: (-?\d+\.?\d*([eE][+-]?\d+)?)/g, ': <span class="s-number">$1</span>');
     html = html.replace(/\b(true|false)\b/g, '<span class="s-bool">$1</span>');
     html = html.replace(/\b(null)\b/g, '<span class="s-null">$1</span>');
     // 顶级数组元素里的字符串
-    html = html.replace(/(\[|, )(&quot;[^&]*?&quot;)/g, '$1<span class="s-string">$2</span>');
+    html = html.replace(/(\[|, )(&quot;[^"]*?&quot;)/g, '$1<span class="s-string">$2</span>');
     return html;
   }
 

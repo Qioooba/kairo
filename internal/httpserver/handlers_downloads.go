@@ -19,11 +19,13 @@ func (s *Server) handleDownloadsList(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 405, errors.New("仅支持 GET"))
 		return
 	}
+	// BE-020：入口取一次配置快照，后续整个 handler 复用同一份，避免 TOCTOU。
+	downloadDir := s.cur().DownloadDir()
 	q := r.URL.Query()
 	filterSys := strings.TrimSpace(q.Get("system"))
 	filterSrv := strings.TrimSpace(q.Get("server"))
 
-	entries, err := downloads.List(s.cur().DownloadDir())
+	entries, err := downloads.List(downloadDir)
 	if err != nil {
 		writeErrSanitized(w, 500, err)
 		return
@@ -68,7 +70,7 @@ func (s *Server) handleDownloadsList(w http.ResponseWriter, r *http.Request) {
 		"count":       len(out),
 		"total_bytes": total,
 		"total_human": humanBytes(total),
-		"folder":      s.cur().DownloadDir(),
+		"folder":      downloadDir,
 	})
 }
 
@@ -84,6 +86,8 @@ func (s *Server) handleDownloadsItem(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	// BE-020：入口取一次配置快照，后续所有分支复用同一份，避免 TOCTOU。
+	downloadDir := s.cur().DownloadDir()
 	// 子路径分发：{name}/open-dir  或  open-dir?name=...（v0.5 新接口）
 	if strings.HasSuffix(rest, "/open-dir") || rest == "open-dir" {
 		// 兼容 v0.5 新接口 /api/downloads/open-dir?name=...（用于 name 含 "/" 时）
@@ -106,7 +110,7 @@ func (s *Server) handleDownloadsItem(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, 405, errors.New("仅支持 POST"))
 			return
 		}
-		n, err := downloads.DeleteAll(s.cur().DownloadDir())
+		n, err := downloads.DeleteAll(downloadDir)
 		if err != nil {
 			writeErrSanitized(w, 500, err)
 			return
@@ -120,7 +124,7 @@ func (s *Server) handleDownloadsItem(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 405, errors.New("仅支持 DELETE"))
 		return
 	}
-	if err := downloads.Delete(s.cur().DownloadDir(), rest); err != nil {
+	if err := downloads.Delete(downloadDir, rest); err != nil {
 		writeErr(w, 400, err)
 		return
 	}

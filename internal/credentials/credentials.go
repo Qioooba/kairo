@@ -200,35 +200,40 @@ func encrypt(key, plaintext string) (*encryptedEntry, error) {
 	}, nil
 }
 
-func decrypt(key string, e *encryptedEntry) (string, error) {
+// decrypt 解密一条密文。返回 (明文, isLegacy, error)。
+// isLegacy=true 表示命中的是未绑定 AAD 的旧格式密文（向后兼容路径），
+// 调用方应据此触发一次性迁移到新格式（见 BE-013）。
+func decrypt(key string, e *encryptedEntry) (string, bool, error) {
 	nonce, err := hex.DecodeString(e.Nonce)
 	if err != nil {
-		return "", fmt.Errorf("credentials: nonce hex 解码失败: %w", err)
+		return "", false, fmt.Errorf("credentials: nonce hex 解码失败: %w", err)
 	}
 	ct, err := hex.DecodeString(e.Ciphertext)
 	if err != nil {
-		return "", fmt.Errorf("credentials: ciphertext hex 解码失败: %w", err)
+		return "", false, fmt.Errorf("credentials: ciphertext hex 解码失败: %w", err)
 	}
 	block, err := aes.NewCipher(fileKey)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	gcm, err := cipher.NewGCM(block)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	if len(nonce) != gcm.NonceSize() {
-		return "", errors.New("credentials: nonce 长度不正确")
+		return "", false, errors.New("credentials: nonce 长度不正确")
 	}
+	// BE-013：优先用 AAD 绑定格式解密；失败后再按旧格式（nil AAD）读取，
+	// 命中旧格式时返回 isLegacy=true 让调用方触发迁移重写，逐步消除旧密文。
 	pt, err := gcm.Open(nil, nonce, ct, []byte(key))
 	if err != nil {
-		// 兼容旧版本：历史密文未绑定 AAD，先尝试新格式，失败后再按旧格式读取。
 		pt, err = gcm.Open(nil, nonce, ct, nil)
 		if err != nil {
-			return "", fmt.Errorf("credentials: 解密失败（密钥不匹配或数据损坏）: %w", err)
+			return "", false, fmt.Errorf("credentials: 解密失败（密钥不匹配或数据损坏）: %w", err)
 		}
+		return string(pt), true, nil
 	}
-	return string(pt), nil
+	return string(pt), false, nil
 }
 
 func loadFile() (map[string]encryptedEntry, error) {
@@ -312,7 +317,19 @@ func fileGet(key string) (string, error) {
 	if !ok {
 		return "", ErrNotSaved
 	}
-	return decrypt(key, &e)
+	pt, isLegacy, err := decrypt(key, &e)
+	if err != nil {
+		return "", err
+	}
+	// BE-013：读取到旧格式（未绑定 AAD）密文时，立即用新格式重写存储，
+	// 一次性迁移；下次读取即走 AAD 校验路径。迁移失败仅记日志不阻塞读取。
+	if isLegacy {
+		if enc, mErr := encrypt(key, pt); mErr == nil {
+			entries[key] = *enc
+			_ = saveFile(entries)
+		}
+	}
+	return pt, nil
 }
 
 func fileClear(key string) error {

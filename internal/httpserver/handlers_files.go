@@ -122,9 +122,11 @@ func (s *Server) handleFilesList(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 405, errors.New("仅支持 POST"))
 		return
 	}
+	// BE-020：入口取一次配置快照，后续整个 handler 复用同一份，避免 TOCTOU。
+	cur := s.cur()
 	// 文件浏览器（任意路径下载）开关检查：
 	// 配置里显式 enable_free_file_browser: false 时，整个 /api/files/* 拒绝服务。
-	if !s.cur().App.FreeFileBrowserEnabled() {
+	if !cur.App.FreeFileBrowserEnabled() {
 		writeErr(w, 403, errors.New("文件浏览器（任意路径下载）已在配置中关闭 (app.enable_free_file_browser=false)"))
 		return
 	}
@@ -208,7 +210,7 @@ func (s *Server) handleFilesList(w http.ResponseWriter, r *http.Request) {
 
 	// 项 14：free_file_roots 白名单检查（仅 list 时校验；download 也复用同一逻辑）。
 	// 多服务器模式：每个 path 都要在白名单里（任意一个不通过就 403 整个请求）
-	cur := s.cur()
+	// BE-020：复用入口取的 cur，不再重复 s.cur()。
 	for _, p := range plans {
 		if !cur.App.FreeFileRootsEnabled(p.path) {
 			writeErr(w, 403, fmt.Errorf("path %q 不在 app.free_file_roots 白名单中", p.path))
@@ -559,7 +561,9 @@ func (s *Server) handleFilesPreview(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 405, errors.New("仅支持 POST"))
 		return
 	}
-	if !s.cur().App.FreeFileBrowserEnabled() {
+	// BE-020：入口取一次配置快照，后续整个 handler 复用同一份，避免 TOCTOU。
+	cur := s.cur()
+	if !cur.App.FreeFileBrowserEnabled() {
 		writeErr(w, 403, errors.New("文件浏览器（任意路径下载）已在配置中关闭 (app.enable_free_file_browser=false)"))
 		return
 	}
@@ -581,12 +585,12 @@ func (s *Server) handleFilesPreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// FreeFileRoots 白名单（跟 list/download 一致）
-	if !s.cur().App.FreeFileRootsEnabled(req.Path) {
+	if !cur.App.FreeFileRootsEnabled(req.Path) {
 		writeErr(w, 403, fmt.Errorf("path %q 不在 app.free_file_roots 白名单中", req.Path))
 		return
 	}
 
-	_, srv, ok := s.cur().FindServer(req.System, req.Server)
+	_, srv, ok := cur.FindServer(req.System, req.Server)
 	if !ok {
 		writeErr(w, 400, errors.New("系统或服务器不存在"))
 		return
@@ -729,8 +733,10 @@ func (s *Server) handleFilesDownload(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 405, errors.New("仅支持 POST"))
 		return
 	}
+	// BE-020：入口取一次配置快照，后续整个 handler 复用同一份，避免 TOCTOU。
+	cur := s.cur()
 	// 文件浏览器（任意路径下载）开关检查（同 handleFilesList）
-	if !s.cur().App.FreeFileBrowserEnabled() {
+	if !cur.App.FreeFileBrowserEnabled() {
 		writeErr(w, 403, errors.New("文件浏览器（任意路径下载）已在配置中关闭 (app.enable_free_file_browser=false)"))
 		return
 	}
@@ -761,12 +767,12 @@ func (s *Server) handleFilesDownload(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// 项 14：free_file_roots 白名单检查
-		if !s.cur().App.FreeFileRootsEnabled(p) {
+		if !cur.App.FreeFileRootsEnabled(p) {
 			writeErr(w, 403, fmt.Errorf("path %q 不在 app.free_file_roots 白名单中", p))
 			return
 		}
 	}
-	_, srv, ok := s.cur().FindServer(req.System, req.Server)
+	_, srv, ok := cur.FindServer(req.System, req.Server)
 	if !ok {
 		writeErr(w, 400, errors.New("系统或服务器不存在"))
 		return
@@ -788,18 +794,18 @@ func (s *Server) handleFilesDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// v0.5-G 项 18：app.allow_custom_download_dir 开关（默认 true）
-	if resolvedTarget != "" && !s.cur().App.AllowCustomDownloadDirEnabled() {
+	if resolvedTarget != "" && !cur.App.AllowCustomDownloadDirEnabled() {
 		writeErr(w, 403, errors.New("自定义下载目录已被配置关闭 (app.allow_custom_download_dir=false)"))
 		return
 	}
 	// v0.5-G 项 18：app.allowed_download_roots 白名单
-	if resolvedTarget != "" && !s.cur().App.TargetDirAllowed(resolvedTarget) {
+	if resolvedTarget != "" && !cur.App.TargetDirAllowed(resolvedTarget) {
 		writeErr(w, 403, fmt.Errorf("target_dir %q 不在 app.allowed_download_roots 白名单中", resolvedTarget))
 		return
 	}
 	downloadRoot := resolvedTarget
 	if downloadRoot == "" {
-		downloadRoot = s.cur().DownloadDir()
+		downloadRoot = cur.DownloadDir()
 	}
 
 	id := dlmanager.NewID()

@@ -140,13 +140,17 @@ func TestManager_Start_HappyPath(t *testing.T) {
 	ch, unsub := s.Subscribe()
 	defer unsub()
 
-	// 至少要收到两条 line + 一条 info + 一条 done
-	got := collectN(t, ch, 4, 2*time.Second)
+	// 至少要收到两条 line + 一条 info（done 不再走 channel 广播，BE-019）
+	got := collectN(t, ch, 3, 2*time.Second)
 	joined := strings.Join(got, "\n")
-	for _, want := range []string{`"kind":"info"`, `"kind":"line","line":"hello"`, `"kind":"line","line":"world"`, `"kind":"done"`} {
+	for _, want := range []string{`"kind":"info"`, `"kind":"line","line":"hello"`, `"kind":"line","line":"world"`} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("应包含 %s，实际: %s", want, joined)
 		}
+	}
+	// done 消息由 setDoneMsg 设置（不广播），handler 的 !open 分支读 DoneMsg 发 SSE
+	if !strings.Contains(s.DoneMsg(), "tail 结束") {
+		t.Errorf("DoneMsg 应包含结束消息，实际: %q", s.DoneMsg())
 	}
 }
 
@@ -178,14 +182,15 @@ func TestManager_Start_StreamErr(t *testing.T) {
 	}
 
 	ch, _ := s.Subscribe()
-	// 收完整：info + line + error + done → 用 collectAll 等 channel 关闭
+	// 收完整：info + line + error → 用 collectAll 等 channel 关闭
+	// done 不再走 channel 广播（BE-019），改为 setDoneMsg + handler !open 分支发 SSE
 	got := collectAll(t, ch, 2*time.Second)
 	joined := strings.Join(got, "\n")
 	if !strings.Contains(joined, `"kind":"error"`) || !strings.Contains(joined, "ssh broken") {
 		t.Errorf("应包含 error 事件含原因: %s", joined)
 	}
-	if !strings.Contains(joined, `"kind":"done"`) {
-		t.Errorf("error 后应推 done: %s", joined)
+	if !strings.Contains(s.DoneMsg(), "tail 结束") {
+		t.Errorf("error 后应设置 doneMsg: %q", s.DoneMsg())
 	}
 
 	stopped, sErr := s.Stopped()
@@ -219,14 +224,15 @@ func TestManager_Start_CtxCancel_PropagatesAsCanceled(t *testing.T) {
 		t.Fatalf("Stop: %v", err)
 	}
 
-	// 应该很快收到 done（不会因为 ctx 取消而推 error）
-	got := collectN(t, ch, 2, 2*time.Second)
+	// 应该很快收到 info（不会因为 ctx 取消而推 error）。
+	// done 不再走 channel 广播（BE-019），改为 setDoneMsg。
+	got := collectN(t, ch, 1, 2*time.Second)
 	joined := strings.Join(got, "\n")
-	if !strings.Contains(joined, `"kind":"done"`) {
-		t.Errorf("ctx 取消后应推 done: %s", joined)
-	}
 	if strings.Contains(joined, `"kind":"error"`) {
 		t.Errorf("ctx 取消不应推 error 事件: %s", joined)
+	}
+	if !strings.Contains(s.DoneMsg(), "tail 结束") {
+		t.Errorf("ctx 取消后应设置 doneMsg: %q", s.DoneMsg())
 	}
 }
 

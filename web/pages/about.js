@@ -7,8 +7,21 @@
   const OTB = window.OTB = window.OTB || {};
   OTB.pages = OTB.pages || {};
   const { el } = OTB.core;
+  const { api } = OTB.api || {};
 
+  // 兜底版本号；后端 /api/config 读取失败时使用。
   const VERSION = 'v0.8';
+
+  // FE-006：异步从后端 /api/config 读取真实版本号（构建时 ldflags 注入），
+  // 失败回退到硬编码 VERSION。返回 null 表示取不到。
+  async function fetchVersion() {
+    try {
+      if (typeof api !== 'function') return null;
+      const cfg = await api('GET', '/api/config');
+      if (cfg && cfg.version) return cfg.version;
+    } catch (e) { /* ignore，回退硬编码 */ }
+    return null;
+  }
 
   const changelog = [
     {
@@ -91,15 +104,19 @@
   ];
 
   function renderAbout(view) {
+    // FE-006：版本徽章先用硬编码 VERSION 渲染（避免空缺），异步拿到后端版本后回填。
+    const versionBadge = el('span', {
+      class: 'tier-badge',
+      style: 'display:inline-block; font-size:14px; padding:4px 16px; border-radius:20px; background:var(--primary); color:#fff;',
+      text: VERSION
+    });
+    fetchVersion().then(v => { if (v) versionBadge.textContent = v; });
+
     const headerCard = el('div', { class: 'card', style: 'text-align:center; padding:32px 24px;' }, [
       el('div', { style: 'font-size:48px; margin-bottom:12px;' }, [document.createTextNode('⚙')]),
       el('h1', { style: 'margin:0 0 8px 0; font-size:28px;', text: '内网运维工具箱' }),
       el('div', { class: 'text-dim', style: 'font-size:15px; margin-bottom:16px;', text: 'OpsToolbox · 内网运维效率平台' }),
-      el('span', {
-        class: 'tier-badge',
-        style: 'display:inline-block; font-size:14px; padding:4px 16px; border-radius:20px; background:var(--primary); color:#fff;',
-        text: VERSION
-      })
+      versionBadge
     ]);
 
     const historyTitle = el('h3', { style: 'margin:24px 0 12px 0;', text: '版本历史' });

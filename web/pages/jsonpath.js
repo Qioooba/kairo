@@ -15,7 +15,7 @@
   'use strict';
   const OTB = window.OTB = window.OTB || {};
   OTB.pages = OTB.pages || {};
-  const { el, toast } = OTB.core;
+  const { el, toast, copyToClipboard } = OTB.core;
   const { api } = OTB.api;
 
   const LS_HISTORY = 'otb:jsonpath:history';
@@ -138,11 +138,12 @@
         toast('已格式化', 'ok');
       } catch (e) { toast('格式化失败：' + e.message, 'err'); }
     }});
-    const btnCopy = el('button', { class: 'btn', text: '复制结果', onclick: () => {
+    const btnCopy = el('button', { class: 'btn', text: '复制结果', onclick: async () => {
       if (!outTa.value) { toast('结果为空', 'warn'); return; }
-      outTa.select();
-      try { document.execCommand('copy'); toast('已复制', 'ok'); }
-      catch (e) { toast('复制失败', 'err'); }
+      try {
+        await copyToClipboard(outTa.value);
+        toast('已复制', 'ok');
+      } catch (e) { toast('复制失败', 'err'); }
     }});
 
     // 回车提交流程

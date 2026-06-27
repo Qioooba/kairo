@@ -12,9 +12,9 @@ func TestPathTraversal_AllowsDoubleDotFilename(t *testing.T) {
 		"my..file.log",
 		"report..txt",
 		"a.b..c",
-		"..config.ini",   // 前缀含 ".." 但不构成穿越（无分隔符）
-		"config..ini",    // 双点在中间但无路径分隔符
-		"日志..zip",       // 非 ASCII 双点
+		"..config.ini", // 前缀含 ".." 但不构成穿越（无分隔符）
+		"config..ini",  // 双点在中间但无路径分隔符
+		"日志..zip",      // 非 ASCII 双点
 		"normal.log",
 		"20260624/app.log",
 	}
@@ -36,7 +36,7 @@ func TestPathTraversal_RejectsParentDir(t *testing.T) {
 		"..",
 		"/../etc",
 		"etc/..",
-		"..\\etc\\passwd",  // Windows 形态
+		"..\\etc\\passwd", // Windows 形态
 		"a\\..\\b",
 		"etc\\..",
 	}

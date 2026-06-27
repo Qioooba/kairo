@@ -49,6 +49,18 @@ const (
 	authQueryParam = "token"
 )
 
+// Version / BuildTime 可在构建时通过 ldflags 注入，例如：
+//
+//	go build -ldflags "-X 'ops-toolbox/internal/httpserver.Version=v0.8' \
+//	  -X 'ops-toolbox/internal/httpserver.BuildTime=2026-06-27T00:00:00Z'" .
+//
+// 未注入时使用下面的默认值；前端 about 页通过 GET /api/config 读取并回填显示，
+// 读取失败则回退到前端硬编码版本（FE-006）。
+var (
+	Version   = "v0.8-dev"
+	BuildTime = "unknown"
+)
+
 type contextKey string
 
 const authUserKey contextKey = "authUser"
@@ -451,11 +463,13 @@ func (s *Server) serveStatic(w http.ResponseWriter, r *http.Request, name string
 // 前端可在 sidebar 或下载结果卡显示"文件落到 D:\...\downloads"之类。
 // 原 App 字段保留 yaml 里的相对路径（用于配置回写）。
 type configView struct {
-	App     config.AppConfig      `json:"app"`
-	Systems []config.SystemConfig `json:"systems"`
-	Search  config.SearchConfig   `json:"search"`
-	Auth    configAuthView        `json:"auth"`
-	Paths   configViewPaths       `json:"paths"`
+	App       config.AppConfig      `json:"app"`
+	Systems   []config.SystemConfig `json:"systems"`
+	Search    config.SearchConfig   `json:"search"`
+	Auth      configAuthView        `json:"auth"`
+	Paths     configViewPaths       `json:"paths"`
+	Version   string                `json:"version"`
+	BuildTime string                `json:"build_time,omitempty"`
 }
 
 type configViewPaths struct {
@@ -495,5 +509,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			LogDir:      cur.LogDir(),
 			DataDir:     cur.DataDir(),
 		},
+		Version:   Version,
+		BuildTime: BuildTime,
 	})
 }

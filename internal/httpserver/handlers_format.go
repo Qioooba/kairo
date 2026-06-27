@@ -675,6 +675,19 @@ func collectCronRuns(now time.Time, dir, want int, sets []map[int]bool, hasSecon
 	}
 	out := make([]map[string]any, 0, want)
 	t := now
+	if dir > 0 {
+		// BE-015: 正向用字段递进 + 跳跃算法，避免稀疏 cron（如 `0 0 0 1 1 *`
+		// 每年1月1日，5 次≈262 万分钟）超过旧版 200 万次暴力迭代上限。
+		// 每次跳跃直接到下一个可能匹配的时间点，最多几千次循环即可。
+		const maxIter = 10000
+		for i := 0; i < maxIter && len(out) < want; i++ {
+			t = nextCronMatchForward(t, sets, hasSeconds)
+			out = append(out, cronRun(t))
+			t = t.Add(step)
+		}
+		return out
+	}
+	// 反向仍用暴力遍历（want 通常仅 3，迭代量小）。
 	for i := 0; i < 2000000 && len(out) < want; i++ {
 		if cronMatch(t, sets) {
 			out = append(out, cronRun(t))
@@ -682,6 +695,48 @@ func collectCronRuns(now time.Time, dir, want int, sets []map[int]bool, hasSecon
 		t = t.Add(step)
 	}
 	return out
+}
+
+// nextCronMatchForward 从 from（含）开始找下一个匹配 cron 表达式的时间点。
+// BE-015：按 月 → 日 → 时 → 分 → 秒 顺序递进，任一字段不匹配即跳到下一个
+// 该字段可能匹配的边界，避免逐分钟暴力遍历。
+func nextCronMatchForward(from time.Time, sets []map[int]bool, hasSeconds bool) time.Time {
+	loc := from.Location()
+	t := from
+	for i := 0; i < 100000; i++ {
+		if !sets[4][int(t.Month())] {
+			// 月份不匹配：跳到下个月 1 号 00:00:00（Go 自动归一化 12→次年1月）。
+			t = time.Date(t.Year(), t.Month()+1, 1, 0, 0, 0, 0, loc)
+			continue
+		}
+		if !dayMatches(t, sets) {
+			// 日期不匹配：跳到下一天 00:00:00。
+			t = time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, loc).AddDate(0, 0, 1)
+			continue
+		}
+		if !sets[2][t.Hour()] {
+			// 小时不匹配：跳到下一小时 00 分 00 秒。
+			t = time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), 0, 0, 0, loc).Add(time.Hour)
+			continue
+		}
+		if !sets[1][t.Minute()] {
+			// 分钟不匹配：跳到下一分钟 00 秒。
+			t = time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), 0, 0, loc).Add(time.Minute)
+			continue
+		}
+		if hasSeconds && !sets[0][t.Second()] {
+			t = t.Add(time.Second)
+			continue
+		}
+		return t
+	}
+	return from
+}
+
+// dayMatches 判断 t 的日期部分是否匹配 cron 的 day-of-month 和 day-of-week 字段。
+// 与 cronMatch 保持一致的 AND 语义（既有行为，不改 cron 标准 OR 规则）。
+func dayMatches(t time.Time, sets []map[int]bool) bool {
+	return sets[3][t.Day()] && sets[5][int(t.Weekday())]
 }
 
 func cronMatch(t time.Time, sets []map[int]bool) bool {

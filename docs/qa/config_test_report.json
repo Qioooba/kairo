@@ -1,0 +1,221 @@
+{
+  "testTime": "2026-06-27T07:07:37.320Z",
+  "summary": {
+    "total": 29,
+    "passed": 29,
+    "failed": 0
+  },
+  "consoleErrors": [
+    {
+      "type": "error",
+      "text": "Failed to load resource: the server responded with a status of 400 (Bad Request)"
+    }
+  ],
+  "pageErrors": [],
+  "results": [
+    {
+      "name": "打开系统配置页面",
+      "status": "pass",
+      "ms": 1473,
+      "error": null,
+      "detail": "面包屑: 系统配置"
+    },
+    {
+      "name": "检查首屏卡片结构",
+      "status": "pass",
+      "ms": 11,
+      "error": null,
+      "detail": "卡片: 应用自身配置 | 搜索默认参数 | 业务系统 / 服务器 / 日志目录 | 外部打开器 | 下载历史自动清理"
+    },
+    {
+      "name": "检查顶部操作条按钮",
+      "status": "pass",
+      "ms": 16,
+      "error": null,
+      "detail": "按钮齐全: + 新增业务系统, 导出配置, 导入配置, 放弃改动, 保存, 放弃改动, 保存"
+    },
+    {
+      "name": "检查应用自身配置只读卡",
+      "status": "pass",
+      "ms": 3,
+      "error": null,
+      "detail": "行数: 6"
+    },
+    {
+      "name": "点击\"+新增业务系统\"按钮",
+      "status": "pass",
+      "ms": 420,
+      "error": null,
+      "detail": "系统块数量: 2"
+    },
+    {
+      "name": "测试系统下移按钮",
+      "status": "pass",
+      "ms": 638,
+      "error": null,
+      "detail": "下移完成"
+    },
+    {
+      "name": "测试系统上移按钮",
+      "status": "pass",
+      "ms": 319,
+      "error": null,
+      "detail": "上移完成"
+    },
+    {
+      "name": "测试系统复制按钮",
+      "status": "pass",
+      "ms": 389,
+      "error": null,
+      "detail": "复制后名称: TestSys-A-copy"
+    },
+    {
+      "name": "测试新增服务器按钮",
+      "status": "pass",
+      "ms": 371,
+      "error": null,
+      "detail": "服务器块数: 2"
+    },
+    {
+      "name": "测试服务器复制按钮",
+      "status": "pass",
+      "ms": 323,
+      "error": null,
+      "detail": "复制后服务器块数: 3"
+    },
+    {
+      "name": "测试新增日志目录按钮",
+      "status": "pass",
+      "ms": 391,
+      "error": null,
+      "detail": "日志目录块数: 2"
+    },
+    {
+      "name": "测试日志目录复制按钮",
+      "status": "pass",
+      "ms": 323,
+      "error": null,
+      "detail": "复制后日志目录块数: 3"
+    },
+    {
+      "name": "测试编码下拉框切换",
+      "status": "pass",
+      "ms": 212,
+      "error": null,
+      "detail": "编码切换正常"
+    },
+    {
+      "name": "测试文件名规则textarea",
+      "status": "pass",
+      "ms": 208,
+      "error": null,
+      "detail": "规则行数: 3"
+    },
+    {
+      "name": "点击\"放弃改动\"按钮",
+      "status": "pass",
+      "ms": 1094,
+      "error": null,
+      "detail": "放弃成功，保存按钮已disabled"
+    },
+    {
+      "name": "点击\"导出配置\"按钮",
+      "status": "pass",
+      "ms": 521,
+      "error": null,
+      "detail": "下载触发: config.yaml"
+    },
+    {
+      "name": "点击外部打开器\"+添加打开器\"",
+      "status": "pass",
+      "ms": 379,
+      "error": null,
+      "detail": "打开器行数: 1"
+    },
+    {
+      "name": "测试打开器图标自动推断",
+      "status": "pass",
+      "ms": 621,
+      "error": null,
+      "detail": "图标: 📋"
+    },
+    {
+      "name": "点击打开器保存按钮",
+      "status": "pass",
+      "ms": 1082,
+      "error": null,
+      "detail": "toast: 打开器已保存"
+    },
+    {
+      "name": "测试打开器保存空名称（应报错）",
+      "status": "pass",
+      "ms": 848,
+      "error": null,
+      "detail": "正确报错: 保存失败：打开器名称不能为空"
+    },
+    {
+      "name": "测试下载历史保留天数输入",
+      "status": "pass",
+      "ms": 221,
+      "error": null,
+      "detail": "保留天数: 30"
+    },
+    {
+      "name": "测试保留天数设为0",
+      "status": "pass",
+      "ms": 210,
+      "error": null,
+      "detail": "设为0成功"
+    },
+    {
+      "name": "点击保存按钮",
+      "status": "pass",
+      "ms": 1614,
+      "error": null,
+      "detail": "toast: 部分保存失败 — openers：配置校验失败: app.external_openers[1].name 不能为空"
+    },
+    {
+      "name": "检查警告横幅",
+      "status": "pass",
+      "ms": 326,
+      "error": null,
+      "detail": "关闭后display: none"
+    },
+    {
+      "name": "检查底部保存按钮",
+      "status": "pass",
+      "ms": 6,
+      "error": null,
+      "detail": "底部按钮: 放弃改动, 保存"
+    },
+    {
+      "name": "测试删除打开器",
+      "status": "pass",
+      "ms": 531,
+      "error": null,
+      "detail": "删除前: 1 → 删除后: 0"
+    },
+    {
+      "name": "测试窄屏响应式布局",
+      "status": "pass",
+      "ms": 567,
+      "error": null,
+      "detail": "已截图窄屏布局"
+    },
+    {
+      "name": "切换到首页再切回配置页",
+      "status": "pass",
+      "ms": 1513,
+      "error": null,
+      "detail": "切回后卡片数: 5"
+    },
+    {
+      "name": "检查控制台错误",
+      "status": "pass",
+      "ms": 0,
+      "error": null,
+      "detail": "console错误数: 1 :: Failed to load resource: the server responded with a status of 400 (Bad Request)"
+    }
+  ],
+  "networkApiCalls": 28
+}

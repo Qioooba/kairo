@@ -5,6 +5,18 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%232563eb'/%3E%3Cpath d='M9 10h14M9 16h14M9 22h8' stroke='%23fff' stroke-width='2.5' stroke-linecap='round'/%3E%3C/svg%3E" />
   <title>文件预览 · 独立窗口</title>
+  <!-- 与 index.html 一致：在 CSS 加载后立刻读 localStorage 设 data-theme，避免独立窗口深色与主窗口主题不一致 / FOUC -->
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem('otb_theme');
+        if (t !== 'dark' && t !== 'light' && t !== 'green' && t !== 'hc') t = 'dark';
+        document.documentElement.setAttribute('data-theme', t);
+      } catch (_) {
+        document.documentElement.setAttribute('data-theme', 'dark');
+      }
+    })();
+  </script>
   <link rel="stylesheet" href="/static/style.css" />
   <style>
     /* preview 独立窗口：尽量窄、尽量高，避免被侧边栏挤 */
@@ -95,7 +107,6 @@
   </main>
 
   <div id="toast" class="toast"></div>
-  <script src="/static/api.js"></script>
   <script>
     // ===== preview.html 独立窗口 JS =====
     // 从 query string 拿 system/server/path/encoding，
@@ -104,8 +115,35 @@
 
     (function () {
       'use strict';
+      if (!window.OTB) window.OTB = {};
       const $ = (s) => document.querySelector(s);
-      const { api } = window.OTB || { api: null };
+      const { api } = window.OTB.api || {};
+      // FE-003：优先走 OTB.api.api() —— 它会在 401 时触发登录引导（requireLogin）。
+      // 但 api() 内部依赖 window.OTB.core.setStatus；preview 独立窗口没加载 core.js，
+      // 此时 api() 调用会抛错。这里做 fallback：core 没就绪时退回裸 fetch 兜底，
+      // 并复刻 api() 的「401→requireLogin / !ok→throw」语义，保证功能不中断。
+      const coreReady = !!(window.OTB && window.OTB.core);
+      async function request(method, path, body) {
+        const opts = { method, headers: {}, credentials: 'same-origin' };
+        if (body !== undefined) {
+          opts.headers['Content-Type'] = 'application/json';
+          opts.body = JSON.stringify(body);
+        }
+        const resp = await fetch(path, opts);
+        let data = null;
+        try { data = await resp.json(); } catch (e) { /* ignore */ }
+        if (resp.status === 401 && data && data.auth_required) {
+          if (window.OTB.auth && window.OTB.auth.requireLogin) window.OTB.auth.requireLogin();
+          const err = new Error((data && data.error) || '需要登录');
+          err.authRequired = true;
+          throw err;
+        }
+        if (!resp.ok) {
+          throw new Error((data && data.error) || ('HTTP ' + resp.status));
+        }
+        return data;
+      }
+      const call = (typeof api === 'function' && coreReady) ? api : request;
       const params = new URLSearchParams(location.search);
       const system = params.get('system') || '';
       const server = params.get('server') || '';
@@ -176,33 +214,20 @@
 
         setConn('busy', '加载中…');
         try {
-          // 用 fetch 而不是 OTB.api（可能依赖主页面初始化）
-          const r = await fetch('/api/files/preview', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              system: system, server: server, path: path,
-              username: cred.username, password: cred.password,
-              encoding: encoding, max_bytes: 1048576
-            })
+          // FE-003：走 call()（OTB.api.api() 优先，401 触发登录引导），
+          // 退化时用裸 fetch 兜底。call() 返回解析后的 data，!ok/401 时抛错。
+          const data = await call('POST', '/api/files/preview', {
+            system: system, server: server, path: path,
+            username: cred.username, password: cred.password,
+            encoding: encoding, max_bytes: 1048576
           });
-          const data = await r.json();
-          if (!r.ok) {
-            $('#preview-out').innerHTML = '';
-            const div = document.createElement('div');
-            div.className = 'preview-err';
-            div.textContent = '预览失败：' + (data && data.error || ('HTTP ' + r.status));
-            $('#preview-out').appendChild(div);
-            setConn('err', '失败');
-            return;
-          }
           renderPreview(data);
           setConn('ok', '已加载');
         } catch (e) {
           $('#preview-out').innerHTML = '';
           const div = document.createElement('div');
           div.className = 'preview-err';
-          div.textContent = '请求失败：' + e.message;
+          div.textContent = '预览失败：' + (e && e.message ? e.message : '未知错误');
           $('#preview-out').appendChild(div);
           setConn('err', '失败');
         }
@@ -241,22 +266,22 @@
       // 按钮事件
       $('#btn-refresh').addEventListener('click', () => doPreview(activeCred || getCred()));
       $('#btn-close').addEventListener('click', () => { window.close(); });
-      $('#btn-download').addEventListener('click', () => {
+      $('#btn-download').addEventListener('click', async () => {
         // P0-BUG-3：getCred() 可能返回 {username:'', password:''}（无凭据），
         // 但仍然发请求——后端有 keyring 兜底。
         const cred = activeCred || getCred() || { username: '', password: '' };
-        fetch('/api/files/download', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
+        try {
+          // FE-003：走 call()（OTB.api.api() 优先，401 触发登录引导）。
+          const d = await call('POST', '/api/files/download', {
             system: system, server: server, path: path,
             username: cred.username || '', password: cred.password || '',
             paths: [path], zip: false
-          })
-        }).then(r => r.json()).then(d => {
+          });
           if (d && d.id) toast('下载任务已启动：' + d.id, 'ok');
-          else toast('启动失败：' + (d && d.error || '未知'), 'err');
-        }).catch(e => toast('启动失败：' + e.message, 'err'));
+          else toast('启动失败：未知', 'err');
+        } catch (e) {
+          toast('启动失败：' + (e && e.message ? e.message : '未知'), 'err');
+        }
       });
 
       if (loginForm) {

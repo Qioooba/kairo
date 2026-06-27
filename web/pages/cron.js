@@ -81,14 +81,17 @@
       });
     }
 
+    let reqId = 0;
     async function doParse() {
       const input = inInp.value.trim();
       if (!input) { toast('表达式不能为空', 'warn'); return; }
+      const myReqId = ++reqId;
       try {
         const r = await api('POST', '/api/format/cron-parse', {
           input,
           loc: locSel.value,
         });
+        if (myReqId !== reqId) return; // 旧请求被新请求覆盖，丢弃
         const res = r.res || {};
         if (res.valid) {
           statusTag.textContent = '✓ 合法';
@@ -113,6 +116,7 @@
           toast('解析失败：' + res.error, 'err');
         }
       } catch (e) {
+        if (myReqId !== reqId) return; // 旧请求，丢弃错误提示
         toast('解析失败：' + (e.message || e), 'err');
       }
     }

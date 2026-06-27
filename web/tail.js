@@ -159,7 +159,8 @@
     viewer.scrollToBottomIfNear();
     updateMeters();
   }
-  setInterval(flushTail, 100);
+  // FE-005：保存 interval id，停止 / 关闭窗口时 clearInterval，避免路由切换或窗口关闭后 interval 持续运行。
+  const flushInterval = setInterval(flushTail, 100);
 
   function updateMeters() {
     const total = viewer.totalEver();
@@ -177,7 +178,7 @@
       lastRateCount = total;
     }
   }
-  setInterval(updateMeters, 1000); // 每秒刷一次 meter 兜底（rate 计算兜底）
+  const meterInterval = setInterval(updateMeters, 1000); // 每秒刷一次 meter 兜底（rate 计算兜底）
 
   btnPause.addEventListener('click', () => {
     const newPaused = !viewer.isPaused();
@@ -201,11 +202,15 @@
       try { await fetch('/api/logs/tail/' + tailId + '/stop', { method: 'POST' }); } catch (e) {}
     }
     if (evtSrc) { evtSrc.close(); evtSrc = null; }
+    clearInterval(flushInterval);
+    clearInterval(meterInterval);
     setConn('idle', '已停止');
     btnStop.disabled = true;
   });
   btnClose.addEventListener('click', () => { window.close(); });
   window.addEventListener('beforeunload', () => {
+    clearInterval(flushInterval);
+    clearInterval(meterInterval);
     if (tailId) {
       try { navigator.sendBeacon('/api/logs/tail/' + tailId + '/stop'); } catch (e) {}
     }

@@ -52,6 +52,10 @@ type Session struct {
 	stopped     bool
 	stopErr     error
 	stopOnce    sync.Once
+	// BE-019：结束消息，markDone 前由 setDoneMsg 设置，
+	// handlers_tail.go 的 !open 分支通过 DoneMsg() 读取，作为 SSE done 事件的 data。
+	// 不再走 pushImmediate 广播，避免前端收到两个 done 信号。
+	doneMsg string
 
 	// BE-002：lastActivity 记录最后一次有"真实活动"的时间
 	// （有订阅者挂上、收到 SSH 行、flush 给订阅者）。
@@ -234,6 +238,30 @@ func (s *Session) markDone(err error) {
 	})
 }
 
+// setDoneMsg 设置 session 结束消息（不广播）。
+// 由 Start 的后台 goroutine 在 markDone 前调用；handlers_tail.go 的 !open 分支
+// 通过 DoneMsg() 读取，作为 SSE done 事件的 data。
+//
+// 读写都在 s.mu 保护下，保证线程安全：
+//   - setDoneMsg 在 markDone 之前调用，写 doneMsg 时持锁；
+//   - markDone 关闭订阅者 chan 时也持锁，chan close happens-before handler 接收；
+//   - handler 观察到 chan 关闭后调 DoneMsg()（RLock），此时 markDone 已释放锁，
+//     且 setDoneMsg 的写发生在 markDone 之前，happens-before 链完整。
+func (s *Session) setDoneMsg(msg string) {
+	s.mu.Lock()
+	s.doneMsg = msg
+	s.mu.Unlock()
+}
+
+// DoneMsg 返回 session 结束消息（线程安全）。
+// doneMsg 为空表示未设置（handler 应发空对象 {}）；
+// 为 JSON 字符串可直接用作 SSE data；为纯文本由 handler 包装成 JSON。
+func (s *Session) DoneMsg() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.doneMsg
+}
+
 // Stopped 是否已结束
 func (s *Session) Stopped() (bool, error) {
 	s.mu.RLock()
@@ -339,12 +367,9 @@ func (m *Manager) Start(cli Streamer, serverName, serverHost, dir, file, encodin
 				s.pushImmediate(formatOutput(Output{Kind: "error", Msg: "tail 异常: " + streamErr.Error()}))
 			}
 		}
-		// session 结束前 flush 残余 + done 事件
+		// session 结束前 flush 残余 + 设置 done 消息（不广播，由 handler 的 !open 分支发）
 		s.flushPending()
-		s.pushImmediate(formatOutput(Output{
-			Kind: "done",
-			Msg:  fmt.Sprintf("tail 结束 (exit=%d)", exitCode),
-		}))
+		s.setDoneMsg(fmt.Sprintf("tail 结束 (exit=%d)", exitCode))
 		s.markDone(streamErr)
 	}()
 

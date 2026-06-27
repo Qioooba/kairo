@@ -33,12 +33,14 @@ func (s *Server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 405, errors.New("仅支持 POST"))
 		return
 	}
+	// BE-020：入口取一次配置快照，后续整个 handler 复用同一份，避免 TOCTOU。
+	cur := s.cur()
 	var req logsSearchReq
 	if err := json.NewDecoder(io.LimitReader(r.Body, 64*1024)).Decode(&req); err != nil {
 		writeErr(w, 400, err)
 		return
 	}
-	_, srv, ok := s.cur().FindServer(req.System, req.Server)
+	_, srv, ok := cur.FindServer(req.System, req.Server)
 	if !ok {
 		writeErr(w, 400, errors.New("系统或服务器不存在"))
 		return
@@ -72,7 +74,7 @@ func (s *Server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 	}
 	filesN := req.Files
 	if filesN <= 0 {
-		filesN = s.cur().Search.DefaultLatestFiles
+		filesN = cur.Search.DefaultLatestFiles
 	}
 	if filesN > 10 {
 		filesN = 10
@@ -90,7 +92,7 @@ func (s *Server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 	cli, err := sshclient.Dial(dialCtx, sshclient.Server{
 		Name: srv.Name, Host: srv.Host, Port: srv.Port, Username: username,
 		HostKeySHA256: srv.HostKeySHA256, SSHProfile: srv.SSHProfile,
-		AllowInsecureHostKey: s.cur().App.AllowInsecureHostKeyEnabled(),
+		AllowInsecureHostKey: cur.App.AllowInsecureHostKeyEnabled(),
 	}, sshclient.Credentials{Password: creds.Password}, sshAttemptTimeout)
 	cancelDial()
 	if err != nil {
@@ -106,8 +108,9 @@ func (s *Server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 		writeErrSanitized(w, 500, err)
 		return
 	}
-	listCtx, cancelList := context.WithTimeout(r.Context(), s.cur().SearchTimeout()+5*time.Second)
-	stdout, stderr, code, err := cli.Run(listCtx, cmd, s.cur().SearchTimeout(), ld.Encoding)
+	searchTimeout := cur.SearchTimeout()
+	listCtx, cancelList := context.WithTimeout(r.Context(), searchTimeout+5*time.Second)
+	stdout, stderr, code, err := cli.Run(listCtx, cmd, searchTimeout, ld.Encoding)
 	cancelList()
 	if err != nil || code != 0 {
 		writeErrSanitized(w, 502, fmt.Errorf("列文件失败: %v", err))
@@ -123,13 +126,13 @@ func (s *Server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 		fileNames = append(fileNames, f.Name)
 	}
 
-	cmd, err = logquery.SearchCommand(ld.Path, fileNames, kw, s.cur().Search.MaxMatches, s.cur().Search.TimeoutSeconds, ld.Encoding)
+	cmd, err = logquery.SearchCommand(ld.Path, fileNames, kw, cur.Search.MaxMatches, cur.Search.TimeoutSeconds, ld.Encoding)
 	if err != nil {
 		writeErr(w, 400, err)
 		return
 	}
-	searchCtx, cancelSearch := context.WithTimeout(r.Context(), s.cur().SearchTimeout()+15*time.Second)
-	stdout, stderr, code, err = cli.Run(searchCtx, cmd, s.cur().SearchTimeout()+5*time.Second, ld.Encoding)
+	searchCtx, cancelSearch := context.WithTimeout(r.Context(), searchTimeout+15*time.Second)
+	stdout, stderr, code, err = cli.Run(searchCtx, cmd, searchTimeout+5*time.Second, ld.Encoding)
 	cancelSearch()
 	if err != nil {
 		s.audit.Write("logs.search", "system", req.System, "server", req.Server, "dir", ld.Path, "query", req.Query, "result", "fail", "err", err.Error())
@@ -282,12 +285,14 @@ func (s *Server) handleLogsContext(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 405, errors.New("仅支持 POST"))
 		return
 	}
+	// BE-020：入口取一次配置快照，后续整个 handler 复用同一份，避免 TOCTOU。
+	cur := s.cur()
 	var req logsContextReq
 	if err := json.NewDecoder(io.LimitReader(r.Body, 32*1024)).Decode(&req); err != nil {
 		writeErr(w, 400, err)
 		return
 	}
-	_, srv, ok := s.cur().FindServer(req.System, req.Server)
+	_, srv, ok := cur.FindServer(req.System, req.Server)
 	if !ok {
 		writeErr(w, 400, errors.New("系统或服务器不存在"))
 		return
@@ -309,11 +314,11 @@ func (s *Server) handleLogsContext(w http.ResponseWriter, r *http.Request) {
 	username := creds.Username
 	before := req.Before
 	if before <= 0 {
-		before = s.cur().Search.DefaultContextLines
+		before = cur.Search.DefaultContextLines
 	}
 	after := req.After
 	if after <= 0 {
-		after = s.cur().Search.DefaultContextLines
+		after = cur.Search.DefaultContextLines
 	}
 	if before > 5000 {
 		before = 5000
@@ -321,7 +326,7 @@ func (s *Server) handleLogsContext(w http.ResponseWriter, r *http.Request) {
 	if after > 5000 {
 		after = 5000
 	}
-	cmd, err := logquery.ContextCommand(ld.Path, req.File, req.Line, before, after, s.cur().Search.TimeoutSeconds)
+	cmd, err := logquery.ContextCommand(ld.Path, req.File, req.Line, before, after, cur.Search.TimeoutSeconds)
 	if err != nil {
 		writeErr(w, 400, err)
 		return
@@ -332,7 +337,7 @@ func (s *Server) handleLogsContext(w http.ResponseWriter, r *http.Request) {
 	cli, err := sshclient.Dial(dialCtx, sshclient.Server{
 		Name: srv.Name, Host: srv.Host, Port: srv.Port, Username: username,
 		HostKeySHA256: srv.HostKeySHA256, SSHProfile: srv.SSHProfile,
-		AllowInsecureHostKey: s.cur().App.AllowInsecureHostKeyEnabled(),
+		AllowInsecureHostKey: cur.App.AllowInsecureHostKeyEnabled(),
 	}, sshclient.Credentials{Password: creds.Password}, sshAttemptTimeout)
 	cancelDial()
 	if err != nil {
@@ -342,9 +347,10 @@ func (s *Server) handleLogsContext(w http.ResponseWriter, r *http.Request) {
 	}
 	defer cli.Close()
 
-	runCtx, cancelRun := context.WithTimeout(r.Context(), s.cur().SearchTimeout()+10*time.Second)
+	searchTimeout := cur.SearchTimeout()
+	runCtx, cancelRun := context.WithTimeout(r.Context(), searchTimeout+10*time.Second)
 	defer cancelRun()
-	stdout, stderr, code, err := cli.Run(runCtx, cmd, s.cur().SearchTimeout(), ld.Encoding)
+	stdout, stderr, code, err := cli.Run(runCtx, cmd, searchTimeout, ld.Encoding)
 	if err != nil {
 		s.audit.Write("logs.context", "system", req.System, "server", req.Server, "dir", ld.Path, "file", req.File, "line", req.Line, "result", "fail", "err", err.Error())
 		writeErrSanitized(w, 502, err)

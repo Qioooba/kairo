@@ -1634,7 +1634,7 @@
         folderRow.appendChild(el('button', {
           class: 'btn btn-sm', text: '📋 复制路径',
           title: '复制目录绝对路径到剪贴板',
-          onclick: () => copyToClipboard(folder)
+          onclick: () => OTB.core.copyToClipboard(folder)
         }));
       }
       wrap.appendChild(folderRow);
@@ -1655,30 +1655,6 @@
         await api('POST', '/api/local/open-folder', { path: absDir, folder: listState.lastDownloadFolder || '' });
       } catch (e) {
         toast('打开目录失败：' + e.message, 'err');
-      }
-    }
-    // 复制文本到剪贴板（fallback：旧浏览器走 prompt）
-    function copyToClipboard(text) {
-      if (navigator.clipboard && window.isSecureContext) {
-        navigator.clipboard.writeText(text).then(
-          () => toast('已复制：' + text, 'ok'),
-          () => fallbackCopy(text)
-        );
-      } else {
-        fallbackCopy(text);
-      }
-    }
-    function fallbackCopy(text) {
-      try {
-        const ta = document.createElement('textarea');
-        ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
-        document.body.appendChild(ta);
-        ta.select();
-        document.execCommand('copy');
-        document.body.removeChild(ta);
-        toast('已复制：' + text, 'ok');
-      } catch (e) {
-        toast('复制失败：' + e.message, 'err');
       }
     }
 

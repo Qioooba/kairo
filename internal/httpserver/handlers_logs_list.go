@@ -33,12 +33,14 @@ func (s *Server) handleLogsList(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 405, errors.New("仅支持 POST"))
 		return
 	}
+	// BE-020：入口取一次配置快照，后续整个 handler 复用同一份，避免 TOCTOU。
+	cur := s.cur()
 	var req logsListReq
 	if err := json.NewDecoder(io.LimitReader(r.Body, 32*1024)).Decode(&req); err != nil {
 		writeErr(w, 400, fmt.Errorf("请求体解析失败: %w", err))
 		return
 	}
-	_, srv, ok := s.cur().FindServer(req.System, req.Server)
+	_, srv, ok := cur.FindServer(req.System, req.Server)
 	if !ok {
 		writeErr(w, 400, errors.New("系统或服务器不存在"))
 		return
@@ -65,7 +67,7 @@ func (s *Server) handleLogsList(w http.ResponseWriter, r *http.Request) {
 	cli, err := sshclient.Dial(dialCtx, sshclient.Server{
 		Name: srv.Name, Host: srv.Host, Port: srv.Port, Username: username,
 		HostKeySHA256: srv.HostKeySHA256, SSHProfile: srv.SSHProfile,
-		AllowInsecureHostKey: s.cur().App.AllowInsecureHostKeyEnabled(),
+		AllowInsecureHostKey: cur.App.AllowInsecureHostKeyEnabled(),
 	}, sshclient.Credentials{Password: creds.Password}, sshAttemptTimeout)
 	cancelDial()
 	if err != nil {
@@ -81,9 +83,10 @@ func (s *Server) handleLogsList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Run 用 SearchTimeout 控制（不受 Dial ctx 影响）
-	runCtx, cancelRun := context.WithTimeout(r.Context(), s.cur().SearchTimeout()+10*time.Second)
+	searchTimeout := cur.SearchTimeout()
+	runCtx, cancelRun := context.WithTimeout(r.Context(), searchTimeout+10*time.Second)
 	defer cancelRun()
-	stdout, stderr, code, err := cli.Run(runCtx, cmd, s.cur().SearchTimeout(), ld.Encoding)
+	stdout, stderr, code, err := cli.Run(runCtx, cmd, searchTimeout, ld.Encoding)
 
 	// 项 6：list_mode=auto 时，先试 gnu_find；远端不是 Linux/macOS / 没装 find，
 	// 退出码非 0 或输出 "找不到命令" 时，降级到 posix_ls 再试一次。
@@ -96,7 +99,7 @@ func (s *Server) handleLogsList(w http.ResponseWriter, r *http.Request) {
 			"reason", trim(stderr, 100))
 		fallbackCmd, ferr := logquery.ListCommand(ld.Path, ld.Patterns, 100, "posix_ls")
 		if ferr == nil {
-			stdout, stderr, code, err = cli.Run(runCtx, fallbackCmd, s.cur().SearchTimeout(), ld.Encoding)
+			stdout, stderr, code, err = cli.Run(runCtx, fallbackCmd, searchTimeout, ld.Encoding)
 		}
 	}
 
@@ -334,11 +337,13 @@ func (s *Server) runOneLogsList(parentCtx context.Context, system string, srv *c
 		return res
 	}
 
+	// BE-020：入口取一次配置快照，后续整个函数复用同一份，避免 TOCTOU。
+	cur := s.cur()
 	dialCtx, cancelDial := context.WithTimeout(parentCtx, sshDialOuterTimeout)
 	cli, err := sshclient.Dial(dialCtx, sshclient.Server{
 		Name: srv.Name, Host: srv.Host, Port: srv.Port, Username: creds.Username,
 		HostKeySHA256: srv.HostKeySHA256, SSHProfile: srv.SSHProfile,
-		AllowInsecureHostKey: s.cur().App.AllowInsecureHostKeyEnabled(),
+		AllowInsecureHostKey: cur.App.AllowInsecureHostKeyEnabled(),
 	}, sshclient.Credentials{Password: creds.Password}, sshAttemptTimeout)
 	cancelDial()
 	if err != nil {
@@ -356,13 +361,14 @@ func (s *Server) runOneLogsList(parentCtx context.Context, system string, srv *c
 		res.Ms = time.Since(start).Milliseconds()
 		return res
 	}
-	runCtx, cancelRun := context.WithTimeout(parentCtx, s.cur().SearchTimeout()+10*time.Second)
+	searchTimeout := cur.SearchTimeout()
+	runCtx, cancelRun := context.WithTimeout(parentCtx, searchTimeout+10*time.Second)
 	defer cancelRun()
-	stdout, stderr, code, err := cli.Run(runCtx, cmd, s.cur().SearchTimeout(), ld.Encoding)
+	stdout, stderr, code, err := cli.Run(runCtx, cmd, searchTimeout, ld.Encoding)
 	if ld.ListModeIsAuto() && shouldFallbackToPOSIX(stdout, stderr, code, err) {
 		fallbackCmd, ferr := logquery.ListCommand(ld.Path, ld.Patterns, 100, "posix_ls")
 		if ferr == nil {
-			stdout, stderr, code, err = cli.Run(runCtx, fallbackCmd, s.cur().SearchTimeout(), ld.Encoding)
+			stdout, stderr, code, err = cli.Run(runCtx, fallbackCmd, searchTimeout, ld.Encoding)
 		}
 	}
 	if err != nil {

@@ -156,6 +156,9 @@
   }
 
   function openDiffInNewWindow(unifiedDiff, diffTitle, stats, opts) {
+    // TODO(FE-021): 此函数用 document.write 把整个 diff 页面塞进新窗口，
+    // 长期应重构为独立 diff-window.html + diff-window.js，用 postMessage 传 payload。
+    // 当前实现已有 XSS 防御（base64 + Blob URL），短期可接受。
     opts = opts || {};
     const mode = opts.mode || outputMode;
     const hideEq = opts.hideEqual != null ? !!opts.hideEqual : hideEqualRows;
@@ -752,6 +755,8 @@
   }
 
   function renderCompare(view) {
+    folderScanResult = null;
+    folderExpanded = new Set();
     const ignore = loadIgnore();
     outputMode = loadMode();
     hideEqualRows = loadHideEqual();

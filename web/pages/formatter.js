@@ -6,7 +6,7 @@
   'use strict';
   const OTB = window.OTB = window.OTB || {};
   OTB.pages = OTB.pages || {};
-  const { el, toast } = OTB.core;
+  const { el, toast, copyToClipboard } = OTB.core;
   const { api } = OTB.api;
 
   function groupLabel(text) {
@@ -212,11 +212,12 @@
         if (mode === 'decode') toast(`共 ${r.kv ? Object.keys(r.kv).length : 0} 个 key`, 'ok');
       } catch (e) { toast('form 处理失败：' + e.message, 'err'); }
     }
-    function copyOut() {
+    async function copyOut() {
       if (!outTa.value) { toast('结果为空', 'warn'); return; }
-      outTa.select();
-      try { document.execCommand('copy'); toast('已复制', 'ok'); }
-      catch (e) { toast('复制失败', 'err'); }
+      try {
+        await copyToClipboard(outTa.value);
+        toast('已复制', 'ok');
+      } catch (e) { toast('复制失败', 'err'); }
     }
 
     const outWrap = el('div', null, [

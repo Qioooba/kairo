@@ -360,12 +360,14 @@ func (s *Server) runOneServerSearchWithScope(
 		Server: srv.Name, Host: srv.Host, Dir: ld.Path, Encoding: ld.Encoding,
 	}
 
+	// BE-020：入口取一次配置快照，后续整个函数复用同一份，避免 TOCTOU。
+	cur := s.cur()
 	// 单独给 Dial 一个短超时（10s），但仍受总 ctx 控制
 	dialCtx, cancelDial := context.WithTimeout(ctx, sshDialOuterTimeout)
 	cli, err := sshclient.Dial(dialCtx, sshclient.Server{
 		Name: srv.Name, Host: srv.Host, Port: srv.Port, Username: username,
 		HostKeySHA256: srv.HostKeySHA256, SSHProfile: srv.SSHProfile,
-		AllowInsecureHostKey: s.cur().App.AllowInsecureHostKeyEnabled(),
+		AllowInsecureHostKey: cur.App.AllowInsecureHostKeyEnabled(),
 	}, sshclient.Credentials{Password: password}, sshAttemptTimeout)
 	cancelDial()
 	if err != nil {
@@ -375,8 +377,6 @@ func (s *Server) runOneServerSearchWithScope(
 		return res
 	}
 	defer cli.Close()
-
-	cur := s.cur()
 
 	// 决定 fileNames：
 	//   - selected 模式：直接用 selectedFiles，跳过 ListCommand

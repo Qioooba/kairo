@@ -43,12 +43,14 @@ func (s *Server) handleDownloadLatest(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 405, errors.New("仅支持 POST"))
 		return
 	}
+	// BE-020：入口取一次配置快照，后续整个 handler 复用同一份，避免 TOCTOU。
+	cur := s.cur()
 	var req downloadLatestReq
 	if err := json.NewDecoder(io.LimitReader(r.Body, 32*1024)).Decode(&req); err != nil {
 		writeErr(w, 400, err)
 		return
 	}
-	_, srv, ok := s.cur().FindServer(req.System, req.Server)
+	_, srv, ok := cur.FindServer(req.System, req.Server)
 	if !ok {
 		writeErr(w, 400, errors.New("系统或服务器不存在"))
 		return
@@ -92,7 +94,7 @@ func (s *Server) handleDownloadLatest(w http.ResponseWriter, r *http.Request) {
 		Files:     nil, // latest 模式：启动时还没列文件，下载时再确定
 		Latest:    latest,
 		Zip:       req.Zip,
-		Folder:    s.cur().DownloadDir(),
+		Folder:    cur.DownloadDir(),
 		CreatedAt: time.Now(),
 	}
 	sess.AttachCancel(cancel)
@@ -177,12 +179,16 @@ func (s *Server) runLogsDownloadOnce(
 	zip bool,
 	sess *dlmanager.Session,
 ) ([]dlmanager.Item, string, int, error) {
+	// BE-020：入口取一次配置快照，后续整个函数复用同一份，避免 TOCTOU。
+	cur := s.cur()
+	downloadDir := cur.DownloadDir()
+	searchTimeout := cur.SearchTimeout()
 	// SSH Dial 独立 ctx + 统一超时
 	dialCtx, cancelDial := context.WithTimeout(ctx, sshDialOuterTimeout)
 	cli, err := sshclient.Dial(dialCtx, sshclient.Server{
 		Name: srv.Name, Host: srv.Host, Port: srv.Port, Username: username,
 		HostKeySHA256: srv.HostKeySHA256, SSHProfile: srv.SSHProfile,
-		AllowInsecureHostKey: s.cur().App.AllowInsecureHostKeyEnabled(),
+		AllowInsecureHostKey: cur.App.AllowInsecureHostKeyEnabled(),
 	}, sshclient.Credentials{Password: password}, sshAttemptTimeout)
 	cancelDial()
 	if err != nil {
@@ -204,7 +210,7 @@ func (s *Server) runLogsDownloadOnce(
 	if err != nil {
 		return nil, "", 500, err
 	}
-	stdout, stderr, code, err := cli.Run(runCtx, cmd, s.cur().SearchTimeout(), ld.Encoding)
+	stdout, stderr, code, err := cli.Run(runCtx, cmd, searchTimeout, ld.Encoding)
 	if err != nil || code != 0 {
 		s.audit.Write("logs.download", "system", system, "server", srv.Name, "dir", ld.Path, "result", "fail", "stage", "list", "err", trim(stderr, 200))
 		return nil, "", 502, fmt.Errorf("列文件失败: %v / %s", err, trim(stderr, 200))
@@ -225,7 +231,7 @@ func (s *Server) runLogsDownloadOnce(
 	// 项 4 修复：保留远端原始文件名，不再加 server/dir/timestamp 前缀。
 	// 多服务器同名日志：落到 downloads/YYYYMMDD/server_<name>__<file> 下避免覆盖。
 	// 旧行为：server_dir_file_HHMMSS_000.log  →  新行为：原始 basename
-	targetDir := filepath.Join(s.cur().DownloadDir(), dateDir)
+	targetDir := filepath.Join(downloadDir, dateDir)
 	// 收集已经下到本地的文件路径，zip 时按这个顺序打包
 	localPaths := make([]string, 0, latest)
 	results := make([]dlmanager.Item, 0, latest+1)
@@ -241,7 +247,7 @@ func (s *Server) runLogsDownloadOnce(
 	for i := 0; i < latest; i++ {
 		// ctx 取消检查（用户点取消 / IdleGC 超时）
 		if cerr := ctx.Err(); cerr != nil {
-			return results, s.cur().DownloadDir(), 0, cerr
+			return results, downloadDir, 0, cerr
 		}
 		f := files[i]
 		remote := filepath.ToSlash(filepath.Join(ld.Path, f.Name))
@@ -288,7 +294,7 @@ func (s *Server) runLogsDownloadOnce(
 					"dir":    ld.Path,
 				})
 			}
-			return results, s.cur().DownloadDir(), 502, fmt.Errorf("下载 %s 失败: %w", f.Name, err)
+			return results, downloadDir, 502, fmt.Errorf("下载 %s 失败: %w", f.Name, err)
 		}
 		results = append(results, dlmanager.Item{
 			File:    f.Name,
@@ -345,7 +351,7 @@ func (s *Server) runLogsDownloadOnce(
 					"error": err.Error(),
 				})
 			}
-			return results, s.cur().DownloadDir(), 502, fmt.Errorf("打包 zip 失败: %w", err)
+			return results, downloadDir, 502, fmt.Errorf("打包 zip 失败: %w", err)
 		}
 		st, statErr := os.Stat(zipPath)
 		var size int64
@@ -385,5 +391,5 @@ func (s *Server) runLogsDownloadOnce(
 			})
 		}
 	}
-	return results, s.cur().DownloadDir(), 0, nil
+	return results, downloadDir, 0, nil
 }

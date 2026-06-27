@@ -25,12 +25,14 @@ func (s *Server) handleSSHTest(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 405, errors.New("仅支持 POST"))
 		return
 	}
+	// BE-020：入口取一次配置快照，后续整个 handler 复用同一份，避免 TOCTOU。
+	cur := s.cur()
 	var req sshTestReq
 	if err := json.NewDecoder(io.LimitReader(r.Body, 32*1024)).Decode(&req); err != nil {
 		writeErr(w, 400, fmt.Errorf("请求体解析失败: %w", err))
 		return
 	}
-	_, srv, ok := s.cur().FindServer(req.System, req.Server)
+	_, srv, ok := cur.FindServer(req.System, req.Server)
 	if !ok {
 		writeErr(w, 400, errors.New("系统或服务器不存在"))
 		return
@@ -50,7 +52,7 @@ func (s *Server) handleSSHTest(w http.ResponseWriter, r *http.Request) {
 	cli, err := sshclient.Dial(dialCtx, sshclient.Server{
 		Name: srv.Name, Host: srv.Host, Port: srv.Port, Username: username,
 		HostKeySHA256: srv.HostKeySHA256, SSHProfile: srv.SSHProfile,
-		AllowInsecureHostKey: s.cur().App.AllowInsecureHostKeyEnabled(),
+		AllowInsecureHostKey: cur.App.AllowInsecureHostKeyEnabled(),
 	}, sshclient.Credentials{Password: creds.Password}, sshAttemptTimeout)
 	cancelDial()
 	if err != nil {

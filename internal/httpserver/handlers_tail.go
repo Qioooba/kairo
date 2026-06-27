@@ -33,12 +33,14 @@ func (s *Server) handleTailStart(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 405, errors.New("仅支持 POST"))
 		return
 	}
+	// BE-020：入口取一次配置快照，后续整个 handler 复用同一份，避免 TOCTOU。
+	cur := s.cur()
 	var req tailStartReq
 	if err := json.NewDecoder(io.LimitReader(r.Body, 32*1024)).Decode(&req); err != nil {
 		writeErr(w, 400, err)
 		return
 	}
-	_, srv, ok := s.cur().FindServer(req.System, req.Server)
+	_, srv, ok := cur.FindServer(req.System, req.Server)
 	if !ok {
 		writeErr(w, 400, errors.New("系统或服务器不存在"))
 		return
@@ -69,7 +71,7 @@ func (s *Server) handleTailStart(w http.ResponseWriter, r *http.Request) {
 	cli, err := sshclient.Dial(dialCtx, sshclient.Server{
 		Name: srv.Name, Host: srv.Host, Port: srv.Port, Username: username,
 		HostKeySHA256: srv.HostKeySHA256, SSHProfile: srv.SSHProfile,
-		AllowInsecureHostKey: s.cur().App.AllowInsecureHostKeyEnabled(),
+		AllowInsecureHostKey: cur.App.AllowInsecureHostKeyEnabled(),
 	}, sshclient.Credentials{Password: creds.Password}, sshAttemptTimeout)
 	if err != nil {
 		auditErr(w, s.audit, "logs.tail", "system", req.System, "server", req.Server, "dir", ld.Path, "file", req.File, "result", "fail", err)
@@ -151,8 +153,20 @@ func (s *Server) streamTailEvents(w http.ResponseWriter, r *http.Request, id str
 			return
 		case line, open := <-ch:
 			if !open {
-				// 会话结束，发一条最终事件后退出
-				_, _ = fmt.Fprintf(w, "event: done\ndata: {}\n\n")
+				// 会话结束：读取 tailmgr 在 markDone 前设置的 doneMsg，
+				// 作为 SSE done 事件的 data（BE-019：避免 pushImmediate 广播 + !open 双 done）。
+				// doneMsg 为空 → 发空对象；是 JSON → 直接用；纯文本 → 包装成 {"kind":"done","msg":"..."}。
+				doneMsg := sess.DoneMsg()
+				var data string
+				if doneMsg == "" {
+					data = "{}"
+				} else if strings.HasPrefix(strings.TrimSpace(doneMsg), "{") {
+					data = doneMsg
+				} else {
+					b, _ := json.Marshal(map[string]string{"kind": "done", "msg": doneMsg})
+					data = string(b)
+				}
+				_, _ = fmt.Fprintf(w, "event: done\ndata: %s\n\n", data)
 				flusher.Flush()
 				return
 			}

@@ -20,14 +20,16 @@ func (s *Server) serveDownload(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	full := filepath.Join(s.cur().DownloadDir(), filepath.FromSlash(name))
+	// BE-020：入口取一次配置快照，后续整个 handler 复用同一份，避免 TOCTOU。
+	downloadDir := s.cur().DownloadDir()
+	full := filepath.Join(downloadDir, filepath.FromSlash(name))
 	// 必须在 DownloadDir 下
 	abs, err := filepath.Abs(full)
 	if err != nil {
 		http.NotFound(w, r)
 		return
 	}
-	base, err := filepath.Abs(s.cur().DownloadDir())
+	base, err := filepath.Abs(downloadDir)
 	if err != nil {
 		http.NotFound(w, r)
 		return

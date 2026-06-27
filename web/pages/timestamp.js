@@ -91,15 +91,18 @@
       outRows.weekday_cn.textContent = r.weekday_cn || '—';
     }
 
+    let reqId = 0;
     async function doConvert() {
       const input = inInp.value.trim();
       if (!input) { toast('输入不能为空', 'warn'); return; }
+      const myReqId = ++reqId;
       try {
         const r = await api('POST', '/api/format/timestamp', {
           input,
           from_tz: fromSel.value,
           to_tz: toSel.value,
         });
+        if (myReqId !== reqId) return; // 旧请求被新请求覆盖，丢弃
         // 即使 r.res.error 也要 fillOut（把输出区刷新成 invalid 状态），
         // 否则 DOM 残留上次结果
         fillOut(r.res || {});
@@ -107,6 +110,7 @@
           toast(r.res.error, 'err');
         }
       } catch (e) {
+        if (myReqId !== reqId) return; // 旧请求，丢弃错误提示
         toast('转换失败：' + (e.message || e), 'err');
       }
     }
