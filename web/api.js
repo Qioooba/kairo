@@ -34,7 +34,16 @@
       }
       if (!resp.ok) {
         const msg = (data && data.error) ? data.error : ('HTTP ' + resp.status);
-        throw new Error(msg);
+        const err = new Error(msg);
+        // P1-BUG-10 修复：把后端结构化 body（category / reason / suggestion）挂到 err 上，
+        // 调用方按需读取做更友好的 toast/展示；没有时保持 undefined
+        if (data && typeof data === 'object') {
+          if (data.category) err.category = data.category;
+          if (data.reason) err.reason = data.reason;
+          if (data.suggestion) err.suggestion = data.suggestion;
+        }
+        err.status = resp.status;
+        throw err;
       }
       core.setStatus('ok', '完成');
       setTimeout(() => core.setStatus('idle'), 800);

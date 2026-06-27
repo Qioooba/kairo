@@ -141,9 +141,17 @@
       // 重置 aria-activedescendant（无高亮）
       queryInp.setAttribute('aria-activedescendant', '');
       if (!list.length) {
-        // 空历史：面板收起（不显示空状态，免得在 input 里第一次就弹个空框）
-        queryPopover.style.display = 'none';
-        queryInp.setAttribute('aria-expanded', 'false');
+        // P1-BUG-11 修复：空历史时显示"暂无搜索历史"提示，让用户知道这个 popover
+        // 是干嘛的（旧版直接隐藏，焦点聚焦过去毫无反应，用户根本不知道有历史功能）。
+        const empty = el('div', {
+          class: 'ws-query-popover-empty',
+          style: 'padding:10px 12px; color:var(--text-dim, #888); font-size:12.5px; cursor:default; user-select:none;',
+          text: '暂无搜索历史（搜索后自动记录）'
+        });
+        queryPopover.appendChild(empty);
+        // 显式设回非 none（空状态也要展开，让用户看见提示）
+        queryPopover.style.display = '';
+        queryInp.setAttribute('aria-expanded', 'true');
         return list;
       }
       list.forEach((item, idx) => {
@@ -781,13 +789,37 @@
           srvStatus[n] = { state: 'ok' };
           await maybeSaveCred(n);
         } catch (e) {
-          srvStatus[n] = { state: 'fail', err: e.message };
+          // P1-BUG-10 修复：保留后端返回的 reason（中文短句），用于 toast 展示
+          // —— 旧版只用 e.message 拼文案，遇到"SSH 连接 127.0.0.1:2225 失败: ssh: handshake failed:..."
+          // 这种原文会有重复"失败"字面，体验差
+          srvStatus[n] = {
+            state: 'fail',
+            err: e.message,
+            reason: e.reason || '',
+            category: e.category || '',
+            suggestion: e.suggestion || ''
+          };
         } finally {
           renderSrvPick();
         }
       }));
+      // P1-BUG-10 修复：toast 措辞按成功/失败比例调整，避免"0/1 台连接成功"字面歧义
+      //   - 全成功：N/N 台连接成功（ok）
+      //   - 全失败：N 台全部失败：第一条原因（err）
+      //   - 部分成功：M/N 台成功，K 台失败（warn）
       const okN = srvs.filter(n => srvStatus[n].state === 'ok').length;
-      toast(okN + '/' + srvs.length + ' 台连接成功', okN === srvs.length ? 'ok' : 'warn');
+      const failN = srvs.length - okN;
+      const firstFail = srvs.find(n => srvStatus[n].state === 'fail');
+      // 取中文 reason 优先；拿不到再 fallback 到 err 字符串
+      const firstFailReason = firstFail ? (srvStatus[firstFail].reason || extractShortErr(srvStatus[firstFail].err)) : '';
+      if (failN === 0) {
+        toast(srvs.length + '/' + srvs.length + ' 台连接成功', 'ok');
+      } else if (okN === 0) {
+        const tail = firstFailReason ? '：' + firstFailReason : '';
+        toast(srvs.length + ' 台全部失败' + tail, 'err');
+      } else {
+        toast(okN + '/' + srvs.length + ' 台成功，' + failN + ' 台失败', 'warn');
+      }
       refreshCredStatus();
     }
 

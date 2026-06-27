@@ -59,7 +59,15 @@ func (s *Server) handleSSHTest(w http.ResponseWriter, r *http.Request) {
 			"result", "fail", "err", clean,
 			"category", string(diag.Category),
 			"reason", diag.Reason)
-		writeJSON(w, 502, map[string]any{
+		// P1-BUG-10 修复：HTTP 状态码按错误类别区分
+		//   - 认证类（密码错 / 账号锁）→ 401，语义上更准确，前端 fetch 不会误判为服务端故障
+		//   - 其它（网络/握手/host key 等）→ 502 Bad Gateway
+		//     （SSH 服务器不可达/不兼容，对前端来说"上游坏了"是准确的）
+		status := 502
+		if diag.Category == sshclient.CatAuth {
+			status = 401
+		}
+		writeJSON(w, status, map[string]any{
 			"error":      clean,
 			"category":   diag.Category,
 			"reason":     diag.Reason,

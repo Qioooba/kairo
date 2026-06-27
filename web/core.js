@@ -76,7 +76,10 @@
     t.textContent = msg;
     t.className = 'toast show' + (type ? ' ' + type : '');
     clearTimeout(toast._timer);
-    toast._timer = setTimeout(() => { t.className = 'toast'; }, 2400);
+    // P1-BUG-8 修复：错误类 toast（type='err'/'warn'）延长到 6000ms，
+    // 让用户有足够时间看清错误原因。普通 ok/idle 仍走 2400ms（不打扰）。
+    const duration = (type === 'err' || type === 'warn') ? 6000 : 2400;
+    toast._timer = setTimeout(() => { t.className = 'toast'; }, duration);
   }
   core.toast = toast;
 
