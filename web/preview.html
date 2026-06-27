@@ -216,9 +216,11 @@
         try {
           // FE-003：走 call()（OTB.api.api() 优先，401 触发登录引导），
           // 退化时用裸 fetch 兜底。call() 返回解析后的 data，!ok/401 时抛错。
+          // BUG-3：cred 可能是 null（getCred() opener 拿不到 password 时返回 null），
+          // 改读 activeCred（有 || {username:'',password:''} 兜底，永远是对象）。
           const data = await call('POST', '/api/files/preview', {
             system: system, server: server, path: path,
-            username: cred.username, password: cred.password,
+            username: activeCred.username, password: activeCred.password,
             encoding: encoding, max_bytes: 1048576
           });
           renderPreview(data);
