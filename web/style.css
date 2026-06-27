@@ -369,6 +369,8 @@ body {
 }
 .card h3 { margin: 0 0 12px; font-size: 15px; font-weight: 600; }
 .card .card-desc { color: var(--text-dim); font-size: 12.5px; margin-top: -8px; margin-bottom: 14px; }
+/* v0.x #U3：只读卡片的说明文案，用稍醒目的样式提示用户"不可编辑"。 */
+.card .card-desc.readonly-note { color: var(--warn); font-weight: 500; }
 
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
@@ -717,7 +719,8 @@ textarea { resize: vertical; min-height: 60px; font-family: ui-monospace, monosp
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 10px 12px;
-  margin-bottom: 12px;
+  /* 【v0.x 修复 #L2】去掉这里的 margin-bottom，保留下方 v0.5 #15 三层视觉处的 10px 定义。
+     两处都写会被后写的覆盖，导致冗余。 */
   background: rgba(255,255,255,0.02);
 }
 .sys-head {
@@ -751,7 +754,9 @@ textarea { resize: vertical; min-height: 60px; font-family: ui-monospace, monosp
 }
 .srv-fields {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  /* v0.x 修复 #L1：服务器字段 6 个，旧的 repeat(5, 1fr) 会让第 6 个 wrap 独占一行。
+     改 auto-fit + minmax：宽屏尽量填满，窄屏自动换行（每行最少 180px），不强制 5 列。 */
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 8px;
   margin-bottom: 8px;
 }
@@ -777,7 +782,10 @@ textarea { resize: vertical; min-height: 60px; font-family: ui-monospace, monosp
 .block { display: block; margin-bottom: 6px; }
 @media (max-width: 1100px) {
   .sys-head { grid-template-columns: 1fr; }
-  .srv-fields { grid-template-columns: repeat(2, 1fr); }
+  /* .srv-fields 用 auto-fit 自适应，窄屏自动 wrap，无需强制 2 列。
+     但 1100px 以下 minmax(180px, 1fr) 一次只能塞 5 个左右，第 6 个 wrap 单独一行；
+     把 minmax 降到 140px 让窄屏更紧凑些。 */
+  .srv-fields { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
   .dir-fields { grid-template-columns: 1fr; }
 }
 

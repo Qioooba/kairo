@@ -22,31 +22,46 @@
   const { api } = OTB.api;
 
   // 模块级 state：跨 tab 切换 / 跨 re-render 存活
-  // 结构：{ systems, app, search, openers, retention, dirty, freeBrowserEnabled, loaded }
-  // loaded=true 表示已经从服务器拉过；之后切回本页不再 fetch，避免覆盖未保存改动
+  // 结构：{ systems, app, search, openers, retention, dirty*, loaded* }
+  // dirty=true 是"任一节脏"的总标记（用于按钮 disabled / 离开确认）；
+  // sectionsDirty = { systems, openers, retention } 是分节脏标记，
+  // doSave 只 PUT 真正改过的节；saveOpenerRow 只清 openersDirty，
+  // 不影响 systemsDirty（修 #B1）。
   if (!OTB.state.configEditor) {
     OTB.state.configEditor = {
       systems: [],
       app: null,
       search: null,
       openers: [],
+      openersLoaded: false,
       retention: { retention_days: 7, max_count: 1000 },
       retentionLoaded: false,
+      // 总 dirty = 任一节脏（同步给保存按钮 + 离开确认）
       dirty: false,
+      // 分节 dirty：doSave 只 PUT 真正脏的节；单行保存按钮只清自己那节
+      sectionsDirty: { systems: false, openers: false, retention: false },
       freeBrowserEnabled: true,
       loaded: false
     };
   }
   const state = OTB.state.configEditor;
 
+  // 计算总 dirty + 同步给 OTB.state.unsavedConfig + 按钮 disabled
+  const recomputeDirty = () => {
+    const any = state.sectionsDirty.systems || state.sectionsDirty.openers || state.sectionsDirty.retention;
+    state.dirty = any;
+    OTB.state.unsavedConfig = any;
+    syncSaveBtns();
+  };
+
   function renderConfig(view) {
     // 工具：标记 dirty + 通知 app.js 用于离开页面前确认
     // 【v0.5 #3】保存按钮现在有"顶部"+"底部"两个（共享 onclick handler 和 disabled 状态），
     // 通过 syncSaveBtns() 同步两个按钮。
-    const markDirty = () => {
-      state.dirty = true;
-      syncSaveBtns();
-      OTB.state.unsavedConfig = true;
+    // 【v0.x 修复 #B1】markDirty 必须指定节（默认 'systems'）；openers 单行保存只清自己那节。
+    const markDirty = (section = 'systems') => {
+      state.sectionsDirty[section] = true;
+      recomputeDirty();
     };
 
     // 同步两个保存按钮（顶部 #cfg-save-btn 和底部 .cfg-save-footer）的 disabled
@@ -72,14 +87,15 @@
     // ---- 应用信息卡（只读展示） ----
     const appCard = el('div', { class: 'card' });
     const appKV = el('div');
-    appCard.appendChild(el('h3', { text: '应用自身配置' }));
-    appCard.appendChild(el('div', { class: 'card-desc', text: '应用名、端口、目录等由 config.yaml 管理，本页面只管服务器和日志目录。' }));
+    appCard.appendChild(el('h3', { text: '应用自身配置', title: '只读展示，编辑请改 config.yaml' }));
+    appCard.appendChild(el('div', { class: 'card-desc readonly-note', text: 'ⓘ 只读：应用名、监听端口、目录等需要在 config.yaml 修改后重启服务。' }));
     appCard.appendChild(appKV);
 
     // ---- 搜索参数卡（只读展示） ----
     const searchCard = el('div', { class: 'card' });
     const searchKV = el('div');
-    searchCard.appendChild(el('h3', { text: '搜索默认参数' }));
+    searchCard.appendChild(el('h3', { text: '搜索默认参数', title: '只读展示，编辑请改 config.yaml' }));
+    searchCard.appendChild(el('div', { class: 'card-desc readonly-note', text: 'ⓘ 只读：默认最近文件数、最大匹配条数等需要在 config.yaml 修改后重启服务。' }));
     searchCard.appendChild(searchKV);
 
     // ---- 编辑器卡（动态） ----
@@ -111,10 +127,12 @@
 
     // 【v0.5 #3】底部操作条：复制"放弃改动"+"保存"按钮，长表单滚到底也能直接保存。
     // 顶部 + 底部按钮共用同一份 doSave / doReset 处理逻辑（共享 state.dirty）。
+    // 【v0.x 修复 #L3】底部"放弃改动"按钮不带 cfg-save-footer class，
+    // 让 syncSaveBtns 只禁用保存按钮，不禁用重置按钮——
+    // 顶部和底部的"放弃改动"行为应该一致（都始终可点，重置时也只是 re-fetch，无副作用）。
     const btnSaveFooter = el('button', { class: 'btn btn-primary cfg-save-footer', text: '保存', onclick: doSave });
-    const btnResetFooter = el('button', { class: 'btn cfg-save-footer', text: '放弃改动', onclick: doReset });
+    const btnResetFooter = el('button', { class: 'btn', text: '放弃改动', onclick: doReset });
     btnSaveFooter.disabled = true;
-    btnResetFooter.disabled = true; // 没有改动时也禁用（避免误触重新 fetch）
     const footerBar = el('div', { class: 'btn-row cfg-save-footer-bar', style: 'justify-content: flex-end; margin-top: 16px; padding-top: 12px; border-top: 1px dashed var(--line);' }, [btnResetFooter, btnSaveFooter]);
 
     // ---- v0.8：外部打开器（external_openers）卡 ----
@@ -132,7 +150,7 @@
       el('button', { class: 'btn btn-sm', text: '+ 添加打开器',
         onclick: () => {
           state.openers.push({ name: '', path: '', icon: '' });
-          markDirty();
+          markDirty('openers');
           renderOpeners();
         }
       })
@@ -392,14 +410,29 @@
     }
 
     async function saveOpenerRow(op) {
-      if (!op.name || !op.name.trim()) { toast('保存失败：打开器名称不能为空', 'err'); return; }
-      if (!op.path || !op.path.trim()) { toast('保存失败：打开器路径不能为空', 'err'); return; }
+      // 【v0.x 修复 #B1 + #B3】前端预校验 + 只清 openers 节 dirty。
+      // 后端仍然会兜底校验（不能信任前端），这里只是把明显错误提前到客户端。
+      if (!op.name || !op.name.trim()) {
+        toast('保存失败：打开器名称不能为空', 'err');
+        return;
+      }
+      if (!op.path || !op.path.trim()) {
+        toast('保存失败：打开器路径不能为空', 'err');
+        return;
+      }
+      // 名称唯一性（前端先查，能避免一次往返；后端仍会兜底校验）
+      const dup = state.openers.find(o => o !== op && String(o.name || '').trim() === String(op.name || '').trim());
+      if (dup) {
+        toast('保存失败：打开器名称 "' + op.name + '" 已存在', 'err');
+        return;
+      }
       try {
         await api('PUT', '/api/admin/openers', { openers: state.openers });
-        state.openersDirty = false;
-        if (!state.dirty) { state.dirty = false; }
-        syncSaveBtns();
-        toast('已保存', 'ok');
+        // 只清 openers 这节 dirty —— 不影响 systemsDirty / retentionDirty。
+        // 旧实现直接 state.dirty = false，会把业务系统的未保存改动也清掉。
+        state.sectionsDirty.openers = false;
+        recomputeDirty();
+        toast('打开器已保存', 'ok');
       } catch (e) {
         toast('保存失败：' + e.message, 'err');
       }
@@ -428,7 +461,7 @@
             if (r && r.path) {
               pathInp.value = r.path;
               op.path = r.path;
-              markDirty();
+              markDirty('openers');
               updateIcon();
             }
           } catch (e) { /* ignore */ }
@@ -440,7 +473,7 @@
         const btnDel = el('button', { class: 'btn btn-sm btn-danger', text: '删除', type: 'button', onclick: () => {
           if (confirm('确认删除打开器 "' + (op.name || '(未命名)') + '"？')) {
             state.openers.splice(idx, 1);
-            markDirty();
+            markDirty('openers');
             renderOpeners();
           }
         }});
@@ -450,8 +483,8 @@
           iconSpan.textContent = op.icon;
         }
 
-        nameInp.addEventListener('input', () => { op.name = nameInp.value; markDirty(); updateIcon(); });
-        pathInp.addEventListener('input', () => { op.path = pathInp.value; markDirty(); updateIcon(); });
+        nameInp.addEventListener('input', () => { op.name = nameInp.value; markDirty('openers'); updateIcon(); });
+        pathInp.addEventListener('input', () => { op.path = pathInp.value; markDirty('openers'); updateIcon(); });
 
         row.appendChild(iconSpan);
         row.appendChild(nameInp);
@@ -476,7 +509,7 @@
       daysInp.addEventListener('input', () => {
         const n = parseInt(daysInp.value, 10);
         state.retention.days = isNaN(n) ? 0 : n;
-        markDirty();
+        markDirty('retention');
       });
       daysWrap.appendChild(daysInp);
       daysWrap.appendChild(el('span', { class: 'card-desc', style: 'font-size:12px;', text: '0 = 不按时间自动清理；默认 7 天' }));
@@ -487,7 +520,7 @@
       countInp.addEventListener('input', () => {
         const n = parseInt(countInp.value, 10);
         state.retention.count = isNaN(n) ? 0 : n;
-        markDirty();
+        markDirty('retention');
       });
       countWrap.appendChild(countInp);
       countWrap.appendChild(el('span', { class: 'card-desc', style: 'font-size:12px;', text: '0 = 不限制数量；默认 1000 条' }));
@@ -499,68 +532,97 @@
     }
 
     // ----- 保存 / 重置 -----
+    // 【v0.x 修复 #B4】doSave 只 PUT 真正脏的节（sectionsDirty）。
+    // 旧实现无条件 PUT 三段，未改的段也写盘 + 多一条 audit 日志。
     async function doSave() {
       const err = validate(state.systems);
       if (err) { toast('保存失败：' + err, 'err'); return; }
-      try {
-        // 先存 systems（用现有 admin/servers 接口）
-        const r = await api('PUT', '/api/admin/servers', { systems: state.systems });
-        // 再存 openers（独立接口，因为 admin/servers 不接收 app 段）
-        // 即使 openers 失败，也要把上面的 systems 成功反馈给用户——
-        // 但要明确告诉用户"openers 部分失败"（不能吞错）。
-        let openerErr = null;
+
+      // 至少有一节脏才允许保存（按钮 disabled 也应挡住，这里再兜底）
+      if (!state.dirty) {
+        toast('没有需要保存的改动', '');
+        return;
+      }
+
+      // 收集待保存的节 + 错误
+      const tasks = [];        // [{name, run}]
+      const errs = [];         // [{name, err}]
+      let path = '';
+
+      if (state.sectionsDirty.systems) {
+        tasks.push({
+          name: 'systems',
+          run: async () => {
+            const r = await api('PUT', '/api/admin/servers', { systems: state.systems });
+            path = r.path || path;
+          }
+        });
+      }
+      if (state.sectionsDirty.openers) {
+        tasks.push({
+          name: 'openers',
+          run: async () => { await api('PUT', '/api/admin/openers', { openers: state.openers || [] }); }
+        });
+      }
+      if (state.sectionsDirty.retention) {
+        tasks.push({
+          name: 'retention',
+          run: async () => {
+            await api('PUT', '/api/admin/download-retention', {
+              download_retention_days: state.retention.days,
+              download_max_count: state.retention.count,
+            });
+          }
+        });
+      }
+
+      // 顺序执行：前面的失败不阻断后面的（避免一处错挡住其他改动）
+      for (const t of tasks) {
         try {
-          await api('PUT', '/api/admin/openers', { openers: state.openers || [] });
+          await t.run();
+          // 单节成功后立即清那节 dirty（即便后续节失败，用户至少能看到"这一节已经保存"）
+          state.sectionsDirty[t.name] = false;
+          recomputeDirty();
         } catch (e) {
-          openerErr = e;
+          errs.push({ name: t.name, err: e });
         }
-        // 存下载清理策略
-        let retentionErr = null;
+      }
+
+      // 重新 GET 后端拉规范化数据回填（只 GET 改过的节 + 依赖的 app/search）
+      if (state.sectionsDirty.systems) {
         try {
-          await api('PUT', '/api/admin/download-retention', {
-            download_retention_days: state.retention.days,
-            download_max_count: state.retention.count,
-          });
-        } catch (e) {
-          retentionErr = e;
-        }
-        // P0-5 修复：保存成功后重新 GET 后端，用后端规范化后的数据覆盖前端 state，
-        // 确保 encoding 归一等后端处理被前端确认（比如 gbk→gbk，utf-8→utf-8）。
-        // 同时 toast 里显示"后端确认"让用户知道写盘成功。
-        const info = await api('GET', '/api/admin/servers');
-        state.app = info.app;
-        state.search = info.search;
-        state.systems = JSON.parse(JSON.stringify(info.systems));
-        // 拉 openers 回填（GET /api/admin/openers，避免依赖 info.app 的字段稳定性）
+          const info = await api('GET', '/api/admin/servers');
+          state.app = info.app;
+          state.search = info.search;
+          state.systems = JSON.parse(JSON.stringify(info.systems));
+          renderApp(); renderSearch(); renderEditor();
+        } catch (e) { /* 回填失败不影响"保存成功"的提示 */ }
+      }
+      if (state.sectionsDirty.openers) {
         try {
           const opInfo = await api('GET', '/api/admin/openers');
           state.openers = Array.isArray(opInfo.openers) ? opInfo.openers : [];
-        } catch (e) { /* 拉失败不影响主要保存提示 */ }
-        // 拉 retention 配置回填
+          renderOpeners();
+        } catch (e) { /* 回填失败不影响 */ }
+      }
+      if (state.sectionsDirty.retention) {
         try {
           const retInfo = await api('GET', '/api/admin/download-retention');
           state.retention.days = retInfo.effective.retention_days;
           state.retention.count = retInfo.effective.max_count;
-        } catch (e) { /* 拉失败不影响 */ }
-        state.dirty = false;
-        state.loaded = true;
-        OTB.state.unsavedConfig = false;
-        syncSaveBtns();
-        renderApp();
-        renderSearch();
-        renderEditor();
-        renderOpeners();
-        renderRetention();
-        let errMsg = '';
-        if (openerErr) errMsg += '打开器保存失败：' + openerErr.message + '；';
-        if (retentionErr) errMsg += '清理策略保存失败：' + retentionErr.message + '；';
-        if (errMsg) {
-          toast('systems 已保存，但' + errMsg, 'err');
-        } else {
-          toast('已保存并后端确认：' + r.path, 'ok');
-        }
-      } catch (e) {
-        toast('保存失败：' + e.message, 'err');
+          renderRetention();
+        } catch (e) { /* 回填失败不影响 */ }
+      }
+      state.loaded = true;
+
+      // 错误汇总（不要吞错，但要明确告诉用户"哪些节失败"）
+      if (errs.length) {
+        const failed = errs.map(e => e.name + '：' + e.err.message).join('；');
+        toast('部分保存失败 — ' + failed, 'err');
+      } else if (path) {
+        toast('已保存并后端确认：' + path, 'ok');
+      } else {
+        toast('已保存', 'ok');
       }
     }
     function doReset() {
@@ -571,18 +633,22 @@
           // 同时重拉 openers
           api('GET', '/api/admin/openers').then(opInfo => {
             state.openers = Array.isArray(opInfo.openers) ? opInfo.openers : [];
+            state.openersLoaded = true;
             renderOpeners();
-          }).catch(() => { state.openers = []; renderOpeners(); });
+          }).catch(() => { state.openers = []; state.openersLoaded = true; renderOpeners(); });
           // 同时重拉 retention 配置
           api('GET', '/api/admin/download-retention').then(retInfo => {
             state.retention.days = retInfo.effective.retention_days;
             state.retention.count = retInfo.effective.max_count;
+            state.retentionLoaded = true;
             renderRetention();
-          }).catch(() => { renderRetention(); });
-          state.dirty = false;
+          }).catch(() => { state.retentionLoaded = true; renderRetention(); });
+          // 重置后清所有 dirty（含分节 dirty）
+          state.sectionsDirty.systems = false;
+          state.sectionsDirty.openers = false;
+          state.sectionsDirty.retention = false;
           state.loaded = true;
-          OTB.state.unsavedConfig = false;
-          syncSaveBtns();
+          recomputeDirty();
           renderApp(); renderSearch(); renderEditor(); renderOpeners(); renderRetention();
           maybeShowBanner(info);
         }).catch(e => toast('加载失败：' + e.message, 'err'));
@@ -607,7 +673,8 @@
         a.click();
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
-        toast('配置已导出为 config.yaml', 'ok');
+        // 【v0.x 修复 #U1】明确告知用户"密码已脱敏为 ***"，避免误以为导出了完整密码。
+        toast('配置已导出为 config.yaml（密码等敏感字段已脱敏为 ***）', 'ok');
       } catch (e) {
         toast('导出失败：' + e.message, 'err');
       }
@@ -634,8 +701,12 @@
             toast('文件内容为空', 'err');
             return;
           }
-          const preview = String(yamlText).substring(0, 200).replace(/</g, '&lt;');
-          const confirmMsg = '确定要导入此配置文件吗？\n\n文件：' + file.name + ' (' + file.size + ' 字节)\n\n⚠ 警告：导入后将完全覆盖现有配置，旧配置会自动备份为 .bak 文件。\n\n文件预览（前200字符）：\n' + preview;
+          // 【v0.x 修复 #U2】预览从 200 → 2000 字符，方便用户确认内容。
+          // confirm() 自带的消息框没有滚动条，2000 字符在大多数浏览器还能装下；
+          // 再长会触发浏览器自动截断，反而不如当前。
+          const preview = String(yamlText).substring(0, 2000).replace(/</g, '&lt;');
+          const ellipsis = String(yamlText).length > 2000 ? '\n…（省略 ' + (String(yamlText).length - 2000) + ' 字符）' : '';
+          const confirmMsg = '确定要导入此配置文件吗？\n\n文件：' + file.name + ' (' + file.size + ' 字节)\n\n⚠ 警告：导入后将完全覆盖现有配置，旧配置会自动备份为 .bak 文件。\n\n文件预览（前 2000 字符）：\n' + preview + ellipsis;
           if (!confirm(confirmMsg)) {
             toast('已取消导入', '');
             return;
@@ -670,16 +741,20 @@
         try {
           const opInfo = await api('GET', '/api/admin/openers');
           state.openers = Array.isArray(opInfo.openers) ? opInfo.openers : [];
-        } catch (_) { state.openers = []; }
+          state.openersLoaded = true;
+        } catch (_) { state.openers = []; state.openersLoaded = true; }
         try {
           const retInfo = await api('GET', '/api/admin/download-retention');
           state.retention.days = retInfo.effective.retention_days;
           state.retention.count = retInfo.effective.max_count;
-        } catch (_) { /* 使用默认值 */ }
-        state.dirty = false;
+          state.retentionLoaded = true;
+        } catch (_) { state.retentionLoaded = true; /* 使用默认值 */ }
+        // 重置所有 dirty（含分节 dirty）
+        state.sectionsDirty.systems = false;
+        state.sectionsDirty.openers = false;
+        state.sectionsDirty.retention = false;
         state.loaded = true;
-        OTB.state.unsavedConfig = false;
-        syncSaveBtns();
+        recomputeDirty();
         renderApp();
         renderSearch();
         renderEditor();
@@ -698,18 +773,20 @@
     // 切 tab 再回来（navigate() 重新调用 renderConfig）时不再 fetch，
     // 直接用内存里的 state.systems —— 这是"切 tab 内容还在"的关键。
     // v0.8：openers 跟 systems 走相同的"首次 fetch + 切回不重 fetch"策略。
+    // 【v0.x 修复 #B2】用 state.openersLoaded 标记避免每次切回本页都重复 GET
+    // （旧实现用 state.openers.length 判断，空数组会被反复 fetch）。
     function ensureOpenersLoaded(cb) {
-      // 已加载过：直接 renderOpeners + cb（cb 通常是 maybeShowBanner）
-      if (state.openers && state.openers.length) {
+      if (state.openersLoaded) {
         renderOpeners();
         if (cb) cb();
         return;
       }
       api('GET', '/api/admin/openers').then(opInfo => {
         state.openers = Array.isArray(opInfo.openers) ? opInfo.openers : [];
+        state.openersLoaded = true;
         renderOpeners();
         if (cb) cb();
-      }).catch(() => { state.openers = []; renderOpeners(); if (cb) cb(); });
+      }).catch(() => { state.openers = []; state.openersLoaded = true; renderOpeners(); if (cb) cb(); });
     }
     function ensureRetentionLoaded(cb) {
       if (state.retentionLoaded) {
