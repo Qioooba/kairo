@@ -41,6 +41,16 @@ verify-commands.js
 /docs/qa/report.json
 # QA 截图：~4MB，CI 跑出来会变，跟 commit 绑一起没意义
 /docs/qa/screenshots/
+/docs/qa/*-shots/
+# 一次性深度测试产物（脚本 / 报告 / 一次性 review）
+/docs/qa/*-deep-report.json
+/docs/qa/*-deep-summary.json
+/docs/qa/REVIEW-*-deep.md
+/docs/qa/compare_deep_test.js
+/docs/qa/websphere_deep_test.js
+/docs/qa/debug_search.js
+# 配置文件备份
+/config.yaml.bak.*
 .mavis/plans/
 # Playwright E2E（仓库根目录的临时安装，仅供本地调试）
 /node_modules/
