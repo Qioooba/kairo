@@ -182,6 +182,7 @@ func (s *Server) runLogsDownloadOnce(
 	cli, err := sshclient.Dial(dialCtx, sshclient.Server{
 		Name: srv.Name, Host: srv.Host, Port: srv.Port, Username: username,
 		HostKeySHA256: srv.HostKeySHA256, SSHProfile: srv.SSHProfile,
+		AllowInsecureHostKey: s.cur().App.AllowInsecureHostKeyEnabled(),
 	}, sshclient.Credentials{Password: password}, sshAttemptTimeout)
 	cancelDial()
 	if err != nil {

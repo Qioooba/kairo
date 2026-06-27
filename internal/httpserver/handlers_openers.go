@@ -18,7 +18,7 @@ import (
 //   - 现有 /api/admin/servers 不接受 app 段（运维控制 vs 页面编辑边界）；
 //   - 但用户希望从页面配置 external_openers（Notepad++ / IDEA / VS Code ...）；
 //   - 单独开个 PUT 接口：req 只接受 openers 数组，handler 用 cur.Clone + 替换 App.ExternalOpeners
-//     + Manager.Replace 原子写盘。
+//   - Manager.Replace 原子写盘。
 //   - 校验走 Manager.Replace 内部的 Validate（name 非空 / path 非空 / name 唯一），
 //     非法值 400，不会写盘。
 type adminOpenersPutReq struct {

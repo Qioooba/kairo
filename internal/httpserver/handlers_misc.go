@@ -14,7 +14,7 @@ import (
 func (s *Server) serveDownload(w http.ResponseWriter, r *http.Request) {
 	name := strings.TrimPrefix(r.URL.Path, "/downloads/")
 	if name == "" ||
-		strings.Contains(name, "..") ||
+		hasPathTraversal(name) ||
 		strings.Contains(name, "\\") ||
 		containsControlChar(name) {
 		http.NotFound(w, r)

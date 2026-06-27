@@ -44,8 +44,7 @@
       { id: 'http', name: 'HTTP 接口测试', desc: 'Postman 风格接口调试，Headers/Body/用例管理/响应高亮', icon: '🌐', tag: 'ready', tagText: 'v0.7' },
       { id: 'commands', name: '常用命令速查', desc: 'Linux / Git / Docker / Oracle / MySQL / Redis / Nginx 等 · 实时搜索 + 一键复制', icon: '$_', tag: 'ready', tagText: 'v0.7' },
       { id: 'diagnostics', name: '环境自检', desc: '一键体检：本机 / 网络 / 配置 / 工具 / 每台 server 连通性', icon: '🩺', tag: 'ready', tagText: 'v0.4' },
-      { id: 'downloads', name: '下载历史', desc: '浏览 / 删除 / 重新下载 / 外部程序打开已下载文件', icon: '⤓', tag: 'ready', tagText: '已就绪' },
-      { id: 'history', name: '操作历史', desc: '本地审计日志的最近记录 + CSV / JSON 过滤导出', icon: '⏱', tag: 'ready', tagText: '已就绪' }
+      { id: 'downloads', name: '下载历史', desc: '浏览 / 删除 / 重新下载 / 外部程序打开已下载文件', icon: '⤓', tag: 'ready', tagText: '已就绪' }
     ];
 
     const grid = OTB.core.el('div', { class: 'grid-4' });

@@ -31,9 +31,9 @@ func TestLocalReveal_RejectsOutsideRoot(t *testing.T) {
 	badPath := filepath.Join(tmpDir, "..", "etc", "passwd")
 
 	cases := []struct {
-		name    string
-		path    string
-		want    int
+		name string
+		path string
+		want int
 	}{
 		{"空路径", "", 400},
 		{"含控制字符", tmpDir + "\nrm", 403}, // 含控制字符被 openPathAllowed 当 403 拒（更严格）

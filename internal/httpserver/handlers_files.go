@@ -365,6 +365,7 @@ func (s *Server) listOneServer(
 	cli, err := sshclient.Dial(ctx, sshclient.Server{
 		Name: srv.Name, Host: srv.Host, Port: srv.Port, Username: username,
 		HostKeySHA256: srv.HostKeySHA256, SSHProfile: srv.SSHProfile,
+		AllowInsecureHostKey: s.cur().App.AllowInsecureHostKeyEnabled(),
 	}, sshclient.Credentials{Password: password}, sshAttemptTimeout)
 	if err != nil {
 		return nil, fmt.Errorf("SSH 连接失败: %w", err)
@@ -509,6 +510,7 @@ func (s *Server) previewOneServer(
 	cli, err := sshclient.Dial(ctx, sshclient.Server{
 		Name: srv.Name, Host: srv.Host, Port: srv.Port, Username: username,
 		HostKeySHA256: srv.HostKeySHA256, SSHProfile: srv.SSHProfile,
+		AllowInsecureHostKey: s.cur().App.AllowInsecureHostKeyEnabled(),
 	}, sshclient.Credentials{Password: password}, sshAttemptTimeout)
 	if err != nil {
 		return nil, 0, fmt.Errorf("SSH 连接失败: %w", err)
@@ -839,6 +841,7 @@ func (s *Server) runFilesDownloadTask(
 	cli, err := sshclient.Dial(dialCtx, sshclient.Server{
 		Name: srv.Name, Host: srv.Host, Port: srv.Port, Username: username,
 		HostKeySHA256: srv.HostKeySHA256, SSHProfile: srv.SSHProfile,
+		AllowInsecureHostKey: s.cur().App.AllowInsecureHostKeyEnabled(),
 	}, sshclient.Credentials{Password: password}, sshAttemptTimeout)
 	cancelDial()
 	if err != nil {
@@ -1083,8 +1086,10 @@ func (s *Server) streamDownloadEvents(w http.ResponseWriter, r *http.Request, id
 		} else {
 			ev = dlmanager.FormatEvent("done", map[string]any{"ok": true, "downloads": result, "folder": folder})
 		}
-		_, _ = fmt.Fprintf(w, "data: %s\n\n", ev)
-		_, _ = fmt.Fprintf(w, "event: done\ndata: {}\n\n")
+		// 统一为一个 done 命名事件并携带真实 payload（旧实现先写 data:<payload> 再写
+		// event:done\ndata:{}，会发出 message + done 两个事件且 done 是空 data，
+		// 前端只听 done 时拿不到结果）。
+		_, _ = fmt.Fprintf(w, "event: done\ndata: %s\n\n", ev)
 		flusher.Flush()
 		return
 	}

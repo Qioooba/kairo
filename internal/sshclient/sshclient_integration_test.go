@@ -160,7 +160,7 @@ func TestDial_Happy(t *testing.T) {
 	_, addr := startFakeSSH(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	cli, err := Dial(ctx, Server{Host: "127.0.0.1", Port: portOf(addr), Username: "ops"},
+	cli, err := Dial(ctx, Server{Host: "127.0.0.1", Port: portOf(addr), Username: "ops", AllowInsecureHostKey: true},
 		Credentials{Password: "testpw"}, 3*time.Second)
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
@@ -175,7 +175,7 @@ func TestDial_BadPassword(t *testing.T) {
 	_, addr := startFakeSSH(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_, err := Dial(ctx, Server{Host: "127.0.0.1", Port: portOf(addr), Username: "ops"},
+	_, err := Dial(ctx, Server{Host: "127.0.0.1", Port: portOf(addr), Username: "ops", AllowInsecureHostKey: true},
 		Credentials{Password: "wrong"}, 3*time.Second)
 	if err == nil {
 		t.Fatal("bad password should fail")
@@ -189,7 +189,7 @@ func TestRun_EchoOK(t *testing.T) {
 	_, addr := startFakeSSH(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	cli, err := Dial(ctx, Server{Host: "127.0.0.1", Port: portOf(addr), Username: "ops"},
+	cli, err := Dial(ctx, Server{Host: "127.0.0.1", Port: portOf(addr), Username: "ops", AllowInsecureHostKey: true},
 		Credentials{Password: "testpw"}, 3*time.Second)
 	if err != nil {
 		t.Fatal(err)
@@ -211,7 +211,7 @@ func TestRun_NonZeroExit(t *testing.T) {
 	_, addr := startFakeSSH(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	cli, _ := Dial(ctx, Server{Host: "127.0.0.1", Port: portOf(addr), Username: "ops"},
+	cli, _ := Dial(ctx, Server{Host: "127.0.0.1", Port: portOf(addr), Username: "ops", AllowInsecureHostKey: true},
 		Credentials{Password: "testpw"}, 3*time.Second)
 	defer cli.Close()
 	_, _, code, err := cli.Run(ctx, "exit 7", 3*time.Second, "utf-8")
@@ -226,7 +226,7 @@ func TestRun_NonZeroExit(t *testing.T) {
 func TestRun_Timeout(t *testing.T) {
 	_, addr := startFakeSSH(t)
 	ctx := context.Background()
-	cli, _ := Dial(ctx, Server{Host: "127.0.0.1", Port: portOf(addr), Username: "ops"},
+	cli, _ := Dial(ctx, Server{Host: "127.0.0.1", Port: portOf(addr), Username: "ops", AllowInsecureHostKey: true},
 		Credentials{Password: "testpw"}, 3*time.Second)
 	defer cli.Close()
 	start := time.Now()
@@ -245,7 +245,7 @@ func TestRun_Timeout(t *testing.T) {
 
 func TestRun_ContextCancel(t *testing.T) {
 	_, addr := startFakeSSH(t)
-	cli, _ := Dial(context.Background(), Server{Host: "127.0.0.1", Port: portOf(addr), Username: "ops"},
+	cli, _ := Dial(context.Background(), Server{Host: "127.0.0.1", Port: portOf(addr), Username: "ops", AllowInsecureHostKey: true},
 		Credentials{Password: "testpw"}, 3*time.Second)
 	defer cli.Close()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -268,7 +268,7 @@ func TestRun_GBK(t *testing.T) {
 	_, addr := startFakeSSH(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	cli, _ := Dial(ctx, Server{Host: "127.0.0.1", Port: portOf(addr), Username: "ops"},
+	cli, _ := Dial(ctx, Server{Host: "127.0.0.1", Port: portOf(addr), Username: "ops", AllowInsecureHostKey: true},
 		Credentials{Password: "testpw"}, 3*time.Second)
 	defer cli.Close()
 	stdout, _, code, err := cli.Run(ctx, "gbk 你好", 3*time.Second, "gbk")
@@ -287,7 +287,7 @@ func TestStream_Basic(t *testing.T) {
 	_, addr := startFakeSSH(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	cli, _ := Dial(ctx, Server{Host: "127.0.0.1", Port: portOf(addr), Username: "ops"},
+	cli, _ := Dial(ctx, Server{Host: "127.0.0.1", Port: portOf(addr), Username: "ops", AllowInsecureHostKey: true},
 		Credentials{Password: "testpw"}, 3*time.Second)
 	defer cli.Close()
 	var got string
@@ -307,7 +307,7 @@ func TestStream_Basic(t *testing.T) {
 
 func TestStream_ContextCancel(t *testing.T) {
 	_, addr := startFakeSSH(t)
-	cli, _ := Dial(context.Background(), Server{Host: "127.0.0.1", Port: portOf(addr), Username: "ops"},
+	cli, _ := Dial(context.Background(), Server{Host: "127.0.0.1", Port: portOf(addr), Username: "ops", AllowInsecureHostKey: true},
 		Credentials{Password: "testpw"}, 3*time.Second)
 	defer cli.Close()
 	ctx, cancel := context.WithCancel(context.Background())

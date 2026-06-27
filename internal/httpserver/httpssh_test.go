@@ -300,10 +300,10 @@ func TestLogsSearchMulti_ScopeSelected(t *testing.T) {
 	// 合法 selected + 含非法文件名（路径穿越）→ 500 (per-server error)
 	w := doRequest(srv, "POST", "/api/logs/search/multi", map[string]any{
 		"system": "信贷生产", "servers": []string{"mock-1"},
-		"dir": "SystemOut",
-		"scope_mode": "selected",
+		"dir":            "SystemOut",
+		"scope_mode":     "selected",
 		"selected_files": []string{"../etc/passwd"},
-		"query": "x", "username": "ops", "password": "testpw",
+		"query":          "x", "username": "ops", "password": "testpw",
 	})
 	if w.Code != 200 {
 		t.Errorf("selected 路径穿越应返 200 + per-server error，得到 %d body=%s", w.Code, w.Body.String())
@@ -324,10 +324,10 @@ func TestLogsSearchMulti_ScopeSelected(t *testing.T) {
 	// 合法 selected + 合法文件名 → 200
 	w = doRequest(srv, "POST", "/api/logs/search/multi", map[string]any{
 		"system": "信贷生产", "servers": []string{"mock-1"},
-		"dir": "SystemOut",
-		"scope_mode": "selected",
+		"dir":            "SystemOut",
+		"scope_mode":     "selected",
 		"selected_files": []string{"SystemOut.log", "SystemErr.log"},
-		"query": "x", "username": "ops", "password": "testpw",
+		"query":          "x", "username": "ops", "password": "testpw",
 	})
 	if w.Code != 200 {
 		t.Errorf("合法 selected 应 200，得到 %d body=%s", w.Code, w.Body.String())
@@ -347,7 +347,7 @@ func TestLogsSearchMulti_ScopeBackwardCompat(t *testing.T) {
 		"dir": "SystemOut",
 		// scope_mode 故意不传
 		"selected_files": []string{"a.log"},
-		"query": "x", "username": "ops", "password": "testpw",
+		"query":          "x", "username": "ops", "password": "testpw",
 	})
 	if w.Code != 200 {
 		t.Errorf("向后兼容（自动 selected）应 200，得到 %d body=%s", w.Code, w.Body.String())
@@ -356,9 +356,9 @@ func TestLogsSearchMulti_ScopeBackwardCompat(t *testing.T) {
 	// 空 + 有 file_patterns → 自动 glob 模式
 	w = doRequest(srv, "POST", "/api/logs/search/multi", map[string]any{
 		"system": "信贷生产", "servers": []string{"mock-1"},
-		"dir": "SystemOut",
+		"dir":           "SystemOut",
 		"file_patterns": []string{"*.log"},
-		"query": "x", "username": "ops", "password": "testpw",
+		"query":         "x", "username": "ops", "password": "testpw",
 	})
 	if w.Code != 200 {
 		t.Errorf("向后兼容（自动 glob）应 200，得到 %d", w.Code)
@@ -367,7 +367,7 @@ func TestLogsSearchMulti_ScopeBackwardCompat(t *testing.T) {
 	// 空 + 空 → 自动 latest 模式（与原行为一致）
 	w = doRequest(srv, "POST", "/api/logs/search/multi", map[string]any{
 		"system": "信贷生产", "servers": []string{"mock-1"},
-		"dir": "SystemOut",
+		"dir":   "SystemOut",
 		"files": 1, "query": "x",
 		"username": "ops", "password": "testpw",
 	})
@@ -397,7 +397,7 @@ func TestLogsListTargets_Basic(t *testing.T) {
 
 	// system 缺失 → 400
 	if w := doRequest(srv, "POST", "/api/logs/list/targets", map[string]any{
-		"targets": []map[string]string{{"server": "mock-1", "dir": "SystemOut"}},
+		"targets":  []map[string]string{{"server": "mock-1", "dir": "SystemOut"}},
 		"username": "ops", "password": "testpw",
 	}); w.Code != 400 {
 		t.Errorf("空 system 应 400，得到 %d", w.Code)
@@ -405,7 +405,7 @@ func TestLogsListTargets_Basic(t *testing.T) {
 
 	// targets 缺失 → 400
 	if w := doRequest(srv, "POST", "/api/logs/list/targets", map[string]any{
-		"system": "信贷生产",
+		"system":   "信贷生产",
 		"username": "ops", "password": "testpw",
 	}); w.Code != 400 {
 		t.Errorf("空 targets 应 400，得到 %d", w.Code)
@@ -413,8 +413,8 @@ func TestLogsListTargets_Basic(t *testing.T) {
 
 	// 合法：1 个 target
 	w := doRequest(srv, "POST", "/api/logs/list/targets", map[string]any{
-		"system": "信贷生产",
-		"targets": []map[string]string{{"server": "mock-1", "dir": "SystemOut"}},
+		"system":   "信贷生产",
+		"targets":  []map[string]string{{"server": "mock-1", "dir": "SystemOut"}},
 		"username": "ops", "password": "testpw",
 	})
 	if w.Code != 200 {

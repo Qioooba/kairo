@@ -56,6 +56,34 @@ const authUserKey contextKey = "authUser"
 type authUser struct {
 	Name  string
 	Token string
+	Role  string // BE-003: "admin" / "user"，空视为 "user"
+}
+
+// isAdmin v0.9 起（BE-003）：判断当前请求的认证用户是否为管理员角色。
+func (u *authUser) isAdmin() bool {
+	return u != nil && u.Role == "admin"
+}
+
+// requireAdmin v0.9 起（BE-003）：校验当前请求的认证用户是否为 admin 角色。
+//   - auth 未启用时（无 authUser）→ 放行（本机 127.0.0.1 场景默认信任）
+//   - auth 启用 + 非 admin 角色 → 返回 403 并写 false（拒绝）
+//   - auth 启用 + admin 角色 → 返回 true（放行）
+//
+// 注意：auth 未启用时放行是向后兼容设计；如需强制 admin，
+// 在 config.yaml 里启用 auth 并配置 admin token。
+func requireAdmin(w http.ResponseWriter, r *http.Request) bool {
+	u, _ := r.Context().Value(authUserKey).(*authUser)
+	if u == nil {
+		// auth 未启用 → 放行
+		return true
+	}
+	if !u.isAdmin() {
+		writeJSON(w, http.StatusForbidden, map[string]any{
+			"error": "需要管理员权限（token.role=admin）",
+		})
+		return false
+	}
+	return true
 }
 
 // Server 持有配置（线程安全 Manager）、审计日志、嵌入式静态资源、tail 会话池、下载任务池
@@ -161,7 +189,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusForbidden, map[string]any{"error": "访问被拒绝：IP 不在允许列表", "auth_required": true})
 			return
 		}
-		ctx := context.WithValue(r.Context(), authUserKey, &authUser{Name: token.Name, Token: token.Token})
+		ctx := context.WithValue(r.Context(), authUserKey, &authUser{Name: token.Name, Token: token.Token, Role: token.Role})
 		r = r.WithContext(ctx)
 	}
 
@@ -177,6 +205,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case path == "/api/config/export":
 		s.handleConfigExport(w, r)
 	case path == "/api/config/import":
+		// BE-003：导入配置是敏感写接口，仅 admin 角色。
+		if !requireAdmin(w, r) {
+			return
+		}
 		s.handleConfigImport(w, r)
 	case path == "/api/ssh/test":
 		s.handleSSHTest(w, r)
@@ -194,12 +226,6 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleLogsContext(w, r)
 	case path == "/api/logs/tail/start":
 		s.handleTailStart(w, r)
-	case path == "/api/audit/recent":
-		s.handleAuditRecent(w, r)
-	case path == "/api/audit/export.csv":
-		s.handleAuditExportCSV(w, r)
-	case path == "/api/audit/export.json":
-		s.handleAuditExportJSON(w, r)
 	case path == "/api/diagnostics":
 		s.handleDiagnostics(w, r)
 	case path == "/api/credentials/save":
@@ -207,6 +233,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case path == "/api/credentials/has":
 		s.handleCredHas(w, r)
 	case path == "/api/credentials/clear":
+		// BE-003：清空他人凭据是敏感写接口，仅 admin 角色。
+		if !requireAdmin(w, r) {
+			return
+		}
 		s.handleCredClear(w, r)
 	case path == "/api/downloads/list":
 		s.handleDownloadsList(w, r)
@@ -229,6 +259,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case path == "/api/diff/compare":
 		s.handleDiffCompare(w, r)
 	case path == "/api/admin/servers":
+		// BE-003：管理员接口，仅 admin 角色。
+		if !requireAdmin(w, r) {
+			return
+		}
 		s.handleAdminServers(w, r)
 	case path == "/api/http/cases":
 		s.handleHTTPCases(w, r)
@@ -259,8 +293,16 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case path == "/api/compare/file-diff":
 		s.handleCompareFileDiff(w, r)
 	case path == "/api/admin/openers":
+		// BE-003：管理员接口，仅 admin 角色。
+		if !requireAdmin(w, r) {
+			return
+		}
 		s.handleAdminOpeners(w, r)
 	case path == "/api/admin/download-retention":
+		// BE-003：管理员接口，仅 admin 角色。
+		if !requireAdmin(w, r) {
+			return
+		}
 		s.handleAdminDownloadRetention(w, r)
 	case strings.HasPrefix(path, "/api/files/download/"):
 		s.handleFilesDownloadEventsOrCancel(w, r)
@@ -423,8 +465,8 @@ type configViewPaths struct {
 }
 
 type configAuthView struct {
-	Enabled bool              `json:"enabled"`
-	Users   []configAuthUser  `json:"users,omitempty"`
+	Enabled bool             `json:"enabled"`
+	Users   []configAuthUser `json:"users,omitempty"`
 }
 
 type configAuthUser struct {

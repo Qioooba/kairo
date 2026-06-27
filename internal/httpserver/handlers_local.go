@@ -159,7 +159,7 @@ func (s *Server) handleLocalOpenWith(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 2) name 反向防注入：拒绝 .. / 反斜杠 / NUL（同 open-dir）
-	if strings.ContainsAny(req.Name, "\\\x00") || strings.Contains(req.Name, "..") {
+	if strings.ContainsAny(req.Name, "\\\x00") || hasPathTraversal(req.Name) {
 		writeErr(w, 400, errors.New("name 含非法字符"))
 		return
 	}

@@ -395,7 +395,6 @@ func TestURLFormRoundTrip(t *testing.T) {
 	}
 }
 
-
 func TestJSONToYAML_NumberTypes(t *testing.T) {
 	// json.Number 在 decodeStrictJSON 里被保留；
 	// JSONToYAML 应该把它转成 int64 / float64，输出不带引号。

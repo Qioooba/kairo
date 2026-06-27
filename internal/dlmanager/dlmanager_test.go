@@ -341,7 +341,7 @@ func TestIdleGCForceCancelOnTimeout(t *testing.T) {
 	sess := &Session{ID: "gc2", Kind: "files"}
 	m.Create(sess)
 	sess.AttachCancel(cancel)
-	sess.CreatedAt = time.Now().Add(-time.Hour) // 假装已经跑了一小时
+	sess.lastActivity = time.Now().Add(-time.Hour) // 假装最后一次活动在一小时前（BE-012：基于 lastActivity 判定空闲）
 
 	done := make(chan struct{})
 	go func() {

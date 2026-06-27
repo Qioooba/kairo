@@ -31,7 +31,7 @@ type fileEntry struct {
 }
 
 type folderScanResp struct {
-	Left  struct {
+	Left struct {
 		Root string      `json:"root"`
 		Tree []fileEntry `json:"tree"`
 	} `json:"left"`
@@ -45,6 +45,8 @@ type folderScanResp struct {
 		LeftOnly  []string `json:"left_only"`
 		RightOnly []string `json:"right_only"`
 	} `json:"diff"`
+	// Truncated 任一侧目录文件数超过 maxFiles 上限被截断时为 true。
+	Truncated bool `json:"truncated"`
 }
 
 type fileDiffReq struct {
@@ -69,6 +71,9 @@ var ignoreScanDirs = map[string]bool{
 	".nuxt":        true,
 }
 
+// maxFileSize 单文件大小上限：超过时跳过 hashFile 计算避免占内存。
+const maxFileSize = 100 * 1024 * 1024 // 100MB
+
 func shouldIgnoreScanPath(relPath string) bool {
 	parts := strings.Split(filepath.ToSlash(relPath), "/")
 	for _, p := range parts {
@@ -92,21 +97,26 @@ func hashFile(path string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-func scanDir(root string) (map[string]fileEntry, error) {
-	entries := make(map[string]fileEntry)
+// scanDir 递归遍历 root 收集文件/目录条目。第二个返回值 truncated 为 true 表示
+// 文件数超过 maxFiles 上限被截断（避免 10 万文件目录阻塞 worker、占满内存）。
+func scanDir(root string) (entries map[string]fileEntry, truncated bool, err error) {
+	entries = make(map[string]fileEntry)
 	absRoot, err := filepath.Abs(root)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	stat, err := os.Stat(absRoot)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if !stat.IsDir() {
-		return nil, fmt.Errorf("路径不是目录: %s", root)
+		return nil, false, fmt.Errorf("路径不是目录: %s", root)
 	}
 
-	err = filepath.WalkDir(absRoot, func(path string, d fs.DirEntry, err error) error {
+	// maxFiles 限制单侧目录收集的文件数上限，超过后停止遍历并标记 truncated。
+	const maxFiles = 10000
+	fileCount := 0
+	walkErr := filepath.WalkDir(absRoot, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
@@ -145,9 +155,18 @@ func scanDir(root string) (map[string]fileEntry, error) {
 			IsDir:   false,
 			Status:  "same",
 		}
+		fileCount++
+		if fileCount >= maxFiles {
+			truncated = true
+			return io.EOF
+		}
 		return nil
 	})
-	return entries, err
+	// io.EOF 是我们主动用来终止遍历的，不是真实错误。
+	if walkErr != nil && !errors.Is(walkErr, io.EOF) {
+		return nil, false, walkErr
+	}
+	return entries, truncated, nil
 }
 
 func (s *Server) handleCompareFolderScan(w http.ResponseWriter, r *http.Request) {
@@ -160,6 +179,8 @@ func (s *Server) handleCompareFolderScan(w http.ResponseWriter, r *http.Request)
 		writeErr(w, 400, fmt.Errorf("请求体解析失败: %w", err))
 		return
 	}
+	// BE-017：补审计日志（/api/compare/* 之前是审计盲区）。
+	s.audit.Write("compare.folder_scan", "left", req.LeftPath, "right", req.RightPath)
 	req.LeftPath = strings.TrimSpace(req.LeftPath)
 	req.RightPath = strings.TrimSpace(req.RightPath)
 	if req.LeftPath == "" || req.RightPath == "" {
@@ -167,12 +188,20 @@ func (s *Server) handleCompareFolderScan(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	leftEntries, err := scanDir(req.LeftPath)
+	// BE-001 fail-closed：路径必须在 app.compare_allowed_roots 白名单里。
+	// 空 roots → 一律 403（防止任意文件读）。
+	cur := s.cfg.Get()
+	if !cur.App.ComparePathAllowed(req.LeftPath) || !cur.App.ComparePathAllowed(req.RightPath) {
+		writeErr(w, 403, errors.New("路径不在 compare_allowed_roots 白名单内（fail-closed）"))
+		return
+	}
+
+	leftEntries, leftTrunc, err := scanDir(req.LeftPath)
 	if err != nil {
 		writeErr(w, 400, fmt.Errorf("扫描左侧目录失败: %w", err))
 		return
 	}
-	rightEntries, err := scanDir(req.RightPath)
+	rightEntries, rightTrunc, err := scanDir(req.RightPath)
 	if err != nil {
 		writeErr(w, 400, fmt.Errorf("扫描右侧目录失败: %w", err))
 		return
@@ -221,6 +250,10 @@ func (s *Server) handleCompareFolderScan(w http.ResponseWriter, r *http.Request)
 			} else if !left.IsDir && !right.IsDir {
 				if left.Size != right.Size {
 					status = "different"
+				} else if left.Size > maxFileSize || right.Size > maxFileSize {
+					// 单文件过大（>100MB）时跳过 hashFile 计算，避免读整个文件占内存。
+					// 大小相同但无法校验哈希，保守标为 different。
+					status = "different"
 				} else {
 					leftHash, err1 := hashFile(left.Path)
 					rightHash, err2 := hashFile(right.Path)
@@ -252,6 +285,7 @@ func (s *Server) handleCompareFolderScan(w http.ResponseWriter, r *http.Request)
 	resp.Diff.Different = different
 	resp.Diff.LeftOnly = leftOnly
 	resp.Diff.RightOnly = rightOnly
+	resp.Truncated = leftTrunc || rightTrunc
 
 	writeJSON(w, 200, resp)
 }
@@ -266,10 +300,20 @@ func (s *Server) handleCompareFileDiff(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, fmt.Errorf("请求体解析失败: %w", err))
 		return
 	}
+	// BE-017：补审计日志（/api/compare/* 之前是审计盲区）。
+	s.audit.Write("compare.file_diff", "left", req.LeftPath, "right", req.RightPath)
 	req.LeftPath = strings.TrimSpace(req.LeftPath)
 	req.RightPath = strings.TrimSpace(req.RightPath)
 	if req.LeftPath == "" || req.RightPath == "" {
 		writeErr(w, 400, errors.New("left_path 和 right_path 不能为空"))
+		return
+	}
+
+	// BE-001 fail-closed：路径必须在 app.compare_allowed_roots 白名单里。
+	// 空 roots → 一律 403（防止任意文件读）。
+	cur := s.cfg.Get()
+	if !cur.App.ComparePathAllowed(req.LeftPath) || !cur.App.ComparePathAllowed(req.RightPath) {
+		writeErr(w, 403, errors.New("路径不在 compare_allowed_roots 白名单内（fail-closed）"))
 		return
 	}
 

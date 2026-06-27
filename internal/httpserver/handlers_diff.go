@@ -15,11 +15,11 @@ import (
 //   - Left / Right：两侧文本（必填）。label 用于 unified diff 的文件头展示，可选。
 //   - Ignore：忽略规则。可选，默认 trim_space=true、ignore_blank=false、ignore_case=false。
 type compareReq struct {
-	Left      string         `json:"left"`
-	Right     string         `json:"right"`
-	LeftLabel string         `json:"left_label"`
+	Left       string        `json:"left"`
+	Right      string        `json:"right"`
+	LeftLabel  string        `json:"left_label"`
 	RightLabel string        `json:"right_label"`
-	Ignore    compareIgnore  `json:"ignore"`
+	Ignore     compareIgnore `json:"ignore"`
 }
 
 type compareIgnore struct {

@@ -195,6 +195,11 @@ func writeYAMLAtomic(path string, cfg *Config) error {
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("关闭临时文件失败: %w", err)
 	}
+	// BE-016：config.yaml 含敏感数据（如 SSH 密码 / token），显式收紧到 0600
+	// （避免依赖平台默认 / umask，rename 后保留权限）。
+	if err := os.Chmod(tmpPath, 0o600); err != nil {
+		return fmt.Errorf("收紧临时文件权限失败: %w", err)
+	}
 	if err := os.Rename(tmpPath, path); err != nil {
 		// 兼容 Windows：不能先删除原文件，否则第二次 rename 失败会导致配置文件丢失。
 		// 改为 old -> backup -> new -> path；如果 new -> path 失败，尽量恢复 backup。

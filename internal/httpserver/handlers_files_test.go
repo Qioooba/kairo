@@ -513,7 +513,7 @@ func TestFilesPreview_Happy_Text(t *testing.T) {
 	w := doRequest(srv, "POST", "/api/files/preview", map[string]any{
 		"system": "信贷生产", "server": "mock-1",
 		"username": "ops", "password": "testpw",
-		"path":     "/data/SystemOut.log",
+		"path": "/data/SystemOut.log",
 	})
 	if w.Code != 200 {
 		t.Fatalf("期望 200，得到 %d body=%s", w.Code, w.Body.String())
@@ -566,8 +566,8 @@ func TestFilesPreview_Truncated(t *testing.T) {
 	srv := newServerWithFakeSSHAndSFTP(t, f)
 
 	w := doRequest(srv, "POST", "/api/files/preview", map[string]any{
-		"system":    "信贷生产", "server": "mock-1",
-		"username":  "ops", "password": "testpw",
+		"system": "信贷生产", "server": "mock-1",
+		"username": "ops", "password": "testpw",
 		"path":      "/data/big.log",
 		"max_bytes": 100,
 	})
@@ -598,8 +598,8 @@ func TestFilesPreview_MaxBytesHardCap(t *testing.T) {
 	srv := newServerWithFakeSSHAndSFTP(t, f)
 
 	w := doRequest(srv, "POST", "/api/files/preview", map[string]any{
-		"system":    "信贷生产", "server": "mock-1",
-		"username":  "ops", "password": "testpw",
+		"system": "信贷生产", "server": "mock-1",
+		"username": "ops", "password": "testpw",
 		"path":      "/data/x.log",
 		"max_bytes": 100 << 20, // 100MB，超过 10MB 上限
 	})
@@ -701,7 +701,7 @@ func TestFilesPreview_EncodingGBK(t *testing.T) {
 	srv := newServerWithFakeSSHAndSFTP(t, f)
 
 	w := doRequest(srv, "POST", "/api/files/preview", map[string]any{
-		"system":   "信贷生产", "server": "mock-1",
+		"system": "信贷生产", "server": "mock-1",
 		"username": "ops", "password": "testpw",
 		"path":     "/data/cn.log",
 		"encoding": "gbk",

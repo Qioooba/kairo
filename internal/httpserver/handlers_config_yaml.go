@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"os"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 // handleConfigExport GET /api/config/export
@@ -28,9 +30,69 @@ func (s *Server) handleConfigExport(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(redactConfigYAML(data))
 }
 
+// sensitiveKeys 是需要脱敏的 YAML key 子串列表（大小写不敏感匹配）。
+// 命中任一子串的 key，其 value 会被替换为 "***"。
+//
+// 采用子串匹配可覆盖复合 key（如 db_password、api_key_secret）。
+var sensitiveKeys = []string{
+	"password", "passwd", "secret", "token",
+	"api_key", "private_key", "host_key_sha256", "credential_key",
+}
+
+// isSensitiveKey 判断（小写化后的）key 是否包含任一敏感子串。
+func isSensitiveKey(key string) bool {
+	lk := strings.ToLower(key)
+	for _, s := range sensitiveKeys {
+		if strings.Contains(lk, s) {
+			return true
+		}
+	}
+	return false
+}
+
+// redactConfigYAML 解析 YAML 后递归脱敏敏感字段，再重新序列化为 YAML 文本。
+// 相比旧的逐行扫描，能正确处理多行字符串、flow 风格、嵌套 map 等结构。
+// 若 YAML 解析失败（语法错误），回退到逐行脱敏逻辑，避免完全无法导出。
 func redactConfigYAML(data []byte) []byte {
+	var root any
+	if err := yaml.Unmarshal(data, &root); err != nil {
+		return redactConfigYAMLLegacy(data)
+	}
+	if root == nil {
+		return data
+	}
+	out, err := yaml.Marshal(redactValue(root))
+	if err != nil {
+		return redactConfigYAMLLegacy(data)
+	}
+	return out
+}
+
+// redactValue 递归遍历 YAML 解析出的值，命中敏感 key 时把 value 替换为 "***"。
+func redactValue(v any) any {
+	switch t := v.(type) {
+	case map[string]any:
+		for k, val := range t {
+			if isSensitiveKey(k) {
+				t[k] = "***"
+			} else {
+				t[k] = redactValue(val)
+			}
+		}
+		return t
+	case []any:
+		for i, val := range t {
+			t[i] = redactValue(val)
+		}
+		return t
+	default:
+		return v
+	}
+}
+
+// redactConfigYAMLLegacy 是旧的逐行脱敏实现，仅在 YAML 解析失败时作为回退使用。
+func redactConfigYAMLLegacy(data []byte) []byte {
 	lines := strings.Split(string(data), "\n")
-	sensitiveKeys := []string{"password", "passwd", "secret", "token", "api_key", "apikey", "private_key", "host_key_sha256"}
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
@@ -41,14 +103,7 @@ func redactConfigYAML(data []byte) []byte {
 			continue
 		}
 		key := strings.ToLower(strings.TrimSpace(trimmed[:colon]))
-		redact := false
-		for _, s := range sensitiveKeys {
-			if strings.Contains(key, s) {
-				redact = true
-				break
-			}
-		}
-		if !redact {
+		if !isSensitiveKey(key) {
 			continue
 		}
 		indentLen := len(line) - len(strings.TrimLeft(line, " \t"))

@@ -25,6 +25,9 @@ import (
 
 // ---------- 测试辅助 ----------
 
+// boolPtr 是 *bool 字面量构造辅助（避免每处都写临时变量）。
+func boolPtr(b bool) *bool { return &b }
+
 // newTestServer 构造一个最小可用的 Server，配置 + 1 个系统 / 1 台服务器 / 1 个 log_dir。
 // downloadDir / logDir 落在 t.TempDir() 下；audit 也在那里写。
 func newTestServer(t *testing.T) (*Server, *config.Manager, *audit.Logger, string) {
@@ -38,6 +41,16 @@ func newTestServer(t *testing.T) (*Server, *config.Manager, *audit.Logger, strin
 			DownloadDir: "downloads",
 			LogDir:      "logs",
 			DataDir:     "data",
+			// v0.9 起 FreeFileRoots / AllowedDownloadRoots / CompareAllowedRoots 都 fail-closed。
+			// 测试基础设施默认显式放行，模拟"已正确配置"的环境；BE-001/BE-007 专门测试
+			// 用单独的 cfg 验证空 roots 行为。
+			FreeFileRoots:        []string{"*"},
+			AllowedDownloadRoots: []string{"*"},
+			CompareAllowedRoots:  []string{"*"},
+			// v0.9 起 BE-005：未配 host_key_sha256 时默认 fail-closed。
+			// 测试基础设施默认显式 allow_insecure_host_key=true，让 SSH 相关测试
+			// （TestSSHTest_Happy 等）继续通过；BE-005 专门测试用单独 cfg 验证默认行为。
+			AllowInsecureHostKey: boolPtr(true),
 		},
 		Systems: []config.SystemConfig{
 			{
@@ -954,30 +967,6 @@ func TestTailStop_WrongMethod(t *testing.T) {
 	w := doRequest(srv, "GET", "/api/logs/tail/any-id/stop", nil)
 	if w.Code != 405 {
 		t.Errorf("expected 405, got %d", w.Code)
-	}
-}
-
-// ---------- /api/audit/recent ----------
-
-func TestAuditRecent_WrongMethod(t *testing.T) {
-	srv, _, _, _ := newTestServer(t)
-	w := doRequest(srv, "POST", "/api/audit/recent", nil)
-	if w.Code != 405 {
-		t.Errorf("expected 405, got %d", w.Code)
-	}
-}
-
-func TestAuditRecent_Happy(t *testing.T) {
-	srv, _, al, _ := newTestServer(t)
-	al.Write("ssh.test", "system", "信贷生产", "server", "mock-1", "result", "ok")
-	w := doRequest(srv, "GET", "/api/audit/recent?limit=10", nil)
-	if w.Code != 200 {
-		t.Fatalf("code=%d", w.Code)
-	}
-	var got map[string]any
-	_ = json.Unmarshal(w.Body.Bytes(), &got)
-	if got["count"].(float64) < 1 {
-		t.Errorf("count: %v", got["count"])
 	}
 }
 

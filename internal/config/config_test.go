@@ -241,6 +241,35 @@ func TestValidate_RejectsNonLocalhost(t *testing.T) {
 	}
 }
 
+// TestValidate_BE006_RejectsWildcardHost 验证 BE-006：0.0.0.0 / :: / [::]
+// 一律拒绝，即使 auth.enabled=true。
+func TestValidate_BE006_RejectsWildcardHost(t *testing.T) {
+	cases := []struct {
+		name string
+		host string
+	}{
+		{"0.0.0.0", "0.0.0.0"},
+		{"::", "::"},
+		{"[::]", "[::]"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cfg := &Config{App: AppConfig{Host: c.host}}
+			cfg.Defaults()
+			// auth 未启用也应拒绝
+			if err := cfg.Validate(); err == nil {
+				t.Fatalf("auth 未启用时 %q 应被拒绝", c.host)
+			}
+			// auth 启用也应拒绝（BE-006）
+			cfg.Auth = AuthConfig{Enabled: true}
+			cfg.Auth.Tokens = []AuthToken{{Name: "admin", Token: "abcdefghijklmnopqrstuvwx"}}
+			if err := cfg.Validate(); err == nil {
+				t.Fatalf("auth 启用时 %q 也应被拒绝（BE-006）", c.host)
+			}
+		})
+	}
+}
+
 func TestValidate_RequiresSystems(t *testing.T) {
 	c := &Config{App: AppConfig{Host: "127.0.0.1"}}
 	c.Defaults()
@@ -699,6 +728,9 @@ func TestConfig_Clone_NilInnerSlices(t *testing.T) {
 }
 
 // TestFreeFileRootsEnabled 验证 free_file_roots 白名单匹配逻辑（项 14）。
+//
+// v0.9 起 fail-closed：空 roots → 一律拒绝（不再"最自由模式"）；
+// 显式 "*" / "ANY" → 全部放行（用户明确同意承担风险）。
 func TestFreeFileRootsEnabled(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -706,9 +738,15 @@ func TestFreeFileRootsEnabled(t *testing.T) {
 		path  string
 		want  bool
 	}{
-		// 空 roots = 放行
-		{"empty roots allow all", nil, "/var/log", true},
-		{"empty roots allow root", nil, "/", true},
+		// v0.9 fail-closed：空 roots = 拒绝（不再是放行）
+		{"empty roots reject all (fail-closed)", nil, "/var/log", false},
+		{"empty roots reject root (fail-closed)", nil, "/", false},
+		{"empty roots reject etc", nil, "/etc/passwd", false},
+		// 显式 "*" / "ANY" → 放行
+		{"star allows all", []string{"*"}, "/etc/passwd", true},
+		{"ANY allows all (case-insensitive)", []string{"ANY"}, "/var/log/x", true},
+		{"any allows all (lowercase)", []string{"any"}, "/var/log/x", true},
+		{"star with spaces", []string{"  *  "}, "/etc/shadow", true},
 		// 单个 root
 		{"exact match", []string{"/var/log"}, "/var/log", true},
 		{"subpath match", []string{"/var/log"}, "/var/log/app.log", true},
@@ -726,7 +764,7 @@ func TestFreeFileRootsEnabled(t *testing.T) {
 		{"trailing slash cleaned", []string{"/var/log/"}, "/var/log/x", true},
 		// 空 path
 		{"empty path with roots", []string{"/var/log"}, "", false},
-		{"empty path no roots", nil, "", true},
+		{"empty path no roots (fail-closed)", nil, "", false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -849,13 +887,27 @@ func TestAllowCustomDownloadDirEnabled(t *testing.T) {
 }
 
 // v0.5-G #18：TargetDirAllowed（按 allowed_download_roots 白名单 + 目录边界）
+//
+// v0.9 起 fail-closed：空 roots → 一律拒绝（不再"全放行"）；
+// 显式 "*" / "ANY" → 全部放行（用户明确同意承担风险）。
 func TestTargetDirAllowed(t *testing.T) {
-	// 空 roots → 全放行
+	// v0.9 fail-closed：空 roots → 全拒绝
 	a := AppConfig{}
 	for _, p := range []string{"/tmp/x", "D:\\Windows\\System32", "/var/log/app"} {
-		if !a.TargetDirAllowed(p) {
-			t.Errorf("空 roots 应放行 %q", p)
+		if a.TargetDirAllowed(p) {
+			t.Errorf("BE-007 fail-closed: 空 roots 应拒绝 %q", p)
 		}
+	}
+	// 显式 "*" / "ANY" → 全放行
+	a.AllowedDownloadRoots = []string{"*"}
+	for _, p := range []string{"/tmp/x", "D:\\Windows\\System32", "/etc/passwd"} {
+		if !a.TargetDirAllowed(p) {
+			t.Errorf("显式 * 应放行 %q", p)
+		}
+	}
+	a.AllowedDownloadRoots = []string{"ANY"}
+	if !a.TargetDirAllowed("/var/log/app") {
+		t.Error("显式 ANY 应放行")
 	}
 	// 非空 roots + 子路径放行
 	a.AllowedDownloadRoots = []string{"/tmp", "D:/logs"}
@@ -886,3 +938,75 @@ func TestTargetDirAllowed(t *testing.T) {
 		t.Error("空白 root 不应放行任何非空路径")
 	}
 }
+
+// TestComparePathAllowed v0.9 BE-001：compare_allowed_roots 白名单（fail-closed）。
+func TestComparePathAllowed(t *testing.T) {
+	// 空 roots → 一律拒绝
+	a := AppConfig{}
+	if a.ComparePathAllowed("/etc/passwd") {
+		t.Error("空 roots 应拒绝 /etc/passwd")
+	}
+	if a.ComparePathAllowed("/var/log/app") {
+		t.Error("空 roots 应拒绝 /var/log/app")
+	}
+	// 显式 "*" → 全放行
+	a.CompareAllowedRoots = []string{"*"}
+	if !a.ComparePathAllowed("/etc/passwd") {
+		t.Error("显式 * 应放行 /etc/passwd")
+	}
+	if !a.ComparePathAllowed(`C:\Windows\System32\drivers\etc\hosts`) {
+		t.Error("显式 * 应放行 Windows 路径")
+	}
+	// ANY（大小写不敏感）
+	a.CompareAllowedRoots = []string{"ANY"}
+	if !a.ComparePathAllowed("/etc/shadow") {
+		t.Error("ANY 应放行 /etc/shadow")
+	}
+	// 非空 roots + 子路径放行
+	a.CompareAllowedRoots = []string{"/var/log", "/opt/was"}
+	for _, p := range []string{"/var/log", "/var/log/app.log", "/opt/was/x"} {
+		if !a.ComparePathAllowed(p) {
+			t.Errorf("白名单内应放行 %q", p)
+		}
+	}
+	// 越界拒绝
+	for _, p := range []string{"/etc/passwd", "/var/logs", "/home/user"} {
+		if a.ComparePathAllowed(p) {
+			t.Errorf("越界应拒绝 %q", p)
+		}
+	}
+	// 空 path
+	a.CompareAllowedRoots = []string{"/var/log"}
+	if a.ComparePathAllowed("") {
+		t.Error("空 path 应拒绝")
+	}
+}
+
+// TestTailIdleDuration 验证 BE-002 配置项 tail_idle_minutes 的解析。
+func TestTailIdleDuration(t *testing.T) {
+	cases := []struct {
+		name string
+		min  *int
+		want time.Duration
+	}{
+		{"nil → 默认 30 分钟", nil, 30 * time.Minute},
+		{"0 → 默认 30 分钟", intPtr(0), 30 * time.Minute},
+		{"负数 → 默认 30 分钟", intPtr(-5), 30 * time.Minute},
+		{"< 5 分钟 → 兜底 5 分钟", intPtr(1), 5 * time.Minute},
+		{"= 5 分钟", intPtr(5), 5 * time.Minute},
+		{"= 30 分钟（默认）", intPtr(30), 30 * time.Minute},
+		{"= 60 分钟", intPtr(60), 60 * time.Minute},
+		{"= 120 分钟", intPtr(120), 120 * time.Minute},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			a := AppConfig{TailIdleMinutes: c.min}
+			got := a.TailIdleDuration()
+			if got != c.want {
+				t.Errorf("TailIdleDuration() = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+func intPtr(n int) *int { return &n }

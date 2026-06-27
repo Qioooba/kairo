@@ -1150,7 +1150,7 @@ input[type="datetime-local"] {
   color-scheme: dark;
 }
 
-/* 操作按钮容器 — downloads / history 表里更紧凑 */
+/* 操作按钮容器 — downloads 表里更紧凑 */
 .actions { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .actions .btn-sm { padding: 3px 9px; font-size: 12px; }
 
@@ -1209,7 +1209,7 @@ input[type="datetime-local"] {
   letter-spacing: 0;
 }
 
-/* 操作历史：filter bar 一行紧凑 */
+/* filter bar 一行紧凑（commands / downloads 等复用） */
 .filter-bar {
   display: flex; gap: 10px; flex-wrap: wrap;
   padding: 10px 12px;

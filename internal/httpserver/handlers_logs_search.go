@@ -90,6 +90,7 @@ func (s *Server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 	cli, err := sshclient.Dial(dialCtx, sshclient.Server{
 		Name: srv.Name, Host: srv.Host, Port: srv.Port, Username: username,
 		HostKeySHA256: srv.HostKeySHA256, SSHProfile: srv.SSHProfile,
+		AllowInsecureHostKey: s.cur().App.AllowInsecureHostKeyEnabled(),
 	}, sshclient.Credentials{Password: creds.Password}, sshAttemptTimeout)
 	cancelDial()
 	if err != nil {
@@ -331,6 +332,7 @@ func (s *Server) handleLogsContext(w http.ResponseWriter, r *http.Request) {
 	cli, err := sshclient.Dial(dialCtx, sshclient.Server{
 		Name: srv.Name, Host: srv.Host, Port: srv.Port, Username: username,
 		HostKeySHA256: srv.HostKeySHA256, SSHProfile: srv.SSHProfile,
+		AllowInsecureHostKey: s.cur().App.AllowInsecureHostKeyEnabled(),
 	}, sshclient.Credentials{Password: creds.Password}, sshAttemptTimeout)
 	cancelDial()
 	if err != nil {

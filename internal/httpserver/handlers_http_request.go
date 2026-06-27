@@ -72,6 +72,8 @@ func (s *Server) handleHTTPRequest(w http.ResponseWriter, r *http.Request) {
 	}
 	// doHTTPRequest 永不返回 error，所有错误都封装在 resp.Error 字段里
 	resp, _ := doHTTPRequest(req)
+	// BE-017：补审计日志（/api/http/request 之前是审计盲区）。
+	s.audit.Write("http.request", "method", req.Method, "url", req.URL, "status", resp.Status)
 	writeJSON(w, 200, resp)
 }
 
@@ -228,6 +230,18 @@ func safeHTTPDialContext(ctx context.Context, network, address string) (net.Conn
 	}
 	if len(ips) == 0 {
 		return nil, errors.New("DNS 解析结果为空")
+	}
+	// 防 DNS rebinding 的双重校验设计：
+	// validateOutboundHTTPURL / rejectPrivateHost 已经做了一次 DNS 解析 + IP 校验，
+	// 但在 follow_redirect 路径下，重定向 URL 的校验（CheckRedirect）与实际拨号
+	// （safeHTTPDialContext）之间存在轻微 TOCTOU：两次独立的 DNS 解析之间，
+	// 攻击者理论上可让权威 DNS 返回不同结果（先返公网 IP 通过校验，再返内网 IP 触发 SSRF）。
+	// 因此这里对 *本次* 拨号即将使用的解析结果再次显式调用 isBlockedHTTPIP 校验，
+	// 确保真正用于建连的 IP 一定是公网 IP。
+	for _, addr := range ips {
+		if isBlockedHTTPIP(addr.IP) {
+			return nil, fmt.Errorf("拒绝访问内网或本机地址: %s (DNS rebinding 双重校验)", addr.IP)
+		}
 	}
 	dialer := &net.Dialer{}
 	return dialer.DialContext(ctx, network, net.JoinHostPort(ips[0].IP.String(), port))

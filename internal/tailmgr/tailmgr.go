@@ -53,6 +53,13 @@ type Session struct {
 	stopErr     error
 	stopOnce    sync.Once
 
+	// BE-002：lastActivity 记录最后一次有"真实活动"的时间
+	// （有订阅者挂上、收到 SSH 行、flush 给订阅者）。
+	// idleGC 用 lastActivity 而不是 CreatedAt 判断空闲，
+	// 避免持续有日志输出/订阅的会话被 5 分钟 CreatedAt 强制断开。
+	activityMu   sync.Mutex
+	lastActivity time.Time
+
 	// P0-3：批量打包。SSH reader 把 line 推入 pendingBuf，独立的
 	// batcher goroutine 每 50ms（或满 100 行）flush 一次，
 	// 把多行 NDJSON 通过单次 channel send 推给订阅者。
@@ -61,6 +68,27 @@ type Session struct {
 	pendingBuf  []byte
 	pendingN    int
 	flushSignal chan struct{}
+}
+
+// touchActivity 更新 lastActivity 为当前时间。在所有"真实活动"点调用：
+//   - Subscribe（有订阅者挂上）
+//   - enqueueLine（SSH 收到一行）
+//   - broadcast（flush 给订阅者）
+//   - pushImmediate（控制消息立即广播）
+//
+// 用独立 activityMu 而不是 subscribers 的 mu，避免高频 broadcast 时
+// 把 RLock 改成 Lock 影响并发吞吐。
+func (s *Session) touchActivity() {
+	s.activityMu.Lock()
+	s.lastActivity = time.Now()
+	s.activityMu.Unlock()
+}
+
+// lastActivityAt 返回最后一次活动时间（idleGC 用）。
+func (s *Session) lastActivityAt() time.Time {
+	s.activityMu.Lock()
+	defer s.activityMu.Unlock()
+	return s.lastActivity
 }
 
 // Output 表示一条流式输出（按行）
@@ -86,6 +114,8 @@ func (s *Session) Subscribe() (<-chan []byte, func()) {
 		close(ch)
 		return ch, func() {}
 	}
+	// BE-002：有订阅者挂上 = 真实活动
+	s.touchActivity()
 	cancel := func() {
 		s.mu.Lock()
 		if _, ok := s.subscribers[ch]; ok {
@@ -108,6 +138,9 @@ func (s *Session) broadcast(line []byte) {
 			// 订阅者处理慢，丢这一行
 		}
 	}
+	// BE-002：成功推给订阅者（或尝试推）= 真实活动。
+	// 即使被 drop 也算活动（说明 SSH 还在产日志，订阅者只是临时慢）。
+	s.touchActivity()
 }
 
 // ---------- P0-3: 批量打包 ----------
@@ -132,6 +165,9 @@ func (s *Session) enqueueLine(line string) {
 	s.pendingN++
 	shouldSignal := s.pendingN >= 100
 	s.pendingMu.Unlock()
+	// BE-002：SSH reader 收到一行 = 真实活动，更新 lastActivity。
+	// 即使 batcher 还没 flush（< 50ms 窗口），也要让 idleGC 知道会话还活着。
+	s.touchActivity()
 	if shouldSignal {
 		select {
 		case s.flushSignal <- struct{}{}:
@@ -216,12 +252,38 @@ type Manager struct {
 }
 
 // NewManager 创建 Manager
+//
+// BE-002 v0.9：idleAfter 默认从 5 分钟改为 30 分钟，
+// 且 idleGC 改用 lastActivity（而非 CreatedAt）判断空闲，
+// 持续有订阅 / 持续有日志输出的会话不会被强断。
+// 测试需要更短 idle 时用 NewManagerWithIdle。
 func NewManager() *Manager {
 	return &Manager{
 		sessions:   make(map[string]*Session),
-		idleAfter:  5 * time.Minute,
+		idleAfter:  30 * time.Minute,
 		GCInterval: 15 * time.Second,
 	}
+}
+
+// NewManagerWithIdle 创建一个自定义 idleAfter 的 Manager（测试用）。
+// idleAfter <= 0 走默认 30 分钟。
+func NewManagerWithIdle(idleAfter time.Duration) *Manager {
+	m := NewManager()
+	if idleAfter > 0 {
+		m.idleAfter = idleAfter
+	}
+	return m
+}
+
+// SetIdleAfter 运行时改 idleAfter（main 启动配置可调）。
+// <= 0 忽略，保留默认。
+func (m *Manager) SetIdleAfter(d time.Duration) {
+	if d <= 0 {
+		return
+	}
+	m.mu.Lock()
+	m.idleAfter = d
+	m.mu.Unlock()
 }
 
 // Start 开一个新 tail 会话
@@ -239,17 +301,19 @@ func (m *Manager) Start(cli Streamer, serverName, serverHost, dir, file, encodin
 
 	id := newID()
 	sessCtx, cancel := context.WithCancel(context.Background())
+	now := time.Now()
 	s := &Session{
-		ID:          id,
-		ServerName:  serverName,
-		ServerHost:  serverHost,
-		Dir:         dir,
-		File:        file,
-		Encoding:    encoding,
-		CreatedAt:   time.Now(),
-		killSSH:     cancel,
-		subscribers: make(map[chan []byte]struct{}),
-		flushSignal: make(chan struct{}, 1),
+		ID:           id,
+		ServerName:   serverName,
+		ServerHost:   serverHost,
+		Dir:          dir,
+		File:         file,
+		Encoding:     encoding,
+		CreatedAt:    now,
+		lastActivity: now, // BE-002：初始化 lastActivity = CreatedAt
+		killSSH:      cancel,
+		subscribers:  make(map[chan []byte]struct{}),
+		flushSignal:  make(chan struct{}, 1),
 	}
 
 	m.mu.Lock()
@@ -320,6 +384,13 @@ func (m *Manager) ShutdownAll() {
 }
 
 // idleGC 定期清理已结束且无订阅者的会话
+//
+// BE-002 v0.9：判断"空闲"用 lastActivity 而不是 CreatedAt，
+// 这样持续有日志输出 / 持续有订阅者的会话不会被强断。
+// 只有真正空闲（无订阅、无日志输出）超过 idleAfter 才 GC：
+//   - 有订阅者：永不 idle-kill（订阅 = 活跃，即使没有日志输出）
+//   - 无订阅者 + lastActivity 未超时：保留
+//   - 无订阅者 + lastActivity 超时：killSSH，下一轮 GC 从 map 移除
 func (m *Manager) idleGC(s *Session) {
 	interval := m.GCInterval
 	if interval <= 0 {
@@ -339,8 +410,16 @@ func (m *Manager) idleGC(s *Session) {
 			m.mu.Unlock()
 			return
 		}
-		if time.Since(s.CreatedAt) > m.idleAfter {
-			// 太老的会话（即使还活着）也清掉，防止内存泄漏
+		// BE-002：有订阅者时永不 idle-kill（订阅 = 活跃）。
+		// 只有无订阅 + lastActivity 超时才 killSSH，防内存泄漏。
+		if subs > 0 {
+			continue
+		}
+		m.mu.RLock()
+		idleAfter := m.idleAfter
+		m.mu.RUnlock()
+		if time.Since(s.lastActivityAt()) > idleAfter {
+			// 真正空闲超过阈值（无订阅 + 无日志输出）→ 清掉，防内存泄漏
 			s.killSSH()
 		}
 	}

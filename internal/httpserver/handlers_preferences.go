@@ -82,6 +82,12 @@ func (s *Server) handlePreferencesPut(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, fmt.Errorf("关闭临时文件失败: %w", err))
 		return
 	}
+	// BE-016：preferences.json 含敏感数据，显式收紧到 0600（避免依赖平台默认 / umask）。
+	if err := os.Chmod(tmp, 0o600); err != nil {
+		_ = os.Remove(tmp)
+		writeErr(w, 500, fmt.Errorf("收紧临时文件权限失败: %w", err))
+		return
+	}
 	if err := os.Rename(tmp, prefFile); err != nil {
 		_ = os.Remove(tmp)
 		writeErr(w, 500, fmt.Errorf("原子替换 preferences 失败: %w", err))

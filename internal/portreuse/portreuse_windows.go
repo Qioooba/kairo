@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"golang.org/x/sys/windows"
 )
 
 // handlePortOccupied Windows 平台：检测占用端口的进程，自动杀残留 OpsToolbox.exe，

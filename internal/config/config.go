@@ -37,6 +37,11 @@ type AuthToken struct {
 	Name       string   `yaml:"name" json:"name"`
 	Token      string   `yaml:"token" json:"token"`
 	AllowedIPs []string `yaml:"allowed_ips,omitempty" json:"allowed_ips,omitempty"`
+	// Role v0.9 起（BE-003）：token 角色，取值 "admin" / "user"。
+	// 空字符串视为 "user"（向后兼容旧配置）。
+	// admin 可访问 /api/admin/*、/api/config/import、/api/credentials/clear 等敏感写接口；
+	// user 只能访问普通读写接口。
+	Role string `yaml:"role,omitempty" json:"role,omitempty"`
 
 	allowednets []*net.IPNet `yaml:"-" json:"-"`
 }
@@ -85,6 +90,14 @@ type AppConfig struct {
 	// "" / "auto" = 走默认重试链（保持向后兼容）。
 	SSHCompatProfile string `yaml:"ssh_compat_profile,omitempty" json:"ssh_compat_profile,omitempty"`
 
+	// AllowInsecureHostKey v0.9 起（BE-005 修复）：是否允许 SSH 连接跳过 host key 校验。
+	//   - nil / false（默认）+ 某台 server 未配 host_key_sha256 → 拒绝连接（fail-closed）
+	//   - true              + 某台 server 未配 host_key_sha256 → 退回 InsecureIgnoreHostKey（向后兼容旧内网）
+	//   - server 配了 host_key_sha256                       → 总是强校验，忽略此字段
+	// 安全建议：新部署保留默认 false；只有确认所有目标 server 都是内网可信且不方便逐台
+	// 取 host key 时，才显式写 allow_insecure_host_key: true。
+	AllowInsecureHostKey *bool `yaml:"allow_insecure_host_key,omitempty" json:"allow_insecure_host_key,omitempty"`
+
 	// AllowCustomDownloadDir v0.5-G 起：是否允许用户在下载请求里指定 target_dir
 	// （v0.5 项 18「FTP 下载到指定目录」）。
 	//   - true / 未设置 = 允许（默认；向后兼容）
@@ -115,6 +128,20 @@ type AppConfig struct {
 	// 默认 1000 条；超过则删除最旧的记录和对应文件；0 = 不限制数量。
 	DownloadMaxCount *int `yaml:"download_max_count,omitempty" json:"download_max_count,omitempty"`
 
+	// CompareAllowedRoots v0.9 起：/api/compare/file-diff、/api/compare/folder-scan
+	// 路径白名单（绝对路径或相对路径前缀），fail-closed：
+	//   - 空切片 → 一律 403（默认安全，禁止任意本地文件读）
+	//   - 包含 "*" 或 "ANY" → 全部放行（用户显式同意承担风险）
+	//   - 其它非空 → path 必须以列表中某项为目录边界前缀
+	// 用途：BE-001 修复，避免 compare 接口读 /etc/passwd、C:\Windows 等敏感文件。
+	CompareAllowedRoots []string `yaml:"compare_allowed_roots,omitempty" json:"compare_allowed_roots,omitempty"`
+
+	// TailIdleMinutes v0.9 起（BE-002 修复）：tail SSE 会话空闲多久后被 idleGC 回收。
+	// "空闲"指无订阅者且无日志输出。默认 30 分钟；最小建议 5 分钟。
+	// 旧的 5 分钟 CreatedAt 强制断开已废弃，改用 lastActivity 判断真实空闲。
+	// nil / 0 / 负数 → 走默认 30 分钟。
+	TailIdleMinutes *int `yaml:"tail_idle_minutes,omitempty" json:"tail_idle_minutes,omitempty"`
+
 	// 解析后的绝对路径
 	downloadDirAbs string
 	logDirAbs      string
@@ -130,26 +157,70 @@ func (a *AppConfig) FreeFileBrowserEnabled() bool {
 	return *a.EnableFreeFileBrowser
 }
 
+// AllowInsecureHostKeyEnabled v0.9 起（BE-005）：是否允许 SSH 连接跳过 host key 校验。
+// 默认 false（fail-closed）；显式 true 才放行。
+// 仅当 server 未配 host_key_sha256 时本字段才生效；配了 host_key_sha256 总是强校验。
+func (a *AppConfig) AllowInsecureHostKeyEnabled() bool {
+	if a.AllowInsecureHostKey == nil {
+		return false
+	}
+	return *a.AllowInsecureHostKey
+}
+
+// TailIdleDuration v0.9 起（BE-002 修复）：返回 tail 会话空闲回收时长。
+// nil / 0 / 负数 → 默认 30 分钟；< 5 分钟按 5 分钟兜底（避免误配成 1 分钟强断）。
+// main.go 启动时调用 tailmgr.SetIdleAfter 应用此值。
+func (a *AppConfig) TailIdleDuration() time.Duration {
+	const (
+		defaultIdle = 30 * time.Minute
+		minIdle     = 5 * time.Minute
+	)
+	if a.TailIdleMinutes == nil {
+		return defaultIdle
+	}
+	n := *a.TailIdleMinutes
+	if n <= 0 {
+		return defaultIdle
+	}
+	d := time.Duration(n) * time.Minute
+	if d < minIdle {
+		return minIdle
+	}
+	return d
+}
+
 // FreeFileRootsEnabled 判断 path 是否在 free_file_roots 白名单里。
 //
-// roots 为空时放行（最自由模式）；非空时要求 path 以任一 root 为前缀。
+// 规则（v0.9 起 fail-closed）：
+//   - roots 为空 → 返回 false（默认安全，禁止任意远端路径访问）
+//   - roots 含 "*" 或 "ANY"（trim+upper 后）→ 返回 true（显式放行）
+//   - 其它非空 → path 必须以列表中任一 root 为目录边界前缀
+//
 // 匹配按 / 边界："/var/log" 匹配 "/var/log" 和 "/var/log/app.log"，但不匹配 "/var/logs"。
 // 大小写敏感（远端 Linux 系统路径区分大小写）。
 func (a *AppConfig) FreeFileRootsEnabled(path string) bool {
 	if len(a.FreeFileRoots) == 0 {
-		return true
+		return false // fail-closed
 	}
 	if path == "" {
 		return false
 	}
 	cleaned := filepath.ToSlash(filepath.Clean(path))
 	for _, root := range a.FreeFileRoots {
-		root = filepath.ToSlash(filepath.Clean(root))
-		if cleaned == root {
+		root = strings.TrimSpace(root)
+		if root == "" {
+			continue
+		}
+		// 显式放行标记
+		if root == "*" || strings.EqualFold(root, "ANY") {
+			return true
+		}
+		rootCleaned := filepath.ToSlash(filepath.Clean(root))
+		if cleaned == rootCleaned {
 			return true
 		}
 		// 必须按目录边界匹配：cleaned 是 root 的子路径
-		if strings.HasPrefix(cleaned, root+"/") {
+		if strings.HasPrefix(cleaned, rootCleaned+"/") {
 			return true
 		}
 	}
@@ -160,6 +231,44 @@ func (a *AppConfig) FreeFileRootsEnabled(path string) bool {
 // 用于前端判断"用户是否已限定根路径"，决定要不要显示警告。
 func (a *AppConfig) FreeFileRootsConfigured() bool {
 	return len(a.FreeFileRoots) > 0
+}
+
+// ComparePathAllowed v0.9 起：判断 path 是否可被 /api/compare/* 接口读取。
+//
+// 规则（fail-closed）：
+//   - roots 为空 → 返回 false（默认安全，禁止任意本地文件读）
+//   - roots 含 "*" 或 "ANY"（trim+upper 后）→ 返回 true（显式放行）
+//   - 其它非空 → path 必须以列表中任一 root 为目录边界前缀
+//
+// 路径匹配按目录边界（与 FreeFileRootsEnabled 同规则）："/foo/bar" 匹配
+// "/foo/bar" 和 "/foo/bar/baz.txt"，但不匹配 "/foo/barbaz"。
+// 大小写敏感（远端 Linux 系统路径区分大小写）；Windows 路径需用户自行确保前缀正确。
+func (a *AppConfig) ComparePathAllowed(path string) bool {
+	if len(a.CompareAllowedRoots) == 0 {
+		return false // fail-closed
+	}
+	if path == "" {
+		return false
+	}
+	cleaned := filepath.ToSlash(filepath.Clean(path))
+	for _, root := range a.CompareAllowedRoots {
+		root = strings.TrimSpace(root)
+		if root == "" {
+			continue
+		}
+		// 显式放行标记
+		if root == "*" || strings.EqualFold(root, "ANY") {
+			return true
+		}
+		rootCleaned := filepath.ToSlash(filepath.Clean(root))
+		if cleaned == rootCleaned {
+			return true
+		}
+		if strings.HasPrefix(cleaned, rootCleaned+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 // AllowCustomDownloadDirEnabled 返回是否允许用户在下载请求里指定 target_dir。
@@ -173,9 +282,10 @@ func (a *AppConfig) AllowCustomDownloadDirEnabled() bool {
 
 // TargetDirAllowed v0.5-G #18：检查 absolutePath 是否被 allowed_download_roots 允许。
 //
-// 规则：
-//   - roots 为空 → 放行（最自由模式）
-//   - roots 非空 → absolutePath 必须以任一 root 为前缀（按 / 或 \ 边界）
+// 规则（v0.9 起 fail-closed）：
+//   - roots 为空 → 返回 false（默认安全，禁止下载到任意本地目录）
+//   - roots 含 "*" 或 "ANY"（trim+upper 后）→ 返回 true（显式放行）
+//   - 其它非空 → absolutePath 必须以任一 root 为目录边界前缀（按 / 或 \ 边界）
 //
 // 注意：
 //   - absolutePath 必须是绝对路径（不在这里检查，由 validateTargetDir 保证）
@@ -183,15 +293,20 @@ func (a *AppConfig) AllowCustomDownloadDirEnabled() bool {
 //   - 双分隔符归一。
 func (a *AppConfig) TargetDirAllowed(absolutePath string) bool {
 	if len(a.AllowedDownloadRoots) == 0 {
-		return true
+		return false // fail-closed
 	}
 	if absolutePath == "" {
 		return false
 	}
 	cleaned := normalizeLocalPathForCompare(absolutePath)
 	for _, root := range a.AllowedDownloadRoots {
-		if strings.TrimSpace(root) == "" {
+		root = strings.TrimSpace(root)
+		if root == "" {
 			continue
+		}
+		// 显式放行标记
+		if root == "*" || strings.EqualFold(root, "ANY") {
+			return true
 		}
 		rootCleaned := normalizeLocalPathForCompare(root)
 		if cleaned == rootCleaned {
@@ -495,9 +610,15 @@ func (c *Config) Validate() error {
 	if host == "" {
 		host = "127.0.0.1"
 	}
+	// BE-006 v0.9：禁止 0.0.0.0 / :: 绑定（攻击面过大）。
+	// 即使 auth.enabled=true，也要求显式指定具体网卡 IP（或 127.0.0.1/localhost）。
+	// 如需监听所有网卡，请在 config.yaml 注释里说明风险，并配具体内网 IP。
+	if host == "0.0.0.0" || host == "::" || host == "[::]" {
+		return fmt.Errorf("app.host 禁止使用 %q（0.0.0.0 会监听所有网卡，攻击面过大）。请改为具体网卡 IP 或 127.0.0.1/localhost", c.App.Host)
+	}
 	if c.Auth.EffectiveEnabled() {
-		if host != "0.0.0.0" && host != "::" && host != "[::]" && host != "127.0.0.1" && host != "localhost" && !isPrivateIP(host) {
-			return fmt.Errorf("auth.enabled=true 时，app.host 允许为 0.0.0.0、内网IP 或 127.0.0.1/localhost，当前: %q", c.App.Host)
+		if host != "127.0.0.1" && host != "localhost" && !isPrivateIP(host) {
+			return fmt.Errorf("auth.enabled=true 时，app.host 允许为内网IP 或 127.0.0.1/localhost，当前: %q", c.App.Host)
 		}
 	} else {
 		if host != "127.0.0.1" && host != "localhost" {
@@ -842,12 +963,21 @@ func (c *Config) Clone() *Config {
 		b := *c.App.EnableFreeFileBrowser
 		out.App.EnableFreeFileBrowser = &b
 	}
+	// v0.9：AppConfig.AllowInsecureHostKey 同样是 *bool（BE-005），独立复制
+	if c.App.AllowInsecureHostKey != nil {
+		b := *c.App.AllowInsecureHostKey
+		out.App.AllowInsecureHostKey = &b
+	}
 	// AppConfig.FreeFileRoots 是 slice header 复用底层数组，必须新建。
 	if c.App.FreeFileRoots != nil {
 		out.App.FreeFileRoots = append([]string(nil), c.App.FreeFileRoots...)
 	}
 	if c.App.AllowedDownloadRoots != nil {
 		out.App.AllowedDownloadRoots = append([]string(nil), c.App.AllowedDownloadRoots...)
+	}
+	// v0.9：CompareAllowedRoots 同样是 slice header 复用底层数组，必须新建。
+	if c.App.CompareAllowedRoots != nil {
+		out.App.CompareAllowedRoots = append([]string(nil), c.App.CompareAllowedRoots...)
 	}
 	// v0.8：AppConfig.ExternalOpeners 同理必须新建 slice（且每项是值拷贝 struct，无指针字段）。
 	if c.App.ExternalOpeners != nil {
@@ -862,6 +992,11 @@ func (c *Config) Clone() *Config {
 		n := *c.App.DownloadMaxCount
 		out.App.DownloadMaxCount = &n
 	}
+	// v0.9：AppConfig.TailIdleMinutes 是 *int（BE-002），独立复制
+	if c.App.TailIdleMinutes != nil {
+		n := *c.App.TailIdleMinutes
+		out.App.TailIdleMinutes = &n
+	}
 
 	// Auth.Tokens 深拷贝
 	if c.Auth.Tokens != nil {
@@ -871,6 +1006,7 @@ func (c *Config) Clone() *Config {
 			dst := &out.Auth.Tokens[i]
 			dst.Name = src.Name
 			dst.Token = src.Token
+			dst.Role = src.Role // BE-003: Role 字符串值拷贝
 			if src.AllowedIPs != nil {
 				dst.AllowedIPs = append([]string(nil), src.AllowedIPs...)
 			}

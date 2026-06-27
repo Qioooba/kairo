@@ -388,6 +388,9 @@ func TestJsonString_ControlChar(t *testing.T) {
 
 // ---------- idleAfter 兜底 ----------
 
+// TestManager_IdleAfterForcesKill 验证 BE-002 后的兜底语义：
+// 无订阅者 + lastActivity 超过 idleAfter → idleGC 调 killSSH → session stopped。
+// 注意：BE-002 修复后"有订阅者时永不 idle-kill"，所以本测试不能 Subscribe。
 func TestManager_IdleAfterForcesKill(t *testing.T) {
 	m := NewManager()
 	m.GCInterval = 15 * time.Millisecond
@@ -399,13 +402,110 @@ func TestManager_IdleAfterForcesKill(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.CreatedAt = time.Now().Add(-time.Hour) // 假装很老
+	// 不订阅：lastActivity = CreatedAt = now，idleAfter 后被视为空闲 → killSSH
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if stopped, _ := s.Stopped(); stopped {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("无订阅 + 超过 idleAfter 应被 idleGC kill（BE-002 修复后兜底）")
+}
+
+// continuousStreamer 持续每隔 interval 产一行日志，直到 ctx 被取消。
+// 用于 BE-002 测试：持续有日志输出时不应被 idleGC kill。
+type continuousStreamer struct {
+	interval time.Duration
+	started  chan struct{}
+	once     sync.Once
+}
+
+func (c *continuousStreamer) Stream(ctx context.Context, _, _ string, onLine func(string)) (int, error) {
+	c.once.Do(func() {
+		if c.started == nil {
+			c.started = make(chan struct{})
+		}
+		close(c.started)
+	})
+	ticker := time.NewTicker(c.interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return -1, ctx.Err()
+		case <-ticker.C:
+			onLine("tick")
+		}
+	}
+}
+
+// TestManager_IdleGC_KeepAliveWhileProducingLogs 验证 BE-002 核心修复：
+// 持续有日志输出（lastActivity 持续更新）时，即使超过 idleAfter 也不应被 kill。
+// 对应用户要求："持续有订阅/持续有日志输出时，超过 6 分钟不应断开"。
+func TestManager_IdleGC_KeepAliveWhileProducingLogs(t *testing.T) {
+	// idleAfter=80ms，GCInterval=15ms；streamer 每 20ms 产一行（远小于 idleAfter）。
+	// 持续 400ms（5x idleAfter）后，session 应仍存活。
+	m := NewManagerWithIdle(80 * time.Millisecond)
+	m.GCInterval = 15 * time.Millisecond
+	defer m.ShutdownAll()
+
+	f := &continuousStreamer{interval: 20 * time.Millisecond}
+	s, err := m.Start(f, "s", "h", "/d", "f", "utf-8", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 订阅并后台排空 ch；broadcast 用 default-drop 不阻塞 streamer，但排空便于观察。
+	// 不 join drain goroutine：ShutdownAll 会 markDone → close(ch) → goroutine 自然退出。
+	ch, unsub := s.Subscribe()
+	defer unsub()
+	go func() {
+		for range ch {
+		}
+	}()
+
+	// 等 400ms，远超 idleAfter=80ms，但 streamer 每 20ms 产一行 → lastActivity 持续更新
+	time.Sleep(400 * time.Millisecond)
+
+	if stopped, _ := s.Stopped(); stopped {
+		t.Fatal("持续有日志输出时 session 不应被 idleGC kill（BE-002 修复）")
+	}
+	if _, ok := m.Get(s.ID); !ok {
+		t.Fatal("session 应仍在 map 中")
+	}
+}
+
+// TestManager_IdleGC_KeepAliveWhileSubscribed 验证 BE-002 另一核心场景：
+// 有订阅者但无日志输出时，即使超过 idleAfter 也不应被 kill。
+// 对应用户要求："持续有订阅时，超过 6 分钟不应断开"。
+func TestManager_IdleGC_KeepAliveWhileSubscribed(t *testing.T) {
+	// idleAfter=80ms，GCInterval=15ms；streamer 阻塞不产日志（模拟"有订阅但无日志"）。
+	m := NewManagerWithIdle(80 * time.Millisecond)
+	m.GCInterval = 15 * time.Millisecond
+	defer m.ShutdownAll()
+
+	f := &fakeStreamer{delayBeforeReturn: 5 * time.Second} // 阻塞，不产日志
+	s, err := m.Start(f, "s", "h", "/d", "f", "utf-8", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	ch, _ := s.Subscribe()
-	// 等到 idleAfter 触发 → killSSH → ctx 取消 → Stream 返回
-	got := collectN(t, ch, 2, 3*time.Second)
-	joined := strings.Join(got, "\n")
-	if !strings.Contains(joined, `"kind":"done"`) {
-		t.Errorf("超时兜底应让 Stream 返回并推 done: %s", joined)
+	defer func() {
+		go func() {
+			for range ch {
+			}
+		}()
+	}()
+
+	// 等 400ms，远超 idleAfter=80ms，但有订阅者 → 不应被 kill
+	time.Sleep(400 * time.Millisecond)
+
+	if stopped, _ := s.Stopped(); stopped {
+		t.Fatal("有订阅者时 session 不应被 idleGC kill（BE-002 修复）")
+	}
+	if _, ok := m.Get(s.ID); !ok {
+		t.Fatal("session 应仍在 map 中")
 	}
 }

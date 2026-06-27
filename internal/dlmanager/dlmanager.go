@@ -75,6 +75,11 @@ type Session struct {
 	Folder    string // 本地下载根目录
 	CreatedAt time.Time
 
+	// lastActivity 是 session 最后一次活动时间（推事件时刷新）。
+	// IdleGC 基于 lastActivity 而非 CreatedAt 判定空闲超时，
+	// 这样慢速大文件下载只要持续推进度就不会被强制 cancel。
+	lastActivity time.Time
+
 	mu          sync.RWMutex
 	subscribers map[chan []byte]struct{}
 	cancel      context.CancelFunc
@@ -129,6 +134,9 @@ func NewID() string {
 func (m *Manager) Create(sess *Session) *Session {
 	if sess.CreatedAt.IsZero() {
 		sess.CreatedAt = time.Now()
+	}
+	if sess.lastActivity.IsZero() {
+		sess.lastActivity = sess.CreatedAt
 	}
 	sess.manager = m
 	m.mu.Lock()
@@ -219,7 +227,13 @@ func (s *Session) Broadcast(line []byte) {
 //
 // 调用方不应直接构造 JSON；用本方法可以让 dlmanager 包统一决定序列化规则
 // （比如以后换 Protobuf 只需要改 formatEvent）。
+//
+// 每次推事件都会刷新 lastActivity，使慢速大文件下载只要持续推进度
+// 就不会被 IdleTimeout 误杀（BE-012）。
 func (s *Session) BroadcastEvent(kind string, kv map[string]any) {
+	s.mu.Lock()
+	s.lastActivity = time.Now()
+	s.mu.Unlock()
 	s.Broadcast(formatEvent(kind, kv))
 }
 
@@ -328,6 +342,7 @@ func (m *Manager) IdleGC(s *Session) {
 		s.mu.RLock()
 		finished := s.finished
 		subs := len(s.subscribers)
+		lastActivity := s.lastActivity
 		s.mu.RUnlock()
 		if finished && subs == 0 {
 			m.mu.Lock()
@@ -335,7 +350,10 @@ func (m *Manager) IdleGC(s *Session) {
 			m.mu.Unlock()
 			return
 		}
-		if m.IdleTimeout > 0 && time.Since(s.CreatedAt) > m.IdleTimeout {
+		// BE-012：基于 lastActivity 而非 CreatedAt 判定空闲超时。
+		// 慢速大文件下载只要持续广播进度，lastActivity 就会被刷新，
+		// 不会因为总时长超过 IdleTimeout 被强制 cancel。
+		if m.IdleTimeout > 0 && time.Since(lastActivity) > m.IdleTimeout {
 			if s.cancel != nil {
 				s.cancel()
 			}

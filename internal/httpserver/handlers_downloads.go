@@ -156,8 +156,8 @@ func (s *Server) handleDownloadsOpenDir(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	// name 反向防注入：拒绝 .. / 反斜杠 / NUL。
-	// 允许 "/" 因为 v0.5 起支持按日期子目录（"20260624/app.log"），但限制不能含 ".."。
-	if strings.ContainsAny(name, "\\\x00") || strings.Contains(name, "..") {
+	// 允许 "/" 因为 v0.5 起支持按日期子目录（"20260624/app.log"），但限制不能含穿越片段 ".."。
+	if strings.ContainsAny(name, "\\\x00") || hasPathTraversal(name) {
 		writeErr(w, 400, errors.New("name 含非法字符"))
 		return
 	}

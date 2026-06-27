@@ -253,6 +253,26 @@ func uniqueLocalName(targetDir, rawBase, serverName string) string {
 	return fmt.Sprintf("%s_%d%s", base, time.Now().UnixNano(), ext)
 }
 
+// hasPathTraversal 检测 name 是否含路径穿越片段（精确匹配路径分隔符形式的 ".."）。
+//
+// 旧实现 strings.Contains(name, "..") 会误拒所有含 ".." 子串的合法文件名
+// （如 "my..file.log"），这里改为只匹配真正能构成穿越的形态：
+//
+//   - 形如 "/../"（夹在中间）、"../"（前缀）、"/.."（后缀）
+//   - 形如 "\\..\\"、"..\\"、"\\.."（Windows 路径分隔符版本）
+//   - 单独的 ".."（整串就是父目录引用）
+//
+// 不含上述任意形态则返回 false，允许 "my..file.log" 这类合法双点文件名。
+func hasPathTraversal(name string) bool {
+	return strings.Contains(name, "/../") ||
+		strings.HasPrefix(name, "../") ||
+		strings.HasSuffix(name, "/..") ||
+		strings.Contains(name, "\\..\\") ||
+		strings.HasPrefix(name, "..\\") ||
+		strings.HasSuffix(name, "\\..") ||
+		name == ".."
+}
+
 // trim 把字符串按 rune 数截断到 n 个，加 "..."
 func trim(s string, n int) string {
 	s = strings.TrimSpace(s)

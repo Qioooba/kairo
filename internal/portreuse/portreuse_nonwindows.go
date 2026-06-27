@@ -63,8 +63,10 @@ func handlePortOccupied(port int, selfExePath string, selfPID int) Result {
 // findListenerOnPort 使用 lsof 命令查找监听指定端口的进程。
 // macOS/Linux 通用：lsof -nP -iTCP:PORT -sTCP:LISTEN -F pc
 // 使用 -F 选项获取机器可读格式：
-//   p<PID>   进程 ID
-//   c<COMM>  进程命令名（完整，不截断）
+//
+//	p<PID>   进程 ID
+//	c<COMM>  进程命令名（完整，不截断）
+//
 // lsof 退出码：0=找到，1=未找到（端口空闲），其它=真正错误。
 func findListenerOnPort(port int) (int, string, bool) {
 	cmd := exec.Command("lsof", "-nP", "-iTCP:"+strconv.Itoa(port), "-sTCP:LISTEN", "-F", "pc")

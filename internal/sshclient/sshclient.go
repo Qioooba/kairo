@@ -48,6 +48,12 @@ type Server struct {
 	// 取值同 AppConfig.SSHCompatProfile：modern/compat/no-ecdh/legacy/auto。
 	// 空时由 SetDefaultProfile 指定的全局默认决定；都没设就 compat。
 	SSHProfile string
+	// AllowInsecureHostKey v0.9 起（BE-005 修复）：
+	//   - false（默认）+ HostKeySHA256 空 → Dial 立即拒绝，不发起连接
+	//   - true  + HostKeySHA256 空       → 退回 InsecureIgnoreHostKey（向后兼容旧内网配置）
+	//   - HostKeySHA256 非空             → 总是用 FixedHostKey 强校验（忽略此字段）
+	// 安全要求：默认 fail-closed，避免新部署无意中接受中间人攻击。
+	AllowInsecureHostKey bool
 }
 
 // ---- 日志与 profile 全局配置（项 9 + 项 22）----
@@ -438,32 +444,61 @@ func passwordKeyboardInteractive(password string) ssh.KeyboardInteractiveChallen
 	}
 }
 
-func newSSHClientConfig(srv Server, cred Credentials, timeout time.Duration, p sshCompatProfile) *ssh.ClientConfig {
-	hostKeyCb := ssh.InsecureIgnoreHostKey() // 内网工具默认：信任 host key
-	// 项 10：如果用户在 server 上配了 host_key_sha256，启用强校验。
-	// 这里用 base64 SHA256 比对，远比 known_hosts 文件管理轻量，适合内网固定机器场景。
-	if hk := strings.TrimSpace(srv.HostKeySHA256); hk != "" {
-		if fp, err := base64.StdEncoding.DecodeString(hk); err == nil && len(fp) == 32 {
-			want := fp
-			hostKeyCb = func(_ string, _ net.Addr, key ssh.PublicKey) error {
-				got := key.Marshal()
-				h := sha256.Sum256(got)
-				if !bytes.Equal(h[:], want) {
-					return fmt.Errorf("host key fingerprint 不匹配: want sha256:%s, got sha256:%s",
-						base64.StdEncoding.EncodeToString(want),
-						base64.StdEncoding.EncodeToString(h[:]))
-				}
-				return nil
-			}
-		} else {
-			sshDebugLogf("HostKeySHA256=%q 不是合法的 base64 SHA256（需 32 字节），按 insecure 处理", hk)
+// errHostKeyNotConfigured BE-005：未配 host key 指纹且未显式 allow_insecure_host_key
+// 时 Dial 立即拒绝的清晰错误。让 handler 能给前端友好提示，而不是 SSH 协议层错误。
+var errHostKeyNotConfigured = errors.New("未配置 host_key_sha256 且 allow_insecure_host_key=false：拒绝连接（BE-005 fail-closed）。请在 config.yaml 给 server 配 host_key_sha256，或在 app.allow_insecure_host_key=true 显式同意风险")
+
+func newSSHClientConfig(srv Server, cred Credentials, timeout time.Duration, p sshCompatProfile) (*ssh.ClientConfig, error) {
+	// BE-005 fail-closed 默认：
+	//   - HostKeySHA256 非空 → FixedHostKey 强校验（最安全）
+	//   - HostKeySHA256 空 + AllowInsecureHostKey=true → InsecureIgnoreHostKey（向后兼容）
+	//   - HostKeySHA256 空 + AllowInsecureHostKey=false → 拒绝构造 config（fail-closed）
+	hk := strings.TrimSpace(srv.HostKeySHA256)
+	if hk == "" {
+		if !srv.AllowInsecureHostKey {
+			return nil, errHostKeyNotConfigured
 		}
+		// 显式同意风险 → 退回旧行为
+		return &ssh.ClientConfig{
+			User: srv.Username,
+			Auth: []ssh.AuthMethod{
+				ssh.Password(cred.Password),
+				ssh.KeyboardInteractive(passwordKeyboardInteractive(cred.Password)),
+			},
+			Timeout:           timeout,
+			HostKeyCallback:   ssh.InsecureIgnoreHostKey(),
+			HostKeyAlgorithms: p.HostKeyAlgorithms,
+			Config: ssh.Config{
+				KeyExchanges: p.KeyExchanges,
+				Ciphers:      p.Ciphers,
+				MACs:         p.MACs,
+			},
+		}, nil
+	}
+
+	// HostKeySHA256 非空 → 强校验
+	var hostKeyCb ssh.HostKeyCallback
+	if fp, err := base64.StdEncoding.DecodeString(hk); err == nil && len(fp) == 32 {
+		want := fp
+		hostKeyCb = func(_ string, _ net.Addr, key ssh.PublicKey) error {
+			got := key.Marshal()
+			h := sha256.Sum256(got)
+			if !bytes.Equal(h[:], want) {
+				return fmt.Errorf("host key fingerprint 不匹配: want sha256:%s, got sha256:%s",
+					base64.StdEncoding.EncodeToString(want),
+					base64.StdEncoding.EncodeToString(h[:]))
+			}
+			return nil
+		}
+	} else {
+		// 配了但格式非法 → fail-closed：不再"按 insecure 处理"，
+		// 因为用户显式配了 host_key_sha256 说明意图是 pin，配错就该停。
+		return nil, fmt.Errorf("HostKeySHA256=%q 不是合法的 base64 SHA256（需 32 字节），拒绝连接（fail-closed）", hk)
 	}
 	return &ssh.ClientConfig{
 		User: srv.Username,
 		Auth: []ssh.AuthMethod{
 			ssh.Password(cred.Password),
-			// 兼容只开 keyboard-interactive/PAM 的老 Linux、AIX、堡垒机。
 			ssh.KeyboardInteractive(passwordKeyboardInteractive(cred.Password)),
 		},
 		Timeout:           timeout,
@@ -474,7 +509,7 @@ func newSSHClientConfig(srv Server, cred Credentials, timeout time.Duration, p s
 			Ciphers:      p.Ciphers,
 			MACs:         p.MACs,
 		},
-	}
+	}, nil
 }
 
 func isNonRetryableSSHErr(err error) bool {
@@ -498,7 +533,12 @@ func isNonRetryableSSHErr(err error) bool {
 }
 
 func dialSSHOnce(ctx context.Context, addr string, srv Server, cred Credentials, timeout time.Duration, p sshCompatProfile, attempt int) (*ssh.Client, error) {
-	cfg := newSSHClientConfig(srv, cred, timeout, p)
+	cfg, err := newSSHClientConfig(srv, cred, timeout, p)
+	if err != nil {
+		// BE-005 fail-closed：未配 host key 且未显式 allow_insecure_host_key
+		// 在这里直接返回，不发起网络连接。
+		return nil, err
+	}
 	sshDebugLogf("  attempt #%d profile : %s", attempt, p.Name)
 	sshDebugLogf("  profile desc       : %s", p.Description)
 	sshDebugLogf("  client kex         : %v", cfg.KeyExchanges)
@@ -551,6 +591,14 @@ func Dial(ctx context.Context, srv Server, cred Credentials, timeout time.Durati
 	sshDebugLogf("==== Dial 开始 ====")
 	sshDebugLogf("  target       : %s (user=%s, timeout=%s)", addr, srv.Username, timeout)
 	sshDebugLogf("  x/crypto/ssh : %s", cryptoSSHVersion())
+
+	// BE-005 fail-closed 预检查：未配 host_key_sha256 且未显式 allow_insecure_host_key
+	// 时直接拒绝，不发起网络连接，也不做 profile 重试（无意义）。
+	// 这里调一次 newSSHClientConfig 仅为校验（结果丢弃），避免在 dialSSHOnce 里重复检查。
+	if _, err := newSSHClientConfig(srv, cred, timeout, sshCompatProfile{}); err != nil {
+		sshDebugLogf("Dial 预检失败（host key 校验）: %s", err.Error())
+		return nil, err
+	}
 
 	dialStart := time.Now()
 	var lastErr error

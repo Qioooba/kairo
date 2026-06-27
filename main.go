@@ -126,7 +126,9 @@ func main() {
 	cfgMgr := config.NewManager(cfg, cfgPath, runDir)
 
 	// 7.5 构造 tail 会话池
+	// BE-002：idleAfter 从 config.tail_idle_minutes 读取（默认 30 分钟，最小 5 分钟）。
 	tails := tailmgr.NewManager()
+	tails.SetIdleAfter(cfg.App.TailIdleDuration())
 	defer tails.ShutdownAll()
 
 	// 8. 构造 HTTP 服务
