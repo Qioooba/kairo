@@ -854,7 +854,7 @@
 
     const hero = el('div', { class: 'card', style: 'text-align:center; padding:48px 24px 36px; background:linear-gradient(180deg, rgba(79,140,255,0.10), rgba(139,92,246,0.04) 60%, transparent); border:1px solid var(--line); position:relative; overflow:hidden;' }, [
       el('div', { style: 'font-size:64px; margin-bottom:14px; filter:drop-shadow(0 6px 18px rgba(79,140,255,0.35));' }, [
-        (function(){ var img = document.createElement('img'); img.src = '/static/img/doubao-logo-64.png'; img.style.width='64px'; img.style.height='64px'; img.style.borderRadius='16px'; return img; })()
+        (function(){ var img = document.createElement('img'); img.src = '/static/img/doubao-logo.png'; img.style.width='72px'; img.style.height='72px'; img.style.borderRadius='18px'; return img; })()
       ]),
       el('h1', { style: 'margin:0 0 8px 0; font-size:36px; font-weight:800; background:linear-gradient(135deg, var(--text), var(--primary) 50%, var(--accent)); -webkit-background-clip:text; -webkit-text-fill-color:transparent; background-clip:text;', text: '豆包工具箱 · Doubao Toolbox' }),
       el('div', { class: 'text-dim', style: 'font-size:16px; margin-bottom:18px; max-width:760px; margin-left:auto; margin-right:auto; line-height:1.7;', text: '企业级内网运维效率平台 · 为 SRE / DevOps / 运维工程师量身打造。安全为先、极简为骨、上下文为魂——一套二进制搞定 SSH 日志检索、文件下载、代码比对、HTTP 调试、环境诊断与配置管理。' }),
