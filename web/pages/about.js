@@ -1568,12 +1568,21 @@
 
   // --- Footer ---
   function renderFooter(view) {
-    const f = el('div', { class: 'text-dim', style: 'text-align:center; margin-top:48px; padding:28px 16px 36px; font-size:13px; border-top:1px solid var(--line); background:linear-gradient(180deg, transparent, rgba(79,140,255,0.04));' }, [
-      el('div', { style: 'font-size:16px; font-weight:700; color:var(--text); margin-bottom:8px; background:linear-gradient(135deg, var(--text), var(--primary)); -webkit-background-clip:text; -webkit-text-fill-color:transparent; background-clip:text;', text: '© 2026 豆包工具箱 · 匠心打造' }),
-      el('div', { style: 'margin-top:4px; font-size:13px;', text: '技术栈：Go 1.20+ · 原生 JavaScript · x/crypto/ssh · pkg/sftp · single-binary deploy · zero runtime deps' }),
-      el('div', { style: 'margin-top:6px; font-size:12px;', text: '为运维效率而生 · 让每一次操作都有迹可循 · 让每一次配置都可审计 · 让每一次下载都可追溯' }),
-      el('div', { style: 'margin-top:14px; font-size:11.5px; opacity:0.7;', text: '本页面所有内容均从 git commit log / 源码 / README.md 提取，写作工具为 vanilla JS DOM API · 零外部依赖。' })
-    ]);
+    var keyframesStyle = document.getElementById('dtb-footer-shimmer');
+    if (!keyframesStyle) {
+      keyframesStyle = el('style', { id: 'dtb-footer-shimmer' });
+      keyframesStyle.textContent = '@keyframes dtb-shimmer{0%{background-position:0% 50%}100%{background-position:200% 50%}}';
+      document.head.appendChild(keyframesStyle);
+    }
+    var f = el('div', { class: 'text-dim', style: 'position:relative; text-align:center; margin-top:48px; padding:32px 16px 40px; font-size:13px; border-top:1px solid var(--line); background:linear-gradient(180deg, transparent, rgba(79,140,255,0.06)); overflow:hidden;' });
+    // 顶部光晕装饰线
+    f.appendChild(el('div', { style: 'position:absolute; top:-1px; left:0; right:0; height:1px; background:linear-gradient(90deg, transparent, var(--primary), var(--accent), var(--primary), transparent); background-size:200% 100%; animation:dtb-shimmer 3s linear infinite;' }));
+    // 品牌行：渐变流光文字
+    f.appendChild(el('div', { style: 'font-size:17px; font-weight:800; margin-bottom:10px; background:linear-gradient(135deg, var(--text) 0%, var(--primary) 40%, var(--accent) 60%, var(--primary) 80%, var(--text) 100%); background-size:200% 100%; -webkit-background-clip:text; -webkit-text-fill-color:transparent; background-clip:text; animation:dtb-shimmer 4s linear infinite; letter-spacing:0.5px;', text: '© 2026 豆包工具箱 · 匠心打造' }));
+    f.appendChild(el('div', { style: 'margin-top:6px; font-size:13px;', text: '技术栈：Go 1.20+ · 原生 JavaScript · x/crypto/ssh · pkg/sftp · single-binary deploy · zero runtime deps' }));
+    f.appendChild(el('div', { style: 'margin-top:6px; font-size:12px;', text: '为运维效率而生 · 让每一次操作都有迹可循 · 让每一次配置都可审计 · 让每一次下载都可追溯' }));
+    // 末行：作者署名融入，带强调色
+    f.appendChild(el('div', { style: 'margin-top:14px; font-size:11.5px; opacity:0.75;', unsafeHtml: '本页面所有内容均从 git commit log / 源码 / README.md 提取，写作工具为 vanilla JS DOM API · 零外部依赖。<span style="color:var(--primary); font-weight:600;">Made by Qi</span>' }));
     view.appendChild(f);
   }
 
