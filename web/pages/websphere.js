@@ -23,7 +23,7 @@
   //   - 上限 20 条，超过截尾。
   // 设计动机：日志查询是高频操作，关键词经常重复（"Exception"、"NPE"、"订单超时" 等），
   // 鼠标点选比重新手敲快很多；localStorage 存避免改后端 schema。
-  const SEARCH_HISTORY_KEY = 'otb:websphere:search-history';
+  const SEARCH_HISTORY_KEY = 'dtb:websphere:search-history';
   const SEARCH_HISTORY_MAX = 20;
   // 用户首次进入看到的默认值（写在 queryInp.value 里）—— 不要塞进历史。
   const SEARCH_DEFAULT_VALUE = 'Exception';

@@ -61,7 +61,7 @@ async function main() {
   const svc = await checkService(BASE_URL + '/');
   if (!svc.reachable) {
     console.error('❌ 服务不可达:', BASE_URL);
-    console.error('请先启动服务: ./ops-toolbox 或 go run .');
+    console.error('请先启动服务: ./doubao-toolbox 或 go run .');
     process.exit(1);
   }
   console.log('✅ 服务可达 (HTTP ' + svc.statusCode + ')');

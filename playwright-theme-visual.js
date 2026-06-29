@@ -50,8 +50,8 @@ function rec(severity, theme, page, button, message, shot = null) {
 async function setTheme(page, theme) {
   try {
     await page.evaluate(t => {
-      try { localStorage.setItem('otb_theme', t); } catch (_) {}
-      if (window.OTB?.theme?.set) window.OTB.theme.set(t);
+      try { localStorage.setItem('dtb_theme', t); } catch (_) {}
+      if (window.DTB?.theme?.set) window.DTB.theme.set(t);
       else document.documentElement.setAttribute('data-theme', t);
     }, theme);
   } catch (_) {
@@ -77,7 +77,7 @@ async function enterCleanly(page, pageDef, theme) {
   try {
     await page.evaluate(t => {
       try {
-        const keep = ['otb_theme'];
+        const keep = ['dtb_theme'];
         for (let i = localStorage.length - 1; i >= 0; i--) {
           const k = localStorage.key(i);
           if (!keep.includes(k)) localStorage.removeItem(k);
@@ -254,8 +254,8 @@ async function main() {
   // 关键：每次新导航前清 localStorage + 设主题 → 避免脏表单状态
   async function freshGoto(hash, theme) {
     await page.evaluate(([h, t]) => {
-      // 仅清 app 自己的 key，不动 otb_theme
-      const keep = ['otb_theme'];
+      // 仅清 app 自己的 key，不动 dtb_theme
+      const keep = ['dtb_theme'];
       for (let i = localStorage.length - 1; i >= 0; i--) {
         const k = localStorage.key(i);
         if (!keep.includes(k)) localStorage.removeItem(k);
@@ -369,7 +369,7 @@ async function checkNavContrast(page) {
     await setTheme(page, theme);
     // reload + 清脏
     await page.evaluate(t => {
-      const keep = ['otb_theme'];
+      const keep = ['dtb_theme'];
       for (let i = localStorage.length - 1; i >= 0; i--) {
         const k = localStorage.key(i);
         if (!keep.includes(k)) localStorage.removeItem(k);

@@ -28,7 +28,7 @@
   const { el, toast, copyToClipboard, confirmDialog, escapeHtml, notify } = DTB.core;
   const { api } = DTB.api;
 
-  const LS_LAST = 'otb:http:last:v2';
+  const LS_LAST = 'dtb:http:last:v2';
 
   // ---------- 工具 ----------
 
@@ -814,10 +814,10 @@
         }
         try {
           const snap = { method, url: urlRaw };
-          const hist = JSON.parse(localStorage.getItem('otb:http:history') || '[]')
+          const hist = JSON.parse(localStorage.getItem('dtb:http:history') || '[]')
             .filter(s => !(s.method === method && s.url === urlRaw));
           hist.unshift(snap);
-          localStorage.setItem('otb:http:history', JSON.stringify(hist.slice(0, 20)));
+          localStorage.setItem('dtb:http:history', JSON.stringify(hist.slice(0, 20)));
         } catch (e) { /* ignore */ }
       } catch (e) {
         respStatus.className = 'http2-resp-status s-err';

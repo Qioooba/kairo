@@ -148,7 +148,7 @@ func doHTTPRequest(req httpRequestReq) (httpRequestResp, error) {
 		httpReq.Header.Set(k, v)
 	}
 	if httpReq.Header.Get("User-Agent") == "" {
-		httpReq.Header.Set("User-Agent", "ops-toolbox-http-test/0.7")
+		httpReq.Header.Set("User-Agent", "doubao-toolbox-http-test/0.7")
 	}
 
 	start := time.Now()

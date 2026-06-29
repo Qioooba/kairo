@@ -157,7 +157,7 @@ function buildDiagnostics() {
       download_dir: mock.config.app.download_dir,
       log_dir: mock.config.app.log_dir,
       data_dir: mock.config.app.data_dir,
-      config_path: '/Users/qi/Projects/ops-toolbox/config.yaml',
+      config_path: '/Users/qi/Projects/doubao-toolbox/config.yaml',
     },
     build: { go_version: 'go1.20', goos: 'darwin', goarch: 'arm64', crypto_ssh_version: 'v0.31.0' },
     runtime: { data_dir_writable: true, download_dir_writable: true, log_dir_writable: true, working_dir: ROOT, pid: 12345, num_goroutine: 6 },
@@ -363,11 +363,11 @@ async function auditRoute(page, route) {
     await page.waitForTimeout(40);
     const bodyText = await page.locator('body').innerText().catch(() => '');
     if (/请确认|确认/.test(bodyText)) {
-      const ok = page.locator('.otb-dialog .btn-primary, .preview-overlay .btn-primary').first();
+      const ok = page.locator('.dtb-dialog .btn-primary, .preview-overlay .btn-primary').first();
       if (await ok.count()) await ok.click({ force: true }).catch(() => {});
     }
-    if (await page.locator('.otb-dialog-overlay, .preview-overlay, .http2-modal-mask').count().catch(() => 0)) {
-      const close = page.locator('.otb-dialog .btn, .preview-overlay .btn, .http2-modal .btn, .http2-modal .btn-primary').first();
+    if (await page.locator('.dtb-dialog-overlay, .preview-overlay, .http2-modal-mask').count().catch(() => 0)) {
+      const close = page.locator('.dtb-dialog .btn, .preview-overlay .btn, .http2-modal .btn, .http2-modal .btn-primary').first();
       if (await close.count()) await close.click({ force: true }).catch(() => {});
     }
   }

@@ -1440,7 +1440,7 @@ input[type="datetime-local"] {
 /* ===== v0.5 项 16：通知栈（download done / 配置错误等） =====
    v0.9 改：原来在 right-top，会遮住下载历史页第一行的"打开所在目录"按钮（BUG-5），
    改成 right-bottom，不挡 sidebar 也不挡表格行；column-reverse 让新通知在栈底（IM 风格）。 */
-.otb-notify-stack {
+.dtb-notify-stack {
   position: fixed;
   bottom: 16px;
   right: 16px;
@@ -1451,7 +1451,7 @@ input[type="datetime-local"] {
   pointer-events: none;
   max-width: 380px;
 }
-.otb-notify {
+.dtb-notify {
   pointer-events: auto;
   position: relative;
   background: var(--bg-1);
@@ -1463,26 +1463,26 @@ input[type="datetime-local"] {
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
   font-size: 13px;
   line-height: 1.5;
-  animation: otb-notify-slide-in 0.18s ease-out;
+  animation: dtb-notify-slide-in 0.18s ease-out;
 }
 /* v0.6.2：hover 时轻微高亮，配合 mouseenter 暂停倒计时，让用户知道"现在不会自动消失" */
-.otb-notify:hover {
+.dtb-notify:hover {
   box-shadow: 0 6px 24px rgba(0, 0, 0, 0.28);
   border-color: var(--primary-2, var(--primary));
 }
-.otb-notify.ok { border-left-color: var(--success); }
-.otb-notify.warn { border-left-color: var(--warn); }
-.otb-notify.err { border-left-color: var(--error); }
-.otb-notify-title { font-weight: 600; margin-bottom: 4px; }
-.otb-notify-body {
+.dtb-notify.ok { border-left-color: var(--success); }
+.dtb-notify.warn { border-left-color: var(--warn); }
+.dtb-notify.err { border-left-color: var(--error); }
+.dtb-notify-title { font-weight: 600; margin-bottom: 4px; }
+.dtb-notify-body {
   color: var(--text-dim);
   font-family: ui-monospace, monospace;
   font-size: 12px;
   white-space: pre-wrap;
   word-break: break-all;
 }
-.otb-notify-actions { margin-top: 8px; display: flex; gap: 6px; flex-wrap: wrap; }
-.otb-notify-close {
+.dtb-notify-actions { margin-top: 8px; display: flex; gap: 6px; flex-wrap: wrap; }
+.dtb-notify-close {
   position: absolute;
   top: 6px; right: 6px;
   background: transparent; border: none;
@@ -1490,8 +1490,8 @@ input[type="datetime-local"] {
   color: var(--text-dim); cursor: pointer;
   padding: 2px 6px; border-radius: 4px;
 }
-.otb-notify-close:hover { background: var(--bg-2); color: var(--text); }
-.otb-notify-clearall {
+.dtb-notify-close:hover { background: var(--bg-2); color: var(--text); }
+.dtb-notify-clearall {
   pointer-events: auto;
   display: none;
   align-self: flex-end;
@@ -1504,12 +1504,12 @@ input[type="datetime-local"] {
   cursor: pointer;
   margin-bottom: 2px;
 }
-.otb-notify-clearall:hover {
+.dtb-notify-clearall:hover {
   background: var(--bg-3);
   color: var(--text);
   border-color: var(--primary);
 }
-@keyframes otb-notify-slide-in {
+@keyframes dtb-notify-slide-in {
   from { opacity: 0; transform: translateX(40px); }
   to   { opacity: 1; transform: translateX(0); }
 }
@@ -2470,9 +2470,9 @@ input[type="datetime-local"] {
 .http2-resp-status.s-busy{ background: var(--tag-enc-bg); color: var(--tag-enc-fg); }
 .http2-resp-status .dot-anim {
   width: 6px; height: 6px; border-radius: 50%; background: currentColor;
-  animation: otb-pulse 1s ease-in-out infinite;
+  animation: dtb-pulse 1s ease-in-out infinite;
 }
-@keyframes otb-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+@keyframes dtb-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
 .http2-resp-meta {
   display: flex; gap: 14px; font-size: 11.5px; color: var(--text-dim);
   font-family: ui-monospace, monospace;
@@ -2567,17 +2567,17 @@ input[type="datetime-local"] {
   position: fixed; inset: 0; background: rgba(0,0,0,0.55);
   display: flex; align-items: center; justify-content: center;
   z-index: 999; backdrop-filter: blur(2px);
-  animation: otb-fadein 0.12s ease;
+  animation: dtb-fadein 0.12s ease;
 }
-@keyframes otb-fadein { from { opacity: 0; } to { opacity: 1; } }
+@keyframes dtb-fadein { from { opacity: 0; } to { opacity: 1; } }
 .http2-modal {
   background: var(--bg-1); border: 1px solid var(--line);
   border-radius: 12px; padding: 16px 18px;
   min-width: 380px; max-width: 520px;
   box-shadow: var(--shadow);
-  animation: otb-scalein 0.14s cubic-bezier(0.34, 1.56, 0.64, 1);
+  animation: dtb-scalein 0.14s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
-@keyframes otb-scalein { from { transform: scale(0.95); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+@keyframes dtb-scalein { from { transform: scale(0.95); opacity: 0; } to { transform: scale(1); opacity: 1; } }
 .http2-modal h4 { margin: 0 0 10px; font-size: 14px; color: var(--text); }
 .http2-modal .modal-row { display: flex; align-items: center; gap: 8px; margin: 8px 0; }
 .http2-modal .modal-row label { width: 70px; color: var(--text-dim); font-size: 12.5px; }
@@ -2712,7 +2712,7 @@ input[type="datetime-local"] {
 .cmd-syntax-box:focus-within .cmd-copy { opacity: 1; }
 
 /* 通用对话框 */
-.otb-dialog-overlay {
+.dtb-dialog-overlay {
   position: fixed;
   inset: 0;
   z-index: 10000;
@@ -2721,9 +2721,9 @@ input[type="datetime-local"] {
   align-items: center;
   justify-content: center;
   padding: 20px;
-  animation: otb-fadein 0.12s ease-out;
+  animation: dtb-fadein 0.12s ease-out;
 }
-.otb-dialog {
+.dtb-dialog {
   width: min(92vw, 440px);
   background: var(--bg-1);
   border: 1px solid var(--line);
@@ -2731,18 +2731,18 @@ input[type="datetime-local"] {
   box-shadow: 0 20px 50px rgba(0, 0, 0, 0.3);
   padding: 16px;
 }
-.otb-dialog-title {
+.dtb-dialog-title {
   font-size: 15px;
   font-weight: 700;
   margin-bottom: 8px;
 }
-.otb-dialog-body {
+.dtb-dialog-body {
   color: var(--text-dim);
   line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-word;
 }
-.otb-dialog-actions {
+.dtb-dialog-actions {
   margin-top: 16px;
   display: flex;
   justify-content: flex-end;

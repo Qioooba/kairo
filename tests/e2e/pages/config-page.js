@@ -30,8 +30,8 @@ class ConfigPage {
   async ensureNoOverlay() {
     try {
       const overlaySelectors = [
-        '.otb-dialog-overlay',
-        '.otb-modal-overlay',
+        '.dtb-dialog-overlay',
+        '.dtb-modal-overlay',
         '.modal-overlay',
         '[class*="dialog-overlay"]',
         '[class*="modal-overlay"]',
@@ -286,7 +286,7 @@ class ConfigPage {
 
   async isDialogVisible() {
     try {
-      const overlay = await this.page.$('.otb-dialog-overlay');
+      const overlay = await this.page.$('.dtb-dialog-overlay');
       if (!overlay) return false;
       const visible = await overlay.isVisible().catch(() => false);
       return visible;
@@ -297,7 +297,7 @@ class ConfigPage {
 
   async clickDialogCancel() {
     try {
-      const cancelBtn = await this.page.$('.otb-dialog-actions button:has-text("取消")');
+      const cancelBtn = await this.page.$('.dtb-dialog-actions button:has-text("取消")');
       if (cancelBtn) {
         await cancelBtn.click();
         await this.page.waitForTimeout(300);

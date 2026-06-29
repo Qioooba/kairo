@@ -40,8 +40,8 @@ function register(runner, ctx) {
   async function closeAllDialogs(pg) {
     try {
       const dialogSelectors = [
-        '.otb-dialog-overlay',
-        '.otb-modal-overlay',
+        '.dtb-dialog-overlay',
+        '.dtb-modal-overlay',
         '.modal-overlay',
         '.dialog-overlay',
         '[class*="dialog-overlay"]',
@@ -58,13 +58,13 @@ function register(runner, ctx) {
             if (isVisible) {
               dialogFound = true;
               const closeSelectors = [
-                '.otb-dialog .close',
-                '.otb-modal .close',
+                '.dtb-dialog .close',
+                '.dtb-modal .close',
                 '.dialog-close',
                 '.modal-close',
                 'button:has-text("关闭")',
                 'button:has-text("取消")',
-                '.otb-dialog-footer button:last-child',
+                '.dtb-dialog-footer button:last-child',
                 '.modal-footer button:last-child',
               ];
 
@@ -95,8 +95,8 @@ function register(runner, ctx) {
   async function hasOpenDialog(pg) {
     try {
       const dialogSelectors = [
-        '.otb-dialog-overlay',
-        '.otb-modal-overlay',
+        '.dtb-dialog-overlay',
+        '.dtb-modal-overlay',
         '.modal-overlay',
         '.dialog-overlay',
         '[class*="dialog-overlay"]',

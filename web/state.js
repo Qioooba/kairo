@@ -37,6 +37,29 @@
       }
     }
   } catch (_) { /* ignore migration errors */ }
+
+  // v0.9 rebrand: 全局兜底迁移 —— 启动时扫一遍 localStorage 里所有 otb: 前缀的键，
+  // 一次性复制到 dtb: 前缀（新键不存在时才复制，避免覆盖用户在迁移期间写入的新数据）。
+  // 这样做的好处：未来再有遗漏的 otb: 键也能自动带过来，不需要每处单独写迁移代码。
+  // 老键不删除，留作只读 fallback；如果新代码稳定后想清理，可以再加一个清理函数。
+  try {
+    if (typeof localStorage !== 'undefined') {
+      var GLOBAL_OLD = 'otb:';
+      var GLOBAL_NEW = 'dtb:';
+      var seen = {};
+      for (var gi = 0; gi < localStorage.length; gi++) {
+        var gk = localStorage.key(gi);
+        if (gk && gk.indexOf(GLOBAL_OLD) === 0) {
+          var gn = GLOBAL_NEW + gk.slice(GLOBAL_OLD.length);
+          if (!seen[gn] && !localStorage.getItem(gn)) {
+            try { localStorage.setItem(gn, localStorage.getItem(gk)); } catch (_) { /* quota? */ }
+          }
+          seen[gn] = true;
+        }
+      }
+    }
+  } catch (_) { /* ignore migration errors */ }
+
   const LS_PREFIX = 'dtb:dismissed:';
 
   function isDismissed(key) {

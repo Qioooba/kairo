@@ -115,7 +115,7 @@ finally { stopTailUI(); }
 | CSS 平衡 | 自检 { vs } | 245/245 |
 
 **未补新自动化测试**：本轮改动主要是 view 层 DOM 操作 + 状态联动，已通过浏览器交互验证覆盖。
-若后续要把正反例接口测试固化为 CI，建议在 `web/api.test.js` 新增（独立运行，需要 ops-toolbox 服务在 18090 端口）。
+若后续要把正反例接口测试固化为 CI，建议在 `web/api.test.js` 新增（独立运行，需要 doubao-toolbox 服务在 18090 端口）。
 
 ---
 

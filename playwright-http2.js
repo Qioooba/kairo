@@ -11,7 +11,7 @@
 //   - 导出 / 导入
 //
 // 跑法：
-//   1. 后端起：cd ops-toolbox && /tmp/ops-toolbox-http-test  (或 go run .)
+//   1. 后端起：cd doubao-toolbox && /tmp/doubao-toolbox-http-test  (或 go run .)
 //   2. node playwright-http2.js
 //
 // 依赖：playwright（先 npm i playwright）

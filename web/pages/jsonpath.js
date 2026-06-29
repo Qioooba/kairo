@@ -8,7 +8,7 @@
  *   - 单下标访问元素：items.1
  *   - 嵌套数组用 # 递归：friends.#(last=="Murphy")#.first
  *
- * 历史记录走 localStorage（key=otb:jsonpath:history），最多 20 条。
+ * 历史记录走 localStorage（key=dtb:jsonpath:history），最多 20 条。
  */
 
 (function () {
@@ -18,8 +18,8 @@
   const { el, toast, copyToClipboard } = DTB.core;
   const { api } = DTB.api;
 
-  const LS_HISTORY = 'otb:jsonpath:history';
-  const LS_LAST = 'otb:jsonpath:last';
+  const LS_HISTORY = 'dtb:jsonpath:history';
+  const LS_LAST = 'dtb:jsonpath:last';
   const MAX_HIST = 20;
 
   // ---------- 历史 ----------

@@ -2,7 +2,7 @@
 
 **日期**: 2026-06-23
 **Agent**: coder (agent1-backend-v3)
-**工作目录**: `/Users/qi/Documents/spaces/ops-toolbox`
+**工作目录**: `/Users/qi/Documents/spaces/doubao-toolbox`
 **基线**: v2 plan 已收尾（commit 437b254 / 827c134 / c8d48a4 / 2475ef3）
 
 ---
@@ -221,19 +221,19 @@ $ go build -mod=vendor ./...
 # (空输出)         ← build clean
 
 $ go test -mod=vendor -count=1 ./...
-ok  	ops-toolbox                              0.013s
-ok  	ops-toolbox/internal/audit               0.031s   ← B2 新增
-ok  	ops-toolbox/internal/config              0.718s   ← 项 6 ListModeIsAuto 追加
-ok  	ops-toolbox/internal/credentials         0.779s
-ok  	ops-toolbox/internal/diagnostics         0.757s
-ok  	ops-toolbox/internal/dlmanager           0.236s
-ok  	ops-toolbox/internal/downloads           0.031s
-ok  	ops-toolbox/internal/formatter           0.008s
-ok  	ops-toolbox/internal/httpserver           91.238s  ← B1/B2/B3 + 项 6 集成测试追加
-ok  	ops-toolbox/internal/logquery            0.012s   ← B1 新增
-ok  	ops-toolbox/internal/sftpclient          0.102s   ← 项 8 新增
-ok  	ops-toolbox/internal/sshclient           3.448s
-ok  	ops-toolbox/internal/tailmgr             0.351s
+ok  	doubao-toolbox                              0.013s
+ok  	doubao-toolbox/internal/audit               0.031s   ← B2 新增
+ok  	doubao-toolbox/internal/config              0.718s   ← 项 6 ListModeIsAuto 追加
+ok  	doubao-toolbox/internal/credentials         0.779s
+ok  	doubao-toolbox/internal/diagnostics         0.757s
+ok  	doubao-toolbox/internal/dlmanager           0.236s
+ok  	doubao-toolbox/internal/downloads           0.031s
+ok  	doubao-toolbox/internal/formatter           0.008s
+ok  	doubao-toolbox/internal/httpserver           91.238s  ← B1/B2/B3 + 项 6 集成测试追加
+ok  	doubao-toolbox/internal/logquery            0.012s   ← B1 新增
+ok  	doubao-toolbox/internal/sftpclient          0.102s   ← 项 8 新增
+ok  	doubao-toolbox/internal/sshclient           3.448s
+ok  	doubao-toolbox/internal/tailmgr             0.351s
 # 13/13 包测试 pass
 ```
 

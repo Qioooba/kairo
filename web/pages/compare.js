@@ -19,13 +19,13 @@
   let isScanning = false;
   let isDeepChecking = false;
 
-  const LS_IGNORE = 'otb:compare:ignore';
-  const LS_MODE = 'otb:compare:mode';
-  const LS_HIDE_EQUAL = 'otb:compare:hideEqual';
-  const LS_LEFT_FOLDER = 'otb:compare:left_folder';
-  const LS_RIGHT_FOLDER = 'otb:compare:right_folder';
-  const LS_SCAN_MODE = 'otb:compare:scan_mode';
-  const LS_IGNORE_EXTS = 'otb:compare:ignore_exts';
+  const LS_IGNORE = 'dtb:compare:ignore';
+  const LS_MODE = 'dtb:compare:mode';
+  const LS_HIDE_EQUAL = 'dtb:compare:hideEqual';
+  const LS_LEFT_FOLDER = 'dtb:compare:left_folder';
+  const LS_RIGHT_FOLDER = 'dtb:compare:right_folder';
+  const LS_SCAN_MODE = 'dtb:compare:scan_mode';
+  const LS_IGNORE_EXTS = 'dtb:compare:ignore_exts';
 
   function loadIgnore() {
     try {

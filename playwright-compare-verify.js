@@ -44,12 +44,12 @@ const RIGHT = [
   // 进入"代码比对"路由
   console.log('2. open compare page');
   await page.evaluate(() => {
-    if (typeof OTB === 'undefined') throw new Error('OTB not loaded');
-    if (typeof OTB.state.setRoute !== 'function') {
+    if (typeof DTB === 'undefined') throw new Error('DTB not loaded');
+    if (typeof DTB.state.setRoute !== 'function') {
       // 退化：直接调 router 注册的函数
-      OTB.pages.compare(document.getElementById('view'));
+      DTB.pages.compare(document.getElementById('view'));
     } else {
-      OTB.state.setRoute('compare');
+      DTB.state.setRoute('compare');
     }
   });
   await page.waitForSelector('#cmp-left', { timeout: 5000 });
@@ -114,7 +114,7 @@ const RIGHT = [
   // 直接在浏览器里跑一次 buildUnifiedDiffFromLines 通过 monkey-patch 拿到 lastResult.lines
   const builtDebug = await page.evaluate(() => {
     // 闭包函数外部抓不到，但 lastResult 是 module 级 let。
-    // OTB.pages.compare 闭包内的 lastResult，外部也抓不到。
+    // DTB.pages.compare 闭包内的 lastResult，外部也抓不到。
     // 只能从 .d2h-wrapper 的 data-* 看，或者直接读 d2h 内部生成的 text
     const table = document.querySelector('.d2h-wrapper .d2h-diff-table');
     return table ? table.outerHTML.length : 0;
@@ -137,7 +137,7 @@ const RIGHT = [
   console.log('8. cmp-pane-header 文件名样式', fileLabelStyle);
 
   // 截图存档
-  const outDir = '/tmp/otb-verify-shots';
+  const outDir = '/tmp/dtb-verify-shots';
   fs.mkdirSync(outDir, { recursive: true });
   await page.screenshot({ path: path.join(outDir, 'compare-side-hide-equal.png'), fullPage: true });
   console.log('9. screenshot ->', outDir);

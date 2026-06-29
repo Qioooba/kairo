@@ -1,9 +1,9 @@
 # 豆包工具箱 深度测试问题汇总
 
-> 审查范围：ops-toolbox v0.8 全量代码（后端 Go + 前端 JS + 配置 + 文档 + 打包产物）
+> 审查范围：doubao-toolbox v0.8 全量代码（后端 Go + 前端 JS + 配置 + 文档 + 打包产物）
 > 审查方式：静态全量代码阅读 + gofmt/node --check/go test 实跑 + API 契约核对 + 配置/README 一致性比对
 > 审查时间：2026-06-27
-> 代码基线：本地工作目录 /Users/qi/Documents/spaces/ops-toolbox（含 vendor/ 和 web/vendor/）；同时核对 ops-toolbox-src-review.tar.gz 打包产物
+> 代码基线：本地工作目录 /Users/qi/Documents/spaces/ops-toolbox（含 vendor/ 和 web/vendor/）；同时核对 doubao-toolbox-src-review.tar.gz 打包产物
 
 ---
 
@@ -48,8 +48,8 @@
 - 编号：PKG-001
 - 优先级：P0
 - 模块：打包产物
-- 页面/按钮/接口：ops-toolbox-src-review.tar.gz
-- 复现步骤：`tar -tzf ops-toolbox-src-review.tar.gz | grep vendor` 返回空
+- 页面/按钮/接口：doubao-toolbox-src-review.tar.gz
+- 复现步骤：`tar -tzf doubao-toolbox-src-review.tar.gz | grep vendor` 返回空
 - 实际结果：tar.gz 解包后没有 `vendor/` 目录，离线环境执行 `go test -mod=vendor ./...` 会因为找不到依赖直接失败
 - 期望结果：发布包应包含完整 vendor/，或附带 `GOFLAGS=-mod=mod` + 完整 go.sum 让 `go mod download` 还原
 - 影响：分发场景（内网同事拿到包后想自测）无法构建/测试
@@ -62,7 +62,7 @@
 - 优先级：P0
 - 模块：打包产物
 - 页面/按钮/接口：web/vendor/diff2html.min.{css,js}
-- 复现步骤：`tar -tzf ops-toolbox-src-review.tar.gz | grep "web/vendor"` 返回空；解包后访问代码比对页
+- 复现步骤：`tar -tzf doubao-toolbox-src-review.tar.gz | grep "web/vendor"` 返回空；解包后访问代码比对页
 - 实际结果：tar.gz 缺 `web/vendor/diff2html.min.css` 和 `web/vendor/diff2html.min.js`，而 `web/index.html` 第 8、110 行直接引用 `/static/vendor/diff2html.min.{css,js}`。解包运行后代码比对页会 404 加载这两个资源，diff 渲染失败
 - 期望结果：打包脚本应包含 web/vendor/；或前端加 CDN fallback
 - 影响：代码比对页（用户 14 个菜单之一）在 tar.gz 解包运行场景下完全不可用
@@ -113,7 +113,7 @@
 - 期望结果：应校验 left_path / right_path 必须落在白名单根下（如 `cfg.App.FreeFileRoots` 或新增 `compare_roots`），并禁止 `/etc`、`/Users`、`/var`、`C:\Windows` 等系统目录
 - 影响：安全 — 任意已认证用户可读取本机任意文件内容（通过 diff 输出回显）、枚举任意目录结构 + 文件大小 + MD5 哈希
 - 修改建议：`handlers_compare.go:153` 和 `:253` 入口处增加 `openPathAllowed` 校验；对 `handleCompareFileDiff` 加文件大小上限（如 50MB）
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/internal/httpserver/handlers_compare.go`
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/internal/httpserver/handlers_compare.go`
 - 是否需要补测试：是 — 测 `/api/compare/file-diff` 传 `/etc/passwd` 应返回 403
 
 ### BE-002
@@ -126,7 +126,7 @@
 - 期望结果：idle 判定应基于"最后一条行输出时间"或"最后有订阅者的时间"，而非创建时间
 - 影响：稳定性 — 用户盯长时间滚动日志（生产故障排查）会被意外断开，必须重新点 tail
 - 修改建议：`tailmgr.go:39` 的 `Session` 结构增加 `lastActivity time.Time` 字段，在 `enqueueLine`（:128）和 `Subscribe`（:74）时更新；`idleGC`（:342）改判 `time.Since(s.lastActivity) > m.idleAfter`。同时把 `idleAfter` 改为可配置（如 30 分钟）
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/internal/tailmgr/tailmgr.go`
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/internal/tailmgr/tailmgr.go`
 - 是否需要补测试：是 — 测持续推 line 的 session 6 分钟后仍存活
 
 ### BE-003
@@ -139,7 +139,7 @@
 - 期望结果：敏感管理接口应要求管理员角色 token
 - 影响：安全 — 多用户共享时，任意同事可改写 server 配置、注入恶意 host_key_sha256、清空他人凭据、导入带后门的 config.yaml
 - 修改建议：`internal/config/config.go` 的 `AuthToken` 增加 `Role string` 字段（`admin`/`user`）；`httpserver.go:147` 在调 `/api/admin/*`、`/api/config/import`、`/api/credentials/clear` 前校验 `token.Role == "admin"`
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/internal/httpserver/httpserver.go`、`/Users/qi/Documents/spaces/ops-toolbox/internal/config/config.go`
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/internal/httpserver/httpserver.go`、`/Users/qi/Documents/spaces/doubao-toolbox/internal/config/config.go`
 - 是否需要补测试：是 — 测普通 token 调 `/api/config/import` 返回 403
 
 ### BE-004
@@ -152,7 +152,7 @@
 - 期望结果：脱敏应基于结构化 YAML 解析（`yaml.Unmarshal` 到 `map[string]any` 后递归遍历，遇到敏感 key 替换 value）
 - 影响：安全 — 导出的 config.yaml 可能泄露明文密码 / token / 私钥
 - 修改建议：`handlers_config_yaml.go:31` 改用 `gopkg.in/yaml.v3` 解析为 `map[string]any`，递归遍历，命中 `password/passwd/secret/token/api_key/private_key/host_key_sha256` 等 key 时把 value 替换为 `"***"`
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/internal/httpserver/handlers_config_yaml.go`
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/internal/httpserver/handlers_config_yaml.go`
 - 是否需要补测试：是 — 测多行密码、flow 风格、嵌套 map 的脱敏
 
 ### BE-005
@@ -165,7 +165,7 @@
 - 期望结果：默认应拒绝未配置 host key 的连接（fail-closed），或采用 TOFU 模式 + 审计
 - 影响：安全 — MITM 可截获 SSH 密码，进而横向渗透内网
 - 修改建议：`sshclient.go` 的 `Dial` 中，当 `HostKeySHA256 == ""` 时返回错误"未配置 host key 指纹，拒绝连接"；或新增 `app.allow_insecure_host_key: false` 默认值
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/internal/sshclient/sshclient.go`
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/internal/sshclient/sshclient.go`
 - 是否需要补测试：是 — 测未配 host key 时 Dial 返回错误
 
 ### BE-006
@@ -178,7 +178,7 @@
 - 期望结果：`0.0.0.0` 应被显式拒绝，或要求同时配置 IP 白名单；至少启动时打 WARNING
 - 影响：安全 — 攻击面从 127.0.0.1 扩大到所有网卡
 - 修改建议：`config.go` 的 `Validate` 中，`host == "0.0.0.0"` 时返回错误"禁止 0.0.0.0，请用具体网卡 IP 或 127.0.0.1"
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/internal/config/config.go`
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/internal/config/config.go`
 - 是否需要补测试：是 — 测 `host=0.0.0.0` + `auth.enabled=true` 时 Validate 返回错误
 
 ### BE-007
@@ -191,7 +191,7 @@
 - 期望结果：默认应为 fail-closed：`free_file_roots` 为空时拒绝任意路径浏览
 - 影响：安全 — 默认配置下任意已认证用户可通过 SSH 账号权限浏览/下载远端任意文件（如 `/etc/shadow`、`~/.ssh/id_rsa`）
 - 修改建议：`config.go` 的 `FreeFileRootsEnabled` 改为 `len(roots) == 0` 时返回 `false`；`Validate` 在 `enable_free_file_browser: true` 且 `free_file_roots` 为空时返回错误
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/internal/config/config.go`
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/internal/config/config.go`
 - 是否需要补测试：是 — 测空 `free_file_roots` 时 `/api/files/list` 返回 403
 
 ### BE-008
@@ -204,7 +204,7 @@
 - 期望结果：应精确匹配路径分隔符形式的 `..`（如 `/../`、`..\`）
 - 影响：功能 — 合法文件名被误拒
 - 修改建议：改为 `strings.Contains(req.Name, "/../") || strings.HasPrefix(req.Name, "../") || strings.Contains(req.Name, "\\..\\")`
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/internal/httpserver/handlers_local.go`、`/Users/qi/Documents/spaces/ops-toolbox/internal/httpserver/handlers_downloads.go`
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/internal/httpserver/handlers_local.go`、`/Users/qi/Documents/spaces/doubao-toolbox/internal/httpserver/handlers_downloads.go`
 - 是否需要补测试：是 — 测 `name="my..file.log"` 应通过
 
 ### BE-009
@@ -217,7 +217,7 @@
 - 期望结果：统一为：结束时只发一个 `event: done\ndata: <真实payload>\n\n`
 - 影响：功能 — 前端需兼容两种 done 形态，易漏掉真实结果数据
 - 修改建议：`handlers_files.go:1086-1087` 删掉 `data: <done-payload>` 那行，改为 `event: done\ndata: <done-payload>\n\n`
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/internal/httpserver/handlers_files.go`
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/internal/httpserver/handlers_files.go`
 - 是否需要补测试：是 — 测已结束 session 的 SSE 流只发一个 `event: done` 且 data 含 `downloads/folder`
 
 ### BE-010
@@ -230,7 +230,7 @@
 - 期望结果：应限制 diff 输出大小（`io.LimitReader` 包 `cmd.StdoutPipe`，超 10MB 截断）；或限制输入文件大小
 - 影响：稳定性 — 单个请求可 OOM 整个进程
 - 修改建议：`handlers_compare.go:268` 加输入文件大小校验（> 50MB 返回 413）；`:271` 改用 `cmd.StdoutPipe()` + `io.LimitReader`
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/internal/httpserver/handlers_compare.go`
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/internal/httpserver/handlers_compare.go`
 - 是否需要补测试：是 — 测两个 100MB 文件 diff 不 OOM、返回 truncated
 
 ### BE-011
@@ -243,7 +243,7 @@
 - 期望结果：应限制最大文件数（如 10000）、最大单文件大小、目录深度、总扫描时长超时
 - 影响：稳定性 — 单请求可阻塞 worker 数分钟、占满磁盘 IO 和内存
 - 修改建议：`handlers_compare.go:109` 的 `WalkDir` 回调里加计数器，超过阈值返回 `filepath.SkipDir` 并标 `truncated`
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/internal/httpserver/handlers_compare.go`
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/internal/httpserver/handlers_compare.go`
 - 是否需要补测试：是 — 测 10 万文件目录扫描在 10s 内返回且不 OOM
 
 ### BE-012
@@ -256,7 +256,7 @@
 - 期望结果：IdleTimeout 应基于"最后活动时间"，而非创建时间
 - 影响：稳定性 — 大文件下载被意外中断
 - 修改建议：`dlmanager.go` 的 `Session` 增加 `lastActivity` 字段，`BroadcastEvent` 时更新；`IdleGC` 改判 `time.Since(s.lastActivity) > IdleTimeout`
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/internal/dlmanager/dlmanager.go`
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/internal/dlmanager/dlmanager.go`
 - 是否需要补测试：是 — 测下载进行中（每 10s 推 progress）的 session 30 分钟后不被 GC
 
 ### BE-013
@@ -269,7 +269,7 @@
 - 期望结果：应只允许 AAD 绑定格式；旧格式密文应在读取时一次性迁移到新格式
 - 影响：安全 — AAD 防篡改/防替换能力被弱化
 - 修改建议：`credentials.go` 的 `decrypt` 收到非 AAD 格式密文时，解密成功后立即用新格式重写（一次性迁移）；下一版本删除旧格式支持分支
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/internal/credentials/credentials.go`
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/internal/credentials/credentials.go`
 - 是否需要补测试：是 — 测旧格式密文读取后会被重写为新格式
 
 ### BE-014
@@ -282,7 +282,7 @@
 - 期望结果：要么前端恢复入口、要么后端注释路由（或加配置开关 `app.audit_enabled`）
 - 影响：功能一致性 — 接口契约与 UI 不一致；安全 — 任意用户可导出全量审计 CSV/JSON
 - 修改建议：若决定下线，注释 `httpserver.go:197-202` 的 3 个 case；若保留，前端恢复入口并在 `handlers_audit.go` 加管理员鉴权
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/internal/httpserver/httpserver.go`
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/internal/httpserver/httpserver.go`
 - 是否需要补测试：否
 
 ### BE-015
@@ -295,7 +295,7 @@
 - 期望结果：应使用真正的 cron 解析算法（基于字段集合的位运算推进）
 - 影响：功能 — 稀疏 cron 表达式预览结果不完整
 - 修改建议：`handlers_format.go:665` 改用按字段递进算法（标准 cron 库如 `github.com/robfig/cron/v3` 的实现，vendor 已有）
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/internal/httpserver/handlers_format.go`
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/internal/httpserver/handlers_format.go`
 - 是否需要补测试：是 — 测 `0 0 0 1 1 *` 返回 5 条 next_runs；测 `0 0 0 29 2 *`（2 月 29 日）闰年处理
 
 ### BE-016
@@ -308,7 +308,7 @@
 - 期望结果：所有含敏感数据的本地文件都应显式 0600
 - 影响：安全 — 同机其他用户可读 config.yaml / preferences / http_cases
 - 修改建议：`handlers_preferences.go:68`、`handlers_http_cases.go:307`、`config/manager.go` 的 `writeYAMLAtomic` 在 `tmp.Close()` 后、`os.Rename` 前显式 `os.Chmod(tmp, 0o600)`
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/internal/httpserver/handlers_preferences.go`、`/Users/qi/Documents/spaces/ops-toolbox/internal/httpserver/handlers_http_cases.go`、`/Users/qi/Documents/spaces/ops-toolbox/internal/config/manager.go`
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/internal/httpserver/handlers_preferences.go`、`/Users/qi/Documents/spaces/doubao-toolbox/internal/httpserver/handlers_http_cases.go`、`/Users/qi/Documents/spaces/doubao-toolbox/internal/config/manager.go`
 - 是否需要补测试：否
 
 ### BE-017
@@ -321,7 +321,7 @@
 - 期望结果：所有"执行了实际副作用"的接口都应审计：HTTP 测试记录 method/url/target_host；compare 记录 left/right path
 - 影响：安全 — 审计盲区，发生数据外泄时无法溯源
 - 修改建议：`handlers_http_request.go:74` 在 `doHTTPRequest` 返回前加 `s.audit.Write("http.request", "method", method, "url", url, "status", resp.Status)`；`handlers_compare.go:153` 和 `:253` 入口加 `s.audit.Write("compare.file_diff", "left", req.LeftPath, "right", req.RightPath)`
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/internal/httpserver/handlers_http_request.go`、`/Users/qi/Documents/spaces/ops-toolbox/internal/httpserver/handlers_compare.go`
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/internal/httpserver/handlers_http_request.go`、`/Users/qi/Documents/spaces/doubao-toolbox/internal/httpserver/handlers_compare.go`
 - 是否需要补测试：否
 
 ### BE-018
@@ -334,7 +334,7 @@
 - 期望结果：在 `safeHTTPDialContext` 里把解析出的 IP 直接用于连接（已基本做到），加注释说明防 DNS rebinding 的双重校验设计
 - 影响：安全（轻微）— 理论 TOCTOU，实际难利用
 - 修改建议：`handlers_http_request.go:225` 的 `ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)` 后，对 `ips[0].IP` 再调一次 `isBlockedHTTPIP` 显式校验
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/internal/httpserver/handlers_http_request.go`
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/internal/httpserver/handlers_http_request.go`
 - 是否需要补测试：是 — 测 `url: "http://127.0.0.1"` 被拒
 
 ### BE-019
@@ -347,7 +347,7 @@
 - 期望结果：统一为只发一个 `event: done\ndata: {"kind":"done","msg":"..."}\n\n`
 - 影响：功能一致性 — 前端需兼容两种 done
 - 修改建议：`tailmgr.go:280` 的 `pushImmediate(formatOutput(Output{Kind: "done", ...}))` 改为只更新 `s.doneMsg` 字段，不广播；`markDone` 关闭 chan 时让 `handlers_tail.go:152` 的 `!open` 分支读取 `s.doneMsg` 并发为 `event: done\ndata: <doneMsg>\n\n`
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/internal/tailmgr/tailmgr.go`、`/Users/qi/Documents/spaces/ops-toolbox/internal/httpserver/handlers_tail.go`
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/internal/tailmgr/tailmgr.go`、`/Users/qi/Documents/spaces/doubao-toolbox/internal/httpserver/handlers_tail.go`
 - 是否需要补测试：是 — 测 SSE 流只收到一个 done 且含 exit 信息
 
 ### BE-020
@@ -360,7 +360,7 @@
 - 期望结果：handler 入口处调一次 `cur := s.cur()`，后续全用 `cur` 局部变量
 - 影响：稳定性 — 配置热替换时偶发行为不一致
 - 修改建议：全局搜索所有 `s.cur()` 在同一 handler 内的多次调用，改为入口处 `cur := s.cur()` 一次取值
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/internal/httpserver/handlers_files.go`（及其他 handler）
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/internal/httpserver/handlers_files.go`（及其他 handler）
 - 是否需要补测试：否
 
 ### BE-021
@@ -373,7 +373,7 @@
 - 期望结果：`..` 检查改为精确匹配 `/../`
 - 影响：功能 — 合法文件名含 `..` 被拒下载
 - 修改建议：`handlers_misc.go:18` 改为 `strings.Contains(name, "/../") || strings.HasPrefix(name, "../")`
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/internal/httpserver/handlers_misc.go`
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/internal/httpserver/handlers_misc.go`
 - 是否需要补测试：是 — 测 `name="my..file.log"` 可下载
 
 ### BE-022
@@ -386,7 +386,7 @@
 - 期望结果：GUI 模式下应弹原生 Win32 MessageBox
 - 影响：功能 — Windows 双击启动时端口占用自动恢复失效
 - 修改建议：`portreuse_windows.go:158` 改用 `golang.org/x/sys/windows` 的 `MessageBox` API 弹原生对话框
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/internal/portreuse/portreuse_windows.go`
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/internal/portreuse/portreuse_windows.go`
 - 是否需要补测试：否（GUI 交互难测）
 
 ---
@@ -408,7 +408,7 @@
   - `web/pages/home.js:48` 删除 history 卡片对象
   - 删除 `web/pages/history.js` 文件
   - 后端 `httpserver.go:197-202` 同步处理（删除或保留）
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/web/index.html`（第 62、104 行）、`/Users/qi/Documents/spaces/ops-toolbox/web/pages/home.js`（第 48 行）、`/Users/qi/Documents/spaces/ops-toolbox/web/pages/history.js`
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/web/index.html`（第 62、104 行）、`/Users/qi/Documents/spaces/doubao-toolbox/web/pages/home.js`（第 48 行）、`/Users/qi/Documents/spaces/doubao-toolbox/web/pages/history.js`
 - 是否需要补测试：是 — 应补一个路由 smoke 测试，确保菜单项与注册路由一一对应
 
 ### FE-002
@@ -418,10 +418,10 @@
 - 页面/按钮/接口：preview.html（独立预览窗口）
 - 复现步骤：在主窗口切换到 light（或 green / hc）主题，在「日志助手」或「文件下载」页点击文件预览，打开 preview.html 独立窗口
 - 实际结果：`web/preview.html` 的 `<head>` 没有像 `web/index.html:28-38` 那样的内联主题初始化脚本，`<html>` 元素没有 `data-theme` 属性，CSS 回退到 `:root` 默认值（dark 主题）。独立窗口显示深色，与主窗口的浅色主题不一致
-- 期望结果：preview.html 应读取 `localStorage.getItem('otb_theme')` 并设置 `data-theme`，与主窗口保持一致
+- 期望结果：preview.html 应读取 `localStorage.getItem('dtb_theme')` 并设置 `data-theme`，与主窗口保持一致
 - 影响：用户在浅色主题下使用时，预览窗口突然变成深色，视觉割裂
 - 修改建议：在 `web/preview.html` 的 `<head>` 中、`<link rel="stylesheet">` 之前，加入与 `index.html:28-38` 相同的内联脚本
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/web/preview.html`
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/web/preview.html`
 - 是否需要补测试：否
 
 ### FE-003
@@ -429,12 +429,12 @@
 - 优先级：P1
 - 模块：安全 / 隐私
 - 页面/按钮/接口：preview.html 的 doPreview / btn-download
-- 复现步骤：主窗口登录后获取 token，打开 preview.html 独立窗口，preview.html 第 175 行 `doPreview` 和第 243 行 `btn-download` 直接调用 `fetch('/api/files/preview', ...)` 和 `fetch('/api/files/download', ...)`，不经过 `OTB.api.api()` 封装
+- 复现步骤：主窗口登录后获取 token，打开 preview.html 独立窗口，preview.html 第 175 行 `doPreview` 和第 243 行 `btn-download` 直接调用 `fetch('/api/files/preview', ...)` 和 `fetch('/api/files/download', ...)`，不经过 `DTB.api.api()` 封装
 - 实际结果：如果后端鉴权依赖请求头 token（而非 cookie），裸 fetch 不携带 token → 返回 401 → 预览页显示"预览失败：HTTP 401"。即使后端用 cookie 鉴权，preview.html 也绕过了 `api.js` 的 401 自动弹登录逻辑
-- 期望结果：preview.html 应使用 `OTB.api.api()` 封装
+- 期望结果：preview.html 应使用 `DTB.api.api()` 封装
 - 影响：预览功能可能完全不可用（token 鉴权场景），或鉴权失败时无友好引导
-- 修改建议：`preview.html:108` 的解构修复为 `const { api } = window.OTB.api || {};`，将第 175、243 行的裸 fetch 替换为 `api('POST', '/api/files/preview', {...})`
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/web/preview.html`（第 108、175、243 行）
+- 修改建议：`preview.html:108` 的解构修复为 `const { api } = window.DTB.api || {};`，将第 175、243 行的裸 fetch 替换为 `api('POST', '/api/files/preview', {...})`
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/web/preview.html`（第 108、175、243 行）
 - 是否需要补测试：是 — 测试 preview.html 在 401 场景下的行为
 
 ### FE-004
@@ -443,11 +443,11 @@
 - 模块：安全 / 隐私
 - 页面/按钮/接口：config.js 的 doExport / doImportUpload
 - 复现步骤：进入「系统配置」页，点击「导出配置」按钮 → `doExport`（`web/pages/config.js:685`）调用 `fetch('/api/config/export', { credentials: 'same-origin' })`；点击「导入配置」→ `doImportUpload`（:749）调用 `fetch('/api/config/import', ...)`
-- 实际结果：与 FE-003 同理，绕过 `OTB.api` 封装。token 鉴权场景下 401 不触发 auth overlay；且错误响应解析逻辑自行实现（:690、:758），与 `api.js` 的统一错误处理重复
-- 期望结果：统一使用 `OTB.api.api()`，或至少在 fetch 中注入 token
+- 实际结果：与 FE-003 同理，绕过 `DTB.api` 封装。token 鉴权场景下 401 不触发 auth overlay；且错误响应解析逻辑自行实现（:690、:758），与 `api.js` 的统一错误处理重复
+- 期望结果：统一使用 `DTB.api.api()`，或至少在 fetch 中注入 token
 - 影响：鉴权失效时用户看到原始 HTTP 错误而非登录引导；代码重复
 - 修改建议：`config.js:685` 和 `:749` 的裸 fetch 改为 `api()` 调用；导出场景需保留 blob 下载逻辑，可让 `api()` 支持 `responseType: 'blob'`
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/web/pages/config.js`（第 685-708、749-795 行）
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/web/pages/config.js`（第 685-708、749-795 行）
 - 是否需要补测试：否
 
 ### FE-005
@@ -460,7 +460,7 @@
 - 期望结果：在 Tail 停止 / 路由切换 / 页面卸载时 clearInterval
 - 影响：长时间使用主页面 tail 后切走，后台仍每 100ms 跑 flushTail，CPU 占用持续
 - 修改建议：在 `web/tail.js` 的停止逻辑和 `window.addEventListener('beforeunload', ...)` 中加入 `clearInterval`；保存 interval id 以便清理
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/web/tail.js`（第 162、180 行）
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/web/tail.js`（第 162、180 行）
 - 是否需要补测试：否
 
 ### FE-006
@@ -473,7 +473,7 @@
 - 期望结果：about.js 应在渲染时调用 `api('GET', '/api/config')` 读取版本字段（需后端 `configView` 增加 Version/BuildTime），回填到 VERSION 变量
 - 影响：版本发布后前端显示的版本号与后端实际版本脱节
 - 修改建议：后端 `httpserver.go` 的 `configView` 增加 `Version`/`BuildTime` 字段（main.go 传入 ldflags）；前端 `about.js` 异步读取后渲染
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/web/pages/about.js`（第 11 行）、`/Users/qi/Documents/spaces/ops-toolbox/internal/httpserver/httpserver.go`（configView 结构）
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/web/pages/about.js`（第 11 行）、`/Users/qi/Documents/spaces/doubao-toolbox/internal/httpserver/httpserver.go`（configView 结构）
 - 是否需要补测试：否
 
 ### FE-007
@@ -486,7 +486,7 @@
 - 期望结果：footer 应使用 CSS 变量（如 `--sidebar-width`）或相对定位
 - 影响：未来若调整 sidebar 宽度或做移动端折叠，footer 错位
 - 修改建议：`web/style.css:236` 和 `:568` 引入 `--sidebar-width: 240px` 变量，两处引用变量；响应式媒体查询中调整变量值
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/web/style.css`（第 236、568 行）
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/web/style.css`（第 236、568 行）
 - 是否需要补测试：否
 
 ### FE-008
@@ -496,10 +496,10 @@
 - 页面/按钮/接口：formatter.js copyOut / jsonpath.js btnCopy
 - 复现步骤：进入「报文格式化」页，格式化一段 JSON，点击「复制结果」按钮 → `web/pages/formatter.js:218` `document.execCommand('copy')`；进入「JSONPath」页，提取后点「复制结果」→ `web/pages/jsonpath.js:144` 同样调用
 - 实际结果：`document.execCommand('copy')` 已被 MDN 标记为 Deprecated。而 `web/core.js:149` 已实现基于 `navigator.clipboard.writeText` 的 `copyToClipboard`，且 `commands.js`、`timestamp.js`、`cron.js` 都已使用新 API，唯独 formatter.js 和 jsonpath.js 仍用旧 API
-- 期望结果：统一使用 `OTB.core.copyToClipboard`
+- 期望结果：统一使用 `DTB.core.copyToClipboard`
 - 影响：兼容性风险；代码不一致
 - 修改建议：`formatter.js:215-220` 的 `copyOut` 改为调用 `copyToClipboard(outTa.value)`；`jsonpath.js:141-146` 的 `btnCopy` onclick 改为调用 `copyToClipboard(outTa.value)`
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/web/pages/formatter.js`（第 215-220 行）、`/Users/qi/Documents/spaces/ops-toolbox/web/pages/jsonpath.js`（第 141-146 行）
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/web/pages/formatter.js`（第 215-220 行）、`/Users/qi/Documents/spaces/doubao-toolbox/web/pages/jsonpath.js`（第 141-146 行）
 - 是否需要补测试：否
 
 ### FE-009
@@ -512,7 +512,7 @@
 - 期望结果：所有确认弹窗统一走 `confirmDialog`
 - 影响：UI 风格不统一；Electron 环境下原生 confirm 可能不弹出
 - 修改建议：`downloads.js:196`、`:216` 的 `confirm(...)` 改为 `await confirmDialog(...)`（需将函数改为 async）；`config.js:244`、`:350`、`:405`、`:486`、`:656`、`:711`、`:737` 同样替换
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/web/pages/downloads.js`（第 196、216 行）、`/Users/qi/Documents/spaces/ops-toolbox/web/pages/config.js`（第 244、350、405、486、656、711、737 行）
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/web/pages/downloads.js`（第 196、216 行）、`/Users/qi/Documents/spaces/doubao-toolbox/web/pages/config.js`（第 244、350、405、486、656、711、737 行）
 - 是否需要补测试：否
 
 ### FE-010
@@ -520,12 +520,12 @@
 - 优先级：P2
 - 模块：代码质量
 - 页面/按钮/接口：websphere.js copyToClipboard
-- 复现步骤：在「日志助手」页搜索结果中点「复制路径」按钮 → 调用文件内局部 `copyToClipboard`（`websphere.js:1629` 定义）；同页"导出搜索结果"功能却调用 `OTB.core.copyToClipboard`（:2936、:2946）
+- 复现步骤：在「日志助手」页搜索结果中点「复制路径」按钮 → 调用文件内局部 `copyToClipboard`（`websphere.js:1629` 定义）；同页"导出搜索结果"功能却调用 `DTB.core.copyToClipboard`（:2936、:2946）
 - 实际结果：`websphere.js:1629` 重新实现了一遍 `copyToClipboard`，而 `core.js:149` 已有完全等价的实现。同一文件内两种调用方式混用
-- 期望结果：删除 `websphere.js:1629` 的局部 `copyToClipboard`，统一使用 `OTB.core.copyToClipboard`
+- 期望结果：删除 `websphere.js:1629` 的局部 `copyToClipboard`，统一使用 `DTB.core.copyToClipboard`
 - 影响：维护负担（修一处忘另一处）；行为可能细微不一致
-- 修改建议：`websphere.js:1629` 删除局部函数定义；第 971、1551、1577、1605、1793 行的 `copyToClipboard(...)` 改为 `OTB.core.copyToClipboard(...)`
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/web/pages/websphere.js`（第 971、1551、1577、1605、1629、1793 行）
+- 修改建议：`websphere.js:1629` 删除局部函数定义；第 971、1551、1577、1605、1793 行的 `copyToClipboard(...)` 改为 `DTB.core.copyToClipboard(...)`
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/web/pages/websphere.js`（第 971、1551、1577、1605、1629、1793 行）
 - 是否需要补测试：否
 
 ### FE-011
@@ -538,7 +538,7 @@
 - 期望结果：合并为一处定义
 - 影响：维护困惑（改了第一处不生效）；CSS 体积冗余
 - 修改建议：删除 `web/style.css:512-533` 的第一处定义，保留 `:703-719` 的第二处
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/web/style.css`（第 512-533、703-719 行）
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/web/style.css`（第 512-533、703-719 行）
 - 是否需要补测试：否
 
 ### FE-012
@@ -551,7 +551,7 @@
 - 期望结果：`renderCompare` 开头应重置 `folderScanResult = null; folderExpanded = new Set();`
 - 影响：用户看到上一次的比对结果残留，可能误以为是当前结果
 - 修改建议：`compare.js:712` 的 `renderCompare` 函数开头加入 `folderScanResult = null; folderExpanded = new Set();`
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/web/pages/compare.js`（第 24-27、712、911-912 行）
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/web/pages/compare.js`（第 24-27、712、911-912 行）
 - 是否需要补测试：否
 
 ### FE-013
@@ -564,7 +564,7 @@
 - 期望结果：应使用请求取消（AbortController）或序列号（sequence number）丢弃过期响应
 - 影响：快速操作时显示结果与当前选择不一致
 - 修改建议：在 `doParse` / `doConvert` 中维护一个递增的 `reqId`，回调中检查 `if (myReqId !== reqId) return;`
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/web/pages/cron.js`（第 84-118、141 行）、`/Users/qi/Documents/spaces/ops-toolbox/web/pages/timestamp.js`（第 94-112、132-133 行）
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/web/pages/cron.js`（第 84-118、141 行）、`/Users/qi/Documents/spaces/doubao-toolbox/web/pages/timestamp.js`（第 94-112、132-133 行）
 - 是否需要补测试：否
 
 ### FE-014
@@ -577,7 +577,7 @@
 - 期望结果：路由离开时应 `clearInterval(autoTimer)`
 - 影响：后台持续网络请求 + 无效 DOM 操作；如果 audit 路由已删除（见 FE-001），每 3 秒报一次 404
 - 修改建议：`app.js` 的 `navigate()` 应支持页面注册 `onLeave` 钩子；或 history.js 在 `window.addEventListener('hashchange', ...)` 中清理
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/web/pages/history.js`（第 38、277-287 行）
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/web/pages/history.js`（第 38、277-287 行）
 - 是否需要补测试：否
 
 ### FE-015
@@ -590,7 +590,7 @@
 - 期望结果：vendor 资源也应加版本号，或改用 SRI hash
 - 影响：升级 diff2html 后用户看到样式错乱，需强制刷新
 - 修改建议：`web/index.html:8` 和 `:110` 加 `?v=20260627`
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/web/index.html`（第 8、110 行）
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/web/index.html`（第 8、110 行）
 - 是否需要补测试：否
 
 ### FE-016
@@ -603,7 +603,7 @@
 - 期望结果：高亮应正确处理已转义的内容
 - 影响：含特殊字符的 JSON 高亮缺失（纯视觉问题）
 - 修改建议：正则改为 `[^"]*?` 配合转义后的 `&quot;` 边界
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/web/pages/http.js`（第 139-151 行）
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/web/pages/http.js`（第 139-151 行）
 - 是否需要补测试：否
 
 ### FE-017
@@ -616,7 +616,7 @@
 - 期望结果：至少 toast 提示重复 key；或改为数组值支持多值 header
 - 影响：用户误以为发了两个 header，实际只发一个
 - 修改建议：`web/pages/http.js:100` 检测重复 key 时 toast 警告
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/web/pages/http.js`（第 100-109 行）
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/web/pages/http.js`（第 100-109 行）
 - 是否需要补测试：否
 
 ### FE-018
@@ -624,12 +624,12 @@
 - 优先级：P3
 - 模块：代码质量
 - 页面/按钮/接口：preview.html 加载 api.js 但从未使用
-- 复现步骤：查看 `web/preview.html:98`：`<script src="/static/api.js"></script>`；查看 `preview.html:108`：`const { api } = window.OTB || { api: null };`；全文搜索 `api(` 调用
-- 实际结果：preview.html 加载了 api.js，但解构赋值写错（`window.OTB` 的 `api` 属性是模块对象不是函数），且全文未实际调用 `api()`。属于死代码 + 误导
+- 复现步骤：查看 `web/preview.html:98`：`<script src="/static/api.js"></script>`；查看 `preview.html:108`：`const { api } = window.DTB || { api: null };`；全文搜索 `api(` 调用
+- 实际结果：preview.html 加载了 api.js，但解构赋值写错（`window.DTB` 的 `api` 属性是模块对象不是函数），且全文未实际调用 `api()`。属于死代码 + 误导
 - 期望结果：要么正确使用 `api()`（见 FE-003），要么删除该 script 标签
 - 影响：多一次网络请求；误导维护者以为已集成 auth
-- 修改建议：配合 FE-003 修复，正确使用 `OTB.api.api()`；或删除 `preview.html:98` 行
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/web/preview.html`（第 98、108 行）
+- 修改建议：配合 FE-003 修复，正确使用 `DTB.api.api()`；或删除 `preview.html:98` 行
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/web/preview.html`（第 98、108 行）
 - 是否需要补测试：否
 
 ### FE-019
@@ -642,7 +642,7 @@
 - 期望结果：内网工具可酌情，但生产分发建议加 SRI
 - 影响：供应链安全风险低（内网），但不符合最佳实践
 - 修改建议：生成 `integrity="sha384-..."` 并加 `crossorigin="anonymous"`
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/web/index.html`（第 8、110 行）
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/web/index.html`（第 8、110 行）
 - 是否需要补测试：否
 
 ### FE-020
@@ -655,7 +655,7 @@
 - 期望结果：标签应改为"已下线"或直接删除卡片
 - 影响：误导用户以为功能可用
 - 修改建议：配合 FE-001 一并处理，删除 `home.js:48` 的 history 卡片
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/web/pages/home.js`（第 48 行）
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/web/pages/home.js`（第 48 行）
 - 是否需要补测试：否
 
 ### FE-021
@@ -668,7 +668,7 @@
 - 期望结果：改为通过 `postMessage` 向新窗口传递数据，新窗口加载独立的 JS 文件
 - 影响：可维护性差，但当前功能正常
 - 修改建议：长期重构 — 新建 `web/diff-window.html` + `web/diff-window.js`，主窗口 `window.open` 后 `postMessage` 传 diff 数据
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/web/pages/compare.js`（第 156-358 行）
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/web/pages/compare.js`（第 156-358 行）
 - 是否需要补测试：否
 
 ---
@@ -685,7 +685,7 @@
 - 期望结果：要么删除后端死路由，要么在 README 标注「保留供脚本/SDK 使用」
 - 影响：死路由，无直接功能影响；维护负担
 - 修改建议：保留供 acceptance/外部脚本调用，但在 README API 表里明确标注
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/internal/httpserver/httpserver.go`、`/Users/qi/Documents/spaces/ops-toolbox/internal/httpserver/handlers_logs_list.go`、`/Users/qi/Documents/spaces/ops-toolbox/README.md`
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/internal/httpserver/httpserver.go`、`/Users/qi/Documents/spaces/doubao-toolbox/internal/httpserver/handlers_logs_list.go`、`/Users/qi/Documents/spaces/doubao-toolbox/README.md`
 - 是否需要补测试：否（已有 `httpssh_test.go:201` 覆盖）
 
 ### API-002
@@ -698,7 +698,7 @@
 - 期望结果：同 API-001
 - 影响：死路由
 - 修改建议：保留供 acceptance/SDK，README 标注
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/internal/httpserver/handlers_logs_search.go`、`/Users/qi/Documents/spaces/ops-toolbox/README.md`
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/internal/httpserver/handlers_logs_search.go`、`/Users/qi/Documents/spaces/doubao-toolbox/README.md`
 - 是否需要补测试：否
 
 ### API-003
@@ -711,7 +711,7 @@
 - 期望结果：README 删除该行，或补一个真的能启动下载的 `/api/logs/download` 接口
 - 影响：用户照 README 调用会 404
 - 修改建议：删除 README 第 333 行的错误条目
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/README.md`
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/README.md`
 - 是否需要补测试：否
 
 ### API-004
@@ -724,7 +724,7 @@
 - 期望结果：README 改为 `PUT /api/preferences`
 - 影响：用户照 README 用 POST 会 405
 - 修改建议：改 README
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/README.md`、`/Users/qi/Documents/spaces/ops-toolbox/internal/httpserver/handlers_preferences.go`
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/README.md`、`/Users/qi/Documents/spaces/doubao-toolbox/internal/httpserver/handlers_preferences.go`
 - 是否需要补测试：否
 
 ### API-005
@@ -737,7 +737,7 @@
 - 期望结果：补全 README API 表
 - 影响：用户/集成方照 README 调用会以为接口不存在
 - 修改建议：把上面接口按现有分组合并进 README「📡 API 列表」表
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/README.md`
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/README.md`
 - 是否需要补测试：否
 
 ---
@@ -754,7 +754,7 @@
 - 期望结果：production.example 给出注释掉的 `auth:` 示例
 - 影响：用户不知道可以启用 token 认证
 - 修改建议：在 production.example 末尾加注释段
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/config.yaml.production.example`
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/config.yaml.production.example`
 - 是否需要补测试：是（加测试：把 production.example 解析后跑 Validate，确保示例合法）
 
 ### CFG-002
@@ -767,7 +767,7 @@
 - 期望结果：给出 `credential_store: keyring` 默认示例 + 注释说明 `file` / `disabled` 取值含义
 - 影响：用户不知道有 `file` 模式（适合无 keyring 的 headless 服务器）
 - 修改建议：在 `app:` 段加注释示例
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/config.yaml.production.example`
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/config.yaml.production.example`
 - 是否需要补测试：是
 
 ### CFG-003
@@ -780,7 +780,7 @@
 - 期望结果：给出注释示例
 - 影响：用户遇到 OpenSSH 6.2p2 / AIX 老服务器连不上时无文档可循
 - 修改建议：加注释段
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/config.yaml.production.example`
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/config.yaml.production.example`
 - 是否需要补测试：否
 
 ### CFG-004
@@ -793,7 +793,7 @@
 - 期望结果：给出注释示例（如 Notepad++ / VS Code）
 - 影响：用户不知道有「外部打开器」功能
 - 修改建议：加注释段
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/config.yaml.production.example`
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/config.yaml.production.example`
 - 是否需要补测试：否
 
 ### CFG-005
@@ -806,7 +806,7 @@
 - 期望结果：给出注释示例，说明默认 7 天 / 1000 条
 - 影响：用户不知道有自动清理，可能让 downloads 目录无限增长
 - 修改建议：加注释段
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/config.yaml.production.example`
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/config.yaml.production.example`
 - 是否需要补测试：否
 
 ### CFG-006
@@ -819,7 +819,7 @@
 - 期望结果：给出注释示例（如 `/opt/IBM/WebSphere` / `/var/log`）
 - 影响：用户开了 `enable_free_file_browser: true` 但不知道配 `free_file_roots` 限定前缀；任意路径下载 = 走 SSH 账号全权限，内网分发场景风险高
 - 修改建议：加注释段
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/config.yaml.production.example`
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/config.yaml.production.example`
 - 是否需要补测试：否
 
 ### CFG-007
@@ -832,7 +832,7 @@
 - 期望结果：至少有一个 server 给出注释示例
 - 影响：高安全场景用户不知道可做 host key pinning
 - 修改建议：在某个 server 里加注释示例
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/config.yaml.production.example`
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/config.yaml.production.example`
 - 是否需要补测试：否
 
 ### CFG-008
@@ -845,7 +845,7 @@
 - 期望结果：legacy-node-1 这种 AIX 示例应该明确配 `list_mode: posix_ls`
 - 影响：用户照搬示例遇到老 AIX 仍可能踩 fallback 路径
 - 修改建议：在 legacy-node-1 的 log_dirs 里加 `list_mode: posix_ls`
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/config.yaml.production.example`
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/config.yaml.production.example`
 - 是否需要补测试：否
 
 ### CFG-009
@@ -858,7 +858,7 @@
 - 期望结果：production.example 作为生产部署参考，应在文件顶部 WARNING 区块里明确列出这些默认行为
 - 影响：用户复制 example 当 config.yaml 用，会在不知情情况下开放任意路径下载
 - 修改建议：在 production.example 顶部注释段加「默认安全行为清单」+ 推荐「生产环境至少配 free_file_roots + allowed_download_roots」
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/config.yaml.production.example`
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/config.yaml.production.example`
 - 是否需要补测试：否
 
 ---
@@ -875,7 +875,7 @@
 - 期望结果：补全 README API 表
 - 影响：用户/集成方照 README 调用会以为接口不存在
 - 修改建议：把漏掉的接口合并进 README「📡 API 列表」表
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/README.md`
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/README.md`
 - 是否需要补测试：否
 
 ### DOC-002
@@ -888,7 +888,7 @@
 - 期望结果：徽章升到 v0.8；Release Notes 补 v0.6 / v0.7 / v0.8 段落
 - 影响：用户照 README 以为功能截止 v0.5
 - 修改建议：改 badge + 补 Release Notes
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/README.md`
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/README.md`
 - 是否需要补测试：否
 
 ### DOC-003
@@ -901,7 +901,7 @@
 - 期望结果：补全 6 个文件
 - 影响：项目结构图与实际不符
 - 修改建议：补到 README 项目结构树
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/README.md`
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/README.md`
 - 是否需要补测试：否
 
 ### DOC-004
@@ -914,7 +914,7 @@
 - 期望结果：README 改为 `modern | compat | no-ecdh | legacy | auto`
 - 影响：用户照 README 配 `compat-dh-before-ecdh` 会被 `Validate()` 拒，启动失败
 - 修改建议：改 README 第 513、701 行
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/README.md`
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/README.md`
 - 是否需要补测试：否
 
 ### DOC-005
@@ -927,7 +927,7 @@
 - 期望结果：README 改成实际字段名
 - 影响：用户照 README 配 `context_lines: 30` 不生效（yaml 会忽略未知字段，默认值仍是 30 巧合没暴露问题，但配 `multi_server_concurrency` 就完全不生效）
 - 修改建议：改 README 配置详解
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/README.md`
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/README.md`
 - 是否需要补测试：否
 
 ### DOC-006
@@ -940,7 +940,7 @@
 - 期望结果：README 改为 `# keyring | file | disabled | off | none`
 - 影响：用户不知道有 `file` 模式
 - 修改建议：改 README
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/README.md`
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/README.md`
 - 是否需要补测试：否
 
 ### DOC-007
@@ -953,7 +953,7 @@
 - 期望结果：README 改为「禁止 `; | & ` $ ( ) { } [ ] < > \ " ' 空白`，允许 `* ?`（glob）」
 - 影响：用户照 README 以为不能写 `*.log`，被误导
 - 修改建议：改 README 第 542 行
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/README.md`
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/README.md`
 - 是否需要补测试：否
 
 ### DOC-008
@@ -966,7 +966,7 @@
 - 期望结果：README 补一句「启用 auth 后允许 0.0.0.0 / 内网 IP」
 - 影响：用户想远程访问时不知道正确做法
 - 修改建议：改 README 第 498 行
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/README.md`
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/README.md`
 - 是否需要补测试：否
 
 ### DOC-009
@@ -979,7 +979,7 @@
 - 期望结果：安全设计补一条「可选启用 Bearer token 认证 + IP 白名单，启用后可监听 0.0.0.0」
 - 影响：用户不知道工具有认证能力
 - 修改建议：补一条
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/README.md`
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/README.md`
 - 是否需要补测试：否
 
 ### DOC-010
@@ -992,7 +992,7 @@
 - 期望结果：标语改为「跨平台 · 纯 Go 单 exe · 启动即用 · 默认仅本机访问」
 - 影响：轻微误导
 - 修改建议：改标语
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/README.md`
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/README.md`
 - 是否需要补测试：否
 
 ### DOC-011
@@ -1005,7 +1005,7 @@
 - 期望结果：要么恢复 nav 链接，要么 README 注明「该功能仅通过 audit.log 文件 + 手敲 hash 访问」
 - 影响：用户照 README 找不到入口
 - 修改建议：恢复 nav 链接（推荐）或改 README
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/web/index.html`、`/Users/qi/Documents/spaces/ops-toolbox/README.md`
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/web/index.html`、`/Users/qi/Documents/spaces/doubao-toolbox/README.md`
 - 是否需要补测试：否
 
 ### DOC-012
@@ -1018,7 +1018,7 @@
 - 期望结果：统一文案，建议改 nav 为「文件下载」避免误导
 - 影响：轻微文案不一致
 - 修改建议：改 `index.html:52` 文案
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/web/index.html`
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/web/index.html`
 - 是否需要补测试：否
 
 ### DOC-013
@@ -1031,7 +1031,7 @@
 - 期望结果：补全 internal/ 子包说明
 - 影响：用户读 README 看不到完整代码组织
 - 修改建议：补到 README 项目结构树
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/README.md`
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/README.md`
 - 是否需要补测试：否
 
 ### DOC-014
@@ -1044,7 +1044,7 @@
 - 期望结果：README 补充 file 模式 + AAD 绑定说明
 - 影响：用户不知道 file 模式存在
 - 修改建议：改 README
-- 涉及文件：`/Users/qi/Documents/spaces/ops-toolbox/README.md`
+- 涉及文件：`/Users/qi/Documents/spaces/doubao-toolbox/README.md`
 - 是否需要补测试：否
 
 ---

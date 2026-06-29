@@ -94,11 +94,11 @@
     }
 
     return new Promise((resolve) => {
-      const overlay = el('div', { class: 'otb-dialog-overlay' });
-      const dialog = el('div', { class: 'otb-dialog' });
-      const title = el('div', { class: 'otb-dialog-title', text: opts.title || '请确认' });
-      const body = el('div', { class: 'otb-dialog-body', text: msg });
-      const actions = el('div', { class: 'otb-dialog-actions' });
+      const overlay = el('div', { class: 'dtb-dialog-overlay' });
+      const dialog = el('div', { class: 'dtb-dialog' });
+      const title = el('div', { class: 'dtb-dialog-title', text: opts.title || '请确认' });
+      const body = el('div', { class: 'dtb-dialog-body', text: msg });
+      const actions = el('div', { class: 'dtb-dialog-actions' });
       const cancelBtn = el('button', {
         class: 'btn',
         type: 'button',
@@ -181,26 +181,26 @@
   //   - duration    (ms, 默认 6000；0 = 不自动消失)
   //   - id          (string)   同 id 通知会替换旧的（避免堆叠）
   //
-  // 通知堆在 body 右上角的 #otb-notify-stack 容器里，
-  // 每条是一个 .otb-notify 卡片；点 × 关闭按钮立即移除。
+  // 通知堆在 body 右上角的 #dtb-notify-stack 容器里，
+  // 每条是一个 .dtb-notify 卡片；点 × 关闭按钮立即移除。
   function notify(opts) {
     opts = opts || {};
     const stack = ensureNotifyStack();
     const id = opts.id;
     if (id) {
-      const old = stack.querySelector('.otb-notify[data-id="' + cssEscape(id) + '"]');
+      const old = stack.querySelector('.dtb-notify[data-id="' + cssEscape(id) + '"]');
       if (old) old.remove();
     }
-    const card = el('div', { class: 'otb-notify' + (opts.type ? ' ' + opts.type : '') });
+    const card = el('div', { class: 'dtb-notify' + (opts.type ? ' ' + opts.type : '') });
     if (id) card.setAttribute('data-id', id);
     if (opts.title) {
-      card.appendChild(el('div', { class: 'otb-notify-title', text: opts.title }));
+      card.appendChild(el('div', { class: 'dtb-notify-title', text: opts.title }));
     }
     if (opts.body) {
-      card.appendChild(el('div', { class: 'otb-notify-body', text: opts.body }));
+      card.appendChild(el('div', { class: 'dtb-notify-body', text: opts.body }));
     }
     if (opts.actions && opts.actions.length) {
-      const actionsEl = el('div', { class: 'otb-notify-actions' });
+      const actionsEl = el('div', { class: 'dtb-notify-actions' });
       opts.actions.forEach(a => {
         actionsEl.appendChild(el('button', {
           class: 'btn btn-sm',
@@ -214,7 +214,7 @@
       card.appendChild(actionsEl);
     }
     card.appendChild(el('button', {
-      class: 'otb-notify-close',
+      class: 'dtb-notify-close',
       text: '×',
       title: '关闭',
       onclick: () => { card.remove(); updateClearAllBtn(); }
@@ -224,15 +224,15 @@
     return card;
   }
   function ensureNotifyStack() {
-    let stack = document.getElementById('otb-notify-stack');
+    let stack = document.getElementById('dtb-notify-stack');
     if (!stack) {
-      stack = el('div', { id: 'otb-notify-stack', class: 'otb-notify-stack' });
+      stack = el('div', { id: 'dtb-notify-stack', class: 'dtb-notify-stack' });
       const clearAll = el('button', {
-        id: 'otb-notify-clearall',
-        class: 'otb-notify-clearall',
+        id: 'dtb-notify-clearall',
+        class: 'dtb-notify-clearall',
         text: '全部清空',
         onclick: () => {
-          const cards = stack.querySelectorAll('.otb-notify');
+          const cards = stack.querySelectorAll('.dtb-notify');
           cards.forEach(c => c.remove());
           updateClearAllBtn();
         }
@@ -243,11 +243,11 @@
     return stack;
   }
   function updateClearAllBtn() {
-    const stack = document.getElementById('otb-notify-stack');
+    const stack = document.getElementById('dtb-notify-stack');
     if (!stack) return;
-    const clearAll = document.getElementById('otb-notify-clearall');
+    const clearAll = document.getElementById('dtb-notify-clearall');
     if (!clearAll) return;
-    const cards = stack.querySelectorAll('.otb-notify');
+    const cards = stack.querySelectorAll('.dtb-notify');
     clearAll.style.display = cards.length >= 2 ? 'block' : 'none';
   }
   core.notify = notify;
@@ -451,10 +451,26 @@
 
   // -------- "上次选择" 记忆（系统 / 服务器 / 日志目录 / 凭据） --------
   //
-  // 用 localStorage 跨页面跨刷新记，键格式 otb:last:<page>:<key>
+  // 用 localStorage 跨页面跨刷新记，键格式 dtb:last:<page>:<key>
   // 跨页面共享（websphere / files 都用同一份），自动 JSON 化。
   // 写入失败（隐私模式 / quota 超）静默忽略。
-  const LAST_PREFIX = 'otb:last:';
+  //
+  // v0.9 rebrand: 从 otb:last:* 迁移到 dtb:last:*（一次性，不删除旧键）。
+  const LAST_PREFIX = 'dtb:last:';
+  try {
+    if (typeof localStorage !== 'undefined') {
+      var LAST_OLD = 'otb:last:';
+      for (var li = 0; li < localStorage.length; li++) {
+        var lk = localStorage.key(li);
+        if (lk && lk.indexOf(LAST_OLD) === 0) {
+          var lNew = LAST_PREFIX + lk.slice(LAST_OLD.length);
+          if (!localStorage.getItem(lNew)) {
+            localStorage.setItem(lNew, localStorage.getItem(lk));
+          }
+        }
+      }
+    }
+  } catch (_) { /* ignore migration errors */ }
 
   function lastGet(page, key) {
     try {

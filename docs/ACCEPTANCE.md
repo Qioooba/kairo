@@ -22,8 +22,8 @@
 
 | # | 操作 | 期望结果 |
 | --- | --- | --- |
-| 1.1 | 把交付目录放到 `D:\ops-toolbox\` | 目录结构完整 |
-| 1.2 | `Win+R` → `cmd` → `cd /d D:\ops-toolbox` → `DoubaoToolbox.exe` | 控制台输出 `[豆包工具箱] 工具箱已启动: http://127.0.0.1:18080` 等日志 |
+| 1.1 | 把交付目录放到 `D:\doubao-toolbox\` | 目录结构完整 |
+| 1.2 | `Win+R` → `cmd` → `cd /d D:\doubao-toolbox` → `DoubaoToolbox.exe` | 控制台输出 `[豆包工具箱] 工具箱已启动: http://127.0.0.1:18080` 等日志 |
 | 1.3 | 默认浏览器自动打开 `http://127.0.0.1:18080` | 进入首页，看到 6 个功能卡片 |
 | 1.4 | 左侧菜单点击"WebSphere 日志" | 进入日志助手页面，能看到系统/服务器下拉 |
 | 1.5 | 左侧菜单点击"报文格式化" | 进入格式化页面 |
@@ -274,7 +274,7 @@ op=logs.context
 | P1-09 | 文件下载页没常用目录 | 「常用目录」按钮栏（点即跳转）+「⭐ 收藏当前路径」+「⚙ 管理」（弹 modal 改别名/路径/删/上下移）| ✅ v0.5-E 0b98581 |
 | P1-10 | 文件列表没模糊搜索 | filter input 接受子串 / `*.log` / `SystemOut*` / `log?` 通配 + "过滤后 X / Y" 计数 | ✅ v0.5-E 0b98581 |
 | P1-11 | 点击文件名新窗口预览 | 后端 `/api/files/preview`（前 1MB / 上限 10MB / utf-8 或 gbk / 二进制检测）；前端 modal 默认弹 + Shift+点击 → `/preview.html` 独立新窗口 | ✅ v0.5-E 0b98581 |
-| P1-12 | 下载完成不知道文件在哪 | Item 加 `abs_path` 字段；`/api/local/reveal-file` + `/api/local/open-folder` + `/api/downloads/{name}/open-dir`（B3）；下载完成 → `OTB.core.notify` 右上角通知（含 title/path/操作按钮「📂 打开 / 📋 复制 / 📜 查看下载历史」） | ✅ v0.5-F a53840f + 5f |
+| P1-12 | 下载完成不知道文件在哪 | Item 加 `abs_path` 字段；`/api/local/reveal-file` + `/api/local/open-folder` + `/api/downloads/{name}/open-dir`（B3）；下载完成 → `DTB.core.notify` 右上角通知（含 title/path/操作按钮「📂 打开 / 📋 复制 / 📜 查看下载历史」） | ✅ v0.5-F a53840f + 5f |
 
 ### 5f.3 页面可用性（9 条 P2）
 
@@ -285,7 +285,7 @@ op=logs.context
 | P2-15 | 复制服务器按钮加说明 | 同 P2-13 合并 | ✅ v0.5-F |
 | P2-16 | 系统紫色图标"系统"两字横排 | `grid-template-columns: auto 1.4fr 2fr auto`（不再固定 36px 挤成竖排）；新增 tier-badge "业务系统 N" badge | ✅ v0.5-C 4d323a3 + 5f |
 | P2-17 | 记住密码默认勾上 | `files.js` `rememberChk.checked = true`；`websphere.js` 同 | ✅ v0.4-final + v0.5 |
-| P2-18 | 目标服务器默认勾上 + 记忆上次操作 | `OTB.core.lastGet/lastSet('websphere', 'sel', {system, servers, dirs, username})`；进入页面 `lastForSys` 恢复 | ✅ v0.4-final + v0.5 |
+| P2-18 | 目标服务器默认勾上 + 记忆上次操作 | `DTB.core.lastGet/lastSet('websphere', 'sel', {system, servers, dirs, username})`；进入页面 `lastForSys` 恢复 | ✅ v0.4-final + v0.5 |
 | P2-19 | 背景色可切换 | `web/theme.js` + localStorage 持久化 + index.html inline script 防 FOUC + 顶栏 ☀️/🌙 按钮 | ✅ v0.5-C 4d323a3 |
 | P2-20 | FTP 下载到指定目录 | `dlTargetDirInp` + 后端 `validateTargetDir`（绝对路径/mkdir/写探针）+ zip 路径也跟 target_dir 走 | ✅ v0.5-D 18ce504 |
 

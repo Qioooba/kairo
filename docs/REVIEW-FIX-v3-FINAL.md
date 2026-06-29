@@ -16,7 +16,7 @@
 - 30+ 新单测
 
 ### Agent 2 — 前端 v3
-- web/app.js 2664 行 → 65 行入口 + 12 个模块（零构建，window.OTB.* namespace）
+- web/app.js 2664 行 → 65 行入口 + 12 个模块（零构建，window.DTB.* namespace）
 - style.css token 化（v3 设计 token）
 - 4 个新功能 UI：
   - **C1** 日志搜索时间窗口（10m/1h/today/自定义 datetime-local）
@@ -41,7 +41,7 @@ go build -mod=vendor ./...          → pass
 ### 2.2 Go 单元测试
 ```
 go test -mod=vendor -count=1 ./...  → 13/13 packages pass
-  ops-toolbox                        0.012s
+  doubao-toolbox                        0.012s
   internal/audit                     0.161s (+B2 JSON 导出 7 个测试)
   internal/config                    0.244s (+Encoding 测试 2 个)
   internal/credentials               0.352s

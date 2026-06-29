@@ -141,8 +141,8 @@ async function main() {
     // 兜底注入（确保有 span 可断言）
     await page.evaluate(() => {
       const out = document.getElementById('ws-tail-out');
-      if (out && OTB && OTB.core && OTB.core.renderHighlightedLine) {
-        const frag = OTB.core.renderHighlightedLine('test ERROR line and WARN too', OTB.state.tailHighlights);
+      if (out && DTB && DTB.core && DTB.core.renderHighlightedLine) {
+        const frag = DTB.core.renderHighlightedLine('test ERROR line and WARN too', DTB.state.tailHighlights);
         frag.appendChild(document.createTextNode('\n'));
         out.appendChild(frag);
       }

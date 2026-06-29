@@ -39,11 +39,11 @@
 
 ### 方式 A：直接运行发版 exe（同事拿到包就这样用）
 
-1. 解压发版 zip 到任意目录，比如 `D:\ops-toolbox\`
+1. 解压发版 zip 到任意目录，比如 `D:\doubao-toolbox\`
 2. **不要双击 exe**，先用 `cmd` 启动看完整日志：
 
    ```bat
-   cd /d D:\ops-toolbox
+   cd /d D:\doubao-toolbox
    DoubaoToolbox.exe
    ```
 
@@ -53,7 +53,7 @@
 
 ```bash
 git clone <repo-url>
-cd ops-toolbox
+cd doubao-toolbox
 go run .
 ```
 
@@ -83,12 +83,12 @@ go run .
 
 | 偏好 | 键 |
 | --- | --- |
-| 主题（dark / light / green / hc） | `otb_theme` |
-| WebSphere 上次选的「系统 / 服务器 / 目录 / 用户名」 | `otb:last:websphere:sel` |
-| 文件下载页「当前路径 / 过滤词」 | `otb:last:files:sel` / `otb:last:files:filter` |
-| WebSphere 目标区折叠 / 展开 | `otb:last:websphere:target_collapsed` |
-| 提示 banner 关闭状态 | `otb:dismissed:*` |
-| 实时 tail 凭据（单次内存 → opener 共享，不进 LS） | `window.opener.OTB._tailCred` |
+| 主题（dark / light / green / hc） | `dtb_theme`（老 `otb_theme` 自动迁移） |
+| WebSphere 上次选的「系统 / 服务器 / 目录 / 用户名」 | `dtb:last:websphere:sel`（老 `otb:last:websphere:sel` 自动迁移） |
+| 文件下载页「当前路径 / 过滤词」 | `dtb:last:files:sel` / `dtb:last:files:filter` |
+| WebSphere 目标区折叠 / 展开 | `dtb:last:websphere:target_collapsed` |
+| 提示 banner 关闭状态 | `dtb:dismissed:*`（老 `otb:dismissed:*` 自动迁移） |
+| 实时 tail 凭据（单次内存 → opener 共享，不进 LS） | `window.opener.DTB._tailCred` |
 
 > 注意：localStorage 是浏览器本地存储，**换浏览器 / 清缓存 / 隐身模式**会丢；
 > 想跨电脑同步就走 `data/preferences.json`（tail 高亮目前走的这条路径）。
@@ -472,7 +472,7 @@ python scripts/fake-websphere/     # 假 WebSphere 日志布局
 ### macOS / Linux 上交叉编译 Windows exe
 
 ```bash
-cd ops-toolbox
+cd doubao-toolbox
 
 # 第一次 clone 后，把依赖固化到 vendor/
 go mod vendor
@@ -598,7 +598,7 @@ systems:
 ## 📁 项目结构
 
 ```
-ops-toolbox/
+doubao-toolbox/
 ├── main.go                      # 入口：解析 -workdir / 加载 config / 起 HTTP server
 ├── debug_run.go                 # 调试辅助
 ├── config.yaml                  # 运行时配置

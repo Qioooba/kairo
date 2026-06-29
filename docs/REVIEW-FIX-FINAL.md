@@ -36,7 +36,7 @@
 - `internal/sftpclient` — 6 个
 - `internal/sshclient` — 25+ 个（含 Categorize 10 个 + Dial + Run + Stream + SafeWriter）
 - `internal/tailmgr` — 多项
-- 顶层 `ops-toolbox` — main 流程
+- 顶层 `doubao-toolbox` — main 流程
 
 ---
 

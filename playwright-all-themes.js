@@ -99,7 +99,7 @@ async function run() {
     for (const theme of THEMES) {
       for (const p of PAGES) {
         // 1) 切主题
-        await page.evaluate((t) => window.OTB.theme.set(t), theme);
+        await page.evaluate((t) => window.DTB.theme.set(t), theme);
         await page.waitForTimeout(80);
 
         // 2) 路由

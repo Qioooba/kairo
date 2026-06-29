@@ -6,7 +6,7 @@
 //   - /http：保存用例 → 列表出现 → 加载回填；env 组保存 → 切换 → 占位替换
 //
 // 跑法：
-//   1. 后端起：cd ops-toolbox && go run . (或 prebuild 二进制)
+//   1. 后端起：cd doubao-toolbox && go run . (或 prebuild 二进制)
 //   2. node playwright-v0.7.js
 //
 // 依赖：playwright（先 npm i playwright）

@@ -148,10 +148,10 @@ func resolveProfile(srv Server, defaultName string) (name string, profs []sshCom
 	}
 }
 
-// sshDebugLog 把 ops-toolbox 自己的 SSH 调用细节写到独立文件
+// sshDebugLog 把 豆包工具箱 自己的 SSH 调用细节写到独立文件
 // （<exe 目录>/logs/ssh_debug.log），便于排查老 sshd 兼容性问题。
 // 注意：Go x/crypto/ssh 内部 KEXINIT 协商没有暴露 Logf API，
-// 这里只能记 ops-toolbox 自己的配置/调用/错误/耗时，
+// 这里只能记 豆包工具箱 自己的配置/调用/错误/耗时，
 // 真正的 SSH 协议包需要 ssh -vvv 或 Wireshark 抓。
 var (
 	sshDebugOnce sync.Once
@@ -219,10 +219,10 @@ func cryptoSSHVersion() string {
 	return "not found in build info"
 }
 
-// sshTrafficLog 把 ops-toolbox 跟远端 sshd 之间的 TCP 字节流镜像到
+// sshTrafficLog 把 豆包工具箱 跟远端 sshd 之间的 TCP 字节流镜像到
 // <exe 目录>/logs/ssh_traffic.log（hex dump 格式）。
 // 既然不能装 ssh 客户端跑 ssh -vvv 抓真实 KEXINIT，
-// 就让 ops-toolbox 自己抓，这样能直接看到 client 发了什么 KEXINIT、
+// 就让 豆包工具箱 自己抓，这样能直接看到 client 发了什么 KEXINIT、
 // server 回了什么 KEXINIT、协商到哪一步 close 的。
 var (
 	sshTrafficOnce     sync.Once

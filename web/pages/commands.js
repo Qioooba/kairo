@@ -44,7 +44,7 @@
   ];
 
   // ===== localStorage 收藏 =====
-  const FAV_LS_KEY = 'otb:commands:favs';
+  const FAV_LS_KEY = 'dtb:commands:favs';
   function loadFavs() {
     try {
       const raw = localStorage.getItem(FAV_LS_KEY);

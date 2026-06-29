@@ -58,8 +58,8 @@ class BasePage {
   async closeAllDialogs() {
     try {
       const overlaySelectors = [
-        '.otb-dialog-overlay',
-        '.otb-modal-overlay',
+        '.dtb-dialog-overlay',
+        '.dtb-modal-overlay',
         '.modal-overlay',
         '[class*="dialog-overlay"]',
         '[class*="modal-overlay"]',
@@ -71,13 +71,13 @@ class BasePage {
           const isVisible = await overlay.isVisible().catch(() => false);
           if (isVisible) {
             const closeSelectors = [
-              '.otb-dialog .close',
-              '.otb-modal .close',
+              '.dtb-dialog .close',
+              '.dtb-modal .close',
               '.dialog-close',
               '.modal-close',
               'button:has-text("关闭")',
               'button:has-text("取消")',
-              '.otb-dialog-footer button:last-child',
+              '.dtb-dialog-footer button:last-child',
               '.modal-footer button:last-child',
             ];
             for (const closeSel of closeSelectors) {
@@ -101,8 +101,8 @@ class BasePage {
     try {
       await this.closeAllDialogs();
       const overlaySelectors = [
-        '.otb-dialog-overlay',
-        '.otb-modal-overlay',
+        '.dtb-dialog-overlay',
+        '.dtb-modal-overlay',
         '.modal-overlay',
         '[class*="dialog-overlay"]',
         '[class*="modal-overlay"]',
@@ -239,7 +239,7 @@ class BasePage {
           }
         }
 
-        const dialogSelectors = ['.otb-dialog', '.otb-modal', '.modal', '.dialog'];
+        const dialogSelectors = ['.dtb-dialog', '.dtb-modal', '.modal', '.dialog'];
         for (const sel of dialogSelectors) {
           const dialogs = document.querySelectorAll(sel);
           dialogs.forEach((d, i) => {

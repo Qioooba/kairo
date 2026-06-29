@@ -105,8 +105,8 @@ async function run() {
 
     for (const theme of THEMES) {
       console.log('\n=== 主题: ' + theme + ' ===');
-      // 通过 OTB.theme.set 切换
-      await page.evaluate((t) => window.OTB.theme.set(t), theme);
+      // 通过 DTB.theme.set 切换
+      await page.evaluate((t) => window.DTB.theme.set(t), theme);
       await page.waitForTimeout(150); // 让 CSS 应用
 
       // 读主题变量
@@ -132,7 +132,7 @@ async function run() {
         // 等渲染稳定
         await page.waitForTimeout(200);
         // 重新 apply 主题（路由切换可能没影响，但保险）
-        await page.evaluate((t) => window.OTB.theme.set(t), theme);
+        await page.evaluate((t) => window.DTB.theme.set(t), theme);
         await page.waitForTimeout(100);
         const shot = path.join(OUT, theme + '-' + p.name + '.png');
         await page.screenshot({ path: shot });
@@ -159,7 +159,7 @@ async function run() {
 
     // 额外：在 light 主题下，HTTP 页的 sidebar / 折叠区 / 按钮颜色要合理
     console.log('\n=== light 主题专项：HTTP 页细节 ===');
-    await page.evaluate(() => window.OTB.theme.set('light'));
+    await page.evaluate(() => window.DTB.theme.set('light'));
     await page.goto(BASE + '/#/http');
     await page.waitForSelector('#http2-url', { timeout: 5000 });
     await page.waitForTimeout(300);
@@ -175,7 +175,7 @@ async function run() {
 
     // 在 hc 主题下：所有文字都该是高对比（白底黑字 / 黑底白字，对比度高）
     console.log('\n=== hc 主题专项 ===');
-    await page.evaluate(() => window.OTB.theme.set('hc'));
+    await page.evaluate(() => window.DTB.theme.set('hc'));
     await page.goto(BASE + '/#/timestamp');
     await page.waitForSelector('#ts-in', { timeout: 5000 });
     await page.fill('#ts-in', 'now');
@@ -189,7 +189,7 @@ async function run() {
 
     // 在 green 主题下：检查背景色调（绿色系偏暖）
     console.log('\n=== green 主题专项 ===');
-    await page.evaluate(() => window.OTB.theme.set('green'));
+    await page.evaluate(() => window.DTB.theme.set('green'));
     await page.goto(BASE + '/#/cron');
     await page.waitForSelector('#cron-in', { timeout: 5000 });
     await page.fill('#cron-in', '0 9 * * 1-5');

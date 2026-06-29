@@ -22,7 +22,7 @@
 ## 1. 项目结构（按 internal/ 模块梳理）
 
 ```
-ops-toolbox/
+doubao-toolbox/
 ├── main.go                     # 入口：embed web + load config + start HTTP
 ├── config.yaml                 # 运行时配置（app / systems / search）
 ├── web/                        # 嵌入式前端（IIFE 单文件 SPA）

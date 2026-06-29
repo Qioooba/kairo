@@ -275,7 +275,7 @@ func cloneMetaIndex(src *metaIndex) *metaIndex {
 //   - 跳过隐藏文件（. 开头，含 .doubao-toolbox-meta.json 索引文件）；
 //   - 子目录（如 downloads/20260621/）递归；
 //   - rootDir 不存在时返回空切片和 nil；
-//   - 列表策略：优先列有元数据的文件（确认是 ops-toolbox 下载产物）；
+//   - 列表策略：优先列有元数据的文件（确认是 豆包工具箱 下载产物）；
 //     没元数据的兜底按扩展名收（.log / .zip / .txt / .gz / .tar / .properties 等常见后缀），
 //     避免 v0.3 文件浏览器下载的 .properties / .xml 等"任意文件"不显示在历史里。
 //

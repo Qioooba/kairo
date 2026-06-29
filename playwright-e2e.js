@@ -4,7 +4,7 @@
 //   项 1: files 过滤 input 不失焦 + 标签横排
 //   项 2: 下载完成通知只 1 条
 //   项 3: 通知"打开所在目录"按钮可点
-//   项 4: 下载文件名保留原 basename + downloads/.ops-toolbox-meta.json 单文件索引
+// 项 4: 下载文件名保留原 basename + downloads/.doubao-toolbox-meta.json 单文件索引
 //   项 5: 文件下载状态行内实时更新
 //   项 6: 日志助手"4 步走"不重复编号
 //   项 7: 搜索"尚未勾选"实时跟随勾选
@@ -235,7 +235,7 @@ async function main() {
   });
 
   await run('项 9 (opener 路径): 从主页面开 tail 窗口不弹 prompt', async () => {
-    // 先打开主页 + 输入凭据 + 保存到 OTB._tailCred
+    // 先打开主页 + 输入凭据 + 保存到 DTB._tailCred
     await page.goto(APP + '/#/websphere');
     await page.waitForSelector('#ws-sys', { timeout: 5000 });
     await page.selectOption('#ws-sys', SYS);
@@ -250,11 +250,11 @@ async function main() {
     await page.waitForTimeout(500);
     // files tab 有文件列表
     // 改用直接调 openTailForFileInNewTab —— 但这是 page-internal 函数
-    // 简单做法：直接构造 tail URL 并通过 OTB._tailCred 注入
+    // 简单做法：直接构造 tail URL 并通过 DTB._tailCred 注入
     await page.evaluate(([sys, srv, dir, file, user, pw]) => {
-      window.OTB = window.OTB || {};
-      window.OTB._tailCred = window.OTB._tailCred || {};
-      window.OTB._tailCred[sys + '::' + srv] = { username: user, password: pw };
+      window.DTB = window.DTB || {};
+      window.DTB._tailCred = window.DTB._tailCred || {};
+      window.DTB._tailCred[sys + '::' + srv] = { username: user, password: pw };
     }, [SYS, SRV, DIR, 'SystemOut.log', 'test', PW]);
     // 打开新 tail 窗口
     const popupPromise = page.context().waitForEvent('page');
@@ -299,10 +299,10 @@ async function main() {
   // ===========================================================
   console.log('\n=== 阶段 6: 后端 downloads 索引 ===');
 
-  await run('项 4: downloads/.ops-toolbox-meta.json 存在', async () => {
+  await run('项 4: downloads/.doubao-toolbox-meta.json 存在', async () => {
     const fs = require('fs');
     const path = require('path');
-    const indexPath = path.join(process.cwd(), 'downloads', '.ops-toolbox-meta.json');
+    const indexPath = path.join(process.cwd(), 'downloads', '.doubao-toolbox-meta.json');
     assert(fs.existsSync(indexPath), '索引文件不存在: ' + indexPath);
   });
 

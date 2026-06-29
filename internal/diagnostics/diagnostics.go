@@ -2,7 +2,7 @@
 //
 // 目标：在不暴露密码的前提下，回答运维三问：
 //
-//  1. 我这台 ops-toolbox 跑得正常吗？（Go 版本、x/crypto/ssh 版本、监听地址、磁盘可写）
+//  1. 我这台 豆包工具箱 跑得正常吗？（Go 版本、x/crypto/ssh 版本、监听地址、磁盘可写）
 //  2. 我能 SSH 上去吗？（DNS 解析 + TCP 端口连通性，按 server 逐台报）
 //  3. 我有必要的工具吗？（find -printf、grep、sed、tail 等 find_list / grep 依赖）
 //
