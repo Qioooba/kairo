@@ -184,7 +184,13 @@
     const newPaused = !viewer.isPaused();
     viewer.setPaused(newPaused);
     btnPause.textContent = newPaused ? '继续' : '暂停';
-    rateEl.textContent = newPaused ? '已暂停（缓冲 ' + pendingLines.length + ' 行）' : '实时显示中';
+    if (newPaused) {
+      rateEl.textContent = '已暂停（缓冲 ' + pendingLines.length + ' 行）';
+    } else {
+      rateEl.textContent = '实时显示中';
+      flushTail();
+    }
+    if (evtSrc) btnStop.disabled = false;
   });
   btnClear.addEventListener('click', () => {
     viewer.clear();
@@ -256,6 +262,7 @@
       }
       tailId = data.id;
       setConn('ok', '已连接 · id=' + tailId);
+      btnStop.disabled = false;
       viewer.clear();
       pendingLines = [];
       appendInfo('已开启 tail · id=' + tailId + ' · 起始 ' + lines + ' 行');

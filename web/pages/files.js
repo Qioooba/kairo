@@ -111,7 +111,7 @@
 
     const btnSelAll = el('button', { class: 'btn btn-sm', text: '全选', onclick: () => toggleAllFiles(true) });
     const btnSelNone = el('button', { class: 'btn btn-sm', text: '取消选中', onclick: () => toggleAllFiles(false) });
-    const selCount = el('span', { class: 'text-dim', text: '已选 0 个' });
+    const selCount = el('span', { class: 'text-dim', style: 'margin-right:0;', text: '已选 0 个' });
     const dlZipChk = el('input', { type: 'checkbox', id: 'files-zip' });
     const dlZipLabel = el('label', { class: 'inline' }, [dlZipChk, document.createTextNode('多文件打包 zip')]);
     // v0.5 #18：可选的本地下载目录。留空走默认 download_dir。
@@ -158,12 +158,15 @@
     fileCard.appendChild(el('div', { class: 'mt-2', style: 'display:flex; gap:8px; align-items:center; flex-wrap:wrap;' }, [
       filterLabel, filterClearBtn, filterCountEl
     ]));
-    fileCard.appendChild(el('div', { class: 'file-toolbar' }, [
-      btnSelAll, btnSelNone, selCount, dlZipLabel, btnDownload, btnCancel
-    ]));
-    fileCard.appendChild(el('div', { class: 'mt-2', style: 'display:flex; gap:8px; align-items:center; flex-wrap:wrap;' }, [
-      el('span', { class: 'lbl', text: '本地目录：' }),
-      dlTargetDirInp
+    fileCard.appendChild(el('div', { class: 'file-toolbar', style: 'display:flex; gap:8px; align-items:center; flex-wrap:wrap; padding:8px 0; border-bottom:1px dashed var(--line);' }, [
+      btnSelAll, btnSelNone, selCount,
+      el('span', { style: 'flex:0 0 auto;', text: ' | ' }),
+      dlZipLabel,
+      el('span', { style: 'flex:1 1 auto;' }),
+      el('label', { class: 'inline', style: 'display:inline-flex; align-items:center; gap:6px; white-space:nowrap;' }, [
+        document.createTextNode('本地目录：'), dlTargetDirInp
+      ]),
+      btnDownload, btnCancel
     ]));
     fileCard.appendChild(tableWrap);
 
@@ -816,12 +819,10 @@
       tbl.appendChild(tbody);
       tableWrap.appendChild(tbl);
       updateSelCount();
-      // 恢复下载进行中的进度条
-      Object.keys(state.fileStates).forEach(p => {
-        const st = state.fileStates[p];
+      Object.keys(state.fileStates).forEach(bn => {
+        const st = state.fileStates[bn];
         if (!st) return;
-        const base = p.split('/').pop();
-        setRowStatusByName(base, st);
+        setRowStatusByName(bn, st);
       });
     }
 
@@ -916,8 +917,9 @@
       }
       state.fileStates = {};
       paths.forEach(p => {
-        state.fileStates[p] = { status: 'pending' };
-        setRowStatusByName(p.split('/').pop(), state.fileStates[p]);
+        const bn = p.split('/').pop();
+        state.fileStates[bn] = { status: 'pending' };
+        setRowStatusByName(bn, state.fileStates[bn]);
       });
       btnDownload.disabled = true;
       btnCancel.disabled = false;
@@ -975,8 +977,9 @@
       } catch (e) {
         toast('启动下载失败：' + e.message, 'err');
         paths.forEach(p => {
-          state.fileStates[p] = { status: 'fail', error: e.message };
-          setRowStatusByName(p.split('/').pop(), state.fileStates[p]);
+          const bn = p.split('/').pop();
+          state.fileStates[bn] = { status: 'fail', error: e.message };
+          setRowStatusByName(bn, state.fileStates[bn]);
         });
         btnDownload.disabled = false;
         btnCancel.disabled = true;
@@ -987,16 +990,19 @@
 
     function handleDownloadEvent(o) {
       if (o.kind === 'file_start') {
-        state.fileStates[o.file] = { status: 'downloading', written: 0, total: o.total || -1 };
-        setRowStatusByName(o.file.split('/').pop(), state.fileStates[o.file]);
+        const bn = (o.file || '').split('/').pop();
+        state.fileStates[bn] = { status: 'downloading', written: 0, total: o.total || -1 };
+        setRowStatusByName(bn, state.fileStates[bn]);
       } else if (o.kind === 'progress') {
-        const st = state.fileStates[o.file] || {};
+        const bn = (o.file || '').split('/').pop();
+        const st = state.fileStates[bn] || {};
         st.status = 'downloading'; st.written = o.written; st.total = o.total;
-        state.fileStates[o.file] = st;
-        setRowStatusByName(o.file.split('/').pop(), st);
+        state.fileStates[bn] = st;
+        setRowStatusByName(bn, st);
       } else if (o.kind === 'file_done') {
-        state.fileStates[o.file] = { status: 'done', bytes: o.bytes };
-        setRowStatusByName(o.file.split('/').pop(), state.fileStates[o.file]);
+        const bn = (o.file || '').split('/').pop();
+        state.fileStates[bn] = { status: 'done', bytes: o.bytes };
+        setRowStatusByName(bn, state.fileStates[bn]);
       } else if (o.kind === 'done') {
         btnDownload.disabled = state.selected.size === 0;
         btnCancel.disabled = true;
@@ -1007,19 +1013,18 @@
               const baseName = d.name || (d.local ? d.local.split(/[\\/]/).pop() : '');
               if (baseName) {
                 const remotePath = (state.currentPath === '/' ? '' : state.currentPath) + '/' + baseName;
-                state.downloadedFiles[remotePath] = d.local || baseName;
+                state.downloadedFiles[remotePath] = d.abs_path || (d.date ? d.date + '/' + d.local : d.local);
               }
             }
           });
-          // 项 16：下载完成用 notify 通知（标题 + 路径 + 操作按钮）
           showDownloadDoneNotify(o);
         } else {
           toast('下载失败：' + (o.error || '未知错误'), 'err');
-          Object.keys(state.fileStates).forEach(p => {
-            const st = state.fileStates[p];
+          Object.keys(state.fileStates).forEach(bn => {
+            const st = state.fileStates[bn];
             if (st.status === 'pending' || st.status === 'downloading') {
               st.status = 'fail'; st.error = o.error || '';
-              setRowStatusByName(p.split('/').pop(), st);
+              setRowStatusByName(bn, st);
             }
           });
         }
@@ -1036,19 +1041,18 @@
     function showDownloadDoneNotify(o) {
       const downloads = o.downloads || [];
       const folder = o.folder || '';
-      const firstName = downloads[0] && downloads[0].local || downloads[0] && downloads[0].name || '';
+      const firstAbsPath = downloads[0] && downloads[0].abs_path || '';
       const fileList = downloads.slice(0, 3).map(d => d.local || d.name || '').filter(Boolean).join(', ');
       const more = downloads.length > 3 ? (' 等 ' + downloads.length + ' 个') : '';
       const title = '✓ 下载完成 · ' + downloads.length + ' 个文件';
       const body = folder + (fileList ? ('\n' + fileList + more) : '');
       const actions = [];
-      if (firstName && folder) {
+      if (firstAbsPath) {
         actions.push({
           label: '📂 打开所在目录',
           callback: async () => {
             try {
-              // 项 3 修复：用 query 而非 path 参数，避免 name 含 "/"（按日期子目录）时被 path 解析拒掉
-              await api('POST', '/api/downloads/open-dir?name=' + encodeURIComponent(firstName));
+              await api('POST', '/api/local/reveal-file', { path: firstAbsPath });
             } catch (e) {
               toast('打开目录失败：' + e.message, 'err');
             }
@@ -1195,10 +1199,14 @@
       }
     }
 
-    async function openLocalDir(localName) {
-      if (!localName) return;
+    async function openLocalDir(localPath) {
+      if (!localPath) return;
       try {
-        await api('POST', '/api/downloads/open-dir?name=' + encodeURIComponent(localName));
+        if (localPath.startsWith('/') || (localPath.length > 1 && localPath[1] === ':')) {
+          await api('POST', '/api/local/reveal-file', { path: localPath });
+        } else {
+          await api('POST', '/api/downloads/open-dir?name=' + encodeURIComponent(localPath));
+        }
       } catch (e) {
         toast('打开目录失败：' + e.message, 'err');
       }
@@ -1210,8 +1218,8 @@
       if (!c.username) { toast('请在系统配置中设置 SSH 用户名', 'warn'); return; }
 
       state.fileStates = {};
-      state.fileStates[fullPath] = { status: 'pending' };
-      setRowStatusByName(fileName, state.fileStates[fullPath]);
+      state.fileStates[fileName] = { status: 'pending' };
+      setRowStatusByName(fileName, state.fileStates[fileName]);
       btnDownload.disabled = true;
       btnCancel.disabled = false;
       setStatus('busy', '下载中…');
@@ -1264,8 +1272,8 @@
         };
       } catch (e) {
         toast('启动下载失败：' + e.message, 'err');
-        state.fileStates[fullPath] = { status: 'fail', error: e.message };
-        setRowStatusByName(fileName, state.fileStates[fullPath]);
+        state.fileStates[fileName] = { status: 'fail', error: e.message };
+        setRowStatusByName(fileName, state.fileStates[fileName]);
         btnDownload.disabled = false;
         btnCancel.disabled = true;
         setStatus('err', '失败');
@@ -1278,8 +1286,8 @@
       if (o.kind === 'done' && o.ok) {
         const downloads = o.downloads || [];
         if (downloads.length > 0) {
-          const localName = downloads[0].local || downloads[0].name || fileName;
-          state.downloadedFiles[fullPath] = localName;
+          const d = downloads[0];
+          state.downloadedFiles[fullPath] = d.abs_path || (d.date ? d.date + '/' + d.local : (d.local || d.name || fileName));
         }
       }
     }

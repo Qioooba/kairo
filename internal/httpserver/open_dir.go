@@ -111,7 +111,7 @@ func openPathAllowed(allowRoot, target string) error {
 func chooseFile() (string, error) {
 	switch runtime.GOOS {
 	case "darwin":
-		script := `POSIX path of (choose file with prompt "选择可执行文件" of type {"APP", "APPL", "public.unix-executable", "public.executable"})`
+		script := `POSIX path of (choose file with prompt "选择文件" default location (path to downloads folder))`
 		cmd := exec.Command("osascript", "-e", script)
 		var out bytes.Buffer
 		cmd.Stdout = &out
@@ -123,6 +123,34 @@ func chooseFile() (string, error) {
 			return "", fmt.Errorf("文件选择失败: %w", err)
 		}
 		return strings.TrimSpace(out.String()), nil
+	case "windows":
+		psScript := `
+Add-Type -AssemblyName System.Windows.Forms
+$dlg = New-Object System.Windows.Forms.OpenFileDialog
+$dlg.Title = "选择文件"
+$dlg.InitialDirectory = [Environment]::GetFolderPath('Desktop')
+$dlg.Filter = "所有文件 (*.*)|*.*"
+$dlg.RestoreDirectory = $true
+if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+	$dlg.FileName
+}
+`
+		cmd := exec.Command("powershell", "-NoProfile", "-STA", "-Command", psScript)
+		var out bytes.Buffer
+		cmd.Stdout = &out
+		cmd.Stderr = &out
+		if err := cmd.Run(); err != nil {
+			errStr := out.String()
+			if strings.Contains(errStr, "取消") || strings.Contains(errStr, "cancel") || strings.Contains(errStr, "Cancel") {
+				return "", nil
+			}
+			return "", fmt.Errorf("文件选择失败: %w", err)
+		}
+		result := strings.TrimSpace(out.String())
+		if result == "" {
+			return "", nil
+		}
+		return result, nil
 	default:
 		return "", errors.New("当前平台暂不支持文件选择对话框")
 	}
@@ -131,7 +159,7 @@ func chooseFile() (string, error) {
 func chooseDir() (string, error) {
 	switch runtime.GOOS {
 	case "darwin":
-		script := `POSIX path of (choose folder with prompt "选择文件夹")`
+		script := `POSIX path of (choose folder with prompt "选择文件夹" default location (path to downloads folder))`
 		cmd := exec.Command("osascript", "-e", script)
 		var out bytes.Buffer
 		cmd.Stdout = &out
@@ -143,6 +171,32 @@ func chooseDir() (string, error) {
 			return "", fmt.Errorf("文件夹选择失败: %w", err)
 		}
 		return strings.TrimSpace(out.String()), nil
+	case "windows":
+		psScript := `
+Add-Type -AssemblyName System.Windows.Forms
+$dlg = New-Object System.Windows.Forms.FolderBrowserDialog
+$dlg.Description = "选择文件夹"
+$dlg.ShowNewFolderButton = $true
+if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+	$dlg.SelectedPath
+}
+`
+		cmd := exec.Command("powershell", "-NoProfile", "-STA", "-Command", psScript)
+		var out bytes.Buffer
+		cmd.Stdout = &out
+		cmd.Stderr = &out
+		if err := cmd.Run(); err != nil {
+			errStr := out.String()
+			if strings.Contains(errStr, "取消") || strings.Contains(errStr, "cancel") || strings.Contains(errStr, "Cancel") {
+				return "", nil
+			}
+			return "", fmt.Errorf("文件夹选择失败: %w", err)
+		}
+		result := strings.TrimSpace(out.String())
+		if result == "" {
+			return "", nil
+		}
+		return result, nil
 	default:
 		return "", errors.New("当前平台暂不支持文件夹选择对话框")
 	}

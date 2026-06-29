@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"io"
+	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -54,10 +55,53 @@ func (s *Server) serveDownload(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	w.Header().Set("Content-Disposition", contentDispositionFilename(name))
-	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Length", strconv.FormatInt(stat.Size(), 10))
+	ext := strings.ToLower(filepath.Ext(name))
+	ct := mime.TypeByExtension(ext)
+	isText := false
+	if strings.HasPrefix(ct, "text/") {
+		isText = true
+		if !strings.Contains(ct, "charset") {
+			ct += "; charset=utf-8"
+		}
+	}
+	switch ext {
+	case ".log", ".out", ".err", ".txt", ".csv", ".json", ".xml", ".yml", ".yaml",
+		".properties", ".conf", ".cfg", ".ini", ".md", ".sh", ".bat", ".ps1",
+		".js", ".ts", ".css", ".html", ".htm", ".py", ".go", ".java", ".sql",
+		".env", "":
+		if !isText && (ext != "" || isLikelyTextFile(abs)) {
+			ct = "text/plain; charset=utf-8"
+			isText = true
+		}
+	}
+	if isText {
+		w.Header().Set("Content-Type", ct)
+		w.Header().Set("Content-Disposition", "inline")
+	} else {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Disposition", contentDispositionFilename(name))
+	}
 	_, _ = io.Copy(w, f)
+}
+
+func isLikelyTextFile(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	buf := make([]byte, 512)
+	n, err := f.Read(buf)
+	if err != nil || n == 0 {
+		return false
+	}
+	for i := 0; i < n; i++ {
+		if buf[i] == 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // containsControlChar 检查 s 是否含 ASCII 控制字符（含 \r \n \t）。

@@ -12,7 +12,7 @@
   'use strict';
   const OTB = window.OTB = window.OTB || {};
   OTB.pages = OTB.pages || {};
-  const { el, $, toast, setStatus, cssEscape, pctText, formatBytes, formatTime, trimMiddle, looksMojibake, basenameOf } = OTB.core;
+  const { el, $, toast, setStatus, cssEscape, pctText, formatBytes, formatTime, trimMiddle, looksMojibake, basenameOf, copyToClipboard } = OTB.core;
   const { api } = OTB.api;
 
   // ===== 搜索关键词历史（localStorage 持久化）=====
@@ -996,7 +996,12 @@
               class: 'btn btn-sm',
               text: '复制路径',
               title: f.full_path || '',
-              onclick: () => copyToClipboard(f.full_path || ((g.dir || '') + '/' + f.name))
+              onclick: () => {
+                copyToClipboard(f.full_path || ((g.dir || '') + '/' + f.name)).then(
+                  () => toast('路径已复制', 'ok'),
+                  (e) => toast('复制失败: ' + e.message, 'err')
+                );
+              }
             })
           ]));
           row.appendChild(statusCell);
@@ -1562,11 +1567,12 @@
               const row = el('div');
               row.appendChild(document.createTextNode('· ' + d.file + ' → '));
               row.appendChild(el('a', {
-                href: '/downloads/' + encodeURIComponent(d.local),
+                href: '/downloads/' + encodeURIComponent(d.date + '/' + d.local),
                 text: d.local,
+                target: '_blank',
+                rel: 'noopener'
               }));
               row.appendChild(document.createTextNode('（' + formatBytes(d.bytes) + '）'));
-              // v0.5-F P1-12：在文件管理器中显示 + 复制绝对路径
               if (d.abs_path) {
                 row.appendChild(el('button', {
                   class: 'btn btn-sm', text: '📂 打开', style: 'margin-left:8px;',
@@ -1576,7 +1582,12 @@
                 row.appendChild(el('button', {
                   class: 'btn btn-sm', text: '📋', style: 'margin-left:4px;',
                   title: '复制绝对路径：' + d.abs_path,
-                  onclick: () => copyToClipboard(d.abs_path)
+                  onclick: () => {
+                    copyToClipboard(d.abs_path).then(
+                      () => toast('路径已复制', 'ok'),
+                      (e) => toast('复制失败: ' + e.message, 'err')
+                    );
+                  }
                 }));
               }
               block.appendChild(row);
@@ -1589,8 +1600,10 @@
               const row = el('div');
               row.appendChild(document.createTextNode('· 📦 '));
               row.appendChild(el('a', {
-                href: '/downloads/' + encodeURIComponent(d.local),
+                href: '/downloads/' + encodeURIComponent(d.date + '/' + d.local),
                 text: d.local,
+                target: '_blank',
+                rel: 'noopener'
               }));
               row.appendChild(document.createTextNode('（' + formatBytes(d.bytes) + '）'));
               if (d.abs_path) {
@@ -1602,7 +1615,12 @@
                 row.appendChild(el('button', {
                   class: 'btn btn-sm', text: '📋', style: 'margin-left:4px;',
                   title: '复制绝对路径：' + d.abs_path,
-                  onclick: () => copyToClipboard(d.abs_path)
+                  onclick: () => {
+                    copyToClipboard(d.abs_path).then(
+                      () => toast('路径已复制', 'ok'),
+                      (e) => toast('复制失败: ' + e.message, 'err')
+                    );
+                  }
                 }));
               }
               block.appendChild(row);
@@ -1790,7 +1808,12 @@
               cells.push(el('td', { class: 'actions text-dim', text: '' }));
             } else {
               cells.push(el('td', { class: 'actions' }, [
-                el('button', { class: 'btn btn-sm', text: '复制', onclick: () => copyToClipboard(fullContent) }),
+                el('button', { class: 'btn btn-sm', text: '复制', onclick: () => {
+                  copyToClipboard(fullContent).then(
+                    () => toast('已复制', 'ok'),
+                    (e) => toast('复制失败: ' + e.message, 'err')
+                  );
+                }}),
                 el('button', { class: 'btn btn-sm', text: '上下文', onclick: () => doContext(h) }),
                 el('button', { class: 'btn btn-sm', text: '↗ 新窗口跟踪', onclick: () => openTailForFileInNewTab(h.server, h.dir, h.file) })
               ]));
@@ -1827,32 +1850,32 @@
       w.document.title = title;
       w.document.body.style.fontFamily = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
       w.document.body.style.fontSize = '13px';
-      w.document.body.style.margin = '12px';
       w.document.body.style.background = '#fff';
       w.document.body.style.color = '#333';
+      const style = w.document.createElement('style');
+      style.textContent = '@keyframes ctxHitFlash{0%{background:#ff6b35;}50%{background:#ff9800;}100%{background:#fff176;}}.ctx-hit{background:#fff176!important;font-weight:bold!important;animation:ctxHitFlash 1.2s ease-out;box-shadow:inset 3px 0 0 #ff9800;}.ctx-line{padding:2px 0;border-bottom:1px solid #eee;}.ctx-ln{display:inline-block;width:60px;color:#999;text-align:right;margin-right:12px;user-select:none;}.ctx-ct{white-space:pre-wrap;word-break:break-all;}html,body{margin:0;padding:0;}body{padding:12px;overflow-y:auto;height:100vh;box-sizing:border-box;}';
+      (w.document.head || w.document.getElementsByTagName('head')[0]).appendChild(style);
       const h = w.document.createElement('h3');
       h.textContent = title;
       w.document.body.appendChild(h);
+      let hitEl = null;
       lines.forEach(l => {
         const row = w.document.createElement('div');
-        row.style.padding = '2px 0';
-        row.style.borderBottom = '1px solid #eee';
-        if (l.hit) { row.style.background = '#fff3cd'; row.style.fontWeight = 'bold'; }
+        row.className = 'ctx-line' + (l.hit ? ' ctx-hit' : '');
+        if (l.hit) { row.id = 'ctx-hit-line'; hitEl = row; }
         const ln = w.document.createElement('span');
+        ln.className = 'ctx-ln';
         ln.textContent = l.line_no;
-        ln.style.display = 'inline-block';
-        ln.style.width = '60px';
-        ln.style.color = '#999';
-        ln.style.textAlign = 'right';
-        ln.style.marginRight = '12px';
         const ct = w.document.createElement('span');
-        ct.style.whiteSpace = 'pre-wrap';
-        ct.style.wordBreak = 'break-all';
+        ct.className = 'ctx-ct';
         ct.textContent = l.content;
         row.appendChild(ln);
         row.appendChild(ct);
         w.document.body.appendChild(row);
       });
+      if (hitEl) {
+        setTimeout(() => { hitEl.scrollIntoView({ block: 'center', behavior: 'smooth' }); }, 100);
+      }
     }
 
     function renderContext(lines, hit, contextN) {
@@ -1878,22 +1901,22 @@ const formCard = el('div', { class: 'card' }, [
       targetBody,
     ]);
     // targetBody 内部是完整表单（折叠时整段隐藏）
-    targetBody.appendChild(el('h3', { text: 'WebSphere 日志助手 · 多目标操作' }));
+    targetBody.appendChild(el('h3', { text: '日志助手 · 多目标操作' }));
     targetBody.appendChild(el('div', {
       class: 'card-desc',
       text: '先选业务系统，再勾选要操作的服务器和日志目录；页面只会操作已勾选的目录。'
     }));
-    targetBody.appendChild(el('div', { class: 'grid-2', style: 'display:none' }, [
+    targetBody.appendChild(el('div', { class: 'grid-2' }, [
       el('div', null, [el('label', { text: '业务系统' }), sysSel]),
       el('div', null, [el('label', { text: '目录预览（实际以勾选为准）' }), dirSel])
     ]));
     targetBody.appendChild(el('div', { class: 'mt-2' }, [srvPickToolbar, srvPickWrap]));
     targetBody.appendChild(el('div', { class: 'mt-2' }, [srvDirsToolbar, srvDirsWrap]));
-    targetBody.appendChild(el('div', { class: 'grid-2 mt-2', style: 'display:none' }, [
+    targetBody.appendChild(el('div', { class: 'grid-2 mt-2' }, [
       el('div', null, [el('label', { text: 'SSH 用户名' }), userInp]),
       el('div', null, [el('label', { text: 'SSH 密码' }), passInp])
     ]));
-    targetBody.appendChild(el('div', { class: 'mt-1', style: 'display:none' }, [rememberLbl, credStatusRow]));
+    targetBody.appendChild(el('div', { class: 'mt-1' }, [rememberLbl, credStatusRow]));
     targetBody.appendChild(el('div', { class: 'btn-row mt-3' }, [btnTest]));
 
     // v0.5 #8：文件名参数 — 单文件 / 多文件 / glob 模糊匹配（空格或逗号分隔）
@@ -3194,5 +3217,5 @@ const formCard = el('div', { class: 'card' }, [
 
   OTB.pages.websphere = renderWebsphere;
   OTB.state.routes.websphere = renderWebsphere;
-  OTB.state.routeNames.websphere = 'WebSphere 日志助手';
+  OTB.state.routeNames.websphere = '日志助手';
 })();
