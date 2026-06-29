@@ -1837,7 +1837,7 @@
 
     // 把上下文渲染到新窗口（避免本页 ctxCard 被滚动覆盖；多命中可并行开多个窗口对比）
     function openContextInNewWindow(lines, hit, contextN) {
-      const w = window.open('', '_blank', 'width=900,height=700');
+      const w = window.open('', '_blank');
       if (!w) { toast('弹窗被拦截，请允许弹窗后重试', 'err'); return; }
       const rangeText = contextN > 0 ? ('前后 ' + contextN + ' 行') : '仅命中行';
       const title = '上下文 · ' + hit.server + ' · ' + hit.file + ':' + hit.line_no + ' · ' + rangeText;

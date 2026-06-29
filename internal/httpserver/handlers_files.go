@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -993,7 +994,7 @@ func (s *Server) downloadSeriesFree(
 			"index":  idx,
 			"total":  len(paths),
 			"server": srv.Name,
-			"dir":    filepath.Dir(remote),
+			"dir":    path.Dir(remote),
 		})
 
 		// 项 4 修复：保留远端原始 basename，不再加 server_001_xxx_HHMMSS 前缀。
@@ -1007,7 +1008,7 @@ func (s *Server) downloadSeriesFree(
 				"written": w,
 				"total":   t,
 				"server":  srv.Name,
-				"dir":     filepath.Dir(remote),
+				"dir":     path.Dir(remote),
 			})
 		}
 
@@ -1041,7 +1042,7 @@ func (s *Server) downloadSeriesFree(
 			"file":   remote,
 			"bytes":  bytes,
 			"server": srv.Name,
-			"dir":    filepath.Dir(remote),
+			"dir":    path.Dir(remote),
 		})
 	}
 	return results, nil

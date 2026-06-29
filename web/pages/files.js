@@ -777,18 +777,15 @@
         tr.appendChild(el('td', { class: 'col-check' }, [cb]));
 
         const icon = entry.isDir ? '📁' : '📄';
-        // UI-5 修复：nameCell 改成 flex 布局 + gap:6px，让 icon 和文字有合理间距，
-        // 不再用纯文本"📄 "+name 那种靠空格分隔。
         const nameCell = el('td', { class: 'name-cell' });
+        const inner = el('div', { class: 'name-cell-inner' });
         const iconSpan = el('span', { class: 'name-icon', text: icon });
-        nameCell.appendChild(iconSpan);
+        inner.appendChild(iconSpan);
         if (entry.isDir) {
-          nameCell.appendChild(el('a', { href: '#', text: entry.name, onclick: (e) => {
+          inner.appendChild(el('a', { href: '#', text: entry.name, onclick: (e) => {
             e.preventDefault(); doListDir(fullPath, creds());
           }}));
         } else {
-          // P1-10 修复：点击文件名直接新窗口预览（用户原需求），
-          // Shift+点击 / Ctrl+点击才弹 modal。modal 作为备用入口。
           const link = el('a', {
             href: '#',
             text: entry.name,
@@ -802,8 +799,9 @@
               }
             }
           });
-          nameCell.appendChild(link);
+          inner.appendChild(link);
         }
+        nameCell.appendChild(inner);
         tr.appendChild(nameCell);
 
         tr.appendChild(el('td', { class: 'num' }, [document.createTextNode(entry.isDir ? '—' : formatBytes(entry.size))]));

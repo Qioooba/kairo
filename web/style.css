@@ -2684,10 +2684,12 @@ input[type="datetime-local"] {
 /* ===== fix-files-bugs 配套样式（2026-06-27） ===== */
 /* UI-5：表格文件名 cell 用 flex 让 icon 和文字有间距（替换原先 "📄 name" 纯文本拼接） */
 .table td.name-cell {
+  min-width: 180px;
+}
+.table td.name-cell .name-cell-inner {
   display: flex;
   align-items: center;
   gap: 6px;
-  min-width: 180px;
 }
 .table td.name-cell .name-icon {
   flex: 0 0 auto;
