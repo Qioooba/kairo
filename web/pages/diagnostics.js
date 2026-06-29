@@ -94,7 +94,10 @@
 
       toolsWrap.appendChild(el('div', { class: 'card' }, [
         el('h3', { text: '本机命令工具' }),
-        toolsTable(r.tools)
+        toolsTable(r.tools),
+        // Note 字段：当前平台探测这些 Linux 命令工具的意义说明。
+        // Windows 上 Note 解释为什么 find/grep/sed/tail/unzip 没找到是正常的。
+        r.tools && r.tools.note ? el('div', { class: 'text-dim mt-2', style: 'font-size: 12.5px;', text: r.tools.note }) : null
       ]));
 
       if (r.servers && r.servers.length) {

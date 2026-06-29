@@ -43,7 +43,7 @@ const ROUTES = [
 const mock = {
   config: {
     app: {
-      name: '内网运维工具箱（审计）',
+      name: '豆包工具箱（审计）',
       host: '127.0.0.1',
       port: 18092,
       download_dir: './downloads',

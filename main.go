@@ -9,17 +9,16 @@ import (
 	"embed"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"net"
 	"net/http"
 	"os"
 	"os/exec"
-	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strings"
-	"syscall"
 	"time"
 
 	"doubao-toolbox/internal/audit"
@@ -29,6 +28,7 @@ import (
 	"doubao-toolbox/internal/httpserver"
 	"doubao-toolbox/internal/sshclient"
 	"doubao-toolbox/internal/tailmgr"
+	"doubao-toolbox/internal/tray"
 )
 
 //go:embed web
@@ -42,22 +42,34 @@ func main() {
 	// 再回退到当前工作目录，兼容 `go run .` 这类临时二进制路径。
 	runDir, cfgPath, err := resolveRunDir()
 	if err != nil {
-		log.Fatalf("定位运行目录失败: %v", err)
+		tray.FatalDialogf("定位运行目录失败: %v", err)
 	}
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
-		log.Fatalf("加载配置失败 (%s): %v", cfgPath, err)
+		tray.FatalDialogf("加载配置失败 (%s): %v", cfgPath, err)
 	}
 
 	// 3. 解析相对目录为基于 exeDir 的绝对路径
 	if err := cfg.ResolvePaths(runDir); err != nil {
-		log.Fatalf("解析目录失败: %v", err)
+		tray.FatalDialogf("解析目录失败: %v", err)
 	}
 
 	// 4. 准备运行时目录
 	if err := cfg.EnsureDirs(); err != nil {
-		log.Fatalf("创建运行时目录失败: %v", err)
+		tray.FatalDialogf("创建运行时目录失败: %v", err)
 	}
+
+	// 4.1 设置日志文件输出。
+	// Windows GUI 模式（-H windowsgui）下没有 stdout/stderr，
+	// 必须落盘到 logs/doubao-toolbox.log 才能看到运行时日志。
+	// 非 Windows 开发模式同时输出到 stderr 方便调试。
+	logFilePath := filepath.Join(cfg.LogDir(), "doubao-toolbox.log")
+	logFile, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		tray.FatalDialogf("无法打开日志文件 %s: %v", logFilePath, err)
+	}
+	defer logFile.Close()
+	log.SetOutput(io.MultiWriter(os.Stderr, logFile))
 
 	// 4.5 凭据后端模式（项 23）—— 配置加载后立即切换，handler 后续读 Mode() 就知道走哪条路。
 	// 默认值 cfg.App.CredentialStoreEnabled() = "keyring"（向后兼容）。
@@ -67,7 +79,7 @@ func main() {
 	// 4.5.1 file 模式初始化：设置数据目录和加密密钥。
 	// keyring/disabled 模式下 Init 是 no-op，不影响原有流程。
 	if err := credentials.Init(cfg.DataDir(), cfg.App.CredentialKey); err != nil {
-		log.Fatalf("初始化凭据后端失败: %v", err)
+		tray.FatalDialogf("初始化凭据后端失败: %v", err)
 	}
 	if credentials.Mode() == "file" && strings.TrimSpace(cfg.App.CredentialKey) == "" {
 		log.Printf("凭据 file 模式: 密钥已自动生成并保存到 %s（请妥善备份 .credkey 文件）", filepath.Join(cfg.DataDir(), ".credkey"))
@@ -104,7 +116,7 @@ func main() {
 	// 5. 初始化审计日志
 	auditLog, err := audit.New(cfg.LogDir(), "audit.log")
 	if err != nil {
-		log.Fatalf("初始化审计日志失败: %v", err)
+		tray.FatalDialogf("初始化审计日志失败: %v", err)
 	}
 	defer auditLog.Close()
 
@@ -119,7 +131,7 @@ func main() {
 	// 6. 嵌入的 web 静态资源
 	webSubFS, err := fs.Sub(webFS, "web")
 	if err != nil {
-		log.Fatalf("加载 web 资源失败: %v", err)
+		tray.FatalDialogf("加载 web 资源失败: %v", err)
 	}
 
 	// 7. 构造可热替换的配置 Manager
@@ -153,20 +165,15 @@ func main() {
 	// 9. 监听 127.0.0.1
 	ln, err := net.Listen("tcp", cfg.App.ListenAddr())
 	if err != nil {
-		log.Fatalf("监听 %s 失败: %v", cfg.App.ListenAddr(), err)
+		tray.FatalDialogf("监听 %s 失败: %v", cfg.App.ListenAddr(), err)
 	}
 
-	// 10. 优雅退出
-	ctx, stop := signal.NotifyContext(context.Background(),
-		os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
+	// 10. 启动 HTTP server（goroutine）。
+	// 主线程交给系统托盘（Windows）或信号等待（非 Windows）。
 	go func() {
-		<-ctx.Done()
-		log.Println("收到退出信号，正在关闭服务...")
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = httpSrv.Shutdown(shutdownCtx)
+		if err := httpSrv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			tray.FatalDialogf("HTTP 服务异常: %v", err)
+		}
 	}()
 
 	// 11. 启动并自动打开浏览器
@@ -175,14 +182,28 @@ func main() {
 	log.Printf("工作目录: %s", runDir)
 	log.Printf("下载目录: %s", cfg.DownloadDir())
 	log.Printf("审计日志: %s", filepath.Join(cfg.LogDir(), "audit.log"))
+	log.Printf("运行日志: %s", logFilePath)
 
 	if cfg.App.AutoOpenBrowser {
 		go openBrowser(url)
 	}
 
-	if err := httpSrv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Fatalf("HTTP 服务异常: %v", err)
-	}
+	// 12. 启动系统托盘（阻塞主线程直到退出）。
+	// Windows：托盘菜单"退出"触发 OnQuit。
+	// 非 Windows：SIGINT/SIGTERM 触发 OnQuit。
+	// Shutdown 超时用 1 秒而不是 5 秒：托盘"退出"的用户预期是立刻退，
+	// SSE 长连接（WriteTimeout=0）会让 Shutdown 卡到超时才强切，
+	// 1 秒足够正常请求收尾，强切的 SSE 不影响数据完整性（tail 是实时流，下载已落盘）。
+	tray.Run(tray.Config{
+		Tooltip: "豆包工具箱",
+		OnOpenBrowser: func() { openBrowser(url) },
+		OnQuit: func() {
+			log.Println("收到退出请求，正在关闭服务...")
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			_ = httpSrv.Shutdown(shutdownCtx)
+		},
+	})
 	log.Println("服务已停止，再见。")
 }
 

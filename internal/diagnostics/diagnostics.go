@@ -93,6 +93,10 @@ type ToolsInfo struct {
 	Unzip         ToolCheck `json:"unzip"`
 	SSH           ToolCheck `json:"ssh"`
 	SCPKnownHosts string    `json:"scp_known_hosts,omitempty"` // 暂留空，避免误以为真的有 ~/.ssh/known_hosts
+	// Note 给前端的人类可读说明：当前平台探测这些 Linux 命令工具的意义。
+	// 比如在 Windows 上本地没 find/grep 是正常的（远端命令由 SSH 目标服务器提供），
+	// 这时 Note 解释清楚，避免假警告 + 前端展示一堆 ✗。
+	Note string `json:"note,omitempty"`
 }
 
 // ToolCheck 命令工具检查结果
@@ -247,6 +251,25 @@ func dirWritable(path string) bool {
 }
 
 func buildToolsInfo() ToolsInfo {
+	// Windows 平台：find/grep/sed/tail/unzip 这些 GNU 工具默认不存在；
+	// 但 doubao-toolbox 的命令实际是发到**远端 SSH 服务器**执行的，本地没这些命令是正常的。
+	// 为了避免前端展示一堆 "✗ 未找到" + issue 列表爆假警告，给前端一个 Note 解释。
+	//
+	// 探测本身还是照做（Found 字段真实反映 PATH 情况），万一用户在 Git for Windows /
+	// MSYS / WSL 里装了 GNU 工具，前端能看到；只是不再把"没装"当 issue。
+	if runtime.GOOS == "windows" {
+		// 仍然探测 ssh：Win10 1809+ / Win11 内置 OpenSSH 客户端，可能命中
+		return ToolsInfo{
+			Find:       checkTool("find"),
+			FindPrintF: findSupportsPrintf(),
+			Grep:       checkTool("grep"),
+			Sed:        checkTool("sed"),
+			Tail:       checkTool("tail"),
+			Unzip:      checkTool("unzip"),
+			SSH:        checkTool("ssh"),
+			Note:       "Windows 平台：find/grep/sed/tail/unzip 是 GNU/Linux 工具，本机通常不存在（若装 Git for Windows / MSYS / WSL 可能命中）。这些命令实际是发到远端 SSH 目标服务器执行的，工具可用性以远端为准。",
+		}
+	}
 	return ToolsInfo{
 		Find:       checkTool("find"),
 		FindPrintF: findSupportsPrintf(),
@@ -394,6 +417,10 @@ func truncate(s string, n int) string {
 //  3. tail / grep 缺失（影响 tail / search）
 //  4. 任意 server 的 DNS / TCP 失败
 //  5. credential_store=file（占位模式，未实现）
+//
+// 平台注意：Windows 上 find/grep/sed/tail/unzip 是 GNU 工具，本机通常不存在；
+// 这些命令实际是发到**远端 SSH 服务器**执行的，本地缺失不是 issue（见 buildToolsInfo 的 Note）。
+// 所以 Windows 上跳过 2/3 两条规则对应的 issue。
 func summarizeIssues(rep Report) []string {
 	var issues []string
 	if !rep.Runtime.DataDirWritable {
@@ -405,16 +432,19 @@ func summarizeIssues(rep Report) []string {
 	if !rep.Runtime.LogDirWritable {
 		issues = append(issues, "⚠ 日志目录不可写："+rep.App.LogDir)
 	}
-	if !rep.Tools.Find.Found {
-		issues = append(issues, "⚠ 本机缺 find 命令")
-	} else if !rep.Tools.FindPrintF {
-		issues = append(issues, "⚠ find 不支持 -printf（AIX / 老 BSD），把 log_dirs[*].list_mode 显式设为 posix_ls")
-	}
-	if !rep.Tools.Tail.Found {
-		issues = append(issues, "⚠ 本机缺 tail（实时跟踪不可用）")
-	}
-	if !rep.Tools.Grep.Found {
-		issues = append(issues, "⚠ 本机缺 grep（搜索不可用）")
+	// Windows 上不报"本机缺 find/grep/tail"——这些命令实际在远端跑，本地缺失正常。
+	if rep.Build.GOOS != "windows" {
+		if !rep.Tools.Find.Found {
+			issues = append(issues, "⚠ 本机缺 find 命令")
+		} else if !rep.Tools.FindPrintF {
+			issues = append(issues, "⚠ find 不支持 -printf（AIX / 老 BSD），把 log_dirs[*].list_mode 显式设为 posix_ls")
+		}
+		if !rep.Tools.Tail.Found {
+			issues = append(issues, "⚠ 本机缺 tail（实时跟踪不可用）")
+		}
+		if !rep.Tools.Grep.Found {
+			issues = append(issues, "⚠ 本机缺 grep（搜索不可用）")
+		}
 	}
 	if rep.App.CredentialStore == "file" {
 		issues = append(issues, "ℹ credential_store=file 暂未实现（v0.4 占位），凭据不会被持久化")

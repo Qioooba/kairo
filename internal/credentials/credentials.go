@@ -22,8 +22,10 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/zalando/go-keyring"
 )
@@ -283,6 +285,15 @@ func saveFile(entries map[string]encryptedEntry) error {
 		return fmt.Errorf("credentials: 关闭临时文件失败: %w", err)
 	}
 	if err := os.Rename(tmp, filePath); err != nil {
+		// Windows 上 os.Rename 可能因杀毒软件/备份软件实时扫描目标文件而偶发失败
+		// （Access is denied / Permission denied）。sleep 100ms 让扫描完成后重试一次，
+		// 绕过这种瞬时占用；其它平台 rename 失败就是真失败，不重试。
+		if runtime.GOOS == "windows" {
+			time.Sleep(100 * time.Millisecond)
+			if err2 := os.Rename(tmp, filePath); err2 == nil {
+				return nil
+			}
+		}
 		_ = os.Remove(tmp)
 		return fmt.Errorf("credentials: 替换凭据文件失败: %w", err)
 	}

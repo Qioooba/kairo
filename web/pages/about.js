@@ -29,18 +29,19 @@
   // §1. 核心数据看板
   // =====================================================================
   const stats = [
-    { label: '代码行数 (Go)',       value: '21,000+', sub: 'production + tests', tone: 'primary' },
-    { label: '代码行数 (前端)',     value: '14,000+', sub: 'vanilla JS · 零依赖', tone: 'accent' },
-    { label: '提交次数',            value: '100+',    sub: 'v0.1 → v0.9 (90 天)', tone: 'success' },
-    { label: '后端模块',            value: '13',      sub: 'internal/* 子包',     tone: 'primary' },
-    { label: '前端页面',            value: '14',      sub: 'web/pages/*.js',     tone: 'accent' },
-    { label: 'API 接口',            value: '40+',     sub: 'REST + SSE',         tone: 'primary' },
-    { label: '测试用例 (Go)',       value: '120+',    sub: '单元 + 集成',        tone: 'success' },
-    { label: '测试用例 (Node)',     value: '80+',     sub: 'app.test.js',        tone: 'success' },
-    { label: 'E2E 场景 (Playwright)', value: '200+',  sub: '6 个脚本',           tone: 'warn'   },
-    { label: '修复缺陷',            value: '300+',    sub: 'P0/P1/P2 全量',      tone: 'warn'   },
-    { label: '安全设计点',          value: '14',      sub: 'fail-closed 全栈',   tone: 'error'  },
-    { label: 'SSH 兼容 profile',    value: '5',       sub: 'modern → legacy',    tone: 'primary' }
+    { label: '总代码量',             value: '47,000+', sub: 'Go 28K · 前端 19K · 0 npm 运行时', tone: 'primary' },
+    { label: '代码行数 (Go)',         value: '28,000+', sub: '47 个源文件 · 15 个子包',     tone: 'primary' },
+    { label: '代码行数 (前端)',       value: '19,000+', sub: 'vanilla JS · 零依赖',         tone: 'accent'  },
+    { label: '提交次数',              value: '120+',    sub: 'v0.1 → v0.9 (90 天)',          tone: 'success' },
+    { label: '后端模块',              value: '15',      sub: 'internal/* 子包',              tone: 'primary' },
+    { label: '前端页面',              value: '14',      sub: 'web/pages/*.js',              tone: 'accent'  },
+    { label: 'API 接口',              value: '60+',     sub: 'REST + SSE',                  tone: 'primary' },
+    { label: '测试用例 (Go)',         value: '500+',    sub: '51 个 _test.go · 单元 + 集成', tone: 'success' },
+    { label: '测试用例 (Node)',       value: '150+',    sub: 'app.test.js · 17 case',       tone: 'success' },
+    { label: 'E2E 场景 (Playwright)', value: '250+',    sub: '8 个脚本 · 14 测试套',        tone: 'warn'    },
+    { label: '修复缺陷',              value: '350+',    sub: 'P0/P1/P2 全量',               tone: 'warn'    },
+    { label: '安全设计点',            value: '14',      sub: 'fail-closed 全栈',            tone: 'error'   },
+    { label: 'SSH 兼容 profile',      value: '5',       sub: 'modern → legacy · 自动 fallback', tone: 'primary' }
   ];
 
   // =====================================================================
@@ -48,12 +49,12 @@
   // =====================================================================
   const principles = [
     {
-      icon: '🔒', title: '安全第一 (fail-closed)',
-      body: '所有权限决策默认"拒绝"。白名单空 → 一律拒绝；host key 没配 + allow_insecure=false → 不发起连接；admin 专属接口没带 admin token → 403。把"忘记配"和"配错"都收敛到安全侧，避免任何隐式放行。'
+      icon: '🔒', title: '安全优先 (fail-closed)',
+      body: '所有权限决策默认"拒绝"。白名单空 → 一律拒绝；host key 没配 + allow_insecure=false → 不发起连接；admin 专属接口没带 admin token → 403。把"忘记配"和"配错"都收敛到安全侧，让纵深防御没有单点失守即可破防的逻辑链。'
     },
     {
       icon: '🎯', title: '受控优于开放',
-      body: '不开放任意 shell。所有远程命令由后端固定模板生成 (find / grep / sed / sort / head / cat 组合)，目录 / 文件名只能来自配置白名单或前一步 ls 的结果，关键词做严格转义。零命令注入面。'
+      body: '不开放任意 shell。所有远程命令由后端固定模板生成 (find / grep / sed / sort / head / cat 组合)，目录 / 文件名只能来自配置白名单或前一步 ls 的结果，关键词做严格转义——零命令注入面、零隐式越权。'
     },
     {
       icon: '⚡', title: '上下文优先 (context-first)',
@@ -61,11 +62,11 @@
     },
     {
       icon: '🔬', title: '极简优于复杂',
-      body: '零前端框架、零外部 UI 库、零 CSS 预处理器。vanilla JS + 原生 CSS 变量 + 内嵌 go:embed。前端 14 个页面 / 14K 行代码平均每个页面 ~1000 行。'
+      body: '零前端框架、零外部 UI 库、零 CSS 预处理器、零 npm 运行时。vanilla JS + 原生 CSS 变量 + 内嵌 go:embed。47,000+ 行代码，14 个前端页面平均每个 ~1.3K 行。'
     },
     {
       icon: '🧪', title: '可测优于能跑',
-      body: 'sshclient → Streamer 接口、sftpclient → RemoteFS 接口、dlmanager → Session 模型：每个核心包都对测试友好，提供 mock 注入点。fake-websphere + mock_sshd.py 给集成测试真实感，单测覆盖率 81%+。'
+      body: 'sshclient → Streamer 接口、sftpclient → RemoteFS 接口、dlmanager → Session 模型：每个核心包都对测试友好，提供 mock 注入点。fake-websphere + mock_sshd.py 给集成测试真实感；Go 测试 500+ 用例，单测覆盖率 81%+。'
     },
     {
       icon: '🛡️', title: '凭据零落盘 (zero plain)',
@@ -125,8 +126,8 @@
   // §4. 后端技术栈 (10 依赖逐项)
   // =====================================================================
   const backendStack = [
-    { name: 'Go', version: '1.20+', role: '主语言', desc: 'go 1.20 directive，向下兼容 Win7 编译；goroutine 调度，静态二进制，零运行时依赖。' },
-    { name: 'golang.org/x/crypto/ssh', version: 'v0.31.0', role: 'SSH 客户端', desc: '深度定制的 SSH 协议栈；3 套 KEX profile 自动 fallback；keyboard-interactive 认证；HostKey 指纹校验。' },
+    { name: 'Go', version: '1.20+', role: '主语言', desc: 'go 1.20 directive，向下兼容 Win7 编译；goroutine 调度，静态二进制，零运行时依赖；28,000+ 行单仓代码。' },
+    { name: 'golang.org/x/crypto/ssh', version: 'v0.31.0', role: 'SSH 客户端', desc: '深度定制的 SSH 协议栈；5 套 KEX profile 自动 fallback；keyboard-interactive 认证；HostKey 指纹校验 (v0.9 起 fail-closed)。' },
     { name: 'github.com/pkg/sftp', version: 'v1.13.6', role: 'SFTP 子系统', desc: '文件 Open/Stat/Read。v0.4 起抽象出 RemoteFS 接口，支持 SFTPBackend + ShellBackend 双 backend 自动降级。' },
     { name: 'golang.org/x/text', version: 'v0.21.0', role: '字符编码', desc: 'simplifiedchinese.GBK / GB18030 透明编码转换；老 WebSphere / Oracle / AIX 上的 GBK 日志直读不乱码。' },
     { name: 'github.com/zalando/go-keyring', version: 'v0.2.8', role: 'OS 钥匙串抽象', desc: '统一 macOS Keychain / Windows DPAPI / Linux Secret Service 三个原生后端；零明文落盘。' },
@@ -204,12 +205,12 @@
   // §9. 质量保障
   // =====================================================================
   const quality = [
-    { tier: 'L1 单元测试', tool: 'go test ./...', coverage: '>80%', detail: '每个 internal/* 子包都有 _test.go，覆盖 sshclient / sftpclient / logquery / dlmanager / tailmgr / diff / downloads / credentials / formatter / config / diagnostics / audit / portreuse 全栈。' },
+    { tier: 'L1 单元测试', tool: 'go test ./...', coverage: '500+ · >80%', detail: '51 个 _test.go 文件，覆盖 sshclient / sftpclient / logquery / dlmanager / tailmgr / diff / downloads / credentials / formatter / config / diagnostics / audit / portreuse / httpserver 全栈。' },
     { tier: 'L2 集成测试', tool: 'mock_sshd.py + fake-websphere', coverage: '12 场景', detail: 'Python helper 启动 in-process SSH server，注入 fake sftpDialer，验证 handler 全链路：列文件 / 搜索 / 上下文 / tail / 下载 / 凭据 / RBAC / 路径穿越 / hostkey 拒绝。' },
-    { tier: 'L3 E2E (Playwright)', tool: '6 个 playwright-*.js', coverage: '200+ 用例', detail: '真实浏览器自动化：多主题切换、HTTP 测试页、命令页、tail 高亮持久化、主题视觉一致性、全部功能页面截图回归。' },
-    { tier: 'L4 手动验收', tool: 'docs/ACCEPTANCE.md', coverage: '5b/5c/5d 全量', detail: '文件浏览器 / tail / 测试矩阵 / 完整业务路径逐项验收，每项可执行 / 可验证。' },
+    { tier: 'L3 E2E (Playwright)', tool: '8 个 playwright-*.js + 14 e2e/tests/*', coverage: '250+ 用例', detail: '真实浏览器自动化：多主题切换、HTTP 测试页、命令页、tail 高亮持久化、主题视觉一致性、全部功能页面截图回归；tests/e2e/tests/ 按页面切片组织。' },
+    { tier: 'L4 手动验收', tool: 'docs/ACCEPTANCE.md + scripts/acceptance_run.py', coverage: '5b/5c/5d 全量', detail: '文件浏览器 / tail / 测试矩阵 / 完整业务路径逐项验收，每项可执行 / 可验证；scripts/acceptance_run.py 一键回归。' },
     { tier: 'L5 静态检查', tool: 'go vet + gofmt', coverage: '100%', detail: '提交前必跑；CI 流水线集成；不允许未格式化代码合入 main。' },
-    { tier: 'L6 文档同步', tool: 'README + RELEASE-NOTES + docs/qa/', coverage: '全量', detail: '代码改动同步更新文档；CHANGELOG 与 release notes 双轨；qa 目录存所有 E2E 截图与覆盖率报告。' }
+    { tier: 'L6 文档同步', tool: 'README + docs/RELEASE-NOTES + docs/qa/', coverage: '全量', detail: '代码改动同步更新文档；CHANGELOG 与 release notes 双轨；qa 目录存所有 E2E 截图与覆盖率报告；v0.9.0 rebrand 一次性清理 docs 全量。' }
   ];
 
   // =====================================================================
@@ -416,10 +417,10 @@
       lesson: '回归修复必须把所有受影响页面列全，独立 HTML 窗口是常见遗漏点'
     },
     {
-      id: 'OpenSSH 6.2p2', version: 'v0.4.0', severity: 'P0', title: '老 sshd 握手 RST — 排查 3 天',
+      id: 'OpenSSH 6.2p2', version: 'v0.4.x', severity: 'P0', title: '老 sshd 握手 RST — 排查 3 天',
       symptom: '用户报"连不上测试环境 sshd 6.2p2"，x/crypto 报 "ssh: handshake failed: ssh: no common algorithms"；同账号用 SecureCRT 正常',
       rootCause: 'OpenSSH 6.2p2 默认 KEX 是 diffie-hellman-group-exchange-sha1，老但仍可用；x/crypto 默认从高到低协商，碰到 ECDH_INIT 后老 sshd 直接 RST',
-      fix: '拆 3 套 SSH profile：modern / compat / legacy / no-ecdh / auto；外层 sshDialOuterTimeout = 45s (3×12s + buffer)；握手失败自动 fallback 到下一套；详细排查过程写在排查总结-6.2p2连接问题-2026-06-22.md',
+      fix: '拆 5 套 SSH profile：modern / compat (默认) / no-ecdh / legacy / auto；外层 sshDialOuterTimeout = 45s (3×12s + buffer)；握手失败自动 fallback 到下一套；详细排查过程写在排查总结-6.2p2连接问题-2026-06-22.md',
       lesson: '老 sshd 兼容性是科学问题不是工程问题，必须有 fallback 链 + 详细日志'
     }
   ];
@@ -447,42 +448,45 @@
   // =====================================================================
   const roadmap = {
     planned: [
-      { name: '多用户 / 多租户隔离', desc: '基于 token 扩展为完整 RBAC，支持只读 / 普通用户 / 管理员三档角色' },
-      { name: '审计中心升级', desc: 'audit.log → SQLite 索引，支持按 user/op/server/time 检索与导出 CSV' },
+      { name: 'v0.9.1 hotfix', desc: '基于 v0.9.0 反馈的 UI 细节 / 性能 / 兼容性 集中收口，预计 1-2 周内' },
+      { name: '审计中心升级', desc: 'audit.log → SQLite 索引，支持按 user/op/server/time 检索与导出 CSV (v0.9 RBAC 已落地，下一步把审计数据做成可查询)' },
       { name: 'WebSocket 升级 SSE', desc: '对双向场景（如交互式 shell）切换 WebSocket，但保留 SSE 给 tail 流' },
       { name: '容器化分发', desc: 'Docker 镜像 + docker-compose，CI/CD 一键起' },
       { name: '更多兼容矩阵', desc: 'OpenSSH 4.x / Tandem / HP-UX 等老 sshd 适配' },
       { name: '插件系统', desc: '命令模板 / 格式化器走 go-plugin 扩展位' }
     ],
     considering: [
+      { name: '多用户 / 多租户隔离 (v0.9 已部分落地)', desc: 'v0.9 已实现 role=admin/user RBAC + IP 白名单，下一步考虑只读 / 普通 / 管理员 三档精细化 + 用户自助注册' },
       { name: 'P2P 内网穿透', desc: '无网环境 / 隔离网段的工具箱访问' },
       { name: '移动端适配', desc: 'iPad / 触屏优化布局' },
       { name: 'AI 助手', desc: '日志异常自动告警 / 根因分析 (本地 LLM)' },
-      { name: '国际化', desc: 'en-US / ja-JP 多语言' },
+      { name: '国际化', desc: 'en-US / ja-JP 多语言 (现已完成 rebrand 准备)' },
       { name: '云端同步', desc: '配置 + 收藏 + 审计日志端云同步' }
     ]
   };
 
   // =====================================================================
-  // §12. 版本演进史 (9 个版本, 每版 ~2000 字, accordion 折叠)
+  // §13. 版本演进史 (9 个版本, 每版 ~2000 字, accordion 折叠)
   // =====================================================================
   const changelog = [
     {
       version: 'v0.9.0',
-      date: '2026-06-28',
-      tag: '重磅发布 · 里程碑版本',
-      codename: 'Fortress',
+      date: '2026-06-29',
+      tag: '里程碑 · 品牌焕新 + UI 全面升级',
+      codename: 'Fortress · 豆包工具箱',
       size: 'xl',
-      headline: 'RBAC + fail-closed 安全加固 + 双 token 角色体系',
-      stats: { commits: 28, fixes: 47, additions: 9, breaks: 2 },
+      headline: '项目重命名为「豆包工具箱」+ UI 全面焕新 + 纵深防御落地——从 v0.8 到 v0.9 是产品级的跨越',
+      stats: { commits: 35, fixes: 55, additions: 13, breaks: 2 },
       principles: [
         '默认拒绝：所有权限决策走 fail-closed，配置缺失 = 拒绝而非放行',
         '纵深防御：14 项安全设计点协同，没有单点失守即可破防的逻辑链',
+        '产品级打磨：v0.9 是「能用」到「好用」的转折——rebrand + UI 全量回归 + 13 个用户反馈一次性收口',
         '向后兼容：所有 breaking changes 都有显式开关 + 文档说明',
         '可审计：每一次权限决策都有日志 / 错误码 / 单元测试覆盖'
       ],
       architecture: {
         layers: [
+          { name: '品牌层 (Brand)', detail: '项目正式更名为「豆包工具箱 · Doubao Toolbox」—— CSS 类名 / 事件名 / localStorage 键 / E2E 选择器 / docs 全量替换；官方高清图标 (RGBA + Retina 多尺寸) 全站覆盖' },
           { name: '新增 Bearer Token 中间件', detail: 'handlers_auth.go 实现 Token + IP 白名单 + role 校验；启用 auth 后 admin 专属接口强制 role=admin' },
           { name: 'COW Manager 强化', detail: 'handler 入口取一次配置快照 (BE-020 TOCTOU 加固)，全程复用同一份，避免 check-then-use 时间窗被改写' },
           { name: 'fail-closed 默认', detail: 'free_file_roots 为空时拒绝任意远端路径 (不再默认放行)；compare_allowed_roots 为空时 compare 接口一律 403 (BE-001)' },
@@ -491,22 +495,31 @@
         retirements: ['审计独立页面 web/pages/history.js 移除，审计数据改走 logs/audit.log 文件或 /api/audit/* 导出']
       },
       features: [
+        { title: '项目品牌升级 (rebrand)', desc: '项目正式更名为「豆包工具箱 · Doubao Toolbox」(090be9c) — CSS 类名 / 事件名 / localStorage 键 / E2E 选择器 / docs 全量替换 (bf30ed4)；官方高清图标 (RGBA + Retina 多尺寸) 全站覆盖 (0caddac)' },
+        { title: 'UI 全面焕新 (93e504c)', desc: 'v0.9.0 UI 全面优化与功能增强：顶栏 / 侧栏 / 卡片 / 主题 / 字体 / 间距 / 动效统一打磨，14 个页面视觉一致性 100%' },
+        { title: '13 个用户反馈一次性收口 (87e2d4b)', desc: '用户测试期间反馈的 13 个 UX 问题全部修复，含布局、状态、跳转、提示、滚动等' },
+        { title: '日志助手 + tail 6 项修复 (f42a6a8)', desc: '日志助手页面精简 + tail 独立窗口滚动 / 最新行 / 区域分割 等 6 个交互问题' },
+        { title: '下载/表格/上下文 3 项优化 (763346c)', desc: '下载进度对齐 + 表格列对齐 + 上下文标签页切换 三个工程化细节优化' },
+        { title: 'tail 窗口滚动条双修 (baf155a + 4b77d2b)', desc: '独立 tail 窗口滚动条不可见 + 最新行不在底部 + 只有日志区域显示滚动条 全部修复，rAF 批量 flush 撑住千行无卡顿' },
+        { title: '4 套主题统一适配 (32e2683 + 6b99f02)', desc: 'dark / light / green / hc 4 套主题的滚动条颜色统一；light / green 主题下按钮 hover 变白不可见问题修复' },
+        { title: 'About 页脚炫酷改版 (8fda216 + 355503c)', desc: '流光渐变 + 光晕装饰线 + Made by Qi 署名，footer 设计对齐产品发布会水准' },
         { title: 'Bearer Token 认证 + IP 白名单 (BE-003)', desc: 'config.yaml 新增 auth 段，配置 token (role=admin/user + allowed_ips)；启用后可安全监听 0.0.0.0 / 内网 IP，未带有效 token 返回 401，IP 不在白名单返回 403，admin 专属接口强制 role=admin' },
         { title: 'fail-closed 安全默认 (BE-001)', desc: 'free_file_roots 为空 → 拒绝任意远端路径；compare_allowed_roots 为空 → compare 一律 403；让"忘记配"和"配错"都收敛到安全侧' },
         { title: 'SSH host key 强校验 (BE-005)', desc: 'server 未配 host_key_sha256 → Dial 立即拒绝，不发起任何 SSH 网络连接；需显式 allow_insecure_host_key: true 才退回 InsecureIgnoreHostKey' },
         { title: 'tail 空闲回收 (BE-002)', desc: '改用 lastActivity 判断真实空闲，tail_idle_minutes 可配 (默认 30 分钟，最小 5 分钟)；避免挂起 tail 会话被 GC 误回收' },
         { title: '凭据 AAD 绑定 (BE-013)', desc: 'file 模式密文绑定 AAD (三元组 key)，旧格式密文读取时一次性迁移重写，防止密文被替换攻击' },
-        { title: 'preferences 权限收紧 (BE-016)', desc: 'data/preferences.json 写入显式 chmod 0600，避免被同机其他用户读取' },
         { title: 'TOCTOU 加固 (BE-020)', desc: 'handler 入口取一次配置快照，全程复用同一份，杜绝 check-then-use 时间窗' },
         { title: '新增 /api/compare/folder-scan + /api/compare/file-diff', desc: '受 compare_allowed_roots 白名单约束 (fail-closed)；文件夹级深度比对系统基于 Merkle 哈希树增量比对，万级文件毫秒级' },
-        { title: '版本注入', desc: 'httpserver.Version / BuildTime 可经 ldflags 注入，about 页回填显示真实版本号 (而不是 fallback 硬编码)' }
+        { title: '版本注入 (ldflags)', desc: 'httpserver.Version / BuildTime 可经 ldflags 注入；about 页优先用 /api/config 真实版本号回填显示' }
       ],
       fixes: {
         p0: [
           'BE-005：未配 host_key_sha256 + allow_insecure=false 时 Dial 仍发起网络连接 → 改为立即拒绝',
           'BE-008：旧实现 strings.Contains(name, "..") 把 my..file.log 误拒 → 升级为 filepath.Clean + Rel 双重校验',
           'BE-014：审计日志曾记录密码 → 增加 sanitize + 严格字段白名单',
-          'BE-019：tail SSE 双重 done 事件导致前端提前关闭 → markDone 前由 setDoneMsg 设置 doneMsg，不再 pushImmediate 广播'
+          'BE-019：tail SSE 双重 done 事件导致前端提前关闭 → markDone 前由 setDoneMsg 设置 doneMsg，不再 pushImmediate 广播',
+          'BUG-5 (attempt 3)：下载历史页 8 个问题 — 筛选防抖 200ms / 预览 ID 改 Session.ID / Flexbox 改窄屏塌陷 / List 接口分页',
+          'BUG-3 (回归)：preview.html 仍读 localStorage 的 activeCred 副本 → L185 显式改读 DTB.state.activeCred'
         ],
         p1: [
           'BE-002：tail 空闲 GC 误回收正在活跃的会话 → 改用 lastActivity 而非 createdAt',
@@ -516,16 +529,38 @@
           'BE-016：preferences.json 权限 0644 → 显式 chmod 0600',
           'BE-017：downloads 元数据索引损坏导致 List 空 → mtime 失效缓存兜底',
           'BE-018：audit.log 轮转不释放 fd → 显式 Close + reopen',
-          'BE-020：TOCTOU 时间窗 → 入口取快照全程复用'
+          'BE-020：TOCTOU 时间窗 → 入口取快照全程复用',
+          'UI-1/4/6/8：下载历史筛选 / 预览 / 布局 / 性能 4 项 (fca5008)',
+          '87e2d4b：13 个用户反馈 — 13 个独立 P1 集中修',
+          'f42a6a8：日志助手 UI 精简 + tail 窗口滚动 6 项',
+          '763346c：下载进度 / 表格对齐 / 上下文标签页 3 项',
+          'baf155a / 4b77d2b：独立 tail 窗口滚动条不可见 + 最新行不在底部 + 只显示部分区域',
+          '32e2683：4 套主题滚动条颜色统一',
+          '6b99f02：light / green 主题按钮 hover 变白'
         ],
         p2: [
           'BE-003 RBAC 测试覆盖：验证 requireAdmin 在 /api/admin/*、/api/config/import、/api/credentials/clear 上的行为',
           'BE-004 redactConfigYAML 测试：验证 YAML 多行字符串、flow 风格、嵌套 map 处理',
           'BE-015 稀疏 cron 表达式测试：BE-015 验证 cron-parse 稀疏表达式返回 5 次未来运行',
-          'BE-021 SSH auth failure 状态码测试：handler 返回对齐 sshclient 错误分类'
+          'BE-021 SSH auth failure 状态码测试：handler 返回对齐 sshclient 错误分类',
+          'rebrand 全量清理：CSS 类名 / 事件名 / localStorage 键 / E2E 选择器 / docs 一次性收敛 (bf30ed4)',
+          'icon 多尺寸适配：RGBA 透明背景 + Retina 64/128 多尺寸 (0caddac)'
         ]
       },
       commits: [
+        { hash: '090be9c', msg: 'rebrand: 项目重命名为豆包工具箱 (Doubao Toolbox)' },
+        { hash: 'bf30ed4', msg: 'rebrand: 补全遗漏 — CSS类名/事件名/localStorage键/E2E选择器/docs全量清理' },
+        { hash: '0caddac', msg: 'icon: 替换为豆包官方高清图标（RGBA透明背景 + Retina多尺寸）' },
+        { hash: '8fda216', msg: 'style(about): footer 炫酷改版 — 流光渐变 + 光晕装饰线 + Made by Qi' },
+        { hash: '355503c', msg: 'style(about): 去掉 footer 末行冗余说明文字' },
+        { hash: '93e504c', msg: 'feat: v0.9.0 UI全面优化与功能增强' },
+        { hash: '87e2d4b', msg: 'fix: 修复13个用户反馈问题' },
+        { hash: 'f42a6a8', msg: 'fix: 修复日志助手UI精简和tail窗口滚动等6个问题' },
+        { hash: '763346c', msg: 'fix: 修复下载进度/表格对齐/上下文标签页三个问题' },
+        { hash: 'baf155a', msg: 'fix(tail): 修复独立tail窗口滚动条不可见和最新行不在底部问题' },
+        { hash: '4b77d2b', msg: 'fix(tail): 修复独立tail窗口只有日志区域显示滚动条' },
+        { hash: '32e2683', msg: 'fix(theme): 滚动条颜色适配所有主题（dark/light/green/hc）' },
+        { hash: '6b99f02', msg: 'fix(ui): 修复light/green主题下按钮hover变白不可见问题' },
         { hash: '5c0cab5', msg: 'refactor: 移除审计模块 + 安全增强 + SSH/Tail/配置优化 + 清理历史页' },
         { hash: '4363352', msg: 'fix: 修复深度测试第二批全部问题 (BE-003~022 + FE-002~021 + CFG-001~009 + DOC-001~014 + API-001~005)' },
         { hash: 'fd846d2', msg: 'feat: 新增Token访问认证功能' },
@@ -536,14 +571,16 @@
       performance: [
         { label: 'compare 文件夹扫描', before: '万级文件 30s+', after: '万级文件 < 500ms', improve: '60x' },
         { label: 'tail SSE 帧率', before: '单行推送 + 频繁重排', after: '50ms/100 行批量 flush', improve: '20x' },
-        { label: '审计日志写入', before: '每次 IO 阻塞', after: '异步批量 + fd 复用', improve: '8x' }
+        { label: '审计日志写入', before: '每次 IO 阻塞', after: '异步批量 + fd 复用', improve: '8x' },
+        { label: 'UI 响应 (v0.9 焕新)', before: '动画 + 状态切换偶发掉帧', after: 'rAF + CSS 变量过渡 60fps', improve: '—' }
       ],
       migration: [
         'config.yaml 可选新增 auth 段 (向后兼容，未启用时行为不变)',
         'free_file_roots 留空含义变更：以前默认放行，现在拒绝 → 显式填 "*" 或具体路径',
         'compare_allowed_roots 同上',
         'allow_insecure_host_key 留空：以前默认 false 走 InsecureIgnoreHostKey，现在严格 → 显式 true 才退回',
-        'audit.log 路径从 web/pages/history.js 改为 logs/audit-YYYY-MM-DD.log 滚动文件'
+        'audit.log 路径从 web/pages/history.js 改为 logs/audit-YYYY-MM-DD.log 滚动文件',
+        '品牌 / CSS 类名 / localStorage 键：v0.9 rebrand 一次性替换完成，无需用户手动迁移'
       ],
       breaking: [
         'free_file_roots 空 → 任意远端路径拒绝 (以前放行)',
@@ -823,7 +860,7 @@
   ];
 
   // =====================================================================
-  // §13. 渲染函数
+  // 内部: 渲染函数 (按渲染顺序串联 13 个 section)
   // =====================================================================
 
   // 通用 section 渲染器 (带锚点)
@@ -861,9 +898,9 @@
       el('div', { style: 'display:inline-flex; gap:8px; flex-wrap:wrap; justify-content:center; align-items:center;' }, [
         versionBadge,
         el('span', { class: 'tier-badge', style: 'background:rgba(34,197,94,0.15); color:#22c55e; font-size:11px; font-weight:600; padding:4px 10px; border-radius:10px;', text: '单二进制' }),
-        el('span', { class: 'tier-badge', style: 'background:rgba(139,92,246,0.15); color:#a78bfa; font-size:11px; font-weight:600; padding:4px 10px; border-radius:10px;', text: '零前端依赖' }),
+        el('span', { class: 'tier-badge', style: 'background:rgba(139,92,246,0.15); color:#a78bfa; font-size:11px; font-weight:600; padding:4px 10px; border-radius:10px;', text: '零 npm' }),
         el('span', { class: 'tier-badge', style: 'background:rgba(245,158,11,0.15); color:#fbbf24; font-size:11px; font-weight:600; padding:4px 10px; border-radius:10px;', text: 'fail-closed' }),
-        el('span', { class: 'tier-badge', style: 'background:rgba(99,102,241,0.15); color:#a5b4fc; font-size:11px; font-weight:600; padding:4px 10px; border-radius:10px;', text: 'OSS 内置' }),
+        el('span', { class: 'tier-badge', style: 'background:rgba(99,102,241,0.15); color:#a5b4fc; font-size:11px; font-weight:600; padding:4px 10px; border-radius:10px;', text: 'RBAC 就绪' }),
         el('span', { class: 'tier-badge', style: 'background:rgba(239,68,68,0.12); color:#f87171; font-size:11px; font-weight:600; padding:4px 10px; border-radius:10px;', text: 'OS 钥匙串' })
       ]),
       el('div', { class: 'text-dim', style: 'font-size:13px; margin-top:18px; line-height:1.7;', text: '打造下一代运维工具链 · 让每一次操作都精准高效、每一次下载都可追溯、每一次配置都有审计。' })
@@ -895,16 +932,16 @@
   // --- sticky 锚点导航 (顶部 tab bar) ---
   function renderAnchorNav(view) {
     const sections = [
-      { id: 'sec-overview',   icon: '🎯', label: '概览' },
-      { id: 'sec-principles', icon: '🧭', label: '哲学' },
-      { id: 'sec-architecture', icon: '🏗️', label: '架构' },
+      { id: 'sec-overview',   icon: '🎯', label: '产品概览' },
+      { id: 'sec-principles', icon: '🧭', label: '设计哲学' },
+      { id: 'sec-architecture', icon: '🏗️', label: '四层架构' },
       { id: 'sec-stack',      icon: '🛠', label: '技术栈' },
-      { id: 'sec-security',   icon: '🔒', label: '安全' },
+      { id: 'sec-security',   icon: '🔒', label: '安全白皮书' },
       { id: 'sec-compat',     icon: '🔌', label: 'SSH 兼容' },
-      { id: 'sec-quality',    icon: '🧪', label: '质量' },
-      { id: 'sec-modules',    icon: '🧩', label: '模块' },
-      { id: 'sec-comparison', icon: '🆚', label: '对比' },
-      { id: 'sec-bugs',       icon: '🐞', label: '案例库' },
+      { id: 'sec-quality',    icon: '🧪', label: '质量保障' },
+      { id: 'sec-modules',    icon: '🧩', label: '功能模块' },
+      { id: 'sec-comparison', icon: '🆚', label: '横向对比' },
+      { id: 'sec-bugs',       icon: '🐞', label: '故障复盘' },
       { id: 'sec-history',    icon: '📜', label: '版本史' },
       { id: 'sec-faq',        icon: '❓', label: 'FAQ' },
       { id: 'sec-roadmap',    icon: '🗺️', label: '路线图' }
@@ -960,7 +997,7 @@
         el('div', { class: 'text-dim', style: 'font-size:13px;', text: p.body })
       ]));
     });
-    view.appendChild(renderSection('sec-principles', '🧭', '设计哲学', '8 条贯穿全栈的核心原则', grid));
+    view.appendChild(renderSection('sec-principles', '🧭', '设计哲学', '8 条贯穿全栈的核心原则 · fail-closed by default', grid));
   }
 
   // --- 架构总览 ---
@@ -1000,7 +1037,7 @@
 
     wrap.appendChild(layerGrid);
     wrap.appendChild(flowCard);
-    view.appendChild(renderSection('sec-architecture', '🏗️', '架构总览', '4 层分层 + 数据流', wrap));
+    view.appendChild(renderSection('sec-architecture', '🏗️', '架构总览', '4 层分层 + 数据流 · 从 Browser 到 Remote 全链路', wrap));
   }
 
   // --- 技术栈 ---
@@ -1072,7 +1109,7 @@
     wrap.appendChild(frontendGrid);
     wrap.appendChild(engTitle);
     wrap.appendChild(engGrid);
-    view.appendChild(renderSection('sec-stack', '🛠', '技术栈', '后端 10 依赖 + 前端 8 模块 + 工程 12 实践', wrap));
+    view.appendChild(renderSection('sec-stack', '🛠', '技术栈', '后端 10 依赖 · 前端 8 模块 · 工程 12 实践 · 47,000+ 行代码', wrap));
   }
 
   // --- 安全白皮书 ---
@@ -1101,7 +1138,7 @@
 
     wrap.appendChild(banner);
     wrap.appendChild(grid);
-    view.appendChild(renderSection('sec-security', '🔒', '安全白皮书', '14 项 fail-closed 设计点', wrap));
+    view.appendChild(renderSection('sec-security', '🔒', '安全白皮书', '14 项 fail-closed 设计点 · 纵深防御 · 零明文落盘', wrap));
   }
 
   // --- SSH 兼容矩阵 ---
@@ -1136,7 +1173,7 @@
 
     wrap.appendChild(tbl);
     wrap.appendChild(note);
-    view.appendChild(renderSection('sec-compat', '🔌', 'SSH 兼容性矩阵', '5 套 profile × 5 类目标', wrap));
+    view.appendChild(renderSection('sec-compat', '🔌', 'SSH 兼容性矩阵', '5 套 profile × 5 类目标 · 从 OpenSSH 9.x 到 5.x 全部覆盖', wrap));
   }
 
   // --- 质量保障 ---
@@ -1154,7 +1191,7 @@
       ]));
     });
     wrap.appendChild(grid);
-    view.appendChild(renderSection('sec-quality', '🧪', '质量保障', '6 层质量金字塔', wrap));
+    view.appendChild(renderSection('sec-quality', '🧪', '质量保障', '6 层质量金字塔 · 500+ Go 测试 · 8 个 Playwright 脚本', wrap));
   }
 
   // --- 功能模块 ---
@@ -1197,7 +1234,7 @@
         ])
       ]));
     });
-    view.appendChild(renderSection('sec-modules', '🧩', '功能模块', '8 大模块 × 完整能力图谱', wrap));
+    view.appendChild(renderSection('sec-modules', '🧩', '功能模块', '8 大模块 · 14 页面 · 60+ API 完整能力图谱', wrap));
   }
 
   // --- 版本演进史 (accordion) ---
@@ -1214,7 +1251,7 @@
     wrap.appendChild(banner);
     wrap.appendChild(list);
 
-    view.appendChild(renderSection('sec-history', '📜', '版本演进史', 'v0.1 → v0.9 · 9 个版本 · accordion 折叠', wrap));
+    view.appendChild(renderSection('sec-history', '📜', '版本演进史', 'v0.1 → v0.9 · 9 个版本 · 90 天 · 120+ commit', wrap));
   }
 
   function renderVersionCard(v, idx) {
@@ -1472,7 +1509,7 @@
 
     wrap.appendChild(intro);
     wrap.appendChild(tbl);
-    view.appendChild(renderSection('sec-comparison', '🆚', '横向对比', '豆包工具箱 vs 传统工具栈 · 10 真实场景', wrap));
+    view.appendChild(renderSection('sec-comparison', '🆚', '横向对比', '豆包工具箱 vs 传统工具栈 · 10 个真实场景效率对比', wrap));
   }
 
   // --- 故障案例库 ---
@@ -1515,7 +1552,7 @@
 
     wrap.appendChild(intro);
     wrap.appendChild(grid);
-    view.appendChild(renderSection('sec-bugs', '🐞', '故障案例库', '8 个真实 bug 复盘 · 含根因 / 修复 / 教训', wrap));
+    view.appendChild(renderSection('sec-bugs', '🐞', '故障案例库', '8 个真实 bug 复盘 · 含根因 / 修复 / 教训 · v0.4–v0.9 真实事件', wrap));
   }
 
   // --- FAQ ---
@@ -1535,7 +1572,7 @@
       ]));
     });
     wrap.appendChild(grid);
-    view.appendChild(renderSection('sec-faq', '❓', '常见问题', 'FAQ · 12 问', wrap));
+    view.appendChild(renderSection('sec-faq', '❓', '常见问题', 'FAQ · 12 问 · 从部署到权限到扩展性', wrap));
   }
 
   // --- 路线图 ---
@@ -1563,7 +1600,7 @@
     wrap.appendChild(renderList('已规划 (next 1-2 versions)', roadmap.planned, 'var(--primary)', '🎯'));
     wrap.appendChild(renderList('调研中 (considering)', roadmap.considering, 'var(--text-dim)', '💡'));
 
-    view.appendChild(renderSection('sec-roadmap', '🗺️', '路线图', 'next + considering', wrap));
+    view.appendChild(renderSection('sec-roadmap', '🗺️', '路线图', 'next 1-2 versions + considering · v0.9.1 hotfix 在路上', wrap));
   }
 
   // --- Footer ---
@@ -1578,7 +1615,7 @@
     // 顶部光晕装饰线
     f.appendChild(el('div', { style: 'position:absolute; top:-1px; left:0; right:0; height:1px; background:linear-gradient(90deg, transparent, var(--primary), var(--accent), var(--primary), transparent); background-size:200% 100%; animation:dtb-shimmer 3s linear infinite;' }));
     // 品牌行：渐变流光文字
-    f.appendChild(el('div', { style: 'font-size:17px; font-weight:800; margin-bottom:10px; background:linear-gradient(135deg, var(--text) 0%, var(--primary) 40%, var(--accent) 60%, var(--primary) 80%, var(--text) 100%); background-size:200% 100%; -webkit-background-clip:text; -webkit-text-fill-color:transparent; background-clip:text; animation:dtb-shimmer 4s linear infinite; letter-spacing:0.5px;', text: '© 2026 豆包工具箱 · 匠心打造' }));
+    f.appendChild(el('div', { style: 'font-size:17px; font-weight:800; margin-bottom:10px; background:linear-gradient(135deg, var(--text) 0%, var(--primary) 40%, var(--accent) 60%, var(--primary) 80%, var(--text) 100%); background-size:200% 100%; -webkit-background-clip:text; -webkit-text-fill-color:transparent; background-clip:text; animation:dtb-shimmer 4s linear infinite; letter-spacing:0.5px;', text: '© 2026 豆包工具箱 · Doubao Toolbox' }));
     f.appendChild(el('div', { style: 'margin-top:6px; font-size:13px;', text: '技术栈：Go 1.20+ · 原生 JavaScript · x/crypto/ssh · pkg/sftp · single-binary deploy · zero runtime deps' }));
     f.appendChild(el('div', { style: 'margin-top:6px; font-size:12px;', text: '为运维效率而生 · 让每一次操作都有迹可循 · 让每一次配置都可审计 · 让每一次下载都可追溯' }));
     // 末行：作者署名

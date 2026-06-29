@@ -2,14 +2,14 @@
 
 # 豆包工具箱 · Doubao Toolbox
 
-**跨平台 · 纯 Go 单 exe · 启动即用 · 默认仅本机访问**
+**跨平台 · 纯 Go 单 exe · 启动即用 · 系统托盘常驻 · 默认仅本机访问**
 
 面向内网运维 / DBA / SRE 的本地工具箱，把 **SSH 远程命令、WebSphere 日志排查、文件下载、报文格式化、审计追溯** 这些高频操作收敛到一个零依赖、绿色运行的单 exe 中。
 
 [![Go Version](https://img.shields.io/badge/Go-1.20%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-4F4F4F)](#)
 [![License](https://img.shields.io/badge/License-Internal%20Use-orange)](#)
-[![Status](https://img.shields.io/badge/Status-v0.9%20Released-brightgreen)](#)
+[![Status](https://img.shields.io/badge/Status-v0.9.0%20Released-brightgreen)](#)
 [![Dependencies](https://img.shields.io/badge/Deps-zero%20runtime-2ea44f)](#)
 [![Binary](https://img.shields.io/badge/Single%20Exe-%E2%9C%93-success)](#)
 
@@ -40,14 +40,13 @@
 ### 方式 A：直接运行发版 exe（同事拿到包就这样用）
 
 1. 解压发版 zip 到任意目录，比如 `D:\doubao-toolbox\`
-2. **不要双击 exe**，先用 `cmd` 启动看完整日志：
-
-   ```bat
-   cd /d D:\doubao-toolbox
-   DoubaoToolbox.exe
-   ```
-
-3. 看到 `工具箱已启动: http://127.0.0.1:18080` 后，浏览器会自动打开；没自动开就手动访问这个地址。
+2. **双击 `DoubaoToolbox.exe`**：
+   - 无控制台黑窗口弹出
+   - 浏览器自动打开 `http://127.0.0.1:18080`
+   - **系统托盘**（右下角）出现豆包图标，常驻进程
+3. 右键托盘图标可 **「打开浏览器」** 或 **「退出」**
+4. 启动失败会弹 MessageBox 提示错误内容（按 Ctrl+C 可复制），同时写 `crash.log`
+5. 运行日志在 `logs/doubao-toolbox.log`
 
 ### 方式 B：开发模式
 
@@ -181,9 +180,10 @@ go run .
 
 ### 7. 操作历史（审计）
 
-> 前端「操作历史」页（`web/pages/history.js`）已在 v0.8 下线；审计数据改为直接访问 `logs/audit.log` 文件，或在「下载历史」页查看 `op=files.*` / `op=downloads.*` 的下载侧记录。
+> 前端「操作历史」页（`web/pages/history.js`）已在 v0.8 下线；v0.9 起 `handlers_audit.go` 也已移除（`/api/audit/*` 端点全部下线）。
+> 现在审计数据**只**走 `logs/audit.log`（按天滚动为 `audit-YYYY-MM-DD.log`），用文本工具 / `jq` / 自写脚本离线分析即可。
 
-- `logs/audit.log` 全操作流水（`/api/audit/*` 仍提供 CSV / JSON 导出，供 acceptance 脚本 / 运维离线分析）
+- `logs/audit.log` 全操作流水，按天滚动保留
 - **永不记录** SSH 密码、日志正文
 - 字段示例：
   ```
@@ -207,6 +207,7 @@ go run .
 | [`github.com/pkg/sftp`](https://github.com/pkg/sftp) | v1.13.6 | SFTP 协议实现：列目录、Stat、下载、Open |
 | [`golang.org/x/crypto/ssh`](https://pkg.go.dev/golang.org/x/crypto/ssh) | v0.31.0 | SSH 客户端 + 3 套 compat profile |
 | [`golang.org/x/text`](https://pkg.go.dev/golang.org/x/text) | v0.21.0 | `simplifiedchinese.GBK` / `GB18030` 透明编码转换 |
+| [`fyne.io/systray`](https://github.com/fyne-io/systray) | v1.11.0 | Windows 系统托盘（右下角图标 + 右键菜单） |
 | [`github.com/zalando/go-keyring`](https://github.com/zalando/go-keyring) | v0.2.8 | OS 钥匙串统一抽象 |
 | [`github.com/danieljoos/wincred`](https://github.com/danieljoos/wincred) | v1.2.3 | Windows DPAPI（`go-keyring` 后端） |
 | [`github.com/godbus/dbus/v5`](https://github.com/godbus/dbus) | v5.2.2 | Linux Secret Service / D-Bus |
@@ -219,7 +220,7 @@ go run .
 | 选型 | 说明 |
 | --- | --- |
 | **原生 JavaScript (ES2020)** | 无 React / Vue 依赖，单文件 IIFE |
-| **模块拆分** | `core.js` / `state.js` / `api.js` / `theme.js` + `pages/*.js`（home / websphere / files / formatter / commands / diagnostics / config / downloads / http / timestamp / cron / jsonpath / compare / about） |
+| **模块拆分** | `core.js` / `state.js` / `api.js` / `theme.js` / `auth.js`（v0.9 Bearer token 登录遮罩）+ `tail.js`（独立 tail 窗口逻辑）+ `pages/*.js`（home / websphere / files / formatter / commands / diagnostics / config / downloads / http / timestamp / cron / jsonpath / compare / about） |
 | **CSS 变量主题** | `:root[data-theme=...]` 4 套主题（dark / light / green / hc）；inline script 在 `<head>` 提前设 `data-theme` 防 FOUC |
 | **Node 单测** | `web/app.test.js` 覆盖 `escapeHtml` / `formatBytes` / `formatTime` / `trimMiddle` / `cssEscape` / `pctText` / `validate` |
 | **go:embed** | `web/` 整个目录内嵌进二进制，无外部静态文件 |
@@ -360,16 +361,15 @@ go run .
 | POST | `/api/choose-file` | 弹原生文件选择框，返回路径（macOS / Windows / Linux） |
 | POST | `/api/choose-dir` | 弹原生目录选择框，返回路径 |
 
-### 凭据 / 审计 / 下载管理
+### 凭据 / 下载管理
+
+> 审计：`/api/audit/*` 端点已在 v0.9 移除（`handlers_audit.go` 删除），审计数据直接读 `logs/audit.log`。
 
 | Method | Path | 用途 |
 | --- | --- | --- |
 | POST | `/api/credentials/save` | 保存 SSH 密码（按 `credential_store` 落 keyring 或 file） |
 | GET | `/api/credentials/has` | 检查是否已存密码（不返回密码） |
 | POST | `/api/credentials/clear` | 删除已存密码（**admin**，启用 auth 时） |
-| GET | `/api/audit/recent` | 操作历史（按 op/system/server/result 过滤） |
-| GET | `/api/audit/export.csv` | 导出 CSV |
-| GET | `/api/audit/export.json` | 导出 JSON |
 | GET | `/api/downloads/list` | 下载历史（含 sidecar 元数据） |
 | DELETE | `/api/downloads/<name>` | 删除单条下载 |
 | POST | `/api/downloads/all` | 清空 downloads/ |
@@ -477,15 +477,15 @@ cd doubao-toolbox
 # 第一次 clone 后，把依赖固化到 vendor/
 go mod vendor
 
-# 主版本（Win10/11）
+# 主版本（Win10/11）— -H windowsgui 让双击无控制台，走系统托盘
 GOOS=windows GOARCH=amd64 CGO_ENABLED=0 \
-  go build -mod=vendor -trimpath -ldflags "-s -w" \
+  go build -mod=vendor -trimpath -ldflags "-s -w -H windowsgui" \
   -o DoubaoToolbox.exe .
 
 # 或用脚本（自动检测 vendor/ 是否存在）
 ./scripts/build_windows_amd64.sh v0.5.0
 ./scripts/package_windows.sh v0.5.0
-# → dist/ops-toolbox-v0.5.0-windows.zip
+# → dist/doubao-toolbox-v0.5.0-windows.zip
 ```
 
 ### 编译 Win7 兼容版
@@ -502,23 +502,21 @@ tar -C ~/sdk/go120 -xzf /tmp/go1.20.14.darwin-amd64.tar.gz --strip-components=1
 # 2) 编译（脚本同样会自动 -mod=vendor）
 export GO120_HOME=~/sdk/go120
 ./scripts/build_windows_amd64_win7_go120.sh v0.5.0
-# → dist/ops-toolbox-v0.5.0-win7/豆包工具箱_win7.exe
+# → dist/doubao-toolbox-v0.5.0-win7/豆包工具箱_win7.exe
 ```
 
 ### 发版给同事要打什么包
 
 ```
-DoubaoToolbox.exe              # 主程序（Win10/11）
+DoubaoToolbox.exe              # 主程序（Win10/11）— 双击即用，无控制台，托盘常驻
 # 或 豆包工具箱_win7.exe   # Win7 兼容版
 config.yaml                 # 配置文件
-config.yaml.production.example  # 生产示例（首次部署参考）
 README.md                   # 本文件
-start.bat                   # 控制台启动脚本
-downloads/                  # 下载保存目录
-logs/                       # 程序 + 审计日志
-data/                       # 预留数据目录
 ```
 
+> 双击 exe 后自动创建 `downloads/`、`logs/`、`data/` 目录。
+> 启动失败弹 MessageBox（Ctrl+C 可复制）+ 写 `crash.log`。
+> 运行日志在 `logs/doubao-toolbox.log`。
 > 不要把源码、scripts、docs、dist 目录发出去。
 
 ---
@@ -529,7 +527,7 @@ data/                       # 预留数据目录
 
 ```yaml
 app:
-  name: 内网运维工具箱
+  name: 豆包工具箱
   host: 127.0.0.1                # 默认仅 127.0.0.1 / localhost；启用 auth 后允许 0.0.0.0 / 内网 IP
   port: 18080                    # 端口被占用就换一个
   auto_open_browser: true
@@ -612,6 +610,10 @@ doubao-toolbox/
 │   ├── style.css                # CSS 变量主题（dark/light/green/hc）
 │   ├── theme.js                 # 主题切换（localStorage 持久）
 │   ├── core.js / api.js / state.js / app.js
+│   ├── auth.js                  # Bearer token 登录遮罩（v0.9 起）
+│   ├── tail.js                  # 独立 tail 窗口逻辑（v0.9 起）
+│   ├── img/                     # 豆包官方图标（128/64/favicon，Retina 多尺寸）
+│   ├── vendor/                  # 第三方前端库（diff2html.min.{js,css}）
 │   ├── app.test.js              # Node 单测
 │   └── pages/
 │       ├── home.js              # 首页
@@ -627,12 +629,13 @@ doubao-toolbox/
 │       ├── cron.js              # Cron 解析（v0.7）
 │       ├── jsonpath.js          # JSONPath 查询（v0.7）
 │       ├── compare.js           # 代码 / 文件比对（v0.7）
-│       └── about.js             # 关于
+│       └── about.js             # 关于（v0.9 重写：数据仪表盘 + 架构 + 版本史）
 ├── internal/
-│   ├── audit/                   # 审计日志（线程安全，不含密码）
+│   ├── audit/                   # 审计日志（线程安全，不含密码；v0.9 起 `/api/audit/*` 端点下线）
 │   ├── config/                  # config.yaml 加载 + 校验 + COW Manager
-│   ├── credentials/             # 凭据存储抽象（keyring / file AES-256-GCM）
+│   ├── credentials/             # 凭据存储抽象（keyring / file AES-256-GCM + AAD）
 │   ├── diagnostics/             # 环境自检（App/Build/Runtime/Tools/Servers）
+│   ├── diff/                    # 跨平台 diff 实现（v0.7+）
 │   ├── dlmanager/               # 异步下载任务池 + SSE 广播（GC 周期可调）
 │   ├── downloads/               # sidecar 元数据（*.meta.json）
 │   ├── formatter/               # JSON / XML 格式化
@@ -640,26 +643,42 @@ doubao-toolbox/
 │   │   ├── httpserver.go        # 路由表 + 服务组装
 │   │   ├── response.go / helpers.go / open_dir.go
 │   │   ├── handlers_ssh.go / handlers_logs_*.go / handlers_files.go
-│   │   ├── handlers_tail.go / handlers_admin.go / handlers_audit.go
+│   │   ├── handlers_tail.go / handlers_admin.go
 │   │   ├── handlers_credentials.go / handlers_downloads.go / handlers_format.go
 │   │   ├── handlers_diagnostics.go / handlers_preferences.go / handlers_local.go
+│   │   ├── handlers_compare.go / handlers_diff.go
+│   │   ├── handlers_auth.go / handlers_openers.go / handlers_config_yaml.go
 │   │   └── *_test.go            # 单测 + 集成测试（fake SFTP）
 │   ├── logquery/                # 后端命令模板
 │   ├── portreuse/               # 端口复用（Windows 独立实现 + 跨平台兜底）
 │   ├── sftpclient/              # SFTP 客户端封装
 │   ├── sshclient/               # SSH 客户端（3 套 compat profile + ctx 超时）
-│   └── tailmgr/                 # Tail 会话池 + Streamer 接口
+│   ├── tailmgr/                 # Tail 会话池 + Streamer 接口
+│   └── tray/                    # 系统托盘 + 启动错误弹框（Windows GUI 模式）
 ├── scripts/
 │   ├── build_windows_amd64.sh
 │   ├── build_windows_amd64_win7_go120.sh
-│   ├── package_windows.sh
+│   ├── package_windows.sh       # 打 Windows 发版 zip
+│   ├── package_source.sh        # 打源码 zip
 │   ├── acceptance_run.py
 │   ├── mock_sshd.py             # 假 sshd，给集成测试用
 │   ├── fake-websphere/          # 假 WebSphere 日志布局
-│   └── start.bat
+│   ├── fake-files/              # 假远端文件系统（e2e 夹具）
+│   ├── e2e.sh                   # Playwright e2e 入口（v0.9 起）
+│   ├── e2e-prepare-fixtures.js  # e2e 夹具准备脚本（v0.9 起）
+│   └── release_smoke_test.sh    # 发版冒烟测试
+├── tests/
+│   └── e2e/                     # Playwright 端到端测试（v0.9 起）
 └── docs/
     ├── ACCEPTANCE.md            # 验收清单
+    ├── TEST-MATRIX.md           # 测试矩阵
+    ├── MANUAL-CLICK-CASES.md    # 手工点击用例
+    ├── E2E-COVERAGE-GAP.md      # e2e 覆盖差距分析（v0.9 起）
+    ├── E2E-ISSUES-FOUND.md      # e2e 发现的问题（v0.9 起）
+    ├── E2E-KNOWN-LIMITATIONS.md # e2e 已知限制（v0.9 起）
+    ├── ISSUES-FOUND.md          # 深度测试问题清单
     ├── banner.svg               # 顶部 banner
+    ├── qa/                      # 深度测试脚本与产物（playwright / reports / screenshots）
     └── REVIEW-FIX-*.md / v0.5-*.md  # 修复与发版记录
 ```
 
@@ -683,7 +702,7 @@ doubao-toolbox/
 | ✅ | 主题切换（4 套） |
 | ✅ | OpenSSH 6.2p2 / AIX / WebSphere SSH 兼容 |
 | ✅ | 环境自检（Diagnostics） |
-| ✅ | 下载历史 + 操作历史 + CSV/JSON 导出 |
+| ✅ | 下载历史（v0.9 起 audit API 已下线，审计数据只走 `logs/audit.log`） |
 | ✅ | 「在资源管理器打开」「定位文件」 |
 | 🚧 | 常用命令模块（当前占位） |
 | 🚧 | 数据库连接（MySQL/PG/Redis） |
@@ -761,7 +780,9 @@ v0.2 起在「系统配置」页直接编辑保存即可，无需重启。手编
 
 ## 📜 Release Notes
 
-### v0.9（当前）— RBAC + fail-closed 安全加固
+### v0.9.0（当前）— RBAC + fail-closed 安全加固 + UI 全面优化
+
+#### 安全加固
 
 - **Bearer token 认证 + IP 白名单**（BE-003）：`config.yaml` 新增 `auth` 段，配置 token（`role=admin` / `user` + `allowed_ips`）；启用后可安全监听 `0.0.0.0` / 内网 IP，未带有效 token 返回 401，IP 不在白名单返回 403；admin 专属接口（配置导入 / 凭据清空 / 服务器增改 / openers / download-retention）强制 `role=admin`
 - **fail-closed 安全默认**：`free_file_roots` 为空时拒绝任意远端路径（不再默认放行）；`compare_allowed_roots` 为空时 compare 接口一律 403（BE-001）
@@ -771,12 +792,32 @@ v0.2 起在「系统配置」页直接编辑保存即可，无需重启。手编
 - **preferences 权限收紧**（BE-016）：`data/preferences.json` 写入显式 `chmod 0600`
 - **TOCTOU 加固**（BE-020）：handler 入口取一次配置快照，全程复用同一份
 - **新增 `/api/compare/folder-scan`、`/api/compare/file-diff`**（受 `compare_allowed_roots` 白名单约束）
+- **`/api/audit/*` 端点下线**：`handlers_audit.go` 移除，审计数据只走 `logs/audit.log`（按天滚动 `audit-YYYY-MM-DD.log`）
+
+#### UI 全面优化 + 功能增强
+
+- **about 页面重写**：数据统计仪表盘（提交次数 / 代码量 / 测试覆盖）+ 技术架构展示 + 完整版本演进史（v0.1 → v0.9 accordion 折叠）
+- **WebSphere 搜索历史 popover**：表达式历史记录 + 空状态友好提示
+- **WebSphere 实时跟踪改独立窗口模式**：`tail.js` + `tail.html` 跟主页面解耦，主页面不再受 SSE 流影响卡顿
+- **WebSphere 文件列表优化**：大小列右对齐、过滤框宽度优化、复制路径 / 打开目录 toast 反馈
+- **WebSphere UI 清理**：移除冗余 introCard、自动填充凭据隐藏 SSH 密码区
+- **主题修复**：green / hc 主题 inline code 背景色修复、文字对比度提升；独立 tail 窗口主题同步（head 内联脚本防 FOUC）
+- **HTTP 页面优化**：侧边栏宽度、Send 按钮圆角 + 居中 + hover 动效
+- **全局样式**：主按钮 hover 上浮阴影、工具类间距、cmd-syntax 右侧 padding
+- **图标替换**：豆包官方高清图标（RGBA 透明背景 + Retina 多尺寸）替换旧 logo
+
+#### E2E 测试基础设施
+
+- **Playwright 端到端框架**：`tests/e2e/pages/*.js`（base / config / files / formatter 等 page object）
+- **夹具准备脚本**：`scripts/e2e-prepare-fixtures.js` + `scripts/e2e.sh` 一键跑
+- **假文件系统**：`scripts/fake-files/` 含二进制 / 空文件 / 含空格 / 子目录 / 中文文件名等
+- **测试覆盖文档**：`docs/E2E-COVERAGE-GAP.md` / `E2E-ISSUES-FOUND.md` / `E2E-KNOWN-LIMITATIONS.md`
 
 ### v0.8 — 下载管理 + external_openers + 工具集完善
 
 - **external_openers**：`app.external_openers` 配置「用外部程序打开下载文件」列表（`{Name, Path, Icon}`），下载历史页显示对应按钮，调 `/api/local/open-with` 启动
 - **下载保留策略**：`download_retention_days`（默认 7 天）/ `download_max_count`（默认 1000 条），启动 + 下载完成后触发清理；`/api/admin/download-retention` 可在线配置（admin）
-- **操作历史页下线**：`web/pages/history.js` 移除，审计数据改走 `logs/audit.log` 文件或 `/api/audit/*` 导出
+- **操作历史页下线**：`web/pages/history.js` 移除（v0.8），审计数据改走 `logs/audit.log` 文件；`/api/audit/*` 端点则在 v0.9 同步移除
 - **端口复用**：新增 `internal/portreuse`（Windows 独立实现 + 跨平台兜底），支持 SO_REUSEADDR / SO_REUSEPORT
 - **版本注入**：`httpserver.Version` / `BuildTime` 可经 ldflags 注入，about 页回填显示
 

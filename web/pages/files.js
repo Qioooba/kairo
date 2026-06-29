@@ -530,12 +530,18 @@
     //     "systemA/serverA": [ { name: "server1 日志", path: "/opt/IBM/.../server1" }, ... ],
     //     ...
     //   }
-    // 持久化键：localStorage["ops.files.common_dirs"] = JSON
+    // 持久化键：localStorage["dtb:files:common_dirs"] = JSON
+    // v0.9 rebrand: 从 ops.files.common_dirs 迁移到 dtb:files:common_dirs（一次性，不删旧键）
     // 切换 system/server 时重新渲染 commonDirsBar
-    const COMMON_DIRS_LS_KEY = 'ops.files.common_dirs';
+    const COMMON_DIRS_LS_KEY = 'dtb:files:common_dirs';
+    const COMMON_DIRS_LS_KEY_OLD = 'ops.files.common_dirs';
 
     function loadCommonDirs() {
       try {
+        // 一次性迁移：新键不存在但旧键存在时，复制旧值到新键
+        if (!localStorage.getItem(COMMON_DIRS_LS_KEY) && localStorage.getItem(COMMON_DIRS_LS_KEY_OLD)) {
+          localStorage.setItem(COMMON_DIRS_LS_KEY, localStorage.getItem(COMMON_DIRS_LS_KEY_OLD));
+        }
         const raw = localStorage.getItem(COMMON_DIRS_LS_KEY);
         if (!raw) return {};
         const obj = JSON.parse(raw);

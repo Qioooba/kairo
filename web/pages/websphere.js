@@ -3101,17 +3101,6 @@ const formCard = el('div', { class: 'card' }, [
       Object.keys(tabBtns).forEach(k => { tabBtns[k].classList.toggle('active', k === tabId); });
       Object.keys(tabContents).forEach(k => { tabContents[k].classList.toggle('active', k === tabId); });
       try { history.replaceState(null, '', '#/websphere?tab=' + (tabHash[tabId] || tabId)); } catch (e) { /* ignore */ }
-      // 项 8 修复：用户从「搜索排障」点"列出文件"按钮过来时，自动 doList 一次
-      if (tabId === 'files' && window.__otbSwitchTabAndList) {
-        window.__otbSwitchTabAndList = false;
-        // doList 依赖 getSelectedTargets 拿 targets；同时依赖 cfg 已加载
-        if (cfg && sysSel.value && getSelectedTargets().length > 0) {
-          // 异步触发，不阻塞 switchTab
-          setTimeout(() => { doList().catch(() => { /* toast 已在 doList 内部 */ }); }, 50);
-        } else {
-          toast('请先在「目标」里勾选服务器 + 目录', 'warn');
-        }
-      }
     }
 
     tabBar.appendChild(makeTab('📁 文件 / 下载', 'files'));

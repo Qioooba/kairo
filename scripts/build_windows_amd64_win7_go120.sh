@@ -73,7 +73,7 @@ else
   echo ">> 提示：vendor/ 目录缺失，回退到 module 模式（建议先跑 go mod vendor）"
 fi
 
-"${GO_BIN}" build "${GO_MOD_FLAGS[@]}" -trimpath -ldflags "-s -w" -o "${OUT_DIR}/豆包工具箱_win7.exe" .
+"${GO_BIN}" build "${GO_MOD_FLAGS[@]}" -trimpath -ldflags "-s -w -H windowsgui" -o "${OUT_DIR}/豆包工具箱_win7.exe" .
 
 # config.yaml 优先，缺则回退到 config.yaml.production.example，再缺则报错。
 if [[ -f config.yaml ]]; then
@@ -86,13 +86,12 @@ else
   exit 1
 fi
 cp README.md    "${OUT_DIR}/"
-if [[ -f scripts/start.bat ]]; then
-  cp scripts/start.bat "${OUT_DIR}/start.bat"
-fi
-mkdir -p "${OUT_DIR}/downloads" "${OUT_DIR}/logs" "${OUT_DIR}/data"
+# 不再需要 start.bat：-H windowsgui 让双击 exe 无控制台窗口，
+# 系统托盘提供"打开浏览器"和"退出"菜单。
+# downloads/ logs/ data/ 由 exe 启动时自动创建，无需预置。
 
 echo
 echo ">> 已生成："
 ls -lh "${OUT_DIR}/"
 echo
-echo ">> 提示：把这个目录拷到 Win7 机器上，从 cmd 启动 豆包工具箱_win7.exe 验证"
+echo ">> 提示：把这个目录拷到 Win7 机器上，双击 豆包工具箱_win7.exe 即可（托盘右键退出）"

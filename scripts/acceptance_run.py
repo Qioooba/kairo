@@ -53,7 +53,7 @@ def main():
     # 启动 豆包工具箱
     app = subprocess.Popen(
         [os.path.join(ROOT, "DoubaoToolbox_mac")],
-        stdout=open(os.path.join(LOG_DIR, "ops_toolbox.out"), "w"),
+        stdout=open(os.path.join(LOG_DIR, "doubao_toolbox.out"), "w"),
         stderr=subprocess.STDOUT, cwd=ROOT, preexec_fn=os.setsid)
     print(f"app  pid={app.pid}")
     if not wait_port("127.0.0.1", APP_PORT, 6):

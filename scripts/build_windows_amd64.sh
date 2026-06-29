@@ -45,7 +45,7 @@ else
   echo ">> 提示：vendor/ 目录缺失，回退到 module 模式（建议先跑 go mod vendor）"
 fi
 
-go build "${GO_MOD_FLAGS[@]}" -trimpath -ldflags "-s -w" -o "${OUT_DIR}/DoubaoToolbox.exe" .
+go build "${GO_MOD_FLAGS[@]}" -trimpath -ldflags "-s -w -H windowsgui" -o "${OUT_DIR}/DoubaoToolbox.exe" .
 
 # 复制运行所需文件
 # config.yaml 是首选，但发布包里通常只有 config.yaml.production.example（占位 / 模板）。
@@ -60,11 +60,9 @@ else
   exit 1
 fi
 cp README.md    "${OUT_DIR}/"
-# 顺手复制启动脚本（README 里说可以用 start.bat）
-if [[ -f scripts/start.bat ]]; then
-  cp scripts/start.bat "${OUT_DIR}/start.bat"
-fi
-mkdir -p "${OUT_DIR}/downloads" "${OUT_DIR}/logs" "${OUT_DIR}/data"
+# 不再需要 start.bat：-H windowsgui 让双击 exe 无控制台窗口，
+# 系统托盘提供"打开浏览器"和"退出"菜单。
+# downloads/ logs/ data/ 由 exe 启动时自动创建，无需预置。
 
 echo
 echo ">> 已生成："
@@ -72,3 +70,4 @@ ls -lh "${OUT_DIR}/"
 echo
 echo ">> 产物目录：${OUT_DIR}/"
 echo ">> 建议：把这个目录打包成 zip 发给同事（不要把 dist/ 整目录打进去）"
+echo ">> 用法：双击 DoubaoToolbox.exe，托盘图标常驻右下角，右键退出"

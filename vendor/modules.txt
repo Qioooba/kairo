@@ -1,9 +1,16 @@
+# fyne.io/systray v1.11.0
+## explicit; go 1.19
+fyne.io/systray
+fyne.io/systray/internal/generated/menu
+fyne.io/systray/internal/generated/notifier
 # github.com/danieljoos/wincred v1.2.3
 ## explicit; go 1.18
 github.com/danieljoos/wincred
 # github.com/godbus/dbus/v5 v5.2.2
 ## explicit; go 1.20
 github.com/godbus/dbus/v5
+github.com/godbus/dbus/v5/introspect
+github.com/godbus/dbus/v5/prop
 # github.com/kr/fs v0.1.0
 ## explicit
 github.com/kr/fs
