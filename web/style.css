@@ -65,6 +65,14 @@
   --tail-out-fg: #b8d4a3;
   --code-inline-bg: #0a0e14;
 
+  /* 滚动条（跨主题一致可见） */
+  --scrollbar-w: 12px;
+  --scrollbar-h: 12px;
+  --scrollbar-track: rgba(255,255,255,0.06);
+  --scrollbar-thumb: rgba(255,255,255,0.35);
+  --scrollbar-thumb-hover: rgba(255,255,255,0.55);
+  --scrollbar-corner: transparent;
+
   /* 命令速查收藏色 */
   --cmd-fav-color: #f0c040;
 
@@ -190,6 +198,14 @@
   --tail-out-bg: #f3f4f6;
   --tail-out-fg: #1f2937;
   --code-inline-bg: #f1f5f9;
+
+  /* 滚动条（浅主题：深灰滑块在浅灰轨道上，保证可见） */
+  --scrollbar-w: 12px;
+  --scrollbar-h: 12px;
+  --scrollbar-track: rgba(0,0,0,0.06);
+  --scrollbar-thumb: rgba(0,0,0,0.28);
+  --scrollbar-thumb-hover: rgba(0,0,0,0.45);
+  --scrollbar-corner: transparent;
 
   /* diff2html 主题（light）：保留 vendor 默认白底，仅微调高亮强度 */
   --d2h-bg-color: #ffffff;
@@ -954,20 +970,119 @@ textarea { resize: vertical; min-height: 60px; font-family: ui-monospace, monosp
   overflow: auto;
   white-space: pre;
   margin: 0;
-  /* v0.6.2 修复：Firefox 的 thin 默认只 5px 几乎看不见，宽度提到 14px + 用更显眼的 thumb */
-  scrollbar-width: auto; /* Firefox：auto 比 thin 更明显 */
-  scrollbar-color: rgba(255,255,255,0.45) rgba(255,255,255,0.06);
+  scrollbar-width: auto;
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
 }
-.tail-out::-webkit-scrollbar { width: 14px; height: 14px; }
-.tail-out::-webkit-scrollbar-track { background: rgba(255,255,255,0.06); border-radius: 7px; }
+.tail-out::-webkit-scrollbar { width: var(--scrollbar-w); height: var(--scrollbar-h); }
+.tail-out::-webkit-scrollbar-track { background: var(--scrollbar-track); border-radius: 6px; }
 .tail-out::-webkit-scrollbar-thumb {
-  background: rgba(255,255,255,0.45);
-  border-radius: 7px;
+  background: var(--scrollbar-thumb);
+  border-radius: 6px;
   border: 2px solid transparent;
   background-clip: padding-box;
 }
-.tail-out::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.65); background-clip: padding-box; border: 2px solid transparent; }
-.tail-out::-webkit-scrollbar-corner { background: transparent; }
+.tail-out::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+  background-clip: padding-box;
+  border: 2px solid transparent;
+}
+.tail-out::-webkit-scrollbar-corner { background: var(--scrollbar-corner); }
+
+/* ===== 全局可复用滚动条皮肤：给任意 overflow:auto/scroll 容器加 class="scroll-skin"
+   即可获得跟当前主题一致的可见滚动条（Firefox + Webkit）。
+   注意：不在 * 或 body 上强加，避免影响原生 select/option 等控件 ===== */
+.scroll-skin {
+  scrollbar-width: auto;
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+}
+.scroll-skin::-webkit-scrollbar { width: var(--scrollbar-w); height: var(--scrollbar-h); }
+.scroll-skin::-webkit-scrollbar-track { background: var(--scrollbar-track); border-radius: 6px; }
+.scroll-skin::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 6px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+.scroll-skin::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+  background-clip: padding-box;
+  border: 2px solid transparent;
+}
+.scroll-skin::-webkit-scrollbar-corner { background: var(--scrollbar-corner); }
+
+/* 主要滚动容器统一应用主题滚动条（不用逐个加 class） */
+.sidebar,
+.nav,
+.view,
+.tail-highlight-list,
+.http-sidebar,
+.http2-cases-wrap,
+.http2-req-headers,
+.http2-resp-headers,
+.http2-resp-body-wrap,
+pre {
+  scrollbar-width: auto;
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+}
+.sidebar::-webkit-scrollbar,
+.nav::-webkit-scrollbar,
+.view::-webkit-scrollbar,
+.tail-highlight-list::-webkit-scrollbar,
+.http-sidebar::-webkit-scrollbar,
+.http2-cases-wrap::-webkit-scrollbar,
+.http2-req-headers::-webkit-scrollbar,
+.http2-resp-headers::-webkit-scrollbar,
+.http2-resp-body-wrap::-webkit-scrollbar,
+pre::-webkit-scrollbar { width: var(--scrollbar-w); height: var(--scrollbar-h); }
+.sidebar::-webkit-scrollbar-track,
+.nav::-webkit-scrollbar-track,
+.view::-webkit-scrollbar-track,
+.tail-highlight-list::-webkit-scrollbar-track,
+.http-sidebar::-webkit-scrollbar-track,
+.http2-cases-wrap::-webkit-scrollbar-track,
+.http2-req-headers::-webkit-scrollbar-track,
+.http2-resp-headers::-webkit-scrollbar-track,
+.http2-resp-body-wrap::-webkit-scrollbar-track,
+pre::-webkit-scrollbar-track { background: var(--scrollbar-track); border-radius: 6px; }
+.sidebar::-webkit-scrollbar-thumb,
+.nav::-webkit-scrollbar-thumb,
+.view::-webkit-scrollbar-thumb,
+.tail-highlight-list::-webkit-scrollbar-thumb,
+.http-sidebar::-webkit-scrollbar-thumb,
+.http2-cases-wrap::-webkit-scrollbar-thumb,
+.http2-req-headers::-webkit-scrollbar-thumb,
+.http2-resp-headers::-webkit-scrollbar-thumb,
+.http2-resp-body-wrap::-webkit-scrollbar-thumb,
+pre::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 6px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+.sidebar::-webkit-scrollbar-thumb:hover,
+.nav::-webkit-scrollbar-thumb:hover,
+.view::-webkit-scrollbar-thumb:hover,
+.tail-highlight-list::-webkit-scrollbar-thumb:hover,
+.http-sidebar::-webkit-scrollbar-thumb:hover,
+.http2-cases-wrap::-webkit-scrollbar-thumb:hover,
+.http2-req-headers::-webkit-scrollbar-thumb:hover,
+.http2-resp-headers::-webkit-scrollbar-thumb:hover,
+.http2-resp-body-wrap::-webkit-scrollbar-thumb:hover,
+pre::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+  background-clip: padding-box;
+  border: 2px solid transparent;
+}
+.sidebar::-webkit-scrollbar-corner,
+.nav::-webkit-scrollbar-corner,
+.view::-webkit-scrollbar-corner,
+.tail-highlight-list::-webkit-scrollbar-corner,
+.http-sidebar::-webkit-scrollbar-corner,
+.http2-cases-wrap::-webkit-scrollbar-corner,
+.http2-req-headers::-webkit-scrollbar-corner,
+.http2-resp-headers::-webkit-scrollbar-corner,
+.http2-resp-body-wrap::-webkit-scrollbar-corner,
+pre::-webkit-scrollbar-corner { background: var(--scrollbar-corner); }
 
 /* P0-2：tail 行级节点。TailViewer 把每行包成 <div class="tail-line">，
    而不是 <pre> 连续文本。优点：截断到 maxLines 时只 removeChild 头节点，
@@ -1433,6 +1548,14 @@ input[type="datetime-local"] {
   --info: #4a7e8a;
   --tail-out-bg: #f6f9ef;
   --code-inline-bg: #e8efdd;
+
+  /* 滚动条（绿色护眼主题：深绿灰滑块在浅绿轨道上） */
+  --scrollbar-w: 12px;
+  --scrollbar-h: 12px;
+  --scrollbar-track: rgba(63,122,63,0.08);
+  --scrollbar-thumb: rgba(63,122,63,0.30);
+  --scrollbar-thumb-hover: rgba(63,122,63,0.50);
+  --scrollbar-corner: transparent;
   /* v0.7 主题适配：green 主题下 .tag 紫字（来自 --tag-fg=#c0aaff）跟米绿底对比差；
      用绿色系变量替代，跟主色调和谐。*/
   --tag-bg: rgba(63, 122, 63, 0.12);
@@ -1500,6 +1623,14 @@ input[type="datetime-local"] {
   --info: #88ccff;
   --tail-out-bg: #0a0a0a;
   --code-inline-bg: #1a1a1a;
+
+  /* 滚动条（高对比主题：亮青色滑块在纯黑底上，最醒目） */
+  --scrollbar-w: 14px;
+  --scrollbar-h: 14px;
+  --scrollbar-track: #1a1a1a;
+  --scrollbar-thumb: #00cccc;
+  --scrollbar-thumb-hover: #00ffff;
+  --scrollbar-corner: #0a0a0a;
   /* v0.7 主题适配：hc 黑底 .tag 改成纯黑 + 亮黄字，对比度 ~16:1*/
   --tag-bg: #000000;
   --tag-fg: #ffff00;
@@ -2066,8 +2197,6 @@ input[type="datetime-local"] {
 .http2-sidebar-tools .btn { flex: 1; font-size: 11.5px; padding: 6px 8px; min-height: 30px; }
 
 .http2-cases-wrap { flex: 1; overflow-y: auto; margin: 0 -4px; padding: 0 4px; }
-.http2-cases-wrap::-webkit-scrollbar { width: 6px; }
-.http2-cases-wrap::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
 
 .http2-case-group { margin-bottom: 6px; }
 .http2-case-group-head {
