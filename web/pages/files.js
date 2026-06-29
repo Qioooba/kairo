@@ -1063,15 +1063,11 @@
         actions.push({
           label: '📋 复制路径',
           callback: () => {
-            try {
-              if (navigator.clipboard && navigator.clipboard.writeText) {
-                navigator.clipboard.writeText(folder);
-                toast('路径已复制', 'ok');
-              } else {
-                // fallback：弹 textarea 让用户手动复制
-                window.prompt('复制此路径：', folder);
-              }
-            } catch (e) { toast('复制失败：' + e.message, 'err'); }
+            OTB.core.copyToClipboard(folder).then(() => {
+              toast('路径已复制', 'ok');
+            }).catch(() => {
+              window.prompt('复制此路径：', folder);
+            });
           }
         });
       }

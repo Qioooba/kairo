@@ -486,12 +486,6 @@
         ]);
         srvPickWrap.appendChild(item);
       });
-      const hasOk = Object.keys(srvStatus).some(k => srvStatus[k] && srvStatus[k].state === 'ok');
-      btnPickOnline.disabled = !hasOk;
-      btnPickOnline.title = hasOk ? '取消未测通或连接失败的服务器' : '请先测试连接';
-      // P0-BugFix #2：初次渲染 / 切系统后必须把已勾选服务器的目录区展开，
-      // 否则 srvDirsWrap 永远停在 "勾选服务器后会展开它的日志目录，可多选"
-      // 提示语，导致「列出文件 / 搜索」拿不到 (server, dir) targets。
       renderSrvDirs();
     }
     // renderSrvDirs v0.5：每个勾选服务器展开一个目录勾选区
@@ -563,7 +557,7 @@
         dirSel.value = dirSel.options[0].value;
       }
     }
-    sysSel.addEventListener('change', () => { fillCredFromConfig(); renderSrvPick(); refreshDirs(); refreshCredStatus(); persistSelection(); });
+    sysSel.addEventListener('change', () => { fillCredFromConfig(); renderSrvPick(); if (getCheckedServers().length === 0) { toggleAllSrv(true); } refreshDirs(); refreshCredStatus(); persistSelection(); });
     // P1-8：renderSrvDirs / renderSrvPick 内部本来就会 persistSelection，所以这里
     // 不需要再额外调 updateTargetSummary。但因为 renderSrvPick 后会重建 srvPickWrap，
     // 摘要需要根据"新勾选列表"重新算；persistSelection 里调一次就够。
@@ -1907,16 +1901,10 @@ const formCard = el('div', { class: 'card' }, [
       text: '先选业务系统，再勾选要操作的服务器和日志目录；页面只会操作已勾选的目录。'
     }));
     targetBody.appendChild(el('div', { class: 'grid-2' }, [
-      el('div', null, [el('label', { text: '业务系统' }), sysSel]),
-      el('div', null, [el('label', { text: '目录预览（实际以勾选为准）' }), dirSel])
+      el('div', null, [el('label', { text: '业务系统' }), sysSel])
     ]));
     targetBody.appendChild(el('div', { class: 'mt-2' }, [srvPickToolbar, srvPickWrap]));
     targetBody.appendChild(el('div', { class: 'mt-2' }, [srvDirsToolbar, srvDirsWrap]));
-    targetBody.appendChild(el('div', { class: 'grid-2 mt-2' }, [
-      el('div', null, [el('label', { text: 'SSH 用户名' }), userInp]),
-      el('div', null, [el('label', { text: 'SSH 密码' }), passInp])
-    ]));
-    targetBody.appendChild(el('div', { class: 'mt-1' }, [rememberLbl, credStatusRow]));
     targetBody.appendChild(el('div', { class: 'btn-row mt-3' }, [btnTest]));
 
     // v0.5 #8：文件名参数 — 单文件 / 多文件 / glob 模糊匹配（空格或逗号分隔）
@@ -3196,6 +3184,10 @@ const formCard = el('div', { class: 'card' }, [
       }
       fillCredFromConfig();
       renderSrvPick();
+      // 首次加载如果没有已勾选的服务器，自动全选
+      if (getCheckedServers().length === 0) {
+        toggleAllSrv(true);
+      }
       refreshDirs();
       if (lastSel && lastSel.dir) dirSel.value = lastSel.dir;
       refreshCredStatus();

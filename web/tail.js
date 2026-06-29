@@ -153,10 +153,11 @@
   function flushTail() {
     flushTimer = null;
     if (viewer.isPaused() || pendingLines.length === 0) return;
+    const wasNearBottom = (tailOut.scrollHeight - tailOut.clientHeight - tailOut.scrollTop) < 120;
     const lines = pendingLines;
     pendingLines = [];
     viewer.pushBatch(lines);
-    viewer.scrollToBottomIfNear();
+    if (wasNearBottom) viewer.scrollToBottom();
     updateMeters();
   }
   // FE-005：保存 interval id，停止 / 关闭窗口时 clearInterval，避免路由切换或窗口关闭后 interval 持续运行。
@@ -291,11 +292,11 @@
   // P0-2：info/error 走 viewer.push 而不是直接操作 tailOut —— viewer 管 DOM
   function appendInfo(msg) {
     viewer.push('⟦info⟧ ' + msg, 'info');
-    viewer.scrollToBottomIfNear();
+    viewer.scrollToBottom();
   }
   function appendError(msg) {
     viewer.push('⟦error⟧ ' + msg, 'error');
-    viewer.scrollToBottomIfNear();
+    viewer.scrollToBottom();
   }
 
   if (loginForm) {
