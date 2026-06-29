@@ -12,9 +12,9 @@ import (
 	"sync"
 	"time"
 
-	"ops-toolbox/internal/config"
-	"ops-toolbox/internal/logquery"
-	"ops-toolbox/internal/sshclient"
+	"doubao-toolbox/internal/config"
+	"doubao-toolbox/internal/logquery"
+	"doubao-toolbox/internal/sshclient"
 )
 
 // ---------- /api/logs/search/multi ----------

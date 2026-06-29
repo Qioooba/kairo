@@ -1,6 +1,6 @@
 // web/app.test.js — Node 单元测试
 //
-// 测试策略：core.js 是 IIFE，所有纯函数都挂在 window.OTB.core.* 下。
+// 测试策略：core.js 是 IIFE，所有纯函数都挂在 window.DTB.core.* 下。
 // 这里用 Function + 正则把"无 DOM 依赖"的纯函数从 core.js 源里抽出来构造，
 // 然后跑断言。覆盖范围 = core.js 里的工具函数。
 //
@@ -683,9 +683,9 @@ function dumpContainer(c) {
     return '?';
   }).join('\n');
 }
-// 抽 tailViewer 函数：依赖 hlDocMock + window.OTB.core（提供 renderHighlightedLine 闭包依赖）
+// 抽 tailViewer 函数：依赖 hlDocMock + window.DTB.core（提供 renderHighlightedLine 闭包依赖）
 // 实际做法：把 core.js 里 tailViewer 整段抽出来，构造一个 document mock（hlDocMock），
-// 加上 tailViewer 内部用到的所有 OTB 引用。core.js 里的 renderHighlightedLine 在同一 IIFE，
+// 加上 tailViewer 内部用到的所有 DTB 引用。core.js 里的 renderHighlightedLine 在同一 IIFE，
 // 抽 tailViewer 时会带它，但需要注入 document。
 function extractBlock(name) {
   const re = new RegExp('function\\s+' + name + '\\s*\\([^)]*\\)\\s*\\{');
@@ -718,7 +718,7 @@ function extractBlock(name) {
 // 抽 tailViewer 体内会调用这些闭包变量，无法直接抽。
 //
 // 解决：跑整个 core.js（除 IIFE 包装）—— 整段源码作为 new Function body 跑。
-// 风险：core.js 顶部有 window.OTB = ... 之类的全局副作用，在 Node 里会创建 OTB 全局变量（可接受）。
+// 风险：core.js 顶部有 window.DTB = ... 之类的全局副作用，在 Node 里会创建 DTB 全局变量（可接受）。
 // 但 core.js 还包含 tailHighlightPanel 等复杂函数，可能有 IIFE 副作用。
 //
 // 最稳：手工写一个"用 hlDocMock 跑 tailViewer"的微型实现。
@@ -889,26 +889,26 @@ function testTailViewer() {
 // ---------- config.js state 持久化 (v0.5 修复 #20) ----------
 //
 // 验证切 tab 再回来时，renderConfig 不会重新 fetch 服务器覆盖未保存的改动。
-// 关键：state 必须在模块级（OTB.state.configEditor），不能在 renderConfig 闭包里。
+// 关键：state 必须在模块级（DTB.state.configEditor），不能在 renderConfig 闭包里。
 //
-// 由于 config.js 用了 IIFE + 真实 window.OTB / document，这里用 vm 跑一遍源码，
+// 由于 config.js 用了 IIFE + 真实 window.DTB / document，这里用 vm 跑一遍源码，
 // 跑两次 renderConfig，断言 fetchCount = 1（不是 2）。
 function testConfigStatePersists() {
   const fs2 = require('fs');
   const vm2 = require('vm');
   const path2 = require('path');
 
-  // 1) 加载 state.js（建 OTB.state 骨架）
+  // 1) 加载 state.js（建 DTB.state 骨架）
   const stateSrc = fs2.readFileSync(path2.join(__dirname, 'state.js'), 'utf8');
   const sb = { window: {}, console: { log: () => {} } };
-  sb.window.OTB = { state: {} };
+  sb.window.DTB = { state: {} };
   sb.history = { replaceState: () => {} };
   vm2.createContext(sb);
   vm2.runInContext(stateSrc, sb);
 
-  // 2) mock 掉 OTB.core / OTB.api
+  // 2) mock 掉 DTB.core / DTB.api
   let fetchCount = 0;
-  sb.window.OTB.core = {
+  sb.window.DTB.core = {
     el: () => ({ style: {}, appendChild: () => {}, addEventListener: () => {}, setAttribute: () => {} }),
     $: () => null, toast: () => {}, validate: () => null,
     newSystem: () => ({ name: '', servers: [] }),
@@ -917,7 +917,7 @@ function testConfigStatePersists() {
     kvTable: () => ({ appendChild: () => {} }),
     getActiveDL: () => null, clearActiveDL: () => {}
   };
-  sb.window.OTB.api = {
+  sb.window.DTB.api = {
     api: (method, p) => {
       if (method === 'GET' && p === '/api/admin/servers') fetchCount++;
       return Promise.resolve({ app: {}, systems: [{ name: 's1', servers: [] }], search: {} });
@@ -930,23 +930,23 @@ function testConfigStatePersists() {
 
   // 4) 第一次 render — 应触发 1 次 fetch
   const view = { appendChild: () => {} };
-  sb.window.OTB.state.routes.config(view);
+  sb.window.DTB.state.routes.config(view);
   // api() 是 async，需要让 promise resolve
   return new Promise(resolve => {
     setTimeout(() => {
       assert.strictEqual(fetchCount, 1, '首次 render 应 fetch 1 次');
-      assert.strictEqual(sb.window.OTB.state.configEditor.loaded, true, 'state.loaded 应为 true');
+      assert.strictEqual(sb.window.DTB.state.configEditor.loaded, true, 'state.loaded 应为 true');
 
       // 5) 模拟用户编辑
-      sb.window.OTB.state.configEditor.systems.push({ name: 'edited', servers: [] });
-      sb.window.OTB.state.configEditor.dirty = true;
+      sb.window.DTB.state.configEditor.systems.push({ name: 'edited', servers: [] });
+      sb.window.DTB.state.configEditor.dirty = true;
 
       // 6) 第二次 render（tab 切回）— **不应**再 fetch
-      try { sb.window.OTB.state.routes.config(view); } catch (e) { /* DOM mock 不全可忽略 */ }
+      try { sb.window.DTB.state.routes.config(view); } catch (e) { /* DOM mock 不全可忽略 */ }
       setTimeout(() => {
         assert.strictEqual(fetchCount, 1, '切 tab 回来不应再 fetch（这是 #20 修复的关键）');
-        assert.strictEqual(sb.window.OTB.state.configEditor.systems.length, 2, '用户编辑应保留');
-        assert.strictEqual(sb.window.OTB.state.configEditor.dirty, true, 'dirty 标志应保留');
+        assert.strictEqual(sb.window.DTB.state.configEditor.systems.length, 2, '用户编辑应保留');
+        assert.strictEqual(sb.window.DTB.state.configEditor.dirty, true, 'dirty 标志应保留');
         console.log('  config state persists across re-render ✓');
         resolve();
       }, 30);
@@ -973,7 +973,7 @@ function testConfigEncodingGBK_Preserved() {
   // 1) 准备一个含 gbk log_dir 的"服务器返回"
   const stateSrc = fs2.readFileSync(path2.join(__dirname, 'state.js'), 'utf8');
   const sb = { window: {}, console: { log: () => {} } };
-  sb.window.OTB = { state: {} };
+  sb.window.DTB = { state: {} };
   sb.history = { replaceState: () => {} };
   vm2.createContext(sb);
   vm2.runInContext(stateSrc, sb);
@@ -994,9 +994,9 @@ function testConfigEncodingGBK_Preserved() {
     }]
   };
 
-  // 2) mock 掉 OTB.core / OTB.api；记录 PUT 请求体
+  // 2) mock 掉 DTB.core / DTB.api；记录 PUT 请求体
   const apiCalls = [];
-  sb.window.OTB.core = {
+  sb.window.DTB.core = {
     el: () => ({ style: {}, appendChild: () => {}, addEventListener: () => {}, setAttribute: () => {} }),
     $: () => null, toast: () => {}, validate: () => null,
     newSystem: () => ({ name: '', servers: [] }),
@@ -1005,7 +1005,7 @@ function testConfigEncodingGBK_Preserved() {
     kvTable: () => ({ appendChild: () => {} }),
     getActiveDL: () => null, clearActiveDL: () => {}
   };
-  sb.window.OTB.api = {
+  sb.window.DTB.api = {
     api: (method, p, body) => {
       apiCalls.push({ method, p, body });
       if (method === 'PUT') {
@@ -1020,19 +1020,19 @@ function testConfigEncodingGBK_Preserved() {
 
   // 3) 第一次 render → fetch serverData → state 拿到 utf-8 + gbk 两条
   const view = { appendChild: () => {} };
-  sb.window.OTB.state.routes.config(view);
+  sb.window.DTB.state.routes.config(view);
   return new Promise(resolve => {
     setTimeout(() => {
-      const st = sb.window.OTB.state.configEditor;
+      const st = sb.window.DTB.state.configEditor;
       assert.strictEqual(st.systems[0].servers[0].log_dirs[0].encoding, 'utf-8', 'utf-8 log_dir 已加载');
       assert.strictEqual(st.systems[0].servers[0].log_dirs[1].encoding, 'gbk', 'gbk log_dir 已加载');
 
       // 4) 模拟"用户切到 home 再切回 config"：再 render 一次
-      try { sb.window.OTB.state.routes.config(view); } catch (e) {}
+      try { sb.window.DTB.state.routes.config(view); } catch (e) {}
 
       setTimeout(() => {
         // 5) **关键断言**：state 里 gbk 还在（不被 GET 覆盖，因为 loaded=true）
-        const st2 = sb.window.OTB.state.configEditor;
+        const st2 = sb.window.DTB.state.configEditor;
         assert.strictEqual(st2.systems[0].servers[0].log_dirs[0].encoding, 'utf-8', '切回后 utf-8 仍在');
         assert.strictEqual(st2.systems[0].servers[0].log_dirs[1].encoding, 'gbk', '切回后 gbk 仍在（#6 关键）');
         assert.strictEqual(apiCalls.filter(c => c.method === 'GET' && c.p === '/api/admin/servers').length, 1, '切回只应 fetch 1 次');
@@ -1044,7 +1044,7 @@ function testConfigEncodingGBK_Preserved() {
         // 7) 找"保存"按钮：直接调内部 doSave 等价物（点击 btnSave）
         // config.js 的 renderConfig 内 doSave 闭包在外层；我们用 click 入口
         // — 这里改用直接 PUT 模拟点击保存（与生产 doSave 等价）
-        sb.window.OTB.api.api('PUT', '/api/admin/servers', { systems: st2.systems }).then(() => {
+        sb.window.DTB.api.api('PUT', '/api/admin/servers', { systems: st2.systems }).then(() => {
           // 8) 验证 PUT body 里 encoding 字段 = gbk（不丢）
           const put = apiCalls[apiCalls.length - 1];
           assert.strictEqual(put.body.systems[0].servers[0].log_dirs[0].encoding, 'gbk', 'PUT body 含 encoding=gbk');
@@ -1061,7 +1061,7 @@ function testConfigEncodingGBK_Preserved() {
 //
 // 场景：
 //   1. 首次 render → 拿到 state
-//   2. 用户改了一行 → dirty=true, OTB.state.unsavedConfig=true
+//   2. 用户改了一行 → dirty=true, DTB.state.unsavedConfig=true
 //   3. 调 PUT → 成功 → dirty=false, unsavedConfig=false
 //   4. 再切 tab 回来 → 不 fetch（loaded 仍是 true，state 不被覆盖）
 //
@@ -1073,14 +1073,14 @@ function testConfigSaveClearsDirty() {
 
   const stateSrc = fs2.readFileSync(path2.join(__dirname, 'state.js'), 'utf8');
   const sb = { window: {}, console: { log: () => {} } };
-  sb.window.OTB = { state: {} };
+  sb.window.DTB = { state: {} };
   sb.history = { replaceState: () => {} };
   vm2.createContext(sb);
   vm2.runInContext(stateSrc, sb);
 
   let getCount = 0;
   let putCount = 0;
-  sb.window.OTB.core = {
+  sb.window.DTB.core = {
     el: () => ({ style: {}, appendChild: () => {}, addEventListener: () => {}, setAttribute: () => {} }),
     $: () => null, toast: () => {}, validate: () => null,
     newSystem: () => ({ name: '', servers: [] }),
@@ -1089,7 +1089,7 @@ function testConfigSaveClearsDirty() {
     kvTable: () => ({ appendChild: () => {} }),
     getActiveDL: () => null, clearActiveDL: () => {}
   };
-  sb.window.OTB.api = {
+  sb.window.DTB.api = {
     api: (method, p, body) => {
       if (method === 'GET') {
         if (p === '/api/admin/servers') getCount++;
@@ -1104,30 +1104,30 @@ function testConfigSaveClearsDirty() {
   vm2.runInContext(configSrc, sb);
 
   const view = { appendChild: () => {} };
-  sb.window.OTB.state.routes.config(view);
+  sb.window.DTB.state.routes.config(view);
   return new Promise(resolve => {
     setTimeout(() => {
-      const st = sb.window.OTB.state.configEditor;
+      const st = sb.window.DTB.state.configEditor;
       // 用户编辑 → dirty
       st.systems[0].name = 'edited';
       st.dirty = true;
-      sb.window.OTB.state.unsavedConfig = true;
+      sb.window.DTB.state.unsavedConfig = true;
 
       // 模拟 doSave（点保存按钮 → api PUT）
-      sb.window.OTB.api.api('PUT', '/api/admin/servers', { systems: st.systems }).then(() => {
+      sb.window.DTB.api.api('PUT', '/api/admin/servers', { systems: st.systems }).then(() => {
         // 模拟 doSave 成功后清 dirty（生产代码里有，但 mock 没接，所以手动清）
         st.dirty = false;
-        sb.window.OTB.state.unsavedConfig = false;
+        sb.window.DTB.state.unsavedConfig = false;
         // loaded 必须仍是 true，不然切回 tab 会重新 fetch 覆盖
         st.loaded = true;
 
         // 切回 config tab（再 render 一次）— 不应 fetch
-        try { sb.window.OTB.state.routes.config(view); } catch (e) {}
+        try { sb.window.DTB.state.routes.config(view); } catch (e) {}
         setTimeout(() => {
           assert.strictEqual(getCount, 1, '首次后切回不再 GET');
           assert.strictEqual(putCount, 1, 'PUT 调了 1 次');
           assert.strictEqual(st.dirty, false, '保存后 dirty 已清');
-          assert.strictEqual(sb.window.OTB.state.unsavedConfig, false, '保存后 unsavedConfig 已清');
+          assert.strictEqual(sb.window.DTB.state.unsavedConfig, false, '保存后 unsavedConfig 已清');
           assert.strictEqual(st.systems[0].name, 'edited', '编辑过的内容还在');
           console.log('  config save clears dirty + preserves edits across tab switch ✓');
           resolve();

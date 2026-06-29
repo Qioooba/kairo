@@ -24,7 +24,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"ops-toolbox/internal/config"
+	"doubao-toolbox/internal/config"
 )
 
 // Report 单次自检结果。结构稳定，前端可作为表格字段映射。
@@ -238,7 +238,7 @@ func dirWritable(path string) bool {
 	if err := os.MkdirAll(path, 0o755); err != nil {
 		return false
 	}
-	tmp := filepath.Join(path, ".ops-toolbox-write-check")
+	tmp := filepath.Join(path, ".doubao-toolbox-write-check")
 	if err := os.WriteFile(tmp, []byte("x"), 0o600); err != nil {
 		return false
 	}

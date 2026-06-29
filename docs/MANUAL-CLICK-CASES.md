@@ -1,4 +1,4 @@
-# OpsToolbox 手工点击测试用例
+# 豆包工具箱 手工点击测试用例
 
 > 用途：按菜单顺序逐个点击验证，每个按钮都要点，每个功能都要看请求、响应、页面状态和错误提示
 > 配套文件：`docs/ISSUES-FOUND.md`（问题清单）、`docs/TEST-MATRIX.md`（覆盖矩阵）
@@ -9,7 +9,7 @@
 ## 通用前置准备
 
 1. 启动 mock SSH 服务：`python3 scripts/mock_sshd.py`（默认 127.0.0.1:2225）
-2. 启动主服务：`go run .` 或 `./OpsToolbox`（默认 127.0.0.1:18080，会自动开浏览器）
+2. 启动主服务：`go run .` 或 `./DoubaoToolbox`（默认 127.0.0.1:18080，会自动开浏览器）
 3. 准备测试数据：`scripts/fake-websphere/opt/IBM/WebSphere/AppServer/profiles/AppSrv01/logs/server1/` 下放几个 `SystemOut*.log` 文件
 4. 浏览器开 DevTools Network 面板，勾选 "Preserve log" + "Disable cache"
 5. 准备 4 套主题切换：dark / light / green / hc（点右上角 🌙 按钮循环）

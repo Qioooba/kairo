@@ -145,7 +145,7 @@ node web/app.test.js              10 pass, 0 fail
 
 **1) 操作历史 CSV 导出（GET /api/audit/export.csv）**
 - 接受 `op/system/server/result/limit` 过滤参数（跟 `/api/audit/recent` 一致）。
-- 响应 `text/csv` 附件，文件名 `ops-toolbox-audit-YYYYMMDD-HHMMSS.csv`。
+- 响应 `text/csv` 附件，文件名 `doubao-toolbox-audit-YYYYMMDD-HHMMSS.csv`。
 - UTF-8 BOM 头让 Excel 默认按 UTF-8 打开（避免中文乱码）。
 - 标准列：`ts, op, system, server, result, dir, file, query, stage, bytes, hits, id, lines, files, count, err, raw`。
 - 自动收集 KV 里"非标准列"的其它字段往后排（保证数据完整）。

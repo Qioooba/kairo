@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"strings"
 
-	"ops-toolbox/internal/credentials"
+	"doubao-toolbox/internal/credentials"
 )
 
 // ---------- /api/credentials/* ----------

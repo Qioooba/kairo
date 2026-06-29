@@ -1,5 +1,5 @@
 app:
-    name: 内网运维工具箱（模拟验收版）
+    name: 豆包工具箱
     host: 127.0.0.1
     port: 18092
     auto_open_browser: false

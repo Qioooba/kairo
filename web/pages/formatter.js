@@ -4,10 +4,10 @@
 
 (function () {
   'use strict';
-  const OTB = window.OTB = window.OTB || {};
-  OTB.pages = OTB.pages || {};
-  const { el, toast, copyToClipboard } = OTB.core;
-  const { api } = OTB.api;
+  const DTB = window.DTB = window.DTB || {};
+  DTB.pages = DTB.pages || {};
+  const { el, toast, copyToClipboard } = DTB.core;
+  const { api } = DTB.api;
 
   function groupLabel(text) {
     return el('span', { class: 'text-dim mt-2', style: 'font-size:12px;display:block;' }, [document.createTextNode(text)]);
@@ -262,7 +262,7 @@
     ]));
   }
 
-  OTB.pages.formatter = renderFormatter;
-  OTB.state.routes.formatter = renderFormatter;
-  OTB.state.routeNames.formatter = '报文格式化';
+  DTB.pages.formatter = renderFormatter;
+  DTB.state.routes.formatter = renderFormatter;
+  DTB.state.routeNames.formatter = '报文格式化';
 })();

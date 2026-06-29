@@ -9,10 +9,10 @@
  */
 (function () {
   'use strict';
-  const OTB = window.OTB = window.OTB || {};
-  OTB.pages = OTB.pages || {};
-  const { el } = OTB.core;
-  const { api } = OTB.api || {};
+  const DTB = window.DTB = window.DTB || {};
+  DTB.pages = DTB.pages || {};
+  const { el } = DTB.core;
+  const { api } = DTB.api || {};
 
   const VERSION = 'v0.9.0';
 
@@ -73,7 +73,7 @@
     },
     {
       icon: '🔁', title: '写后即持久 (write-then-persist)',
-      body: 'config.yaml 写回走 tmpfile + rename(2)，损坏不污染线上配置；downloads 元数据走单文件 .ops-toolbox-meta.json 加 mtime 失效缓存；preferences.json 写入显式 chmod 0600。每一次"保存"都有兜底。'
+      body: 'config.yaml 写回走 tmpfile + rename(2)，损坏不污染线上配置；downloads 元数据走单文件 .doubao-toolbox-meta.json 加 mtime 失效缓存；preferences.json 写入显式 chmod 0600。每一次"保存"都有兜底。'
     },
     {
       icon: '🧭', title: '工程师视角 (operator-grade)',
@@ -142,7 +142,7 @@
   // =====================================================================
   const frontendStack = [
     { name: 'core.js', desc: 'DOM/工具内核 — el() 安全构造器、escapeHtml、toast、confirmDialog、modal、tabs、virtualList、resize 监听。零依赖。' },
-    { name: 'state.js', desc: '全局状态机 — 当前用户、主题、routeMap、routeNames、tailHighlights 等共享状态。OTB.state.* 单一入口。' },
+    { name: 'state.js', desc: '全局状态机 — 当前用户、主题、routeMap、routeNames、tailHighlights 等共享状态。DTB.state.* 单一入口。' },
     { name: 'api.js', desc: 'HTTP 客户端 — api(method, path, body) 统一封装；自动加 Bearer token；SSE EventSource 工厂；统一错误处理。' },
     { name: 'theme.js', desc: '主题切换 — dark / light / green / hc 4 套主题，inline script 在 <head> 提前设 data-theme 防 FOUC。' },
     { name: 'auth.js', desc: '认证层 — 拉 /api/auth/status 探测；token cookie 管理；role-gated UI 显隐。' },
@@ -243,7 +243,7 @@
         '3 种列文件模式：单 server+path / 多 server+path / targets[]',
         '文件预览：默认 1MB，上限 10MB，单文件模态 + 新窗口双模式',
         '异步下载任务：dlmanager.Session 模型，后台下载 + SSE 进度流',
-        '下载历史：downloads/YYYYMMDD/<file> 落盘，元数据走 .ops-toolbox-meta.json',
+        '下载历史：downloads/YYYYMMDD/<file> 落盘，元数据走 .doubao-toolbox-meta.json',
         '保留策略：download_retention_days (默认 7 天) + download_max_count (默认 1000)，启动 + 下载完成后自动清理',
         'external_openers：用外部程序打开下载文件 (Notepad++ / VSCode / 自定义)',
         '下载取消：幂等 cancel ctx；SSE done 事件统一收尾',
@@ -347,19 +347,19 @@
   ];
 
   // =====================================================================
-  // §11. 横向对比 — OpsToolbox vs 传统工具栈
+  // §11. 横向对比 — 豆包工具箱 vs 传统工具栈
   // =====================================================================
   const comparison = [
-    { dim: '日均 50 次 SSH 登录 + 查日志', traditional: 'SecureCRT 开 5 个标签 + 复制粘贴路径 + cat + grep', otb: '浏览器 /websphere 一页，三级目录展开，关键词走受控模板，30 行上下文直出', win: '省 80% 重复操作' },
-    { dim: '从 5 台机器拉最近日志', traditional: 'WinSCP 一台一台连 → 找路径 → 拉 → 手动归档', otb: '勾选 5 个 server + 选最近 3 个文件 → 后台并发 + SSE 进度 + 按 YYYYMMDD 自动归档', win: '5 台从 8 分钟 → 30 秒' },
-    { dim: '配置对比 (生产 vs 预发)', traditional: 'Beyond Compare 单独开 + 手动 export + 选两边文件', otb: 'compare 页 → 文件夹扫描 → Merkle 哈希树差异图 → 一键 unified diff', win: '万级文件 < 500ms' },
-    { dim: '调一个内网 HTTP 接口', traditional: 'Postman 开 + 配 baseURL + 加 header + 复制 curl', otb: 'http 页 → 用例收藏 + 环境变量模板 → 一键重放 + 历史回溯', win: '零客户端启动' },
-    { dim: '运维巡检 (10 台 SSH 通不通)', traditional: '一台一台 ping + ssh 试，连不上再查防火墙', otb: '诊断中心一键自检：DNS / TCP 端口 / 工具 / hostkey 全部汇总', win: '10 台从 20 分钟 → 10 秒' },
-    { dim: '凭据管理', traditional: '记事本 / Excel / KeePass，散落各处', otb: 'OS 钥匙串按 (system,server,user) 三元组加密，零明文落盘', win: '合规审计可过' },
-    { dim: '操作审计', traditional: '没有 / 靠 shell history', otb: 'logs/audit-YYYY-MM-DD.log 滚动 + /api/audit/* 导出', win: '满足等保' },
-    { dim: '跨平台部署', traditional: 'WinSCP 在 macOS 难用 / SecureCRT 要付费 / Postman 体积大', otb: '单二进制 12MB，macOS / Linux / Win / Win7 一份走天下', win: '分发成本 → 0' },
-    { dim: '老 sshd (OpenSSH 5.x / 6.0 / AIX)', traditional: '要手动降级客户端 + 配置 KEX + 试错', otb: '5 套 SSH profile 自动 fallback，握手 45s 外层 timeout', win: '老设备开机即用' },
-    { dim: 'GBK 编码日志 (老 WebSphere / Oracle)', traditional: 'SecureCRT 切编码 + 复制出来再 iconv', otb: 'golang.org/x/text 透明转换，直读不乱码', win: '所见即所得' }
+    { dim: '日均 50 次 SSH 登录 + 查日志', traditional: 'SecureCRT 开 5 个标签 + 复制粘贴路径 + cat + grep', dtb: '浏览器 /websphere 一页，三级目录展开，关键词走受控模板，30 行上下文直出', win: '省 80% 重复操作' },
+    { dim: '从 5 台机器拉最近日志', traditional: 'WinSCP 一台一台连 → 找路径 → 拉 → 手动归档', dtb: '勾选 5 个 server + 选最近 3 个文件 → 后台并发 + SSE 进度 + 按 YYYYMMDD 自动归档', win: '5 台从 8 分钟 → 30 秒' },
+    { dim: '配置对比 (生产 vs 预发)', traditional: 'Beyond Compare 单独开 + 手动 export + 选两边文件', dtb: 'compare 页 → 文件夹扫描 → Merkle 哈希树差异图 → 一键 unified diff', win: '万级文件 < 500ms' },
+    { dim: '调一个内网 HTTP 接口', traditional: 'Postman 开 + 配 baseURL + 加 header + 复制 curl', dtb: 'http 页 → 用例收藏 + 环境变量模板 → 一键重放 + 历史回溯', win: '零客户端启动' },
+    { dim: '运维巡检 (10 台 SSH 通不通)', traditional: '一台一台 ping + ssh 试，连不上再查防火墙', dtb: '诊断中心一键自检：DNS / TCP 端口 / 工具 / hostkey 全部汇总', win: '10 台从 20 分钟 → 10 秒' },
+    { dim: '凭据管理', traditional: '记事本 / Excel / KeePass，散落各处', dtb: 'OS 钥匙串按 (system,server,user) 三元组加密，零明文落盘', win: '合规审计可过' },
+    { dim: '操作审计', traditional: '没有 / 靠 shell history', dtb: 'logs/audit-YYYY-MM-DD.log 滚动 + /api/audit/* 导出', win: '满足等保' },
+    { dim: '跨平台部署', traditional: 'WinSCP 在 macOS 难用 / SecureCRT 要付费 / Postman 体积大', dtb: '单二进制 12MB，macOS / Linux / Win / Win7 一份走天下', win: '分发成本 → 0' },
+    { dim: '老 sshd (OpenSSH 5.x / 6.0 / AIX)', traditional: '要手动降级客户端 + 配置 KEX + 试错', dtb: '5 套 SSH profile 自动 fallback，握手 45s 外层 timeout', win: '老设备开机即用' },
+    { dim: 'GBK 编码日志 (老 WebSphere / Oracle)', traditional: 'SecureCRT 切编码 + 复制出来再 iconv', dtb: 'golang.org/x/text 透明转换，直读不乱码', win: '所见即所得' }
   ];
 
   // =====================================================================
@@ -369,13 +369,13 @@
     {
       id: 'BUG-3', version: 'v0.9.0', severity: 'P0', title: 'preview.html 读取已失效凭据 — 文件预览空白',
       symptom: '用户在文件浏览器打开 preview.html（新窗口模式）预览远程文件，预览页因读取了错误的 activeCred 变量，拿到的是上一次会话的密码字符串而非有效凭据对象，导致 SSH 连接立即 auth fail。',
-      rootCause: 'preview.html 是独立 HTML 窗口，与主页面 OTB.state 不共享。它直接从 localStorage 反序列化 activeCred，但 activeCred 是个内存对象（含 password 字段的引用），序列化丢失了密码。',
-      fix: 'preview.html L185 改读 activeCred → 调用 OTB.state.activeCred 取真实内存对象；后端 handler 同步把凭据逻辑改成"先读 activeCred 再走 fallback"',
+      rootCause: 'preview.html 是独立 HTML 窗口，与主页面 DTB.state 不共享。它直接从 localStorage 反序列化 activeCred，但 activeCred 是个内存对象（含 password 字段的引用），序列化丢失了密码。',
+      fix: 'preview.html L185 改读 activeCred → 调用 DTB.state.activeCred 取真实内存对象；后端 handler 同步把凭据逻辑改成"先读 activeCred 再走 fallback"',
       lesson: '跨窗口状态共享要么走 window.opener.*，要么走 BroadcastChannel，不能盲目 localStorage 序列化内存对象'
     },
     {
       id: 'BE-005', version: 'v0.9.0', severity: 'P0', title: 'SSH Dial 默认允许中间人攻击',
-      symptom: '用户配置新 server 时忘记配 host_key_sha256，OpsToolbox 仍走 InsecureIgnoreHostKey 接受任意 host key → 攻击者可在内网 ARP 欺骗 + 自签证书，截获所有 SSH 操作',
+      symptom: '用户配置新 server 时忘记配 host_key_sha256，豆包工具箱 仍走 InsecureIgnoreHostKey 接受任意 host key → 攻击者可在内网 ARP 欺骗 + 自签证书，截获所有 SSH 操作',
       rootCause: 'v0.8 之前 AllowInsecureHostKey 默认是 true（为了兼容老配置），但新部署未显式改 false 就会有此漏洞',
       fix: 'fail-closed：未配 host_key_sha256 + allow_insecure=false → Dial 立即拒绝，不发起任何网络连接；只有显式 allow_insecure_host_key: true 才退回 InsecureIgnoreHostKey',
       lesson: '安全选项的默认值必须是安全侧，兼容性是显式 opt-in，不是隐式 fallback'
@@ -411,8 +411,8 @@
     {
       id: 'BUG-3 (回归)', version: 'v0.9.0', severity: 'P0', title: 'preview.html L185 改读 activeCred — 回归修复',
       symptom: '尝试 3 后 BUG-3 修复不彻底，preview.html 仍然读 localStorage 里的 activeCred 副本',
-      rootCause: 'preview.html 是独立 HTML，它和主页面 OTB.state 不共享；上次修复只改了主页面，但没改 preview.html',
-      fix: 'preview.html L185 显式改读 OTB.state.activeCred（通过 window.opener 拿主页面状态）',
+      rootCause: 'preview.html 是独立 HTML，它和主页面 DTB.state 不共享；上次修复只改了主页面，但没改 preview.html',
+      fix: 'preview.html L185 显式改读 DTB.state.activeCred（通过 window.opener 拿主页面状态）',
       lesson: '回归修复必须把所有受影响页面列全，独立 HTML 窗口是常见遗漏点'
     },
     {
@@ -428,9 +428,9 @@
   // §13. 常见问题 (FAQ)
   // =====================================================================
   const faq = [
-    { q: 'OpsToolbox 是给谁用的？', a: '内网运维工程师 / SRE / DevOps。需要登录多台 SSH 服务器、查日志、拉文件、对比配置、调内网 HTTP 接口的"日常运维工程师"。不需要懂 Kubernetes / Prometheus 也能用。' },
+    { q: '豆包工具箱 是给谁用的？', a: '内网运维工程师 / SRE / DevOps。需要登录多台 SSH 服务器、查日志、拉文件、对比配置、调内网 HTTP 接口的"日常运维工程师"。不需要懂 Kubernetes / Prometheus 也能用。' },
     { q: '它和 SecureCRT + WinSCP + Postman 比有什么优势？', a: '三大优势：(1) 单一二进制 + Web UI，跨平台一致体验；(2) 受控操作而非任意 shell，安全可审计；(3) 内置 OS 钥匙串凭据管理 + 下载历史 + 诊断中心，是一个工具箱而不是三个工具拼凑。' },
-    { q: '为什么不直接用 Ansible / Jenkins？', a: '定位完全不同。Ansible / Jenkins 是自动化平台，跑任务编排；OpsToolbox 是工程师的"快进键"，跑交互式操作。两者互补，不是替代。' },
+    { q: '为什么不直接用 Ansible / Jenkins？', a: '定位完全不同。Ansible / Jenkins 是自动化平台，跑任务编排；豆包工具箱 是工程师的"快进键"，跑交互式操作。两者互补，不是替代。' },
     { q: '需要安装吗？', a: '零安装。下载一个二进制文件（macOS / Linux / Windows）双击即跑，自动打开浏览器。无需 Python / Node / .NET 运行时。' },
     { q: '支持哪些操作系统？', a: 'macOS (M1+ / Intel) / Linux (x86_64) / Windows (10/11) / Windows 7 (需 Go 1.20 编译)。三个平台同一份代码同一份二进制行为一致。' },
     { q: '支持 SSH 跳板机 / 堡垒机吗？', a: '支持。sshclient 包支持多跳代理配置（ProxyCommand / ProxyJump）；老堡垒机的 keyboard-interactive 认证也支持（v0.4 起加固）。' },
@@ -438,8 +438,8 @@
     { q: '怎么保证我不被中间人攻击？', a: 'v0.9 起 SSH host key 默认强校验（fail-closed）。每台 server 在 config.yaml 配 host_key_sha256，未配 + 未显式允许 insecure → Dial 立即拒绝，不发起网络连接。' },
     { q: '日志乱码怎么办？', a: '工具自动识别 UTF-8 / GBK / GB18030（老 WebSphere / Oracle / AIX 常见 GBK）；encoding 字段可手动指定。如果还有乱码，截图发 issue。' },
     { q: '下载到一半断网会怎样？', a: '当前下载项标记为"未完成"并保留半成品文件（.partial 后缀）；其他已完成项不受影响。重连后可手动重试整个下载任务。' },
-    { q: '能上传文件到远程吗？', a: '不能。设计上只读不写——这是核心安全策略。如果你需要上传功能，建议用专门的 SCP 工具，OpsToolbox 不提供该能力以避免误删/越权。' },
-    { q: '想贡献代码 / 反馈 bug？', a: '所有 issue / PR 在 GitHub 仓库；反馈 bug 请附 (1) OpsToolbox 版本号 (2) 操作系统 (3) 目标服务器 sshd 版本 (4) 完整操作步骤 (5) logs/ 下最新日志。' }
+    { q: '能上传文件到远程吗？', a: '不能。设计上只读不写——这是核心安全策略。如果你需要上传功能，建议用专门的 SCP 工具，豆包工具箱 不提供该能力以避免误删/越权。' },
+    { q: '想贡献代码 / 反馈 bug？', a: '所有 issue / PR 在 GitHub 仓库；反馈 bug 请附 (1) 豆包工具箱 版本号 (2) 操作系统 (3) 目标服务器 sshd 版本 (4) 完整操作步骤 (5) logs/ 下最新日志。' }
   ];
 
   // =====================================================================
@@ -853,8 +853,10 @@
     fetchVersion().then(v => { if (v) versionBadge.textContent = v; });
 
     const hero = el('div', { class: 'card', style: 'text-align:center; padding:48px 24px 36px; background:linear-gradient(180deg, rgba(79,140,255,0.10), rgba(139,92,246,0.04) 60%, transparent); border:1px solid var(--line); position:relative; overflow:hidden;' }, [
-      el('div', { style: 'font-size:64px; margin-bottom:14px; filter:drop-shadow(0 6px 18px rgba(79,140,255,0.35));' }, [document.createTextNode('⚙️')]),
-      el('h1', { style: 'margin:0 0 8px 0; font-size:36px; font-weight:800; background:linear-gradient(135deg, var(--text), var(--primary) 50%, var(--accent)); -webkit-background-clip:text; -webkit-text-fill-color:transparent; background-clip:text;', text: 'OpsToolbox · 内网运维工具箱' }),
+      el('div', { style: 'font-size:64px; margin-bottom:14px; filter:drop-shadow(0 6px 18px rgba(79,140,255,0.35));' }, [
+        (function(){ var img = document.createElement('img'); img.src = '/static/img/doubao-logo-64.png'; img.style.width='64px'; img.style.height='64px'; img.style.borderRadius='16px'; return img; })()
+      ]),
+      el('h1', { style: 'margin:0 0 8px 0; font-size:36px; font-weight:800; background:linear-gradient(135deg, var(--text), var(--primary) 50%, var(--accent)); -webkit-background-clip:text; -webkit-text-fill-color:transparent; background-clip:text;', text: '豆包工具箱 · Doubao Toolbox' }),
       el('div', { class: 'text-dim', style: 'font-size:16px; margin-bottom:18px; max-width:760px; margin-left:auto; margin-right:auto; line-height:1.7;', text: '企业级内网运维效率平台 · 为 SRE / DevOps / 运维工程师量身打造。安全为先、极简为骨、上下文为魂——一套二进制搞定 SSH 日志检索、文件下载、代码比对、HTTP 调试、环境诊断与配置管理。' }),
       el('div', { style: 'display:inline-flex; gap:8px; flex-wrap:wrap; justify-content:center; align-items:center;' }, [
         versionBadge,
@@ -928,9 +930,9 @@
   function renderOverview(view) {
     const wrap = el('div');
     const para1 = el('div', { class: 'card', style: 'padding:20px 22px; line-height:1.85; font-size:14px;' }, [
-      el('p', { style: 'margin:0 0 12px 0;', text: 'OpsToolbox 是一款专为内网运维场景打造的桌面级工具箱。它把日常运维中最常见的几类操作——SSH 日志检索、远程文件下载、代码比对、HTTP 接口调试、报文格式化、环境诊断、系统配置——打包成一份独立的可执行文件，开箱即用，无需安装任何运行时。' }),
+      el('p', { style: 'margin:0 0 12px 0;', text: '豆包工具箱 是一款专为内网运维场景打造的桌面级工具箱。它把日常运维中最常见的几类操作——SSH 日志检索、远程文件下载、代码比对、HTTP 接口调试、报文格式化、环境诊断、系统配置——打包成一份独立的可执行文件，开箱即用，无需安装任何运行时。' }),
       el('p', { style: 'margin:0 0 12px 0;', text: '整套系统默认只监听 127.0.0.1，所有功能通过 Web UI 暴露；后端用 Go 编写，前端用原生 JavaScript 编写（零 npm 依赖，零构建工具链），所有静态资源通过 go:embed 内嵌进单一二进制。跨平台分发只需要一份文件：macOS / Linux / Windows / Win7 均可。' }),
-      el('p', { style: 'margin:0;', text: '产品定位上，OpsToolbox 不是要替代 Ansible / Jenkins / Prometheus 这类重型平台，而是作为运维工程师日常 80% 操作的"快进键"——登录、查日志、下载文件、对比配置、调一下接口、转一下编码——这些"小但高频"的动作，过去要在 SecureCRT + WinSCP + Postman + 各种在线工具之间反复横跳，现在一个浏览器标签就能搞定。' })
+      el('p', { style: 'margin:0;', text: '产品定位上，豆包工具箱 不是要替代 Ansible / Jenkins / Prometheus 这类重型平台，而是作为运维工程师日常 80% 操作的"快进键"——登录、查日志、下载文件、对比配置、调一下接口、转一下编码——这些"小但高频"的动作，过去要在 SecureCRT + WinSCP + Postman + 各种在线工具之间反复横跳，现在一个浏览器标签就能搞定。' })
     ]);
     const useCases = el('div', { class: 'card mt-3', style: 'padding:18px 22px;' }, [
       el('div', { style: 'font-weight:600; font-size:14px; margin-bottom:10px; color:var(--primary);', text: '🎯 典型使用场景' }),
@@ -938,7 +940,7 @@
         el('li', {}, [document.createTextNode('线上故障定位：在 10 台 WebSphere 上同时搜索 '), el('code', { style: 'background:var(--bg-2); padding:1px 6px; border-radius:4px; font-size:12.5px;', text: 'NullPointerException' }), document.createTextNode('，30 秒内拿到全量上下文')]),
         el('li', {}, [document.createTextNode('远程取配置文件：从老 AIX 机器下载 '), el('code', { style: 'background:var(--bg-2); padding:1px 6px; border-radius:4px; font-size:12.5px;', text: '/etc/profile' }), document.createTextNode('，一键用 VSCode 打开对比')]),
         el('li', {}, [document.createTextNode('接口联调：内网 HTTP 服务无 Swagger，用 HTTP 测试台 30 秒构造请求 + 看响应')]),
-        el('li', {}, [document.createTextNode('环境巡检：双击 OpsToolbox，进入诊断中心，确认所有服务器 SSH 可达 + 工具齐全')]),
+        el('li', {}, [document.createTextNode('环境巡检：双击 豆包工具箱，进入诊断中心，确认所有服务器 SSH 可达 + 工具齐全')]),
         el('li', {}, [document.createTextNode('跨机器批量下载：勾选 50 个日志文件，后台下载 + SSE 实时进度 + 自动按日期归档')]),
         el('li', {}, [document.createTextNode('应急对比：把生产配置和预发配置拉下来，diff 一眼看出差异行')])
       ])
@@ -1442,7 +1444,7 @@
     const wrap = el('div');
     const intro = el('div', { class: 'card', style: 'padding:16px 20px; margin-bottom:12px; font-size:13.5px; line-height:1.85; color:var(--text-dim);' }, [
       el('strong', { style: 'color:var(--text);', text: '一句话：' }),
-      document.createTextNode('OpsToolbox 不是要替代你的 SecureCRT + WinSCP + Postman 工具栈，而是把 80% 的高频操作收敛到一个浏览器标签。下面 10 个真实场景的对比，让你自己判断值不值。')
+      document.createTextNode('豆包工具箱 不是要替代你的 SecureCRT + WinSCP + Postman 工具栈，而是把 80% 的高频操作收敛到一个浏览器标签。下面 10 个真实场景的对比，让你自己判断值不值。')
     ]);
 
     const tbl = el('div', { class: 'card', style: 'padding:0; overflow-x:auto;' });
@@ -1451,7 +1453,7 @@
       el('tr', { style: 'background:var(--bg-2);' }, [
         el('th', { style: 'padding:10px 14px; text-align:left; border-bottom:1px solid var(--line); font-weight:600; width:18%;', text: '场景' }),
         el('th', { style: 'padding:10px 14px; text-align:left; border-bottom:1px solid var(--line); font-weight:600; width:36%; color:var(--text-dim);', text: '传统工具栈' }),
-        el('th', { style: 'padding:10px 14px; text-align:left; border-bottom:1px solid var(--line); font-weight:600; width:36%; color:var(--primary);', text: 'OpsToolbox' }),
+        el('th', { style: 'padding:10px 14px; text-align:left; border-bottom:1px solid var(--line); font-weight:600; width:36%; color:var(--primary);', text: '豆包工具箱' }),
         el('th', { style: 'padding:10px 14px; text-align:left; border-bottom:1px solid var(--line); font-weight:600; width:10%; color:var(--success);', text: '收益' })
       ])
     ]));
@@ -1461,7 +1463,7 @@
       tbody.appendChild(el('tr', { style: 'border-bottom:1px solid var(--line); ' + bg }, [
         el('td', { style: 'padding:10px 14px; font-weight:600;', text: c.dim }),
         el('td', { style: 'padding:10px 14px; color:var(--text-dim); font-size:12.5px; line-height:1.55;', text: c.traditional }),
-        el('td', { style: 'padding:10px 14px; font-size:12.5px; line-height:1.55;', text: c.otb }),
+        el('td', { style: 'padding:10px 14px; font-size:12.5px; line-height:1.55;', text: c.dtb }),
         el('td', { style: 'padding:10px 14px; color:var(--success); font-weight:600; font-size:12.5px;', text: c.win })
       ]));
     });
@@ -1470,7 +1472,7 @@
 
     wrap.appendChild(intro);
     wrap.appendChild(tbl);
-    view.appendChild(renderSection('sec-comparison', '🆚', '横向对比', 'OpsToolbox vs 传统工具栈 · 10 真实场景', wrap));
+    view.appendChild(renderSection('sec-comparison', '🆚', '横向对比', '豆包工具箱 vs 传统工具栈 · 10 真实场景', wrap));
   }
 
   // --- 故障案例库 ---
@@ -1567,7 +1569,7 @@
   // --- Footer ---
   function renderFooter(view) {
     const f = el('div', { class: 'text-dim', style: 'text-align:center; margin-top:48px; padding:28px 16px 36px; font-size:13px; border-top:1px solid var(--line); background:linear-gradient(180deg, transparent, rgba(79,140,255,0.04));' }, [
-      el('div', { style: 'font-size:16px; font-weight:700; color:var(--text); margin-bottom:8px; background:linear-gradient(135deg, var(--text), var(--primary)); -webkit-background-clip:text; -webkit-text-fill-color:transparent; background-clip:text;', text: '© 2026 OpsToolbox · 匠心打造' }),
+      el('div', { style: 'font-size:16px; font-weight:700; color:var(--text); margin-bottom:8px; background:linear-gradient(135deg, var(--text), var(--primary)); -webkit-background-clip:text; -webkit-text-fill-color:transparent; background-clip:text;', text: '© 2026 豆包工具箱 · 匠心打造' }),
       el('div', { style: 'margin-top:4px; font-size:13px;', text: '技术栈：Go 1.20+ · 原生 JavaScript · x/crypto/ssh · pkg/sftp · single-binary deploy · zero runtime deps' }),
       el('div', { style: 'margin-top:6px; font-size:12px;', text: '为运维效率而生 · 让每一次操作都有迹可循 · 让每一次配置都可审计 · 让每一次下载都可追溯' }),
       el('div', { style: 'margin-top:14px; font-size:11.5px; opacity:0.7;', text: '本页面所有内容均从 git commit log / 源码 / README.md 提取，写作工具为 vanilla JS DOM API · 零外部依赖。' })
@@ -1605,7 +1607,7 @@
     renderFooter(view);
   }
 
-  OTB.pages.about = renderAbout;
-  OTB.state.routes.about = renderAbout;
-  OTB.state.routeNames.about = '关于';
+  DTB.pages.about = renderAbout;
+  DTB.state.routes.about = renderAbout;
+  DTB.state.routeNames.about = '关于';
 })();

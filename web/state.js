@@ -1,19 +1,19 @@
 /* ===== web/state.js =====
  * 全局 state：路由表 / 路由名 / 路由副标题 / 启动信息缓存
  *
- * 不引 ES module，挂 window.OTB.state
+ * 不引 ES module，挂 window.DTB.state
  */
 
 (function () {
   'use strict';
 
-  if (!window.OTB) window.OTB = {};
-  if (!window.OTB.state) window.OTB.state = {};
-  const state = window.OTB.state;
+  if (!window.DTB) window.DTB = {};
+  if (!window.DTB.state) window.DTB.state = {};
+  const state = window.DTB.state;
 
   // 路由表：route name → render 函数引用
   // 页面模块加载时会注册自己：
-  //   window.OTB.state.routes.home = function(view) { ... }
+  //   window.DTB.state.routes.home = function(view) { ... }
   // app.js 在 navigate 时统一调用
   state.routes = state.routes || {};
   state.routeNames = state.routeNames || {};
@@ -24,7 +24,20 @@
   state.bootInfo = state.bootInfo || null;
 
   // localStorage 提示关闭键的统一前缀
-  const LS_PREFIX = 'otb:dismissed:';
+  // v0.9 rebrand: 从 otb:dismissed:* 迁移到 dtb:dismissed:*（一次性，不删除旧键）
+  try {
+    var OLD_PREFIX = 'otb:dismissed:';
+    for (var i = 0; i < localStorage.length; i++) {
+      var k = localStorage.key(i);
+      if (k && k.indexOf(OLD_PREFIX) === 0) {
+        var newK = 'dtb:dismissed:' + k.slice(OLD_PREFIX.length);
+        if (!localStorage.getItem(newK)) {
+          localStorage.setItem(newK, localStorage.getItem(k));
+        }
+      }
+    }
+  } catch (_) { /* ignore migration errors */ }
+  const LS_PREFIX = 'dtb:dismissed:';
 
   function isDismissed(key) {
     try { return localStorage.getItem(LS_PREFIX + key) === '1'; }

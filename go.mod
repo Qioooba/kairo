@@ -1,4 +1,4 @@
-module ops-toolbox
+module doubao-toolbox
 
 go 1.20
 

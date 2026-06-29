@@ -16,7 +16,7 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// handlePortOccupied Windows 平台：检测占用端口的进程，自动杀残留 OpsToolbox.exe，
+// handlePortOccupied Windows 平台：检测占用端口的进程，自动杀残留 DoubaoToolbox.exe，
 // 其它进程弹框询问用户。
 func handlePortOccupied(port int, selfExePath string, selfPID int) Result {
 	res := Result{Decision: DecisionNone}
@@ -36,23 +36,23 @@ func handlePortOccupied(port int, selfExePath string, selfPID int) Result {
 		return res
 	}
 
-	if strings.EqualFold(procName, "OpsToolbox.exe") {
+	if strings.EqualFold(procName, "DoubaoToolbox.exe") {
 		if procExe != "" && selfExePath != "" {
 			sameExe, err := sameFilePath(procExe, selfExePath)
 			if err == nil && !sameExe {
 				res.Reason = fmt.Sprintf(
-					"进程名是 OpsToolbox.exe 但路径不同 (占用方=%s / 当前=%s)，疑似别人的工具，不杀",
+					"进程名是 DoubaoToolbox.exe 但路径不同 (占用方=%s / 当前=%s)，疑似别人的工具，不杀",
 					procExe, selfExePath)
 				return res
 			}
 		}
-		log.Printf("[portreuse] 检测到残留 OpsToolbox.exe (PID=%d)，自动 taskkill", pid)
+		log.Printf("[portreuse] 检测到残留 DoubaoToolbox.exe (PID=%d)，自动 taskkill", pid)
 		if err := taskKill(pid); err != nil {
 			res.Reason = fmt.Sprintf("taskkill PID=%d 失败: %v", pid, err)
 			return res
 		}
 		res.Decision = DecisionKilled
-		res.Reason = fmt.Sprintf("已 taskkill 残留 OpsToolbox.exe (PID=%d)", pid)
+		res.Reason = fmt.Sprintf("已 taskkill 残留 DoubaoToolbox.exe (PID=%d)", pid)
 		return res
 	}
 
@@ -179,10 +179,10 @@ func isGUIMode() bool {
 //   - 终端模式：保留现有 stdin.Read Y/N 逻辑
 func promptKillOtherProcess(pid int, name string, port int) bool {
 	msg := fmt.Sprintf(
-		"OpsToolbox 想使用端口 %d，但被其它进程占用。\r\n\r\n"+
+		"DoubaoToolbox 想使用端口 %d，但被其它进程占用。\r\n\r\n"+
 			"占用方：%s (PID=%d)\r\n\r\n"+
 			"按 Y 杀掉该进程（注意：会丢失该进程未保存的数据）。\r\n"+
-			"按 N 取消，OpsToolbox 退出。\r\n",
+			"按 N 取消，DoubaoToolbox 退出。\r\n",
 		port, name, pid)
 
 	// GUI 模式：双击启动时 stdin 是 EOF，os.Stdin.Read 立即返回，
@@ -239,7 +239,7 @@ func promptKillOtherProcess(pid int, name string, port int) bool {
 // promptKillViaMessageBox 在 GUI 模式下用 windows.MessageBox 弹原生对话框。
 // 阻塞等待用户点击 Yes/No，没有超时（MessageBox 默认无限等待，符合 GUI 交互习惯）。
 func promptKillViaMessageBox(pid int, name string, port int, msg string) bool {
-	title := fmt.Sprintf("OpsToolbox - 端口 %d 被占用", port)
+	title := fmt.Sprintf("DoubaoToolbox - 端口 %d 被占用", port)
 	log.Printf("[portreuse] GUI 模式：弹 MessageBox 询问用户 (PID=%d name=%s)", pid, name)
 
 	// UTF16PtrFromString 在字符串含 NUL 字节时返回 error（比已废弃的
@@ -273,7 +273,7 @@ func promptKillViaMessageBox(pid int, name string, port int, msg string) bool {
 
 // notifyMsg 用 Windows msg.exe 通知其它 session。
 func notifyMsg(pid int, name string, port int) {
-	msg := fmt.Sprintf("OpsToolbox needs port %d, occupied by %s (PID=%d). Check the launching console for Y/N prompt.", port, name, pid)
+	msg := fmt.Sprintf("DoubaoToolbox needs port %d, occupied by %s (PID=%d). Check the launching console for Y/N prompt.", port, name, pid)
 	cmd := exec.Command("msg", "*", "/TIME:60", msg)
 	_ = cmd.Run()
 }

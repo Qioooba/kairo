@@ -24,9 +24,9 @@
 
 (function () {
   'use strict';
-  const OTB = window.OTB = window.OTB || {};
-  OTB.pages = OTB.pages || {};
-  const { el, toast, copyToClipboard, escapeHtml } = OTB.core;
+  const DTB = window.DTB = window.DTB || {};
+  DTB.pages = DTB.pages || {};
+  const { el, toast, copyToClipboard, escapeHtml } = DTB.core;
 
   // ===== 分类定义（顺序就是 tab 顺序） =====
   const CATEGORIES = [
@@ -1062,8 +1062,8 @@
     renderList();
   }
 
-  OTB.pages.commands = renderCommands;
-  OTB.state.routes.commands = renderCommands;
-  OTB.state.routeNames.commands = '常用命令';
-  OTB.state.routeSubs.commands = 'Linux / Git / Docker / Oracle / MySQL / Redis / Nginx / Java / 前端 / IDEA 速查';
+  DTB.pages.commands = renderCommands;
+  DTB.state.routes.commands = renderCommands;
+  DTB.state.routeNames.commands = '常用命令';
+  DTB.state.routeSubs.commands = 'Linux / Git / Docker / Oracle / MySQL / Redis / Nginx / Java / 前端 / IDEA 速查';
 })();

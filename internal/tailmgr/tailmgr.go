@@ -24,7 +24,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"ops-toolbox/internal/logquery"
+	"doubao-toolbox/internal/logquery"
 )
 
 // Streamer 是 tailmgr 对底层 SSH 客户端的最小依赖抽象。

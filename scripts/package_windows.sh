@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # package_windows.sh
 #
-# 把已经构建好的 dist/ops-toolbox-<ver>/ 目录打包成 zip，
-# 方便发给同事（同事只需解压后双击 OpsToolbox.exe）。
+# 把已经构建好的 dist/doubao-toolbox-<ver>/ 目录打包成 zip，
+# 方便发给同事（同事只需解压后双击 DoubaoToolbox.exe）。
 #
 # 用法：
 #   ./scripts/package_windows.sh <ver>
@@ -10,7 +10,7 @@
 #   ./scripts/package_windows.sh v0.1.0
 #
 # 产物：
-#   ./dist/ops-toolbox-<ver>-windows.zip
+#   ./dist/doubao-toolbox-<ver>-windows.zip
 
 set -euo pipefail
 
@@ -23,8 +23,8 @@ if [[ -z "${VER}" ]]; then
   exit 1
 fi
 
-SRC="dist/ops-toolbox-${VER}"
-DST="dist/ops-toolbox-${VER}-windows.zip"
+SRC="dist/doubao-toolbox-${VER}"
+DST="dist/doubao-toolbox-${VER}-windows.zip"
 
 if [[ ! -d "${SRC}" ]]; then
   echo "错误：找不到 ${SRC}" >&2

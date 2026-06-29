@@ -1,4 +1,4 @@
-// OpsToolbox - 内网运维工具箱入口
+// DoubaoToolbox - 豆包工具箱入口
 //
 // 启动本地 HTTP 服务，默认监听 127.0.0.1:18080，
 // 启动后自动打开浏览器访问首页。
@@ -22,13 +22,13 @@ import (
 	"syscall"
 	"time"
 
-	"ops-toolbox/internal/audit"
-	"ops-toolbox/internal/config"
-	"ops-toolbox/internal/credentials"
-	"ops-toolbox/internal/downloads"
-	"ops-toolbox/internal/httpserver"
-	"ops-toolbox/internal/sshclient"
-	"ops-toolbox/internal/tailmgr"
+	"doubao-toolbox/internal/audit"
+	"doubao-toolbox/internal/config"
+	"doubao-toolbox/internal/credentials"
+	"doubao-toolbox/internal/downloads"
+	"doubao-toolbox/internal/httpserver"
+	"doubao-toolbox/internal/sshclient"
+	"doubao-toolbox/internal/tailmgr"
 )
 
 //go:embed web
@@ -36,7 +36,7 @@ var webFS embed.FS
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
-	log.SetPrefix("[OpsToolbox] ")
+	log.SetPrefix("[DoubaoToolbox] ")
 
 	// 1. 确定运行目录。优先用可执行文件目录；若 config.yaml 不在那，
 	// 再回退到当前工作目录，兼容 `go run .` 这类临时二进制路径。
@@ -108,7 +108,7 @@ func main() {
 	}
 	defer auditLog.Close()
 
-	// 4.9 项 4 迁移：把历史 .meta sidecar 文件合并到单文件索引 .ops-toolbox-meta.json。
+	// 4.9 项 4 迁移：把历史 .meta sidecar 文件合并到单文件索引 .doubao-toolbox-meta.json。
 	// 一次性操作，幂等。失败不致命（侧车丢了只是丢元数据，不影响下载文件本身）。
 	if migrated, skipped, err := downloads.MigrateSidecars(cfg.DownloadDir()); err != nil {
 		log.Printf("WARNING: .meta sidecar 迁移失败: %v", err)

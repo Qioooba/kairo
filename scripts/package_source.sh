@@ -10,17 +10,17 @@
 #   ./scripts/package_source.sh v0.9
 #
 # 产物：
-#   ./dist/ops-toolbox-src-<ver>.tar.gz
+#   ./dist/doubao-toolbox-src-<ver>.tar.gz
 #
 # 打包后建议跑 smoke 测试：
-#   ./scripts/release_smoke_test.sh ./dist/ops-toolbox-src-<ver>.tar.gz
+#   ./scripts/release_smoke_test.sh ./dist/doubao-toolbox-src-<ver>.tar.gz
 
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
 VER="${1:-v0.9}"
-OUT="dist/ops-toolbox-src-${VER}.tar.gz"
+OUT="dist/doubao-toolbox-src-${VER}.tar.gz"
 
 echo ">> 打包源码发布包: ${OUT}"
 
@@ -47,7 +47,7 @@ mkdir -p dist
 # 如果不在 git 仓库内，回退到 tar 手动排除。
 if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   echo ">> 使用 git archive 打包（自动排除 dist/、.git/、运行时产物）"
-  git archive --format=tar.gz --prefix="ops-toolbox-${VER}/" HEAD -o "${OUT}"
+  git archive --format=tar.gz --prefix="doubao-toolbox-${VER}/" HEAD -o "${OUT}"
 else
   echo ">> 不在 git 仓库内，手动 tar 打包"
   tar -czf "${OUT}" \
@@ -58,7 +58,7 @@ else
     --exclude='./downloads' \
     --exclude='./node_modules' \
     --exclude='./*.exe' \
-    --transform "s,^\./,ops-toolbox-${VER}/," \
+    --transform "s,^\./,doubao-toolbox-${VER}/," \
     .
 fi
 

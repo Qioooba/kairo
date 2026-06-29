@@ -1,16 +1,16 @@
 /* ===== web/api.js =====
  * API 封装：fetch + status 联动 + 一些常用的 fetch 包装
  *
- * 暴露：window.OTB.api.{api, postJSON, getJSON, triggerDownload}
+ * 暴露：window.DTB.api.{api, postJSON, getJSON, triggerDownload}
  */
 
 (function () {
   'use strict';
 
-  if (!window.OTB) window.OTB = {};
-  if (!window.OTB.api) window.OTB.api = {};
-  const apiNs = window.OTB.api;
-  const core = window.OTB.core;
+  if (!window.DTB) window.DTB = {};
+  if (!window.DTB.api) window.DTB.api = {};
+  const apiNs = window.DTB.api;
+  const core = window.DTB.core;
 
   async function api(method, path, body) {
     core.setStatus('busy');
@@ -25,8 +25,8 @@
       try { data = await resp.json(); } catch (e) { /* ignore */ }
       if (resp.status === 401 && data && data.auth_required) {
         core.setStatus('idle');
-        if (window.OTB.auth && window.OTB.auth.requireLogin) {
-          window.OTB.auth.requireLogin();
+        if (window.DTB.auth && window.DTB.auth.requireLogin) {
+          window.DTB.auth.requireLogin();
         }
         const err = new Error(data.error || '需要登录');
         err.authRequired = true;
@@ -75,8 +75,8 @@
       if (r.status === 401) {
         let data = null;
         try { data = await r.json(); } catch (e) {}
-        if (data && data.auth_required && window.OTB.auth && window.OTB.auth.requireLogin) {
-          window.OTB.auth.requireLogin();
+        if (data && data.auth_required && window.DTB.auth && window.DTB.auth.requireLogin) {
+          window.DTB.auth.requireLogin();
           const err = new Error(data.error || '需要登录');
           err.authRequired = true;
           throw err;

@@ -1,4 +1,4 @@
-# OpsToolbox 深度测试问题汇总
+# 豆包工具箱 深度测试问题汇总
 
 > 审查范围：ops-toolbox v0.8 全量代码（后端 Go + 前端 JS + 配置 + 文档 + 打包产物）
 > 审查方式：静态全量代码阅读 + gofmt/node --check/go test 实跑 + API 契约核对 + 配置/README 一致性比对
@@ -381,7 +381,7 @@
 - 优先级：P3
 - 模块：后端-portreuse Windows
 - 页面/按钮/接口：启动时端口占用处理
-- 复现步骤：Windows 上双击启动 OpsToolbox.exe，端口被另一个 OpsToolbox.exe 残留进程占用
+- 复现步骤：Windows 上双击启动 DoubaoToolbox.exe，端口被另一个 DoubaoToolbox.exe 残留进程占用
 - 实际结果：`internal/portreuse/portreuse_windows.go:158` 的 `promptKillOtherProcess` 用 `os.Stdin.Read` 读 Y/N，但 GUI 程序双击启动时没有 stdin，`os.Stdin.Read` 立即返回 EOF，默认不杀。同时 `notifyMsg`（:210）调 `msg.exe` 弹窗，但用户没法在 GUI 弹窗里输入 Y/N 给 stdin
 - 期望结果：GUI 模式下应弹原生 Win32 MessageBox
 - 影响：功能 — Windows 双击启动时端口占用自动恢复失效

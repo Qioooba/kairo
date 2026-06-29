@@ -1,8 +1,8 @@
-# OpsToolbox v0.3 代码审查 + 自动化 UI 测试报告
+# 豆包工具箱 v0.3 代码审查 + 自动化 UI 测试报告
 
 **审查日期**：2026-06-22
 **审查范围**：`/Users/qi/Documents/spaces/ops-toolbox`（macOS arm64 编译产物 + Go 源码 + 嵌入 web 前端 + mock SSH 脚本）
-**Go 二进制**：`OpsToolbox_mac`（重建后 7.8 MB，监听 127.0.0.1:18090）
+**Go 二进制**：`DoubaoToolbox_mac`（重建后 7.8 MB，监听 127.0.0.1:18090）
 **测试环境**：mock SSH @ 127.0.0.1:2225（test/ops），Playwright 1.61.0 + headless chromium
 
 ---
@@ -270,8 +270,8 @@ $ curl 'http://127.0.0.1:18090/api/credentials/has?system=信贷生产（模拟�
 # 1. 启动 mock SSH（必须用 2225，与 config.yaml 一致）
 MOCK_SSHD_PORT=2225 python3 scripts/mock_sshd.py &
 
-# 2. 启动 OpsToolbox（监听 18090）
-./OpsToolbox_mac &
+# 2. 启动 豆包工具箱（监听 18090）
+./DoubaoToolbox_mac &
 
 # 3. 跑自动化测试
 cd docs/qa

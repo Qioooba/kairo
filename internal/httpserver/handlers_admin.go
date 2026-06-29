@@ -7,7 +7,7 @@ import (
 	"io"
 	"net/http"
 
-	"ops-toolbox/internal/config"
+	"doubao-toolbox/internal/config"
 )
 
 // ---------- /api/admin/servers ----------

@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"strings"
 
-	"ops-toolbox/internal/diff"
+	"doubao-toolbox/internal/diff"
 )
 
 // compareReq 是 /api/diff/compare 的请求体。

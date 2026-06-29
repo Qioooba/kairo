@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"ops-toolbox/internal/sshclient"
+	"doubao-toolbox/internal/sshclient"
 )
 
 type sshTestReq struct {

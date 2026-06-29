@@ -3,13 +3,17 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%232563eb'/%3E%3Cpath d='M9 10h14M9 16h14M9 22h8' stroke='%23fff' stroke-width='2.5' stroke-linecap='round'/%3E%3C/svg%3E" />
-  <title>文件预览 · 独立窗口</title>
+  <link rel="icon" type="image/png" href="/static/img/favicon.png" />
+  <title>文件预览 · 豆包工具箱</title>
   <!-- 与 index.html 一致：在 CSS 加载后立刻读 localStorage 设 data-theme，避免独立窗口深色与主窗口主题不一致 / FOUC -->
   <script>
     (function () {
       try {
-        var t = localStorage.getItem('otb_theme');
+        if (!localStorage.getItem('dtb_theme')) {
+          var oldTheme = localStorage.getItem('otb_theme');
+          if (oldTheme) localStorage.setItem('dtb_theme', oldTheme);
+        }
+        var t = localStorage.getItem('dtb_theme');
         if (t !== 'dark' && t !== 'light' && t !== 'green' && t !== 'hc') t = 'dark';
         document.documentElement.setAttribute('data-theme', t);
       } catch (_) {
@@ -110,19 +114,19 @@
   <script>
     // ===== preview.html 独立窗口 JS =====
     // 从 query string 拿 system/server/path/encoding，
-    // 从 opener.OTB 拿凭据（如果开了"记住密码"已经在 opener 里），
+    // 从 opener.DTB 拿凭据（如果开了"记住密码"已经在 opener 里），
     // 调 /api/files/preview，显示文本 / 二进制提示。
 
     (function () {
       'use strict';
-      if (!window.OTB) window.OTB = {};
+      if (!window.DTB) window.DTB = {};
       const $ = (s) => document.querySelector(s);
-      const { api } = window.OTB.api || {};
-      // FE-003：优先走 OTB.api.api() —— 它会在 401 时触发登录引导（requireLogin）。
-      // 但 api() 内部依赖 window.OTB.core.setStatus；preview 独立窗口没加载 core.js，
+      const { api } = window.DTB.api || {};
+      // FE-003：优先走 DTB.api.api() —— 它会在 401 时触发登录引导（requireLogin）。
+      // 但 api() 内部依赖 window.DTB.core.setStatus；preview 独立窗口没加载 core.js，
       // 此时 api() 调用会抛错。这里做 fallback：core 没就绪时退回裸 fetch 兜底，
       // 并复刻 api() 的「401→requireLogin / !ok→throw」语义，保证功能不中断。
-      const coreReady = !!(window.OTB && window.OTB.core);
+      const coreReady = !!(window.DTB && window.DTB.core);
       async function request(method, path, body) {
         const opts = { method, headers: {}, credentials: 'same-origin' };
         if (body !== undefined) {
@@ -133,7 +137,7 @@
         let data = null;
         try { data = await resp.json(); } catch (e) { /* ignore */ }
         if (resp.status === 401 && data && data.auth_required) {
-          if (window.OTB.auth && window.OTB.auth.requireLogin) window.OTB.auth.requireLogin();
+          if (window.DTB.auth && window.DTB.auth.requireLogin) window.DTB.auth.requireLogin();
           const err = new Error((data && data.error) || '需要登录');
           err.authRequired = true;
           throw err;
@@ -181,8 +185,8 @@
       function getCred() {
         try {
           const op = window.opener;
-          if (op && op.OTB && op.OTB._previewCred && op.OTB._previewCred[system + '::' + server]) {
-            const c = op.OTB._previewCred[system + '::' + server];
+          if (op && op.DTB && op.DTB._previewCred && op.DTB._previewCred[system + '::' + server]) {
+            const c = op.DTB._previewCred[system + '::' + server];
             if (c && c.username && c.password) return c;
           }
         } catch (e) { /* ignore cross-origin */ }
@@ -214,7 +218,7 @@
 
         setConn('busy', '加载中…');
         try {
-          // FE-003：走 call()（OTB.api.api() 优先，401 触发登录引导），
+          // FE-003：走 call()（DTB.api.api() 优先，401 触发登录引导），
           // 退化时用裸 fetch 兜底。call() 返回解析后的 data，!ok/401 时抛错。
           // BUG-3：cred 可能是 null（getCred() opener 拿不到 password 时返回 null），
           // 改读 activeCred（有 || {username:'',password:''} 兜底，永远是对象）。
@@ -273,7 +277,7 @@
         // 但仍然发请求——后端有 keyring 兜底。
         const cred = activeCred || getCred() || { username: '', password: '' };
         try {
-          // FE-003：走 call()（OTB.api.api() 优先，401 触发登录引导）。
+          // FE-003：走 call()（DTB.api.api() 优先，401 触发登录引导）。
           const d = await call('POST', '/api/files/download', {
             system: system, server: server, path: path,
             username: cred.username || '', password: cred.password || '',

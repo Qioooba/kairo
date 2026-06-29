@@ -4,10 +4,10 @@
 
 (function () {
   'use strict';
-  const OTB = window.OTB = window.OTB || {};
-  OTB.pages = OTB.pages || {};
-  const { el, kvTable, toast } = OTB.core;
-  const { api } = OTB.api;
+  const DTB = window.DTB = window.DTB || {};
+  DTB.pages = DTB.pages || {};
+  const { el, kvTable, toast } = DTB.core;
+  const { api } = DTB.api;
 
   function renderDiagnostics(view) {
     const summaryEl = el('div', { class: 'text-dim mt-2', text: '加载中…' });
@@ -183,8 +183,8 @@
     load(false);
   }
 
-  OTB.pages.diagnostics = renderDiagnostics;
-  OTB.state.routes.diagnostics = renderDiagnostics;
-  OTB.state.routeNames.diagnostics = '环境自检';
-  OTB.state.routeSubs.diagnostics = '本机 / 网络 / 配置 / 工具 / 每台 server 连通性快速体检';
+  DTB.pages.diagnostics = renderDiagnostics;
+  DTB.state.routes.diagnostics = renderDiagnostics;
+  DTB.state.routeNames.diagnostics = '环境自检';
+  DTB.state.routeSubs.diagnostics = '本机 / 网络 / 配置 / 工具 / 每台 server 连通性快速体检';
 })();

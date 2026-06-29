@@ -38,8 +38,8 @@
   function getOpenerCred() {
     try {
       const op = window.opener;
-      if (op && op.OTB && op.OTB._tailCred && op.OTB._tailCred[system + '::' + server]) {
-        const c = op.OTB._tailCred[system + '::' + server];
+      if (op && op.DTB && op.DTB._tailCred && op.DTB._tailCred[system + '::' + server]) {
+        const c = op.DTB._tailCred[system + '::' + server];
         if (c && c.password) return { username: c.username || '', password: c.password };
       }
     } catch (e) { /* ignore (跨源 opener 会抛) */ }
@@ -87,9 +87,9 @@
   }
 
   // ---- Tail 高亮面板（独立窗口版） ----
-  // 与 websphere.js 共享 OTB.core.tailHighlightPanel 工厂。
+  // 与 websphere.js 共享 DTB.core.tailHighlightPanel 工厂。
   // 持久化策略：
-  //   1) 先尝试从 opener 的 OTB.state.tailHighlights 拿（项 9 修复：用户在主页刚设过）
+  //   1) 先尝试从 opener 的 DTB.state.tailHighlights 拿（项 9 修复：用户在主页刚设过）
   //   2) 兜底：本地 fetch GET /api/preferences 读 tail.highlights
   //   3) 都没有：空列表
   // onChange：PUT /api/preferences + 回写 opener 的 state（同进程多窗口同步）
@@ -97,8 +97,8 @@
   async function initHighlightPanel() {
     let initial = [];
     try {
-      if (window.opener && window.opener.OTB && Array.isArray(window.opener.OTB.state && window.opener.OTB.state.tailHighlights)) {
-        initial = window.opener.OTB.state.tailHighlights;
+      if (window.opener && window.opener.DTB && Array.isArray(window.opener.DTB.state && window.opener.DTB.state.tailHighlights)) {
+        initial = window.opener.DTB.state.tailHighlights;
       }
     } catch (e) { /* ignore (跨源 opener 会抛) */ }
     if (!initial.length) {
@@ -107,13 +107,13 @@
         if (prefs && prefs.tail && Array.isArray(prefs.tail.highlights)) initial = prefs.tail.highlights;
       } catch (e) { /* ignore */ }
     }
-    highlightPanel = OTB.core.tailHighlightPanel({
+    highlightPanel = DTB.core.tailHighlightPanel({
       initial,
       onChange: async (list) => {
         try {
-          if (window.opener && window.opener.OTB) {
-            window.opener.OTB.state = window.opener.OTB.state || {};
-            window.opener.OTB.state.tailHighlights = list;
+          if (window.opener && window.opener.DTB) {
+            window.opener.DTB.state = window.opener.DTB.state || {};
+            window.opener.DTB.state.tailHighlights = list;
           }
         } catch (e) { /* ignore */ }
         try {
@@ -139,7 +139,7 @@
   // viewer.pushBatch(arr) 内部会按当前 highlights 渲染每一行
   // —— 注意：viewer 创建时 highlightPanel 还没就绪（异步 initHighlightPanel 之后），
   // 但 getHighlights 用闭包读 highlightPanel 的 .enabled/.list，每次 push 重新读，所以没问题。
-  const viewer = OTB.core.tailViewer({
+  const viewer = DTB.core.tailViewer({
     container: tailOut,
     maxLines: getMaxLines(),
     getHighlights: () => (highlightPanel && highlightPanel.enabled) ? highlightPanel.list : []

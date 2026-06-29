@@ -2,17 +2,17 @@
  * web/theme.js — 暗 / 亮主题切换（v0.5 接入 #19）
  *
  * 设计要点：
- *  - 暴露 window.OTB.theme = { get, set, toggle, init }
- *  - 持久化：localStorage.otb_theme（默认 'dark'）
+ *  - 暴露 window.DTB.theme = { get, set, toggle, init }
+ *  - 持久化：localStorage.dtb_theme（默认 'dark'）
  *  - 应用：document.documentElement.setAttribute('data-theme', name)
  *  - 在 index.html 的 <head> 里有一段 inline script 提前读 localStorage
  *    设置 data-theme，避免刷新时整页先闪一下暗色再切到亮色（FOUC）
- *  - 切换后 dispatch 自定义事件 'otb:themechange'，按钮可监听并改 emoji
+ *  - 切换后 dispatch 自定义事件 'dtb:themechange'，按钮可监听并改 emoji
  *    （这样 theme.js 本身不耦合顶栏 DOM 结构，扩展友好）
  */
 (function () {
   'use strict';
-  const KEY = 'otb_theme';
+  const KEY = 'dtb_theme';
   // v0.5-G #19：4 种主题（深色 / 浅色 / 护眼绿 / 高对比）
   const ALLOWED = ['dark', 'light', 'green', 'hc'];
 
@@ -40,7 +40,7 @@
     try { localStorage.setItem(KEY, name); } catch (_) {}
     document.documentElement.setAttribute('data-theme', name);
     try {
-      window.dispatchEvent(new CustomEvent('otb:themechange', { detail: { theme: name } }));
+      window.dispatchEvent(new CustomEvent('dtb:themechange', { detail: { theme: name } }));
     } catch (_) {}
     const btn = document.getElementById('theme-toggle');
     if (btn) {
@@ -65,7 +65,7 @@
       btn.textContent = EMOJI[name] || EMOJI.dark;
       btn.title = TIP[name] || TIP.dark;
       if (!btn.onclick) {
-        btn.addEventListener('click', () => OTB.theme.toggle());
+        btn.addEventListener('click', () => DTB.theme.toggle());
       }
     }
     return name;
@@ -76,6 +76,6 @@
     return ALLOWED.slice();
   }
 
-  window.OTB = window.OTB || {};
-  window.OTB.theme = { get, set, toggle, init, list };
+  window.DTB = window.DTB || {};
+  window.DTB.theme = { get, set, toggle, init, list };
 })();

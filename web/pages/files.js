@@ -11,10 +11,10 @@
 
 (function () {
   'use strict';
-  const OTB = window.OTB = window.OTB || {};
-  OTB.pages = OTB.pages || {};
-  const { el, $, toast, setStatus, cssEscape, pctText, formatBytes, formatTime, basenameOf } = OTB.core;
-  const { api } = OTB.api;
+  const DTB = window.DTB = window.DTB || {};
+  DTB.pages = DTB.pages || {};
+  const { el, $, toast, setStatus, cssEscape, pctText, formatBytes, formatTime, basenameOf } = DTB.core;
+  const { api } = DTB.api;
 
   function renderFiles(view) {
     const state = {
@@ -136,7 +136,7 @@
     let filterDebounce = null;
     filterInp.addEventListener('input', () => {
       state.filter = filterInp.value || '';
-      OTB.core.lastSet('files', 'filter', state.filter);
+      DTB.core.lastSet('files', 'filter', state.filter);
       // 防抖：避免每个按键都重渲染整张表 → 200ms 静默后才 render
       if (filterDebounce) clearTimeout(filterDebounce);
       filterDebounce = setTimeout(() => {
@@ -148,7 +148,7 @@
     const filterClearBtn = el('button', { class: 'btn btn-sm', text: '清空', onclick: () => {
       filterInp.value = '';
       state.filter = '';
-      OTB.core.lastSet('files', 'filter', '');
+      DTB.core.lastSet('files', 'filter', '');
       renderTable();
     }});
     const filterCountEl = el('span', { id: 'files-filter-count', class: 'text-dim' });
@@ -205,7 +205,7 @@
           sysSel.appendChild(el('option', { value: sys.name, text: sys.name + (sys.description ? ' · ' + sys.description : '') }));
         });
         // 恢复上次选择
-        const lastSel = OTB.core.lastGet('files', 'sel');
+        const lastSel = DTB.core.lastGet('files', 'sel');
         if (lastSel && lastSel.system && (info.systems || []).find(s => s.name === lastSel.system)) {
           sysSel.value = lastSel.system;
           setSystem(lastSel.system);
@@ -217,7 +217,7 @@
           rememberChk.checked = true;
         }
         // 恢复 filter lastGet
-        const lastFilter = OTB.core.lastGet('files', 'filter');
+        const lastFilter = DTB.core.lastGet('files', 'filter');
         if (lastFilter) {
           state.filter = lastFilter;
           filterInp.value = lastFilter;
@@ -274,7 +274,7 @@
     }
 
     function persistSelection() {
-      OTB.core.lastSet('files', 'sel', {
+      DTB.core.lastSet('files', 'sel', {
         system: state.currentSys,
         server: state.currentSrv
       });
@@ -425,7 +425,7 @@
       }
     }
 
-    // openPreviewInNewWindow 开新窗口（preview.html），凭证走 OTB._previewCred 跨窗口传递
+    // openPreviewInNewWindow 开新窗口（preview.html），凭证走 DTB._previewCred 跨窗口传递
     function openPreviewInNewWindow(filePath, fileName) {
       const c = creds();
       if (!c.username) { toast('请在系统配置中设置 SSH 用户名或在上方填写', 'warn'); return; }
@@ -438,8 +438,8 @@
       } catch (e) { /* keep utf-8 */ }
       // P0-BUG-3 修复：传给 preview.html 的 password 必须是"实际能用的密码"。
       // 优先级：用户在输入框里填的 > srv.password（通常空）> 空（让 preview.html 后端 keyring 兜底）。
-      OTB._previewCred = OTB._previewCred || {};
-      OTB._previewCred[state.currentSys + '::' + state.currentSrv] = {
+      DTB._previewCred = DTB._previewCred || {};
+      DTB._previewCred[state.currentSys + '::' + state.currentSrv] = {
         username: c.username,
         password: (passInput && passInput.value) || c.password || '',
         has_keyring: !!rememberChk.checked
@@ -923,7 +923,7 @@
       btnCancel.disabled = false;
       setStatus('busy', '下载中…');
       // 项 2 修复：每个下载任务开始时生成稳定的 notify id（"files-时间戳"），
-      // 同任务即便多次重推 done 事件，notify 也会去重（见 OTB.core.notify 的 id 去重逻辑）。
+      // 同任务即便多次重推 done 事件，notify 也会去重（见 DTB.core.notify 的 id 去重逻辑）。
       // 多任务之间也不会互相覆盖。
       state.lastNotifyId = 'files-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
       try {
@@ -937,7 +937,7 @@
         if (!window.EventSource) { toast('浏览器不支持 EventSource', 'err'); return; }
         const es = new EventSource('/api/files/download/' + r.id + '/events');
         state.dlEvtSrc = es;
-        OTB.core.setActiveDL({ id: r.id, evtsrc: es });
+        DTB.core.setActiveDL({ id: r.id, evtsrc: es });
         let gotDone = false;
         // P1-BUG-4 修复：done 一旦见到，**立刻** es.close() + 清 onerror/onmessage，
         // 防止 EventSource 自动重连把 404 刷到 network log。
@@ -1061,7 +1061,7 @@
         actions.push({
           label: '📋 复制路径',
           callback: () => {
-            OTB.core.copyToClipboard(folder).then(() => {
+            DTB.core.copyToClipboard(folder).then(() => {
               toast('路径已复制', 'ok');
             }).catch(() => {
               window.prompt('复制此路径：', folder);
@@ -1075,7 +1075,7 @@
           if (location.hash !== '#/downloads') location.hash = '#/downloads';
         }
       });
-      OTB.core.notify({
+      DTB.core.notify({
         id: state.lastNotifyId || ('download-' + Date.now()),
         type: 'ok',
         title: title,
@@ -1084,7 +1084,7 @@
         duration: 8000
       });
       if (location.hash !== '#/downloads') {
-        OTB.core.bumpDlBadge(downloads.length);
+        DTB.core.bumpDlBadge(downloads.length);
       }
     }
 
@@ -1230,7 +1230,7 @@
         if (!window.EventSource) { toast('浏览器不支持 EventSource', 'err'); return; }
         const es = new EventSource('/api/files/download/' + r.id + '/events');
         state.dlEvtSrc = es;
-        OTB.core.setActiveDL({ id: r.id, evtsrc: es });
+        DTB.core.setActiveDL({ id: r.id, evtsrc: es });
         let gotDone = false;
         // P1-BUG-4：参考上面 doDownload 的修复——done 见到立即卸监听器 + close。
         const onDoneSeen = (reason) => {
@@ -1303,7 +1303,7 @@ renderCommonDirsBar();
 loadCfg().then(refreshCredStatus).catch(e => toast('配置加载失败：' + e.message, 'err'));
   }
 
-  OTB.pages.files = renderFiles;
-  OTB.state.routes.files = renderFiles;
-  OTB.state.routeNames.files = 'FTP文件下载';
+  DTB.pages.files = renderFiles;
+  DTB.state.routes.files = renderFiles;
+  DTB.state.routeNames.files = 'FTP文件下载';
 })();

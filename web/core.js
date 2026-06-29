@@ -2,7 +2,7 @@
  * 通用工具：DOM/escape/格式化 + 校验/创建函数 + activeDL 管理
  *
  * 设计：
- *   - 零构建，纯 vanilla JS，挂到 window.OTB.core
+ *   - 零构建，纯 vanilla JS，挂到 window.DTB.core
  *   - 所有"无 DOM 依赖"的纯函数放在这里（escapeHtml / formatBytes / formatTime / cssEscape / pctText / trimMiddle / looksMojibake / basenameOf / validate）
  *   - 仍需要 document 的（el / $ / $$ / toast / setStatus / kvTable）也放这里（统一入口）
  *   - 测试 web/app.test.js 会从这里抽函数，所以命名必须保持稳定
@@ -11,9 +11,9 @@
 (function () {
   'use strict';
 
-  if (!window.OTB) window.OTB = {};
-  if (!window.OTB.core) window.OTB.core = {};
-  const core = window.OTB.core;
+  if (!window.DTB) window.DTB = {};
+  if (!window.DTB.core) window.DTB.core = {};
+  const core = window.DTB.core;
 
   // -------- DOM helper --------
 
@@ -41,7 +41,7 @@
         else if (k === 'text') e.textContent = attrs[k];
         else if (k === 'html') {
           // 兼容老调用：warn 但仍然执行，避免回归
-          console.warn("[ops-toolbox] el(..., { html: ... }) is deprecated; use 'unsafeHtml' to make intent explicit, or 'text' to auto-escape.");
+          console.warn("[doubao-toolbox] el(..., { html: ... }) is deprecated; use 'unsafeHtml' to make intent explicit, or 'text' to auto-escape.");
           e.innerHTML = attrs[k];
         } else if (k === 'unsafeHtml') e.innerHTML = attrs[k];
         else if (k.indexOf('on') === 0) e.addEventListener(k.slice(2), attrs[k]);
@@ -663,8 +663,8 @@
   // -------- Tail 高亮面板（共享 UI 工厂） --------
   //
   // 用法：
-  //   const panel = OTB.core.tailHighlightPanel({
-  //     initial: OTB.state.tailHighlights || [],   // 初始规则
+  //   const panel = DTB.core.tailHighlightPanel({
+  //     initial: DTB.state.tailHighlights || [],   // 初始规则
   //     onChange: async (list) => { ... },         // 规则变化时（持久化）
   //     onToggle: (enabled) => { ... }             // 启停切换（可选）
   //   });

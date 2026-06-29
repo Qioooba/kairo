@@ -1,6 +1,6 @@
 # Agent 2 前端 v3 — REVIEW/FIX
 
-> OpsToolbox 前端 v3 计划：拆分 `web/app.js`（2664 行 → 13 模块）+ UI 视觉优化 + 4 个新功能 UI
+> 豆包工具箱前端 v3 计划：拆分 `web/app.js`（2664 行 → 13 模块）+ UI 视觉优化 + 4 个新功能 UI
 > 执行时间：2026-06-23 08:23 ~ 08:38 (Asia/Shanghai)
 > 作者：coder agent (Agent 2)
 
@@ -112,7 +112,7 @@
 **位置**：`pages/history.js` btn-row，截图 `docs/qa/screenshots/16-history.png`
 
 - 第三个按钮："导出 JSON"，走 `/api/audit/export.json?{过滤参数}`
-- filename = `ops-toolbox-audit.json`
+- filename = `doubao-toolbox-audit.json`
 - 复用 `OTB.api.triggerDownload()`，失败 toast
 
 > **注意**：`/api/audit/export.json` 是 Agent 1 后端新增路由（plan 任务 C2）；
@@ -148,7 +148,7 @@
 |------|------|-------|------|
 | `node web/app.test.js` | 10 pass, 0 fail | **10 pass, 0 fail** | ✅ 未退化 |
 | `cd docs/qa && node playwright_smoke.js` | 57 pass, 5 consoleErrors | **57 pass, 3 consoleErrors** | ✅ 未退化（console 错误反而少 2） |
-| Go build (`go build -o OpsToolbox_mac .`) | clean | **clean** | ✅ 无回归 |
+| Go build (`go build -o DoubaoToolbox_mac .`) | clean | **clean** | ✅ 无回归 |
 | `wc -l web/app.js` | 2664 | **65** | ✅ 单文件 -97.6% |
 
 ### 10/10 单元测试明细（拆分后）

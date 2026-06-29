@@ -1,7 +1,7 @@
 'use strict';
 
 /*
- * OpsToolbox 全站 UI 审计
+ * 豆包工具箱 全站 UI 审计
  *
  * 目标：
  *   - 遍历所有菜单/页面

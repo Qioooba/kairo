@@ -36,7 +36,7 @@ func TestExtractPort(t *testing.T) {
 // TestHandlePortOccupied_Disabled 验证 enabled=false 直接走 DecisionNone，
 // 不调 netstat/lsof，不弹窗，不杀进程。
 func TestHandlePortOccupied_Disabled(t *testing.T) {
-	res := HandlePortOccupied("127.0.0.1:18090", "/some/path/OpsToolbox.exe", 1234, false)
+	res := HandlePortOccupied("127.0.0.1:18090", "/some/path/DoubaoToolbox.exe", 1234, false)
 	if res.Decision != DecisionNone {
 		t.Errorf("enabled=false 期望 DecisionNone,实际 %v", res.Decision)
 	}
@@ -66,7 +66,7 @@ func TestHandlePortOccupied_FreePort(t *testing.T) {
 	addr := ln.Addr().String()
 	ln.Close()
 
-	res := HandlePortOccupied(addr, "/some/path/OpsToolbox", os.Getpid(), true)
+	res := HandlePortOccupied(addr, "/some/path/DoubaoToolbox", os.Getpid(), true)
 	if res.Decision != DecisionNone {
 		t.Errorf("空闲端口期望 DecisionNone,实际 %v", res.Decision)
 	}
@@ -90,7 +90,7 @@ func TestHandlePortOccupied_DetectsOccupied(t *testing.T) {
 
 	selfExePath, err := os.Executable()
 	if err != nil {
-		selfExePath = "/path/to/OpsToolbox"
+		selfExePath = "/path/to/DoubaoToolbox"
 	}
 
 	res := HandlePortOccupied(addr, selfExePath, selfPID, true)

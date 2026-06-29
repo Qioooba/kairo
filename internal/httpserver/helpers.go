@@ -14,9 +14,9 @@ import (
 	"strings"
 	"time"
 
-	"ops-toolbox/internal/audit"
-	"ops-toolbox/internal/credentials"
-	"ops-toolbox/internal/sshclient"
+	"doubao-toolbox/internal/audit"
+	"doubao-toolbox/internal/credentials"
+	"doubao-toolbox/internal/sshclient"
 )
 
 // ZipSource 描述一个要打进 zip 的源文件。

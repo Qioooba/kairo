@@ -82,7 +82,7 @@ func TestLoad_BadYAML(t *testing.T) {
 func TestDefaults_AppliesMissing(t *testing.T) {
 	c := &Config{}
 	c.Defaults()
-	if c.App.Name != "内网运维工具箱" {
+	if c.App.Name != "豆包工具箱" {
 		t.Errorf("App.Name default: %q", c.App.Name)
 	}
 	if c.App.Host != "127.0.0.1" {

@@ -1,6 +1,6 @@
 <div align="center">
 
-# OpsToolbox · 内网运维工具箱
+# 豆包工具箱 · Doubao Toolbox
 
 **跨平台 · 纯 Go 单 exe · 启动即用 · 默认仅本机访问**
 
@@ -19,9 +19,9 @@
 
 ---
 
-## ✨ 为什么是 OpsToolbox
+## ✨ 为什么是豆包工具箱
 
-| 痛点 | OpsToolbox 的解法 |
+| 痛点 | 豆包工具箱的解法 |
 | --- | --- |
 | 排查 WebSphere 老系统日志要 SSH 登十几台机器，循环 `grep` / `tail` | 浏览器里勾服务器 × 日志目录，1–16 路并发搜索，结果按主机分组 + 命中数 + 耗时 |
 | 老 OpenSSH 6.2p2 / AIX / WebSphere 服务器 SSH 连不上 | 内置 3 套 SSH compat profile 自动 fallback（curve25519 → ECDH → DH-sha1），`x/crypto v0.31.0` 完整支持 `diffie-hellman-group14-sha256` |
@@ -44,7 +44,7 @@
 
    ```bat
    cd /d D:\ops-toolbox
-   OpsToolbox.exe
+   DoubaoToolbox.exe
    ```
 
 3. 看到 `工具箱已启动: http://127.0.0.1:18080` 后，浏览器会自动打开；没自动开就手动访问这个地址。
@@ -72,7 +72,7 @@ go run .
 
 | 偏好 | 存哪 | 何时回填 |
 | --- | --- | --- |
-| **Tail 高亮规则** | `data/preferences.json` 的 `tail.highlights` | 主页 `app.js` 启动时 `GET /api/preferences` 拉到 `OTB.state.tailHighlights`；websphere tail tab / 独立 tail 窗口共用 |
+| **Tail 高亮规则** | `data/preferences.json` 的 `tail.highlights` | 主页 `app.js` 启动时 `GET /api/preferences` 拉到 `DTB.state.tailHighlights`；websphere tail tab / 独立 tail 窗口共用 |
 | **系统配置** | `config.yaml`（COW Manager 热替换） | 启动时 Load → 立即生效；页面保存后立即写盘 |
 | **凭据模式** | `app.credential_store`（默认 keyring） | 启动时 `credentials.SetMode` |
 | **SSH 日志 / compat profile** | `app.ssh_debug` / `app.ssh_traffic_dump` / `app.ssh_compat_profile` | 启动时 `sshclient.SetLogConfig` / `SetDefaultProfile` |
@@ -480,7 +480,7 @@ go mod vendor
 # 主版本（Win10/11）
 GOOS=windows GOARCH=amd64 CGO_ENABLED=0 \
   go build -mod=vendor -trimpath -ldflags "-s -w" \
-  -o OpsToolbox.exe .
+  -o DoubaoToolbox.exe .
 
 # 或用脚本（自动检测 vendor/ 是否存在）
 ./scripts/build_windows_amd64.sh v0.5.0
@@ -502,14 +502,14 @@ tar -C ~/sdk/go120 -xzf /tmp/go1.20.14.darwin-amd64.tar.gz --strip-components=1
 # 2) 编译（脚本同样会自动 -mod=vendor）
 export GO120_HOME=~/sdk/go120
 ./scripts/build_windows_amd64_win7_go120.sh v0.5.0
-# → dist/ops-toolbox-v0.5.0-win7/OpsToolbox_win7.exe
+# → dist/ops-toolbox-v0.5.0-win7/豆包工具箱_win7.exe
 ```
 
 ### 发版给同事要打什么包
 
 ```
-OpsToolbox.exe              # 主程序（Win10/11）
-# 或 OpsToolbox_win7.exe   # Win7 兼容版
+DoubaoToolbox.exe              # 主程序（Win10/11）
+# 或 豆包工具箱_win7.exe   # Win7 兼容版
 config.yaml                 # 配置文件
 config.yaml.production.example  # 生产示例（首次部署参考）
 README.md                   # 本文件
@@ -739,7 +739,7 @@ v0.2 起在「系统配置」页直接编辑保存即可，无需重启。手编
 <details>
 <summary><b>Q: Win7 上跑不起来？</b></summary>
 
-必须用 Go 1.20.x 编译的 `OpsToolbox_win7.exe`，主版本在 Win7 上跑不起来（Go 1.21+ 不再支持 Win7）。
+必须用 Go 1.20.x 编译的 `豆包工具箱_win7.exe`，主版本在 Win7 上跑不起来（Go 1.21+ 不再支持 Win7）。
 </details>
 
 <details>
@@ -801,7 +801,7 @@ v0.2 起在「系统配置」页直接编辑保存即可，无需重启。手编
 #### P0 Bug Fix
 
 - **#20 配置持久化**（重启 + tab 切换都不丢）
-  - 前端 `OTB.state.configEditor` 提到模块级 + `loaded` flag，切 tab 不再 GET 覆盖未保存编辑
+  - 前端 `DTB.state.configEditor` 提到模块级 + `loaded` flag，切 tab 不再 GET 覆盖未保存编辑
   - 离开页面 `unsavedConfig` 标志 + `window.confirm`
   - 后端 `Manager.Replace` 已验证正确
   - 测试：`TestReplace_FullRestartRoundTrip` 5 阶段端到端

@@ -24,7 +24,7 @@ import (
 	"strconv"
 	"testing"
 
-	"ops-toolbox/internal/config"
+	"doubao-toolbox/internal/config"
 )
 
 // newTestServerMultiServers 构造一个配置了 3 台 server 的测试环境：

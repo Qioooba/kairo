@@ -102,7 +102,7 @@ curl -X POST 'http://127.0.0.1:18080/api/logs/search?since=2026-06-23T00:00:00Z&
 ```bash
 # 全量
 curl -OJ 'http://127.0.0.1:18080/api/audit/export.json'
-# → ops-toolbox-audit-2026-06-23-020000.json
+# → doubao-toolbox-audit-2026-06-23-020000.json
 
 # 过滤
 curl -OJ 'http://127.0.0.1:18080/api/audit/export.json?op=ssh.test&result=fail&limit=1000'
@@ -166,7 +166,7 @@ curl -X POST 'http://127.0.0.1:18080/api/downloads/srv-1_001_app_150405_000.log/
 {
   "ok": true,
   "platform": "darwin",
-  "path": "/Users/ops/OpsToolbox/downloads/20260623/srv-1_001_app_150405_000.log"
+  "path": "/Users/ops/DoubaoToolbox/downloads/20260623/srv-1_001_app_150405_000.log"
 }
 ```
 

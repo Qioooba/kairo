@@ -18,11 +18,11 @@ import (
 	"sync"
 	"time"
 
-	"ops-toolbox/internal/audit"
-	"ops-toolbox/internal/config"
-	"ops-toolbox/internal/dlmanager"
-	"ops-toolbox/internal/downloads"
-	"ops-toolbox/internal/tailmgr"
+	"doubao-toolbox/internal/audit"
+	"doubao-toolbox/internal/config"
+	"doubao-toolbox/internal/dlmanager"
+	"doubao-toolbox/internal/downloads"
+	"doubao-toolbox/internal/tailmgr"
 )
 
 // SSH Dial 超时（统一规范，所有 handler 都用这一对）
@@ -43,7 +43,7 @@ const (
 )
 
 const (
-	authCookieName = "otb_token"
+	authCookieName = "dtb_token"
 	authCookieTTL  = 30 * 24 * time.Hour
 	authHeaderName = "Authorization"
 	authQueryParam = "token"
@@ -187,13 +187,13 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if cur.Auth.EffectiveEnabled() && isAPIRequest(path) {
 		tokenStr := extractToken(r)
 		if tokenStr == "" {
-			w.Header().Set("WWW-Authenticate", `Bearer realm="ops-toolbox"`)
+			w.Header().Set("WWW-Authenticate", `Bearer realm="doubao-toolbox"`)
 			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "需要认证", "auth_required": true})
 			return
 		}
 		token := cur.Auth.LookupToken(tokenStr)
 		if token == nil {
-			w.Header().Set("WWW-Authenticate", `Bearer realm="ops-toolbox"`)
+			w.Header().Set("WWW-Authenticate", `Bearer realm="doubao-toolbox"`)
 			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "认证失败：无效的 token", "auth_required": true})
 			return
 		}
@@ -302,6 +302,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleChooseDir(w, r)
 	case path == "/api/compare/folder-scan":
 		s.handleCompareFolderScan(w, r)
+	case path == "/api/compare/deep-check":
+		s.handleCompareDeepCheck(w, r)
 	case path == "/api/compare/file-diff":
 		s.handleCompareFileDiff(w, r)
 	case path == "/api/admin/openers":

@@ -1,11 +1,11 @@
 /*
- * OpsToolbox 自动化 UI 冒烟测试
+ * 豆包工具箱 自动化 UI 冒烟测试
  *
  * 用 Playwright 启动 headless chromium，跑过所有 8 个页面
  * 的关键按钮，截图 + 收集 console / pageerror，最后输出 JSON 报告。
  *
  * 前置条件：
- *   - OpsToolbox 二进制已经在 127.0.0.1:18090 跑起来
+ *   - 豆包工具箱 二进制已经在 127.0.0.1:18090 跑起来
  *   - mock SSH 在 127.0.0.1:2225 跑起来（test/ops）
  *
  * 跑法：

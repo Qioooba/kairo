@@ -13,10 +13,10 @@
 
 (function () {
   'use strict';
-  const OTB = window.OTB = window.OTB || {};
-  OTB.pages = OTB.pages || {};
-  const { el, toast, copyToClipboard } = OTB.core;
-  const { api } = OTB.api;
+  const DTB = window.DTB = window.DTB || {};
+  DTB.pages = DTB.pages || {};
+  const { el, toast, copyToClipboard } = DTB.core;
+  const { api } = DTB.api;
 
   const LS_HISTORY = 'otb:jsonpath:history';
   const LS_LAST = 'otb:jsonpath:last';
@@ -193,8 +193,8 @@
     ]));
   }
 
-  OTB.pages.jsonpath = renderJSONPath;
-  OTB.state.routes.jsonpath = renderJSONPath;
-  OTB.state.routeNames.jsonpath = 'JSONPath';
-  OTB.state.routeSubs.jsonpath = 'gjson 路径提取';
+  DTB.pages.jsonpath = renderJSONPath;
+  DTB.state.routes.jsonpath = renderJSONPath;
+  DTB.state.routeNames.jsonpath = 'JSONPath';
+  DTB.state.routeSubs.jsonpath = 'gjson 路径提取';
 })();

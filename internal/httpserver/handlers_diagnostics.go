@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"ops-toolbox/internal/diagnostics"
+	"doubao-toolbox/internal/diagnostics"
 )
 
 // handleDiagnostics GET /api/diagnostics

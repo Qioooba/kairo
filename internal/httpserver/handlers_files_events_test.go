@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"ops-toolbox/internal/dlmanager"
+	"doubao-toolbox/internal/dlmanager"
 )
 
 // TestSSE_DoneEvent_CarriesPayload 验证已结束 session 的 SSE 流只发一个

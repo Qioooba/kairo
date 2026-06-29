@@ -52,7 +52,7 @@ async function main() {
   const headless = args.headed ? false : HEADLESS;
 
   console.log('='.repeat(60));
-  console.log('OpsToolbox E2E 测试');
+  console.log('豆包工具箱 E2E 测试');
   console.log('='.repeat(60));
   console.log('服务地址:', BASE_URL);
   console.log('模式:', headless ? 'headless' : 'headed');

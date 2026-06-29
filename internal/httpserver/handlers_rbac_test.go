@@ -15,7 +15,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"ops-toolbox/internal/config"
+	"doubao-toolbox/internal/config"
 )
 
 // newTestServerWithAuth 构造一个启用 auth 的测试 Server。

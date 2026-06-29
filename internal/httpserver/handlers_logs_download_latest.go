@@ -12,11 +12,11 @@ import (
 	"strconv"
 	"time"
 
-	"ops-toolbox/internal/config"
-	"ops-toolbox/internal/dlmanager"
-	"ops-toolbox/internal/downloads"
-	"ops-toolbox/internal/logquery"
-	"ops-toolbox/internal/sshclient"
+	"doubao-toolbox/internal/config"
+	"doubao-toolbox/internal/dlmanager"
+	"doubao-toolbox/internal/downloads"
+	"doubao-toolbox/internal/logquery"
+	"doubao-toolbox/internal/sshclient"
 )
 
 type downloadLatestReq struct {
@@ -306,7 +306,7 @@ func (s *Server) runLogsDownloadOnce(
 			AbsPath: localPath, // v0.5-F：让前端能"在文件管理器中显示"
 		})
 		localPaths = append(localPaths, localPath)
-		// 写元数据索引（项 4：写到 .ops-toolbox-meta.json，避免散落 .meta 文件）
+		// 写元数据索引（项 4：写到 .doubao-toolbox-meta.json，避免散落 .meta 文件）
 		_ = downloads.WriteMeta(localPath, downloads.Meta{
 			System:   system,
 			Server:   srv.Name,

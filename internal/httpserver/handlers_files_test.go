@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"ops-toolbox/internal/config"
-	"ops-toolbox/internal/sftpclient"
-	"ops-toolbox/internal/sshclient"
+	"doubao-toolbox/internal/config"
+	"doubao-toolbox/internal/sftpclient"
+	"doubao-toolbox/internal/sshclient"
 )
 
 // fakeSftpClient 实现 sftpClientLike 接口，给测试用。

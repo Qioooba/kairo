@@ -16,11 +16,11 @@ import (
 	"testing/fstest"
 	"time"
 
-	"ops-toolbox/internal/audit"
-	"ops-toolbox/internal/config"
-	"ops-toolbox/internal/downloads"
-	"ops-toolbox/internal/logquery"
-	"ops-toolbox/internal/tailmgr"
+	"doubao-toolbox/internal/audit"
+	"doubao-toolbox/internal/config"
+	"doubao-toolbox/internal/downloads"
+	"doubao-toolbox/internal/logquery"
+	"doubao-toolbox/internal/tailmgr"
 )
 
 // ---------- 测试辅助 ----------

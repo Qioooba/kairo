@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # build_windows_amd64.sh
 #
-# 用本机 Go 编译 Windows 10/11 用的 OpsToolbox.exe。
+# 用本机 Go 编译 Windows 10/11 用的 DoubaoToolbox.exe。
 # 纯交叉编译，不依赖 Windows。
 #
 # 用法：
 #   ./scripts/build_windows_amd64.sh [版本号]
 #
 # 产物：
-#   ./dist/ops-toolbox-<ver>/OpsToolbox.exe
+#   ./dist/doubao-toolbox-<ver>/DoubaoToolbox.exe
 #
 # 注意：本脚本默认用本地 Go 工具链（不下载更新版本）。
 
@@ -17,7 +17,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 VER="${1:-v0.1.0}"
-OUT_DIR="dist/ops-toolbox-${VER}"
+OUT_DIR="dist/doubao-toolbox-${VER}"
 mkdir -p "${OUT_DIR}"
 
 if ! command -v go >/dev/null 2>&1; then
@@ -45,7 +45,7 @@ else
   echo ">> 提示：vendor/ 目录缺失，回退到 module 模式（建议先跑 go mod vendor）"
 fi
 
-go build "${GO_MOD_FLAGS[@]}" -trimpath -ldflags "-s -w" -o "${OUT_DIR}/OpsToolbox.exe" .
+go build "${GO_MOD_FLAGS[@]}" -trimpath -ldflags "-s -w" -o "${OUT_DIR}/DoubaoToolbox.exe" .
 
 # 复制运行所需文件
 # config.yaml 是首选，但发布包里通常只有 config.yaml.production.example（占位 / 模板）。

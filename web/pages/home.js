@@ -4,12 +4,12 @@
 
 (function () {
   'use strict';
-  const OTB = window.OTB = window.OTB || {};
-  OTB.pages = OTB.pages || {};
+  const DTB = window.DTB = window.DTB || {};
+  DTB.pages = DTB.pages || {};
 
   function makeCard(t, small) {
     const cls = 'tool-card' + (small ? ' tool-card-small' : '');
-    return OTB.core.el('div', {
+    return DTB.core.el('div', {
       class: cls,
       tabindex: '0',
       role: 'button',
@@ -22,19 +22,19 @@
         }
       }
     }, [
-      OTB.core.el('div', { class: 'row between' }, [
-        OTB.core.el('div', { class: 'icon', text: t.icon }),
-        t.tagText ? OTB.core.el('span', { class: 'tag ' + (t.tag || 'ready'), text: t.tagText }) : null
+      DTB.core.el('div', { class: 'row between' }, [
+        DTB.core.el('div', { class: 'icon', text: t.icon }),
+        t.tagText ? DTB.core.el('span', { class: 'tag ' + (t.tag || 'ready'), text: t.tagText }) : null
       ]),
-      OTB.core.el('div', { class: 'name', text: t.name }),
-      OTB.core.el('div', { class: 'desc', text: t.desc })
+      DTB.core.el('div', { class: 'name', text: t.name }),
+      DTB.core.el('div', { class: 'desc', text: t.desc })
     ]);
   }
 
   function renderHome(view) {
-    view.appendChild(OTB.core.el('div', { class: 'mb-3' }, [
-      OTB.core.el('div', { class: 'section-title', text: '内网运维工具箱' }),
-      OTB.core.el('div', { class: 'section-sub', text: '日志检索、报文格式化、常用运维辅助工具。' })
+    view.appendChild(DTB.core.el('div', { class: 'mb-3' }, [
+      DTB.core.el('div', { class: 'section-title', text: '豆包工具箱' }),
+      DTB.core.el('div', { class: 'section-sub', text: '日志检索、报文格式化、常用运维辅助工具。' })
     ]));
 
     const mainTools = [
@@ -49,7 +49,7 @@
       { id: 'config', name: '系统配置', desc: '在线编辑业务系统 / 服务器 / 日志目录 / 全局设置', icon: '⚙️', tag: 'ready', tagText: 'v0.4' }
     ];
 
-    const grid = OTB.core.el('div', { class: 'grid-4' });
+    const grid = DTB.core.el('div', { class: 'grid-4' });
     mainTools.forEach(t => grid.appendChild(makeCard(t, false)));
     view.appendChild(grid);
 
@@ -60,13 +60,13 @@
       { id: 'about', name: '关于', desc: '版本信息、技术架构、数据统计', icon: 'ℹ️' },
     ];
 
-    view.appendChild(OTB.core.el('div', { class: 'section-title mt-4', style: 'font-size:14px;color:var(--text-dim);' }, '更多工具'));
-    const miniGrid = OTB.core.el('div', { class: 'grid-5' });
+    view.appendChild(DTB.core.el('div', { class: 'section-title mt-4', style: 'font-size:14px;color:var(--text-dim);' }, '更多工具'));
+    const miniGrid = DTB.core.el('div', { class: 'grid-5' });
     miniTools.forEach(t => miniGrid.appendChild(makeCard(t, true)));
     view.appendChild(miniGrid);
   }
 
-  OTB.pages.home = renderHome;
-  OTB.state.routes.home = renderHome;
-  OTB.state.routeNames.home = '首页';
+  DTB.pages.home = renderHome;
+  DTB.state.routes.home = renderHome;
+  DTB.state.routeNames.home = '首页';
 })();

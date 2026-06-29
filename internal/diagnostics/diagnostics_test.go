@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"ops-toolbox/internal/config"
+	"doubao-toolbox/internal/config"
 )
 
 // makeCfg 构造一个最小可用的 config（用 t.TempDir 兜底所有 dir）

@@ -1,4 +1,4 @@
-# OpsToolbox v3 plan 修复总报告（ChatGPT 24 项 verify + 新功能 + 前端拆分 + UI 优化）
+# 豆包工具箱 v3 plan 修复总报告（ChatGPT 24 项 verify + 新功能 + 前端拆分 + UI 优化）
 
 日期：2026-06-23
 工作目录：`/Users/qi/Documents/spaces/ops-toolbox`
@@ -155,7 +155,7 @@ web/
 ## 6. Win10 build
 
 - 脚本：`./scripts/build_windows_amd64.sh v0.4.0`
-- 输出：`dist/ops-toolbox-v0.4.0/OpsToolbox.exe`
+- 输出：`dist/doubao-toolbox-v0.4.0/DoubaoToolbox.exe`
 - 配置：`config.yaml`（来自本地，否则从 `config.yaml.production.example` 复制）
 - 启动脚本：`scripts/start.bat`（README 推荐）
 - 大小：~12MB（trimpath -ldflags "-s -w"）

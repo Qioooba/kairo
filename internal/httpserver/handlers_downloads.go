@@ -9,7 +9,7 @@ import (
 	"runtime"
 	"strings"
 
-	"ops-toolbox/internal/downloads"
+	"doubao-toolbox/internal/downloads"
 )
 
 // - system / server 可选；只过滤元数据中匹配的（不会真的去访问 SSH）

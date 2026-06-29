@@ -9,8 +9,8 @@
 
 | 项 | 说明 |
 | --- | --- |
-| 工具包 | `OpsToolbox.exe` + `config.yaml` + `README.md` + `downloads/` + `logs/` + `data/` |
-| Windows 版本 | Win10/11 直接用；Win7 需用 `OpsToolbox_win7.exe`（Go 1.20.x 编译版） |
+| 工具包 | `DoubaoToolbox.exe` + `config.yaml` + `README.md` + `downloads/` + `logs/` + `data/` |
+| Windows 版本 | Win10/11 直接用；Win7 需用 `DoubaoToolbox_win7.exe`（Go 1.20.x 编译版） |
 | 启动方式 | **先用 `cmd` 启动**（不要直接双击），看完整日志 |
 | 测试服务器 | 至少准备 1 台 Linux 机器，能 SSH 上、有 WebSphere 日志目录 |
 
@@ -23,12 +23,12 @@
 | # | 操作 | 期望结果 |
 | --- | --- | --- |
 | 1.1 | 把交付目录放到 `D:\ops-toolbox\` | 目录结构完整 |
-| 1.2 | `Win+R` → `cmd` → `cd /d D:\ops-toolbox` → `OpsToolbox.exe` | 控制台输出 `[OpsToolbox] 工具箱已启动: http://127.0.0.1:18080` 等日志 |
+| 1.2 | `Win+R` → `cmd` → `cd /d D:\ops-toolbox` → `DoubaoToolbox.exe` | 控制台输出 `[豆包工具箱] 工具箱已启动: http://127.0.0.1:18080` 等日志 |
 | 1.3 | 默认浏览器自动打开 `http://127.0.0.1:18080` | 进入首页，看到 6 个功能卡片 |
 | 1.4 | 左侧菜单点击"WebSphere 日志" | 进入日志助手页面，能看到系统/服务器下拉 |
 | 1.5 | 左侧菜单点击"报文格式化" | 进入格式化页面 |
 | 1.6 | 左侧菜单点击"系统配置" | 看到 config.yaml 中所有 systems/servers/log_dirs |
-| 1.7 | 关闭控制台 | 服务退出（`[OpsToolbox] 服务已停止，再见。`） |
+| 1.7 | 关闭控制台 | 服务退出（`[豆包工具箱] 服务已停止，再见。`） |
 
 如果浏览器没自动打开：手动访问 `http://127.0.0.1:18080`。
 
@@ -214,8 +214,8 @@ op=logs.context
 | 5d.2 | 跑 `go test -mod=vendor ./...` | vendor 模式下全过；构建不依赖外网 |
 | 5d.3 | 跑 `node web/app.test.js` | 7 个前端 pure 函数全过（escapeHtml / formatBytes / formatTime / trimMiddle / cssEscape / pctText / validate） |
 | 5d.4 | 跑 `GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -mod=vendor` | macOS / Linux 上能交叉编译出 Windows exe，不联网 |
-| 5d.5 | 跑 `./scripts/build_windows_amd64.sh v0.3.0` | 脚本自动检测 vendor/ 并加 `-mod=vendor`，产物在 `dist/ops-toolbox-v0.3.0/OpsToolbox.exe`，`file` 命令验证是 PE32+ x86-64 |
-| 5d.6 | 跑 `./scripts/package_windows.sh v0.3.0` | `dist/ops-toolbox-v0.3.0-windows.zip` 包含 exe + config + README + 空 downloads/logs/data |
+| 5d.5 | 跑 `./scripts/build_windows_amd64.sh v0.3.0` | 脚本自动检测 vendor/ 并加 `-mod=vendor`，产物在 `dist/doubao-toolbox-v0.3.0/DoubaoToolbox.exe`，`file` 命令验证是 PE32+ x86-64 |
+| 5d.6 | 跑 `./scripts/package_windows.sh v0.3.0` | `dist/doubao-toolbox-v0.3.0-windows.zip` 包含 exe + config + README + 空 downloads/logs/data |
 | 5d.7 | 跑 `gofmt -l .` | 0 行（包含 `vendor/` 因为已 commit） |
 
 ---

@@ -1,38 +1,31 @@
-/* ===== web/pages/compare.js =====
- * 代码比对：粘贴 / 选择本地文件，左右两栏做行级 diff。
- * 支持文本比对和文件夹比对模式。
- *
- * 渲染层用 diff2html（MIT，已嵌入 vendor）。
- *  - side-by-side：Diff2Html.html(unifiedDiffString, { outputFormat: 'side-by-side' })
- *  - unified 模式：Diff2Html.html(unifiedDiffString, { outputFormat: 'line-by-line' })
- *  - 仅差异行：手写（diff2html 不支持），但复用后端返回的 lines
- */
 (function () {
   'use strict';
-  const OTB = window.OTB = window.OTB || {};
-  OTB.pages = OTB.pages || {};
-  const { el, toast } = OTB.core;
-  const { api } = OTB.api;
+  const DTB = window.DTB = window.DTB || {};
+  DTB.pages = DTB.pages || {};
+  const { el, toast } = DTB.core;
+  const { api } = DTB.api;
 
   let lastResult = null;
   let outputMode = 'unified';
   let hideEqualRows = false;
-  let activeRenderResult = null;
-  // 复用 popup 窗口（连续比对不刷窗口）。
-  // 用固定 name 让 window.open 命中已有窗口，避免开 N 个标签页。
-  const POPUP_NAME = 'otb_compare_diff';
+  const POPUP_NAME = 'dtb_compare_diff';
 
   let folderScanResult = null;
   let folderExpanded = new Set();
   let folderShowOnlyDiff = false;
   let folderFilter = '';
-  let folderExpandedSnapshot = null; // 仅 diff 开关 / 搜索过滤前的快照，用于恢复
+  let folderExpandedSnapshot = null;
+  let selectedSuspects = new Set();
+  let isScanning = false;
+  let isDeepChecking = false;
 
   const LS_IGNORE = 'otb:compare:ignore';
   const LS_MODE = 'otb:compare:mode';
   const LS_HIDE_EQUAL = 'otb:compare:hideEqual';
   const LS_LEFT_FOLDER = 'otb:compare:left_folder';
   const LS_RIGHT_FOLDER = 'otb:compare:right_folder';
+  const LS_SCAN_MODE = 'otb:compare:scan_mode';
+  const LS_IGNORE_EXTS = 'otb:compare:ignore_exts';
 
   function loadIgnore() {
     try {
@@ -49,23 +42,23 @@
     }
   }
   function saveIgnore(v) {
-    try { localStorage.setItem(LS_IGNORE, JSON.stringify(v)); } catch (e) { /* ignore */ }
+    try { localStorage.setItem(LS_IGNORE, JSON.stringify(v)); } catch (e) {}
   }
   function loadMode() {
     try {
       const m = localStorage.getItem(LS_MODE);
       if (m === 'unified' || m === 'side' || m === 'changes') return m;
-    } catch (e) { /* ignore */ }
+    } catch (e) {}
     return 'unified';
   }
   function saveMode(m) {
-    try { localStorage.setItem(LS_MODE, m); } catch (e) { /* ignore */ }
+    try { localStorage.setItem(LS_MODE, m); } catch (e) {}
   }
   function loadHideEqual() {
     try { return localStorage.getItem(LS_HIDE_EQUAL) === '1'; } catch (e) { return false; }
   }
   function saveHideEqual(v) {
-    try { localStorage.setItem(LS_HIDE_EQUAL, v ? '1' : '0'); } catch (e) { /* ignore */ }
+    try { localStorage.setItem(LS_HIDE_EQUAL, v ? '1' : '0'); } catch (e) {}
   }
   function loadFolderPath(side) {
     try {
@@ -76,7 +69,19 @@
     try {
       if (path) localStorage.setItem(side === 'left' ? LS_LEFT_FOLDER : LS_RIGHT_FOLDER, path);
       else localStorage.removeItem(side === 'left' ? LS_LEFT_FOLDER : LS_RIGHT_FOLDER);
-    } catch (e) { /* ignore */ }
+    } catch (e) {}
+  }
+  function loadScanMode() {
+    try { return localStorage.getItem(LS_SCAN_MODE) === 'deep' ? 'deep' : 'fast'; } catch (e) { return 'fast'; }
+  }
+  function saveScanMode(m) {
+    try { localStorage.setItem(LS_SCAN_MODE, m); } catch (e) {}
+  }
+  function loadIgnoreExts() {
+    try { return localStorage.getItem(LS_IGNORE_EXTS) || ''; } catch (e) { return ''; }
+  }
+  function saveIgnoreExts(v) {
+    try { localStorage.setItem(LS_IGNORE_EXTS, v); } catch (e) {}
   }
 
   function pickLocalFile(targetTextarea, onLoaded) {
@@ -156,14 +161,10 @@
   }
 
   function openDiffInNewWindow(unifiedDiff, diffTitle, stats, opts) {
-    // TODO(FE-021): 此函数用 document.write 把整个 diff 页面塞进新窗口，
-    // 长期应重构为独立 diff-window.html + diff-window.js，用 postMessage 传 payload。
-    // 当前实现已有 XSS 防御（base64 + Blob URL），短期可接受。
     opts = opts || {};
     const mode = opts.mode || outputMode;
     const hideEq = opts.hideEqual != null ? !!opts.hideEqual : hideEqualRows;
 
-    // 复用同一个 popup 窗口：连续比对时不刷窗口，避免开 N 个标签页。
     const win = window.open('', POPUP_NAME);
     if (!win) {
       toast('弹窗被浏览器阻止，请允许弹窗后重试', 'err');
@@ -180,10 +181,6 @@
     const textDimColor = theme === 'light' ? '#5a6678' : theme === 'hc' ? '#ffffaa' : theme === 'green' ? '#4d5d4d' : '#8b97a8';
     const textMuteColor = theme === 'light' ? '#8b97a8' : theme === 'hc' ? '#ccc888' : theme === 'green' ? '#6b7a6b' : '#5a6678';
 
-    // XSS 防御：diff 内容可能来自不可信输入（恶意日志 / 配置 / 用户粘贴）。
-    // 用 base64 + Blob URL 序列化 JSON 后通过 fetch 喂给弹窗，
-    // 彻底规避 `</script><script>...</script>` 注入导致的脚本执行。
-    // btoa 在 unicode 字符串上会抛 InvalidCharacterError，所以先 encodeURIComponent 转义。
     const payload = {
       unified: unifiedDiff || '',
       title: diffTitle || 'left vs right',
@@ -192,11 +189,7 @@
       hideEqual: hideEq,
     };
     const payloadJson = JSON.stringify(payload);
-    // XSS 防御：JSON 字符串里出现 `</script>` 会让 HTML 解析器提前关闭 <script> 标签。
-    // 把 `<` 转成 JS unicode escape `\u003c`（HTML 解析器看不到 `<`，但 JS 解析器会还原成 `<`，
-    // 接着 JSON.parse 又会把它当成 unicode escape 还原成 `<`，所以 data.unified 仍然是原值）。
     const payloadEscaped = payloadJson.replace(/</g, '\\u003c');
-    // JSON.stringify 二次包一层是为了得到一个合法的 JS 字符串字面量（自动转义内部 `"` 和 `\`）。
     const payloadJsLiteral = JSON.stringify(payloadEscaped);
 
     win.document.write('<!DOCTYPE html><html lang="zh-CN" data-theme="' + theme + '"><head><meta charset="utf-8"><title>Diff ' + (diffTitle || 'left vs right') + '</title>'
@@ -383,7 +376,6 @@
       + '  boot();'
       + '}'
       + '})();<' + '/script>'
-      // 外部 diff2html 放在 IIFE 之后：boot() 会轮询等待它加载。
       + '<script src="/static/vendor/diff2html.min.js" async onerror="document.getElementById(\'diffBody\').innerHTML=\'<pre style=&quot;padding:16px;&quot;>diff2html.min.js 加载失败，请检查 /static/vendor/ 目录</pre>\'"><' + '/script>'
       + '</body></html>');
     win.document.close();
@@ -453,6 +445,7 @@
     switch (status) {
       case 'same': return '✓';
       case 'different': return '≠';
+      case 'suspect': return '?';
       case 'left_only': return '<';
       case 'right_only': return '>';
       default: return '  ';
@@ -463,6 +456,7 @@
     switch (status) {
       case 'same': return '#22c55e';
       case 'different': return '#f97316';
+      case 'suspect': return '#eab308';
       case 'left_only': return '#ef4444';
       case 'right_only': return '#3b82f6';
       default: return 'var(--text-dim)';
@@ -474,6 +468,15 @@
     if (bytes < 1024) return bytes + ' B';
     if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
     return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+  }
+
+  function formatTime(ts) {
+    if (!ts) return '';
+    try {
+      const d = new Date(ts * 1000);
+      const pad = n => String(n).padStart(2, '0');
+      return pad(d.getMonth()+1) + '-' + pad(d.getDate()) + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+    } catch (e) { return ''; }
   }
 
   function isEntryVisible(entry, sideEntries) {
@@ -523,11 +526,13 @@
       const entry = map.get(relPath);
       let isDir = true;
       let size = 0;
+      let mtime = 0;
       let status = 'same';
       let fullPath = '';
       if (entry) {
         isDir = entry.is_dir;
         size = entry.size;
+        mtime = entry.mtime;
         status = entry.status;
         fullPath = entry.path;
       } else {
@@ -538,6 +543,7 @@
         if (otherEntry) {
           isDir = otherEntry.is_dir;
           size = otherEntry.size;
+          mtime = otherEntry.mtime;
           status = otherEntry.status;
           fullPath = otherEntry.path;
         }
@@ -548,6 +554,7 @@
         depth,
         isDir,
         size,
+        mtime,
         status,
         fullPath,
       });
@@ -584,12 +591,12 @@
 
     if (folderShowOnlyDiff) {
       const hasDiffChild = (entries, entry) => {
-        if (!entry.isDir) return entry.status === 'different' || entry.status === 'left_only' || entry.status === 'right_only';
+        if (!entry.isDir) return entry.status === 'different' || entry.status === 'suspect' || entry.status === 'left_only' || entry.status === 'right_only';
         const prefix = entry.path + '/';
-        return entries.some(e => !e.isDir && e.path.startsWith(prefix) && (e.status === 'different' || e.status === 'left_only' || e.status === 'right_only'));
+        return entries.some(e => !e.isDir && e.path.startsWith(prefix) && (e.status === 'different' || e.status === 'suspect' || e.status === 'left_only' || e.status === 'right_only'));
       };
-      leftEntries = leftEntries.filter(e => e.isDir ? hasDiffChild(leftEntries, e) : (e.status === 'different' || e.status === 'left_only' || e.status === 'right_only'));
-      rightEntries = rightEntries.filter(e => e.isDir ? hasDiffChild(rightEntries, e) : (e.status === 'different' || e.status === 'left_only' || e.status === 'right_only'));
+      leftEntries = leftEntries.filter(e => e.isDir ? hasDiffChild(leftEntries, e) : (e.status === 'different' || e.status === 'suspect' || e.status === 'left_only' || e.status === 'right_only'));
+      rightEntries = rightEntries.filter(e => e.isDir ? hasDiffChild(rightEntries, e) : (e.status === 'different' || e.status === 'suspect' || e.status === 'left_only' || e.status === 'right_only'));
     }
 
     const leftPanel = el('div', { class: 'cmp-tree-panel', style: 'flex:1; overflow:auto;' });
@@ -597,14 +604,17 @@
 
     const renderNode = (entry, panel, side) => {
       const isMissing = (side === 'left' && entry.status === 'right_only') || (side === 'right' && entry.status === 'left_only');
+      const isSuspect = entry.status === 'suspect';
       let bgStyle = '';
       if (entry.status === 'different' && !entry.isDir) bgStyle = 'background:rgba(249,115,22,0.08);';
+      else if (isSuspect && !entry.isDir) bgStyle = 'background:rgba(234,179,8,0.10);';
       else if (entry.status === 'left_only' && side === 'left' && !entry.isDir) bgStyle = 'background:rgba(239,68,68,0.08);';
       else if (entry.status === 'right_only' && side === 'right' && !entry.isDir) bgStyle = 'background:rgba(59,130,246,0.08);';
 
+      const canClick = entry.isDir || (!isMissing && !entry.isDir && entry.status !== 'same');
       const row = el('div', {
         class: 'cmp-tree-row',
-        style: 'display:flex; align-items:center; padding:2px 8px; cursor:' + (entry.isDir || (!isMissing && !entry.isDir) ? 'pointer' : 'default') + '; font-size:12.5px; line-height:24px; white-space:nowrap; user-select:none;' +
+        style: 'display:flex; align-items:center; padding:2px 8px; cursor:' + (canClick ? 'pointer' : 'default') + '; font-size:12.5px; line-height:24px; white-space:nowrap; user-select:none;' +
           'padding-left:' + (entry.depth * 16 + 8) + 'px;' +
           (isMissing ? 'opacity:0.3;' : '') +
           bgStyle,
@@ -630,10 +640,27 @@
           row.appendChild(el('span', { style: 'width:20px; flex-shrink:0;' }));
           row.appendChild(el('span', { style: 'flex:1;', text: '' }));
         } else {
+          if (isSuspect) {
+            const cb = el('input', { type: 'checkbox', style: 'width:14px; flex-shrink:0; margin-right:2px;' });
+            cb.checked = selectedSuspects.has(entry.path);
+            cb.title = '勾选后深度校验此文件';
+            cb.addEventListener('click', (e) => {
+              e.stopPropagation();
+              if (cb.checked) selectedSuspects.add(entry.path);
+              else selectedSuspects.delete(entry.path);
+              updateDeepCheckButton();
+            });
+            row.appendChild(cb);
+          } else {
+            row.appendChild(el('span', { style: 'width:16px; flex-shrink:0;' }));
+          }
           const statusDot = el('span', { style: 'width:16px; display:inline-block; text-align:center; flex-shrink:0; font-size:12px; color:' + getStatusColor(entry.status) + '; font-weight:bold;', text: getStatusIcon(entry.status) });
+          if (isSuspect) {
+            statusDot.title = '大小相同但修改时间不同，需深度校验';
+          }
           const icon = el('span', { style: 'margin-right:4px;', text: '📄' });
           const nameEl = el('span', { style: 'flex:1; overflow:hidden; text-overflow:ellipsis; font-family:ui-monospace,monospace;', text: entry.name });
-          const sizeEl = el('span', { style: 'margin-left:8px; color:var(--text-dim); font-size:11px; flex-shrink:0;', text: formatSize(entry.size) });
+          const sizeEl = el('span', { style: 'margin-left:8px; color:var(--text-dim); font-size:11px; flex-shrink:0; min-width:60px; text-align:right;', text: formatSize(entry.size) });
           row.appendChild(statusDot);
           row.appendChild(icon);
           row.appendChild(nameEl);
@@ -643,9 +670,15 @@
               e.stopPropagation();
               viewFileDiff(entry.path);
             });
+          } else if (entry.status === 'suspect') {
+            row.title = '点击或勾选后深度校验';
+            row.addEventListener('click', (e) => {
+              e.stopPropagation();
+              selectedSuspects.clear();
+              selectedSuspects.add(entry.path);
+              doDeepCheckSelected();
+            });
           } else if (entry.status === 'same') {
-            row.style.cursor = 'default';
-          } else if (entry.status === 'left_only' || entry.status === 'right_only') {
             row.style.cursor = 'default';
           }
         }
@@ -660,11 +693,10 @@
 
     const leftCount = folderScanResult.left.tree.filter(e => !e.is_dir).length;
     const rightCount = folderScanResult.right.tree.filter(e => !e.is_dir).length;
-    // 后端可能返回 null（极端：所有 diff 字段都为空，例如左右填同一目录）。
-    // 这种情况必须 fallback 到 []，否则 .length 会抛 TypeError。
     const diffObj = folderScanResult.diff || {};
     const sameCount = (diffObj.same || []).length;
     const diffCount = (diffObj.different || []).length;
+    const suspectCount = (diffObj.suspect || []).length;
     const leftOnlyCount = (diffObj.left_only || []).length;
     const rightOnlyCount = (diffObj.right_only || []).length;
 
@@ -680,20 +712,110 @@
     const leftWrap = el('div', { style: 'display:flex; flex-direction:column; flex:1; min-width:0; height:100%;' }, [leftHeader, leftPanel]);
     const rightWrap = el('div', { style: 'display:flex; flex-direction:column; flex:1; min-width:0; height:100%;' }, [rightHeader, rightPanel]);
 
+    const scanModeText = folderScanResult.deep_mode ? '深度模式 (MD5校验)' : '快速模式 (大小+mtime)';
+    const scanTimeText = folderScanResult.scan_ms ? '耗时 ' + (folderScanResult.scan_ms < 1000 ? folderScanResult.scan_ms + 'ms' : (folderScanResult.scan_ms/1000).toFixed(1) + 's') : '';
     const legendBar = el('div', { style: 'padding:4px 12px; border-top:1px solid var(--line); font-size:11px; color:var(--text-dim); display:flex; gap:16px; align-items:center; background:var(--bg2,#1d2532); flex-shrink:0; flex-wrap:wrap;' }, [
       el('span', { style: 'color:#22c55e;', text: '✓ 相同' }),
+      el('span', { style: 'color:#eab308;', text: '? 待校验' }),
       el('span', { style: 'color:#f97316;', text: '≠ 不同' }),
       el('span', { style: 'color:#ef4444;', text: '< 仅左侧' }),
       el('span', { style: 'color:#3b82f6;', text: '> 仅右侧' }),
-      el('span', { style: 'margin-left:auto;', text: '相同: ' + sameCount + ' · 不同: ' + diffCount + ' · 仅左: ' + leftOnlyCount + ' · 仅右: ' + rightOnlyCount }),
+      el('span', { style: 'margin-left:auto;', text: scanModeText + (scanTimeText ? ' · ' + scanTimeText : '') }),
+    ]);
+
+    const statBar = el('div', { style: 'padding:4px 12px; font-size:11px; color:var(--text-dim); display:flex; gap:12px; align-items:center; background:var(--bg,#11161f); flex-shrink:0; flex-wrap:wrap; border-bottom:1px solid var(--line);' }, [
+      el('span', { text: '相同: ' + sameCount }),
+      el('span', { style: 'color:#eab308;', text: '待校验: ' + suspectCount }),
+      el('span', { style: 'color:#f97316;', text: '不同: ' + diffCount }),
+      el('span', { style: 'color:#ef4444;', text: '仅左: ' + leftOnlyCount }),
+      el('span', { style: 'color:#3b82f6;', text: '仅右: ' + rightOnlyCount }),
     ]);
 
     const treeContent = el('div', { style: 'display:flex; flex:1; min-height:0;' }, [leftWrap, rightWrap]);
-    const treeWrap = el('div', { class: 'cmp-tree-container', style: 'display:flex; flex-direction:column; border:1px solid var(--line); border-radius:6px; margin-top:8px; height:500px; background:var(--bg);' }, [treeContent, legendBar]);
+    const treeWrap = el('div', { class: 'cmp-tree-container', style: 'display:flex; flex-direction:column; border:1px solid var(--line); border-radius:6px; margin-top:8px; height:500px; background:var(--bg);' }, [statBar, treeContent, legendBar]);
     container.appendChild(treeWrap);
   }
 
-  async function doFolderCompare(leftPathInp, rightPathInp, progressEl, treeContainer) {
+  function updateDeepCheckButton() {
+    const btn = document.getElementById('btnDeepCheck');
+    if (!btn) return;
+    const count = selectedSuspects.size;
+    btn.disabled = count === 0 || isDeepChecking;
+    btn.textContent = isDeepChecking ? '校验中...' : ('深度校验选中 (' + count + ')');
+  }
+
+  async function doDeepCheckSelected() {
+    if (isDeepChecking) return;
+    if (selectedSuspects.size === 0) {
+      toast('请先勾选要深度校验的文件（? 标记）', 'warn');
+      return;
+    }
+    isDeepChecking = true;
+    updateDeepCheckButton();
+
+    try {
+      const files = [];
+      selectedSuspects.forEach(relPath => {
+        const leftEntry = folderScanResult.left.tree.find(e => e.rel_path === relPath);
+        const rightEntry = folderScanResult.right.tree.find(e => e.rel_path === relPath);
+        if (leftEntry && rightEntry) {
+          files.push({
+            left_path: leftEntry.path,
+            right_path: rightEntry.path,
+            rel_path: relPath,
+          });
+        }
+      });
+      if (files.length === 0) {
+        toast('没有可校验的文件', 'warn');
+        return;
+      }
+      const r = await api('POST', '/api/compare/deep-check', { files });
+      let updated = 0;
+      for (const [relPath, result] of Object.entries(r.results || {})) {
+        const leftEntry = folderScanResult.left.tree.find(e => e.rel_path === relPath);
+        const rightEntry = folderScanResult.right.tree.find(e => e.rel_path === relPath);
+        if (leftEntry && rightEntry) {
+          const newStatus = result === 'same' ? 'same' : result === 'different' ? 'different' : 'suspect';
+          if (leftEntry.status !== newStatus) {
+            leftEntry.status = newStatus;
+            rightEntry.status = newStatus;
+            leftEntry.checked = true;
+            rightEntry.checked = true;
+            updated++;
+            const diffObj = folderScanResult.diff;
+            const suspectIdx = (diffObj.suspect || []).indexOf(relPath);
+            if (suspectIdx >= 0) diffObj.suspect.splice(suspectIdx, 1);
+            if (newStatus === 'same') {
+              if (!diffObj.same.includes(relPath)) diffObj.same.push(relPath);
+              const diffIdx = diffObj.different.indexOf(relPath);
+              if (diffIdx >= 0) diffObj.different.splice(diffIdx, 1);
+            } else if (newStatus === 'different') {
+              if (!diffObj.different.includes(relPath)) diffObj.different.push(relPath);
+              const sameIdx = diffObj.same.indexOf(relPath);
+              if (sameIdx >= 0) diffObj.same.splice(sameIdx, 1);
+            } else {
+              if (!diffObj.suspect.includes(relPath)) diffObj.suspect.push(relPath);
+            }
+          }
+        }
+      }
+      selectedSuspects.clear();
+      if (updated > 0) {
+        toast('深度校验完成，更新了 ' + updated + ' 个文件状态', 'ok');
+      } else {
+        toast('深度校验完成', 'ok');
+      }
+      renderFolderTree(document.getElementById('folderTreeContainer'));
+    } catch (e) {
+      toast('深度校验失败：' + (e.message || e), 'err');
+    } finally {
+      isDeepChecking = false;
+      updateDeepCheckButton();
+    }
+  }
+
+  async function doFolderCompare(leftPathInp, rightPathInp, progressEl, treeContainer, scanMode, ignoreExtsInp, minSizeInp, maxSizeInp) {
     const leftPath = leftPathInp.value.trim();
     const rightPath = rightPathInp.value.trim();
     if (!leftPath || !rightPath) {
@@ -702,28 +824,56 @@
     }
     saveFolderPath('left', leftPath);
     saveFolderPath('right', rightPath);
+    saveScanMode(scanMode);
+    saveIgnoreExts(ignoreExtsInp ? ignoreExtsInp.value : '');
 
     folderScanResult = null;
+    selectedSuspects.clear();
     treeContainer.innerHTML = '';
-    if (progressEl) progressEl.textContent = '正在扫描...';
+    isScanning = true;
+    if (progressEl) progressEl.innerHTML = '<span style="color:var(--primary,#4f8cff);">⏳ 正在' + (scanMode === 'deep' ? '深度扫描（计算MD5）' : '快速扫描') + '...</span>';
 
     try {
-      const r = await api('POST', '/api/compare/folder-scan', {
+      const req = {
         left_path: leftPath,
         right_path: rightPath,
-      });
+        deep_check: scanMode === 'deep',
+      };
+      if (ignoreExtsInp && ignoreExtsInp.value.trim()) {
+        req.ignore_exts = ignoreExtsInp.value.split(/[,，\s]+/).filter(s => s.trim());
+      }
+      if (minSizeInp && minSizeInp.value) {
+        const v = parseInt(minSizeInp.value);
+        if (!isNaN(v) && v > 0) req.min_size = v;
+      }
+      if (maxSizeInp && maxSizeInp.value) {
+        const v = parseInt(maxSizeInp.value);
+        if (!isNaN(v) && v > 0) req.max_size = v * 1024 * 1024;
+      }
+      const r = await api('POST', '/api/compare/folder-scan', req);
       folderScanResult = r;
       setAllExpanded(true);
       const fileCount = r.left.tree.filter(e => !e.is_dir).length + r.right.tree.filter(e => !e.is_dir).length;
       const diffObj = r.diff || {};
       const diffCount = (diffObj.different || []).length + (diffObj.left_only || []).length + (diffObj.right_only || []).length;
+      const suspectCount = (diffObj.suspect || []).length;
+      const timeStr = r.scan_ms ? (' (' + (r.scan_ms < 1000 ? r.scan_ms + 'ms' : (r.scan_ms/1000).toFixed(1) + 's') + ')') : '';
       if (progressEl) {
-        progressEl.textContent = '扫描完成：共 ' + fileCount + ' 个文件，差异 ' + diffCount + ' 个';
+        let msg = '扫描完成' + timeStr + '：共 ' + fileCount + ' 个文件，不同 ' + diffCount + ' 个';
+        if (suspectCount > 0 && !r.deep_mode) {
+          msg += '，<span style="color:#eab308;">' + suspectCount + ' 个待校验</span>';
+        }
+        if (r.truncated) {
+          msg += ' <span style="color:#f97316;">(文件过多已截断)</span>';
+        }
+        progressEl.innerHTML = msg;
       }
       renderFolderTree(treeContainer);
     } catch (e) {
       if (progressEl) progressEl.textContent = '扫描失败';
       toast('扫描失败：' + (e.message || e), 'err');
+    } finally {
+      isScanning = false;
     }
   }
 
@@ -754,9 +904,12 @@
   function renderCompare(view) {
     folderScanResult = null;
     folderExpanded = new Set();
+    selectedSuspects = new Set();
     const ignore = loadIgnore();
     outputMode = loadMode();
     hideEqualRows = loadHideEqual();
+    const scanMode = loadScanMode();
+    const savedIgnoreExts = loadIgnoreExts();
 
     const modeTabBar = el('div', { class: 'cmp-mode-tabs' }, [
       el('button', {
@@ -911,6 +1064,24 @@
     });
     rightFolderPathInp.value = loadFolderPath('right');
 
+    const rdoFast = el('input', { type: 'radio', name: 'folder-scan-mode', value: 'fast' });
+    const rdoDeep = el('input', { type: 'radio', name: 'folder-scan-mode', value: 'deep' });
+    rdoFast.checked = scanMode !== 'deep';
+    rdoDeep.checked = scanMode === 'deep';
+    function syncScanMode() {
+      const checked = document.querySelector('input[name="folder-scan-mode"]:checked');
+      if (checked) saveScanMode(checked.value);
+    }
+    rdoFast.addEventListener('change', syncScanMode);
+    rdoDeep.addEventListener('change', syncScanMode);
+
+    const ignoreExtsInp = el('input', {
+      type: 'text',
+      placeholder: '忽略扩展名: log,tmp,bak',
+      style: 'max-width:180px; font-size:12px;',
+      value: savedIgnoreExts,
+    });
+
     const cbOnlyDiff = el('input', { type: 'checkbox' });
     cbOnlyDiff.checked = folderShowOnlyDiff;
     cbOnlyDiff.addEventListener('change', () => {
@@ -925,8 +1096,6 @@
     });
     folderSearchInput.addEventListener('input', () => {
       const newFilter = folderSearchInput.value;
-      // 进入过滤时快照当前展开状态；清空过滤时恢复，
-      // 避免污染用户手动展开/折叠的视图。
       if (newFilter && !folderFilter) {
         folderExpandedSnapshot = new Set(folderExpanded);
       } else if (!newFilter && folderFilter && folderExpandedSnapshot) {
@@ -940,8 +1109,17 @@
     const btnExpandAll = el('button', { class: 'btn btn-sm', text: '展开全部', onclick: () => { setAllExpanded(true); renderFolderTree(folderTreeContainer); } });
     const btnCollapseAll = el('button', { class: 'btn btn-sm', text: '折叠全部', onclick: () => { setAllExpanded(false); renderFolderTree(folderTreeContainer); } });
 
+    const btnDeepCheck = el('button', {
+      id: 'btnDeepCheck',
+      class: 'btn btn-sm',
+      text: '深度校验选中 (0)',
+      disabled: true,
+      style: 'color:#eab308;',
+      onclick: doDeepCheckSelected,
+    });
+
     const folderProgressEl = el('div', { class: 'muted', style: 'font-size:12px;', text: '' });
-    const folderTreeContainer = el('div');
+    const folderTreeContainer = el('div', { id: 'folderTreeContainer' });
 
     const btnChooseLeftDir = el('button', {
       class: 'btn btn-sm',
@@ -999,7 +1177,15 @@
     const btnFolderGo = el('button', {
       class: 'btn btn-primary',
       text: '开始比对',
-      onclick: () => doFolderCompare(leftFolderPathInp, rightFolderPathInp, folderProgressEl, folderTreeContainer),
+      onclick: () => {
+        const mode = document.querySelector('input[name="folder-scan-mode"]:checked');
+        doFolderCompare(
+          leftFolderPathInp, rightFolderPathInp,
+          folderProgressEl, folderTreeContainer,
+          mode ? mode.value : 'fast',
+          ignoreExtsInp, null, null
+        );
+      },
     });
 
     const cmpOptionsStyle = 'display:flex; align-items:center; gap:8px; flex-wrap:wrap;';
@@ -1041,10 +1227,20 @@
 
     const folderArea = el('div', { class: 'cmp-folder-area', id: 'cmp-folder-area', style: 'display:none;' }, [
       el('div', { class: 'cmp-options', style: cmpOptionsStyle }, [
-        makeCheckbox(cbOnlyDiff, '只显示不同'),
+        el('span', { class: 'cmp-label', text: '扫描模式：' }),
+        makeRadio(rdoFast, '快速（大小+时间，推荐）'),
+        makeRadio(rdoDeep, '深度（MD5校验，慢）'),
         el('span', { class: 'cmp-spacer', style: 'width:16px;' }),
+        el('span', { class: 'muted', style: 'font-size:11px;', text: '💡 快速模式秒出结果，? 标记的文件可点击或勾选后深度校验' }),
+      ]),
+      el('div', { class: 'cmp-options', style: cmpOptionsStyle + '; margin-top:4px;' }, [
+        makeCheckbox(cbOnlyDiff, '只显示不同/待校验'),
+        el('span', { class: 'cmp-spacer', style: 'width:8px;' }),
+        ignoreExtsInp,
+        el('span', { class: 'cmp-spacer', style: 'width:8px;' }),
         btnExpandAll,
         btnCollapseAll,
+        btnDeepCheck,
         el('span', { class: 'cmp-spacer', style: 'width:16px;' }),
         folderSearchInput,
       ]),
@@ -1097,7 +1293,7 @@
     return el('label', { class: 'cmp-opt', style: 'display:flex; align-items:center; gap:4px;' }, [input, document.createTextNode(' ' + label)]);
   }
 
-  OTB.pages.compare = renderCompare;
-  OTB.state.routes.compare = renderCompare;
-  OTB.state.routeNames.compare = '代码比对';
+  DTB.pages.compare = renderCompare;
+  DTB.state.routes.compare = renderCompare;
+  DTB.state.routeNames.compare = '代码比对';
 })();

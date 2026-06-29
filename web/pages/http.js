@@ -23,10 +23,10 @@
 
 (function () {
   'use strict';
-  const OTB = window.OTB = window.OTB || {};
-  OTB.pages = OTB.pages || {};
-  const { el, toast, copyToClipboard, confirmDialog, escapeHtml, notify } = OTB.core;
-  const { api } = OTB.api;
+  const DTB = window.DTB = window.DTB || {};
+  DTB.pages = DTB.pages || {};
+  const { el, toast, copyToClipboard, confirmDialog, escapeHtml, notify } = DTB.core;
+  const { api } = DTB.api;
 
   const LS_LAST = 'otb:http:last:v2';
 
@@ -1502,8 +1502,8 @@
     });
   }
 
-  OTB.pages.http = renderHTTP;
-  OTB.state.routes.http = renderHTTP;
-  OTB.state.routeNames.http = 'HTTP 测试';
-  OTB.state.routeSubs.http = '键值对编辑器 · Body 多模式 · 响应高亮 · 用例管理';
+  DTB.pages.http = renderHTTP;
+  DTB.state.routes.http = renderHTTP;
+  DTB.state.routeNames.http = 'HTTP 测试';
+  DTB.state.routeSubs.http = '键值对编辑器 · Body 多模式 · 响应高亮 · 用例管理';
 })();

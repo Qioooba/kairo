@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"time"
 
-	"ops-toolbox/internal/config"
+	"doubao-toolbox/internal/config"
 )
 
 type authLoginReq struct {

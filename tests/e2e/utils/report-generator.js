@@ -113,7 +113,7 @@ function generateReport(testResults, options) {
 
   let md = '';
 
-  md += '# OpsToolbox E2E 测试报告\n\n';
+  md += '# 豆包工具箱 E2E 测试报告\n\n';
 
   md += '## 基本信息\n\n';
   md += `- **测试时间**: ${testTime}\n`;

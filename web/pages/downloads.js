@@ -8,13 +8,13 @@
 
 (function () {
   'use strict';
-  const OTB = window.OTB = window.OTB || {};
-  OTB.pages = OTB.pages || {};
-  const { el, toast, confirmDialog } = OTB.core;
-  const { api } = OTB.api;
+  const DTB = window.DTB = window.DTB || {};
+  DTB.pages = DTB.pages || {};
+  const { el, toast, confirmDialog } = DTB.core;
+  const { api } = DTB.api;
 
   // v0.8：外部打开器缓存（module 级，跨 re-render 存活）。
-  OTB.state.downloadsOpeners = OTB.state.downloadsOpeners || [];
+  DTB.state.downloadsOpeners = DTB.state.downloadsOpeners || [];
   let openersLoaded = false;
 
   function renderDownloads(view) {
@@ -31,15 +31,15 @@
     // 跟整体暗色协调，但仍能跟"删除单文件"的 .btn-danger 区分开。
     const btnClearAll = el('button', { class: 'btn btn-danger-soft', text: '清空全部', onclick: doClearAll });
 
-    // v0.8：拉一次外部打开器列表（缓存到 OTB.state.downloadsOpeners）。
+    // v0.8：拉一次外部打开器列表（缓存到 DTB.state.downloadsOpeners）。
     // 等 openers 加载完再调 load()，避免重复请求 /api/downloads/list。
     if (!openersLoaded) {
       api('GET', '/api/admin/openers').then(r => {
-        OTB.state.downloadsOpeners = Array.isArray(r && r.openers) ? r.openers : [];
+        DTB.state.downloadsOpeners = Array.isArray(r && r.openers) ? r.openers : [];
         openersLoaded = true;
         load();
       }).catch(() => {
-        OTB.state.downloadsOpeners = [];
+        DTB.state.downloadsOpeners = [];
         openersLoaded = true;
         load();
       });
@@ -127,7 +127,7 @@
           onclick: () => doDelete(f, load) });
         const openDir = el('button', { class: 'btn btn-sm', text: '📂 打开所在目录',
           onclick: () => doOpenDir(f) });
-        const openerBtns = (OTB.state.downloadsOpeners || []).map(op => {
+        const openerBtns = (DTB.state.downloadsOpeners || []).map(op => {
           const label = (op.icon && op.icon.trim()) ? op.icon.trim() : '🔗 ' + (op.name || '?');
           const tip = (op.name || '') + (op.path ? ' — ' + op.path : '');
           return el('button', {
@@ -230,8 +230,8 @@
     if (openersLoaded) load();
   }
 
-  OTB.pages.downloads = renderDownloads;
-  OTB.state.routes.downloads = renderDownloads;
-  OTB.state.routeNames.downloads = '下载历史';
-  OTB.state.routeSubs.downloads = 'downloads/ 目录里所有已下载的日志（zip / 单文件）+ 来源、删除';
+  DTB.pages.downloads = renderDownloads;
+  DTB.state.routes.downloads = renderDownloads;
+  DTB.state.routeNames.downloads = '下载历史';
+  DTB.state.routeSubs.downloads = 'downloads/ 目录里所有已下载的日志（zip / 单文件）+ 来源、删除';
 })();

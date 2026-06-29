@@ -10,10 +10,10 @@
 
 (function () {
   'use strict';
-  const OTB = window.OTB = window.OTB || {};
-  OTB.pages = OTB.pages || {};
-  const { el, toast, copyToClipboard } = OTB.core;
-  const { api } = OTB.api;
+  const DTB = window.DTB = window.DTB || {};
+  DTB.pages = DTB.pages || {};
+  const { el, toast, copyToClipboard } = DTB.core;
+  const { api } = DTB.api;
 
   const COMMON_TZ = [
     'Local', 'UTC',
@@ -175,8 +175,8 @@
     ]));
   }
 
-  OTB.pages.cron = renderCron;
-  OTB.state.routes.cron = renderCron;
-  OTB.state.routeNames.cron = 'Cron 解析';
-  OTB.state.routeSubs.cron = '表达式 / 描述符 / 5+3 次运行';
+  DTB.pages.cron = renderCron;
+  DTB.state.routes.cron = renderCron;
+  DTB.state.routeNames.cron = 'Cron 解析';
+  DTB.state.routeSubs.cron = '表达式 / 描述符 / 5+3 次运行';
 })();

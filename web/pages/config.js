@@ -10,23 +10,23 @@
  * 原因：app.js 的 navigate() 在每次 hashchange 都会 view.innerHTML = ''
  * 然后重新调用 routes[name](view)。如果 state 放闭包里，每次切 tab 再回来
  * 都会被覆盖，**未保存的改动全丢**，用户报告"切 tab 内容没了/保存没写盘"。
- * 修复后：state 挂到 OTB.state.configEditor，跨 re-render 存活；
+ * 修复后：state 挂到 DTB.state.configEditor，跨 re-render 存活；
  * 只有"还没加载过"或"用户点放弃改动"时才重新 fetch。
  */
 
 (function () {
   'use strict';
-  const OTB = window.OTB = window.OTB || {};
-  OTB.pages = OTB.pages || {};
-  const { el, $, toast, validate, newSystem, newServer, newLogDir, kvTable, confirmDialog } = OTB.core;
-  const { api } = OTB.api;
+  const DTB = window.DTB = window.DTB || {};
+  DTB.pages = DTB.pages || {};
+  const { el, $, toast, validate, newSystem, newServer, newLogDir, kvTable, confirmDialog } = DTB.core;
+  const { api } = DTB.api;
 
   // FE-004：doExport（blob 下载）/ doImportUpload（text/yaml body）必须用裸 fetch
   // —— api() 只支持 JSON body 且只返回 JSON，无法承载 blob 或 yaml 文本。
   // 这里统一处理 401：触发登录引导，避免 token 鉴权场景下静默失败。
   function handleAuth401(resp) {
     if (resp.status === 401) {
-      if (window.OTB.auth && window.OTB.auth.requireLogin) window.OTB.auth.requireLogin();
+      if (window.DTB.auth && window.DTB.auth.requireLogin) window.DTB.auth.requireLogin();
       return true;
     }
     return false;
@@ -38,8 +38,8 @@
   // sectionsDirty = { systems, openers, retention } 是分节脏标记，
   // doSave 只 PUT 真正改过的节；saveOpenerRow 只清 openersDirty，
   // 不影响 systemsDirty（修 #B1）。
-  if (!OTB.state.configEditor) {
-    OTB.state.configEditor = {
+  if (!DTB.state.configEditor) {
+    DTB.state.configEditor = {
       systems: [],
       app: null,
       search: null,
@@ -55,7 +55,7 @@
       loaded: false
     };
   }
-  const state = OTB.state.configEditor;
+  const state = DTB.state.configEditor;
 
   // 同步两个保存按钮（顶部 #cfg-save-btn 和底部 .cfg-save-footer）的 disabled
   // 【修复】原 syncSaveBtns 定义在 renderConfig 闭包里，而 recomputeDirty 在模块级
@@ -67,11 +67,11 @@
     document.querySelectorAll('.cfg-save-footer').forEach(b => { b.disabled = !state.dirty; });
   };
 
-  // 计算总 dirty + 同步给 OTB.state.unsavedConfig + 按钮 disabled
+  // 计算总 dirty + 同步给 DTB.state.unsavedConfig + 按钮 disabled
   const recomputeDirty = () => {
     const any = state.sectionsDirty.systems || state.sectionsDirty.openers || state.sectionsDirty.retention;
     state.dirty = any;
-    OTB.state.unsavedConfig = any;
+    DTB.state.unsavedConfig = any;
     syncSaveBtns();
   };
 
@@ -93,7 +93,7 @@
       el('div', { class: 'warn-banner-sub', text: '生产分发建议 config.yaml 设 app.enable_free_file_browser = false，或在 app.free_file_roots 里加白名单路径。' })
     ]));
     const closeBtn = el('button', { class: 'warn-banner-close', text: '×', title: '本会话不再显示', onclick: () => {
-      OTB.state.dismiss(bannerKey);
+      DTB.state.dismiss(bannerKey);
       banner.style.display = 'none';
     }});
     banner.appendChild(closeBtn);
@@ -193,7 +193,7 @@
       const roots = Array.isArray(app.free_file_roots) ? app.free_file_roots : [];
       // 只在"自由模式"下提醒（白名单模式已经有 renderFiles 顶部提示，不重复）
       state.freeBrowserEnabled = enabled && roots.length === 0;
-      if (state.freeBrowserEnabled && !OTB.state.isDismissed(bannerKey)) {
+      if (state.freeBrowserEnabled && !DTB.state.isDismissed(bannerKey)) {
         banner.style.display = '';
       }
     }
@@ -867,7 +867,7 @@
     }
   }
 
-  OTB.pages.config = renderConfig;
-  OTB.state.routes.config = renderConfig;
-  OTB.state.routeNames.config = '系统配置';
+  DTB.pages.config = renderConfig;
+  DTB.state.routes.config = renderConfig;
+  DTB.state.routeNames.config = '系统配置';
 })();

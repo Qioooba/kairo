@@ -1,10 +1,10 @@
 # ===== Go 构建产物 / 缓存 =====
 # 编译出来的二进制
-/OpsToolbox
-/OpsToolbox.exe
-/OpsToolbox_mac
-/OpsToolbox_*
-/ops-toolbox-test
+/DoubaoToolbox
+/DoubaoToolbox.exe
+/DoubaoToolbox_mac
+/DoubaoToolbox_*
+/doubao-toolbox-test
 
 # Go 缓存
 /.gocache/
@@ -28,7 +28,7 @@ Thumbs.db
 # ===== debug 临时文件 =====
 /debug_run.go
 dbg-*.js
-otb-snap.js
+dtb-snap.js
 verify-commands.js
 
 # ===== 临时文件 =====
@@ -61,4 +61,4 @@ verify-commands.js
 /theme-test-out/
 /theme-*-out/
 /playwright-*.js
-ops-toolbox
+doubao-toolbox

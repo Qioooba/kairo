@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""OpsToolbox Phase 1 模拟验收驱动"""
+"""豆包工具箱 Phase 1 模拟验收驱动"""
 import json, os, signal, socket, subprocess, sys, time, urllib.request, urllib.error, contextlib
 
 ROOT = "/Users/qi/Documents/spaces/ops-toolbox"
@@ -50,9 +50,9 @@ def main():
         print("MOCK NOT READY"); mock.terminate(); return
     print(f"mock listening on 127.0.0.1:{MOCK_PORT}")
 
-    # 启动 OpsToolbox
+    # 启动 豆包工具箱
     app = subprocess.Popen(
-        [os.path.join(ROOT, "OpsToolbox_mac")],
+        [os.path.join(ROOT, "DoubaoToolbox_mac")],
         stdout=open(os.path.join(LOG_DIR, "ops_toolbox.out"), "w"),
         stderr=subprocess.STDOUT, cwd=ROOT, preexec_fn=os.setsid)
     print(f"app  pid={app.pid}")
@@ -193,7 +193,7 @@ def main():
     print("===== downloads 目录 ====")
     subprocess.run(["ls", "-la", os.path.join(ROOT, "downloads")])
 
-    print("=== 关闭 mock + OpsToolbox ===")
+    print("=== 关闭 mock + 豆包工具箱 ===")
     try: os.killpg(os.getpgid(app.pid), signal.SIGTERM)
     except: pass
     mock.terminate()

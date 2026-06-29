@@ -1,4 +1,4 @@
-# OpsToolbox v2 plan 修复总报告（12 项 ChatGPT 审查遗留 + P3 体验 4 项）
+# 豆包工具箱 v2 plan 修复总报告（12 项 ChatGPT 审查遗留 + P3 体验 4 项）
 
 日期：2026-06-23
 工作目录：`/Users/qi/Documents/spaces/ops-toolbox`

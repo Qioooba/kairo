@@ -2,7 +2,7 @@
 //
 // 设计：
 //   - 数据文件按日期子目录存放（downloads/YYYYMMDD/<file>），原文件名保留
-//   - 元数据统一写到 downloads/.ops-toolbox-meta.json 单文件（key 是 "YYYYMMDD/<file>"）
+//   - 元数据统一写到 downloads/.doubao-toolbox-meta.json 单文件（key 是 "YYYYMMDD/<file>"）
 //     避免在 downloads/ 目录里散一堆 .meta 副作用文件
 //
 // 这样下载历史页能直接展示"这份文件是从哪台机器、哪个目录、什么时候下来的"，
@@ -26,7 +26,7 @@ import (
 )
 
 // metaIndexFile 索引文件名（隐藏在 downloads/ 根目录里）。
-const metaIndexFile = ".ops-toolbox-meta.json"
+const metaIndexFile = ".doubao-toolbox-meta.json"
 
 // metaIndex 是元数据索引文件的结构：
 //   - Version: 文件格式版本（未来加字段用）
@@ -71,7 +71,7 @@ type Entry struct {
 	MetaPresent bool      `json:"meta_present"` // sidecar 是否存在
 }
 
-// WriteMeta 把元数据写到 rootDir/.ops-toolbox-meta.json（按 "YYYYMMDD/file" 或 "file" 索引）。
+// WriteMeta 把元数据写到 rootDir/.doubao-toolbox-meta.json（按 "YYYYMMDD/file" 或 "file" 索引）。
 // 用 0o600 权限（不准备给其它用户看）；失败不返回错误也能继续（list 仍能看到文件），
 // 所以本函数不 panic，调用方按需决定是否报错。
 //
@@ -100,7 +100,7 @@ func WriteMeta(dataPath string, m Meta) error {
 	return saveMetaIndex(rootDir, idx, mtime)
 }
 
-// ReadMeta 读 rootDir/.ops-toolbox-meta.json 里 dataPath 对应的元数据；不存在时返回 (zeroMeta, false, nil)。
+// ReadMeta 读 rootDir/.doubao-toolbox-meta.json 里 dataPath 对应的元数据；不存在时返回 (zeroMeta, false, nil)。
 func ReadMeta(dataPath string) (Meta, bool, error) {
 	rootDir, rel, err := splitDataPath(dataPath)
 	if err != nil {
@@ -123,7 +123,7 @@ func ReadMeta(dataPath string) (Meta, bool, error) {
 // 但因为 WriteMeta / ReadMeta / Delete 没有传 rootDir（只传 dataPath），
 // 我们用更简单的策略：dataPath = rootDir/<rest>，倒推 rootDir 是包含 dataPath
 // 的最大 "downloads" 目录。具体做法：把 dataPath 转为绝对路径，往上找
-// 直到找到一个含 ".ops-toolbox-meta.json" 或就是传入路径的祖父目录。
+// 直到找到一个含 ".doubao-toolbox-meta.json" 或就是传入路径的祖父目录。
 //
 // 这里采用最稳的方案：dataPath 必须是 rootDir/<date>/<file> 或 rootDir/<file>
 // 形态，我们反推 rootDir 最多两层：
@@ -201,7 +201,7 @@ func saveMetaIndex(rootDir string, idx *metaIndex, mtimeOld time.Time) error {
 			return fmt.Errorf("序列化索引失败: %w", err)
 		}
 		// 写临时文件 + rename（atomic on POSIX / best-effort on Windows）
-		tmp, err := os.CreateTemp(rootDir, ".ops-toolbox-meta-*.tmp")
+		tmp, err := os.CreateTemp(rootDir, ".doubao-toolbox-meta-*.tmp")
 		if err != nil {
 			return fmt.Errorf("创建临时索引失败: %w", err)
 		}
@@ -272,7 +272,7 @@ func cloneMetaIndex(src *metaIndex) *metaIndex {
 // List 列出 rootDir 下所有数据文件 + 它们的元数据。
 //
 //   - 按 mtime 倒序；
-//   - 跳过隐藏文件（. 开头，含 .ops-toolbox-meta.json 索引文件）；
+//   - 跳过隐藏文件（. 开头，含 .doubao-toolbox-meta.json 索引文件）；
 //   - 子目录（如 downloads/20260621/）递归；
 //   - rootDir 不存在时返回空切片和 nil；
 //   - 列表策略：优先列有元数据的文件（确认是 ops-toolbox 下载产物）；
@@ -529,7 +529,7 @@ func removeFromIndexBulk(rootDir string, names []string) {
 // MigrateSidecars 从老的 .meta sidecar 格式迁移到单文件索引。
 //
 // 一次性工具：扫描 rootDir 下所有 <name>.meta 文件，把内容合并到
-// .ops-toolbox-meta.json 索引文件，然后删掉 sidecar。
+// .doubao-toolbox-meta.json 索引文件，然后删掉 sidecar。
 //
 // 调用方：CLI 命令（root 启动时一次性跑一次）；或管理员手动。
 // 幂等：跑过一次后再跑没副作用（sidecar 已经删完，索引文件已存在）。
@@ -552,7 +552,7 @@ func MigrateSidecars(rootDir string) (migrated, skipped int, err error) {
 		if !strings.HasSuffix(name, ".meta") {
 			return nil
 		}
-		// 跳过 .ops-toolbox-meta.json 自身（万一以后改后缀）
+		// 跳过 .doubao-toolbox-meta.json 自身（万一以后改后缀）
 		if name == metaIndexFile {
 			return nil
 		}
