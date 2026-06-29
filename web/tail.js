@@ -157,7 +157,11 @@
     const lines = pendingLines;
     pendingLines = [];
     viewer.pushBatch(lines);
-    if (wasNearBottom) viewer.scrollToBottom();
+    if (wasNearBottom) {
+      requestAnimationFrame(() => {
+        tailOut.scrollTop = tailOut.scrollHeight;
+      });
+    }
     updateMeters();
   }
   // FE-005：保存 interval id，停止 / 关闭窗口时 clearInterval，避免路由切换或窗口关闭后 interval 持续运行。
@@ -292,11 +296,11 @@
   // P0-2：info/error 走 viewer.push 而不是直接操作 tailOut —— viewer 管 DOM
   function appendInfo(msg) {
     viewer.push('⟦info⟧ ' + msg, 'info');
-    viewer.scrollToBottom();
+    requestAnimationFrame(() => { tailOut.scrollTop = tailOut.scrollHeight; });
   }
   function appendError(msg) {
     viewer.push('⟦error⟧ ' + msg, 'error');
-    viewer.scrollToBottom();
+    requestAnimationFrame(() => { tailOut.scrollTop = tailOut.scrollHeight; });
   }
 
   if (loginForm) {

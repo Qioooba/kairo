@@ -26,15 +26,21 @@
     .tail-standalone {
       flex: 1; display: flex; flex-direction: column;
       padding: 10px 14px; gap: 10px;
+      min-height: 0;
+      overflow: hidden;
     }
+    .tail-standalone .tail-meta { flex: 0 0 auto; }
+    .tail-standalone .tail-login { flex: 0 0 auto; }
+    .tail-standalone .btn-row { flex: 0 0 auto; }
+    .tail-standalone #tail-highlight { flex: 0 0 auto; overflow-y: auto; max-height: 180px; }
     .tail-standalone .tail-out {
-      flex: 1; min-height: 0; max-height: none;
+      flex: 1 1 auto;
+      min-height: 0;
+      max-height: none;
       font-size: 12.5px;
-      overflow: auto;
       overflow-y: scroll;
-      overflow-x: auto;
-      white-space: pre-wrap;
-      word-break: break-all;
+      overflow-x: scroll;
+      white-space: pre;
       border: 1px solid var(--line);
       border-radius: 6px;
       padding: 6px 10px;
