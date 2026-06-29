@@ -51,6 +51,15 @@
       }
       OTB.core.clearActiveDL();
     }
+    // 离开页面：清理进行中的 tail（关闭 SSE + 通知后端停止）
+    if (OTB.core && OTB.core.getActiveTail && OTB.core.getActiveTail()) {
+      const tail = OTB.core.getActiveTail();
+      try { tail.evtsrc && tail.evtsrc.close(); } catch (e) { /* ignore */ }
+      if (tail.id) {
+        api('POST', '/api/logs/tail/' + tail.id + '/stop', {}).catch(() => {});
+      }
+      OTB.core.clearActiveTail();
+    }
     const view = $('#view');
     if (!view) return;
     view.innerHTML = '';
@@ -76,6 +85,26 @@
   }
 
   window.addEventListener('hashchange', navigate);
+  window.addEventListener('beforeunload', () => {
+    // 页面卸载时清理进行中的下载
+    if (OTB.core && OTB.core.getActiveDL && OTB.core.getActiveDL()) {
+      const dl = OTB.core.getActiveDL();
+      try { dl.evtsrc && dl.evtsrc.close(); } catch (e) { /* ignore */ }
+      if (dl.id && navigator.sendBeacon) {
+        try { navigator.sendBeacon('/api/files/download/' + dl.id + '/cancel', ''); } catch (e) { /* ignore */ }
+      }
+      OTB.core.clearActiveDL();
+    }
+    // 页面卸载时清理进行中的 tail
+    if (OTB.core && OTB.core.getActiveTail && OTB.core.getActiveTail()) {
+      const tail = OTB.core.getActiveTail();
+      try { tail.evtsrc && tail.evtsrc.close(); } catch (e) { /* ignore */ }
+      if (tail.id && navigator.sendBeacon) {
+        try { navigator.sendBeacon('/api/logs/tail/' + tail.id + '/stop', ''); } catch (e) { /* ignore */ }
+      }
+      OTB.core.clearActiveTail();
+    }
+  });
   window.addEventListener('load', async () => {
     try {
       const info = await api('GET', '/api/config');

@@ -10,7 +10,7 @@
   const { api } = OTB.api;
 
   function groupLabel(text) {
-    return el('span', { class: 'text-dim', style: 'font-size:12px;margin-top:12px;display:block;' }, [document.createTextNode(text)]);
+    return el('span', { class: 'text-dim mt-2', style: 'font-size:12px;display:block;' }, [document.createTextNode(text)]);
   }
 
   function renderFormatter(view) {
@@ -37,7 +37,7 @@
     const searchBar = el('div', {
       class: 'fmt-search-bar',
       style: 'display:flex; gap:6px; align-items:center; margin-top:6px; padding:6px 8px; background:var(--bg-2); border-radius:6px; border:1px solid var(--line);'
-    }, [searchInp, btnPrev, btnNext, searchCount]);
+    }, [searchInp, searchCount, btnPrev, btnNext]);
     searchBar.style.display = 'none';
 
     function updateSearchCount() {
@@ -163,8 +163,8 @@
     const btnJSONToYAML = el('button', { class: 'btn', text: 'JSON → YAML', onclick: () => doYAML('from_json') });
 
     // ---- URL-form 组 ----
-    const btnFormEnc = el('button', { class: 'btn', text: 'encode（map → a=1&b=2）', onclick: () => doURLForm('encode') });
-    const btnFormDec = el('button', { class: 'btn', text: 'decode（a=1&b=2 → map）', onclick: () => doURLForm('decode') });
+    const btnFormEnc = el('button', { class: 'btn', text: 'URL 编码', onclick: () => doURLForm('encode') });
+    const btnFormDec = el('button', { class: 'btn', text: 'URL 解码', onclick: () => doURLForm('decode') });
 
     // ---- 通用 ----
     const btnClear = el('button', { class: 'btn', text: '清空', onclick: () => {

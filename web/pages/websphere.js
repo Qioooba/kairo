@@ -98,7 +98,8 @@
       'aria-haspopup': 'listbox',
       'aria-expanded': 'false',
       'aria-controls': 'ws-query-history-popover',
-      'aria-activedescendant': ''
+      'aria-activedescendant': '',
+      style: 'width: 100%; box-sizing: border-box;'
     });
 
     // ===== 搜索关键词历史下拉面板 =====
@@ -110,13 +111,13 @@
     //   - 历史为空时整个面板隐藏。
     // 用一个 inline-block 的 wrapper 把 queryInp 和 popover 包一起，
     // popover 用 position:absolute 定位到 wrapper 下方。
-    const queryWrap = el('div', { class: 'ws-query-wrap', style: 'position:relative;' });
+    const queryWrap = el('div', { class: 'ws-query-wrap', style: 'position:relative; width:100%;' });
     queryWrap.appendChild(queryInp);
     const queryPopover = el('div', {
       id: 'ws-query-history-popover',
       class: 'ws-query-popover',
       role: 'listbox',
-      style: 'display:none; position:absolute; top:100%; left:0; right:0; z-index:50;'
+      style: 'display:none; position:absolute; top:calc(100% + 4px); left:0; right:0; z-index:100; max-height:320px; overflow-y:auto; background:var(--bg-1); border:1px solid var(--line); border-radius:8px; box-shadow:0 8px 24px rgba(0,0,0,0.15);'
     });
     queryWrap.appendChild(queryPopover);
 
@@ -145,12 +146,12 @@
         // 是干嘛的（旧版直接隐藏，焦点聚焦过去毫无反应，用户根本不知道有历史功能）。
         const empty = el('div', {
           class: 'ws-query-popover-empty',
-          style: 'padding:10px 12px; color:var(--text-dim, #888); font-size:12.5px; cursor:default; user-select:none;',
+          style: 'padding:12px 14px; color:var(--text-dim, #888); font-size:12.5px; cursor:default; user-select:none; text-align:center;',
           text: '暂无搜索历史（搜索后自动记录）'
         });
         queryPopover.appendChild(empty);
-        // 显式设回非 none（空状态也要展开，让用户看见提示）
-        queryPopover.style.display = '';
+        // 显式设为 block（空状态也要展开，让用户看见提示）
+        queryPopover.style.display = 'block';
         queryInp.setAttribute('aria-expanded', 'true');
         return list;
       }
@@ -161,11 +162,11 @@
           role: 'option',
           'aria-selected': 'false',
           'data-idx': String(idx),
-          style: 'display:flex; justify-content:space-between; align-items:center; gap:10px; padding:6px 10px; cursor:pointer; border-bottom:1px solid var(--border, #eee);'
+          style: 'display:flex; justify-content:space-between; align-items:center; gap:10px; padding:8px 14px; cursor:pointer; border-bottom:1px solid var(--line, #eee);'
         }, [
           el('span', {
             class: 'ws-query-popover-q',
-            style: 'font-family: var(--mono, monospace); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex:1;',
+            style: 'font-family: var(--mono, monospace); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex:1; color:var(--text);',
             text: item.q
           }),
           el('span', {
@@ -186,11 +187,11 @@
         queryPopover.appendChild(row);
       });
       // 「清空历史」分隔 + 按钮
-      const sep = el('div', { style: 'height:1px; background:var(--border, #eee); margin-top:2px;' });
+      const sep = el('div', { style: 'height:1px; background:var(--line, #eee); margin-top:2px;' });
       queryPopover.appendChild(sep);
       const clearBtn = el('div', {
         class: 'ws-query-popover-clear',
-        style: 'padding:6px 10px; cursor:pointer; color:var(--text-dim, #888); font-size:12px; text-align:center;',
+        style: 'padding:8px 14px; cursor:pointer; color:var(--text-dim, #888); font-size:12px; text-align:center;',
         text: '🗑 清空搜索历史'
       });
       clearBtn.addEventListener('mousedown', (ev) => {
@@ -204,11 +205,9 @@
     }
 
     function showQueryHistory() {
-      // 屏蔽期（选择条目后 / 清空后）不允许重新展开
       if (isQueryHistorySuspended()) return;
-      const list = renderQueryHistory();
-      if (!list.length) return; // renderQueryHistory 已设 display:none
-      queryPopover.style.display = '';
+      renderQueryHistory();
+      queryPopover.style.display = 'block';
       queryInp.setAttribute('aria-expanded', 'true');
     }
     function hideQueryHistory() {
@@ -324,8 +323,8 @@
 
     function updateTimeCustomVisibility() {
       const isCustom = timeSel.value === 'custom';
-      timeFromInp.style.display = isCustom ? '' : 'none';
-      timeToInp.style.display = isCustom ? '' : 'none';
+      timeFromInp.style.display = isCustom ? 'inline-block' : 'none';
+      timeToInp.style.display = isCustom ? 'inline-block' : 'none';
     }
     timeSel.addEventListener('change', updateTimeCustomVisibility);
     updateTimeCustomVisibility();
@@ -367,15 +366,11 @@
     srvPickWrap.appendChild(srvPickHint);
     const btnPickAll = el('button', { class: 'btn btn-sm', text: '全选', onclick: () => toggleAllSrv(true) });
     const btnPickNone = el('button', { class: 'btn btn-sm', text: '全不选', onclick: () => toggleAllSrv(false) });
-    const btnPickOnline = el('button', { class: 'btn btn-sm', text: '只保留已测通', onclick: () => toggleOnline() });
     const srvPickToolbar = el('div', { class: 'srv-pick-toolbar' }, [
-      document.createTextNode('目标服务器:'), btnPickAll, btnPickNone, btnPickOnline
+      document.createTextNode('目标服务器:'), btnPickAll, btnPickNone
     ]);
 
-    // v0.5：每个勾选服务器下展开它的日志目录（二级勾选），用于 #10 多对多。
     const srvDirsWrap = el('div', { class: 'srv-dirs' });
-    const srvDirsHint = el('div', { class: 'text-dim', text: '勾选服务器后会展开它的日志目录，可多选。' });
-    srvDirsWrap.appendChild(srvDirsHint);
     const srvDirsToolbar = el('div', { class: 'srv-pick-toolbar' }, [
       document.createTextNode('目标日志目录（多对多勾选）:'),
       el('button', { class: 'btn btn-sm', text: '全选', onclick: () => toggleAllDirs(true) }),
@@ -475,12 +470,9 @@
         const st = srvStatus[s.name] || { state: 'idle' };
         const dotCls = 'dot dot-' + (st.state === 'idle' ? 'idle' : st.state);
         const cb = el('input', { type: 'checkbox', 'data-srv': s.name, value: s.name });
-        // 默认只选上次使用；没有历史时只选第一台，避免首次进入就扫全量生产节点。
-        //   - 有上次选择 → 恢复
-        //   - 无上次 → 默认勾第一台（用户可主动全选）
         const wasChecked = prevChecked.indexOf(s.name) !== -1
           || (lastForSys && lastForSys.indexOf(s.name) !== -1)
-          || (prevChecked.length === 0 && !lastForSys && idx === 0);
+          || (prevChecked.length === 0 && !lastForSys);
         if (wasChecked) cb.checked = true;
         cb.addEventListener('change', () => { renderSrvDirs(); persistSelection(); refreshCredStatus(); });
         const item = el('label', { class: 'srv-pick-item' }, [
@@ -529,14 +521,9 @@
         const list = el('div', { class: 'srv-dirs-list' });
         (srv.log_dirs || []).forEach((d, di) => {
           const cb = el('input', { type: 'checkbox', 'data-srv': srv.name, 'data-dir': d.path, value: d.path });
-          // 默认只选上次使用；没有历史时只选每台已选服务器的第一个目录。
-          //   - 有上次选择 → 恢复
-          //   - 无上次 → 父级 server 勾选了 → 默认勾第一个目录
-          //   - 无上次 + dirSel 命中 → 兜底勾上
           const dirHit = lastDirs.find(x => x.srv === srv.name && x.dir === d.path);
-          const fallbackHit = (!hasLastForSys && dirSel.value === d.path && di === 0);
-          const parentDefault = (!hasLastForSys && checkedSrvs.indexOf(srv.name) !== -1 && di === 0);
-          if (dirHit || fallbackHit || parentDefault) cb.checked = true;
+          const parentDefault = !hasLastForSys && checkedSrvs.indexOf(srv.name) !== -1;
+          if (dirHit || parentDefault) cb.checked = true;
           cb.addEventListener('change', persistSelection);
           const enc = (d.encoding || 'utf-8').toLowerCase();
           const item = el('label', { class: 'srv-dirs-item' }, [
@@ -576,7 +563,7 @@
         dirSel.value = dirSel.options[0].value;
       }
     }
-    sysSel.addEventListener('change', () => { renderSrvPick(); refreshDirs(); refreshCredStatus(); persistSelection(); });
+    sysSel.addEventListener('change', () => { fillCredFromConfig(); renderSrvPick(); refreshDirs(); refreshCredStatus(); persistSelection(); });
     // P1-8：renderSrvDirs / renderSrvPick 内部本来就会 persistSelection，所以这里
     // 不需要再额外调 updateTargetSummary。但因为 renderSrvPick 后会重建 srvPickWrap，
     // 摘要需要根据"新勾选列表"重新算；persistSelection 里调一次就够。
@@ -702,6 +689,14 @@
       credStatus, btnForget
     ]);
 
+    function fillCredFromConfig() {
+      const sys = cfg && cfg.systems ? cfg.systems.find(s => s.name === sysSel.value) : null;
+      if (!sys || !sys.servers || !sys.servers.length) return;
+      const srv = sys.servers[0];
+      if (srv.username && !userInp.value) userInp.value = srv.username;
+      if (srv.password && !passInp.value) passInp.value = srv.password;
+    }
+
     function currentCredKey() {
       const srvs = getCheckedServers();
       const srv = srvs[0] || (sysSel.value && cfg ? (cfg.systems.find(s => s.name === sysSel.value) || {}).servers?.[0]?.name : '');
@@ -820,6 +815,7 @@
       } else {
         toast(okN + '/' + srvs.length + ' 台成功，' + failN + ' 台失败', 'warn');
       }
+      renderSrvPick();
       refreshCredStatus();
     }
 
@@ -911,7 +907,7 @@
       const filterInp = el('input', {
         type: 'text',
         placeholder: '过滤文件名（子串 / 通配符 * ?）',
-        style: 'min-width: 200px;'
+        style: 'width: 240px;'
       });
       filterInp.value = wsFileFilter;
       filterInp.addEventListener('input', () => {
@@ -924,7 +920,7 @@
         renderFileTable();
       }});
       const filterRow = el('div', { class: 'mt-1', style: 'display:flex; gap:8px; align-items:center;' }, [
-        el('span', { class: 'lbl', text: '过滤：' }),
+        el('span', { class: 'lbl', style: 'white-space:nowrap;', text: '过滤：' }),
         filterInp, filterClrBtn
       ]);
       fileTableWrap.appendChild(filterRow);
@@ -964,7 +960,7 @@
         tbl.appendChild(el('thead', null, el('tr', null, [
           el('th', { class: 'col-check' }),
           el('th', { text: '文件名' }),
-          el('th', { text: '大小' }),
+          el('th', { class: 'num', style: 'text-align:right;', text: '大小' }),
           el('th', { text: '修改时间' }),
           el('th', { text: '操作' }),
           el('th', { class: 'col-status', text: '状态' })
@@ -1093,7 +1089,7 @@
         const tbl = el('table', { class: 'table' });
         tbl.appendChild(el('thead', null, el('tr', null, [
           el('th', { text: '文件名' }),
-          el('th', { text: '大小' }),
+          el('th', { class: 'num', style: 'text-align:right;', text: '大小' }),
           el('th', { class: 'col-status', text: '状态' })
         ])));
         tbody = el('tbody', { 'data-group-key': groupKey });
@@ -1634,7 +1630,13 @@
         folderRow.appendChild(el('button', {
           class: 'btn btn-sm', text: '📋 复制路径',
           title: '复制目录绝对路径到剪贴板',
-          onclick: () => OTB.core.copyToClipboard(folder)
+          onclick: () => {
+            OTB.core.copyToClipboard(folder).then(() => {
+              toast('路径已复制', 'ok');
+            }).catch(() => {
+              window.prompt('复制此路径：', folder);
+            });
+          }
         }));
       }
       wrap.appendChild(folderRow);
@@ -1653,6 +1655,7 @@
     async function openLocalFolder(absDir) {
       try {
         await api('POST', '/api/local/open-folder', { path: absDir, folder: listState.lastDownloadFolder || '' });
+        toast('已在文件管理器中打开', 'ok');
       } catch (e) {
         toast('打开目录失败：' + e.message, 'err');
       }
@@ -1786,18 +1789,7 @@
             if (isCtx) {
               cells.push(el('td', { class: 'actions text-dim', text: '' }));
             } else {
-              const btnExpand = el('button', {
-                class: 'btn btn-sm',
-                text: '展开',
-                onclick: () => {
-                  const expanded = contentCell.getAttribute('data-expanded') === '1';
-                  contentCell.textContent = expanded ? shortContent : fullContent;
-                  contentCell.setAttribute('data-expanded', expanded ? '0' : '1');
-                  btnExpand.textContent = expanded ? '展开' : '收起';
-                }
-              });
               cells.push(el('td', { class: 'actions' }, [
-                btnExpand,
                 el('button', { class: 'btn btn-sm', text: '复制', onclick: () => copyToClipboard(fullContent) }),
                 el('button', { class: 'btn btn-sm', text: '上下文', onclick: () => doContext(h) }),
                 el('button', { class: 'btn btn-sm', text: '↗ 新窗口跟踪', onclick: () => openTailForFileInNewTab(h.server, h.dir, h.file) })
@@ -1891,17 +1883,17 @@ const formCard = el('div', { class: 'card' }, [
       class: 'card-desc',
       text: '先选业务系统，再勾选要操作的服务器和日志目录；页面只会操作已勾选的目录。'
     }));
-    targetBody.appendChild(el('div', { class: 'grid-2' }, [
+    targetBody.appendChild(el('div', { class: 'grid-2', style: 'display:none' }, [
       el('div', null, [el('label', { text: '业务系统' }), sysSel]),
       el('div', null, [el('label', { text: '目录预览（实际以勾选为准）' }), dirSel])
     ]));
     targetBody.appendChild(el('div', { class: 'mt-2' }, [srvPickToolbar, srvPickWrap]));
     targetBody.appendChild(el('div', { class: 'mt-2' }, [srvDirsToolbar, srvDirsWrap]));
-    targetBody.appendChild(el('div', { class: 'grid-2 mt-2' }, [
+    targetBody.appendChild(el('div', { class: 'grid-2 mt-2', style: 'display:none' }, [
       el('div', null, [el('label', { text: 'SSH 用户名' }), userInp]),
       el('div', null, [el('label', { text: 'SSH 密码' }), passInp])
     ]));
-    targetBody.appendChild(el('div', { class: 'mt-1' }, [rememberLbl, credStatusRow]));
+    targetBody.appendChild(el('div', { class: 'mt-1', style: 'display:none' }, [rememberLbl, credStatusRow]));
     targetBody.appendChild(el('div', { class: 'btn-row mt-3' }, [btnTest]));
 
     // v0.5 #8：文件名参数 — 单文件 / 多文件 / glob 模糊匹配（空格或逗号分隔）
@@ -2129,7 +2121,7 @@ const formCard = el('div', { class: 'card' }, [
           tbl.appendChild(el('thead', null, el('tr', null, [
             el('th', { class: 'col-check' }),
             el('th', { text: '文件名' }),
-            el('th', { text: '大小' }),
+            el('th', { class: 'num', style: 'text-align:right;', text: '大小' }),
             el('th', { text: '修改时间' })
           ])));
           const tbody = el('tbody');
@@ -3018,8 +3010,8 @@ const formCard = el('div', { class: 'card' }, [
     }
 
     const tailCard = el('div', { class: 'card' }, [
-      el('h3', { text: '实时跟踪（单文件 SSE 流）' }),
-      el('div', { class: 'card-desc', text: '跟踪远程文件新增行（用 tail -F）。实时跟踪本质只支持单服务器单目录 —— 选错机器就看不到你要的日志。日志量大卡顿时点「↗ 新窗口打开」切到独立窗口。' }),
+      el('h3', { text: '实时跟踪（新窗口打开）' }),
+      el('div', { class: 'card-desc', text: '跟踪远程文件新增行（用 tail -F）。实时跟踪在独立窗口中运行，避免本页卡顿。' }),
       tailTargetWarn,
       el('div', { class: 'grid-2 mt-2' }, [
         el('div', null, [
@@ -3027,7 +3019,6 @@ const formCard = el('div', { class: 'card' }, [
           tailTargetSel,
           tailTargetInfo
         ]),
-        // grid-2 第二列空 div 撑位（让 label 与 select 对齐到左半边）
         el('div')
       ]),
       el('div', { class: 'grid-3 mt-2' }, [
@@ -3036,28 +3027,14 @@ const formCard = el('div', { class: 'card' }, [
           el('div', { style: 'display:flex; gap:6px;' }, [tailFileWrap, btnTailPickFile])
         ]),
         el('div', null, [el('label', { text: '起始行数（0=只追新增）' }), tailLinesInp]),
-        // 项 11 修复：可配"最多保留 N 行"上限（默认 1000）
         el('div', null, [
           el('label', { text: '最多保留行数（超过自动截断）' }),
           tailMaxLinesInp
         ])
       ]),
-      el('div', { class: 'btn-row mt-2' }, [btnTailStart, btnTailStop, btnTailNewTab]),
-      tailHighlight.root,
-      tailToolbar,
-      el('div', { class: 'mt-2' }, tailOut)
+      el('div', { class: 'btn-row mt-2' }, [btnTailNewTab])
     ]);
 
-    // v0.5 #13：页面顶部加说明卡（让用户知道页面分区和流程）
-    // 项 6 修复：去掉 <strong> 里的 1./2./3./4. 前缀 —— <ol> 会自动生成序号，
-    // 留着会变成 "1. 1. 选目标" 这种重复编号的丑陋显示。
-    // 层级关系说明卡：业务系统 → 1 台或多台服务器 → 每台服务器下多个日志目录
-    // 之前叫"4 步走"，但和 sticky tabBar 重叠（DOM 在前，被 sticky 浮在上面覆盖），
-    // 而且层级关系没强调，新人看不懂"为什么有 业务系统 / 服务器 / 目录 三层"。
-    // 改为：紧凑一行 + 4 步列表 + DOM 移到 tabBar 之后，避免被 sticky 覆盖。
-    const introCard = el('div', { class: 'ws-intro-card text-dim' }, [
-      document.createTextNode('目标 = 业务系统 / 服务器 / 日志目录；当前操作只作用于已勾选目录。')
-    ]);
     // v0.5-G #13：4 个 tab 快捷跳转按钮（点 → 真 tab 切换）
     // P2-14：真 tab 切换（show/hide 内容区），而不是 scrollIntoView
     // v0.6-Redesign：tab 收编为 3 个（文件/下载 / 搜索排障 / 实时跟踪），
@@ -3150,26 +3127,25 @@ const formCard = el('div', { class: 'card' }, [
         el('span', { class: 'files-toolbar-title', text: '文件列表' }),
         btnList
       ]),
-      el('div', { class: 'files-toolbar-row' }, [
-        el('span', { class: 'files-toolbar-title', text: '快速下载最新日志' }),
-        el('span', { class: 'lbl', text: '范围：' }),
-        dlNSel,
-        dlZipLabel,
-        el('label', { class: 'inline', style: 'gap: 6px;' }, [
+      el('div', { class: 'files-toolbar-row', style: 'justify-content: flex-start; gap: 16px;' }, [
+        el('div', { style: 'display:flex; align-items:center; gap:8px; flex-wrap:wrap;' }, [
+          el('span', { class: 'files-toolbar-title', text: '快速下载最新日志' }),
+          el('span', { class: 'lbl', text: '范围：' }),
+          dlNSel,
+          btnDownload,
+        ]),
+        el('div', { style: 'display:flex; align-items:center; gap:8px; flex-wrap:wrap;' }, [
+          dlZipLabel,
           el('span', { class: 'lbl', text: '本地目录：' }),
           dlTargetDirInp
-        ]),
-        btnDownload,
+        ])
       ])
     ]);
     btnDownload.textContent = '下载最新';
     const filesWrap = el('div', { class: 'files-wrap' }, [filesToolbar, fileTableWrap]);
     // P2-14：目标选择永远显示；功能区包进 tab content
-    // DOM 顺序：tabBar 必须先渲染、introCard 在它之后 —— 否则 sticky tabBar 会盖住 introCard 上半部分
-    // （sticky 元素离开原位置后，原来的位置由下方元素填充；DOM 顺序在前的内容会被 sticky 浮在上面覆盖）
     view.appendChild(formCard);
     view.appendChild(tabBar);
-    view.appendChild(introCard);
     view.appendChild(makeTabContent('files', filesWrap));
     view.appendChild(makeTabContent('search', searchCard));
     view.appendChild(makeTabContent('tail', tailCard));
@@ -3194,8 +3170,8 @@ const formCard = el('div', { class: 'card' }, [
       const lastSel = OTB.core.lastGet('websphere', 'sel');
       if (lastSel && lastSel.system && info.systems.find(s => s.name === lastSel.system)) {
         sysSel.value = lastSel.system;
-        if (lastSel.username) userInp.value = lastSel.username;
       }
+      fillCredFromConfig();
       renderSrvPick();
       refreshDirs();
       if (lastSel && lastSel.dir) dirSel.value = lastSel.dir;

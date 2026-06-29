@@ -1,32 +1,3 @@
-[2026-06-19 09:00:00.001] 00000050 com.ibm.ws.webcontainer.servlet.ServletWrapper init  SRVE0242I: –≈¥˚œµÕ≥ [wcredit.ear] ≥ı ºªØ°£
-[2026-06-19 09:00:00.123] 00000050 com.ibm.ws.util.WSInit  INFO    WebSphere Application Server 8.5.5.20 ∆Ù∂ØÕÍ≥…
-[2026-06-19 09:00:01.234] 00000050 com.ibm.ws.jdbc.WSJdbcDataSource  J2CA0036I:  ˝æ›‘¥ jdbc/creditDS ¥¥Ω®≥…π¶
-[2026-06-19 09:00:02.345] 00000050 user.ScheduleJob  INFO    µ˜∂»»ŒŒÒ credit-schedule ∆Ù∂Ø£¨cron: 0 0/5 * * * ?
-[2026-06-19 09:00:05.000] 0000001a com.ibm.ws.webcontainer.servlet.ServletWrapper service  INFO    ”√ªß≤È—Ø userinfo=’≈»˝ ∂©µ•=ORD20260618001 ≥…π¶
-[2026-06-19 09:01:00.000] 0000001b user.ScheduleJob  DEBUG   credit-schedule tick begin
-[2026-06-19 09:01:00.012] 0000001b user.ScheduleJob  INFO    credit-schedule tick √¸÷– 0 Ãı
-[2026-06-19 09:01:30.001] 00000050 com.ibm.ws.webcontainer.filter.FilterChainImpl doFilter  INFO    /api/v1/query?userinfo=¿ÓÀƒ √¸÷–ª∫¥Ê
-[2026-06-19 09:02:15.123] 00000050 user.Service  INFO     ’µΩ÷ß∏∂«Î«Û amount=99.00 userinfo=ÕıŒÂ
-[2026-06-19 09:02:15.234] 00000050 user.Service  INFO    ÷ß∏∂≥…π¶ userinfo=ÕıŒÂ order=ORD20260618002
-[2026-06-19 09:03:01.001] 0000001c com.ibm.ws.webcontainer.servlet.ServletWrapper service  INFO    ¥•∑¢“Ï≥£¬∑æ∂ userinfo=’‘¡˘
-[2026-06-19 09:03:01.234] 0000001c user.Service  ERROR   ≤È—Ø ß∞‹ userinfo=’‘¡˘
-java.lang.NullPointerException
-	at user.Service.query(Service.java:120)
-	at sun.reflect.NativeMethodAccessorImpl.invoke0(Native Method)
-	at sun.reflect.DelegatingMethodAccessorImpl.invoke(DelegatingMethodAccessorImpl.java:43)
-	at java.lang.reflect.Method.invoke(Method.java:498)
-[2026-06-19 09:03:01.456] 0000001c user.Service  WARN    userinfo=’‘¡˘ ¥•∑¢Ωµº∂¬ﬂº≠
-[2026-06-19 09:04:00.000] 0000001b user.ScheduleJob  DEBUG   credit-schedule tick begin
-[2026-06-19 09:04:30.789] 00000050 com.ibm.ws.websvcs.transport.http.WSServlet doPost  INFO    WebService µ˜”√ userinfo=ÀÔ∆ﬂ »Î≤Œ=<soap>...</soap>
-[2026-06-19 09:05:10.012] 00000050 user.ScheduleJob  ERROR   ORA-00060: deadlock detected while waiting for resource
-	at oracle.jdbc.driver.T4CConnection.logon(T4CConnection.java:789)
-	at user.ScheduleJob.tick(ScheduleJob.java:88)
-[2026-06-19 09:05:30.345] 00000050 user.ScheduleJob  ERROR   ORA-00060: deadlock detected while waiting for resource (userinfo=÷‹∞À)
-[2026-06-19 09:06:00.111] 00000050 user.Service  ERROR   SocketTimeoutException: Read timed out after 30s userinfo=Œ‚æ≈
-[2026-06-19 09:06:30.222] 00000050 user.Service  ERROR   No more data to read from socket userinfo=÷£ Æ
-[2026-06-19 09:07:00.001] 0000001c user.ScheduleJob  INFO    –ﬁ∏¥ deadlock ÕÍ≥…
-[2026-06-19 09:07:30.123] 00000050 user.Service  INFO    userinfo=∑Î Æ“ª ’˝≥£
-[2026-06-19 09:08:00.456] 00000050 com.ibm.ws.webcontainer.filter.FilterChainImpl doFilter  DEBUG   «Î«Û¬∑æ∂ /health 200[2026-06-19 09:10:00.001] 00000050 user.Service  ERROR   java.lang.RuntimeException: ≤‚ ‘ GBK ∏¥∫œ userinfo=gbk-user-1
-[2026-06-19 09:10:30.123] 00000050 user.ScheduleJob  INFO    –≈¥˚œµÕ≥ ∆Ù∂ØÕÍ≥… DEBUG=off
-[2026-06-19 09:11:00.456] 00000050 user.Service  INFO    ORA-00060 ¥•∑¢ gbk-user-2
-[2026-06-19 09:12:00.789] 00000050 user.ScheduleJob  INFO    –≈¥˚œµÕ≥ ’˝≥£¬÷—Ø DEBUG=on
+[2026-06-28 09:00:00.000] 00000050 user.Service  INFO    GBKK’ ·7˚ﬂ
+[2026-06-28 09:00:01.000] 00000050 user.Service  WARN    Yù≥ (7= 	
+[2026-06-28 09:00:02.000] 00000050 user.Service  ERROR   Õ\1% ü‡=˚ﬂ8

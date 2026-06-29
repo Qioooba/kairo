@@ -7,7 +7,11 @@
     "doc": "docs"
   },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "e2e": "node tests/e2e/index.js",
+    "e2e:headed": "HEADLESS=false node tests/e2e/index.js",
+    "e2e:report": "node tests/e2e/utils/report-generator.js",
+    "e2e:list": "node -e \"console.log('E2E tests: menu-navigation, pages-screenshot, button-scan, websphere, files, formatter, commands, config, misc-pages')\""
   },
   "repository": {
     "type": "git",

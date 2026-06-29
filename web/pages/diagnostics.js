@@ -10,7 +10,7 @@
   const { api } = OTB.api;
 
   function renderDiagnostics(view) {
-    const summaryEl = el('div', { class: 'text-dim', text: '加载中…' });
+    const summaryEl = el('div', { class: 'text-dim mt-2', text: '加载中…' });
     const btnRefresh = el('button', { class: 'btn btn-primary', text: '重新自检', onclick: load });
     const btnSkipServers = el('button', { class: 'btn', text: '只看本机（跳过 server 检查）', onclick: () => load(true) });
     const issuesCard = el('div');

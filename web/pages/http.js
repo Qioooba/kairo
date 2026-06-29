@@ -261,13 +261,14 @@
       const wrap = el('div', { class: 'http2-kv-table' });
       const rows = []; // {enabled, key, value, els}
 
-      function renderRow(rowData) {
+      function renderRow(rowData, addToRows) {
+        if (addToRows === undefined) addToRows = true;
         const check = el('input', { type: 'checkbox' });
         check.checked = rowData.enabled !== false;
         check.setAttribute('aria-label', '启用/禁用该行');
         check.title = '启用/禁用该行';
-        const keyInp = el('input', { type: 'text', placeholder: opts.keyPh || 'key', value: rowData.key || '' });
-        const valInp = el('input', { type: 'text', placeholder: opts.valPh || 'value', value: rowData.value || '' });
+        const keyInp = el('input', { type: 'text', class: 'kv-key', placeholder: opts.keyPh || 'key', value: rowData.key || '' });
+        const valInp = el('input', { type: 'text', class: 'kv-val', placeholder: opts.valPh || 'value', value: rowData.value || '' });
         const delBtn = el('button', { class: 'kv-del', text: '×', title: '删除该行' });
         const row = el('div', { class: 'kv-row' });
         if (!check.checked) row.classList.add('is-disabled');
@@ -277,7 +278,7 @@
         row.appendChild(delBtn);
         wrap.appendChild(row);
 
-        const entry = { enabled: check.checked, key: '', value: '', row, check, keyInp, valInp, delBtn };
+        const entry = { enabled: check.checked, key: keyInp.value, value: valInp.value, row, check, keyInp, valInp, delBtn };
         check.addEventListener('change', () => {
           entry.enabled = check.checked;
           row.classList.toggle('is-disabled', !check.checked);
@@ -292,23 +293,14 @@
           e.preventDefault();
           const parsed = parseBulkHeaders(txt);
           if (parsed.length === 0) return;
-          // 把当前行内容作为第一行（如果非空）
-          const curKey = keyInp.value.trim();
-          const curVal = valInp.value;
-          let inserted = false;
-          if (curKey) {
-            rows[rows.indexOf(entry)].key = curKey;
-            rows[rows.indexOf(entry)].value = curVal;
-            inserted = true;
-          }
-          // 从当前行后插入
+          entry.key = keyInp.value;
+          entry.value = valInp.value;
           const myIdx = rows.indexOf(entry);
+          let insertBefore = entry.row.nextSibling;
           parsed.forEach((p, i) => {
-            const newRow = renderRow(p);
-            if (inserted || i > 0 || myIdx >= 0) {
-              wrap.insertBefore(newRow.row, entry.row.nextSibling);
-              rows.splice(myIdx + 1 + i, 0, p);
-            }
+            const newEntry = renderRow(p, false);
+            wrap.insertBefore(newEntry.row, insertBefore);
+            rows.splice(myIdx + 1 + i, 0, newEntry);
           });
           markDirty();
         });
@@ -316,10 +308,10 @@
         keyInp.addEventListener('keydown', (e) => {
           if (e.key === 'Enter') {
             e.preventDefault();
-            const newRow = renderRow({ enabled: true, key: '', value: '' });
-            wrap.insertBefore(newRow.row, row.nextSibling);
-            rows.splice(rows.indexOf(entry) + 1, 0, { enabled: true, key: '', value: '' });
-            newRow.keyInp.focus();
+            const newEntry = renderRow({ enabled: true, key: '', value: '' }, false);
+            wrap.insertBefore(newEntry.row, row.nextSibling);
+            rows.splice(rows.indexOf(entry) + 1, 0, newEntry);
+            newEntry.keyInp.focus();
           }
           if (e.key === 'Backspace' && !keyInp.value && !valInp.value) {
             e.preventDefault();
@@ -329,11 +321,28 @@
         valInp.addEventListener('keydown', (e) => {
           if (e.key === 'Enter') {
             e.preventDefault();
-            const newRow = renderRow({ enabled: true, key: '', value: '' });
-            wrap.insertBefore(newRow.row, row.nextSibling);
-            rows.splice(rows.indexOf(entry) + 1, 0, { enabled: true, key: '', value: '' });
-            newRow.keyInp.focus();
+            const newEntry = renderRow({ enabled: true, key: '', value: '' }, false);
+            wrap.insertBefore(newEntry.row, row.nextSibling);
+            rows.splice(rows.indexOf(entry) + 1, 0, newEntry);
+            newEntry.keyInp.focus();
           }
+        });
+        valInp.addEventListener('paste', (e) => {
+          const txt = (e.clipboardData || window.clipboardData).getData('text');
+          if (!txt || (!txt.includes('\n') && !txt.includes(':'))) return;
+          e.preventDefault();
+          const parsed = parseBulkHeaders(txt);
+          if (parsed.length === 0) return;
+          entry.key = keyInp.value;
+          entry.value = valInp.value;
+          const myIdx = rows.indexOf(entry);
+          let insertBefore = entry.row.nextSibling;
+          parsed.forEach((p, i) => {
+            const newEntry = renderRow(p, false);
+            wrap.insertBefore(newEntry.row, insertBefore);
+            rows.splice(myIdx + 1 + i, 0, newEntry);
+          });
+          markDirty();
         });
         delBtn.addEventListener('click', () => {
           const idx = rows.indexOf(entry);
@@ -348,7 +357,9 @@
           }
         });
 
-        rows.push(entry);
+        if (addToRows) {
+          rows.push(entry);
+        }
         return entry;
       }
 
@@ -493,7 +504,7 @@
 
     const bodyTabs = el('div', { class: 'http2-tabs' });
 
-    const bodyNone = el('div', { class: 'http2-resp-empty', text: '此请求不发送 Body' });
+    const bodyNone = el('div', { class: 'http2-mute', style: 'padding:12px 0;text-align:center;', text: '此请求不发送 Body' });
 
     const bodyForm = el('div');
     bodyForm.appendChild(el('div', { class: 'http2-section-desc', text: 'multipart/form-data（每行一个字段，key 留空删除）' }));
@@ -508,7 +519,6 @@
     const bodyRaw = el('div', { class: 'http2-raw-wrap' });
     const bodyMeta = el('div', { class: 'http2-raw-meta' }, [
       el('span', { text: '0 行 · 0 B' }),
-      el('span', { text: '' }),
     ]);
     const bodyToolbar = el('div', { class: 'http2-raw-toolbar' });
     bodyToolbar.appendChild(el('div', { class: 'http2-raw-toolbar-left' }, [
@@ -577,7 +587,7 @@
     ]);
 
     const respHeadersPre = el('pre', { class: 'http2-resp-headers' });
-    respHeadersPre.appendChild(el('div', { class: 'http2-mute', text: '（响应头会显示在这里）' }));
+    respHeadersPre.appendChild(el('span', { class: 'http2-mute', text: '（响应头会显示在这里）' }));
 
     const respBodyView = el('div', { class: 'http2-resp-body-wrap' });
     respBodyView.appendChild(el('div', { class: 'http2-resp-empty', text: '点击 Send 发送请求查看响应' }));
@@ -605,7 +615,6 @@
     respTabBar.appendChild(respLangBadge);
 
     const respToolbar = el('div', { class: 'http2-resp-toolbar' });
-    const respTrLeft = el('div', { class: 'http2-raw-toolbar-left', text: '' });
     const respTrRight = el('div', { class: 'http2-raw-toolbar-right' });
 
     const btnCopyResp = el('button', { class: 'btn btn-mini', text: '复制 Body', onclick: () => {
@@ -636,7 +645,6 @@
     respTrRight.appendChild(btnCopyResp);
     respTrRight.appendChild(btnDownloadResp);
     respTrRight.appendChild(btnCopyCurl);
-    respToolbar.appendChild(respTrLeft);
     respToolbar.appendChild(respTrRight);
 
     respViewWrap.appendChild(respTabBar);
@@ -701,7 +709,7 @@
     function renderRespHeaders(headers) {
       respHeadersPre.innerHTML = '';
       if (!headers || Object.keys(headers).length === 0) {
-        respHeadersPre.appendChild(el('div', { class: 'http2-mute', text: '（响应头会显示在这里）' }));
+        respHeadersPre.appendChild(el('span', { class: 'http2-mute', text: '（响应头会显示在这里）' }));
         return;
       }
       const lines = Object.keys(headers).sort().map(k => {
@@ -795,7 +803,7 @@
           renderRespHeaders(r.headers || {});
           renderRespBody();
           if (r.final_url && r.final_url !== url) {
-            respMeta.appendChild(el('span', null, [document.createTextNode('→ ' + r.final_url)]));
+            respMeta.appendChild(el('span', { style: 'max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;', title: r.final_url, text: '→ ' + r.final_url }));
           }
         } else {
           respStatus.className = 'http2-resp-status s-err';
@@ -806,7 +814,6 @@
         }
         try {
           const snap = { method, url: urlRaw };
-          if (window.__opsActiveDL === null) {/* noop */} // 防 unused
           const hist = JSON.parse(localStorage.getItem('otb:http:history') || '[]')
             .filter(s => !(s.method === method && s.url === urlRaw));
           hist.unshift(snap);

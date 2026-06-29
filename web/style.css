@@ -384,6 +384,15 @@ body {
 @media (max-width: 1280px) { .grid-4 { grid-template-columns: repeat(2, 1fr); } .grid-5 { grid-template-columns: repeat(3, 1fr); } }
 @media (max-width: 900px)  { .grid-3 { grid-template-columns: 1fr; } .grid-5 { grid-template-columns: repeat(2, 1fr); } }
 
+.ws-query-wrap { position: relative; width: 100%; display: block; }
+#ws-query { width: 100%; box-sizing: border-box; }
+.ws-query-popover-empty { padding: 16px 14px !important; text-align: center !important; }
+.ws-query-popover-row { padding: 10px 14px; display: flex; justify-content: space-between; align-items: center; gap: 10px; border-bottom: 1px solid var(--line); cursor: pointer; }
+.ws-query-popover-row:hover { background: var(--bg-2); }
+.ws-query-popover-sep { height: 1px; background: var(--line); margin: 4px 0; }
+.ws-query-popover-clear { padding: 10px 14px; cursor: pointer; color: var(--text-dim); font-size: 12px; text-align: center; }
+.ws-query-popover-clear:hover { color: var(--error); background: var(--bg-2); }
+
 /* 2026-06-24：选择目标服务器 — 业务系统/默认目录/SSH 用户名/SSH 密码/记住密码/测试连接 单行展示
    宽屏（≥1280px）：6 列一行
    中屏（900-1280px）：3 列 × 2 行（业务系统+默认目录+用户名 / 密码+记住+测试）
@@ -566,7 +575,8 @@ textarea { resize: vertical; min-height: 100px; font-family: ui-monospace, SFMon
   color: #fff;
   box-shadow: var(--btn-primary-shadow);
 }
-.btn-primary:hover { filter: brightness(1.08); }
+.btn-primary:hover { filter: brightness(1.1); transform: translateY(-1px); box-shadow: 0 8px 20px rgba(79,140,255,0.4); }
+.btn-primary:active { filter: brightness(0.95); transform: translateY(0); }
 .btn-danger { background: var(--btn-danger-grad); border-color: transparent; color: #fff; }
 /* v0.9 UI-1：清空类按钮的"软"红 — 淡红底 + 红边 + 红字，不再用 .btn-danger 那种
    高饱和渐变实心红。和单行删除按钮 (.btn-danger.btn-sm) 区分开——一个醒目警告，一个柔和提示。 */
@@ -716,8 +726,10 @@ textarea { resize: vertical; min-height: 100px; font-family: ui-monospace, SFMon
 .row.between { justify-content: space-between; }
 .gap-2 { gap: 8px; }
 .gap-3 { gap: 12px; }
+.mt-1 { margin-top: 4px; }
 .mt-2 { margin-top: 8px; }
 .mt-3 { margin-top: 14px; }
+.mt-4 { margin-top: 20px; }
 .mb-2 { margin-bottom: 8px; }
 .mb-3 { margin-bottom: 14px; }
 .text-dim { color: var(--text-dim); }
@@ -725,8 +737,13 @@ textarea { resize: vertical; min-height: 100px; font-family: ui-monospace, SFMon
 .text-err { color: var(--error); }
 .text-ok { color: var(--success); }
 .code-inline {
-  background: var(--code-inline-bg, #0a0e14); border: 1px solid var(--line); border-radius: 6px;
-  padding: 1px 6px; font-family: ui-monospace, monospace; font-size: 12.5px;
+  background: var(--code-inline-bg, #0a0e14);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 1px 6px;
+  font-family: ui-monospace, monospace;
+  font-size: 12.5px;
 }
 .section-title { font-size: 18px; font-weight: 700; margin: 0 0 6px; }
 .section-sub { color: var(--text-dim); font-size: 13px; margin-bottom: 18px; }
@@ -1415,6 +1432,7 @@ input[type="datetime-local"] {
   --error: #b04545;
   --info: #4a7e8a;
   --tail-out-bg: #f6f9ef;
+  --code-inline-bg: #e8efdd;
   /* v0.7 主题适配：green 主题下 .tag 紫字（来自 --tag-fg=#c0aaff）跟米绿底对比差；
      用绿色系变量替代，跟主色调和谐。*/
   --tag-bg: rgba(63, 122, 63, 0.12);
@@ -1481,6 +1499,7 @@ input[type="datetime-local"] {
   --error: #ff5555;
   --info: #88ccff;
   --tail-out-bg: #0a0a0a;
+  --code-inline-bg: #1a1a1a;
   /* v0.7 主题适配：hc 黑底 .tag 改成纯黑 + 亮黄字，对比度 ~16:1*/
   --tag-bg: #000000;
   --tag-fg: #ffff00;
@@ -2006,46 +2025,45 @@ input[type="datetime-local"] {
 @media (max-width: 1180px) { .http2-layout { flex-direction: column; } }
 
 .http2-sidebar {
-  width: 240px; flex: 0 0 240px; min-width: 220px;
+  width: 260px; flex: 0 0 260px; min-width: 240px;
   background: linear-gradient(180deg, var(--bg-2), var(--bg-1));
   border: 1px solid var(--line);
   border-radius: 12px;
-  /* 对齐修复：padding-top 与右侧 .http2-card 的 12px 一致，
-     让 sidebar 内首个元素（h3）与主区首个 card 内的 urlRow 顶部齐平。 */
-  padding: 12px 12px;
-  max-height: calc(100vh - 130px);
+  padding: 14px 14px;
+  max-height: calc(100vh - 100px);
   display: flex; flex-direction: column;
-  position: sticky; top: 70px;
+  position: sticky; top: 80px;
   box-shadow: var(--shadow-sm);
+  overflow: hidden;
 }
 /* 窄屏适配：sidebar 收窄，避免挤占主内容区 */
 @media (max-width: 900px) {
   .http2-sidebar { width: 220px; flex: 0 0 220px; min-width: 200px; }
 }
-.http2-sidebar h3 { margin: 0 0 8px; font-size: 12px; color: var(--text-dim); letter-spacing: 0.06em; text-transform: uppercase; }
+.http2-sidebar h3 { margin: 0 0 10px; font-size: 12px; color: var(--text-dim); letter-spacing: 0.06em; text-transform: uppercase; }
 .http2-sidebar-search {
   display: flex; align-items: center; gap: 6px;
   background: var(--bg-3);
   border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 4px 8px;
-  margin-bottom: 8px;
+  border-radius: 8px;
+  padding: 6px 10px;
+  margin-bottom: 10px;
   transition: border-color 0.15s ease;
 }
 .http2-sidebar-search:focus-within { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(79,140,255,0.15); }
 .http2-sidebar-search input {
   flex: 1; background: transparent; border: none; outline: none;
-  color: var(--text); font-size: 12.5px;
+  color: var(--text); font-size: 13px;
   min-height: 28px;
-  padding: 4px 0;
+  padding: 2px 0;
 }
-.http2-sidebar-search-icon { color: var(--text-dim); font-size: 13px; flex: 0 0 auto; }
+.http2-sidebar-search-icon { color: var(--text-dim); font-size: 14px; flex: 0 0 auto; }
 
 .http2-sidebar-tools {
-  display: flex; gap: 4px; margin-bottom: 8px;
-  padding-bottom: 8px; border-bottom: 1px dashed var(--line);
+  display: flex; gap: 6px; margin-bottom: 10px;
+  padding-bottom: 10px; border-bottom: 1px solid var(--line);
 }
-.http2-sidebar-tools .btn { flex: 1; font-size: 11px; padding: 5px 8px; min-height: 30px; }
+.http2-sidebar-tools .btn { flex: 1; font-size: 11.5px; padding: 6px 8px; min-height: 30px; }
 
 .http2-cases-wrap { flex: 1; overflow-y: auto; margin: 0 -4px; padding: 0 4px; }
 .http2-cases-wrap::-webkit-scrollbar { width: 6px; }
@@ -2151,7 +2169,7 @@ input[type="datetime-local"] {
 
 /* —— URL 行 —— */
 .http2-url-row {
-  display: flex; align-items: stretch; gap: 0;
+  display: flex; align-items: center; gap: 0;
   background: var(--bg-1); border: 1px solid var(--line);
   border-radius: 10px; overflow: hidden;
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
@@ -2182,6 +2200,8 @@ input[type="datetime-local"] {
   letter-spacing: 0.06em;
   display: flex; align-items: center; gap: 6px;
   transition: filter 0.15s ease;
+  border-radius: 20px;
+  height: 32px;
 }
 .http2-send-btn:hover:not(:disabled) {
   background: linear-gradient(135deg, var(--primary), var(--primary-2)) !important;
@@ -2534,7 +2554,7 @@ input[type="datetime-local"] {
   margin-bottom: 8px;
 }
 .cmd-syntax {
-  margin: 0; padding: 10px 12px;
+  margin: 0; padding: 10px 72px 10px 12px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12.5px; line-height: 1.55;
   color: var(--text);

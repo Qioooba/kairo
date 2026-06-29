@@ -68,23 +68,13 @@
     warnBox.appendChild(warnBody);
 
     const connCard = el('div', { class: 'card' });
-    connCard.appendChild(el('h3', { text: '1. 选择目标服务器' }));
+    connCard.appendChild(el('h3', { text: '选择目标服务器' }));
     connCard.appendChild(el('div', { class: 'card-desc', text: '支持任意路径浏览；下载权限以 SSH 账号实际权限为准。' }));
     connCard.appendChild(el('div', { class: 'grid-2' }, [
       el('label', null, [el('span', { class: 'lbl', text: '业务系统' }), sysSel]),
       el('label', null, [el('span', { class: 'lbl', text: '服务器' }), srvSel])
     ]));
-    // P0-BUG-2：用户名/密码输入区。视觉上独立行，配色与主表单区分（淡蓝背景）。
-    const credRow = el('div', { class: 'files-cred-row', style: 'display:flex; gap:10px; flex-wrap:wrap; align-items:center;' }, [
-      el('label', { style: 'flex: 1 1 220px; margin: 0; display:flex; flex-direction:column; gap:4px;' }, [
-        el('span', { class: 'lbl', text: 'SSH 用户名（可覆盖服务器默认）' }), userInput
-      ]),
-      el('label', { style: 'flex: 1 1 220px; margin: 0; display:flex; flex-direction:column; gap:4px;' }, [
-        el('span', { class: 'lbl', text: 'SSH 密码（留空 → keyring / 临时）' }), passInput
-      ])
-    ]);
-    connCard.appendChild(credRow);
-    connCard.appendChild(el('div', { class: 'mt-2', style: 'display:flex;align-items:center;gap:10px' }, [rememberLabel, btnConnect]));
+    connCard.appendChild(el('div', { class: 'btn-row mt-2' }, [btnConnect]));
 
     // ---- 路径区 ----
     const crumbsEl = el('div', { class: 'file-crumbs', style: 'font-family: ui-monospace, monospace; font-size: 13px;' });
@@ -101,7 +91,7 @@
     pathCard.appendChild(pathInp);
 
     // v0.5 #2：常用目录栏（点即跳转；星标加入/管理）
-    const commonDirsBar = el('div', { class: 'common-dirs-bar', style: 'margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center;' });
+    const commonDirsBar = el('div', { class: 'common-dirs-bar', style: 'margin: 10px 0 12px 0; display: flex; flex-wrap: wrap; gap: 6px; align-items: center;' });
     const commonDirsLabel = el('span', { class: 'lbl', text: '常用目录：' });
     commonDirsBar.appendChild(commonDirsLabel);
     // ★ 收藏当前路径 按钮（连同当前 system+server 存进 localStorage）
@@ -141,7 +131,7 @@
       type: 'text',
       id: 'files-filter',
       placeholder: '过滤文件名（子串 / 通配符 * ?, 例 SystemOut 或 *.log）',
-      style: 'flex: 1 1 auto; min-width: 200px; width: auto;'
+      style: 'flex: 3 1 auto; min-width: 300px; width: auto;'
     });
     let filterDebounce = null;
     filterInp.addEventListener('input', () => {
@@ -237,36 +227,7 @@
     }
 
     function renderFileBrowserWarning(info) {
-      const app = (info && info.app) || {};
-      const enabled = app.enable_free_file_browser === undefined || app.enable_free_file_browser === true;
-      const roots = Array.isArray(app.free_file_roots) ? app.free_file_roots : [];
-
-      while (warnBody.firstChild) warnBody.removeChild(warnBody.firstChild);
-      const titleEl = $('#files-warn-title');
-
-      if (!enabled) {
-        titleEl.textContent = '⛔ 文件浏览器已关闭';
-        warnBody.appendChild(el('div', { class: 'text-dim', text:
-          'config.yaml 里 app.enable_free_file_browser = false。整个文件浏览功能已停用。' }));
-        warnBox.style.display = '';
-        return;
-      }
-      if (roots.length > 0) {
-        titleEl.textContent = '✓ 文件浏览器（白名单模式）';
-        warnBody.appendChild(el('div', { class: 'text-dim', text:
-          '仅以下前缀的路径可访问（其它路径会被服务端拒绝 403）：' }));
-        const ul = el('ul', { style: 'margin: 6px 0 0 0; padding-left: 20px;' });
-        roots.forEach(r => ul.appendChild(el('li', { text: r })));
-        warnBody.appendChild(ul);
-        warnBox.style.display = '';
-        return;
-      }
-      titleEl.textContent = '⚠ 文件浏览器（自由模式 · 无白名单）';
-      warnBody.appendChild(el('div', { class: 'text-err', text:
-        '当前可访问任何 SSH 账号有权限的路径（包括 /etc、/root 等敏感目录）。' }));
-      warnBody.appendChild(el('div', { class: 'text-dim mt-1', style: 'font-size: 12px;', text:
-        '建议在 config.yaml 加 app.free_file_roots（如 /var/log、/opt/websphere）以缩小可访问范围。' }));
-      warnBox.style.display = '';
+      // 隐藏文件浏览器警告卡片
     }
 
     function refreshCredStatus() {

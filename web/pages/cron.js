@@ -124,9 +124,11 @@
     const btnParse = el('button', { class: 'btn btn-primary', text: '解析', onclick: doParse });
     const btnClear = el('button', { class: 'btn', text: '清空', onclick: () => {
       inInp.value = '';
-      statusTag.textContent = '—'; statusTag.className = 'tag';
+      statusTag.textContent = '—'; statusTag.className = 'tag'; statusTag.style.visibility = 'hidden';
+      secTag.textContent = ''; secTag.className = 'tag'; secTag.style.visibility = 'hidden';
       descBox.textContent = '点"解析"后展示字段含义';
       nextList.innerHTML = ''; prevList.innerHTML = '';
+      reqId++;
     }});
 
     // 样例按钮

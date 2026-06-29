@@ -1,6 +1,7 @@
-[2026-06-19 08:00:00.000] 00000050 org.springframework.web.context.ContextLoader  INFO    Root WebApplicationContext 初始化
-[2026-06-19 08:00:01.000] 00000050 org.springframework.web.servlet.DispatcherServlet  INFO    FrameworkServlet 'spring' 初始化完成
-[2026-06-19 08:05:00.000] 00000050 user.App  INFO    app started
-[2026-06-19 08:30:00.000] 00000050 user.App  DEBUG   debug heartbeat
-[2026-06-19 09:00:00.000] 00000050 user.App  INFO    业务侧普通 INFO
-[2026-06-19 09:30:00.000] 00000050 user.App  WARN    业务侧普通 WARN
+[2026-06-28 09:00:00.000] APP INFO  应用启动成功
+[2026-06-28 09:00:01.000] APP INFO  配置加载完成
+[2026-06-28 09:00:02.000] APP INFO  数据库连接成功
+[2026-06-28 09:00:03.000] APP INFO  HTTP 服务启动完成 port=8080
+[2026-06-28 09:00:05.000] APP WARN  内存使用率 85%
+[2026-06-28 09:00:10.000] APP ERROR 连接超时 host=db.example.com
+[2026-06-28 09:00:15.000] APP INFO  重试成功

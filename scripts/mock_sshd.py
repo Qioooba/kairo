@@ -36,9 +36,10 @@ except Exception:  # 旧 paramiko 没有这些常量时降级
     SFTP_NO_SUCH_FILE = 2
 
 HOST = os.environ.get("MOCK_SSHD_HOST", "127.0.0.1")
-PORT = int(os.environ.get("MOCK_SSHD_PORT", "2222"))
-PASSWORD = os.environ.get("MOCK_SSHD_PASSWORD", "ops")
-FAKE_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "fake-websphere"))
+PORT = int(os.environ.get("MOCK_SSHD_PORT", "2225"))
+PASSWORD = os.environ.get("MOCK_SSHD_PASSWORD", "test")
+FAKE_ROOT = os.environ.get("FAKE_ROOT", os.path.abspath(os.path.join(os.path.dirname(__file__), "fake-websphere")))
+FAKE_FILES_ROOT = os.environ.get("FAKE_FILES_ROOT", os.path.abspath(os.path.join(os.path.dirname(__file__), "fake-files")))
 
 # 把 OpsToolbox 配置里的远程绝对路径映射到 FAKE_ROOT 下的相对路径。
 PATH_MAP = {
@@ -75,8 +76,42 @@ def gnu_to_bsd_find(cmd):
 
 def translate_for_mock(command):
     """路径映射 + GNU→BSD 转换。"""
+    # WebSphere 日志路径
     for fake_abs, real_rel in PATH_MAP.items():
         command = command.replace(fake_abs, real_rel)
+
+    # Files/FTP 路径：对于以 / 开头但不是 WebSphere 路径的命令，
+    # 把 / 替换为 FAKE_FILES_ROOT（安全限制：只替换字面值 /）
+    # 这样 "ls /" 变成 "ls /path/to/fake-files"
+    # 但 "cat /opt/IBM/..." 不会被影响（已经被上面的循环处理）
+    if not command.startswith('/opt/IBM') and not command.startswith('"') and not command.startswith("'"):
+        # 简单情况：命令以 ls / 或 cat / 等开头
+        import shlex
+        try:
+            parts = shlex.split(command)
+            new_parts = []
+            for i, part in enumerate(parts):
+                if part == '/' and i == len(parts) - 1:
+                    # 单独的 / 参数，替换为 FAKE_FILES_ROOT
+                    new_parts.append(FAKE_FILES_ROOT)
+                elif part.startswith('/') and not part.startswith(FAKE_FILES_ROOT):
+                    # 绝对路径参数，检查是否是 WebSphere 路径
+                    if '/opt/IBM' not in part:
+                        # 非 WebSphere 路径，当作 Files 路径
+                        rel = part.lstrip('/')
+                        new_parts.append(os.path.join(FAKE_FILES_ROOT, rel))
+                    else:
+                        new_parts.append(part)
+                else:
+                    new_parts.append(part)
+            command = ' '.join(shlex.quote(p) for p in new_parts)
+        except Exception:
+            # 如果解析失败，用简单的字符串替换
+            if command.startswith('ls /') or command.startswith('cat /') or command.startswith('stat /'):
+                command = command.replace('/ ', FAKE_FILES_ROOT + '/', 1)
+                command = command.replace('/\'', FAKE_FILES_ROOT + '/\'')
+                command = command.replace('"/', FAKE_FILES_ROOT + '/"')
+
     command = gnu_to_bsd_find(command)
     return command
 
@@ -217,11 +252,13 @@ class ReadOnlySFTPServer(SFTPServerInterface):
         super().__init__(server, *args, **kwargs)
 
     def _resolve(self, path):
-        """把客户端传入的"远程路径"翻译成 FAKE_ROOT 下的真实路径。"""
+        """把客户端传入的"远程路径"翻译到 FAKE_ROOT 或 FAKE_FILES_ROOT 下。"""
         if path is None:
             path = "/"
         if not path.startswith("/"):
             path = "/" + path
+
+        # 先查 PATH_MAP（WebSphere 日志路径）
         for fake_abs, real_rel in PATH_MAP.items():
             if path == fake_abs:
                 return os.path.join(FAKE_ROOT, real_rel)
@@ -229,6 +266,21 @@ class ReadOnlySFTPServer(SFTPServerInterface):
             if path.startswith(prefix):
                 rel = path[len(prefix):]
                 return os.path.join(FAKE_ROOT, real_rel, rel)
+
+        # Files / FTP 场景：根路径 "/" 映射到 FAKE_FILES_ROOT
+        # FTP 服务器的 root 是 "/"，所以 /file.txt → FAKE_FILES_ROOT/file.txt
+        if path == "/" or not path.startswith("/opt/IBM"):
+            # 如果 path 是文件或目录的绝对路径（如 /README.md），
+            # 直接拼接到 FAKE_FILES_ROOT
+            rel_path = path.lstrip("/")
+            fake_path = os.path.join(FAKE_FILES_ROOT, rel_path) if rel_path else FAKE_FILES_ROOT
+            # 安全检查：确保结果在 FAKE_FILES_ROOT 下
+            real = os.path.abspath(fake_path)
+            root = os.path.abspath(FAKE_FILES_ROOT)
+            if real.startswith(root):
+                return real
+            return None
+
         # 不在白名单里：拒绝
         return None
 
@@ -350,12 +402,17 @@ def main():
     if not os.path.isdir(FAKE_ROOT):
         print(f"FAKE_ROOT 不存在: {FAKE_ROOT}", file=sys.stderr)
         sys.exit(1)
+    if not os.path.isdir(FAKE_FILES_ROOT):
+        print(f"FAKE_FILES_ROOT 不存在: {FAKE_FILES_ROOT}", file=sys.stderr)
+        sys.exit(1)
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.bind((HOST, PORT))
     sock.listen(50)
-    print(f"Mock SSH listening on {HOST}:{PORT} (root={FAKE_ROOT})", file=sys.stderr)
+    print(f"Mock SSH listening on {HOST}:{PORT}", file=sys.stderr)
+    print(f"  FAKE_ROOT (WebSphere): {FAKE_ROOT}", file=sys.stderr)
+    print(f"  FAKE_FILES_ROOT (Files/FTP): {FAKE_FILES_ROOT}", file=sys.stderr)
 
     while True:
         client, addr = sock.accept()

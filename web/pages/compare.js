@@ -404,9 +404,6 @@
         ignore: ignore,
       });
       lastResult = r;
-      // 主页面 resultBox 先渲染一遍（inline fallback），保证弹窗被拦截时也能看到结果。
-      if (activeRenderResult) activeRenderResult(r);
-      // 然后开 popup 显示独立窗口版本（带 prev/next 导航 + 复制/下载）。
       openDiffInNewWindow(r.unified_diff || '', 'left vs right', r.stats, {
         mode: outputMode,
         hideEqual: hideEqualRows,
@@ -854,7 +851,6 @@
         outputMode = checked.value;
         saveMode(outputMode);
         cbHideEqualWrap.style.display = (outputMode === 'side') ? '' : 'none';
-        renderResult();
       }
     }
     rdoUnified.addEventListener('change', syncMode);
@@ -863,7 +859,6 @@
     cbHideEqual.addEventListener('change', () => {
       hideEqualRows = cbHideEqual.checked;
       saveHideEqual(hideEqualRows);
-      renderResult();
     });
     cbHideEqualWrap.style.display = (outputMode === 'side') ? '' : 'none';
 
@@ -879,7 +874,6 @@
       leftFileLabel.textContent = '未选择文件';
       rightFileLabel.textContent = '未选择文件';
       lastResult = null;
-      renderResult();
     }});
     const btnCopy = el('button', { class: 'btn', text: '复制 diff', onclick: () => {
       if (!lastResult || !lastResult.unified_diff) { toast('暂无可复制的 diff', 'warn'); return; }
@@ -903,78 +897,6 @@
         }
       });
     });
-
-    const statsBar = el('div', { class: 'diff-stats muted', text: '尚未比对' });
-    const resultBox = el('div', { class: 'diff-result d2h-wrapper' });
-
-    function renderResult(result) {
-      const r = result || lastResult;
-      if (!r) {
-        statsBar.textContent = '尚未比对';
-        resultBox.innerHTML = '';
-        resultBox.className = 'diff-result d2h-wrapper';
-        return;
-      }
-      const s = r.stats;
-      statsBar.textContent =
-        '共 ' + s.left_lines + ' → ' + s.right_lines + ' 行 · ' +
-        '新增 ' + s.added + ' · 删除 ' + s.removed + ' · 共同 ' + s.common;
-
-      // 同步在 resultBox 里 inline 渲染 diff：即使弹窗被拦截，用户也能看到结果。
-      // 模式分支：
-      //   - 'changes'：手写只显示 +/-/@ 行（diff2html 不支持）
-      //   - 其他：用 window.Diff2Html（主页面全局可用）
-      const unified = r.unified_diff || '';
-      if (!unified.trim()) {
-        resultBox.innerHTML = '<div class="muted" style="padding:16px;text-align:center;">两侧完全一致，无差异。</div>';
-        return;
-      }
-      if (outputMode === 'changes') {
-        resultBox.innerHTML = renderChangesOnly(unified);
-        return;
-      }
-      const localD2H = (typeof window.Diff2Html !== 'undefined') ? window.Diff2Html : null;
-      if (!localD2H) {
-        resultBox.innerHTML = '<pre style="padding:16px;white-space:pre-wrap;word-break:break-all;">' + escapeHtmlInline(unified) + '</pre>';
-        return;
-      }
-      try {
-        const fmt = (outputMode === 'side') ? 'side-by-side' : 'line-by-line';
-        const html = localD2H.html(unified, {
-          outputFormat: fmt,
-          drawFileList: false,
-          matching: 'lines',
-          renderNothingWhenEmpty: false,
-          hideEqualRows: !!hideEqualRows,
-        });
-        resultBox.innerHTML = html;
-      } catch (e) {
-        resultBox.innerHTML = '<pre style="padding:16px;white-space:pre-wrap;word-break:break-all;">' + escapeHtmlInline(unified) + '</pre>';
-      }
-    }
-    function escapeHtmlInline(s) {
-      const d = document.createElement('div');
-      d.textContent = s;
-      return d.innerHTML;
-    }
-    function renderChangesOnly(unified) {
-      // '仅差异行' 模式：手写实现，diff2html 没有原生支持。
-      const lines = unified.split('\n');
-      let html = '<pre class="cmp-changes-only" style="padding:12px;line-height:1.6;font-size:12.5px;background:var(--bg2);border-radius:6px;">';
-      for (let i = 0; i < lines.length; i++) {
-        const ln = lines[i];
-        const ch = ln.charAt(0);
-        let color = 'var(--text, #e6edf3)';
-        let bg = 'transparent';
-        if (ch === '+') { color = '#3fb950'; bg = 'rgba(46,160,67,0.15)'; }
-        else if (ch === '-') { color = '#f85149'; bg = 'rgba(248,81,73,0.15)'; }
-        else if (ch === '@') { color = '#58a6ff'; }
-        html += '<div style="background:' + bg + ';color:' + color + ';padding:0 8px;">' + escapeHtmlInline(ln) + '</div>';
-      }
-      html += '</pre>';
-      return html;
-    }
-    activeRenderResult = renderResult;
 
     const leftFolderPathInp = el('input', {
       type: 'text',
@@ -1115,7 +1037,6 @@
         ]),
       ]),
       el('div', { class: 'btn-row mt-3' }, [btnGo, btnSwap, btnClear, btnCopy, btnDownload]),
-      el('div', { class: 'diff-result-wrap' }, [statsBar, resultBox]),
     ]);
 
     const folderArea = el('div', { class: 'cmp-folder-area', id: 'cmp-folder-area', style: 'display:none;' }, [
@@ -1167,8 +1088,6 @@
 
     makeDropTarget(leftTa, leftFileLabel);
     makeDropTarget(rightTa, rightFileLabel);
-
-    renderResult();
   }
 
   function makeCheckbox(input, label) {

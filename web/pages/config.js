@@ -415,7 +415,7 @@
       const btnDirDown = el('button', { class: 'btn btn-sm', text: '↓', onclick: () => { if (ldi < srv.log_dirs.length - 1) { [srv.log_dirs[ldi+1], srv.log_dirs[ldi]] = [srv.log_dirs[ldi], srv.log_dirs[ldi+1]]; onEdit(); renderEditor(); } } });
       const btnDirDel = el('button', { class: 'btn btn-sm btn-danger', text: '删除目录', onclick: async () => { if (await confirmDialog('确认删除日志目录 "' + (ld.name || ld.path || '(未命名)') + '" ？')) { srv.log_dirs.splice(ldi, 1); onEdit(); renderEditor(); } } });
       btnDirUp.disabled = ldi === 0; btnDirDown.disabled = ldi === srv.log_dirs.length - 1;
-      wrap.appendChild(el('div', { class: 'dir-actions' }, [btnDirDup, btnDirUp, btnDirDown, btnDirDel]));
+      wrap.appendChild(el('div', { class: 'dir-actions' }, [btnDirUp, btnDirDown, btnDirDup, btnDirDel]));
       return wrap;
     }
 

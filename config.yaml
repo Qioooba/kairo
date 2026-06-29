@@ -10,6 +10,11 @@ app:
     ssh_traffic_dump: false
     ssh_log_max_mb: 20
     ssh_log_keep: 3
+    allow_insecure_host_key: true
+    free_file_roots:
+        - "*"
+    compare_allowed_roots:
+        - "*"
     external_openers:
         - name: Notepad++
           path: C:\Windows\notepad.exe
@@ -28,6 +33,7 @@ systems:
           port: 2225
           username: test
           auth_type: password
+          password: test
           log_dirs:
             - name: AppSrv01 server1
               path: /opt/IBM/WebSphere/AppServer/profiles/AppSrv01/logs/server1

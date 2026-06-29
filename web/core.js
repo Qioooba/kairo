@@ -427,6 +427,28 @@
   core.getActiveDL = getActiveDL;
   core.clearActiveDL = clearActiveDL;
 
+  // -------- 全局 activeTail 管理（websphere 页 tail 时注册，navigate 切走时清理）--------
+
+  if (typeof window !== 'undefined') {
+    window.__opsActiveTail = window.__opsActiveTail || null;
+  }
+
+  function setActiveTail(tail) {
+    window.__opsActiveTail = tail;
+  }
+  function getActiveTail() {
+    return window.__opsActiveTail;
+  }
+  function clearActiveTail() {
+    if (window.__opsActiveTail) {
+      try { window.__opsActiveTail.evtsrc && window.__opsActiveTail.evtsrc.close(); } catch (e) { /* ignore */ }
+    }
+    window.__opsActiveTail = null;
+  }
+  core.setActiveTail = setActiveTail;
+  core.getActiveTail = getActiveTail;
+  core.clearActiveTail = clearActiveTail;
+
   // -------- "上次选择" 记忆（系统 / 服务器 / 日志目录 / 凭据） --------
   //
   // 用 localStorage 跨页面跨刷新记，键格式 otb:last:<page>:<key>

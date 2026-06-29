@@ -73,6 +73,14 @@
 
     const cbStrict = el('input', { type: 'checkbox' });
     cbStrict.checked = last.strict !== false; // 默认开
+    const strictLabelText = document.createTextNode('  严格模式（JSON 不合法直接报错）');
+    const strictStatusText = el('span', { class: 'muted', text: cbStrict.checked ? '严格模式：JSON 必须合法' : '宽松模式：尽量解析' });
+    function updateStrictLabel() {
+      const isStrict = cbStrict.checked;
+      strictStatusText.textContent = isStrict ? '严格模式：JSON 必须合法' : '宽松模式：尽量解析';
+      strictLabelText.textContent = isStrict ? '  严格模式（JSON 不合法直接报错）' : '  宽松模式（尽量解析，允许尾部垃圾）';
+    }
+    cbStrict.addEventListener('change', updateStrictLabel);
 
     const typeTag = el('span', { class: 'muted', text: '—' });
     const elapsedTag = el('span', { class: 'muted', text: '' });
@@ -157,7 +165,7 @@
         el('div', null, [
           el('div', { class: 'cmp-pane-header' }, [
             el('label', { text: '输入 JSON' }),
-            el('span', { class: 'muted', text: cbStrict.checked ? '严格模式：JSON 必须合法' : '宽松模式：尽量解析' }),
+            strictStatusText,
           ]),
           inTa,
         ]),
@@ -173,7 +181,7 @@
           ]),
           el('label', { class: 'cmp-opt', style: 'display:block; margin-bottom:8px' }, [
             cbStrict,
-            document.createTextNode('  严格模式（JSON 不合法直接报错）'),
+            strictLabelText,
           ]),
           outTa,
         ]),

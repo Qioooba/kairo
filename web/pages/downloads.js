@@ -118,8 +118,8 @@
       ])));
       const tbody = el('tbody');
       files.forEach(f => {
-        const fromServer = f.server || '（未记录）';
-        const fromDir = f.dir || '（未记录）';
+        const fromServer = f.server || '—';
+        const fromDir = f.dir || '—';
         const fromFile = f.kind === 'zip'
           ? '📦 ' + (f.files && f.files.length ? f.files.length + ' 个文件' : 'zip')
           : (f.file || '?');
@@ -142,7 +142,7 @@
           el('td', { class: 'num', style: 'text-align:right;', text: f.size_human || '-' }),
           el('td', { class: 'muted', text: f.downloaded_at || f.mod_time || '-' }),
           buildFromCell(fromServer, fromDir, fromFile),
-          el('td', { class: 'actions', style: 'display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end;' },
+          el('td', { class: 'actions', style: 'display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end; align-items:center;' },
             [openDir, ...openerBtns, del])
         ]));
       });
@@ -154,14 +154,15 @@
     // buildNameCell 构造"文件名"单元格：点文件名 → 新 tab 预览/下载。
     function buildNameCell(f) {
       const td = el('td');
-      const safeName = encodeURIComponent(f.name || '');
+      const nameParts = (f.name || '').split('/');
+      const encodedPath = nameParts.map(p => encodeURIComponent(p)).join('/');
       const link = el('a', {
-        href: '/downloads/' + safeName,
+        href: '/downloads/' + encodedPath,
         target: '_blank',
         title: '点击预览/下载',
         style: 'text-decoration:none; color:inherit;'
       });
-      link.appendChild(el('code', { text: f.name || '' }));
+      link.appendChild(el('code', { text: nameParts[nameParts.length - 1] || '' }));
       td.appendChild(link);
       if (f.kind === 'zip') {
         td.appendChild(document.createTextNode(' '));

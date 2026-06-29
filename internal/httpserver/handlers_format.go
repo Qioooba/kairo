@@ -222,7 +222,6 @@ func (s *Server) handleFormatURLForm(w http.ResponseWriter, r *http.Request) {
 	mode := strings.ToLower(strings.TrimSpace(req.Mode))
 	switch mode {
 	case "encode":
-		// input 约定是 JSON 对象字符串，前端用 JSON.stringify(map) 即可
 		raw := strings.TrimSpace(req.Input)
 		if raw == "" {
 			writeJSON(w, 200, map[string]any{"ok": true, "output": ""})
@@ -230,7 +229,7 @@ func (s *Server) handleFormatURLForm(w http.ResponseWriter, r *http.Request) {
 		}
 		var kv map[string]string
 		if err := json.Unmarshal([]byte(raw), &kv); err != nil {
-			writeErr(w, 400, fmt.Errorf("encode 模式 input 必须是 JSON 对象字符串：%w", err))
+			writeErr(w, 400, fmt.Errorf("encode 模式 input 必须是 JSON 对象字符串，且所有 value 必须是 string 类型：%w", err))
 			return
 		}
 		out, err := formatter.URLFormEncode(kv)
