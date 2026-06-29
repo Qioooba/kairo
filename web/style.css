@@ -170,16 +170,16 @@
   --tag-enc-fg: #3730a3;        /* 蓝更深 */
   --tag-warn-fg: #92400e;
   --tag-ready-fg: #14532d;
-  --tag-placeholder-fg: #92400e;
-  /* v0.7 主题适配：.btn 边框在 light 下太淡（--line=#e3e8f0 跟 bg-3=#e9eef6 几乎同色，
-     按钮"飘"在背景上，没立体感。改用 --line-2 级别 + 纯白底让按钮立起来。*/
-  --btn-border-override: #cbd5e1;
-  --btn-bg-override: #ffffff;
-  --btn-hover-bg-override: #f1f5f9;
+  /* v0.9 UI fix：.btn 在 light 主题下使用浅蓝灰底+可见边框，
+     避免白卡上白底白边"消失"；hover 时加深背景+边框，有明确反馈。*/
+  --btn-border-override: #b0bdd0;
+  --btn-bg-override: #f1f5f9;
+  --btn-hover-bg-override: #e2e8f0;
+  --btn-hover-border-override: #94a8c4;
   --tag-placeholder-fg: #b45309;
 
-  --btn-hover-bg: #e3eaf3;
-  --btn-hover-border: #c8d1e0;
+  --btn-hover-bg: #e2e8f0;
+  --btn-hover-border: #94a8c4;
   --btn-primary-grad: linear-gradient(135deg, var(--primary), #3b82f6);
   --btn-primary-shadow: 0 4px 10px rgba(37,99,235,0.25);
   --btn-danger-grad: linear-gradient(135deg, #dc2626, #ef4444);
@@ -578,7 +578,7 @@ textarea { resize: vertical; min-height: 100px; font-family: ui-monospace, SFMon
   cursor: pointer;
   transition: background .15s, border-color .15s, transform .05s;
 }
-.btn:hover { background: var(--btn-hover-bg-override, var(--btn-hover-bg)); border-color: var(--btn-border-override, var(--btn-hover-border)); }
+.btn:hover { background: var(--btn-hover-bg-override, var(--btn-hover-bg)); border-color: var(--btn-hover-border-override, var(--btn-border-override, var(--btn-hover-border))); }
 .btn:active { transform: translateY(1px); }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .btn:focus-visible {
@@ -591,9 +591,11 @@ textarea { resize: vertical; min-height: 100px; font-family: ui-monospace, SFMon
   color: #fff;
   box-shadow: var(--btn-primary-shadow);
 }
-.btn-primary:hover { filter: brightness(1.1); transform: translateY(-1px); box-shadow: 0 8px 20px rgba(79,140,255,0.4); }
-.btn-primary:active { filter: brightness(0.95); transform: translateY(0); }
-.btn-danger { background: var(--btn-danger-grad); border-color: transparent; color: #fff; }
+.btn-primary:hover { background: var(--btn-primary-grad); border-color: transparent; filter: brightness(1.08); transform: translateY(-1px); box-shadow: 0 8px 20px rgba(79,140,255,0.4); }
+.btn-primary:active { background: var(--btn-primary-grad); border-color: transparent; filter: brightness(0.95); transform: translateY(0); }
+.btn-danger { background: var(--btn-danger-grad); border-color: transparent; color: #fff; box-shadow: 0 4px 10px rgba(220,38,38,0.25); }
+.btn-danger:hover { background: var(--btn-danger-grad); border-color: transparent; filter: brightness(1.08); transform: translateY(-1px); box-shadow: 0 8px 20px rgba(220,38,38,0.35); }
+.btn-danger:active { background: var(--btn-danger-grad); border-color: transparent; filter: brightness(0.95); transform: translateY(0); }
 /* v0.9 UI-1：清空类按钮的"软"红 — 淡红底 + 红边 + 红字，不再用 .btn-danger 那种
    高饱和渐变实心红。和单行删除按钮 (.btn-danger.btn-sm) 区分开——一个醒目警告，一个柔和提示。 */
 .btn-danger-soft {
@@ -1568,10 +1570,12 @@ input[type="datetime-local"] {
   --tag-ready-fg: #1f5028;
   --tag-placeholder-bg: rgba(201, 122, 22, 0.15);
   --tag-placeholder-fg: #7a4c10;
-  /* v0.7 主题适配：.btn 用更深的 bg-3（--line-2 边）让按钮在米绿页面里"立"起来*/
-  --btn-border-override: #b8c5a3;
-  --btn-bg-override: #f3f6e8;
-  --btn-hover-bg-override: #e7ecd5;
+  /* v0.9 UI fix：.btn 在 green 主题下用更深的浅绿底+可见边框，
+     避免米白卡上浅绿底淡边"消失"；hover 加深背景+边框。*/
+  --btn-border-override: #9aab82;
+  --btn-bg-override: #e5ebd5;
+  --btn-hover-bg-override: #d4dcc0;
+  --btn-hover-border-override: #7d9065;
   /* v0.5-G #19 修：sidebar/topbar/body 三个容器背景在 green 主题也要覆盖，
      否则 sidebar 沿用 dark 的 rgba(17,22,31,0.85) 黑底，跟浅绿页面冲突。 */
   --body-bg: linear-gradient(180deg, #f3f6f0 0%, #ecf2e2 100%);
@@ -1642,10 +1646,11 @@ input[type="datetime-local"] {
   --tag-ready-fg: #00ff88;
   --tag-placeholder-bg: #000000;
   --tag-placeholder-fg: #ffaa00;
-  /* v0.7 主题适配：.btn 在 hc 主题下边框用白色 + 深黑底，对比拉满*/
+  /* v0.9 UI fix：.btn 在 hc 主题下边框用白色 + 深黑底，对比拉满*/
   --btn-border-override: #ffffff;
   --btn-bg-override: #0a0a0a;
   --btn-hover-bg-override: #1f1f1f;
+  --btn-hover-border-override: #66aaff;
   /* v0.5-G #19 修：hc 主题 sidebar 用深黑 + 高对比边框，跟 dark 的透明灰不同 */
   --body-bg: #000000;
   --sidebar-bg: #0a0a0a;
