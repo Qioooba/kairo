@@ -51,13 +51,13 @@ const (
 
 // Version / BuildTime 可在构建时通过 ldflags 注入，例如：
 //
-//	go build -ldflags "-X 'doubao-toolbox/internal/httpserver.Version=v0.8' \
+//	go build -ldflags "-X 'doubao-toolbox/internal/httpserver.Version=v0.9.0' \
 //	  -X 'doubao-toolbox/internal/httpserver.BuildTime=2026-06-27T00:00:00Z'" .
 //
 // 未注入时使用下面的默认值；前端 about 页通过 GET /api/config 读取并回填显示，
 // 读取失败则回退到前端硬编码版本（FE-006）。
 var (
-	Version   = "v0.8-dev"
+	Version   = "v0.9.0-dev"
 	BuildTime = "unknown"
 )
 
