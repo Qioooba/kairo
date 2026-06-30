@@ -14,13 +14,17 @@
 package sshclient
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"golang.org/x/crypto/ssh"
+	"golang.org/x/text/encoding/simplifiedchinese"
+	"golang.org/x/text/transform"
 )
 
 // ShellSession 封装一个交互式 shell 会话。
@@ -34,11 +38,103 @@ import (
 // 生命周期由调用方管理：Close 会关闭底层 session + stdin pipe。
 // 不要假设 Ssh.Close() 后 Stdin/Stdout 仍可读写。
 type ShellSession struct {
-	Ssh    *ssh.Session
-	Stdin  io.WriteCloser
-	Stdout io.Reader
-	Rows   int
-	Cols   int
+	Ssh     *ssh.Session
+	Stdin   io.WriteCloser
+	Stdout  io.Reader
+	Rows    int
+	Cols    int
+	encoding string // "utf-8" 或 "gbk"/"gb18030"
+}
+
+// gbkDecoder 包装一个 io.Reader，对 GBK 字节流做实时解码。
+// 它内部缓冲未完成的字节（GBK 字符最多 2 字节），避免跨 Read() 边界截断字符。
+type gbkDecoder struct {
+	src   io.Reader
+	buf   []byte // 缓冲未完成的字节
+	enc   transform.Transformer
+}
+
+func newGBKDecoder(src io.Reader) *gbkDecoder {
+	return &gbkDecoder{
+		src: src,
+		buf: make([]byte, 0, 4), // 最多缓冲 2 个未完成字节
+		enc: simplifiedchinese.GBK.NewDecoder(),
+	}
+}
+
+// Read 从 GBK 字节流读取，解码后返回 UTF-8 字节。
+func (d *gbkDecoder) Read(p []byte) (int, error) {
+	// 如果有残留字节，先消费
+	if len(d.buf) > 0 {
+		n := copy(p, d.buf)
+		d.buf = d.buf[n:]
+		if len(d.buf) == 0 {
+			return n, nil
+		}
+	}
+	// 从 src 读取更多字节
+	tmp := make([]byte, 4096)
+	for {
+		nr, err := d.src.Read(tmp)
+		if nr == 0 {
+			if err == nil {
+				continue
+			}
+			// src EOF 或错误，flush 缓冲
+			if len(d.buf) > 0 {
+				n := copy(p, d.buf)
+				d.buf = d.buf[:0]
+				if n > 0 {
+					return n, err
+				}
+			}
+			return 0, err
+		}
+		// 把新字节追加到缓冲
+		d.buf = append(d.buf, tmp[:nr]...)
+		// 尝试把整个缓冲转换（buf 里可能有未完成字符）
+		r := transform.NewReader(bytes.NewReader(d.buf), d.enc)
+		n, err := r.Read(p)
+		if err == transform.ErrShortDst {
+			// 输出缓冲区不够，这意味着 p 太小或 buf 有完整转换但输出没读完
+			// 保留一个字节（可能是不完整字符）继续
+			if len(d.buf) > 0 {
+				d.buf = d.buf[len(d.buf)-1:]
+			}
+			return n, nil
+		}
+		if err == io.EOF {
+			// 全部转换完成，可能还有 1 字节残留（半个 GBK 字符）
+			// EOF 表示转换器已处理完所有输入
+			// 检查 buf 是否还有未处理的字节
+			if len(d.buf) > 0 {
+				// buf 里可能有 1 字节残留
+				if len(d.buf) == 1 && n > 0 {
+					return n, nil
+				}
+			}
+			return n, nil
+		}
+		if n > 0 {
+			// 成功转换了一些字节，可能还有残留字符
+			if len(d.buf) > 0 && n < len(p) {
+				// 还有空间，尝试继续处理残留
+				continue
+			}
+			return n, nil
+		}
+		// n == 0 且无特殊错误，循环继续
+		if err != nil && err != io.EOF {
+			break
+		}
+	}
+	// 错误时尽量 flush 缓冲
+	if len(d.buf) > 0 {
+		n := copy(p, d.buf)
+		d.buf = d.buf[:0]
+		return n, nil
+	}
+	return 0, nil
 }
 
 // 默认 TERM 类型。xterm-256color 是事实标准，所有现代 sshd 都支持；
@@ -60,6 +156,7 @@ var defaultEnv = [][2]string{
 //   - term：终端类型，空字符串走 DefaultTERM
 //   - rows, cols：初始 PTY 尺寸（前端 fitAddon 算出）
 //   - env：额外的环境变量（k1,v1,k2,v2,...），长度必须为偶数；可空
+//   - encoding：输出编码，"utf-8"（默认）或 "gbk"/"gb18030"（老 WebSphere/Oracle 终端）
 //
 // 返回的 *ShellSession 由调用方负责 Close。
 //
@@ -69,12 +166,13 @@ var defaultEnv = [][2]string{
 //  3. RequestPty(term, rows, cols, modes)
 //  4. StdoutPipe + StdinPipe（合并 stderr：ssh.Stdout 设置后再 RequestPty，远端会把 stderr 重定向到 stdout）
 //  5. Shell()
+//  6. 若 encoding 为 GBK，用 gbkDecoder 包装 stdout（实时解码避免多字节字符被截断）
 //
 // 老 sshd（6.2p2 / AIX）的兼容性：
 //   - RequestPty 已被 x/crypto/ssh 兼容到所有标准 sshd；
 //   - 6.2p2 默认接受 xterm-256color（terminfo 在大多数发行版都有）；
 //   - 极少数老 AIX 不识别 256color，shell 仍能起来，只是颜色退化为 16 色 —— 不影响功能。
-func (c *Client) Shell(ctx context.Context, term string, rows, cols int, env []string) (*ShellSession, error) {
+func (c *Client) Shell(ctx context.Context, term string, rows, cols int, env []string, encoding string) (*ShellSession, error) {
 	if c == nil || c.conn == nil {
 		return nil, errors.New("ssh 客户端未连接")
 	}
@@ -89,6 +187,9 @@ func (c *Client) Shell(ctx context.Context, term string, rows, cols int, env []s
 	}
 	if cols <= 0 {
 		cols = 80
+	}
+	if encoding == "" {
+		encoding = "utf-8"
 	}
 
 	sess, err := c.conn.NewSession()
@@ -133,12 +234,19 @@ func (c *Client) Shell(ctx context.Context, term string, rows, cols int, env []s
 		return nil, fmt.Errorf("启动 shell 失败: %w", err)
 	}
 
+	// 若 encoding 为 GBK/GB18030，用解码器包装 stdout
+	var stdoutReader io.Reader = stdout
+	if strings.ToLower(encoding) == "gbk" || strings.ToLower(encoding) == "gb18030" {
+		stdoutReader = newGBKDecoder(stdout)
+	}
+
 	return &ShellSession{
-		Ssh:    sess,
-		Stdin:  stdin,
-		Stdout: stdout,
-		Rows:   rows,
-		Cols:   cols,
+		Ssh:      sess,
+		Stdin:    stdin,
+		Stdout:   stdoutReader,
+		Rows:     rows,
+		Cols:     cols,
+		encoding: encoding,
 	}, nil
 }
 
