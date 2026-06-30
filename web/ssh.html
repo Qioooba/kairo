@@ -1,0 +1,441 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <link rel="icon" type="image/png" sizes="32x32" href="/static/img/favicon-32.png" />
+  <link rel="icon" type="image/png" sizes="64x64" href="/static/img/favicon-64.png" />
+  <link rel="icon" type="image/png" sizes="192x192" href="/static/img/favicon-192.png" />
+  <title>SSH 终端 · Kairo</title>
+  <script>
+    // 提前读 localStorage 设置主题，避免 FOUC（页面闪烁）
+    (function() {
+      try {
+        var t = localStorage.getItem('kairo_theme');
+        if (!t) {
+          var oldT = localStorage.getItem('dtb_theme') || localStorage.getItem('otb_theme');
+          if (oldT) localStorage.setItem('kairo_theme', oldT);
+          t = oldT;
+        }
+        if (t === 'dark' || t === 'light' || t === 'green' || t === 'hc' || t === 'xianxia') {
+          document.documentElement.setAttribute('data-theme', t);
+        }
+      } catch (e) {}
+    })();
+  </script>
+  <link rel="stylesheet" href="/static/vendor/xterm/xterm.css?v=20260630" />
+  <link rel="stylesheet" href="/static/style.css" />
+  <style>
+    /* SSH 独立窗口专用：窄边距、全高终端 */
+    body { grid-template-columns: 1fr; }
+    .sidebar { display: none; }
+    .main { display: flex; flex-direction: column; height: 100vh; }
+    .topbar { padding: 8px 14px; }
+    .ssh-standalone {
+      flex: 1; display: flex; flex-direction: column;
+      padding: 8px 12px; gap: 8px;
+      min-height: 0; overflow: hidden;
+    }
+    .ssh-standalone .ssh-meta {
+      flex: 0 0 auto;
+      display: flex; gap: 12px; flex-wrap: wrap;
+      padding: 6px 12px; background: var(--bg-2);
+      border: 1px solid var(--line); border-radius: 8px;
+      font-size: 12.5px; color: var(--text-dim);
+    }
+    .ssh-standalone .ssh-meta .meta-key { color: var(--text-mute); margin-right: 4px; }
+    .ssh-standalone .ssh-meta .meta-val { color: var(--text); font-family: ui-monospace, monospace; }
+    .ssh-standalone .ssh-toolbar { flex: 0 0 auto; }
+    .ssh-standalone .ssh-term-wrap {
+      flex: 1 1 auto; min-height: 0; overflow: hidden;
+      background: var(--bg, #0f172a); border: 1px solid var(--line);
+      border-radius: 6px; padding: 4px;
+    }
+    .ssh-standalone .ssh-term-wrap .xterm { height: 100%; padding: 4px; }
+    .ssh-standalone .ssh-term-wrap .xterm-viewport { background-color: transparent !important; }
+    /* 密码弹层复用主页样式 */
+    .ssh-pwd-overlay {
+      position: fixed; inset: 0; background: rgba(0,0,0,.6);
+      backdrop-filter: blur(4px); z-index: 99998;
+      display: flex; align-items: center; justify-content: center; padding: 20px;
+    }
+    .ssh-pwd-card {
+      background: var(--bg-card, #1e293b); border: 1px solid var(--border, #334155);
+      border-radius: 12px; padding: 28px 24px; width: 100%; max-width: 380px;
+      box-shadow: 0 16px 48px rgba(0,0,0,.4);
+    }
+    .ssh-pwd-title { font-size: 18px; font-weight: 600; color: var(--text, #e2e8f0); margin-bottom: 6px; }
+    .ssh-pwd-desc { font-size: 13px; margin-bottom: 16px; color: var(--text-dim, #94a3b8); }
+    .ssh-pwd-input {
+      width: 100%; padding: 10px 14px; border-radius: 8px;
+      border: 1px solid var(--border, #334155); background: var(--bg, #0f172a);
+      color: var(--text, #e2e8f0); font-size: 14px; font-family: ui-monospace, monospace;
+      outline: none; box-sizing: border-box; margin-bottom: 12px;
+    }
+    .ssh-pwd-input:focus { border-color: var(--primary, #3b82f6); }
+    .ssh-pwd-remember { display: flex; align-items: center; gap: 6px; font-size: 13px; margin-bottom: 16px; color: var(--text-dim, #94a3b8); }
+    .ssh-pwd-btnrow { display: flex; gap: 8px; justify-content: flex-end; }
+  </style>
+</head>
+<body>
+  <main class="main">
+    <header class="topbar">
+      <div class="crumbs">SSH 终端（独立窗口）</div>
+      <div class="topbar-right">
+        <span id="conn-dot" class="dot dot-idle"></span>
+        <span id="conn-text" class="muted">连接中…</span>
+      </div>
+    </header>
+    <section class="ssh-standalone">
+      <div class="ssh-meta" id="meta">
+        <span><span class="meta-key">系统:</span><span class="meta-val" id="m-system">-</span></span>
+        <span><span class="meta-key">服务器:</span><span class="meta-val" id="m-server">-</span></span>
+        <span><span class="meta-key">用户:</span><span class="meta-val" id="m-user">-</span></span>
+      </div>
+      <div class="ssh-toolbar">
+        <button id="btn-ctrlc" class="btn btn-sm" title="发送 SIGINT">Ctrl+C</button>
+        <button id="btn-clear" class="btn btn-sm" title="清屏">清屏</button>
+        <button id="btn-reconnect" class="btn btn-sm" title="断开重连">重连</button>
+        <button id="btn-close" class="btn btn-sm">关闭本页</button>
+      </div>
+      <div class="ssh-term-wrap">
+        <div id="term-container"></div>
+      </div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast"></div>
+  <script src="/static/core.js"></script>
+  <script src="/static/api.js"></script>
+  <script src="/static/theme.js"></script>
+  <script src="/static/vendor/xterm/xterm.min.js?v=20260630"></script>
+  <script src="/static/vendor/xterm/xterm-addon-fit.min.js?v=20260630"></script>
+  <script src="/static/vendor/xterm/xterm-addon-web-links.min.js?v=20260630"></script>
+  <script>
+    (function () {
+      'use strict';
+      var Kairo = window.Kairo = window.Kairo || {};
+      var el = Kairo.core.el;
+      var toast = Kairo.core.toast;
+      var api = Kairo.api.api;
+
+      // 解析 query 参数
+      var params = new URLSearchParams(location.search);
+      var system = params.get('system') || '';
+      var server = params.get('server') || '';
+      var initCols = parseInt(params.get('cols'), 10) || 80;
+      var initRows = parseInt(params.get('rows'), 10) || 24;
+
+      // 元信息显示
+      document.getElementById('m-system').textContent = system || '-';
+      document.getElementById('m-server').textContent = server || '-';
+      document.getElementById('m-user').textContent = '（连接后显示）';
+
+      function setConn(state, text) {
+        var dot = document.getElementById('conn-dot');
+        var txt = document.getElementById('conn-text');
+        dot.className = 'dot dot-' + (state || 'idle');
+        txt.textContent = text || (state === 'busy' ? '连接中…' : '就绪');
+      }
+
+      // xterm 主题（与主页同步，4 套）
+      var XTERM_THEMES = {
+        dark: { background: '#0f172a', foreground: '#e2e8f0', cursor: '#e2e8f0', selectionBackground: '#334155',
+                black: '#1e293b', red: '#f87171', green: '#4ade80', yellow: '#facc15', blue: '#60a5fa',
+                magenta: '#c084fc', cyan: '#22d3ee', white: '#e2e8f0', brightBlack: '#64748b', brightRed: '#fca5a5',
+                brightGreen: '#86efac', brightYellow: '#fde047', brightBlue: '#93c5fd', brightMagenta: '#d8b4fe',
+                brightCyan: '#67e8f9', brightWhite: '#f8fafc' },
+        light: { background: '#f8fafc', foreground: '#1e293b', cursor: '#1e293b', selectionBackground: '#cbd5e1',
+                 black: '#1e293b', red: '#dc2626', green: '#16a34a', yellow: '#ca8a04', blue: '#2563eb',
+                 magenta: '#9333ea', cyan: '#0891b2', white: '#f1f5f9', brightBlack: '#64748b', brightRed: '#ef4444',
+                 brightGreen: '#22c55e', brightYellow: '#eab308', brightBlue: '#3b82f6', brightMagenta: '#a855f7',
+                 brightCyan: '#06b6d4', brightWhite: '#ffffff' },
+        green: { background: '#0c1a0c', foreground: '#c8e6c9', cursor: '#a5d6a7', selectionBackground: '#1b3a1b',
+                 black: '#0c1a0c', red: '#ef9a9a', green: '#81c784', yellow: '#fff59d', blue: '#90caf9',
+                 magenta: '#ce93d8', cyan: '#80deea', white: '#c8e6c9', brightBlack: '#4e6e4e', brightRed: '#ffcdd2',
+                 brightGreen: '#a5d6a7', brightYellow: '#fff9c4', brightBlue: '#bbdefb', brightMagenta: '#e1bee7',
+                 brightCyan: '#b2ebf2', brightWhite: '#e8f5e9' },
+        hc: { background: '#000000', foreground: '#ffffff', cursor: '#ffffff', selectionBackground: '#444444',
+              black: '#000000', red: '#ff0000', green: '#00ff00', yellow: '#ffff00', blue: '#0000ff',
+              magenta: '#ff00ff', cyan: '#00ffff', white: '#ffffff', brightBlack: '#666666', brightRed: '#ff6666',
+              brightGreen: '#66ff66', brightYellow: '#ffff66', brightBlue: '#6666ff', brightMagenta: '#ff66ff',
+              brightCyan: '#66ffff', brightWhite: '#ffffff' },
+        xianxia: { background: '#0a0907', foreground: '#e8dcc0', cursor: '#c9a24b', selectionBackground: 'rgba(201,162,75,0.25)',
+                   black: '#1a1510', red: '#e07050', green: '#7cb342', yellow: '#c9a24b', blue: '#5c9dc4',
+                   magenta: '#b07cc4', cyan: '#4db6ac', white: '#e8dcc0', brightBlack: '#6b5d4f', brightRed: '#f49770',
+                   brightGreen: '#9ccc65', brightYellow: '#dcb766', brightBlue: '#7fb8da', brightMagenta: '#c59cd9',
+                   brightCyan: '#80cbc4', brightWhite: '#f5eddc' }
+      };
+      function curTheme() {
+        var t = (Kairo.theme && Kairo.theme.get) ? Kairo.theme.get() : 'dark';
+        return XTERM_THEMES[t] || XTERM_THEMES.dark;
+      }
+
+      if (!system || !server) {
+        document.getElementById('term-container').appendChild(el('div', {
+          class: 'text-err', text: '缺少 system / server 参数'
+        }));
+        setConn('err', '参数错误');
+      } else {
+        startTerminal();
+      }
+
+      function startTerminal() {
+        var TerminalCtor = window.Terminal;
+        if (!TerminalCtor) { toast('xterm.js 未加载', 'err'); return; }
+
+        var term = new TerminalCtor({
+          theme: curTheme(), fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+          fontSize: 13, cursorBlink: true, scrollback: 5000, allowProposedApi: true,
+          cols: initCols, rows: initRows, rendererType: 'canvas'
+        });
+        var FitAddonCtor = window.FitAddon && window.FitAddon.FitAddon;
+        var WebLinksAddonCtor = window.WebLinksAddon && window.WebLinksAddon.WebLinksAddon;
+        var fitAddon = FitAddonCtor ? new FitAddonCtor() : null;
+        if (fitAddon) term.loadAddon(fitAddon);
+        if (WebLinksAddonCtor) term.loadAddon(new WebLinksAddonCtor());
+
+        var container = document.getElementById('term-container');
+        term.open(container);
+
+        var cols = initCols;
+        var rows = initRows;
+        var ws = null;
+        var closed = false;
+
+        setTimeout(function() {
+          if (fitAddon) { try { fitAddon.fit(); } catch (e) {} }
+          cols = term.cols || initCols;
+          rows = term.rows || initRows;
+          afterInit();
+        }, 50);
+
+        function afterInit() {
+        // 主题联动
+        function syncBg() {
+          var t = curTheme();
+          if (t && t.background) {
+            var wrap = document.querySelector('.ssh-term-wrap');
+            if (wrap) wrap.style.background = t.background;
+          }
+        }
+        syncBg();
+        window.addEventListener('kairo:themechange', function () {
+          try { term.options.theme = curTheme(); } catch (e) {}
+          syncBg();
+        });
+
+        // resize
+        term.onResize(function (size) {
+          cols = size.cols; rows = size.rows;
+          sendControl({ type: 'resize', cols: size.cols, rows: size.rows });
+        });
+        if (fitAddon) {
+          var ro = new ResizeObserver(function () { if (!closed && fitAddon) { try { fitAddon.fit(); } catch (e) {} } });
+          ro.observe(container);
+        }
+
+        // 输入 → WS binary frame（必须 TextEncoder 编码，否则发 text frame）
+        var encoder = new TextEncoder();
+        term.onData(function (data) {
+          if (ws && ws.readyState === 1) ws.send(encoder.encode(data));
+        });
+
+        // 按钮
+        document.getElementById('btn-ctrlc').addEventListener('click', function () {
+          if (!ws || ws.readyState !== 1) { toast('未连接', 'warn'); return; }
+          sendControl({ type: 'signal', signal: 'SIGINT' });
+        });
+        document.getElementById('btn-clear').addEventListener('click', function () { term.clear(); });
+        document.getElementById('btn-reconnect').addEventListener('click', function () {
+          if (!closed && ws && ws.readyState === 1) {
+            sendControl({ type: 'signal', signal: 'SIGKILL' });
+            setTimeout(function() {
+              if (ws) try { ws.close(); } catch (e) {}
+              closed = false;
+              term.write('\r\n\x1b[36m重连中…\x1b[0m\r\n');
+              connect();
+            }, 200);
+            return;
+          }
+          closed = false;
+          term.write('\r\n\x1b[36m重连中…\x1b[0m\r\n');
+          if (ws) { try { ws.close(); } catch (e) {} }
+          connect();
+        });
+        document.getElementById('btn-close').addEventListener('click', function () { window.close(); });
+
+        function sendControl(obj) {
+          if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj));
+        }
+
+        function connect() {
+          if (closed) return;
+          setConn('busy', '连接中…');
+          if (ws) { try { ws.close(); } catch (e) {} ws = null; }
+          var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+          var url = proto + '//' + location.host + '/api/ssh/shell/ws' +
+            '?system=' + encodeURIComponent(system) +
+            '&server=' + encodeURIComponent(server) +
+            '&cols=' + cols + '&rows=' + rows;
+          try {
+            ws = new WebSocket(url);
+          } catch (e) {
+            term.write('\r\n\x1b[31m连接失败: ' + (e.message || e) + '\x1b[0m\r\n');
+            setConn('err', '连接失败');
+            closed = true;
+            return;
+          }
+          ws.binaryType = 'arraybuffer';
+          ws.onopen = function () { setConn('idle', '已连接'); term.focus(); };
+          ws.onmessage = function (ev) {
+            if (closed) return;
+            if (typeof ev.data === 'string') {
+              handleControl(ev.data);
+            } else {
+              term.write(new Uint8Array(ev.data));
+            }
+          };
+          ws.onclose = function () {
+            if (this !== ws) return;
+            if (closed) return;
+            term.write('\r\n\x1b[33m— 连接已断开 —\x1b[0m\r\n');
+            closed = true;
+            setConn('idle', '已断开');
+          };
+        }
+
+        function handleControl(raw) {
+          var msg;
+          try { msg = JSON.parse(raw); } catch (e) { return; }
+          if (!msg || !msg.type) return;
+          if (msg.type === 'exit') {
+            term.write('\r\n\x1b[33m— shell 已退出（code=' + (msg.code != null ? msg.code : '?') + '）—\x1b[0m\r\n');
+            closed = true; setConn('idle', '已退出');
+          } else if (msg.type === 'error') {
+            handleError(msg);
+          }
+        }
+
+        function handleError(msg) {
+          var reason = msg.reason || '';
+          var message = msg.message || '';
+          if (reason === 'no_password') {
+            term.write('\r\n\x1b[36m需要 SSH 密码\x1b[0m\r\n');
+            promptPassword();
+          } else if (reason === 'dial_failed') {
+            term.write('\r\n\x1b[31mSSH 连接失败: ' + message + '\x1b[0m\r\n');
+            term.write('\r\n\x1b[2m  （检查 host/port/网络/host_key 配置）\x1b[0m\r\n');
+            closed = true;
+          } else if (reason === 'cred_resolve') {
+            term.write('\r\n\x1b[31m凭据解析失败: ' + message + '\x1b[0m\r\n');
+            closed = true;
+          } else if (reason === 'shell_failed') {
+            term.write('\r\n\x1b[31m启动 shell 失败: ' + message + '\x1b[0m\r\n');
+            closed = true;
+          } else {
+            term.write('\r\n\x1b[31m错误: ' + (message || reason) + '\x1b[0m\r\n');
+            closed = true;
+          }
+          setConn('idle', '错误');
+        }
+
+        function promptPassword() {
+          var overlay = el('div', { class: 'ssh-pwd-overlay' });
+          var card = el('div', { class: 'ssh-pwd-card' });
+          card.appendChild(el('div', { class: 'ssh-pwd-title', text: '输入 SSH 密码' }));
+          card.appendChild(el('div', { class: 'ssh-pwd-desc', text: system + ' / ' + server }));
+          var passInput = el('input', { type: 'password', class: 'ssh-pwd-input', autocomplete: 'current-password', placeholder: 'SSH 密码' });
+          card.appendChild(passInput);
+          var rememberLabel = el('label', { class: 'ssh-pwd-remember inline' }, [
+            el('input', { type: 'checkbox', checked: true }), document.createTextNode('记住密码（存到系统 keyring）')
+          ]);
+          card.appendChild(rememberLabel);
+          var btnRow = el('div', { class: 'ssh-pwd-btnrow' });
+          var cancelBtn = el('button', { class: 'btn', type: 'button', text: '取消' });
+          var okBtn = el('button', { class: 'btn btn-primary', type: 'button', text: '连接' });
+          btnRow.appendChild(cancelBtn); btnRow.appendChild(okBtn);
+          card.appendChild(btnRow); overlay.appendChild(card);
+          document.body.appendChild(overlay);
+          setTimeout(function () { passInput.focus(); }, 50);
+
+          function closeOverlay() { overlay.remove(); }
+          function submit() {
+            var pw = passInput.value;
+            if (!pw) { toast('密码不能为空', 'warn'); return; }
+            var remember = rememberLabel.querySelector('input').checked;
+            if (!remember) {
+              toast('Web 终端需要保存密码到 keyring 才能连接，请勾选「记住密码」', 'warn');
+              return;
+            }
+            okBtn.textContent = '保存中…'; okBtn.disabled = true;
+            api('GET', '/api/config').then(function (info) {
+              var username = '';
+              (info.systems || []).forEach(function (s) {
+                if (s.name === system) (s.servers || []).forEach(function (sv) {
+                  if (sv.name === server) username = sv.username || '';
+                });
+              });
+              document.getElementById('m-user').textContent = username || '-';
+              return api('POST', '/api/credentials/save', {
+                system: system, server: server, username: username, password: pw
+              });
+            }).then(function () {
+              closeOverlay();
+              closed = false;
+              connect();
+            }).catch(function (e) {
+              okBtn.textContent = '连接'; okBtn.disabled = false;
+              toast('保存密码失败：' + (e.message || e), 'err');
+            });
+          }
+          okBtn.addEventListener('click', submit);
+          cancelBtn.addEventListener('click', function() {
+            closeOverlay();
+            term.write('\r\n\x1b[2m已取消\x1b[0m\r\n');
+            closed = true;
+            setConn('idle', '已取消');
+          });
+          passInput.addEventListener('keydown', function (e) {
+            if (e.key === 'Enter') { e.preventDefault(); submit(); }
+            if (e.key === 'Escape') {
+              e.preventDefault(); closeOverlay();
+              term.write('\r\n\x1b[2m已取消\x1b[0m\r\n');
+              closed = true;
+              setConn('idle', '已取消');
+            }
+          });
+          overlay.addEventListener('click', function(e) {
+            if (e.target === overlay) {
+              closeOverlay();
+              term.write('\r\n\x1b[2m已取消\x1b[0m\r\n');
+              closed = true;
+              setConn('idle', '已取消');
+            }
+          });
+        }
+
+        // 拉配置显示 username，然后连接
+        api('GET', '/api/config').then(function (info) {
+          var username = '';
+          (info.systems || []).forEach(function (s) {
+            if (s.name === system) (s.servers || []).forEach(function (sv) {
+              if (sv.name === server) username = sv.username || '';
+            });
+          });
+          document.getElementById('m-user').textContent = username || '-';
+          connect();
+        }).catch(function () { connect(); });
+
+        } // end afterInit
+
+        // 页面卸载时关 WS + 释放 xterm 资源
+        window.addEventListener('beforeunload', function () {
+          if (ws) { try { ws.close(); } catch (e) {} }
+          if (term) { try { term.dispose(); } catch (e) {} }
+        });
+      }
+    })();
+  </script>
+</body>
+</html>

@@ -1,4 +1,4 @@
-/* ===== 豆包工具箱 · 深色科技风 ===== */
+/* ===== Kairo · 深色科技风 ===== */
 
 :root,
 :root[data-theme="dark"] {
@@ -284,8 +284,33 @@ body {
   border-radius: 10px;
   display: block;
 }
-.brand-text .title { font-weight: 700; font-size: 15px; }
+.brand-text .title {
+  font-weight: 700;
+  font-size: 15px;
+  background-image: linear-gradient(
+    90deg,
+    #3b82f6,
+    #8b5cf6,
+    #ec4899,
+    #f59e0b,
+    #10b981,
+    #3b82f6
+  );
+  background-size: 300% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  animation: brand-gradient-flow 8s linear infinite;
+}
 .brand-text .subtitle { color: var(--text-dim); font-size: 12px; }
+@keyframes brand-gradient-flow {
+  0%   { background-position: 0% 50%; }
+  100% { background-position: 100% 50%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .brand-text .title { animation: none; background-position: 0% 50%; }
+}
 
 .nav { display: flex; flex-direction: column; gap: 2px; flex: 1; overflow-y: auto; }
 .nav-item {
@@ -771,6 +796,8 @@ textarea { resize: vertical; min-height: 100px; font-family: ui-monospace, SFMon
 }
 .section-title { font-size: 18px; font-weight: 700; margin: 0 0 6px; }
 .section-sub { color: var(--text-dim); font-size: 13px; margin-bottom: 18px; }
+/* v0.9：home 视图主标题复用 sidebar 渐变流光 class，比 section-title 字号更大 */
+.section-title.brand-text-title { font-size: 28px; letter-spacing: 0.5px; }
 
 /* 输入区左右布局 */
 .pane {
@@ -1107,9 +1134,15 @@ pre::-webkit-scrollbar-corner { background: var(--scrollbar-corner); }
 :root[data-theme="green"] .tail-line.tail-line-error { color: #b91c1c; }
 :root[data-theme="hc"] .tail-line.tail-line-error { color: #ff5555; }
 
-/* ===== Tail 行号显示 ===== */
+/* ===== Tail 行号显示 =====
+ *
+ * 行号由 CSS counter 生成。每行 ::before 里 counter-increment 一次。
+ * 容器上的 counter-reset 接受 --tail-line-offset 变量，让 trim 之后
+ * buffer 第一行的行号 = offset + 1（例如 maxLines=1000，丢到只剩
+ * 后 1000 行时，offset = 总丢弃数，第一行显示 "1001"）。
+ */
 .tail-out.show-line-numbers {
-  counter-reset: tail-line;
+  counter-reset: tail-line var(--tail-line-offset, 0);
   padding-left: 8px;
 }
 .tail-out.show-line-numbers .tail-line {
@@ -1440,7 +1473,7 @@ input[type="datetime-local"] {
 /* ===== v0.5 项 16：通知栈（download done / 配置错误等） =====
    v0.9 改：原来在 right-top，会遮住下载历史页第一行的"打开所在目录"按钮（BUG-5），
    改成 right-bottom，不挡 sidebar 也不挡表格行；column-reverse 让新通知在栈底（IM 风格）。 */
-.dtb-notify-stack {
+.kairo-notify-stack {
   position: fixed;
   bottom: 16px;
   right: 16px;
@@ -1451,7 +1484,7 @@ input[type="datetime-local"] {
   pointer-events: none;
   max-width: 380px;
 }
-.dtb-notify {
+.kairo-notify {
   pointer-events: auto;
   position: relative;
   background: var(--bg-1);
@@ -1463,26 +1496,26 @@ input[type="datetime-local"] {
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
   font-size: 13px;
   line-height: 1.5;
-  animation: dtb-notify-slide-in 0.18s ease-out;
+  animation: kairo-notify-slide-in 0.18s ease-out;
 }
 /* v0.6.2：hover 时轻微高亮，配合 mouseenter 暂停倒计时，让用户知道"现在不会自动消失" */
-.dtb-notify:hover {
+.kairo-notify:hover {
   box-shadow: 0 6px 24px rgba(0, 0, 0, 0.28);
   border-color: var(--primary-2, var(--primary));
 }
-.dtb-notify.ok { border-left-color: var(--success); }
-.dtb-notify.warn { border-left-color: var(--warn); }
-.dtb-notify.err { border-left-color: var(--error); }
-.dtb-notify-title { font-weight: 600; margin-bottom: 4px; }
-.dtb-notify-body {
+.kairo-notify.ok { border-left-color: var(--success); }
+.kairo-notify.warn { border-left-color: var(--warn); }
+.kairo-notify.err { border-left-color: var(--error); }
+.kairo-notify-title { font-weight: 600; margin-bottom: 4px; }
+.kairo-notify-body {
   color: var(--text-dim);
   font-family: ui-monospace, monospace;
   font-size: 12px;
   white-space: pre-wrap;
   word-break: break-all;
 }
-.dtb-notify-actions { margin-top: 8px; display: flex; gap: 6px; flex-wrap: wrap; }
-.dtb-notify-close {
+.kairo-notify-actions { margin-top: 8px; display: flex; gap: 6px; flex-wrap: wrap; }
+.kairo-notify-close {
   position: absolute;
   top: 6px; right: 6px;
   background: transparent; border: none;
@@ -1490,8 +1523,8 @@ input[type="datetime-local"] {
   color: var(--text-dim); cursor: pointer;
   padding: 2px 6px; border-radius: 4px;
 }
-.dtb-notify-close:hover { background: var(--bg-2); color: var(--text); }
-.dtb-notify-clearall {
+.kairo-notify-close:hover { background: var(--bg-2); color: var(--text); }
+.kairo-notify-clearall {
   pointer-events: auto;
   display: none;
   align-self: flex-end;
@@ -1504,12 +1537,12 @@ input[type="datetime-local"] {
   cursor: pointer;
   margin-bottom: 2px;
 }
-.dtb-notify-clearall:hover {
+.kairo-notify-clearall:hover {
   background: var(--bg-3);
   color: var(--text);
   border-color: var(--primary);
 }
-@keyframes dtb-notify-slide-in {
+@keyframes kairo-notify-slide-in {
   from { opacity: 0; transform: translateX(40px); }
   to   { opacity: 1; transform: translateX(0); }
 }
@@ -1683,6 +1716,133 @@ input[type="datetime-local"] {
   --d2h-moved-label-color: #00ffff;
   --d2h-change-del-color: rgba(255,85,85,0.25);
   --d2h-change-ins-color: rgba(0,255,136,0.25);
+
+  color-scheme: dark;
+}
+
+/* ===== 仙侠·墨韵青锋主题（xianxia）：古风武侠风 ===== */
+:root[data-theme="xianxia"] {
+  --bg-0: #0a0d0c;
+  --bg-1: #0f1312;
+  --bg-2: #151a18;
+  --bg-3: #1d2421;
+  --line: #2a3330;
+  --line-2: #3a4742;
+  --text: #d4e0db;
+  --text-dim: #8fa39c;
+  --text-mute: #60726b;
+  --primary: #5a8a7a;
+  --primary-2: #7fb09e;
+  --accent: #c9a24b;
+  --success: #6b9e5c;
+  --warn: #d4782a;
+  --error: #b8332a;
+  --shadow: 0 10px 30px rgba(0,0,0,0.5);
+  --radius: 8px;
+  --sidebar-width: 240px;
+
+  --body-bg: linear-gradient(135deg, #080a09 0%, #0f1312 50%, #0a0d0c 100%);
+  --sidebar-bg: rgba(15, 19, 18, 0.92);
+  --topbar-bg: rgba(10, 13, 12, 0.75);
+  --shadow-sm: 0 4px 12px rgba(0,0,0,0.4);
+  --shadow-pop: 0 8px 24px rgba(90,138,122,0.25);
+
+  --tag-bg: rgba(90,138,122,0.18);
+  --tag-fg: #7fb09e;
+  --tag-enc-bg: rgba(107,158,92,0.18);
+  --tag-enc-fg: #8fc47e;
+  --tag-warn-bg: rgba(212,120,42,0.18);
+  --tag-warn-fg: #e8a05a;
+  --tag-ready-bg: rgba(107,158,92,0.18);
+  --tag-ready-fg: #8fc47e;
+  --tag-placeholder-bg: rgba(201,162,75,0.15);
+  --tag-placeholder-fg: #dbb968;
+
+  --btn-border-override: #3a4742;
+  --btn-bg-override: #1d2421;
+  --btn-hover-bg-override: #2a3530;
+  --btn-hover-border-override: #4a5e56;
+  --btn-hover-bg: #2a3530;
+  --btn-hover-border: #4a5e56;
+  --btn-primary-grad: linear-gradient(135deg, #3d6b5d, #5a8a7a);
+  --btn-primary-shadow: 0 4px 12px rgba(90,138,122,0.35);
+  --btn-danger-grad: linear-gradient(135deg, #9a241e, #c9463d);
+
+  --row-hover-bg: rgba(90,138,122,0.08);
+  --row-active-bg: rgba(90,138,122,0.06);
+
+  --sys-block-bg: rgba(90,138,122,0.04);
+  --sys-block-border: 1px solid var(--line);
+  --srv-block-bg: var(--bg-2);
+  --srv-block-border: 1px solid var(--line);
+  --dir-block-bg: var(--bg-1);
+  --dir-block-border: 1px solid var(--line);
+
+  --tier-sys-color: var(--primary);
+  --tier-srv-color: var(--success);
+  --tier-dir-color: var(--text-mute);
+
+  --tail-out-bg: #080a09;
+  --tail-out-fg: #b8c4be;
+  --code-inline-bg: #151a18;
+
+  --scrollbar-w: 12px;
+  --scrollbar-h: 12px;
+  --scrollbar-track: rgba(90,138,122,0.05);
+  --scrollbar-thumb: rgba(90,138,122,0.28);
+  --scrollbar-thumb-hover: rgba(90,138,122,0.45);
+  --scrollbar-corner: transparent;
+
+  --cmd-fav-color: #c9a24b;
+
+  --d2h-bg-color: var(--bg-1);
+  --d2h-color: var(--text);
+  --d2h-border-color: var(--line);
+  --d2h-line-border-color: var(--line);
+  --d2h-dim-color: var(--text-mute);
+  --d2h-file-header-bg-color: var(--bg-2);
+  --d2h-file-header-border-color: var(--line);
+  --d2h-empty-placeholder-bg-color: var(--bg-2);
+  --d2h-empty-placeholder-border-color: var(--line);
+  --d2h-info-bg-color: var(--bg-2);
+  --d2h-info-border-color: var(--line);
+  --d2h-selected-color: rgba(90,138,122,0.25);
+  --d2h-change-del-color: rgba(184,51,42,0.2);
+  --d2h-change-ins-color: rgba(107,158,92,0.2);
+  --d2h-change-label-color: var(--text-dim);
+  --d2h-del-bg-color: rgba(184,51,42,0.15);
+  --d2h-del-border-color: rgba(184,51,42,0.5);
+  --d2h-del-highlight-bg-color: rgba(184,51,42,0.35);
+  --d2h-del-label-color: #d67b74;
+  --d2h-ins-bg-color: rgba(107,158,92,0.15);
+  --d2h-ins-border-color: rgba(107,158,92,0.5);
+  --d2h-ins-highlight-bg-color: rgba(107,158,92,0.32);
+  --d2h-ins-label-color: #9bc98b;
+  --d2h-moved-label-color: var(--primary-2);
+  --d2h-dark-bg-color: var(--d2h-bg-color);
+  --d2h-dark-color: var(--d2h-color);
+  --d2h-dark-border-color: var(--d2h-border-color);
+  --d2h-dark-line-border-color: var(--d2h-line-border-color);
+  --d2h-dark-dim-color: var(--d2h-dim-color);
+  --d2h-dark-file-header-bg-color: var(--d2h-file-header-bg-color);
+  --d2h-dark-file-header-border-color: var(--d2h-file-header-border-color);
+  --d2h-dark-empty-placeholder-bg-color: var(--d2h-empty-placeholder-bg-color);
+  --d2h-dark-empty-placeholder-border-color: var(--d2h-empty-placeholder-border-color);
+  --d2h-dark-info-bg-color: var(--d2h-info-bg-color);
+  --d2h-dark-info-border-color: var(--d2h-info-border-color);
+  --d2h-dark-selected-color: var(--d2h-selected-color);
+  --d2h-dark-change-del-color: var(--d2h-change-del-color);
+  --d2h-dark-change-ins-color: var(--d2h-change-ins-color);
+  --d2h-dark-change-label-color: var(--d2h-change-label-color);
+  --d2h-dark-del-bg-color: var(--d2h-del-bg-color);
+  --d2h-dark-del-border-color: var(--d2h-del-border-color);
+  --d2h-dark-del-highlight-bg-color: var(--d2h-del-highlight-bg-color);
+  --d2h-dark-del-label-color: var(--d2h-del-label-color);
+  --d2h-dark-ins-bg-color: var(--d2h-ins-bg-color);
+  --d2h-dark-ins-border-color: var(--d2h-ins-border-color);
+  --d2h-dark-ins-highlight-bg-color: var(--d2h-ins-highlight-bg-color);
+  --d2h-dark-ins-label-color: var(--d2h-ins-label-color);
+  --d2h-dark-moved-label-color: var(--d2h-moved-label-color);
 
   color-scheme: dark;
 }
@@ -2470,9 +2630,9 @@ input[type="datetime-local"] {
 .http2-resp-status.s-busy{ background: var(--tag-enc-bg); color: var(--tag-enc-fg); }
 .http2-resp-status .dot-anim {
   width: 6px; height: 6px; border-radius: 50%; background: currentColor;
-  animation: dtb-pulse 1s ease-in-out infinite;
+  animation: kairo-pulse 1s ease-in-out infinite;
 }
-@keyframes dtb-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+@keyframes kairo-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
 .http2-resp-meta {
   display: flex; gap: 14px; font-size: 11.5px; color: var(--text-dim);
   font-family: ui-monospace, monospace;
@@ -2567,17 +2727,17 @@ input[type="datetime-local"] {
   position: fixed; inset: 0; background: rgba(0,0,0,0.55);
   display: flex; align-items: center; justify-content: center;
   z-index: 999; backdrop-filter: blur(2px);
-  animation: dtb-fadein 0.12s ease;
+  animation: kairo-fadein 0.12s ease;
 }
-@keyframes dtb-fadein { from { opacity: 0; } to { opacity: 1; } }
+@keyframes kairo-fadein { from { opacity: 0; } to { opacity: 1; } }
 .http2-modal {
   background: var(--bg-1); border: 1px solid var(--line);
   border-radius: 12px; padding: 16px 18px;
   min-width: 380px; max-width: 520px;
   box-shadow: var(--shadow);
-  animation: dtb-scalein 0.14s cubic-bezier(0.34, 1.56, 0.64, 1);
+  animation: kairo-scalein 0.14s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
-@keyframes dtb-scalein { from { transform: scale(0.95); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+@keyframes kairo-scalein { from { transform: scale(0.95); opacity: 0; } to { transform: scale(1); opacity: 1; } }
 .http2-modal h4 { margin: 0 0 10px; font-size: 14px; color: var(--text); }
 .http2-modal .modal-row { display: flex; align-items: center; gap: 8px; margin: 8px 0; }
 .http2-modal .modal-row label { width: 70px; color: var(--text-dim); font-size: 12.5px; }
@@ -2712,7 +2872,7 @@ input[type="datetime-local"] {
 .cmd-syntax-box:focus-within .cmd-copy { opacity: 1; }
 
 /* 通用对话框 */
-.dtb-dialog-overlay {
+.kairo-dialog-overlay {
   position: fixed;
   inset: 0;
   z-index: 10000;
@@ -2721,9 +2881,9 @@ input[type="datetime-local"] {
   align-items: center;
   justify-content: center;
   padding: 20px;
-  animation: dtb-fadein 0.12s ease-out;
+  animation: kairo-fadein 0.12s ease-out;
 }
-.dtb-dialog {
+.kairo-dialog {
   width: min(92vw, 440px);
   background: var(--bg-1);
   border: 1px solid var(--line);
@@ -2731,18 +2891,18 @@ input[type="datetime-local"] {
   box-shadow: 0 20px 50px rgba(0, 0, 0, 0.3);
   padding: 16px;
 }
-.dtb-dialog-title {
+.kairo-dialog-title {
   font-size: 15px;
   font-weight: 700;
   margin-bottom: 8px;
 }
-.dtb-dialog-body {
+.kairo-dialog-body {
   color: var(--text-dim);
   line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-word;
 }
-.dtb-dialog-actions {
+.kairo-dialog-actions {
   margin-top: 16px;
   display: flex;
   justify-content: flex-end;
@@ -2921,5 +3081,957 @@ input[type="datetime-local"] {
    渐变在 hc 主题下（primary=#00ffff cyan, accent=#8b5cf6 purple）显得突兀。 */
 :root[data-theme="hc"] .brand .logo {
   box-shadow: none;
+}
+/* v0.9 brand 渐变：hc 高对比主题用纯亮黄单色，避免彩色破坏对比度 */
+:root[data-theme="hc"] .brand-text .title {
+  background-image: none;
+  -webkit-text-fill-color: #ffff00;
+  color: #ffff00;
+  animation: none;
+}
+
+/* ===== v0.10 SSH 终端 ===== */
+/* 整体布局：左主机列表 + 右终端区，flex 布局 */
+.ssh-page {
+  display: flex;
+  gap: 12px;
+  height: calc(100vh - 100px);
+  min-height: 400px;
+}
+.ssh-sidebar {
+  flex: 0 0 240px;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-2, #1e293b);
+  border: 1px solid var(--line, #334155);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.ssh-sidebar-title {
+  padding: 10px 14px;
+  font-weight: 600;
+  font-size: 14px;
+  border-bottom: 1px solid var(--line, #334155);
+  color: var(--text, #e2e8f0);
+}
+.ssh-host-list {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 6px 0;
+  min-height: 0;
+}
+.ssh-sidebar-hint {
+  padding: 8px 14px;
+  font-size: 12px;
+  border-top: 1px solid var(--line, #334155);
+}
+.ssh-sys-group {
+  margin-bottom: 4px;
+}
+.ssh-sys-header {
+  padding: 6px 14px 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim, #94a3b8);
+  text-transform: none;
+  letter-spacing: 0.02em;
+}
+.ssh-srv-item {
+  display: flex;
+  flex-direction: column;
+  padding: 6px 14px 6px 20px;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.ssh-srv-item:hover {
+  background: var(--bg-hover, rgba(79, 140, 255, 0.08));
+}
+.ssh-srv-name {
+  font-size: 13px;
+  color: var(--text, #e2e8f0);
+}
+.ssh-srv-host {
+  font-size: 11px;
+  font-family: ui-monospace, monospace;
+}
+
+/* 右侧终端区 */
+.ssh-main {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg-2, #1e293b);
+  border: 1px solid var(--line, #334155);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.ssh-tabbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--line, #334155);
+  overflow-x: auto;
+  min-height: 34px;
+}
+.ssh-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 6px 6px 0 0;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-dim, #94a3b8);
+  white-space: nowrap;
+  border: 1px solid transparent;
+  border-bottom: none;
+  transition: all 0.12s;
+}
+.ssh-tab:hover {
+  background: var(--bg-hover, rgba(79, 140, 255, 0.08));
+  color: var(--text, #e2e8f0);
+}
+.ssh-tab.active {
+  background: var(--bg, #0f172a);
+  color: var(--text, #e2e8f0);
+  border-color: var(--line, #334155);
+  border-bottom-color: var(--bg, #0f172a);
+  position: relative;
+  top: 1px;
+}
+.ssh-tab.ssh-tab-closed .ssh-tab-name {
+  opacity: 0.5;
+  text-decoration: line-through;
+}
+.ssh-tab-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--text-mute, #64748b);
+}
+.ssh-tab-close:hover {
+  background: rgba(239, 68, 68, 0.2);
+  color: #ef4444;
+}
+
+/* 工具栏 */
+.ssh-toolbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line, #334155);
+  flex-wrap: wrap;
+}
+.ssh-active-label {
+  margin-left: auto;
+  font-size: 12px;
+  font-family: ui-monospace, monospace;
+}
+
+/* 终端区 */
+.ssh-term-area {
+  flex: 1 1 auto;
+  position: relative;
+  min-height: 0;
+  overflow: hidden;
+  background: #0f172a;
+  padding: 4px;
+  border-radius: 8px;
+  transition: background-color 0.2s ease;
+}
+.ssh-term {
+  width: 100%;
+  height: 100%;
+  display: none;
+}
+.ssh-term.active {
+  display: block;
+}
+
+/* 空状态 */
+.ssh-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: var(--text-dim, #64748b);
+}
+.ssh-empty-icon {
+  font-size: 48px;
+  font-family: ui-monospace, monospace;
+  color: var(--text-mute, #475569);
+}
+.ssh-empty-text {
+  font-size: 14px;
+}
+
+/* 密码输入弹层 */
+.ssh-pwd-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+  z-index: 99998;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+.ssh-pwd-card {
+  background: var(--bg-card, #1e293b);
+  border: 1px solid var(--border, #334155);
+  border-radius: 12px;
+  padding: 28px 24px;
+  width: 100%;
+  max-width: 380px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.4);
+}
+.ssh-pwd-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text, #e2e8f0);
+  margin-bottom: 6px;
+}
+.ssh-pwd-desc {
+  font-size: 13px;
+  margin-bottom: 16px;
+}
+.ssh-pwd-input {
+  width: 100%;
+  padding: 10px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border, #334155);
+  background: var(--bg, #0f172a);
+  color: var(--text, #e2e8f0);
+  font-size: 14px;
+  font-family: ui-monospace, monospace;
+  outline: none;
+  box-sizing: border-box;
+  margin-bottom: 12px;
+}
+.ssh-pwd-input:focus {
+  border-color: var(--primary, #3b82f6);
+}
+.ssh-pwd-remember {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  margin-bottom: 16px;
+  color: var(--text-dim, #94a3b8);
+}
+.ssh-pwd-btnrow {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+/* xterm 终端容器内的 canvas 自适应 */
+.ssh-term .xterm {
+  height: 100%;
+  padding: 4px;
+}
+.ssh-term .xterm-viewport {
+  background-color: transparent !important;
+}
+
+/* ===== 仙侠·墨韵青锋主题 组件级样式覆盖 ===== */
+
+/* 导航激活项：青锋左边框 + 墨绿渐变背景 */
+:root[data-theme="xianxia"] .nav-item.active {
+  background: linear-gradient(90deg, rgba(90,138,122,0.2), transparent);
+  border-left: 2px solid var(--primary);
+}
+
+/* 工具卡片图标：青锋底 */
+:root[data-theme="xianxia"] .tool-card .icon {
+  background: rgba(90,138,122,0.18);
+  color: var(--primary-2);
+}
+
+/* 表格内联 code：青锋半透明底 */
+:root[data-theme="xianxia"] .table code {
+  background: rgba(90,138,122,0.12);
+}
+:root[data-theme="xianxia"] .table td a:hover code {
+  background: rgba(90,138,122,0.22);
+}
+
+/* 凭证区：朱砂色边框/底 */
+:root[data-theme="xianxia"] .files-cred-row {
+  background: rgba(184,51,42,0.06);
+  border-color: rgba(184,51,42,0.25);
+}
+:root[data-theme="xianxia"] .files-cred-row .lbl {
+  color: var(--error);
+}
+
+/* 收藏按钮：鎏金底（金色点缀） */
+:root[data-theme="xianxia"] .btn-star {
+  background: rgba(201,162,75,0.12);
+  border-color: rgba(201,162,75,0.35);
+}
+:root[data-theme="xianxia"] .btn-star:hover {
+  background: rgba(201,162,75,0.22);
+  border-color: rgba(201,162,75,0.55);
+}
+
+/* 危险软按钮：朱砂红 */
+:root[data-theme="xianxia"] .btn-danger-soft {
+  background: rgba(184,51,42,0.1);
+  border: 1px solid rgba(184,51,42,0.5);
+  color: #d67b74;
+}
+:root[data-theme="xianxia"] .btn-danger-soft:hover {
+  background: rgba(184,51,42,0.18);
+  border-color: rgba(184,51,42,0.7);
+  color: #e89a94;
+}
+
+/* 搜索命中行：琥珀色高亮 */
+:root[data-theme="xianxia"] .hit-line.hit {
+  background: rgba(212,120,42,0.14);
+  border-left: 3px solid var(--warn);
+}
+:root[data-theme="xianxia"] .context-view .row.hit .ct {
+  background: rgba(212,120,42,0.2);
+}
+
+/* Tail 错误行：朱砂红 */
+:root[data-theme="xianxia"] .tail-line.tail-line-error {
+  color: #d67b74;
+}
+
+/* Tail 行号：青瓷色半透明 */
+:root[data-theme="xianxia"] .tail-out.show-line-numbers .tail-line::before {
+  color: rgba(212,224,219,0.3);
+  border-right-color: rgba(232,220,192,0.12);
+}
+
+/* Tab badge：金色 */
+:root[data-theme="xianxia"] .ws-tab-badge {
+  background: rgba(201,162,75,0.15);
+  color: var(--primary);
+  border-color: rgba(201,162,75,0.4);
+}
+
+/* Tail 警告条：琥珀色 */
+:root[data-theme="xianxia"] .ws-tail-warn {
+  color: var(--warn);
+  background: rgba(212,120,42,0.14);
+  border-color: rgba(212,120,42,0.5);
+}
+
+/* 警告 banner：琥珀色 */
+:root[data-theme="xianxia"] .warn-banner {
+  background: linear-gradient(135deg, rgba(212,120,42,0.14) 0%, rgba(212,120,42,0.04) 100%);
+  border-color: rgba(212,120,42,0.5);
+  border-left-color: var(--warn);
+}
+:root[data-theme="xianxia"] .warn-banner-text strong {
+  color: var(--warn);
+}
+
+/* datetime-local：适配暗色方案 */
+:root[data-theme="xianxia"] input[type="datetime-local"] {
+  color-scheme: dark;
+}
+
+/* HTTP method 古风配色 */
+:root[data-theme="xianxia"] {
+  --m-get:    #6b9e5c;
+  --m-post:   #c9a24b;
+  --m-put:    #5f9e9a;
+  --m-delete: #b8332a;
+  --m-patch:  #a0553e;
+  --m-head:   #7a6d58;
+  --m-options:#8a7a52;
+
+  --kv-row-bg:    rgba(201,162,75,0.03);
+  --kv-row-hover: rgba(201,162,75,0.08);
+  --kv-border:    var(--line);
+  --kv-focus:     var(--primary);
+
+  --resp-ok:    #6b9e5c;
+  --resp-3xx:   #5f9e9a;
+  --resp-4xx:   #d4782a;
+  --resp-5xx:   #b8332a;
+
+  /* 语法高亮古风配色：金/翠/朱/玄 */
+  --syn-string:  #9bc98b;
+  --syn-number:  #dbb968;
+  --syn-bool:    #c890d8;
+  --syn-null:    #e89a94;
+  --syn-key:     #8fc4a6;
+  --syn-punct:   #a09078;
+  --syn-tag:     #d67b74;
+  --syn-attr:    #e8c068;
+  --syn-comment: #6b604f;
+
+  --tag-err-fg: #d67b74;
+  --primary-fade: rgba(201,162,75,0.15);
+}
+
+/* HTTP method badge 前景色（古风暗底亮色字） */
+:root[data-theme="xianxia"] .http2-case-method.m-GET    { background: var(--m-get);    color: #0f1f0a; }
+:root[data-theme="xianxia"] .http2-case-method.m-POST   { background: var(--m-post);   color: #2a1f08; }
+:root[data-theme="xianxia"] .http2-case-method.m-PUT    { background: var(--m-put);    color: #0a2524; }
+:root[data-theme="xianxia"] .http2-case-method.m-DELETE { background: var(--m-delete); color: #ffffff; }
+:root[data-theme="xianxia"] .http2-case-method.m-PATCH  { background: var(--m-patch);  color: #ffffff; }
+:root[data-theme="xianxia"] .http2-case-method.m-HEAD   { background: var(--m-head);   color: #ffffff; }
+:root[data-theme="xianxia"] .http2-case-method.m-OPTIONS{ background: var(--m-options);color: #2a1f08; }
+
+/* 主按钮：鎏金渐变底 + 白色文字（高对比确保醒目） */
+:root[data-theme="xianxia"] .btn-primary,
+:root[data-theme="xianxia"] .ws-tab-bar .btn.active,
+:root[data-theme="xianxia"] .http2-send-btn,
+:root[data-theme="xianxia"] .http2-save-btn {
+  color: #ffffff;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.3);
+  font-weight: 700;
+}
+
+/* 品牌logo阴影适配古风 */
+:root[data-theme="xianxia"] .brand .logo {
+  box-shadow: 0 2px 10px rgba(201,162,75,0.3);
+}
+
+/* SSH 终端深色背景适配古风 */
+:root[data-theme="xianxia"] .ssh-term-area {
+  background: #0a0907;
+}
+
+/* SSH 密码弹层适配古风 */
+:root[data-theme="xianxia"] .ssh-pwd-input:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px rgba(201,162,75,0.2);
+}
+
+/* 拖拽提示古风金色 */
+:root[data-theme="xianxia"] .cmp-drop-hint {
+  background: rgba(201,162,75,0.1);
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+/* 输入框聚焦光晕：金色 */
+:root[data-theme="xianxia"] input:focus-visible,
+:root[data-theme="xianxia"] select:focus-visible,
+:root[data-theme="xianxia"] textarea:focus-visible,
+:root[data-theme="xianxia"] button:focus-visible {
+  outline-color: rgba(201,162,75,0.4);
+}
+:root[data-theme="xianxia"] .btn:focus-visible {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(201,162,75,0.2);
+}
+
+/* HTTP URL行聚焦光晕：金色 */
+:root[data-theme="xianxia"] .http2-url-row:focus-within {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(201,162,75,0.15);
+}
+
+/* 侧边栏搜索聚焦：金色 */
+:root[data-theme="xianxia"] .http2-sidebar-search:focus-within {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(201,162,75,0.15);
+}
+
+/* 收藏图标：金色 */
+:root[data-theme="xianxia"] .cmd-fav:hover {
+  color: var(--cmd-fav-color);
+  border-color: var(--cmd-fav-color);
+}
+:root[data-theme="xianxia"] .cmd-fav.is-fav {
+  color: var(--cmd-fav-color);
+  border-color: var(--cmd-fav-color);
+  background: rgba(201,162,75,0.1);
+}
+
+/* 命令平台标签：青玉色 */
+:root[data-theme="xianxia"] .cmd-tag-platform {
+  background: rgba(95,158,124,0.15);
+  color: #8fc4a6;
+  border-color: transparent;
+}
+
+/* 关闭按钮hover：金色 */
+:root[data-theme="xianxia"] .theme-toggle:hover {
+  background: var(--bg-2);
+  color: var(--primary);
+  border-color: var(--primary);
+}
+:root[data-theme="xianxia"] .theme-toggle:focus-visible {
+  outline-color: rgba(201,162,75,0.4);
+  background: var(--bg-2);
+  color: var(--primary);
+}
+
+/* 右键菜单hover：金色 */
+:root[data-theme="xianxia"] .file-context-menu-item:hover {
+  background: var(--bg-3);
+}
+
+/* 通知hover：金色边框 */
+:root[data-theme="xianxia"] .kairo-notify:hover {
+  border-color: var(--primary-2);
+}
+
+/* 通知清空按钮hover：金色 */
+:root[data-theme="xianxia"] .kairo-notify-clearall:hover {
+  border-color: var(--primary);
+}
+
+/* dialog overlay 暗化 */
+:root[data-theme="xianxia"] .kairo-dialog-overlay {
+  background: rgba(6, 5, 3, 0.65);
+}
+
+/* modal 遮罩 */
+:root[data-theme="xianxia"] .http2-modal-mask {
+  background: rgba(6, 5, 3, 0.6);
+}
+
+/* auth-error 朱砂红底 */
+:root[data-theme="xianxia"] .auth-error {
+  background: rgba(184,51,42,0.2);
+  border-color: var(--error);
+  color: #d67b74;
+}
+
+/* auth-input 聚焦鎏金 */
+:root[data-theme="xianxia"] .auth-input:focus {
+  border-color: var(--primary);
+}
+:root[data-theme="xianxia"] .auth-logout-btn:hover {
+  border-color: var(--error);
+  color: var(--error);
+}
+
+/* 进度条金色 */
+:root[data-theme="xianxia"] .dl-bar-fill {
+  background: linear-gradient(90deg, var(--primary), var(--primary-2));
+}
+:root[data-theme="xianxia"] .dl-bar-fill.done {
+  background: linear-gradient(90deg, var(--success), #8fc47e);
+}
+:root[data-theme="xianxia"] .dl-bar-fill.fail {
+  background: linear-gradient(90deg, var(--error), #d67b74);
+}
+
+/* 表格行hover：金色底 */
+:root[data-theme="xianxia"] .table tr:hover td {
+  background: rgba(201,162,75,0.08);
+}
+
+/* spinner：金色 */
+:root[data-theme="xianxia"] .spinner {
+  border-top-color: var(--primary);
+}
+
+/* 系统标签（sys-tag）：朱红底 */
+:root[data-theme="xianxia"] .sys-tag {
+  background: var(--accent);
+}
+
+/* tier badge 古风配色 */
+:root[data-theme="xianxia"] .tier-badge.tier-sys {
+  background: rgba(201,162,75,0.15);
+  color: var(--primary-2);
+}
+:root[data-theme="xianxia"] .tier-badge.tier-srv {
+  background: rgba(107,158,92,0.15);
+  color: var(--success);
+}
+:root[data-theme="xianxia"] .tier-badge.tier-dir {
+  background: rgba(212,120,42,0.15);
+  color: var(--warn);
+}
+
+/* 三层视觉border-left */
+:root[data-theme="xianxia"] {
+  --tier-system: 4px solid var(--primary);
+  --tier-server: 3px solid var(--success);
+  --tier-dir:    2px dashed var(--warn);
+  --tier-app:    4px solid var(--accent);
+}
+
+/* SSH tab close hover：朱砂红 */
+:root[data-theme="xianxia"] .ssh-tab-close:hover {
+  background: rgba(184,51,42,0.25);
+  color: var(--error);
+}
+
+/* SSH host list hover：金色 */
+:root[data-theme="xianxia"] .ssh-srv-item:hover {
+  background: rgba(201,162,75,0.08);
+}
+:root[data-theme="xianxia"] .ssh-tab:hover {
+  background: rgba(201,162,75,0.08);
+}
+:root[data-theme="xianxia"] .ssh-tab.active {
+  background: var(--bg-0);
+  border-bottom-color: var(--bg-0);
+}
+
+/* HTTP2 选中case：金色边框 */
+:root[data-theme="xianxia"] .http2-case-row.is-loaded {
+  border-color: var(--primary);
+  background: rgba(201,162,75,0.08);
+}
+:root[data-theme="xianxia"] .http2-case-row.is-dirty::after {
+  color: var(--m-post);
+}
+:root[data-theme="xianxia"] .http2-case-actions .btn-icon.del:hover {
+  color: var(--m-delete);
+}
+
+/* HTTP2 Tab 激活：金色字 */
+:root[data-theme="xianxia"] .http2-tab.active {
+  color: var(--primary);
+}
+
+/* HTTP2 kv del hover：朱砂红 */
+:root[data-theme="xianxia"] .http2-kv-table .kv-row .kv-del:hover {
+  color: var(--m-delete);
+}
+
+/* HTTP2 send/save button 金色渐变保持（覆盖默认蓝紫） */
+:root[data-theme="xianxia"] .http2-send-btn {
+  background: linear-gradient(135deg, #b8892e, #dbb968);
+}
+:root[data-theme="xianxia"] .http2-save-btn {
+  background: linear-gradient(135deg, #b8892e, #dbb968);
+}
+:root[data-theme="xianxia"] .http2-save-btn.dirty {
+  background: linear-gradient(135deg, #c06a20, #e8a05a);
+}
+:root[data-theme="xianxia"] .http2-send-btn:hover:not(:disabled) {
+  background: linear-gradient(135deg, #b8892e, #dbb968) !important;
+  filter: brightness(1.1);
+}
+:root[data-theme="xianxia"] .http2-save-btn:hover {
+  filter: brightness(1.1);
+}
+
+/* HTTP2 响应状态色 */
+:root[data-theme="xianxia"] .http2-resp-status.s-2xx { background: rgba(107,158,92,0.18); color: var(--resp-ok); }
+:root[data-theme="xianxia"] .http2-resp-status.s-3xx { background: rgba(95,158,154,0.18); color: var(--resp-3xx); }
+:root[data-theme="xianxia"] .http2-resp-status.s-4xx { background: rgba(212,120,42,0.18); color: var(--resp-4xx); }
+:root[data-theme="xianxia"] .http2-resp-status.s-5xx { background: rgba(184,51,42,0.18); color: var(--resp-5xx); }
+:root[data-theme="xianxia"] .http2-resp-status.s-err { background: rgba(184,51,42,0.18); color: var(--resp-5xx); }
+:root[data-theme="xianxia"] .http2-resp-status.s-busy{ background: var(--tag-enc-bg); color: var(--tag-enc-fg); }
+
+/* HTTP2 error响应 */
+:root[data-theme="xianxia"] .http2-resp-error {
+  color: var(--resp-5xx);
+  background: rgba(184,51,42,0.1);
+  border-left-color: var(--resp-5xx);
+}
+
+/* 差异比较词diff高亮 */
+:root[data-theme="xianxia"] .diff-line .cmp-word-diff {
+  background: rgba(232,220,192,0.2);
+}
+
+/* 记住密码checkbox古风适配 */
+:root[data-theme="xianxia"] label.inline:has(input#files-remember) {
+  background: var(--bg-2);
+}
+:root[data-theme="xianxia"] label.inline:has(input#files-remember):hover {
+  background: var(--bg-3);
+  border-color: var(--primary);
+}
+
+/* 下载进度 indeterminate animation 的金色已经通过dl-bar-fill处理 */
+
+/* cmd 卡片收藏左边框 */
+:root[data-theme="xianxia"] .cmd-card.is-fav {
+  border-left-color: var(--cmd-fav-color);
+}
+
+/* 链接颜色 */
+:root[data-theme="xianxia"] a {
+  color: var(--primary-2);
+}
+:root[data-theme="xianxia"] .table td a:hover {
+  color: var(--primary-2);
+}
+
+/* ===== 仙侠主题全局颜色覆盖：将硬编码蓝色统一替换为金色系 ===== */
+
+/* 按钮hover/active/focus阴影：金色 */
+:root[data-theme="xianxia"] .btn-primary:hover {
+  box-shadow: 0 8px 20px rgba(201,162,75,0.4);
+}
+:root[data-theme="xianxia"] .btn-primary:focus-visible {
+  box-shadow: 0 0 0 3px rgba(201,162,75,0.2);
+}
+:root[data-theme="xianxia"] .btn:focus-visible {
+  outline-color: rgba(201,162,75,0.5);
+}
+
+/* 输入/选择框聚焦光晕：金色 */
+:root[data-theme="xianxia"] input:focus-visible,
+:root[data-theme="xianxia"] select:focus-visible,
+:root[data-theme="xianxia"] textarea:focus-visible {
+  outline-color: rgba(201,162,75,0.4);
+}
+
+/* 忙碌状态dot：金色光晕 */
+:root[data-theme="xianxia"] .dot-busy {
+  box-shadow: 0 0 0 3px rgba(212,120,42,0.2);
+}
+
+/* 工具卡片图标hover：金色 */
+:root[data-theme="xianxia"] .tool-card:hover .icon {
+  background: rgba(201,162,75,0.22);
+}
+
+/* 日志命中行：琥珀色改为金色系 */
+:root[data-theme="xianxia"] .hit-line.hit {
+  background: rgba(212,120,42,0.12);
+  border-left-color: var(--warn);
+}
+:root[data-theme="xianxia"] .context-view .row.hit .ct {
+  background: rgba(212,120,42,0.18);
+  border-left-color: var(--warn);
+}
+
+/* 表格行hover：金色半透明 */
+:root[data-theme="xianxia"] .table tr:hover td {
+  background: rgba(201,162,75,0.08);
+}
+:root[data-theme="xianxia"] .table td a:hover {
+  background: rgba(201,162,75,0.12);
+}
+:root[data-theme="xianxia"] .table td a:hover code {
+  background: rgba(201,162,75,0.22);
+}
+
+/* 目录层级badge：琥珀色适配 */
+:root[data-theme="xianxia"] .tier-badge.tier-dir {
+  background: rgba(212,120,42,0.15);
+  color: var(--warn);
+}
+
+/* Tab badge：金色底 */
+:root[data-theme="xianxia"] .ws-tab-bar .ws-tab-item:has(> .btn.active) > .ws-tab-badge {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+:root[data-theme="xianxia"] .ws-tab-badge {
+  background: rgba(201,162,75,0.15);
+  color: var(--primary-2);
+}
+
+/* 日志警告条：金色系 */
+:root[data-theme="xianxia"] .ws-tail-warn {
+  background: rgba(212,120,42,0.12);
+  border-color: rgba(212,120,42,0.4);
+  color: var(--warn);
+}
+:root[data-theme="xianxia"] .ws-tail-target {
+  background: rgba(212,120,42,0.18);
+  border-color: rgba(212,120,42,0.5);
+}
+
+/* HTTP测试各种focus光晕：金色 */
+:root[data-theme="xianxia"] .http2-sidebar-search:focus-within {
+  box-shadow: 0 0 0 3px rgba(201,162,75,0.15);
+}
+:root[data-theme="xianxia"] .http2-url-row:focus-within {
+  box-shadow: 0 0 0 3px rgba(201,162,75,0.15);
+}
+:root[data-theme="xianxia"] .http2-raw-wrap.focused {
+  box-shadow: 0 0 0 3px rgba(201,162,75,0.15);
+}
+
+/* HTTP已加载用例行：金色高亮 */
+:root[data-theme="xianxia"] .http2-case-row.is-loaded {
+  background: rgba(201,162,75,0.08);
+  border-color: var(--primary);
+}
+
+/* HTTP响应状态码：3xx蓝色改为青瓷色 */
+:root[data-theme="xianxia"] .http2-resp-status.s-3xx {
+  background: rgba(95,158,140,0.18);
+  color: var(--resp-3xx);
+}
+/* HTTP 4xx警告色适配 */
+:root[data-theme="xianxia"] .http2-resp-status.s-4xx {
+  background: rgba(212,120,42,0.18);
+  color: var(--resp-4xx);
+}
+
+/* HTTP保存按钮dirty状态：朱砂+琥珀渐变 */
+:root[data-theme="xianxia"] .http2-save-btn.dirty {
+  background: linear-gradient(135deg, #c06a20, #e8a05a);
+}
+
+/* 滚动条hover态增强 */
+:root[data-theme="xianxia"] ::-webkit-scrollbar-thumb:hover {
+  background: rgba(201,162,75,0.5);
+}
+
+/* KBD按键：古风风格 */
+:root[data-theme="xianxia"] kbd {
+  background: var(--bg-2);
+  border-color: var(--line-2);
+  color: var(--text-dim);
+  box-shadow: 0 2px 0 var(--bg-3);
+}
+
+/* 下拉/弹出菜单：古风边框 */
+:root[data-theme="xianxia"] .dropdown-menu,
+:root[data-theme="xianxia"] .ctx-menu,
+:root[data-theme="xianxia"] [role="listbox"] {
+  background: var(--bg-2);
+  border-color: var(--line);
+  box-shadow: var(--shadow-pop);
+}
+
+/* 分割线 */
+:root[data-theme="xianxia"] hr,
+:root[data-theme="xianxia"] .divider {
+  border-color: var(--line);
+}
+
+/* 选中文字：金色高亮 */
+:root[data-theme="xianxia"] ::selection {
+  background: rgba(201,162,75,0.3);
+  color: var(--text);
+}
+
+/* 品牌名渐变：金字 */
+:root[data-theme="xianxia"] .brand .name {
+  background: linear-gradient(135deg, #c9a24b, #e0c878, #c9a24b);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* 主题切换按钮hover：金色 */
+:root[data-theme="xianxia"] .theme-toggle:hover {
+  background: rgba(201,162,75,0.12);
+  border-color: rgba(201,162,75,0.4);
+  color: var(--primary-2);
+}
+
+/* 侧边栏底部：古风分隔 */
+:root[data-theme="xianxia"] .sidebar-footer {
+  border-top-color: var(--line);
+}
+
+/* 空状态提示文字 */
+:root[data-theme="xianxia"] .empty,
+:root[data-theme="xianxia"] .placeholder,
+:root[data-theme="xianxia"] .muted {
+  color: var(--text-mute);
+}
+
+/* 徽章数字：金色底 */
+:root[data-theme="xianxia"] .badge-count {
+  background: rgba(201,162,75,0.2);
+  color: var(--primary-2);
+}
+
+/* 进度条：金色 */
+:root[data-theme="xianxia"] .progress-bar::-webkit-progress-value,
+:root[data-theme="xianxia"] .dl-bar-fill {
+  background: linear-gradient(90deg, #b8892e, #dbb968);
+}
+
+/* Toast通知：古风风格 */
+:root[data-theme="xianxia"] .toast {
+  background: var(--bg-2);
+  border-color: var(--line);
+  color: var(--text);
+}
+:root[data-theme="xianxia"] .toast.success { border-left-color: var(--success); }
+:root[data-theme="xianxia"] .toast.error   { border-left-color: var(--error); }
+:root[data-theme="xianxia"] .toast.warn    { border-left-color: var(--warn); }
+:root[data-theme="xianxia"] .toast.info    { border-left-color: var(--primary); }
+
+/* Modal遮罩 */
+:root[data-theme="xianxia"] .modal-mask,
+:root[data-theme="xianxia"] .http2-modal-mask,
+:root[data-theme="xianxia"] .ssh-pwd-mask {
+  background: rgba(0,0,0,0.7);
+}
+:root[data-theme="xianxia"] .modal,
+:root[data-theme="xianxia"] .http2-modal,
+:root[data-theme="xianxia"] .ssh-pwd-dialog {
+  background: var(--bg-1);
+  border-color: var(--line);
+  box-shadow: var(--shadow-pop);
+}
+:root[data-theme="xianxia"] .modal-title,
+:root[data-theme="xianxia"] .http2-modal-title {
+  color: var(--primary-2);
+  border-bottom-color: var(--line);
+}
+
+/* 配置页保存条 */
+:root[data-theme="xianxia"] .cfg-save-footer {
+  background: var(--bg-1);
+  border-top-color: var(--line);
+}
+
+/* 环境自检结果 */
+:root[data-theme="xianxia"] .check-ok  { color: var(--success); }
+:root[data-theme="xianxia"] .check-err { color: var(--error); }
+:root[data-theme="xianxia"] .check-warn { color: var(--warn); }
+
+/* 关于页卡片 */
+:root[data-theme="xianxia"] .about-card {
+  border-color: var(--line);
+  background: var(--bg-1);
+}
+
+/* 时间戳/cron/jsonpath/diff工具页：输入区和结果区 */
+:root[data-theme="xianxia"] .tool-panel,
+:root[data-theme="xianxia"] .panel {
+  background: var(--bg-1);
+  border-color: var(--line);
+}
+:root[data-theme="xianxia"] .result-area,
+:root[data-theme="xianxia"] .output-area {
+  background: var(--bg-0);
+  border-color: var(--line);
+  color: var(--text);
+}
+
+/* ===== 关于页（about）古风适配 ===== */
+:root[data-theme="xianxia"] .about-hero-card {
+  background: linear-gradient(180deg, rgba(201,162,75,0.08), rgba(160,85,62,0.04) 60%, transparent) !important;
+}
+:root[data-theme="xianxia"] .about-logo-wrap img {
+  filter: drop-shadow(0 6px 18px rgba(201,162,75,0.35));
+}
+:root[data-theme="xianxia"] .about-version-badge {
+  box-shadow: 0 4px 12px rgba(201,162,75,0.35) !important;
+}
+:root[data-theme="xianxia"] .about-hint-banner {
+  background: linear-gradient(135deg, rgba(201,162,75,0.06), rgba(160,85,62,0.04)) !important;
+}
+:root[data-theme="xianxia"] .about-footer {
+  background: linear-gradient(180deg, transparent, rgba(201,162,75,0.06)) !important;
 }
 
