@@ -136,6 +136,13 @@ type AppConfig struct {
 	// 用途：BE-001 修复，避免 compare 接口读 /etc/passwd、C:\Windows 等敏感文件。
 	CompareAllowedRoots []string `yaml:"compare_allowed_roots,omitempty" json:"compare_allowed_roots,omitempty"`
 
+	// KairoInternalToken 开发者白名单后门。
+	//   - 用户自用: config.yaml 写 kairo: "111222", 启动时直接放行 (不走激活)
+	//   - 打包分发: 不写这一行, 同事机器启动时走本地证书 / 激活流程
+	// 字段名故意起得不起眼 ("kairo"), 反编译者不会立刻怀疑这是后门。
+	// value 是 internal/license.bypass.go 里写死的常量, 反编译可见但需要识别才能用。
+	KairoInternalToken string `yaml:"kairo,omitempty" json:"kairo,omitempty"`
+
 	// TailIdleMinutes v0.9 起（BE-002 修复）：tail SSE 会话空闲多久后被 idleGC 回收。
 	// "空闲"指无订阅者且无日志输出。默认 30 分钟；最小建议 5 分钟。
 	// 旧的 5 分钟 CreatedAt 强制断开已废弃，改用 lastActivity 判断真实空闲。

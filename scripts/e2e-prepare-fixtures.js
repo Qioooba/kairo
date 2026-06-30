@@ -27,7 +27,7 @@ const FAKE_DOWNLOADS_DIR = path.join(E2E_ROOT, 'downloads');
 
 const MOCK_SSH = {
   host: '127.0.0.1',
-  port: 2225,
+  port: 2222,
   username: 'test',
   password: 'test'
 };
@@ -249,7 +249,7 @@ auth:
 ssh:
   mock_enabled: true
   default_host: "127.0.0.1"
-  default_port: 2225
+  default_port: 2222
   default_username: "test"
   default_password: "test"
 
@@ -261,7 +261,7 @@ systems:
       - name: "mock-websphere"
         type: "websphere"
         host: "127.0.0.1"
-        port: 2225
+        port: 2222
         username: "test"
         password: "test"
         log_paths:
@@ -269,7 +269,7 @@ systems:
       - name: "mock-files"
         type: "ftp"
         host: "127.0.0.1"
-        port: 2225
+        port: 2222
         username: "test"
         password: "test"
         root: "/"

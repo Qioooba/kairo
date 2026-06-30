@@ -132,26 +132,26 @@
     const btnCtrlC = el('button', { class: 'btn btn-sm', text: 'Ctrl+C', title: '发送 SIGINT', onclick: sendCtrlC, disabled: true });
     const btnClear = el('button', { class: 'btn btn-sm', text: '清屏', title: '清屏（clear）', onclick: clearActive, disabled: true });
     const btnReconnect = el('button', { class: 'btn btn-sm', text: '重连', title: '断开重连', onclick: reconnectActive, disabled: true });
-    const btnNewWindow = el('button', { class: 'btn btn-sm', text: '↗新窗口', title: '在独立窗口打开', onclick: openInNewWindow, disabled: true });
     const btnCloseTab = el('button', { class: 'btn btn-sm btn-danger', text: '关闭 tab', title: '关闭当前 tab', onclick: closeActiveTab, disabled: true });
     const activeLabel = el('span', { class: 'ssh-active-label text-dim', text: '' });
     // 编码选择器：UTF-8 / GBK（老 WebSphere / Oracle 终端常见）
-    const encodingSel = el('select', { class: 'btn btn-sm', style: 'max-width:90px;' });
+    // UI-修复：之前用 .btn .btn-sm 让它"看起来像按钮"，结果用户看不出来是下拉。
+    // 改成专用 .ssh-encoding-sel 类，下拉箭头 + 边框都按 <select> 原生样式渲染。
+    const encodingSel = el('select', { class: 'ssh-encoding-sel', title: '终端输出编码（UTF-8 / GBK），切换后自动重连' });
     encodingSel.appendChild(el('option', { value: 'utf-8', text: 'UTF-8' }));
     encodingSel.appendChild(el('option', { value: 'gbk', text: 'GBK' }));
     encodingSel.addEventListener('change', function () {
       const tab = getActiveTab();
-      if (tab && !tab.closed) {
-        tab.encoding = encodingSel.value;
-        // 编码变更时自动重连以新编码通信
-        reconnectActive();
-      }
+      if (!tab || tab.closed) return;
+      tab.encoding = encodingSel.value;
+      // UI-修复：之前切换无声无息，用户看不到反馈。加 toast + 自动重连（终端会刷"重连中…"）。
+      toast('已切换编码为 ' + (tab.encoding === 'gbk' ? 'GBK' : 'UTF-8') + '，正在重连…', 'idle');
+      reconnectActive();
     });
     toolbarEl.appendChild(btnCtrlC);
+    toolbarEl.appendChild(encodingSel);
     toolbarEl.appendChild(btnClear);
     toolbarEl.appendChild(btnReconnect);
-    toolbarEl.appendChild(encodingSel);
-    toolbarEl.appendChild(btnNewWindow);
     toolbarEl.appendChild(btnCloseTab);
     toolbarEl.appendChild(activeLabel);
 
@@ -161,7 +161,6 @@
       btnCtrlC.disabled = !hasActive;
       btnClear.disabled = !hasActive;
       btnReconnect.disabled = !hasActive;
-      btnNewWindow.disabled = !hasActive;
       btnCloseTab.disabled = !hasActive;
       // 同步编码选择器
       if (tab && !tab.closed) {
@@ -667,7 +666,14 @@
     function sendCtrlC() {
       const tab = getActiveTab();
       if (!tab || !tab.ws || tab.ws.readyState !== 1) { toast('未连接', 'warn'); return; }
-      sendControl(tab, { type: 'signal', signal: 'SIGINT' });
+      // v0.10-修复：之前用 SSH signal channel 发 SIGINT，结果只给 bash 自己，
+      // 当前景命令（比如 `sleep 10`）不是 bash 进程组里的前台进程时就收不到，
+      // 用户看着 ^C 标记一刷新没反应就以为按钮坏了。
+      //
+      // 正确做法：发 0x03 (Ctrl+C 字节) 到 ssh stdin，让对端 PTY 的 line discipline
+      // 走 ISIG 处理 —— 这样 SIGINT 会发给 fg 进程组，sleep 等子命令才能被打断。
+      // 0x03 走 PTY 时 line discipline 自己会回显 ^C 到 xterm，不需要前端再写一遍。
+      tab.ws.send(new Uint8Array([0x03]));
     }
 
     function clearActive() {
@@ -695,15 +701,6 @@
       if (tab.term) tab.term.write('\r\n\x1b[36m重连中…\x1b[0m\r\n');
       if (tab.ws) { try { tab.ws.close(); } catch (e) { /* ignore */ } }
       connectWS(tab);
-    }
-
-    function openInNewWindow() {
-      const tab = getActiveTab();
-      if (!tab) { toast('没有活跃的 tab', 'warn'); return; }
-      const url = '/static/ssh.html?system=' + encodeURIComponent(tab.system) +
-        '&server=' + encodeURIComponent(tab.server) +
-        '&cols=' + tab.cols + '&rows=' + tab.rows;
-      window.open(url, '_blank');
     }
 
     function getActiveTab() {

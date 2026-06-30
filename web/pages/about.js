@@ -16,6 +16,40 @@
 
   const VERSION = 'v0.9.0';
 
+  // =====================================================================
+  // SVG icon 字典 — 13 个 section icon (Win7 兼容, 不依赖 emoji 字体)
+  // - 单色 currentColor, 跟 CSS 变量自动适配 4 套主题 + xianxia
+  // - viewBox 统一 24×24, 渲染时按需 size
+  // - path data 单源, sticky 锚点 + section title 两处复用
+  // =====================================================================
+  const ICONS = {
+    overview:     'M12 2a10 10 0 100 20 10 10 0 000-20zm0 3a7 7 0 110 14 7 7 0 010-14zm0 3a4 4 0 100 8 4 4 0 000-8zm0 2a2 2 0 110 4 2 2 0 010-4z',         // 靶心 — 产品概览
+    principles:   'M12 2L8 12l4 10 4-10zM12 12L9 9M12 12l3-3M12 12l-3 3M12 12l3 3',                                                                       // 罗盘 — 设计哲学
+    architecture: 'M2 4h20v4H2zM2 11h20v4H2zM2 18h20v3H2z',                                                                                                 // 堆叠层 — 四层架构
+    stack:        'M12 2l1.5 3 3.5-1-1 3.5 3 1.5-3 1.5 1 3.5-3.5-1L12 16l-1.5 3-3.5 1 1-3.5L5 15l3-1.5L7 10l-3-1.5 3-1.5L6 3.5 9.5 4.5z',              // 八角齿轮 — 技术栈
+    security:     'M12 2L3 6v6c0 5 4 9 9 10 5-1 9-5 9-10V6z',                                                                                               // 盾牌 — 安全白皮书
+    compat:       'M8 3v5M16 3v5M5 8h14v4a5 5 0 01-5 5h-4a5 5 0 01-5-5zM10 17v5M14 17v5',                                                                  // 插头 — SSH 兼容
+    quality:      'M9 2v6L5 18a3 3 0 003 4h8a3 3 0 003-4l-4-10V2zM8 14h8',                                                                                  // 烧瓶 — 质量保障
+    modules:      'M3 3h6v3a2 2 0 004 0V3h6v6h-3a2 2 0 000 4h3v6h-6v-3a2 2 0 00-4 0v3H3v-6h3a2 2 0 000-4H3z',                                          // 拼图 — 功能模块
+    comparison:   'M6 4L2 12l4 8M18 4l4 8-4 8M14 4l-4 16',                                                                                                  // VS 双柱 — 横向对比
+    bugs:         'M12 2L2 22h20zM12 9v6M12 18v1',                                                                                                          // 警告三角 — 故障复盘
+    history:      'M12 2a10 10 0 100 20 10 10 0 000-20zM12 6v6l4 2',                                                                                         // 时钟 — 版本演进史
+    faq:          'M12 2a10 10 0 100 20 10 10 0 000-20zM9 9a3 3 0 016 0c0 2-3 3-3 5M12 17v1',                                                                // 圆 + 问号 — FAQ
+    roadmap:      'M5 3v18M5 4h11l-2 4 2 4H5'                                                                                                               // 旗子 — 路线图
+  };
+
+  // 渲染一个 SVG icon (返回 HTML 字符串, 走 unsafeHtml)
+  // - key: ICONS 字典的键
+  // - size: 渲染尺寸 (像素), 默认 14
+  // - cls: 额外 class, 用于覆盖颜色 (例如 'text-dim')
+  function svgIcon(key, size, cls) {
+    size = size || 14;
+    const path = ICONS[key] || '';
+    const clsAttr = cls ? ' class="' + cls + '"' : '';
+    // path data 必须包在 <path d="..."> 里, 否则浏览器不识别为路径
+    return '<svg' + clsAttr + ' viewBox="0 0 24 24" width="' + size + '" height="' + size + '" fill="currentColor" style="vertical-align:-2px;display:inline-block;flex-shrink:0" aria-hidden="true"><path d="' + path + '"/></svg>';
+  }
+
   async function fetchVersion() {
     try {
       if (typeof api !== 'function') return null;
@@ -864,11 +898,12 @@
   // =====================================================================
 
   // 通用 section 渲染器 (带锚点)
+  // icon 参数: ICONS 字典的 key (Win7 兼容 SVG, 不依赖 emoji 字体)
   function renderSection(id, icon, title, subtitle, contentNodes, opts) {
     opts = opts || {};
     const anchor = el('div', { id: id, style: 'scroll-margin-top:24px;' });
     const head = el('div', { style: 'display:flex; align-items:center; gap:10px; margin:36px 0 16px 0;' }, [
-      el('span', { style: 'font-size:24px;', text: icon }),
+      el('span', { style: 'width:24px; height:24px; display:inline-flex; align-items:center; justify-content:center; color:var(--primary);', unsafeHtml: svgIcon(icon, 24) }),
       el('h2', { style: 'margin:0; font-size:22px; font-weight:700;', text: title }),
       subtitle ? el('span', { class: 'text-dim', style: 'font-size:13px;', text: subtitle }) : null
     ]);
@@ -933,30 +968,30 @@
   // --- sticky 锚点导航 (顶部 tab bar) ---
   function renderAnchorNav(view) {
     const sections = [
-      { id: 'sec-overview',   icon: '[*]', label: '产品概览' },
-      { id: 'sec-principles', icon: '[@]', label: '设计哲学' },
-      { id: 'sec-architecture', icon: '[#]', label: '四层架构' },
-      { id: 'sec-stack',      icon: '[&]', label: '技术栈' },
-      { id: 'sec-security',   icon: '[!]', label: '安全白皮书' },
-      { id: 'sec-compat',     icon: '[~]', label: 'SSH 兼容' },
-      { id: 'sec-quality',    icon: '[%]', label: '质量保障' },
-      { id: 'sec-modules',    icon: '[+]', label: '功能模块' },
-      { id: 'sec-comparison', icon: '[<>]', label: '横向对比' },
-      { id: 'sec-bugs',       icon: '[x]', label: '故障复盘' },
-      { id: 'sec-history',    icon: '[=]', label: '版本史' },
-      { id: 'sec-faq',        icon: '[?]', label: 'FAQ' },
-      { id: 'sec-roadmap',    icon: '[o]', label: '路线图' }
+      { id: 'sec-overview',     icon: 'overview',     label: '产品概览' },
+      { id: 'sec-principles',   icon: 'principles',   label: '设计哲学' },
+      { id: 'sec-architecture', icon: 'architecture', label: '四层架构' },
+      { id: 'sec-stack',        icon: 'stack',        label: '技术栈' },
+      { id: 'sec-security',     icon: 'security',     label: '安全白皮书' },
+      { id: 'sec-compat',       icon: 'compat',       label: 'SSH 兼容' },
+      { id: 'sec-quality',      icon: 'quality',      label: '质量保障' },
+      { id: 'sec-modules',      icon: 'modules',      label: '功能模块' },
+      { id: 'sec-comparison',   icon: 'comparison',   label: '横向对比' },
+      { id: 'sec-bugs',         icon: 'bugs',         label: '故障复盘' },
+      { id: 'sec-history',      icon: 'history',      label: '版本史' },
+      { id: 'sec-faq',          icon: 'faq',          label: 'FAQ' },
+      { id: 'sec-roadmap',      icon: 'roadmap',      label: '路线图' }
     ];
     const wrap = el('div', { style: 'position:sticky; top:8px; z-index:10; background:var(--topbar-bg); backdrop-filter: blur(10px); border:1px solid var(--line); border-radius:var(--radius); padding:8px 10px; margin:20px 0 8px 0; display:flex; gap:6px; flex-wrap:wrap; box-shadow: var(--shadow-sm);' });
     sections.forEach(s => {
       const a = el('a', {
         href: '#' + s.id,
-        style: 'font-size:12.5px; padding:5px 12px; border-radius:6px; text-decoration:none; color:var(--text-dim); border:1px solid transparent; transition:all 0.15s; cursor:pointer;',
+        style: 'font-size:12.5px; padding:5px 12px; border-radius:6px; text-decoration:none; color:var(--text-dim); border:1px solid transparent; transition:all 0.15s; cursor:pointer; display:inline-flex; align-items:center; gap:5px;',
         onmouseover: function () { this.style.background = 'var(--bg-2)'; this.style.color = 'var(--text)'; this.style.borderColor = 'var(--line)'; },
         onmouseout: function () { this.style.background = ''; this.style.color = 'var(--text-dim)'; this.style.borderColor = 'transparent'; },
         onclick: function (e) { e.preventDefault(); const tgt = document.getElementById(s.id); if (tgt) tgt.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
       }, [
-        el('span', { style: 'margin-right:4px;', text: s.icon }),
+        el('span', { style: 'width:14px; height:14px; display:inline-flex; align-items:center; justify-content:center;', unsafeHtml: svgIcon(s.icon, 14) }),
         document.createTextNode(s.label)
       ]);
       wrap.appendChild(a);
@@ -985,7 +1020,7 @@
     ]);
     wrap.appendChild(para1);
     wrap.appendChild(useCases);
-    view.appendChild(renderSection('sec-overview', '🎯', '产品概览', 'product overview', wrap));
+    view.appendChild(renderSection('sec-overview', 'overview', '产品概览', 'product overview', wrap));
   }
 
   // --- 设计哲学 ---
@@ -998,7 +1033,7 @@
         el('div', { class: 'text-dim', style: 'font-size:13px;', text: p.body })
       ]));
     });
-    view.appendChild(renderSection('sec-principles', '🧭', '设计哲学', '8 条贯穿全栈的核心原则 · fail-closed by default', grid));
+    view.appendChild(renderSection('sec-principles', 'principles', '设计哲学', '8 条贯穿全栈的核心原则 · fail-closed by default', grid));
   }
 
   // --- 架构总览 ---
@@ -1038,7 +1073,7 @@
 
     wrap.appendChild(layerGrid);
     wrap.appendChild(flowCard);
-    view.appendChild(renderSection('sec-architecture', '🏗️', '架构总览', '4 层分层 + 数据流 · 从 Browser 到 Remote 全链路', wrap));
+    view.appendChild(renderSection('sec-architecture', 'architecture', '架构总览', '4 层分层 + 数据流 · 从 Browser 到 Remote 全链路', wrap));
   }
 
   // --- 技术栈 ---
@@ -1110,7 +1145,7 @@
     wrap.appendChild(frontendGrid);
     wrap.appendChild(engTitle);
     wrap.appendChild(engGrid);
-    view.appendChild(renderSection('sec-stack', '🛠', '技术栈', '后端 10 依赖 · 前端 8 模块 · 工程 12 实践 · 47,000+ 行代码', wrap));
+    view.appendChild(renderSection('sec-stack', 'stack', '技术栈', '后端 10 依赖 · 前端 8 模块 · 工程 12 实践 · 47,000+ 行代码', wrap));
   }
 
   // --- 安全白皮书 ---
@@ -1139,7 +1174,7 @@
 
     wrap.appendChild(banner);
     wrap.appendChild(grid);
-    view.appendChild(renderSection('sec-security', '🔒', '安全白皮书', '14 项 fail-closed 设计点 · 纵深防御 · 零明文落盘', wrap));
+    view.appendChild(renderSection('sec-security', 'security', '安全白皮书', '14 项 fail-closed 设计点 · 纵深防御 · 零明文落盘', wrap));
   }
 
   // --- SSH 兼容矩阵 ---
@@ -1174,7 +1209,7 @@
 
     wrap.appendChild(tbl);
     wrap.appendChild(note);
-    view.appendChild(renderSection('sec-compat', '🔌', 'SSH 兼容性矩阵', '5 套 profile × 5 类目标 · 从 OpenSSH 9.x 到 5.x 全部覆盖', wrap));
+    view.appendChild(renderSection('sec-compat', 'compat', 'SSH 兼容性矩阵', '5 套 profile × 5 类目标 · 从 OpenSSH 9.x 到 5.x 全部覆盖', wrap));
   }
 
   // --- 质量保障 ---
@@ -1192,7 +1227,7 @@
       ]));
     });
     wrap.appendChild(grid);
-    view.appendChild(renderSection('sec-quality', '🧪', '质量保障', '6 层质量金字塔 · 500+ Go 测试 · 8 个 Playwright 脚本', wrap));
+    view.appendChild(renderSection('sec-quality', 'quality', '质量保障', '6 层质量金字塔 · 500+ Go 测试 · 8 个 Playwright 脚本', wrap));
   }
 
   // --- 功能模块 ---
@@ -1235,7 +1270,7 @@
         ])
       ]));
     });
-    view.appendChild(renderSection('sec-modules', '🧩', '功能模块', '8 大模块 · 14 页面 · 60+ API 完整能力图谱', wrap));
+    view.appendChild(renderSection('sec-modules', 'modules', '功能模块', '8 大模块 · 14 页面 · 60+ API 完整能力图谱', wrap));
   }
 
   // --- 版本演进史 (accordion) ---
@@ -1252,7 +1287,7 @@
     wrap.appendChild(banner);
     wrap.appendChild(list);
 
-    view.appendChild(renderSection('sec-history', '📜', '版本演进史', 'v0.1 → v0.9 · 9 个版本 · 90 天 · 120+ commit', wrap));
+    view.appendChild(renderSection('sec-history', 'history', '版本演进史', 'v0.1 → v0.9 · 9 个版本 · 90 天 · 120+ commit', wrap));
   }
 
   function renderVersionCard(v, idx) {
@@ -1510,7 +1545,7 @@
 
     wrap.appendChild(intro);
     wrap.appendChild(tbl);
-    view.appendChild(renderSection('sec-comparison', '🆚', '横向对比', 'Kairo vs 传统工具栈 · 10 个真实场景效率对比', wrap));
+    view.appendChild(renderSection('sec-comparison', 'comparison', '横向对比', 'Kairo vs 传统工具栈 · 10 个真实场景效率对比', wrap));
   }
 
   // --- 故障案例库 ---
@@ -1553,7 +1588,7 @@
 
     wrap.appendChild(intro);
     wrap.appendChild(grid);
-    view.appendChild(renderSection('sec-bugs', '🐞', '故障案例库', '8 个真实 bug 复盘 · 含根因 / 修复 / 教训 · v0.4–v0.9 真实事件', wrap));
+    view.appendChild(renderSection('sec-bugs', 'bugs', '故障案例库', '8 个真实 bug 复盘 · 含根因 / 修复 / 教训 · v0.4–v0.9 真实事件', wrap));
   }
 
   // --- FAQ ---
@@ -1573,7 +1608,7 @@
       ]));
     });
     wrap.appendChild(grid);
-    view.appendChild(renderSection('sec-faq', '❓', '常见问题', 'FAQ · 12 问 · 从部署到权限到扩展性', wrap));
+    view.appendChild(renderSection('sec-faq', 'faq', '常见问题', 'FAQ · 12 问 · 从部署到权限到扩展性', wrap));
   }
 
   // --- 路线图 ---
@@ -1601,7 +1636,7 @@
     wrap.appendChild(renderList('已规划 (next 1-2 versions)', roadmap.planned, 'var(--primary)', '🎯'));
     wrap.appendChild(renderList('调研中 (considering)', roadmap.considering, 'var(--text-dim)', '💡'));
 
-    view.appendChild(renderSection('sec-roadmap', '🗺️', '路线图', 'next 1-2 versions + considering · v0.9.1 hotfix 在路上', wrap));
+    view.appendChild(renderSection('sec-roadmap', 'roadmap', '路线图', 'next 1-2 versions + considering · v0.9.1 hotfix 在路上', wrap));
   }
 
   // --- Footer ---

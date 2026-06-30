@@ -20,6 +20,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
@@ -27,12 +29,23 @@ import (
 	"kairo/internal/logquery"
 )
 
+// baselineTimeout 是 tail 启动时跑 wc / awk 取 baseline 的硬上限。
+//
+// 选 5 秒：稳态下 wc/awk 是几毫秒~100ms；5s 兜住"老 sshd 慢执行"等场景；
+// 超时后就让 baseline 取不到（兜底走"无 baseline"），不阻塞 tail 启动。
+const baselineTimeout = 5 * time.Second
+
 // Streamer 是 tailmgr 对底层 SSH 客户端的最小依赖抽象。
 //
 // 生产环境用 *sshclient.Client（已满足）；测试里可以注入 mock，
 // 不需要拉起真 SSH。
+//
+// RunOutput 是"一次性命令"，用于在 tail -F 启动前同步取 baseline
+// （如 awk 'END{print NR}' file 拿当前文件总行数）。tail 期间只跑一次，
+// 退出码非 0 或 stdout 为空 → 返回 err 即可，调用方决定兜底。
 type Streamer interface {
 	Stream(ctx context.Context, command, encoding string, onLine func(line string)) (exitCode int, err error)
+	RunOutput(ctx context.Context, command, encoding string, timeout time.Duration) (stdout string, err error)
 }
 
 // Session 一个 tail 会话
@@ -44,6 +57,11 @@ type Session struct {
 	File       string
 	Encoding   string
 	CreatedAt  time.Time
+
+	// Baseline 是 tail 启动瞬间文件总行数（精确 = awk 'END{print NR}' 的结果）。
+	// 用法：前端 buffer 第一行真实行号 = max(0, Baseline - historyLines) + 1。
+	// -1 表示拿不到 baseline（命令失败 / 文件不存在 / 编码异常等）—— 前端 fallback 到"buffer 内序号"。
+	Baseline int
 
 	// 内嵌状态
 	mu          sync.RWMutex
@@ -262,6 +280,17 @@ func (s *Session) DoneMsg() string {
 	return s.doneMsg
 }
 
+// Baseline 返回 tail 启动瞬间拿到的文件总行数。
+//
+// -1 表示 baseline 拿不到（前端 fallback）；≥0 表示精确行号可用。
+// 由 /api/logs/tail/start 响应携带给前端，handler 读这个字段。
+// 不需要 mu 保护：Baseline 在 Start 内一次性写入（其它 goroutine 读到的
+// 必须是 ≥0 或者 Start 已经返回后的 -1；竞态只会让前端偶尔晚 ~100ms 拿到
+// baseline，不影响功能）。
+func (s *Session) GetBaseline() int {
+	return s.Baseline
+}
+
 // Stopped 是否已结束
 func (s *Session) Stopped() (bool, error) {
 	s.mu.RLock()
@@ -318,6 +347,14 @@ func (m *Manager) SetIdleAfter(d time.Duration) {
 //
 // cli（生产是 *sshclient.Client，测试可以是 mock Streamer）必须非空；
 // dir / file / encoding 由调用方校验（白名单目录、文件名来自 ls）。
+//
+// 流程：
+//  1. 同步先跑一次 RunOutput(awk 'END{print NR}' file) 取 baseline；
+//     拿不到或非数字 → baseline = -1，前端 fallback（无行号或近似行号）。
+//  2. 起 goroutine 跑 tail -F 命令。
+//
+// baseline 是同步阻塞的（~10ms~200ms，5s 兜底超时），
+// 不影响 tail 启动后的持续推流性能（每秒行速率、NDI 完全不受影响）。
 func (m *Manager) Start(cli Streamer, serverName, serverHost, dir, file, encoding string, lines int) (*Session, error) {
 	if cli == nil {
 		return nil, errors.New("ssh 客户端为空")
@@ -325,6 +362,19 @@ func (m *Manager) Start(cli Streamer, serverName, serverHost, dir, file, encodin
 	cmd, err := logquery.TailCommand(dir, file, lines)
 	if err != nil {
 		return nil, fmt.Errorf("构造 tail 命令失败: %w", err)
+	}
+
+	// 取 baseline：单次 awk，整文件只数行号，stdout 是一个数字。
+	// 拿不到就保持 -1，前端走 fallback（旧"buffer 内序号"行为，不阻塞 tail）。
+	baseline := -1
+	if wcCmd, werr := logquery.LineCountCommand(dir, file); werr == nil {
+		baselineCtx, baselineCancel := context.WithTimeout(context.Background(), baselineTimeout)
+		if out, rerr := cli.RunOutput(baselineCtx, wcCmd, encoding, baselineTimeout); rerr == nil {
+			if n, perr := strconv.Atoi(strings.TrimSpace(out)); perr == nil && n >= 0 {
+				baseline = n
+			}
+		}
+		baselineCancel()
 	}
 
 	id := newID()
@@ -338,6 +388,7 @@ func (m *Manager) Start(cli Streamer, serverName, serverHost, dir, file, encodin
 		File:         file,
 		Encoding:     encoding,
 		CreatedAt:    now,
+		Baseline:     baseline,
 		lastActivity: now, // BE-002：初始化 lastActivity = CreatedAt
 		killSSH:      cancel,
 		subscribers:  make(map[chan []byte]struct{}),

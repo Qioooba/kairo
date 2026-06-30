@@ -310,6 +310,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleCompareDeepCheck(w, r)
 	case path == "/api/compare/file-diff":
 		s.handleCompareFileDiff(w, r)
+	case path == "/api/license/status":
+		s.handleLicenseStatus(w, r)
+	case path == "/api/license/activate":
+		s.handleLicenseActivate(w, r)
 	case path == "/api/admin/openers":
 		// BE-003：管理员接口，仅 admin 角色。
 		if !requireAdmin(w, r) {

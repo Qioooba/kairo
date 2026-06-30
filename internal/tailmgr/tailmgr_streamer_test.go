@@ -38,6 +38,15 @@ type fakeStreamer struct {
 	delayBeforeReturn time.Duration
 
 	started chan struct{} // 第一次调 Stream 时关闭；让测试能 join
+
+	// baselineOutput / baselineErr 控制 RunOutput 的返回值：
+	//   baselineOutput 为 "" 表示"拿不到 baseline"（前端 fallback）。
+	// 真实 baseline 测试：把 "1234" 写到 baselineOutput 即可。
+	baselineOutput string
+	baselineErr    error
+
+	// recordRunOutput 让 RunOutput 调一次后置 true，单测可断言"被调过"。
+	runOutputCalled bool
 }
 
 func (f *fakeStreamer) Stream(ctx context.Context, _ /*command*/, _ /*encoding*/ string, onLine func(string)) (int, error) {
@@ -74,6 +83,20 @@ func (f *fakeStreamer) Stream(ctx context.Context, _ /*command*/, _ /*encoding*/
 		}
 	}
 	return f.exitCode, f.err
+}
+
+// RunOutput fake 实现：返回 (baselineOutput, baselineErr)；命令/编码都忽略。
+// 用于 tail start 前的 baseline 取值（wc/awk 一次性命令）。
+func (f *fakeStreamer) RunOutput(ctx context.Context, _ string, _ string, _ time.Duration) (string, error) {
+	f.mu.Lock()
+	f.runOutputCalled = true
+	out := f.baselineOutput
+	err := f.baselineErr
+	f.mu.Unlock()
+	if err != nil {
+		return "", err
+	}
+	return out, nil
 }
 
 // collectN 收 ch 直到拿到 n 条或超时
@@ -425,6 +448,11 @@ type continuousStreamer struct {
 	interval time.Duration
 	started  chan struct{}
 	once     sync.Once
+
+	// baselineOutput / runOutputCalled 同 fakeStreamer；测试里都用同一套默认值。
+	baselineOutput  string
+	baselineErr     error
+	runOutputCalled bool
 }
 
 func (c *continuousStreamer) Stream(ctx context.Context, _, _ string, onLine func(string)) (int, error) {
@@ -444,6 +472,14 @@ func (c *continuousStreamer) Stream(ctx context.Context, _, _ string, onLine fun
 			onLine("tick")
 		}
 	}
+}
+
+func (c *continuousStreamer) RunOutput(_ context.Context, _ string, _ string, _ time.Duration) (string, error) {
+	c.runOutputCalled = true
+	if c.baselineErr != nil {
+		return "", c.baselineErr
+	}
+	return c.baselineOutput, nil
 }
 
 // TestManager_IdleGC_KeepAliveWhileProducingLogs 验证 BE-002 核心修复：
@@ -513,5 +549,114 @@ func TestManager_IdleGC_KeepAliveWhileSubscribed(t *testing.T) {
 	}
 	if _, ok := m.Get(s.ID); !ok {
 		t.Fatal("session 应仍在 map 中")
+	}
+}
+
+// ---------- Baseline（v0.10 起：tail 启动瞬间拿文件真实行号） ----------
+
+// TestManager_Start_BaselineFromRunOutput 验证 happy path：fakeStreamer 的 baselineOutput
+// 是合法数字时，Session.Baseline = 该数字。
+func TestManager_Start_BaselineFromRunOutput(t *testing.T) {
+	m := NewManager()
+	m.GCInterval = 20 * time.Millisecond
+	defer m.ShutdownAll()
+
+	f := &fakeStreamer{
+		lines:          []string{"a", "b"},
+		baselineOutput: "1234",
+	}
+	s, err := m.Start(f, "s", "h", "/d", "f", "utf-8", 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !f.runOutputCalled {
+		t.Fatal("RunOutput 应被调用过一次（取 baseline）")
+	}
+	if got := s.GetBaseline(); got != 1234 {
+		t.Fatalf("Baseline 应等于 1234，实际 %d", got)
+	}
+}
+
+// TestManager_Start_BaselineEmpty_FallbackToNegative 验证 baseline stdout 为空时
+// 走 -1 兜底（前端 fallback，不阻塞 tail）。
+func TestManager_Start_BaselineEmpty_FallbackToNegative(t *testing.T) {
+	m := NewManager()
+	m.GCInterval = 20 * time.Millisecond
+	defer m.ShutdownAll()
+
+	f := &fakeStreamer{
+		lines:          []string{"hello"},
+		baselineOutput: "", // 模拟 awk 没出 stdout（文件不存在等）
+	}
+	s, err := m.Start(f, "s", "h", "/d", "f", "utf-8", 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := s.GetBaseline(); got != -1 {
+		t.Fatalf("空 stdout 应 fallback 为 -1，实际 %d", got)
+	}
+}
+
+// TestManager_Start_BaselineErr_FallbackToNegative 验证 RunOutput 报错时
+// Session 仍能成功创建（不阻塞 tail），baseline 走 -1。
+func TestManager_Start_BaselineErr_FallbackToNegative(t *testing.T) {
+	m := NewManager()
+	m.GCInterval = 20 * time.Millisecond
+	defer m.ShutdownAll()
+
+	f := &fakeStreamer{
+		lines:       []string{"x"},
+		baselineErr: errors.New("wc 远端失败"),
+	}
+	s, err := m.Start(f, "s", "h", "/d", "f", "utf-8", 0)
+	if err != nil {
+		t.Fatalf("RunOutput 报错不应让 Start 失败: %v", err)
+	}
+	if !f.runOutputCalled {
+		t.Fatal("RunOutput 应被尝试调用过")
+	}
+	if got := s.GetBaseline(); got != -1 {
+		t.Fatalf("RunOutput 报错应 fallback 为 -1，实际 %d", got)
+	}
+}
+
+// TestManager_Start_BaselineNonNumeric_FallbackToNegative 验证 stdout 不是合法数字
+// （带单位 / 含字母 / 含换行外字符）时 fallback 为 -1。
+func TestManager_Start_BaselineNonNumeric_FallbackToNegative(t *testing.T) {
+	m := NewManager()
+	m.GCInterval = 20 * time.Millisecond
+	defer m.ShutdownAll()
+
+	cases := []string{"abc", "12 abc", "\x00123", "-5"}
+	for _, bad := range cases {
+		f := &fakeStreamer{
+			lines:          []string{"x"},
+			baselineOutput: bad,
+		}
+		s, err := m.Start(f, "s", "h", "/d", "f", "utf-8", 0)
+		if err != nil {
+			t.Fatalf("非数字 baseline 不应让 Start 失败: %v", err)
+		}
+		if got := s.GetBaseline(); got != -1 {
+			t.Fatalf("baseline %q 应 fallback 为 -1，实际 %d", bad, got)
+		}
+	}
+}
+
+// TestManager_Start_BaselineTrimmedWhitespace 验证 stdout 前后有空格/换行也能正确解析。
+func TestManager_Start_BaselineTrimmedWhitespace(t *testing.T) {
+	m := NewManager()
+	m.GCInterval = 20 * time.Millisecond
+	defer m.ShutdownAll()
+
+	f := &fakeStreamer{
+		baselineOutput: "  5000\n",
+	}
+	s, err := m.Start(f, "s", "h", "/d", "f", "utf-8", 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := s.GetBaseline(); got != 5000 {
+		t.Fatalf("应 trim 后解析为 5000，实际 %d", got)
 	}
 }

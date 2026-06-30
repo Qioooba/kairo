@@ -14,7 +14,6 @@
 package sshclient
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -48,94 +47,25 @@ type ShellSession struct {
 
 // gbkDecoder 包装一个 io.Reader，对 GBK 字节流做实时解码。
 // 它内部缓冲未完成的字节（GBK 字符最多 2 字节），避免跨 Read() 边界截断字符。
+//
+// 早期自写 buffer 的版本有严重 bug：每次 Read 都新建 transform.Reader 会丢 transformer
+// 内部状态；EOF 后的「d.buf 残留」判断让循环一直打转 src.Read，导致要么没有数据送达
+// 前端，要么（src 真正 EOF 后）把 EOF 错误一并返回给消费者 —— 用户端表现就是
+// 「切到 GBK 就重连不上」。
+//
+// v0.10 修复：直接复用 golang.org/x/text/transform 包提供的 NewReader。它内部已经按 GBK
+// 字符宽度（双字节）正确维护 incomplete 序列缓冲；不再需要手写额外缓冲层。
 type gbkDecoder struct {
-	src   io.Reader
-	buf   []byte // 缓冲未完成的字节
-	enc   transform.Transformer
+	r io.Reader // = transform.NewReader(src, decoder)
 }
 
 func newGBKDecoder(src io.Reader) *gbkDecoder {
-	return &gbkDecoder{
-		src: src,
-		buf: make([]byte, 0, 4), // 最多缓冲 2 个未完成字节
-		enc: simplifiedchinese.GBK.NewDecoder(),
-	}
+	return &gbkDecoder{r: transform.NewReader(src, simplifiedchinese.GBK.NewDecoder())}
 }
 
-// Read 从 GBK 字节流读取，解码后返回 UTF-8 字节。
-func (d *gbkDecoder) Read(p []byte) (int, error) {
-	// 如果有残留字节，先消费
-	if len(d.buf) > 0 {
-		n := copy(p, d.buf)
-		d.buf = d.buf[n:]
-		if len(d.buf) == 0 {
-			return n, nil
-		}
-	}
-	// 从 src 读取更多字节
-	tmp := make([]byte, 4096)
-	for {
-		nr, err := d.src.Read(tmp)
-		if nr == 0 {
-			if err == nil {
-				continue
-			}
-			// src EOF 或错误，flush 缓冲
-			if len(d.buf) > 0 {
-				n := copy(p, d.buf)
-				d.buf = d.buf[:0]
-				if n > 0 {
-					return n, err
-				}
-			}
-			return 0, err
-		}
-		// 把新字节追加到缓冲
-		d.buf = append(d.buf, tmp[:nr]...)
-		// 尝试把整个缓冲转换（buf 里可能有未完成字符）
-		r := transform.NewReader(bytes.NewReader(d.buf), d.enc)
-		n, err := r.Read(p)
-		if err == transform.ErrShortDst {
-			// 输出缓冲区不够，这意味着 p 太小或 buf 有完整转换但输出没读完
-			// 保留一个字节（可能是不完整字符）继续
-			if len(d.buf) > 0 {
-				d.buf = d.buf[len(d.buf)-1:]
-			}
-			return n, nil
-		}
-		if err == io.EOF {
-			// 全部转换完成，可能还有 1 字节残留（半个 GBK 字符）
-			// EOF 表示转换器已处理完所有输入
-			// 检查 buf 是否还有未处理的字节
-			if len(d.buf) > 0 {
-				// buf 里可能有 1 字节残留
-				if len(d.buf) == 1 && n > 0 {
-					return n, nil
-				}
-			}
-			return n, nil
-		}
-		if n > 0 {
-			// 成功转换了一些字节，可能还有残留字符
-			if len(d.buf) > 0 && n < len(p) {
-				// 还有空间，尝试继续处理残留
-				continue
-			}
-			return n, nil
-		}
-		// n == 0 且无特殊错误，循环继续
-		if err != nil && err != io.EOF {
-			break
-		}
-	}
-	// 错误时尽量 flush 缓冲
-	if len(d.buf) > 0 {
-		n := copy(p, d.buf)
-		d.buf = d.buf[:0]
-		return n, nil
-	}
-	return 0, nil
-}
+// Read 把内部 transform.Reader 当成普通 io.Reader 透传 ——
+// 它自己负责 multi-byte GBK 字符跨 Read 边界的拼接 + 非法字节的 replacement 字符替换。
+func (d *gbkDecoder) Read(p []byte) (int, error) { return d.r.Read(p) }
 
 // 默认 TERM 类型。xterm-256color 是事实标准，所有现代 sshd 都支持；
 // 老 WebSphere / AIX 默认 xterm 也支持，256color 在老 terminfo 缺失时退化为 16 色，

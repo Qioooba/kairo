@@ -840,6 +840,53 @@ func TailCommand(dir, file string, lines int) (string, error) {
 	return cmd, nil
 }
 
+// LineCountCommand 构造"统计 file 当前行数"的命令模板。
+//
+// 用 awk 'END{print NR}' 而不是 wc -l：
+//
+//   - wc -l 数 `\n` 数量，最后一行没 `\n` 会少算 1；
+//   - awk 'END{print NR}' 按"awk 读到的最终记录数"算，兼容末尾无换行；
+//   - awk 在 GNU/Linux/macOS/AIX/精简镜像都自带，比 wc 更稳定；
+//   - 空文件输出 "0"。
+//
+// 安全要点：
+//   - file 必须是没有目录分隔符的纯文件名；
+//   - 走和 TailCommand 一样的白名单规则，不允许出现路径穿越字符；
+//   - 2>/dev/null 兜底：文件不存在 / 不可读时 awk 退出码非 0，返回 stderr，我们忽略
+//     不出 stdout，让 baseline 拿不到（兜底路径"前端不显示行号"）。
+//
+// 与 TailCommand 的语义区别：这是"一次性命令"，由 Go 端同步调一次拿到 baseline，
+// 不是流式。
+func LineCountCommand(dir, file string) (string, error) {
+	if strings.TrimSpace(dir) == "" {
+		return "", fmt.Errorf("dir 不能为空")
+	}
+	if strings.TrimSpace(file) == "" {
+		return "", fmt.Errorf("file 不能为空")
+	}
+	if strings.ContainsAny(dir, "'`$\\;") {
+		return "", fmt.Errorf("dir 含非法字符")
+	}
+	if strings.ContainsAny(file, "'`$\\;&|><\n\r*?") {
+		return "", fmt.Errorf("file 含非法字符")
+	}
+	// 路径穿越防护：file 必须是 basename。
+	if file == "." || file == ".." {
+		return "", fmt.Errorf("file 不允许为 '.' 或 '..'")
+	}
+	if strings.ContainsAny(file, "/\\") {
+		return "", fmt.Errorf("file 不允许包含路径分隔符: %q", file)
+	}
+	if strings.Contains(file, "..") {
+		return "", fmt.Errorf("file 不允许包含 '..'")
+	}
+	cleanFile := strings.ReplaceAll(file, "'", "")
+	// awk 脚本作为 shell token 直接拼（不是用户输入），固定字符串安全。
+	cmd := fmt.Sprintf(`sh -c 'cd %q && awk "END{print NR}" %q 2>/dev/null'`,
+		dir, cleanFile)
+	return cmd, nil
+}
+
 // ContextLinesForHitsCommand 构建一个 awk 命令，一次性输出多个命中行及其前后 N 行上下文。
 //
 // 输入：

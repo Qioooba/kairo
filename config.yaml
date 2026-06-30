@@ -6,15 +6,13 @@ app:
     download_dir: ./downloads
     log_dir: ./logs
     data_dir: ./data
+    free_file_roots:
+        - '*'
     ssh_debug: false
     ssh_traffic_dump: false
     ssh_log_max_mb: 20
     ssh_log_keep: 3
     allow_insecure_host_key: true
-    free_file_roots:
-        - "*"
-    compare_allowed_roots:
-        - "*"
     external_openers:
         - name: Notepad++
           path: C:\Windows\notepad.exe
@@ -24,16 +22,19 @@ app:
           icon: "\U0001F4CE"
     download_retention_days: 7
     download_max_count: 1000
+    compare_allowed_roots:
+        - '*'
+    kairo: "111222"
 systems:
     - name: 信贷生产（模拟）
       description: ""
       servers:
         - name: mock-node-1
           host: 127.0.0.1
-          port: 2225
+          port: 2222
           username: test
-          auth_type: password
           password: test
+          auth_type: password
           log_dirs:
             - name: AppSrv01 server1
               path: /opt/IBM/WebSphere/AppServer/profiles/AppSrv01/logs/server1

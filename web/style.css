@@ -367,6 +367,13 @@ body {
   padding: 7px 12px 7px 20px;
   color: var(--text-dim);
 }
+/* 侧边栏行内小图标（替换原来 emoji ℹ️ 等） */
+.nav-ico {
+  display: inline-block;
+  vertical-align: -2px;
+  margin-right: 6px;
+  color: var(--text-dim);
+}
 
 .footer { border-top: 1px solid var(--line); padding-top: 10px; font-size: 11.5px; }
 .muted { color: var(--text-mute); }
@@ -389,9 +396,10 @@ body {
   border: 1px solid var(--line);
   color: var(--text-dim);
   cursor: pointer;
-  font-size: 16px;
+  padding: 0;
   transition: background .15s, color .15s, border-color .15s;
 }
+.theme-toggle svg { width: 18px; height: 18px; display: block; }
 .theme-toggle:hover { background: var(--bg-2); color: var(--text); border-color: var(--text-dim); }
 .theme-toggle:focus-visible {
   outline: 2px solid var(--primary);
@@ -488,13 +496,13 @@ body {
   border-color: var(--primary);
   box-shadow: var(--shadow-pop);
 }
+/* 工具卡片角标：彩色实心 SVG 自带色块，外面不再叠底色 */
 .tool-card .icon {
   width: 36px; height: 36px; border-radius: 8px;
   display: flex; align-items: center; justify-content: center;
-  background: rgba(79,140,255,0.12);
-  color: var(--primary-2); font-size: 18px;
+  /* 去掉原 background（rgba 蓝）—— 彩色 SVG 自身已是色块，叠色会"双层" */
 }
-:root[data-theme="light"] .tool-card .icon { background: rgba(37,99,235,0.10); }
+.tool-card .icon svg { width: 28px; height: 28px; display: block; }
 .tool-card .name { font-size: 15px; font-weight: 600; }
 .tool-card .desc { color: var(--text-dim); font-size: 12.5px; flex: 1; }
 .tool-card .tag {
@@ -516,9 +524,9 @@ body {
 }
 .tool-card-small .icon {
   width: 30px; height: 30px;
-  font-size: 15px;
   border-radius: 7px;
 }
+.tool-card-small .icon svg { width: 24px; height: 24px; display: block; }
 .tool-card-small .name { font-size: 13.5px; }
 .tool-card-small .desc { font-size: 11.5px; line-height: 1.5; }
 
@@ -1161,6 +1169,29 @@ pre::-webkit-scrollbar-corner { background: var(--scrollbar-corner); }
   padding-right: 0.5em;
   border-right: 1px solid rgba(255,255,255,0.1);
   margin-right: 0.5em;
+}
+/* v0.10 真实行号修复：info / error / done 这些控制消息不算文件行，
+ * 不应该占用 counter 槽位（否则后续真实行号整体 +1 错位）。
+ *   - 不输出行号数字
+ *   - 不递增 tail-line counter（counter-increment: 0 跳过此行）
+ *   - 但 padding-left:3.5em 仍保留（避免 text-overflow 顶到行号列的竖线上） */
+.tail-out.show-line-numbers .tail-line.tail-line-info::before,
+.tail-out.show-line-numbers .tail-line.tail-line-error::before {
+  counter-increment: tail-line 0;
+  content: '·';
+  color: rgba(255,255,255,0.2);
+}
+:root[data-theme="light"] .tail-out.show-line-numbers .tail-line.tail-line-info::before,
+:root[data-theme="light"] .tail-out.show-line-numbers .tail-line.tail-line-error::before {
+  color: rgba(0,0,0,0.2);
+}
+:root[data-theme="green"] .tail-out.show-line-numbers .tail-line.tail-line-info::before,
+:root[data-theme="green"] .tail-out.show-line-numbers .tail-line.tail-line-error::before {
+  color: rgba(0,0,0,0.2);
+}
+:root[data-theme="hc"] .tail-out.show-line-numbers .tail-line.tail-line-info::before,
+:root[data-theme="hc"] .tail-out.show-line-numbers .tail-line.tail-line-error::before {
+  color: rgba(255,255,255,0.4);
 }
 :root[data-theme="light"] .tail-out.show-line-numbers .tail-line::before {
   color: rgba(0,0,0,0.3);
@@ -3235,12 +3266,74 @@ input[type="datetime-local"] {
   gap: 6px;
   padding: 6px 10px;
   border-bottom: 1px solid var(--line, #334155);
-  flex-wrap: wrap;
+  /* v0.10-UI：之前是 wrap，加了 UTF-8/GBK 下拉后 select 会被 flex 推满整行，
+     工具栏挤成 3 行（行 1: Ctrl+C / 行 2: UTF-8 占满宽 / 行 3: 其余按钮）。
+     强制改成 nowrap 保证一行；窄屏走 overflow-x 横向滚动。 */
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+}
+.ssh-toolbar > * {
+  /* 按钮 + select + label 都不许被 flex 自动拉伸/收缩挤压 */
+  flex: 0 0 auto;
 }
 .ssh-active-label {
+  /* 状态 label 是唯一允许收缩的（多余时 ellipsis 截断），始终被推到最右 */
+  flex: 1 1 auto;
+  min-width: 0;
   margin-left: auto;
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-size: 12px;
   font-family: ui-monospace, monospace;
+}
+/* v0.10-修复：SSH 工具栏里的编码下拉（UTF-8 / GBK）。
+   之前用 .btn .btn-sm 把它"假装成按钮"，结果原生下拉箭头被覆盖，
+   用户看不出是 select，反而以为是坏掉的按钮。
+   改成专用类：保留 .btn-sm 的尺寸（高 30 / padding 4 10），
+   但显示浏览器原生下拉箭头 + 标准 focus 边框。 */
+.ssh-encoding-sel {
+  width: auto;
+  font: inherit;
+  font-size: 12px;
+  min-height: 30px;
+  padding: 4px 24px 4px 10px;
+  /* v0.10-UI：去掉浏览器默认下拉箭头（macOS 会再画一个 ▼），
+     只保留下面 background-image 手画的箭头，避免重复箭头。 */
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  /* v0.11-UI：背景 / 边框跟工具栏旁的 .btn 用同一套变量，
+     避免下拉框"白漂"在浅蓝灰按钮群里。 */
+  background-color: var(--btn-bg-override, var(--bg-3));
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--text-dim) 50%),
+    linear-gradient(135deg, var(--text-dim) 50%, transparent 50%);
+  background-position:
+    calc(100% - 13px) 14px,
+    calc(100% - 8px) 14px;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  border: 1px solid var(--btn-border-override, var(--line));
+  border-radius: 6px;
+  color: var(--text);
+  cursor: pointer;
+  outline: none;
+  transition: border-color 0.15s, background-color 0.15s;
+}
+.ssh-encoding-sel:hover {
+  background-color: var(--btn-hover-bg-override, var(--btn-hover-bg));
+  border-color: var(--btn-hover-border-override, var(--btn-hover-border));
+}
+.ssh-encoding-sel:focus {
+  border-color: var(--primary);
+}
+.ssh-encoding-sel:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* 终端区 */
@@ -3688,9 +3781,22 @@ input[type="datetime-local"] {
 :root[data-theme="xianxia"] .ssh-tab:hover {
   background: rgba(201,162,75,0.08);
 }
+/* v0.11-UI：浅色主题下 active tab 跟浅色 UI 走，避免"白底中间嵌黑块"。
+   抹掉 active tab 的下边框（border-bottom-color: transparent）让 active tab
+   视觉上"长进"下方终端区，淡化 tab→终端的接缝。
+   dark / hc 主题保持默认（深底浅字），跟终端区本就连成一片。*/
+:root[data-theme="light"] .ssh-tab.active,
+:root[data-theme="green"] .ssh-tab.active {
+  background: var(--bg-1);
+  color: var(--text);
+  border-color: var(--line);
+  border-bottom-color: transparent;
+}
 :root[data-theme="xianxia"] .ssh-tab.active {
-  background: var(--bg-0);
-  border-bottom-color: var(--bg-0);
+  background: var(--bg-1);
+  color: var(--text);
+  border-color: var(--line);
+  border-bottom-color: transparent;
 }
 
 /* HTTP2 选中case：金色边框 */
@@ -4057,5 +4163,46 @@ input[type="datetime-local"] {
 /* 隐藏剑装饰元素 */
 :root[data-theme="xianxia"] .sword-decor {
   display: none !important;
+}
+
+/* ============ xianxia 主题：sidebar 武侠风背景（水墨剑） ============ */
+/* 仅在 xianxia 主题下启用；侧栏要求 position: relative 让伪元素锚定，overflow 隐藏溢出 */
+:root[data-theme="xianxia"] .sidebar {
+  position: relative;
+  overflow: hidden;
+}
+:root[data-theme="xianxia"] .sidebar::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  /* 两层叠加：
+     - 顶到底的青色遮罩（保证品牌区 / 菜单区 / 页脚三段文字清晰可读，并把底部"天命契机"+ "豆包 AI 生成"水印盖掉）
+     - 水墨剑背景图位于遮罩下方（图片层）
+     sidebar 实际宽 ~240px、高 ≥ 800px（高瘦），cover 模式会把左右两侧裁掉，视觉中心就是正中的剑身与水墨烟雾 */
+  background-color: var(--sidebar-bg);
+  background-image:
+    linear-gradient(180deg,
+      rgba(240, 247, 244, 0.95) 0%,
+      rgba(240, 247, 244, 0.92) 12%,
+      rgba(240, 247, 244, 0.70) 22%,
+      rgba(240, 247, 244, 0.62) 50%,
+      rgba(240, 247, 244, 0.72) 75%,
+      rgba(240, 247, 244, 0.94) 88%,
+      rgba(240, 247, 244, 1.00) 100%
+    ),
+    url("/static/img/xianxia-bg.png");
+  background-size: auto, cover;
+  background-position: center, center top;
+  background-repeat: no-repeat;
+}
+/* 菜单项在剑身深色区域 hover/active 时给一个完全不透明青灰底，确保文字始终清晰 */
+:root[data-theme="xianxia"] .nav-item:hover,
+:root[data-theme="xianxia"] .nav-item:focus-visible {
+  background-color: var(--bg-1);
+}
+:root[data-theme="xianxia"] .nav-item.active {
+  background: linear-gradient(90deg, rgba(74,122,106,0.22), var(--bg-1));
 }
 

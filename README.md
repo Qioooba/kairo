@@ -4,12 +4,12 @@
 
 **跨平台 · 纯 Go 单 exe · 启动即用 · 系统托盘常驻 · 默认仅本机访问**
 
-面向内网运维 / DBA / SRE 的本地工具箱，把 **SSH 远程命令、WebSphere 日志排查、文件下载、报文格式化、审计追溯** 这些高频操作收敛到一个零依赖、绿色运行的单 exe 中。
+面向内网运维 / DBA / SRE 的本地工具箱，把 **SSH 远程命令、WebSphere 日志排查、SSH 交互式终端、文件下载、报文格式化、审计追溯** 这些高频操作收敛到一个零依赖、绿色运行的单 exe 中。
 
 [![Go Version](https://img.shields.io/badge/Go-1.20%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-4F4F4F)](#)
 [![License](https://img.shields.io/badge/License-Internal%20Use-orange)](#)
-[![Status](https://img.shields.io/badge/Status-v0.9.0%20Released-brightgreen)](#)
+[![Status](https://img.shields.io/badge/Status-v0.9.0--dev-yellow)](#)
 [![Dependencies](https://img.shields.io/badge/Deps-zero%20runtime-2ea44f)](#)
 [![Binary](https://img.shields.io/badge/Single%20Exe-%E2%9C%93-success)](#)
 
@@ -19,7 +19,7 @@
 
 ---
 
-## ✨ 为什么是Kairo
+## <img src="docs/section-icons/sparkle.svg" width="22" height="22" align="absmiddle"> 为什么是Kairo
 
 | 痛点 | Kairo的解法 |
 | --- | --- |
@@ -35,7 +35,7 @@
 
 ---
 
-## 🚀 快速开始
+## <img src="docs/section-icons/rocket.svg" width="22" height="22" align="absmiddle"> 快速开始
 
 ### 方式 A：直接运行发版 exe（同事拿到包就这样用）
 
@@ -82,7 +82,7 @@ go run .
 
 | 偏好 | 键 |
 | --- | --- |
-| 主题（dark / light / green / hc） | `kairo_theme`（老 `dtb_theme` / `otb_theme` 自动迁移） |
+| 主题（dark / light / green / hc / xianxia） | `kairo_theme`（老 `dtb_theme` / `otb_theme` 自动迁移） |
 | WebSphere 上次选的「系统 / 服务器 / 目录 / 用户名」 | `kairo:last:websphere:sel`（老 `dtb:last:websphere:sel` / `otb:last:websphere:sel` 自动迁移） |
 | 文件下载页「当前路径 / 过滤词」 | `kairo:last:files:sel` / `kairo:last:files:filter` |
 | WebSphere 目标区折叠 / 展开 | `kairo:last:websphere:target_collapsed` |
@@ -96,7 +96,7 @@ go run .
 
 ---
 
-## 🎯 功能矩阵
+## <img src="docs/section-icons/modules.svg" width="22" height="22" align="absmiddle"> 功能矩阵
 
 ### 1. WebSphere 日志助手
 
@@ -115,7 +115,22 @@ go run .
 | **文件名模糊搜索** | 子串 / glob（`*.log` / `SystemOut*` / `log?`），实时显示 `显示 X / Y` |
 | **文件名点击预览** | 新窗口 + modal 双模式；编码自动归一（utf-8 / gbk / gb18030）；NUL 字节检测防乱码；二进制文件提示 |
 
-### 2. 文件下载（任意路径）
+### 2. SSH 终端（v0.10 起）
+
+定位：在浏览器里直接开交互式 shell，类似 Xshell 的 Web 版。复用 `sshclient` 的 3 套 compat profile，连老 OpenSSH 6.2p2 / AIX 同样能进。
+
+| 子功能 | 说明 |
+| --- | --- |
+| **xterm.js + addons** | Canvas 渲染（无 WebGL 依赖），addon-fit / addon-search / addon-web-links 内嵌 |
+| **WebSocket 双向桥** | `GET /api/ssh/shell/ws`；binary frame = 字节流透传（stdin/stdout），text frame = JSON 控制（`resize` / `signal` / `ping`） |
+| **凭据不经过 WS** | WS upgrade 帧不带 password；server 端 `resolveCreds` 从 keyring / file 拿，前端缺密码时弹一次性密码框 → `POST /api/credentials/save` → 重连 |
+| **多 tab** | 每个 tab = 1 个 WS → 1 个 SSH session，独立关闭；打开的 tab + 选中服务器 + 状态点存 `localStorage['kairo:ssh:tabs']` |
+| **主题联动** | 5 套主题（dark / light / green / hc / xianxia）切换时同步 xterm 主题；监听 `kairo:themechange` |
+| **独立全屏窗口** | `ssh.html` 整窗终端，主页 hash 路由 `#/ssh` 内嵌版同时存在 |
+| **SSH compat 复用** | 复用 `sshclient.Dial` 的 modern / compat / no-ecdh / legacy / auto，老 6.2p2 / AIX / WebSphere 直接进 |
+| **审计只记 start/end** | 命令内容不写 audit；并发上限 32（`sshshell.DefaultMaxSessions`，单 session ~6MB） |
+
+### 3. 文件下载（任意路径）
 
 定位：跳出白名单，按 SSH 账号实际权限拿任意文件。
 
@@ -138,7 +153,7 @@ go run .
 | 写权限 | 无 | 无（依然只读 + 下载） |
 | 审计 | `op=logs.*` | `op=files.*` |
 
-### 3. 报文格式化
+### 4. 报文格式化
 
 完全本地工具，无网络：
 
@@ -148,7 +163,7 @@ go run .
 - **URL-encoded / form-data**：encode（map → `a=1&b=2`，按 key 字典序） / decode（`a=1&b=2` → map，重复 key 自动合并成数组）
 - 单元测试覆盖 `decodeStrictJSON` / `FormatJSON` / `MinifyJSON` / `ValidateJSON` / `FormatXML` / `MinifyXML` / `FormatYAML` / `MinifyYAML` / `ValidateYAML` / `YAMLToJSON` / `JSONToYAML` / `URLFormEncode` / `URLFormDecode`
 
-### 4. 系统配置（可视化编辑器）
+### 5. 系统配置（可视化编辑器）
 
 - 业务系统 / 服务器 / 日志目录 **三层结构**：
   - 业务系统：4px primary border-left + 编号 badge
@@ -161,7 +176,7 @@ go run .
 - 顶部 + 底部双保存按钮，sticky 保存栏
 - 编码值归一：`gbk/gb18030 → gbk`；非法值（`shift-jis` 等）拒绝保存
 
-### 5. 环境自检（Diagnostics）
+### 6. 环境自检（Diagnostics）
 
 一键收集：
 
@@ -171,14 +186,14 @@ go run .
 - **Tools info**：`find -printf` 是否可用（决定能否列日志文件）
 - **Servers check**：每台配置服务器握手探测（独立 timeout，失败不影响其他），输出 hostname / 端口 / SSH 协议 / 错误摘要
 
-### 6. 下载历史
+### 7. 下载历史
 
 - `downloads/` 目录所有文件 + 对应 `.meta.json`
 - `meta.json` 包含 system / server / host / dir / dir_alias / file / encoding / kind / downloaded_at
 - 卡片视图，单条删除、一键清空
 - 任意路径下载的 `.properties` / `.xml` / `.gz` 等同样进历史
 
-### 7. 操作历史（审计）
+### 8. 操作历史（审计）
 
 > 前端「操作历史」页（`web/pages/history.js`）已在 v0.8 下线；v0.9 起 `handlers_audit.go` 也已移除（`/api/audit/*` 端点全部下线）。
 > 现在审计数据**只**走 `logs/audit.log`（按天滚动为 `audit-YYYY-MM-DD.log`），用文本工具 / `jq` / 自写脚本离线分析即可。
@@ -191,13 +206,20 @@ go run .
   ts=2026-06-19 10:30:10.789 op=logs.search system=信贷生产 server=prod-node-1 dir=/opt/... query=Exception && userinfo result=ok hits=8
   ```
 
-### 8. 常用命令（占位，预留扩展位）
+### 9. 常用命令速查
 
-当前为目录索引占位页，业务上暂未沉淀。
+v0.7 起实装的客户端静态工具（无后端改动）：
+
+- **6 大分类 tabs**：Linux / Git / Docker / Oracle / MySQL / Redis / Nginx / Java 后端 / 前端 / IDEA 快捷键
+- **顶栏搜索 + 收藏 tab**：localStorage 持久化收藏（`kairo:commands:favs`）
+- **每条命令卡片**：标题 / 标签 / syntax（默认显示）/ 展开看 example + desc
+- **复制按钮**：复制 syntax 主体，toast 反馈
+- **快捷键**：`/` 聚焦搜索框，`Esc` 清空
+- **主题**：复用全局 5 套主题（dark / light / green / hc / xianxia）
 
 ---
 
-## 🛠 技术栈
+## <img src="docs/section-icons/stack.svg" width="22" height="22" align="absmiddle"> 技术栈
 
 ### 后端
 
@@ -205,7 +227,8 @@ go run .
 | --- | --- | --- |
 | **Go** | 1.20+ | 主语言，`go 1.20` directive（兼容 Win7 编译） |
 | [`github.com/pkg/sftp`](https://github.com/pkg/sftp) | v1.13.6 | SFTP 协议实现：列目录、Stat、下载、Open |
-| [`golang.org/x/crypto/ssh`](https://pkg.go.dev/golang.org/x/crypto/ssh) | v0.31.0 | SSH 客户端 + 3 套 compat profile |
+| [`github.com/gorilla/websocket`](https://github.com/gorilla/websocket) | v1.5.3 | SSH 终端双向桥（v0.10 起） |
+| [`golang.org/x/crypto/ssh`](https://pkg.go.dev/golang.org/x/crypto/ssh) | v0.31.0 | SSH 客户端 + 3 套 compat profile；SSH shell 会话（v0.10 起） |
 | [`golang.org/x/text`](https://pkg.go.dev/golang.org/x/text) | v0.21.0 | `simplifiedchinese.GBK` / `GB18030` 透明编码转换 |
 | [`fyne.io/systray`](https://github.com/fyne-io/systray) | v1.11.0 | Windows 系统托盘（右下角图标 + 右键菜单） |
 | [`github.com/zalando/go-keyring`](https://github.com/zalando/go-keyring) | v0.2.8 | OS 钥匙串统一抽象 |
@@ -220,8 +243,8 @@ go run .
 | 选型 | 说明 |
 | --- | --- |
 | **原生 JavaScript (ES2020)** | 无 React / Vue 依赖，单文件 IIFE |
-| **模块拆分** | `core.js` / `state.js` / `api.js` / `theme.js` / `auth.js`（v0.9 Bearer token 登录遮罩）+ `tail.js`（独立 tail 窗口逻辑）+ `pages/*.js`（home / websphere / files / formatter / commands / diagnostics / config / downloads / http / timestamp / cron / jsonpath / compare / about） |
-| **CSS 变量主题** | `:root[data-theme=...]` 4 套主题（dark / light / green / hc）；inline script 在 `<head>` 提前设 `data-theme` 防 FOUC |
+| **模块拆分** | `core.js` / `state.js` / `api.js` / `theme.js` / `auth.js`（v0.9 Bearer token 登录遮罩）+ `tail.js`（独立 tail 窗口逻辑）+ `pages/*.js`（home / websphere / files / ssh / formatter / commands / diagnostics / config / downloads / http / timestamp / cron / jsonpath / compare / about） |
+| **CSS 变量主题** | `:root[data-theme=...]` 5 套主题（dark / light / green / hc / xianxia 仙侠·墨韵青锋）；inline script 在 `<head>` 提前设 `data-theme` 防 FOUC；xterm.js 终端主题跟随联动（v0.10 起） |
 | **Node 单测** | `web/app.test.js` 覆盖 `escapeHtml` / `formatBytes` / `formatTime` / `trimMiddle` / `cssEscape` / `pctText` / `validate` |
 | **go:embed** | `web/` 整个目录内嵌进二进制，无外部静态文件 |
 | **SSE (Server-Sent Events)** | Tail 流 + 下载进度流，长连接，`http.Server.WriteTimeout = 0` |
@@ -242,7 +265,7 @@ go run .
 
 ---
 
-## 🏗 架构
+## <img src="docs/section-icons/architecture.svg" width="22" height="22" align="absmiddle"> 架构
 
 ### 分层
 
@@ -251,20 +274,22 @@ go run .
 │  Web Browser (单页应用，hash-router 路由)                    │
 │  ┌─────────┬─────────┬─────────┬──────────┬─────────────┐    │
 │  │ home    │ websphere│ files  │formatter │ diagnostics │   │
-│  │ config  │ downloads│ http   │ commands │ compare     │   │
+│  │ ssh     │ downloads│ http   │ commands │ compare     │   │
 │  └─────────┴─────────┴─────────┴──────────┴─────────────┘    │
-│           IIFE 风格 · vanilla JS · 4 套主题                  │
+│           IIFE 风格 · vanilla JS · 5 套主题                  │
+│           xterm.js 终端（v0.10 起，独立 ssh.html 窗口）      │
 └──────────────────────────────────────────────────────────────┘
-                          │ fetch + EventSource(SSE)
+                          │ fetch + EventSource(SSE) + WebSocket
                           ▼
 ┌──────────────────────────────────────────────────────────────┐
 │  HTTP Server (net/http, 127.0.0.1:18080)                     │
 │  ┌──────────────────────────────────────────────────────┐    │
 │  │ httpserver                                           │    │
 │  │ ├── httpserver.go (路由表 + 配置/服务组装)            │    │
-│  │ ├── handlers_ssh.go / handlers_logs_*.go / ...        │    │
+│  │ ├── handlers_ssh.go / handlers_ssh_shell.go (WS) /   │    │
+│  │ │   handlers_logs_*.go / handlers_files.go / ...      │    │
 │  │ ├── response.go / helpers.go                          │    │
-│  │ └── *_test.go (含集成测试：fake SFTP backend)         │    │
+│  │ └── *_test.go (含集成测试：fake SFTP + fakeShellSSH)  │    │
 │  └──────────────────────────────────────────────────────┘    │
 └──────────────────────────────────────────────────────────────┘
                           │
@@ -286,6 +311,8 @@ go run .
 │  ├── downloads   sidecar 元数据 (downloads/*.meta.json)      │
 │  ├── dlmanager   异步下载任务池 + SSE 进度广播               │
 │  ├── tailmgr     Tail 会话池 + Streamer 接口（可 mock）      │
+│  ├── sshshell    SSH 终端 WS ↔ shell 桥（v0.10 起，max=32） │
+│  ├── sysutil     跨平台系统调用（HideConsoleWindow 等）      │
 │  ├── logquery    后端命令模板（find/grep/sed/sort/head）     │
 │  ├── formatter   JSON / XML / YAML / URL-form 格式化（本地）│
 │  └── diagnostics 环境自检（App/Build/Runtime/Tools/Servers）│
@@ -296,16 +323,17 @@ go run .
 
 | Profile（config 值） | 默认 KEX | 适用场景 |
 | --- | --- | --- |
-| **modern** / **compat**（默认） | curve25519 优先 → ecdh-sha2-* → diffie-hellman-group14-sha256 | OpenSSH 7.4+ / 现代 Linux；老 6.2p2 也能握上 |
+| **modern** | curve25519 优先 | OpenSSH 7.4+ / 现代 Linux |
+| **compat** | curve25519 → ecdh-sha2-* → diffie-hellman-group14-sha256 | OpenSSH 6.5+；老 6.2p2 也能握上 |
 | **no-ecdh** | 完全去掉 ECDH，仅 DH | 某些老 OpenSSL 的 ECDH_INIT 后 RST bug |
 | **legacy** | group14-sha1 + ssh-dss | OpenSSH 5.x / 6.0 / AIX / 老堡垒机 |
-| **auto** | 按 compat → no-ecdh → legacy 顺序自动 fallback | 不确定目标 server 时的默认兜底 |
+| **auto**（默认） | 按 compat → no-ecdh → legacy 顺序自动 fallback | 不确定目标 server 时的默认兜底 |
 
 握手失败自动 fallback 到下一套，外层 `sshDialOuterTimeout = 45s`（3 × 12s + buffer），单套 `sshAttemptTimeout = 10s`。
 
 ---
 
-## 📡 API 列表
+## <img src="docs/section-icons/radio.svg" width="22" height="22" align="absmiddle"> API 列表
 
 所有接口默认只接受本机访问（`127.0.0.1`），handler 入口统一校验，跨域 / 路径穿越全面拒绝。启用 `auth` 后可监听 `0.0.0.0` / 内网 IP，请求需带 Bearer token（见安全设计）。标注 **admin** 的接口在启用 auth 时仅 `role=admin` 的 token 可访问。
 
@@ -319,6 +347,7 @@ go run .
 | GET | `/api/config/export` | 导出完整 `config.yaml`（含密文，供备份 / 迁移） |
 | POST | `/api/config/import` | 导入并替换 `config.yaml`（**admin**，敏感写） |
 | POST | `/api/ssh/test` | 测试 SSH 连接（password 缺省时从凭据存储读） |
+| GET | `/api/ssh/shell/ws` | SSH 终端 WebSocket 升级（v0.10 起；binary frame = 字节流透传，text frame = JSON 控制；凭据由 server 端 resolveCreds 解析，不接受前端传 password） |
 | GET / PUT | `/api/admin/servers` | 服务器清单读取 / 增改（**admin**） |
 | GET / PUT | `/api/admin/openers` | external_openers 列表读取 / 配置（**admin**，v0.8 起） |
 | GET / PUT | `/api/admin/download-retention` | 下载保留策略读取 / 配置（**admin**，v0.8 起） |
@@ -398,6 +427,7 @@ go run .
 | POST | `/api/diff/compare` | 文本 diff（v0.7 起） |
 | POST | `/api/compare/folder-scan` | 目录对比扫描（v0.9 起，受 `compare_allowed_roots` 白名单约束） |
 | POST | `/api/compare/file-diff` | 单文件 diff（v0.9 起，受 `compare_allowed_roots` 白名单约束） |
+| POST | `/api/compare/deep-check` | 文件夹深度检查（按需展开子目录，受 `compare_allowed_roots` 白名单约束） |
 
 ### 诊断
 
@@ -407,7 +437,7 @@ go run .
 
 ---
 
-## 🔒 安全设计
+## <img src="docs/section-icons/security.svg" width="22" height="22" align="absmiddle"> 安全设计
 
 1. **默认只监听 127.0.0.1**：未启用 `auth` 时 `0.0.0.0` / 内网 IP 直接被配置校验拒绝，不向局域网暴露；启用 `auth` 后才允许监听 `0.0.0.0` / 内网 IP
 2. **不开放任意 shell**：所有远程命令由后端固定模板生成（`find` / `grep` / `sed` / `sort` / `head` / `cat` 组合）
@@ -426,7 +456,7 @@ go run .
 
 ---
 
-## 🧪 测试与质量保障
+## <img src="docs/section-icons/quality.svg" width="22" height="22" align="absmiddle"> 测试与质量保障
 
 ### 后端
 
@@ -467,7 +497,7 @@ python scripts/fake-websphere/     # 假 WebSphere 日志布局
 
 ---
 
-## 🏗 构建与发布
+## <img src="docs/section-icons/package.svg" width="22" height="22" align="absmiddle"> 构建与发布
 
 ### macOS / Linux 上交叉编译 Windows exe
 
@@ -521,13 +551,13 @@ README.md                   # 本文件
 
 ---
 
-## ⚙️ 配置详解
+## <img src="docs/section-icons/settings.svg" width="22" height="22" align="absmiddle"> 配置详解
 
 ### `config.yaml` 完整结构
 
 ```yaml
 app:
-  name: Kairo
+  name: 天命契机                       # 中文产品名；品牌名 Kairo 用于 module 名 / Go 代码 log prefix
   host: 127.0.0.1                # 默认仅 127.0.0.1 / localhost；启用 auth 后允许 0.0.0.0 / 内网 IP
   port: 18080                    # 端口被占用就换一个
   auto_open_browser: true
@@ -535,15 +565,18 @@ app:
   log_dir: ./logs
   data_dir: ./data
   enable_free_file_browser: true         # false → /api/files/* 全部 403
-  free_file_roots:                       # 可选：文件浏览器的路径前缀白名单
+  free_file_roots:                       # v0.9 起 fail-closed：留空 = 拒绝任意远端路径；非空 = 限定可访问的远端路径前缀
     - /opt/IBM/WebSphere
     - /var/log
+  allow_custom_download_dir: true        # 默认 true；false → 忽略请求里的 target_dir（强制走 download_dir）
+  allowed_download_roots:                # target_dir 白名单；空 = 不限制；非空 = 限定本地落盘路径前缀（生产建议配上）
+    - D:/downloads
   credential_store: keyring             # keyring | file | disabled | off | none（file 模式 AES-256-GCM + AAD 绑定，见下方「凭据管理」）
   ssh_debug: false                      # 打开 logs/ssh_debug.log
   ssh_traffic_dump: false               # 打开 logs/ssh_traffic.log（C→S / S→C 分向）
   ssh_log_max_mb: 8                     # 单日志文件上限
   ssh_log_keep: 3                        # 滚动保留份数
-  ssh_compat_profile: modern            # modern | compat | no-ecdh | legacy | auto
+  ssh_compat_profile: auto               # modern | compat | no-ecdh | legacy | auto（默认 auto：3 套 profile 自动 fallback）
 
 search:
   default_latest_files: 1        # 「下载最新 N 个」默认值（1–5）
@@ -593,7 +626,7 @@ systems:
 
 ---
 
-## 📁 项目结构
+## <img src="docs/section-icons/folder-tree.svg" width="22" height="22" align="absmiddle"> 项目结构
 
 ```
 kairo/
@@ -607,21 +640,23 @@ kairo/
 │   ├── index.html               # SPA 骨架 + 顶部菜单 + 主题 inline 防 FOUC
 │   ├── preview.html             # 文件预览独立新窗口
 │   ├── tail.html                # Tail 全屏窗口
-│   ├── style.css                # CSS 变量主题（dark/light/green/hc）
+│   ├── ssh.html                 # SSH 终端全屏窗口（v0.10 起）
+│   ├── style.css                # CSS 变量主题（dark/light/green/hc/xianxia）
 │   ├── theme.js                 # 主题切换（localStorage 持久）
 │   ├── core.js / api.js / state.js / app.js
 │   ├── auth.js                  # Bearer token 登录遮罩（v0.9 起）
 │   ├── tail.js                  # 独立 tail 窗口逻辑（v0.9 起）
 │   ├── img/                     # Kairo 官方图标（128/64/favicon，Retina 多尺寸）
-│   ├── vendor/                  # 第三方前端库（diff2html.min.{js,css}）
+│   ├── vendor/                  # 第三方前端库（diff2html.{js,css} + xterm/{js,addon,css}）
 │   ├── app.test.js              # Node 单测
 │   └── pages/
 │       ├── home.js              # 首页
 │       ├── websphere.js         # 日志助手
 │       ├── files.js             # 文件下载
+│       ├── ssh.js               # SSH 终端（v0.10 起）
 │       ├── formatter.js         # JSON/XML/YAML/URL-form 格式化
 │       ├── http.js              # HTTP 测试（v0.7）
-│       ├── commands.js          # 常用命令（占位）
+│       ├── commands.js          # 常用命令速查（v0.7 起）
 │       ├── diagnostics.js       # 环境自检
 │       ├── config.js            # 系统配置可视化编辑器
 │       ├── downloads.js         # 下载历史
@@ -631,7 +666,7 @@ kairo/
 │       ├── compare.js           # 代码 / 文件比对（v0.7）
 │       └── about.js             # 关于（v0.9 重写：数据仪表盘 + 架构 + 版本史）
 ├── internal/
-│   ├── audit/                   # 审计日志（线程安全，不含密码；v0.9 起 `/api/audit/*` 端点下线）
+│   ├── audit/                   # 审计日志（线程安全，不含密码；v0.9 起 `/api/audit/*` 端点下线，模块保留供内部 write 调用）
 │   ├── config/                  # config.yaml 加载 + 校验 + COW Manager
 │   ├── credentials/             # 凭据存储抽象（keyring / file AES-256-GCM + AAD）
 │   ├── diagnostics/             # 环境自检（App/Build/Runtime/Tools/Servers）
@@ -642,31 +677,35 @@ kairo/
 │   ├── httpserver/
 │   │   ├── httpserver.go        # 路由表 + 服务组装
 │   │   ├── response.go / helpers.go / open_dir.go
-│   │   ├── handlers_ssh.go / handlers_logs_*.go / handlers_files.go
+│   │   ├── handlers_ssh.go / handlers_ssh_shell.go (WS, v0.10) / handlers_logs_*.go / handlers_files.go
 │   │   ├── handlers_tail.go / handlers_admin.go
 │   │   ├── handlers_credentials.go / handlers_downloads.go / handlers_format.go
 │   │   ├── handlers_diagnostics.go / handlers_preferences.go / handlers_local.go
 │   │   ├── handlers_compare.go / handlers_diff.go
 │   │   ├── handlers_auth.go / handlers_openers.go / handlers_config_yaml.go
-│   │   └── *_test.go            # 单测 + 集成测试（fake SFTP）
+│   │   └── *_test.go            # 单测 + 集成测试（fake SFTP + fakeShellSSH）
 │   ├── logquery/                # 后端命令模板
 │   ├── portreuse/               # 端口复用（Windows 独立实现 + 跨平台兜底）
 │   ├── sftpclient/              # SFTP 客户端封装
-│   ├── sshclient/               # SSH 客户端（3 套 compat profile + ctx 超时）
+│   ├── sshclient/               # SSH 客户端（3 套 compat profile + ctx 超时 + shell 会话）
+│   ├── sshshell/                # SSH 终端 WS ↔ shell 桥（v0.10 起，默认 max=32）
+│   ├── sysutil/                 # 跨平台系统调用（HideConsoleWindow 等）
 │   ├── tailmgr/                 # Tail 会话池 + Streamer 接口
 │   └── tray/                    # 系统托盘 + 启动错误弹框（Windows GUI 模式）
 ├── scripts/
 │   ├── build_windows_amd64.sh
 │   ├── build_windows_amd64_win7_go120.sh
+│   ├── build_windows_both.sh    # 同时打 Win10/11 + Win7 两个产物
 │   ├── package_windows.sh       # 打 Windows 发版 zip
+│   ├── package_windows_both.sh  # 打 Windows 双版本 zip
 │   ├── package_source.sh        # 打源码 zip
 │   ├── acceptance_run.py
-│   ├── mock_sshd.py             # 假 sshd，给集成测试用
+│   ├── release.sh / release_smoke_test.sh
+│   ├── mock_sshd.py / mock_shell_sshd.py  # 假 sshd / 假 shell，给集成测试用
 │   ├── fake-websphere/          # 假 WebSphere 日志布局
 │   ├── fake-files/              # 假远端文件系统（e2e 夹具）
 │   ├── e2e.sh                   # Playwright e2e 入口（v0.9 起）
-│   ├── e2e-prepare-fixtures.js  # e2e 夹具准备脚本（v0.9 起）
-│   └── release_smoke_test.sh    # 发版冒烟测试
+│   └── e2e-prepare-fixtures.js  # e2e 夹具准备脚本（v0.9 起）
 ├── tests/
 │   └── e2e/                     # Playwright 端到端测试（v0.9 起）
 └── docs/
@@ -676,6 +715,7 @@ kairo/
     ├── E2E-COVERAGE-GAP.md      # e2e 覆盖差距分析（v0.9 起）
     ├── E2E-ISSUES-FOUND.md      # e2e 发现的问题（v0.9 起）
     ├── E2E-KNOWN-LIMITATIONS.md # e2e 已知限制（v0.9 起）
+    ├── SSH-TERMINAL-DESIGN.md   # SSH 终端设计说明（v0.10 起）
     ├── ISSUES-FOUND.md          # 深度测试问题清单
     ├── banner.svg               # 顶部 banner
     ├── qa/                      # 深度测试脚本与产物（playwright / reports / screenshots）
@@ -684,7 +724,7 @@ kairo/
 
 ---
 
-## 🧭 路线图（已规划 / 未做）
+## <img src="docs/section-icons/roadmap.svg" width="22" height="22" align="absmiddle"> 路线图（已规划 / 未做）
 
 | 状态 | 功能 |
 | --- | --- |
@@ -699,19 +739,20 @@ kairo/
 | ✅ | 常用目录管理（localStorage） |
 | ✅ | 文件名模糊搜索（glob / 子串） |
 | ✅ | OS 钥匙串密码存储 |
-| ✅ | 主题切换（4 套） |
+| ✅ | 主题切换（5 套：dark / light / green / hc / xianxia） |
 | ✅ | OpenSSH 6.2p2 / AIX / WebSphere SSH 兼容 |
+| ✅ | SSH 交互式终端菜单（v0.10，xterm.js + WebSocket，复用 3 套 compat profile） |
 | ✅ | 环境自检（Diagnostics） |
 | ✅ | 下载历史（v0.9 起 audit API 已下线，审计数据只走 `logs/audit.log`） |
 | ✅ | 「在资源管理器打开」「定位文件」 |
-| 🚧 | 常用命令模块（当前占位） |
+| ✅ | 常用命令速查（v0.7 起：6 大分类 tabs + 顶栏搜索 + 收藏 + 一键复制） |
 | 🚧 | 数据库连接（MySQL/PG/Redis） |
-| ❌ | 任意命令执行（设计为禁止） |
+| ❌ | 任意命令执行（SSH 终端里用户连的是自己已声明的服务器，不视作「任意命令」） |
 | ❌ | 日期 / 日历 / 文本处理模块（已从导航移除） |
 
 ---
 
-## ❓ 常见问题
+## <img src="docs/section-icons/faq.svg" width="22" height="22" align="absmiddle"> 常见问题
 
 <details>
 <summary><b>Q: 启动后浏览器没自动打开？</b></summary>
@@ -778,7 +819,28 @@ v0.2 起在「系统配置」页直接编辑保存即可，无需重启。手编
 
 ---
 
-## 📜 Release Notes
+## <img src="docs/section-icons/changelog.svg" width="22" height="22" align="absmiddle"> Release Notes
+
+### v0.10（开发中）— SSH 交互式终端菜单
+
+#### SSH 终端菜单
+
+- **新增「SSH 终端」菜单**：浏览器里开交互式 shell（Xshell Web 版体验），xterm.js Canvas 渲染 + 5 套主题联动
+- **WebSocket 双向桥**：`GET /api/ssh/shell/ws`；binary frame = 字节流透传，text frame = JSON 控制（`resize` / `signal` / `ping`）
+- **`internal/sshshell` 模块**：活跃会话计数 + `DefaultMaxSessions = 32` 上限保护 + `ShutdownAll` 进程退出清理；1 WS 对 1 SSH session（无 broadcast，结构比 `tailmgr` 简单）
+- **凭据不经过 WS**：WS upgrade 帧不带 password；server 端 `resolveCreds` 从 keyring / file 拿，前端缺密码时弹一次性密码框 → `POST /api/credentials/save` → 重连
+- **复用 sshclient 3 套 compat profile**：modern / compat / no-ecdh / legacy / auto，老 OpenSSH 6.2p2 / AIX / WebSphere 直接进
+- **独立全屏窗口**：`ssh.html` + `web/pages/ssh.js`；主页 hash 路由 `#/ssh` 内嵌版同时存在
+- **多 tab + 状态持久**：打开的 tab + 选中服务器 + 状态点 → `localStorage['kairo:ssh:tabs']`；离开页面自动关闭所有 WS + dispose terminal
+- **审计只记 start/end**：命令内容不写 audit（输入流密集且可能含密码）
+- **测试覆盖**：`internal/sshshell/manager_test.go` + `internal/httpserver/handlers_ssh_shell_test.go` + `docs/SSH-TERMINAL-DESIGN.md` 设计说明
+
+#### 其他
+
+- **xianxia 仙侠·墨韵青锋主题**：5 套主题新增第 5 套（dark / light / green / hc / xianxia）
+- **`gorilla/websocket v1.5.3`**：新增后端依赖
+- **`internal/sysutil`**：抽象 `HideConsoleWindow` 跨平台实现
+- **`/api/compare/deep-check`**：文件夹深度检查端点
 
 ### v0.9.0（当前）— RBAC + fail-closed 安全加固 + UI 全面优化
 
@@ -853,7 +915,7 @@ v0.2 起在「系统配置」页直接编辑保存即可，无需重启。手编
 
 #### 体验大改造
 
-- **#19 背景主题切换**：4 套主题（dark / light / green / hc），CSS 变量抽取到 `:root[data-theme=...]`，右上角按钮 + localStorage 记忆
+- **#19 背景主题切换**：CSS 变量抽取到 `:root[data-theme=...]`，右上角按钮 + localStorage 记忆（v0.9 起新增 `xianxia` 仙侠·墨韵青锋主题，共 5 套）
 - **#3 配置页保存按钮位置**：sticky 保存栏 + 底部再加一个保存按钮
 - **#4 紫色「系统」tag 横排显示**：`writing-mode: horizontal-tb; white-space: nowrap; min-width: 36px;`
 - **#5 配置页字段说明 + 复制服务器按钮解释**
@@ -902,6 +964,6 @@ v0.2 起在「系统配置」页直接编辑保存即可，无需重启。手编
 
 ---
 
-## 📄 License
+## <img src="docs/section-icons/file-text.svg" width="22" height="22" align="absmiddle"> License
 
 Internal use only. Not for public distribution.

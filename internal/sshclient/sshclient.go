@@ -655,6 +655,31 @@ func (c *Client) RawConn() *ssh.Client {
 	return c.conn
 }
 
+// RunOutput 适配 tailmgr.Streamer 接口的"一次性命令"语义。
+//
+// 接口签名为 RunOutput(ctx, command, encoding, timeout) (stdout string, err error)：
+//
+//   - 把命令执行完的 stdout 作为单一字符串返回；
+//   - 退出码非 0 / stderr 非空 / ctx 取消 → 一律包成 err 返回；
+//   - 这是 tailmgr 用来在 tail -F 启动前同步跑一次 wc/awk 取 baseline 的入口，
+//     用 Run 走一遍单次 ssh exec 即可，无新依赖。
+//
+// 与 Stream 的区别：Stream 是长连接、按行回调；RunOutput 是"跑完就完"、一次性返回。
+func (c *Client) RunOutput(ctx context.Context, command, encoding string, timeout time.Duration) (string, error) {
+	stdout, stderr, exitCode, err := c.Run(ctx, command, timeout, encoding)
+	if err != nil {
+		return "", err
+	}
+	if exitCode != 0 {
+		stderr = strings.TrimSpace(stderr)
+		if stderr == "" {
+			stderr = fmt.Sprintf("exit=%d", exitCode)
+		}
+		return "", fmt.Errorf("远端命令失败: %s", stderr)
+	}
+	return stdout, nil
+}
+
 // SanitizeError 把远程错误信息里的敏感词脱敏，避免返回给前端的 err 中出现 "password"。
 // Go 的 x/crypto/ssh 在认证失败时会返回形如：
 //

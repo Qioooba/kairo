@@ -26,6 +26,7 @@ import (
 	"kairo/internal/credentials"
 	"kairo/internal/downloads"
 	"kairo/internal/httpserver"
+	"kairo/internal/license"
 	"kairo/internal/sshclient"
 	"kairo/internal/sshshell"
 	"kairo/internal/tailmgr"
@@ -137,6 +138,26 @@ func main() {
 
 	// 7. 构造可热替换的配置 Manager
 	cfgMgr := config.NewManager(cfg, cfgPath, runDir)
+
+	// 7.1 注入 license 包的 config provider
+	// 这样 license 包能在不直接 import config (避免循环) 的情况下读取 kairo 字段
+	license.SetConfigProvider(func() *license.ConfigSnapshot {
+		c := cfgMgr.Get()
+		if c == nil {
+			return &license.ConfigSnapshot{}
+		}
+		return &license.ConfigSnapshot{
+			KairoInternalToken: c.App.KairoInternalToken,
+		}
+	})
+
+	// 7.2 启动时做一次 license 检查 (仅日志, 不阻止启动)
+	// 前端 GET /api/license/status 时会再次检查, 这里是 fail-soft 的预检
+	if err := license.Check(); err == nil {
+		log.Printf("license: 启动检查通过 (开发自用 或 本地证书有效)")
+	} else {
+		log.Printf("license: 启动检查未通过, 前端将弹激活窗 (err=%v)", err)
+	}
 
 	// 7.5 构造 tail 会话池
 	// BE-002：idleAfter 从 config.tail_idle_minutes 读取（默认 30 分钟，最小 5 分钟）。

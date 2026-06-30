@@ -17,11 +17,17 @@ GNU→BSD 兼容：把 `find -printf 'fmt'` 翻译成 `find -exec stat -f 'fmt' 
 """
 
 import os
+import pty
 import re
+import select
+import signal
 import socket
+import struct
 import subprocess
 import sys
+import termios
 import threading
+import fcntl
 
 import paramiko
 try:
@@ -50,6 +56,108 @@ PATH_MAP = {
 }
 
 PRINTF_RE = re.compile(r"""-printf\s+(['"])([^'"]+)\1""")
+
+
+# 交互式 shell session 表：channel id → master pty fd（用于 window-change resize）
+_shell_sessions = {}
+
+
+def _handle_shell_channel(channel):
+    """处理"SSH 终端"发来的交互式 shell channel。
+
+    行为：
+    - pty.openpty() 开一对 pty
+    - spawn /bin/bash --noprofile --norc -i，cwd=FAKE_ROOT（让"远程绝对路径"自然解析）
+    - 两个 goroutine：master → channel 发送、channel.recv → master 写入
+    - 客户端断连/关 channel → SIGHUP 杀进程、close master fd
+    """
+    master_fd, slave_fd = pty.openpty()
+    try:
+        env = os.environ.copy()
+        env["TERM"] = "xterm-256color"
+        # 关键：\[ 和 \] 是 bash 的"不可打印"边界标记
+        # PS1 里裸的 [ ... ] 会被 bash 误认为是类似 \033[...m 的不可见序列，
+        # 导致 readline 计算光标列数时少算 6 列，跟 terminal 实际光标位置错位。
+        # 用 \[ / \] 显式告诉 bash "这段是 0 宽度"，terminal 还是会把 [mock] 画出来。
+        env["PS1"] = "\\[mock\\] \\u@\\h:\\w\\$ "
+
+        proc = subprocess.Popen(
+            ["/bin/bash", "--noprofile", "--norc", "-i"],
+            stdin=slave_fd,
+            stdout=slave_fd,
+            stderr=slave_fd,
+            preexec_fn=os.setsid,
+            cwd=FAKE_ROOT,
+            env=env,
+            close_fds=True,
+        )
+        os.close(slave_fd)
+
+        _shell_sessions[id(channel)] = master_fd
+
+        # 设置初始 winsize（24x80 是 PTY 的 fallback 默认）
+        try:
+            fcntl.ioctl(master_fd, termios.TIOCSWINSZ, struct.pack('HHHH', 24, 80, 0, 0))
+        except Exception:
+            pass
+
+        stop_event = threading.Event()
+
+        def pump_to_channel():
+            try:
+                while not stop_event.is_set():
+                    r, _, _ = select.select([master_fd], [], [], 0.2)
+                    if master_fd in r:
+                        try:
+                            data = os.read(master_fd, 4096)
+                            if not data:
+                                break
+                            channel.sendall(data)
+                        except OSError:
+                            break
+            except Exception:
+                pass
+
+        pump_thread = threading.Thread(target=pump_to_channel, daemon=True)
+        pump_thread.start()
+
+        try:
+            while not stop_event.is_set():
+                r, _, _ = select.select([channel], [], [], 0.2)
+                if channel in r:
+                    try:
+                        data = channel.recv(4096)
+                        if not data:
+                            break
+                        os.write(master_fd, data)
+                    except Exception:
+                        break
+        except Exception:
+            pass
+        finally:
+            stop_event.set()
+            _shell_sessions.pop(id(channel), None)
+            for sig in (signal.SIGHUP, signal.SIGTERM):
+                try:
+                    os.killpg(os.getpgid(proc.pid), sig)
+                except Exception:
+                    pass
+            try:
+                proc.wait(timeout=2)
+            except Exception:
+                pass
+            try:
+                os.close(master_fd)
+            except Exception:
+                pass
+            try:
+                channel.close()
+            except Exception:
+                pass
+    except Exception as e:
+        print(f"  shell channel error: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc(file=sys.stderr)
 
 
 def gnu_to_bsd_find(cmd):
@@ -185,9 +293,27 @@ class MockServer(paramiko.ServerInterface):
     # 之前 mock 自己 override 只返回 OPEN_SUCCEEDED 而没启动 SFTP server，
     # 导致客户端 invoke_subsystem("sftp") 后等不到 SFTP 协议响应、channel 关闭。
 
+    def check_channel_pty_request(self, channel, term, width, height, pixelwidth, pixelheight, modes):
+        # 接受所有 PTY 请求（"日志助手"用 exec 不需要 PTY，"SSH 终端"才需要）。
+        # 即使非 shell channel 来了 pty-req，也放行 —— 模拟真实 sshd 的宽容行为。
+        return True
+
+    def check_channel_window_change_request(self, channel, width, height, pixelwidth, pixelheight):
+        # 把尺寸变更转发给活跃 shell session 的 master pty。
+        master_fd = _shell_sessions.get(id(channel))
+        if master_fd is not None:
+            try:
+                fcntl.ioctl(master_fd, termios.TIOCSWINSZ,
+                            struct.pack('HHHH', height, width, pixelwidth, pixelheight))
+            except Exception:
+                pass
+        return True
+
     def check_channel_shell_request(self, channel):
-        # 模拟环境不开交互 shell，exec channel 就够用。
-        return paramiko.OPEN_FAILED_ADMINISTRATIVELY_PROHIBITED
+        # 启动交互式 shell（cwd=FAKE_ROOT，让用户能 ls /opt/IBM/... 等"远程路径"）。
+        t = threading.Thread(target=_handle_shell_channel, args=(channel,), daemon=True)
+        t.start()
+        return True
 
     def check_auth_password(self, username, password):
         if password == PASSWORD:

@@ -26,8 +26,9 @@
 
   // 切换循环：dark → light → green → hc → xianxia → dark
   const NEXT = { dark: 'light', light: 'green', green: 'hc', hc: 'xianxia', xianxia: 'dark' };
-  // 按钮 emoji / tooltip
-  const EMOJI = { dark: '🌙', light: '☀️', green: '🌿', hc: '🔆', xianxia: '⚔️' };
+  // 按钮图标（lucide key，见 web/icons.js）+ tooltip
+  // 之前是 emoji，在 Win 7 上字体缺失会显示豆腐块，改内联 SVG 跨平台一致
+  const THEME_ICON = { dark: 'moon', light: 'sun', green: 'leaf', hc: 'contrast', xianxia: 'sword' };
   const TIP = {
     dark: '切换到浅色主题',
     light: '切换到护眼绿主题',
@@ -36,6 +37,20 @@
     xianxia: '切换到深色主题'
   };
 
+  // 按钮里的 SVG 尺寸（px）
+  const ICON_SIZE = 18;
+
+  function paintBtn(btn, name) {
+    if (!btn) return;
+    btn.setAttribute('data-theme', name);
+    // icons.js 在 core.js 之后加载；理论上一定可用，但防御一下
+    const ic = (window.Kairo && Kairo.icons && Kairo.icons.innerHTML)
+      ? Kairo.icons.innerHTML(THEME_ICON[name] || THEME_ICON.dark, ICON_SIZE)
+      : '';
+    btn.innerHTML = ic;
+    btn.title = TIP[name] || TIP.dark;
+  }
+
   function set(name) {
     if (ALLOWED.indexOf(name) === -1) name = 'dark';
     try { localStorage.setItem(KEY, name); } catch (_) {}
@@ -43,12 +58,7 @@
     try {
       window.dispatchEvent(new CustomEvent('kairo:themechange', { detail: { theme: name } }));
     } catch (_) {}
-    const btn = document.getElementById('theme-toggle');
-    if (btn) {
-      btn.setAttribute('data-theme', name);
-      btn.textContent = EMOJI[name] || EMOJI.dark;
-      btn.title = TIP[name] || TIP.dark;
-    }
+    paintBtn(document.getElementById('theme-toggle'), name);
     return name;
   }
 
@@ -56,15 +66,13 @@
     return set(NEXT[get()] || 'dark');
   }
 
-  // init：设置初始主题 + 按钮 emoji
+  // init：设置初始主题 + 按钮 SVG
   function init() {
     const name = get();
     document.documentElement.setAttribute('data-theme', name);
     const btn = document.getElementById('theme-toggle');
     if (btn) {
-      btn.setAttribute('data-theme', name);
-      btn.textContent = EMOJI[name] || EMOJI.dark;
-      btn.title = TIP[name] || TIP.dark;
+      paintBtn(btn, name);
       if (!btn.onclick) {
         btn.addEventListener('click', () => Kairo.theme.toggle());
       }

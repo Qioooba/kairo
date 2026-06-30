@@ -86,11 +86,16 @@ func (s *Server) handleTailStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit.Write("logs.tail", "system", req.System, "server", req.Server, "dir", ld.Path, "file", req.File, "result", "ok", "id", sess.ID, "lines", req.Lines)
+	// total_lines：tail 启动瞬间拿到的文件总行数（精确）。
+	// 前端拿到后用 baseline - lines 算 buffer 第一行的"真实文件行号"。
+	// -1 表示 baseline 拿不到（命令失败 / 文件不存在 / 编码异常）——
+	// 前端 fallback 到"buffer 内序号"，UI 上仍可见但语义不真实。
 	writeJSON(w, 200, map[string]any{
-		"id":     sess.ID,
-		"server": srv.Name,
-		"dir":    ld.Path,
-		"file":   req.File,
+		"id":          sess.ID,
+		"server":      srv.Name,
+		"dir":         ld.Path,
+		"file":        req.File,
+		"total_lines": sess.GetBaseline(),
 	})
 }
 

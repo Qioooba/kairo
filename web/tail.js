@@ -147,8 +147,23 @@
   });
 
   // v0.6：行号显示开关。持久化到 localStorage（key 兼容 v0.6 前后页面刷新记忆），
-  // 默认开启。把 viewer.droppedCount() 写到 --tail-line-offset，CSS counter
-  // 会让 buffer 第一行的行号 = offset + 1，trim 后行号仍连续。
+  // 默认开启。
+  //
+  // v0.10 真实行号：把 (baselineOffset - viewer.droppedCount()) 写到 --tail-line-offset，
+  // CSS counter 会让 buffer 第一行的真实文件行号 = offset + 1，trim 后依然连续。
+  //   - baselineOffset = 后端 /start 响应带回来的真实文件行号 - 历史行数
+  //     （即"启动前文件总行数"减去"要先吐的最后 N 行的起点"）。
+  //   - 每次 viewer trim 时 droppedCount 上涨，offset 自动跟着减，第一行号不变。
+  //   - baselineOffset < 0（baseline = -1 兜底 / baseline < lines）走 fallback：行号
+  //     从 1 开始，"buffer 内序号"模式（旧行为，UI 仍可见但语义不真实）。
+  //
+  // 推导：
+  //   设 baseline = 启动瞬间文件总行数；historyLines = 启动时先吐的 N（= lines 参数）。
+  //   历史起点 = max(1, baseline - historyLines + 1)
+  //   baselineOffset = history 起点 - 1 = max(0, baseline - historyLines)
+  //   buffer 第一行行号 = (baselineOffset - droppedCount) + 1
+  //                  = max(0, baseline - historyLines) - droppedCount + 1
+  //   历史模式（droppedCount=0）：max(0, baseline - historyLines) + 1 ✓
   const LINE_NUM_KEY = 'kairo_tail_show_line_numbers';
   let showLineNumbers = (function () {
     try {
@@ -157,6 +172,14 @@
       return raw === '1' || raw === 'true';
     } catch (e) { return true; }
   })();
+  // baselineOffset 由 startWithCred 成功后在拿到 total_lines 后设置；
+  // -1 = "baseline 拿不到"，走 fallback（viewer droppedCount 即可）。
+  let baselineOffset = -1;
+  function computeCurrentOffset() {
+    // baseline 拿不到 → fallback 到 "viewer droppedCount"（旧行为，行号从 1 开始）。
+    if (baselineOffset < 0) return viewer.droppedCount();
+    return baselineOffset - viewer.droppedCount();
+  }
   function applyLineNumberVisibility() {
     if (showLineNumbers) tailOut.classList.add('show-line-numbers');
     else tailOut.classList.remove('show-line-numbers');
@@ -164,8 +187,9 @@
   }
   function syncLineNumberOffset() {
     if (!showLineNumbers) return;
-    // droppedCount = totalEver 中被 trim 掉的数量。buffer 第一行行号 = offset + 1
-    tailOut.style.setProperty('--tail-line-offset', String(viewer.droppedCount()));
+    // buffer 第一行的"全局行号 - 1" = computeCurrentOffset()；
+    // CSS counter `counter-reset: tail-line <N>` 让每行 ::before 渲染 N+1, N+2, ...
+    tailOut.style.setProperty('--tail-line-offset', String(computeCurrentOffset()));
   }
   if (showLineNumbersInp) {
     showLineNumbersInp.checked = showLineNumbers;
@@ -234,8 +258,13 @@
   btnClear.addEventListener('click', () => {
     viewer.clear();
     pendingLines = [];
+    // v0.10 真实行号：clear 后 baselineOffset 走 fallback（-1），
+    // 即从"buffer 内序号 1"重新计数 —— 因为 baseline 是启动瞬间拿的，
+    // 文件继续写入时已经过期；想重新对齐文件真实行号，需要重新 tail（重新拉 baseline）。
+    baselineOffset = -1;
     rateEl.textContent = '实时显示中';
-    syncLineNumberOffset(); // clear 重置 droppedCount，offset 也要跟着归零让行号从 1 重新开始
+    toast('已清屏（行号重置为 buffer 内序号，如需真实文件行号请重新打开跟踪）', 'info');
+    syncLineNumberOffset();
   });
   // 项 11 修复：max-lines 改动时立即 trim 到新上限
   if (maxLinesInp) {
@@ -302,6 +331,15 @@
         throw new Error(errMsg);
       }
       tailId = data.id;
+      // v0.10 真实行号：拿后端的 total_lines 算 baselineOffset
+      //   baselineOffset = max(0, baseline - lines)
+      //   -1 → fallback（行号从 1 起的旧行为）
+      const tlines = Number(data.total_lines);
+      if (Number.isFinite(tlines) && tlines >= 0) {
+        baselineOffset = Math.max(0, tlines - lines);
+      } else {
+        baselineOffset = -1;
+      }
       setConn('ok', '已连接 · id=' + tailId);
       btnStop.disabled = false;
       viewer.clear();
