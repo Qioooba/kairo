@@ -1,19 +1,19 @@
 /* ===== web/state.js =====
  * 全局 state：路由表 / 路由名 / 路由副标题 / 启动信息缓存
  *
- * 不引 ES module，挂 window.DTB.state
+ * 不引 ES module，挂 window.Kairo.state
  */
 
 (function () {
   'use strict';
 
-  if (!window.DTB) window.DTB = {};
-  if (!window.DTB.state) window.DTB.state = {};
-  const state = window.DTB.state;
+  if (!window.Kairo) window.Kairo = {};
+  if (!window.Kairo.state) window.Kairo.state = {};
+  const state = window.Kairo.state;
 
   // 路由表：route name → render 函数引用
   // 页面模块加载时会注册自己：
-  //   window.DTB.state.routes.home = function(view) { ... }
+  //   window.Kairo.state.routes.home = function(view) { ... }
   // app.js 在 navigate 时统一调用
   state.routes = state.routes || {};
   state.routeNames = state.routeNames || {};
@@ -24,13 +24,13 @@
   state.bootInfo = state.bootInfo || null;
 
   // localStorage 提示关闭键的统一前缀
-  // v0.9 rebrand: 从 otb:dismissed:* 迁移到 dtb:dismissed:*（一次性，不删除旧键）
+  // v0.9 rebrand: 从 otb:dismissed:* 迁移到 kairo:dismissed:*（一次性，不删除旧键）
   try {
     var OLD_PREFIX = 'otb:dismissed:';
     for (var i = 0; i < localStorage.length; i++) {
       var k = localStorage.key(i);
       if (k && k.indexOf(OLD_PREFIX) === 0) {
-        var newK = 'dtb:dismissed:' + k.slice(OLD_PREFIX.length);
+        var newK = 'kairo:dismissed:' + k.slice(OLD_PREFIX.length);
         if (!localStorage.getItem(newK)) {
           localStorage.setItem(newK, localStorage.getItem(k));
         }
@@ -38,29 +38,32 @@
     }
   } catch (_) { /* ignore migration errors */ }
 
-  // v0.9 rebrand: 全局兜底迁移 —— 启动时扫一遍 localStorage 里所有 otb: 前缀的键，
-  // 一次性复制到 dtb: 前缀（新键不存在时才复制，避免覆盖用户在迁移期间写入的新数据）。
-  // 这样做的好处：未来再有遗漏的 otb: 键也能自动带过来，不需要每处单独写迁移代码。
+  // v0.9 rebrand: 全局兜底迁移 —— 启动时扫一遍 localStorage 里所有 otb: 和 dtb: 前缀的键，
+  // 一次性复制到 kairo: 前缀（新键不存在时才复制，避免覆盖用户在迁移期间写入的新数据）。
+  // 先迁 dtb:（较新），再迁 otb:（较老，仅作 fallback），保证较新的数据优先。
   // 老键不删除，留作只读 fallback；如果新代码稳定后想清理，可以再加一个清理函数。
   try {
     if (typeof localStorage !== 'undefined') {
-      var GLOBAL_OLD = 'otb:';
-      var GLOBAL_NEW = 'dtb:';
+      var GLOBAL_NEW = 'kairo:';
       var seen = {};
-      for (var gi = 0; gi < localStorage.length; gi++) {
-        var gk = localStorage.key(gi);
-        if (gk && gk.indexOf(GLOBAL_OLD) === 0) {
-          var gn = GLOBAL_NEW + gk.slice(GLOBAL_OLD.length);
-          if (!seen[gn] && !localStorage.getItem(gn)) {
-            try { localStorage.setItem(gn, localStorage.getItem(gk)); } catch (_) { /* quota? */ }
+      function migratePrefix(oldPrefix) {
+        for (var gi = 0; gi < localStorage.length; gi++) {
+          var gk = localStorage.key(gi);
+          if (gk && gk.indexOf(oldPrefix) === 0) {
+            var gn = GLOBAL_NEW + gk.slice(oldPrefix.length);
+            if (!seen[gn] && !localStorage.getItem(gn)) {
+              try { localStorage.setItem(gn, localStorage.getItem(gk)); } catch (_) { /* quota? */ }
+            }
+            seen[gn] = true;
           }
-          seen[gn] = true;
         }
       }
+      migratePrefix('dtb:');
+      migratePrefix('otb:');
     }
   } catch (_) { /* ignore migration errors */ }
 
-  const LS_PREFIX = 'dtb:dismissed:';
+  const LS_PREFIX = 'kairo:dismissed:';
 
   function isDismissed(key) {
     try { return localStorage.getItem(LS_PREFIX + key) === '1'; }

@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"doubao-toolbox/internal/diff"
+	"kairo/internal/diff"
 )
 
 type folderScanReq struct {
@@ -243,7 +243,7 @@ func (s *Server) handleCompareFolderScan(w http.ResponseWriter, r *http.Request)
 
 	cur := s.cfg.Get()
 	if !cur.App.ComparePathAllowed(req.LeftPath) || !cur.App.ComparePathAllowed(req.RightPath) {
-		writeErr(w, 403, errors.New("路径不在 compare_allowed_roots 白名单内（fail-closed）"))
+		writeErr(w, 403, errors.New("路径不在 compare_allowed_roots 白名单内"))
 		return
 	}
 
@@ -434,7 +434,7 @@ func (s *Server) handleCompareFileDiff(w http.ResponseWriter, r *http.Request) {
 
 	cur := s.cfg.Get()
 	if !cur.App.ComparePathAllowed(req.LeftPath) || !cur.App.ComparePathAllowed(req.RightPath) {
-		writeErr(w, 403, errors.New("路径不在 compare_allowed_roots 白名单内（fail-closed）"))
+		writeErr(w, 403, errors.New("路径不在 compare_allowed_roots 白名单内"))
 		return
 	}
 

@@ -2,7 +2,7 @@
 //
 // 目标：在不暴露密码的前提下，回答运维三问：
 //
-//  1. 我这台 豆包工具箱 跑得正常吗？（Go 版本、x/crypto/ssh 版本、监听地址、磁盘可写）
+//  1. 我这台 Kairo 跑得正常吗？（Go 版本、x/crypto/ssh 版本、监听地址、磁盘可写）
 //  2. 我能 SSH 上去吗？（DNS 解析 + TCP 端口连通性，按 server 逐台报）
 //  3. 我有必要的工具吗？（find -printf、grep、sed、tail 等 find_list / grep 依赖）
 //
@@ -24,7 +24,8 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"doubao-toolbox/internal/config"
+	"kairo/internal/config"
+	"kairo/internal/sysutil"
 )
 
 // Report 单次自检结果。结构稳定，前端可作为表格字段映射。
@@ -242,7 +243,7 @@ func dirWritable(path string) bool {
 	if err := os.MkdirAll(path, 0o755); err != nil {
 		return false
 	}
-	tmp := filepath.Join(path, ".doubao-toolbox-write-check")
+	tmp := filepath.Join(path, ".kairo-write-check")
 	if err := os.WriteFile(tmp, []byte("x"), 0o600); err != nil {
 		return false
 	}
@@ -252,7 +253,7 @@ func dirWritable(path string) bool {
 
 func buildToolsInfo() ToolsInfo {
 	// Windows 平台：find/grep/sed/tail/unzip 这些 GNU 工具默认不存在；
-	// 但 doubao-toolbox 的命令实际是发到**远端 SSH 服务器**执行的，本地没这些命令是正常的。
+	// 但 kairo 的命令实际是发到**远端 SSH 服务器**执行的，本地没这些命令是正常的。
 	// 为了避免前端展示一堆 "✗ 未找到" + issue 列表爆假警告，给前端一个 Note 解释。
 	//
 	// 探测本身还是照做（Found 字段真实反映 PATH 情况），万一用户在 Git for Windows /
@@ -295,7 +296,9 @@ func checkTool(name string) ToolCheck {
 	// 拿版本（带 2s 兜底超时，避免 hang）
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, name, "--version").Output()
+	cmd := exec.CommandContext(ctx, name, "--version")
+	sysutil.HideConsoleWindow(cmd) // Windows 隐藏子进程控制台，避免双击 GUI exe 时闪 cmd 黑框
+	out, err := cmd.Output()
 	if err == nil {
 		first := strings.TrimSpace(strings.SplitN(string(out), "\n", 2)[0])
 		// 有些工具的 --version 输出多行；第一行通常是版本号
@@ -310,10 +313,14 @@ func checkTool(name string) ToolCheck {
 func findSupportsPrintf() bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "find", "--help").CombinedOutput()
+	cmd := exec.CommandContext(ctx, "find", "--help")
+	sysutil.HideConsoleWindow(cmd) // Windows 隐藏子进程控制台
+	out, err := cmd.CombinedOutput()
 	if err != nil {
 		// 某些 BSD find 接受 -h 而不是 --help；试一下
-		out2, err2 := exec.CommandContext(ctx, "find", "-h").CombinedOutput()
+		cmd2 := exec.CommandContext(ctx, "find", "-h")
+		sysutil.HideConsoleWindow(cmd2)
+		out2, err2 := cmd2.CombinedOutput()
 		if err2 != nil {
 			return false
 		}

@@ -415,23 +415,23 @@ async function waitForToast(page, timeout = 5000) {
 
 async function closeAllDialogs(page) {
   const overlaySelectors = [
-    '.dtb-dialog-overlay',
-    '.dtb-modal-overlay',
+    '.kairo-dialog-overlay',
+    '.kairo-modal-overlay',
     '.modal-overlay',
     '[class*="dialog-overlay"]',
   ];
 
   const closeButtonSelectors = [
-    '.dtb-dialog-close',
+    '.kairo-dialog-close',
     '.modal-close',
     '.close-btn',
     '[aria-label="Close"]',
     '[aria-label="close"]',
     '.btn-close',
     '.cancel-btn',
-    '.dtb-dialog-footer .dtb-btn-default',
+    '.kairo-dialog-footer .kairo-btn-default',
     '.modal-footer .btn-default',
-    '.dtb-dialog-footer button:last-child',
+    '.kairo-dialog-footer button:last-child',
     '.modal-footer button:last-child',
   ];
 
@@ -530,8 +530,8 @@ async function clearTransientUI(page) {
 
 async function ensureNoOverlay(page) {
   const overlaySelectors = [
-    '.dtb-dialog-overlay',
-    '.dtb-modal-overlay',
+    '.kairo-dialog-overlay',
+    '.kairo-modal-overlay',
     '.modal-overlay',
     '[class*="dialog-overlay"]',
     '.el-overlay',
@@ -669,8 +669,8 @@ async function getPageDomSummary(page) {
   try {
     const summary = await page.evaluate(() => {
       const dialogSelectors = [
-        '.dtb-dialog-overlay',
-        '.dtb-modal-overlay',
+        '.kairo-dialog-overlay',
+        '.kairo-modal-overlay',
         '.modal-overlay',
         '[class*="dialog-overlay"]',
       ];

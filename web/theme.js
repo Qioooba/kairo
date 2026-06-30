@@ -1,20 +1,20 @@
 /*
- * web/theme.js — 暗 / 亮主题切换（v0.5 接入 #19）
+ * web/theme.js — 主题切换（v0.5 接入 #19，v0.9.0 新增仙侠主题）
  *
  * 设计要点：
- *  - 暴露 window.DTB.theme = { get, set, toggle, init }
- *  - 持久化：localStorage.dtb_theme（默认 'dark'）
+ *  - 暴露 window.Kairo.theme = { get, set, toggle, init }
+ *  - 持久化：localStorage.kairo_theme（默认 'dark'）
  *  - 应用：document.documentElement.setAttribute('data-theme', name)
  *  - 在 index.html 的 <head> 里有一段 inline script 提前读 localStorage
  *    设置 data-theme，避免刷新时整页先闪一下暗色再切到亮色（FOUC）
- *  - 切换后 dispatch 自定义事件 'dtb:themechange'，按钮可监听并改 emoji
+ *  - 切换后 dispatch 自定义事件 'kairo:themechange'，按钮可监听并改 emoji
  *    （这样 theme.js 本身不耦合顶栏 DOM 结构，扩展友好）
  */
 (function () {
   'use strict';
-  const KEY = 'dtb_theme';
-  // v0.5-G #19：4 种主题（深色 / 浅色 / 护眼绿 / 高对比）
-  const ALLOWED = ['dark', 'light', 'green', 'hc'];
+  const KEY = 'kairo_theme';
+  // 5 种主题：深色 / 浅色 / 护眼绿 / 高对比 / 仙侠古风
+  const ALLOWED = ['dark', 'light', 'green', 'hc', 'xianxia'];
 
   function get() {
     try {
@@ -24,15 +24,16 @@
     return 'dark';
   }
 
-  // 切换循环：dark → light → green → hc → dark
-  const NEXT = { dark: 'light', light: 'green', green: 'hc', hc: 'dark' };
+  // 切换循环：dark → light → green → hc → xianxia → dark
+  const NEXT = { dark: 'light', light: 'green', green: 'hc', hc: 'xianxia', xianxia: 'dark' };
   // 按钮 emoji / tooltip
-  const EMOJI = { dark: '🌙', light: '☀️', green: '🌿', hc: '🔆' };
+  const EMOJI = { dark: '🌙', light: '☀️', green: '🌿', hc: '🔆', xianxia: '⚔️' };
   const TIP = {
     dark: '切换到浅色主题',
     light: '切换到护眼绿主题',
     green: '切换到高对比主题',
-    hc: '切换到深色主题'
+    hc: '切换到仙侠古风主题',
+    xianxia: '切换到深色主题'
   };
 
   function set(name) {
@@ -40,7 +41,7 @@
     try { localStorage.setItem(KEY, name); } catch (_) {}
     document.documentElement.setAttribute('data-theme', name);
     try {
-      window.dispatchEvent(new CustomEvent('dtb:themechange', { detail: { theme: name } }));
+      window.dispatchEvent(new CustomEvent('kairo:themechange', { detail: { theme: name } }));
     } catch (_) {}
     const btn = document.getElementById('theme-toggle');
     if (btn) {
@@ -65,7 +66,7 @@
       btn.textContent = EMOJI[name] || EMOJI.dark;
       btn.title = TIP[name] || TIP.dark;
       if (!btn.onclick) {
-        btn.addEventListener('click', () => DTB.theme.toggle());
+        btn.addEventListener('click', () => Kairo.theme.toggle());
       }
     }
     return name;
@@ -76,6 +77,6 @@
     return ALLOWED.slice();
   }
 
-  window.DTB = window.DTB || {};
-  window.DTB.theme = { get, set, toggle, init, list };
+  window.Kairo = window.Kairo || {};
+  window.Kairo.theme = { get, set, toggle, init, list };
 })();

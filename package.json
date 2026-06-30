@@ -1,5 +1,5 @@
 {
-  "name": "doubao-toolbox",
+  "name": "kairo",
   "version": "1.0.0",
   "description": "<div align=\"center\">",
   "main": "playwright-e2e.js",
@@ -15,15 +15,15 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Qioooba/doubao-toolbox.git"
+    "url": "git+https://github.com/Qioooba/kairo.git"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "bugs": {
-    "url": "https://github.com/Qioooba/doubao-toolbox/issues"
+    "url": "https://github.com/Qioooba/kairo/issues"
   },
-  "homepage": "https://github.com/Qioooba/doubao-toolbox#readme",
+  "homepage": "https://github.com/Qioooba/kairo#readme",
   "dependencies": {
     "playwright": "^1.61.1"
   }

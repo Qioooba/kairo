@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"doubao-toolbox/internal/sshclient"
+	"kairo/internal/sshclient"
 )
 
 type sshTestReq struct {

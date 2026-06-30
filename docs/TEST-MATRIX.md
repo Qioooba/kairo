@@ -1,4 +1,4 @@
-# 豆包工具箱 测试覆盖矩阵
+# Kairo 测试覆盖矩阵
 
 > 用途：逐项核对全菜单 / 全页面 / 全接口 / 全主题 / 全分辨率是否被测试覆盖
 > 配套文件：`docs/ISSUES-FOUND.md`（问题清单）、`docs/MANUAL-CLICK-CASES.md`（手工点击用例）

@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"strings"
 
-	"doubao-toolbox/internal/credentials"
+	"kairo/internal/credentials"
 )
 
 // ---------- /api/credentials/* ----------

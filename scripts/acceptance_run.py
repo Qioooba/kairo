@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
-"""豆包工具箱 Phase 1 模拟验收驱动"""
+"""Kairo Phase 1 模拟验收驱动"""
 import json, os, signal, socket, subprocess, sys, time, urllib.request, urllib.error, contextlib
 
-ROOT = "/Users/qi/Documents/spaces/ops-toolbox"
+# 相对脚本位置定位项目根目录，避免硬编码
+def _find_root():
+    import os
+    here = os.path.dirname(os.path.abspath(__file__))
+    # scripts/ 的上一级就是项目根
+    return os.path.dirname(here)
+ROOT = _find_root()
 MOCK_PORT = int(os.environ.get("MOCK_SSHD_PORT", "2225"))
 APP_PORT = int(os.environ.get("OPS_APP_PORT", "18090"))
 LOG_DIR = os.path.join(ROOT, "logs")
@@ -50,10 +56,10 @@ def main():
         print("MOCK NOT READY"); mock.terminate(); return
     print(f"mock listening on 127.0.0.1:{MOCK_PORT}")
 
-    # 启动 豆包工具箱
+    # 启动 Kairo
     app = subprocess.Popen(
-        [os.path.join(ROOT, "DoubaoToolbox_mac")],
-        stdout=open(os.path.join(LOG_DIR, "doubao_toolbox.out"), "w"),
+        [os.path.join(ROOT, "Kairo_mac")],
+        stdout=open(os.path.join(LOG_DIR, "kairo.out"), "w"),
         stderr=subprocess.STDOUT, cwd=ROOT, preexec_fn=os.setsid)
     print(f"app  pid={app.pid}")
     if not wait_port("127.0.0.1", APP_PORT, 6):
@@ -193,7 +199,7 @@ def main():
     print("===== downloads 目录 ====")
     subprocess.run(["ls", "-la", os.path.join(ROOT, "downloads")])
 
-    print("=== 关闭 mock + 豆包工具箱 ===")
+    print("=== 关闭 mock + Kairo ===")
     try: os.killpg(os.getpgid(app.pid), signal.SIGTERM)
     except: pass
     mock.terminate()

@@ -2,7 +2,7 @@
 
 **日期**: 2026-06-23
 **Agent**: coder (agent1-backend-v3)
-**工作目录**: `/Users/qi/Documents/spaces/doubao-toolbox`
+**工作目录**: `/Users/qi/Documents/spaces/kairo`
 **基线**: v2 plan 已收尾（commit 437b254 / 827c134 / c8d48a4 / 2475ef3）
 
 ---
@@ -102,7 +102,7 @@ curl -X POST 'http://127.0.0.1:18080/api/logs/search?since=2026-06-23T00:00:00Z&
 ```bash
 # 全量
 curl -OJ 'http://127.0.0.1:18080/api/audit/export.json'
-# → doubao-toolbox-audit-2026-06-23-020000.json
+# → kairo-audit-2026-06-23-020000.json
 
 # 过滤
 curl -OJ 'http://127.0.0.1:18080/api/audit/export.json?op=ssh.test&result=fail&limit=1000'
@@ -166,7 +166,7 @@ curl -X POST 'http://127.0.0.1:18080/api/downloads/srv-1_001_app_150405_000.log/
 {
   "ok": true,
   "platform": "darwin",
-  "path": "/Users/ops/DoubaoToolbox/downloads/20260623/srv-1_001_app_150405_000.log"
+  "path": "/Users/ops/Kairo/downloads/20260623/srv-1_001_app_150405_000.log"
 }
 ```
 
@@ -221,19 +221,19 @@ $ go build -mod=vendor ./...
 # (空输出)         ← build clean
 
 $ go test -mod=vendor -count=1 ./...
-ok  	doubao-toolbox                              0.013s
-ok  	doubao-toolbox/internal/audit               0.031s   ← B2 新增
-ok  	doubao-toolbox/internal/config              0.718s   ← 项 6 ListModeIsAuto 追加
-ok  	doubao-toolbox/internal/credentials         0.779s
-ok  	doubao-toolbox/internal/diagnostics         0.757s
-ok  	doubao-toolbox/internal/dlmanager           0.236s
-ok  	doubao-toolbox/internal/downloads           0.031s
-ok  	doubao-toolbox/internal/formatter           0.008s
-ok  	doubao-toolbox/internal/httpserver           91.238s  ← B1/B2/B3 + 项 6 集成测试追加
-ok  	doubao-toolbox/internal/logquery            0.012s   ← B1 新增
-ok  	doubao-toolbox/internal/sftpclient          0.102s   ← 项 8 新增
-ok  	doubao-toolbox/internal/sshclient           3.448s
-ok  	doubao-toolbox/internal/tailmgr             0.351s
+ok  	kairo                              0.013s
+ok  	kairo/internal/audit               0.031s   ← B2 新增
+ok  	kairo/internal/config              0.718s   ← 项 6 ListModeIsAuto 追加
+ok  	kairo/internal/credentials         0.779s
+ok  	kairo/internal/diagnostics         0.757s
+ok  	kairo/internal/dlmanager           0.236s
+ok  	kairo/internal/downloads           0.031s
+ok  	kairo/internal/formatter           0.008s
+ok  	kairo/internal/httpserver           91.238s  ← B1/B2/B3 + 项 6 集成测试追加
+ok  	kairo/internal/logquery            0.012s   ← B1 新增
+ok  	kairo/internal/sftpclient          0.102s   ← 项 8 新增
+ok  	kairo/internal/sshclient           3.448s
+ok  	kairo/internal/tailmgr             0.351s
 # 13/13 包测试 pass
 ```
 

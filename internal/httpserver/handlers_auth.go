@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"time"
 
-	"doubao-toolbox/internal/config"
+	"kairo/internal/config"
 )
 
 type authLoginReq struct {

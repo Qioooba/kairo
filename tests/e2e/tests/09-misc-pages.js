@@ -151,8 +151,8 @@ function register(runner, ctx) {
       const hasAbout = await page.evaluate(function () {
         return document.body.textContent.indexOf('版本') >= 0 ||
           document.body.textContent.indexOf('关于') >= 0 ||
-          document.body.textContent.indexOf('豆包工具箱') >= 0 ||
-          document.body.textContent.indexOf('doubao-toolbox') >= 0;
+          document.body.textContent.indexOf('Kairo') >= 0 ||
+          document.body.textContent.indexOf('kairo') >= 0;
       });
       if (!hasAbout) throw new Error('关于页内容不正确');
     });

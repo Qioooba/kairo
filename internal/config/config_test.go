@@ -82,8 +82,8 @@ func TestLoad_BadYAML(t *testing.T) {
 func TestDefaults_AppliesMissing(t *testing.T) {
 	c := &Config{}
 	c.Defaults()
-	if c.App.Name != "豆包工具箱" {
-		t.Errorf("App.Name default: %q", c.App.Name)
+	if c.App.Name != "天命契机" {
+	t.Errorf("App.Name default: %q", c.App.Name)
 	}
 	if c.App.Host != "127.0.0.1" {
 		t.Errorf("App.Host default: %q", c.App.Host)
@@ -939,15 +939,15 @@ func TestTargetDirAllowed(t *testing.T) {
 	}
 }
 
-// TestComparePathAllowed v0.9 BE-001：compare_allowed_roots 白名单（fail-closed）。
+// TestComparePathAllowed 验证 compare_allowed_roots 白名单（fail-open，向后兼容）。
 func TestComparePathAllowed(t *testing.T) {
-	// 空 roots → 一律拒绝
+	// 空 roots → 一律放行（fail-open，旧行为）
 	a := AppConfig{}
-	if a.ComparePathAllowed("/etc/passwd") {
-		t.Error("空 roots 应拒绝 /etc/passwd")
+	if !a.ComparePathAllowed("/etc/passwd") {
+		t.Error("空 roots 应放行 /etc/passwd（fail-open）")
 	}
-	if a.ComparePathAllowed("/var/log/app") {
-		t.Error("空 roots 应拒绝 /var/log/app")
+	if !a.ComparePathAllowed("/var/log/app") {
+		t.Error("空 roots 应放行 /var/log/app（fail-open）")
 	}
 	// 显式 "*" → 全放行
 	a.CompareAllowedRoots = []string{"*"}

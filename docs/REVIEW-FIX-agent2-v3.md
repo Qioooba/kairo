@@ -1,6 +1,6 @@
 # Agent 2 前端 v3 — REVIEW/FIX
 
-> 豆包工具箱前端 v3 计划：拆分 `web/app.js`（2664 行 → 13 模块）+ UI 视觉优化 + 4 个新功能 UI
+> Kairo前端 v3 计划：拆分 `web/app.js`（2664 行 → 13 模块）+ UI 视觉优化 + 4 个新功能 UI
 > 执行时间：2026-06-23 08:23 ~ 08:38 (Asia/Shanghai)
 > 作者：coder agent (Agent 2)
 
@@ -26,12 +26,12 @@
 | `web/pages/history.js` | — | **146** | 操作历史 + CSV/JSON 导出（C2） |
 | `web/app.test.js` | 387 | **368** | 改为从 `core.js` 抽函数（缩进 4 空格） |
 | `web/style.css` | 472 | **598** | 加 v3 token：warn-banner / split-2 / spinner / filter-bar / empty-state / field |
-| **总计** | 2664（单文件） | 3912（13 模块） | 多出的 ~1248 行是模块头注释 + register DTB.state.routes 三行 |
+| **总计** | 2664（单文件） | 3912（13 模块） | 多出的 ~1248 行是模块头注释 + register Kairo.state.routes 三行 |
 
 **拆分原则**：
 - 零构建（保持 vanilla JS + `<script>` 顺序加载）
-- 单一 namespace：`window.DTB.{core,api,state,pages.*}`
-- 每个 page 模块自注册到 `DTB.state.routes[name]`（app.js 不需要 import 它们）
+- 单一 namespace：`window.Kairo.{core,api,state,pages.*}`
+- 每个 page 模块自注册到 `Kairo.state.routes[name]`（app.js 不需要 import 它们）
 - 单元测试从 `core.js` 抽函数（搬到 core.js 后函数定义缩进变 4 空格）
 
 ---
@@ -81,7 +81,7 @@
 
 ### 7. 系统配置 (`pages/config.js`)
 - **C4 启动警告 banner**：当 `app.enable_free_file_browser=true && free_file_roots=[]`（自由模式）时显示黄色 banner
-- 关闭按钮（×）调用 `DTB.state.dismiss('free-file-browser-warning')`，session 内不重复显示
+- 关闭按钮（×）调用 `Kairo.state.dismiss('free-file-browser-warning')`，session 内不重复显示
 - 业务系统 / 服务器 / 日志目录 三层树形编辑器
 - 上移/下移/复制/删除按钮组
 
@@ -112,8 +112,8 @@
 **位置**：`pages/history.js` btn-row，截图 `docs/qa/screenshots/16-history.png`
 
 - 第三个按钮："导出 JSON"，走 `/api/audit/export.json?{过滤参数}`
-- filename = `doubao-toolbox-audit.json`
-- 复用 `DTB.api.triggerDownload()`，失败 toast
+- filename = `kairo-audit.json`
+- 复用 `Kairo.api.triggerDownload()`，失败 toast
 
 > **注意**：`/api/audit/export.json` 是 Agent 1 后端新增路由（plan 任务 C2）；
 > 本前端 v3 仅加按钮 + 调用 + 下载。如果 Agent 1 还没落地该路由，会得到 HTTP 404，
@@ -137,7 +137,7 @@
 
 - 仅当 `app.enable_free_file_browser=true && app.free_file_roots=[]`（自由模式）显示
 - banner 内容：⚠ 文件浏览器任意路径下载已开启 + 副标题 + 关闭按钮
-- 关闭后写入 `localStorage.dtb:dismissed:free-file-browser-warning = 1`，session 内不重复显示
+- 关闭后写入 `localStorage.kairo:dismissed:free-file-browser-warning = 1`，session 内不重复显示
 - 文件下载页（`pages/files.js`）已经有"自由模式 · 无白名单"提示，不重复显示 banner
 
 ---
@@ -148,7 +148,7 @@
 |------|------|-------|------|
 | `node web/app.test.js` | 10 pass, 0 fail | **10 pass, 0 fail** | ✅ 未退化 |
 | `cd docs/qa && node playwright_smoke.js` | 57 pass, 5 consoleErrors | **57 pass, 3 consoleErrors** | ✅ 未退化（console 错误反而少 2） |
-| Go build (`go build -o DoubaoToolbox_mac .`) | clean | **clean** | ✅ 无回归 |
+| Go build (`go build -o Kairo_mac .`) | clean | **clean** | ✅ 无回归 |
 | `wc -l web/app.js` | 2664 | **65** | ✅ 单文件 -97.6% |
 
 ### 10/10 单元测试明细（拆分后）
@@ -193,7 +193,7 @@ gotDone dedupe ✓      (SSE done + onerror dedupe 模式)
 
 ### 零构建拆分策略
 
-不引入 ES module / bundler — 保持 vanilla JS + `<script>` 顺序加载 + `window.DTB.*` namespace。
+不引入 ES module / bundler — 保持 vanilla JS + `<script>` 顺序加载 + `window.Kairo.*` namespace。
 代价：
 - 全局挂在 window 上（污染）
 - 模块加载顺序敏感（index.html 写死）
@@ -254,8 +254,8 @@ C3 截图见 `15-downloads.png`（加载中状态，"📂 打开所在目录"按
    - 下载历史点"打开目录"会得到 HTTP 404，toast 提示
    前端 v3 已经做了错误处理，不会崩。
 2. **config 警告 banner 的 dismiss 是 session 内**：
-   `localStorage.dtb:dismissed:free-file-browser-warning`，刷新页面或换浏览器仍然记住。
-   要重新显示需 `localStorage.removeItem('dtb:dismissed:free-file-browser-warning')`。
+   `localStorage.kairo:dismissed:free-file-browser-warning`，刷新页面或换浏览器仍然记住。
+   要重新显示需 `localStorage.removeItem('kairo:dismissed:free-file-browser-warning')`。
 
 ### 未做（留给后续 plan）
 

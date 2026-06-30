@@ -11,10 +11,10 @@
 
 (function () {
   'use strict';
-  const DTB = window.DTB = window.DTB || {};
-  DTB.pages = DTB.pages || {};
-  const { el, $, toast, setStatus, cssEscape, pctText, formatBytes, formatTime, basenameOf } = DTB.core;
-  const { api } = DTB.api;
+  const Kairo = window.Kairo = window.Kairo || {};
+  Kairo.pages = Kairo.pages || {};
+  const { el, $, toast, setStatus, cssEscape, pctText, formatBytes, formatTime, basenameOf } = Kairo.core;
+  const { api } = Kairo.api;
 
   function renderFiles(view) {
     const state = {
@@ -136,7 +136,7 @@
     let filterDebounce = null;
     filterInp.addEventListener('input', () => {
       state.filter = filterInp.value || '';
-      DTB.core.lastSet('files', 'filter', state.filter);
+      Kairo.core.lastSet('files', 'filter', state.filter);
       // 防抖：避免每个按键都重渲染整张表 → 200ms 静默后才 render
       if (filterDebounce) clearTimeout(filterDebounce);
       filterDebounce = setTimeout(() => {
@@ -148,7 +148,7 @@
     const filterClearBtn = el('button', { class: 'btn btn-sm', text: '清空', onclick: () => {
       filterInp.value = '';
       state.filter = '';
-      DTB.core.lastSet('files', 'filter', '');
+      Kairo.core.lastSet('files', 'filter', '');
       renderTable();
     }});
     const filterCountEl = el('span', { id: 'files-filter-count', class: 'text-dim' });
@@ -205,7 +205,7 @@
           sysSel.appendChild(el('option', { value: sys.name, text: sys.name + (sys.description ? ' · ' + sys.description : '') }));
         });
         // 恢复上次选择
-        const lastSel = DTB.core.lastGet('files', 'sel');
+        const lastSel = Kairo.core.lastGet('files', 'sel');
         if (lastSel && lastSel.system && (info.systems || []).find(s => s.name === lastSel.system)) {
           sysSel.value = lastSel.system;
           setSystem(lastSel.system);
@@ -217,7 +217,7 @@
           rememberChk.checked = true;
         }
         // 恢复 filter lastGet
-        const lastFilter = DTB.core.lastGet('files', 'filter');
+        const lastFilter = Kairo.core.lastGet('files', 'filter');
         if (lastFilter) {
           state.filter = lastFilter;
           filterInp.value = lastFilter;
@@ -274,7 +274,7 @@
     }
 
     function persistSelection() {
-      DTB.core.lastSet('files', 'sel', {
+      Kairo.core.lastSet('files', 'sel', {
         system: state.currentSys,
         server: state.currentSrv
       });
@@ -425,7 +425,7 @@
       }
     }
 
-    // openPreviewInNewWindow 开新窗口（preview.html），凭证走 DTB._previewCred 跨窗口传递
+    // openPreviewInNewWindow 开新窗口（preview.html），凭证走 Kairo._previewCred 跨窗口传递
     function openPreviewInNewWindow(filePath, fileName) {
       const c = creds();
       if (!c.username) { toast('请在系统配置中设置 SSH 用户名或在上方填写', 'warn'); return; }
@@ -438,8 +438,8 @@
       } catch (e) { /* keep utf-8 */ }
       // P0-BUG-3 修复：传给 preview.html 的 password 必须是"实际能用的密码"。
       // 优先级：用户在输入框里填的 > srv.password（通常空）> 空（让 preview.html 后端 keyring 兜底）。
-      DTB._previewCred = DTB._previewCred || {};
-      DTB._previewCred[state.currentSys + '::' + state.currentSrv] = {
+      Kairo._previewCred = Kairo._previewCred || {};
+      Kairo._previewCred[state.currentSys + '::' + state.currentSrv] = {
         username: c.username,
         password: (passInput && passInput.value) || c.password || '',
         has_keyring: !!rememberChk.checked
@@ -530,17 +530,19 @@
     //     "systemA/serverA": [ { name: "server1 日志", path: "/opt/IBM/.../server1" }, ... ],
     //     ...
     //   }
-    // 持久化键：localStorage["dtb:files:common_dirs"] = JSON
-    // v0.9 rebrand: 从 ops.files.common_dirs 迁移到 dtb:files:common_dirs（一次性，不删旧键）
+    // 持久化键：localStorage["kairo:files:common_dirs"] = JSON
+    // v0.9 rebrand: 从 ops.files.common_dirs 和 dtb:files:common_dirs 迁移到 kairo:files:common_dirs（一次性，不删旧键）
     // 切换 system/server 时重新渲染 commonDirsBar
-    const COMMON_DIRS_LS_KEY = 'dtb:files:common_dirs';
+    const COMMON_DIRS_LS_KEY = 'kairo:files:common_dirs';
     const COMMON_DIRS_LS_KEY_OLD = 'ops.files.common_dirs';
+    const COMMON_DIRS_LS_KEY_DTB = 'dtb:files:common_dirs';
 
     function loadCommonDirs() {
       try {
-        // 一次性迁移：新键不存在但旧键存在时，复制旧值到新键
-        if (!localStorage.getItem(COMMON_DIRS_LS_KEY) && localStorage.getItem(COMMON_DIRS_LS_KEY_OLD)) {
-          localStorage.setItem(COMMON_DIRS_LS_KEY, localStorage.getItem(COMMON_DIRS_LS_KEY_OLD));
+        // 一次性迁移：新键不存在但旧键存在时，复制旧值到新键（优先 dtb:，再 ops.）
+        if (!localStorage.getItem(COMMON_DIRS_LS_KEY)) {
+          const src = localStorage.getItem(COMMON_DIRS_LS_KEY_DTB) || localStorage.getItem(COMMON_DIRS_LS_KEY_OLD);
+          if (src) localStorage.setItem(COMMON_DIRS_LS_KEY, src);
         }
         const raw = localStorage.getItem(COMMON_DIRS_LS_KEY);
         if (!raw) return {};
@@ -929,7 +931,7 @@
       btnCancel.disabled = false;
       setStatus('busy', '下载中…');
       // 项 2 修复：每个下载任务开始时生成稳定的 notify id（"files-时间戳"），
-      // 同任务即便多次重推 done 事件，notify 也会去重（见 DTB.core.notify 的 id 去重逻辑）。
+      // 同任务即便多次重推 done 事件，notify 也会去重（见 Kairo.core.notify 的 id 去重逻辑）。
       // 多任务之间也不会互相覆盖。
       state.lastNotifyId = 'files-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
       try {
@@ -943,7 +945,7 @@
         if (!window.EventSource) { toast('浏览器不支持 EventSource', 'err'); return; }
         const es = new EventSource('/api/files/download/' + r.id + '/events');
         state.dlEvtSrc = es;
-        DTB.core.setActiveDL({ id: r.id, evtsrc: es });
+        Kairo.core.setActiveDL({ id: r.id, evtsrc: es });
         let gotDone = false;
         // P1-BUG-4 修复：done 一旦见到，**立刻** es.close() + 清 onerror/onmessage，
         // 防止 EventSource 自动重连把 404 刷到 network log。
@@ -1067,7 +1069,7 @@
         actions.push({
           label: '📋 复制路径',
           callback: () => {
-            DTB.core.copyToClipboard(folder).then(() => {
+            Kairo.core.copyToClipboard(folder).then(() => {
               toast('路径已复制', 'ok');
             }).catch(() => {
               window.prompt('复制此路径：', folder);
@@ -1081,7 +1083,7 @@
           if (location.hash !== '#/downloads') location.hash = '#/downloads';
         }
       });
-      DTB.core.notify({
+      Kairo.core.notify({
         id: state.lastNotifyId || ('download-' + Date.now()),
         type: 'ok',
         title: title,
@@ -1090,7 +1092,7 @@
         duration: 8000
       });
       if (location.hash !== '#/downloads') {
-        DTB.core.bumpDlBadge(downloads.length);
+        Kairo.core.bumpDlBadge(downloads.length);
       }
     }
 
@@ -1236,7 +1238,7 @@
         if (!window.EventSource) { toast('浏览器不支持 EventSource', 'err'); return; }
         const es = new EventSource('/api/files/download/' + r.id + '/events');
         state.dlEvtSrc = es;
-        DTB.core.setActiveDL({ id: r.id, evtsrc: es });
+        Kairo.core.setActiveDL({ id: r.id, evtsrc: es });
         let gotDone = false;
         // P1-BUG-4：参考上面 doDownload 的修复——done 见到立即卸监听器 + close。
         const onDoneSeen = (reason) => {
@@ -1309,7 +1311,7 @@ renderCommonDirsBar();
 loadCfg().then(refreshCredStatus).catch(e => toast('配置加载失败：' + e.message, 'err'));
   }
 
-  DTB.pages.files = renderFiles;
-  DTB.state.routes.files = renderFiles;
-  DTB.state.routeNames.files = 'FTP文件下载';
+  Kairo.pages.files = renderFiles;
+  Kairo.state.routes.files = renderFiles;
+  Kairo.state.routeNames.files = 'FTP文件下载';
 })();

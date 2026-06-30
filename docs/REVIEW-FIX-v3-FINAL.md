@@ -1,4 +1,4 @@
-# 豆包工具箱 v3 plan 修复总报告（ChatGPT 24 项 verify + 新功能 + 前端拆分 + UI 优化）
+# Kairo v3 plan 修复总报告（ChatGPT 24 项 verify + 新功能 + 前端拆分 + UI 优化）
 
 日期：2026-06-23
 工作目录：`/Users/qi/Documents/spaces/ops-toolbox`
@@ -16,7 +16,7 @@
 - 30+ 新单测
 
 ### Agent 2 — 前端 v3
-- web/app.js 2664 行 → 65 行入口 + 12 个模块（零构建，window.DTB.* namespace）
+- web/app.js 2664 行 → 65 行入口 + 12 个模块（零构建，window.Kairo.* namespace）
 - style.css token 化（v3 设计 token）
 - 4 个新功能 UI：
   - **C1** 日志搜索时间窗口（10m/1h/today/自定义 datetime-local）
@@ -41,7 +41,7 @@ go build -mod=vendor ./...          → pass
 ### 2.2 Go 单元测试
 ```
 go test -mod=vendor -count=1 ./...  → 13/13 packages pass
-  doubao-toolbox                        0.012s
+  kairo                        0.012s
   internal/audit                     0.161s (+B2 JSON 导出 7 个测试)
   internal/config                    0.244s (+Encoding 测试 2 个)
   internal/credentials               0.352s
@@ -155,7 +155,7 @@ web/
 ## 6. Win10 build
 
 - 脚本：`./scripts/build_windows_amd64.sh v0.4.0`
-- 输出：`dist/doubao-toolbox-v0.4.0/DoubaoToolbox.exe`
+- 输出：`dist/kairo-v0.4.0/Kairo.exe`
 - 配置：`config.yaml`（来自本地，否则从 `config.yaml.production.example` 复制）
 - 启动脚本：`scripts/start.bat`（README 推荐）
 - 大小：~12MB（trimpath -ldflags "-s -w"）

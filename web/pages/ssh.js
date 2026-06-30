@@ -62,12 +62,12 @@
       brightMagenta: '#ff66ff', brightCyan: '#66ffff', brightWhite: '#ffffff'
     },
     xianxia: {
-      background: '#0a0907', foreground: '#e8dcc0', cursor: '#dbb968',
-      selectionBackground: 'rgba(201,162,75,0.3)', black: '#1a1410', red: '#b8332a',
-      green: '#6b9e5c', yellow: '#dbb968', blue: '#5f7e9e', magenta: '#9e6b5c',
-      cyan: '#5f9e8c', white: '#c8b890', brightBlack: '#524636', brightRed: '#d67b74',
-      brightGreen: '#8fc47e', brightYellow: '#f0d890', brightBlue: '#8faec4',
-      brightMagenta: '#c08e7e', brightCyan: '#8fc4b0', brightWhite: '#e8dcc0'
+      background: '#f5f8f7', foreground: '#1a2320', cursor: '#4a7a6a',
+      selectionBackground: 'rgba(74,122,106,0.2)', black: '#2a3530', red: '#a82820',
+      green: '#5a8e4c', yellow: '#b8923e', blue: '#4a6a8a', magenta: '#7a5a8a',
+      cyan: '#4a7a6a', white: '#5a6a60', brightBlack: '#7a8a80', brightRed: '#c84840',
+      brightGreen: '#7aac6c', brightYellow: '#d8b25e', brightBlue: '#6a8aaa',
+      brightMagenta: '#9a7aac', brightCyan: '#6a9a8a', brightWhite: '#1a2320'
     }
   };
 
@@ -135,9 +135,22 @@
     const btnNewWindow = el('button', { class: 'btn btn-sm', text: '↗新窗口', title: '在独立窗口打开', onclick: openInNewWindow, disabled: true });
     const btnCloseTab = el('button', { class: 'btn btn-sm btn-danger', text: '关闭 tab', title: '关闭当前 tab', onclick: closeActiveTab, disabled: true });
     const activeLabel = el('span', { class: 'ssh-active-label text-dim', text: '' });
+    // 编码选择器：UTF-8 / GBK（老 WebSphere / Oracle 终端常见）
+    const encodingSel = el('select', { class: 'btn btn-sm', style: 'max-width:90px;' });
+    encodingSel.appendChild(el('option', { value: 'utf-8', text: 'UTF-8' }));
+    encodingSel.appendChild(el('option', { value: 'gbk', text: 'GBK' }));
+    encodingSel.addEventListener('change', function () {
+      const tab = getActiveTab();
+      if (tab && !tab.closed) {
+        tab.encoding = encodingSel.value;
+        // 编码变更时自动重连以新编码通信
+        reconnectActive();
+      }
+    });
     toolbarEl.appendChild(btnCtrlC);
     toolbarEl.appendChild(btnClear);
     toolbarEl.appendChild(btnReconnect);
+    toolbarEl.appendChild(encodingSel);
     toolbarEl.appendChild(btnNewWindow);
     toolbarEl.appendChild(btnCloseTab);
     toolbarEl.appendChild(activeLabel);
@@ -150,6 +163,12 @@
       btnReconnect.disabled = !hasActive;
       btnNewWindow.disabled = !hasActive;
       btnCloseTab.disabled = !hasActive;
+      // 同步编码选择器
+      if (tab && !tab.closed) {
+        encodingSel.value = tab.encoding || 'utf-8';
+      } else {
+        encodingSel.value = 'utf-8';
+      }
     }
 
     Kairo.core.setActiveShells({
@@ -264,6 +283,7 @@
         host: srv.host,
         port: srv.port || 22,
         username: srv.username,
+        encoding: 'utf-8', // 终端编码：UTF-8（默认）或 GBK
         term: null,
         fitAddon: null,
         searchAddon: null,
@@ -362,10 +382,12 @@
         tab.ws = null;
       }
       const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const encoding = tab.encoding || 'utf-8';
       const url = proto + '//' + location.host + '/api/ssh/shell/ws' +
         '?system=' + encodeURIComponent(tab.system) +
         '&server=' + encodeURIComponent(tab.server) +
-        '&cols=' + tab.cols + '&rows=' + tab.rows;
+        '&cols=' + tab.cols + '&rows=' + tab.rows +
+        '&encoding=' + encoding;
 
       try {
         tab.ws = new WebSocket(url);

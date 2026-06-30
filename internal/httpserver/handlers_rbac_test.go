@@ -15,7 +15,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"doubao-toolbox/internal/config"
+	"kairo/internal/config"
 )
 
 // newTestServerWithAuth 构造一个启用 auth 的测试 Server。

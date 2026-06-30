@@ -24,9 +24,9 @@
 
 (function () {
   'use strict';
-  const DTB = window.DTB = window.DTB || {};
-  DTB.pages = DTB.pages || {};
-  const { el, toast, copyToClipboard, escapeHtml } = DTB.core;
+  const Kairo = window.Kairo = window.Kairo || {};
+  Kairo.pages = Kairo.pages || {};
+  const { el, toast, copyToClipboard, escapeHtml } = Kairo.core;
 
   // ===== 分类定义（顺序就是 tab 顺序） =====
   const CATEGORIES = [
@@ -44,7 +44,7 @@
   ];
 
   // ===== localStorage 收藏 =====
-  const FAV_LS_KEY = 'dtb:commands:favs';
+  const FAV_LS_KEY = 'kairo:commands:favs';
   function loadFavs() {
     try {
       const raw = localStorage.getItem(FAV_LS_KEY);
@@ -1062,8 +1062,8 @@
     renderList();
   }
 
-  DTB.pages.commands = renderCommands;
-  DTB.state.routes.commands = renderCommands;
-  DTB.state.routeNames.commands = '常用命令';
-  DTB.state.routeSubs.commands = 'Linux / Git / Docker / Oracle / MySQL / Redis / Nginx / Java / 前端 / IDEA 速查';
+  Kairo.pages.commands = renderCommands;
+  Kairo.state.routes.commands = renderCommands;
+  Kairo.state.routeNames.commands = '常用命令';
+  Kairo.state.routeSubs.commands = 'Linux / Git / Docker / Oracle / MySQL / Redis / Nginx / Java / 前端 / IDEA 速查';
 })();

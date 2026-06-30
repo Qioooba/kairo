@@ -1722,56 +1722,56 @@ input[type="datetime-local"] {
 
 /* ===== 仙侠·墨韵青锋主题（xianxia）：古风武侠风 ===== */
 :root[data-theme="xianxia"] {
-  --bg-0: #0a0d0c;
-  --bg-1: #0f1312;
-  --bg-2: #151a18;
-  --bg-3: #1d2421;
-  --line: #2a3330;
-  --line-2: #3a4742;
-  --text: #d4e0db;
-  --text-dim: #8fa39c;
-  --text-mute: #60726b;
-  --primary: #5a8a7a;
-  --primary-2: #7fb09e;
-  --accent: #c9a24b;
-  --success: #6b9e5c;
-  --warn: #d4782a;
-  --error: #b8332a;
-  --shadow: 0 10px 30px rgba(0,0,0,0.5);
+  --bg-0: #f5f8f7;
+  --bg-1: #e8efe9;
+  --bg-2: #d9e4e0;
+  --bg-3: #cad5d0;
+  --line: #b8c5be;
+  --line-2: #a0b0a8;
+  --text: #1a2320;
+  --text-dim: #4a5a54;
+  --text-mute: #70827b;
+  --primary: #4a7a6a;
+  --primary-2: #5a8a7a;
+  --accent: #b8923e;
+  --success: #5a8e4c;
+  --warn: #c8681e;
+  --error: #a82820;
+  --shadow: 0 10px 30px rgba(74,122,106,0.15);
   --radius: 8px;
   --sidebar-width: 240px;
 
-  --body-bg: linear-gradient(135deg, #080a09 0%, #0f1312 50%, #0a0d0c 100%);
-  --sidebar-bg: rgba(15, 19, 18, 0.92);
-  --topbar-bg: rgba(10, 13, 12, 0.75);
-  --shadow-sm: 0 4px 12px rgba(0,0,0,0.4);
-  --shadow-pop: 0 8px 24px rgba(90,138,122,0.25);
+  --body-bg: linear-gradient(135deg, #e8f0ed 0%, #f5f8f7 30%, #edf4f1 60%, #f0f7f4 100%);
+  --sidebar-bg: rgba(240, 247, 244, 0.95);
+  --topbar-bg: rgba(245, 248, 247, 0.85);
+  --shadow-sm: 0 4px 12px rgba(74,122,106,0.1);
+  --shadow-pop: 0 8px 24px rgba(74,122,106,0.15);
 
-  --tag-bg: rgba(90,138,122,0.18);
-  --tag-fg: #7fb09e;
-  --tag-enc-bg: rgba(107,158,92,0.18);
-  --tag-enc-fg: #8fc47e;
-  --tag-warn-bg: rgba(212,120,42,0.18);
-  --tag-warn-fg: #e8a05a;
-  --tag-ready-bg: rgba(107,158,92,0.18);
-  --tag-ready-fg: #8fc47e;
-  --tag-placeholder-bg: rgba(201,162,75,0.15);
-  --tag-placeholder-fg: #dbb968;
+  --tag-bg: rgba(74,122,106,0.15);
+  --tag-fg: #4a7a6a;
+  --tag-enc-bg: rgba(90,142,76,0.15);
+  --tag-enc-fg: #5a8e4c;
+  --tag-warn-bg: rgba(200,104,30,0.15);
+  --tag-warn-fg: #c8681e;
+  --tag-ready-bg: rgba(90,142,76,0.15);
+  --tag-ready-fg: #5a8e4c;
+  --tag-placeholder-bg: rgba(184,146,62,0.12);
+  --tag-placeholder-fg: #b8923e;
 
-  --btn-border-override: #3a4742;
-  --btn-bg-override: #1d2421;
-  --btn-hover-bg-override: #2a3530;
-  --btn-hover-border-override: #4a5e56;
-  --btn-hover-bg: #2a3530;
-  --btn-hover-border: #4a5e56;
-  --btn-primary-grad: linear-gradient(135deg, #3d6b5d, #5a8a7a);
-  --btn-primary-shadow: 0 4px 12px rgba(90,138,122,0.35);
-  --btn-danger-grad: linear-gradient(135deg, #9a241e, #c9463d);
+  --btn-border-override: #b8c5be;
+  --btn-bg-override: #f5f8f7;
+  --btn-hover-bg-override: #e8efe9;
+  --btn-hover-border-override: #8fa39c;
+  --btn-hover-bg: #e8efe9;
+  --btn-hover-border: #8fa39c;
+  --btn-primary-grad: linear-gradient(135deg, #3d6b5d, #4a7a6a);
+  --btn-primary-shadow: 0 4px 12px rgba(74,122,106,0.25);
+  --btn-danger-grad: linear-gradient(135deg, #8a241e, #a8362d);
 
-  --row-hover-bg: rgba(90,138,122,0.08);
-  --row-active-bg: rgba(90,138,122,0.06);
+  --row-hover-bg: rgba(74,122,106,0.08);
+  --row-active-bg: rgba(74,122,106,0.06);
 
-  --sys-block-bg: rgba(90,138,122,0.04);
+  --sys-block-bg: rgba(74,122,106,0.04);
   --sys-block-border: 1px solid var(--line);
   --srv-block-bg: var(--bg-2);
   --srv-block-border: 1px solid var(--line);
@@ -3047,6 +3047,10 @@ input[type="datetime-local"] {
 :root[data-theme="light"] .btn-star:hover {
   background: rgba(217, 119, 6, 0.15);
 }
+/* light 主题下 tab bar 背景确保为浅色（--bg-0 在 light 下已是 #f5f7fb，此处显式声明防透明度叠加变黑） */
+:root[data-theme="light"] .ws-tab-bar {
+  background: var(--bg-0);
+}
 
 /* Final theme readability overrides. Keep these after component styles so the
    theme contract wins over page-specific button defaults. */
@@ -3507,49 +3511,49 @@ input[type="datetime-local"] {
 
 /* 品牌logo阴影适配古风 */
 :root[data-theme="xianxia"] .brand .logo {
-  box-shadow: 0 2px 10px rgba(201,162,75,0.3);
+  box-shadow: 0 2px 10px rgba(74,122,106,0.3);
 }
 
-/* SSH 终端深色背景适配古风 */
+/* SSH 终端背景适配古风 */
 :root[data-theme="xianxia"] .ssh-term-area {
-  background: #0a0907;
+  background: #e8efe9;
 }
 
 /* SSH 密码弹层适配古风 */
 :root[data-theme="xianxia"] .ssh-pwd-input:focus {
   border-color: var(--primary);
-  box-shadow: 0 0 0 2px rgba(201,162,75,0.2);
+  box-shadow: 0 0 0 2px rgba(74,122,106,0.2);
 }
 
-/* 拖拽提示古风金色 */
+/* 拖拽提示古风青锋色 */
 :root[data-theme="xianxia"] .cmp-drop-hint {
-  background: rgba(201,162,75,0.1);
+  background: rgba(74,122,106,0.1);
   border-color: var(--primary);
   color: var(--primary);
 }
 
-/* 输入框聚焦光晕：金色 */
+/* 输入框聚焦光晕：青锋色 */
 :root[data-theme="xianxia"] input:focus-visible,
 :root[data-theme="xianxia"] select:focus-visible,
 :root[data-theme="xianxia"] textarea:focus-visible,
 :root[data-theme="xianxia"] button:focus-visible {
-  outline-color: rgba(201,162,75,0.4);
+  outline-color: rgba(74,122,106,0.4);
 }
 :root[data-theme="xianxia"] .btn:focus-visible {
   border-color: var(--primary);
-  box-shadow: 0 0 0 3px rgba(201,162,75,0.2);
+  box-shadow: 0 0 0 3px rgba(74,122,106,0.2);
 }
 
-/* HTTP URL行聚焦光晕：金色 */
+/* HTTP URL行聚焦光晕：青锋色 */
 :root[data-theme="xianxia"] .http2-url-row:focus-within {
   border-color: var(--primary);
-  box-shadow: 0 0 0 3px rgba(201,162,75,0.15);
+  box-shadow: 0 0 0 3px rgba(74,122,106,0.15);
 }
 
-/* 侧边栏搜索聚焦：金色 */
+/* 侧边栏搜索聚焦：青锋色 */
 :root[data-theme="xianxia"] .http2-sidebar-search:focus-within {
   border-color: var(--primary);
-  box-shadow: 0 0 0 3px rgba(201,162,75,0.15);
+  box-shadow: 0 0 0 3px rgba(74,122,106,0.15);
 }
 
 /* 收藏图标：金色 */
@@ -3773,121 +3777,121 @@ input[type="datetime-local"] {
   color: var(--primary-2);
 }
 
-/* ===== 仙侠主题全局颜色覆盖：将硬编码蓝色统一替换为金色系 ===== */
+/* ===== 仙侠主题全局颜色覆盖：将硬编码蓝色统一替换为青锋色系 ===== */
 
-/* 按钮hover/active/focus阴影：金色 */
+/* 按钮hover/active/focus阴影：青锋色 */
 :root[data-theme="xianxia"] .btn-primary:hover {
-  box-shadow: 0 8px 20px rgba(201,162,75,0.4);
+  box-shadow: 0 8px 20px rgba(74,122,106,0.35);
 }
 :root[data-theme="xianxia"] .btn-primary:focus-visible {
-  box-shadow: 0 0 0 3px rgba(201,162,75,0.2);
+  box-shadow: 0 0 0 3px rgba(74,122,106,0.2);
 }
 :root[data-theme="xianxia"] .btn:focus-visible {
-  outline-color: rgba(201,162,75,0.5);
+  outline-color: rgba(74,122,106,0.5);
 }
 
-/* 输入/选择框聚焦光晕：金色 */
+/* 输入/选择框聚焦光晕：青锋色 */
 :root[data-theme="xianxia"] input:focus-visible,
 :root[data-theme="xianxia"] select:focus-visible,
 :root[data-theme="xianxia"] textarea:focus-visible {
-  outline-color: rgba(201,162,75,0.4);
+  outline-color: rgba(74,122,106,0.4);
 }
 
-/* 忙碌状态dot：金色光晕 */
+/* 忙碌状态dot：青锋光晕 */
 :root[data-theme="xianxia"] .dot-busy {
-  box-shadow: 0 0 0 3px rgba(212,120,42,0.2);
+  box-shadow: 0 0 0 3px rgba(74,122,106,0.3);
 }
 
-/* 工具卡片图标hover：金色 */
+/* 工具卡片图标hover：青锋色 */
 :root[data-theme="xianxia"] .tool-card:hover .icon {
-  background: rgba(201,162,75,0.22);
+  background: rgba(74,122,106,0.2);
 }
 
-/* 日志命中行：琥珀色改为金色系 */
+/* 日志命中行：青锋系 */
 :root[data-theme="xianxia"] .hit-line.hit {
-  background: rgba(212,120,42,0.12);
-  border-left-color: var(--warn);
+  background: rgba(74,122,106,0.12);
+  border-left-color: var(--primary);
 }
 :root[data-theme="xianxia"] .context-view .row.hit .ct {
-  background: rgba(212,120,42,0.18);
-  border-left-color: var(--warn);
+  background: rgba(74,122,106,0.18);
+  border-left-color: var(--primary);
 }
 
-/* 表格行hover：金色半透明 */
+/* 表格行hover：青锋色半透明 */
 :root[data-theme="xianxia"] .table tr:hover td {
-  background: rgba(201,162,75,0.08);
+  background: rgba(74,122,106,0.08);
 }
 :root[data-theme="xianxia"] .table td a:hover {
-  background: rgba(201,162,75,0.12);
+  background: rgba(74,122,106,0.12);
 }
 :root[data-theme="xianxia"] .table td a:hover code {
-  background: rgba(201,162,75,0.22);
+  background: rgba(74,122,106,0.2);
 }
 
-/* 目录层级badge：琥珀色适配 */
+/* 目录层级badge：青锋色适配 */
 :root[data-theme="xianxia"] .tier-badge.tier-dir {
-  background: rgba(212,120,42,0.15);
-  color: var(--warn);
+  background: rgba(74,122,106,0.15);
+  color: var(--primary);
 }
 
-/* Tab badge：金色底 */
+/* Tab badge：青锋底 */
 :root[data-theme="xianxia"] .ws-tab-bar .ws-tab-item:has(> .btn.active) > .ws-tab-badge {
   background: var(--primary);
   border-color: var(--primary);
   color: #fff;
 }
 :root[data-theme="xianxia"] .ws-tab-badge {
-  background: rgba(201,162,75,0.15);
-  color: var(--primary-2);
+  background: rgba(74,122,106,0.15);
+  color: var(--primary);
 }
 
-/* 日志警告条：金色系 */
+/* 日志警告条：青锋系 */
 :root[data-theme="xianxia"] .ws-tail-warn {
-  background: rgba(212,120,42,0.12);
-  border-color: rgba(212,120,42,0.4);
+  background: rgba(200,104,30,0.12);
+  border-color: rgba(200,104,30,0.4);
   color: var(--warn);
 }
 :root[data-theme="xianxia"] .ws-tail-target {
-  background: rgba(212,120,42,0.18);
-  border-color: rgba(212,120,42,0.5);
+  background: rgba(74,122,106,0.18);
+  border-color: rgba(74,122,106,0.5);
 }
 
-/* HTTP测试各种focus光晕：金色 */
+/* HTTP测试各种focus光晕：青锋色 */
 :root[data-theme="xianxia"] .http2-sidebar-search:focus-within {
-  box-shadow: 0 0 0 3px rgba(201,162,75,0.15);
+  box-shadow: 0 0 0 3px rgba(74,122,106,0.15);
 }
 :root[data-theme="xianxia"] .http2-url-row:focus-within {
-  box-shadow: 0 0 0 3px rgba(201,162,75,0.15);
+  box-shadow: 0 0 0 3px rgba(74,122,106,0.15);
 }
 :root[data-theme="xianxia"] .http2-raw-wrap.focused {
-  box-shadow: 0 0 0 3px rgba(201,162,75,0.15);
+  box-shadow: 0 0 0 3px rgba(74,122,106,0.15);
 }
 
-/* HTTP已加载用例行：金色高亮 */
+/* HTTP已加载用例行：青锋高亮 */
 :root[data-theme="xianxia"] .http2-case-row.is-loaded {
-  background: rgba(201,162,75,0.08);
+  background: rgba(74,122,106,0.08);
   border-color: var(--primary);
 }
 
 /* HTTP响应状态码：3xx蓝色改为青瓷色 */
 :root[data-theme="xianxia"] .http2-resp-status.s-3xx {
-  background: rgba(95,158,140,0.18);
-  color: var(--resp-3xx);
+  background: rgba(74,122,106,0.15);
+  color: var(--primary);
 }
 /* HTTP 4xx警告色适配 */
 :root[data-theme="xianxia"] .http2-resp-status.s-4xx {
-  background: rgba(212,120,42,0.18);
-  color: var(--resp-4xx);
+  background: rgba(200,104,30,0.15);
+  color: var(--warn);
 }
 
 /* HTTP保存按钮dirty状态：朱砂+琥珀渐变 */
 :root[data-theme="xianxia"] .http2-save-btn.dirty {
-  background: linear-gradient(135deg, #c06a20, #e8a05a);
+  background: linear-gradient(135deg, #a85a1a, #c88a3a);
 }
 
 /* 滚动条hover态增强 */
 :root[data-theme="xianxia"] ::-webkit-scrollbar-thumb:hover {
-  background: rgba(201,162,75,0.5);
+  background: rgba(74,122,106,0.4);
 }
 
 /* KBD按键：古风风格 */
@@ -3913,24 +3917,24 @@ input[type="datetime-local"] {
   border-color: var(--line);
 }
 
-/* 选中文字：金色高亮 */
+/* 选中文字：青锋高亮 */
 :root[data-theme="xianxia"] ::selection {
-  background: rgba(201,162,75,0.3);
+  background: rgba(90,138,122,0.3);
   color: var(--text);
 }
 
-/* 品牌名渐变：金字 */
+/* 品牌名渐变：青锋字 */
 :root[data-theme="xianxia"] .brand .name {
-  background: linear-gradient(135deg, #c9a24b, #e0c878, #c9a24b);
+  background: linear-gradient(135deg, #5a8a7a, #7fb09e, #5a8a7a);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
 }
 
-/* 主题切换按钮hover：金色 */
+/* 主题切换按钮hover：青锋色 */
 :root[data-theme="xianxia"] .theme-toggle:hover {
-  background: rgba(201,162,75,0.12);
-  border-color: rgba(201,162,75,0.4);
+  background: rgba(90,138,122,0.15);
+  border-color: rgba(90,138,122,0.4);
   color: var(--primary-2);
 }
 
@@ -3946,16 +3950,16 @@ input[type="datetime-local"] {
   color: var(--text-mute);
 }
 
-/* 徽章数字：金色底 */
+/* 徽章数字：青锋底 */
 :root[data-theme="xianxia"] .badge-count {
-  background: rgba(201,162,75,0.2);
+  background: rgba(90,138,122,0.2);
   color: var(--primary-2);
 }
 
-/* 进度条：金色 */
+/* 进度条：青锋色 */
 :root[data-theme="xianxia"] .progress-bar::-webkit-progress-value,
 :root[data-theme="xianxia"] .dl-bar-fill {
-  background: linear-gradient(90deg, #b8892e, #dbb968);
+  background: linear-gradient(90deg, #3d6b5d, #5a8a7a);
 }
 
 /* Toast通知：古风风格 */
@@ -4020,18 +4024,38 @@ input[type="datetime-local"] {
 
 /* ===== 关于页（about）古风适配 ===== */
 :root[data-theme="xianxia"] .about-hero-card {
-  background: linear-gradient(180deg, rgba(201,162,75,0.08), rgba(160,85,62,0.04) 60%, transparent) !important;
+  background: linear-gradient(180deg, rgba(90,138,122,0.1), rgba(160,85,62,0.04) 60%, transparent) !important;
 }
 :root[data-theme="xianxia"] .about-logo-wrap img {
-  filter: drop-shadow(0 6px 18px rgba(201,162,75,0.35));
+  filter: drop-shadow(0 6px 18px rgba(90,138,122,0.35));
 }
 :root[data-theme="xianxia"] .about-version-badge {
-  box-shadow: 0 4px 12px rgba(201,162,75,0.35) !important;
+  box-shadow: 0 4px 12px rgba(90,138,122,0.35) !important;
 }
 :root[data-theme="xianxia"] .about-hint-banner {
-  background: linear-gradient(135deg, rgba(201,162,75,0.06), rgba(160,85,62,0.04)) !important;
+  background: linear-gradient(135deg, rgba(90,138,122,0.08), rgba(160,85,62,0.04)) !important;
 }
 :root[data-theme="xianxia"] .about-footer {
-  background: linear-gradient(180deg, transparent, rgba(201,162,75,0.06)) !important;
+  background: linear-gradient(180deg, transparent, rgba(90,138,122,0.08)) !important;
+}
+
+/* ===== 仙侠主题：纯背景色（移除3D剑装饰以提升性能） ===== */
+:root[data-theme="xianxia"] .sidebar {
+  background: linear-gradient(180deg, rgba(90,138,122,0.08) 0%, rgba(74,122,106,0.04) 50%, rgba(90,138,122,0.06) 100%) !important;
+}
+:root[data-theme="xianxia"] .sidebar > .brand,
+:root[data-theme="xianxia"] .sidebar > .nav,
+:root[data-theme="xianxia"] .sidebar > .footer {
+  position: relative;
+  z-index: 1;
+}
+/* 确保导航菜单项有正确的z-index */
+:root[data-theme="xianxia"] .nav-item {
+  position: relative;
+  z-index: 2;
+}
+/* 隐藏剑装饰元素 */
+:root[data-theme="xianxia"] .sword-decor {
+  display: none !important;
 }
 

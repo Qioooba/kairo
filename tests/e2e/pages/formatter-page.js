@@ -50,8 +50,8 @@ class FormatterPage {
   async ensureNoOverlay() {
     try {
       const overlaySelectors = [
-        '.dtb-dialog-overlay',
-        '.dtb-modal-overlay',
+        '.kairo-dialog-overlay',
+        '.kairo-modal-overlay',
         '.modal-overlay',
         '[class*="dialog-overlay"]',
         '[class*="modal-overlay"]',

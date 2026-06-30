@@ -233,10 +233,10 @@ func (a *AppConfig) FreeFileRootsConfigured() bool {
 	return len(a.FreeFileRoots) > 0
 }
 
-// ComparePathAllowed v0.9 起：判断 path 是否可被 /api/compare/* 接口读取。
+// ComparePathAllowed 判断 path 是否可被 /api/compare/* 接口读取。
 //
-// 规则（fail-closed）：
-//   - roots 为空 → 返回 false（默认安全，禁止任意本地文件读）
+// 规则（fail-open，向后兼容内网工具旧行为）：
+//   - roots 为空 → 返回 true（默认放行，不限制比对路径）
 //   - roots 含 "*" 或 "ANY"（trim+upper 后）→ 返回 true（显式放行）
 //   - 其它非空 → path 必须以列表中任一 root 为目录边界前缀
 //
@@ -245,7 +245,7 @@ func (a *AppConfig) FreeFileRootsConfigured() bool {
 // 大小写敏感（远端 Linux 系统路径区分大小写）；Windows 路径需用户自行确保前缀正确。
 func (a *AppConfig) ComparePathAllowed(path string) bool {
 	if len(a.CompareAllowedRoots) == 0 {
-		return false // fail-closed
+		return true // fail-open，向后兼容
 	}
 	if path == "" {
 		return false
@@ -509,7 +509,7 @@ type SearchConfig struct {
 //     掩盖用户配错的事实（看着像 utf-8 在跑，其实是想用 shift-jis）。
 func (c *Config) Defaults() {
 	if c.App.Name == "" {
-		c.App.Name = "豆包工具箱"
+		c.App.Name = "天命契机"
 	}
 	if c.App.Host == "" {
 		c.App.Host = "127.0.0.1"

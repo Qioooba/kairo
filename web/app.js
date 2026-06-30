@@ -1,7 +1,7 @@
 /* ===== web/app.js — 入口 =====
  *
- * 拆分后的启动器。所有 page 模块已自己注册到 window.DTB.state.routes
- * 和 window.DTB.state.routeNames。本文件只剩：
+ * 拆分后的启动器。所有 page 模块已自己注册到 window.Kairo.state.routes
+ * 和 window.Kairo.state.routeNames。本文件只剩：
  *   1. listenInfo（启动信息）从 /api/config 拿
  *   2. navigate 路由切换
  *   3. hashchange + load 监听
@@ -12,10 +12,10 @@
 
 (function () {
   'use strict';
-  const DTB = window.DTB = window.DTB || {};
-  const { $ = () => null, $$ = () => [] } = DTB.core || {};
-  const { api } = DTB.api || {};
-  const state = DTB.state = DTB.state || {};
+  const Kairo = window.Kairo = window.Kairo || {};
+  const { $ = () => null, $$ = () => [] } = Kairo.core || {};
+  const { api } = Kairo.api || {};
+  const state = Kairo.state = Kairo.state || {};
 
   function routeFromHash(hash) {
     return (hash || '#/home').replace(/^#\//, '').split(/[?#]/)[0] || 'home';
@@ -43,22 +43,26 @@
       }
     }
     // 离开页面：清理进行中的下载（关闭 SSE + 通知后端取消）
-    if (DTB.core && DTB.core.getActiveDL && DTB.core.getActiveDL()) {
-      const dl = DTB.core.getActiveDL();
+    if (Kairo.core && Kairo.core.getActiveDL && Kairo.core.getActiveDL()) {
+      const dl = Kairo.core.getActiveDL();
       try { dl.evtsrc && dl.evtsrc.close(); } catch (e) { /* ignore */ }
       if (dl.id) {
         api('POST', '/api/files/download/' + dl.id + '/cancel', {}).catch(() => {});
       }
-      DTB.core.clearActiveDL();
+      Kairo.core.clearActiveDL();
     }
     // 离开页面：清理进行中的 tail（关闭 SSE + 通知后端停止）
-    if (DTB.core && DTB.core.getActiveTail && DTB.core.getActiveTail()) {
-      const tail = DTB.core.getActiveTail();
+    if (Kairo.core && Kairo.core.getActiveTail && Kairo.core.getActiveTail()) {
+      const tail = Kairo.core.getActiveTail();
       try { tail.evtsrc && tail.evtsrc.close(); } catch (e) { /* ignore */ }
       if (tail.id) {
         api('POST', '/api/logs/tail/' + tail.id + '/stop', {}).catch(() => {});
       }
-      DTB.core.clearActiveTail();
+      Kairo.core.clearActiveTail();
+    }
+    // 离开页面：清理 SSH 终端 WS 连接（v0.10）
+    if (Kairo.core && Kairo.core.clearActiveShells) {
+      Kairo.core.clearActiveShells();
     }
     const view = $('#view');
     if (!view) return;
@@ -68,9 +72,9 @@
     try {
       routes[name](view);
     } catch (e) {
-      view.appendChild(DTB.core.el('div', { class: 'card' }, [
-        DTB.core.el('h3', { text: '页面渲染失败' }),
-        DTB.core.el('div', { class: 'text-err', text: e.message })
+      view.appendChild(Kairo.core.el('div', { class: 'card' }, [
+        Kairo.core.el('h3', { text: '页面渲染失败' }),
+        Kairo.core.el('div', { class: 'text-err', text: e.message })
       ]));
     }
     const crumbs = $('#crumbs');
@@ -78,8 +82,8 @@
     Array.from(document.querySelectorAll('.nav-item')).forEach(a => {
       a.classList.toggle('active', a.getAttribute('data-route') === name);
     });
-    if (name === 'downloads' && DTB.core.clearDlBadge) {
-      DTB.core.clearDlBadge();
+    if (name === 'downloads' && Kairo.core.clearDlBadge) {
+      Kairo.core.clearDlBadge();
     }
     state.currentRoute = name;
   }
@@ -87,36 +91,40 @@
   window.addEventListener('hashchange', navigate);
   window.addEventListener('beforeunload', () => {
     // 页面卸载时清理进行中的下载
-    if (DTB.core && DTB.core.getActiveDL && DTB.core.getActiveDL()) {
-      const dl = DTB.core.getActiveDL();
+    if (Kairo.core && Kairo.core.getActiveDL && Kairo.core.getActiveDL()) {
+      const dl = Kairo.core.getActiveDL();
       try { dl.evtsrc && dl.evtsrc.close(); } catch (e) { /* ignore */ }
       if (dl.id && navigator.sendBeacon) {
         try { navigator.sendBeacon('/api/files/download/' + dl.id + '/cancel', ''); } catch (e) { /* ignore */ }
       }
-      DTB.core.clearActiveDL();
+      Kairo.core.clearActiveDL();
     }
     // 页面卸载时清理进行中的 tail
-    if (DTB.core && DTB.core.getActiveTail && DTB.core.getActiveTail()) {
-      const tail = DTB.core.getActiveTail();
+    if (Kairo.core && Kairo.core.getActiveTail && Kairo.core.getActiveTail()) {
+      const tail = Kairo.core.getActiveTail();
       try { tail.evtsrc && tail.evtsrc.close(); } catch (e) { /* ignore */ }
       if (tail.id && navigator.sendBeacon) {
         try { navigator.sendBeacon('/api/logs/tail/' + tail.id + '/stop', ''); } catch (e) { /* ignore */ }
       }
-      DTB.core.clearActiveTail();
+      Kairo.core.clearActiveTail();
+    }
+    // 页面卸载时清理 SSH 终端 WS 连接
+    if (Kairo.core && Kairo.core.clearActiveShells) {
+      Kairo.core.clearActiveShells();
     }
   });
   window.addEventListener('load', async () => {
     try {
       const info = await api('GET', '/api/config');
       state.bootInfo = info;
-      const appName = (info.app && info.app.name) || '豆包工具箱';
+      const appName = (info.app && info.app.name) || 'Kairo';
       const dlFolder = info.paths && info.paths.download_dir;
       const listenInfo = document.getElementById('listen-info');
       if (listenInfo) {
         listenInfo.textContent = '已启动 · ' + appName + ' v0.9' + (dlFolder ? ' · 保存到 ' + dlFolder : '');
       }
     } catch (e) { /* 忽略 */ }
-    // 启动时拉一次 preferences：把用户上次保存的 tail 高亮规则放到 DTB.state.tailHighlights，
+    // 启动时拉一次 preferences：把用户上次保存的 tail 高亮规则放到 Kairo.state.tailHighlights，
     // 让独立 tail.html / websphere tail tab 都直接用同一份（"页面上设置过的不要再让用户重设"）。
     // GET 失败（文件不存在 / 服务端 500）静默忽略 —— 没有高亮也能正常工作。
     try {

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"doubao-toolbox/internal/diagnostics"
+	"kairo/internal/diagnostics"
 )
 
 // handleDiagnostics GET /api/diagnostics

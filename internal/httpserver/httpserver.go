@@ -18,11 +18,12 @@ import (
 	"sync"
 	"time"
 
-	"doubao-toolbox/internal/audit"
-	"doubao-toolbox/internal/config"
-	"doubao-toolbox/internal/dlmanager"
-	"doubao-toolbox/internal/downloads"
-	"doubao-toolbox/internal/tailmgr"
+	"kairo/internal/audit"
+	"kairo/internal/config"
+	"kairo/internal/dlmanager"
+	"kairo/internal/downloads"
+	"kairo/internal/sshshell"
+	"kairo/internal/tailmgr"
 )
 
 // SSH Dial 超时（统一规范，所有 handler 都用这一对）
@@ -43,7 +44,7 @@ const (
 )
 
 const (
-	authCookieName = "dtb_token"
+	authCookieName = "kairo_token"
 	authCookieTTL  = 30 * 24 * time.Hour
 	authHeaderName = "Authorization"
 	authQueryParam = "token"
@@ -51,8 +52,8 @@ const (
 
 // Version / BuildTime 可在构建时通过 ldflags 注入，例如：
 //
-//	go build -ldflags "-X 'doubao-toolbox/internal/httpserver.Version=v0.9.0' \
-//	  -X 'doubao-toolbox/internal/httpserver.BuildTime=2026-06-27T00:00:00Z'" .
+//	go build -ldflags "-X 'kairo/internal/httpserver.Version=v0.9.0' \
+//	  -X 'kairo/internal/httpserver.BuildTime=2026-06-27T00:00:00Z'" .
 //
 // 未注入时使用下面的默认值；前端 about 页通过 GET /api/config 读取并回填显示，
 // 读取失败则回退到前端硬编码版本（FE-006）。
@@ -98,20 +99,21 @@ func requireAdmin(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 
-// Server 持有配置（线程安全 Manager）、审计日志、嵌入式静态资源、tail 会话池、下载任务池
+// Server 持有配置（线程安全 Manager）、审计日志、嵌入式静态资源、tail 会话池、下载任务池、SSH shell 会话池
 type Server struct {
 	cfg       *config.Manager
 	audit     *audit.Logger
 	webRoot   fs.FS
 	tails     *tailmgr.Manager
 	downloads *dlmanager.Manager
+	shells    *sshshell.Manager
 
 	cleanupMu sync.Mutex // 防止并发执行清理任务
 }
 
 // New 构造一个 Server
-func New(cfg *config.Manager, a *audit.Logger, webRoot fs.FS, tails *tailmgr.Manager) *Server {
-	return &Server{cfg: cfg, audit: a, webRoot: webRoot, tails: tails, downloads: dlmanager.New()}
+func New(cfg *config.Manager, a *audit.Logger, webRoot fs.FS, tails *tailmgr.Manager, shells *sshshell.Manager) *Server {
+	return &Server{cfg: cfg, audit: a, webRoot: webRoot, tails: tails, downloads: dlmanager.New(), shells: shells}
 }
 
 // TriggerCleanup 触发一次下载清理（同步执行）。
@@ -187,13 +189,13 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if cur.Auth.EffectiveEnabled() && isAPIRequest(path) {
 		tokenStr := extractToken(r)
 		if tokenStr == "" {
-			w.Header().Set("WWW-Authenticate", `Bearer realm="doubao-toolbox"`)
+			w.Header().Set("WWW-Authenticate", `Bearer realm="kairo"`)
 			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "需要认证", "auth_required": true})
 			return
 		}
 		token := cur.Auth.LookupToken(tokenStr)
 		if token == nil {
-			w.Header().Set("WWW-Authenticate", `Bearer realm="doubao-toolbox"`)
+			w.Header().Set("WWW-Authenticate", `Bearer realm="kairo"`)
 			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "认证失败：无效的 token", "auth_required": true})
 			return
 		}
@@ -224,6 +226,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleConfigImport(w, r)
 	case path == "/api/ssh/test":
 		s.handleSSHTest(w, r)
+	case path == "/api/ssh/shell/ws":
+		s.handleSSHShellWS(w, r)
 	case path == "/api/logs/list":
 		s.handleLogsList(w, r)
 	case path == "/api/logs/list/targets":

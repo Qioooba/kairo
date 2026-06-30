@@ -30,7 +30,7 @@ v0.6 改造完成后，剩余两件事（v0.6 FINAL 文档"六、待用户决定
 **后**：
 - 默认折叠 → 顶部一行胶囊：`🎯 信贷生产（模拟） · mock-node-1 · 2 个目录 · 凭据已输入` + `✏️ 修改目标` 按钮
 - 展开后 → 完整表单 + `▲ 收起` 按钮
-- 状态记忆到 `dtb:last:websphere:target_collapsed`（collapsed / expanded），跨刷新保持
+- 状态记忆到 `kairo:last:websphere:target_collapsed`（collapsed / expanded），跨刷新保持
 - 摘要**实时同步**：勾选 / 取消 server、勾选 / 取消 dir、输入凭据、保存凭据，都会触发 `renderTargetSummary()` 重渲
 
 ### 第三波：按 tab 归属调整按钮
@@ -91,7 +91,7 @@ v0.6 改造完成后，剩余两件事（v0.6 FINAL 文档"六、待用户决定
 | 7 | 摘要实时更新（取消勾 dir） | 摘要从 "2 个目录" → "1 个目录 · 凭据已输入" | ✅ 实时同步 |
 | 8 | 跑搜索 | search badge="10 命中"、hits table 渲染 | ✅ 全过 |
 | 9 | 启动/停止 tail | tail badge: start 后 = "🟢"，stop 后清空 | ✅ 全过 |
-| 10 | 刷新页面，折叠状态记忆 | expanded → reload → 仍展开；collapsed → reload → 仍折叠；localStorage key `dtb:last:websphere:target_collapsed` 正常 | ✅ 全过 |
+| 10 | 刷新页面，折叠状态记忆 | expanded → reload → 仍展开；collapsed → reload → 仍折叠；localStorage key `kairo:last:websphere:target_collapsed` 正常 | ✅ 全过 |
 
 ### 视觉验证
 
@@ -178,13 +178,13 @@ v0.6 改造完成后，剩余两件事（v0.6 FINAL 文档"六、待用户决定
 | 问题 | 状态 |
 |---|---|
 | targetSummaryRow 初始没摘要（cfg 没加载完）| ✅ 已用 cfg.then 末尾 + persistSelection 末尾双重 refresh 覆盖 |
-| 摘要刷新时用 renderTargetSummary 闭包变量 sysSel/getSelectedTargets/credStatus，会不会 stale？| ✅ 都是 DTB.core 闭包内引用 + 每次调用读最新值，OK |
+| 摘要刷新时用 renderTargetSummary 闭包变量 sysSel/getSelectedTargets/credStatus，会不会 stale？| ✅ 都是 Kairo.core 闭包内引用 + 每次调用读最新值，OK |
 | formCard 折叠时，测试连接按钮还能用吗？| ✅ 用户展开 formCard 后才能点测试连接（设计上合理：展开 = 想改配置）|
 | files tab toolbar 与 fileTableWrap 排序，谁先谁后？| ✅ toolbar 在前（top 操作）→ table 在后（结果展示）|
 | toggle button 文字来回切换会不会引起 reflow？| ✅ 改 textContent + style.display 都是文本级操作，无重排 |
 | 多个 tab 切换时 toolbar 会消失/重现？| ✅ 正常行为（files tab 不 active 时 toolbar 跟随 files tab content 隐藏）|
 | placeholder 在 doList 后会不会和真实列表冲突？| ✅ renderFileTable 第一行 `innerHTML=''` 把 placeholder 清掉，正常 |
-| localStorage key 命名冲突？| ✅ 用 DTB.core.lastSet 走 `dtb:last:websphere:` 前缀，跟其它 sel/cred 等命名空间一致 |
+| localStorage key 命名冲突？| ✅ 用 Kairo.core.lastSet 走 `kairo:last:websphere:` 前缀，跟其它 sel/cred 等命名空间一致 |
 
 ---
 

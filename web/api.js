@@ -1,16 +1,16 @@
 /* ===== web/api.js =====
  * API 封装：fetch + status 联动 + 一些常用的 fetch 包装
  *
- * 暴露：window.DTB.api.{api, postJSON, getJSON, triggerDownload}
+ * 暴露：window.Kairo.api.{api, postJSON, getJSON, triggerDownload}
  */
 
 (function () {
   'use strict';
 
-  if (!window.DTB) window.DTB = {};
-  if (!window.DTB.api) window.DTB.api = {};
-  const apiNs = window.DTB.api;
-  const core = window.DTB.core;
+  if (!window.Kairo) window.Kairo = {};
+  if (!window.Kairo.api) window.Kairo.api = {};
+  const apiNs = window.Kairo.api;
+  const core = window.Kairo.core;
 
   async function api(method, path, body) {
     core.setStatus('busy');
@@ -25,8 +25,8 @@
       try { data = await resp.json(); } catch (e) { /* ignore */ }
       if (resp.status === 401 && data && data.auth_required) {
         core.setStatus('idle');
-        if (window.DTB.auth && window.DTB.auth.requireLogin) {
-          window.DTB.auth.requireLogin();
+        if (window.Kairo.auth && window.Kairo.auth.requireLogin) {
+          window.Kairo.auth.requireLogin();
         }
         const err = new Error(data.error || '需要登录');
         err.authRequired = true;
@@ -75,8 +75,8 @@
       if (r.status === 401) {
         let data = null;
         try { data = await r.json(); } catch (e) {}
-        if (data && data.auth_required && window.DTB.auth && window.DTB.auth.requireLogin) {
-          window.DTB.auth.requireLogin();
+        if (data && data.auth_required && window.Kairo.auth && window.Kairo.auth.requireLogin) {
+          window.Kairo.auth.requireLogin();
           const err = new Error(data.error || '需要登录');
           err.authRequired = true;
           throw err;

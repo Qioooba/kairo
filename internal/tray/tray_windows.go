@@ -27,7 +27,7 @@ func run(cfg Config) {
 
 		mOpen := systray.AddMenuItem("打开浏览器", "在默认浏览器中打开")
 		systray.AddSeparator()
-		mQuit := systray.AddMenuItem("退出", "退出豆包工具箱")
+		mQuit := systray.AddMenuItem("退出", "退出Kairo")
 
 		go func() {
 			for {
@@ -55,7 +55,7 @@ func fatalDialog(msg string) {
 	writeCrashLog(msg)
 
 	text, _ := windows.UTF16PtrFromString(msg)
-	caption, _ := windows.UTF16PtrFromString("豆包工具箱启动失败")
+	caption, _ := windows.UTF16PtrFromString("Kairo启动失败")
 	procMessageBoxW.Call(
 		0,
 		uintptr(unsafe.Pointer(text)),

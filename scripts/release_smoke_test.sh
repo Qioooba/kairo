@@ -10,7 +10,7 @@
 # 用法：
 #   ./scripts/release_smoke_test.sh <tar.gz 路径>
 # 例如：
-#   ./scripts/release_smoke_test.sh ./dist/doubao-toolbox-src-v0.9.tar.gz
+#   ./scripts/release_smoke_test.sh ./dist/kairo-src-v0.9.tar.gz
 
 set -euo pipefail
 
@@ -36,7 +36,7 @@ trap 'rm -rf "${TMP_DIR}"' EXIT
 echo ">> 解包到 ${TMP_DIR}"
 tar -xzf "${TAR}" -C "${TMP_DIR}"
 
-# tar.gz 内可能有顶层目录（如 doubao-toolbox-v0.9/），找到它
+# tar.gz 内可能有顶层目录（如 kairo-v0.9/），找到它
 SRC_DIR="${TMP_DIR}"
 DIRS=$(find "${TMP_DIR}" -maxdepth 1 -mindepth 1 -type d)
 DIR_COUNT=$(echo "${DIRS}" | wc -l | tr -d ' ')
@@ -112,7 +112,7 @@ echo "==== 5. 启动服务验证 /static/vendor/diff2html 无 404 ===="
 # 构建二进制到临时目录
 BIN_DIR="$(mktemp -d)"
 trap 'rm -rf "${TMP_DIR}" "${BIN_DIR}"' EXIT
-BIN="${BIN_DIR}/doubao-toolbox-smoke"
+BIN="${BIN_DIR}/kairo-smoke"
 
 echo "   编译二进制..."
 if ! go build -mod=vendor -o "${BIN}" . 2>&1; then
@@ -158,7 +158,7 @@ YAML
   mkdir -p "${BIN_DIR}/downloads" "${BIN_DIR}/logs" "${BIN_DIR}/data"
 
   echo "   启动服务（127.0.0.1:18999）..."
-  cd "${BIN_DIR}" && ./doubao-toolbox-smoke &
+  cd "${BIN_DIR}" && ./kairo-smoke &
   SRV_PID=$!
   trap 'rm -rf "${TMP_DIR}" "${BIN_DIR}"; kill ${SRV_PID} 2>/dev/null || true' EXIT
 

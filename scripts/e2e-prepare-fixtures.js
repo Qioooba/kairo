@@ -499,7 +499,7 @@ async function main() {
 
   if (configPath) {
     console.log('\n  测试专用配置路径:', configPath);
-    console.log('\n  启动 豆包工具箱 时使用:');
+    console.log('\n  启动 Kairo 时使用:');
     console.log(`    CONFIG_PATH="${configPath}" npm start`);
   }
 

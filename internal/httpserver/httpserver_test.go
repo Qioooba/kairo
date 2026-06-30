@@ -16,11 +16,12 @@ import (
 	"testing/fstest"
 	"time"
 
-	"doubao-toolbox/internal/audit"
-	"doubao-toolbox/internal/config"
-	"doubao-toolbox/internal/downloads"
-	"doubao-toolbox/internal/logquery"
-	"doubao-toolbox/internal/tailmgr"
+	"kairo/internal/audit"
+	"kairo/internal/config"
+	"kairo/internal/downloads"
+	"kairo/internal/logquery"
+	"kairo/internal/sshshell"
+	"kairo/internal/tailmgr"
 )
 
 // ---------- 测试辅助 ----------
@@ -100,7 +101,7 @@ func newTestServer(t *testing.T) (*Server, *config.Manager, *audit.Logger, strin
 
 	// 嵌入 fs 用真实 web/ 目录（测试用真实 index.html）
 	webFS := os.DirFS(filepath.Join("..", "..", "web"))
-	srv := New(mgr, al, webFS, tailmgr.NewManager())
+	srv := New(mgr, al, webFS, tailmgr.NewManager(), sshshell.New(0))
 	return srv, mgr, al, cfg.DownloadDir()
 }
 

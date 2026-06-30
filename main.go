@@ -1,4 +1,4 @@
-// DoubaoToolbox - 豆包工具箱入口
+// Kairo - Kairo入口
 //
 // 启动本地 HTTP 服务，默认监听 127.0.0.1:18080，
 // 启动后自动打开浏览器访问首页。
@@ -21,14 +21,15 @@ import (
 	"strings"
 	"time"
 
-	"doubao-toolbox/internal/audit"
-	"doubao-toolbox/internal/config"
-	"doubao-toolbox/internal/credentials"
-	"doubao-toolbox/internal/downloads"
-	"doubao-toolbox/internal/httpserver"
-	"doubao-toolbox/internal/sshclient"
-	"doubao-toolbox/internal/tailmgr"
-	"doubao-toolbox/internal/tray"
+	"kairo/internal/audit"
+	"kairo/internal/config"
+	"kairo/internal/credentials"
+	"kairo/internal/downloads"
+	"kairo/internal/httpserver"
+	"kairo/internal/sshclient"
+	"kairo/internal/sshshell"
+	"kairo/internal/tailmgr"
+	"kairo/internal/tray"
 )
 
 //go:embed web
@@ -36,7 +37,7 @@ var webFS embed.FS
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
-	log.SetPrefix("[DoubaoToolbox] ")
+	log.SetPrefix("[Kairo] ")
 
 	// 1. 确定运行目录。优先用可执行文件目录；若 config.yaml 不在那，
 	// 再回退到当前工作目录，兼容 `go run .` 这类临时二进制路径。
@@ -61,9 +62,9 @@ func main() {
 
 	// 4.1 设置日志文件输出。
 	// Windows GUI 模式（-H windowsgui）下没有 stdout/stderr，
-	// 必须落盘到 logs/doubao-toolbox.log 才能看到运行时日志。
+	// 必须落盘到 logs/kairo.log 才能看到运行时日志。
 	// 非 Windows 开发模式同时输出到 stderr 方便调试。
-	logFilePath := filepath.Join(cfg.LogDir(), "doubao-toolbox.log")
+	logFilePath := filepath.Join(cfg.LogDir(), "kairo.log")
 	logFile, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		tray.FatalDialogf("无法打开日志文件 %s: %v", logFilePath, err)
@@ -120,7 +121,7 @@ func main() {
 	}
 	defer auditLog.Close()
 
-	// 4.9 项 4 迁移：把历史 .meta sidecar 文件合并到单文件索引 .doubao-toolbox-meta.json。
+	// 4.9 项 4 迁移：把历史 .meta sidecar 文件合并到单文件索引 .kairo-meta.json。
 	// 一次性操作，幂等。失败不致命（侧车丢了只是丢元数据，不影响下载文件本身）。
 	if migrated, skipped, err := downloads.MigrateSidecars(cfg.DownloadDir()); err != nil {
 		log.Printf("WARNING: .meta sidecar 迁移失败: %v", err)
@@ -143,8 +144,13 @@ func main() {
 	tails.SetIdleAfter(cfg.App.TailIdleDuration())
 	defer tails.ShutdownAll()
 
+	// 7.6 构造 SSH shell 会话池（v0.10 SSH 终端菜单用）。
+	// max=0 走 DefaultMaxSessions（32 个，约 192MB 内存上限）。
+	shells := sshshell.New(0)
+	defer shells.ShutdownAll()
+
 	// 8. 构造 HTTP 服务
-	srv := httpserver.New(cfgMgr, auditLog, webSubFS, tails)
+	srv := httpserver.New(cfgMgr, auditLog, webSubFS, tails, shells)
 
 	// 8.5 启动下载历史定期清理（启动时清理一次 + 每小时清理一次）
 	srv.StartPeriodicCleanup()
@@ -195,7 +201,7 @@ func main() {
 	// SSE 长连接（WriteTimeout=0）会让 Shutdown 卡到超时才强切，
 	// 1 秒足够正常请求收尾，强切的 SSE 不影响数据完整性（tail 是实时流，下载已落盘）。
 	tray.Run(tray.Config{
-		Tooltip: "豆包工具箱",
+		Tooltip: "Kairo",
 		OnOpenBrowser: func() { openBrowser(url) },
 		OnQuit: func() {
 			log.Println("收到退出请求，正在关闭服务...")

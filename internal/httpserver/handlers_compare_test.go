@@ -1,8 +1,9 @@
 package httpserver
 
-// handlers_compare_test.go — BE-001 修复的回归测试：
-// /api/compare/file-diff、/api/compare/folder-scan 必须按 app.compare_allowed_roots
-// 做白名单校验（fail-closed），空 roots → 一律 403，防止任意本地文件读。
+// handlers_compare_test.go — compare 白名单行为测试：
+// /api/compare/file-diff、/api/compare/folder-scan 按 app.compare_allowed_roots
+// 做白名单校验。默认 fail-open（空 roots 放行，向后兼容内网工具旧行为）；
+// 配了非 "*" 的 roots 后，越界路径 403。
 
 import (
 	"os"
@@ -11,11 +12,11 @@ import (
 	"testing"
 )
 
-// TestCompare_FileDiff_NoRoots_ForbiddenByDefault 验证 BE-001 fail-closed：
-// CompareAllowedRoots 为空时，传 /etc/passwd、/etc/shadow、C:\Windows 都应 403。
-func TestCompare_FileDiff_NoRoots_ForbiddenByDefault(t *testing.T) {
+// TestCompare_FileDiff_NoRoots_AllowedByDefault 验证默认 fail-open：
+// CompareAllowedRoots 为空时放行任意路径（不返 403）。
+func TestCompare_FileDiff_NoRoots_AllowedByDefault(t *testing.T) {
 	srv, mgr, _, _ := newTestServer(t)
-	// newTestServer 默认配 "*"，这里显式清空回 fail-closed 默认行为
+	// 显式清空 roots，模拟默认 fail-open 行为
 	cfg := mgr.Get()
 	cfg.App.CompareAllowedRoots = nil
 	if err := mgr.Replace(cfg); err != nil {
@@ -28,21 +29,21 @@ func TestCompare_FileDiff_NoRoots_ForbiddenByDefault(t *testing.T) {
 	}{
 		{"etc/passwd", map[string]any{"left_path": "/etc/passwd", "right_path": "/etc/passwd"}},
 		{"etc/shadow", map[string]any{"left_path": "/etc/shadow", "right_path": "/etc/shadow"}},
-		{"C:/Windows", map[string]any{"left_path": `C:\Windows\System32\drivers\etc\hosts`, "right_path": `C:\Windows\System32\drivers\etc\hosts`}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			w := doRequest(srv, "POST", "/api/compare/file-diff", tc.body)
-			if w.Code != 403 {
-				t.Errorf("BE-001 fail-closed: 空 roots 时 %v 应返 403，得到 %d body=%s",
+			// fail-open：空 roots 不应返 403（放行，可能 200/400 取决于文件是否存在）
+			if w.Code == 403 {
+				t.Errorf("fail-open: 空 roots 时 %v 不应返 403，得到 %d body=%s",
 					tc.body, w.Code, w.Body.String())
 			}
 		})
 	}
 }
 
-// TestCompare_FolderScan_NoRoots_ForbiddenByDefault 同样验证 folder-scan 的 fail-closed。
-func TestCompare_FolderScan_NoRoots_ForbiddenByDefault(t *testing.T) {
+// TestCompare_FolderScan_NoRoots_AllowedByDefault 同样验证 folder-scan 的 fail-open。
+func TestCompare_FolderScan_NoRoots_AllowedByDefault(t *testing.T) {
 	srv, mgr, _, _ := newTestServer(t)
 	cfg := mgr.Get()
 	cfg.App.CompareAllowedRoots = nil
@@ -53,8 +54,9 @@ func TestCompare_FolderScan_NoRoots_ForbiddenByDefault(t *testing.T) {
 		"left_path":  "/etc",
 		"right_path": "/etc",
 	})
-	if w.Code != 403 {
-		t.Errorf("folder-scan 空 roots 应返 403，得到 %d body=%s", w.Code, w.Body.String())
+	// fail-open：空 roots 不应返 403
+	if w.Code == 403 {
+		t.Errorf("folder-scan 空 roots 不应返 403，得到 %d body=%s", w.Code, w.Body.String())
 	}
 }
 

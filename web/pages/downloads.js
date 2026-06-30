@@ -8,13 +8,13 @@
 
 (function () {
   'use strict';
-  const DTB = window.DTB = window.DTB || {};
-  DTB.pages = DTB.pages || {};
-  const { el, toast, confirmDialog } = DTB.core;
-  const { api } = DTB.api;
+  const Kairo = window.Kairo = window.Kairo || {};
+  Kairo.pages = Kairo.pages || {};
+  const { el, toast, confirmDialog } = Kairo.core;
+  const { api } = Kairo.api;
 
   // v0.8：外部打开器缓存（module 级，跨 re-render 存活）。
-  DTB.state.downloadsOpeners = DTB.state.downloadsOpeners || [];
+  Kairo.state.downloadsOpeners = Kairo.state.downloadsOpeners || [];
   let openersLoaded = false;
 
   function renderDownloads(view) {
@@ -31,19 +31,18 @@
     // 跟整体暗色协调，但仍能跟"删除单文件"的 .btn-danger 区分开。
     const btnClearAll = el('button', { class: 'btn btn-danger-soft', text: '清空全部', onclick: doClearAll });
 
-    // v0.8：拉一次外部打开器列表（缓存到 DTB.state.downloadsOpeners）。
-    // 等 openers 加载完再调 load()，避免重复请求 /api/downloads/list。
+    // v0.8：拉一次外部打开器列表（缓存到 Kairo.state.downloadsOpeners）。
+    // openers 异步加载，不阻塞列表 load()。
     if (!openersLoaded) {
       api('GET', '/api/admin/openers').then(r => {
-        DTB.state.downloadsOpeners = Array.isArray(r && r.openers) ? r.openers : [];
+        Kairo.state.downloadsOpeners = Array.isArray(r && r.openers) ? r.openers : [];
         openersLoaded = true;
-        load();
       }).catch(() => {
-        DTB.state.downloadsOpeners = [];
+        Kairo.state.downloadsOpeners = [];
         openersLoaded = true;
-        load();
       });
     }
+    load(); // 无论 openers 是否加载完都加载下载列表
 
     view.appendChild(el('div', { class: 'grid-2 mt-2' }, [
       el('div', null, [el('label', { text: '业务系统' }), sysSel]),
@@ -127,7 +126,7 @@
           onclick: () => doDelete(f, load) });
         const openDir = el('button', { class: 'btn btn-sm', text: '📂 打开所在目录',
           onclick: () => doOpenDir(f) });
-        const openerBtns = (DTB.state.downloadsOpeners || []).map(op => {
+        const openerBtns = (Kairo.state.downloadsOpeners || []).map(op => {
           const label = (op.icon && op.icon.trim()) ? op.icon.trim() : '🔗 ' + (op.name || '?');
           const tip = (op.name || '') + (op.path ? ' — ' + op.path : '');
           return el('button', {
@@ -230,8 +229,8 @@
     if (openersLoaded) load();
   }
 
-  DTB.pages.downloads = renderDownloads;
-  DTB.state.routes.downloads = renderDownloads;
-  DTB.state.routeNames.downloads = '下载历史';
-  DTB.state.routeSubs.downloads = 'downloads/ 目录里所有已下载的日志（zip / 单文件）+ 来源、删除';
+  Kairo.pages.downloads = renderDownloads;
+  Kairo.state.routes.downloads = renderDownloads;
+  Kairo.state.routeNames.downloads = '下载历史';
+  Kairo.state.routeSubs.downloads = 'downloads/ 目录里所有已下载的日志（zip / 单文件）+ 来源、删除';
 })();

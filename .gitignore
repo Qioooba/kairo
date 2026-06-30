@@ -1,10 +1,13 @@
+# ===== 本地 Go SDK（Win7 兼容构建用 Go 1.20.x，不入仓库）=====
+/sdk/
+
 # ===== Go 构建产物 / 缓存 =====
 # 编译出来的二进制
-/DoubaoToolbox
-/DoubaoToolbox.exe
-/DoubaoToolbox_mac
-/DoubaoToolbox_*
-/doubao-toolbox-test
+/Kairo
+/Kairo.exe
+/Kairo_mac
+/Kairo_*
+/kairo-test
 
 # Go 缓存
 /.gocache/
@@ -28,7 +31,7 @@ Thumbs.db
 # ===== debug 临时文件 =====
 /debug_run.go
 dbg-*.js
-dtb-snap.js
+kairo-snap.js
 verify-commands.js
 
 # ===== 临时文件 =====
@@ -61,6 +64,9 @@ verify-commands.js
 /theme-test-out/
 /theme-*-out/
 /playwright-*.js
-/doubao-toolbox*
-/ops-toolbox
-/DoubaoToolbox_dev
+/kairo*
+/Kairo_dev
+
+# ===== Windows exe 资源图标（构建产物，不入库）=====
+*.syso
+/Kairo.jpg

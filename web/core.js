@@ -2,7 +2,7 @@
  * 通用工具：DOM/escape/格式化 + 校验/创建函数 + activeDL 管理
  *
  * 设计：
- *   - 零构建，纯 vanilla JS，挂到 window.DTB.core
+ *   - 零构建，纯 vanilla JS，挂到 window.Kairo.core
  *   - 所有"无 DOM 依赖"的纯函数放在这里（escapeHtml / formatBytes / formatTime / cssEscape / pctText / trimMiddle / looksMojibake / basenameOf / validate）
  *   - 仍需要 document 的（el / $ / $$ / toast / setStatus / kvTable）也放这里（统一入口）
  *   - 测试 web/app.test.js 会从这里抽函数，所以命名必须保持稳定
@@ -11,9 +11,9 @@
 (function () {
   'use strict';
 
-  if (!window.DTB) window.DTB = {};
-  if (!window.DTB.core) window.DTB.core = {};
-  const core = window.DTB.core;
+  if (!window.Kairo) window.Kairo = {};
+  if (!window.Kairo.core) window.Kairo.core = {};
+  const core = window.Kairo.core;
 
   // -------- DOM helper --------
 
@@ -41,7 +41,7 @@
         else if (k === 'text') e.textContent = attrs[k];
         else if (k === 'html') {
           // 兼容老调用：warn 但仍然执行，避免回归
-          console.warn("[doubao-toolbox] el(..., { html: ... }) is deprecated; use 'unsafeHtml' to make intent explicit, or 'text' to auto-escape.");
+          console.warn("[kairo] el(..., { html: ... }) is deprecated; use 'unsafeHtml' to make intent explicit, or 'text' to auto-escape.");
           e.innerHTML = attrs[k];
         } else if (k === 'unsafeHtml') e.innerHTML = attrs[k];
         else if (k.indexOf('on') === 0) e.addEventListener(k.slice(2), attrs[k]);
@@ -94,11 +94,11 @@
     }
 
     return new Promise((resolve) => {
-      const overlay = el('div', { class: 'dtb-dialog-overlay' });
-      const dialog = el('div', { class: 'dtb-dialog' });
-      const title = el('div', { class: 'dtb-dialog-title', text: opts.title || '请确认' });
-      const body = el('div', { class: 'dtb-dialog-body', text: msg });
-      const actions = el('div', { class: 'dtb-dialog-actions' });
+      const overlay = el('div', { class: 'kairo-dialog-overlay' });
+      const dialog = el('div', { class: 'kairo-dialog' });
+      const title = el('div', { class: 'kairo-dialog-title', text: opts.title || '请确认' });
+      const body = el('div', { class: 'kairo-dialog-body', text: msg });
+      const actions = el('div', { class: 'kairo-dialog-actions' });
       const cancelBtn = el('button', {
         class: 'btn',
         type: 'button',
@@ -181,26 +181,26 @@
   //   - duration    (ms, 默认 6000；0 = 不自动消失)
   //   - id          (string)   同 id 通知会替换旧的（避免堆叠）
   //
-  // 通知堆在 body 右上角的 #dtb-notify-stack 容器里，
-  // 每条是一个 .dtb-notify 卡片；点 × 关闭按钮立即移除。
+  // 通知堆在 body 右上角的 #kairo-notify-stack 容器里，
+  // 每条是一个 .kairo-notify 卡片；点 × 关闭按钮立即移除。
   function notify(opts) {
     opts = opts || {};
     const stack = ensureNotifyStack();
     const id = opts.id;
     if (id) {
-      const old = stack.querySelector('.dtb-notify[data-id="' + cssEscape(id) + '"]');
+      const old = stack.querySelector('.kairo-notify[data-id="' + cssEscape(id) + '"]');
       if (old) old.remove();
     }
-    const card = el('div', { class: 'dtb-notify' + (opts.type ? ' ' + opts.type : '') });
+    const card = el('div', { class: 'kairo-notify' + (opts.type ? ' ' + opts.type : '') });
     if (id) card.setAttribute('data-id', id);
     if (opts.title) {
-      card.appendChild(el('div', { class: 'dtb-notify-title', text: opts.title }));
+      card.appendChild(el('div', { class: 'kairo-notify-title', text: opts.title }));
     }
     if (opts.body) {
-      card.appendChild(el('div', { class: 'dtb-notify-body', text: opts.body }));
+      card.appendChild(el('div', { class: 'kairo-notify-body', text: opts.body }));
     }
     if (opts.actions && opts.actions.length) {
-      const actionsEl = el('div', { class: 'dtb-notify-actions' });
+      const actionsEl = el('div', { class: 'kairo-notify-actions' });
       opts.actions.forEach(a => {
         actionsEl.appendChild(el('button', {
           class: 'btn btn-sm',
@@ -214,7 +214,7 @@
       card.appendChild(actionsEl);
     }
     card.appendChild(el('button', {
-      class: 'dtb-notify-close',
+      class: 'kairo-notify-close',
       text: '×',
       title: '关闭',
       onclick: () => { card.remove(); updateClearAllBtn(); }
@@ -224,15 +224,15 @@
     return card;
   }
   function ensureNotifyStack() {
-    let stack = document.getElementById('dtb-notify-stack');
+    let stack = document.getElementById('kairo-notify-stack');
     if (!stack) {
-      stack = el('div', { id: 'dtb-notify-stack', class: 'dtb-notify-stack' });
+      stack = el('div', { id: 'kairo-notify-stack', class: 'kairo-notify-stack' });
       const clearAll = el('button', {
-        id: 'dtb-notify-clearall',
-        class: 'dtb-notify-clearall',
+        id: 'kairo-notify-clearall',
+        class: 'kairo-notify-clearall',
         text: '全部清空',
         onclick: () => {
-          const cards = stack.querySelectorAll('.dtb-notify');
+          const cards = stack.querySelectorAll('.kairo-notify');
           cards.forEach(c => c.remove());
           updateClearAllBtn();
         }
@@ -243,11 +243,11 @@
     return stack;
   }
   function updateClearAllBtn() {
-    const stack = document.getElementById('dtb-notify-stack');
+    const stack = document.getElementById('kairo-notify-stack');
     if (!stack) return;
-    const clearAll = document.getElementById('dtb-notify-clearall');
+    const clearAll = document.getElementById('kairo-notify-clearall');
     if (!clearAll) return;
-    const cards = stack.querySelectorAll('.dtb-notify');
+    const cards = stack.querySelectorAll('.kairo-notify');
     clearAll.style.display = cards.length >= 2 ? 'block' : 'none';
   }
   core.notify = notify;
@@ -449,26 +449,56 @@
   core.getActiveTail = getActiveTail;
   core.clearActiveTail = clearActiveTail;
 
+  // -------- 全局 activeShells 管理（ssh 页打开的 WS 终端，navigate 切走时清理）--------
+
+  if (typeof window !== 'undefined') {
+    window.__opsActiveShells = window.__opsActiveShells || null;
+  }
+
+  // setActiveShells 注册一个 shells 控制器，结构：{ closeAll: () => void }
+  // ssh 页 mount 时注册，unmount / navigate 切走时 clearActiveShells 会调 closeAll。
+  function setActiveShells(controller) {
+    window.__opsActiveShells = controller;
+  }
+  function getActiveShells() {
+    return window.__opsActiveShells;
+  }
+  function clearActiveShells() {
+    if (window.__opsActiveShells && typeof window.__opsActiveShells.closeAll === 'function') {
+      try { window.__opsActiveShells.closeAll(); } catch (e) { /* ignore */ }
+    }
+    window.__opsActiveShells = null;
+  }
+  core.setActiveShells = setActiveShells;
+  core.getActiveShells = getActiveShells;
+  core.clearActiveShells = clearActiveShells;
+
   // -------- "上次选择" 记忆（系统 / 服务器 / 日志目录 / 凭据） --------
   //
-  // 用 localStorage 跨页面跨刷新记，键格式 dtb:last:<page>:<key>
+  // 用 localStorage 跨页面跨刷新记，键格式 kairo:last:<page>:<key>
   // 跨页面共享（websphere / files 都用同一份），自动 JSON 化。
   // 写入失败（隐私模式 / quota 超）静默忽略。
   //
-  // v0.9 rebrand: 从 otb:last:* 迁移到 dtb:last:*（一次性，不删除旧键）。
-  const LAST_PREFIX = 'dtb:last:';
+  // v0.9 rebrand: 从 otb:last:* 和 dtb:last:* 迁移到 kairo:last:*（一次性，不删除旧键）。
+  // 先迁 dtb:（较新），再迁 otb:（较老，仅作 fallback），保证较新的数据优先。
+  const LAST_PREFIX = 'kairo:last:';
   try {
     if (typeof localStorage !== 'undefined') {
-      var LAST_OLD = 'otb:last:';
-      for (var li = 0; li < localStorage.length; li++) {
-        var lk = localStorage.key(li);
-        if (lk && lk.indexOf(LAST_OLD) === 0) {
-          var lNew = LAST_PREFIX + lk.slice(LAST_OLD.length);
-          if (!localStorage.getItem(lNew)) {
-            localStorage.setItem(lNew, localStorage.getItem(lk));
+      var lastSeen = {};
+      function migrateLast(oldPrefix) {
+        for (var li = 0; li < localStorage.length; li++) {
+          var lk = localStorage.key(li);
+          if (lk && lk.indexOf(oldPrefix) === 0) {
+            var lNew = LAST_PREFIX + lk.slice(oldPrefix.length);
+            if (!lastSeen[lNew] && !localStorage.getItem(lNew)) {
+              localStorage.setItem(lNew, localStorage.getItem(lk));
+            }
+            lastSeen[lNew] = true;
           }
         }
       }
+      migrateLast('dtb:last:');
+      migrateLast('otb:last:');
     }
   } catch (_) { /* ignore migration errors */ }
 
@@ -679,8 +709,8 @@
   // -------- Tail 高亮面板（共享 UI 工厂） --------
   //
   // 用法：
-  //   const panel = DTB.core.tailHighlightPanel({
-  //     initial: DTB.state.tailHighlights || [],   // 初始规则
+  //   const panel = Kairo.core.tailHighlightPanel({
+  //     initial: Kairo.state.tailHighlights || [],   // 初始规则
   //     onChange: async (list) => { ... },         // 规则变化时（持久化）
   //     onToggle: (enabled) => { ... }             // 启停切换（可选）
   //   });
@@ -979,6 +1009,7 @@
     let _maxLines = Math.max(100, Math.min(50000, Number(opts.maxLines) || 1000));
     let _paused = false;
     let _totalEver = 0;     // 累计 push 的总行数（清屏不重置）
+    let _droppedEver = 0;   // 累计因 trim 丢弃的行数（清屏时重置，让行号从 1 重新开始）
     let _disposed = false;
 
     if (!container.classList.contains('tail-out')) {
@@ -1012,6 +1043,7 @@
         _lines.shift();
         const old = _nodes.shift();
         if (old && old.parentNode) old.parentNode.removeChild(old);
+        _droppedEver++;
       }
     }
 
@@ -1020,6 +1052,7 @@
       if (_disposed || _paused) return;
       if (!arr || !arr.length) return;
       if (arr.length > _maxLines) {
+        _droppedEver += arr.length - _maxLines;
         _totalEver += arr.length - _maxLines;
         arr = Array.prototype.slice.call(arr, arr.length - _maxLines);
       }
@@ -1034,6 +1067,7 @@
             if (n && n.parentNode) n.parentNode.removeChild(n);
           }
           _lines.splice(0, drop);
+          _droppedEver += drop;
         }
       }
       const highlights = getHighlights() || [];
@@ -1056,9 +1090,12 @@
     }
 
     // ----- 公开：清屏 -----
+    // 重置 _droppedEver：清屏后行号从 1 重新开始（totalEver 不重置，
+    // 留作"实时速率"计算 —— 用法差异，注释保留）。
     function clear() {
       _lines.length = 0;
       _nodes.length = 0;
+      _droppedEver = 0;
       container.innerHTML = '';
     }
 
@@ -1081,6 +1118,10 @@
     function getText() { return _lines.join('\n'); }
     function lineCount() { return _lines.length; }
     function totalEver() { return _totalEver; }
+    // 累计被 trim 掉的行数。buffer 第一行的"全局行号 - 1"就是它；
+    // 外部用 `container.style.setProperty('--tail-line-offset', droppedCount())`
+    // 同步到 CSS counter reset，让 trim 之后行号连续。
+    function droppedCount() { return _droppedEver; }
     function getMaxLines() { return _maxLines; }
     function setMaxLines(n) {
       const v = Math.max(100, Math.min(50000, Number(n) || 1000));
@@ -1091,6 +1132,7 @@
           _lines.shift();
           const nd = _nodes.shift();
           if (nd && nd.parentNode) nd.parentNode.removeChild(nd);
+          _droppedEver++;
         }
       }
       // 新上限更大：不动 buffer，下次 push 触顶时 trim
@@ -1113,6 +1155,7 @@
       getText,
       lineCount,
       totalEver,
+      droppedCount,
       getMaxLines,
       setMaxLines,
       dispose

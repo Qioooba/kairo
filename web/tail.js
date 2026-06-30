@@ -38,8 +38,8 @@
   function getOpenerCred() {
     try {
       const op = window.opener;
-      if (op && op.DTB && op.DTB._tailCred && op.DTB._tailCred[system + '::' + server]) {
-        const c = op.DTB._tailCred[system + '::' + server];
+      if (op && op.Kairo && op.Kairo._tailCred && op.Kairo._tailCred[system + '::' + server]) {
+        const c = op.Kairo._tailCred[system + '::' + server];
         if (c && c.password) return { username: c.username || '', password: c.password };
       }
     } catch (e) { /* ignore (跨源 opener 会抛) */ }
@@ -71,6 +71,7 @@
   const btnClear = $('#btn-clear');
   const btnStop = $('#btn-stop');
   const btnClose = $('#btn-close');
+  const showLineNumbersInp = $('#show-line-numbers');
 
   let evtSrc = null;
   let tailId = null;
@@ -87,9 +88,9 @@
   }
 
   // ---- Tail 高亮面板（独立窗口版） ----
-  // 与 websphere.js 共享 DTB.core.tailHighlightPanel 工厂。
+  // 与 websphere.js 共享 Kairo.core.tailHighlightPanel 工厂。
   // 持久化策略：
-  //   1) 先尝试从 opener 的 DTB.state.tailHighlights 拿（项 9 修复：用户在主页刚设过）
+  //   1) 先尝试从 opener 的 Kairo.state.tailHighlights 拿（项 9 修复：用户在主页刚设过）
   //   2) 兜底：本地 fetch GET /api/preferences 读 tail.highlights
   //   3) 都没有：空列表
   // onChange：PUT /api/preferences + 回写 opener 的 state（同进程多窗口同步）
@@ -97,8 +98,8 @@
   async function initHighlightPanel() {
     let initial = [];
     try {
-      if (window.opener && window.opener.DTB && Array.isArray(window.opener.DTB.state && window.opener.DTB.state.tailHighlights)) {
-        initial = window.opener.DTB.state.tailHighlights;
+      if (window.opener && window.opener.Kairo && Array.isArray(window.opener.Kairo.state && window.opener.Kairo.state.tailHighlights)) {
+        initial = window.opener.Kairo.state.tailHighlights;
       }
     } catch (e) { /* ignore (跨源 opener 会抛) */ }
     if (!initial.length) {
@@ -107,13 +108,13 @@
         if (prefs && prefs.tail && Array.isArray(prefs.tail.highlights)) initial = prefs.tail.highlights;
       } catch (e) { /* ignore */ }
     }
-    highlightPanel = DTB.core.tailHighlightPanel({
+    highlightPanel = Kairo.core.tailHighlightPanel({
       initial,
       onChange: async (list) => {
         try {
-          if (window.opener && window.opener.DTB) {
-            window.opener.DTB.state = window.opener.DTB.state || {};
-            window.opener.DTB.state.tailHighlights = list;
+          if (window.opener && window.opener.Kairo) {
+            window.opener.Kairo.state = window.opener.Kairo.state || {};
+            window.opener.Kairo.state.tailHighlights = list;
           }
         } catch (e) { /* ignore */ }
         try {
@@ -139,11 +140,43 @@
   // viewer.pushBatch(arr) 内部会按当前 highlights 渲染每一行
   // —— 注意：viewer 创建时 highlightPanel 还没就绪（异步 initHighlightPanel 之后），
   // 但 getHighlights 用闭包读 highlightPanel 的 .enabled/.list，每次 push 重新读，所以没问题。
-  const viewer = DTB.core.tailViewer({
+  const viewer = Kairo.core.tailViewer({
     container: tailOut,
     maxLines: getMaxLines(),
     getHighlights: () => (highlightPanel && highlightPanel.enabled) ? highlightPanel.list : []
   });
+
+  // v0.6：行号显示开关。持久化到 localStorage（key 兼容 v0.6 前后页面刷新记忆），
+  // 默认开启。把 viewer.droppedCount() 写到 --tail-line-offset，CSS counter
+  // 会让 buffer 第一行的行号 = offset + 1，trim 后行号仍连续。
+  const LINE_NUM_KEY = 'kairo_tail_show_line_numbers';
+  let showLineNumbers = (function () {
+    try {
+      const raw = localStorage.getItem(LINE_NUM_KEY);
+      if (raw === null || raw === '') return true; // 默认开
+      return raw === '1' || raw === 'true';
+    } catch (e) { return true; }
+  })();
+  function applyLineNumberVisibility() {
+    if (showLineNumbers) tailOut.classList.add('show-line-numbers');
+    else tailOut.classList.remove('show-line-numbers');
+    syncLineNumberOffset();
+  }
+  function syncLineNumberOffset() {
+    if (!showLineNumbers) return;
+    // droppedCount = totalEver 中被 trim 掉的数量。buffer 第一行行号 = offset + 1
+    tailOut.style.setProperty('--tail-line-offset', String(viewer.droppedCount()));
+  }
+  if (showLineNumbersInp) {
+    showLineNumbersInp.checked = showLineNumbers;
+    showLineNumbersInp.addEventListener('change', () => {
+      showLineNumbers = !!showLineNumbersInp.checked;
+      try { localStorage.setItem(LINE_NUM_KEY, showLineNumbers ? '1' : '0'); } catch (e) { /* ignore */ }
+      applyLineNumberVisibility();
+    });
+  }
+  // 初始化：保证 viewer 创建完就同步一次（首屏可能已有容器初始文本）
+  applyLineNumberVisibility();
 
   // 批量 flush：100ms / 100 行
   function scheduleFlush() {
@@ -162,6 +195,7 @@
         tailOut.scrollTop = tailOut.scrollHeight;
       });
     }
+    syncLineNumberOffset();
     updateMeters();
   }
   // FE-005：保存 interval id，停止 / 关闭窗口时 clearInterval，避免路由切换或窗口关闭后 interval 持续运行。
@@ -201,11 +235,13 @@
     viewer.clear();
     pendingLines = [];
     rateEl.textContent = '实时显示中';
+    syncLineNumberOffset(); // clear 重置 droppedCount，offset 也要跟着归零让行号从 1 重新开始
   });
   // 项 11 修复：max-lines 改动时立即 trim 到新上限
   if (maxLinesInp) {
     maxLinesInp.addEventListener('change', () => {
       viewer.setMaxLines(getMaxLines());
+      syncLineNumberOffset(); // 缩小可能触发 dropped，需要重写 offset
     });
   }
   btnStop.addEventListener('click', async () => {
@@ -270,6 +306,7 @@
       btnStop.disabled = false;
       viewer.clear();
       pendingLines = [];
+      syncLineNumberOffset(); // 重连后 droppedCount 归零，offset 立刻同步（避免出现第一行号 = 旧值 + 1 的瞬间）
       appendInfo('已开启 tail · id=' + tailId + ' · 起始 ' + lines + ' 行');
       evtSrc = new EventSource('/api/logs/tail/' + tailId + '/events');
       evtSrc.onmessage = (ev) => {
@@ -296,10 +333,12 @@
   // P0-2：info/error 走 viewer.push 而不是直接操作 tailOut —— viewer 管 DOM
   function appendInfo(msg) {
     viewer.push('⟦info⟧ ' + msg, 'info');
+    syncLineNumberOffset(); // 单行 push 也可能 trim，同步 offset
     requestAnimationFrame(() => { tailOut.scrollTop = tailOut.scrollHeight; });
   }
   function appendError(msg) {
     viewer.push('⟦error⟧ ' + msg, 'error');
+    syncLineNumberOffset();
     requestAnimationFrame(() => { tailOut.scrollTop = tailOut.scrollHeight; });
   }
 

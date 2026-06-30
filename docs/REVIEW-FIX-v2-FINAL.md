@@ -1,4 +1,4 @@
-# 豆包工具箱 v2 plan 修复总报告（12 项 ChatGPT 审查遗留 + P3 体验 4 项）
+# Kairo v2 plan 修复总报告（12 项 ChatGPT 审查遗留 + P3 体验 4 项）
 
 日期：2026-06-23
 工作目录：`/Users/qi/Documents/spaces/ops-toolbox`
@@ -50,7 +50,7 @@ go vet ./...                        → 0 warning
 ### 2.2 Go 单元测试
 ```
 go test -mod=vendor -count=1 ./...  → 13/13 packages pass
-  doubao-toolbox                        0.020s
+  kairo                        0.020s
   internal/audit                     0.030s
   internal/config                    0.157s
   internal/credentials               0.506s

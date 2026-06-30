@@ -7,7 +7,7 @@ import (
 	"io"
 	"net/http"
 
-	"doubao-toolbox/internal/config"
+	"kairo/internal/config"
 )
 
 // ---------- /api/admin/servers ----------

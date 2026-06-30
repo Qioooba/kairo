@@ -1,12 +1,12 @@
 // Package portreuse 提供「端口被占时自动清理」能力。
 //
-// 背景：v0.6.1 之前，DoubaoToolbox.exe 双击启动时如果上一次还没完全退出，
+// 背景：v0.6.1 之前，Kairo.exe 双击启动时如果上一次还没完全退出，
 // 会立刻报 `bind: Only one usage of each socket address (protocol/network
 // address/port) is normally permitted.` 然后退出。对内网测试场景来说
 // 「双击重启」是高频操作，每次都要去任务管理器杀残留进程很烦。
 //
 // 策略：
-//   - Windows：自动检测残留 DoubaoToolbox.exe 并静默 taskkill；其它进程弹框询问
+//   - Windows：自动检测残留 Kairo.exe 并静默 taskkill；其它进程弹框询问
 //   - macOS/Linux：使用 lsof 检测占用进程，给出友好提示让用户手动处理，不强杀
 //
 // 任何步骤失败都不致命 —— 最差就是回到原来的"端口被占"错误，
@@ -43,7 +43,7 @@ type Result struct {
 //
 // 参数：
 //   - listenAddr: bind 时使用的地址，例如 "127.0.0.1:18090"
-//   - selfExePath: 当前 DoubaoToolbox.exe 的绝对路径（用于判断"是不是自己"）
+//   - selfExePath: 当前 Kairo.exe 的绝对路径（用于判断"是不是自己"）
 //   - selfPID: 当前进程 PID（额外保险：同名不同 exe 时也不杀）
 //   - enabled: config.yaml 里 kill_occupied_port 的值
 //

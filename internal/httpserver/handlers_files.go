@@ -17,11 +17,11 @@ import (
 
 	"golang.org/x/text/encoding/simplifiedchinese"
 
-	"doubao-toolbox/internal/config"
-	"doubao-toolbox/internal/dlmanager"
-	"doubao-toolbox/internal/downloads"
-	"doubao-toolbox/internal/sftpclient"
-	"doubao-toolbox/internal/sshclient"
+	"kairo/internal/config"
+	"kairo/internal/dlmanager"
+	"kairo/internal/downloads"
+	"kairo/internal/sftpclient"
+	"kairo/internal/sshclient"
 )
 
 // sftpDialer 把 SSH 连接变成 SFTP 客户端。
@@ -707,7 +707,7 @@ func validateTargetDir(raw string) (string, error) {
 	if err := os.MkdirAll(raw, 0o755); err != nil {
 		return "", fmt.Errorf("无法创建 target_dir %q: %w", raw, err)
 	}
-	probe := filepath.Join(raw, ".doubao-toolbox-write-test")
+	probe := filepath.Join(raw, ".kairo-write-test")
 	if err := os.WriteFile(probe, []byte("ok"), 0o600); err != nil {
 		return "", fmt.Errorf("target_dir %q 不可写: %w", raw, err)
 	}

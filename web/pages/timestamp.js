@@ -18,10 +18,10 @@
 
 (function () {
   'use strict';
-  const DTB = window.DTB = window.DTB || {};
-  DTB.pages = DTB.pages || {};
-  const { el, toast, copyToClipboard } = DTB.core;
-  const { api } = DTB.api;
+  const Kairo = window.Kairo = window.Kairo || {};
+  Kairo.pages = Kairo.pages || {};
+  const { el, toast, copyToClipboard } = Kairo.core;
+  const { api } = Kairo.api;
 
   // 常用 IANA 时区（前端下拉够用）
   const COMMON_TZ = [
@@ -152,8 +152,8 @@
     ]));
   }
 
-  DTB.pages.timestamp = renderTimestamp;
-  DTB.state.routes.timestamp = renderTimestamp;
-  DTB.state.routeNames.timestamp = '时间戳';
-  DTB.state.routeSubs.timestamp = 'Unix / ISO / 人类可读 互转';
+  Kairo.pages.timestamp = renderTimestamp;
+  Kairo.state.routes.timestamp = renderTimestamp;
+  Kairo.state.routeNames.timestamp = '时间戳';
+  Kairo.state.routeSubs.timestamp = 'Unix / ISO / 人类可读 互转';
 })();

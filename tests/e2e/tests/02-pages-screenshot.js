@@ -105,8 +105,8 @@ function register(runner, ctx) {
                   const beforeErrors = consoleLogs.filter(function (l) { return l.type === 'error'; }).length;
 
                   await page.evaluate(function (theme) {
-                    if (window.DTB && window.DTB.theme) {
-                      window.DTB.theme.set(theme);
+                    if (window.Kairo && window.Kairo.theme) {
+                      window.Kairo.theme.set(theme);
                     } else {
                       document.documentElement.setAttribute('data-theme', theme);
                     }

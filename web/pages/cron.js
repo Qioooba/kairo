@@ -10,10 +10,10 @@
 
 (function () {
   'use strict';
-  const DTB = window.DTB = window.DTB || {};
-  DTB.pages = DTB.pages || {};
-  const { el, toast, copyToClipboard } = DTB.core;
-  const { api } = DTB.api;
+  const Kairo = window.Kairo = window.Kairo || {};
+  Kairo.pages = Kairo.pages || {};
+  const { el, toast, copyToClipboard } = Kairo.core;
+  const { api } = Kairo.api;
 
   const COMMON_TZ = [
     'Local', 'UTC',
@@ -175,8 +175,8 @@
     ]));
   }
 
-  DTB.pages.cron = renderCron;
-  DTB.state.routes.cron = renderCron;
-  DTB.state.routeNames.cron = 'Cron 解析';
-  DTB.state.routeSubs.cron = '表达式 / 描述符 / 5+3 次运行';
+  Kairo.pages.cron = renderCron;
+  Kairo.state.routes.cron = renderCron;
+  Kairo.state.routeNames.cron = 'Cron 解析';
+  Kairo.state.routeSubs.cron = '表达式 / 描述符 / 5+3 次运行';
 })();

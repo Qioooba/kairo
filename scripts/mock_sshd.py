@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Mock SSH server for 豆包工具箱 模拟验收。
+Mock SSH server for Kairo 模拟验收。
 
 行为：
 - 监听 127.0.0.1:2222
@@ -11,7 +11,7 @@ Mock SSH server for 豆包工具箱 模拟验收。
 - 支持同一连接多次 exec_channel
 
 GNU→BSD 兼容：把 `find -printf 'fmt'` 翻译成 `find -exec stat -f 'fmt' {} +`
-路径映射：把 豆包工具箱 配置里的"远程绝对路径"替换为 FAKE_ROOT 下的相对路径
+路径映射：把 Kairo 配置里的"远程绝对路径"替换为 FAKE_ROOT 下的相对路径
 
 依赖：pip install paramiko
 """
@@ -41,7 +41,7 @@ PASSWORD = os.environ.get("MOCK_SSHD_PASSWORD", "test")
 FAKE_ROOT = os.environ.get("FAKE_ROOT", os.path.abspath(os.path.join(os.path.dirname(__file__), "fake-websphere")))
 FAKE_FILES_ROOT = os.environ.get("FAKE_FILES_ROOT", os.path.abspath(os.path.join(os.path.dirname(__file__), "fake-files")))
 
-# 把 豆包工具箱 配置里的远程绝对路径映射到 FAKE_ROOT 下的相对路径。
+# 把 Kairo 配置里的远程绝对路径映射到 FAKE_ROOT 下的相对路径。
 PATH_MAP = {
     "/opt/IBM/WebSphere/AppServer/profiles/AppSrv01/logs/server1":
         "opt/IBM/WebSphere/AppServer/profiles/AppSrv01/logs/server1",

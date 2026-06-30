@@ -3,20 +3,21 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <link rel="icon" type="image/png" sizes="32x32" href="/static/img/favicon.png" />
+  <link rel="icon" type="image/png" sizes="32x32" href="/static/img/favicon-32.png" />
   <link rel="icon" type="image/png" sizes="64x64" href="/static/img/favicon-64.png" />
   <link rel="icon" type="image/png" sizes="192x192" href="/static/img/favicon-192.png" />
-  <title>实时 tail · 豆包工具箱</title>
+  <title>实时 tail · Kairo · 天命契机</title>
   <script>
     // 提前读 localStorage 设置主题，避免 FOUC（页面闪烁）
     (function() {
       try {
-        if (!localStorage.getItem('dtb_theme')) {
-          var oldTheme = localStorage.getItem('otb_theme');
-          if (oldTheme) localStorage.setItem('dtb_theme', oldTheme);
+        var t = localStorage.getItem('kairo_theme');
+        if (!t) {
+          var oldT = localStorage.getItem('dtb_theme') || localStorage.getItem('otb_theme');
+          if (oldT) localStorage.setItem('kairo_theme', oldT);
+          t = oldT;
         }
-        var t = localStorage.getItem('dtb_theme');
-        if (t === 'dark' || t === 'light' || t === 'green' || t === 'hc') {
+        if (t === 'dark' || t === 'light' || t === 'green' || t === 'hc' || t === 'xianxia') {
           document.documentElement.setAttribute('data-theme', t);
         }
       } catch (e) {}
@@ -106,6 +107,11 @@
         <button id="btn-clear" class="btn">清屏</button>
         <button id="btn-stop" class="btn btn-danger">停止 tail</button>
         <button id="btn-close" class="btn">关闭本页</button>
+        <!-- v0.6：行号显示开关。默认开，localStorage 记忆，trim 后行号仍连续（CSS counter offset） -->
+        <label class="inline">
+          <input type="checkbox" id="show-line-numbers" />
+          <span>行号</span>
+        </label>
         <!-- 项 11 修复：可配的"最多保留 N 行"上限（默认 1000）—— 大日志场景下避免页面卡 -->
         <label class="inline" style="margin-left:auto;">
           <span class="text-dim">最多保留</span>

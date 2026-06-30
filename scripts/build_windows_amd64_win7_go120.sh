@@ -21,18 +21,18 @@
 #        GO120_HOME=~/sdk/go120 ./scripts/build_windows_amd64_win7_go120.sh v0.1.0
 #
 # 产物：
-#   ./dist/doubao-toolbox-v0.1.0-win7/豆包工具箱_win7.exe
+#   ./dist/kairo-v0.1.0-win7/Kairo_win7.exe
 #
 # 验证 Win7 兼容：
 #   把产物 + config.yaml + downloads/ + logs/ + data/ 拷到一台 Win7 机器上，
-#   用 cmd 启动 豆包工具箱_win7.exe 验证。
+#   用 cmd 启动 Kairo_win7.exe 验证。
 
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
 VER="${1:-v0.1.0}"
-OUT_DIR="dist/doubao-toolbox-${VER}-win7"
+OUT_DIR="dist/kairo-${VER}-win7"
 mkdir -p "${OUT_DIR}"
 
 if [[ -z "${GO120_HOME:-}" ]]; then
@@ -73,7 +73,7 @@ else
   echo ">> 提示：vendor/ 目录缺失，回退到 module 模式（建议先跑 go mod vendor）"
 fi
 
-"${GO_BIN}" build "${GO_MOD_FLAGS[@]}" -trimpath -ldflags "-s -w -H windowsgui" -o "${OUT_DIR}/豆包工具箱_win7.exe" .
+"${GO_BIN}" build "${GO_MOD_FLAGS[@]}" -trimpath -ldflags "-s -w -H windowsgui" -o "${OUT_DIR}/Kairo_win7.exe" .
 
 # config.yaml 优先，缺则回退到 config.yaml.production.example，再缺则报错。
 if [[ -f config.yaml ]]; then
@@ -94,4 +94,4 @@ echo
 echo ">> 已生成："
 ls -lh "${OUT_DIR}/"
 echo
-echo ">> 提示：把这个目录拷到 Win7 机器上，双击 豆包工具箱_win7.exe 即可（托盘右键退出）"
+echo ">> 提示：把这个目录拷到 Win7 机器上，双击 Kairo_win7.exe 即可（托盘右键退出）"

@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"doubao-toolbox/internal/formatter"
+	"kairo/internal/formatter"
 )
 
 type formatJSONReq struct {

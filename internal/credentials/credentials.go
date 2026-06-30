@@ -4,7 +4,7 @@
 //   - disabled       → 不持久化密码，每次都需要用户手动输入
 //
 // 设计要点：
-//   - Service 固定为 "DoubaoToolbox"，account 编码为 "system|server|username"；
+//   - Service 固定为 "Kairo"，account 编码为 "system|server|username"；
 //   - 永远不会把密码写进 audit.log、URL、错误信息或前端响应；
 //   - keyring 不可用时返回 ErrUnavailable，前端提示用户"无法访问系统钥匙串"；
 //   - file 模式使用 AES-256-GCM 加密，密钥从 credential_key 配置读取，
@@ -30,7 +30,7 @@ import (
 	"github.com/zalando/go-keyring"
 )
 
-const Service = "DoubaoToolbox"
+const Service = "Kairo"
 
 const (
 	ModeKeyring  = "keyring"

@@ -8,18 +8,18 @@
  *   - 单下标访问元素：items.1
  *   - 嵌套数组用 # 递归：friends.#(last=="Murphy")#.first
  *
- * 历史记录走 localStorage（key=dtb:jsonpath:history），最多 20 条。
+ * 历史记录走 localStorage（key=kairo:jsonpath:history），最多 20 条。
  */
 
 (function () {
   'use strict';
-  const DTB = window.DTB = window.DTB || {};
-  DTB.pages = DTB.pages || {};
-  const { el, toast, copyToClipboard } = DTB.core;
-  const { api } = DTB.api;
+  const Kairo = window.Kairo = window.Kairo || {};
+  Kairo.pages = Kairo.pages || {};
+  const { el, toast, copyToClipboard } = Kairo.core;
+  const { api } = Kairo.api;
 
-  const LS_HISTORY = 'dtb:jsonpath:history';
-  const LS_LAST = 'dtb:jsonpath:last';
+  const LS_HISTORY = 'kairo:jsonpath:history';
+  const LS_LAST = 'kairo:jsonpath:last';
   const MAX_HIST = 20;
 
   // ---------- 历史 ----------
@@ -193,8 +193,8 @@
     ]));
   }
 
-  DTB.pages.jsonpath = renderJSONPath;
-  DTB.state.routes.jsonpath = renderJSONPath;
-  DTB.state.routeNames.jsonpath = 'JSONPath';
-  DTB.state.routeSubs.jsonpath = 'gjson 路径提取';
+  Kairo.pages.jsonpath = renderJSONPath;
+  Kairo.state.routes.jsonpath = renderJSONPath;
+  Kairo.state.routeNames.jsonpath = 'JSONPath';
+  Kairo.state.routeSubs.jsonpath = 'gjson 路径提取';
 })();

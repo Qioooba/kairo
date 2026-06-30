@@ -1,14 +1,14 @@
 (function () {
   'use strict';
-  const DTB = window.DTB = window.DTB || {};
-  DTB.pages = DTB.pages || {};
-  const { el, toast } = DTB.core;
-  const { api } = DTB.api;
+  const Kairo = window.Kairo = window.Kairo || {};
+  Kairo.pages = Kairo.pages || {};
+  const { el, toast } = Kairo.core;
+  const { api } = Kairo.api;
 
   let lastResult = null;
   let outputMode = 'unified';
   let hideEqualRows = false;
-  const POPUP_NAME = 'dtb_compare_diff';
+  const POPUP_NAME = 'kairo_compare_diff';
 
   let folderScanResult = null;
   let folderExpanded = new Set();
@@ -19,13 +19,13 @@
   let isScanning = false;
   let isDeepChecking = false;
 
-  const LS_IGNORE = 'dtb:compare:ignore';
-  const LS_MODE = 'dtb:compare:mode';
-  const LS_HIDE_EQUAL = 'dtb:compare:hideEqual';
-  const LS_LEFT_FOLDER = 'dtb:compare:left_folder';
-  const LS_RIGHT_FOLDER = 'dtb:compare:right_folder';
-  const LS_SCAN_MODE = 'dtb:compare:scan_mode';
-  const LS_IGNORE_EXTS = 'dtb:compare:ignore_exts';
+  const LS_IGNORE = 'kairo:compare:ignore';
+  const LS_MODE = 'kairo:compare:mode';
+  const LS_HIDE_EQUAL = 'kairo:compare:hideEqual';
+  const LS_LEFT_FOLDER = 'kairo:compare:left_folder';
+  const LS_RIGHT_FOLDER = 'kairo:compare:right_folder';
+  const LS_SCAN_MODE = 'kairo:compare:scan_mode';
+  const LS_IGNORE_EXTS = 'kairo:compare:ignore_exts';
 
   function loadIgnore() {
     try {
@@ -173,13 +173,13 @@
 
     const theme = (document.documentElement.getAttribute('data-theme') || 'dark');
     const statsText = stats ? ('新增 ' + stats.added + ' 行·删除 ' + stats.removed + ' 行') : '';
-    const primaryColor = theme === 'light' ? '#2563eb' : theme === 'hc' ? '#00ffff' : theme === 'green' ? '#3f7a3f' : '#4f8cff';
-    const bgColor = theme === 'light' ? '#ffffff' : theme === 'hc' ? '#000000' : theme === 'green' ? '#fbfdf7' : '#11161f';
-    const bg2Color = theme === 'light' ? '#f6f8fa' : theme === 'hc' ? '#0a0a0a' : theme === 'green' ? '#eef3e7' : '#1d2532';
-    const lineColor = theme === 'light' ? '#d8dee4' : theme === 'hc' ? '#ffffff' : theme === 'green' ? '#cfd9c0' : '#232b3a';
-    const textColor = theme === 'light' ? '#1f2328' : theme === 'hc' ? '#ffff00' : theme === 'green' ? '#1f2a1f' : '#e6edf3';
-    const textDimColor = theme === 'light' ? '#5a6678' : theme === 'hc' ? '#ffffaa' : theme === 'green' ? '#4d5d4d' : '#8b97a8';
-    const textMuteColor = theme === 'light' ? '#8b97a8' : theme === 'hc' ? '#ccc888' : theme === 'green' ? '#6b7a6b' : '#5a6678';
+    const primaryColor = theme === 'light' ? '#2563eb' : theme === 'hc' ? '#00ffff' : theme === 'green' ? '#3f7a3f' : theme === 'xianxia' ? '#4a7a6a' : '#4f8cff';
+    const bgColor = theme === 'light' ? '#ffffff' : theme === 'hc' ? '#000000' : theme === 'green' ? '#fbfdf7' : theme === 'xianxia' ? '#f5f8f7' : '#11161f';
+    const bg2Color = theme === 'light' ? '#f6f8fa' : theme === 'hc' ? '#0a0a0a' : theme === 'green' ? '#eef3e7' : theme === 'xianxia' ? '#e8efe9' : '#1d2532';
+    const lineColor = theme === 'light' ? '#d8dee4' : theme === 'hc' ? '#ffffff' : theme === 'green' ? '#cfd9c0' : theme === 'xianxia' ? '#b8c5be' : '#232b3a';
+    const textColor = theme === 'light' ? '#1f2328' : theme === 'hc' ? '#ffff00' : theme === 'green' ? '#1f2a1f' : theme === 'xianxia' ? '#1a2320' : '#e6edf3';
+    const textDimColor = theme === 'light' ? '#5a6678' : theme === 'hc' ? '#ffffaa' : theme === 'green' ? '#4d5d4d' : theme === 'xianxia' ? '#4a5a54' : '#8b97a8';
+    const textMuteColor = theme === 'light' ? '#8b97a8' : theme === 'hc' ? '#ccc888' : theme === 'green' ? '#6b7a6b' : theme === 'xianxia' ? '#70827b' : '#5a6678';
 
     const payload = {
       unified: unifiedDiff || '',
@@ -1293,7 +1293,7 @@
     return el('label', { class: 'cmp-opt', style: 'display:flex; align-items:center; gap:4px;' }, [input, document.createTextNode(' ' + label)]);
   }
 
-  DTB.pages.compare = renderCompare;
-  DTB.state.routes.compare = renderCompare;
-  DTB.state.routeNames.compare = '代码比对';
+  Kairo.pages.compare = renderCompare;
+  Kairo.state.routes.compare = renderCompare;
+  Kairo.state.routeNames.compare = '代码比对';
 })();

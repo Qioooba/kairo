@@ -1,6 +1,6 @@
 <div align="center">
 
-# 豆包工具箱 · Doubao Toolbox
+# Kairo · 天命契机
 
 **跨平台 · 纯 Go 单 exe · 启动即用 · 系统托盘常驻 · 默认仅本机访问**
 
@@ -19,9 +19,9 @@
 
 ---
 
-## ✨ 为什么是豆包工具箱
+## ✨ 为什么是Kairo
 
-| 痛点 | 豆包工具箱的解法 |
+| 痛点 | Kairo的解法 |
 | --- | --- |
 | 排查 WebSphere 老系统日志要 SSH 登十几台机器，循环 `grep` / `tail` | 浏览器里勾服务器 × 日志目录，1–16 路并发搜索，结果按主机分组 + 命中数 + 耗时 |
 | 老 OpenSSH 6.2p2 / AIX / WebSphere 服务器 SSH 连不上 | 内置 3 套 SSH compat profile 自动 fallback（curve25519 → ECDH → DH-sha1），`x/crypto v0.31.0` 完整支持 `diffie-hellman-group14-sha256` |
@@ -39,20 +39,20 @@
 
 ### 方式 A：直接运行发版 exe（同事拿到包就这样用）
 
-1. 解压发版 zip 到任意目录，比如 `D:\doubao-toolbox\`
-2. **双击 `DoubaoToolbox.exe`**：
+1. 解压发版 zip 到任意目录，比如 `D:\kairo\`
+2. **双击 `Kairo.exe`**：
    - 无控制台黑窗口弹出
    - 浏览器自动打开 `http://127.0.0.1:18080`
-   - **系统托盘**（右下角）出现豆包图标，常驻进程
+   - **系统托盘**（右下角）出现 Kairo 图标，常驻进程
 3. 右键托盘图标可 **「打开浏览器」** 或 **「退出」**
 4. 启动失败会弹 MessageBox 提示错误内容（按 Ctrl+C 可复制），同时写 `crash.log`
-5. 运行日志在 `logs/doubao-toolbox.log`
+5. 运行日志在 `logs/kairo.log`
 
 ### 方式 B：开发模式
 
 ```bash
 git clone <repo-url>
-cd doubao-toolbox
+cd kairo
 go run .
 ```
 
@@ -71,7 +71,7 @@ go run .
 
 | 偏好 | 存哪 | 何时回填 |
 | --- | --- | --- |
-| **Tail 高亮规则** | `data/preferences.json` 的 `tail.highlights` | 主页 `app.js` 启动时 `GET /api/preferences` 拉到 `DTB.state.tailHighlights`；websphere tail tab / 独立 tail 窗口共用 |
+| **Tail 高亮规则** | `data/preferences.json` 的 `tail.highlights` | 主页 `app.js` 启动时 `GET /api/preferences` 拉到 `Kairo.state.tailHighlights`；websphere tail tab / 独立 tail 窗口共用 |
 | **系统配置** | `config.yaml`（COW Manager 热替换） | 启动时 Load → 立即生效；页面保存后立即写盘 |
 | **凭据模式** | `app.credential_store`（默认 keyring） | 启动时 `credentials.SetMode` |
 | **SSH 日志 / compat profile** | `app.ssh_debug` / `app.ssh_traffic_dump` / `app.ssh_compat_profile` | 启动时 `sshclient.SetLogConfig` / `SetDefaultProfile` |
@@ -82,12 +82,12 @@ go run .
 
 | 偏好 | 键 |
 | --- | --- |
-| 主题（dark / light / green / hc） | `dtb_theme`（老 `otb_theme` 自动迁移） |
-| WebSphere 上次选的「系统 / 服务器 / 目录 / 用户名」 | `dtb:last:websphere:sel`（老 `otb:last:websphere:sel` 自动迁移） |
-| 文件下载页「当前路径 / 过滤词」 | `dtb:last:files:sel` / `dtb:last:files:filter` |
-| WebSphere 目标区折叠 / 展开 | `dtb:last:websphere:target_collapsed` |
-| 提示 banner 关闭状态 | `dtb:dismissed:*`（老 `otb:dismissed:*` 自动迁移） |
-| 实时 tail 凭据（单次内存 → opener 共享，不进 LS） | `window.opener.DTB._tailCred` |
+| 主题（dark / light / green / hc） | `kairo_theme`（老 `dtb_theme` / `otb_theme` 自动迁移） |
+| WebSphere 上次选的「系统 / 服务器 / 目录 / 用户名」 | `kairo:last:websphere:sel`（老 `dtb:last:websphere:sel` / `otb:last:websphere:sel` 自动迁移） |
+| 文件下载页「当前路径 / 过滤词」 | `kairo:last:files:sel` / `kairo:last:files:filter` |
+| WebSphere 目标区折叠 / 展开 | `kairo:last:websphere:target_collapsed` |
+| 提示 banner 关闭状态 | `kairo:dismissed:*`（老 `dtb:dismissed:*` / `otb:dismissed:*` 自动迁移） |
+| 实时 tail 凭据（单次内存 → opener 共享，不进 LS） | `window.opener.Kairo._tailCred` |
 
 > 注意：localStorage 是浏览器本地存储，**换浏览器 / 清缓存 / 隐身模式**会丢；
 > 想跨电脑同步就走 `data/preferences.json`（tail 高亮目前走的这条路径）。
@@ -472,7 +472,7 @@ python scripts/fake-websphere/     # 假 WebSphere 日志布局
 ### macOS / Linux 上交叉编译 Windows exe
 
 ```bash
-cd doubao-toolbox
+cd kairo
 
 # 第一次 clone 后，把依赖固化到 vendor/
 go mod vendor
@@ -480,12 +480,12 @@ go mod vendor
 # 主版本（Win10/11）— -H windowsgui 让双击无控制台，走系统托盘
 GOOS=windows GOARCH=amd64 CGO_ENABLED=0 \
   go build -mod=vendor -trimpath -ldflags "-s -w -H windowsgui" \
-  -o DoubaoToolbox.exe .
+  -o Kairo.exe .
 
 # 或用脚本（自动检测 vendor/ 是否存在）
 ./scripts/build_windows_amd64.sh v0.5.0
 ./scripts/package_windows.sh v0.5.0
-# → dist/doubao-toolbox-v0.5.0-windows.zip
+# → dist/kairo-v0.5.0-windows.zip
 ```
 
 ### 编译 Win7 兼容版
@@ -502,21 +502,21 @@ tar -C ~/sdk/go120 -xzf /tmp/go1.20.14.darwin-amd64.tar.gz --strip-components=1
 # 2) 编译（脚本同样会自动 -mod=vendor）
 export GO120_HOME=~/sdk/go120
 ./scripts/build_windows_amd64_win7_go120.sh v0.5.0
-# → dist/doubao-toolbox-v0.5.0-win7/豆包工具箱_win7.exe
+# → dist/kairo-v0.5.0-win7/Kairo_win7.exe
 ```
 
 ### 发版给同事要打什么包
 
 ```
-DoubaoToolbox.exe              # 主程序（Win10/11）— 双击即用，无控制台，托盘常驻
-# 或 豆包工具箱_win7.exe   # Win7 兼容版
+Kairo.exe              # 主程序（Win10/11）— 双击即用，无控制台，托盘常驻
+# 或 Kairo_win7.exe   # Win7 兼容版
 config.yaml                 # 配置文件
 README.md                   # 本文件
 ```
 
 > 双击 exe 后自动创建 `downloads/`、`logs/`、`data/` 目录。
 > 启动失败弹 MessageBox（Ctrl+C 可复制）+ 写 `crash.log`。
-> 运行日志在 `logs/doubao-toolbox.log`。
+> 运行日志在 `logs/kairo.log`。
 > 不要把源码、scripts、docs、dist 目录发出去。
 
 ---
@@ -527,7 +527,7 @@ README.md                   # 本文件
 
 ```yaml
 app:
-  name: 豆包工具箱
+  name: Kairo
   host: 127.0.0.1                # 默认仅 127.0.0.1 / localhost；启用 auth 后允许 0.0.0.0 / 内网 IP
   port: 18080                    # 端口被占用就换一个
   auto_open_browser: true
@@ -596,7 +596,7 @@ systems:
 ## 📁 项目结构
 
 ```
-doubao-toolbox/
+kairo/
 ├── main.go                      # 入口：解析 -workdir / 加载 config / 起 HTTP server
 ├── debug_run.go                 # 调试辅助
 ├── config.yaml                  # 运行时配置
@@ -612,7 +612,7 @@ doubao-toolbox/
 │   ├── core.js / api.js / state.js / app.js
 │   ├── auth.js                  # Bearer token 登录遮罩（v0.9 起）
 │   ├── tail.js                  # 独立 tail 窗口逻辑（v0.9 起）
-│   ├── img/                     # 豆包官方图标（128/64/favicon，Retina 多尺寸）
+│   ├── img/                     # Kairo 官方图标（128/64/favicon，Retina 多尺寸）
 │   ├── vendor/                  # 第三方前端库（diff2html.min.{js,css}）
 │   ├── app.test.js              # Node 单测
 │   └── pages/
@@ -758,7 +758,7 @@ v0.2 起在「系统配置」页直接编辑保存即可，无需重启。手编
 <details>
 <summary><b>Q: Win7 上跑不起来？</b></summary>
 
-必须用 Go 1.20.x 编译的 `豆包工具箱_win7.exe`，主版本在 Win7 上跑不起来（Go 1.21+ 不再支持 Win7）。
+必须用 Go 1.20.x 编译的 `Kairo_win7.exe`，主版本在 Win7 上跑不起来（Go 1.21+ 不再支持 Win7）。
 </details>
 
 <details>
@@ -804,7 +804,7 @@ v0.2 起在「系统配置」页直接编辑保存即可，无需重启。手编
 - **主题修复**：green / hc 主题 inline code 背景色修复、文字对比度提升；独立 tail 窗口主题同步（head 内联脚本防 FOUC）
 - **HTTP 页面优化**：侧边栏宽度、Send 按钮圆角 + 居中 + hover 动效
 - **全局样式**：主按钮 hover 上浮阴影、工具类间距、cmd-syntax 右侧 padding
-- **图标替换**：豆包官方高清图标（RGBA 透明背景 + Retina 多尺寸）替换旧 logo
+- **图标替换**：Kairo 高清图标（RGBA 透明背景 + Retina 多尺寸）替换旧 logo
 
 #### E2E 测试基础设施
 
@@ -842,7 +842,7 @@ v0.2 起在「系统配置」页直接编辑保存即可，无需重启。手编
 #### P0 Bug Fix
 
 - **#20 配置持久化**（重启 + tab 切换都不丢）
-  - 前端 `DTB.state.configEditor` 提到模块级 + `loaded` flag，切 tab 不再 GET 覆盖未保存编辑
+  - 前端 `Kairo.state.configEditor` 提到模块级 + `loaded` flag，切 tab 不再 GET 覆盖未保存编辑
   - 离开页面 `unsavedConfig` 标志 + `window.confirm`
   - 后端 `Manager.Replace` 已验证正确
   - 测试：`TestReplace_FullRestartRoundTrip` 5 阶段端到端

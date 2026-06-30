@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"kairo/internal/sysutil"
 )
 
 // revealInFileManager 跨平台"在文件管理器里打开并选中文件"。
@@ -44,7 +46,10 @@ func revealInFileManager(path string) error {
 	case "windows":
 		// explorer.exe /select,<path>：选中文件
 		// 注意 /select 后紧跟逗号，逗号后是路径；逗号必须紧贴、不能用空格分隔
-		cmd := exec.Command("explorer.exe", "/select,"+path)
+		// Windows 命令行不支持正斜杠，拼 explorer 参数前先转成反斜杠
+		winPath := strings.ReplaceAll(path, "/", "\\")
+		cmd := exec.Command("explorer.exe", "/select,"+winPath)
+		sysutil.HideConsoleWindow(cmd) // 双击 GUI exe 启动时避免弹 cmd 黑框
 		if err := cmd.Start(); err != nil {
 			return fmt.Errorf("explorer.exe 失败: %w", err)
 		}
@@ -135,7 +140,8 @@ if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
 	$dlg.FileName
 }
 `
-		cmd := exec.Command("powershell", "-NoProfile", "-STA", "-Command", psScript)
+		cmd := exec.Command("powershell", "-NoProfile", "-STA", "-WindowStyle", "Hidden", "-Command", psScript)
+		sysutil.HideConsoleWindow(cmd) // CREATE_NO_WINDOW：powershell 启动时也会先建 conhost，加这个彻底消失
 		var out bytes.Buffer
 		cmd.Stdout = &out
 		cmd.Stderr = &out
@@ -181,7 +187,8 @@ if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
 	$dlg.SelectedPath
 }
 `
-		cmd := exec.Command("powershell", "-NoProfile", "-STA", "-Command", psScript)
+		cmd := exec.Command("powershell", "-NoProfile", "-STA", "-WindowStyle", "Hidden", "-Command", psScript)
+		sysutil.HideConsoleWindow(cmd) // CREATE_NO_WINDOW：powershell 启动时也会先建 conhost，加这个彻底消失
 		var out bytes.Buffer
 		cmd.Stdout = &out
 		cmd.Stderr = &out

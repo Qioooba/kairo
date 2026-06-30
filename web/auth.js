@@ -5,14 +5,22 @@
  *   - 登录成功后在顶栏显示当前用户名和登出按钮
  *   - API 请求 401 时自动弹出登录遮罩
  *
- * 暴露：window.DTB.auth
+ * 暴露：window.Kairo.auth
  */
 (function () {
   'use strict';
 
-  if (!window.DTB) window.DTB = {};
-  if (window.DTB.auth) return;
-  const auth = window.DTB.auth = {};
+  if (!window.Kairo) window.Kairo = {};
+  if (window.Kairo.auth) return;
+  const auth = window.Kairo.auth = {};
+
+  // v0.9 rebrand: 一次性迁移 sessionStorage 用户名键（dtb_auth_user / otb_auth_user → kairo_auth_user）
+  try {
+    if (!sessionStorage.getItem('kairo_auth_user')) {
+      var oldUser = sessionStorage.getItem('dtb_auth_user') || sessionStorage.getItem('otb_auth_user');
+      if (oldUser) sessionStorage.setItem('kairo_auth_user', oldUser);
+    }
+  } catch (_) { /* ignore */ }
 
   let _overlay = null;
   let _userLabel = null;
@@ -128,13 +136,13 @@
     buildUserArea();
     if (_userLabel) _userLabel.textContent = name ? ('👤 ' + name) : '';
     if (_logoutBtn) _logoutBtn.style.display = name ? '' : 'none';
-    try { sessionStorage.setItem('dtb_auth_user', name || ''); } catch (e) {}
+    try { sessionStorage.setItem('kairo_auth_user', name || ''); } catch (e) {}
   }
 
   function hideUser() {
     if (_userLabel) _userLabel.textContent = '';
     if (_logoutBtn) _logoutBtn.style.display = 'none';
-    try { sessionStorage.removeItem('dtb_auth_user'); } catch (e) {}
+    try { sessionStorage.removeItem('kairo_auth_user'); } catch (e) {}
   }
 
   async function doLogout() {
@@ -178,7 +186,7 @@
       if (!resp.ok) return false;
       const data = await resp.json();
       if (data.auth_required) {
-        try { sessionStorage.removeItem('dtb_auth_user'); } catch (e) {}
+        try { sessionStorage.removeItem('kairo_auth_user'); } catch (e) {}
         await auth.requireLogin();
         return true;
       } else {
@@ -192,12 +200,12 @@
 
   auth.logout = doLogout;
   auth.getUser = function () {
-    try { return sessionStorage.getItem('dtb_auth_user') || ''; } catch (e) { return ''; }
+    try { return sessionStorage.getItem('kairo_auth_user') || ''; } catch (e) { return ''; }
   };
 
   function init() {
     let cached = '';
-    try { cached = sessionStorage.getItem('dtb_auth_user') || ''; } catch (e) {}
+    try { cached = sessionStorage.getItem('kairo_auth_user') || ''; } catch (e) {}
     if (cached) showUser(cached);
     auth.checkAuth();
   }

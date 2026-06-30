@@ -72,7 +72,7 @@ func TestIsUnavailableDetection(t *testing.T) {
 // TestKeyringRoundTrip 真正地跟 OS keyring 走一遍（不依赖 mock）。
 // 在没有 keyring 的环境（CI / Linux 容器）会跳过，标记为 t.Skip。
 //
-// 这里采用独立的 service 命名（"DoubaoToolboxTest"），避免污染真实数据。
+// 这里采用独立的 service 命名（"KairoTest"），避免污染真实数据。
 func TestKeyringRoundTrip(t *testing.T) {
 	origService := Service
 	t.Cleanup(func() { /* nothing — package-level const */ })

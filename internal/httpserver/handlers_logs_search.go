@@ -12,9 +12,9 @@ import (
 	"strings"
 	"time"
 
-	"doubao-toolbox/internal/config"
-	"doubao-toolbox/internal/logquery"
-	"doubao-toolbox/internal/sshclient"
+	"kairo/internal/config"
+	"kairo/internal/logquery"
+	"kairo/internal/sshclient"
 )
 
 type logsSearchReq struct {

@@ -52,7 +52,7 @@ async function main() {
   const headless = args.headed ? false : HEADLESS;
 
   console.log('='.repeat(60));
-  console.log('豆包工具箱 E2E 测试');
+  console.log('Kairo E2E 测试');
   console.log('='.repeat(60));
   console.log('服务地址:', BASE_URL);
   console.log('模式:', headless ? 'headless' : 'headed');
@@ -61,7 +61,7 @@ async function main() {
   const svc = await checkService(BASE_URL + '/');
   if (!svc.reachable) {
     console.error('❌ 服务不可达:', BASE_URL);
-    console.error('请先启动服务: ./doubao-toolbox 或 go run .');
+    console.error('请先启动服务: ./kairo 或 go run .');
     process.exit(1);
   }
   console.log('✅ 服务可达 (HTTP ' + svc.statusCode + ')');

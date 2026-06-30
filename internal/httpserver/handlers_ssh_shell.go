@@ -98,6 +98,11 @@ func (s *Server) handleSSHShellWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rows, cols := parseRowsCols(r)
+	// encoding：终端输出编码，默认 utf-8，可选 gbk（老 WebSphere / Oracle 终端）
+	encoding := r.URL.Query().Get("encoding")
+	if encoding == "" {
+		encoding = "utf-8"
+	}
 	username := srvCfg.Username
 
 	// ---- 2. 升级 WS ----
@@ -192,7 +197,7 @@ func (s *Server) handleSSHShellWS(w http.ResponseWriter, r *http.Request) {
 	// ---- 6. Shell ----
 	shellCtx, cancelShell := context.WithCancel(context.Background())
 	defer cancelShell()
-	shell, err := cli.Shell(shellCtx, sshclient.DefaultTERM, rows, cols, nil)
+	shell, err := cli.Shell(shellCtx, sshclient.DefaultTERM, rows, cols, nil, encoding)
 	if err != nil {
 		clean := sshclient.SanitizeError(err.Error())
 		s.audit.Write("ssh.shell.end", "system", system, "server", server,

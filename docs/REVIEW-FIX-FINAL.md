@@ -1,4 +1,4 @@
-# 豆包工具箱 24 项代码审查修复 - 最终验收报告
+# Kairo 24 项代码审查修复 - 最终验收报告
 
 日期：2026-06-23
 工作目录：/Users/qi/Documents/spaces/ops-toolbox
@@ -36,7 +36,7 @@
 - `internal/sftpclient` — 6 个
 - `internal/sshclient` — 25+ 个（含 Categorize 10 个 + Dial + Run + Stream + SafeWriter）
 - `internal/tailmgr` — 多项
-- 顶层 `doubao-toolbox` — main 流程
+- 顶层 `kairo` — main 流程
 
 ---
 
@@ -233,11 +233,11 @@ sshclient.go line 520 `code := 0` 在 `Run()` 函数内，line 622 `code := 0` �
 
 ### 不必修（确认安全）
 
-- 现有的 `DoubaoToolbox_mac` 二进制是 6-22 编译的；**重新编译后再发版**
+- 现有的 `Kairo_mac` 二进制是 6-22 编译的；**重新编译后再发版**
 
 ```bash
 cd /Users/qi/Documents/spaces/ops-toolbox
-go build -mod=vendor -o DoubaoToolbox_mac .
+go build -mod=vendor -o Kairo_mac .
 ./scripts/package_windows.sh v0.4.0   # 跨平台打包
 ```
 

@@ -3,20 +3,21 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <link rel="icon" type="image/png" sizes="32x32" href="/static/img/favicon.png" />
+  <link rel="icon" type="image/png" sizes="32x32" href="/static/img/favicon-32.png" />
   <link rel="icon" type="image/png" sizes="64x64" href="/static/img/favicon-64.png" />
   <link rel="icon" type="image/png" sizes="192x192" href="/static/img/favicon-192.png" />
-  <title>文件预览 · 豆包工具箱</title>
+  <title>文件预览 · Kairo · 天命契机</title>
   <!-- 与 index.html 一致：在 CSS 加载后立刻读 localStorage 设 data-theme，避免独立窗口深色与主窗口主题不一致 / FOUC -->
   <script>
     (function () {
       try {
-        if (!localStorage.getItem('dtb_theme')) {
-          var oldTheme = localStorage.getItem('otb_theme');
-          if (oldTheme) localStorage.setItem('dtb_theme', oldTheme);
+        var t = localStorage.getItem('kairo_theme');
+        if (!t) {
+          var oldT = localStorage.getItem('dtb_theme') || localStorage.getItem('otb_theme');
+          if (oldT) localStorage.setItem('kairo_theme', oldT);
+          t = oldT;
         }
-        var t = localStorage.getItem('dtb_theme');
-        if (t !== 'dark' && t !== 'light' && t !== 'green' && t !== 'hc') t = 'dark';
+        if (t !== 'dark' && t !== 'light' && t !== 'green' && t !== 'hc' && t !== 'xianxia') t = 'dark';
         document.documentElement.setAttribute('data-theme', t);
       } catch (_) {
         document.documentElement.setAttribute('data-theme', 'dark');
@@ -116,19 +117,19 @@
   <script>
     // ===== preview.html 独立窗口 JS =====
     // 从 query string 拿 system/server/path/encoding，
-    // 从 opener.DTB 拿凭据（如果开了"记住密码"已经在 opener 里），
+    // 从 opener.Kairo 拿凭据（如果开了"记住密码"已经在 opener 里），
     // 调 /api/files/preview，显示文本 / 二进制提示。
 
     (function () {
       'use strict';
-      if (!window.DTB) window.DTB = {};
+      if (!window.Kairo) window.Kairo = {};
       const $ = (s) => document.querySelector(s);
-      const { api } = window.DTB.api || {};
-      // FE-003：优先走 DTB.api.api() —— 它会在 401 时触发登录引导（requireLogin）。
-      // 但 api() 内部依赖 window.DTB.core.setStatus；preview 独立窗口没加载 core.js，
+      const { api } = window.Kairo.api || {};
+      // FE-003：优先走 Kairo.api.api() —— 它会在 401 时触发登录引导（requireLogin）。
+      // 但 api() 内部依赖 window.Kairo.core.setStatus；preview 独立窗口没加载 core.js，
       // 此时 api() 调用会抛错。这里做 fallback：core 没就绪时退回裸 fetch 兜底，
       // 并复刻 api() 的「401→requireLogin / !ok→throw」语义，保证功能不中断。
-      const coreReady = !!(window.DTB && window.DTB.core);
+      const coreReady = !!(window.Kairo && window.Kairo.core);
       async function request(method, path, body) {
         const opts = { method, headers: {}, credentials: 'same-origin' };
         if (body !== undefined) {
@@ -139,7 +140,7 @@
         let data = null;
         try { data = await resp.json(); } catch (e) { /* ignore */ }
         if (resp.status === 401 && data && data.auth_required) {
-          if (window.DTB.auth && window.DTB.auth.requireLogin) window.DTB.auth.requireLogin();
+          if (window.Kairo.auth && window.Kairo.auth.requireLogin) window.Kairo.auth.requireLogin();
           const err = new Error((data && data.error) || '需要登录');
           err.authRequired = true;
           throw err;
@@ -187,8 +188,8 @@
       function getCred() {
         try {
           const op = window.opener;
-          if (op && op.DTB && op.DTB._previewCred && op.DTB._previewCred[system + '::' + server]) {
-            const c = op.DTB._previewCred[system + '::' + server];
+          if (op && op.Kairo && op.Kairo._previewCred && op.Kairo._previewCred[system + '::' + server]) {
+            const c = op.Kairo._previewCred[system + '::' + server];
             if (c && c.username && c.password) return c;
           }
         } catch (e) { /* ignore cross-origin */ }
@@ -220,7 +221,7 @@
 
         setConn('busy', '加载中…');
         try {
-          // FE-003：走 call()（DTB.api.api() 优先，401 触发登录引导），
+          // FE-003：走 call()（Kairo.api.api() 优先，401 触发登录引导），
           // 退化时用裸 fetch 兜底。call() 返回解析后的 data，!ok/401 时抛错。
           // BUG-3：cred 可能是 null（getCred() opener 拿不到 password 时返回 null），
           // 改读 activeCred（有 || {username:'',password:''} 兜底，永远是对象）。
@@ -279,7 +280,7 @@
         // 但仍然发请求——后端有 keyring 兜底。
         const cred = activeCred || getCred() || { username: '', password: '' };
         try {
-          // FE-003：走 call()（DTB.api.api() 优先，401 触发登录引导）。
+          // FE-003：走 call()（Kairo.api.api() 优先，401 触发登录引导）。
           const d = await call('POST', '/api/files/download', {
             system: system, server: server, path: path,
             username: cred.username || '', password: cred.password || '',

@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"kairo/internal/sysutil"
 )
 
 // localRevealReq /api/local/reveal-file 的请求体
@@ -180,6 +182,7 @@ func (s *Server) handleLocalOpenWith(w http.ResponseWriter, r *http.Request) {
 
 	// 4) 启动外部程序（不等待返回）
 	cmd := exec.Command(op.Path, absPath)
+	sysutil.HideConsoleWindow(cmd) // 用户配置的 opener 一般是 GUI 程序（VSCode/Sublime/Notepad++ 等），加 CREATE_NO_WINDOW 更干净
 	if err := cmd.Start(); err != nil {
 		s.audit.Write("local.open_with", "opener", req.Opener, "name", req.Name, "result", "fail", "err", err.Error())
 		writeErrSanitized(w, 500, fmt.Errorf("启动打开器 %q 失败: %v", req.Opener, err))

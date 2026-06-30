@@ -10,10 +10,10 @@
 
 (function () {
   'use strict';
-  const DTB = window.DTB = window.DTB || {};
-  DTB.pages = DTB.pages || {};
-  const { el, $, toast, setStatus, cssEscape, pctText, formatBytes, formatTime, trimMiddle, looksMojibake, basenameOf, copyToClipboard } = DTB.core;
-  const { api } = DTB.api;
+  const Kairo = window.Kairo = window.Kairo || {};
+  Kairo.pages = Kairo.pages || {};
+  const { el, $, toast, setStatus, cssEscape, pctText, formatBytes, formatTime, trimMiddle, looksMojibake, basenameOf, copyToClipboard } = Kairo.core;
+  const { api } = Kairo.api;
 
   // ===== 搜索关键词历史（localStorage 持久化）=====
   // 行为：
@@ -23,7 +23,7 @@
   //   - 上限 20 条，超过截尾。
   // 设计动机：日志查询是高频操作，关键词经常重复（"Exception"、"NPE"、"订单超时" 等），
   // 鼠标点选比重新手敲快很多；localStorage 存避免改后端 schema。
-  const SEARCH_HISTORY_KEY = 'dtb:websphere:search-history';
+  const SEARCH_HISTORY_KEY = 'kairo:websphere:search-history';
   const SEARCH_HISTORY_MAX = 20;
   // 用户首次进入看到的默认值（写在 queryInp.value 里）—— 不要塞进历史。
   const SEARCH_DEFAULT_VALUE = 'Exception';
@@ -423,8 +423,8 @@
     }
     async function confirmManyTargets(targets, actionText) {
       if (!targets || targets.length <= 5) return true;
-      if (!DTB.core.confirmDialog) return window.confirm(actionText + '将作用于 ' + describeTargets(targets) + '，是否继续？');
-      return DTB.core.confirmDialog(
+      if (!Kairo.core.confirmDialog) return window.confirm(actionText + '将作用于 ' + describeTargets(targets) + '，是否继续？');
+      return Kairo.core.confirmDialog(
         actionText + '将作用于 ' + describeTargets(targets) + '。请确认这是你想操作的范围。',
         { title: '确认批量操作', okText: '继续执行', cancelText: '取消' }
       );
@@ -440,7 +440,7 @@
       const explicitDirs = srvDirsWrap.querySelectorAll('input[type="checkbox"][data-srv][data-dir]:checked');
       const dirs = [];
       explicitDirs.forEach(cb => dirs.push({ srv: cb.getAttribute('data-srv'), dir: cb.getAttribute('data-dir') }));
-      DTB.core.lastSet('websphere', 'sel', {
+      Kairo.core.lastSet('websphere', 'sel', {
         system: sysSel.value,
         servers: checked,
         dir: dirSel.value,
@@ -457,7 +457,7 @@
     function renderSrvPick() {
       const prevChecked = getCheckedServers();
       // 第一次加载：尝试用上次记忆的服务器列表
-      const lastSel = DTB.core.lastGet('websphere', 'sel');
+      const lastSel = Kairo.core.lastGet('websphere', 'sel');
       const lastForSys = (lastSel && lastSel.system === sysSel.value && Array.isArray(lastSel.servers)) ? lastSel.servers : null;
       srvPickWrap.innerHTML = '';
       const sysName = sysSel.value;
@@ -493,7 +493,7 @@
       srvDirsWrap.innerHTML = '';
       const sysName = sysSel.value;
       const sys = cfg && cfg.systems.find(s => s.name === sysName);
-      const lastSel = DTB.core.lastGet('websphere', 'sel');
+      const lastSel = Kairo.core.lastGet('websphere', 'sel');
       const hasLastForSys = !!(lastSel && lastSel.system === sysName);
       const lastDirs = (hasLastForSys && Array.isArray(lastSel.dirs)) ? lastSel.dirs : [];
       const checkedSrvs = getCheckedServers();
@@ -550,7 +550,7 @@
       // 项 7 修复：默认选第一个目录（让 getSelectedTargets 在二级目录没勾时
       // 也能 fallback 到 dirSel 返回有效 targets）。lastSel.dir 已被 loadCfg 读进来，
       // 如果在配置里设过就走 lastSel.dir，否则走第一个。
-      const lastSel = DTB.core.lastGet('websphere', 'sel');
+      const lastSel = Kairo.core.lastGet('websphere', 'sel');
       if (lastSel && lastSel.dir && dirSel.querySelector('option[value="' + cssEscape(lastSel.dir) + '"]')) {
         dirSel.value = lastSel.dir;
       } else if (dirSel.options.length > 0 && !dirSel.value) {
@@ -594,7 +594,7 @@
     //   - 新用户 / 未设置 → 展开
     let targetCollapsed = false;
     try {
-      const saved = DTB.core.lastGet('websphere', 'target_collapsed');
+      const saved = Kairo.core.lastGet('websphere', 'target_collapsed');
       if (saved === 'collapsed') targetCollapsed = true;
     } catch (e) { /* keep default (展开) */ }
     const targetSummaryBadge = el('span', { class: 'ws-target-summary-badge' });
@@ -621,7 +621,7 @@
     });
     function toggleTargetPanel() {
       targetCollapsed = !targetCollapsed;
-      try { DTB.core.lastSet('websphere', 'target_collapsed', targetCollapsed ? 'collapsed' : 'expanded'); } catch (e) { /* ignore */ }
+      try { Kairo.core.lastSet('websphere', 'target_collapsed', targetCollapsed ? 'collapsed' : 'expanded'); } catch (e) { /* ignore */ }
       applyTargetPanelState();
     }
     function applyTargetPanelState() {
@@ -1211,7 +1211,7 @@
           if (!window.EventSource) { toast('浏览器不支持 EventSource', 'err'); return; }
           const es = new EventSource(listState.dlApiBase + dlId + '/events');
           listState.dlEvtSrc = es;
-          DTB.core.setActiveDL({ id: dlId, evtsrc: es });
+          Kairo.core.setActiveDL({ id: dlId, evtsrc: es });
           // 等待 done；done 事件的回调负责收集 result item，不自己渲染
           await new Promise((resolve) => {
             let gotDone = false;
@@ -1261,7 +1261,7 @@
       if (okGroups === results.length) {
         let totalDl = 0;
         results.forEach(r => { totalDl += (r.downloads && r.downloads.length) || 0; });
-        if (totalDl > 0 && location.hash !== '#/downloads') DTB.core.bumpDlBadge(totalDl);
+        if (totalDl > 0 && location.hash !== '#/downloads') Kairo.core.bumpDlBadge(totalDl);
       }
       toast((okGroups === results.length ? '下载完成：' : '部分失败：') + okGroups + '/' + results.length + ' 组', okGroups === results.length ? 'ok' : 'warn');
     }
@@ -1321,7 +1321,7 @@
         listState.dlEvtSrc.close();
         listState.dlEvtSrc = null;
       }
-      DTB.core.clearActiveDL();
+      Kairo.core.clearActiveDL();
       const tb = fileTableWrap._toolbar;
       if (tb) { tb.btnDownloadSel.disabled = false; tb.btnCancel.disabled = true; }
       if (listState.dlLatestUi) {
@@ -1421,7 +1421,7 @@
           if (!window.EventSource) { toast('浏览器不支持 EventSource', 'err'); break; }
           const es = new EventSource(listState.dlApiBase + dlId + '/events');
           listState.dlEvtSrc = es;
-          DTB.core.setActiveDL({ id: dlId, evtsrc: es });
+          Kairo.core.setActiveDL({ id: dlId, evtsrc: es });
           runReason = await new Promise((resolve) => {
             let gotDone = false;
             let active = true;
@@ -1432,7 +1432,7 @@
               listState.dlAbort = null;
               try { es.close(); } catch (_) { /* ignore */ }
               if (listState.dlEvtSrc === es) { listState.dlEvtSrc = null; }
-              DTB.core.clearActiveDL();
+              Kairo.core.clearActiveDL();
               resolve(reason);
             };
             listState.dlAbort = () => finish('cancel');
@@ -1511,7 +1511,7 @@
       listState.dlEvtSrc = null;
       listState.dlLatestUi = null;
       listState.dlAbort = null;
-      DTB.core.clearActiveDL();
+      Kairo.core.clearActiveDL();
       setStatus('idle');
 
       if (cancelled) {
@@ -1521,7 +1521,7 @@
         const okGroups = results.filter(r => r.ok).length;
         let totalDl = 0;
         dlResults.forEach(r => { totalDl += (r.downloads && r.downloads.length) || 0; });
-        if (totalDl > 0 && location.hash !== '#/downloads') DTB.core.bumpDlBadge(totalDl);
+        if (totalDl > 0 && location.hash !== '#/downloads') Kairo.core.bumpDlBadge(totalDl);
         toast((okGroups === results.length ? '下载完成：' : '部分失败：') + okGroups + '/' + results.length + ' 组', okGroups === results.length ? 'ok' : 'warn');
         for (const r of results) {
           if (r.ok) await maybeSaveCred(r.server);
@@ -1643,7 +1643,7 @@
           class: 'btn btn-sm', text: '📋 复制路径',
           title: '复制目录绝对路径到剪贴板',
           onclick: () => {
-            DTB.core.copyToClipboard(folder).then(() => {
+            Kairo.core.copyToClipboard(folder).then(() => {
               toast('路径已复制', 'ok');
             }).catch(() => {
               window.prompt('复制此路径：', folder);
@@ -2233,7 +2233,7 @@ const formCard = el('div', { class: 'card' }, [
       targetSummaryEl.appendChild(detail);
     }
     // 让 updateTargetSummary 在目标变化时也能调用（persistSelection 后会触发）
-    // 这里把函数挂到 window 上方便从 DTB 钩子（如果有）或调试用，不强制。
+    // 这里把函数挂到 window 上方便从 Kairo 钩子（如果有）或调试用，不强制。
     if (typeof window !== 'undefined') window.updateTargetSummary = updateTargetSummary;
 
     const searchCard = el('div', { class: 'card' }, [
@@ -2506,20 +2506,20 @@ const formCard = el('div', { class: 'card' }, [
     const tailOut = el('div', { id: 'ws-tail-out', class: 'tail-out' });
     // ---- Tail 高亮面板（共享 UI 工厂）----
     // 持久化策略：onChange 写 PUT /api/preferences，
-    //             同时同步更新 DTB.state.tailHighlights（独立 tail.html 也会读到）。
-    const tailHighlight = DTB.core.tailHighlightPanel({
-      initial: DTB.state.tailHighlights || [],
+    //             同时同步更新 Kairo.state.tailHighlights（独立 tail.html 也会读到）。
+    const tailHighlight = Kairo.core.tailHighlightPanel({
+      initial: Kairo.state.tailHighlights || [],
       onChange: async (list) => {
         // 1) 内存同步：websphere tail tab 立即用新规则渲染后续行
-        DTB.state.tailHighlights = list;
+        Kairo.state.tailHighlights = list;
         // 2) 落盘：放到 preferences.json 的 tail.highlights 字段
         //    注意：PUT 是覆盖整个 prefs map，要保留其它字段（暂时没有，但留个口子）
         try {
           // 先 GET 一次拿到现有 prefs，避免覆盖其它未来字段
           let cur = {};
-          try { cur = await DTB.api.api('GET', '/api/preferences') || {}; } catch (e) { /* ignore */ }
+          try { cur = await Kairo.api.api('GET', '/api/preferences') || {}; } catch (e) { /* ignore */ }
           cur.tail = Object.assign({}, cur.tail || {}, { highlights: list });
-          await DTB.api.api('PUT', '/api/preferences', cur);
+          await Kairo.api.api('PUT', '/api/preferences', cur);
         } catch (e) {
           toast('保存高亮规则失败：' + e.message, 'err');
         }
@@ -2738,11 +2738,11 @@ const formCard = el('div', { class: 'card' }, [
         file: fileName,
         lines: String(Math.max(0, Math.min(1000, Number(tailLinesInp.value) || 0)))
       });
-      // 项 9 修复：把当前已填的凭据存到 DTB._tailCred，tail 页面 opener 拿
+      // 项 9 修复：把当前已填的凭据存到 Kairo._tailCred，tail 页面 opener 拿
       // 避免用户每次开新窗口都被要求再输一次密码。
       try {
-        DTB._tailCred = DTB._tailCred || {};
-        DTB._tailCred[sysSel.value + '::' + serverName] = {
+        Kairo._tailCred = Kairo._tailCred || {};
+        Kairo._tailCred[sysSel.value + '::' + serverName] = {
           username: userInp.value,
           password: passInp.value
         };
@@ -2809,13 +2809,13 @@ const formCard = el('div', { class: 'card' }, [
     }
 
     // ----- tail 缓冲 + rAF 批量刷新（v0.5 修复卡死） -----
-    // P0-2：切到 DTB.core.tailViewer（环形 buffer + 行级 DOM 节点池）。
+    // P0-2：切到 Kairo.core.tailViewer（环形 buffer + 行级 DOM 节点池）。
     // 旧版每次 flush 都用 textContent split/slice/join 重建整 <pre>，
     // 5000 行截断一次 O(N) 字符串拷贝 + 浏览器重解析整容器。
     // 新版只 removeChild 头节点 + append 新节点，O(1)/行。
     let pendingTailLines = [];
     let tailFlushScheduled = false;
-    const tailViewer = DTB.core.tailViewer({
+    const tailViewer = Kairo.core.tailViewer({
       container: tailOut,
       maxLines: 1000, // max-lines UI 改值时通过 setMaxLines 同步
       getHighlights: () => tailHighlight.enabled ? tailHighlight.list : []
@@ -2944,7 +2944,7 @@ const formCard = el('div', { class: 'card' }, [
     });
     btnTailCopy.addEventListener('click', () => {
       const text = tailViewer.getText();
-      DTB.core.copyToClipboard(text).then(
+      Kairo.core.copyToClipboard(text).then(
         () => toast('已复制 ' + tailViewer.lineCount() + ' 行', 'ok'),
         (e) => toast('复制失败: ' + e.message, 'err')
       );
@@ -2954,7 +2954,7 @@ const formCard = el('div', { class: 'card' }, [
       tailOut.querySelectorAll('.tail-line').forEach(n => {
         lines.push(n.textContent);
       });
-      DTB.core.copyToClipboard(lines.join('\n')).then(
+      Kairo.core.copyToClipboard(lines.join('\n')).then(
         () => toast('已复制显示的 ' + lines.length + ' 行', 'ok'),
         (e) => toast('复制失败: ' + e.message, 'err')
       );
@@ -3167,7 +3167,7 @@ const formCard = el('div', { class: 'card' }, [
       sysSel.innerHTML = '';
       info.systems.forEach(s => sysSel.appendChild(el('option', { value: s.name, text: s.name })));
       // 恢复上次选择
-      const lastSel = DTB.core.lastGet('websphere', 'sel');
+      const lastSel = Kairo.core.lastGet('websphere', 'sel');
       if (lastSel && lastSel.system && info.systems.find(s => s.name === lastSel.system)) {
         sysSel.value = lastSel.system;
       }
@@ -3196,7 +3196,7 @@ const formCard = el('div', { class: 'card' }, [
     }).catch(e => toast('配置加载失败：' + e.message, 'err'));
   }
 
-  DTB.pages.websphere = renderWebsphere;
-  DTB.state.routes.websphere = renderWebsphere;
-  DTB.state.routeNames.websphere = '日志助手';
+  Kairo.pages.websphere = renderWebsphere;
+  Kairo.state.routes.websphere = renderWebsphere;
+  Kairo.state.routeNames.websphere = '日志助手';
 })();

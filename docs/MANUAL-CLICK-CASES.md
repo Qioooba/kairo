@@ -1,4 +1,4 @@
-# 豆包工具箱 手工点击测试用例
+# Kairo 手工点击测试用例
 
 > 用途：按菜单顺序逐个点击验证，每个按钮都要点，每个功能都要看请求、响应、页面状态和错误提示
 > 配套文件：`docs/ISSUES-FOUND.md`（问题清单）、`docs/TEST-MATRIX.md`（覆盖矩阵）
@@ -9,7 +9,7 @@
 ## 通用前置准备
 
 1. 启动 mock SSH 服务：`python3 scripts/mock_sshd.py`（默认 127.0.0.1:2225）
-2. 启动主服务：`go run .` 或 `./DoubaoToolbox`（默认 127.0.0.1:18080，会自动开浏览器）
+2. 启动主服务：`go run .` 或 `./Kairo`（默认 127.0.0.1:18080，会自动开浏览器）
 3. 准备测试数据：`scripts/fake-websphere/opt/IBM/WebSphere/AppServer/profiles/AppSrv01/logs/server1/` 下放几个 `SystemOut*.log` 文件
 4. 浏览器开 DevTools Network 面板，勾选 "Preserve log" + "Disable cache"
 5. 准备 4 套主题切换：dark / light / green / hc（点右上角 🌙 按钮循环）
@@ -36,7 +36,7 @@
 1. 在首页点右上角 🌙 按钮
 2. 依次切换 dark → light → green → hc
 3. 期望：每套主题下卡片颜色、文字、图标都清晰可读
-4. 检查：切换后刷新页面，主题是否持久化（localStorage `dtb_theme`）
+4. 检查：切换后刷新页面，主题是否持久化（localStorage `kairo_theme`）
 
 ### TC-HOME-004 窗口缩放
 1. 依次调整窗口到 1366×768 / 1920×1080 / 2K / 半屏
@@ -111,7 +111,7 @@
 ### TC-WS-008 复制路径
 1. 搜索结果中点「复制路径」
 2. 期望：toast「已复制」，剪贴板含完整路径
-3. 检查：是否调用 `DTB.core.copyToClipboard`（FE-010：websphere.js 有局部重复实现）
+3. 检查：是否调用 `Kairo.core.copyToClipboard`（FE-010：websphere.js 有局部重复实现）
 
 ### TC-WS-009 在文件夹中显示
 1. 搜索结果中点「在文件夹中显示」
@@ -183,7 +183,7 @@
 4. **取消下载测试**：下载中点「取消」
    - 期望：立即停止
    - 检查：Network 应有 `POST /api/files/download/{id}/cancel` 200
-5. **下载到指定目录测试**：勾选「下载到指定目录」，输入 `/tmp/dtb-test`
+5. **下载到指定目录测试**：勾选「下载到指定目录」，输入 `/tmp/kairo-test`
    - 期望：文件下载到该目录
    - 实际（CFG-006）：`allowed_download_roots` 为空时不限制，可下到任意路径（含 `C:\Windows`）
 
@@ -198,7 +198,7 @@
 ### TC-FILES-006 复制文件路径
 1. 浏览目录后，点某文件「复制路径」
 2. 期望：toast「已复制」，剪贴板含完整路径
-3. 检查：是否调用 `DTB.core.copyToClipboard`（FE-010：websphere.js 有局部重复实现，files.js 应统一）
+3. 检查：是否调用 `Kairo.core.copyToClipboard`（FE-010：websphere.js 有局部重复实现，files.js 应统一）
 
 ---
 
@@ -836,8 +836,8 @@
 
 | # | 命令 | 期望 | 关联问题 |
 |---|---|---|---|
-| 1 | `tar -tzf doubao-toolbox-src-review.tar.gz \| grep vendor/` | 有输出 | PKG-001 |
-| 2 | `tar -tzf doubao-toolbox-src-review.tar.gz \| grep web/vendor/diff2html` | 有输出 | PKG-002 |
+| 1 | `tar -tzf kairo-src-review.tar.gz \| grep vendor/` | 有输出 | PKG-001 |
+| 2 | `tar -tzf kairo-src-review.tar.gz \| grep web/vendor/diff2html` | 有输出 | PKG-002 |
 | 3 | `gofmt -l $(find . -name '*.go' -not -path './vendor/*')` | 无输出 | STATIC-001 |
 | 4 | `go test -mod=vendor -count=1 ./...` | all pass | — |
 | 5 | `node web/app.test.js` | 17 pass / 0 fail | — |

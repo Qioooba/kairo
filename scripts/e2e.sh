@@ -180,7 +180,7 @@ function main() {
   parse_args "$@"
 
   echo "========================================"
-  echo "  Doubao Toolbox E2E 测试"
+  echo "  Kairo E2E 测试"
   echo "========================================"
   echo ""
 

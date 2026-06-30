@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"doubao-toolbox/internal/config"
-	"doubao-toolbox/internal/sftpclient"
-	"doubao-toolbox/internal/sshclient"
+	"kairo/internal/config"
+	"kairo/internal/sftpclient"
+	"kairo/internal/sshclient"
 )
 
 // fakeSftpClient 实现 sftpClientLike 接口，给测试用。

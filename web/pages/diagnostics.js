@@ -4,10 +4,10 @@
 
 (function () {
   'use strict';
-  const DTB = window.DTB = window.DTB || {};
-  DTB.pages = DTB.pages || {};
-  const { el, kvTable, toast } = DTB.core;
-  const { api } = DTB.api;
+  const Kairo = window.Kairo = window.Kairo || {};
+  Kairo.pages = Kairo.pages || {};
+  const { el, kvTable, toast } = Kairo.core;
+  const { api } = Kairo.api;
 
   function renderDiagnostics(view) {
     const summaryEl = el('div', { class: 'text-dim mt-2', text: '加载中…' });
@@ -186,8 +186,8 @@
     load(false);
   }
 
-  DTB.pages.diagnostics = renderDiagnostics;
-  DTB.state.routes.diagnostics = renderDiagnostics;
-  DTB.state.routeNames.diagnostics = '环境自检';
-  DTB.state.routeSubs.diagnostics = '本机 / 网络 / 配置 / 工具 / 每台 server 连通性快速体检';
+  Kairo.pages.diagnostics = renderDiagnostics;
+  Kairo.state.routes.diagnostics = renderDiagnostics;
+  Kairo.state.routeNames.diagnostics = '环境自检';
+  Kairo.state.routeSubs.diagnostics = '本机 / 网络 / 配置 / 工具 / 每台 server 连通性快速体检';
 })();
