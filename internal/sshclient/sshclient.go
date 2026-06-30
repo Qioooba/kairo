@@ -148,10 +148,10 @@ func resolveProfile(srv Server, defaultName string) (name string, profs []sshCom
 	}
 }
 
-// sshDebugLog 把 豆包工具箱 自己的 SSH 调用细节写到独立文件
+// sshDebugLog 把 Kairo 自己的 SSH 调用细节写到独立文件
 // （<exe 目录>/logs/ssh_debug.log），便于排查老 sshd 兼容性问题。
 // 注意：Go x/crypto/ssh 内部 KEXINIT 协商没有暴露 Logf API，
-// 这里只能记 豆包工具箱 自己的配置/调用/错误/耗时，
+// 这里只能记 Kairo 自己的配置/调用/错误/耗时，
 // 真正的 SSH 协议包需要 ssh -vvv 或 Wireshark 抓。
 var (
 	sshDebugOnce sync.Once
@@ -219,10 +219,10 @@ func cryptoSSHVersion() string {
 	return "not found in build info"
 }
 
-// sshTrafficLog 把 豆包工具箱 跟远端 sshd 之间的 TCP 字节流镜像到
+// sshTrafficLog 把 Kairo 跟远端 sshd 之间的 TCP 字节流镜像到
 // <exe 目录>/logs/ssh_traffic.log（hex dump 格式）。
 // 既然不能装 ssh 客户端跑 ssh -vvv 抓真实 KEXINIT，
-// 就让 豆包工具箱 自己抓，这样能直接看到 client 发了什么 KEXINIT、
+// 就让 Kairo 自己抓，这样能直接看到 client 发了什么 KEXINIT、
 // server 回了什么 KEXINIT、协商到哪一步 close 的。
 var (
 	sshTrafficOnce     sync.Once
@@ -444,21 +444,21 @@ func passwordKeyboardInteractive(password string) ssh.KeyboardInteractiveChallen
 	}
 }
 
-// errHostKeyNotConfigured BE-005：未配 host key 指纹且未显式 allow_insecure_host_key
+// errHostKeyNotConfigured：未配 host key 指纹且显式 allow_insecure_host_key=false
 // 时 Dial 立即拒绝的清晰错误。让 handler 能给前端友好提示，而不是 SSH 协议层错误。
-var errHostKeyNotConfigured = errors.New("未配置 host_key_sha256 且 allow_insecure_host_key=false：拒绝连接（BE-005 fail-closed）。请在 config.yaml 给 server 配 host_key_sha256，或在 app.allow_insecure_host_key=true 显式同意风险")
+var errHostKeyNotConfigured = errors.New("未配置 host_key_sha256 且 allow_insecure_host_key=false：拒绝连接（fail-closed）。请在 config.yaml 给 server 配 host_key_sha256，或将 app.allow_insecure_host_key 改为 true（不推荐）")
 
 func newSSHClientConfig(srv Server, cred Credentials, timeout time.Duration, p sshCompatProfile) (*ssh.ClientConfig, error) {
-	// BE-005 fail-closed 默认：
+	// host key 校验策略（默认 fail-closed，v0.9 BE-005 修复）：
 	//   - HostKeySHA256 非空 → FixedHostKey 强校验（最安全）
-	//   - HostKeySHA256 空 + AllowInsecureHostKey=true → InsecureIgnoreHostKey（向后兼容）
-	//   - HostKeySHA256 空 + AllowInsecureHostKey=false → 拒绝构造 config（fail-closed）
+	//   - HostKeySHA256 空 + AllowInsecureHostKey=false（默认）→ 拒绝构造 config（fail-closed）
+	//   - HostKeySHA256 空 + AllowInsecureHostKey=true → InsecureIgnoreHostKey（向后兼容旧内网，需显式开启）
 	hk := strings.TrimSpace(srv.HostKeySHA256)
 	if hk == "" {
 		if !srv.AllowInsecureHostKey {
 			return nil, errHostKeyNotConfigured
 		}
-		// 显式同意风险 → 退回旧行为
+		// 显式放行 → 退回 InsecureIgnoreHostKey
 		return &ssh.ClientConfig{
 			User: srv.Username,
 			Auth: []ssh.AuthMethod{
