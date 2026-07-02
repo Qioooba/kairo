@@ -24,7 +24,7 @@
     })();
   </script>
   <link rel="stylesheet" href="/static/vendor/xterm/xterm.css?v=20260702" />
-  <link rel="stylesheet" href="/static/style.css?v=20260702" />
+  <link rel="stylesheet" href="/static/style.css?v=20260702b" />
   <style>
     /* SSH 独立窗口专用：窄边距、全高终端 */
     body { grid-template-columns: 1fr; }
@@ -55,8 +55,8 @@
     .ssh-standalone .ssh-term-wrap .xterm-viewport { background-color: transparent !important; }
     /* 密码弹层复用主页样式 */
     .ssh-pwd-overlay {
-      position: fixed; inset: 0; background: rgba(0,0,0,.6);
-      backdrop-filter: blur(4px); z-index: 99998;
+      position: fixed; top: 0; right: 0; bottom: 0; left: 0; background: rgba(0,0,0,.6);
+      -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px); z-index: 99998;
       display: flex; align-items: center; justify-content: center; padding: 20px;
     }
     .ssh-pwd-card {

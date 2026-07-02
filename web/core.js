@@ -11,7 +11,9 @@
 (function () {
   'use strict';
 
-  // -------- Polyfills for older browsers (Chrome <86 / Win7) --------
+  // -------- Polyfills for older browsers (Chrome <86 / Win7 / 360浏览器) --------
+
+  // Element.prototype.replaceChildren (Chrome 86+)
   if (!Element.prototype.replaceChildren) {
     Element.prototype.replaceChildren = function() {
       while (this.firstChild) {
@@ -32,6 +34,119 @@
   }
   if (!DocumentFragment.prototype.replaceChildren) {
     DocumentFragment.prototype.replaceChildren = Element.prototype.replaceChildren;
+  }
+
+  // Element.prototype.matches (old WebKit: webkitMatchesSelector)
+  if (!Element.prototype.matches) {
+    Element.prototype.matches = Element.prototype.msMatchesSelector ||
+      Element.prototype.webkitMatchesSelector ||
+      function(s) {
+        var els = (this.document || this.ownerDocument).querySelectorAll(s);
+        for (var i = 0; i < els.length; i++) {
+          if (els[i] === this) return true;
+        }
+        return false;
+      };
+  }
+
+  // Element.prototype.closest (Chrome 41+, add polyfill for very old browsers)
+  if (!Element.prototype.closest) {
+    Element.prototype.closest = function(s) {
+      var el = this;
+      do {
+        if (el.matches(s)) return el;
+        el = el.parentElement || el.parentNode;
+      } while (el && el.nodeType === 1);
+      return null;
+    };
+  }
+
+  // NodeList.prototype.forEach (old browsers may not support)
+  if (window.NodeList && !NodeList.prototype.forEach) {
+    NodeList.prototype.forEach = Array.prototype.forEach;
+  }
+
+  // HTMLCollection.prototype.forEach
+  if (window.HTMLCollection && !HTMLCollection.prototype.forEach) {
+    HTMLCollection.prototype.forEach = Array.prototype.forEach;
+  }
+
+  // CustomEvent (IE11/old Chrome compatibility)
+  if (typeof window.CustomEvent !== 'function') {
+    window.CustomEvent = function(event, params) {
+      params = params || { bubbles: false, cancelable: false, detail: null };
+      var evt = document.createEvent('CustomEvent');
+      evt.initCustomEvent(event, params.bubbles, params.cancelable, params.detail);
+      return evt;
+    };
+    window.CustomEvent.prototype = window.Event.prototype;
+  }
+
+  // globalThis (Chrome 71+)
+  if (typeof globalThis === 'undefined') {
+    window.globalThis = window;
+  }
+
+  // Array.prototype.includes (Chrome 47+, polyfill for very old)
+  if (!Array.prototype.includes) {
+    Array.prototype.includes = function(searchElement, fromIndex) {
+      if (this == null) throw new TypeError('"this" is null or not defined');
+      var o = Object(this);
+      var len = o.length >>> 0;
+      if (len === 0) return false;
+      var n = fromIndex | 0;
+      var k = Math.max(n >= 0 ? n : len - Math.abs(n), 0);
+      while (k < len) {
+        if (o[k] === searchElement) return true;
+        k++;
+      }
+      return false;
+    };
+  }
+
+  // String.prototype.padStart/padEnd (Chrome 57+)
+  if (!String.prototype.padStart) {
+    String.prototype.padStart = function padStart(targetLength, padString) {
+      targetLength = targetLength >> 0;
+      padString = String(padString !== undefined ? padString : ' ');
+      if (this.length >= targetLength) return String(this);
+      targetLength = targetLength - this.length;
+      if (targetLength > padString.length) padString += padString.repeat(targetLength / padString.length);
+      return padString.slice(0, targetLength) + String(this);
+    };
+  }
+  if (!String.prototype.padEnd) {
+    String.prototype.padEnd = function padEnd(targetLength, padString) {
+      targetLength = targetLength >> 0;
+      padString = String(padString !== undefined ? padString : ' ');
+      if (this.length >= targetLength) return String(this);
+      targetLength = targetLength - this.length;
+      if (targetLength > padString.length) padString += padString.repeat(targetLength / padString.length);
+      return String(this) + padString.slice(0, targetLength);
+    };
+  }
+
+  // String.prototype.repeat (for padStart/padEnd)
+  if (!String.prototype.repeat) {
+    String.prototype.repeat = function(count) {
+      if (this == null) throw new TypeError('can\'t convert ' + this + ' to object');
+      var str = '' + this;
+      count = +count;
+      if (count !== count) count = 0;
+      if (count < 0) throw new RangeError('repeat count must be non-negative');
+      if (count === Infinity) throw new RangeError('repeat count must be less than infinity');
+      count = Math.floor(count);
+      if (str.length === 0 || count === 0) return '';
+      if (str.length * count >= 1 << 28) throw new RangeError('repeat count must not overflow maximum string size');
+      var rpt = '';
+      for (;;) {
+        if ((count & 1) === 1) rpt += str;
+        count >>>= 1;
+        if (count === 0) break;
+        str += str;
+      }
+      return rpt;
+    };
   }
 
   if (!window.Kairo) window.Kairo = {};

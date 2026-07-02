@@ -1492,7 +1492,7 @@ input[type="datetime-local"] {
 
 /* 文件预览 modal（v0.5 项 1） */
 .preview-overlay {
-  position: fixed; inset: 0;
+  position: fixed; top: 0; right: 0; bottom: 0; left: 0;
   background: rgba(0, 0, 0, 0.55);
   z-index: 1000;
   display: flex; align-items: center; justify-content: center;
@@ -2187,7 +2187,7 @@ input[type="datetime-local"] {
 /* 拖拽提示：覆盖在 textarea 上方的半透明层 */
 .cmp-drop-hint {
   position: absolute;
-  inset: 0;
+  top: 0; right: 0; bottom: 0; left: 0;
   display: flex; align-items: center; justify-content: center;
   background: rgba(79,140,255,0.12);
   border: 2px dashed var(--primary);
@@ -2796,7 +2796,7 @@ input[type="datetime-local"] {
 
 /* —— Modal（复制用例 / 改名 / 导入确认） —— */
 .http2-modal-mask {
-  position: fixed; inset: 0; background: rgba(0,0,0,0.55);
+  position: fixed; top: 0; right: 0; bottom: 0; left: 0; background: rgba(0,0,0,0.55);
   display: flex; align-items: center; justify-content: center;
   z-index: 999; -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px);
   animation: kairo-fadein 0.12s ease;
@@ -2946,7 +2946,7 @@ input[type="datetime-local"] {
 /* 通用对话框 */
 .kairo-dialog-overlay {
   position: fixed;
-  inset: 0;
+  top: 0; right: 0; bottom: 0; left: 0;
   z-index: 10000;
   background: rgba(2, 6, 23, 0.55);
   display: flex;
@@ -3401,7 +3401,7 @@ input[type="datetime-local"] {
 /* 空状态 */
 .ssh-empty {
   position: absolute;
-  inset: 0;
+  top: 0; right: 0; bottom: 0; left: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -3421,7 +3421,7 @@ input[type="datetime-local"] {
 /* 密码输入弹层 */
 .ssh-pwd-overlay {
   position: fixed;
-  inset: 0;
+  top: 0; right: 0; bottom: 0; left: 0;
   background: rgba(0, 0, 0, 0.6);
   -webkit-backdrop-filter: blur(4px);
   backdrop-filter: blur(4px);
@@ -4219,7 +4219,7 @@ input[type="datetime-local"] {
 :root[data-theme="xianxia"] .sidebar::before {
   content: "";
   position: absolute;
-  inset: 0;
+  top: 0; right: 0; bottom: 0; left: 0;
   z-index: 0;
   pointer-events: none;
   /* 两层叠加：
@@ -4279,7 +4279,7 @@ input[type="datetime-local"] {
 :root[data-theme="xianxia"] input[type="radio"]:checked::after {
   content: "";
   position: absolute;
-  inset: 4px;
+  top: 4px; right: 4px; bottom: 4px; left: 4px;
   border-radius: 50%;
   background: var(--primary);
 }
