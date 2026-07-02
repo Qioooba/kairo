@@ -9,7 +9,7 @@
 [![Go Version](https://img.shields.io/badge/Go-1.20%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-4F4F4F)](#)
 [![License](https://img.shields.io/badge/License-Internal%20Use-orange)](#)
-[![Status](https://img.shields.io/badge/Status-v0.9.0--dev-yellow)](#)
+[![Status](https://img.shields.io/badge/Status-v0.11--rc1-yellow)](#)
 [![Dependencies](https://img.shields.io/badge/Deps-zero%20runtime-2ea44f)](#)
 [![Binary](https://img.shields.io/badge/Single%20Exe-%E2%9C%93-success)](#)
 
@@ -40,7 +40,7 @@
 ### 方式 A：直接运行发版 exe（同事拿到包就这样用）
 
 1. 解压发版 zip 到任意目录，比如 `D:\kairo\`
-2. **双击 `Kairo.exe`**：
+2. **双击 `Kairo_win10.exe`**（Win10/11）或 `Kairo_win7.exe`（Win7）：
    - 无控制台黑窗口弹出
    - 浏览器自动打开 `http://127.0.0.1:18080`
    - **系统托盘**（右下角）出现 Kairo 图标，常驻进程
@@ -510,7 +510,7 @@ go mod vendor
 # 主版本（Win10/11）— -H windowsgui 让双击无控制台，走系统托盘
 GOOS=windows GOARCH=amd64 CGO_ENABLED=0 \
   go build -mod=vendor -trimpath -ldflags "-s -w -H windowsgui" \
-  -o Kairo.exe .
+  -o Kairo_win10.exe .
 
 # 或用脚本（自动检测 vendor/ 是否存在）
 ./scripts/build_windows_amd64.sh v0.5.0
@@ -538,8 +538,8 @@ export GO120_HOME=~/sdk/go120
 ### 发版给同事要打什么包
 
 ```
-Kairo.exe              # 主程序（Win10/11）— 双击即用，无控制台，托盘常驻
-# 或 Kairo_win7.exe   # Win7 兼容版
+Kairo_win10.exe        # 主程序（Win10/11）— 双击即用，无控制台，托盘常驻
+Kairo_win7.exe          # Win7 兼容版（Go 1.20 编译）
 config.yaml                 # 配置文件
 README.md                   # 本文件
 ```
@@ -697,7 +697,7 @@ kairo/
 │   ├── build_windows_amd64_win7_go120.sh
 │   ├── build_windows_both.sh    # 同时打 Win10/11 + Win7 两个产物
 │   ├── package_windows.sh       # 打 Windows 发版 zip
-│   ├── package_windows_both.sh  # 打 Windows 双版本 zip
+│   ├── package_windows_both.sh  # 打 Windows 双版本合并 zip（默认）或单包（仅快速测试）
 │   ├── package_source.sh        # 打源码 zip
 │   ├── acceptance_run.py
 │   ├── release.sh / release_smoke_test.sh
@@ -821,7 +821,36 @@ v0.2 起在「系统配置」页直接编辑保存即可，无需重启。手编
 
 ## <img src="docs/section-icons/changelog.svg" width="22" height="22" align="absmiddle"> Release Notes
 
-### v0.10（开发中）— SSH 交互式终端菜单
+### v0.11-rc1（当前）— Kairo / 天命契机品牌焕新 + License 激活体系 + 强制 release 流程
+
+#### 品牌 & 更名
+
+- **项目正式更名为 Kairo / 天命契机**（commit `99843ba`）：go.mod / vendor / CLI / 进程名 / 数据目录 全部从 `doubao-` 前缀切到 `kairo-` 前缀；首次启动自动 rename `data/.doubao-*` → `data/.kairo-*`
+- **关于页头部声明 + README badge** 全部同步更新
+
+#### 中文友好
+
+- **SSH 终端 GBK 编码支持**（commit `fa19990`）：中文老服务器 GBK / GB18030 输出在 xterm.js 终端里直显不乱码；编码自动检测 + 手动切换；SFTP 文件列表同步转码
+- 老 WebSphere / Oracle / AIX 上的 GBK 日志彻底告别问号
+
+#### 商业化基础
+
+- **License 激活体系**（`internal/license/*` + `cmd/mock-license-server`）：本地 AES-GCM 证书（AAD 绑 IP 防复制）+ 服务端「激活码 ↔ IP」绑定 + 开发者白名单 + bypass 模式
+
+#### 发布流程
+
+- **强制 release 门禁**（commit `e3daf1e`）：release 前必跑全量测试 + lint + e2e；版本号 / changelog / 校验和三件套自动生成
+- **双版本 Windows 构建**：Win10 modern（Go ≥1.21）+ Win7 legacy（Go 1.20 directive）
+- **xterm.js vendored**：不再走 CDN，本地随二进制发
+
+#### 基础设施
+
+- **SSH shell 集成测试**（commit `b5c19f7`）：`fakeShellSSH` + `fakeShellPTY` 双 mock，覆盖 PTY 行为 / 命令流 / Ctrl+C / ctx 取消
+- **SSH 终端设计文档**（commit `8c6de1e`）：菜单设计说明 + 外部 mock 测试工具使用指南
+
+> 完整提交列表见 `web/pages/about.js` 的 changelog 卡片。
+
+### v0.10 — SSH 交互式终端菜单
 
 #### SSH 终端菜单
 
@@ -842,7 +871,7 @@ v0.2 起在「系统配置」页直接编辑保存即可，无需重启。手编
 - **`internal/sysutil`**：抽象 `HideConsoleWindow` 跨平台实现
 - **`/api/compare/deep-check`**：文件夹深度检查端点
 
-### v0.9.0（当前）— RBAC + fail-closed 安全加固 + UI 全面优化
+### v0.9.0 — RBAC + fail-closed 安全加固 + UI 全面优化
 
 #### 安全加固
 

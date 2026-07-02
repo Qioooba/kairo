@@ -52,7 +52,7 @@ func TestSearchAnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c, err := SearchCommand("/dir", []string{"SystemOut.log"}, kw, 200, 30, "utf-8")
+	c, err := SearchCommand("/dir", []string{"SystemOut.log"}, kw, 200, 30, "utf-8", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +75,7 @@ func TestSearchAnd(t *testing.T) {
 
 func TestSearchOr(t *testing.T) {
 	kw, _ := ParseQuery("Exception || Timeout")
-	c, _ := SearchCommand("/dir", []string{"a.log"}, kw, 200, 30, "utf-8")
+	c, _ := SearchCommand("/dir", []string{"a.log"}, kw, 200, 30, "utf-8", false)
 	if !strings.Contains(c, "grep -HnE") {
 		t.Fatalf("OR 缺 grep -HnE: %s", c)
 	}
@@ -90,10 +90,10 @@ func TestSearchNot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c, _ := SearchCommand("/dir", []string{"a.log"}, kw, 200, 30, "utf-8")
-	// 纯 NOT 也走 `grep -HnE "^" -- file...`，保留 `file:lineno:` 前缀，
+	c, _ := SearchCommand("/dir", []string{"a.log"}, kw, 200, 30, "utf-8", false)
+	// 纯 NOT 也走 `grep -HnE [-m N] "^" -- file...`，保留 `file:lineno:` 前缀，
 	// 这样前端解析多文件命中才不至于错位。改成 cat 会丢掉前缀。
-	if !strings.Contains(c, `grep -HnE "^" --`) {
+	if !strings.Contains(c, `grep -HnE`) || !strings.Contains(c, `"^" --`) {
 		t.Fatalf("纯 NOT 应保留 grep -HnE 前缀: %s", c)
 	}
 	if !strings.Contains(c, "grep -vE") || !strings.Contains(c, "DEBUG") {
@@ -106,7 +106,7 @@ func TestSearchAndNot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c, _ := SearchCommand("/dir", []string{"a.log"}, kw, 200, 30, "utf-8")
+	c, _ := SearchCommand("/dir", []string{"a.log"}, kw, 200, 30, "utf-8", false)
 	if !strings.Contains(c, "Exception") {
 		t.Fatalf("AND 部分缺失: %s", c)
 	}
@@ -184,7 +184,7 @@ func TestNoTimeoutInCommand(t *testing.T) {
 		t.Fatalf("命令不应该依赖 Linux timeout: %s", c)
 	}
 	kw, _ := ParseQuery("Exception")
-	c, _ = SearchCommand("/dir", []string{"a.log"}, kw, 200, 30, "utf-8")
+	c, _ = SearchCommand("/dir", []string{"a.log"}, kw, 200, 30, "utf-8", false)
 	if strings.Contains(c, "timeout") {
 		t.Fatalf("搜索命令不应该依赖 Linux timeout: %s", c)
 	}
@@ -208,7 +208,7 @@ func TestSearchGBK(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c, err := SearchCommand("/dir", []string{"a.log"}, kw, 200, 30, "gbk")
+	c, err := SearchCommand("/dir", []string{"a.log"}, kw, 200, 30, "gbk", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -223,7 +223,7 @@ func TestSearchGBK(t *testing.T) {
 
 func TestSearchUTF8(t *testing.T) {
 	kw, _ := ParseQuery("Exception && 信贷系统")
-	c, err := SearchCommand("/dir", []string{"a.log"}, kw, 200, 30, "utf-8")
+	c, err := SearchCommand("/dir", []string{"a.log"}, kw, 200, 30, "utf-8", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -241,7 +241,7 @@ func TestSearchCommand_TermsAreRegexEscapedLiterals(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c, err := SearchCommand("/dir", []string{"a.log"}, kw, 200, 30, "utf-8")
+	c, err := SearchCommand("/dir", []string{"a.log"}, kw, 200, 30, "utf-8", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -255,7 +255,7 @@ func TestSearchCommand_QuotesFileWithSpacesInsideShC(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c, err := SearchCommand("/dir with space", []string{"System Out.log"}, kw, 200, 30, "utf-8")
+	c, err := SearchCommand("/dir with space", []string{"System Out.log"}, kw, 200, 30, "utf-8", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -272,7 +272,7 @@ func TestSearchCommand_GBKPrintfQuotedInsideShC(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c, err := SearchCommand("/dir", []string{"a.log"}, kw, 200, 30, "gbk")
+	c, err := SearchCommand("/dir", []string{"a.log"}, kw, 200, 30, "gbk", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -329,7 +329,7 @@ func TestSearchCommand_SingleFile_Uses_GrepH(t *testing.T) {
 	// v6 修复：单文件搜索必须用 `grep -HnE`，否则 grep 输出 lineno:content
 	// （不带 filename），parseSearchOutput 解析失败整行被丢。
 	kw, _ := ParseQuery("Exception")
-	c, _ := SearchCommand("/dir", []string{"SystemOut.log"}, kw, 200, 30, "utf-8")
+	c, _ := SearchCommand("/dir", []string{"SystemOut.log"}, kw, 200, 30, "utf-8", false)
 	if !strings.Contains(c, "grep -HnE") {
 		t.Fatalf("单文件搜索应使用 grep -HnE（带 -H 输出 filename）: %s", c)
 	}
@@ -341,7 +341,7 @@ func TestSearchCommand_SingleFile_Uses_GrepH(t *testing.T) {
 func TestSearchCommand_NotOnly_Uses_GrepH(t *testing.T) {
 	// 纯 NOT 也必须保留 filename:lineno: 前缀。
 	kw, _ := ParseQuery("!DEBUG")
-	c, _ := SearchCommand("/dir", []string{"a.log"}, kw, 200, 30, "utf-8")
+	c, _ := SearchCommand("/dir", []string{"a.log"}, kw, 200, 30, "utf-8", false)
 	if !strings.Contains(c, "grep -HnE") {
 		t.Fatalf("纯 NOT 搜索必须用 grep -HnE 保留前缀: %s", c)
 	}
@@ -507,7 +507,7 @@ func TestSearchCommand_OR_IncludesFirstBranch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c, err := SearchCommand("/dir", []string{"a.log", "b.log"}, kw, 200, 30, "utf-8")
+	c, err := SearchCommand("/dir", []string{"a.log", "b.log"}, kw, 200, 30, "utf-8", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -541,7 +541,7 @@ func TestSearchCommand_OR_WithNegation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c, err := SearchCommand("/dir", []string{"a.log"}, kw, 200, 30, "utf-8")
+	c, err := SearchCommand("/dir", []string{"a.log"}, kw, 200, 30, "utf-8", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -558,9 +558,9 @@ func TestSearchCommand_OR_WithNegation(t *testing.T) {
 	if !strings.Contains(c, "sort -u") {
 		t.Fatalf("OR + NEG 必须用 sort -u 合并: %s", c)
 	}
-	// 纯 neg 段必须用 grep -HnE "^" 而不是 cat（保留 filename:lineno: 前缀，且包含空行）
-	// 验证：第二段（括号内）必须含 grep -HnE "^" 然后 grep -vE DEBUG
-	if !strings.Contains(c, `grep -HnE "^"`) {
+	// 纯 neg 段必须用 grep -HnE [-m N] "^" 而不是 cat（保留 filename:lineno: 前缀，且包含空行）
+	// 验证：第二段（括号内）必须含 grep -HnE 然后 "^" 然后 grep -vE DEBUG
+	if !strings.Contains(c, `grep -HnE`) || !strings.Contains(c, `"^"`) {
 		t.Fatalf("纯 neg 段应用 grep -HnE \"^\" 保留前缀: %s", c)
 	}
 }
@@ -574,15 +574,15 @@ func TestSearchCommand_OR_PureNegOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c, err := SearchCommand("/dir", []string{"a.log"}, kw, 200, 30, "utf-8")
+	c, err := SearchCommand("/dir", []string{"a.log"}, kw, 200, 30, "utf-8", false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(c, "sort -u") {
 		t.Fatalf("OR 必须有 sort -u: %s", c)
 	}
-	// 第一段必须保留 grep -HnE "^" 前缀
-	if !strings.Contains(c, `grep -HnE "^" --`) {
+	// 第一段必须保留 grep -HnE "^" 前缀（-m N 在 -HnE 和 "^" 之间）
+	if !strings.Contains(c, `grep -HnE`) || !strings.Contains(c, `"^" --`) {
 		t.Fatalf("第一段必须保留 grep -HnE \"^\" 前缀: %s", c)
 	}
 	// 两个 grep -vE 都必须存在

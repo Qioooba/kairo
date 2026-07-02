@@ -381,13 +381,15 @@ func ListCommand(dir string, patterns []string, max int, listMode string) (strin
 		// pattern 转义：只允许 glob 字符 * ? []，去掉其他特殊字符。
 		cleanPatterns := make([]string, 0, len(patterns))
 		for _, p := range patterns {
-			// 简单去掉 shell 注入风险字符；只保留 * ? [ ] 和普通字符。
+			// REVIEW-rc5 #5：原白名单只允许 glob 元字符 + ASCII 字母数字 + . - _，
+			// 中文 / Unicode 后缀（如「日志.2026.gz」「Système.1.log」）会被静默丢弃。
+			// 改成"排除法"——只去掉真正危险的 shell 元字符，其他字符（含中文 / Unicode）全保留。
 			cleaned := make([]rune, 0, len(p))
 			for _, r := range p {
-				if r == '*' || r == '?' || r == '[' || r == ']' || r == '.' || r == '-' || r == '_' ||
-					(r >= '0' && r <= '9') || (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') {
-					cleaned = append(cleaned, r)
+				if isShellUnsafePatternRune(r) {
+					continue
 				}
+				cleaned = append(cleaned, r)
 			}
 			if len(cleaned) == 0 {
 				continue
@@ -575,7 +577,12 @@ func ParseListOutputPOSIX(out string) ([]FileEntry, error) {
 //   - gbk / gb18030：keyword 先 UTF-8 → GBK，再用 printf %b '\xHH...' 形式交给远程 sh。
 //     shell 结构、文件路径、&& || ! 都保持原样；只有"关键词 token"按目标编码转字节。
 //     这样 UTF-8 页面输入的中文关键词能匹配 GBK 文件里的中文。
-func SearchCommand(dir string, files []string, kw []SearchKeyword, max, timeoutSec int, encoding string) (string, error) {
+//
+// ignoreCase（v0.13）：
+//   - true → 所有 grep 加 -i 标志（pattern 与文件内容都转小写匹配）。
+//   - false（默认）→ 大小写敏感，保持原行为。
+//   - 影响所有 grep 调用（首段 AND、OR 分支、neg 的 grep -vE、纯 neg 的 "^"）。
+func SearchCommand(dir string, files []string, kw []SearchKeyword, max, timeoutSec int, encoding string, ignoreCase bool) (string, error) {
 	if strings.TrimSpace(dir) == "" {
 		return "", fmt.Errorf("dir 不能为空")
 	}
@@ -626,8 +633,30 @@ func SearchCommand(dir string, files []string, kw []SearchKeyword, max, timeoutS
 		return "", fmt.Errorf("没有可用的搜索关键词")
 	}
 
-	fileList := strings.Join(quoteArgs(files), " ")
 	enc := strings.ToLower(strings.TrimSpace(encoding))
+	// v0.13：ignoreCase 标志，统一附加到所有 grep 命令上（首段 AND / OR 分支 / neg 过滤 / 纯 neg 的 "^"）。
+	// grep 的 -i 放最前面，配合原有的 -HnE 形成 "grep -iHnE" 形式，对所有中间 grep 同样保持 -i。
+	caseFlag := ""
+	if ignoreCase {
+		caseFlag = "i"
+	}
+	// P1-bugfix：每个文件单独 grep -m 限制单文件最大匹配数，确保所有文件都被搜索到。
+	// 原问题：grep file1 file2 file3 | head -n 200 时，如果 file1 匹配了 200+ 行，
+	// head 读完就关管道，grep 收 SIGPIPE 退出，file2/file3 根本没被搜。
+	// 修复策略：
+	//   1. 用 for 循环逐个文件 grep；
+	//   2. 每个 grep 加 -m perFileMax，限制单文件输出上限；
+	//   3. 所有文件结果合并后，再全局 sort -u | head -n max 截断总数。
+	// perFileMax 计算：平均分配 + 缓冲，保证每文件至少 30 行（如果有的话）。
+	perFileMax := max / len(files)
+	if perFileMax < 30 {
+		perFileMax = 30
+	}
+	perFileMax += 20 // 加缓冲，抵消 AND 链后续 grep 过滤掉的行
+	// 单文件场景：不需要循环，直接 grep 单文件（保持原有行为，只是加 -m 保险）
+	singleFile := len(files) == 1
+	// 构造 for 循环的文件列表：用单引号包裹每个文件名，安全拼接
+	quotedFiles := quoteArgs(files)
 	// quoteForGrep 根据目标编码生成 grep 模式部分的 shell token：
 	//   - utf-8：直接用 Go 的 %q 双引号包裹（UTF-8 字节安全）。
 	//   - gbk：用 $(printf %b '\xHH...') 展开 GBK 字节。
@@ -645,63 +674,80 @@ func SearchCommand(dir string, files []string, kw []SearchKeyword, max, timeoutS
 		return fmt.Sprintf("%q", pattern), nil
 	}
 
-	// P0-3 修复：OR 搜索时每段都要独立读文件列表，不能把第一段结果通过管道传给子 shell。
-	// 原 bug：`grep A -- files | (grep B -- files; grep C -- files)` 里，
-	// 子 shell 的 stdin 指向管道，但 grep B/C 不读 stdin，各自重新读 files，
-	// 导致 grep A 的结果实际上被丢弃。
-	//
-	// 正确结构：所有段（包括第一段 AND 链）全部放进统一子 shell，
-	// 每个分支独立用 grep 读 files，再 sort -u 合并。
-	// 例 A || B → `sh -c 'grep A -- files; grep B -- files' | sort -u | head -n N`
-	// 多段时：
-	//   ( grep A -- files | grep B -- files; grep C -- files ) | sort -u | head -n N
-	//
-	// buildBranch 是同一个 group 内的 AND 链构建（grep 串联 + neg 过滤），
-	// buildOrBranch 把 group 变成一个完整分支字符串（含括号外的 grep 读文件）。
-	// 我们把所有 groups（包括第一个）都作为分支，统一子 shell 合并。
-	var allBranches []string
-	for _, g := range groups {
+	// buildPerFileBranch 构建"对单个文件 $f"执行的 grep 管道（一个 OR 分支）。
+	// fileArg 是 grep 读文件的参数——单文件直接传文件名，多文件传循环变量 "$f"。
+	// 第一个 grep 加 -m perFileMax 限制单文件输出，防止单个文件吃光所有配额。
+	buildPerFileBranch := func(g orGroup, fileArg string) (string, error) {
 		var branch string
 		if len(g.pos) > 0 {
-			// AND 链：第一个 grep 读文件并加 filename:lineno: 前缀，后续 grep 串联过滤
 			pat0, err := quoteForGrep(g.pos[0])
 			if err != nil {
 				return "", err
 			}
-			// 关键：即使只有一个文件，grep -H 也要加，让输出有 filename: 前缀
-			// parseSearchOutput 按 filename: 分割，没有前缀会解析失败。
-			// 不能用 cat | grep：grep 看到 cat 的单流会去掉文件名，导致解析错位。
-			branch = fmt.Sprintf("grep -HnE %s -- %s", pat0, fileList)
+			// 关键：grep -H 必须加（即使单文件），保证输出有 filename: 前缀；
+			// grep -m N 限制单文件最大匹配行数，确保后续文件能被搜到。
+			branch = fmt.Sprintf("LC_ALL=C grep -HnE%s -m %d %s -- %s", caseFlag, perFileMax, pat0, fileArg)
 			for _, term := range g.pos[1:] {
 				pat, err := quoteForGrep(term)
 				if err != nil {
 					return "", err
 				}
-				branch += " | grep -E " + pat
+				branch += " | LC_ALL=C grep -" + caseFlag + "E " + pat
 			}
 		} else {
-			// 纯 neg（例 "!DEBUG"）：用 "^" 匹配所有行（包括空行）并加 filename:lineno: 前缀。
-			branch = fmt.Sprintf("grep -HnE %q -- %s", "^", fileList)
+			// 纯 neg（例 "!DEBUG"）：用 "^" 匹配所有行，同样加 -m 限制。
+			branch = fmt.Sprintf("LC_ALL=C grep -HnE%s -m %d %q -- %s", caseFlag, perFileMax, "^", fileArg)
 		}
-		// neg 过滤（每组都适用，包括纯 neg 组）
 		for _, p := range g.neg {
 			pat, err := quoteForGrep(p)
 			if err != nil {
 				return "", err
 			}
-			branch += " | grep -vE " + pat
+			branch += " | LC_ALL=C grep -v" + caseFlag + "E " + pat
 		}
-		allBranches = append(allBranches, branch)
+		return branch, nil
 	}
 
 	var cmdBody string
-	if len(allBranches) == 1 {
-		// 单一分支：不需要子 shell，直接 pipe 到 sort + head
-		cmdBody = allBranches[0] + " | LC_ALL=C sort -u | head -n " + strconv.Itoa(max)
+	if singleFile {
+		// 单文件：不需要 for 循环，直接 grep 该文件
+		var allBranches []string
+		for _, g := range groups {
+			b, err := buildPerFileBranch(g, quotedFiles[0])
+			if err != nil {
+				return "", err
+			}
+			allBranches = append(allBranches, b)
+		}
+		if len(allBranches) == 1 {
+			cmdBody = allBranches[0] + " | LC_ALL=C sort -u | head -n " + strconv.Itoa(max)
+		} else {
+			cmdBody = "(" + strings.Join(allBranches, "; ") + ") | LC_ALL=C sort -u | head -n " + strconv.Itoa(max)
+		}
 	} else {
-		// 多分支 OR：所有分支放进统一子 shell（每个分支独立读 files），再 sort -u + head
-		// 结构：( branch1; branch2; ... ) | LC_ALL=C sort -u | head -n N
-		cmdBody = "(" + strings.Join(allBranches, "; ") + ") | LC_ALL=C sort -u | head -n " + strconv.Itoa(max)
+		// 多文件：for f in ...; do ...; done 循环逐个 grep，每文件用 -m 限制
+		// 结构：
+		//   (for f in 'f1' 'f2' 'f3'; do
+		//     [OR 多分支：( branch1_for_f; branch2_for_f )]
+		//     [单分支：branch1_for_f]
+		//   done) | sort -u | head -n max
+		var perFileParts []string
+		for _, g := range groups {
+			b, err := buildPerFileBranch(g, `"$f"`)
+			if err != nil {
+				return "", err
+			}
+			perFileParts = append(perFileParts, b)
+		}
+		var loopBody string
+		if len(perFileParts) == 1 {
+			loopBody = perFileParts[0]
+		} else {
+			// OR：多分支放进子 shell，保证分支间互不干扰（P0-3 修复语义）
+			loopBody = "(" + strings.Join(perFileParts, "; ") + ")"
+		}
+		fileList := strings.Join(quotedFiles, " ")
+		cmdBody = "(for f in " + fileList + "; do " + loopBody + "; done) | LC_ALL=C sort -u | head -n " + strconv.Itoa(max)
 	}
 
 	// 超时由 Go 客户端 ctx + 内部 timer 控制，这里不再依赖 Linux `timeout` 命令，
@@ -733,6 +779,28 @@ func quoteArgs(args []string) []string {
 // shellQuote 用 POSIX 单引号形式安全引用一个 shell token。
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// isShellUnsafePatternRune REVIEW-rc5 #5：判断一个 rune 在 posix_ls pattern 中
+// 是否属于 shell 危险字符。返回 true 表示需要从 pattern 中过滤掉。
+//
+// 危险字符清单（POSIX shell 元字符，会被 ls / grep 当成语法 / 注入载体）：
+//   - ' " ` $ \ ; & | < > ( ) { } —— 注入 / 重定向 / 子 shell
+//   - ! —— bash 历史展开 + 部分 shell 操作符
+//   - \n \r \t \x00 —— 控制字符 / NUL（截断）
+//   - ~ —— 用户主目录展开
+//   - = —— 部分 shell 当作赋值
+//
+// glob 元字符 * ? [ ] 以及 ASCII 字母数字、中文 / Unicode 全部允许。
+// pattern 最终会被包在 grep -E 里再用 shellQuote 二次转义，所以即使 pattern 含
+// 看起来"危险"的字符（比如空格）也不会触发 shell 注入——这一层是纵深防御。
+func isShellUnsafePatternRune(r rune) bool {
+	switch r {
+	case '\'', '"', '`', '$', '\\', ';', '&', '|', '<', '>',
+		'(', ')', '{', '}', '!', '~', '=', '\n', '\r', '\t', 0:
+		return true
+	}
+	return false
 }
 
 // ContextCommand 构造 "sed -n 'a,bp' file" 上下文查看命令
@@ -788,10 +856,15 @@ func ContextCommand(dir, file string, line, before, after, timeoutSec int) (stri
 		start = 1
 	}
 	end := line + after
-	cleanFile := strings.ReplaceAll(file, "'", "")
+	// REVIEW-rc5 #3：上游已经校验 file 不含 '，这里不再做 ReplaceAll 静默删 —
+	// 万一上游重构漏校验，O'Brien.log 会变成 OBrien.log 然后读到错的文件还不报错。
+	// 纵深防御：再 assert 一次，含 ' 直接报错，绝不静默删。
+	if strings.Contains(file, "'") {
+		return "", fmt.Errorf("file 含非法字符 '（纵深防御）")
+	}
 	// 不在 sed 前面加 `--` 终止符（sed 不支持）；文件名来自 ls 白名单。
 	cmd := fmt.Sprintf(`sh -c 'cd %q && sed -n "%d,%dp" %q'`,
-		dir, start, end, cleanFile)
+		dir, start, end, file)
 	return cmd, nil
 }
 
@@ -834,9 +907,12 @@ func TailCommand(dir, file string, lines int) (string, error) {
 	if strings.Contains(file, "..") {
 		return "", fmt.Errorf("file 不允许包含 '..'")
 	}
-	cleanFile := strings.ReplaceAll(file, "'", "")
+	// REVIEW-rc5 #3：纵深防御，再 assert 一次，绝不静默 ReplaceAll。
+	if strings.Contains(file, "'") {
+		return "", fmt.Errorf("file 含非法字符 '（纵深防御）")
+	}
 	cmd := fmt.Sprintf(`sh -c 'cd %q && tail -n %d -F %q 2>/dev/null'`,
-		dir, lines, cleanFile)
+		dir, lines, file)
 	return cmd, nil
 }
 
@@ -880,10 +956,13 @@ func LineCountCommand(dir, file string) (string, error) {
 	if strings.Contains(file, "..") {
 		return "", fmt.Errorf("file 不允许包含 '..'")
 	}
-	cleanFile := strings.ReplaceAll(file, "'", "")
+	// REVIEW-rc5 #3：纵深防御，再 assert 一次，绝不静默 ReplaceAll。
+	if strings.Contains(file, "'") {
+		return "", fmt.Errorf("file 含非法字符 '（纵深防御）")
+	}
 	// awk 脚本作为 shell token 直接拼（不是用户输入），固定字符串安全。
 	cmd := fmt.Sprintf(`sh -c 'cd %q && awk "END{print NR}" %q 2>/dev/null'`,
-		dir, cleanFile)
+		dir, file)
 	return cmd, nil
 }
 
@@ -951,8 +1030,16 @@ func ContextLinesForHitsCommand(dir, file string, hitLines []int, ctx int) (stri
 	}
 	hitsStr := strings.Join(hitsList, ",")
 
-	cleanFile := strings.ReplaceAll(file, "'", "")
-	cleanHitsStr := strings.ReplaceAll(hitsStr, "'", "")
+	// REVIEW-rc5 #3：纵深防御，上游已经校验不含 '，这里再 assert 一次，绝不静默 ReplaceAll。
+	// hitsStr 是 Go strconv.Itoa 出来的纯数字，理论上不可能含 '，但还是 assert 一下。
+	if strings.Contains(file, "'") {
+		return "", fmt.Errorf("file 含非法字符 '（纵深防御）")
+	}
+	if strings.Contains(hitsStr, "'") {
+		return "", fmt.Errorf("hit 行号非法（不应出现 '）")
+	}
+	cleanFile := file
+	cleanHitsStr := hitsStr
 	cleanCtx := strconv.Itoa(ctx)
 
 	// awk 脚本：
@@ -1015,34 +1102,20 @@ func ParseContextEnrichedOutput(out, server, dir string, files []FileEntry) []Se
 			continue
 		}
 
-		// 找第一个分隔符：: 表示匹配行，- 表示上下文行
-		// 格式：filename X lineno : content，其中 X 是 : 或 -
-		idx1 := strings.IndexAny(line, ":-")
-		if idx1 < 0 {
+		// REVIEW-rc5 #1：filename 可能含 : 或 -（AIX 老系统尤其常见），
+		// 原算法 strings.IndexAny(":-") 找第一个匹配，会把 "SystemOut:20260619.log:123:err"
+		// 解析成 file="SystemOut" lineno="20260619.log"（atoi 失败 → 整行丢弃）。
+		// 修复：扫描整行找第一个形如 "<sep><digits><:>" 或 "<sep><digits>$" 的子串，
+		// 其中 sep 是 : 或 -，digits 是 lineno。这要求 lineno 必须是纯数字——能完全消除
+		// filename 含 : 或 - 时的歧义。
+		file, sep, ln, content, ok := parseSearchLine(line)
+		if !ok {
 			continue
 		}
-		sep := line[idx1]
-		rest := line[idx1+1:]
-
-		// 第二个分隔符一定是 :（lineno 和 content 之间）
-		idx2 := strings.Index(rest, ":")
-		if idx2 < 0 {
-			continue
-		}
-
-		file := line[:idx1]
 		if useWhitelist {
 			if _, ok := byName[file]; !ok {
 				continue
 			}
-		}
-
-		lineNoStr := rest[:idx2]
-		content := rest[idx2+1:]
-
-		ln, err := strconv.Atoi(strings.TrimSpace(lineNoStr))
-		if err != nil {
-			continue
 		}
 
 		isContext := sep == '-'
@@ -1082,4 +1155,66 @@ func ParseContextEnrichedOutput(out, server, dir string, files []FileEntry) []Se
 	})
 
 	return hits
+}
+
+// parseSearchLine 解析单行 grep 输出。
+//
+// 格式：filename SEP lineno : content
+//   - SEP 是 `:`（匹配行）或 `-`（上下文行）
+//   - lineno 必须是纯数字
+//
+// REVIEW-rc5 #1：filename 可能含 `:` 或 `-`（AIX/Linux 都允许），原算法
+// strings.IndexAny(":-") 找第一个匹配会错位。本算法扫描整行找第一个
+// 形如 `SEP<digits><:>` 或 `SEP<digits>$` 的子串——lineno 必须是纯数字这一约束
+// 完全消除了 filename 含 `:`/`-` 时的歧义。
+//
+// 返回：
+//   - file: filename（不含末尾 SEP）
+//   - sep: SEP 字符（`:` 或 `-`），调用方用来区分匹配行/上下文行
+//   - lineno: 行号
+//   - content: SEP lineno 之后的全部内容
+//   - ok: 是否成功解析（false 时整行丢弃）
+func parseSearchLine(line string) (file string, sep byte, lineno int, content string, ok bool) {
+	n := len(line)
+	if n == 0 {
+		return "", 0, 0, "", false
+	}
+	// 扫所有 i：line[i] 是 `:` 或 `-`，尝试作为 SEP
+	for i := 0; i < n; i++ {
+		c := line[i]
+		if c != ':' && c != '-' {
+			continue
+		}
+		// SEP 之后必须是 digits
+		j := i + 1
+		if j >= n || line[j] < '0' || line[j] > '9' {
+			continue
+		}
+		for j < n && line[j] >= '0' && line[j] <= '9' {
+			j++
+		}
+		// digits 之后必须是 `:`（content 前缀分隔符）或行尾
+		if j < n && line[j] != ':' {
+			continue
+		}
+		// 找到合法 lineno
+		ln, err := strconv.Atoi(line[i+1 : j])
+		if err != nil {
+			continue
+		}
+		file = line[:i]
+		sep = c
+		lineno = ln
+		if j < n {
+			content = line[j+1:]
+		}
+		return file, sep, lineno, content, true
+	}
+	return "", 0, 0, "", false
+}
+
+// ParseSearchHitLine 是 parseSearchLine 的导出版本，供 handler 层复用同一套
+// 解析规则（避免规则漂移）。REVIEW-rc5 #1 修复后单点维护。
+func ParseSearchHitLine(line string) (file string, sep byte, lineno int, content string, ok bool) {
+	return parseSearchLine(line)
 }

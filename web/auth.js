@@ -14,6 +14,17 @@
   if (window.Kairo.auth) return;
   const auth = window.Kairo.auth = {};
 
+  const ICONS = {
+    smShield:  'M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z',
+    smUser:    'M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2M12 11a4 4 0 100-8 4 4 0 000 8z',
+  };
+  function svgIcon(name, size) {
+    const d = ICONS[name];
+    if (!d) return '';
+    const s = size || 24;
+    return '<svg xmlns="http://www.w3.org/2000/svg" width="' + s + '" height="' + s + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="' + d + '"/></svg>';
+  }
+
   // v0.9 rebrand: 一次性迁移 sessionStorage 用户名键（dtb_auth_user / otb_auth_user → kairo_auth_user）
   try {
     if (!sessionStorage.getItem('kairo_auth_user')) {
@@ -34,7 +45,7 @@
     _overlay.className = 'auth-overlay';
     _overlay.innerHTML =
       '<div class="auth-card">' +
-        '<div class="auth-icon">🔐</div>' +
+        '<div class="auth-icon">' + svgIcon('smShield', 48) + '</div>' +
         '<h2 class="auth-title">需要访问令牌</h2>' +
         '<p class="auth-subtitle">请向管理员索取您的访问令牌，输入后即可使用工具箱。<br/>令牌只需输入一次，浏览器会自动记住。</p>' +
         '<div class="auth-error" id="auth-err" style="display:none;"></div>' +
@@ -134,7 +145,7 @@
 
   function showUser(name) {
     buildUserArea();
-    if (_userLabel) _userLabel.textContent = name ? ('👤 ' + name) : '';
+    if (_userLabel) _userLabel.innerHTML = name ? ('<span style="display:inline-flex;align-items:center;gap:6px;">' + svgIcon('smUser', 16) + ' ' + name + '</span>') : '';
     if (_logoutBtn) _logoutBtn.style.display = name ? '' : 'none';
     try { sessionStorage.setItem('kairo_auth_user', name || ''); } catch (e) {}
   }

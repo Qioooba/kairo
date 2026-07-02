@@ -1,0 +1,722 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Kairo · 工具图标风格对比</title>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #fafafa;
+    --surface: #ffffff;
+    --line: #e5e7eb;
+    --line-soft: #f3f4f6;
+    --text: #14171e;
+    --text-dim: #6b7280;
+    --text-faint: #9ca3af;
+    --accent: #3b82f6;
+    --accent-soft: #dbeafe;
+    --accent-duo: #6366f1;
+    --accent-duo-soft: #e0e7ff;
+    --tag: #10b981;
+    --tag-soft: #d1fae5;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Outfit', system-ui, -apple-system, sans-serif;
+    font-size: 14px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .page {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 48px 32px 80px;
+  }
+
+  /* Header */
+  .header {
+    margin-bottom: 40px;
+  }
+  .eyebrow {
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 12px;
+  }
+  h1 {
+    font-size: 32px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    color: var(--text);
+    margin-bottom: 12px;
+  }
+  .subtitle {
+    font-size: 15px;
+    color: var(--text-dim);
+    max-width: 720px;
+  }
+  .subtitle code {
+    font-family: 'JetBrains Mono', monospace;
+    background: var(--line-soft);
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-size: 13px;
+    color: var(--text);
+  }
+
+  /* Style column header strip */
+  .style-strip {
+    display: grid;
+    grid-template-columns: 220px 1fr 1fr 1fr;
+    gap: 12px;
+    align-items: end;
+    padding: 20px 0 16px;
+    border-bottom: 1px solid var(--line);
+    margin-bottom: 0;
+    position: sticky;
+    top: 0;
+    background: var(--bg);
+    z-index: 10;
+  }
+  .style-strip .col-name {
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+  }
+  .style-strip .col-desc {
+    font-size: 13px;
+    color: var(--text-faint);
+    margin-top: 4px;
+    font-weight: 400;
+    text-transform: none;
+    letter-spacing: 0;
+  }
+
+  /* Row */
+  .row {
+    display: grid;
+    grid-template-columns: 220px 1fr 1fr 1fr;
+    gap: 12px;
+    padding: 20px 0;
+    border-bottom: 1px solid var(--line-soft);
+    align-items: center;
+  }
+  .row:hover { background: var(--surface); }
+
+  .row-label .name {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 4px;
+  }
+  .row-label .id {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    color: var(--text-faint);
+  }
+
+  /* Preview cell */
+  .preview {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+  .preview-card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 14px 16px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 280px;
+    height: 64px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.02);
+  }
+  .preview-card .icon-slot {
+    width: 36px;
+    height: 36px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .preview-card .icon-slot svg {
+    width: 28px;
+    height: 28px;
+  }
+  .preview-card .text {
+    flex: 1;
+    min-width: 0;
+  }
+  .preview-card .text .t-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+    line-height: 1.3;
+  }
+  .preview-card .text .t-desc {
+    font-size: 11px;
+    color: var(--text-dim);
+    line-height: 1.4;
+    margin-top: 2px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* Standalone large preview */
+  .preview-large {
+    width: 36px;
+    height: 36px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+  .preview-large svg {
+    width: 32px;
+    height: 32px;
+  }
+
+  /* Color variants */
+  .col-line .preview-large svg { color: var(--accent); }
+  .col-duo .preview-large svg { color: var(--accent-duo); }
+  .col-color .preview-large svg { color: #ea580c; }
+
+  /* Section break */
+  .section-divider {
+    margin: 56px 0 32px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+  .section-divider .label {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .section-divider .hint {
+    font-size: 13px;
+    color: var(--text-dim);
+  }
+
+  /* Pros / Cons grid */
+  .compare-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+    margin-top: 16px;
+  }
+  .compare-card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    padding: 20px 22px;
+  }
+  .compare-card h3 {
+    font-size: 15px;
+    font-weight: 600;
+    margin-bottom: 14px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .compare-card h3 .swatch {
+    width: 28px; height: 28px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .swatch.line { background: var(--accent-soft); color: var(--accent); }
+  .swatch.duo { background: var(--accent-duo-soft); color: var(--accent-duo); }
+  .swatch.color { background: #fed7aa; color: #ea580c; }
+  .swatch svg { width: 18px; height: 18px; }
+
+  .compare-card ul {
+    list-style: none;
+    font-size: 13px;
+    color: var(--text-dim);
+    line-height: 1.7;
+  }
+  .compare-card li::before {
+    content: "·";
+    color: var(--text-faint);
+    margin-right: 8px;
+  }
+  .compare-card li.pos::before { content: "+"; color: var(--tag); font-weight: 600; }
+  .compare-card li.neg::before { content: "−"; color: #f43f5e; font-weight: 600; }
+
+  /* Original ascii reference */
+  .ascii-ref {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    color: var(--text-faint);
+    background: var(--surface);
+    border: 1px dashed var(--line);
+    padding: 8px 12px;
+    border-radius: 6px;
+    margin-top: 8px;
+    display: inline-block;
+  }
+
+  /* Footer recommendation */
+  .rec {
+    margin-top: 40px;
+    padding: 24px 28px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 24px;
+  }
+  .rec-block .rec-label {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    margin-bottom: 6px;
+  }
+  .rec-block .rec-text {
+    font-size: 13px;
+    color: var(--text);
+    line-height: 1.6;
+  }
+
+  @media (max-width: 900px) {
+    .style-strip, .row { grid-template-columns: 1fr; }
+    .compare-grid, .rec { grid-template-columns: 1fr; }
+    .preview-card { width: 100%; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <div class="header">
+    <div class="eyebrow">Kairo · 视觉设计对比</div>
+    <h1>工具卡片图标 · 三种风格预览</h1>
+    <p class="subtitle">
+      针对当前首页 13 个工具卡片的角标改造。每行展示同一工具在三种风格下的实际效果。预览卡片模拟真实 <code>tool-card</code> 的尺寸和排版，右侧独立大图标用于细看图形细节。
+    </p>
+  </div>
+
+  <!-- Column headers -->
+  <div class="style-strip">
+    <div class="col-name"></div>
+    <div class="col-name">
+      A · 单色线性
+      <div class="col-desc">stroke-only · 24px · currentColor · 1-2KB</div>
+    </div>
+    <div class="col-name">
+      B · 拟物 Duotone
+      <div class="col-desc">fill 双色阶 · 主题色 + 浅色背景形</div>
+    </div>
+    <div class="col-name">
+      C · 彩色 Emoji 风
+      <div class="col-desc">多色填充 · 类似 Twemoji / Fluent</div>
+    </div>
+  </div>
+
+  <div id="rows"></div>
+
+  <div class="section-divider">
+    <div class="label">风格对比小结</div>
+    <div class="hint">从清晰度、风格统一、改造工作量、Win 7 兼容性四个维度</div>
+  </div>
+
+  <div class="compare-grid">
+    <div class="compare-card">
+      <h3><span class="swatch line">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/></svg>
+      </span>单色线性</h3>
+      <ul>
+        <li class="pos">风格统一，最有"工具感"</li>
+        <li class="pos">hover/active/主题切换能直接换色</li>
+        <li class="pos">体积最小，单文件 1-2KB</li>
+        <li class="pos">Win 7 / WebView2 完美兼容</li>
+        <li class="neg">视觉冲击力弱于彩色</li>
+        <li class="neg">需要美术把控线条比例</li>
+      </ul>
+    </div>
+    <div class="compare-card">
+      <h3><span class="swatch duo">
+        <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="9"/></svg>
+      </span>拟物 Duotone</h3>
+      <ul>
+        <li class="pos">比单色更厚重，有质感</li>
+        <li class="pos">仍然能换主色，但背景色固定</li>
+        <li class="neg">配色一多容易显得花哨</li>
+        <li class="neg">运维工具场景偏"过于设计"</li>
+        <li class="neg">和现有"专业简洁"调性略冲突</li>
+      </ul>
+    </div>
+    <div class="compare-card">
+      <h3><span class="swatch color">
+        <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="9"/></svg>
+      </span>彩色 Emoji 风</h3>
+      <ul>
+        <li class="pos">视觉冲击最强，最"亲切"</li>
+        <li class="pos">接近原生 emoji，用户认知成本低</li>
+        <li class="neg">容易"卡通化"，不够专业</li>
+        <li class="neg">每个图标都要单独配色，工作量大</li>
+        <li class="neg">和"天命契机"主题的江湖感冲突</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="rec">
+    <div class="rec-block">
+      <div class="rec-label">我的建议</div>
+      <div class="rec-text">首选 <strong>A 单色线性</strong>。和你已有的品牌色（青蓝、靛蓝）、主题切换（"天命契机" 主题的极简风）最搭。</div>
+    </div>
+    <div class="rec-block">
+      <div class="rec-label">落地成本</div>
+      <div class="rec-text">13 个 SVG 手绘约 30 分钟；或者用 Lucide 直接挑 13 个相近图标复制粘贴，10 分钟搞定。</div>
+    </div>
+    <div class="rec-block">
+      <div class="rec-label">附带收益</div>
+      <div class="rec-text">顺手把侧边栏 <code>ℹ️</code>、主题按钮 <code>🌙</code> 也换 SVG，一并解决 Win 7 上 emoji 兼容隐患。</div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+/* ===== 13 个工具的图标数据 =====
+ * 每个工具三种风格的 SVG
+ */
+const tools = [
+  {
+    id: 'websphere', name: '日志助手', desc: '多服务器日志并行搜索',
+    ascii: '[L]',
+    line: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+      <path d="M14 2v6h6"/>
+      <path d="M8 13h8M8 17h6M8 9h2"/>
+    </svg>`,
+    duo: `<svg viewBox="0 0 24 24">
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" fill="#e0e7ff"/>
+      <path d="M14 2v6h6" fill="#c7d2fe"/>
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" fill="none" stroke="#6366f1" stroke-width="1.5" stroke-linejoin="round"/>
+      <path d="M14 2v6h6" fill="none" stroke="#6366f1" stroke-width="1.5" stroke-linejoin="round"/>
+      <path d="M8 13h8M8 17h6M8 9h2" fill="none" stroke="#6366f1" stroke-width="1.5" stroke-linecap="round"/>
+    </svg>`,
+    color: `<svg viewBox="0 0 24 24">
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" fill="#fef3c7"/>
+      <path d="M14 2v6h6" fill="#fde68a"/>
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" fill="none" stroke="#d97706" stroke-width="1.5" stroke-linejoin="round"/>
+      <path d="M8 13h8M8 17h6M8 9h2" stroke="#92400e" stroke-width="2" stroke-linecap="round"/>
+    </svg>`
+  },
+  {
+    id: 'files', name: '文件下载', desc: 'SSH 目录浏览下载',
+    ascii: '[D]',
+    line: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+      <path d="M14 2v6h6"/>
+      <path d="M12 18v-6"/>
+      <path d="m9 15 3 3 3-3"/>
+    </svg>`,
+    duo: `<svg viewBox="0 0 24 24">
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" fill="#d1fae5"/>
+      <path d="M14 2v6h6" fill="#a7f3d0"/>
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" fill="none" stroke="#10b981" stroke-width="1.5" stroke-linejoin="round"/>
+      <path d="M14 2v6h6" fill="none" stroke="#10b981" stroke-width="1.5" stroke-linejoin="round"/>
+      <path d="M12 18v-6m-3 3 3 3 3-3" fill="none" stroke="#10b981" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>`,
+    color: `<svg viewBox="0 0 24 24">
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" fill="#dcfce7"/>
+      <path d="M14 2v6h6" fill="#bbf7d0"/>
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" fill="none" stroke="#16a34a" stroke-width="1.5"/>
+      <path d="M12 18v-6m-3 3 3 3 3-3" fill="none" stroke="#15803d" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>`
+  },
+  {
+    id: 'formatter', name: '报文格式化', desc: 'JSON/XML/YAML 互转',
+    ascii: '{}',
+    line: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M8 3H7a2 2 0 0 0-2 2v4a2 2 0 0 1-2 2 2 2 0 0 1 2 2v4a2 2 0 0 0 2 2h1"/>
+      <path d="M16 21h1a2 2 0 0 0 2-2v-4a2 2 0 0 1 2-2 2 2 0 0 1-2-2V5a2 2 0 0 0-2-2h-1"/>
+      <path d="M8 12h8"/>
+    </svg>`,
+    duo: `<svg viewBox="0 0 24 24">
+      <rect x="3" y="5" width="18" height="14" rx="3" fill="#e0e7ff"/>
+      <path d="M8 3H7a2 2 0 0 0-2 2v4a2 2 0 0 1-2 2 2 2 0 0 1 2 2v4a2 2 0 0 0 2 2h1" fill="none" stroke="#6366f1" stroke-width="1.5" stroke-linecap="round"/>
+      <path d="M16 21h1a2 2 0 0 0 2-2v-4a2 2 0 0 1 2-2 2 2 0 0 1-2-2V5a2 2 0 0 0-2-2h-1" fill="none" stroke="#6366f1" stroke-width="1.5" stroke-linecap="round"/>
+      <path d="M8 12h8" fill="none" stroke="#6366f1" stroke-width="1.5" stroke-linecap="round"/>
+    </svg>`,
+    color: `<svg viewBox="0 0 24 24">
+      <rect x="3" y="5" width="18" height="14" rx="3" fill="#ede9fe"/>
+      <path d="M8 3H7a2 2 0 0 0-2 2v4a2 2 0 0 1-2 2 2 2 0 0 1 2 2v4a2 2 0 0 0 2 2h1" fill="none" stroke="#7c3aed" stroke-width="2" stroke-linecap="round"/>
+      <path d="M16 21h1a2 2 0 0 0 2-2v-4a2 2 0 0 1 2-2 2 2 0 0 1-2-2V5a2 2 0 0 0-2-2h-1" fill="none" stroke="#7c3aed" stroke-width="2" stroke-linecap="round"/>
+      <path d="M8 12h8" fill="none" stroke="#a855f7" stroke-width="2" stroke-linecap="round"/>
+    </svg>`
+  },
+  {
+    id: 'http', name: 'HTTP 接口测试', desc: 'Postman 风格调试',
+    ascii: '~',
+    line: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="12" r="10"/>
+      <path d="M2 12h20"/>
+      <path d="M12 2a15 15 0 0 1 4 10 15 15 0 0 1-4 10 15 15 0 0 1-4-10 15 15 0 0 1 4-10z"/>
+    </svg>`,
+    duo: `<svg viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="10" fill="#dbeafe"/>
+      <circle cx="12" cy="12" r="10" fill="none" stroke="#3b82f6" stroke-width="1.5"/>
+      <path d="M2 12h20M12 2a15 15 0 0 1 4 10 15 15 0 0 1-4 10 15 15 0 0 1-4-10 15 15 0 0 1 4-10z" fill="none" stroke="#3b82f6" stroke-width="1.5"/>
+    </svg>`,
+    color: `<svg viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="10" fill="#bfdbfe"/>
+      <path d="M2 12h20" stroke="#1e40af" stroke-width="2"/>
+      <path d="M12 2a15 15 0 0 1 4 10 15 15 0 0 1-4 10 15 15 0 0 1-4-10 15 15 0 0 1 4-10z" fill="none" stroke="#1e40af" stroke-width="2"/>
+      <circle cx="17" cy="8" r="1.5" fill="#fbbf24"/>
+    </svg>`
+  },
+  {
+    id: 'compare', name: '代码比对', desc: '文本/文件夹 diff',
+    ascii: '<>',
+    line: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="5" cy="6" r="3"/>
+      <circle cx="19" cy="18" r="3"/>
+      <path d="M5 9v6a3 3 0 0 0 3 3h8a3 3 0 0 1 3 3"/>
+    </svg>`,
+    duo: `<svg viewBox="0 0 24 24">
+      <circle cx="5" cy="6" r="3" fill="#dbeafe"/>
+      <circle cx="19" cy="18" r="3" fill="#fee2e2"/>
+      <path d="M5 9v6a3 3 0 0 0 3 3h8a3 3 0 0 1 3 3" fill="none" stroke="#6366f1" stroke-width="1.5" stroke-linecap="round"/>
+      <circle cx="5" cy="6" r="3" fill="none" stroke="#3b82f6" stroke-width="1.5"/>
+      <circle cx="19" cy="18" r="3" fill="none" stroke="#ef4444" stroke-width="1.5"/>
+    </svg>`,
+    color: `<svg viewBox="0 0 24 24">
+      <circle cx="5" cy="6" r="3" fill="#bfdbfe"/>
+      <circle cx="19" cy="18" r="3" fill="#fecaca"/>
+      <path d="M5 9v6a3 3 0 0 0 3 3h8a3 3 0 0 1 3 3" fill="none" stroke="#6366f1" stroke-width="2" stroke-linecap="round"/>
+    </svg>`
+  },
+  {
+    id: 'commands', name: '常用命令速查', desc: 'Linux/Git/Docker 等',
+    ascii: '>_',
+    line: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <polyline points="4 17 10 11 4 5"/>
+      <line x1="12" y1="19" x2="20" y2="19"/>
+    </svg>`,
+    duo: `<svg viewBox="0 0 24 24">
+      <rect x="2" y="4" width="20" height="16" rx="2" fill="#e0e7ff"/>
+      <polyline points="7 9 11 12 7 15" fill="none" stroke="#6366f1" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+      <line x1="13" y1="16" x2="17" y2="16" stroke="#6366f1" stroke-width="1.8" stroke-linecap="round"/>
+    </svg>`,
+    color: `<svg viewBox="0 0 24 24">
+      <rect x="2" y="4" width="20" height="16" rx="2" fill="#1f2937"/>
+      <polyline points="7 9 11 12 7 15" fill="none" stroke="#10b981" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      <line x1="13" y1="16" x2="17" y2="16" stroke="#10b981" stroke-width="2" stroke-linecap="round"/>
+      <circle cx="6" cy="6.5" r="0.6" fill="#ef4444"/>
+      <circle cx="8" cy="6.5" r="0.6" fill="#fbbf24"/>
+      <circle cx="10" cy="6.5" r="0.6" fill="#10b981"/>
+    </svg>`
+  },
+  {
+    id: 'diagnostics', name: '环境自检', desc: '一键体检网络/工具',
+    ascii: '[!]',
+    line: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+      <path d="m9 12 2 2 4-4"/>
+    </svg>`,
+    duo: `<svg viewBox="0 0 24 24">
+      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" fill="#d1fae5"/>
+      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" fill="none" stroke="#10b981" stroke-width="1.5" stroke-linejoin="round"/>
+      <path d="m9 12 2 2 4-4" fill="none" stroke="#10b981" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>`,
+    color: `<svg viewBox="0 0 24 24">
+      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" fill="#bbf7d0"/>
+      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" fill="none" stroke="#16a34a" stroke-width="1.5"/>
+      <path d="m9 12 2 2 4-4" fill="none" stroke="#15803d" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>`
+  },
+  {
+    id: 'downloads', name: '下载历史', desc: '已下载文件管理',
+    ascii: '[v]',
+    line: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+      <polyline points="7 10 12 15 17 10"/>
+      <line x1="12" y1="15" x2="12" y2="3"/>
+    </svg>`,
+    duo: `<svg viewBox="0 0 24 24">
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" fill="#e0e7ff"/>
+      <polyline points="7 10 12 15 17 10" fill="none" stroke="#6366f1" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+      <line x1="12" y1="15" x2="12" y2="3" stroke="#6366f1" stroke-width="1.8" stroke-linecap="round"/>
+    </svg>`,
+    color: `<svg viewBox="0 0 24 24">
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" fill="#c7d2fe"/>
+      <polyline points="7 10 12 15 17 10" fill="none" stroke="#4f46e5" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      <line x1="12" y1="15" x2="12" y2="3" stroke="#4f46e5" stroke-width="2" stroke-linecap="round"/>
+      <path d="M9 21h6" stroke="#4f46e5" stroke-width="2" stroke-linecap="round"/>
+    </svg>`
+  },
+  {
+    id: 'config', name: '系统配置', desc: '服务器/系统配置编辑',
+    ascii: '[=]',
+    line: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="12" r="3"/>
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+    </svg>`,
+    duo: `<svg viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="3" fill="#e0e7ff"/>
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" fill="#e0e7ff" stroke="#6366f1" stroke-width="1.5" stroke-linejoin="round"/>
+      <circle cx="12" cy="12" r="3" fill="none" stroke="#6366f1" stroke-width="1.5"/>
+    </svg>`,
+    color: `<svg viewBox="0 0 24 24">
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" fill="#fde68a" stroke="#d97706" stroke-width="1.5" stroke-linejoin="round"/>
+      <circle cx="12" cy="12" r="3" fill="#fbbf24" stroke="#92400e" stroke-width="1.5"/>
+    </svg>`
+  },
+  {
+    id: 'timestamp', name: '时间戳转换', desc: '时区/秒毫秒',
+    ascii: '[T]',
+    line: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="12" r="10"/>
+      <polyline points="12 6 12 12 16 14"/>
+    </svg>`,
+    duo: `<svg viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="10" fill="#fef3c7"/>
+      <circle cx="12" cy="12" r="10" fill="none" stroke="#f59e0b" stroke-width="1.5"/>
+      <polyline points="12 6 12 12 16 14" fill="none" stroke="#f59e0b" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>`,
+    color: `<svg viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="10" fill="#fed7aa"/>
+      <circle cx="12" cy="12" r="10" fill="none" stroke="#ea580c" stroke-width="2"/>
+      <polyline points="12 6 12 12 16 14" fill="none" stroke="#9a3412" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      <line x1="12" y1="3" x2="12" y2="5" stroke="#9a3412" stroke-width="2" stroke-linecap="round"/>
+      <line x1="12" y1="19" x2="12" y2="21" stroke="#9a3412" stroke-width="2" stroke-linecap="round"/>
+    </svg>`
+  },
+  {
+    id: 'cron', name: 'Cron 解析', desc: '表达式 + 下次执行',
+    ascii: '[C]',
+    line: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="3" y="4" width="18" height="18" rx="2"/>
+      <line x1="16" y1="2" x2="16" y2="6"/>
+      <line x1="8" y1="2" x2="8" y2="6"/>
+      <line x1="3" y1="10" x2="21" y2="10"/>
+      <path d="M8 14h.01M12 14h.01M16 14h.01M8 18h.01M12 18h.01"/>
+    </svg>`,
+    duo: `<svg viewBox="0 0 24 24">
+      <rect x="3" y="4" width="18" height="18" rx="2" fill="#e0e7ff"/>
+      <rect x="3" y="4" width="18" height="18" rx="2" fill="none" stroke="#6366f1" stroke-width="1.5"/>
+      <line x1="16" y1="2" x2="16" y2="6" stroke="#6366f1" stroke-width="1.5" stroke-linecap="round"/>
+      <line x1="8" y1="2" x2="8" y2="6" stroke="#6366f1" stroke-width="1.5" stroke-linecap="round"/>
+      <line x1="3" y1="10" x2="21" y2="10" stroke="#6366f1" stroke-width="1.5"/>
+      <circle cx="8" cy="15" r="0.8" fill="#6366f1"/>
+      <circle cx="12" cy="15" r="0.8" fill="#6366f1"/>
+      <circle cx="16" cy="15" r="0.8" fill="#6366f1"/>
+    </svg>`,
+    color: `<svg viewBox="0 0 24 24">
+      <rect x="3" y="4" width="18" height="18" rx="2" fill="#ddd6fe"/>
+      <rect x="3" y="4" width="18" height="18" rx="2" fill="none" stroke="#7c3aed" stroke-width="2"/>
+      <line x1="16" y1="2" x2="16" y2="6" stroke="#5b21b6" stroke-width="2" stroke-linecap="round"/>
+      <line x1="8" y1="2" x2="8" y2="6" stroke="#5b21b6" stroke-width="2" stroke-linecap="round"/>
+      <line x1="3" y1="10" x2="21" y2="10" stroke="#5b21b6" stroke-width="2"/>
+      <circle cx="8" cy="15" r="1" fill="#a855f7"/>
+      <circle cx="12" cy="15" r="1" fill="#ec4899"/>
+      <circle cx="16" cy="15" r="1" fill="#a855f7"/>
+    </svg>`
+  },
+  {
+    id: 'jsonpath', name: 'JSONPath 查询', desc: '在线表达式求值',
+    ascii: '[J]',
+    line: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="5" cy="5" r="2"/>
+      <circle cx="19" cy="5" r="2"/>
+      <circle cx="12" cy="12" r="2"/>
+      <circle cx="5" cy="19" r="2"/>
+      <circle cx="19" cy="19" r="2"/>
+      <path d="M5 7v3a2 2 0 0 0 2 2h3a2 2 0 0 1 2 2 2 2 0 0 0 2 2h3a2 2 0 0 0 2-2V7"/>
+      <path d="M5 17v-3a2 2 0 0 1 2-2h3"/>
+    </svg>`,
+    duo: `<svg viewBox="0 0 24 24">
+      <circle cx="5" cy="5" r="2" fill="#dbeafe"/>
+      <circle cx="19" cy="5" r="2" fill="#dbeafe"/>
+      <circle cx="12" cy="12" r="2" fill="#dbeafe"/>
+      <circle cx="5" cy="19" r="2" fill="#dbeafe"/>
+      <circle cx="19" cy="19" r="2" fill="#dbeafe"/>
+      <path d="M5 7v3a2 2 0 0 0 2 2h3a2 2 0 0 1 2 2 2 2 0 0 0 2 2h3a2 2 0 0 0 2-2V7M5 17v-3a2 2 0 0 1 2-2h3" fill="none" stroke="#3b82f6" stroke-width="1.5"/>
+      <circle cx="5" cy="5" r="2" fill="none" stroke="#3b82f6" stroke-width="1.5"/>
+      <circle cx="19" cy="5" r="2" fill="none" stroke="#3b82f6" stroke-width="1.5"/>
+      <circle cx="12" cy="12" r="2" fill="none" stroke="#3b82f6" stroke-width="1.5"/>
+      <circle cx="5" cy="19" r="2" fill="none" stroke="#3b82f6" stroke-width="1.5"/>
+      <circle cx="19" cy="19" r="2" fill="none" stroke="#3b82f6" stroke-width="1.5"/>
+    </svg>`,
+    color: `<svg viewBox="0 0 24 24">
+      <path d="M5 5a2 2 0 1 0 0 .01zM19 5a2 2 0 1 0 0 .01zM12 12a2 2 0 1 0 0 .01zM5 19a2 2 0 1 0 0 .01zM19 19a2 2 0 1 0 0 .01z" stroke="#3b82f6" stroke-width="2" fill="#bfdbfe"/>
+      <path d="M5 7v3a2 2 0 0 0 2 2h3a2 2 0 0 1 2 2 2 2 0 0 0 2 2h3a2 2 0 0 0 2-2V7M5 17v-3a2 2 0 0 1 2-2h3" fill="none" stroke="#1e40af" stroke-width="2" stroke-linecap="round"/>
+    </svg>`
+  },
+  {
+    id: 'about', name: '关于', desc: '版本/架构/统计',
+    ascii: '[i]',
+    line: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="12" r="10"/>
+      <line x1="12" y1="16" x2="12" y2="12"/>
+      <line x1="12" y1="8" x2="12.01" y2="8"/>
+    </svg>`,
+    duo: `<svg viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="10" fill="#e0e7ff"/>
+      <circle cx="12" cy="12" r="10" fill="none" stroke="#6366f1" stroke-width="1.5"/>
+      <line x1="12" y1="16" x2="12" y2="12" stroke="#6366f1" stroke-width="2" stroke-linecap="round"/>
+      <circle cx="12" cy="8" r="0.8" fill="#6366f1"/>
+    </svg>`,
+    color: `<svg viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="10" fill="#c7d2fe"/>
+      <circle cx="12" cy="12" r="10" fill="none" stroke="#4338ca" stroke-width="2"/>
+      <line x1="12" y1="16" x2="12" y2="12" stroke="#4338ca" stroke-width="2.5" stroke-linecap="round"/>
+      <circle cx="12" cy="8" r="1" fill="#4338ca"/>
+    </svg>`
+  },
+];
+
+/* ===== 渲染 ===== */
+function card(t, svgKey, swatchClass) {
+  return `
+    <div class="preview">
+      <div class="preview-large ${swatchClass}">${t[svgKey]}</div>
+      <div class="preview-card">
+        <div class="icon-slot ${swatchClass}">${t[svgKey]}</div>
+        <div class="text">
+          <div class="t-name">${t.name}</div>
+          <div class="t-desc">${t.desc}</div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+const rows = document.getElementById('rows');
+tools.forEach(t => {
+  const row = document.createElement('div');
+  row.className = 'row';
+  row.innerHTML = `
+    <div class="row-label">
+      <div class="name">${t.name}</div>
+      <div class="id">${t.id}</div>
+      <div class="ascii-ref">原: ${t.ascii}</div>
+    </div>
+    <div class="col-line">${card(t, 'line', 'col-line')}</div>
+    <div class="col-duo">${card(t, 'duo', 'col-duo')}</div>
+    <div class="col-color">${card(t, 'color', 'col-color')}</div>
+  `;
+  rows.appendChild(row);
+});
+</script>
+</body>
+</html>

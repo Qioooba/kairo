@@ -11,8 +11,6 @@ package license
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"sync"
 	"testing"
 )
@@ -98,14 +96,6 @@ func TestIntegration_Activate_BadCode(t *testing.T) {
 		t.Errorf("无效激活码应该返回错误")
 	}
 	t.Logf("Activate 返回错误 (符合预期): %v", err)
-}
-
-// 工具: 确保测试时 home 目录干净
-func withCleanCertInt(t *testing.T) {
-	t.Helper()
-	if home, err := os.UserHomeDir(); err == nil {
-		_ = os.Remove(filepath.Join(home, ".kairo", "license.dat"))
-	}
 }
 
 // TestIntegration_ConcurrentActivate 验证: 多个 IP 同时激活同一个 code, 最终只有一个能成功

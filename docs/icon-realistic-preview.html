@@ -1,0 +1,671 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Kairo · 工具图标真实风格对比</title>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #fafafa;
+    --surface: #ffffff;
+    --line: #e5e7eb;
+    --line-soft: #f3f4f6;
+    --text: #14171e;
+    --text-dim: #6b7280;
+    --text-faint: #9ca3af;
+    --accent: #3b82f6;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Outfit', system-ui, -apple-system, sans-serif;
+    font-size: 14px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  .page { max-width: 1320px; margin: 0 auto; padding: 48px 32px 80px; }
+
+  .header { margin-bottom: 40px; }
+  .eyebrow {
+    font-size: 12px; font-weight: 600;
+    letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--accent); margin-bottom: 12px;
+  }
+  h1 { font-size: 32px; font-weight: 600; letter-spacing: -0.01em; margin-bottom: 12px; }
+  .subtitle { font-size: 15px; color: var(--text-dim); max-width: 760px; }
+  .subtitle b { color: var(--text); font-weight: 600; }
+
+  /* Style strip */
+  .style-strip {
+    display: grid;
+    grid-template-columns: 220px 1fr 1fr 1fr 1fr;
+    gap: 12px;
+    padding: 20px 0 16px;
+    border-bottom: 1px solid var(--line);
+    position: sticky; top: 0; background: var(--bg); z-index: 10;
+  }
+  .style-strip .col-name {
+    font-size: 12px; font-weight: 600;
+    letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--text-dim);
+  }
+  .style-strip .col-desc {
+    font-size: 12px; color: var(--text-faint);
+    margin-top: 6px; font-weight: 400;
+    text-transform: none; letter-spacing: 0;
+    line-height: 1.5;
+  }
+
+  .row {
+    display: grid;
+    grid-template-columns: 220px 1fr 1fr 1fr 1fr;
+    gap: 12px;
+    padding: 24px 0;
+    border-bottom: 1px solid var(--line-soft);
+    align-items: center;
+  }
+  .row:hover { background: var(--surface); }
+
+  .row-label .name { font-size: 15px; font-weight: 600; margin-bottom: 4px; }
+  .row-label .id {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px; color: var(--text-faint);
+  }
+
+  .preview {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    padding: 8px;
+  }
+  .preview-large {
+    width: 64px; height: 64px;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+  .preview-large svg { width: 48px; height: 48px; display: block; }
+
+  .preview-card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 14px 16px;
+    display: flex; align-items: center; gap: 12px;
+    width: 280px; height: 64px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.02);
+  }
+  .preview-card .icon-slot {
+    width: 36px; height: 36px;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+  .preview-card .icon-slot svg { width: 28px; height: 28px; display: block; }
+  .preview-card .text { flex: 1; min-width: 0; }
+  .preview-card .text .t-name { font-size: 13px; font-weight: 600; line-height: 1.3; }
+  .preview-card .text .t-desc {
+    font-size: 11px; color: var(--text-dim);
+    line-height: 1.4; margin-top: 2px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+
+  .section-divider {
+    margin: 56px 0 32px;
+    display: flex; align-items: center; gap: 16px;
+  }
+  .section-divider .label { font-size: 18px; font-weight: 600; }
+  .section-divider .hint { font-size: 13px; color: var(--text-dim); }
+
+  .compare-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-top: 16px; }
+  .compare-card { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 22px; }
+  .compare-card h3 { font-size: 15px; font-weight: 600; margin-bottom: 12px; }
+  .compare-card p { font-size: 13px; color: var(--text-dim); line-height: 1.65; margin-bottom: 8px; }
+  .compare-card ul { list-style: none; font-size: 12.5px; color: var(--text-dim); line-height: 1.7; }
+  .compare-card li::before { content: "·"; color: var(--text-faint); margin-right: 8px; }
+
+  .rec {
+    margin-top: 40px; padding: 24px 28px;
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: 16px;
+    display: grid; grid-template-columns: 1fr 1fr; gap: 24px;
+  }
+  .rec-block .rec-label {
+    font-size: 11px; font-weight: 600;
+    letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--text-dim); margin-bottom: 8px;
+  }
+  .rec-block .rec-text { font-size: 13.5px; color: var(--text); line-height: 1.7; }
+  .rec-block .rec-text b { color: var(--accent); font-weight: 600; }
+
+  @media (max-width: 1100px) {
+    .style-strip, .row { grid-template-columns: 1fr; }
+    .compare-grid, .rec { grid-template-columns: 1fr; }
+    .preview-card { width: 100%; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <div class="header">
+    <div class="eyebrow">Kairo · v2 设计对比</div>
+    <h1>工具图标 · 4 种"真实"风格预览</h1>
+    <p class="subtitle">
+      上一版 lucide stroke-only 偏抽象、太"系统 UI"。这次给你 4 种更"实"的方向：A <b>Badge 徽章</b>、B <b>彩色实心</b>、C <b>2.5D 拟物</b>、D <b>Heroicons mini solid</b>（额外参考）。
+      每个工具一图，左侧独立大图标看细节，右侧嵌进实际 tool-card 看真实效果。
+    </p>
+  </div>
+
+  <div class="style-strip">
+    <div></div>
+    <div class="col-name">
+      当前 Lucide<br><div class="col-desc">（上一版）stroke-only · 太抽象</div>
+    </div>
+    <div class="col-name">
+      A · Badge 徽章<br><div class="col-desc">圆角矩形底色 + 上面线条 icon（Material You 风格）</div>
+    </div>
+    <div class="col-name">
+      B · 彩色实心<br><div class="col-desc">每个图标一种主色填充，最厚实</div>
+    </div>
+    <div class="col-name">
+      C · 2.5D 拟物<br><div class="col-desc">渐变 + 高光，最"立体"、最"真实"</div>
+    </div>
+  </div>
+
+  <div id="rows"></div>
+
+  <div class="section-divider">
+    <div class="label">风格对比小结</div>
+    <div class="hint">从视觉重量、辨识度、改造工作量、与"天命契机"主题契合度四个维度</div>
+  </div>
+
+  <div class="compare-grid">
+    <div class="compare-card">
+      <h3>当前 Lucide</h3>
+      <p>纯线条、最抽象。视觉重量轻，看着像"系统设置"图标。</p>
+      <ul>
+        <li>改造已完成</li>
+        <li>风格偏冷淡</li>
+        <li>用户反馈"不好看"</li>
+      </ul>
+    </div>
+    <div class="compare-card">
+      <h3>A · Badge 徽章</h3>
+      <p>保留线条图标，加圆角矩形底色。每个工具一个色（蓝/绿/橙/紫…），识别度高，简洁不失活泼。</p>
+      <ul>
+        <li>改造快（lucide 外面套一层）</li>
+        <li>和现有"圆角矩形卡片"调性一致</li>
+        <li>视觉重量中等</li>
+      </ul>
+    </div>
+    <div class="compare-card">
+      <h3>B · 彩色实心</h3>
+      <p>实心填充，每个工具一个颜色。视觉重量最重、最"产品化"，接近 Fluent UI / Material Design 风格。</p>
+      <ul>
+        <li>改造中（13 个图标自绘 fill 版）</li>
+        <li>辨识度最高</li>
+        <li>和现有"冷淡"调性差异大</li>
+      </ul>
+    </div>
+    <div class="compare-card">
+      <h3>C · 2.5D 拟物</h3>
+      <p>渐变色 + 高光，最"立体"、最"真实"。但运维工具场景下偏"过于设计"。</p>
+      <ul>
+        <li>改造慢（13 个图标手绘渐变 + 高光）</li>
+        <li>风格偏卡通，和"天命契机"主题冲突</li>
+        <li>Win 7 上性能可接受</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="rec">
+    <div class="rec-block">
+      <div class="rec-label">我的推荐</div>
+      <div class="rec-text">
+        <b>A · Badge 徽章</b> 风格最契合你现在这套卡片——卡片本身就是圆角矩形，徽章图标在视觉上和卡片"内外呼应"，每个工具一种主色，辨识度直接上来，改造成本还低。
+      </div>
+    </div>
+    <div class="rec-block">
+      <div class="rec-label">落地时间</div>
+      <div class="rec-text">
+        A 风格：~15 分钟（icons.js 加个 wrap 函数，每个卡片外面套一层）。<br>
+        B 风格：~45 分钟（要自绘 13 个 fill 版路径）。<br>
+        C 风格：~1.5 小时（每个图标手绘渐变 + 高光 + 阴影）。
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+/* ===== 工具数据：13 个工具，4 种风格 SVG ===== */
+const tools = [
+  {
+    id: 'websphere', name: '日志助手', desc: '多服务器日志并行搜索',
+    // 当前 lucide（已有）
+    current: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z"/><path d="M14 2v5a1 1 0 0 0 1 1h5"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/></svg>`,
+    // A · Badge 风格：圆角矩形 + 上面线条 icon
+    badge: `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+      <rect x="2" y="2" width="20" height="20" rx="5" fill="#dbeafe"/>
+      <g fill="none" stroke="#1e40af" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M8 18a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h5l3 3v7a2 2 0 0 1-2 2z"/>
+        <path d="M13 6v2.5a.5.5 0 0 0 .5.5H16"/>
+        <line x1="9" y1="10" x2="9" y2="10.01"/>
+        <line x1="9" y1="13" x2="14" y2="13"/>
+        <line x1="9" y1="15.5" x2="14" y2="15.5"/>
+      </g>
+    </svg>`,
+    // B · 彩色实心：每个图标一个主色填充
+    filled: `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+      <path d="M14 3v4a1 1 0 0 0 1 1h4v9a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z" fill="#3b82f6"/>
+      <path d="M14 3v4a1 1 0 0 0 1 1h4l-5-5z" fill="#1e40af"/>
+      <rect x="8" y="11" width="8" height="1.5" rx="0.5" fill="#ffffff"/>
+      <rect x="8" y="14" width="8" height="1.5" rx="0.5" fill="#ffffff"/>
+      <circle cx="9.5" cy="8" r="0.8" fill="#ffffff"/>
+    </svg>`,
+    // C · 2.5D 拟物：渐变 + 高光 + 阴影
+    threeD: `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="g1" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#60a5fa"/>
+          <stop offset="100%" stop-color="#2563eb"/>
+        </linearGradient>
+      </defs>
+      <path d="M14 3v4a1 1 0 0 0 1 1h4v9a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z" fill="url(#g1)"/>
+      <path d="M14 3v4a1 1 0 0 0 1 1h4l-5-5z" fill="#1d4ed8"/>
+      <path d="M14 3v3a2 2 0 0 0 2 2h3" fill="none" stroke="#ffffff" stroke-width="0.8" opacity="0.5"/>
+      <rect x="8" y="10" width="8" height="1.4" rx="0.7" fill="#ffffff" opacity="0.85"/>
+      <rect x="8" y="13" width="8" height="1.4" rx="0.7" fill="#ffffff" opacity="0.7"/>
+      <rect x="8" y="16" width="5" height="1.4" rx="0.7" fill="#ffffff" opacity="0.55"/>
+    </svg>`,
+  },
+
+  {
+    id: 'files', name: '文件下载', desc: 'SSH 目录浏览下载',
+    current: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z"/><path d="M14 2v5a1 1 0 0 0 1 1h5"/><path d="M12 18v-6"/><path d="m9 15 3 3 3-3"/></svg>`,
+    badge: `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+      <rect x="2" y="2" width="20" height="20" rx="5" fill="#dcfce7"/>
+      <g fill="none" stroke="#15803d" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M8 18a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h5l3 3v7a2 2 0 0 1-2 2z"/>
+        <path d="M13 6v2.5a.5.5 0 0 0 .5.5H16"/>
+        <line x1="12" y1="14" x2="12" y2="9"/>
+        <polyline points="10 11.5 12 13.5 14 11.5"/>
+      </g>
+    </svg>`,
+    filled: `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+      <path d="M14 3v4a1 1 0 0 0 1 1h4v9a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z" fill="#10b981"/>
+      <path d="M14 3v4a1 1 0 0 0 1 1h4l-5-5z" fill="#047857"/>
+      <path d="M12 15.5v-5" stroke="#ffffff" stroke-width="2" stroke-linecap="round"/>
+      <polyline points="9.5 12.5 12 15 14.5 12.5" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>`,
+    threeD: `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="g2" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#34d399"/><stop offset="100%" stop-color="#059669"/>
+        </linearGradient>
+      </defs>
+      <path d="M14 3v4a1 1 0 0 0 1 1h4v9a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z" fill="url(#g2)"/>
+      <path d="M14 3v4a1 1 0 0 0 1 1h4l-5-5z" fill="#047857"/>
+      <path d="M14 3v3a2 2 0 0 0 2 2h3" fill="none" stroke="#ffffff" stroke-width="0.8" opacity="0.5"/>
+      <path d="M12 15v-5" stroke="#ffffff" stroke-width="2" stroke-linecap="round"/>
+      <polyline points="9.5 12 12 14.5 14.5 12" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>`,
+  },
+
+  {
+    id: 'formatter', name: '报文格式化', desc: 'JSON/XML/YAML 互转',
+    current: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H7a2 2 0 0 0-2 2v5a2 2 0 0 1-2 2 2 2 0 0 1 2 2v5c0 1.1.9 2 2 2h1"/><path d="M16 21h1a2 2 0 0 0 2-2v-5c0-1.1.9-2 2-2a2 2 0 0 1-2-2V5a2 2 0 0 0-2-2h-1"/></svg>`,
+    badge: `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+      <rect x="2" y="2" width="20" height="20" rx="5" fill="#fef3c7"/>
+      <g fill="none" stroke="#a16207" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M9 5H8a2 2 0 0 0-2 2v3a2 2 0 0 1-1 1.7 2 2 0 0 1 1 1.3v3a2 2 0 0 0 2 2h1"/>
+        <path d="M15 19h1a2 2 0 0 0 2-2v-3a2 2 0 0 1 1-1.3 2 2 0 0 1-1-1.7V7a2 2 0 0 0-2-2h-1"/>
+      </g>
+    </svg>`,
+    filled: `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+      <path d="M8 3H7a2 2 0 0 0-2 2v5a2 2 0 0 1-2 2 2 2 0 0 1 2 2v5c0 1.1.9 2 2 2h1a1 1 0 1 0 0-2H8a1 1 0 0 1-1-1v-4a3 3 0 0 0-1.5-2.6A3 3 0 0 0 7 9V6a1 1 0 0 1 1-1h1a1 1 0 1 0 0-2z" fill="#f59e0b"/>
+      <path d="M16 3a1 1 0 0 0 0 2h1a1 1 0 0 1 1 1v3a3 3 0 0 0 1.5 2.6A3 3 0 0 0 18 14v4a1 1 0 0 1-1 1h-1a1 1 0 1 0 0 2h1a3 3 0 0 0 3-3v-3a2 2 0 0 1 2-2 2 2 0 0 1-2-2V6a3 3 0 0 0-3-3z" fill="#f59e0b"/>
+      <circle cx="12" cy="12" r="1" fill="#dc2626"/>
+    </svg>`,
+    threeD: `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="g3" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#fbbf24"/><stop offset="100%" stop-color="#d97706"/>
+        </linearGradient>
+      </defs>
+      <rect x="3" y="3" width="18" height="18" rx="3" fill="url(#g3)"/>
+      <path d="M8 6a1 1 0 1 0 0 2v8a1 1 0 1 0 0 2M16 6a1 1 0 1 1 0 2v8a1 1 0 1 1 0 2" stroke="#ffffff" stroke-width="1.5" stroke-linecap="round" fill="none" opacity="0.95"/>
+      <circle cx="12" cy="12" r="1.4" fill="#dc2626"/>
+    </svg>`,
+  },
+
+  {
+    id: 'http', name: 'HTTP 接口测试', desc: 'Postman 风格调试',
+    current: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg>`,
+    badge: `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+      <rect x="2" y="2" width="20" height="20" rx="5" fill="#cffafe"/>
+      <g fill="none" stroke="#0e7490" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="7"/>
+        <path d="M12 5a10 10 0 0 1 0 14 10 10 0 0 1 0-14"/>
+        <line x1="5" y1="12" x2="19" y2="12"/>
+      </g>
+    </svg>`,
+    filled: `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+      <circle cx="12" cy="12" r="10" fill="#06b6d4"/>
+      <path d="M12 2a14.5 14.5 0 0 1 0 20 14.5 14.5 0 0 1 0-20" fill="none" stroke="#ffffff" stroke-width="1.4" opacity="0.85"/>
+      <line x1="2" y1="12" x2="22" y2="12" stroke="#ffffff" stroke-width="1.4" opacity="0.85"/>
+      <circle cx="17" cy="8" r="1.5" fill="#fbbf24"/>
+    </svg>`,
+    threeD: `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <radialGradient id="g4" cx="0.35" cy="0.35" r="0.7">
+          <stop offset="0%" stop-color="#67e8f9"/><stop offset="100%" stop-color="#0891b2"/>
+        </radialGradient>
+      </defs>
+      <circle cx="12" cy="12" r="10" fill="url(#g4)"/>
+      <ellipse cx="12" cy="12" rx="4.5" ry="10" fill="none" stroke="#ffffff" stroke-width="1.3" opacity="0.9"/>
+      <line x1="2" y1="12" x2="22" y2="12" stroke="#ffffff" stroke-width="1.3" opacity="0.9"/>
+      <circle cx="8" cy="7" r="2.5" fill="#ffffff" opacity="0.3"/>
+    </svg>`,
+  },
+
+  {
+    id: 'compare', name: '代码比对', desc: '文本/文件夹 diff',
+    current: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><path d="M11 18H8a2 2 0 0 1-2-2V9"/></svg>`,
+    badge: `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+      <rect x="2" y="2" width="20" height="20" rx="5" fill="#f3e8ff"/>
+      <g stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="7" cy="7" r="2" fill="#7c3aed"/>
+        <circle cx="17" cy="17" r="2" fill="#a855f7"/>
+        <path d="M11 7h2a2 2 0 0 1 2 2v5" fill="none" stroke="#6d28d9"/>
+        <path d="M13 17h-2a2 2 0 0 1-2-2v-5" fill="none" stroke="#6d28d9"/>
+      </g>
+    </svg>`,
+    filled: `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+      <circle cx="6" cy="6" r="3" fill="#7c3aed"/>
+      <circle cx="18" cy="18" r="3" fill="#a855f7"/>
+      <path d="M9 6h4a3 3 0 0 1 3 3v6" stroke="#7c3aed" stroke-width="2.5" stroke-linecap="round" fill="none"/>
+      <path d="M15 18h-4a3 3 0 0 1-3-3V9" stroke="#a855f7" stroke-width="2.5" stroke-linecap="round" fill="none"/>
+    </svg>`,
+    threeD: `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="g5a" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#a78bfa"/><stop offset="100%" stop-color="#6d28d9"/></linearGradient>
+        <linearGradient id="g5b" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#c084fc"/><stop offset="100%" stop-color="#9333ea"/></linearGradient>
+      </defs>
+      <circle cx="6" cy="6" r="3" fill="url(#g5a)"/>
+      <circle cx="18" cy="18" r="3" fill="url(#g5b)"/>
+      <path d="M9 6h4a3 3 0 0 1 3 3v6" stroke="#7c3aed" stroke-width="2.5" stroke-linecap="round" fill="none"/>
+      <path d="M15 18h-4a3 3 0 0 1-3-3V9" stroke="#a855f7" stroke-width="2.5" stroke-linecap="round" fill="none"/>
+    </svg>`,
+  },
+
+  {
+    id: 'commands', name: '常用命令速查', desc: 'Linux/Git/Docker 等',
+    current: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 11 2-2-2-2"/><path d="M11 13h4"/><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/></svg>`,
+    badge: `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+      <rect x="2" y="2" width="20" height="20" rx="5" fill="#1f2937"/>
+      <g fill="none" stroke="#86efac" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="5" y="6" width="14" height="12" rx="1.5"/>
+        <polyline points="8 10 10 12 8 14"/>
+        <line x1="11" y1="15" x2="14" y2="15"/>
+      </g>
+    </svg>`,
+    filled: `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+      <rect x="3" y="3" width="18" height="18" rx="2" fill="#1f2937"/>
+      <rect x="3" y="3" width="18" height="18" rx="2" fill="none" stroke="#374151" stroke-width="0.5"/>
+      <circle cx="6" cy="6.5" r="0.8" fill="#ef4444"/>
+      <circle cx="8.5" cy="6.5" r="0.8" fill="#eab308"/>
+      <circle cx="11" cy="6.5" r="0.8" fill="#10b981"/>
+      <polyline points="8 11 11 13 8 15" fill="none" stroke="#10b981" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      <line x1="13" y1="15" x2="17" y2="15" stroke="#10b981" stroke-width="2" stroke-linecap="round"/>
+    </svg>`,
+    threeD: `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="g6" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#374151"/><stop offset="100%" stop-color="#111827"/></linearGradient>
+      </defs>
+      <rect x="3" y="3" width="18" height="18" rx="3" fill="url(#g6)"/>
+      <path d="M3 8 Q12 6 21 8" stroke="#ffffff" stroke-width="0.6" fill="none" opacity="0.15"/>
+      <circle cx="6" cy="6.5" r="0.9" fill="#ef4444"/><circle cx="8.5" cy="6.5" r="0.9" fill="#eab308"/><circle cx="11" cy="6.5" r="0.9" fill="#10b981"/>
+      <polyline points="8 11 11 13 8 15" fill="none" stroke="#22d3ee" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      <line x1="13" y1="15" x2="17" y2="15" stroke="#22d3ee" stroke-width="2" stroke-linecap="round"/>
+    </svg>`,
+  },
+
+  {
+    id: 'diagnostics', name: '环境自检', desc: '一键体检网络/工具',
+    current: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></svg>`,
+    badge: `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+      <rect x="2" y="2" width="20" height="20" rx="5" fill="#d1fae5"/>
+      <g stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none" stroke="#047857">
+        <path d="M12 4 6 6v6c0 4 3 6.5 6 7.5 3-1 6-3.5 6-7.5V6z"/>
+        <polyline points="9 11.5 11 13.5 14.5 10"/>
+      </g>
+    </svg>`,
+    filled: `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+      <path d="M12 2.5 5.5 5v6.5c0 5 3.5 8.5 6.5 9.5 3-1 6.5-4.5 6.5-9.5V5z" fill="#10b981"/>
+      <path d="M9 11.5 11 13.5 14.5 10" fill="none" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>`,
+    threeD: `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="g7" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#34d399"/><stop offset="100%" stop-color="#047857"/></linearGradient>
+      </defs>
+      <path d="M12 2.5 5.5 5v6.5c0 5 3.5 8.5 6.5 9.5 3-1 6.5-4.5 6.5-9.5V5z" fill="url(#g7)"/>
+      <path d="M12 4.5 7 6v6c0 3 2 5.5 5 6.5 3-1 5-3.5 5-6.5V6z" fill="none" stroke="#ffffff" stroke-width="0.6" opacity="0.4"/>
+      <path d="M9 11.5 11 13.5 14.5 10" fill="none" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>`,
+  },
+
+  {
+    id: 'downloads', name: '下载历史', desc: '已下载文件管理',
+    current: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>`,
+    badge: `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+      <rect x="2" y="2" width="20" height="20" rx="5" fill="#ede9fe"/>
+      <g stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none" stroke="#5b21b6">
+        <path d="M5 12a7 7 0 1 0 7-7 7.5 7.5 0 0 0-5 2L5 9"/>
+        <polyline points="5 5 5 9 9 9"/>
+        <polyline points="9 9 9 12 12 13.5"/>
+      </g>
+    </svg>`,
+    filled: `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+      <path d="M12 3a9 9 0 1 1-6.36 2.64l-2.06 2.07a1 1 0 0 1-1.7-.71V3a1 1 0 0 1 1-1h4a1 1 0 1 1 0 2H4.4l1.5-1.5A9 9 0 0 1 12 3z" fill="#8b5cf6"/>
+      <polyline points="9 10 12 13 15 10" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      <line x1="12" y1="13" x2="12" y2="6" stroke="#ffffff" stroke-width="2" stroke-linecap="round"/>
+    </svg>`,
+    threeD: `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="g8" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#a78bfa"/><stop offset="100%" stop-color="#6d28d9"/></linearGradient>
+      </defs>
+      <circle cx="12" cy="12" r="9" fill="url(#g8)"/>
+      <path d="M12 3a9 9 0 1 1-6.36 2.64" fill="none" stroke="#ffffff" stroke-width="1.3" opacity="0.5"/>
+      <polyline points="3 4 3 8 7 8" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      <line x1="12" y1="12" x2="12" y2="6" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round"/>
+      <polyline points="9 10 12 13 15 10" fill="none" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>`,
+  },
+
+  {
+    id: 'config', name: '系统配置', desc: '服务器/系统配置编辑',
+    current: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"/><circle cx="12" cy="12" r="3"/></svg>`,
+    badge: `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+      <rect x="2" y="2" width="20" height="20" rx="5" fill="#fed7aa"/>
+      <g stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none" stroke="#9a3412">
+        <path d="M12 4.5a2 2 0 0 1 4 0 2 2 0 0 0 2.8 1.65 2 2 0 0 1 2 3.46 2 2 0 0 0 0 3.3 2 2 0 0 1-2 3.46A2 2 0 0 0 16 17.95a2 2 0 0 1-4 0 2 2 0 0 0-2.8-1.65 2 2 0 0 1-2-3.46 2 2 0 0 0 0-3.3 2 2 0 0 1 2-3.46A2 2 0 0 0 12 4.95"/>
+        <circle cx="12" cy="12" r="2.5" fill="#ea580c"/>
+      </g>
+    </svg>`,
+    filled: `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+      <path d="M14.7 4.1a2.5 2.5 0 0 1-5 0 2.5 2.5 0 0 0-3.5 2 2.5 2.5 0 0 1-2.5 4.3 2.5 2.5 0 0 0 0 4.1 2.5 2.5 0 0 1 2.5 4.3 2.5 2.5 0 0 0 3.5 2 2.5 2.5 0 0 1 5 0 2.5 2.5 0 0 0 3.5-2 2.5 2.5 0 0 1 2.5-4.3 2.5 2.5 0 0 0 0-4.1 2.5 2.5 0 0 1-2.5-4.3 2.5 2.5 0 0 0-3.5-2z" fill="#f97316"/>
+      <circle cx="12" cy="12" r="3.5" fill="#ffffff"/>
+    </svg>`,
+    threeD: `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="g9" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#fb923c"/><stop offset="100%" stop-color="#c2410c"/></linearGradient>
+      </defs>
+      <path d="M14.7 4.1a2.5 2.5 0 0 1-5 0 2.5 2.5 0 0 0-3.5 2 2.5 2.5 0 0 1-2.5 4.3 2.5 2.5 0 0 0 0 4.1 2.5 2.5 0 0 1 2.5 4.3 2.5 2.5 0 0 0 3.5 2 2.5 2.5 0 0 1 5 0 2.5 2.5 0 0 0 3.5-2 2.5 2.5 0 0 1 2.5-4.3 2.5 2.5 0 0 0 0-4.1 2.5 2.5 0 0 1-2.5-4.3 2.5 2.5 0 0 0-3.5-2z" fill="url(#g9)"/>
+      <circle cx="12" cy="12" r="3.5" fill="#ffffff"/>
+      <circle cx="12" cy="12" r="2" fill="#9a3412"/>
+    </svg>`,
+  },
+
+  // 小工具区
+  {
+    id: 'timestamp', name: '时间戳转换', desc: '时区/秒毫秒',
+    current: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>`,
+    badge: `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+      <rect x="2" y="2" width="20" height="20" rx="5" fill="#ffe4e6"/>
+      <g fill="none" stroke="#be123c" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="7"/>
+        <polyline points="12 8 12 12 14.5 13.5"/>
+      </g>
+    </svg>`,
+    filled: `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+      <circle cx="12" cy="12" r="10" fill="#f43f5e"/>
+      <circle cx="12" cy="12" r="8" fill="none" stroke="#ffffff" stroke-width="0.5" opacity="0.4"/>
+      <polyline points="12 6 12 12 15.5 14" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      <circle cx="12" cy="12" r="1" fill="#ffffff"/>
+    </svg>`,
+    threeD: `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <radialGradient id="g10" cx="0.35" cy="0.35" r="0.7"><stop offset="0%" stop-color="#fda4af"/><stop offset="100%" stop-color="#be123c"/></radialGradient>
+      </defs>
+      <circle cx="12" cy="12" r="10" fill="url(#g10)"/>
+      <circle cx="9" cy="9" r="3" fill="#ffffff" opacity="0.3"/>
+      <polyline points="12 6 12 12 15.5 14" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      <circle cx="12" cy="12" r="0.8" fill="#ffffff"/>
+    </svg>`,
+  },
+
+  {
+    id: 'cron', name: 'Cron 解析', desc: '表达式 + 下次执行',
+    current: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 14v2.2l1.6 1"/><path d="M16 2v4"/><path d="M21 7.5V6a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h3.5"/><path d="M3 10h5"/><path d="M8 2v4"/><circle cx="16" cy="16" r="6"/></svg>`,
+    badge: `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+      <rect x="2" y="2" width="20" height="20" rx="5" fill="#e0e7ff"/>
+      <g fill="none" stroke="#3730a3" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="4" y="5" width="13" height="11" rx="1.5"/>
+        <line x1="8" y1="3" x2="8" y2="6"/>
+        <line x1="13" y1="3" x2="13" y2="6"/>
+        <line x1="4" y1="9" x2="17" y2="9"/>
+        <circle cx="16" cy="15" r="4"/>
+        <polyline points="16 13 16 15 17.5 16"/>
+      </g>
+    </svg>`,
+    filled: `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+      <rect x="3" y="5" width="14" height="11" rx="1.5" fill="#6366f1"/>
+      <rect x="3" y="5" width="14" height="2.5" rx="1" fill="#4338ca"/>
+      <line x1="8" y1="3" x2="8" y2="6" stroke="#4338ca" stroke-width="1.5" stroke-linecap="round"/>
+      <line x1="13" y1="3" x2="13" y2="6" stroke="#4338ca" stroke-width="1.5" stroke-linecap="round"/>
+      <line x1="3" y1="9" x2="17" y2="9" stroke="#4338ca" stroke-width="0.8"/>
+      <circle cx="6" cy="12" r="0.8" fill="#ffffff"/>
+      <circle cx="9" cy="12" r="0.8" fill="#ffffff"/>
+      <circle cx="12" cy="12" r="0.8" fill="#ffffff"/>
+      <circle cx="16" cy="16" r="6" fill="#10b981"/>
+      <polyline points="16 13 16 16 18.5 17.5" fill="none" stroke="#ffffff" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>`,
+    threeD: `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="g11a" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#a5b4fc"/><stop offset="100%" stop-color="#4338ca"/></linearGradient>
+        <linearGradient id="g11b" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#34d399"/><stop offset="100%" stop-color="#047857"/></linearGradient>
+      </defs>
+      <rect x="3" y="5" width="14" height="11" rx="1.5" fill="url(#g11a)"/>
+      <line x1="3" y1="9" x2="17" y2="9" stroke="#3730a3" stroke-width="0.8"/>
+      <line x1="8" y1="3" x2="8" y2="6" stroke="#3730a3" stroke-width="1.6" stroke-linecap="round"/>
+      <line x1="13" y1="3" x2="13" y2="6" stroke="#3730a3" stroke-width="1.6" stroke-linecap="round"/>
+      <circle cx="6" cy="12" r="0.9" fill="#ffffff"/><circle cx="9" cy="12" r="0.9" fill="#ffffff"/><circle cx="12" cy="12" r="0.9" fill="#ffffff"/>
+      <circle cx="16" cy="16" r="6" fill="url(#g11b)"/>
+      <polyline points="16 13 16 16 18.5 17.5" fill="none" stroke="#ffffff" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>`,
+  },
+
+  {
+    id: 'jsonpath', name: 'JSONPath 查询', desc: '在线表达式求值',
+    current: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="8" height="8" x="3" y="3" rx="2"/><path d="M7 11v4a2 2 0 0 0 2 2h4"/><rect width="8" height="8" x="13" y="13" rx="2"/></svg>`,
+    badge: `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+      <rect x="2" y="2" width="20" height="20" rx="5" fill="#fce7f3"/>
+      <g fill="#be185d">
+        <rect x="5" y="5" width="6" height="6" rx="1.2"/>
+        <rect x="13" y="13" width="6" height="6" rx="1.2" fill="#db2777"/>
+      </g>
+      <path d="M11 8h2a3 3 0 0 1 3 3v2" stroke="#be185d" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>`,
+    filled: `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+      <rect x="3" y="3" width="9" height="9" rx="1.5" fill="#ec4899"/>
+      <rect x="12" y="12" width="9" height="9" rx="1.5" fill="#f472b6"/>
+      <path d="M12 6h2a3 3 0 0 1 3 3v3" stroke="#ec4899" stroke-width="2" stroke-linecap="round" fill="none"/>
+      <circle cx="5" cy="5" r="1.5" fill="#ffffff" opacity="0.7"/>
+      <circle cx="14" cy="14" r="1.5" fill="#ffffff" opacity="0.7"/>
+    </svg>`,
+    threeD: `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="g12a" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#f9a8d4"/><stop offset="100%" stop-color="#be185d"/></linearGradient>
+        <linearGradient id="g12b" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#fbcfe8"/><stop offset="100%" stop-color="#db2777"/></linearGradient>
+      </defs>
+      <rect x="3" y="3" width="9" height="9" rx="1.5" fill="url(#g12a)"/>
+      <rect x="12" y="12" width="9" height="9" rx="1.5" fill="url(#g12b)"/>
+      <path d="M12 6h2a3 3 0 0 1 3 3v3" stroke="#be185d" stroke-width="2" stroke-linecap="round" fill="none"/>
+    </svg>`,
+  },
+
+  {
+    id: 'about', name: '关于', desc: '版本/架构/统计',
+    current: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>`,
+    badge: `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+      <rect x="2" y="2" width="20" height="20" rx="5" fill="#cbd5e1"/>
+      <g fill="none" stroke="#1e293b" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="7"/>
+        <line x1="12" y1="15" x2="12" y2="11"/>
+        <circle cx="12" cy="8.5" r="0.5" fill="#1e293b"/>
+      </g>
+    </svg>`,
+    filled: `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+      <circle cx="12" cy="12" r="10" fill="#475569"/>
+      <circle cx="12" cy="12" r="9" fill="none" stroke="#ffffff" stroke-width="0.5" opacity="0.3"/>
+      <line x1="12" y1="16" x2="12" y2="11" stroke="#ffffff" stroke-width="2" stroke-linecap="round"/>
+      <circle cx="12" cy="8" r="1.2" fill="#ffffff"/>
+    </svg>`,
+    threeD: `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <radialGradient id="g13" cx="0.35" cy="0.35" r="0.7"><stop offset="0%" stop-color="#94a3b8"/><stop offset="100%" stop-color="#1e293b"/></radialGradient>
+      </defs>
+      <circle cx="12" cy="12" r="10" fill="url(#g13)"/>
+      <circle cx="9" cy="9" r="3" fill="#ffffff" opacity="0.25"/>
+      <line x1="12" y1="16" x2="12" y2="11" stroke="#ffffff" stroke-width="2" stroke-linecap="round"/>
+      <circle cx="12" cy="8" r="1.2" fill="#ffffff"/>
+    </svg>`,
+  },
+];
+
+function cell(tool, key) {
+  return `
+    <div class="preview">
+      <div class="preview-large">${tool[key]}</div>
+      <div class="preview-card">
+        <div class="icon-slot">${tool[key]}</div>
+        <div class="text">
+          <div class="t-name">${tool.name}</div>
+          <div class="t-desc">${tool.desc}</div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+const rows = document.getElementById('rows');
+tools.forEach(t => {
+  const row = document.createElement('div');
+  row.className = 'row';
+  row.innerHTML = `
+    <div class="row-label">
+      <div class="name">${t.name}</div>
+      <div class="id">${t.id}</div>
+    </div>
+    <div class="col-current">${cell(t, 'current')}</div>
+    <div class="col-badge">${cell(t, 'badge')}</div>
+    <div class="col-filled">${cell(t, 'filled')}</div>
+    <div class="col-3d">${cell(t, 'threeD')}</div>
+  `;
+  rows.appendChild(row);
+});
+</script>
+</body>
+</html>

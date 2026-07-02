@@ -14,7 +14,9 @@
   const { el } = Kairo.core;
   const { api } = Kairo.api || {};
 
-  const VERSION = 'v0.9.0';
+  // 与 internal/httpserver/httpserver.go 的 Version 常量保持一致；
+  // 后端 /api/config 读取失败时回退到这里（FE-006）。
+  const VERSION = 'v0.11-rc1';
 
   // =====================================================================
   // SVG icon 字典 — 13 个 section icon (Win7 兼容, 不依赖 emoji 字体)
@@ -35,7 +37,59 @@
     bugs:         'M12 2L2 22h20zM12 9v6M12 18v1',                                                                                                          // 警告三角 — 故障复盘
     history:      'M12 2a10 10 0 100 20 10 10 0 000-20zM12 6v6l4 2',                                                                                         // 时钟 — 版本演进史
     faq:          'M12 2a10 10 0 100 20 10 10 0 000-20zM9 9a3 3 0 016 0c0 2-3 3-3 5M12 17v1',                                                                // 圆 + 问号 — FAQ
-    roadmap:      'M5 3v18M5 4h11l-2 4 2 4H5'                                                                                                               // 旗子 — 路线图
+    roadmap:      'M5 3v18M5 4h11l-2 4 2 4H5',                                                                                                              // 旗子 — 路线图
+
+    // ----------------------------------------------------------------
+    // 设计哲学 8 原则 (renderPrinciplesSection 卡片)
+    // ----------------------------------------------------------------
+    safeClosed:   'M12 2L4 5v6c0 5 4 9 8 10 4-1 8-5 8-10V5zM12 11v3M12 17v.5',                                                                             // 盾牌 + 中心点 — 安全优先
+    controlled:   'M12 2a5 5 0 00-5 5v3H4v12h16V10h-3V7a5 5 0 00-5-5zM9 7a3 3 0 016 0v3H9z',                                                              // 锁 — 受控优于开放
+    context:      'M6 2h12v5l-3 5 3 5v5H6v-5l3-5-3-5zM9 2v5h6V2M9 17v5h6v-5',                                                                            // 沙漏 — 上下文优先
+    simple:       'M12 3a9 9 0 100 18 9 9 0 000-18zM12 7v5M9 9l3 3',                                                                                       // 圆 + 极简光点 — 极简优于复杂
+    testable:     'M9 2v9l-4 8a3 3 0 003 4h8a3 3 0 003-4l-4-8V2zM8 14h8',                                                                                  // 烧瓶 — 可测优于能跑 (复用 quality)
+    zeroPlain:    'M14 4a4 4 0 014 4 4 4 0 01-4 4h-1l-7 7H2v-4l7-7V7a4 4 0 014-4z',                                                                      // 钥匙 — 凭据零落盘
+    persist:      'M5 3h14v18H5zM7 3v6h10V3M9 14h6v6H9z',                                                                                                 // 保存/磁盘 — 写后即持久
+    operator:     'M3 4h18v16H3zM3 8h18M6 12l3 2-3 2M11 16h7',                                                                                           // 终端 — 工程师视角
+
+    // ----------------------------------------------------------------
+    // 功能模块 8 卡片 (renderModulesSection)
+    // ----------------------------------------------------------------
+    websphere:    'M4 4h16v2H4zM4 8h11v2H4zM4 12h16v2H4zM4 16h11v2H4zM4 20h16v2H4z',                                                                     // 日志列表 — WebSphere 日志助手
+    downloader:   'M12 3v12M7 10l5 5 5-5M5 19h14v2H5z',                                                                                                  // 下箭头 — 文件下载器
+    compareIc:    'M3 6l4 6-4 6M21 6l-4 6 4 6M14 4l-4 16',                                                                                                // diff 双柱 — 代码比对系统
+    http:         'M12 2a10 10 0 100 20 10 10 0 000-20zM2 12h20M12 2a15 15 0 010 20M12 2a15 15 0 000 20',                                                // 经纬网 — HTTP 测试台
+    formatter:    'M9 4a3 3 0 00-3 3v3a3 3 0 01-3 3v1a3 3 0 013 3v3a3 3 0 003 3M15 4a3 3 0 013 3v3a3 3 0 003 3v1a3 3 0 00-3 3v3a3 3 0 01-3 3',         // 大括号 — 格式化器
+    diagnostics:  'M3 12h4l2-6 4 12 2-6h6',                                                                                                              // 心电脉冲 — 诊断中心
+    config:       'M3 4h18v4H3zM3 10h12v4H3zM3 16h18v4H3z',                                                                                              // 堆叠方块 — 配置中心
+    commands:     'M3 4h18v16H3zM7 9l3 3-3 3M13 15h6',                                                                                                  // 命令行 — 常用命令
+
+    // ----------------------------------------------------------------
+    // 小标题装饰图标 (Win7 兼容, 替换 emoji)
+    // ----------------------------------------------------------------
+    smTarget:     'M12 2a10 10 0 100 20 10 10 0 000-20zm0 3a7 7 0 110 14 7 7 0 010-14zm0 3a4 4 0 100 8 4 4 0 000-8zm0 2a2 2 0 110 4 2 2 0 010-4z',         // 靶心 — 典型使用场景
+    smRepeat:     'M17 1l4 4-4 4M3 11V9a6 6 0 016-6h12M7 23l-4-4 4-4M21 13v2a6 6 0 01-6 6H3',                                                        // 循环箭头 — 数据流向
+    smGear:       'M14.7 4.1a2.5 2.5 0 0 1-5 0 2.5 2.5 0 0 0-3.5 2 2.5 2.5 0 0 1-2.5 4.3 2.5 2.5 0 0 0 0 4.1 2.5 2.5 0 0 1 2.5 4.3 2.5 2.5 0 0 0 3.5 2 2.5 2.5 0 0 1 5 0 2.5 2.5 0 0 0 3.5-2 2.5 2.5 0 0 1 2.5-4.3 2.5 2.5 0 0 0 0-4.1 2.5 2.5 0 0 1-2.5-4.3 2.5 2.5 0 0 0-3.5-2zM12 12a3.5 3.5 0 100 7 3.5 3.5 0 000-7z',   // 齿轮 — 后端技术栈
+    smPalette:    'M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.6 0 1-.4 1-1 0-.3-.1-.5-.2-.7-.2-.3-.3-.6-.3-1 0-1.1.9-2 2-2h1.7c2.9 0 5.3-2.4 5.3-5.3C22 6 17.5 2 12 2zM6.5 10a1.5 1.5 0 110-3 1.5 1.5 0 010 3zM10 6.5a1.5 1.5 0 113 0 1.5 1.5 0 01-3 0zm5 1.5a1.5 1.5 0 110-3 1.5 1.5 0 010 3z',    // 调色板 — 前端
+    smTools:      'M5 3a2 2 0 00-2 2v2h4V5h2V3H5zm12 0h-4v2h2v2h4V5a2 2 0 00-2-2zM3 9v8a3 3 0 003 3h2v-8H3zm16 0v8h-2v-2h-4v-2h4v-2h-4V9h6z',                                                     // 扳手螺丝刀 — 工程化实践
+    smShield:     'M12 2L3 6v6c0 5 4 9 9 10 5-1 9-5 9-10V6z',                                                                                               // 盾牌 — 安全模型 banner
+    smPackage:    'M3 7l9-4 9 4v10l-9 4-9-4zM3 7l9 4 9-4M12 11v10',                                                                                          // 包裹 — 后端包
+    smPin:        'M12 2L6 8v2l2 2v8l4-2 4 2v-8l2-2V8z',                                                                                                   // 图钉 — 前端页 / 关键 commit
+    smPlug:       'M8 3v5M16 3v5M5 8h14v4a5 5 0 01-5 5h-4a5 5 0 01-5-5zM10 17v5M14 17v5',                                                                  // 插头 — API
+    smSparkles:   'M12 2 L13.5 9 L20 10.5 L13.5 12 L12 19 L10.5 12 L4 10.5 L10.5 9 Z',                                                                     // 闪耀星 — 核心能力/特性
+    smBook:       'M4 3h10a4 4 0 014 4v13H8a4 4 0 01-4-4V3zm0 14a4 4 0 014-4h10M8 7h6',                                                                   // 打开的书 — 阅读提示
+    smCompass:    'M12 2L8 12l4 10 4-10zM12 12L9 9M12 12l3-3M12 12l-3 3M12 12l3 3',                                                                       // 罗盘 — 本版设计哲学
+    smBuilding:   'M3 21V7l9-4 9 4v14zM6 21v-6h4v6zM14 21v-6h4v6zM9 9h2v2H9zM13 9h2v2h-2z',                                                               // 建筑 — 架构调整
+    smRecycle:    'M7 19l-3-3h2.5a5 5 0 019.5 1M17 5l3 3h-2.5a5 5 0 00-9.5 1M12 22l3-5-3-1-3-1 3-5z',                                                  // 回收箭头 — 退役
+    smWrench:     'M14.7 4.1a5 5 0 00-6.4 6.4L3 15.9 8.1 21l5.4-5.3a5 5 0 006.4-6.4l-2.6 2.6-2.6-2.6 2.6-2.6z',                                         // 扳手 — 修复与优化
+    smZap:        'M13 2L4 14h7l-1 8 9-12h-7z',                                                                                                           // 闪电 — 性能数据
+    smWarn:       'M12 2L2 22h20zM12 9v6M12 18v1',                                                                                                        // 警告三角 — Breaking Changes
+    smClipboard:  'M9 2h6a1 1 0 011 1v1h3a1 1 0 011 1v16a1 1 0 01-1 1H5a1 1 0 01-1-1V5a1 1 0 011-1h3V3a1 1 0 011-1zM9 5h6M7 9h10M7 13h10M7 17h6',           // 剪贴板 — 升级注意
+    smAlert:      'M12 2a10 10 0 100 20 10 10 0 000-20zM12 8v5M12 16v1',                                                                                   // 圆圈叹号 — 症状
+    smSearch:     'M11 3a8 8 0 105.3 14l4.4 4.4 1.4-1.4-4.4-4.4A8 8 0 0011 3zm0 2a6 6 0 110 12 6 6 0 010-12z',                                             // 放大镜 — 根因
+    smBulb:       'M9 18h6M10 21h4M12 2a7 7 0 00-4 12.7V17a2 2 0 002 2h4a2 2 0 002-2v-2.3A7 7 0 0012 2z',                                                 // 灯泡 — 教训 / 调研中
+    smFolder:     'M2 5a2 2 0 012-2h5l2 2h9a2 2 0 012 2v11a2 2 0 01-2 2H4a2 2 0 01-2-2V5z',                                                                 // 文件夹
+    smFile:       'M6 2h6l4 4v14a2 2 0 01-2 2H6a2 2 0 01-2-2V4a2 2 0 012-2zm6 0v4h4',                                                                      // 文件
+    smChevronDown: 'M6 9l6 6 6-6',                                                                                                                          // 向下箭头
   };
 
   // 渲染一个 SVG icon (返回 HTML 字符串, 走 unsafeHtml)
@@ -63,12 +117,12 @@
   // §1. 核心数据看板
   // =====================================================================
   const stats = [
-    { label: '总代码量',             value: '47,000+', sub: 'Go 28K · 前端 19K · 0 npm 运行时', tone: 'primary' },
-    { label: '代码行数 (Go)',         value: '28,000+', sub: '47 个源文件 · 15 个子包',     tone: 'primary' },
-    { label: '代码行数 (前端)',       value: '19,000+', sub: 'vanilla JS · 零依赖',         tone: 'accent'  },
-    { label: '提交次数',              value: '120+',    sub: 'v0.1 → v0.9 (90 天)',          tone: 'success' },
-    { label: '后端模块',              value: '15',      sub: 'internal/* 子包',              tone: 'primary' },
-    { label: '前端页面',              value: '14',      sub: 'web/pages/*.js',              tone: 'accent'  },
+    { label: '总代码量',             value: '57,000+', sub: 'Go 34K · 前端 23K · 0 npm 运行时', tone: 'primary' },
+    { label: '代码行数 (Go)',         value: '34,000+', sub: '63 个源文件 · 18 个子包',     tone: 'primary' },
+    { label: '代码行数 (前端)',       value: '23,000+', sub: 'vanilla JS · 零依赖',         tone: 'accent'  },
+    { label: '提交次数',              value: '130+',    sub: 'v0.1 → v0.11-rc1 (11 天)',     tone: 'success' },
+    { label: '后端模块',              value: '18',      sub: 'internal/* 子包',              tone: 'primary' },
+    { label: '前端页面',              value: '15',      sub: 'web/pages/*.js',              tone: 'accent'  },
     { label: 'API 接口',              value: '60+',     sub: 'REST + SSE',                  tone: 'primary' },
     { label: '测试用例 (Go)',         value: '500+',    sub: '51 个 _test.go · 单元 + 集成', tone: 'success' },
     { label: '测试用例 (Node)',       value: '150+',    sub: 'app.test.js · 17 case',       tone: 'success' },
@@ -83,35 +137,35 @@
   // =====================================================================
   const principles = [
     {
-      icon: '[*]', title: '安全优先 (fail-closed)',
+      icon: 'safeClosed', title: '安全优先 (fail-closed)',
       body: '所有权限决策默认"拒绝"。白名单空 → 一律拒绝；host key 没配 + allow_insecure=false → 不发起连接；admin 专属接口没带 admin token → 403。把"忘记配"和"配错"都收敛到安全侧，让纵深防御没有单点失守即可破防的逻辑链。'
     },
     {
-      icon: '[>]', title: '受控优于开放',
+      icon: 'controlled', title: '受控优于开放',
       body: '不开放任意 shell。所有远程命令由后端固定模板生成 (find / grep / sed / sort / head / cat 组合)，目录 / 文件名只能来自配置白名单或前一步 ls 的结果，关键词做严格转义——零命令注入面、零隐式越权。'
     },
     {
-      icon: '[!]', title: '上下文优先 (context-first)',
+      icon: 'context', title: '上下文优先 (context-first)',
       body: '所有 I/O 路径走 ctx。远程命令三段式超时 (SIGTERM → 1s → SIGKILL)；下载任务 30 分钟硬超时；SSE 长连接不被默认 120s 强制断开。一次 cancel 终止整条调用链，无悬挂 goroutine。'
     },
     {
-      icon: '[o]', title: '极简优于复杂',
-      body: '零前端框架、零外部 UI 库、零 CSS 预处理器、零 npm 运行时。vanilla JS + 原生 CSS 变量 + 内嵌 go:embed。47,000+ 行代码，14 个前端页面平均每个 ~1.3K 行。'
+      icon: 'simple', title: '极简优于复杂',
+      body: '零前端框架、零外部 UI 库、零 CSS 预处理器、零 npm 运行时。vanilla JS + 原生 CSS 变量 + 内嵌 go:embed。57,000+ 行代码，15 个前端页面平均每个 ~1.5K 行。'
     },
     {
-      icon: '[~]', title: '可测优于能跑',
+      icon: 'testable', title: '可测优于能跑',
       body: 'sshclient → Streamer 接口、sftpclient → RemoteFS 接口、dlmanager → Session 模型：每个核心包都对测试友好，提供 mock 注入点。fake-websphere + mock_sshd.py 给集成测试真实感；Go 测试 500+ 用例，单测覆盖率 81%+。'
     },
     {
-      icon: '[#]', title: '凭据零落盘 (zero plain)',
+      icon: 'zeroPlain', title: '凭据零落盘 (zero plain)',
       body: '密码永不写进 audit.log / URL / 错误信息 / 前端响应。可选 OS 钥匙串 (macOS Keychain / Windows DPAPI / Linux Secret Service) 按 (system, server, user) 三元组加密；file 模式走 AES-256-GCM，密文绑 AAD 防替换攻击。'
     },
     {
-      icon: '[+]', title: '写后即持久 (write-then-persist)',
+      icon: 'persist', title: '写后即持久 (write-then-persist)',
       body: 'config.yaml 写回走 tmpfile + rename(2)，损坏不污染线上配置；downloads 元数据走单文件 .kairo-meta.json 加 mtime 失效缓存；preferences.json 写入显式 chmod 0600。每一次"保存"都有兜底。'
     },
     {
-      icon: '[@]', title: '工程师视角 (operator-grade)',
+      icon: 'operator', title: '工程师视角 (operator-grade)',
       body: 'SSH 错误归类到运维友好中文（"密码错误 / 账号锁定 / 网络超时 / HostKey 不匹配"）；诊断中心 3 问自检；Diagnostics 报告按"App / Runtime / Tools / Servers / Issues"分块；日志助手三级目录展开 + 多对多勾选矩阵。'
     }
   ];
@@ -122,7 +176,7 @@
   const architecture = [
     {
       layer: 'L1', name: '展示层 (Presentation)',
-      detail: 'Web Browser · 单页应用 · hash-router 路由 · vanilla JS · 14 个页面 · 4 套主题',
+      detail: 'Web Browser · 单页应用 · hash-router 路由 · vanilla JS · 15 个页面 · 4 套主题',
       tech: ['原生 ES2020', 'CSS 变量主题', 'hash 路由', 'EventSource(SSE)', 'localStorage'],
       duty: '所有用户交互、渲染、状态机、主题切换、SSE 订阅、UI 反馈。不依赖任何 npm 运行时。'
     },
@@ -160,7 +214,7 @@
   // §4. 后端技术栈 (10 依赖逐项)
   // =====================================================================
   const backendStack = [
-    { name: 'Go', version: '1.20+', role: '主语言', desc: 'go 1.20 directive，向下兼容 Win7 编译；goroutine 调度，静态二进制，零运行时依赖；28,000+ 行单仓代码。' },
+    { name: 'Go', version: '1.20+', role: '主语言', desc: 'go 1.20 directive，向下兼容 Win7 编译；goroutine 调度，静态二进制，零运行时依赖；34,000+ 行单仓代码（含测试）。' },
     { name: 'golang.org/x/crypto/ssh', version: 'v0.31.0', role: 'SSH 客户端', desc: '深度定制的 SSH 协议栈；5 套 KEX profile 自动 fallback；keyboard-interactive 认证；HostKey 指纹校验 (v0.9 起 fail-closed)。' },
     { name: 'github.com/pkg/sftp', version: 'v1.13.6', role: 'SFTP 子系统', desc: '文件 Open/Stat/Read。v0.4 起抽象出 RemoteFS 接口，支持 SFTPBackend + ShellBackend 双 backend 自动降级。' },
     { name: 'golang.org/x/text', version: 'v0.21.0', role: '字符编码', desc: 'simplifiedchinese.GBK / GB18030 透明编码转换；老 WebSphere / Oracle / AIX 上的 GBK 日志直读不乱码。' },
@@ -181,7 +235,7 @@
     { name: 'api.js', desc: 'HTTP 客户端 — api(method, path, body) 统一封装；自动加 Bearer token；SSE EventSource 工厂；统一错误处理。' },
     { name: 'theme.js', desc: '主题切换 — dark / light / green / hc / xianxia（玄墨鎏金·仙侠风）5 套主题，inline script 在 <head> 提前设 data-theme 防 FOUC。' },
     { name: 'auth.js', desc: '认证层 — 拉 /api/auth/status 探测；token cookie 管理；role-gated UI 显隐。' },
-    { name: 'pages/*.js', desc: '14 个页面 — home / websphere / files / formatter / commands / diagnostics / config / downloads / http / timestamp / cron / jsonpath / compare / about。每个页面一个 IIFE，路由切换时整体替换 view。' },
+    { name: 'pages/*.js', desc: '15 个页面 — home / websphere / files / formatter / commands / diagnostics / config / downloads / http / timestamp / cron / jsonpath / compare / about / ssh。每个页面一个 IIFE，路由切换时整体替换 view。' },
     { name: 'tail.js + tail.html', desc: '独立 tail 窗口 — 从主页面剥离的 tail 流，跟踪 SSE 不影响主页面操作；行级 DOM 节点池 + rAF 批量 flush (50ms/100 行)。' },
     { name: 'preview.html', desc: '文件预览子窗口 — 单文件模态 + 新窗口双模式，支持文本 / GBK 编码自动识别。' }
   ];
@@ -252,7 +306,7 @@
   // =====================================================================
   const featureModules = [
     {
-      icon: '[L]', name: 'WebSphere 日志助手',
+      icon: 'websphere', name: 'WebSphere 日志助手',
       pages: ['websphere'],
       apis: ['/api/logs/list/targets', '/api/logs/search/multi', '/api/logs/context', '/api/logs/tail/*'],
       pkg: 'internal/logquery + internal/tailmgr',
@@ -269,7 +323,7 @@
       ]
     },
     {
-      icon: '[D]', name: '文件下载器 (任意路径)',
+      icon: 'downloader', name: '文件下载器 (任意路径)',
       pages: ['files'],
       apis: ['/api/files/list', '/api/files/preview', '/api/files/download*'],
       pkg: 'internal/dlmanager + internal/sftpclient',
@@ -286,7 +340,7 @@
       ]
     },
     {
-      icon: '[<>]', name: '代码比对系统',
+      icon: 'compareIc', name: '代码比对系统',
       pages: ['compare'],
       apis: ['/api/diff/compare', '/api/compare/folder-scan', '/api/compare/file-diff'],
       pkg: 'internal/diff',
@@ -302,7 +356,7 @@
       ]
     },
     {
-      icon: '[~]', name: 'HTTP 测试台',
+      icon: 'http', name: 'HTTP 测试台',
       pages: ['http'],
       apis: ['/api/http/cases', '/api/http/envs', '/api/http/request'],
       pkg: 'internal/httpserver/handlers_http_request.go',
@@ -318,7 +372,7 @@
       ]
     },
     {
-      icon: '{}', name: '格式化器 / 小工具集',
+      icon: 'formatter', name: '格式化器 / 小工具集',
       pages: ['formatter', 'timestamp', 'cron', 'jsonpath'],
       apis: ['/api/format/*'],
       pkg: 'internal/formatter',
@@ -333,7 +387,7 @@
       ]
     },
     {
-      icon: '[!]', name: '诊断中心',
+      icon: 'diagnostics', name: '诊断中心',
       pages: ['diagnostics'],
       apis: ['/api/diagnostics'],
       pkg: 'internal/diagnostics',
@@ -349,7 +403,7 @@
       ]
     },
     {
-      icon: '[=]', name: '配置中心',
+      icon: 'config', name: '配置中心',
       pages: ['config'],
       apis: ['/api/config*', '/api/admin/servers', '/api/admin/openers', '/api/admin/download-retention'],
       pkg: 'internal/config + internal/credentials',
@@ -366,7 +420,7 @@
       ]
     },
     {
-      icon: '[$]', name: '常用命令 / 命令收藏',
+      icon: 'commands', name: '常用命令 / 命令收藏',
       pages: ['commands'],
       apis: ['/api/commands*'],
       pkg: 'internal/httpserver (待迁移)',
@@ -500,9 +554,103 @@
   };
 
   // =====================================================================
-  // §13. 版本演进史 (9 个版本, 每版 ~2000 字, accordion 折叠)
+  // §13. 版本演进史 (11 个版本, 每版 ~2000 字, accordion 折叠)
   // =====================================================================
   const changelog = [
+    {
+      version: 'v0.11-rc1',
+      date: '2026-07-01',
+      tag: '中文友好 · 品牌焕新 · 商业化基础设施',
+      codename: 'Kismet · 天命契机',
+      size: 'l',
+      headline: 'SSH 终端 GBK 编码终结中文乱码 + 项目正式更名为 Kairo + License 激活体系 + xterm.js vendored',
+      stats: { commits: 6, fixes: 8, additions: 5, breaks: 1 },
+      principles: [
+        '中文友好: SSH 终端 + 日志检索 + 文件预览全链路 GBK/GB18030 透明转码, 老 WebSphere / Oracle / AIX 不再乱码',
+        '品牌升级: 豆包工具箱 → Kairo / 天命契机 — go.mod / vendor / CLI / 进程名 / 数据目录 全量替换',
+        '商业化基础: 本地激活体系 (license 包 + mock-license-server) 落地, 不依赖外部基础设施',
+        'release 纪律: 强制 release 流程 + 双版本 Windows 构建 (Win10 modern + Win7 legacy)'
+      ],
+      features: [
+        { title: 'SSH 终端 GBK 编码支持 (fa19990)', desc: '中文老服务器的 GBK / GB18030 输出在 xterm.js 终端里直显不乱码; 编码自动检测 + 手动切换; SFTP 文件列表同步转码' },
+        { title: '项目正式更名为 Kairo / 天命契机 (99843ba)', desc: 'go.mod / vendor 路径 / CLI 参数 / 进程名 / 配置文件路径 / 数据目录 全部从 doubao-prefix 切到 kairo-prefix; 关于页头部声明同步更新' },
+        { title: 'License 激活体系 (internal/license + cmd/mock-license-server)', desc: '本地 AES-GCM 证书 (AAD 绑 IP 防复制) + 服务端"激活码 ↔ IP" 绑定 + 开发者白名单 + bypass 模式; 2627 行 Go 代码含 8 个测试文件' },
+        { title: 'xterm.js vendored + 双版本 Windows 构建 (e3daf1e)', desc: 'web/vendor/xterm.js 不再走 CDN; 双版本构建脚本: Win10 modern + Win7 legacy (Go 1.20 directive)' },
+        { title: '强制 release 流程', desc: 'release 前必跑全量测试 + lint + e2e; 版本号 / changelog / 校验和 三件套自动生成; 不通过不允许合并到 main' },
+        { title: 'SSH shell 集成测试基础设施 (b5c19f7)', desc: 'fakeShellSSH + fakeShellPTY 双 mock: PTY 行为 / 命令流 / Ctrl+C 中断 / ctx 取消 全覆盖; 可重放任意命令流做回归' },
+        { title: 'SSH 终端设计文档 (8c6de1e)', desc: 'SSH 终端菜单设计说明 + 外部 mock 测试工具使用指南; 工程文档与代码同步' }
+      ],
+      fixes: [
+        'P0: SSH 终端输出 GBK 编码透传 — xterm.js 默认按 UTF-8 渲染, 老服务器 GBK 全部显示为问号 (fa19990)',
+        'P1: SFTP 文件列表 GBK 文件名 — 转码后再展示, 中文文件名不再乱码',
+        'P1: vendor 路径同步 — Kairo 改名后 go.mod replace / internal import path 一次性跑齐 (99843ba)',
+        'P1: docs 同步 — SSH 终端设计说明 + 测试工具文档 (8c6de1e)',
+        'P2: release 流程缺失 — 加强制门禁 + 双版本 Windows 构建脚本 (e3daf1e)'
+      ],
+      commits: [
+        { hash: '8c6de1e', msg: 'docs(ssh): SSH 终端菜单设计说明 + 外部 mock 测试工具' },
+        { hash: 'b5c19f7', msg: 'test(ssh): SSH shell 集成测试（fakeShellSSH + fakeShellPTY）' },
+        { hash: '99843ba', msg: 'refactor(rebrand)!: 重命名项目为 Kairo / 天命契机（含 go.mod/vendor 同步）' },
+        { hash: 'fa19990', msg: 'feat(ssh)!: SSH 终端支持 GBK 编码（中文老服务器乱码修复）' },
+        { hash: 'e3daf1e', msg: 'chore(infra): xterm.js vendored + 双版本 Windows 构建脚本 + 强制 release 流程' },
+        { hash: 'aedadf4', msg: 'feat: 全量代码合并 v0.11-rc1' }
+      ],
+      breaking: [
+        '项目名: 豆包工具箱 / Doubao Toolbox → Kairo / 天命契机',
+        '二进制 / 进程名 / CLI 参数 / 配置文件路径 / 数据目录: 全部从 doubao-prefix 切到 kairo-prefix',
+        'vendor import path: 同步更新'
+      ],
+      migration: [
+        '现有用户: 直接替换二进制即可 (首次启动自动 rename data/.doubao-* → data/.kairo-*)',
+        '配置文件路径: data/.doubao-config.yaml → data/.kairo-config.yaml (自动迁移)',
+        'Windows 安装路径 / 服务名: 不再含 "doubao" 字样',
+        'License 体系默认开启开发者白名单模式; 需要激活时切换 production 模式'
+      ]
+    },
+    {
+      version: 'v0.10',
+      date: '2026-06-30',
+      tag: '交互式 SSH 终端',
+      codename: 'Mercury',
+      size: 'l',
+      headline: 'SSH 交互式终端菜单上线 (xterm.js + WebSocket + PTY) + Windows 10 加固 + 系统托盘',
+      stats: { commits: 6, fixes: 12, additions: 3 },
+      principles: [
+        '真实 shell: 后端开 PTY, 前端 xterm.js 完整渲染 ANSI 颜色 / 光标移动 / 滚动 / 终端尺寸同步',
+        '双向流: WebSocket 全双工, 输入直达 PTY stdin, PTY stdout 推送前端',
+        '主题适配: xterm.js 主题与 Kairo 4 套主题联动, 切换不闪烁不留残影'
+      ],
+      features: [
+        { title: 'SSH 终端菜单后端 (91b1ee5)', desc: 'xterm.js + WebSocket + PTY 全栈落地; 基于 sshclient + 新增 sshshell 包; 支持交互式 shell / 命令历史 / Ctrl+C 中断 / 窗口尺寸同步' },
+        { title: 'Windows 10 兼容性加固 (f0a56c6)', desc: '系统托盘 (tray 包) + 凭据 rename 重试 (文件占用场景) + HideConsoleWindow 跨平台抽象' },
+        { title: 'SSH 终端前端集成', desc: 'ssh.html 独立窗口 + web/pages/ssh.js 路由 (从 14 → 15 个页面); xterm.js vendored 到 web/vendor/xterm; 4 套主题适配 + Retina Canvas DPR' },
+        { title: 'system tray 跨平台', desc: 'macOS / Windows / Linux 三平台统一 API; 点托盘弹主窗口 / 退出 / 查看下载历史 / 检查更新' },
+        { title: 'shell 集成测试基础设施 (b5c19f7)', desc: 'fakeShellSSH + fakeShellPTY 双 mock; 单测覆盖 PTY 行为 / 命令流 / Ctrl+C / ctx 取消; v0.11-rc1 起为 license / 终端回归打底' }
+      ],
+      fixes: [
+        'P0: 终端初始化时序 — 前端 xterm 必须在 WebSocket ready 后再 attach, 否则首屏空白 (ee1ace2)',
+        'P0: 主题切换背景同步 — 4 套主题切换时 xterm 背景色实时跟随, 不留残影 (ee1ace2)',
+        'P0: 按钮状态 + Canvas 渲染 — 连上/断开按钮互斥; Canvas DPR 适配 Retina 不模糊 (ee1ace2)',
+        'P1: allow_insecure_host_key=true 正向测试覆盖 — 防 v0.9.0 fail-closed 改回滚 (ebe868f)',
+        'P1: HideConsoleWindow 跨平台抽象 — macOS / Windows / Linux 三平台 API 统一 (4f8b417)',
+        'P2: 默认版本号 bump — v0.8-dev → v0.9.0-dev, 构建示例同步更新 (8f7ba5c)'
+      ],
+      commits: [
+        { hash: 'f0a56c6', msg: 'feat(win): Windows 10 兼容性加固 + 系统托盘 + 凭据 rename 重试' },
+        { hash: '8f7ba5c', msg: 'chore(version): 默认版本号 v0.8-dev → v0.9.0-dev，构建示例同步更新' },
+        { hash: 'ee1ace2', msg: 'fix(ssh-terminal): 修复终端初始化时序、主题背景同步、按钮状态及Canvas渲染' },
+        { hash: 'ebe868f', msg: 'test(ssh): 恢复 allow_insecure_host_key=true 向后兼容正向测试' },
+        { hash: '4f8b417', msg: 'refactor(sysutil): 抽象 HideConsoleWindow 跨平台实现' },
+        { hash: '91b1ee5', msg: 'feat(ssh): v0.10 SSH 终端菜单后端（xterm.js + WebSocket + 交互式 shell）' }
+      ],
+      migration: [
+        '新增 sshshell 包 (internal/sshshell): Session 管理 + PTY 抽象',
+        '新增 tray 包 (internal/tray): 跨平台系统托盘',
+        '新增 web/pages/ssh.js: SSH 终端菜单前端入口 (15 个页面)',
+        '新增 web/vendor/xterm/: vendored xterm.js + xterm.css',
+        'config.yaml 可选新增 ssh_shell 段 (PTY 尺寸 / 编码 / 命令白名单)'
+      ]
+    },
     {
       version: 'v0.9.0',
       date: '2026-06-29',
@@ -530,7 +678,7 @@
       },
       features: [
         { title: '项目品牌升级 (rebrand)', desc: '项目正式更名为「Kairo」(090be9c) — CSS 类名 / 事件名 / localStorage 键 / E2E 选择器 / docs 全量替换 (bf30ed4)；官方高清图标 (RGBA + Retina 多尺寸) 全站覆盖 (0caddac)' },
-        { title: 'UI 全面焕新 (93e504c)', desc: 'v0.9.0 UI 全面优化与功能增强：顶栏 / 侧栏 / 卡片 / 主题 / 字体 / 间距 / 动效统一打磨，14 个页面视觉一致性 100%' },
+        { title: 'UI 全面焕新 (93e504c)', desc: 'v0.9.0 UI 全面优化与功能增强：顶栏 / 侧栏 / 卡片 / 主题 / 字体 / 间距 / 动效统一打磨，15 个页面视觉一致性 100%' },
         { title: '13 个用户反馈一次性收口 (87e2d4b)', desc: '用户测试期间反馈的 13 个 UX 问题全部修复，含布局、状态、跳转、提示、滚动等' },
         { title: '日志助手 + tail 6 项修复 (f42a6a8)', desc: '日志助手页面精简 + tail 独立窗口滚动 / 最新行 / 区域分割 等 6 个交互问题' },
         { title: '下载/表格/上下文 3 项优化 (763346c)', desc: '下载进度对齐 + 表格列对齐 + 上下文标签页切换 三个工程化细节优化' },
@@ -1008,7 +1156,7 @@
       el('p', { style: 'margin:0;', text: '产品定位上，Kairo 不是要替代 Ansible / Jenkins / Prometheus 这类重型平台，而是作为运维工程师日常 80% 操作的"快进键"——登录、查日志、下载文件、对比配置、调一下接口、转一下编码——这些"小但高频"的动作，过去要在 SecureCRT + WinSCP + Postman + 各种在线工具之间反复横跳，现在一个浏览器标签就能搞定。' })
     ]);
     const useCases = el('div', { class: 'card mt-3', style: 'padding:18px 22px;' }, [
-      el('div', { style: 'font-weight:600; font-size:14px; margin-bottom:10px; color:var(--primary);', text: '🎯 典型使用场景' }),
+      el('div', { style: 'font-weight:600; font-size:14px; margin-bottom:10px; color:var(--primary); display:flex; align-items:center; gap:6px;', unsafeHtml: svgIcon('smTarget', 16) + ' 典型使用场景' }),
       el('ul', { style: 'margin:0; padding-left:20px; line-height:1.85; font-size:13.5px;' }, [
         el('li', {}, [document.createTextNode('线上故障定位：在 10 台 WebSphere 上同时搜索 '), el('code', { style: 'background:var(--bg-2); padding:1px 6px; border-radius:4px; font-size:12.5px;', text: 'NullPointerException' }), document.createTextNode('，30 秒内拿到全量上下文')]),
         el('li', {}, [document.createTextNode('远程取配置文件：从老 AIX 机器下载 '), el('code', { style: 'background:var(--bg-2); padding:1px 6px; border-radius:4px; font-size:12.5px;', text: '/etc/profile' }), document.createTextNode('，一键用 VSCode 打开对比')]),
@@ -1028,7 +1176,7 @@
     const grid = el('div', { style: 'display:grid; grid-template-columns:repeat(auto-fit, minmax(280px, 1fr)); gap:12px;' });
     principles.forEach(p => {
       grid.appendChild(el('div', { class: 'card', style: 'padding:18px 18px; line-height:1.7;' }, [
-        el('div', { style: 'font-size:24px; margin-bottom:6px;', text: p.icon }),
+        el('div', { style: 'width:24px; height:24px; margin-bottom:8px; display:inline-flex; align-items:center; justify-content:center; color:var(--primary);', unsafeHtml: svgIcon(p.icon, 24) }),
         el('div', { style: 'font-weight:700; font-size:14.5px; margin-bottom:6px;', text: p.title }),
         el('div', { class: 'text-dim', style: 'font-size:13px;', text: p.body })
       ]));
@@ -1059,15 +1207,16 @@
 
     // 数据流
     const flowCard = el('div', { class: 'card mt-3', style: 'padding:18px 22px;' }, [
-      el('div', { style: 'font-weight:700; font-size:14.5px; margin-bottom:10px; color:var(--accent);', text: '🔁 数据流向' }),
+      el('div', { style: 'font-weight:700; font-size:14.5px; margin-bottom:10px; color:var(--accent); display:flex; align-items:center; gap:6px;', unsafeHtml: svgIcon('smRepeat', 16) + ' 数据流向' }),
       el('div', { style: 'font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:12.5px; line-height:2.0; background:var(--bg-2); padding:14px 16px; border-radius:8px; overflow-x:auto;' },
-        dataFlow.flatMap((d) => el('div', {}, [
+        dataFlow.reduce(function (acc, d) {
+          return acc.concat(el('div', {}, [
             el('span', { style: 'color:var(--primary); font-weight:600;', text: d.from }),
             document.createTextNode('  →  '),
             el('span', { style: 'color:var(--accent); font-weight:600;', text: d.to }),
             el('span', { class: 'text-dim', style: 'margin-left:10px;', text: '// ' + d.label })
-          ])
-        )
+          ]));
+        }, [])
       )
     ]);
 
@@ -1082,7 +1231,7 @@
 
     // 后端技术栈
     const backendTitle = el('h3', { style: 'margin:0 0 12px 0; font-size:16px; display:flex; align-items:center; gap:8px;' }, [
-      el('span', { text: '⚙️' }),
+      el('span', { unsafeHtml: svgIcon('smGear', 18) }),
       document.createTextNode(' 后端 (Go 1.20+)')
     ]);
     const backendTable = el('div', { class: 'card', style: 'padding:0; overflow-x:auto;' });
@@ -1110,7 +1259,7 @@
 
     // 前端架构
     const frontendTitle = el('h3', { style: 'margin:24px 0 12px 0; font-size:16px; display:flex; align-items:center; gap:8px;' }, [
-      el('span', { text: '🎨' }),
+      el('span', { unsafeHtml: svgIcon('smPalette', 18) }),
       document.createTextNode(' 前端 (Vanilla JS · 零依赖)')
     ]);
     const frontendGrid = el('div', { style: 'display:grid; grid-template-columns:repeat(auto-fit, minmax(280px, 1fr)); gap:10px;' });
@@ -1123,7 +1272,7 @@
 
     // 工程实践
     const engTitle = el('h3', { style: 'margin:24px 0 12px 0; font-size:16px; display:flex; align-items:center; gap:8px;' }, [
-      el('span', { text: '🛠' }),
+      el('span', { unsafeHtml: svgIcon('smTools', 18) }),
       document.createTextNode(' 工程化实践 (12 项)')
     ]);
     const engGrid = el('div', { style: 'display:grid; grid-template-columns:repeat(auto-fit, minmax(280px, 1fr)); gap:8px;' });
@@ -1145,7 +1294,7 @@
     wrap.appendChild(frontendGrid);
     wrap.appendChild(engTitle);
     wrap.appendChild(engGrid);
-    view.appendChild(renderSection('sec-stack', 'stack', '技术栈', '后端 10 依赖 · 前端 8 模块 · 工程 12 实践 · 47,000+ 行代码', wrap));
+    view.appendChild(renderSection('sec-stack', 'stack', '技术栈', '后端 10 依赖 · 前端 8 模块 · 工程 12 实践 · 57,000+ 行代码', wrap));
   }
 
   // --- 安全白皮书 ---
@@ -1153,7 +1302,7 @@
     const wrap = el('div');
     const banner = el('div', { class: 'card', style: 'background:linear-gradient(135deg, rgba(239,68,68,0.08), rgba(245,158,11,0.04)); border:1px solid rgba(239,68,68,0.25); padding:16px 20px; margin-bottom:12px;' }, [
       el('div', { style: 'display:flex; align-items:center; gap:10px; margin-bottom:6px;' }, [
-        el('span', { style: 'font-size:22px;', text: '🛡️' }),
+        el('span', { style: 'width:26px; height:26px; display:inline-flex; align-items:center; justify-content:center; color:var(--error);', unsafeHtml: svgIcon('smShield', 26) }),
         el('span', { style: 'font-weight:700; font-size:15px; color:var(--error);', text: 'fail-closed 安全模型 (v0.9 起)' })
       ]),
       el('div', { style: 'font-size:13px; line-height:1.7; color:var(--text-dim);', text: '所有权限决策默认"拒绝"。白名单空 → 一律拒绝；host key 没配 + allow_insecure=false → 不发起连接；admin 专属接口没带 admin token → 403。把"忘记配"和"配错"都收敛到安全侧，避免任何隐式放行。14 项安全设计点协同，没有单点失守即可破防的逻辑链。' })
@@ -1243,29 +1392,32 @@
 
       wrap.appendChild(el('div', { class: 'card', style: 'padding:18px 22px; margin-bottom:12px; border-left:4px solid var(--primary);' }, [
         el('div', { style: 'display:flex; align-items:flex-start; gap:14px; margin-bottom:10px;' }, [
-          el('span', { style: 'font-size:32px; flex-shrink:0; line-height:1;', text: m.icon }),
+          el('span', { style: 'width:32px; height:32px; flex-shrink:0; display:inline-flex; align-items:center; justify-content:center; color:var(--primary);', unsafeHtml: svgIcon(m.icon, 32) }),
           el('div', { style: 'flex:1; min-width:0;' }, [
             el('div', { style: 'display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:4px;' }, [
               el('span', { style: 'font-weight:700; font-size:17px;', text: m.name }),
               el('span', { class: 'tier-badge', style: 'background:var(--bg-2); color:var(--text-dim); font-size:11px; padding:2px 8px; border-radius:6px;', text: '#' + String(idx + 1).padStart(2, '0') })
             ]),
             el('div', { class: 'text-dim', style: 'font-size:13.5px; line-height:1.7; margin-bottom:8px;', text: m.desc }),
-            el('div', { style: 'font-size:12px; margin-bottom:6px;' }, [
-              el('span', { style: 'color:var(--text-dim); font-weight:600;', text: '📦 后端包: ' }),
+            el('div', { style: 'font-size:12px; margin-bottom:6px; display:flex; align-items:center; gap:4px;', }, [
+              el('span', { style: 'width:14px; height:14px; color:var(--text-dim); display:inline-flex; align-items:center; justify-content:center;', unsafeHtml: svgIcon('smPackage', 14) }),
+              el('span', { style: 'color:var(--text-dim); font-weight:600;', text: '后端包: ' }),
               el('code', { style: 'background:var(--bg-2); padding:1px 6px; border-radius:4px; font-size:11.5px;', text: m.pkg })
             ]),
-            el('div', { style: 'font-size:12px; margin-bottom:6px;' }, [
-              el('span', { style: 'color:var(--text-dim); font-weight:600;', text: '🧷 前端页: ' }),
+            el('div', { style: 'font-size:12px; margin-bottom:6px; display:flex; align-items:center; gap:4px;', }, [
+              el('span', { style: 'width:14px; height:14px; color:var(--text-dim); display:inline-flex; align-items:center; justify-content:center;', unsafeHtml: svgIcon('smPin', 14) }),
+              el('span', { style: 'color:var(--text-dim); font-weight:600;', text: '前端页: ' }),
               ...m.pages.map(p => el('code', { style: 'background:var(--bg-2); padding:1px 6px; border-radius:4px; font-size:11.5px; margin-right:4px;', text: 'web/pages/' + p + '.js' }))
             ]),
-            el('div', { style: 'font-size:12px;' }, [
-              el('span', { style: 'color:var(--text-dim); font-weight:600;', text: '🔌 API: ' }),
+            el('div', { style: 'font-size:12px; display:flex; align-items:center; gap:4px;', }, [
+              el('span', { style: 'width:14px; height:14px; color:var(--text-dim); display:inline-flex; align-items:center; justify-content:center;', unsafeHtml: svgIcon('smPlug', 14) }),
+              el('span', { style: 'color:var(--text-dim); font-weight:600;', text: 'API: ' }),
               ...apiLine
             ])
           ])
         ]),
         el('div', { style: 'margin-top:10px; padding-top:10px; border-top:1px dashed var(--line);' }, [
-          el('div', { style: 'font-weight:600; font-size:13px; color:var(--primary); margin-bottom:4px;', text: '✨ 核心能力' }),
+          el('div', { style: 'font-weight:600; font-size:13px; color:var(--primary); margin-bottom:4px; display:flex; align-items:center; gap:6px;', unsafeHtml: svgIcon('smSparkles', 14) + ' 核心能力' }),
           featUl
         ])
       ]));
@@ -1278,7 +1430,7 @@
     const wrap = el('div');
 
     const banner = el('div', { class: 'card about-hint-banner', style: 'padding:14px 20px; margin-bottom:14px; font-size:13px; color:var(--text-dim);' }, [
-      el('span', { style: 'color:var(--primary); font-weight:600;', text: '📖 阅读提示：' }),
+      el('span', { style: 'color:var(--primary); font-weight:600; display:inline-flex; align-items:center; gap:6px;', unsafeHtml: svgIcon('smBook', 14) + ' 阅读提示：' }),
       document.createTextNode('点击任意版本卡片展开完整内容。每个版本包含：核心定位 / 设计哲学 / 架构调整 / 核心特性 / 修复记录 (P0/P1/P2) / 关键 commit / 性能数据 / 升级注意 / Breaking Changes。')
     ]);
 
@@ -1287,7 +1439,7 @@
     wrap.appendChild(banner);
     wrap.appendChild(list);
 
-    view.appendChild(renderSection('sec-history', 'history', '版本演进史', 'v0.1 → v0.9 · 9 个版本 · 90 天 · 120+ commit', wrap));
+    view.appendChild(renderSection('sec-history', 'history', '版本演进史', 'v0.1 → v0.11-rc1 · 11 个版本 · 11 天 · 130+ commit', wrap));
   }
 
   function renderVersionCard(v, idx) {
@@ -1318,8 +1470,8 @@
     }) : null;
     const dateLabel = el('span', { class: 'text-dim', style: 'font-size:13px;', text: v.date });
     const expandIcon = el('span', {
-      style: 'margin-left:auto; font-size:14px; color:var(--text-dim); transition:transform 0.2s; display:inline-block;',
-      text: '▼'
+      style: 'margin-left:auto; color:var(--text-dim); transition:transform 0.2s; display:inline-flex; align-items:center;',
+      unsafeHtml: svgIcon('smChevronDown', 16)
     });
 
     const header = el('div', {
@@ -1360,7 +1512,7 @@
     // 1. 设计哲学
     if (v.principles && v.principles.length) {
       const sec = el('div', { style: 'margin-bottom:18px;' });
-      sec.appendChild(el('div', { style: 'font-weight:700; font-size:13.5px; color:var(--accent); margin-bottom:8px;', text: '🧭 本版设计哲学' }));
+      sec.appendChild(el('div', { style: 'font-weight:700; font-size:13.5px; color:var(--accent); margin-bottom:8px; display:flex; align-items:center; gap:6px;', unsafeHtml: svgIcon('smCompass', 14) + ' 本版设计哲学' }));
       const ul = el('ul', { style: 'margin:0; padding-left:20px; line-height:1.85; font-size:13px;' });
       v.principles.forEach(p => ul.appendChild(el('li', { text: p })));
       sec.appendChild(ul);
@@ -1370,7 +1522,7 @@
     // 2. 架构调整
     if (v.architecture) {
       const sec = el('div', { style: 'margin-bottom:18px;' });
-      sec.appendChild(el('div', { style: 'font-weight:700; font-size:13.5px; color:var(--accent); margin-bottom:8px;', text: '🏗️ 架构调整' }));
+      sec.appendChild(el('div', { style: 'font-weight:700; font-size:13.5px; color:var(--accent); margin-bottom:8px; display:flex; align-items:center; gap:6px;', unsafeHtml: svgIcon('smBuilding', 14) + ' 架构调整' }));
       if (v.architecture.layers) {
         const layers = el('div', { style: 'display:flex; flex-direction:column; gap:6px;' });
         v.architecture.layers.forEach(l => {
@@ -1382,7 +1534,7 @@
         sec.appendChild(layers);
       }
       if (v.architecture.retirements && v.architecture.retirements.length) {
-        sec.appendChild(el('div', { style: 'font-weight:600; font-size:12.5px; margin-top:10px; margin-bottom:5px; color:var(--warn);', text: '♻️ 退役' }));
+        sec.appendChild(el('div', { style: 'font-weight:600; font-size:12.5px; margin-top:10px; margin-bottom:5px; color:var(--warn); display:flex; align-items:center; gap:6px;', unsafeHtml: svgIcon('smRecycle', 12) + ' 退役' }));
         const ul = el('ul', { style: 'margin:0; padding-left:20px; line-height:1.7; font-size:12.5px; color:var(--text-dim);' });
         v.architecture.retirements.forEach(r => ul.appendChild(el('li', { text: r })));
         sec.appendChild(ul);
@@ -1393,7 +1545,7 @@
     // 3. 核心特性
     if (v.features && v.features.length) {
       const sec = el('div', { style: 'margin-bottom:18px;' });
-      sec.appendChild(el('div', { style: 'font-weight:700; font-size:13.5px; color:var(--primary); margin-bottom:8px;', text: '✨ 核心特性 (' + v.features.length + ')' }));
+      sec.appendChild(el('div', { style: 'font-weight:700; font-size:13.5px; color:var(--primary); margin-bottom:8px; display:flex; align-items:center; gap:6px;', unsafeHtml: svgIcon('smSparkles', 14) + ' 核心特性 (' + v.features.length + ')' }));
       const ul = el('ul', { style: 'margin:0; padding-left:20px; line-height:1.8; font-size:13px;' });
       v.features.forEach(f => {
         const li = el('li', { style: 'margin-bottom:6px;' });
@@ -1409,7 +1561,7 @@
     // 4. 修复
     if (v.fixes) {
       const sec = el('div', { style: 'margin-bottom:18px;' });
-      sec.appendChild(el('div', { style: 'font-weight:700; font-size:13.5px; color:var(--warn); margin-bottom:8px;', text: '🔧 修复与优化' }));
+      sec.appendChild(el('div', { style: 'font-weight:700; font-size:13.5px; color:var(--warn); margin-bottom:8px; display:flex; align-items:center; gap:6px;', unsafeHtml: svgIcon('smWrench', 14) + ' 修复与优化' }));
       const renderGroup = (label, items, color) => {
         if (!items || !items.length) return;
         sec.appendChild(el('div', { style: 'font-weight:600; font-size:12.5px; margin-top:8px; margin-bottom:5px; color:' + color + ';', text: label + ' (' + items.length + ')' }));
@@ -1432,7 +1584,7 @@
     // 5. 关键 commit
     if (v.commits && v.commits.length) {
       const sec = el('div', { style: 'margin-bottom:18px;' });
-      sec.appendChild(el('div', { style: 'font-weight:700; font-size:13.5px; color:var(--success); margin-bottom:8px;', text: '📌 关键 commit (' + v.commits.length + ')' }));
+      sec.appendChild(el('div', { style: 'font-weight:700; font-size:13.5px; color:var(--success); margin-bottom:8px; display:flex; align-items:center; gap:6px;', unsafeHtml: svgIcon('smPin', 14) + ' 关键 commit (' + v.commits.length + ')' }));
       const ul = el('ul', { style: 'margin:0; padding-left:0; list-style:none; line-height:1.85; font-size:12.5px;' });
       v.commits.forEach(c => {
         ul.appendChild(el('li', { style: 'padding:4px 0; border-bottom:1px dashed var(--line);' }, [
@@ -1447,7 +1599,7 @@
     // 6. 性能数据
     if (v.performance && v.performance.length) {
       const sec = el('div', { style: 'margin-bottom:18px;' });
-      sec.appendChild(el('div', { style: 'font-weight:700; font-size:13.5px; color:var(--warn); margin-bottom:8px;', text: '⚡ 性能数据' }));
+      sec.appendChild(el('div', { style: 'font-weight:700; font-size:13.5px; color:var(--warn); margin-bottom:8px; display:flex; align-items:center; gap:6px;', unsafeHtml: svgIcon('smZap', 14) + ' 性能数据' }));
       const perfGrid = el('div', { style: 'display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:8px;' });
       v.performance.forEach(p => {
         perfGrid.appendChild(el('div', { style: 'padding:10px 14px; background:var(--bg-2); border-radius:8px; border-left:3px solid var(--success);' }, [
@@ -1467,13 +1619,13 @@
     if ((v.migration && v.migration.length) || (v.breaking && v.breaking.length)) {
       const sec = el('div', { style: 'margin-bottom:8px;' });
       if (v.breaking && v.breaking.length) {
-        sec.appendChild(el('div', { style: 'font-weight:700; font-size:13.5px; color:var(--error); margin-bottom:8px;', text: '⚠️ Breaking Changes (' + v.breaking.length + ')' }));
+        sec.appendChild(el('div', { style: 'font-weight:700; font-size:13.5px; color:var(--error); margin-bottom:8px; display:flex; align-items:center; gap:6px;', unsafeHtml: svgIcon('smWarn', 14) + ' Breaking Changes (' + v.breaking.length + ')' }));
         const ul = el('ul', { style: 'margin:0 0 12px 0; padding-left:20px; line-height:1.75; font-size:12.5px;' });
         v.breaking.forEach(b => ul.appendChild(el('li', { style: 'color:var(--error);', text: b })));
         sec.appendChild(ul);
       }
       if (v.migration && v.migration.length) {
-        sec.appendChild(el('div', { style: 'font-weight:700; font-size:13.5px; color:var(--text); margin-bottom:8px;', text: '📋 升级注意 (' + v.migration.length + ')' }));
+        sec.appendChild(el('div', { style: 'font-weight:700; font-size:13.5px; color:var(--text); margin-bottom:8px; display:flex; align-items:center; gap:6px;', unsafeHtml: svgIcon('smClipboard', 14) + ' 升级注意 (' + v.migration.length + ')' }));
         const ul = el('ul', { style: 'margin:0; padding-left:20px; line-height:1.75; font-size:12.5px; color:var(--text-dim);' });
         v.migration.forEach(m => ul.appendChild(el('li', { text: m })));
         sec.appendChild(ul);
@@ -1566,18 +1718,18 @@
           el('span', { class: 'text-dim', style: 'font-size:12px;', text: b.version })
         ]),
         el('div', { style: 'font-weight:700; font-size:14px; margin-bottom:10px; line-height:1.5;', text: b.title }),
-        storyRow('😣', '症状', b.symptom),
-        storyRow('🔍', '根因', b.rootCause),
-        storyRow('🔧', '修复', b.fix),
-        storyRow('💡', '教训', b.lesson, true)
+        storyRow('smAlert', '症状', b.symptom),
+        storyRow('smSearch', '根因', b.rootCause),
+        storyRow('smWrench', '修复', b.fix),
+        storyRow('smBulb', '教训', b.lesson, true)
       ]);
       grid.appendChild(card);
     });
 
-    function storyRow(icon, label, text, accent) {
+    function storyRow(iconName, label, text, accent) {
       return el('div', { style: 'font-size:12.5px; line-height:1.7; margin-bottom:6px;' }, [
         el('div', { style: 'display:flex; align-items:flex-start; gap:8px;' }, [
-          el('span', { style: 'flex-shrink:0; font-size:13px;', text: icon }),
+          el('span', { style: 'flex-shrink:0; width:14px; height:14px; color:var(--text-dim); display:inline-flex; align-items:center; justify-content:center; margin-top:2px;', unsafeHtml: svgIcon(iconName, 14) }),
           el('div', {}, [
             el('span', { style: 'font-weight:600; color:' + (accent ? 'var(--warn)' : 'var(--text)') + '; margin-right:6px;', text: label + '：' }),
             el('span', { class: 'text-dim', text: text })
@@ -1615,10 +1767,10 @@
   function renderRoadmapSection(view) {
     const wrap = el('div');
 
-    const renderList = (title, items, color, icon) => {
+    const renderList = (title, items, color, iconName) => {
       const card = el('div', { class: 'card', style: 'padding:18px 22px; margin-bottom:12px; border-left:4px solid ' + color + ';' }, [
         el('div', { style: 'font-weight:700; font-size:15px; margin-bottom:12px; display:flex; align-items:center; gap:8px; color:' + color + ';' }, [
-          el('span', { text: icon }),
+          el('span', { style: 'width:18px; height:18px; display:inline-flex; align-items:center; justify-content:center;', unsafeHtml: svgIcon(iconName, 18) }),
           document.createTextNode(title)
         ])
       ]);
@@ -1633,8 +1785,8 @@
       return card;
     };
 
-    wrap.appendChild(renderList('已规划 (next 1-2 versions)', roadmap.planned, 'var(--primary)', '🎯'));
-    wrap.appendChild(renderList('调研中 (considering)', roadmap.considering, 'var(--text-dim)', '💡'));
+    wrap.appendChild(renderList('已规划 (next 1-2 versions)', roadmap.planned, 'var(--primary)', 'smTarget'));
+    wrap.appendChild(renderList('调研中 (considering)', roadmap.considering, 'var(--text-dim)', 'smBulb'));
 
     view.appendChild(renderSection('sec-roadmap', 'roadmap', '路线图', 'next 1-2 versions + considering · v0.9.1 hotfix 在路上', wrap));
   }

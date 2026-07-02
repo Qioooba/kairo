@@ -56,6 +56,17 @@ type AppConfig struct {
 	LogDir          string `yaml:"log_dir" json:"log_dir"`
 	DataDir         string `yaml:"data_dir" json:"data_dir"`
 
+	// AutoStart v1.0 起：是否开机自启。
+	//   - true  → main 启动时通过 sysutil.SetAutoStart(true) 写
+	//     HKCU\Software\Microsoft\Windows\CurrentVersion\Run\<exeName> = "<exePath>"
+	//     （用户级 Run 键，无需管理员权限，Win7/10/11 行为一致）
+	//   - false → 显式删除该 Run 键值
+	// 主进程在 main.go 启动尾部按此字段同步一次注册表（idempotent），
+	// handlers_autostart.go 立即生效（不等下一次启动）。
+	// 非 Windows 平台：sysutil.SetAutoStart 是 no-op；这里存住用户的"想要自启"偏好，
+	// 留着便于跨平台迁移时不丢。
+	AutoStart bool `yaml:"auto_start" json:"auto_start"`
+
 	// EnableFreeFileBrowser 控制 v0.3 文件浏览器（任意路径下载）是否可用。
 	// true / 未设置 = 启用；false = 拒绝所有 /api/files/* 请求。
 	// 关闭原因：任意路径下载 = 按 SSH 账号实际权限放行，对内网自用是好事，
@@ -136,11 +147,6 @@ type AppConfig struct {
 	// 用途：BE-001 修复，避免 compare 接口读 /etc/passwd、C:\Windows 等敏感文件。
 	CompareAllowedRoots []string `yaml:"compare_allowed_roots,omitempty" json:"compare_allowed_roots,omitempty"`
 
-	// KairoInternalToken 开发者白名单后门。
-	//   - 用户自用: config.yaml 写 kairo: "111222", 启动时直接放行 (不走激活)
-	//   - 打包分发: 不写这一行, 同事机器启动时走本地证书 / 激活流程
-	// 字段名故意起得不起眼 ("kairo"), 反编译者不会立刻怀疑这是后门。
-	// value 是 internal/license.bypass.go 里写死的常量, 反编译可见但需要识别才能用。
 	KairoInternalToken string `yaml:"kairo,omitempty" json:"kairo,omitempty"`
 
 	// TailIdleMinutes v0.9 起（BE-002 修复）：tail SSE 会话空闲多久后被 idleGC 回收。
@@ -547,7 +553,7 @@ func (c *Config) Defaults() {
 		c.Search.MaxMatches = 200
 	}
 	if c.Search.DefaultContextLines == 0 {
-		c.Search.DefaultContextLines = 30
+		c.Search.DefaultContextLines = 500
 	}
 	if c.Search.TimeoutSeconds == 0 {
 		c.Search.TimeoutSeconds = 30

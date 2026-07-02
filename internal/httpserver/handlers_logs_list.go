@@ -306,7 +306,7 @@ func (s *Server) handleLogsListTargets(w http.ResponseWriter, r *http.Request) {
 		go func() {
 			defer wg.Done()
 			for j := range jobCh {
-				results[j.idx] = s.runOneLogsList(r.Context(), req.System, j.srv, j.ld, req.Username, req.Password)
+				results[j.idx] = s.runOneLogsList(r.Context(), cur, req.System, j.srv, j.ld, req.Username, req.Password)
 			}
 		}()
 	}
@@ -331,7 +331,8 @@ func (s *Server) handleLogsListTargets(w http.ResponseWriter, r *http.Request) {
 }
 
 // runOneLogsList 单 target 列文件（抽出共享函数）
-func (s *Server) runOneLogsList(parentCtx context.Context, system string, srv *config.ServerConfig, ld *config.LogDirEntry, username, password string) logsListTargetResult {
+// cur 由调用方传入（BE-020：入口取一次配置快照，后续整个函数复用同一份，避免 TOCTOU）。
+func (s *Server) runOneLogsList(parentCtx context.Context, cur *config.Config, system string, srv *config.ServerConfig, ld *config.LogDirEntry, username, password string) logsListTargetResult {
 	start := time.Now()
 	res := logsListTargetResult{Server: srv.Name, Host: srv.Host, Dir: ld.Path, OK: true}
 
@@ -349,8 +350,6 @@ func (s *Server) runOneLogsList(parentCtx context.Context, system string, srv *c
 		return res
 	}
 
-	// BE-020：入口取一次配置快照，后续整个函数复用同一份，避免 TOCTOU。
-	cur := s.cur()
 	dialCtx, cancelDial := context.WithTimeout(parentCtx, sshDialOuterTimeout)
 	cli, err := sshclient.Dial(dialCtx, sshclient.Server{
 		Name: srv.Name, Host: srv.Host, Port: srv.Port, Username: creds.Username,

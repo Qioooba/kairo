@@ -28,19 +28,39 @@
   Kairo.pages = Kairo.pages || {};
   const { el, toast, copyToClipboard, escapeHtml } = Kairo.core;
 
+  const ICONS = {
+    smStar:       'M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z',
+    smStarFilled: 'M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z',
+    smFolder:     'M2 5a2 2 0 012-2h5l2 2h9a2 2 0 012 2v11a2 2 0 01-2 2H4a2 2 0 01-2-2V5z',
+    smFile:       'M6 2h6l4 4v14a2 2 0 01-2 2H6a2 2 0 01-2-2V4a2 2 0 012-2zm6 0v4h4',
+    smDatabase:   'M12 2C8 2 4 3.5 4 6s4 4 8 4 8-1.5 8-4-4-4-8-4zM4 6v6c0 2.5 4 4 8 4s8-1.5 8-4V6M4 12v6c0 2.5 4 4 8 4s8-1.5 8-4v-6',
+    smSquare:     'M3 3h18v18H3z',
+    smGlobe:      'M12 2a10 10 0 100 20 10 10 0 000-20zM2 12h20M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z',
+    smCoffee:     'M17 8h1a4 4 0 010 8h-1M3 8h14v9a4 4 0 01-4 4H7a4 4 0 01-4-4V8zM6 2v3M10 2v3M14 2v3',
+    smPalette:    'M12 2a10 10 0 1010 10 4 4 0 00-4-4h-2a2 2 0 01-2-2v-2a2 2 0 00-2-2zM7.5 10.5a1 1 0 110-2 1 1 0 010 2zM10.5 6.5a1 1 0 110-2 1 1 0 010 2zM14.5 6.5a1 1 0 110-2 1 1 0 010 2zM17.5 10.5a1 1 0 110-2 1 1 0 010 2z',
+    smKeyboard:   'M2 6h20v12H2zM6 10h.01M10 10h.01M14 10h.01M18 10h.01M8 14h8',
+  };
+  function svgIcon(name, size) {
+    const d = ICONS[name];
+    if (!d) return '';
+    const s = size || 16;
+    const filled = name === 'smStarFilled';
+    return '<svg xmlns="http://www.w3.org/2000/svg" width="' + s + '" height="' + s + '" viewBox="0 0 24 24" fill="' + (filled ? 'currentColor' : 'none') + '" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="' + d + '"/></svg>';
+  }
+
   // ===== 分类定义（顺序就是 tab 顺序） =====
   const CATEGORIES = [
-    { id: 'fav',       name: '⭐ 收藏', icon: '' },
-    { id: 'linux',     name: 'Linux',  icon: '🐧' },
-    { id: 'git',       name: 'Git',    icon: '⎇' },
-    { id: 'docker',    name: 'Docker', icon: '🐳' },
-    { id: 'oracle',    name: 'Oracle', icon: '🗄' },
-    { id: 'mysql',     name: 'MySQL',  icon: '🐬' },
-    { id: 'redis',     name: 'Redis',  icon: '🟥' },
-    { id: 'nginx',     name: 'Nginx',  icon: '🌐' },
-    { id: 'java',      name: 'Java 后端', icon: '☕' },
-    { id: 'frontend',  name: '前端',   icon: '🎨' },
-    { id: 'idea',      name: 'IDEA 快捷键', icon: '⌨' },
+    { id: 'fav',       name: '收藏',       iconName: 'smStar' },
+    { id: 'linux',     name: 'Linux',      iconName: 'smFolder' },
+    { id: 'git',       name: 'Git',        iconName: 'smFile' },
+    { id: 'docker',    name: 'Docker',     iconName: 'smSquare' },
+    { id: 'oracle',    name: 'Oracle',     iconName: 'smDatabase' },
+    { id: 'mysql',     name: 'MySQL',      iconName: 'smDatabase' },
+    { id: 'redis',     name: 'Redis',      iconName: 'smSquare' },
+    { id: 'nginx',     name: 'Nginx',      iconName: 'smGlobe' },
+    { id: 'java',      name: 'Java 后端',  iconName: 'smCoffee' },
+    { id: 'frontend',  name: '前端',       iconName: 'smPalette' },
+    { id: 'idea',      name: 'IDEA 快捷键', iconName: 'smKeyboard' },
   ];
 
   // ===== localStorage 收藏 =====
@@ -835,9 +855,9 @@
     searchInp.style.minWidth = '240px';
 
     const categorySel = el('select', { id: 'cmd-category' });
-    categorySel.appendChild(el('option', { value: 'all', text: '🗂  全部' }));
+    categorySel.appendChild(el('option', { value: 'all', text: '全部' }));
     CATEGORIES.forEach(c => {
-      const opt = el('option', { value: c.id, text: c.icon + '  ' + c.name });
+      const opt = el('option', { value: c.id, text: c.name });
       categorySel.appendChild(opt);
     });
     categorySel.style.width = '180px';
@@ -934,7 +954,8 @@
         });
         CATEGORIES.forEach(c => {
           if (c.id === 'fav' || !byCat[c.id]) return;
-          list.appendChild(el('div', { class: 'cmd-group-title', text: c.icon + '  ' + c.name + '  ·  ' + byCat[c.id].length + ' 条' }));
+          const titleEl = el('div', { class: 'cmd-group-title', style: 'display:flex; align-items:center; gap:6px;', unsafeHtml: svgIcon(c.iconName, 16) + ' ' + c.name + '  ·  ' + byCat[c.id].length + ' 条' });
+          list.appendChild(titleEl);
           byCat[c.id].forEach(it => list.appendChild(buildCard(it)));
         });
       } else {
@@ -972,7 +993,8 @@
       // 收藏按钮
       const favBtn = el('button', {
         class: 'btn btn-sm cmd-fav' + (isFav ? ' is-fav' : ''),
-        text: isFav ? '★' : '☆',
+        style: 'display:inline-flex; align-items:center; justify-content:center; width:28px; padding:0;',
+        unsafeHtml: svgIcon(isFav ? 'smStarFilled' : 'smStar', 16),
         title: isFav ? '取消收藏' : '收藏',
         onclick: (e) => {
           e.stopPropagation();

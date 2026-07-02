@@ -137,17 +137,33 @@
     // 编码选择器：UTF-8 / GBK（老 WebSphere / Oracle 终端常见）
     // UI-修复：之前用 .btn .btn-sm 让它"看起来像按钮"，结果用户看不出来是下拉。
     // 改成专用 .ssh-encoding-sel 类，下拉箭头 + 边框都按 <select> 原生样式渲染。
-    const encodingSel = el('select', { class: 'ssh-encoding-sel', title: '终端输出编码（UTF-8 / GBK），切换后自动重连' });
+    // 持久化：用户为某台机器选过 GBK 后，下次开同 (system, server) 的 tab 自动用 GBK。
+    // 用 localStorage 存，key 形如 "ssh_encoding:<system>:<server>"，避免污染全局。
+    const encodingSel = el('select', { class: 'ssh-encoding-sel', title: '终端输出编码（UTF-8 / GBK），切换后自动重连。已为当前主机记住选择。' });
     encodingSel.appendChild(el('option', { value: 'utf-8', text: 'UTF-8' }));
     encodingSel.appendChild(el('option', { value: 'gbk', text: 'GBK' }));
     encodingSel.addEventListener('change', function () {
       const tab = getActiveTab();
       if (!tab || tab.closed) return;
       tab.encoding = encodingSel.value;
+      // 写 localStorage：key = ssh_encoding:<system>:<server>
+      // 同一台机器（不管开多少 tab）共享一个偏好；删 user data 自动清空。
+      try {
+        localStorage.setItem('ssh_encoding:' + tab.system + ':' + tab.server, tab.encoding);
+      } catch (_) { /* localStorage 不可用（隐私模式 / quota）不阻断流程 */ }
       // UI-修复：之前切换无声无息，用户看不到反馈。加 toast + 自动重连（终端会刷"重连中…"）。
       toast('已切换编码为 ' + (tab.encoding === 'gbk' ? 'GBK' : 'UTF-8') + '，正在重连…', 'idle');
       reconnectActive();
     });
+    // 读持久化的 helper：在 openTab 创建 tab 时调，把 saved encoding 赋给 tab.encoding
+    function readPersistedEncoding(system, server) {
+      try {
+        const v = localStorage.getItem('ssh_encoding:' + system + ':' + server);
+        // 只接受 utf-8 / gbk，外部篡改的非法值忽略
+        if (v === 'utf-8' || v === 'gbk') return v;
+      } catch (_) { /* ignore */ }
+      return null;
+    }
     toolbarEl.appendChild(btnCtrlC);
     toolbarEl.appendChild(encodingSel);
     toolbarEl.appendChild(btnClear);
@@ -282,7 +298,9 @@
         host: srv.host,
         port: srv.port || 22,
         username: srv.username,
-        encoding: 'utf-8', // 终端编码：UTF-8（默认）或 GBK
+        // 终端编码：优先用 localStorage 里为这台机器记下的偏好，否则默认 utf-8。
+        // 切换编码时（见 encodingSel change handler）会回写 localStorage。
+        encoding: readPersistedEncoding(sys.name, srv.name) || 'utf-8',
         term: null,
         fitAddon: null,
         searchAddon: null,
@@ -357,7 +375,12 @@
           });
 
           const resizeObs = new ResizeObserver(function () {
-            if (tab.fitAddon && !tab.closed) {
+            // 【bug-修复】tab 隐藏时（termEl display:none）offsetWidth=0，
+            // 此时 fit() 会把 cols 拉成 0/1，buffer 中后续写入的字符按 0 列 wrap，
+            // 切回 tab 时 buffer 显示成"竖排乱码"（用户报告：credit@ces... / hi199:/...）。
+            // 修复：hidden 状态跳过 fit，让 cols 维持上次有效值。
+            // 切回时由 activateTab 里的 setTimeout(50) 统一 fit + focus。
+            if (tab.fitAddon && !tab.closed && termEl.offsetWidth > 0) {
               try {
                 tab.fitAddon.fit();
               } catch (e) { /* ignore */ }

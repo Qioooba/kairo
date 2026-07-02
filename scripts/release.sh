@@ -14,8 +14,7 @@
 #        ./scripts/release.sh v0.9.0
 #
 # 产物：
-#   dist/kairo-<ver>-windows.zip       ← Win10/11 发布包
-#   dist/kairo-<ver>-win7-windows.zip  ← Win7 发布包
+#   dist/Kairo-<ver>-windows-both.zip  ← Win10/11 + Win7 合并发布包（v0.12-rc10+ 起默认）
 #
 # 失败条件（会立即退出）：
 #   - GO120_HOME 未配置或路径无效
@@ -75,7 +74,7 @@ echo ">>> [1/3] 编译 Win10 + Win7 双版本"
 # -------------------------------------------------------------------
 # 3) 验证产物齐全
 # -------------------------------------------------------------------
-WIN10_EXE="dist/kairo-${VER}/Kairo.exe"
+WIN10_EXE="dist/kairo-${VER}/Kairo_win10.exe"
 WIN7_EXE="dist/kairo-${VER}-win7/Kairo_win7.exe"
 
 echo
@@ -104,23 +103,19 @@ echo ">>> [3/3] 打包发布 zip"
 # -------------------------------------------------------------------
 # 5) 验证打包产物
 # -------------------------------------------------------------------
-WIN10_ZIP="dist/kairo-${VER}-windows.zip"
-WIN7_ZIP="dist/kairo-${VER}-win7-windows.zip"
+BOTH_ZIP="dist/Kairo-${VER}-windows-both.zip"
 
-if [[ ! -f "${WIN10_ZIP}" ]]; then
-  echo "错误：Win10 发布包缺失 ${WIN10_ZIP}" >&2
+if [[ ! -f "${BOTH_ZIP}" ]]; then
+  echo "错误：合并发布包缺失 ${BOTH_ZIP}" >&2
+  echo "（package_windows_both.sh 应当默认打合并包；如果是单包模式说明 Win10/Win7 有一个没编）" >&2
   exit 1
 fi
-if [[ ! -f "${WIN7_ZIP}" ]]; then
-  echo "错误：Win7 发布包缺失 ${WIN7_ZIP}" >&2
-  exit 1
-fi
+echo "   ✅ 合并包: ${BOTH_ZIP} ($(ls -lh "${BOTH_ZIP}" | awk '{print $5}'))"
 
 echo
 echo "============================================="
 echo " 发布完成"
 echo "============================================="
-echo "  Win10/11 → ${WIN10_ZIP} ($(ls -lh "${WIN10_ZIP}" | awk '{print $5}'))"
-echo "  Win7     → ${WIN7_ZIP} ($(ls -lh "${WIN7_ZIP}" | awk '{print $5}'))"
+echo "  Win10/11 + Win7 → ${BOTH_ZIP} ($(ls -lh "${BOTH_ZIP}" | awk '{print $5}'))"
 echo
-echo ">> 下一步：把两个 zip 发给对应用户 / 上传发布渠道"
+echo ">> 下一步：把 ${BOTH_ZIP} 发给用户 / 上传发布渠道"

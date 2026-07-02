@@ -156,7 +156,7 @@ func loadLocalCert() (*Cert, error) {
 //
 // 写入策略:
 //   - 加密 cert → payload (AES-GCM)
-//   - AAD = cert.IP
+//   - AAD = cert.IP + MAC fingerprint (aadForCert)
 //   - 落盘格式: {payload: base64(nonce+ct), ip: 明文}
 //   - 文件权限 0o600 (仅当前用户可读写)
 func saveLocalCert(cert *Cert) error {

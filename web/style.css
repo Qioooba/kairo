@@ -385,6 +385,7 @@ body {
   padding: 14px 22px;
   border-bottom: 1px solid var(--line);
   background: var(--topbar-bg);
+  -webkit-backdrop-filter: blur(6px);
   backdrop-filter: blur(6px);
 }
 .topbar-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
@@ -556,25 +557,25 @@ label.inline {
   color: var(--text);
 }
 /* v0.9 UI-8：files 页"记住密码"checkbox 区域加边框/底色，让小 checkbox 视觉权重
-   跟"连接并浏览"主按钮对齐。files.js 锁着不修改，用 :has() 锁定到含 #files-remember
+   跟"连接并浏览"主按钮对齐。用 .remember-wrap class 锁定到含 #files-remember
    的 label，避免影响其他 label.inline（如多文件打包 zip）。
    hc 主题下用更醒目的对比边框。 */
-label.inline:has(input#files-remember) {
+label.inline.remember-wrap {
   padding: 6px 12px;
   border: 1px solid var(--line);
   border-radius: 6px;
   background: var(--bg-2);
 }
-label.inline:has(input#files-remember):hover {
+label.inline.remember-wrap:hover {
   background: var(--bg-3);
   border-color: var(--primary);
 }
-:root[data-theme="hc"] label.inline:has(input#files-remember) {
+:root[data-theme="hc"] label.inline.remember-wrap {
   background: #000000;
   border: 2px solid #ffffff;
   color: #ffff00;
 }
-:root[data-theme="hc"] label.inline:has(input#files-remember):hover {
+:root[data-theme="hc"] label.inline.remember-wrap:hover {
   border-color: #00ffff;
   color: #00ffff;
 }
@@ -629,6 +630,25 @@ textarea { resize: vertical; min-height: 100px; font-family: ui-monospace, SFMon
   border-color: transparent;
   color: #fff;
   box-shadow: var(--btn-primary-shadow);
+  /* 修复 v0.12 UI-5：在 xianxia（浅色 + color-scheme: dark）下，
+     Chromium macOS 会按 dark scheme 把 <button> 的 UA background-color
+     渲染为白底覆盖到 gradient 上 — 显式 -webkit-appearance:none /
+     appearance:none 阻止 UA 背景色覆盖，让 var(--btn-primary-grad) 永远生效。 */
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+}
+/* 修复 v0.12 UI-5 续：浏览器对 disabled <button> 会强制清掉 background-image，
+   使 var(--btn-primary-grad) 失效，按钮退化成容器底色 + 白字（xianxia 下就是 #e8efe9 浅绿
+   + 0.55 透明，几乎看不见「保存」）。显式重新赋予 background-image 让 disabled 状态
+   也保留青绿渐变，仅靠 opacity 0.5 表达禁用灰度。 */
+.btn-primary:disabled {
+  background: var(--btn-primary-grad);
+  border-color: transparent;
+  color: #fff;
+  opacity: 0.5;
+  filter: none;
+  transform: none;
 }
 .btn-primary:hover { background: var(--btn-primary-grad); border-color: transparent; filter: brightness(1.08); transform: translateY(-1px); box-shadow: 0 8px 20px rgba(79,140,255,0.4); }
 .btn-primary:active { background: var(--btn-primary-grad); border-color: transparent; filter: brightness(0.95); transform: translateY(0); }
@@ -692,6 +712,11 @@ textarea { resize: vertical; min-height: 100px; font-family: ui-monospace, SFMon
 .table th, .table td {
   padding: 7px 10px; text-align: left; border-bottom: 1px solid var(--line);
 }
+/* v0.11：表格 td 默认 vertical-align: middle，文件/操作列内容多行时把整行 tr 撑高，
+   但同行的「大小」「下载时间」等短内容列被 middle 拉到中间 —— 视觉上每行位置不齐。
+   强制 top 对齐：所有列从顶端开始，long filename / 按钮 wrap 自然向下延伸，
+   短列固定在行顶，整页看着齐。 */
+.table td { vertical-align: top; }
 .table th { color: var(--text-dim); font-weight: 500; background: var(--bg-2); position: sticky; top: 0; }
 .table tr:hover td { background: var(--row-hover-bg); }
 /* v0.9 UI-6：表格数字列右对齐 + tabular-nums，让 "544 B / 3.1 KB / 1.5 MB"
@@ -772,7 +797,13 @@ textarea { resize: vertical; min-height: 100px; font-family: ui-monospace, SFMon
   transition: opacity .2s, transform .2s;
   pointer-events: none;
   max-width: 360px;
+  /* 修复 v0.12 UI-4：toast 默认 z-index auto 会输给了 .cfg-save-footer-bar (z-index:50)，
+     导致在配置页保存后右下角 toast 被底部「放弃改动 / 保存」按钮区域盖住，文字只露一半。
+     拉大 z-index 并把 bottom 提到 footer bar 上方 56+8 px，确保 toast 完全可见，
+     同时 pointer-events:none 不阻挡页面交互。 */
+  z-index: 60;
 }
+.toast.has-sticky-footer { bottom: 84px; }
 .toast.show { opacity: 1; transform: translateY(0); }
 .toast.ok { border-color: var(--success); }
 .toast.err { border-color: var(--error); }
@@ -1369,7 +1400,9 @@ input[type="datetime-local"] {
   color: var(--text);
   font-size: 13px;
   font-family: inherit;
-  color-scheme: dark;
+  color-scheme: light dark;
+  min-height: 36px;
+  box-sizing: border-box;
 }
 
 /* 操作按钮容器 — downloads 表里更紧凑 */
@@ -1469,7 +1502,8 @@ input[type="datetime-local"] {
   background: var(--bg-1);
   border: 1px solid var(--line);
   border-radius: 10px;
-  width: min(960px, 96vw);
+  width: 96vw;
+  max-width: 960px;
   max-height: 88vh;
   display: flex; flex-direction: column;
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
@@ -1815,7 +1849,10 @@ input[type="datetime-local"] {
 
   --tail-out-bg: #080a09;
   --tail-out-fg: #b8c4be;
-  --code-inline-bg: #151a18;
+  /* v0.11：xianxia 是浅色主题（--text=#1a2320 深色），--code-inline-bg 必须用浅色，
+     之前抄了 dark 的 #151a18（深色）→ 黑底黑字，inline code 三个块全黑看不清。
+     改成 bg-1 的浅绿（#e8efe9）配 .code-inline 默认 color:var(--text) 深色字，可读。 */
+  --code-inline-bg: #e8efe9;
 
   --scrollbar-w: 12px;
   --scrollbar-h: 12px;
@@ -1875,7 +1912,12 @@ input[type="datetime-local"] {
   --d2h-dark-ins-label-color: var(--d2h-ins-label-color);
   --d2h-dark-moved-label-color: var(--d2h-moved-label-color);
 
-  color-scheme: dark;
+  /* 修复 v0.12 UI-5：xianxia 是浅色主题（--bg-0:#f5f8f7, --text:#1a2320），
+     但末尾 color-scheme: dark 让浏览器在 macOS WebKit / 部分 Chromium 上把
+     <button> 的原生 background fallback 成白底，叠加 var(--btn-primary-grad)
+     被某些 reset 抹掉，最终 .btn-primary 显示成白底浅灰字 — 「保存」按钮看不见。
+     改为 color-scheme: light 匹配主题实际明暗。 */
+  color-scheme: light;
 }
 
 /* ===== v0.5-G #13：tab 跳转高亮 + tab bar 样式 ===== */
@@ -1928,10 +1970,9 @@ input[type="datetime-local"] {
   text-align: center;
   font-weight: 600;
 }
-/* v0.6-fix：用 :has() 显式表达"父 tab-item 含 active btn 时给 badge 换主题色"，
-   避免依赖 btn 和 badge 的兄弟位置关系（之前用 `.btn + .ws-tab-badge` 在重构时容易踩坑）。
-   浏览器支持：Chrome 105+ / Safari 15.4+ / Firefox 121+。 */
-.ws-tab-bar .ws-tab-item:has(> .btn.active) > .ws-tab-badge {
+/* v0.6-fix：用 .has-active class 表达"父 tab-item 含 active btn 时给 badge 换主题色"，
+   避免依赖 :has() 选择器（Win7 旧浏览器不支持）。JS switchTab 中同步切换 has-active。 */
+.ws-tab-bar .ws-tab-item.has-active > .ws-tab-badge {
   background: var(--primary);
   color: #fff;
   border-color: var(--primary);
@@ -2757,7 +2798,7 @@ input[type="datetime-local"] {
 .http2-modal-mask {
   position: fixed; inset: 0; background: rgba(0,0,0,0.55);
   display: flex; align-items: center; justify-content: center;
-  z-index: 999; backdrop-filter: blur(2px);
+  z-index: 999; -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px);
   animation: kairo-fadein 0.12s ease;
 }
 @keyframes kairo-fadein { from { opacity: 0; } to { opacity: 1; } }
@@ -2915,7 +2956,8 @@ input[type="datetime-local"] {
   animation: kairo-fadein 0.12s ease-out;
 }
 .kairo-dialog {
-  width: min(92vw, 440px);
+  width: 92vw;
+  max-width: 440px;
   background: var(--bg-1);
   border: 1px solid var(--line);
   border-radius: 12px;
@@ -3381,6 +3423,7 @@ input[type="datetime-local"] {
   position: fixed;
   inset: 0;
   background: rgba(0, 0, 0, 0.6);
+  -webkit-backdrop-filter: blur(4px);
   backdrop-filter: blur(4px);
   z-index: 99998;
   display: flex;
@@ -3860,10 +3903,10 @@ input[type="datetime-local"] {
 }
 
 /* 记住密码checkbox古风适配 */
-:root[data-theme="xianxia"] label.inline:has(input#files-remember) {
+:root[data-theme="xianxia"] label.inline.remember-wrap {
   background: var(--bg-2);
 }
-:root[data-theme="xianxia"] label.inline:has(input#files-remember):hover {
+:root[data-theme="xianxia"] label.inline.remember-wrap:hover {
   background: var(--bg-3);
   border-color: var(--primary);
 }
@@ -3941,7 +3984,7 @@ input[type="datetime-local"] {
 }
 
 /* Tab badge：青锋底 */
-:root[data-theme="xianxia"] .ws-tab-bar .ws-tab-item:has(> .btn.active) > .ws-tab-badge {
+:root[data-theme="xianxia"] .ws-tab-bar .ws-tab-item.has-active > .ws-tab-badge {
   background: var(--primary);
   border-color: var(--primary);
   color: #fff;
@@ -4098,8 +4141,10 @@ input[type="datetime-local"] {
   border-bottom-color: var(--line);
 }
 
-/* 配置页保存条 */
-:root[data-theme="xianxia"] .cfg-save-footer {
+/* 配置页保存条 — 修复 v0.12 UI-5：之前写成 .cfg-save-footer 选择器，被复用给了"保存"按钮本身，
+   引发 background: var(--bg-1) 覆盖到 .btn-primary 上导致按钮退化成浅绿色块。
+   改为容器选择器 .cfg-save-footer-bar。 */
+:root[data-theme="xianxia"] .cfg-save-footer-bar {
   background: var(--bg-1);
   border-top-color: var(--line);
 }
@@ -4204,5 +4249,67 @@ input[type="datetime-local"] {
 }
 :root[data-theme="xianxia"] .nav-item.active {
   background: linear-gradient(90deg, rgba(74,122,106,0.22), var(--bg-1));
+}
+
+/* v0.11：xianxia 主题下 radio / checkbox 自定义渲染
+   浏览器默认 appearance: auto 在 macOS Webkit 下未选中 radio 是 24px 圆 + 黑色实心点，
+   配上 xianxia 的浅绿主题，黑色点非常突兀（用户反馈「很多单选框变成黑色」）。
+   这里用 appearance: none + 自定义：未选中给线框 + 浅色底，选中后用 primary 青绿填充。
+   不影响其他 4 个主题（dark/light/green/hc 仍走系统默认，深色背景上更协调）。 */
+:root[data-theme="xianxia"] input[type="radio"],
+:root[data-theme="xianxia"] input[type="checkbox"] {
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+  position: relative;
+  background: var(--bg-0);
+  border: 1.5px solid var(--line-2);
+  cursor: pointer;
+  box-sizing: border-box;
+  flex-shrink: 0;
+  transition: background-color .12s, border-color .12s;
+}
+:root[data-theme="xianxia"] input[type="radio"] {
+  border-radius: 50%;
+}
+:root[data-theme="xianxia"] input[type="radio"]:checked {
+  border-color: var(--primary);
+  background: var(--bg-0);
+}
+:root[data-theme="xianxia"] input[type="radio"]:checked::after {
+  content: "";
+  position: absolute;
+  inset: 4px;
+  border-radius: 50%;
+  background: var(--primary);
+}
+:root[data-theme="xianxia"] input[type="radio"]:hover:not(:disabled) {
+  border-color: var(--primary);
+}
+:root[data-theme="xianxia"] input[type="checkbox"] {
+  border-radius: 4px;
+}
+:root[data-theme="xianxia"] input[type="checkbox"]:checked {
+  background: var(--primary);
+  border-color: var(--primary);
+}
+:root[data-theme="xianxia"] input[type="checkbox"]:checked::after {
+  content: "";
+  position: absolute;
+  left: 6px;
+  top: 2px;
+  width: 5px;
+  height: 10px;
+  border: solid #fff;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+:root[data-theme="xianxia"] input[type="checkbox"]:hover:not(:disabled) {
+  border-color: var(--primary);
+}
+:root[data-theme="xianxia"] input[type="radio"]:disabled,
+:root[data-theme="xianxia"] input[type="checkbox"]:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 

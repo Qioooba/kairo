@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Kairo · README SVG 改造预览</title>
+<style>
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif;
+    background: #ffffff;
+    color: #1f2328;
+  }
+  .gh-wrap {
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 32px 24px 80px;
+  }
+  .gh-h1 {
+    font-size: 32px;
+    font-weight: 600;
+    border-bottom: 1px solid #d1d9e0;
+    padding-bottom: 8px;
+    margin: 24px 0 16px;
+  }
+  .gh-h2 {
+    font-size: 24px;
+    font-weight: 600;
+    border-bottom: 1px solid #d1d9e0;
+    padding-bottom: 6px;
+    margin: 32px 0 16px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .gh-h2 img { width: 22px; height: 22px; }
+  .gh-h3 {
+    font-size: 20px;
+    font-weight: 600;
+    margin: 24px 0 12px;
+  }
+  .gh-p { line-height: 1.6; margin: 12px 0; }
+  .gh-code {
+    background: #f6f8fa;
+    border-radius: 6px;
+    padding: 14px 16px;
+    margin: 12px 0;
+    font-family: 'SF Mono', 'Monaco', Consolas, monospace;
+    font-size: 13px;
+    line-height: 1.5;
+    overflow-x: auto;
+  }
+  .gh-li { line-height: 1.7; margin-left: 24px; }
+  .badge {
+    display: inline-block;
+    background: #ddf4ff;
+    color: #0969da;
+    padding: 2px 10px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 500;
+    margin-left: 8px;
+  }
+  .section-banner {
+    background: linear-gradient(90deg, #ddf4ff, #fff);
+    border-left: 4px solid #0969da;
+    padding: 14px 18px;
+    border-radius: 6px;
+    margin: 32px 0 16px;
+    font-size: 14px;
+    color: #1f2328;
+  }
+  .section-banner b { color: #0969da; }
+  .toc {
+    background: #f6f8fa;
+    border-radius: 6px;
+    padding: 16px 24px;
+    margin: 24px 0;
+  }
+  .toc b { display: block; margin-bottom: 8px; }
+  .toc ol { margin: 0; padding-left: 20px; line-height: 1.7; }
+  .toc li { list-style: decimal; }
+  .compare-cols {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+    margin: 24px 0;
+  }
+  .compare-cols > div {
+    background: #f6f8fa;
+    border-radius: 8px;
+    padding: 16px;
+  }
+  .compare-cols h3 {
+    font-size: 14px;
+    margin: 0 0 12px;
+    color: #57606a;
+    font-weight: 600;
+  }
+</style>
+</head>
+<body>
+<div class="gh-wrap">
+
+  <div class="section-banner">
+    <b>预览说明：</b>这是模拟 GitHub README 渲染效果的预览页。左半是 <b>当前 README.md 现状</b>（emoji 标题），右半是 <b>改造方案预览</b>（用 SVG 替换 emoji）。<br>
+    13 个章节图标已生成在 <code>docs/section-icons/</code>，icons.js 也加了 13 个 key 待用。<b>README.md 还没改</b>，看完告诉我具体怎么改。
+  </div>
+
+  <h1 class="gh-h1">Kairo · 天命契机</h1>
+  <p class="gh-p">本地运维工具箱 — WebSphere 日志、SSH 终端、文件下载、报文格式化、常用命令速查。Win 10 / 11 + Win 7 双版本，本地内网部署，零外网依赖。</p>
+
+  <!-- ======================================================== -->
+  <!-- 当前 README 现状：emoji 标题 -->
+  <!-- ======================================================== -->
+  <div class="section-banner">
+    <b>A · 当前 README.md 现状</b>（emoji 标题 — Win 7 上 emoji 字体缺失会显示豆腐块）
+  </div>
+
+  <h2 class="gh-h2">✨ 为什么是Kairo</h2>
+  <p class="gh-p">内网 WebSphere 维护痛点：日志散落多台机器、tail 不实时、SSH 工具又笨重。Kairo 把"日志搜索 / 文件下载 / 报文格式化 / 常用命令速查"塞进一个本地 Web 界面。</p>
+
+  <h2 class="gh-h2">🚀 快速开始</h2>
+  <p class="gh-p">方式 A：双击发版 exe。方式 B：开发模式 <code>go run .</code>。</p>
+
+  <h2 class="gh-h2">🎯 功能矩阵</h2>
+  <p class="gh-p">9 大功能卡片 + 4 个小工具，覆盖 80% 日常运维场景。</p>
+
+  <h2 class="gh-h2">🛠 技术栈</h2>
+  <p class="gh-p">Go 1.22 / Wails（备选）/ 内嵌 WebView + vanilla JS。Win 7 兼容走 Go 1.20.x + go-keyring 旧分支。</p>
+
+  <h2 class="gh-h2">🏗 架构</h2>
+  <p class="gh-p">四层：Web (vanilla JS) → HTTP API → internal/... → SSH client / File / Config。</p>
+
+  <h2 class="gh-h2">🔒 安全设计</h2>
+  <p class="gh-p">凭据走后端 keyring、不进前端、free_file_roots 白名单、SSH 主机指纹校验。</p>
+
+  <h2 class="gh-h2">🧪 测试与质量保障</h2>
+  <p class="gh-p">mock_sshd + fake-websphere Python helper；Playwright E2E 16 项修复回归。</p>
+
+  <h2 class="gh-h2">🧭 路线图（已规划 / 未做）</h2>
+  <p class="gh-p">v0.11+ 多用户 RBAC、v0.12 远程协作、v1.0 完整产品化。</p>
+
+  <h2 class="gh-h2">❓ 常见问题</h2>
+  <p class="gh-p">Q: Win 7 怎么跑？A: 用专门的 Go 1.20.x 编译 win7 版本。Q: 凭据存在哪？A: 系统 keyring（macOS Keychain / Windows Credential Manager / Linux Secret Service）。</p>
+
+  <h2 class="gh-h2">📜 Release Notes</h2>
+  <p class="gh-p">v0.10（开发中）、v0.9.0（当前）、v0.8 / v0.7 / v0.6 / v0.5 / v0.4 / v0.3 / v0.2 / v0.1 历史版本说明。</p>
+
+  <!-- ======================================================== -->
+  <!-- 方案 B：13 个新章节（按用户给的章节名） -->
+  <!-- ======================================================== -->
+  <div class="section-banner" style="margin-top: 64px;">
+    <b>B · 按你给的 13 个章节重写后的预览</b>（章节名换成新名字 + SVG 图标）
+  </div>
+
+  <h2 class="gh-h2"><img src="section-icons/overview.svg" alt=""> 产品概览 <span class="badge">新</span></h2>
+  <p class="gh-p">内网 WebSphere 维护痛点：日志散落多台机器、tail 不实时、SSH 工具又笨重。Kairo 把"日志搜索 / 文件下载 / 报文格式化 / 常用命令速查"塞进一个本地 Web 界面。</p>
+
+  <h2 class="gh-h2"><img src="section-icons/philosophy.svg" alt=""> 设计哲学 <span class="badge">新</span></h2>
+  <p class="gh-p">为什么选 Wails / Go / 内嵌 WebView？为什么不直接搞 Electron？取舍点：包体积（10MB vs 100MB+）、启动速度、内网零依赖、Win 7 兼容性。每一条都有明确 trade-off，不为"现代"而现代。</p>
+
+  <h2 class="gh-h2"><img src="section-icons/architecture.svg" alt=""> 四层架构 <span class="badge">改</span></h2>
+  <p class="gh-p">分层：Web (vanilla JS, 零构建) → HTTP API → internal/... → SSH client / File / Config。每一层职责单一、可独立测试、不允许跨层调用。</p>
+
+  <h2 class="gh-h2"><img src="section-icons/stack.svg" alt=""> 技术栈</h2>
+  <p class="gh-p">Go 1.22 / 内嵌 WebView + vanilla JS。Win 7 兼容走 Go 1.20.x + go-keyring 旧分支。前端零构建，所有逻辑在浏览器原生 JS 里跑。</p>
+
+  <h2 class="gh-h2"><img src="section-icons/security.svg" alt=""> 安全白皮书 <span class="badge">改</span></h2>
+  <p class="gh-p">威胁模型：恶意前端输入 / 中间人 / 凭据泄漏 / 任意文件下载。缓解：凭据走后端 keyring、不进前端；free_file_roots 白名单；SSH 主机指纹校验；fail-closed 默认配置。</p>
+
+  <h2 class="gh-h2"><img src="section-icons/ssh.svg" alt=""> SSH 兼容 <span class="badge">新</span></h2>
+  <p class="gh-p">OpenSSH 6.2p2 / AIX / WebSphere SSH 兼容矩阵：3 套 profile 自动 fallback、keyboard-interactive 认证、握手 deadline 与 ctx 分离。详见 docs/SSH-TERMINAL-DESIGN.md。</p>
+
+  <h2 class="gh-h2"><img src="section-icons/quality.svg" alt=""> 质量保障 <span class="badge">改</span></h2>
+  <p class="gh-p">mock_sshd + fake-websphere Python helper；Playwright E2E 16 项修复回归；前后端单测 + 集成测试 + 覆盖率。CI 辅助脚本确保不漏项。</p>
+
+  <h2 class="gh-h2"><img src="section-icons/modules.svg" alt=""> 功能模块 <span class="badge">改</span></h2>
+  <p class="gh-p">9 大功能卡片（WebSphere 日志 / 文件下载 / 报文格式化 / HTTP 测试 / 代码比对 / 常用命令 / 环境自检 / 下载历史 / 系统配置）+ 4 个小工具（时间戳 / Cron / JSONPath / 关于）。</p>
+
+  <h2 class="gh-h2"><img src="section-icons/compare.svg" alt=""> 横向对比 <span class="badge">新</span></h2>
+  <p class="gh-p">和 kibana / ssh-cli / postman-desktop / windterm 的对比。Kairo 不替代它们，而是"在不能用 GUI 工具的内网 + 必须管 WebSphere 的场景下"的最佳折中。</p>
+
+  <h2 class="gh-h2"><img src="section-icons/incident.svg" alt=""> 故障复盘 <span class="badge">新</span></h2>
+  <p class="gh-p">踩过的坑：OpenSSH 6.2p2 握手 hang、keyring 在 Linux headless 容器下不可用、Win 7 下 emoji 字体缺失、xterm.js Canvas 渲染在老显卡白屏。每次都有"现象 → 根因 → 修复 → 验证"四段。</p>
+
+  <h2 class="gh-h2"><img src="section-icons/changelog.svg" alt=""> 版本史 <span class="badge">改</span></h2>
+  <p class="gh-p">v0.10（开发中）、v0.9.0（当前）、v0.8 / v0.7 / v0.6 / v0.5 / v0.4 / v0.3 / v0.2 / v0.1 历史。每个版本一行总结 + 关键 commit 链接。</p>
+
+  <h2 class="gh-h2"><img src="section-icons/faq.svg" alt=""> FAQ</h2>
+  <p class="gh-p">Q: Win 7 怎么跑？A: 用专门的 Go 1.20.x 编译 win7 版本。Q: 凭据存在哪？A: 系统 keyring（macOS Keychain / Windows Credential Manager / Linux Secret Service）。Q: 能上云吗？A: 当前定位是本地工具，云端是另一套架构。</p>
+
+  <h2 class="gh-h2"><img src="section-icons/roadmap.svg" alt=""> 路线图</h2>
+  <p class="gh-p">v0.11+ 多用户 RBAC、v0.12 远程协作、v1.0 完整产品化。优先级由"内网同事实际需求"驱动，不是"feature 列表"驱动。</p>
+
+  <!-- ======================================================== -->
+  <!-- TOC 对比 -->
+  <!-- ======================================================== -->
+  <div class="section-banner" style="margin-top: 64px;">
+    <b>改造对照表</b>
+  </div>
+
+  <div class="compare-cols">
+    <div>
+      <h3>当前 README（15 个 emoji 章节）</h3>
+      <ol>
+        <li>✨ 为什么是Kairo</li>
+        <li>🚀 快速开始</li>
+        <li>🎯 功能矩阵</li>
+        <li>🛠 技术栈</li>
+        <li>🏗 架构</li>
+        <li>📡 API 列表</li>
+        <li>🔒 安全设计</li>
+        <li>🧪 测试与质量保障</li>
+        <li>🏗 构建与发布</li>
+        <li>⚙️ 配置详解</li>
+        <li>📁 项目结构</li>
+        <li>🧭 路线图</li>
+        <li>❓ 常见问题</li>
+        <li>📜 Release Notes</li>
+        <li>📄 License</li>
+      </ol>
+    </div>
+    <div>
+      <h3>改造后（按你给的 13 个新章节）</h3>
+      <ol>
+        <li>📄 产品概览 <small>(新增)</small></li>
+        <li>💡 设计哲学 <small>(新增)</small></li>
+        <li>🧱 四层架构 <small>(改自 架构)</small></li>
+        <li>🛠 技术栈</li>
+        <li>🛡 安全白皮书 <small>(改自 安全设计)</small></li>
+        <li>💻 SSH 兼容 <small>(新增)</small></li>
+        <li>✅ 质量保障 <small>(改自 测试与质量保障)</small></li>
+        <li>🧩 功能模块 <small>(改自 功能矩阵)</small></li>
+        <li>⚖️ 横向对比 <small>(新增)</small></li>
+        <li>🔧 故障复盘 <small>(新增)</small></li>
+        <li>📋 版本史 <small>(改自 Release Notes)</small></li>
+        <li>❓ FAQ</li>
+        <li>🗺 路线图</li>
+        <li><s>📡 API 列表 / 🏗 构建与发布 / ⚙️ 配置详解 / 📁 项目结构</s> <small>(合并/删除？)</small></li>
+        <li>📄 License</li>
+      </ol>
+    </div>
+  </div>
+
+  <p class="gh-p" style="margin-top: 32px; color: #57606a; font-size: 13px;">
+    <b>需要你确认的 4 件事：</b><br>
+    ① <b>现有 → 新章节 的映射</b>：上面表格里 7 个"改"的章节我能猜到，但 🚀 快速开始 / 📡 API 列表 / 🏗 构建与发布 / ⚙️ 配置详解 / 📁 项目结构 5 个 README 现有章节在你 13 个新章节里<b>没对应</b>。要保留？合并到其他章节？删除？<br>
+    ② <b>新增 5 个章节的内容</b>：产品概览、设计哲学、SSH 兼容、横向对比、故障复盘 —— 这 5 个章节<b>现有 README 里没有对应内容</b>。每个章节要写什么？写多长？<br>
+    ③ <b>SVG 尺寸</b>：当前预览用 22×22。如果 GitHub 渲染觉得太大可以改 18-20。<br>
+    ④ <b>README 现有 emoji 怎么迁</b>：是否全部换成 SVG？还是要保留 emoji + SVG 双图标（emoji 给 Win 10+ 看，SVG 兜底 Win 7）？
+  </p>
+
+</div>
+</body>
+</html>

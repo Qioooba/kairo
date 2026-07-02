@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # build_windows_amd64.sh
 #
-# 用本机 Go 编译 Windows 10/11 用的 Kairo.exe。
+# 用本机 Go 编译 Windows 10/11 用的 Kairo_win10.exe。
 # 纯交叉编译，不依赖 Windows。
 #
 # 用法：
 #   ./scripts/build_windows_amd64.sh [版本号]
 #
 # 产物：
-#   ./dist/kairo-<ver>/Kairo.exe
+#   ./dist/kairo-<ver>/Kairo_win10.exe
 #
 # 注意：本脚本默认用本地 Go 工具链（不下载更新版本）。
 
@@ -45,7 +45,7 @@ else
   echo ">> 提示：vendor/ 目录缺失，回退到 module 模式（建议先跑 go mod vendor）"
 fi
 
-go build "${GO_MOD_FLAGS[@]}" -trimpath -ldflags "-s -w -H windowsgui" -o "${OUT_DIR}/Kairo.exe" .
+go build "${GO_MOD_FLAGS[@]}" -trimpath -ldflags "-s -w -H windowsgui" -o "${OUT_DIR}/Kairo_win10.exe" .
 
 # 复制运行所需文件
 # config.yaml 是首选，但发布包里通常只有 config.yaml.production.example（占位 / 模板）。
@@ -70,4 +70,4 @@ ls -lh "${OUT_DIR}/"
 echo
 echo ">> 产物目录：${OUT_DIR}/"
 echo ">> 建议：把这个目录打包成 zip 发给同事（不要把 dist/ 整目录打进去）"
-echo ">> 用法：双击 Kairo.exe，托盘图标常驻右下角，右键退出"
+echo ">> 用法：双击 Kairo_win10.exe，托盘图标常驻右下角，右键退出"

@@ -310,34 +310,57 @@ func TestActivate_EmptyCode(t *testing.T) {
 	withCleanCert(t)
 
 	// 设为 PLACEHOLDER 地址, 让请求失败但不应 panic
-	LicenseServerPrimary = "http://PLACEHOLDER/kairo/auth/activate"
-	LicenseServerSecondary = ""
-	BasicAuthHeader = "TEST"
-	URLParamK1 = ""; URLParamV1 = ""  // 全空, URL 不带参数
-	URLParamK2 = ""; URLParamV2 = ""
-	URLParamK3 = ""; URLParamV3 = ""
+	saveAndRestoreLicenseVars(t, func() {
+		LicenseServerPrimary = "http://PLACEHOLDER/kairo/auth/activate"
+		LicenseServerSecondary = ""
+		BasicAuthHeader = "TEST"
+		URLParamK1 = ""; URLParamV1 = ""  // 全空, URL 不带参数
+		URLParamK2 = ""; URLParamV2 = ""
+		URLParamK3 = ""; URLParamV3 = ""
 
-	err := Activate("")
-	if err == nil {
-		t.Errorf("空激活码应该返回错误")
-	}
-	t.Logf("Activate('') 错误 (符合预期): %v", err)
+		err := Activate("")
+		if err == nil {
+			t.Errorf("空激活码应该返回错误")
+		}
+		t.Logf("Activate('') 错误 (符合预期): %v", err)
+	})
 }
 
 // TestActivate_WhitespaceCode 纯空白激活码
 func TestActivate_WhitespaceCode(t *testing.T) {
 	withCleanCert(t)
-	LicenseServerPrimary = "http://PLACEHOLDER/kairo/auth/activate"
-	LicenseServerSecondary = ""
-	BasicAuthHeader = "TEST"
-	URLParamK1 = ""; URLParamV1 = ""
-	URLParamK2 = ""; URLParamV2 = ""
-	URLParamK3 = ""; URLParamV3 = ""
+	saveAndRestoreLicenseVars(t, func() {
+		LicenseServerPrimary = "http://PLACEHOLDER/kairo/auth/activate"
+		LicenseServerSecondary = ""
+		BasicAuthHeader = "TEST"
+		URLParamK1 = ""; URLParamV1 = ""
+		URLParamK2 = ""; URLParamV2 = ""
+		URLParamK3 = ""; URLParamV3 = ""
 
-	err := Activate("   ")
-	if err == nil {
-		t.Errorf("空白激活码应该返回错误")
-	}
+		err := Activate("   ")
+		if err == nil {
+			t.Errorf("空白激活码应该返回错误")
+		}
+	})
+}
+
+// saveAndRestoreLicenseVars 在测试体 fn 执行前 snapshot var, 测试结束后还原。
+// 避免测试改 var 后污染其他测试。
+func saveAndRestoreLicenseVars(t *testing.T, fn func()) {
+	t.Helper()
+	prim, sec, auth := LicenseServerPrimary, LicenseServerSecondary, BasicAuthHeader
+	k1, v1 := URLParamK1, URLParamV1
+	k2, v2 := URLParamK2, URLParamV2
+	k3, v3 := URLParamK3, URLParamV3
+	defer func() {
+		LicenseServerPrimary = prim
+		LicenseServerSecondary = sec
+		BasicAuthHeader = auth
+		URLParamK1, URLParamV1 = k1, v1
+		URLParamK2, URLParamV2 = k2, v2
+		URLParamK3, URLParamV3 = k3, v3
+	}()
+	fn()
 }
 
 // TestGetStatus_Reasons 各种状态 reason 分类正确

@@ -16,6 +16,24 @@
   const { el, $, toast, setStatus, cssEscape, pctText, formatBytes, formatTime, basenameOf } = Kairo.core;
   const { api } = Kairo.api;
 
+  const ICONS = {
+    smFolder:    'M2 5a2 2 0 012-2h5l2 2h9a2 2 0 012 2v11a2 2 0 01-2 2H4a2 2 0 01-2-2V5z',
+    smFile:      'M6 2h6l4 4v14a2 2 0 01-2 2H6a2 2 0 01-2-2V4a2 2 0 012-2zm6 0v4h4',
+    smLink:      'M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71',
+    smClipboard: 'M9 2h6a2 2 0 012 2v16a2 2 0 01-2 2H9a2 2 0 01-2-2V4a2 2 0 012-2zm0 2v2h6V4zM8 12h8M8 16h8M8 8h4',
+    smEye:       'M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8zM12 15a3 3 0 100-6 3 3 0 000 6z',
+    smDownload:  'M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3',
+    smScroll:    'M8 3h8M6 7h12M6 11h12M6 15h12M6 19h12M4 2a2 2 0 00-2 2v16a2 2 0 002 2h16a2 2 0 002-2V4a2 2 0 00-2-2z',
+    smCheck:     'M5 13l4 4L19 7',
+    smX:         'M6 18L18 6M6 6l12 12',
+  };
+  function svgIcon(name, size) {
+    const d = ICONS[name];
+    if (!d) return '';
+    const s = size || 16;
+    return '<svg xmlns="http://www.w3.org/2000/svg" width="' + s + '" height="' + s + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="' + d + '"/></svg>';
+  }
+
   function renderFiles(view) {
     const state = {
       cfg: null,
@@ -53,7 +71,7 @@
     // P1-BUG-6 修复：remember 初始 disabled（没选 sys/srv 时不让勾）。
     const rememberChk = el('input', { type: 'checkbox', id: 'files-remember' });
     rememberChk.disabled = true;
-    const rememberLabel = el('label', { class: 'inline' }, [rememberChk, document.createTextNode('记住密码')]);
+    const rememberLabel = el('label', { class: 'inline remember-wrap' }, [rememberChk, document.createTextNode('记住密码')]);
     // P0-BUG-2 修复：添加 SSH 用户名 / 密码 输入框。
     // /api/config 不返回 password，所以 srv.password 永远空 → 没输入框用户没法连接。
     // creds() 优先用用户输入，没填才回落到 srv 默认。
@@ -505,7 +523,7 @@
       const rootLink = el('a', { href: '#', style: 'text-decoration:none;', onclick: (e) => {
         e.preventDefault(); doListDir('/', creds());
       }});
-      rootLink.appendChild(el('span', { text: '📁 /' }));
+      rootLink.appendChild(el('span', { style: 'display:inline-flex; align-items:center; gap:4px;', unsafeHtml: svgIcon('smFolder', 14) + ' /' }));
       crumbsEl.appendChild(rootLink);
       let acc = '';
       parts.forEach((seg, i) => {
@@ -584,7 +602,8 @@
         const btn = el('button', {
           class: 'btn btn-sm',
           title: item.path,
-          text: '📂 ' + item.name,
+          style: 'display:inline-flex; align-items:center; gap:4px;',
+          unsafeHtml: svgIcon('smFolder', 14) + ' ' + item.name,
           onclick: (e) => {
             e.preventDefault();
             pathInp.value = item.path;
@@ -784,10 +803,10 @@
         });
         tr.appendChild(el('td', { class: 'col-check' }, [cb]));
 
-        const icon = entry.isDir ? '📁' : '📄';
+        const iconName = entry.isDir ? 'smFolder' : 'smFile';
         const nameCell = el('td', { class: 'name-cell' });
         const inner = el('div', { class: 'name-cell-inner' });
-        const iconSpan = el('span', { class: 'name-icon', text: icon });
+        const iconSpan = el('span', { class: 'name-icon', style: 'width:18px; height:18px; display:inline-flex; align-items:center; justify-content:center;', unsafeHtml: svgIcon(iconName, 18) });
         inner.appendChild(iconSpan);
         if (entry.isDir) {
           inner.appendChild(el('a', { href: '#', text: entry.name, onclick: (e) => {
@@ -814,9 +833,14 @@
 
         tr.appendChild(el('td', { class: 'num' }, [document.createTextNode(entry.isDir ? '—' : formatBytes(entry.size))]));
         tr.appendChild(el('td', null, [document.createTextNode(entry.mtime ? formatTime(entry.mtime) : '-')]));
-        // P1-BUG-9：权限列显示简化形式（📄 644 / 📁 755），title 保留原始 mode 给高级用户看。
+        // P1-BUG-9：权限列显示简化形式（带图标 + 权限数字），title 保留原始 mode 给高级用户看。
         const modeCell = el('td', { class: 'mode-cell', title: entry.mode || '' });
-        modeCell.textContent = formatShortMode(entry.mode);
+        const modeResult = formatShortMode(entry.mode);
+        if (modeResult && typeof modeResult === 'object' && modeResult.iconName) {
+          modeCell.innerHTML = '<span style="display:inline-flex;align-items:center;gap:4px;">' + svgIcon(modeResult.iconName, 14) + ' ' + modeResult.text + '</span>';
+        } else {
+          modeCell.textContent = modeResult;
+        }
         tr.appendChild(modeCell);
         tr.appendChild(el('td', { class: 'col-status status-cell', 'data-name': entry.name }, [document.createTextNode('')]));
 
@@ -857,9 +881,9 @@
       const u = tri(mode.slice(1, 4));
       const g = tri(mode.slice(4, 7));
       const o = tri(mode.slice(7, 10));
-      const typeIcon = { '-': '📄', 'd': '📁', 'l': '🔗', 'c': '🖨', 'b': '💾', 'p': '🔌', 's': '🧦' };
-      const icon = typeIcon[mode.charAt(0)] || '📄';
-      return icon + ' ' + u + g + o;
+      const typeIconName = { '-': 'smFile', 'd': 'smFolder', 'l': 'smLink' };
+      const iconName = typeIconName[mode.charAt(0)] || 'smFile';
+      return { iconName: iconName, text: u + g + o };
     }
 
     function setRowStatusByName(name, st) {
@@ -897,13 +921,11 @@
         return wrap;
       }
       if (st.status === 'done') {
-        const span = el('span', { class: 'dl-pct', style: 'color:#10b981' });
-        span.appendChild(document.createTextNode('✓ 完成 · ' + formatBytes(st.bytes || 0)));
+        const span = el('span', { class: 'dl-pct', style: 'color:#10b981; display:inline-flex; align-items:center; gap:4px;', unsafeHtml: svgIcon('smCheck', 14) + ' 完成 · ' + formatBytes(st.bytes || 0) });
         return span;
       }
       if (st.status === 'fail') {
-        const span = el('span', { class: 'dl-pct', style: 'color:#ef4444' });
-        span.appendChild(document.createTextNode('✗ ' + (st.error || '失败')));
+        const span = el('span', { class: 'dl-pct', style: 'color:#ef4444; display:inline-flex; align-items:center; gap:4px;', unsafeHtml: svgIcon('smX', 14) + ' ' + (st.error || '失败') });
         return span;
       }
       return null;
@@ -1055,7 +1077,7 @@
       const actions = [];
       if (firstAbsPath) {
         actions.push({
-          label: '📂 打开所在目录',
+          html: '<span style="display:inline-flex;align-items:center;gap:4px;">' + svgIcon('smFolder', 14) + ' 打开所在目录</span>',
           callback: async () => {
             try {
               await api('POST', '/api/local/reveal-file', { path: firstAbsPath });
@@ -1067,7 +1089,7 @@
       }
       if (folder) {
         actions.push({
-          label: '📋 复制路径',
+          html: '<span style="display:inline-flex;align-items:center;gap:4px;">' + svgIcon('smClipboard', 14) + ' 复制路径</span>',
           callback: () => {
             Kairo.core.copyToClipboard(folder).then(() => {
               toast('路径已复制', 'ok');
@@ -1078,7 +1100,7 @@
         });
       }
       actions.push({
-        label: '📜 查看下载历史',
+        html: '<span style="display:inline-flex;align-items:center;gap:4px;">' + svgIcon('smScroll', 14) + ' 查看下载历史</span>',
         callback: () => {
           if (location.hash !== '#/downloads') location.hash = '#/downloads';
         }
@@ -1133,11 +1155,12 @@
 
       const isDownloaded = !!state.downloadedFiles[fullPath];
 
-      function addItem(icon, label, onClick, disabled) {
+      function addItem(iconName, label, onClick, disabled) {
         const item = el('div', {
           class: 'file-context-menu-item' + (disabled ? ' disabled' : '')
         });
-        item.appendChild(el('span', { class: 'file-context-menu-icon', text: icon }));
+        const iconEl = el('span', { class: 'file-context-menu-icon', style: 'width:16px; height:16px; display:inline-flex; align-items:center; justify-content:center;', unsafeHtml: svgIcon(iconName, 16) });
+        item.appendChild(iconEl);
         item.appendChild(el('span', { class: 'file-context-menu-label', text: label }));
         if (!disabled) {
           item.addEventListener('click', () => {
@@ -1153,20 +1176,20 @@
         menu.appendChild(el('div', { class: 'file-context-menu-divider' }));
       }
 
-      addItem('📋', '复制文件路径', () => {
+      addItem('smClipboard', '复制文件路径', () => {
         copyToClipboard(fullPath);
       });
 
-      addItem('👁', '预览', () => {
+      addItem('smEye', '预览', () => {
         openPreviewInNewWindow(fullPath, entry.name);
       });
 
-      addItem('📥', '下载', () => {
+      addItem('smDownload', '下载', () => {
         doDownloadSingle(fullPath, entry.name);
       });
 
       const localName = state.downloadedFiles[fullPath];
-      addItem('📂', '打开所在目录（本地）', () => {
+      addItem('smFolder', '打开所在目录（本地）', () => {
         openLocalDir(localName);
       }, !isDownloaded);
 

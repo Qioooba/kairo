@@ -48,10 +48,17 @@ func revealInFileManager(path string) error {
 		// 注意 /select 后紧跟逗号，逗号后是路径；逗号必须紧贴、不能用空格分隔
 		// Windows 命令行不支持正斜杠，拼 explorer 参数前先转成反斜杠
 		winPath := strings.ReplaceAll(path, "/", "\\")
-		cmd := exec.Command("explorer.exe", "/select,"+winPath)
+		// v0.11：兼容 Win7
+		// 之前直接 exec.Command("explorer.exe", "/select,"+winPath) 在 Win7 上含空格路径会被
+		// Go 的 CommandLineToArgvW 加引号变成 explorer.exe "/select,C:\path with space\file.log"，
+		// Win7 的 explorer.exe 解析带引号的 /select,"..." 静默失败（Win10/11 修过这个 bug，
+		// 所以 Win10 用户没感知）。改用 cmd /c start "" explorer.exe /select,..."：cmd 内部
+		// 解析引号后 start 启动 explorer，Win7/10/11 都能稳定工作。
+		// start 后那个 "" 是 window title 必填占位（start "<title>" <command>）。
+		cmd := exec.Command("cmd", "/c", "start", "", "explorer.exe", "/select,"+winPath)
 		sysutil.HideConsoleWindow(cmd) // 双击 GUI exe 启动时避免弹 cmd 黑框
 		if err := cmd.Start(); err != nil {
-			return fmt.Errorf("explorer.exe 失败: %w", err)
+			return fmt.Errorf("explorer.exe 启动失败: %w", err)
 		}
 		go func() { _ = cmd.Wait() }()
 		return nil

@@ -179,22 +179,38 @@ Content-Type: application/json
 2. `Transaction.current()` / `tx.getResultSet()` / `tx.execute()` → 你们项目里的实际 API
 3. `Logger.log()` / `System.out.println()` → 你们项目里的日志工具
 
-## Go 端编译 (重要)
+## Go 端编译
 
-**占位符需要替换**:
-- `LicenseServerPrimary` / `LicenseServerSecondary`: Java 服务地址
-- `BasicAuthHeader`: Basic 认证串 (跟 Java 端 BASIC_AUTH_TOKEN 一致)
-- `URLParamK1` / `URLParamV1` / `URLParamK2` / `URLParamV2` / `URLParamK3` / `URLParamV3`: URL 上 3 个固定 KV 参数
+激活服务相关配置（地址 / Basic auth / URL 参数）**直接硬编码在 `internal/license/server.go` 源码里**，改完重新 `go build` 即可生效，**不需要 ldflags 注入**。
 
+要切换到另一套激活服务时，编辑 `internal/license/server.go` 里 `var (...)` 块里的常量值即可：
+
+```go
+var (
+    LicenseServerPrimary   = "http://66.0.34.199:9080/credit/httpInterface"  // 主地址
+    LicenseServerSecondary = "http://66.0.34.198:9080/credit/httpInterface"  // 备用地址
+    BasicAuthHeader        = "anN5aDpqc3loQDEyMw=="                          // Basic 认证 base64 串
+    URLParamK1             = "channelID"
+    URLParamV1             = "PC"
+    URLParamK2             = "serviceID"
+    URLParamV2             = "KairoActivateAction"
+    URLParamK3             = "seqNo"
+    URLParamV3             = "<TIMESTAMP>"  // 每次请求用当前秒级时间戳替换
+)
+```
+
+编译:
 ```bash
-go build -ldflags "\
-  -X 'kairo/internal/license.LicenseServerPrimary=http://10.0.0.5:8080/kairo/auth/activate' \
-  -X 'kairo/internal/license.LicenseServerSecondary=http://10.0.0.6:8080/kairo/auth/activate' \
-  -X 'kairo/internal/license.BasicAuthHeader=YOUR_BASIC_TOKEN' \
-  -X 'kairo/internal/license.URLParamK1=k1' -X 'kairo/internal/license.URLParamV1=v1' \
-  -X 'kairo/internal/license.URLParamK2=k2' -X 'kairo/internal/license.URLParamV2=v2' \
-  -X 'kairo/internal/license.URLParamK3=k3' -X 'kairo/internal/license.URLParamV3=v3'" \
-  -o kairo
+go build -o kairo
+```
+
+最终请求长这样:
+```
+POST http://66.0.34.199:9080/credit/httpInterface?channelID=PC&serviceID=KairoActivateAction&seqNo=1719800000 HTTP/1.1
+Authorization: Basic anN5aDpqc3loQDEyMw==
+Content-Type: application/json;charset=UTF-8
+
+{"secret_key":"<激活码>","ip":"<本机IP>"}
 ```
 
 ## 部署流程

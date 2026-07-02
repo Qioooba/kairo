@@ -9,6 +9,18 @@
   const { el, kvTable, toast } = Kairo.core;
   const { api } = Kairo.api;
 
+  const ICONS = {
+    smCheck:   'M20 6L9 17l-5-5',
+    smX:       'M18 6L6 18M6 6l12 12',
+    smWarn:    'M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0zM12 9v4M12 17h.01',
+  };
+  function svgIcon(name, size) {
+    const d = ICONS[name];
+    if (!d) return '';
+    const s = size || 16;
+    return '<svg xmlns="http://www.w3.org/2000/svg" width="' + s + '" height="' + s + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="' + d + '"/></svg>';
+  }
+
   function renderDiagnostics(view) {
     const summaryEl = el('div', { class: 'text-dim mt-2', text: '加载中…' });
     const btnRefresh = el('button', { class: 'btn btn-primary', text: '重新自检', onclick: load });
@@ -56,12 +68,23 @@
       if (r.issues && r.issues.length) {
         issuesCard.appendChild(el('div', { class: 'card' }, [
           el('h3', { text: '需要关注 (' + r.issues.length + ')' }),
-          el('div', {}, r.issues.map(t => el('div', { class: 'text-warn', text: t })))
+          el('div', {}, r.issues.map(t => {
+            let icon = 'smWarn';
+            let text = t;
+            if (t.startsWith('⚠ ')) {
+              icon = 'smWarn';
+              text = t.slice(2);
+            } else if (t.startsWith('✗ ')) {
+              icon = 'smX';
+              text = t.slice(2);
+            }
+            return el('div', { class: 'text-warn', style: 'display:flex; align-items:flex-start; gap:6px; margin-bottom:4px;', unsafeHtml: '<span style="flex-shrink:0; margin-top:2px;">' + svgIcon(icon, 14) + '</span>' + text });
+          }))
         ]));
       } else {
         issuesCard.appendChild(el('div', { class: 'card' }, [
           el('h3', { text: '需要关注' }),
-          el('div', { class: 'text-dim', text: '一切正常 ✓' })
+          el('div', { class: 'text-dim', style: 'display:inline-flex; align-items:center; gap:6px;', unsafeHtml: svgIcon('smCheck', 16) + ' 一切正常' })
         ]));
       }
 
@@ -114,7 +137,11 @@
     }
 
     function yesNo(b) {
-      return b ? '✓ 是' : '✗ 否';
+      return {
+        html: b
+          ? '<span style="display:inline-flex;align-items:center;gap:4px;color:#22c55e;">' + svgIcon('smCheck', 14) + ' 是</span>'
+          : '<span style="display:inline-flex;align-items:center;gap:4px;color:#ef4444;">' + svgIcon('smX', 14) + ' 否</span>'
+      };
     }
     function groupedKvCard(title, rows) {
       return el('div', { class: 'card' }, [
@@ -132,14 +159,25 @@
         ['tail', t.tail],
         ['unzip', t.unzip],
         ['ssh', t.ssh],
-        ['find 支持 -printf', t.find_supports_printf ? '✓' : '✗（AIX / 老 BSD）']
+        ['find 支持 -printf', t.find_supports_printf
+          ? { html: '<span style="display:inline-flex;align-items:center;gap:4px;color:#22c55e;">' + svgIcon('smCheck', 14) + '</span>' }
+          : { html: '<span style="display:inline-flex;align-items:center;gap:4px;color:#ef4444;">' + svgIcon('smX', 14) + '（AIX / 老 BSD）</span>' }
+        ]
       ];
       rows.forEach(r => {
         const tc = r[1];
-        if (typeof tc === 'object' && tc !== null) {
+        if (typeof tc === 'object' && tc !== null && tc.nodeType === undefined && !tc.html) {
           tb.appendChild(el('tr', null, [
             el('td', { style: 'width: 220px; color: var(--text-dim)', text: r[0] }),
-            el('td', { text: tc.found ? (tc.path + (tc.version ? ' · ' + tc.version : '')) : '✗ 未找到' })
+            el('td', tc.found
+              ? { text: tc.path + (tc.version ? ' · ' + tc.version : '') }
+              : { unsafeHtml: '<span style="display:inline-flex;align-items:center;gap:4px;color:#ef4444;">' + svgIcon('smX', 14) + ' 未找到</span>' }
+            )
+          ]));
+        } else if (typeof tc === 'object' && tc.html) {
+          tb.appendChild(el('tr', null, [
+            el('td', { style: 'width: 220px; color: var(--text-dim)', text: r[0] }),
+            el('td', { unsafeHtml: tc.html })
           ]));
         } else {
           tb.appendChild(el('tr', null, [
@@ -164,8 +202,10 @@
       tbl.appendChild(thead);
       const tb = el('tbody');
       arr.forEach(s => {
-        const dnsDot = s.dns && s.dns.ok ? '✓' : '✗';
-        const tcpDot = s.tcp && s.tcp.ok ? '✓' : '✗';
+        const dnsOk = s.dns && s.dns.ok;
+        const tcpOk = s.tcp && s.tcp.ok;
+        const dnsHtml = '<span style="display:inline-flex;align-items:center;gap:4px;color:' + (dnsOk ? '#22c55e' : '#ef4444') + ';">' + svgIcon(dnsOk ? 'smCheck' : 'smX', 14) + '</span>';
+        const tcpHtml = '<span style="display:inline-flex;align-items:center;gap:4px;color:' + (tcpOk ? '#22c55e' : '#ef4444') + ';">' + svgIcon(tcpOk ? 'smCheck' : 'smX', 14) + '</span>';
         const detail = [];
         if (s.dns && s.dns.message) detail.push('DNS: ' + s.dns.message);
         if (s.tcp && s.tcp.message) detail.push('TCP: ' + s.tcp.message);
@@ -173,8 +213,8 @@
         tb.appendChild(el('tr', null, [
           el('td', { text: s.system + ' · ' + s.server }),
           el('td', { class: 'mono', text: s.host + ':' + s.port }),
-          el('td', { text: dnsDot }),
-          el('td', { text: tcpDot }),
+          el('td', { unsafeHtml: dnsHtml }),
+          el('td', { unsafeHtml: tcpHtml }),
           el('td', { class: 'num muted', text: s.elapsed_ms + ' ms' }),
           el('td', { class: 'muted small', text: detail.join(' · ') || '-' })
         ]));

@@ -118,10 +118,17 @@
       const info = await api('GET', '/api/config');
       state.bootInfo = info;
       const appName = (info.app && info.app.name) || 'Kairo';
+      const appSubtitle = (info.app && info.app.subtitle) || '天命契机';
+      const version = info.version || 'v0.11-rc1';
       const dlFolder = info.paths && info.paths.download_dir;
       const listenInfo = document.getElementById('listen-info');
       if (listenInfo) {
-        listenInfo.textContent = '已启动 · ' + appName + ' v0.9' + (dlFolder ? ' · 保存到 ' + dlFolder : '');
+        listenInfo.textContent = '已启动 · ' + appName + ' ' + version + (dlFolder ? ' · 保存到 ' + dlFolder : '');
+      }
+      // 更新底部版本号显示（与后端版本保持一致）
+      const footerVersion = document.getElementById('footer-version');
+      if (footerVersion) {
+        footerVersion.textContent = version + ' · ' + appName + ' · ' + appSubtitle;
       }
     } catch (e) { /* 忽略 */ }
     // 启动时拉一次 preferences：把用户上次保存的 tail 高亮规则放到 Kairo.state.tailHighlights，

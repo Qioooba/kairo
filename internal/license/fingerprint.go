@@ -6,17 +6,53 @@ import (
 	"net"
 )
 
-// localIP 取本机第一个非 loopback 的 IPv4 地址。
+// primaryNetInfo 从同一张网卡取 IPv4 地址和 MAC 指纹。
 //
-// 简化策略: 遍历所有网卡, 跳过 loopback, 取第一个 IPv4。
+// 旧版 localIP() 用 net.InterfaceAddrs() 遍历地址, macFingerprint() 用
+// net.Interfaces() 遍历网卡, 两者独立迭代 → 多网卡机器上可能 IP 来自 eth0
+// 而 MAC 来自 docker0, AAD 出现 IP-A|MAC-B 的错配, 重启后接口顺序变化
+// 会导致 AAD 漂移 → 强制重新激活。
+//
+// 修复: 以 net.Interfaces() 为唯一数据源, 找到第一张同时有 MAC 和非 loopback
+// IPv4 的网卡, IP 和 MAC 都从它取。这样 AAD 始终是同一张网卡的 IP|MAC,
+// 不会因两套迭代顺序不一致而漂移。
 //
 // 边界:
-//   - 多网卡机器 (有线 + 无线 + VPN) → 取第一个, 不一定是用户预期的 IP。
-//     对内网固定 IP 的运维同事, 实际机器一般只有一个网卡, 这不是问题。
-//   - 取不到时 fallback 到 "127.0.0.1", 此时本地证书校验会用 127.0.0.1 比对,
-//     不太可能匹配 → 用户会走激活流程重新绑定, 这是安全兜底。
-//   - Windows + WSL / Docker 场景会拿到奇怪的 IP, 用户激活时绑的就是这个 "本机 IP"。
-func localIP() string {
+//   - 找不到"同时有 IP + MAC"的网卡 (如纯 VPN 隧道, 有 IP 无 MAC):
+//     IP 走 net.InterfaceAddrs() 兜底, MAC 用 "nomac-fallback"。
+//     AAD 退化为 IP-only 维度, 仍有 IP 绑定保护。
+//   - 取不到任何 IP → "127.0.0.1", 不会匹配已有证书 → 走激活流程。
+func primaryNetInfo() (ip, macFP string) {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return "127.0.0.1", "nomac-fallback"
+	}
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		if len(iface.HardwareAddr) == 0 {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
+				if v4 := ipnet.IP.To4(); v4 != nil {
+					h := sha256.Sum256([]byte(iface.HardwareAddr.String()))
+					return v4.String(), hex.EncodeToString(h[:8])
+				}
+			}
+		}
+	}
+	// 兜底: 没有"同时有 IP + MAC"的网卡, 尝试只取 IP (VPN-only 等场景)
+	return fallbackLocalIP(), "nomac-fallback"
+}
+
+// fallbackLocalIP 用 net.InterfaceAddrs 取第一个非 loopback IPv4 (兜底路径)。
+func fallbackLocalIP() string {
 	addrs, err := net.InterfaceAddrs()
 	if err != nil {
 		return "127.0.0.1"
@@ -31,35 +67,14 @@ func localIP() string {
 	return "127.0.0.1"
 }
 
-// macFingerprint 取本机第一个非 loopback 网卡的 MAC 地址, SHA256 后取前 16 字节 hex。
-//
-// 用途: 作为本地证书的额外 AAD, 防止攻击者"猜对 IP 后伪造证书"。
-// 安全模型:
-//   - 攻击者要伪造 cert, 必须知道 IP + MAC
-//   - IP 通过 ARP 扫描 / OUI 表能拿到
-//   - MAC 通过 ARP 扫描也能拿到 (任意内网机器)
-//   - 但要**同时**知道 IP + MAC + 拿到 AES key + 主动发给特定受害者, 成本极高
-//   - 内网同事级别威胁下, 这个组合条件足以拦住攻击
-//
-// 取不到 MAC 时 (罕见: 无网卡 / 权限问题) → 返回固定 fallback, 仍然能保护 IP 维度。
+func localIP() string {
+	ip, _ := primaryNetInfo()
+	return ip
+}
+
 func macFingerprint() string {
-	ifaces, err := net.Interfaces()
-	if err != nil {
-		return "nomac-fallback"
-	}
-	for _, iface := range ifaces {
-		// 跳过 loopback 和没 MAC 的虚拟接口
-		if iface.Flags&net.FlagLoopback != 0 {
-			continue
-		}
-		if len(iface.HardwareAddr) == 0 {
-			continue
-		}
-		// 取第一个非 loopback 有 MAC 的网卡
-		h := sha256.Sum256([]byte(iface.HardwareAddr.String()))
-		return hex.EncodeToString(h[:8]) // 16 字符 hex
-	}
-	return "nomac-fallback"
+	_, mac := primaryNetInfo()
+	return mac
 }
 
 // Fingerprint 返回 IP + MAC 拼接的指纹 (AAD 用)。

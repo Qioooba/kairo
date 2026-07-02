@@ -9,24 +9,33 @@
   <title>Kairo · 天命契机</title>
   <!-- TODO(FE-019): vendor 资源建议加 integrity（SRI）属性；内网工具低优先级，需计算文件 hash -->
   <link rel="stylesheet" href="/static/vendor/diff2html.min.css?v=20260627" />
-  <link rel="stylesheet" href="/static/vendor/xterm/xterm.css?v=20260630" />
-  <link rel="stylesheet" href="/static/style.css?v=20260630-fix" />
+  <link rel="stylesheet" href="/static/vendor/xterm/xterm.css?v=20260702" />
+  <link rel="stylesheet" href="/static/style.css?v=20260702" />
   <style>
-    .auth-overlay{position:fixed;inset:0;background:rgba(0,0,0,.72);backdrop-filter:blur(6px);z-index:99999;display:none;align-items:center;justify-content:center;padding:20px}
-    .auth-card{background:var(--bg-card, #1e293b);border:1px solid var(--border,#334155);border-radius:14px;padding:40px 36px;width:100%;max-width:440px;box-shadow:0 24px 60px rgba(0,0,0,.5);text-align:center}
-    .auth-icon{font-size:48px;margin-bottom:8px}
-    .auth-title{margin:0 0 8px;font-size:22px;color:var(--text,#e2e8f0);font-weight:600}
-    .auth-subtitle{margin:0 0 20px;color:var(--text-dim,#94a3b8);font-size:14px;line-height:1.5}
-    .auth-error{background:#450a0a;border:1px solid #dc2626;color:#fca5a5;border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:13px;text-align:left}
-    .auth-input-group{display:flex;gap:8px;margin-bottom:14px}
-    .auth-input{flex:1;padding:10px 14px;border-radius:8px;border:1px solid var(--border,#334155);background:var(--bg,#0f172a);color:var(--text,#e2e8f0);font-size:14px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;outline:none;transition:border-color .15s}
-    .auth-input:focus{border-color:#3b82f6}
-    .auth-submit{padding:10px 20px;white-space:nowrap}
-    .auth-hint{margin:0;color:var(--text-dim,#94a3b8);font-size:12px}
-    .auth-user-area{display:flex;align-items:center;gap:8px;margin-right:10px}
-    .auth-user-label{font-size:12px;color:var(--text-dim,#94a3b8);white-space:nowrap}
-    .auth-logout-btn{background:transparent;border:1px solid var(--border,#334155);color:var(--text-dim,#94a3b8);border-radius:6px;padding:3px 10px;font-size:12px;cursor:pointer;transition:all .15s}
-    .auth-logout-btn:hover{border-color:#ef4444;color:#ef4444}
+    .auth-overlay{position:fixed;inset:0;background:rgba(0,0,0,.72);-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);z-index:99999;display:none;align-items:center;justify-content:center;padding:20px}
+    /* v0.13 bug-2：激活弹窗原来吃 --bg-card / --text / --text-dim 等会随主题切换的变量，
+       在 light/green/xianxia 几个浅色主题下 --text / --text-dim 仍是偏暗色（深绿、墨青、深青）
+       直接叠到 #1e293b 深色卡片上对比度只有 2~3:1，subtitle / hint 几乎看不清。
+       弹窗是「短暂一次性」界面，本就该是中断性视觉，跟随主题反而扰民。
+       改成硬编码深卡 + 浅字，所有主题统一一套颜色，杜绝色彩问题。
+       用 .auth-overlay .xxx 加权（specificity 20）压 style.css 里的
+       input[type=text]{color:var(--text)} 全局规则（specificity 11），
+       确保不被全局 input 规则覆盖。 */
+    .auth-overlay .auth-card{background:#1e293b;border:1px solid #334155;border-radius:14px;padding:40px 36px;width:100%;max-width:440px;box-shadow:0 24px 60px rgba(0,0,0,.5);text-align:center;color:#e2e8f0}
+    .auth-overlay .auth-icon{font-size:48px;margin-bottom:8px;color:#cbd5e1}
+    .auth-overlay .auth-title{margin:0 0 8px;font-size:22px;color:#f1f5f9;font-weight:600}
+    .auth-overlay .auth-subtitle{margin:0 0 20px;color:#94a3b8;font-size:14px;line-height:1.5}
+    .auth-overlay .auth-error{background:#450a0a;border:1px solid #dc2626;color:#fca5a5;border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:13px;text-align:left}
+    .auth-overlay .auth-input-group{display:flex;gap:8px;margin-bottom:14px}
+    .auth-overlay .auth-input{flex:1;width:auto;padding:10px 14px;border-radius:8px;border:1px solid #334155;background:#0f172a !important;color:#e2e8f0 !important;font-size:14px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;outline:none;transition:border-color .15s;min-height:auto}
+    .auth-overlay .auth-input::placeholder{color:#64748b}
+    .auth-overlay .auth-input:focus{border-color:#3b82f6}
+    .auth-overlay .auth-submit{padding:10px 20px;white-space:nowrap}
+    .auth-overlay .auth-hint{margin:0;color:#94a3b8;font-size:12px}
+    .auth-overlay .auth-user-area{display:flex;align-items:center;gap:8px;margin-right:10px}
+    .auth-overlay .auth-user-label{font-size:12px;color:#94a3b8;white-space:nowrap}
+    .auth-overlay .auth-logout-btn{background:transparent;border:1px solid #334155;color:#94a3b8;border-radius:6px;padding:3px 10px;font-size:12px;cursor:pointer;transition:all .15s}
+    .auth-overlay .auth-logout-btn:hover{border-color:#ef4444;color:#ef4444}
   </style>
   <!-- v0.5 #19 主题切换：在 CSS 加载后立刻读 localStorage 设 data-theme，避免 FOUC -->
   <script>
@@ -78,7 +87,7 @@
     </nav>
     <div class="footer">
       <div id="listen-info" class="muted">—</div>
-      <div class="muted">v0.9 · Kairo · 天命契机</div>
+      <div id="footer-version" class="muted">v0.11-rc1 · Kairo · 天命契机</div>
     </div>
   </aside>
 
@@ -97,37 +106,35 @@
   <div id="toast" class="toast"></div>
 
   <!-- 模块加载顺序：core → icons → theme → api → auth → state → pages → app 入口 -->
-  <script src="/static/core.js"></script>
-  <script src="/static/icons.js?v=20260630"></script>
-  <script src="/static/theme.js"></script>
-  <script src="/static/api.js"></script>
-  <script src="/static/auth.js"></script>
-  <script src="/static/license.js"></script>
-  <script src="/static/state.js"></script>
-  <script src="/static/pages/home.js"></script>
-  <script src="/static/pages/websphere.js"></script>
-  <script src="/static/pages/files.js"></script>
-  <script src="/static/pages/formatter.js"></script>
-  <script src="/static/pages/commands.js"></script>
-  <script src="/static/pages/diagnostics.js"></script>
-  <script src="/static/pages/config.js"></script>
-  <script src="/static/pages/downloads.js"></script>
-  <!-- v0.7 新增页：HTTP 测试 / 时间戳 / Cron / JSONPath（路由注册在各自的 pages/*.js） -->
-  <script src="/static/pages/http.js"></script>
-  <script src="/static/pages/timestamp.js"></script>
-  <script src="/static/pages/cron.js"></script>
-  <script src="/static/pages/jsonpath.js"></script>
-  <!-- TODO(FE-019): vendor 资源建议加 integrity（SRI）属性 -->
+  <script src="/static/core.js?v=20260702"></script>
+  <script src="/static/icons.js?v=20260702"></script>
+  <script src="/static/theme.js?v=20260702"></script>
+  <script src="/static/api.js?v=20260702"></script>
+  <script src="/static/auth.js?v=20260702"></script>
+  <script src="/static/license.js?v=20260702"></script>
+  <script src="/static/state.js?v=20260702"></script>
+  <script src="/static/app.js?v=20260702"></script>
+  <script src="/static/pages/home.js?v=20260702"></script>
+  <script src="/static/pages/websphere.js?v=20260702"></script>
+  <script src="/static/pages/files.js?v=20260702"></script>
+  <script src="/static/pages/formatter.js?v=20260702"></script>
+  <script src="/static/pages/commands.js?v=20260702"></script>
+  <script src="/static/pages/diagnostics.js?v=20260702"></script>
+  <script src="/static/pages/config.js?v=20260702"></script>
+  <script src="/static/pages/downloads.js?v=20260702"></script>
+  <script src="/static/pages/http.js?v=20260702"></script>
+  <script src="/static/pages/timestamp.js?v=20260702"></script>
+  <script src="/static/pages/cron.js?v=20260702"></script>
+  <script src="/static/pages/jsonpath.js?v=20260702"></script>
   <script src="/static/vendor/diff2html.min.js?v=20260627"></script>
-  <script src="/static/pages/compare.js"></script>
+  <script src="/static/pages/compare.js?v=20260702"></script>
   <!-- v0.10 SSH 终端：xterm.js + addons（Canvas 渲染，无 WebGL 依赖） -->
-  <script src="/static/vendor/xterm/xterm.min.js?v=20260630b"></script>
-  <script src="/static/vendor/xterm/xterm-addon-fit.min.js?v=20260630b"></script>
-  <script src="/static/vendor/xterm/xterm-addon-search.min.js?v=20260630b"></script>
-  <script src="/static/vendor/xterm/xterm-addon-web-links.min.js?v=20260630b"></script>
-  <script src="/static/pages/ssh.js?v=20260630b"></script>
-  <script src="/static/pages/about.js?v=20260630-brand"></script>
-  <script src="/static/app.js"></script>
+  <script src="/static/vendor/xterm/xterm.min.js?v=20260702"></script>
+  <script src="/static/vendor/xterm/xterm-addon-fit.min.js?v=20260702"></script>
+  <script src="/static/vendor/xterm/xterm-addon-search.min.js?v=20260702"></script>
+  <script src="/static/vendor/xterm/xterm-addon-web-links.min.js?v=20260702"></script>
+  <script src="/static/pages/ssh.js?v=20260702"></script>
+  <script src="/static/pages/about.js?v=20260702"></script>
   <script>
     // v0.5 #19：DOM ready 后同步按钮 emoji 到当前主题
     document.addEventListener('DOMContentLoaded', function () {

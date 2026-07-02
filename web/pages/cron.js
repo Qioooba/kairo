@@ -15,6 +15,17 @@
   const { el, toast, copyToClipboard } = Kairo.core;
   const { api } = Kairo.api;
 
+  const ICONS = {
+    smCheck: 'M20 6L9 17l-5-5',
+    smX:     'M18 6L6 18M6 6l12 12',
+  };
+  function svgIcon(name, size) {
+    const d = ICONS[name];
+    if (!d) return '';
+    const s = size || 14;
+    return '<svg xmlns="http://www.w3.org/2000/svg" width="' + s + '" height="' + s + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="' + d + '"/></svg>';
+  }
+
   const COMMON_TZ = [
     'Local', 'UTC',
     'Asia/Shanghai', 'Asia/Tokyo', 'Asia/Singapore', 'Asia/Hong_Kong',
@@ -94,11 +105,17 @@
         if (myReqId !== reqId) return; // 旧请求被新请求覆盖，丢弃
         const res = r.res || {};
         if (res.valid) {
-          statusTag.textContent = '✓ 合法';
+          statusTag.innerHTML = svgIcon('smCheck', 14) + ' 合法';
           statusTag.className = 'tag tag-ok';
+          statusTag.style.display = 'inline-flex';
+          statusTag.style.alignItems = 'center';
+          statusTag.style.gap = '4px';
         } else {
-          statusTag.textContent = '✗ 不合法';
+          statusTag.innerHTML = svgIcon('smX', 14) + ' 不合法';
           statusTag.className = 'tag tag-err';
+          statusTag.style.display = 'inline-flex';
+          statusTag.style.alignItems = 'center';
+          statusTag.style.gap = '4px';
         }
         statusTag.style.visibility = '';
         if (res.has_seconds) {

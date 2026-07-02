@@ -70,3 +70,13 @@ verify-commands.js
 # ===== Windows exe 资源图标（构建产物，不入库）=====
 *.syso
 /Kairo.jpg
+
+# ===== 临时测试/验证脚本 =====
+_tmp-*.js
+screenshot-*.js
+crash.log
+/doubao-toolbox
+/mock-license-server
+/bugfix-*-shots/
+/*.jpg.png
+/web/vendor/xterm-backup/

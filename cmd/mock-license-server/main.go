@@ -46,13 +46,17 @@ var (
 	bindings = map[string]*activationRecord{}
 	audits   []auditRecord
 	auditSeq int64
+
+	adminAuthToken string // 由 main() 设置, /admin/* 和 /activate 共用
 )
 
 func main() {
-	addr := flag.String("addr", ":18091", "监听地址")
+	addr := flag.String("addr", "127.0.0.1:18091", "监听地址 (默认仅本机, 避免误暴露)")
 	authToken := flag.String("auth", "TEST_TOKEN_123", "Basic auth 校验串 (放在 Authorization: Basic 后面)")
 	presetCodes := flag.String("preset", "test-code-001,test-code-002,demo-001", "预置激活码, 逗号分隔")
 	flag.Parse()
+
+	adminAuthToken = *authToken
 
 	for _, c := range strings.Split(*presetCodes, ",") {
 		c = strings.TrimSpace(c)
@@ -66,20 +70,24 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
+	// 兼容两套接口: 旧 /kairo/auth/activate (Java 直连风格) + 新 /credit/httpInterface (通用 credit 网关风格)
+	// 业务逻辑完全相同 (激活码↔IP 绑定 + 审计), handler 复用。
 	mux.HandleFunc("/kairo/auth/activate", handleActivate)
-	mux.HandleFunc("/admin/list", handleAdminList)
-	mux.HandleFunc("/admin/audit", handleAdminAudit)
-	mux.HandleFunc("/admin/reset", handleAdminReset)
-	mux.HandleFunc("/admin/suspicious", handleAdminSuspicious)
+	mux.HandleFunc("/credit/httpInterface", handleActivate)
+	mux.HandleFunc("/admin/list", requireAdminAuth(handleAdminList))
+	mux.HandleFunc("/admin/audit", requireAdminAuth(handleAdminAudit))
+	mux.HandleFunc("/admin/reset", requireAdminAuth(handleAdminReset))
+	mux.HandleFunc("/admin/suspicious", requireAdminAuth(handleAdminSuspicious))
 	mux.HandleFunc("/health", handleHealth)
 
 	log.Printf("可用端点:")
-	log.Printf("  POST /kairo/auth/activate  激活接口 (主功能)")
-	log.Printf("  GET  /admin/list           查看所有激活码状态")
-	log.Printf("  GET  /admin/audit          查看所有审计日志")
-	log.Printf("  GET  /admin/suspicious     查可疑激活码 (多个 IP 尝试过)")
-	log.Printf("  POST /admin/reset          重置所有绑定 (IP 清空, 清空审计)")
-	log.Printf("  GET  /health               健康检查")
+	log.Printf("  POST /kairo/auth/activate    激活接口 (旧, Java 直连风格)")
+	log.Printf("  POST /credit/httpInterface   激活接口 (新, 通用 credit 网关风格)")
+	log.Printf("  GET  /admin/list             查看所有激活码状态 (需 Basic auth)")
+	log.Printf("  GET  /admin/audit            查看所有审计日志 (需 Basic auth)")
+	log.Printf("  GET  /admin/suspicious       查可疑激活码 (需 Basic auth)")
+	log.Printf("  POST /admin/reset            重置所有绑定 (需 Basic auth)")
+	log.Printf("  GET  /health                 健康检查")
 	log.Fatal(http.ListenAndServe(*addr, mux))
 }
 
@@ -280,12 +288,31 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"ok": true, "service": "mock-license-server"})
 }
 
-// mockAuthPass 简化版 auth 校验
-func mockAuthPass(token string) bool {
-	if token == "" || token == "PLACEHOLDER_BASIC_AUTH" || token == "TEST_TOKEN_123" {
-		return true
+// requireAdminAuth 包装 /admin/* handler, 要求 Basic auth 与 -auth 配置的 token 一致。
+func requireAdminAuth(handler http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		auth := r.Header.Get("Authorization")
+		if !strings.HasPrefix(auth, "Basic ") {
+			w.Header().Set("WWW-Authenticate", `Basic realm="mock-admin"`)
+			writeJSON(w, 401, map[string]any{"error": "admin requires auth"})
+			return
+		}
+		token := strings.TrimPrefix(auth, "Basic ")
+		if !mockAuthPass(token) {
+			w.Header().Set("WWW-Authenticate", `Basic realm="mock-admin"`)
+			writeJSON(w, 401, map[string]any{"error": "invalid auth token"})
+			return
+		}
+		handler(w, r)
 	}
-	return true
+}
+
+// mockAuthPass 校验 token 是否与 -auth 配置的一致。
+func mockAuthPass(token string) bool {
+	if token == "" || token == "PLACEHOLDER_BASIC_AUTH" {
+		return false
+	}
+	return token == adminAuthToken
 }
 
 func maskToken(t string) string {

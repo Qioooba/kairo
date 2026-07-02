@@ -5,6 +5,21 @@
   const { el, toast } = Kairo.core;
   const { api } = Kairo.api;
 
+  const ICONS = {
+    smFolder: 'M2 5a2 2 0 012-2h5l2 2h9a2 2 0 012 2v11a2 2 0 01-2 2H4a2 2 0 01-2-2V5z',
+    smFile:   'M6 2h6l4 4v14a2 2 0 01-2 2H6a2 2 0 01-2-2V4a2 2 0 012-2zm6 0v4h4',
+    smBulb:   'M9 18h6M10 21h4M12 2a7 7 0 00-4 12.7V17a2 2 0 002 2h4a2 2 0 002-2v-2.3A7 7 0 0012 2z',
+    smCheck:  'M20 6L9 17l-5-5',
+    smChevronDown:  'M6 9l6 6 6-6',
+    smChevronRight: 'M9 18l6-6-6-6',
+  };
+  function svgIcon(name, size) {
+    const d = ICONS[name];
+    if (!d) return '';
+    const s = size || 16;
+    return '<svg xmlns="http://www.w3.org/2000/svg" width="' + s + '" height="' + s + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="' + d + '"/></svg>';
+  }
+
   let lastResult = null;
   let outputMode = 'unified';
   let hideEqualRows = false;
@@ -443,12 +458,12 @@
 
   function getStatusIcon(status) {
     switch (status) {
-      case 'same': return '✓';
+      case 'same': return svgIcon('smCheck', 14);
       case 'different': return '≠';
       case 'suspect': return '?';
       case 'left_only': return '<';
       case 'right_only': return '>';
-      default: return '  ';
+      default: return '';
     }
   }
 
@@ -622,8 +637,8 @@
 
       if (entry.isDir) {
         const expanded = folderExpanded.has(entry.path);
-        const arrow = el('span', { style: 'width:14px; display:inline-block; text-align:center; color:var(--text-dim); font-size:9px; flex-shrink:0;', text: expanded ? '▼' : '▶' });
-        const icon = el('span', { style: 'margin-right:4px;', text: '📁' });
+        const arrow = el('span', { style: 'width:14px; display:inline-flex; align-items:center; justify-content:center; color:var(--text-dim); flex-shrink:0;', unsafeHtml: svgIcon(expanded ? 'smChevronDown' : 'smChevronRight', 12) });
+        const icon = el('span', { style: 'margin-right:4px; width:16px; height:16px; display:inline-flex; align-items:center; justify-content:center; color:var(--text-dim);', unsafeHtml: svgIcon('smFolder', 16) });
         const nameEl = el('span', { style: 'flex:1; overflow:hidden; text-overflow:ellipsis; font-weight:500;', text: entry.name });
         row.appendChild(arrow);
         row.appendChild(icon);
@@ -654,11 +669,11 @@
           } else {
             row.appendChild(el('span', { style: 'width:16px; flex-shrink:0;' }));
           }
-          const statusDot = el('span', { style: 'width:16px; display:inline-block; text-align:center; flex-shrink:0; font-size:12px; color:' + getStatusColor(entry.status) + '; font-weight:bold;', text: getStatusIcon(entry.status) });
+          const statusDot = el('span', { style: 'width:16px; display:inline-flex; align-items:center; justify-content:center; flex-shrink:0; color:' + getStatusColor(entry.status) + ';', unsafeHtml: getStatusIcon(entry.status) });
           if (isSuspect) {
             statusDot.title = '大小相同但修改时间不同，需深度校验';
           }
-          const icon = el('span', { style: 'margin-right:4px;', text: '📄' });
+          const icon = el('span', { style: 'margin-right:4px; width:16px; height:16px; display:inline-flex; align-items:center; justify-content:center; color:var(--text-dim);', unsafeHtml: svgIcon('smFile', 16) });
           const nameEl = el('span', { style: 'flex:1; overflow:hidden; text-overflow:ellipsis; font-family:ui-monospace,monospace;', text: entry.name });
           const sizeEl = el('span', { style: 'margin-left:8px; color:var(--text-dim); font-size:11px; flex-shrink:0; min-width:60px; text-align:right;', text: formatSize(entry.size) });
           row.appendChild(statusDot);
@@ -701,11 +716,11 @@
     const rightOnlyCount = (diffObj.right_only || []).length;
 
     const leftHeader = el('div', { style: 'padding:8px 12px; border-bottom:1px solid var(--line); font-weight:600; display:flex; justify-content:space-between; align-items:center; background:var(--bg2,#1d2532); flex-shrink:0; gap:8px;' }, [
-      el('span', { style: 'overflow:hidden; text-overflow:ellipsis; white-space:nowrap;', text: '📁 ' + folderScanResult.left.root }),
+      el('span', { style: 'overflow:hidden; text-overflow:ellipsis; white-space:nowrap; display:flex; align-items:center; gap:6px;', unsafeHtml: svgIcon('smFolder', 14) + ' ' + folderScanResult.left.root }),
       el('span', { style: 'font-size:11px; color:var(--text-dim); font-weight:normal; flex-shrink:0;', text: leftCount + ' 文件' })
     ]);
     const rightHeader = el('div', { style: 'padding:8px 12px; border-bottom:1px solid var(--line); border-left:1px solid var(--line); font-weight:600; display:flex; justify-content:space-between; align-items:center; background:var(--bg2,#1d2532); flex-shrink:0; gap:8px;' }, [
-      el('span', { style: 'overflow:hidden; text-overflow:ellipsis; white-space:nowrap;', text: '📁 ' + folderScanResult.right.root }),
+      el('span', { style: 'overflow:hidden; text-overflow:ellipsis; white-space:nowrap; display:flex; align-items:center; gap:6px;', unsafeHtml: svgIcon('smFolder', 14) + ' ' + folderScanResult.right.root }),
       el('span', { style: 'font-size:11px; color:var(--text-dim); font-weight:normal; flex-shrink:0;', text: rightCount + ' 文件' })
     ]);
 
@@ -715,7 +730,7 @@
     const scanModeText = folderScanResult.deep_mode ? '深度模式 (MD5校验)' : '快速模式 (大小+mtime)';
     const scanTimeText = folderScanResult.scan_ms ? '耗时 ' + (folderScanResult.scan_ms < 1000 ? folderScanResult.scan_ms + 'ms' : (folderScanResult.scan_ms/1000).toFixed(1) + 's') : '';
     const legendBar = el('div', { style: 'padding:4px 12px; border-top:1px solid var(--line); font-size:11px; color:var(--text-dim); display:flex; gap:16px; align-items:center; background:var(--bg2,#1d2532); flex-shrink:0; flex-wrap:wrap;' }, [
-      el('span', { style: 'color:#22c55e;', text: '✓ 相同' }),
+      el('span', { style: 'color:#22c55e; display:inline-flex; align-items:center; gap:4px;', unsafeHtml: svgIcon('smCheck', 12) + ' 相同' }),
       el('span', { style: 'color:#eab308;', text: '? 待校验' }),
       el('span', { style: 'color:#f97316;', text: '≠ 不同' }),
       el('span', { style: 'color:#ef4444;', text: '< 仅左侧' }),
@@ -1231,7 +1246,7 @@
         makeRadio(rdoFast, '快速（大小+时间，推荐）'),
         makeRadio(rdoDeep, '深度（MD5校验，慢）'),
         el('span', { class: 'cmp-spacer', style: 'width:16px;' }),
-        el('span', { class: 'muted', style: 'font-size:11px;', text: '💡 快速模式秒出结果，? 标记的文件可点击或勾选后深度校验' }),
+        el('span', { class: 'muted', style: 'font-size:11px; display:flex; align-items:center; gap:4px;', unsafeHtml: svgIcon('smBulb', 12) + ' 快速模式秒出结果，? 标记的文件可点击或勾选后深度校验' }),
       ]),
       el('div', { class: 'cmp-options', style: cmpOptionsStyle + '; margin-top:4px;' }, [
         makeCheckbox(cbOnlyDiff, '只显示不同/待校验'),

@@ -28,6 +28,20 @@
   const { el, toast, copyToClipboard, confirmDialog, escapeHtml, notify } = Kairo.core;
   const { api } = Kairo.api;
 
+  const ICONS = {
+    smSearch: 'M11 4a7 7 0 100 14 7 7 0 000-14zM21 21l-4.3-4.3',
+    smWarn: 'M12 2L1 21h22L12 2zM12 9v4M12 17v.01',
+    smEdit: 'M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z',
+    smPlay: 'M6 4l14 8-14 8V4z',
+    smCircle: 'M12 12m-2 0a2 2 0 1 0 4 0a2 2 0 1 0 -4 0',
+  };
+  function svgIcon(name, size) {
+    const d = ICONS[name];
+    if (!d) return '';
+    const s = size || 16;
+    return '<svg xmlns="http://www.w3.org/2000/svg" width="' + s + '" height="' + s + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="' + d + '"/></svg>';
+  }
+
   const LS_LAST = 'kairo:http:last:v2';
 
   // ---------- 工具 ----------
@@ -409,7 +423,7 @@
     });
 
     const btnSend = el('button', { class: 'http2-send-btn', onclick: doSend }, [
-      el('span', { class: 'send-icon', text: '▶' }),
+      el('span', { class: 'send-icon', style: 'display:inline-flex;align-items:center;', unsafeHtml: svgIcon('smPlay', 16) }),
       el('span', { text: 'Send' }),
     ]);
 
@@ -799,7 +813,7 @@
           respMeta.appendChild(el('span', null, [document.createTextNode('后端 '), el('b', { text: (r.elapsed_ms || 0) + 'ms' })]));
           respMeta.appendChild(el('span', null, [document.createTextNode('总耗时 '), el('b', { text: total + 'ms' })]));
           respMeta.appendChild(el('span', null, [document.createTextNode('大小 '), el('b', { text: fmtBytes(r.body_bytes || 0) })]));
-          if (r.truncated) respMeta.appendChild(el('span', null, [document.createTextNode('⚠ 已截断（>1MB）')]));
+          if (r.truncated) respMeta.appendChild(el('span', { style: 'display:inline-flex;align-items:center;gap:4px;', unsafeHtml: svgIcon('smWarn', 14) + ' 已截断（&gt;1MB）' }));
           renderRespHeaders(r.headers || {});
           renderRespBody();
           if (r.final_url && r.final_url !== url) {
@@ -854,7 +868,7 @@
     // ---------- 用例管理（左侧栏） ----------
 
     const searchInp = el('input', { type: 'text', placeholder: '搜索用例名 / URL' });
-    const searchIcon = el('span', { class: 'http2-sidebar-search-icon', text: '🔍' });
+    const searchIcon = el('span', { class: 'http2-sidebar-search-icon', style: 'width:16px; height:16px; display:inline-flex; align-items:center; justify-content:center;', unsafeHtml: svgIcon('smSearch', 16) });
     const searchBox = el('div', { class: 'http2-sidebar-search' }, [searchIcon, searchInp]);
     searchInp.addEventListener('input', () => refreshCasesUI());
 
@@ -950,7 +964,7 @@
       ]);
       const actions = el('div', { class: 'http2-case-actions' });
       const btnClone = el('button', { class: 'btn-icon', text: '⎘', title: '复制用例（改名另存）' });
-      const btnEdit = el('button', { class: 'btn-icon', text: '✎', title: '改名 / 换分组' });
+      const btnEdit = el('button', { class: 'btn-icon', style: 'display:inline-flex;align-items:center;justify-content:center;', unsafeHtml: svgIcon('smEdit', 14), title: '改名 / 换分组' });
       const btnDel = el('button', { class: 'btn-icon del', text: '×', title: '删除' });
       actions.appendChild(btnClone);
       actions.appendChild(btnEdit);
@@ -1079,10 +1093,10 @@
       saveBtn.classList.toggle('dirty', dirty);
       if (dirty) {
         if (lastLoadedCaseId) {
-          saveMeta.textContent = '● 已修改 · 保存会覆盖「' + (lastLoadedCaseName || lastLoadedCaseId) + '」';
+          saveMeta.innerHTML = '<span style="display:inline-flex;align-items:center;gap:4px;">' + svgIcon('smCircle', 10) + ' 已修改 · 保存会覆盖「' + escapeHtml(lastLoadedCaseName || lastLoadedCaseId) + '」</span>';
           saveMeta.classList.add('dirty');
         } else {
-          saveMeta.textContent = '● 已修改 · 保存会创建新用例';
+          saveMeta.innerHTML = '<span style="display:inline-flex;align-items:center;gap:4px;">' + svgIcon('smCircle', 10) + ' 已修改 · 保存会创建新用例</span>';
           saveMeta.classList.add('dirty');
         }
       } else {

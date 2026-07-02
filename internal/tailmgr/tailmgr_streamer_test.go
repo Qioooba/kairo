@@ -249,7 +249,8 @@ func TestManager_Start_CtxCancel_PropagatesAsCanceled(t *testing.T) {
 
 	// 应该很快收到 info（不会因为 ctx 取消而推 error）。
 	// done 不再走 channel 广播（BE-019），改为 setDoneMsg。
-	got := collectN(t, ch, 1, 2*time.Second)
+	// 用 collectAll 等到 channel 关闭（markDone 会 close），保证 setDoneMsg 已执行。
+	got := collectAll(t, ch, 2*time.Second)
 	joined := strings.Join(got, "\n")
 	if strings.Contains(joined, `"kind":"error"`) {
 		t.Errorf("ctx 取消不应推 error 事件: %s", joined)

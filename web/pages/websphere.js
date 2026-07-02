@@ -15,6 +15,33 @@
   const { el, $, toast, setStatus, cssEscape, pctText, formatBytes, formatTime, trimMiddle, looksMojibake, basenameOf, copyToClipboard } = Kairo.core;
   const { api } = Kairo.api;
 
+  const ICONS = {
+    smFolder:    'M2 5a2 2 0 012-2h5l2 2h9a2 2 0 012 2v11a2 2 0 01-2 2H4a2 2 0 01-2-2V5z',
+    smFile:      'M6 2h6l4 4v14a2 2 0 01-2 2H6a2 2 0 01-2-2V4a2 2 0 012-2zm6 0v4h4',
+    smClipboard: 'M9 2h6a2 2 0 012 2v16a2 2 0 01-2 2H9a2 2 0 01-2-2V4a2 2 0 012-2zm0 2v2h6V4zM8 12h8M8 16h8M8 8h4',
+    smTrash:     'M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0v14M10 11v6M14 11v6',
+    smSearch:    'M11 4a7 7 0 100 14 7 7 0 000-14zM21 21l-4.3-4.3',
+    smSave:      'M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2zM17 21v-7H7v7M7 3v4h10V3',
+    smTarget:    'M12 2a10 10 0 100 20 10 10 0 000-20zM12 6a6 6 0 100 12 6 6 0 000-12zM12 10a2 2 0 100 4 2 2 0 000-4z',
+    smPackage:   'M3 7l9-4 9 4v10l-9 4-9-4zM3 7l9 4 9-4M12 11v10',
+    smMonitor:   'M2 3h20v14H2zM8 21h8M12 17v4',
+    smCircle:    'M12 22a10 10 0 100-20 10 10 0 000 20z',
+    smCheck:     'M20 6L9 17l-5-5',
+    smX:         'M18 6L6 18M6 6l12 12',
+    smWarn:      'M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0zM12 9v4M12 17h.01',
+    smChevronDown: 'M6 9l6 6 6-6',
+    smChevronUp:   'M18 15l-6-6-6 6',
+    smPause:     'M6 4h4v16H6zM14 4h4v16h-4z',
+    smPlay:      'M5 3l14 9-14 9V3z',
+    smEdit:      'M12 20h9M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z',
+  };
+  function svgIcon(name, size) {
+    const d = ICONS[name];
+    if (!d) return '';
+    const s = size || 16;
+    return '<svg xmlns="http://www.w3.org/2000/svg" width="' + s + '" height="' + s + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="' + d + '"/></svg>';
+  }
+
   // ===== 搜索关键词历史（localStorage 持久化）=====
   // 行为：
   //   - 提交搜索时记录表达式；空 / 纯空白 / 仅 1 字符不记录；
@@ -191,8 +218,8 @@
       queryPopover.appendChild(sep);
       const clearBtn = el('div', {
         class: 'ws-query-popover-clear',
-        style: 'padding:8px 14px; cursor:pointer; color:var(--text-dim, #888); font-size:12px; text-align:center;',
-        text: '🗑 清空搜索历史'
+        style: 'padding:8px 14px; cursor:pointer; color:var(--text-dim, #888); font-size:12px; text-align:center; display:flex; align-items:center; justify-content:center; gap:4px;',
+        unsafeHtml: svgIcon('smTrash', 14) + ' 清空搜索历史'
       });
       clearBtn.addEventListener('mousedown', (ev) => {
         ev.preventDefault();
@@ -317,14 +344,20 @@
       ['today', '今天'],
       ['custom', '自定义…']
     ].forEach(([v, t]) => timeSel.appendChild(el('option', { value: v, text: t })));
-    const timeFromInp = el('input', { type: 'datetime-local', id: 'ws-time-from', style: 'display:none; min-width:170px; flex:1 1 170px;' });
-    const timeToInp = el('input', { type: 'datetime-local', id: 'ws-time-to', style: 'display:none; min-width:170px; flex:1 1 170px;' });
+    const timeFromInp = el('input', { type: 'datetime-local', id: 'ws-time-from', style: 'display:none; width:200px; min-width:180px; height:36px; min-height:36px; flex:0 0 auto; box-sizing:border-box;' });
+    const timeToInp = el('input', { type: 'datetime-local', id: 'ws-time-to', style: 'display:none; width:200px; min-width:180px; height:36px; min-height:36px; flex:0 0 auto; box-sizing:border-box;' });
     const timeHint = el('div', { class: 'text-dim', style: 'font-size:11.5px; margin-top:2px;', text: '按文件修改时间粗筛，不按日志行时间筛选' });
 
     function updateTimeCustomVisibility() {
       const isCustom = timeSel.value === 'custom';
-      timeFromInp.style.display = isCustom ? 'inline-block' : 'none';
-      timeToInp.style.display = isCustom ? 'inline-block' : 'none';
+      const row = document.getElementById('ws-time-custom-row');
+      if (row) {
+        row.style.display = isCustom ? 'flex' : 'none';
+      }
+      // flex 容器内的子项不需要手动设置 display（flex item 自动 block 化）
+      // 但初始是 display:none，这里恢复为空字符串即可让 CSS/inline 的默认 display 生效
+      timeFromInp.style.display = isCustom ? '' : 'none';
+      timeToInp.style.display = isCustom ? '' : 'none';
     }
     timeSel.addEventListener('change', updateTimeCustomVisibility);
     updateTimeCustomVisibility();
@@ -601,7 +634,8 @@
     const targetToggleBtn = el('button', {
       class: 'btn btn-sm ws-target-toggle',
       id: 'ws-target-toggle',
-      text: '✏️ 修改目标',
+      style: 'display:flex; align-items:center; gap:6px;',
+      unsafeHtml: svgIcon('smEdit', 14) + ' 修改目标',
       title: '展开/收起目标选择区',
       'aria-expanded': 'false',
       'aria-controls': 'ws-target-body',
@@ -627,12 +661,18 @@
     function applyTargetPanelState() {
       if (targetCollapsed) {
         targetBody.style.display = 'none';
-        targetToggleBtn.textContent = '✏️ 修改目标';
+        targetToggleBtn.innerHTML = svgIcon('smEdit', 14) + ' 修改目标';
+        targetToggleBtn.style.display = 'inline-flex';
+        targetToggleBtn.style.alignItems = 'center';
+        targetToggleBtn.style.gap = '6px';
         targetToggleBtn.setAttribute('aria-expanded', 'false');
         targetSummaryRow.style.display = '';
       } else {
         targetBody.style.display = '';
-        targetToggleBtn.textContent = '▲ 收起';
+        targetToggleBtn.innerHTML = svgIcon('smChevronUp', 14) + ' 收起';
+        targetToggleBtn.style.display = 'inline-flex';
+        targetToggleBtn.style.alignItems = 'center';
+        targetToggleBtn.style.gap = '6px';
         targetToggleBtn.setAttribute('aria-expanded', 'true');
         targetSummaryRow.style.display = 'none';
       }
@@ -647,7 +687,8 @@
       // 凭据状态（不阻塞渲染，没保存就显示"未保存"）
       const credTxt = passInp.value ? '· 凭据已输入' : (credStatus.textContent && credStatus.textContent.indexOf('已为') !== -1 ? '· 已保存凭据' : '');
       targetSummaryBadge.innerHTML = '';
-      targetSummaryBadge.appendChild(document.createTextNode('🎯 ' + sysName + '  ·  ' + srvTxt + '  ·  ' + dirTxt + (credTxt ? '  ' + credTxt : '')));
+      const badgeContent = el('span', { style: 'display:inline-flex; align-items:center; gap:6px;', unsafeHtml: svgIcon('smTarget', 14) + ' ' + sysName + '  ·  ' + srvTxt + '  ·  ' + dirTxt + (credTxt ? '  ' + credTxt : '') });
+      targetSummaryBadge.appendChild(badgeContent);
     }
     // 让外层钩子能拿到这两个函数（保持 v0.6 的约定）
     if (typeof window !== 'undefined') {
@@ -660,7 +701,7 @@
     const fileTableWrap = el('div', { class: 'card' });
     // v0.7-Redesign（第三波）：files tab 工具栏移到 fileTableWrap 之外了，
     // fileTableWrap 现在初始就是空 card。给一个"请先点列出文件"占位，避免空白卡。
-    fileTableWrap.appendChild(el('div', { class: 'ws-files-placeholder text-dim', text: '暂无文件，先点上方「📋 列出文件」拿到列表。' }));
+    fileTableWrap.appendChild(el('div', { class: 'ws-files-placeholder text-dim', style: 'display:flex; align-items:center; justify-content:center; gap:6px;', unsafeHtml: svgIcon('smClipboard', 14) + ' 暂无文件，先点上方「列出文件」拿到列表。' }));
     const hitTableWrap = el('div', { class: 'card', style: 'display:none' });
     const ctxCard = el('div', { class: 'card', style: 'display:none' });
 
@@ -693,7 +734,12 @@
 
     function currentCredKey() {
       const srvs = getCheckedServers();
-      const srv = srvs[0] || (sysSel.value && cfg ? (cfg.systems.find(s => s.name === sysSel.value) || {}).servers?.[0]?.name : '');
+      var srv0 = srvs[0];
+      if (!srv0 && sysSel.value && cfg) {
+        var sys = cfg.systems.find(function (s) { return s.name === sysSel.value; }) || {};
+        if (sys.servers && sys.servers[0]) srv0 = sys.servers[0].name;
+      }
+      const srv = srv0;
       return { system: sysSel.value, server: srv, username: userInp.value };
     }
 
@@ -723,11 +769,11 @@
         rememberChk.disabled = false;
         rememberLbl.style.display = '';
         if (!r.available) {
-          credStatus.textContent = '⚠ 系统钥匙串不可用 — 当前无法「记住密码」';
+          credStatus.innerHTML = '<span style="display:inline-flex; align-items:center; gap:4px;">' + svgIcon('smWarn', 14) + ' 系统钥匙串不可用 — 当前无法「记住密码」</span>';
           credStatus.style.color = '#c00';
           btnForget.style.display = 'none';
         } else if (r.has) {
-          credStatus.textContent = '✓ 已为 ' + k.username + '@' + k.server + ' 保存密码（无需再次输入）';
+          credStatus.innerHTML = '<span style="display:inline-flex; align-items:center; gap:4px;">' + svgIcon('smCheck', 14) + ' 已为 ' + k.username + '@' + k.server + ' 保存密码（无需再次输入）</span>';
           credStatus.style.color = '';
           btnForget.style.display = '';
         } else {
@@ -1136,13 +1182,11 @@
           return wrap;
         }
         case 'done': {
-          const span = el('span', { class: 'dl-pct', style: 'color:#10b981' });
-          span.appendChild(document.createTextNode('✓ 完成 · ' + formatBytes(args.bytes || 0)));
+          const span = el('span', { class: 'dl-pct', style: 'color:#10b981; display:inline-flex; align-items:center; gap:4px;', unsafeHtml: svgIcon('smCheck', 14) + ' 完成 · ' + formatBytes(args.bytes || 0) });
           return span;
         }
         case 'fail': {
-          const span = el('span', { class: 'dl-pct', style: 'color:#ef4444' });
-          span.appendChild(document.createTextNode('✗ ' + (args.error || '失败')));
+          const span = el('span', { class: 'dl-pct', style: 'color:#ef4444; display:inline-flex; align-items:center; gap:4px;', unsafeHtml: svgIcon('smX', 14) + ' ' + (args.error || '失败') });
           return span;
         }
         case 'startfail':
@@ -1190,61 +1234,89 @@
       // 因此改成"串行下载"——一组的 done 事件触发后再启下一组，UX 更可控）
       listState.dlId = null;
       listState.dlEvtSrc = null;
+      listState.dlAbort = null;
       listState.dlMode = 'selected';
       listState.dlApiBase = '/api/files/download/';
       listState.dlLatestUi = null;
       const groupsArr = Array.from(groups.values());
       const results = [];
       const dlResults = []; // 收集各组成功下载的 result items，for 循环结束后统一渲染
+      let cancelled = false;
       for (let gi = 0; gi < groupsArr.length; gi++) {
+        if (cancelled) break;
         const g = groupsArr[gi];
         // full_path 为空时用 dir + '/' + file 兜底
         const paths = g.items.map(it => it.full_path || ((it.dir || '') + '/' + it.file));
         const groupZip = wantZipPerGroup && g.items.length >= 2;
+        let runReason = 'done';
         try {
+          listState.dlAbort = () => { cancelled = true; };
           const r = await api('POST', '/api/files/download', Object.assign({}, credsOne(g.server), {
             paths: paths, zip: groupZip,
             target_dir: (dlTargetDirInp.value || '').trim()
           }));
+          if (cancelled) break;
           const dlId = r.id;
           listState.dlId = dlId;
-          if (!window.EventSource) { toast('浏览器不支持 EventSource', 'err'); return; }
+          if (!window.EventSource) { toast('浏览器不支持 EventSource', 'err'); break; }
           const es = new EventSource(listState.dlApiBase + dlId + '/events');
           listState.dlEvtSrc = es;
           Kairo.core.setActiveDL({ id: dlId, evtsrc: es });
-          // 等待 done；done 事件的回调负责收集 result item，不自己渲染
-          await new Promise((resolve) => {
+          runReason = await new Promise((resolve) => {
             let gotDone = false;
-            const onDoneSeen = (reason) => {
+            let active = true;
+            const finish = (reason) => {
               if (gotDone) return;
               gotDone = true;
-              closeDownloadStream(reason);
+              active = false;
+              listState.dlAbort = null;
+              try { es.close(); } catch (_) { /* ignore */ }
+              if (listState.dlEvtSrc === es) { listState.dlEvtSrc = null; }
+              Kairo.core.clearActiveDL();
               resolve(reason);
             };
+            listState.dlAbort = () => finish('cancel');
             const onDone = (err, item) => {
               if (!err && item) dlResults.push(item);
             };
             es.onmessage = (ev) => {
+              if (!active) return;
               let o; try { o = JSON.parse(ev.data); } catch (e) { return; }
               if (o && o.kind === 'done') {
                 handleDownloadEvent(o, g.items, g, onDone);
-                onDoneSeen('done');
+                finish('done');
                 return;
               }
               handleDownloadEvent(o, g.items, g, onDone);
             };
-            es.addEventListener('done', () => { onDoneSeen('done'); });
+            es.addEventListener('done', (ev) => {
+              if (!active) return;
+              try {
+                const o = JSON.parse(ev.data);
+                if (o && (o.ok === true || o.ok === false)) {
+                  handleDownloadEvent(o, g.items, g, onDone);
+                }
+              } catch (_) { /* ignore */ }
+              finish('done');
+            });
             es.onerror = () => {
               setTimeout(() => {
-                if (listState.dlId === dlId && listState.dlEvtSrc === es && !gotDone) {
-                  onDoneSeen('error');
+                if (active && !gotDone && !cancelled) {
+                  finish('error');
                   toast('SSE 连接异常（已强制收尾）', 'err');
+                } else if (active && !gotDone) {
+                  finish('cancel');
                 }
               }, 2000);
             };
           });
-          results.push({ server: g.server, dir: g.dir, ok: true });
+          if (runReason !== 'cancel') {
+            results.push({ server: g.server, dir: g.dir, ok: runReason !== 'error' });
+          } else {
+            cancelled = true;
+          }
         } catch (e) {
+          if (cancelled) break;
           toast('下载 ' + g.server + ' / ' + g.dir + ' 失败：' + e.message, 'err');
           g.items.forEach(it => {
             const k = (g.server || '') + '|' + (g.dir || '') + '|' + it.file;
@@ -1252,18 +1324,28 @@
           });
           results.push({ server: g.server, dir: g.dir, ok: false, error: e.message });
         }
+        if (runReason === 'cancel' || cancelled) break;
       }
       if (tb) { tb.btnDownloadSel.disabled = false; tb.btnCancel.disabled = true; }
+      listState.dlMode = null;
+      listState.dlApiBase = '';
+      listState.dlId = null;
+      listState.dlEvtSrc = null;
+      listState.dlLatestUi = null;
+      listState.dlAbort = null;
+      Kairo.core.clearActiveDL();
       setStatus('idle');
-      // 所有组结束后统一渲染下载结果（不再每组 done 单独渲染）
-      if (dlResults.length) renderDownloadResults(dlResults);
-      const okGroups = results.filter(r => r.ok).length;
-      if (okGroups === results.length) {
-        let totalDl = 0;
-        results.forEach(r => { totalDl += (r.downloads && r.downloads.length) || 0; });
-        if (totalDl > 0 && location.hash !== '#/downloads') Kairo.core.bumpDlBadge(totalDl);
+      if (!cancelled) {
+        // 所有组结束后统一渲染下载结果（不再每组 done 单独渲染）
+        if (dlResults.length) renderDownloadResults(dlResults);
+        const okGroups = results.filter(r => r.ok).length;
+        if (okGroups === results.length) {
+          let totalDl = 0;
+          dlResults.forEach(r => { totalDl += (r.downloads && r.downloads.length) || 0; });
+          if (totalDl > 0 && location.hash !== '#/downloads') Kairo.core.bumpDlBadge(totalDl);
+        }
+        toast((okGroups === results.length ? '下载完成：' : '部分失败：') + okGroups + '/' + results.length + ' 组', okGroups === results.length ? 'ok' : 'warn');
       }
-      toast((okGroups === results.length ? '下载完成：' : '部分失败：') + okGroups + '/' + results.length + ' 组', okGroups === results.length ? 'ok' : 'warn');
     }
 
     function handleDownloadEvent(o, files, groupCtx, onDone) {
@@ -1304,11 +1386,6 @@
           });
           if (onDone) { onDone(o.error); }
         }
-        listState.dlId = null;
-        listState.dlEvtSrc = null;
-        setStatus('idle');
-        const tb = fileTableWrap._toolbar;
-        if (tb) { tb.btnDownloadSel.disabled = false; tb.btnCancel.disabled = true; }
       }
     }
 
@@ -1318,32 +1395,33 @@
         listState.dlAbort = null;
       }
       if (listState.dlEvtSrc) {
-        listState.dlEvtSrc.close();
+        try { listState.dlEvtSrc.close(); } catch (_) { /* ignore */ }
         listState.dlEvtSrc = null;
       }
       Kairo.core.clearActiveDL();
       const tb = fileTableWrap._toolbar;
-      if (tb) { tb.btnDownloadSel.disabled = false; tb.btnCancel.disabled = true; }
-      if (listState.dlLatestUi) {
+      if (tb) { tb.btnCancel.disabled = true; }
+      if (listState.dlMode === 'latest' && listState.dlLatestUi) {
         btnDownload.disabled = false;
         if (listState.dlLatestUi.cancelBtn) listState.dlLatestUi.cancelBtn.disabled = true;
         if (listState.dlLatestUi.summary) listState.dlLatestUi.summary.textContent = reason === 'cancel' ? '已停止' : '完成';
       }
-      listState.dlMode = null;
-      listState.dlApiBase = '';
-      listState.dlLatestUi = null;
-      listState.dlId = null;
+      if (!listState.dlMode) {
+        if (tb) { tb.btnDownloadSel.disabled = false; }
+        setStatus('idle');
+      }
       if (reason === 'cancel') {
         toast('已停止下载', 'warn');
       }
-      setStatus('idle');
     }
 
     async function doCancelDownload() {
-      if (!listState.dlId) return;
-      const base = listState.dlApiBase || '/api/files/download/';
-      try { await api('POST', base + listState.dlId + '/cancel', {}); }
-      catch (e) { /* ignore */ }
+      if (!listState.dlId && !listState.dlAbort) return;
+      if (listState.dlId) {
+        const base = listState.dlApiBase || '/api/files/download/';
+        try { await api('POST', base + listState.dlId + '/cancel', {}); }
+        catch (e) { /* ignore */ }
+      }
       closeDownloadStream('cancel');
     }
 
@@ -1463,7 +1541,16 @@
               }
               handleDownloadEvent(o, currentGroupFiles, groupCtx, onDone);
             };
-            es.addEventListener('done', () => finish('done'));
+            es.addEventListener('done', (ev) => {
+              if (!active) return;
+              try {
+                const o = JSON.parse(ev.data);
+                if (o && (o.ok === true || o.ok === false)) {
+                  handleDownloadEvent(o, currentGroupFiles, groupCtx, onDone);
+                }
+              } catch (_) { /* ignore */ }
+              finish('done');
+            });
             es.onerror = () => {
               setTimeout(() => {
                 if (active && !gotDone && !cancelled) {
@@ -1569,19 +1656,21 @@
               row.appendChild(document.createTextNode('（' + formatBytes(d.bytes) + '）'));
               if (d.abs_path) {
                 row.appendChild(el('button', {
-                  class: 'btn btn-sm', text: '📂 打开', style: 'margin-left:8px;',
+                  class: 'btn btn-sm', style: 'margin-left:8px; display:inline-flex; align-items:center; gap:4px;',
                   title: '在 Finder/Explorer 中显示（' + d.abs_path + '）',
-                  onclick: () => revealLocal(d.abs_path)
+                  onclick: () => revealLocal(d.abs_path),
+                  unsafeHtml: svgIcon('smFolder', 14) + ' 打开'
                 }));
                 row.appendChild(el('button', {
-                  class: 'btn btn-sm', text: '📋', style: 'margin-left:4px;',
+                  class: 'btn btn-sm', style: 'margin-left:4px; display:inline-flex; align-items:center; gap:0; width:28px; justify-content:center; padding-left:0; padding-right:0;',
                   title: '复制绝对路径：' + d.abs_path,
                   onclick: () => {
                     copyToClipboard(d.abs_path).then(
                       () => toast('路径已复制', 'ok'),
                       (e) => toast('复制失败: ' + e.message, 'err')
                     );
-                  }
+                  },
+                  unsafeHtml: svgIcon('smClipboard', 14)
                 }));
               }
               block.appendChild(row);
@@ -1591,8 +1680,9 @@
           if (zips.length) {
             const block = el('div', { class: 'mt-2' });
             zips.forEach(d => {
-              const row = el('div');
-              row.appendChild(document.createTextNode('· 📦 '));
+              const row = el('div', { style: 'display:flex; align-items:center; gap:4px;' });
+              row.appendChild(el('span', { style: 'width:14px; height:14px; display:inline-flex; align-items:center; justify-content:center; color:var(--text-dim);', unsafeHtml: svgIcon('smPackage', 14) }));
+              row.appendChild(document.createTextNode('· '));
               row.appendChild(el('a', {
                 href: '/downloads/' + encodeURIComponent(d.date + '/' + d.local),
                 text: d.local,
@@ -1602,19 +1692,21 @@
               row.appendChild(document.createTextNode('（' + formatBytes(d.bytes) + '）'));
               if (d.abs_path) {
                 row.appendChild(el('button', {
-                  class: 'btn btn-sm', text: '📂 打开', style: 'margin-left:8px;',
+                  class: 'btn btn-sm', style: 'margin-left:8px; display:inline-flex; align-items:center; gap:4px;',
                   title: '在 Finder/Explorer 中显示（' + d.abs_path + '）',
-                  onclick: () => revealLocal(d.abs_path)
+                  onclick: () => revealLocal(d.abs_path),
+                  unsafeHtml: svgIcon('smFolder', 14) + ' 打开'
                 }));
                 row.appendChild(el('button', {
-                  class: 'btn btn-sm', text: '📋', style: 'margin-left:4px;',
+                  class: 'btn btn-sm', style: 'margin-left:4px; display:inline-flex; align-items:center; gap:0; width:28px; justify-content:center; padding-left:0; padding-right:0;',
                   title: '复制绝对路径：' + d.abs_path,
                   onclick: () => {
                     copyToClipboard(d.abs_path).then(
                       () => toast('路径已复制', 'ok'),
                       (e) => toast('复制失败: ' + e.message, 'err')
                     );
-                  }
+                  },
+                  unsafeHtml: svgIcon('smClipboard', 14)
                 }));
               }
               block.appendChild(row);
@@ -1635,20 +1727,24 @@
       ]);
       if (folder && folder !== '-') {
         folderRow.appendChild(el('button', {
-          class: 'btn btn-sm', text: '📁 打开目录',
+          class: 'btn btn-sm',
           title: '在 Finder/Explorer 中打开目录',
-          onclick: () => openLocalFolder(folder)
+          style: 'display:inline-flex; align-items:center; gap:4px;',
+          onclick: () => openLocalFolder(folder),
+          unsafeHtml: svgIcon('smFolder', 14) + ' 打开目录'
         }));
         folderRow.appendChild(el('button', {
-          class: 'btn btn-sm', text: '📋 复制路径',
+          class: 'btn btn-sm',
           title: '复制目录绝对路径到剪贴板',
+          style: 'display:inline-flex; align-items:center; gap:4px;',
           onclick: () => {
             Kairo.core.copyToClipboard(folder).then(() => {
               toast('路径已复制', 'ok');
             }).catch(() => {
               window.prompt('复制此路径：', folder);
             });
-          }
+          },
+          unsafeHtml: svgIcon('smClipboard', 14) + ' 复制路径'
         }));
       }
       wrap.appendChild(folderRow);
@@ -1679,6 +1775,7 @@
       if (!queryInp.value.trim()) { toast('搜索表达式不能为空', 'warn'); return; }
       if (!(await confirmManyTargets(targets, '搜索日志'))) return;
       pushSearchHistory(queryInp.value);
+      saveContextLines();
       const scope = Object.keys(scopeRadios).filter(k => !k.endsWith('Label') && scopeRadios[k].checked)[0] || 'latest';
       let selectedItems = null;
       if (scope === 'selected') {
@@ -1719,6 +1816,8 @@
         };
         if (filePatterns) body.file_patterns = filePatterns;
         if (contextN > 0) body.context = contextN;
+        // v0.13：忽略大小写 checkbox（勾上 → 后端 grep -i）
+        body.ignore_case = !!ignoreCaseChk.checked;
         if (selectedItems) {
           // P1-9：传 selected_file_targets（新格式），按 (server, dir) 区分
           // 后端会优先用 per-target 列表，匹配不上再退到老的 selected_files。
@@ -1795,7 +1894,7 @@
             ];
             const contentCell = el('td', { class: 'hit-line' + (isCtx ? ' ctx-line' : ''), text: (isCtx ? '┊ ' : '') + shortContent });
             if (!isCtx && looksMojibake(shortContent)) {
-              contentCell.appendChild(el('span', { class: 'tag tag-warn', title: '当前目录编码与文件实际编码不一致，中文可能错位。试试切换到「GBK」目录。', text: '⚠ 解码可能有误' }));
+              contentCell.appendChild(el('span', { class: 'tag tag-warn', title: '当前目录编码与文件实际编码不一致，中文可能错位。试试切换到「GBK」目录。', style: 'display:inline-flex; align-items:center; gap:4px;', unsafeHtml: svgIcon('smWarn', 12) + ' 解码可能有误' }));
             }
             cells.push(contentCell);
             if (isCtx) {
@@ -1917,15 +2016,63 @@ const formCard = el('div', { class: 'card' }, [
       el('div', { class: 'text-dim', style: 'font-size:11.5px; margin-top:2px;', text: '填 glob 后，N 仍限制"取匹配文件中的最新 N 个"' })
     ]);
 
-    const contextInp = el('input', { type: 'number', id: 'ws-context', min: '0', max: '5000', value: '5000', style: 'width:100%;' });
+    // 上下文行数：默认 500，用户改过后 localStorage 记住。
+    // - localStorage key: kairo.websphere.contextLines
+    // - 默认值前后端一致（后端 DefaultContextLines / handler clamp 500）；
+    // - max=500：handler 端 hard clamp 500，再大也没用
+    const CONTEXT_LINES_KEY = 'kairo.websphere.contextLines';
+    const CONTEXT_LINES_DEFAULT = 500;
+    const CONTEXT_LINES_MAX = 500;
+    const savedCtx = (() => {
+      try {
+        const raw = localStorage.getItem(CONTEXT_LINES_KEY);
+        const n = Number(raw);
+        if (Number.isFinite(n) && n >= 0 && n <= CONTEXT_LINES_MAX) return n;
+      } catch (e) { /* 隐私模式 / 配额满：忽略，回退到默认 */ }
+      return CONTEXT_LINES_DEFAULT;
+    })();
+    const contextInp = el('input', {
+      type: 'number',
+      id: 'ws-context',
+      min: '0',
+      max: String(CONTEXT_LINES_MAX),
+      value: String(savedCtx),
+      style: 'width:100%;',
+      title: '每个命中行前后各 N 行；可手动改成 0~500；改完自动记住'
+    });
+    // 改完即存，下次打开还是这个值（用户不用再输入）
+    // - change: 值改变并提交（如按回车、选下拉）时触发
+    // - blur: 失焦时也保存一次，防止用户输入后直接点搜索按钮没触发 change
+    function saveContextLines() {
+      try { localStorage.setItem(CONTEXT_LINES_KEY, String(getContextLineCount())); } catch (e) { /* ignore */ }
+    }
+    contextInp.addEventListener('change', saveContextLines);
+    contextInp.addEventListener('blur', saveContextLines);
+    contextInp.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') saveContextLines();
+    });
     function getContextLineCount() {
       let n = Number(contextInp.value);
       if (!Number.isFinite(n)) n = 0;
       n = Math.floor(n);
       if (n < 0) n = 0;
-      if (n > 5000) n = 5000;
+      if (n > CONTEXT_LINES_MAX) n = CONTEXT_LINES_MAX;
       return n;
     }
+
+    // 忽略大小写 checkbox（v0.13）：勾上 → 搜索关键词不区分大小写。
+    // - 默认 false（保持原有大小写敏感行为）
+    // - localStorage 记忆：kairo.websphere.ignoreCase
+    const IGNORE_CASE_KEY = 'kairo.websphere.ignoreCase';
+    const ignoreCaseChk = el('input', { type: 'checkbox', id: 'ws-ignore-case' });
+    try { ignoreCaseChk.checked = localStorage.getItem(IGNORE_CASE_KEY) === '1'; } catch (e) { /* ignore */ }
+    ignoreCaseChk.addEventListener('change', () => {
+      try { localStorage.setItem(IGNORE_CASE_KEY, ignoreCaseChk.checked ? '1' : '0'); } catch (e) { /* ignore */ }
+    });
+    const ignoreCaseLbl = el('label', { class: 'inline', title: '勾上后关键词不区分大小写（例：DEBUG 能匹配 debug / Debug / Debug）' }, [
+      ignoreCaseChk,
+      document.createTextNode(' 忽略大小写')
+    ]);
 
     // v0.5-G P1-08：搜索范围三选一（latest / selected / glob）
     // - latest  默认，列最近 N 个
@@ -1950,13 +2097,14 @@ const formCard = el('div', { class: 'card' }, [
     const searchSelSummary = el('div', { class: 'text-dim', id: 'ws-search-sel-summary', text: '尚未选择文件' });
     const btnSearchPickFiles = el('button', {
       class: 'btn btn-sm mt-1',
-      text: '📋 选择文件…',
-      onclick: openSearchFilePicker
+      style: 'display:inline-flex; align-items:center; gap:4px;',
+      onclick: openSearchFilePicker,
+      unsafeHtml: svgIcon('smClipboard', 14) + ' 选择文件…'
     });
     const btnSearchClearFiles = el('button', {
       class: 'btn btn-sm mt-1',
-      text: '✕ 清空选择',
-      style: 'display:none',
+      style: 'display:none; align-items:center; gap:4px;',
+      unsafeHtml: svgIcon('smX', 14) + ' 清空选择',
       onclick: () => {
         searchSelectedFiles = [];
         updateSearchSelSummary();
@@ -1981,9 +2129,9 @@ const formCard = el('div', { class: 'card' }, [
           bySrv[k] = (bySrv[k] || 0) + 1;
         });
         const parts = Object.keys(bySrv).map(k => k + ': ' + bySrv[k] + ' 个');
-        searchSelSummary.textContent = '✓ 已选 ' + searchSelectedFiles.length + ' 个文件（' + parts.join('，') + '）';
+        searchSelSummary.innerHTML = '<span style="display:inline-flex; align-items:center; gap:4px;">' + svgIcon('smCheck', 14) + ' 已选 ' + searchSelectedFiles.length + ' 个文件（' + parts.join('，') + '）</span>';
         searchSelSummary.style.color = 'var(--success)';
-        btnSearchClearFiles.style.display = '';
+        btnSearchClearFiles.style.display = 'inline-flex';
       }
     }
     function updateScopeVisibility() {
@@ -2205,13 +2353,14 @@ const formCard = el('div', { class: 'card' }, [
       targetSummaryEl.style.color = '';
       const badge = el('span', { class: 'tag tag-ok', text: '已选 ' + srvs.length + ' 台服务器 / ' + dirs + ' 个 targets' });
       const expandBtn = el('button', {
-        class: 'btn btn-sm', text: '▼ 展开查看', style: 'margin-left:6px;',
+        class: 'btn btn-sm', style: 'margin-left:6px; display:inline-flex; align-items:center; gap:4px;',
+        unsafeHtml: svgIcon('smChevronDown', 14) + ' 展开查看',
         onclick: () => {
           const detail = $('#ws-target-detail');
           if (detail) {
             const shown = detail.style.display !== 'none';
             detail.style.display = shown ? 'none' : '';
-            expandBtn.textContent = shown ? '▼ 展开查看' : '▲ 收起';
+            expandBtn.innerHTML = shown ? (svgIcon('smChevronDown', 14) + ' 展开查看') : (svgIcon('smChevronUp', 14) + ' 收起');
           }
         }
       });
@@ -2240,7 +2389,13 @@ const formCard = el('div', { class: 'card' }, [
       el('h3', { text: '多目标并行搜索' }),
       el('div', { class: 'card-desc', unsafeHtml: '语法：<span class="code-inline">A &amp;&amp; B</span>（同包含）、<span class="code-inline">A || B</span>（任一）、<span class="code-inline">!X</span>（排除）。结果按服务器 / 目录分组。' }),
       el('div', { class: 'grid-3' }, [
-        el('div', { style: 'grid-column: span 2' }, [el('label', { text: '搜索表达式' }), queryWrap]),
+        // 搜索表达式 + 忽略大小写 checkbox（视觉绑定：「忽略大小写」修饰的是关键词匹配规则，
+        // 跟并发/上下文这类「结果处理参数」不是同一类，放搜索表达式底下更合理）
+        el('div', { style: 'grid-column: span 2' }, [
+          el('label', { text: '搜索表达式' }),
+          queryWrap,
+          el('div', { class: 'mt-1', style: 'display:flex; align-items:center; gap:6px;' }, [ignoreCaseLbl])
+        ]),
         el('div', null, [el('label', { text: '并发' }), concSel])
       ]),
       scopeRow,
@@ -2250,23 +2405,32 @@ const formCard = el('div', { class: 'card' }, [
         el('div', null, [
           el('label', { text: '上下文行数（0=仅命中行）' }),
           contextInp,
-          el('div', { class: 'text-dim', style: 'font-size:11.5px; margin-top:2px;', text: '每个命中行前后各 N 行，点击“上下文”也会用这里的值' })
+          el('div', { class: 'text-dim', style: 'font-size:11.5px; margin-top:2px;', text: '每个命中行前后各 N 行，点击"上下文"也会用这里的值。改完自动记住' })
         ])
       ]),
       fileListArea,
       el('div', { class: 'grid-3 mt-2' }, [
-        el('div', null, [el('label', { text: '按文件修改时间粗筛' }), timeSel, timeHint]),
-        // 自定义时间范围：只有 timeSel 选「自定义…」时才显示（updateTimeCustomVisibility 控制）
-        el('div', { style: 'display:flex; gap:8px; align-items:center; flex-wrap:wrap;' }, [
-          el('label', { class: 'inline', style: 'display:inline-flex; align-items:center; gap:4px; font-size:12px; color:var(--text-dim);' }, [document.createTextNode('从'), timeFromInp]),
-          el('label', { class: 'inline', style: 'display:inline-flex; align-items:center; gap:4px; font-size:12px; color:var(--text-dim);' }, [document.createTextNode('到'), timeToInp])
-        ]),
-        // P1-8：目标摘要节点（已在外层声明 + 实现 updateTargetSummary）
-        targetSummaryEl
+        el('div', null, [el('label', { text: '按文件修改时间粗筛' }), timeSel, timeHint])
       ]),
+      // 自定义时间范围：只有 timeSel 选「自定义…」时才显示（updateTimeCustomVisibility 控制）
+      // 单独一行，简单 flex 布局，避免 grid-column span 在 Windows 上的兼容性问题
+      el('div', { id: 'ws-time-custom-row', style: 'display:none; margin-top:8px; gap:16px; align-items:center; flex-wrap:wrap;' }, [
+        el('label', { style: 'display:inline-flex; align-items:center; gap:6px; font-size:13px; color:var(--text-dim); white-space:nowrap;' }, [
+          document.createTextNode('从'),
+          timeFromInp
+        ]),
+        el('label', { style: 'display:inline-flex; align-items:center; gap:6px; font-size:13px; color:var(--text-dim); white-space:nowrap;' }, [
+          document.createTextNode('到'),
+          timeToInp
+        ])
+      ]),
+      el('div', { class: 'mt-1' }, [targetSummaryEl]),
       el('div', { class: 'btn-row mt-2' }, [btnSearch])
     ]);
     updateScopeVisibility();
+    // searchCard 渲染完成后再做一次时间自定义行可见性同步
+    // （初始调用时 DOM 还没挂载，getElementById 返回 null）
+    updateTimeCustomVisibility();
     // searchCard 渲染完成后做一次初始摘要
     updateTargetSummary();
 
@@ -2530,7 +2694,7 @@ const formCard = el('div', { class: 'card' }, [
     const btnTailNewTab = el('button', { class: 'btn', text: '↗ 新窗口打开', onclick: openTailInNewTab, title: '在新窗口中跟踪，避免本页卡死' });
     // 项 12 修复：实时跟踪的"选文件"按钮 —— 拉当前 server+dir 下的文件列表，
     // 让用户点选而不是手输文件路径（避免打错字找不到文件）。
-    const btnTailPickFile = el('button', { class: 'btn btn-sm', text: '📋 选文件', onclick: openTailFilePicker, title: '列出当前服务器/目录下的文件，点选填入文件名' });
+    const btnTailPickFile = el('button', { class: 'btn btn-sm', style: 'display:inline-flex; align-items:center; gap:4px;', onclick: openTailFilePicker, title: '列出当前服务器/目录下的文件，点选填入文件名', unsafeHtml: svgIcon('smClipboard', 14) + ' 选文件' });
     // v0.6-Redesign：实时 tail 严格单 target。多 target 时让用户选 1 个；
     // 单 target 时也明确显示当前选的是哪个（避免"我以为在跟 server-a 实际在跟 server-b"）。
     const tailTargetSel = el('select', { id: 'ws-tail-target', 'aria-label': '实时跟踪的目标服务器和目录' });
@@ -2567,7 +2731,7 @@ const formCard = el('div', { class: 'card' }, [
       });
       if (targets.length > 1) {
         tailTargetWarn.style.display = '';
-        tailTargetWarn.textContent = '⚠ 你已选 ' + targets.length + ' 个 targets，实时跟踪只支持单服务器单目录。请从中选 1 个。';
+        tailTargetWarn.innerHTML = '<span style="display:inline-flex; align-items:center; gap:4px;">' + svgIcon('smWarn', 14) + ' 你已选 ' + targets.length + ' 个 targets，实时跟踪只支持单服务器单目录。请从中选 1 个。</span>';
       } else {
         tailTargetWarn.style.display = 'none';
       }
@@ -2633,7 +2797,7 @@ const formCard = el('div', { class: 'card' }, [
         btnTailStart.disabled = true;
         btnTailStop.disabled = false;
         appendTailLine({ kind: 'info', msg: '已开启 tail · 服务器=' + serverName + ' · 目录=' + dirPath + ' · id=' + tailId });
-        setTabBadge('tail', '🟢');
+        setTabBadge('tail', '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#22c55e;vertical-align:middle;"></span>', true);
         if (window.EventSource) {
           tailEvtSrc = new EventSource('/api/logs/tail/' + tailId + '/events');
           // v0.6-fix：v0.5 旧 bug 修复 —— onerror 不再只是 append，必须调 stopTailUI
@@ -2836,10 +3000,10 @@ const formCard = el('div', { class: 'card' }, [
     let grepShownLines = 0;
     let grepClearedNoticeShown = false;
 
-    const btnTailPause = el('button', { class: 'btn btn-sm', text: '⏸ 暂停', title: '暂停/继续接收新日志' });
-    const btnTailClear = el('button', { class: 'btn btn-sm', text: '🗑 清屏', title: '清空当前显示' });
-    const btnTailCopy = el('button', { class: 'btn btn-sm', text: '📋 复制全部', title: '复制缓冲区所有文本' });
-    const btnTailCopyShown = el('button', { class: 'btn btn-sm', text: '📋 复制显示', title: '复制过滤后显示的行', style: 'display:none' });
+    const btnTailPause = el('button', { class: 'btn btn-sm', style: 'display:inline-flex; align-items:center; gap:4px;', unsafeHtml: svgIcon('smPause', 14) + ' 暂停', title: '暂停/继续接收新日志' });
+    const btnTailClear = el('button', { class: 'btn btn-sm', style: 'display:inline-flex; align-items:center; gap:4px;', title: '清空当前显示', unsafeHtml: svgIcon('smTrash', 14) + ' 清屏' });
+    const btnTailCopy = el('button', { class: 'btn btn-sm', style: 'display:inline-flex; align-items:center; gap:4px;', title: '复制缓冲区所有文本', unsafeHtml: svgIcon('smClipboard', 14) + ' 复制全部' });
+    const btnTailCopyShown = el('button', { class: 'btn btn-sm', style: 'display:none; align-items:center; gap:4px;', title: '复制过滤后显示的行', unsafeHtml: svgIcon('smClipboard', 14) + ' 复制显示' });
 
     const grepInp = el('input', {
       type: 'text',
@@ -2854,7 +3018,7 @@ const formCard = el('div', { class: 'card' }, [
       title: '切换正则/纯文本模式',
       style: 'font-family: monospace; font-weight: bold;'
     });
-    const grepClearBtn = el('button', { class: 'btn btn-sm', text: '✕', title: '清除过滤 (Esc)' });
+    const grepClearBtn = el('button', { class: 'btn btn-sm', style: 'display:inline-flex; align-items:center; gap:4px;', unsafeHtml: svgIcon('smX', 14), title: '清除过滤 (Esc)' });
     const grepStatus = el('span', { class: 'text-dim', style: 'font-size: 12px; min-width: 120px; text-align: right;', text: '' });
 
     function updateGrepStatus() {
@@ -2932,7 +3096,7 @@ const formCard = el('div', { class: 'card' }, [
     btnTailPause.addEventListener('click', () => {
       const newPaused = !tailViewer.isPaused();
       tailViewer.setPaused(newPaused);
-      btnTailPause.textContent = newPaused ? '▶ 继续' : '⏸ 暂停';
+      btnTailPause.innerHTML = newPaused ? (svgIcon('smPlay', 14) + ' 继续') : (svgIcon('smPause', 14) + ' 暂停');
     });
     btnTailClear.addEventListener('click', () => {
       tailViewer.clear();
@@ -2976,7 +3140,7 @@ const formCard = el('div', { class: 'card' }, [
     }, [
       btnTailPause, btnTailClear, btnTailCopy, btnTailCopyShown,
       el('span', { style: 'width: 1px; height: 20px; background: var(--line); margin: 0 4px;' }),
-      el('span', { class: 'text-dim', style: 'font-size: 12px;', text: '🔍' }),
+      el('span', { class: 'text-dim', style: 'font-size: 12px; width:16px; height:16px; display:inline-flex; align-items:center; justify-content:center;', unsafeHtml: svgIcon('smSearch', 16) }),
       grepInp,
       grepRegexBtn,
       grepClearBtn,
@@ -3071,13 +3235,18 @@ const formCard = el('div', { class: 'card' }, [
       search: 'search',
       tail: 'tail'
     };
-    function makeTab(label, tabId) {
-      const tabItem = el('span', { class: 'ws-tab-item', 'data-tab-id': tabId, style: 'display:inline-flex; align-items:center; gap:6px;' });
+    function makeTab(label, tabId, isHtml) {
+      const tabItem = el('span', { class: 'ws-tab-item' + (tabId === activeTab ? ' has-active' : ''), 'data-tab-id': tabId, style: 'display:inline-flex; align-items:center; gap:6px;' });
       const btn = el('button', {
         class: 'btn' + (tabId === activeTab ? ' active' : ''),
-        text: label,
+        style: 'display:inline-flex; align-items:center; gap:6px;',
         onclick: () => switchTab(tabId)
       });
+      if (isHtml) {
+        btn.innerHTML = label;
+      } else {
+        btn.textContent = label;
+      }
       const badge = el('span', { class: 'ws-tab-badge', 'data-tab-badge': tabId, text: '', 'aria-label': tabId + ' 状态' });
       tabItem.appendChild(btn);
       tabItem.appendChild(badge);
@@ -3086,26 +3255,38 @@ const formCard = el('div', { class: 'card' }, [
       return tabItem;
     }
 
-    function setTabBadge(tabId, text) {
+    function setTabBadge(tabId, text, isHtml) {
       const b = tabBadges[tabId];
       if (!b) return;
-      // v0.6-fix：必须显式设 inline-block —— '' 会被 CSS 默认 .ws-tab-badge{display:none} 覆盖，
-      // 导致 badge 永远看不见。空值清空时设 'none'。
-      b.textContent = text == null ? '' : String(text);
-      b.style.display = text ? 'inline-block' : 'none';
+      if (text == null || text === '') {
+        b.textContent = '';
+        b.style.display = 'none';
+      } else {
+        if (isHtml) {
+          b.innerHTML = String(text);
+        } else {
+          b.textContent = String(text);
+        }
+        b.style.display = 'inline-block';
+      }
     }
 
     function switchTab(tabId) {
       if (!tabBtns[tabId]) return; // 防御：未知 tab 直接忽略
       activeTab = tabId;
-      Object.keys(tabBtns).forEach(k => { tabBtns[k].classList.toggle('active', k === tabId); });
-      Object.keys(tabContents).forEach(k => { tabContents[k].classList.toggle('active', k === tabId); });
+      Object.keys(tabBtns).forEach(function (k) {
+        var isActive = k === tabId;
+        tabBtns[k].classList.toggle('active', isActive);
+        // Win7 兼容：用 class 替代 CSS :has() 选择器
+        if (tabBtns[k].parentElement) tabBtns[k].parentElement.classList.toggle('has-active', isActive);
+      });
+      Object.keys(tabContents).forEach(function (k) { tabContents[k].classList.toggle('active', k === tabId); });
       try { history.replaceState(null, '', '#/websphere?tab=' + (tabHash[tabId] || tabId)); } catch (e) { /* ignore */ }
     }
 
-    tabBar.appendChild(makeTab('📁 文件 / 下载', 'files'));
-    tabBar.appendChild(makeTab('🔍 搜索排障', 'search'));
-    tabBar.appendChild(makeTab('📺 实时跟踪', 'tail'));
+    tabBar.appendChild(makeTab(svgIcon('smFolder', 16) + ' 文件 / 下载', 'files', true));
+    tabBar.appendChild(makeTab(svgIcon('smSearch', 16) + ' 搜索排障', 'search', true));
+    tabBar.appendChild(makeTab(svgIcon('smMonitor', 16) + ' 实时跟踪', 'tail', true));
 
     formCard.id = 'ws-target-card';
     searchCard.id = 'ws-search-card';
@@ -3180,9 +3361,18 @@ const formCard = el('div', { class: 'card' }, [
       refreshDirs();
       if (lastSel && lastSel.dir) dirSel.value = lastSel.dir;
       refreshCredStatus();
-      if (info.search && typeof info.search.default_context_lines === 'number') {
-        contextInp.value = String(Math.max(0, Math.min(5000, info.search.default_context_lines)));
-      }
+      // v0.13 改造：context input 由 localStorage 控制（用户改过的就记住），后端 default
+      // 仅在用户从未手动改过（localStorage 没值）时才作为兜底——
+      // 否则每次 config 加载都会把用户调好的值再覆盖回去，很烦人。
+      try {
+        const hasSaved = localStorage.getItem(CONTEXT_LINES_KEY) !== null;
+        if (!hasSaved && info.search && typeof info.search.default_context_lines === 'number') {
+          const v = Math.max(0, Math.min(CONTEXT_LINES_MAX, info.search.default_context_lines));
+          if (v !== savedCtx) {
+            contextInp.value = String(v);
+          }
+        }
+      } catch (e) { /* ignore */ }
       // 默认勾上"记住密码"（keyring 模式下；file/disabled 时由 refreshCredStatus 强制取消）
       rememberChk.checked = true;
       rememberChk.disabled = false;

@@ -433,10 +433,18 @@ func sshCompatProfiles() []sshCompatProfile {
 func passwordKeyboardInteractive(password string) ssh.KeyboardInteractiveChallenge {
 	return func(user, instruction string, questions []string, echos []bool) ([]string, error) {
 		answers := make([]string, len(questions))
-		for i := range questions {
-			// 老 sshd / PAM 有时只开放 keyboard-interactive，问题通常是 Password:。
-			// 对 echo=false 的问题返回同一个密码；echo=true 的交互问题不回显密码，避免误把密码写入日志/提示。
-			if i < len(echos) && !echos[i] {
+		for i, q := range questions {
+			lowerQ := strings.ToLower(q)
+			isPassword := strings.Contains(lowerQ, "password") ||
+				strings.Contains(lowerQ, "passcode") ||
+				strings.Contains(lowerQ, "密码") ||
+				strings.Contains(lowerQ, "口令") ||
+				strings.Contains(lowerQ, "pass word") ||
+				strings.Contains(lowerQ, "otp")
+			isEchoFalse := i < len(echos) && !echos[i]
+			singleQuestion := len(questions) == 1
+
+			if singleQuestion || isEchoFalse || isPassword {
 				answers[i] = password
 			}
 		}

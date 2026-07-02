@@ -102,6 +102,7 @@ func newTestServer(t *testing.T) (*Server, *config.Manager, *audit.Logger, strin
 	// 嵌入 fs 用真实 web/ 目录（测试用真实 index.html）
 	webFS := os.DirFS(filepath.Join("..", "..", "web"))
 	srv := New(mgr, al, webFS, tailmgr.NewManager(), sshshell.New(0))
+	srv.skipLicenseCheck = true
 	return srv, mgr, al, cfg.DownloadDir()
 }
 

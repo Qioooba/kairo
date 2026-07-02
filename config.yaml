@@ -1,49 +1,81 @@
 app:
-    name: 天命契机
-    host: 127.0.0.1
-    port: 18092
-    auto_open_browser: false
-    download_dir: ./downloads
-    log_dir: ./logs
-    data_dir: ./data
-    free_file_roots:
-        - '*'
-    ssh_debug: false
-    ssh_traffic_dump: false
-    ssh_log_max_mb: 20
-    ssh_log_keep: 3
-    allow_insecure_host_key: true
-    external_openers:
-        - name: Notepad++
-          path: C:\Windows\notepad.exe
-          icon: "\U0001F4CB"
-        - name: TestApp
-          path: /usr/bin/testapp
-          icon: "\U0001F4CE"
-    download_retention_days: 7
-    download_max_count: 1000
-    compare_allowed_roots:
-        - '*'
-    kairo: "111222"
+  name: 天命契机
+  host: 127.0.0.1
+  port: 18092
+  auto_open_browser: false
+  download_dir: ./downloads
+  log_dir: ./logs
+  data_dir: ./data
+  auto_start: false
+  free_file_roots:
+  - '*'
+  ssh_debug: false
+  ssh_traffic_dump: false
+  ssh_log_max_mb: 20
+  ssh_log_keep: 3
+  allow_insecure_host_key: true
+  external_openers:
+  - name: NotePad++
+    path: D:\软件\Notepad++\notepad++.exe
+    icon: smFile
+  - name: VS Code
+    path: /usr/local/bin/code
+    icon: smFile
+  - name: 我的 IDE
+    path: /Applications/我的应用/IDE.app/Contents/MacOS/ide
+    icon: smFile
+  download_retention_days: 7
+  download_max_count: 1000
+  compare_allowed_roots:
+  - '*'
 systems:
-    - name: 信贷生产（模拟）
-      description: ""
-      servers:
-        - name: mock-node-1
-          host: 127.0.0.1
-          port: 2222
-          username: test
-          password: test
-          auth_type: password
-          log_dirs:
-            - name: AppSrv01 server1
-              path: /opt/IBM/WebSphere/AppServer/profiles/AppSrv01/logs/server1
-              patterns:
-                - SystemOut*.log
-              encoding: utf-8
+- name: 信贷应用服务器
+  description: ""
+  servers:
+  - name: 信贷测试198
+    host: 66.0.34.198
+    port: 22
+    username: credit
+    password: credit
+    auth_type: password
+    log_dirs:
+    - name: AppSrv01 server1
+      path: /opt/IBM/WebSphere/AppServer/profiles/AppSrv01/logs/server1
+      patterns:
+      - SystemOut*.log
+      - SystemErr*.log
+      encoding: gbk
+  - name: 信贷测试199
+    host: 66.0.34.199
+    port: 22
+    username: credit
+    password: credit
+    auth_type: password
+    log_dirs:
+    - name: AppSrv01 server1
+      path: /opt/IBM/WebSphere/AppServer/profiles/AppSrv01/logs/server1
+      patterns:
+      - SystemOut*.log
+      - SystemErr*.log
+      encoding: gbk
+- name: 信贷批量服务器
+  description: ""
+  servers:
+  - name: 信贷测试28
+    host: 66.2.43.28
+    port: 22
+    username: creditpl
+    password: creditpl
+    auth_type: password
+    log_dirs:
+    - name: AmarExtract
+      path: /batch/credit/AmarExtract
+      patterns:
+      - '*.log'
+      encoding: gbk
 search:
-    default_latest_files: 3
-    max_matches: 200
-    default_context_lines: 30
-    timeout_seconds: 30
-    max_concurrency: 2
+  default_latest_files: 3
+  max_matches: 200
+  default_context_lines: 30
+  timeout_seconds: 30
+  max_concurrency: 2

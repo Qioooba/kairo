@@ -29,6 +29,7 @@ import (
 	"kairo/internal/license"
 	"kairo/internal/sshclient"
 	"kairo/internal/sshshell"
+	"kairo/internal/sysutil"
 	"kairo/internal/tailmgr"
 	"kairo/internal/tray"
 )
@@ -113,6 +114,45 @@ func main() {
 		}
 	} else {
 		log.Printf("文件浏览器（任意路径下载）已禁用 (/api/files/* 将 403)")
+	}
+
+	// 4.8 v1.0：按 cfg.App.AutoStart 同步注册表（idempotent）；v1.1 升级场景扩展。
+	//
+	// 触发条件（任一为真即同步注册表到当前 exe 路径）：
+	//   - 配置 auto_start=true：用户在配置页勾了"开机自启" → 正常路径；
+	//   - 配置 auto_start=false 但注册表里有 KairoOpsToolboxAutoStart 值：
+	//     升级前用户在旧版本勾过自启、但新版本 config.yaml 被重置成默认；
+	//     或者 exe 路径在升级时变了（v0.5/ → v0.6/ 子目录），注册表还指旧路径。
+	//     两种情况都接管"用户想继续自启"的意图，把注册表更新到当前 exe。
+	//
+	// valueName 用了独特复合命名（产品+工具+功能），不会被外部程序撞到，
+	// 所以"看注册表里有没有这个值"可以无脑信任。
+	//
+	// 取消自启只能通过配置页取消（config=auto_start=false 且注册表无项），
+	// 所以"用户主动取消过的旧版本升级上来"不会触发接管。
+	//
+	// 失败只 log warning，不阻断启动 —— 自启没设上不影响 HTTP 服务正常跑。
+	if sysutil.Supported() {
+		wantEnabled := cfg.App.AutoStart
+		if !wantEnabled {
+			actual, _ := sysutil.IsAutoStartEnabled()
+			wantEnabled = actual
+		}
+		if wantEnabled {
+			exe, exeErr := os.Executable()
+			if exeErr != nil {
+				log.Printf("WARNING: 自启同步失败，获取 exe 路径失败: %v", exeErr)
+			} else {
+				if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+					exe = resolved
+				}
+				if err := sysutil.SetAutoStart(true, filepath.Clean(exe)); err != nil {
+					log.Printf("WARNING: 自启同步失败（%s）: %v", sysutil.AutoStartKeyName(), err)
+				} else {
+					log.Printf("开机自启已同步: %s = %s", sysutil.AutoStartKeyName(), filepath.Clean(exe))
+				}
+			}
+		}
 	}
 
 	// 5. 初始化审计日志

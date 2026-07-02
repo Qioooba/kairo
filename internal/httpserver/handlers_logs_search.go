@@ -18,14 +18,15 @@ import (
 )
 
 type logsSearchReq struct {
-	System   string `json:"system"`
-	Server   string `json:"server"`
-	Dir      string `json:"dir"`
-	Files    int    `json:"files"` // 选最近几个文件
-	Query    string `json:"query"` // 搜索表达式
-	Context  int    `json:"context"`
-	Username string `json:"username"`
-	Password string `json:"password"`
+	System     string `json:"system"`
+	Server     string `json:"server"`
+	Dir        string `json:"dir"`
+	Files      int    `json:"files"` // 选最近几个文件
+	Query      string `json:"query"` // 搜索表达式
+	Context    int    `json:"context"`
+	Username   string `json:"username"`
+	Password   string `json:"password"`
+	IgnoreCase bool   `json:"ignore_case"` // v0.13：忽略大小写搜索（透传 grep -i）
 }
 
 func (s *Server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
@@ -83,8 +84,8 @@ func (s *Server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 	if contextN < 0 {
 		contextN = 0
 	}
-	if contextN > 50 {
-		contextN = 50
+	if contextN > 500 {
+		contextN = 500
 	}
 
 	// SSH Dial 独立 ctx + 统一超时（不受 SearchTimeout 太小影响）
@@ -126,7 +127,7 @@ func (s *Server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 		fileNames = append(fileNames, f.Name)
 	}
 
-	cmd, err = logquery.SearchCommand(ld.Path, fileNames, kw, cur.Search.MaxMatches, cur.Search.TimeoutSeconds, ld.Encoding)
+	cmd, err = logquery.SearchCommand(ld.Path, fileNames, kw, cur.Search.MaxMatches, cur.Search.TimeoutSeconds, ld.Encoding, req.IgnoreCase)
 	if err != nil {
 		writeErr(w, 400, err)
 		return
@@ -154,8 +155,15 @@ func (s *Server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 	// B1：按"文件 mtime"过滤命中（前后端都返回过滤后的 hits）
 	hits = logquery.FilterHitsByTimeWindow(hits, files, tw)
 	// 上下文行：contextN > 0 时为每个匹配行获取前后 N 行
+	// REVIEW-rc5 #6：失败时不再静默回退，写一条 audit 记录 + 标记 context_fail，
+	// 但仍返回无上下文的 hits（不阻断主流程）。前端可从 audit 看到错误原因。
 	if contextN > 0 && len(hits) > 0 {
-		if enriched, err := s.enrichHitsWithContext(r.Context(), cli, ld, srv.Name, files, hits, contextN); err == nil {
+		enriched, ctxErr := s.enrichHitsWithContext(r.Context(), cli, ld, srv.Name, files, hits, contextN)
+		if ctxErr != nil {
+			s.audit.Write("logs.search", "system", req.System, "server", req.Server, "dir", ld.Path,
+				"query", req.Query, "result", "context_fail", "err", ctxErr.Error(),
+				"context", contextN)
+		} else {
 			hits = enriched
 		}
 	}
@@ -231,28 +239,19 @@ func parseSearchOutput(out string, server, dir string, files []logquery.FileEntr
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
-		// 形如 "filename:lineno:content"
-		idx1 := strings.Index(line, ":")
-		if idx1 < 0 {
+		// REVIEW-rc5 #1：filename 含 `:` 时的解析错位（与 logquery.parseSearchLine 同算法）。
+		// 单一 search 接口只解析 hit 行（不含上下文 `-` 分隔符），sep 应当是 `:`；
+		// 遇到 `-` 分隔的上下文行时按未知格式丢弃（这个 handler 本就不返回上下文行）。
+		file, sep, ln, content, ok := logquery.ParseSearchHitLine(line)
+		if !ok || sep != ':' {
 			continue
 		}
-		idx2 := strings.Index(line[idx1+1:], ":")
-		if idx2 < 0 {
-			continue
-		}
-		file := line[:idx1]
 		// 防御性校验：file 必须来自 ListCommand 返回的 files 列表
 		// （仅在 handler 提供 files 时启用）
 		if useWhitelist {
 			if _, ok := byName[file]; !ok {
 				continue
 			}
-		}
-		lineNoStr := line[idx1+1 : idx1+1+idx2]
-		content := line[idx1+1+idx2+1:]
-		ln, err := strconv.Atoi(strings.TrimSpace(lineNoStr))
-		if err != nil {
-			continue
 		}
 		hits = append(hits, logquery.SearchHit{
 			Server:   server,

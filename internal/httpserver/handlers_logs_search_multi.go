@@ -48,6 +48,10 @@ type logsSearchMultiReq struct {
 	Username       string             `json:"username"`
 	Password       string             `json:"password"`
 	MaxConcurrency int                `json:"max_concurrency"`
+	// v0.13：忽略大小写搜索。所有 grep 命令统一加 -i。
+	//   - true  → 大小写不敏感（适合大小写不固定的英文关键词、混合日志）
+	//   - false（默认）→ 大小写敏感，保持原行为
+	IgnoreCase bool `json:"ignore_case"`
 	// v0.5-G #8：搜索范围三种模式（互斥，优先级 selected > glob > latest）
 	//   - "latest"（默认）：先 ListCommand 取最近 N 个文件，再搜索
 	//   - "selected"：直接用 SelectedFiles 作为文件名列表，跳过 ListCommand
@@ -163,8 +167,8 @@ func (s *Server) handleLogsSearchMulti(w http.ResponseWriter, r *http.Request) {
 	if contextN < 0 {
 		contextN = 0
 	}
-	if contextN > 50 {
-		contextN = 50
+	if contextN > 500 {
+		contextN = 500
 	}
 	maxConc := req.MaxConcurrency
 	if maxConc <= 0 {
@@ -272,13 +276,22 @@ func (s *Server) handleLogsSearchMulti(w http.ResponseWriter, r *http.Request) {
 			} else {
 				useFiles = req.SelectedFiles
 			}
-			res := s.runOneServerSearchWithScope(totalCtx, srv, ld, scope, filesN, useFiles, req.FilePatterns, kw, c.Username, c.Password, tw, contextN)
+			res := s.runOneServerSearchWithScope(totalCtx, srv, ld, scope, filesN, useFiles, req.FilePatterns, kw, c.Username, c.Password, tw, contextN, req.IgnoreCase)
 			results[idx] = res
 			// 审计
 			if res.OK {
-				s.audit.Write("logs.search.multi",
-					"system", req.System, "server", target.Server, "dir", ld.Path,
-					"query", req.Query, "result", "ok", "hits", res.HitsN, "ms", res.Ms)
+				// REVIEW-rc5 #6：检测 context_enrich_failed 标记（hit 主流程成功但上下文补全失败）
+				if strings.HasPrefix(res.Error, "context_enrich_failed:") {
+					s.audit.Write("logs.search.multi",
+						"system", req.System, "server", target.Server, "dir", ld.Path,
+						"query", req.Query, "result", "context_fail",
+						"err", strings.TrimPrefix(res.Error, "context_enrich_failed: "),
+						"hits", res.HitsN, "context", contextN, "ms", res.Ms)
+				} else {
+					s.audit.Write("logs.search.multi",
+						"system", req.System, "server", target.Server, "dir", ld.Path,
+						"query", req.Query, "result", "ok", "hits", res.HitsN, "ms", res.Ms)
+				}
 			} else {
 				s.audit.Write("logs.search.multi",
 					"system", req.System, "server", target.Server, "dir", ld.Path,
@@ -329,7 +342,7 @@ func (s *Server) runOneServerSearchWithPatterns(
 	kw []logquery.SearchKeyword,
 	username, password string,
 ) logsSearchMultiServerResult {
-	return s.runOneServerSearchWithScope(ctx, srv, ld, "latest", filesN, nil, patterns, kw, username, password, logquery.SearchTimeWindow{}, 0)
+	return s.runOneServerSearchWithScope(ctx, srv, ld, "latest", filesN, nil, patterns, kw, username, password, logquery.SearchTimeWindow{}, 0, false)
 }
 
 // runOneServerSearchWithScope v0.5-G #8：搜索范围三种模式（互斥）
@@ -342,6 +355,7 @@ func (s *Server) runOneServerSearchWithPatterns(
 // 也不能是 . / ..，否则直接返回错误。
 //
 // tw 为时间窗口过滤（仅 latest/glob 模式有效）；contextN 为上下文行数（0 表示无上下文）。
+// ignoreCase v0.13：忽略大小写搜索（透传到 SearchCommand，所有 grep 加 -i）。
 func (s *Server) runOneServerSearchWithScope(
 	ctx context.Context,
 	srv *config.ServerConfig,
@@ -354,6 +368,7 @@ func (s *Server) runOneServerSearchWithScope(
 	username, password string,
 	tw logquery.SearchTimeWindow,
 	contextN int,
+	ignoreCase bool,
 ) logsSearchMultiServerResult {
 	start := time.Now()
 	res := logsSearchMultiServerResult{
@@ -455,7 +470,7 @@ func (s *Server) runOneServerSearchWithScope(
 	}
 
 	// 搜索
-	searchCmd, err := logquery.SearchCommand(ld.Path, fileNames, kw, cur.Search.MaxMatches, cur.Search.TimeoutSeconds, ld.Encoding)
+	searchCmd, err := logquery.SearchCommand(ld.Path, fileNames, kw, cur.Search.MaxMatches, cur.Search.TimeoutSeconds, ld.Encoding, ignoreCase)
 	if err != nil {
 		res.OK = false
 		res.Error = err.Error()
@@ -491,10 +506,22 @@ func (s *Server) runOneServerSearchWithScope(
 		hits = logquery.FilterHitsByTimeWindow(hits, files, tw)
 	}
 	// 上下文行：contextN > 0 时为每个匹配行获取前后 N 行
+	// REVIEW-rc5 #6：失败不再静默回退，把 err 信息塞到 result.Error（前端可见），
+	// audit 由 caller 负责（需要 req/target 闭包，这里拿不到）。
 	if contextN > 0 && len(hits) > 0 {
-		if enriched, err := s.enrichHitsWithContext(ctx, cli, ld, srv.Name, files, hits, contextN); err == nil {
-			hits = enriched
+		enriched, ctxErr := s.enrichHitsWithContext(ctx, cli, ld, srv.Name, files, hits, contextN)
+		if ctxErr != nil {
+			res.OK = true // 不阻断主流程，hits 仍返回
+			res.Hits = hits
+			res.Files = fileNames
+			res.HitsN = len(hits)
+			res.Ms = time.Since(start).Milliseconds()
+			res.fileList = files
+			// 在 err 字段里塞一个标记（前端可读：hits 没上下文，但 search 主流程成功）
+			res.Error = "context_enrich_failed: " + ctxErr.Error()
+			return res
 		}
+		hits = enriched
 	}
 	res.OK = true
 	res.Hits = hits
@@ -506,12 +533,16 @@ func (s *Server) runOneServerSearchWithScope(
 }
 
 // filterSelectedFilesForTarget v0.6 P1-9：从 per-target 列表里筛选出匹配
-// (server, dir) 的 file 列表（不区分大小写；file 名做 trim 兜底）。
+// (server, dir) 的 file 列表（v0.13：不区分大小写匹配 server/dir，跟 Windows
+// 文件系统语义一致；file 名做 trim 兜底）。
 // 调用方需先判断 hasPerTarget（命中）再决定是否使用。
 func filterSelectedFilesForTarget(items []logsSelectedFile, target logsSearchTarget) []string {
 	out := make([]string, 0, len(items))
 	for _, it := range items {
-		if it.Server == target.Server && it.Dir == target.Dir {
+		// REVIEW-rc5 #2：原实现用 == 比较 server/dir，前端大小写不一致时会
+		// 静默 fallback 到 latest 模式，用户看不到自己选的文件。改成 EqualFold
+		// 对齐 Windows 文件系统语义（用户/前端不该被强制记配置的大小写）。
+		if strings.EqualFold(it.Server, target.Server) && strings.EqualFold(it.Dir, target.Dir) {
 			f := strings.TrimSpace(it.File)
 			if f != "" {
 				out = append(out, f)

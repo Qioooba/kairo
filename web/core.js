@@ -11,6 +11,29 @@
 (function () {
   'use strict';
 
+  // -------- Polyfills for older browsers (Chrome <86 / Win7) --------
+  if (!Element.prototype.replaceChildren) {
+    Element.prototype.replaceChildren = function() {
+      while (this.firstChild) {
+        this.removeChild(this.firstChild);
+      }
+      for (var i = 0; i < arguments.length; i++) {
+        var node = arguments[i];
+        if (typeof node === 'string') {
+          this.appendChild(document.createTextNode(node));
+        } else if (node instanceof Node) {
+          this.appendChild(node);
+        }
+      }
+    };
+  }
+  if (!Document.prototype.replaceChildren) {
+    Document.prototype.replaceChildren = Element.prototype.replaceChildren;
+  }
+  if (!DocumentFragment.prototype.replaceChildren) {
+    DocumentFragment.prototype.replaceChildren = Element.prototype.replaceChildren;
+  }
+
   if (!window.Kairo) window.Kairo = {};
   if (!window.Kairo.core) window.Kairo.core = {};
   const core = window.Kairo.core;
@@ -74,12 +97,16 @@
   function toast(msg, type) {
     const t = $('#toast');
     t.textContent = msg;
-    t.className = 'toast show' + (type ? ' ' + type : '');
+    // 修复 v0.12 UI-4：当下视图是 config（有 .cfg-save-footer-bar 底部按钮组）时，
+    // 给 toast 加 .has-sticky-footer 让 CSS bottom:84px 抬到底栏上方，
+    // 配合 z-index:60 完全避免被底栏遮挡。
+    const sticky = !!document.querySelector('.view.has-sticky-footer');
+    t.className = 'toast show' + (type ? ' ' + type : '') + (sticky ? ' has-sticky-footer' : '');
     clearTimeout(toast._timer);
     // P1-BUG-8 修复：错误类 toast（type='err'/'warn'）延长到 6000ms，
     // 让用户有足够时间看清错误原因。普通 ok/idle 仍走 2400ms（不打扰）。
     const duration = (type === 'err' || type === 'warn') ? 6000 : 2400;
-    toast._timer = setTimeout(() => { t.className = 'toast'; }, duration);
+    toast._timer = setTimeout(() => { t.className = 'toast' + (sticky ? ' has-sticky-footer' : ''); }, duration);
   }
   core.toast = toast;
 
@@ -202,14 +229,19 @@
     if (opts.actions && opts.actions.length) {
       const actionsEl = el('div', { class: 'kairo-notify-actions' });
       opts.actions.forEach(a => {
-        actionsEl.appendChild(el('button', {
+        const btn = el('button', {
           class: 'btn btn-sm',
-          text: a.label,
           onclick: (e) => {
             e.preventDefault();
             try { a.callback && a.callback(); } catch (err) { console.warn('notify action err', err); }
           }
-        }));
+        });
+        if (a.html) {
+          btn.innerHTML = a.html;
+        } else {
+          btn.textContent = a.label;
+        }
+        actionsEl.appendChild(btn);
       });
       card.appendChild(actionsEl);
     }
@@ -393,9 +425,20 @@
     const tbl = el('table', { class: 'table' });
     const tbody = el('tbody');
     rows.forEach(r => {
+      const td = el('td');
+      const val = r[1];
+      if (val == null || val === '') {
+        td.textContent = '-';
+      } else if (typeof val === 'object' && val.nodeType) {
+        td.appendChild(val);
+      } else if (typeof val === 'object' && val.html) {
+        td.innerHTML = val.html;
+      } else {
+        td.textContent = String(val);
+      }
       tbody.appendChild(el('tr', null, [
         el('td', { style: 'width: 220px; color: var(--text-dim)', text: r[0] }),
-        el('td', { text: r[1] == null || r[1] === '' ? '-' : r[1] })
+        td
       ]));
     });
     tbl.appendChild(tbody);
@@ -791,7 +834,12 @@
         // 删除
         const rmBtn = document.createElement('button');
         rmBtn.className = 'btn btn-sm btn-danger tail-highlight-rm';
-        rmBtn.textContent = '✕';
+        rmBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L6 18M6 6l12 12"/></svg>';
+        rmBtn.style.display = 'inline-flex';
+        rmBtn.style.alignItems = 'center';
+        rmBtn.style.justifyContent = 'center';
+        rmBtn.style.width = '24px';
+        rmBtn.style.padding = '0';
         rmBtn.title = '删除该规则';
         rmBtn.addEventListener('click', () => {
           list.splice(idx, 1);

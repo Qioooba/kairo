@@ -21,6 +21,22 @@
   const { el, $, toast, validate, newSystem, newServer, newLogDir, kvTable, confirmDialog } = Kairo.core;
   const { api } = Kairo.api;
 
+  const ICONS = {
+    smClipboard: 'M9 2h6a2 2 0 012 2v16a2 2 0 01-2 2H9a2 2 0 01-2-2V4a2 2 0 012-2zm0 2v2h6V4zM8 12h8M8 16h8M8 8h4',
+    smFolder:    'M2 5a2 2 0 012-2h5l2 2h9a2 2 0 012 2v11a2 2 0 01-2 2H4a2 2 0 01-2-2V5z',
+    smSave:      'M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2zM17 21v-7H7v7M7 3v4h10V3',
+    smWarn:      'M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0zM12 9v4M12 17h.01',
+    // 通用文件图标 —— inferIconFromPath 给所有打开器返回的 svg name 都是 smFile，
+    // 然后用 color 区分。path d 跟 websphere.js / about.js 保持一致。
+    smFile:      'M6 2h6l4 4v14a2 2 0 01-2 2H6a2 2 0 01-2-2V4a2 2 0 012-2zm6 0v4h4',
+  };
+  function svgIcon(name, size) {
+    const d = ICONS[name];
+    if (!d) return '';
+    const s = size || 16;
+    return '<svg xmlns="http://www.w3.org/2000/svg" width="' + s + '" height="' + s + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="' + d + '"/></svg>';
+  }
+
   // FE-004：doExport（blob 下载）/ doImportUpload（text/yaml body）必须用裸 fetch
   // —— api() 只支持 JSON body 且只返回 JSON，无法承载 blob 或 yaml 文本。
   // 这里统一处理 401：触发登录引导，避免 token 鉴权场景下静默失败。
@@ -47,10 +63,14 @@
       openersLoaded: false,
       retention: { retention_days: 7, max_count: 1000 },
       retentionLoaded: false,
+      // v1.0：自启开关 — {enabled, actual, platform, supported, keyName, error}
+      // actual 是注册表实际值，可能跟 enabled 不一致（用户手动 regedit 清了 / 拷贝到 macOS）
+      autostart: { enabled: false, actual: false, platform: '', supported: false, keyName: '', error: '' },
+      autostartLoaded: false,
       // 总 dirty = 任一节脏（同步给保存按钮 + 离开确认）
       dirty: false,
       // 分节 dirty：doSave 只 PUT 真正脏的节；单行保存按钮只清自己那节
-      sectionsDirty: { systems: false, openers: false, retention: false },
+      sectionsDirty: { systems: false, openers: false, retention: false, autostart: false },
       freeBrowserEnabled: true,
       loaded: false
     };
@@ -69,7 +89,7 @@
 
   // 计算总 dirty + 同步给 Kairo.state.unsavedConfig + 按钮 disabled
   const recomputeDirty = () => {
-    const any = state.sectionsDirty.systems || state.sectionsDirty.openers || state.sectionsDirty.retention;
+    const any = state.sectionsDirty.systems || state.sectionsDirty.openers || state.sectionsDirty.retention || state.sectionsDirty.autostart;
     state.dirty = any;
     Kairo.state.unsavedConfig = any;
     syncSaveBtns();
@@ -89,7 +109,7 @@
     const bannerKey = 'free-file-browser-warning';
     const banner = el('div', { class: 'warn-banner', style: 'display:none' });
     banner.appendChild(el('div', { class: 'warn-banner-text' }, [
-      el('strong', { text: '⚠ 文件浏览器任意路径下载已开启' }),
+      el('strong', { style: 'display:inline-flex; align-items:center; gap:6px;', unsafeHtml: svgIcon('smWarn', 16) + ' 文件浏览器任意路径下载已开启' }),
       el('div', { class: 'warn-banner-sub', text: '生产分发建议 config.yaml 设 app.enable_free_file_browser = false，或在 app.free_file_roots 里加白名单路径。' })
     ]));
     const closeBtn = el('button', { class: 'warn-banner-close', text: '×', title: '本会话不再显示', onclick: () => {
@@ -149,6 +169,28 @@
     btnSaveFooter.disabled = true;
     const footerBar = el('div', { class: 'btn-row cfg-save-footer-bar', style: 'justify-content: flex-end; margin-top: 16px; padding-top: 12px; border-top: 1px dashed var(--line);' }, [btnResetFooter, btnSaveFooter]);
 
+    // v0.11：把 op.icon (object {type,name,color}) 序列化成 string 发给后端。
+    // 原因：前端 state.openers[i].icon 是个 {type, name, color} 对象（用于动态渲染不同颜色 svg），
+    // 但后端 ExternalOpener.Icon 字段是 string。直接 PUT 整个 openers 数组会 400：
+    //   "json: cannot unmarshal object into Go struct field ExternalOpener.openers.icon of type string"
+    // 修法：把 object 转成 string 字段（取 name 即可，后端 Icon 字段无业务逻辑只 storage）；
+    // 前端渲染时（renderOpeners）已有 typeof op.icon === 'string' 的兼容逻辑，
+    // 拿回来后会自动用 inferIconFromPath 重新推断回 object。
+    function serializeOpenersForSave(openers) {
+      return (openers || []).map(o => {
+        let iconStr = '';
+        if (o.icon == null) {
+          iconStr = '';
+        } else if (typeof o.icon === 'string') {
+          iconStr = o.icon;
+        } else if (typeof o.icon === 'object') {
+          // 渲染用 object：{type:'svg', name:'smFile', color:'#3b82f6'}；取 name 即可
+          iconStr = o.icon.name || '';
+        }
+        return { name: o.name, path: o.path, icon: iconStr };
+      });
+    }
+
     // ---- v0.8：外部打开器（external_openers）卡 ----
     //
     // 让用户在页面里增删常用打开器（Notepad++ / IDEA / VS Code ...），
@@ -177,6 +219,21 @@
     const retentionBody = el('div');
     retentionCard.appendChild(retentionBody);
 
+    // ---- v1.0：开机自启动卡 ----
+    //
+    // 用户勾选「开机自动启动」→ 保存按钮立即写 Windows 注册表
+    // (HKCU\Software\Microsoft\Windows\CurrentVersion\Run\Kairo)，
+    // 下次开机 Kairo 会自动启动。不勾选则删除注册表值。
+    // 兼容 Win7 / Win10 / Win11（用户级 Run 键三代行为一致）。
+    //
+    // 显示三态：✓ 已启用 / ⚠ 配置与实际不一致 / ✗ 平台不支持。
+    // 平台不支持（macOS / Linux）时勾选框 disabled + 提示文案，PUT 也会被后端 400 挡掉。
+    const startupCard = el('div', { class: 'card' });
+    startupCard.appendChild(el('h3', { text: '开机自启' }));
+    startupCard.appendChild(el('div', { class: 'card-desc', text: '勾选后下次开机 Kairo 自动启动（写入用户注册表，无需管理员权限）。' }));
+    const startupBody = el('div');
+    startupCard.appendChild(startupBody);
+
     view.appendChild(banner);
     view.appendChild(topBar);
     view.appendChild(appCard);
@@ -184,6 +241,7 @@
     view.appendChild(editorCard);
     view.appendChild(openersCard);
     view.appendChild(retentionCard);
+    view.appendChild(startupCard);
     view.appendChild(footerBar);
 
     function maybeShowBanner(info) {
@@ -349,14 +407,15 @@
       const btnSrvDown = el('button', { class: 'btn btn-sm', text: '↓', onclick: () => { if (sri < sys.servers.length - 1) { [sys.servers[sri+1], sys.servers[sri]] = [sys.servers[sri], sys.servers[sri+1]]; onEdit(); renderEditor(); } } });
       const btnSrvDup = el('button', {
         class: 'btn btn-sm',
-        text: '📋 复制服务器（含日志目录）',
+        style: 'display:inline-flex; align-items:center; gap:4px;',
         title: '复制这台服务器（含所有日志目录）到下一行。适合 app01 → app02 改名后复用。复制后会重名（自动加 -copy 后缀提示）。',
         onclick: () => {
           const copy = JSON.parse(JSON.stringify(srv));
           if (copy.name && !copy.name.endsWith('-copy')) copy.name = copy.name + '-copy';
           sys.servers.splice(sri+1, 0, copy);
           onEdit(); renderEditor();
-        }
+        },
+        unsafeHtml: svgIcon('smClipboard', 14) + ' 复制服务器（含日志目录）'
       });
       const btnSrvDel = el('button', { class: 'btn btn-sm btn-danger', text: '删除服务器', onclick: async () => { if (await confirmDialog('确认删除服务器 “' + (srv.name || '(未命名)') + '” 及其日志目录？')) { sys.servers.splice(sri, 1); onEdit(); renderEditor(); } } });
       btnSrvUp.disabled = sri === 0; btnSrvDown.disabled = sri === sys.servers.length - 1;
@@ -421,15 +480,15 @@
 
     function inferIconFromPath(path, name) {
       const s = (path + ' ' + name).toLowerCase();
-      if (s.includes('code') || s.includes('vscode') || s.includes('vs ')) return '💙';
-      if (s.includes('notepad') || s.includes('npp')) return '📋';
-      if (s.includes('idea') || s.includes('intellij')) return '🧡';
-      if (s.includes('vim') || s.includes('nvim')) return '🖤';
-      if (s.includes('sublime')) return '🟣';
-      if (s.includes('terminal') || s.includes('cmd') || s.includes('powershell') || s.includes('iterm')) return '⌨️';
-      if (s.includes('excel') || s.includes('xlsx')) return '📊';
-      if (s.includes('word') || s.includes('docx')) return '📄';
-      return '📎';
+      if (s.includes('code') || s.includes('vscode') || s.includes('vs ')) return { type: 'svg', name: 'smFile', color: '#3b82f6' };
+      if (s.includes('notepad') || s.includes('npp')) return { type: 'svg', name: 'smFile', color: '#f59e0b' };
+      if (s.includes('idea') || s.includes('intellij')) return { type: 'svg', name: 'smFile', color: '#f97316' };
+      if (s.includes('vim') || s.includes('nvim')) return { type: 'svg', name: 'smFile', color: '#374151' };
+      if (s.includes('sublime')) return { type: 'svg', name: 'smFile', color: '#8b5cf6' };
+      if (s.includes('terminal') || s.includes('cmd') || s.includes('powershell') || s.includes('iterm')) return { type: 'svg', name: 'smFile', color: '#10b981' };
+      if (s.includes('excel') || s.includes('xlsx')) return { type: 'svg', name: 'smFile', color: '#22c55e' };
+      if (s.includes('word') || s.includes('docx')) return { type: 'svg', name: 'smFile', color: '#3b82f6' };
+      return { type: 'svg', name: 'smFile', color: '#64748b' };
     }
 
     async function saveOpenerRow(op) {
@@ -449,8 +508,18 @@
         toast('保存失败：打开器名称 "' + op.name + '" 已存在', 'err');
         return;
       }
+      // v0.11：和 doSave 一致 —— 先把完全空的行（没 name 也没 path）剔掉，
+      // 否则后端校验会拒（"external_openers[i].name 不能为空"）。
+      // doSave 本来就 clean，但 saveOpenerRow 是单行保存不跑 doSave，留了空行
+      // 在 state.openers 里就会让单行保存也 400。
+      const cleaned = (state.openers || []).filter(o => (o.name && o.name.trim()) || (o.path && o.path.trim()));
+      if (cleaned.length !== state.openers.length) {
+        state.openers = cleaned;
+        renderOpeners();
+      }
       try {
-        await api('PUT', '/api/admin/openers', { openers: state.openers });
+        // v0.11：op.icon 是渲染用 object，PUT 前序列化成 string 避免后端 unmarshal 400
+        await api('PUT', '/api/admin/openers', { openers: serializeOpenersForSave(state.openers) });
         // 只清 openers 这节 dirty —— 不影响 systemsDirty / retentionDirty。
         // 旧实现直接 state.dirty = false，会把业务系统的未保存改动也清掉。
         state.sectionsDirty.openers = false;
@@ -469,15 +538,16 @@
       }
       const list = el('div');
       state.openers.forEach((op, idx) => {
-        if (!op.icon) op.icon = inferIconFromPath(op.path || '', op.name || '');
-        const iconSpan = el('span', { style: 'font-size:20px; width:28px; text-align:center; flex-shrink:0; cursor:default;', text: op.icon, title: '图标根据路径自动推断' });
+        if (!op.icon || typeof op.icon === 'string') op.icon = inferIconFromPath(op.path || '', op.name || '');
+        const iconSvg = svgIcon(op.icon.name, 20).replace('stroke="currentColor"', 'stroke="' + op.icon.color + '"');
+        const iconSpan = el('span', { style: 'width:28px; height:28px; text-align:center; flex-shrink:0; cursor:default; display:inline-flex; align-items:center; justify-content:center;', unsafeHtml: iconSvg, title: '图标根据路径自动推断' });
 
         const row = el('div', { class: 'opener-row', style: 'display:flex; gap:8px; margin-bottom:8px; align-items:center;' });
         const nameInp = el('input', { type: 'text', value: op.name || '', placeholder: '名称（如 Notepad++）', style: 'flex:1;' });
 
         const pathWrap = el('div', { style: 'flex:2; display:flex; gap:4px; position:relative;' });
         const pathInp = el('input', { type: 'text', value: op.path || '', placeholder: '可执行文件路径（如 C:\\Windows\\notepad.exe 或 /usr/bin/code）', style: 'flex:1;' });
-        const btnBrowse = el('button', { class: 'btn btn-sm', text: '📂', title: '选择文件', type: 'button', style: 'flex-shrink:0;' });
+        const btnBrowse = el('button', { class: 'btn btn-sm', title: '选择文件', type: 'button', style: 'flex-shrink:0; display:inline-flex; align-items:center; gap:0; width:32px; justify-content:center; padding-left:0; padding-right:0;', unsafeHtml: svgIcon('smFolder', 14) });
         btnBrowse.addEventListener('click', async () => {
           try {
             const r = await api('POST', '/api/choose-file');
@@ -492,7 +562,7 @@
         pathWrap.appendChild(pathInp);
         pathWrap.appendChild(btnBrowse);
 
-        const btnSave = el('button', { class: 'btn btn-sm', text: '💾 保存', type: 'button', onclick: () => saveOpenerRow(op) });
+        const btnSave = el('button', { class: 'btn btn-sm', type: 'button', style: 'display:inline-flex; align-items:center; gap:4px;', onclick: () => saveOpenerRow(op), unsafeHtml: svgIcon('smSave', 14) + ' 保存' });
         const btnDel = el('button', { class: 'btn btn-sm btn-danger', text: '删除', type: 'button', onclick: async () => {
           if (await confirmDialog('确认删除打开器 "' + (op.name || '(未命名)') + '"？')) {
             state.openers.splice(idx, 1);
@@ -503,7 +573,8 @@
 
         function updateIcon() {
           op.icon = inferIconFromPath(op.path || '', op.name || '');
-          iconSpan.textContent = op.icon;
+          const iconSvg = svgIcon(op.icon.name, 20).replace('stroke="currentColor"', 'stroke="' + op.icon.color + '"');
+          iconSpan.innerHTML = iconSvg;
         }
 
         nameInp.addEventListener('input', () => { op.name = nameInp.value; markDirty('openers'); updateIcon(); });
@@ -554,6 +625,111 @@
       retentionBody.appendChild(el('div', { class: 'card-desc', style: 'margin-top:8px;', text: '提示：系统启动时自动清理一次；每次下载完成后也会触发检查。' }));
     }
 
+    // renderAutoStart v1.0：渲染「开机自启」卡的 UI。
+    //
+    // 三态展示：
+    //   - enabled === actual === true            → 绿色「✓ 已启用」
+    //   - enabled === actual === false           → 灰色「未启用」
+    //   - enabled !== actual                     → 黄色「⚠ 配置与实际不一致」+ 同步按钮
+    //   - supported === false（macOS / Linux）  → 灰，勾选框 disabled，文案「该平台不支持」
+    //
+    // 勾选后走 markDirty('autostart')，由顶部 / 底部保存按钮统一 PUT。
+    function renderAutoStart() {
+      startupBody.innerHTML = '';
+      const a = state.autostart;
+
+      // 状态徽章：根据 enabled / actual / supported 计算
+      let badge, badgeColor;
+      if (!a.supported) {
+        badge = '✗ 当前平台不支持';
+        badgeColor = '#9ca3af';
+      } else if (a.enabled && a.actual) {
+        badge = '✓ 已启用';
+        badgeColor = '#16a34a';
+      } else if (!a.enabled && !a.actual) {
+        badge = '未启用';
+        badgeColor = '#9ca3af';
+      } else {
+        badge = '⚠ 配置与实际不一致';
+        badgeColor = '#f59e0b';
+      }
+      const badgeEl = el('span', {
+        style: 'display:inline-flex; align-items:center; padding:2px 10px; border-radius:10px; font-size:12px; color:#fff; background:' + badgeColor + ';',
+        text: badge
+      });
+
+      // 勾选框 + 标签
+      const checkWrap = el('label', { style: 'display:flex; align-items:center; gap:8px; cursor:' + (a.supported ? 'pointer' : 'not-allowed') + ';' });
+      const check = el('input', { type: 'checkbox' });
+      check.checked = !!a.enabled;
+      check.disabled = !a.supported;
+      check.style.cursor = a.supported ? 'pointer' : 'not-allowed';
+      check.addEventListener('change', () => {
+        state.autostart.enabled = check.checked;
+        markDirty('autostart');
+        // 勾选变化时刷新徽章（不重渲整个卡，避免输入焦点丢失）
+        updateBadge();
+      });
+      checkWrap.appendChild(check);
+      checkWrap.appendChild(el('span', { text: '开机自动启动 Kairo', style: 'font-weight:500;' }));
+
+      const badgeWrap = el('div', { style: 'display:flex; align-items:center; gap:8px;' }, [badgeEl]);
+      // 「配置与实际不一致」时多放一个"立即同步"按钮（不重渲）
+      const btnSync = el('button', {
+        class: 'btn btn-sm',
+        text: '立即同步',
+        title: '按当前 config 偏好重新写注册表',
+        style: 'display:none;',
+        onclick: async () => {
+          btnSync.disabled = true;
+          try {
+            await api('PUT', '/api/admin/autostart', { enabled: a.enabled });
+            const fresh = await api('GET', '/api/admin/autostart');
+            state.autostart = { ...state.autostart, ...fresh };
+            renderAutoStart();
+            toast('同步成功：注册表已按 ' + (a.enabled ? '启用' : '禁用') + ' 更新', 'ok');
+          } catch (e) {
+            toast('同步失败：' + e.message, 'err');
+          } finally {
+            btnSync.disabled = false;
+          }
+        }
+      });
+
+      function updateBadge() {
+        const a2 = state.autostart;
+        let b, c;
+        if (!a2.supported) { b = '✗ 当前平台不支持'; c = '#9ca3af'; }
+        else if (a2.enabled && a2.actual) { b = '✓ 已启用'; c = '#16a34a'; }
+        else if (!a2.enabled && !a2.actual) { b = '未启用'; c = '#9ca3af'; }
+        else { b = '⚠ 配置与实际不一致'; c = '#f59e0b'; }
+        badgeEl.textContent = b;
+        badgeEl.style.background = c;
+        // 不一致时显示「立即同步」按钮
+        btnSync.style.display = (a2.enabled !== a2.actual) ? '' : 'none';
+      }
+
+      const top = el('div', { style: 'display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;' }, [
+        checkWrap,
+        el('div', { style: 'display:flex; align-items:center; gap:8px;' }, [badgeEl, btnSync])
+      ]);
+      startupBody.appendChild(top);
+
+      // 提示文案
+      const hint = el('div', { class: 'card-desc', style: 'margin-top:10px; font-size:12px;' });
+      if (!a.supported) {
+        hint.appendChild(el('span', { text: '当前平台（' + (a.platform || 'unknown') + '）暂不支持开机自启；此设置仅在 Windows 上生效。' }));
+      } else if (a.error) {
+        // IsAutoStartEnabled 读注册表失败（罕见：注册表被锁 / 权限问题）
+        hint.appendChild(el('span', { style: 'color:var(--error, #ef4444);', text: '读取注册表状态失败：' + a.error + '。勾选「开机自动启动」保存后可重试。' }));
+      } else {
+        const platformLabel = a.platform === 'windows' ? 'Windows' : a.platform;
+        const works = a.platform === 'windows' ? '（Win7 / Win10 / Win11 通用，无需管理员权限）' : '';
+        hint.appendChild(el('span', { text: '注册表项：' + (a.keyName || '—') + '，当前平台 ' + platformLabel + ' ' + works }));
+      }
+      startupBody.appendChild(hint);
+    }
+
     // ----- 保存 / 重置 -----
     // 【v0.x 修复 #B4】doSave 只 PUT 真正脏的节（sectionsDirty）。
     // 旧实现无条件 PUT 三段，未改的段也写盘 + 多一条 audit 日志。
@@ -591,7 +767,8 @@
               state.openers = cleaned;
               renderOpeners();
             }
-            await api('PUT', '/api/admin/openers', { openers: cleaned });
+            // v0.11：同上，icon object → string 后再 PUT
+            await api('PUT', '/api/admin/openers', { openers: serializeOpenersForSave(cleaned) });
           }
         });
       }
@@ -603,6 +780,24 @@
               download_retention_days: state.retention.days,
               download_max_count: state.retention.count,
             });
+          }
+        });
+      }
+      if (state.sectionsDirty.autostart) {
+        tasks.push({
+          name: 'autostart',
+          run: async () => {
+            // 自启走的不是 config 树，是独立端点。
+            // PUT 失败会抛异常被外层 catch，config.yaml 不会被改（因为 auto_start 字段就是从 config 读的）——
+            // 实际不严谨：若 PUT 成功但 config 落盘失败，main 下次启动会按旧 config 重新同步，反而能自愈。
+            const r = await api('PUT', '/api/admin/autostart', { enabled: state.autostart.enabled });
+            // 回写 actual（PUT 后端会回填）
+            if (r && typeof r.actual === 'boolean') {
+              state.autostart.actual = r.actual;
+            }
+            if (r && r.key_name) {
+              state.autostart.keyName = r.key_name;
+            }
           }
         });
       }
@@ -644,6 +839,14 @@
           renderRetention();
         } catch (e) { /* 回填失败不影响 */ }
       }
+      if (state.sectionsDirty.autostart) {
+        // 自启是独立端点，回填直接拉一次 GET 拿到最新的 actual / keyName
+        try {
+          const aInfo = await api('GET', '/api/admin/autostart');
+          state.autostart = { ...state.autostart, ...aInfo };
+          renderAutoStart();
+        } catch (e) { /* 回填失败不影响 */ }
+      }
       state.loaded = true;
 
       // 错误汇总：区分"部分失败"和"全部成功"
@@ -681,13 +884,21 @@
             state.retentionLoaded = true;
             renderRetention();
           }).catch(() => { state.retentionLoaded = true; renderRetention(); });
+          // 同时重拉自启状态
+          api('GET', '/api/admin/autostart').then(aInfo => {
+            state.autostart = { ...state.autostart, ...aInfo };
+            state.autostartLoaded = true;
+            renderAutoStart();
+          }).catch(() => { state.autostartLoaded = true; renderAutoStart(); });
           // 重置后清所有 dirty（含分节 dirty）
           state.sectionsDirty.systems = false;
           state.sectionsDirty.openers = false;
           state.sectionsDirty.retention = false;
+          state.sectionsDirty.autostart = false;
           state.loaded = true;
           recomputeDirty();
           renderApp(); renderSearch(); renderEditor(); renderOpeners(); renderRetention();
+          renderAutoStart();
           maybeShowBanner(info);
         }).catch(e => toast('加载失败：' + e.message, 'err'));
       }
@@ -789,10 +1000,17 @@
           state.retention.count = retInfo.effective.max_count;
           state.retentionLoaded = true;
         } catch (_) { state.retentionLoaded = true; /* 使用默认值 */ }
+        // 导入后重新拉自启状态
+        try {
+          const aInfo = await api('GET', '/api/admin/autostart');
+          state.autostart = { ...state.autostart, ...aInfo };
+          state.autostartLoaded = true;
+        } catch (_) { state.autostartLoaded = true; /* 保持默认值 */ }
         // 重置所有 dirty（含分节 dirty）
         state.sectionsDirty.systems = false;
         state.sectionsDirty.openers = false;
         state.sectionsDirty.retention = false;
+        state.sectionsDirty.autostart = false;
         state.loaded = true;
         recomputeDirty();
         renderApp();
@@ -800,6 +1018,7 @@
         renderEditor();
         renderOpeners();
         renderRetention();
+        renderAutoStart();
         maybeShowBanner(info);
         toast('配置导入成功！旧配置已自动备份。', 'ok');
       } catch (e) {
@@ -848,11 +1067,34 @@
         if (cb) cb();
       });
     }
+    // ensureAutoStartLoaded v1.0：自启状态加载（同 retention 模式：首次 fetch + 切回不重 fetch）。
+    function ensureAutoStartLoaded(cb) {
+      if (state.autostartLoaded) {
+        renderAutoStart();
+        if (cb) cb();
+        return;
+      }
+      api('GET', '/api/admin/autostart').then(aInfo => {
+        state.autostart = { ...state.autostart, ...aInfo };
+        state.autostartLoaded = true;
+        renderAutoStart();
+        if (cb) cb();
+      }).catch(() => {
+        // GET 失败：保持默认空对象 + supported=false，UI 显示"不支持"提示
+        state.autostart.supported = false;
+        state.autostart.error = '无法读取自启状态';
+        state.autostartLoaded = true;
+        renderAutoStart();
+        if (cb) cb();
+      });
+    }
     if (state.loaded && state.systems) {
       // 已加载过：直接 render，不再 fetch（除非用户点放弃改动）
       renderApp(); renderSearch(); renderEditor();
       ensureOpenersLoaded(() => {
-        ensureRetentionLoaded(() => maybeShowBanner({ app: state.app }));
+        ensureRetentionLoaded(() => {
+          ensureAutoStartLoaded(() => maybeShowBanner({ app: state.app }));
+        });
       });
     } else {
       api('GET', '/api/admin/servers').then(info => {
@@ -861,7 +1103,9 @@
         state.loaded = true;
         renderApp(); renderSearch(); renderEditor();
         ensureOpenersLoaded(() => {
-          ensureRetentionLoaded(() => maybeShowBanner(info));
+          ensureRetentionLoaded(() => {
+            ensureAutoStartLoaded(() => maybeShowBanner(info));
+          });
         });
       }).catch(e => toast('加载失败：' + e.message, 'err'));
     }

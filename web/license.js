@@ -14,6 +14,17 @@
   if (window.Kairo.license) return;
   const lic = window.Kairo.license = {};
 
+  const ICONS = {
+    smKey:   'M21 2l-2 2m-7.61 7.61a5.5 5.5 0 11-7.778 7.778 5.5 5.5 0 017.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4',
+    smCheck: 'M20 6L9 17l-5-5',
+  };
+  function svgIcon(name, size) {
+    const d = ICONS[name];
+    if (!d) return '';
+    const s = size || 24;
+    return '<svg xmlns="http://www.w3.org/2000/svg" width="' + s + '" height="' + s + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="' + d + '"/></svg>';
+  }
+
   let _overlay = null;
   let _submitting = false;
 
@@ -32,7 +43,7 @@
     _overlay.style.display = 'none';
     _overlay.innerHTML =
       '<div class="auth-card">' +
-        '<div class="auth-icon">🔑</div>' +
+        '<div class="auth-icon">' + svgIcon('smKey', 48) + '</div>' +
         '<h2 class="auth-title" id="lic-title">首次使用需要激活</h2>' +
         '<p class="auth-subtitle" id="lic-subtitle">请向管理员索取激活码，输入后即可使用本工具箱。<br/>激活只需一次，后续启动自动通过。</p>' +
         '<div class="auth-error" id="lic-err" style="display:none;"></div>' +
@@ -91,9 +102,12 @@
         let data = {};
         try { data = await r.json(); } catch (e) {}
         if (r.ok && data.ok) {
-          submit.textContent = '✓ 已激活';
+          submit.innerHTML = svgIcon('smCheck', 16) + ' 已激活';
+          submit.style.display = 'inline-flex';
+          submit.style.alignItems = 'center';
+          submit.style.gap = '6px';
           submit.classList.add('btn-success');
-          // 短暂延迟让用户看到 ✓, 然后 reload
+          // 短暂延迟让用户看到成功状态, 然后 reload
           setTimeout(function () { location.reload(); }, 600);
         } else {
           showErr((data && data.error) || ('激活失败（HTTP ' + r.status + '）'));

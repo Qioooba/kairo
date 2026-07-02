@@ -22,6 +22,7 @@ import (
 	"kairo/internal/config"
 	"kairo/internal/dlmanager"
 	"kairo/internal/downloads"
+	"kairo/internal/license"
 	"kairo/internal/sshshell"
 	"kairo/internal/tailmgr"
 )
@@ -52,13 +53,14 @@ const (
 
 // Version / BuildTime 可在构建时通过 ldflags 注入，例如：
 //
-//	go build -ldflags "-X 'kairo/internal/httpserver.Version=v0.9.0' \
-//	  -X 'kairo/internal/httpserver.BuildTime=2026-06-27T00:00:00Z'" .
+//	go build -ldflags "-X 'kairo/internal/httpserver.Version=v0.11-rc1' \
+//	  -X 'kairo/internal/httpserver.BuildTime=2026-07-01T00:00:00Z'" .
 //
 // 未注入时使用下面的默认值；前端 about 页通过 GET /api/config 读取并回填显示，
 // 读取失败则回退到前端硬编码版本（FE-006）。
+// 当前值与 HEAD `feat: 全量代码合并 v0.11-rc1` 对齐，统一改版本号看 web/pages/about.js:VERSION。
 var (
-	Version   = "v0.9.0-dev"
+	Version   = "v0.11-rc1"
 	BuildTime = "unknown"
 )
 
@@ -107,6 +109,8 @@ type Server struct {
 	tails     *tailmgr.Manager
 	downloads *dlmanager.Manager
 	shells    *sshshell.Manager
+
+	skipLicenseCheck bool // 测试专用: 跳过 license 网关
 
 	cleanupMu sync.Mutex // 防止并发执行清理任务
 }
@@ -205,6 +209,19 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		ctx := context.WithValue(r.Context(), authUserKey, &authUser{Name: token.Name, Token: token.Token, Role: token.Role})
 		r = r.WithContext(ctx)
+	}
+
+	// License 网关: 未激活时阻断所有 /api/* 功能端点。
+	// 豁免: /api/license/* (激活流程本身) 和 /api/auth/* (已在上方处理)。
+	// 静态资源 (/, /static/, /preview.html) 不受影响 → 前端能加载、弹激活框。
+	if !s.skipLicenseCheck && isAPIRequest(path) && !strings.HasPrefix(path, "/api/license/") {
+		if err := license.Check(); err != nil {
+			writeJSON(w, http.StatusForbidden, map[string]any{
+				"error":             "未激活，请先输入激活码",
+				"license_required":  true,
+			})
+			return
+		}
 	}
 
 	switch {
@@ -326,6 +343,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.handleAdminDownloadRetention(w, r)
+	case path == "/api/admin/autostart":
+		// v1.0：自启开关。GET 不限角色（状态不敏感），PUT 限 admin。
+		// 鉴权放在 handler 里（GET/PUT 分支各自判断），保持和现有 admin 路由风格一致。
+		s.handleAdminAutoStart(w, r)
 	case strings.HasPrefix(path, "/api/files/download/"):
 		s.handleFilesDownloadEventsOrCancel(w, r)
 	// 注意：/api/logs/download-latest 必须在 /api/logs/download/ 之前匹配（精确匹配优先）
