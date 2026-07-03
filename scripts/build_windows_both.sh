@@ -31,7 +31,15 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-VER="${1:-v0.1.0}"
+if [[ -n "${1:-}" ]]; then
+  VER="${1}"
+elif [[ -f VERSION ]]; then
+  VER="$(tr -d '[:space:]' < VERSION)"
+else
+  echo "错误：未指定版本号，且未找到 VERSION 文件" >&2
+  echo "用法: $0 [版本号]  （或根目录放 VERSION 文件）" >&2
+  exit 1
+fi
 
 if ! command -v go >/dev/null 2>&1; then
   echo "错误：未找到 go 命令，请先安装 Go 并加入 PATH" >&2

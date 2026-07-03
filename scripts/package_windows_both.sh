@@ -21,7 +21,16 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-VER="${1:?用法: $0 <版本号>，例如: $0 v0.1.0}"
+if [[ -n "${1:-}" ]]; then
+  VER="${1}"
+elif [[ -f VERSION ]]; then
+  VER="$(tr -d '[:space:]' < VERSION)"
+else
+  echo "错误：未指定版本号，且未找到 VERSION 文件" >&2
+  echo "用法: $0 [版本号]  （或根目录放 VERSION 文件）" >&2
+  echo "例如: $0 v0.1.0" >&2
+  exit 1
+fi
 
 WIN10_DIR="dist/kairo-${VER}"
 WIN7_DIR="dist/kairo-${VER}-win7"

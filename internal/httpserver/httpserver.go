@@ -9,11 +9,13 @@ package httpserver
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"net"
 	"net/http"
 	urlpkg "net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -25,6 +27,7 @@ import (
 	"kairo/internal/license"
 	"kairo/internal/sshshell"
 	"kairo/internal/tailmgr"
+	"kairo/internal/webservice"
 )
 
 // SSH Dial 超时（统一规范，所有 handler 都用这一对）
@@ -53,14 +56,15 @@ const (
 
 // Version / BuildTime 可在构建时通过 ldflags 注入，例如：
 //
-//	go build -ldflags "-X 'kairo/internal/httpserver.Version=v0.11-rc1' \
-//	  -X 'kairo/internal/httpserver.BuildTime=2026-07-01T00:00:00Z'" .
+//	go build -ldflags "-X 'kairo/internal/httpserver.Version=v0.12' \
+//	  -X 'kairo/internal/httpserver.BuildTime=2026-07-04T00:00:00Z'" .
 //
 // 未注入时使用下面的默认值；前端 about 页通过 GET /api/config 读取并回填显示，
 // 读取失败则回退到前端硬编码版本（FE-006）。
-// 当前值与 HEAD `feat: 全量代码合并 v0.11-rc1` 对齐，统一改版本号看 web/pages/about.js:VERSION。
+// 版本号强制对齐：VERSION 文件 / 此处 Version 常量 / web/pages/about.js:VERSION /
+// web/index.html#footer-version / web/app.js fallback —— 五处必须一致，改时一起改。
 var (
-	Version   = "v0.11-rc1"
+	Version   = "v0.12"
 	BuildTime = "unknown"
 )
 
@@ -110,6 +114,11 @@ type Server struct {
 	downloads *dlmanager.Manager
 	shells    *sshshell.Manager
 
+	// v0.12 WebService 调试中心：WSDL/模板/历史/Mock 的本地存储 + Mock 路由注册表。
+	// Store 在 New 时按当前 data 目录构造；MockRegistry 启动后 Reload 一次让已保存的 mock 生效。
+	ws      *webservice.Store
+	wsMocks *webservice.MockRegistry
+
 	skipLicenseCheck bool // 测试专用: 跳过 license 网关
 
 	cleanupMu sync.Mutex // 防止并发执行清理任务
@@ -117,7 +126,19 @@ type Server struct {
 
 // New 构造一个 Server
 func New(cfg *config.Manager, a *audit.Logger, webRoot fs.FS, tails *tailmgr.Manager, shells *sshshell.Manager) *Server {
-	return &Server{cfg: cfg, audit: a, webRoot: webRoot, tails: tails, downloads: dlmanager.New(), shells: shells}
+	wsStore := webservice.NewStore(cfg.Get().DataDir())
+	wsMocks := webservice.NewMockRegistry(wsStore)
+	// 启动时加载已保存的 mock 路由（失败只记日志，不阻断启动）
+	if err := wsMocks.Reload(); err != nil {
+		// 不能用 log 包（会污染测试输出），写 audit 文件 + stderr 便于 GUI 模式可见
+		fmt.Fprintln(os.Stderr, "WARN: 加载已保存的 mock 路由失败:", err)
+		a.Write("webservice.mock.reload", "result", "fail", "error", err.Error())
+	}
+	return &Server{
+		cfg: cfg, audit: a, webRoot: webRoot,
+		tails: tails, downloads: dlmanager.New(), shells: shells,
+		ws: wsStore, wsMocks: wsMocks,
+	}
 }
 
 // TriggerCleanup 触发一次下载清理（同步执行）。
@@ -217,8 +238,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !s.skipLicenseCheck && isAPIRequest(path) && !strings.HasPrefix(path, "/api/license/") {
 		if err := license.Check(); err != nil {
 			writeJSON(w, http.StatusForbidden, map[string]any{
-				"error":             "未激活，请先输入激活码",
-				"license_required":  true,
+				"error":            "未激活，请先输入激活码",
+				"license_required": true,
 			})
 			return
 		}
@@ -303,6 +324,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleHTTPEnvs(w, r)
 	case path == "/api/http/request":
 		s.handleHTTPRequest(w, r)
+	// v0.12 WebService 调试中心：WSDL 导入 / SOAP 生成发送 / 模板 / 历史 / Mock / XML 辅助。
+	// 路由分发统一进 handleWSDispatch，按 path 前缀细化（见 handlers_webservice.go）。
+	case strings.HasPrefix(path, "/api/wsdl/"),
+		strings.HasPrefix(path, "/api/soap/"),
+		strings.HasPrefix(path, "/api/ws/xml/"):
+		s.handleWSDispatch(w, r)
 	case path == "/api/files/list":
 		s.handleFilesList(w, r)
 	case path == "/api/files/preview":
@@ -356,6 +383,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleTailEventsOrStop(w, r)
 	case strings.HasPrefix(path, "/downloads/"):
 		s.serveDownload(w, r)
+	case strings.HasPrefix(path, "/mock/"):
+		// v0.12 Mock WebService：外部系统直接请求 /mock/xxx，不走 /api/ 鉴权与 license 网关
+		// （mock 地址是给别人调用的，不能要求带本工具箱的 token）。
+		s.wsMocks.ServeHTTP(w, r)
 	default:
 		http.NotFound(w, r)
 	}

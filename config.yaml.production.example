@@ -19,7 +19,7 @@
 # 生产环境至少配置：free_file_roots + allowed_download_roots + auth.enabled=true
 
 app:
-  name: 天命契机
+  name: Kairo
   host: 127.0.0.1
   port: 18080
   auto_open_browser: true

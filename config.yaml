@@ -1,5 +1,5 @@
 app:
-  name: 天命契机
+  name: Kairo
   host: 127.0.0.1
   port: 18092
   auto_open_browser: false
@@ -28,6 +28,7 @@ app:
   download_max_count: 1000
   compare_allowed_roots:
   - '*'
+  kairo: '111222'
 systems:
 - name: 信贷应用服务器
   description: ""

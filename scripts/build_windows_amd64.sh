@@ -16,9 +16,18 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-VER="${1:-v0.1.0}"
+if [[ -n "${1:-}" ]]; then
+  VER="${1}"
+elif [[ -f VERSION ]]; then
+  VER="$(tr -d '[:space:]' < VERSION)"
+else
+  VER="v0.1.0"
+fi
 OUT_DIR="dist/kairo-${VER}"
 mkdir -p "${OUT_DIR}"
+
+BUILD_TIME="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+LDFLAGS="-s -w -H windowsgui -X 'kairo/internal/httpserver.Version=${VER}' -X 'kairo/internal/httpserver.BuildTime=${BUILD_TIME}'"
 
 if ! command -v go >/dev/null 2>&1; then
   echo "错误：未找到 go 命令，请先安装 Go 1.20+ 并加入 PATH" >&2
@@ -45,7 +54,7 @@ else
   echo ">> 提示：vendor/ 目录缺失，回退到 module 模式（建议先跑 go mod vendor）"
 fi
 
-go build "${GO_MOD_FLAGS[@]}" -trimpath -ldflags "-s -w -H windowsgui" -o "${OUT_DIR}/Kairo_win10.exe" .
+go build "${GO_MOD_FLAGS[@]}" -trimpath -ldflags "${LDFLAGS}" -o "${OUT_DIR}/Kairo_win10.exe" .
 
 # 复制运行所需文件
 # config.yaml 是首选，但发布包里通常只有 config.yaml.production.example（占位 / 模板）。

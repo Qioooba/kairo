@@ -1,0 +1,54 @@
+﻿<?xml version="1.0" encoding="UTF-8" ?>
+<xs:schema targetNamespace="http://www.jscb.com.cn/type/ExpertDecision/"
+	version="1.0" xmlns:tns="http://www.jscb.com.cn/type/ExpertDecision/"
+	xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:esb="http://www.jscb.com.cn/esb/">
+    <!-- 导入ESB报文头定义文件   -->
+    <xs:import schemaLocation="esb.xsd" namespace="http://www.jscb.com.cn/esb/" />
+    <xs:complexType name="SuLianLoanHengLiRequest">
+        <xs:complexContent>
+            <xs:extension base="esb:RequestBase">
+                <xs:sequence>
+                    <xs:element name="creditcode" type="xs:string" minOccurs="0"/>
+					<xs:element name="custname" type="xs:string" minOccurs="0"/>
+					<xs:element name="period" type="xs:string" minOccurs="0"/>
+					<xs:element name="amt" type="xs:string" minOccurs="0"/>
+					<xs:element name="evaluat" type="xs:string" minOccurs="0"/>
+					<xs:element name="isstateowned" type="xs:string" minOccurs="0"/>
+					<xs:element name="rsv1" type="xs:string" minOccurs="0"/>
+					<xs:element name="rsv2" type="xs:string" minOccurs="0"/>
+					<xs:element name="rsv3" type="xs:string" minOccurs="0"/>
+					<xs:element name="rsv4" type="xs:string" minOccurs="0"/>
+					<xs:element name="rsv5" type="xs:string" minOccurs="0"/>
+                    <xs:element name="rsv6" type="xs:string" minOccurs="0"/>
+                    <xs:element name="rsv7" type="xs:string" minOccurs="0"/>
+                    <xs:element name="rsv8" type="xs:string" minOccurs="0"/>
+                    <xs:element name="rsv9" type="xs:string" minOccurs="0"/>
+                    <xs:element name="rsv10" type="xs:string" minOccurs="0"/>
+                    <xs:element name="custDealDetails" type="xs:string" minOccurs="0"/>
+                    <xs:element name="fstIncome" type="xs:string" minOccurs="0"/>
+                    <xs:element name="qyFstZcfzl" type="xs:string" minOccurs="0"/>
+                    <xs:element name="zwhhtlydklsblqk" type="xs:string" minOccurs="0"/>
+                    <xs:element name="custType" type="xs:string" minOccurs="0"/>
+                </xs:sequence>
+            </xs:extension>
+        </xs:complexContent>
+    </xs:complexType>
+	
+    <xs:complexType name="SuLianLoanHengLiResponse">
+        <xs:complexContent>
+            <xs:extension base="esb:ResponseBase">
+                <xs:sequence>
+                    <xs:element name="creditcode" type="xs:string" minOccurs="0"/>
+					<xs:element name="custname" type="xs:string" minOccurs="0"/>
+					<xs:element name="quota" type="xs:string" minOccurs="0"/>
+					<xs:element name="period" type="xs:string" minOccurs="0"/>
+					<xs:element name="rsv01" type="xs:string" minOccurs="0"/>
+					<xs:element name="rsv02" type="xs:string" minOccurs="0"/>
+					<xs:element name="rsv03" type="xs:string" minOccurs="0"/>
+					<xs:element name="rsv04" type="xs:string" minOccurs="0"/>
+					<xs:element name="rsv05" type="xs:string" minOccurs="0"/>
+                </xs:sequence>
+            </xs:extension>
+        </xs:complexContent>
+    </xs:complexType>
+</xs:schema>

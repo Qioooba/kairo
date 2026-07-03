@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schema targetNamespace="http://www.jscb.com.cn/esb/" xmlns="http://www.w3.org/2001/XMLSchema" xmlns:esb="http://www.jscb.com.cn/esb/">
+	<!-- 请求报文头信息 -->
+	<complexType name="RequestBase">
+		<sequence>
+			<!-- 交易流水号，必填 -->
+			<element minOccurs="1" maxOccurs="1" name="SEQ_NO" nillable="false" type="string"/>
+			<!-- 交易号，必填 -->
+			<element minOccurs="1" maxOccurs="1" name="SERVICE_ID" nillable="false" type="string"/>
+			<!-- 渠道代号 ，必填-->
+			<element minOccurs="1" maxOccurs="1" name="CHANNEL_ID" nillable="false" type="string"/>
+			<!-- 服务系统代号 ，可选-->
+			<element minOccurs="0" maxOccurs="1" name="SERVER_ID" nillable="false" type="string"/>
+			<!-- 机构号，必填 -->
+			<element minOccurs="1" maxOccurs="1" name="BANK_CODE" nillable="false" type="string"/>
+			<!-- 操作员，必填 -->
+			<element minOccurs="1" maxOccurs="1" name="USER_ID" nillable="false" type="string"/>
+			<!-- 授权操作员，可选 -->
+			<element minOccurs="0" maxOccurs="1" name="AUTH_ID" nillable="false" type="string"/>
+			<!-- 请求日期，必填，格式：YYYYMMDD -->
+			<element minOccurs="1" maxOccurs="1" name="TRAN_DATE" nillable="false">
+				<simpleType>
+					<restriction base="string">
+						<minLength value="8"/>
+						<maxLength value="8"/>
+					</restriction>
+				</simpleType>
+			</element>
+			<!-- 请求时间 ，必填，格式：HHMMSSNNN -->
+			<element minOccurs="1" maxOccurs="1" name="TRAN_TIME" nillable="false">
+				<simpleType>
+					<restriction base="string">
+						<minLength value="6"/>
+						<maxLength value="9"/>
+					</restriction>
+				</simpleType>
+			</element>
+			<!-- 认证信息，可选 -->
+			<element minOccurs="0" maxOccurs="1" name="AUTH_CONTEXT" nillable="false" type="string"/>
+			<!-- 交易终端号，可选 -->
+			<element minOccurs="0" maxOccurs="1" name="TRAN_TERM" nillable="false" type="string"/>
+			<!-- 扩展信息，可选  -->
+			<element minOccurs="0" maxOccurs="1" name="EXT_HEAD" nillable="false" type="esb:extHeadList"/>
+		</sequence>
+	</complexType>
+	<!-- 扩展信息 -->
+	<complexType name="extHeadList">
+				<sequence>
+					<!-- MAC索引号 -->
+					<element minOccurs="0" maxOccurs="1" name="MAC_INDEX" nillable="false" type="string"/>
+					<!-- MAC值 -->
+					<element minOccurs="0" maxOccurs="1" name="MAC_VALUE" nillable="false" type="string"/>
+	        <!-- 业务种类，核心渠道号 -->
+					<element minOccurs="0" maxOccurs="1" name="BUSINESS_ID" nillable="false" type="string"/>
+          <!-- PIN 种子号 -->
+					<element minOccurs="0" maxOccurs="1" name="PIN_SEED" nillable="false" type="string"/>	
+				</sequence>
+	</complexType>
+	<!-- 响应报文头信息 -->
+	<complexType name="ResponseBase">
+		<sequence>
+			<!-- 交易流水号，必填 -->
+			<element minOccurs="1" maxOccurs="1" name="SEQ_NO" nillable="false" type="string"/>
+			<!-- 服务号，必填 -->
+			<element minOccurs="1" maxOccurs="1" name="SERVICE_ID" nillable="false" type="string"/>
+			<!-- 机构号，可选-->
+			<element minOccurs="1" maxOccurs="1" name="BANK_CODE" nillable="false" type="string"/>
+			<!-- 响应日期YYYYMMDD，必填 -->
+			<element minOccurs="1" maxOccurs="1" name="TRAN_DATE" nillable="false">
+				<simpleType>
+					<restriction base="string">
+						<minLength value="8"/>
+						<maxLength value="8"/>
+					</restriction>
+				</simpleType>
+			</element>
+			<!-- 响应时间 HHMMSSNNN，必填-->
+			<element minOccurs="1" maxOccurs="1" name="TRAN_TIME" nillable="false">
+				<simpleType>
+					<restriction base="string">
+						<minLength value="9"/>
+						<maxLength value="9"/>
+					</restriction>
+				</simpleType>
+			</element>
+			<!-- 交易状态，必填， COMPLETE代表交易成功，FAIL代表失败 -->
+			<element minOccurs="1" maxOccurs="1" name="TRAN_STATUS" nillable="false">
+				<simpleType>
+				  <restriction base="string">
+				    <enumeration value="COMPLETE"/>
+				    <enumeration value="FAIL"/>
+				  </restriction>
+				</simpleType>
+			</element>
+			<!-- 失败码,交易失败时必填 -->
+			<element minOccurs="0" maxOccurs="1" name="ERROR_CODE" nillable="false" type="string"/>
+			<!-- 失败描述 -->
+			<element minOccurs="0" maxOccurs="1" name="ERROR_MSG" nillable="false" type="string"/>
+			<!-- 交易返回码 -->
+			<element minOccurs="0" maxOccurs="1" name="RET_CODE" nillable="false" type="string"/>
+			<!-- 交易返回信息描述 -->
+			<element minOccurs="0" maxOccurs="1" name="RET_MSG" nillable="false" type="string"/>
+		</sequence>
+	</complexType>
+</schema>

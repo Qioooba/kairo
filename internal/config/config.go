@@ -522,7 +522,7 @@ type SearchConfig struct {
 //     掩盖用户配错的事实（看着像 utf-8 在跑，其实是想用 shift-jis）。
 func (c *Config) Defaults() {
 	if c.App.Name == "" {
-		c.App.Name = "天命契机"
+		c.App.Name = "Kairo"
 	}
 	if c.App.Host == "" {
 		c.App.Host = "127.0.0.1"

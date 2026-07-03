@@ -9,7 +9,7 @@
 [![Go Version](https://img.shields.io/badge/Go-1.20%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-4F4F4F)](#)
 [![License](https://img.shields.io/badge/License-Internal%20Use-orange)](#)
-[![Status](https://img.shields.io/badge/Status-v0.11--rc1-yellow)](#)
+[![Status](https://img.shields.io/badge/Status-v0.12-yellow)](#)
 [![Dependencies](https://img.shields.io/badge/Deps-zero%20runtime-2ea44f)](#)
 [![Binary](https://img.shields.io/badge/Single%20Exe-%E2%9C%93-success)](#)
 
@@ -32,6 +32,7 @@
 | 想追溯谁什么时候拉了哪个文件 | `logs/audit.log` 全操作流水 + `downloads/*.meta.json` sidecar 元数据 |
 | 密码写在 yaml 里很危险 | OS 钥匙串（Keychain / DPAPI / Secret Service）按 `(system,server,user)` 三元组存储 |
 | 工具箱上线后没意识到任意路径下载开着 | 启动日志 WARNING 明确打 `enable_free_file_browser` + `free_file_roots` 状态 |
+| 老 Java / WebSphere / XFire 的 SOAP 接口要调试，SoapUI 太重 | WebService 调试中心：WSDL 导入（URL/文件）→ 自动生成 Envelope → 一键发送 + 模板 + 历史 + Mock |
 
 ---
 
@@ -217,6 +218,21 @@ v0.7 起实装的客户端静态工具（无后端改动）：
 - **快捷键**：`/` 聚焦搜索框，`Esc` 清空
 - **主题**：复用全局 5 套主题（dark / light / green / hc / xianxia）
 
+### 10. WebService 调试中心（v0.12 起）
+
+定位：面向老 Java / WebSphere / XFire / SOAP 场景的轻量 SoapUI，浏览器内完成 WSDL 导入 → 报文生成 → 接口测试 → 模板复用 → 历史回放 → Mock 服务端全链路。
+
+| 子功能 | 说明 |
+| --- | --- |
+| **WSDL 导入** | URL 拉取（30s 超时）或本地 `.wsdl` / `.xsd` / `.xml` 上传（4MB 上限，支持多文件 attach）；外部 XSD import / include 递归加载；解析失败降级保留 `InputRaw` / `OutputRaw` + Warnings |
+| **SOAP Envelope 生成** | 选中 operation 自动生成 Envelope，输入 / 输出参数树展开；支持 SOAP 1.1 / 1.2；XSD complex content / extension 继承解析 |
+| **接口测试** | 自定义 endpoint / SOAPAction / Headers / Body；超时 + 取消；响应按 status / body / 关键词分块展示 |
+| **模板管理** | 保存常用请求为模板（按分组），命名 / 编辑 / 删除 |
+| **历史回放** | 最近 500 条请求记录，搜索 / 一键回放 |
+| **Mock 服务端** | 保存 Mock 配置后立即生效，支持 record 异步落盘 + 查询 / 清空 |
+| **XML 格式化** | 内置 XML format / minify / validate，独立小工具 |
+| **数据隔离** | 每个 WSDL 项目独立存储；模板 / 历史 / Mock 按 project 维度隔离 |
+
 ---
 
 ## <img src="docs/section-icons/stack.svg" width="22" height="22" align="absmiddle"> 技术栈
@@ -243,7 +259,7 @@ v0.7 起实装的客户端静态工具（无后端改动）：
 | 选型 | 说明 |
 | --- | --- |
 | **原生 JavaScript (ES2020)** | 无 React / Vue 依赖，单文件 IIFE |
-| **模块拆分** | `core.js` / `state.js` / `api.js` / `theme.js` / `auth.js`（v0.9 Bearer token 登录遮罩）+ `tail.js`（独立 tail 窗口逻辑）+ `pages/*.js`（home / websphere / files / ssh / formatter / commands / diagnostics / config / downloads / http / timestamp / cron / jsonpath / compare / about） |
+| **模块拆分** | `core.js` / `state.js` / `api.js` / `theme.js` / `auth.js`（v0.9 Bearer token 登录遮罩）+ `tail.js`（独立 tail 窗口逻辑）+ `pages/*.js`（home / websphere / files / ssh / formatter / commands / diagnostics / config / downloads / http / timestamp / cron / jsonpath / compare / webservice / about） |
 | **CSS 变量主题** | `:root[data-theme=...]` 5 套主题（dark / light / green / hc / xianxia 仙侠·墨韵青锋）；inline script 在 `<head>` 提前设 `data-theme` 防 FOUC；xterm.js 终端主题跟随联动（v0.10 起） |
 | **Node 单测** | `web/app.test.js` 覆盖 `escapeHtml` / `formatBytes` / `formatTime` / `trimMiddle` / `cssEscape` / `pctText` / `validate` |
 | **go:embed** | `web/` 整个目录内嵌进二进制，无外部静态文件 |
@@ -262,6 +278,7 @@ v0.7 起实装的客户端静态工具（无后端改动）：
 - **原子写回 yaml**：`tmpfile + rename(2)`，损坏不污染线上配置
 - **接口风格**：进程内 `fs.FS` 接口（`httpserver.serveStatic`）+ `sftpDialer` 包级变量（集成测试注入 fake）
 - **测试覆盖**：`internal/*` 每个包都有 `_test.go`，集成测试用 `mock_sshd.py` + injected `sftpDialer`
+- **老浏览器兼容**：xterm.js 5.5+ 的 ES2020 语法（`?.` / `??` / `globalThis`）经 esbuild 转译到 ES5 落入 `web/vendor/xterm/`；`core.js` 内置 `replaceChildren` / `closest` / `includes` / `padStart` / `globalThis` polyfill；文件读取走 `FileReader` 而非 `File.text()`（Chrome <76 兼容）；静态资源带 `?v=` 版本参数防缓存
 
 ---
 
@@ -315,6 +332,7 @@ v0.7 起实装的客户端静态工具（无后端改动）：
 │  ├── sysutil     跨平台系统调用（HideConsoleWindow 等）      │
 │  ├── logquery    后端命令模板（find/grep/sed/sort/head）     │
 │  ├── formatter   JSON / XML / YAML / URL-form 格式化（本地）│
+│  ├── webservice  WSDL / SOAP / Mock 调试中心（v0.12 起）    │
 │  └── diagnostics 环境自检（App/Build/Runtime/Tools/Servers）│
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -428,6 +446,24 @@ v0.7 起实装的客户端静态工具（无后端改动）：
 | POST | `/api/compare/folder-scan` | 目录对比扫描（v0.9 起，受 `compare_allowed_roots` 白名单约束） |
 | POST | `/api/compare/file-diff` | 单文件 diff（v0.9 起，受 `compare_allowed_roots` 白名单约束） |
 | POST | `/api/compare/deep-check` | 文件夹深度检查（按需展开子目录，受 `compare_allowed_roots` 白名单约束） |
+
+### WebService / SOAP / WSDL（v0.12 起）
+
+| Method | Path | 用途 |
+| --- | --- | --- |
+| POST | `/api/wsdl/import-url` | 从 URL 拉取并解析 WSDL（30s 超时） |
+| POST | `/api/wsdl/import-file` | 上传 `.wsdl` / `.xsd` / `.xml` 文件解析（4MB 上限，支持多文件 attach） |
+| GET / DELETE | `/api/wsdl/projects` | 列出 / 删除已导入的 WSDL 项目 |
+| GET | `/api/wsdl/projects/{id}` | 获取单个 WSDL 项目详情（含 operations） |
+| POST | `/api/soap/generate` | 按 operation 自动生成 SOAP Envelope |
+| POST | `/api/soap/send` | 发送 SOAP 请求并返回响应（含 status / body / 关键词） |
+| GET / POST / DELETE | `/api/soap/templates` | SOAP 请求模板 列出 / 保存 / 删除 |
+| GET / DELETE | `/api/soap/history` | 请求历史 列出 / 删除（最近 500 条，支持搜索 / 回放） |
+| GET / POST / DELETE | `/api/soap/mocks` | Mock 服务端配置 列出 / 保存 / 删除 |
+| GET / DELETE | `/api/soap/mocks/records` | Mock 调用记录 查询 / 清空 |
+| POST | `/api/ws/xml/format` | XML 格式化 |
+| POST | `/api/ws/xml/minify` | XML 压缩 |
+| POST | `/api/ws/xml/validate` | XML 校验 |
 
 ### 诊断
 
@@ -557,7 +593,7 @@ README.md                   # 本文件
 
 ```yaml
 app:
-  name: 天命契机                       # 中文产品名；品牌名 Kairo 用于 module 名 / Go 代码 log prefix
+  name: Kairo                       # 产品名（主品牌）；副标题「天命契机」用于关于页 / hero 区
   host: 127.0.0.1                # 默认仅 127.0.0.1 / localhost；启用 auth 后允许 0.0.0.0 / 内网 IP
   port: 18080                    # 端口被占用就换一个
   auto_open_browser: true
@@ -664,6 +700,7 @@ kairo/
 │       ├── cron.js              # Cron 解析（v0.7）
 │       ├── jsonpath.js          # JSONPath 查询（v0.7）
 │       ├── compare.js           # 代码 / 文件比对（v0.7）
+│       ├── webservice.js        # WebService 调试中心（v0.12 起：WSDL/SOAP/Mock）
 │       └── about.js             # 关于（v0.9 重写：数据仪表盘 + 架构 + 版本史）
 ├── internal/
 │   ├── audit/                   # 审计日志（线程安全，不含密码；v0.9 起 `/api/audit/*` 端点下线，模块保留供内部 write 调用）
@@ -683,6 +720,7 @@ kairo/
 │   │   ├── handlers_diagnostics.go / handlers_preferences.go / handlers_local.go
 │   │   ├── handlers_compare.go / handlers_diff.go
 │   │   ├── handlers_auth.go / handlers_openers.go / handlers_config_yaml.go
+│   │   ├── handlers_webservice.go # WSDL / SOAP / Mock 端点（v0.12 起）
 │   │   └── *_test.go            # 单测 + 集成测试（fake SFTP + fakeShellSSH）
 │   ├── logquery/                # 后端命令模板
 │   ├── portreuse/               # 端口复用（Windows 独立实现 + 跨平台兜底）
@@ -691,7 +729,8 @@ kairo/
 │   ├── sshshell/                # SSH 终端 WS ↔ shell 桥（v0.10 起，默认 max=32）
 │   ├── sysutil/                 # 跨平台系统调用（HideConsoleWindow 等）
 │   ├── tailmgr/                 # Tail 会话池 + Streamer 接口
-│   └── tray/                    # 系统托盘 + 启动错误弹框（Windows GUI 模式）
+│   ├── tray/                    # 系统托盘 + 启动错误弹框（Windows GUI 模式）
+│   └── webservice/              # WSDL 解析 + SOAP 报文 + Mock 服务端（v0.12 起）
 ├── scripts/
 │   ├── build_windows_amd64.sh
 │   ├── build_windows_amd64_win7_go120.sh
@@ -746,6 +785,8 @@ kairo/
 | ✅ | 下载历史（v0.9 起 audit API 已下线，审计数据只走 `logs/audit.log`） |
 | ✅ | 「在资源管理器打开」「定位文件」 |
 | ✅ | 常用命令速查（v0.7 起：6 大分类 tabs + 顶栏搜索 + 收藏 + 一键复制） |
+| ✅ | WebService 调试中心（v0.12 起：WSDL 导入 + SOAP 报文 + 模板 + 历史 + Mock + XML 格式化） |
+| ✅ | 老浏览器兼容加固（v0.12 起：xterm.js ES5 转译 + DOM polyfill + FileReader 文本读取） |
 | 🚧 | 数据库连接（MySQL/PG/Redis） |
 | ❌ | 任意命令执行（SSH 终端里用户连的是自己已声明的服务器，不视作「任意命令」） |
 | ❌ | 日期 / 日历 / 文本处理模块（已从导航移除） |
@@ -821,7 +862,45 @@ v0.2 起在「系统配置」页直接编辑保存即可，无需重启。手编
 
 ## <img src="docs/section-icons/changelog.svg" width="22" height="22" align="absmiddle"> Release Notes
 
-### v0.11-rc1（当前）— Kairo / 天命契机品牌焕新 + License 激活体系 + 强制 release 流程
+### v0.12（当前）— WebService 调试中心 + 老浏览器兼容加固
+
+#### 新功能
+
+- **WebService 调试中心**（`internal/webservice/*` + `web/pages/webservice.js` + `handlers_webservice.go`）：面向老 Java / WebSphere / XFire / SOAP 场景的轻量 SoapUI
+  - **WSDL 导入**：URL 拉取（30s 超时）或本地 `.wsdl` / `.xsd` / `.xml` 上传（4MB 上限，支持多文件 attach）；外部 XSD import / include 递归加载；XSD complex content / extension 继承解析；解析失败降级保留 `InputRaw` / `OutputRaw` + Warnings
+  - **SOAP 报文生成**：选中 operation 自动生成 Envelope；支持 SOAP 1.1 / 1.2；输入 / 输出参数树展开
+  - **接口测试**：自定义 endpoint / SOAPAction / Headers / Body；超时 + 取消；响应按 status / body / 关键词分块
+  - **模板管理**：保存常用请求为模板（按分组），命名 / 编辑 / 删除
+  - **历史回放**：最近 500 条请求记录，搜索 / 一键回放
+  - **Mock 服务端**：保存 Mock 配置后立即生效；record 异步落盘（recordQueue + 后台 goroutine，不阻塞热路径）；查询 / 清空
+  - **XML 格式化**：内置 XML format / minify / validate 独立小工具
+- **数据隔离**：每个 WSDL 项目独立存储；模板 / 历史 / Mock 按 project 维度隔离
+- **新增 15 个 API**：`/api/wsdl/*` / `/api/soap/*` / `/api/ws/xml/*` 三组前缀
+- **40 个测试函数**：覆盖 wsdl 解析 / soap 生成 / store / mock / hengli 真实 WSDL 回归
+
+#### 老浏览器兼容加固
+
+- **xterm.js ES5 转译**：xterm.js 5.5+ 使用 ES2020 语法（`?.` / `??` / `globalThis`）在 Chrome <86 报 `Uncaught SyntaxError`；用 esbuild 把 `xterm.min.js` / `xterm-addon-search.min.js` / `xterm-addon-web-links.min.js` / `xterm-addon-fit.min.js` 转译到 ES5 落入 `web/vendor/xterm/`；原文件备份到 `web/vendor/xterm-backup/`
+- **`replaceChildren` polyfill**：Chrome <86 不支持 `Element.replaceChildren()`；`core.js` 内置 polyfill 用 `removeChild` + `appendChild` 实现
+- **`FileReader` 替代 `File.text()`**：`File.text()` 在 Chrome <76 不可用；统一改用 `readFileText()` 函数（基于 `FileReader`），与 `config.js` / `compare.js` 对齐
+- **静态资源版本参数**：`index.html` / `ssh.html` 引用 JS 加 `?v=20260702` 防浏览器缓存
+
+#### 其他改进
+
+- **SSH keyboard-interactive 回调增强**：`passwordKeyboardInteractive` 兼容更多老 sshd 提问模式（echo=false / 含 password / passcode / 密码 / 口令 / otp 关键词）
+- **品牌名收敛**：`app.name` 默认值从「天命契机」改为「Kairo」，确立「Kairo（主品牌）· 天命契机（副标题）」结构，与 sidebar 头部 logo 显示对齐
+- **修复 `handleWSDispatch` 函数名拼写**（`handleSOPTemplates` → `handleSOAPTemplates`）
+- **预编译正则**：`handlers_webservice.go` 里反复编译的正则提到包级 `var` 一次性编译
+- **超时处理**：SOAP send / WSDL import URL 均加 ctx 超时
+- **Windows 重命名重试**：webservice store 落盘走 `renameRetry`（AV / 备份软件锁场景）
+
+#### Breaking Changes
+
+- 无破坏性变更；现有 v0.11-rc1 用户直接替换二进制即可
+
+> 完整提交列表见 `web/pages/about.js` 的 changelog 卡片。
+
+### v0.11-rc1 — Kairo / 天命契机品牌焕新 + License 激活体系 + 强制 release 流程
 
 #### 品牌 & 更名
 

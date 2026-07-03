@@ -3,7 +3,7 @@
  *
  * 设计目标：
  *   - 把"关于"从单页简介升级为一份**带交互的产品技术白皮书**
- *   - 顶部 sticky 锚点导航 + 9 个版本卡片 (accordion 折叠) + 12 个数据区块
+ *   - 顶部 sticky 锚点导航 + 12 个版本卡片 (accordion 折叠) + 13 个数据区块
  *   - 内容 100% 由 commit log / 源码 / README 提取, 不注水
  *   - 几万字正文 + 折叠默认收起, 首屏不卡
  */
@@ -16,7 +16,7 @@
 
   // 与 internal/httpserver/httpserver.go 的 Version 常量保持一致；
   // 后端 /api/config 读取失败时回退到这里（FE-006）。
-  const VERSION = 'v0.11-rc1';
+  const VERSION = 'v0.12';
 
   // =====================================================================
   // SVG icon 字典 — 13 个 section icon (Win7 兼容, 不依赖 emoji 字体)
@@ -117,14 +117,14 @@
   // §1. 核心数据看板
   // =====================================================================
   const stats = [
-    { label: '总代码量',             value: '57,000+', sub: 'Go 34K · 前端 23K · 0 npm 运行时', tone: 'primary' },
-    { label: '代码行数 (Go)',         value: '34,000+', sub: '63 个源文件 · 18 个子包',     tone: 'primary' },
-    { label: '代码行数 (前端)',       value: '23,000+', sub: 'vanilla JS · 零依赖',         tone: 'accent'  },
-    { label: '提交次数',              value: '130+',    sub: 'v0.1 → v0.11-rc1 (11 天)',     tone: 'success' },
-    { label: '后端模块',              value: '18',      sub: 'internal/* 子包',              tone: 'primary' },
-    { label: '前端页面',              value: '15',      sub: 'web/pages/*.js',              tone: 'accent'  },
-    { label: 'API 接口',              value: '60+',     sub: 'REST + SSE',                  tone: 'primary' },
-    { label: '测试用例 (Go)',         value: '500+',    sub: '51 个 _test.go · 单元 + 集成', tone: 'success' },
+    { label: '总代码量',             value: '65,000+', sub: 'Go 40K · 前端 25K · 0 npm 运行时', tone: 'primary' },
+    { label: '代码行数 (Go)',         value: '40,000+', sub: '70 个源文件 · 19 个子包 · 含测试', tone: 'primary' },
+    { label: '代码行数 (前端)',       value: '25,000+', sub: 'vanilla JS · 零依赖',         tone: 'accent'  },
+    { label: '提交次数',              value: '131',     sub: 'v0.1 → v0.12',                tone: 'success' },
+    { label: '后端模块',              value: '19',      sub: 'internal/* 子包 (新增 webservice)', tone: 'primary' },
+    { label: '前端页面',              value: '16',      sub: 'web/pages/*.js (新增 webservice)', tone: 'accent'  },
+    { label: 'API 接口',              value: '79+',     sub: 'REST + SSE + WebSocket',      tone: 'primary' },
+    { label: '测试用例 (Go)',         value: '645+',    sub: '61 个 _test.go · 单元 + 集成', tone: 'success' },
     { label: '测试用例 (Node)',       value: '150+',    sub: 'app.test.js · 17 case',       tone: 'success' },
     { label: 'E2E 场景 (Playwright)', value: '250+',    sub: '8 个脚本 · 14 测试套',        tone: 'warn'    },
     { label: '修复缺陷',              value: '350+',    sub: 'P0/P1/P2 全量',               tone: 'warn'    },
@@ -176,7 +176,7 @@
   const architecture = [
     {
       layer: 'L1', name: '展示层 (Presentation)',
-      detail: 'Web Browser · 单页应用 · hash-router 路由 · vanilla JS · 15 个页面 · 4 套主题',
+      detail: 'Web Browser · 单页应用 · hash-router 路由 · vanilla JS · 16 个页面 · 5 套主题',
       tech: ['原生 ES2020', 'CSS 变量主题', 'hash 路由', 'EventSource(SSE)', 'localStorage'],
       duty: '所有用户交互、渲染、状态机、主题切换、SSE 订阅、UI 反馈。不依赖任何 npm 运行时。'
     },
@@ -188,7 +188,7 @@
     },
     {
       layer: 'L3', name: '业务层 (Domain)',
-      detail: 'sshclient · sftpclient · logquery · dlmanager · tailmgr · diff · downloads · formatter · credentials',
+      detail: 'sshclient · sftpclient · logquery · dlmanager · tailmgr · diff · downloads · formatter · credentials · webservice (v0.12)',
       tech: ['x/crypto/ssh', 'pkg/sftp', 'x/text (GBK 透明转换)', 'AES-256-GCM', 'COW Config', 'Worker Pool', 'Myers Diff'],
       duty: '受控 SSH 执行、受控文件读取、命令模板生成、异步任务会话池、实时 SSE 广播、行级 diff、凭据存取。元数据全部集中维护，handler 只负责协议转换。'
     },
@@ -235,7 +235,7 @@
     { name: 'api.js', desc: 'HTTP 客户端 — api(method, path, body) 统一封装；自动加 Bearer token；SSE EventSource 工厂；统一错误处理。' },
     { name: 'theme.js', desc: '主题切换 — dark / light / green / hc / xianxia（玄墨鎏金·仙侠风）5 套主题，inline script 在 <head> 提前设 data-theme 防 FOUC。' },
     { name: 'auth.js', desc: '认证层 — 拉 /api/auth/status 探测；token cookie 管理；role-gated UI 显隐。' },
-    { name: 'pages/*.js', desc: '15 个页面 — home / websphere / files / formatter / commands / diagnostics / config / downloads / http / timestamp / cron / jsonpath / compare / about / ssh。每个页面一个 IIFE，路由切换时整体替换 view。' },
+    { name: 'pages/*.js', desc: '16 个页面 — home / websphere / files / ssh / formatter / commands / diagnostics / config / downloads / http / timestamp / cron / jsonpath / compare / webservice (v0.12) / about。每个页面一个 IIFE，路由切换时整体替换 view。' },
     { name: 'tail.js + tail.html', desc: '独立 tail 窗口 — 从主页面剥离的 tail 流，跟踪 SSE 不影响主页面操作；行级 DOM 节点池 + rAF 批量 flush (50ms/100 行)。' },
     { name: 'preview.html', desc: '文件预览子窗口 — 单文件模态 + 新窗口双模式，支持文本 / GBK 编码自动识别。' }
   ];
@@ -432,6 +432,23 @@
         '执行历史：每次执行留痕，可重放',
         '7 项深度测试修复'
       ]
+    },
+    {
+      icon: 'websphere', name: 'WebService 调试中心 (v0.12 起)',
+      pages: ['webservice'],
+      apis: ['/api/wsdl/*', '/api/soap/*', '/api/ws/xml/*'],
+      pkg: 'internal/webservice',
+      desc: '面向老 Java / WebSphere / XFire / SOAP 场景的轻量 SoapUI：WSDL 导入 → 报文生成 → 接口测试 → 模板 → 历史 → Mock + XML 格式化。',
+      features: [
+        'WSDL 双导入模式：URL 拉取 (30s 超时) / 本地 .wsdl/.xsd/.xml 上传 (4MB 上限，支持多文件 attach)',
+        '外部 XSD import / include 递归加载；XSD complex content / extension 继承解析',
+        '解析失败降级：受影响 operation 保留 InputRaw/OutputRaw + Warnings，不阻塞其他',
+        'SOAP 1.1 / 1.2 双版本；选中 operation 自动生成 Envelope；输入/输出参数树展开',
+        '接口测试：自定义 endpoint / SOAPAction / Headers / Body；超时 + 取消；status/body/关键词分块响应',
+        '模板管理 (按分组命名) + 历史回放 (最近 500 条，搜索 + 一键 replay)',
+        'Mock 服务端：保存即生效；record 异步落盘 (recordQueue + 后台 goroutine，不阻塞热路径)',
+        'XML format / minify / validate 内置小工具；40 个测试函数 (含 hengli 真实 WSDL 回归)'
+      ]
     }
   ];
 
@@ -448,7 +465,8 @@
     { dim: '操作审计', traditional: '没有 / 靠 shell history', kairo: 'logs/audit-YYYY-MM-DD.log 滚动 + /api/audit/* 导出', win: '满足等保' },
     { dim: '跨平台部署', traditional: 'WinSCP 在 macOS 难用 / SecureCRT 要付费 / Postman 体积大', kairo: '单二进制 12MB，macOS / Linux / Win / Win7 一份走天下', win: '分发成本 → 0' },
     { dim: '老 sshd (OpenSSH 5.x / 6.0 / AIX)', traditional: '要手动降级客户端 + 配置 KEX + 试错', kairo: '5 套 SSH profile 自动 fallback，握手 45s 外层 timeout', win: '老设备开机即用' },
-    { dim: 'GBK 编码日志 (老 WebSphere / Oracle)', traditional: 'SecureCRT 切编码 + 复制出来再 iconv', kairo: 'golang.org/x/text 透明转换，直读不乱码', win: '所见即所得' }
+    { dim: 'GBK 编码日志 (老 WebSphere / Oracle)', traditional: 'SecureCRT 切编码 + 复制出来再 iconv', kairo: 'golang.org/x/text 透明转换，直读不乱码', win: '所见即所得' },
+    { dim: '调试老 SOAP / WebService 接口', traditional: 'SoapUI 体积大 + WSDL 解析弱 + Mock 难配', kairo: 'webservice 页 → URL/文件导入 WSDL → 自动生成 Envelope → 一键发送 + 模板 + 历史 + Mock', win: 'SoapUI 替代品 (浏览器内)' }
   ];
 
   // =====================================================================
@@ -528,6 +546,8 @@
     { q: '日志乱码怎么办？', a: '工具自动识别 UTF-8 / GBK / GB18030（老 WebSphere / Oracle / AIX 常见 GBK）；encoding 字段可手动指定。如果还有乱码，截图发 issue。' },
     { q: '下载到一半断网会怎样？', a: '当前下载项标记为"未完成"并保留半成品文件（.partial 后缀）；其他已完成项不受影响。重连后可手动重试整个下载任务。' },
     { q: '能上传文件到远程吗？', a: '不能。设计上只读不写——这是核心安全策略。如果你需要上传功能，建议用专门的 SCP 工具，Kairo 不提供该能力以避免误删/越权。' },
+    { q: 'WebService 调试中心是干什么的？(v0.12 起)', a: '面向老 Java / WebSphere / XFire / SOAP 场景的轻量 SoapUI。导入 WSDL（URL 或上传 .wsdl/.xsd）→ 自动生成 SOAP Envelope → 自定义 endpoint/Headers/Body 发送 → 保存模板 → 历史回放 → 起 Mock 服务端。内置 XML 格式化小工具。适合内网老 SOAP 接口调试，不必再装 SoapUI。' },
+    { q: '老 Chrome / Win7 内网浏览器打不开 SSH 终端？', a: 'v0.12 起已加固：xterm.js 5.5+ 的 ES2020 语法转译到 ES5；replaceChildren / FileReader 等 DOM API 在 core.js 内置 polyfill；文件读取走 FileReader 而非 File.text()。若仍报错，硬刷新一次（Ctrl/Cmd+Shift+R）清缓存即可。' },
     { q: '想贡献代码 / 反馈 bug？', a: '所有 issue / PR 在 GitHub 仓库；反馈 bug 请附 (1) Kairo 版本号 (2) 操作系统 (3) 目标服务器 sshd 版本 (4) 完整操作步骤 (5) logs/ 下最新日志。' }
   ];
 
@@ -554,9 +574,70 @@
   };
 
   // =====================================================================
-  // §13. 版本演进史 (11 个版本, 每版 ~2000 字, accordion 折叠)
+  // §13. 版本演进史 (12 个版本, 每版 ~2000 字, accordion 折叠)
   // =====================================================================
   const changelog = [
+    {
+      version: 'v0.12',
+      date: '2026-07-04',
+      tag: 'WebService 调试中心 · 老浏览器兼容加固',
+      codename: 'Aegis · 守护',
+      size: 'l',
+      headline: 'WebService 调试中心上线 (WSDL/SOAP/Mock) + xterm.js ES5 转译 + DOM polyfill + SSH keyboard-interactive 增强',
+      stats: { commits: 8, fixes: 15, additions: 9, breaks: 0 },
+      principles: [
+        'SOAP 调试轻量化: 浏览器内完成 WSDL 导入 → 报文生成 → 接口测试 → 模板 → 历史 → Mock 全链路, 老 Java/WebSphere/XFire 不再依赖 SoapUI',
+        '兼容性守护: xterm.js ES5 转译 + replaceChildren/FileReader polyfill, 让老 Chrome (Win7 内网常见) 也能跑',
+        '降级优先: 复杂 WSDL / 外部 XSD 拉取失败不崩, 受影响 operation 保留 InputRaw/OutputRaw + Warnings',
+        '热路径不阻塞: Mock record 走 recordQueue + 后台 goroutine 异步落盘'
+      ],
+      features: [
+        { title: 'WebService 调试中心 (新增 9 卡片)', desc: 'internal/webservice/* (client/soap/wsdl/store/mock/types) + web/pages/webservice.js + handlers_webservice.go; 4 个 Tab (WSDL项目/模板/历史/Mock) + XML 格式化小工具' },
+        { title: 'WSDL 双导入模式', desc: 'URL 拉取 (30s 超时) / 本地 .wsdl/.xsd/.xml 上传 (4MB 上限，支持多文件 attach); 外部 XSD import/include 递归加载; XSD complex content/extension 继承解析' },
+        { title: 'SOAP Envelope 自动生成 + 接口测试', desc: 'SOAP 1.1/1.2 双版本; 选中 operation 自动生成 Envelope; 自定义 endpoint/SOAPAction/Headers/Body; 超时+取消; status/body/关键词分块响应' },
+        { title: '模板 + 历史 + Mock 服务端', desc: '模板按分组命名; 历史最近 500 条搜索+一键 replay; Mock 保存即生效, record 异步落盘 (recordQueue + 后台 goroutine)' },
+        { title: '15 个新 API', desc: '/api/wsdl/import-url / import-file / projects[/{id}] · /api/soap/generate / send / templates / history / mocks[/records] · /api/ws/xml/format / minify / validate' },
+        { title: 'xterm.js ES5 转译', desc: 'xterm.js 5.5+ ES2020 语法 (?. / ?? / globalThis) 在 Chrome<86 报 Uncaught SyntaxError; esbuild 把 xterm.min.js + 3 个 addon 转译到 ES5 落入 web/vendor/xterm/; 原文件备份 web/vendor/xterm-backup/' },
+        { title: 'replaceChildren + FileReader polyfill', desc: 'core.js 内置 replaceChildren polyfill (Chrome<86) 用 removeChild+appendChild 实现; 文件读取统一改用 readFileText() (基于 FileReader) 替代 File.text() (Chrome<76); 静态资源带 ?v=20260702 防缓存' },
+        { title: 'SSH keyboard-interactive 回调增强', desc: 'passwordKeyboardInteractive 兼容更多老 sshd 提问模式: echo=false / 含 password/passcode/密码/口令/otp 关键词; 解决 66.2.43.28 等 creditpl 服务器认证失败' },
+        { title: '品牌名收敛', desc: 'app.name 默认值 天命契机 → Kairo, 确立 Kairo(主品牌)·天命契机(副标题) 结构, 与 sidebar 头部 logo 对齐' }
+      ],
+      fixes: [
+        'P0: SSH 终端 xterm.js 在 Chrome<86 报 Uncaught SyntaxError: Unexpected token . — ES2020 语法转译到 ES5',
+        'P0: 他人 Chrome 浏览器报 M.replaceChildren is not a function — core.js 加 polyfill',
+        'P0: webservice handleSOPTemplates 函数名拼写错误 — 改为 handleSOAPTemplates',
+        'P1: SSH 连 66.2.43.28 报 unable to authenticate, attempted methods [none *** keyboard-interactive] — passwordKeyboardInteractive 回调增强',
+        'P1: webservice handlers 反复编译正则 — 提到包级 var 一次性编译',
+        'P1: SOAP send / WSDL import URL 缺超时 — 加 ctx 超时',
+        'P1: webservice store 落盘 Windows 重命名失败 (AV/备份锁) — 走 renameRetry',
+        'P1: HistoryEntry 缺 ResponseBody/Headers 字段 — 补齐',
+        'P1: soap.go trace 字段丢大小写 — 修正',
+        'P1: 前端 selectOperation 覆盖用户编辑 body — 加 bodyDirty 标记控制生成时机',
+        'P1: time.After 在 cancel 路径泄漏 timer — 改用 time.NewTimer 并正确停止',
+        'P1: refresh* 函数静默吞错 — 加 toast 错误提示',
+        'P2: mock.go 同步写盘阻塞热路径 — 引入 recordQueue + 后台 goroutine',
+        'P2: Template 缺 SOAPVersion 字段 — types.go 补字段 + 前端同步',
+        'P2: wsdl.go lookupElementNS 多 schema 同名 element — 留待后续优化 (边缘场景)'
+      ],
+      commits: [
+        { hash: 'v0.12-1', msg: 'feat(webservice): WebService 调试中心 — WSDL/SOAP/Mock/模板/历史/XML 格式化' },
+        { hash: 'v0.12-2', msg: 'fix(webservice): 13 项问题修复 (函数名/正则/超时/重命名/状态/字段)' },
+        { hash: 'v0.12-3', msg: 'feat(wsdl): XSD extension 继承 + 外部 XSD 递归加载 + 多文件 attach' },
+        { hash: 'v0.12-4', msg: 'fix(compat): xterm.js ES5 转译 + replaceChildren polyfill + FileReader' },
+        { hash: 'v0.12-5', msg: 'fix(ssh): passwordKeyboardInteractive 回调增强 (中文/otp/passcode)' },
+        { hash: 'v0.12-6', msg: 'fix(webservice): mock 异步落盘 + SOAPVersion + bodyDirty + timer泄漏 + 错误提示' },
+        { hash: 'v0.12-7', msg: 'fix(webservice): 10 项代码审查修复 (函数名/正则/超时/重命名/emoji)' },
+        { hash: 'v0.12-8', msg: 'docs: 品牌名收敛 app.name → Kairo (主品牌) · 天命契机 (副标题)' }
+      ],
+      migration: [
+        'config.yaml: app.name 默认 天命契机 → Kairo (副标题 天命契机 在关于页 hero 区显示)',
+        '新增 internal/webservice 包 + web/pages/webservice.js (前端页面 15 → 16)',
+        '新增 15 个 API: /api/wsdl/* / /api/soap/* / /api/ws/xml/*',
+        'web/vendor/xterm/ 下 4 个 .min.js 已转译到 ES5; 老文件备份到 web/vendor/xterm-backup/',
+        'index.html / ssh.html 静态资源加 ?v=20260702 防缓存; 用户需硬刷新 (Ctrl/Cmd+Shift+R)',
+        '无破坏性变更; 现有 v0.11-rc1 用户直接替换二进制即可'
+      ]
+    },
     {
       version: 'v0.11-rc1',
       date: '2026-07-01',
@@ -1439,7 +1520,7 @@
     wrap.appendChild(banner);
     wrap.appendChild(list);
 
-    view.appendChild(renderSection('sec-history', 'history', '版本演进史', 'v0.1 → v0.11-rc1 · 11 个版本 · 11 天 · 130+ commit', wrap));
+    view.appendChild(renderSection('sec-history', 'history', '版本演进史', 'v0.1 → v0.12 · 12 个版本 · 14 天 · 131 commit', wrap));
   }
 
   function renderVersionCard(v, idx) {

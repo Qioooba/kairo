@@ -119,7 +119,7 @@
       state.bootInfo = info;
       const appName = (info.app && info.app.name) || 'Kairo';
       const appSubtitle = (info.app && info.app.subtitle) || '天命契机';
-      const version = info.version || 'v0.11-rc1';
+      const version = info.version || 'v0.12';
       const dlFolder = info.paths && info.paths.download_dir;
       const listenInfo = document.getElementById('listen-info');
       if (listenInfo) {

@@ -67,6 +67,9 @@
     // JSONPath：粉色方块+连线
     'workflow': `<rect x="3" y="3" width="9" height="9" rx="1.5" fill="#ec4899"/><rect x="12" y="12" width="9" height="9" rx="1.5" fill="#f472b6"/><path d="M12 6h2a3 3 0 0 1 3 3v3" stroke="#ec4899" stroke-width="2" stroke-linecap="round" fill="none"/><circle cx="5" cy="5" r="1.5" fill="#ffffff" opacity="0.7"/><circle cx="14" cy="14" r="1.5" fill="#ffffff" opacity="0.7"/>`,
 
+    // WebService 调试：靛蓝 SOAP 信封 + 橙色齿轮角章
+    'soap-envelope': `<path d="M3 6l9 5 9-5-9-5z" fill="#6366f1"/><path d="M3 6v12l9 5V11z" fill="#4f46e5"/><path d="M21 6v12l-9 5V11z" fill="#818cf8"/><path d="M7 9l3 1.5L7 12z" fill="#ffffff" opacity="0.8"/><circle cx="18" cy="18" r="5" fill="#f59e0b"/><path d="M18 16v2l1.5 1" fill="none" stroke="#ffffff" stroke-width="1.4" stroke-linecap="round"/>`,
+
     // 关于：中性灰圆 + 白色 i（之前 #475569 在 dark 主题下太沉，改亮一档 #64748b）
     'info': `<circle cx="12" cy="12" r="10" fill="#64748b"/><circle cx="12" cy="12" r="9" fill="none" stroke="#ffffff" stroke-width="0.7" opacity="0.45"/><line x1="12" y1="16.5" x2="12" y2="11" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round"/><circle cx="12" cy="8" r="1.3" fill="#ffffff"/>`,
   };

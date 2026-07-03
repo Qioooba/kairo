@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<wsdl:definitions name="SuLianLoanHengLiServiceService" targetNamespace="http://www.jscb.com.cn/ExpertDecision/" xmlns:ns1="http://schemas.xmlsoap.org/soap/http" xmlns:wsdl="http://schemas.xmlsoap.org/wsdl/" xmlns:tns="http://www.jscb.com.cn/ExpertDecision/" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soap="http://schemas.xmlsoap.org/wsdl/soap/">
+  <wsdl:types>
+    <xs:schema targetNamespace="http://www.jscb.com.cn/ExpertDecision/" version="1.0" xmlns:cas="http://www.jscb.com.cn/type/ExpertDecision/" xmlns:tns="http://www.jscb.com.cn/ExpertDecision/" xmlns:xs="http://www.w3.org/2001/XMLSchema">
+			<xs:import namespace="http://www.jscb.com.cn/type/ExpertDecision/" schemaLocation="SuLianLoanHengLiServiceCore.xsd"/>
+			<xs:element name="SuLianLoanHengLiRequest" type="cas:SuLianLoanHengLiRequest"/>
+			<xs:element name="SuLianLoanHengLiResponse" type="cas:SuLianLoanHengLiResponse"/>
+		</xs:schema>
+  </wsdl:types>
+  <wsdl:message name="getSuLianLoanHengLiResponse">
+    <wsdl:part name="SuLianLoanHengLiResponse" element="tns:SuLianLoanHengLiResponse">
+    </wsdl:part>
+  </wsdl:message>
+  <wsdl:message name="getSuLianLoanHengLiRequest">
+    <wsdl:part name="SuLianLoanHengLiRequest" element="tns:SuLianLoanHengLiRequest">
+    </wsdl:part>
+  </wsdl:message>
+  <wsdl:portType name="SuLianLoanHengLiService">
+    <wsdl:operation name="querySuLianLoanHengLiService">
+      <wsdl:input name="getSuLianLoanHengLiRequest" message="tns:getSuLianLoanHengLiRequest">
+    </wsdl:input>
+      <wsdl:output name="getSuLianLoanHengLiResponse" message="tns:getSuLianLoanHengLiResponse">
+    </wsdl:output>
+    </wsdl:operation>
+  </wsdl:portType>
+  <wsdl:binding name="SuLianLoanHengLiServiceSoapBinding" type="tns:SuLianLoanHengLiService">
+    <soap:binding style="document" transport="http://schemas.xmlsoap.org/soap/http"/>
+    <wsdl:operation name="querySuLianLoanHengLiService">
+      <soap:operation soapAction="" style="document"/>
+      <wsdl:input name="getSuLianLoanHengLiRequest">
+        <soap:body use="literal" namespace="http://www.jscb.com.cn/ExpertDecision/"/>
+      </wsdl:input>
+      <wsdl:output name="getSuLianLoanHengLiResponse">
+        <soap:body use="literal" namespace="http://www.jscb.com.cn/ExpertDecision/"/>
+      </wsdl:output>
+    </wsdl:operation>
+  </wsdl:binding>
+  <wsdl:service name="SuLianLoanHengLiService">
+    <wsdl:port name="SuLianLoanHengLiServicePort" binding="tns:SuLianLoanHengLiServiceSoapBinding">
+      <soap:address location="http://66.1.43.100:8888/esxsp/services/SuLianLoanHengLiService"/>
+    </wsdl:port>
+  </wsdl:service>
+</wsdl:definitions>

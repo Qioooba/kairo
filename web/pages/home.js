@@ -49,6 +49,7 @@
       { id: 'files', name: '文件下载', desc: '按 SSH 账号权限浏览任意目录，像 FTP 一样层层进入并下载', icon: 'file-down', tag: 'ready', tagText: 'v0.3' },
       { id: 'formatter', name: '报文格式化', desc: 'JSON / XML / YAML / URL-form 格式化、压缩、校验、互转', icon: 'braces', tag: 'ready', tagText: '已就绪' },
       { id: 'http', name: 'HTTP 接口测试', desc: 'Postman 风格接口调试，Headers/Body/用例管理/响应高亮', icon: 'globe', tag: 'ready', tagText: 'v0.7' },
+      { id: 'webservice', name: 'WebService 调试', desc: 'SOAP/WSDL 调试中心：导入 WSDL、生成报文、发送请求、Mock 服务端', icon: 'soap-envelope', tag: 'ready', tagText: 'v0.12' },
       { id: 'compare', name: '代码比对', desc: '文本 / 文件 / 文件夹级 diff 差异对比，支持多种视图模式', icon: 'git-compare', tag: 'ready', tagText: 'v0.8' },
       { id: 'commands', name: '常用命令速查', desc: 'Linux / Git / Docker / Oracle / MySQL / Redis / Nginx 等 · 实时搜索 + 一键复制', icon: 'square-terminal', tag: 'ready', tagText: 'v0.7' },
       { id: 'diagnostics', name: '环境自检', desc: '一键体检：本机 / 网络 / 配置 / 工具 / 每台 server 连通性', icon: 'shield-check', tag: 'ready', tagText: 'v0.4' },

@@ -31,9 +31,18 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-VER="${1:-v0.1.0}"
+if [[ -n "${1:-}" ]]; then
+  VER="${1}"
+elif [[ -f VERSION ]]; then
+  VER="$(tr -d '[:space:]' < VERSION)"
+else
+  VER="v0.1.0"
+fi
 OUT_DIR="dist/kairo-${VER}-win7"
 mkdir -p "${OUT_DIR}"
+
+BUILD_TIME="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+LDFLAGS="-s -w -H windowsgui -X 'kairo/internal/httpserver.Version=${VER}' -X 'kairo/internal/httpserver.BuildTime=${BUILD_TIME}'"
 
 if [[ -z "${GO120_HOME:-}" ]]; then
   echo "错误：未设置 GO120_HOME" >&2
@@ -73,7 +82,7 @@ else
   echo ">> 提示：vendor/ 目录缺失，回退到 module 模式（建议先跑 go mod vendor）"
 fi
 
-"${GO_BIN}" build "${GO_MOD_FLAGS[@]}" -trimpath -ldflags "-s -w -H windowsgui" -o "${OUT_DIR}/Kairo_win7.exe" .
+"${GO_BIN}" build "${GO_MOD_FLAGS[@]}" -trimpath -ldflags "${LDFLAGS}" -o "${OUT_DIR}/Kairo_win7.exe" .
 
 # config.yaml 优先，缺则回退到 config.yaml.production.example，再缺则报错。
 if [[ -f config.yaml ]]; then
