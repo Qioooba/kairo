@@ -475,7 +475,6 @@
         sftpDlId: null,             // 当前下载任务 id
         sftpDlProgress: null,       // 下载进度 {total, done, current, fileWritten, fileTotal}
         sftpPanelInited: false,     // 面板 DOM 是否已初始化
-        sftpAutoFollow: false,      // 自动跟随终端目录
         sftpCwdQueryId: null,       // 当前 cwd 查询 ID（用于 WS 响应匹配）
         sftpCwdQueryTimer: null,    // cwd 查询超时定时器
         sftpLastDlNotifyId: null,   // 上次下载通知 ID（去重）
@@ -857,9 +856,6 @@
             try { tab.fitAddon.fit(); } catch (e) { /* ignore */ }
           }
         }, 16);
-        if (tab.sftpAutoFollow && !tab.sftpLoading && !tab.sftpCwdQueryId) {
-          setTimeout(function () { gotoCurrentDir(tab); }, 400);
-        }
         // 首次显示且未加载过文件列表时，先列当前目录（/ 或上次记忆路径）
         if ((!tab.sftpEntries || tab.sftpEntries.length === 0) && !tab.sftpLoading && !tab.sftpCwdQueryId) {
           setTimeout(function () { sftpList(tab, tab.sftpCwd || '/'); }, 50);
@@ -1201,10 +1197,6 @@ function updateTabStatus(tab) {
       } catch (_) { /* ignore */ }
       syncFilesPanelForActiveTab();
       updateToolbarButtons();
-      // 开启了自动跟随时，同步到终端当前目录
-      if (tab.filesPanelVisible && tab.sftpAutoFollow && !tab.sftpLoading && !tab.sftpCwdQueryId) {
-        setTimeout(function () { gotoCurrentDir(tab); }, 300);
-      }
     }
 
     // initSftpPanelForTab 首次显示时构建面板 DOM（懒初始化）。
@@ -1261,33 +1253,15 @@ function updateTabStatus(tab) {
       header.appendChild(pathBar);
 
       const actions = el('div', { class: 'sftp-actions' });
-      // 导航组：📌终端目录 / ↕上级 / 🔄刷新 / 自动跟随
+      // 导航组：📂进入当前目录 / ↕上级 / 🔄刷新
       const btnSyncCwd = el('button', {
-        class: 'btn btn-sm',
-        title: '切换到 SSH 终端当前所在目录（会向终端发送一条 pwd 命令）',
+        class: 'btn btn-sm btn-primary',
+        title: '进入 SSH 终端当前所在目录（会向终端发送一条 pwd 命令）',
         onclick: function () { gotoCurrentDir(tab); }
       });
-      btnSyncCwd.innerHTML = '<span style="display:inline-flex;align-items:center;gap:3px;">' + svgIcon('smRefresh', 12) + ' 终端目录</span>';
+      btnSyncCwd.innerHTML = '<span style="display:inline-flex;align-items:center;gap:3px;">📂 进入当前目录</span>';
       const btnUp = el('button', { class: 'btn btn-sm', text: '↕ 上级', title: '跳到上一级目录', onclick: function () { sftpGoUp(tab); } });
       const btnRefresh = el('button', { class: 'btn btn-sm', text: '🔄 刷新', title: '刷新当前目录', onclick: function () { sftpList(tab, tab.sftpCwd); } });
-      // 自动跟随 checkbox
-      const autoFollowLabel = el('label', { class: 'sftp-autofollow-label', title: '开启后：显示文件面板或切换 tab 时自动同步终端目录' });
-      const autoFollowCb = el('input', { type: 'checkbox', class: 'sftp-autofollow-cb' });
-      autoFollowCb.checked = !!tab.sftpAutoFollow;
-      autoFollowCb.addEventListener('change', function () {
-        tab.sftpAutoFollow = autoFollowCb.checked;
-        try { localStorage.setItem('ssh_sftp_autofollow:' + tab.system + ':' + tab.server, tab.sftpAutoFollow ? '1' : '0'); } catch (_) {}
-        if (tab.sftpAutoFollow && !tab.sftpLoading) {
-          gotoCurrentDir(tab);
-        }
-      });
-      // 读持久化
-      try {
-        const v = localStorage.getItem('ssh_sftp_autofollow:' + tab.system + ':' + tab.server);
-        if (v === '1') { tab.sftpAutoFollow = true; autoFollowCb.checked = true; }
-      } catch (_) {}
-      autoFollowLabel.appendChild(autoFollowCb);
-      autoFollowLabel.appendChild(document.createTextNode('自动跟随'));
 
       const navSep = el('span', { class: 'sftp-actions-sep' });
       const btnDownload = el('button', { class: 'btn btn-sm btn-primary', text: '下载', title: '下载选中文件（多选）', onclick: function () { sftpDownloadSelected(tab); }, disabled: true });
@@ -1309,7 +1283,6 @@ function updateTabStatus(tab) {
       actions.appendChild(btnSyncCwd);
       actions.appendChild(btnUp);
       actions.appendChild(btnRefresh);
-      actions.appendChild(autoFollowLabel);
       actions.appendChild(navSep);
       actions.appendChild(btnDownload);
       actions.appendChild(btnSelectAll);
@@ -1556,8 +1529,9 @@ function updateTabStatus(tab) {
 
     // gotoCurrentDir 通过 WS 向活跃 shell 查询真实 cwd（不再用独立连接的 /api/ssh/sftp/pwd，
     // 那样只会拿到新连接的 home 目录，不是终端当前路径）。
-    // 流程：发 query_cwd 控制帧 → 后端注入 printf $PWD 命令 → 扫描 stdout 标记 → 发回 cwd 事件。
-    // 终端会短暂显示 printf 命令和输出（1-2 行），随后被提示符覆盖，影响可接受。
+    // 流程：发 query_cwd 控制帧 → 后端注入 printf 命令输出 OSC 999 序列包裹 $PWD →
+    // 扫描 stdout 中的 OSC 标记 → 提取路径 → 发回 cwd 事件。
+    // v0.11+ 改进：OSC 序列对用户不可见，仅 printf 命令行本身会被 shell 回显一行。
     function gotoCurrentDir(tab) {
       if (tab.closed) { toast('tab 已关闭', 'warn'); return; }
       if (!tab.ws || tab.ws.readyState !== 1) { toast('SSH 未连接', 'warn'); return; }

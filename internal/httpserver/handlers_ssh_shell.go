@@ -224,6 +224,8 @@ func (s *Server) handleSSHShellWS(w http.ResponseWriter, r *http.Request) {
 	// cwd 查询状态：前端发 query_cwd 控制帧 → 注入 pwd 命令到 stdin →
 	// sshReader 在 stdout 字节流里扫描起止标记 → 提取路径 → 发 cwd 事件。
 	// 用 mutex 保护，因为 wsReader 写、sshReader 读。
+	// v0.11+ 改进：使用 OSC 999 私有序列作为标记，xterm.js 对未知 OSC 不渲染，
+	// 大幅减少终端可见输出（仅 printf 命令行本身会被 tty 回显，OSC 输出完全不可见）。
 	type cwdQueryState struct {
 		mu        sync.Mutex
 		active    bool
@@ -234,8 +236,11 @@ func (s *Server) handleSSHShellWS(w http.ResponseWriter, r *http.Request) {
 	}
 	cwdState := &cwdQueryState{}
 
+	// cwdMarker 使用 OSC 999 私有序列格式：ESC ] 999 ; <path> ESC \（ST 终止）
+	// xterm.js 会忽略未知 OSC 代码，不渲染任何可见字符。
+	// 使用 ST（ESC \）终止而不是 BEL（\x07），避免触发终端响铃。
 	cwdMarker := func(id string) (start, end string) {
-		return "__KAIRO_CWD_S_" + id + "__", "__KAIRO_CWD_E_" + id + "__"
+		return "\x1b]999;", "\x1b\\"
 	}
 
 	// isValidCwdPath 校验提取的路径是否为合法绝对路径：
@@ -301,11 +306,13 @@ func (s *Server) handleSSHShellWS(w http.ResponseWriter, r *http.Request) {
 					cwdState.endMark = em
 					cwdState.sentAt = time.Now()
 					cwdState.mu.Unlock()
-					// 向 stdin 注入命令：回车确保在新行，echo 输出 start-marker + $PWD + end-marker。
-					// 终端回显会让命令字符串本身先出现一次（此时标记间是 "$PWD" 字面值，isValidCwdPath 会跳过），
-					// 真正的 echo 输出会产生第二次匹配，通过校验后被采用。
-					// 注意：不用 printf 格式串，避免 %s 与 shell 转义的交互问题；直接用 echo 拼接。
-					cmd := fmt.Sprintf("\recho %s\"$PWD\"%s\r", sm, em)
+					// 向 stdin 注入命令：使用 printf 输出 OSC 999 私有序列包裹 $PWD，ST（ESC \）终止。
+					// OSC 序列被 xterm.js 识别为控制序列，不会渲染为可见字符，
+					// 因此之前 __KAIRO_CWD 标记的乱码输出问题彻底解决。
+					// 命令格式：\r 回车确保在新行执行，printf 输出 ESC ] 999 ; <path> ESC \
+					// 命令行本身会被 tty 回显（如 "printf '\033]999;%s\033\\' \"$PWD\""），这是正常的 shell 交互。
+					// 注意：\033\\ 在 printf 格式字符串中 = ESC（八进制033） + 字面量反斜杠（转义后），即 ST 序列。
+					cmd := "\rprintf '\\033]999;%s\\033\\\\' \"$PWD\"\r"
 					_, _ = shell.Stdin.Write([]byte(cmd))
 				}
 			case websocket.BinaryMessage:

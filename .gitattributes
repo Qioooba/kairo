@@ -1,0 +1,24 @@
+# ===== export-ignore: git archive 打包源码时排除以下开发/测试/mock 文件 =====
+# 这些文件仍保留在 git 版本控制中（开发/CI/测试需要），但不会进入发布源码包。
+# 注意：.gitattributes 必须被 commit 后 git archive 才会读取这些规则。
+
+# --- 测试 mock 数据（整个目录树排除）---
+scripts/fake-files/**         export-ignore
+scripts/fake-websphere/**     export-ignore
+
+# --- Mock 服务（仅开发测试用）---
+scripts/mock_sshd.py          export-ignore
+scripts/mock_shell_sshd.py    export-ignore
+cmd/mock-license-server/**    export-ignore
+
+# --- E2E / 验收 / 冒烟测试脚本 ---
+scripts/e2e.sh                export-ignore
+scripts/e2e-prepare-fixtures.js export-ignore
+scripts/acceptance_run.py     export-ignore
+scripts/release_smoke_test.sh export-ignore
+/playwright-*.js              export-ignore
+
+# --- docs/qa 下的测试脚本和临时报告（保留 package.json 和 *.md）---
+docs/qa/*.js                  export-ignore
+docs/qa/*.json                export-ignore
+docs/qa/package.json          -export-ignore

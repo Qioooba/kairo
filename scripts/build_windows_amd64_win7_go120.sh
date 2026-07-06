@@ -85,11 +85,13 @@ fi
 "${GO_BIN}" build "${GO_MOD_FLAGS[@]}" -trimpath -ldflags "${LDFLAGS}" -o "${OUT_DIR}/Kairo_win7.exe" .
 
 # config.yaml 优先，缺则回退到 config.yaml.production.example，再缺则报错。
+# 同样需要剥离开发者白名单（kairo: ...），不进生产分发包。详见 docs/KAIRO-LICENSE.md。
+# 用 ^\s*kairo: 匹配所有非注释的 kairo 行（不管值的格式），注释行不会被误伤。
 if [[ -f config.yaml ]]; then
-  cp config.yaml "${OUT_DIR}/config.yaml"
+  grep -v -E "^\s*kairo:" config.yaml > "${OUT_DIR}/config.yaml"
 elif [[ -f config.yaml.production.example ]]; then
   echo ">> 警告：未找到 config.yaml，使用 config.yaml.production.example 复制为 config.yaml"
-  cp config.yaml.production.example "${OUT_DIR}/config.yaml"
+  grep -v -E "^\s*kairo:" config.yaml.production.example > "${OUT_DIR}/config.yaml"
 else
   echo "错误：找不到 config.yaml 或 config.yaml.production.example" >&2
   exit 1

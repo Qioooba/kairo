@@ -72,6 +72,34 @@
       border-radius: 8px;
     }
     .tail-login label { min-width: 180px; margin-bottom: 0; }
+    .search-bar {
+      display: flex; gap: 6px; align-items: center;
+      padding: 6px 10px; background: var(--bg-2);
+      border: 1px solid var(--line); border-radius: 8px;
+      flex: 0 0 auto;
+    }
+    .search-bar input[type="text"] {
+      flex: 1; min-width: 120px; font-family: ui-monospace, monospace; font-size: 12.5px;
+      padding: 4px 8px; border: 1px solid var(--line); border-radius: 4px;
+      background: var(--bg-1); color: var(--text);
+    }
+    .search-bar input[type="text"]:focus { outline: none; border-color: var(--primary-2); box-shadow: 0 0 0 2px rgba(79,140,255,0.2); }
+    .search-bar .search-count { font-size: 11.5px; color: var(--text-dim); min-width: 60px; text-align: center; }
+    .search-bar .btn { padding: 4px 10px; font-size: 12px; }
+    mark.search-hl {
+      background: #fff176; color: #000; border-radius: 2px; padding: 0 1px;
+    }
+    mark.search-hl.search-hl-active {
+      background: #ff9800; color: #000; box-shadow: 0 0 0 1px #e65100;
+    }
+    :root[data-theme="dark"] mark.search-hl { background: #f9a825; color: #000; }
+    :root[data-theme="dark"] mark.search-hl.search-hl-active { background: #ff6d00; color: #000; }
+    :root[data-theme="green"] mark.search-hl { background: #c6ff00; color: #1b5e20; }
+    :root[data-theme="green"] mark.search-hl.search-hl-active { background: #76ff03; color: #1b5e20; box-shadow: 0 0 0 1px #33691e; }
+    :root[data-theme="hc"] mark.search-hl { background: #ffeb3b; color: #000; }
+    :root[data-theme="hc"] mark.search-hl.search-hl-active { background: #ff9800; color: #000; }
+    :root[data-theme="xianxia"] mark.search-hl { background: #ffe082; color: #4e342e; }
+    :root[data-theme="xianxia"] mark.search-hl.search-hl-active { background: #ffb300; color: #3e2723; }
   </style>
 </head>
 <body>
@@ -90,6 +118,13 @@
         <span><span class="meta-key">目录:</span><span class="meta-val" id="m-dir">-</span></span>
         <span><span class="meta-key">文件:</span><span class="meta-val" id="m-file">-</span></span>
         <span><span class="badge" id="m-lines">0 行</span></span>
+      </div>
+      <div class="search-bar" id="search-bar">
+        <input type="text" id="search-input" placeholder="搜索日志内容…（Ctrl+F / ⌘F）" autocomplete="off" />
+        <button class="btn" id="search-prev" title="上一个匹配 (Shift+Enter)">↑</button>
+        <button class="btn" id="search-next" title="下一个匹配 (Enter)">↓</button>
+        <span class="search-count" id="search-count"></span>
+        <button class="btn" id="search-clear" title="清除搜索 (Esc)">✕</button>
       </div>
       <form class="tail-login" id="tail-login">
         <label>

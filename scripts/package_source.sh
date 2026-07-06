@@ -58,7 +58,7 @@ if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   echo ">> 使用 git archive 打包（自动排除 dist/、.git/、运行时产物）"
   git archive --format=tar.gz --prefix="kairo-${VER}/" HEAD -o "${OUT}"
 else
-  echo ">> 不在 git 仓库内，手动 tar 打包"
+  echo ">> 不在 git 仓库内，手动 tar 打包（排除 mock/测试文件）"
   tar -czf "${OUT}" \
     --exclude='./dist' \
     --exclude='./.git' \
@@ -67,6 +67,18 @@ else
     --exclude='./downloads' \
     --exclude='./node_modules' \
     --exclude='./*.exe' \
+    --exclude='./scripts/fake-files' \
+    --exclude='./scripts/fake-websphere' \
+    --exclude='./scripts/mock_sshd.py' \
+    --exclude='./scripts/mock_shell_sshd.py' \
+    --exclude='./scripts/e2e.sh' \
+    --exclude='./scripts/e2e-prepare-fixtures.js' \
+    --exclude='./scripts/acceptance_run.py' \
+    --exclude='./scripts/release_smoke_test.sh' \
+    --exclude='./cmd/mock-license-server' \
+    --exclude='./playwright-*.js' \
+    --exclude='./docs/qa/*.js' \
+    --exclude='./docs/qa/*.json' \
     --transform "s,^\./,kairo-${VER}/," \
     .
 fi
@@ -93,6 +105,27 @@ check_in_tar "web/vendor/diff2html\.min\.css$" "PKG-002 diff2html.min.css"
 check_in_tar "web/vendor/diff2html\.min\.js$"  "PKG-002 diff2html.min.js"
 check_in_tar "go\.mod$" "go.mod"
 check_in_tar "main\.go$" "main.go"
+
+echo
+echo ">> 验证 mock/测试文件已被排除："
+
+check_not_in_tar() {
+  local pattern="$1"
+  local label="$2"
+  local count
+  count=$(tar -tzf "${OUT}" | grep -c "${pattern}" || true)
+  if [[ "${count}" -ne 0 ]]; then
+    echo "   ❌ ${label}：发现 ${count} 个文件，应当被排除（pattern: ${pattern}）" >&2
+    exit 1
+  fi
+  echo "   ✅ ${label}：已排除"
+}
+
+check_not_in_tar "scripts/fake-files/"    "mock 数据（scripts/fake-files/）"
+check_not_in_tar "scripts/fake-websphere/" "mock WebSphere 日志（scripts/fake-websphere/）"
+check_not_in_tar "mock_sshd\.py"           "mock SSH 服务"
+check_not_in_tar "cmd/mock-license-server" "mock License 服务"
+check_not_in_tar "playwright-.*\.js"       "Playwright E2E 脚本"
 
 echo
 echo ">> 打包完成：${OUT}"

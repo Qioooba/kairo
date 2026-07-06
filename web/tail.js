@@ -401,5 +401,226 @@
       }
     });
   }
+
+  // ===== 页面内搜索 / 高亮 =====
+  let searchTerm = '';
+  let searchMatches = [];
+  let searchActiveIdx = -1;
+  const searchInp = document.getElementById('search-input');
+  const searchCountEl = document.getElementById('search-count');
+  const searchPrevBtn = document.getElementById('search-prev');
+  const searchNextBtn = document.getElementById('search-next');
+  const searchClearBtn = document.getElementById('search-clear');
+
+  function escapeRegExp(s) {
+    return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  function clearSearchHighlights() {
+    const marks = tailOut.querySelectorAll('mark.search-hl');
+    for (let i = marks.length - 1; i >= 0; i--) {
+      const mark = marks[i];
+      const parent = mark.parentNode;
+      while (mark.firstChild) parent.insertBefore(mark.firstChild, mark);
+      parent.removeChild(mark);
+      parent.normalize();
+    }
+    searchMatches = [];
+    searchActiveIdx = -1;
+    searchCountEl.textContent = '';
+  }
+
+  function highlightTextNode(textNode, regex) {
+    const text = textNode.nodeValue;
+    if (!text) return [];
+    const matches = [];
+    let m;
+    regex.lastIndex = 0;
+    while ((m = regex.exec(text)) !== null) {
+      if (m[0].length === 0) { regex.lastIndex++; continue; }
+      matches.push({ start: m.index, length: m[0].length });
+    }
+    if (!matches.length) return [];
+    const frag = document.createDocumentFragment();
+    let pos = 0;
+    const createdMarks = [];
+    matches.forEach((match) => {
+      if (match.start > pos) {
+        frag.appendChild(document.createTextNode(text.slice(pos, match.start)));
+      }
+      const mark = document.createElement('mark');
+      mark.className = 'search-hl';
+      mark.textContent = text.slice(match.start, match.start + match.length);
+      frag.appendChild(mark);
+      createdMarks.push(mark);
+      pos = match.start + match.length;
+    });
+    if (pos < text.length) {
+      frag.appendChild(document.createTextNode(text.slice(pos)));
+    }
+    textNode.parentNode.replaceChild(frag, textNode);
+    return createdMarks;
+  }
+
+  function applySearchHighlight(term) {
+    clearSearchHighlights();
+    if (!term) return;
+    const regex = new RegExp(escapeRegExp(term), 'gi');
+    const marks = [];
+    const walker = document.createTreeWalker(tailOut, NodeFilter.SHOW_TEXT, {
+      acceptNode: function(node) {
+        if (!node.nodeValue || !node.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
+        let p = node.parentNode;
+        while (p && p !== tailOut) {
+          if (p.classList && p.classList.contains('search-hl')) return NodeFilter.FILTER_REJECT;
+          p = p.parentNode;
+        }
+        return NodeFilter.FILTER_ACCEPT;
+      }
+    });
+    const textNodes = [];
+    let n;
+    while ((n = walker.nextNode())) textNodes.push(n);
+    textNodes.forEach(function(tn) {
+      const created = highlightTextNode(tn, regex);
+      for (let i = 0; i < created.length; i++) marks.push(created[i]);
+    });
+    searchMatches = marks;
+    searchActiveIdx = marks.length > 0 ? 0 : -1;
+    updateActiveMark();
+    updateSearchCount();
+    scrollToActiveMark();
+  }
+
+  function updateActiveMark() {
+    for (let i = 0; i < searchMatches.length; i++) {
+      if (i === searchActiveIdx) {
+        searchMatches[i].classList.add('search-hl-active');
+      } else {
+        searchMatches[i].classList.remove('search-hl-active');
+      }
+    }
+  }
+
+  function updateSearchCount() {
+    if (!searchTerm) { searchCountEl.textContent = ''; return; }
+    if (searchMatches.length === 0) {
+      searchCountEl.textContent = '无匹配';
+    } else {
+      searchCountEl.textContent = (searchActiveIdx + 1) + ' / ' + searchMatches.length;
+    }
+  }
+
+  function scrollToActiveMark() {
+    if (searchActiveIdx < 0 || !searchMatches[searchActiveIdx]) return;
+    searchMatches[searchActiveIdx].scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }
+
+  function goToNextMatch() {
+    if (searchMatches.length === 0) return;
+    searchActiveIdx = (searchActiveIdx + 1) % searchMatches.length;
+    updateActiveMark();
+    updateSearchCount();
+    scrollToActiveMark();
+  }
+
+  function goToPrevMatch() {
+    if (searchMatches.length === 0) return;
+    searchActiveIdx = (searchActiveIdx - 1 + searchMatches.length) % searchMatches.length;
+    updateActiveMark();
+    updateSearchCount();
+    scrollToActiveMark();
+  }
+
+  function applySearchToNewLines() {
+    if (!searchTerm) return;
+    const regex = new RegExp(escapeRegExp(searchTerm), 'gi');
+    const unmarkedLines = tailOut.querySelectorAll('.tail-line');
+    const newMarks = [];
+    for (let li = 0; li < unmarkedLines.length; li++) {
+      const line = unmarkedLines[li];
+      if (line._searchApplied) continue;
+      const walker = document.createTreeWalker(line, NodeFilter.SHOW_TEXT, {
+        acceptNode: function(node) {
+          if (!node.nodeValue) return NodeFilter.FILTER_REJECT;
+          let p = node.parentNode;
+          while (p && p !== line) {
+            if (p.classList && p.classList.contains('search-hl')) return NodeFilter.FILTER_REJECT;
+            p = p.parentNode;
+          }
+          return NodeFilter.FILTER_ACCEPT;
+        }
+      });
+      const textNodes = [];
+      let n;
+      while ((n = walker.nextNode())) textNodes.push(n);
+      textNodes.forEach(function(tn) {
+        const created = highlightTextNode(tn, regex);
+        for (let i = 0; i < created.length; i++) newMarks.push(created[i]);
+      });
+      line._searchApplied = true;
+    }
+    if (newMarks.length) {
+      for (let i = 0; i < newMarks.length; i++) searchMatches.push(newMarks[i]);
+      if (searchActiveIdx < 0) searchActiveIdx = 0;
+      updateActiveMark();
+      updateSearchCount();
+    }
+  }
+
+  let searchDebounce = null;
+  searchInp.addEventListener('input', function() {
+    clearTimeout(searchDebounce);
+    searchDebounce = setTimeout(function() {
+      searchTerm = searchInp.value;
+      const lines = tailOut.querySelectorAll('.tail-line');
+      for (let i = 0; i < lines.length; i++) lines[i]._searchApplied = false;
+      applySearchHighlight(searchTerm);
+      for (let i = 0; i < lines.length; i++) lines[i]._searchApplied = true;
+    }, 250);
+  });
+  searchInp.addEventListener('keydown', function(ev) {
+    if (ev.key === 'Enter') {
+      ev.preventDefault();
+      if (ev.shiftKey) goToPrevMatch();
+      else goToNextMatch();
+    } else if (ev.key === 'Escape') {
+      ev.preventDefault();
+      searchInp.value = '';
+      searchTerm = '';
+      clearSearchHighlights();
+      searchInp.blur();
+    }
+  });
+  searchPrevBtn.addEventListener('click', goToPrevMatch);
+  searchNextBtn.addEventListener('click', goToNextMatch);
+  searchClearBtn.addEventListener('click', function() {
+    searchInp.value = '';
+    searchTerm = '';
+    clearSearchHighlights();
+    searchInp.focus();
+  });
+
+  document.addEventListener('keydown', function(ev) {
+    if ((ev.ctrlKey || ev.metaKey) && ev.key === 'f') {
+      ev.preventDefault();
+      searchInp.focus();
+      searchInp.select();
+    }
+  });
+
+  const tailObserver = new MutationObserver(function() {
+    if (searchTerm) {
+      if (tailOut.children.length === 0) {
+        searchMatches = [];
+        searchActiveIdx = -1;
+        updateSearchCount();
+      } else {
+        requestAnimationFrame(applySearchToNewLines);
+      }
+    }
+  });
+  tailObserver.observe(tailOut, { childList: true, subtree: false });
+
   start();
 })();

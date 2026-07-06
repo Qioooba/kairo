@@ -71,6 +71,34 @@
       border-radius: 8px;
     }
     .preview-login label { min-width: 180px; margin-bottom: 0; }
+    .search-bar {
+      display: flex; gap: 6px; align-items: center;
+      padding: 6px 10px; background: var(--bg-2);
+      border: 1px solid var(--line); border-radius: 8px;
+      flex: 0 0 auto;
+    }
+    .search-bar input[type="text"] {
+      flex: 1; min-width: 120px; font-family: ui-monospace, monospace; font-size: 12.5px;
+      padding: 4px 8px; border: 1px solid var(--line); border-radius: 4px;
+      background: var(--bg-1); color: var(--text);
+    }
+    .search-bar input[type="text"]:focus { outline: none; border-color: var(--primary-2); box-shadow: 0 0 0 2px rgba(79,140,255,0.2); }
+    .search-bar .search-count { font-size: 11.5px; color: var(--text-dim); min-width: 60px; text-align: center; }
+    .search-bar .btn { padding: 4px 10px; font-size: 12px; }
+    mark.search-hl {
+      background: #fff176; color: #000; border-radius: 2px; padding: 0 1px;
+    }
+    mark.search-hl.search-hl-active {
+      background: #ff9800; color: #000; box-shadow: 0 0 0 1px #e65100;
+    }
+    :root[data-theme="dark"] mark.search-hl { background: #f9a825; color: #000; }
+    :root[data-theme="dark"] mark.search-hl.search-hl-active { background: #ff6d00; color: #000; }
+    :root[data-theme="green"] mark.search-hl { background: #c6ff00; color: #1b5e20; }
+    :root[data-theme="green"] mark.search-hl.search-hl-active { background: #76ff03; color: #1b5e20; box-shadow: 0 0 0 1px #33691e; }
+    :root[data-theme="hc"] mark.search-hl { background: #ffeb3b; color: #000; }
+    :root[data-theme="hc"] mark.search-hl.search-hl-active { background: #ff9800; color: #000; }
+    :root[data-theme="xianxia"] mark.search-hl { background: #ffe082; color: #4e342e; }
+    :root[data-theme="xianxia"] mark.search-hl.search-hl-active { background: #ffb300; color: #3e2723; }
   </style>
 </head>
 <body>
@@ -83,6 +111,13 @@
       </div>
     </header>
     <section class="preview-standalone">
+      <div class="search-bar" id="search-bar">
+        <input type="text" id="search-input" placeholder="搜索页面内容…（Ctrl+F / ⌘F）" autocomplete="off" />
+        <button class="btn" id="search-prev" title="上一个匹配 (Shift+Enter)">↑</button>
+        <button class="btn" id="search-next" title="下一个匹配 (Enter)">↓</button>
+        <span class="search-count" id="search-count"></span>
+        <button class="btn" id="search-clear" title="清除搜索 (Esc)">✕</button>
+      </div>
       <div class="preview-meta" id="meta">
         <span><span class="meta-key">系统:</span><span class="meta-val" id="m-system">-</span></span>
         <span><span class="meta-key">服务器:</span><span class="meta-val" id="m-server">-</span></span>
@@ -247,6 +282,16 @@
         }
       }
 
+      function formatBytes(n) {
+        n = Number(n) || 0;
+        const u = ['B', 'KB', 'MB', 'GB', 'TB'];
+        let i = 0;
+        while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+        return n.toFixed(i ? 1 : 0) + ' ' + u[i];
+      }
+
+      let onPreviewRendered = function() {};
+
       function renderPreview(d) {
         $('#m-system').textContent = system;
         $('#m-server').textContent = server;
@@ -263,18 +308,12 @@
           div.className = 'preview-empty';
           div.textContent = '二进制文件，前 8KB 含 NUL 字节（占比 > 5%）。请用「下载完整文件」查看。';
           $('#preview-out').appendChild(div);
+          onPreviewRendered();
           return;
         }
         // 用 textContent 自动 escape，避免渲染 XSS
         $('#preview-out').textContent = d.content || '（文件为空）';
-      }
-
-      function formatBytes(n) {
-        n = Number(n) || 0;
-        const u = ['B', 'KB', 'MB', 'GB', 'TB'];
-        let i = 0;
-        while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
-        return n.toFixed(i ? 1 : 0) + ' ' + u[i];
+        onPreviewRendered();
       }
 
       // 按钮事件
@@ -313,6 +352,181 @@
           doPreview(cred);
         });
       }
+
+      // ===== 页面内搜索 / 高亮 =====
+      let searchTerm = '';
+      let searchMatches = [];
+      let searchActiveIdx = -1;
+      const searchInp = $('#search-input');
+      const searchCountEl = $('#search-count');
+      const searchPrevBtn = $('#search-prev');
+      const searchNextBtn = $('#search-next');
+      const searchClearBtn = $('#search-clear');
+      const previewOut = $('#preview-out');
+
+      function escapeRegExp(s) {
+        return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      }
+
+      function clearSearchHighlights() {
+        const marks = previewOut.querySelectorAll('mark.search-hl');
+        for (let i = marks.length - 1; i >= 0; i--) {
+          const m = marks[i];
+          const p = m.parentNode;
+          while (m.firstChild) p.insertBefore(m.firstChild, m);
+          p.removeChild(m);
+          p.normalize();
+        }
+        searchMatches = [];
+        searchActiveIdx = -1;
+        searchCountEl.textContent = '';
+      }
+
+      function highlightTextNode(textNode, regex) {
+        const text = textNode.nodeValue;
+        if (!text) return [];
+        const ms = [];
+        let mm;
+        regex.lastIndex = 0;
+        while ((mm = regex.exec(text)) !== null) {
+          if (mm[0].length === 0) { regex.lastIndex++; continue; }
+          ms.push({ start: mm.index, length: mm[0].length });
+        }
+        if (!ms.length) return [];
+        const frag = document.createDocumentFragment();
+        let pos = 0;
+        const created = [];
+        ms.forEach(function(match) {
+          if (match.start > pos) {
+            frag.appendChild(document.createTextNode(text.slice(pos, match.start)));
+          }
+          const mk = document.createElement('mark');
+          mk.className = 'search-hl';
+          mk.textContent = text.slice(match.start, match.start + match.length);
+          frag.appendChild(mk);
+          created.push(mk);
+          pos = match.start + match.length;
+        });
+        if (pos < text.length) {
+          frag.appendChild(document.createTextNode(text.slice(pos)));
+        }
+        textNode.parentNode.replaceChild(frag, textNode);
+        return created;
+      }
+
+      function applySearchHighlight(term) {
+        clearSearchHighlights();
+        if (!term) return;
+        const regex = new RegExp(escapeRegExp(term), 'gi');
+        const walker = document.createTreeWalker(previewOut, NodeFilter.SHOW_TEXT, {
+          acceptNode: function(node) {
+            if (!node.nodeValue) return NodeFilter.FILTER_REJECT;
+            let p = node.parentNode;
+            while (p && p !== previewOut) {
+              if (p.classList && p.classList.contains('search-hl')) return NodeFilter.FILTER_REJECT;
+              p = p.parentNode;
+            }
+            return NodeFilter.FILTER_ACCEPT;
+          }
+        });
+        const tnodes = [];
+        let n;
+        while ((n = walker.nextNode())) tnodes.push(n);
+        const marks = [];
+        tnodes.forEach(function(tn) {
+          const c = highlightTextNode(tn, regex);
+          for (let i = 0; i < c.length; i++) marks.push(c[i]);
+        });
+        searchMatches = marks;
+        searchActiveIdx = marks.length > 0 ? 0 : -1;
+        updateActiveMark();
+        updateSearchCount();
+        scrollToActiveMark();
+      }
+
+      function updateActiveMark() {
+        for (let i = 0; i < searchMatches.length; i++) {
+          if (i === searchActiveIdx) {
+            searchMatches[i].classList.add('search-hl-active');
+          } else {
+            searchMatches[i].classList.remove('search-hl-active');
+          }
+        }
+      }
+
+      function updateSearchCount() {
+        if (!searchTerm) { searchCountEl.textContent = ''; return; }
+        if (searchMatches.length === 0) {
+          searchCountEl.textContent = '无匹配';
+        } else {
+          searchCountEl.textContent = (searchActiveIdx + 1) + ' / ' + searchMatches.length;
+        }
+      }
+
+      function scrollToActiveMark() {
+        if (searchActiveIdx < 0 || !searchMatches[searchActiveIdx]) return;
+        searchMatches[searchActiveIdx].scrollIntoView({ block: 'center', behavior: 'smooth' });
+      }
+
+      function goToNextMatch() {
+        if (searchMatches.length === 0) return;
+        searchActiveIdx = (searchActiveIdx + 1) % searchMatches.length;
+        updateActiveMark();
+        updateSearchCount();
+        scrollToActiveMark();
+      }
+
+      function goToPrevMatch() {
+        if (searchMatches.length === 0) return;
+        searchActiveIdx = (searchActiveIdx - 1 + searchMatches.length) % searchMatches.length;
+        updateActiveMark();
+        updateSearchCount();
+        scrollToActiveMark();
+      }
+
+      let searchDebounce = null;
+      searchInp.addEventListener('input', function() {
+        clearTimeout(searchDebounce);
+        searchDebounce = setTimeout(function() {
+          searchTerm = searchInp.value;
+          applySearchHighlight(searchTerm);
+        }, 200);
+      });
+      searchInp.addEventListener('keydown', function(ev) {
+        if (ev.key === 'Enter') {
+          ev.preventDefault();
+          if (ev.shiftKey) goToPrevMatch();
+          else goToNextMatch();
+        } else if (ev.key === 'Escape') {
+          ev.preventDefault();
+          searchInp.value = '';
+          searchTerm = '';
+          clearSearchHighlights();
+          searchInp.blur();
+        }
+      });
+      searchPrevBtn.addEventListener('click', goToPrevMatch);
+      searchNextBtn.addEventListener('click', goToNextMatch);
+      searchClearBtn.addEventListener('click', function() {
+        searchInp.value = '';
+        searchTerm = '';
+        clearSearchHighlights();
+        searchInp.focus();
+      });
+
+      document.addEventListener('keydown', function(ev) {
+        if ((ev.ctrlKey || ev.metaKey) && ev.key === 'f') {
+          ev.preventDefault();
+          searchInp.focus();
+          searchInp.select();
+        }
+      });
+
+      onPreviewRendered = function() {
+        if (searchTerm) {
+          applySearchHighlight(searchTerm);
+        }
+      };
 
       // 启动
       doPreview(getCred());

@@ -1945,12 +1945,64 @@
       w.document.body.style.fontSize = '13px';
       w.document.body.style.background = '#fff';
       w.document.body.style.color = '#333';
+      w.document.body.style.margin = '0';
+      w.document.body.style.padding = '0';
       const style = w.document.createElement('style');
-      style.textContent = '@keyframes ctxHitFlash{0%{background:#ff6b35;}50%{background:#ff9800;}100%{background:#fff176;}}.ctx-hit{background:#fff176!important;font-weight:bold!important;animation:ctxHitFlash 1.2s ease-out;box-shadow:inset 3px 0 0 #ff9800;}.ctx-line{padding:2px 0;border-bottom:1px solid #eee;}.ctx-ln{display:inline-block;width:60px;color:#999;text-align:right;margin-right:12px;user-select:none;}.ctx-ct{white-space:pre-wrap;word-break:break-all;}html,body{margin:0;padding:0;}body{padding:12px;overflow-y:auto;height:100vh;box-sizing:border-box;}';
+      style.textContent = '@keyframes ctxHitFlash{0%{background:#ff6b35;}50%{background:#ff9800;}100%{background:#fff176;}}' +
+        '.ctx-hit{background:#fff176!important;font-weight:bold!important;animation:ctxHitFlash 1.2s ease-out;box-shadow:inset 3px 0 0 #ff9800;}' +
+        '.ctx-line{padding:2px 0;border-bottom:1px solid #eee;}' +
+        '.ctx-ln{display:inline-block;width:60px;color:#999;text-align:right;margin-right:12px;user-select:none;}' +
+        '.ctx-ct{white-space:pre-wrap;word-break:break-all;}' +
+        'html,body{margin:0;padding:0;height:100%;}' +
+        'body{display:flex;flex-direction:column;height:100vh;box-sizing:border-box;}' +
+        '.ctx-header{padding:10px 14px 6px;background:#fafafa;border-bottom:1px solid #eee;flex:0 0 auto;}' +
+        '.ctx-header h3{margin:0 0 8px 0;font-size:14px;}' +
+        '.ctx-search{display:flex;gap:6px;align-items:center;}' +
+        '.ctx-search input{flex:1;padding:4px 8px;border:1px solid #ccc;border-radius:4px;font-family:inherit;font-size:12px;}' +
+        '.ctx-search input:focus{outline:none;border-color:#4f8cff;box-shadow:0 0 0 2px rgba(79,140,255,0.2);}' +
+        '.ctx-search button{padding:3px 10px;border:1px solid #ccc;border-radius:4px;background:#fff;cursor:pointer;font-size:12px;font-family:inherit;}' +
+        '.ctx-search button:hover{background:#f0f0f0;}' +
+        '.ctx-search .ctx-search-count{font-size:11px;color:#888;min-width:50px;text-align:center;}' +
+        '.ctx-body{flex:1;overflow-y:auto;padding:6px 14px;}' +
+        'mark.search-hl{background:#fff176;color:#000;border-radius:2px;padding:0 1px;}' +
+        'mark.search-hl.search-hl-active{background:#ff9800;color:#000;box-shadow:0 0 0 1px #e65100;}';
       (w.document.head || w.document.getElementsByTagName('head')[0]).appendChild(style);
+
+      const header = w.document.createElement('div');
+      header.className = 'ctx-header';
       const h = w.document.createElement('h3');
       h.textContent = title;
-      w.document.body.appendChild(h);
+      header.appendChild(h);
+
+      const searchBar = w.document.createElement('div');
+      searchBar.className = 'ctx-search';
+      const searchInp = w.document.createElement('input');
+      searchInp.type = 'text';
+      searchInp.placeholder = '搜索…（Ctrl+F / ⌘F）';
+      searchInp.autocomplete = 'off';
+      const searchPrev = w.document.createElement('button');
+      searchPrev.textContent = '↑';
+      searchPrev.title = '上一个 (Shift+Enter)';
+      const searchNext = w.document.createElement('button');
+      searchNext.textContent = '↓';
+      searchNext.title = '下一个 (Enter)';
+      const searchCount = w.document.createElement('span');
+      searchCount.className = 'ctx-search-count';
+      const searchClear = w.document.createElement('button');
+      searchClear.textContent = '✕';
+      searchClear.title = '清除 (Esc)';
+      searchBar.appendChild(searchInp);
+      searchBar.appendChild(searchPrev);
+      searchBar.appendChild(searchNext);
+      searchBar.appendChild(searchCount);
+      searchBar.appendChild(searchClear);
+      header.appendChild(searchBar);
+      w.document.body.appendChild(header);
+
+      const body = w.document.createElement('div');
+      body.className = 'ctx-body';
+      w.document.body.appendChild(body);
+
       let hitEl = null;
       lines.forEach(l => {
         const row = w.document.createElement('div');
@@ -1964,8 +2016,134 @@
         ct.textContent = l.content;
         row.appendChild(ln);
         row.appendChild(ct);
-        w.document.body.appendChild(row);
+        body.appendChild(row);
       });
+
+      const escRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      let searchMatches = [];
+      let searchActiveIdx = -1;
+
+      function clearHL() {
+        const marks = body.querySelectorAll('mark.search-hl');
+        for (let i = marks.length - 1; i >= 0; i--) {
+          const m = marks[i];
+          const p = m.parentNode;
+          while (m.firstChild) p.insertBefore(m.firstChild, m);
+          p.removeChild(m);
+          p.normalize();
+        }
+        searchMatches = [];
+        searchActiveIdx = -1;
+        searchCount.textContent = '';
+      }
+
+      function hlTextNode(tn, regex) {
+        const text = tn.nodeValue;
+        if (!text) return [];
+        const ms = [];
+        let mm;
+        regex.lastIndex = 0;
+        while ((mm = regex.exec(text)) !== null) {
+          if (mm[0].length === 0) { regex.lastIndex++; continue; }
+          ms.push({ s: mm.index, l: mm[0].length });
+        }
+        if (!ms.length) return [];
+        const frag = w.document.createDocumentFragment();
+        let pos = 0;
+        const created = [];
+        ms.forEach(function(match) {
+          if (match.s > pos) frag.appendChild(w.document.createTextNode(text.slice(pos, match.s)));
+          const mk = w.document.createElement('mark');
+          mk.className = 'search-hl';
+          mk.textContent = text.slice(match.s, match.s + match.l);
+          frag.appendChild(mk);
+          created.push(mk);
+          pos = match.s + match.l;
+        });
+        if (pos < text.length) frag.appendChild(w.document.createTextNode(text.slice(pos)));
+        tn.parentNode.replaceChild(frag, tn);
+        return created;
+      }
+
+      function doSearch(term) {
+        clearHL();
+        if (!term) return;
+        const regex = new RegExp(escRe(term), 'gi');
+        const walker = w.document.createTreeWalker(body, w.NodeFilter.SHOW_TEXT, {
+          acceptNode: function(node) {
+            if (!node.nodeValue) return w.NodeFilter.FILTER_REJECT;
+            let p = node.parentNode;
+            while (p && p !== body) {
+              if (p.classList && p.classList.contains('search-hl')) return w.NodeFilter.FILTER_REJECT;
+              p = p.parentNode;
+            }
+            return w.NodeFilter.FILTER_ACCEPT;
+          }
+        });
+        const tnodes = [];
+        let n;
+        while ((n = walker.nextNode())) tnodes.push(n);
+        const marks = [];
+        tnodes.forEach(function(tn) {
+          const c = hlTextNode(tn, regex);
+          for (let i = 0; i < c.length; i++) marks.push(c[i]);
+        });
+        searchMatches = marks;
+        searchActiveIdx = marks.length > 0 ? 0 : -1;
+        updateActive();
+        updateCount();
+        scrollActive();
+      }
+
+      function updateActive() {
+        for (let i = 0; i < searchMatches.length; i++) {
+          if (i === searchActiveIdx) searchMatches[i].classList.add('search-hl-active');
+          else searchMatches[i].classList.remove('search-hl-active');
+        }
+      }
+
+      function updateCount() {
+        if (searchMatches.length === 0) searchCount.textContent = searchInp.value ? '无匹配' : '';
+        else searchCount.textContent = (searchActiveIdx + 1) + ' / ' + searchMatches.length;
+      }
+
+      function scrollActive() {
+        if (searchActiveIdx < 0 || !searchMatches[searchActiveIdx]) return;
+        searchMatches[searchActiveIdx].scrollIntoView({ block: 'center', behavior: 'smooth' });
+      }
+
+      function nextMatch() {
+        if (!searchMatches.length) return;
+        searchActiveIdx = (searchActiveIdx + 1) % searchMatches.length;
+        updateActive(); updateCount(); scrollActive();
+      }
+      function prevMatch() {
+        if (!searchMatches.length) return;
+        searchActiveIdx = (searchActiveIdx - 1 + searchMatches.length) % searchMatches.length;
+        updateActive(); updateCount(); scrollActive();
+      }
+
+      let sdeb = null;
+      searchInp.addEventListener('input', function() {
+        clearTimeout(sdeb);
+        sdeb = setTimeout(function() { doSearch(searchInp.value); }, 200);
+      });
+      searchInp.addEventListener('keydown', function(ev) {
+        if (ev.key === 'Enter') { ev.preventDefault(); if (ev.shiftKey) prevMatch(); else nextMatch(); }
+        else if (ev.key === 'Escape') { ev.preventDefault(); searchInp.value = ''; clearHL(); searchInp.blur(); }
+      });
+      searchPrev.addEventListener('click', prevMatch);
+      searchNext.addEventListener('click', nextMatch);
+      searchClear.addEventListener('click', function() { searchInp.value = ''; clearHL(); searchInp.focus(); });
+
+      w.document.addEventListener('keydown', function(ev) {
+        if ((ev.ctrlKey || ev.metaKey) && ev.key === 'f') {
+          ev.preventDefault();
+          searchInp.focus();
+          searchInp.select();
+        }
+      });
+
       if (hitEl) {
         setTimeout(() => { hitEl.scrollIntoView({ block: 'center', behavior: 'smooth' }); }, 100);
       }

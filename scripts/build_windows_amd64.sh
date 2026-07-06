@@ -59,11 +59,16 @@ go build "${GO_MOD_FLAGS[@]}" -trimpath -ldflags "${LDFLAGS}" -o "${OUT_DIR}/Kai
 # 复制运行所需文件
 # config.yaml 是首选，但发布包里通常只有 config.yaml.production.example（占位 / 模板）。
 # 优先用本地 config.yaml，没有就回退到 example，再没有就报错退出。
+#
+# 注意：无论走哪条路径，都必须剥离开发者白名单行（kairo: ...），
+# 这是开发者自用旁路，不应进入生产分发包。详见 docs/KAIRO-LICENSE.md。
+# 用 ^\s*kairo: 匹配所有非注释的 kairo 行（不管值的格式：引号、点号、空值等），
+# 注释行（# kairo: ...）以 # 开头不会被误伤。
 if [[ -f config.yaml ]]; then
-  cp config.yaml "${OUT_DIR}/config.yaml"
+  grep -v -E "^\s*kairo:" config.yaml > "${OUT_DIR}/config.yaml"
 elif [[ -f config.yaml.production.example ]]; then
   echo ">> 警告：未找到 config.yaml，使用 config.yaml.production.example 复制为 config.yaml"
-  cp config.yaml.production.example "${OUT_DIR}/config.yaml"
+  grep -v -E "^\s*kairo:" config.yaml.production.example > "${OUT_DIR}/config.yaml"
 else
   echo "错误：找不到 config.yaml 或 config.yaml.production.example" >&2
   exit 1

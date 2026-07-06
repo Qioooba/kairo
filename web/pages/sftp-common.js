@@ -125,17 +125,40 @@
   }
 
   // isTextFileByExt 根据扩展名判断是否文本文件（用于「双击预览」）。
-  // 与项目约定一致：.log/.txt/.out 走新 tab 预览，其他走下载。
+  // 策略：采用黑名单排除已知二进制格式，其余默认按文本处理。
+  // 这样能覆盖绝大多数代码/配置/日志/脚本/标记语言文件，避免白名单漏判
+  // （如 .jsp/.jspx/.php/.asp/.rb/.kt/.gradle/.vue/.svelte/.toml/.env 等之前都不在白名单里）。
   function isTextFileByExt(name) {
     if (!name) return false;
     const lower = name.toLowerCase();
-    const exts = ['.log', '.txt', '.out', '.csv', '.json', '.xml', '.yaml', '.yml',
-      '.conf', '.cfg', '.ini', '.properties', '.sh', '.py', '.js', '.ts', '.go',
-      '.java', '.c', '.cpp', '.h', '.hpp', '.md', '.sql', '.html', '.css'];
-    for (let i = 0; i < exts.length; i++) {
-      if (lower.endsWith(exts[i])) return true;
+    // 已知二进制扩展名（压缩包/图片/音视频/可执行/字体/Office文档等）→ 不预览
+    const binaryExts = [
+      // 压缩/归档
+      '.zip', '.tar', '.gz', '.tgz', '.bz2', '.xz', '.7z', '.rar', '.jar', '.war',
+      '.ear', '.deb', '.rpm', '.dmg', '.iso', '.pkg',
+      // 图片
+      '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.ico', '.webp', '.tiff', '.tif',
+      '.svg', '.psd', '.ai', '.eps',
+      // 音视频
+      '.mp3', '.mp4', '.wav', '.flac', '.ogg', '.aac', '.wma', '.avi', '.mkv',
+      '.mov', '.wmv', '.flv', '.webm',
+      // 可执行/库
+      '.exe', '.dll', '.so', '.dylib', '.o', '.a', '.lib', '.obj', '.bin', '.class',
+      '.pyc', '.pyo', '.elc', '.ko',
+      // 字体
+      '.ttf', '.otf', '.woff', '.woff2', '.eot',
+      // Office/PDF
+      '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.odt', '.ods', '.odp',
+      // 数据库
+      '.db', '.sqlite', '.sqlite3', '.mdb',
+      // 其他
+      '.swf', '.pdb', '.wasm',
+    ];
+    for (let i = 0; i < binaryExts.length; i++) {
+      if (lower.endsWith(binaryExts[i])) return false;
     }
-    return false;
+    // 无扩展名文件（如 Makefile/Dockerfile/README/CHANGELOG/LICENSE 等）也按文本处理
+    return true;
   }
 
   // openPreviewWindow 在新 tab 打开预览页面。
