@@ -144,4 +144,7 @@ crash.log
 /docs/qa/hc-websphere-fixed.png
 
 # ===== 测试 mock 临时文件 =====
+# scripts/fake-websphere/opt/ 是 fake-websphere 的"伪文件系统"大目录（模拟 AIX/WebSphere 环境），
+# 由脚本动态生成，不纳入版本控制；fake-websphere 下的其他配置文件（如 shell 脚本等）仍被跟踪。
+# 对应 .gitattributes 里 scripts/fake-websphere/** export-ignore 负责 archive 时排除已跟踪的部分。
 /scripts/fake-websphere/opt/

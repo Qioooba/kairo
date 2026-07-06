@@ -2019,130 +2019,20 @@
         body.appendChild(row);
       });
 
-      const escRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      let searchMatches = [];
-      let searchActiveIdx = -1;
-
-      function clearHL() {
-        const marks = body.querySelectorAll('mark.search-hl');
-        for (let i = marks.length - 1; i >= 0; i--) {
-          const m = marks[i];
-          const p = m.parentNode;
-          while (m.firstChild) p.insertBefore(m.firstChild, m);
-          p.removeChild(m);
-          p.normalize();
-        }
-        searchMatches = [];
-        searchActiveIdx = -1;
-        searchCount.textContent = '';
-      }
-
-      function hlTextNode(tn, regex) {
-        const text = tn.nodeValue;
-        if (!text) return [];
-        const ms = [];
-        let mm;
-        regex.lastIndex = 0;
-        while ((mm = regex.exec(text)) !== null) {
-          if (mm[0].length === 0) { regex.lastIndex++; continue; }
-          ms.push({ s: mm.index, l: mm[0].length });
-        }
-        if (!ms.length) return [];
-        const frag = w.document.createDocumentFragment();
-        let pos = 0;
-        const created = [];
-        ms.forEach(function(match) {
-          if (match.s > pos) frag.appendChild(w.document.createTextNode(text.slice(pos, match.s)));
-          const mk = w.document.createElement('mark');
-          mk.className = 'search-hl';
-          mk.textContent = text.slice(match.s, match.s + match.l);
-          frag.appendChild(mk);
-          created.push(mk);
-          pos = match.s + match.l;
+      // 加载公共搜索高亮模块，加载完成后初始化
+      const script = w.document.createElement('script');
+      script.src = '/static/vendor/search-hl.js?v=20260707';
+      script.onload = function() {
+        w.Kairo.createSearchHighlighter({
+          container: body,
+          input: searchInp,
+          countEl: searchCount,
+          prevBtn: searchPrev,
+          nextBtn: searchNext,
+          clearBtn: searchClear
         });
-        if (pos < text.length) frag.appendChild(w.document.createTextNode(text.slice(pos)));
-        tn.parentNode.replaceChild(frag, tn);
-        return created;
-      }
-
-      function doSearch(term) {
-        clearHL();
-        if (!term) return;
-        const regex = new RegExp(escRe(term), 'gi');
-        const walker = w.document.createTreeWalker(body, w.NodeFilter.SHOW_TEXT, {
-          acceptNode: function(node) {
-            if (!node.nodeValue) return w.NodeFilter.FILTER_REJECT;
-            let p = node.parentNode;
-            while (p && p !== body) {
-              if (p.classList && p.classList.contains('search-hl')) return w.NodeFilter.FILTER_REJECT;
-              p = p.parentNode;
-            }
-            return w.NodeFilter.FILTER_ACCEPT;
-          }
-        });
-        const tnodes = [];
-        let n;
-        while ((n = walker.nextNode())) tnodes.push(n);
-        const marks = [];
-        tnodes.forEach(function(tn) {
-          const c = hlTextNode(tn, regex);
-          for (let i = 0; i < c.length; i++) marks.push(c[i]);
-        });
-        searchMatches = marks;
-        searchActiveIdx = marks.length > 0 ? 0 : -1;
-        updateActive();
-        updateCount();
-        scrollActive();
-      }
-
-      function updateActive() {
-        for (let i = 0; i < searchMatches.length; i++) {
-          if (i === searchActiveIdx) searchMatches[i].classList.add('search-hl-active');
-          else searchMatches[i].classList.remove('search-hl-active');
-        }
-      }
-
-      function updateCount() {
-        if (searchMatches.length === 0) searchCount.textContent = searchInp.value ? '无匹配' : '';
-        else searchCount.textContent = (searchActiveIdx + 1) + ' / ' + searchMatches.length;
-      }
-
-      function scrollActive() {
-        if (searchActiveIdx < 0 || !searchMatches[searchActiveIdx]) return;
-        searchMatches[searchActiveIdx].scrollIntoView({ block: 'center', behavior: 'smooth' });
-      }
-
-      function nextMatch() {
-        if (!searchMatches.length) return;
-        searchActiveIdx = (searchActiveIdx + 1) % searchMatches.length;
-        updateActive(); updateCount(); scrollActive();
-      }
-      function prevMatch() {
-        if (!searchMatches.length) return;
-        searchActiveIdx = (searchActiveIdx - 1 + searchMatches.length) % searchMatches.length;
-        updateActive(); updateCount(); scrollActive();
-      }
-
-      let sdeb = null;
-      searchInp.addEventListener('input', function() {
-        clearTimeout(sdeb);
-        sdeb = setTimeout(function() { doSearch(searchInp.value); }, 200);
-      });
-      searchInp.addEventListener('keydown', function(ev) {
-        if (ev.key === 'Enter') { ev.preventDefault(); if (ev.shiftKey) prevMatch(); else nextMatch(); }
-        else if (ev.key === 'Escape') { ev.preventDefault(); searchInp.value = ''; clearHL(); searchInp.blur(); }
-      });
-      searchPrev.addEventListener('click', prevMatch);
-      searchNext.addEventListener('click', nextMatch);
-      searchClear.addEventListener('click', function() { searchInp.value = ''; clearHL(); searchInp.focus(); });
-
-      w.document.addEventListener('keydown', function(ev) {
-        if ((ev.ctrlKey || ev.metaKey) && ev.key === 'f') {
-          ev.preventDefault();
-          searchInp.focus();
-          searchInp.select();
-        }
-      });
+      };
+      (w.document.head || w.document.getElementsByTagName('head')[0]).appendChild(script);
 
       if (hitEl) {
         setTimeout(() => { hitEl.scrollIntoView({ block: 'center', behavior: 'smooth' }); }, 100);

@@ -25,6 +25,7 @@
     })();
   </script>
   <link rel="stylesheet" href="/static/style.css" />
+  <link rel="stylesheet" href="/static/vendor/search-hl.css?v=20260707" />
   <style>
     /* preview 独立窗口：尽量窄、尽量高，避免被侧边栏挤 */
     body { grid-template-columns: 1fr; }
@@ -85,20 +86,6 @@
     .search-bar input[type="text"]:focus { outline: none; border-color: var(--primary-2); box-shadow: 0 0 0 2px rgba(79,140,255,0.2); }
     .search-bar .search-count { font-size: 11.5px; color: var(--text-dim); min-width: 60px; text-align: center; }
     .search-bar .btn { padding: 4px 10px; font-size: 12px; }
-    mark.search-hl {
-      background: #fff176; color: #000; border-radius: 2px; padding: 0 1px;
-    }
-    mark.search-hl.search-hl-active {
-      background: #ff9800; color: #000; box-shadow: 0 0 0 1px #e65100;
-    }
-    :root[data-theme="dark"] mark.search-hl { background: #f9a825; color: #000; }
-    :root[data-theme="dark"] mark.search-hl.search-hl-active { background: #ff6d00; color: #000; }
-    :root[data-theme="green"] mark.search-hl { background: #c6ff00; color: #1b5e20; }
-    :root[data-theme="green"] mark.search-hl.search-hl-active { background: #76ff03; color: #1b5e20; box-shadow: 0 0 0 1px #33691e; }
-    :root[data-theme="hc"] mark.search-hl { background: #ffeb3b; color: #000; }
-    :root[data-theme="hc"] mark.search-hl.search-hl-active { background: #ff9800; color: #000; }
-    :root[data-theme="xianxia"] mark.search-hl { background: #ffe082; color: #4e342e; }
-    :root[data-theme="xianxia"] mark.search-hl.search-hl-active { background: #ffb300; color: #3e2723; }
   </style>
 </head>
 <body>
@@ -149,6 +136,7 @@
   </main>
 
   <div id="toast" class="toast"></div>
+  <script src="/static/vendor/search-hl.js?v=20260707"></script>
   <script>
     // ===== preview.html 独立窗口 JS =====
     // 从 query string 拿 system/server/path/encoding，
@@ -191,9 +179,6 @@
       const server = params.get('server') || '';
       const path = params.get('path') || '';
       const encoding = params.get('encoding') || 'utf-8';
-      // v0.11+：source=ssh-sftp 表示来自 SSH 终端内嵌 SFTP 面板，
-      // 走 /api/ssh/sftp/preview（不走 free_file_roots 白名单）。
-      // 默认（files 页）走 /api/files/preview（受白名单约束）。
       const source = params.get('source') || '';
       const previewApi = source === 'ssh-sftp' ? '/api/ssh/sftp/preview' : '/api/files/preview';
 
@@ -222,9 +207,6 @@
       const passInp = $('#preview-pass');
       let activeCred = null;
 
-      // 拿凭据：opener window 同源直接取（用户在主页已输入）。
-      // P0-BUG-3 修复：拿不到 password 时返回 null（不是空 password），
-      // 让 doPreview 走"直接调后端"路径——后端有 keyring 兜底。
       function getCred() {
         try {
           const op = window.opener;
@@ -250,21 +232,15 @@
           toast('参数缺失：system / server / path', 'err');
           setConn('err', '参数缺失');
           $('#preview-out').textContent = '';
+          searchHl.clear();
           return;
         }
         cred = cred || getCred();
-        // P0-BUG-3：cred 缺失时仍然**直接调后端**——后端会走 keyring 兜底。
-        // 老逻辑是"没 password 就 showLogin 等用户输入"，但 opener 拿不到密码是常态，
-        // 导致每次预览都弹 login，纯粹多余。
         activeCred = cred || { username: '', password: '' };
         hideLogin();
 
         setConn('busy', '加载中…');
         try {
-          // FE-003：走 call()（Kairo.api.api() 优先，401 触发登录引导），
-          // 退化时用裸 fetch 兜底。call() 返回解析后的 data，!ok/401 时抛错。
-          // BUG-3：cred 可能是 null（getCred() opener 拿不到 password 时返回 null），
-          // 改读 activeCred（有 || {username:'',password:''} 兜底，永远是对象）。
           const data = await call('POST', previewApi, {
             system: system, server: server, path: path,
             username: activeCred.username, password: activeCred.password,
@@ -290,7 +266,7 @@
         return n.toFixed(i ? 1 : 0) + ' ' + u[i];
       }
 
-      let onPreviewRendered = function() {};
+      const previewOut = $('#preview-out');
 
       function renderPreview(d) {
         $('#m-system').textContent = system;
@@ -302,29 +278,35 @@
           (d.truncated ? '（文件 ' + formatBytes(d.size) + ' 更大）' : '');
         $('#m-trunc-wrap').style.display = d.truncated ? '' : 'none';
         $('#m-binary-wrap').style.display = d.is_binary ? '' : 'none';
-        $('#preview-out').innerHTML = '';
+        previewOut.innerHTML = '';
         if (d.is_binary) {
           const div = document.createElement('div');
           div.className = 'preview-empty';
           div.textContent = '二进制文件，前 8KB 含 NUL 字节（占比 > 5%）。请用「下载完整文件」查看。';
-          $('#preview-out').appendChild(div);
-          onPreviewRendered();
-          return;
+          previewOut.appendChild(div);
+        } else {
+          previewOut.textContent = d.content || '（文件为空）';
         }
-        // 用 textContent 自动 escape，避免渲染 XSS
-        $('#preview-out').textContent = d.content || '（文件为空）';
-        onPreviewRendered();
+        // 内容渲染完成后，如果已有搜索词则重新高亮（修复：searchHl 在 doPreview 之前已初始化）
+        searchHl.refresh();
       }
+
+      // ===== 页面内搜索 / 高亮（公共模块） =====
+      const searchHl = Kairo.createSearchHighlighter({
+        container: previewOut,
+        input: $('#search-input'),
+        countEl: $('#search-count'),
+        prevBtn: $('#search-prev'),
+        nextBtn: $('#search-next'),
+        clearBtn: $('#search-clear')
+      });
 
       // 按钮事件
       $('#btn-refresh').addEventListener('click', () => doPreview(activeCred || getCred()));
       $('#btn-close').addEventListener('click', () => { window.close(); });
       $('#btn-download').addEventListener('click', async () => {
-        // P0-BUG-3：getCred() 可能返回 {username:'', password:''}（无凭据），
-        // 但仍然发请求——后端有 keyring 兜底。
         const cred = activeCred || getCred() || { username: '', password: '' };
         try {
-          // FE-003：走 call()（Kairo.api.api() 优先，401 触发登录引导）。
           const d = await call('POST', '/api/files/download', {
             system: system, server: server, path: path,
             username: cred.username || '', password: cred.password || '',
@@ -353,182 +335,7 @@
         });
       }
 
-      // ===== 页面内搜索 / 高亮 =====
-      let searchTerm = '';
-      let searchMatches = [];
-      let searchActiveIdx = -1;
-      const searchInp = $('#search-input');
-      const searchCountEl = $('#search-count');
-      const searchPrevBtn = $('#search-prev');
-      const searchNextBtn = $('#search-next');
-      const searchClearBtn = $('#search-clear');
-      const previewOut = $('#preview-out');
-
-      function escapeRegExp(s) {
-        return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      }
-
-      function clearSearchHighlights() {
-        const marks = previewOut.querySelectorAll('mark.search-hl');
-        for (let i = marks.length - 1; i >= 0; i--) {
-          const m = marks[i];
-          const p = m.parentNode;
-          while (m.firstChild) p.insertBefore(m.firstChild, m);
-          p.removeChild(m);
-          p.normalize();
-        }
-        searchMatches = [];
-        searchActiveIdx = -1;
-        searchCountEl.textContent = '';
-      }
-
-      function highlightTextNode(textNode, regex) {
-        const text = textNode.nodeValue;
-        if (!text) return [];
-        const ms = [];
-        let mm;
-        regex.lastIndex = 0;
-        while ((mm = regex.exec(text)) !== null) {
-          if (mm[0].length === 0) { regex.lastIndex++; continue; }
-          ms.push({ start: mm.index, length: mm[0].length });
-        }
-        if (!ms.length) return [];
-        const frag = document.createDocumentFragment();
-        let pos = 0;
-        const created = [];
-        ms.forEach(function(match) {
-          if (match.start > pos) {
-            frag.appendChild(document.createTextNode(text.slice(pos, match.start)));
-          }
-          const mk = document.createElement('mark');
-          mk.className = 'search-hl';
-          mk.textContent = text.slice(match.start, match.start + match.length);
-          frag.appendChild(mk);
-          created.push(mk);
-          pos = match.start + match.length;
-        });
-        if (pos < text.length) {
-          frag.appendChild(document.createTextNode(text.slice(pos)));
-        }
-        textNode.parentNode.replaceChild(frag, textNode);
-        return created;
-      }
-
-      function applySearchHighlight(term) {
-        clearSearchHighlights();
-        if (!term) return;
-        const regex = new RegExp(escapeRegExp(term), 'gi');
-        const walker = document.createTreeWalker(previewOut, NodeFilter.SHOW_TEXT, {
-          acceptNode: function(node) {
-            if (!node.nodeValue) return NodeFilter.FILTER_REJECT;
-            let p = node.parentNode;
-            while (p && p !== previewOut) {
-              if (p.classList && p.classList.contains('search-hl')) return NodeFilter.FILTER_REJECT;
-              p = p.parentNode;
-            }
-            return NodeFilter.FILTER_ACCEPT;
-          }
-        });
-        const tnodes = [];
-        let n;
-        while ((n = walker.nextNode())) tnodes.push(n);
-        const marks = [];
-        tnodes.forEach(function(tn) {
-          const c = highlightTextNode(tn, regex);
-          for (let i = 0; i < c.length; i++) marks.push(c[i]);
-        });
-        searchMatches = marks;
-        searchActiveIdx = marks.length > 0 ? 0 : -1;
-        updateActiveMark();
-        updateSearchCount();
-        scrollToActiveMark();
-      }
-
-      function updateActiveMark() {
-        for (let i = 0; i < searchMatches.length; i++) {
-          if (i === searchActiveIdx) {
-            searchMatches[i].classList.add('search-hl-active');
-          } else {
-            searchMatches[i].classList.remove('search-hl-active');
-          }
-        }
-      }
-
-      function updateSearchCount() {
-        if (!searchTerm) { searchCountEl.textContent = ''; return; }
-        if (searchMatches.length === 0) {
-          searchCountEl.textContent = '无匹配';
-        } else {
-          searchCountEl.textContent = (searchActiveIdx + 1) + ' / ' + searchMatches.length;
-        }
-      }
-
-      function scrollToActiveMark() {
-        if (searchActiveIdx < 0 || !searchMatches[searchActiveIdx]) return;
-        searchMatches[searchActiveIdx].scrollIntoView({ block: 'center', behavior: 'smooth' });
-      }
-
-      function goToNextMatch() {
-        if (searchMatches.length === 0) return;
-        searchActiveIdx = (searchActiveIdx + 1) % searchMatches.length;
-        updateActiveMark();
-        updateSearchCount();
-        scrollToActiveMark();
-      }
-
-      function goToPrevMatch() {
-        if (searchMatches.length === 0) return;
-        searchActiveIdx = (searchActiveIdx - 1 + searchMatches.length) % searchMatches.length;
-        updateActiveMark();
-        updateSearchCount();
-        scrollToActiveMark();
-      }
-
-      let searchDebounce = null;
-      searchInp.addEventListener('input', function() {
-        clearTimeout(searchDebounce);
-        searchDebounce = setTimeout(function() {
-          searchTerm = searchInp.value;
-          applySearchHighlight(searchTerm);
-        }, 200);
-      });
-      searchInp.addEventListener('keydown', function(ev) {
-        if (ev.key === 'Enter') {
-          ev.preventDefault();
-          if (ev.shiftKey) goToPrevMatch();
-          else goToNextMatch();
-        } else if (ev.key === 'Escape') {
-          ev.preventDefault();
-          searchInp.value = '';
-          searchTerm = '';
-          clearSearchHighlights();
-          searchInp.blur();
-        }
-      });
-      searchPrevBtn.addEventListener('click', goToPrevMatch);
-      searchNextBtn.addEventListener('click', goToNextMatch);
-      searchClearBtn.addEventListener('click', function() {
-        searchInp.value = '';
-        searchTerm = '';
-        clearSearchHighlights();
-        searchInp.focus();
-      });
-
-      document.addEventListener('keydown', function(ev) {
-        if ((ev.ctrlKey || ev.metaKey) && ev.key === 'f') {
-          ev.preventDefault();
-          searchInp.focus();
-          searchInp.select();
-        }
-      });
-
-      onPreviewRendered = function() {
-        if (searchTerm) {
-          applySearchHighlight(searchTerm);
-        }
-      };
-
-      // 启动
+      // 启动（searchHl 已在上方初始化，renderPreview 里直接调用 searchHl.refresh() 安全）
       doPreview(getCred());
     })();
   </script>

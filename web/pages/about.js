@@ -52,9 +52,10 @@
     operator:     'M3 4h18v16H3zM3 8h18M6 12l3 2-3 2M11 16h7',                                                                                           // 终端 — 工程师视角
 
     // ----------------------------------------------------------------
-    // 功能模块 8 卡片 (renderModulesSection)
+    // 功能模块 10 卡片 (renderModulesSection)
     // ----------------------------------------------------------------
     websphere:    'M4 4h16v2H4zM4 8h11v2H4zM4 12h16v2H4zM4 16h11v2H4zM4 20h16v2H4z',                                                                     // 日志列表 — WebSphere 日志助手
+    sshTerminal:  'M3 4h18v16H3zM3 8h18M6 12l3 2-3 2M11 16h7',                                                                                          // 终端窗口 — SSH 终端 + SFTP
     downloader:   'M12 3v12M7 10l5 5 5-5M5 19h14v2H5z',                                                                                                  // 下箭头 — 文件下载器
     compareIc:    'M3 6l4 6-4 6M21 6l-4 6 4 6M14 4l-4 16',                                                                                                // diff 双柱 — 代码比对系统
     http:         'M12 2a10 10 0 100 20 10 10 0 000-20zM2 12h20M12 2a15 15 0 010 20M12 2a15 15 0 000 20',                                                // 经纬网 — HTTP 测试台
@@ -117,14 +118,14 @@
   // §1. 核心数据看板
   // =====================================================================
   const stats = [
-    { label: '总代码量',             value: '65,000+', sub: 'Go 40K · 前端 25K · 0 npm 运行时', tone: 'primary' },
-    { label: '代码行数 (Go)',         value: '40,000+', sub: '70 个源文件 · 19 个子包 · 含测试', tone: 'primary' },
-    { label: '代码行数 (前端)',       value: '25,000+', sub: 'vanilla JS · 零依赖',         tone: 'accent'  },
-    { label: '提交次数',              value: '131',     sub: 'v0.1 → v0.12',                tone: 'success' },
-    { label: '后端模块',              value: '19',      sub: 'internal/* 子包 (新增 webservice)', tone: 'primary' },
-    { label: '前端页面',              value: '16',      sub: 'web/pages/*.js (新增 webservice)', tone: 'accent'  },
+    { label: '总代码量',             value: '68,000+', sub: 'Go 41K · 前端 28K · 0 npm 运行时', tone: 'primary' },
+    { label: '代码行数 (Go)',         value: '41,000+', sub: '70 个源文件 · 19 个子包 · 含测试', tone: 'primary' },
+    { label: '代码行数 (前端)',       value: '28,000+', sub: 'vanilla JS · 零依赖',         tone: 'accent'  },
+    { label: '提交次数',              value: '134',     sub: 'v0.1 → v0.13',                tone: 'success' },
+    { label: '后端模块',              value: '19',      sub: 'internal/* (含 sshshell/sftpclient/webservice)', tone: 'primary' },
+    { label: '前端页面',              value: '16',      sub: 'web/pages/*.js (含 ssh/webservice)', tone: 'accent'  },
     { label: 'API 接口',              value: '79+',     sub: 'REST + SSE + WebSocket',      tone: 'primary' },
-    { label: '测试用例 (Go)',         value: '645+',    sub: '61 个 _test.go · 单元 + 集成', tone: 'success' },
+    { label: '测试用例 (Go)',         value: '650+',    sub: '60 个 _test.go · 单元 + 集成', tone: 'success' },
     { label: '测试用例 (Node)',       value: '150+',    sub: 'app.test.js · 17 case',       tone: 'success' },
     { label: 'E2E 场景 (Playwright)', value: '250+',    sub: '8 个脚本 · 14 测试套',        tone: 'warn'    },
     { label: '修复缺陷',              value: '350+',    sub: 'P0/P1/P2 全量',               tone: 'warn'    },
@@ -150,7 +151,7 @@
     },
     {
       icon: 'simple', title: '极简优于复杂',
-      body: '零前端框架、零外部 UI 库、零 CSS 预处理器、零 npm 运行时。vanilla JS + 原生 CSS 变量 + 内嵌 go:embed。57,000+ 行代码，15 个前端页面平均每个 ~1.5K 行。'
+      body: '零前端框架、零外部 UI 库、零 CSS 预处理器、零 npm 运行时。vanilla JS + 原生 CSS 变量 + 内嵌 go:embed。68,000+ 行代码，16 个前端页面平均每个 ~1.5K 行。'
     },
     {
       icon: 'testable', title: '可测优于能跑',
@@ -188,9 +189,9 @@
     },
     {
       layer: 'L3', name: '业务层 (Domain)',
-      detail: 'sshclient · sftpclient · logquery · dlmanager · tailmgr · diff · downloads · formatter · credentials · webservice (v0.12)',
-      tech: ['x/crypto/ssh', 'pkg/sftp', 'x/text (GBK 透明转换)', 'AES-256-GCM', 'COW Config', 'Worker Pool', 'Myers Diff'],
-      duty: '受控 SSH 执行、受控文件读取、命令模板生成、异步任务会话池、实时 SSE 广播、行级 diff、凭据存取。元数据全部集中维护，handler 只负责协议转换。'
+      detail: 'sshclient · sftpclient · sshshell (v0.10 PTY) · logquery · dlmanager · tailmgr · diff · downloads · formatter · credentials · webservice (v0.12) · license (v0.11)',
+      tech: ['x/crypto/ssh', 'pkg/sftp', 'x/text (GBK 透明转换)', 'AES-256-GCM', 'COW Config', 'Worker Pool', 'Myers Diff', 'PTY + WebSocket'],
+      duty: '受控 SSH 执行、交互式 PTY 终端、SFTP 文件浏览、命令模板生成、异步任务会话池、实时 SSE 广播、行级 diff、凭据存取。元数据全部集中维护，handler 只负责协议转换。'
     },
     {
       layer: 'L4', name: '基础设施层 (Infra)',
@@ -235,9 +236,10 @@
     { name: 'api.js', desc: 'HTTP 客户端 — api(method, path, body) 统一封装；自动加 Bearer token；SSE EventSource 工厂；统一错误处理。' },
     { name: 'theme.js', desc: '主题切换 — dark / light / green / hc / xianxia（玄墨鎏金·仙侠风）5 套主题，inline script 在 <head> 提前设 data-theme 防 FOUC。' },
     { name: 'auth.js', desc: '认证层 — 拉 /api/auth/status 探测；token cookie 管理；role-gated UI 显隐。' },
-    { name: 'pages/*.js', desc: '16 个页面 — home / websphere / files / ssh / formatter / commands / diagnostics / config / downloads / http / timestamp / cron / jsonpath / compare / webservice (v0.12) / about。每个页面一个 IIFE，路由切换时整体替换 view。' },
-    { name: 'tail.js + tail.html', desc: '独立 tail 窗口 — 从主页面剥离的 tail 流，跟踪 SSE 不影响主页面操作；行级 DOM 节点池 + rAF 批量 flush (50ms/100 行)。' },
-    { name: 'preview.html', desc: '文件预览子窗口 — 单文件模态 + 新窗口双模式，支持文本 / GBK 编码自动识别。' }
+    { name: 'pages/*.js', desc: '16 个页面 — home / websphere / files / ssh (v0.10) / formatter / commands / diagnostics / config / downloads / http / timestamp / cron / jsonpath / compare / webservice (v0.12) / about。每个页面一个 IIFE，路由切换时整体替换 view。' },
+    { name: 'tail.js + tail.html', desc: '独立 tail 窗口 — 从主页面剥离的 tail 流，跟踪 SSE 不影响主页面操作；行级 DOM 节点池 + rAF 批量 flush (50ms/100 行)；v0.13 起支持 Ctrl/⌘+F 页面内搜索高亮，新到达日志自动应用当前搜索词。' },
+    { name: 'preview.html', desc: '文件预览子窗口 — 单文件模态 + 新窗口双模式，支持文本 / GBK 编码自动识别；v0.13 起支持页面内搜索高亮 (TreeWalker 遍历文本节点，不破坏关键词高亮 span)。' },
+    { name: 'vendor/search-hl.js', desc: '搜索高亮公共模块 (v0.13) — preview.html / tail.html / 上下文窗口三处共用；TreeWalker 遍历文本节点 + mark 标签包裹，Enter/Shift+Enter 跳转匹配，Esc 清除。' }
   ];
 
   // =====================================================================
@@ -293,7 +295,7 @@
   // §9. 质量保障
   // =====================================================================
   const quality = [
-    { tier: 'L1 单元测试', tool: 'go test ./...', coverage: '500+ · >80%', detail: '51 个 _test.go 文件，覆盖 sshclient / sftpclient / logquery / dlmanager / tailmgr / diff / downloads / credentials / formatter / config / diagnostics / audit / portreuse / httpserver 全栈。' },
+    { tier: 'L1 单元测试', tool: 'go test ./...', coverage: '500+ · >80%', detail: '60 个 _test.go 文件，覆盖 sshclient / sftpclient / sshshell / logquery / dlmanager / tailmgr / diff / downloads / credentials / formatter / config / diagnostics / audit / portreuse / webservice / httpserver 全栈。' },
     { tier: 'L2 集成测试', tool: 'mock_sshd.py + fake-websphere', coverage: '12 场景', detail: 'Python helper 启动 in-process SSH server，注入 fake sftpDialer，验证 handler 全链路：列文件 / 搜索 / 上下文 / tail / 下载 / 凭据 / RBAC / 路径穿越 / hostkey 拒绝。' },
     { tier: 'L3 E2E (Playwright)', tool: '8 个 playwright-*.js + 14 e2e/tests/*', coverage: '250+ 用例', detail: '真实浏览器自动化：多主题切换、HTTP 测试页、命令页、tail 高亮持久化、主题视觉一致性、全部功能页面截图回归；tests/e2e/tests/ 按页面切片组织。' },
     { tier: 'L4 手动验收', tool: 'docs/ACCEPTANCE.md + scripts/acceptance_run.py', coverage: '5b/5c/5d 全量', detail: '文件浏览器 / tail / 测试矩阵 / 完整业务路径逐项验收，每项可执行 / 可验证；scripts/acceptance_run.py 一键回归。' },
@@ -302,7 +304,7 @@
   ];
 
   // =====================================================================
-  // §10. 功能模块 (8 大模块深度剖析)
+  // §10. 功能模块 (10 大模块深度剖析)
   // =====================================================================
   const featureModules = [
     {
@@ -320,6 +322,24 @@
         '实时 tail 独立窗口：从主页面剥离，SSE 长连接不被 120s 强制断开',
         'tail 高亮规则持久化：data/preferences.json 的 tail.highlights',
         '行级 DOM 节点池 + rAF 批量 flush：千行无卡顿'
+      ]
+    },
+    {
+      icon: 'sshTerminal', name: 'SSH 终端 + SFTP 文件浏览器',
+      pages: ['ssh'],
+      apis: ['/api/ssh/shell/* (WebSocket)', '/api/ssh/sftp/*', '/api/files/download*'],
+      pkg: 'internal/sshshell + internal/sshclient + internal/sftpclient',
+      desc: '交互式 SSH 终端 (xterm.js + WebSocket + PTY) 旁侧内嵌 SFTP 文件浏览器，一个页面完成"敲命令 + 看文件 + 拉文件"三件事。GBK 编码透明转换，老服务器中文不乱码。',
+      features: [
+        'xterm.js + WebSocket 全双工：输入直达 PTY stdin，stdout 推送前端，完整渲染 ANSI 颜色 / 光标 / 滚动',
+        'SFTP 面板与终端并排：左终端右文件浏览器，目录导航 + 文件下载 + 路径跳转一屏完成',
+        '路径输入框直达：持久可见的路径输入框，输入绝对路径回车即跳转，不再只能点面包屑',
+        '「进入当前目录」按钮：通过 WS query_cwd 帧向活跃 shell 注入 pwd，OSC 999 私有序列标记起止，一键同步终端 cwd',
+        'GBK / GB18030 透明转换：老 WebSphere / Oracle / AIX 的中文输出直显不乱码 (v0.11)',
+        '5 套 SSH KEX profile 自动 fallback：modern → compat → no-ecdh → legacy，老 sshd 5.x / AIX / 堡垒机即用',
+        'xterm.js ES5 转译：v0.12 起 esbuild 把 xterm.js 5.5+ 的 ES2020 语法转译到 ES5，老 Chrome (Win7 内网) 也能跑',
+        '终端目录 / 复制路径：SFTP 面板操作栏支持一键复制当前工作目录、跳转终端所在目录',
+        '统一下载通知：SFTP 下载完成走 Kairo.core.notify，打开目录 / 复制路径 / 查看下载历史三按钮'
       ]
     },
     {
@@ -583,33 +603,42 @@
       tag: 'SSH 终端 SFTP 增强',
       codename: 'Pathfinder · 探路',
       size: 'm',
-      headline: 'SSH 内嵌 SFTP 面板增加自定义路径输入、自动跟随终端目录、统一下载通知',
-      stats: { commits: 1, fixes: 3, additions: 3, breaks: 0 },
+      headline: 'SSH 内嵌 SFTP 面板增加自定义路径输入、一键进入当前目录、统一下载通知 + 新窗口页面搜索',
+      stats: { commits: 2, fixes: 5, additions: 5, breaks: 0 },
       principles: [
         '路径直达: 始终可见的路径输入框，输入任意绝对路径回车即可跳转，不再只能点面包屑',
-        '真跟随终端: 修复"跟随"按钮无效问题 — 通过 WebSocket 向活跃 shell 注入 pwd 命令获取真实 cwd，不再用独立连接读 home 目录',
-        '自动跟随: 提供 checkbox 开关，开启后显示面板/切换 tab 时自动同步终端所在目录',
-        '通知统一: SFTP 下载完成通知与日志助手/文件助手保持一致 — 支持打开目录/复制路径/查看下载历史'
+        '一键同步: 「📂 进入当前目录」按钮通过 WebSocket 向活跃 shell 注入 pwd 获取真实 cwd，一键跳到终端所在目录',
+        '通知统一: SFTP 下载完成通知与日志助手/文件助手保持一致 — 支持打开目录/复制路径/查看下载历史',
+        '窗口搜索: 文件预览、实时 tail、上下文窗口均支持 Ctrl/⌘+F 页面内搜索高亮，Enter/Shift+Enter 跳转匹配'
       ],
       features: [
         'SFTP 面板新增持久路径输入框（替代原面包屑双击编辑），支持回车跳转和"跳转"按钮',
         '新增"复制路径"按钮，一键复制当前 SFTP 工作目录',
-        '新增"终端目录"按钮（原"跟随"按钮修复），通过 WS query_cwd 帧获取 shell 真实 cwd',
-        '新增"自动跟随"复选框（localStorage 持久化），开启后自动同步终端目录',
+        '「📂 进入当前目录」按钮（原"跟随"按钮修复），通过 WS query_cwd 帧获取 shell 真实 cwd',
+        'cwd 同步改用 OSC 999 私有序列标记起止，避免终端输出中出现 __KAIRO_CWD 标记污染',
         '下载完成通知统一使用 Kairo.core.notify：打开所在目录 / 复制路径 / 查看下载历史 三个操作按钮',
-        '后端新增 query_cwd 控制帧：stdout 流扫描起止标记提取 $PWD，避免新开 SSH 连接只能拿到 home'
+        '后端新增 query_cwd 控制帧：stdout 流扫描起止标记提取 $PWD，避免新开 SSH 连接只能拿到 home',
+        '文件预览窗口（preview.html）新增页面内搜索高亮：Ctrl/⌘+F 唤起、实时匹配、Enter/Shift+Enter 跳转',
+        '实时 tail 窗口（tail.html）新增页面内搜索高亮，新到达日志行自动应用当前搜索词高亮',
+        '日志上下文新窗口（openContextInNewWindow）同样支持页面内搜索高亮',
+        '搜索高亮公共模块 web/vendor/search-hl.js 统一管理，三个窗口共用'
       ],
       fixes: [
         '修复 SFTP 面板"跟随"按钮无效（原实现新开 SSH 连接读 ~，无法获取终端内 cd 后的真实目录）',
         '修复 SFTP 下载完成通知过于简陋（仅 toast，缺少打开目录/复制路径/跳转下载页等操作）',
-        '修复路径无法手动输入（原实现需双击面包屑编辑，入口隐藏）'
+        '修复路径无法手动输入（原实现需双击面包屑编辑，入口隐藏）',
+        '修复 cwd 标记 __KAIRO_CWD_*__ 污染终端显示（改用 OSC 999 私有序列，终端忽略不显示）',
+        '修复 .ts 等扩展名撞名导致 TypeScript 源码被误判为二进制（白名单+黑名单混合策略）',
+        '修复源码发布包包含 mock/fake 测试数据（.gitattributes export-ignore 排除 scripts/fake-*、mock 服务等）'
       ],
       commits: [
-        { hash: 'v0.13-1', msg: 'feat(ssh-sftp): 路径输入框 + 真cwd跟随 + 自动跟随checkbox + 统一下载通知' }
+        { hash: 'v0.13-1', msg: 'feat(ssh-sftp): 路径输入框 + 真cwd跟随 + 统一下载通知' },
+        { hash: 'v0.13-2', msg: 'feat: 新窗口页面搜索高亮 + OSC 999 cwd 标记 + 文件类型检测改进 + mock 文件排除' }
       ],
       migration: [
-        'SSH 终端 SFTP 面板 UI 微调：原面包屑区域替换为"路径输入框 + 跳转/复制按钮"，操作栏新增"自动跟随"复选框',
-        '后端 WebSocket 协议新增 query_cwd 控制帧和 cwd 事件帧，前端已对应适配'
+        'SSH 终端 SFTP 面板 UI 微调：原面包屑区域替换为"路径输入框 + 跳转/复制按钮"，操作栏「📂 进入当前目录」按钮替代原"跟随/自动跟随"',
+        '后端 WebSocket 协议新增 query_cwd 控制帧和 cwd 事件帧，前端已对应适配',
+        '自动跟随 checkbox 已移除（简化 UI，避免 localStorage 孤儿值），统一为手动「进入当前目录」按钮'
       ]
     },
     {
@@ -1538,7 +1567,7 @@
         ])
       ]));
     });
-    view.appendChild(renderSection('sec-modules', 'modules', '功能模块', '8 大模块 · 14 页面 · 60+ API 完整能力图谱', wrap));
+    view.appendChild(renderSection('sec-modules', 'modules', '功能模块', '10 大模块 · 16 页面 · 79+ API 完整能力图谱', wrap));
   }
 
   // --- 版本演进史 (accordion) ---
@@ -1555,7 +1584,7 @@
     wrap.appendChild(banner);
     wrap.appendChild(list);
 
-    view.appendChild(renderSection('sec-history', 'history', '版本演进史', 'v0.1 → v0.13 · 13 个版本 · 14 天 · 132 commit', wrap));
+    view.appendChild(renderSection('sec-history', 'history', '版本演进史', 'v0.1 → v0.13 · 13 个版本 · 14 天 · 134 commit', wrap));
   }
 
   function renderVersionCard(v, idx) {

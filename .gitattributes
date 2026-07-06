@@ -18,7 +18,7 @@ scripts/acceptance_run.py     export-ignore
 scripts/release_smoke_test.sh export-ignore
 /playwright-*.js              export-ignore
 
-# --- docs/qa 下的测试脚本和临时报告（保留 package.json 和 *.md）---
-docs/qa/*.js                  export-ignore
-docs/qa/*.json                export-ignore
+# --- docs/qa 下的测试脚本和临时报告（递归子目录；保留 package.json 和 *.md）---
+docs/qa/**/*.js               export-ignore
+docs/qa/**/*.json             export-ignore
 docs/qa/package.json          -export-ignore

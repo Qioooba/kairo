@@ -77,8 +77,7 @@ else
     --exclude='./scripts/release_smoke_test.sh' \
     --exclude='./cmd/mock-license-server' \
     --exclude='./playwright-*.js' \
-    --exclude='./docs/qa/*.js' \
-    --exclude='./docs/qa/*.json' \
+    --exclude='./docs/qa' \
     --transform "s,^\./,kairo-${VER}/," \
     .
 fi
@@ -92,7 +91,7 @@ check_in_tar() {
   local label="$2"
   local count
   count=$(tar -tzf "${OUT}" | grep -c "${pattern}" || true)
-  if [[ "${count}" -eq 0 ]]; then
+  if [[ "${count}" == "0" ]]; then
     echo "   ❌ ${label}：未找到（pattern: ${pattern}）" >&2
     exit 1
   fi
@@ -114,7 +113,7 @@ check_not_in_tar() {
   local label="$2"
   local count
   count=$(tar -tzf "${OUT}" | grep -c "${pattern}" || true)
-  if [[ "${count}" -ne 0 ]]; then
+  if [[ "${count}" != "0" ]]; then
     echo "   ❌ ${label}：发现 ${count} 个文件，应当被排除（pattern: ${pattern}）" >&2
     exit 1
   fi

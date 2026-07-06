@@ -224,23 +224,37 @@ func (s *Server) handleSSHShellWS(w http.ResponseWriter, r *http.Request) {
 	// cwd 查询状态：前端发 query_cwd 控制帧 → 注入 pwd 命令到 stdin →
 	// sshReader 在 stdout 字节流里扫描起止标记 → 提取路径 → 发 cwd 事件。
 	// 用 mutex 保护，因为 wsReader 写、sshReader 读。
-	// v0.11+ 改进：使用 OSC 999 私有序列作为标记，xterm.js 对未知 OSC 不渲染，
-	// 大幅减少终端可见输出（仅 printf 命令行本身会被 tty 回显，OSC 输出完全不可见）。
+	//
+	// 标记策略（自适应降级）：
+	//   - 默认使用 OSC 999 私有序列（ESC ] 999 ; <path> ESC \），xterm.js 忽略未知 OSC，终端无可见输出；
+	//   - 老 SSH server/PTY（AIX、WebSphere、某些嵌入式 sshd）可能剥掉 OSC 序列导致超时；
+	//   - 单次查询内：OSC 注入后 2.5s 未命中，自动在同一个 query_cwd 请求里注入字面标记重试；
+	//   - 会话级：连续 2 次 OSC 最终失败（连字面重试都没拿到），后续查询直接用字面标记，不再等 OSC 超时。
 	type cwdQueryState struct {
-		mu        sync.Mutex
-		active    bool
-		id        string
-		startMark string
-		endMark   string
-		sentAt    time.Time
+		mu         sync.Mutex
+		active     bool
+		id         string
+		startMark  string
+		endMark    string
+		sentAt     time.Time
+		retried    bool   // 本次查询是否已用字面标记重试
+		useLiteral bool   // 会话级降级：后续直接用字面标记
+		failCount  int    // OSC 最终连续失败次数
 	}
 	cwdState := &cwdQueryState{}
 
-	// cwdMarker 使用 OSC 999 私有序列格式：ESC ] 999 ; <path> ESC \（ST 终止）
-	// xterm.js 会忽略未知 OSC 代码，不渲染任何可见字符。
-	// 使用 ST（ESC \）终止而不是 BEL（\x07），避免触发终端响铃。
-	cwdMarker := func(id string) (start, end string) {
-		return "\x1b]999;", "\x1b\\"
+	const cwdOscTimeout = 2500 * time.Millisecond // OSC 单次快速超时，超时后自动降级
+	const cwdTotalTimeout = 5 * time.Second       // 整个查询（含重试）总超时
+	const cwdFailThreshold = 2                    // 会话级降级阈值
+
+	// cwdMarker 返回指定策略下的起止标记和注入命令
+	cwdMarker := func(id string, useLiteral bool) (start, end, cmd string) {
+		if useLiteral {
+			return "__KAIRO_CWD_S_" + id + "__", "__KAIRO_CWD_E_" + id + "__",
+				"\rprintf '__KAIRO_CWD_S_" + id + "__%s__KAIRO_CWD_E_" + id + "__' \"$PWD\"\r"
+		}
+		return "\x1b]999;", "\x1b\\",
+			"\rprintf '\\033]999;%s\\033\\\\' \"$PWD\"\r"
 	}
 
 	// isValidCwdPath 校验提取的路径是否为合法绝对路径：
@@ -299,20 +313,15 @@ func (s *Server) handleSSHShellWS(w http.ResponseWriter, r *http.Request) {
 					if qid == "" {
 						qid = fmt.Sprintf("%d", time.Now().UnixNano())
 					}
-					sm, em := cwdMarker(qid)
+					useLit := cwdState.useLiteral // 会话级降级则直接用字面标记
+					sm, em, cmd := cwdMarker(qid, useLit)
 					cwdState.active = true
 					cwdState.id = qid
 					cwdState.startMark = sm
 					cwdState.endMark = em
 					cwdState.sentAt = time.Now()
+					cwdState.retried = useLit // 降级模式下视为已经过重试
 					cwdState.mu.Unlock()
-					// 向 stdin 注入命令：使用 printf 输出 OSC 999 私有序列包裹 $PWD，ST（ESC \）终止。
-					// OSC 序列被 xterm.js 识别为控制序列，不会渲染为可见字符，
-					// 因此之前 __KAIRO_CWD 标记的乱码输出问题彻底解决。
-					// 命令格式：\r 回车确保在新行执行，printf 输出 ESC ] 999 ; <path> ESC \
-					// 命令行本身会被 tty 回显（如 "printf '\033]999;%s\033\\' \"$PWD\""），这是正常的 shell 交互。
-					// 注意：\033\\ 在 printf 格式字符串中 = ESC（八进制033） + 字面量反斜杠（转义后），即 ST 序列。
-					cmd := "\rprintf '\\033]999;%s\\033\\\\' \"$PWD\"\r"
 					_, _ = shell.Stdin.Write([]byte(cmd))
 				}
 			case websocket.BinaryMessage:
@@ -338,10 +347,26 @@ func (s *Server) handleSSHShellWS(w http.ResponseWriter, r *http.Request) {
 				// 检查是否有活跃的 cwd 查询，扫描标记
 				cwdState.mu.Lock()
 				if cwdState.active {
-					// 超时保护：超过 5 秒未找到有效路径，放弃本次查询
-					if time.Since(cwdState.sentAt) > 5*time.Second {
+					elapsed := time.Since(cwdState.sentAt)
+					// 阶段 1：OSC 快速超时（未重试过）→ 自动注入字面标记重试
+					if !cwdState.retried && elapsed > cwdOscTimeout {
+						cwdState.retried = true
+						sm2, em2, cmd2 := cwdMarker(cwdState.id, true)
+						cwdState.startMark = sm2
+						cwdState.endMark = em2
+						cwdAccum = nil // 丢弃之前的 OSC 缓冲，重新扫描字面标记
+						cwdState.mu.Unlock()
+						_, _ = shell.Stdin.Write([]byte(cmd2))
+					} else if elapsed > cwdTotalTimeout {
+						// 阶段 2：总超时（含字面重试也没拿到）→ 本次查询失败
 						cwdState.active = false
 						cwdAccum = nil
+						if !cwdState.useLiteral {
+							cwdState.failCount++
+							if cwdState.failCount >= cwdFailThreshold {
+								cwdState.useLiteral = true
+							}
+						}
 						cwdState.mu.Unlock()
 					} else {
 						cwdAccum = append(cwdAccum, data...)
@@ -373,6 +398,12 @@ func (s *Server) handleSSHShellWS(w http.ResponseWriter, r *http.Request) {
 								qid := cwdState.id
 								cwdState.active = false
 								cwdAccum = nil
+								// OSC 直接成功（未触发重试）→ 重置失败计数，保持 OSC 模式
+								if !cwdState.retried {
+									cwdState.failCount = 0
+								}
+								// 字面重试成功或会话级降级下成功：不回切 OSC，
+								// 因为若 server 剥 OSC，回切只会再次触发 2.5s 延迟 + 重试
 								cwdState.mu.Unlock()
 								_ = writeJSON(wsEvent{Type: "cwd", CwdID: qid, CwdPath: path})
 								cwdDone = true

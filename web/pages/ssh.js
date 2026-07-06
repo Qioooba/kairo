@@ -1529,9 +1529,10 @@ function updateTabStatus(tab) {
 
     // gotoCurrentDir 通过 WS 向活跃 shell 查询真实 cwd（不再用独立连接的 /api/ssh/sftp/pwd，
     // 那样只会拿到新连接的 home 目录，不是终端当前路径）。
-    // 流程：发 query_cwd 控制帧 → 后端注入 printf 命令输出 OSC 999 序列包裹 $PWD →
-    // 扫描 stdout 中的 OSC 标记 → 提取路径 → 发回 cwd 事件。
-    // v0.11+ 改进：OSC 序列对用户不可见，仅 printf 命令行本身会被 shell 回显一行。
+    // 流程：发 query_cwd 控制帧 → 后端注入 printf 命令输出 OSC 999 私有序列包裹 $PWD →
+    // 扫描 stdout 中的起止标记 → 提取路径 → 发回 cwd 事件。
+    // v0.13：OSC 999 序列对用户不可见（xterm.js 忽略未知 OSC），仅 printf 命令行会被 shell 回显；
+    //        若 SSH server/PTY 剥离 OSC 序列（老 AIX/WebSphere），后端 2.5s 后自动降级为字面标记重试。
     function gotoCurrentDir(tab) {
       if (tab.closed) { toast('tab 已关闭', 'warn'); return; }
       if (!tab.ws || tab.ws.readyState !== 1) { toast('SSH 未连接', 'warn'); return; }

@@ -1,0 +1,20 @@
+/* Kairo 页面内搜索高亮 —— 公共样式（preview/tail/context 窗口共用） */
+mark.search-hl {
+  background: #fff176;
+  color: #000;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+mark.search-hl.search-hl-active {
+  background: #ff9800;
+  color: #000;
+  box-shadow: 0 0 0 1px #e65100;
+}
+:root[data-theme="dark"] mark.search-hl { background: #f9a825; color: #000; }
+:root[data-theme="dark"] mark.search-hl.search-hl-active { background: #ff6d00; color: #000; }
+:root[data-theme="green"] mark.search-hl { background: #c6ff00; color: #1b5e20; }
+:root[data-theme="green"] mark.search-hl.search-hl-active { background: #76ff03; color: #1b5e20; box-shadow: 0 0 0 1px #33691e; }
+:root[data-theme="hc"] mark.search-hl { background: #ffeb3b; color: #000; }
+:root[data-theme="hc"] mark.search-hl.search-hl-active { background: #ff9800; color: #000; }
+:root[data-theme="xianxia"] mark.search-hl { background: #ffe082; color: #4e342e; }
+:root[data-theme="xianxia"] mark.search-hl.search-hl-active { background: #ffb300; color: #3e2723; }

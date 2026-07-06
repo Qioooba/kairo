@@ -125,12 +125,56 @@
   }
 
   // isTextFileByExt 根据扩展名判断是否文本文件（用于「双击预览」）。
-  // 策略：采用黑名单排除已知二进制格式，其余默认按文本处理。
-  // 这样能覆盖绝大多数代码/配置/日志/脚本/标记语言文件，避免白名单漏判
-  // （如 .jsp/.jspx/.php/.asp/.rb/.kt/.gradle/.vue/.svelte/.toml/.env 等之前都不在白名单里）。
+  // 策略：白名单（常见代码/配置/脚本/标记语言）→ 黑名单（已知二进制）→ 默认按文本。
+  // 白名单解决扩展名撞名问题（如 .ts 既可是 TypeScript 源码也可是 MPEG-TS 视频，
+  // 运维场景下代码/配置/日志更常见，白名单优先判文本）；
+  // 黑名单拦截图片/音视频/压缩包/可执行等确定是二进制的格式；
+  // 其余无扩展名/未知扩展名默认按文本，服务端 NUL 字节检测兜底二进制误判。
   function isTextFileByExt(name) {
     if (!name) return false;
     const lower = name.toLowerCase();
+    // 白名单：常见代码/脚本/配置/标记语言/数据交换格式（确保按文本预览）
+    const textExts = new Set([
+      // 编程语言
+      '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.py', '.rb', '.pl', '.pm',
+      '.php', '.java', '.kt', '.kts', '.scala', '.groovy', '.gradle',
+      '.c', '.h', '.cpp', '.cc', '.cxx', '.hpp', '.hh', '.hxx', '.m', '.mm',
+      '.go', '.rs', '.swift', '.cs', '.fs', '.fsx', '.vb', '.r',
+      '.lua', '.tcl', '.awk', '.sed', '.sh', '.bash', '.zsh', '.fish',
+      '.bat', '.cmd', '.ps1', '.psm1', '.vbs',
+      '.dart', '.el', '.lisp', '.clj', '.cljs', '.hs', '.erl', '.ex', '.exs',
+      '.ml', '.mli', '.nim', '.zig', '.cr',
+      // Web/标记/样式
+      '.html', '.htm', '.xhtml', '.xml', '.xsl', '.xslt', '.svg', '.vue', '.svelte',
+      '.css', '.scss', '.sass', '.less', '.styl',
+      '.jsp', '.jspx', '.asp', '.aspx', '.cshtml', '.vbhtml',
+      // 数据/配置
+      '.json', '.json5', '.jsonc', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.conf',
+      '.properties', '.prop', '.env', '.envrc', '.editorconfig',
+      '.plist', '.csv', '.tsv',
+      // 标记/文档（纯文本类）
+      '.md', '.markdown', '.rst', '.txt', '.text', '.org', '.adoc', '.asciidoc',
+      '.tex', '.latex', '.ltx',
+      // 模板
+      '.tmpl', '.tpl', '.template', '.mustache', '.handlebars', '.hbs', '.pug', '.jade',
+      '.ejs', '.jinja', '.jinja2', '.j2',
+      // 日志/特殊
+      '.log', '.out', '.err', '.trace',
+      '.sql', '.ddl', '.dml',
+      '.patch', '.diff', '.rej',
+      '.nfo', '.diz',
+      // 点文件配置（无其他扩展名，文件名本身以 . 开头）
+      '.gitignore', '.gitattributes', '.gitmodules', '.npmignore', '.dockerignore',
+      '.eslintrc', '.prettierrc', '.babelrc', '.bashrc', '.bash_profile', '.bash_login',
+      '.profile', '.zshrc', '.zshenv', '.zprofile', '.zlogin', '.zlogout',
+      '.vimrc', '.exrc', '.gitconfig', '.npmrc', '.yarnrc',
+    ]);
+    // 无扩展名但命中文件名白名单（全小写比较）
+    const textBasenames = new Set([
+      'makefile', 'dockerfile', 'rakefile', 'gemfile', 'vagrantfile',
+      'readme', 'changelog', 'changes', 'news', 'copying', 'license', 'licence',
+      'authors', 'contributors', 'todo', 'notes', 'notice',
+    ]);
     // 已知二进制扩展名（压缩包/图片/音视频/可执行/字体/Office文档等）→ 不预览
     const binaryExts = [
       // 压缩/归档
@@ -138,10 +182,10 @@
       '.ear', '.deb', '.rpm', '.dmg', '.iso', '.pkg',
       // 图片
       '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.ico', '.webp', '.tiff', '.tif',
-      '.svg', '.psd', '.ai', '.eps',
+      '.psd', '.ai', '.eps',
       // 音视频
       '.mp3', '.mp4', '.wav', '.flac', '.ogg', '.aac', '.wma', '.avi', '.mkv',
-      '.mov', '.wmv', '.flv', '.webm',
+      '.mov', '.wmv', '.flv', '.webm', '.m2ts', '.mts',
       // 可执行/库
       '.exe', '.dll', '.so', '.dylib', '.o', '.a', '.lib', '.obj', '.bin', '.class',
       '.pyc', '.pyo', '.elc', '.ko',
@@ -151,13 +195,18 @@
       '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.odt', '.ods', '.odp',
       // 数据库
       '.db', '.sqlite', '.sqlite3', '.mdb',
-      // 其他
-      '.swf', '.pdb', '.wasm',
+      // 其他二进制
+      '.swf', '.pdb', '.wasm', '.apk', '.ipa', '.keystore', '.jks',
     ];
+    // 白名单优先（解决 .ts 等扩展名歧义）
+    const dot = lower.lastIndexOf('.');
+    const basename = dot >= 0 ? lower.substring(0, dot) : lower;
+    const ext = dot >= 0 ? lower.substring(dot) : '';
+    if (textExts.has(ext) || textBasenames.has(lower) || textBasenames.has(basename)) return true;
     for (let i = 0; i < binaryExts.length; i++) {
       if (lower.endsWith(binaryExts[i])) return false;
     }
-    // 无扩展名文件（如 Makefile/Dockerfile/README/CHANGELOG/LICENSE 等）也按文本处理
+    // 无扩展名/未知扩展名默认按文本处理（服务端 NUL 字节检测兜底）
     return true;
   }
 
