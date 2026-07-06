@@ -6,6 +6,7 @@
   --bg-1: #11161f;
   --bg-2: #161c26;
   --bg-3: #1d2532;
+  --bg: #11161f;
   --line: #232b3a;
   --text: #e6edf3;
   --text-dim: #8b97a8;
@@ -137,6 +138,7 @@
   --bg-1: #ffffff;
   --bg-2: #f4f6fa;
   --bg-3: #e9eef6;
+  --bg: #ffffff;
   --line: #d8dee9;
   --text: #1c2330;
   --text-dim: #5a6678;
@@ -1640,6 +1642,7 @@ input[type="datetime-local"] {
   --bg-1: #fbfdf7;
   --bg-2: #eef3e7;
   --bg-3: #e5edd9;
+  --bg: #fbfdf7;
   --line: #cfd9c0;
   --line-2: #b8c5a3;
   --text: #1f2a1f;
@@ -1717,6 +1720,7 @@ input[type="datetime-local"] {
   --bg-1: #0a0a0a;
   --bg-2: #161616;
   --bg-3: #1f1f1f;
+  --bg: #0a0a0a;
   --line: #ffffff;
   --line-2: #cccccc;
   --text: #ffff00;
@@ -1791,6 +1795,7 @@ input[type="datetime-local"] {
   --bg-1: #e8efe9;
   --bg-2: #d9e4e0;
   --bg-3: #cad5d0;
+  --bg: #e8efe9;
   --line: #b8c5be;
   --line-2: #a0b0a8;
   --text: #1a2320;
@@ -3250,6 +3255,72 @@ input[type="datetime-local"] {
   font-family: ui-monospace, monospace;
 }
 
+/* Bug#18：主机列表过滤框（设计文档 §5.2） */
+.ssh-filter-wrap {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line, #334155);
+}
+.ssh-filter-input {
+  width: 100%;
+  padding: 5px 8px;
+  font-size: 12px;
+  border-radius: 4px;
+  border: 1px solid var(--line, #334155);
+  background: var(--bg, #0f172a);
+  color: var(--text, #e2e8f0);
+  outline: none;
+  box-sizing: border-box;
+}
+.ssh-filter-input:focus {
+  border-color: var(--primary, #3b82f6);
+}
+.ssh-filter-input::placeholder {
+  color: var(--text-mute, #64748b);
+}
+
+/* Bug#7：系统组折叠状态 */
+.ssh-sys-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim, #94a3b8);
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.12s;
+}
+.ssh-sys-header:hover {
+  background: var(--bg-hover, rgba(79, 140, 255, 0.08));
+  color: var(--text, #e2e8f0);
+}
+.ssh-sys-caret {
+  display: inline-block;
+  width: 12px;
+  font-size: 10px;
+  color: var(--text-mute, #64748b);
+  text-align: center;
+}
+.ssh-sys-count {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 400;
+}
+.ssh-no-match {
+  padding: 16px 14px;
+  text-align: center;
+}
+
+/* Bug#15：主机列表 padding 左右对称 */
+.ssh-srv-item {
+  display: flex;
+  flex-direction: column;
+  padding: 6px 14px 6px 28px;  /* 左 padding 加大让出缩进，右侧跟 header 对齐 */
+  cursor: pointer;
+  transition: background 0.12s;
+}
+
 /* 右侧终端区 */
 .ssh-main {
   flex: 1 1 auto;
@@ -3302,6 +3373,47 @@ input[type="datetime-local"] {
   opacity: 0.5;
   text-decoration: line-through;
 }
+
+/* Bug#4：tab 连接状态点（设计文档 §5.2 要求"🟢 已连接 / 🟡 正在连接 / ⚪ 未连接 / 🔴 错误"）。
+   之前完全没实现，4 个 tab 看起来一模一样。状态点显示在 tab 名字左边的小圆点。 */
+.ssh-tab-status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  /* 默认 idle 灰点；以下 4 个 class 覆盖 */
+  background: #64748b;
+  box-shadow: 0 0 0 0 transparent;
+  transition: background 0.18s, box-shadow 0.18s;
+}
+/* idle: 未连接（默认初始）— 灰色 */
+.ssh-tab-state-idle .ssh-tab-status-dot {
+  background: #64748b;
+}
+/* connecting: 正在握手 / 重连中 — 黄色 + 微光晕脉动（用 animation） */
+.ssh-tab-state-connecting .ssh-tab-status-dot {
+  background: #facc15;
+  animation: ssh-tab-dot-pulse 1.2s ease-in-out infinite;
+}
+@keyframes ssh-tab-dot-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(250, 204, 21, 0.5); }
+  50%      { box-shadow: 0 0 0 4px rgba(250, 204, 21, 0); }
+}
+/* connected: ws 已开 + shell 活着 — 绿色 */
+.ssh-tab-state-connected .ssh-tab-status-dot {
+  background: #22c55e;
+}
+/* closed: 用户主动 close / shell 退出 / ws.onclose — 灰色（跟 idle 区分通过 line-through） */
+.ssh-tab-state-closed .ssh-tab-status-dot {
+  background: #64748b;
+}
+/* err: 连接失败（dial_failed / cred_resolve / max_sessions 等）— 红色 */
+.ssh-tab-state-err .ssh-tab-status-dot {
+  background: #ef4444;
+  box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.25);
+}
+
 .ssh-tab-close {
   display: inline-flex;
   align-items: center;
@@ -3396,6 +3508,48 @@ input[type="datetime-local"] {
   cursor: not-allowed;
 }
 
+/* Bug#3：自绘搜索条（替掉之前的 window.prompt）。
+   挂在 ssh-main 顶部、term-area 上方。跟工具栏同款颜色变量。 */
+.ssh-search-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: var(--bg-2, #1e293b);
+  border-bottom: 1px solid var(--line, #334155);
+}
+.ssh-search-bar .ssh-search-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 5px 8px;
+  font-size: 12px;
+  border-radius: 4px;
+  border: 1px solid var(--line, #334155);
+  background: var(--bg, #0f172a);
+  color: var(--text, #e2e8f0);
+  outline: none;
+  font-family: ui-monospace, monospace;
+}
+.ssh-search-bar .ssh-search-input:focus {
+  border-color: var(--primary, #3b82f6);
+}
+.ssh-search-bar .ssh-search-opt {
+  font-size: 11px;
+  padding: 3px 7px;
+  opacity: 0.7;
+}
+.ssh-search-bar .ssh-search-opt.btn-active {
+  opacity: 1;
+  background: var(--primary, #3b82f6);
+  color: #fff;
+  border-color: var(--primary, #3b82f6);
+}
+.ssh-search-bar .btn-xs {
+  font-size: 11px;
+  padding: 3px 7px;
+}
+
 /* 终端区 */
 .ssh-term-area {
   flex: 1 1 auto;
@@ -3414,6 +3568,534 @@ input[type="datetime-local"] {
 }
 .ssh-term.active {
   display: block;
+}
+
+/* ============================================================================
+ * v0.11+ SSH + SFTP 二合一面板（FinalShell 风格：上终端 / 下文件）
+ * ============================================================================ */
+
+/* 文件面板容器：默认隐藏（display:none 由 JS 控制），显示时 flex column */
+.ssh-files-panel {
+  flex: 0 0 40%;             /* 默认占下方 40%，可后续扩展为可拖拽 */
+  display: flex;
+  flex-direction: column;
+  min-height: 140px;
+  max-height: 70%;
+  border-top: 2px solid var(--line, #334155);
+  background: var(--bg-1, #0f172a);
+  overflow: hidden;
+}
+
+/* Bug#22：顶部 SSH 工具栏按钮分组竖分隔条（终端操作 / tab 操作） */
+.ssh-toolbar-sep {
+  width: 1px;
+  height: 22px;
+  background: var(--line, #334155);
+  margin: 0 4px;
+  flex-shrink: 0;
+}
+
+/* Bug#22：activeLabel 显示在工具栏末尾，省略号 + tooltip 配合让窄屏也能用 */
+.ssh-active-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  flex-shrink: 1;
+  margin-left: 8px;
+}
+
+/* 面板头部：面包屑 + 操作按钮 + backend 徽章 */
+.sftp-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--bg-2, #1e293b);
+  border-bottom: 1px solid var(--line, #334155);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+.sftp-breadcrumb {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 4px;
+  min-width: 100px;
+  max-width: calc(100% - 280px); /* 给右侧操作按钮留空间，避免挤压换行 */
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  cursor: text;
+  user-select: none;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+/* 隐藏 breadcrumb 滚动条（视觉清洁，鼠标悬停仍可滚） */
+.sftp-breadcrumb::-webkit-scrollbar {
+  height: 4px;
+}
+.sftp-breadcrumb::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border-radius: 2px;
+}
+.sftp-breadcrumb::-webkit-scrollbar-track {
+  background: transparent;
+}
+.sftp-crumb {
+  color: var(--primary, #60a5fa);
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 3px;
+  white-space: nowrap;
+}
+.sftp-crumb:hover {
+  background: var(--bg-hover, rgba(96, 165, 250, 0.1));
+}
+.sftp-crumb-sep {
+  color: var(--text-dim, #64748b);
+  user-select: none;
+}
+.sftp-path-input {
+  flex: 1 1 auto;
+  min-width: 200px;
+  padding: 4px 8px;
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  background: var(--bg, #0f172a);
+  color: var(--text, #e2e8f0);
+  border: 1px solid var(--line, #334155);
+  border-radius: 4px;
+  outline: none;
+}
+.sftp-path-input:focus {
+  border-color: var(--primary, #60a5fa);
+}
+
+.sftp-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+  align-items: center;
+}
+
+/* Bug#20：工具栏视觉分组 — 导航组 [pwd/up/refresh] 和 操作组 [download/selectall/close] 之间
+   加 1px 竖分隔条，避免 6 个按钮挤一行让用户看不清哪个跟哪个是一组。 */
+.sftp-actions-sep {
+  width: 1px;
+  height: 18px;
+  background: var(--line);
+  margin: 0 4px;
+  flex-shrink: 0;
+}
+
+/* 全选按钮 active 态：当前已全选时高亮（bg-sel 半透明，跟 row 选中一致） */
+.sftp-select-all:not(:disabled).active {
+  background: var(--bg-sel, rgba(96, 165, 250, 0.18));
+  border-color: var(--primary);
+  color: var(--text);
+}
+
+/* "×" 关闭按钮：跟其他按钮稍微隔开，避免误点 */
+.sftp-close {
+  margin-left: 2px;
+}
+
+/* backend 徽章 */
+.sftp-backend-badge {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.sftp-backend-badge.badge-ok {
+  background: rgba(74, 222, 128, 0.18);
+  color: #4ade80;
+  border: 1px solid rgba(74, 222, 128, 0.4);
+}
+.sftp-backend-badge.badge-warn {
+  background: rgba(250, 204, 21, 0.18);
+  color: #facc15;
+  border: 1px solid rgba(250, 204, 21, 0.4);
+}
+.sftp-backend-badge.badge-dim {
+  background: var(--bg-2, #1e293b);
+  color: var(--text-dim, #64748b);
+  border: 1px solid var(--line, #334155);
+}
+
+/* 文件列表容器 */
+.sftp-filelist-wrap {
+  flex: 1 1 auto;
+  overflow: auto;
+  min-height: 0;
+  padding-bottom: 4px;
+  background: var(--bg, #0f172a);
+}
+.sftp-empty {
+  padding: 24px;
+  text-align: center;
+  font-size: 13px;
+}
+
+/* Bug#21：列表加载失败的视觉反馈。之前用同一个 .sftp-empty 样式显示"目录为空"，
+   让用户分不清是路径真的空还是出错。错误用更醒目的红色框 + 错误图标区分。 */
+.sftp-empty-err {
+  border: 1px dashed var(--error, #dc2626);
+  border-radius: 8px;
+  margin: 16px;
+  padding: 20px;
+  background: rgba(220, 38, 38, 0.05);
+}
+.sftp-empty-err-title {
+  color: var(--error, #dc2626);
+  font-weight: 600;
+  font-size: 14px;
+  margin-bottom: 6px;
+}
+.sftp-empty-err-msg {
+  color: var(--text-dim, #64748b);
+  font-size: 12px;
+  font-family: ui-monospace, monospace;
+  word-break: break-all;
+}
+
+/* 文件表格 */
+.sftp-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  table-layout: fixed;
+}
+.sftp-table th, .sftp-table td {
+  padding: 4px 8px;
+  text-align: left;
+  border-bottom: 1px solid var(--line, #334155);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sftp-table th {
+  position: sticky;
+  top: 0;
+  background: var(--bg-2, #1e293b);
+  color: var(--text-dim, #64748b);
+  font-weight: 600;
+  z-index: 1;
+}
+/* 列宽：名称占大头，其他固定 */
+.sftp-col-name { width: auto; min-width: 120px; }
+.sftp-col-size { width: 80px; }
+.sftp-col-mtime { width: 130px; }
+.sftp-col-mode { width: 110px; }
+.sftp-col-actions { width: 140px; white-space: nowrap; }
+
+.sftp-row {
+  cursor: pointer;
+  transition: background 0.1s ease;
+}
+.sftp-row:hover {
+  background: var(--bg-hover, rgba(96, 165, 250, 0.06));
+}
+.sftp-row-selected {
+  background: var(--bg-sel, rgba(96, 165, 250, 0.18)) !important;
+}
+.sftp-row-parent {
+  cursor: pointer;
+  background: var(--bg-2, rgba(255, 255, 255, 0.02));
+}
+.sftp-row-parent-link {
+  color: var(--primary, #60a5fa);
+  cursor: pointer;
+  padding: 2px 4px;
+}
+.sftp-row-parent-link:hover {
+  text-decoration: underline;
+}
+.sftp-icon {
+  margin-right: 6px;
+  display: inline-block;
+  min-width: 18px;
+}
+.sftp-name {
+  color: var(--text, #e2e8f0);
+}
+
+/* 状态栏 */
+.sftp-status {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  background: var(--bg-2, #1e293b);
+  border-top: 1px solid var(--line, #334155);
+  font-size: 11px;
+  color: var(--text-dim, #64748b);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+.sftp-status-sep {
+  color: var(--text-mute, #475569);
+}
+.sftp-status-dl {
+  color: var(--primary, #60a5fa);
+  font-weight: 600;
+}
+.sftp-dl-bar-wrap {
+  display: inline-flex;
+  align-items: center;
+  width: 80px;
+  height: 6px;
+  background: var(--line, #334155);
+  border-radius: 3px;
+  overflow: hidden;
+  margin: 0 2px;
+}
+.sftp-dl-bar {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, var(--primary, #60a5fa), #34d399);
+  border-radius: 3px;
+  transition: width 0.2s ease;
+  min-width: 0;
+}
+
+/* [📁 文件] toggle 按钮激活态 */
+.btn.btn-active {
+  background: var(--primary, #60a5fa);
+  color: #0f172a;
+  border-color: var(--primary, #60a5fa);
+}
+
+/* 高对比度主题适配（hc 主题：背景纯黑，强调色用亮黄） */
+:root[data-theme="hc"] .sftp-backend-badge.badge-ok {
+  background: #003800;
+  color: #00ff00;
+  border-color: #00ff00;
+}
+:root[data-theme="hc"] .sftp-backend-badge.badge-warn {
+  background: #3a3000;
+  color: #ffff00;
+  border-color: #ffff00;
+}
+:root[data-theme="hc"] .sftp-row-selected {
+  background: rgba(255, 255, 0, 0.25) !important;
+}
+:root[data-theme="hc"] .btn.btn-active {
+  background: #ffff00;
+  color: #000000;
+  border-color: #ffff00;
+}
+
+/* 浅色主题适配：badge-ok 用深绿底+亮绿字在浅背景上对比度不足，改用深色绿 */
+:root[data-theme="light"] .sftp-backend-badge.badge-ok {
+  background: rgba(22, 163, 74, 0.12);
+  color: #15803d;
+  border-color: rgba(22, 163, 74, 0.35);
+}
+:root[data-theme="light"] .sftp-backend-badge.badge-warn {
+  background: rgba(180, 83, 9, 0.12);
+  color: #a16207;
+  border-color: rgba(180, 83, 9, 0.35);
+}
+
+/* 护眼绿主题：badge 用更深的森林绿 */
+:root[data-theme="green"] .sftp-backend-badge.badge-ok {
+  background: rgba(21, 128, 61, 0.13);
+  color: #14532d;
+  border-color: rgba(21, 128, 61, 0.35);
+}
+:root[data-theme="green"] .sftp-backend-badge.badge-warn {
+  background: rgba(180, 83, 9, 0.12);
+  color: #854d0e;
+  border-color: rgba(180, 83, 9, 0.35);
+}
+
+/* 仙侠古风主题：badge 用墨绿+暗金 */
+:root[data-theme="xianxia"] .sftp-backend-badge.badge-ok {
+  background: rgba(30, 77, 52, 0.15);
+  color: #1a4a32;
+  border-color: rgba(30, 77, 52, 0.35);
+}
+:root[data-theme="xianxia"] .sftp-backend-badge.badge-warn {
+  background: rgba(133, 97, 35, 0.15);
+  color: #7a5a14;
+  border-color: rgba(133, 97, 35, 0.35);
+}
+
+/* light 主题 SFTP 适配 */
+:root[data-theme="light"] .sftp-row-selected {
+  background: rgba(37, 99, 235, 0.10) !important;
+}
+:root[data-theme="light"] .btn.btn-active {
+  background: var(--primary);
+  color: #ffffff;
+  border-color: var(--primary);
+}
+
+/* green 主题 SFTP 适配 */
+:root[data-theme="green"] .sftp-row-selected {
+  background: rgba(63, 122, 63, 0.12) !important;
+}
+:root[data-theme="green"] .btn.btn-active {
+  background: var(--primary);
+  color: #ffffff;
+  border-color: var(--primary);
+}
+
+/* xianxia 主题 SFTP 适配：加深面包屑颜色提高对比度 */
+:root[data-theme="xianxia"] .sftp-crumb {
+  color: #2d5f4f;
+}
+:root[data-theme="xianxia"] .sftp-row-selected {
+  background: rgba(74, 122, 106, 0.12) !important;
+}
+:root[data-theme="xianxia"] .btn.btn-active {
+  background: var(--primary);
+  color: #ffffff;
+  border-color: var(--primary);
+}
+
+/* ---- SFTP 路径栏（始终可见的输入框 + 操作按钮） ---- */
+.sftp-pathbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+input.sftp-path-input-visible {
+  flex: 1 1 auto !important;
+  width: auto !important;
+  min-width: 0;
+  height: 30px;
+  min-height: 30px;
+  padding: 0 10px !important;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12.5px !important;
+  border: 1px solid var(--line, #334155);
+  border-radius: 6px;
+  background: var(--bg-2, #1e293b);
+  color: var(--text, #e2e8f0);
+  outline: none;
+  transition: border-color .15s, box-shadow .15s;
+  box-sizing: border-box;
+}
+input.sftp-path-input-visible:focus {
+  border-color: var(--primary, #3b82f6);
+  background: var(--bg-3, #334155);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+}
+.sftp-path-go {
+  white-space: nowrap;
+  height: 30px;
+  padding: 0 10px;
+}
+.sftp-path-copy {
+  white-space: nowrap;
+  height: 30px;
+  padding: 0 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+/* ---- 自动跟随 checkbox 标签 ---- */
+.sftp-autofollow-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-dim, #94a3b8);
+  cursor: pointer;
+  user-select: none;
+  padding: 0 4px;
+  margin: 0;
+  white-space: nowrap;
+  height: 30px;
+}
+input.sftp-autofollow-cb {
+  width: 14px !important;
+  height: 14px !important;
+  min-width: 14px !important;
+  min-height: 14px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  accent-color: var(--primary, #3b82f6);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+/* ---- 图标按钮（切换到当前目录、上传） ---- */
+.sftp-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 30px;
+  padding: 0 8px;
+}
+.sftp-icon-btn svg {
+  flex-shrink: 0;
+}
+
+/* light 主题覆盖 */
+:root[data-theme="light"] input.sftp-path-input-visible {
+  background: var(--bg-2, #ffffff);
+  border-color: var(--line, #cbd5e1);
+  color: var(--text, #1e293b);
+}
+:root[data-theme="light"] .sftp-autofollow-label {
+  color: var(--text-dim, #64748b);
+}
+
+/* hc 主题覆盖 */
+:root[data-theme="hc"] input.sftp-path-input-visible {
+  background: #000000;
+  border-color: #ffffff;
+  color: #ffff00;
+  border-width: 2px;
+}
+:root[data-theme="hc"] input.sftp-path-input-visible:focus {
+  border-color: #00ffff;
+  box-shadow: 0 0 0 2px #ffff00;
+}
+:root[data-theme="hc"] .sftp-autofollow-cb {
+  accent-color: #00ffff;
+}
+
+/* green 主题覆盖 */
+:root[data-theme="green"] input.sftp-path-input-visible {
+  background: #fbfdf7;
+  border-color: #cfd9c0;
+  color: #1f2a1f;
+}
+:root[data-theme="green"] input.sftp-path-input-visible:focus {
+  border-color: var(--primary, #3f7a3f);
+  box-shadow: 0 0 0 2px rgba(63, 122, 63, 0.2);
+}
+:root[data-theme="green"] .sftp-autofollow-cb {
+  accent-color: var(--primary, #3f7a3f);
+}
+
+/* xianxia 主题覆盖 */
+:root[data-theme="xianxia"] input.sftp-path-input-visible {
+  background: rgba(245, 240, 228, 0.9);
+  border-color: #c9b99a;
+  color: #2d2418;
+}
+:root[data-theme="xianxia"] input.sftp-path-input-visible:focus {
+  border-color: #4a7a6a;
+  box-shadow: 0 0 0 2px rgba(74, 122, 106, 0.2);
+}
+:root[data-theme="xianxia"] .sftp-autofollow-label {
+  color: #5a6b5e;
+}
+:root[data-theme="xianxia"] .sftp-autofollow-cb {
+  accent-color: #4a7a6a;
 }
 
 /* 空状态 */
@@ -4243,7 +4925,7 @@ input[type="datetime-local"] {
   /* 两层叠加：
      - 顶到底的青色遮罩（保证品牌区 / 菜单区 / 页脚三段文字清晰可读，并把底部"天命契机"+ "豆包 AI 生成"水印盖掉）
      - 水墨剑背景图位于遮罩下方（图片层）
-     sidebar 实际宽 ~240px、高 ≥ 800px（高瘦），cover 模式会把左右两侧裁掉，视觉中心就是正中的剑身与水墨烟雾 */
+     sidebar 实际宽 ~240px、高 ≥ 800px（高瘦），cover 模式会把左右两侧裁掉，视觉中心就是正中的剑身与水墨烟雾。 */
   background-color: var(--sidebar-bg);
   background-image:
     linear-gradient(180deg,

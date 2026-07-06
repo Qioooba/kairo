@@ -210,7 +210,7 @@ func sanitize(s string) string {
 	if s == "" {
 		return "x"
 	}
-	bad := []string{"/", "\\", ":", "*", "?", "\"", "<", ">", "|", " "}
+	bad := []string{"/", "\\", ":", "*", "?", "\"", "<", ">", "|"}
 	for _, b := range bad {
 		s = strings.ReplaceAll(s, b, "_")
 	}

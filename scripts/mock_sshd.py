@@ -384,6 +384,21 @@ class ReadOnlySFTPServer(SFTPServerInterface):
         if not path.startswith("/"):
             path = "/" + path
 
+        # Special case: bash `pwd` over SSH shell returns the LOCAL FAKE_ROOT path
+        # because cwd=FAKE_ROOT locally. Real SSH servers return remote-style paths
+        # that SFTP can resolve directly; the mock leaks the local path through pwd.
+        # Map FAKE_ROOT (and any subpath under it) back to FAKE_ROOT so SFTP
+        # operations on pwd's result work transparently.
+        if path == FAKE_ROOT:
+            return FAKE_ROOT
+        if path.startswith(FAKE_ROOT + "/"):
+            rel = path[len(FAKE_ROOT) + 1:]
+            candidate = os.path.join(FAKE_ROOT, rel)
+            real = os.path.abspath(candidate)
+            if real.startswith(FAKE_ROOT):
+                return real
+            return None
+
         # 先查 PATH_MAP（WebSphere 日志路径）
         for fake_abs, real_rel in PATH_MAP.items():
             if path == fake_abs:

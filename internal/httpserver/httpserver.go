@@ -64,7 +64,7 @@ const (
 // 版本号强制对齐：VERSION 文件 / 此处 Version 常量 / web/pages/about.js:VERSION /
 // web/index.html#footer-version / web/app.js fallback —— 五处必须一致，改时一起改。
 var (
-	Version   = "v0.12"
+	Version   = "v0.13"
 	BuildTime = "unknown"
 )
 
@@ -250,6 +250,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.serveStatic(w, r, "index.html")
 	case path == "/preview.html":
 		s.serveStatic(w, r, "preview.html")
+	// SSH 终端独立窗口（v0.10+）：从主页 SSH 工具栏「⛶新窗口」点过来，
+	// 走 /ssh.html 直接渲染，避免被 index.html 的 hash router 拦截。
+	case path == "/ssh.html":
+		s.serveStatic(w, r, "ssh.html")
 	case strings.HasPrefix(path, "/static/"):
 		s.serveStatic(w, r, strings.TrimPrefix(path, "/static/"))
 	case path == "/api/config":
@@ -266,6 +270,17 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleSSHTest(w, r)
 	case path == "/api/ssh/shell/ws":
 		s.handleSSHShellWS(w, r)
+	// SSH 终端 tab 内嵌 SFTP 浏览器（v0.11+）：list / pwd / preview / download
+	// 独立命名空间 /api/ssh/sftp/*，不走 free_file_roots 白名单，
+	// 访问控制由 SSH 账号权限承担（用户在 SSH 终端已能 cd 到任何路径）。
+	case path == "/api/ssh/sftp/list":
+		s.handleSshSftpList(w, r)
+	case path == "/api/ssh/sftp/pwd":
+		s.handleSshSftpPwd(w, r)
+	case path == "/api/ssh/sftp/preview":
+		s.handleSshSftpPreview(w, r)
+	case path == "/api/ssh/sftp/download":
+		s.handleSshSftpDownload(w, r)
 	case path == "/api/logs/list":
 		s.handleLogsList(w, r)
 	case path == "/api/logs/list/targets":
@@ -376,6 +391,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleAdminAutoStart(w, r)
 	case strings.HasPrefix(path, "/api/files/download/"):
 		s.handleFilesDownloadEventsOrCancel(w, r)
+	case strings.HasPrefix(path, "/api/ssh/sftp/download/"):
+		s.handleSshSftpDownloadEventsOrCancel(w, r)
 	// 注意：/api/logs/download-latest 必须在 /api/logs/download/ 之前匹配（精确匹配优先）
 	case strings.HasPrefix(path, "/api/logs/download/"):
 		s.handleLogsDownloadEventsOrCancel(w, r)

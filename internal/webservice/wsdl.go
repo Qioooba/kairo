@@ -501,14 +501,11 @@ func ParseWSDL(raw string, opts ...ParseOption) *WSDLProject {
 }
 
 // containsLocalName 粗略判断 XML 文本里是否出现某 local name 的开始标签。
+// 匹配无前缀(<name>、<name )和带前缀( <prefix:name )两种情况。
 func containsLocalName(raw, name string) bool {
-	// 匹配 <prefix:name 或 <name（name 后跟空格/>>
-	needle1 := "<" + name + " "
-	needle2 := "<" + name + ">"
-	needle3 := "<" + name + "/"
-	needle4 := ":" + name
-	return strings.Contains(raw, needle1) || strings.Contains(raw, needle2) ||
-		strings.Contains(raw, needle3) || strings.Contains(raw, needle4)
+	return strings.Contains(raw, "<"+name+">") ||
+		strings.Contains(raw, "<"+name+" ") ||
+		strings.Contains(raw, ":"+name)
 }
 
 func resolveMessage(qname string, msgs map[string]wsdlMessage) *wsdlMessage {

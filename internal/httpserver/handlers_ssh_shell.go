@@ -21,8 +21,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -46,18 +48,21 @@ var sshShellUpgrader = websocket.Upgrader{
 
 // ws 控制消息的 JSON schema（仅 v1 最小集）
 type wsControl struct {
-	Type   string `json:"type"`             // resize | signal | ping
+	Type   string `json:"type"`             // resize | signal | ping | query_cwd
 	Cols   int    `json:"cols,omitempty"`   // resize
 	Rows   int    `json:"rows,omitempty"`   // resize
 	Signal string `json:"signal,omitempty"` // signal: SIGINT | SIGTERM | SIGKILL
+	CwdID  string `json:"cwd_id,omitempty"` // query_cwd: 前端生成的请求 ID
 }
 
 // ws 服务端推送的 JSON schema
 type wsEvent struct {
-	Type    string `json:"type"`              // exit | error | pong
+	Type    string `json:"type"`              // exit | error | pong | cwd
 	Code    int    `json:"code,omitempty"`    // exit
 	Reason  string `json:"reason,omitempty"`  // exit / error
 	Message string `json:"message,omitempty"` // error
+	CwdID   string `json:"cwd_id,omitempty"`  // cwd: 对应请求 ID
+	CwdPath string `json:"path,omitempty"`    // cwd: 当前工作目录路径
 }
 
 // wsWriteTimeout 写 ws 的超时。终端字节流密集，30s 足够；
@@ -216,6 +221,44 @@ func (s *Server) handleSSHShellWS(w http.ResponseWriter, r *http.Request) {
 	var wg sync.WaitGroup
 	wg.Add(3)
 
+	// cwd 查询状态：前端发 query_cwd 控制帧 → 注入 pwd 命令到 stdin →
+	// sshReader 在 stdout 字节流里扫描起止标记 → 提取路径 → 发 cwd 事件。
+	// 用 mutex 保护，因为 wsReader 写、sshReader 读。
+	type cwdQueryState struct {
+		mu        sync.Mutex
+		active    bool
+		id        string
+		startMark string
+		endMark   string
+		sentAt    time.Time
+	}
+	cwdState := &cwdQueryState{}
+
+	cwdMarker := func(id string) (start, end string) {
+		return "__KAIRO_CWD_S_" + id + "__", "__KAIRO_CWD_E_" + id + "__"
+	}
+
+	// isValidCwdPath 校验提取的路径是否为合法绝对路径：
+	// 必须以 / 开头，长度合理，不含控制字符 / 百分号 / 引号等格式串残留。
+	isValidCwdPath := func(p string) bool {
+		if p == "" || p[0] != '/' {
+			return false
+		}
+		if len(p) > 4096 {
+			return false
+		}
+		for i := 0; i < len(p); i++ {
+			c := p[i]
+			if c < 0x20 || c == 0x7f {
+				return false
+			}
+			if c == '%' || c == '"' || c == '\\' {
+				return false
+			}
+		}
+		return true
+	}
+
 	// 7a. ws → SSH stdin（binary）+ 控制帧（text JSON）
 	go func() {
 		defer wg.Done()
@@ -241,6 +284,29 @@ func (s *Server) handleSSHShellWS(w http.ResponseWriter, r *http.Request) {
 					_ = shell.Signal(parseSSHSignal(ctrl.Signal))
 				case "ping":
 					_ = writeJSON(wsEvent{Type: "pong"})
+				case "query_cwd":
+					cwdState.mu.Lock()
+					if cwdState.active {
+						cwdState.mu.Unlock()
+						continue // 已有查询在进行中，忽略重复请求
+					}
+					qid := ctrl.CwdID
+					if qid == "" {
+						qid = fmt.Sprintf("%d", time.Now().UnixNano())
+					}
+					sm, em := cwdMarker(qid)
+					cwdState.active = true
+					cwdState.id = qid
+					cwdState.startMark = sm
+					cwdState.endMark = em
+					cwdState.sentAt = time.Now()
+					cwdState.mu.Unlock()
+					// 向 stdin 注入命令：回车确保在新行，echo 输出 start-marker + $PWD + end-marker。
+					// 终端回显会让命令字符串本身先出现一次（此时标记间是 "$PWD" 字面值，isValidCwdPath 会跳过），
+					// 真正的 echo 输出会产生第二次匹配，通过校验后被采用。
+					// 注意：不用 printf 格式串，避免 %s 与 shell 转义的交互问题；直接用 echo 拼接。
+					cmd := fmt.Sprintf("\recho %s\"$PWD\"%s\r", sm, em)
+					_, _ = shell.Stdin.Write([]byte(cmd))
 				}
 			case websocket.BinaryMessage:
 				if len(payload) > 0 {
@@ -252,15 +318,76 @@ func (s *Server) handleSSHShellWS(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	// 7b. SSH stdout → ws binary
+	// 7b. SSH stdout → ws binary（带 cwd 标记扫描）
 	go func() {
 		defer wg.Done()
 		defer cancelShell()
 		buf := make([]byte, 8*1024) // 8KB 读缓冲，够终端字节流
+		var cwdAccum []byte
 		for {
 			n, err := shell.Stdout.Read(buf)
 			if n > 0 {
-				if werr := writeBinary(buf[:n]); werr != nil {
+				data := buf[:n]
+				// 检查是否有活跃的 cwd 查询，扫描标记
+				cwdState.mu.Lock()
+				if cwdState.active {
+					// 超时保护：超过 5 秒未找到有效路径，放弃本次查询
+					if time.Since(cwdState.sentAt) > 5*time.Second {
+						cwdState.active = false
+						cwdAccum = nil
+						cwdState.mu.Unlock()
+					} else {
+						cwdAccum = append(cwdAccum, data...)
+						sm := cwdState.startMark
+						em := cwdState.endMark
+						cwdDone := false
+						for {
+							startIdx := strings.Index(string(cwdAccum), sm)
+							if startIdx < 0 {
+								if len(cwdAccum) > 1024 {
+									cwdAccum = nil
+								}
+								break
+							}
+							afterStart := cwdAccum[startIdx+len(sm):]
+							endIdx := strings.Index(string(afterStart), em)
+							if endIdx < 0 {
+								if len(cwdAccum) > 8192 {
+									cwdAccum = cwdAccum[startIdx+len(sm):]
+									if len(cwdAccum) > 4096 {
+										cwdAccum = cwdAccum[len(cwdAccum)-4096:]
+									}
+									continue
+								}
+								break
+							}
+							path := strings.TrimSpace(string(afterStart[:endIdx]))
+							if isValidCwdPath(path) {
+								qid := cwdState.id
+								cwdState.active = false
+								cwdAccum = nil
+								cwdState.mu.Unlock()
+								_ = writeJSON(wsEvent{Type: "cwd", CwdID: qid, CwdPath: path})
+								cwdDone = true
+								break
+							}
+							skipTo := startIdx + len(sm) + endIdx + len(em)
+							if skipTo < len(cwdAccum) {
+								cwdAccum = cwdAccum[skipTo:]
+							} else {
+								cwdAccum = nil
+								break
+							}
+						}
+						if !cwdDone {
+							cwdState.mu.Unlock()
+						}
+					}
+				} else {
+					cwdAccum = nil
+					cwdState.mu.Unlock()
+				}
+				if werr := writeBinary(data); werr != nil {
 					return // ws 写失败
 				}
 			}

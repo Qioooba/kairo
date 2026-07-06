@@ -17,16 +17,20 @@ package httpserver
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"time"
 
 	"kairo/internal/webservice"
 )
+
+var sharedWsTLSConfig = &tls.Config{InsecureSkipVerify: true}
 
 // handleWSDispatch 把 /api/wsdl/ / /api/soap/ / /api/ws/xml/ 三类前缀再细分。
 func (s *Server) handleWSDispatch(w http.ResponseWriter, r *http.Request) {
@@ -126,7 +130,35 @@ func (s *Server) handleWSDLImportURL(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpReq.Header.Set("User-Agent", "kairo-wsdl/0.1")
-	client := &http.Client{}
+	// SSRF 防护：只允许访问 loopback 和内网私网地址，禁止公网/云元数据地址
+	dialer := &net.Dialer{Timeout: 10 * time.Second}
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				host, _, err := net.SplitHostPort(addr)
+				if err != nil {
+					return nil, fmt.Errorf("地址解析失败: %w", err)
+				}
+				ip := net.ParseIP(host)
+				if ip == nil {
+					// 域名情况：先解析再检查
+					addrs, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+					if err != nil || len(addrs) == 0 {
+						return nil, fmt.Errorf("域名解析失败: %w", err)
+					}
+					ip = addrs[0].IP
+				}
+				if !ip.IsLoopback() && !ip.IsPrivate() {
+					return nil, errors.New("安全限制：WSDL URL 仅允许本地/内网地址，公网地址请先下载到本地再导入")
+				}
+				return dialer.DialContext(ctx, network, addr)
+			},
+			TLSClientConfig:       sharedWsTLSConfig,
+			DisableCompression:    false,
+			ResponseHeaderTimeout: 25 * time.Second,
+		},
+	}
 	resp, err := client.Do(httpReq)
 	if err != nil {
 		writeErr(w, 502, fmt.Errorf("拉取 WSDL 失败: %w", err))

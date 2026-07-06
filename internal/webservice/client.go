@@ -110,7 +110,16 @@ func Send(req SendRequest) SendResponse {
 	if contentType == "" {
 		charset := encoding
 		if soapVer == "1.2" {
-			contentType = SOAPContentType12 + charset
+			// SOAP 1.2 规范要求 action 参数放在 Content-Type 里
+			// 格式: application/soap+xml; charset=UTF-8; action="xxx"
+			sa := req.SOAPAction
+			if sa == "" {
+				sa = `""`
+			}
+			if !strings.HasPrefix(sa, `"`) {
+				sa = `"` + sa + `"`
+			}
+			contentType = fmt.Sprintf("%s%s; action=%s", SOAPContentType12, charset, sa)
 		} else {
 			contentType = SOAPContentType11 + charset
 		}
@@ -124,13 +133,13 @@ func Send(req SendRequest) SendResponse {
 		return SendResponse{Error: "构造请求失败: " + err.Error()}
 	}
 	httpReq.Header.Set("Content-Type", contentType)
-	// SOAP 1.1 必带 SOAPAction（即使空也要 ""）；1.2 把 action 放 Content-Type，不需要 header。
+	// SOAP 1.1 必带 SOAPAction HTTP header（即使空也要 ""）；
+	// SOAP 1.2 把 action 放在 Content-Type 参数里，不需要此 header。
 	if soapVer == "1.1" {
 		sa := req.SOAPAction
 		if sa == "" {
 			sa = `""`
 		}
-		// SOAPAction 规范要求带引号
 		if !strings.HasPrefix(sa, `"`) {
 			sa = `"` + sa + `"`
 		}

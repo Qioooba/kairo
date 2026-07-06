@@ -3,7 +3,7 @@
  *
  * 设计目标：
  *   - 把"关于"从单页简介升级为一份**带交互的产品技术白皮书**
- *   - 顶部 sticky 锚点导航 + 12 个版本卡片 (accordion 折叠) + 13 个数据区块
+ *   - 顶部 sticky 锚点导航 + 13 个版本卡片 (accordion 折叠) + 13 个数据区块
  *   - 内容 100% 由 commit log / 源码 / README 提取, 不注水
  *   - 几万字正文 + 折叠默认收起, 首屏不卡
  */
@@ -16,7 +16,7 @@
 
   // 与 internal/httpserver/httpserver.go 的 Version 常量保持一致；
   // 后端 /api/config 读取失败时回退到这里（FE-006）。
-  const VERSION = 'v0.12';
+  const VERSION = 'v0.13';
 
   // =====================================================================
   // SVG icon 字典 — 13 个 section icon (Win7 兼容, 不依赖 emoji 字体)
@@ -574,9 +574,44 @@
   };
 
   // =====================================================================
-  // §13. 版本演进史 (12 个版本, 每版 ~2000 字, accordion 折叠)
+  // §13. 版本演进史 (13 个版本, 每版 ~2000 字, accordion 折叠)
   // =====================================================================
   const changelog = [
+    {
+      version: 'v0.13',
+      date: '2026-07-04',
+      tag: 'SSH 终端 SFTP 增强',
+      codename: 'Pathfinder · 探路',
+      size: 'm',
+      headline: 'SSH 内嵌 SFTP 面板增加自定义路径输入、自动跟随终端目录、统一下载通知',
+      stats: { commits: 1, fixes: 3, additions: 3, breaks: 0 },
+      principles: [
+        '路径直达: 始终可见的路径输入框，输入任意绝对路径回车即可跳转，不再只能点面包屑',
+        '真跟随终端: 修复"跟随"按钮无效问题 — 通过 WebSocket 向活跃 shell 注入 pwd 命令获取真实 cwd，不再用独立连接读 home 目录',
+        '自动跟随: 提供 checkbox 开关，开启后显示面板/切换 tab 时自动同步终端所在目录',
+        '通知统一: SFTP 下载完成通知与日志助手/文件助手保持一致 — 支持打开目录/复制路径/查看下载历史'
+      ],
+      features: [
+        'SFTP 面板新增持久路径输入框（替代原面包屑双击编辑），支持回车跳转和"跳转"按钮',
+        '新增"复制路径"按钮，一键复制当前 SFTP 工作目录',
+        '新增"终端目录"按钮（原"跟随"按钮修复），通过 WS query_cwd 帧获取 shell 真实 cwd',
+        '新增"自动跟随"复选框（localStorage 持久化），开启后自动同步终端目录',
+        '下载完成通知统一使用 Kairo.core.notify：打开所在目录 / 复制路径 / 查看下载历史 三个操作按钮',
+        '后端新增 query_cwd 控制帧：stdout 流扫描起止标记提取 $PWD，避免新开 SSH 连接只能拿到 home'
+      ],
+      fixes: [
+        '修复 SFTP 面板"跟随"按钮无效（原实现新开 SSH 连接读 ~，无法获取终端内 cd 后的真实目录）',
+        '修复 SFTP 下载完成通知过于简陋（仅 toast，缺少打开目录/复制路径/跳转下载页等操作）',
+        '修复路径无法手动输入（原实现需双击面包屑编辑，入口隐藏）'
+      ],
+      commits: [
+        { hash: 'v0.13-1', msg: 'feat(ssh-sftp): 路径输入框 + 真cwd跟随 + 自动跟随checkbox + 统一下载通知' }
+      ],
+      migration: [
+        'SSH 终端 SFTP 面板 UI 微调：原面包屑区域替换为"路径输入框 + 跳转/复制按钮"，操作栏新增"自动跟随"复选框',
+        '后端 WebSocket 协议新增 query_cwd 控制帧和 cwd 事件帧，前端已对应适配'
+      ]
+    },
     {
       version: 'v0.12',
       date: '2026-07-04',
@@ -1520,7 +1555,7 @@
     wrap.appendChild(banner);
     wrap.appendChild(list);
 
-    view.appendChild(renderSection('sec-history', 'history', '版本演进史', 'v0.1 → v0.12 · 12 个版本 · 14 天 · 131 commit', wrap));
+    view.appendChild(renderSection('sec-history', 'history', '版本演进史', 'v0.1 → v0.13 · 13 个版本 · 14 天 · 132 commit', wrap));
   }
 
   function renderVersionCard(v, idx) {

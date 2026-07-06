@@ -28,6 +28,7 @@ app:
   download_max_count: 1000
   compare_allowed_roots:
   - '*'
+  # kairo: ''  # 开发者自用白名单（不随仓库提交），详见 docs/KAIRO-LICENSE.md
   kairo: '111222'
 systems:
 - name: 信贷应用服务器
@@ -74,6 +75,21 @@ systems:
       patterns:
       - '*.log'
       encoding: gbk
+- name: 本地测试
+  description: ""
+  servers:
+  - name: Mock SSH
+    host: 127.0.0.1
+    port: 2226
+    username: test
+    password: test
+    auth_type: password
+    log_dirs:
+    - name: 测试目录
+      path: /tmp
+      patterns:
+      - '*.log'
+      encoding: utf-8
 search:
   default_latest_files: 3
   max_matches: 200

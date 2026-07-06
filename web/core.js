@@ -171,19 +171,30 @@
   //                      旧的 'html' 键名已废弃，避免误用）
   //   - 'on*'          → addEventListener
   //   - 其它           → setAttribute
+  var BOOL_PROPS = {
+    disabled: 1, checked: 1, selected: 1, readonly: 1, required: 1,
+    autofocus: 1, multiple: 1, nowrap: 1, hidden: 1, open: 1,
+    defer: 1, async: 1, autoplay: 1, controls: 1, loop: 1, muted: 1,
+    draggable: 1, contenteditable: 1, spellcheck: 1
+  };
   function el(tag, attrs, children) {
     const e = document.createElement(tag);
     if (attrs) {
       for (const k in attrs) {
-        if (k === 'class') e.className = attrs[k];
-        else if (k === 'text') e.textContent = attrs[k];
+        const v = attrs[k];
+        if (k === 'class') e.className = v;
+        else if (k === 'text') e.textContent = v;
         else if (k === 'html') {
-          // 兼容老调用：warn 但仍然执行，避免回归
           console.warn("[kairo] el(..., { html: ... }) is deprecated; use 'unsafeHtml' to make intent explicit, or 'text' to auto-escape.");
-          e.innerHTML = attrs[k];
-        } else if (k === 'unsafeHtml') e.innerHTML = attrs[k];
-        else if (k.indexOf('on') === 0) e.addEventListener(k.slice(2), attrs[k]);
-        else e.setAttribute(k, attrs[k]);
+          e.innerHTML = v;
+        } else if (k === 'unsafeHtml') e.innerHTML = v;
+        else if (k.indexOf('on') === 0) e.addEventListener(k.slice(2), v);
+        else if (BOOL_PROPS[k]) {
+          if (v) e.setAttribute(k, '');
+          else e.removeAttribute(k);
+        }
+        else if (v === false || v == null) e.removeAttribute(k);
+        else e.setAttribute(k, v === true ? '' : v);
       }
     }
     if (children) {
@@ -421,10 +432,13 @@
   core.clearDlBadge = clearDlBadge;
 
   function setStatus(state, text) {
+    // 独立窗口（ssh.html / preview.html / tail.html）没有 #status-dot / #status-text，
+    // 不加保护会让 setStatus 抛 TypeError，把整个 api() 调用链炸掉（独立窗口里 m-user
+    // 更新、密码保存等功能全依赖 api()）。所以这里是必须的兜底，不是过度防御。
     const dot = $('#status-dot');
     const txt = $('#status-text');
-    dot.className = 'dot dot-' + (state || 'idle');
-    txt.textContent = text || (state === 'busy' ? '处理中…' : '就绪');
+    if (dot) dot.className = 'dot dot-' + (state || 'idle');
+    if (txt) txt.textContent = text || (state === 'busy' ? '处理中…' : '就绪');
   }
   core.setStatus = setStatus;
 

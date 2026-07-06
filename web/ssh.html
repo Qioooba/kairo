@@ -24,7 +24,7 @@
     })();
   </script>
   <link rel="stylesheet" href="/static/vendor/xterm/xterm.css?v=20260702" />
-  <link rel="stylesheet" href="/static/style.css?v=20260702b" />
+  <link rel="stylesheet" href="/static/style.css?v=20260706" />
   <style>
     /* SSH 独立窗口专用：窄边距、全高终端 */
     body { grid-template-columns: 1fr; }
@@ -93,10 +93,10 @@
         <span><span class="meta-key">用户:</span><span class="meta-val" id="m-user">-</span></span>
       </div>
       <div class="ssh-toolbar">
-        <button id="btn-ctrlc" class="btn btn-sm" title="发送 SIGINT">Ctrl+C</button>
+        <button id="btn-ctrlc" class="btn btn-sm" title="发送 SIGINT" disabled>Ctrl+C</button>
         <button id="btn-clear" class="btn btn-sm" title="清屏">清屏</button>
         <button id="btn-reconnect" class="btn btn-sm" title="断开重连">重连</button>
-        <button id="btn-close" class="btn btn-sm">关闭本页</button>
+        <button id="btn-close" class="btn btn-sm" title="关闭本页">关闭本页</button>
       </div>
       <div class="ssh-term-wrap">
         <div id="term-container"></div>
@@ -160,11 +160,11 @@
               magenta: '#ff00ff', cyan: '#00ffff', white: '#ffffff', brightBlack: '#666666', brightRed: '#ff6666',
               brightGreen: '#66ff66', brightYellow: '#ffff66', brightBlue: '#6666ff', brightMagenta: '#ff66ff',
               brightCyan: '#66ffff', brightWhite: '#ffffff' },
-        xianxia: { background: '#0a0907', foreground: '#e8dcc0', cursor: '#c9a24b', selectionBackground: 'rgba(201,162,75,0.25)',
-                   black: '#1a1510', red: '#e07050', green: '#7cb342', yellow: '#c9a24b', blue: '#5c9dc4',
-                   magenta: '#b07cc4', cyan: '#4db6ac', white: '#e8dcc0', brightBlack: '#6b5d4f', brightRed: '#f49770',
-                   brightGreen: '#9ccc65', brightYellow: '#dcb766', brightBlue: '#7fb8da', brightMagenta: '#c59cd9',
-                   brightCyan: '#80cbc4', brightWhite: '#f5eddc' }
+        xianxia: { background: '#f5f8f7', foreground: '#1a2320', cursor: '#4a7a6a', selectionBackground: 'rgba(74,122,106,0.2)',
+                   black: '#2a3530', red: '#a82820', green: '#5a8e4c', yellow: '#b8923e', blue: '#4a6a8a',
+                   magenta: '#7a5a8a', cyan: '#4a7a6a', white: '#5a6a60', brightBlack: '#7a8a80', brightRed: '#c84840',
+                   brightGreen: '#7aac6c', brightYellow: '#d8b25e', brightBlue: '#6a8aaa', brightMagenta: '#9a7aac',
+                   brightCyan: '#6a9a8a', brightWhite: '#1a2320' }
       };
       function curTheme() {
         var t = (Kairo.theme && Kairo.theme.get) ? Kairo.theme.get() : 'dark';
@@ -278,16 +278,24 @@
             '?system=' + encodeURIComponent(system) +
             '&server=' + encodeURIComponent(server) +
             '&cols=' + cols + '&rows=' + rows;
+          // Bug#13：连接中状态 — 只有重连按钮应该 enabled（其他按钮等连接成功）
+          updateStandaloneButtons('connecting');
           try {
             ws = new WebSocket(url);
           } catch (e) {
             term.write('\r\n\x1b[31m连接失败: ' + (e.message || e) + '\x1b[0m\r\n');
             setConn('err', '连接失败');
             closed = true;
+            updateStandaloneButtons('closed');
             return;
           }
           ws.binaryType = 'arraybuffer';
-          ws.onopen = function () { setConn('idle', '已连接'); term.focus(); };
+          ws.onopen = function () {
+            setConn('idle', '已连接');
+            // Bug#13：连接成功 → Ctrl+C / 清屏 enabled
+            updateStandaloneButtons('connected');
+            term.focus();
+          };
           ws.onmessage = function (ev) {
             if (closed) return;
             if (typeof ev.data === 'string') {
@@ -302,7 +310,22 @@
             term.write('\r\n\x1b[33m— 连接已断开 —\x1b[0m\r\n');
             closed = true;
             setConn('idle', '已断开');
+            // Bug#13：断开 → Ctrl+C / 清屏 disabled，但重连 / 关闭本页仍可用
+            updateStandaloneButtons('closed');
           };
+        }
+
+        // Bug#13：独立窗口 4 个按钮的 disabled 联动。
+        // 规则：
+        //   - Ctrl+C:  只有 connected 时可用（其他时候发 SIGINT 没意义）
+        //   - 清屏:    始终 enabled（清的是 xterm 缓冲，不依赖 ssh 连接）
+        //   - 重连:    closed 或 connected 都可用，connecting 时灰着避免重复点
+        //   - 关闭本页: 始终 enabled
+        function updateStandaloneButtons(state) {
+          var btnCtrlC = document.getElementById('btn-ctrlc');
+          var btnReconnect = document.getElementById('btn-reconnect');
+          if (btnCtrlC) btnCtrlC.disabled = (state !== 'connected');
+          if (btnReconnect) btnReconnect.disabled = (state === 'connecting');
         }
 
         function handleControl(raw) {
@@ -311,7 +334,10 @@
           if (!msg || !msg.type) return;
           if (msg.type === 'exit') {
             term.write('\r\n\x1b[33m— shell 已退出（code=' + (msg.code != null ? msg.code : '?') + '）—\x1b[0m\r\n');
-            closed = true; setConn('idle', '已退出');
+            closed = true;
+            setConn('idle', '已退出');
+            // Bug#13：shell 退出也是 closed 状态
+            updateStandaloneButtons('closed');
           } else if (msg.type === 'error') {
             handleError(msg);
           }
@@ -338,6 +364,8 @@
             closed = true;
           }
           setConn('idle', '错误');
+          // Bug#13：错误状态也要联动按钮（清屏 / 重连 / 关闭本页 enabled，Ctrl+C disabled）
+          updateStandaloneButtons('closed');
         }
 
         function promptPassword() {

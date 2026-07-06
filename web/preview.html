@@ -156,6 +156,11 @@
       const server = params.get('server') || '';
       const path = params.get('path') || '';
       const encoding = params.get('encoding') || 'utf-8';
+      // v0.11+：source=ssh-sftp 表示来自 SSH 终端内嵌 SFTP 面板，
+      // 走 /api/ssh/sftp/preview（不走 free_file_roots 白名单）。
+      // 默认（files 页）走 /api/files/preview（受白名单约束）。
+      const source = params.get('source') || '';
+      const previewApi = source === 'ssh-sftp' ? '/api/ssh/sftp/preview' : '/api/files/preview';
 
       $('#m-system').textContent = system || '?';
       $('#m-server').textContent = server || '?';
@@ -225,7 +230,7 @@
           // 退化时用裸 fetch 兜底。call() 返回解析后的 data，!ok/401 时抛错。
           // BUG-3：cred 可能是 null（getCred() opener 拿不到 password 时返回 null），
           // 改读 activeCred（有 || {username:'',password:''} 兜底，永远是对象）。
-          const data = await call('POST', '/api/files/preview', {
+          const data = await call('POST', previewApi, {
             system: system, server: server, path: path,
             username: activeCred.username, password: activeCred.password,
             encoding: encoding, max_bytes: 1048576
