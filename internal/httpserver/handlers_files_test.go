@@ -78,6 +78,17 @@ func (f *fakeSftpClient) ReadDir(path string) ([]os.FileInfo, error) {
 	return out, nil
 }
 
+func (f *fakeSftpClient) ListLimited(path string, max int) ([]os.FileInfo, bool, error) {
+	entries, err := f.ReadDir(path)
+	if err != nil {
+		return nil, false, err
+	}
+	if max > 0 && len(entries) > max {
+		return entries[:max], true, nil
+	}
+	return entries, false, nil
+}
+
 func (f *fakeSftpClient) Stat(path string) (os.FileInfo, error) {
 	if entries, ok := f.dirs[path]; ok {
 		if len(entries) == 0 {

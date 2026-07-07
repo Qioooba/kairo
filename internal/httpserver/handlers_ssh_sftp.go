@@ -245,7 +245,7 @@ func (s *Server) sshSftpListOne(
 			Name:  info.Name(),
 			Size:  info.Size(),
 			IsDir: info.IsDir(),
-			Mode:  info.Mode().String(),
+			Mode:  sftpclient.FormatMode(info.Mode()),
 			MTime: info.ModTime().UTC().Format(time.RFC3339),
 		})
 	}

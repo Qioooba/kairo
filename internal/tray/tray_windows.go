@@ -26,7 +26,17 @@ func run(cfg Config) {
 		}
 
 		mOpen := systray.AddMenuItem("打开浏览器", "在默认浏览器中打开")
-		systray.AddSeparator()
+
+		// v1.0 便笺提醒的"暂停今日 / 恢复"菜单项。
+		// label 动态：未暂停时显示"暂停今日提醒"，暂停后切到"恢复提醒"。
+		// systray.MenuItem 没有公开 Title()，所以用 paused bool 外部变量追踪状态。
+		var mPause *systray.MenuItem
+		var paused bool
+		if cfg.OnPauseToday != nil || cfg.OnResumeToday != nil {
+			mPause = systray.AddMenuItem("暂停今日提醒", "今天到次日 0 点不再弹提醒")
+			systray.AddSeparator()
+		}
+
 		mQuit := systray.AddMenuItem("退出", "退出Kairo")
 
 		go func() {
@@ -35,6 +45,25 @@ func run(cfg Config) {
 				case <-mOpen.ClickedCh:
 					if cfg.OnOpenBrowser != nil {
 						cfg.OnOpenBrowser()
+					}
+				case <-mPause.ClickedCh:
+					if mPause == nil {
+						continue
+					}
+					if !paused {
+						if cfg.OnPauseToday != nil {
+							cfg.OnPauseToday()
+						}
+						mPause.SetTitle("恢复提醒")
+						mPause.SetTooltip("立即恢复所有提醒")
+						paused = true
+					} else {
+						if cfg.OnResumeToday != nil {
+							cfg.OnResumeToday()
+						}
+						mPause.SetTitle("暂停今日提醒")
+						mPause.SetTooltip("今天到次日 0 点不再弹提醒")
+						paused = false
 					}
 				case <-mQuit.ClickedCh:
 					systray.Quit()

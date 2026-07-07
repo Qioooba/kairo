@@ -97,6 +97,7 @@
         <button id="btn-clear" class="btn btn-sm" title="清屏">清屏</button>
         <button id="btn-reconnect" class="btn btn-sm" title="断开重连">重连</button>
         <button id="btn-close" class="btn btn-sm" title="关闭本页">关闭本页</button>
+        <button id="btn-bgtoggle" class="btn btn-sm ssh-bg-toggle" title="切换终端背景：跟随主题 / 强制深色">🌓 跟随主题</button>
       </div>
       <div class="ssh-term-wrap">
         <div id="term-container"></div>
@@ -125,6 +126,7 @@
       var server = params.get('server') || '';
       var initCols = parseInt(params.get('cols'), 10) || 80;
       var initRows = parseInt(params.get('rows'), 10) || 24;
+      var encoding = params.get('encoding') || 'utf-8';
 
       // 元信息显示
       document.getElementById('m-system').textContent = system || '-';
@@ -211,19 +213,95 @@
         }, 50);
 
         function afterInit() {
-        // 主题联动
-        function syncBg() {
-          var t = curTheme();
-          if (t && t.background) {
-            var wrap = document.querySelector('.ssh-term-wrap');
-            if (wrap) wrap.style.background = t.background;
+        // ===== v0.13+ 终端背景模式切换 =====
+        // 模式：'theme' 跟随主题（默认） / 'dark' 强制深色（适合亮色主题对比度不足时）
+        var BG_MODE_KEY = 'kairo_ssh_bg_mode';
+        var bgMode = (function () {
+          try {
+            var v = localStorage.getItem(BG_MODE_KEY);
+            if (v === 'dark' || v === 'theme') return v;
+          } catch (_) {}
+          return 'theme';
+        })();
+        // 强制深色模式覆盖当前主题；其他情况跟随主题
+        function effectiveTheme() {
+          return bgMode === 'dark' ? XTERM_THEMES.dark : curTheme();
+        }
+        function applyBgMode() {
+          var theme = effectiveTheme();
+          var wrap = document.querySelector('.ssh-term-wrap');
+          if (wrap && theme && theme.background) wrap.style.background = theme.background;
+          // 同步 xterm 内部主题（不仅是外面 wrap 背景）
+          try { term.options.theme = theme; } catch (_) {}
+        }
+        function paintBgToggleBtn() {
+          var btn = document.getElementById('btn-bgtoggle');
+          if (!btn) return;
+          if (bgMode === 'dark') {
+            btn.textContent = '🌙 强制深色';
+            btn.title = '当前：强制深色。点击切换回跟随主题';
+            btn.classList.add('is-dark');
+          } else {
+            btn.textContent = '🌓 跟随主题';
+            btn.title = '当前：跟随主题。点击切换到强制深色（适合亮色主题对比度不够的场景）';
+            btn.classList.remove('is-dark');
           }
         }
-        syncBg();
-        window.addEventListener('kairo:themechange', function () {
-          try { term.options.theme = curTheme(); } catch (e) {}
-          syncBg();
+        document.getElementById('btn-bgtoggle').addEventListener('click', function () {
+          bgMode = (bgMode === 'dark') ? 'theme' : 'dark';
+          try { localStorage.setItem(BG_MODE_KEY, bgMode); } catch (_) {}
+          applyBgMode();
+          paintBgToggleBtn();
         });
+
+        // 主题联动：背景模式 = dark 时不跟随，否则跟随主题
+        function syncBg() { applyBgMode(); }
+        applyBgMode();
+        paintBgToggleBtn();
+        window.addEventListener('kairo:themechange', function () {
+          applyBgMode();
+        });
+
+        // ===== v0.13+ 光标行高亮 marker =====
+        // xterm.js 没有"输入行 vs 输出行"语义（输入输出同流），
+        // 退而求其次在光标所在行左侧画主题色条 + 柔光，视觉锚定"正在编辑的行"。
+        // 通过 rAF 读 buffer.cursorY / viewportY 算位置，监听 buffer 滚动。
+        var xtermEl = term.element;       // .xterm 容器
+        if (xtermEl) {
+          var marker = document.createElement('div');
+          marker.className = 'ssh-cursor-marker';
+          xtermEl.appendChild(marker);
+          var rafId = 0;
+          function tickCursorMarker() {
+            rafId = requestAnimationFrame(tickCursorMarker);
+            var buf, cell;
+            try {
+              buf = term.buffer && term.buffer.active;
+              var dim = term._core && term._core._renderService && term._core._renderService.dimensions;
+              cell = dim && dim.css && dim.css.cell;
+            } catch (_) { return; }
+            if (!buf || !cell || !cell.height) {
+              marker.classList.remove('visible');
+              return;
+            }
+            var cursorY = (typeof buf.cursorY === 'number') ? buf.cursorY : -1;
+            var viewportY = (typeof buf.viewportY === 'number') ? buf.viewportY : 0;
+            var screenY = cursorY - viewportY;
+            // xterm 内部 padding: 4px；用 css cell 尺寸精确定位
+            marker.style.top = (4 + screenY * cell.height) + 'px';
+            marker.style.height = cell.height + 'px';
+            // 光标不在 viewport 内时不显示
+            if (screenY < 0 || screenY >= term.rows) {
+              marker.classList.remove('visible');
+            } else {
+              marker.classList.add('visible');
+            }
+          }
+          rafId = requestAnimationFrame(tickCursorMarker);
+          // 卸载时取消 rAF（在 beforeunload 里 dispose term 一并取消）
+          var stopMarker = function () { if (rafId) cancelAnimationFrame(rafId); rafId = 0; };
+          window.addEventListener('beforeunload', stopMarker);
+        }
 
         // resize
         term.onResize(function (size) {
@@ -277,7 +355,8 @@
           var url = proto + '//' + location.host + '/api/ssh/shell/ws' +
             '?system=' + encodeURIComponent(system) +
             '&server=' + encodeURIComponent(server) +
-            '&cols=' + cols + '&rows=' + rows;
+            '&cols=' + cols + '&rows=' + rows +
+            '&encoding=' + encodeURIComponent(encoding);
           // Bug#13：连接中状态 — 只有重连按钮应该 enabled（其他按钮等连接成功）
           updateStandaloneButtons('connecting');
           try {

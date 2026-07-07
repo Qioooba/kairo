@@ -46,6 +46,18 @@ func (m *mockBackend) ReadDir(path string) ([]os.FileInfo, error) {
 	return entries, nil
 }
 
+// ListLimited mock 实现：返回 dirs[path] 的前 max 条，截断时返回 truncated=true。
+func (m *mockBackend) ListLimited(path string, max int) ([]os.FileInfo, bool, error) {
+	entries, err := m.ReadDir(path)
+	if err != nil {
+		return nil, false, err
+	}
+	if max > 0 && len(entries) > max {
+		return entries[:max], true, nil
+	}
+	return entries, false, nil
+}
+
 func (m *mockBackend) Stat(path string) (os.FileInfo, error) {
 	if entries, ok := m.dirs[path]; ok {
 		// 视为目录：取第一个条目的字段当占位（mode 用目录位）
@@ -59,6 +71,14 @@ func (m *mockBackend) Stat(path string) (os.FileInfo, error) {
 		return fakeFileInfo{name: filepath.Base(path), size: int64(len(b)), mode: 0o644}, nil
 	}
 	return nil, &os.PathError{Op: "stat", Path: path, Err: os.ErrNotExist}
+}
+
+func (m *mockBackend) WriteFile(path string, data []byte, perm os.FileMode) error {
+	if m.files == nil {
+		m.files = make(map[string][]byte)
+	}
+	m.files[path] = data
+	return nil
 }
 
 func (m *mockBackend) Close() error {
@@ -270,8 +290,14 @@ func (m *cancelMockBackend) Open(path string) (SftpFile, error) {
 func (m *cancelMockBackend) ReadDir(path string) ([]os.FileInfo, error) {
 	return nil, os.ErrNotExist
 }
+func (m *cancelMockBackend) ListLimited(path string, max int) ([]os.FileInfo, bool, error) {
+	return nil, false, os.ErrNotExist
+}
 func (m *cancelMockBackend) Stat(path string) (os.FileInfo, error) {
 	return fakeFileInfo{name: filepath.Base(path), size: 1024 * 1024}, nil
+}
+func (m *cancelMockBackend) WriteFile(path string, data []byte, perm os.FileMode) error {
+	return nil
 }
 func (m *cancelMockBackend) Close() error { _ = m.reader.Close(); return nil }
 

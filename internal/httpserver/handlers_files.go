@@ -46,6 +46,9 @@ var sftpDialer = func(cli *sshclient.Client) (sftpClientLike, error) {
 type sftpClientLike interface {
 	Close() error
 	ReadDir(path string) ([]os.FileInfo, error)
+	// ListLimited v1.0 新增：列目录时给一个 max 限制，避免 10w 文件目录爆内存。
+	// 返回 (entries, truncated, err)；truncated=true 表示远端实际 > max。
+	ListLimited(path string, max int) ([]os.FileInfo, bool, error)
 	Stat(path string) (os.FileInfo, error)
 	DownloadFile(remotePath, localPath string) (int64, error)
 	DownloadFileWithProgress(remotePath, localPath string, progress func(written, total int64)) (int64, error)
@@ -65,14 +68,18 @@ type sftpClientLike interface {
 //   - 多服务器共享 path 模式：填 `servers []string` + `path`（项 7 主推荐）
 //   - 多服务器独立 path 模式：填 `targets []` 数组（每项 {server, path}）
 //   - 优先级：targets > servers > server
+//
+// v1.0 起加 MaxEntries：单 server 列目录条目上限（防 10w 文件目录爆内存）。
+// 0 = 走默认值 filesListDefaultMax；硬上限 filesListHardMax。
 type filesListReq struct {
-	System   string            `json:"system"`
-	Server   string            `json:"server"`
-	Servers  []string          `json:"servers"` // v0.5 新增：多 server 共享 path
-	Targets  []filesListTarget `json:"targets"` // v0.5 新增：多 server 多 path
-	Username string            `json:"username"`
-	Password string            `json:"password"`
-	Path     string            `json:"path"` // 必须以 "/" 开头的绝对路径
+	System     string            `json:"system"`
+	Server     string            `json:"server"`
+	Servers    []string          `json:"servers"` // v0.5 新增：多 server 共享 path
+	Targets    []filesListTarget `json:"targets"` // v0.5 新增：多 server 多 path
+	Username   string            `json:"username"`
+	Password   string            `json:"password"`
+	Path       string            `json:"path"`        // 必须以 "/" 开头的绝对路径
+	MaxEntries int               `json:"max_entries"` // v1.0：单 server 列目录条目上限（0 = 默认）
 }
 
 // filesListTarget 一个 (server, path) 列表目标
@@ -92,15 +99,16 @@ type filesEntry struct {
 
 // filesListServerResult 多服务器列目录时单台结果
 type filesListServerResult struct {
-	Server  string       `json:"server"`
-	Host    string       `json:"host,omitempty"`
-	Path    string       `json:"path,omitempty"`
-	Parent  string       `json:"parent,omitempty"`
-	OK      bool         `json:"ok"`
-	Error   string       `json:"error,omitempty"`
-	Entries []filesEntry `json:"entries,omitempty"`
-	Count   int          `json:"count"`
-	Ms      int64        `json:"elapsed_ms"`
+	Server    string       `json:"server"`
+	Host      string       `json:"host,omitempty"`
+	Path      string       `json:"path,omitempty"`
+	Parent    string       `json:"parent,omitempty"`
+	OK        bool         `json:"ok"`
+	Error     string       `json:"error,omitempty"`
+	Entries   []filesEntry `json:"entries,omitempty"`
+	Count     int          `json:"count"`
+	Truncated bool         `json:"truncated,omitempty"` // v1.0：true 表示远端条目 > max，实际只返回 max 条
+	Ms        int64        `json:"elapsed_ms"`
 }
 
 // handleFilesList 列远端目录（任意路径）。
@@ -135,6 +143,15 @@ func (s *Server) handleFilesList(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(io.LimitReader(r.Body, 32*1024)).Decode(&req); err != nil {
 		writeErr(w, 400, err)
 		return
+	}
+
+	// v1.0：解析 max_entries；0 → 默认；超过硬上限 → 夹回。
+	maxEntries := req.MaxEntries
+	if maxEntries <= 0 {
+		maxEntries = filesListDefaultMax
+	}
+	if maxEntries > filesListHardMax {
+		maxEntries = filesListHardMax
 	}
 
 	// 决定模式：targets > servers > server（向后兼容）
@@ -263,7 +280,7 @@ func (s *Server) handleFilesList(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, 400, errors.New("缺少密码（输入或勾选「记住密码」）"))
 			return
 		}
-		es, err := s.listOneServer(r.Context(), sn, entry, creds.Username, creds.Password, req.Path)
+		es, truncated, err := s.listOneServer(r.Context(), sn, entry, creds.Username, creds.Password, req.Path, maxEntries)
 		if err != nil {
 			s.audit.Write("files.list", "system", req.System, "server", sn, "path", req.Path, "result", "fail", "err", err.Error())
 			writeErrSanitized(w, 502, err)
@@ -274,11 +291,13 @@ func (s *Server) handleFilesList(w http.ResponseWriter, r *http.Request) {
 		if cleaned != "/" && cleaned != "." {
 			parent = filepath.ToSlash(filepath.Dir(cleaned))
 		}
-		s.audit.Write("files.list", "system", req.System, "server", sn, "path", req.Path, "result", "ok", "count", len(es))
+		s.audit.Write("files.list", "system", req.System, "server", sn, "path", req.Path, "result", "ok", "count", len(es), "truncated", truncated)
 		writeJSON(w, 200, map[string]any{
-			"path":    cleaned,
-			"parent":  parent,
-			"entries": es,
+			"path":      cleaned,
+			"parent":    parent,
+			"entries":   es,
+			"truncated": truncated,
+			"max":       maxEntries,
 		})
 		return
 	}
@@ -314,7 +333,7 @@ func (s *Server) handleFilesList(w http.ResponseWriter, r *http.Request) {
 					continue
 				}
 				start := time.Now()
-				es, err := s.listOneServer(r.Context(), sn, entry, creds.Username, creds.Password, pp)
+				es, truncated, err := s.listOneServer(r.Context(), sn, entry, creds.Username, creds.Password, pp, maxEntries)
 				ms := time.Since(start).Milliseconds()
 				cleaned := filepath.ToSlash(filepath.Clean(pp))
 				parent := ""
@@ -326,8 +345,8 @@ func (s *Server) handleFilesList(w http.ResponseWriter, r *http.Request) {
 					s.audit.Write("files.list", "system", req.System, "server", sn, "path", pp, "result", "fail", "err", err.Error())
 					continue
 				}
-				results[j.idx] = filesListServerResult{Server: sn, Host: entry.Host, Path: cleaned, Parent: parent, OK: true, Entries: es, Count: len(es), Ms: ms}
-				s.audit.Write("files.list", "system", req.System, "server", sn, "path", pp, "result", "ok", "count", len(es))
+				results[j.idx] = filesListServerResult{Server: sn, Host: entry.Host, Path: cleaned, Parent: parent, OK: true, Entries: es, Count: len(es), Truncated: truncated, Ms: ms}
+				s.audit.Write("files.list", "system", req.System, "server", sn, "path", pp, "result", "ok", "count", len(es), "truncated", truncated)
 			}
 		}()
 	}
@@ -355,13 +374,20 @@ func (s *Server) handleFilesList(w http.ResponseWriter, r *http.Request) {
 // listOneServer 实际 SSH→SFTP→ReadDir 一台 server 的目录。
 //
 // 把 list 的核心逻辑抽出来，单服务器 / 多服务器 handler 都共用。
-// 返回 entries（可能为空），错误时返回 err。审计在 caller 写。
+// 返回 (entries, truncated, err)：
+//   - entries: 目录条目（最多 maxEntries 条）；
+//   - truncated: true 表示远端实际条目数 > maxEntries；
+//   - err: 协议 / 网络 / 权限错误。
+//
+// v1.0 起改用 sftpCli.ListLimited（sftpclient 内部委托 backend，
+// SFTP 治标本地 cap / shell 治本远端 head）防止 10w 文件目录爆内存。
 func (s *Server) listOneServer(
 	parentCtx context.Context,
 	serverName string,
 	srv *config.ServerConfig,
 	username, password, path string,
-) ([]filesEntry, error) {
+	maxEntries int,
+) ([]filesEntry, bool, error) {
 	ctx, cancel := context.WithTimeout(parentCtx, sshDialOuterTimeout)
 	defer cancel()
 
@@ -371,22 +397,22 @@ func (s *Server) listOneServer(
 		AllowInsecureHostKey: s.cur().App.AllowInsecureHostKeyEnabled(),
 	}, sshclient.Credentials{Password: password}, sshAttemptTimeout)
 	if err != nil {
-		return nil, fmt.Errorf("SSH 连接失败: %w", err)
+		return nil, false, fmt.Errorf("SSH 连接失败: %w", err)
 	}
 	defer cli.Close()
 
 	sftpCli, err := sftpDialer(cli)
 	if err != nil {
-		return nil, fmt.Errorf("SFTP 打开失败: %w", err)
+		return nil, false, fmt.Errorf("SFTP 打开失败: %w", err)
 	}
 	defer sftpCli.Close()
 
-	infos, err := sftpCli.ReadDir(path)
+	infos, truncated, err := sftpCli.ListLimited(path, maxEntries)
 	if err != nil {
-		// 注意：sftpclient.ReadDir 自己已经 wrap 过 "列出目录失败:"，
-		// 这里不要再 wrap，避免前端 toast 出现 "列出目录失败：列出目录失败: 列出目录失败: ..."
+		// 注意：sftpclient.ListLimited 已经 wrap 过 "列出目录失败:"，
+		// 这里不要再 wrap，避免前端 toast 出现 "列出目录失败：列出目录失败: ..."
 		// 这种 3 层嵌套的难看错误信息。
-		return nil, err
+		return nil, false, err
 	}
 
 	entries := make([]filesEntry, 0, len(infos))
@@ -395,11 +421,11 @@ func (s *Server) listOneServer(
 			Name:  info.Name(),
 			Size:  info.Size(),
 			IsDir: info.IsDir(),
-			Mode:  info.Mode().String(),
+			Mode:  sftpclient.FormatMode(info.Mode()),
 			MTime: info.ModTime().UTC().Format(time.RFC3339),
 		})
 	}
-	return entries, nil
+	return entries, truncated, nil
 }
 
 // filesDownloadReq 下载请求体（任意路径）
@@ -666,6 +692,16 @@ func (s *Server) handleFilesPreview(w http.ResponseWriter, r *http.Request) {
 const (
 	filesMaxFilesPerTask = 100              // 单次最多 100 个文件
 	filesDownloadTimeout = 30 * time.Minute // 单个下载任务总超时（dlmanager.Session idleGC 也是 30min）
+)
+
+// filesListMaxEntriesLimits 列目录的条目数限制（v1.0 新增）。
+//
+// 默认 1000 与 logs/list 一致；硬上限 5000 防呆（前端不能传更大值）。
+// 设计动机：10w 文件目录会让 SFTP ReadDir / HTTP JSON 序列化把进程吃爆，
+// 所以必须有一个合理上限 + truncated 标记，前端按需提示用户。
+const (
+	filesListDefaultMax = 1000 // 默认单 server 列目录条目上限
+	filesListHardMax    = 5000 // 前端 max_entries 传超过这个就夹回
 )
 
 // validateTargetDir 校验并解析 target_dir（v0.5 项 18：自定义下载落点）。

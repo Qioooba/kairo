@@ -435,7 +435,7 @@ class ReadOnlySFTPServer(SFTPServerInterface):
                 full = os.path.join(real, name)
                 if SFTPAttributes is None:
                     continue
-                attr = SFTPAttributes.from_stat(os.stat(full))
+                attr = SFTPAttributes.from_stat(os.lstat(full))
                 # paramiko 5.x 严格要求纯 SFTPAttributes 列表，且每个要有 .filename
                 attr.filename = name
                 entries.append(attr)

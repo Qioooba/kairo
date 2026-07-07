@@ -150,9 +150,17 @@ func (s *Session) Subscribe() (<-chan []byte, func()) {
 }
 
 // broadcast 把一行推给所有订阅者；满了就丢旧的（防阻塞 SSH reader）
+//
+// v1.0 行为变更：无订阅者时**不 touchActivity**。
+// 原因：用户 unsub 后 SSH 行持续来如果还 touch，会让 grace 期无法触发 killSSH，
+// 资源白白占着。语义统一为"广播到订阅者 = 活跃；广播不到 = 不算活跃"。
 func (s *Session) broadcast(line []byte) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	if len(s.subscribers) == 0 {
+		// 无订阅者：不推送 + 不 touchActivity（让 subsLostGrace 计时生效）
+		return
+	}
 	for ch := range s.subscribers {
 		select {
 		case ch <- line:
@@ -180,6 +188,11 @@ func (s *Session) broadcast(line []byte) {
 
 // enqueueLine 把一条 line 编码成 NDJSON 放进 pendingBuf。
 // 满 100 行时非阻塞地给 flushSignal 推一个信号，让 batcher 提前 flush。
+//
+// v1.0 行为变更：只在**有订阅者**时 touch activity。
+// 原因：用户 unsub 后 SSH 行持续来如果还 touch，会让 grace 期无法触发 killSSH。
+// 配合 broadcast 的 v1.0 变更（无订阅者不 touch），整体语义：
+// "有人订阅 = 活跃，无人订阅 = 计时到就 kill"。
 func (s *Session) enqueueLine(line string) {
 	payload := formatOutput(Output{Kind: "line", Line: line})
 	s.pendingMu.Lock()
@@ -189,7 +202,13 @@ func (s *Session) enqueueLine(line string) {
 	s.pendingMu.Unlock()
 	// BE-002：SSH reader 收到一行 = 真实活动，更新 lastActivity。
 	// 即使 batcher 还没 flush（< 50ms 窗口），也要让 idleGC 知道会话还活着。
-	s.touchActivity()
+	// v1.0：仅在有订阅者时 touch；无订阅者时让 grace 期计时生效。
+	s.mu.RLock()
+	hasSubs := len(s.subscribers) > 0
+	s.mu.RUnlock()
+	if hasSubs {
+		s.touchActivity()
+	}
 	if shouldSignal {
 		select {
 		case s.flushSignal <- struct{}{}:
@@ -303,31 +322,59 @@ type Manager struct {
 	mu        sync.RWMutex
 	sessions  map[string]*Session
 	idleAfter time.Duration
+	// subsLostGrace v1.0 新增：用户 unsub（前端 SSE 关闭）后超过这个时长就 killSSH，
+	// 不必等 idleAfter。生产 60s，测试可改短。
+	subsLostGrace time.Duration
 	// GCInterval 是 idleGC 的巡检周期。默认 15s；测试里调短。
 	// 0 走默认值。
 	GCInterval time.Duration
 }
+
+// subsLostGraceDefault 是"无订阅者后多久 killSSH"的 grace 期默认值（v1.0 新增）。
+//
+// 设计意图：用户切走页面（前端 unsub）后，SSH session 仍连着；
+// grace 期（60s）内用户切回来还有缓冲；超过 grace 就 killSSH，释放资源。
+//
+// grace 不能大于 idleAfter（避免测试场景 grace 永远 > idleAfter 触发不到）。
+// idleAfter 兜底机制保留，作为"持续无任何活动 X 分钟"的硬上限。
+const subsLostGraceDefault = 60 * time.Second
 
 // NewManager 创建 Manager
 //
 // BE-002 v0.9：idleAfter 默认从 5 分钟改为 30 分钟，
 // 且 idleGC 改用 lastActivity（而非 CreatedAt）判断空闲，
 // 持续有订阅 / 持续有日志输出的会话不会被强断。
-// 测试需要更短 idle 时用 NewManagerWithIdle。
+//
+// v1.0 起：idleAfter 默认改回 5 分钟（v0.9 改 30 min 是防"持续有订阅被强断"，
+// 但实际有订阅者时 idleGC 永不 kill，所以 30 min 太长会让"前端关浏览器
+// 但 SSH session 还连着 30 min"的资源浪费重现）。同时加 subsLostGrace 60s
+// grace 期，无订阅者超过 60s 立即 kill。
+// 测试需要更短 idle / grace 时用 NewManagerWithIdle / NewManagerWithGrace。
 func NewManager() *Manager {
 	return &Manager{
-		sessions:   make(map[string]*Session),
-		idleAfter:  30 * time.Minute,
-		GCInterval: 15 * time.Second,
+		sessions:      make(map[string]*Session),
+		idleAfter:     5 * time.Minute,
+		subsLostGrace: subsLostGraceDefault,
+		GCInterval:    15 * time.Second,
 	}
 }
 
 // NewManagerWithIdle 创建一个自定义 idleAfter 的 Manager（测试用）。
-// idleAfter <= 0 走默认 30 分钟。
+// idleAfter <= 0 走默认 5 分钟（v1.0）。
 func NewManagerWithIdle(idleAfter time.Duration) *Manager {
 	m := NewManager()
 	if idleAfter > 0 {
 		m.idleAfter = idleAfter
+	}
+	return m
+}
+
+// NewManagerWithGrace 创建一个自定义 subsLostGrace 的 Manager（测试用）。
+// subsLostGrace <= 0 走默认 60 秒。
+func NewManagerWithGrace(grace time.Duration) *Manager {
+	m := NewManager()
+	if grace > 0 {
+		m.subsLostGrace = grace
 	}
 	return m
 }
@@ -467,6 +514,14 @@ func (m *Manager) ShutdownAll() {
 //   - 有订阅者：永不 idle-kill（订阅 = 活跃，即使没有日志输出）
 //   - 无订阅者 + lastActivity 未超时：保留
 //   - 无订阅者 + lastActivity 超时：killSSH，下一轮 GC 从 map 移除
+//
+// v1.0 增强：
+//   1. 加 subsLostGrace（60s）：用户 unsub 后超过 grace 立即 kill，不必等 idleAfter。
+//      配合 broadcast / enqueueLine 的"无订阅者不 touch activity"语义：
+//      unsub 后 lastActivity 不再更新，grace 计时准确。
+//   2. grace 不大于 idleAfter（兜底兼容测试场景 idleAfter=50ms 之类）；
+//   3. 行为仍然简单：每轮 ticker 跑一次判断；stopped + 无订阅者立即清理。
+//      （v1.0 不引入 select 多路：复杂度换不来明显收益，等真有需要再加。）
 func (m *Manager) idleGC(s *Session) {
 	interval := m.GCInterval
 	if interval <= 0 {
@@ -487,15 +542,26 @@ func (m *Manager) idleGC(s *Session) {
 			return
 		}
 		// BE-002：有订阅者时永不 idle-kill（订阅 = 活跃）。
-		// 只有无订阅 + lastActivity 超时才 killSSH，防内存泄漏。
 		if subs > 0 {
 			continue
 		}
+		// v1.0：无订阅者按 grace 计时 kill（不必等 idleAfter）。
+		// grace 不能大于 idleAfter（兼容测试用更短 idleAfter 的场景）。
 		m.mu.RLock()
 		idleAfter := m.idleAfter
 		m.mu.RUnlock()
-		if time.Since(s.lastActivityAt()) > idleAfter {
-			// 真正空闲超过阈值（无订阅 + 无日志输出）→ 清掉，防内存泄漏
+		grace := m.subsLostGrace
+		if grace <= 0 {
+			grace = subsLostGraceDefault
+		}
+		if grace > idleAfter {
+			grace = idleAfter
+		}
+		if time.Since(s.lastActivityAt()) > grace {
+			// 真正空闲超过 grace（无订阅 + 无日志输出）→ killSSH，下一轮 GC 从 map 移除
+			s.killSSH()
+		} else if time.Since(s.lastActivityAt()) > idleAfter {
+			// 兜底：grace 未到但超过 idleAfter（grace > idleAfter 时不会触发；保留用于未来调参）
 			s.killSSH()
 		}
 	}

@@ -215,6 +215,12 @@
     }
 
     function loadCfg() {
+      api('GET', '/api/admin/openers').then(r => {
+        Kairo.state.downloadsOpeners = Array.isArray(r && r.openers) ? r.openers : [];
+      }).catch(() => {
+        Kairo.state.downloadsOpeners = [];
+      });
+
       return api('GET', '/api/config').then(info => {
         state.cfg = info;
         sysSel.innerHTML = '';
@@ -440,6 +446,35 @@
         showPreviewModal(r, fileName, filePath, encoding);
       } catch (e) {
         toast('预览失败：' + e.message, 'err');
+      }
+    }
+
+    // editFile 编辑远程文件：下载到临时目录 → 用外部编辑器打开 → 监控保存 → 自动上传
+    async function editFile(filePath, fileName, openerName) {
+      const c = creds();
+      if (!c.username) { toast('请在系统配置中设置 SSH 用户名', 'warn'); return; }
+      try {
+        const r = await api('POST', '/api/ssh/sftp/edit', {
+          system: state.currentSys,
+          server: state.currentSrv,
+          username: c.username,
+          password: c.password,
+          path: filePath,
+          opener: openerName
+        });
+        if (r.ok !== undefined) {
+          toast('已用 ' + openerName + ' 打开文件，保存后自动上传', 'success');
+        } else {
+          toast('编辑失败: ' + (r.error || '未知错误'), 'error');
+        }
+      } catch (e) {
+        if (e.message && e.message.includes('未找到打开器')) {
+          toast('未找到打开器 "' + openerName + '"，请先在系统配置中添加', 'warn');
+        } else if (e.message && e.message.includes('文件超过大小限制')) {
+          toast('文件超过 200MB 限制，无法编辑', 'warn');
+        } else {
+          toast('编辑失败: ' + e.message, 'error');
+        }
       }
     }
 
@@ -778,8 +813,9 @@
         el('th', null, [sortLink('名称', 'name')]),
         el('th', null, [sortLink('大小', 'size')]),
         el('th', null, [sortLink('修改时间', 'mtime')]),
-        el('th', null, [document.createTextNode('权限')]),
-        el('th', { class: 'col-status' }, [document.createTextNode('状态')])
+        el('th', { class: 'col-mode' }, [document.createTextNode('权限')]),
+        el('th', { class: 'col-status' }, [document.createTextNode('状态')]),
+        el('th', { class: 'col-actions' }, [document.createTextNode('操作')])
       ]));
       tbl.appendChild(thead);
 
@@ -833,16 +869,66 @@
 
         tr.appendChild(el('td', { class: 'num' }, [document.createTextNode(entry.isDir ? '—' : formatBytes(entry.size))]));
         tr.appendChild(el('td', null, [document.createTextNode(entry.mtime ? formatTime(entry.mtime) : '-')]));
-        // P1-BUG-9：权限列显示简化形式（带图标 + 权限数字），title 保留原始 mode 给高级用户看。
-        const modeCell = el('td', { class: 'mode-cell', title: entry.mode || '' });
-        const modeResult = formatShortMode(entry.mode);
-        if (modeResult && typeof modeResult === 'object' && modeResult.iconName) {
-          modeCell.innerHTML = '<span style="display:inline-flex;align-items:center;gap:4px;">' + svgIcon(modeResult.iconName, 14) + ' ' + modeResult.text + '</span>';
-        } else {
-          modeCell.textContent = modeResult;
-        }
-        tr.appendChild(modeCell);
+        // 权限列：直接显示后端给的 ls -l 风格 10 字符串（"drwxr-xr-x"），
+        // 与 SSH 终端 / macOS Finder 一致，不需要再简化成 octal 数字。
+        // 文件类型图标已经在「名称」列里有，这里不再重复。
+        tr.appendChild(el('td', { class: 'mode-cell', text: entry.mode || '-' }));
         tr.appendChild(el('td', { class: 'col-status status-cell', 'data-name': entry.name }, [document.createTextNode('')]));
+
+        const actionsCell = el('td', { class: 'col-actions' });
+        if (!entry.isDir) {
+          const isText = (window.Kairo && window.Kairo.SftpCommon && Kairo.SftpCommon.isTextFileByExt) ? Kairo.SftpCommon.isTextFileByExt(entry.name) : true;
+          if (isText) {
+            const previewBtn = el('button', {
+              class: 'btn btn-sm',
+              text: '预览',
+              title: '预览文件内容',
+              onclick: (e) => {
+                e.stopPropagation();
+                openPreview(fullPath, entry.name);
+              }
+            });
+            actionsCell.appendChild(previewBtn);
+
+            const openers = (window.Kairo && Kairo.state && Kairo.state.downloadsOpeners) || [];
+            if (!openers || openers.length === 0) {
+              const editBtn = el('button', {
+                class: 'btn btn-sm btn-disabled',
+                text: '编辑',
+                title: '请先在系统配置中添加外部打开器（如 Notepad++、VS Code）',
+                disabled: true
+              });
+              actionsCell.appendChild(editBtn);
+            } else {
+              openers.forEach(op => {
+                const rawIcon = (typeof op.icon === 'string') ? op.icon.trim() : '';
+                let iconHtml = '';
+                if (rawIcon) {
+                  const isEmoji = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(rawIcon);
+                  if (isEmoji) {
+                    iconHtml = rawIcon;
+                  } else if (ICONS[rawIcon]) {
+                    iconHtml = svgIcon(rawIcon, 14);
+                  }
+                }
+                if (!iconHtml) iconHtml = '📝';
+                const tip = (op.name || '') + (op.path ? ' — ' + op.path : '') + '\n保存后自动上传到服务器';
+                const editBtn = el('button', {
+                  class: 'btn btn-sm',
+                  title: tip,
+                  style: 'display:inline-flex; align-items:center; gap:4px;',
+                  onclick: (e) => {
+                    e.stopPropagation();
+                    editFile(fullPath, entry.name, op.name);
+                  },
+                  unsafeHtml: iconHtml + ' ' + (op.name || '编辑')
+                });
+                actionsCell.appendChild(editBtn);
+              });
+            }
+          }
+        }
+        tr.appendChild(actionsCell);
 
         tbody.appendChild(tr);
       });
@@ -871,20 +957,8 @@
       renderTable();
     }
 
-    // P1-BUG-9 修复：把 "-rw-r--r--" 翻译成 "644" 这种简化形式显示给普通用户，
-    // 原始 mode 字符串放 title 里 hover 可看。
-    // 输入：标准 ls -l 风格的 10 字符串（首位 type，1-3 用户，4-6 组，7-9 其它）。
-    // 输出：'{icon} {octal}' 形式，例如 '📄 644' / '📁 755' / '🔗 777'。
-    function formatShortMode(mode) {
-      if (!mode || typeof mode !== 'string' || mode.length < 10) return mode || '-';
-      const tri = (s) => (s.charAt(0) === 'r' ? 4 : 0) + (s.charAt(1) === 'w' ? 2 : 0) + (s.charAt(2) === 'x' ? 1 : 0);
-      const u = tri(mode.slice(1, 4));
-      const g = tri(mode.slice(4, 7));
-      const o = tri(mode.slice(7, 10));
-      const typeIconName = { '-': 'smFile', 'd': 'smFolder', 'l': 'smLink' };
-      const iconName = typeIconName[mode.charAt(0)] || 'smFile';
-      return { iconName: iconName, text: u + g + o };
-    }
+    // 已删除：旧版把 ls -l 字符串简化成 octal 数字 + 图标的 formatShortMode。
+    // 现在权限列直接显示后端给的 10 字符串（如 "drwxr-xr-x"），与 SSH 终端一致。
 
     function setRowStatusByName(name, st) {
       const cell = tableWrap.querySelector('tr[data-name="' + cssEscape(name) + '"] .status-cell')

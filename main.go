@@ -8,6 +8,7 @@ import (
 	"context"
 	"embed"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"io/fs"
@@ -22,11 +23,14 @@ import (
 	"time"
 
 	"kairo/internal/audit"
+	"kairo/internal/browserpref"
 	"kairo/internal/config"
 	"kairo/internal/credentials"
 	"kairo/internal/downloads"
 	"kairo/internal/httpserver"
 	"kairo/internal/license"
+	"kairo/internal/popup"
+	"kairo/internal/reminder"
 	"kairo/internal/sshclient"
 	"kairo/internal/sshshell"
 	"kairo/internal/sysutil"
@@ -40,6 +44,35 @@ var webFS embed.FS
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 	log.SetPrefix("[Kairo] ")
+
+	// --reset-browser 工具箱启动前的一个独立处理：删掉浏览器偏好 state，
+	// 让下次正常启动重新探测。流程跟"主流程"前两段一致（定位 cfg → 加载 →
+	// 解析目录），但失败直接 os.Exit(1) 而不是弹托盘错误框。
+	resetBrowser := flag.Bool("reset-browser", false, "重置浏览器偏好（删除 data/browser_state.json），下次启动重新探测")
+	flag.Parse()
+	if *resetBrowser {
+		runDir, cfgPath, err := resolveRunDir()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "定位运行目录失败:", err)
+			os.Exit(1)
+		}
+		cfg, err := config.Load(cfgPath)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "加载配置失败:", err)
+			os.Exit(1)
+		}
+		if err := cfg.ResolvePaths(runDir); err != nil {
+			fmt.Fprintln(os.Stderr, "解析目录失败:", err)
+			os.Exit(1)
+		}
+		browserpref.Init(cfg.DataDir())
+		if err := browserpref.Reset(); err != nil {
+			fmt.Fprintln(os.Stderr, "重置浏览器偏好失败:", err)
+			os.Exit(1)
+		}
+		fmt.Println("浏览器偏好已重置，下次启动会重新探测。")
+		return
+	}
 
 	// 1. 确定运行目录。优先用可执行文件目录；若 config.yaml 不在那，
 	// 再回退到当前工作目录，兼容 `go run .` 这类临时二进制路径。
@@ -87,6 +120,10 @@ func main() {
 	if credentials.Mode() == "file" && strings.TrimSpace(cfg.App.CredentialKey) == "" {
 		log.Printf("凭据 file 模式: 密钥已自动生成并保存到 %s（请妥善备份 .credkey 文件）", filepath.Join(cfg.DataDir(), ".credkey"))
 	}
+
+	// 4.5.2 浏览器偏好：只放 cfg.DataDir() 全局，state 文件读取走
+	// browserpref.Read，探测/落盘都在 openBrowser 里按需触发（startup 时不动）。
+	browserpref.Init(cfg.DataDir())
 
 	// 4.6 SSH 日志开关 + compat profile 默认值（项 9 + 项 22）
 	// 默认全关 —— 避免在用户机器上无脑生成日志。
@@ -164,11 +201,19 @@ func main() {
 
 	// 4.9 项 4 迁移：把历史 .meta sidecar 文件合并到单文件索引 .kairo-meta.json。
 	// 一次性操作，幂等。失败不致命（侧车丢了只是丢元数据，不影响下载文件本身）。
-	if migrated, skipped, err := downloads.MigrateSidecars(cfg.DownloadDir()); err != nil {
-		log.Printf("WARNING: .meta sidecar 迁移失败: %v", err)
-	} else if migrated > 0 {
-		log.Printf("元数据迁移完成: 合并 %d 个 .meta 文件到单文件索引（跳过 %d 个）", migrated, skipped)
-	}
+	//
+	// v1.0：改为异步 + 短延迟（100ms），不阻塞启动监听：
+	//   - 旧实现同步等迁移完成；下载目录有 10w .meta 文件时启动阻塞几十秒；
+	//   - 新实现启动 100ms 后才扫描，期间 HTTP 服务已经 listen + 浏览器已打开；
+	//   - 用户首次调 /api/downloads/list 时如迁移未完成会拿到旧视图，迁移完成后下次刷新正常。
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		if migrated, skipped, err := downloads.MigrateSidecars(cfg.DownloadDir()); err != nil {
+			log.Printf("WARNING: .meta sidecar 迁移失败: %v", err)
+		} else if migrated > 0 {
+			log.Printf("元数据迁移完成: 合并 %d 个 .meta 文件到单文件索引（跳过 %d 个）", migrated, skipped)
+		}
+	}()
 
 	// 6. 嵌入的 web 静态资源
 	webSubFS, err := fs.Sub(webFS, "web")
@@ -210,8 +255,41 @@ func main() {
 	shells := sshshell.New(0)
 	defer shells.ShutdownAll()
 
+	// 7.7 构造便笺提醒管理器（v1.0）：存储 + 事件驱动调度器。
+	// 数据文件在 data/reminders.json；OnFire 把触发扔给 popup 包显示。
+	rStore := reminder.NewStore(filepath.Join(cfg.DataDir(), "reminders.json"))
+	if err := rStore.EnsurePath(); err != nil {
+		log.Printf("WARNING: 准备 reminder 数据目录失败: %v", err)
+	}
+	rManager, err := reminder.NewManager(rStore, func(r reminder.Reminder, at time.Time) {
+		// 在新 goroutine 里弹窗，避免阻塞调度器主循环
+		go func() {
+			popup.Show(r.Content)
+			auditLog.Write("reminder.fire.popup",
+				"id", r.ID,
+				"type", string(r.Type),
+				"at", at.Format(time.RFC3339),
+			)
+		}()
+	})
+	if err != nil {
+		log.Printf("WARNING: 初始化 reminder manager 失败: %v", err)
+		rManager = nil
+	} else {
+		log.Printf("便笺提醒已加载: %d 条", len(rManager.List()))
+	}
+	defer func() {
+		if rManager != nil {
+			rManager.Stop()
+		}
+		popup.Shutdown()
+	}()
+
 	// 8. 构造 HTTP 服务
 	srv := httpserver.New(cfgMgr, auditLog, webSubFS, tails, shells)
+	if rManager != nil {
+		srv.SetReminders(rManager)
+	}
 
 	// 8.5 启动下载历史定期清理（启动时清理一次 + 每小时清理一次）
 	srv.StartPeriodicCleanup()
@@ -251,7 +329,7 @@ func main() {
 	log.Printf("审计日志: %s", filepath.Join(cfg.LogDir(), "audit.log"))
 	log.Printf("运行日志: %s", logFilePath)
 
-	if cfg.App.AutoOpenBrowser {
+	if cfg.App.AutoOpenBrowserEnabled() {
 		go openBrowser(url)
 	}
 
@@ -269,6 +347,27 @@ func main() {
 			shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
 			_ = httpSrv.Shutdown(shutdownCtx)
+		},
+		// 便笺提醒：暂停今日到次日 0 点 / 立即恢复。
+		// pause 状态不持久化（重启后默认恢复），用户重启电脑后想再暂停需手动点一次。
+		OnPauseToday: func() {
+			if rManager == nil {
+				return
+			}
+			now := time.Now()
+			y, m, d := now.Date()
+			until := time.Date(y, m, d+1, 0, 0, 0, 0, now.Location())
+			rManager.PauseUntil(until)
+			auditLog.Write("reminder.pause.tray", "until", until.Format(time.RFC3339))
+			log.Printf("提醒已暂停至 %s", until.Format("2006-01-02 15:04"))
+		},
+		OnResumeToday: func() {
+			if rManager == nil {
+				return
+			}
+			rManager.PauseUntil(time.Time{})
+			auditLog.Write("reminder.resume.tray")
+			log.Println("提醒已恢复")
 		},
 	})
 	log.Println("服务已停止，再见。")
@@ -314,19 +413,84 @@ func exeDirectory() (string, error) {
 	return filepath.Dir(real), nil
 }
 
-// openBrowser 跨平台打开默认浏览器
+// openBrowser 跨平台打开浏览器。
+//
+// 决策链：
+//
+//	1) 读 data/browser_state.json（"上次用什么浏览器打开"）
+//	   ├─ state.Kind=chrome + path 文件仍在 → 直接 exec(state.Path, url)
+//	   └─ 没有 / 失效                       → 进入 2
+//
+//	2) 探测链：
+//	     Windows + 装了 Chrome  → exec(chrome.exe, url)，kind=chrome
+//	     Windows 没 Chrome        → rundll32 url.dll,FileProtocolHandler，kind=default
+//	     macOS                    → open url，kind=default
+//	     Linux                    → xdg-open url，kind=default
+//
+//	3) 启动成功 → 把这次用的浏览器写回 state（remembered=true 时跳过写回）
+//
+// 资源占用：多读一次小 JSON（< 1ms），state 命中则不读注册表；探测链走
+// os.Stat 常见路径（< 1ms）失败再读注册表（< 5ms）。本进程本身在 cmd.Start()
+// 后立刻退出，浏览器进程与本程序解耦。
+//
+// Win7/10 兼容：Chrome 装路径在 Win7/10/11 三代完全一致；注册表 API
+// (RegOpenKeyExW/QueryValueExW) Unicode 版本从 Win7 起行为一致；WOW6432Node
+// 区分 32/64-bit 也是 Win7 x64 起就有的特性，不引入新平台差异。
 func openBrowser(url string) {
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
-	case "windows":
-		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
-	case "darwin":
-		cmd = exec.Command("open", url)
-	default:
-		cmd = exec.Command("xdg-open", url)
-	}
+	args, kind, path, remembered := chooseBrowser(url)
+	cmd := exec.Command(args[0], args[1:]...)
 	cmd.Stdout = nil
 	cmd.Stderr = nil
-	_ = cmd.Start()
+	if err := cmd.Start(); err != nil {
+		log.Printf("打开浏览器失败 (%s): %v", args[0], err)
+		return
+	}
 	go func() { _ = cmd.Wait() }()
+
+	// 写回 state：探测链命中时记录；state 命中时跳过（避免无意义写盘）。
+	if !remembered {
+		if err := browserpref.Write(&browserpref.State{
+			Kind: kind,
+			Path: path,
+		}); err != nil {
+			log.Printf("保存浏览器偏好失败: %v", err)
+		}
+	}
+}
+
+// chooseBrowser 选浏览器并返回 (argv, kind, executablePath, remembered)。
+//
+// remembered=true 表示从 state 命中（无需写回）；
+// remembered=false 表示探测链命中（调用方需要写回 state）。
+//
+// 失败兜底：state 读取失败 / 解析失败都视为"无 state"，安静进入探测链。
+func chooseBrowser(url string) (args []string, kind browserpref.Kind, path string, remembered bool) {
+	// 1) 读 state。Read 失败不影响主流程 —— 落到探测链。
+	s, err := browserpref.Read()
+	if err != nil {
+		log.Printf("读取浏览器偏好失败（回落探测）: %v", err)
+	}
+	if s != nil && s.Kind == browserpref.KindChrome && s.Path != "" {
+		if _, statErr := os.Stat(s.Path); statErr == nil {
+			return []string{s.Path, url}, browserpref.KindChrome, s.Path, true
+		}
+		// path 失效 → 留一行 log，下次启动会重新探测。
+		log.Printf("浏览器偏好中记录的 Chrome 路径已失效: %s，回落到探测", s.Path)
+	}
+
+	// 2) 探测链。
+	if runtime.GOOS == "windows" {
+		if chromePath, ok := sysutil.FindChrome(); ok {
+			log.Printf("探测到 Chrome: %s", chromePath)
+			return []string{chromePath, url}, browserpref.KindChrome, chromePath, false
+		}
+		// 没 Chrome → 走系统默认浏览器（rundll32 走 shell32 间接层，
+		// 由 Windows 根据"设置 → 默认应用 → Web 浏览器"决定开哪个）。
+		return []string{"rundll32", "url.dll,FileProtocolHandler", url}, browserpref.KindDefault, "", false
+	}
+	if runtime.GOOS == "darwin" {
+		return []string{"open", url}, browserpref.KindDefault, "", false
+	}
+	// Linux + 其他 Unix。
+	return []string{"xdg-open", url}, browserpref.KindDefault, "", false
 }

@@ -148,3 +148,9 @@ crash.log
 # 由脚本动态生成，不纳入版本控制；fake-websphere 下的其他配置文件（如 shell 脚本等）仍被跟踪。
 # 对应 .gitattributes 里 scripts/fake-websphere/** export-ignore 负责 archive 时排除已跟踪的部分。
 /scripts/fake-websphere/opt/
+
+# ===== E2E / 测试跑出来的截图与报告产物（本地生成，不入库）=====
+/test-results/
+/tests/test-results/
+/v0.13-out/
+/v0.13-xianxia-out/

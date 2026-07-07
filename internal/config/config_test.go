@@ -886,6 +886,29 @@ func TestAllowCustomDownloadDirEnabled(t *testing.T) {
 	}
 }
 
+// v1.x 起：AutoOpenBrowserEnabled 默认 true（启动默认开浏览器）；
+// 老配置里没这一行（即 nil）也走 true；显式 false 才关闭。
+// 这一条跟 FreeFileBrowserEnabled 模式对称，但默认方向相反。
+func TestAutoOpenBrowserEnabled(t *testing.T) {
+	// nil → 默认 true
+	a := AppConfig{}
+	if !a.AutoOpenBrowserEnabled() {
+		t.Error("nil 应默认开启（启动后自动打开浏览器）")
+	}
+	// 显式 true
+	tr := true
+	a.AutoOpenBrowser = &tr
+	if !a.AutoOpenBrowserEnabled() {
+		t.Error("显式 true 应开启")
+	}
+	// 显式 false（用户主动关）
+	fl := false
+	a.AutoOpenBrowser = &fl
+	if a.AutoOpenBrowserEnabled() {
+		t.Error("显式 false 应关闭")
+	}
+}
+
 // v0.5-G #18：TargetDirAllowed（按 allowed_download_roots 白名单 + 目录边界）
 //
 // v0.9 起 fail-closed：空 roots → 一律拒绝（不再"全放行"）；

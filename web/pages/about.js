@@ -234,7 +234,7 @@
     { name: 'core.js', desc: 'DOM/工具内核 — el() 安全构造器、escapeHtml、toast、confirmDialog、modal、tabs、virtualList、resize 监听。零依赖。' },
     { name: 'state.js', desc: '全局状态机 — 当前用户、主题、routeMap、routeNames、tailHighlights 等共享状态。Kairo.state.* 单一入口。' },
     { name: 'api.js', desc: 'HTTP 客户端 — api(method, path, body) 统一封装；自动加 Bearer token；SSE EventSource 工厂；统一错误处理。' },
-    { name: 'theme.js', desc: '主题切换 — dark / light / green / hc / xianxia（玄墨鎏金·仙侠风）5 套主题，inline script 在 <head> 提前设 data-theme 防 FOUC。' },
+    { name: 'theme.js', desc: '主题切换 — dark / light / green / hc / xianxia（玄墨鎏金·武侠风）5 套主题，inline script 在 <head> 提前设 data-theme 防 FOUC。' },
     { name: 'auth.js', desc: '认证层 — 拉 /api/auth/status 探测；token cookie 管理；role-gated UI 显隐。' },
     { name: 'pages/*.js', desc: '16 个页面 — home / websphere / files / ssh (v0.10) / formatter / commands / diagnostics / config / downloads / http / timestamp / cron / jsonpath / compare / webservice (v0.12) / about。每个页面一个 IIFE，路由切换时整体替换 view。' },
     { name: 'tail.js + tail.html', desc: '独立 tail 窗口 — 从主页面剥离的 tail 流，跟踪 SSE 不影响主页面操作；行级 DOM 节点池 + rAF 批量 flush (50ms/100 行)；v0.13 起支持 Ctrl/⌘+F 页面内搜索高亮，新到达日志自动应用当前搜索词。' },
@@ -612,16 +612,16 @@
         '窗口搜索: 文件预览、实时 tail、上下文窗口均支持 Ctrl/⌘+F 页面内搜索高亮，Enter/Shift+Enter 跳转匹配'
       ],
       features: [
-        'SFTP 面板新增持久路径输入框（替代原面包屑双击编辑），支持回车跳转和"跳转"按钮',
-        '新增"复制路径"按钮，一键复制当前 SFTP 工作目录',
-        '「📂 进入当前目录」按钮（原"跟随"按钮修复），通过 WS query_cwd 帧获取 shell 真实 cwd',
-        'cwd 同步改用 OSC 999 私有序列标记起止，避免终端输出中出现 __KAIRO_CWD 标记污染',
-        '下载完成通知统一使用 Kairo.core.notify：打开所在目录 / 复制路径 / 查看下载历史 三个操作按钮',
-        '后端新增 query_cwd 控制帧：stdout 流扫描起止标记提取 $PWD，避免新开 SSH 连接只能拿到 home',
-        '文件预览窗口（preview.html）新增页面内搜索高亮：Ctrl/⌘+F 唤起、实时匹配、Enter/Shift+Enter 跳转',
-        '实时 tail 窗口（tail.html）新增页面内搜索高亮，新到达日志行自动应用当前搜索词高亮',
-        '日志上下文新窗口（openContextInNewWindow）同样支持页面内搜索高亮',
-        '搜索高亮公共模块 web/vendor/search-hl.js 统一管理，三个窗口共用'
+        { title: 'SFTP 面板持久路径输入框', desc: '替代原面包屑双击编辑，支持回车跳转和"跳转"按钮，任意绝对路径直达' },
+        { title: '复制路径按钮', desc: '一键复制当前 SFTP 工作目录到剪贴板' },
+        { title: '📂 进入当前目录按钮', desc: '原"跟随"按钮修复：通过 WS query_cwd 帧获取 shell 真实 cwd，避免新开 SSH 连接只能拿到 home' },
+        { title: 'cwd 标记改 OSC 999 私有序列', desc: '原 __KAIRO_CWD_*__ 标记污染终端显示，改用 OSC 999 起止标记，终端忽略不显示' },
+        { title: '下载完成通知统一', desc: '改用 Kairo.core.notify，支持打开所在目录 / 复制路径 / 查看下载历史 三个操作按钮，与日志助手/文件助手保持一致' },
+        { title: '后端 query_cwd 控制帧', desc: 'stdout 流扫描起止标记提取 $PWD，避免新开 SSH 连接只能拿到 home' },
+        { title: '文件预览页面内搜索高亮', desc: 'preview.html 新增 Ctrl/⌘+F 唤起页面内搜索，TreeWalker 遍历文本节点，实时匹配，Enter/Shift+Enter 跳转' },
+        { title: '实时 tail 页面内搜索高亮', desc: 'tail.html 新增页面内搜索，新到达日志行自动应用当前搜索词高亮' },
+        { title: '日志上下文新窗口搜索高亮', desc: 'openContextInNewWindow 同样支持页面内搜索高亮' },
+        { title: '搜索高亮公共模块', desc: 'web/vendor/search-hl.js 统一管理，preview/tail/上下文三窗口共用；Enter/Shift+Enter 跳转匹配，Esc 清除' }
       ],
       fixes: [
         '修复 SFTP 面板"跟随"按钮无效（原实现新开 SSH 连接读 ~，无法获取终端内 cd 后的真实目录）',
@@ -1694,9 +1694,14 @@
       const ul = el('ul', { style: 'margin:0; padding-left:20px; line-height:1.8; font-size:13px;' });
       v.features.forEach(f => {
         const li = el('li', { style: 'margin-bottom:6px;' });
-        li.appendChild(el('span', { style: 'font-weight:600;', text: f.title }));
-        li.appendChild(document.createTextNode(' — '));
-        li.appendChild(el('span', { class: 'text-dim', style: 'font-size:12.5px; line-height:1.7;', text: f.desc }));
+        if (typeof f === 'string') {
+          // 兜底: 防御未来写漏对象格式 — 字符串当整句加粗显示
+          li.appendChild(el('span', { style: 'font-weight:600;', text: f }));
+        } else {
+          li.appendChild(el('span', { style: 'font-weight:600;', text: f.title }));
+          li.appendChild(document.createTextNode(' — '));
+          li.appendChild(el('span', { class: 'text-dim', style: 'font-size:12.5px; line-height:1.7;', text: f.desc }));
+        }
         ul.appendChild(li);
       });
       sec.appendChild(ul);

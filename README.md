@@ -78,6 +78,7 @@ go run .
 | **SSH 日志 / compat profile** | `app.ssh_debug` / `app.ssh_traffic_dump` / `app.ssh_compat_profile` | 启动时 `sshclient.SetLogConfig` / `SetDefaultProfile` |
 | **文件浏览器开关 + 路径白名单** | `app.enable_free_file_browser` / `app.free_file_roots` | 启动时打 WARNING（开）+ handler 即时校验 |
 | **下载到指定目录开关 + 白名单** | `app.allow_custom_download_dir` / `app.allowed_download_roots` | 启动时 `TargetDirAllowed` 立即生效 |
+| **浏览器偏好**（v1.x） | `data/browser_state.json`：`{kind:"chrome"/"default", path, updated_at}` | Win 下首次启动探测 Chrome（常见路径 + 注册表兜底），命中记下来；后续启动直接复用上次那个；`kairo --reset-browser` 清掉重来 |
 
 浏览器侧（localStorage，不进文件）跨刷新保留：
 
@@ -798,7 +799,10 @@ kairo/
 <details>
 <summary><b>Q: 启动后浏览器没自动打开？</b></summary>
 
-检查 `config.yaml` 的 `auto_open_browser: true`；或手动访问 `http://127.0.0.1:18080`。
+v1.x 起默认 `auto_open_browser: true`（启动自动打开浏览器）。
+- 双击后浏览器没弹？手动访问 `http://127.0.0.1:18080` 看是否服务起来了；
+- 想换个浏览器开？运行 `Kairo.exe --reset-browser` 清掉 `data/browser_state.json` 里的上次浏览器偏好，下一次启动会重新探测（Win 下优先 Chrome）；
+- 不想自动开？`config.yaml` 里 `auto_open_browser: false`。
 </details>
 
 <details>

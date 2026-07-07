@@ -3022,6 +3022,19 @@ const formCard = el('div', { class: 'card' }, [
       setTabBadge('tail', '');
     }
 
+    // v1.0：页面卸载/导航走时主动 stop tail，释放 SSH 连接。
+    // 之前只靠后端 idleGC（默认 30 min）兜底，会浪费 SSH session 30 min；
+    // 现在后端 idleAfter 5 min + grace 60s，但页面关闭时刻就 stop 更直接。
+    //
+    // 用 pagehide 而非 beforeunload：pagehide 在移动端 Safari 也触发，
+    // 且不阻塞页面卸载（beforeunload 弹确认框会阻塞，影响体验）。
+    // navigator.sendBeacon 是异步 POST，不受 fetch unload 中断影响。
+    window.addEventListener('pagehide', () => {
+      if (tailId) {
+        try { navigator.sendBeacon('/api/logs/tail/' + tailId + '/stop'); } catch (e) { /* ignore */ }
+      }
+    });
+
     function appendTailLine(o) {
       // v0.5 修复：实时 tail 改用 buffer + requestAnimationFrame 批量 append。
       // 原版每行都 textContent += + 全文 split/slice/join，日志一快直接卡死浏览器。

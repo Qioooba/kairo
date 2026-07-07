@@ -25,6 +25,7 @@ import (
 	"kairo/internal/dlmanager"
 	"kairo/internal/downloads"
 	"kairo/internal/license"
+	"kairo/internal/reminder"
 	"kairo/internal/sshshell"
 	"kairo/internal/tailmgr"
 	"kairo/internal/webservice"
@@ -114,6 +115,9 @@ type Server struct {
 	downloads *dlmanager.Manager
 	shells    *sshshell.Manager
 
+	// v1.0 便笺提醒：可空（nil 时 /api/reminders 返回 503）。SetReminders 在 main.go 启动 reminder.Manager 后注入。
+	reminders *reminder.Manager
+
 	// v0.12 WebService 调试中心：WSDL/模板/历史/Mock 的本地存储 + Mock 路由注册表。
 	// Store 在 New 时按当前 data 目录构造；MockRegistry 启动后 Reload 一次让已保存的 mock 生效。
 	ws      *webservice.Store
@@ -139,6 +143,12 @@ func New(cfg *config.Manager, a *audit.Logger, webRoot fs.FS, tails *tailmgr.Man
 		tails: tails, downloads: dlmanager.New(), shells: shells,
 		ws: wsStore, wsMocks: wsMocks,
 	}
+}
+
+// SetReminders 注入 reminder.Manager（在 main.go 启动 reminder 后调用）。
+// handler 里检查 nil，未注入时返回 503。
+func (s *Server) SetReminders(m *reminder.Manager) {
+	s.reminders = m
 }
 
 // TriggerCleanup 触发一次下载清理（同步执行）。
@@ -167,17 +177,31 @@ func (s *Server) TriggerCleanup() {
 			"errors", len(result.Errors),
 		)
 	}
+
+	s.cleanupEditTempFiles()
 }
 
-// StartPeriodicCleanup 启动下载清理：启动时清理一次。
+// StartPeriodicCleanup 启动下载清理：启动时立即清理一次 + 每 1 小时清理一次。
 //
 // 通常在 main.go 中 HTTP 服务启动前调用。
 // 每次下载完成后也会触发检查（见 TriggerCleanup）。
+//
+// v1.0 行为变更：
+//   - 旧实现 sleep 500ms 再触发，意图是"等服务初始化完"。
+//     但 sleep 期间 Sync.Mutex 持有逻辑会让首次 /api/downloads/list 在 500ms 内阻塞；
+//     实际上 TriggerCleanup 是同步执行，初始化阶段不会冲突；
+//     改成"启动后立即触发 + 1h 周期"，减少首请求延迟。
+//   - 清理本身仍是同步执行，cleanupMu 防止并发。
 func (s *Server) StartPeriodicCleanup() {
-	// 启动时立即清理一次
 	go func() {
-		time.Sleep(500 * time.Millisecond) // 等服务初始化完
+		// 启动立即清理一次（不 sleep）
 		s.TriggerCleanup()
+		// 每小时清理一次
+		ticker := time.NewTicker(1 * time.Hour)
+		defer ticker.Stop()
+		for range ticker.C {
+			s.TriggerCleanup()
+		}
 	}()
 }
 
@@ -281,6 +305,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleSshSftpPreview(w, r)
 	case path == "/api/ssh/sftp/download":
 		s.handleSshSftpDownload(w, r)
+	case path == "/api/ssh/sftp/edit":
+		s.handleSshSftpEdit(w, r)
 	case path == "/api/logs/list":
 		s.handleLogsList(w, r)
 	case path == "/api/logs/list/targets":
@@ -393,11 +419,17 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleFilesDownloadEventsOrCancel(w, r)
 	case strings.HasPrefix(path, "/api/ssh/sftp/download/"):
 		s.handleSshSftpDownloadEventsOrCancel(w, r)
+	case strings.HasPrefix(path, "/api/ssh/sftp/edit/"):
+		s.handleSshSftpEditEvents(w, r)
 	// 注意：/api/logs/download-latest 必须在 /api/logs/download/ 之前匹配（精确匹配优先）
 	case strings.HasPrefix(path, "/api/logs/download/"):
 		s.handleLogsDownloadEventsOrCancel(w, r)
 	case strings.HasPrefix(path, "/api/logs/tail/"):
 		s.handleTailEventsOrStop(w, r)
+	// v1.0 便笺提醒：增删改查 / 启用切换 / 立即触发 / 元信息。
+	// 统一进 handleReminderDispatch 收口，按 path 后缀再分发。
+	case strings.HasPrefix(path, "/api/reminders"):
+		s.handleReminderDispatch(w, r)
 	case strings.HasPrefix(path, "/downloads/"):
 		s.serveDownload(w, r)
 	case strings.HasPrefix(path, "/mock/"):

@@ -45,14 +45,23 @@ type SftpFile interface {
 // RemoteFS 是 sftpclient 包对外暴露的"远端文件系统"抽象（项 8 新增）。
 //
 // 两种实现：
-//   - sftpBackend：标准 SFTP 子系统；
+//   - realSftpBackend：标准 SFTP 子系统；
 //   - shellBackend：SSH shell + 命令（cat / dd / ls）。
 //
-// 加新 backend 只要再写一个 struct 实现这 4 个方法。
+// 加新 backend 只要再写一个 struct 实现这 6 个方法。
+//
+// v1.0 起加 ListLimited：列出目录时给一个 max 限制，避免 10w 文件目录把全部条目
+// 拉回本地（OOM 风险）。返回 (entries, truncated, err)：
+//   - entries: 最多 max 条目录项；
+//   - truncated: true 表示远端实际条目数 > max，前端可以提示"目录过大，仅展示前 N 条"。
+//
+// v0.12 起加 WriteFile：支持文件上传（用于远程编辑场景）。
 type RemoteFS interface {
 	Open(path string) (SftpFile, error)
 	ReadDir(path string) ([]os.FileInfo, error)
+	ListLimited(path string, max int) ([]os.FileInfo, bool, error)
 	Stat(path string) (os.FileInfo, error)
+	WriteFile(path string, data []byte, perm os.FileMode) error
 	Close() error
 }
 
@@ -61,10 +70,15 @@ type RemoteFS interface {
 //
 // 命名上虽然保持 "sftpFile"，但 v0.3 起 ReadDir / Stat 也走这个抽象，
 // 这样 mock 时可以用 map/file 假数据完整覆盖 list / stat 路径。
+//
+// v1.0 起加 ListLimited：见 RemoteFS 接口注释。
+// v0.12 起加 WriteFile：支持文件上传。
 type sftpBackend interface {
 	Open(path string) (SftpFile, error)
 	ReadDir(path string) ([]os.FileInfo, error)
+	ListLimited(path string, max int) ([]os.FileInfo, bool, error)
 	Stat(path string) (os.FileInfo, error)
+	WriteFile(path string, data []byte, perm os.FileMode) error
 	Close() error
 }
 
@@ -133,8 +147,47 @@ func (r *realSftpBackend) ReadDir(path string) ([]os.FileInfo, error) {
 	return r.c.ReadDir(path)
 }
 
+// ListLimited SFTP 实现：调 ReadDir 后本地 cap。
+//
+// 治标：pkg/sftp 的 ReadDir 协议层就会一次性拿所有条目，远端遍历 + 本地内存
+// 都已完成。本地 cap 只能挡住后续解析 / 序列化阶段，无法阻止 SFTP 协议读所有
+// 条目。对 10w 文件目录仍是慢路径，但能避免"全量拉回 + 序列化 10w JSON"把进程
+// 吃爆。彻底治本的远端 head 在 shellBackend.ListLimited 里。
+//
+// max <= 0 时不截断（行为同 ReadDir，返回 truncated=false）。
+func (r *realSftpBackend) ListLimited(path string, max int) ([]os.FileInfo, bool, error) {
+	infos, err := r.c.ReadDir(path)
+	if err != nil {
+		return nil, false, err
+	}
+	if max > 0 && len(infos) > max {
+		return infos[:max], true, nil
+	}
+	return infos, false, nil
+}
+
 func (r *realSftpBackend) Stat(path string) (os.FileInfo, error) {
 	return r.c.Stat(path)
+}
+
+func (r *realSftpBackend) WriteFile(path string, data []byte, perm os.FileMode) error {
+	f, err := r.c.Create(path)
+	if err != nil {
+		return fmt.Errorf("创建远程文件失败: %w", err)
+	}
+	defer f.Close()
+	if _, err := f.Write(data); err != nil {
+		return fmt.Errorf("写入远程文件失败: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("关闭远程文件失败: %w", err)
+	}
+	if perm != 0 {
+		if err := r.c.Chmod(path, perm); err != nil {
+			return fmt.Errorf("修改权限失败: %w", err)
+		}
+	}
+	return nil
 }
 
 func (r *realSftpBackend) Close() error {
@@ -274,6 +327,9 @@ func (c *Client) Open(path string) (SftpFile, error) {
 // 不做白名单校验——调用方决定该传什么路径；
 // 真实访问控制由远端 SSH 服务器的账号权限承担。
 // 隐藏文件（以 . 开头）也一并返回，由调用方决定是否过滤。
+//
+// v1.0 起：10w 文件目录会爆内存，调用方应该改用 ListLimited(path, max)。
+// ReadDir 保留仅为向后兼容（v0.x 老代码）。
 func (c *Client) ReadDir(path string) ([]os.FileInfo, error) {
 	if c == nil || c.b == nil {
 		return nil, fmt.Errorf("sftp 客户端未连接")
@@ -283,6 +339,29 @@ func (c *Client) ReadDir(path string) ([]os.FileInfo, error) {
 		return nil, fmt.Errorf("列出目录失败: %w", err)
 	}
 	return infos, nil
+}
+
+// ListLimited 列出 path 下最多 max 个条目（v1.0 新增）。
+//
+// 解决 10w 文件目录爆内存：
+//   - SFTP backend：本地 cap（治标，pkg/sftp 协议层会拉回所有条目）
+//   - Shell backend：远端 head（治本，远端 ls 截断后才传回）
+//
+// 返回：
+//   - entries: 实际条目（最多 max 条）
+//   - truncated: true 表示远端实际条目数 > max
+//   - err: 协议 / 网络 / 权限错误
+//
+// max <= 0 时不截断（行为同 ReadDir，truncated=false）。
+func (c *Client) ListLimited(path string, max int) ([]os.FileInfo, bool, error) {
+	if c == nil || c.b == nil {
+		return nil, false, fmt.Errorf("sftp 客户端未连接")
+	}
+	entries, truncated, err := c.b.ListLimited(path, max)
+	if err != nil {
+		return nil, false, fmt.Errorf("列出目录失败: %w", err)
+	}
+	return entries, truncated, nil
 }
 
 // Stat 拿到 path 对应的文件信息（大小、修改时间、是否为目录、权限位）。
@@ -297,6 +376,27 @@ func (c *Client) Stat(path string) (os.FileInfo, error) {
 		return nil, fmt.Errorf("stat 失败: %w", err)
 	}
 	return info, nil
+}
+
+// UploadFile 把本地文件上传到远端路径。
+//
+// remotePath 必须由调用方做过白名单校验。
+// perm 是远端文件权限，传 0 时使用默认权限。
+func (c *Client) UploadFile(localPath, remotePath string, perm os.FileMode) error {
+	if c == nil || c.b == nil {
+		return fmt.Errorf("sftp 客户端未连接")
+	}
+	data, err := os.ReadFile(localPath)
+	if err != nil {
+		return fmt.Errorf("读取本地文件失败: %w", err)
+	}
+	if perm == 0 {
+		perm = 0o644
+	}
+	if err := c.b.WriteFile(remotePath, data, perm); err != nil {
+		return fmt.Errorf("上传文件失败: %w", err)
+	}
+	return nil
 }
 
 // progressInterval 进度回调最小间隔（字节）。64KB 对内网 SFTP
@@ -378,6 +478,49 @@ func newShellBackend(conn *ssh.Client, runFn func(ctx context.Context, command s
 // 注意：shellBackend 使用调用方传入的共享 SSH 连接创建 session，不能在这里关闭
 // s.conn，否则关闭一个文件客户端会连带中断同一 SSH 连接上的其它操作。
 func (s *shellBackend) Close() error {
+	return nil
+}
+
+// WriteFile 通过 shell 命令上传文件：用 cat > path 覆盖写入。
+//
+// 实现：通过 SSH session 的 stdin 写入数据，配合 cat > 命令覆盖目标文件。
+// 对于大文件，建议使用 SFTP backend（shell 方式受 SSH buffer 限制）。
+func (s *shellBackend) WriteFile(path string, data []byte, perm os.FileMode) error {
+	cmd := "cat > " + shellQuoteArg(path)
+	sess, err := s.conn.NewSession()
+	if err != nil {
+		return fmt.Errorf("创建 SSH session 失败: %w", err)
+	}
+	defer sess.Close()
+
+	stdin, err := sess.StdinPipe()
+	if err != nil {
+		return fmt.Errorf("拿 stdin pipe 失败: %w", err)
+	}
+
+	if err := sess.Start(cmd); err != nil {
+		return fmt.Errorf("启动 cat 失败: %w", err)
+	}
+
+	if _, err := stdin.Write(data); err != nil {
+		return fmt.Errorf("写入数据失败: %w", err)
+	}
+	if err := stdin.Close(); err != nil {
+		return fmt.Errorf("关闭 stdin 失败: %w", err)
+	}
+
+	if err := sess.Wait(); err != nil {
+		return fmt.Errorf("cat 命令执行失败: %w", err)
+	}
+
+	if perm != 0 {
+		chmodCmd := fmt.Sprintf("chmod %o %s", perm, shellQuoteArg(path))
+		_, _, _, err = s.run(context.Background(), chmodCmd, 10*time.Second, "utf-8")
+		if err != nil {
+			return fmt.Errorf("chmod 失败: %w", err)
+		}
+	}
+
 	return nil
 }
 
@@ -570,8 +713,53 @@ func (s *shellBackend) ReadDir(path string) ([]os.FileInfo, error) {
 	if code != 0 {
 		return nil, fmt.Errorf("ls -la 退出码 %d: %s", code, strings.TrimSpace(stderr))
 	}
+	infos, _, err := s.parseLsLa(stdout)
+	return infos, err
+}
+
+// ListLimited 跑 "ls -la <path> | head -n max+10" 远端截断（治本，v1.0 新增）。
+//
+// 多取 10 行是给 "total N" / "." / ".." 这些非文件条目留 buffer；
+// 本地解析后过滤掉这些 + 再 cap 到 max。
+//
+// truncated 判定：head 拿到的行数 >= headN（即 max+10）即认为远端有更多条目。
+// 这是近似（如果 ls 真的只有 max+10 行就误报 truncated=true），但用户场景下
+// "目录条目数 = max+10" 概率极低，不影响实际 UX。
+//
+// max <= 0 时退化为 ReadDir。
+func (s *shellBackend) ListLimited(path string, max int) ([]os.FileInfo, bool, error) {
+	if max <= 0 {
+		infos, err := s.ReadDir(path)
+		return infos, false, err
+	}
+	headN := max + 10
+	cmd := fmt.Sprintf("ls -la %s 2>/dev/null | head -n %d", shellQuoteArg(path), headN)
+	stdout, stderr, code, err := s.run(context.Background(), cmd, 30*time.Second, "utf-8")
+	if err != nil {
+		return nil, false, fmt.Errorf("ls -la 失败: %w", err)
+	}
+	if code != 0 {
+		return nil, false, fmt.Errorf("ls -la 退出码 %d: %s", code, strings.TrimSpace(stderr))
+	}
+	infos, rawLineCount, err := s.parseLsLa(stdout)
+	if err != nil {
+		return nil, false, err
+	}
+	truncated := rawLineCount >= headN
+	if len(infos) > max {
+		infos = infos[:max]
+		truncated = true
+	}
+	return infos, truncated, nil
+}
+
+// parseLsLa 解析 ls -la 输出，返回 (有效条目, 原始行数, err)。
+//
+// 共享给 ReadDir / ListLimited 复用，避免逻辑漂移。
+func (s *shellBackend) parseLsLa(stdout string) ([]os.FileInfo, int, error) {
+	lines := strings.Split(stdout, "\n")
 	var infos []os.FileInfo
-	for _, line := range strings.Split(stdout, "\n") {
+	for _, line := range lines {
 		line = strings.TrimRight(line, "\r")
 		if strings.TrimSpace(line) == "" {
 			continue
@@ -597,11 +785,7 @@ func (s *shellBackend) ReadDir(path string) ([]os.FileInfo, error) {
 			modTime: mtime,
 		})
 	}
-	if len(infos) == 0 {
-		// 目录空 / 全是 . .. 也算 OK（返空 slice）
-		return infos, nil
-	}
-	return infos, nil
+	return infos, len(lines), nil
 }
 
 // shellFile 是 shellBackend Open 返回的"虚拟文件"，包装 cat 输出流。
@@ -682,4 +866,73 @@ func (s *shellBackend) Open(path string) (SftpFile, error) {
 			_ = sess.Close()
 		},
 	}, nil
+}
+
+// FormatMode 把 os.FileMode 转成 `ls -l` 风格的 10 字符字符串（"drwxr-xr-x"）。
+//
+// 为什么不用 (os.FileMode).String()：
+// Go 1.20+ 的 FileMode.String() 对 setuid/setgid/sticky 这些"高位"位处理
+// 不再走 ls 风格的 s/S/t/T 字符，例如 chmod 4755 的文件会显示成 "urwxr-xr-x"
+// 或者 "-rwxr-xr-x"（完全丢失 setuid），前端拿到这种字符串就显示不出来原本
+// 的安全标识位。这里我们按 ls -l 的标准格式自己拼一遍，保证前端展示稳定。
+//
+// 标准 10 字符串：
+//   - [0]   ：类型（d 目录 / l 符号链接 / - 普通文件 / c/b/p/s 等）
+//   - [1-3] ：owner  rwx
+//   - [4-6] ：group  rwx
+//   - [7-9] ：other  rwx
+// setuid/setgid/sticky 把对应位（owner 的 x → s/S、group 的 x → s/S、
+// other 的 x → t/T）的字符替换。
+func FormatMode(m os.FileMode) string {
+	var buf [10]byte
+	switch {
+	case m&os.ModeDir != 0:
+		buf[0] = 'd'
+	case m&os.ModeSymlink != 0:
+		buf[0] = 'l'
+	case m&os.ModeDevice != 0:
+		// c / b 不区分，前端无对应图标，统一用 'c'
+		buf[0] = 'c'
+	case m&os.ModeNamedPipe != 0:
+		buf[0] = 'p'
+	case m&os.ModeSocket != 0:
+		buf[0] = 's'
+	default:
+		buf[0] = '-'
+	}
+	// 位 8..0 映射到 "rwxrwxrwx"（位 n 决定位置 8-n 字符）
+	const permChars = "rwxrwxrwx"
+	for i := 0; i < 9; i++ {
+		if m&(1<<uint(8-i)) != 0 {
+			buf[i+1] = permChars[i]
+		} else {
+			buf[i+1] = '-'
+		}
+	}
+	// setuid → owner 的 x 位变成 s（有 x）/ S（无 x），即 buf[3]
+	// 注意：setuid/setgid/sticky 在 os.FileMode 里是高位的 os.ModeSetuid /
+	// os.ModeSetgid / os.ModeSticky，不是 Linux perm 的 0o4000/0o2000/0o1000
+	// （那俩是 SFTP 协议层的位，不要混）。
+	if m&os.ModeSetuid != 0 {
+		if buf[3] == 'x' {
+			buf[3] = 's'
+		} else {
+			buf[3] = 'S'
+		}
+	}
+	if m&os.ModeSetgid != 0 {
+		if buf[6] == 'x' {
+			buf[6] = 's'
+		} else {
+			buf[6] = 'S'
+		}
+	}
+	if m&os.ModeSticky != 0 {
+		if buf[9] == 'x' {
+			buf[9] = 't'
+		} else {
+			buf[9] = 'T'
+		}
+	}
+	return string(buf[:])
 }

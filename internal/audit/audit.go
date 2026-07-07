@@ -155,11 +155,19 @@ type Filter struct {
 
 // Recent 读取最近的 N 条记录（按文件中倒序）。
 //
-// 设计要点：
-//   - 默认日志是 append-only，文件不大，所以倒序读尾部足够；
-//   - limit 上限 5000，避免 OOM；
-//   - 过滤在解析后做，先 filter 再 limit 返回（保证 limit 命中的是过滤后的最新 N 条）；
-//   - 文件不存在时返回空切片和 nil，不报错。
+// 设计要点（v1.0）：
+//   - limit 上限 5000，避免单次返回过大；
+//   - 文件不存在时返回空切片和 nil，不报错；
+//   - **关键**：不再"全部行读到内存再 filter"——audit.log 可能涨到 1GB+
+//     （每条 ~200B，10w 条 ~20MB，100w 条 ~200MB），旧实现会瞬时吃满内存。
+//   - 改用环形 buffer：只保留文件末尾 ringSize 行的字符串引用（head 索引，
+//     append/移动都是 O(1)），内存上限 ≈ ringSize × 平均行长 ≈ 几 MB 稳态；
+//   - ringSize = limit × 10（兜底 filter 命中率 10%），下限 2000，上限 50000；
+//   - 倒序遍历环形 buffer（最新 → 最旧），filter 命中后达到 limit 即返回。
+//
+// 边界：
+//   - 文件总行数 < ringSize：环形 buffer 没装满，只输出已装入的 count 条；
+//   - filter 命中率 < 10%（极端 case）：可能返回 < limit 条记录，前端能接受。
 func (l *Logger) Recent(limit int, f Filter) ([]Record, error) {
 	if limit <= 0 {
 		limit = 200
@@ -180,25 +188,40 @@ func (l *Logger) Recent(limit int, f Filter) ([]Record, error) {
 	}
 	defer file.Close()
 
-	// 先把全部行读到内存。日志增长有限（每条 ~200B，10万条约 20MB）。
-	// 后续可优化成 tail -n。
-	var allLines []string
+	// 环形 buffer：只保留文件末尾 ringSize 行的字符串引用，避免全文件入内存。
+	ringSize := limit * 10
+	if ringSize < 2000 {
+		ringSize = 2000
+	}
+	if ringSize > 50000 {
+		ringSize = 50000
+	}
+	ring := make([]string, ringSize)
+	head := 0  // 下一个写入位置
+	count := 0 // 已写入数量（min(count, ringSize)）
+
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for scanner.Scan() {
 		line := strings.TrimRight(scanner.Text(), "\r\n")
-		if line != "" {
-			allLines = append(allLines, line)
+		if line == "" {
+			continue
+		}
+		ring[head] = line
+		head = (head + 1) % ringSize
+		if count < ringSize {
+			count++
 		}
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("读审计文件失败: %w", err)
 	}
 
-	// 倒序遍历，应用过滤
+	// 倒序遍历环形 buffer（从最新 → 最旧），filter 命中后达到 limit 即返回。
 	out := make([]Record, 0, limit)
-	for i := len(allLines) - 1; i >= 0 && len(out) < limit; i-- {
-		rec := parseLine(allLines[i])
+	for i := 0; i < count && len(out) < limit; i++ {
+		idx := (head - 1 - i + ringSize) % ringSize
+		rec := parseLine(ring[idx])
 		if rec == nil {
 			continue
 		}

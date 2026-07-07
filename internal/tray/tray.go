@@ -22,6 +22,11 @@ type Config struct {
 	Tooltip       string // 托盘 tooltip
 	OnOpenBrowser func() // "打开浏览器"菜单回调
 	OnQuit        func() // "退出"菜单回调（优雅关闭 HTTP server 等）
+
+	// v1.0 便笺提醒：托盘"暂停今日 / 恢复提醒"菜单回调。
+	// 两者二选一被设置；点哪个调哪个。Pause 会自动切到 Resume 的 label。
+	OnPauseToday  func() // "暂停今日提醒"菜单回调（直到次日 0 点）
+	OnResumeToday func() // "恢复提醒"菜单回调
 }
 
 // Icon 返回 embed 的 ICO 图标字节

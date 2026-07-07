@@ -48,10 +48,13 @@ type AuthToken struct {
 
 // AppConfig 应用自身配置
 type AppConfig struct {
-	Name            string `yaml:"name" json:"name"`
-	Host            string `yaml:"host" json:"host"` // 默认 127.0.0.1
-	Port            int    `yaml:"port" json:"port"` // 默认 18080
-	AutoOpenBrowser bool   `yaml:"auto_open_browser" json:"auto_open_browser"`
+	Name string `yaml:"name" json:"name"`
+	Host string `yaml:"host" json:"host"` // 默认 127.0.0.1
+	Port int    `yaml:"port" json:"port"` // 默认 18080
+	// AutoOpenBrowser 用 *bool 而非 bool：v1.x 起默认改 true，老配置文件
+	// 里没这一行的话零值 false 会被误读。指针让"未配置"和"显式 false"
+	// 区分开，配合 AutoOpenBrowserEnabled() 实现"未配置视为默认 true"。
+	AutoOpenBrowser *bool `yaml:"auto_open_browser,omitempty" json:"auto_open_browser,omitempty"`
 	DownloadDir     string `yaml:"download_dir" json:"download_dir"`
 	LogDir          string `yaml:"log_dir" json:"log_dir"`
 	DataDir         string `yaml:"data_dir" json:"data_dir"`
@@ -170,7 +173,20 @@ func (a *AppConfig) FreeFileBrowserEnabled() bool {
 	return *a.EnableFreeFileBrowser
 }
 
-// AllowInsecureHostKeyEnabled v0.9 起（BE-005）：是否允许 SSH 连接跳过 host key 校验。
+// AutoOpenBrowserEnabled v1.x 起：启动后是否自动打开浏览器。
+//
+// 用 *bool 实现三态，避免"未配置"和"显式 false"被 Go 零值合并：
+//   - 字段未配置（nil，老 config.yaml 升级上来）→ 默认 true（与新装机行为一致）
+//   - 显式 auto_open_browser: true  → true
+//   - 显式 auto_open_browser: false → false（用户主动关闭，UI 上尊重选择）
+//
+// 调用方：main.go 的 openBrowser 启动分支。
+func (a *AppConfig) AutoOpenBrowserEnabled() bool {
+	if a.AutoOpenBrowser == nil {
+		return true
+	}
+	return *a.AutoOpenBrowser
+}
 // 默认 false（fail-closed）；显式 true 才放行。
 // 仅当 server 未配 host_key_sha256 时本字段才生效；配了 host_key_sha256 总是强校验。
 func (a *AppConfig) AllowInsecureHostKeyEnabled() bool {

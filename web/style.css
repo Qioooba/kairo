@@ -392,17 +392,20 @@ body {
 }
 .topbar-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
 .theme-toggle {
-  display: inline-flex; align-items: center; justify-content: center;
-  width: 36px; height: 36px;
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 32px;
+  padding: 0 10px 0 8px;
   border-radius: 8px;
   background: transparent;
   border: 1px solid var(--line);
   color: var(--text-dim);
   cursor: pointer;
-  padding: 0;
+  font: inherit;
+  font-size: 12.5px;
+  line-height: 1;
+  white-space: nowrap;
   transition: background .15s, color .15s, border-color .15s;
 }
-.theme-toggle svg { width: 18px; height: 18px; display: block; }
 .theme-toggle:hover { background: var(--bg-2); color: var(--text); border-color: var(--text-dim); }
 .theme-toggle:focus-visible {
   outline: 2px solid var(--primary);
@@ -410,6 +413,14 @@ body {
   background: var(--bg-2);
   color: var(--text);
 }
+.theme-toggle-icon { display: inline-flex; align-items: center; justify-content: center; line-height: 0; }
+.theme-toggle-icon svg { width: 16px; height: 16px; display: block; }
+.theme-toggle-label { font-weight: 500; letter-spacing: 0.02em; }
+
+/* v0.13：dark 主题下月亮用经典淡黄 (#fbbf24)，跟 light 主题的太阳同色，
+   形成"日=黄 / 月=黄"的对称美感；浅灰虽然对比度达标，但跟旁边文字同色
+   反而失去"按钮"色彩辨识度 */
+:root[data-theme="dark"] .theme-toggle-icon svg { color: #fbbf24; }
 .crumbs { font-size: 14px; font-weight: 600; }
 .topbar-right { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
 .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
@@ -1789,7 +1800,7 @@ input[type="datetime-local"] {
   color-scheme: dark;
 }
 
-/* ===== 仙侠·墨韵青锋主题（xianxia）：古风武侠风 ===== */
+/* ===== 武侠·墨韵青锋主题（xianxia）：古风武侠风 ===== */
 :root[data-theme="xianxia"] {
   --bg-0: #f5f8f7;
   --bg-1: #e8efe9;
@@ -3102,12 +3113,14 @@ input[type="datetime-local"] {
 }
 
 /* BUG-9：权限列简化形式（📄 644 / 📁 755）单元格样式 */
-.table td.mode-cell {
-  font-family: ui-monospace, Menlo, Consolas, monospace;
-  font-size: 12.5px;
-  color: var(--text-dim);
-  white-space: nowrap;
-}
+ .table td.mode-cell {
+   font-family: ui-monospace, Menlo, Consolas, monospace;
+   font-size: 12.5px;
+   color: var(--text-dim);
+   white-space: nowrap;
+   min-width: 96px;
+ }
+ .table th.col-mode { width: 96px; }
 
 /* BUG-2：用户名/密码输入区视觉与主表单区分（淡蓝背景 + 蓝左边框） */
 .files-cred-row {
@@ -3915,7 +3928,7 @@ input[type="datetime-local"] {
   border-color: rgba(180, 83, 9, 0.35);
 }
 
-/* 仙侠古风主题：badge 用墨绿+暗金 */
+/* 武侠古风主题：badge 用墨绿+暗金 */
 :root[data-theme="xianxia"] .sftp-backend-badge.badge-ok {
   background: rgba(30, 77, 52, 0.15);
   color: #1a4a32;
@@ -4181,6 +4194,9 @@ input.sftp-autofollow-cb {
 }
 
 /* xterm 终端容器内的 canvas 自适应 */
+.ssh-term {
+  position: relative;   /* v0.13+ 让 .ssh-cursor-marker 可以绝对定位到容器 */
+}
 .ssh-term .xterm {
   height: 100%;
   padding: 4px;
@@ -4189,7 +4205,65 @@ input.sftp-autofollow-cb {
   background-color: transparent !important;
 }
 
-/* ===== 仙侠·墨韵青锋主题 组件级样式覆盖 ===== */
+/* 独立 SSH 窗口的 term-wrap 也加 relative，让 wrap 内的 marker 定位生效 */
+.ssh-standalone .ssh-term-wrap {
+  position: relative;
+}
+
+/* ============================================================================
+ * v0.13+ SSH 终端增强：背景模式切换按钮 + 光标行高亮
+ * ============================================================================
+ *
+ * 设计意图：
+ *  - 背景切换：默认跟随主题（dark/light/green/hc/xianxia），给亮色主题用户一键
+ *    切到强制深色终端的兜底（解决亮色主题下背景对比度不够、命令显示不清的问题）。
+ *  - 光标行高亮：xterm.js 没有"输入行 vs 输出行"的语义概念（终端里输入输出同流）。
+ *    退而求其次：在光标所在行的左侧画一道主题色高亮条 + 柔和 glow，视觉上
+ *    锚定"用户正在编辑哪一行"，让它和历史输出明显区分。
+ *    marker 通过 rAF 循环读 term.buffer.active.cursorY / viewportY 算位置。
+ */
+
+/* 背景切换按钮：默认态（跟随主题）vs 激活态（强制深色） */
+.ssh-bg-toggle {
+  /* 用现成的 .btn .btn-sm 即可，这里只补激活态样式 */
+}
+.ssh-bg-toggle.is-dark {
+  background: #0f172a;
+  color: #22d3ee;
+  border-color: #22d3ee;
+  box-shadow: 0 0 0 1px rgba(34, 211, 238, 0.25);
+}
+.ssh-bg-toggle.is-dark:hover {
+  background: #1e293b;
+  filter: none;
+}
+
+/* 光标行高亮条（左侧 2px 主题色 + 柔光）*/
+.ssh-cursor-marker {
+  position: absolute;
+  left: 4px;          /* 对齐 .xterm padding-left，让条贴在文本左边缘 */
+  width: 2px;
+  background: var(--primary, #4f8cff);
+  pointer-events: none;
+  z-index: 4;         /* 比 .xterm-helpers (z=5) 低，避免遮挡 IME */
+  opacity: 0.85;
+  border-radius: 1px;
+  box-shadow: 0 0 6px var(--primary, #4f8cff);
+  transition: opacity 0.15s ease;
+  display: none;      /* 默认隐藏，连上/有 cursorY 后才显示 */
+}
+.ssh-cursor-marker.visible {
+  display: block;
+}
+
+/* hc 主题下 marker 用纯白，对比拉满 */
+:root[data-theme="hc"] .ssh-cursor-marker {
+  background: #ffffff;
+  box-shadow: 0 0 6px #ffffff;
+  width: 3px;
+}
+
+/* ===== 武侠·墨韵青锋主题 组件级样式覆盖 ===== */
 
 /* 导航激活项：青锋左边框 + 墨绿渐变背景 */
 :root[data-theme="xianxia"] .nav-item.active {
@@ -4626,7 +4700,7 @@ input.sftp-autofollow-cb {
   color: var(--primary-2);
 }
 
-/* ===== 仙侠主题全局颜色覆盖：将硬编码蓝色统一替换为青锋色系 ===== */
+/* ===== 武侠主题全局颜色覆盖：将硬编码蓝色统一替换为青锋色系 ===== */
 
 /* 按钮hover/active/focus阴影：青锋色 */
 :root[data-theme="xianxia"] .btn-primary:hover {
@@ -4890,7 +4964,7 @@ input.sftp-autofollow-cb {
   background: linear-gradient(180deg, transparent, rgba(90,138,122,0.08)) !important;
 }
 
-/* ===== 仙侠主题：纯背景色（移除3D剑装饰以提升性能） ===== */
+/* ===== 武侠主题：纯背景色（移除3D剑装饰以提升性能） ===== */
 :root[data-theme="xianxia"] .sidebar {
   background: linear-gradient(180deg, rgba(90,138,122,0.08) 0%, rgba(74,122,106,0.04) 50%, rgba(90,138,122,0.06) 100%) !important;
 }
@@ -5330,3 +5404,222 @@ input.sftp-autofollow-cb {
   color: var(--text);
 }
 
+
+/* ===== v1.0 便笺提醒页面样式 ===== */
+
+/* 用 var 而非主题别名：所有 5 主题都已定义这几个变量（dark/light/green/hc/xianxia）。
+   之前我用了 --card-bg/--bg-soft/--border/--err 这些主题里没定义的别名，导致切换主题时
+   会回退到默认色（透明/黑/红），跟 .card 主体视觉不一致。改成统一用主题 var。 */
+
+.reminders-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.tabs-bar { display: flex; gap: 4px; flex-wrap: wrap; }
+.tab-btn {
+  padding: 6px 14px;
+  font-size: 13px;
+  background: var(--btn-bg);
+  color: var(--text-dim);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.tab-btn:hover { color: var(--text); border-color: var(--accent); background: var(--btn-hover-bg); }
+.tab-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.tab-btn.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+.reminders-list { display: flex; flex-direction: column; gap: 8px; }
+.reminders-group-title {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin: 12px 0 4px;
+  font-weight: 500;
+}
+.reminder-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  transition: opacity 0.15s, border-color 0.15s, background 0.15s;
+}
+.reminder-row.disabled { opacity: 0.55; }
+.reminder-row:hover { border-color: var(--accent); background: var(--bg-2); }
+.reminder-row:focus-within { border-color: var(--accent); }
+.reminder-toggle {
+  margin-top: 4px;
+  cursor: pointer;
+  width: 16px; height: 16px;
+  flex-shrink: 0;
+  accent-color: var(--accent);
+}
+.reminder-main { flex: 1; min-width: 0; }
+.reminder-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12.5px;
+  color: var(--text-dim);
+  margin-bottom: 4px;
+}
+.reminder-schedule { color: var(--text); font-weight: 500; font-size: 13px; }
+.reminder-fired { font-size: 11.5px; color: var(--text-mute); }
+.reminder-content {
+  font-size: 14px;
+  color: var(--text);
+  word-break: break-all;
+  white-space: pre-wrap;
+  line-height: 1.5;
+}
+.reminder-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+.btn-sm { padding: 4px 10px; font-size: 12px; }
+.btn-danger { color: var(--error); border-color: var(--error); background: transparent; }
+.btn-danger:hover { background: var(--error); color: #fff; border-color: var(--error); }
+.btn-danger:focus-visible { outline: 2px solid var(--error); outline-offset: 1px; }
+
+.type-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  background: var(--bg-2);
+  color: var(--text-dim);
+}
+.type-once { background: rgba(99,102,241,.15); color: #818cf8; }
+.type-weekly { background: rgba(34,197,94,.15); color: #4ade80; }
+.type-monthly { background: rgba(245,158,11,.15); color: #fbbf24; }
+/* xianxia / hc 等特殊主题里 --bg-2 是深色，加一个浅色 fallback 提升对比 */
+[data-theme="xianxia"] .type-once,
+[data-theme="xianxia"] .type-weekly,
+[data-theme="xianxia"] .type-monthly { color: var(--text); }
+[data-theme="hc"] .type-once,
+[data-theme="hc"] .type-weekly,
+[data-theme="hc"] .type-monthly { color: var(--text); font-weight: 600; }
+
+/* 编辑对话框 */
+.editor-body { display: flex; flex-direction: column; gap: 14px; }
+.editor-type-tabs { display: flex; gap: 4px; }
+.editor-fields { display: flex; flex-direction: column; gap: 12px; }
+.editor-label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--text-dim); }
+.editor-label > span { font-weight: 500; color: var(--text); }
+.editor-input {
+  padding: 8px 12px;
+  background: var(--bg-2);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 13px;
+  font-family: inherit;
+  transition: border-color 0.15s;
+}
+.editor-input:hover { border-color: var(--accent); }
+.editor-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px rgba(79,140,255,0.15); }
+.editor-content {
+  padding: 10px 12px;
+  background: var(--bg-2);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 13px;
+  font-family: inherit;
+  resize: vertical;
+  min-height: 60px;
+  transition: border-color 0.15s;
+}
+.editor-content:hover { border-color: var(--accent); }
+.editor-content:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px rgba(79,140,255,0.15); }
+.editor-hint { font-size: 11.5px; line-height: 1.5; color: var(--text-mute); }
+
+.weekday-picker { display: flex; gap: 4px; flex-wrap: wrap; }
+.weekday-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 10px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+  color: var(--text-dim);
+  transition: all 0.15s;
+}
+.weekday-chip:hover { color: var(--text); border-color: var(--accent); }
+.weekday-chip input { display: none; }
+.weekday-chip.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.weekday-chip:focus-within { outline: 2px solid var(--accent); outline-offset: 1px; }
+.weekday-quick { display: flex; gap: 4px; margin-top: 4px; flex-wrap: wrap; }
+
+.editor-row-inline { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.editor-label-inline { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-dim); }
+.editor-footer { display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px; }
+
+/* 空状态 */
+.reminders-list .empty-state { padding: 40px 20px; text-align: center; }
+.reminders-list .empty-state .empty-icon { font-size: 36px; opacity: 0.5; }
+.reminders-list .empty-state .empty-title { font-size: 14px; color: var(--text); margin: 8px 0 4px; }
+.reminders-list .empty-state .empty-desc { font-size: 12.5px; color: var(--text-mute); }
+
+/* ===== modal（reminders 编辑对话框用） ===== */
+.modal-overlay {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0, 0, 0, 0.55);
+  -webkit-backdrop-filter: blur(4px);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 99999;
+  padding: 20px;
+}
+.modal-card {
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 20px 22px;
+  width: 480px;
+  max-width: 100%;
+  box-shadow: var(--shadow), 0 24px 60px rgba(0, 0, 0, 0.45);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  color: var(--text);
+}
+.modal-title { font-size: 16px; font-weight: 600; color: var(--text); }
+
+/* 暂停 banner */
+.reminders-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  background: var(--bg-2);
+  border: 1px solid var(--warn);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-size: 13px;
+}
+.reminders-banner .banner-icon { font-size: 16px; color: var(--warn); }
+.reminders-banner .banner-text { flex: 1; }

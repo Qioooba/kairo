@@ -415,8 +415,23 @@
 
   // 监听 tail 容器变化（新行追加/清屏），自动对新增行应用搜索高亮
   // 用 rAF 防抖：批量 flush 期间多次 mutation 合并为一次 refresh
+  //
+  // ★ 修复：search-hl 的 refresh() 内部会清空 + 重建 mark（替换文本节点），
+  // 这本身就是一次 childList mutation —— 不加保护的话 observer 会无限递归：
+  //   applyHighlight → mutation → observer → rAF → refresh → applyHighlight → ...
+  //   每秒约 60 次循环，且每次都把 searchActiveIdx 强制重置为 0，
+  //   导致用户点 ↑/↓ 时索引立刻被刷新覆盖、永远停在第 1 个匹配。
+  //
+  // MutationObserver 的回调是 microtask 投递的，会在当前同步代码结束后才执行。
+  // 所以 `_isRefreshing = false` 放在 finally 里仍然会被「自己 refresh 触发的 mutation」
+  // 看到的 _isRefreshing=false。正确做法是在 refresh 期间直接 disconnect observer，
+  // refresh 结束后重新 observe —— 这期间产生的 mutation 会被丢弃，但 search-hl 自己
+  // 产生的 mutation 本来就不需要再 refresh 一次。
   let tailObserverPending = false;
+  let _isRefreshing = false;
+  const tailObserverConfig = { childList: true, subtree: true };
   const tailObserver = new MutationObserver(function() {
+    if (_isRefreshing) return;
     if (!searchHl.term) return;
     if (tailOut.children.length === 0) {
       searchHl.clear();
@@ -426,10 +441,17 @@
     tailObserverPending = true;
     requestAnimationFrame(function() {
       tailObserverPending = false;
-      searchHl.refresh();
+      tailObserver.disconnect();
+      _isRefreshing = true;
+      try {
+        searchHl.refresh();
+      } finally {
+        _isRefreshing = false;
+        tailObserver.observe(tailOut, tailObserverConfig);
+      }
     });
   });
-  tailObserver.observe(tailOut, { childList: true, subtree: true });
+  tailObserver.observe(tailOut, tailObserverConfig);
 
   start();
 })();

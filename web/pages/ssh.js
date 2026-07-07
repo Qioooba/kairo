@@ -171,6 +171,11 @@
 
     // ---- 工具栏按钮 ----
     const btnCtrlC = el('button', { class: 'btn btn-sm', text: 'Ctrl+C', title: '发送 SIGINT', onclick: sendCtrlC, disabled: true });
+    // v0.13+：终端背景模式切换（跟随主题 / 强制深色）
+    const btnBgToggle = el('button', {
+      class: 'btn btn-sm ssh-bg-toggle', text: '🌓 跟随主题',
+      title: '切换终端背景：跟随主题 / 强制深色', onclick: toggleBgMode
+    });
     const btnClear = el('button', { class: 'btn btn-sm', text: '清屏', title: '清屏（clear）', onclick: clearActive, disabled: true });
     const btnReconnect = el('button', { class: 'btn btn-sm', text: '重连', title: '断开重连', onclick: reconnectActive, disabled: true });
     const btnSearch = el('button', { class: 'btn btn-sm', text: '🔍 搜索', title: '在终端输出中搜索（Ctrl+Shift+F）', onclick: searchInTerminal, disabled: true });
@@ -244,6 +249,8 @@
       onclick: popOutActive, disabled: true
     });
     toolbarEl.appendChild(btnPopOut);
+    // v0.13+：背景切换按钮放工具栏最右（紧贴 activeLabel 左边）
+    toolbarEl.appendChild(btnBgToggle);
     toolbarEl.appendChild(activeLabel);
 
     function updateToolbarButtons() {
@@ -280,22 +287,97 @@
       closeAll: function () { closeAllTabs(); }
     });
 
-    function syncTermAreaBg() {
-      const theme = currentXtermTheme();
-      if (termAreaEl && theme.background) {
-        termAreaEl.style.background = theme.background;
-      }
+    // ===== v0.13+ 终端背景模式切换（跟随主题 / 强制深色） =====
+    const BG_MODE_KEY = 'kairo_ssh_bg_mode';
+    let bgMode = (function () {
+      try {
+        const v = localStorage.getItem(BG_MODE_KEY);
+        if (v === 'dark' || v === 'theme') return v;
+      } catch (_) {}
+      return 'theme';
+    })();
+    // 强制深色时覆盖当前主题；其他情况跟随主题
+    function effectiveXtermTheme() {
+      return bgMode === 'dark' ? XTERM_THEMES.dark : currentXtermTheme();
     }
-
-    // ---- 主题联动 ----
-    function onThemeChange() {
-      const theme = currentXtermTheme();
+    function applyBgMode() {
+      const theme = effectiveXtermTheme();
+      // 同步所有 tab 的 xterm 内部主题
       pageState.tabs.forEach(function (tab) {
         if (tab.term && !tab.closed) {
           try { tab.term.options.theme = theme; } catch (e) { /* ignore */ }
         }
       });
-      syncTermAreaBg();
+      // 同步外面 termAreaEl 的背景（让未连上的区域也是对应色）
+      if (termAreaEl && theme.background) {
+        termAreaEl.style.background = theme.background;
+      }
+    }
+    function paintBgToggleBtn() {
+      if (bgMode === 'dark') {
+        btnBgToggle.textContent = '🌙 强制深色';
+        btnBgToggle.title = '当前：强制深色。点击切换回跟随主题';
+        btnBgToggle.classList.add('is-dark');
+      } else {
+        btnBgToggle.textContent = '🌓 跟随主题';
+        btnBgToggle.title = '当前：跟随主题。点击切换到强制深色（适合亮色主题对比度不够的场景）';
+        btnBgToggle.classList.remove('is-dark');
+      }
+    }
+    function toggleBgMode() {
+      bgMode = (bgMode === 'dark') ? 'theme' : 'dark';
+      try { localStorage.setItem(BG_MODE_KEY, bgMode); } catch (_) {}
+      applyBgMode();
+      paintBgToggleBtn();
+    }
+
+    // v0.13+：光标行高亮 marker（左侧主题色条，跟踪光标所在行）
+    // xterm.js 没有"输入行 vs 输出行"语义（输入输出同流），
+    // 退而求其次在光标所在行左侧画主题色条 + 柔光，视觉锚定"正在编辑的行"。
+    // 通过 rAF 读 buffer.cursorY / viewportY 算位置，自动跟 buffer 滚动。
+    function setupCursorMarker(tab, term) {
+      const xtermEl = term.element;  // .xterm 容器
+      if (!xtermEl) return;
+      const marker = document.createElement('div');
+      marker.className = 'ssh-cursor-marker';
+      xtermEl.appendChild(marker);
+      let rafId = 0;
+      function tick() {
+        rafId = requestAnimationFrame(tick);
+        if (tab.closed) return;
+        let buf, cell;
+        try {
+          buf = term.buffer && term.buffer.active;
+          const dim = term._core && term._core._renderService && term._core._renderService.dimensions;
+          cell = dim && dim.css && dim.css.cell;
+        } catch (_) { return; }
+        if (!buf || !cell || !cell.height) {
+          marker.classList.remove('visible');
+          return;
+        }
+        const cursorY = (typeof buf.cursorY === 'number') ? buf.cursorY : -1;
+        const viewportY = (typeof buf.viewportY === 'number') ? buf.viewportY : 0;
+        const screenY = cursorY - viewportY;
+        // xterm 内部 padding: 4px；用 css cell 尺寸精确定位
+        marker.style.top = (4 + screenY * cell.height) + 'px';
+        marker.style.height = cell.height + 'px';
+        if (screenY < 0 || screenY >= term.rows) {
+          marker.classList.remove('visible');
+        } else {
+          marker.classList.add('visible');
+        }
+      }
+      rafId = requestAnimationFrame(tick);
+      tab.cursorMarkerRaf = function () { return rafId; };
+      tab.cursorMarkerStop = function () {
+        if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
+      };
+    }
+
+    // ---- 主题联动 ----
+    function onThemeChange() {
+      // 背景模式 = dark 时强制保持深色（不跟随主题）；其他情况跟随主题
+      applyBgMode();
     }
     window.addEventListener('kairo:themechange', onThemeChange);
     // Ctrl+Shift+F：终端搜索快捷键（仅 SSH 页面激活时生效）
@@ -308,8 +390,9 @@
         searchInTerminal();
       }
     });
-    syncTermAreaBg();
+    applyBgMode();
     updateToolbarButtons();
+    paintBgToggleBtn();
 
     loadConfig();
 
@@ -522,6 +605,9 @@
         tab.searchAddon = searchAddon;
 
         term.open(termEl);
+
+        // v0.13+：光标行高亮 marker（左侧主题色条，跟踪光标所在行）
+        setupCursorMarker(tab, term);
 
         setTimeout(function () {
           if (tab.closed) return;
@@ -941,6 +1027,8 @@ function updateTabStatus(tab) {
       tab.closed = true;
       if (tab.ws) { try { tab.ws.close(); } catch (e) { /* ignore */ } }
       if (tab.resizeObs) { try { tab.resizeObs.disconnect(); } catch (e) { /* ignore */ } }
+      // v0.13+：先停光标行高亮 rAF，再 dispose term（dispose 后 term._core 不可用）
+      if (tab.cursorMarkerStop) { try { tab.cursorMarkerStop(); } catch (e) { /* ignore */ } }
       if (tab.term) { try { tab.term.dispose(); } catch (e) { /* ignore */ } }
       // v0.11+：清理 SFTP 资源（关闭进行中的下载 SSE）
       if (tab.sftpDlEvtSrc) {
@@ -1365,7 +1453,8 @@ function updateTabStatus(tab) {
               el('button', { class: 'btn btn-sm', text: '打开', onclick: function (e) { e.stopPropagation(); sftpList(tab, fullPath); } })
             ] : (isText(entry.name) ? [
               el('button', { class: 'btn btn-sm', text: '预览', onclick: function (e) { e.stopPropagation(); sftpPreview(tab, fullPath); } }),
-              el('button', { class: 'btn btn-sm', text: '下载', disabled: dlInProgress, title: dlInProgress ? '当前已有下载任务进行中' : '下载此文件', onclick: function (e) { e.stopPropagation(); sftpDownloadOne(tab, fullPath); } })
+              el('button', { class: 'btn btn-sm', text: '下载', disabled: dlInProgress, title: dlInProgress ? '当前已有下载任务进行中' : '下载此文件', onclick: function (e) { e.stopPropagation(); sftpDownloadOne(tab, fullPath); } }),
+              ...buildEditButtons(entry.name, fullPath, tab)
             ] : [
               el('button', { class: 'btn btn-sm', text: '下载', disabled: dlInProgress, title: dlInProgress ? '当前已有下载任务进行中' : '下载此文件', onclick: function (e) { e.stopPropagation(); sftpDownloadOne(tab, fullPath); } })
             ]))
@@ -1569,6 +1658,72 @@ function updateTabStatus(tab) {
       } else {
         window.open(url, '_blank');
       }
+    }
+
+    // buildEditButtons 构建编辑按钮（使用用户配置的外部打开器）
+    function buildEditButtons(fileName, fullPath, tab) {
+      const openers = Kairo.state.downloadsOpeners || [];
+      if (!openers || openers.length === 0) {
+        return [
+          el('button', {
+            class: 'btn btn-sm btn-disabled',
+            text: '编辑',
+            title: '请先在系统配置中添加外部打开器（如 Notepad++、VS Code）',
+            disabled: true
+          })
+        ];
+      }
+      return openers.map(op => {
+        const rawIcon = (typeof op.icon === 'string') ? op.icon.trim() : '';
+        let iconHtml = '';
+        if (rawIcon) {
+          const isEmoji = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(rawIcon);
+          if (isEmoji) {
+            iconHtml = rawIcon;
+          } else if (ICONS[rawIcon]) {
+            iconHtml = svgIcon(rawIcon, 14);
+          }
+        }
+        if (!iconHtml) iconHtml = '📝';
+        const tip = (op.name || '') + (op.path ? ' — ' + op.path : '') + '\n保存后自动上传到服务器';
+        return el('button', {
+          class: 'btn btn-sm',
+          title: tip,
+          style: 'display:inline-flex; align-items:center; gap:4px;',
+          onclick: function (e) {
+            e.stopPropagation();
+            sftpEdit(tab, fullPath, op.name);
+          },
+          unsafeHtml: iconHtml + ' ' + (op.name || '编辑')
+        });
+      });
+    }
+
+    // sftpEdit 编辑远程文件：下载到临时目录 → 用外部编辑器打开 → 监控保存 → 自动上传
+    function sftpEdit(tab, fullPath, openerName) {
+      const creds = getCreds(tab.system, tab.server);
+      api('POST', '/api/ssh/sftp/edit', {
+        system: tab.system,
+        server: tab.server,
+        username: creds.username || '',
+        password: creds.password || '',
+        path: fullPath,
+        opener: openerName
+      }).then(function (r) {
+        if (r.ok !== undefined) {
+          toast('已用 ' + openerName + ' 打开文件，保存后自动上传', 'success');
+        } else {
+          toast('编辑失败: ' + (r.error || '未知错误'), 'error');
+        }
+      }).catch(function (e) {
+        if (e.message && e.message.includes('未找到打开器')) {
+          toast('未找到打开器 "' + openerName + '"，请先在系统配置中添加', 'warn');
+        } else if (e.message && e.message.includes('文件超过大小限制')) {
+          toast('文件超过 200MB 限制，无法编辑', 'warn');
+        } else {
+          toast('编辑失败: ' + e.message, 'error');
+        }
+      });
     }
 
     // sftpDownloadOne 下载单个文件
@@ -1780,7 +1935,8 @@ function updateTabStatus(tab) {
       const url = '/ssh.html?system=' + encodeURIComponent(tab.system) +
         '&server=' + encodeURIComponent(tab.server) +
         '&cols=' + (tab.cols || 80) +
-        '&rows=' + (tab.rows || 24);
+        '&rows=' + (tab.rows || 24) +
+        '&encoding=' + encodeURIComponent(tab.encoding || 'utf-8');
       const w = window.open(url, '_blank');
       if (!w) {
         toast('浏览器拦截了新窗口，请允许弹出窗后重试', 'err');
