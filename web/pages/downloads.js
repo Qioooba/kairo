@@ -53,7 +53,7 @@
         Kairo.state.downloadsOpeners = Array.isArray(r && r.openers) ? r.openers : [];
         openersLoaded = true;
       }).catch(() => {
-        Kairo.state.downloadsOpeners = [];
+        // 网络抖动时保留旧数据（顶层 line 32 已用 `|| []` 兜底初始化）。
         openersLoaded = true;
       });
     }
@@ -140,28 +140,19 @@
         //   - emoji（如 '📝'/'💡'）→ 直接当图标字符渲染
         //   - SVG icon name（如 'smFile'/'smFolder'）→ 调 svgIcon 渲染对应 SVG
         //   - 空字符串或对象 → 默认 smLink
-        // 旧实现只判断 '非 emoji 字符串' 就当自定义文本，结果 'smFile' 被原样显示，
-        // 按钮 3 个全显示成 'smFile'，而不是对应的软件名称。
+        // v0.14：opener 图标统一走 Kairo.icons.openerIconHTML（emoji 优先 / exe 真实图标 / SVG fallback）。
+        // 点击按钮调 doOpenWith → /api/local/open-with 用该软件打开下载文件。
         const openerBtns = (Kairo.state.downloadsOpeners || []).map(op => {
-          const rawIcon = (typeof op.icon === 'string') ? op.icon.trim() : '';
-          let iconHtml = '';
-          if (rawIcon) {
-            const isEmoji = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(rawIcon);
-            if (isEmoji) {
-              iconHtml = rawIcon;
-            } else if (ICONS[rawIcon]) {
-              // 是 SVG icon name → 渲染 SVG
-              iconHtml = svgIcon(rawIcon, 14);
-            }
-          }
-          if (!iconHtml) iconHtml = svgIcon('smLink', 14);
+          const iconHtml = (window.Kairo && Kairo.icons && Kairo.icons.openerIconHTML)
+            ? Kairo.icons.openerIconHTML(op, 14)
+            : svgIcon('smLink', 14);
           const tip = (op.name || '') + (op.path ? ' — ' + op.path : '');
           return el('button', {
             class: 'btn btn-sm',
             title: tip,
             style: 'display:inline-flex; align-items:center; gap:4px;',
             onclick: () => doOpenWith(op, f),
-            unsafeHtml: iconHtml + ' ' + (op.name || '?')
+            unsafeHtml: iconHtml + ' ' + escapeHtml(op.name || '?')
           });
         });
         tbody.appendChild(el('tr', null, [

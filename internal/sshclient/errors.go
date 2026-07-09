@@ -121,6 +121,16 @@ func classify(lower string, orig error) (Category, string, string) {
 		return CatKbdInt, "PAM / keyboard-interactive 认证失败",
 			"服务端 PAM 配置可能不允许 password auth；可让运维改 sshd_config 的 KbdInteractiveAuthentication"
 	}
+	// 服务器仅支持 keyboard-interactive（attempted methods 里只有 none + keyboard-interactive，
+	// 没有 password）且认证被拒。这通常意味着回调被调用了但服务器拒绝了密码。
+	if strings.Contains(lower, "unable to authenticate") &&
+		strings.Contains(lower, "keyboard-interactive") {
+		return CatKbdInt, "keyboard-interactive 认证失败（服务器拒绝了密码）",
+			"1. 确认密码正确（用 FinalShell 等工具交叉验证）；" +
+				"2. 如密码含 YAML 特殊字符（如 : # @ { } 等），在 config.yaml 里给密码加引号；" +
+				"3. 开启 app.ssh_debug=true 后重试，查看 logs/ssh_debug.log 中 kbd-interactive 回调详情；" +
+				"4. 尝试在 SSH 终端页面手动输入密码连接，排除配置文件密码解析问题"
+	}
 	if strings.Contains(lower, "unable to authenticate") ||
 		strings.Contains(lower, "no supported methods remain") ||
 		strings.Contains(lower, "authentication failed") ||

@@ -151,8 +151,25 @@ func FilterHitsByTimeWindow(hits []SearchHit, files []FileEntry, window SearchTi
 }
 
 // illegalKeyKey 决定一个 token 是否被整体拒绝。
-// 覆盖 shell 元字符、grep -E 元字符、伪 grep 选项（dash 开头）、路径式输入（/）。
-var illegalKeyKey = regexp.MustCompile(`[\\\(\)\[\]\{\}\|\$\` + "`" + `&;<>!'"/\*\?\n\r\t~]`)
+//
+// 早期版本禁了一大堆 shell / grep 元字符（`< > ( ) [ ] { } * ? & ; | ! ~ ` $ \` 等），
+// 结果把日志里极其常见的字符（HTML 标签、URL fragment、堆栈里的 `( )`、SQL 里的 `<>`）
+// 一并挡在门外 —— 用户报障搜索 `Exception at com.example.Foo.bar(Foo.java:123)`
+// 都搜不到，因为 `(` `)` 被拒。
+//
+// 现在的设计：
+//   - grep -E 元字符 `(` `)` `[` `]` `{` `}` `*` `?` `.` `+` `^` `|` `\` 全部放行，
+//     因为 `quoteForGrep` 用 `regexp.QuoteMeta` 把它们转成 `\( \)` 等字面匹配。
+//   - shell 元字符 `<` `>` `&` `;` `|` `!` `~` `` ` `` `$` `"` 全部放行：
+//     keyword 经过 `quoteForGrep` 之后，要么包在 `$(printf %b '...')` 的单引号里
+//     （GBK），要么包在 Go `%q` 的双引号里（UTF-8）；再被外层 `sh -c '...'` 单引号
+//     包裹一层，shell 永远不会展开它们。
+//   - 真危险的只剩这几个，必须禁：
+//       `'`  —— 唯一会破坏外层 sh -c '...' / 内部 $(printf %b '...') 单引号包裹的字符
+//       `/`  —— 路径分隔符；保留它会让用户误以为可以搜路径
+//       `\n` `\r` `\t` —— 控制字符；单引号包裹虽字面保留但会让 grep 解析乱
+//       `\x00` —— NUL；远程 grep / ssh 通道都可能截断
+var illegalKeyKey = regexp.MustCompile(`['/\x00\n\r\t]`)
 
 // ToEncodingEscaped 把 UTF-8 字符串按目标编码转成纯 ASCII 的 printf 转义序列。
 //
@@ -199,12 +216,41 @@ func pickEncoder(name string) (encoding.Encoding, error) {
 // 兼容旧调用路径的别名。
 var illegalKey = illegalKeyKey
 
-func EscapeKeyword(s string) string {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return ""
+// describeIllegalRune 在错误信息里给用户描述"第一个非法的字符是什么"。
+// 例：'foo/bar' → "斜杠 /"；'a\nb' → "换行符"；"O'Brien" → "单引号 '"。
+func describeIllegalRune(s string) string {
+	for _, r := range s {
+		switch r {
+		case '\'':
+			return "单引号 '"
+		case '/':
+			return "斜杠 /"
+		case '\n':
+			return "换行符"
+		case '\r':
+			return "回车符"
+		case '\t':
+			return "制表符"
+		case 0:
+			return "NUL 字符"
+		}
 	}
-	return illegalKey.ReplaceAllString(s, "")
+	return "非法字符"
+}
+
+// EscapeKeyword 对一个 term token 做"保留字面"的处理：仅 trim 首尾空白后返回。
+//
+// 早期版本这里用 `illegalKey.ReplaceAllString(s, "")` 静默删除"非法字符"——
+// 这是 bug：用户输入 `123>` 会被悄悄删成 `123`，远程 grep 搜 `123` 当然查不到
+// `123>`，而且不会报错，调试时极难发现"为啥我搜的关键词好像没生效"。
+//
+// 现在的设计：
+//   - 真危险的字符在 ParseQuery 阶段（illegalKeyKey.MatchString）直接整体拒收，
+//     抛错让前端 toast 提示用户。
+//   - EscapeKeyword 拿到的是已经通过 ParseQuery 校验的 token，**不要再删任何字符**，
+//     也不需要 QuoteMeta（那是 quoteForGrep 在构造 shell 管道时做的）。
+func EscapeKeyword(s string) string {
+	return strings.TrimSpace(s)
 }
 
 // ParseQuery 解析搜索表达式，支持 && || !
@@ -292,9 +338,11 @@ func ParseQuery(q string) ([]SearchKeyword, error) {
 			negateNext = true
 			// state 不变
 		default:
-			// 拒绝对搜索无意义或危险的字符。
+			// 拒绝对搜索无意义或危险的字符（v0.14：黑名单缩窄到 6 个真危险的；
+			// 见 illegalKeyKey 注释）。错误信息告诉用户具体哪个字符有问题，
+			// 而不是笼统的"非法字符"。
 			if illegalKey.MatchString(tok) {
-				return nil, fmt.Errorf("关键词含非法字符: %q", tok)
+				return nil, fmt.Errorf("关键词不能含 %q（单引号 / 斜杠 / 控制字符；其他特殊字符如 ( ) [ ] { } * ? < > & ; | ! ~ 都可以搜）: %q", describeIllegalRune(tok), tok)
 			}
 			// 拒绝以 - 开头（看起来像 grep 的选项 flag）。
 			if strings.HasPrefix(tok, "-") {
@@ -1086,6 +1134,18 @@ FNR in needed {
 //
 // server/dir 用于填充 SearchHit 的 Server/Dir/FullPath 字段。
 // files 用于白名单校验（可选，为 nil/空则跳过校验）。
+//
+// 输出排序（v0.14）：
+//   - 同一 file 内部按 LineNo **降序**（最晚的命中在前面，符合用户
+//     "最新的排最上方"的直觉）。
+//   - 不同 file 之间按 mtime **降序**（最近修改的文件在前面，
+//     让用户能按"文件时间线"自然地看新不看旧）。
+//   - mtime 解析失败的文件用 file 字典序倒序兜底（保持稳定有序）。
+//   - hits 里的 file 不在 files 白名单里（防御性情况）的，排到最末。
+//
+// 早期版本用的是 `file asc + line asc` —— file 按字典序聚类、line 升序。
+// 实际产品里 file 字典序对用户没意义（SystemErr < SystemOut 是巧合，不是时间线），
+// 而且 line 升序导致"最早出现的命中在最上面"——用户要"最新"必须往下翻很长。
 func ParseContextEnrichedOutput(out, server, dir string, files []FileEntry) []SearchHit {
 	byName := make(map[string]FileEntry, len(files))
 	for _, f := range files {
@@ -1146,12 +1206,58 @@ func ParseContextEnrichedOutput(out, server, dir string, files []FileEntry) []Se
 		})
 	}
 
-	// 按行号升序、文件名排序（保持输出有序）
-	sort.SliceStable(hits, func(i, j int) bool {
-		if hits[i].File != hits[j].File {
-			return hits[i].File < hits[j].File
+	// v0.14：先按 mtime 倒序给 file 排名（最新 = rank 0），解析失败或不在白名单的 file
+	// 用 unknownRank 兜底（保证排到最末，不会污染时间线）。
+	const unknownRank = 1 << 30
+	fileRank := make(map[string]int, len(byName))
+	{
+		// 收集"已知的 file"列表（mtime 可解析才进排序，否则进 unknownRank）
+		known := make([]FileEntry, 0, len(byName))
+		for _, f := range byName {
+			if !f.ModTimeParsed().IsZero() {
+				known = append(known, f)
+			}
 		}
-		return hits[i].LineNo < hits[j].LineNo
+		// 已知 file 按 mtime 倒序
+		sort.SliceStable(known, func(i, j int) bool {
+			return known[i].ModTimeParsed().After(known[j].ModTimeParsed())
+		})
+		for i, f := range known {
+			fileRank[f.Name] = i
+		}
+		// mtime 解析失败的 file 用字典序倒序接在已知 file 之后
+		unknown := make([]string, 0)
+		for _, f := range byName {
+			if _, ok := fileRank[f.Name]; !ok {
+				unknown = append(unknown, f.Name)
+			}
+		}
+		sort.Sort(sort.Reverse(sort.StringSlice(unknown)))
+		for i, name := range unknown {
+			// 已知 file 数量 + i —— 让 mtime 已知 file 永远在前
+			fileRank[name] = len(known) + i
+		}
+	}
+
+	// hits 排序：file 按 rank 升序（同 file 聚类），file 内 line 降序（最晚在前）
+	sort.SliceStable(hits, func(i, j int) bool {
+		ri, oki := fileRank[hits[i].File]
+		if !oki {
+			ri = unknownRank
+		}
+		rj, okj := fileRank[hits[j].File]
+		if !okj {
+			rj = unknownRank
+		}
+		if ri != rj {
+			return ri < rj
+		}
+		// 同 file：line 降序
+		if hits[i].LineNo != hits[j].LineNo {
+			return hits[i].LineNo > hits[j].LineNo
+		}
+		// 同行号：命中行（IsContext=false）排在上下文行前面，让用户先看到"真命中"
+		return !hits[i].IsContext && hits[j].IsContext
 	})
 
 	return hits

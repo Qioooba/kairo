@@ -23,13 +23,22 @@
   // ---- minimal modal（core.js 文档说有 modal 但实际没暴露，这里 inline）----
   function modal({ title, body, footer, width }) {
     const overlay = el('div', { class: 'modal-overlay' });
-    const card = el('div', { class: 'modal-card' });
+    const card = el('div', { class: 'modal-card', role: 'dialog', 'aria-modal': 'true' });
     if (width) card.style.width = width + 'px';
-    if (title) card.appendChild(el('div', { class: 'modal-title', text: title }));
+    const titleEl = title ? el('div', { class: 'modal-title', text: title, id: 'modal-title-' + Date.now() }) : null;
+    if (titleEl) {
+      card.appendChild(titleEl);
+      card.setAttribute('aria-labelledby', titleEl.id);
+    }
     if (body) card.appendChild(body);
     if (footer) card.appendChild(footer);
     overlay.appendChild(card);
     document.body.appendChild(overlay);
+
+    const focusable = card.querySelectorAll('button, input, textarea, [href], select');
+    const firstFocusable = focusable[0];
+    const lastFocusable = focusable[focusable.length - 1];
+    if (firstFocusable) firstFocusable.focus();
 
     let closed = false;
     function close() {
@@ -38,7 +47,18 @@
       overlay.remove();
       document.removeEventListener('keydown', onKey);
     }
-    function onKey(e) { if (e.key === 'Escape') close(); }
+    function onKey(e) {
+      if (e.key === 'Escape') close();
+      if (e.key === 'Tab') {
+        if (e.shiftKey && document.activeElement === firstFocusable) {
+          e.preventDefault();
+          lastFocusable.focus();
+        } else if (!e.shiftKey && document.activeElement === lastFocusable) {
+          e.preventDefault();
+          firstFocusable.focus();
+        }
+      }
+    }
     overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
     document.addEventListener('keydown', onKey);
 
@@ -117,8 +137,11 @@
       const disabled = filtered.filter(r => !r.enabled);
 
       if (filtered.length === 0) {
+        // 原来用 🔔 emoji，Win 7 / 无 emoji 字体环境会显示成方框，改用 icons.js 里的 bell SVG。
+        const bellIcon = (Kairo.icons && Kairo.icons.svg) ? Kairo.icons.svg('bell', 56) : null;
+        if (bellIcon) bellIcon.classList.add('empty-icon-svg');
         listWrap.appendChild(el('div', { class: 'empty-state' }, [
-          el('div', { class: 'empty-icon', text: '🔔' }),
+          el('div', { class: 'empty-icon' }, bellIcon ? [bellIcon] : ['🔔']),
           el('div', { class: 'empty-title', text: '还没有提醒' }),
           el('div', { class: 'empty-desc', text: '点击右上角"新增"创建一条提醒。' }),
         ]));
@@ -274,28 +297,47 @@
     });
 
     const contentArea = el('div', { class: 'editor-fields' });
+    const typeFieldsWrap = el('div', { class: 'editor-type-fields' });
     const contentInput = el('textarea', { class: 'editor-content', rows: 3, placeholder: '提醒内容（≤ 200 字）' });
     contentInput.value = state.content;
     contentInput.maxLength = 200;
-
+    const contentLabel = el('label', { class: 'editor-label' }, [el('span', { text: '提醒内容' }), contentInput]);
     const hint = el('div', { class: 'editor-hint muted' });
+    contentArea.appendChild(typeFieldsWrap);
+    contentArea.appendChild(contentLabel);
+    contentArea.appendChild(hint);
+
+    let dayChips = [];
+    let dayWrapEl = null;
+
+    function updateWeeklyChips() {
+      if (!dayChips.length) return;
+      dayChips.forEach((cb, i) => {
+        const d = i + 1;
+        cb.classList.toggle('active', state.weekdays.includes(d));
+        const inp = cb.querySelector('input[type=checkbox]');
+        if (inp) inp.checked = state.weekdays.includes(d);
+      });
+    }
 
     function switchType(newType) {
+      if (state.type === newType) return;
       state.type = newType;
       Array.from(typeSelector.children).forEach(b => b.classList.toggle('active', b.dataset.type === newType));
       renderFields();
     }
 
     function renderFields() {
-      contentArea.innerHTML = '';
+      typeFieldsWrap.innerHTML = '';
       if (state.type === 'once') {
         const inAt = el('input', { type: 'datetime-local', class: 'editor-input' });
         inAt.value = state.at;
         inAt.onchange = () => { state.at = inAt.value; };
-        contentArea.appendChild(el('label', { class: 'editor-label' }, [el('span', { text: '触发时间' }), inAt]));
+        typeFieldsWrap.appendChild(el('label', { class: 'editor-label' }, [el('span', { text: '触发时间' }), inAt]));
         hint.textContent = '到点后弹窗一次，自动停用（保留记录）。';
       } else if (state.type === 'weekly') {
-        const dayWrap = el('div', { class: 'weekday-picker' });
+        dayWrapEl = el('div', { class: 'weekday-picker' });
+        dayChips = [];
         WEEKDAY_LABELS.forEach((lab, i) => {
           const d = i + 1;
           const cb = el('label', { class: 'weekday-chip' + (state.weekdays.includes(d) ? ' active' : '') }, [
@@ -312,16 +354,15 @@
             })(),
             el('span', { text: lab }),
           ]);
-          dayWrap.appendChild(cb);
+          dayChips.push(cb);
+          dayWrapEl.appendChild(cb);
         });
         const quick = el('div', { class: 'weekday-quick muted' });
-        ['工作日', '周末', '全选', '清空'].forEach(q => {
-          const b = el('button', { class: 'btn btn-sm', text: q, onclick: () => {
-            if (q === '工作日') state.weekdays = [1, 2, 3, 4, 5];
-            else if (q === '周末') state.weekdays = [6, 7];
-            else if (q === '全选') state.weekdays = [1, 2, 3, 4, 5, 6, 7];
-            else state.weekdays = [];
-            renderFields();
+        [['工作日', [1,2,3,4,5]], ['周末', [6,7]], ['全选', [1,2,3,4,5,6,7]], ['清空', []]].forEach(([q, days]) => {
+          const b = el('button', { class: 'btn btn-sm', text: q, type: 'button', onclick: (e) => {
+            e.preventDefault();
+            state.weekdays = days.slice();
+            updateWeeklyChips();
           }});
           quick.appendChild(b);
         });
@@ -329,8 +370,8 @@
         const inTime = el('input', { type: 'time', class: 'editor-input', value: state.time });
         inTime.onchange = () => { state.time = inTime.value; };
 
-        contentArea.appendChild(el('label', { class: 'editor-label' }, [el('span', { text: '星期几' }), dayWrap, quick]));
-        contentArea.appendChild(el('label', { class: 'editor-label' }, [el('span', { text: '时间' }), inTime]));
+        typeFieldsWrap.appendChild(el('label', { class: 'editor-label' }, [el('span', { text: '星期几' }), dayWrapEl, quick]));
+        typeFieldsWrap.appendChild(el('label', { class: 'editor-label' }, [el('span', { text: '时间' }), inTime]));
         hint.textContent = '勾选的每个星期几，到点弹窗。';
       } else if (state.type === 'monthly') {
         const inDay = el('input', { type: 'number', min: 1, max: 31, class: 'editor-input', value: String(state.day) });
@@ -344,12 +385,9 @@
           el('label', { class: 'editor-label-inline' }, [el('span', { text: '每月' }), inDay, el('span', { text: '号' })]),
           el('label', { class: 'editor-label-inline' }, [el('span', { text: '时间' }), inTime]),
         ]);
-        contentArea.appendChild(row);
+        typeFieldsWrap.appendChild(row);
         hint.textContent = '注意：31 号在 2 月会自动回退到当月最后一天。';
       }
-      // 通用字段：提醒内容 + hint（每次 rebuild 都重新创建，确保存在）
-      contentArea.appendChild(el('label', { class: 'editor-label' }, [el('span', { text: '提醒内容' }), contentInput]));
-      contentArea.appendChild(hint);
     }
 
     renderFields();

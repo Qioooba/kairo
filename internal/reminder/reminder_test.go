@@ -3,6 +3,7 @@ package reminder
 import (
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -156,9 +157,12 @@ func TestManagerCRUD(t *testing.T) {
 	dir := t.TempDir()
 	s := NewStore(filepath.Join(dir, "reminders.json"))
 
+	var mu sync.Mutex
 	var firedCount int
 	var lastFired Reminder
 	m, err := NewManager(s, func(r Reminder, at time.Time) {
+		mu.Lock()
+		defer mu.Unlock()
 		firedCount++
 		lastFired = r
 	})
@@ -215,14 +219,24 @@ func TestManagerCRUD(t *testing.T) {
 	}
 	// OnFire 是异步触发，等一下
 	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) && firedCount == 0 {
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		fc := firedCount
+		mu.Unlock()
+		if fc > 0 {
+			break
+		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if firedCount != 1 {
-		t.Errorf("fired count: got %d, want 1", firedCount)
+	mu.Lock()
+	fc := firedCount
+	lf := lastFired
+	mu.Unlock()
+	if fc != 1 {
+		t.Errorf("fired count: got %d, want 1", fc)
 	}
-	if lastFired.Content != "test fire" {
-		t.Errorf("fired content: %s", lastFired.Content)
+	if lf.Content != "test fire" {
+		t.Errorf("fired content: %s", lf.Content)
 	}
 }
 
@@ -280,4 +294,253 @@ func TestPauseUntil(t *testing.T) {
 	if paused {
 		t.Error("past pause should not be active")
 	}
+}
+
+func TestDueAt(t *testing.T) {
+	loc := time.Local
+
+	// once: 已到点 → 返回 at
+	r1 := Reminder{Type: TypeOnce, Enabled: true, At: "2026-07-20T15:00"}
+	now := time.Date(2026, 7, 20, 15, 0, 0, 0, loc)
+	got := r1.DueAt(now)
+	want := time.Date(2026, 7, 20, 15, 0, 0, 0, loc)
+	if !got.Equal(want) {
+		t.Errorf("once due: got %v, want %v", got, want)
+	}
+	// once: 还没到点 → 零值
+	now = time.Date(2026, 7, 20, 14, 59, 0, 0, loc)
+	if got := r1.DueAt(now); !got.IsZero() {
+		t.Errorf("once not yet due: should be zero, got %v", got)
+	}
+
+	// weekly: 今天是周一 18:00（17:00 已过）→ 今天 17:00
+	r2 := Reminder{Type: TypeWeekly, Enabled: true, Weekdays: []int{1}, Time: "17:00"}
+	now = time.Date(2026, 7, 13, 18, 0, 0, 0, loc) // 2026-07-13 周一
+	got = r2.DueAt(now)
+	want = time.Date(2026, 7, 13, 17, 0, 0, 0, loc)
+	if !got.Equal(want) {
+		t.Errorf("weekly due (今天已过): got %v, want %v", got, want)
+	}
+	// weekly: 今天是周一 16:00（还没到 17:00）→ 上周一 17:00
+	now = time.Date(2026, 7, 13, 16, 0, 0, 0, loc)
+	got = r2.DueAt(now)
+	want = time.Date(2026, 7, 6, 17, 0, 0, 0, loc) // 上周一
+	if !got.Equal(want) {
+		t.Errorf("weekly due (今天未到): got %v, want %v", got, want)
+	}
+
+	// monthly: 本月 8 号 10:05（10:00 已过）→ 本月 8 号 10:00
+	r3 := Reminder{Type: TypeMonthly, Enabled: true, DayOfMonth: 8, Time: "10:00"}
+	now = time.Date(2026, 7, 8, 10, 5, 0, 0, loc)
+	got = r3.DueAt(now)
+	want = time.Date(2026, 7, 8, 10, 0, 0, 0, loc)
+	if !got.Equal(want) {
+		t.Errorf("monthly due (本月已过): got %v, want %v", got, want)
+	}
+	// monthly: 本月 8 号 09:00（还没到 10:00）→ 上月 8 号 10:00
+	now = time.Date(2026, 7, 8, 9, 0, 0, 0, loc)
+	got = r3.DueAt(now)
+	want = time.Date(2026, 6, 8, 10, 0, 0, 0, loc)
+	if !got.Equal(want) {
+		t.Errorf("monthly due (本月未到): got %v, want %v", got, want)
+	}
+}
+
+// TestFireScheduledTriggersOnFire 验证定时到点 fire() 能真正触发 onFire。
+// 这是 v0.x 修复的核心 bug：旧 fire() 用 NextFire(now)（只返回未来）判 due，
+// 导致定时提醒永远不弹窗（只有"测试"按钮 FireNow 能弹）。
+func TestFireScheduledTriggersOnFire(t *testing.T) {
+	dir := t.TempDir()
+	s := NewStore(filepath.Join(dir, "reminders.json"))
+
+	var mu sync.Mutex
+	var fired []Reminder
+	m, err := NewManager(s, func(r Reminder, at time.Time) {
+		mu.Lock()
+		defer mu.Unlock()
+		fired = append(fired, r)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Stop()
+
+	// 注入固定 now：周一 17:00:00（恰好到点）
+	slot := time.Date(2026, 7, 13, 17, 0, 0, 0, time.Local) // 2026-07-13 周一
+	m.now = func() time.Time { return slot }
+
+	r, err := m.Add(Reminder{Type: TypeWeekly, Enabled: true, Content: "周报", Weekdays: []int{1}, Time: "17:00"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 直接调 fire()，模拟 timer 到点
+	m.fire()
+
+	// onFire 异步触发，等一下
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		n := len(fired)
+		mu.Unlock()
+		if n > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	mu.Lock()
+	if len(fired) != 1 {
+		t.Fatalf("expected 1 fire, got %d", len(fired))
+	}
+	if fired[0].Content != "周报" {
+		t.Errorf("fired content: %s", fired[0].Content)
+	}
+	mu.Unlock()
+
+	// 验证 LastFiredAt 已更新、FiredCount 递增
+	got, _ := m.Get(r.ID)
+	if got.FiredCount != 1 {
+		t.Errorf("FiredCount: got %d, want 1", got.FiredCount)
+	}
+	if got.LastFiredAt == "" {
+		t.Error("LastFiredAt should be set")
+	}
+}
+
+// TestFireOnceTriggersOnFire 验证单次提醒到点也能触发。
+func TestFireOnceTriggersOnFire(t *testing.T) {
+	dir := t.TempDir()
+	s := NewStore(filepath.Join(dir, "reminders.json"))
+
+	var mu sync.Mutex
+	var firedCount int
+	m, err := NewManager(s, func(r Reminder, at time.Time) {
+		mu.Lock()
+		defer mu.Unlock()
+		firedCount++
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Stop()
+
+	slot := time.Date(2026, 7, 20, 15, 0, 0, 0, time.Local)
+	m.now = func() time.Time { return slot }
+
+	r, err := m.Add(Reminder{Type: TypeOnce, Enabled: true, Content: "发布会", At: "2026-07-20T15:00"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	m.fire()
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		if firedCount > 0 {
+			mu.Unlock()
+			break
+		}
+		mu.Unlock()
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	mu.Lock()
+	if firedCount != 1 {
+		t.Fatalf("expected 1 fire, got %d", firedCount)
+	}
+	mu.Unlock()
+
+	// 单次提醒触发后应自动 disabled
+	got, _ := m.Get(r.ID)
+	if got.Enabled {
+		t.Error("once reminder should be disabled after fire")
+	}
+}
+
+// TestFireNoDoubleFire 验证同一槽位不会因 fire() 被多次调用而重复弹窗。
+func TestFireNoDoubleFire(t *testing.T) {
+	dir := t.TempDir()
+	s := NewStore(filepath.Join(dir, "reminders.json"))
+
+	var mu sync.Mutex
+	var firedCount int
+	m, err := NewManager(s, func(r Reminder, at time.Time) {
+		mu.Lock()
+		defer mu.Unlock()
+		firedCount++
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Stop()
+
+	slot := time.Date(2026, 7, 13, 17, 0, 0, 0, time.Local) // 周一 17:00
+	m.now = func() time.Time { return slot }
+
+	_, err = m.Add(Reminder{Type: TypeWeekly, Enabled: true, Content: "周报", Weekdays: []int{1}, Time: "17:00"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 连续调两次 fire()，第二次应被 LastFiredAt 防重复逻辑跳过
+	m.fire()
+	m.fire()
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		if firedCount >= 2 {
+			mu.Unlock()
+			break
+		}
+		mu.Unlock()
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	mu.Lock()
+	if firedCount != 1 {
+		t.Errorf("expected 1 fire (no double), got %d", firedCount)
+	}
+	mu.Unlock()
+}
+
+// TestFireSkipsStaleSlot 验证超过容差窗口的迟到不补触发
+// （模拟电脑休眠很久刚醒，避免积压提醒轰炸）。
+func TestFireSkipsStaleSlot(t *testing.T) {
+	dir := t.TempDir()
+	s := NewStore(filepath.Join(dir, "reminders.json"))
+
+	var mu sync.Mutex
+	var firedCount int
+	m, err := NewManager(s, func(r Reminder, at time.Time) {
+		mu.Lock()
+		defer mu.Unlock()
+		firedCount++
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Stop()
+
+	// now 比槽时间晚 3 小时（远超 fireCatchUpWindow=2min）
+	slot := time.Date(2026, 7, 13, 20, 0, 0, 0, time.Local) // 周一 20:00
+	m.now = func() time.Time { return slot }
+
+	_, err = m.Add(Reminder{Type: TypeWeekly, Enabled: true, Content: "周报", Weekdays: []int{1}, Time: "17:00"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	m.fire()
+
+	// 给异步 onFire 一点时间确认不会触发
+	time.Sleep(200 * time.Millisecond)
+
+	mu.Lock()
+	if firedCount != 0 {
+		t.Errorf("expected 0 fire (stale slot skipped), got %d", firedCount)
+	}
+	mu.Unlock()
 }

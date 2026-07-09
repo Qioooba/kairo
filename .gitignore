@@ -154,3 +154,7 @@ crash.log
 /tests/test-results/
 /v0.13-out/
 /v0.13-xianxia-out/
+/test-*/
+/test-output/
+/config-debug.yaml
+/config-test-port-*.yaml

@@ -18,7 +18,7 @@
   'use strict';
   const Kairo = window.Kairo = window.Kairo || {};
   Kairo.pages = Kairo.pages || {};
-  const { el, $, toast, validate, newSystem, newServer, newLogDir, kvTable, confirmDialog } = Kairo.core;
+  const { el, $, toast, validate, newSystem, newServer, newLogDir, kvTable, confirmDialog, escapeHtml } = Kairo.core;
   const { api } = Kairo.api;
 
   const ICONS = {
@@ -169,24 +169,11 @@
     btnSaveFooter.disabled = true;
     const footerBar = el('div', { class: 'btn-row cfg-save-footer-bar', style: 'justify-content: flex-end; margin-top: 16px; padding-top: 12px; border-top: 1px dashed var(--line);' }, [btnResetFooter, btnSaveFooter]);
 
-    // v0.11：把 op.icon (object {type,name,color}) 序列化成 string 发给后端。
-    // 原因：前端 state.openers[i].icon 是个 {type, name, color} 对象（用于动态渲染不同颜色 svg），
-    // 但后端 ExternalOpener.Icon 字段是 string。直接 PUT 整个 openers 数组会 400：
-    //   "json: cannot unmarshal object into Go struct field ExternalOpener.openers.icon of type string"
-    // 修法：把 object 转成 string 字段（取 name 即可，后端 Icon 字段无业务逻辑只 storage）；
-    // 前端渲染时（renderOpeners）已有 typeof op.icon === 'string' 的兼容逻辑，
-    // 拿回来后会自动用 inferIconFromPath 重新推断回 object。
+    // op.icon 始终是 string（emoji 或空），与后端 ExternalOpener.Icon 字段一致，
+    // 直接透传即可。历史数据里若混入 object（旧渲染产物），归一化成空串避免 400。
     function serializeOpenersForSave(openers) {
       return (openers || []).map(o => {
-        let iconStr = '';
-        if (o.icon == null) {
-          iconStr = '';
-        } else if (typeof o.icon === 'string') {
-          iconStr = o.icon;
-        } else if (typeof o.icon === 'object') {
-          // 渲染用 object：{type:'svg', name:'smFile', color:'#3b82f6'}；取 name 即可
-          iconStr = o.icon.name || '';
-        }
+        const iconStr = (typeof o.icon === 'string') ? o.icon : '';
         return { name: o.name, path: o.path, icon: iconStr };
       });
     }
@@ -478,17 +465,43 @@
       return wrap;
     }
 
-    function inferIconFromPath(path, name) {
-      const s = (path + ' ' + name).toLowerCase();
-      if (s.includes('code') || s.includes('vscode') || s.includes('vs ')) return { type: 'svg', name: 'smFile', color: '#3b82f6' };
-      if (s.includes('notepad') || s.includes('npp')) return { type: 'svg', name: 'smFile', color: '#f59e0b' };
-      if (s.includes('idea') || s.includes('intellij')) return { type: 'svg', name: 'smFile', color: '#f97316' };
-      if (s.includes('vim') || s.includes('nvim')) return { type: 'svg', name: 'smFile', color: '#374151' };
-      if (s.includes('sublime')) return { type: 'svg', name: 'smFile', color: '#8b5cf6' };
-      if (s.includes('terminal') || s.includes('cmd') || s.includes('powershell') || s.includes('iterm')) return { type: 'svg', name: 'smFile', color: '#10b981' };
-      if (s.includes('excel') || s.includes('xlsx')) return { type: 'svg', name: 'smFile', color: '#22c55e' };
-      if (s.includes('word') || s.includes('docx')) return { type: 'svg', name: 'smFile', color: '#3b82f6' };
-      return { type: 'svg', name: 'smFile', color: '#64748b' };
+    // 渲染打开器图标：v0.14 起统一调 Kairo.icons.openerIconHTML
+    //   - emoji 优先（用户在配置页手填）
+    //   - 选 exe 后临时预览（op._iconPreviewBase64）→ data URL 直接显示
+    //   - 否则 <img src=/api/local/opener-icon> 显示后端缓存的 exe 真实图标
+    //   - 失败时 onerror 自动 fallback 到按名推断颜色的 SVG 占位
+    // 配置页 size 用 20px（比列表里的 14px 大一档，方便用户辨识）。
+    function renderOpenerIcon(op) {
+      // 选 exe 后实时预览：extract-icon API 返回的 base64（未保存前走 data URL）
+      if (op && op._iconPreviewBase64) {
+        return '<img src="data:image/png;base64,' + op._iconPreviewBase64 + '" alt="" width="20" height="20" ' +
+          'style="width:20px; height:20px; vertical-align:middle; object-fit:contain;" ' +
+          'onerror="this.outerHTML=\'\'">';
+      }
+      if (window.Kairo && Kairo.icons && Kairo.icons.openerIconHTML) {
+        return Kairo.icons.openerIconHTML(op, 20);
+      }
+      // icons.js 未加载（理论不会发生，兜底防黑屏）：fallback 到原 SVG 占位
+      const color = (op && op.path && op.path.toLowerCase().includes('notepad')) ? '#f59e0b' : '#64748b';
+      return svgIcon('smFile', 20).replace('stroke="currentColor"', 'stroke="' + escapeHtml(color) + '"');
+    }
+
+    // previewOpenerIcon 选 exe 后调 extract-icon API 拿 PNG base64，
+    // 临时存到 op._iconPreviewBase64，再 updateIcon() 触发重渲染。
+    // 失败/平台不支持时静默跳过（renderOpenerIcon 会走 SVG fallback）。
+    async function previewOpenerIcon(op) {
+      if (!op || !op.path) return;
+      try {
+        const r = await api('POST', '/api/admin/openers/extract-icon', { path: op.path });
+        if (r && r.png_base64) {
+          op._iconPreviewBase64 = r.png_base64;
+        } else {
+          // 平台不支持 / 提取失败 → 清掉旧的 preview，避免改 path 后还显示旧图
+          delete op._iconPreviewBase64;
+        }
+      } catch (_) {
+        delete op._iconPreviewBase64;
+      }
     }
 
     async function saveOpenerRow(op) {
@@ -538,11 +551,28 @@
       }
       const list = el('div');
       state.openers.forEach((op, idx) => {
-        if (!op.icon || typeof op.icon === 'string') op.icon = inferIconFromPath(op.path || '', op.name || '');
-        const iconSvg = svgIcon(op.icon.name, 20).replace('stroke="currentColor"', 'stroke="' + op.icon.color + '"');
-        const iconSpan = el('span', { style: 'width:28px; height:28px; text-align:center; flex-shrink:0; cursor:default; display:inline-flex; align-items:center; justify-content:center;', unsafeHtml: iconSvg, title: '图标根据路径自动推断' });
+        if (op.icon != null && typeof op.icon !== 'string') op.icon = '';
 
         const row = el('div', { class: 'opener-row', style: 'display:flex; gap:8px; margin-bottom:8px; align-items:center;' });
+        const iconWrap = el('div', { style: 'width:34px; height:34px; flex-shrink:0; border:1px solid var(--line); border-radius:8px; display:inline-flex; align-items:center; justify-content:center; background:var(--bg-2); position:relative; cursor:pointer;', title: '点击修改图标 emoji' });
+        const iconSpan = el('span', { style: 'font-size:18px; display:flex; align-items:center; justify-content:center; width:100%; height:100%;', unsafeHtml: renderOpenerIcon(op) });
+        iconWrap.appendChild(iconSpan);
+        const iconInp = el('input', { type: 'text', value: (typeof op.icon === 'string') ? op.icon : '', placeholder: '📝', title: '图标 emoji（留空则使用 exe 图标）', maxlength: '4', style: 'position:absolute; inset:0; width:100%; height:100%; border:none; border-radius:8px; background:var(--bg-1); text-align:center; font-size:16px; padding:0; display:none; outline:none; box-sizing:border-box;' });
+        iconWrap.appendChild(iconInp);
+        iconWrap.addEventListener('click', () => {
+          iconSpan.style.display = 'none';
+          iconInp.style.display = 'block';
+          iconInp.focus();
+          iconInp.select();
+        });
+        iconInp.addEventListener('blur', () => {
+          iconSpan.style.display = '';
+          iconInp.style.display = 'none';
+        });
+        iconInp.addEventListener('keydown', (ev) => {
+          if (ev.key === 'Enter' || ev.key === 'Escape') { ev.preventDefault(); iconInp.blur(); }
+        });
+
         const nameInp = el('input', { type: 'text', value: op.name || '', placeholder: '名称（如 Notepad++）', style: 'flex:1;' });
 
         const pathWrap = el('div', { style: 'flex:2; display:flex; gap:4px; position:relative;' });
@@ -555,6 +585,9 @@
               pathInp.value = r.path;
               op.path = r.path;
               markDirty('openers');
+              updateIcon();
+              // 选完 exe 后实时预览图标（调后端 extract-icon）
+              await previewOpenerIcon(op);
               updateIcon();
             }
           } catch (e) { /* ignore */ }
@@ -572,15 +605,31 @@
         }});
 
         function updateIcon() {
-          op.icon = inferIconFromPath(op.path || '', op.name || '');
-          const iconSvg = svgIcon(op.icon.name, 20).replace('stroke="currentColor"', 'stroke="' + op.icon.color + '"');
-          iconSpan.innerHTML = iconSvg;
+          iconSpan.innerHTML = renderOpenerIcon(op);
         }
 
-        nameInp.addEventListener('input', () => { op.name = nameInp.value; markDirty('openers'); updateIcon(); });
-        pathInp.addEventListener('input', () => { op.path = pathInp.value; markDirty('openers'); updateIcon(); });
+        // 防抖：手动输入 path 时不要每次按键都调 extract-icon（用户可能还在敲）
+        let pathPreviewTimer = null;
+        function schedulePathPreview() {
+          if (pathPreviewTimer) clearTimeout(pathPreviewTimer);
+          pathPreviewTimer = setTimeout(async () => {
+            await previewOpenerIcon(op);
+            updateIcon();
+          }, 500);
+        }
 
-        row.appendChild(iconSpan);
+        iconInp.addEventListener('input', () => { op.icon = iconInp.value; markDirty('openers'); updateIcon(); });
+        nameInp.addEventListener('input', () => { op.name = nameInp.value; markDirty('openers'); updateIcon(); });
+        pathInp.addEventListener('input', () => {
+          op.path = pathInp.value;
+          // path 变了，旧的 preview 失效，先清掉避免显示错图标
+          delete op._iconPreviewBase64;
+          markDirty('openers');
+          updateIcon();
+          schedulePathPreview();
+        });
+
+        row.appendChild(iconWrap);
         row.appendChild(nameInp);
         row.appendChild(pathWrap);
         row.appendChild(btnSave);

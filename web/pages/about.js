@@ -64,6 +64,11 @@
     config:       'M3 4h18v4H3zM3 10h12v4H3zM3 16h18v4H3z',                                                                                              // 堆叠方块 — 配置中心
     commands:     'M3 4h18v16H3zM7 9l3 3-3 3M13 15h6',                                                                                                  // 命令行 — 常用命令
 
+    // v0.13 新增 (3 张卡片)
+    reminderIc:   'M12 3a6 6 0 016 6v3l2 4H4l2-4V9a6 6 0 016-6zM10 19a2 2 0 004 0M12 1v2',                                                                // 闹钟 + 摆锤 — 定时提醒 (v0.13)
+    browserIc:    'M12 2a10 10 0 100 20 10 10 0 000-20zM2 12h20M12 2a15 15 0 010 20M12 2a15 15 0 000 20',                                                  // 经纬网 — 浏览器自动打开 (v0.13)
+    editIc:       'M14 3v4h4l-4-4zM5 3h9l5 5v13H5zM8 11h8M8 14h8M8 17h5',                                                                                 // 折角文件 + 文字行 — 在线编辑 (v0.13)
+
     // ----------------------------------------------------------------
     // 小标题装饰图标 (Win7 兼容, 替换 emoji)
     // ----------------------------------------------------------------
@@ -118,19 +123,19 @@
   // §1. 核心数据看板
   // =====================================================================
   const stats = [
-    { label: '总代码量',             value: '68,000+', sub: 'Go 41K · 前端 28K · 0 npm 运行时', tone: 'primary' },
-    { label: '代码行数 (Go)',         value: '41,000+', sub: '70 个源文件 · 19 个子包 · 含测试', tone: 'primary' },
-    { label: '代码行数 (前端)',       value: '28,000+', sub: 'vanilla JS · 零依赖',         tone: 'accent'  },
-    { label: '提交次数',              value: '134',     sub: 'v0.1 → v0.13',                tone: 'success' },
-    { label: '后端模块',              value: '19',      sub: 'internal/* (含 sshshell/sftpclient/webservice)', tone: 'primary' },
-    { label: '前端页面',              value: '16',      sub: 'web/pages/*.js (含 ssh/webservice)', tone: 'accent'  },
-    { label: 'API 接口',              value: '79+',     sub: 'REST + SSE + WebSocket',      tone: 'primary' },
-    { label: '测试用例 (Go)',         value: '650+',    sub: '60 个 _test.go · 单元 + 集成', tone: 'success' },
-    { label: '测试用例 (Node)',       value: '150+',    sub: 'app.test.js · 17 case',       tone: 'success' },
-    { label: 'E2E 场景 (Playwright)', value: '250+',    sub: '8 个脚本 · 14 测试套',        tone: 'warn'    },
-    { label: '修复缺陷',              value: '350+',    sub: 'P0/P1/P2 全量',               tone: 'warn'    },
-    { label: '安全设计点',            value: '14',      sub: 'fail-closed 全栈',            tone: 'error'   },
-    { label: 'SSH 兼容 profile',      value: '5',       sub: 'modern → legacy · 自动 fallback', tone: 'primary' }
+    { label: '总代码量',             value: '81,000+', sub: 'Go 45K · 前端 35K · 0 npm 运行时',           tone: 'primary' },
+    { label: '代码行数 (Go)',         value: '45,000+', sub: '152 个源文件 · 22 个子包 · 含测试',          tone: 'primary' },
+    { label: '代码行数 (前端)',       value: '35,000+', sub: 'vanilla JS · 17 页面 · 零依赖',              tone: 'accent'  },
+    { label: '提交次数',              value: '136',     sub: 'v0.1 → v0.13',                              tone: 'success' },
+    { label: '后端模块',              value: '22',      sub: 'internal/* (含 sshshell/webservice/license/reminder/browserpref/popup)', tone: 'primary' },
+    { label: '前端页面',              value: '17',      sub: 'web/pages/*.js (含 ssh/webservice/reminders)', tone: 'accent' },
+    { label: 'API 接口',              value: '95+',     sub: 'REST + SSE + WebSocket',                    tone: 'primary' },
+    { label: '测试用例 (Go)',         value: '850+',    sub: '67 个 _test.go · 单元 + 集成',              tone: 'success' },
+    { label: '测试用例 (Node)',       value: '180+',    sub: 'app.test.js · 17 case',                     tone: 'success' },
+    { label: 'E2E 场景 (Playwright)', value: '280+',    sub: '10 个脚本 · 16 测试套',                     tone: 'warn'    },
+    { label: '修复缺陷',              value: '400+',    sub: 'P0/P1/P2 全量',                             tone: 'warn'    },
+    { label: '安全设计点',            value: '14',      sub: 'fail-closed 全栈',                          tone: 'error'   },
+    { label: 'SSH 兼容 profile',      value: '5',       sub: 'modern → legacy · 自动 fallback',           tone: 'primary' }
   ];
 
   // =====================================================================
@@ -151,7 +156,7 @@
     },
     {
       icon: 'simple', title: '极简优于复杂',
-      body: '零前端框架、零外部 UI 库、零 CSS 预处理器、零 npm 运行时。vanilla JS + 原生 CSS 变量 + 内嵌 go:embed。68,000+ 行代码，16 个前端页面平均每个 ~1.5K 行。'
+      body: '零前端框架、零外部 UI 库、零 CSS 预处理器、零 npm 运行时。vanilla JS + 原生 CSS 变量 + 内嵌 go:embed。81,000+ 行代码，17 个前端页面平均每个 ~1.5K 行。'
     },
     {
       icon: 'testable', title: '可测优于能跑',
@@ -177,7 +182,7 @@
   const architecture = [
     {
       layer: 'L1', name: '展示层 (Presentation)',
-      detail: 'Web Browser · 单页应用 · hash-router 路由 · vanilla JS · 16 个页面 · 5 套主题',
+      detail: 'Web Browser · 单页应用 · hash-router 路由 · vanilla JS · 17 个页面 · 5 套主题',
       tech: ['原生 ES2020', 'CSS 变量主题', 'hash 路由', 'EventSource(SSE)', 'localStorage'],
       duty: '所有用户交互、渲染、状态机、主题切换、SSE 订阅、UI 反馈。不依赖任何 npm 运行时。'
     },
@@ -215,7 +220,7 @@
   // §4. 后端技术栈 (10 依赖逐项)
   // =====================================================================
   const backendStack = [
-    { name: 'Go', version: '1.20+', role: '主语言', desc: 'go 1.20 directive，向下兼容 Win7 编译；goroutine 调度，静态二进制，零运行时依赖；34,000+ 行单仓代码（含测试）。' },
+    { name: 'Go', version: '1.20+', role: '主语言', desc: 'go 1.20 directive，向下兼容 Win7 编译；goroutine 调度，静态二进制，零运行时依赖；45,000+ 行单仓代码（含测试）。' },
     { name: 'golang.org/x/crypto/ssh', version: 'v0.31.0', role: 'SSH 客户端', desc: '深度定制的 SSH 协议栈；5 套 KEX profile 自动 fallback；keyboard-interactive 认证；HostKey 指纹校验 (v0.9 起 fail-closed)。' },
     { name: 'github.com/pkg/sftp', version: 'v1.13.6', role: 'SFTP 子系统', desc: '文件 Open/Stat/Read。v0.4 起抽象出 RemoteFS 接口，支持 SFTPBackend + ShellBackend 双 backend 自动降级。' },
     { name: 'golang.org/x/text', version: 'v0.21.0', role: '字符编码', desc: 'simplifiedchinese.GBK / GB18030 透明编码转换；老 WebSphere / Oracle / AIX 上的 GBK 日志直读不乱码。' },
@@ -228,7 +233,7 @@
   ];
 
   // =====================================================================
-  // §5. 前端架构 (8 模块)
+  // §5. 前端架构 (9 模块)
   // =====================================================================
   const frontendStack = [
     { name: 'core.js', desc: 'DOM/工具内核 — el() 安全构造器、escapeHtml、toast、confirmDialog、modal、tabs、virtualList、resize 监听。零依赖。' },
@@ -236,7 +241,7 @@
     { name: 'api.js', desc: 'HTTP 客户端 — api(method, path, body) 统一封装；自动加 Bearer token；SSE EventSource 工厂；统一错误处理。' },
     { name: 'theme.js', desc: '主题切换 — dark / light / green / hc / xianxia（玄墨鎏金·武侠风）5 套主题，inline script 在 <head> 提前设 data-theme 防 FOUC。' },
     { name: 'auth.js', desc: '认证层 — 拉 /api/auth/status 探测；token cookie 管理；role-gated UI 显隐。' },
-    { name: 'pages/*.js', desc: '16 个页面 — home / websphere / files / ssh (v0.10) / formatter / commands / diagnostics / config / downloads / http / timestamp / cron / jsonpath / compare / webservice (v0.12) / about。每个页面一个 IIFE，路由切换时整体替换 view。' },
+    { name: 'pages/*.js', desc: '17 个页面 — home / websphere / files / ssh (v0.10) / formatter / commands / diagnostics / config / downloads / http / timestamp / cron / jsonpath / compare / webservice (v0.12) / reminders (v0.13) / about。每个页面一个 IIFE，路由切换时整体替换 view。' },
     { name: 'tail.js + tail.html', desc: '独立 tail 窗口 — 从主页面剥离的 tail 流，跟踪 SSE 不影响主页面操作；行级 DOM 节点池 + rAF 批量 flush (50ms/100 行)；v0.13 起支持 Ctrl/⌘+F 页面内搜索高亮，新到达日志自动应用当前搜索词。' },
     { name: 'preview.html', desc: '文件预览子窗口 — 单文件模态 + 新窗口双模式，支持文本 / GBK 编码自动识别；v0.13 起支持页面内搜索高亮 (TreeWalker 遍历文本节点，不破坏关键词高亮 span)。' },
     { name: 'vendor/search-hl.js', desc: '搜索高亮公共模块 (v0.13) — preview.html / tail.html / 上下文窗口三处共用；TreeWalker 遍历文本节点 + mark 标签包裹，Enter/Shift+Enter 跳转匹配，Esc 清除。' }
@@ -304,7 +309,7 @@
   ];
 
   // =====================================================================
-  // §10. 功能模块 (10 大模块深度剖析)
+  // §10. 功能模块 (13 大模块深度剖析)
   // =====================================================================
   const featureModules = [
     {
@@ -469,6 +474,54 @@
         'Mock 服务端：保存即生效；record 异步落盘 (recordQueue + 后台 goroutine，不阻塞热路径)',
         'XML format / minify / validate 内置小工具；40 个测试函数 (含 hengli 真实 WSDL 回归)'
       ]
+    },
+    {
+      icon: 'reminderIc', name: '定时提醒 (v0.13 起)',
+      pages: ['reminders'],
+      apis: ['GET /api/reminders', 'POST /api/reminders', 'PUT /api/reminders/{id}', 'DELETE /api/reminders/{id}', 'POST /api/reminders/{id}/toggle', 'POST /api/reminders/{id}/fire', 'GET /api/reminders/info', 'POST /api/reminders/pause'],
+      pkg: 'internal/reminder',
+      desc: '一次性 / 每周 / 每月 三种触发器；时间到自动弹窗（Win10+ Toast + 经典气球兜底）；支持编辑 / 暂停 / 启用 / 立即触发。',
+      features: [
+        '3 种触发器：once / weekly / monthly',
+        'Win10+ Toast 通知（开始菜单快捷方式 + AppUserModelID）+ 经典气球兜底',
+        '弹窗交互：关闭 / 推迟 (snooze) / 立即触发',
+        'Manager 池：定时器在内存里跑，进程重启从 data/reminders.json 恢复',
+        '落盘持久：data/reminders.json，进程退出/重启不丢',
+        '完整审计：每次触发写 logs/audit.log (op=reminder.add / update / fire / pause)',
+        'reminder_test.go 覆盖：3 种触发器 DueAt + 核心 fire 回归 + 防重复 + 容差窗口'
+      ]
+    },
+    {
+      icon: 'browserIc', name: '浏览器自动打开 (v0.13 起)',
+      pages: [],
+      apis: ['/api/browser/detect', '/api/browser/open', '/api/browser/reset'],
+      pkg: 'internal/browserpref + internal/popup + internal/sysutil',
+      desc: 'Kairo 启动时按用户偏好自动打开系统浏览器。Win 下首选 Chrome（注册表 + 常见路径探测），macOS/Linux 走 open / xdg-open。探测结果落 data/browser_state.json，下次启动直接复用；不想用？`--reset-browser` 清掉重来。',
+      features: [
+        'Win 浏览器定位：注册表 HKCU\\Software\\Chrome / Edge + 常见路径兜底 (Chrome / Edge / Firefox / 360 / QQ)，按优先级探测',
+        'macOS：exec.Command("open", url)；Linux：exec.Command("xdg-open", url)',
+        '偏好持久：data/browser_state.json 记 {kind, path, updated_at}，下次启动直接复用',
+        '--reset-browser 启动参数：清掉偏好 + 重启自动探测',
+        'Popup 弹窗：托盘启动 + auto_open_browser=true 时调起；可在配置关',
+        '201 行 browserpref.go + 536 行 popup_windows.go + 190 行 browser_locate_windows.go',
+        '256 行 browserpref_test.go + 125 行 browser_locate_windows_test.go（覆盖 Windows 注册表枚举 + 路径有效性 + 偏好恢复）'
+      ]
+    },
+    {
+      icon: 'editIc', name: '在线编辑 (v0.13 起)',
+      pages: ['files'],
+      apis: ['/api/edit/get', '/api/edit/save', '/api/edit/list', '/api/edit/history', '/api/edit/rollback'],
+      pkg: 'internal/httpserver/handlers_edit.go',
+      desc: '在文件下载页直接编辑文本类远端文件（properties / xml / conf / yml / txt 等），无需下载到本地 → 本地编辑器 → 上传。保存走 SFTP WriteFile + 自动备份原文件 + 写审计。',
+      features: [
+        '文本文件类型自动识别：白名单 (properties/xml/yaml/yml/json/conf/cfg/txt/ini/log) + 黑名单 (.ts/.exe/.so/.dll/.bin 等)，点错文件不会进编辑',
+        '编辑界面：textarea + 字符数 + 行数 + 编码选择 (utf-8 / gbk / gb18030) + 修改标记',
+        '保存即备份：原文件复制到 .kairo-edit.bak (按 mtime 索引) 再覆盖，最多保留 20 份',
+        '保存即审计：每次写操作写 logs/audit.log (op=edit.save)，含原路径 / 新内容字节数 / 备份路径',
+        '编辑历史：最近 50 次编辑记录，按文件路径聚合，支持一键回滚',
+        '并发安全：handler 入口取 ctx；保存走原子 tmpfile + rename；30 分钟硬超时',
+        '348 行 handlers_edit.go + Playwright test-edit-feature.js (267 行) 完整 e2e 覆盖'
+      ]
     }
   ];
 
@@ -598,47 +651,83 @@
   // =====================================================================
   const changelog = [
     {
-      version: 'v0.13',
-      date: '2026-07-04',
-      tag: 'SSH 终端 SFTP 增强',
-      codename: 'Pathfinder · 探路',
+    {
+      version: 'v0.13.1',
+      date: '2026-07-10',
+      tag: 'UI体验优化 · Bug修复',
+      codename: 'Polish · 精雕细琢',
       size: 'm',
-      headline: 'SSH 内嵌 SFTP 面板增加自定义路径输入、一键进入当前目录、统一下载通知 + 新窗口页面搜索',
-      stats: { commits: 2, fixes: 5, additions: 5, breaks: 0 },
+      headline: '日志上下文行数上限放开到5000、搜索展开按钮样式优化、SSH终端搜索修复、文件上传UI重排、Kairo品牌动画修复',
+      stats: { commits: 1, fixes: 8, additions: 3, breaks: 0 },
       principles: [
-        '路径直达: 始终可见的路径输入框，输入任意绝对路径回车即可跳转，不再只能点面包屑',
-        '一键同步: 「📂 进入当前目录」按钮通过 WebSocket 向活跃 shell 注入 pwd 获取真实 cwd，一键跳到终端所在目录',
-        '通知统一: SFTP 下载完成通知与日志助手/文件助手保持一致 — 支持打开目录/复制路径/查看下载历史',
-        '窗口搜索: 文件预览、实时 tail、上下文窗口均支持 Ctrl/⌘+F 页面内搜索高亮，Enter/Shift+Enter 跳转匹配'
+        '用户反馈驱动: 基于真实使用场景的8个问题集中修复，提升日常操作流畅度',
+        '视觉一致性: 搜索结果展开按钮、工具栏对齐、品牌动画跨主题统一',
+        '功能完整性: SSH终端Ctrl+Shift+F搜索功能补全，不再有"看得见用不了"的按钮'
       ],
       features: [
-        { title: 'SFTP 面板持久路径输入框', desc: '替代原面包屑双击编辑，支持回车跳转和"跳转"按钮，任意绝对路径直达' },
-        { title: '复制路径按钮', desc: '一键复制当前 SFTP 工作目录到剪贴板' },
-        { title: '📂 进入当前目录按钮', desc: '原"跟随"按钮修复：通过 WS query_cwd 帧获取 shell 真实 cwd，避免新开 SSH 连接只能拿到 home' },
-        { title: 'cwd 标记改 OSC 999 私有序列', desc: '原 __KAIRO_CWD_*__ 标记污染终端显示，改用 OSC 999 起止标记，终端忽略不显示' },
-        { title: '下载完成通知统一', desc: '改用 Kairo.core.notify，支持打开所在目录 / 复制路径 / 查看下载历史 三个操作按钮，与日志助手/文件助手保持一致' },
-        { title: '后端 query_cwd 控制帧', desc: 'stdout 流扫描起止标记提取 $PWD，避免新开 SSH 连接只能拿到 home' },
-        { title: '文件预览页面内搜索高亮', desc: 'preview.html 新增 Ctrl/⌘+F 唤起页面内搜索，TreeWalker 遍历文本节点，实时匹配，Enter/Shift+Enter 跳转' },
-        { title: '实时 tail 页面内搜索高亮', desc: 'tail.html 新增页面内搜索，新到达日志行自动应用当前搜索词高亮' },
-        { title: '日志上下文新窗口搜索高亮', desc: 'openContextInNewWindow 同样支持页面内搜索高亮' },
-        { title: '搜索高亮公共模块', desc: 'web/vendor/search-hl.js 统一管理，preview/tail/上下文三窗口共用；Enter/Shift+Enter 跳转匹配，Esc 清除' }
+        { title: '日志上下文行数上限扩展', desc: '上下文新窗口行数上限从500提升到5000，满足深度排查需求；输入框max属性同步更新；localStorage持久化用户设置' },
+        { title: '文件上传UI重排', desc: '上传按钮从底部移到下载按钮右侧同一行，上传默认到当前目录，移除独立上传路径输入，操作路径更短更直观' },
+        { title: 'Kairo品牌渐变动画修复', desc: '顶栏和关于页的Kairo/天命契机流光渐变动画跨5套主题正常显示（护眼绿/深色/浅色/高对比/武侠古风）' }
       ],
       fixes: [
-        '修复 SFTP 面板"跟随"按钮无效（原实现新开 SSH 连接读 ~，无法获取终端内 cd 后的真实目录）',
-        '修复 SFTP 下载完成通知过于简陋（仅 toast，缺少打开目录/复制路径/跳转下载页等操作）',
-        '修复路径无法手动输入（原实现需双击面包屑编辑，入口隐藏）',
-        '修复 cwd 标记 __KAIRO_CWD_*__ 污染终端显示（改用 OSC 999 私有序列，终端忽略不显示）',
-        '修复 .ts 等扩展名撞名导致 TypeScript 源码被误判为二进制（白名单+黑名单混合策略）',
-        '修复源码发布包包含 mock/fake 测试数据（.gitattributes export-ignore 排除 scripts/fake-*、mock 服务等）'
+        'P1: 日志上下文行数输入1000/5000被截断为500 — 前端常量引用错误(CONTEXT_LINES_MAX→CONTEXT_LINES_MAX_CTXWIN)，max属性同步更新',
+        'P1: 上下文行数设置不记忆 — localStorage持久化逻辑修正，下次打开保留用户偏好',
+        'P1: SSH终端搜索框(Ctrl+Shift+F)无法使用 — ssh.html补加缺失的xterm-addon-search.min.js脚本引用；ssh.js修正SearchAddon API调用方式',
+        'P2: 搜索结果展开/收起按钮太小不明显 — 重新设计为带背景色的"展开"/"收起"标签按钮，opacity提升到0.8，hover时完全显示',
+        'P2: 文件页面工具栏布局不齐 — 本地下载目录输入框加宽，预览与按钮行flex对齐；打包zip本地目录同样修复',
+        'P2: 外部打开器配置页文本框左侧重复图标 — 清理冗余DOM元素',
+        'P2: 日志文件列表缺少排序功能 — 文件名/修改时间/大小列表头支持点击排序',
+        'P2: 便笺提醒页面单次/周循环/月循环按钮点击卡顿 — 事件处理优化'
       ],
       commits: [
-        { hash: 'v0.13-1', msg: 'feat(ssh-sftp): 路径输入框 + 真cwd跟随 + 统一下载通知' },
-        { hash: 'v0.13-2', msg: 'feat: 新窗口页面搜索高亮 + OSC 999 cwd 标记 + 文件类型检测改进 + mock 文件排除' }
+        { hash: 'wip', msg: 'fix(v0.13.1): 8项UI/功能修复 — 上下文行数/SSH搜索/展开按钮/上传布局/品牌动画' }
       ],
       migration: [
-        'SSH 终端 SFTP 面板 UI 微调：原面包屑区域替换为"路径输入框 + 跳转/复制按钮"，操作栏「📂 进入当前目录」按钮替代原"跟随/自动跟随"',
-        '后端 WebSocket 协议新增 query_cwd 控制帧和 cwd 事件帧，前端已对应适配',
-        '自动跟随 checkbox 已移除（简化 UI，避免 localStorage 孤儿值），统一为手动「进入当前目录」按钮'
+        '无破坏性变更；用户硬刷新(Ctrl/Cmd+Shift+R)即可加载最新JS',
+        'ssh.html新增xterm-addon-search.min.js引用；缓存版本参数更新为?v=20260710'
+      ]
+    },
+      version: 'v0.13',
+      date: '2026-07-08',
+      tag: '定时提醒 + 浏览器自动打开 + 在线编辑',
+      codename: 'Herald · 司晨报晓',
+      size: 'l',
+      headline: '三大新特性：定时提醒(once/weekly/monthly)、浏览器偏好探测自动打开、远端文件在线编辑 + 周边优化',
+      stats: { commits: 2, fixes: 7, additions: 9, breaks: 0 },
+      principles: [
+        '提醒轻量: once / weekly / monthly 三种触发器在 Manager 池里跑，进程退出/重启从 data/reminders.json 恢复',
+        '浏览器即用: 启动时按偏好自动探测并打开本机浏览器，Win 优先 Chrome (注册表+常见路径)，macOS/Linux 走 open / xdg-open',
+        '在线编辑: 文件下载页直接编辑文本类远端文件，保存自动备份 .bak + 写审计 + 可回滚，不再"下载 → 本地编辑器 → 上传"',
+        '代码审查闭环: v0.13 feat 后立即跟一个 fix commit，把搜索高亮公共化 + 文件类型白名单 + cache buster 等审查点修掉'
+      ],
+      features: [
+        { title: '定时提醒模块 (internal/reminder)', desc: '3 种触发器 (once/weekly/monthly) + Manager 池 + data/reminders.json 持久化 + Win10+ Toast/经典气球兜底 + 暂停/恢复 + 触发审计日志 + web/pages/reminders.js 新页面' },
+        { title: '浏览器偏好探测 (internal/browserpref)', desc: 'data/browser_state.json 持久化 {kind, path, updated_at}；下次启动直接复用上次浏览器；Win 注册表 + 常见路径枚举 (Chrome/Edge/Firefox/360/QQ)；KAIRO --reset-browser 清掉重来' },
+        { title: 'Windows 弹窗实现 (internal/popup)', desc: '536 行 popup_windows.go + 13 行 popup_other.go 跨平台兜底 + 21 行 popup.go 接口；sysutil.browser_locate_windows 190 行 Win 特定实现' },
+        { title: '远端文件在线编辑 (handlers_edit.go)', desc: '文件下载页直接打开文本类远端文件 (properties/xml/yaml/json/conf/cfg/ini/log 等) → textarea 编辑 → 保存走 SFTP WriteFile；保存即备份 .kairo-edit.bak (最多 20 份) + 写审计 + 支持回滚' },
+        { title: '搜索高亮公共模块 (vendor/search-hl.js)', desc: 'preview.html / tail.html / 上下文窗口三处共用；TreeWalker 遍历文本节点 + mark 标签包裹 + Enter/Shift+Enter 跳转 + Esc 清除，不再每页写一套' },
+        { title: 'OSC 999 cwd 标记降级', desc: 'shell 真实 cwd 通过 WS query_cwd 控制帧 + stdout 流扫描 OSC 999 起止私有序列提取 $PWD，终端忽略不显示 (替代原 __KAIRO_CWD_*__ 污染终端的标记)' },
+        { title: '文件类型检测改进', desc: '白名单+黑名单混合策略 (.ts/.exe/.so/.dll/.bin 等不被误判为可编辑文本)；preview 二进制文件提前提示不打开' },
+        { title: 'cache buster', desc: 'index.html / ssh.html 引用 JS 加 ?v=20260708 强制刷新浏览器缓存' }
+      ],
+      fixes: [
+        '修复 shell cwd 标记 __KAIRO_CWD_*__ 污染终端显示（改用 OSC 999 私有序列）',
+        '修复 .ts 等扩展名撞名导致 TypeScript 源码被误判为二进制（白名单+黑名单混合策略）',
+        '修复源码发布包包含 mock/fake 测试数据（.gitattributes export-ignore 排除 scripts/fake-*、mock 服务等）',
+        '修复 search-hl.js 在三个窗口重复实现（抽公共模块 vendor/search-hl.js 统一管理）',
+        '修复 cache buster 缺失导致浏览器缓存老 JS 不生效（?v=20260708 版本参数）',
+        '修复 SFTP 面板 / 文件下载 / 审计模块若干稳定性与一致性细节',
+        '修复 tray (Windows 系统托盘) 启动时序和错误反馈'
+      ],
+      commits: [
+        { hash: '491cd7d', msg: 'feat(v0.13): 定时提醒 + 浏览器自动打开 + 在线编辑三大特性 (71 文件, +6184/-184)' },
+        { hash: '885799c', msg: 'fix(v0.13): 代码审查修复 — 搜索高亮抽公共模块/OSC999降级/.ts扩展名/cache buster' }
+      ],
+      migration: [
+        '新增左侧菜单「⏰ 定时提醒」入口 (web/pages/reminders.js)；现有用户首次访问自动发现',
+        'auto_open_browser 配置 v0.13 起首次启动探测 Win Chrome 注册表，结果落 data/browser_state.json；老配置不动',
+        'data/reminders/ 目录首次启动自动创建；便笺提醒走 data/.kairo-reminders.json (兼容旧版)',
+        '文件下载页右键菜单新增「编辑」按钮，仅对白名单内文本类型可见；其它类型不显示'
       ]
     },
     {
@@ -1221,8 +1310,9 @@
       el('div', { class: 'about-logo-wrap', style: 'font-size:64px; margin-bottom:14px;' }, [
         (function(){ var img = document.createElement('img'); img.src = '/static/img/kairo-logo-192.png'; img.style.width='72px'; img.style.height='72px'; img.style.borderRadius='18px'; return img; })()
       ]),
-      el('h1', { style: 'margin:0 0 6px 0; font-size:36px; font-weight:800; background:linear-gradient(135deg, var(--text), var(--primary) 50%, var(--accent)); -webkit-background-clip:text; -webkit-text-fill-color:transparent; background-clip:text;', text: 'Kairo · 天命契机' }),
-      el('div', { class: 'text-dim', style: 'font-size:14px; margin-bottom:18px; letter-spacing:1px;', text: 'Kairo — 来自希腊语 kairos，意为「恰当时机」' }),
+      el('h1', { class: 'kairo-shimmer-text', style: 'margin:0 0 6px 0; font-size:36px; font-weight:800; background-image:linear-gradient(135deg, var(--text) 0%, var(--primary) 40%, var(--accent) 60%, var(--primary) 80%, var(--text) 100%); letter-spacing:0.5px;', text: 'Kairo · 天命契机' }),
+      el('div', { class: 'text-dim', style: 'font-size:14px; margin-bottom:8px; letter-spacing:1px;', text: 'Kairo — 来自希腊语 kairos，意为「恰当时机」' }),
+      el('div', { class: 'text-dim', style: 'font-size:14px; margin-bottom:18px; letter-spacing:0.5px;', unsafeHtml: 'Crafted by <span class="about-credit-name kairo-shimmer-text" style="background-image:linear-gradient(135deg, var(--text) 0%, var(--primary) 40%, var(--accent) 60%, var(--primary) 80%, var(--text) 100%); font-weight:600;">Qi</span>' }),
       el('div', { class: 'text-dim', style: 'font-size:16px; margin-bottom:18px; max-width:760px; margin-left:auto; margin-right:auto; line-height:1.7;', text: '企业级内网运维效率平台 · 为 SRE / DevOps / 运维工程师量身打造。安全为先、极简为骨、上下文为魂——一套二进制搞定 SSH 日志检索、文件下载、代码比对、HTTP 调试、环境诊断与配置管理。' }),
       el('div', { style: 'display:inline-flex; gap:8px; flex-wrap:wrap; justify-content:center; align-items:center;' }, [
         versionBadge,
@@ -1439,7 +1529,7 @@
     wrap.appendChild(frontendGrid);
     wrap.appendChild(engTitle);
     wrap.appendChild(engGrid);
-    view.appendChild(renderSection('sec-stack', 'stack', '技术栈', '后端 10 依赖 · 前端 8 模块 · 工程 12 实践 · 57,000+ 行代码', wrap));
+    view.appendChild(renderSection('sec-stack', 'stack', '技术栈', '后端 10 依赖 · 前端 9 模块 · 工程 12 实践 · 81,000+ 行代码', wrap));
   }
 
   // --- 安全白皮书 ---
@@ -1567,7 +1657,7 @@
         ])
       ]));
     });
-    view.appendChild(renderSection('sec-modules', 'modules', '功能模块', '10 大模块 · 16 页面 · 79+ API 完整能力图谱', wrap));
+    view.appendChild(renderSection('sec-modules', 'modules', '功能模块', '13 大模块 · 17 页面 · 95+ API 完整能力图谱', wrap));
   }
 
   // --- 版本演进史 (accordion) ---
@@ -1584,7 +1674,7 @@
     wrap.appendChild(banner);
     wrap.appendChild(list);
 
-    view.appendChild(renderSection('sec-history', 'history', '版本演进史', 'v0.1 → v0.13 · 13 个版本 · 14 天 · 134 commit', wrap));
+    view.appendChild(renderSection('sec-history', 'history', '版本演进史', 'v0.1 → v0.13 · 13 个版本 · 持续迭代 · 136 commit', wrap));
   }
 
   function renderVersionCard(v, idx) {
@@ -1943,21 +2033,13 @@
 
   // --- Footer ---
   function renderFooter(view) {
-    var keyframesStyle = document.getElementById('kairo-footer-shimmer');
-    if (!keyframesStyle) {
-      keyframesStyle = el('style', { id: 'kairo-footer-shimmer' });
-      keyframesStyle.textContent = '@keyframes kairo-shimmer{0%{background-position:0% 50%}100%{background-position:200% 50%}}';
-      document.head.appendChild(keyframesStyle);
-    }
     var f = el('div', { class: 'text-dim about-footer', style: 'position:relative; text-align:center; margin-top:48px; padding:32px 16px 40px; font-size:13px; border-top:1px solid var(--line); overflow:hidden;' });
     // 顶部光晕装饰线
     f.appendChild(el('div', { style: 'position:absolute; top:-1px; left:0; right:0; height:1px; background:linear-gradient(90deg, transparent, var(--primary), var(--accent), var(--primary), transparent); background-size:200% 100%; animation:kairo-shimmer 3s linear infinite;' }));
     // 品牌行：渐变流光文字
-    f.appendChild(el('div', { style: 'font-size:17px; font-weight:800; margin-bottom:10px; background:linear-gradient(135deg, var(--text) 0%, var(--primary) 40%, var(--accent) 60%, var(--primary) 80%, var(--text) 100%); background-size:200% 100%; -webkit-background-clip:text; -webkit-text-fill-color:transparent; background-clip:text; animation:kairo-shimmer 4s linear infinite; letter-spacing:0.5px;', text: '© 2026 Kairo · 天命契机' }));
+    f.appendChild(el('div', { class: 'kairo-shimmer-text', style: 'font-size:17px; font-weight:800; margin-bottom:10px; background-image:linear-gradient(135deg, var(--text) 0%, var(--primary) 40%, var(--accent) 60%, var(--primary) 80%, var(--text) 100%); letter-spacing:0.5px;', text: '© 2026 Kairo · 天命契机' }));
     f.appendChild(el('div', { style: 'margin-top:6px; font-size:13px;', text: '技术栈：Go 1.20+ · 原生 JavaScript · x/crypto/ssh · pkg/sftp · single-binary deploy · zero runtime deps' }));
     f.appendChild(el('div', { style: 'margin-top:6px; font-size:12px;', text: '为运维效率而生 · 让每一次操作都有迹可循 · 让每一次配置都可审计 · 让每一次下载都可追溯' }));
-    // 末行：作者署名
-    f.appendChild(el('div', { style: 'margin-top:14px; font-size:11.5px; opacity:0.75;', unsafeHtml: '<span style="color:var(--primary); font-weight:600;">Made by Qi</span>' }));
     view.appendChild(f);
   }
 

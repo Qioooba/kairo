@@ -273,8 +273,8 @@ type logsContextReq struct {
 	Dir      string `json:"dir"`
 	File     string `json:"file"`
 	Line     int    `json:"line"`
-	Before   int    `json:"before"`
-	After    int    `json:"after"`
+	Before   *int   `json:"before"`
+	After    *int   `json:"after"`
 	Username string `json:"username"`
 	Password string `json:"password"`
 }
@@ -311,12 +311,20 @@ func (s *Server) handleLogsContext(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	username := creds.Username
-	before := req.Before
-	if before <= 0 {
+	before := 0
+	beforeSet := req.Before != nil
+	if beforeSet {
+		before = *req.Before
+	}
+	if !beforeSet || before < 0 {
 		before = cur.Search.DefaultContextLines
 	}
-	after := req.After
-	if after <= 0 {
+	after := 0
+	afterSet := req.After != nil
+	if afterSet {
+		after = *req.After
+	}
+	if !afterSet || after < 0 {
 		after = cur.Search.DefaultContextLines
 	}
 	if before > 5000 {

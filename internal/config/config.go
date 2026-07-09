@@ -142,6 +142,12 @@ type AppConfig struct {
 	// 默认 1000 条；超过则删除最旧的记录和对应文件；0 = 不限制数量。
 	DownloadMaxCount *int `yaml:"download_max_count,omitempty" json:"download_max_count,omitempty"`
 
+	// UploadMaxSize v1.1 起：单文件上传大小上限（字节）。
+	// 默认 2GB（与 edit 限制对齐，但走流式不进内存，可放宽到更大）。
+	// 0 = 不限制（不推荐，防误传大文件撑爆磁盘）。
+	// 校验在 init 阶段做：客户端传的 size 字段超过此值 → 400。
+	UploadMaxSize *int64 `yaml:"upload_max_size,omitempty" json:"upload_max_size,omitempty"`
+
 	// CompareAllowedRoots v0.9 起：/api/compare/file-diff、/api/compare/folder-scan
 	// 路径白名单（绝对路径或相对路径前缀），fail-closed：
 	//   - 空切片 → 一律 403（默认安全，禁止任意本地文件读）
@@ -216,6 +222,15 @@ func (a *AppConfig) TailIdleDuration() time.Duration {
 		return minIdle
 	}
 	return d
+}
+
+// UploadMaxSizeBytes 返回单文件上传大小上限（字节）。
+// 默认 2GB；nil / 0 → 不限制。
+func (a *AppConfig) UploadMaxSizeBytes() int64 {
+	if a.UploadMaxSize == nil {
+		return 2 * 1024 * 1024 * 1024
+	}
+	return *a.UploadMaxSize
 }
 
 // FreeFileRootsEnabled 判断 path 是否在 free_file_roots 白名单里。
@@ -576,6 +591,11 @@ func (c *Config) Defaults() {
 	}
 	if c.Search.MaxConcurrency == 0 {
 		c.Search.MaxConcurrency = 2
+	}
+	// v1.1：UploadMaxSize 默认 2GB
+	if c.App.UploadMaxSize == nil {
+		twoGB := int64(2 * 1024 * 1024 * 1024)
+		c.App.UploadMaxSize = &twoGB
 	}
 	for i := range c.Systems {
 		sys := &c.Systems[i]

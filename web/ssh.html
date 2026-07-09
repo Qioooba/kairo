@@ -24,7 +24,7 @@
     })();
   </script>
   <link rel="stylesheet" href="/static/vendor/xterm/xterm.css?v=20260702" />
-  <link rel="stylesheet" href="/static/style.css?v=20260706" />
+  <link rel="stylesheet" href="/static/style.css?v=20260708" />
   <style>
     /* SSH 独立窗口专用：窄边距、全高终端 */
     body { grid-template-columns: 1fr; }
@@ -97,7 +97,7 @@
         <button id="btn-clear" class="btn btn-sm" title="清屏">清屏</button>
         <button id="btn-reconnect" class="btn btn-sm" title="断开重连">重连</button>
         <button id="btn-close" class="btn btn-sm" title="关闭本页">关闭本页</button>
-        <button id="btn-bgtoggle" class="btn btn-sm ssh-bg-toggle" title="切换终端背景：跟随主题 / 强制深色">🌓 跟随主题</button>
+        <button id="btn-bgtoggle" class="btn btn-sm ssh-bg-toggle" title="切换终端背景：跟随主题 / 强制深色"><span class="bg-ico"></span><span class="bg-label">跟随主题</span></button>
       </div>
       <div class="ssh-term-wrap">
         <div id="term-container"></div>
@@ -106,12 +106,14 @@
   </main>
 
   <div id="toast" class="toast"></div>
-  <script src="/static/core.js?v=20260702"></script>
-  <script src="/static/api.js?v=20260702"></script>
-  <script src="/static/theme.js?v=20260702"></script>
-  <script src="/static/vendor/xterm/xterm.min.js?v=20260702"></script>
-  <script src="/static/vendor/xterm/xterm-addon-fit.min.js?v=20260702"></script>
-  <script src="/static/vendor/xterm/xterm-addon-web-links.min.js?v=20260702"></script>
+  <script src="/static/core.js?v=20260708b"></script>
+  <script src="/static/icons.js?v=20260708b"></script>
+  <script src="/static/api.js?v=20260708b"></script>
+  <script src="/static/theme.js?v=20260708b"></script>
+  <script src="/static/vendor/xterm/xterm.min.js?v=20260708b"></script>
+  <script src="/static/vendor/xterm/xterm-addon-fit.min.js?v=20260708b"></script>
+  <script src="/static/vendor/xterm/xterm-addon-search.min.js?v=20260708b"></script>
+  <script src="/static/vendor/xterm/xterm-addon-web-links.min.js?v=20260708b"></script>
   <script>
     (function () {
       'use strict';
@@ -237,12 +239,25 @@
         function paintBgToggleBtn() {
           var btn = document.getElementById('btn-bgtoggle');
           if (!btn) return;
+          var ico = btn.querySelector('.bg-ico');
+          var label = btn.querySelector('.bg-label');
+          var sunSvg = Kairo.icons && Kairo.icons.svg ? Kairo.icons.svg('sun', 14) : null;
+          var moonSvg = Kairo.icons && Kairo.icons.svg ? Kairo.icons.svg('moon', 14) : null;
+          // 原来用 🌓 / 🌙 emoji，Win 7 没有字体支持会显示成方框；改 SVG 跨平台一致。
+          if (ico) {
+            ico.innerHTML = '';
+            if (bgMode === 'dark' && moonSvg) {
+              ico.appendChild(moonSvg);
+            } else if (sunSvg) {
+              ico.appendChild(sunSvg);
+            }
+          }
+          if (label) label.textContent = (bgMode === 'dark') ? '强制深色' : '跟随主题';
+          // 同步按钮的 title
           if (bgMode === 'dark') {
-            btn.textContent = '🌙 强制深色';
             btn.title = '当前：强制深色。点击切换回跟随主题';
             btn.classList.add('is-dark');
           } else {
-            btn.textContent = '🌓 跟随主题';
             btn.title = '当前：跟随主题。点击切换到强制深色（适合亮色主题对比度不够的场景）';
             btn.classList.remove('is-dark');
           }

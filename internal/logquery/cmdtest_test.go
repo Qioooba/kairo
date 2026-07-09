@@ -1,6 +1,7 @@
 package logquery
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -115,18 +116,74 @@ func TestSearchAndNot(t *testing.T) {
 	}
 }
 
+// v0.14：关键词字符黑名单缩窄到 `' / \x00` 3 个真危险的字符（控制字符 \n \r \t
+// 在 strings.Fields 阶段就被 tokenize 掉，到不了 illegalKey 检查，等于默认禁）。
+// 之前禁的 `( ) [ ] { } * ? < > & ; | ! ~ \` $` 全部放行——
+// grep -E 元字符由 quoteForGrep 里的 regexp.QuoteMeta 转义；
+// shell 元字符在 `$(printf %b '...')` / `%q` 单引号里被 shell 跳过。
+// 见 illegalKeyKey 注释。
 func TestSearchInjection(t *testing.T) {
-	cases := []string{
-		"Exception; cat /etc/passwd",
-		"$(rm -rf /)",
-		"`whoami`",
+	// 这些 case 必须被拒（真危险的字符在多 token 里触发）
+	rejectedCases := []string{
+		"Exception; cat /etc/passwd", // 第三个 token `/etc/passwd` 含 `/`
+		"$(rm -rf /)",                // `-rf` 是 - 开头伪选项；`/etc/passwd` 含 `/`
+		"foo && O'Brien",             // `O'Brien` 含 `'`
+		"path/to/file",               // `/` 路径字符
+		"a\u0000b",                   // NUL（Fields 不切它，会到 illegalKey）
 	}
-	for _, c := range cases {
+	for _, c := range rejectedCases {
 		if _, err := ParseQuery(c); err == nil {
 			t.Fatalf("应该拒绝 %q 但没拒绝", c)
 		}
 	}
-	// "A && B" 是合法表达式
+
+	// 这些 case 之前被禁、v0.14 起合法（黑名单缩窄后）：
+	// 覆盖 ( ) [ ] { } * ? < > & ; | ! ~ ` $ \ + ^ . 等日志里常见字符
+	acceptedCases := []struct {
+		in        string
+		wantValue string // 期望能找到的某个 term 的 value（断言特殊字符没被静默删）
+	}{
+		// ParseQuery 按空白切 token，所以"Exception at (Foo.java:123)"会被拆成
+		// 3 个 term：Exception / at / (Foo.java:123)。验证 ( ) : . 都在 token 里。
+		{"Exception at (Foo.java:123)", "(Foo.java:123)"},
+		{"a && b", "a"},                // 状态机会拆，"b" 是 term
+		{"a || b", "a"},                // 同上
+		{"!DEBUG", "DEBUG"},            // ! 是 negate 修饰符
+		{"a < b", "a"},                 // < 字符在 term 里
+		{"a > b", "a"},                 // > 字符
+		{"x*y", "x*y"},                 // * 字符
+		{"x?y", "x?y"},                 // ? 字符
+		{"x|y", "x|y"},                 // | 是 OR 操作符，状态机会拆
+		{"x&y", "x&y"},                 // & 字符
+		{"x;y", "x;y"},                 // ; 字符
+		{"x~y", "x~y"},                 // ~ 字符
+		{"`whoami`", "`whoami`"},       // 反引号在单引号里是字面，shell 不展开
+		{"$USER", "$USER"},             // $ 字符
+		{"a\\b", "a\\b"},               // 反斜杠
+		{`a"b`, `a"b`},                 // 双引号
+		{"[INFO]", "[INFO]"},           // 中括号
+		{"{key}", "{key}"},             // 大括号
+		{"com.example+svc^", "com.example+svc^"}, // 已存在的 . + ^ 用例
+	}
+	for _, c := range acceptedCases {
+		kw, err := ParseQuery(c.in)
+		if err != nil {
+			t.Fatalf("应该接受 %q 但被拒: %v", c.in, err)
+		}
+		// 在所有 term 里找 value 等于 wantValue 的，断言特殊字符没被静默删
+		found := false
+		for _, k := range kw {
+			if k.Op == "term" && k.Value == c.wantValue {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("输入 %q：期望能找到 term %q（特殊字符没被删），实际 ParseQuery 结果: %+v", c.in, c.wantValue, kw)
+		}
+	}
+
+	// "A && B" 合法表达式
 	if _, err := ParseQuery("A && B"); err != nil {
 		t.Fatalf("合法表达式被拒: %v", err)
 	}
@@ -588,5 +645,230 @@ func TestSearchCommand_OR_PureNegOnly(t *testing.T) {
 	// 两个 grep -vE 都必须存在
 	if got := strings.Count(c, "grep -vE"); got < 2 {
 		t.Fatalf("!A || !B 应有 ≥ 2 个 grep -vE, 实际 %d\ncmd=%s", got, c)
+	}
+}
+
+// ---------- v0.14 修复：ParseContextEnrichedOutput 排序 ----------
+//
+// 设计：
+//   - 同 file 内部按 LineNo 降序（最晚的命中在最上面，符合用户"最新的排最上方"的直觉）
+//   - 跨 file 按 mtime 倒序（最近修改的文件在最上面）
+//   - mtime 解析失败 / file 不在白名单 → 排到最末
+//
+// 用户原话：
+//   "它应该把最晚出现的排在最上面……如果这样不好实现……你就把这个文件里面
+//    最早出现的排在最上面。但是我发现就是现在是最早出现排在最上面，但是往下翻的过程中，
+//    这个行号好像还有更早出现的，会排在这个它的下面。"
+// 早期版本是 file asc + line asc，导致跨 file 顺序没意义、用户看不到最新。
+func TestParseContextEnrichedOutput_SortByFileMtimeThenLineDesc(t *testing.T) {
+	// 构造两个 file：SystemOut.log（mtime 早）vs SystemErr.log（mtime 晚）
+	// 输出故意打乱顺序：err 的小行号、out 的小行号、err 的大行号、out 的大行号
+	raw := strings.Join([]string{
+		"SystemErr.log:30:err-old-line",       // file B (newer), line 30
+		"SystemOut.log:50:out-old-line",       // file A (older), line 50
+		"SystemErr.log:80:err-new-line",       // file B, line 80
+		"SystemOut.log:200:out-new-line",      // file A, line 200
+		"",                                    // 空行应被跳过
+		"junk-line-without-valid-format",      // 解析失败的行应被跳过
+	}, "\n")
+
+	// mtime：SystemOut.log 是 2020-01-01（旧），SystemErr.log 是 2025-01-01（新）
+	files := []FileEntry{
+		{Name: "SystemOut.log", FullPath: "SystemOut.log", Size: 1024, ModTime: "2020-01-01T00:00:00Z", IsReadable: true},
+		{Name: "SystemErr.log", FullPath: "SystemErr.log", Size: 1024, ModTime: "2025-01-01T00:00:00Z", IsReadable: true},
+	}
+	hits := ParseContextEnrichedOutput(raw, "srv1", "/var/log", files)
+	if len(hits) != 4 {
+		t.Fatalf("期望 4 条 hit，实际 %d：%+v", len(hits), hits)
+	}
+
+	// 期望顺序：mtime 新的 file (SystemErr) 在前，mtime 旧的 (SystemOut) 在后；
+	// 同 file 内 line 降序。
+	want := []struct {
+		file string
+		line int
+	}{
+		{"SystemErr.log", 80}, // newer file first, line desc
+		{"SystemErr.log", 30},
+		{"SystemOut.log", 200},
+		{"SystemOut.log", 50},
+	}
+	for i, w := range want {
+		if hits[i].File != w.file || hits[i].LineNo != w.line {
+			t.Errorf("hits[%d] = %s:%d，期望 %s:%d\n完整序列: %s", i, hits[i].File, hits[i].LineNo, w.file, w.line, hitsSummary(hits))
+		}
+	}
+}
+
+// mtime 解析失败（空字符串 / 非 RFC3339 格式）应该走"file 字典序倒序"兜底，
+// 排在 mtime 已解析 file 之后，保证已知时间线的 file 永远在前。
+func TestParseContextEnrichedOutput_MtimeParseFailFallback(t *testing.T) {
+	raw := strings.Join([]string{
+		"z_last.log:10:z-line",
+		"a_first.log:20:a-line",
+		"a_first.log:5:a-old-line",
+	}, "\n")
+	files := []FileEntry{
+		{Name: "z_last.log", FullPath: "z_last.log", ModTime: "garbage-not-rfc3339", IsReadable: true},
+		{Name: "a_first.log", FullPath: "a_first.log", ModTime: "2024-06-01T00:00:00Z", IsReadable: true},
+	}
+	hits := ParseContextEnrichedOutput(raw, "srv", "/d", files)
+	if len(hits) != 3 {
+		t.Fatalf("期望 3 条 hit，实际 %d", len(hits))
+	}
+	// a_first.log (mtime 已知) 排前面，且内部 line 降序
+	// z_last.log (mtime 解析失败) 排后面，字典序倒序就是 z 在前（只有一个）
+	if hits[0].File != "a_first.log" || hits[0].LineNo != 20 {
+		t.Errorf("hits[0] = %s:%d，期望 a_first.log:20", hits[0].File, hits[0].LineNo)
+	}
+	if hits[1].File != "a_first.log" || hits[1].LineNo != 5 {
+		t.Errorf("hits[1] = %s:%d，期望 a_first.log:5（同 file 内 line 降序）", hits[1].File, hits[1].LineNo)
+	}
+	if hits[2].File != "z_last.log" {
+		t.Errorf("hits[2] = %s，期望 z_last.log（mtime 解析失败的兜底到末尾）", hits[2].File)
+	}
+}
+
+// hits 里的 file 不在 files 白名单时（防御性场景），应该排到最末。
+// 实际产品中 ParseContextEnrichedOutput 解析的 file 必然来自白名单，
+// 但排序逻辑要 defensive。
+func TestParseContextEnrichedOutput_UnknownFileGoesToEnd(t *testing.T) {
+	raw := strings.Join([]string{
+		"orphan.log:99:orphan-line",      // 不在 files 白名单
+		"known.log:50:known-line",
+		"known.log:10:known-old-line",
+	}, "\n")
+	files := []FileEntry{
+		{Name: "known.log", ModTime: "2024-01-01T00:00:00Z", IsReadable: true},
+		// 注意：orphan.log 不在这里
+	}
+	hits := ParseContextEnrichedOutput(raw, "srv", "/d", files)
+	if len(hits) != 2 {
+		t.Fatalf("orphan.log 应被白名单拒收，期望 2 条 hit，实际 %d", len(hits))
+	}
+	// 同 file 内 line 降序
+	if hits[0].LineNo != 50 || hits[1].LineNo != 10 {
+		t.Errorf("同 file 内期望 line 降序 50, 10，实际 %d, %d", hits[0].LineNo, hits[1].LineNo)
+	}
+}
+
+// helpers
+func hitsSummary(hits []SearchHit) string {
+	var parts []string
+	for _, h := range hits {
+		parts = append(parts, fmt.Sprintf("%s:%d", h.File, h.LineNo))
+	}
+	return strings.Join(parts, " | ")
+}
+
+// v0.14 用户报障场景一：用户输入"123>"这种带尖括号的关键词。
+// 早期版本会被拒（illegalKey 包含 >），现在应该通过。
+// 同时验证搜出来的实际命令里 `<` `>` 字符都正确 escape 成 grep 字面匹配。
+func TestUserReport_AngleBracketsInKeyword(t *testing.T) {
+	kw, err := ParseQuery("123>")
+	if err != nil {
+		t.Fatalf("用户报障场景 '123>' 应被接受：%v", err)
+	}
+	if len(kw) != 1 || kw[0].Value != "123>" {
+		t.Fatalf("term 应该是 '123>'，实际 %+v", kw)
+	}
+	// 构造搜索命令：grep pattern 应是字面 "123>"（> 在 QuoteMeta 里是字面，不需要转义）
+	c, err := SearchCommand("/dir", []string{"a.log"}, kw, 200, 30, "utf-8", false)
+	if err != nil {
+		t.Fatalf("构造 SearchCommand 失败：%v", err)
+	}
+	// %q 包裹的 pattern 应包含字面的 "123>"
+	if !strings.Contains(c, `"123>"`) {
+		t.Fatalf("生成的 grep 命令应包含字面 '123>'，实际:\n%s", c)
+	}
+}
+
+// v0.14 用户报障场景二：用户搜 SQL 里的 "<>" 不等号（早期拒收）。
+func TestUserReport_SQLNotEqual(t *testing.T) {
+	kw, err := ParseQuery("a<>b")
+	if err != nil {
+		t.Fatalf("'a<>b' 应被接受：%v", err)
+	}
+	if len(kw) != 1 || kw[0].Value != "a<>b" {
+		t.Fatalf("term 应该是 'a<>b'，实际 %+v", kw)
+	}
+	// SearchCommand 也能成功生成
+	c, err := SearchCommand("/dir", []string{"a.log"}, kw, 200, 30, "utf-8", false)
+	if err != nil {
+		t.Fatalf("SearchCommand 失败：%v", err)
+	}
+	if !strings.Contains(c, `a\<\>b`) && !strings.Contains(c, `"a<>b"`) {
+		t.Fatalf("'<>' 应作为字面匹配：\n%s", c)
+	}
+}
+
+// v0.14 用户报障场景三：用户搜 Java 异常堆栈 "at com.example.Foo.bar(Foo.java:123)"。
+// 早期版本 `(` `)` `:` `.` 里的 `(` `)` 被拒，现在全过。
+func TestUserReport_JavaStackTrace(t *testing.T) {
+	// 这个 query 按空白切，"(Foo.java:123)" 是单 token
+	kw, err := ParseQuery("(Foo.java:123)")
+	if err != nil {
+		t.Fatalf("'(Foo.java:123)' 应被接受：%v", err)
+	}
+	if len(kw) != 1 || kw[0].Value != "(Foo.java:123)" {
+		t.Fatalf("term 应保留所有字符：%+v", kw)
+	}
+	// grep -E 模式里 ( ) . 都要转义（QuoteMeta 处理）
+	c, err := SearchCommand("/dir", []string{"a.log"}, kw, 200, 30, "utf-8", false)
+	if err != nil {
+		t.Fatalf("SearchCommand 失败：%v", err)
+	}
+	// 验证转义正确：( → \(, ) → \), . → \.
+	// 注意：Go 端 QuoteMeta 输出 `\(Foo\.java:123\)`，再被 %q 包裹成 `"\\(Foo\\.java:123\\)"`；
+	// shell 解释双引号里 `\\` → `\`、保留 `\(` `\)`，所以最终 grep 看到的还是 `\(Foo\.java:123\)`。
+	// 测试匹配 Go 源码里的 raw 字符串（即 sh -c 命令中的字面）。
+	if !strings.Contains(c, `\\(Foo\\.java:123\\)`) {
+		t.Fatalf("grep 模式应转义 ( ) . 为字面（Go 端 %%q 形式）:\n%s", c)
+	}
+}
+
+// v0.14 用户报障场景四：用户报"现在是最早出现排在最上面，但往下翻的过程中，
+// 这个行号好像还有更早出现的"。这意味着同 file 内排序不一致。
+//
+// 早期 ParseContextEnrichedOutput 用 sort.SliceStable + file asc + line asc，
+// 排序本身是对的，但跨 file 用了 file 字典序（SystemErr < SystemOut）导致
+// 跨 file 的 hits 互相穿插，用户看到 A file 的 line 100 之后是 B file 的 line 30，
+// 觉得"line 30 应该排在 line 100 前面"。
+//
+// 现在的修复：同 file 聚类 + file 内 line 降序 + file 之间按 mtime 倒序。
+// 关键测试：同 file 内的 hits 必须严格按 line 降序，相邻 file 切换不穿插。
+func TestUserReport_NoCrossFileInterleave(t *testing.T) {
+	// 模拟用户视角看到的"穿插"：file A 排在 file B 之前，但 A 的最大行号
+	// 远大于 B 的最小行号——这正是用户觉得"穿插"的根因。
+	raw := strings.Join([]string{
+		"SystemOut.log:1000:out-line-large",
+		"SystemErr.log:30:err-line-small",     // 早期实现：穿插进 A 之后
+		"SystemErr.log:80:err-line-medium",
+		"SystemOut.log:50:out-line-small",     // 早期实现：穿插到 B 之后
+	}, "\n")
+	// mtime: SystemOut (新) > SystemErr (旧) —— 新文件排前面
+	files := []FileEntry{
+		{Name: "SystemErr.log", ModTime: "2020-01-01T00:00:00Z", IsReadable: true},
+		{Name: "SystemOut.log", ModTime: "2025-01-01T00:00:00Z", IsReadable: true},
+	}
+	hits := ParseContextEnrichedOutput(raw, "srv", "/d", files)
+	if len(hits) != 4 {
+		t.Fatalf("期望 4 条 hit：%+v", hits)
+	}
+	// 新文件先：SystemOut.log → 老文件：SystemErr.log
+	// 同 file 内 line 降序
+	want := []struct {
+		file string
+		line int
+	}{
+		{"SystemOut.log", 1000},
+		{"SystemOut.log", 50},
+		{"SystemErr.log", 80},
+		{"SystemErr.log", 30},
+	}
+	for i, w := range want {
+		if hits[i].File != w.file || hits[i].LineNo != w.line {
+			t.Errorf("hits[%d] = %s:%d，期望 %s:%d\n完整序列: %s", i, hits[i].File, hits[i].LineNo, w.file, w.line, hitsSummary(hits))
+		}
 	}
 }

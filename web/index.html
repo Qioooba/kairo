@@ -9,8 +9,8 @@
   <title>Kairo · 天命契机</title>
   <!-- TODO(FE-019): vendor 资源建议加 integrity（SRI）属性；内网工具低优先级，需计算文件 hash -->
   <link rel="stylesheet" href="/static/vendor/diff2html.min.css?v=20260627" />
-  <link rel="stylesheet" href="/static/vendor/xterm/xterm.css?v=20260703" />
-  <link rel="stylesheet" href="/static/style.css?v=20260706" />
+  <link rel="stylesheet" href="/static/vendor/xterm/xterm.css?v=20260708" />
+  <link rel="stylesheet" href="/static/style.css?v=20260709" />
   <style>
     .auth-overlay{position:fixed;top:0;right:0;bottom:0;left:0;background:rgba(0,0,0,.72);-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);z-index:99999;display:none;align-items:center;justify-content:center;padding:20px}
     /* v0.13 bug-2：激活弹窗原来吃 --bg-card / --text / --text-dim 等会随主题切换的变量，
@@ -69,10 +69,9 @@
       <a href="#/websphere" class="nav-item" data-route="websphere">日志助手</a>
       <a href="#/files" class="nav-item" data-route="files">文件下载</a>
       <a href="#/ssh" class="nav-item" data-route="ssh">SSH 终端</a>
-      <a href="#/formatter" class="nav-item" data-route="formatter">报文格式化</a>
       <a href="#/http" class="nav-item" data-route="http">HTTP 测试</a>
       <a href="#/webservice" class="nav-item" data-route="webservice">WebService</a>
-      <a href="#/commands" class="nav-item" data-route="commands">常用命令</a>
+      <a href="#/formatter" class="nav-item" data-route="formatter">报文格式化</a>
       <a href="#/diagnostics" class="nav-item" data-route="diagnostics">环境自检</a>
       <a href="#/config" class="nav-item" data-route="config">系统配置</a>
       <a href="#/downloads" class="nav-item" data-route="downloads">
@@ -84,8 +83,9 @@
       <a href="#/cron" class="nav-item small" data-route="cron">Cron 解析</a>
       <a href="#/jsonpath" class="nav-item small" data-route="jsonpath">JSONPath</a>
       <a href="#/compare" class="nav-item small" data-route="compare">代码比对</a>
+      <a href="#/commands" class="nav-item small" data-route="commands">常用命令</a>
       <a href="#/reminders" class="nav-item small" data-route="reminders">便笺提醒</a>
-      <a href="#/about" class="nav-item small" data-route="about"><svg class="nav-ico" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="#64748b"/><circle cx="12" cy="12" r="9" fill="none" stroke="#ffffff" stroke-width="0.7" opacity="0.45"/><line x1="12" y1="16.5" x2="12" y2="11" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round"/><circle cx="12" cy="8" r="1.3" fill="#ffffff"/></svg>关于</a>
+      <a href="#/about" class="nav-item small" data-route="about">关于</a>
     </nav>
     <div class="footer">
       <div id="listen-info" class="muted">—</div>
@@ -108,45 +108,88 @@
   <div id="toast" class="toast"></div>
 
   <!-- 模块加载顺序：core → icons → theme → api → auth → state → pages → app 入口 -->
-  <script src="/static/core.js?v=20260703"></script>
-  <script src="/static/icons.js?v=20260703"></script>
-  <script src="/static/theme.js?v=20260703"></script>
-  <script src="/static/api.js?v=20260703"></script>
-  <script src="/static/auth.js?v=20260703"></script>
-  <script src="/static/license.js?v=20260703"></script>
-  <script src="/static/state.js?v=20260703"></script>
-  <script src="/static/app.js?v=20260703"></script>
-  <script src="/static/pages/home.js?v=20260703"></script>
-  <script src="/static/pages/websphere.js?v=20260703"></script>
-  <script src="/static/pages/sftp-common.js?v=20260703"></script>
-  <script src="/static/pages/files.js?v=20260703"></script>
-  <script src="/static/pages/formatter.js?v=20260703"></script>
-  <script src="/static/pages/commands.js?v=20260703"></script>
-  <script src="/static/pages/diagnostics.js?v=20260703"></script>
-  <script src="/static/pages/config.js?v=20260703"></script>
-  <script src="/static/pages/downloads.js?v=20260703"></script>
-  <script src="/static/pages/http.js?v=20260703"></script>
-  <script src="/static/pages/webservice.js?v=20260703"></script>
-  <script src="/static/pages/timestamp.js?v=20260703"></script>
-  <script src="/static/pages/cron.js?v=20260703"></script>
-  <script src="/static/pages/jsonpath.js?v=20260703"></script>
+  <script src="/static/core.js?v=20260708"></script>
+  <script src="/static/icons.js?v=20260708b"></script>
+  <script src="/static/theme.js?v=20260708"></script>
+  <script src="/static/api.js?v=20260708"></script>
+  <script src="/static/auth.js?v=20260708"></script>
+  <script src="/static/license.js?v=20260708"></script>
+  <script src="/static/state.js?v=20260708"></script>
+  <script src="/static/app.js?v=20260708"></script>
+  <script src="/static/pages/home.js?v=20260708b"></script>
+  <script src="/static/pages/websphere.js?v=20260708"></script>
+  <script src="/static/pages/sftp-common.js?v=20260708"></script>
+  <script src="/static/pages/files.js?v=20260708c"></script>
+  <script src="/static/pages/formatter.js?v=20260708"></script>
+  <script src="/static/pages/commands.js?v=20260708"></script>
+  <script src="/static/pages/diagnostics.js?v=20260708"></script>
+  <script src="/static/pages/config.js?v=20260708c"></script>
+  <script src="/static/pages/downloads.js?v=20260708"></script>
+  <script src="/static/pages/http.js?v=20260708"></script>
+  <script src="/static/pages/webservice.js?v=20260708"></script>
+  <script src="/static/pages/timestamp.js?v=20260708"></script>
+  <script src="/static/pages/cron.js?v=20260708"></script>
+  <script src="/static/pages/jsonpath.js?v=20260708"></script>
   <script src="/static/vendor/diff2html.min.js?v=20260627"></script>
-  <script src="/static/pages/compare.js?v=20260703"></script>
+  <script src="/static/pages/compare.js?v=20260708"></script>
   <!-- v1.0 便笺提醒编辑页（CRUD + 三种调度类型） -->
-  <script src="/static/pages/reminders.js?v=20260707b"></script>
+  <script src="/static/pages/reminders.js?v=20260708b"></script>
   <!-- v0.10 SSH 终端：xterm.js + addons（Canvas 渲染，无 WebGL 依赖） -->
-  <script src="/static/vendor/xterm/xterm.min.js?v=20260703"></script>
-  <script src="/static/vendor/xterm/xterm-addon-fit.min.js?v=20260703"></script>
-  <script src="/static/vendor/xterm/xterm-addon-search.min.js?v=20260703"></script>
-  <script src="/static/vendor/xterm/xterm-addon-web-links.min.js?v=20260703"></script>
-  <script src="/static/pages/ssh.js?v=20260703"></script>
-  <script src="/static/pages/about.js?v=20260703"></script>
+  <script src="/static/vendor/xterm/xterm.min.js?v=20260708"></script>
+  <script src="/static/vendor/xterm/xterm-addon-fit.min.js?v=20260708"></script>
+  <script src="/static/vendor/xterm/xterm-addon-search.min.js?v=20260708"></script>
+  <script src="/static/vendor/xterm/xterm-addon-web-links.min.js?v=20260708"></script>
+  <script src="/static/pages/ssh.js?v=20260708c"></script>
+  <script src="/static/pages/about.js?v=20260709b"></script>
   <script>
     // v0.5 #19：DOM ready 后同步按钮 emoji 到当前主题
     document.addEventListener('DOMContentLoaded', function () {
       if (window.Kairo && window.Kairo.theme && window.Kairo.theme.init) {
         window.Kairo.theme.init();
       }
+      // v0.13：给左侧每个菜单项注入 SVG 图标（统一视觉，Win 7 + 无 emoji 字体也 OK）
+      // 之前只有「关于」有硬编码 SVG，其他菜单项都是纯文字。
+      // 这里用 icons.js 里同款彩色 SVG，保证侧栏和首页卡片视觉一致。
+      var NAV_ICON_MAP = {
+        home: 'home',
+        websphere: 'file-text',
+        files: 'file-down',
+        ssh: 'terminal',
+        formatter: 'braces',
+        http: 'globe',
+        webservice: 'soap-envelope',
+        commands: 'square-terminal',
+        diagnostics: 'shield-check',
+        config: 'settings',
+        downloads: 'history',
+        timestamp: 'clock',
+        cron: 'calendar-clock',
+        jsonpath: 'workflow',
+        compare: 'git-compare',
+        reminders: 'bell',
+        about: 'info'
+      };
+      try {
+        var svgFn = window.Kairo && window.Kairo.icons && window.Kairo.icons.svg;
+        if (svgFn) {
+          var items = document.querySelectorAll('.nav-item[data-route]');
+          for (var i = 0; i < items.length; i++) {
+            var a = items[i];
+            var route = a.getAttribute('data-route');
+            var key = NAV_ICON_MAP[route];
+            if (!key) continue;
+            // 已经注入过（避免重渲染导致重复图标）
+            if (a.querySelector(':scope > svg.nav-ico')) continue;
+            var node = svgFn(key, 14);
+            if (node) {
+              node.classList.add('nav-ico');
+              // 插入到文字前面；如果有 badge（下载历史），让 badge 保留在最后
+              var firstChild = a.firstChild;
+              a.insertBefore(node, firstChild);
+            }
+          }
+        }
+      } catch (e) { /* nav 图标注入失败不影响主体功能 */ }
     });
   </script>
 </body>

@@ -9,7 +9,7 @@
 [![Go Version](https://img.shields.io/badge/Go-1.20%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-4F4F4F)](#)
 [![License](https://img.shields.io/badge/License-Internal%20Use-orange)](#)
-[![Status](https://img.shields.io/badge/Status-v0.12-yellow)](#)
+[![Status](https://img.shields.io/badge/Status-v0.13-yellow)](#)
 [![Dependencies](https://img.shields.io/badge/Deps-zero%20runtime-2ea44f)](#)
 [![Binary](https://img.shields.io/badge/Single%20Exe-%E2%9C%93-success)](#)
 

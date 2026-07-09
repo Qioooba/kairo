@@ -1,14 +1,13 @@
-// Package popup 提供系统级悬浮通知弹窗（Windows-only，非 Windows no-op）。
+// Package popup 提供系统级提醒通知（Windows-only，非 Windows no-op）。
 //
 // 设计：
-//   - Show(content string) 立即在屏幕右下角弹一个悬浮卡片，8 秒后自动 fade-out。
-//   - 多条提醒排队显示，间隔 1 秒，避免堆叠。
-//   - 跨 Win 7 / Win 10：用纯 GDI+ + PNG 背景图分层渲染，不依赖 DWM 圆角
-//     或 Action Center 等 Win10 only API。
-//   - 主题跟随系统：Win10 用 ShouldAppsUseDarkMode；Win7 始终浅色。
+//   - Show(content string) 调用 Windows 原生通知区域消息提醒。
+//   - 多条提醒排队显示，间隔约 1 秒，避免堆叠。
+//   - 跨 Win 7 / Win 10/11：Win7 显示经典通知气泡，Win10/11 由系统通知接管样式。
+//   - 不内嵌 PNG 资源，不自绘大背景图，避免拖大单 exe 体积。
 package popup
 
-// Show 在屏幕右下角弹一个提醒卡片。立即返回，不阻塞调用方。
+// Show 弹出一个系统提醒。立即返回，不阻塞调用方。
 //
 // 非 Windows 平台：no-op（开发模式下不弹窗，避免污染 macOS / Linux 桌面）。
 // Windows 平台：实际实现见 popup_windows.go。

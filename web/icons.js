@@ -72,6 +72,20 @@
 
     // 关于：中性灰圆 + 白色 i（之前 #475569 在 dark 主题下太沉，改亮一档 #64748b）
     'info': `<circle cx="12" cy="12" r="10" fill="#64748b"/><circle cx="12" cy="12" r="9" fill="none" stroke="#ffffff" stroke-width="0.7" opacity="0.45"/><line x1="12" y1="16.5" x2="12" y2="11" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round"/><circle cx="12" cy="8" r="1.3" fill="#ffffff"/>`,
+
+    // SSH 终端（v0.10 起）：蓝色终端 + 白色 prompt + 光标
+    // 区别于 square-terminal（深灰 + 红黄绿圆点）：这里是「一个具体 shell 会话」
+    'terminal': `<rect x="3" y="3" width="18" height="18" rx="2" fill="#0ea5e9"/><rect x="3" y="3" width="18" height="18" rx="2" fill="none" stroke="#0284c7" stroke-width="0.5"/><polyline points="7 10 10 12 7 14" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><line x1="12" y1="15" x2="17" y2="15" stroke="#ffffff" stroke-width="2" stroke-linecap="round"/><rect x="17" y="15" width="0.8" height="2" fill="#ffffff"/>`,
+
+    // 便笺提醒（v0.13 起）：黄色钟铃 + 橙色摆锤
+    // 区别于 clock（玫红实心圆 + 白色指针）：这里是「独立的钟 + 提醒感」
+    'bell': `<path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z" fill="#fbbf24"/><path d="M6 16V11a6 6 0 0 1 12 0v5" fill="none" stroke="#b45309" stroke-width="0.5" opacity="0.6"/><path d="M10.5 19a1.5 1.5 0 0 0 3 0" stroke="#f59e0b" stroke-width="1.5" fill="none"/><line x1="12" y1="6.5" x2="12" y2="5" stroke="#f59e0b" stroke-width="1.5" stroke-linecap="round"/><circle cx="12" cy="4" r="0.9" fill="#f59e0b"/>`,
+
+    // 首页（home）：橙色屋顶 + 烟囱
+    'home': `<path d="M3 11.5 12 4l9 7.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z" fill="#f97316"/><path d="M3 11.5 12 4l9 7.5" fill="none" stroke="#ea580c" stroke-width="0.6"/><rect x="14" y="5" width="2" height="2.5" fill="#ea580c"/>`,
+
+    // 搜索（lucide 风格放大镜）：青绿描边
+    'search': `<circle cx="11" cy="11" r="6.5" fill="none" stroke="#06b6d4" stroke-width="2"/><line x1="15.5" y1="15.5" x2="20" y2="20" stroke="#06b6d4" stroke-width="2.2" stroke-linecap="round"/><circle cx="11" cy="11" r="2.5" fill="#06b6d4" opacity="0.25"/>`,
   };
 
   // 主题按钮 5 个图标（彩色实心版，与工具卡片风格统一）
@@ -138,4 +152,99 @@
   icons.innerHTML = toHTML;
   icons.has = function (name) { return !!PATHS[name]; };
   icons.PATHS = PATHS;
+
+  // ---------- 外部打开器图标统一渲染 ----------
+  //
+  // 设计动机：v0.14 前各页面（config/downloads/files/ssh）各自 inline 一份
+  // "emoji 优先 / 否则按名推断颜色 + 通用 SVG 占位" 的逻辑，且都没有真实 exe
+  // 图标。v0.14 新增 Windows exe 图标提取后，把渲染逻辑统一收口到这里，
+  // 4 个页面共用同一份。
+  //
+  // 渲染优先级：
+  //   1. op.icon 是 emoji → 直接返回 emoji span（用户在配置页手填的 emoji）
+  //   2. 后端已缓存 exe 图标 → <img src="/api/local/opener-icon?name=...&t=hash">
+  //      onerror 时自动换成 SVG fallback（防止缓存未命中 / 非平台支持时显示破图）
+  //   3. 兜底：按 path/name 关键词推断颜色 + 通用 file-text SVG 占位
+  //
+  // 入参：
+  //   op: { name, path, icon }（ExternalOpener 结构）
+  //   size: 图标像素尺寸，默认 14
+  //
+  // 返回 HTML 字符串，调用方用 unsafeHtml 注入到 button/span 里。
+  function inferOpenerColor(path, name) {
+    const s = ((path || '') + ' ' + (name || '')).toLowerCase();
+    if (s.includes('code') || s.includes('vscode') || s.includes('vs ')) return '#3b82f6';
+    if (s.includes('notepad') || s.includes('npp')) return '#f59e0b';
+    if (s.includes('idea') || s.includes('intellij')) return '#f97316';
+    if (s.includes('vim') || s.includes('nvim')) return '#374151';
+    if (s.includes('sublime')) return '#8b5cf6';
+    if (s.includes('terminal') || s.includes('cmd') || s.includes('powershell') || s.includes('iterm')) return '#10b981';
+    if (s.includes('excel') || s.includes('xlsx')) return '#22c55e';
+    if (s.includes('word') || s.includes('docx')) return '#3b82f6';
+    return '#64748b';
+  }
+
+  // 通用文件 SVG 占位（单色 stroke，可指定颜色）。
+  // 跟 icons.js 整体"彩色实心"风格不同——这里用 stroke 是因为占位图本身就是
+  // 临时替代品，视觉重量轻一点更好，让真实 exe 图标（彩色 PNG）来当主角。
+  function openerFallbackSVG(path, name, size) {
+    const s = size || 14;
+    const color = inferOpenerColor(path, name);
+    // 用 file-text 路径（与 Kairo.icons.PATHS['file-text'] 风格一致但用 stroke）
+    return '<svg xmlns="http://www.w3.org/2000/svg" width="' + s + '" height="' + s + '" viewBox="0 0 24 24" fill="none" stroke="' + color + '" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+      '<path d="M14 3v4a1 1 0 0 0 1 1h4v9a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/>' +
+      '<path d="M14 3v4a1 1 0 0 0 1 1h4l-5-5z"/>' +
+      '<line x1="9" y1="13" x2="15" y2="13"/>' +
+      '<line x1="9" y1="17" x2="13" y2="17"/>' +
+      '</svg>';
+  }
+
+  // 简单 hash（djb2）→ 36 进制，用作 URL 的 cacheBust 参数。
+  // 同一 path 始终产生同一 hash；path 改了 hash 变，浏览器重新拉图标。
+  function pathHash(s) {
+    let h = 5381;
+    for (let i = 0; i < s.length; i++) {
+      h = ((h << 5) + h + s.charCodeAt(i)) >>> 0;
+    }
+    return h.toString(36);
+  }
+
+  function openerIconHTML(op, size) {
+    if (!op) return '';
+    const s = size || 14;
+    const ic = (typeof op.icon === 'string') ? op.icon.trim() : '';
+    if (ic) {
+      // emoji 检测：覆盖常见 emoji 区段（与原各页面逻辑一致）
+      const isEmoji = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(ic);
+      if (isEmoji) {
+        return '<span style="font-size:' + s + 'px; line-height:1; display:inline-flex; align-items:center;">' + escapeHTML(ic) + '</span>';
+      }
+    }
+    // 没有真实 exe 图标缓存时（非 Windows 平台 / 提取失败）走 fallback；
+    // <img> 的 onerror 会替换 outerHTML 为 SVG，避免破图。
+    // name 必须 encodeURIComponent 防 URL 注入；path hash 用于 cacheBust。
+    const name = op.name || '';
+    if (!name) {
+      return openerFallbackSVG(op.path || '', op.name || '', s);
+    }
+    const url = '/api/local/opener-icon?name=' + encodeURIComponent(name) + '&t=' + pathHash(op.path || name);
+    const fallbackSVG = openerFallbackSVG(op.path || '', op.name || '', s)
+      // onerror 里塞的是 JS 字符串，SVG 里的双引号要转成 &quot; 才不会破坏 HTML 属性
+      .replace(/"/g, '&quot;');
+    return '<img src="' + url + '" alt="" width="' + s + '" height="' + s + '" ' +
+      'style="width:' + s + 'px; height:' + s + 'px; vertical-align:middle; object-fit:contain;" ' +
+      'onerror="this.outerHTML=\'' + fallbackSVG + '\'" ' +
+      'loading="lazy" decoding="async">';
+  }
+  icons.openerIconHTML = openerIconHTML;
+
+  // escapeHTML 跟 core.js 的实现保持一致（这里 inline 一份避免循环依赖）。
+  function escapeHTML(s) {
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
 })();

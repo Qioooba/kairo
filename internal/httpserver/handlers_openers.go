@@ -61,6 +61,11 @@ func (s *Server) handleAdminOpeners(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, 400, err)
 			return
 		}
+		// 异步提取并缓存所有 opener 的 exe 图标（不阻塞响应）：
+		//   - 提取过程可能调 Windows API，耗时几十 ms / 个
+		//   - 提取失败静默跳过（前端会 fallback 到 SVG 占位）
+		//   - 已缓存的 path 会被自动跳过，不会重复提取
+		go s.refreshOpenerIcons(req.Openers)
 		s.audit.Write("admin.openers.put", "result", "ok", "count", len(req.Openers))
 		writeJSON(w, 200, map[string]any{
 			"ok":    true,

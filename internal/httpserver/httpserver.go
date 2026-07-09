@@ -57,13 +57,18 @@ const (
 
 // Version / BuildTime 可在构建时通过 ldflags 注入，例如：
 //
-//	go build -ldflags "-X 'kairo/internal/httpserver.Version=v0.12' \
-//	  -X 'kairo/internal/httpserver.BuildTime=2026-07-04T00:00:00Z'" .
+//	go build -ldflags "-X 'kairo/internal/httpserver.Version=v0.13' \
+//	  -X 'kairo/internal/httpserver.BuildTime=2026-07-08T00:00:00Z'" .
 //
 // 未注入时使用下面的默认值；前端 about 页通过 GET /api/config 读取并回填显示，
 // 读取失败则回退到前端硬编码版本（FE-006）。
-// 版本号强制对齐：VERSION 文件 / 此处 Version 常量 / web/pages/about.js:VERSION /
-// web/index.html#footer-version / web/app.js fallback —— 五处必须一致，改时一起改。
+// 版本号强制对齐（六处必须一致，改时一起改）：
+//   1. VERSION 文件
+//   2. 此处 Version 常量
+//   3. web/pages/about.js 的 VERSION 常量
+//   4. web/index.html 的 #footer-version
+//   5. web/app.js 的 info.version || fallback
+//   6. README.md 的 Status 徽章
 var (
 	Version   = "v0.13"
 	BuildTime = "unknown"
@@ -108,12 +113,13 @@ func requireAdmin(w http.ResponseWriter, r *http.Request) bool {
 
 // Server 持有配置（线程安全 Manager）、审计日志、嵌入式静态资源、tail 会话池、下载任务池、SSH shell 会话池
 type Server struct {
-	cfg       *config.Manager
-	audit     *audit.Logger
-	webRoot   fs.FS
-	tails     *tailmgr.Manager
-	downloads *dlmanager.Manager
-	shells    *sshshell.Manager
+	cfg          *config.Manager
+	audit        *audit.Logger
+	webRoot      fs.FS
+	tails        *tailmgr.Manager
+	downloads    *dlmanager.Manager
+	shells       *sshshell.Manager
+	uploadStates *uploadStateMap // v1.1：SSH/SFTP 上传会话（独立于 downloads）
 
 	// v1.0 便笺提醒：可空（nil 时 /api/reminders 返回 503）。SetReminders 在 main.go 启动 reminder.Manager 后注入。
 	reminders *reminder.Manager
@@ -142,6 +148,7 @@ func New(cfg *config.Manager, a *audit.Logger, webRoot fs.FS, tails *tailmgr.Man
 		cfg: cfg, audit: a, webRoot: webRoot,
 		tails: tails, downloads: dlmanager.New(), shells: shells,
 		ws: wsStore, wsMocks: wsMocks,
+		uploadStates: newUploadStateMap(),
 	}
 }
 
@@ -307,6 +314,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleSshSftpDownload(w, r)
 	case path == "/api/ssh/sftp/edit":
 		s.handleSshSftpEdit(w, r)
+	case path == "/api/ssh/sftp/upload/init":
+		s.handleSshSftpUploadInit(w, r)
+	case path == "/api/ssh/sftp/upload/cancel":
+		s.handleSshSftpUploadCancel(w, r)
 	case path == "/api/logs/list":
 		s.handleLogsList(w, r)
 	case path == "/api/logs/list/targets":
@@ -405,6 +416,15 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.handleAdminOpeners(w, r)
+	case path == "/api/admin/openers/extract-icon":
+		// 预览 exe 图标，仅 admin 角色（防止任意路径探测）
+		if !requireAdmin(w, r) {
+			return
+		}
+		s.handleAdminOpenersExtractIcon(w, r)
+	case path == "/api/local/opener-icon":
+		// 读取已缓存的 opener 图标（GET，方便 <img src> 直接引用）
+		s.handleLocalOpenerIcon(w, r)
 	case path == "/api/admin/download-retention":
 		// BE-003：管理员接口，仅 admin 角色。
 		if !requireAdmin(w, r) {
@@ -421,6 +441,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleSshSftpDownloadEventsOrCancel(w, r)
 	case strings.HasPrefix(path, "/api/ssh/sftp/edit/"):
 		s.handleSshSftpEditEvents(w, r)
+	case strings.HasPrefix(path, "/api/ssh/sftp/upload/") && strings.HasSuffix(path, "/data"):
+		s.handleSshSftpUploadData(w, r)
 	// 注意：/api/logs/download-latest 必须在 /api/logs/download/ 之前匹配（精确匹配优先）
 	case strings.HasPrefix(path, "/api/logs/download/"):
 		s.handleLogsDownloadEventsOrCancel(w, r)

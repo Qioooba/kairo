@@ -22,10 +22,11 @@ import (
 )
 
 const (
-	editTempDir     = "edit-temp"
-	editMaxFileSize = 200 * 1024 * 1024
-	editWatcherWait = 500 * time.Millisecond
-	editMaxIdleTime = 24 * time.Hour
+	editTempDir            = "edit-temp"
+	editMaxFileSize        = 200 * 1024 * 1024
+	editWatcherWait        = 500 * time.Millisecond
+	editMaxIdleTime        = 24 * time.Hour
+	editWatcherIdleTimeout = 2 * time.Hour
 )
 
 type editTask struct {
@@ -38,8 +39,16 @@ type editTask struct {
 	localPath  string
 	opener     *config.ExternalOpener
 	done       chan struct{}
+	editorDone chan struct{}
+	events     chan editEvent
 	mu         sync.Mutex
 	closed     bool
+}
+
+type editEvent struct {
+	Kind    string `json:"kind"`
+	Message string `json:"message,omitempty"`
+	Bytes   int64  `json:"bytes,omitempty"`
 }
 
 var editTasks sync.Map
@@ -161,6 +170,31 @@ func (s *Server) handleSshSftpEdit(w http.ResponseWriter, r *http.Request) {
 
 	hash := sha256.Sum256([]byte(req.System + req.Server + req.Path))
 	taskID := fmt.Sprintf("%x", hash[:16])
+
+	// taskID 是 system+server+path 的确定性哈希。对同一文件再次点击 "编辑"
+	// 如果不显式清理旧 watcher，老 watcher 退出时 editTasks.Delete(task.id)
+	// 会误删掉新 task、导致 SSE 立刻 404、且老 watcher 与新 watcher 都会在
+	// mtime 变化时上传 → 重复上传 + 重复 SSH 拨号。这里主动关闭旧 task 等
+	// 它退出，再接管同一 taskID。
+	if existing, ok := editTasks.Load(taskID); ok {
+		if old, ok2 := existing.(*editTask); ok2 && old != nil {
+			old.mu.Lock()
+			if !old.closed {
+				old.closed = true
+				old.mu.Unlock()
+				close(old.done)
+			} else {
+				old.mu.Unlock()
+			}
+			// 等 watcher 退出，但带超时避免拖死调用方。
+			select {
+			case <-old.done:
+			case <-time.After(500 * time.Millisecond):
+			}
+			editTasks.Delete(taskID)
+		}
+	}
+
 	taskDir := filepath.Join(tempDir, taskID)
 	if err := os.MkdirAll(taskDir, 0o700); err != nil {
 		s.audit.Write("ssh.sftp.edit", "system", req.System, "server", req.Server,
@@ -169,11 +203,23 @@ func (s *Server) handleSshSftpEdit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	localPath := filepath.Join(taskDir, filepath.Base(req.Path))
+	// 拒绝 base 为 "." / ".." / 空：filepath.Base("/foo/..") 返回 ".."，会让
+	// localPath 变成 taskDir 本身而不是文件。
+	base := filepath.Base(req.Path)
+	if base == "" || base == "." || base == ".." {
+		s.audit.Write("ssh.sftp.edit", "system", req.System, "server", req.Server,
+			"path", req.Path, "result", "fail", "stage", "basename", "err", "invalid base")
+		os.RemoveAll(taskDir)
+		writeErr(w, 400, fmt.Errorf("无法编辑路径 %q（base 无效）", req.Path))
+		return
+	}
+	localPath := filepath.Join(taskDir, base)
 	if _, err := sftpCli.DownloadFile(req.Path, localPath); err != nil {
 		s.audit.Write("ssh.sftp.edit", "system", req.System, "server", req.Server,
 			"path", req.Path, "result", "fail", "stage", "download", "err", err.Error())
 		writeErrSanitized(w, 502, fmt.Errorf("下载文件失败: %w", err))
+		// 与 cmd.Start 失败路径保持一致：失败时清掉 taskDir，不留半截状态。
+		os.RemoveAll(taskDir)
 		return
 	}
 
@@ -187,20 +233,27 @@ func (s *Server) handleSshSftpEdit(w http.ResponseWriter, r *http.Request) {
 		localPath:  localPath,
 		opener:     op,
 		done:       make(chan struct{}),
+		editorDone: make(chan struct{}),
+		events:     make(chan editEvent, 16),
 	}
 	editTasks.Store(taskID, task)
-
-	go s.watchAndUploadEdit(task, srv)
 
 	cmd := exec.Command(op.Path, localPath)
 	sysutil.HideConsoleWindow(cmd)
 	if err := cmd.Start(); err != nil {
 		s.audit.Write("ssh.sftp.edit", "system", req.System, "server", req.Server,
 			"path", req.Path, "result", "fail", "stage", "open", "err", err.Error())
+		os.RemoveAll(taskDir)
+		editTasks.Delete(taskID)
 		writeErrSanitized(w, 500, fmt.Errorf("启动打开器 %q 失败: %w", op.Name, err))
 		return
 	}
-	go func() { _ = cmd.Wait() }()
+	go func() {
+		_ = cmd.Wait()
+		close(task.editorDone)
+	}()
+
+	go s.watchAndUploadEdit(task, srv)
 
 	s.audit.Write("ssh.sftp.edit", "system", req.System, "server", req.Server,
 		"path", req.Path, "result", "ok", "opener", op.Name)
@@ -212,17 +265,42 @@ func (s *Server) handleSshSftpEdit(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) watchAndUploadEdit(task *editTask, srv *config.ServerConfig) {
-	defer func() {
-		task.mu.Lock()
-		task.closed = true
-		task.mu.Unlock()
-		close(task.done)
-		editTasks.Delete(task.id)
-	}()
+	var closeOnce sync.Once
+	closeTask := func() {
+		closeOnce.Do(func() {
+			task.mu.Lock()
+			task.closed = true
+			task.mu.Unlock()
+			close(task.done)
+			editTasks.Delete(task.id)
+		})
+	}
+	defer closeTask()
 
-	var lastMod time.Time
+	// 初始化 lastMod 为文件当前 ModTime，避免首次轮询把"刚下载未修改"的文件上传回去
+	fi0, err := os.Stat(task.localPath)
+	if err != nil {
+		return
+	}
+	lastMod := fi0.ModTime()
+	lastActivity := time.Now()
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
+
+	// 编辑器进程退出只通知前端，不再结束任务。
+	// 原因：单实例编辑器（Notepad++ / VS Code / Sublime 等）的启动器进程会立刻退出，
+	// 但用户实际还在另一个常驻实例里编辑文件。若在此处 closeTask()，监控循环会在
+	// ~2s 内退出，用户后续保存永远检测不到。任务靠 editWatcherIdleTimeout 自然回收。
+	// 注意：cmd.Start() 失败时不会启动下面的 wait goroutine，editorDone 永远不关闭。
+	// 这里加 task.done 分支：task 被释放（taskID 冲突、idle 超时等）后直接退出，避免泄漏。
+	go func() {
+		select {
+		case <-task.editorDone:
+			time.Sleep(2 * time.Second)
+			sendEditEvent(task, editEvent{Kind: "editor_closed"})
+		case <-task.done:
+		}
+	}()
 
 	for {
 		select {
@@ -236,10 +314,20 @@ func (s *Server) watchAndUploadEdit(task *editTask, srv *config.ServerConfig) {
 			}
 			task.mu.Unlock()
 
+			// idle 超时：长时间没有任何文件改动，认为用户已停止编辑，回收任务。
+			if time.Since(lastActivity) > editWatcherIdleTimeout {
+				return
+			}
+
 			fi, err := os.Stat(task.localPath)
 			if err != nil {
 				if os.IsNotExist(err) {
-					return
+					// Notepad++ / VS Code 等编辑器的"安全保存"会先写临时文件 → 删除原文件 →
+					// 重命名临时文件为原文件名，期间 os.Stat 会短暂返回 IsNotExist。
+					// 旧实现这里直接 return 会让监控 goroutine 提前退出，后续真正保存永远检测不到。
+					// 改为 continue：文件重新出现后下一轮 ticker 自然会取到新 ModTime 并上传；
+					// 真正的文件删除由 editWatcherIdleTimeout（2 小时无活动）兜底回收任务。
+					continue
 				}
 				continue
 			}
@@ -260,17 +348,29 @@ func (s *Server) watchAndUploadEdit(task *editTask, srv *config.ServerConfig) {
 			}
 
 			lastMod = fi.ModTime()
+			lastActivity = time.Now()
+			sendEditEvent(task, editEvent{Kind: "upload_start"})
 
 			if err := s.uploadEditFile(task, srv); err != nil {
 				s.audit.Write("ssh.sftp.edit.upload", "system", task.system,
 					"server", task.server, "path", task.remotePath,
 					"result", "fail", "err", err.Error())
+				sendEditEvent(task, editEvent{Kind: "upload_fail", Message: err.Error()})
 			} else {
 				s.audit.Write("ssh.sftp.edit.upload", "system", task.system,
 					"server", task.server, "path", task.remotePath,
 					"result", "ok")
+				sendEditEvent(task, editEvent{Kind: "upload_ok", Bytes: fi2.Size()})
 			}
 		}
+	}
+}
+
+func sendEditEvent(task *editTask, ev editEvent) {
+	defer func() { _ = recover() }()
+	select {
+	case task.events <- ev:
+	default:
 	}
 }
 
@@ -297,7 +397,29 @@ func (s *Server) uploadEditFile(task *editTask, srv *config.ServerConfig) error 
 	}
 	defer sftpCli.Close()
 
-	return sftpCli.UploadFile(task.localPath, task.remotePath, 0)
+	// 上传前重新校验文件大小（用户可能在编辑器里粘贴大段内容）
+	fi, err := os.Stat(task.localPath)
+	if err != nil {
+		return fmt.Errorf("stat 本地文件失败: %w", err)
+	}
+	if fi.Size() > editMaxFileSize {
+		return fmt.Errorf("文件超过 %d MB 限制，已跳过上传", editMaxFileSize/1024/1024)
+	}
+
+	// 原子落盘：先写 .partial 再 Rename，避免网络中断导致远端文件半截损坏。
+	// partial 与目标在同一目录，保证同文件系统 Rename 是原子的。
+	partialPath := task.remotePath + ".kairo-edit.partial"
+	if err := sftpCli.UploadFile(task.localPath, partialPath, 0); err != nil {
+		// 清理残留的 partial（忽略清理失败）
+		_ = sftpCli.Remove(partialPath)
+		return fmt.Errorf("上传到临时文件失败: %w", err)
+	}
+	if err := sftpCli.Rename(partialPath, task.remotePath); err != nil {
+		// Rename 失败：远端 partial 残留，但原文件未被破坏
+		_ = sftpCli.Remove(partialPath)
+		return fmt.Errorf("原子重命名失败（原文件未受影响）: %w", err)
+	}
+	return nil
 }
 
 func (s *Server) handleSshSftpEditEvents(w http.ResponseWriter, r *http.Request) {
@@ -306,19 +428,40 @@ func (s *Server) handleSshSftpEditEvents(w http.ResponseWriter, r *http.Request)
 		http.NotFound(w, r)
 		return
 	}
+	taskID := parts[0]
+	taskAny, ok := editTasks.Load(taskID)
+	if !ok {
+		writeErr(w, 404, errors.New("编辑任务不存在或已结束"))
+		return
+	}
+	task := taskAny.(*editTask)
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeErr(w, 500, errors.New("SSE 不支持"))
+		return
+	}
+
+	pingTicker := time.NewTicker(30 * time.Second)
+	defer pingTicker.Stop()
 
 	for {
 		select {
-		case <-ticker.C:
+		case ev := <-task.events:
+			data, _ := json.Marshal(ev)
+			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", ev.Kind, string(data))
+			flusher.Flush()
+		case <-pingTicker.C:
 			fmt.Fprintf(w, "event: ping\ndata: {}\n\n")
-			w.(http.Flusher).Flush()
+			flusher.Flush()
+		case <-task.done:
+			fmt.Fprintf(w, "event: done\ndata: {}\n\n")
+			flusher.Flush()
+			return
 		case <-r.Context().Done():
 			return
 		}

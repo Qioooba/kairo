@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"sort"
 	"sync"
@@ -14,6 +15,11 @@ import (
 // OnFireFunc 触发回调。参数是 reminder 的快照 + 触发的"理想时间"。
 // 回调里不要做长阻塞操作（建议扔到 goroutine），避免阻塞调度器主循环。
 type OnFireFunc func(r Reminder, at time.Time)
+
+// fireCatchUpWindow timer 到点后允许的最大迟到时间。
+// timer 正常抖动在秒级；超过该窗口（如电脑长时间休眠刚醒）则不补触发，
+// 避免开机被一堆积压提醒轰炸。
+const fireCatchUpWindow = 2 * time.Minute
 
 // Manager 提醒的总线：内存状态 + 调度器 + 触发回调。
 //
@@ -32,6 +38,8 @@ type Manager struct {
 	// pauseUntil：触发器在该时刻之前整体静默（不弹窗）。用于"暂停今日"场景。
 	// 设为 time.Time{}（零值）表示无暂停。每次 fire 之前检查，PauseUntil(time.Time{}) 解除暂停。
 	pauseUntil time.Time
+
+	persistMu sync.Mutex // 序列化 persist 调用，避免并发快照互相覆盖
 }
 
 // NewManager 构造 Manager。Load 现存提醒 + Rebuild 调度。
@@ -158,7 +166,7 @@ func (m *Manager) Add(in Reminder) (Reminder, error) {
 	return in, nil
 }
 
-// Update 全量替换。ID / CreatedAt 不变；UpdatedAt 自动更新。
+// Update 全量替换。ID / CreatedAt 不变；UpdatedAt 自动更新；Enabled 保留原值。
 func (m *Manager) Update(id string, in Reminder) (Reminder, error) {
 	if err := in.Validate(); err != nil {
 		return Reminder{}, err
@@ -167,13 +175,14 @@ func (m *Manager) Update(id string, in Reminder) (Reminder, error) {
 	old, ok := m.items[id]
 	if !ok {
 		m.mu.Unlock()
-		return Reminder{}, fmt.Errorf("提醒不存在：%s", id)
+		return Reminder{}, fmt.Errorf("%w: %s", ErrNotFound, id)
 	}
 	in.ID = id
 	in.CreatedAt = old.CreatedAt
 	in.UpdatedAt = m.now().Format(time.RFC3339)
 	in.LastFiredAt = old.LastFiredAt
 	in.FiredCount = old.FiredCount
+	in.Enabled = old.Enabled
 	m.items[id] = &in
 	m.mu.Unlock()
 
@@ -194,7 +203,7 @@ func (m *Manager) Delete(id string) error {
 	old, ok := m.items[id]
 	if !ok {
 		m.mu.Unlock()
-		return fmt.Errorf("提醒不存在：%s", id)
+		return fmt.Errorf("%w: %s", ErrNotFound, id)
 	}
 	delete(m.items, id)
 	m.mu.Unlock()
@@ -216,7 +225,7 @@ func (m *Manager) Toggle(id string) (Reminder, error) {
 	r, ok := m.items[id]
 	if !ok {
 		m.mu.Unlock()
-		return Reminder{}, fmt.Errorf("提醒不存在：%s", id)
+		return Reminder{}, fmt.Errorf("%w: %s", ErrNotFound, id)
 	}
 	r.Enabled = !r.Enabled
 	r.UpdatedAt = m.now().Format(time.RFC3339)
@@ -240,12 +249,19 @@ func (m *Manager) FireNow(id string) error {
 	r, ok := m.items[id]
 	if !ok {
 		m.mu.Unlock()
-		return fmt.Errorf("提醒不存在：%s", id)
+		return fmt.Errorf("%w: %s", ErrNotFound, id)
 	}
 	snap := *r
 	m.mu.Unlock()
 	if m.onFire != nil {
-		go m.onFire(snap, m.now())
+		go func() {
+			defer func() {
+				if rv := recover(); rv != nil {
+					log.Printf("reminder: onFire panic: %v", rv)
+				}
+			}()
+			m.onFire(snap, m.now())
+		}()
 	}
 	return nil
 }
@@ -262,6 +278,8 @@ func (m *Manager) Rebuild() {
 	}
 	now := m.now()
 	var nextAt time.Time
+	var nextID string
+	var nextType Type
 	for _, r := range m.items {
 		if !r.Enabled {
 			continue
@@ -272,14 +290,19 @@ func (m *Manager) Rebuild() {
 		}
 		if nextAt.IsZero() || t.Before(nextAt) {
 			nextAt = t
+			nextID = r.ID
+			nextType = r.Type
 		}
 	}
 	if nextAt.IsZero() {
+		log.Printf("reminder.Rebuild: 无待触发提醒（now=%s）", now.Format("2006-01-02 15:04:05"))
 		m.mu.Unlock()
 		return
 	}
 	d := nextAt.Sub(now)
 	m.timer = time.AfterFunc(d, m.fire)
+	log.Printf("reminder.Rebuild: 挂上 timer id=%s type=%s 下次触发=%s 距今=%s",
+		nextID, nextType, nextAt.Format("2006-01-02 15:04:05"), d.Truncate(time.Second))
 	m.mu.Unlock()
 }
 
@@ -288,9 +311,11 @@ func (m *Manager) Rebuild() {
 func (m *Manager) fire() {
 	m.mu.Lock()
 	now := m.now()
+	log.Printf("reminder.fire: timer 到点 now=%s items=%d", now.Format("2006-01-02 15:04:05.000"), len(m.items))
 
 	// 全局暂停检查：到点但 pauseUntil 还在生效（> now），跳过本次触发。
 	if !m.pauseUntil.IsZero() && m.pauseUntil.After(now) {
+		log.Printf("reminder.fire: 全局暂停中 pauseUntil=%s，跳过并重排", m.pauseUntil.Format("2006-01-02 15:04:05"))
 		m.mu.Unlock()
 		m.Rebuild()
 		return
@@ -301,15 +326,32 @@ func (m *Manager) fire() {
 		if !r.Enabled {
 			continue
 		}
-		t := r.NextFire(now)
+		// 用 DueAt(now) 拿"刚刚到达"的槽（<= now 的最近一次）。
+		// 注意：不能用 NextFire(now)——它只返回严格未来时间，timer 到点时
+		// NextFire 会返回下一个周期，导致所有提醒都被判"未到点"而永远不触发。
+		t := r.DueAt(now)
 		if t.IsZero() {
+			log.Printf("reminder.fire: 跳过 id=%s type=%s DueAt=零值（未到点或无效）", r.ID, r.Type)
 			continue
 		}
-		// 容忍 ±30s 漂移（电脑唤醒、调度延迟等）
+		// 容差窗口：timer 正常抖动几秒；超过窗口（如电脑休眠很久刚醒）不补触发，
+		// 避免开机被一堆积压提醒轰炸。
 		diff := now.Sub(t)
-		if diff < -30*time.Second || diff > 30*time.Second {
+		if diff < 0 || diff > fireCatchUpWindow {
+			log.Printf("reminder.fire: 跳过 id=%s type=%s due=%s diff=%s 超出容差窗口(%s)",
+				r.ID, r.Type, t.Format("2006-01-02 15:04:05"), diff.Truncate(time.Second), fireCatchUpWindow)
 			continue
 		}
+		// 防重复触发：该槽已触发过（LastFiredAt >= 槽时间）则跳过。
+		// 典型场景：同一天 fire() 因别的提醒被再次调用，本周期的槽不应重复弹窗。
+		if r.LastFiredAt != "" {
+			if last, err := time.ParseInLocation(time.RFC3339, r.LastFiredAt, time.Local); err == nil && !last.Before(t) {
+				log.Printf("reminder.fire: 跳过 id=%s type=%s 已触发过 last=%s >= due=%s",
+					r.ID, r.Type, last.Format("2006-01-02 15:04:05"), t.Format("2006-01-02 15:04:05"))
+				continue
+			}
+		}
+		log.Printf("reminder.fire: 命中 id=%s type=%s due=%s 准备弹窗", r.ID, r.Type, t.Format("2006-01-02 15:04:05"))
 		r.LastFiredAt = now.Format(time.RFC3339)
 		r.FiredCount++
 		if r.Type == TypeOnce {
@@ -320,11 +362,20 @@ func (m *Manager) fire() {
 	m.mu.Unlock()
 
 	if len(due) > 0 {
-		_ = m.persist()
+		if err := m.persist(); err != nil {
+			log.Printf("reminder: persist 失败: %v", err)
+		}
 		// 触发回调（异步，不阻塞）
 		if m.onFire != nil {
 			for _, r := range due {
-				go m.onFire(r, now)
+				go func(r Reminder) {
+					defer func() {
+						if rv := recover(); rv != nil {
+							log.Printf("reminder: onFire panic: %v", rv)
+						}
+					}()
+					m.onFire(r, now)
+				}(r)
 			}
 		}
 	}
@@ -333,6 +384,9 @@ func (m *Manager) fire() {
 
 // persist 写盘（持锁的内部方法）。
 func (m *Manager) persist() error {
+	m.persistMu.Lock()
+	defer m.persistMu.Unlock()
+
 	snap := make([]Reminder, 0, len(m.items))
 	m.mu.Lock()
 	for _, r := range m.items {

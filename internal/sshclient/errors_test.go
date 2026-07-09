@@ -129,6 +129,8 @@ func TestCategorize_KbdInt(t *testing.T) {
 	cases := []string{
 		"keyboard-interactive failed",
 		"no keyboard-interactive methods",
+		// 服务器仅支持 keyboard-interactive（不含 password），认证被拒
+		"ssh: handshake failed: ssh: unable to authenticate, attempted methods [none keyboard-interactive], no supported methods remain",
 	}
 	for _, s := range cases {
 		if got := Categorize(errors.New(s)); got != CatKbdInt {

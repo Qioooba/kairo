@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -56,12 +57,21 @@ type SftpFile interface {
 //   - truncated: true 表示远端实际条目数 > max，前端可以提示"目录过大，仅展示前 N 条"。
 //
 // v0.12 起加 WriteFile：支持文件上传（用于远程编辑场景）。
+// v1.1 起加 UploadStream / Rename / Remove：支持流式大文件上传 + partial+rename 原子落盘。
 type RemoteFS interface {
 	Open(path string) (SftpFile, error)
 	ReadDir(path string) ([]os.FileInfo, error)
 	ListLimited(path string, max int) ([]os.FileInfo, bool, error)
 	Stat(path string) (os.FileInfo, error)
 	WriteFile(path string, data []byte, perm os.FileMode) error
+	// UploadStream 流式把 reader 数据写到 remotePath，不读进内存。
+	// progress 回调每写入 progressInterval 字节触发一次，可为 nil。
+	// remotePath 会被 truncate（Create 语义），调用方应写到 .partial 再 Rename。
+	UploadStream(ctx context.Context, reader io.Reader, remotePath string, perm os.FileMode, progress func(written, total int64)) error
+	// Rename 原子重命名（SFTP 协议层保证原子性）。
+	Rename(oldPath, newPath string) error
+	// Remove 删除远端文件（不递归）。
+	Remove(path string) error
 	Close() error
 }
 
@@ -73,12 +83,16 @@ type RemoteFS interface {
 //
 // v1.0 起加 ListLimited：见 RemoteFS 接口注释。
 // v0.12 起加 WriteFile：支持文件上传。
+// v1.1 起加 UploadStream / Rename / Remove：流式上传 + 原子 rename。
 type sftpBackend interface {
 	Open(path string) (SftpFile, error)
 	ReadDir(path string) ([]os.FileInfo, error)
 	ListLimited(path string, max int) ([]os.FileInfo, bool, error)
 	Stat(path string) (os.FileInfo, error)
 	WriteFile(path string, data []byte, perm os.FileMode) error
+	UploadStream(ctx context.Context, reader io.Reader, remotePath string, perm os.FileMode, progress func(written, total int64)) error
+	Rename(oldPath, newPath string) error
+	Remove(path string) error
 	Close() error
 }
 
@@ -184,8 +198,107 @@ func (r *realSftpBackend) WriteFile(path string, data []byte, perm os.FileMode) 
 	}
 	if perm != 0 {
 		if err := r.c.Chmod(path, perm); err != nil {
-			return fmt.Errorf("修改权限失败: %w", err)
+			// chmod 失败不致命：文件已写入成功。仅记录日志，不返回 error。
+			log.Printf("[sftpclient] WARN chmod %o 失败（文件已写入 %s）: %v", perm, path, err)
 		}
+	}
+	return nil
+}
+
+// UploadStream 流式把 reader 数据写到 remotePath，不读进内存。
+//
+// 实现：sftp.Create(path) → progressWriter → io.CopyBuffer(32KB buffer) → Close。
+// Create 是 truncate 语义：目标已存在会被覆盖，所以调用方应写到 .partial 再 Rename。
+//
+// ctx 取消时通过 Close 文件句柄让 io.Copy 立即退出（io.Copy 阻塞在 sftp.File.Write，
+// Write 内部会因 channel close 返回 ctx.Err）。
+//
+// 注意：sftp.File 本身不支持 ctx 取消传递，所以这里通过 closeWatch 主动关文件。
+func (r *realSftpBackend) UploadStream(ctx context.Context, reader io.Reader, remotePath string, perm os.FileMode, progress func(written, total int64)) error {
+	f, err := r.c.Create(remotePath)
+	if err != nil {
+		return fmt.Errorf("创建远程文件失败: %w", err)
+	}
+
+	// ctx 取消时主动 Close 文件，让正在进行的 Write 返回错误。
+	// 不能关 r.c（整个 backend 共用），只能关 f。
+	// 用 mutex 保护 safeClose，避免 goroutine 和主流程并发调用 f.Close() 导致 panic
+	// （底层 pkg/sftp 的 File.Close 不是并发安全的，Win7 等环境易出现闪退）。
+	var closeMu sync.Mutex
+	var fileClosed bool
+	safeClose := func() error {
+		closeMu.Lock()
+		defer closeMu.Unlock()
+		if fileClosed {
+			return nil
+		}
+		fileClosed = true
+		return f.Close()
+	}
+
+	cancelDone := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = safeClose()
+		case <-cancelDone:
+		}
+	}()
+	defer close(cancelDone)
+
+	// progressWriter 已存在（下载路径用），可直接复用。
+	// total 传 -1：上传侧进度由调用方通过 progress 回调得到，不需要 total（UploadStream 不强制传 size）。
+	// 但 progressWriter 内部用 total 做进度计算时，-1 会让前端按 indeterminate 处理；
+	// 上传场景我们用 written 直接作为进度，所以 total=-1 也 OK。
+	pw := &progressWriter{w: f, total: -1, progress: progress}
+	buf := make([]byte, 32*1024)
+	if _, err := io.CopyBuffer(pw, reader, buf); err != nil {
+		_ = safeClose()
+		// 区分 ctx 取消与普通错误，便于上层报"已取消"而不是"写入失败"
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return fmt.Errorf("上传被取消: %w", ctxErr)
+		}
+		return fmt.Errorf("写入远程文件失败: %w", err)
+	}
+	if err := safeClose(); err != nil {
+		// sftp.File.Close 会 flush 缓冲区，可能因 ctx 已取消报错
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return fmt.Errorf("上传被取消: %w", ctxErr)
+		}
+		return fmt.Errorf("关闭远程文件失败: %w", err)
+	}
+	if perm != 0 {
+		if err := r.c.Chmod(remotePath, perm); err != nil {
+			// chmod 失败不致命：文件已上传成功，权限不对不影响数据完整性。
+			// 不返回 error，避免 handler 层把"上传成功"误判为"上传失败"
+			// 导致用户重试覆盖刚上传的文件。仅记录日志供排查。
+			log.Printf("[sftpclient] WARN chmod %o 失败（文件已上传到 %s）: %v", perm, remotePath, err)
+		}
+	}
+	// 收尾回调：保证最终状态（100% 或实际字节数）推给前端
+	if progress != nil {
+		progress(pw.written, pw.written)
+	}
+	return nil
+}
+
+// Rename 原子重命名。SFTP 协议层保证原子性，但跨文件系统可能失败。
+func (r *realSftpBackend) Rename(oldPath, newPath string) error {
+	// 优先 PosixRename（RFC 非标准但 OpenSSH 等 server 支持，能覆盖已存在目标）
+	// 失败回退到普通 Rename（标准要求目标不存在）
+	if err := r.c.PosixRename(oldPath, newPath); err == nil {
+		return nil
+	}
+	if err := r.c.Rename(oldPath, newPath); err != nil {
+		return fmt.Errorf("重命名失败: %w", err)
+	}
+	return nil
+}
+
+// Remove 删除远端文件（不递归，删除目录用 RemoveDirectory）。
+func (r *realSftpBackend) Remove(path string) error {
+	if err := r.c.Remove(path); err != nil {
+		return fmt.Errorf("删除失败: %w", err)
 	}
 	return nil
 }
@@ -399,6 +512,54 @@ func (c *Client) UploadFile(localPath, remotePath string, perm os.FileMode) erro
 	return nil
 }
 
+// UploadStream 流式上传 reader 到远端 remotePath。
+//
+// 与 UploadFile 的差别：
+//   - UploadFile 先把整个文件 ReadFile 进内存（适合小文件 edit 场景，200MB 上限）
+//   - UploadStream 边读边写，内存占用恒定（适合大文件上传，2GB+ 也不 OOM）
+//
+// progress 回调每写入 progressInterval 字节触发一次，可为 nil。
+// ctx 取消时通过 Close sftp 文件让 io.Copy 退出。
+//
+// remotePath 会被 truncate（Create 语义），调用方应写到 .partial 再 Rename 实现原子落盘。
+func (c *Client) UploadStream(ctx context.Context, reader io.Reader, remotePath string, perm os.FileMode, progress func(written, total int64)) error {
+	if c == nil || c.b == nil {
+		return fmt.Errorf("sftp 客户端未连接")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if perm == 0 {
+		perm = 0o644
+	}
+	if err := c.b.UploadStream(ctx, reader, remotePath, perm, progress); err != nil {
+		return fmt.Errorf("上传文件失败: %w", err)
+	}
+	return nil
+}
+
+// Rename 远端原子重命名。优先 PosixRename（可覆盖已存在目标），失败回退到标准 Rename。
+func (c *Client) Rename(oldPath, newPath string) error {
+	if c == nil || c.b == nil {
+		return fmt.Errorf("sftp 客户端未连接")
+	}
+	if err := c.b.Rename(oldPath, newPath); err != nil {
+		return fmt.Errorf("重命名失败: %w", err)
+	}
+	return nil
+}
+
+// Remove 删除远端文件（不递归）。
+func (c *Client) Remove(path string) error {
+	if c == nil || c.b == nil {
+		return fmt.Errorf("sftp 客户端未连接")
+	}
+	if err := c.b.Remove(path); err != nil {
+		return fmt.Errorf("删除失败: %w", err)
+	}
+	return nil
+}
+
 // progressInterval 进度回调最小间隔（字节）。64KB 对内网 SFTP
 // 来说粒度足够细，1GB 文件约 16384 次回调。配合下面的
 // progressMinInterval 时间节流，最终频率 ≈ 10 Hz，避免刷爆前端。
@@ -517,10 +678,144 @@ func (s *shellBackend) WriteFile(path string, data []byte, perm os.FileMode) err
 		chmodCmd := fmt.Sprintf("chmod %o %s", perm, shellQuoteArg(path))
 		_, _, _, err = s.run(context.Background(), chmodCmd, 10*time.Second, "utf-8")
 		if err != nil {
-			return fmt.Errorf("chmod 失败: %w", err)
+			// chmod 失败不致命：文件已写入成功。仅记录日志，不返回 error。
+			log.Printf("[sftpclient] WARN shell chmod %o 失败（文件已写入 %s）: %v", perm, path, err)
 		}
 	}
 
+	return nil
+}
+
+// UploadStream 通过 shell 命令流式上传：cat > path，stdin 流式写入。
+//
+// 与 WriteFile 的差别：WriteFile 接受 []byte（整文件在内存），UploadStream 接受 io.Reader（边读边写）。
+// 大文件应该走 UploadStream 避免 OOM。
+//
+// 实现：
+//   - 创建 SSH session，Start("cat > '<path>'")
+//   - 拿 stdin pipe，goroutine 把 reader 数据流式 copy 到 stdin
+//   - 主流程 Wait 等 cat 结束
+//   - ctx 取消时 Close session 强杀 cat
+//
+// 注意：shell 方式受 SSH channel buffer 限制，速度比 SFTP 慢；老 AIX / 精简镜像兜底用。
+func (s *shellBackend) UploadStream(ctx context.Context, reader io.Reader, remotePath string, perm os.FileMode, progress func(written, total int64)) error {
+	cmd := "cat > " + shellQuoteArg(remotePath)
+	sess, err := s.conn.NewSession()
+	if err != nil {
+		return fmt.Errorf("创建 SSH session 失败: %w", err)
+	}
+	// 用 mutex 保护 safeClose，避免 goroutine 和 defer 并发调用 sess.Close()
+	// 导致底层 ssh channel 竞态 panic（Win7 等环境尤为明显）。
+	var closeMu sync.Mutex
+	var sessClosed bool
+	safeSessClose := func() error {
+		closeMu.Lock()
+		defer closeMu.Unlock()
+		if sessClosed {
+			return nil
+		}
+		sessClosed = true
+		return sess.Close()
+	}
+	defer safeSessClose()
+
+	stdin, err := sess.StdinPipe()
+	if err != nil {
+		return fmt.Errorf("拿 stdin pipe 失败: %w", err)
+	}
+
+	if err := sess.Start(cmd); err != nil {
+		return fmt.Errorf("启动 cat 失败: %w", err)
+	}
+
+	// ctx 取消时主动 Close session，让 stdin.Write / sess.Wait 立即返回错误。
+	cancelDone := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = safeSessClose()
+		case <-cancelDone:
+		}
+	}()
+	defer close(cancelDone)
+
+	// goroutine 把 reader 流式 copy 到 stdin，同时按 progressInterval 节流回调 progress。
+	// io.CopyBuffer 签名：CopyBuffer(dst io.Writer, src io.Reader, buf []byte)
+	pw := &progressWriter{w: stdin, total: -1, progress: progress}
+	buf := make([]byte, 32*1024)
+	copyDone := make(chan struct {
+		n   int64
+		err error
+	}, 1)
+	go func() {
+		n, err := io.CopyBuffer(pw, reader, buf) // dst=pw(stdin writer), src=reader
+		copyDone <- struct {
+			n   int64
+			err error
+		}{n, err}
+	}()
+
+	copyResult := <-copyDone
+	// 无论成功失败都要 close stdin，让 cat 进程收到 EOF / SIGPIPE
+	_ = stdin.Close()
+
+	if copyResult.err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return fmt.Errorf("上传被取消: %w", ctxErr)
+		}
+		return fmt.Errorf("写入数据失败: %w", copyResult.err)
+	}
+
+	if err := sess.Wait(); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return fmt.Errorf("上传被取消: %w", ctxErr)
+		}
+		return fmt.Errorf("cat 命令执行失败: %w", err)
+	}
+
+	if perm != 0 {
+		chmodCtx, chmodCancel := context.WithTimeout(ctx, 10*time.Second)
+		chmodCmd := fmt.Sprintf("chmod %o %s", perm, shellQuoteArg(remotePath))
+		_, _, _, err = s.run(chmodCtx, chmodCmd, 10*time.Second, "utf-8")
+		chmodCancel()
+		if err != nil {
+			// chmod 失败不致命：文件已上传成功。仅记录日志，不返回 error。
+			log.Printf("[sftpclient] WARN shell chmod %o 失败（文件已上传到 %s）: %v", perm, remotePath, err)
+		}
+	}
+
+	// 收尾回调
+	if progress != nil {
+		progress(pw.written, pw.written)
+	}
+	return nil
+}
+
+// Rename 通过 shell mv 命令实现重命名。
+//
+// mv 在 POSIX 系统是原子操作（同文件系统内）；跨文件系统会 fallback 到 copy+unlink。
+func (s *shellBackend) Rename(oldPath, newPath string) error {
+	cmd := "mv " + shellQuoteArg(oldPath) + " " + shellQuoteArg(newPath)
+	_, _, code, err := s.run(context.Background(), cmd, 30*time.Second, "utf-8")
+	if err != nil {
+		return fmt.Errorf("重命名失败: %w", err)
+	}
+	if code != 0 {
+		return fmt.Errorf("重命名失败: mv 退出码 %d", code)
+	}
+	return nil
+}
+
+// Remove 通过 shell rm -f 命令删除文件（-f 不存在不报错，简化错误处理）。
+func (s *shellBackend) Remove(path string) error {
+	cmd := "rm -f " + shellQuoteArg(path)
+	_, _, code, err := s.run(context.Background(), cmd, 10*time.Second, "utf-8")
+	if err != nil {
+		return fmt.Errorf("删除失败: %w", err)
+	}
+	if code != 0 {
+		return fmt.Errorf("删除失败: rm 退出码 %d", code)
+	}
 	return nil
 }
 

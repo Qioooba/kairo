@@ -13,7 +13,7 @@
   'use strict';
   const Kairo = window.Kairo = window.Kairo || {};
   Kairo.pages = Kairo.pages || {};
-  const { el, $, toast, setStatus, cssEscape, pctText, formatBytes, formatTime, basenameOf } = Kairo.core;
+  const { el, $, toast, setStatus, cssEscape, pctText, formatBytes, formatTime, basenameOf, escapeHtml } = Kairo.core;
   const { api } = Kairo.api;
 
   const ICONS = {
@@ -61,6 +61,12 @@
       ctxTarget: null,
       // 已下载文件的本地路径映射：remotePath -> localName
       downloadedFiles: {},
+      // v1.1：上传任务列表（按 basename 索引）
+      //   每项：{ name, size, status: 'pending'|'uploading'|'done'|'fail'|'cancel',
+      //           progress: 0-100, bytes: 已上传字节, error: 错误信息, uploadId: 后端 id,
+      //           finalName: 最终落盘名（rename 策略可能改）, xhr: XMLHttpRequest 引用 }
+      uploadQueue: [],
+      uploadInflight: false, // 是否正在传一个文件（串行队列控制）
     };
 
     // ---- 连接区 ----
@@ -134,14 +140,32 @@
     const dlZipLabel = el('label', { class: 'inline' }, [dlZipChk, document.createTextNode('多文件打包 zip')]);
     // v0.5 #18：可选的本地下载目录。留空走默认 download_dir。
     // 写绝对路径（如 D:\ops-downloads）落到指定位置；写相对路径（如 backups）落到默认 download_dir 同级。
-    const dlTargetDirInp = el('input', { type: 'text', id: 'files-target-dir', placeholder: '本地下载目录（留空走默认）', style: 'min-width: 240px;', title: '留空 → 走 cfg.download_dir。\n写绝对路径 → 落到指定目录（受 app.allowed_download_roots 白名单约束）。' });
+    const dlTargetDirInp = el('input', { type: 'text', id: 'files-target-dir', placeholder: '留空走默认', style: 'min-width: 180px; max-width: 320px; flex: 1 1 180px;', title: '留空 → 走 cfg.download_dir。\n写绝对路径 → 落到指定目录（受 app.allowed_download_roots 白名单约束）。' });
     const btnDownload = el('button', { class: 'btn btn-primary', text: '下载选中', onclick: doDownload });
     const btnCancel = el('button', { class: 'btn btn-danger', text: '取消下载', onclick: doCancelDownload });
     btnDownload.disabled = true;
     btnCancel.disabled = true;
 
+    // ---- 上传控件（v1.3 还原）----
+    // v1.2 曾把上传拆成独立第 4 张卡片，用户不要，回到 v1.1 状态：
+    //   - 上传按钮（btnUploadPick）放在下载 toolbar 末尾，跟"下载"同 row 紧邻
+    //   - 覆盖策略 / 刷新勾选 / 队列 在 fileCard 内部、table 之后（用分隔线划开，不挤）
+    //   - 上传按钮挪回下载按钮右侧 —— 不再独立卡片、不再放到页面最下面
+    const uploadFileInp = el('input', { type: 'file', multiple: 'multiple', style: 'display:none;' });
+    const uploadOverwriteSel = el('select', { id: 'upload-overwrite', title: '同名文件已存在时的处理策略' });
+    uploadOverwriteSel.appendChild(el('option', { value: 'reject', text: '拒绝覆盖（默认）' }));
+    uploadOverwriteSel.appendChild(el('option', { value: 'replace', text: '直接替换' }));
+    uploadOverwriteSel.appendChild(el('option', { value: 'rename', text: '自动重命名（追加 _1/_2）' }));
+    const uploadRefreshChk = el('input', { type: 'checkbox', id: 'upload-refresh' });
+    const btnUploadPick = el('button', { class: 'btn btn-primary', text: '📤 上传文件', onclick: () => uploadFileInp.click(), title: '上传文件到当前目录' });
+    const btnUploadCancelAll = el('button', { class: 'btn btn-danger btn-sm', text: '全取消', onclick: cancelAllUploads, disabled: true });
+    const btnUploadClear = el('button', { class: 'btn btn-sm', text: '清空已完成', onclick: clearFinishedUploads });
+
     const fileCard = el('div', { class: 'card' });
-    fileCard.appendChild(el('h3', { text: '3. 选择并下载' }));
+    fileCard.appendChild(el('h3', { text: '3. 文件传输（上传 / 下载）' }));
+    fileCard.appendChild(el('div', { class: 'card-desc' }, [
+      document.createTextNode('勾选文件后点击"下载选中"保存到本地；点击"上传文件"把本地文件传到当前目录。支持拖拽文件到列表区域上传。')
+    ]));
     // v0.5 #17：文件名模糊过滤（前端实时；支持子串 / *.log / log?）
     // 修：项 1 — input 事件**只更新数据 + markDirty**，不重建 DOM。
     // 重建只在 debounce 后（200ms）触发一次；防 layout 抖动 + input 失焦。
@@ -172,23 +196,113 @@
     const filterCountEl = el('span', { id: 'files-filter-count', class: 'text-dim' });
     // 项 1 修复：filter 容器让 .lbl 用 inline-block（不撑成 block），避免 flex 里
     // 出现"过滤"两个字被竖排 / 换行的视觉错乱。
+    // 第一行：过滤 + 本地下载目录（输入框）
     const filterLabel = el('label', { class: 'inline', style: 'display:inline-flex; align-items:center; gap:6px;' }, [document.createTextNode('过滤：'), filterInp]);
     fileCard.appendChild(el('div', { class: 'mt-2', style: 'display:flex; gap:8px; align-items:center; flex-wrap:wrap;' }, [
-      filterLabel, filterClearBtn, filterCountEl
+      filterLabel, filterClearBtn, filterCountEl,
+      el('span', { style: 'flex:1 1 auto;' }),
+      el('label', { class: 'inline', style: 'display:inline-flex; align-items:center; gap:6px; white-space:nowrap;' }, [
+        document.createTextNode('本地下载目录：'), dlTargetDirInp
+      ])
     ]));
+    // 第二行：选择操作 + 主按钮（下载/上传并排，按钮组不换行）
+    const actionGroup = el('div', { style: 'display:flex; gap:8px; align-items:center; flex:0 0 auto; flex-wrap:nowrap;' }, [
+      btnDownload, btnUploadPick, btnCancel
+    ]);
     fileCard.appendChild(el('div', { class: 'file-toolbar', style: 'display:flex; gap:8px; align-items:center; flex-wrap:wrap; padding:8px 0; border-bottom:1px dashed var(--line);' }, [
       btnSelAll, btnSelNone, selCount,
       el('span', { style: 'flex:0 0 auto;', text: ' | ' }),
       dlZipLabel,
       el('span', { style: 'flex:1 1 auto;' }),
-      el('label', { class: 'inline', style: 'display:inline-flex; align-items:center; gap:6px; white-space:nowrap;' }, [
-        document.createTextNode('本地目录：'), dlTargetDirInp
-      ]),
-      btnDownload, btnCancel
+      actionGroup
     ]));
     fileCard.appendChild(tableWrap);
 
-    // 修复：warnBox 必须挂到 DOM，否则 renderFileBrowserWarning 里
+    // 上传区域（表格下方）：默认隐藏，有上传任务时显示
+    // 顶部是上传选项栏：覆盖策略 / 完成后刷新 / 清空 / 全取消
+    const uploadSection = el('div', { id: 'upload-section', style: 'display:none; margin-top:12px; padding-top:10px; border-top:1px dashed var(--line);' });
+    const uploadOptsRow = el('div', {
+      class: 'upload-opts-row',
+      style: 'display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-bottom:8px;'
+    }, [
+      el('span', { class: 'text-dim', style: 'font-weight:600;', text: '📤 上传队列' }),
+      el('span', { style: 'flex:1 1 auto;' }),
+      el('label', { class: 'inline', style: 'display:inline-flex; align-items:center; gap:4px; white-space:nowrap;' }, [
+        el('span', { class: 'lbl', text: '同名文件：' }), uploadOverwriteSel
+      ]),
+      el('label', { class: 'inline', style: 'display:inline-flex; align-items:center; gap:4px; white-space:nowrap; cursor:pointer;' }, [
+        uploadRefreshChk, document.createTextNode('完成后刷新')
+      ]),
+      btnUploadClear,
+      btnUploadCancelAll
+    ]);
+    uploadSection.appendChild(uploadOptsRow);
+
+    // 上传队列 + 汇总（行为函数 renderUploadList 等依赖 uploadListWrap / uploadSummary 变量名）
+    const uploadListWrap = el('div', { class: 'upload-list-wrap', style: 'max-height: 260px; overflow-y: auto;' });
+    const uploadSummary = el('div', { class: 'upload-summary text-dim', style: 'margin-top: 6px; font-size: 12px;' });
+    uploadSection.appendChild(uploadListWrap);
+    uploadSection.appendChild(uploadSummary);
+    fileCard.appendChild(uploadSection);
+
+    // 隐藏的 file input 挂到 fileCard 内（跟着 fileCard 一起渲染/卸载）
+    fileCard.appendChild(uploadFileInp);
+
+    // 拖拽上传：fileCard / tableWrap 接受 drop，显示上传区域
+    const showUploadSection = () => { uploadSection.style.display = ''; };
+    fileCard.addEventListener('dragover', (e) => {
+      if (e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files')) {
+        e.preventDefault();
+        e.stopPropagation();
+        fileCard.classList.add('dragover');
+        showUploadSection();
+      }
+    });
+    fileCard.addEventListener('dragleave', (e) => {
+      if (e.target === fileCard) fileCard.classList.remove('dragover');
+    });
+    fileCard.addEventListener('drop', (e) => {
+      if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) {
+        e.preventDefault();
+        e.stopPropagation();
+        fileCard.classList.remove('dragover');
+        showUploadSection();
+        addUploadFiles(e.dataTransfer.files);
+      }
+    });
+
+    // 拖拽上传支持：文件列表区域接受 drop（保持兼容 — 用户拖到列表区也能上传）
+    tableWrap.addEventListener('dragover', (e) => {
+      if (e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files')) {
+        e.preventDefault();
+        e.stopPropagation();
+        tableWrap.classList.add('dragover');
+        showUploadSection();
+      }
+    });
+    tableWrap.addEventListener('dragleave', (e) => {
+      if (e.target === tableWrap) tableWrap.classList.remove('dragover');
+    });
+    tableWrap.addEventListener('drop', (e) => {
+      if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) {
+        e.preventDefault();
+        e.stopPropagation();
+        tableWrap.classList.remove('dragover');
+        showUploadSection();
+        addUploadFiles(e.dataTransfer.files);
+      }
+    });
+
+    // 文件选择 input 变化 → 加入队列（点「上传文件」按钮触发）
+    uploadFileInp.addEventListener('change', () => {
+      if (uploadFileInp.files && uploadFileInp.files.length) {
+        showUploadSection();
+        addUploadFiles(uploadFileInp.files);
+        uploadFileInp.value = ''; // 清空，允许重复选同一文件
+      }
+    });
+
+    // 修复 warnBox 必须挂到 DOM，否则 renderFileBrowserWarning 里
     // $('#files-warn-title') 返回 null → textContent 抛异常 → 显示"配置加载失败"。
     // warnBox 初始 display:none，挂上去不会立即显示，只有 renderFileBrowserWarning
     // 里设置 warnBox.style.display='' 才显示。
@@ -196,6 +310,7 @@
     view.appendChild(connCard);
     view.appendChild(pathCard);
     view.appendChild(fileCard);
+    // v1.3：uploadCard 已合并到 fileCard 内部（上传按钮挪回下载 toolbar 右侧），不再单独 append
 
     // =================== 行为 ===================
 
@@ -218,7 +333,8 @@
       api('GET', '/api/admin/openers').then(r => {
         Kairo.state.downloadsOpeners = Array.isArray(r && r.openers) ? r.openers : [];
       }).catch(() => {
-        Kairo.state.downloadsOpeners = [];
+        // 网络抖动时保留旧数据：避免编辑按钮突然全禁用的连带故障。
+        // 读取处已有 `(window.Kairo && Kairo.state && Kairo.state.downloadsOpeners) || []` 兜底。
       });
 
       return api('GET', '/api/config').then(info => {
@@ -423,6 +539,7 @@
       }
     }
 
+
     // ---- 文件预览（v0.5 项 1）----
     // 普通点击文件名 → 弹窗显示（modal 快速看）
     // Shift+点击 / 或显式调用 → 新窗口预览（独立页 preview.html）
@@ -462,10 +579,9 @@
           path: filePath,
           opener: openerName
         });
-        if (r.ok !== undefined) {
-          toast('已用 ' + openerName + ' 打开文件，保存后自动上传', 'success');
-        } else {
-          toast('编辑失败: ' + (r.error || '未知错误'), 'error');
+        toast('已用 ' + openerName + ' 打开文件，保存后自动上传', 'success');
+        if (r && r.id) {
+          subscribeEditEvents(r.id, fileName);
         }
       } catch (e) {
         if (e.message && e.message.includes('未找到打开器')) {
@@ -476,6 +592,46 @@
           toast('编辑失败: ' + e.message, 'error');
         }
       }
+    }
+
+    function subscribeEditEvents(taskId, fileName) {
+      const SftpCommon = (window.Kairo && window.Kairo.SftpCommon) || {};
+      const base = SftpCommon.buildSseBaseUrl ? SftpCommon.buildSseBaseUrl() : '';
+      const url = base + '/api/ssh/sftp/edit/' + encodeURIComponent(taskId) + '/events';
+      let es;
+      try {
+        es = new EventSource(url);
+      } catch (e) {
+        return;
+      }
+      es.addEventListener('upload_start', function () {
+        toast('正在上传 ' + fileName + ' …', 'idle');
+      });
+      es.addEventListener('upload_ok', function (e) {
+        let sizeText = '';
+        try {
+          const data = JSON.parse(e.data);
+          if (data.bytes) {
+            const fmt = SftpCommon.formatBytes || function (n) { return n + ' B'; };
+            sizeText = '（' + fmt(data.bytes) + '）';
+          }
+        } catch (_) {}
+        toast(fileName + ' 已上传' + sizeText, 'success');
+      });
+      es.addEventListener('upload_fail', function (e) {
+        let msg = '';
+        try { const data = JSON.parse(e.data); msg = data.message || ''; } catch (_) {}
+        toast(fileName + ' 上传失败: ' + (msg || '未知错误'), 'error');
+      });
+      es.addEventListener('editor_closed', function () {
+        toast('编辑器进程已退出，如仍在编辑，保存后仍会自动上传', 'idle');
+      });
+      es.addEventListener('done', function () {
+        es.close();
+      });
+      es.onerror = function () {
+        es.close();
+      };
     }
 
     // openPreviewInNewWindow 开新窗口（preview.html），凭证走 Kairo._previewCred 跨窗口传递
@@ -901,17 +1057,10 @@
               actionsCell.appendChild(editBtn);
             } else {
               openers.forEach(op => {
-                const rawIcon = (typeof op.icon === 'string') ? op.icon.trim() : '';
-                let iconHtml = '';
-                if (rawIcon) {
-                  const isEmoji = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(rawIcon);
-                  if (isEmoji) {
-                    iconHtml = rawIcon;
-                  } else if (ICONS[rawIcon]) {
-                    iconHtml = svgIcon(rawIcon, 14);
-                  }
-                }
-                if (!iconHtml) iconHtml = '📝';
+                // v0.14：opener 图标统一走 Kairo.icons.openerIconHTML（emoji / exe 真实图标 / SVG fallback）。
+                const iconHtml = (window.Kairo && Kairo.icons && Kairo.icons.openerIconHTML)
+                  ? Kairo.icons.openerIconHTML(op, 14)
+                  : ((Kairo.icons && Kairo.icons.innerHTML) ? Kairo.icons.innerHTML('file-text', 14) : '📝');
                 const tip = (op.name || '') + (op.path ? ' — ' + op.path : '') + '\n保存后自动上传到服务器';
                 const editBtn = el('button', {
                   class: 'btn btn-sm',
@@ -921,7 +1070,9 @@
                     e.stopPropagation();
                     editFile(fullPath, entry.name, op.name);
                   },
-                  unsafeHtml: iconHtml + ' ' + (op.name || '编辑')
+                  // op.name 来自 /api/admin/openers（用户配置），未做服务端长度/字符限制。
+                  // 必须 escapeHtml，否则 `<img src=x onerror=alert(1)>` 会执行。
+                  unsafeHtml: iconHtml + ' ' + escapeHtml(op.name || '编辑')
                 });
                 actionsCell.appendChild(editBtn);
               });
@@ -1210,6 +1361,354 @@
       closeDownloadStream('cancel');
     }
 
+    // =================== 上传（v1.1 新增）===================
+
+    // addUploadFiles 把 FileList 加入上传队列，并启动串行传输（如未启动）。
+    // 不去重：用户重复选同名文件是有意为之（覆盖策略由后端处理）。
+    function addUploadFiles(fileList) {
+      if (!state.currentSys || !state.currentSrv) {
+        toast('请先选系统和服务器并连接', 'warn'); return;
+      }
+      const c = creds();
+      if (!c.username) { toast('请在系统配置中设置 SSH 用户名', 'warn'); return; }
+      const targetDir = state.currentPath || '/';
+      if (!targetDir || targetDir[0] !== '/') {
+        toast('目标目录必须是绝对路径', 'warn'); return;
+      }
+      for (let i = 0; i < fileList.length; i++) {
+        const f = fileList[i];
+        // size 校验：浏览器已知 size，提前报错避免上传到一半才失败
+        // maxSize 从后端 init 响应拿不到（init 时才返回），这里只做粗校验
+        state.uploadQueue.push({
+          name: f.name,
+          size: f.size,
+          status: 'pending',
+          progress: 0,
+          bytes: 0,
+          error: '',
+          uploadId: '',
+          finalName: f.name,
+          targetDir: targetDir,
+          overwrite: uploadOverwriteSel.value,
+          file: f, // 保留 File 引用
+          xhr: null,
+          creds: { username: c.username, password: c.password }
+        });
+      }
+      renderUploadList();
+      // 启动队列（如未启动）
+      if (!state.uploadInflight) {
+        startNextUpload();
+      }
+    }
+
+    // startNextUpload 从队列取下一个 pending 任务发起上传。
+    // 串行：一次只跑一个，完成后自动取下一个。
+    function startNextUpload() {
+      if (state.uploadInflight) return;
+      const next = state.uploadQueue.find(t => t.status === 'pending');
+      if (!next) {
+        // 队列空，更新汇总
+        renderUploadSummary();
+        // 全部完成后按需刷新目录
+        if (uploadRefreshChk.checked && state.currentPath) {
+          const c = creds();
+          if (c.username) doListDir(state.currentPath, c);
+        }
+        return;
+      }
+      state.uploadInflight = true;
+      next.status = 'uploading';
+      next.progress = 0;
+      renderUploadList();
+      doUploadOne(next).finally(() => {
+        state.uploadInflight = false;
+        // 继续下一个（不管成功失败）
+        startNextUpload();
+      });
+    }
+
+    // doUploadOne 单个文件上传：init → data（流式）。
+    // 返回 Promise，resolve 时表示这个文件处理结束（成功/失败/取消）。
+    async function doUploadOne(task) {
+      try {
+        // 1. init
+        const initResp = await api('POST', '/api/ssh/sftp/upload/init', {
+          system: state.currentSys,
+          server: state.currentSrv,
+          username: task.creds.username,
+          password: task.creds.password,
+          target_dir: task.targetDir,
+          filename: task.name,
+          size: task.size,
+          overwrite: task.overwrite
+        });
+        task.uploadId = initResp.id;
+        task.maxSize = initResp.max_size;
+        // init 阶段如果 size 超限，后端会返回 400，进入 catch
+        // 这里再次校验本地 size 与后端 max_size
+        if (initResp.max_size && task.size > initResp.max_size) {
+          throw new Error('文件大小 ' + formatBytes(task.size) + ' 超过服务端上限 ' + formatBytes(initResp.max_size));
+        }
+        renderUploadList();
+        // 2. data（流式 POST，raw body）
+        await uploadFileData(task);
+        // 成功（uploadFileData 内部已更新 task.status）
+      } catch (e) {
+        // init / data 阶段的错误
+        task.status = 'fail';
+        task.error = e.message || String(e);
+        if (task.xhr) {
+          // XHR 已发出但被中断/报错
+          try { task.xhr.abort(); } catch (e2) { /* ignore */ }
+          task.xhr = null;
+        }
+        // init 阶段就 fail 了的话，task.file 还没传给 xhr，需要在这里也释放
+        if (task.file) { try { task.file = null; } catch (e2) { /* ignore */ } }
+        renderUploadList();
+        toast('上传失败：' + task.name + ' — ' + task.error, 'err');
+      } finally {
+        updateUploadButtons();
+      }
+    }
+
+    // uploadFileData 用 XHR 把文件作为 raw body 发到 /data 端点。
+    // 用 XHR.upload.onprogress 算进度（Win 7 Chrome 109 兼容，不用 fetch stream）。
+    function uploadFileData(task) {
+      return new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        task.xhr = xhr;
+        const url = '/api/ssh/sftp/upload/' + encodeURIComponent(task.uploadId) + '/data';
+        xhr.open('POST', url, true);
+        // 不设 Content-Type：让浏览器自动用文件原始类型 / 或省略
+        // 服务端按 raw body 读，不看 Content-Type
+        // 必须 set Content-Length？XHR 浏览器自动从 file.size 设置（通过 send(file)）
+        xhr.upload.onprogress = (ev) => {
+          if (ev.lengthComputable) {
+            task.bytes = ev.loaded;
+            task.progress = Math.min(100, Math.round((ev.loaded / ev.total) * 100));
+            renderUploadRow(task);
+          }
+        };
+        // 终态后清理 task.file 引用，避免大文件残留内存。
+        // - done：上传成功，文件已写到服务端，本地引用可释放
+        // - fail/cancel：同样不再需要本地文件了
+        // File 对象本身不可清空（spec 限制），但把 task.file = null 让 GC 释放 task 对它的引用链。
+        const releaseFile = () => {
+          if (task.file) {
+            try { task.file = null; } catch (e) { /* ignore */ }
+          }
+        };
+        xhr.onload = () => {
+          task.xhr = null;
+          let resp = null;
+          try { resp = JSON.parse(xhr.responseText || '{}'); } catch (e) { /* ignore */ }
+          if (xhr.status >= 200 && xhr.status < 300 && resp && resp.ok) {
+            task.status = 'done';
+            task.bytes = resp.bytes || task.size;
+            task.progress = 100;
+            task.finalName = resp.final_name || task.name;
+            renderUploadRow(task);
+            renderUploadSummary();
+            releaseFile();
+            resolve();
+          } else {
+            // 后端返回错误
+            const errMsg = (resp && (resp.error || resp.message)) || ('HTTP ' + xhr.status);
+            task.status = 'fail';
+            task.error = errMsg;
+            renderUploadRow(task);
+            releaseFile();
+            reject(new Error(errMsg));
+          }
+        };
+        xhr.onerror = () => {
+          task.xhr = null;
+          task.status = 'fail';
+          task.error = '网络错误';
+          renderUploadRow(task);
+          releaseFile();
+          reject(new Error('网络错误'));
+        };
+        xhr.onabort = () => {
+          task.xhr = null;
+          task.status = 'cancel';
+          task.error = '已取消';
+          renderUploadRow(task);
+          releaseFile();
+          // 取消不算失败，resolve 让队列继续
+          resolve();
+        };
+        // send(File) 浏览器会自动设 Content-Length = file.size + Content-Type = file.type
+        try {
+          xhr.send(task.file);
+        } catch (e) {
+          task.xhr = null;
+          task.status = 'fail';
+          task.error = '发送失败：' + e.message;
+          renderUploadRow(task);
+          releaseFile();
+          reject(e);
+        }
+      });
+    }
+
+    // cancelOneUpload 取消单个上传任务。
+    //   - pending：直接标 cancel
+    //   - uploading：调后端 cancel + abort XHR
+    //   - done/fail/cancel：忽略
+    async function cancelOneUpload(task) {
+      if (task.status === 'done' || task.status === 'fail' || task.status === 'cancel') return;
+      if (task.status === 'pending') {
+        task.status = 'cancel';
+        task.error = '已取消';
+        // 释放 File 引用（pending 没真上传，但 task.file 也保留着）
+        if (task.file) { try { task.file = null; } catch (e) { /* ignore */ } }
+        renderUploadRow(task);
+        renderUploadSummary();
+        return;
+      }
+      // uploading
+      if (task.uploadId) {
+        try { await api('POST', '/api/ssh/sftp/upload/cancel', { id: task.uploadId }); }
+        catch (e) { /* ignore */ }
+      }
+      if (task.xhr) {
+        try { task.xhr.abort(); } catch (e) { /* onabort 会处理 */ }
+      }
+      // 注：task.file 释放走 xhr.onabort → releaseFile
+    }
+
+    // cancelAllUploads 取消所有 pending/uploading 任务
+    async function cancelAllUploads() {
+      const tasks = state.uploadQueue.filter(t => t.status === 'pending' || t.status === 'uploading');
+      if (!tasks.length) return;
+      // 先标 pending 为 cancel
+      tasks.forEach(t => {
+        if (t.status === 'pending') {
+          t.status = 'cancel';
+          t.error = '已取消';
+        }
+      });
+      renderUploadList();
+      // 取消 uploading 的那个（如果有）
+      const uploading = tasks.find(t => t.status === 'uploading');
+      if (uploading) {
+        await cancelOneUpload(uploading);
+      }
+      renderUploadSummary();
+      toast('已取消全部待上传任务', 'warn');
+    }
+
+    // retryUpload 失败后重试：重置状态为 pending，启动队列
+    function retryUpload(task) {
+      if (task.status !== 'fail' && task.status !== 'cancel') return;
+      task.status = 'pending';
+      task.progress = 0;
+      task.bytes = 0;
+      task.error = '';
+      task.uploadId = '';
+      renderUploadRow(task);
+      if (!state.uploadInflight) startNextUpload();
+    }
+
+    // removeUploadRow 从队列移除一个任务（仅允许 done/fail/cancel）
+    function removeUploadRow(task) {
+      if (task.status === 'uploading' || task.status === 'pending') return;
+      const idx = state.uploadQueue.indexOf(task);
+      if (idx >= 0) state.uploadQueue.splice(idx, 1);
+      renderUploadList();
+    }
+
+    // clearFinishedUploads 清空所有 done/fail/cancel 任务
+    function clearFinishedUploads() {
+      const before = state.uploadQueue.length;
+      state.uploadQueue = state.uploadQueue.filter(t => t.status === 'pending' || t.status === 'uploading');
+      if (state.uploadQueue.length !== before) renderUploadList();
+    }
+
+    // updateUploadButtons 根据队列状态更新按钮可用性
+    function updateUploadButtons() {
+      const hasActive = state.uploadQueue.some(t => t.status === 'pending' || t.status === 'uploading');
+      btnUploadCancelAll.disabled = !hasActive;
+    }
+
+    // renderUploadList 重建整个上传列表 DOM
+    function renderUploadList() {
+      while (uploadListWrap.firstChild) uploadListWrap.removeChild(uploadListWrap.firstChild);
+      state.uploadQueue.forEach(t => uploadListWrap.appendChild(buildUploadRow(t)));
+      renderUploadSummary();
+      updateUploadButtons();
+    }
+
+    // renderUploadRow 只更新单行（避免整列重建丢失滚动位置）
+    function renderUploadRow(task) {
+      const idx = state.uploadQueue.indexOf(task);
+      if (idx < 0) return;
+      const oldRow = uploadListWrap.children[idx];
+      if (!oldRow) { renderUploadList(); return; }
+      const newRow = buildUploadRow(task);
+      uploadListWrap.replaceChild(newRow, oldRow);
+      updateUploadButtons();
+    }
+
+    // buildUploadRow 构造单行 DOM
+    function buildUploadRow(task) {
+      const row = el('div', { class: 'upload-row', style: 'display:flex; align-items:center; gap:8px; padding:6px 4px; border-bottom:1px dashed var(--line);' });
+      // 文件名
+      const nameCell = el('div', { style: 'flex: 1 1 40%; min-width: 120px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;', title: task.name + (task.finalName && task.finalName !== task.name ? ' → ' + task.finalName : '') });
+      nameCell.textContent = task.name;
+      if (task.finalName && task.finalName !== task.name && task.status === 'done') {
+        nameCell.appendChild(document.createTextNode('  → ' + task.finalName));
+      }
+      row.appendChild(nameCell);
+      // 进度
+      const progCell = el('div', { style: 'flex: 1 1 auto; min-width: 100px; display:flex; align-items:center; gap:6px;' });
+      if (task.status === 'pending') {
+        progCell.appendChild(el('span', { class: 'dl-pct', text: '等待…' }));
+      } else if (task.status === 'uploading') {
+        const bar = el('div', { class: 'dl-bar', style: 'width: 140px;' });
+        const fill = el('div', { class: 'dl-bar-fill', style: 'width:' + task.progress + '%' });
+        bar.appendChild(fill);
+        progCell.appendChild(bar);
+        progCell.appendChild(el('span', { class: 'dl-pct', text: task.progress + '%' }));
+      } else if (task.status === 'done') {
+        const span = el('span', { class: 'dl-pct', style: 'color:#10b981; display:inline-flex; align-items:center; gap:4px;', unsafeHtml: svgIcon('smCheck', 14) + ' 完成 · ' + formatBytes(task.bytes) });
+        progCell.appendChild(span);
+      } else if (task.status === 'fail') {
+        const span = el('span', { class: 'dl-pct', style: 'color:#ef4444; display:inline-flex; align-items:center; gap:4px;', unsafeHtml: svgIcon('smX', 14) + ' ' + (task.error || '失败') });
+        progCell.appendChild(span);
+      } else if (task.status === 'cancel') {
+        progCell.appendChild(el('span', { class: 'dl-pct', style: 'color:var(--text-dim);', text: '已取消' }));
+      }
+      row.appendChild(progCell);
+      // 操作按钮
+      const btnCell = el('div', { style: 'flex: 0 0 auto; display:flex; gap:4px;' });
+      if (task.status === 'uploading') {
+        btnCell.appendChild(el('button', { class: 'btn btn-sm btn-danger', text: '取消', onclick: () => cancelOneUpload(task) }));
+      } else if (task.status === 'fail' || task.status === 'cancel') {
+        btnCell.appendChild(el('button', { class: 'btn btn-sm', text: '重试', onclick: () => retryUpload(task) }));
+        btnCell.appendChild(el('button', { class: 'btn btn-sm', text: '✕', title: '移除', onclick: () => removeUploadRow(task) }));
+      } else if (task.status === 'done') {
+        btnCell.appendChild(el('button', { class: 'btn btn-sm', text: '✕', title: '移除', onclick: () => removeUploadRow(task) }));
+      }
+      row.appendChild(btnCell);
+      return row;
+    }
+
+    // renderUploadSummary 更新底部汇总
+    function renderUploadSummary() {
+      const total = state.uploadQueue.length;
+      const done = state.uploadQueue.filter(t => t.status === 'done').length;
+      const fail = state.uploadQueue.filter(t => t.status === 'fail').length;
+      const cancel = state.uploadQueue.filter(t => t.status === 'cancel').length;
+      const bytes = state.uploadQueue.reduce((s, t) => s + (t.status === 'done' ? t.bytes : 0), 0);
+      const totalBytes = state.uploadQueue.reduce((s, t) => s + (t.size || 0), 0);
+      let text = total === 0 ? '（队列为空）' : ('共 ' + total + ' 个 · 成功 ' + done + ' · 失败 ' + fail + ' · 取消 ' + cancel);
+      if (total > 0) text += ' · ' + formatBytes(bytes) + ' / ' + formatBytes(totalBytes);
+      uploadSummary.textContent = text;
+    }
+
     // =================== 右键菜单 ===================
 
     function hideContextMenu() {
@@ -1406,9 +1905,32 @@
 state.commonDirs = loadCommonDirs();
 renderCommonDirsBar();
 loadCfg().then(refreshCredStatus).catch(e => toast('配置加载失败：' + e.message, 'err'));
+
+    // v1.2 Bug 1 修复：注册上传 controller 到 Kairo.core，
+    // navigate 切走 / beforeunload 时 core 会调 cancelAll / cancelAllBeacon 取消进行中的上传。
+    // （防止后台 XHR 继续跑 + 回调访问已被卸载的 DOM）
+    Kairo.core.setActiveUploads({
+      cancelAll: () => {
+        // 同步：abort XHR + 通知后端 cancel（异步）
+        try { cancelAllUploads(); } catch (e) { /* ignore */ }
+      },
+      cancelAllBeacon: () => {
+        // beforeunload 路径：用 sendBeacon 异步通知后端，不阻塞 unload
+        const tasks = (state && state.uploadQueue) || [];
+        tasks.forEach(t => {
+          if (t.status === 'uploading' && t.uploadId && navigator.sendBeacon) {
+            try {
+              navigator.sendBeacon('/api/ssh/sftp/upload/cancel',
+                new Blob([JSON.stringify({ id: t.uploadId })], { type: 'application/json' }));
+            } catch (e) { /* ignore */ }
+          }
+          if (t.xhr) { try { t.xhr.abort(); } catch (e) { /* ignore */ } }
+        });
+      }
+    });
   }
 
   Kairo.pages.files = renderFiles;
   Kairo.state.routes.files = renderFiles;
-  Kairo.state.routeNames.files = 'FTP文件下载';
+  Kairo.state.routeNames.files = '文件传输';
 })();

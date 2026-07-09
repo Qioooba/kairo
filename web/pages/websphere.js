@@ -12,7 +12,7 @@
   'use strict';
   const Kairo = window.Kairo = window.Kairo || {};
   Kairo.pages = Kairo.pages || {};
-  const { el, $, toast, setStatus, cssEscape, pctText, formatBytes, formatTime, trimMiddle, looksMojibake, basenameOf, copyToClipboard } = Kairo.core;
+  const { el, $, toast, setStatus, cssEscape, pctText, formatBytes, formatTime, trimMiddle, escapeHtml, highlightAndTrim, parseSearchTermsForHighlight, looksMojibake, basenameOf, copyToClipboard } = Kairo.core;
   const { api } = Kairo.api;
 
   const ICONS = {
@@ -108,7 +108,7 @@
 
   function renderWebsphere(view) {
     let cfg = null;
-    let listState = { files: [], serverName: '', dlId: null, dlEvtSrc: null, fileStates: {}, lastDownloadFolder: '', dlMode: null, dlApiBase: '', dlLatestUi: null, dlAbort: null };
+    let listState = { files: [], serverName: '', dlId: null, dlEvtSrc: null, fileStates: {}, lastDownloadFolder: '', dlMode: null, dlApiBase: '', dlLatestUi: null, dlAbort: null, fileSortKey: 'mtime', fileSortDesc: true };
     let searchSelectedFiles = [];
     const srvStatus = {};
 
@@ -997,16 +997,34 @@
           return;
         }
         const tbl = el('table', { class: 'table' });
+        const fileSortLink = (label, key) => {
+          const isActive = listState.fileSortKey === key;
+          const arrow = isActive ? (listState.fileSortDesc ? ' ↓' : ' ↑') : '';
+          return el('a', { href: '#', style: 'color:inherit; text-decoration:none;', text: label + arrow, onclick: (e) => {
+            e.preventDefault();
+            if (listState.fileSortKey === key) listState.fileSortDesc = !listState.fileSortDesc;
+            else { listState.fileSortKey = key; listState.fileSortDesc = key === 'name' ? false : true; }
+            renderFileTable();
+          }});
+        };
         tbl.appendChild(el('thead', null, el('tr', null, [
           el('th', { class: 'col-check' }),
-          el('th', { text: '文件名' }),
-          el('th', { class: 'num', style: 'text-align:right;', text: '大小' }),
-          el('th', { text: '修改时间' }),
-          el('th', { text: '操作' }),
+          el('th', null, [fileSortLink('文件名', 'name')]),
+          el('th', { class: 'num', style: 'text-align:right;' }, [fileSortLink('大小', 'size')]),
+          el('th', null, [fileSortLink('修改时间', 'mtime')]),
+          el('th', { class: 'col-actions', text: '操作' }),
           el('th', { class: 'col-status', text: '状态' })
         ])));
         const tbody = el('tbody');
-        filteredFiles.forEach(f => {
+        const sortedFiles = filteredFiles.slice().sort((a, b) => {
+          let cmp = 0;
+          const k = listState.fileSortKey;
+          if (k === 'size') cmp = (a.size || 0) - (b.size || 0);
+          else if (k === 'mtime') cmp = new Date(a.mod_time || 0).getTime() - new Date(b.mod_time || 0).getTime();
+          else cmp = (a.name || '').localeCompare(b.name || '', 'zh');
+          return listState.fileSortDesc ? -cmp : cmp;
+        });
+        sortedFiles.forEach(f => {
           const key = (g.server || '') + '|' + (g.dir || '') + '|' + f.name;
           const row = el('tr', { 'data-key': key, 'data-file': f.name, 'data-srv': g.server, 'data-dir': g.dir });
           const cb = el('input', {
@@ -1030,7 +1048,7 @@
           row.appendChild(el('td', { title: f.full_path || f.name }, f.name));
           row.appendChild(el('td', { class: 'num', text: formatBytes(f.size) }));
           row.appendChild(el('td', { class: 'muted', text: formatTime(f.mod_time) }));
-          row.appendChild(el('td', null, [
+          row.appendChild(el('td', { class: 'col-actions' }, [
             tailNewWinBtn, ' ',
             el('button', {
               class: 'btn btn-sm',
@@ -1793,7 +1811,10 @@
       hitTableWrap.innerHTML = '';
       hitTableWrap.appendChild(el('h3', { text: '并行搜索中…' }));
       const conc = Number(concSel.value) || 8;
-      const contextN = getContextLineCount();
+      const contextRaw = getContextLineCount();
+      // 搜索内嵌上下限 500 行（后端 hard clamp，前端也限制避免请求过大）；
+      // 点击「上下文」新窗口时用 contextRaw 原值（最多 5000）
+      const contextN = Math.min(contextRaw, CONTEXT_LINES_MAX_SEARCH);
       const timeRange = scope === 'selected' ? {} : buildTimeRange();
       // v0.5 #8：文件名参数 — 单文件 / 多文件 / glob 模糊匹配
       const filePatternsRaw = (filePatternInp.value || '').trim();
@@ -1827,7 +1848,11 @@
         }
         const url = '/api/logs/search/multi' + (qs.toString() ? '?' + qs : '');
         const r = await api('POST', url, body);
-        renderMultiResults(r);
+        // v0.14：把搜索词传给 renderMultiResults 用于高亮。
+        // term 列表从 queryInp.value 解析出来（跟后端 ParseQuery 的 token 切分对齐）。
+        // ignoreCase 状态从 ignoreCaseChk 拿，跟发给后端的 ignore_case 字段同源。
+        const termsForHl = parseSearchTermsForHighlight(queryInp.value);
+        renderMultiResults(r, termsForHl, !!ignoreCaseChk.checked);
         let toastMsg = '命中 ' + r.total_hits + ' 条，' + r.ok_count + '/' + targets.length + ' 组成功';
         if (timeRange.since || timeRange.until) toastMsg += '（时间范围已应用）';
         if (filePatterns) toastMsg += '（文件名过滤：' + filePatterns.join(', ') + '）';
@@ -1845,7 +1870,7 @@
       }
     }
 
-    function renderMultiResults(r) {
+    function renderMultiResults(r, terms, ignoreCase) {
       hitTableWrap.innerHTML = '';
       hitTableWrap.appendChild(el('h3', { text: '搜索结果 · ' + r.ok_count + '/' + r.servers.length + ' 成功，共 ' + r.total_hits + ' 条命中' }));
       hitTableWrap.appendChild(el('div', { class: 'text-dim mb-2', text: '并发 ' + r.max_concurrency + '，按服务器分组展示' }));
@@ -1854,6 +1879,8 @@
         hitTableWrap.appendChild(el('div', { class: 'text-dim', text: '没有结果。' }));
         return;
       }
+      const termList = terms || [];
+      const ig = !!ignoreCase;
 
       r.servers.forEach(srv => {
         const grp = el('div', { class: 'server-group ' + (srv.ok ? 'ok' : 'fail') });
@@ -1887,14 +1914,43 @@
           srv.hits.forEach(h => {
             const isCtx = !!h.is_context;
             const fullContent = h.content || '';
-            const shortContent = trimMiddle(fullContent, 280);
             const cells = [
               el('td', { class: 'muted' + (isCtx ? ' text-dim' : ''), text: h.file }),
               el('td', { class: 'num' + (isCtx ? ' text-dim' : ''), text: (isCtx ? '┊ ' : '') + h.line_no })
             ];
-            const contentCell = el('td', { class: 'hit-line' + (isCtx ? ' ctx-line' : ''), text: (isCtx ? '┊ ' : '') + shortContent });
-            if (!isCtx && looksMojibake(shortContent)) {
-              contentCell.appendChild(el('span', { class: 'tag tag-warn', title: '当前目录编码与文件实际编码不一致，中文可能错位。试试切换到「GBK」目录。', style: 'display:inline-flex; align-items:center; gap:4px;', unsafeHtml: svgIcon('smWarn', 12) + ' 解码可能有误' }));
+            // 内容单元：v0.14 改造——
+            //   - 命中行：用 highlightAndTrim 智能截断 + <mark> 高亮 + <details> 可展开
+            //   - 上下文行：保留原来的 trimMiddle 简单截断（ctx 长度可控，不展开）
+            // 用户报障：原版"整行省略 + 关键词看不到 + 没高亮"全改了。
+            const contentCell = el('td', { class: 'hit-line' + (isCtx ? ' ctx-line' : '') });
+            if (isCtx) {
+              contentCell.textContent = '┊ ' + trimMiddle(fullContent, 280);
+            } else {
+              // 命中行：智能截断 + 高亮
+              const hl = highlightAndTrim(fullContent, termList, { ignoreCase: ig, max: 240, keep: 60 });
+              if (hl.truncated) {
+                // 用 <details> 实现"截断预览 + 点击展开"
+                // summary：默认显示截断预览（带高亮、带头尾省略号）
+                // summary 之后：展开后的完整内容（同样高亮）
+                const det = el('details', { class: 'hit-trim' });
+                const summary = el('summary', { class: 'hit-trim-summary', title: '点击展开完整内容' });
+                summary.innerHTML = hl.html;
+                // 全文同样做一次高亮（不过不截断，max 设为无限大）
+                const fullHl = highlightAndTrim(fullContent, termList, { ignoreCase: ig, max: 1e9, keep: 0 });
+                const fullDiv = el('div', { class: 'hit-trim-full' });
+                fullDiv.innerHTML = fullHl.html;
+                det.appendChild(summary);
+                det.appendChild(fullDiv);
+                contentCell.appendChild(det);
+              } else {
+                // 不需要截断：直接 innerHTML 一次性渲染
+                const wrap = el('div', { class: 'hit-trim hit-trim-static' });
+                wrap.innerHTML = hl.html;
+                contentCell.appendChild(wrap);
+              }
+              if (looksMojibake(fullContent)) {
+                contentCell.appendChild(el('span', { class: 'tag tag-warn', title: '当前目录编码与文件实际编码不一致，中文可能错位。试试切换到「GBK」目录。', style: 'display:inline-flex; align-items:center; gap:4px;', unsafeHtml: svgIcon('smWarn', 12) + ' 解码可能有误' }));
+              }
             }
             cells.push(contentCell);
             if (isCtx) {
@@ -2086,16 +2142,18 @@ const formCard = el('div', { class: 'card' }, [
 
     // 上下文行数：默认 500，用户改过后 localStorage 记住。
     // - localStorage key: kairo.websphere.contextLines
-    // - 默认值前后端一致（后端 DefaultContextLines / handler clamp 500）；
-    // - max=500：handler 端 hard clamp 500，再大也没用
+    // - 默认值前后端一致（后端 DefaultContextLines=500）；
+    // - 搜索内嵌上下文后端 clamp 到 500（避免单请求过大）；
+    // - 点击「上下文」按钮开新窗口时后端支持到 5000，所以前端上限设为 5000。
     const CONTEXT_LINES_KEY = 'kairo.websphere.contextLines';
     const CONTEXT_LINES_DEFAULT = 500;
-    const CONTEXT_LINES_MAX = 500;
+    const CONTEXT_LINES_MAX_SEARCH = 500;   // 搜索内嵌上下文：后端 hard clamp 500
+    const CONTEXT_LINES_MAX_CTXWIN = 5000;  // 上下文新窗口：后端支持到 5000
     const savedCtx = (() => {
       try {
         const raw = localStorage.getItem(CONTEXT_LINES_KEY);
         const n = Number(raw);
-        if (Number.isFinite(n) && n >= 0 && n <= CONTEXT_LINES_MAX) return n;
+        if (Number.isFinite(n) && n >= 0 && n <= CONTEXT_LINES_MAX_CTXWIN) return n;
       } catch (e) { /* 隐私模式 / 配额满：忽略，回退到默认 */ }
       return CONTEXT_LINES_DEFAULT;
     })();
@@ -2103,10 +2161,10 @@ const formCard = el('div', { class: 'card' }, [
       type: 'number',
       id: 'ws-context',
       min: '0',
-      max: String(CONTEXT_LINES_MAX),
+      max: String(CONTEXT_LINES_MAX_CTXWIN),
       value: String(savedCtx),
       style: 'width:100%;',
-      title: '每个命中行前后各 N 行；可手动改成 0~500；改完自动记住'
+      title: '每个命中行前后各 N 行；可手动改成 0~5000；改完自动记住。搜索结果内嵌上下限 500 行，「上下文」新窗口最多 5000 行'
     });
     // 改完即存，下次打开还是这个值（用户不用再输入）
     // - change: 值改变并提交（如按回车、选下拉）时触发
@@ -2124,7 +2182,7 @@ const formCard = el('div', { class: 'card' }, [
       if (!Number.isFinite(n)) n = 0;
       n = Math.floor(n);
       if (n < 0) n = 0;
-      if (n > CONTEXT_LINES_MAX) n = CONTEXT_LINES_MAX;
+      if (n > CONTEXT_LINES_MAX_CTXWIN) n = CONTEXT_LINES_MAX_CTXWIN;
       return n;
     }
 
@@ -3448,7 +3506,7 @@ const formCard = el('div', { class: 'card' }, [
       try {
         const hasSaved = localStorage.getItem(CONTEXT_LINES_KEY) !== null;
         if (!hasSaved && info.search && typeof info.search.default_context_lines === 'number') {
-          const v = Math.max(0, Math.min(CONTEXT_LINES_MAX, info.search.default_context_lines));
+          const v = Math.max(0, Math.min(CONTEXT_LINES_MAX_CTXWIN, info.search.default_context_lines));
           if (v !== savedCtx) {
             contextInp.value = String(v);
           }

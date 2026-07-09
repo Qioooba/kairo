@@ -484,6 +484,195 @@
   }
   core.trimMiddle = trimMiddle;
 
+  // 把 regex 元字符转义成字面量（用于把"搜索关键词"原样塞进 RegExp）。
+  // 比 `new RegExp(term)` 裸用更安全：用户输入 `(foo)` 不会变成捕获组。
+  function escapeRegex(s) {
+    s = s == null ? '' : String(s);
+    return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+  core.escapeRegex = escapeRegex;
+
+  // 从用户输入的搜索表达式里抽出"所有 term token"用于前端高亮。
+  //
+  // 跟后端 ParseQuery 的 token 切分对齐（v0.14）：
+  //   - 按空白切
+  //   - `&&` `||` 是操作符（OR 段分隔符）
+  //   - `!` 是 negate 修饰符（修饰紧跟的 term）
+  //   - 其余都是 term
+  //
+  // 注意：不做非法字符检查——前端高亮没必要拒绝输入。
+  // 如果用户输入了后端会拒的字符，后端搜索会失败，highlight 最多就是不标。
+  function parseSearchTermsForHighlight(q) {
+    q = String(q == null ? '' : q).trim();
+    if (!q) return [];
+    // 把 && || ! 都加空格再切，跟后端 ParseQuery 行为一致
+    q = q.replace(/&&/g, ' && ').replace(/\|\|/g, ' || ').replace(/!/g, ' ! ');
+    const tokens = q.split(/\s+/).filter(Boolean);
+    const out = [];
+    for (let i = 0; i < tokens.length; i++) {
+      const t = tokens[i];
+      if (t === '&&' || t === '||' || t === '!') continue;
+      out.push(t);
+    }
+    return out;
+  }
+  core.parseSearchTermsForHighlight = parseSearchTermsForHighlight;
+
+  // 搜索结果行的"高亮 + 智能截断"工具（v0.14）。
+  //
+  // 设计目标（按用户报障原话）：
+  //   - 用户报："搜出来的结果展示关键词的部分，你这个地方虽然展示了，但是展示的并不是
+  //     什么呢？并不是我搜索到的这关键词啊。你现在是把这个这一行给省略了。"
+  //   - 用户报："要么全量展示，要么就虽然不全量展示，但你应该展示出来这个有关键词的这一节，
+  //     然后并且把关键词进行高亮。"
+  //   - 用户报："而且关键词要高亮的……要成一个可以展开的。"
+  //
+  // 输入：
+  //   - content: 原始全文（可能很长）
+  //   - terms:   搜索关键词数组（来自解析搜索表达式得到的 term 列表）
+  //   - opts.max:        截断后允许的最大长度（默认 240）
+  //   - opts.keep:       截断时关键词前后至少保留的字符数（默认 60）
+  //   - opts.ignoreCase: 忽略大小写（默认 false）
+  //
+  // 输出 { html, truncated, fullText, snippet }:
+  //   - html:       已高亮 + 已截断的 html（已 escape，mark 标签是 mark.search-hl）
+  //   - truncated:  是否做了截断（前端据此决定是否渲染"展开"按钮）
+  //   - fullText:   原始全文（前端展开时直接用这个再高亮一次）
+  //   - snippet:    截断后的纯文本（escape 之前），调试用
+  function highlightAndTrim(content, terms, opts) {
+    content = String(content == null ? '' : content);
+    opts = opts || {};
+    const max = opts.max || 240;
+    const keep = opts.keep || 60;
+    const ignoreCase = !!opts.ignoreCase;
+    const termList = (terms || []).map(String).filter(function (t) { return t.length > 0; });
+
+    // 无关键词：原样返回 escape 后的内容（不截断；保持完整）
+    if (termList.length === 0) {
+      return {
+        html: escapeHtml(content),
+        truncated: false,
+        fullText: content,
+        snippet: content
+      };
+    }
+
+    // 1) 找所有 term 的所有 match 位置。
+    //    - 按字面匹配（escapeRegex），不把 `(` `)` `*` `?` 当 regex 元字符。
+    //    - 忽略大小写按 ignoreCase 走 'i' flag。
+    //    - 多个 term 的 match 合并后按 start 升序。
+    //    - 重叠 match：去重（保留先出现的，后出现的跳过）——避免 <mark><mark>x</mark></mark>。
+    const matches = [];
+    for (let ti = 0; ti < termList.length; ti++) {
+      const term = termList[ti];
+      const re = new RegExp(escapeRegex(term), ignoreCase ? 'gi' : 'g');
+      let m;
+      while ((m = re.exec(content)) !== null) {
+        const start = m.index;
+        const end = start + m[0].length;
+        // 防零宽死循环
+        if (m[0].length === 0) { re.lastIndex++; continue; }
+        // 与已收集的 match 合并：若新 match 完全被前一个 match 覆盖，跳过
+        let dominated = false;
+        for (let k = 0; k < matches.length; k++) {
+          const ex = matches[k];
+          if (start >= ex.start && end <= ex.end) { dominated = true; break; }
+        }
+        if (!dominated) matches.push({ start: start, end: end });
+        if (re.lastIndex === m.index) re.lastIndex++; // 零宽兜底
+      }
+    }
+    matches.sort(function (a, b) { return a.start - b.start; });
+
+    // 2) 决定截断窗口。
+    //    - 没找到 match（理论不会发生——hit 就是按 term 匹配的——但兜底）：
+    //      用 trimMiddle 简单中间截断。
+    //    - 找到 match 且总长 ≤ max：完整展示。
+    //    - 找到 match 且总长 > max：以"第一个和最后一个 match"为中心，
+    //      向左右各扩 keep 字符，再裁到 max。
+    let sliceStart = 0;
+    let sliceEnd = content.length;
+    let preElided = false;
+    let postElided = false;
+
+    if (matches.length === 0) {
+      if (content.length > max) {
+        const keepHalf = Math.floor((max - 1) / 2);
+        sliceStart = 0;
+        sliceEnd = content.length;
+        // 中间截断（保留前 keepHalf + 1 个省略号 + 后 keepHalf）
+        return {
+          html: escapeHtml(content.slice(0, keepHalf)) + '…' + escapeHtml(content.slice(content.length - keepHalf)),
+          truncated: true,
+          fullText: content,
+          snippet: content.slice(0, keepHalf) + '…' + content.slice(content.length - keepHalf)
+        };
+      }
+      return {
+        html: escapeHtml(content),
+        truncated: false,
+        fullText: content,
+        snippet: content
+      };
+    }
+
+    if (content.length > max) {
+      const firstStart = matches[0].start;
+      const lastEnd = matches[matches.length - 1].end;
+      // 让所有 match 都在窗口内
+      sliceStart = Math.max(0, firstStart - keep);
+      sliceEnd = Math.min(content.length, lastEnd + keep);
+      // 窗口过大时再收：以 match 中心为锚
+      if (sliceEnd - sliceStart > max) {
+        const center = Math.floor((firstStart + lastEnd) / 2);
+        let s = Math.max(0, center - Math.floor(max / 2));
+        let e = Math.min(content.length, s + max);
+        // 收完后必须把第一个/最后一个 match 留在窗口内
+        if (s > firstStart) s = firstStart;
+        if (e < lastEnd) e = lastEnd;
+        // 再次约束到 max
+        if (e - s > max) {
+          if (firstStart - s > e - lastEnd) {
+            s = e - max;
+          } else {
+            e = s + max;
+          }
+        }
+        sliceStart = s;
+        sliceEnd = e;
+      }
+      preElided = sliceStart > 0;
+      postElided = sliceEnd < content.length;
+    }
+
+    // 3) 切片 + 高亮（按 match 位置插 <mark>）
+    const slice = content.slice(sliceStart, sliceEnd);
+    let html = '';
+    let pos = 0;
+    for (let i = 0; i < matches.length; i++) {
+      const m = matches[i];
+      // 跳过窗口外的 match
+      if (m.end <= sliceStart) continue;
+      if (m.start >= sliceEnd) break;
+      const localStart = Math.max(0, m.start - sliceStart);
+      const localEnd = Math.min(slice.length, m.end - sliceStart);
+      if (localStart > pos) html += escapeHtml(slice.slice(pos, localStart));
+      html += '<mark class="search-hl">' + escapeHtml(slice.slice(localStart, localEnd)) + '</mark>';
+      pos = localEnd;
+    }
+    if (pos < slice.length) html += escapeHtml(slice.slice(pos));
+    if (preElided) html = '…' + html;
+    if (postElided) html = html + '…';
+
+    return {
+      html: html,
+      truncated: preElided || postElided,
+      fullText: content,
+      snippet: slice
+    };
+  }
+  core.highlightAndTrim = highlightAndTrim;
+
   // 简易乱码检测：U+FFFD (�) 出现 ≥2 次。基本够用。
   function looksMojibake(s) {
     if (!s) return false;
@@ -644,6 +833,38 @@
   core.setActiveShells = setActiveShells;
   core.getActiveShells = getActiveShells;
   core.clearActiveShells = clearActiveShells;
+
+  // -------- 上传任务清理 hook（v1.2 上传 Bug 1 修复） --------
+  //
+  // files 页 mount 时通过 setActiveUploads(controller) 注册，
+  // navigate 切走 / beforeunload 时调 cancelAllUploads / cancelAllUploadsBeacon。
+  // 注册对象需实现 cancelAll()：取消所有 pending/uploading + abort XHR + 通知后端 cancel。
+  function setActiveUploads(controller) {
+    window.__opsActiveUploads = controller;
+  }
+  function getActiveUploads() {
+    return window.__opsActiveUploads;
+  }
+  function cancelAllUploads() {
+    const c = window.__opsActiveUploads;
+    if (c && typeof c.cancelAll === 'function') {
+      try { c.cancelAll(); } catch (e) { /* ignore */ }
+    }
+  }
+  // beforeunload 路径：调 controller.cancelAllBeacon()，里面用 sendBeacon 异步通知后端，
+  // 不阻塞 unload；前端 XHR 也 abort。
+  function cancelAllUploadsBeacon() {
+    const c = window.__opsActiveUploads;
+    if (c && typeof c.cancelAllBeacon === 'function') {
+      try { c.cancelAllBeacon(); } catch (e) { /* ignore */ }
+    } else if (c && typeof c.cancelAll === 'function') {
+      try { c.cancelAll(); } catch (e) { /* ignore */ }
+    }
+  }
+  core.setActiveUploads = setActiveUploads;
+  core.getActiveUploads = getActiveUploads;
+  core.cancelAllUploads = cancelAllUploads;
+  core.cancelAllUploadsBeacon = cancelAllUploadsBeacon;
 
   // -------- "上次选择" 记忆（系统 / 服务器 / 日志目录 / 凭据） --------
   //

@@ -172,13 +172,22 @@
     // ---- 工具栏按钮 ----
     const btnCtrlC = el('button', { class: 'btn btn-sm', text: 'Ctrl+C', title: '发送 SIGINT', onclick: sendCtrlC, disabled: true });
     // v0.13+：终端背景模式切换（跟随主题 / 强制深色）
+    // 用 svg + 文本 span 替代原来的 🌓 / 🌙 emoji（Win 7 无字体支持会显示成方框）。
     const btnBgToggle = el('button', {
-      class: 'btn btn-sm ssh-bg-toggle', text: '🌓 跟随主题',
+      class: 'btn btn-sm ssh-bg-toggle',
       title: '切换终端背景：跟随主题 / 强制深色', onclick: toggleBgMode
     });
+    btnBgToggle.appendChild(el('span', { class: 'bg-ico' }));
+    btnBgToggle.appendChild(el('span', { class: 'bg-label', text: '跟随主题' }));
     const btnClear = el('button', { class: 'btn btn-sm', text: '清屏', title: '清屏（clear）', onclick: clearActive, disabled: true });
     const btnReconnect = el('button', { class: 'btn btn-sm', text: '重连', title: '断开重连', onclick: reconnectActive, disabled: true });
-    const btnSearch = el('button', { class: 'btn btn-sm', text: '🔍 搜索', title: '在终端输出中搜索（Ctrl+Shift+F）', onclick: searchInTerminal, disabled: true });
+    // 原来用 🔍 emoji，Win 7 无字体支持；改成 icons.search SVG（lucide-style 放大镜）
+const btnSearch = el('button', {
+  class: 'btn btn-sm', title: '在终端输出中搜索（Ctrl+Shift+F）',
+  onclick: searchInTerminal, disabled: true
+});
+btnSearch.appendChild((Kairo.icons && Kairo.icons.svg) ? Kairo.icons.svg('search', 14) : document.createTextNode('🔍'));
+btnSearch.appendChild(el('span', { text: '搜索' }));
     const btnCloseTab = el('button', { class: 'btn btn-sm btn-danger', text: '关闭 tab', title: '关闭当前 tab', onclick: closeActiveTab, disabled: true });
     // v0.11+：[📁 文件] toggle 按钮 — 显示/隐藏底部 SFTP 文件面板
     // 行为：toggle .ssh-files-panel 显隐；记忆 localStorage（每 system:server 独立）
@@ -314,12 +323,19 @@
       }
     }
     function paintBgToggleBtn() {
+      // 替换原来的 emoji：用 Kairo.icons 生成 sun/moon SVG
+      const icoBox = btnBgToggle.querySelector('.bg-ico');
+      const labelBox = btnBgToggle.querySelector('.bg-label');
+      const moonSvg = (Kairo.icons && Kairo.icons.svg) ? Kairo.icons.svg('moon', 14) : null;
+      const sunSvg = (Kairo.icons && Kairo.icons.svg) ? Kairo.icons.svg('sun', 14) : null;
       if (bgMode === 'dark') {
-        btnBgToggle.textContent = '🌙 强制深色';
+        if (icoBox) { icoBox.innerHTML = ''; if (moonSvg) icoBox.appendChild(moonSvg); }
+        if (labelBox) labelBox.textContent = '强制深色';
         btnBgToggle.title = '当前：强制深色。点击切换回跟随主题';
         btnBgToggle.classList.add('is-dark');
       } else {
-        btnBgToggle.textContent = '🌓 跟随主题';
+        if (icoBox) { icoBox.innerHTML = ''; if (sunSvg) icoBox.appendChild(sunSvg); }
+        if (labelBox) labelBox.textContent = '跟随主题';
         btnBgToggle.title = '当前：跟随主题。点击切换到强制深色（适合亮色主题对比度不够的场景）';
         btnBgToggle.classList.remove('is-dark');
       }
@@ -397,6 +413,16 @@
     loadConfig();
 
     function loadConfig() {
+      api('GET', '/api/admin/openers').then(r => {
+        const prevLen = (Kairo.state.downloadsOpeners || []).length;
+        Kairo.state.downloadsOpeners = Array.isArray(r && r.openers) ? r.openers : [];
+        if (Kairo.state.downloadsOpeners.length !== prevLen) {
+          refreshActiveSftpList();
+        }
+      }).catch(() => {
+        // 网络抖动时保留旧数据：避免编辑按钮异常禁用。
+      });
+
       const cached = Kairo.state && Kairo.state.bootInfo;
       if (cached && cached.systems) {
         pageState.cfg = cached;
@@ -1204,28 +1230,26 @@ function updateTabStatus(tab) {
         caseBtn.classList.toggle('btn-active', opts.caseSensitive);
         wordBtn.classList.toggle('btn-active', opts.wholeWord);
         regexBtn.classList.toggle('btn-active', opts.regex);
-        tab.searchAddon.setOptions && tab.searchAddon.setOptions(opts);
       }
       function find(dir) {
         const q = input.value;
         if (!q) return;
-        let re;
-        try {
-          if (opts.regex) {
-            re = new RegExp(q, opts.caseSensitive ? '' : 'i');
-          } else {
-            const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            const wrap = opts.wholeWord ? '\\b' + escaped + '\\b' : escaped;
-            re = new RegExp(wrap, opts.caseSensitive ? 'g' : 'gi');
+        if (opts.regex) {
+          try {
+            new RegExp(q, opts.caseSensitive ? '' : 'i');
+          } catch (e) {
+            toast('正则语法错误：' + e.message, 'err');
+            return;
           }
-        } catch (e) {
-          toast('正则语法错误：' + e.message, 'err');
-          return;
         }
-        // xterm-search-addon 接受 string 或 RegExp
+        const searchOpts = {
+          caseSensitive: opts.caseSensitive,
+          wholeWord: opts.wholeWord,
+          regex: opts.regex,
+        };
         try {
-          if (dir === 'prev') tab.searchAddon.findPrevious(re);
-          else tab.searchAddon.findNext(re);
+          if (dir === 'prev') tab.searchAddon.findPrevious(q, searchOpts);
+          else tab.searchAddon.findNext(q, searchOpts);
         } catch (e) {
           toast('搜索失败：' + e.message, 'err');
         }
@@ -1285,6 +1309,12 @@ function updateTabStatus(tab) {
       } catch (_) { /* ignore */ }
       syncFilesPanelForActiveTab();
       updateToolbarButtons();
+    }
+
+    function refreshActiveSftpList() {
+      const tab = getActiveTab();
+      if (!tab || !tab.sftpEntries || !tab.filesPanelVisible) return;
+      renderSftpPanelContent(tab);
     }
 
     // initSftpPanelForTab 首次显示时构建面板 DOM（懒初始化）。
@@ -1661,6 +1691,7 @@ function updateTabStatus(tab) {
     }
 
     // buildEditButtons 构建编辑按钮（使用用户配置的外部打开器）
+    // v0.14：opener 图标统一走 Kairo.icons.openerIconHTML（emoji / exe 真实图标 / SVG fallback）。
     function buildEditButtons(fileName, fullPath, tab) {
       const openers = Kairo.state.downloadsOpeners || [];
       if (!openers || openers.length === 0) {
@@ -1674,17 +1705,9 @@ function updateTabStatus(tab) {
         ];
       }
       return openers.map(op => {
-        const rawIcon = (typeof op.icon === 'string') ? op.icon.trim() : '';
-        let iconHtml = '';
-        if (rawIcon) {
-          const isEmoji = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(rawIcon);
-          if (isEmoji) {
-            iconHtml = rawIcon;
-          } else if (ICONS[rawIcon]) {
-            iconHtml = svgIcon(rawIcon, 14);
-          }
-        }
-        if (!iconHtml) iconHtml = '📝';
+        const iconHtml = (window.Kairo && Kairo.icons && Kairo.icons.openerIconHTML)
+          ? Kairo.icons.openerIconHTML(op, 14)
+          : '📝';
         const tip = (op.name || '') + (op.path ? ' — ' + op.path : '') + '\n保存后自动上传到服务器';
         return el('button', {
           class: 'btn btn-sm',
@@ -1694,7 +1717,9 @@ function updateTabStatus(tab) {
             e.stopPropagation();
             sftpEdit(tab, fullPath, op.name);
           },
-          unsafeHtml: iconHtml + ' ' + (op.name || '编辑')
+          // op.name 来自 /api/admin/openers（用户配置），未做服务端长度/字符限制。
+          // 必须 escapeHtml，否则 `<img src=x onerror=alert(1)>` 会执行。
+          unsafeHtml: iconHtml + ' ' + escapeHtml(op.name || '编辑')
         });
       });
     }
@@ -1710,10 +1735,9 @@ function updateTabStatus(tab) {
         path: fullPath,
         opener: openerName
       }).then(function (r) {
-        if (r.ok !== undefined) {
-          toast('已用 ' + openerName + ' 打开文件，保存后自动上传', 'success');
-        } else {
-          toast('编辑失败: ' + (r.error || '未知错误'), 'error');
+        toast('已用 ' + openerName + ' 打开文件，保存后自动上传', 'success');
+        if (r && r.id) {
+          subscribeEditEvents(r.id, fullPath);
         }
       }).catch(function (e) {
         if (e.message && e.message.includes('未找到打开器')) {
@@ -1724,6 +1748,47 @@ function updateTabStatus(tab) {
           toast('编辑失败: ' + e.message, 'error');
         }
       });
+    }
+
+    function subscribeEditEvents(taskId, filePath) {
+      const SftpCommon = (window.Kairo && window.Kairo.SftpCommon) || {};
+      const base = SftpCommon.buildSseBaseUrl ? SftpCommon.buildSseBaseUrl() : '';
+      const url = base + '/api/ssh/sftp/edit/' + encodeURIComponent(taskId) + '/events';
+      let es;
+      try {
+        es = new EventSource(url);
+      } catch (e) {
+        return;
+      }
+      const fileName = filePath.split('/').pop() || filePath;
+      es.addEventListener('upload_start', function () {
+        toast('正在上传 ' + fileName + ' …', 'idle');
+      });
+      es.addEventListener('upload_ok', function (e) {
+        let sizeText = '';
+        try {
+          const data = JSON.parse(e.data);
+          if (data.bytes) {
+            const fmt = SftpCommon.formatBytes || function (n) { return n + ' B'; };
+            sizeText = '（' + fmt(data.bytes) + '）';
+          }
+        } catch (_) {}
+        toast(fileName + ' 已上传' + sizeText, 'success');
+      });
+      es.addEventListener('upload_fail', function (e) {
+        let msg = '';
+        try { const data = JSON.parse(e.data); msg = data.message || ''; } catch (_) {}
+        toast(fileName + ' 上传失败: ' + (msg || '未知错误'), 'error');
+      });
+      es.addEventListener('editor_closed', function () {
+        toast('编辑器进程已退出，如仍在编辑，保存后仍会自动上传', 'idle');
+      });
+      es.addEventListener('done', function () {
+        es.close();
+      });
+      es.onerror = function () {
+        es.close();
+      };
     }
 
     // sftpDownloadOne 下载单个文件

@@ -3,6 +3,7 @@ package sftpclient
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -78,6 +79,50 @@ func (m *mockBackend) WriteFile(path string, data []byte, perm os.FileMode) erro
 		m.files = make(map[string][]byte)
 	}
 	m.files[path] = data
+	return nil
+}
+
+// UploadStream mock 实现：把 reader 全量读到 buffer，存到 files[path]。
+// 单元测试用，不模拟流式节流；progress 回调按已写字节触发一次。
+func (m *mockBackend) UploadStream(ctx context.Context, reader io.Reader, remotePath string, perm os.FileMode, progress func(written, total int64)) error {
+	if m.files == nil {
+		m.files = make(map[string][]byte)
+	}
+	// 用 io.ReadAll 读取（mock 场景数据小，无 OOM 风险）
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		return fmt.Errorf("mock upload read: %w", err)
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return fmt.Errorf("上传被取消: %w", ctxErr)
+	}
+	m.files[remotePath] = data
+	if progress != nil {
+		progress(int64(len(data)), int64(len(data)))
+	}
+	return nil
+}
+
+// Rename mock 实现：把 files[oldPath] 移到 files[newPath]。
+func (m *mockBackend) Rename(oldPath, newPath string) error {
+	if m.files == nil {
+		return fmt.Errorf("重命名失败: 源文件不存在: %s", oldPath)
+	}
+	data, ok := m.files[oldPath]
+	if !ok {
+		return fmt.Errorf("重命名失败: 源文件不存在: %s", oldPath)
+	}
+	m.files[newPath] = data
+	delete(m.files, oldPath)
+	return nil
+}
+
+// Remove mock 实现：删除 files[path]。
+func (m *mockBackend) Remove(path string) error {
+	if m.files == nil {
+		return nil
+	}
+	delete(m.files, path)
 	return nil
 }
 
@@ -299,7 +344,12 @@ func (m *cancelMockBackend) Stat(path string) (os.FileInfo, error) {
 func (m *cancelMockBackend) WriteFile(path string, data []byte, perm os.FileMode) error {
 	return nil
 }
-func (m *cancelMockBackend) Close() error { _ = m.reader.Close(); return nil }
+func (m *cancelMockBackend) UploadStream(ctx context.Context, reader io.Reader, remotePath string, perm os.FileMode, progress func(written, total int64)) error {
+	return nil
+}
+func (m *cancelMockBackend) Rename(oldPath, newPath string) error { return nil }
+func (m *cancelMockBackend) Remove(path string) error            { return nil }
+func (m *cancelMockBackend) Close() error                        { _ = m.reader.Close(); return nil }
 
 type cancelMockFile struct {
 	r *slowReader
@@ -553,6 +603,167 @@ func TestReadDir_NilClient(t *testing.T) {
 func TestStat_NilClient(t *testing.T) {
 	var c *Client
 	_, err := c.Stat("/x")
+	if err == nil {
+		t.Fatal("nil client should fail")
+	}
+}
+
+// ============================================================================
+// UploadStream / Rename / Remove 单元测试（v1.1 新增方法）
+// ============================================================================
+
+func TestUploadStream_Happy(t *testing.T) {
+	backend := &mockBackend{files: map[string][]byte{}}
+	c := newWithBackend(backend)
+	defer c.Close()
+
+	data := []byte("hello upload stream")
+	var lastWritten, lastTotal int64
+	err := c.UploadStream(context.Background(), strings.NewReader(string(data)), "/tmp/up.log", 0o644, func(w, total int64) {
+		lastWritten = w
+		lastTotal = total
+	})
+	if err != nil {
+		t.Fatalf("UploadStream: %v", err)
+	}
+	got, ok := backend.files["/tmp/up.log"]
+	if !ok {
+		t.Fatal("file not stored in backend")
+	}
+	if string(got) != string(data) {
+		t.Errorf("content=%q, want %q", got, data)
+	}
+	if lastWritten != int64(len(data)) || lastTotal != int64(len(data)) {
+		t.Errorf("progress callback: written=%d total=%d, want %d", lastWritten, lastTotal, len(data))
+	}
+}
+
+func TestUploadStream_NilClient(t *testing.T) {
+	var c *Client
+	err := c.UploadStream(context.Background(), strings.NewReader("x"), "/p", 0o644, nil)
+	if err == nil {
+		t.Fatal("nil client should fail")
+	}
+}
+
+func TestUploadStream_NilContext(t *testing.T) {
+	// nil ctx 应被兜底为 context.Background()，不应 panic
+	backend := &mockBackend{files: map[string][]byte{}}
+	c := newWithBackend(backend)
+	defer c.Close()
+	err := c.UploadStream(nil, strings.NewReader("x"), "/p", 0o644, nil)
+	if err != nil {
+		t.Fatalf("nil ctx should be tolerated: %v", err)
+	}
+}
+
+func TestUploadStream_ZeroPerm(t *testing.T) {
+	// perm=0 应兜底为 0o644
+	backend := &mockBackend{files: map[string][]byte{}}
+	c := newWithBackend(backend)
+	defer c.Close()
+	err := c.UploadStream(context.Background(), strings.NewReader("x"), "/p", 0, nil)
+	if err != nil {
+		t.Fatalf("zero perm: %v", err)
+	}
+}
+
+func TestUploadStream_CancelCtx(t *testing.T) {
+	// mockBackend.UploadStream 在读完数据后检查 ctx.Err()
+	// 用一个已取消的 ctx → 应返回"上传被取消"错误
+	backend := &mockBackend{files: map[string][]byte{}}
+	c := newWithBackend(backend)
+	defer c.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // 立即取消
+
+	err := c.UploadStream(ctx, strings.NewReader("data"), "/p", 0o644, nil)
+	if err == nil {
+		t.Fatal("canceled ctx should produce error")
+	}
+	if !strings.Contains(err.Error(), "取消") {
+		t.Errorf("err should mention cancel: %v", err)
+	}
+}
+
+func TestUploadStream_NilProgress(t *testing.T) {
+	// nil progress 回调不应 panic
+	backend := &mockBackend{files: map[string][]byte{}}
+	c := newWithBackend(backend)
+	defer c.Close()
+	err := c.UploadStream(context.Background(), strings.NewReader("x"), "/p", 0o644, nil)
+	if err != nil {
+		t.Fatalf("nil progress: %v", err)
+	}
+}
+
+func TestRename_Happy(t *testing.T) {
+	backend := &mockBackend{files: map[string][]byte{"/old": []byte("data")}}
+	c := newWithBackend(backend)
+	defer c.Close()
+
+	err := c.Rename("/old", "/new")
+	if err != nil {
+		t.Fatalf("Rename: %v", err)
+	}
+	if _, ok := backend.files["/old"]; ok {
+		t.Error("old path should be removed")
+	}
+	if got, ok := backend.files["/new"]; !ok || string(got) != "data" {
+		t.Errorf("new path: ok=%v data=%q", ok, got)
+	}
+}
+
+func TestRename_SourceNotExist(t *testing.T) {
+	backend := &mockBackend{files: map[string][]byte{}}
+	c := newWithBackend(backend)
+	defer c.Close()
+
+	err := c.Rename("/missing", "/new")
+	if err == nil {
+		t.Fatal("rename missing source should fail")
+	}
+}
+
+func TestRename_NilClient(t *testing.T) {
+	var c *Client
+	err := c.Rename("/a", "/b")
+	if err == nil {
+		t.Fatal("nil client should fail")
+	}
+}
+
+func TestRemove_Happy(t *testing.T) {
+	backend := &mockBackend{files: map[string][]byte{"/del": []byte("x")}}
+	c := newWithBackend(backend)
+	defer c.Close()
+
+	err := c.Remove("/del")
+	if err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	if _, ok := backend.files["/del"]; ok {
+		t.Error("file should be deleted")
+	}
+}
+
+func TestRemove_NotExist(t *testing.T) {
+	// mockBackend.Remove 对不存在的文件返回 nil（与 sftp.Remove 行为可能不同，
+	// 但这里只测 mock 行为一致性）
+	backend := &mockBackend{files: map[string][]byte{}}
+	c := newWithBackend(backend)
+	defer c.Close()
+
+	err := c.Remove("/missing")
+	if err != nil {
+		t.Fatalf("Remove missing should be nil in mock: %v", err)
+	}
+}
+
+func TestRemove_NilClient(t *testing.T) {
+	var c *Client
+	err := c.Remove("/x")
 	if err == nil {
 		t.Fatal("nil client should fail")
 	}

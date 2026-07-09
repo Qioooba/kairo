@@ -824,9 +824,10 @@ func TestLogsSearch_Validations(t *testing.T) {
 	if w := doRequest(srv, "GET", "/api/logs/search", nil); w.Code != 405 {
 		t.Errorf("GET: %d", w.Code)
 	}
+	// v0.14：关键词黑名单缩窄到 `' / \x00`；用 `'` 触发"非法字符 → 400"
 	if w := doRequest(srv, "POST", "/api/logs/search", map[string]any{
 		"system": "信贷生产", "server": "mock-1", "dir": "SystemOut",
-		"query": "你好[", "username": "u", "password": "p",
+		"query": "你好'", "username": "u", "password": "p",
 	}); w.Code != 400 {
 		t.Errorf("bad query: %d body=%s", w.Code, w.Body.String())
 	}
@@ -871,9 +872,9 @@ func TestLogsSearchMulti_Validations(t *testing.T) {
 	}); w.Code != 400 {
 		t.Errorf("empty dir: %d", w.Code)
 	}
-	// bad query
+	// bad query — v0.14：黑名单缩窄后用 `'` 触发 400（`[` 现在合法）
 	if w := doRequest(srv, "POST", "/api/logs/search/multi", map[string]any{
-		"system": "信贷生产", "servers": []string{"mock-1"}, "dir": "SystemOut", "query": "你[",
+		"system": "信贷生产", "servers": []string{"mock-1"}, "dir": "SystemOut", "query": "你'",
 		"username": "u", "password": "p",
 	}); w.Code != 400 {
 		t.Errorf("bad query: %d", w.Code)

@@ -1,7 +1,7 @@
 app:
   name: Kairo
   host: 127.0.0.1
-  port: 18092
+  port: 18094
   auto_open_browser: true
   download_dir: ./downloads
   log_dir: ./logs

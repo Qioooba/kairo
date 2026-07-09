@@ -159,6 +159,14 @@ func (s *Server) handleReminderAdd(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, out)
 }
 
+// handleReminderUpdate PUT /api/reminders/:id — 全量替换 content / schedule。
+//
+// 契约说明：客户端 PUT 的 enabled 字段会被静默忽略（即"缺省保留原值"）。
+// 这是有意设计，由 reminder.Update() 在 manager 层统一执行，避免 PUT 与
+// /toggle 双端点对同一字段的并发竞态。
+//
+// 启用 / 停用只能通过 POST /api/reminders/:id/toggle 走专用路径。
+// 若调用方依赖「传 enabled:false 立即停用」会得到反直觉结果——这是契约而不是 bug。
 func (s *Server) handleReminderUpdate(w http.ResponseWriter, r *http.Request, id string) {
 	if s.reminders == nil {
 		writeErr(w, 503, errors.New("reminder 服务未初始化"))
@@ -170,18 +178,7 @@ func (s *Server) handleReminderUpdate(w http.ResponseWriter, r *http.Request, id
 		writeErr(w, 400, fmt.Errorf("请求体 JSON 解析失败: %w", err))
 		return
 	}
-	// Update 保留现有 enabled（除非 client 显式传 enabled 字段）。
-	// 因为 Update 接收 *bool，DTO 转 Reminder 时无法自动读"当前值"，所以 Update 时
-	// manager 会按已有行为（in.Enabled）走——这里强制让 enabled=false 走默认值再覆盖。
-	// 实际修复：把 Update 调用前先把 enabled 补成"现有值若 req.Enabled 为 nil"。
 	in := req.toReminder(false)
-	if req.Enabled == nil {
-		// 保留现有 enabled
-		old, ok := s.reminders.Get(id)
-		if ok {
-			in.Enabled = old.Enabled
-		}
-	}
 	out, err := s.reminders.Update(id, in)
 	if err != nil {
 		if errors.Is(err, reminder.ErrNotFound) {

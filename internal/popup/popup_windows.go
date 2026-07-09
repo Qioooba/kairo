@@ -3,106 +3,71 @@
 package popup
 
 import (
+	"context"
+	"encoding/base64"
+	"encoding/binary"
 	"fmt"
 	"log"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
+	"unicode/utf16"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
 
-// popup_windows.go：自绘右下角悬浮通知。
+// popup_windows.go：Windows 提醒弹窗。
 //
 // 设计要点：
-//   - 圆角用 SetWindowRgn(CreateRoundRectRgn)，跨 Win 7/10 都支持（无需 DWM）。
-//   - 半透明用 WS_EX_LAYERED + LWA_ALPHA（整体 alpha，不依赖 UpdateLayeredWindow）。
-//   - 文字用 GDI DrawTextW（无抗锯齿，但简洁够用；后续可升级 GDI+）。
-//   - 关闭按钮：自己处理 WM_LBUTTONDOWN，按坐标判断关闭按钮区域。
-//   - 多条提醒排队显示，避免堆叠。
-//   - 主题跟随系统：注册表 HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize
-//     下 AppsUseLightTheme = 0 表示深色（Win10 1809+）；Win 7 没有此值，默认浅色。
-
-// ---------- 常量 ----------
+//   - Win10/11 优先走现代系统 Toast（Windows.UI.Notifications），由系统通知中心渲染。
+//   - Win7/Win8 或 Toast 不可用时 fallback 到 Shell_NotifyIconW(NIF_INFO) 经典气泡。
+//   - 不内嵌 PNG，不自绘大背景图；视觉交给 Windows，避免拖大单 exe 体积。
+//   - 多条提醒排队显示，避免同一时间刷屏。
 
 const (
-	popupClassName = "KairoReminderPopupClass_v1"
+	kairoAppID      = "Kairo.OpsToolbox"
+	nativeClassName = "KairoNativeReminderToastClass_v1"
 
-	popupW      = 360
-	popupH      = 140
-	popupMargin = 16  // 距工作区右下角
-	popupGap    = 1200 * time.Millisecond
-	popupLive   = 8 * time.Second
+	nativeUID  uint32 = 0x4b52 // KR
+	nativeGap         = 800 * time.Millisecond
+	legacyLive        = 10 * time.Second
 )
 
 const (
-	WM_DESTROY     = 0x0002
-	WM_PAINT       = 0x000F
-	WM_TIMER       = 0x0113
-	WM_LBUTTONDOWN = 0x0201
-	WM_MOUSEMOVE   = 0x0200
-	WM_QUIT        = 0x0012
+	WM_USER = 0x0400
 
-	WS_POPUP            = 0x80000000
-	WS_EX_TOPMOST       = 0x00000008
-	WS_EX_TOOLWINDOW    = 0x00000080
-	WS_EX_LAYERED       = 0x00080000
-	WS_EX_NOACTIVATE    = 0x08000000
+	NIM_ADD        = 0x00000000
+	NIM_MODIFY     = 0x00000001
+	NIM_DELETE     = 0x00000002
+	NIM_SETVERSION = 0x00000004
 
-	LWA_ALPHA = 0x00000002
+	NIF_MESSAGE = 0x00000001
+	NIF_ICON    = 0x00000002
+	NIF_TIP     = 0x00000004
+	NIF_INFO    = 0x00000010
 
-	HWND_TOPMOST = ^uintptr(0) // -1
+	NOTIFYICON_VERSION_4 = 4
 
-	SWP_NOMOVE     = 0x0002
-	SWP_NOSIZE     = 0x0001
-	SWP_NOACTIVATE = 0x0010
-	SWP_SHOWWINDOW = 0x0040
+	NIIF_INFO = 0x00000001
 
-	SPI_GETWORKAREA = 0x0030
-
-	TRANSPARENT = 1
-
-	DT_SINGLELINE = 0x00000020
-	DT_WORDBREAK  = 0x00000010
-	DT_NOPREFIX   = 0x00000800
-	DT_END_ELLIPSIS = 0x00008000
-	DT_CALCRECT   = 0x00000400
-
-	IDC_HAND = 32649
-
-	timerClose = 1
-	timerFade  = 2
-
-	// 配色（深色主题）—— 与 popup-dark-1-indigo 背景图风格一致
-	colBgDark     = 0x001e293b // slate-800
-	colAccentDark = 0x006366f1 // indigo-500
-	colTitleDark  = 0x00f1f5f9 // slate-100
-	colBodyDark   = 0x00cbd5e1 // slate-300
-	colCloseDark  = 0x0094a3b8 // slate-400
-
-	// 配色（浅色主题）
-	colBgLight     = 0x00fafafa
-	colAccentLight = 0x003b82f6 // blue-500
-	colTitleLight  = 0x000f172a // slate-900
-	colBodyLight   = 0x00334155 // slate-700
-	colCloseLight  = 0x0064748b // slate-500
+	IDI_INFORMATION = 32516
 )
 
-// ---------- 结构体 ----------
+const (
+	COINIT_APARTMENTTHREADED = 0x2
+	CLSCTX_INPROC_SERVER     = 0x1
+	VT_LPWSTR                = 31
 
-type point struct{ X, Y int32 }
-type rect struct{ Left, Top, Right, Bottom int32 }
-
-type msg struct {
-	Hwnd    uintptr
-	Message uint32
-	WParam  uintptr
-	LParam  uintptr
-	Time    uint32
-	Pt      point
-}
+	S_OK               uintptr = 0x00000000
+	S_FALSE            uintptr = 0x00000001
+	RPC_E_CHANGED_MODE uint32  = 0x80010106
+)
 
 type wndClassEx struct {
 	CbSize        uint32
@@ -119,86 +84,186 @@ type wndClassEx struct {
 	HIconSm       uintptr
 }
 
-type paintStruct struct {
-	Hdc        uintptr
-	FErase     int32
-	RcPaint    rect
-	FRestore   int32
-	FIncUpdate int32
-	Reserved   [32]byte
+type notifyIconData struct {
+	CbSize            uint32
+	HWnd              uintptr
+	UID               uint32
+	UFlags            uint32
+	UCallbackMessage  uint32
+	HIcon             uintptr
+	SzTip             [128]uint16
+	DwState           uint32
+	DwStateMask       uint32
+	SzInfo            [256]uint16
+	UTimeoutOrVersion uint32
+	SzInfoTitle       [64]uint16
+	DwInfoFlags       uint32
 }
 
-// ---------- Procs ----------
+type osVersionInfoExW struct {
+	OSVersionInfoSize uint32
+	MajorVersion      uint32
+	MinorVersion      uint32
+	BuildNumber       uint32
+	PlatformID        uint32
+	CSDVersion        [128]uint16
+	ServicePackMajor  uint16
+	ServicePackMinor  uint16
+	SuiteMask         uint16
+	ProductType       byte
+	Reserved          byte
+}
+
+type propertyKey struct {
+	Fmtid windows.GUID
+	Pid   uint32
+}
+
+type propVariant struct {
+	Vt         uint16
+	Reserved1  uint16
+	Reserved2  uint16
+	Reserved3  uint16
+	PointerVal uintptr
+}
+
+type iUnknown struct {
+	LpVtbl *iUnknownVtbl
+}
+
+type iUnknownVtbl struct {
+	QueryInterface uintptr
+	AddRef         uintptr
+	Release        uintptr
+}
+
+type iShellLinkW struct {
+	LpVtbl *iShellLinkWVtbl
+}
+
+type iShellLinkWVtbl struct {
+	QueryInterface      uintptr
+	AddRef              uintptr
+	Release             uintptr
+	GetPath             uintptr
+	GetIDList           uintptr
+	SetIDList           uintptr
+	GetDescription      uintptr
+	SetDescription      uintptr
+	GetWorkingDirectory uintptr
+	SetWorkingDirectory uintptr
+	GetArguments        uintptr
+	SetArguments        uintptr
+	GetHotkey           uintptr
+	SetHotkey           uintptr
+	GetShowCmd          uintptr
+	SetShowCmd          uintptr
+	GetIconLocation     uintptr
+	SetIconLocation     uintptr
+	SetRelativePath     uintptr
+	Resolve             uintptr
+	SetPath             uintptr
+}
+
+type iPersistFile struct {
+	LpVtbl *iPersistFileVtbl
+}
+
+type iPersistFileVtbl struct {
+	QueryInterface uintptr
+	AddRef         uintptr
+	Release        uintptr
+	GetClassID     uintptr
+	IsDirty        uintptr
+	Load           uintptr
+	Save           uintptr
+	SaveCompleted  uintptr
+	GetCurFile     uintptr
+}
+
+type iPropertyStore struct {
+	LpVtbl *iPropertyStoreVtbl
+}
+
+type iPropertyStoreVtbl struct {
+	QueryInterface uintptr
+	AddRef         uintptr
+	Release        uintptr
+	GetCount       uintptr
+	GetAt          uintptr
+	GetValue       uintptr
+	SetValue       uintptr
+	Commit         uintptr
+}
 
 var (
-	procRegisterClassExW           = user32DLL().NewProc("RegisterClassExW")
-	procCreateWindowExW            = user32DLL().NewProc("CreateWindowExW")
-	procDefWindowProcW             = user32DLL().NewProc("DefWindowProcW")
-	procDestroyWindow              = user32DLL().NewProc("DestroyWindow")
-	procGetMessageW                = user32DLL().NewProc("GetMessageW")
-	procTranslateMessage           = user32DLL().NewProc("TranslateMessage")
-	procDispatchMessageW           = user32DLL().NewProc("DispatchMessageW")
-	procSetWindowPos               = user32DLL().NewProc("SetWindowPos")
-	procSetLayeredWindowAttributes = user32DLL().NewProc("SetLayeredWindowAttributes")
-	procCreateRoundRectRgn         = gdi32DLL().NewProc("CreateRoundRectRgn")
-	procSetWindowRgn               = user32DLL().NewProc("SetWindowRgn")
-	procDeleteObject               = gdi32DLL().NewProc("DeleteObject")
-	procSystemParametersInfoW      = user32DLL().NewProc("SystemParametersInfoW")
-	procBeginPaint                 = user32DLL().NewProc("BeginPaint")
-	procEndPaint                   = user32DLL().NewProc("EndPaint")
-	procFillRect                   = user32DLL().NewProc("FillRect")
-	procDrawTextW                  = user32DLL().NewProc("DrawTextW")
-	procSetTextColor               = gdi32DLL().NewProc("SetTextColor")
-	procSetBkMode                  = user32DLL().NewProc("SetBkMode")
-	procCreateSolidBrush           = gdi32DLL().NewProc("CreateSolidBrush")
-	procSetTimer                   = user32DLL().NewProc("SetTimer")
-	procKillTimer                  = user32DLL().NewProc("KillTimer")
-	procPostQuitMessage            = user32DLL().NewProc("PostQuitMessage")
-	procGetClientRect              = user32DLL().NewProc("GetClientRect")
-	procLoadCursorW                = user32DLL().NewProc("LoadCursorW")
-	procSetCursor                  = user32DLL().NewProc("SetCursor")
-	procGetModuleHandleW           = kernel32DLL().NewProc("GetModuleHandleW")
-	procGradientFill               = gdi32DLL().NewProc("GradientFill")
+	procRegisterClassExW = user32DLL().NewProc("RegisterClassExW")
+	procCreateWindowExW  = user32DLL().NewProc("CreateWindowExW")
+	procDefWindowProcW   = user32DLL().NewProc("DefWindowProcW")
+	procDestroyWindow    = user32DLL().NewProc("DestroyWindow")
+	procLoadIconW        = user32DLL().NewProc("LoadIconW")
+	procGetModuleHandleW = kernel32DLL().NewProc("GetModuleHandleW")
+	procShellNotifyIconW = shell32DLL().NewProc("Shell_NotifyIconW")
+	procRtlGetVersion    = ntdllDLL().NewProc("RtlGetVersion")
+
+	procCoInitializeEx   = ole32DLL().NewProc("CoInitializeEx")
+	procCoUninitialize   = ole32DLL().NewProc("CoUninitialize")
+	procCoCreateInstance = ole32DLL().NewProc("CoCreateInstance")
 )
 
-func user32DLL() *windows.LazyDLL  { return windows.NewLazySystemDLL("user32.dll") }
-func gdi32DLL() *windows.LazyDLL   { return windows.NewLazySystemDLL("gdi32.dll") }
+func user32DLL() *windows.LazyDLL   { return windows.NewLazySystemDLL("user32.dll") }
+func shell32DLL() *windows.LazyDLL  { return windows.NewLazySystemDLL("shell32.dll") }
 func kernel32DLL() *windows.LazyDLL { return windows.NewLazySystemDLL("kernel32.dll") }
-
-// ---------- 状态 ----------
+func ntdllDLL() *windows.LazyDLL    { return windows.NewLazySystemDLL("ntdll.dll") }
+func ole32DLL() *windows.LazyDLL    { return windows.NewLazySystemDLL("ole32.dll") }
 
 var (
 	queueMu sync.Mutex
 	queue   []popupItem
 	showing bool
 	classOK bool
+	hwnd    uintptr // 所有读写 hwnd 必须在 queueMu 内进行
 
-	// pump goroutine 启动一次
-	pumpStart sync.Once
+	// pumpCancel 是 popupPump 的 ctx 取消函数。shutdown 可通过它立即杀掉挂起的
+	// powershell 子进程与正在等待的 ticker / IO，避免 8s 的 powershell CombinedOutput
+	// 阻塞退出路径。
+	pumpCancelMu sync.Mutex
+	pumpCancel   context.CancelFunc
+
+	toastShortcutOnce sync.Once
+	toastShortcutErr  error
+)
+
+var (
+	clsidShellLink    = windows.GUID{Data1: 0x00021401, Data2: 0x0000, Data3: 0x0000, Data4: [8]byte{0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}}
+	iidIShellLinkW    = windows.GUID{Data1: 0x000214F9, Data2: 0x0000, Data3: 0x0000, Data4: [8]byte{0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}}
+	iidIPersistFile   = windows.GUID{Data1: 0x0000010b, Data2: 0x0000, Data3: 0x0000, Data4: [8]byte{0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}}
+	iidIPropertyStore = windows.GUID{Data1: 0x00000138, Data2: 0x0000, Data3: 0x0000, Data4: [8]byte{0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}}
+
+	pkeyAppUserModelID = propertyKey{
+		Fmtid: windows.GUID{Data1: 0x9F4C2855, Data2: 0x9F79, Data3: 0x4B39, Data4: [8]byte{0xA8, 0xD0, 0xE1, 0xD4, 0x2D, 0xE1, 0xD5, 0xF3}},
+		Pid:   5,
+	}
 )
 
 type popupItem struct {
 	content string
 }
 
-// ---------- Public API ----------
-
 func show(content string) {
+	content = strings.TrimSpace(content)
 	if content == "" {
 		content = "(空提醒)"
 	}
-	item := popupItem{content: content}
 
 	queueMu.Lock()
-	queue = append(queue, item)
+	queue = append(queue, popupItem{content: content})
 	needStart := !showing
 	showing = true
 	queueMu.Unlock()
 
 	if needStart {
-		pumpStart.Do(func() {
-			go popupPump()
-		})
+		go popupPump()
 	}
 }
 
@@ -206,7 +271,31 @@ func shutdown() {
 	queueMu.Lock()
 	showing = false
 	queue = queue[:0]
+	// 快照 + 清零：避免 pump 拿到旧 hwnd 调 NIM_MODIFY 时窗口已经销毁。
+	h := hwnd
+	hwnd = 0
 	queueMu.Unlock()
+
+	pumpCancelMu.Lock()
+	cancel := pumpCancel
+	pumpCancel = nil
+	pumpCancelMu.Unlock()
+	if cancel != nil {
+		// 杀掉 powershell 子进程 + 任何阻塞中的 CombinedOutput/Ticker。
+		cancel()
+	}
+
+	if h == 0 {
+		return
+	}
+	// 先从托盘摘除图标，再销毁窗口，避免残留"幽灵"图标。
+	nid := notifyIconData{
+		CbSize: uint32(unsafe.Sizeof(notifyIconData{})),
+		HWnd:   h,
+		UID:    nativeUID,
+	}
+	procShellNotifyIconW.Call(NIM_DELETE, uintptr(unsafe.Pointer(&nid)))
+	procDestroyWindow.Call(h)
 }
 
 func queueLength() int {
@@ -215,19 +304,20 @@ func queueLength() int {
 	return len(queue)
 }
 
-// ---------- Pump ----------
-
 func popupPump() {
+	ctx, cancel := context.WithCancel(context.Background())
+	pumpCancelMu.Lock()
+	pumpCancel = cancel
+	pumpCancelMu.Unlock()
+	defer func() {
+		pumpCancelMu.Lock()
+		pumpCancel = nil
+		pumpCancelMu.Unlock()
+		cancel()
+	}()
+
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
-
-	if err := registerClass(); err != nil {
-		log.Printf("popup: registerClass 失败: %v", err)
-		queueMu.Lock()
-		showing = false
-		queueMu.Unlock()
-		return
-	}
 
 	for {
 		queueMu.Lock()
@@ -240,297 +330,445 @@ func popupPump() {
 		queue = queue[1:]
 		queueMu.Unlock()
 
-		runPopupWindow(item)
-		time.Sleep(popupGap)
+		if isWindows10OrNewer() {
+			if err := runModernToast(ctx, item.content); err == nil {
+				time.Sleep(nativeGap)
+				continue
+			} else {
+				log.Printf("popup: Win10 Toast 失败，回退传统气泡: %v", err)
+			}
+		}
+
+		if err := registerClass(); err != nil {
+			log.Printf("popup: registerClass 失败: %v", err)
+			time.Sleep(nativeGap)
+			continue
+		}
+		runLegacyBalloon(item)
+		time.Sleep(nativeGap)
+	}
+}
+
+func isWindows10OrNewer() bool {
+	var vi osVersionInfoExW
+	vi.OSVersionInfoSize = uint32(unsafe.Sizeof(vi))
+	ret, _, _ := procRtlGetVersion.Call(uintptr(unsafe.Pointer(&vi)))
+	if ret != 0 {
+		return false
+	}
+	return vi.MajorVersion >= 10
+}
+
+func runModernToast(parentCtx context.Context, content string) error {
+	if err := ensureToastShortcutOnce(); err != nil {
+		return err
+	}
+
+	toastXML := buildToastXML(content)
+	xmlB64 := base64.StdEncoding.EncodeToString([]byte(toastXML))
+	ps := fmt.Sprintf(`$ErrorActionPreference = 'Stop'
+[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] > $null
+[Windows.UI.Notifications.ToastNotification, Windows.UI.Notifications, ContentType = WindowsRuntime] > $null
+[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] > $null
+$AppId = '%s'
+$XmlText = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('%s'))
+$Xml = New-Object Windows.Data.Xml.Dom.XmlDocument
+$Xml.LoadXml($XmlText)
+$Toast = [Windows.UI.Notifications.ToastNotification]::new($Xml)
+[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($AppId).Show($Toast)
+`, psQuote(kairoAppID), xmlB64)
+
+	// parentCtx 由 popupPump 提供，shutdown 时会 cancel 它 — 由此杀掉 powershell 子进程。
+	// 8s 超时是兜底，二者同时有效：先到先杀。
+	ctx, cancel := context.WithTimeout(parentCtx, 8*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "powershell.exe",
+		"-NoProfile",
+		"-ExecutionPolicy", "Bypass",
+		"-WindowStyle", "Hidden",
+		"-EncodedCommand", utf16LEBase64(ps),
+	)
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+
+	out, err := cmd.CombinedOutput()
+	if ctx.Err() != nil {
+		return fmt.Errorf("powershell toast 超时: %w", ctx.Err())
+	}
+	if err != nil {
+		msg := strings.TrimSpace(string(out))
+		if len(msg) > 500 {
+			msg = msg[:500] + "..."
+		}
+		if msg == "" {
+			msg = err.Error()
+		}
+		return fmt.Errorf("powershell toast 执行失败: %s", msg)
+	}
+	return nil
+}
+
+func buildToastXML(content string) string {
+	now := time.Now()
+	timeStr := fmt.Sprintf("%d:%02d", now.Hour(), now.Minute())
+	return `<toast scenario="reminder" launch="action=open">
+  <visual>
+    <binding template="ToastGeneric">
+      <text placement="attribution">Kairo</text>
+      <text hint-style="header" hint-wrap="true">便笺提醒</text>
+      <text hint-wrap="true" hint-maxLines="3">` + xmlEscape(content) + `</text>
+      <text hint-style="captionSubtle" hint-wrap="true">` + timeStr + `</text>
+    </binding>
+  </visual>
+  <audio src="ms-winsoundevent:Notification.Reminder" />
+</toast>`
+}
+
+func ensureToastShortcutOnce() error {
+	toastShortcutOnce.Do(func() {
+		toastShortcutErr = ensureToastShortcut()
+	})
+	return toastShortcutErr
+}
+
+func ensureToastShortcut() error {
+	exePath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("获取 exe 路径失败: %w", err)
+	}
+	if resolved, err := filepath.EvalSymlinks(exePath); err == nil {
+		exePath = resolved
+	}
+
+	appData := os.Getenv("APPDATA")
+	if appData == "" {
+		return fmt.Errorf("APPDATA 为空，无法创建开始菜单快捷方式")
+	}
+	shortcutPath := filepath.Join(appData, "Microsoft", "Windows", "Start Menu", "Programs", "Kairo.lnk")
+	if err := os.MkdirAll(filepath.Dir(shortcutPath), 0o755); err != nil {
+		return fmt.Errorf("创建开始菜单目录失败: %w", err)
+	}
+
+	coUninit, err := coInitialize()
+	if err != nil {
+		return err
+	}
+	if coUninit {
+		defer procCoUninitialize.Call()
+	}
+
+	var shellLink *iShellLinkW
+	hr, _, _ := procCoCreateInstance.Call(
+		uintptr(unsafe.Pointer(&clsidShellLink)),
+		0,
+		uintptr(CLSCTX_INPROC_SERVER),
+		uintptr(unsafe.Pointer(&iidIShellLinkW)),
+		uintptr(unsafe.Pointer(&shellLink)),
+	)
+	if failed(hr) || shellLink == nil {
+		return hresultError("CoCreateInstance(IShellLinkW)", hr)
+	}
+	defer releaseCOM(unsafe.Pointer(shellLink))
+
+	if err := shellLink.SetPath(exePath); err != nil {
+		return err
+	}
+	if err := shellLink.SetWorkingDirectory(filepath.Dir(exePath)); err != nil {
+		return err
+	}
+	if err := shellLink.SetIconLocation(exePath, 0); err != nil {
+		return err
+	}
+	if err := shellLink.SetDescription("Kairo Ops Toolbox"); err != nil {
+		return err
+	}
+	if err := setShellLinkAppID(shellLink, kairoAppID); err != nil {
+		return err
+	}
+	if err := saveShellLink(shellLink, shortcutPath); err != nil {
+		return err
+	}
+	return nil
+}
+
+func coInitialize() (bool, error) {
+	hr, _, _ := procCoInitializeEx.Call(0, uintptr(COINIT_APARTMENTTHREADED))
+	if hr == S_OK || hr == S_FALSE {
+		return true, nil
+	}
+	if uint32(hr) == RPC_E_CHANGED_MODE {
+		// 当前线程已经用别的模式初始化过 COM，继续使用即可，但不能 CoUninitialize。
+		return false, nil
+	}
+	return false, hresultError("CoInitializeEx", hr)
+}
+
+func setShellLinkAppID(shellLink *iShellLinkW, appID string) error {
+	psPtr, err := queryInterface(unsafe.Pointer(shellLink), &iidIPropertyStore)
+	if err != nil {
+		return err
+	}
+	ps := (*iPropertyStore)(psPtr)
+	defer releaseCOM(psPtr)
+
+	appIDPtr, err := windows.UTF16PtrFromString(appID)
+	if err != nil {
+		return err
+	}
+	pv := propVariant{Vt: VT_LPWSTR, PointerVal: uintptr(unsafe.Pointer(appIDPtr))}
+	hr, _, _ := syscall.SyscallN(
+		ps.LpVtbl.SetValue,
+		uintptr(unsafe.Pointer(ps)),
+		uintptr(unsafe.Pointer(&pkeyAppUserModelID)),
+		uintptr(unsafe.Pointer(&pv)),
+	)
+	if failed(hr) {
+		return hresultError("IPropertyStore.SetValue(AppUserModelID)", hr)
+	}
+	hr, _, _ = syscall.SyscallN(ps.LpVtbl.Commit, uintptr(unsafe.Pointer(ps)))
+	if failed(hr) {
+		return hresultError("IPropertyStore.Commit", hr)
+	}
+	return nil
+}
+
+func saveShellLink(shellLink *iShellLinkW, shortcutPath string) error {
+	pfPtr, err := queryInterface(unsafe.Pointer(shellLink), &iidIPersistFile)
+	if err != nil {
+		return err
+	}
+	pf := (*iPersistFile)(pfPtr)
+	defer releaseCOM(pfPtr)
+
+	pathPtr, err := windows.UTF16PtrFromString(shortcutPath)
+	if err != nil {
+		return err
+	}
+	hr, _, _ := syscall.SyscallN(
+		pf.LpVtbl.Save,
+		uintptr(unsafe.Pointer(pf)),
+		uintptr(unsafe.Pointer(pathPtr)),
+		uintptr(1),
+	)
+	if failed(hr) {
+		return hresultError("IPersistFile.Save", hr)
+	}
+	return nil
+}
+
+func queryInterface(obj unsafe.Pointer, iid *windows.GUID) (unsafe.Pointer, error) {
+	if obj == nil {
+		return nil, fmt.Errorf("QueryInterface: nil object")
+	}
+	var out unsafe.Pointer
+	hr, _, _ := syscall.SyscallN(
+		(*iUnknown)(obj).LpVtbl.QueryInterface,
+		uintptr(obj),
+		uintptr(unsafe.Pointer(iid)),
+		uintptr(unsafe.Pointer(&out)),
+	)
+	if failed(hr) || out == nil {
+		return nil, hresultError("QueryInterface", hr)
+	}
+	return out, nil
+}
+
+func releaseCOM(obj unsafe.Pointer) {
+	if obj != nil {
+		syscall.SyscallN((*iUnknown)(obj).LpVtbl.Release, uintptr(obj))
 	}
 }
 
 func registerClass() error {
-	className, _ := windows.UTF16PtrFromString(popupClassName)
+	if classOK {
+		return nil
+	}
+
+	className, _ := windows.UTF16PtrFromString(nativeClassName)
 	hInstance, _, _ := procGetModuleHandleW.Call(0)
 
 	wc := wndClassEx{
 		CbSize:        uint32(unsafe.Sizeof(wndClassEx{})),
-		Style:         0,
-		LpfnWndProc:   syscall.NewCallback(wndProc),
+		LpfnWndProc:   syscall.NewCallback(nativeWndProc),
 		HInstance:     hInstance,
 		HbrBackground: 0,
 		LpszClassName: className,
 	}
-	ret, _, _ := procRegisterClassExW.Call(uintptr(unsafe.Pointer(&wc)))
-	if ret == 0 {
-		return fmt.Errorf("RegisterClassExW 失败")
+	ret, _, err := procRegisterClassExW.Call(uintptr(unsafe.Pointer(&wc)))
+	if ret == 0 && err != syscall.Errno(1410) { // ERROR_CLASS_ALREADY_EXISTS
+		return fmt.Errorf("RegisterClassExW 失败: %v", err)
 	}
 	classOK = true
 	return nil
 }
 
-// ---------- WindowProc ----------
-
-var lastPopupContent string // wndProc 拿不到 item 引用，用全局变量传 content（pump 串行，互斥）
-
-func wndProc(hwnd, uMsg, wParam, lParam uintptr) uintptr {
-	switch uMsg {
-	case WM_PAINT:
-		onPaint(hwnd, lastPopupContent)
-		return 0
-	case WM_LBUTTONDOWN:
-		x := int16(lParam & 0xFFFF)
-		y := int16((lParam >> 16) & 0xFFFF)
-		if isCloseHit(int32(x), int32(y)) {
-			procPostQuitMessage.Call(0)
-		}
-		return 0
-	case WM_MOUSEMOVE:
-		x := int16(lParam & 0xFFFF)
-		y := int16((lParam >> 16) & 0xFFFF)
-		if isCloseHit(int32(x), int32(y)) {
-			hc, _, _ := procLoadCursorW.Call(0, uintptr(IDC_HAND))
-			if hc != 0 {
-				procSetCursor.Call(hc)
-			}
-		}
-		return 0
-	case WM_TIMER:
-		if wParam == timerClose {
-			procPostQuitMessage.Call(0)
-		}
-		return 0
-	case WM_DESTROY:
-		procKillTimer.Call(hwnd, uintptr(timerClose))
-		return 0
-	}
-	ret, _, _ := procDefWindowProcW.Call(hwnd, uMsg, wParam, lParam)
+func nativeWndProc(hwnd, msg, wParam, lParam uintptr) uintptr {
+	ret, _, _ := procDefWindowProcW.Call(hwnd, msg, wParam, lParam)
 	return ret
 }
 
-// ---------- 渲染 ----------
+func runLegacyBalloon(item popupItem) {
+	// hwnd 的所有读写必须在 queueMu 内进行：shutdown 在锁内把 hwnd 清零，
+	// 此处在锁内快照出本地 h 之后再去用，避免与 DestroyWindow 并发。
+	queueMu.Lock()
+	var h uintptr
+	if hwnd == 0 {
+		h = createHiddenWindow()
+		if h == 0 {
+			queueMu.Unlock()
+			log.Printf("popup: CreateWindowExW 失败")
+			return
+		}
 
-func onPaint(hwnd uintptr, content string) {
-	var ps paintStruct
-	hdc, _, _ := procBeginPaint.Call(hwnd, uintptr(unsafe.Pointer(&ps)))
-	if hdc == 0 {
-		return
+		hIcon, _, _ := procLoadIconW.Call(0, uintptr(IDI_INFORMATION))
+		nid := notifyIconData{
+			CbSize:           uint32(unsafe.Sizeof(notifyIconData{})),
+			HWnd:             h,
+			UID:              nativeUID,
+			UFlags:           NIF_MESSAGE | NIF_ICON | NIF_TIP,
+			UCallbackMessage: WM_USER + 77,
+			HIcon:            hIcon,
+		}
+		copyUTF16(nid.SzTip[:], "Kairo")
+
+		ret, _, err := procShellNotifyIconW.Call(NIM_ADD, uintptr(unsafe.Pointer(&nid)))
+		if ret == 0 {
+			log.Printf("popup: Shell_NotifyIconW(NIM_ADD) 失败: %v", err)
+			procDestroyWindow.Call(h)
+			queueMu.Unlock()
+			return
+		}
+
+		nid.UTimeoutOrVersion = NOTIFYICON_VERSION_4
+		ret, _, err = procShellNotifyIconW.Call(NIM_SETVERSION, uintptr(unsafe.Pointer(&nid)))
+		if ret == 0 {
+			log.Printf("popup: Shell_NotifyIconW(NIM_SETVERSION) 失败: %v", err)
+		}
+		// NIM_ADD 成功后才把 hwnd 登记进全局变量。
+		hwnd = h
+	} else {
+		h = hwnd
 	}
-	defer procEndPaint.Call(hwnd, uintptr(unsafe.Pointer(&ps)))
+	queueMu.Unlock()
 
-	var rc rect
-	procGetClientRect.Call(hwnd, uintptr(unsafe.Pointer(&rc)))
-
-	// 主题色
-	colBg, colAccent, colTitle, colBody, colClose :=
-		colBgLight, colAccentLight, colTitleLight, colBodyLight, colCloseLight
-	if isSystemDark() {
-		colBg, colAccent, colTitle, colBody, colClose =
-			colBgDark, colAccentDark, colTitleDark, colBodyDark, colCloseDark
+	nid := notifyIconData{
+		CbSize:      uint32(unsafe.Sizeof(notifyIconData{})),
+		HWnd:        h,
+		UID:         nativeUID,
+		UFlags:      NIF_INFO,
+		DwInfoFlags: NIIF_INFO,
 	}
+	copyUTF16(nid.SzInfoTitle[:], "Kairo · 便笺提醒")
+	copyUTF16(nid.SzInfo[:], item.content)
 
-	// 1) 背景
-	bg, _, _ := procCreateSolidBrush.Call(uintptr(colBg))
-	procFillRect.Call(hdc, uintptr(unsafe.Pointer(&rc)), bg)
-	procDeleteObject.Call(bg)
-
-	// 2) 左侧 6px accent 条（垂直渐变：上浅下深，比纯色更有质感）
-	drawAccentGradient(hdc, rc.Left, rc.Top, rc.Left+6, rc.Bottom, uint32(colAccent))
-
-	procSetBkMode.Call(hdc, uintptr(TRANSPARENT))
-
-	// 3) 标题（"Kairo · 便笺提醒"）
-	title := "Kairo · 便笺提醒"
-	titlePtr, _ := windows.UTF16PtrFromString(title)
-	procSetTextColor.Call(hdc, uintptr(colTitle))
-	titleRect := rect{
-		Left:   rc.Left + 18,
-		Top:    rc.Top + 12,
-		Right:  rc.Right - 36,
-		Bottom: rc.Top + 36,
+	ret, _, err := procShellNotifyIconW.Call(NIM_MODIFY, uintptr(unsafe.Pointer(&nid)))
+	if ret == 0 {
+		log.Printf("popup: Shell_NotifyIconW(NIM_MODIFY) 失败: %v", err)
 	}
-	procDrawTextW.Call(
-		hdc,
-		uintptr(unsafe.Pointer(titlePtr)),
-		uintptr(len([]rune(title))),
-		uintptr(unsafe.Pointer(&titleRect)),
-		DT_SINGLELINE|DT_NOPREFIX,
-	)
-
-	// 4) 关闭按钮 ×
-	xMark := "×"
-	xPtr, _ := windows.UTF16PtrFromString(xMark)
-	procSetTextColor.Call(hdc, uintptr(colClose))
-	xRect := rect{
-		Left:   rc.Right - 30,
-		Top:    rc.Top + 2,
-		Right:  rc.Right - 4,
-		Bottom: rc.Top + 30,
-	}
-	procDrawTextW.Call(
-		hdc,
-		uintptr(unsafe.Pointer(xPtr)),
-		1,
-		uintptr(unsafe.Pointer(&xRect)),
-		DT_SINGLELINE|DT_NOPREFIX,
-	)
-
-	// 5) 内容（最多两行，超出截断）
-	procSetTextColor.Call(hdc, uintptr(colBody))
-	contentPtr, _ := windows.UTF16PtrFromString(content)
-	contentRect := rect{
-		Left:   rc.Left + 18,
-		Top:    rc.Top + 44,
-		Right:  rc.Right - 18,
-		Bottom: rc.Bottom - 14,
-	}
-	procDrawTextW.Call(
-		hdc,
-		uintptr(unsafe.Pointer(contentPtr)),
-		uintptr(lenRunes(content)),
-		uintptr(unsafe.Pointer(&contentRect)),
-		DT_WORDBREAK|DT_NOPREFIX|DT_END_ELLIPSIS,
-	)
 }
 
-// drawAccentGradient 用 GDI GradientFill 在指定矩形画垂直渐变 accent 条。
-// 上端：colAccent 原色；下端：colAccent 暗化 30%。
-//
-// GradientFill 用两个 TRIVERTEX + 一个 GRADIENT_RECT，垂直渐变方向 (GRADIENT_FILL_RECT_V)。
-// 跨 Win 7 / Win 10 都支持（msimg32.dll / gdi32 都有）。
-func drawAccentGradient(hdc uintptr, x1, y1, x2, y2 int32, colAccent uint32) {
-	type triVertex struct {
-		X, Y                       int32
-		Red, Green, Blue, Alpha    uint16
-	}
-	type gradientRect struct {
-		UpperLeft, LowerRight uint32
-	}
-
-	r1 := uint16((colAccent >> 16) & 0xFF)
-	g1 := uint16((colAccent >> 8) & 0xFF)
-	b1 := uint16(colAccent & 0xFF)
-	// 下端：暗化 30%（×0.7）
-	r2 := uint16((r1 * 7) / 10)
-	g2 := uint16((g1 * 7) / 10)
-	b2 := uint16((b1 * 7) / 10)
-
-	verts := [2]triVertex{
-		{X: x1, Y: y1, Red: r1 << 8, Green: g1 << 8, Blue: b1 << 8, Alpha: 0xFF00},
-		{X: x2, Y: y2, Red: r2 << 8, Green: g2 << 8, Blue: b2 << 8, Alpha: 0xFF00},
-	}
-	gRect := gradientRect{UpperLeft: 0, LowerRight: 1}
-
-	// GRADIENT_FILL_RECT_V = 0x00000001
-	procGradientFill.Call(
-		hdc,
-		uintptr(unsafe.Pointer(&verts[0])),
-		2,
-		uintptr(unsafe.Pointer(&gRect)),
-		1,
-		0x00000001,
-	)
-}
-
-func isCloseHit(x, y int32) bool {
-	return x >= popupW-32 && x <= popupW-4 && y >= 2 && y <= 32
-}
-
-// ---------- 窗口生命周期 ----------
-
-func runPopupWindow(item popupItem) {
-	lastPopupContent = item.content
-
-	// 工作区（避开任务栏）
-	var wa rect
-	procSystemParametersInfoW.Call(SPI_GETWORKAREA, 0, uintptr(unsafe.Pointer(&wa)), 0)
-	x := wa.Right - int32(popupW) - popupMargin
-	y := wa.Bottom - int32(popupH) - popupMargin
-
-	className, _ := windows.UTF16PtrFromString(popupClassName)
-	winName, _ := windows.UTF16PtrFromString(item.content)
-
+func createHiddenWindow() uintptr {
+	className, _ := windows.UTF16PtrFromString(nativeClassName)
+	winName, _ := windows.UTF16PtrFromString("KairoReminderNotification")
+	hInstance, _, _ := procGetModuleHandleW.Call(0)
 	hwnd, _, _ := procCreateWindowExW.Call(
-		uintptr(WS_EX_TOPMOST|WS_EX_TOOLWINDOW|WS_EX_LAYERED|WS_EX_NOACTIVATE),
+		0,
 		uintptr(unsafe.Pointer(className)),
 		uintptr(unsafe.Pointer(winName)),
-		uintptr(WS_POPUP),
-		uintptr(x), uintptr(y),
-		uintptr(popupW), uintptr(popupH),
+		0,
 		0, 0, 0, 0,
+		0, 0, hInstance, 0,
 	)
-	if hwnd == 0 {
-		log.Printf("popup: CreateWindowExW 失败")
+	return hwnd
+}
+
+func (sl *iShellLinkW) SetPath(path string) error {
+	p, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return err
+	}
+	hr, _, _ := syscall.SyscallN(sl.LpVtbl.SetPath, uintptr(unsafe.Pointer(sl)), uintptr(unsafe.Pointer(p)))
+	if failed(hr) {
+		return hresultError("IShellLinkW.SetPath", hr)
+	}
+	return nil
+}
+
+func (sl *iShellLinkW) SetWorkingDirectory(path string) error {
+	p, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return err
+	}
+	hr, _, _ := syscall.SyscallN(sl.LpVtbl.SetWorkingDirectory, uintptr(unsafe.Pointer(sl)), uintptr(unsafe.Pointer(p)))
+	if failed(hr) {
+		return hresultError("IShellLinkW.SetWorkingDirectory", hr)
+	}
+	return nil
+}
+
+func (sl *iShellLinkW) SetIconLocation(path string, index int) error {
+	p, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return err
+	}
+	hr, _, _ := syscall.SyscallN(sl.LpVtbl.SetIconLocation, uintptr(unsafe.Pointer(sl)), uintptr(unsafe.Pointer(p)), uintptr(index))
+	if failed(hr) {
+		return hresultError("IShellLinkW.SetIconLocation", hr)
+	}
+	return nil
+}
+
+func (sl *iShellLinkW) SetDescription(desc string) error {
+	p, err := windows.UTF16PtrFromString(desc)
+	if err != nil {
+		return err
+	}
+	hr, _, _ := syscall.SyscallN(sl.LpVtbl.SetDescription, uintptr(unsafe.Pointer(sl)), uintptr(unsafe.Pointer(p)))
+	if failed(hr) {
+		return hresultError("IShellLinkW.SetDescription", hr)
+	}
+	return nil
+}
+
+func failed(hr uintptr) bool {
+	return int32(uint32(hr)) < 0
+}
+
+func hresultError(action string, hr uintptr) error {
+	return fmt.Errorf("%s failed: HRESULT 0x%08x", action, uint32(hr))
+}
+
+func copyUTF16(dst []uint16, s string) {
+	if len(dst) == 0 {
 		return
 	}
-	defer procDestroyWindow.Call(hwnd)
-
-	// 圆角区域
-	hrgn, _, _ := procCreateRoundRectRgn.Call(0, 0, uintptr(popupW), uintptr(popupH), 16, 16)
-	if hrgn != 0 {
-		procSetWindowRgn.Call(hwnd, hrgn, 1)
-		// hrgn 由系统接管，不再 DeleteObject
+	u := windows.StringToUTF16(s)
+	if len(u) > len(dst) {
+		u = u[:len(dst)]
+		u[len(u)-1] = 0
 	}
-
-	// 整体 alpha（230 / 255 ≈ 90% 不透明）
-	procSetLayeredWindowAttributes.Call(hwnd, 0, 230, LWA_ALPHA)
-
-	// 显示（NOACTIVATE：不抢焦点）
-	procSetWindowPos.Call(
-		hwnd, HWND_TOPMOST, 0, 0, 0, 0,
-		SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE|SWP_SHOWWINDOW,
-	)
-
-	// 关闭 timer
-	procSetTimer.Call(hwnd, uintptr(timerClose), uintptr(popupLive/time.Millisecond), 0)
-
-	// 消息循环
-	var m msg
-	for {
-		ret, _, _ := procGetMessageW.Call(
-			uintptr(unsafe.Pointer(&m)), 0, 0, 0,
-		)
-		if int32(ret) <= 0 {
-			break // 0 = WM_QUIT, -1 = error
-		}
-		procTranslateMessage.Call(uintptr(unsafe.Pointer(&m)))
-		procDispatchMessageW.Call(uintptr(unsafe.Pointer(&m)))
-	}
-
-	procKillTimer.Call(hwnd, uintptr(timerClose))
+	copy(dst, u)
 }
 
-// ---------- 系统主题检测 ----------
-
-// isSystemDark 探测系统是否使用深色主题。
-//
-// Win10 1809+：HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize
-//   AppsUseLightTheme = 0 → 深色；= 1 → 浅色；不存在 → 浅色（默认）。
-// Win7 / 早期 Win10：注册表项不存在 → 浅色。
-func isSystemDark() bool {
-	const key = `Software\Microsoft\Windows\CurrentVersion\Themes\Personalize`
-	const value = "AppsUseLightTheme"
-
-	var hKey windows.Handle
-	err := windows.RegOpenKeyEx(windows.HKEY_CURRENT_USER, windows.StringToUTF16Ptr(key), 0, windows.KEY_READ, &hKey)
-	if err != nil {
-		return false
+func utf16LEBase64(s string) string {
+	u16 := utf16.Encode([]rune(s))
+	buf := make([]byte, len(u16)*2)
+	for i, v := range u16 {
+		binary.LittleEndian.PutUint16(buf[i*2:], v)
 	}
-	defer windows.RegCloseKey(hKey)
-
-	var val uint32
-	var size uint32 = 4
-	var typ uint32
-	err = windows.RegQueryValueEx(hKey, windows.StringToUTF16Ptr(value), nil, &typ, (*byte)(unsafe.Pointer(&val)), &size)
-	if err != nil {
-		return false
-	}
-	return val == 0
+	return base64.StdEncoding.EncodeToString(buf)
 }
 
-// ---------- helpers ----------
+func xmlEscape(s string) string {
+	return strings.NewReplacer(
+		"&", "&amp;",
+		"<", "&lt;",
+		">", "&gt;",
+		"\"", "&quot;",
+		"'", "&apos;",
+	).Replace(s)
+}
 
-// lenRunes 返回字符串的 rune 数（DrawTextW 第三个参数是字符数，不是字节数）。
-func lenRunes(s string) int {
-	n := 0
-	for range s {
-		n++
-	}
-	return n
+func psQuote(s string) string {
+	return strings.ReplaceAll(s, "'", "''")
 }

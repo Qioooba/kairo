@@ -156,6 +156,9 @@ func resolveProfile(srv Server, defaultName string) (name string, profs []sshCom
 var (
 	sshDebugOnce sync.Once
 	sshDebugFile *os.File
+	// sshDebugMu 保护 sshDebugFile 的 Fprintf。多 goroutine 同时拨号时日志行会交错，
+	// 调试日志因此丧失排查价值。
+	sshDebugMu sync.Mutex
 )
 
 func openSSHDebugLog() *os.File {
@@ -193,6 +196,8 @@ func sshDebugLogf(format string, args ...interface{}) {
 	if f == nil {
 		return
 	}
+	sshDebugMu.Lock()
+	defer sshDebugMu.Unlock()
 	ts := time.Now().Format("2006-01-02 15:04:05.000")
 	fmt.Fprintf(f, "[%s] %s\n", ts, fmt.Sprintf(format, args...))
 }
@@ -432,24 +437,135 @@ func sshCompatProfiles() []sshCompatProfile {
 
 func passwordKeyboardInteractive(password string) ssh.KeyboardInteractiveChallenge {
 	return func(user, instruction string, questions []string, echos []bool) ([]string, error) {
+		sshDebugLogf("  kbd-interactive 回调被调用: name=%q instruction=%q numQuestions=%d", user, instruction, len(questions))
+
 		answers := make([]string, len(questions))
+
+		// 判定规则（v0.14 修复，对齐 FinalShell 行为，覆盖堡垒机/PAM/OTP 场景）：
+		//   1. echo=false → 一定回密码（SSH 协议里 echo=false 在标准实现中只用于密码/PIN/口令）
+		//   2. echo=true  +  prompt 文本含 password/密码/口令/passwd/passcode/otp → 仍回密码
+		//      （防 echo=true 的"奇葩密码"提示，例如某些 PAM 把密码 prompt 标 echo=true）
+		//   3. echo=true  +  prompt 文本不含密码词 → 填空字符串
+		//      （典型：Press ENTER to continue / 确认条款 / Verification code 等，
+		//       如果硬塞密码会触发 server 校验失败，参考 v0.14 之前 66.0.248.118 这类
+		//       只开 keyboard-interactive 的堡垒机连不上）
+		//
+		// 注意：username 走 SSH-USERAUTH 包的 user 字段（line 549-554 of x/crypto/ssh），
+		// 不会通过 questions 重新问。如果 server 发了 "login:" 这种 prompt，
+		// 它的 answers[i] 应当填空（server 端不会用 answers[0] 当 username 校验）。
+		// （如果未来真有 server 这么干，再单独处理。）
 		for i, q := range questions {
 			lowerQ := strings.ToLower(q)
-			isPassword := strings.Contains(lowerQ, "password") ||
-				strings.Contains(lowerQ, "passcode") ||
-				strings.Contains(lowerQ, "密码") ||
-				strings.Contains(lowerQ, "口令") ||
-				strings.Contains(lowerQ, "pass word") ||
-				strings.Contains(lowerQ, "otp")
 			isEchoFalse := i < len(echos) && !echos[i]
-			singleQuestion := len(questions) == 1
+			// echo=false 一律视作密码类
+			// echo=true 时看 prompt 文本是否明显是密码类
+			//
+			// 全部用 token 化匹配（前/后是空格、标点或字符串边界），
+			// 避免 "password" 误中 "passwordless"、"bypass"、"passphrase-not-supported" 等。
+			isPasswordPrompt := hasPasswordToken(lowerQ)
 
-			if singleQuestion || isEchoFalse || isPassword {
+			echoFlag := false
+			if i < len(echos) {
+				echoFlag = echos[i]
+			}
+
+			if isEchoFalse {
 				answers[i] = password
+				sshDebugLogf("    Q%d (echo=%v prompt=%q): 回填密码 (echo=false)", i, echoFlag, truncateForLog(q, 80))
+			} else if isPasswordPrompt {
+				// echo=true 但 prompt 文本明显是密码类
+				answers[i] = password
+				sshDebugLogf("    Q%d (echo=%v prompt=%q): 回填密码 (echo=true 但含密码词)", i, echoFlag, truncateForLog(q, 80))
+			} else {
+				// echo=true 且非密码词：填空字符串
+				// 不要回密码：堡垒机 / PAM 常把"Press Enter"、"确认"、"Verification code"等
+				// 非密码 prompt 标 echo=true；硬塞密码会让 server 校验失败。
+				answers[i] = ""
+				sshDebugLogf("    Q%d (echo=%v prompt=%q): 填空 (echo=true 非密码类)", i, echoFlag, truncateForLog(q, 80))
 			}
 		}
+		sshDebugLogf("  kbd-interactive 回调返回: %d 个答案", len(answers))
 		return answers, nil
 	}
+}
+
+// hasPasswordToken 判断 lowerQ 中是否含"密码类 token"（独立 token，前后是空格/标点/边界）。
+//
+// 匹配的 token：
+//   - password / passwords / password: 之类
+//   - passcode / passcode:
+//   - passwd / passwd:
+//   - otp      （避免命中 prototype / autopilot 之类）
+//   - 密码     （中文不会和英文子串冲突）
+//   - 口令     （中文）
+//
+// 匹配规则：找候选子串后，要求前/后字符是字符串边界、空格、tab、常见标点。
+// 避免"password"误中"passwordless"——这种 case 实际堡垒机不会发，
+// 但严谨一点总没坏处。
+func hasPasswordToken(lowerQ string) bool {
+	for _, w := range passwordTokens {
+		idx := 0
+		for {
+			i := strings.Index(lowerQ[idx:], w)
+			if i < 0 {
+				break
+			}
+			pos := idx + i
+			end := pos + len(w)
+			if isWordBoundary(lowerQ, pos, end) {
+				return true
+			}
+			idx = pos + 1
+		}
+	}
+	return false
+}
+
+// passwordTokens 候选密码类 token。统一小写。
+// 不含 "pass"：太短，容易误中 "pass-word" / "pass your code" 等非密码提示。
+// "password" / "passcode" / "passwd" 已覆盖绝大多数场景。
+var passwordTokens = []string{
+	"password", "passcode", "passwd", "otp",
+	"密码", "口令",
+}
+
+// isWordBoundary 判断 [start, end) 区间在 s 中是否是独立 token 边界。
+func isWordBoundary(s string, start, end int) bool {
+	prevOK := start == 0
+	if !prevOK {
+		if !isWordSep(s[start-1]) {
+			return false
+		}
+		prevOK = true
+	}
+	nextOK := end >= len(s)
+	if !nextOK {
+		if !isWordSep(s[end]) {
+			return false
+		}
+		nextOK = true
+	}
+	return prevOK && nextOK
+}
+
+// isWordSep 判定 c 是否是 token 边界字符（空格、tab、常见标点）。
+func isWordSep(c byte) bool {
+	switch c {
+	case ' ', '\t', '\n', '\r',
+		':', ';', ',', '.', '?', '!',
+		'(', ')', '[', ']', '{', '}',
+		'/', '\\', '|', '-', '_', '+', '=', '*', '#', '@', '"', '\'':
+		return true
+	}
+	return false
+}
+
+// truncateForLog 截断日志中的字符串，避免过长 prompt 污染日志。
+func truncateForLog(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }
 
 // errHostKeyNotConfigured：未配 host key 指纹且显式 allow_insecure_host_key=false
@@ -553,6 +669,8 @@ func dialSSHOnce(ctx context.Context, addr string, srv Server, cred Credentials,
 	sshDebugLogf("  client host_key    : %v", cfg.HostKeyAlgorithms)
 	sshDebugLogf("  client cipher      : %v", cfg.Ciphers)
 	sshDebugLogf("  client mac         : %v", cfg.MACs)
+	sshDebugLogf("  user               : %s", srv.Username)
+	sshDebugLogf("  password length    : %d", len(cred.Password))
 
 	dialer := &net.Dialer{Timeout: timeout, KeepAlive: 30 * time.Second}
 	rawConn, dialErr := dialer.DialContext(ctx, "tcp", addr)

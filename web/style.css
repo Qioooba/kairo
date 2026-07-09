@@ -279,12 +279,20 @@ body {
   overflow: hidden;
   flex-shrink: 0;
   box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+  animation: logo-hue-shift 10s linear infinite;
 }
 .logo img {
   width: 100%; height: 100%;
   object-fit: cover;
   border-radius: 10px;
   display: block;
+}
+@keyframes logo-hue-shift {
+  0%   { filter: hue-rotate(0deg) saturate(1); }
+  25%  { filter: hue-rotate(30deg) saturate(1.1); }
+  50%  { filter: hue-rotate(0deg) saturate(1); }
+  75%  { filter: hue-rotate(-25deg) saturate(1.05); }
+  100% { filter: hue-rotate(0deg) saturate(1); }
 }
 .brand-text .title {
   font-weight: 700;
@@ -305,13 +313,38 @@ body {
   color: transparent;
   animation: brand-gradient-flow 8s linear infinite;
 }
-.brand-text .subtitle { color: var(--text-dim); font-size: 12px; }
+.brand-text .subtitle {
+  font-size: 13px;
+  background-image: linear-gradient(90deg, #8b5cf6, #3b82f6, #10b981, #8b5cf6);
+  background-size: 300% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  animation: brand-gradient-flow 10s linear infinite reverse;
+  opacity: 0.85;
+}
 @keyframes brand-gradient-flow {
   0%   { background-position: 0% 50%; }
   100% { background-position: 100% 50%; }
 }
+@keyframes kairo-shimmer {
+  0%   { background-position: 0% 50%; }
+  100% { background-position: 200% 50%; }
+}
+.kairo-shimmer-text {
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  animation: kairo-shimmer 4s linear infinite;
+}
 @media (prefers-reduced-motion: reduce) {
   .brand-text .title { animation: none; background-position: 0% 50%; }
+  .brand-text .subtitle { animation: none; background-position: 0% 50%; }
+  .logo { animation: none; }
+  .kairo-shimmer-text { animation: none; background-position: 0% 50%; }
 }
 
 .nav { display: flex; flex-direction: column; gap: 2px; flex: 1; overflow-y: auto; }
@@ -745,6 +778,8 @@ textarea { resize: vertical; min-height: 100px; font-family: ui-monospace, SFMon
 .table .actions { white-space: nowrap; }
 .table .col-check { width: 32px; text-align: center; }
 .table .col-status { width: 180px; }
+.table .col-actions { width: 1%; white-space: nowrap; text-align: right; vertical-align: middle; }
+.table .col-actions .btn-sm { vertical-align: middle; }
 .table tr.row-done td { color: var(--text-dim); }
 .table tr.row-fail td { color: var(--error); }
 .table tr.row-active td { background: var(--row-active-bg); }
@@ -773,6 +808,29 @@ textarea { resize: vertical; min-height: 100px; font-family: ui-monospace, SFMon
 }
 .dl-pct { font-family: ui-monospace, monospace; font-size: 12px; color: var(--text-dim); }
 
+/* v1.1 上传拖拽样式（绑定在文件列表区域） */
+.file-table-wrap.dragover {
+  border: 2px dashed var(--primary);
+  background: var(--bg-1);
+}
+.upload-list-wrap {
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg-1);
+}
+.upload-row {
+  transition: background 0.15s;
+}
+.upload-row:hover {
+  background: var(--bg-2);
+}
+.upload-summary {
+  font-family: ui-monospace, monospace;
+}
+/* v1.3：上传按钮回到下载 toolbar 右侧、取消独立卡片，
+ * 上传拖拽视觉反馈复用 .file-table-wrap.dragover（绑在文件列表区）。
+ * uploadCard 专用的 outline/background 高亮 + opt-row lbl 颜色都没必要了，删掉。 */
+
 .file-toolbar {
   display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
   padding: 8px 0; margin-bottom: 6px;
@@ -787,6 +845,87 @@ textarea { resize: vertical; min-height: 100px; font-family: ui-monospace, SFMon
 .hit-line { font-family: ui-monospace, monospace; font-size: 12.5px; white-space: pre-wrap; word-break: break-all; }
 .hit-line.hit { background: rgba(245,158,11,0.12); border-left: 3px solid var(--warn); padding-left: 6px; }
 :root[data-theme="light"] .hit-line.hit { background: rgba(217,119,6,0.10); }
+/* v0.14：搜索结果的"截断预览 + 点击展开"控件
+ * 用户报障原话："你这个地方虽然展示了，但是展示的并不是什么呢？并不是我搜索到的这关键词啊。
+ *               你现在是把这个这一行给省略了。""要么全量展示，要么就虽然不全量展示，但你应该
+ *               展示出来这个有关键词的这一节，然后并且把关键词进行高亮。"
+ * 设计：<details>/<summary> 原生可展开；summary 总是显示截断预览（带 <mark> 高亮），
+ *       展开后 summary 下面追加完整内容（同样高亮）。<mark> 复用 search-hl.css 的样式。 */
+.hit-trim { display: block; margin: 0; }
+.hit-trim-static { display: block; }
+.hit-trim > .hit-trim-summary,
+.hit-trim > .hit-trim-full {
+  display: block;
+  font-family: ui-monospace, monospace;
+  font-size: 12.5px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  line-height: 1.45;
+}
+.hit-trim > .hit-trim-summary {
+  cursor: pointer;
+  list-style: none;
+  outline: none;
+  position: relative;
+  padding: 5px 68px 5px 22px;
+  border-radius: 6px;
+  transition: background-color 0.15s;
+}
+.hit-trim > .hit-trim-summary::-webkit-details-marker { display: none; }
+.hit-trim > .hit-trim-summary::marker { content: ''; }
+.hit-trim > .hit-trim-summary::before {
+  content: '';
+  position: absolute;
+  left: 5px;
+  top: 9px;
+  width: 0;
+  height: 0;
+  border-left: 5px solid var(--primary);
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  opacity: 0.7;
+  transition: transform 0.18s ease, opacity 0.15s;
+}
+.hit-trim[open] > .hit-trim-summary::before {
+  transform: rotate(90deg);
+}
+.hit-trim > .hit-trim-summary:hover::before {
+  opacity: 1;
+}
+.hit-trim > .hit-trim-summary::after {
+  content: '展开';
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 11.5px;
+  padding: 2px 10px;
+  border-radius: 4px;
+  background: var(--primary);
+  color: #fff;
+  opacity: 0.8;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-weight: 500;
+  white-space: nowrap;
+  pointer-events: none;
+  letter-spacing: 0.3px;
+  transition: opacity 0.15s;
+}
+.hit-trim[open] > .hit-trim-summary::after {
+  content: '收起';
+  background: var(--text-dim);
+  opacity: 0.65;
+}
+.hit-trim > .hit-trim-summary:hover { background: var(--bg-2); }
+.hit-trim > .hit-trim-summary:hover::after { opacity: 1; }
+.hit-trim > .hit-trim-summary mark.search-hl { font-weight: 600; }
+.hit-trim > .hit-trim-full {
+  margin-top: 4px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--line);
+  padding-left: 22px;
+  padding-right: 8px;
+}
 .context-view {
   background: var(--tail-out-bg); border: 1px solid var(--line); border-radius: 8px;
   padding: 10px 12px; max-height: 480px; overflow: auto;
@@ -3194,6 +3333,7 @@ input[type="datetime-local"] {
    渐变在 hc 主题下（primary=#00ffff cyan, accent=#8b5cf6 purple）显得突兀。 */
 :root[data-theme="hc"] .brand .logo {
   box-shadow: none;
+  animation: none;
 }
 /* v0.9 brand 渐变：hc 高对比主题用纯亮黄单色，避免彩色破坏对比度 */
 :root[data-theme="hc"] .brand-text .title {
@@ -3201,6 +3341,19 @@ input[type="datetime-local"] {
   -webkit-text-fill-color: #ffff00;
   color: #ffff00;
   animation: none;
+}
+:root[data-theme="hc"] .brand-text .subtitle {
+  background-image: none;
+  -webkit-text-fill-color: #ffffff;
+  color: #ffffff;
+  animation: none;
+  opacity: 1;
+}
+:root[data-theme="hc"] .about-credit-name {
+  background-image: none !important;
+  -webkit-text-fill-color: #ffff00 !important;
+  color: #ffff00 !important;
+  animation: none !important;
 }
 
 /* ===== v0.10 SSH 终端 ===== */
@@ -4226,7 +4379,10 @@ input.sftp-autofollow-cb {
 /* 背景切换按钮：默认态（跟随主题）vs 激活态（强制深色） */
 .ssh-bg-toggle {
   /* 用现成的 .btn .btn-sm 即可，这里只补激活态样式 */
+  display: inline-flex; align-items: center; gap: 4px;
 }
+.ssh-bg-toggle .bg-ico { display: inline-flex; align-items: center; width: 14px; height: 14px; }
+.ssh-bg-toggle .bg-ico svg { display: block; }
 .ssh-bg-toggle.is-dark {
   background: #0f172a;
   color: #22d3ee;
@@ -4948,11 +5104,22 @@ input.sftp-autofollow-cb {
 }
 
 /* ===== 关于页（about）古风适配 ===== */
+.about-logo-wrap img {
+  animation: logo-hue-shift 10s linear infinite;
+}
 :root[data-theme="xianxia"] .about-hero-card {
   background: linear-gradient(180deg, rgba(90,138,122,0.1), rgba(160,85,62,0.04) 60%, transparent) !important;
 }
 :root[data-theme="xianxia"] .about-logo-wrap img {
-  filter: drop-shadow(0 6px 18px rgba(90,138,122,0.35));
+  filter: drop-shadow(0 6px 18px rgba(90,138,122,0.35)) hue-rotate(0deg);
+  animation: xianxia-logo-hue 10s linear infinite;
+}
+@keyframes xianxia-logo-hue {
+  0%   { filter: drop-shadow(0 6px 18px rgba(90,138,122,0.35)) hue-rotate(0deg); }
+  25%  { filter: drop-shadow(0 6px 18px rgba(120,168,142,0.40)) hue-rotate(20deg); }
+  50%  { filter: drop-shadow(0 6px 18px rgba(90,138,122,0.35)) hue-rotate(0deg); }
+  75%  { filter: drop-shadow(0 6px 18px rgba(100,148,125,0.38)) hue-rotate(-15deg); }
+  100% { filter: drop-shadow(0 6px 18px rgba(90,138,122,0.35)) hue-rotate(0deg); }
 }
 :root[data-theme="xianxia"] .about-version-badge {
   box-shadow: 0 4px 12px rgba(90,138,122,0.35) !important;
@@ -5565,7 +5732,7 @@ input.sftp-autofollow-cb {
   transition: all 0.15s;
 }
 .weekday-chip:hover { color: var(--text); border-color: var(--accent); }
-.weekday-chip input { display: none; }
+.weekday-chip input { opacity: 0; position: absolute; pointer-events: none; }
 .weekday-chip.active { background: var(--accent); color: #fff; border-color: var(--accent); }
 .weekday-chip:focus-within { outline: 2px solid var(--accent); outline-offset: 1px; }
 .weekday-quick { display: flex; gap: 4px; margin-top: 4px; flex-wrap: wrap; }
@@ -5577,6 +5744,8 @@ input.sftp-autofollow-cb {
 /* 空状态 */
 .reminders-list .empty-state { padding: 40px 20px; text-align: center; }
 .reminders-list .empty-state .empty-icon { font-size: 36px; opacity: 0.5; }
+/* v0.13：emoji 改成 SVG（Win 7 兼容），SVG 由 icons.js 生成，需要固定尺寸 + 块级居中 */
+.reminders-list .empty-state .empty-icon-svg { width: 56px; height: 56px; margin: 0 auto 12px; opacity: 0.55; display: block; }
 .reminders-list .empty-state .empty-title { font-size: 14px; color: var(--text); margin: 8px 0 4px; }
 .reminders-list .empty-state .empty-desc { font-size: 12.5px; color: var(--text-mute); }
 

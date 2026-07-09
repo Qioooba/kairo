@@ -37,6 +37,12 @@ func run(cfg Config) {
 			systray.AddSeparator()
 		}
 
+		// nil channel 在 select 中永远阻塞，避免 mPause 为 nil 时解引用 ClickedCh panic
+		var pauseCh chan struct{}
+		if mPause != nil {
+			pauseCh = mPause.ClickedCh
+		}
+
 		mQuit := systray.AddMenuItem("退出", "退出Kairo")
 
 		go func() {
@@ -46,10 +52,7 @@ func run(cfg Config) {
 					if cfg.OnOpenBrowser != nil {
 						cfg.OnOpenBrowser()
 					}
-				case <-mPause.ClickedCh:
-					if mPause == nil {
-						continue
-					}
+				case <-pauseCh:
 					if !paused {
 						if cfg.OnPauseToday != nil {
 							cfg.OnPauseToday()

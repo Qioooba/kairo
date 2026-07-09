@@ -64,6 +64,16 @@
     if (Kairo.core && Kairo.core.clearActiveShells) {
       Kairo.core.clearActiveShells();
     }
+    // 离开页面：清理进行中的上传（v1.2 上传 P1）
+    // 修 Bug 1：用户在文件页上传未完成就切走 → 上传后台 XHR 还在跑，
+    // 但下次回到文件页会重建 uploadQueue / state，原 XHR 引用的 task 已经不在 queue，
+    // 回调里 task.xhr / task.file 引用仍然指向旧对象，可能导致 UI 错乱或内存泄漏。
+    // 这里在 view.innerHTML = '' 之前 cancel 所有上传，关掉 XHR + 通知后端 cancel。
+    if (Kairo.core && Kairo.core.cancelAllUploads) {
+      try { Kairo.core.cancelAllUploads(); } catch (e) { /* ignore */ }
+      // 清理 controller 引用（旧 uploadQueue 已被 cancel，下次进 files 页会重新注册）
+      try { window.__opsActiveUploads = null; } catch (e) { /* ignore */ }
+    }
     const view = $('#view');
     if (!view) return;
     view.innerHTML = '';
@@ -111,6 +121,11 @@
     // 页面卸载时清理 SSH 终端 WS 连接
     if (Kairo.core && Kairo.core.clearActiveShells) {
       Kairo.core.clearActiveShells();
+    }
+    // 页面卸载时清理进行中的上传（v1.2）
+    // 用 sendBeacon 异步通知后端 cancel，前端 fire-and-forget。
+    if (Kairo.core && Kairo.core.cancelAllUploadsBeacon) {
+      try { Kairo.core.cancelAllUploadsBeacon(); } catch (e) { /* ignore */ }
     }
   });
   window.addEventListener('load', async () => {

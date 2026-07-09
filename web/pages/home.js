@@ -47,14 +47,13 @@
     const mainTools = [
       { id: 'websphere', name: '日志助手', desc: '多服务器日志并行搜索、上下文查看、实时 Tail、日志下载', icon: 'file-text', tag: 'ready', tagText: '已就绪' },
       { id: 'files', name: '文件下载', desc: '按 SSH 账号权限浏览任意目录，像 FTP 一样层层进入并下载', icon: 'file-down', tag: 'ready', tagText: 'v0.3' },
-      { id: 'formatter', name: '报文格式化', desc: 'JSON / XML / YAML / URL-form 格式化、压缩、校验、互转', icon: 'braces', tag: 'ready', tagText: '已就绪' },
+      { id: 'ssh', name: 'SSH 终端', desc: '浏览器里直接开交互式 shell，多 tab、复用老 SSH 兼容配置', icon: 'terminal', tag: 'ready', tagText: 'v0.10' },
       { id: 'http', name: 'HTTP 接口测试', desc: 'Postman 风格接口调试，Headers/Body/用例管理/响应高亮', icon: 'globe', tag: 'ready', tagText: 'v0.7' },
       { id: 'webservice', name: 'WebService 调试', desc: 'SOAP/WSDL 调试中心：导入 WSDL、生成报文、发送请求、Mock 服务端', icon: 'soap-envelope', tag: 'ready', tagText: 'v0.12' },
-      { id: 'compare', name: '代码比对', desc: '文本 / 文件 / 文件夹级 diff 差异对比，支持多种视图模式', icon: 'git-compare', tag: 'ready', tagText: 'v0.8' },
-      { id: 'commands', name: '常用命令速查', desc: 'Linux / Git / Docker / Oracle / MySQL / Redis / Nginx 等 · 实时搜索 + 一键复制', icon: 'square-terminal', tag: 'ready', tagText: 'v0.7' },
+      { id: 'formatter', name: '报文格式化', desc: 'JSON / XML / YAML / URL-form 格式化、压缩、校验、互转', icon: 'braces', tag: 'ready', tagText: '已就绪' },
       { id: 'diagnostics', name: '环境自检', desc: '一键体检：本机 / 网络 / 配置 / 工具 / 每台 server 连通性', icon: 'shield-check', tag: 'ready', tagText: 'v0.4' },
-      { id: 'downloads', name: '下载历史', desc: '浏览 / 删除 / 重新下载 / 外部程序打开已下载文件', icon: 'history', tag: 'ready', tagText: '已就绪' },
-      { id: 'config', name: '系统配置', desc: '在线编辑业务系统 / 服务器 / 日志目录 / 全局设置', icon: 'settings', tag: 'ready', tagText: 'v0.4' }
+      { id: 'config', name: '系统配置', desc: '在线编辑业务系统 / 服务器 / 日志目录 / 全局设置', icon: 'settings', tag: 'ready', tagText: 'v0.4' },
+      { id: 'downloads', name: '下载历史', desc: '浏览 / 删除 / 重新下载 / 外部程序打开已下载文件', icon: 'history', tag: 'ready', tagText: '已就绪' }
     ];
 
     const grid = Kairo.core.el('div', { class: 'grid-4' });
@@ -65,6 +64,9 @@
       { id: 'timestamp', name: '时间戳转换', desc: '时间戳 ↔ 日期互转、时区计算', icon: 'clock' },
       { id: 'cron', name: 'Cron 解析', desc: 'Cron 表达式解析、下次执行时间预览', icon: 'calendar-clock' },
       { id: 'jsonpath', name: 'JSONPath 查询', desc: '在线 JSONPath 表达式求值', icon: 'workflow' },
+      { id: 'compare', name: '代码比对', desc: '文本 / 文件 / 文件夹级 diff 差异对比，支持多种视图模式', icon: 'git-compare' },
+      { id: 'commands', name: '常用命令速查', desc: 'Linux / Git / Docker / Oracle / MySQL / Redis / Nginx 等 · 实时搜索 + 一键复制', icon: 'square-terminal' },
+      { id: 'reminders', name: '便笺提醒', desc: '一次性 / 周期 / Cron 表达式定时，本地落盘不依赖外网', icon: 'bell' },
       { id: 'about', name: '关于', desc: '版本信息、技术架构、数据统计', icon: 'info' },
     ];
 

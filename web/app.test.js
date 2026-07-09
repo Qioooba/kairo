@@ -47,9 +47,13 @@ const formatTime = new Function(extract('formatTime') + '; return formatTime;')(
 // Node 没 document，所以给 new Function 注入一个最小 mock：
 //   - document.createElement(tag) 返回一个带 innerHTML/textContent 字段的对象；
 //   - document.createTextNode(text) 返回 {nodeType: 'text', data: text}。
+// el() 内部引用了外层 var BOOL_PROPS（core.js:174），extract('el') 只抽函数体拿不到。
+// 这里把 BOOL_PROPS 定义拼到 el 函数体前面，保持与 core.js 一致。
+const BOOL_PROPS_SRC = 'var BOOL_PROPS = { disabled:1, checked:1, selected:1, readonly:1, required:1, autofocus:1, multiple:1, nowrap:1, hidden:1, open:1, defer:1, async:1, autoplay:1, controls:1, loop:1, muted:1, draggable:1, contenteditable:1, spellcheck:1 };';
+
 const el = new Function(
   'document',
-  extract('el') + '\n  return el;'
+  BOOL_PROPS_SRC + '\n  ' + extract('el') + '\n  return el;'
 )({
   createElement: function (tag) {
     return {
@@ -113,7 +117,7 @@ const dialogDocMock = (function () {
 
 const elDialog = new Function(
   'document',
-  extract('el') + '\n  return el;'
+  BOOL_PROPS_SRC + '\n  ' + extract('el') + '\n  return el;'
 )(dialogDocMock);
 const confirmDialog = new Function(
   'document', 'window', 'el',
@@ -140,6 +144,13 @@ const pctText = new Function(
 
 const validate = new Function(extract('validate') + '; return validate;')();
 const trimMiddle = new Function(extract('trimMiddle') + '; return trimMiddle;')();
+const escapeRegex = new Function(extract('escapeRegex') + '; return escapeRegex;')();
+const parseSearchTermsForHighlight = new Function(extract('parseSearchTermsForHighlight') + '; return parseSearchTermsForHighlight;')();
+// highlightAndTrim 内部依赖 escapeHtml 和 escapeRegex，两个都得注入。
+const highlightAndTrim = new Function(
+  'escapeHtml', 'escapeRegex',
+  extract('highlightAndTrim') + '\n  return highlightAndTrim;'
+)(escapeHtml, escapeRegex);
 
 // Tail 高亮：3 个核心函数从 core.js 抽出来。
 // 它们依赖 document.createElement / document.createDocumentFragment / document.createTextNode，
@@ -273,6 +284,138 @@ function testTrimMiddle() {
   assert.ok(out.length < 10, 'shortened');
   assert.strictEqual(trimMiddle(null, 10), '', 'null');
   console.log('  trimMiddle ✓');
+}
+
+// ---------- v0.14: escapeRegex ----------
+
+function testEscapeRegex() {
+  // 关键场景：用户搜 `foo.bar`，不应该被当成 regex
+  assert.strictEqual(escapeRegex('foo.bar'), 'foo\\.bar', 'dot escaped');
+  assert.strictEqual(escapeRegex('a*b'), 'a\\*b', 'star escaped');
+  assert.strictEqual(escapeRegex('a(b)c'), 'a\\(b\\)c', 'paren escaped');
+  assert.strictEqual(escapeRegex('a[b]c'), 'a\\[b\\]c', 'bracket escaped');
+  assert.strictEqual(escapeRegex('a$b'), 'a\\$b', 'dollar escaped');
+  assert.strictEqual(escapeRegex('a|b'), 'a\\|b', 'pipe escaped');
+  assert.strictEqual(escapeRegex('普通文字'), '普通文字', '中文 no-op');
+  assert.strictEqual(escapeRegex(''), '', 'empty');
+  assert.strictEqual(escapeRegex(null), '', 'null');
+  console.log('  escapeRegex ✓');
+}
+
+// ---------- v0.14: parseSearchTermsForHighlight ----------
+
+function testParseSearchTermsForHighlight() {
+  assert.deepStrictEqual(parseSearchTermsForHighlight(''), [], 'empty');
+  assert.deepStrictEqual(parseSearchTermsForHighlight('   '), [], 'whitespace only');
+  assert.deepStrictEqual(parseSearchTermsForHighlight('Exception'), ['Exception'], 'single term');
+  assert.deepStrictEqual(parseSearchTermsForHighlight('A && B'), ['A', 'B'], 'AND');
+  assert.deepStrictEqual(parseSearchTermsForHighlight('A || B'), ['A', 'B'], 'OR');
+  assert.deepStrictEqual(parseSearchTermsForHighlight('!DEBUG'), ['DEBUG'], 'negate');
+  assert.deepStrictEqual(parseSearchTermsForHighlight('!A || !B'), ['A', 'B'], 'double negate');
+  assert.deepStrictEqual(parseSearchTermsForHighlight('Exception && 信贷系统'), ['Exception', '信贷系统'], 'chinese term');
+  assert.deepStrictEqual(parseSearchTermsForHighlight('(foo)'), ['(foo)'], '保留括号（v0.14 黑名单缩窄后）');
+  assert.deepStrictEqual(parseSearchTermsForHighlight('a < b && c > d'), ['a', '<', 'b', 'c', '>', 'd'], '保留 < >');
+  console.log('  parseSearchTermsForHighlight ✓');
+}
+
+// ---------- v0.14: highlightAndTrim ----------
+//
+// 这是搜索结果展示的核心工具：
+//   - 找到所有关键词 match 位置
+//   - 智能截断（保留关键词周围 keep 字符，截掉多余的）
+//   - 用 <mark class="search-hl"> 包裹 match
+//   - 正确 escape HTML（防 XSS）
+//   - 零宽 match 不死循环
+//   - 重叠 match 合并
+//   - ignoreCase 控制
+function testHighlightAndTrim() {
+  // 1. 空内容
+  const r0 = highlightAndTrim('', ['foo'], { max: 10 });
+  assert.strictEqual(r0.html, '', 'empty content');
+  assert.strictEqual(r0.truncated, false, 'empty not truncated');
+
+  // 2. 无关键词 → 原样 escape
+  const r1 = highlightAndTrim('hello <world>', [], { max: 100 });
+  assert.strictEqual(r1.html, 'hello &lt;world&gt;', 'no terms = escaped plain');
+  assert.strictEqual(r1.truncated, false, 'no terms not truncated');
+
+  // 3. 单 match + 短内容：完整 + 高亮
+  const r2 = highlightAndTrim('Exception happened', ['Exception'], { max: 100 });
+  assert.strictEqual(r2.html, '<mark class="search-hl">Exception</mark> happened', 'single match highlight');
+  assert.strictEqual(r2.truncated, false, 'short not truncated');
+
+  // 4. 多 match（同一 term 出现多次）：全部高亮
+  const r3 = highlightAndTrim('foo and foo and foo', ['foo'], { max: 100 });
+  assert.strictEqual(
+    r3.html,
+    '<mark class="search-hl">foo</mark> and <mark class="search-hl">foo</mark> and <mark class="search-hl">foo</mark>',
+    'multi match same term'
+  );
+
+  // 5. 多个 term：分别高亮
+  const r4 = highlightAndTrim('Exception at com.example.Foo.bar(Foo.java:123)', ['Exception', 'Foo'], { max: 1000 });
+  // 重点验证 Foo 出现 2 次都高亮、特殊字符 ( ) . 都原样保留
+  assert.ok(r4.html.includes('<mark class="search-hl">Exception</mark>'), 'Exception highlighted');
+  assert.ok((r4.html.match(/<mark class="search-hl">Foo<\/mark>/g) || []).length === 2, 'Foo highlighted twice');
+  // `.bar(` 是命中 Foo 前后的普通字符，验证没被 escapeHtml 改掉（( ) 不在 escapeHtml 字符集里）
+  assert.ok(r4.html.includes('.bar(<mark class="search-hl">Foo</mark>'), 'parenthesis + dot preserved around match');
+  assert.ok(r4.html.includes('.java:123)'), 'dot + colon + paren preserved in tail');
+
+  // 6. 截断：长内容只显示关键词周围
+  const long = 'A'.repeat(200) + 'MIDDLE_KEYWORD ' + 'B'.repeat(200);
+  const r5 = highlightAndTrim(long, ['MIDDLE_KEYWORD'], { max: 60, keep: 20 });
+  assert.ok(r5.truncated, 'long content truncated');
+  assert.ok(r5.html.startsWith('…'), 'preElided has leading ellipsis');
+  assert.ok(r5.html.endsWith('…'), 'postElided has trailing ellipsis');
+  assert.ok(r5.html.includes('<mark class="search-hl">MIDDLE_KEYWORD</mark>'), 'keyword still visible after trim');
+  assert.ok(r5.html.length < long.length, 'trimmed shorter than original');
+
+  // 7. ignoreCase
+  const r6 = highlightAndTrim('exception EXCEPTION Exception', ['exception'], { max: 100, ignoreCase: true });
+  assert.ok((r6.html.match(/<mark class="search-hl">exception<\/mark>/gi) || []).length === 3, 'ignoreCase matches all 3');
+
+  // 8. ignoreCase=false（默认）只匹配小写
+  const r7 = highlightAndTrim('exception EXCEPTION Exception', ['exception'], { max: 100 });
+  assert.ok(r7.html.includes('<mark class="search-hl">exception</mark>'), 'lowercase matched');
+  assert.ok(!r7.html.includes('<mark class="search-hl">EXCEPTION</mark>'), 'uppercase not matched (case-sensitive)');
+
+  // 9. 重叠 match：长 term 包含短 term 时，保留长的
+  const r8 = highlightAndTrim('foobarbaz', ['foo', 'foobar'], { max: 100 });
+  // "foo" 在位置 0-3，"foobar" 在位置 0-6；保留 foobar 即可
+  assert.ok(r8.html.includes('<mark class="search-hl">foobar</mark>'), 'longer match wins');
+  assert.ok(r8.html.includes('<mark class="search-hl">foobarbaz</mark>') || r8.html.endsWith('</mark>baz'), 'remainder after long match is plain');
+
+  // 10. HTML 注入：用户控制不了输出（XSS 防御）
+  const r9 = highlightAndTrim('<script>alert(1)</script> foo', ['foo'], { max: 100 });
+  assert.ok(!r9.html.includes('<script>'), 'no raw <script> in output');
+  assert.ok(r9.html.includes('&lt;script&gt;'), 'script escaped');
+  assert.ok(r9.html.includes('<mark class="search-hl">foo</mark>'), 'foo still highlighted');
+
+  // 11. 零宽 term（空字符串）：不应进入 matches 列表
+  const r10 = highlightAndTrim('hello world', [''], { max: 100 });
+  assert.strictEqual(r10.html, 'hello world', 'empty term no-op');
+  assert.strictEqual(r10.truncated, false, 'empty term not truncated');
+
+  // 12. 截断但内容只有 match：完整展示 keyword + 头尾省略号
+  const r11 = highlightAndTrim('AAAAAAAAAAAAAAAA KEYWORD BBBBBBBBBBBBBBBB', ['KEYWORD'], { max: 14, keep: 2 });
+  assert.ok(r11.truncated, 'still truncated even with small keep');
+  assert.ok(r11.html.includes('<mark class="search-hl">KEYWORD</mark>'), 'keyword visible');
+
+  // 13. 多 term（用户搜 "Exception Foo"）分别高亮
+  const r12 = highlightAndTrim('Exception happened at Foo.bar()', ['Exception', 'Foo'], { max: 100 });
+  assert.ok(r12.html.includes('<mark class="search-hl">Exception</mark>'), 'Exception highlighted');
+  assert.ok(r12.html.includes('<mark class="search-hl">Foo</mark>'), 'Foo highlighted');
+  // 没 match 的不标
+  assert.ok(!r12.html.includes('<mark class="search-hl">happened</mark>'), 'non-match not highlighted');
+
+  // 14. 超长 line（5000 字符）+ 一个 match 在中段：截断后长度合理
+  const giant = 'X'.repeat(2500) + 'NEEDLE ' + 'Y'.repeat(2500);
+  const r13 = highlightAndTrim(giant, ['NEEDLE'], { max: 100, keep: 30 });
+  assert.ok(r13.truncated, 'giant line truncated');
+  assert.ok(r13.html.length < 200, 'truncated is much shorter than giant');
+  assert.ok(r13.html.includes('<mark class="search-hl">NEEDLE</mark>'), 'needle visible');
+
+  console.log('  highlightAndTrim ✓');
 }
 
 // ---------- cssEscape ----------
@@ -1184,6 +1327,7 @@ async function main() {
   console.log('Running web/app.test.js...');
   const tests = [
     testEscapeHtml, testFormatBytes, testFormatTime, testTrimMiddle,
+    testEscapeRegex, testParseSearchTermsForHighlight, testHighlightAndTrim,
     testCssEscape, testPctText, testValidate, testEl, testConfirmDialog, testXSSInErrorText,
     testGotDoneDedupe, testNormalizeHighlightColor, testRenderHighlightedLine,
     testTailViewer,

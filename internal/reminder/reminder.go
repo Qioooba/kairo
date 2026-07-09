@@ -192,6 +192,72 @@ func (r *Reminder) NextFire(now time.Time) time.Time {
 	return time.Time{}
 }
 
+// DueAt 返回 <= now 的最近一次调度时间（即"刚刚到达"的那个槽）。
+//
+// 与 NextFire（只返回严格未来）互补，专供 fire() 判断"哪些提醒该触发"用。
+// 若不存在这样的槽（如 once 还没到点、weekly 本周尚未到勾选日），返回零值。
+//
+// 注意：对周/月循环，若当前已过本周/本月槽，返回的是当前周期的槽；
+// 若当前周期槽尚未到，返回上一个周期的槽（可能距今很久，由调用方用容差窗口过滤）。
+func (r *Reminder) DueAt(now time.Time) time.Time {
+	if !r.Enabled {
+		return time.Time{}
+	}
+	switch r.Type {
+	case TypeOnce:
+		t, err := time.ParseInLocation("2006-01-02T15:04", r.At, time.Local)
+		if err != nil || t.After(now) {
+			return time.Time{}
+		}
+		return t
+	case TypeWeekly:
+		hh, mm, err := parseHHMMParts(r.Time)
+		if err != nil {
+			return time.Time{}
+		}
+		today := int(now.Weekday())
+		if today == 0 {
+			today = 7 // 周日 → 7
+		}
+		// 今天的槽已到（<= now）→ 直接返回
+		if contains(r.Weekdays, today) {
+			candidate := time.Date(now.Year(), now.Month(), now.Day(), hh, mm, 0, 0, time.Local)
+			if !candidate.After(now) {
+				return candidate
+			}
+		}
+		// 否则找过去 7 天内最近的勾选日
+		for offset := 1; offset <= 7; offset++ {
+			d := today - offset
+			if d < 1 {
+				d += 7
+			}
+			if contains(r.Weekdays, d) {
+				return time.Date(now.Year(), now.Month(), now.Day()-offset, hh, mm, 0, 0, time.Local)
+			}
+		}
+		return time.Time{}
+	case TypeMonthly:
+		hh, mm, err := parseHHMMParts(r.Time)
+		if err != nil {
+			return time.Time{}
+		}
+		// 本月槽已到 → 返回
+		candidate := monthCandidate(now.Year(), now.Month(), r.DayOfMonth, hh, mm)
+		if !candidate.After(now) {
+			return candidate
+		}
+		// 否则上个月
+		y, m := now.Year(), now.Month()-1
+		if m < 1 {
+			y--
+			m = 12
+		}
+		return monthCandidate(y, m, r.DayOfMonth, hh, mm)
+	}
+	return time.Time{}
+}
+
 // monthCandidate 构造"指定年月的第 N 天 HH:MM"，N 越界则回退到月末。
 func monthCandidate(y int, m time.Month, day, hh, mm int) time.Time {
 	lastDay := daysInMonth(y, m)
