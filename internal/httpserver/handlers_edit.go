@@ -41,8 +41,19 @@ type editTask struct {
 	done       chan struct{}
 	editorDone chan struct{}
 	events     chan editEvent
+	finished   chan struct{}
 	mu         sync.Mutex
 	closed     bool
+	closeOnce  sync.Once
+}
+
+func (t *editTask) signalStop() {
+	t.closeOnce.Do(func() {
+		t.mu.Lock()
+		t.closed = true
+		t.mu.Unlock()
+		close(t.done)
+	})
 }
 
 type editEvent struct {
@@ -175,23 +186,15 @@ func (s *Server) handleSshSftpEdit(w http.ResponseWriter, r *http.Request) {
 	// 如果不显式清理旧 watcher，老 watcher 退出时 editTasks.Delete(task.id)
 	// 会误删掉新 task、导致 SSE 立刻 404、且老 watcher 与新 watcher 都会在
 	// mtime 变化时上传 → 重复上传 + 重复 SSH 拨号。这里主动关闭旧 task 等
-	// 它退出，再接管同一 taskID。
+	// 它完全退出（finished 通道关闭），再接管同一 taskID。
 	if existing, ok := editTasks.Load(taskID); ok {
 		if old, ok2 := existing.(*editTask); ok2 && old != nil {
-			old.mu.Lock()
-			if !old.closed {
-				old.closed = true
-				old.mu.Unlock()
-				close(old.done)
-			} else {
-				old.mu.Unlock()
-			}
-			// 等 watcher 退出，但带超时避免拖死调用方。
+			old.signalStop()
 			select {
-			case <-old.done:
-			case <-time.After(500 * time.Millisecond):
+			case <-old.finished:
+			case <-time.After(3 * time.Second):
 			}
-			editTasks.Delete(taskID)
+			editTasks.CompareAndDelete(taskID, old)
 		}
 	}
 
@@ -234,6 +237,7 @@ func (s *Server) handleSshSftpEdit(w http.ResponseWriter, r *http.Request) {
 		opener:     op,
 		done:       make(chan struct{}),
 		editorDone: make(chan struct{}),
+		finished:   make(chan struct{}),
 		events:     make(chan editEvent, 16),
 	}
 	editTasks.Store(taskID, task)
@@ -265,17 +269,13 @@ func (s *Server) handleSshSftpEdit(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) watchAndUploadEdit(task *editTask, srv *config.ServerConfig) {
-	var closeOnce sync.Once
-	closeTask := func() {
-		closeOnce.Do(func() {
-			task.mu.Lock()
-			task.closed = true
-			task.mu.Unlock()
-			close(task.done)
-			editTasks.Delete(task.id)
-		})
+	defer close(task.finished)
+
+	cleanup := func() {
+		task.signalStop()
+		editTasks.CompareAndDelete(task.id, task)
 	}
-	defer closeTask()
+	defer cleanup()
 
 	// 初始化 lastMod 为文件当前 ModTime，避免首次轮询把"刚下载未修改"的文件上传回去
 	fi0, err := os.Stat(task.localPath)
