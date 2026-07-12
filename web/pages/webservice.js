@@ -144,23 +144,38 @@
   }
 
   // ---------- 工具：textarea 自动撑高 ----------
+  // - 跟 envelope/header 整体长度走：高度 = 内容 scrollHeight（封顶视口相关上限）
   // - oninput 时把 height 重置为 auto 再设成 scrollHeight，避免一直累积
   // - 封顶 MAX_H，超过后允许纵向滚动（不撑爆页面）
+  // - 模板恢复 / 外部 value 变化：MutationObserver 监听 value attribute 变化
   // - 切 tab 重渲染后也要重新触发一次（因为 DOM 刚挂载、初始值可能没生效）
-  const TEXTAREA_MAX_H = 600;
+  function textareaMaxH() {
+    // 视口高度的 60%，下限 400，上限 800
+    const vh = window.innerHeight || 800;
+    return Math.max(400, Math.min(800, Math.floor(vh * 0.6)));
+  }
   function autoResizeTextarea(ta) {
     if (!ta) return;
     ta.style.height = 'auto';
-    const h = Math.min(ta.scrollHeight, TEXTAREA_MAX_H);
+    const max = textareaMaxH();
+    const h = Math.min(ta.scrollHeight, max);
     ta.style.height = h + 'px';
-    ta.style.overflowY = ta.scrollHeight > TEXTAREA_MAX_H ? 'auto' : 'hidden';
+    ta.style.overflowY = ta.scrollHeight > max ? 'auto' : 'hidden';
   }
-  // 挂监听：oninput + DOMContentLoaded 后跑一次（处理从 state 回填的初始内容）
+  // 挂监听：oninput + 下一帧 + 监听外部 value 变化（如模板恢复直接赋值）
   function bindAutoResize(ta) {
     if (!ta) return;
     ta.addEventListener('input', () => autoResizeTextarea(ta));
     // 下一帧触发（确保 DOM 已挂载、scrollHeight 准）
     requestAnimationFrame(() => autoResizeTextarea(ta));
+    // 监听 value attribute 变化（脚本赋值 ta.value = ... 不触发 input 事件）
+    if (typeof MutationObserver === 'function' && !ta.__mavis_observed) {
+      ta.__mavis_observed = true;
+      const obs = new MutationObserver(() => autoResizeTextarea(ta));
+      obs.observe(ta, { attributes: true, attributeFilter: ['value'] });
+    }
+    // 窗口大小变化时重新评估 max
+    window.addEventListener('resize', () => autoResizeTextarea(ta), { passive: true });
   }
 
   // ---------- 左侧 Sidebar ----------
@@ -606,14 +621,6 @@
       el('label', { text: ' ' }), el('span'),
     ]));
 
-    // 参数填写面板（v0.13.x 优化）：
-    // - 当选中 operation 后，按 input_params 生成一排输入框
-    // - 简单类型（string/int/number 等）→ text/number 输入框
-    // - 复杂类型（无 type 且无 children）→ textarea 写内层 XML
-    // - "应用" 按钮把表单值灌进 body 的 ${name} 占位
-    // - 没有 operation 时不显示
-    const paramPanel = renderParamFillPanel();
-    if (paramPanel) card.appendChild(paramPanel);
 
     // 自定义 headers
     const headersArea = el('textarea', { class: 'svc-headers', id: 'svc-headers', placeholder: '自定义 Header（每行一个，格式 Key: Value）', rows: '3', oninput: (e) => { state.draft.headers = e.target.value; autoResizeTextarea(e.target); } });
@@ -631,9 +638,10 @@
       el('label', { text: '请求 XML' }), bodyArea,
     ]));
 
-    // 操作按钮：生成 / 格式化 / 压缩 / 校验 / 复制 / 发送 / 存模板
+    // 操作按钮：格式化 / 压缩 / 校验 / 复制 / 发送 / 存模板
+    // v0.14.1 去掉「生成 Envelope」按钮 —— 选 op 时已自动生成全空值 envelope，
+    // 按钮点击会写入同样内容，UI 看上去无反应。
     const btnRow = el('div', { class: 'svc-btn-row' });
-    const btnGenerate = el('button', { class: 'btn', text: '生成 Envelope', title: '按当前 operation 生成 SOAP 报文', onclick: generateEnvelope });
     const btnFormat = el('button', { class: 'btn', text: '格式化', onclick: () => xmlAction('format') });
     const btnMinify = el('button', { class: 'btn', text: '压缩', onclick: () => xmlAction('minify') });
     const btnValidate = el('button', { class: 'btn', text: '校验', onclick: () => xmlAction('validate') });
@@ -642,7 +650,6 @@
     }});
     const btnSaveTpl = el('button', { class: 'btn', text: '存为模板', onclick: saveCurrentAsTemplate });
     const btnSend = el('button', { class: 'btn btn-primary', text: '发送', onclick: sendRequest });
-    btnRow.appendChild(btnGenerate);
     btnRow.appendChild(btnFormat);
     btnRow.appendChild(btnMinify);
     btnRow.appendChild(btnValidate);
@@ -998,187 +1005,6 @@
     }
   }
 
-  // ---------- 参数填写面板 ----------
-  // 推断 input 输入类型：number 类（int/decimal/double/float/long/short/byte）→ number，其余 → text
-  function guessInputType(p) {
-    if (!p || !p.type) return 'text';
-    const t = String(p.type).toLowerCase();
-    if (/(int|integer|long|short|byte|decimal|double|float|number)/.test(t) && !/string/.test(t)) return 'number';
-    if (/(date|time|datetime)/.test(t) && !/string/.test(t)) return 'datetime-local';
-    return 'text';
-  }
-  // 复选：param 是否「叶子」且会被后端生成 ${name} 占位
-  function isLeafParam(p) { return !p.children || p.children.length === 0; }
-  // 复选：param 是否复杂类型（无 type、无 children）—— 这种用户需在表单里写内层 XML
-  function isComplexBare(p) { return (!p.type || p.type === 'any') && (!p.children || p.children.length === 0); }
-
-  // 收集所有 input_params 里的叶子节点（递归）
-  function collectLeafParams(params) {
-    const out = [];
-    function walk(arr) {
-      for (const p of arr || []) {
-        if (isLeafParam(p)) out.push(p);
-        else if (p.children && p.children.length) walk(p.children);
-      }
-    }
-    walk(params);
-    return out;
-  }
-  // 收集所有 input_params 里的「复杂无子」节点（需要 textarea 写 XML）
-  function collectComplexBareParams(params) {
-    const out = [];
-    function walk(arr, parentPath) {
-      for (const p of arr || []) {
-        if (isComplexBare(p) && p.name) {
-          out.push({ param: p, path: parentPath });
-        } else if (p.children && p.children.length) {
-          walk(p.children, parentPath + '/' + p.name);
-        }
-      }
-    }
-    walk(params, '');
-    return out;
-  }
-
-  // 渲染参数填写面板
-  function renderParamFillPanel() {
-    const op = state.currentOperation;
-    if (!op || !op.input_params || op.input_params.length === 0) return null;
-    const leaves = collectLeafParams(op.input_params);
-    const complex = collectComplexBareParams(op.input_params);
-    if (leaves.length === 0 && complex.length === 0) return null;
-
-    const panel = el('div', { class: 'svc-param-panel' });
-    const titleRow = el('div', { class: 'svc-param-title' });
-    titleRow.appendChild(el('span', { text: '请求参数' }));
-    titleRow.appendChild(el('span', { class: 'svc-param-hint', text: '· 填写后点「应用到 XML」可一键注入请求体（无需手动改 ${...} 占位）' }));
-    panel.appendChild(titleRow);
-
-    // 叶子节点：每个一行
-    leaves.forEach(p => {
-      const row = el('div', { class: 'svc-param-row-edit' });
-      const labelText = (p.name || '?') + (p.min_occurs === '1' || p.max_occurs === '1' ? ' *' : '');
-      row.appendChild(el('label', { class: 'svc-param-name-edit', text: labelText }));
-      const meta = el('span', { class: 'svc-param-type-edit', text: p.type || 'any' });
-      row.appendChild(meta);
-      const inputType = guessInputType(p);
-      const inp = el('input', {
-        type: inputType,
-        class: 'svc-param-input',
-        'data-param-name': p.name || '',
-        'data-param-mode': 'leaf',
-        placeholder: inputType === 'number' ? '0' : '填写值',
-      });
-      // 从 body 现有值回填（如果用户之前手动改过）
-      const existing = extractLeafValueFromBody(state.draft.body || '', p.name);
-      if (existing) inp.value = existing;
-      row.appendChild(inp);
-      panel.appendChild(row);
-    });
-
-    // 复杂无子节点：每个一个 textarea 写内层 XML
-    complex.forEach(({ param, path }) => {
-      const row = el('div', { class: 'svc-param-row-edit svc-param-row-complex' });
-      const labelText = (param.name || '?') + ' (复杂)';
-      const head = el('div', { class: 'svc-param-row-head' });
-      head.appendChild(el('label', { class: 'svc-param-name-edit', text: labelText }));
-      head.appendChild(el('span', { class: 'svc-param-type-edit', text: '嵌套 XML' }));
-      row.appendChild(head);
-      const ta = el('textarea', {
-        class: 'svc-param-input svc-param-textarea',
-        'data-param-name': param.name || '',
-        'data-param-mode': 'complex',
-        placeholder: '内层 XML，例如：\n  <userId>123</userId>\n  <name>张三</name>',
-        rows: '3',
-        spellcheck: 'false',
-      });
-      const existing = extractLeafValueFromBody(state.draft.body || '', param.name);
-      if (existing) ta.value = existing;
-      ta.addEventListener('input', () => autoResizeTextarea(ta));
-      row.appendChild(ta);
-      panel.appendChild(row);
-    });
-
-    // 操作按钮行
-    const btnRow = el('div', { class: 'svc-param-btn-row' });
-    const applyBtn = el('button', { class: 'btn btn-primary btn-mini', text: '应用到 XML', onclick: applyParamValuesToBody });
-    const clearBtn = el('button', { class: 'btn btn-mini', text: '清空表单', onclick: () => {
-      panel.querySelectorAll('.svc-param-input').forEach(i => { i.value = ''; autoResizeTextarea(i); });
-    }});
-    btnRow.appendChild(applyBtn);
-    btnRow.appendChild(clearBtn);
-    btnRow.appendChild(el('span', { class: 'svc-param-stats', text: '共 ' + (leaves.length + complex.length) + ' 个参数' }));
-    panel.appendChild(btnRow);
-
-    return panel;
-  }
-
-  // 从 body XML 中提取 ${name} 占位的值（仅匹配最简单情形：<tag>${name}</tag>，取中间）
-  function extractLeafValueFromBody(body, name) {
-    if (!body || !name) return '';
-    // 转义正则元字符
-    const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const re = new RegExp('<' + esc + '[^>]*>\\s*\\$\\{' + esc + '\\}\\s*</' + esc + '>');
-    const m = body.match(re);
-    if (m) return ''; // 仍是占位，未填
-    // 提取已填值
-    const re2 = new RegExp('<' + esc + '[^>]*>([\\s\\S]*?)</' + esc + '>');
-    const m2 = body.match(re2);
-    if (m2) {
-      const v = m2[1].trim();
-      if (v && v !== '${' + name + '}') return v;
-    }
-    return '';
-  }
-
-  // 把面板里的值灌进 body 的对应 ${name} 占位
-  function applyParamValuesToBody() {
-    const panel = document.querySelector('.svc-param-panel');
-    if (!panel) return;
-    let body = state.draft.body || '';
-    if (!body) { toast('请求体为空，请先「生成 Envelope」', 'warn'); return; }
-    let applied = 0;
-    panel.querySelectorAll('.svc-param-input').forEach(inp => {
-      const name = inp.getAttribute('data-param-name');
-      const mode = inp.getAttribute('data-param-mode');
-      if (!name) return;
-      const value = inp.value || '';
-      // 转义正则元字符
-      const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      // 替换 <name>${name}</name> 为 <name>VALUE</name>
-      // 简单类型：值插入文本节点（需要 XML 转义 < > &）
-      // 复杂类型：值本身就是 XML，不转义，直接塞进标签
-      const escapedValue = mode === 'complex' ? value : escapeXmlText(value);
-      const placeholder = '${' + name + '}';
-      // 先尝试匹配带占位的形式
-      const re1 = new RegExp('(<' + esc + '[^>]*>)\\s*\\$\\{' + esc + '\\}\\s*(</' + esc + '>)', 'g');
-      if (re1.test(body)) {
-        body = body.replace(re1, '$1' + escapedValue + '$2');
-        applied++;
-        return;
-      }
-      // 若该 tag 不含 ${} 但存在，且值非空，提示用户手动调整（避免覆盖用户手填的内容）
-      // 这里不强制覆盖，保留用户手填结果
-    });
-    if (applied === 0) {
-      toast('没有可替换的 ${...} 占位（可能已应用过或 body 被手动改过）', 'info');
-      return;
-    }
-    state.draft.body = body;
-    state.draft.bodyDirty = true;
-    const bodyInp = document.getElementById('svc-body');
-    if (bodyInp) { bodyInp.value = body; autoResizeTextarea(bodyInp); }
-    toast('已应用 ' + applied + ' 个参数到 XML', 'ok');
-  }
-
-  // XML 文本节点转义（用于简单类型值注入）
-  function escapeXmlText(s) {
-    if (s == null) return '';
-    return String(s)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;');
-  }
 
   // ---------- 动作：发送 / XML 操作 ----------
 

@@ -18,7 +18,7 @@ func bytesContain(s []byte, b1, b2 byte) bool {
 	return false
 }
 
-func TestGenerateEnvelope_NamespaceAndPlaceholders(t *testing.T) {
+func TestGenerateEnvelope_NamespaceAndEmptyValues(t *testing.T) {
 	op := Operation{
 		Name:      "customerQuery",
 		Namespace: "http://cust.example.com/",
@@ -43,16 +43,23 @@ func TestGenerateEnvelope_NamespaceAndPlaceholders(t *testing.T) {
 	if !strings.Contains(env, "<web:customerQuery>") {
 		t.Errorf("envelope missing operation node: %s", env)
 	}
-	// placeholders
-	if !strings.Contains(env, "${custNo}") {
-		t.Errorf("missing ${custNo} placeholder")
+	// 叶子节点：空值形式（<tag></tag>），不再嵌入 ${name} 占位
+	if !strings.Contains(env, "<custNo></custNo>") {
+		t.Errorf("missing empty <custNo></custNo>: %s", env)
 	}
-	if !strings.Contains(env, "${serialNo}") {
-		t.Errorf("missing ${serialNo} placeholder")
+	if !strings.Contains(env, "<serialNo></serialNo>") {
+		t.Errorf("missing empty <serialNo></serialNo>: %s", env)
 	}
-	// nested
-	if !strings.Contains(env, "<addr>") || !strings.Contains(env, "${city}") {
-		t.Errorf("missing nested param: %s", env)
+	// 严禁出现旧的 ${...} 占位符
+	if strings.Contains(env, "${") {
+		t.Errorf("envelope should not embed ${...} placeholders anymore: %s", env)
+	}
+	// 嵌套子节点也是空值
+	if !strings.Contains(env, "<addr>") {
+		t.Errorf("missing nested container: %s", env)
+	}
+	if !strings.Contains(env, "<city></city>") {
+		t.Errorf("missing empty nested <city></city>: %s", env)
 	}
 }
 

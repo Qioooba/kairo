@@ -254,8 +254,10 @@ a { color: var(--primary-2); text-decoration: none; }
 body {
   display: grid;
   grid-template-columns: var(--sidebar-width) 1fr;
-  height: 100vh;
+  min-height: 100vh;
+  height: auto;
   overflow: hidden;
+  overflow-y: auto;
 }
 
 .sidebar {
@@ -265,10 +267,14 @@ body {
   padding: 20px 14px;
   overflow-y: auto;
   overflow-x: hidden;
+  position: sticky;
+  top: 0;
+  align-self: start;
+  max-height: 100vh;
 }
 .brand {
   display: flex; align-items: center; gap: 10px;
-  padding: 4px 6px 18px;
+  padding: 4px 6px 8px;
   border-bottom: 1px solid var(--line);
   margin-bottom: 14px;
 }
@@ -350,7 +356,7 @@ body {
 .nav { display: flex; flex-direction: column; gap: 2px; flex: 1; overflow-y: auto; }
 .nav-item {
   display: block;
-  padding: 9px 12px;
+  padding: 7px 12px;
   border-radius: 8px;
   color: var(--text-dim);
   font-size: 13.5px;
@@ -394,13 +400,13 @@ body {
   color: var(--text-mute);
   text-transform: uppercase;
   letter-spacing: 0.5px;
-  padding: 14px 12px 4px;
-  margin-top: 6px;
+  padding: 10px 12px 2px;
+  margin-top: 4px;
   border-top: 1px solid var(--line);
 }
 .nav-item.small {
   font-size: 12.5px;
-  padding: 7px 12px 7px 20px;
+  padding: 5px 12px 5px 20px;
   color: var(--text-dim);
 }
 /* 侧边栏行内小图标（替换原来 emoji ℹ️ 等） */
@@ -415,7 +421,7 @@ body {
 .muted { color: var(--text-mute); }
 
 /* main */
-.main { display: flex; flex-direction: column; overflow: hidden; }
+.main { display: flex; flex-direction: column; overflow: hidden; overflow-y: auto; min-height: 0; }
 .topbar {
   display: flex; align-items: center; justify-content: space-between;
   padding: 14px 22px;
@@ -564,6 +570,7 @@ body {
 }
 .tool-card .tag.placeholder { background: var(--tag-placeholder-bg); color: var(--tag-placeholder-fg); }
 .tool-card .tag.ready { background: var(--tag-ready-bg); color: var(--tag-ready-fg); }
+.tool-card .tag.new    { background: var(--tag-enc-bg);  color: var(--tag-enc-fg); }
 
 .tool-card-small {
   padding: 14px 16px;
@@ -5480,79 +5487,11 @@ input.sftp-autofollow-cb {
   box-sizing: border-box;
   overflow-y: hidden;
 }
-.svc-body, .svc-mock-body { min-height: 200px; }
+.svc-body, .svc-mock-body { min-height: 100px; }
 .svc-headers:focus, .svc-body:focus, .svc-mock-body:focus {
   outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(79,140,255,0.15);
 }
 
-/* 参数填写面板（v0.13.x 优化）—— 解决 ${...} 占位难填的问题 */
-.svc-param-panel {
-  margin-bottom: 12px;
-  padding: 10px 12px;
-  background: linear-gradient(180deg, rgba(79,140,255,0.04), rgba(79,140,255,0.01));
-  border: 1px solid rgba(79,140,255,0.2);
-  border-radius: 8px;
-}
-.svc-param-title {
-  display: flex; align-items: baseline; gap: 8px;
-  font-size: 12.5px; font-weight: 600; color: var(--primary);
-  margin-bottom: 8px;
-}
-.svc-param-hint { font-size: 11px; color: var(--text-dim); font-weight: 400; }
-.svc-param-row-edit {
-  display: grid;
-  grid-template-columns: 140px 110px minmax(0, 1fr);
-  gap: 8px; align-items: center;
-  margin-bottom: 6px;
-}
-.svc-param-row-edit.svc-param-row-complex {
-  display: block;
-  margin-bottom: 8px;
-}
-.svc-param-row-head {
-  display: flex; align-items: baseline; gap: 10px;
-  margin-bottom: 4px;
-}
-.svc-param-name-edit {
-  font-size: 11.5px; color: var(--text-dim);
-  font-family: var(--mono, monospace);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-.svc-param-type-edit {
-  font-size: 10.5px; color: var(--text-dim); opacity: 0.7;
-  font-family: var(--mono, monospace);
-  padding: 1px 6px; background: var(--bg-3); border-radius: 3px;
-}
-.svc-param-input {
-  width: 100%; padding: 6px 9px;
-  border: 1px solid var(--line); border-radius: 6px;
-  background: var(--bg-1); color: var(--text);
-  font-size: 12px; font-family: var(--mono, monospace);
-  min-width: 0; box-sizing: border-box;
-}
-.svc-param-input:focus {
-  outline: none; border-color: var(--primary);
-  box-shadow: 0 0 0 2px rgba(79,140,255,0.15);
-}
-.svc-param-textarea {
-  width: 100%; resize: vertical; min-height: 60px;
-  font-family: var(--mono, monospace); line-height: 1.5;
-  overflow-y: hidden;
-}
-.svc-param-btn-row {
-  display: flex; gap: 6px; align-items: center;
-  margin-top: 8px; padding-top: 8px;
-  border-top: 1px dashed rgba(79,140,255,0.2);
-  flex-wrap: wrap;
-}
-.svc-param-stats {
-  margin-left: auto;
-  font-size: 11px; color: var(--text-dim);
-}
-@media (max-width: 900px) {
-  .svc-param-row-edit { grid-template-columns: 1fr; gap: 4px; }
-  .svc-param-row-edit > .svc-param-type-edit { display: inline-block; width: max-content; }
-}
 
 .svc-btn-row { display: flex; gap: 6px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
 .svc-btn-row .btn { font-size: 12px; padding: 6px 10px; }

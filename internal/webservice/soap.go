@@ -5,8 +5,8 @@ package webservice
 // 报文生成策略（document/literal wrapped 为主）：
 //   - Envelope 用 soapenv 前缀（SOAP 1.1 env ns = http://schemas.xmlsoap.org/soap/envelope/）；
 //   - Body 下放 operation 元素，namespace 取 Operation.Namespace；
-//   - 参数用占位符 ${paramName}，方便用户替换；
-//   - 复杂参数递归生成嵌套节点。
+//   - 叶子参数节点默认空值（<name></name>），用户直接在编辑器里填值；复杂参数递归生成嵌套节点。
+//   - 不再嵌入 ${paramName} 占位符 —— 避免"必填/非必填"判断、避免应用按钮、避免用户误以为要替换字符串。
 
 import (
 	"bytes"
@@ -56,7 +56,9 @@ func GenerateEnvelope(op Operation, soapVersion string) string {
 	return b.String()
 }
 
-// writeParamNodes 递归写出参数节点。叶子节点用占位符 ${name}。
+// writeParamNodes 递归写出参数节点。叶子节点默认空值，由用户在编辑器里直接填。
+// 不嵌入 ${name} 占位符 —— 避免把"必填/可选"的判断责任推给前端表单，
+// 也不强制用户点"应用"按钮；用户想填什么自己在请求体 XML 里写。
 func writeParamNodes(b *strings.Builder, params []Param, indent string) {
 	for _, p := range params {
 		if len(p.Children) > 0 {
@@ -65,11 +67,8 @@ func writeParamNodes(b *strings.Builder, params []Param, indent string) {
 			b.WriteString(indent + "</" + p.Name + ">\n")
 			continue
 		}
-		placeholder := "${" + p.Name + "}"
-		if p.Name == "" {
-			placeholder = "${value}"
-		}
-		b.WriteString(indent + "<" + p.Name + ">" + placeholder + "</" + p.Name + ">\n")
+		// 叶子：空标签（自闭合形式省字节，但保留成对标签方便用户点开填值）
+		b.WriteString(indent + "<" + p.Name + "></" + p.Name + ">\n")
 	}
 }
 

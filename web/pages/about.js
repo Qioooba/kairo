@@ -69,6 +69,9 @@
     browserIc:    'M12 2a10 10 0 100 20 10 10 0 000-20zM2 12h20M12 2a15 15 0 010 20M12 2a15 15 0 000 20',                                                  // 经纬网 — 浏览器自动打开 (v0.13)
     editIc:       'M14 3v4h4l-4-4zM5 3h9l5 5v13H5zM8 11h8M8 14h8M8 17h5',                                                                                 // 折角文件 + 文字行 — 在线编辑 (v0.13)
 
+    // v0.14 新增 (1 张卡片)
+    coffee:       'M3 8h14v6a4 4 0 01-4 4H7a4 4 0 01-4-4V8zM17 10h2a2 2 0 010 4h-2M7 4c0-1 1-2 2-2M10 2c0-1 1-2 2-2M14 2c0-1 1-2 2-2',                                                                            // 咖啡杯 + 杯耳 + 三道蒸汽 — 投喂作者 (v0.14)
+
     // ----------------------------------------------------------------
     // 小标题装饰图标 (Win7 兼容, 替换 emoji)
     // ----------------------------------------------------------------
@@ -214,17 +217,17 @@
   // §1. 核心数据看板
   // =====================================================================
   const stats = [
-    { label: '总代码量',             value: '81,000+', sub: 'Go 45K · 前端 35K · 0 npm 运行时',           tone: 'primary' },
-    { label: '代码行数 (Go)',         value: '45,000+', sub: '152 个源文件 · 22 个子包 · 含测试',          tone: 'primary' },
-    { label: '代码行数 (前端)',       value: '35,000+', sub: 'vanilla JS · 17 页面 · 零依赖',              tone: 'accent'  },
-    { label: '提交次数',              value: '136',     sub: 'v0.1 → v0.13',                              tone: 'success' },
-    { label: '后端模块',              value: '22',      sub: 'internal/* (含 sshshell/webservice/license/reminder/browserpref/popup)', tone: 'primary' },
-    { label: '前端页面',              value: '17',      sub: 'web/pages/*.js (含 ssh/webservice/reminders)', tone: 'accent' },
-    { label: 'API 接口',              value: '95+',     sub: 'REST + SSE + WebSocket',                    tone: 'primary' },
-    { label: '测试用例 (Go)',         value: '850+',    sub: '67 个 _test.go · 单元 + 集成',              tone: 'success' },
+    { label: '总代码量',             value: '85,000+', sub: 'Go 48K · 前端 37K · 0 npm 运行时',           tone: 'primary' },
+    { label: '代码行数 (Go)',         value: '48,000+', sub: '164 个源文件 · 24 个子包 · 含测试',          tone: 'primary' },
+    { label: '代码行数 (前端)',       value: '37,000+', sub: 'vanilla JS · 18 页面 · 零依赖',              tone: 'accent'  },
+    { label: '提交次数',              value: '148',     sub: 'v0.1 → v0.14',                              tone: 'success' },
+    { label: '后端模块',              value: '24',      sub: 'internal/* (含 sshshell/webservice/license/reminder/browserpref/popup/endpointclient/sponsor)', tone: 'primary' },
+    { label: '前端页面',              value: '18',      sub: 'web/pages/*.js (含 ssh/webservice/reminders/sponsor)', tone: 'accent'  },
+    { label: 'API 接口',              value: '96+',     sub: 'REST + SSE + WebSocket',                    tone: 'primary' },
+    { label: '测试用例 (Go)',         value: '1450+',   sub: '72 个 _test.go · 单元 + 集成',              tone: 'success' },
     { label: '测试用例 (Node)',       value: '180+',    sub: 'app.test.js · 17 case',                     tone: 'success' },
     { label: 'E2E 场景 (Playwright)', value: '280+',    sub: '10 个脚本 · 16 测试套',                     tone: 'warn'    },
-    { label: '修复缺陷',              value: '400+',    sub: 'P0/P1/P2 全量',                             tone: 'warn'    },
+    { label: '修复缺陷',              value: '420+',    sub: 'P0/P1/P2 全量',                             tone: 'warn'    },
     { label: '安全设计点',            value: '14',      sub: 'fail-closed 全栈',                          tone: 'error'   },
     { label: 'SSH 兼容 profile',      value: '5',       sub: 'modern → legacy · 自动 fallback',           tone: 'primary' }
   ];
@@ -613,6 +616,25 @@
         '并发安全：handler 入口取 ctx；保存走原子 tmpfile + rename；30 分钟硬超时',
         '348 行 handlers_edit.go + Playwright test-edit-feature.js (267 行) 完整 e2e 覆盖'
       ]
+    },
+    {
+      icon: 'coffee', name: '投喂作者 (v0.14 起)',
+      pages: ['sponsor'],
+      apis: ['/api/sponsor/leaderboard'],
+      pkg: 'internal/sponsor + internal/endpointclient + internal/httpserver/handlers_sponsor.go',
+      desc: '老用户反哺渠道。前端 Hero 黄色气泡 + 营业中牌子（红色 pulse 动画）+ 3 品牌（库迪/瑞幸/随缘）二维码 + 18 条搞笑随机文案（同事间玩笑感，不乞讨）+ 天命武林榜 (50 昵称写死占位) + 续命恩人榜（前 10 名 + 三色奖杯）；后端走 endpointclient 调内部激活服务 serviceID=SPONSOR_LEADERBOARD，5 分钟内存缓存，失败时给用户 5 条随机搞笑 quip，console.warn 给开发者排查，绝不反显内部地址。',
+      features: [
+        '3 品牌: 库迪 (9.9 续命首选) / 瑞幸 (小蓝杯 懂的都懂) / 随缘 (给啥喝啥 不挑食) — logo 直接铺在页面背景, 选中态放大 1.08 + 底部彩色实心长条指示器',
+        'Hero 黄色气泡 + 营业中牌子: 红色 pulse 动画 (sponsor-pulse 2s), 黄色渐变背景 + 阴影, 古风/高对比度主题适配',
+        '18 条搞笑随机文案: 工具帮你准点下班了? / 喝了你的咖啡我改 bug 速度 +50% (大概) / 续的不是命是 30 岁以后的颈椎和头发 — 同事间玩笑感, 不乞讨',
+        '天命武林榜 (静态骨架 50 昵称占位, rank 1:1 绑定) + 续命恩人榜 (前 10 名 hover 动画 + 三色奖杯 gold/silver/bronze SVG) — 真数据从 /api/sponsor/leaderboard 异步加载',
+        '5 分钟本地缓存: handlers_sponsor.go 内存缓存, 减少对方服务压力, cache miss 才真拉; 失败友好降级 — 接口 502/慢响应/挂掉时静态部分 100% 显示, 榜单区显示 loading + 5 条随机搞笑 quip + retry',
+        '安全可见: 失败时 console.warn 输出开发者需要的诊断信息 (endpointclient 主备地址/serviceID/HTTP 502), 但用户侧只看到搞笑 quip, 内部地址零泄漏 (Playwright 18099 端口实测: 内部地址/svc/HTTP 502 泄漏检测全部 false)',
+        '主页快捷入口 3 处: web/index.html 导航加"投喂作者" + sponsor.svg 路由 icon; web/pages/webservice.js 首页快捷入口加"投喂作者"卡 (跟其他工具卡风格一致); web/icons.js coffee 图标 (琥珀色咖啡杯 + 热气)',
+        '基座共享: internal/endpointclient 统一封装主备切换/超时/4xx-5xx 错误归一化, license + sponsor + 后续所有"调内部服务"代码走同一条路径, 不再每包手写 http.Client',
+        'DBA + Java 同事对接文档: docs/sponsor/{K_SPONSOR.sql (Oracle 建表 + 3 触发器 + 索引 + 5 条示例), KairoSponsorLeaderboardAction.java (Basic auth + serviceID 路由), README.md (接口协议 + 已知风险点)}',
+        '579 行 sponsor.js + 555 行 internal/sponsor (client.go 127 + types.go 46 + sponsor_test.go 312 + integration_test.go 70) + 360 行 endpointclient (client.go 136 + client_test.go 224) + cmd/mock-sponsor-server 独立 mock 给前端开发 + E2E, 不进生产发布包'
+      ]
     }
   ];
 
@@ -720,7 +742,7 @@
   // =====================================================================
   const roadmap = {
     planned: [
-      { name: 'v0.9.1 hotfix', desc: '基于 v0.9.0 反馈的 UI 细节 / 性能 / 兼容性 集中收口，预计 1-2 周内' },
+      { name: 'v0.15 续命日常化', desc: '投喂作者页深度打磨: 武林榜真实数据接驳 (当前静态 50 昵称占位 → 真实赞助人) + 投喂方式新增支付宝/微信 + 赞助后置 Toast 反馈 + 老板键一键隐藏 (在严肃场合)' },
       { name: '审计中心升级', desc: 'audit.log → SQLite 索引，支持按 user/op/server/time 检索与导出 CSV (v0.9 RBAC 已落地，下一步把审计数据做成可查询)' },
       { name: 'WebSocket 升级 SSE', desc: '对双向场景（如交互式 shell）切换 WebSocket，但保留 SSE 给 tail 流' },
       { name: '容器化分发', desc: 'Docker 镜像 + docker-compose，CI/CD 一键起' },
@@ -738,9 +760,62 @@
   };
 
   // =====================================================================
-  // §13. 版本演进史 (13 个版本, 每版 ~2000 字, accordion 折叠)
+  // §13. 版本演进史 (14 个版本, 每版 ~2000 字, accordion 折叠)
   // =====================================================================
   const changelog = [
+    {
+      version: 'v0.14',
+      date: '2026-07-13',
+      tag: '投喂作者 · 性能优化 · 内部基座',
+      codename: 'Aurelia · 锦上添花',
+      size: 'l',
+      headline: '投喂作者门面上线 (Go 后端 + Web UI + DBA 对接文档) + endpointclient 共享基座 + about.js 首屏节点 -95% + License 审计全流程',
+      stats: { commits: 7, fixes: 2, additions: 4, breaks: 0 },
+      principles: [
+        '续命也是产品力: 投喂作者不是营销 — 是给老用户一个反哺渠道, 排行榜用真实赞助数据, 失败不反显内部地址, 5 条随机搞笑 quip 兜底',
+        '基座先行: 抽 endpointclient 是为了让 license / sponsor / 后续所有"调内部服务"的代码走同一条主备+超时+错误归一路径, 不再每包手写 http.Client',
+        '安全可见: License 激活全流程写 audit (request/ok/fail), 跟 Java 端 K_AUDIT 对齐, 给"内鬼"追查留数据源, 审计不是可选项',
+        '门面先于自己: about.js 性能优化 (节点 -95%) 是为了让 about 页本身不成为性能包袱 — 元页面不能拖慢进入, 自己不能成为反例'
+      ],
+      features: [
+        { title: '投喂作者 Web UI (web/pages/sponsor.js 579 行)', desc: 'Hero 黄色气泡 + 营业中牌子 (红色 pulse 动画) + 古风/高对比度主题适配; 3 品牌: 库迪 (9.9 续命首选) / 瑞幸 (小蓝杯) / 随缘 (给啥喝啥) — 二维码 + 选中态放大 + 彩色实心长条; 18 条搞笑随机文案 (不乞讨, 同事间玩笑感); 天命武林榜 (50 昵称写死, rank 1:1 绑定) + 续命恩人榜 (前 10 名 hover 动画 + 三色奖杯 gold/silver/bronze); 二维码卡片 (左右手指 bounce 提示) + 投喂方式切换; 排行榜侧栏 5 分钟本地缓存 + 失败友好降级' },
+        { title: '投喂作者 Go 后端 (internal/sponsor 555 行 + mock)', desc: 'types.go Leader / Leaderboard 强类型 + JSON 序列化; client.go 调内部激活服务 serviceID=SPONSOR_LEADERBOARD 走 endpointclient 主备切换; InitFromConfig 覆盖 var 池; sponsor_test.go 312 行 + integration_test.go 70 行表驱动覆盖正常/拒绝/网络挂/主备切换/字段映射; handlers_sponsor.go /api/sponsor/leaderboard 5 分钟内存缓存; cmd/mock-sponsor-server 独立 mock 给前端开发 + E2E, 不进生产发布包' },
+        { title: 'endpointclient 共享 HTTP 调用器 (新包, 360 行)', desc: 'internal/endpointclient/client.go 136 行: 统一封装主备切换 / 超时 / 4xx-5xx 错误归一化; 替换 license/server.go 手写 http.Client, 函数签名兼容 (老测试零修改); 224 行 client_test.go 覆盖主备切换 / 超时 / 4xx-5xx 错误码归一 / ctx 取消; 后续所有"调内部服务"的代码统一走这条路径' },
+        { title: 'License 审计增强 (防内鬼核心数据源)', desc: 'handlers_license.go 激活全流程写 audit (request / ok / fail), 跟 Java 端 K_AUDIT 风格一致; ConfigSnapshot 加 LicenseActivatePrimary / Secondary / Auth 字段; InitFromConfig() / applySnapshotLocked() 注入时立刻覆盖 var 池; postActivateJSON 改走 endpointclient, 简化调用' },
+        { title: '投喂作者部署文档 (DBA + Java 同事对接)', desc: 'docs/sponsor/K_SPONSOR.sql: Oracle 建表 (K_SPONSOR + 3 触发器 + 索引 + 5 条示例数据); KairoSponsorLeaderboardAction.java: Java Action (Basic auth + serviceID 路由); README.md: DBA + Java 同事对接流程, 接口协议, 已知风险点 (主备切换 / 缓存一致 / 审计一致性)' },
+        { title: 'about.js 性能优化 (perf 提交 3a8da9d, 为 v0.14 蓄力)', desc: '12 section IO 懒渲染 (IntersectionObserver + content-visibility: auto); DocumentFragment 批量挂载 (14 次 reflow → 1 次); sticky 锚点条删 backdrop-filter (滚动 GPU 模糊合成停掉); toggleVersion setTimeout 加 timerId 清理 (修快速连点 bug); 数据: 首屏 view 节点 3187 → 165 (-95%), 首屏 load 770ms → 564ms (-27%); 5 主题 × 4 场景全过 0 错误; 老浏览器 (无 IO / 无 CV) 自动降级' },
+        { title: '投喂页面集成入口 (3 处)', desc: 'web/index.html: 导航加"投喂作者" + sponsor.svg 路由 icon + cache buster 升 20260711; web/pages/webservice.js: 首页快捷入口加"投喂作者"卡 (跟其他工具卡风格一致); web/icons.js: 新增 coffee 图标 (琥珀色咖啡杯 + 热气)' },
+        { title: '全局版本号 6 处对齐 v0.13 → v0.14', desc: 'VERSION 文件; internal/httpserver/httpserver.go Version 常量 + ldflags 示例注释; web/pages/about.js VERSION 常量; web/index.html #footer-version; web/app.js info.version fallback; README.md Status 徽章 — 老配置无需动, 替换二进制即生效' }
+      ],
+      fixes: [
+        'P1: 投喂作者页排行榜改异步加载 + 失败不反显内部地址 (d5c541c) — 接口 502/慢响应/挂掉时, 静态部分 (banner/品牌/QR/footer) 立即显示, 榜单区显示 5 条随机搞笑 quip + retry; console.warn 给开发者排查; Playwright 18099 端口实测: 内部地址/svc/HTTP 502 泄漏检测全部 false',
+        'P1: 顶部 status dot/text 改默认隐藏 — 太抢戏, 改用 footer listen-info 显示, 让顶栏更干净',
+        'P2: 配置文件补 internal_endpoints 段 (license_activate 5s / sponsor_leaderboard 10s 默认值) — 后续 Java 同事可改 IP 不用动源码',
+        'P2: nav-item.active 改 inset box-shadow 画左条 (不占 layout 空间) + svc-form-grid 网格化表单 (解决 select/input flex:1 拉满全宽)'
+      ],
+      commits: [
+        { hash: '979ae99', msg: 'feat(internal): 提取 endpointclient 共享 HTTP 调用器 + License 审计增强' },
+        { hash: '32a20ee', msg: 'feat(sponsor): 投喂作者排行榜 Go 后端 + Mock 服务器 + 部署文档' },
+        { hash: '3a8da9d', msg: 'perf(about): 12 section IO 懒渲染 + 批量挂载 + content-visibility, 首屏节点 -95%' },
+        { hash: 'b2cd572', msg: 'feat(v0.14): 投喂作者 Web UI + About/顶部 status 优化 + 全局版本号升 v0.14' },
+        { hash: 'd5c541c', msg: 'fix(sponsor): 投喂作者页排行榜改异步加载, 失败不再反显内部地址改随机搞笑提示' },
+        { hash: '55badb6', msg: 'fix: 修复文件在线编辑第二次点击时闪退问题' },
+        { hash: 'bb0acf6', msg: 'fix: 修复about.js语法错误、更新所有JS/CSS缓存版本号至v20260710, 解决关于按钮点击无反应问题' },
+        { hash: '1e05969', msg: 'chore: 忽略 .mavis/ 目录 (Mavis agent 自身运行数据)' }
+      ],
+      performance: [
+        { label: 'about.js 首屏 view 节点', before: '3187', after: '165 (-95%)', improve: '19x' },
+        { label: 'about.js 首屏 load', before: '770ms', after: '564ms (-27%)', improve: '1.4x' },
+        { label: 'about.js reflow 次数', before: '14 次 (每个 section 各 1 次)', after: '1 次 (DocumentFragment 批量挂载)', improve: '14x' }
+      ],
+      migration: [
+        '新增左侧菜单"☕ 投喂作者"入口 (web/pages/sponsor.js), 17 → 18 个前端页面',
+        'config.yaml 新增 internal_endpoints 段 (license_activate 5s / sponsor_leaderboard 10s 默认值), 老配置无需动 (Defaults 兜底)',
+        'audit.log 新增 license.activate.request / ok / fail 事件 + sponsor.leaderboard.error 事件, 跟 Java 端 K_AUDIT 对齐',
+        'web/index.html / ssh.html 静态资源 cache buster 升 ?v=20260711; 用户需硬刷新 (Ctrl/Cmd+Shift+R) 加载 sponsor 路由 icon',
+        '无破坏性变更; 现有 v0.13.1 用户直接替换二进制即可'
+      ]
+    },
     {
       version: 'v0.13.1',
       date: '2026-07-10',
@@ -1765,7 +1840,7 @@
     wrap.appendChild(banner);
     wrap.appendChild(list);
 
-    view.appendChild(renderSection('sec-history', 'history', '版本演进史', 'v0.1 → v0.13 · 13 个版本 · 持续迭代 · 136 commit', wrap));
+    view.appendChild(renderSection('sec-history', 'history', '版本演进史', 'v0.1 → v0.14 · 15 个版本 (含 v0.13.1 / v0.11-rc1) · 持续迭代 · 148 commit', wrap));
   }
 
   function renderVersionCard(v, idx) {
@@ -2127,7 +2202,7 @@
     wrap.appendChild(renderList('已规划 (next 1-2 versions)', roadmap.planned, 'var(--primary)', 'smTarget'));
     wrap.appendChild(renderList('调研中 (considering)', roadmap.considering, 'var(--text-dim)', 'smBulb'));
 
-    view.appendChild(renderSection('sec-roadmap', 'roadmap', '路线图', 'next 1-2 versions + considering · v0.9.1 hotfix 在路上', wrap));
+    view.appendChild(renderSection('sec-roadmap', 'roadmap', '路线图', 'next 1-2 versions + considering · v0.15 续命日常化优先', wrap));
   }
 
   // --- Footer ---

@@ -325,11 +325,15 @@ func TestWS_SOAPGenerate(t *testing.T) {
 	if !strings.Contains(resp.Envelope, "web:customerQuery") {
 		t.Errorf("envelope 缺 web:customerQuery: %s", resp.Envelope)
 	}
-	if !strings.Contains(resp.Envelope, "${custNo}") {
-		t.Errorf("envelope 缺 ${custNo} 占位符: %s", resp.Envelope)
+	// v0.14+ 不再嵌 ${...} 占位符，叶子节点默认空值，由用户直接编辑 XML
+	if !strings.Contains(resp.Envelope, "<custNo></custNo>") {
+		t.Errorf("envelope 缺空值字段 <custNo></custNo>: %s", resp.Envelope)
 	}
-	if !strings.Contains(resp.Envelope, "${serialNo}") {
-		t.Errorf("envelope 缺 ${serialNo} 占位符: %s", resp.Envelope)
+	if !strings.Contains(resp.Envelope, "<serialNo></serialNo>") {
+		t.Errorf("envelope 缺空值字段 <serialNo></serialNo>: %s", resp.Envelope)
+	}
+	if strings.Contains(resp.Envelope, "${") {
+		t.Errorf("envelope 不应再含 ${...} 占位符: %s", resp.Envelope)
 	}
 }
 

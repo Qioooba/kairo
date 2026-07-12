@@ -73,7 +73,8 @@ else
   echo "错误：找不到 config.yaml 或 config.yaml.production.example" >&2
   exit 1
 fi
-cp README.md    "${OUT_DIR}/"
+# README.md 不再打进产物目录：同事解压后看 README 没什么用，体积也大（68KB）。
+# 文档统一走 docs/ 目录或仓库本身，需要时看 GitHub / GitLab 即可。
 # 不再需要 start.bat：-H windowsgui 让双击 exe 无控制台窗口，
 # 系统托盘提供"打开浏览器"和"退出"菜单。
 # downloads/ logs/ data/ 由 exe 启动时自动创建，无需预置。

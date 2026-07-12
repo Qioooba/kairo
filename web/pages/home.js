@@ -67,6 +67,12 @@
       { id: 'compare', name: '代码比对', desc: '文本 / 文件 / 文件夹级 diff 差异对比，支持多种视图模式', icon: 'git-compare' },
       { id: 'commands', name: '常用命令速查', desc: 'Linux / Git / Docker / Oracle / MySQL / Redis / Nginx 等 · 实时搜索 + 一键复制', icon: 'square-terminal' },
       { id: 'reminders', name: '便笺提醒', desc: '一次性 / 周期 / Cron 表达式定时，本地落盘不依赖外网', icon: 'bell' },
+    ];
+
+    // 「其他」分区：sponsor (v0.14 新增) 在前，about 在后
+    // 跟 web/index.html 侧栏 nav-sep "其他" 分组顺序保持一致
+    const otherTools = [
+      { id: 'sponsor', name: '投喂作者', desc: '咖啡续命小站 · 续命恩人榜 · 二维码打赏', icon: 'coffee', tag: 'new', tagText: '新' },
       { id: 'about', name: '关于', desc: '版本信息、技术架构、数据统计', icon: 'info' },
     ];
 
@@ -74,6 +80,11 @@
     const miniGrid = Kairo.core.el('div', { class: 'grid-5' });
     miniTools.forEach(t => miniGrid.appendChild(makeCard(t, true)));
     view.appendChild(miniGrid);
+
+    view.appendChild(Kairo.core.el('div', { class: 'section-title mt-4', style: 'font-size:14px;color:var(--text-dim);' }, '其他'));
+    const otherGrid = Kairo.core.el('div', { class: 'grid-5' });
+    otherTools.forEach(t => otherGrid.appendChild(makeCard(t, true)));
+    view.appendChild(otherGrid);
   }
 
   Kairo.pages.home = renderHome;
