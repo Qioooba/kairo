@@ -57,8 +57,8 @@ const (
 
 // Version / BuildTime 可在构建时通过 ldflags 注入，例如：
 //
-//	go build -ldflags "-X 'kairo/internal/httpserver.Version=v0.13' \
-//	  -X 'kairo/internal/httpserver.BuildTime=2026-07-08T00:00:00Z'" .
+//	go build -ldflags "-X 'kairo/internal/httpserver.Version=v0.14' \
+//	  -X 'kairo/internal/httpserver.BuildTime=2026-07-13T00:00:00Z'" .
 //
 // 未注入时使用下面的默认值；前端 about 页通过 GET /api/config 读取并回填显示，
 // 读取失败则回退到前端硬编码版本（FE-006）。
@@ -70,7 +70,7 @@ const (
 //   5. web/app.js 的 info.version || fallback
 //   6. README.md 的 Status 徽章
 var (
-	Version   = "v0.13"
+	Version   = "v0.14"
 	BuildTime = "unknown"
 )
 

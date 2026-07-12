@@ -86,6 +86,9 @@
 
     // 搜索（lucide 风格放大镜）：青绿描边
     'search': `<circle cx="11" cy="11" r="6.5" fill="none" stroke="#06b6d4" stroke-width="2"/><line x1="15.5" y1="15.5" x2="20" y2="20" stroke="#06b6d4" stroke-width="2.2" stroke-linecap="round"/><circle cx="11" cy="11" r="2.5" fill="#06b6d4" opacity="0.25"/>`,
+
+    // 赞助作者：琥珀色咖啡杯 + 热气
+    'coffee': `<path d="M5 9h11v5a3.5 3.5 0 0 1-3.5 3.5h-4A3.5 3.5 0 0 1 5 14z" fill="#b45309"/><path d="M5 9h11v1H5z" fill="#92400e"/><path d="M16 10.5h2a2 2 0 0 1 0 3h-2" fill="none" stroke="#b45309" stroke-width="2"/><path d="M8 4.5c0 1.2-1 1.8-1 3M11.5 3.5c0 1.2-1 1.8-1 3M15 4.5c0 1.2-1 1.8-1 3" fill="none" stroke="#f59e0b" stroke-width="1.6" stroke-linecap="round"/><rect x="3" y="19" width="15" height="1.8" rx="0.8" fill="#92400e"/>`,
   };
 
   // 主题按钮 5 个图标（彩色实心版，与工具卡片风格统一）

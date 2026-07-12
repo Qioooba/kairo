@@ -16,7 +16,7 @@
 
   // 与 internal/httpserver/httpserver.go 的 Version 常量保持一致；
   // 后端 /api/config 读取失败时回退到这里（FE-006）。
-  const VERSION = 'v0.13';
+  const VERSION = 'v0.14';
 
   // =====================================================================
   // SVG icon 字典 — 13 个 section icon (Win7 兼容, 不依赖 emoji 字体)
@@ -97,6 +97,97 @@
     smFile:       'M6 2h6l4 4v14a2 2 0 01-2 2H6a2 2 0 01-2-2V4a2 2 0 012-2zm6 0v4h4',                                                                      // 文件
     smChevronDown: 'M6 9l6 6 6-6',                                                                                                                          // 向下箭头
   };
+
+  // =====================================================================
+  // 性能工具 (v0.13.x hotfix): 懒渲染 + 批量挂载
+  // ---------------------------------------------------------------------
+  // 设计: 13 个 section 不再一次性塞 DOM, 改用 IntersectionObserver
+  //       进入视口前显示占位 (content-visibility: auto skip layout/paint)
+  // 兼容: 老浏览器 (无 IO) 自动降级到 "全量直接渲染", 行为等同旧版
+  // 安全: 3 层兜底
+  //   1. try/catch 包住 factory 内部异常, 失败不污染页面
+  //   2. 200ms 后仍未触发 → 强制全量渲染, 防止极端 IO 异常
+  //   3. disconnect 避免重复挂载
+  // =====================================================================
+  const HAS_IO = typeof IntersectionObserver !== 'undefined';
+  const HAS_CV = (typeof CSS !== 'undefined') && CSS.supports && CSS.supports('content-visibility', 'auto');
+
+  // 立即渲染的 section (首屏必须看到的内容, 不懒渲染)
+  // 占位高度是经验估算, 真实渲染后会被清掉
+  const LAZY_SECTIONS = [
+    { name: 'principles',   fn: renderPrinciplesSection,   min: 400 },
+    { name: 'architecture', fn: renderArchitectureSection, min: 500 },
+    { name: 'stack',        fn: renderStackSection,        min: 600 },
+    { name: 'security',     fn: renderSecuritySection,     min: 700 },
+    { name: 'compat',       fn: renderCompatSection,       min: 400 },
+    { name: 'quality',      fn: renderQualitySection,      min: 500 },
+    { name: 'modules',      fn: renderModulesSection,      min: 800 },
+    { name: 'comparison',   fn: renderComparisonSection,   min: 500 },
+    { name: 'bugs',         fn: renderBugStoriesSection,   min: 700 },
+    { name: 'history',      fn: renderHistorySection,      min: 900 },  // changelog 13 版本卡
+    { name: 'faq',          fn: renderFaqSection,          min: 600 },
+    { name: 'roadmap',      fn: renderRoadmapSection,      min: 500 }
+  ];
+
+  // factory(): 同步返回真实 DOM 节点
+  // opts.minHeight: 占位 div 高度 (px)
+  // 失败兜底: 老浏览器 / IO 异常 / factory 抛错
+  function withLazyMount(factory, opts) {
+    opts = opts || {};
+    const minH = opts.minHeight || 320;
+    const placeholder = document.createElement('div');
+    placeholder.className = 'about-lazy-section';
+    placeholder.style.minHeight = minH + 'px';
+    if (HAS_CV) {
+      // content-visibility: auto 让浏览器自动 skip 屏外 section 的 layout/paint
+      // contain-intrinsic-size 给一个占位高度, 防滚动条跳
+      placeholder.style.contentVisibility = 'auto';
+      placeholder.style.containIntrinsicSize = 'auto ' + minH + 'px';
+    }
+
+    // 降级路径 1: 没有 IO 直接全量渲染, 行为等同旧版
+    if (!HAS_IO) {
+      try {
+        placeholder.appendChild(factory());
+        placeholder.style.minHeight = '';
+      } catch (e) {
+        console.error('[about] lazyMount fallback (no IO) failed:', e);
+      }
+      return placeholder;
+    }
+
+    let mounted = false;
+    const doMount = function () {
+      if (mounted) return;
+      mounted = true;
+      clearTimeout(fallbackTimer);
+      try {
+        const node = factory();
+        if (node) placeholder.appendChild(node);
+        placeholder.style.minHeight = '';
+      } catch (e) {
+        console.error('[about] lazyMount factory failed:', e);
+        // factory 失败时强制清掉占位, 避免留白
+        placeholder.style.minHeight = '40px';
+      }
+      try { io.disconnect(); } catch (e) { /* ignore */ }
+    };
+
+    // 降级路径 2: 200ms 兜底, 防止 IO 极端不触发
+    const fallbackTimer = setTimeout(doMount, 200);
+
+    const io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (e) {
+        if (e.isIntersecting) doMount();
+      });
+    }, { rootMargin: '200px' });
+    try { io.observe(placeholder); } catch (e) {
+      // observe 失败直接走全量
+      console.error('[about] lazyMount observe failed:', e);
+      doMount();
+    }
+    return placeholder;
+  }
 
   // 渲染一个 SVG icon (返回 HTML 字符串, 走 unsafeHtml)
   // - key: ICONS 字典的键
@@ -1365,7 +1456,7 @@
       { id: 'sec-faq',          icon: 'faq',          label: 'FAQ' },
       { id: 'sec-roadmap',      icon: 'roadmap',      label: '路线图' }
     ];
-    const wrap = el('div', { style: 'position:sticky; top:8px; z-index:10; background:var(--topbar-bg); backdrop-filter: blur(10px); border:1px solid var(--line); border-radius:var(--radius); padding:8px 10px; margin:20px 0 8px 0; display:flex; gap:6px; flex-wrap:wrap; box-shadow: var(--shadow-sm);' });
+    const wrap = el('div', { style: 'position:sticky; top:8px; z-index:10; background:var(--topbar-bg); border:1px solid var(--line); border-radius:var(--radius); padding:8px 10px; margin:20px 0 8px 0; display:flex; gap:6px; flex-wrap:wrap; box-shadow: 0 2px 8px rgba(0,0,0,0.06);' });
     sections.forEach(s => {
       const a = el('a', {
         href: '#' + s.id,
@@ -1885,6 +1976,8 @@
     return card;
   }
 
+  // 模块级 timer 句柄, 防止快速切换时 setTimeout 多次执行竞争
+  let _versionExpandTimer = null;
   function toggleVersion(cardId, icon) {
     const body = document.getElementById(cardId);
     if (!body) return;
@@ -1892,12 +1985,18 @@
     if (isOpen) {
       body.style.maxHeight = '0px';
       if (icon) icon.style.transform = 'rotate(-90deg)';
+      if (_versionExpandTimer) {
+        clearTimeout(_versionExpandTimer);
+        _versionExpandTimer = null;
+      }
     } else {
       // 用 scrollHeight 撑开
       body.style.maxHeight = body.scrollHeight + 'px';
       if (icon) icon.style.transform = 'rotate(0deg)';
       // 展开后再清掉固定高度, 让内部能自适应 (再次展开也保持)
-      setTimeout(() => {
+      if (_versionExpandTimer) clearTimeout(_versionExpandTimer);
+      _versionExpandTimer = setTimeout(function () {
+        _versionExpandTimer = null;
         if (!body.style.maxHeight || body.style.maxHeight === '0px') return;
         body.style.maxHeight = 'none';
       }, 360);
@@ -2046,31 +2145,44 @@
   // =====================================================================
   // 主入口
   // =====================================================================
+  // v0.13.x hotfix: 性能优化
+  //   1. DocumentFragment 批量挂载: 14 次 reflow → 1 次
+  //   2. 12 个非首屏 section 改 IO 懒渲染 (进视口才创建)
+  //   3. 首屏 4 块 (hero/stats/anchorNav/overview) 立即渲染
+  //   4. 老浏览器 (无 IO / 无 content-visibility) 自动降级
+  // 兼容性: 全部浏览器行为至少等同旧版, 不会出错
   function renderAbout(view) {
-    // 顶部
-    renderHero(view);
-    renderStats(view);
+    // 1. DocumentFragment 批量挂载
+    const frag = document.createDocumentFragment();
 
-    // sticky 锚点导航
-    renderAnchorNav(view);
+    // 2. 立即渲染: 顶部 4 块 (用户一进来就看到的内容)
+    renderHero(frag);
+    renderStats(frag);
+    renderAnchorNav(frag);
+    renderOverview(frag);
 
-    // 13 个 section
-    renderOverview(view);
-    renderPrinciplesSection(view);
-    renderArchitectureSection(view);
-    renderStackSection(view);
-    renderSecuritySection(view);
-    renderCompatSection(view);
-    renderQualitySection(view);
-    renderModulesSection(view);
-    renderComparisonSection(view);
-    renderBugStoriesSection(view);
-    renderHistorySection(view);
-    renderFaqSection(view);
-    renderRoadmapSection(view);
+    // 3. 懒渲染: 12 个 section 进入视口才创建 DOM
+    // 每个子函数内部用 view.appendChild(renderSection(...)) 挂载, 我们传一个临时 div 收
+    LAZY_SECTIONS.forEach(function (s) {
+      const placeholder = withLazyMount(function () {
+        const tmp = document.createElement('div');
+        try {
+          s.fn(tmp);
+        } catch (e) {
+          console.error('[about] section render failed: ' + s.name, e);
+          return null;
+        }
+        // 子函数会把 anchor 节点 appendChild 到 tmp, 取第一个孩子就是
+        return tmp.firstChild;
+      }, { minHeight: s.min });
+      frag.appendChild(placeholder);
+    });
 
-    // 页脚
-    renderFooter(view);
+    // 4. 页脚 (用户可能滚到底, 跟 IO lazy 配合也工作)
+    renderFooter(frag);
+
+    // 5. 一次性挂载, 只触发 1 次 reflow
+    view.appendChild(frag);
   }
 
   Kairo.pages.about = renderAbout;

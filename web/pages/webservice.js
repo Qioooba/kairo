@@ -143,6 +143,26 @@
       .replace(/([\w:.-]+)=(&quot;.*?&quot;)/g, '<span style="color:var(--warn)">$1</span>=<span style="color:var(--success)">$2</span>');
   }
 
+  // ---------- 工具：textarea 自动撑高 ----------
+  // - oninput 时把 height 重置为 auto 再设成 scrollHeight，避免一直累积
+  // - 封顶 MAX_H，超过后允许纵向滚动（不撑爆页面）
+  // - 切 tab 重渲染后也要重新触发一次（因为 DOM 刚挂载、初始值可能没生效）
+  const TEXTAREA_MAX_H = 600;
+  function autoResizeTextarea(ta) {
+    if (!ta) return;
+    ta.style.height = 'auto';
+    const h = Math.min(ta.scrollHeight, TEXTAREA_MAX_H);
+    ta.style.height = h + 'px';
+    ta.style.overflowY = ta.scrollHeight > TEXTAREA_MAX_H ? 'auto' : 'hidden';
+  }
+  // 挂监听：oninput + DOMContentLoaded 后跑一次（处理从 state 回填的初始内容）
+  function bindAutoResize(ta) {
+    if (!ta) return;
+    ta.addEventListener('input', () => autoResizeTextarea(ta));
+    // 下一帧触发（确保 DOM 已挂载、scrollHeight 准）
+    requestAnimationFrame(() => autoResizeTextarea(ta));
+  }
+
   // ---------- 左侧 Sidebar ----------
 
   function renderSidebar() {
@@ -573,29 +593,41 @@
     encodingSel.value = d.encoding || 'UTF-8';
     const timeoutInp = el('input', { type: 'number', class: 'svc-inp-timeout', id: 'svc-timeout', placeholder: '超时(ms)', value: String(d.timeoutMs || 30000), min: '1000', max: '300000', oninput: (e) => { const v = parseInt(e.target.value, 10); if (!isNaN(v)) state.draft.timeoutMs = v; } });
 
-    card.appendChild(el('div', { class: 'svc-form-row' }, [
+    card.appendChild(el('div', { class: 'svc-form-grid svc-form-grid-1col' }, [
       el('label', { text: 'endpoint' }), endpointInp,
     ]));
-    card.appendChild(el('div', { class: 'svc-form-row' }, [
+    card.appendChild(el('div', { class: 'svc-form-grid svc-form-grid-2col' }, [
       el('label', { text: 'SOAPAction' }), soapActionInp,
       el('label', { text: '版本' }), soapVerSel,
     ]));
-    card.appendChild(el('div', { class: 'svc-form-row' }, [
+    card.appendChild(el('div', { class: 'svc-form-grid svc-form-grid-3col' }, [
       el('label', { text: '编码' }), encodingSel,
       el('label', { text: '超时(ms)' }), timeoutInp,
+      el('label', { text: ' ' }), el('span'),
     ]));
 
+    // 参数填写面板（v0.13.x 优化）：
+    // - 当选中 operation 后，按 input_params 生成一排输入框
+    // - 简单类型（string/int/number 等）→ text/number 输入框
+    // - 复杂类型（无 type 且无 children）→ textarea 写内层 XML
+    // - "应用" 按钮把表单值灌进 body 的 ${name} 占位
+    // - 没有 operation 时不显示
+    const paramPanel = renderParamFillPanel();
+    if (paramPanel) card.appendChild(paramPanel);
+
     // 自定义 headers
-    const headersArea = el('textarea', { class: 'svc-headers', id: 'svc-headers', placeholder: '自定义 Header（每行一个，格式 Key: Value）', rows: '2', oninput: (e) => { state.draft.headers = e.target.value; } });
+    const headersArea = el('textarea', { class: 'svc-headers', id: 'svc-headers', placeholder: '自定义 Header（每行一个，格式 Key: Value）', rows: '3', oninput: (e) => { state.draft.headers = e.target.value; autoResizeTextarea(e.target); } });
     headersArea.value = d.headers || '';
-    card.appendChild(el('div', { class: 'svc-form-row' }, [
+    bindAutoResize(headersArea);
+    card.appendChild(el('div', { class: 'svc-form-grid svc-form-grid-5col' }, [
       el('label', { text: 'Headers' }), headersArea,
     ]));
 
     // 请求 body
-    const bodyArea = el('textarea', { class: 'svc-body', id: 'svc-body', placeholder: '请求 XML（Envelope）', rows: '12', spellcheck: 'false', oninput: (e) => { state.draft.body = e.target.value; state.draft.bodyDirty = true; } });
+    const bodyArea = el('textarea', { class: 'svc-body', id: 'svc-body', placeholder: '请求 XML（Envelope）', rows: '12', spellcheck: 'false', oninput: (e) => { state.draft.body = e.target.value; state.draft.bodyDirty = true; autoResizeTextarea(e.target); } });
     bodyArea.value = d.body || '';
-    card.appendChild(el('div', { class: 'svc-form-row' }, [
+    bindAutoResize(bodyArea);
+    card.appendChild(el('div', { class: 'svc-form-grid svc-form-grid-5col' }, [
       el('label', { text: '请求 XML' }), bodyArea,
     ]));
 
@@ -720,18 +752,19 @@
     const statusInp = el('input', { type: 'number', id: 'svc-mock-status', placeholder: 'HTTP 状态码', value: String(m.status_code || 200), min: '100', max: '599' });
     const delayInp = el('input', { type: 'number', id: 'svc-mock-delay', placeholder: '延迟(ms)', value: String(m.delay_ms || 0), min: '0', max: '300000' });
     const enabledChk = el('input', { type: 'checkbox', id: 'svc-mock-enabled', checked: m.enabled });
-    const bodyArea = el('textarea', { class: 'svc-mock-body', id: 'svc-mock-body', placeholder: '固定响应 XML', rows: '10', spellcheck: 'false' });
+    const bodyArea = el('textarea', { class: 'svc-mock-body', id: 'svc-mock-body', placeholder: '固定响应 XML', rows: '10', spellcheck: 'false', oninput: (e) => autoResizeTextarea(e.target) });
     bodyArea.value = m.body || '';
+    bindAutoResize(bodyArea);
 
-    card.appendChild(el('div', { class: 'svc-form-row' }, [el('label', { text: '名称*' }), nameInp]));
-    card.appendChild(el('div', { class: 'svc-form-row' }, [el('label', { text: '路径*' }), pathInp]));
-    card.appendChild(el('div', { class: 'svc-form-row' }, [el('label', { text: 'operation' }), opInp]));
-    card.appendChild(el('div', { class: 'svc-form-row' }, [
+    card.appendChild(el('div', { class: 'svc-form-grid svc-form-grid-1col' }, [el('label', { text: '名称*' }), nameInp]));
+    card.appendChild(el('div', { class: 'svc-form-grid svc-form-grid-1col' }, [el('label', { text: '路径*' }), pathInp]));
+    card.appendChild(el('div', { class: 'svc-form-grid svc-form-grid-1col' }, [el('label', { text: 'operation' }), opInp]));
+    card.appendChild(el('div', { class: 'svc-form-grid svc-form-grid-4col' }, [
       el('label', { text: '状态码' }), statusInp,
       el('label', { text: '延迟(ms)' }), delayInp,
       el('label', { text: '启用' }), enabledChk,
     ]));
-    card.appendChild(el('div', { class: 'svc-form-row' }, [el('label', { text: '响应 XML' }), bodyArea]));
+    card.appendChild(el('div', { class: 'svc-form-grid svc-form-grid-5col' }, [el('label', { text: '响应 XML' }), bodyArea]));
 
     const btnRow = el('div', { class: 'svc-btn-row' });
     const btnSave = el('button', { class: 'btn btn-primary', text: '保存 Mock', onclick: saveMock });
@@ -954,12 +987,197 @@
         state.draft.bodyDirty = false; // 程序生成的 body 不算用户编辑
         // 如果编辑器已渲染，同步到 DOM
         const bodyInp = document.getElementById('svc-body');
-        if (bodyInp) { bodyInp.value = r.envelope; }
+        if (bodyInp) {
+          bodyInp.value = r.envelope;
+          autoResizeTextarea(bodyInp);
+        }
         if (!silent) toast('已生成 Envelope', 'ok');
       }
     } catch (e) {
       if (!silent) toast('生成失败：' + (e.message || e), 'err');
     }
+  }
+
+  // ---------- 参数填写面板 ----------
+  // 推断 input 输入类型：number 类（int/decimal/double/float/long/short/byte）→ number，其余 → text
+  function guessInputType(p) {
+    if (!p || !p.type) return 'text';
+    const t = String(p.type).toLowerCase();
+    if (/(int|integer|long|short|byte|decimal|double|float|number)/.test(t) && !/string/.test(t)) return 'number';
+    if (/(date|time|datetime)/.test(t) && !/string/.test(t)) return 'datetime-local';
+    return 'text';
+  }
+  // 复选：param 是否「叶子」且会被后端生成 ${name} 占位
+  function isLeafParam(p) { return !p.children || p.children.length === 0; }
+  // 复选：param 是否复杂类型（无 type、无 children）—— 这种用户需在表单里写内层 XML
+  function isComplexBare(p) { return (!p.type || p.type === 'any') && (!p.children || p.children.length === 0); }
+
+  // 收集所有 input_params 里的叶子节点（递归）
+  function collectLeafParams(params) {
+    const out = [];
+    function walk(arr) {
+      for (const p of arr || []) {
+        if (isLeafParam(p)) out.push(p);
+        else if (p.children && p.children.length) walk(p.children);
+      }
+    }
+    walk(params);
+    return out;
+  }
+  // 收集所有 input_params 里的「复杂无子」节点（需要 textarea 写 XML）
+  function collectComplexBareParams(params) {
+    const out = [];
+    function walk(arr, parentPath) {
+      for (const p of arr || []) {
+        if (isComplexBare(p) && p.name) {
+          out.push({ param: p, path: parentPath });
+        } else if (p.children && p.children.length) {
+          walk(p.children, parentPath + '/' + p.name);
+        }
+      }
+    }
+    walk(params, '');
+    return out;
+  }
+
+  // 渲染参数填写面板
+  function renderParamFillPanel() {
+    const op = state.currentOperation;
+    if (!op || !op.input_params || op.input_params.length === 0) return null;
+    const leaves = collectLeafParams(op.input_params);
+    const complex = collectComplexBareParams(op.input_params);
+    if (leaves.length === 0 && complex.length === 0) return null;
+
+    const panel = el('div', { class: 'svc-param-panel' });
+    const titleRow = el('div', { class: 'svc-param-title' });
+    titleRow.appendChild(el('span', { text: '请求参数' }));
+    titleRow.appendChild(el('span', { class: 'svc-param-hint', text: '· 填写后点「应用到 XML」可一键注入请求体（无需手动改 ${...} 占位）' }));
+    panel.appendChild(titleRow);
+
+    // 叶子节点：每个一行
+    leaves.forEach(p => {
+      const row = el('div', { class: 'svc-param-row-edit' });
+      const labelText = (p.name || '?') + (p.min_occurs === '1' || p.max_occurs === '1' ? ' *' : '');
+      row.appendChild(el('label', { class: 'svc-param-name-edit', text: labelText }));
+      const meta = el('span', { class: 'svc-param-type-edit', text: p.type || 'any' });
+      row.appendChild(meta);
+      const inputType = guessInputType(p);
+      const inp = el('input', {
+        type: inputType,
+        class: 'svc-param-input',
+        'data-param-name': p.name || '',
+        'data-param-mode': 'leaf',
+        placeholder: inputType === 'number' ? '0' : '填写值',
+      });
+      // 从 body 现有值回填（如果用户之前手动改过）
+      const existing = extractLeafValueFromBody(state.draft.body || '', p.name);
+      if (existing) inp.value = existing;
+      row.appendChild(inp);
+      panel.appendChild(row);
+    });
+
+    // 复杂无子节点：每个一个 textarea 写内层 XML
+    complex.forEach(({ param, path }) => {
+      const row = el('div', { class: 'svc-param-row-edit svc-param-row-complex' });
+      const labelText = (param.name || '?') + ' (复杂)';
+      const head = el('div', { class: 'svc-param-row-head' });
+      head.appendChild(el('label', { class: 'svc-param-name-edit', text: labelText }));
+      head.appendChild(el('span', { class: 'svc-param-type-edit', text: '嵌套 XML' }));
+      row.appendChild(head);
+      const ta = el('textarea', {
+        class: 'svc-param-input svc-param-textarea',
+        'data-param-name': param.name || '',
+        'data-param-mode': 'complex',
+        placeholder: '内层 XML，例如：\n  <userId>123</userId>\n  <name>张三</name>',
+        rows: '3',
+        spellcheck: 'false',
+      });
+      const existing = extractLeafValueFromBody(state.draft.body || '', param.name);
+      if (existing) ta.value = existing;
+      ta.addEventListener('input', () => autoResizeTextarea(ta));
+      row.appendChild(ta);
+      panel.appendChild(row);
+    });
+
+    // 操作按钮行
+    const btnRow = el('div', { class: 'svc-param-btn-row' });
+    const applyBtn = el('button', { class: 'btn btn-primary btn-mini', text: '应用到 XML', onclick: applyParamValuesToBody });
+    const clearBtn = el('button', { class: 'btn btn-mini', text: '清空表单', onclick: () => {
+      panel.querySelectorAll('.svc-param-input').forEach(i => { i.value = ''; autoResizeTextarea(i); });
+    }});
+    btnRow.appendChild(applyBtn);
+    btnRow.appendChild(clearBtn);
+    btnRow.appendChild(el('span', { class: 'svc-param-stats', text: '共 ' + (leaves.length + complex.length) + ' 个参数' }));
+    panel.appendChild(btnRow);
+
+    return panel;
+  }
+
+  // 从 body XML 中提取 ${name} 占位的值（仅匹配最简单情形：<tag>${name}</tag>，取中间）
+  function extractLeafValueFromBody(body, name) {
+    if (!body || !name) return '';
+    // 转义正则元字符
+    const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp('<' + esc + '[^>]*>\\s*\\$\\{' + esc + '\\}\\s*</' + esc + '>');
+    const m = body.match(re);
+    if (m) return ''; // 仍是占位，未填
+    // 提取已填值
+    const re2 = new RegExp('<' + esc + '[^>]*>([\\s\\S]*?)</' + esc + '>');
+    const m2 = body.match(re2);
+    if (m2) {
+      const v = m2[1].trim();
+      if (v && v !== '${' + name + '}') return v;
+    }
+    return '';
+  }
+
+  // 把面板里的值灌进 body 的对应 ${name} 占位
+  function applyParamValuesToBody() {
+    const panel = document.querySelector('.svc-param-panel');
+    if (!panel) return;
+    let body = state.draft.body || '';
+    if (!body) { toast('请求体为空，请先「生成 Envelope」', 'warn'); return; }
+    let applied = 0;
+    panel.querySelectorAll('.svc-param-input').forEach(inp => {
+      const name = inp.getAttribute('data-param-name');
+      const mode = inp.getAttribute('data-param-mode');
+      if (!name) return;
+      const value = inp.value || '';
+      // 转义正则元字符
+      const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      // 替换 <name>${name}</name> 为 <name>VALUE</name>
+      // 简单类型：值插入文本节点（需要 XML 转义 < > &）
+      // 复杂类型：值本身就是 XML，不转义，直接塞进标签
+      const escapedValue = mode === 'complex' ? value : escapeXmlText(value);
+      const placeholder = '${' + name + '}';
+      // 先尝试匹配带占位的形式
+      const re1 = new RegExp('(<' + esc + '[^>]*>)\\s*\\$\\{' + esc + '\\}\\s*(</' + esc + '>)', 'g');
+      if (re1.test(body)) {
+        body = body.replace(re1, '$1' + escapedValue + '$2');
+        applied++;
+        return;
+      }
+      // 若该 tag 不含 ${} 但存在，且值非空，提示用户手动调整（避免覆盖用户手填的内容）
+      // 这里不强制覆盖，保留用户手填结果
+    });
+    if (applied === 0) {
+      toast('没有可替换的 ${...} 占位（可能已应用过或 body 被手动改过）', 'info');
+      return;
+    }
+    state.draft.body = body;
+    state.draft.bodyDirty = true;
+    const bodyInp = document.getElementById('svc-body');
+    if (bodyInp) { bodyInp.value = body; autoResizeTextarea(bodyInp); }
+    toast('已应用 ' + applied + ' 个参数到 XML', 'ok');
+  }
+
+  // XML 文本节点转义（用于简单类型值注入）
+  function escapeXmlText(s) {
+    if (s == null) return '';
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
   }
 
   // ---------- 动作：发送 / XML 操作 ----------

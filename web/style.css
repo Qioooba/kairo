@@ -367,8 +367,9 @@ body {
 .nav-item.active {
   background: linear-gradient(90deg, rgba(79,140,255,0.18), transparent);
   color: var(--text);
-  border-left: 2px solid var(--primary);
-  padding-left: 10px;
+  /* 用 inset shadow 画左侧蓝条，不占 layout 空间 —— 否则 .nav-item.small.active
+   * 会被 .small 的 padding-left:20px 覆盖 active 的 10px 补偿，导致文字比同级小工具项右移 2px */
+  box-shadow: inset 2px 0 0 var(--primary);
 }
 :root[data-theme="light"] .nav-item.active {
   background: linear-gradient(90deg, rgba(37,99,235,0.12), transparent);
@@ -5436,16 +5437,121 @@ input.sftp-autofollow-cb {
 .svc-form-row input:not([type]) { flex: 1; min-width: 180px; }
 .svc-form-row select { min-width: 100px; }
 .svc-inp-endpoint { font-family: var(--mono, monospace); font-size: 12.5px; }
+
+/* 网格化表单行（v0.13.x UI 优化：解决 select/input flex:1 拉满全宽问题）
+ *  - .svc-form-grid：单 label + 单 input 撑满
+ *  - .svc-form-grid-2col：两个 label+控件 横向并排（SOAPAction + 版本）
+ *  - .svc-form-grid-3col：3 个紧凑字段并排（编码 / 超时 / 占位）
+ *  - .svc-form-grid-4col：4 个紧凑字段并排（Mock：状态码 / 延迟 / 启用 toggle）
+ * label 列宽固定对齐，控件列宽通过 minmax 限定，输入框不会无脑 flex 拉满
+ */
+.svc-form-grid { display: grid; gap: 8px 10px; align-items: center; margin-bottom: 10px; }
+.svc-form-grid > label { font-size: 11.5px; color: var(--text-dim); text-align: right; }
+.svc-form-grid input,
+.svc-form-grid select,
+.svc-form-grid textarea { width: 100%; min-width: 0; padding: 7px 9px; }
+.svc-form-grid textarea { resize: vertical; }
+
+.svc-form-grid-1col { grid-template-columns: 72px minmax(0, 1fr); }
+.svc-form-grid-2col { grid-template-columns: 72px minmax(0, 1fr) 60px 200px; }
+.svc-form-grid-3col { grid-template-columns: 72px 160px 60px 140px minmax(0, 1fr); }
+.svc-form-grid-4col { grid-template-columns: 72px 130px 60px 130px 60px 100px; }
+.svc-form-grid-5col { grid-template-columns: 72px minmax(0, 1fr); }
+
+/* 响应式：窄屏（<900px）回到单列，避免被 grid 强行压扁 */
+@media (max-width: 900px) {
+  .svc-form-grid-2col,
+  .svc-form-grid-3col,
+  .svc-form-grid-4col { grid-template-columns: 72px minmax(0, 1fr); }
+  .svc-form-grid-2col > :nth-child(n+3),
+  .svc-form-grid-3col > :nth-child(n+3),
+  .svc-form-grid-4col > :nth-child(n+3) { grid-column: 2; }
+  .svc-form-grid-2col > label:nth-of-type(n+2),
+  .svc-form-grid-3col > label:nth-of-type(n+2),
+  .svc-form-grid-4col > label:nth-of-type(n+2) { text-align: left; padding-left: 6px; }
+}
 .svc-headers, .svc-body, .svc-mock-body {
   width: 100%; flex: 1; padding: 8px;
   border: 1px solid var(--line); border-radius: 8px;
   background: var(--bg-1); color: var(--text);
   font-family: var(--mono, monospace); font-size: 12px;
   resize: vertical; min-height: 60px;
+  /* 自动撑高：JS 动态设置 height + overflow，超出封顶后允许滚动 */
+  box-sizing: border-box;
+  overflow-y: hidden;
 }
 .svc-body, .svc-mock-body { min-height: 200px; }
 .svc-headers:focus, .svc-body:focus, .svc-mock-body:focus {
   outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(79,140,255,0.15);
+}
+
+/* 参数填写面板（v0.13.x 优化）—— 解决 ${...} 占位难填的问题 */
+.svc-param-panel {
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  background: linear-gradient(180deg, rgba(79,140,255,0.04), rgba(79,140,255,0.01));
+  border: 1px solid rgba(79,140,255,0.2);
+  border-radius: 8px;
+}
+.svc-param-title {
+  display: flex; align-items: baseline; gap: 8px;
+  font-size: 12.5px; font-weight: 600; color: var(--primary);
+  margin-bottom: 8px;
+}
+.svc-param-hint { font-size: 11px; color: var(--text-dim); font-weight: 400; }
+.svc-param-row-edit {
+  display: grid;
+  grid-template-columns: 140px 110px minmax(0, 1fr);
+  gap: 8px; align-items: center;
+  margin-bottom: 6px;
+}
+.svc-param-row-edit.svc-param-row-complex {
+  display: block;
+  margin-bottom: 8px;
+}
+.svc-param-row-head {
+  display: flex; align-items: baseline; gap: 10px;
+  margin-bottom: 4px;
+}
+.svc-param-name-edit {
+  font-size: 11.5px; color: var(--text-dim);
+  font-family: var(--mono, monospace);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.svc-param-type-edit {
+  font-size: 10.5px; color: var(--text-dim); opacity: 0.7;
+  font-family: var(--mono, monospace);
+  padding: 1px 6px; background: var(--bg-3); border-radius: 3px;
+}
+.svc-param-input {
+  width: 100%; padding: 6px 9px;
+  border: 1px solid var(--line); border-radius: 6px;
+  background: var(--bg-1); color: var(--text);
+  font-size: 12px; font-family: var(--mono, monospace);
+  min-width: 0; box-sizing: border-box;
+}
+.svc-param-input:focus {
+  outline: none; border-color: var(--primary);
+  box-shadow: 0 0 0 2px rgba(79,140,255,0.15);
+}
+.svc-param-textarea {
+  width: 100%; resize: vertical; min-height: 60px;
+  font-family: var(--mono, monospace); line-height: 1.5;
+  overflow-y: hidden;
+}
+.svc-param-btn-row {
+  display: flex; gap: 6px; align-items: center;
+  margin-top: 8px; padding-top: 8px;
+  border-top: 1px dashed rgba(79,140,255,0.2);
+  flex-wrap: wrap;
+}
+.svc-param-stats {
+  margin-left: auto;
+  font-size: 11px; color: var(--text-dim);
+}
+@media (max-width: 900px) {
+  .svc-param-row-edit { grid-template-columns: 1fr; gap: 4px; }
+  .svc-param-row-edit > .svc-param-type-edit { display: inline-block; width: max-content; }
 }
 
 .svc-btn-row { display: flex; gap: 6px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
@@ -5792,3 +5898,59 @@ input.sftp-autofollow-cb {
 }
 .reminders-banner .banner-icon { font-size: 16px; color: var(--warn); }
 .reminders-banner .banner-text { flex: 1; }
+
+/* ===== 赞助作者页面（sponsor）搞笑动画 ===== */
+
+/* 营业中牌子呼吸效果 */
+@keyframes sponsor-pulse {
+  0%, 100% { transform: rotate(5deg) scale(1); opacity: 1; }
+  50%      { transform: rotate(5deg) scale(1.08); opacity: 0.9; }
+}
+
+/* Hero 黄色气泡轻微摇摆 */
+@keyframes sponsor-wobble {
+  0%, 100% { transform: rotate(-0.5deg); }
+  50%      { transform: rotate(0.5deg); }
+}
+.sponsor-wobble {
+  animation: sponsor-wobble 3s ease-in-out infinite;
+}
+
+/* 二维码左右手指 bounce */
+@keyframes sponsor-bounce-l {
+  0%, 100% { transform: translateY(-50%) translateX(0); }
+  50%      { transform: translateY(-50%) translateX(6px); }
+}
+@keyframes sponsor-bounce-r {
+  0%, 100% { transform: translateY(-50%) translateX(0); }
+  50%      { transform: translateY(-50%) translateX(-6px); }
+}
+
+/* 续命恩人榜行 hover */
+.sponsor-honor-row:hover {
+  background: var(--bg-3) !important;
+  transform: translateX(4px);
+  border-color: var(--accent) !important;
+}
+
+/* xianxia 古风主题：Hero 黄色气泡改成古风青绿/暖棕色调 */
+:root[data-theme="xianxia"] .sponsor-wobble {
+  background: linear-gradient(135deg, rgba(90,138,122,0.15), rgba(160,85,62,0.1)) !important;
+  border-color: rgba(90,138,122,0.5) !important;
+  box-shadow: 0 6px 20px rgba(90,138,122,0.2) !important;
+}
+:root[data-theme="xianxia"] .sponsor-wobble h1 {
+  color: #5a8a7a !important;
+}
+:root[data-theme="xianxia"] .sponsor-qr-card {
+  border-color: rgba(90,138,122,0.4) !important;
+}
+
+/* hc 高对比度主题：加大边框对比 */
+:root[data-theme="hc"] .sponsor-sticker {
+  border-width: 3px !important;
+}
+:root[data-theme="hc"] .sponsor-wobble {
+  border-width: 4px !important;
+}
+
