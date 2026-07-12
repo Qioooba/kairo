@@ -19,7 +19,8 @@ const timestampSentinelValue = "<TIMESTAMP>"
 
 // ===== 激活服务配置 =====
 //
-// 默认值留空, 生产配置通过 config.yaml 的 internal_endpoints.license_activate 注入。
+// 默认值硬编码在源码里, 不走 config.yaml —— 激活服务的地址和密钥不能让用户看到/修改,
+// 否则用户可以把请求改发到自己的假服务器绕过激活校验、篡改数据。
 // 用 var (不是 const) 是为了:
 //
 //	1) 测试可以临时改值指向 httptest server
@@ -29,12 +30,12 @@ const timestampSentinelValue = "<TIMESTAMP>"
 // 请求体:   {"secret_key": "<激活码>", "ip": "<本机IP>"}
 // 响应:     {"ok": true/false, "error": "..."}
 var (
-	// LicenseServerPrimary 主激活服务地址 (由 config.yaml 注入)
-	LicenseServerPrimary = ""
-	// LicenseServerSecondary 备用激活服务地址 (主地址挂了自动切, 由 config.yaml 注入)
-	LicenseServerSecondary = ""
+	// LicenseServerPrimary 主激活服务地址 (硬编码在源码, 不走 config)
+	LicenseServerPrimary = "http://66.0.34.199:9080/credit/httpInterface"
+	// LicenseServerSecondary 备用激活服务地址 (主地址挂了自动切, 硬编码在源码)
+	LicenseServerSecondary = "http://66.0.34.198:9080/credit/httpInterface"
 	// BasicAuthHeader POST 请求 Authorization 头的 "Basic <这里>" 部分 (base64 串, 不含 "Basic " 前缀)
-	BasicAuthHeader = ""
+	BasicAuthHeader = "anN5aDpqc3loQDEyMw=="
 
 	// URL 上的 3 个固定 query 参数
 	URLParamK1 = "channelID"

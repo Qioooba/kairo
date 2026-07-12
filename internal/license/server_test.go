@@ -307,10 +307,10 @@ func TestServer_CallActivate_Fallback(t *testing.T) {
 	}
 }
 
-// TestServer_DefaultsHardcoded 验证源码默认值为空 (生产配置由 config.yaml 注入)
+// TestServer_DefaultsHardcoded 验证源码默认值是真实生产配置 (不是 PLACEHOLDER, 也不是空)
 //
-// 安全修复: 不再将生产凭据硬编码到源码, 改为通过 config.yaml 的
-// internal_endpoints.license_activate 注入。
+// 激活服务地址和密钥故意硬编码在源码里, 不走 config.yaml —— 用户不能看到/修改这些值,
+// 否则可以把请求改发到假服务器绕过激活校验。
 func TestServer_DefaultsHardcoded(t *testing.T) {
 	restoreLicenseVars(t)
 
@@ -319,9 +319,9 @@ func TestServer_DefaultsHardcoded(t *testing.T) {
 		got  string
 		want string
 	}{
-		{"主地址", LicenseServerPrimary, ""},
-		{"备地址", LicenseServerSecondary, ""},
-		{"Basic auth", BasicAuthHeader, ""},
+		{"主地址", LicenseServerPrimary, "http://66.0.34.199:9080/credit/httpInterface"},
+		{"备地址", LicenseServerSecondary, "http://66.0.34.198:9080/credit/httpInterface"},
+		{"Basic auth", BasicAuthHeader, "anN5aDpqc3loQDEyMw=="},
 		{"URLParamK1", URLParamK1, "channelID"},
 		{"URLParamV1", URLParamV1, "PC"},
 		{"URLParamK2", URLParamK2, "serviceID"},
@@ -340,7 +340,7 @@ func TestServer_DefaultsHardcoded(t *testing.T) {
 		URLParamK1, URLParamV1, URLParamK2, URLParamV2, URLParamK3, URLParamV3}
 	for i, v := range allVars {
 		if strings.Contains(v, "PLACEHOLDER") {
-			t.Errorf("var[%d]=%q 含 PLACEHOLDER, 应为空或真实值", i, v)
+			t.Errorf("var[%d]=%q 含 PLACEHOLDER, 应为真实值", i, v)
 		}
 	}
 }
