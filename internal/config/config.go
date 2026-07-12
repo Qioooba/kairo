@@ -24,6 +24,29 @@ type Config struct {
 	Systems []SystemConfig `yaml:"systems" json:"systems"`
 	Search  SearchConfig   `yaml:"search" json:"search"`
 	Auth    AuthConfig     `yaml:"auth,omitempty" json:"auth,omitempty"`
+	// InternalEndpoints (v0.14 起)：Kairo 内部调用的外部 HTTP 端点配置
+	// (激活服务、赞助排行榜等)。每个 endpoint 自己持有 serviceID / URL params
+	// 等"协议约定" (硬编码到对应包内), config 段只管 IP/端口/认证串/超时
+	// —— 避免用户乱填 serviceID 导致 Java 反射路由错。
+	InternalEndpoints InternalEndpointsConfig `yaml:"internal_endpoints,omitempty" json:"internal_endpoints,omitempty"`
+}
+
+// InternalEndpointsConfig Kairo 内部调用的外部 HTTP 端点集合
+type InternalEndpointsConfig struct {
+	LicenseActivate    EndpointConfig `yaml:"license_activate,omitempty" json:"license_activate,omitempty"`
+	SponsorLeaderboard EndpointConfig `yaml:"sponsor_leaderboard,omitempty" json:"sponsor_leaderboard,omitempty"`
+}
+
+// EndpointConfig 单个外部端点配置
+type EndpointConfig struct {
+	// Primary 主地址 (必填, 空就报错, 避免静默路由到错的地址)
+	Primary string `yaml:"primary,omitempty" json:"primary,omitempty"`
+	// Secondary 备用地址 (主地址挂自动切)
+	Secondary string `yaml:"secondary,omitempty" json:"secondary,omitempty"`
+	// Auth base64 编码的认证串 (放在 Authorization: Basic 后面), 不含 "Basic " 前缀
+	Auth string `yaml:"auth,omitempty" json:"auth,omitempty"`
+	// Timeout 单次请求超时, 0 = 5s 默认
+	Timeout time.Duration `yaml:"timeout,omitempty" json:"timeout,omitempty"`
 }
 
 // AuthConfig Token 白名单认证配置
@@ -597,6 +620,14 @@ func (c *Config) Defaults() {
 		twoGB := int64(2 * 1024 * 1024 * 1024)
 		c.App.UploadMaxSize = &twoGB
 	}
+
+	// v0.14: internal_endpoints.Timeout 默认 5s (0 = 用 endpointclient.DefaultTimeout)
+	if c.InternalEndpoints.LicenseActivate.Timeout == 0 {
+		c.InternalEndpoints.LicenseActivate.Timeout = 5 * time.Second
+	}
+	if c.InternalEndpoints.SponsorLeaderboard.Timeout == 0 {
+		c.InternalEndpoints.SponsorLeaderboard.Timeout = 10 * time.Second
+	}
 	for i := range c.Systems {
 		sys := &c.Systems[i]
 		for j := range sys.Servers {
@@ -672,6 +703,33 @@ func (c *Config) Validate() error {
 	} else {
 		if host != "127.0.0.1" && host != "localhost" {
 			return fmt.Errorf("app.host 必须为 127.0.0.1 或 localhost，当前: %q（如需远程访问请配置 auth.enabled=true）", c.App.Host)
+		}
+	}
+
+	// v0.14: internal_endpoints 校验
+	// 配了的 primary/secondary 必须 http:// 或 https:// 开头
+	// 额外校验: primary != secondary (避免静默重复打两次), timeout >= 0 (负数会被 endpointclient 静默兜底)
+	for name, ep := range map[string]EndpointConfig{
+		"internal_endpoints.license_activate":    c.InternalEndpoints.LicenseActivate,
+		"internal_endpoints.sponsor_leaderboard": c.InternalEndpoints.SponsorLeaderboard,
+	} {
+		for _, field := range []struct {
+			label string
+			url   string
+		}{{"primary", ep.Primary}, {"secondary", ep.Secondary}} {
+			if field.url == "" {
+				continue
+			}
+			if !strings.HasPrefix(field.url, "http://") && !strings.HasPrefix(field.url, "https://") {
+				return fmt.Errorf("%s.%s %q 必须以 http:// 或 https:// 开头", name, field.label, field.url)
+			}
+		}
+		if ep.Primary != "" && ep.Secondary != "" && ep.Primary == ep.Secondary {
+			// 配错静默重复打两次, 不算 bug 但用户多半是误配, 提示一下
+			return fmt.Errorf("%s.primary 与 secondary 不能相同 (%s)", name, ep.Primary)
+		}
+		if ep.Timeout < 0 {
+			return fmt.Errorf("%s.timeout %v 不能为负数 (0 走 endpointclient 默认 5s)", name, ep.Timeout)
 		}
 	}
 

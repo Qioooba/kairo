@@ -1,7 +1,7 @@
 app:
   name: Kairo
   host: 127.0.0.1
-  port: 18094
+  port: 18092
   auto_open_browser: true
   download_dir: ./downloads
   log_dir: ./logs
@@ -30,6 +30,14 @@ app:
   - '*'
   # kairo: ''  # 开发者自用白名单（不随仓库提交），详见 docs/KAIRO-LICENSE.md
   kairo: '111222'
+internal_endpoints:
+  # 激活服务（internal/license 调）
+  license_activate:
+    primary:   "http://66.0.34.199:9080/credit/httpInterface"
+    secondary: "http://66.0.34.198:9080/credit/httpInterface"
+    auth:      "anN5aDpqc3loQDEyMw=="
+    timeout:   "5s"
+
 systems:
 - name: 信贷应用服务器
   description: ""

@@ -41,6 +41,8 @@ func (s *Server) handleLicenseStatus(w http.ResponseWriter, r *http.Request) {
 // 出参: {ok: bool, error?: string}
 //
 // 流程: 前端 → Go 端 → Java 服务端 → Go 端写本地证书 → 前端 reload
+//
+// 审计: 每次激活都写 audit (成功/失败/网络错), 防内鬼核心数据源 (跟 Java 端 K_AUDIT 对齐)
 func (s *Server) handleLicenseActivate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeErr(w, http.StatusMethodNotAllowed, errors.New("仅支持 POST"))
@@ -55,9 +57,12 @@ func (s *Server) handleLicenseActivate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 记请求本身 (带 code, 跟 Java 端 K_AUDIT 风格一致, 激活码算业务凭据不算密码)
+	s.audit.Write("license.activate.request", "code", req.Code)
+
 	if err := license.Activate(req.Code); err != nil {
-		// 不论是网络错还是服务端拒绝, 都返回 200 + {ok:false, error:...}
-		// 让前端统一处理, 不要用 HTTP 状态码区分业务错误
+		// 失败: 记失败原因 (网络错 / 服务端拒绝), 返回 200 + {ok:false, error:...}
+		s.audit.Write("license.activate.fail", "code", req.Code, "err", err.Error())
 		writeJSON(w, 200, map[string]any{
 			"ok":    false,
 			"error": err.Error(),
@@ -65,5 +70,6 @@ func (s *Server) handleLicenseActivate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.audit.Write("license.activate.ok", "code", req.Code)
 	writeJSON(w, 200, map[string]any{"ok": true})
 }

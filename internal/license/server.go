@@ -1,15 +1,15 @@
 package license
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 	"time"
+
+	"kairo/internal/endpointclient"
 )
 
 // timestampSentinelValue 是 URLParamV3 的特殊值, 命中后在拼 URL 时用
@@ -137,19 +137,16 @@ func appendURLParams(base string) string {
 
 // postActivateJSON POST JSON body 到指定 URL, 带 Basic auth header。
 //
+// 内部走 internal/endpointclient, 享受主备切换 + 4xx/5xx 错误归一化。
+// 函数签名 / 行为完全兼容历史版本 (server_test.go / simulate_test.go 直接调它)。
+//
 // 超时: 5 秒 (激活请求应该秒回, 5s 还连不上视为不可用)。
 func postActivateJSON(url string, body []byte) (*ActivateResp, error) {
-	req, err := http.NewRequest("POST", url, bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	// Content-Type 跟对方 /credit/httpInterface 接口文档要求一致 (charset=UTF-8)。
-	req.Header.Set("Content-Type", "application/json;charset=UTF-8")
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Authorization", "Basic "+BasicAuthHeader)
-
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := endpointclient.Call(endpointclient.Config{
+		Primary: url,
+		Auth:    BasicAuthHeader,
+		Timeout: 5 * time.Second,
+	}, body)
 	if err != nil {
 		return nil, err
 	}
