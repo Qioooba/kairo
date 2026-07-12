@@ -85,7 +85,7 @@ go run .
 2. 录入「业务系统 / 服务器 / 日志目录」（三层：系统 → 服务器 → 目录，支持可视化增删改）
 3. 回到 **日志助手**，选目标 → 列文件 → 搜索 → Tail
 4. 需要 properties / xml / jar 等不在白名单目录的文件？用 **文件下载** 或在 **SSH 终端** 里直接浏览
-5. 第一次跑会要求激活（License 体系，详见下方「商业化」一节）
+5. 第一次跑会要求激活（License 体系，详见下方「FAQ · License 激活失败」与 v0.11-rc1 发布日志）
 
 ### 启动时会自动恢复哪些用户偏好（不用重设）
 
@@ -122,7 +122,7 @@ go run .
 
 ## <img src="docs/section-icons/modules.svg" width="22" height="22" align="absmiddle"> 功能矩阵
 
-Kairo 当前 **13 个功能模块** · 18 个前端页面（+ 1 个 SFTP 共享工具） · ~95 个 API 端点 · 26 个后端子包。
+Kairo 当前 **13 个功能模块** · 18 个前端页面（+ 1 个 SFTP 共享工具） · ~90 个 API 端点 · **25 个后端子包**。
 
 ### 1. WebSphere 日志助手
 
@@ -134,7 +134,7 @@ Kairo 当前 **13 个功能模块** · 18 个前端页面（+ 1 个 SFTP 共享�
 | **多服务器并行搜索** | 1–16 路并发 `grep`，按主机分组返回 `{server, hits, elapsed_ms}`，失败不影响其他 |
 | **搜索语法** | `Exception`、`A && B`、`A \|\| B`、`A && !B`，关键词白名单校验 |
 | **上下文查看** | 命中行前后各 30 行（在配置里可调），用 `sed -n a,bp` 拿，绝不下整个文件 |
-| **下载最新 N 个** | 默认最新 1 个，可配 1–5 个，带 sidecar 元数据 |
+| **下载最新 N 个** | 默认最新 3 个（用户可显式覆盖为任意正整数），带 sidecar 元数据 |
 | **指定文件下载** | 勾选任意文件 → 异步任务 + SSE 进度 + 可取消 + 多文件 zip |
 | **实时 Tail** | SSE 长连接，可配最多保留行数（默认 1000）+ `requestAnimationFrame` 批量 flush，独立 `/tail.html` 全屏窗口；v0.13 起支持 Ctrl/⌘+F 页面内搜索高亮 |
 | **Tail 多关键词高亮** | 在 tail 面板里加关键词 + 选颜色（12 色调色板 + 自定义 hex，支持中文 / 特殊字符），匹配段自动背景高亮；多条规则共用一套面板，规则保存到本地 `data/preferences.json` |
@@ -340,7 +340,7 @@ v0.7 起实装的客户端静态工具（无后端改动）：
 - **`vendor/` 已 commit**：clone 后无网也能 `-mod=vendor` 构建
 - **`go:embed web`**：静态资源打进单 exe
 - **COW Config Manager**：每次 `Replace` 整体换指针，handler 读快照不被撕裂
-- **Goroutine Worker Pool**：多服务器搜索/列文件走 4 路并发 + `errgroup` 风格隔离
+- **Goroutine Worker Pool**：多服务器列文件走 4 路并发（硬编码）；多服务器搜索走 `Search.MaxConcurrency` 路（默认 2，最大 16）+ `errgroup` 风格隔离
 - **`context` 优先**：所有远程命令 / 下载 / Tail 都用 ctx 控制超时
 - **三段式超时**：`ctx deadline → SSH session.Signal(SIGTERM) → 1s 后 SIGKILL`
 - **原子写回 yaml**：`tmpfile + rename(2)`，损坏不污染线上配置
@@ -375,7 +375,7 @@ v0.7 起实装的客户端静态工具（无后端改动）：
 │  ┌──────────────────────────────────────────────────────────────┐    │
 │  │ httpserver (内嵌 web/ 静态资源 + go:embed)                   │    │
 │  │ ├── httpserver.go (路由表 + 配置/服务组装 + license 网关)     │    │
-│  │ ├── handlers_*.go (~30 个文件, 按模块分文件)                  │    │
+│  │ ├── handlers_*.go (~38 个非测试文件 + ~14 个 _test.go, 按模块分文件)     │    │
 │  │ │   ssh / ssh_shell(WS) / ssh_sftp / ssh_sftp_edit /        │    │
 │  │ │   logs_* / files / tail / credentials / downloads /        │    │
 │  │ │   format / http / diff / compare / preferences / local /   │    │
@@ -694,7 +694,7 @@ app:
     - /opt/IBM/WebSphere
     - /var/log
   allow_custom_download_dir: true   # 默认 true；false → 忽略请求里的 target_dir（强制走 download_dir）
-  allowed_download_roots:           # target_dir 白名单；空 = 不限制；非空 = 限定本地落盘路径前缀（生产建议配上）
+  allowed_download_roots:           # target_dir 白名单（v0.9 起 fail-closed：留空 = 一律拒绝；非空 = 限定本地落盘路径前缀；配 "*" 或 "ANY" 显式放行）
     - D:/downloads
   allow_insecure_host_key: false    # v0.9 BE-005：默认 fail-closed；某台 server 没配 host_key_sha256 时拒绝；显式 true 退回 InsecureIgnoreHostKey
   tail_idle_minutes: 30              # v0.9 BE-002：tail 空闲回收时长（分钟，最小 5）
@@ -702,10 +702,10 @@ app:
   credential_key: ""                # file 模式必填（hex 64 字符 = 32 字节）；留空自动生成并写入 data/.credkey（0600）
   ssh_debug: false                  # 打开 logs/ssh_debug.log
   ssh_traffic_dump: false           # 打开 logs/ssh_traffic.log（C→S / S→C 分向）
-  ssh_log_max_mb: 8                 # 单日志文件上限
-  ssh_log_keep: 3                   # 滚动保留份数
+  ssh_log_max_mb: 20                # 单日志文件上限（0..1024）
+  ssh_log_keep: 3                   # 滚动保留份数（0..100）
   ssh_compat_profile: auto          # modern | compat | no-ecdh | legacy | auto（默认 auto：4 套 profile 自动 fallback）
-  kairo_internal_token: ""          # v0.11-rc1 起：内部调用 Java 端用的 token
+  kairo: ""                         # v0.11-rc1 起：开发者白名单 token（内部调 Java 端时透传；空 = 走 base64 默认串）
   external_openers:                 # 下载完成后「用...打开」按钮列表
     - name: NotePad++
       path: D:\软件\Notepad++\notepad++.exe
@@ -717,11 +717,11 @@ app:
   download_max_count: 1000          # 下载最大条数（0 = 不按条数清）
 
 search:
-  default_latest_files: 1           # 「下载最新 N 个」默认值（1–5）
+  default_latest_files: 3           # 「下载最新 N 个」默认值
   max_matches: 200                  # 单次搜索命中上限
-  default_context_lines: 30         # 上下文查看前后行数
+  default_context_lines: 500        # 上下文查看前后行数
   timeout_seconds: 30               # 单次远程命令超时
-  max_concurrency: 4                # 多服务器并发数（1–16）
+  max_concurrency: 2                # 多服务器并发数（1–16）
 
 # v0.9 BE-003：Bearer token 认证（启用后可监听 0.0.0.0）
 # auth:
@@ -813,7 +813,7 @@ kairo/
 │   ├── tail.js                        # 独立 tail 窗口逻辑（v0.9 起）
 │   ├── sftp-common.js                 # SSH 终端 SFTP 共享工具（v0.11+）
 │   ├── sponsor.js / reminders.js      # v0.14 / v0.13 新增页面
-│   ├── img/                           # Kairo 官方图标（128/64/favicon，Retina 多尺寸）
+│   ├── img/                           # Kairo 官方图标（kairo-logo.png + 32/64/192 favicon + sponsor/ + xianxia-bg.png）
 │   ├── vendor/                        # 第三方前端库（diff2html + xterm ES5 转译）
 │   ├── app.test.js                    # Node 单测
 │   └── pages/
@@ -846,21 +846,22 @@ kairo/
 │   ├── downloads/                     # 单文件索引元数据（.kairo-meta.json）
 │   ├── endpointclient/                # 共享 HTTP 调用器（v0.14 起）
 │   ├── formatter/                     # JSON / XML / YAML / URL-form 格式化
-│   ├── httpserver/                    # HTTP 路由 + handlers (~30 文件)
+│   ├── httpserver/                    # HTTP 路由 + handlers (~38 文件 + 14 _test.go)
 │   │   ├── httpserver.go              # 路由表 + 服务组装 + license 网关
 │   │   ├── response.go / helpers.go / open_dir.go
-│   │   ├── handlers_ssh.go / handlers_ssh_shell.go (WS) / handlers_ssh_sftp.go / handlers_ssh_sftp_upload.go
+│   │   ├── handlers_ssh.go / handlers_ssh_shell.go (WS) / handlers_ssh_sftp.go / handlers_ssh_sftp_upload.go / handlers_edit.go
 │   │   ├── handlers_logs_*.go / handlers_files.go / handlers_tail.go
 │   │   ├── handlers_credentials.go / handlers_downloads.go / handlers_format.go
 │   │   ├── handlers_diagnostics.go / handlers_preferences.go / handlers_local.go
 │   │   ├── handlers_compare.go / handlers_diff.go
-│   │   ├── handlers_auth.go / handlers_openers.go / handlers_config_yaml.go
+│   │   ├── handlers_http_cases.go / handlers_http_request.go (v0.7+)
+│   │   ├── handlers_auth.go / handlers_openers.go / handlers_opener_icon.go / handlers_config_yaml.go / handlers_admin.go / handlers_autostart.go
 │   │   ├── handlers_webservice.go     # WSDL / SOAP / Mock 端点
 │   │   ├── handlers_license.go        # v0.11-rc1 起
 │   │   ├── handlers_sponsor.go        # v0.14 起
 │   │   ├── handlers_reminder.go       # v0.13 起
-│   │   ├── handlers_autostart.go      # v1.0 起
-│   │   └── *_test.go                  # 单测 + 集成测试
+│   │   ├── handlers_misc.go           # 兜底（健康检查等小端点）
+│   │   └── *_test.go                  # 单测 + 集成测试（~14 个 _test.go）
 │   ├── iconextract/                   # exe 图标提取（v0.8+）
 │   ├── license/                       # 本地激活 + Java 后端验证（v0.11-rc1 起）
 │   ├── logquery/                      # 后端命令模板
@@ -929,7 +930,7 @@ kairo/
 | **v0.12** | WebService 调试中心（WSDL/SOAP/Mock/模板/历史）+ 老浏览器兼容加固（xterm ES5 转译 + DOM polyfill + FileReader 替代 File.text()） |
 | **v0.11-rc1** | Kairo / 天命契机品牌焕新 + License 激活体系 + xterm.js vendored + 双版本 Windows 构建 + 强制 release 流程 + SSH 终端 GBK 编码 |
 | **v0.10** | SSH 交互式终端菜单（xterm.js + WebSocket + 5 套 compat profile） + xianxia 仙侠·墨韵青锋主题 |
-| **v0.9.0** | Bearer token 认证 + IP 白名单 + fail-closed 全栈加固（host key / free_file_roots / compare_allowed_roots）+ Playwright e2e + UI 全面焕新 |
+| **v0.9.0** | Bearer token 认证 + IP 白名单 + fail-closed 全栈加固（host key / free_file_roots / allowed_download_roots）+ Playwright e2e + UI 全面焕新 |
 | **v0.8** | external_openers + 下载保留策略 + 端口复用 + 版本注入 + 操作历史页下线 |
 | **v0.7** | HTTP 测试 + 时间戳 + Cron + JSONPath + 代码比对（diff2html） |
 | **v0.6** | Tail 独立全屏窗口 + Tail 多关键词高亮 + Tail rAF 批量 flush |
@@ -1159,7 +1160,7 @@ v0.11-rc1 起所有 `/api/*`（除 `/api/license/*`）都被 license 网关拦�
 
 - **License 激活体系**（`internal/license/*` + `cmd/mock-license-server`）：本地 AES-GCM 证书（AAD 绑 IP 防复制）+ 服务端「激活码 ↔ IP」绑定 + 开发者白名单 + bypass 模式
 - **License 网关**（`handlers_license.go`）：未激活时除 `/api/license/*` 外所有 API 返回 403 + `license_required: true`
-- **配置段**：`app.kairo_internal_token` + `internal_endpoints.license_activate`
+- **配置段**：`app.kairo`（Go 字段 `KairoInternalToken`，开发者白名单） + `internal_endpoints.license_activate`
 
 #### 发布流程
 
@@ -1198,7 +1199,7 @@ v0.11-rc1 起所有 `/api/*`（除 `/api/license/*`）都被 license 网关拦�
 #### 安全加固
 
 - **Bearer token 认证 + IP 白名单**（BE-003）：`config.yaml` 新增 `auth` 段，配置 token（`role=admin` / `user` + `allowed_ips`）；启用后可安全监听 `0.0.0.0` / 内网 IP，未带有效 token 返回 401，IP 不在白名单返回 403；admin 专属接口（配置导入 / 凭据清空 / 服务器增改 / openers / download-retention / autostart）强制 `role=admin`
-- **fail-closed 安全默认**：`free_file_roots` 为空时拒绝任意远端路径（不再默认放行）；`compare_allowed_roots` 为空时 compare 接口一律 403（BE-001）
+- **fail-closed 安全默认**：`free_file_roots` 为空时拒绝任意远端路径（不再默认放行）；`allowed_download_roots` 为空时 target_dir 一律拒绝（BE-001 衍生；`compare_allowed_roots` 仍是 fail-open 向后兼容，配 `*`/`ANY` 显式放行）
 - **SSH host key 强校验**（BE-005）：server 未配 `host_key_sha256` 时默认拒绝连接（fail-closed），需显式 `allow_insecure_host_key: true` 才退回 InsecureIgnoreHostKey
 - **tail 空闲回收**（BE-002）：改用 `lastActivity` 判断真实空闲，`tail_idle_minutes` 可配（默认 30 分钟，最小 5 分钟）
 - **凭据 AAD 绑定**（BE-013）：`file` 模式密文绑定 AAD（三元组 key），旧格式密文读取时一次性迁移重写
@@ -1260,7 +1261,7 @@ v0.11-rc1 起所有 `/api/*`（除 `/api/license/*`）都被 license 网关拦�
   - 后端 `Manager.Replace` 已验证正确
   - 测试：`TestReplace_FullRestartRoundTrip` 5 阶段端到端
 - **#6 GBK 编码保存后仍显 GBK**：显式 `encSel.value = 'gbk'` + 后端 `Defaults()` 归一 `gbk/gb18030→gbk`、`Validate()` 拒绝 `shift-jis`
-- **#7 多服务器列出文件全部展示**：`/api/files/list` 支持 3 种互斥模式；多 server 走 4 路并发；响应 `{servers:[{server,ok,files}], ok_count, fail_count, total_count}`
+- **#7 多服务器列出文件全部展示**：`/api/files/list` 支持 3 种互斥模式；多 server 走 4 路并发（硬编码上限）；响应 `{servers:[{server,ok,files}], ok_count, fail_count, total_count}`
 - **#9 实时 tail 卡死浏览器**：`appendTailLine` 用 `pendingTailLines` 缓冲 + `requestAnimationFrame` 批量 flush；`appendChild TextNode` 而非 `textContent +=`；限速 5000 行
 - **#8 日志搜索 stale 30s 真连 10.0.0.1:22**：用 fake SSH server 替真 dial
 
