@@ -122,7 +122,12 @@
   // ---- v0.14 起: 不再前端组装 drinks 数组, 用后端 entry.total / entry.cotti / etc. 字段 ----
   // 删除 cn / formatDrinks / totalCups 死代码 (mock 阶段用过, 改 API 后用不上)
 
-  async function renderSponsor(view) {
+  // v0.15 改造: 同步骨架 + 异步排行榜
+  // 旧版: 整个 renderSponsor 是 async, 排行榜 await 卡住会让整个 view 都是空的,
+  //       一旦 Java 端慢/挂, 用户感觉"页面崩了"
+  // 新版: 静态内容(banner/品牌/QR/footer)立即 append,
+  //       排行榜只在自己容器里显示 loading, 失败/空都只影响这个容器, 不影响其他模块
+  function renderSponsor(view) {
     var selectedBrandId = null;
 
     var jokeEl = el('div', {
@@ -353,19 +358,17 @@
       jokeCard
     ]);
 
-    // ============ 4. 天命武林榜 (v0.14: 改用 /api/sponsor/leaderboard 真数据) ============
+    // ============ 4. 天命武林榜 (v0.15: 静态骨架立即 append, 数据异步加载) ============
     //
-    // 数据流:
-    //   1. 同步塞骨架 (loading 占位)
-    //   2. await api('GET', '/api/sponsor/leaderboard') 拿 entries
-    //   3. 成功: 用 NICKNAMES[rank-1] 拼上真实姓名, 渲染列表
-    //   4. 失败: 显示错误 + 重试按钮 (不兜底 mock, 用户原话: "以后就固定使用接口返回数据了")
+    // 设计: honorList 容器里先放 loading 占位, 函数末尾先 append 所有静态部分
+    //       (banner/品牌/QR/footer) 到 view, 然后调 loadHonorList() 异步拉数据
+    //       拉数据失败/为空都只影响 honorList 内部, 其他模块不受影响
     //
     // 后端字段 (entries[]):
     //   {rank: 1-based, real_name, cotti, lucky, milktea, total, date}
     var honorList = el('div', { style: 'margin-top:8px;' });
 
-    // 先显示 loading 占位
+    // loading 占位 (克隆用, 原始节点会先 append 一次, 之后清空时再 clone 出来)
     var loadingBox = el('div', {
       style: 'text-align:center; padding:24px 16px;'
     }, [
@@ -373,130 +376,6 @@
       el('div', { style: 'font-size:13px; color:var(--text-dim);', text: '正在从天命服务器拉取榜单…' })
     ]);
     honorList.appendChild(loadingBox);
-
-    // ---- 拉数据 + 渲染 ----
-    var entries = null;
-    var loadError = null;
-    try {
-      var resp = await api('GET', '/api/sponsor/leaderboard');
-      if (resp && resp.ok && Array.isArray(resp.entries)) {
-        entries = resp.entries;
-      } else {
-        loadError = (resp && resp.error) ? resp.error : '响应格式不对';
-      }
-    } catch (e) {
-      loadError = e && e.message ? e.message : '网络错误';
-    }
-
-    // 拿到数据后, 清掉 loading 占位再渲染
-    honorList.innerHTML = '';
-
-    if (loadError) {
-      // 失败: 错误 + 重试按钮 (重试 = 重新 render)
-      var retryBox = el('div', {
-        style: 'text-align:center; padding:32px 16px;'
-      }, [
-        el('div', { style: 'font-size:32px; margin-bottom:8px;', text: '😢' }),
-        el('div', {
-          style: 'font-size:14px; font-weight:700; color:var(--text-err,#dc2626); margin-bottom:6px;',
-          text: '天命服务器失联了'
-        }),
-        el('div', {
-          style: 'font-size:12px; color:var(--text-dim); margin-bottom:14px; line-height:1.5;',
-          text: '错误: ' + loadError
-        }),
-        el('button', {
-          class: 'btn',
-          style: 'padding:6px 18px;',
-          text: '重试',
-          onclick: function () {
-            // 简单粗暴: 重新调 renderSponsor(view), 它会再 await 一次
-            view.innerHTML = '';
-            renderSponsor(view);
-          }
-        })
-      ]);
-      honorList.appendChild(retryBox);
-    } else if (entries.length === 0) {
-      // 没人赞助
-      honorList.appendChild(el('div', {
-        style: 'text-align:center; padding:32px 16px;',
-      }, [
-        el('div', { style: 'font-size:48px; margin-bottom:8px;', text: '🤔' }),
-        el('div', { style: 'font-size:15px; font-weight:700; color:var(--text);', text: '还没人请过咖啡呢' }),
-        el('div', { style: 'font-size:12px; color:var(--text-dim); margin-top:4px;', text: '第一个请的人 名字永远在这里（直到我删代码）' }),
-      ]));
-    } else {
-      // 成功: 渲染列表 (后端已经按 rank 排好, 直接用)
-      // 排名节点: 1-3 用金/银/铜 SVG 奖杯, 4+ 用两位补零数字 (04, 05, ...)
-      function makeRankNode(idx) {
-        if (idx === 0) {
-          return el('img', { src: '/static/img/sponsor/trophy-gold.svg',   alt: '🥇', style: 'width:32px; height:32px; flex-shrink:0;' });
-        } else if (idx === 1) {
-          return el('img', { src: '/static/img/sponsor/trophy-silver.svg', alt: '🥈', style: 'width:32px; height:32px; flex-shrink:0;' });
-        } else if (idx === 2) {
-          return el('img', { src: '/static/img/sponsor/trophy-bronze.svg', alt: '🥉', style: 'width:32px; height:32px; flex-shrink:0;' });
-        }
-        return el('span', {
-          style: 'width:32px; text-align:center; font-size:14px; font-weight:800; color:var(--text-mute); ' +
-                 'font-family:ui-monospace,monospace; flex-shrink:0; letter-spacing:0.5px;',
-          text: String(idx + 1).padStart(2, '0')
-        });
-      }
-
-      entries.forEach(function (e, i) {
-        var rankNode = makeRankNode(i);
-        // 拼 name: 前 50 名拿 NICKNAMES[rank-1], 50+ 只显示真实姓名
-        var nick = NICKNAMES[(e.rank || 1) - 1];
-        var displayName = nick ? (nick + '·' + e.real_name) : e.real_name;
-
-        if (i < 3) {
-          // ===== Top 3: 1 行带金色左边框 (奖杯 + 名称 + 总杯数 + 日期) =====
-          honorList.appendChild(el('div', {
-            style: 'display:flex; align-items:center; gap:12px; padding:10px 14px; border-radius:8px; ' +
-                   'margin-bottom:6px; background:var(--bg-1); border-left:3px solid #F59E0B;'
-          }, [
-            rankNode,
-            el('span', {
-              style: 'flex:1; min-width:0; font-size:15px; font-weight:800; color:var(--text); ' +
-                     'white-space:nowrap; overflow:hidden; text-overflow:ellipsis;',
-              text: displayName
-            }),
-            el('span', {
-              style: 'font-size:12px; font-weight:700; color:var(--warn); ' +
-                     'padding:2px 10px; border-radius:8px; background:rgba(245,158,11,0.12); flex-shrink:0;',
-              text: e.total + ' 杯'
-            }),
-            el('span', {
-              style: 'font-size:12px; color:var(--text-mute); font-family:ui-monospace,monospace; flex-shrink:0;',
-              text: e.date || ''
-            }),
-          ]));
-        } else {
-          // ===== #4 ~ #50: 1 行紧凑版 (序号 + 名称 + 总杯数 + 日期) =====
-          honorList.appendChild(el('div', {
-            style: 'display:flex; align-items:center; gap:12px; padding:6px 14px; border-radius:6px; ' +
-                   'margin-bottom:2px;'
-          }, [
-            rankNode,
-            el('span', {
-              style: 'flex:1; min-width:0; font-size:14px; font-weight:700; color:var(--text); ' +
-                     'white-space:nowrap; overflow:hidden; text-overflow:ellipsis;',
-              text: displayName
-            }),
-            el('span', {
-              style: 'font-size:12px; font-weight:700; color:var(--warn); ' +
-                     'padding:1px 8px; border-radius:6px; background:rgba(245,158,11,0.10); flex-shrink:0;',
-              text: e.total + ' 杯'
-            }),
-            el('span', {
-              style: 'font-size:11px; color:var(--text-mute); font-family:ui-monospace,monospace; flex-shrink:0;',
-              text: e.date || ''
-            }),
-          ]));
-        }
-      });
-    }
 
     var honorCard = el('div', { style: 'margin-top:28px;' }, [
       el('div', {
@@ -533,13 +412,165 @@
       }),
     ]);
 
-    // ============ 组装页面 ============
+    // ============ 组装页面 (静态部分立即 append, 排行榜异步加载) ============
+    // 顺序: 招牌 → 品牌 → 提示 → QR → 武林榜 → 段子
+    // 武林榜此时内部是 loading 占位, loadHonorList() 完成后会原地替换
     view.appendChild(banner);
     view.appendChild(cardsWrap);
     view.appendChild(jokeEl);
     view.appendChild(qrCard);
     view.appendChild(honorCard);
     view.appendChild(footer);
+
+    // ---- 异步加载排行榜 (失败/空都只影响 honorList 内部) ----
+    //
+    // v0.15.1 修复: 不要把 loadError 反显到页面上
+    //   - 之前直接 '错误: ' + loadError, 会把 endpointclient 主备地址 + Java 端响应
+    //     (66.0.34.199:9080/credit/httpInterface?... HTTP 502) 全贴在页面上
+    //   - 同事看到了就知道内网地址 + serviceID, 等于白送
+    //   - 真实错误细节走 console.warn 给开发者排查, 后端 audit log 也有 (handlers_sponsor.go
+    //     写 audit "sponsor.leaderboard.error" + err.Error()), 页面只显示一句搞笑话
+    function loadHonorList() {
+      // 先重置回 loading 占位 (cloneNode 是因为 loadingBox 已经被 append 过,
+      // 直接重用可能被 detach, clone 出一个干净的)
+      honorList.innerHTML = '';
+      honorList.appendChild(loadingBox.cloneNode(true));
+
+      api('GET', '/api/sponsor/leaderboard').then(function (resp) {
+        var entries = null;
+        var loadError = null;
+        if (resp && resp.ok && Array.isArray(resp.entries)) {
+          entries = resp.entries;
+        } else {
+          loadError = (resp && resp.error) ? resp.error : '响应格式不对';
+          // 真实错误只走 console, UI 不显示
+          // eslint-disable-next-line no-console
+          console.warn('[sponsor] leaderboard load failed:', loadError);
+        }
+        renderHonorList(entries, loadError);
+      }).catch(function (e) {
+        // 网络错 / 5xx, 同样 console.warn 不反显
+        // eslint-disable-next-line no-console
+        console.warn('[sponsor] leaderboard request error:', e && e.message);
+        renderHonorList(null, e && e.message ? e.message : '网络错误');
+      });
+    }
+
+    // 排行榜拉取失败时的搞笑提示语 (v0.15.1 加, 替代之前的 "错误: <原样后端报错>")
+    // 5 条随机选一条, 跟整体"咖啡续命 + 武林"风格对齐, 不暴露任何内部地址
+    var HONOR_ERROR_QUIPS = [
+      '☕ 天命服务器出门买咖啡了,稍等片刻',
+      '🥲 江湖榜今日休刊,榜主下山云游去了',
+      '🛠️ 武林盟主闭关修榜中,先来杯咖啡提提神',
+      '🌙 月黑风高,榜主早已归隐山林',
+      '🤔 天机不可泄露,榜单暂时算不出来'
+    ];
+
+    function renderHonorList(entries, loadError) {
+      honorList.innerHTML = '';
+      if (loadError) {
+        // 失败: 搞笑话 + 重试按钮 (真实错误只走 console, 不反显)
+        // 不再显示 '错误: <后端原始报错>' 那一行 —— 避免把内部地址 / serviceID 暴露给前端用户
+        var quip = HONOR_ERROR_QUIPS[Math.floor(Math.random() * HONOR_ERROR_QUIPS.length)];
+        honorList.appendChild(el('div', {
+          style: 'text-align:center; padding:32px 16px;'
+        }, [
+          el('div', { style: 'font-size:32px; margin-bottom:8px;', text: '😢' }),
+          el('div', {
+            style: 'font-size:14px; font-weight:700; color:var(--text-err,#dc2626); margin-bottom:14px; line-height:1.5;',
+            text: quip
+          }),
+          el('button', {
+            class: 'btn',
+            style: 'padding:6px 18px;',
+            text: '再试一次',
+            onclick: loadHonorList
+          })
+        ]));
+      } else if (!entries || entries.length === 0) {
+        // 没人赞助
+        honorList.appendChild(el('div', {
+          style: 'text-align:center; padding:32px 16px;',
+        }, [
+          el('div', { style: 'font-size:48px; margin-bottom:8px;', text: '🤔' }),
+          el('div', { style: 'font-size:15px; font-weight:700; color:var(--text);', text: '还没人请过咖啡呢' }),
+          el('div', { style: 'font-size:12px; color:var(--text-dim); margin-top:4px;', text: '第一个请的人 名字永远在这里（直到我删代码）' }),
+        ]));
+      } else {
+        // 成功: 渲染列表 (后端已经按 rank 排好, 直接用)
+        // 排名节点: 1-3 用金/银/铜 SVG 奖杯, 4+ 用两位补零数字 (04, 05, ...)
+        function makeRankNode(idx) {
+          if (idx === 0) {
+            return el('img', { src: '/static/img/sponsor/trophy-gold.svg',   alt: '🥇', style: 'width:32px; height:32px; flex-shrink:0;' });
+          } else if (idx === 1) {
+            return el('img', { src: '/static/img/sponsor/trophy-silver.svg', alt: '🥈', style: 'width:32px; height:32px; flex-shrink:0;' });
+          } else if (idx === 2) {
+            return el('img', { src: '/static/img/sponsor/trophy-bronze.svg', alt: '🥉', style: 'width:32px; height:32px; flex-shrink:0;' });
+          }
+          return el('span', {
+            style: 'width:32px; text-align:center; font-size:14px; font-weight:800; color:var(--text-mute); ' +
+                   'font-family:ui-monospace,monospace; flex-shrink:0; letter-spacing:0.5px;',
+            text: String(idx + 1).padStart(2, '0')
+          });
+        }
+
+        entries.forEach(function (e, i) {
+          var rankNode = makeRankNode(i);
+          // 拼 name: 前 50 名拿 NICKNAMES[rank-1], 50+ 只显示真实姓名
+          var nick = NICKNAMES[(e.rank || 1) - 1];
+          var displayName = nick ? (nick + '·' + e.real_name) : e.real_name;
+
+          if (i < 3) {
+            // ===== Top 3: 1 行带金色左边框 (奖杯 + 名称 + 总杯数 + 日期) =====
+            honorList.appendChild(el('div', {
+              style: 'display:flex; align-items:center; gap:12px; padding:10px 14px; border-radius:8px; ' +
+                     'margin-bottom:6px; background:var(--bg-1); border-left:3px solid #F59E0B;'
+            }, [
+              rankNode,
+              el('span', {
+                style: 'flex:1; min-width:0; font-size:15px; font-weight:800; color:var(--text); ' +
+                       'white-space:nowrap; overflow:hidden; text-overflow:ellipsis;',
+                text: displayName
+              }),
+              el('span', {
+                style: 'font-size:12px; font-weight:700; color:var(--warn); ' +
+                       'padding:2px 10px; border-radius:8px; background:rgba(245,158,11,0.12); flex-shrink:0;',
+                text: e.total + ' 杯'
+              }),
+              el('span', {
+                style: 'font-size:12px; color:var(--text-mute); font-family:ui-monospace,monospace; flex-shrink:0;',
+                text: e.date || ''
+              }),
+            ]));
+          } else {
+            // ===== #4 ~ #50: 1 行紧凑版 (序号 + 名称 + 总杯数 + 日期) =====
+            honorList.appendChild(el('div', {
+              style: 'display:flex; align-items:center; gap:12px; padding:6px 14px; border-radius:6px; ' +
+                     'margin-bottom:2px;'
+            }, [
+              rankNode,
+              el('span', {
+                style: 'flex:1; min-width:0; font-size:14px; font-weight:700; color:var(--text); ' +
+                       'white-space:nowrap; overflow:hidden; text-overflow:ellipsis;',
+                text: displayName
+              }),
+              el('span', {
+                style: 'font-size:12px; font-weight:700; color:var(--warn); ' +
+                       'padding:1px 8px; border-radius:6px; background:rgba(245,158,11,0.10); flex-shrink:0;',
+                text: e.total + ' 杯'
+              }),
+              el('span', {
+                style: 'font-size:11px; color:var(--text-mute); font-family:ui-monospace,monospace; flex-shrink:0;',
+                text: e.date || ''
+              }),
+            ]));
+          }
+        });
+      }
+    }
+
+    // 触发异步加载
+    loadHonorList();
   }
 
   Kairo.pages.sponsor = renderSponsor;
