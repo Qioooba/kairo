@@ -19,6 +19,9 @@
 /data/
 /dist/
 
+# ===== Mavis agent 自身运行数据（截图/plan/capture 脚本等，不入仓库）=====
+/.mavis/
+
 # ===== 系统/编辑器垃圾 =====
 .DS_Store
 Thumbs.db
@@ -158,3 +161,6 @@ crash.log
 /test-output/
 /config-debug.yaml
 /config-test-port-*.yaml
+
+# local dev build output
+build/
