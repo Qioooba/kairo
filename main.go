@@ -31,6 +31,7 @@ import (
 	"kairo/internal/license"
 	"kairo/internal/popup"
 	"kairo/internal/reminder"
+	"kairo/internal/sponsor"
 	"kairo/internal/sshclient"
 	"kairo/internal/sshshell"
 	"kairo/internal/sysutil"
@@ -225,16 +226,35 @@ func main() {
 	cfgMgr := config.NewManager(cfg, cfgPath, runDir)
 
 	// 7.1 注入 license 包的 config provider
-	// 这样 license 包能在不直接 import config (避免循环) 的情况下读取 kairo 字段
+	// 这样 license 包能在不直接 import config (避免循环) 的情况下读取 kairo 字段 + internal_endpoints
+	// SetConfigProvider 内部会立即用 snapshot 覆盖 var 池 (LicenseServerPrimary 等)
+	// —— 测试代码不调 SetConfigProvider, var 池走源码默认值, 老测试零修改
 	license.SetConfigProvider(func() *license.ConfigSnapshot {
 		c := cfgMgr.Get()
 		if c == nil {
 			return &license.ConfigSnapshot{}
 		}
 		return &license.ConfigSnapshot{
-			KairoInternalToken: c.App.KairoInternalToken,
+			KairoInternalToken:        c.App.KairoInternalToken,
+			LicenseActivatePrimary:    c.InternalEndpoints.LicenseActivate.Primary,
+			LicenseActivateSecondary:  c.InternalEndpoints.LicenseActivate.Secondary,
+			LicenseActivateAuth:       c.InternalEndpoints.LicenseActivate.Auth,
 		}
 	})
+
+	// 7.1.1 v0.14: 注入 sponsor 包的 endpoint config 覆盖
+	//   - 从 config.yaml 的 internal_endpoints.sponsor_leaderboard 读 (主备 + auth + timeout)
+	//   - 启动时立即用 var 池覆盖 (跟 license 同款模式)
+	//   - 测试代码不调 InitFromConfig, var 池走源码默认值, 老测试零修改
+	//   - 之前忘了调 → config 段配的 mock 地址永远不生效, 改地址必须改源码重编译
+	if c := cfgMgr.Get(); c != nil {
+		sponsor.InitFromConfig(
+			c.InternalEndpoints.SponsorLeaderboard.Primary,
+			c.InternalEndpoints.SponsorLeaderboard.Secondary,
+			c.InternalEndpoints.SponsorLeaderboard.Auth,
+			c.InternalEndpoints.SponsorLeaderboard.Timeout,
+		)
+	}
 
 	// 7.2 启动时做一次 license 检查 (仅日志, 不阻止启动)
 	// 前端 GET /api/license/status 时会再次检查, 这里是 fail-soft 的预检

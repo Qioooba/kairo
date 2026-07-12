@@ -37,6 +37,12 @@ internal_endpoints:
     secondary: "http://66.0.34.198:9080/credit/httpInterface"
     auth:      "anN5aDpqc3loQDEyMw=="
     timeout:   "5s"
+  # 赞助排行榜（internal/sponsor 调）
+  sponsor_leaderboard:
+    primary:   "http://66.0.34.199:9080/credit/httpInterface"
+    secondary: "http://66.0.34.198:9080/credit/httpInterface"
+    auth:      "anN5aDpqc3loQDEyMw=="
+    timeout:   "10s"
 
 systems:
 - name: 信贷应用服务器

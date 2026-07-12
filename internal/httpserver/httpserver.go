@@ -410,6 +410,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleLicenseStatus(w, r)
 	case path == "/api/license/activate":
 		s.handleLicenseActivate(w, r)
+	case path == "/api/sponsor/leaderboard":
+		// v0.14: 投喂作者排行榜
+		s.handleSponsorLeaderboard(w, r)
 	case path == "/api/admin/openers":
 		// BE-003：管理员接口，仅 admin 角色。
 		if !requireAdmin(w, r) {
