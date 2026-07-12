@@ -30,8 +30,8 @@ func TestIntegration_FetchLeaderboard_Success(t *testing.T) {
 	if !lr.OK {
 		t.Fatalf("lr.OK 应为 true, got=false, err=%s", lr.Error)
 	}
-	if len(lr.Entries) == 0 {
-		t.Fatal("Entries 应有数据, got=0")
+	if len(lr.Entries) < 2 {
+		t.Fatalf("Entries 应至少有 2 条数据用于排序验证, got=%d", len(lr.Entries))
 	}
 
 	// 验证排序 (rank 1 应该是 total 最高的)

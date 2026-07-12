@@ -30,7 +30,7 @@ type Entry struct {
 	Lucky     int       `json:"lucky"`      // 瑞幸杯数
 	Milktea   int       `json:"milktea"`    // 奶茶杯数 (用户原话: "random 就是奶茶啊 随机奶茶数量")
 	Total     int       `json:"total"`      // 总杯数 = cotti+lucky+milktea (Java 端冗余存, 方便 ORDER BY)
-	Date      string    `json:"date"`       // YYYY-MM-DD, 首次赞助日期 (前端显示用)
+	Date      string    `json:"date"`       // MM-DD, 首次赞助日期 (前端显示用)
 	UpdatedAt time.Time `json:"updated_at"` // Java 端最后更新时间
 }
 

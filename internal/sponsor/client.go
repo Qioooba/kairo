@@ -18,6 +18,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"kairo/internal/endpointclient"
@@ -35,15 +36,17 @@ const (
 
 // ===== 端点配置 (var 池, 跟 license 同款) =====
 //
-// 默认值硬编码到源码, 不走 ldflags 注入。
+// 默认值留空, 生产配置通过 config.yaml 的 internal_endpoints.sponsor_leaderboard 注入。
 // 测试代码可以临时改 var 指向 httptest server。
-// main.go 启动时如果 config.yaml 配了 internal_endpoints.sponsor_leaderboard,
-// 会调 InitFromConfig() 覆盖 var (跟 license 包同款流程)。
+// main.go 启动时调 InitFromConfig() 覆盖 var (跟 license 包同款流程)。
 var (
-	Primary   = "http://66.0.34.199:9080/credit/httpInterface"
-	Secondary = "http://66.0.34.198:9080/credit/httpInterface"
+	mu sync.RWMutex
+	// Primary 主排行榜服务地址 (由 config.yaml 注入)
+	Primary = ""
+	// Secondary 备用排行榜服务地址 (由 config.yaml 注入)
+	Secondary = ""
 	// BasicAuthHeader POST 请求 Authorization 头的 "Basic <这里>" 部分 (base64 串, 不含 "Basic " 前缀)
-	BasicAuthHeader = "anN5aDpqc3loQDEyMw=="
+	BasicAuthHeader = ""
 	// DefaultTimeout 默认 10s (排行榜比激活慢点, Java 端要算 rank)
 	DefaultTimeout = 10 * time.Second
 )
@@ -53,6 +56,8 @@ var (
 //
 // 调用方: main.go 启动时调一次, 把 config.InternalEndpoints.SponsorLeaderboard 传进来。
 func InitFromConfig(primary, secondary, auth string, timeout time.Duration) {
+	mu.Lock()
+	defer mu.Unlock()
 	if primary != "" {
 		Primary = primary
 	}
@@ -76,15 +81,25 @@ func InitFromConfig(primary, secondary, auth string, timeout time.Duration) {
 //
 // 调用方约定: 拿到非 nil *resp 后, 永远先看 resp.OK, OK=false 时 Entries 可能是 nil。
 func FetchLeaderboard() (*LeaderboardResp, error) {
-	body, _ := json.Marshal(map[string]string{}) // 空对象: 排行榜不需要入参
+	body, err := json.Marshal(map[string]string{}) // 空对象: 排行榜不需要入参
+	if err != nil {
+		return nil, fmt.Errorf("构造请求失败: %w", err)
+	}
+
+	mu.RLock()
+	primary := Primary
+	secondary := Secondary
+	auth := BasicAuthHeader
+	timeout := DefaultTimeout
+	mu.RUnlock()
 
 	cfg := endpointclient.Config{
-		Primary:   buildURL(Primary),
-		Auth:      BasicAuthHeader,
-		Timeout:   DefaultTimeout,
+		Primary: buildURL(primary),
+		Auth:    auth,
+		Timeout: timeout,
 	}
-	if Secondary != "" {
-		cfg.Secondary = buildURL(Secondary)
+	if secondary != "" {
+		cfg.Secondary = buildURL(secondary)
 	}
 
 	resp, err := endpointclient.Call(cfg, body)

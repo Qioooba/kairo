@@ -21,7 +21,7 @@ if [[ -n "${1:-}" ]]; then
 elif [[ -f VERSION ]]; then
   VER="$(tr -d '[:space:]' < VERSION)"
 else
-  VER="v0.1.0"
+  VER="v0.14"
 fi
 OUT_DIR="dist/kairo-${VER}"
 mkdir -p "${OUT_DIR}"

@@ -62,16 +62,16 @@ public class KairoSponsorLeaderboardAction {
         ARE.getLog().info(seqNo + "---HttpPost对方交易请求参数body: ~~~getSponsorLeaderboard~~~~~~~~~~~~~~~~~~~~~~ " + requestParam);
         Map<String, Object> resp = new HashMap<String, Object>();
 
-        // 兼容 Oracle 11g (用 ROWNUM 子查询, 不用 FETCH FIRST 12c+ 语法)
+        // 兼容 Oracle 11g (用 RNK 子查询, 不用 FETCH FIRST 12c+ 语法)
         //   内层: ROW_NUMBER() 算 rank + 全部字段
-        //   外层: WHERE ROWNUM <= 50 截前 50 + ORDER BY 稳定排序 (同分按 ID 升序)
+        //   外层: WHERE RNK <= 50 截前 50 + ORDER BY 稳定排序 (同分按 ID 升序)
         String sql = "SELECT * FROM (" +
                      "  SELECT ID, REAL_NAME, COTTI, LUCKY, MILKTEA, TOTAL, " +
                      "         ROW_NUMBER() OVER (ORDER BY TOTAL DESC, ID ASC) AS RNK, " +
                      "         TO_CHAR(CREATED_AT, 'MM-DD') AS DATE_STR, " +
                      "         UPDATED_AT " +
                      "  FROM K_SPONSOR " +
-                     ") WHERE ROWNUM <= 50 " +
+                     ") WHERE RNK <= 50 " +
                      "ORDER BY TOTAL DESC, ID ASC";
 
         // try-with-resources 自动关 rs/ps, 异常路径也不漏连接池

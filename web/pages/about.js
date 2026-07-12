@@ -217,16 +217,16 @@
   // §1. 核心数据看板
   // =====================================================================
   const stats = [
-    { label: '总代码量',             value: '85,000+', sub: 'Go 48K · 前端 37K · 0 npm 运行时',           tone: 'primary' },
-    { label: '代码行数 (Go)',         value: '48,000+', sub: '164 个源文件 · 24 个子包 · 含测试',          tone: 'primary' },
-    { label: '代码行数 (前端)',       value: '37,000+', sub: 'vanilla JS · 18 页面 · 零依赖',              tone: 'accent'  },
+    { label: '总代码量',             value: '60,000+', sub: 'Go 30K · 前端 30K (JS+CSS) · 0 npm 运行时',  tone: 'primary' },
+    { label: '代码行数 (Go)',         value: '30,000+', sub: '94 个源文件 · 25 个子包 · 含测试',          tone: 'primary' },
+    { label: '代码行数 (前端)',       value: '30,000+', sub: 'vanilla JS 24K + CSS 6K · 18 页面 · 零依赖', tone: 'accent'  },
     { label: '提交次数',              value: '148',     sub: 'v0.1 → v0.14',                              tone: 'success' },
-    { label: '后端模块',              value: '24',      sub: 'internal/* (含 sshshell/webservice/license/reminder/browserpref/popup/endpointclient/sponsor)', tone: 'primary' },
-    { label: '前端页面',              value: '18',      sub: 'web/pages/*.js (含 ssh/webservice/reminders/sponsor)', tone: 'accent'  },
-    { label: 'API 接口',              value: '96+',     sub: 'REST + SSE + WebSocket',                    tone: 'primary' },
-    { label: '测试用例 (Go)',         value: '1450+',   sub: '72 个 _test.go · 单元 + 集成',              tone: 'success' },
-    { label: '测试用例 (Node)',       value: '180+',    sub: 'app.test.js · 17 case',                     tone: 'success' },
-    { label: 'E2E 场景 (Playwright)', value: '280+',    sub: '10 个脚本 · 16 测试套',                     tone: 'warn'    },
+    { label: '后端模块',              value: '25',      sub: 'internal/* (sshshell/webservice/license/reminder/browserpref/popup/endpointclient/sponsor/iconextract 等)', tone: 'primary' },
+    { label: '前端页面',              value: '18',      sub: 'web/pages/*.js (含 ssh/webservice/reminders/sponsor) + 1 共享模块 sftp-common', tone: 'accent'  },
+    { label: 'API 接口',              value: '90+',     sub: 'REST + SSE + WebSocket',                    tone: 'primary' },
+    { label: '测试用例 (Go)',         value: '740+',    sub: '73 个 _test.go · 单元 + 集成',              tone: 'success' },
+    { label: '测试用例 (Node)',       value: '30+',     sub: 'web/app.test.js + sponsor 联调 · 单元',    tone: 'success' },
+    { label: 'E2E 场景 (Playwright)', value: '280+',    sub: '27 个脚本 · 16 测试套',                     tone: 'warn'    },
     { label: '修复缺陷',              value: '420+',    sub: 'P0/P1/P2 全量',                             tone: 'warn'    },
     { label: '安全设计点',            value: '14',      sub: 'fail-closed 全栈',                          tone: 'error'   },
     { label: 'SSH 兼容 profile',      value: '5',       sub: 'modern → legacy · 自动 fallback',           tone: 'primary' }
@@ -288,7 +288,7 @@
     },
     {
       layer: 'L3', name: '业务层 (Domain)',
-      detail: 'sshclient · sftpclient · sshshell (v0.10 PTY) · logquery · dlmanager · tailmgr · diff · downloads · formatter · credentials · webservice (v0.12) · license (v0.11)',
+      detail: 'sshclient · sftpclient · sshshell (v0.10 PTY) · logquery · dlmanager · tailmgr · diff · downloads · formatter · credentials · webservice (v0.12) · license (v0.11) · sponsor (v0.14)',
       tech: ['x/crypto/ssh', 'pkg/sftp', 'x/text (GBK 透明转换)', 'AES-256-GCM', 'COW Config', 'Worker Pool', 'Myers Diff', 'PTY + WebSocket'],
       duty: '受控 SSH 执行、交互式 PTY 终端、SFTP 文件浏览、命令模板生成、异步任务会话池、实时 SSE 广播、行级 diff、凭据存取。元数据全部集中维护，handler 只负责协议转换。'
     },
@@ -335,7 +335,7 @@
     { name: 'api.js', desc: 'HTTP 客户端 — api(method, path, body) 统一封装；自动加 Bearer token；SSE EventSource 工厂；统一错误处理。' },
     { name: 'theme.js', desc: '主题切换 — dark / light / green / hc / xianxia（玄墨鎏金·武侠风）5 套主题，inline script 在 <head> 提前设 data-theme 防 FOUC。' },
     { name: 'auth.js', desc: '认证层 — 拉 /api/auth/status 探测；token cookie 管理；role-gated UI 显隐。' },
-    { name: 'pages/*.js', desc: '17 个页面 — home / websphere / files / ssh (v0.10) / formatter / commands / diagnostics / config / downloads / http / timestamp / cron / jsonpath / compare / webservice (v0.12) / reminders (v0.13) / about。每个页面一个 IIFE，路由切换时整体替换 view。' },
+    { name: 'pages/*.js', desc: '18 个页面 — home / websphere / files / ssh (v0.10) / formatter / commands / diagnostics / config / downloads / http / timestamp / cron / jsonpath / compare / webservice (v0.12) / reminders (v0.13) / sponsor (v0.14) / about。每个页面一个 IIFE，路由切换时整体替换 view。' },
     { name: 'tail.js + tail.html', desc: '独立 tail 窗口 — 从主页面剥离的 tail 流，跟踪 SSE 不影响主页面操作；行级 DOM 节点池 + rAF 批量 flush (50ms/100 行)；v0.13 起支持 Ctrl/⌘+F 页面内搜索高亮，新到达日志自动应用当前搜索词。' },
     { name: 'preview.html', desc: '文件预览子窗口 — 单文件模态 + 新窗口双模式，支持文本 / GBK 编码自动识别；v0.13 起支持页面内搜索高亮 (TreeWalker 遍历文本节点，不破坏关键词高亮 span)。' },
     { name: 'vendor/search-hl.js', desc: '搜索高亮公共模块 (v0.13) — preview.html / tail.html / 上下文窗口三处共用；TreeWalker 遍历文本节点 + mark 标签包裹，Enter/Shift+Enter 跳转匹配，Esc 清除。' }
@@ -1876,6 +1876,7 @@
     });
 
     const header = el('div', {
+      class: 'changelog-version-header',
       style: 'display:flex; justify-content:space-between; align-items:center; cursor:pointer; padding:16px 20px; gap:10px; flex-wrap:wrap;',
       onclick: function () { toggleVersion(cardId, expandIcon); }
     }, [

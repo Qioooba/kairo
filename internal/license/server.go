@@ -19,27 +19,22 @@ const timestampSentinelValue = "<TIMESTAMP>"
 
 // ===== 激活服务配置 =====
 //
-// 默认值硬编码在源码里, 直接 go build 即可生效, 不用 ldflags 注入。
-// 改完下面这些 var 的值, 重新编译就能切换到另一套激活服务
-// (主备地址 / 认证串 / URL 参数)。
-//
-// 接口形态: POST /credit/httpInterface?channelID=PC&serviceID=KairoActivateAction&seqNo=<秒级时间戳>
-// 请求体:   {"secret_key": "<激活码>", "ip": "<本机IP>"}
-// 响应:     {"ok": true/false, "error": "..."}
-//
+// 默认值留空, 生产配置通过 config.yaml 的 internal_endpoints.license_activate 注入。
 // 用 var (不是 const) 是为了:
 //
 //	1) 测试可以临时改值指向 httptest server
 //	2) 万一未来要"按环境切换" (开发态指向 mock, 生产态指向真实), 不用改架构
 //
-// 默认值是真实生产配置, 不是 PLACEHOLDER。
+// 接口形态: POST /credit/httpInterface?channelID=PC&serviceID=KairoActivateAction&seqNo=<秒级时间戳>
+// 请求体:   {"secret_key": "<激活码>", "ip": "<本机IP>"}
+// 响应:     {"ok": true/false, "error": "..."}
 var (
-	// LicenseServerPrimary 主激活服务地址
-	LicenseServerPrimary = "http://66.0.34.199:9080/credit/httpInterface"
-	// LicenseServerSecondary 备用激活服务地址 (主地址挂了自动切)
-	LicenseServerSecondary = "http://66.0.34.198:9080/credit/httpInterface"
+	// LicenseServerPrimary 主激活服务地址 (由 config.yaml 注入)
+	LicenseServerPrimary = ""
+	// LicenseServerSecondary 备用激活服务地址 (主地址挂了自动切, 由 config.yaml 注入)
+	LicenseServerSecondary = ""
 	// BasicAuthHeader POST 请求 Authorization 头的 "Basic <这里>" 部分 (base64 串, 不含 "Basic " 前缀)
-	BasicAuthHeader = "anN5aDpqc3loQDEyMw=="
+	BasicAuthHeader = ""
 
 	// URL 上的 3 个固定 query 参数
 	URLParamK1 = "channelID"
@@ -68,29 +63,58 @@ type ActivateResp struct {
 //   - (*ActivateResp{OK:false, Error:"..."}, nil) → 服务端拒绝 (激活码无效/IP 不匹配等)
 //   - (nil, error) → 网络错误 / 所有地址都不可达
 func callActivate(code, ip string) (*ActivateResp, error) {
-	body, _ := json.Marshal(map[string]string{
+	body, err := json.Marshal(map[string]string{
 		"secret_key": code,
 		"ip":         ip,
 	})
+	if err != nil {
+		return nil, fmt.Errorf("构造请求失败: %w", err)
+	}
 
-	urls := buildActivateURLs()
-	if len(urls) == 0 {
+	cfgProviderMu.RLock()
+	primary := LicenseServerPrimary
+	secondary := LicenseServerSecondary
+	auth := BasicAuthHeader
+	cfgProviderMu.RUnlock()
+
+	cfg := endpointclient.Config{
+		Auth:    auth,
+		Timeout: 5 * time.Second,
+	}
+
+	if primary != "" {
+		cfg.Primary = appendURLParams(primary)
+	}
+	if secondary != "" {
+		cfg.Secondary = appendURLParams(secondary)
+	}
+
+	if cfg.Primary == "" {
 		return nil, fmt.Errorf("激活服务地址未配置")
 	}
 
-	var lastErr error
-	for _, url := range urls {
-		resp, err := postActivateJSON(url, body)
-		if err == nil {
-			return resp, nil
-		}
-		lastErr = err
+	resp, err := endpointclient.Call(cfg, body)
+	if err != nil {
+		return nil, err
 	}
-	return nil, fmt.Errorf("所有激活服务都不可达: %v", lastErr)
+	defer resp.Body.Close()
+
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	var ar ActivateResp
+	if err := json.Unmarshal(raw, &ar); err != nil {
+		return nil, fmt.Errorf("响应解析失败: %w (body=%s)", err, string(raw))
+	}
+	return &ar, nil
 }
 
 // buildActivateURLs 组装实际请求的 URL 列表 (主 + 备)。
 func buildActivateURLs() []string {
+	cfgProviderMu.RLock()
+	defer cfgProviderMu.RUnlock()
 	var urls []string
 	for _, base := range []string{LicenseServerPrimary, LicenseServerSecondary} {
 		if base == "" {
@@ -142,9 +166,13 @@ func appendURLParams(base string) string {
 //
 // 超时: 5 秒 (激活请求应该秒回, 5s 还连不上视为不可用)。
 func postActivateJSON(url string, body []byte) (*ActivateResp, error) {
+	cfgProviderMu.RLock()
+	auth := BasicAuthHeader
+	cfgProviderMu.RUnlock()
+
 	resp, err := endpointclient.Call(endpointclient.Config{
 		Primary: url,
-		Auth:    BasicAuthHeader,
+		Auth:    auth,
 		Timeout: 5 * time.Second,
 	}, body)
 	if err != nil {

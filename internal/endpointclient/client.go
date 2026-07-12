@@ -16,9 +16,9 @@
 //
 //	// 1. main.go 启动时注册
 //	endpointclient.Register("license_activate", endpointclient.Config{
-//	    Primary:   "http://66.0.34.199:9080/credit/httpInterface?...",
-//	    Secondary: "http://66.0.34.198:9080/credit/httpInterface?...",
-//	    Auth:      "anN5aDpqc3loQDEyMw==",
+//	    Primary:   "http://<primary-host>:<port>/credit/httpInterface?...",
+//	    Secondary: "http://<secondary-host>:<port>/credit/httpInterface?...",
+//	    Auth:      "<base64-auth-string>",
 //	    Timeout:   5 * time.Second,
 //	})
 //
@@ -55,6 +55,9 @@ type Config struct {
 // DefaultTimeout 没填 Timeout 时的默认值
 const DefaultTimeout = 5 * time.Second
 
+// sharedClient 复用连接池, 避免每次 Call 新建 http.Client
+var sharedClient = &http.Client{}
+
 // Call POST JSON body 到 cfg 配置的 endpoint, 主备自动切换。
 //
 // 行为:
@@ -87,7 +90,7 @@ func Call(cfg Config, body []byte) (*http.Response, error) {
 		if err == nil {
 			return resp, nil
 		}
-		errs = append(errs, fmt.Sprintf("[%d/%d] %s: %v", i+1, len(urls), u, err))
+		errs = append(errs, fmt.Sprintf("[%d/%d] %v", i+1, len(urls), err))
 	}
 	return nil, fmt.Errorf("endpointclient: 所有地址都失败: %s", strings.Join(errs, "; "))
 }
@@ -120,7 +123,7 @@ func doOne(url, auth string, body []byte, timeout time.Duration) (*http.Response
 		req.Header.Set("Authorization", "Basic "+auth)
 	}
 
-	client := &http.Client{Timeout: timeout}
+	client := sharedClient
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err

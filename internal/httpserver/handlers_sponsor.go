@@ -40,10 +40,11 @@ func (s *Server) handleSponsorLeaderboard(w http.ResponseWriter, r *http.Request
 	lr, err := sponsor.FetchLeaderboard()
 	if err != nil {
 		// 网络错 / JSON 解析失败 / 4xx 5xx (endpointclient 已归一化)
+		// 详细错误写审计日志, 不反显给前端 (避免泄露内网地址)
 		s.audit.Write("sponsor.leaderboard.error", "err", err.Error())
 		writeJSON(w, http.StatusBadGateway, map[string]any{
 			"ok":    false,
-			"error": "拉取排行榜失败: " + err.Error(),
+			"error": "排行榜服务暂时不可用, 请稍后重试",
 		})
 		return
 	}

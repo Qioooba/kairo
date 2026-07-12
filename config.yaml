@@ -29,7 +29,7 @@ app:
   compare_allowed_roots:
   - '*'
   # kairo: ''  # 开发者自用白名单（不随仓库提交），详见 docs/KAIRO-LICENSE.md
-  kairo: '111222'
+  kairo: ''
 internal_endpoints:
   # 激活服务（internal/license 调）
   license_activate:

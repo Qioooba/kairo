@@ -307,12 +307,10 @@ func TestServer_CallActivate_Fallback(t *testing.T) {
 	}
 }
 
-// TestServer_DefaultsHardcoded 验证源码默认值就是真实生产配置 (不是 PLACEHOLDER)
+// TestServer_DefaultsHardcoded 验证源码默认值为空 (生产配置由 config.yaml 注入)
 //
-// 这是用户要求"在代码里写死"的关键验证:
-//   - 默认值直接指向 66.0.34.199/66.0.34.198 真实地址
-//   - 不需要 ldflags 注入就能跑
-//   - Basic auth / URL 参数都是真实值
+// 安全修复: 不再将生产凭据硬编码到源码, 改为通过 config.yaml 的
+// internal_endpoints.license_activate 注入。
 func TestServer_DefaultsHardcoded(t *testing.T) {
 	restoreLicenseVars(t)
 
@@ -321,9 +319,9 @@ func TestServer_DefaultsHardcoded(t *testing.T) {
 		got  string
 		want string
 	}{
-		{"主地址", LicenseServerPrimary, "http://66.0.34.199:9080/credit/httpInterface"},
-		{"备地址", LicenseServerSecondary, "http://66.0.34.198:9080/credit/httpInterface"},
-		{"Basic auth", BasicAuthHeader, "anN5aDpqc3loQDEyMw=="},
+		{"主地址", LicenseServerPrimary, ""},
+		{"备地址", LicenseServerSecondary, ""},
+		{"Basic auth", BasicAuthHeader, ""},
 		{"URLParamK1", URLParamK1, "channelID"},
 		{"URLParamV1", URLParamV1, "PC"},
 		{"URLParamK2", URLParamK2, "serviceID"},
@@ -333,7 +331,7 @@ func TestServer_DefaultsHardcoded(t *testing.T) {
 	}
 	for _, c := range checks {
 		if c.got != c.want {
-			t.Errorf("%s 默认值应硬编码为 %q, got=%q", c.name, c.want, c.got)
+			t.Errorf("%s 默认值应为 %q, got=%q", c.name, c.want, c.got)
 		}
 	}
 
@@ -342,7 +340,7 @@ func TestServer_DefaultsHardcoded(t *testing.T) {
 		URLParamK1, URLParamV1, URLParamK2, URLParamV2, URLParamK3, URLParamV3}
 	for i, v := range allVars {
 		if strings.Contains(v, "PLACEHOLDER") {
-			t.Errorf("var[%d]=%q 含 PLACEHOLDER, 应硬编码为真实值", i, v)
+			t.Errorf("var[%d]=%q 含 PLACEHOLDER, 应为空或真实值", i, v)
 		}
 	}
 }

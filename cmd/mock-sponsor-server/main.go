@@ -19,6 +19,7 @@ import (
 	"flag"
 	"log"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -76,7 +77,7 @@ func main() {
 	flag.Parse()
 
 	adminAuthToken = *authToken
-	log.Printf("mock-sponsor-server 启动: addr=%s auth=%s 预置 %d 条 sponsor 数据", *addr, *authToken, len(entries))
+	log.Printf("mock-sponsor-server 启动: addr=%s auth=<masked> 预置 %d 条 sponsor 数据", *addr, len(entries))
 	for _, e := range entries {
 		log.Printf("  - %s (cotti=%d lucky=%d milktea=%d total=%d)", e.RealName, e.Cotti, e.Lucky, e.Milktea, e.Total)
 	}
@@ -97,6 +98,12 @@ func main() {
 
 // handleLeaderboard 模拟 Java 端, 按 total 倒序排, 最多返 50 条
 func handleLeaderboard(w http.ResponseWriter, r *http.Request) {
+	// 0. 校验 HTTP 方法 (生产 Java 端只接受 POST)
+	if r.Method != http.MethodPost {
+		writeJSON(w, 405, map[string]any{"ok": false, "error": "仅支持 POST"})
+		return
+	}
+
 	// 1. Basic auth 校验
 	auth := r.Header.Get("Authorization")
 	if !strings.HasPrefix(auth, "Basic ") {
@@ -110,7 +117,7 @@ func handleLeaderboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 2. 校验 serviceID (生产 Java 端会按 serviceID 反射, mock 简单校验一下)
-	if !strings.Contains(r.URL.RawQuery, "serviceID=KairoSponsorLeaderboardAction") {
+	if r.URL.Query().Get("serviceID") != "KairoSponsorLeaderboardAction" {
 		writeJSON(w, 200, map[string]any{
 			"ok":    false,
 			"error": "serviceID 不是 KairoSponsorLeaderboardAction, 走错 Action 了",
@@ -153,11 +160,12 @@ func handleLeaderboard(w http.ResponseWriter, r *http.Request) {
 
 // sortEntriesByTotalDesc 按 total 倒序 (同分时按 id 升序保证稳定)
 func sortEntriesByTotalDesc(s []sponsorEntry) {
-	for i := 1; i < len(s); i++ {
-		for j := i; j > 0 && (s[j].Total > s[j-1].Total || (s[j].Total == s[j-1].Total && s[j].ID < s[j-1].ID)); j-- {
-			s[j], s[j-1] = s[j-1], s[j]
+	sort.Slice(s, func(i, j int) bool {
+		if s[i].Total != s[j].Total {
+			return s[i].Total > s[j].Total
 		}
-	}
+		return s[i].ID < s[j].ID
+	})
 }
 
 // handleAdminList 查看所有 sponsor 数据

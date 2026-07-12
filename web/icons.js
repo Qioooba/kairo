@@ -242,7 +242,9 @@
   icons.openerIconHTML = openerIconHTML;
 
   // escapeHTML 跟 core.js 的实现保持一致（这里 inline 一份避免循环依赖）。
+  // 注意：修改时务必与 core.js 的 escapeHtml 保持同步（含 null 守卫）。
   function escapeHTML(s) {
+    if (s == null) return '';
     return String(s)
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')

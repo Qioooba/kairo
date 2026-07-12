@@ -57,19 +57,29 @@ func (s *Server) handleLicenseActivate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 记请求本身 (带 code, 跟 Java 端 K_AUDIT 风格一致, 激活码算业务凭据不算密码)
-	s.audit.Write("license.activate.request", "code", req.Code)
+	// 记请求本身 (激活码做脱敏, 只保留前4后2)
+	maskedCode := maskCode(req.Code)
+	s.audit.Write("license.activate.request", "code", maskedCode)
 
 	if err := license.Activate(req.Code); err != nil {
-		// 失败: 记失败原因 (网络错 / 服务端拒绝), 返回 200 + {ok:false, error:...}
-		s.audit.Write("license.activate.fail", "code", req.Code, "err", err.Error())
+		// 失败: 详细错误写审计日志, 前端只显示通用提示 (避免泄露内网地址)
+		s.audit.Write("license.activate.fail", "code", maskedCode, "err", err.Error())
 		writeJSON(w, 200, map[string]any{
 			"ok":    false,
-			"error": err.Error(),
+			"error": "激活失败, 请检查激活码是否正确或稍后重试",
 		})
 		return
 	}
 
-	s.audit.Write("license.activate.ok", "code", req.Code)
+	s.audit.Write("license.activate.ok", "code", maskedCode)
 	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
+// maskCode 脱敏激活码, 保留前4后2, 中间用 **** 代替。
+// 短于 6 位的激活码全部用 **** 代替。
+func maskCode(code string) string {
+	if len(code) <= 6 {
+		return "****"
+	}
+	return code[:4] + "****" + code[len(code)-2:]
 }

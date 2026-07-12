@@ -198,9 +198,18 @@
       var card = el('div', {
         class: 'sponsor-item',
         'data-brand': brand.id,
+        tabindex: '0',
+        role: 'button',
         style: 'cursor:pointer; padding:12px 8px 6px; min-width:130px; ' +
                'text-align:center; transition:transform .2s ease; ' +
-               'flex:0 0 auto;'
+               'flex:0 0 auto;',
+        onkeydown: function (e) {
+          // Enter / Space 触发选中（键盘可访问性 —— M-5）
+          if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
+            e.preventDefault();
+            selectBrand(brand);
+          }
+        }
       }, [
         // logo 区域：高度 96px 居中展示。所有图片高度统一，宽度按比例自适应
         el('div', {
@@ -212,7 +221,7 @@
             alt: brand.name,
             // 瑞幸原版白鹿在浅色主题下需要染成深色（在 web/style.css 里加 :root[data-theme="light"] 选择器）
             style: 'max-height:96px; max-width:140px; width:auto; height:auto;',
-            onerror: function () { this.style.display = 'none'; }
+            onerror: function () { this.style.display = 'none'; var span = document.createElement('span'); span.textContent = this.alt || ''; span.style.cssText = 'font-size:14px;color:#999;'; this.parentNode.appendChild(span); }
           })
         ]),
         // 品牌名
@@ -507,10 +516,12 @@
           } else if (idx === 2) {
             return el('img', { src: '/static/img/sponsor/trophy-bronze.svg', alt: '🥉', style: 'width:32px; height:32px; flex-shrink:0;' });
           }
+          var rankStr = String(idx + 1);
+          rankStr = rankStr.length < 2 ? '0' + rankStr : rankStr;
           return el('span', {
             style: 'width:32px; text-align:center; font-size:14px; font-weight:800; color:var(--text-mute); ' +
                    'font-family:ui-monospace,monospace; flex-shrink:0; letter-spacing:0.5px;',
-            text: String(idx + 1).padStart(2, '0')
+            text: rankStr
           });
         }
 

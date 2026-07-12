@@ -68,7 +68,7 @@ async function getLongTasks(page) {
 }
 
 async function getMemory(page) {
-  if (!page.evaluate(() => performance.memory)) return null;
+  if (!await page.evaluate(() => performance.memory)) return null;
   return await page.evaluate(() => ({
     usedJSHeapSize: performance.memory.usedJSHeapSize,
     totalJSHeapSize: performance.memory.totalJSHeapSize,
@@ -142,8 +142,9 @@ async function runScenario(browser, theme) {
     const cards = document.querySelectorAll('#sec-history [id^="version-"]');
     cards.forEach(c => {
       try {
-        // 模拟点击 header 展开
-        const header = c.parentElement && c.parentElement.querySelector('div[onclick]');
+        // 模拟点击 header 展开（about.js 用 addEventListener 绑定 onclick，不是 HTML 属性，
+        // 所以不能用 div[onclick] 选择器，改用 header 上的 class）
+        const header = c.parentElement && c.parentElement.querySelector('.changelog-version-header');
         if (header) { header.click(); count++; }
       } catch (e) { errors++; }
     });

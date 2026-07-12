@@ -162,20 +162,40 @@
     ta.style.height = h + 'px';
     ta.style.overflowY = ta.scrollHeight > max ? 'auto' : 'hidden';
   }
+  // 全局 resize 监听：只注册一次，迭代所有已注册的 textarea
+  // （避免每个 textarea 都挂一个 window resize 监听导致内存泄漏 —— M-2 修复）
+  var _autoResizeTextareas = new Set();
+  var _autoResizeInited = false;
+  function _initGlobalAutoResize() {
+    if (_autoResizeInited) return;
+    _autoResizeInited = true;
+    window.addEventListener('resize', function () {
+      _autoResizeTextareas.forEach(function (ta) {
+        // 顺带清理已从 DOM 移除的 textarea，避免 Set 无限增长
+        if (ta.isConnected) {
+          autoResizeTextarea(ta);
+        } else {
+          _autoResizeTextareas.delete(ta);
+        }
+      });
+    }, { passive: true });
+  }
   // 挂监听：oninput + 下一帧 + 监听外部 value 变化（如模板恢复直接赋值）
   function bindAutoResize(ta) {
     if (!ta) return;
+    _initGlobalAutoResize();
+    _autoResizeTextareas.add(ta);
     ta.addEventListener('input', () => autoResizeTextarea(ta));
     // 下一帧触发（确保 DOM 已挂载、scrollHeight 准）
     requestAnimationFrame(() => autoResizeTextarea(ta));
     // 监听 value attribute 变化（脚本赋值 ta.value = ... 不触发 input 事件）
+    // __mavis_observed 守卫防止同一 textarea 重复挂多个 observer（M-3：限制 observer 数量）
     if (typeof MutationObserver === 'function' && !ta.__mavis_observed) {
       ta.__mavis_observed = true;
       const obs = new MutationObserver(() => autoResizeTextarea(ta));
       obs.observe(ta, { attributes: true, attributeFilter: ['value'] });
     }
-    // 窗口大小变化时重新评估 max
-    window.addEventListener('resize', () => autoResizeTextarea(ta), { passive: true });
+    // window resize 由全局监听统一处理（见 _initGlobalAutoResize），不再逐 textarea 挂监听
   }
 
   // ---------- 左侧 Sidebar ----------
@@ -449,7 +469,8 @@
 
     // Warnings / ParseError
     if (p.parse_error) {
-      card.appendChild(el('div', { class: 'svc-warn', text: '解析失败：' + p.parse_error }));
+      console.warn('parse error:', p.parse_error);
+      card.appendChild(el('div', { class: 'svc-warn', text: '解析失败, 请检查输入格式' }));
     }
     if (p.warnings && p.warnings.length > 0) {
       const w = el('div', { class: 'svc-warn' });
@@ -890,7 +911,8 @@
         }
       }
     } catch (err) {
-      toast('导入失败：' + (err.message || err), 'err');
+      console.warn('import failed:', err.message || err);
+      toast('导入失败, 请检查文件格式', 'err');
     }
     e.target.value = '';
   }
@@ -1038,6 +1060,7 @@
       operation: state.currentOperation ? state.currentOperation.name : '',
     };
 
+    _sendRequestInFlight = true;
     try {
       toast('发送中...', 'info');
       const r = await postJSON('/api/soap/send', req);
@@ -1050,7 +1073,11 @@
         toast('请求完成', state.response.ok ? 'ok' : 'warn');
       }
     } catch (e) {
-      toast('发送失败：' + (e.message || e), 'err');
+      // 后端错误细节不直接暴露给用户（M-6），仅记到控制台
+      console.warn('send failed:', e.message || e);
+      toast('发送失败, 请稍后重试', 'err');
+    } finally {
+      _sendRequestInFlight = false;
     }
   }
 

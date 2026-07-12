@@ -621,7 +621,7 @@ func (c *Config) Defaults() {
 		c.App.UploadMaxSize = &twoGB
 	}
 
-	// v0.14: internal_endpoints.Timeout 默认 5s (0 = 用 endpointclient.DefaultTimeout)
+	// v0.14: internal_endpoints.Timeout 默认值 (license=5s, sponsor=10s)
 	if c.InternalEndpoints.LicenseActivate.Timeout == 0 {
 		c.InternalEndpoints.LicenseActivate.Timeout = 5 * time.Second
 	}
@@ -708,7 +708,7 @@ func (c *Config) Validate() error {
 
 	// v0.14: internal_endpoints 校验
 	// 配了的 primary/secondary 必须 http:// 或 https:// 开头
-	// 额外校验: primary != secondary (避免静默重复打两次), timeout >= 0 (负数会被 endpointclient 静默兜底)
+	// 额外校验: primary != secondary (避免静默重复打两次), timeout >= 0
 	for name, ep := range map[string]EndpointConfig{
 		"internal_endpoints.license_activate":    c.InternalEndpoints.LicenseActivate,
 		"internal_endpoints.sponsor_leaderboard": c.InternalEndpoints.SponsorLeaderboard,
@@ -729,7 +729,7 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("%s.primary 与 secondary 不能相同 (%s)", name, ep.Primary)
 		}
 		if ep.Timeout < 0 {
-			return fmt.Errorf("%s.timeout %v 不能为负数 (0 走 endpointclient 默认 5s)", name, ep.Timeout)
+			return fmt.Errorf("%s.timeout %v 不能为负数", name, ep.Timeout)
 		}
 	}
 

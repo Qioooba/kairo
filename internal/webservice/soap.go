@@ -44,9 +44,10 @@ func GenerateEnvelope(op Operation, soapVersion string) string {
 	b.WriteString("  <soapenv:Body>\n")
 
 	// operation 元素：document/literal 用 web 前缀；rpc 用 web 前缀同样可用。
-	opTag := "web:" + op.Name
+	opName := sanitizeXMLElementName(op.Name)
+	opTag := "web:" + opName
 	if op.Namespace == "" {
-		opTag = op.Name
+		opTag = opName
 	}
 	b.WriteString("    <" + opTag + ">\n")
 	writeParamNodes(&b, op.InputParams, "      ")
@@ -61,15 +62,36 @@ func GenerateEnvelope(op Operation, soapVersion string) string {
 // 也不强制用户点"应用"按钮；用户想填什么自己在请求体 XML 里写。
 func writeParamNodes(b *strings.Builder, params []Param, indent string) {
 	for _, p := range params {
+		name := sanitizeXMLElementName(p.Name)
 		if len(p.Children) > 0 {
-			b.WriteString(indent + "<" + p.Name + ">\n")
+			b.WriteString(indent + "<" + name + ">\n")
 			writeParamNodes(b, p.Children, indent+"  ")
-			b.WriteString(indent + "</" + p.Name + ">\n")
+			b.WriteString(indent + "</" + name + ">\n")
 			continue
 		}
 		// 叶子：空标签（自闭合形式省字节，但保留成对标签方便用户点开填值）
-		b.WriteString(indent + "<" + p.Name + "></" + p.Name + ">\n")
+		b.WriteString(indent + "<" + name + "></" + name + ">\n")
 	}
+}
+
+// sanitizeXMLElementName 过滤 XML 元素名中的危险字符, 防止 XML 注入。
+// 移除 < > & " ' / 和空格等不能出现在 XML 元素名中的字符。
+func sanitizeXMLElementName(name string) string {
+	if name == "" {
+		return "element"
+	}
+	var b strings.Builder
+	for _, r := range name {
+		if r == '<' || r == '>' || r == '&' || r == '"' || r == '\'' || r == '/' || r == ' ' || r == '\t' || r == '\n' || r == '\r' {
+			continue
+		}
+		b.WriteRune(r)
+	}
+	result := b.String()
+	if result == "" {
+		return "element"
+	}
+	return result
 }
 
 // escapeXMLAttr 转义属性值里的特殊字符。
@@ -79,6 +101,7 @@ func escapeXMLAttr(s string) string {
 		"<", "&lt;",
 		">", "&gt;",
 		`"`, "&quot;",
+		`'`, "&#39;",
 	)
 	return r.Replace(s)
 }
@@ -129,9 +152,25 @@ func SuggestLogKeywords(operation, soapAction, requestBody string) []string {
 // 容错：跳过属性、跳过自闭合。
 func extractTagValue(origXML, lowerXML, tag string) string {
 	open := "<" + tag
-	idx := strings.Index(lowerXML, open)
-	if idx < 0 {
-		return ""
+	// 循环搜索, 跳过前缀匹配 (如 serialno 匹配到 serialnumber)
+	searchFrom := 0
+	var idx int
+	for {
+		relIdx := strings.Index(lowerXML[searchFrom:], open)
+		if relIdx < 0 {
+			return ""
+		}
+		idx = searchFrom + relIdx
+		// 边界守卫: 标签名后必须是 >, /, 空格, \t, \n, \r
+		endPos := idx + len(open)
+		if endPos >= len(lowerXML) {
+			return ""
+		}
+		next := lowerXML[endPos]
+		if next == '>' || next == '/' || next == ' ' || next == '\t' || next == '\n' || next == '\r' {
+			break
+		}
+		searchFrom = idx + 1
 	}
 	// 跳过到 ">" 结束开始标签
 	gt := strings.IndexByte(lowerXML[idx:], '>')
@@ -143,7 +182,7 @@ func extractTagValue(origXML, lowerXML, tag string) string {
 	if start-2 >= idx && lowerXML[start-2] == '/' {
 		return ""
 	}
-	close := "</" + tag
+	close := "</" + tag + ">"
 	cidx := strings.Index(lowerXML[start:], close)
 	if cidx < 0 {
 		return ""
@@ -402,7 +441,7 @@ func ValidateXML(input string) error {
 	}
 	dec := xml.NewDecoder(strings.NewReader(input))
 	dec.Strict = true
-	var stack []string
+	var stack []xml.Name
 	for {
 		tok, err := dec.Token()
 		if err != nil {
@@ -413,20 +452,20 @@ func ValidateXML(input string) error {
 		}
 		switch t := tok.(type) {
 		case xml.StartElement:
-			stack = append(stack, t.Name.Local)
+			stack = append(stack, t.Name)
 		case xml.EndElement:
 			if len(stack) == 0 {
 				return fmt.Errorf("XML 非法: 多余的结束标签 </%s>", t.Name.Local)
 			}
 			top := stack[len(stack)-1]
-			if top != t.Name.Local {
-				return fmt.Errorf("XML 非法: 标签不匹配，期望 </%s> 实际 </%s>", top, t.Name.Local)
+			if top != t.Name {
+				return fmt.Errorf("XML 非法: 标签不匹配，期望 </%s> 实际 </%s>", top.Local, t.Name.Local)
 			}
 			stack = stack[:len(stack)-1]
 		}
 	}
 	if len(stack) > 0 {
-		return fmt.Errorf("XML 非法: 未闭合的标签 <%s>", stack[len(stack)-1])
+		return fmt.Errorf("XML 非法: 未闭合的标签 <%s>", stack[len(stack)-1].Local)
 	}
 	return nil
 }
