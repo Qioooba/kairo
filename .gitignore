@@ -80,6 +80,7 @@ screenshot-*.js
 crash.log
 /doubao-toolbox
 /mock-license-server
+/mock-sponsor-server
 /bugfix-*-shots/
 /*.jpg.png
 /web/vendor/xterm-backup/
@@ -110,6 +111,9 @@ crash.log
 /verify-badge-contrast*.json
 /verify-theme-*.png
 /diagnose-ssh-autoinput.js
+/scripts/theme-screenshot-review.js
+/test-v0.14-about-out/
+/test-v0.14-about-out-archive/
 
 # ===== docs/qa 临时 QA 脚本/报告 =====
 /docs/qa/diag-*.js
@@ -157,6 +161,7 @@ crash.log
 /tests/test-results/
 /v0.13-out/
 /v0.13-xianxia-out/
+/v0.14-*-out/
 /test-*/
 /test-output/
 /config-debug.yaml
