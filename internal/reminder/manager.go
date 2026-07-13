@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -168,28 +169,52 @@ func (m *Manager) Add(in Reminder) (Reminder, error) {
 
 // Update 全量替换。ID / CreatedAt 不变；UpdatedAt 自动更新；Enabled 保留原值。
 func (m *Manager) Update(id string, in Reminder) (Reminder, error) {
-	if err := in.Validate(); err != nil {
-		return Reminder{}, err
-	}
 	m.mu.Lock()
 	old, ok := m.items[id]
 	if !ok {
 		m.mu.Unlock()
 		return Reminder{}, fmt.Errorf("%w: %s", ErrNotFound, id)
 	}
+	if in.Type == "" {
+		in.Type = old.Type
+	}
+	if strings.TrimSpace(in.Content) == "" {
+		in.Content = old.Content
+	}
+	if in.Type == TypeOnce && strings.TrimSpace(in.At) == "" {
+		in.At = old.At
+	}
+	if (in.Type == TypeWeekly || in.Type == TypeMonthly) && strings.TrimSpace(in.Time) == "" {
+		in.Time = old.Time
+	}
+	if in.Type == TypeWeekly && len(in.Weekdays) == 0 {
+		in.Weekdays = old.Weekdays
+	}
+	if in.Type == TypeMonthly && in.DayOfMonth == 0 {
+		in.DayOfMonth = old.DayOfMonth
+	}
+	m.mu.Unlock()
+	if err := in.Validate(); err != nil {
+		return Reminder{}, err
+	}
+	m.mu.Lock()
+	old2, ok := m.items[id]
+	if !ok {
+		m.mu.Unlock()
+		return Reminder{}, fmt.Errorf("%w: %s", ErrNotFound, id)
+	}
 	in.ID = id
-	in.CreatedAt = old.CreatedAt
+	in.CreatedAt = old2.CreatedAt
 	in.UpdatedAt = m.now().Format(time.RFC3339)
-	in.LastFiredAt = old.LastFiredAt
-	in.FiredCount = old.FiredCount
-	in.Enabled = old.Enabled
+	in.LastFiredAt = old2.LastFiredAt
+	in.FiredCount = old2.FiredCount
+	in.Enabled = old2.Enabled
 	m.items[id] = &in
 	m.mu.Unlock()
 
 	if err := m.persist(); err != nil {
-		// 回滚
 		m.mu.Lock()
-		m.items[id] = old
+		m.items[id] = old2
 		m.mu.Unlock()
 		return Reminder{}, err
 	}

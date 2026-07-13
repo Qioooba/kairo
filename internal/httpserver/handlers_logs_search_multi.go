@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -504,6 +505,26 @@ func (s *Server) runOneServerSearchWithScope(
 	// B1：按文件 mtime 过滤命中（非 selected 模式，selected 模式无 mtime 信息）
 	if scope != "selected" && len(hits) > 0 {
 		hits = logquery.FilterHitsByTimeWindow(hits, files, tw)
+	}
+	// 排序：文件按 mtime 降序，同文件内按行号降序（与 ParseContextEnrichedOutput 一致）
+	if len(hits) > 0 {
+		byName := make(map[string]logquery.FileEntry, len(files))
+		for _, f := range files {
+			byName[f.Name] = f
+		}
+		sort.SliceStable(hits, func(i, j int) bool {
+			fi, oki := byName[hits[i].File]
+			fj, okj := byName[hits[j].File]
+			if oki && okj {
+				ti, tj := fi.ModTimeParsed(), fj.ModTimeParsed()
+				if !ti.IsZero() && !tj.IsZero() {
+					if !ti.Equal(tj) {
+						return ti.After(tj)
+					}
+				}
+			}
+			return hits[i].LineNo > hits[j].LineNo
+		})
 	}
 	// 上下文行：contextN > 0 时为每个匹配行获取前后 N 行
 	// REVIEW-rc5 #6：失败不再静默回退，把 err 信息塞到 result.Error（前端可见），
