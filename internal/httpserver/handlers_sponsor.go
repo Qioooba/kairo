@@ -9,18 +9,52 @@
 //                                    → Java 端 /credit/httpInterface
 //                                    → 返前 50 名 (按 total 倒序, 含 rank)
 //
+// 缓存:
+//   - 5 分钟内存缓存 (sponsorCache), 减少对内部 Java 服务的压力
+//   - 缓存命中直接返回, 不打后端
+//   - 缓存过期/失效时, 成功则更新缓存; 失败但有陈旧缓存时返回陈旧数据 (优雅降级)
+//   - 线程安全 (sponsorCacheMu)
+//
 // 失败语义 (跟前端对齐, 不兜底):
-//   - 网络错 / Java 端 4xx 5xx → handler 返 502 + {ok:false, error:"..."}
-//   - Java 端业务失败 (OK=false) → handler 返 200 + {ok:false, error:"..."}
+//   - 网络错 / Java 端 4xx 5xx 且无缓存 → handler 返 502 + {ok:false, error:"..."}
+//   - Java 端业务失败 (OK=false) 且无缓存 → handler 返 200 + {ok:false, error:"..."}
 //   - 成功 → handler 返 200 + {ok:true, entries:[...]}
 package httpserver
 
 import (
 	"errors"
 	"net/http"
+	"sync"
+	"time"
 
 	"kairo/internal/sponsor"
 )
+
+const sponsorCacheTTL = 5 * time.Minute
+
+var (
+	sponsorCacheMu      sync.RWMutex
+	sponsorCacheEntries []sponsor.Entry
+	sponsorCacheTime    time.Time
+	sponsorCacheOK      bool
+)
+
+func getSponsorCache() ([]sponsor.Entry, bool, bool) {
+	sponsorCacheMu.RLock()
+	defer sponsorCacheMu.RUnlock()
+	if sponsorCacheTime.IsZero() || time.Since(sponsorCacheTime) > sponsorCacheTTL {
+		return nil, false, false
+	}
+	return sponsorCacheEntries, true, sponsorCacheOK
+}
+
+func setSponsorCache(entries []sponsor.Entry, ok bool) {
+	sponsorCacheMu.Lock()
+	defer sponsorCacheMu.Unlock()
+	sponsorCacheEntries = entries
+	sponsorCacheOK = ok
+	sponsorCacheTime = time.Now()
+}
 
 // handleSponsorLeaderboard GET /api/sponsor/leaderboard
 //
@@ -37,11 +71,43 @@ func (s *Server) handleSponsorLeaderboard(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	if entries, fresh, ok := getSponsorCache(); fresh {
+		s.audit.Write("sponsor.leaderboard.cache_hit", "count", len(entries))
+		if ok {
+			writeJSON(w, http.StatusOK, map[string]any{
+				"ok":      true,
+				"entries": entries,
+				"cached":  true,
+			})
+		} else {
+			writeJSON(w, http.StatusOK, map[string]any{
+				"ok":    false,
+				"error": "排行榜服务暂时不可用, 请稍后重试",
+				"cached": true,
+			})
+		}
+		return
+	}
+
 	lr, err := sponsor.FetchLeaderboard()
 	if err != nil {
-		// 网络错 / JSON 解析失败 / 4xx 5xx (endpointclient 已归一化)
-		// 详细错误写审计日志, 不反显给前端 (避免泄露内网地址)
 		s.audit.Write("sponsor.leaderboard.error", "err", err.Error())
+
+		sponsorCacheMu.RLock()
+		hasStale := !sponsorCacheTime.IsZero() && sponsorCacheOK && len(sponsorCacheEntries) > 0
+		staleEntries := sponsorCacheEntries
+		sponsorCacheMu.RUnlock()
+
+		if hasStale {
+			s.audit.Write("sponsor.leaderboard.stale", "count", len(staleEntries))
+			writeJSON(w, http.StatusOK, map[string]any{
+				"ok":      true,
+				"entries": staleEntries,
+				"stale":   true,
+			})
+			return
+		}
+
 		writeJSON(w, http.StatusBadGateway, map[string]any{
 			"ok":    false,
 			"error": "排行榜服务暂时不可用, 请稍后重试",
@@ -50,8 +116,23 @@ func (s *Server) handleSponsorLeaderboard(w http.ResponseWriter, r *http.Request
 	}
 
 	if !lr.OK {
-		// Java 端业务失败 (比如 K_SPONSOR 表锁住)
 		s.audit.Write("sponsor.leaderboard.fail", "error", lr.Error)
+
+		sponsorCacheMu.RLock()
+		hasStale := !sponsorCacheTime.IsZero() && sponsorCacheOK && len(sponsorCacheEntries) > 0
+		staleEntries := sponsorCacheEntries
+		sponsorCacheMu.RUnlock()
+
+		if hasStale {
+			s.audit.Write("sponsor.leaderboard.stale", "count", len(staleEntries))
+			writeJSON(w, http.StatusOK, map[string]any{
+				"ok":      true,
+				"entries": staleEntries,
+				"stale":   true,
+			})
+			return
+		}
+
 		writeJSON(w, http.StatusOK, map[string]any{
 			"ok":    false,
 			"error": lr.Error,
@@ -59,7 +140,8 @@ func (s *Server) handleSponsorLeaderboard(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// 成功 - 返 entries 给前端
+	setSponsorCache(lr.Entries, true)
+
 	s.audit.Write("sponsor.leaderboard.ok", "count", len(lr.Entries))
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":      true,

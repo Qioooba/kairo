@@ -22,7 +22,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -130,34 +129,10 @@ func (s *Server) handleWSDLImportURL(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpReq.Header.Set("User-Agent", "kairo-wsdl/0.1")
-	// SSRF 防护：只允许访问 loopback 和内网私网地址，禁止公网/云元数据地址
-	dialer := &net.Dialer{Timeout: 10 * time.Second}
+	// WSDL URL 拉取：不做 IP 段限制，任意地址都可导入（用户主动操作，由其自行负责目标合法性）。
 	client := &http.Client{
-		Timeout: 30 * time.Second,
-		Transport: &http.Transport{
-			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-				host, _, err := net.SplitHostPort(addr)
-				if err != nil {
-					return nil, fmt.Errorf("地址解析失败: %w", err)
-				}
-				ip := net.ParseIP(host)
-				if ip == nil {
-					// 域名情况：先解析再检查
-					addrs, err := net.DefaultResolver.LookupIPAddr(ctx, host)
-					if err != nil || len(addrs) == 0 {
-						return nil, fmt.Errorf("域名解析失败: %w", err)
-					}
-					ip = addrs[0].IP
-				}
-				if !ip.IsLoopback() && !ip.IsPrivate() {
-					return nil, errors.New("安全限制：WSDL URL 仅允许本地/内网地址，公网地址请先下载到本地再导入")
-				}
-				return dialer.DialContext(ctx, network, addr)
-			},
-			TLSClientConfig:       sharedWsTLSConfig,
-			DisableCompression:    false,
-			ResponseHeaderTimeout: 25 * time.Second,
-		},
+		Timeout:   30 * time.Second,
+		Transport: &http.Transport{TLSClientConfig: sharedWsTLSConfig, ResponseHeaderTimeout: 25 * time.Second},
 	}
 	resp, err := client.Do(httpReq)
 	if err != nil {
