@@ -28,11 +28,16 @@ app:
   download_max_count: 1000
   compare_allowed_roots:
   - '*'
-  # kairo: ''  # 开发者自用白名单（不随仓库提交），详见 docs/KAIRO-LICENSE.md
-  kairo: ''
-  # 注意: 激活服务 / 排行榜的地址和密钥故意不放在 config.yaml —— 它们硬编码在
-  # internal/license 和 internal/sponsor 的源码里, 不让用户看到/修改。
-  # 详见这两个包的 var 注释。
+  kairo: '111222'
+  # 注意: 激活服务 / 排行榜的地址和密钥默认硬编码在源码里。
+  # 本地测试时可通过 internal_endpoints 覆盖 (不随发布包提交给用户)。
+  # 详见 internal/license 和 internal/sponsor 包的 var 注释。
+
+internal_endpoints:
+  sponsor_leaderboard:
+    primary: "http://127.0.0.1:18093/credit/httpInterface"
+    auth: "TEST_TOKEN_123"
+    timeout: 10s
 
 systems:
 - name: 信贷应用服务器

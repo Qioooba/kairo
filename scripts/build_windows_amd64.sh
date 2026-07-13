@@ -65,10 +65,14 @@ go build "${GO_MOD_FLAGS[@]}" -trimpath -ldflags "${LDFLAGS}" -o "${OUT_DIR}/Kai
 # 用 ^\s*kairo: 匹配所有非注释的 kairo 行（不管值的格式：引号、点号、空值等），
 # 注释行（# kairo: ...）以 # 开头不会被误伤。
 if [[ -f config.yaml ]]; then
-  grep -v -E "^\s*kairo:" config.yaml > "${OUT_DIR}/config.yaml"
+  grep -v -E "^\s*kairo:" config.yaml \
+    | awk 'BEGIN{skip=0} /^internal_endpoints:[[:space:]]*$/ {skip=1; next} skip==1 && /^[a-zA-Z_]/{skip=0} skip==0 {print}' \
+    > "${OUT_DIR}/config.yaml"
 elif [[ -f config.yaml.production.example ]]; then
   echo ">> 警告：未找到 config.yaml，使用 config.yaml.production.example 复制为 config.yaml"
-  grep -v -E "^\s*kairo:" config.yaml.production.example > "${OUT_DIR}/config.yaml"
+  grep -v -E "^\s*kairo:" config.yaml.production.example \
+    | awk 'BEGIN{skip=0} /^internal_endpoints:[[:space:]]*$/ {skip=1; next} skip==1 && /^[a-zA-Z_]/{skip=0} skip==0 {print}' \
+    > "${OUT_DIR}/config.yaml"
 else
   echo "错误：找不到 config.yaml 或 config.yaml.production.example" >&2
   exit 1
