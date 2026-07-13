@@ -108,9 +108,9 @@ func TestFetchLeaderboard_Success(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"ok": true,
 			"entries": []map[string]any{
-				{"rank": 1, "real_name": "张三", "cotti": 4, "lucky": 4, "milktea": 1, "total": 9, "date": "07-09"},
-				{"rank": 2, "real_name": "李四", "cotti": 3, "lucky": 4, "milktea": 1, "total": 8, "date": "07-08"},
-				{"rank": 3, "real_name": "王五", "cotti": 0, "lucky": 5, "milktea": 0, "total": 5, "date": "07-07"},
+				{"rank": 1, "real_name": "张三", "cotti": 4, "lucky": 4, "milktea": 1, "total": 9, "date": "07-09", "updated_at": "2026-07-13 11:40:30.0"},
+				{"rank": 2, "real_name": "李四", "cotti": 3, "lucky": 4, "milktea": 1, "total": 8, "date": "07-08", "updated_at": "2026-07-13 11:40:30.0"},
+				{"rank": 3, "real_name": "王五", "cotti": 0, "lucky": 5, "milktea": 0, "total": 5, "date": "07-07", "updated_at": "2026-07-13 11:40:30.0"},
 			},
 		})
 	}))
@@ -139,6 +139,11 @@ func TestFetchLeaderboard_Success(t *testing.T) {
 	}
 	if lr.Entries[2].Milktea != 0 {
 		t.Errorf("第 3 名 milktea 应为 0, got=%d", lr.Entries[2].Milktea)
+	}
+	// v0.16: 验证 updated_at 是真实生产 Java 端格式 (空格分隔 + ".0" 毫秒后缀)
+	// 这个 case 之前没有 updated_at 字段, 所以单元测试一直过, 但生产炸 —— 教训
+	if lr.Entries[0].UpdatedAt != "2026-07-13 11:40:30.0" {
+		t.Errorf("updated_at 应透传为原始 string, got=%q", lr.Entries[0].UpdatedAt)
 	}
 }
 
@@ -309,4 +314,62 @@ func TestFetchLeaderboard_BodyIsEmpty(t *testing.T) {
 	if gotBody != "" && gotBody != "{}" {
 		t.Errorf("请求体应为空或 {}, got=%q", gotBody)
 	}
+}
+
+// TestFetchLeaderboard_RealJavaTimeFormat v0.16 加。
+//
+// 复现 v0.15 之前生产炸的 bug: Java 端 updated_at 返 "2026-07-13 11:40:30.0"
+// (Oracle/MySQL DATETIME 文本, 空格分隔 + ".0" 毫秒后缀), 跟 Go encoding/json
+// 默认 time.Time 解析器 (RFC3339 "T" 分隔) 不兼容 → "响应解析失败" 审计告警。
+//
+// 修法: Entry.UpdatedAt 改 string 透传。本测试验证 string 字段能正确收真实格式。
+// 数字字段 (rank/cotti/lucky/milktea/total) 在生产 Java 端是 JSON number,
+// 这里也用 number 跟生产 1:1, 跟 updated_at string 形成对比。
+func TestFetchLeaderboard_RealJavaTimeFormat(t *testing.T) {
+	restoreSponsorVars(t)
+
+	// 真实 Java 端会返的 updated_at: 空格分隔 + ".0" 毫秒后缀, 跟 RFC3339 完全不同
+	const realUpdatedAt = "2026-07-13 11:40:30.0"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json;charset=UTF-8")
+		// 数字字段用 JSON number, updated_at 用真实生产 string 格式
+		body := `{
+			"ok": true,
+			"entries": [
+				{"rank": 1, "real_name": "张三", "cotti": 4, "lucky": 4, "milktea": 1, "total": 9, "date": "07-13", "updated_at": "` + realUpdatedAt + `"},
+				{"rank": 2, "real_name": "李四", "cotti": 3, "lucky": 4, "milktea": 1, "total": 8, "date": "07-13", "updated_at": "` + realUpdatedAt + `"}
+			]
+		}`
+		w.Write([]byte(body))
+	}))
+	defer srv.Close()
+
+	Primary = srv.URL + "/credit/httpInterface"
+	Secondary = ""
+	BasicAuthHeader = "test-auth"
+
+	lr, err := FetchLeaderboard()
+	if err != nil {
+		t.Fatalf("真实 Java 时间格式应能解析 (string 透传), got err: %v", err)
+	}
+	if !lr.OK {
+		t.Fatalf("lr.OK 应为 true, got=false, err=%s", lr.Error)
+	}
+	if len(lr.Entries) != 2 {
+		t.Fatalf("应有 2 条, got=%d", len(lr.Entries))
+	}
+
+	// 关键断言: 真实生产格式能原样收
+	if lr.Entries[0].UpdatedAt != realUpdatedAt {
+		t.Errorf("updated_at 透传应原样保留, got=%q want=%q", lr.Entries[0].UpdatedAt, realUpdatedAt)
+	}
+	if lr.Entries[0].Total != 9 {
+		t.Errorf("total 应为 9, got=%d", lr.Entries[0].Total)
+	}
+	if lr.Entries[0].Rank != 1 {
+		t.Errorf("rank 应为 1, got=%d", lr.Entries[0].Rank)
+	}
+
+	t.Logf("真实 Java 格式解析 OK: updated_at=%q", lr.Entries[0].UpdatedAt)
 }

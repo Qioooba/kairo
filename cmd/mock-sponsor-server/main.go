@@ -60,6 +60,14 @@ var (
 )
 
 // leaderboardEntry 返给前端的格式 (含 rank, 按 total 倒序)
+//
+// v0.16: 跟 internal/sponsor.Entry 对齐, 数字字段 (rank/cotti/lucky/milktea/total) 留 int,
+// UpdatedAt 改 string 透传 (模拟生产 Java 端真实格式: "2006-01-02 15:04:05.0"
+// 空格分隔 + ".0" 毫秒后缀 —— 这是 Go 端之前 UpdatedAt time.Time 解析炸的真实格式)。
+//
+// 数字字段保留 int 是因为 Java 端 JSONObject 转 JSON 时数字字段是 JSON number
+// (例: "cotti":4), Go encoding/json 严格区分 number/string, 收 number 进 string
+// 字段会直接拒掉, 跟 updated_at 错误同类。所以"全 string" 不行, 只 UpdatedAt 改 string。
 type leaderboardEntry struct {
 	Rank      int    `json:"rank"`
 	RealName  string `json:"real_name"`
@@ -138,7 +146,12 @@ func handleLeaderboard(w http.ResponseWriter, r *http.Request) {
 		limit = len(sorted)
 	}
 	result := make([]leaderboardEntry, 0, limit)
-	now := time.Now().Format(time.RFC3339)
+	// 模拟生产 Java 端 (Oracle/MySQL DATETIME 文本格式):
+	//   "2006-01-02 15:04:05.0"  ← 空格分隔 (不是 RFC3339 的 T) + ".0" 毫秒后缀
+	// 这是 Go 端之前 UpdatedAt time.Time 解析炸的真实格式; 改 string 透传后能正确收。
+	// Truncate(time.Second) 抹掉亚秒, 让输出是 ".0" (跟生产 Java 端 Oracle TIMESTAMP 精度一致,
+	// 不是 ".600" 这种带实际毫秒数的, 否则跟生产不一致会让 mock 偏离 1:1)。
+	now := time.Now().Truncate(time.Second).Format("2006-01-02 15:04:05.0")
 	for i := 0; i < limit; i++ {
 		result = append(result, leaderboardEntry{
 			Rank:      i + 1,

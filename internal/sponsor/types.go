@@ -14,8 +14,6 @@
 //   - Java 端注入风险 (用 ? 拼接但参数值 URL-encode 过, 不会逃逸出 query)
 package sponsor
 
-import "time"
-
 // Entry 排行榜里的一行 (一个真实姓名 + 3 列杯数 + 总杯数 + 日期)。
 //
 // 字段命名按用户原话: 库迪=cotti, 瑞幸=lucky, 奶茶=milktea (用户原话:
@@ -23,15 +21,22 @@ import "time"
 //
 // JSON 字段名用 snake_case (小写), 跟 Java 端 JSONObject.toJSONString 默认
 // 风格一致, 也跟前端 brand id (cotti / luckin / milktea) 对齐。
+//
+// v0.16: UpdatedAt 改 string 透传 (原是 time.Time, 跟 Java 端真实格式不兼容)。
+//   - Java 端 updated_at 返的是 "2026-07-13 11:40:30.0" (Oracle/MySQL DATETIME 文本,
+//     空格分隔 + ".0" 毫秒后缀), 跟 encoding/json 默认 time.Time 解析器
+//     (RFC3339 "T" 分隔) 不兼容, 之前生产一直返 "响应解析失败"
+//   - 数字字段 (rank/cotti/lucky/milktea/total) 保留 int, 因为 Java 端返的是
+//     JSON number (例: "cotti":4), 改成 string 会被 Go 拒收 (跟 updated_at 错误同类)
 type Entry struct {
-	Rank      int       `json:"rank"`       // 1-based 排名, Java 端 ROW_NUMBER() OVER (ORDER BY TOTAL DESC)
-	RealName  string    `json:"real_name"`  // 真实姓名 (前端拼到 NICKNAMES[rank-1] 后面)
-	Cotti     int       `json:"cotti"`      // 库迪杯数
-	Lucky     int       `json:"lucky"`      // 瑞幸杯数
-	Milktea   int       `json:"milktea"`    // 奶茶杯数 (用户原话: "random 就是奶茶啊 随机奶茶数量")
-	Total     int       `json:"total"`      // 总杯数 = cotti+lucky+milktea (Java 端冗余存, 方便 ORDER BY)
-	Date      string    `json:"date"`       // MM-DD, 首次赞助日期 (前端显示用)
-	UpdatedAt time.Time `json:"updated_at"` // Java 端最后更新时间
+	Rank      int    `json:"rank"`       // 1-based 排名, Java 端 ROW_NUMBER() OVER (ORDER BY TOTAL DESC)
+	RealName  string `json:"real_name"`  // 真实姓名 (前端拼到 NICKNAMES[rank-1] 后面)
+	Cotti     int    `json:"cotti"`      // 库迪杯数
+	Lucky     int    `json:"lucky"`      // 瑞幸杯数
+	Milktea   int    `json:"milktea"`    // 奶茶杯数 (用户原话: "random 就是奶茶啊 随机奶茶数量")
+	Total     int    `json:"total"`      // 总杯数 = cotti+lucky+milktea (Java 端冗余存, 方便 ORDER BY)
+	Date      string `json:"date"`       // MM-DD, 首次赞助日期 (前端显示用)
+	UpdatedAt string `json:"updated_at"` // Java 端最后更新时间, string 透传 (格式不限, 见上方注释)
 }
 
 // LeaderboardResp Java 端返回的 Map → JSON 反序列化结构。

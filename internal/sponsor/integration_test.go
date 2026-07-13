@@ -50,9 +50,13 @@ func TestIntegration_FetchLeaderboard_Success(t *testing.T) {
 	if lr.Entries[0].Cotti != 4 {
 		t.Errorf("张三 cotti 应为 4, got=%d", lr.Entries[0].Cotti)
 	}
-	t.Logf("rank 1: %s (cotti=%d lucky=%d milktea=%d total=%d)",
+	// v0.16: updated_at 是 string 透传, 验 mock 返的 "2006-01-02 15:04:05.0" 格式
+	if lr.Entries[0].UpdatedAt == "" {
+		t.Errorf("updated_at 不应为空, 真实 Java 端会返非空时间戳")
+	}
+	t.Logf("rank 1: %s (cotti=%d lucky=%d milktea=%d total=%d updated_at=%q)",
 		lr.Entries[0].RealName, lr.Entries[0].Cotti, lr.Entries[0].Lucky,
-		lr.Entries[0].Milktea, lr.Entries[0].Total)
+		lr.Entries[0].Milktea, lr.Entries[0].Total, lr.Entries[0].UpdatedAt)
 }
 
 // TestIntegration_FetchLeaderboard_BadAuth 验证 mock server 在 auth 错时返 401
