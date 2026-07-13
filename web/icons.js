@@ -87,6 +87,28 @@
     // 搜索（lucide 风格放大镜）：青绿描边
     'search': `<circle cx="11" cy="11" r="6.5" fill="none" stroke="#06b6d4" stroke-width="2"/><line x1="15.5" y1="15.5" x2="20" y2="20" stroke="#06b6d4" stroke-width="2.2" stroke-linecap="round"/><circle cx="11" cy="11" r="2.5" fill="#06b6d4" opacity="0.25"/>`,
 
+    // 鼠标点击（lucide mouse-pointer-click 风格）：青蓝箭头 + 三道点击波纹
+    // 用途：替代 👆 之类的"指一下/点一下"emoji（Win 7 无字体支持）
+    'mouse-pointer-click': `<path d="M9 4l3 13 2.5-6.5L21 8z" fill="#06b6d4" stroke="#0891b2" stroke-width="0.6" stroke-linejoin="round"/><path d="M3 4l1.5 1.5M3 9l2 0M4.5 13.5l-1.5 1.5" stroke="#06b6d4" stroke-width="1.8" stroke-linecap="round" fill="none"/>`,
+
+    // 向下箭头（lucide arrow-down 风格）：青蓝描边
+    // 用途：替代 👇 之类的"往下选"emoji（Win 7 无字体支持）
+    'arrow-down': `<path d="M12 5v14M5 12l7 7 7-7" fill="none" stroke="#06b6d4" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>`,
+
+    // 沙漏加载（lucide loader 风格 + hourglass 混合）：青蓝旋转弧
+    // 用途：替代 ⏳ loading 提示（Win 7 无字体支持；静态弧形不需要动画也清晰）
+    'hourglass': `<path d="M5 4h14M5 20h14" stroke="#06b6d4" stroke-width="2" stroke-linecap="round"/><path d="M7 4c0 5 2.5 6 5 8 2.5-2 5-3 5-8M7 20c0-5 2.5-6 5-8 2.5 2 5 3 5 8" fill="none" stroke="#06b6d4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M9.5 4h5M9.5 20h5" stroke="#06b6d4" stroke-width="1.2" stroke-linecap="round"/><circle cx="9" cy="11" r="0.9" fill="#fbbf24"><animate attributeName="cy" values="11;13;11" dur="1.4s" repeatCount="indefinite"/></circle>`,
+
+    // 哭脸（替代 😢）：红脸蛋 + 蓝眼泪（Win 7 跨平台一致）
+    'sad-face': `<circle cx="12" cy="12" r="9" fill="#fecaca" stroke="#dc2626" stroke-width="1.4"/><circle cx="8.5" cy="10" r="0.9" fill="#1f2937"/><circle cx="15.5" cy="10" r="0.9" fill="#1f2937"/><path d="M8 16 Q12 13.5 16 16" fill="none" stroke="#dc2626" stroke-width="1.6" stroke-linecap="round"/><path d="M9 8 Q8.2 9.4 8.6 11" fill="none" stroke="#3b82f6" stroke-width="1.4" stroke-linecap="round"/><path d="M15 8 Q15.8 9.4 15.4 11" fill="none" stroke="#3b82f6" stroke-width="1.4" stroke-linecap="round"/>`,
+
+    // 思考脸（替代 🤔）：黄脸 + 皱眉 + 托腮手
+    'thinking-face': `<circle cx="12" cy="12" r="9" fill="#fde68a" stroke="#d97706" stroke-width="1.4"/><circle cx="8.5" cy="11" r="0.9" fill="#1f2937"/><circle cx="15.5" cy="11" r="0.9" fill="#1f2937"/><path d="M9 16 Q12 15 15 16" fill="none" stroke="#92400e" stroke-width="1.4" stroke-linecap="round"/><path d="M9 6.5 L8 5.5 M11 5.5 L10 4.5" stroke="#92400e" stroke-width="1.4" stroke-linecap="round"/><path d="M17 18 Q19 18 19 16 Q19 14 17 14 L16 14 L16 18 Z" fill="#fde68a" stroke="#d97706" stroke-width="1.2" stroke-linejoin="round"/>`,
+
+    // 状态点（dot 风格）：彩色实心圆点。color 字段允许覆盖默认 #10b981
+    // 用途：替代 🟢 / 🟡 / 🔴 状态 emoji（Win 7 无字体支持，且圆点配色不可控）
+    'status-dot': `<circle cx="12" cy="12" r="6" fill="#10b981"/><circle cx="12" cy="12" r="6" fill="none" stroke="#ffffff" stroke-width="0.6" opacity="0.5"/>`,
+
     // 赞助作者：琥珀色咖啡杯 + 热气
     'coffee': `<path d="M5 9h11v5a3.5 3.5 0 0 1-3.5 3.5h-4A3.5 3.5 0 0 1 5 14z" fill="#b45309"/><path d="M5 9h11v1H5z" fill="#92400e"/><path d="M16 10.5h2a2 2 0 0 1 0 3h-2" fill="none" stroke="#b45309" stroke-width="2"/><path d="M8 4.5c0 1.2-1 1.8-1 3M11.5 3.5c0 1.2-1 1.8-1 3M15 4.5c0 1.2-1 1.8-1 3" fill="none" stroke="#f59e0b" stroke-width="1.6" stroke-linecap="round"/><rect x="3" y="19" width="15" height="1.8" rx="0.8" fill="#92400e"/>`,
   };

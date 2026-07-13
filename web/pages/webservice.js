@@ -52,6 +52,7 @@
       body: '',
       bodyDirty: false, // 用户手动编辑过 body 后置 true，切 operation 时不自动覆盖
     },
+    requestInFlight: false, // 发送请求进行中标志，防止重复提交
   };
 
   // ---------- 工具 ----------
@@ -670,7 +671,7 @@
       copyToClipboard(state.draft.body || '').then(() => toast('已复制请求体', 'ok'), () => toast('复制失败', 'err'));
     }});
     const btnSaveTpl = el('button', { class: 'btn', text: '存为模板', onclick: saveCurrentAsTemplate });
-    const btnSend = el('button', { class: 'btn btn-primary', text: '发送', onclick: sendRequest });
+    const btnSend = el('button', { id: 'svc-send-btn', class: 'btn btn-primary', text: state.requestInFlight ? '发送中...' : '发送', disabled: state.requestInFlight, onclick: sendRequest });
     btnRow.appendChild(btnFormat);
     btnRow.appendChild(btnMinify);
     btnRow.appendChild(btnValidate);
@@ -1031,6 +1032,7 @@
   // ---------- 动作：发送 / XML 操作 ----------
 
   async function sendRequest() {
+    if (state.requestInFlight) return; // 防止重复提交
     const d = state.draft;
     const endpoint = d.endpoint || '';
     const soapAction = d.soapAction || '';
@@ -1060,7 +1062,9 @@
       operation: state.currentOperation ? state.currentOperation.name : '',
     };
 
-    _sendRequestInFlight = true;
+    state.requestInFlight = true;
+    const sendBtn = document.getElementById('svc-send-btn');
+    if (sendBtn) { sendBtn.disabled = true; sendBtn.textContent = '发送中...'; }
     try {
       toast('发送中...', 'info');
       const r = await postJSON('/api/soap/send', req);
@@ -1077,7 +1081,9 @@
       console.warn('send failed:', e.message || e);
       toast('发送失败, 请稍后重试', 'err');
     } finally {
-      _sendRequestInFlight = false;
+      state.requestInFlight = false;
+      const btn = document.getElementById('svc-send-btn');
+      if (btn) { btn.disabled = false; btn.textContent = '发送'; }
     }
   }
 

@@ -132,9 +132,18 @@
 
     var jokeEl = el('div', {
       style: 'text-align:center; font-size:15px; font-weight:600; color:var(--text-dim); ' +
-             'padding:8px 0 16px; min-height:28px; transition:all .3s;',
-      text: '👇 选一杯？👇'
-    });
+             'padding:8px 0 16px; min-height:28px; transition:all .3s; ' +
+             'display:inline-flex; align-items:center; justify-content:center; gap:6px; width:100%;'
+    }, [
+      // 左右两个下指箭头（替代 👇👇 emoji：Win 7 跨平台一致）
+      (window.Kairo && Kairo.icons && Kairo.icons.svg)
+        ? Kairo.icons.svg('arrow-down', 14)
+        : document.createTextNode('↓'),
+      el('span', { text: '选一杯？' }),
+      (window.Kairo && Kairo.icons && Kairo.icons.svg)
+        ? Kairo.icons.svg('arrow-down', 14)
+        : document.createTextNode('↓'),
+    ]);
 
     // ============ 1. 店铺招牌横幅 ============
     var banner = el('div', {
@@ -147,9 +156,15 @@
         style: 'position:absolute; top:-10px; right:20px; background:#DC2626; color:#fff; ' +
                'padding:4px 14px; border-radius:20px; font-size:12px; font-weight:800; ' +
                'transform:rotate(5deg); box-shadow:0 2px 8px rgba(220,38,38,0.3); ' +
-               'animation:sponsor-pulse 2s ease-in-out infinite;',
-        text: '🟢 营业中'
-      }),
+               'animation:sponsor-pulse 2s ease-in-out infinite; ' +
+               'display:inline-flex; align-items:center; gap:5px;'
+      }, [
+        // 营业中绿点（替代 🟢 emoji：Win 7 无字体支持，用 SVG 圆点跨平台一致）
+        (window.Kairo && Kairo.icons && Kairo.icons.svg)
+          ? Kairo.icons.svg('status-dot', 12)
+          : document.createTextNode('●'),
+        el('span', { text: '营业中' })
+      ]),
       el('div', {
         style: 'font-size:36px; font-weight:900; color:#78350F; text-shadow:1px 1px 0 #fff3;',
         text: '☕ Kairo 咖啡续命小站 ☕'
@@ -323,16 +338,37 @@
     qrBox.innerHTML = qrMock;
 
     // 彩蛋提示（点击 QR 时展开，紧贴在卡片下方）
+    // 注：text 里不用 emoji —— 全部走 inline SVG，Win 7 跨平台一致
     var jokeCard = el('div', {
       style: 'display:none; margin-top:10px; padding:8px 12px; border-radius:10px; ' +
              'background:linear-gradient(135deg, #FEF3C7 0%, #FDE68A 100%); ' +
-             'color:#78350F; font-size:12px; line-height:1.5; font-weight:600; text-align:center;',
-      text: '😏 这不是付款码，被骗了吧？哈哈，直接点了，送过来放我桌上 ☕'
-    });
+             'color:#78350F; font-size:12px; line-height:1.5; font-weight:600; text-align:center; ' +
+             'align-items:center; justify-content:center; gap:6px;'
+    }, [
+      // 笑（替代 😏 emoji — 彩蛋文案里的「得意的笑」表情，Win 7 跨平台一致）
+      // 复用 coffee 图标的杯口弧线 + 嘴部上扬曲线凑一个简笔笑脸，避免新增 icon
+      (function () {
+        var s = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24">' +
+                '<circle cx="12" cy="12" r="9" fill="none" stroke="#78350F" stroke-width="2"/>' +
+                '<circle cx="9" cy="10" r="0.9" fill="#78350F"/>' +
+                '<circle cx="15" cy="10" r="0.9" fill="#78350F"/>' +
+                '<path d="M8 14 Q12 17 16 14" fill="none" stroke="#78350F" stroke-width="1.6" stroke-linecap="round"/></svg>';
+        var wrap = document.createElement('span');
+        wrap.style.display = 'inline-flex';
+        wrap.style.alignItems = 'center';
+        wrap.innerHTML = s;
+        return wrap;
+      })(),
+      el('span', { text: '这不是付款码，被骗了吧？哈哈，直接点了，送过来放我桌上' }),
+      // 咖啡杯（替代 ☕ emoji：Win 7 无字体支持，用 coffee SVG 跨平台一致）
+      (window.Kairo && Kairo.icons && Kairo.icons.svg)
+        ? Kairo.icons.svg('coffee', 14)
+        : document.createTextNode('☕')
+    ]);
 
     function toggleJoke() {
       qrRevealed = !qrRevealed;
-      jokeCard.style.display = qrRevealed ? 'block' : 'none';
+      jokeCard.style.display = qrRevealed ? 'flex' : 'none';
     }
 
     // 横排卡片：QR 在左，文字在右
@@ -350,18 +386,29 @@
         qrBox,
         el('div', { style: 'flex:1; text-align:left; min-width:0;' }, [
           el('div', {
-            style: 'display:inline-block; background:#F59E0B; color:#fff; padding:3px 12px; border-radius:12px; ' +
-                   'font-size:12px; font-weight:800; margin-bottom:6px; box-shadow:0 2px 6px rgba(245,158,11,0.3);',
-            text: '🪑 投喂方式'
-          }),
+            style: 'display:inline-flex; align-items:center; gap:5px; background:#F59E0B; color:#fff; padding:3px 12px; border-radius:12px; ' +
+                   'font-size:12px; font-weight:800; margin-bottom:6px; box-shadow:0 2px 6px rgba(245,158,11,0.3);'
+          }, [
+            // 投喂方式牌（替代 🪑 emoji：Win 7 无字体支持，用 coffee SVG 跨平台一致）
+            (window.Kairo && Kairo.icons && Kairo.icons.svg)
+              ? Kairo.icons.svg('coffee', 14)
+              : document.createTextNode('☕'),
+            el('span', { text: '投喂方式' })
+          ]),
           el('div', {
             style: 'font-size:13px; color:var(--text); font-weight:700; margin-bottom:3px;',
             text: '扫一扫 请我喝一杯'
           }),
           el('div', {
-            style: 'font-size:11px; color:var(--text-dim); font-weight:600;',
-            text: '👆 点一下试试彩蛋'
-          })
+            style: 'font-size:11px; color:var(--text-dim); font-weight:600; ' +
+                   'display:inline-flex; align-items:center; gap:4px;'
+          }, [
+            // 点一下提示（替代 👆 emoji：Win 7 无字体支持，用 mouse-pointer-click SVG）
+            (window.Kairo && Kairo.icons && Kairo.icons.svg)
+              ? Kairo.icons.svg('mouse-pointer-click', 12)
+              : document.createTextNode('☞'),
+            el('span', { text: '点一下试试彩蛋' })
+          ])
         ])
       ]),
       jokeCard
@@ -381,7 +428,11 @@
     var loadingBox = el('div', {
       style: 'text-align:center; padding:24px 16px;'
     }, [
-      el('div', { style: 'font-size:32px; margin-bottom:8px;', text: '⏳' }),
+      // 沙漏图标（替代 ⏳ emoji：Win 7 无字体支持，hourglass 自带一颗落沙动画）
+      el('div', { style: 'margin-bottom:8px; display:flex; justify-content:center;' },
+        [(window.Kairo && Kairo.icons && Kairo.icons.svg)
+          ? Kairo.icons.svg('hourglass', 28)
+          : el('div', { style: 'font-size:28px;', text: '⏳' })]),
       el('div', { style: 'font-size:13px; color:var(--text-dim);', text: '正在从天命服务器拉取榜单…' })
     ]);
     honorList.appendChild(loadingBox);
@@ -484,7 +535,11 @@
         honorList.appendChild(el('div', {
           style: 'text-align:center; padding:32px 16px;'
         }, [
-          el('div', { style: 'font-size:32px; margin-bottom:8px;', text: '😢' }),
+          // 哭脸（替代 😢 emoji：Win 7 跨平台一致）
+          el('div', { style: 'margin-bottom:8px; display:flex; justify-content:center;' },
+            [(window.Kairo && Kairo.icons && Kairo.icons.svg)
+              ? Kairo.icons.svg('sad-face', 32)
+              : el('div', { style: 'font-size:32px;', text: '😢' })]),
           el('div', {
             style: 'font-size:14px; font-weight:700; color:var(--text-err,#dc2626); margin-bottom:14px; line-height:1.5;',
             text: quip
@@ -501,7 +556,11 @@
         honorList.appendChild(el('div', {
           style: 'text-align:center; padding:32px 16px;',
         }, [
-          el('div', { style: 'font-size:48px; margin-bottom:8px;', text: '🤔' }),
+          // 思考脸（替代 🤔 emoji：Win 7 跨平台一致）
+          el('div', { style: 'margin-bottom:8px; display:flex; justify-content:center;' },
+            [(window.Kairo && Kairo.icons && Kairo.icons.svg)
+              ? Kairo.icons.svg('thinking-face', 48)
+              : el('div', { style: 'font-size:48px;', text: '🤔' })]),
           el('div', { style: 'font-size:15px; font-weight:700; color:var(--text);', text: '还没人请过咖啡呢' }),
           el('div', { style: 'font-size:12px; color:var(--text-dim); margin-top:4px;', text: '第一个请的人 名字永远在这里（直到我删代码）' }),
         ]));

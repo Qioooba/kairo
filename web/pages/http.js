@@ -436,15 +436,12 @@
     cbFollow.addEventListener('change', markDirty);
     const cbInsecure = el('input', { type: 'checkbox' });
     cbInsecure.addEventListener('change', markDirty);
-    const cbPretty = el('input', { type: 'checkbox', checked: true });
-    cbPretty.id = 'http2-pretty';
 
     const optRow = el('div', { class: 'http2-opt-row' }, [
       el('label', { class: 'opt-num' }, [el('span', { text: '超时' }), timeoutInp, el('span', { text: 'ms' })]),
       el('label', { class: 'opt' }, [cbFollow, document.createTextNode(' 跟随重定向')]),
       el('label', { class: 'opt' }, [cbInsecure, document.createTextNode(' 跳过 TLS 校验')]),
       el('label', { class: 'opt-num' }, [el('span', { text: 'env:' }), envSel]),
-      el('label', { class: 'opt' }, [cbPretty, document.createTextNode(' 自动美化响应')]),
     ]);
 
     // ---------- Headers 编辑器 ----------
@@ -631,6 +628,31 @@
     const respToolbar = el('div', { class: 'http2-resp-toolbar' });
     const respTrRight = el('div', { class: 'http2-raw-toolbar-right' });
 
+    const btnFmtResp = el('button', { class: 'btn btn-mini', text: '美化', title: '格式化响应 Body（JSON / XML / HTML）', onclick: () => {
+      if (!lastResponse || !lastResponse.body) { toast('响应为空', 'warn'); return; }
+      const body = lastResponse.body;
+      const ct = (lastResponse.headers || {})['Content-Type'] || (lastResponse.headers || {})['content-type'] || '';
+      const lang = detectLang(ct, body);
+      if (lang === 'json') {
+        try {
+          lastResponse.body = prettyJSON(body, 2);
+          renderRespBody();
+          toast('已美化 JSON', 'ok');
+        } catch (e) {
+          toast('内容不是合法 JSON：' + (e.message || e), 'err');
+        }
+      } else if (lang === 'xml' || lang === 'html') {
+        try {
+          lastResponse.body = body.replace(/>\s*</g, '><').replace(/></g, '>\n<');
+          renderRespBody();
+          toast('已格式化', 'ok');
+        } catch (e) {
+          toast('格式化失败：' + (e.message || e), 'err');
+        }
+      } else {
+        toast('当前内容不支持美化（仅 JSON / XML / HTML）', 'warn');
+      }
+    }});
     const btnCopyResp = el('button', { class: 'btn btn-mini', text: '复制 Body', onclick: () => {
       if (!lastResponse) { toast('响应为空', 'warn'); return; }
       copyToClipboard(lastResponse.body || '').then(() => toast('已复制', 'ok'), () => toast('复制失败', 'err'));
@@ -655,6 +677,7 @@
       toast('已下载', 'ok');
     }});
 
+    respTrRight.appendChild(btnFmtResp);
     respTrRight.appendChild(btnCopyHeaders);
     respTrRight.appendChild(btnCopyResp);
     respTrRight.appendChild(btnDownloadResp);

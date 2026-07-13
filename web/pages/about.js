@@ -1476,9 +1476,9 @@
       el('div', { class: 'about-logo-wrap', style: 'font-size:64px; margin-bottom:14px;' }, [
         (function(){ var img = document.createElement('img'); img.src = '/static/img/kairo-logo-192.png'; img.style.width='72px'; img.style.height='72px'; img.style.borderRadius='18px'; return img; })()
       ]),
-      el('h1', { class: 'kairo-shimmer-text', style: 'margin:0 0 6px 0; font-size:36px; font-weight:800; background-image:linear-gradient(135deg, var(--text) 0%, var(--primary) 40%, var(--accent) 60%, var(--primary) 80%, var(--text) 100%); letter-spacing:0.5px;', text: 'Kairo · 天命契机' }),
+      el('h1', { class: 'kairo-shimmer-text', style: 'margin:0 0 6px 0; font-size:36px; font-weight:800; background-image:repeating-linear-gradient(135deg, var(--primary) 0%, var(--accent) 50%, var(--primary) 100%); letter-spacing:0.5px; background-clip:text; -webkit-background-clip:text; color:transparent; -webkit-text-fill-color:transparent;', text: 'Kairo · 天命契机' }),
       el('div', { class: 'text-dim', style: 'font-size:14px; margin-bottom:8px; letter-spacing:1px;', text: 'Kairo — 来自希腊语 kairos，意为「恰当时机」' }),
-      el('div', { class: 'text-dim', style: 'font-size:14px; margin-bottom:18px; letter-spacing:0.5px;', unsafeHtml: 'Crafted by <span class="about-credit-name kairo-shimmer-text" style="background-image:linear-gradient(135deg, var(--text) 0%, var(--primary) 40%, var(--accent) 60%, var(--primary) 80%, var(--text) 100%); font-weight:600;">Qi</span>' }),
+      el('div', { class: 'text-dim', style: 'font-size:14px; margin-bottom:18px; letter-spacing:0.5px;', unsafeHtml: 'Crafted by <span class="about-credit-name kairo-shimmer-text" style="background-image:linear-gradient(135deg, var(--text) 0%, var(--primary) 40%, var(--accent) 60%, var(--primary) 80%, var(--text) 100%); font-weight:600; background-clip:text; -webkit-background-clip:text; color:transparent; -webkit-text-fill-color:transparent;">Qi</span>' }),
       el('div', { class: 'text-dim', style: 'font-size:16px; margin-bottom:18px; max-width:760px; margin-left:auto; margin-right:auto; line-height:1.7;', text: '企业级内网运维效率平台 · 为 SRE / DevOps / 运维工程师量身打造。安全为先、极简为骨、上下文为魂——一套二进制搞定 SSH 日志检索、文件下载、代码比对、HTTP 调试、环境诊断与配置管理。' }),
       el('div', { style: 'display:inline-flex; gap:8px; flex-wrap:wrap; justify-content:center; align-items:center;' }, [
         versionBadge,
@@ -2212,7 +2212,7 @@
     // 顶部光晕装饰线
     f.appendChild(el('div', { style: 'position:absolute; top:-1px; left:0; right:0; height:1px; background:linear-gradient(90deg, transparent, var(--primary), var(--accent), var(--primary), transparent); background-size:200% 100%; animation:kairo-shimmer 3s linear infinite;' }));
     // 品牌行：渐变流光文字
-    f.appendChild(el('div', { class: 'kairo-shimmer-text', style: 'font-size:17px; font-weight:800; margin-bottom:10px; background-image:linear-gradient(135deg, var(--text) 0%, var(--primary) 40%, var(--accent) 60%, var(--primary) 80%, var(--text) 100%); letter-spacing:0.5px;', text: '© 2026 Kairo · 天命契机' }));
+    f.appendChild(el('div', { class: 'kairo-shimmer-text', style: 'font-size:17px; font-weight:800; margin-bottom:10px; background-image:repeating-linear-gradient(135deg, var(--primary) 0%, var(--accent) 50%, var(--primary) 100%); letter-spacing:0.5px; background-clip:text; -webkit-background-clip:text; color:transparent; -webkit-text-fill-color:transparent;', text: '© 2026 Kairo · 天命契机' }));
     f.appendChild(el('div', { style: 'margin-top:6px; font-size:13px;', text: '技术栈：Go 1.20+ · 原生 JavaScript · x/crypto/ssh · pkg/sftp · single-binary deploy · zero runtime deps' }));
     f.appendChild(el('div', { style: 'margin-top:6px; font-size:12px;', text: '为运维效率而生 · 让每一次操作都有迹可循 · 让每一次配置都可审计 · 让每一次下载都可追溯' }));
     view.appendChild(f);
