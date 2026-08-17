@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -169,15 +170,25 @@ func zipFilesNamed(sources []ZipSource, destPath string) error {
 		if name == "" {
 			name = filepath.Base(abs)
 		}
-		// 去掉可能混入的目录分隔符（防止解压后出现 ./ 等奇怪路径）
-		name = filepath.Base(name)
-		// 同名文件避免覆盖：第二个起加 _N 后缀
-		if n := usedNames[name]; n > 0 {
-			ext := filepath.Ext(name)
-			base := strings.TrimSuffix(name, ext)
-			name = fmt.Sprintf("%s_%d%s", base, n+1, ext)
+		// v1.4：支持目录层级（目录递归下载）。把 "\" 归一成 "/"，逐个路径段过滤
+		// 危险片段（""、"."、".."、穿越形态），防 zip 解压路径逃逸。
+		name = sanitizeZipName(name)
+		// 同名文件避免覆盖：第二个起加 _N 后缀（对最后一段加）
+		orig := name
+		n := usedNames[orig]
+		if n > 0 {
+			dir := path.Dir(name)
+			last := path.Base(name)
+			ext := path.Ext(last)
+			base := strings.TrimSuffix(last, ext)
+			last = fmt.Sprintf("%s_%d%s", base, n+1, ext)
+			if dir == "." || dir == "/" {
+				name = last
+			} else {
+				name = path.Join(dir, last)
+			}
 		}
-		usedNames[name]++
+		usedNames[orig] = n + 1
 		header := &zip.FileHeader{
 			Name:     name,
 			Method:   zip.Deflate,
@@ -202,6 +213,36 @@ func zipFilesNamed(sources []ZipSource, destPath string) error {
 	}
 	closed = true
 	return nil
+}
+
+// sanitizeZipName 把 NameInZip 归一成安全的 zip 内路径（v1.4 目录递归下载）。
+//
+// 规则：
+//   - "\" 归一成 "/"（Windows 风格路径）
+//   - 逐段过滤：去掉空段、"."、".."、含穿越形态的段
+//   - 过滤后为空 → 回退 basename（若 basename 也是 "."/".." → "x"）
+//
+// NameInZip 由后端从远端文件名构造（非用户直接输入），这里只是防御性收口，
+// 防解压路径逃逸（zip-slip）。
+func sanitizeZipName(name string) string {
+	name = strings.ReplaceAll(name, "\\", "/")
+	name = strings.TrimPrefix(name, "/")
+	segs := strings.Split(name, "/")
+	clean := make([]string, 0, len(segs))
+	for _, seg := range segs {
+		if seg == "" || seg == "." || seg == ".." {
+			continue
+		}
+		clean = append(clean, seg)
+	}
+	if len(clean) == 0 {
+		base := path.Base(name)
+		if base == "" || base == "." || base == ".." {
+			return "x"
+		}
+		return base
+	}
+	return path.Join(clean...)
 }
 
 // sanitize 把字符串清成安全文件名片段

@@ -86,6 +86,8 @@ def main():
     run("T07 search ORA-00060 || deadlock", dict(CRED, query="ORA-00060 || deadlock"), "/api/logs/search")
     run("T08 search Exception && !DEBUG", dict(CRED, query="Exception && !DEBUG"), "/api/logs/search")
     run("T09 search !DEBUG", dict(CRED, query="!DEBUG"), "/api/logs/search")
+    run("T09b search 多行窗口匹配", dict(CRED, query="Exception && userinfo", match_window=10), "/api/logs/search")
+    run("T09c search 多行窗口超界钳制", dict(CRED, query="Exception", match_window=999), "/api/logs/search")
     run("T10 search 危险 ;", dict(CRED, query="Exception; cat /etc/passwd"), "/api/logs/search")
     run("T11 search 危险 $", dict(CRED, query="$(id)"), "/api/logs/search")
     run("T12 search 危险 反引号", dict(CRED, query="`whoami`"), "/api/logs/search")

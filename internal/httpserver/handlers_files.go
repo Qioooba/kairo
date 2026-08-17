@@ -915,7 +915,7 @@ func (s *Server) runFilesDownloadTask(
 	}()
 	defer close(cancelDone)
 
-	results, err := s.downloadSeriesFree(ctx, srv, sess.Paths, sftpCli, sess)
+	results, hadDir, err := s.downloadSeriesFree(ctx, srv, sess.Paths, sftpCli, sess)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			s.audit.Write("files.download", "system", sess.System, "server", sess.Server, "result", "fail", "stage", "cancel")
@@ -927,8 +927,9 @@ func (s *Server) runFilesDownloadTask(
 		return
 	}
 
-	// 可选 zip（>= 2 个文件才打）
-	if sess.Zip && len(results) >= 2 {
+	// 可选 zip：多文件（>= 2）才打；选中目录（hadDir）时强制打 zip 保留目录结构
+	zipWanted := (sess.Zip && len(results) >= 2) || hadDir
+	if zipWanted && len(results) > 0 {
 		// 项 4 修复：zip 名改成简洁的 server_files_YYYYMMDD.zip（去掉毫秒戳）
 		zipName := fmt.Sprintf("%s_files_%s.zip",
 			sanitize(srv.Name), results[0].Date)
@@ -937,11 +938,16 @@ func (s *Server) runFilesDownloadTask(
 		zipPath := filepath.Join(sess.Folder, results[0].Date, zipName)
 		// 项 17：zip 内的文件名用远端原始 basename，下载时拿到的 zip
 		// 解压后能直接看到原始文件名（而不是 server_001_app.log 这种本地化文件名）。
+		// v1.4：目录递归下载时用 Item.ZipName 保留层级（如 "logs/app/x.log"）。
 		sources := make([]ZipSource, 0, len(results))
 		remoteNames := make([]string, 0, len(results))
 		for _, it := range results {
 			p := filepath.Join(sess.Folder, it.Date, it.Local)
-			sources = append(sources, ZipSource{Path: p, NameInZip: filepath.Base(it.Remote)})
+			nameInZip := it.ZipName
+			if nameInZip == "" {
+				nameInZip = filepath.Base(it.Remote)
+			}
+			sources = append(sources, ZipSource{Path: p, NameInZip: nameInZip})
 			remoteNames = append(remoteNames, it.Remote)
 		}
 		if err := zipFilesNamed(sources, zipPath); err != nil {
@@ -978,6 +984,9 @@ func (s *Server) runFilesDownloadTask(
 
 // downloadSeriesFree 串行下多个"完整路径"文件，进度通过 session 广播。
 //
+// v1.4：支持目录递归下载。选中目录时递归展开（ReadDir walk），
+// 本地按目录结构镜像落盘，zip 时保留层级（见 Item.ZipName）。
+//
 // 任何一个文件失败立刻返回（已下完的文件留在本地，不删）。
 // 本地落点：downloads/YYYYMMDD/server_<idx>_basename_HHMMSS
 //   - 用远端路径 basename 当主名，保留原始文件名信息；
@@ -986,102 +995,199 @@ func (s *Server) runFilesDownloadTask(
 //   - 加 _HHMMSS 防止同一文件短时间内重复下载互相覆盖；
 //   - 不强加 .log 后缀：浏览器下载任意文件都该是原始名+扩展名。
 //
-// 下载前先 Stat：目录直接报错，避免 SFTP Open 在不同 server 行为不一致。
+// 下载前先 Stat：文件正常下载；目录递归展开（见 expandRemoteDir）。
+//
+// 返回值第二个 bool：本次任务是否包含目录（调用方据此强制打 zip）。
 func (s *Server) downloadSeriesFree(
 	ctx context.Context,
 	srv *config.ServerConfig,
 	paths []string,
 	sftpCli sftpClientLike,
 	sess *dlmanager.Session,
-) ([]dlmanager.Item, error) {
+) ([]dlmanager.Item, bool, error) {
 	now := time.Now()
 	dateDir := now.Format("20060102")
 	// v0.5 #18：用 sess.Folder 替代硬编码 s.cur().DownloadDir()，
 	// 这样用户在请求里指定 target_dir 时文件落点跟着变。
 	targetDir := filepath.Join(sess.Folder, dateDir)
 
-	results := make([]dlmanager.Item, 0, len(paths))
-	localPaths := make([]string, 0, len(paths))
+	// ---- 第一阶段：展开所有路径 → plan 列表（先 Stat 后下载，total 进度准确）----
+	var plan []dirPlanEntry
+	hadDir := false
 	emittedPaths := make(map[string]bool, len(paths))
 
-	for idx, remote := range paths {
+	for _, remote := range paths {
 		if err := ctx.Err(); err != nil {
-			return results, err
+			return nil, hadDir, err
 		}
 		if emittedPaths[remote] {
 			continue
 		}
 		emittedPaths[remote] = true
 
-		// 下载前 Stat：目录不支持，Stat 失败也直接报错（避免 SFTP Open 半行为）
 		info, statErr := sftpCli.Stat(remote)
 		if statErr != nil {
-			return results, fmt.Errorf("stat %s 失败: %w", remote, statErr)
+			return nil, hadDir, fmt.Errorf("stat %s 失败: %w", remote, statErr)
 		}
 		if info.IsDir() {
-			return results, fmt.Errorf("暂不支持直接下载目录: %s", remote)
+			// 目录：递归展开。顶层本地目录名用 uniqueLocalName 防冲突，
+			// zip 内保留远端原始目录名。
+			hadDir = true
+			topLocalName := uniqueLocalName(targetDir, sanitize(path.Base(remote)), sanitize(srv.Name))
+			entries, err := expandRemoteDir(sftpCli, remote, path.Base(remote),
+				filepath.Join(targetDir, topLocalName), 0)
+			if err != nil {
+				return nil, hadDir, err
+			}
+			plan = append(plan, entries...)
+			continue
 		}
 
+		// 普通文件：沿用原逻辑
 		base := filepath.Base(remote)
+		localName := uniqueLocalName(targetDir, sanitize(base), sanitize(srv.Name))
+		localPath := filepath.Join(targetDir, localName)
+		plan = append(plan, dirPlanEntry{
+			remote:    remote,
+			localPath: localPath,
+			zipName:   path.Base(remote),
+		})
+	}
+
+	if len(plan) == 0 {
+		return nil, hadDir, errors.New("没有可下载的文件（所选目录为空）")
+	}
+	if len(plan) > dirDownloadMaxFiles {
+		return nil, hadDir, fmt.Errorf("目录展开后文件数 %d 超过单任务上限 %d，请缩小选择范围", len(plan), dirDownloadMaxFiles)
+	}
+
+	// ---- 第二阶段：串行下载 plan ----
+	results := make([]dlmanager.Item, 0, len(plan))
+	for idx, pe := range plan {
+		if err := ctx.Err(); err != nil {
+			return results, hadDir, err
+		}
 		// 项 5 修复：附带 server/dir，前端 handleDownloadEvent 按
 		// "server|dir|basename" 拼 key 找行；不附 → key 退化成 "undefined|undefined|..."，永远查不到行。
 		sess.BroadcastEvent("file_start", map[string]any{
-			"file":   remote,
+			"file":   pe.remote,
 			"index":  idx,
-			"total":  len(paths),
+			"total":  len(plan),
 			"server": srv.Name,
-			"dir":    path.Dir(remote),
+			"dir":    path.Dir(pe.remote),
 		})
-
-		// 项 4 修复：保留远端原始 basename，不再加 server_001_xxx_HHMMSS 前缀。
-		// 多 server 同名冲突由 uniqueLocalName 处理（加 server__ 前缀）。
-		localName := uniqueLocalName(targetDir, sanitize(base), sanitize(srv.Name))
-		localPath := filepath.Join(targetDir, localName)
 
 		progress := func(w, t int64) {
 			sess.BroadcastEvent("progress", map[string]any{
-				"file":    remote,
+				"file":    pe.remote,
 				"written": w,
 				"total":   t,
 				"server":  srv.Name,
-				"dir":     path.Dir(remote),
+				"dir":     path.Dir(pe.remote),
 			})
 		}
 
-		bytes, err := sftpCli.DownloadFileWithProgress(remote, localPath, progress)
+		bytes, err := sftpCli.DownloadFileWithProgress(pe.remote, pe.localPath, progress)
 		if err != nil {
-			_ = os.Remove(localPath)
-			return results, fmt.Errorf("下载 %s 失败: %w", remote, err)
+			_ = os.Remove(pe.localPath)
+			return results, hadDir, fmt.Errorf("下载 %s 失败: %w", pe.remote, err)
 		}
 
+		relLocal, _ := filepath.Rel(targetDir, pe.localPath)
 		results = append(results, dlmanager.Item{
-			File:    base,
-			Local:   localName,
+			File:    path.Base(pe.remote),
+			Local:   filepath.ToSlash(relLocal),
 			Bytes:   strconv.FormatInt(bytes, 10),
-			Remote:  remote,
+			Remote:  pe.remote,
 			Date:    dateDir,
 			Kind:    "file",
-			AbsPath: localPath, // v0.5-F：让前端能"在文件管理器中显示"
+			AbsPath: pe.localPath, // v0.5-F：让前端能"在文件管理器中显示"
+			ZipName: pe.zipName,
 		})
-		localPaths = append(localPaths, localPath)
-		_ = downloads.WriteMeta(localPath, downloads.Meta{
+		_ = downloads.WriteMeta(pe.localPath, downloads.Meta{
 			System: sess.System,
 			Server: srv.Name,
 			Host:   fmt.Sprintf("%s:%d", srv.Host, srv.Port),
-			File:   base,
-			Files:  []string{remote},
+			File:   path.Base(pe.remote),
+			Files:  []string{pe.remote},
 			Kind:   "file",
 		})
-		s.audit.Write("files.download", "system", sess.System, "server", srv.Name, "path", remote, "result", "ok", "bytes", bytes)
+		s.audit.Write("files.download", "system", sess.System, "server", srv.Name, "path", pe.remote, "result", "ok", "bytes", bytes)
 
 		sess.BroadcastEvent("file_done", map[string]any{
-			"file":   remote,
+			"file":   pe.remote,
 			"bytes":  bytes,
 			"server": srv.Name,
-			"dir":    path.Dir(remote),
+			"dir":    path.Dir(pe.remote),
 		})
 	}
-	return results, nil
+	return results, hadDir, nil
+}
+
+// 目录递归下载的保护上限。
+const (
+	// dirDownloadMaxDepth 目录递归最大深度（防环 / 异常深目录树）
+	dirDownloadMaxDepth = 64
+	// dirDownloadMaxFiles 单任务展开后文件总数上限（防误选大目录爆盘）
+	dirDownloadMaxFiles = 5000
+)
+
+// dirPlanEntry 目录展开后的单个下载计划条目。
+type dirPlanEntry struct {
+	remote    string // 远端完整路径
+	localPath string // 本地落点（完整路径）
+	zipName   string // zip 内路径（含目录层级，"/" 分隔）
+}
+
+// expandRemoteDir 递归展开远端目录为下载 plan。
+//
+//   - remoteDir：远端目录完整路径
+//   - remoteRel：该目录相对用户所选根目录的路径（用于 zip 内层级）
+//   - localDir：对应本地目录完整路径
+//   - depth：当前深度（从 0 起）
+//
+// 安全：
+//   - 深度上限 dirDownloadMaxDepth；
+//   - 条目名含 "/"、"\\"、NUL 或为 "."、".." 时跳过（ReadDir 正常不会返回，防御远端异常实现）；
+//   - 本地文件名逐个 sanitize，防止 Windows 非法字符导致写盘失败。
+func expandRemoteDir(
+	sftpCli sftpClientLike,
+	remoteDir, remoteRel, localDir string,
+	depth int,
+) ([]dirPlanEntry, error) {
+	if depth > dirDownloadMaxDepth {
+		return nil, fmt.Errorf("目录嵌套过深（>%d 层）: %s", dirDownloadMaxDepth, remoteDir)
+	}
+	infos, err := sftpCli.ReadDir(remoteDir)
+	if err != nil {
+		return nil, fmt.Errorf("列目录 %s 失败: %w", remoteDir, err)
+	}
+	var out []dirPlanEntry
+	for _, info := range infos {
+		name := info.Name()
+		if name == "" || name == "." || name == ".." ||
+			strings.ContainsAny(name, "/\\\x00") {
+			continue
+		}
+		fullRemote := path.Join(remoteDir, name)
+		relRemote := path.Join(remoteRel, name)
+		localName := sanitize(name)
+		localPath := filepath.Join(localDir, localName)
+		if info.IsDir() {
+			sub, err := expandRemoteDir(sftpCli, fullRemote, relRemote, localPath, depth+1)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, sub...)
+			continue
+		}
+		out = append(out, dirPlanEntry{
+			remote:    fullRemote,
+			localPath: localPath,
+			zipName:   relRemote,
+		})
+	}
+	return out, nil
 }
 
 // handleFilesDownloadEventsOrCancel 分发 events / cancel 子路径

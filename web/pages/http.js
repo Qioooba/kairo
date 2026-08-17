@@ -14,11 +14,18 @@
  *   - Method 配色：与 Postman 一致（GET 绿 / POST 橙 / PUT 蓝 / DELETE 红 / PATCH 紫 / HEAD/OPTIONS 灰）
  *   - URL 行：method 下拉 + url 输入 + Send 按钮 三合一卡片化
  *
+ * v0.15 新增（对齐 Postman 核心能力）：
+ *   - 导入 cURL：粘贴 curl 命令 → 后端 /api/http/curl-parse 解析 → 回填 method/url/headers/body
+ *   - 响应断言：保存用例时可配 status / body 关键词断言，Send 后逐条标绿 ✓ / 红 ✗ + 汇总
+ *   - WebSocket 测试：后端 gorilla/websocket 连目标，前端 poll 拉消息（连接/发送/日志）
+ *
  * 数据结构（向后兼容 v0.7）：
  *   case 仍为 {id, group, name, method, url, headers, body, timeout_ms, follow_redirect, insecure_tls}
  *   v0.7-Redesign 多存了：body_mode / body_type（form/x-www-form-urlencoded/raw 类型），向后兼容老用例
+ *   v0.15 多存了：assertions（响应断言数组），向后兼容老用例
  *
  * 后端不变：/api/http/request、/api/http/cases、/api/http/envs。
+ * v0.15 新增：/api/http/curl-parse、/api/http/ws/{connect,send,poll,close}。
  */
 
 (function () {
@@ -406,6 +413,101 @@
       return { wrap, setRows, getRows, addRow, clearAll };
     }
 
+    // ---------- 断言编辑器（v0.15） ----------
+    // 每行：类型下拉 + Header 名（仅 header_contains）+ 期望值 + 结果徽标 + 删除
+    const ASSERT_TYPES = [
+      { v: 'status', t: '状态码 =' },
+      { v: 'body_contains', t: 'Body 包含' },
+      { v: 'body_not_contains', t: 'Body 不包含' },
+      { v: 'header_contains', t: 'Header 包含' },
+    ];
+    function buildAssertionEditor(initialArr) {
+      const wrap = el('div', { class: 'http2-assert-table' });
+      const rows = []; // {type, key, value, els}
+      function valPlaceholder(type) {
+        if (type === 'status') return '如 200 或 2xx';
+        if (type === 'header_contains') return '期望包含的内容';
+        return '关键词';
+      }
+      function renderRow(rowData, addToRows) {
+        if (addToRows === undefined) addToRows = true;
+        const sel = el('select', { class: 'http2-assert-type' });
+        ASSERT_TYPES.forEach(t => sel.appendChild(el('option', { value: t.v, text: t.t })));
+        sel.value = rowData.type || 'status';
+        const keyInp = el('input', { type: 'text', class: 'http2-assert-key', placeholder: 'Header 名' });
+        keyInp.value = rowData.key || '';
+        keyInp.disabled = sel.value !== 'header_contains';
+        const valInp = el('input', { type: 'text', class: 'http2-assert-val', placeholder: valPlaceholder(sel.value) });
+        valInp.value = rowData.value || '';
+        const resSpan = el('span', { class: 'http2-assert-res' });
+        const delBtn = el('button', { class: 'kv-del', text: '×', title: '删除该行' });
+        const row = el('div', { class: 'http2-assert-row' }, [sel, keyInp, valInp, resSpan, delBtn]);
+        wrap.appendChild(row);
+
+        const entry = { type: sel.value, key: keyInp.value, value: valInp.value, row, sel, keyInp, valInp, resSpan };
+        sel.addEventListener('change', () => {
+          entry.type = sel.value;
+          keyInp.disabled = sel.value !== 'header_contains';
+          valInp.placeholder = valPlaceholder(sel.value);
+          markDirty();
+        });
+        keyInp.addEventListener('input', () => { entry.key = keyInp.value; markDirty(); });
+        valInp.addEventListener('input', () => { entry.value = valInp.value; markDirty(); });
+        delBtn.addEventListener('click', () => {
+          const idx = rows.indexOf(entry);
+          if (idx >= 0) { rows.splice(idx, 1); row.remove(); }
+          markDirty();
+        });
+        if (addToRows) rows.push(entry);
+        return entry;
+      }
+      function setRows(arr) {
+        rows.length = 0;
+        while (wrap.firstChild) wrap.removeChild(wrap.firstChild);
+        (arr || []).forEach(r => renderRow(r));
+        if (rows.length === 0) {
+          renderRow({ type: 'status', key: '', value: '' });
+        }
+      }
+      function getRows() {
+        return rows.map(r => ({
+          type: r.type,
+          key: r.type === 'header_contains' ? (r.key || '').trim() : '',
+          value: r.value,
+        }));
+      }
+      function addRow(initial) {
+        const e = renderRow(initial || { type: 'status', key: '', value: '' });
+        e.valInp.focus();
+        return e;
+      }
+      // 显示断言结果：按行号对应（发送顺序 == 行顺序）
+      function setResults(results) {
+        rows.forEach((entry, i) => {
+          const rr = (results || [])[i];
+          if (!rr) {
+            entry.resSpan.className = 'http2-assert-res';
+            entry.resSpan.textContent = '';
+            entry.resSpan.title = '';
+            return;
+          }
+          entry.resSpan.className = 'http2-assert-res ' + (rr.pass ? 'ok' : 'bad');
+          entry.resSpan.textContent = rr.pass ? '✓ 通过' : '✗ 失败';
+          const actual = (rr.actual !== undefined && rr.actual !== null && rr.actual !== '') ? '实际: ' + rr.actual : '不通过';
+          entry.resSpan.title = actual;
+        });
+      }
+      function clearResults() {
+        rows.forEach(entry => {
+          entry.resSpan.className = 'http2-assert-res';
+          entry.resSpan.textContent = '';
+          entry.resSpan.title = '';
+        });
+      }
+      setRows(initialArr || []);
+      return { wrap, setRows, getRows, addRow, setResults, clearResults };
+    }
+
     // ---------- 主请求区：URL 行 ----------
 
     const methodSel = el('select', { class: 'http2-method-sel', id: 'http2-method' });
@@ -468,6 +570,33 @@
     const formdataEditor = buildKvEditor([], { keyPh: '字段名', valPh: '值' });
     const urlencEditor = buildKvEditor([], { keyPh: '字段名', valPh: '值' });
     [formdataEditor, urlencEditor].forEach(ed => ed.wrap.addEventListener('input', markDirty));
+
+    // ---------- 断言（v0.15） ----------
+
+    const assertionEditor = buildAssertionEditor([{ type: 'status', value: '200' }]);
+    const assertSummary = el('span', { class: 'http2-assert-summary' });
+    const assertAddBtn = el('button', { class: 'http2-kv-add', text: '+ 添加断言' });
+    assertAddBtn.addEventListener('click', () => { assertionEditor.addRow(); markDirty(); });
+    function renderAssertSummary(results) {
+      if (!results || results.length === 0) {
+        assertSummary.textContent = '';
+        assertSummary.className = 'http2-assert-summary';
+        return;
+      }
+      const pass = results.filter(x => x.pass).length;
+      const cls = pass === results.length ? 'all-ok' : (pass === 0 ? 'all-bad' : 'some');
+      assertSummary.className = 'http2-assert-summary ' + cls;
+      assertSummary.textContent = '断言 ' + pass + '/' + results.length + ' 通过';
+    }
+    const assertCard = el('div', { class: 'http2-card' }, [
+      el('div', { class: 'http2-card-head' }, [
+        el('div', { class: 'http2-card-title', text: '响应断言' }),
+        assertSummary,
+        el('span', { class: 'http2-mute', style: 'font-size:11px', text: '发送后自动评估；随用例一起保存' }),
+      ]),
+      assertionEditor.wrap,
+      assertAddBtn,
+    ]);
 
     const bodyTypeSel = el('select');
     [
@@ -807,6 +936,11 @@
       const followRedirect = cbFollow.checked;
       const insecureTLS = cbInsecure.checked;
 
+      // 断言（过滤空行）
+      const assertions = assertionEditor.getRows()
+        .filter(a => a.type && String(a.value || '').trim() !== '')
+        .map(a => ({ type: a.type, key: a.key, value: a.value }));
+
       // UI busy
       btnSend.disabled = true;
       respStatus.className = 'http2-resp-status s-busy';
@@ -817,6 +951,8 @@
       respHeadersPre.innerHTML = '';
       respBodyView.innerHTML = '';
       respBodyView.appendChild(el('div', { class: 'http2-resp-empty', text: '请求中…' }));
+      assertionEditor.clearResults();
+      renderAssertSummary(null);
 
       lastReqParams = { method, url: urlRaw, headers: hdrs, body, timeoutMs, followRedirect, insecureTLS, envs: envsNow };
 
@@ -825,9 +961,13 @@
         const r = await api('POST', '/api/http/request', {
           method, url, headers: hdrsEnv, body, timeout_ms: timeoutMs,
           follow_redirect: followRedirect, insecure_tls: insecureTLS,
+          assertions,
         });
         lastResponse = r;
         const total = Math.round(performance.now() - start);
+        // 断言结果：逐条标绿/红 + 汇总
+        assertionEditor.setResults(r.assert_results || []);
+        renderAssertSummary(r.assert_results);
         if (r.ok) {
           const cls = r.status >= 500 ? 's-5xx' : r.status >= 400 ? 's-4xx' : r.status >= 300 ? 's-3xx' : 's-2xx';
           respStatus.className = 'http2-resp-status ' + cls;
@@ -899,6 +1039,7 @@
 
     const btnExportAll = el('button', { class: 'btn', text: '导出', onclick: exportCases });
     const btnImportBtn = el('button', { class: 'btn', text: '导入', onclick: importCases });
+    const btnImportCurl = el('button', { class: 'btn', text: '导入 cURL', title: '粘贴 curl 命令，解析并回填请求', onclick: importCurl });
     const btnNewCaseBtn = el('button', { class: 'btn', text: '+ 新用例', onclick: () => {
       // 清空 + 聚焦 URL 输入
       urlInp.value = '';
@@ -920,7 +1061,7 @@
       updateSaveMeta();
       urlInp.focus();
     }});
-    const sidebarTools = el('div', { class: 'http2-sidebar-tools' }, [btnExportAll, btnImportBtn, btnNewCaseBtn]);
+    const sidebarTools = el('div', { class: 'http2-sidebar-tools' }, [btnImportCurl, btnExportAll, btnImportBtn, btnNewCaseBtn]);
 
     const sidebar = el('div', { class: 'http2-sidebar' }, [
       el('h3', { text: '已保存用例' }),
@@ -1039,7 +1180,8 @@
       return row;
     }
 
-    function loadCase(c) {
+    // 把一份请求描述回填到 UI（loadCase / cURL 导入共用）
+    function applyRequestToUI(c) {
       methodSel.value = (c.method || 'GET').toUpperCase();
       urlInp.value = c.url || '';
       headersEditor.setRows(mapToKvArray(c.headers || {}));
@@ -1061,6 +1203,16 @@
       } else if (bm === 'urlencoded') {
         urlencEditor.setRows(mapToKvArray(c.body_form || parseFormBody(c.body || '')));
       }
+      // 断言
+      assertionEditor.setRows((c.assertions || []).map(a => ({
+        type: a.type || 'status', key: a.key || '', value: a.value || '',
+      })));
+      assertionEditor.clearResults();
+      renderAssertSummary(null);
+    }
+
+    function loadCase(c) {
+      applyRequestToUI(c);
       lastLoadedCaseId = c.id || '';
       lastLoadedCaseName = c.name || '';
       lastLoadedCaseGroup = c.group || '';
@@ -1173,6 +1325,8 @@
           body_mode: bodyModeOut,
           body_type: bodyRawType,
           body_form: bodyForm,
+          assertions: assertionEditor.getRows()
+            .filter(a => a.type && String(a.value || '').trim() !== ''),
           timeout_ms: parseInt(timeoutInp.value, 10) || 0,
           follow_redirect: cbFollow.checked,
           insecure_tls: cbInsecure.checked,
@@ -1256,6 +1410,7 @@
               body_mode: c.body_mode || 'raw',
               body_type: c.body_type || 'json',
               body_form: c.body_form || null,
+              assertions: c.assertions || [],
               timeout_ms: c.timeout_ms || 0,
               follow_redirect: c.follow_redirect !== false,
               insecure_tls: !!c.insecure_tls,
@@ -1307,6 +1462,7 @@
               body_mode: c.body_mode || 'raw',
               body_type: c.body_type || 'json',
               body_form: c.body_form || null,
+              assertions: c.assertions || [],
               timeout_ms: c.timeout_ms || 0,
               follow_redirect: c.follow_redirect !== false,
               insecure_tls: !!c.insecure_tls,
@@ -1327,6 +1483,80 @@
     }
 
     // ---------- 导出 / 导入 ----------
+
+    // 导入 cURL：弹窗粘贴 → 后端解析 → 预览 → 回填
+    function importCurl() {
+      const ta = el('textarea', { class: 'http2-curl-ta', spellcheck: 'false',
+        placeholder: "粘贴 cURL 命令，例如：\ncurl -X POST 'https://api.example.com/v1/order' \\\n  -H 'Content-Type: application/json' \\\n  --data-raw '{\"a\":1}'" });
+      const preview = el('div', { class: 'http2-curl-preview', style: 'display:none' });
+      const actions = el('div', { class: 'modal-actions' });
+      const cancelBtn = el('button', { class: 'btn', text: '取消' });
+      const parseBtn = el('button', { class: 'btn', text: '解析' });
+      const applyBtn = el('button', { class: 'btn btn-primary', text: '应用并回填', disabled: true });
+      actions.appendChild(cancelBtn);
+      actions.appendChild(parseBtn);
+      actions.appendChild(applyBtn);
+      const m = openModal(el('div', null, [
+        el('h4', { text: '导入 cURL 命令' }),
+        ta, preview, actions,
+      ]));
+      ta.focus();
+      cancelBtn.addEventListener('click', m.close);
+
+      let parsed = null;
+      parseBtn.addEventListener('click', async () => {
+        const txt = (ta.value || '').trim();
+        if (!txt) { toast('请先粘贴 cURL 命令', 'warn'); return; }
+        parseBtn.disabled = true;
+        try {
+          parsed = await api('POST', '/api/http/curl-parse', { curl: txt });
+          const headerNames = Object.keys(parsed.headers || {});
+          const bodyDesc = parsed.body_mode === 'none' ? '无 Body'
+            : (parsed.body_mode === 'raw' ? 'raw（' + (parsed.body_type || 'text') + '）'
+              : (parsed.body_mode === 'urlencoded' ? 'url-encoded' : 'form-data'));
+          preview.style.display = '';
+          preview.innerHTML = '';
+          preview.appendChild(el('div', null, [
+            el('span', { class: 'http2-case-method m-' + parsed.method, text: parsed.method }),
+            el('code', { text: parsed.url }),
+          ]));
+          preview.appendChild(el('div', { class: 'http2-mute', style: 'margin-top:6px', text:
+            headerNames.length + ' 个 Header · ' + bodyDesc
+            + (parsed.insecure_tls ? ' · 跳过 TLS 校验' : '')
+            + (parsed.follow_redirect === false ? ' · 不跟随重定向' : '') }));
+          applyBtn.disabled = false;
+          toast('解析成功', 'ok');
+        } catch (e) {
+          toast('解析失败：' + e.message, 'err');
+        } finally {
+          parseBtn.disabled = false;
+        }
+      });
+
+      applyBtn.addEventListener('click', () => {
+        if (!parsed) return;
+        const doApply = () => {
+          applyRequestToUI(parsed);
+          saveGroupInp.value = '';
+          saveNameInp.value = '';
+          lastLoadedCaseId = '';
+          lastLoadedCaseName = '';
+          lastLoadedCaseGroup = '';
+          pristineSnapshot = takeSnapshot();
+          updateSaveMeta();
+          refreshCasesUI();
+          m.close();
+          toast('已回填 cURL', 'ok');
+        };
+        if (isDirty && lastLoadedCaseId) {
+          confirmDialog('当前请求有未保存修改，回填 cURL 会丢弃这些修改，确定？').then(ok => {
+            if (ok) doApply();
+          });
+        } else {
+          doApply();
+        }
+      });
+    }
 
     function exportCases() {
       const data = {
@@ -1458,6 +1688,142 @@
       rebuildEnvMgr();
     }});
 
+    // ---------- WebSocket 测试（v0.15） ----------
+
+    let wsSessionId = null;
+    let wsConnected = false;
+    let wsPollTimer = null;
+    let wsAfterSeq = 0;
+    let wsPollBusy = false;
+
+    const wsUrlInp = el('input', { type: 'text', class: 'http2-url-input', id: 'http2-ws-url',
+      placeholder: 'ws://echo.example.com/socket（支持 ws:// 和 wss://）' });
+    wsUrlInp.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); wsToggle(); }
+    });
+    const btnWsToggle = el('button', { class: 'http2-send-btn', text: '连接', onclick: wsToggle });
+    const wsStatusBadge = el('span', { class: 'http2-ws-status idle', text: '未连接' });
+    const wsTimeoutInp = el('input', { type: 'number', value: '10000', min: '1000', max: '60000', step: '1000' });
+    const wsCbInsecure = el('input', { type: 'checkbox' });
+    const wsHeadersEditor = buildKvEditor([], { keyPh: 'Header', valPh: 'Value' });
+    const wsMsgTa = el('textarea', { class: 'http2-raw-textarea', rows: 2, spellcheck: 'false',
+      placeholder: '输入要发送的文本消息，Enter 发送（Shift+Enter 换行）' });
+    wsMsgTa.style.minHeight = '52px';
+    wsMsgTa.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); wsSend(); }
+    });
+    const btnWsSend = el('button', { class: 'btn btn-primary', text: '发送', disabled: true, onclick: wsSend });
+    const wsLogBox = el('div', { class: 'http2-ws-log' });
+
+    function updateWsUI() {
+      btnWsToggle.textContent = wsConnected ? '断开' : '连接';
+      btnWsToggle.classList.toggle('off', wsConnected);
+      wsStatusBadge.className = 'http2-ws-status ' + (wsConnected ? 'on' : 'idle');
+      wsStatusBadge.textContent = wsConnected ? '已连接' : '未连接';
+      wsUrlInp.disabled = wsConnected;
+      btnWsSend.disabled = !wsConnected;
+    }
+
+    function wsLog(kind, text) {
+      const line = el('div', { class: 'http2-ws-entry ' + kind });
+      const t = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+      line.appendChild(el('span', { class: 'http2-ws-time', text: t }));
+      const tag = { recv: '←', sent: '→', error: '✕', closed: '●', sys: '·' }[kind] || '·';
+      line.appendChild(el('span', { class: 'http2-ws-arrow', text: tag }));
+      line.appendChild(el('span', { class: 'http2-ws-text', text: text }));
+      wsLogBox.appendChild(line);
+      wsLogBox.scrollTop = wsLogBox.scrollHeight;
+    }
+
+    async function wsToggle() {
+      if (wsConnected || wsSessionId) { wsClose(); return; }
+      const url = wsUrlInp.value.trim();
+      if (!url) { toast('请输入 WebSocket 地址', 'warn'); wsUrlInp.focus(); return; }
+      if (!/^wss?:\/\//i.test(url)) { toast('仅支持 ws:// 或 wss:// 地址', 'err'); return; }
+      btnWsToggle.disabled = true;
+      wsLogBox.innerHTML = '';
+      try {
+        const r = await api('POST', '/api/http/ws/connect', {
+          url,
+          headers: kvArrayToMap(wsHeadersEditor.getRows()),
+          timeout_ms: parseInt(wsTimeoutInp.value, 10) || 0,
+          insecure_tls: wsCbInsecure.checked,
+        });
+        wsSessionId = r.session_id;
+        wsConnected = true;
+        wsAfterSeq = 0;
+        wsLog('sys', '已连接：' + url);
+        updateWsUI();
+        wsPoll();
+      } catch (e) {
+        wsConnected = false;
+        wsSessionId = null;
+        wsLog('error', '连接失败：' + e.message);
+      } finally {
+        btnWsToggle.disabled = false;
+        updateWsUI();
+      }
+    }
+
+    function wsPoll() {
+      if (!wsSessionId || wsPollBusy) return;
+      wsPollBusy = true;
+      api('POST', '/api/http/ws/poll', { session_id: wsSessionId, after_seq: wsAfterSeq })
+        .then(r => {
+          if (!r.ok) {
+            wsLog('closed', r.error || '会话已结束');
+            wsSessionId = null;
+            wsConnected = false;
+            updateWsUI();
+            return;
+          }
+          (r.events || []).forEach(ev => {
+            if (ev.seq > wsAfterSeq) wsAfterSeq = ev.seq;
+            if (ev.kind === 'sent') return; // 发送时已本地回显，避免重复
+            wsLog(ev.kind, ev.text);
+          });
+          wsConnected = !!r.connected;
+          updateWsUI();
+          if (r.connected && wsSessionId) {
+            wsPollTimer = setTimeout(wsPoll, 400);
+          } else if (!r.connected) {
+            wsSessionId = null;
+          }
+        })
+        .catch(e => {
+          wsLog('error', '拉取消息失败：' + e.message);
+          wsConnected = false;
+          wsSessionId = null;
+          updateWsUI();
+        })
+        .finally(() => { wsPollBusy = false; });
+    }
+
+    async function wsSend() {
+      const msg = wsMsgTa.value;
+      if (!msg) { toast('消息不能为空', 'warn'); return; }
+      if (!wsSessionId) { toast('未连接', 'warn'); return; }
+      wsLog('sent', msg);
+      wsMsgTa.value = '';
+      try {
+        await api('POST', '/api/http/ws/send', { session_id: wsSessionId, message: msg });
+      } catch (e) {
+        wsLog('error', '发送失败：' + e.message);
+      }
+    }
+
+    async function wsClose() {
+      clearTimeout(wsPollTimer);
+      const sid = wsSessionId;
+      wsSessionId = null;
+      wsConnected = false;
+      if (sid) {
+        try { await api('POST', '/api/http/ws/close', { session_id: sid }); } catch (e) { /* ignore */ }
+      }
+      wsLog('closed', '连接已关闭');
+      updateWsUI();
+    }
+
     // ---------- 整体布局 ----------
 
     const headersCard = el('div', { class: 'http2-card' }, [
@@ -1492,6 +1858,24 @@
       ]),
     ]);
 
+    const wsCard = el('div', { class: 'http2-card' }, [
+      el('div', { class: 'http2-card-head' }, [
+        el('div', { class: 'http2-card-title', text: 'WebSocket 测试' }),
+        wsStatusBadge,
+      ]),
+      el('div', { class: 'http2-url-row', style: 'margin-bottom:8px' }, [wsUrlInp, btnWsToggle]),
+      el('div', { class: 'http2-opt-row' }, [
+        el('label', { class: 'opt-num' }, [el('span', { text: '握手超时' }), wsTimeoutInp, el('span', { text: 'ms' })]),
+        el('label', { class: 'opt' }, [wsCbInsecure, document.createTextNode(' 跳过 TLS 校验')]),
+      ]),
+      el('div', { style: 'font-size: 12px; color: var(--text-dim); margin: 10px 0 4px', text: '请求 Headers（如 Origin / Authorization）' }),
+      wsHeadersEditor.wrap,
+      el('div', { style: 'font-size: 12px; color: var(--text-dim); margin: 10px 0 4px', text: '消息' }),
+      el('div', { class: 'http2-ws-send-row' }, [wsMsgTa, btnWsSend]),
+      el('div', { style: 'font-size: 12px; color: var(--text-dim); margin: 10px 0 4px', text: '消息日志' }),
+      wsLogBox,
+    ]);
+
     const saveCard = el('div', { class: 'http2-card' }, [
       el('div', { class: 'http2-card-head' }, [
         el('div', { class: 'http2-card-title', text: '保存用例' }),
@@ -1516,8 +1900,10 @@
       ]),
       headersCard,
       bodyCard,
+      assertCard,
       respCard,
       saveCard,
+      wsCard,
       envCard,
     ]);
 
@@ -1542,5 +1928,5 @@
   Kairo.pages.http = renderHTTP;
   Kairo.state.routes.http = renderHTTP;
   Kairo.state.routeNames.http = 'HTTP 测试';
-  Kairo.state.routeSubs.http = '键值对编辑器 · Body 多模式 · 响应高亮 · 用例管理';
+  Kairo.state.routeSubs.http = 'cURL 导入 · 响应断言 · WebSocket · 用例管理';
 })();

@@ -732,6 +732,12 @@ func Dial(ctx context.Context, srv Server, cred Credentials, timeout time.Durati
 	defaultProf := pkgDefaultProf
 	pkgLogMu.RUnlock()
 	_, profiles := resolveProfile(srv, defaultProf)
+	// 连接方案自适应：把上次连接成功的 profile 挪到最前，失败再走后续 profile。
+	// 命中记忆时记一条 debug 日志，便于排查"为什么这次直接选了某套算法"。
+	profiles = prioritizeProfiles(addr, profiles)
+	if name, ok := rememberedProfile(addr); ok {
+		sshDebugLogf("  命中连接方案记忆: %s（优先尝试，失败自动回退）", name)
+	}
 	for i, p := range profiles {
 		if err := ctx.Err(); err != nil {
 			sshDebugLogf("Dial 超时/取消: %s (耗时 %s)", addr, time.Since(dialStart))
@@ -744,6 +750,7 @@ func Dial(ctx context.Context, srv Server, cred Credentials, timeout time.Durati
 			sshDebugLogf("Dial 成功: %s (耗时 %s, attempt=%d, profile=%s)", addr, time.Since(dialStart), i+1, p.Name)
 			sshDebugLogf("  client version: %s", string(c.Conn.ClientVersion()))
 			sshDebugLogf("  server version: %s", string(c.Conn.ServerVersion()))
+			rememberProfile(addr, p.Name)
 			return &Client{srv: srv, cre: cred, conn: c}, nil
 		}
 		lastErr = err

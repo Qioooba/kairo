@@ -656,29 +656,9 @@ func SearchCommand(dir string, files []string, kw []SearchKeyword, max, timeoutS
 	}
 
 	// 拆成 OR 段；每段内是 AND
-	var groups []orGroup
-	cur := orGroup{}
-	flush := func() {
-		if len(cur.pos) > 0 || len(cur.neg) > 0 {
-			groups = append(groups, cur)
-		}
-		cur = orGroup{}
-	}
-	for _, k := range kw {
-		switch k.Op {
-		case "term":
-			if k.Negate {
-				cur.neg = append(cur.neg, k.Value)
-			} else {
-				cur.pos = append(cur.pos, k.Value)
-			}
-		case "or":
-			flush()
-		}
-	}
-	flush()
-	if len(groups) == 0 {
-		return "", fmt.Errorf("没有可用的搜索关键词")
+	groups, err := splitOrGroups(kw)
+	if err != nil {
+		return "", err
 	}
 
 	enc := strings.ToLower(strings.TrimSpace(encoding))
@@ -804,6 +784,145 @@ func SearchCommand(dir string, files []string, kw []SearchKeyword, max, timeoutS
 	return cmd, nil
 }
 
+// windowAwkScript 是 WindowSearchCommand 用到的 awk 脚本（单行、无单引号，
+// 因为要嵌进 sh -c '...' 的单引号里）。
+//
+// 算法（对单个文件单遍扫描）：
+//   - 每行先按"负"term 检查：命中任意负 term 的行不参与该 OR 段的窗口判定、
+//     也永不输出（负 term 行级生效，语义与 grep -v 一致）；
+//   - 命中"正"term 的行记录行号（ln[g,t]）与原文（tx[g,t]）；
+//   - 当某 OR 段所有正 term 都已出现、且最远两个行号差 <= w 时，窗口成立，
+//     把窗口内所有 term 行输出为命中行（全局 em[] 按行号去重）；
+//   - 纯负 OR 段（np[g]==0）：输出所有不含负 term 的行；
+//   - 输出行数达到 lim 后 exit（等价 grep -m 的单文件配额）。
+//
+// 模式通过 ENVIRON["KP_<g>_<t>"] / ENVIRON["KN_<g>_<t>"] 传入，而不是 -v：
+// -v 的值会被 awk 做转义处理（\t → TAB 等），关键词里的字面反斜杠会被破坏；
+// 环境变量的值是原始字节，index() 按字节做字面匹配，最安全。
+const windowAwkScript = `BEGIN { split(npos, np, ","); split(nneg, nn, ","); for (g = 1; g <= ng; g++) { for (t = 1; t <= np[g]; t++) { pp[g,t] = ENVIRON["KP_" g "_" t]; if (ig) pp[g,t] = tolower(pp[g,t]); } for (t = 1; t <= nn[g]; t++) { pn[g,t] = ENVIRON["KN_" g "_" t]; if (ig) pn[g,t] = tolower(pn[g,t]); } } } { L = $0; if (ig) L = tolower(L); for (g = 1; g <= ng; g++) { if (np[g] == 0) { bad = 0; for (t = 1; t <= nn[g]; t++) if (index(L, pn[g,t]) > 0) { bad = 1; break; } if (!bad && !em[FNR]) { printf "%s:%d:%s\n", fname, FNR, $0; em[FNR] = 1; cnt++; if (cnt >= lim) exit; } continue; } bad = 0; for (t = 1; t <= nn[g]; t++) if (index(L, pn[g,t]) > 0) { bad = 1; break; } if (bad) continue; for (t = 1; t <= np[g]; t++) { if (index(L, pp[g,t]) > 0) { ln[g,t] = FNR; tx[g,t] = $0; has[g,t] = 1; } } all = 1; mn = 0; mx = 0; for (t = 1; t <= np[g]; t++) { if (!has[g,t]) { all = 0; break; } v = ln[g,t]; if (!mn || v < mn) mn = v; if (v > mx) mx = v; } if (all && (mx - mn) <= w) { for (t = 1; t <= np[g]; t++) { l = ln[g,t]; if (!em[l]) { printf "%s:%d:%s\n", fname, l, tx[g,t]; em[l] = 1; cnt++; if (cnt >= lim) exit; } } } } }`
+
+// WindowSearchCommand 构造"多行窗口匹配"的安全命令（v0.15）。
+//
+// 与 SearchCommand 的区别：
+//   - SearchCommand 的 && 是"同一行内同时包含"（grep 管道逐行过滤）；
+//   - 本函数的 && 是"在 window 行跨度内出现"（|行号差| <= window），
+//     由单次 awk 扫描实现；window 对单 term 段 / || / 纯 ! 段不影响语义。
+//
+// 语义约定：
+//   - 每个 OR 段内的所有"正"term 都必须出现，且最远两个匹配行号差 <= window；
+//   - 窗口成立时，窗口内每条 term 行都是命中行（同一行只输出一次）；
+//   - "负"term（!X）行级生效：含 X 的行不参与该段的窗口判定、也永不输出；
+//   - 纯负段（如 !DEBUG）输出所有不含 X 的行（与 grep '^' | grep -v 等价）。
+//
+// 实现要点：
+//   - awk 是 POSIX 工具，AIX / GNU / macOS 都有，且项目里已在用（ContextLinesForHitsCommand）；
+//   - 模式字节通过 $(printf %b '\xHH..') 展开成环境变量值传给 awk（-v 会转义破坏反斜杠），
+//     UTF-8 直接转义原始字节、GBK 走 ToEncodingEscaped 同款机制；
+//   - index() 字面匹配绕开正则转义；忽略大小写用 LC_ALL=C tolower（与 grep -i C locale 一致）；
+//   - 每文件输出行数达到 lim 后 awk exit（等价 SearchCommand 的 grep -m 配额）；
+//   - 输出格式 file:lineno:content，与 grep -HnE 完全一致，下游解析零改动。
+func WindowSearchCommand(dir string, files []string, kw []SearchKeyword, max, timeoutSec int, encoding string, ignoreCase bool, window int) (string, error) {
+	if strings.TrimSpace(dir) == "" {
+		return "", fmt.Errorf("dir 不能为空")
+	}
+	if len(files) == 0 {
+		return "", fmt.Errorf("files 不能为空")
+	}
+	if len(kw) == 0 {
+		return "", fmt.Errorf("kw 不能为空")
+	}
+	if max <= 0 {
+		max = 200
+	}
+	if window <= 0 {
+		window = 10
+	}
+	if window > 50 {
+		window = 50
+	}
+	if timeoutSec <= 0 {
+		timeoutSec = 30
+	}
+	if strings.ContainsAny(dir, "'`$\\;") {
+		return "", fmt.Errorf("dir 含非法字符: %q", dir)
+	}
+	for _, f := range files {
+		if strings.ContainsAny(f, "'`$\\;&|><\n\r*?") {
+			return "", fmt.Errorf("file 含非法字符: %q", f)
+		}
+	}
+
+	groups, err := splitOrGroups(kw)
+	if err != nil {
+		return "", err
+	}
+
+	enc := strings.ToLower(strings.TrimSpace(encoding))
+	ig := 0
+	if ignoreCase {
+		ig = 1
+	}
+
+	// 每文件输出配额（与 SearchCommand 相同的计算方式：平均分配 + 缓冲）
+	perFileMax := max / len(files)
+	if perFileMax < 30 {
+		perFileMax = 30
+	}
+	perFileMax += 20
+
+	// 构造环境变量前缀：KP_<g>_<t>=$(printf %b '\xHH..')（正 term）/ KN_<g>_<t>（负 term）。
+	// 值先按目标编码转字节再 hex 转义，shell 展开后是原始字节，awk ENVIRON 原样拿到。
+	var envParts []string
+	var nposList, nnegList []string
+	for gi, g := range groups {
+		nposList = append(nposList, strconv.Itoa(len(g.pos)))
+		nnegList = append(nnegList, strconv.Itoa(len(g.neg)))
+		for ti, term := range g.pos {
+			esc, err := ToEncodingEscaped(term, enc)
+			if err != nil {
+				return "", err
+			}
+			envParts = append(envParts, fmt.Sprintf(`KP_%d_%d=$(printf %%b '%s')`, gi+1, ti+1, esc))
+		}
+		for ti, term := range g.neg {
+			esc, err := ToEncodingEscaped(term, enc)
+			if err != nil {
+				return "", err
+			}
+			envParts = append(envParts, fmt.Sprintf(`KN_%d_%d=$(printf %%b '%s')`, gi+1, ti+1, esc))
+		}
+	}
+	envPrefix := strings.Join(envParts, " ")
+
+	// buildAwk 构造"对单个文件"的 awk 调用。
+	// fnameArg / fileArg 由调用方给出（单文件传 shellQuote 后的文件名，多文件传 "$f"）。
+	buildAwk := func(fnameArg, fileArg string) string {
+		inv := fmt.Sprintf(
+			`LC_ALL=C awk -v ng=%d -v npos=%q -v nneg=%q -v w=%d -v lim=%d -v fname=%s -v ig=%d '%s' %s`,
+			len(groups), strings.Join(nposList, ","), strings.Join(nnegList, ","),
+			window, perFileMax, fnameArg, ig, windowAwkScript, fileArg,
+		)
+		if envPrefix != "" {
+			inv = envPrefix + " " + inv
+		}
+		return inv
+	}
+
+	singleFile := len(files) == 1
+	quotedFiles := quoteArgs(files)
+
+	var cmdBody string
+	if singleFile {
+		cmdBody = buildAwk(quotedFiles[0], quotedFiles[0]) + " | LC_ALL=C sort -u | head -n " + strconv.Itoa(max)
+	} else {
+		fileList := strings.Join(quotedFiles, " ")
+		cmdBody = "(for f in " + fileList + "; do " + buildAwk(`"$f"`, `"$f"`) + "; done) | LC_ALL=C sort -u | head -n " + strconv.Itoa(max)
+	}
+
+	cmd := fmt.Sprintf("sh -c %s", shellQuote("cd "+shellQuote(dir)+" && "+cmdBody))
+	return cmd, nil
+}
+
 // orGroup 是 SearchCommand 把 kw 切分成"OR 段"时用的内部容器：
 //   - pos: 当前段里的"正"term（被 grep -E / grep -HnE 命中的）
 //   - neg: 当前段里的"负"term（被 grep -vE 排除的）
@@ -813,6 +932,36 @@ func SearchCommand(dir string, files []string, kw []SearchKeyword, max, timeoutS
 type orGroup struct {
 	pos []string
 	neg []string
+}
+
+// splitOrGroups 把解析后的关键词切成 OR 段（每段内部是 AND 关系）。
+// SearchCommand 与 WindowSearchCommand 共用，保证两条路径的分组语义一致。
+func splitOrGroups(kw []SearchKeyword) ([]orGroup, error) {
+	var groups []orGroup
+	cur := orGroup{}
+	flush := func() {
+		if len(cur.pos) > 0 || len(cur.neg) > 0 {
+			groups = append(groups, cur)
+		}
+		cur = orGroup{}
+	}
+	for _, k := range kw {
+		switch k.Op {
+		case "term":
+			if k.Negate {
+				cur.neg = append(cur.neg, k.Value)
+			} else {
+				cur.pos = append(cur.pos, k.Value)
+			}
+		case "or":
+			flush()
+		}
+	}
+	flush()
+	if len(groups) == 0 {
+		return nil, fmt.Errorf("没有可用的搜索关键词")
+	}
+	return groups, nil
 }
 
 // quoteArgs 把每个 arg 包成单引号字符串
@@ -1113,9 +1262,13 @@ FNR in needed {
 }
 `
 
-	// 压缩空白（避免多行脚本被 shell 解释问题）—— 简单替换换行和多空格
+	// 压缩空白（避免多行脚本被 shell 解释问题）。
+	// REVIEW-v0.15 修复：换行必须换成 ";" 而不是空格——awk 语句之间需要
+	// 换行或分号做分隔符，换成空格会得到 "split(...) for (...)" 这类
+	// 语法错误（awk exit 2，stderr 报 syntax error），而 enrichHitsWithContext
+	// 把 exit!=0 静默吞掉 → 搜索结果的上下文行永远补不上。
 	awkScript = strings.TrimSpace(awkScript)
-	awkScript = strings.ReplaceAll(awkScript, "\n", " ")
+	awkScript = strings.ReplaceAll(awkScript, "\n", "; ")
 	awkScript = strings.ReplaceAll(awkScript, "\t", " ")
 
 	cmd := fmt.Sprintf(

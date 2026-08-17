@@ -37,6 +37,7 @@ func (s *Server) handleConfigExport(w http.ResponseWriter, r *http.Request) {
 var sensitiveKeys = []string{
 	"password", "passwd", "secret", "token",
 	"api_key", "private_key", "host_key_sha256", "credential_key",
+	"kairo",
 }
 
 // isSensitiveKey 判断（小写化后的）key 是否包含任一敏感子串。
@@ -44,6 +45,25 @@ func isSensitiveKey(key string) bool {
 	lk := strings.ToLower(key)
 	for _, s := range sensitiveKeys {
 		if strings.Contains(lk, s) {
+			return true
+		}
+	}
+	return false
+}
+
+// isSensitiveScalarKey 判断 key 是否敏感、且其 value 是标量（需要整值脱敏）。
+//
+// "auth" 比较特殊：顶层 auth: 是 map（enabled/tokens 容器，非敏感），
+// 而 internal_endpoints.*.auth 是 base64 认证串（敏感标量）。
+// 因此 "auth" 只在值为标量时才脱敏，map 则继续递归。
+func isSensitiveScalarKey(key string, val any) bool {
+	if isSensitiveKey(key) {
+		return true
+	}
+	lk := strings.ToLower(key)
+	if lk == "auth" {
+		switch val.(type) {
+		case string, int, int64, float64, bool, nil:
 			return true
 		}
 	}
@@ -73,7 +93,7 @@ func redactValue(v any) any {
 	switch t := v.(type) {
 	case map[string]any:
 		for k, val := range t {
-			if isSensitiveKey(k) {
+			if isSensitiveScalarKey(k, val) {
 				t[k] = "***"
 			} else {
 				t[k] = redactValue(val)
@@ -103,7 +123,10 @@ func redactConfigYAMLLegacy(data []byte) []byte {
 			continue
 		}
 		key := strings.ToLower(strings.TrimSpace(trimmed[:colon]))
-		if !isSensitiveKey(key) {
+		val := strings.TrimSpace(trimmed[colon+1:])
+		// "auth" 只在行内带标量值时脱敏（internal_endpoints.*.auth），
+		// 顶层 `auth:`（map 容器，值为空）不脱敏。
+		if !isSensitiveKey(key) && !(key == "auth" && val != "") {
 			continue
 		}
 		indentLen := len(line) - len(strings.TrimLeft(line, " \t"))

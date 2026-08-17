@@ -24,6 +24,19 @@ import (
 	"time"
 )
 
+// OpEvent 一次审计操作的只读快照。
+// Fields 是 Write(op, fields...) 传入的 key/value 交替切片，订阅者只读、不得修改。
+type OpEvent struct {
+	Op     string
+	Fields []any
+}
+
+// Subscriber 审计订阅者。OnOp 在每次 Write 落盘后调用（Write 返回前）。
+// 实现必须快速返回；panic 会被 audit 包 recover，绝不影响审计主流程。
+type Subscriber interface {
+	OnOp(OpEvent)
+}
+
 // Logger 简单的线程安全审计日志器
 type Logger struct {
 	dir  string
@@ -31,6 +44,9 @@ type Logger struct {
 	out  io.WriteCloser
 	file *os.File
 	cur  string // 当前日期字符串
+
+	subsMu sync.RWMutex // 保护 subs（与 mu 独立：通知在 mu 释放后进行）
+	subs   []Subscriber
 }
 
 // New 在 dir 下创建/打开 audit.log（同一天复用）
@@ -55,6 +71,53 @@ func (l *Logger) Close() error {
 	return nil
 }
 
+// Subscribe 注册一个订阅者，返回注销函数（按 identity 比较移除；重复调用幂等）。
+// 订阅者会在每次 Write 落盘后、在 Write 返回前被调用（见 notifySubs）。
+func (l *Logger) Subscribe(s Subscriber) func() {
+	if s == nil {
+		// 防御：nil 订阅者直接返回空注销函数
+		return func() {}
+	}
+	l.subsMu.Lock()
+	l.subs = append(l.subs, s)
+	l.subsMu.Unlock()
+	return func() {
+		l.subsMu.Lock()
+		for i, sub := range l.subs {
+			if sub == s {
+				l.subs = append(l.subs[:i], l.subs[i+1:]...)
+				break
+			}
+		}
+		l.subsMu.Unlock()
+	}
+}
+
+// notifySubs 在锁外通知所有订阅者（best-effort）。
+//
+// 设计要点：
+//   - 必须在 l.mu 释放之后调用：订阅者（如 pet 引擎）有自己的锁，
+//     若在持锁期间回调可能死锁或阻塞审计主流程；
+//   - 先复制订阅者列表再逐个回调，避免回调期间 Subscribe/注销的竞态；
+//   - 每个订阅者的 panic 单独 recover 吞掉，绝不影响审计；
+//   - 回调失败静默忽略——宠物经验属于增值功能，不值得为它降级审计。
+func (l *Logger) notifySubs(op string, fields []any) {
+	l.subsMu.RLock()
+	subs := make([]Subscriber, len(l.subs))
+	copy(subs, l.subs)
+	l.subsMu.RUnlock()
+	if len(subs) == 0 {
+		return
+	}
+	ev := OpEvent{Op: op, Fields: fields}
+	for _, s := range subs {
+		func() {
+			defer func() { _ = recover() }()
+			s.OnOp(ev)
+		}()
+	}
+}
+
 // Write 写一条审计记录。
 // fields 是 key/value 交替的扁平结构（必须偶数长度）。
 //
@@ -67,40 +130,48 @@ func (l *Logger) Close() error {
 //   - 解析端一行 json.Unmarshal，零正则；
 //   - 二次处理（grep 改成 jq / awk 拆字段）更稳。
 func (l *Logger) Write(op string, fields ...any) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	// 检查是否需要按日滚动
-	today := time.Now().Format("2006-01-02")
-	if today != l.cur {
-		if err := l.rotateLocked("audit.log"); err != nil {
-			return
+	// 写盘在闭包内持锁完成；闭包返回后 l.mu 已释放，
+	// 再在锁外通知订阅者（避免订阅者回调与审计主流程互相阻塞/死锁）。
+	wrote := func() bool {
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		// 检查是否需要按日滚动
+		today := time.Now().Format("2006-01-02")
+		if today != l.cur {
+			if err := l.rotateLocked("audit.log"); err != nil {
+				return false
+			}
 		}
-	}
-	if l.out == nil {
-		return
-	}
-	if len(fields)%2 != 0 {
-		fields = append(fields, "<missing>")
-	}
-	// 拼成 map[string]string（值走 fmt.Sprint，复合类型也能序列化）
-	rec := make(map[string]string, 2+len(fields)/2)
-	rec["ts"] = time.Now().Format(time.RFC3339Nano)
-	rec["op"] = op
-	for i := 0; i < len(fields); i += 2 {
-		k, ok := fields[i].(string)
-		if !ok {
-			k = fmt.Sprint(fields[i])
+		if l.out == nil {
+			return false
 		}
-		rec[k] = fmt.Sprint(fields[i+1])
+		if len(fields)%2 != 0 {
+			fields = append(fields, "<missing>")
+		}
+		// 拼成 map[string]string（值走 fmt.Sprint，复合类型也能序列化）
+		rec := make(map[string]string, 2+len(fields)/2)
+		rec["ts"] = time.Now().Format(time.RFC3339Nano)
+		rec["op"] = op
+		for i := 0; i < len(fields); i += 2 {
+			k, ok := fields[i].(string)
+			if !ok {
+				k = fmt.Sprint(fields[i])
+			}
+			rec[k] = fmt.Sprint(fields[i+1])
+		}
+		b, err := json.Marshal(rec)
+		if err != nil {
+			// 序列化失败兜底：写一行"audit_format_error"标记
+			_, _ = fmt.Fprintln(l.out, `{"op":"audit_format_error","err":"`+err.Error()+`"}`)
+			return false
+		}
+		_, _ = l.out.Write(b)
+		_, _ = l.out.Write([]byte("\n"))
+		return true
+	}()
+	if wrote {
+		l.notifySubs(op, fields)
 	}
-	b, err := json.Marshal(rec)
-	if err != nil {
-		// 序列化失败兜底：写一行"audit_format_error"标记
-		_, _ = fmt.Fprintln(l.out, `{"op":"audit_format_error","err":"`+err.Error()+`"}`)
-		return
-	}
-	_, _ = l.out.Write(b)
-	_, _ = l.out.Write([]byte("\n"))
 }
 
 func joinComma(parts []string) string {

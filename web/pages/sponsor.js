@@ -437,7 +437,11 @@
     ]);
     honorList.appendChild(loadingBox);
 
-    var honorCard = el('div', { style: 'margin-top:28px;' }, [
+    // 宠物榜单容器（class pet-board，切到宠物 tab 时才填充内容）
+    var petBoard = el('div', { class: 'pet-board', style: 'margin-top:8px;' });
+
+    // 武林 tab 内容（原标题 + 原榜单列表，行为不变）
+    var wulinTab = el('div', { style: 'display:block;' }, [
       el('div', {
         style: 'text-align:center; margin-bottom:14px;',
       }, [
@@ -453,6 +457,48 @@
         text: '武功越高 排名越前'
       }),
       honorList,
+    ]);
+
+    // ============ 4.1 tab 按钮条（武林排行榜 ↔ 宠物排行榜） ============
+    // 宠物 tab 按钮带 class pet-board-tab：未开启宠物时由 Kairo.pet.refreshBoardTab() 隐藏
+    var TAB_BTN_STYLE = 'padding:6px 14px;border-radius:16px;cursor:pointer;margin-right:8px;' +
+      'font-size:13px;border:1px solid var(--border,rgba(0,0,0,.15));' +
+      'background:transparent;color:var(--text-dim);';
+    var wulinBtn = el('button', {
+      type: 'button',
+      class: 'board-tab',
+      style: TAB_BTN_STYLE,
+      text: '武林排行榜',
+      onclick: function () { showTab('wulin'); }
+    });
+    var petBtn = el('button', {
+      type: 'button',
+      class: 'board-tab pet-board-tab',
+      style: TAB_BTN_STYLE,
+      text: '宠物排行榜',
+      onclick: function () { showTab('pet'); }
+    });
+    var tabBar = el('div', { style: 'text-align:center; margin-bottom:14px;' }, [wulinBtn, petBtn]);
+
+    function showTab(name) {
+      // 宠物未开启时强制回武林 tab
+      var petOk = !!(window.Kairo && Kairo.pet && Kairo.pet.isEnabled && Kairo.pet.isEnabled());
+      if (name === 'pet' && !petOk) name = 'wulin';
+      var active = name;
+      wulinTab.style.display = active === 'wulin' ? 'block' : 'none';
+      petBoard.style.display = active === 'pet' ? 'block' : 'none';
+      wulinBtn.style.background = active === 'wulin' ? 'var(--accent,#4a6fa5)' : 'transparent';
+      wulinBtn.style.color = active === 'wulin' ? '#fff' : 'var(--text-dim)';
+      petBtn.style.background = active === 'pet' ? 'var(--accent,#4a6fa5)' : 'transparent';
+      petBtn.style.color = active === 'pet' ? '#fff' : 'var(--text-dim)';
+      try { sessionStorage.setItem('kairo:pet:boardtab', active); } catch (e) { /* ignore */ }
+      if (active === 'pet') loadPetBoard();
+    }
+
+    var honorCard = el('div', { style: 'margin-top:28px;' }, [
+      tabBar,
+      wulinTab,
+      petBoard,
     ]);
 
     // ============ 5. 底部随机段子 + 随机签名 ============
@@ -481,6 +527,12 @@
     view.appendChild(qrCard);
     view.appendChild(honorCard);
     view.appendChild(footer);
+
+    // 宠物未开启时隐藏「宠物排行榜」tab 按钮（必须在 honorCard 进 DOM 之后调用，
+    // 否则 querySelectorAll 找不到按钮；pet.js 提供，失败静默）
+    if (window.Kairo && Kairo.pet && Kairo.pet.refreshBoardTab) {
+      try { Kairo.pet.refreshBoardTab(); } catch (e) { /* 宠物彩蛋联动失败静默 */ }
+    }
 
     // ---- 异步加载排行榜 (失败/空都只影响 honorList 内部) ----
     //
@@ -584,6 +636,11 @@
           });
         }
 
+        // 品牌杯数明细: 库迪 x / 瑞幸 x / 奶茶 x (后端分别返回, 前端不再只显示 total)
+        function breakdownOf(e) {
+          return '库迪 ' + (e.cotti || 0) + ' · 瑞幸 ' + (e.lucky || 0) + ' · 奶茶 ' + (e.milktea || 0);
+        }
+
         entries.forEach(function (e, i) {
           var rankNode = makeRankNode(i);
           // 拼 name: 前 50 名拿 NICKNAMES[rank-1], 50+ 只显示真实姓名
@@ -591,17 +648,26 @@
           var displayName = nick ? (nick + '·' + e.real_name) : e.real_name;
 
           if (i < 3) {
-            // ===== Top 3: 1 行带金色左边框 (奖杯 + 名称 + 总杯数 + 日期) =====
+            // ===== Top 3: 1 行带金色左边框 (奖杯 + 名称/明细 + 总杯数 + 日期) =====
             honorList.appendChild(el('div', {
               style: 'display:flex; align-items:center; gap:12px; padding:10px 14px; border-radius:8px; ' +
                      'margin-bottom:6px; background:var(--bg-1); border-left:3px solid #F59E0B;'
             }, [
               rankNode,
-              el('span', {
-                style: 'flex:1; min-width:0; font-size:15px; font-weight:800; color:var(--text); ' +
-                       'white-space:nowrap; overflow:hidden; text-overflow:ellipsis;',
-                text: displayName
-              }),
+              el('div', {
+                style: 'flex:1; min-width:0;'
+              }, [
+                el('div', {
+                  style: 'font-size:15px; font-weight:800; color:var(--text); ' +
+                         'white-space:nowrap; overflow:hidden; text-overflow:ellipsis;',
+                  text: displayName
+                }),
+                el('div', {
+                  style: 'font-size:11px; font-weight:600; color:var(--text-mute); ' +
+                         'white-space:nowrap; overflow:hidden; text-overflow:ellipsis;',
+                  text: breakdownOf(e)
+                })
+              ]),
               el('span', {
                 style: 'font-size:12px; font-weight:700; color:var(--warn); ' +
                        'padding:2px 10px; border-radius:8px; background:rgba(245,158,11,0.12); flex-shrink:0;',
@@ -613,17 +679,26 @@
               }),
             ]));
           } else {
-            // ===== #4 ~ #50: 1 行紧凑版 (序号 + 名称 + 总杯数 + 日期) =====
+            // ===== #4 ~ #50: 1 行紧凑版 (序号 + 名称/明细 + 总杯数 + 日期) =====
             honorList.appendChild(el('div', {
               style: 'display:flex; align-items:center; gap:12px; padding:6px 14px; border-radius:6px; ' +
                      'margin-bottom:2px;'
             }, [
               rankNode,
-              el('span', {
-                style: 'flex:1; min-width:0; font-size:14px; font-weight:700; color:var(--text); ' +
-                       'white-space:nowrap; overflow:hidden; text-overflow:ellipsis;',
-                text: displayName
-              }),
+              el('div', {
+                style: 'flex:1; min-width:0;'
+              }, [
+                el('div', {
+                  style: 'font-size:14px; font-weight:700; color:var(--text); ' +
+                         'white-space:nowrap; overflow:hidden; text-overflow:ellipsis;',
+                  text: displayName
+                }),
+                el('div', {
+                  style: 'font-size:11px; font-weight:600; color:var(--text-mute); ' +
+                         'white-space:nowrap; overflow:hidden; text-overflow:ellipsis;',
+                  text: breakdownOf(e)
+                })
+              ]),
               el('span', {
                 style: 'font-size:12px; font-weight:700; color:var(--warn); ' +
                        'padding:1px 8px; border-radius:6px; background:rgba(245,158,11,0.10); flex-shrink:0;',
@@ -639,8 +714,274 @@
       }
     }
 
+    // ============ 4.2 宠物排行榜（懒加载） ============
+    // loadPetBoard: POST /api/pet/sync 拉榜单；失败回退 GET /api/pet/leaderboard（缓存）；
+    // 再失败显示友好文案。我的统计独立走 GET /api/pet/state，失败则隐藏统计区。
+    var boardStats = null;  // 我的统计（GET /api/pet/state 的 stats 字段）
+    var statTab = 'today';  // today | month | total
+    var statBtns = {};
+    var statBody = null;    // 统计表格容器（renderPetBoard 里重建）
+    var statSection = null; // 统计区块（无数据时隐藏）
+
+    function fmtInt(n) { return Math.floor(Number(n || 0)); }
+
+    // 宠物榜单 loading 占位
+    var petLoadingBox = el('div', {
+      style: 'text-align:center; padding:24px 16px;'
+    }, [
+      el('div', { style: 'margin-bottom:8px; display:flex; justify-content:center;' },
+        [(window.Kairo && Kairo.icons && Kairo.icons.svg)
+          ? Kairo.icons.svg('hourglass', 28)
+          : el('div', { style: 'font-size:28px;', text: '⏳' })]),
+      el('div', { style: 'font-size:13px; color:var(--text-dim);', text: '正在同步宠物榜单…' })
+    ]);
+
+    function loadPetBoard() {
+      petBoard.innerHTML = '';
+      petBoard.appendChild(petLoadingBox.cloneNode(true));
+      api('POST', '/api/pet/sync', {}).then(function (resp) {
+        if (resp && resp.ok) renderPetBoard(resp);
+        else loadPetBoardCached();
+      }).catch(function () { loadPetBoardCached(); });
+      // 我的统计独立拉取（不阻塞榜单渲染）
+      boardStats = null;
+      api('GET', '/api/pet/state').then(function (resp) {
+        if (resp && resp.enabled && resp.stats) {
+          boardStats = resp.stats;
+          if (statSection) statSection.style.display = '';
+        } else {
+          boardStats = null;
+          if (statSection) statSection.style.display = 'none';
+        }
+        renderStatsTable();
+      }).catch(function () {
+        boardStats = null;
+        if (statSection) statSection.style.display = 'none';
+        renderStatsTable();
+      });
+    }
+
+    function loadPetBoardCached() {
+      api('GET', '/api/pet/leaderboard').then(function (resp) {
+        if (resp && resp.ok) renderPetBoard(resp);
+        else showPetBoardError();
+      }).catch(function () { showPetBoardError(); });
+    }
+
+    function showPetBoardError() {
+      petBoard.innerHTML = '';
+      petBoard.appendChild(el('div', {
+        style: 'text-align:center; padding:32px 16px; font-size:13px; color:var(--text-dim);',
+        text: '宠物排行榜暂不可用'
+      }));
+    }
+
+    function renderPetBoard(resp) {
+      petBoard.innerHTML = '';
+      var petState = (window.Kairo && Kairo.pet && Kairo.pet.state) ? Kairo.pet.state() : null;
+      var isStale = !!(resp && resp.stale);
+
+      // ---- Section 1: 我的排名卡片 ----
+      var myName = (petState && petState.name) || '我的宠物';
+      var rankText = (resp && resp.rank) ? ('第 ' + fmtInt(resp.rank) + ' 名') : '未上榜';
+      var lastSync = (resp && resp.server_time) || (petState && petState.last_sync) || '未同步';
+      petBoard.appendChild(el('div', {
+        style: 'padding:10px 14px; border-radius:8px; margin-bottom:10px; background:var(--bg-1); ' +
+               'border-left:3px solid var(--accent,#4a6fa5);'
+      }, [
+        el('div', {
+          style: 'display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:4px;'
+        }, [
+          el('span', { style: 'font-size:14px; font-weight:800; color:var(--text);', text: String(myName) }),
+          el('span', { style: 'font-size:12px; font-weight:700; color:var(--accent,#4a6fa5);', text: rankText })
+        ]),
+        el('div', {
+          style: 'font-size:11px; color:var(--text-dim);',
+          text: '榜单经验 ' + fmtInt(resp && resp.board_exp) + ' · 上次同步 ' + String(lastSync)
+        })
+      ]));
+
+      // ---- Section 2: 榜单表格 ----
+      var boardHead = el('div', {
+        style: 'font-weight:700; font-size:13px; color:var(--text); margin-bottom:6px;',
+        text: '宠物排行榜'
+      });
+      var tbl = el('table', { class: 'table', style: 'width:100%;font-size:12px;margin-bottom:4px;' });
+      var tHead = el('thead');
+      var tHeadRow = el('tr');
+      ['排名', '名字', '等级', '经验'].forEach(function (t) {
+        tHeadRow.appendChild(el('th', { text: t }));
+      });
+      tHead.appendChild(tHeadRow);
+      tbl.appendChild(tHead);
+      var tBody = el('tbody');
+      var entries = (resp && Array.isArray(resp.entries)) ? resp.entries : [];
+      if (entries.length === 0) {
+        tBody.appendChild(el('tr', null, [
+          el('td', { colspan: '4', style: 'text-align:center;color:var(--text-dim);', text: '榜单空空如也' })
+        ]));
+      } else {
+        entries.forEach(function (e) {
+          var row = el('tr');
+          row.appendChild(el('td', { text: String(fmtInt(e.rank)) }));
+          row.appendChild(el('td', { style: 'font-weight:700;color:var(--text);', text: String(e.name || '-') }));
+          row.appendChild(el('td', { text: 'Lv ' + fmtInt(e.level) }));
+          var expTd = el('td');
+          expTd.appendChild(el('div', { text: String(fmtInt(e.exp)) }));
+          if (e.ops && Array.isArray(e.ops) && e.ops.length) {
+            // 前 3 个 op 简写：op ×count 用 · 连接
+            var parts = [];
+            for (var i = 0; i < Math.min(3, e.ops.length); i++) {
+              var o = e.ops[i];
+              parts.push(String(o.op) + ' ×' + fmtInt(o.count));
+            }
+            expTd.appendChild(el('div', {
+              style: 'font-size:10px;color:var(--text-mute);',
+              text: parts.join(' · ')
+            }));
+          }
+          row.appendChild(expTd);
+          tBody.appendChild(row);
+        });
+      }
+      tbl.appendChild(tBody);
+      var boardWrap = el('div', { style: 'margin-bottom:10px;' }, [boardHead]);
+      boardWrap.appendChild(tbl);
+      if (isStale) {
+        boardWrap.appendChild(el('div', {
+          style: 'font-size:10px;color:var(--text-mute);margin-bottom:6px;',
+          text: '榜单为缓存数据'
+        }));
+      }
+      petBoard.appendChild(boardWrap);
+
+      // ---- Section 3: 我的统计 ----
+      var statsHead = el('div', {
+        style: 'font-weight:700; font-size:13px; color:var(--text); margin-bottom:6px;',
+        text: '我的统计'
+      });
+      var statToggles = el('div', { style: 'display:flex; gap:6px; margin-bottom:6px;' });
+      statBtns = {};
+      ['today', 'month', 'total'].forEach(function (k) {
+        var label = k === 'today' ? '今日' : (k === 'month' ? '本月' : '累计');
+        var b = el('button', {
+          type: 'button',
+          text: label,
+          style: 'padding:3px 12px;font-size:12px;border-radius:12px;cursor:pointer;' +
+                 'border:1px solid var(--border,rgba(0,0,0,.15));' +
+                 'background:transparent;color:var(--text-dim);'
+        });
+        b.addEventListener('click', function () { setStatTab(k); });
+        statBtns[k] = b;
+        statToggles.appendChild(b);
+      });
+      statBody = el('div');
+      statSection = el('div', { style: 'margin-bottom:10px;' }, [statsHead, statToggles, statBody]);
+      petBoard.appendChild(statSection);
+      petBoard.appendChild(el('div', null, [
+        el('button', {
+          class: 'btn btn-sm',
+          type: 'button',
+          text: '刷新',
+          onclick: loadPetBoard
+        })
+      ]));
+      setStatTab('today');
+    }
+
+    function setStatTab(key) {
+      statTab = key;
+      for (var k in statBtns) {
+        var b = statBtns[k];
+        var active = k === statTab;
+        b.style.background = active ? 'var(--accent,#4a6fa5)' : 'transparent';
+        b.style.color = active ? '#fff' : 'var(--text-dim)';
+      }
+      renderStatsTable();
+    }
+
+    function localDateKey(d) {
+      var m = String(d.getMonth() + 1);
+      var day = String(d.getDate());
+      if (m.length < 2) m = '0' + m;
+      if (day.length < 2) day = '0' + day;
+      return d.getFullYear() + '-' + m + '-' + day;
+    }
+
+    function localMonthKey(d) {
+      var m = String(d.getMonth() + 1);
+      if (m.length < 2) m = '0' + m;
+      return d.getFullYear() + '-' + m;
+    }
+
+    function renderStatsTable() {
+      if (!statBody) return;
+      statBody.innerHTML = '';
+      if (!boardStats) return;
+      var map = null;
+      var now = new Date();
+      if (statTab === 'today') {
+        map = (boardStats.daily && boardStats.daily[localDateKey(now)]) || null;
+      } else if (statTab === 'month') {
+        map = (boardStats.monthly && boardStats.monthly[localMonthKey(now)]) || null;
+      } else {
+        map = boardStats.total || null;
+      }
+      // op 名原样展示（后续加 op 中文映射表）
+      var rows = [];
+      if (map) {
+        for (var op in map) {
+          if (!Object.prototype.hasOwnProperty.call(map, op)) continue;
+          var v = map[op] || {};
+          rows.push({ op: op, count: fmtInt(v.count), exp: fmtInt(v.exp) });
+        }
+      }
+      rows.sort(function (a, b) { return b.exp - a.exp; });
+      if (!rows.length) {
+        statBody.appendChild(el('div', {
+          style: 'font-size:12px;color:var(--text-dim);padding:8px 0;',
+          text: '暂无记录，去用用工具吧～'
+        }));
+        return;
+      }
+      var st = el('table', { class: 'table', style: 'width:100%;font-size:12px;' });
+      var stHead = el('thead');
+      var stHeadRow = el('tr');
+      ['操作', '次数', '经验'].forEach(function (t) { stHeadRow.appendChild(el('th', { text: t })); });
+      stHead.appendChild(stHeadRow);
+      st.appendChild(stHead);
+      var stBody = el('tbody');
+      var totalCount = 0;
+      var totalExp = 0;
+      rows.forEach(function (r) {
+        totalCount += r.count;
+        totalExp += r.exp;
+        stBody.appendChild(el('tr', null, [
+          el('td', { text: r.op }),
+          el('td', { text: String(r.count) }),
+          el('td', { text: String(r.exp) })
+        ]));
+      });
+      stBody.appendChild(el('tr', {
+        style: 'border-top:1px solid var(--border,rgba(0,0,0,.15));font-weight:700;'
+      }, [
+        el('td', { text: '合计' }),
+        el('td', { text: String(totalCount) }),
+        el('td', { text: String(totalExp) })
+      ]));
+      st.appendChild(stBody);
+      statBody.appendChild(st);
+    }
+
     // 触发异步加载
     loadHonorList();
+
+    // 默认 tab：sessionStorage 记忆（kairo:pet:boardtab === 'pet' → 宠物榜）
+    var defaultTab = 'wulin';
+    try {
+      if (sessionStorage.getItem('kairo:pet:boardtab') === 'pet') defaultTab = 'pet';
+    } catch (e) { /* ignore */ }
+    showTab(defaultTab);
   }
 
   Kairo.pages.sponsor = renderSponsor;

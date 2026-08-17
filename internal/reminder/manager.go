@@ -193,6 +193,14 @@ func (m *Manager) Update(id string, in Reminder) (Reminder, error) {
 	if in.Type == TypeMonthly && in.DayOfMonth == 0 {
 		in.DayOfMonth = old.DayOfMonth
 	}
+	if in.Type == TypeCron && strings.TrimSpace(in.Cron) == "" {
+		in.Cron = old.Cron
+	}
+	// 注意：LeadMinutes 不做零值合并 —— 0 是合法值（"不提前"），
+	// 前端 PUT 时总是显式携带，省略即重置为 0（与其他字段语义一致）。
+	if in.Action == nil {
+		in.Action = old.Action
+	}
 	m.mu.Unlock()
 	if err := in.Validate(); err != nil {
 		return Reminder{}, err

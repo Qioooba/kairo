@@ -53,6 +53,10 @@ type logsSearchMultiReq struct {
 	//   - true  → 大小写不敏感（适合大小写不固定的英文关键词、混合日志）
 	//   - false（默认）→ 大小写敏感，保持原行为
 	IgnoreCase bool `json:"ignore_case"`
+	// v0.15：多行窗口匹配。>0 时 && 语义从"同行同时包含"变成
+	// "window 行跨度内出现"（走 awk 窗口匹配）；0（默认）保持原同行 grep 语义。
+	// 前后端都 clamp 到 0~50。
+	MatchWindow int `json:"match_window"`
 	// v0.5-G #8：搜索范围三种模式（互斥，优先级 selected > glob > latest）
 	//   - "latest"（默认）：先 ListCommand 取最近 N 个文件，再搜索
 	//   - "selected"：直接用 SelectedFiles 作为文件名列表，跳过 ListCommand
@@ -149,6 +153,14 @@ func (s *Server) handleLogsSearchMulti(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeErr(w, 400, err)
 		return
+	}
+	// v0.15：窗口匹配行数钳制（0 = 默认同行匹配；上限 50 防假关联失控）
+	matchWindow := req.MatchWindow
+	if matchWindow < 0 {
+		matchWindow = 0
+	}
+	if matchWindow > 50 {
+		matchWindow = 50
 	}
 	// B1：解析时间窗口过滤参数（query string 里 ?since=...&until=...）。
 	tw, err := parseTimeWindow(r.URL.Query().Get("since"), r.URL.Query().Get("until"))
@@ -277,27 +289,27 @@ func (s *Server) handleLogsSearchMulti(w http.ResponseWriter, r *http.Request) {
 			} else {
 				useFiles = req.SelectedFiles
 			}
-			res := s.runOneServerSearchWithScope(totalCtx, srv, ld, scope, filesN, useFiles, req.FilePatterns, kw, c.Username, c.Password, tw, contextN, req.IgnoreCase)
-			results[idx] = res
-			// 审计
-			if res.OK {
-				// REVIEW-rc5 #6：检测 context_enrich_failed 标记（hit 主流程成功但上下文补全失败）
-				if strings.HasPrefix(res.Error, "context_enrich_failed:") {
-					s.audit.Write("logs.search.multi",
-						"system", req.System, "server", target.Server, "dir", ld.Path,
-						"query", req.Query, "result", "context_fail",
-						"err", strings.TrimPrefix(res.Error, "context_enrich_failed: "),
-						"hits", res.HitsN, "context", contextN, "ms", res.Ms)
-				} else {
-					s.audit.Write("logs.search.multi",
-						"system", req.System, "server", target.Server, "dir", ld.Path,
-						"query", req.Query, "result", "ok", "hits", res.HitsN, "ms", res.Ms)
-				}
+		res := s.runOneServerSearchWithScope(totalCtx, srv, ld, scope, filesN, useFiles, req.FilePatterns, kw, c.Username, c.Password, tw, contextN, req.IgnoreCase, matchWindow)
+		results[idx] = res
+		// 审计
+		if res.OK {
+			// REVIEW-rc5 #6：检测 context_enrich_failed 标记（hit 主流程成功但上下文补全失败）
+			if strings.HasPrefix(res.Error, "context_enrich_failed:") {
+				s.audit.Write("logs.search.multi",
+					"system", req.System, "server", target.Server, "dir", ld.Path,
+					"query", req.Query, "result", "context_fail",
+					"err", strings.TrimPrefix(res.Error, "context_enrich_failed: "),
+					"hits", res.HitsN, "context", contextN, "window", matchWindow, "ms", res.Ms)
 			} else {
 				s.audit.Write("logs.search.multi",
 					"system", req.System, "server", target.Server, "dir", ld.Path,
-					"query", req.Query, "result", "fail", "err", res.Error, "ms", res.Ms)
+					"query", req.Query, "result", "ok", "hits", res.HitsN, "window", matchWindow, "ms", res.Ms)
 			}
+		} else {
+			s.audit.Write("logs.search.multi",
+				"system", req.System, "server", target.Server, "dir", ld.Path,
+				"query", req.Query, "result", "fail", "err", res.Error, "window", matchWindow, "ms", res.Ms)
+		}
 		}(i, tgt)
 	}
 	wg.Wait()
@@ -343,7 +355,7 @@ func (s *Server) runOneServerSearchWithPatterns(
 	kw []logquery.SearchKeyword,
 	username, password string,
 ) logsSearchMultiServerResult {
-	return s.runOneServerSearchWithScope(ctx, srv, ld, "latest", filesN, nil, patterns, kw, username, password, logquery.SearchTimeWindow{}, 0, false)
+	return s.runOneServerSearchWithScope(ctx, srv, ld, "latest", filesN, nil, patterns, kw, username, password, logquery.SearchTimeWindow{}, 0, false, 0)
 }
 
 // runOneServerSearchWithScope v0.5-G #8：搜索范围三种模式（互斥）
@@ -357,6 +369,7 @@ func (s *Server) runOneServerSearchWithPatterns(
 //
 // tw 为时间窗口过滤（仅 latest/glob 模式有效）；contextN 为上下文行数（0 表示无上下文）。
 // ignoreCase v0.13：忽略大小写搜索（透传到 SearchCommand，所有 grep 加 -i）。
+// matchWindow v0.15：>0 时走 WindowSearchCommand 多行窗口匹配，否则走原 SearchCommand。
 func (s *Server) runOneServerSearchWithScope(
 	ctx context.Context,
 	srv *config.ServerConfig,
@@ -370,6 +383,7 @@ func (s *Server) runOneServerSearchWithScope(
 	tw logquery.SearchTimeWindow,
 	contextN int,
 	ignoreCase bool,
+	matchWindow int,
 ) logsSearchMultiServerResult {
 	start := time.Now()
 	res := logsSearchMultiServerResult{
@@ -470,8 +484,13 @@ func (s *Server) runOneServerSearchWithScope(
 		}
 	}
 
-	// 搜索
-	searchCmd, err := logquery.SearchCommand(ld.Path, fileNames, kw, cur.Search.MaxMatches, cur.Search.TimeoutSeconds, ld.Encoding, ignoreCase)
+	// 搜索（v0.15：matchWindow>0 走多行窗口匹配，否则走原同行 grep 管道）
+	var searchCmd string
+	if matchWindow > 0 {
+		searchCmd, err = logquery.WindowSearchCommand(ld.Path, fileNames, kw, cur.Search.MaxMatches, cur.Search.TimeoutSeconds, ld.Encoding, ignoreCase, matchWindow)
+	} else {
+		searchCmd, err = logquery.SearchCommand(ld.Path, fileNames, kw, cur.Search.MaxMatches, cur.Search.TimeoutSeconds, ld.Encoding, ignoreCase)
+	}
 	if err != nil {
 		res.OK = false
 		res.Error = err.Error()
@@ -527,10 +546,16 @@ func (s *Server) runOneServerSearchWithScope(
 		})
 	}
 	// 上下文行：contextN > 0 时为每个匹配行获取前后 N 行
+	// v0.15：窗口匹配模式下有效上下文 = max(contextN, matchWindow)——
+	// 保证"命中行之间"的窗口跨度行也一定被展示出来（最友好展示）。
 	// REVIEW-rc5 #6：失败不再静默回退，把 err 信息塞到 result.Error（前端可见），
 	// audit 由 caller 负责（需要 req/target 闭包，这里拿不到）。
-	if contextN > 0 && len(hits) > 0 {
-		enriched, ctxErr := s.enrichHitsWithContext(ctx, cli, ld, srv.Name, files, hits, contextN)
+	effContextN := contextN
+	if matchWindow > 0 && effContextN < matchWindow {
+		effContextN = matchWindow
+	}
+	if effContextN > 0 && len(hits) > 0 {
+		enriched, ctxErr := s.enrichHitsWithContext(ctx, cli, ld, srv.Name, files, hits, effContextN)
 		if ctxErr != nil {
 			res.OK = true // 不阻断主流程，hits 仍返回
 			res.Hits = hits

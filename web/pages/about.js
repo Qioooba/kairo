@@ -574,15 +574,17 @@
       pages: ['reminders'],
       apis: ['GET /api/reminders', 'POST /api/reminders', 'PUT /api/reminders/{id}', 'DELETE /api/reminders/{id}', 'POST /api/reminders/{id}/toggle', 'POST /api/reminders/{id}/fire', 'GET /api/reminders/info', 'POST /api/reminders/pause'],
       pkg: 'internal/reminder',
-      desc: '一次性 / 每周 / 每月 三种触发器；时间到自动弹窗（Win10+ Toast + 经典气球兜底）；支持编辑 / 暂停 / 启用 / 立即触发。',
+      desc: '一次性 / 每周 / 每月 / Cron 四种触发器；提前 N 分钟；触发动作支持弹窗 / 打开网址 / 执行本地命令；Win10+ Toast + 经典气球兜底；支持编辑 / 暂停 / 启用 / 立即触发。',
       features: [
-        '3 种触发器：once / weekly / monthly',
+        '4 种触发器：once / weekly / monthly / cron（5/6 段表达式，复用 internal/cronx 跳跃算法）',
+        '提前 N 分钟（lead_minutes）：如「会前 10 分钟」',
+        '触发动作（action）：popup 弹窗 / url 打开网址 / command 执行本地命令（30s 超时 + 审计）',
         'Win10+ Toast 通知（开始菜单快捷方式 + AppUserModelID）+ 经典气球兜底',
         '弹窗交互：关闭 / 推迟 (snooze) / 立即触发',
         'Manager 池：定时器在内存里跑，进程重启从 data/reminders.json 恢复',
         '落盘持久：data/reminders.json，进程退出/重启不丢',
         '完整审计：每次触发写 logs/audit.log (op=reminder.add / update / fire / pause)',
-        'reminder_test.go 覆盖：3 种触发器 DueAt + 核心 fire 回归 + 防重复 + 容差窗口'
+        'reminder_test.go 覆盖：4 种触发器 DueAt + lead 提前量 + 核心 fire 回归 + 防重复 + 容差窗口'
       ]
     },
     {
@@ -861,13 +863,13 @@
       headline: '三大新特性：定时提醒(once/weekly/monthly)、浏览器偏好探测自动打开、远端文件在线编辑 + 周边优化',
       stats: { commits: 2, fixes: 7, additions: 9, breaks: 0 },
       principles: [
-        '提醒轻量: once / weekly / monthly 三种触发器在 Manager 池里跑，进程退出/重启从 data/reminders.json 恢复',
+        '提醒轻量: once / weekly / monthly / cron 四种触发器 + 提前 N 分钟 + 触发动作（弹窗/网址/命令）在 Manager 池里跑，进程退出/重启从 data/reminders.json 恢复',
         '浏览器即用: 启动时按偏好自动探测并打开本机浏览器，Win 优先 Chrome (注册表+常见路径)，macOS/Linux 走 open / xdg-open',
         '在线编辑: 文件下载页直接编辑文本类远端文件，保存自动备份 .bak + 写审计 + 可回滚，不再"下载 → 本地编辑器 → 上传"',
         '代码审查闭环: v0.13 feat 后立即跟一个 fix commit，把搜索高亮公共化 + 文件类型白名单 + cache buster 等审查点修掉'
       ],
       features: [
-        { title: '定时提醒模块 (internal/reminder)', desc: '3 种触发器 (once/weekly/monthly) + Manager 池 + data/reminders.json 持久化 + Win10+ Toast/经典气球兜底 + 暂停/恢复 + 触发审计日志 + web/pages/reminders.js 新页面' },
+        { title: '定时提醒模块 (internal/reminder)', desc: '4 种触发器 (once/weekly/monthly/cron) + 提前 N 分钟 + 触发动作扩展（popup/url/command）+ Manager 池 + data/reminders.json 持久化 + Win10+ Toast/经典气球兜底 + 暂停/恢复 + 触发审计日志 + web/pages/reminders.js 页面' },
         { title: '浏览器偏好探测 (internal/browserpref)', desc: 'data/browser_state.json 持久化 {kind, path, updated_at}；下次启动直接复用上次浏览器；Win 注册表 + 常见路径枚举 (Chrome/Edge/Firefox/360/QQ)；KAIRO --reset-browser 清掉重来' },
         { title: 'Windows 弹窗实现 (internal/popup)', desc: '536 行 popup_windows.go + 13 行 popup_other.go 跨平台兜底 + 21 行 popup.go 接口；sysutil.browser_locate_windows 190 行 Win 特定实现' },
         { title: '远端文件在线编辑 (handlers_edit.go)', desc: '文件下载页直接打开文本类远端文件 (properties/xml/yaml/json/conf/cfg/ini/log 等) → textarea 编辑 → 保存走 SFTP WriteFile；保存即备份 .kairo-edit.bak (最多 20 份) + 写审计 + 支持回滚' },
@@ -936,7 +938,7 @@
         'P1: refresh* 函数静默吞错 — 加 toast 错误提示',
         'P2: mock.go 同步写盘阻塞热路径 — 引入 recordQueue + 后台 goroutine',
         'P2: Template 缺 SOAPVersion 字段 — types.go 补字段 + 前端同步',
-        'P2: wsdl.go lookupElementNS 多 schema 同名 element — 留待后续优化 (边缘场景)'
+        'P2: wsdl.go lookupElementNS 多 schema 同名 element — 改 ns+name 索引 (schemaIndex) + QName 前缀解析 (nsContext) 透传 buildParams 链路'
       ],
       commits: [
         { hash: 'v0.12-1', msg: 'feat(webservice): WebService 调试中心 — WSDL/SOAP/Mock/模板/历史/XML 格式化' },

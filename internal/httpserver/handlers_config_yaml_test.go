@@ -116,3 +116,45 @@ func TestConfigExport_RedactsPassword(t *testing.T) {
 		t.Errorf("non-sensitive field should be preserved: %s", body)
 	}
 }
+
+// TestConfigExport_RedactsKairoAndEndpointAuth 验证导出脱敏 kairo token 与
+// internal_endpoints.*.auth，同时保留顶层 auth 容器（enabled/tokens 名称）。
+func TestConfigExport_RedactsKairoAndEndpointAuth(t *testing.T) {
+	srv, mgr, _, _ := newTestServer(t)
+	cfgContent := []byte(`app:
+  name: "信贷生产"
+  kairo: "111222"
+auth:
+  enabled: true
+  tokens:
+    - name: ops
+      token: TOP_SECRET_TOKEN
+internal_endpoints:
+  license_activate:
+    primary: "http://66.0.34.199:9080/credit/httpInterface"
+    auth: "BASE64_AUTH_SECRET"
+`)
+	if err := os.WriteFile(mgr.Path(), cfgContent, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	w := doRequest(srv, "GET", "/api/config/export", nil)
+	if w.Code != 200 {
+		t.Fatalf("code=%d body=%s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if strings.Contains(body, "111222") {
+		t.Errorf("exported config should not contain kairo token: %s", body)
+	}
+	if strings.Contains(body, "BASE64_AUTH_SECRET") {
+		t.Errorf("exported config should not contain endpoint auth: %s", body)
+	}
+	if strings.Contains(body, "TOP_SECRET_TOKEN") {
+		t.Errorf("exported config should not contain token secret: %s", body)
+	}
+	// 顶层 auth 容器不应被整段脱敏（值为 map 时保留并递归）：
+	// enabled 字段应保留，而 tokens 列表因命中 "token" 子串被整段脱敏（既有行为）。
+	if !strings.Contains(body, "enabled") {
+		t.Errorf("top-level auth.enabled should be preserved: %s", body)
+	}
+}

@@ -544,3 +544,278 @@ func TestFireSkipsStaleSlot(t *testing.T) {
 	}
 	mu.Unlock()
 }
+
+// ---------- cron / lead / action（v1.1 扩展） ----------
+
+func TestValidateCronLeadAction(t *testing.T) {
+	// 合法 cron
+	good := Reminder{Type: TypeCron, Enabled: true, Content: "工作日早会", Cron: "0 9 * * 1-5", LeadMinutes: 10}
+	if err := good.Validate(); err != nil {
+		t.Fatalf("valid cron: %v", err)
+	}
+	// 合法 action
+	good.Action = &Action{Kind: ActionURL, URL: "https://example.com/meeting"}
+	if err := good.Validate(); err != nil {
+		t.Fatalf("valid url action: %v", err)
+	}
+	good.Action = &Action{Kind: ActionCommand, Command: "/usr/local/bin/notify", Args: []string{"-t", "hi"}, WorkDir: "/tmp"}
+	if err := good.Validate(); err != nil {
+		t.Fatalf("valid command action: %v", err)
+	}
+	// nil action / 空 kind 视为 popup
+	if err := (&Reminder{Type: TypeOnce, Content: "x", At: "2099-01-01T10:00", Action: &Action{}}).Validate(); err != nil {
+		t.Errorf("empty action should be popup: %v", err)
+	}
+
+	bad := []Reminder{
+		{Type: TypeCron, Content: "x", Cron: ""},
+		{Type: TypeCron, Content: "x", Cron: "* * * *"},
+		{Type: TypeCron, Content: "x", Cron: "@every 5m"},
+		{Type: TypeOnce, Content: "x", At: "2099-01-01T10:00", LeadMinutes: -1},
+		{Type: TypeOnce, Content: "x", At: "2099-01-01T10:00", LeadMinutes: 1500},
+		{Type: TypeOnce, Content: "x", At: "2099-01-01T10:00", Action: &Action{Kind: "teleport"}},
+		{Type: TypeOnce, Content: "x", At: "2099-01-01T10:00", Action: &Action{Kind: ActionURL, URL: "ftp://x"}},
+		{Type: TypeOnce, Content: "x", At: "2099-01-01T10:00", Action: &Action{Kind: ActionURL, URL: "notaurl"}},
+		{Type: TypeOnce, Content: "x", At: "2099-01-01T10:00", Action: &Action{Kind: ActionURL}},
+		{Type: TypeOnce, Content: "x", At: "2099-01-01T10:00", Action: &Action{Kind: ActionCommand}},
+	}
+	for i, r := range bad {
+		if err := r.Validate(); err == nil {
+			t.Errorf("bad[%d] should fail: %+v", i, r)
+		}
+	}
+}
+
+func TestNextFireCron(t *testing.T) {
+	loc := time.Local
+	r := Reminder{Type: TypeCron, Enabled: true, Content: "早会", Cron: "0 9 * * 1-5"}
+
+	// 周一 08:00 → 周一 09:00
+	now := time.Date(2026, 7, 13, 8, 0, 0, 0, loc) // 2026-07-13 周一
+	want := time.Date(2026, 7, 13, 9, 0, 0, 0, loc)
+	if got := r.NextFire(now); !got.Equal(want) {
+		t.Errorf("cron next (周一8点): got %v, want %v", got, want)
+	}
+
+	// 周一 10:00（今天 9 点已过）→ 周二 09:00
+	now = time.Date(2026, 7, 13, 10, 0, 0, 0, loc)
+	want = time.Date(2026, 7, 14, 9, 0, 0, 0, loc)
+	if got := r.NextFire(now); !got.Equal(want) {
+		t.Errorf("cron next (周一10点): got %v, want %v", got, want)
+	}
+
+	// 周五 10:00 → 下周一 09:00
+	now = time.Date(2026, 7, 17, 10, 0, 0, 0, loc) // 2026-07-17 周五
+	want = time.Date(2026, 7, 20, 9, 0, 0, 0, loc)
+	if got := r.NextFire(now); !got.Equal(want) {
+		t.Errorf("cron next (周五10点): got %v, want %v", got, want)
+	}
+}
+
+func TestNextFireCronWithLead(t *testing.T) {
+	loc := time.Local
+	r := Reminder{Type: TypeCron, Enabled: true, Content: "早会", Cron: "0 9 * * 1-5", LeadMinutes: 10}
+
+	// 周一 08:00 → fire 周一 08:50
+	now := time.Date(2026, 7, 13, 8, 0, 0, 0, loc)
+	want := time.Date(2026, 7, 13, 8, 50, 0, 0, loc)
+	if got := r.NextFire(now); !got.Equal(want) {
+		t.Errorf("cron+lead next (周一8点): got %v, want %v", got, want)
+	}
+
+	// 周一 08:55（fire 时刻 08:50 已过）→ 周二 08:50
+	now = time.Date(2026, 7, 13, 8, 55, 0, 0, loc)
+	want = time.Date(2026, 7, 14, 8, 50, 0, 0, loc)
+	if got := r.NextFire(now); !got.Equal(want) {
+		t.Errorf("cron+lead next (周一8:55): got %v, want %v", got, want)
+	}
+}
+
+func TestDueAtCronWithLead(t *testing.T) {
+	loc := time.Local
+	// 每 5 分钟一次，提前 10 分钟：match 09:15 → fire 09:05
+	r := Reminder{Type: TypeCron, Enabled: true, Content: "打卡", Cron: "*/5 * * * *", LeadMinutes: 10}
+
+	// fire 时刻 09:05:00 刚到 → 返回 09:05
+	now := time.Date(2026, 7, 13, 9, 5, 0, 0, loc)
+	want := time.Date(2026, 7, 13, 9, 5, 0, 0, loc)
+	if got := r.DueAt(now); !got.Equal(want) {
+		t.Errorf("cron due (9:05): got %v, want %v", got, want)
+	}
+
+	// fire 时刻 09:05:30（抖动 30s，容差内）→ 仍返回 09:05
+	now = time.Date(2026, 7, 13, 9, 5, 30, 0, loc)
+	if got := r.DueAt(now); !got.Equal(want) {
+		t.Errorf("cron due (9:05:30): got %v, want %v", got, want)
+	}
+
+	// 09:08：最近槽 09:15 仍在回看窗口内 → 返回 fire 09:05（陈旧值，
+	// 由 fire() 的容差窗口 diff=3min>2min 过滤，不会真触发）
+	now = time.Date(2026, 7, 13, 9, 8, 0, 0, loc)
+	if got := r.DueAt(now); !got.Equal(want) {
+		t.Errorf("cron due (9:08): got %v, want %v", got, want)
+	}
+
+	// 09:09：最近槽 09:15 超出 3 分钟回看窗口 → 零值
+	now = time.Date(2026, 7, 13, 9, 9, 0, 0, loc)
+	if got := r.DueAt(now); !got.IsZero() {
+		t.Errorf("cron due (9:09) should be zero, got %v", got)
+	}
+}
+
+func TestNextFireOnceWithLead(t *testing.T) {
+	loc := time.Local
+	r := Reminder{Type: TypeOnce, Enabled: true, Content: "发布会", At: "2026-07-20T15:00", LeadMinutes: 10}
+
+	// 会前 10 分钟：fire 14:50
+	now := time.Date(2026, 7, 13, 10, 0, 0, 0, loc)
+	want := time.Date(2026, 7, 20, 14, 50, 0, 0, loc)
+	if got := r.NextFire(now); !got.Equal(want) {
+		t.Errorf("once+lead next: got %v, want %v", got, want)
+	}
+
+	// 14:55（fire 时刻 14:50 已过）→ 零值
+	now = time.Date(2026, 7, 20, 14, 55, 0, 0, loc)
+	if got := r.NextFire(now); !got.IsZero() {
+		t.Errorf("once+lead next (已过): should be zero, got %v", got)
+	}
+
+	// DueAt：14:50 到点
+	now = time.Date(2026, 7, 20, 14, 50, 0, 0, loc)
+	if got := r.DueAt(now); !got.Equal(want) {
+		t.Errorf("once+lead due: got %v, want %v", got, want)
+	}
+}
+
+func TestNextFireWeeklyWithLead(t *testing.T) {
+	loc := time.Local
+	r := Reminder{Type: TypeWeekly, Enabled: true, Content: "周会", Weekdays: []int{3}, Time: "10:00", LeadMinutes: 30}
+
+	// 周二 09:00 → fire 周三 09:30
+	now := time.Date(2026, 7, 14, 9, 0, 0, 0, loc) // 2026-07-14 周二
+	want := time.Date(2026, 7, 15, 9, 30, 0, 0, loc)
+	if got := r.NextFire(now); !got.Equal(want) {
+		t.Errorf("weekly+lead next (周二9点): got %v, want %v", got, want)
+	}
+
+	// 周三 09:40（fire 时刻 09:30 已过）→ 下周三 09:30
+	now = time.Date(2026, 7, 15, 9, 40, 0, 0, loc) // 2026-07-15 周三
+	want = time.Date(2026, 7, 22, 9, 30, 0, 0, loc)
+	if got := r.NextFire(now); !got.Equal(want) {
+		t.Errorf("weekly+lead next (周三9:40): got %v, want %v", got, want)
+	}
+
+	// 周三 09:20（今天 fire 时刻 09:30 还没到）→ 今天 09:30
+	now = time.Date(2026, 7, 15, 9, 20, 0, 0, loc)
+	want = time.Date(2026, 7, 15, 9, 30, 0, 0, loc)
+	if got := r.NextFire(now); !got.Equal(want) {
+		t.Errorf("weekly+lead next (周三9:20): got %v, want %v", got, want)
+	}
+}
+
+func TestHumanScheduleCronAndLead(t *testing.T) {
+	r := Reminder{Type: TypeCron, Cron: "0 9 * * 1-5"}
+	if got := r.HumanSchedule(); got != "Cron: 0 9 * * 1-5" {
+		t.Errorf("cron schedule: %q", got)
+	}
+	r.LeadMinutes = 10
+	if got := r.HumanSchedule(); got != "Cron: 0 9 * * 1-5 · 提前 10 分钟" {
+		t.Errorf("cron+lead schedule: %q", got)
+	}
+	r2 := Reminder{Type: TypeOnce, At: "2026-07-20T15:00", LeadMinutes: 5}
+	if got := r2.HumanSchedule(); got != "2026-07-20 15:00 · 提前 5 分钟" {
+		t.Errorf("once+lead schedule: %q", got)
+	}
+}
+
+// TestFireCronTriggersOnFire 验证 cron 提醒到点也能触发（含 lead 提前量）。
+func TestFireCronTriggersOnFire(t *testing.T) {
+	dir := t.TempDir()
+	s := NewStore(filepath.Join(dir, "reminders.json"))
+
+	var mu sync.Mutex
+	var fired []Reminder
+	m, err := NewManager(s, func(r Reminder, at time.Time) {
+		mu.Lock()
+		defer mu.Unlock()
+		fired = append(fired, r)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Stop()
+
+	// match 周一 09:00，lead 10min → fire 周一 08:50
+	slot := time.Date(2026, 7, 13, 8, 50, 0, 0, time.Local) // 2026-07-13 周一
+	m.now = func() time.Time { return slot }
+
+	r, err := m.Add(Reminder{Type: TypeCron, Enabled: true, Content: "早会", Cron: "0 9 * * 1-5", LeadMinutes: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	m.fire()
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		n := len(fired)
+		mu.Unlock()
+		if n > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	mu.Lock()
+	if len(fired) != 1 {
+		t.Fatalf("expected 1 fire, got %d", len(fired))
+	}
+	if fired[0].Content != "早会" {
+		t.Errorf("fired content: %s", fired[0].Content)
+	}
+	mu.Unlock()
+
+	// cron 提醒触发后不应 disabled（周期提醒持续有效）
+	got, _ := m.Get(r.ID)
+	if !got.Enabled {
+		t.Error("cron reminder should stay enabled after fire")
+	}
+	if got.FiredCount != 1 {
+		t.Errorf("FiredCount: got %d, want 1", got.FiredCount)
+	}
+}
+
+// TestStoreRoundtripCronLeadAction 验证新字段 JSON 持久化不丢。
+func TestStoreRoundtripCronLeadAction(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "reminders.json")
+	s := NewStore(path)
+
+	items := []Reminder{{
+		ID:          "c1",
+		Type:        TypeCron,
+		Enabled:     true,
+		Content:     "早会",
+		Cron:        "0 9 * * 1-5",
+		LeadMinutes: 10,
+		Action:      &Action{Kind: ActionCommand, Command: "/usr/bin/say", Args: []string{"早会啦"}, WorkDir: "/tmp"},
+	}}
+	if err := s.Save(items); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(got))
+	}
+	g := got[0]
+	if g.Cron != "0 9 * * 1-5" || g.LeadMinutes != 10 {
+		t.Errorf("cron/lead lost: %+v", g)
+	}
+	if g.Action == nil || g.Action.Kind != ActionCommand || g.Action.Command != "/usr/bin/say" || len(g.Action.Args) != 1 {
+		t.Errorf("action lost: %+v", g.Action)
+	}
+}

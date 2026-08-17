@@ -1,6 +1,7 @@
 package httpserver
 
 import (
+	"archive/zip"
 	"encoding/json"
 	"net"
 	"os"
@@ -426,6 +427,103 @@ func TestFilesDownload_ZipFlow(t *testing.T) {
 
 // 抑制 unused
 var _ = sftpclient.New
+
+// TestFilesDownload_DirRecursive 选中目录下载（zip=false）：后端应强制打 zip，
+// 且 zip 内保留目录层级（app/logs/a.log 而非扁平 a.log）。
+func TestFilesDownload_DirRecursive(t *testing.T) {
+	addr := startFakeSSH(t, "ops", "testpw")
+	_, portStr, _ := net.SplitHostPort(addr)
+	port, _ := strconv.Atoi(portStr)
+	srv := newTestServerWithFakeSSH(t, port)
+	withFakeSFTP(t, func() *fakeSftpClient {
+		f := newFakeSftpBasic()
+		f.dirs["/data/app"] = []fakeDirEntry{
+			{name: "logs", size: 0, isDir: true},
+			{name: "readme.txt", size: 8, isDir: false},
+		}
+		f.dirs["/data/app/logs"] = []fakeDirEntry{
+			{name: "a.log", size: 3, isDir: false},
+			{name: "sub", size: 0, isDir: true},
+		}
+		f.dirs["/data/app/logs/sub"] = []fakeDirEntry{
+			{name: "b.log", size: 3, isDir: false},
+		}
+		f.files["/data/app/readme.txt"] = []byte("readme!!")
+		f.files["/data/app/logs/a.log"] = []byte("aaa")
+		f.files["/data/app/logs/sub/b.log"] = []byte("bbb")
+		return f
+	}())
+
+	// zip=false：单目录也应强制打包（保留目录结构）
+	w := doRequest(srv, "POST", "/api/files/download", map[string]any{
+		"system": "信贷生产", "server": "mock-1",
+		"username": "ops", "password": "testpw",
+		"paths": []string{"/data/app"},
+		"zip":   false,
+	})
+	if w.Code != 200 {
+		t.Fatalf("启动失败: %d body=%s", w.Code, w.Body.String())
+	}
+	var dl struct {
+		ID string `json:"id"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &dl)
+
+	eventsW := doRequest(srv, "GET", "/api/files/download/"+dl.ID+"/events", nil)
+	body := eventsW.Body.String()
+	if !strings.Contains(body, "ok\":true") {
+		t.Fatalf("下载应成功，body=%s", body)
+	}
+
+	listW := doRequest(srv, "GET", "/api/downloads/list", nil)
+	var list struct {
+		Files []struct {
+			Name string `json:"name"`
+			Kind string `json:"kind"`
+		} `json:"files"`
+		Folder string `json:"folder"`
+	}
+	_ = json.Unmarshal(listW.Body.Bytes(), &list)
+
+	// 找到 zip 并校验内部层级
+	var zipPath string
+	if list.Folder != "" {
+		filepath.Walk(list.Folder, func(p string, info os.FileInfo, err error) error {
+			if err == nil && !info.IsDir() && strings.HasSuffix(p, ".zip") {
+				zipPath = p
+			}
+			return nil
+		})
+	}
+	if zipPath == "" {
+		t.Fatalf("目录下载应产出 .zip，body=%s", body)
+	}
+	names := readZipNames(t, zipPath)
+	want := []string{"app/logs/a.log", "app/logs/sub/b.log", "app/readme.txt"}
+	if len(names) != len(want) {
+		t.Fatalf("zip 内条目数不对: got %v", names)
+	}
+	for i := range want {
+		if names[i] != want[i] {
+			t.Errorf("zip 内第 %d 项应为 %q，实际 %q（全部: %v）", i, want[i], names[i], names)
+		}
+	}
+}
+
+// readZipNames 打开 zip 读出所有条目名（保持顺序）。
+func readZipNames(t *testing.T, zipPath string) []string {
+	t.Helper()
+	r, err := zip.OpenReader(zipPath)
+	if err != nil {
+		t.Fatalf("打开 zip 失败: %v", err)
+	}
+	defer r.Close()
+	var names []string
+	for _, f := range r.File {
+		names = append(names, f.Name)
+	}
+	return names
+}
 
 // TestFilesList_FreeBrowserDisabled 验证 app.enable_free_file_browser=false 时
 // /api/files/* 全部返回 403（P2-11 修复）。

@@ -10,9 +10,9 @@
 //                                    → 返前 50 名 (按 total 倒序, 含 rank)
 //
 // 缓存:
-//   - 5 分钟内存缓存 (sponsorCache), 减少对内部 Java 服务的压力
-//   - 缓存命中直接返回, 不打后端
-//   - 缓存过期/失效时, 成功则更新缓存; 失败但有陈旧缓存时返回陈旧数据 (优雅降级)
+//   - 实时查询: 每次请求都直接打 Java 端, 不走缓存
+//   - 查询成功则更新内存缓存 (sponsorCache), 供后续查询失败时兜底
+//   - 查询失败 (网络错 / Java 端业务失败) 且有历史缓存时, 返回陈旧缓存 (优雅降级)
 //   - 线程安全 (sponsorCacheMu)
 //
 // 失败语义 (跟前端对齐, 不兜底):
@@ -30,23 +30,12 @@ import (
 	"kairo/internal/sponsor"
 )
 
-const sponsorCacheTTL = 5 * time.Minute
-
 var (
 	sponsorCacheMu      sync.RWMutex
 	sponsorCacheEntries []sponsor.Entry
 	sponsorCacheTime    time.Time
 	sponsorCacheOK      bool
 )
-
-func getSponsorCache() ([]sponsor.Entry, bool, bool) {
-	sponsorCacheMu.RLock()
-	defer sponsorCacheMu.RUnlock()
-	if sponsorCacheTime.IsZero() || time.Since(sponsorCacheTime) > sponsorCacheTTL {
-		return nil, false, false
-	}
-	return sponsorCacheEntries, true, sponsorCacheOK
-}
 
 func setSponsorCache(entries []sponsor.Entry, ok bool) {
 	sponsorCacheMu.Lock()
@@ -68,24 +57,6 @@ func setSponsorCache(entries []sponsor.Entry, ok bool) {
 func (s *Server) handleSponsorLeaderboard(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeErr(w, http.StatusMethodNotAllowed, errors.New("仅支持 GET"))
-		return
-	}
-
-	if entries, fresh, ok := getSponsorCache(); fresh {
-		s.audit.Write("sponsor.leaderboard.cache_hit", "count", len(entries))
-		if ok {
-			writeJSON(w, http.StatusOK, map[string]any{
-				"ok":      true,
-				"entries": entries,
-				"cached":  true,
-			})
-		} else {
-			writeJSON(w, http.StatusOK, map[string]any{
-				"ok":    false,
-				"error": "排行榜服务暂时不可用, 请稍后重试",
-				"cached": true,
-			})
-		}
 		return
 	}
 

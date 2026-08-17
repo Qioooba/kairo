@@ -987,7 +987,8 @@
         }
         const cb = el('input', { type: 'checkbox' });
         cb.checked = state.selected.has(entry.name);
-        cb.disabled = entry.isDir;
+        // v1.4：目录允许勾选（后端递归下载 + 强制 zip，见 doDownload zip 计算）
+        cb.disabled = false;
         cb.addEventListener('change', () => {
           if (cb.checked) state.selected.add(entry.name);
           else state.selected.delete(entry.name);
@@ -1164,9 +1165,17 @@
       if (!names.length) { toast('请先勾选文件', 'warn'); return; }
       const paths = names.map(n => (state.currentPath === '/' ? '' : state.currentPath) + '/' + n);
       const wantZip = dlZipChk.checked;
-      const zip = wantZip && paths.length >= 2;
-      if (wantZip && paths.length < 2) {
+      // v1.4：选中目录时后端会递归下载并强制打 zip（保留目录结构）
+      const selectedHasDir = names.some(n => {
+        const e = state.entries.find(en => en.name === n);
+        return !!(e && e.isDir);
+      });
+      const zip = (wantZip && paths.length >= 2) || selectedHasDir;
+      if (wantZip && paths.length < 2 && !selectedHasDir) {
         toast('zip 打包需要 ≥ 2 个文件，已仅返回原始文件', 'warn');
+      }
+      if (selectedHasDir && !wantZip) {
+        toast('包含目录，将递归下载并打包 zip', 'idle');
       }
       state.fileStates = {};
       paths.forEach(p => {
@@ -1268,6 +1277,16 @@
                 const remotePath = (state.currentPath === '/' ? '' : state.currentPath) + '/' + baseName;
                 state.downloadedFiles[remotePath] = d.abs_path || (d.date ? d.date + '/' + d.local : d.local);
               }
+            }
+          });
+          // v1.4：目录行（递归下载）不会有 file_start/file_done 事件落到行上，
+          // done 时把仍 pending 的行标为完成，避免"等待…"卡死。
+          Object.keys(state.fileStates).forEach(bn => {
+            const st = state.fileStates[bn];
+            if (st && st.status === 'pending') {
+              st.status = 'done';
+              st.bytes = 0;
+              setRowStatusByName(bn, st);
             }
           });
           showDownloadDoneNotify(o);

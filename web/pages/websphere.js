@@ -1839,6 +1839,9 @@
         if (contextN > 0) body.context = contextN;
         // v0.13：忽略大小写 checkbox（勾上 → 后端 grep -i）
         body.ignore_case = !!ignoreCaseChk.checked;
+        // v0.15：多行窗口匹配（勾上 → && 在 N 行跨度内出现即命中）
+        const winN = winChk.checked ? getMatchWindow() : 0;
+        if (winN > 0) body.match_window = winN;
         if (selectedItems) {
           // P1-9：传 selected_file_targets（新格式），按 (server, dir) 区分
           // 后端会优先用 per-target 列表，匹配不上再退到老的 selected_files。
@@ -1852,8 +1855,9 @@
         // term 列表从 queryInp.value 解析出来（跟后端 ParseQuery 的 token 切分对齐）。
         // ignoreCase 状态从 ignoreCaseChk 拿，跟发给后端的 ignore_case 字段同源。
         const termsForHl = parseSearchTermsForHighlight(queryInp.value);
-        renderMultiResults(r, termsForHl, !!ignoreCaseChk.checked);
+        renderMultiResults(r, termsForHl, !!ignoreCaseChk.checked, winN);
         let toastMsg = '命中 ' + r.total_hits + ' 条，' + r.ok_count + '/' + targets.length + ' 组成功';
+        if (winN > 0) toastMsg += '（多行窗口 ±' + winN + ' 行）';
         if (timeRange.since || timeRange.until) toastMsg += '（时间范围已应用）';
         if (filePatterns) toastMsg += '（文件名过滤：' + filePatterns.join(', ') + '）';
         toast(toastMsg, r.fail_count > 0 ? 'warn' : 'ok');
@@ -1870,10 +1874,11 @@
       }
     }
 
-    function renderMultiResults(r, terms, ignoreCase) {
+    function renderMultiResults(r, terms, ignoreCase, matchWindow) {
       hitTableWrap.innerHTML = '';
       hitTableWrap.appendChild(el('h3', { text: '搜索结果 · ' + r.ok_count + '/' + r.servers.length + ' 成功，共 ' + r.total_hits + ' 条命中' }));
-      hitTableWrap.appendChild(el('div', { class: 'text-dim mb-2', text: '并发 ' + r.max_concurrency + '，按服务器分组展示' }));
+      const winHint = (matchWindow && matchWindow > 0) ? '，多行窗口 ±' + matchWindow + ' 行' : '';
+      hitTableWrap.appendChild(el('div', { class: 'text-dim mb-2', text: '并发 ' + r.max_concurrency + '，按服务器分组展示' + winHint }));
 
       if (!r.servers || !r.servers.length) {
         hitTableWrap.appendChild(el('div', { class: 'text-dim', text: '没有结果。' }));
@@ -2200,6 +2205,65 @@ const formCard = el('div', { class: 'card' }, [
       document.createTextNode(' 忽略大小写')
     ]);
 
+    // 多行窗口匹配（v0.15）：勾上后 && 从"同一行同时包含"变成
+    // "window 行跨度内出现"（两个词相差不超过 N 行即命中，命中行都会标亮）。
+    // - 默认不勾（保持原有同行语义，向后兼容）
+    // - 行数输入框只有勾上时才可编辑；默认 10，范围 1~50
+    // - localStorage 记忆开关和行数
+    const MATCH_WINDOW_ENABLED_KEY = 'kairo.websphere.matchWindowEnabled';
+    const MATCH_WINDOW_KEY = 'kairo.websphere.matchWindow';
+    const MATCH_WINDOW_DEFAULT = 10;
+    const MATCH_WINDOW_MAX = 50;
+    const winChk = el('input', { type: 'checkbox', id: 'ws-match-window' });
+    try { winChk.checked = localStorage.getItem(MATCH_WINDOW_ENABLED_KEY) === '1'; } catch (e) { /* ignore */ }
+    const savedWinN = (() => {
+      try {
+        const n = Number(localStorage.getItem(MATCH_WINDOW_KEY));
+        if (Number.isFinite(n) && n >= 1 && n <= MATCH_WINDOW_MAX) return Math.floor(n);
+      } catch (e) { /* ignore */ }
+      return MATCH_WINDOW_DEFAULT;
+    })();
+    const winInp = el('input', {
+      type: 'number',
+      id: 'ws-match-window-n',
+      min: '1',
+      max: String(MATCH_WINDOW_MAX),
+      value: String(savedWinN),
+      style: 'width:64px;',
+      title: '两个 && 关键词相差不超过 N 行即命中（上下都算）'
+    });
+    winInp.disabled = !winChk.checked;
+    function getMatchWindow() {
+      let n = Number(winInp.value);
+      if (!Number.isFinite(n)) n = MATCH_WINDOW_DEFAULT;
+      n = Math.floor(n);
+      if (n < 1) n = 1;
+      if (n > MATCH_WINDOW_MAX) n = MATCH_WINDOW_MAX;
+      return n;
+    }
+    winChk.addEventListener('change', () => {
+      winInp.disabled = !winChk.checked;
+      try { localStorage.setItem(MATCH_WINDOW_ENABLED_KEY, winChk.checked ? '1' : '0'); } catch (e) { /* ignore */ }
+      if (winChk.checked) {
+        try { localStorage.setItem(MATCH_WINDOW_KEY, String(getMatchWindow())); } catch (e) { /* ignore */ }
+      }
+    });
+    winInp.addEventListener('change', () => {
+      try { localStorage.setItem(MATCH_WINDOW_KEY, String(getMatchWindow())); } catch (e) { /* ignore */ }
+    });
+    winInp.addEventListener('blur', () => {
+      try { localStorage.setItem(MATCH_WINDOW_KEY, String(getMatchWindow())); } catch (e) { /* ignore */ }
+    });
+    const winMatchLbl = el('label', {
+      class: 'inline',
+      title: '勾上后 && 不再要求同一行：两个词相差 ≤ N 行即命中（窗口内所有匹配行都会标亮，中间行按上下文展示）'
+    }, [
+      winChk,
+      document.createTextNode(' 多行窗口匹配（&& 在 '),
+      winInp,
+      document.createTextNode(' 行内同时出现）')
+    ]);
+
     // v0.5-G P1-08：搜索范围三选一（latest / selected / glob）
     // - latest  默认，列最近 N 个
     // - glob    用 filePatternInp 当文件名 glob
@@ -2513,14 +2577,14 @@ const formCard = el('div', { class: 'card' }, [
 
     const searchCard = el('div', { class: 'card' }, [
       el('h3', { text: '多目标并行搜索' }),
-      el('div', { class: 'card-desc', unsafeHtml: '语法：<span class="code-inline">A &amp;&amp; B</span>（同包含）、<span class="code-inline">A || B</span>（任一）、<span class="code-inline">!X</span>（排除）。结果按服务器 / 目录分组。' }),
+      el('div', { class: 'card-desc', unsafeHtml: '语法：<span class="code-inline">A &amp;&amp; B</span>（同包含）、<span class="code-inline">A || B</span>（任一）、<span class="code-inline">!X</span>（排除）。勾选「多行窗口匹配」后 <span class="code-inline">&amp;&amp;</span> 变为“N 行跨度内出现”。结果按服务器 / 目录分组。' }),
       el('div', { class: 'grid-3' }, [
         // 搜索表达式 + 忽略大小写 checkbox（视觉绑定：「忽略大小写」修饰的是关键词匹配规则，
         // 跟并发/上下文这类「结果处理参数」不是同一类，放搜索表达式底下更合理）
         el('div', { style: 'grid-column: span 2' }, [
           el('label', { text: '搜索表达式' }),
           queryWrap,
-          el('div', { class: 'mt-1', style: 'display:flex; align-items:center; gap:6px;' }, [ignoreCaseLbl])
+          el('div', { class: 'mt-1', style: 'display:flex; align-items:center; gap:14px; flex-wrap:wrap;' }, [ignoreCaseLbl, winMatchLbl])
         ]),
         el('div', null, [el('label', { text: '并发' }), concSel])
       ]),

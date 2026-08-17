@@ -154,6 +154,57 @@
     // 设计：FinalShell 风格（上终端 / 下文件），固定 40% 高度，每 tab 独立 SFTP 状态
     const filesPanelEl = el('div', { class: 'ssh-files-panel', style: 'display:none' });
 
+    // v1.4+：SFTP 面板拖拽上传（DnD）。
+    // 监听器挂在 filesPanelEl 上（容器常驻，不随 renderSftpPanelContent 重建），
+    // 拖拽深度计数避免子元素 dragenter/dragleave 抖动；drop 后走 addUploadFiles。
+    let sftpDragDepth = 0;
+    let sftpDropHintEl = null;
+    function sftpHasFiles(e) {
+      return !!(e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files'));
+    }
+    function sftpShowDropHint() {
+      if (!sftpDropHintEl) {
+        sftpDropHintEl = el('div', { class: 'sftp-drop-hint' });
+        sftpDropHintEl.appendChild(el('div', {
+          unsafeHtml: svgIcon('smFolder', 26) + '<div style="margin-top:6px;font-weight:600;">松手上传到当前目录</div>'
+        }));
+      }
+      if (!sftpDropHintEl.parentNode) filesPanelEl.appendChild(sftpDropHintEl);
+    }
+    function sftpHideDropHint() {
+      if (sftpDropHintEl && sftpDropHintEl.parentNode) sftpDropHintEl.remove();
+    }
+    filesPanelEl.addEventListener('dragenter', function (e) {
+      if (!sftpHasFiles(e)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      sftpDragDepth++;
+      sftpShowDropHint();
+    });
+    filesPanelEl.addEventListener('dragover', function (e) {
+      if (!sftpHasFiles(e)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.dataTransfer) {
+        try { e.dataTransfer.dropEffect = 'copy'; } catch (err) { /* ignore */ }
+      }
+    });
+    filesPanelEl.addEventListener('dragleave', function (e) {
+      if (!sftpHasFiles(e)) return;
+      sftpDragDepth = Math.max(0, sftpDragDepth - 1);
+      if (sftpDragDepth === 0) sftpHideDropHint();
+    });
+    filesPanelEl.addEventListener('drop', function (e) {
+      if (!sftpHasFiles(e) || !e.dataTransfer.files || !e.dataTransfer.files.length) return;
+      e.preventDefault();
+      e.stopPropagation();
+      sftpDragDepth = 0;
+      sftpHideDropHint();
+      const tab = getActiveTab();
+      if (!tab || tab.closed) { toast('当前没有可用的 SSH tab', 'warn'); return; }
+      addUploadFiles(tab, e.dataTransfer.files);
+    });
+
     const emptyHint = el('div', { class: 'ssh-empty' }, [
       el('div', { class: 'ssh-empty-icon', text: '>' }),
       el('div', { class: 'ssh-empty-text', text: '从左侧选择一台主机开始 SSH 会话' })
@@ -294,6 +345,14 @@ btnSearch.appendChild(el('span', { text: '搜索' }));
 
     Kairo.core.setActiveShells({
       closeAll: function () { closeAllTabs(); }
+    });
+
+    // v1.4+：注册上传 controller 到 Kairo.core（与 files.js 同机制）。
+    // 路由切走（app.js navigate）时 core 调 cancelAll 取消所有 tab 上传；
+    // beforeunload 时走 cancelAllBeacon（sendBeacon 异步通知后端）。
+    Kairo.core.setActiveUploads({
+      cancelAll: function () { cancelAllTabsUploads(); },
+      cancelAllBeacon: function () { cancelAllTabsUploads(); }
     });
 
     // ===== v0.13+ 终端背景模式切换（跟随主题 / 强制深色） =====
@@ -587,6 +646,11 @@ btnSearch.appendChild(el('span', { text: '搜索' }));
         sftpCwdQueryId: null,       // 当前 cwd 查询 ID（用于 WS 响应匹配）
         sftpCwdQueryTimer: null,    // cwd 查询超时定时器
         sftpLastDlNotifyId: null,   // 上次下载通知 ID（去重）
+        // v1.4+ SFTP 上传状态（每 tab 独立，DnD + 文件选择共用）
+        sftpUploadQueue: [],        // 上传队列：{name,size,status,progress,bytes,error,uploadId,finalName,overwrite,file,xhr}
+        sftpUploadInflight: false,  // 串行上传：一次只传一个
+        sftpUploadOverwrite: 'reject', // 覆盖策略：reject | replace | rename
+        sftpUploadRefresh: true,    // 全部完成后自动刷新列表
       };
       // 恢复持久化的面板显隐偏好（必须在 activateTab 前读，
       // 否则 syncFilesPanelForActiveTab 看不到 true 值，永远走隐藏分支）
@@ -1067,6 +1131,8 @@ function updateTabStatus(tab) {
         tab.sftpDlId = null;
         tab.sftpDlProgress = null;
       }
+      // v1.4+：关闭 tab 时取消该 tab 进行中的上传
+      cancelTabUploads(tab);
       if (tab.tabBtn) tab.tabBtn.remove();
       if (tab.termEl) tab.termEl.remove();
       if (tab._pwdOverlay) tab._pwdOverlay.remove();
@@ -1383,6 +1449,15 @@ function updateTabStatus(tab) {
 
       const navSep = el('span', { class: 'sftp-actions-sep' });
       const btnDownload = el('button', { class: 'btn btn-sm btn-primary', text: '下载', title: '下载选中文件（多选）', onclick: function () { sftpDownloadSelected(tab); }, disabled: true });
+      // v1.4+：上传按钮 + 隐藏 file input（每次渲染重建，change 后进队列）
+      const btnUploadPick = el('button', { class: 'btn btn-sm', text: '📤 上传', title: '上传文件到当前目录（支持拖拽到面板）', onclick: function () { uploadFileInp.click(); } });
+      const uploadFileInp = el('input', { type: 'file', multiple: 'multiple', style: 'display:none;' });
+      uploadFileInp.addEventListener('change', function () {
+        if (uploadFileInp.files && uploadFileInp.files.length) {
+          addUploadFiles(tab, uploadFileInp.files);
+          uploadFileInp.value = '';
+        }
+      });
       const btnSelectAll = el('button', { class: 'btn btn-sm sftp-select-all', text: '全选', title: '全选 / 取消全选',
         onclick: function () {
           if (!tab.sftpEntries || tab.sftpEntries.length === 0) return;
@@ -1403,6 +1478,8 @@ function updateTabStatus(tab) {
       actions.appendChild(btnRefresh);
       actions.appendChild(navSep);
       actions.appendChild(btnDownload);
+      actions.appendChild(btnUploadPick);
+      actions.appendChild(uploadFileInp);
       actions.appendChild(btnSelectAll);
       actions.appendChild(btnClose);
       header.appendChild(actions);
@@ -1480,6 +1557,7 @@ function updateTabStatus(tab) {
             el('td', { class: 'sftp-col-mtime text-dim', text: fmtMTime(entry.mtime) }),
             el('td', { class: 'sftp-col-mode text-dim', text: entry.mode || '-' }),
             el('td', { class: 'sftp-col-actions' }, isDir ? [
+              el('button', { class: 'btn btn-sm', text: '打包下载', disabled: dlInProgress, title: dlInProgress ? '当前已有下载任务进行中' : '递归下载目录并打包 zip', onclick: function (e) { e.stopPropagation(); sftpDownloadPaths(tab, [fullPath]); } }),
               el('button', { class: 'btn btn-sm', text: '打开', onclick: function (e) { e.stopPropagation(); sftpList(tab, fullPath); } })
             ] : (isText(entry.name) ? [
               el('button', { class: 'btn btn-sm', text: '预览', onclick: function (e) { e.stopPropagation(); sftpPreview(tab, fullPath); } }),
@@ -1522,6 +1600,9 @@ function updateTabStatus(tab) {
         btnSelectAll.classList.toggle('active', allSelected);
       }
       filesPanelEl.appendChild(listWrap);
+
+      // ---- v1.4+ 上传区（队列为空时隐藏）----
+      filesPanelEl.appendChild(buildUploadSection(tab));
 
       // ---- 状态栏 ----
       const status = el('div', { class: 'sftp-status' });
@@ -1590,6 +1671,354 @@ function updateTabStatus(tab) {
       if (cancelBtn) {
         cancelBtn.addEventListener('click', function () { cancelSftpDownload(tab); });
       }
+    }
+
+    // ============================================================================
+    // v1.4+ SFTP 上传（DnD + 文件选择，串行队列，后端 /api/ssh/sftp/upload/*）
+    // 参照 files.js 上传实现，按 tab 隔离状态。
+    // ============================================================================
+
+    // buildUploadSection 构建上传区 DOM（renderSftpPanelContent 每次全量重建时调用）。
+    // 队列为空 → display:none；有任务 → 显示。
+    function buildUploadSection(tab) {
+      const section = el('div', { class: 'sftp-upload-section', style: 'display:none; border-top:1px dashed var(--line);' });
+      const optsRow = el('div', { class: 'sftp-upload-opts', style: 'display:flex; align-items:center; gap:8px; padding:6px 10px; flex-wrap:wrap;' });
+      optsRow.appendChild(el('span', { class: 'text-dim', text: '上传：', style: 'font-size:12px;' }));
+      const overwriteSel = el('select', { title: '同名文件已存在时的处理策略' });
+      overwriteSel.appendChild(el('option', { value: 'reject', text: '拒绝覆盖（默认）' }));
+      overwriteSel.appendChild(el('option', { value: 'replace', text: '直接替换' }));
+      overwriteSel.appendChild(el('option', { value: 'rename', text: '自动重命名（_1/_2）' }));
+      overwriteSel.value = tab.sftpUploadOverwrite || 'reject';
+      overwriteSel.addEventListener('change', function () { tab.sftpUploadOverwrite = overwriteSel.value; });
+      const refreshChk = el('input', { type: 'checkbox', id: 'sftp-upload-refresh' });
+      refreshChk.checked = !!tab.sftpUploadRefresh;
+      refreshChk.addEventListener('change', function () { tab.sftpUploadRefresh = refreshChk.checked; });
+      const btnCancelAll = el('button', { class: 'btn btn-sm btn-danger', text: '全取消', onclick: function () { cancelAllUploads(tab); } });
+      const btnClear = el('button', { class: 'btn btn-sm', text: '清空已完成', onclick: function () { clearFinishedUploads(tab); } });
+      optsRow.appendChild(overwriteSel);
+      optsRow.appendChild(el('label', { class: 'inline', style: 'gap:4px; align-items:center; display:inline-flex;' }, [refreshChk, document.createTextNode('完成后刷新')]));
+      optsRow.appendChild(el('span', { style: 'flex:1 1 auto;' }));
+      optsRow.appendChild(btnCancelAll);
+      optsRow.appendChild(btnClear);
+      const listWrap = el('div', { class: 'sftp-upload-list', style: 'max-height:180px; overflow-y:auto; padding:0 10px;' });
+      const summary = el('div', { class: 'sftp-upload-summary text-dim', style: 'padding:4px 10px 8px; font-size:12px;' });
+      section.appendChild(optsRow);
+      section.appendChild(listWrap);
+      section.appendChild(summary);
+      // 全量重建时也要从队列状态渲染行（不只 updateUploadQueueUI 做增量），
+      // 否则列表刷新（renderSftpPanelContent）后行会消失只剩空框。
+      tab.sftpUploadQueue.forEach(function (t) { listWrap.appendChild(buildUploadRow(tab, t)); });
+      summary.textContent = uploadSummaryText(tab);
+      if (tab.sftpUploadQueue.length > 0) section.style.display = '';
+      return section;
+    }
+
+    // updateUploadQueueUI 只更新上传区内容（进度事件高频触发，避免全量重绘面板）。
+    // 仅当 tab 是 active 时才碰 DOM（面板内容属于 active tab）。
+    function updateUploadQueueUI(tab) {
+      if (tab.id !== pageState.activeTabId) return;
+      const section = filesPanelEl.querySelector('.sftp-upload-section');
+      if (!section) return;
+      const listWrap = section.querySelector('.sftp-upload-list');
+      if (!listWrap) return;
+      while (listWrap.firstChild) listWrap.removeChild(listWrap.firstChild);
+      tab.sftpUploadQueue.forEach(function (t) { listWrap.appendChild(buildUploadRow(tab, t)); });
+      section.style.display = tab.sftpUploadQueue.length > 0 ? '' : 'none';
+      const summary = section.querySelector('.sftp-upload-summary');
+      if (summary) summary.textContent = uploadSummaryText(tab);
+      const hasActive = tab.sftpUploadQueue.some(function (t) { return t.status === 'pending' || t.status === 'uploading'; });
+      const btns = section.querySelectorAll('.sftp-upload-opts button');
+      if (btns[0]) btns[0].disabled = !hasActive; // 全取消
+    }
+
+    function uploadSummaryText(tab) {
+      const q = tab.sftpUploadQueue;
+      if (!q.length) return '';
+      const done = q.filter(function (t) { return t.status === 'done'; }).length;
+      const fail = q.filter(function (t) { return t.status === 'fail'; }).length;
+      const cancel = q.filter(function (t) { return t.status === 'cancel'; }).length;
+      const bytes = q.reduce(function (s, t) { return s + (t.status === 'done' ? (t.bytes || 0) : 0); }, 0);
+      const totalBytes = q.reduce(function (s, t) { return s + (t.size || 0); }, 0);
+      return '共 ' + q.length + ' 个 · 成功 ' + done + ' · 失败 ' + fail + ' · 取消 ' + cancel +
+        ' · ' + formatBytes(bytes) + ' / ' + formatBytes(totalBytes);
+    }
+
+    // buildUploadRow 单行任务 DOM（与 files.js 上传行一致的结构，图标用文本）。
+    function buildUploadRow(tab, task) {
+      const row = el('div', { class: 'upload-row', style: 'display:flex; align-items:center; gap:8px; padding:6px 4px; border-bottom:1px dashed var(--line);' });
+      const nameCell = el('div', { style: 'flex: 1 1 40%; min-width: 120px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;', title: task.name + (task.finalName && task.finalName !== task.name ? ' → ' + task.finalName : '') });
+      nameCell.textContent = task.name;
+      if (task.finalName && task.finalName !== task.name && task.status === 'done') {
+        nameCell.appendChild(document.createTextNode('  → ' + task.finalName));
+      }
+      row.appendChild(nameCell);
+      const progCell = el('div', { style: 'flex: 1 1 auto; min-width: 100px; display:flex; align-items:center; gap:6px;' });
+      if (task.status === 'pending') {
+        progCell.appendChild(el('span', { class: 'dl-pct', text: '等待…' }));
+      } else if (task.status === 'uploading') {
+        const bar = el('div', { class: 'dl-bar', style: 'width: 140px;' });
+        bar.appendChild(el('div', { class: 'dl-bar-fill', style: 'width:' + task.progress + '%' }));
+        progCell.appendChild(bar);
+        progCell.appendChild(el('span', { class: 'dl-pct', text: task.progress + '%' }));
+      } else if (task.status === 'done') {
+        progCell.appendChild(el('span', { class: 'dl-pct', style: 'color:#10b981;', text: '✓ 完成 · ' + formatBytes(task.bytes || 0) }));
+      } else if (task.status === 'fail') {
+        progCell.appendChild(el('span', { class: 'dl-pct', style: 'color:#ef4444;', title: task.error || '', text: '✕ ' + (task.error || '失败') }));
+      } else if (task.status === 'cancel') {
+        progCell.appendChild(el('span', { class: 'dl-pct', text: '已取消' }));
+      }
+      row.appendChild(progCell);
+      const btnCell = el('div', { style: 'flex: 0 0 auto; display:flex; gap:4px;' });
+      if (task.status === 'uploading') {
+        btnCell.appendChild(el('button', { class: 'btn btn-sm btn-danger', text: '取消', onclick: function () { cancelOneUpload(tab, task); } }));
+      } else if (task.status === 'fail' || task.status === 'cancel') {
+        btnCell.appendChild(el('button', { class: 'btn btn-sm', text: '重试', onclick: function () { retryUpload(tab, task); } }));
+        btnCell.appendChild(el('button', { class: 'btn btn-sm', text: '✕', title: '移除', onclick: function () { removeUploadRow(tab, task); } }));
+      } else if (task.status === 'done') {
+        btnCell.appendChild(el('button', { class: 'btn btn-sm', text: '✕', title: '移除', onclick: function () { removeUploadRow(tab, task); } }));
+      }
+      row.appendChild(btnCell);
+      return row;
+    }
+
+    // addUploadFiles 把 FileList 加入 tab 上传队列，并启动串行传输（如未启动）。
+    function addUploadFiles(tab, fileList) {
+      if (!tab || tab.closed) { toast('tab 已关闭，无法上传', 'warn'); return; }
+      if (!tab.sftpCwd) tab.sftpCwd = '/';
+      const targetDir = tab.sftpCwd;
+      if (!targetDir || targetDir[0] !== '/') {
+        toast('目标目录必须是绝对路径', 'warn');
+        return;
+      }
+      for (let i = 0; i < fileList.length; i++) {
+        const f = fileList[i];
+        tab.sftpUploadQueue.push({
+          name: f.name,
+          size: f.size,
+          status: 'pending',
+          progress: 0,
+          bytes: 0,
+          error: '',
+          uploadId: '',
+          finalName: f.name,
+          targetDir: targetDir,
+          overwrite: tab.sftpUploadOverwrite || 'reject',
+          file: f,
+          xhr: null
+        });
+      }
+      updateUploadQueueUI(tab);
+      if (!tab.sftpUploadInflight) startNextUpload(tab);
+    }
+
+    // startNextUpload 串行取下一个 pending 任务上传；队列空时按需刷新列表。
+    function startNextUpload(tab) {
+      if (tab.closed || tab.sftpUploadInflight) return;
+      const next = tab.sftpUploadQueue.find(function (t) { return t.status === 'pending'; });
+      if (!next) {
+        updateUploadQueueUI(tab);
+        if (tab.sftpUploadRefresh && tab.sftpCwd) {
+          sftpList(tab, tab.sftpCwd);
+        }
+        return;
+      }
+      tab.sftpUploadInflight = true;
+      next.status = 'uploading';
+      next.progress = 0;
+      updateUploadQueueUI(tab);
+      doUploadOne(tab, next).finally(function () {
+        tab.sftpUploadInflight = false;
+        startNextUpload(tab);
+      });
+    }
+
+    // doUploadOne 单文件上传：init → data（XHR 流式）。失败 toast（全局，不限 active tab）。
+    async function doUploadOne(tab, task) {
+      try {
+        const initResp = await api('POST', '/api/ssh/sftp/upload/init', {
+          system: tab.system,
+          server: tab.server,
+          target_dir: task.targetDir,
+          filename: task.name,
+          size: task.size,
+          overwrite: task.overwrite
+        });
+        task.uploadId = initResp.id;
+        if (initResp.max_size && task.size > initResp.max_size) {
+          throw new Error('文件大小 ' + formatBytes(task.size) + ' 超过服务端上限 ' + formatBytes(initResp.max_size));
+        }
+        updateUploadQueueUI(tab);
+        await uploadFileData(tab, task);
+      } catch (e) {
+        task.status = 'fail';
+        task.error = e.message || String(e);
+        if (task.xhr) {
+          try { task.xhr.abort(); } catch (e2) { /* ignore */ }
+          task.xhr = null;
+        }
+        // 注意：失败时保留 task.file，让「重试」能重新发起上传；
+        // 文件引用只在 done / 移除 / 关 tab 时释放。
+        updateUploadQueueUI(tab);
+        toast('上传失败：' + task.name + ' — ' + task.error, 'err');
+      }
+    }
+
+    // uploadFileData XHR 把 File 作为 raw body 发到 /data，onprogress 算进度。
+    function uploadFileData(tab, task) {
+      return new Promise(function (resolve, reject) {
+        const xhr = new XMLHttpRequest();
+        task.xhr = xhr;
+        const url = '/api/ssh/sftp/upload/' + encodeURIComponent(task.uploadId) + '/data';
+        xhr.open('POST', url, true);
+        xhr.upload.onprogress = function (ev) {
+          if (ev.lengthComputable) {
+            task.bytes = ev.loaded;
+            task.progress = Math.min(100, Math.round((ev.loaded / ev.total) * 100));
+            updateUploadQueueUI(tab);
+          }
+        };
+        const releaseFile = function () {
+          // 仅 done 时释放（fail/cancel 保留 file 供「重试」重新发起）
+          if (task.file) {
+            try { task.file = null; } catch (e) { /* ignore */ }
+          }
+        };
+        xhr.onload = function () {
+          task.xhr = null;
+          let resp = null;
+          try { resp = JSON.parse(xhr.responseText || '{}'); } catch (e) { /* ignore */ }
+          if (xhr.status >= 200 && xhr.status < 300 && resp && resp.ok) {
+            task.status = 'done';
+            task.bytes = resp.bytes || task.size;
+            task.progress = 100;
+            task.finalName = resp.final_name || task.name;
+            updateUploadQueueUI(tab);
+            releaseFile();
+            resolve();
+          } else {
+            const errMsg = (resp && (resp.error || resp.message)) || ('HTTP ' + xhr.status);
+            task.status = 'fail';
+            task.error = errMsg;
+            updateUploadQueueUI(tab);
+            reject(new Error(errMsg));
+          }
+        };
+        xhr.onerror = function () {
+          task.xhr = null;
+          task.status = 'fail';
+          task.error = '网络错误';
+          updateUploadQueueUI(tab);
+          reject(new Error('网络错误'));
+        };
+        xhr.onabort = function () {
+          task.xhr = null;
+          task.status = 'cancel';
+          task.error = '已取消';
+          updateUploadQueueUI(tab);
+          resolve();
+        };
+        try {
+          xhr.send(task.file);
+        } catch (e) {
+          task.xhr = null;
+          task.status = 'fail';
+          task.error = '发送失败：' + (e.message || e);
+          updateUploadQueueUI(tab);
+          reject(e);
+        }
+      });
+    }
+
+    // cancelOneUpload 取消单个任务（pending 直接标 cancel；uploading 后端 cancel + abort）。
+    // 注意：不释放 task.file —— 「重试」可以重新发起。
+    async function cancelOneUpload(tab, task) {
+      if (task.status === 'done' || task.status === 'fail' || task.status === 'cancel') return;
+      if (task.status === 'pending') {
+        task.status = 'cancel';
+        task.error = '已取消';
+        updateUploadQueueUI(tab);
+        return;
+      }
+      if (task.uploadId) {
+        try { await api('POST', '/api/ssh/sftp/upload/cancel', { id: task.uploadId }); }
+        catch (e) { /* ignore */ }
+      }
+      if (task.xhr) {
+        try { task.xhr.abort(); } catch (e) { /* onabort 会处理 */ }
+      }
+    }
+
+    // cancelAllUploads 取消 tab 所有 pending/uploading 任务。
+    async function cancelAllUploads(tab) {
+      const tasks = tab.sftpUploadQueue.filter(function (t) { return t.status === 'pending' || t.status === 'uploading'; });
+      if (!tasks.length) return;
+      tasks.forEach(function (t) {
+        if (t.status === 'pending') {
+          t.status = 'cancel';
+          t.error = '已取消';
+        }
+      });
+      updateUploadQueueUI(tab);
+      const uploading = tasks.find(function (t) { return t.status === 'uploading'; });
+      if (uploading) await cancelOneUpload(tab, uploading);
+      updateUploadQueueUI(tab);
+      toast('已取消全部待上传任务', 'warn');
+    }
+
+    // clearFinishedUploads 清空 done/fail/cancel 任务（移除时释放 File 引用）。
+    function clearFinishedUploads(tab) {
+      const before = tab.sftpUploadQueue.length;
+      const removed = tab.sftpUploadQueue.filter(function (t) { return t.status !== 'pending' && t.status !== 'uploading'; });
+      removed.forEach(function (t) {
+        if (t.file) { try { t.file = null; } catch (e) { /* ignore */ } }
+      });
+      tab.sftpUploadQueue = tab.sftpUploadQueue.filter(function (t) { return t.status === 'pending' || t.status === 'uploading'; });
+      if (tab.sftpUploadQueue.length !== before) updateUploadQueueUI(tab);
+    }
+
+    // retryUpload 失败/取消任务重置为 pending 重新入队。
+    function retryUpload(tab, task) {
+      if (task.status !== 'fail' && task.status !== 'cancel') return;
+      task.status = 'pending';
+      task.progress = 0;
+      task.bytes = 0;
+      task.error = '';
+      task.uploadId = '';
+      updateUploadQueueUI(tab);
+      if (!tab.sftpUploadInflight) startNextUpload(tab);
+    }
+
+    // removeUploadRow 从队列移除终态任务（移除时释放 File 引用）。
+    function removeUploadRow(tab, task) {
+      if (task.status === 'uploading' || task.status === 'pending') return;
+      const idx = tab.sftpUploadQueue.indexOf(task);
+      if (idx >= 0) {
+        if (task.file) { try { task.file = null; } catch (e) { /* ignore */ } }
+        tab.sftpUploadQueue.splice(idx, 1);
+      }
+      updateUploadQueueUI(tab);
+    }
+
+    // cancelTabUploads 关闭 tab 时兜底取消该 tab 的上传（abort XHR + beacon 通知后端）。
+    function cancelTabUploads(tab) {
+      if (!tab || !tab.sftpUploadQueue || !tab.sftpUploadQueue.length) return;
+      tab.sftpUploadQueue.forEach(function (t) {
+        if (t.status === 'uploading' && t.uploadId && navigator.sendBeacon) {
+          try {
+            navigator.sendBeacon('/api/ssh/sftp/upload/cancel',
+              new Blob([JSON.stringify({ id: t.uploadId })], { type: 'application/json' }));
+          } catch (e) { /* ignore */ }
+        }
+        if (t.xhr) { try { t.xhr.abort(); } catch (e) { /* ignore */ } }
+        if (t.file) { try { t.file = null; } catch (e) { /* ignore */ } }
+        t.status = 'cancel';
+      });
+      tab.sftpUploadInflight = false;
+    }
+
+    // cancelAllTabsUploads 路由切走（app.js navigate）时取消所有 tab 的上传。
+    function cancelAllTabsUploads() {
+      pageState.tabs.forEach(function (t) { cancelTabUploads(t); });
     }
 
     // joinPath 拼接 SFTP 路径：'/a' + 'b' → '/a/b'；'/' + 'b' → '/b'
@@ -1842,6 +2271,9 @@ function updateTabStatus(tab) {
                 tab.sftpDlProgress.current = (o.file || '').split('/').pop();
                 tab.sftpDlProgress.fileWritten = 0;
                 tab.sftpDlProgress.fileTotal = 0;
+                // v1.4：目录递归下载时后端展开成 N 个文件，用事件里的 total 校准
+                // 进度分母（前端初始按"选中条目数"计，目录会偏低）。
+                if (o.total && o.total > 0) tab.sftpDlProgress.total = o.total;
               }
               if (tab.id === pageState.activeTabId) updateSftpStatusBar(tab);
             } else if (o.kind === 'file_done') {

@@ -132,6 +132,12 @@ async function main() {
     './tests/12-http-deep',
     './tests/13-config-deep',
     './tests/20-api-coverage',
+    './tests/30-tasks',
+    './tests/31-pet',
+    './tests/32-http-curl-ws',
+    './tests/33-ssh-profiles',
+    './tests/34-reminders-actions',
+    './tests/35-sponsor-pet-board',
   ];
 
   console.log('📦 注册测试模块...');

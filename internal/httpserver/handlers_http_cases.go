@@ -24,17 +24,30 @@ import (
 //
 // 全部存在 data/http_cases.json，单文件 1MB 上限，原子写。
 
+// HTTPAssertion 描述一条响应断言（保存在用例里，发送后自动评估）。
+// Type 支持：
+//   - status            期望状态码，value 如 "200" 或 "2xx"（Nxx 通配）
+//   - body_contains     body 包含关键词
+//   - body_not_contains body 不包含关键词
+//   - header_contains   某响应头（key）包含内容（value，忽略大小写）
+type HTTPAssertion struct {
+	Type  string `json:"type"`
+	Key   string `json:"key"` // 仅 header_contains 使用
+	Value string `json:"value"`
+}
+
 type HTTPCase struct {
-	ID             string            `json:"id"`        // uuid-like（用时间戳 + 随机片段）
-	Group          string            `json:"group"`     // 分组（用户自定，如 "信贷生产" / "dev"）
-	Name           string            `json:"name"`      // 用例名
-	Method         string            `json:"method"`    // GET/POST/...
-	URL            string            `json:"url"`       // 可含 {{var}} 占位
-	Headers        map[string]string `json:"headers"`   // 一律 map
-	Body           string            `json:"body"`      // form/urlencoded 时是 urlencoded 字符串；raw 时是 raw 内容
-	BodyMode       string            `json:"body_mode"` // v0.7-Redesign: none | formdata | urlencoded | raw
-	BodyType       string            `json:"body_type"` // raw 模式下的子类型：json | xml | html | text
-	BodyForm       map[string]string `json:"body_form"` // formdata / urlencoded 模式下的字段
+	ID             string            `json:"id"`         // uuid-like（用时间戳 + 随机片段）
+	Group          string            `json:"group"`      // 分组（用户自定，如 "信贷生产" / "dev"）
+	Name           string            `json:"name"`       // 用例名
+	Method         string            `json:"method"`     // GET/POST/...
+	URL            string            `json:"url"`        // 可含 {{var}} 占位
+	Headers        map[string]string `json:"headers"`    // 一律 map
+	Body           string            `json:"body"`       // form/urlencoded 时是 urlencoded 字符串；raw 时是 raw 内容
+	BodyMode       string            `json:"body_mode"`  // v0.7-Redesign: none | formdata | urlencoded | raw
+	BodyType       string            `json:"body_type"`  // raw 模式下的子类型：json | xml | html | text
+	BodyForm       map[string]string `json:"body_form"`  // formdata / urlencoded 模式下的字段
+	Assertions     []HTTPAssertion   `json:"assertions"` // 响应断言（v0.15+，可空）
 	TimeoutMs      int               `json:"timeout_ms"`
 	FollowRedirect bool              `json:"follow_redirect"`
 	InsecureTLS    bool              `json:"insecure_tls"`
@@ -117,6 +130,18 @@ func (s *Server) handleHTTPCasesCreate(w http.ResponseWriter, r *http.Request) {
 	if c.TimeoutMs < 0 {
 		c.TimeoutMs = 0
 	}
+	// 清洗断言：去掉 type/value 为空的无效行
+	cleanAssertions := make([]HTTPAssertion, 0, len(c.Assertions))
+	for _, a := range c.Assertions {
+		if a.Type == "" || strings.TrimSpace(a.Value) == "" {
+			continue
+		}
+		if a.Key == "" && a.Type == "header_contains" {
+			continue
+		}
+		cleanAssertions = append(cleanAssertions, a)
+	}
+	c.Assertions = cleanAssertions
 	if c.ID == "" {
 		c.ID = newHTTPID()
 	}

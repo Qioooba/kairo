@@ -28,30 +28,58 @@ const (
 
 // GenerateEnvelope 根据 operation 生成一个可编辑的 SOAP 请求报文。
 // soapVersion 为 "1.2" 时用 SOAP 1.2 envelope namespace，否则按 1.1。
+//
+// body 根元素策略：
+//   - document/literal wrapped：InputName 为空或等于 operation 名时，根元素是
+//     operation 名（用 web 前缀挂在 op.Namespace 下），子节点是 InputParams。
+//   - document/literal bare：InputName 存在且 != operation 名时，根元素是
+//     InputName（输入元素），用**默认命名空间**挂在 op.Namespace 下（与 SoapUI
+//     生成的一致），子节点是该输入元素的子字段 —— 需要剥掉 InputParams 里
+//     那层 InputName 包装，避免生成 <op><input>...</input></op> 的双层错误结构。
 func GenerateEnvelope(op Operation, soapVersion string) string {
 	envNS := soap11EnvNS
 	if soapVersion == "1.2" {
 		envNS = soap12EnvNS
 	}
+
+	bodyTag := sanitizeXMLElementName(op.Name)
+	bodyParams := op.InputParams
+	bareMode := false
+
+	// document/literal bare：输入元素名与 operation 名不一致。
+	if op.InputName != "" && op.InputName != op.Name {
+		bodyTag = sanitizeXMLElementName(op.InputName)
+		bodyParams = unwrapWrapper(op.InputParams, op.InputName, op.InputName)
+		bareMode = true
+	}
+
 	var b strings.Builder
 	b.WriteString(`<?xml version="1.0" encoding="UTF-8"?>` + "\n")
 	b.WriteString(`<soapenv:Envelope xmlns:soapenv="` + envNS + `"`)
-	if op.Namespace != "" {
+	if !bareMode && op.Namespace != "" {
 		b.WriteString(` xmlns:web="` + escapeXMLAttr(op.Namespace) + `"`)
 	}
 	b.WriteString(">\n")
 	b.WriteString("  <soapenv:Header/>\n")
 	b.WriteString("  <soapenv:Body>\n")
 
-	// operation 元素：document/literal 用 web 前缀；rpc 用 web 前缀同样可用。
-	opName := sanitizeXMLElementName(op.Name)
-	opTag := "web:" + opName
-	if op.Namespace == "" {
-		opTag = opName
+	// 开标签：bare 用默认命名空间；wrapped 用 web 前缀（或裸名）。
+	if bareMode && op.Namespace != "" {
+		b.WriteString(`    <` + bodyTag + ` xmlns="` + escapeXMLAttr(op.Namespace) + `">` + "\n")
+	} else if op.Namespace != "" {
+		b.WriteString("    <web:" + bodyTag + ">\n")
+	} else {
+		b.WriteString("    <" + bodyTag + ">\n")
 	}
-	b.WriteString("    <" + opTag + ">\n")
-	writeParamNodes(&b, op.InputParams, "      ")
-	b.WriteString("    </" + opTag + ">\n")
+	writeParamNodes(&b, bodyParams, "      ")
+	// 闭标签
+	if bareMode && op.Namespace != "" {
+		b.WriteString("    </" + bodyTag + ">\n")
+	} else if op.Namespace != "" {
+		b.WriteString("    </web:" + bodyTag + ">\n")
+	} else {
+		b.WriteString("    </" + bodyTag + ">\n")
+	}
 	b.WriteString("  </soapenv:Body>\n")
 	b.WriteString("</soapenv:Envelope>\n")
 	return b.String()

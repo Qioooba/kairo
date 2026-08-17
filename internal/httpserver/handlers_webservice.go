@@ -120,6 +120,10 @@ func (s *Server) handleWSDLImportURL(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, errors.New("url 必须以 http:// 或 https:// 开头"))
 		return
 	}
+	if err := webservice.ValidateEndpointURL(url); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
@@ -129,10 +133,19 @@ func (s *Server) handleWSDLImportURL(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpReq.Header.Set("User-Agent", "kairo-wsdl/0.1")
-	// WSDL URL 拉取：不做 IP 段限制，任意地址都可导入（用户主动操作，由其自行负责目标合法性）。
+	// WSDL URL 拉取：拒绝 link-local（含云元数据 169.254.169.254）/ unspecified / 组播，
+	// 私有网段放行（内网 WebService 是核心场景）。DialContext 做拨号时二次校验
+	// （防 DNS rebinding），CheckRedirect 对重定向逐跳校验。
 	client := &http.Client{
-		Timeout:   30 * time.Second,
-		Transport: &http.Transport{TLSClientConfig: sharedWsTLSConfig, ResponseHeaderTimeout: 25 * time.Second},
+		Timeout: 30 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig:       sharedWsTLSConfig,
+			ResponseHeaderTimeout: 25 * time.Second,
+			DialContext:           webservice.SafeDialContext,
+		},
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return webservice.ValidateEndpointURL(req.URL.String())
+		},
 	}
 	resp, err := client.Do(httpReq)
 	if err != nil {

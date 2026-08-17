@@ -6,6 +6,7 @@ import (
 	"io"
 	"io/fs"
 	"net"
+	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
@@ -319,6 +320,28 @@ func TestConfig_WrongMethod(t *testing.T) {
 	w := doRequest(srv, "POST", "/api/config", nil)
 	if w.Code != 405 {
 		t.Errorf("expected 405, got %d", w.Code)
+	}
+}
+
+// TestConfig_Get_RedactsSecrets 验证 /api/config 不泄露 credential_key 与 kairo token。
+func TestConfig_Get_RedactsSecrets(t *testing.T) {
+	srv, mgr, _, _ := newTestServer(t)
+	cur := mgr.Get()
+	cur.App.CredentialKey = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	cur.App.KairoInternalToken = "111222"
+	if err := mgr.Replace(cur); err != nil {
+		t.Fatalf("Replace: %v", err)
+	}
+	w := doRequest(srv, "GET", "/api/config", nil)
+	if w.Code != 200 {
+		t.Fatalf("code=%d", w.Code)
+	}
+	body := w.Body.String()
+	if strings.Contains(body, "aaaaaaaaaaaaaaaa") {
+		t.Errorf("/api/config 不应泄露 credential_key: %s", body)
+	}
+	if strings.Contains(body, "111222") {
+		t.Errorf("/api/config 不应泄露 kairo token: %s", body)
 	}
 }
 
@@ -1294,6 +1317,47 @@ func TestFilesDownload_EventsOrCancel_BadPath(t *testing.T) {
 	w := doRequest(srv, "GET", "/api/files/download/dl-abc/garbage", nil)
 	if w.Code != 404 {
 		t.Errorf("expected 404 for garbage subpath, got %d", w.Code)
+	}
+}
+
+// TestAllowLocalOrigin_OriginNull 验证：桌面工具 / file:// 页面发 "Origin: null"
+// 且请求目标是本机地址时，不应被跨源检查拒绝（v0.14 修复）。
+func TestAllowLocalOrigin_OriginNull(t *testing.T) {
+	srv, _, _, _ := newTestServer(t)
+
+	do := func(origin, host string) int {
+		r := httptest.NewRequest("POST", "http://"+host+"/api/auth/status", strings.NewReader(`{}`))
+		r.Header.Set("Content-Type", "application/json")
+		if origin != "" {
+			r.Header.Set("Origin", origin)
+		}
+		w := httptest.NewRecorder()
+		srv.ServeHTTP(w, r)
+		return w.Code
+	}
+
+	// 本机 Host + Origin: null → 放行（不再 403）
+	if code := do("null", "127.0.0.1:18080"); code == http.StatusForbidden {
+		t.Errorf("Origin:null to localhost should be allowed, got 403")
+	}
+	if code := do("null", "localhost:18080"); code == http.StatusForbidden {
+		t.Errorf("Origin:null to localhost should be allowed, got 403")
+	}
+	// 非本机 Host + Origin: null → 仍拒绝
+	if code := do("null", "10.0.0.99:18080"); code != http.StatusForbidden {
+		t.Errorf("Origin:null to non-local host should be forbidden, got %d", code)
+	}
+	// 远程站点 Origin → 仍拒绝
+	if code := do("http://evil.com", "127.0.0.1:18080"); code != http.StatusForbidden {
+		t.Errorf("evil origin should be forbidden, got %d", code)
+	}
+	// 同源 Origin → 放行
+	if code := do("http://127.0.0.1:18080", "127.0.0.1:18080"); code == http.StatusForbidden {
+		t.Errorf("same-origin should be allowed, got 403")
+	}
+	// 无 Origin/Referer → 放行
+	if code := do("", "127.0.0.1:18080"); code == http.StatusForbidden {
+		t.Errorf("no-origin should be allowed, got 403")
 	}
 }
 

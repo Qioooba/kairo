@@ -12,6 +12,7 @@ package webservice
 //     不影响其它能解析的 operation。
 
 import (
+	"crypto/tls"
 	"encoding/xml"
 	"errors"
 	"fmt"
@@ -24,7 +25,9 @@ import (
 	"time"
 )
 
-var defaultNSRe = regexp.MustCompile(`\sxmlns\s*=\s*("[^"]*"|'[^']*')`)
+// stripDefaultNSRe 匹配 xmlns="..." 或 xmlns = "..."（带空格），保留 xmlns:xxx="..."。
+// 提到包级别，避免 stripDefaultNamespace 每次调用重新编译。
+var stripDefaultNSRe = regexp.MustCompile(`\sxmlns\s*=\s*("[^"]*"|'[^']*')`)
 
 // ---------- 解析用的中间结构 ----------
 
@@ -71,22 +74,22 @@ type xsdElement struct {
 }
 
 type xsdComplexType struct {
-	Name         string       `xml:"name,attr"`
-	Sequence     *xsdSequence `xml:"sequence"`
-	Choice       *xsdSequence `xml:"choice"`
-	All          *xsdSequence `xml:"all"`
+	Name           string             `xml:"name,attr"`
+	Sequence       *xsdSequence       `xml:"sequence"`
+	Choice         *xsdSequence       `xml:"choice"`
+	All            *xsdSequence       `xml:"all"`
 	ComplexContent *xsdComplexContent `xml:"complexContent"`
-	SimpleContent  *xsdSimpleContent `xml:"simpleContent"`
-	RawInner     string `xml:",innerxml"`
+	SimpleContent  *xsdSimpleContent  `xml:"simpleContent"`
+	RawInner       string             `xml:",innerxml"`
 }
 
 type xsdComplexContent struct {
-	Extension *xsdExtension `xml:"extension"`
+	Extension   *xsdExtension   `xml:"extension"`
 	Restriction *xsdRestriction `xml:"restriction"`
 }
 
 type xsdSimpleContent struct {
-	Extension *xsdExtension `xml:"extension"`
+	Extension   *xsdExtension   `xml:"extension"`
 	Restriction *xsdRestriction `xml:"restriction"`
 }
 
@@ -165,6 +168,17 @@ type wsdlBOperation struct {
 	Name          string             `xml:"name,attr"`
 	SoapOperation *soapOperationAttr `xml:"operation"` // soap:operation（local name "operation"）
 	Style         string             `xml:"style,attr"`
+	Input         wsdlBOperationMsg  `xml:"input"`
+	Output        wsdlBOperationMsg  `xml:"output"`
+}
+
+type wsdlBOperationMsg struct {
+	SoapBody *soapBodyAttr `xml:"body"` // soap:body（local name "body"）
+}
+
+type soapBodyAttr struct {
+	Use       string `xml:"use,attr"`
+	Namespace string `xml:"namespace,attr"`
 }
 
 type soapOperationAttr struct {
@@ -195,6 +209,182 @@ func localName(qname string) string {
 		return qname[i+1:]
 	}
 	return qname
+}
+
+// nsMap 保存 XML 命名空间声明（prefix → namespace），"" 前缀代表默认命名空间 xmlns="..."。
+type nsMap map[string]string
+
+// qnameKey 是 ns+name 复合键，用于区分不同 schema 里的同名 element/complexType。
+type qnameKey struct {
+	ns   string
+	name string
+}
+
+// nsContext 提供 QName 解析上下文：前缀表 + 当前 schema 的 targetNamespace。
+// 无前缀的 QName（如 type="Foo"）按 XSD 惯例解析到当前 schema 的 targetNamespace。
+type nsContext struct {
+	prefixes nsMap
+	self     string
+}
+
+// resolve 把 QName 拆成 (namespace, localName)。
+// 带前缀时查前缀表（前缀未声明得到空 namespace，走唯一名兜底）；
+// 无前缀时用当前 schema 的 targetNamespace。
+func (c nsContext) resolve(qname string) (ns, name string) {
+	if i := strings.Index(qname, ":"); i >= 0 {
+		return c.prefixes[qname[:i]], qname[i+1:]
+	}
+	return c.self, qname
+}
+
+// collectNSContexts 遍历 XML token 流，返回根元素的 namespace 声明，
+// 以及按文档顺序每个 <schema> 元素处的 namespace 上下文（父级声明合并自身声明）。
+// struct 解码会丢弃 QName 前缀信息，这里补回来用于 ns+name 解析。
+func collectNSContexts(raw string) (root nsMap, schemas []nsMap) {
+	root = nsMap{}
+	dec := xml.NewDecoder(strings.NewReader(raw))
+	dec.Strict = false
+	stack := []nsMap{}
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			own := nsMap{}
+			for _, a := range t.Attr {
+				switch {
+				case a.Name.Space == "xmlns":
+					own[a.Name.Local] = a.Value
+				case a.Name.Local == "xmlns":
+					own[""] = a.Value
+				}
+			}
+			merged := own
+			if len(stack) > 0 {
+				merged = mergeNS(stack[len(stack)-1], own)
+			}
+			stack = append(stack, merged)
+			if len(stack) == 1 {
+				root = merged
+			}
+			if t.Name.Local == "schema" {
+				schemas = append(schemas, merged)
+			}
+		case xml.EndElement:
+			if len(stack) > 0 {
+				stack = stack[:len(stack)-1]
+			}
+		}
+	}
+}
+
+// mergeNS 返回 base 与 own 合并后的新 map（内层声明覆盖外层同名前缀）。
+func mergeNS(base, own nsMap) nsMap {
+	out := nsMap{}
+	for k, v := range base {
+		out[k] = v
+	}
+	for k, v := range own {
+		out[k] = v
+	}
+	return out
+}
+
+// schemaIndex 是 element/complexType 的 ns+name 索引。
+// 每个条目同时记录其所在 schema 的 namespace 上下文，
+// 供递归展开时正确解析 type/base 等 QName 引用。
+type schemaIndex struct {
+	elements map[qnameKey]xsdElement
+	types    map[qnameKey]xsdComplexType
+	elemCtx  map[qnameKey]nsContext
+	typeCtx  map[qnameKey]nsContext
+	// 全局唯一的 local name → key，作为 ns 解析失败（前缀未声明等）时的兜底。
+	loneElems map[string]qnameKey
+	loneTypes map[string]qnameKey
+	elemCount map[string]int
+	typeCount map[string]int
+}
+
+func newSchemaIndex() *schemaIndex {
+	return &schemaIndex{
+		elements:  map[qnameKey]xsdElement{},
+		types:     map[qnameKey]xsdComplexType{},
+		elemCtx:   map[qnameKey]nsContext{},
+		typeCtx:   map[qnameKey]nsContext{},
+		loneElems: map[string]qnameKey{},
+		loneTypes: map[string]qnameKey{},
+		elemCount: map[string]int{},
+		typeCount: map[string]int{},
+	}
+}
+
+// addSchema 注册一个 schema 的顶层 element/complexType（ns = schema 的 targetNamespace）。
+// 同名不同 ns 的条目互不覆盖；同 ns 同名重复出现时后者为准。
+func (idx *schemaIndex) addSchema(sch xsdSchema, ctx nsContext) {
+	for _, el := range sch.Elements {
+		if el.Name == "" {
+			continue
+		}
+		key := qnameKey{sch.TargetNS, el.Name}
+		if _, dup := idx.elements[key]; !dup {
+			idx.addLone(idx.loneElems, idx.elemCount, el.Name, key)
+		}
+		idx.elements[key] = el
+		idx.elemCtx[key] = ctx
+	}
+	for _, ct := range sch.ComplexTypes {
+		if ct.Name == "" {
+			continue
+		}
+		key := qnameKey{sch.TargetNS, ct.Name}
+		if _, dup := idx.types[key]; !dup {
+			idx.addLone(idx.loneTypes, idx.typeCount, ct.Name, key)
+		}
+		idx.types[key] = ct
+		idx.typeCtx[key] = ctx
+	}
+}
+
+// addLone 维护"全局唯一名"兜底表：同名出现两次及以上就从表里移除。
+func (idx *schemaIndex) addLone(m map[string]qnameKey, counts map[string]int, name string, key qnameKey) {
+	switch counts[name] {
+	case 0:
+		m[name] = key
+	default:
+		delete(m, name)
+	}
+	counts[name]++
+}
+
+// findElement 按 ns+name 查 element；ns 查不到时退回全局唯一名匹配。
+// 返回 element、其所在 schema 的 nsContext、以及实际命中的 namespace（可能为空）。
+func (idx *schemaIndex) findElement(ns, name string) (xsdElement, nsContext, string, bool) {
+	if ns != "" {
+		key := qnameKey{ns, name}
+		if el, ok := idx.elements[key]; ok {
+			return el, idx.elemCtx[key], ns, true
+		}
+	}
+	if key, ok := idx.loneElems[name]; ok {
+		return idx.elements[key], idx.elemCtx[key], key.ns, true
+	}
+	return xsdElement{}, nsContext{}, "", false
+}
+
+// findComplexType 同 findElement，用于 complexType。
+func (idx *schemaIndex) findComplexType(ns, name string) (xsdComplexType, nsContext, bool) {
+	if ns != "" {
+		key := qnameKey{ns, name}
+		if ct, ok := idx.types[key]; ok {
+			return ct, idx.typeCtx[key], true
+		}
+	}
+	if key, ok := idx.loneTypes[name]; ok {
+		return idx.types[key], idx.typeCtx[key], true
+	}
+	return xsdComplexType{}, nsContext{}, false
 }
 
 // ParseOption 是 ParseWSDL 的可选参数类型。
@@ -268,21 +458,19 @@ func ParseWSDL(raw string, opts ...ParseOption) *WSDLProject {
 			imports = append(imports, sch.Includes...)
 		}
 	}
-	// 构建元素/类型查找表（先加载外部 XSD，再合并）。
-	elements := map[string]xsdElement{}         // top-level element by name
-	complexTypes := map[string]xsdComplexType{} // top-level complexType by name
+	// 构建 element/complexType 的 ns+name 索引。
+	// struct 解码丢弃 QName 前缀，这里用 token 流把根元素 + 每个 schema 的
+	// xmlns 声明找回来，供 message part 和 type/base 引用的前缀解析。
+	rootNS, schemaNSs := collectNSContexts(raw)
+	rootCtx := nsContext{prefixes: rootNS, self: defs.TargetNS}
+	idx := newSchemaIndex()
 	if defs.Types != nil {
-		for _, sch := range defs.Types.Schemas {
-			for _, el := range sch.Elements {
-				if el.Name != "" {
-					elements[el.Name] = el
-				}
+		for i, sch := range defs.Types.Schemas {
+			ctx := nsContext{prefixes: rootNS, self: sch.TargetNS}
+			if i < len(schemaNSs) {
+				ctx.prefixes = schemaNSs[i]
 			}
-			for _, ct := range sch.ComplexTypes {
-				if ct.Name != "" {
-					complexTypes[ct.Name] = ct
-				}
-			}
+			idx.addSchema(sch, ctx)
 		}
 	}
 	// 加载外部 XSD（递归处理 XSD 内部的 import）
@@ -300,7 +488,9 @@ func ParseWSDL(raw string, opts ...ParseOption) *WSDLProject {
 			// 优先从 attachments 里按文件名取（上传模式），再从 URL 下载（URL 导入模式）
 			var xsdRaw string
 			var err error
-			basename := path.Base(imp.SchemaLocation)
+			// schemaLocation 可能是 URL（用 / 分隔）或 Windows 路径（用 \ 分隔），
+			// path.Base 只认 /，这里归一化后再取文件名，兼容两种写法。
+			basename := path.Base(strings.ReplaceAll(imp.SchemaLocation, "\\", "/"))
 			if v, ok := attachments[basename]; ok {
 				xsdRaw = v
 			} else if v, ok = attachments[imp.SchemaLocation]; ok {
@@ -325,16 +515,8 @@ func ParseWSDL(raw string, opts ...ParseOption) *WSDLProject {
 					fmt.Sprintf("外部 XSD 解析失败（location=%s）：%v", imp.SchemaLocation, err))
 				continue
 			}
-			for _, el := range extSchema.Elements {
-				if el.Name != "" {
-					elements[el.Name] = el
-				}
-			}
-			for _, ct := range extSchema.ComplexTypes {
-				if ct.Name != "" {
-					complexTypes[ct.Name] = ct
-				}
-			}
+			extRootNS, _ := collectNSContexts(xsdRaw)
+			idx.addSchema(*extSchema, nsContext{prefixes: extRootNS, self: extSchema.TargetNS})
 			_ = extSchema.SimpleTypes
 			// 递归加载 XSD 内部的 import/include
 			for _, nestedImp := range extSchema.Imports {
@@ -415,8 +597,12 @@ func ParseWSDL(raw string, opts ...ParseOption) *WSDLProject {
 				}
 			}
 		}
-		// binding 级 soapAction 风格
+		// binding 级 style：优先取 soap:binding 的 style（document/rpc），
+		// 老 WSDL 常把它写在 soap:binding 而非 wsdl:binding 上；operation 级再覆盖。
 		bindingStyle := b.Style
+		if b.SoapBinding != nil && b.SoapBinding.Style != "" {
+			bindingStyle = b.SoapBinding.Style
+		}
 		for _, bop := range b.Operations {
 			// 找 portType 里同名 operation
 			var ptOp *wsdlPTOperation
@@ -429,28 +615,47 @@ func ParseWSDL(raw string, opts ...ParseOption) *WSDLProject {
 			if ptOp == nil {
 				continue
 			}
+			style := bindingStyle
+			if bop.Style != "" {
+				style = bop.Style
+			} else if bop.SoapOperation != nil && bop.SoapOperation.Style != "" {
+				style = bop.SoapOperation.Style
+			}
 			op := Operation{
 				Name:        bop.Name,
 				Endpoint:    endpoint,
 				SOAPVersion: bindingSOAPVer,
-				Style:       bindingStyle,
+				Style:       style,
 			}
 			if bop.SoapOperation != nil && bop.SoapOperation.SOAPAction != "" {
 				op.SOAPAction = bop.SoapOperation.SOAPAction
 			}
-			// operation namespace：优先用 input message 对应的 element 所在 schema targetNamespace，
-			// 取不到则用 definitions targetNamespace。
+			// operation namespace：document/literal 时 soap:body 的 namespace 是权威来源
+			// （决定 body 根元素的 namespace）；取不到再回退到 input element 所在
+			// schema 的 targetNamespace，最后才用 definitions targetNamespace。
 			op.Namespace = p.TargetNS
+			if bop.Input.SoapBody != nil && bop.Input.SoapBody.Namespace != "" {
+				op.Namespace = bop.Input.SoapBody.Namespace
+			}
 
 			// 解析 input
 			if inMsg := resolveMessage(ptOp.Input.Message, msgs); inMsg != nil {
 				for _, part := range inMsg.Parts {
 					if part.Element != "" {
-						op.InputName = localName(part.Element)
-						el, ok := elements[op.InputName]
+						partNS, partLocal := rootCtx.resolve(part.Element)
+						op.InputName = partLocal
+						el, elCtx, elNS, ok := idx.findElement(partNS, partLocal)
 						if ok {
-							op.InputParams = buildParams(el, complexTypes, 0)
-							op.Namespace = lookupElementNS(el, defs.Types, p.TargetNS)
+							op.InputParams = buildParams(el, idx, elCtx, 0)
+							// namespace 兜底：soap:body namespace 没取到时，用 input element
+							// 所在 schema 的 targetNamespace（soap:body namespace 更权威，勿覆盖）。
+							if bop.Input.SoapBody == nil || bop.Input.SoapBody.Namespace == "" {
+								if elNS != "" {
+									op.Namespace = elNS
+								} else {
+									op.Namespace = p.TargetNS
+								}
+							}
 							// document/literal wrapped：input 元素名 == operation 名且含子元素时，
 							// 把外层包装剥掉，直接用其子元素作为参数（避免生成双层嵌套）。
 							op.InputParams = unwrapWrapper(op.InputParams, op.Name, op.InputName)
@@ -460,9 +665,9 @@ func ParseWSDL(raw string, opts ...ParseOption) *WSDLProject {
 						}
 					} else if part.Type != "" {
 						// rpc/literal：type 直接引用 complexType
-						ctName := localName(part.Type)
-						if ct, ok := complexTypes[ctName]; ok {
-							op.InputParams = paramsFromComplexType(ct, complexTypes, 0)
+						ctNS, ctName := rootCtx.resolve(part.Type)
+						if ct, ctCtx, ok := idx.findComplexType(ctNS, ctName); ok {
+							op.InputParams = paramsFromComplexType(ct, idx, ctCtx, 0)
 							op.InputName = ctName
 						}
 					}
@@ -472,19 +677,20 @@ func ParseWSDL(raw string, opts ...ParseOption) *WSDLProject {
 			if outMsg := resolveMessage(ptOp.Output.Message, msgs); outMsg != nil {
 				for _, part := range outMsg.Parts {
 					if part.Element != "" {
-						op.OutputName = localName(part.Element)
-						el, ok := elements[op.OutputName]
+						partNS, partLocal := rootCtx.resolve(part.Element)
+						op.OutputName = partLocal
+						el, elCtx, _, ok := idx.findElement(partNS, partLocal)
 						if ok {
-							op.OutputParams = buildParams(el, complexTypes, 0)
+							op.OutputParams = buildParams(el, idx, elCtx, 0)
 							op.OutputParams = unwrapWrapper(op.OutputParams, op.Name+"Response", op.OutputName)
 						}
 						if len(op.OutputParams) == 0 {
 							op.OutputRaw = elementRawFragment(el)
 						}
 					} else if part.Type != "" {
-						ctName := localName(part.Type)
-						if ct, ok := complexTypes[ctName]; ok {
-							op.OutputParams = paramsFromComplexType(ct, complexTypes, 0)
+						ctNS, ctName := rootCtx.resolve(part.Type)
+						if ct, ctCtx, ok := idx.findComplexType(ctNS, ctName); ok {
+							op.OutputParams = paramsFromComplexType(ct, idx, ctCtx, 0)
 							op.OutputName = ctName
 						}
 					}
@@ -520,30 +726,31 @@ func resolveMessage(qname string, msgs map[string]wsdlMessage) *wsdlMessage {
 }
 
 // buildParams 从一个 xsd:element 出发构建参数树。
+// ctx 是 element 所在 schema 的 namespace 上下文，用于解析 type/ref 等 QName 引用。
 // element 可能有：type 引用（可能指向 complexType）、inline complexType、inline sequence。
-func buildParams(el xsdElement, complexTypes map[string]xsdComplexType, depth int) []Param {
+func buildParams(el xsdElement, idx *schemaIndex, ctx nsContext, depth int) []Param {
 	if depth > 6 {
 		return nil // 防止递归爆栈
 	}
 	// type 引用了 complexType（优先检查，因为外部 XSD 的类型都在这里）
 	if el.Type != "" {
-		ctName := localName(el.Type)
-		if ct, ok := complexTypes[ctName]; ok {
+		ctNS, ctName := ctx.resolve(el.Type)
+		if ct, ctCtx, ok := idx.findComplexType(ctNS, ctName); ok {
 			p := Param{Name: el.Name, Type: el.Type, MinOccurs: el.MinOccurs, MaxOccurs: el.MaxOccurs, Nillable: el.Nillable}
-			p.Children = paramsFromComplexType(ct, complexTypes, depth)
+			p.Children = paramsFromComplexType(ct, idx, ctCtx, depth)
 			return []Param{p}
 		}
 	}
 	// inline complexType
 	if el.ComplexType != nil {
 		p := Param{Name: el.Name, Type: el.ComplexType.Name, MinOccurs: el.MinOccurs, MaxOccurs: el.MaxOccurs, Nillable: el.Nillable}
-		p.Children = paramsFromComplexType(*el.ComplexType, complexTypes, depth)
+		p.Children = paramsFromComplexType(*el.ComplexType, idx, ctx, depth)
 		return []Param{p}
 	}
 	// 直接 inline sequence（无 complexType 包装，少见）
 	if el.Sequence != nil {
 		p := Param{Name: el.Name, MinOccurs: el.MinOccurs, MaxOccurs: el.MaxOccurs, Nillable: el.Nillable}
-		p.Children = paramsFromSequence(*el.Sequence, complexTypes, depth)
+		p.Children = paramsFromSequence(*el.Sequence, idx, ctx, depth)
 		return []Param{p}
 	}
 	// 简单类型 element：<element name="x" type="xsd:string"/>（前面没匹配到的才是简单类型）
@@ -563,7 +770,7 @@ func buildParams(el xsdElement, complexTypes map[string]xsdComplexType, depth in
 	return nil
 }
 
-func paramsFromComplexType(ct xsdComplexType, complexTypes map[string]xsdComplexType, depth int) []Param {
+func paramsFromComplexType(ct xsdComplexType, idx *schemaIndex, ctx nsContext, depth int) []Param {
 	if depth > 6 {
 		return nil
 	}
@@ -572,74 +779,51 @@ func paramsFromComplexType(ct xsdComplexType, complexTypes map[string]xsdComplex
 		ext := ct.ComplexContent.Extension
 		var out []Param
 		// 展开 base 类型的字段
-		baseName := localName(ext.Base)
-		if baseCT, ok := complexTypes[baseName]; ok {
-			out = paramsFromComplexType(baseCT, complexTypes, depth+1)
+		baseNS, baseName := ctx.resolve(ext.Base)
+		if baseCT, baseCtx, ok := idx.findComplexType(baseNS, baseName); ok {
+			out = paramsFromComplexType(baseCT, idx, baseCtx, depth+1)
 		}
 		// 追加 extension 里的字段
 		if ext.Sequence != nil {
-			out = append(out, paramsFromSequence(*ext.Sequence, complexTypes, depth+1)...)
+			out = append(out, paramsFromSequence(*ext.Sequence, idx, ctx, depth+1)...)
 		}
 		if ext.Choice != nil {
-			out = append(out, paramsFromSequence(*ext.Choice, complexTypes, depth+1)...)
+			out = append(out, paramsFromSequence(*ext.Choice, idx, ctx, depth+1)...)
 		}
 		if ext.All != nil {
-			out = append(out, paramsFromSequence(*ext.All, complexTypes, depth+1)...)
+			out = append(out, paramsFromSequence(*ext.All, idx, ctx, depth+1)...)
 		}
 		return out
 	}
 	// 普通 complexType
 	if ct.Sequence != nil {
-		return paramsFromSequence(*ct.Sequence, complexTypes, depth)
+		return paramsFromSequence(*ct.Sequence, idx, ctx, depth)
 	}
 	if ct.Choice != nil {
-		return paramsFromSequence(*ct.Choice, complexTypes, depth)
+		return paramsFromSequence(*ct.Choice, idx, ctx, depth)
 	}
 	if ct.All != nil {
-		return paramsFromSequence(*ct.All, complexTypes, depth)
+		return paramsFromSequence(*ct.All, idx, ctx, depth)
 	}
 	return nil
 }
 
-func paramsFromSequence(seq xsdSequence, complexTypes map[string]xsdComplexType, depth int) []Param {
+func paramsFromSequence(seq xsdSequence, idx *schemaIndex, ctx nsContext, depth int) []Param {
 	if depth > 6 {
 		return nil
 	}
 	var out []Param
 	for _, child := range seq.Elements {
-		out = append(out, buildParams(child, complexTypes, depth+1)...)
+		out = append(out, buildParams(child, idx, ctx, depth+1)...)
 	}
 	// 嵌套 sequence/choice
 	for _, ns := range seq.Sequences {
-		out = append(out, paramsFromSequence(ns, complexTypes, depth+1)...)
+		out = append(out, paramsFromSequence(ns, idx, ctx, depth+1)...)
 	}
 	for _, nc := range seq.Choices {
-		out = append(out, paramsFromSequence(nc, complexTypes, depth+1)...)
+		out = append(out, paramsFromSequence(nc, idx, ctx, depth+1)...)
 	}
 	return out
-}
-
-// lookupElementNS 找 element 所在 schema 的 targetNamespace。
-//
-// TODO: 当前只按 element.Name 匹配，多 schema 含同名 element 时会拿到
-// 第一个匹配的 namespace（可能误判）。修对的话需要把查找表从
-// map[name]element 改成 map[ns+name]element，并在 buildParams 链路里
-// 透传 namespace 上下文 —— 改动面偏大，且多 schema 同名 element 在
-// 实际内网 WSDL 中极少见，暂留作后续优化。
-func lookupElementNS(el xsdElement, types *wsdlTypes, fallback string) string {
-	if types == nil {
-		return fallback
-	}
-	for _, sch := range types.Schemas {
-		for _, e := range sch.Elements {
-			if e.Name == el.Name {
-				if sch.TargetNS != "" {
-					return sch.TargetNS
-				}
-			}
-		}
-	}
-	return fallback
 }
 
 // unwrapWrapper 处理 document/literal wrapped 模式：若 params 只有一个元素、
@@ -697,17 +881,31 @@ func ValidateWSDLText(raw string) error {
 }
 
 // fetchExternalSchema 从 sourceURL 解析相对路径的 schemaLocation，返回 XSD 原始文本。
-// 支持 http/https URL 和相对路径（如 "SuLianLoanHengLiServiceCore.xsd"）。
+// 支持 http/https URL、相对路径（如 "SuLianLoanHengLiServiceCore.xsd"、"./xsd/a.xsd"）、
+// 以及 schemaLocation 本身就是一个绝对 URL 的情况。
 // 30s 超时（XSD 通常很小，超时主要是防挂起）。
 func fetchExternalSchema(sourceURL, schemaLocation string) (string, error) {
 	u, err := url.Parse(sourceURL)
 	if err != nil {
 		return "", fmt.Errorf("解析 sourceURL 失败: %w", err)
 	}
-	// 拼接相对路径
-	schemaURL := u.ResolveReference(&url.URL{Path: path.Join(path.Dir(u.Path), schemaLocation)})
+	// 用 RFC 3986 相对引用解析：正确覆盖绝对 URL / 相对路径 / ../ / ./ / query / fragment，
+	// 避免手写 path.Join 在 schemaLocation 是绝对 URL 时拼出垃圾路径。
+	ref, err := url.Parse(schemaLocation)
+	if err != nil {
+		return "", fmt.Errorf("解析 schemaLocation 失败: %w", err)
+	}
+	schemaURL := u.ResolveReference(ref)
 
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+		// 与 WSDL URL 导入保持一致：跳过自签证书校验 + SSRF 安全拨号。
+		Transport: &http.Transport{
+			TLSClientConfig:       &tls.Config{InsecureSkipVerify: true},
+			ResponseHeaderTimeout: 25 * time.Second,
+			DialContext:           SafeDialContext,
+		},
+	}
 	req, err := http.NewRequest(http.MethodGet, schemaURL.String(), nil)
 	if err != nil {
 		return "", fmt.Errorf("构造 XSD 请求失败: %w", err)
@@ -742,10 +940,6 @@ func parseExternalXSD(raw string) (*xsdSchema, error) {
 	}
 	return &schema, nil
 }
-
-// stripDefaultNSRe 匹配 xmlns="..." 或 xmlns = "..."（带空格），保留 xmlns:xxx="..."。
-// 提到包级别，避免 stripDefaultNamespace 每次调用重新编译。
-var stripDefaultNSRe = regexp.MustCompile(`\sxmlns\s*=\s*("[^"]*"|'[^']*')`)
 
 // stripDefaultNamespace 去掉 XML 里的默认 namespace 声明（xmlns="..."），
 // 但保留带前缀的 namespace（xmlns:xxx="..."）。

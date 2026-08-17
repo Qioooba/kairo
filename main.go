@@ -29,8 +29,10 @@ import (
 	"kairo/internal/downloads"
 	"kairo/internal/httpserver"
 	"kairo/internal/license"
+	"kairo/internal/pet"
 	"kairo/internal/popup"
 	"kairo/internal/reminder"
+	"kairo/internal/schedtask"
 	"kairo/internal/sponsor"
 	"kairo/internal/sshclient"
 	"kairo/internal/sshshell"
@@ -130,6 +132,7 @@ func main() {
 	// 默认全关 —— 避免在用户机器上无脑生成日志。
 	sshclient.SetLogConfig(cfg.App.SSHDebug, cfg.App.SSHTrafficDump, cfg.App.SSHLogMaxMB, cfg.App.SSHLogKeep)
 	sshclient.SetDefaultProfile(cfg.App.SSHCompatProfile)
+	sshclient.SetProfileStoreDir(cfg.DataDir())
 	if cfg.App.SSHDebug || cfg.App.SSHTrafficDump {
 		log.Printf("SSH 日志已开启: debug=%v traffic=%v maxMB=%d keep=%d", cfg.App.SSHDebug, cfg.App.SSHTrafficDump, cfg.App.SSHLogMaxMB, cfg.App.SSHLogKeep)
 	}
@@ -235,10 +238,10 @@ func main() {
 			return &license.ConfigSnapshot{}
 		}
 		return &license.ConfigSnapshot{
-			KairoInternalToken:        c.App.KairoInternalToken,
-			LicenseActivatePrimary:    c.InternalEndpoints.LicenseActivate.Primary,
-			LicenseActivateSecondary:  c.InternalEndpoints.LicenseActivate.Secondary,
-			LicenseActivateAuth:       c.InternalEndpoints.LicenseActivate.Auth,
+			KairoInternalToken:       c.App.KairoInternalToken,
+			LicenseActivatePrimary:   c.InternalEndpoints.LicenseActivate.Primary,
+			LicenseActivateSecondary: c.InternalEndpoints.LicenseActivate.Secondary,
+			LicenseActivateAuth:      c.InternalEndpoints.LicenseActivate.Auth,
 		}
 	})
 
@@ -256,12 +259,42 @@ func main() {
 		)
 	}
 
+	// 7.1.2 v0.16: 注入 pet 包的 endpoint 配置覆盖（跟 sponsor 同款模式）
+	//   - 从 config.yaml 的 internal_endpoints.pet_leaderboard 读 (主备 + auth + timeout)
+	//   - 空值不覆盖 var 池: 未配置时 syncPrimary 保持空, /api/pet/sync 优雅降级
+	//     (前端显示「未配置服务器, 仅本地展示」), 不把状态数据发到硬编码假地址
+	if c := cfgMgr.Get(); c != nil {
+		pet.InitFromConfig(
+			c.InternalEndpoints.PetLeaderboard.Primary,
+			c.InternalEndpoints.PetLeaderboard.Secondary,
+			c.InternalEndpoints.PetLeaderboard.Auth,
+			c.InternalEndpoints.PetLeaderboard.Timeout,
+		)
+	}
+
 	// 7.2 启动时做一次 license 检查 (仅日志, 不阻止启动)
 	// 前端 GET /api/license/status 时会再次检查, 这里是 fail-soft 的预检
 	if err := license.Check(); err == nil {
 		log.Printf("license: 启动检查通过 (开发自用 或 本地证书有效)")
 	} else {
 		log.Printf("license: 启动检查未通过, 前端将弹激活窗 (err=%v)", err)
+	}
+
+	// 7.3 v0.16 宠物彩蛋引擎：订阅 audit（未解锁时引擎内部 no-op gate 零记录），
+	// 状态落盘 data/pet.json。初始化失败只记日志（宠物功能关闭），不阻断启动。
+	petEngine, perr := pet.NewEngine(pet.RulesFromConfig(cfgMgr.Get().Pet), filepath.Join(cfgMgr.Get().DataDir(), "pet.json"), nil)
+	if perr != nil {
+		log.Printf("pet: 引擎初始化失败（宠物功能关闭）: %v", perr)
+	} else {
+		auditLog.Subscribe(petEngine)
+		if cfgMgr.Get().Pet.Enabled {
+			if _, err := petEngine.ForceEnable(); err != nil {
+				log.Printf("pet: 强制启用失败: %v", err)
+			}
+		}
+	}
+	if petEngine != nil {
+		defer petEngine.Close()
 	}
 
 	// 7.5 构造 tail 会话池
@@ -276,20 +309,23 @@ func main() {
 	defer shells.ShutdownAll()
 
 	// 7.7 构造便笺提醒管理器（v1.0）：存储 + 事件驱动调度器。
-	// 数据文件在 data/reminders.json；OnFire 把触发扔给 popup 包显示。
+	// 数据文件在 data/reminders.json；OnFire 按 Action.Kind 分发：
+	//   popup   → popup 包弹系统提醒（默认）
+	//   url     → openBrowser 打开网址
+	//   command → 执行本地命令/脚本（30s 超时，结果写审计日志）
 	rStore := reminder.NewStore(filepath.Join(cfg.DataDir(), "reminders.json"))
 	if err := rStore.EnsurePath(); err != nil {
 		log.Printf("WARNING: 准备 reminder 数据目录失败: %v", err)
 	}
 	rManager, err := reminder.NewManager(rStore, func(r reminder.Reminder, at time.Time) {
-		// 在新 goroutine 里弹窗，避免阻塞调度器主循环
+		// 在新 goroutine 里执行动作，避免阻塞调度器主循环
 		go func() {
-			popup.Show(r.Content)
-			auditLog.Write("reminder.fire.popup",
-				"id", r.ID,
-				"type", string(r.Type),
-				"at", at.Format(time.RFC3339),
-			)
+			defer func() {
+				if rv := recover(); rv != nil {
+					log.Printf("reminder: 动作执行 panic: %v", rv)
+				}
+			}()
+			fireReminderAction(r, at, auditLog, openBrowser)
 		}()
 	})
 	if err != nil {
@@ -305,10 +341,39 @@ func main() {
 		popup.Shutdown()
 	}()
 
+	// 7.8 构造定时任务管理器：存储 + 事件驱动调度器。
+	// 任务定义在 data/sched_tasks.json，运行历史在 data/sched_task_runs.json。
+	// 命令执行失败 / 落盘失败都只记日志，不影响 HTTP 服务。
+	tStore := schedtask.NewStore(
+		filepath.Join(cfg.DataDir(), "sched_tasks.json"),
+		filepath.Join(cfg.DataDir(), "sched_task_runs.json"),
+	)
+	if err := tStore.EnsurePath(); err != nil {
+		log.Printf("WARNING: 准备 schedtask 数据目录失败: %v", err)
+	}
+	tManager, err := schedtask.NewManager(tStore)
+	if err != nil {
+		log.Printf("WARNING: 初始化 schedtask manager 失败: %v", err)
+		tManager = nil
+	} else if n := len(tManager.List()); n > 0 {
+		log.Printf("定时任务已加载: %d 条", n)
+	}
+	defer func() {
+		if tManager != nil {
+			tManager.Stop()
+		}
+	}()
+
 	// 8. 构造 HTTP 服务
 	srv := httpserver.New(cfgMgr, auditLog, webSubFS, tails, shells)
 	if rManager != nil {
 		srv.SetReminders(rManager)
+	}
+	if petEngine != nil {
+		srv.SetPet(petEngine)
+	}
+	if tManager != nil {
+		srv.SetTasks(tManager)
 	}
 
 	// 8.5 启动下载历史定期清理（启动时清理一次 + 每小时清理一次）
@@ -360,7 +425,7 @@ func main() {
 	// SSE 长连接（WriteTimeout=0）会让 Shutdown 卡到超时才强切，
 	// 1 秒足够正常请求收尾，强切的 SSE 不影响数据完整性（tail 是实时流，下载已落盘）。
 	tray.Run(tray.Config{
-		Tooltip: "Kairo",
+		Tooltip:       "Kairo",
 		OnOpenBrowser: func() { openBrowser(url) },
 		OnQuit: func() {
 			log.Println("收到退出请求，正在关闭服务...")
@@ -433,21 +498,97 @@ func exeDirectory() (string, error) {
 	return filepath.Dir(real), nil
 }
 
+// fireReminderAction 提醒触发后的动作分发。
+//
+//   - popup（默认）：popup.Show(content) 系统弹窗；
+//   - url：openBrowser 打开网址（http/https，Validate 已限制 scheme）；
+//   - command：exec 本地命令/脚本，30s 超时，退出码 + 输出尾巴写审计日志。
+//
+// 安全边界：命令以当前用户权限在本机执行，由用户自己在提醒里配置；
+// 每次执行都写审计（reminder.fire.command），出问题可追溯。
+func fireReminderAction(r reminder.Reminder, at time.Time, auditLog *audit.Logger, openURL func(string)) {
+	kind := reminder.ActionPopup
+	var act *reminder.Action
+	if r.Action != nil && strings.TrimSpace(string(r.Action.Kind)) != "" {
+		act = r.Action
+		kind = act.Kind
+	}
+	switch kind {
+	case reminder.ActionPopup:
+		popup.Show(r.Content)
+		auditLog.Write("reminder.fire.popup",
+			"id", r.ID,
+			"type", string(r.Type),
+			"at", at.Format(time.RFC3339),
+		)
+	case reminder.ActionURL:
+		openURL(act.URL)
+		auditLog.Write("reminder.fire.url",
+			"id", r.ID,
+			"type", string(r.Type),
+			"at", at.Format(time.RFC3339),
+			"url", act.URL,
+		)
+		log.Printf("reminder.fire: id=%s 打开网址 %s", r.ID, act.URL)
+	case reminder.ActionCommand:
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, act.Command, act.Args...)
+		if act.WorkDir != "" {
+			cmd.Dir = act.WorkDir
+		}
+		var out strings.Builder
+		cmd.Stdout = &out
+		cmd.Stderr = &out
+		err := cmd.Run()
+		output := out.String()
+		if len(output) > 500 {
+			output = output[len(output)-500:]
+		}
+		status := "ok"
+		if err != nil {
+			status = "error"
+		}
+		auditLog.Write("reminder.fire.command",
+			"id", r.ID,
+			"type", string(r.Type),
+			"at", at.Format(time.RFC3339),
+			"command", act.Command,
+			"status", status,
+			"err", fmt.Sprintf("%v", err),
+			"output_tail", output,
+		)
+		if err != nil {
+			log.Printf("reminder.fire: id=%s 命令执行失败 %s: %v", r.ID, act.Command, err)
+		} else {
+			log.Printf("reminder.fire: id=%s 命令执行成功 %s", r.ID, act.Command)
+		}
+	default:
+		// 理论不可达（Validate 已拦截），兜底走弹窗
+		popup.Show(r.Content)
+		auditLog.Write("reminder.fire.popup",
+			"id", r.ID,
+			"type", string(r.Type),
+			"at", at.Format(time.RFC3339),
+		)
+	}
+}
+
 // openBrowser 跨平台打开浏览器。
 //
 // 决策链：
 //
-//	1) 读 data/browser_state.json（"上次用什么浏览器打开"）
-//	   ├─ state.Kind=chrome + path 文件仍在 → 直接 exec(state.Path, url)
-//	   └─ 没有 / 失效                       → 进入 2
+//  1. 读 data/browser_state.json（"上次用什么浏览器打开"）
+//     ├─ state.Kind=chrome + path 文件仍在 → 直接 exec(state.Path, url)
+//     └─ 没有 / 失效                       → 进入 2
 //
-//	2) 探测链：
-//	     Windows + 装了 Chrome  → exec(chrome.exe, url)，kind=chrome
-//	     Windows 没 Chrome        → rundll32 url.dll,FileProtocolHandler，kind=default
-//	     macOS                    → open url，kind=default
-//	     Linux                    → xdg-open url，kind=default
+//  2. 探测链：
+//     Windows + 装了 Chrome  → exec(chrome.exe, url)，kind=chrome
+//     Windows 没 Chrome        → rundll32 url.dll,FileProtocolHandler，kind=default
+//     macOS                    → open url，kind=default
+//     Linux                    → xdg-open url，kind=default
 //
-//	3) 启动成功 → 把这次用的浏览器写回 state（remembered=true 时跳过写回）
+//  3. 启动成功 → 把这次用的浏览器写回 state（remembered=true 时跳过写回）
 //
 // 资源占用：多读一次小 JSON（< 1ms），state 命中则不读注册表；探测链走
 // os.Stat 常见路径（< 1ms）失败再读注册表（< 5ms）。本进程本身在 cmd.Start()

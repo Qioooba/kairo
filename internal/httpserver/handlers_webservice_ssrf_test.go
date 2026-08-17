@@ -3,81 +3,78 @@ package httpserver
 import (
 	"bytes"
 	"encoding/json"
-	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
+
+	"kairo/internal/webservice"
 )
 
-// TestWSDLImportURL_NoIPRestriction 验证 /api/wsdl/import-url：
-//   1) 整体能成功拉取并解析 WSDL
-//   2) SSRF IP 校验代码已彻底移除（不再因公网 IP 拒绝）
-func TestWSDLImportURL_NoIPRestriction(t *testing.T) {
-	const sample = `<?xml version="1.0" encoding="UTF-8"?>
-<definitions name="T"
-  targetNamespace="urn:t"
-  xmlns:xsd="http://www.w3.org/2001/XMLSchema"
-  xmlns:soap="http://schemas.xmlsoap.org/wsdl/soap/"
-  xmlns="http://schemas.xmlsoap.org/wsdl/">
-  <types><xsd:schema targetNamespace="urn:t">
-    <xsd:element name="R"><xsd:complexType><xsd:sequence>
-      <xsd:element name="x" type="xsd:string"/></xsd:sequence></xsd:complexType></xsd:element>
-  </xsd:schema></types>
-  <message name="R"><part name="p" element="xsd:R"/></message>
-  <portType name="P"><operation name="Op">
-    <input message="R"/><output message="R"/></operation></portType>
-  <binding name="B" type="P"><soap:binding style="rpc"
-    transport="http://schemas.xmlsoap.org/soap/http"/>
-    <operation name="Op"><soap:operation soapAction="Op"/>
-      <input><soap:body use="encoded"/></input>
-      <output><soap:body use="encoded"/></output></operation></binding>
-  <service name="S"><port name="P" binding="B">
-    <soap:address location="http://example.com/s"/></port></service>
-</definitions>`
+// TestWSDLImportURL_BlocksDangerousTargets 验证 /api/wsdl/import-url 拒绝
+// link-local（含云元数据 169.254.169.254）/ unspecified 目标，放行普通目标。
+func TestWSDLImportURL_BlocksDangerousTargets(t *testing.T) {
+	cases := []struct {
+		url    string
+		status int
+	}{
+		{"http://169.254.169.254/latest/meta-data/", 400},
+		{"http://169.254.0.1/x", 400},
+		{"http://0.0.0.0/x", 400},
+		{"http://[fe80::1]/x", 400},
+	}
+	for _, c := range cases {
+		body, _ := json.Marshal(map[string]string{"url": c.url})
+		req := httptest.NewRequest(http.MethodPost, "/api/wsdl/import-url", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		rr := httptest.NewRecorder()
+		(&Server{}).handleWSDLImportURL(rr, req)
+		if rr.Code != c.status {
+			t.Errorf("url=%s 期望 status=%d, 得到 %d body=%s", c.url, c.status, rr.Code, rr.Body.String())
+		}
+	}
+}
 
-	// (1) 端到端：起 httptest server 模拟 WSDL 端点，POST import-url 应返回 200
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/xml; charset=utf-8")
-		_, _ = io.WriteString(w, sample)
-	}))
-	defer srv.Close()
+// TestValidateEndpointURL 直接校验 webservice 的 SSRF 判定函数。
+func TestValidateEndpointURL(t *testing.T) {
+	blocked := []string{
+		"http://169.254.169.254/latest/meta-data/",
+		"http://169.254.0.1/x",
+		"http://0.0.0.0/x",
+		"http://[::]/x",
+		"http://[fe80::1]/x",
+		"http://224.0.0.1/x",
+	}
+	for _, u := range blocked {
+		if err := webservice.ValidateEndpointURL(u); err == nil {
+			t.Errorf("ValidateEndpointURL(%q) 应返回 error", u)
+		}
+	}
+	// loopback / 私有网段 / 公网域名 应放行（loopback 供本机 mock 调试用）。
+	allowed := []string{
+		"http://127.0.0.1:8080/mock",
+		"http://localhost:8080/x",
+		"http://10.1.2.3/x",
+		"http://192.168.1.10/x",
+		"http://example.com/x",
+	}
+	for _, u := range allowed {
+		if err := webservice.ValidateEndpointURL(u); err != nil {
+			t.Errorf("ValidateEndpointURL(%q) 不应报错, 得到 %v", u, err)
+		}
+	}
+}
 
-	body, _ := json.Marshal(map[string]string{
-		"url":  srv.URL + "/test.wsdl",
-		"name": "no-restriction-test",
+// TestSOAPSend_BlocksDangerousTargets 验证 webservice.Send 拒绝 link-local 目标。
+func TestSOAPSend_BlocksDangerousTargets(t *testing.T) {
+	resp := webservice.Send(webservice.SendRequest{
+		Endpoint: "http://169.254.169.254/latest/meta-data/",
+		Body:     "<x/>",
 	})
-	req := httptest.NewRequest(http.MethodPost, "/api/wsdl/import-url", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	rr := httptest.NewRecorder()
-	(&Server{}).handleWSDLImportURL(rr, req)
-
-	if rr.Code != 200 {
-		t.Fatalf("链路失败 status=%d body=%s", rr.Code, rr.Body.String())
+	if resp.Error == "" {
+		t.Fatalf("Send 到 link-local 应返回 error")
 	}
-	if strings.Contains(rr.Body.String(), "安全限制") {
-		t.Fatalf("不应出现 SSRF 限制错误，body=%s", rr.Body.String())
+	if !strings.Contains(resp.Error, "危险地址") {
+		t.Errorf("错误信息应包含拦截说明, 得到 %q", resp.Error)
 	}
-	t.Logf("PASS (1/2): 整体链路 200 OK，WSDL 已解析")
-
-	// (2) 静态断言：源码里不应再含 IP 段校验代码
-	src, err := os.ReadFile("internal/httpserver/handlers_webservice.go")
-	if err != nil {
-		// 备选：从工作目录找
-		if cwd, _ := os.Getwd(); cwd != "" {
-			src, err = os.ReadFile("handlers_webservice.go")
-		}
-		if err != nil {
-			t.Fatalf("读源码失败: %v", err)
-		}
-	}
-	srcStr := string(src)
-	if strings.Contains(srcStr, "IsLoopback") || strings.Contains(srcStr, "IsPrivate") {
-		t.Fatalf("SSRF IP 校验代码仍在 handlers_webservice.go 中，需彻底移除")
-	}
-	if !strings.Contains(srcStr, "不做 IP 段限制") {
-		t.Fatalf("源码缺少'不做 IP 段限制'标记注释，修复痕迹可能丢失")
-	}
-	t.Logf("PASS (2/2): 源码中无 IsLoopback/IsPrivate 校验，注释标记就位")
 }

@@ -285,7 +285,6 @@ body {
   overflow: hidden;
   flex-shrink: 0;
   box-shadow: 0 2px 8px rgba(0,0,0,0.15);
-  animation: logo-hue-shift 10s linear infinite;
 }
 .logo img {
   width: 100%; height: 100%;
@@ -313,26 +312,22 @@ body {
     #3b82f6
   );
   background-size: 300% 100%;
+  background-position: 0% 50%;
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
   color: transparent;
-  animation: brand-gradient-flow 8s linear infinite;
 }
 .brand-text .subtitle {
   font-size: 13px;
   background-image: linear-gradient(90deg, #8b5cf6, #3b82f6, #10b981, #8b5cf6);
   background-size: 300% 100%;
+  background-position: 0% 50%;
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
   color: transparent;
-  animation: brand-gradient-flow 10s linear infinite reverse;
   opacity: 0.85;
-}
-@keyframes brand-gradient-flow {
-  0%   { background-position: 0% 50%; }
-  100% { background-position: 100% 50%; }
 }
 @keyframes kairo-shimmer {
   0%   { background-position: 0% 50%; }
@@ -347,9 +342,6 @@ body {
   animation: kairo-shimmer 4s linear infinite;
 }
 @media (prefers-reduced-motion: reduce) {
-  .brand-text .title { animation: none; background-position: 0% 50%; }
-  .brand-text .subtitle { animation: none; background-position: 0% 50%; }
-  .logo { animation: none; }
   .kairo-shimmer-text { animation: none; background-position: 0% 50%; }
 }
 
@@ -3758,6 +3750,25 @@ input[type="datetime-local"] {
   border-top: 2px solid var(--line, #334155);
   background: var(--bg-1, #0f172a);
   overflow: hidden;
+  position: relative;        /* v1.4：拖拽上传提示层定位基准 */
+}
+
+/* v1.4：SFTP 面板拖拽上传提示层（dragenter 时显示，drop/dragleave 后移除） */
+.sftp-drop-hint {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(96, 165, 250, 0.10);
+  border: 2px dashed var(--primary, #60a5fa);
+  border-radius: 6px;
+  margin: 4px;
+  color: var(--primary, #60a5fa);
+  font-size: 14px;
+  text-align: center;
+  pointer-events: none;      /* 不拦截 dragover/drop 事件 */
 }
 
 /* Bug#22：顶部 SSH 工具栏按钮分组竖分隔条（终端操作 / tab 操作） */
@@ -5640,7 +5651,7 @@ input.sftp-autofollow-cb {
   border: 1px solid var(--line);
   border-radius: 6px;
   cursor: pointer;
-  transition: all 0.15s;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
 }
 .tab-btn:hover { color: var(--text); border-color: var(--accent); background: var(--btn-hover-bg); }
 .tab-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
@@ -5719,13 +5730,16 @@ input.sftp-autofollow-cb {
 .type-once { background: rgba(99,102,241,.15); color: #818cf8; }
 .type-weekly { background: rgba(34,197,94,.15); color: #4ade80; }
 .type-monthly { background: rgba(245,158,11,.15); color: #fbbf24; }
+.type-cron { background: rgba(236,72,153,.15); color: #f472b6; }
 /* xianxia / hc 等特殊主题里 --bg-2 是深色，加一个浅色 fallback 提升对比 */
 [data-theme="xianxia"] .type-once,
 [data-theme="xianxia"] .type-weekly,
-[data-theme="xianxia"] .type-monthly { color: var(--text); }
+[data-theme="xianxia"] .type-monthly,
+[data-theme="xianxia"] .type-cron { color: var(--text); }
 [data-theme="hc"] .type-once,
 [data-theme="hc"] .type-weekly,
-[data-theme="hc"] .type-monthly { color: var(--text); font-weight: 600; }
+[data-theme="hc"] .type-monthly,
+[data-theme="hc"] .type-cron { color: var(--text); font-weight: 600; }
 
 /* 编辑对话框 */
 .editor-body { display: flex; flex-direction: column; gap: 14px; }
@@ -5786,6 +5800,17 @@ input.sftp-autofollow-cb {
 .editor-label-inline { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-dim); }
 .editor-footer { display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px; }
 
+/* v1.1：cron 实时预览 + 触发动作表单 */
+.cron-preview {
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-mute);
+  word-break: break-all;
+}
+.cron-preview.text-err { color: var(--error); }
+.editor-action-wrap { display: flex; flex-direction: column; gap: 8px; }
+.editor-input.mono { font-family: var(--font-mono, ui-monospace, SFMono-Regular, Consolas, monospace); }
+
 /* 空状态 */
 .reminders-list .empty-state { padding: 40px 20px; text-align: center; }
 .reminders-list .empty-state .empty-icon { font-size: 36px; opacity: 0.5; }
@@ -5798,9 +5823,7 @@ input.sftp-autofollow-cb {
 .modal-overlay {
   position: fixed;
   top: 0; left: 0; right: 0; bottom: 0;
-  background: rgba(0, 0, 0, 0.55);
-  -webkit-backdrop-filter: blur(4px);
-  backdrop-filter: blur(4px);
+  background: rgba(0, 0, 0, 0.6);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -5814,7 +5837,7 @@ input.sftp-autofollow-cb {
   padding: 20px 22px;
   width: 480px;
   max-width: 100%;
-  box-shadow: var(--shadow), 0 24px 60px rgba(0, 0, 0, 0.45);
+  box-shadow: var(--shadow);
   display: flex;
   flex-direction: column;
   gap: 14px;
@@ -5893,3 +5916,150 @@ input.sftp-autofollow-cb {
   border-width: 4px !important;
 }
 
+
+/* ===== v0.15：HTTP 测试 — 响应断言 / cURL 导入 / WebSocket ===== */
+.http2-assert-table { width: 100%; }
+.http2-assert-table .http2-assert-row {
+  display: grid; grid-template-columns: 132px 150px 1fr auto 32px;
+  gap: 6px; align-items: center; padding: 4px 0;
+}
+.http2-assert-table select,
+.http2-assert-table input[type=text] {
+  background: var(--bg-3); border: 1px solid var(--kv-border); border-radius: 4px;
+  min-height: 32px; padding: 6px 8px; font-size: 12px; color: var(--text);
+  font-family: ui-monospace, monospace; outline: none; width: 100%;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+.http2-assert-table select:focus,
+.http2-assert-table input[type=text]:focus { border-color: var(--kv-focus); background: var(--bg-1); }
+.http2-assert-table input[type=text]:disabled { opacity: 0.4; cursor: not-allowed; }
+.http2-assert-res {
+  font-size: 11.5px; font-weight: 600; font-family: ui-monospace, monospace;
+  white-space: nowrap; padding: 2px 8px; border-radius: 4px; text-align: center;
+}
+.http2-assert-res.ok { color: var(--resp-ok); background: rgba(34,197,94,0.12); }
+.http2-assert-res.bad { color: var(--resp-5xx); background: rgba(239,68,68,0.12); }
+.http2-assert-summary { font-size: 12px; font-weight: 700; font-family: ui-monospace, monospace; }
+.http2-assert-summary.all-ok { color: var(--resp-ok); }
+.http2-assert-summary.some { color: var(--resp-4xx); }
+.http2-assert-summary.all-bad { color: var(--resp-5xx); }
+
+/* cURL 导入 modal */
+.http2-curl-ta {
+  width: 100%; min-height: 140px; box-sizing: border-box;
+  background: var(--bg-3); border: 1px solid var(--line); border-radius: 8px;
+  color: var(--text); padding: 10px; font-family: ui-monospace, monospace;
+  font-size: 12px; outline: none; resize: vertical;
+}
+.http2-curl-ta:focus { border-color: var(--primary); }
+.http2-curl-preview { margin-top: 10px; font-size: 12px; color: var(--text); word-break: break-all; }
+.http2-curl-preview code { color: var(--text-dim); }
+
+/* WebSocket 测试 */
+.http2-ws-status {
+  font-size: 11.5px; font-weight: 700; font-family: ui-monospace, monospace;
+  padding: 2px 10px; border-radius: 10px;
+}
+.http2-ws-status.on { color: var(--resp-ok); background: rgba(34,197,94,0.15); }
+.http2-ws-status.idle { color: var(--text-dim); background: var(--bg-3); }
+.http2-send-btn.off {
+  background: var(--bg-3) !important; color: var(--resp-5xx);
+  border: 1px solid var(--line);
+}
+.http2-ws-send-row { display: flex; gap: 8px; align-items: stretch; }
+.http2-ws-send-row textarea { flex: 1; margin: 0; }
+.http2-ws-send-row .btn { flex: 0 0 auto; }
+.http2-ws-log {
+  max-height: 260px; overflow-y: auto;
+  background: var(--bg-1); border: 1px solid var(--line); border-radius: 8px;
+  padding: 8px 10px; font-family: ui-monospace, monospace; font-size: 12px;
+}
+.http2-ws-log:empty::before { content: '连接后收发消息会显示在这里'; color: var(--text-mute); }
+.http2-ws-entry { display: flex; gap: 8px; padding: 2px 0; align-items: baseline; }
+.http2-ws-time { color: var(--text-mute); flex: 0 0 auto; font-size: 11px; }
+.http2-ws-arrow { flex: 0 0 auto; font-weight: 700; }
+.http2-ws-entry.recv .http2-ws-arrow { color: var(--resp-ok); }
+.http2-ws-entry.sent .http2-ws-arrow { color: var(--primary); }
+.http2-ws-entry.error .http2-ws-arrow { color: var(--resp-5xx); }
+.http2-ws-entry.closed .http2-ws-arrow,
+.http2-ws-entry.sys .http2-ws-arrow { color: var(--text-dim); }
+.http2-ws-text { white-space: pre-wrap; word-break: break-all; flex: 1; min-width: 0; }
+.http2-ws-entry.error .http2-ws-text { color: var(--resp-5xx); }
+.http2-ws-entry.closed .http2-ws-text,
+.http2-ws-entry.sys .http2-ws-text { color: var(--text-dim); }
+
+/* ===== 定时任务页（/tasks） =====
+ * 列表骨架复用 .reminders-* / .editor-* / .modal-* / .tag-*，
+ * 这里只补任务页特有元素：命令预览、模板行、cron 预览、运行历史。
+ */
+.mono { font-family: var(--font-mono, ui-monospace, SFMono-Regular, "Cascadia Mono", Menlo, Consolas, monospace); }
+
+.task-cmd {
+  font-size: 12px;
+  color: var(--text-mute);
+  margin-top: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+.task-cmd .task-workdir { color: var(--text-dim); }
+.task-err-text {
+  font-size: 11.5px;
+  color: var(--error);
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 编辑器里的模板快捷填充行 */
+.task-templates {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+  padding-bottom: 10px;
+  border-bottom: 1px dashed var(--line);
+}
+
+/* cron 预览（未来 3 次运行时间） */
+.task-cron-preview { font-size: 12px; min-height: 16px; }
+.task-cron-preview.text-err { color: var(--error); }
+
+/* 运行历史列表 */
+.task-runs-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 420px;
+  overflow-y: auto;
+}
+.task-run-row {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg-1);
+}
+.task-run-row:hover { border-color: var(--accent); }
+.task-run-head {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 10px;
+  font-size: 12.5px;
+  flex-wrap: wrap;
+  user-select: none;
+}
+.task-run-output {
+  margin: 0;
+  padding: 10px 12px;
+  border-top: 1px solid var(--line);
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 240px;
+  overflow-y: auto;
+  background: var(--bg-2);
+  border-radius: 0 0 var(--radius) var(--radius);
+}

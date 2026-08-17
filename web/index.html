@@ -75,6 +75,7 @@
       <a href="#/diagnostics" class="nav-item" data-route="diagnostics">环境自检</a>
       <a href="#/config" class="nav-item" data-route="config">系统配置</a>
       <a href="#/downloads" class="nav-item" data-route="downloads">下载历史<span id="dl-badge" class="nav-badge" style="display:none"></span></a>
+      <a href="#/tasks" class="nav-item" data-route="tasks">定时任务</a>
       <div class="nav-sep">小工具</div>
       <a href="#/timestamp" class="nav-item small" data-route="timestamp">时间戳</a>
       <a href="#/cron" class="nav-item small" data-route="cron">Cron 解析</a>
@@ -133,6 +134,8 @@
   <script src="/static/pages/compare.js?v=20260708"></script>
   <!-- v1.0 便笺提醒编辑页（CRUD + 三种调度类型） -->
   <script src="/static/pages/reminders.js?v=20260710"></script>
+  <!-- 定时任务页（cron 调度 + 本地命令执行 + 运行历史） -->
+  <script src="/static/pages/tasks.js?v=20260816"></script>
   <!-- v0.10 SSH 终端：xterm.js + addons（Canvas 渲染，无 WebGL 依赖） -->
   <script src="/static/vendor/xterm/xterm.min.js?v=20260708"></script>
   <script src="/static/vendor/xterm/xterm-addon-fit.min.js?v=20260708"></script>
@@ -140,7 +143,9 @@
   <script src="/static/vendor/xterm/xterm-addon-web-links.min.js?v=20260708"></script>
   <script src="/static/pages/ssh.js?v=20260710"></script>
   <script src="/static/pages/about.js?v=20260713b"></script>
-  <script src="/static/pages/sponsor.js?v=20260713a"></script>
+  <script src="/static/pages/sponsor.js?v=20260816"></script>
+  <!-- 宠物彩蛋：右下角漂浮宠物（含武林页宠物排行榜联动） -->
+  <script src="/static/pages/pet.js?v=20260816"></script>
   <script>
     // v0.5 #19：DOM ready 后同步按钮 emoji 到当前主题
     document.addEventListener('DOMContentLoaded', function () {
@@ -162,6 +167,7 @@
         diagnostics: 'shield-check',
         config: 'settings',
         downloads: 'history',
+        tasks: 'timer',
         timestamp: 'clock',
         cron: 'calendar-clock',
         jsonpath: 'workflow',

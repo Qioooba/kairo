@@ -23,6 +23,7 @@ import (
 	"net"
 	"net/http"
 	urlpkg "net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -32,22 +33,33 @@ type httpRequestReq struct {
 	URL            string            `json:"url"`
 	Headers        map[string]string `json:"headers"`
 	Body           string            `json:"body"`
+	Assertions     []HTTPAssertion   `json:"assertions"`      // 响应断言（可空）
 	TimeoutMs      int               `json:"timeout_ms"`      // 0 = 30s
 	FollowRedirect bool              `json:"follow_redirect"` // 默认 true
 	InsecureTLS    bool              `json:"insecure_tls"`    // 跳过证书校验（内网自签用）
 }
 
+// HTTPAssertResult 单条断言的评估结果。
+type HTTPAssertResult struct {
+	Type   string `json:"type"`
+	Key    string `json:"key"`
+	Value  string `json:"value"`
+	Pass   bool   `json:"pass"`
+	Actual string `json:"actual"` // 实际值 / 失败原因
+}
+
 type httpRequestResp struct {
-	Ok         bool              `json:"ok"`
-	Status     int               `json:"status"`
-	StatusText string            `json:"status_text"`
-	Headers    map[string]string `json:"headers"`
-	Body       string            `json:"body"`
-	BodyBytes  int               `json:"body_bytes"`
-	ElapsedMs  int64             `json:"elapsed_ms"`
-	FinalURL   string            `json:"final_url"`
-	Truncated  bool              `json:"truncated"`
-	Error      string            `json:"error,omitempty"`
+	Ok            bool               `json:"ok"`
+	Status        int                `json:"status"`
+	StatusText    string             `json:"status_text"`
+	Headers       map[string]string  `json:"headers"`
+	Body          string             `json:"body"`
+	BodyBytes     int                `json:"body_bytes"`
+	ElapsedMs     int64              `json:"elapsed_ms"`
+	FinalURL      string             `json:"final_url"`
+	Truncated     bool               `json:"truncated"`
+	Error         string             `json:"error,omitempty"`
+	AssertResults []HTTPAssertResult `json:"assert_results,omitempty"`
 }
 
 const (
@@ -78,6 +90,15 @@ func (s *Server) handleHTTPRequest(w http.ResponseWriter, r *http.Request) {
 }
 
 func doHTTPRequest(req httpRequestReq) (httpRequestResp, error) {
+	resp, err := doHTTPRequestInner(req)
+	if err != nil {
+		return resp, err
+	}
+	resp.AssertResults = evaluateAssertions(req.Assertions, &resp)
+	return resp, nil
+}
+
+func doHTTPRequestInner(req httpRequestReq) (httpRequestResp, error) {
 	method := strings.ToUpper(strings.TrimSpace(req.Method))
 	if method == "" {
 		method = http.MethodGet
@@ -277,4 +298,80 @@ func isBlockedHTTPIP(ip net.IP) bool {
 		return true
 	}
 	return false
+}
+
+// ---------- 响应断言 ----------
+
+// evaluateAssertions 对响应逐条评估断言，永不 panic / 报错。
+func evaluateAssertions(as []HTTPAssertion, resp *httpRequestResp) []HTTPAssertResult {
+	results := make([]HTTPAssertResult, 0, len(as))
+	for _, a := range as {
+		r := HTTPAssertResult{Type: a.Type, Key: a.Key, Value: a.Value}
+		switch a.Type {
+		case "status":
+			r.Pass = matchAssertStatus(a.Value, resp)
+			if resp.Ok {
+				r.Actual = strconv.Itoa(resp.Status)
+			} else {
+				r.Actual = "请求失败"
+			}
+		case "body_contains":
+			r.Pass = resp.Ok && strings.Contains(resp.Body, a.Value)
+			if r.Pass {
+				r.Actual = "包含"
+			} else if resp.Ok {
+				r.Actual = "未包含"
+				if resp.Truncated {
+					r.Actual += "（响应已截断 >1MB，结果可能不准）"
+				}
+			} else {
+				r.Actual = "请求失败"
+			}
+		case "body_not_contains":
+			r.Pass = resp.Ok && !strings.Contains(resp.Body, a.Value)
+			if r.Pass {
+				r.Actual = "未包含"
+			} else if resp.Ok {
+				r.Actual = "包含"
+			} else {
+				r.Actual = "请求失败"
+			}
+		case "header_contains":
+			v := ""
+			if resp.Ok {
+				for k, hv := range resp.Headers {
+					if strings.EqualFold(k, a.Key) {
+						v = hv
+						break
+					}
+				}
+			}
+			r.Actual = v
+			r.Pass = resp.Ok && v != "" && strings.Contains(strings.ToLower(v), strings.ToLower(a.Value))
+		default:
+			r.Pass = false
+			r.Actual = "未知断言类型: " + a.Type
+		}
+		results = append(results, r)
+	}
+	return results
+}
+
+// matchAssertStatus 支持精确码（"200"）与通配（"2xx" / "5xx"）。
+func matchAssertStatus(expect string, resp *httpRequestResp) bool {
+	if !resp.Ok {
+		return false
+	}
+	expect = strings.TrimSpace(expect)
+	if expect == "" {
+		return false
+	}
+	if strings.HasSuffix(expect, "xx") {
+		return strings.HasPrefix(strconv.Itoa(resp.Status), expect[:len(expect)-2])
+	}
+	n, err := strconv.Atoi(expect)
+	if err != nil {
+		return false
+	}
+	return resp.Status == n
 }

@@ -18,15 +18,16 @@ import (
 )
 
 type logsSearchReq struct {
-	System     string `json:"system"`
-	Server     string `json:"server"`
-	Dir        string `json:"dir"`
-	Files      int    `json:"files"` // 选最近几个文件
-	Query      string `json:"query"` // 搜索表达式
-	Context    int    `json:"context"`
-	Username   string `json:"username"`
-	Password   string `json:"password"`
-	IgnoreCase bool   `json:"ignore_case"` // v0.13：忽略大小写搜索（透传 grep -i）
+	System      string `json:"system"`
+	Server      string `json:"server"`
+	Dir         string `json:"dir"`
+	Files       int    `json:"files"` // 选最近几个文件
+	Query       string `json:"query"` // 搜索表达式
+	Context     int    `json:"context"`
+	Username    string `json:"username"`
+	Password    string `json:"password"`
+	IgnoreCase  bool   `json:"ignore_case"`  // v0.13：忽略大小写搜索（透传 grep -i）
+	MatchWindow int    `json:"match_window"` // v0.15：>0 时 && 走多行窗口匹配（awk），0 保持同行
 }
 
 func (s *Server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
@@ -87,6 +88,14 @@ func (s *Server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 	if contextN > 500 {
 		contextN = 500
 	}
+	// v0.15：窗口匹配行数钳制（0 = 同行匹配；上限 50）
+	matchWindow := req.MatchWindow
+	if matchWindow < 0 {
+		matchWindow = 0
+	}
+	if matchWindow > 50 {
+		matchWindow = 50
+	}
 
 	// SSH Dial 独立 ctx + 统一超时（不受 SearchTimeout 太小影响）
 	dialCtx, cancelDial := context.WithTimeout(r.Context(), sshDialOuterTimeout)
@@ -127,13 +136,19 @@ func (s *Server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 		fileNames = append(fileNames, f.Name)
 	}
 
-	cmd, err = logquery.SearchCommand(ld.Path, fileNames, kw, cur.Search.MaxMatches, cur.Search.TimeoutSeconds, ld.Encoding, req.IgnoreCase)
+	// v0.15：matchWindow>0 走多行窗口匹配，否则走原同行 grep 管道
+	var searchCmd string
+	if matchWindow > 0 {
+		searchCmd, err = logquery.WindowSearchCommand(ld.Path, fileNames, kw, cur.Search.MaxMatches, cur.Search.TimeoutSeconds, ld.Encoding, req.IgnoreCase, matchWindow)
+	} else {
+		searchCmd, err = logquery.SearchCommand(ld.Path, fileNames, kw, cur.Search.MaxMatches, cur.Search.TimeoutSeconds, ld.Encoding, req.IgnoreCase)
+	}
 	if err != nil {
 		writeErr(w, 400, err)
 		return
 	}
 	searchCtx, cancelSearch := context.WithTimeout(r.Context(), searchTimeout+15*time.Second)
-	stdout, stderr, code, err = cli.Run(searchCtx, cmd, searchTimeout+5*time.Second, ld.Encoding)
+	stdout, stderr, code, err = cli.Run(searchCtx, searchCmd, searchTimeout+5*time.Second, ld.Encoding)
 	cancelSearch()
 	if err != nil {
 		s.audit.Write("logs.search", "system", req.System, "server", req.Server, "dir", ld.Path, "query", req.Query, "result", "fail", "err", err.Error())
@@ -155,10 +170,16 @@ func (s *Server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 	// B1：按"文件 mtime"过滤命中（前后端都返回过滤后的 hits）
 	hits = logquery.FilterHitsByTimeWindow(hits, files, tw)
 	// 上下文行：contextN > 0 时为每个匹配行获取前后 N 行
+	// v0.15：窗口匹配模式下有效上下文 = max(contextN, matchWindow)，保证
+	// 命中行之间的窗口跨度行也一定被展示出来。
 	// REVIEW-rc5 #6：失败时不再静默回退，写一条 audit 记录 + 标记 context_fail，
 	// 但仍返回无上下文的 hits（不阻断主流程）。前端可从 audit 看到错误原因。
-	if contextN > 0 && len(hits) > 0 {
-		enriched, ctxErr := s.enrichHitsWithContext(r.Context(), cli, ld, srv.Name, files, hits, contextN)
+	effContextN := contextN
+	if matchWindow > 0 && effContextN < matchWindow {
+		effContextN = matchWindow
+	}
+	if effContextN > 0 && len(hits) > 0 {
+		enriched, ctxErr := s.enrichHitsWithContext(r.Context(), cli, ld, srv.Name, files, hits, effContextN)
 		if ctxErr != nil {
 			s.audit.Write("logs.search", "system", req.System, "server", req.Server, "dir", ld.Path,
 				"query", req.Query, "result", "context_fail", "err", ctxErr.Error(),
@@ -167,7 +188,7 @@ func (s *Server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 			hits = enriched
 		}
 	}
-	s.audit.Write("logs.search", "system", req.System, "server", req.Server, "dir", ld.Path, "query", req.Query, "result", "ok", "hits", len(hits), "context", contextN, "since", tw.Start.Format(time.RFC3339), "until", tw.End.Format(time.RFC3339))
+	s.audit.Write("logs.search", "system", req.System, "server", req.Server, "dir", ld.Path, "query", req.Query, "result", "ok", "hits", len(hits), "context", contextN, "window", matchWindow, "since", tw.Start.Format(time.RFC3339), "until", tw.End.Format(time.RFC3339))
 	writeJSON(w, 200, map[string]any{
 		"hits":  hits,
 		"files": fileNames,
@@ -443,15 +464,30 @@ func (s *Server) enrichHitsWithContext(
 	runTimeout := cur.SearchTimeout() + 10*time.Second
 	cmdTimeout := cur.SearchTimeout()
 
+	// REVIEW-v0.15：单个文件失败记 firstErr，最后统一上抛（不再静默吞掉），
+	// 调用方会把 context_enrich_failed 塞进响应 Error 字段让前端可见。
+	var firstErr error
 	for file, lineNos := range hitsByFile {
 		cmd, err := logquery.ContextLinesForHitsCommand(ld.Path, file, lineNos, contextN)
 		if err != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("构造上下文命令失败(%s): %w", file, err)
+			}
 			continue
 		}
 		runCtx, cancel := context.WithTimeout(ctx, runTimeout)
-		stdout, _, code, err := cli.Run(runCtx, cmd, cmdTimeout, ld.Encoding)
+		stdout, stderr, code, err := cli.Run(runCtx, cmd, cmdTimeout, ld.Encoding)
 		cancel()
-		if err != nil || code != 0 {
+		if err != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("获取上下文失败(%s): %w", file, err)
+			}
+			continue
+		}
+		if code != 0 {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("获取上下文失败(%s): exit=%d %s", file, code, trim(stderr, 120))
+			}
 			continue
 		}
 		enriched := logquery.ParseContextEnrichedOutput(stdout, serverName, ld.Path, files)
@@ -459,6 +495,9 @@ func (s *Server) enrichHitsWithContext(
 	}
 
 	if len(allEnriched) == 0 {
+		if firstErr != nil {
+			return hits, firstErr
+		}
 		return hits, nil
 	}
 	return allEnriched, nil

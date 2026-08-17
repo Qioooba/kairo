@@ -157,5 +157,9 @@
     } catch (e) { /* ignore */ }
     state.tailHighlights = state.tailHighlights || [];
     navigate();
+    // 宠物彩蛋：静默初始化（未开启 / 失败都不影响主流程）
+    if (window.Kairo && Kairo.pet && Kairo.pet.init) {
+      try { Kairo.pet.init(); } catch (e) { /* 宠物彩蛋失败静默 */ }
+    }
   });
 })();

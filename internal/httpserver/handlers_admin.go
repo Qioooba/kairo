@@ -29,7 +29,7 @@ func (s *Server) handleAdminServers(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		cur := s.cur()
 		writeJSON(w, 200, configView{
-			App:     cur.App,
+			App:     sanitizeAppConfig(cur.App),
 			Systems: cur.Systems,
 			Search:  cur.Search,
 		})

@@ -196,6 +196,7 @@
         el('th', { text: '目标' }),
         el('th', { text: 'DNS' }),
         el('th', { text: 'TCP' }),
+        el('th', { text: '连接方案' }),
         el('th', { text: '耗时' }),
         el('th', { text: '详情' })
       ]));
@@ -215,6 +216,7 @@
           el('td', { class: 'mono', text: s.host + ':' + s.port }),
           el('td', { unsafeHtml: dnsHtml }),
           el('td', { unsafeHtml: tcpHtml }),
+          el('td', { class: 'mono muted', text: s.profile || '自动探测' }),
           el('td', { class: 'num muted', text: s.elapsed_ms + ' ms' }),
           el('td', { class: 'muted small', text: detail.join(' · ') || '-' })
         ]));

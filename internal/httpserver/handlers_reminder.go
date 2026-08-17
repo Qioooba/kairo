@@ -18,13 +18,16 @@ import (
 // Add 行为：enabled 缺省视为 true（默认启用）。
 // Update 行为：enabled 缺省保留当前值。
 type reminderReq struct {
-	Type       string `json:"type"`
-	Enabled    *bool  `json:"enabled,omitempty"`
-	Content    string `json:"content"`
-	At         string `json:"at,omitempty"`
-	Weekdays   []int  `json:"weekdays,omitempty"`
-	Time       string `json:"time,omitempty"`
-	DayOfMonth *int   `json:"day_of_month,omitempty"`
+	Type        string           `json:"type"`
+	Enabled     *bool            `json:"enabled,omitempty"`
+	Content     string           `json:"content"`
+	At          string           `json:"at,omitempty"`
+	Weekdays    []int            `json:"weekdays,omitempty"`
+	Time        string           `json:"time,omitempty"`
+	DayOfMonth  *int             `json:"day_of_month,omitempty"`
+	Cron        string           `json:"cron,omitempty"`
+	LeadMinutes *int             `json:"lead_minutes,omitempty"`
+	Action      *reminder.Action `json:"action,omitempty"`
 }
 
 // toReminder 把 DTO 转成 reminder.Reminder，enabled 缺省值由 caller 决定。
@@ -34,15 +37,23 @@ func (r reminderReq) toReminder(enabledDefault bool) reminder.Reminder {
 		enabled = *r.Enabled
 	}
 	out := reminder.Reminder{
-		Type:       reminder.Type(strings.TrimSpace(r.Type)),
-		Enabled:    enabled,
-		Content:    strings.TrimSpace(r.Content),
-		At:         strings.TrimSpace(r.At),
-		Time:       strings.TrimSpace(r.Time),
-		Weekdays:   r.Weekdays,
+		Type:     reminder.Type(strings.TrimSpace(r.Type)),
+		Enabled:  enabled,
+		Content:  strings.TrimSpace(r.Content),
+		At:       strings.TrimSpace(r.At),
+		Time:     strings.TrimSpace(r.Time),
+		Weekdays: r.Weekdays,
+		Cron:     strings.TrimSpace(r.Cron),
+		Action:   r.Action,
 	}
 	if r.DayOfMonth != nil {
 		out.DayOfMonth = *r.DayOfMonth
+	}
+	if r.LeadMinutes != nil {
+		out.LeadMinutes = *r.LeadMinutes
+	}
+	if out.Action != nil && strings.TrimSpace(string(out.Action.Kind)) == "" {
+		out.Action.Kind = reminder.ActionPopup
 	}
 	return out
 }
@@ -50,13 +61,14 @@ func (r reminderReq) toReminder(enabledDefault bool) reminder.Reminder {
 // reminderCtxPath 把 reminder 路由统一收口。
 //
 // 路由：
-//   GET    /api/reminders              列表
-//   POST   /api/reminders              新增（body 为 Reminder）
-//   PUT    /api/reminders/{id}         更新
-//   DELETE /api/reminders/{id}         删除
-//   POST   /api/reminders/{id}/toggle  启用/禁用切换
-//   POST   /api/reminders/{id}/fire    立即触发（测试用）
-//   GET    /api/reminders/info         元信息（数据路径、调度状态）
+//
+//	GET    /api/reminders              列表
+//	POST   /api/reminders              新增（body 为 Reminder）
+//	PUT    /api/reminders/{id}         更新
+//	DELETE /api/reminders/{id}         删除
+//	POST   /api/reminders/{id}/toggle  启用/禁用切换
+//	POST   /api/reminders/{id}/fire    立即触发（测试用）
+//	GET    /api/reminders/info         元信息（数据路径、调度状态）
 func (s *Server) handleReminderDispatch(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/api/reminders")
 
@@ -155,8 +167,18 @@ func (s *Server) handleReminderAdd(w http.ResponseWriter, r *http.Request) {
 		"id", out.ID,
 		"type", string(out.Type),
 		"content_len", len([]rune(out.Content)),
+		"lead_minutes", out.LeadMinutes,
+		"action", reminderActionKind(out),
 	)
 	writeJSON(w, 200, out)
+}
+
+// reminderActionKind 动作类型（nil/空视为 popup），审计日志用。
+func reminderActionKind(r reminder.Reminder) string {
+	if r.Action == nil || strings.TrimSpace(string(r.Action.Kind)) == "" {
+		return "popup"
+	}
+	return string(r.Action.Kind)
 }
 
 // handleReminderUpdate PUT /api/reminders/:id — 全量替换 content / schedule。

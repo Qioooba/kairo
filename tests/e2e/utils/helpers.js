@@ -516,7 +516,17 @@ async function clearTransientUI(page) {
       for (const toast of toasts) {
         const visible = await toast.isVisible().catch(() => false);
         if (visible) {
-          await toast.evaluate((el) => el.remove()).catch(() => {});
+          const isMainToast = await toast.evaluate((el) => el.id === 'toast').catch(() => false);
+          if (isMainToast) {
+            // 主 toast 节点是页面模板的一部分，只能隐藏不能 remove，
+            // 否则后续 toast() 会因 $('#toast') 为 null 抛 "Cannot set properties of null"。
+            await toast.evaluate((el) => {
+              el.className = 'toast';
+              el.textContent = '';
+            }).catch(() => {});
+          } else {
+            await toast.evaluate((el) => el.remove()).catch(() => {});
+          }
           clearedCount++;
         }
       }

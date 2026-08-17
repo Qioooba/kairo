@@ -25,6 +25,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"kairo/internal/config"
+	"kairo/internal/sshclient"
 	"kairo/internal/sysutil"
 )
 
@@ -115,9 +116,12 @@ type ServerCheck struct {
 	Port      int         `json:"port"`
 	DNS       CheckResult `json:"dns"` // 域名解析
 	TCP       CheckResult `json:"tcp"` // TCP 连通性（不发起 SSH 握手）
-	ElapsedMS int64       `json:"elapsed_ms"`
-	Error     string      `json:"error,omitempty"` // 顶层错误（任一项失败都填）
-	Category  string      `json:"category,omitempty"`
+	// Profile 是"连接方案自适应记忆"里这台机器上次连接成功的 SSH compat profile 名。
+	// 空字符串 = 尚未有成功连接（首次自动探测），由 sshclient.RememberedProfileFor 提供。
+	Profile   string `json:"profile,omitempty"`
+	ElapsedMS int64  `json:"elapsed_ms"`
+	Error     string `json:"error,omitempty"` // 顶层错误（任一项失败都填）
+	Category  string `json:"category,omitempty"`
 }
 
 // CheckResult 单项检查结果
@@ -357,6 +361,8 @@ func checkOneServer(sysName string, srv *config.ServerConfig, timeout time.Durat
 		Host:   host,
 		Port:   port,
 	}
+	// 连接方案自适应记忆：这台机器上次成功用的 profile（可能为空 = 尚未记忆）。
+	sc.Profile = sshclient.RememberedProfileFor(host, port)
 
 	if host == "" {
 		sc.Error = "host 为空"

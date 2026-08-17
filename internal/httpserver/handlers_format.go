@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"kairo/internal/cronx"
 	"kairo/internal/formatter"
 )
 
@@ -553,117 +554,27 @@ func parseCronPreview(input string, loc *time.Location) map[string]any {
 		out["prev_runs"] = prev
 		return out
 	}
-	spec := expandCronDescriptor(input)
-	fields := strings.Fields(spec)
-	if len(fields) != 5 && len(fields) != 6 {
-		out["error"] = "Cron 需要 5 段或 6 段，或使用 @hourly / @daily / @every"
-		return out
-	}
-	hasSeconds := len(fields) == 6
-	offset := 0
-	if !hasSeconds {
-		fields = append([]string{"0"}, fields...)
-		offset = 1
-	}
-	sets, err := parseCronFields(fields)
+	spec, err := cronx.Parse(input)
 	if err != nil {
 		out["error"] = err.Error()
 		return out
 	}
 	now := time.Now().In(loc)
-	next := collectCronRuns(now, 1, 5, sets, hasSeconds)
-	prev := collectCronRuns(now, -1, 3, sets, hasSeconds)
+	offset := 0
+	if !spec.HasSeconds() {
+		offset = 1
+	}
 	out["valid"] = true
-	out["has_seconds"] = hasSeconds
-	out["field_desc"] = cronFieldDesc(fields, offset)
-	out["next_runs"] = next
-	out["prev_runs"] = prev
+	out["has_seconds"] = spec.HasSeconds()
+	out["field_desc"] = cronFieldDesc(spec.Fields(), offset)
+	out["next_runs"] = collectCronRuns(now, 1, 5, spec)
+	out["prev_runs"] = collectCronRuns(now, -1, 3, spec)
 	return out
 }
 
-func expandCronDescriptor(input string) string {
-	switch strings.ToLower(strings.TrimSpace(input)) {
-	case "@yearly", "@annually":
-		return "0 0 0 1 1 *"
-	case "@monthly":
-		return "0 0 0 1 * *"
-	case "@weekly":
-		return "0 0 0 * * 0"
-	case "@daily", "@midnight":
-		return "0 0 0 * * *"
-	case "@hourly":
-		return "0 0 * * * *"
-	default:
-		return input
-	}
-}
-
-func parseCronFields(fields []string) ([]map[int]bool, error) {
-	ranges := [][2]int{{0, 59}, {0, 59}, {0, 23}, {1, 31}, {1, 12}, {0, 7}}
-	sets := make([]map[int]bool, len(fields))
-	for i, f := range fields {
-		set, err := parseCronField(f, ranges[i][0], ranges[i][1])
-		if err != nil {
-			return nil, fmt.Errorf("第 %d 段解析失败: %w", i+1, err)
-		}
-		if i == 5 && set[7] {
-			set[0] = true
-			delete(set, 7)
-		}
-		sets[i] = set
-	}
-	return sets, nil
-}
-
-func parseCronField(expr string, min, max int) (map[int]bool, error) {
-	out := make(map[int]bool)
-	for _, part := range strings.Split(expr, ",") {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			return nil, errors.New("空字段")
-		}
-		step := 1
-		base := part
-		if strings.Contains(part, "/") {
-			pair := strings.SplitN(part, "/", 2)
-			base = pair[0]
-			n, err := strconv.Atoi(pair[1])
-			if err != nil || n <= 0 {
-				return nil, fmt.Errorf("非法步长 %q", pair[1])
-			}
-			step = n
-		}
-		start, end := min, max
-		switch {
-		case base == "*" || base == "?":
-		case strings.Contains(base, "-"):
-			pair := strings.SplitN(base, "-", 2)
-			a, errA := strconv.Atoi(pair[0])
-			b, errB := strconv.Atoi(pair[1])
-			if errA != nil || errB != nil || a > b {
-				return nil, fmt.Errorf("非法范围 %q", base)
-			}
-			start, end = a, b
-		default:
-			n, err := strconv.Atoi(base)
-			if err != nil {
-				return nil, fmt.Errorf("非法值 %q", base)
-			}
-			start, end = n, n
-		}
-		if start < min || end > max {
-			return nil, fmt.Errorf("值超出范围 %d-%d", min, max)
-		}
-		for i := start; i <= end; i += step {
-			out[i] = true
-		}
-	}
-	return out, nil
-}
-
-func collectCronRuns(now time.Time, dir, want int, sets []map[int]bool, hasSeconds bool) []map[string]any {
+func collectCronRuns(now time.Time, dir, want int, spec *cronx.Spec) []map[string]any {
 	step := time.Minute
-	if hasSeconds {
+	if spec.HasSeconds() {
 		step = time.Second
 	}
 	if dir > 0 {
@@ -675,12 +586,14 @@ func collectCronRuns(now time.Time, dir, want int, sets []map[int]bool, hasSecon
 	out := make([]map[string]any, 0, want)
 	t := now
 	if dir > 0 {
-		// BE-015: 正向用字段递进 + 跳跃算法，避免稀疏 cron（如 `0 0 0 1 1 *`
-		// 每年1月1日，5 次≈262 万分钟）超过旧版 200 万次暴力迭代上限。
-		// 每次跳跃直接到下一个可能匹配的时间点，最多几千次循环即可。
-		const maxIter = 10000
-		for i := 0; i < maxIter && len(out) < want; i++ {
-			t = nextCronMatchForward(t, sets, hasSeconds)
+		// BE-015: 正向用字段递进 + 跳跃算法（cronx.Spec.Next），避免稀疏 cron
+		//（如 `0 0 0 1 1 *` 每年 1 月 1 日，5 次≈262 万分钟）超过旧版 200 万次
+		// 暴力迭代上限。每次跳跃直接到下一个可能匹配的时间点，最多几千次循环。
+		for i := 0; i < 10000 && len(out) < want; i++ {
+			t = spec.Next(t)
+			if t.IsZero() {
+				break
+			}
 			out = append(out, cronRun(t))
 			t = t.Add(step)
 		}
@@ -688,63 +601,12 @@ func collectCronRuns(now time.Time, dir, want int, sets []map[int]bool, hasSecon
 	}
 	// 反向仍用暴力遍历（want 通常仅 3，迭代量小）。
 	for i := 0; i < 2000000 && len(out) < want; i++ {
-		if cronMatch(t, sets) {
+		if spec.Match(t) {
 			out = append(out, cronRun(t))
 		}
 		t = t.Add(step)
 	}
 	return out
-}
-
-// nextCronMatchForward 从 from（含）开始找下一个匹配 cron 表达式的时间点。
-// BE-015：按 月 → 日 → 时 → 分 → 秒 顺序递进，任一字段不匹配即跳到下一个
-// 该字段可能匹配的边界，避免逐分钟暴力遍历。
-func nextCronMatchForward(from time.Time, sets []map[int]bool, hasSeconds bool) time.Time {
-	loc := from.Location()
-	t := from
-	for i := 0; i < 100000; i++ {
-		if !sets[4][int(t.Month())] {
-			// 月份不匹配：跳到下个月 1 号 00:00:00（Go 自动归一化 12→次年1月）。
-			t = time.Date(t.Year(), t.Month()+1, 1, 0, 0, 0, 0, loc)
-			continue
-		}
-		if !dayMatches(t, sets) {
-			// 日期不匹配：跳到下一天 00:00:00。
-			t = time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, loc).AddDate(0, 0, 1)
-			continue
-		}
-		if !sets[2][t.Hour()] {
-			// 小时不匹配：跳到下一小时 00 分 00 秒。
-			t = time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), 0, 0, 0, loc).Add(time.Hour)
-			continue
-		}
-		if !sets[1][t.Minute()] {
-			// 分钟不匹配：跳到下一分钟 00 秒。
-			t = time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), 0, 0, loc).Add(time.Minute)
-			continue
-		}
-		if hasSeconds && !sets[0][t.Second()] {
-			t = t.Add(time.Second)
-			continue
-		}
-		return t
-	}
-	return from
-}
-
-// dayMatches 判断 t 的日期部分是否匹配 cron 的 day-of-month 和 day-of-week 字段。
-// 与 cronMatch 保持一致的 AND 语义（既有行为，不改 cron 标准 OR 规则）。
-func dayMatches(t time.Time, sets []map[int]bool) bool {
-	return sets[3][t.Day()] && sets[5][int(t.Weekday())]
-}
-
-func cronMatch(t time.Time, sets []map[int]bool) bool {
-	return sets[0][t.Second()] &&
-		sets[1][t.Minute()] &&
-		sets[2][t.Hour()] &&
-		sets[3][t.Day()] &&
-		sets[4][int(t.Month())] &&
-		sets[5][int(t.Weekday())]
 }
 
 func cronRun(t time.Time) map[string]any {

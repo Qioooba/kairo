@@ -598,7 +598,8 @@ func (s *Server) runSshSftpDownloadTask(
 	// 复用 downloadSeriesFree 逻辑：串行下多个文件，进度广播。
 	// sftpCli 是 *sftpclient.Client，已实现 sftpClientLike 接口
 	// （Close/ReadDir/Stat/DownloadFile/DownloadFileWithProgress/Open），直接传入即可。
-	results, err := s.downloadSeriesFree(ctx, srv, sess.Paths, sftpCli, sess)
+	// v1.4：返回 hadDir，选中目录时强制打 zip 保留目录结构。
+	results, hadDir, err := s.downloadSeriesFree(ctx, srv, sess.Paths, sftpCli, sess)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			s.audit.Write("ssh.sftp.download", "system", sess.System, "server", sess.Server,
@@ -612,15 +613,20 @@ func (s *Server) runSshSftpDownloadTask(
 		return
 	}
 
-	// 可选 zip（>= 2 个文件才打）
-	if sess.Zip && len(results) >= 2 {
+	// 可选 zip：多文件（>= 2）才打；选中目录（hadDir）时强制打 zip 保留目录结构
+	zipWanted := (sess.Zip && len(results) >= 2) || hadDir
+	if zipWanted && len(results) > 0 {
 		zipName := fmt.Sprintf("%s_files_%s.zip", sanitize(srv.Name), results[0].Date)
 		zipPath := filepath.Join(sess.Folder, results[0].Date, zipName)
 		sources := make([]ZipSource, 0, len(results))
 		remoteNames := make([]string, 0, len(results))
 		for _, it := range results {
 			p := filepath.Join(sess.Folder, it.Date, it.Local)
-			sources = append(sources, ZipSource{Path: p, NameInZip: path.Base(it.Remote)})
+			nameInZip := it.ZipName
+			if nameInZip == "" {
+				nameInZip = path.Base(it.Remote)
+			}
+			sources = append(sources, ZipSource{Path: p, NameInZip: nameInZip})
 			remoteNames = append(remoteNames, it.Remote)
 		}
 		if err := zipFilesNamed(sources, zipPath); err != nil {

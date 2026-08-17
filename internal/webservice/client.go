@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"golang.org/x/text/encoding/simplifiedchinese"
 	"golang.org/x/text/transform"
@@ -59,12 +60,15 @@ const (
 
 // sharedTransport 复用连接，避免每次 Send 都新建 Transport 导致 fd 暂用涨。
 // 内网自签证书常见，默认跳过校验。
+// DialContext 走 SSRF 校验（拒绝 link-local/unspecified，防 DNS rebinding），
+// 且对重定向的每一跳都生效。
 var sharedTransport = &http.Transport{
 	TLSClientConfig:       &tls.Config{InsecureSkipVerify: true},
 	MaxIdleConns:          20,
 	IdleConnTimeout:       30 * time.Second,
 	DisableCompression:    false,
 	ResponseHeaderTimeout: 0,
+	DialContext:           SafeDialContext,
 }
 
 // Send 执行 SOAP 请求。永不返回 Go error，所有错误都封装在 resp.Error 里，
@@ -76,6 +80,9 @@ func Send(req SendRequest) SendResponse {
 	}
 	if !strings.HasPrefix(endpoint, "http://") && !strings.HasPrefix(endpoint, "https://") {
 		return SendResponse{Error: "endpoint 必须以 http:// 或 https:// 开头"}
+	}
+	if err := ValidateEndpointURL(endpoint); err != nil {
+		return SendResponse{Error: err.Error()}
 	}
 
 	encoding := strings.ToUpper(strings.TrimSpace(req.Encoding))
@@ -157,6 +164,9 @@ func Send(req SendRequest) SendResponse {
 	client := &http.Client{
 		Transport: transport,
 		Timeout:   time.Duration(timeoutMs) * time.Millisecond,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return ValidateEndpointURL(req.URL.String())
+		},
 	}
 
 	start := time.Now()
@@ -220,6 +230,8 @@ func encodeBody(body, encoding string) ([]byte, error) {
 
 // decodeResponseBody 把响应字节解码成字符串。
 // charset 优先取 Content-Type；取不到则用请求编码；再失败回退 GBK。
+// 老 WebSphere / XFire 常谎报 UTF-8 但实际返回 GBK，或干脆不写 charset，
+// 因此当声明为 UTF-8（或未知 charset）但字节不是合法 UTF-8 时，自动回退 GBK 解码。
 func decodeResponseBody(raw []byte, contentType, reqEncoding string) string {
 	cs := parseCharset(contentType)
 	if cs == "" {
@@ -228,27 +240,53 @@ func decodeResponseBody(raw []byte, contentType, reqEncoding string) string {
 	upper := strings.ToUpper(cs)
 	switch upper {
 	case "UTF-8", "UTF8", "":
+		if !utf8.Valid(raw) {
+			if s, ok := decodeGBK(raw); ok {
+				return s
+			}
+		}
 		return string(raw)
 	case "GBK", "GB2312", "GB18030":
-		dec := simplifiedchinese.GBK.NewDecoder()
-		out, err := io.ReadAll(transform.NewReader(bytes.NewReader(raw), dec))
-		if err != nil {
-			return string(raw) // 解码失败返回原始字节字符串
+		if s, ok := decodeGBK(raw); ok {
+			return s
 		}
-		return string(out)
+		return string(raw)
 	default:
+		// 其它 charset（ISO-8859-1 / windows-1252 等）：先看是否合法 UTF-8，
+		// 否则回退 GBK，再不行原样返回。
+		if utf8.Valid(raw) {
+			return string(raw)
+		}
+		if s, ok := decodeGBK(raw); ok {
+			return s
+		}
 		return string(raw)
 	}
 }
 
+// decodeGBK 把字节按 GBK 解码，返回是否成功（transform 出错视为失败）。
+func decodeGBK(raw []byte) (string, bool) {
+	dec := simplifiedchinese.GBK.NewDecoder()
+	out, err := io.ReadAll(transform.NewReader(bytes.NewReader(raw), dec))
+	if err != nil {
+		return "", false
+	}
+	return string(out), true
+}
+
 // parseCharset 从 Content-Type 里抽取 charset=xxx。
+// 兼容 charset=utf-8 / charset = utf-8 / Charset=UTF-8 / 带引号等写法。
 func parseCharset(contentType string) string {
-	parts := strings.Split(contentType, ";")
-	for _, p := range parts {
+	for _, p := range strings.Split(contentType, ";") {
 		p = strings.TrimSpace(p)
-		if strings.HasPrefix(strings.ToLower(p), "charset=") {
-			return strings.Trim(p[len("charset="):], `"'`)
+		eq := strings.IndexByte(p, '=')
+		if eq < 0 {
+			continue
 		}
+		if !strings.EqualFold(strings.TrimSpace(p[:eq]), "charset") {
+			continue
+		}
+		return strings.Trim(p[eq+1:], `"' `)
 	}
 	return ""
 }

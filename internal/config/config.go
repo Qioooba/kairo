@@ -29,12 +29,44 @@ type Config struct {
 	// 等"协议约定" (硬编码到对应包内), config 段只管 IP/端口/认证串/超时
 	// —— 避免用户乱填 serviceID 导致 Java 反射路由错。
 	InternalEndpoints InternalEndpointsConfig `yaml:"internal_endpoints,omitempty" json:"internal_endpoints,omitempty"`
+
+	// Pet (v0.16 起)：宠物彩蛋功能配置。
+	// 用户开关（点击「关于」6 次解锁）持久化在 data/pet.json；
+	// 这里的 enabled 是开发者强制开关（测试/演示用），与用户开关取 OR。
+	// 未配置的字段全部走 internal/pet 的编译期默认值。
+	Pet PetConfig `yaml:"pet,omitempty" json:"pet,omitempty"`
 }
 
 // InternalEndpointsConfig Kairo 内部调用的外部 HTTP 端点集合
 type InternalEndpointsConfig struct {
 	LicenseActivate    EndpointConfig `yaml:"license_activate,omitempty" json:"license_activate,omitempty"`
 	SponsorLeaderboard EndpointConfig `yaml:"sponsor_leaderboard,omitempty" json:"sponsor_leaderboard,omitempty"`
+	PetLeaderboard     EndpointConfig `yaml:"pet_leaderboard,omitempty" json:"pet_leaderboard,omitempty"`
+}
+
+// PetConfig 宠物功能配置段（v0.16）。零值字段由 Defaults()/internal/pet 兜底。
+type PetConfig struct {
+	// Enabled 开发者强制开关：true 时无视用户开关直接启用宠物（测试/演示用）。
+	Enabled bool `yaml:"enabled" json:"enabled"`
+	// DailyCap 每日计入排行的经验上限。
+	DailyCap int64 `yaml:"daily_cap" json:"daily_cap"`
+	// CooldownMinutes 同 op+target 冷却窗口（分钟）。
+	CooldownMinutes int `yaml:"cooldown_minutes" json:"cooldown_minutes"`
+	// SessionExpMinutes 会话时长每满该分钟数 +1 经验。
+	SessionExpMinutes int `yaml:"session_exp_minutes" json:"session_exp_minutes"`
+	// NotifyUp 升级/进化时是否弹 toast（默认 true）。
+	NotifyUp *bool `yaml:"notify_up,omitempty" json:"notify_up,omitempty"`
+	// ExpRules op→经验映射表；未列出的 op 一律 0 分。空 = 用内置默认表。
+	ExpRules map[string]int64 `yaml:"exp_rules,omitempty" json:"exp_rules,omitempty"`
+	// StageLevels 进化阶段→等级区间 [min,max]；空 = 用内置默认表。
+	StageLevels map[string][2]int `yaml:"stage_levels,omitempty" json:"stage_levels,omitempty"`
+	// OpDailyMax 单 op 每日次数上限（超出部分不计经验）；空 = 用内置默认表。
+	OpDailyMax map[string]int64 `yaml:"op_daily_max,omitempty" json:"op_daily_max,omitempty"`
+	// StatsKeepDays / StatsKeepMonths 本地统计保留窗口（默认 90 天 / 12 月）。
+	StatsKeepDays   int `yaml:"stats_keep_days" json:"stats_keep_days"`
+	StatsKeepMonths int `yaml:"stats_keep_months" json:"stats_keep_months"`
+	// SkinCount 皮肤数量（web/img/pet/skin-*.png 的文件数，默认 2）。
+	SkinCount int `yaml:"skin_count" json:"skin_count"`
 }
 
 // EndpointConfig 单个外部端点配置
@@ -628,6 +660,29 @@ func (c *Config) Defaults() {
 	if c.InternalEndpoints.SponsorLeaderboard.Timeout == 0 {
 		c.InternalEndpoints.SponsorLeaderboard.Timeout = 10 * time.Second
 	}
+	if c.InternalEndpoints.PetLeaderboard.Timeout == 0 {
+		c.InternalEndpoints.PetLeaderboard.Timeout = 10 * time.Second
+	}
+
+	// v0.16: pet 配置段默认值（其余字段空值由 internal/pet 内置默认兜底）
+	if c.Pet.DailyCap == 0 {
+		c.Pet.DailyCap = 200
+	}
+	if c.Pet.CooldownMinutes == 0 {
+		c.Pet.CooldownMinutes = 60
+	}
+	if c.Pet.SessionExpMinutes == 0 {
+		c.Pet.SessionExpMinutes = 10
+	}
+	if c.Pet.StatsKeepDays == 0 {
+		c.Pet.StatsKeepDays = 90
+	}
+	if c.Pet.StatsKeepMonths == 0 {
+		c.Pet.StatsKeepMonths = 12
+	}
+	if c.Pet.SkinCount == 0 {
+		c.Pet.SkinCount = 2
+	}
 	for i := range c.Systems {
 		sys := &c.Systems[i]
 		for j := range sys.Servers {
@@ -712,6 +767,7 @@ func (c *Config) Validate() error {
 	for name, ep := range map[string]EndpointConfig{
 		"internal_endpoints.license_activate":    c.InternalEndpoints.LicenseActivate,
 		"internal_endpoints.sponsor_leaderboard": c.InternalEndpoints.SponsorLeaderboard,
+		"internal_endpoints.pet_leaderboard":     c.InternalEndpoints.PetLeaderboard,
 	} {
 		for _, field := range []struct {
 			label string

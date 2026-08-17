@@ -265,6 +265,27 @@ func TestLogsSearchMulti_Happy(t *testing.T) {
 	}
 }
 
+// v0.15：match_window 字段走 WindowSearchCommand 路径（fake SSH 对 awk 命令
+// 返回空输出 → 0 命中，验证整条链路 200 不报错）；超界值被钳制也不应报错。
+func TestLogsSearchMulti_MatchWindow(t *testing.T) {
+	addr := startFakeSSH(t, "ops", "testpw")
+	_, portStr, _ := net.SplitHostPort(addr)
+	port, _ := strconv.Atoi(portStr)
+	srv := newTestServerWithFakeSSH(t, port)
+
+	for _, win := range []int{10, 999, -3} {
+		w := doRequest(srv, "POST", "/api/logs/search/multi", map[string]any{
+			"system": "信贷生产", "servers": []string{"mock-1"},
+			"dir": "SystemOut", "files": 1, "query": "Exception && userinfo",
+			"match_window": win,
+			"username":     "ops", "password": "testpw",
+		})
+		if w.Code != 200 {
+			t.Errorf("match_window=%d expected 200, got %d body=%s", win, w.Code, w.Body.String())
+		}
+	}
+}
+
 func TestLogsSearchMulti_AllBadServers(t *testing.T) {
 	addr := startFakeSSH(t, "ops", "testpw")
 	_, portStr, _ := net.SplitHostPort(addr)

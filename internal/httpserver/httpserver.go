@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log"
 	"net"
 	"net/http"
 	urlpkg "net/url"
@@ -25,7 +26,9 @@ import (
 	"kairo/internal/dlmanager"
 	"kairo/internal/downloads"
 	"kairo/internal/license"
+	"kairo/internal/pet"
 	"kairo/internal/reminder"
+	"kairo/internal/schedtask"
 	"kairo/internal/sshshell"
 	"kairo/internal/tailmgr"
 	"kairo/internal/webservice"
@@ -63,12 +66,12 @@ const (
 // 未注入时使用下面的默认值；前端 about 页通过 GET /api/config 读取并回填显示，
 // 读取失败则回退到前端硬编码版本（FE-006）。
 // 版本号强制对齐（六处必须一致，改时一起改）：
-//   1. VERSION 文件
-//   2. 此处 Version 常量
-//   3. web/pages/about.js 的 VERSION 常量
-//   4. web/index.html 的 #footer-version
-//   5. web/app.js 的 info.version || fallback
-//   6. README.md 的 Status 徽章
+//  1. VERSION 文件
+//  2. 此处 Version 常量
+//  3. web/pages/about.js 的 VERSION 常量
+//  4. web/index.html 的 #footer-version
+//  5. web/app.js 的 info.version || fallback
+//  6. README.md 的 Status 徽章
 var (
 	Version   = "v0.14"
 	BuildTime = "unknown"
@@ -124,6 +127,12 @@ type Server struct {
 	// v1.0 便笺提醒：可空（nil 时 /api/reminders 返回 503）。SetReminders 在 main.go 启动 reminder.Manager 后注入。
 	reminders *reminder.Manager
 
+	// 定时任务：可空（nil 时 /api/tasks 返回 503）。SetTasks 在 main.go 启动 schedtask.Manager 后注入。
+	tasks *schedtask.Manager
+
+	// v0.16 宠物彩蛋：可空（nil 时 /api/pet/* 返回 404）。SetPet 在 main.go 构造 pet.Engine 后注入。
+	pet *pet.Engine
+
 	// v0.12 WebService 调试中心：WSDL/模板/历史/Mock 的本地存储 + Mock 路由注册表。
 	// Store 在 New 时按当前 data 目录构造；MockRegistry 启动后 Reload 一次让已保存的 mock 生效。
 	ws      *webservice.Store
@@ -156,6 +165,18 @@ func New(cfg *config.Manager, a *audit.Logger, webRoot fs.FS, tails *tailmgr.Man
 // handler 里检查 nil，未注入时返回 503。
 func (s *Server) SetReminders(m *reminder.Manager) {
 	s.reminders = m
+}
+
+// SetTasks 注入 schedtask.Manager（在 main.go 启动定时任务后调用）。
+// handler 里检查 nil，未注入时返回 503。
+func (s *Server) SetTasks(m *schedtask.Manager) {
+	s.tasks = m
+}
+
+// SetPet 注入 pet.Engine（在 main.go 构造宠物引擎后调用）。
+// handler 里检查 nil，未注入时返回 404。
+func (s *Server) SetPet(e *pet.Engine) {
+	s.pet = e
 }
 
 // TriggerCleanup 触发一次下载清理（同步执行）。
@@ -226,7 +247,16 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	path := r.URL.Path
 	if strings.HasPrefix(path, "/api/") && !allowLocalOrigin(r) {
-		writeErr(w, http.StatusForbidden, errors.New("拒绝跨源请求"))
+		origin := r.Header.Get("Origin")
+		referer := r.Header.Get("Referer")
+		// 记录现场，便于定位「Origin/Host 不一致」到底是哪种访问方式触发的。
+		// 只打 origin/referer/host/path，不含 token、body 等敏感信息。
+		log.Printf("[cors] 拒绝跨源请求: path=%s origin=%q referer=%q host=%q", path, origin, referer, r.Host)
+		writeJSON(w, http.StatusForbidden, map[string]any{
+			"error":  "拒绝跨源请求：Origin 与 Host 不一致，已阻止访问",
+			"origin": origin,
+			"host":   r.Host,
+		})
 		return
 	}
 
@@ -376,6 +406,16 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleHTTPEnvs(w, r)
 	case path == "/api/http/request":
 		s.handleHTTPRequest(w, r)
+	case path == "/api/http/curl-parse":
+		s.handleHTTPCurlParse(w, r)
+	case path == "/api/http/ws/connect":
+		s.handleHTTPWsConnect(w, r)
+	case path == "/api/http/ws/send":
+		s.handleHTTPWsSend(w, r)
+	case path == "/api/http/ws/poll":
+		s.handleHTTPWsPoll(w, r)
+	case path == "/api/http/ws/close":
+		s.handleHTTPWsClose(w, r)
 	// v0.12 WebService 调试中心：WSDL 导入 / SOAP 生成发送 / 模板 / 历史 / Mock / XML 辅助。
 	// 路由分发统一进 handleWSDispatch，按 path 前缀细化（见 handlers_webservice.go）。
 	case strings.HasPrefix(path, "/api/wsdl/"),
@@ -413,6 +453,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case path == "/api/sponsor/leaderboard":
 		// v0.14: 投喂作者排行榜
 		s.handleSponsorLeaderboard(w, r)
+	case strings.HasPrefix(path, "/api/pet/"):
+		// v0.16: 宠物彩蛋（状态/解锁/改名/位置/皮肤/同步/榜单）
+		s.handlePetDispatch(w, r)
 	case path == "/api/admin/openers":
 		// BE-003：管理员接口，仅 admin 角色。
 		if !requireAdmin(w, r) {
@@ -455,6 +498,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// 统一进 handleReminderDispatch 收口，按 path 后缀再分发。
 	case strings.HasPrefix(path, "/api/reminders"):
 		s.handleReminderDispatch(w, r)
+	// 定时任务：增删改查 / 启停 / 立即执行 / 运行历史。统一进 handleTaskDispatch 收口。
+	case strings.HasPrefix(path, "/api/tasks"):
+		s.handleTaskDispatch(w, r)
 	case strings.HasPrefix(path, "/downloads/"):
 		s.serveDownload(w, r)
 	case strings.HasPrefix(path, "/mock/"):
@@ -469,6 +515,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func allowLocalOrigin(r *http.Request) bool {
 	origin := strings.TrimSpace(r.Header.Get("Origin"))
 	if origin != "" {
+		// 桌面工具（Postman/Apifox 等）或 file:// 页面会发字面量 "null"，
+		// 这不是真实跨站源（URL 无法解析）。仅当请求目标是本机地址时放行；
+		// 远程站点经 sandbox iframe 打本机 IP 时 Host 非 loopback，仍会被拦。
+		if origin == "null" {
+			return isLocalRequestHost(r.Host)
+		}
 		return isAllowedOrigin(origin, r.Host)
 	}
 	referer := strings.TrimSpace(r.Header.Get("Referer"))
@@ -476,6 +528,15 @@ func allowLocalOrigin(r *http.Request) bool {
 		return isAllowedOrigin(referer, r.Host)
 	}
 	return true
+}
+
+// isLocalRequestHost 判断请求 Host 是否本机地址（127.0.0.1 / localhost / ::1）。
+func isLocalRequestHost(requestHost string) bool {
+	h := strings.ToLower(strings.Trim(requestHost, "[]"))
+	if host, _, err := net.SplitHostPort(h); err == nil {
+		h = host
+	}
+	return isLocalWebHost(h)
 }
 
 func isAllowedOrigin(raw string, requestHost string) bool {
@@ -636,7 +697,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, 200, configView{
-		App:     cur.App,
+		App:     sanitizeAppConfig(cur.App),
 		Systems: cur.Systems,
 		Search:  cur.Search,
 		Auth:    authView,
@@ -648,4 +709,13 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		Version:   Version,
 		BuildTime: BuildTime,
 	})
+}
+
+// sanitizeAppConfig 返回一份去除敏感字段的 AppConfig 副本，供 /api/config 等
+// 对前端输出配置时使用。CredentialKey 是 file 模式凭据加密密钥，KairoInternalToken
+// 是 license 开发绕过 token，均不得下发给前端。
+func sanitizeAppConfig(a config.AppConfig) config.AppConfig {
+	a.CredentialKey = ""
+	a.KairoInternalToken = ""
+	return a
 }

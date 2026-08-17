@@ -61,6 +61,9 @@
     // 时间戳：玫红时钟 + 白色指针
     'clock': `<circle cx="12" cy="12" r="10" fill="#f43f5e"/><circle cx="12" cy="12" r="8" fill="none" stroke="#ffffff" stroke-width="0.5" opacity="0.4"/><polyline points="12 6 12 12 15.5 14" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="12" r="1" fill="#ffffff"/>`,
 
+    // 定时任务：橙色秒表 + 白色指针 + 顶部按钮（与 clock 区分：多表冠 + 刻度点）
+    'timer': `<circle cx="12" cy="13.5" r="8" fill="#f97316"/><circle cx="12" cy="13.5" r="6.6" fill="none" stroke="#ffffff" stroke-width="0.6" opacity="0.45"/><rect x="10.4" y="1.2" width="3.2" height="2.4" rx="0.9" fill="#c2410c"/><rect x="8.8" y="3.2" width="6.4" height="1.7" rx="0.85" fill="#c2410c"/><polyline points="12 9.8 12 13.5 15.2 15.3" fill="none" stroke="#ffffff" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="13.5" r="1" fill="#ffffff"/><circle cx="12" cy="7.6" r="0.55" fill="#ffffff" opacity="0.85"/><circle cx="17.4" cy="13.5" r="0.55" fill="#ffffff" opacity="0.85"/><circle cx="12" cy="19.4" r="0.55" fill="#ffffff" opacity="0.85"/><circle cx="6.6" cy="13.5" r="0.55" fill="#ffffff" opacity="0.85"/>`,
+
     // Cron 解析：靛蓝日历 + 绿色时钟角章
     'calendar-clock': `<rect x="3" y="5" width="14" height="11" rx="1.5" fill="#6366f1"/><rect x="3" y="5" width="14" height="2.5" rx="1" fill="#4338ca"/><line x1="8" y1="3" x2="8" y2="6" stroke="#4338ca" stroke-width="1.5" stroke-linecap="round"/><line x1="13" y1="3" x2="13" y2="6" stroke="#4338ca" stroke-width="1.5" stroke-linecap="round"/><line x1="3" y1="9" x2="17" y2="9" stroke="#4338ca" stroke-width="0.8"/><circle cx="6" cy="12" r="0.8" fill="#ffffff"/><circle cx="9" cy="12" r="0.8" fill="#ffffff"/><circle cx="12" cy="12" r="0.8" fill="#ffffff"/><circle cx="16" cy="16" r="6" fill="#10b981"/><polyline points="16 13 16 16 18.5 17.5" fill="none" stroke="#ffffff" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>`,
 

@@ -7,6 +7,18 @@
   const Kairo = window.Kairo = window.Kairo || {};
   Kairo.pages = Kairo.pages || {};
 
+  // 宠物彩蛋解锁：10 秒内点「关于」卡片 6 次触发（见 about 卡片 onCardClick）
+  var aboutClickTimes = [];
+  function aboutClickCounter() {
+    var now = Date.now();
+    aboutClickTimes = aboutClickTimes.filter(function (t) { return now - t < 10000; });
+    aboutClickTimes.push(now);
+    if (aboutClickTimes.length >= 6) {
+      aboutClickTimes = [];
+      if (Kairo.pet && Kairo.pet.unlock) { Kairo.pet.unlock(); }
+    }
+  }
+
   function makeCard(t, small) {
     const cls = 'tool-card' + (small ? ' tool-card-small' : '');
     // SVG 实际显示尺寸由 CSS .tool-card .icon svg 控制（28px / 24px），
@@ -17,7 +29,10 @@
       tabindex: '0',
       role: 'button',
       'aria-label': t.name,
-      onclick: () => { location.hash = '#/' + t.id; },
+      onclick: () => {
+        if (t.onCardClick) { try { t.onCardClick(); } catch (e) { /* 彩蛋点击异常不打断跳转 */ } }
+        location.hash = '#/' + t.id;
+      },
       onkeydown: (ev) => {
         if (ev.key === 'Enter' || ev.key === ' ') {
           ev.preventDefault();
@@ -53,7 +68,8 @@
       { id: 'formatter', name: '报文格式化', desc: 'JSON / XML / YAML / URL-form 格式化、压缩、校验、互转', icon: 'braces', tag: 'ready', tagText: '已就绪' },
       { id: 'diagnostics', name: '环境自检', desc: '一键体检：本机 / 网络 / 配置 / 工具 / 每台 server 连通性', icon: 'shield-check', tag: 'ready', tagText: 'v0.4' },
       { id: 'config', name: '系统配置', desc: '在线编辑业务系统 / 服务器 / 日志目录 / 全局设置', icon: 'settings', tag: 'ready', tagText: 'v0.4' },
-      { id: 'downloads', name: '下载历史', desc: '浏览 / 删除 / 重新下载 / 外部程序打开已下载文件', icon: 'history', tag: 'ready', tagText: '已就绪' }
+      { id: 'downloads', name: '下载历史', desc: '浏览 / 删除 / 重新下载 / 外部程序打开已下载文件', icon: 'history', tag: 'ready', tagText: '已就绪' },
+      { id: 'tasks', name: '定时任务', desc: 'cron 调度执行本地命令：SVN / Git 定时同步、脚本自动运行', icon: 'timer', tag: 'ready', tagText: '新' }
     ];
 
     const grid = Kairo.core.el('div', { class: 'grid-4' });
@@ -73,7 +89,7 @@
     // 跟 web/index.html 侧栏 nav-sep "其他" 分组顺序保持一致
     const otherTools = [
       { id: 'sponsor', name: '投喂作者', desc: '咖啡续命小站 · 续命恩人榜 · 二维码打赏', icon: 'coffee', tag: 'new', tagText: '新' },
-      { id: 'about', name: '关于', desc: '版本信息、技术架构、数据统计', icon: 'info' },
+      { id: 'about', name: '关于', desc: '版本信息、技术架构、数据统计', icon: 'info', onCardClick: aboutClickCounter },
     ];
 
     view.appendChild(Kairo.core.el('div', { class: 'section-title mt-4', style: 'font-size:14px;color:var(--text-dim);' }, '更多工具'));

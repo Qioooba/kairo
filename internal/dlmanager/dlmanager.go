@@ -41,6 +41,7 @@ type Item struct {
 	Date    string `json:"date"`               // YYYYMMDD，本地落点子目录
 	Kind    string `json:"kind"`               // "file" 或 "zip"
 	AbsPath string `json:"abs_path,omitempty"` // v0.5 v0.5-F：本地绝对路径（前端可拼"打开目录"按钮调 /api/local/reveal-file）
+	ZipName string `json:"zip_name,omitempty"` // zip 内路径（目录递归下载时含层级，如 "logs/app/x.log"）；空则打包时回退 basename
 }
 
 // LogsDownloadReq 是"按目录下载最近 N 个文件"任务的入参（同步 handler 解码用）。
