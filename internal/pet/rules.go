@@ -8,6 +8,13 @@ import "kairo/internal/config"
 //   - ExpRules：op → 经验；未列出的 op 一律 0 分（白名单分级）；
 //   - StageLevels：进化阶段名 → 等级区间 [min,max]（含边界）；
 //   - OpDailyMax：op → 每日次数上限；未列出 = 无上限。
+//
+// v2 调整（见 docs/PET-SKINS-V2-DESIGN.md §4/§5）：
+//   - 权重按"用户价值"分 4 档（核心会话 6 / 高价值 3~4 / 中价值 2 / 轻价值 1）；
+//   - 每日上限 300（配合皮肤解锁节奏）；冷却窗口 30min（降低误伤）；
+//   - 阶段区间 egg 1-3 / hatchling 4-8 / grown 9-15 / mythic 16+（等级无上限，
+//     mythic 上限为 MaxInt 语义上的"无穷"）；
+//   - SkinCount 已删除：皮肤清单由 web/img/pet/skins/skins.json 驱动（见 skins.go）。
 type Rules struct {
 	DailyCap          int64
 	CooldownMinutes   int
@@ -19,51 +26,66 @@ type Rules struct {
 	StatsKeepDays     int
 	StatsKeepMonths   int
 	MaxLedger         int
-	SkinCount         int
 }
+
+// mythicNoCap 神话阶段等级上限（int 近似无穷，等级无上限设计）。
+const mythicNoCap = int(^uint32(0) >> 1) // MaxInt32
 
 // DefaultRules 返回编译期内置的默认规则。
 //
-// 数值与 docs/PET-FEATURE-DESIGN.md §5.2/§5.3 对齐：
-// 每日上限 200、冷却 60 分钟、会话每 10 分钟 +1、统计保留 90 天 / 12 月、
-// 流水环形上限 2000 条、内置皮肤 2 张。
+// 数值与 docs/PET-SKINS-V2-DESIGN.md §4/§5 对齐：
+// 每日上限 300、冷却 30 分钟、会话每 10 分钟 +1（封顶 8）、统计保留 90 天 / 12 月、
+// 流水环形上限 2000 条。
 func DefaultRules() Rules {
 	return Rules{
-		DailyCap:          200,
-		CooldownMinutes:   60,
+		DailyCap:          300,
+		CooldownMinutes:   30,
 		SessionExpMinutes: 10,
 		NotifyUp:          true,
 		ExpRules: map[string]int64{
-			"ssh.shell.start":      5,
-			"ssh.sftp.upload":      2,
-			"ssh.sftp.download":    2,
-			"ssh.sftp.edit.upload": 2,
-			"files.download":       1,
-			"logs.download":        1,
-			"compare.file_diff":    2,
-			"compare.folder_scan":  2,
-			"compare.deep_check":   2,
-			"http.request":         1,
-			"http.case.upsert":     1,
-			"credentials.save":     1,
-			"reminder.add":         1,
+			// 核心-会话
+			"ssh.shell.start": 6,
+			// 高价值
+			"compare.deep_check":   4,
+			"compare.folder_scan":  3,
+			"compare.file_diff":    3,
+			"ssh.sftp.edit.upload": 3,
+			// 中价值
+			"ssh.sftp.upload":   2,
+			"ssh.sftp.download": 2,
+			"logs.download":     2,
+			"files.download":    2,
+			// 轻价值
+			"http.request":     1,
+			"http.case.upsert": 1,
+			"credentials.save": 1,
+			"reminder.add":     1,
 		},
 		StageLevels: map[string][2]int{
-			"egg":       {1, 5},
-			"hatchling": {6, 15},
-			"grown":     {16, 30},
-			"mythic":    {31, 999},
+			"egg":       {1, 3},
+			"hatchling": {4, 8},
+			"grown":     {9, 15},
+			"mythic":    {16, mythicNoCap},
 		},
 		OpDailyMax: map[string]int64{
-			"ssh.shell.start":   100,
-			"ssh.sftp.upload":   200,
-			"ssh.sftp.download": 200,
-			"http.request":      200,
+			"ssh.shell.start":      40,
+			"ssh.session.time":     60,
+			"ssh.sftp.upload":      100,
+			"ssh.sftp.download":    100,
+			"ssh.sftp.edit.upload": 80,
+			"files.download":       60,
+			"logs.download":        60,
+			"compare.file_diff":    40,
+			"compare.folder_scan":  30,
+			"compare.deep_check":   30,
+			"http.request":         150,
+			"http.case.upsert":     60,
+			"credentials.save":     20,
+			"reminder.add":         20,
 		},
 		StatsKeepDays:   90,
 		StatsKeepMonths: 12,
 		MaxLedger:       2000,
-		SkinCount:       2,
 	}
 }
 
@@ -72,7 +94,8 @@ func DefaultRules() Rules {
 // 覆盖规则（对齐 config.PetConfig 的注释）：
 //   - 数值字段：仅非零值覆盖（0 视为"未配置"，用默认兜底）；
 //   - ExpRules / StageLevels / OpDailyMax：配置非空时整体替换默认表；
-//   - NotifyUp：配置非 nil 时替换。
+//   - NotifyUp：配置非 nil 时替换；
+//   - SkinCount：v2 已废弃，配置值被忽略（皮肤清单由 skins.json 驱动）。
 //
 // map 全部深拷贝，调用方后续修改 pc 不影响本 Rules。
 func RulesFromConfig(pc config.PetConfig) Rules {
@@ -112,9 +135,6 @@ func RulesFromConfig(pc config.PetConfig) Rules {
 	}
 	if pc.StatsKeepMonths != 0 {
 		r.StatsKeepMonths = pc.StatsKeepMonths
-	}
-	if pc.SkinCount != 0 {
-		r.SkinCount = pc.SkinCount
 	}
 	return r
 }

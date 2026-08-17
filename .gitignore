@@ -40,6 +40,9 @@ verify-commands.js
 # ===== 临时文件 =====
 *.tmp
 
+# ===== 本地临时目录（蒙太奇预览 / 一次性生成脚本等）=====
+/tmp/
+
 # ===== QA / 测试产物（不应入 git）=====
 # Playwright 依赖：~16MB，从 package-lock + npm install 还原
 /docs/qa/node_modules/

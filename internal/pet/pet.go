@@ -70,6 +70,7 @@ type Battle struct {
 // 字段语义：
 //   - Exp 是"当前等级内"经验；TotalEarned 才是历史累计（排行榜用）；
 //   - Dirty 表示有未同步到服务器的流水（由 sync 流程回写清零，与落盘无关）；
+//   - Skin 是语义皮肤 id（如 "orange-cat"，v2 起；v1 的 int 索引加载时迁移）；
 //   - Sig 是 HMAC 签名（保存时生成，加载时校验），不参与签名载荷本身。
 type State struct {
 	V           int            `json:"v"`
@@ -79,7 +80,7 @@ type State struct {
 	Level       int            `json:"level"`
 	Exp         int64          `json:"exp"` // 当前等级内经验
 	Stage       string         `json:"stage"`
-	Skin        int            `json:"skin"`
+	Skin        string         `json:"skin"`
 	Pos         Pos            `json:"pos"`
 	TotalEarned int64          `json:"total_earned"`
 	BoardExp    int64          `json:"board_exp"`
@@ -103,7 +104,7 @@ func freshState() *State {
 		Level:   1,
 		Exp:     0,
 		Stage:   "egg",
-		Skin:    0,
+		Skin:    DefaultSkinID,
 		Pos:     Pos{X: 0.92, Y: 0.88},
 		Stats: Stats{
 			Daily:   make(map[string]map[string]OpStat),
@@ -147,6 +148,9 @@ func normalizeState(st *State) {
 	}
 	if st.Name == "" {
 		st.Name = "小K"
+	}
+	if st.Skin == "" {
+		st.Skin = DefaultSkinID
 	}
 	if st.TotalEarned < 0 {
 		st.TotalEarned = 0
@@ -255,10 +259,24 @@ func loadOrCreateSigKey(keyPath string) ([]byte, error) {
 // ---------- 加载 / 保存 ----------
 
 // loadStateFile 从 path 读取并校验状态；文件不存在 / 损坏 / 签名不匹配都返回 error。
+//
+// v1→v2 兼容：v1 的 skin 字段是 int 索引，直接 Unmarshal 到 string 会失败。
+// 检测到 int 时按 legacySkinIDs 迁移为语义 id 并跳过签名校验
+// （迁移必然改变签名载荷，旧签名不可能匹配；下次保存时自动重新签名。
+// HMAC 定位是"门槛非防线"，对合法格式迁移放行是安全的）。
 func loadStateFile(path string, key []byte) (*State, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
+	}
+	if migrated := migrateSkinBytes(raw); migrated != nil {
+		var st State
+		if err := json.Unmarshal(migrated, &st); err != nil {
+			return nil, fmt.Errorf("pet: 迁移旧皮肤字段后解析失败: %w", err)
+		}
+		st.Sig = "" // 迁移后旧签名失效，置空待下次保存重签
+		normalizeState(&st)
+		return &st, nil
 	}
 	st, err := verifyState(raw, key)
 	if err != nil {
@@ -266,6 +284,29 @@ func loadStateFile(path string, key []byte) (*State, error) {
 	}
 	normalizeState(st)
 	return st, nil
+}
+
+// migrateSkinBytes 若 pet.json 的 skin 字段是数字（v1 格式），返回迁移后的 JSON；
+// 不是数字（v2 格式或字段缺失）返回 nil。
+func migrateSkinBytes(raw []byte) []byte {
+	var probe map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &probe); err != nil {
+		return nil
+	}
+	skinRaw, ok := probe["skin"]
+	if !ok {
+		return nil
+	}
+	id, migrated := MigrateLegacySkin(skinRaw)
+	if !migrated {
+		return nil
+	}
+	probe["skin"], _ = json.Marshal(id)
+	out, err := json.Marshal(probe)
+	if err != nil {
+		return nil
+	}
+	return out
 }
 
 // saveStateFile 原子写盘：先写 <path>.tmp 再 rename；成功后把上一版复制为 <path>.bak。

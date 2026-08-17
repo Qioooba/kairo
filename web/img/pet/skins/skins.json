@@ -1,0 +1,504 @@
+{
+  "version": 2,
+  "frameSize": 32,
+  "frames": 4,
+  "fps": 6,
+  "skins": [
+    {
+      "id": "orange-cat",
+      "name": "橘座",
+      "category": "cat",
+      "unlock": 1,
+      "frames": 4,
+      "fps": 6
+    },
+    {
+      "id": "blue-cat",
+      "name": "蓝猫",
+      "category": "cat",
+      "unlock": 1,
+      "frames": 4,
+      "fps": 6
+    },
+    {
+      "id": "cow-cat",
+      "name": "奶牛",
+      "category": "cat",
+      "unlock": 4,
+      "frames": 4,
+      "fps": 6
+    },
+    {
+      "id": "calico-cat",
+      "name": "三花",
+      "category": "cat",
+      "unlock": 4,
+      "frames": 4,
+      "fps": 6
+    },
+    {
+      "id": "black-cat",
+      "name": "玄猫",
+      "category": "cat",
+      "unlock": 8,
+      "frames": 4,
+      "fps": 6
+    },
+    {
+      "id": "fairy-cat",
+      "name": "仙女猫",
+      "category": "cat",
+      "unlock": 8,
+      "frames": 4,
+      "fps": 6
+    },
+    {
+      "id": "point-cat",
+      "name": "重点色",
+      "category": "cat",
+      "unlock": 8,
+      "frames": 4,
+      "fps": 6
+    },
+    {
+      "id": "lulu",
+      "name": "噜噜",
+      "category": "cat",
+      "unlock": 1,
+      "frames": 4,
+      "fps": 6
+    },
+    {
+      "id": "butter-cat",
+      "name": "黄油小猫",
+      "category": "cat",
+      "unlock": 8,
+      "frames": 4,
+      "fps": 6
+    },
+    {
+      "id": "shiba",
+      "name": "柴柴",
+      "category": "dog",
+      "unlock": 1,
+      "frames": 4,
+      "fps": 6
+    },
+    {
+      "id": "corgi",
+      "name": "柯基",
+      "category": "dog",
+      "unlock": 4,
+      "frames": 4,
+      "fps": 6
+    },
+    {
+      "id": "husky",
+      "name": "二哈",
+      "category": "dog",
+      "unlock": 4,
+      "frames": 4,
+      "fps": 6
+    },
+    {
+      "id": "golden",
+      "name": "金毛",
+      "category": "dog",
+      "unlock": 8,
+      "frames": 4,
+      "fps": 6
+    },
+    {
+      "id": "border",
+      "name": "边牧",
+      "category": "dog",
+      "unlock": 8,
+      "frames": 4,
+      "fps": 6
+    },
+    {
+      "id": "teddy",
+      "name": "泰迪",
+      "category": "dog",
+      "unlock": 8,
+      "frames": 4,
+      "fps": 6
+    },
+    {
+      "id": "frenchie",
+      "name": "法斗",
+      "category": "dog",
+      "unlock": 8,
+      "frames": 4,
+      "fps": 6
+    },
+    {
+      "id": "snow-bunny",
+      "name": "白团",
+      "category": "rabbit",
+      "unlock": 1,
+      "frames": 4,
+      "fps": 6
+    },
+    {
+      "id": "lop-ear",
+      "name": "垂垂",
+      "category": "rabbit",
+      "unlock": 4,
+      "frames": 4,
+      "fps": 6
+    },
+    {
+      "id": "gray-bunny",
+      "name": "灰灰",
+      "category": "rabbit",
+      "unlock": 4,
+      "frames": 4,
+      "fps": 6
+    },
+    {
+      "id": "sakura-bunny",
+      "name": "樱花兔",
+      "category": "rabbit",
+      "unlock": 8,
+      "frames": 4,
+      "fps": 6
+    },
+    {
+      "id": "moon-rabbit",
+      "name": "月兔",
+      "category": "rabbit",
+      "unlock": 12,
+      "frames": 4,
+      "fps": 6
+    },
+    {
+      "id": "coffee-bunny",
+      "name": "咖啡兔",
+      "category": "rabbit",
+      "unlock": 8,
+      "frames": 4,
+      "fps": 6
+    },
+    {
+      "id": "mint-bunny",
+      "name": "薄荷兔",
+      "category": "rabbit",
+      "unlock": 8,
+      "frames": 4,
+      "fps": 6
+    },
+    {
+      "id": "nai-long",
+      "name": "奶龙",
+      "category": "dragon",
+      "unlock": 1,
+      "frames": 4,
+      "fps": 6
+    },
+    {
+      "id": "berry-nai",
+      "name": "草莓奶龙",
+      "category": "dragon",
+      "unlock": 8,
+      "frames": 4,
+      "fps": 6
+    },
+    {
+      "id": "matcha-nai",
+      "name": "抹茶奶龙",
+      "category": "dragon",
+      "unlock": 8,
+      "frames": 4,
+      "fps": 6
+    },
+    {
+      "id": "green-dragon",
+      "name": "青龙",
+      "category": "dragon",
+      "unlock": 8,
+      "frames": 4,
+      "fps": 6
+    },
+    {
+      "id": "red-dragon",
+      "name": "红龙",
+      "category": "dragon",
+      "unlock": 12,
+      "frames": 4,
+      "fps": 6
+    },
+    {
+      "id": "blue-dragon",
+      "name": "蓝龙",
+      "category": "dragon",
+      "unlock": 12,
+      "frames": 4,
+      "fps": 6
+    },
+    {
+      "id": "night-wing",
+      "name": "夜翼",
+      "category": "dragon",
+      "unlock": 16,
+      "frames": 4,
+      "fps": 6
+    },
+    {
+      "id": "frost-dragon",
+      "name": "冰霜龙",
+      "category": "dragon",
+      "unlock": 16,
+      "frames": 4,
+      "fps": 6
+    },
+    {
+      "id": "flame-dragon",
+      "name": "烈焰龙",
+      "category": "dragon",
+      "unlock": 16,
+      "frames": 4,
+      "fps": 6
+    },
+    {
+      "id": "rainbow-dragon",
+      "name": "彩虹龙",
+      "category": "dragon",
+      "unlock": 16,
+      "frames": 4,
+      "fps": 6
+    },
+    {
+      "id": "capybara",
+      "name": "卡皮巴拉",
+      "category": "capybara",
+      "unlock": 1,
+      "frames": 4,
+      "fps": 6
+    },
+    {
+      "id": "orange-capy",
+      "name": "顶橘豚",
+      "category": "capybara",
+      "unlock": 8,
+      "frames": 4,
+      "fps": 6
+    },
+    {
+      "id": "spa-capy",
+      "name": "泡汤豚",
+      "category": "capybara",
+      "unlock": 12,
+      "frames": 4,
+      "fps": 6
+    },
+    {
+      "id": "salted-fish",
+      "name": "咸鱼",
+      "category": "fish",
+      "unlock": 1,
+      "frames": 4,
+      "fps": 6
+    },
+    {
+      "id": "koi",
+      "name": "锦鲤",
+      "category": "fish",
+      "unlock": 12,
+      "frames": 4,
+      "fps": 6
+    },
+    {
+      "id": "chick",
+      "name": "团子鸡",
+      "category": "bird",
+      "unlock": 4,
+      "frames": 4,
+      "fps": 6
+    },
+    {
+      "id": "parrot",
+      "name": "鹦鹉",
+      "category": "bird",
+      "unlock": 4,
+      "frames": 4,
+      "fps": 6
+    },
+    {
+      "id": "sleepy-bird",
+      "name": "呆萌鸟",
+      "category": "bird",
+      "unlock": 8,
+      "frames": 4,
+      "fps": 6
+    },
+    {
+      "id": "bluebird",
+      "name": "蓝雀",
+      "category": "bird",
+      "unlock": 8,
+      "frames": 4,
+      "fps": 6
+    },
+    {
+      "id": "skylark",
+      "name": "云雀",
+      "category": "bird",
+      "unlock": 12,
+      "frames": 4,
+      "fps": 6
+    },
+    {
+      "id": "penguin",
+      "name": "企鹅",
+      "category": "bird",
+      "unlock": 12,
+      "frames": 4,
+      "fps": 6
+    },
+    {
+      "id": "owl",
+      "name": "猫头鹰",
+      "category": "bird",
+      "unlock": 12,
+      "frames": 4,
+      "fps": 6
+    },
+    {
+      "id": "yellow-duck",
+      "name": "小黄鸭",
+      "category": "bird",
+      "unlock": 4,
+      "frames": 4,
+      "fps": 6
+    },
+    {
+      "id": "lazy-duck",
+      "name": "摆烂鸭",
+      "category": "bird",
+      "unlock": 12,
+      "frames": 4,
+      "fps": 6
+    },
+    {
+      "id": "hamster",
+      "name": "仓鼠",
+      "category": "round",
+      "unlock": 1,
+      "frames": 4,
+      "fps": 6
+    },
+    {
+      "id": "mochi-ball",
+      "name": "汤圆",
+      "category": "round",
+      "unlock": 1,
+      "frames": 4,
+      "fps": 6
+    },
+    {
+      "id": "bread",
+      "name": "面包",
+      "category": "round",
+      "unlock": 8,
+      "frames": 4,
+      "fps": 6
+    },
+    {
+      "id": "dango",
+      "name": "饭团",
+      "category": "round",
+      "unlock": 12,
+      "frames": 4,
+      "fps": 6
+    },
+    {
+      "id": "pudding",
+      "name": "布丁",
+      "category": "round",
+      "unlock": 12,
+      "frames": 4,
+      "fps": 6
+    },
+    {
+      "id": "snowball",
+      "name": "雪球",
+      "category": "round",
+      "unlock": 8,
+      "frames": 4,
+      "fps": 6
+    },
+    {
+      "id": "matcha",
+      "name": "麻薯",
+      "category": "round",
+      "unlock": 12,
+      "frames": 4,
+      "fps": 6
+    },
+    {
+      "id": "slime",
+      "name": "史莱姆",
+      "category": "fantasy",
+      "unlock": 1,
+      "frames": 4,
+      "fps": 6
+    },
+    {
+      "id": "ghost",
+      "name": "幽灵",
+      "category": "fantasy",
+      "unlock": 12,
+      "frames": 4,
+      "fps": 6
+    },
+    {
+      "id": "star",
+      "name": "星辰",
+      "category": "fantasy",
+      "unlock": 16,
+      "frames": 4,
+      "fps": 6
+    },
+    {
+      "id": "cloud",
+      "name": "云朵",
+      "category": "fantasy",
+      "unlock": 12,
+      "frames": 4,
+      "fps": 6
+    },
+    {
+      "id": "lava",
+      "name": "岩浆",
+      "category": "fantasy",
+      "unlock": 16,
+      "frames": 4,
+      "fps": 6
+    },
+    {
+      "id": "ice-shard",
+      "name": "寒冰",
+      "category": "fantasy",
+      "unlock": 16,
+      "frames": 4,
+      "fps": 6
+    },
+    {
+      "id": "robo",
+      "name": "机械",
+      "category": "fantasy",
+      "unlock": 16,
+      "frames": 4,
+      "fps": 6
+    },
+    {
+      "id": "gold-dragon",
+      "name": "金龙",
+      "category": "dragon",
+      "unlock": 20,
+      "frames": 4,
+      "fps": 6
+    }
+  ]
+}

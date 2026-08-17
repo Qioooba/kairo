@@ -351,10 +351,10 @@
     const nameInput = el('input', { type: 'text', class: 'editor-input', placeholder: '如：每天下班前拉取最新代码', maxlength: '60' });
     nameInput.value = state.name;
 
-    const cmdInput = el('textarea', { class: 'editor-content mono', rows: 4, placeholder: 'shell 命令，可多行。Windows 走 cmd /C，macOS/Linux 走 sh -c' });
+    const cmdInput = el('textarea', { class: 'editor-content mono', rows: 5, placeholder: 'Windows 下可多行输入命令，建议使用绝对路径；定时执行会调用 cmd /C' });
     cmdInput.value = state.command;
 
-    const dirInput = el('input', { type: 'text', class: 'editor-input mono', placeholder: '工作目录（留空 = 工具运行目录）；git/svn 任务必填仓库路径' });
+    const dirInput = el('input', { type: 'text', class: 'editor-input mono', placeholder: '工作目录（留空 = 工具运行目录）；Windows 下建议填仓库/脚本绝对路径父目录' });
     dirInput.value = state.workDir;
 
     const presetSel = el('select', { class: 'editor-input' });
@@ -400,6 +400,14 @@
     timeoutInput.style.width = '110px';
     timeoutInput.value = String(state.timeoutSec);
 
+    const usageGuide = el('div', { class: 'task-editor-help' }, [
+      el('div', { class: 'task-editor-help-title', text: 'Windows 下自定义脚本说明：' }),
+      el('div', { class: 'editor-hint', text: '• 执行器是 Windows 的 cmd.exe，内部用 cmd /C 调度命令，先按 Windows 路径规则填写。' }),
+      el('div', { class: 'editor-hint', text: '• 建议命令使用绝对路径，避免找不到脚本或环境变量导致的随机失败。路径包含空格请用双引号包裹。' }),
+      el('pre', { class: 'task-editor-code', text: '示例 1：直接执行 BAT\n  C:\\deploy\\run.bat\n\n示例 2：带参数\n  C:\\scripts\\deploy.ps1 -Env prod\n\n示例 3：带空格路径\n  "C:\\deploy scripts\\daily job.bat" /now\n\n示例 4：PowerShell 建议写法\n  powershell -NoProfile -ExecutionPolicy Bypass -File "C:\\scripts\\deploy.ps1" -Tag daily' }),
+      el('div', { class: 'editor-hint', text: '• 如果命令依赖仓库目录（如 git pull/svn update），请把「工作目录」设置为该仓库绝对路径；脚本本身也尽量填绝对路径。' }),
+    ]);
+
     const fields = el('div', { class: 'editor-fields' }, [
       el('label', { class: 'editor-label' }, [el('span', { text: '任务名称' }), nameInput]),
       el('label', { class: 'editor-label' }, [el('span', { text: '执行命令' }), cmdInput]),
@@ -415,6 +423,7 @@
     ]);
 
     const bodyParts = [];
+    bodyParts.push(usageGuide);
     if (templateRow) bodyParts.push(templateRow);
     bodyParts.push(fields);
     const body = el('div', { class: 'editor-body' }, bodyParts);

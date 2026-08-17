@@ -801,11 +801,141 @@
         })
       ]));
 
-      // ---- Section 2: 榜单表格 ----
+    // ---- Section 2: 榜单表格 ----
       var boardHead = el('div', {
         style: 'font-weight:700; font-size:13px; color:var(--text); margin-bottom:6px;',
         text: '宠物排行榜'
       });
+      function formatPetOpSummary(ops, maxItems) {
+        if (!Array.isArray(ops) || !ops.length) {
+          return '暂无行为明细';
+        }
+        var parts = [];
+        var cap = typeof maxItems === 'number' ? maxItems : 3;
+        var end = Math.min(cap, ops.length);
+        for (var i = 0; i < end; i++) {
+          var op = ops[i] || {};
+          parts.push(String(op.op || '(未知行为)') + ' ×' + fmtInt(op.count));
+        }
+        return parts.join(' · ');
+      }
+
+      function buildPetOpDetailRowsBySort(ops, sortBy) {
+        var rows = [];
+        if (!Array.isArray(ops) || !ops.length) {
+          return [el('tr', null, [
+            el('td', { colspan: '3', style: 'padding:10px; color:var(--text-mute); font-size:11px;', text: '暂无行为明细' })
+          ])];
+        }
+        var cloned = ops.slice(0);
+        cloned.sort(function (a, b) {
+          if (sortBy === 'count') {
+            return fmtInt(b.count) - fmtInt(a.count);
+          }
+          return fmtInt(b.exp) - fmtInt(a.exp);
+        });
+        cloned.forEach(function (op) {
+          rows.push(el('tr', null, [
+            el('td', { text: String(op.op || '-') }),
+            el('td', { text: String(fmtInt(op.count)) }),
+            el('td', { text: String(fmtInt(op.exp)) })
+          ]));
+        });
+        return rows;
+      }
+
+      function renderPetEntryDetail(entry) {
+        var sortBy = 'exp';
+        var tbl = el('table', { class: 'table', style: 'width:100%; font-size:12px; margin-top:8px; margin-bottom:0;' });
+        var sortWrap = el('div', { style: 'display:flex; gap:6px; margin:8px 0 4px; justify-content:flex-end;' });
+
+        function renderSortBtn(key, label) {
+          return el('button', {
+            type: 'button',
+            text: label,
+            className: 'btn btn-sm',
+            style: 'padding:2px 8px; font-size:11px;',
+            onclick: function () {
+              if (sortBy === key) return;
+              sortBy = key;
+              if (sortBy === 'exp') {
+                expBtn.style.background = 'var(--accent,#4a6fa5)';
+                expBtn.style.color = '#fff';
+                expBtn.style.borderColor = 'var(--accent,#4a6fa5)';
+                countBtn.style.background = 'transparent';
+                countBtn.style.color = 'var(--text-dim)';
+                countBtn.style.borderColor = 'var(--border,rgba(0,0,0,.15))';
+              } else {
+                countBtn.style.background = 'var(--accent,#4a6fa5)';
+                countBtn.style.color = '#fff';
+                countBtn.style.borderColor = 'var(--accent,#4a6fa5)';
+                expBtn.style.background = 'transparent';
+                expBtn.style.color = 'var(--text-dim)';
+                expBtn.style.borderColor = 'var(--border,rgba(0,0,0,.15))';
+              }
+              renderRows();
+            }
+          });
+        }
+
+        var expBtn = renderSortBtn('exp', '按认可分');
+        var countBtn = renderSortBtn('count', '按次数');
+        expBtn.style.background = 'var(--accent,#4a6fa5)';
+        expBtn.style.color = '#fff';
+        expBtn.style.borderColor = 'var(--accent,#4a6fa5)';
+        countBtn.style.background = 'transparent';
+        countBtn.style.color = 'var(--text-dim)';
+        countBtn.style.borderColor = 'var(--border,rgba(0,0,0,.15))';
+        sortWrap.appendChild(expBtn);
+        sortWrap.appendChild(countBtn);
+
+        var thead = el('thead');
+        var headRow = el('tr');
+        ['操作', '次数', '认可分'].forEach(function (text) { headRow.appendChild(el('th', { text: text })); });
+        thead.appendChild(headRow);
+
+        var tbody = el('tbody');
+        function renderRows() {
+          tbody.innerHTML = '';
+          var rows = buildPetOpDetailRowsBySort(entry && entry.ops, sortBy);
+          rows.forEach(function (r) { tbody.appendChild(r); });
+        }
+
+        renderRows();
+        tbl.appendChild(thead);
+        tbl.appendChild(tbody);
+        var container = el('div');
+        container.appendChild(sortWrap);
+        container.appendChild(tbl);
+        return container;
+      }
+
+      var petDetailCloseHandler = null;
+      var openedPetDetailRow = null;
+      function closePetDetailRow() {
+        if (openedPetDetailRow && openedPetDetailRow.parentNode) {
+          openedPetDetailRow.parentNode.removeChild(openedPetDetailRow);
+        }
+        openedPetDetailRow = null;
+        if (petDetailCloseHandler) {
+          document.removeEventListener('click', petDetailCloseHandler);
+          petDetailCloseHandler = null;
+        }
+      }
+
+      function bindPetDetailClose() {
+        if (petDetailCloseHandler) return;
+        petDetailCloseHandler = function (ev) {
+          if (!openedPetDetailRow) return;
+          var t = ev && ev.target;
+          if (!t || !t.closest) return;
+          if (t.closest('.pet-detail-row')) return;
+          if (t.closest('tr[data-pet-rank]')) return;
+          closePetDetailRow();
+        };
+        document.addEventListener('click', petDetailCloseHandler);
+      }
+
       var tbl = el('table', { class: 'table', style: 'width:100%;font-size:12px;margin-bottom:4px;' });
       var tHead = el('thead');
       var tHeadRow = el('tr');
@@ -823,6 +953,47 @@
       } else {
         entries.forEach(function (e) {
           var row = el('tr');
+          row.style.cursor = 'pointer';
+          row.setAttribute('tabindex', '0');
+          row.setAttribute('role', 'button');
+          row.setAttribute('aria-expanded', 'false');
+          row.title = '点击查看行为明细';
+          row.setAttribute('data-pet-rank', String(fmtInt(e.rank)));
+          (function (entry, tr) {
+            function toggleDetail(ev) {
+              if (ev) {
+                ev.preventDefault();
+                ev.stopPropagation();
+              }
+              var rowKey = 'pet-row-' + tr.getAttribute('data-pet-rank');
+              if (openedPetDetailRow && openedPetDetailRow.getAttribute('data-parent') === rowKey) {
+                closePetDetailRow();
+                tr.setAttribute('aria-expanded', 'false');
+                return;
+              }
+              closePetDetailRow();
+              tr.setAttribute('aria-expanded', 'true');
+              var detailTd = el('td', {
+                colspan: '4',
+                style: 'padding:0 8px 8px; background:var(--bg-1);'
+              });
+              detailTd.appendChild(renderPetEntryDetail(entry));
+              openedPetDetailRow = el('tr', { 'data-parent': rowKey, class: 'pet-detail-row', style: 'background:#0b102018;' });
+              openedPetDetailRow.appendChild(detailTd);
+              tr.parentNode.insertBefore(openedPetDetailRow, tr.nextSibling);
+              bindPetDetailClose();
+            }
+
+            tr.addEventListener('click', toggleDetail);
+            tr.addEventListener('keydown', function (ev) {
+              if (ev.key === 'Enter' || ev.key === ' ') {
+                toggleDetail(ev);
+              } else if (ev.key === 'Escape') {
+                closePetDetailRow();
+                tr.setAttribute('aria-expanded', 'false');
+              }
+            });
+          })(e, row);
           row.appendChild(el('td', { text: String(fmtInt(e.rank)) }));
           row.appendChild(el('td', { style: 'font-weight:700;color:var(--text);', text: String(e.name || '-') }));
           row.appendChild(el('td', { text: 'Lv ' + fmtInt(e.level) }));
@@ -830,14 +1001,9 @@
           expTd.appendChild(el('div', { text: String(fmtInt(e.exp)) }));
           if (e.ops && Array.isArray(e.ops) && e.ops.length) {
             // 前 3 个 op 简写：op ×count 用 · 连接
-            var parts = [];
-            for (var i = 0; i < Math.min(3, e.ops.length); i++) {
-              var o = e.ops[i];
-              parts.push(String(o.op) + ' ×' + fmtInt(o.count));
-            }
             expTd.appendChild(el('div', {
               style: 'font-size:10px;color:var(--text-mute);',
-              text: parts.join(' · ')
+              text: formatPetOpSummary(e.ops, 3)
             }));
           }
           row.appendChild(expTd);

@@ -199,11 +199,18 @@ function register(runner, ctx) {
       await page.waitForTimeout(500);
     });
 
-    runner.it('S3B-5 快速晃动换肤（皮肤 +1）+ 2s 冷却内二次晃动不触发', async function () {
+    runner.it('S3B-5 快速晃动换肤（v2：切到下一款已解锁皮肤）+ 2s 冷却内二次晃动不触发', async function () {
       await page.evaluate(() => { location.hash = '#/'; });
       await page.waitForTimeout(800);
-      const skinBefore = (await apiJSON(page, 'GET', '/api/pet/state')).data.skin;
-      const skinCount = (await apiJSON(page, 'GET', '/api/pet/state')).data.skin_count;
+      const stBefore = (await apiJSON(page, 'GET', '/api/pet/state')).data;
+      const skinBefore = String(stBefore.skin);
+      // v2：skin 为语义 id（如 orange-cat），晃动在「已解锁清单」内循环取下一款
+      const unlocked = (stBefore.skins || [])
+        .filter(s => s && s.unlocked)
+        .map(s => String(s.id));
+      if (unlocked.length < 2) throw new Error('Lv1 应有多款默认解锁皮肤（v2 清单）: ' + JSON.stringify(unlocked));
+      const idx = unlocked.indexOf(skinBefore);
+      const expectNext = unlocked[(idx + 1 + unlocked.length) % unlocked.length];
 
       const shake = async () => {
         const box = await page.$eval('.kairo-pet-widget', el => {
@@ -226,7 +233,9 @@ function register(runner, ctx) {
       const skinReqsAfter1 = ctx.networkLogs.filter(l => l.type === 'request' && l.url.includes('/api/pet/skin')).length;
       if (skinReqsAfter1 !== skinReqsBefore + 1) throw new Error(`晃动未触发恰好 1 次换肤请求（before=${skinReqsBefore} after=${skinReqsAfter1}）`);
       const st1 = await apiJSON(page, 'GET', '/api/pet/state');
-      if (st1.data.skin !== (skinBefore + 1) % Math.max(2, skinCount)) throw new Error('皮肤索引未 +1: ' + JSON.stringify(st1.data.skin));
+      if (String(st1.data.skin) !== expectNext) {
+        throw new Error('晃动后皮肤应为下一款已解锁「' + expectNext + '」, 实际: ' + st1.data.skin);
+      }
 
       await shake();
       await page.waitForTimeout(800);

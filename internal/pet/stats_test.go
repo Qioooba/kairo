@@ -14,7 +14,7 @@ func TestStats_Bump(t *testing.T) {
 	e, _ := newTestEngine(t, rules)
 	mustEnable(t, e)
 
-	feed(t, e, "ssh.shell.start", 2) // 各 5 分
+	feed(t, e, "ssh.shell.start", 2) // 各 6 分
 
 	day := time.Now().Format("2006-01-02")
 	month := time.Now().Format("2006-01")
@@ -22,18 +22,18 @@ func TestStats_Bump(t *testing.T) {
 	st := e.State()
 	// Total
 	total := st.Stats.Total["ssh.shell.start"]
-	if total.Count != 2 || total.Exp != 10 {
-		t.Fatalf("Total = %+v, 期望 {2,10}", total)
+	if total.Count != 2 || total.Exp != 12 {
+		t.Fatalf("Total = %+v, 期望 {2,12}", total)
 	}
 	// Daily
 	daily := st.Stats.Daily[day]["ssh.shell.start"]
-	if daily.Count != 2 || daily.Exp != 10 {
-		t.Fatalf("Daily[%s] = %+v, 期望 {2,10}", day, daily)
+	if daily.Count != 2 || daily.Exp != 12 {
+		t.Fatalf("Daily[%s] = %+v, 期望 {2,12}", day, daily)
 	}
 	// Monthly
 	monthly := st.Stats.Monthly[month]["ssh.shell.start"]
-	if monthly.Count != 2 || monthly.Exp != 10 {
-		t.Fatalf("Monthly[%s] = %+v, 期望 {2,10}", month, monthly)
+	if monthly.Count != 2 || monthly.Exp != 12 {
+		t.Fatalf("Monthly[%s] = %+v, 期望 {2,12}", month, monthly)
 	}
 }
 
@@ -44,13 +44,13 @@ func TestStats_MultiOp(t *testing.T) {
 	e, _ := newTestEngine(t, rules)
 	mustEnable(t, e)
 
-	e.OnOp(evOp("ssh.shell.start", "srv1")) // +5
+	e.OnOp(evOp("ssh.shell.start", "srv1")) // +6
 	e.OnOp(evOp("ssh.sftp.upload", "srv1")) // +2
 
 	day := time.Now().Format("2006-01-02")
 	st := e.State()
-	if st.Stats.Daily[day]["ssh.shell.start"].Exp != 5 {
-		t.Fatalf("start exp = %d, 期望 5", st.Stats.Daily[day]["ssh.shell.start"].Exp)
+	if st.Stats.Daily[day]["ssh.shell.start"].Exp != 6 {
+		t.Fatalf("start exp = %d, 期望 6", st.Stats.Daily[day]["ssh.shell.start"].Exp)
 	}
 	if st.Stats.Daily[day]["ssh.sftp.upload"].Exp != 2 {
 		t.Fatalf("upload exp = %d, 期望 2", st.Stats.Daily[day]["ssh.sftp.upload"].Exp)

@@ -74,7 +74,7 @@ func TestHMAC_Roundtrip(t *testing.T) {
 		key[i] = 0xAB
 	}
 
-	e1, err := NewEngine(DefaultRules(), path, key)
+	e1, err := NewEngine(DefaultRules(), path, key, nil)
 	if err != nil {
 		t.Fatalf("NewEngine#1: %v", err)
 	}
@@ -87,7 +87,7 @@ func TestHMAC_Roundtrip(t *testing.T) {
 	}
 
 	// 重载：状态保持
-	e2, err := NewEngine(DefaultRules(), path, key)
+	e2, err := NewEngine(DefaultRules(), path, key, nil)
 	if err != nil {
 		t.Fatalf("NewEngine#2: %v", err)
 	}
@@ -95,7 +95,7 @@ func TestHMAC_Roundtrip(t *testing.T) {
 		t.Fatal("重载后 Enabled 应为 true")
 	}
 	st2 := e2.State()
-	if st2.TotalEarned != 5 || st2.Name != "小K" || st2.Level != 1 {
+	if st2.TotalEarned != 6 || st2.Name != "小K" || st2.Level != 1 {
 		t.Fatalf("重载状态不一致: %+v", st2)
 	}
 	if err := e2.Close(); err != nil {
@@ -111,7 +111,7 @@ func TestHMAC_Roundtrip(t *testing.T) {
 	if err := os.WriteFile(path, []byte(tampered), 0o600); err != nil {
 		t.Fatalf("写篡改文件: %v", err)
 	}
-	e3, err := NewEngine(DefaultRules(), path, key)
+	e3, err := NewEngine(DefaultRules(), path, key, nil)
 	if err != nil {
 		t.Fatalf("篡改后 NewEngine 不应报错: %v", err)
 	}
@@ -136,7 +136,7 @@ func TestHMAC_Roundtrip(t *testing.T) {
 	if err := os.WriteFile(path+".bak", []byte("also garbage"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	e4, err := NewEngine(DefaultRules(), path, key)
+	e4, err := NewEngine(DefaultRules(), path, key, nil)
 	if err != nil {
 		t.Fatalf("全损坏后 NewEngine 不应报错: %v", err)
 	}
@@ -154,7 +154,7 @@ func TestSigKey_AutoGenerate(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "pet.json")
 
-	e1, err := NewEngine(DefaultRules(), path, nil)
+	e1, err := NewEngine(DefaultRules(), path, nil, nil)
 	if err != nil {
 		t.Fatalf("NewEngine: %v", err)
 	}
@@ -174,7 +174,7 @@ func TestSigKey_AutoGenerate(t *testing.T) {
 	}
 
 	// 复用同一 key 重载（若 key 不一致签名校验会失败 → 回退新建 → Enabled=false）
-	e2, err := NewEngine(DefaultRules(), path, nil)
+	e2, err := NewEngine(DefaultRules(), path, nil, nil)
 	if err != nil {
 		t.Fatalf("NewEngine#2: %v", err)
 	}
@@ -196,7 +196,7 @@ func TestState_DeepCopy(t *testing.T) {
 	st1.Stats.Total["ssh.shell.start"] = OpStat{Count: 999, Exp: 999}
 
 	st2 := e.State()
-	if st2.Name != "小K" || st2.TotalEarned != 5 {
+	if st2.Name != "小K" || st2.TotalEarned != 6 {
 		t.Fatalf("State() 应返回深拷贝, 实际被污染: %+v", st2)
 	}
 	if st2.Ledger[0].Op != "ssh.shell.start" {
@@ -207,13 +207,13 @@ func TestState_DeepCopy(t *testing.T) {
 	}
 }
 
-// TestStateView 计算字段正确。
+// TestStateView 计算字段正确（v2：含 skins 清单与 skin_meta 精灵图元信息）。
 func TestStateView(t *testing.T) {
 	rules := DefaultRules()
-	rules.DailyCap = 200
+	rules.DailyCap = 300
 	e, _ := newTestEngine(t, rules)
 	mustEnable(t, e)
-	feed(t, e, "ssh.shell.start", 1) // +5
+	feed(t, e, "ssh.shell.start", 1) // +6
 
 	v := e.StateView()
 	if v["level"].(float64) != 1 {
@@ -222,14 +222,26 @@ func TestStateView(t *testing.T) {
 	if v["next_exp"].(float64) != float64(NextExp(1)) {
 		t.Fatalf("next_exp = %v", v["next_exp"])
 	}
-	if v["today_earned"].(float64) != 5 {
+	if v["today_earned"].(float64) != 6 {
 		t.Fatalf("today_earned = %v", v["today_earned"])
 	}
-	if v["daily_cap"].(float64) != 200 {
+	if v["daily_cap"].(float64) != 300 {
 		t.Fatalf("daily_cap = %v", v["daily_cap"])
 	}
-	if v["skin_count"].(float64) != 2 {
-		t.Fatalf("skin_count = %v", v["skin_count"])
+	// v2 皮肤清单下发：兜底清单仅 orange-cat（Lv1 解锁）
+	skins, ok := v["skins"].([]map[string]any)
+	if !ok || len(skins) != 1 {
+		t.Fatalf("skins = %#v, 期望 1 款兜底皮肤", v["skins"])
+	}
+	if skins[0]["id"] != DefaultSkinID || skins[0]["unlocked"] != true {
+		t.Fatalf("兜底皮肤应为已解锁的 %q: %+v", DefaultSkinID, skins[0])
+	}
+	meta, ok := v["skin_meta"].(map[string]any)
+	if !ok || meta["frameSize"].(float64) != 32 || meta["frames"].(float64) != 4 {
+		t.Fatalf("skin_meta = %#v", v["skin_meta"])
+	}
+	if _, exists := v["sig"]; exists {
+		t.Fatal("StateView 不应下发签名 sig")
 	}
 }
 
@@ -300,25 +312,53 @@ func TestSetPos(t *testing.T) {
 	}
 }
 
-// TestSetSkin 皮肤索引范围校验。
+// TestSetSkin 皮肤 id 校验（v2：语义字符串 id，兜底清单仅默认款）。
 func TestSetSkin(t *testing.T) {
-	e, _ := newTestEngine(t, DefaultRules()) // SkinCount=2
+	e, _ := newTestEngine(t, DefaultRules())
 	mustEnable(t, e)
 
-	if err := e.SetSkin(0); err != nil {
-		t.Fatalf("SetSkin(0): %v", err)
+	if err := e.SetSkin(DefaultSkinID); err != nil {
+		t.Fatalf("SetSkin(%q): %v", DefaultSkinID, err)
 	}
-	if err := e.SetSkin(1); err != nil {
-		t.Fatalf("SetSkin(1): %v", err)
+	if st := e.State(); st.Skin != DefaultSkinID {
+		t.Fatalf("skin = %q, 期望 %q", st.Skin, DefaultSkinID)
 	}
-	if st := e.State(); st.Skin != 1 {
-		t.Fatalf("skin = %d, 期望 1", st.Skin)
+	// 幂等：重复设置同款不报错
+	if err := e.SetSkin(DefaultSkinID); err != nil {
+		t.Fatalf("重复 SetSkin 应幂等: %v", err)
 	}
-	if err := e.SetSkin(2); err == nil {
-		t.Fatal("SetSkin(2) 应越界")
+	// 不存在的皮肤
+	if err := e.SetSkin("no-such-skin"); err == nil {
+		t.Fatal("不存在的皮肤 id 应被拒绝")
 	}
-	if err := e.SetSkin(-1); err == nil {
-		t.Fatal("SetSkin(-1) 应越界")
+	// 空串
+	if err := e.SetSkin(""); err == nil {
+		t.Fatal("空皮肤 id 应被拒绝")
+	}
+}
+
+// TestSetSkin_Locked 清单内存在但等级未解锁的皮肤应被拒绝。
+func TestSetSkin_Locked(t *testing.T) {
+	skinsJSON := []byte(`{
+		"version": 2, "frameSize": 32, "frames": 4, "fps": 6,
+		"skins": [
+			{"id": "orange-cat", "name": "橘座", "category": "cat", "unlock": 1, "frames": 4, "fps": 6},
+			{"id": "gold-dragon", "name": "金龙", "category": "dragon", "unlock": 20, "frames": 4, "fps": 6}
+		]
+	}`)
+	e, _ := newTestEngineSkins(t, DefaultRules(), skinsJSON)
+	mustEnable(t, e) // Lv1
+
+	err := e.SetSkin("gold-dragon") // 需要 Lv20
+	if err == nil {
+		t.Fatal("未解锁皮肤应被拒绝")
+	}
+	if !strings.Contains(err.Error(), "Lv20") {
+		t.Fatalf("错误信息应提示解锁等级: %v", err)
+	}
+	// 清单内已解锁的皮肤正常
+	if err := e.SetSkin("orange-cat"); err != nil {
+		t.Fatalf("SetSkin(orange-cat): %v", err)
 	}
 }
 
@@ -387,7 +427,7 @@ func TestLedger_MaxTrim(t *testing.T) {
 		t.Fatalf("流水应裁剪到 2 条, 实际 %d", len(st.Ledger))
 	}
 	// 保留最新 2 条：ts 递增，第 1 条最旧应被丢弃
-	if st.Ledger[0].Exp != 5 || st.Ledger[1].Exp != 5 {
+	if st.Ledger[0].Exp != 6 || st.Ledger[1].Exp != 6 {
 		t.Fatalf("流水内容异常: %+v", st.Ledger)
 	}
 }
@@ -414,8 +454,8 @@ func TestClose_Idempotent(t *testing.T) {
 	if err := json.Unmarshal(raw, &disk); err != nil {
 		t.Fatalf("解析失败: %v", err)
 	}
-	if disk.TotalEarned != 5 {
-		t.Fatalf("落盘 TotalEarned = %d, 期望 5", disk.TotalEarned)
+	if disk.TotalEarned != 6 {
+		t.Fatalf("落盘 TotalEarned = %d, 期望 6", disk.TotalEarned)
 	}
 }
 
@@ -425,7 +465,7 @@ func TestNewEngine_MissingDir(t *testing.T) {
 	path := filepath.Join(dir, "pet.json")
 	key := make([]byte, 32)
 
-	e, err := NewEngine(DefaultRules(), path, key)
+	e, err := NewEngine(DefaultRules(), path, key, nil)
 	if err != nil {
 		t.Fatalf("NewEngine: %v", err)
 	}
@@ -440,7 +480,7 @@ func TestNewEngine_MissingDir(t *testing.T) {
 
 // TestNewEngine_EmptyDataPath 空路径直接报错。
 func TestNewEngine_EmptyDataPath(t *testing.T) {
-	if _, err := NewEngine(DefaultRules(), "", make([]byte, 32)); err == nil {
+	if _, err := NewEngine(DefaultRules(), "", make([]byte, 32), nil); err == nil {
 		t.Fatal("空 dataPath 应报错")
 	}
 }

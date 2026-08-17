@@ -9,7 +9,7 @@
 [![Go Version](https://img.shields.io/badge/Go-1.20%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-4F4F4F)](#)
 [![License](https://img.shields.io/badge/License-Internal%20Use-orange)](#)
-[![Status](https://img.shields.io/badge/Status-v0.14-success)](#)
+[![Status](https://img.shields.io/badge/Status-v0.15-success)](#)
 [![Dependencies](https://img.shields.io/badge/Deps-zero%20runtime-2ea44f)](#)
 [![Binary](https://img.shields.io/badge/Single%20Exe-%E2%9C%93-success)](#)
 [![SSH](https://img.shields.io/badge/SSH-5%20compat%20profile-6f42c1)](#)
@@ -637,9 +637,9 @@ GOOS=windows GOARCH=amd64 CGO_ENABLED=0 \
   -o Kairo_win10.exe .
 
 # 或用脚本（自动检测 vendor/ 是否存在）
-./scripts/build_windows_amd64.sh v0.14.0
-./scripts/package_windows.sh v0.14.0
-# → dist/kairo-v0.14.0-windows.zip
+./scripts/build_windows_amd64.sh v0.15.0
+./scripts/package_windows.sh v0.15.0
+# → dist/kairo-v0.15.0-windows.zip
 ```
 
 ### 编译 Win7 兼容版
@@ -655,8 +655,8 @@ tar -C ~/sdk/go120 -xzf /tmp/go1.20.14.darwin-amd64.tar.gz --strip-components=1
 
 # 2) 编译（脚本同样会自动 -mod=vendor）
 export GO120_HOME=~/sdk/go120
-./scripts/build_windows_amd64_win7_go120.sh v0.14.0
-# → dist/kairo-v0.14.0-win7/Kairo_win7.exe
+./scripts/build_windows_amd64_win7_go120.sh v0.15.0
+# → dist/kairo-v0.15.0-win7/Kairo_win7.exe
 ```
 
 ### 发版给同事要打什么包
@@ -1040,7 +1040,33 @@ v0.11-rc1 起所有 `/api/*`（除 `/api/license/*`）都被 license 网关拦�
 
 ## <img src="docs/section-icons/changelog.svg" width="22" height="22" align="absmiddle"> Release Notes
 
-### v0.14（当前）— 投喂作者 + About 性能优化 + endpointclient 抽取
+### v0.15（当前）— 宠物养成 + 定时任务 + SSH/HTTP 增强
+
+#### 宠物系统
+
+- **v1 养成模型接入完成**：新增 `internal/pet/*` 与 `/api/pet/*` 后端，支持解锁、经验计算、升级进化、皮肤解锁/切换、改名、拖拽坐标持久化、排行榜同步（`/api/pet/sync`）与本地展示回退。
+- **官方规则**：未解锁零痕迹；10 秒内 About 点击 6 次解锁；会话/日限与 op 白名单防刷；名字长度控制（<=16，去控制字符）；皮肤 id 服务端校验；排行榜只以服务器认可分（`board_exp`）作为对外口径。
+- **排序页联动**：在 sponsor 页面提供宠物榜入口，未配置服务端时展示本地状态与友好提示，不误发敏感请求。
+
+#### 定时任务与 SSH 配置
+
+- 新增 `internal/schedtask/*` + `internal/cronx/*`，支持任务定义、执行、持久化与查看；前端页面 `web/pages/tasks.js` 提供任务列表与状态动作。
+- 新增 SSH 配置档案模块 `internal/sshclient/profilestore`，统一 profile 读写路径，提升连接配置一致性。
+- `internal/schedtask` 与 `internal/reminder` 形成统一提醒闭环。
+
+#### HTTP / WebSocket
+
+- 增强 `internal/httpserver/handlers_http_curl.go` 与 `handlers_http_ws.go`，补齐请求链路与回显能力；web 侧 `web/pages/http.js` 同步增强测试体验。
+- 加强 SOAP/WSDL/日志链路，便于内部联调与故障回溯。
+
+#### Bug 修复
+
+- 修复 WebService 相关逻辑（缓存、重提交、时间类型兼容）及 sponsor 榜单异步失败文案不回显内部地址。
+- 修复 reminder 更新字段合并与空字符串清空问题。
+- 修复 Win7 emoji 显示、HTTP 美化按钮与 about 渐变渲染细节兼容性。
+- 完成一次深度修复轮次，覆盖凭据外置、并发安全、错误泄露、XML 注入路径与前端健壮性。
+
+### v0.14 — 投喂作者 + About 性能优化 + endpointclient 抽取
 
 #### 投喂作者
 
@@ -1053,7 +1079,7 @@ v0.11-rc1 起所有 `/api/*`（除 `/api/license/*`）都被 license 网关拦�
 #### About 性能优化
 
 - 12 section 用 IntersectionObserver 懒渲染 + 批量挂载 + `content-visibility: auto`，首屏 DOM 节点 -95%
-- 全局版本号对齐：VERSION / `httpserver.Version` / `web/pages/about.js` / `index.html` footer / `app.js` info，五处都升 v0.14
+- 全局版本号对齐：VERSION / `httpserver.Version` / `web/pages/about.js` / `index.html` footer / `app.js` info，六处都升 v0.15（配置文件仍保留历史配置）
 - 顶部 status 区域优化
 
 #### Bug 修复

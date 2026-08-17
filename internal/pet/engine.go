@@ -21,8 +21,16 @@ const saveDebounce = 30 * time.Second
 // sessionStaleAfter 会话表清理阈值：开始时间超过 24h 视为孤儿会话。
 const sessionStaleAfter = 24 * time.Hour
 
-// sessionAwardCap 单会话时长奖励封顶（+5 经验）。
-const sessionAwardCap = int64(5)
+// sessionAwardCap 单会话时长奖励封顶（+8 经验，v2 从 5 上调）。
+const sessionAwardCap = int64(8)
+
+// sessionMinDuration 会话真实性门槛：时长不足 3min 的会话不计时长奖励
+// （防"秒开秒关"刷 ssh.shell.start + 会话分）。
+const sessionMinDuration = 3 * time.Minute
+
+// rapidRepeatWindow 频次异常窗口：同 op+target 两次计分间隔小于该值视为脚本
+// 行为，本次丢弃并重置该 key 冷却（惩罚）。
+const rapidRepeatWindow = 2 * time.Second
 
 // Engine 宠物引擎：订阅 audit 事件、累计经验、维护状态并防抖落盘。
 //
@@ -33,6 +41,7 @@ type Engine struct {
 	rules    Rules
 	dataPath string
 	sigKey   []byte
+	skins    *SkinCatalog
 
 	state *State
 
@@ -47,6 +56,9 @@ type Engine struct {
 	cooldowns map[string]time.Time
 	sessions  map[string]time.Time
 
+	// 防刷：最近一次计分时间（同 cooldowns 的 key），用于 2s 频次异常检测
+	lastAward map[string]time.Time
+
 	// 防抖落盘控制
 	needSave  bool
 	dirtyCh   chan struct{}
@@ -57,12 +69,15 @@ type Engine struct {
 
 // NewEngine 构造引擎；立即从 dataPath 加载已有状态（含 enabled/等级/统计）。
 //
+// skinsJSON 是 web/img/pet/skins/skins.json 的内容（随二进制 embed），
+// 传 nil/空时退回内置最小清单（见 LoadSkins）。
+//
 // 加载失败（文件损坏 / 签名不匹配）不返回错误：先回退 <path>.bak，
 // 仍失败则新建状态（日志写 stderr）。只有密钥生成失败 / 数据目录不可写才返回 error。
 //
 // sigKey 为空时：读取 <pet.json 所在目录>/.petkey，不存在则生成 32 随机字节写入
 // （模式 0600，目录 0755，跟随 internal/credentials 的 .credkey 模式）。
-func NewEngine(rules Rules, dataPath string, sigKey []byte) (*Engine, error) {
+func NewEngine(rules Rules, dataPath string, sigKey []byte, skinsJSON []byte) (*Engine, error) {
 	if dataPath == "" {
 		return nil, errors.New("pet: dataPath 不能为空")
 	}
@@ -84,8 +99,10 @@ func NewEngine(rules Rules, dataPath string, sigKey []byte) (*Engine, error) {
 		rules:         normalizeRules(rules),
 		dataPath:      dataPath,
 		sigKey:        key,
+		skins:         LoadSkins(skinsJSON),
 		cooldowns:     make(map[string]time.Time),
 		sessions:      make(map[string]time.Time),
+		lastAward:     make(map[string]time.Time),
 		dailyOpCounts: make(map[string]int64),
 		dirtyCh:       make(chan struct{}, 1),
 		stopCh:        make(chan struct{}),
@@ -122,9 +139,6 @@ func normalizeRules(r Rules) Rules {
 	d := DefaultRules()
 	if r.MaxLedger <= 0 {
 		r.MaxLedger = d.MaxLedger
-	}
-	if r.SkinCount <= 0 {
-		r.SkinCount = d.SkinCount
 	}
 	if r.SessionExpMinutes <= 0 {
 		r.SessionExpMinutes = d.SessionExpMinutes
@@ -226,7 +240,7 @@ func (e *Engine) stateCopyLocked() *State {
 
 // StateView 供 HTTP 返回：State 拷贝 + 计算字段。
 // JSON 字段名：next_exp（下一级所需经验阈值）、today_earned（今日已得）、
-// daily_cap（每日上限）、skin_count（皮肤数量）。
+// daily_cap（每日上限）、skins（皮肤清单 + 每款解锁状态）、skin_meta（精灵图元信息）。
 func (e *Engine) StateView() map[string]any {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -248,7 +262,8 @@ func (e *Engine) StateView() map[string]any {
 	m["next_exp"] = float64(NextExp(e.state.Level))
 	m["today_earned"] = float64(earned)
 	m["daily_cap"] = float64(e.rules.DailyCap)
-	m["skin_count"] = float64(e.rules.SkinCount)
+	m["skins"] = e.skins.CatalogView(e.state.Level)
+	m["skin_meta"] = e.skins.MetaView()
 	return m
 }
 
@@ -286,19 +301,24 @@ func (e *Engine) SetPos(x, y float64) error {
 	return nil
 }
 
-// SetSkin 保存皮肤索引：0 ≤ idx < rules.SkinCount，否则拒绝。
-func (e *Engine) SetSkin(idx int) error {
+// SetSkin 保存皮肤（v2：语义 id）。校验：清单内存在 + 当前等级已解锁。
+func (e *Engine) SetSkin(id string) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if idx < 0 || idx >= e.rules.SkinCount {
-		return fmt.Errorf("pet: 皮肤索引越界（允许 0..%d）", e.rules.SkinCount-1)
+	if err := e.skins.ValidateSkin(id, e.state.Level); err != nil {
+		return err
 	}
-	if e.state.Skin == idx {
+	if e.state.Skin == id {
 		return nil
 	}
-	e.state.Skin = idx
+	e.state.Skin = id
 	e.markDirtyLocked()
 	return nil
+}
+
+// Skins 返回皮肤清单（只读视图拷贝）。
+func (e *Engine) Skins() *SkinCatalog {
+	return e.skins
 }
 
 // ---------- 防抖落盘 ----------
@@ -428,24 +448,48 @@ func (e *Engine) onOpLocked(ev audit.OpEvent) {
 	e.award(op, target, exp, now, false, false)
 }
 
-// award 计分管线：冷却 → 每日检查 → 上限 → 经验/统计/流水/升级。
-// bypassCooldown / bypassOpMax 供合成 op（会话时长）跳过对应关卡。
+// award 计分管线（v2 防刷三层，见 docs/PET-SKINS-V2-DESIGN.md §6）：
+//
+//  1. 频次异常：同 op+target 距上次计分 < 2s → 丢弃 + 重置该 key 冷却（惩罚）；
+//  2. 冷却（含动态加倍：单 op 当日用量 ≥60% 上限 → 窗口×2；≥85% → ×4）；
+//  3. 每日上限 / 单 op 每日频率上限；
+//  4. 计分：经验、统计、流水、升级循环、进化阶段重算，最后触发防抖落盘。
+//
+// bypassCooldown / bypassOpMax 供合成 op（会话时长）跳过对应关卡；
+// 频次异常检测不 bypass（合成 op 间隔天然 > 2s，不会被误伤）。
 func (e *Engine) award(op, target string, exp int64, now time.Time, bypassCooldown, bypassOpMax bool) {
-	// 冷却（合成 op 绕过）
+	key := op + "|" + target
+
+	// 层 1：频次异常（脚本行为）丢弃 + 惩罚
+	if lt, ok := e.lastAward[key]; ok && now.Sub(lt) < rapidRepeatWindow {
+		e.cooldowns[key] = now // 重置冷却：惩罚窗口从现在重新起算
+		return
+	}
+
+	// 跨天重置（先于上限与动态冷却：dailyOpCounts 必须是当日数据）
+	e.checkDayLocked(now)
+
+	// 层 2：冷却（合成 op 绕过）
 	if !bypassCooldown && e.rules.CooldownMinutes > 0 {
-		key := op + "|" + target
-		if last, ok := e.cooldowns[key]; ok &&
-			now.Sub(last) < time.Duration(e.rules.CooldownMinutes)*time.Minute {
+		window := time.Duration(e.rules.CooldownMinutes) * time.Minute
+		// 动态冷却：越接近单 op 每日上限，窗口越长
+		if max, ok := e.rules.OpDailyMax[op]; ok && max > 0 {
+			used := e.dailyOpCounts[op]
+			switch {
+			case used >= max*85/100:
+				window *= 4
+			case used >= max*60/100:
+				window *= 2
+			}
+		}
+		if last, ok := e.cooldowns[key]; ok && now.Sub(last) < window {
 			return
 		}
 		e.cooldowns[key] = now
 		e.pruneCooldownsLocked(now)
 	}
 
-	// 跨天重置（必须在上限判断之前）
-	e.checkDayLocked(now)
-
-	// 每日上限
+	// 层 3：每日上限
 	if e.todayEarned >= e.rules.DailyCap {
 		return
 	}
@@ -456,7 +500,8 @@ func (e *Engine) award(op, target string, exp int64, now time.Time, bypassCooldo
 		}
 	}
 
-	// 计分
+	// 层 4：计分
+	e.lastAward[key] = now
 	e.todayEarned += exp
 	e.dailyOpCounts[op]++
 	e.state.TotalEarned += exp
@@ -464,7 +509,7 @@ func (e *Engine) award(op, target string, exp int64, now time.Time, bypassCooldo
 	e.bumpStat(op, exp)
 	e.appendLedger(op, now, exp)
 
-	// 升级循环：状态内经验超过阈值就扣掉升一级
+	// 升级循环：状态内经验超过阈值就扣掉升一级（曲线无上限，等级无上限）
 	e.state.Exp += exp
 	next := NextExp(e.state.Level)
 	for e.state.Exp >= next {
@@ -478,7 +523,8 @@ func (e *Engine) award(op, target string, exp int64, now time.Time, bypassCooldo
 }
 
 // settleSession 结算 ssh.shell.end 的会话时长奖励。
-// 合成 op "ssh.session.time"：每满 SessionExpMinutes 分钟 +1，单会话封顶 +5；
+// 合成 op "ssh.session.time"：每满 SessionExpMinutes 分钟 +1，单会话封顶 +8；
+// 会话时长不足 3min 不结算（防秒开秒关刷分）；
 // 走同一条计分管线，但绕过冷却与单 op 频率上限。
 func (e *Engine) settleSession(target string, now time.Time) {
 	if e.rules.SessionExpMinutes <= 0 {
@@ -492,6 +538,10 @@ func (e *Engine) settleSession(target string, now time.Time) {
 	dur := now.Sub(start)
 	if dur < 0 {
 		// 时钟回拨：防御性丢弃
+		return
+	}
+	if dur < sessionMinDuration {
+		// 真实性门槛：短会话不计时长奖励
 		return
 	}
 	award := int64(dur.Minutes()) / int64(e.rules.SessionExpMinutes)
@@ -543,13 +593,15 @@ func (e *Engine) pruneSessionsLocked(now time.Time) {
 
 // ---------- 辅助 ----------
 
-// NextExp 升到下一级所需经验（成长曲线：100 * level^1.5）。
-// L1→2 需 100，L2→3 需 283，L3→4 需 520…
+// NextExp 升到下一级所需经验（成长曲线：80 * level^1.2，等级无上限）。
+// L1→2 需 80，L10→11 约 1,266，L50→51 约 10,456…
+// 曲线设计（见 docs/PET-SKINS-V2-DESIGN.md §5）：满额天 Lv8≈4 天 / Lv16≈13 天 /
+// Lv50≈100 天；普通用户（日均 ~80 分）Lv8 约 2 周，首个进化目标可达。
 func NextExp(level int) int64 {
 	if level < 1 {
 		level = 1
 	}
-	return int64(math.Round(100 * math.Pow(float64(level), 1.5)))
+	return int64(math.Round(80 * math.Pow(float64(level), 1.2)))
 }
 
 // stageForLevel 按等级区间查进化阶段；未匹配默认 "egg"。

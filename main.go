@@ -280,9 +280,15 @@ func main() {
 		log.Printf("license: 启动检查未通过, 前端将弹激活窗 (err=%v)", err)
 	}
 
-	// 7.3 v0.16 宠物彩蛋引擎：订阅 audit（未解锁时引擎内部 no-op gate 零记录），
-	// 状态落盘 data/pet.json。初始化失败只记日志（宠物功能关闭），不阻断启动。
-	petEngine, perr := pet.NewEngine(pet.RulesFromConfig(cfgMgr.Get().Pet), filepath.Join(cfgMgr.Get().DataDir(), "pet.json"), nil)
+	// 7.3 v2 宠物彩蛋引擎：订阅 audit（未解锁时引擎内部 no-op gate 零记录），
+	// 状态落盘 data/pet.json。皮肤清单读 embed 的 skins.json（50 款精灵图）。
+	// 初始化失败只记日志（宠物功能关闭），不阻断启动。
+	skinsJSON, skerr := webFS.ReadFile("web/img/pet/skins/skins.json")
+	if skerr != nil {
+		log.Printf("pet: 读取皮肤清单失败（将退回内置最小清单）: %v", skerr)
+		skinsJSON = nil
+	}
+	petEngine, perr := pet.NewEngine(pet.RulesFromConfig(cfgMgr.Get().Pet), filepath.Join(cfgMgr.Get().DataDir(), "pet.json"), nil, skinsJSON)
 	if perr != nil {
 		log.Printf("pet: 引擎初始化失败（宠物功能关闭）: %v", perr)
 	} else {
@@ -427,6 +433,9 @@ func main() {
 	tray.Run(tray.Config{
 		Tooltip:       "Kairo",
 		OnOpenBrowser: func() { openBrowser(url) },
+		OnOpenPet: func() {
+			openFloatingPetWindow(url + "/static/pet-float.html")
+		},
 		OnQuit: func() {
 			log.Println("收到退出请求，正在关闭服务...")
 			shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second)

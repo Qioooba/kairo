@@ -6,14 +6,14 @@ import (
 	"kairo/internal/config"
 )
 
-// TestDefaultRules 内置默认值与设计文档 §5.2/§5.3 对齐。
+// TestDefaultRules 内置默认值与设计文档（PET-SKINS-V2-DESIGN §4/§5）对齐。
 func TestDefaultRules(t *testing.T) {
 	r := DefaultRules()
-	if r.DailyCap != 200 {
-		t.Fatalf("DailyCap = %d, 期望 200", r.DailyCap)
+	if r.DailyCap != 300 {
+		t.Fatalf("DailyCap = %d, 期望 300", r.DailyCap)
 	}
-	if r.CooldownMinutes != 60 {
-		t.Fatalf("CooldownMinutes = %d, 期望 60", r.CooldownMinutes)
+	if r.CooldownMinutes != 30 {
+		t.Fatalf("CooldownMinutes = %d, 期望 30", r.CooldownMinutes)
 	}
 	if r.SessionExpMinutes != 10 {
 		t.Fatalf("SessionExpMinutes = %d, 期望 10", r.SessionExpMinutes)
@@ -27,42 +27,49 @@ func TestDefaultRules(t *testing.T) {
 	if r.MaxLedger != 2000 {
 		t.Fatalf("MaxLedger = %d, 期望 2000", r.MaxLedger)
 	}
-	if r.SkinCount != 2 {
-		t.Fatalf("SkinCount = %d, 期望 2", r.SkinCount)
-	}
 
-	// ExpRules 白名单抽查 + 未列出 = 0
-	if r.ExpRules["ssh.shell.start"] != 5 {
-		t.Fatalf("ssh.shell.start = %d, 期望 5", r.ExpRules["ssh.shell.start"])
+	// ExpRules 权重分档抽查 + 未列出 = 0
+	if r.ExpRules["ssh.shell.start"] != 6 {
+		t.Fatalf("ssh.shell.start = %d, 期望 6（核心-会话档）", r.ExpRules["ssh.shell.start"])
 	}
-	if r.ExpRules["files.download"] != 1 {
-		t.Fatalf("files.download = %d, 期望 1", r.ExpRules["files.download"])
+	if r.ExpRules["compare.deep_check"] != 4 {
+		t.Fatalf("compare.deep_check = %d, 期望 4（高价值档）", r.ExpRules["compare.deep_check"])
 	}
-	if r.ExpRules["compare.deep_check"] != 2 {
-		t.Fatalf("compare.deep_check = %d, 期望 2", r.ExpRules["compare.deep_check"])
+	if r.ExpRules["files.download"] != 2 {
+		t.Fatalf("files.download = %d, 期望 2（中价值档）", r.ExpRules["files.download"])
+	}
+	if r.ExpRules["http.request"] != 1 {
+		t.Fatalf("http.request = %d, 期望 1（轻价值档）", r.ExpRules["http.request"])
 	}
 	if _, ok := r.ExpRules["files.list"]; ok {
 		t.Fatal("files.list 不应在白名单")
 	}
 
-	// StageLevels 区间
-	if r.StageLevels["egg"] != [2]int{1, 5} {
-		t.Fatalf("egg = %v, 期望 [1 5]", r.StageLevels["egg"])
+	// StageLevels 区间（等级无上限：mythic 到 MaxInt32）
+	if r.StageLevels["egg"] != [2]int{1, 3} {
+		t.Fatalf("egg = %v, 期望 [1 3]", r.StageLevels["egg"])
 	}
-	if r.StageLevels["mythic"] != [2]int{31, 999} {
-		t.Fatalf("mythic = %v, 期望 [31 999]", r.StageLevels["mythic"])
+	if r.StageLevels["hatchling"] != [2]int{4, 8} {
+		t.Fatalf("hatchling = %v, 期望 [4 8]", r.StageLevels["hatchling"])
+	}
+	if r.StageLevels["grown"] != [2]int{9, 15} {
+		t.Fatalf("grown = %v, 期望 [9 15]", r.StageLevels["grown"])
+	}
+	if r.StageLevels["mythic"] != [2]int{16, mythicNoCap} {
+		t.Fatalf("mythic = %v, 期望 [16 %d]", r.StageLevels["mythic"], mythicNoCap)
 	}
 
 	// OpDailyMax
-	if r.OpDailyMax["ssh.shell.start"] != 100 {
-		t.Fatalf("ssh.shell.start 日上限 = %d, 期望 100", r.OpDailyMax["ssh.shell.start"])
+	if r.OpDailyMax["ssh.shell.start"] != 40 {
+		t.Fatalf("ssh.shell.start 日上限 = %d, 期望 40", r.OpDailyMax["ssh.shell.start"])
 	}
-	if r.OpDailyMax["http.request"] != 200 {
-		t.Fatalf("http.request 日上限 = %d, 期望 200", r.OpDailyMax["http.request"])
+	if r.OpDailyMax["http.request"] != 150 {
+		t.Fatalf("http.request 日上限 = %d, 期望 150", r.OpDailyMax["http.request"])
 	}
 }
 
 // TestRulesFromConfig_Override 非零配置字段覆盖默认值；map 整体替换。
+// SkinCount 已废弃：配置值被容忍但不再进入 Rules。
 func TestRulesFromConfig_Override(t *testing.T) {
 	notifyFalse := false
 	pc := config.PetConfig{
@@ -75,7 +82,7 @@ func TestRulesFromConfig_Override(t *testing.T) {
 		OpDailyMax:        map[string]int64{"custom.op": 3},
 		StatsKeepDays:     30,
 		StatsKeepMonths:   3,
-		SkinCount:         9,
+		SkinCount:         9, // v2 已废弃，应被忽略
 	}
 	r := RulesFromConfig(pc)
 
@@ -85,8 +92,8 @@ func TestRulesFromConfig_Override(t *testing.T) {
 	if r.NotifyUp {
 		t.Fatal("NotifyUp 应为 false")
 	}
-	if r.StatsKeepDays != 30 || r.StatsKeepMonths != 3 || r.SkinCount != 9 {
-		t.Fatalf("保留窗口/皮肤数覆盖失败: %+v", r)
+	if r.StatsKeepDays != 30 || r.StatsKeepMonths != 3 {
+		t.Fatalf("保留窗口覆盖失败: %+v", r)
 	}
 	// map 整体替换：只含配置项
 	if len(r.ExpRules) != 1 || r.ExpRules["custom.op"] != 99 {
@@ -109,8 +116,7 @@ func TestRulesFromConfig_ZeroConfig(t *testing.T) {
 	r := RulesFromConfig(config.PetConfig{})
 	d := DefaultRules()
 	if r.DailyCap != d.DailyCap || r.CooldownMinutes != d.CooldownMinutes ||
-		r.SessionExpMinutes != d.SessionExpMinutes || r.SkinCount != d.SkinCount ||
-		r.MaxLedger != d.MaxLedger {
+		r.SessionExpMinutes != d.SessionExpMinutes || r.MaxLedger != d.MaxLedger {
 		t.Fatalf("零配置应等于默认, 实际 %+v", r)
 	}
 	if len(r.ExpRules) != len(d.ExpRules) || len(r.StageLevels) != len(d.StageLevels) {
@@ -152,7 +158,7 @@ func TestDefaultRules_DeepCopy(t *testing.T) {
 	r1 := DefaultRules()
 	r1.ExpRules["ssh.shell.start"] = 1234
 	r2 := DefaultRules()
-	if r2.ExpRules["ssh.shell.start"] != 5 {
+	if r2.ExpRules["ssh.shell.start"] != 6 {
 		t.Fatal("DefaultRules 的 map 应每次新建")
 	}
 }

@@ -42,7 +42,7 @@ func restorePetSyncVars(t *testing.T) {
 // 命名带 sync 前缀, 避免跟 engine_test.go 的 newTestEngine 撞名。
 func newSyncTestEngine(t *testing.T) *Engine {
 	t.Helper()
-	e, err := NewEngine(DefaultRules(), filepath.Join(t.TempDir(), "pet.json"), nil)
+	e, err := NewEngine(DefaultRules(), filepath.Join(t.TempDir(), "pet.json"), nil, nil)
 	if err != nil {
 		t.Fatalf("NewEngine: %v", err)
 	}
@@ -166,7 +166,7 @@ func TestSyncNow_RequestShape(t *testing.T) {
 		t.Fatalf("Enable: %v", err)
 	}
 	// State() 返回深拷贝, 直接改没有用 —— 走 OnOp 白名单 op 产生真实流水 + dirty
-	// (files.download 在默认 ExpRules 表内, 1 分/次, 会 append ledger 并置 Dirty)
+	// (files.download 在默认 ExpRules 表内, v2 中价值档 2 分/次, 会 append ledger 并置 Dirty)
 	e.OnOp(audit.OpEvent{Op: "files.download"})
 	if !e.State().Dirty {
 		t.Fatal("OnOp 后 Dirty 应为 true")
@@ -219,8 +219,8 @@ func TestSyncNow_RequestShape(t *testing.T) {
 	if entry["op"] != "files.download" {
 		t.Errorf("ledger[0].op 应为 files.download, got=%v", entry["op"])
 	}
-	if entry["exp"] != float64(1) {
-		t.Errorf("ledger[0].exp 应为 1, got=%v", entry["exp"])
+	if entry["exp"] != float64(2) {
+		t.Errorf("ledger[0].exp 应为 2, got=%v", entry["exp"])
 	}
 	if gotBody["ts"] == "" {
 		t.Errorf("ts 缺失: %v", gotBody)

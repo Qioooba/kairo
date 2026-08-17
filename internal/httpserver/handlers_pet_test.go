@@ -23,10 +23,17 @@ import (
 )
 
 // newTestServerWithPet 构造带宠物引擎的 Server (引擎数据落 t.TempDir)。
+// 皮肤清单传 nil（引擎退回内置最小清单，仅默认款 orange-cat）。
 func newTestServerWithPet(t *testing.T) (*Server, *pet.Engine) {
+	return newTestServerWithPetSkins(t, nil)
+}
+
+// newTestServerWithPetSkins 同 newTestServerWithPet，但允许指定 skins.json 内容
+// （用于测未解锁皮肤的 400 分支）。
+func newTestServerWithPetSkins(t *testing.T, skinsJSON []byte) (*Server, *pet.Engine) {
 	t.Helper()
 	srv, _, _, _ := newTestServer(t)
-	eng, err := pet.NewEngine(pet.DefaultRules(), filepath.Join(t.TempDir(), "pet.json"), nil)
+	eng, err := pet.NewEngine(pet.DefaultRules(), filepath.Join(t.TempDir(), "pet.json"), nil, skinsJSON)
 	if err != nil {
 		t.Fatalf("NewEngine: %v", err)
 	}
@@ -194,27 +201,64 @@ func TestPetPos_Validation(t *testing.T) {
 
 // ---------- /api/pet/skin ----------
 
-// TestPetSkin_Validation 越界皮肤索引 → 400; 正常 → 200 ok。
+// TestPetSkin_Validation v2：语义 id。不存在 → 400; 清单内已解锁 → 200 ok。
 func TestPetSkin_Validation(t *testing.T) {
 	srv, _ := newTestServerWithPet(t)
 	if w := doRequest(srv, "POST", "/api/pet/enable", nil); w.Code != 200 {
 		t.Fatalf("enable: %d", w.Code)
 	}
 
-	// 越界皮肤索引: 引擎应拒绝 (默认 SkinCount=2, 合法 0..1); 若引擎选择
-	// mod 回卷 (200) 也接受, 但不能 500。引擎落地后按实际行为收紧。
-	if w := doRequest(srv, "POST", "/api/pet/skin", map[string]any{"skin": 99}); w.Code != 400 && w.Code != 200 {
-		t.Errorf("越界皮肤应 400(拒) 或 200(回卷), got=%d body=%s", w.Code, w.Body.String())
+	// 不存在的皮肤 id（兜底清单仅 orange-cat）
+	if w := doRequest(srv, "POST", "/api/pet/skin", map[string]any{"skin": "no-such-skin"}); w.Code != 400 {
+		t.Errorf("不存在的皮肤应 400, got=%d body=%s", w.Code, w.Body.String())
 	}
 
-	// 正常
-	w := doRequest(srv, "POST", "/api/pet/skin", map[string]any{"skin": 0})
+	// 正常（默认款 Lv1 解锁）
+	w := doRequest(srv, "POST", "/api/pet/skin", map[string]any{"skin": "orange-cat"})
 	if w.Code != 200 {
 		t.Fatalf("正常皮肤应 200, got=%d body=%s", w.Code, w.Body.String())
 	}
 	got := decodeJSON(t, w.Body.Bytes())
 	if got["ok"] != true {
 		t.Errorf("skin 响应应带 ok:true, got=%v", got)
+	}
+}
+
+// TestPetSkin_Locked 清单内存在但等级未解锁 → 400（错误信息带解锁等级）。
+func TestPetSkin_Locked(t *testing.T) {
+	skinsJSON := []byte(`{
+		"version": 2, "frameSize": 32, "frames": 4, "fps": 6,
+		"skins": [
+			{"id": "orange-cat", "name": "橘座", "category": "cat", "unlock": 1, "frames": 4, "fps": 6},
+			{"id": "gold-dragon", "name": "金龙", "category": "dragon", "unlock": 20, "frames": 4, "fps": 6}
+		]
+	}`)
+	srv, _ := newTestServerWithPetSkins(t, skinsJSON)
+	if w := doRequest(srv, "POST", "/api/pet/enable", nil); w.Code != 200 {
+		t.Fatalf("enable: %d", w.Code)
+	}
+
+	w := doRequest(srv, "POST", "/api/pet/skin", map[string]any{"skin": "gold-dragon"})
+	if w.Code != 400 {
+		t.Fatalf("未解锁皮肤应 400, got=%d body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "Lv20") {
+		t.Errorf("错误信息应提示解锁等级: %s", w.Body.String())
+	}
+
+	// state 下发的清单带解锁状态
+	w2 := doRequest(srv, "GET", "/api/pet/state", nil)
+	if w2.Code != 200 {
+		t.Fatalf("state: %d", w2.Code)
+	}
+	st := decodeJSON(t, w2.Body.Bytes())
+	skins, ok := st["skins"].([]any)
+	if !ok || len(skins) != 2 {
+		t.Fatalf("state.skins 应 2 款, got=%#v", st["skins"])
+	}
+	gold := skins[1].(map[string]any) // 按 unlock 排序：orange-cat(Lv1) 在前
+	if gold["id"] != "gold-dragon" || gold["unlocked"] != false {
+		t.Fatalf("gold-dragon 应未解锁: %+v", gold)
 	}
 }
 

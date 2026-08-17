@@ -26,6 +26,9 @@ func run(cfg Config) {
 		}
 
 		mOpen := systray.AddMenuItem("打开浏览器", "在默认浏览器中打开")
+		mOpenPet := systray.AddMenuItem("显示宠物", "在桌面上打开悬浮宠物窗口")
+
+		systray.AddSeparator()
 
 		// v1.0 便笺提醒的"暂停今日 / 恢复"菜单项。
 		// label 动态：未暂停时显示"暂停今日提醒"，暂停后切到"恢复提醒"。
@@ -51,6 +54,10 @@ func run(cfg Config) {
 				case <-mOpen.ClickedCh:
 					if cfg.OnOpenBrowser != nil {
 						cfg.OnOpenBrowser()
+					}
+				case <-mOpenPet.ClickedCh:
+					if cfg.OnOpenPet != nil {
+						cfg.OnOpenPet()
 					}
 				case <-pauseCh:
 					if !paused {

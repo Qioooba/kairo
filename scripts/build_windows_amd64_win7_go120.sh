@@ -36,7 +36,7 @@ if [[ -n "${1:-}" ]]; then
 elif [[ -f VERSION ]]; then
   VER="$(tr -d '[:space:]' < VERSION)"
 else
-  VER="v0.14"
+  VER="v0.15"
 fi
 OUT_DIR="dist/kairo-${VER}-win7"
 mkdir -p "${OUT_DIR}"

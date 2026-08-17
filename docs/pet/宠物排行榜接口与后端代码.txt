@@ -1,0 +1,531 @@
+================================================================================
+Kairo 宠物排行榜 · 接口说明 + Oracle 建表 + Java 后端代码 (v0.16)
+================================================================================
+
+一、接口地址与传参
+--------------------------------------------------------------------------------
+
+【请求方式】POST
+【地址】    /credit/httpInterface   (走你们现有的 httpInterface 网关, 与投喂作者排行榜同款)
+【Query】   channelID=PC&serviceID=KairoPetLeaderboardAction&seqNo=<秒级时间戳>
+【Header】  Authorization: Basic <auth>   (与现有 KairoSponsorLeaderboardAction 同一个 Basic Auth)
+
+示例完整 URL:
+    http://66.0.34.199:9080/credit/httpInterface?channelID=PC&serviceID=KairoPetLeaderboardAction&seqNo=1755500000
+
+--------------------------------------------------------------------------------
+请求体 (Body, JSON, 由客户端 Go 端 internal/pet/sync.go 发送):
+--------------------------------------------------------------------------------
+{
+  "user_id":    "3f2a...32hex",          // 本机宠物标识 (客户端生成的 uuid, 排行榜主键)
+  "name":       "小K",                   // 宠物名字 (用户自己起的, 最长 16 个字符)
+  "level":      3,                       // 宠物等级
+  "stage":      "hatchling",             // 进化阶段: egg / hatchling / grown / mythic
+  "exp_total":  1240,                    // 历史累计经验 (仅展示用, 不参与排名)
+  "board_exp":  1180,                    // 客户端上次被服务器认可的分数 (仅参考, 服务器以自己重算为准)
+  "ledger": [                            // 未同步流水 (客户端环形缓冲, 最多 2000 条)
+    { "op": "ssh.shell.start", "ts": "2026-08-16T09:58:00+08:00", "exp": 6 },
+    { "op": "http.request",    "ts": "2026-08-16T09:59:00+08:00", "exp": 1 }
+  ],
+  "ts": "2026-08-16T10:00:00+08:00"      // 客户端发送时间 (RFC3339)
+}
+
+注意:
+  - 当前客户端不发送 sig 字段 (HMAC 密钥未下发给服务器), 服务器校验以
+    "op 白名单 + 每日上限 + 限频 + 单调性" 为准, 见第四节。
+  - ledger 里每条 ts 为客户端本地时间 (RFC3339), 服务器按"日期前缀 == 服务器当天"来判定是否为当日流水。
+
+--------------------------------------------------------------------------------
+响应体 (JSON):
+--------------------------------------------------------------------------------
+成功:
+{
+  "ok":          true,
+  "board_exp":   1187,        // 服务器重算后的认可分 (客户端会回写本地)
+  "rank":        3,           // 我的周榜排名 (0 = 未上榜)
+  "server_time": "2026-08-18 09:30:00",
+  "leaderboard": [            // 周榜 Top 50 (board_exp 倒序, 同分按 user_id 升序)
+    { "rank": 1, "name": "小K",   "level": 3, "exp": 1187 },
+    { "rank": 2, "name": "皮皮",  "level": 5, "exp": 998 }
+  ]
+}
+
+失败 (业务失败, HTTP 仍 200, 用 ok=false 区分):
+{
+  "ok":          false,
+  "error":       "当日经验超限, 增量不采信",
+  "board_exp":   1180,        // 返回旧分 + 旧榜, 客户端静默降级展示
+  "rank":        3,
+  "leaderboard": [ ... 当前周榜 ... ]
+}
+
+字段说明:
+  - leaderboard 条目字段固定为 rank / name / level / exp (exp 即服务器认可分 board_exp)
+  - 服务器异常时返回 { "ok": false, "error": "服务器异常: ..." }
+
+
+二、要建的表 (Oracle, 两张)
+--------------------------------------------------------------------------------
+
+主表  K_PET          —— 每个用户一行, 排行榜直接按 (WEEK_KEY, BOARD_EXP DESC) 查, 无需物化表
+流水表 K_PET_LEDGER  —— 每次同步的流水留痕 (防刷审计用, 可按需裁剪)
+
+-- ============================================================================
+-- Kairo 宠物排行榜表 (v0.16)
+-- ============================================================================
+
+-- 主表: 一个 user_id 一行, 周榜按 week_key 分区
+CREATE TABLE K_PET (
+    USER_ID     VARCHAR2(64)  NOT NULL,            -- 本机宠物标识 (客户端 uuid)
+    NAME        VARCHAR2(64)  NOT NULL,            -- 宠物名字 (用户起, 最长 16 字符)
+    LEVEL       NUMBER        DEFAULT 1 NOT NULL,  -- 宠物等级
+    STAGE       VARCHAR2(32)  DEFAULT 'egg',       -- 进化阶段 egg/hatchling/grown/mythic
+    EXP_TOTAL   NUMBER        DEFAULT 0 NOT NULL,  -- 历史累计经验 (仅展示)
+    BOARD_EXP   NUMBER        DEFAULT 0 NOT NULL,  -- 服务器认可分 (排行榜排序依据)
+    WEEK_KEY    VARCHAR2(10),                      -- 周榜周期 YYYY-MM-DD (周一, 服务器时区)
+    UPDATED_AT  DATE          DEFAULT SYSDATE,     -- 最后同步时间 (限频校验用)
+    CONSTRAINT PK_K_PET PRIMARY KEY (USER_ID)
+);
+
+COMMENT ON TABLE  K_PET         IS 'Kairo 宠物排行榜 (周榜, 服务器重算认可分)';
+COMMENT ON COLUMN K_PET.USER_ID   IS '本机宠物标识, 客户端生成的 32 位 hex uuid';
+COMMENT ON COLUMN K_PET.NAME      IS '宠物名字, 用户自己起, 最长 16 字符';
+COMMENT ON COLUMN K_PET.LEVEL     IS '宠物等级';
+COMMENT ON COLUMN K_PET.STAGE     IS '进化阶段 egg/hatchling/grown/mythic';
+COMMENT ON COLUMN K_PET.EXP_TOTAL IS '历史累计经验, 客户端上报, 仅展示不排名';
+COMMENT ON COLUMN K_PET.BOARD_EXP IS '服务器认可分, 排行榜唯一排序依据';
+COMMENT ON COLUMN K_PET.WEEK_KEY  IS '周榜周期 YYYY-MM-DD(周一), 周一 00:00 换周归零';
+COMMENT ON COLUMN K_PET.UPDATED_AT IS '最后同步时间, 限频用';
+
+-- 排行榜查询索引: 周榜按认可分倒序
+CREATE INDEX IDX_K_PET_WEEK_EXP ON K_PET (WEEK_KEY, BOARD_EXP DESC, USER_ID ASC);
+
+-- ============================================================================
+-- 流水留痕表 (可选, 建议建; 防刷审计 + 未来对账)
+-- ============================================================================
+CREATE TABLE K_PET_LEDGER (
+    ID        NUMBER        NOT NULL,           -- 序列
+    USER_ID   VARCHAR2(64)  NOT NULL,           -- 谁
+    OP        VARCHAR2(64)  NOT NULL,           -- 操作名 (op 白名单)
+    TS        VARCHAR2(32),                     -- 客户端流水时间 (RFC3339)
+    EXP       NUMBER        DEFAULT 0 NOT NULL, -- 该条经验
+    SYNCED_AT DATE          DEFAULT SYSDATE,    -- 服务器接收时间
+    CONSTRAINT PK_K_PET_LEDGER PRIMARY KEY (ID)
+);
+
+COMMENT ON TABLE  K_PET_LEDGER IS 'Kairo 宠物流水留痕 (防刷审计)';
+COMMENT ON COLUMN K_PET_LEDGER.USER_ID   IS '本机宠物标识';
+COMMENT ON COLUMN K_PET_LEDGER.OP        IS '操作名, 必须命中白名单';
+COMMENT ON COLUMN K_PET_LEDGER.TS        IS '客户端流水时间 RFC3339';
+COMMENT ON COLUMN K_PET_LEDGER.EXP       IS '该条经验值';
+COMMENT ON COLUMN K_PET_LEDGER.SYNCED_AT IS '服务器接收时间';
+
+-- 流水 ID 序列
+CREATE SEQUENCE SEQ_K_PET_LEDGER START WITH 1 INCREMENT BY 1 NOCACHE NOCYCLE;
+
+-- 按用户查流水
+CREATE INDEX IDX_K_PET_LEDGER_UID ON K_PET_LEDGER (USER_ID, SYNCED_AT);
+
+-- ============================================================================
+-- 验证: 跑完上面 SQL 后, 下面这条应该能查出空表 (无报错即建表成功)
+-- ============================================================================
+SELECT USER_ID, NAME, LEVEL, STAGE, EXP_TOTAL, BOARD_EXP, WEEK_KEY FROM K_PET WHERE ROWNUM <= 5;
+
+-- 说明: 表名按你们 K_ 前缀约定命名 (K_SPONSOR / K_ACT_CODE 同风格)。
+--       如你们 DBA 想改名, 把 Java 代码里的表名一起改掉即可, 接口协议不受影响。
+
+
+三、Java 后端代码 (KairoPetLeaderboardAction.java)
+--------------------------------------------------------------------------------
+环境: JDK 1.6 / JDBC / Sqlca(ARE Transaction) / fastjson 1.x
+风格: 与 KairoSponsorLeaderboardAction.java 完全同款
+      - SQL 全部在代码里字符串拼接 (不用 ORM/XML), 参数走 PreparedStatement 占位符 (更安全)
+      - JDK 1.6 无 try-with-resources, 手动 finally 关 rs/ps
+      - Oracle 11g 兼容: ROW_NUMBER 子查询, 不用 FETCH FIRST (12c+ 语法)
+
+package cn.com.jscb.httpinterface.pc.kairo;
+
+import com.alibaba.fastjson.JSONArray;
+import com.alibaba.fastjson.JSONObject;
+
+import com.amarsoft.are.ARE;
+import com.amarsoft.are.sql.Transaction;
+
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Timestamp;
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * Kairo 宠物排行榜 Action (v0.16)
+ *
+ * 入口:  POST /credit/httpInterface
+ *        Query: channelID=PC&serviceID=KairoPetLeaderboardAction&seqNo=<秒级时间戳>
+ *        Header: Authorization: Basic <auth>
+ *        Body:  宠物同步请求 JSON (见接口说明第一节)
+ *
+ * 流程:
+ *   1) 防刷校验: 限频(>=5分钟) / op 白名单 / 每日上限(300) / 跨周归零
+ *   2) 认可分重算: 新认可分 = 旧认可分(同周) + 当日有效流水经验
+ *   3) MERGE 落库 K_PET (幂等 upsert), 流水留痕 K_PET_LEDGER
+ *   4) 查周榜 Top 50 + 我的排名, 返回给客户端
+ *
+ * 兼容性:
+ *   - JDK 1.6: 手动 finally 关 rs/ps, 不用 try-with-resources
+ *   - Oracle 11g: ROW_NUMBER 子查询 + 外层 WHERE RNK <= 50
+ *   - SQL 代码内拼接 + PreparedStatement 占位 (跟 KairoSponsorLeaderboardAction 同款)
+ */
+public class KairoPetLeaderboardAction {
+
+    private final Transaction sqlca;
+
+    // ---------- 服务器侧防刷常量 (与 Go 端 internal/pet/rules.go 对齐) ----------
+    /** 每日认可经验上限 */
+    private static final long DAILY_CAP = 300L;
+    /** 同 user_id 同步最小间隔 (分钟) */
+    private static final long SYNC_MIN_INTERVAL_MIN = 5L;
+    /** op 白名单 → 每条经验 (不在表内一律 0 分, 客户端也按这张表计分) */
+    private static final Map<String, Long> OP_EXP = new HashMap<String, Long>();
+    static {
+        OP_EXP.put("ssh.shell.start",      6L); // 核心-会话
+        OP_EXP.put("compare.deep_check",   4L); // 高价值
+        OP_EXP.put("compare.folder_scan",  3L);
+        OP_EXP.put("compare.file_diff",    3L);
+        OP_EXP.put("ssh.sftp.edit.upload", 3L);
+        OP_EXP.put("ssh.sftp.upload",      2L); // 中价值
+        OP_EXP.put("ssh.sftp.download",    2L);
+        OP_EXP.put("logs.download",        2L);
+        OP_EXP.put("files.download",       2L);
+        OP_EXP.put("http.request",         1L); // 轻价值
+        OP_EXP.put("http.case.upsert",     1L);
+        OP_EXP.put("credentials.save",     1L);
+        OP_EXP.put("reminder.add",         1L);
+    }
+
+    public KairoPetLeaderboardAction(Transaction sqlca) {
+        this.sqlca = sqlca;
+    }
+
+    /**
+     * Action 入口方法 (dispatcher 反射调用, 签名跟 KairoSponsorLeaderboardAction 一致)。
+     *
+     * @param requestParam 请求体 JSON 字符串 (宠物同步请求)
+     * @param seqNo        秒级时间戳, 跟请求 query string 里的 seqNo 一致
+     * @return 响应 JSON 字符串, 框架负责返给客户端
+     */
+    public String execute(String requestParam, String seqNo) {
+        ARE.getLog().info(seqNo + "---HttpPost对方交易请求参数body: ~~~getPetLeaderboard~~~~~~~~~~~~~~~~~~~~~~ " + requestParam);
+        Map<String, Object> resp = new HashMap<String, Object>();
+        PreparedStatement ps = null;
+        ResultSet rs = null;
+        try {
+            JSONObject req = JSONObject.parseObject(requestParam);
+            if (req == null) {
+                resp.put("ok", false);
+                resp.put("error", "请求体不能为空");
+                return JSONObject.toJSONString(resp);
+            }
+
+            String userId = req.getString("user_id");
+            if (userId == null || userId.length() == 0) {
+                resp.put("ok", false);
+                resp.put("error", "user_id 不能为空");
+                return JSONObject.toJSONString(resp);
+            }
+            String name  = defaultString(req.getString("name"), "小K");
+            int    level = req.getIntValue("level");   // fastjson 缺省返 0
+            if (level < 1) level = 1;
+            String stage   = defaultString(req.getString("stage"), "egg");
+            long   expTotal = req.getLongValue("exp_total");
+            JSONArray ledger = req.getJSONArray("ledger");
+            if (ledger == null) ledger = new JSONArray();
+
+            // ---------- 1) 读旧分 + 上次同步时间 (限频 + 跨周归零) ----------
+            // SQL 拼接: 按 user_id 查主表
+            String sqlOld = "SELECT BOARD_EXP, UPDATED_AT, WEEK_KEY FROM K_PET WHERE USER_ID = ?";
+            ps = sqlca.conn.prepareStatement(sqlOld);
+            ps.setString(1, userId);
+            rs = ps.executeQuery();
+
+            boolean exists = false;
+            long oldBoardExp = 0L;
+            Timestamp lastSync = null;
+            String oldWeekKey = null;
+            if (rs.next()) {
+                exists = true;
+                oldBoardExp = rs.getLong("BOARD_EXP");
+                lastSync    = rs.getTimestamp("UPDATED_AT");
+                oldWeekKey  = rs.getString("WEEK_KEY");
+            }
+            close(ps, rs);
+
+            // 周榜周期: 服务器时区的周一 (YYYY-MM-DD)
+            String weekKey = queryScalar("SELECT TO_CHAR(TRUNC(SYSDATE, 'IW'), 'YYYY-MM-DD') FROM DUAL");
+            if (weekKey == null) weekKey = new SimpleDateFormat("yyyy-MM-dd").format(new Date());
+
+            // 跨周 → 旧分归零重新起算 (周榜周一 00:00 重置)
+            if (oldWeekKey != null && !oldWeekKey.equals(weekKey)) {
+                oldBoardExp = 0L;
+            }
+
+            // ---------- 2) 限频: 同 user_id 同步间隔 >= 5 分钟 ----------
+            if (exists && lastSync != null) {
+                long intervalMin = (System.currentTimeMillis() - lastSync.getTime()) / 60000L;
+                if (intervalMin < SYNC_MIN_INTERVAL_MIN) {
+                    resp.put("ok", false);
+                    resp.put("error", "同步过于频繁, 请稍后再试");
+                    return buildResp(resp, oldBoardExp, weekKey, userId); // 返旧分旧榜, 客户端静默降级
+                }
+            }
+
+            // ---------- 3) 校验流水: op 白名单 + 每条经验 <= 白名单值 + 仅当日有效 ----------
+            String today = queryScalar("SELECT TO_CHAR(SYSDATE, 'YYYY-MM-DD') FROM DUAL");
+            long todaySum = 0L;
+            // SQL 拼接: 流水留痕
+            String sqlLedger = "INSERT INTO K_PET_LEDGER (ID, USER_ID, OP, TS, EXP) " +
+                               "VALUES (SEQ_K_PET_LEDGER.NEXTVAL, ?, ?, ?, ?)";
+            PreparedStatement psLedger = null;
+            try {
+                psLedger = sqlca.conn.prepareStatement(sqlLedger);
+                for (int i = 0; i < ledger.size(); i++) {
+                    JSONObject e = ledger.getJSONObject(i);
+                    if (e == null) continue;
+                    String op = e.getString("op");
+                    long   exp = e.getLongValue("exp");
+                    String ts  = e.getString("ts");
+                    if (op == null || !OP_EXP.containsKey(op)) continue;  // 不在白名单 → 不采信
+                    if (exp <= 0) continue;                               // 0/负数 → 跳过
+                    Long cap = OP_EXP.get(op);
+                    if (exp > cap) exp = cap;                             // 超过该 op 上限 → 截断
+                    if (ts == null || !ts.startsWith(today)) continue;    // 非当日流水不采信 (服务器时区)
+                    todaySum += exp;
+                    psLedger.setString(1, userId);
+                    psLedger.setString(2, op);
+                    psLedger.setString(3, ts);
+                    psLedger.setLong(4, exp);
+                    psLedger.executeUpdate();
+                }
+            } finally {
+                close(psLedger, null);
+            }
+
+            // 当日认可经验超限 → 整包不采信, 账号保留旧分 (防刷核心防线)
+            if (todaySum > DAILY_CAP) {
+                resp.put("ok", false);
+                resp.put("error", "当日经验超限, 增量不采信");
+                return buildResp(resp, oldBoardExp, weekKey, userId);
+            }
+
+            // 认可分重算: 只涨不跌
+            long newBoardExp = oldBoardExp + todaySum;
+
+            // ---------- 4) MERGE 落库 (幂等 upsert) ----------
+            // SQL 拼接: Oracle MERGE INTO 实现"有则更新, 无则插入"
+            String sqlMerge = "MERGE INTO K_PET p " +
+                              "USING (SELECT ? AS USER_ID FROM DUAL) s " +
+                              "ON (p.USER_ID = s.USER_ID) " +
+                              "WHEN MATCHED THEN UPDATE SET " +
+                              "  p.NAME = ?, p.LEVEL = ?, p.STAGE = ?, p.EXP_TOTAL = ?, " +
+                              "  p.BOARD_EXP = ?, p.WEEK_KEY = ?, p.UPDATED_AT = SYSDATE " +
+                              "WHEN NOT MATCHED THEN INSERT " +
+                              "  (USER_ID, NAME, LEVEL, STAGE, EXP_TOTAL, BOARD_EXP, WEEK_KEY, UPDATED_AT) " +
+                              "  VALUES (?, ?, ?, ?, ?, ?, ?, SYSDATE)";
+            ps = sqlca.conn.prepareStatement(sqlMerge);
+            ps.setString(1, userId);   // USING 侧
+            ps.setString(2, name);     // MATCHED 更新侧
+            ps.setInt(3, level);
+            ps.setString(4, stage);
+            ps.setLong(5, expTotal);
+            ps.setLong(6, newBoardExp);
+            ps.setString(7, weekKey);
+            ps.setString(8, userId);   // NOT MATCHED 插入侧
+            ps.setString(9, name);
+            ps.setInt(10, level);
+            ps.setString(11, stage);
+            ps.setLong(12, expTotal);
+            ps.setLong(13, newBoardExp);
+            ps.setString(14, weekKey);
+            ps.executeUpdate();
+            close(ps, null);
+
+            // ---------- 5) 查周榜 Top 50 + 我的排名 ----------
+            long rank = queryMyRank(userId, weekKey);
+            List<Map<String, Object>> entries = queryTop50(weekKey);
+
+            resp.put("ok", true);
+            resp.put("board_exp",  newBoardExp);
+            resp.put("rank",       rank);
+            resp.put("server_time", new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(new Date()));
+            resp.put("leaderboard", entries);
+            return JSONObject.toJSONString(resp);
+
+        } catch (Exception e) {
+            ARE.getLog().error("[KairoPetLeaderboard] error: " + e.getMessage());
+            resp.put("ok", false);
+            resp.put("error", "服务器异常: " + e.getMessage());
+            return JSONObject.toJSONString(resp);
+        } finally {
+            close(ps, rs);
+        }
+    }
+
+    // ========================================================================
+    // 私有方法
+    // ========================================================================
+
+    /** 查我(当前同步用户)在周榜的排名; 0 = 未上榜 */
+    private long queryMyRank(String userId, String weekKey) throws SQLException {
+        PreparedStatement ps = null;
+        ResultSet rs = null;
+        try {
+            // SQL 拼接: 内层 ROW_NUMBER 算名次, 外层按 user_id 取我自己的名次
+            String sql = "SELECT RNK FROM (" +
+                         "  SELECT USER_ID, ROW_NUMBER() OVER (ORDER BY BOARD_EXP DESC, USER_ID ASC) AS RNK " +
+                         "  FROM K_PET WHERE WEEK_KEY = ?" +
+                         ") WHERE USER_ID = ?";
+            ps = sqlca.conn.prepareStatement(sql);
+            ps.setString(1, weekKey);
+            ps.setString(2, userId);
+            rs = ps.executeQuery();
+            return rs.next() ? rs.getLong(1) : 0L;
+        } finally {
+            close(ps, rs);
+        }
+    }
+
+    /** 查周榜 Top 50 (board_exp 倒序, 同分按 user_id 升序, 稳定排序不跳名次) */
+    private List<Map<String, Object>> queryTop50(String weekKey) throws SQLException {
+        PreparedStatement ps = null;
+        ResultSet rs = null;
+        try {
+            // SQL 拼接: Oracle 11g 兼容写法 (ROW_NUMBER 子查询, 不用 FETCH FIRST)
+            String sql = "SELECT * FROM (" +
+                         "  SELECT ROW_NUMBER() OVER (ORDER BY BOARD_EXP DESC, USER_ID ASC) AS RNK, " +
+                         "         NAME, LEVEL, BOARD_EXP AS EXP " +
+                         "  FROM K_PET WHERE WEEK_KEY = ?" +
+                         ") WHERE RNK <= 50 " +
+                         "ORDER BY BOARD_EXP DESC, USER_ID ASC";
+            ps = sqlca.conn.prepareStatement(sql);
+            ps.setString(1, weekKey);
+            rs = ps.executeQuery();
+            List<Map<String, Object>> entries = new ArrayList<Map<String, Object>>();
+            while (rs.next()) {
+                Map<String, Object> entry = new HashMap<String, Object>();
+                entry.put("rank",  rs.getInt("RNK"));
+                entry.put("name",  rs.getString("NAME"));
+                entry.put("level", rs.getInt("LEVEL"));
+                entry.put("exp",   rs.getLong("EXP"));
+                entries.add(entry);
+            }
+            return entries;
+        } finally {
+            close(ps, rs);
+        }
+    }
+
+    /** 业务失败时: 返回旧分 + 当前周榜, 客户端静默降级展示旧榜 */
+    private String buildResp(Map<String, Object> resp, long oldBoardExp, String weekKey, String userId)
+            throws SQLException {
+        resp.put("board_exp",  oldBoardExp);
+        resp.put("rank",       queryMyRank(userId, weekKey));
+        resp.put("leaderboard", queryTop50(weekKey));
+        return JSONObject.toJSONString(resp);
+    }
+
+    /** 查单值 SQL (返回第一行第一列字符串) */
+    private String queryScalar(String sql) throws SQLException {
+        PreparedStatement ps = null;
+        ResultSet rs = null;
+        try {
+            ps = sqlca.conn.prepareStatement(sql);
+            rs = ps.executeQuery();
+            return rs.next() ? rs.getString(1) : null;
+        } finally {
+            close(ps, rs);
+        }
+    }
+
+    /** JDK 1.6 老代码: 手动关资源, 异常路径也不漏连接池 */
+    private static void close(PreparedStatement ps, ResultSet rs) {
+        if (rs != null) {
+            try { rs.close(); } catch (SQLException ignore) {}
+        }
+        if (ps != null) {
+            try { ps.close(); } catch (SQLException ignore) {}
+        }
+    }
+
+    private static String defaultString(String s, String d) {
+        return (s == null || s.length() == 0) ? d : s;
+    }
+}
+
+
+四、防刷规则 (服务器侧, 对应接口里的校验逻辑)
+--------------------------------------------------------------------------------
+与设计文档 §7.2 对齐, 核心思想: 服务器只认自己重算的认可分, 客户端分数不可信。
+
+| 校验项       | 规则                                                     | 实现位置                     |
+|--------------|----------------------------------------------------------|------------------------------|
+| 限频         | 同 user_id 同步间隔 >= 5 分钟                             | 步骤 2                       |
+| op 白名单    | op 必须在 OP_EXP 表内; 每条 exp <= 该 op 上限             | 步骤 3                       |
+| 每日上限     | 当日有效流水经验合计 <= 300; 超限整包不采信, 保留旧分      | 步骤 3                       |
+| 时间合法性   | 流水 ts 日期前缀 == 服务器当天 (早于当日不采信)            | 步骤 3                       |
+| 单调性       | 新认可分 = 旧认可分 + 当日增量, 只涨不跌                  | 步骤 4 (构造上保证)          |
+| 周榜重置     | 跨周 (week_key 变化) 旧分归零                             | 步骤 1                       |
+
+说明:
+  - 客户端本地也有一套同样的规则 (每日上限 300 / 冷却 30 分钟 / 会话封顶等), 服务器侧校验是兜底防线。
+  - 不做封禁、不做黑名单: 校验失败的增量不采信, 账号保留旧分, 榜上就是旧分。
+  - 排行榜分值 = 服务器重算认可分 (board_exp), 客户端每次同步成功后回写本地。
+
+
+五、部署步骤 (Java 端)
+--------------------------------------------------------------------------------
+1) DBA 用 sqlplus / DBeaver 登录 Oracle, 跑第二节的建表 SQL:
+       sqlplus username/password@database @宠物排行榜接口与后端代码.txt 中的 SQL 部分
+   跑完应有: K_PET 表、K_PET_LEDGER 表、SEQ_K_PET_LEDGER 序列、2 个索引。
+
+2) 把 KairoPetLeaderboardAction.java 放到与 KairoSponsorLeaderboardAction.java 相同的 package:
+       src/cn/com/jscb/httpinterface/pc/kairo/KairoPetLeaderboardAction.java
+
+3) 在 dispatcher 配置文件里注册 serviceID 与 Action 的映射 (按你们项目 dispatcher 风格):
+       KairoPetLeaderboardAction  ->  cn.com.jscb.httpinterface.pc.kairo.KairoPetLeaderboardAction
+
+4) 重新编译部署 Java 后端。
+
+5) 验证 (直接 curl 测 Action 是否通):
+       curl -X POST \
+         -H "Authorization: Basic <auth>" \
+         -H "Content-Type: application/json" \
+         "http://<host>:<port>/credit/httpInterface?channelID=PC&serviceID=KairoPetLeaderboardAction&seqNo=$(date +%s)" \
+         -d '{"user_id":"test001","name":"小K","level":3,"stage":"hatchling","exp_total":100,"board_exp":100,"ledger":[{"op":"http.request","ts":"2026-08-18T10:00:00+08:00","exp":1}],"ts":"2026-08-18T10:00:00+08:00"}'
+
+   期望返回: {"ok":true,"board_exp":101,"rank":1,"server_time":"...","leaderboard":[{"rank":1,"name":"小K","level":3,"exp":101}]}
+   再跑一次 (5 分钟内): 应返 ok=false "同步过于频繁" (限频生效)。
+
+
+六、跟投喂作者排行榜 (KairoSponsorLeaderboardAction) 对照
+--------------------------------------------------------------------------------
+|                       | 投喂作者排行榜              | 宠物排行榜                          |
+|-----------------------|----------------------------|-------------------------------------|
+| serviceID             | KairoSponsorLeaderboardAction | KairoPetLeaderboardAction        |
+| URL                   | /credit/httpInterface (同)  | /credit/httpInterface (同)          |
+| 请求体                | {} (空)                     | 宠物状态 + 流水 (见第一节)           |
+| 响应                  | {ok, entries[]}             | {ok, board_exp, rank, leaderboard[]}|
+| 表                    | K_SPONSOR                   | K_PET + K_PET_LEDGER                |
+| 排名口径              | TOTAL 倒序                  | (WEEK_KEY, BOARD_EXP DESC) 周榜     |
+| 写入数据              | 不写 (纯只读)               | 写库 (同步落库 + 流水留痕)          |
+| 防刷                  | 无                          | 限频/白名单/每日上限/周榜重置         |
+| 鉴权                  | Basic Auth (同)             | Basic Auth (同)                     |
+| JDK                   | 1.6 (同)                    | 1.6 (同)                            |
+
+================================================================================
+EOF
+================================================================================

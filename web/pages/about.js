@@ -3,7 +3,7 @@
  *
  * 设计目标：
  *   - 把"关于"从单页简介升级为一份**带交互的产品技术白皮书**
- *   - 顶部 sticky 锚点导航 + 13 个版本卡片 (accordion 折叠) + 13 个数据区块
+ *   - 顶部 sticky 锚点导航 + 14 个版本卡片 (accordion 折叠) + 14 个数据区块
  *   - 内容 100% 由 commit log / 源码 / README 提取, 不注水
  *   - 几万字正文 + 折叠默认收起, 首屏不卡
  */
@@ -16,7 +16,7 @@
 
   // 与 internal/httpserver/httpserver.go 的 Version 常量保持一致；
   // 后端 /api/config 读取失败时回退到这里（FE-006）。
-  const VERSION = 'v0.14';
+  const VERSION = 'v0.15';
 
   // =====================================================================
   // SVG icon 字典 — 13 个 section icon (Win7 兼容, 不依赖 emoji 字体)
@@ -127,7 +127,7 @@
     { name: 'modules',      fn: renderModulesSection,      min: 800 },
     { name: 'comparison',   fn: renderComparisonSection,   min: 500 },
     { name: 'bugs',         fn: renderBugStoriesSection,   min: 700 },
-    { name: 'history',      fn: renderHistorySection,      min: 900 },  // changelog 13 版本卡
+    { name: 'history',      fn: renderHistorySection,      min: 900 },  // changelog 14 版本卡
     { name: 'faq',          fn: renderFaqSection,          min: 600 },
     { name: 'roadmap',      fn: renderRoadmapSection,      min: 500 }
   ];
@@ -220,7 +220,7 @@
     { label: '总代码量',             value: '60,000+', sub: 'Go 30K · 前端 30K (JS+CSS) · 0 npm 运行时',  tone: 'primary' },
     { label: '代码行数 (Go)',         value: '30,000+', sub: '94 个源文件 · 25 个子包 · 含测试',          tone: 'primary' },
     { label: '代码行数 (前端)',       value: '30,000+', sub: 'vanilla JS 24K + CSS 6K · 18 页面 · 零依赖', tone: 'accent'  },
-    { label: '提交次数',              value: '148',     sub: 'v0.1 → v0.14',                              tone: 'success' },
+    { label: '提交次数',              value: '160',     sub: 'v0.1 → v0.15',                              tone: 'success' },
     { label: '后端模块',              value: '25',      sub: 'internal/* (sshshell/webservice/license/reminder/browserpref/popup/endpointclient/sponsor/iconextract 等)', tone: 'primary' },
     { label: '前端页面',              value: '18',      sub: 'web/pages/*.js (含 ssh/webservice/reminders/sponsor) + 1 共享模块 sftp-common', tone: 'accent'  },
     { label: 'API 接口',              value: '90+',     sub: 'REST + SSE + WebSocket',                    tone: 'primary' },
@@ -744,7 +744,7 @@
   // =====================================================================
   const roadmap = {
     planned: [
-      { name: 'v0.15 续命日常化', desc: '投喂作者页深度打磨: 武林榜真实数据接驳 (当前静态 50 昵称占位 → 真实赞助人) + 投喂方式新增支付宝/微信 + 赞助后置 Toast 反馈 + 老板键一键隐藏 (在严肃场合)' },
+      { name: '宠物技能/对战扩展（v2）', desc: '在当前 v1 基础上保留技能与对战命名空间，逐步开放交互接口、界面入口与对战快照。' },
       { name: '审计中心升级', desc: 'audit.log → SQLite 索引，支持按 user/op/server/time 检索与导出 CSV (v0.9 RBAC 已落地，下一步把审计数据做成可查询)' },
       { name: 'WebSocket 升级 SSE', desc: '对双向场景（如交互式 shell）切换 WebSocket，但保留 SSE 给 tail 流' },
       { name: '容器化分发', desc: 'Docker 镜像 + docker-compose，CI/CD 一键起' },
@@ -762,9 +762,62 @@
   };
 
   // =====================================================================
-  // §13. 版本演进史 (14 个版本, 每版 ~2000 字, accordion 折叠)
+  // §13. 版本演进史 (16 个版本, 每版 ~2000 字, accordion 折叠)
   // =====================================================================
-  const changelog = [
+const changelog = [
+    {
+      version: 'v0.15',
+      date: '2026-08-17',
+      tag: '宠物养成 · 任务闭环 · HTTP/ws 强化',
+      codename: 'Phoenix · 天命续命',
+      size: 'xl',
+      headline: '引入宠物养成闭环 + 定时任务系统 + SSH 配置档案 + HTTP curl/WebSocket 能力增强，新增排行同步规范与安全边界收敛。',
+      stats: { commits: 16, fixes: 6, additions: 7, breaks: 0 },
+      principles: [
+        '未解锁情况下禁止持久化：未达激活条件前不写入 pet.json 与任何宠物状态文件；相关 API 返回 404 或关闭态。',
+        '激活条件与幂等性：在 About 页 10 秒内连续触发 6 次解锁动作后，执行一次性激活建档；已解锁用户后续启动自动恢复。',
+        '计分规则：仅对白名单操作产出成长分，op/target 维度具备冷却约束，存在单日上限，并将会话时长计入评分，全部计算过程落可追溯摘要。',
+        '展示约束：坐标以相对视口百分比持久化，落盘前执行 [0,1] 范围裁剪；名称长度限制与控制字符过滤；皮肤切换需通过服务端清单校验。',
+        '排行榜口径与容错：采用服务端认可分（board_exp）作为权威对比值；失败重试保留 dirty 状态并允许本地展示降级。'
+      ],
+      features: [
+        { title: '宠物系统（v1）', desc: '新增 internal/pet 全链路（状态管理、经验引擎、规则表、同步客户端）与 /api/pet/*；新增漂浮宠物组件 web/pages/pet.js（拖拽、吸边、可见度、摇晃换肤、改名、说话气泡）；宠物榜单 Tab 在 sponsor 页面可见。' },
+        { title: '定时任务管理', desc: '新增 internal/schedtask 与 cronx 子系统，补齐调度模型、执行记录与持久化路径；新增 web/pages/tasks.js 与 /api/tasks/*，支持任务视图与交互。' },
+        { title: 'SSH 配置档案化', desc: '新增 internal/sshclient/profilestore，支持会话主机档案持久化与结构化读写，提升跨页面/跨会话一致性。' },
+        { title: 'HTTP curl/WebSocket 增强', desc: '新增/扩展 handlers_http_curl 与 handlers_http_ws，结合 web/pages/http.js 改造请求编排与回显，增强 SOAP/curl/WS 测试体验。' },
+        { title: '排行榜同步协议', desc: '新增 internal/pet/sync.go 与 endpoint 同步约定（serviceID 固定、seqNo 时序、OK/board_exp/rank 回写），未配置端点时仅提示本地展示，不进行假地址回传。' },
+        { title: '参数与端点治理', desc: '通过 internal_endpoints 与构建脚本剥离配置链路，配置源统一落到 config.yaml，避免硬编码漂移。' }
+      ],
+      fixes: [
+        'P0: 去除 sponsor 榜单与 webservice 的历史竞态与重复提交路径，修复 SSRF/5 分钟缓存/防重交互边界，降低错误提交与资源浪费。',
+        'P1: 更新 sponsor 回传字段兼容性（updated_at 改 string），兼容 Java 端 DATETIME；异步榜单失败不泄露内部地址。',
+        'P1: 更新提醒 Update 字段合并逻辑，修复前端空字符串透传导致的关键字段清空。',
+        'P1: Windows 7 下 emoji 与 HTTP 按钮视觉回退，about 渐变与新图标渲染兼容性修复。',
+        'P2: 代码审查闭环修复凭据外置、并发写入、错误泄露、XML 注入与前端健壮性。'
+      ],
+      commits: [
+        { hash: 'd15dd88', msg: 'feat: v0.15 PET 养成游戏 + 定时任务管理 + SSH 配置档案 + HTTP curl/WebSocket 增强' },
+        { hash: 'de0275f', msg: 'fix(webservice): SSRF 防护移除 + sponsor 排行榜 5min 缓存 + 防重提交' },
+        { hash: 'b5f88e9', msg: 'fix(sponsor): updated_at 改 string 透传, 兼容 Java 端真实 DATETIME 格式' },
+        { hash: '833d397', msg: 'fix(reminder): Update 字段合并加固, 防前端漏传被空字符串清空' },
+        { hash: '715424b', msg: 'fix(web): Win7 emoji 兼容 + http 美化按钮 + about 渐变 + 7 个新 SVG 图标' },
+        { hash: '016f130', msg: 'fix: 代码审查深度修复 — 凭据外置/数据竞争/错误泄露/XML 注入/前端健壮性' },
+        { hash: 'd813690', msg: 'chore(config): internal_endpoints 块 + build 脚本同步剥离' },
+        { hash: '11903d2', msg: 'docs(README): v0.14 全文重写 — 修复 50+ 处与代码不符' },
+        { hash: 'd5c541c', msg: 'fix(sponsor): 投喂作者页排行榜改异步加载, 失败不再反显内部地址改随机搞笑提示' }
+      ],
+      performance: [
+        { label: '宠物页首屏挂载', before: '首次无条件常驻', after: '按需初始化 + 轮询退避', improve: '降低常驻渲染压力' },
+        { label: '排行榜重刷', before: '频繁无条件请求', after: 'dirty 与成功态复用 + 缓存回退', improve: '抖动下降' }
+      ],
+      migration: [
+        '新增宠物 v1 模块：internal/pet、handlers_pet、web/pages/pet；与 sponsor 页面联动形成切换式排行榜入口。',
+        '新增任务治理：internal/schedtask + internal/cronx + /api/tasks，任务从界面到落盘形成统一链路。',
+        '新增 SSH 档案子系统：internal/sshclient/profilestore 提供 profile 结构化持久化。',
+        '新增 HTTP curl/ws 能力增强：handlers_http_curl/handlers_http_ws + web/pages/http 的请求链路增强。',
+        '端点治理与构建流程收敛：internal_endpoints 与 build 脚本配置化，减少环境差异风险。'
+      ]
+    },
     {
       version: 'v0.14',
       date: '2026-07-13',
@@ -1842,7 +1895,7 @@
     wrap.appendChild(banner);
     wrap.appendChild(list);
 
-    view.appendChild(renderSection('sec-history', 'history', '版本演进史', 'v0.1 → v0.14 · 15 个版本 (含 v0.13.1 / v0.11-rc1) · 持续迭代 · 148 commit', wrap));
+    view.appendChild(renderSection('sec-history', 'history', '版本演进史', 'v0.1 → v0.15 · 16 个版本 (含 v0.13.1 / v0.11-rc1) · 持续迭代 · 160 commit', wrap));
   }
 
   function renderVersionCard(v, idx) {
@@ -2205,7 +2258,7 @@
     wrap.appendChild(renderList('已规划 (next 1-2 versions)', roadmap.planned, 'var(--primary)', 'smTarget'));
     wrap.appendChild(renderList('调研中 (considering)', roadmap.considering, 'var(--text-dim)', 'smBulb'));
 
-    view.appendChild(renderSection('sec-roadmap', 'roadmap', '路线图', 'next 1-2 versions + considering · v0.15 续命日常化优先', wrap));
+    view.appendChild(renderSection('sec-roadmap', 'roadmap', '路线图', 'next 1-2 versions + considering · v0.15 以宠物能力深化为先', wrap));
   }
 
   // --- Footer ---

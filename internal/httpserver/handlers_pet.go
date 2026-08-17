@@ -224,7 +224,8 @@ func (s *Server) handlePetPos(w http.ResponseWriter, r *http.Request) {
 
 // ===== POST /api/pet/skin =====
 
-// handlePetSkin 保存皮肤索引 (晃动换肤后)。范围校验 (0..N-1) 在引擎侧。
+// handlePetSkin 保存皮肤（v2：语义 id，如 "orange-cat"）。
+// 存在性 + 解锁等级校验在引擎侧（skins.json 清单驱动），校验失败返 400。
 func (s *Server) handlePetSkin(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeErr(w, http.StatusMethodNotAllowed, errors.New("仅支持 POST"))
@@ -236,7 +237,7 @@ func (s *Server) handlePetSkin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Skin int `json:"skin"`
+		Skin string `json:"skin"`
 	}
 	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
 		writeErr(w, http.StatusBadRequest, errors.New("请求体不是合法 JSON"))

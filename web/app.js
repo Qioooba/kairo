@@ -17,6 +17,26 @@
   const { api } = Kairo.api || {};
   const state = Kairo.state = Kairo.state || {};
 
+  // 侧边栏“关于”菜单：10 秒内点击 6 次，触发宠物解锁（配合隐藏彩蛋）
+  var aboutNavClickTimes = [];
+
+  function bindAboutNavClickUnlock() {
+    const navAbout = document.querySelector('.nav-item[data-route="about"]');
+    if (!navAbout || navAbout.dataset.petUnlockBound === '1') return;
+    navAbout.dataset.petUnlockBound = '1';
+    navAbout.addEventListener('click', function () {
+      var now = Date.now();
+      aboutNavClickTimes = aboutNavClickTimes.filter(function (t) { return now - t < 10000; });
+      aboutNavClickTimes.push(now);
+      if (aboutNavClickTimes.length >= 6) {
+        aboutNavClickTimes = [];
+        if (Kairo.pet && Kairo.pet.unlock) {
+          try { Kairo.pet.unlock(); } catch (e) { /* ignore */ }
+        }
+      }
+    }, { passive: true });
+  }
+
   function routeFromHash(hash) {
     return (hash || '#/home').replace(/^#\//, '').split(/[?#]/)[0] || 'home';
   }
@@ -134,7 +154,7 @@
       state.bootInfo = info;
       const appName = (info.app && info.app.name) || 'Kairo';
       const appSubtitle = (info.app && info.app.subtitle) || '天命契机';
-      const version = info.version || 'v0.14';
+      const version = info.version || 'v0.15';
       const dlFolder = info.paths && info.paths.download_dir;
       const listenInfo = document.getElementById('listen-info');
       if (listenInfo) {
@@ -161,5 +181,6 @@
     if (window.Kairo && Kairo.pet && Kairo.pet.init) {
       try { Kairo.pet.init(); } catch (e) { /* 宠物彩蛋失败静默 */ }
     }
+    bindAboutNavClickUnlock();
   });
 })();

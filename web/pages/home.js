@@ -7,18 +7,6 @@
   const Kairo = window.Kairo = window.Kairo || {};
   Kairo.pages = Kairo.pages || {};
 
-  // 宠物彩蛋解锁：10 秒内点「关于」卡片 6 次触发（见 about 卡片 onCardClick）
-  var aboutClickTimes = [];
-  function aboutClickCounter() {
-    var now = Date.now();
-    aboutClickTimes = aboutClickTimes.filter(function (t) { return now - t < 10000; });
-    aboutClickTimes.push(now);
-    if (aboutClickTimes.length >= 6) {
-      aboutClickTimes = [];
-      if (Kairo.pet && Kairo.pet.unlock) { Kairo.pet.unlock(); }
-    }
-  }
-
   function makeCard(t, small) {
     const cls = 'tool-card' + (small ? ' tool-card-small' : '');
     // SVG 实际显示尺寸由 CSS .tool-card .icon svg 控制（28px / 24px），
@@ -69,7 +57,6 @@
       { id: 'diagnostics', name: '环境自检', desc: '一键体检：本机 / 网络 / 配置 / 工具 / 每台 server 连通性', icon: 'shield-check', tag: 'ready', tagText: 'v0.4' },
       { id: 'config', name: '系统配置', desc: '在线编辑业务系统 / 服务器 / 日志目录 / 全局设置', icon: 'settings', tag: 'ready', tagText: 'v0.4' },
       { id: 'downloads', name: '下载历史', desc: '浏览 / 删除 / 重新下载 / 外部程序打开已下载文件', icon: 'history', tag: 'ready', tagText: '已就绪' },
-      { id: 'tasks', name: '定时任务', desc: 'cron 调度执行本地命令：SVN / Git 定时同步、脚本自动运行', icon: 'timer', tag: 'ready', tagText: '新' }
     ];
 
     const grid = Kairo.core.el('div', { class: 'grid-4' });
@@ -83,13 +70,14 @@
       { id: 'compare', name: '代码比对', desc: '文本 / 文件 / 文件夹级 diff 差异对比，支持多种视图模式', icon: 'git-compare' },
       { id: 'commands', name: '常用命令速查', desc: 'Linux / Git / Docker / Oracle / MySQL / Redis / Nginx 等 · 实时搜索 + 一键复制', icon: 'square-terminal' },
       { id: 'reminders', name: '便笺提醒', desc: '一次性 / 周期 / Cron 表达式定时，本地落盘不依赖外网', icon: 'bell' },
+      { id: 'tasks', name: '定时任务', desc: 'cron 调度执行本地命令：SVN / Git 定时同步、脚本自动运行', icon: 'timer' },
     ];
 
     // 「其他」分区：sponsor (v0.14 新增) 在前，about 在后
     // 跟 web/index.html 侧栏 nav-sep "其他" 分组顺序保持一致
     const otherTools = [
       { id: 'sponsor', name: '投喂作者', desc: '咖啡续命小站 · 续命恩人榜 · 二维码打赏', icon: 'coffee', tag: 'new', tagText: '新' },
-      { id: 'about', name: '关于', desc: '版本信息、技术架构、数据统计', icon: 'info', onCardClick: aboutClickCounter },
+      { id: 'about', name: '关于', desc: '版本信息、技术架构、数据统计', icon: 'info' },
     ];
 
     view.appendChild(Kairo.core.el('div', { class: 'section-title mt-4', style: 'font-size:14px;color:var(--text-dim);' }, '更多工具'));

@@ -65,7 +65,8 @@ type PetConfig struct {
 	// StatsKeepDays / StatsKeepMonths 本地统计保留窗口（默认 90 天 / 12 月）。
 	StatsKeepDays   int `yaml:"stats_keep_days" json:"stats_keep_days"`
 	StatsKeepMonths int `yaml:"stats_keep_months" json:"stats_keep_months"`
-	// SkinCount 皮肤数量（web/img/pet/skin-*.png 的文件数，默认 2）。
+	// SkinCount 【v2 已废弃】：皮肤清单由 web/img/pet/skins/skins.json 驱动，
+	// 该配置被忽略（保留字段仅为兼容旧 config.yaml 解析）。
 	SkinCount int `yaml:"skin_count" json:"skin_count"`
 }
 
