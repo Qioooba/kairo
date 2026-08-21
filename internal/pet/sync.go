@@ -6,11 +6,11 @@
 //   - 主备切换 + Basic Auth + Timeout 全部走 internal/endpointclient
 //
 // 与 sponsor 的关键差异:
-//   - 默认 Primary 为空 (未配置)。SyncNow 直接返 "pet leaderboard endpoint 未配置",
-//     不静默路由到硬编码地址 —— 宠物排行榜是可选服务器功能, 用户没配服务器时
-//     前端应显示「未配置服务器, 仅本地展示」而不是把状态数据发到假地址。
 //   - 请求带本地状态 + 未同步流水 (ledger), 响应带 board_exp (认可分) / rank /
 //     server_time / 周榜 Top N。
+//   - 端点默认值硬编码在源码 (跟 sponsor 同款, 主备地址 + Basic Auth 共用同一套
+//     Java httpInterface 网关), config.yaml 可覆盖; 若被显式清空 (syncPrimary==""),
+//     SyncNow 直接返 "pet leaderboard endpoint 未配置", 前端显示「未配置服务器, 仅本地展示」。
 //
 // 注意: 本文件的 var 池命名都带 sync 前缀 (syncPrimary / syncMu...),
 // 避免跟引擎核心文件 (engine.go / rules.go 等) 里的包级变量撞名。
@@ -40,18 +40,19 @@ const (
 
 // ===== 端点配置 (var 池, 跟 sponsor 同款) =====
 //
-// 默认 Primary 为空: 未配置时 SyncNow 直接报错, 绝不把用户状态数据
-// 发到硬编码地址 (宠物同步的数据比 sponsor 的排行榜请求敏感得多)。
-// 开发者可在 config.yaml 配 internal_endpoints.pet_leaderboard,
-// main.go 启动时调 InitFromConfig() 覆盖 var (空值不覆盖, 老测试零修改)。
+// 默认值硬编码在源码里, 不走 config.yaml —— 与武林排行榜 (internal/sponsor) 完全一致:
+// 主备地址 + Basic Auth 共用同一套 Java httpInterface 网关 (docs/pet/宠物排行榜接口与后端代码.txt
+// 说同一 httpInterface 网关按 serviceID 反射路由, Basic Auth 与 KairoSponsorLeaderboardAction 同一个)。
+// 开发者可在 config.yaml 配 internal_endpoints.pet_leaderboard 覆盖 (空值不覆盖, 老测试零修改)。
 var (
 	syncMu sync.RWMutex
-	// syncPrimary 主排行榜服务地址 (空 = 未配置)
-	syncPrimary = ""
-	// syncSecondary 备用排行榜服务地址 (可选)
-	syncSecondary = ""
-	// syncAuth POST 请求 Authorization 头的 "Basic <这里>" 部分 (base64 串, 不含 "Basic " 前缀)
-	syncAuth = ""
+	// syncPrimary 主排行榜服务地址 (硬编码在源码, 不走 config, 与 sponsor 主地址一致)
+	syncPrimary = "http://66.0.34.199:9080/credit/httpInterface"
+	// syncSecondary 备用排行榜服务地址 (硬编码在源码, 不走 config, 与 sponsor 备地址一致)
+	syncSecondary = "http://66.0.34.198:9080/credit/httpInterface"
+	// syncAuth POST 请求 Authorization 头的 "Basic <这里>" 部分 (base64 串, 不含 "Basic " 前缀,
+	// 与 sponsor.BasicAuthHeader 同一个)
+	syncAuth = "anN5aDpqc3loQDEyMw=="
 	// syncTimeout 默认 10s (跟 sponsor 一致, Java 端要算 rank + 写库)
 	syncTimeout = 10 * time.Second
 )
@@ -118,6 +119,7 @@ type SyncResult struct {
 // 服务器按 user_id 落库 (pets 表), ledger 流水留痕 (pet_ledger 表, 可选)。
 type syncRequest struct {
 	UserID   string        `json:"user_id"`
+	License  string        `json:"license_code,omitempty"` // 激活码（服务器做唯一绑定 + user_id 校验）
 	Name     string        `json:"name"`
 	Level    int           `json:"level"`
 	Stage    string        `json:"stage"`
@@ -156,8 +158,17 @@ func (e *Engine) SyncNow() (*SyncResult, error) {
 		ledger = []LedgerEntry{} // 空流水序列化成 [] 而不是 null
 	}
 
+	// 激活码上送：服务器据此做"一个激活码唯一一只宠物"的硬绑定与 user_id 校验。
+	licenseCode := ""
+	if e.codeSource != nil {
+		if c, ok := e.codeSource(); ok {
+			licenseCode = c
+		}
+	}
+
 	req := syncRequest{
 		UserID:   st.ID,
+		License:  licenseCode,
 		Name:     st.Name,
 		Level:    st.Level,
 		Stage:    st.Stage,

@@ -676,7 +676,10 @@ btnSearch.appendChild(el('span', { text: '搜索' }));
           allowProposedApi: true,
           cols: DEFAULT_COLS,
           rows: DEFAULT_ROWS,
-          rendererType: 'canvas',
+          // Chrome 下 canvas 渲染器有已知 bug：连接后输入命令回车，输出只显示当前行
+          // 或整屏不刷新（360 浏览器因 GPU/合成配置不同未触发）。DOM 渲染器不依赖
+          // canvas 2D 上下文，兼容性最好，SSH 终端场景下性能也完全够用。
+          rendererType: 'dom',
         };
         const term = new TerminalCtor(termOpts);
 

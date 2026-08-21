@@ -127,10 +127,15 @@ func wsSessionByID(id string) *wsClientSession {
 }
 
 // wsSafeDial 是 gorilla Dialer 的 NetDialContext：对每次实际拨号做 SSRF 校验。
-func wsSafeDial(ctx context.Context, network, address string) (net.Conn, error) {
+// ssrfGuard=false（本机无 auth 场景）时跳过校验，直接拨号，允许连内网/本机地址。
+func wsSafeDial(ctx context.Context, network, address string, ssrfGuard bool) (net.Conn, error) {
 	host, port, err := net.SplitHostPort(address)
 	if err != nil {
 		return nil, err
+	}
+	if !ssrfGuard {
+		dialer := &net.Dialer{}
+		return dialer.DialContext(ctx, network, address)
 	}
 	if err := rejectPrivateHost(ctx, host); err != nil {
 		return nil, err
@@ -168,10 +173,14 @@ func (s *Server) handleHTTPWsConnect(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, errors.New("url host 不能为空"))
 		return
 	}
-	// SSRF：目标域名/IP 不允许是内网或本机
-	if err := rejectPrivateHost(r.Context(), u.Hostname()); err != nil {
-		writeErr(w, 400, errors.New("拒绝连接内网或本机地址: "+u.Hostname()))
-		return
+	ssrfGuard := s.ssrfGuard()
+	// SSRF：仅 auth 启用（远程访问）时拦截内网或本机地址；
+	// 本机无 auth 场景放行，方便调试本机/内网 WebSocket 服务。
+	if ssrfGuard {
+		if err := rejectPrivateHost(r.Context(), u.Hostname()); err != nil {
+			writeErr(w, 400, errors.New("拒绝连接内网或本机地址: "+u.Hostname()))
+			return
+		}
 	}
 
 	timeoutMs := req.TimeoutMs
@@ -195,7 +204,9 @@ func (s *Server) handleHTTPWsConnect(w http.ResponseWriter, r *http.Request) {
 
 	dialer := websocket.Dialer{
 		HandshakeTimeout: time.Duration(timeoutMs) * time.Millisecond,
-		NetDialContext:   wsSafeDial,
+		NetDialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+			return wsSafeDial(ctx, network, address, ssrfGuard)
+		},
 	}
 	if req.InsecureTLS || u.Scheme == "ws" {
 		dialer.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}

@@ -119,8 +119,28 @@ func (s *fakeSSH) exec(ch ssh.Channel, cmd string) {
 	case strings.HasPrefix(cmd, "tail ") || strings.HasPrefix(cmd, "grep ") || strings.Contains(cmd, "grep"):
 		_, _ = io.WriteString(ch, "")
 		sendExit(1)
-	case strings.HasPrefix(cmd, "sed "):
-		_, _ = io.WriteString(ch, "a\nb\nc\n")
+	case strings.Contains(cmd, "ENVIRON") && strings.Contains(cmd, "awk"):
+		// 多行窗口搜索（WindowSearchCommand）：返回两条命中行（100 / 108 行）
+		_, _ = io.WriteString(ch, "SystemOut.log:100:Exception at Foo\nSystemOut.log:108:userinfo uid=42\n")
+		sendExit(0)
+	case strings.Contains(cmd, "is_hit") && strings.Contains(cmd, "awk"):
+		// 上下文补全（ContextLinesForHitsCommand）：命中行用 `:`、上下文行用 `-` 分隔
+		_, _ = io.WriteString(ch, "SystemOut.log-99:ctx-before-99\nSystemOut.log:100:Exception at Foo\nSystemOut.log-101:ctx-after-101\nSystemOut.log:108:userinfo uid=42\n")
+		sendExit(0)
+	case strings.Contains(cmd, "sed -n"):
+		// 「上下文」按钮走 ContextCommand → `sh -c '... sed -n "START,ENDp" file'`。
+		// 按区间生成逼真多行数据，便于验证行号/Hit 标记/内容透传。
+		start, end, ok := fakeSedRange(cmd)
+		if !ok {
+			_, _ = io.WriteString(ch, "")
+			sendExit(1)
+			return
+		}
+		var b strings.Builder
+		for ln := start; ln <= end; ln++ {
+			fmt.Fprintf(&b, "[mock] line-%d 2026-08-18 15:48:%02d:00.000 CST 00000079 SystemOut O ...\n", ln, ln%60)
+		}
+		_, _ = io.WriteString(ch, b.String())
 		sendExit(0)
 	case strings.HasPrefix(cmd, "exit "):
 		if n, err := strconv.Atoi(strings.TrimPrefix(cmd, "exit ")); err == nil {
@@ -132,6 +152,32 @@ func (s *fakeSSH) exec(ch ssh.Channel, cmd string) {
 		_, _ = io.WriteString(ch, "")
 		sendExit(0)
 	}
+}
+
+// fakeSedRange 从 ContextCommand 生成的 `sh -c '... sed -n "START,ENDp" file'` 命令里
+// 解析出 sed 的行区间，用于生成逼真的上下文数据。
+func fakeSedRange(cmd string) (start, end int, ok bool) {
+	const prefix = `sed -n "`
+	i := strings.Index(cmd, prefix)
+	if i < 0 {
+		return 0, 0, false
+	}
+	rest := cmd[i+len(prefix):]
+	comma := strings.Index(rest, ",")
+	if comma < 0 {
+		return 0, 0, false
+	}
+	endStr := rest[comma+1:]
+	p := strings.Index(endStr, "p")
+	if p < 0 {
+		return 0, 0, false
+	}
+	start, err1 := strconv.Atoi(rest[:comma])
+	end, err2 := strconv.Atoi(endStr[:p])
+	if err1 != nil || err2 != nil {
+		return 0, 0, false
+	}
+	return start, end, true
 }
 
 func (s *fakeSSH) Stop() {
@@ -249,6 +295,75 @@ func TestLogsContext_Happy(t *testing.T) {
 	}
 }
 
+// TestLogsContext_DataFlow 「上下文」按钮的数据流测试：请求 /api/logs/context，
+// 验证返回的行数、首行行号、命中行（Hit）标记与内容透传。覆盖常规、仅命中行、
+// 行号越界 clamp（line-before<1 时首行回到 1）、以及 before/after 不对称四种场景。
+func TestLogsContext_DataFlow(t *testing.T) {
+	addr := startFakeSSH(t, "ops", "testpw")
+	_, portStr, _ := net.SplitHostPort(addr)
+	port, _ := strconv.Atoi(portStr)
+	srv := newTestServerWithFakeSSH(t, port)
+
+	cases := []struct {
+		name      string
+		line      int
+		before    int
+		after     int
+		wantFirst int
+		wantCount int
+	}{
+		{"常规前后3行", 100, 3, 3, 97, 7},
+		{"仅命中行", 50, 0, 0, 50, 1},
+		{"行号越界clamp到1", 2, 5, 5, 1, 7},
+		{"前后不对称", 10, 2, 4, 8, 7},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w := doRequest(srv, "POST", "/api/logs/context", map[string]any{
+				"system": "信贷生产", "server": "mock-1", "dir": "SystemOut",
+				"file": "SystemOut.log", "line": tc.line,
+				"before": tc.before, "after": tc.after,
+				"username": "ops", "password": "testpw",
+			})
+			if w.Code != 200 {
+				t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
+			}
+			var got struct {
+				Lines []struct {
+					LineNo  int    `json:"line_no"`
+					Content string `json:"content"`
+					Hit     bool   `json:"hit"`
+				} `json:"lines"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+				t.Fatalf("解析响应失败: %v body=%s", err, w.Body.String())
+			}
+			if len(got.Lines) != tc.wantCount {
+				t.Fatalf("行数不符: 期望 %d，实际 %d body=%s", tc.wantCount, len(got.Lines), w.Body.String())
+			}
+			if len(got.Lines) > 0 && got.Lines[0].LineNo != tc.wantFirst {
+				t.Fatalf("首行行号不符: 期望 %d，实际 %d body=%s", tc.wantFirst, got.Lines[0].LineNo, w.Body.String())
+			}
+			hitCount := 0
+			for _, l := range got.Lines {
+				if l.Content == "" {
+					t.Fatalf("内容为空: body=%s", w.Body.String())
+				}
+				if l.Hit {
+					hitCount++
+					if l.LineNo != tc.line {
+						t.Fatalf("Hit 行号错误: 期望 %d，实际 %d body=%s", tc.line, l.LineNo, w.Body.String())
+					}
+				}
+			}
+			if hitCount != 1 {
+				t.Fatalf("Hit 标记数量不符: 期望 1，实际 %d body=%s", hitCount, w.Body.String())
+			}
+		})
+	}
+}
+
 func TestLogsSearchMulti_Happy(t *testing.T) {
 	addr := startFakeSSH(t, "ops", "testpw")
 	_, portStr, _ := net.SplitHostPort(addr)
@@ -282,6 +397,57 @@ func TestLogsSearchMulti_MatchWindow(t *testing.T) {
 		})
 		if w.Code != 200 {
 			t.Errorf("match_window=%d expected 200, got %d body=%s", win, w.Code, w.Body.String())
+		}
+	}
+}
+
+// v0.15.1：搜索结果只返回命中行，不再内嵌上下文——
+// 曾有两个来源导致"命中行上方多出 N 条无效日志"：(1) 窗口匹配强制
+// effContextN=max(contextN,matchWindow)；(2) 请求体 context 字段让后端给每个
+// 命中行补 N 行上下文。本用例同时携带 match_window 与 context，断言结果仍只有
+// 命中行、不含任何 is_context 行（前端显示为带 ┊ 的上下文行）。
+func TestLogsSearchMulti_MatchWindow_NoForcedContext(t *testing.T) {
+	addr := startFakeSSH(t, "ops", "testpw")
+	_, portStr, _ := net.SplitHostPort(addr)
+	port, _ := strconv.Atoi(portStr)
+	srv := newTestServerWithFakeSSH(t, port)
+
+	w := doRequest(srv, "POST", "/api/logs/search/multi", map[string]any{
+		"system": "信贷生产", "servers": []string{"mock-1"},
+		"dir": "SystemOut", "files": 1, "query": "Exception",
+		"match_window": 8,
+		"context":      8,
+		"username":     "ops", "password": "testpw",
+	})
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+	var got struct {
+		TotalHits int `json:"total_hits"`
+		Servers   []struct {
+			OK    bool   `json:"ok"`
+			Error string `json:"error"`
+			Hits  []struct {
+				LineNo    int    `json:"line_no"`
+				Content   string `json:"content"`
+				IsContext bool   `json:"is_context"`
+			} `json:"hits"`
+		} `json:"servers"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("解析响应失败: %v body=%s", err, w.Body.String())
+	}
+	if got.TotalHits != 2 {
+		t.Fatalf("预期 2 条命中，实际 %d body=%s", got.TotalHits, w.Body.String())
+	}
+	for _, s := range got.Servers {
+		if !s.OK {
+			t.Fatalf("服务器搜索失败: %s body=%s", s.Error, w.Body.String())
+		}
+		for _, h := range s.Hits {
+			if h.IsContext {
+				t.Fatalf("搜索结果不应返回上下文行（行 %d: %q），body=%s", h.LineNo, h.Content, w.Body.String())
+			}
 		}
 	}
 }

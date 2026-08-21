@@ -104,6 +104,8 @@ func (s *Server) handlePetDispatch(w http.ResponseWriter, r *http.Request) {
 		s.handlePetEnable(w, r)
 	case path == "/name":
 		s.handlePetName(w, r)
+	case path == "/owner":
+		s.handlePetOwner(w, r)
 	case path == "/pos":
 		s.handlePetPos(w, r)
 	case path == "/skin":
@@ -189,6 +191,34 @@ func (s *Server) handlePetName(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit.Write("pet.rename", "name", req.Name)
+	writePetState(w, e)
+}
+
+// ===== POST /api/pet/owner =====
+
+// handlePetOwner 设置主人的名字（宠物闲聊时称呼）。
+func (s *Server) handlePetOwner(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeErr(w, http.StatusMethodNotAllowed, errors.New("仅支持 POST"))
+		return
+	}
+	e := s.pet
+	if e == nil || !e.Enabled() {
+		petUnavailable(w)
+		return
+	}
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, errors.New("请求体不是合法 JSON"))
+		return
+	}
+	if err := e.SetOwner(req.Name); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	s.audit.Write("pet.owner", "owner", req.Name)
 	writePetState(w, e)
 }
 
@@ -306,9 +336,15 @@ func (s *Server) handlePetSync(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		// 端点未配置 → 明确提示「仅本地展示」；其他网络/端点错误保持通用文案
+		// （前端据此展示友好降级页，而不是笼统的 502）。
+		msg := "排行榜服务暂时不可用, 请稍后重试"
+		if strings.Contains(err.Error(), "未配置") {
+			msg = "排行榜服务未配置, 宠物仅本地展示"
+		}
 		writeJSON(w, http.StatusBadGateway, map[string]any{
 			"ok":    false,
-			"error": "排行榜服务暂时不可用, 请稍后重试",
+			"error": msg,
 		})
 		return
 	}

@@ -336,26 +336,11 @@ func (s *Server) runOneLogsList(parentCtx context.Context, cur *config.Config, s
 	start := time.Now()
 	res := logsListTargetResult{Server: srv.Name, Host: srv.Host, Dir: ld.Path, OK: true}
 
-	creds, err := s.resolveCreds(username, password, system, srv.Name, srv.Username, srv.Password)
-	if err != nil {
-		res.OK = false
-		res.Error = err.Error()
-		res.Ms = time.Since(start).Milliseconds()
-		return res
-	}
-	if creds.Password == "" {
-		res.OK = false
-		res.Error = "缺少密码"
-		res.Ms = time.Since(start).Milliseconds()
-		return res
-	}
-
+	// 凭据自动回退（批量列表兼容修复）：共用密码框的手输密码被拒时，
+	// 自动改用该服务器已保存/配置里的密码重试。
 	dialCtx, cancelDial := context.WithTimeout(parentCtx, sshDialOuterTimeout)
-	cli, err := sshclient.Dial(dialCtx, sshclient.Server{
-		Name: srv.Name, Host: srv.Host, Port: srv.Port, Username: creds.Username,
-		HostKeySHA256: srv.HostKeySHA256, SSHProfile: srv.SSHProfile,
-		AllowInsecureHostKey: cur.App.AllowInsecureHostKeyEnabled(),
-	}, sshclient.Credentials{Password: creds.Password}, sshAttemptTimeout)
+	cli, _, err := s.dialSSHWithFallback(dialCtx, username, password, system, srv.Name, srv,
+		cur.App.AllowInsecureHostKeyEnabled(), sshAttemptTimeout)
 	cancelDial()
 	if err != nil {
 		res.OK = false

@@ -4,7 +4,7 @@
 //  1. 未解锁时 GET /api/pet/state → 200 {enabled:false}
 //  2. POST /api/pet/enable → 200 {enabled:true, level:1}, 幂等
 //  3. name/pos/skin 校验失败 → 400
-//  4. sync 无端点配置 → 502 优雅降级 (不 crash)
+//  4. sync 上游不可用 → 502 优雅降级 (不 crash)
 //  5. leaderboard 空缓存 → {ok:true, entries:[], stale:true, cached:true}
 //  6. engine 未注入 (不调 SetPet) → 404
 //  7. 未解锁时 name/sync/leaderboard → 404
@@ -15,6 +15,8 @@ package httpserver
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -264,16 +266,23 @@ func TestPetSkin_Locked(t *testing.T) {
 
 // ---------- /api/pet/sync ----------
 
-// TestPetSync_NoEndpoint 未配置端点 → 502 优雅降级 (不 crash, 不泄露 panic)。
-func TestPetSync_NoEndpoint(t *testing.T) {
+// TestPetSync_UpstreamDown 上游不可用 (mock 返 500) → 502 优雅降级 (不 crash, 不泄露 panic)。
+// 端点默认值已硬编码在 pet 包 (跟 sponsor 同款), 这里用 pet.InitFromConfig 指向 mock 覆盖。
+func TestPetSync_UpstreamDown(t *testing.T) {
 	srv, _ := newTestServerWithPet(t)
 	if w := doRequest(srv, "POST", "/api/pet/enable", nil); w.Code != 200 {
 		t.Fatalf("enable: %d", w.Code)
 	}
 
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer up.Close()
+	pet.InitFromConfig(up.URL+"/credit/httpInterface", "", "", 0)
+
 	w := doRequest(srv, "POST", "/api/pet/sync", nil)
 	if w.Code != 502 {
-		t.Fatalf("无端点应 502, got=%d body=%s", w.Code, w.Body.String())
+		t.Fatalf("上游不可用应 502, got=%d body=%s", w.Code, w.Body.String())
 	}
 	got := decodeJSON(t, w.Body.Bytes())
 	if got["ok"] != false {

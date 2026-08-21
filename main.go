@@ -6,7 +6,9 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -26,6 +28,7 @@ import (
 	"kairo/internal/browserpref"
 	"kairo/internal/config"
 	"kairo/internal/credentials"
+	"kairo/internal/deskpet"
 	"kairo/internal/downloads"
 	"kairo/internal/httpserver"
 	"kairo/internal/license"
@@ -260,9 +263,10 @@ func main() {
 	}
 
 	// 7.1.2 v0.16: 注入 pet 包的 endpoint 配置覆盖（跟 sponsor 同款模式）
-	//   - 从 config.yaml 的 internal_endpoints.pet_leaderboard 读 (主备 + auth + timeout)
-	//   - 空值不覆盖 var 池: 未配置时 syncPrimary 保持空, /api/pet/sync 优雅降级
-	//     (前端显示「未配置服务器, 仅本地展示」), 不把状态数据发到硬编码假地址
+	//   - 默认值硬编码在源码（与武林排行榜共用同一套 Java httpInterface 网关）;
+	//     开发者可在 config.yaml 的 internal_endpoints.pet_leaderboard 覆盖 (主备 + auth + timeout)
+	//   - 空值不覆盖 var 池; 若显式清空 syncPrimary, /api/pet/sync 优雅降级
+	//     (前端显示「未配置服务器, 仅本地展示」), 不把状态数据发到假地址
 	if c := cfgMgr.Get(); c != nil {
 		pet.InitFromConfig(
 			c.InternalEndpoints.PetLeaderboard.Primary,
@@ -288,7 +292,25 @@ func main() {
 		log.Printf("pet: 读取皮肤清单失败（将退回内置最小清单）: %v", skerr)
 		skinsJSON = nil
 	}
-	petEngine, perr := pet.NewEngine(pet.RulesFromConfig(cfgMgr.Get().Pet), filepath.Join(cfgMgr.Get().DataDir(), "pet.json"), nil, skinsJSON)
+	petEngine, perr := pet.NewEngineWithSources(
+		pet.RulesFromConfig(cfgMgr.Get().Pet),
+		filepath.Join(cfgMgr.Get().DataDir(), "pet.json"),
+		nil, skinsJSON,
+		func() (string, bool) {
+			// 宠物 ID 从激活码派生：同一激活码永远同一只宠物，
+			// 用户重装/删 pet.json 也不会在排行榜上出现多个自己。
+			code, ok := license.CurrentCode()
+			if !ok {
+				return "", false
+			}
+			sum := sha256.Sum256([]byte(code))
+			return hex.EncodeToString(sum[:16]), true
+		},
+		func() (string, bool) {
+			// 同步时上送激活码，服务器做"一个激活码唯一一只宠物"的硬绑定。
+			return license.CurrentCode()
+		},
+	)
 	if perr != nil {
 		log.Printf("pet: 引擎初始化失败（宠物功能关闭）: %v", perr)
 	} else {
@@ -424,6 +446,20 @@ func main() {
 		go openBrowser(url)
 	}
 
+	// 桌面宠物：原生 Win32 透明窗口（仅 Windows 生效，非 Windows no-op）。
+	// 展示、拖拽、点击、皮肤面板、经验漂浮都由本模块自绘，不再借用浏览器小窗口。
+	// 皮肤 PNG 直接从 embed.FS 直读，避免逐张走 HTTP 造成面板首屏卡顿。
+	if err := deskpet.Run(deskpet.Options{
+		BaseURL: url,
+		LoadSprite: func(id string) ([]byte, error) {
+			return webFS.ReadFile("web/img/pet/skins/" + id + ".png")
+		},
+		DataDir: cfg.DataDir(),
+	}); err != nil {
+		log.Printf("deskpet: 初始化失败: %v", err)
+	}
+	defer deskpet.Shutdown()
+
 	// 12. 启动系统托盘（阻塞主线程直到退出）。
 	// Windows：托盘菜单"退出"触发 OnQuit。
 	// 非 Windows：SIGINT/SIGTERM 触发 OnQuit。
@@ -434,7 +470,7 @@ func main() {
 		Tooltip:       "Kairo",
 		OnOpenBrowser: func() { openBrowser(url) },
 		OnOpenPet: func() {
-			openFloatingPetWindow(url + "/static/pet-float.html")
+			deskpet.Toggle()
 		},
 		OnQuit: func() {
 			log.Println("收到退出请求，正在关闭服务...")

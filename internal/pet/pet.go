@@ -77,6 +77,7 @@ type State struct {
 	ID          string         `json:"id"`
 	Enabled     bool           `json:"enabled"`
 	Name        string         `json:"name"`
+	Owner       string         `json:"owner"` // 主人的名字（宠物闲聊时称呼），可空
 	Level       int            `json:"level"`
 	Exp         int64          `json:"exp"` // 当前等级内经验
 	Stage       string         `json:"stage"`

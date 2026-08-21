@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 )
 
@@ -115,6 +116,21 @@ func GetStatus() Status {
 		return Status{Licensed: true, Reason: "local-cert"}
 	}
 	return Status{Licensed: false, Reason: classifyFailReason(cert, err)}
+}
+
+// CurrentCode 返回本地证书中记录的激活码（仅证书有效时）。
+// 用于派生稳定的宠物标识：同一激活码永远对应同一只宠物，
+// 防止用户重装 / 删 pet.json 后生成新宠物 ID，在排行榜上出现多个"自己"。
+func CurrentCode() (string, bool) {
+	cert, err := loadLocalCert()
+	if err != nil || cert == nil {
+		return "", false
+	}
+	code := strings.TrimSpace(cert.Code)
+	if code == "" {
+		return "", false
+	}
+	return code, true
 }
 
 // Activate 由前端 /api/license/activate 端点调用, 流程:

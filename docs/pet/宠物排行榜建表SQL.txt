@@ -1,0 +1,90 @@
+================================================================================
+Kairo 宠物排行榜 · 建表 SQL (Oracle) — 独立执行版
+配套接口协议见: 宠物排行榜接口与后端代码.txt
+================================================================================
+
+执行说明:
+  - 当前无老用户: 若 K_PET 表已存在但为空, 直接 DROP 重建 (激活码唯一绑定列一起建上)。
+  - 若已有数据: 不要 DROP, 用末尾的 ALTER 语句补列 + 唯一约束。
+  - 用 sqlplus / DBeaver 等工具执行, 全量执行即可。
+
+-- ============================================================================
+-- 主表 K_PET —— 一个激活码 (LICENSE_CODE) 一行, 周榜按 week_key 分区
+--   唯一性设计 (一个用户只能一个宠物):
+--     1) USER_ID = SHA256(激活码) 前 32 hex, 客户端派生, 服务器校验;
+--     2) LICENSE_CODE 唯一约束 UK_K_PET_LICENSE, 数据库层面硬保证一个激活码一条记录;
+--     3) 改名只改 NAME, 不产生新宠物。
+-- ============================================================================
+
+CREATE TABLE K_PET (
+    USER_ID      VARCHAR2(64)  NOT NULL,            -- 宠物标识 = SHA256(激活码) 前 32 hex, 主键
+    LICENSE_CODE VARCHAR2(64)  NOT NULL,            -- 激活码 (唯一约束: 一个激活码一只宠物)
+    NAME         VARCHAR2(64)  NOT NULL,            -- 宠物名字 (用户起, 最长 16 字符)
+    LEVEL        NUMBER        DEFAULT 1 NOT NULL,  -- 宠物等级
+    STAGE        VARCHAR2(32)  DEFAULT 'egg',       -- 进化阶段 egg/hatchling/grown/mythic
+    EXP_TOTAL    NUMBER        DEFAULT 0 NOT NULL,  -- 历史累计经验 (仅展示)
+    BOARD_EXP    NUMBER        DEFAULT 0 NOT NULL,  -- 服务器认可分 (排行榜排序依据)
+    WEEK_KEY     VARCHAR2(10),                      -- 周榜周期 YYYY-MM-DD (周一, 服务器时区)
+    UPDATED_AT   DATE          DEFAULT SYSDATE,     -- 最后同步时间 (限频校验用)
+    CONSTRAINT PK_K_PET PRIMARY KEY (USER_ID),
+    CONSTRAINT UK_K_PET_LICENSE UNIQUE (LICENSE_CODE)
+);
+
+COMMENT ON TABLE  K_PET          IS 'Kairo 宠物排行榜 (周榜, 服务器重算认可分)';
+COMMENT ON COLUMN K_PET.USER_ID   IS '宠物标识 = SHA256(激活码) 前 32 hex, 客户端派生, 服务器校验';
+COMMENT ON COLUMN K_PET.LICENSE_CODE IS '激活码, 唯一约束: 一个激活码只能一只宠物 (改用户名不产生新宠物)';
+COMMENT ON COLUMN K_PET.NAME      IS '宠物名字, 用户自己起, 最长 16 字符';
+COMMENT ON COLUMN K_PET.LEVEL     IS '宠物等级';
+COMMENT ON COLUMN K_PET.STAGE     IS '进化阶段 egg/hatchling/grown/mythic';
+COMMENT ON COLUMN K_PET.EXP_TOTAL IS '历史累计经验, 客户端上报, 仅展示不排名';
+COMMENT ON COLUMN K_PET.BOARD_EXP IS '服务器认可分, 排行榜唯一排序依据';
+COMMENT ON COLUMN K_PET.WEEK_KEY  IS '周榜周期 YYYY-MM-DD(周一), 周一 00:00 换周归零';
+COMMENT ON COLUMN K_PET.UPDATED_AT IS '最后同步时间, 限频用';
+
+-- 排行榜查询索引: 周榜按认可分倒序
+CREATE INDEX IDX_K_PET_WEEK_EXP ON K_PET (WEEK_KEY, BOARD_EXP DESC, USER_ID ASC);
+
+-- ============================================================================
+-- 流水留痕表 K_PET_LEDGER (可选, 建议建; 防刷审计 + 未来对账)
+-- ============================================================================
+
+CREATE TABLE K_PET_LEDGER (
+    ID        NUMBER        NOT NULL,           -- 序列
+    USER_ID   VARCHAR2(64)  NOT NULL,           -- 谁
+    OP        VARCHAR2(64)  NOT NULL,           -- 操作名 (op 白名单)
+    TS        VARCHAR2(32),                     -- 客户端流水时间 (RFC3339)
+    EXP       NUMBER        DEFAULT 0 NOT NULL, -- 该条经验
+    SYNCED_AT DATE          DEFAULT SYSDATE,    -- 服务器接收时间
+    CONSTRAINT PK_K_PET_LEDGER PRIMARY KEY (ID)
+);
+
+COMMENT ON TABLE  K_PET_LEDGER IS 'Kairo 宠物流水留痕 (防刷审计)';
+COMMENT ON COLUMN K_PET_LEDGER.USER_ID   IS '本机宠物标识';
+COMMENT ON COLUMN K_PET_LEDGER.OP        IS '操作名, 必须命中白名单';
+COMMENT ON COLUMN K_PET_LEDGER.TS        IS '客户端流水时间 RFC3339';
+COMMENT ON COLUMN K_PET_LEDGER.EXP       IS '该条经验值';
+COMMENT ON COLUMN K_PET_LEDGER.SYNCED_AT IS '服务器接收时间';
+
+-- 流水 ID 序列
+CREATE SEQUENCE SEQ_K_PET_LEDGER START WITH 1 INCREMENT BY 1 NOCACHE NOCYCLE;
+
+-- 按用户查流水
+CREATE INDEX IDX_K_PET_LEDGER_UID ON K_PET_LEDGER (USER_ID, SYNCED_AT);
+
+-- ============================================================================
+-- 验证: 跑完上面 SQL 后, 下面这条应该能查出空表 (无报错即建表成功)
+-- ============================================================================
+SELECT USER_ID, LICENSE_CODE, NAME, LEVEL, STAGE, EXP_TOTAL, BOARD_EXP, WEEK_KEY
+FROM K_PET WHERE ROWNUM <= 5;
+
+
+-- ============================================================================
+-- 【可选】已有数据时 (非空表) 的增量补列方式 —— 仅当 K_PET 已有数据时使用,
+-- 不要和上面 CREATE TABLE 同时执行!
+-- ============================================================================
+-- ALTER TABLE K_PET ADD LICENSE_CODE VARCHAR2(64);
+-- ALTER TABLE K_PET MODIFY LICENSE_CODE NOT NULL;   -- 需先补全存量行再改 NOT NULL
+-- CREATE UNIQUE INDEX UK_K_PET_LICENSE ON K_PET (LICENSE_CODE);
+================================================================================
+EOF
+================================================================================

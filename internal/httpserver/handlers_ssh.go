@@ -37,23 +37,11 @@ func (s *Server) handleSSHTest(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, errors.New("系统或服务器不存在"))
 		return
 	}
-	creds, err := s.resolveCreds(req.Username, req.Password, req.System, req.Server, srv.Username, srv.Password)
-	if err != nil {
-		writeErr(w, 400, err)
-		return
-	}
-	if creds.Password == "" {
-		writeErr(w, 400, errors.New("缺少密码（输入或勾选「记住密码」）"))
-		return
-	}
-	username := creds.Username
-
+	// 凭据自动回退（批量测试兼容修复）：手输密码被拒时自动改用该服务器
+	// 已保存/配置里的密码重试，避免共用密码框导致异构密码服务器集体失败。
 	dialCtx, cancelDial := context.WithTimeout(r.Context(), sshDialOuterTimeout)
-	cli, err := sshclient.Dial(dialCtx, sshclient.Server{
-		Name: srv.Name, Host: srv.Host, Port: srv.Port, Username: username,
-		HostKeySHA256: srv.HostKeySHA256, SSHProfile: srv.SSHProfile,
-		AllowInsecureHostKey: cur.App.AllowInsecureHostKeyEnabled(),
-	}, sshclient.Credentials{Password: creds.Password}, sshAttemptTimeout)
+	cli, credSource, err := s.dialSSHWithFallback(dialCtx, req.Username, req.Password,
+		req.System, req.Server, srv, cur.App.AllowInsecureHostKeyEnabled(), sshAttemptTimeout)
 	cancelDial()
 	if err != nil {
 		clean := sshclient.SanitizeError(err.Error())
@@ -61,13 +49,13 @@ func (s *Server) handleSSHTest(w http.ResponseWriter, r *http.Request) {
 		s.audit.Write("ssh.test", "system", req.System, "server", req.Server,
 			"result", "fail", "err", clean,
 			"category", string(diag.Category),
-			"reason", diag.Reason)
+			"reason", diag.Reason, "cred", credSource)
 		// P1-BUG-10 修复：HTTP 状态码按错误类别区分
 		//   - 认证类（密码错 / 账号锁）→ 401，语义上更准确，前端 fetch 不会误判为服务端故障
 		//   - 其它（网络/握手/host key 等）→ 502 Bad Gateway
 		//     （SSH 服务器不可达/不兼容，对前端来说"上游坏了"是准确的）
 		status := 502
-		if diag.Category == sshclient.CatAuth {
+		if diag.Category == sshclient.CatAuth || diag.Category == sshclient.CatKbdInt {
 			status = 401
 		}
 		writeJSON(w, status, map[string]any{
@@ -88,10 +76,11 @@ func (s *Server) handleSSHTest(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 502, fmt.Errorf("连接成功但命令执行失败: code=%d err=%v", code, err))
 		return
 	}
-	s.audit.Write("ssh.test", "system", req.System, "server", req.Server, "result", "ok")
+	s.audit.Write("ssh.test", "system", req.System, "server", req.Server, "result", "ok", "cred", credSource)
 	writeJSON(w, 200, map[string]any{
-		"ok":     true,
-		"server": req.Server,
-		"system": req.System,
+		"ok":          true,
+		"server":      req.Server,
+		"system":      req.System,
+		"cred_source": credSource,
 	})
 }

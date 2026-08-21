@@ -136,16 +136,16 @@
   <script src="/static/pages/reminders.js?v=20260710"></script>
   <!-- 定时任务页（cron 调度 + 本地命令执行 + 运行历史） -->
   <script src="/static/pages/tasks.js?v=20260816"></script>
-  <!-- v0.10 SSH 终端：xterm.js + addons（Canvas 渲染，无 WebGL 依赖） -->
+  <!-- v0.10 SSH 终端：xterm.js + addons（DOM 渲染，无 WebGL 依赖） -->
   <script src="/static/vendor/xterm/xterm.min.js?v=20260708"></script>
   <script src="/static/vendor/xterm/xterm-addon-fit.min.js?v=20260708"></script>
   <script src="/static/vendor/xterm/xterm-addon-search.min.js?v=20260708"></script>
   <script src="/static/vendor/xterm/xterm-addon-web-links.min.js?v=20260708"></script>
-  <script src="/static/pages/ssh.js?v=20260710"></script>
+  <script src="/static/pages/ssh.js?v=20260820"></script>
   <script src="/static/pages/about.js?v=20260713b"></script>
   <script src="/static/pages/sponsor.js?v=20260816"></script>
-  <!-- 宠物彩蛋：右下角漂浮宠物（含武林页宠物排行榜联动） -->
-  <script src="/static/pages/pet.js?v=20260816"></script>
+  <!-- 宠物彩蛋：仅保留解锁 + 武林页宠物排行榜联动（宠物本体在原生桌面宠物） -->
+  <script src="/static/pages/pet.js?v=20260818"></script>
   <script>
     // v0.5 #19：DOM ready 后同步按钮 emoji 到当前主题
     document.addEventListener('DOMContentLoaded', function () {

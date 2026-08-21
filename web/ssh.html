@@ -191,7 +191,7 @@
         var term = new TerminalCtor({
           theme: curTheme(), fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
           fontSize: 13, cursorBlink: true, scrollback: 5000, allowProposedApi: true,
-          cols: initCols, rows: initRows, rendererType: 'canvas'
+          cols: initCols, rows: initRows, rendererType: 'dom'
         });
         var FitAddonCtor = window.FitAddon && window.FitAddon.FitAddon;
         var WebLinksAddonCtor = window.WebLinksAddon && window.WebLinksAddon.WebLinksAddon;

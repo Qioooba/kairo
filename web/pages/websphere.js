@@ -803,6 +803,10 @@
       const k = currentCredKey();
       const target = srvName || k.server;
       if (!k.system || !target || !k.username) return;
+      // 手输密码不是这台服务器连上用的那个（后端回退到已保存/配置密码）→ 不覆盖。
+      // 老后端无 cred_source 字段时（空串）保持旧行为：成功即保存。
+      const st = srvStatus[target];
+      if (st && st.credSource && st.credSource.indexOf('fallback') >= 0) return;
       try {
         await api('POST', '/api/credentials/save', {
           system: k.system, server: target, username: k.username, password: pw
@@ -818,10 +822,14 @@
       if (!srvs.length) { toast('请先勾选要测试的服务器', 'warn'); return; }
       srvs.forEach(n => { srvStatus[n] = { state: 'busy' }; });
       renderSrvPick();
+      let fallbackUsed = [];
       await Promise.all(srvs.map(async (n) => {
         try {
-          await api('POST', '/api/ssh/test', credsOne(n));
-          srvStatus[n] = { state: 'ok' };
+          const r = await api('POST', '/api/ssh/test', credsOne(n));
+          srvStatus[n] = { state: 'ok', credSource: r.cred_source || '' };
+          // 后端用手输密码认证失败、改用已保存/配置密码连上的场景：
+          // 绝不能把手输密码覆盖写入钥匙串（会破坏该服务器正确的已存凭据）
+          if (r.cred_source && r.cred_source.indexOf('fallback') >= 0) fallbackUsed.push(n);
           await maybeSaveCred(n);
         } catch (e) {
           // P1-BUG-10 修复：保留后端返回的 reason（中文短句），用于 toast 展示
@@ -854,6 +862,11 @@
         toast(srvs.length + ' 台全部失败' + tail, 'err');
       } else {
         toast(okN + '/' + srvs.length + ' 台成功，' + failN + ' 台失败', 'warn');
+      }
+      // 手输密码被拒、靠已保存/配置密码连上的服务器单独提示，
+      // 让用户知道输入框里的密码并不是这台的（避免误以为输入框密码全部有效）
+      if (fallbackUsed.length) {
+        toast(fallbackUsed.join('、') + '：手输密码被拒，已用保存的密码连接', 'warn');
       }
       renderSrvPick();
       refreshCredStatus();
@@ -1811,10 +1824,6 @@
       hitTableWrap.innerHTML = '';
       hitTableWrap.appendChild(el('h3', { text: '并行搜索中…' }));
       const conc = Number(concSel.value) || 8;
-      const contextRaw = getContextLineCount();
-      // 搜索内嵌上下限 500 行（后端 hard clamp，前端也限制避免请求过大）；
-      // 点击「上下文」新窗口时用 contextRaw 原值（最多 5000）
-      const contextN = Math.min(contextRaw, CONTEXT_LINES_MAX_SEARCH);
       const timeRange = scope === 'selected' ? {} : buildTimeRange();
       // v0.5 #8：文件名参数 — 单文件 / 多文件 / glob 模糊匹配
       const filePatternsRaw = (filePatternInp.value || '').trim();
@@ -1836,7 +1845,6 @@
           password: passInp.value
         };
         if (filePatterns) body.file_patterns = filePatterns;
-        if (contextN > 0) body.context = contextN;
         // v0.13：忽略大小写 checkbox（勾上 → 后端 grep -i）
         body.ignore_case = !!ignoreCaseChk.checked;
         // v0.15：多行窗口匹配（勾上 → && 在 N 行跨度内出现即命中）
@@ -2147,12 +2155,11 @@ const formCard = el('div', { class: 'card' }, [
 
     // 上下文行数：默认 500，用户改过后 localStorage 记住。
     // - localStorage key: kairo.websphere.contextLines
-    // - 默认值前后端一致（后端 DefaultContextLines=500）；
-    // - 搜索内嵌上下文后端 clamp 到 500（避免单请求过大）；
-    // - 点击「上下文」按钮开新窗口时后端支持到 5000，所以前端上限设为 5000。
+    // - 仅用于点击命中行右侧「上下文」按钮时，新窗口展示的前后行数（0=仅命中行）；
+    //   搜索结果本身只返回命中行，不再内嵌上下文（v0.15.1 起）。
+    // - 「上下文」新窗口后端支持到 5000，所以前端上限设为 5000。
     const CONTEXT_LINES_KEY = 'kairo.websphere.contextLines';
     const CONTEXT_LINES_DEFAULT = 500;
-    const CONTEXT_LINES_MAX_SEARCH = 500;   // 搜索内嵌上下文：后端 hard clamp 500
     const CONTEXT_LINES_MAX_CTXWIN = 5000;  // 上下文新窗口：后端支持到 5000
     const savedCtx = (() => {
       try {
@@ -2169,7 +2176,7 @@ const formCard = el('div', { class: 'card' }, [
       max: String(CONTEXT_LINES_MAX_CTXWIN),
       value: String(savedCtx),
       style: 'width:100%;',
-      title: '每个命中行前后各 N 行；可手动改成 0~5000；改完自动记住。搜索结果内嵌上下限 500 行，「上下文」新窗口最多 5000 行'
+      title: '点击命中行右侧「上下文」按钮时，新窗口展示的前后行数（0=仅命中行）。可手动改成 0~5000；改完自动记住。搜索结果本身只显示命中行'
     });
     // 改完即存，下次打开还是这个值（用户不用再输入）
     // - change: 值改变并提交（如按回车、选下拉）时触发
@@ -2256,7 +2263,7 @@ const formCard = el('div', { class: 'card' }, [
     });
     const winMatchLbl = el('label', {
       class: 'inline',
-      title: '勾上后 && 不再要求同一行：两个词相差 ≤ N 行即命中（窗口内所有匹配行都会标亮，中间行按上下文展示）'
+      title: '勾上后 && 不再要求同一行：两个词相差 ≤ N 行即命中（窗口内所有匹配行都会标亮；如需查看命中行之间的中间行，请另行设置上下文行数）'
     }, [
       winChk,
       document.createTextNode(' 多行窗口匹配（&& 在 '),
@@ -2595,7 +2602,7 @@ const formCard = el('div', { class: 'card' }, [
         el('div', null, [
           el('label', { text: '上下文行数（0=仅命中行）' }),
           contextInp,
-          el('div', { class: 'text-dim', style: 'font-size:11.5px; margin-top:2px;', text: '每个命中行前后各 N 行，点击"上下文"也会用这里的值。改完自动记住' })
+          el('div', { class: 'text-dim', style: 'font-size:11.5px; margin-top:2px;', text: '点击命中行右侧「上下文」按钮时，新窗口展示的前后行数（0=仅命中行）。改完自动记住' })
         ])
       ]),
       fileListArea,

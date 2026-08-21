@@ -280,7 +280,7 @@ func (s *Server) handleFilesList(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, 400, errors.New("缺少密码（输入或勾选「记住密码」）"))
 			return
 		}
-		es, truncated, err := s.listOneServer(r.Context(), sn, entry, creds.Username, creds.Password, req.Path, maxEntries)
+		es, truncated, err := s.listOneServer(r.Context(), req.System, sn, entry, creds.Username, creds.Password, req.Path, maxEntries)
 		if err != nil {
 			s.audit.Write("files.list", "system", req.System, "server", sn, "path", req.Path, "result", "fail", "err", err.Error())
 			writeErrSanitized(w, 502, err)
@@ -333,7 +333,7 @@ func (s *Server) handleFilesList(w http.ResponseWriter, r *http.Request) {
 					continue
 				}
 				start := time.Now()
-				es, truncated, err := s.listOneServer(r.Context(), sn, entry, creds.Username, creds.Password, pp, maxEntries)
+				es, truncated, err := s.listOneServer(r.Context(), req.System, sn, entry, creds.Username, creds.Password, pp, maxEntries)
 				ms := time.Since(start).Milliseconds()
 				cleaned := filepath.ToSlash(filepath.Clean(pp))
 				parent := ""
@@ -383,7 +383,7 @@ func (s *Server) handleFilesList(w http.ResponseWriter, r *http.Request) {
 // SFTP 治标本地 cap / shell 治本远端 head）防止 10w 文件目录爆内存。
 func (s *Server) listOneServer(
 	parentCtx context.Context,
-	serverName string,
+	system, serverName string,
 	srv *config.ServerConfig,
 	username, password, path string,
 	maxEntries int,
@@ -391,11 +391,10 @@ func (s *Server) listOneServer(
 	ctx, cancel := context.WithTimeout(parentCtx, sshDialOuterTimeout)
 	defer cancel()
 
-	cli, err := sshclient.Dial(ctx, sshclient.Server{
-		Name: srv.Name, Host: srv.Host, Port: srv.Port, Username: username,
-		HostKeySHA256: srv.HostKeySHA256, SSHProfile: srv.SSHProfile,
-		AllowInsecureHostKey: s.cur().App.AllowInsecureHostKeyEnabled(),
-	}, sshclient.Credentials{Password: password}, sshAttemptTimeout)
+	// 凭据自动回退（批量文件列表兼容修复）：共用密码框的手输密码被拒时，
+	// 自动改用该服务器已保存/配置里的密码重试。
+	cli, _, err := s.dialSSHWithFallback(ctx, username, password, system, serverName, srv,
+		s.cur().App.AllowInsecureHostKeyEnabled(), sshAttemptTimeout)
 	if err != nil {
 		return nil, false, fmt.Errorf("SSH 连接失败: %w", err)
 	}

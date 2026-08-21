@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"kairo/internal/config"
 	"kairo/internal/logquery"
 	"kairo/internal/sshclient"
 )
@@ -23,7 +22,6 @@ type logsSearchReq struct {
 	Dir         string `json:"dir"`
 	Files       int    `json:"files"` // 选最近几个文件
 	Query       string `json:"query"` // 搜索表达式
-	Context     int    `json:"context"`
 	Username    string `json:"username"`
 	Password    string `json:"password"`
 	IgnoreCase  bool   `json:"ignore_case"`  // v0.13：忽略大小写搜索（透传 grep -i）
@@ -80,13 +78,6 @@ func (s *Server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 	}
 	if filesN > 10 {
 		filesN = 10
-	}
-	contextN := req.Context
-	if contextN < 0 {
-		contextN = 0
-	}
-	if contextN > 500 {
-		contextN = 500
 	}
 	// v0.15：窗口匹配行数钳制（0 = 同行匹配；上限 50）
 	matchWindow := req.MatchWindow
@@ -169,26 +160,11 @@ func (s *Server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 	hits := parseSearchOutput(stdout, srv.Name, ld.Path, files)
 	// B1：按"文件 mtime"过滤命中（前后端都返回过滤后的 hits）
 	hits = logquery.FilterHitsByTimeWindow(hits, files, tw)
-	// 上下文行：contextN > 0 时为每个匹配行获取前后 N 行
-	// v0.15：窗口匹配模式下有效上下文 = max(contextN, matchWindow)，保证
-	// 命中行之间的窗口跨度行也一定被展示出来。
-	// REVIEW-rc5 #6：失败时不再静默回退，写一条 audit 记录 + 标记 context_fail，
-	// 但仍返回无上下文的 hits（不阻断主流程）。前端可从 audit 看到错误原因。
-	effContextN := contextN
-	if matchWindow > 0 && effContextN < matchWindow {
-		effContextN = matchWindow
-	}
-	if effContextN > 0 && len(hits) > 0 {
-		enriched, ctxErr := s.enrichHitsWithContext(r.Context(), cli, ld, srv.Name, files, hits, effContextN)
-		if ctxErr != nil {
-			s.audit.Write("logs.search", "system", req.System, "server", req.Server, "dir", ld.Path,
-				"query", req.Query, "result", "context_fail", "err", ctxErr.Error(),
-				"context", contextN)
-		} else {
-			hits = enriched
-		}
-	}
-	s.audit.Write("logs.search", "system", req.System, "server", req.Server, "dir", ld.Path, "query", req.Query, "result", "ok", "hits", len(hits), "context", contextN, "window", matchWindow, "since", tw.Start.Format(time.RFC3339), "until", tw.End.Format(time.RFC3339))
+	// v0.15.1：搜索结果只返回命中行，不再内嵌上下文——
+	// 「上下文行数」输入框只作用于命中行右侧「上下文」按钮（走 /api/logs/context
+	// 在新窗口展示前后 N 行），跟搜索接口解耦，避免单关键词搜索（如 "Kairo"）
+	// 被强制补上 N 条不含关键词的日志。
+	s.audit.Write("logs.search", "system", req.System, "server", req.Server, "dir", ld.Path, "query", req.Query, "result", "ok", "hits", len(hits), "window", matchWindow, "since", tw.Start.Format(time.RFC3339), "until", tw.End.Format(time.RFC3339))
 	writeJSON(w, 200, map[string]any{
 		"hits":  hits,
 		"files": fileNames,
@@ -419,86 +395,4 @@ func parseContextOutput(out string, hitLine, before int) []logquery.ContextLine 
 		})
 	}
 	return result
-}
-
-// enrichHitsWithContext 为 hits 中每个匹配行获取前后 N 行上下文，合并去重后返回新的 hits 列表。
-// 匹配行 IsContext = false，上下文行 IsContext = true。同一行既是匹配又是上下文时标记为非上下文。
-func (s *Server) enrichHitsWithContext(
-	ctx context.Context,
-	cli *sshclient.Client,
-	ld *config.LogDirEntry,
-	serverName string,
-	files []logquery.FileEntry,
-	hits []logquery.SearchHit,
-	contextN int,
-) ([]logquery.SearchHit, error) {
-	if contextN <= 0 || len(hits) == 0 {
-		return hits, nil
-	}
-
-	// 按文件分组匹配行号
-	hitsByFile := make(map[string][]int)
-	for _, h := range hits {
-		if h.IsContext {
-			continue
-		}
-		hitsByFile[h.File] = append(hitsByFile[h.File], h.LineNo)
-	}
-
-	// 去重每个文件的行号
-	for f, lns := range hitsByFile {
-		seen := make(map[int]bool)
-		var deduped []int
-		for _, ln := range lns {
-			if !seen[ln] {
-				seen[ln] = true
-				deduped = append(deduped, ln)
-			}
-		}
-		hitsByFile[f] = deduped
-	}
-
-	// 对每个文件执行 awk 命令获取上下文
-	var allEnriched []logquery.SearchHit
-	cur := s.cur()
-	runTimeout := cur.SearchTimeout() + 10*time.Second
-	cmdTimeout := cur.SearchTimeout()
-
-	// REVIEW-v0.15：单个文件失败记 firstErr，最后统一上抛（不再静默吞掉），
-	// 调用方会把 context_enrich_failed 塞进响应 Error 字段让前端可见。
-	var firstErr error
-	for file, lineNos := range hitsByFile {
-		cmd, err := logquery.ContextLinesForHitsCommand(ld.Path, file, lineNos, contextN)
-		if err != nil {
-			if firstErr == nil {
-				firstErr = fmt.Errorf("构造上下文命令失败(%s): %w", file, err)
-			}
-			continue
-		}
-		runCtx, cancel := context.WithTimeout(ctx, runTimeout)
-		stdout, stderr, code, err := cli.Run(runCtx, cmd, cmdTimeout, ld.Encoding)
-		cancel()
-		if err != nil {
-			if firstErr == nil {
-				firstErr = fmt.Errorf("获取上下文失败(%s): %w", file, err)
-			}
-			continue
-		}
-		if code != 0 {
-			if firstErr == nil {
-				firstErr = fmt.Errorf("获取上下文失败(%s): exit=%d %s", file, code, trim(stderr, 120))
-			}
-			continue
-		}
-		enriched := logquery.ParseContextEnrichedOutput(stdout, serverName, ld.Path, files)
-		allEnriched = append(allEnriched, enriched...)
-	}
-
-	if len(allEnriched) == 0 {
-		if firstErr != nil {
-			return hits, firstErr
-		}
-		return hits, nil
-	}
-	return allEnriched, nil
 }

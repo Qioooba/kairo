@@ -83,14 +83,22 @@ func (s *Server) handleHTTPRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// doHTTPRequest 永不返回 error，所有错误都封装在 resp.Error 字段里
-	resp, _ := doHTTPRequest(req)
+	resp, _ := doHTTPRequest(req, s.ssrfGuard())
 	// BE-017：补审计日志（/api/http/request 之前是审计盲区）。
 	s.audit.Write("http.request", "method", req.Method, "url", req.URL, "status", resp.Status)
 	writeJSON(w, 200, resp)
 }
 
-func doHTTPRequest(req httpRequestReq) (httpRequestResp, error) {
-	resp, err := doHTTPRequestInner(req)
+// ssrfGuard 决定出站 HTTP/WS 请求是否启用 SSRF 防护。
+// 本工具默认只监听 127.0.0.1（无 auth），本机用户本就能直接访问内网/本机地址，
+// 此时 SSRF 防护反而妨碍「内网 HTTP 测试台」的核心功能，故放行所有地址。
+// 仅当 auth 启用（远程访问场景）时，才拦截内网/本机地址，防止远程用户借工具探测内网。
+func (s *Server) ssrfGuard() bool {
+	return s.cur().Auth.EffectiveEnabled()
+}
+
+func doHTTPRequest(req httpRequestReq, ssrfGuard bool) (httpRequestResp, error) {
+	resp, err := doHTTPRequestInner(req, ssrfGuard)
 	if err != nil {
 		return resp, err
 	}
@@ -98,7 +106,7 @@ func doHTTPRequest(req httpRequestReq) (httpRequestResp, error) {
 	return resp, nil
 }
 
-func doHTTPRequestInner(req httpRequestReq) (httpRequestResp, error) {
+func doHTTPRequestInner(req httpRequestReq, ssrfGuard bool) (httpRequestResp, error) {
 	method := strings.ToUpper(strings.TrimSpace(req.Method))
 	if method == "" {
 		method = http.MethodGet
@@ -113,7 +121,7 @@ func doHTTPRequestInner(req httpRequestReq) (httpRequestResp, error) {
 	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
 		return httpRequestResp{Ok: false, Error: "URL 必须以 http:// 或 https:// 开头"}, nil
 	}
-	if err := validateOutboundHTTPURL(url); err != nil {
+	if err := validateOutboundHTTPURL(url, ssrfGuard); err != nil {
 		return httpRequestResp{Ok: false, Error: err.Error()}, nil
 	}
 
@@ -133,8 +141,10 @@ func doHTTPRequestInner(req httpRequestReq) (httpRequestResp, error) {
 		IdleConnTimeout:       30 * time.Second,
 		DisableCompression:    false,
 		ResponseHeaderTimeout: 0,
-		Proxy:                 nil,
-		DialContext:           safeHTTPDialContext,
+		Proxy: nil,
+		DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+			return safeHTTPDialContext(ctx, network, address, ssrfGuard)
+		},
 	}
 	if req.InsecureTLS {
 		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
@@ -150,7 +160,7 @@ func doHTTPRequestInner(req httpRequestReq) (httpRequestResp, error) {
 		}
 	} else {
 		client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
-			if err := validateOutboundHTTPURL(req.URL.String()); err != nil {
+			if err := validateOutboundHTTPURL(req.URL.String(), ssrfGuard); err != nil {
 				return err
 			}
 			return nil
@@ -217,7 +227,7 @@ func doHTTPRequestInner(req httpRequestReq) (httpRequestResp, error) {
 	}, nil
 }
 
-func validateOutboundHTTPURL(raw string) error {
+func validateOutboundHTTPURL(raw string, ssrfGuard bool) error {
 	u, err := urlpkg.Parse(raw)
 	if err != nil {
 		return fmt.Errorf("URL 解析失败: %w", err)
@@ -229,6 +239,9 @@ func validateOutboundHTTPURL(raw string) error {
 	if host == "" {
 		return errors.New("URL host 不能为空")
 	}
+	if !ssrfGuard {
+		return nil
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	if err := rejectPrivateHost(ctx, host); err != nil {
@@ -237,10 +250,14 @@ func validateOutboundHTTPURL(raw string) error {
 	return nil
 }
 
-func safeHTTPDialContext(ctx context.Context, network, address string) (net.Conn, error) {
+func safeHTTPDialContext(ctx context.Context, network, address string, ssrfGuard bool) (net.Conn, error) {
 	host, port, err := net.SplitHostPort(address)
 	if err != nil {
 		return nil, err
+	}
+	if !ssrfGuard {
+		dialer := &net.Dialer{}
+		return dialer.DialContext(ctx, network, address)
 	}
 	if err := rejectPrivateHost(ctx, host); err != nil {
 		return nil, err

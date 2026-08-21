@@ -11,7 +11,8 @@
  *   - 防重提交：de0275f 的 requestInFlight 锁在 WebService 发送按钮，sponsor 页无提交表单，
  *     S7-3 改为验证 WebService 发送按钮双击不重复提交（见 04-websphere 回归）。
  *   - 宠物榜未配置端点时的降级：pet_leaderboard 端点未配置 → /api/pet/sync 返 502
- *     → 前端回退 GET /api/pet/leaderboard（本地缓存）→ 显示「我的排名卡片 + 榜单空空如也」。
+ *     （错误消息「排行榜服务未配置」）→ 前端展示「我的排名卡片 + 榜单空空如也
+ *     + 排行榜服务未配置，宠物状态仅本地展示」的本地降级说明（不发外部请求）。
  *   - 依赖：实例宠物已解锁（31-pet 先跑）；mock-sponsor-server 在 18093。
  */
 
@@ -148,7 +149,7 @@ function register(runner, ctx) {
 
       const boardText = await page.$eval('.pet-board', el => el.textContent).catch(() => '');
       if (!boardText) throw new Error('宠物榜容器无内容');
-      if (!/我的宠物|榜单空空如也|宠物排行榜|第 \d+ 名|未上榜/.test(boardText)) {
+      if (!/我的宠物|榜单空空如也|宠物排行榜|第 \d+ 名|未上榜|未配置|仅本地展示/.test(boardText)) {
         throw new Error('宠物榜内容异常: ' + boardText.substring(0, 160));
       }
       const newReqs = ctx.networkLogs.slice(netBefore).filter(l => l.type === 'request');

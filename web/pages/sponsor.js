@@ -725,6 +725,29 @@
 
     function fmtInt(n) { return Math.floor(Number(n || 0)); }
 
+    // op → 中文行为名：audit 原始 op key（如 ssh.shell.start）对用户不友好，
+    // 榜单摘要 / 行为明细 / 我的统计统一走这里转义；未收录的 op 回退显示原始 key。
+    var PET_OP_LABELS = {
+      'ssh.shell.start': '开启 SSH 终端',
+      'ssh.session.time': 'SSH 在线时长',
+      'ssh.sftp.upload': 'SFTP 上传文件',
+      'ssh.sftp.download': 'SFTP 下载文件',
+      'ssh.sftp.edit.upload': '在线编辑保存文件',
+      'compare.deep_check': '深度内容比对',
+      'compare.folder_scan': '目录结构比对',
+      'compare.file_diff': '文件差异比对',
+      'logs.download': '下载日志',
+      'files.download': '下载文件',
+      'http.request': '发起 HTTP 请求',
+      'http.case.upsert': '保存 HTTP 用例',
+      'credentials.save': '保存凭据',
+      'reminder.add': '添加提醒'
+    };
+    function petOpLabel(op) {
+      var key = String(op || '');
+      return PET_OP_LABELS[key] || key || '(未知行为)';
+    }
+
     // 宠物榜单 loading 占位
     var petLoadingBox = el('div', {
       style: 'text-align:center; padding:24px 16px;'
@@ -742,7 +765,18 @@
       api('POST', '/api/pet/sync', {}).then(function (resp) {
         if (resp && resp.ok) renderPetBoard(resp);
         else loadPetBoardCached();
-      }).catch(function () { loadPetBoardCached(); });
+      }).catch(function (e) {
+        // 非 2xx：从错误消息区分「未配置」与「服务不可用」，未配置时展示本地降级说明
+        var msg = (e && e.message) ? String(e.message) : '';
+        if (msg.indexOf('未配置') !== -1) {
+          renderPetBoard(
+            { ok: true, entries: [], rank: 0, board_exp: 0, stale: true, server_time: '' },
+            '排行榜服务未配置，宠物状态仅本地展示'
+          );
+        } else {
+          loadPetBoardCached();
+        }
+      });
       // 我的统计独立拉取（不阻塞榜单渲染）
       boardStats = null;
       api('GET', '/api/pet/state').then(function (resp) {
@@ -763,8 +797,14 @@
 
     function loadPetBoardCached() {
       api('GET', '/api/pet/leaderboard').then(function (resp) {
-        if (resp && resp.ok) renderPetBoard(resp);
-        else showPetBoardError();
+        if (resp && resp.ok && resp.entries && resp.entries.length) {
+          renderPetBoard(resp);
+        } else if (resp && resp.ok) {
+          // 有本地缓存但为空 → 说明从没同步成功过，展示本地降级说明
+          renderPetBoard(resp, '暂无榜单数据：排行榜服务未配置或暂不可用，宠物状态仅本地展示');
+        } else {
+          showPetBoardError();
+        }
       }).catch(function () { showPetBoardError(); });
     }
 
@@ -776,7 +816,7 @@
       }));
     }
 
-    function renderPetBoard(resp) {
+    function renderPetBoard(resp, notice) {
       petBoard.innerHTML = '';
       var petState = (window.Kairo && Kairo.pet && Kairo.pet.state) ? Kairo.pet.state() : null;
       var isStale = !!(resp && resp.stale);
@@ -815,7 +855,7 @@
         var end = Math.min(cap, ops.length);
         for (var i = 0; i < end; i++) {
           var op = ops[i] || {};
-          parts.push(String(op.op || '(未知行为)') + ' ×' + fmtInt(op.count));
+          parts.push(petOpLabel(op.op) + ' ×' + fmtInt(op.count));
         }
         return parts.join(' · ');
       }
@@ -836,7 +876,7 @@
         });
         cloned.forEach(function (op) {
           rows.push(el('tr', null, [
-            el('td', { text: String(op.op || '-') }),
+            el('td', { text: petOpLabel(op.op) }),
             el('td', { text: String(fmtInt(op.count)) }),
             el('td', { text: String(fmtInt(op.exp)) })
           ]));
@@ -1013,10 +1053,16 @@
       tbl.appendChild(tBody);
       var boardWrap = el('div', { style: 'margin-bottom:10px;' }, [boardHead]);
       boardWrap.appendChild(tbl);
-      if (isStale) {
+      if (isStale && !notice) {
         boardWrap.appendChild(el('div', {
           style: 'font-size:10px;color:var(--text-mute);margin-bottom:6px;',
           text: '榜单为缓存数据'
+        }));
+      }
+      if (notice) {
+        boardWrap.appendChild(el('div', {
+          style: 'font-size:11px;color:var(--warn);margin-bottom:6px;',
+          text: notice
         }));
       }
       petBoard.appendChild(boardWrap);
@@ -1093,7 +1139,7 @@
       } else {
         map = boardStats.total || null;
       }
-      // op 名原样展示（后续加 op 中文映射表）
+      // op → 中文名统一走 petOpLabel（见上方映射表）
       var rows = [];
       if (map) {
         for (var op in map) {
@@ -1123,7 +1169,7 @@
         totalCount += r.count;
         totalExp += r.exp;
         stBody.appendChild(el('tr', null, [
-          el('td', { text: r.op }),
+          el('td', { text: petOpLabel(r.op) }),
           el('td', { text: String(r.count) }),
           el('td', { text: String(r.exp) })
         ]));

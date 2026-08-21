@@ -43,6 +43,15 @@ type Engine struct {
 	sigKey   []byte
 	skins    *SkinCatalog
 
+	// idSource 可选：新建宠物时用其返回值作稳定 ID（如从激活码派生），
+	// 保证同一用户重装/删 pet.json 后仍是同一只宠物（排行榜不会出现多个自己）。
+	// 仅对"新建"生效；已存在的 pet.json 保持原 ID，避免老用户排行榜分裂。
+	idSource func() (string, bool)
+
+	// codeSource 可选：返回激活码（用于同步时上送服务器，服务器据此做
+	// 激活码唯一绑定 / user_id 校验）。
+	codeSource func() (string, bool)
+
 	state *State
 
 	enabledFlag atomic.Bool
@@ -78,6 +87,22 @@ type Engine struct {
 // sigKey 为空时：读取 <pet.json 所在目录>/.petkey，不存在则生成 32 随机字节写入
 // （模式 0600，目录 0755，跟随 internal/credentials 的 .credkey 模式）。
 func NewEngine(rules Rules, dataPath string, sigKey []byte, skinsJSON []byte) (*Engine, error) {
+	return newEngine(rules, dataPath, sigKey, skinsJSON, nil, nil)
+}
+
+// NewEngineWithIDSource 同 NewEngine，额外指定新建宠物时的稳定 ID 来源
+// （例如从激活码派生，见 idSource 字段注释）。
+func NewEngineWithIDSource(rules Rules, dataPath string, sigKey []byte, skinsJSON []byte, idSource func() (string, bool)) (*Engine, error) {
+	return newEngine(rules, dataPath, sigKey, skinsJSON, idSource, nil)
+}
+
+// NewEngineWithSources 同 NewEngine，同时指定稳定 ID 来源与激活码来源
+// （激活码用于同步时上送服务器做唯一绑定，见 codeSource 字段注释）。
+func NewEngineWithSources(rules Rules, dataPath string, sigKey []byte, skinsJSON []byte, idSource, codeSource func() (string, bool)) (*Engine, error) {
+	return newEngine(rules, dataPath, sigKey, skinsJSON, idSource, codeSource)
+}
+
+func newEngine(rules Rules, dataPath string, sigKey []byte, skinsJSON []byte, idSource, codeSource func() (string, bool)) (*Engine, error) {
 	if dataPath == "" {
 		return nil, errors.New("pet: dataPath 不能为空")
 	}
@@ -100,6 +125,8 @@ func NewEngine(rules Rules, dataPath string, sigKey []byte, skinsJSON []byte) (*
 		dataPath:      dataPath,
 		sigKey:        key,
 		skins:         LoadSkins(skinsJSON),
+		idSource:      idSource,
+		codeSource:    codeSource,
 		cooldowns:     make(map[string]time.Time),
 		sessions:      make(map[string]time.Time),
 		lastAward:     make(map[string]time.Time),
@@ -122,6 +149,12 @@ func NewEngine(rules Rules, dataPath string, sigKey []byte, skinsJSON []byte) (*
 	}
 	if st == nil {
 		st = freshState()
+		// 有稳定 ID 来源（如激活码）时用派生 ID，保证重装后仍是同一只宠物。
+		if e.idSource != nil {
+			if id, ok := e.idSource(); ok && id != "" {
+				st.ID = id
+			}
+		}
 	}
 	normalizeState(st)
 	e.state = st
@@ -279,6 +312,22 @@ func (e *Engine) Rename(name string) error {
 		return nil
 	}
 	e.state.Name = cleaned
+	e.markDirtyLocked()
+	return nil
+}
+
+// SetOwner 设置主人的名字（宠物闲聊时称呼）：校验规则与改名一致。
+func (e *Engine) SetOwner(name string) error {
+	cleaned := cleanName(name)
+	if err := validateName(cleaned); err != nil {
+		return err
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.state.Owner == cleaned {
+		return nil
+	}
+	e.state.Owner = cleaned
 	e.markDirtyLocked()
 	return nil
 }

@@ -248,9 +248,9 @@ func TestWSRoundTrip(t *testing.T) {
 	}
 }
 
-// TestWSConnect_SSRFBlocked 验证 ws://127.0.0.1 被拒。
+// TestWSConnect_SSRFBlocked 验证 auth 启用（远程访问）时 ws://127.0.0.1 被拒。
 func TestWSConnect_SSRFBlocked(t *testing.T) {
-	srv, _, _, _ := newTestServer(t)
+	srv := newTestServerWithAuth(t, rbacTokens())
 	body := strings.NewReader(`{"url":"ws://127.0.0.1:1234/socket"}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/http/ws/connect", body)
 	rec := httptest.NewRecorder()

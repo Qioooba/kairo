@@ -4,6 +4,7 @@ package httpserver
 
 import (
 	"archive/zip"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"kairo/internal/audit"
+	"kairo/internal/config"
 	"kairo/internal/credentials"
 	"kairo/internal/sshclient"
 )
@@ -356,11 +358,21 @@ func auditErr(w http.ResponseWriter, a *audit.Logger, op string, kv ...any) {
 	a.Write(op, kv...)
 }
 
+// 凭据来源常量（cred_source）。用于响应/审计，定位"这次连接到底用了哪个密码"。
+const (
+	credSourceManual        = "manual"         // 用户本次输入的密码
+	credSourceStore         = "saved"          // keyring/file 里保存的密码
+	credSourceConfig        = "config"         // config.yaml 里的默认密码
+	credSourceStoreFallback = "saved-fallback" // 手输密码认证失败后，回退到已保存密码连接成功
+	credSourceConfigFallback = "config-fallback" // 手输/保存密码都失败后，回退到配置密码连接成功
+)
+
 // resolvedCreds SSH 凭据解析结果。Password 为空表示"需要前端提示用户输入"。
 type resolvedCreds struct {
 	Username     string
 	Password     string
-	SavedByStore bool // true 表示 password 来自凭据存储（keyring/file），不是用户本次输入
+	SavedByStore bool   // true 表示 password 来自凭据存储（keyring/file），不是用户本次输入
+	Source       string // 凭据来源：manual / saved / config（见 credSource* 常量）
 }
 
 // resolveCreds 把 HTTP 请求里的凭据 + 配置里的默认密码 + 凭据存储合并成一个最终值。
@@ -382,14 +394,14 @@ func (s *Server) resolveCreds(inputUser, inputPass, system, server, defaultUser,
 		return resolvedCreds{}, errors.New("缺少用户名")
 	}
 	if inputPass != "" {
-		return resolvedCreds{Username: username, Password: inputPass}, nil
+		return resolvedCreds{Username: username, Password: inputPass, Source: credSourceManual}, nil
 	}
 
 	mode := credentials.Mode()
 	// disabled 模式：不从存储读，尝试配置密码
 	if mode == credentials.ModeDisabled {
 		if defaultPass != "" {
-			return resolvedCreds{Username: username, Password: defaultPass}, nil
+			return resolvedCreds{Username: username, Password: defaultPass, Source: credSourceConfig}, nil
 		}
 		return resolvedCreds{Username: username}, nil
 	}
@@ -397,19 +409,99 @@ func (s *Server) resolveCreds(inputUser, inputPass, system, server, defaultUser,
 	// 尝试从凭据存储读（keyring/file）—— 优先级高于配置文件密码（用户主动保存 vs 管理员默认）
 	pw, err := credentials.Get(system, server, username)
 	if err == nil {
-		return resolvedCreds{Username: username, Password: pw, SavedByStore: true}, nil
+		return resolvedCreds{Username: username, Password: pw, SavedByStore: true, Source: credSourceStore}, nil
 	}
 	if errors.Is(err, credentials.ErrNotSaved) {
 		// keyring 没存 → 尝试配置文件里的默认密码
 		if defaultPass != "" {
-			return resolvedCreds{Username: username, Password: defaultPass}, nil
+			return resolvedCreds{Username: username, Password: defaultPass, Source: credSourceConfig}, nil
 		}
 		return resolvedCreds{Username: username}, nil
 	}
 	// 其它错误（keyring 不可用 / file 后端未初始化等）
 	// keyring 出错时仍可尝试配置密码
 	if defaultPass != "" {
-		return resolvedCreds{Username: username, Password: defaultPass}, nil
+		return resolvedCreds{Username: username, Password: defaultPass, Source: credSourceConfig}, nil
 	}
 	return resolvedCreds{}, fmt.Errorf("凭据存储不可用，请手动输入密码或检查配置: %w", err)
+}
+
+// isAuthRejection 判断 SSH 错误是否为"服务器拒绝了凭据"（认证类失败）。
+// 仅这类错误值得换一个密码重试；网络/握手/host key 类错误换密码无意义。
+func isAuthRejection(err error) bool {
+	if err == nil {
+		return false
+	}
+	cat := sshclient.Categorize(err)
+	return cat == sshclient.CatAuth || cat == sshclient.CatKbdInt
+}
+
+// dialSSHWithFallback 统一 SSH 拨号入口（凭据自动回退）。
+//
+// 背景（批量测试回归修复）：WebSphere/日志等页面批量勾选多台服务器时，
+// 所有服务器共用同一个手输密码框（且常被第一台服务器的配置密码预填充）。
+// 旧逻辑手输密码绝对优先 → 密码不同的服务器全部认证失败，即使钥匙串里
+// 存着各自的正确密码（表现为"以前能连上，新版本连不上"）。
+//
+// 行为：
+//  1. resolveCreds 解析首选凭据（手输 > 钥匙串 > 配置密码）并拨号；
+//  2. 若认证被拒且首选不是"已保存密码"，用钥匙串里该服务器的密码重试一次；
+//  3. 仍被拒且配置密码存在且不同，用配置密码再试一次；
+//  4. 总拨号次数 ≤ 3（每次连接内 x/crypto 最多尝试 none+password+kbd 三种方法），
+//     低于 sshd 默认 MaxAuthTries=6 的安全阈值，且认证失败本身不换算法 profile。
+//
+// 返回 (client, 最终凭据来源, err)。来源用于响应/审计，前端据此决定
+// 是否把手输密码覆盖写入钥匙串（fallback 成功时绝不能覆盖）。
+func (s *Server) dialSSHWithFallback(ctx context.Context, reqUser, reqPass, system, serverName string,
+	srv *config.ServerConfig, allowInsecureHostKey bool, timeout time.Duration) (*sshclient.Client, string, error) {
+
+	creds, err := s.resolveCreds(reqUser, reqPass, system, serverName, srv.Username, srv.Password)
+	if err != nil {
+		return nil, "", err
+	}
+	if creds.Password == "" {
+		return nil, creds.Source, errors.New("缺少密码（输入或勾选「记住密码」）")
+	}
+
+	sshSrv := sshclient.Server{
+		Name: srv.Name, Host: srv.Host, Port: srv.Port, Username: creds.Username,
+		HostKeySHA256: srv.HostKeySHA256, SSHProfile: srv.SSHProfile,
+		AllowInsecureHostKey: allowInsecureHostKey,
+	}
+
+	cli, dialErr := sshclient.Dial(ctx, sshSrv, sshclient.Credentials{Password: creds.Password}, timeout)
+	if dialErr == nil {
+		return cli, creds.Source, nil
+	}
+	if !isAuthRejection(dialErr) {
+		return nil, creds.Source, dialErr
+	}
+
+	// 首选凭据被拒 → 依次尝试其它来源的密码（跳过已试过的同一个密码）
+	type candidate struct {
+		password string
+		source   string
+	}
+	var candidates []candidate
+	if creds.Source != credSourceStore && credentials.Mode() != credentials.ModeDisabled {
+		if pw, e := credentials.Get(system, serverName, creds.Username); e == nil && pw != creds.Password {
+			candidates = append(candidates, candidate{pw, credSourceStoreFallback})
+		}
+	}
+	if creds.Source != credSourceConfig && srv.Password != "" && srv.Password != creds.Password {
+		candidates = append(candidates, candidate{srv.Password, credSourceConfigFallback})
+	}
+
+	var lastErr = dialErr
+	for _, cand := range candidates {
+		cli, err := sshclient.Dial(ctx, sshSrv, sshclient.Credentials{Password: cand.password}, timeout)
+		if err == nil {
+			return cli, cand.source, nil
+		}
+		lastErr = err
+		if !isAuthRejection(err) {
+			return nil, cand.source, err
+		}
+	}
+	return nil, creds.Source, lastErr
 }

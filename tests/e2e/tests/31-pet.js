@@ -1,11 +1,11 @@
 'use strict';
 
 /**
- * 31-pet.js — review-2026-08 方案 02
- * S3 宠物彩蛋全流程（A1，P0）+ S9 about 页懒渲染（B 批 3a8da9d）
+ * 31-pet.js — 宠物彩蛋流程（v3：宠物本体已改为原生桌面宠物）
  *
- * 顺序敏感：实例必须先处于「未解锁」状态（全新数据目录）。
- * 实例 C（config 强制开关）与「删除 pet.json 重启」由脚本外手动验证，见 02-e2e-report.md。
+ * 宠物不再在浏览器内渲染（无 .kairo-pet-widget / 迷你面板），
+ * 本套件只验证浏览器侧仍保留的能力：解锁、状态接口、零痕迹、武林页宠物榜、经验增长。
+ * 桌面宠物的展示/拖拽/换肤/改名由 internal/deskpet 原生窗口承担，不在此覆盖。
  */
 
 const fs = require('fs');
@@ -45,9 +45,6 @@ function register(runner, ctx) {
     let aPreEnabled = false;
 
     runner.beforeAll(async function () {
-      // 实例 A 前提：全新数据目录、宠物未解锁。若已被前置用例解锁
-      // （如全量回归里其它套件点「关于」卡触发），本实例测试整体跳过，
-      // 零痕迹验证在独立全新实例上跑（见 02-e2e-report.md 记录）。
       const st = await apiJSON(page, 'GET', '/api/pet/state');
       aPreEnabled = !!(st.data && st.data.enabled);
     });
@@ -60,12 +57,12 @@ function register(runner, ctx) {
       return false;
     }
 
-    runner.it('S3A-1 无浮动宠物 DOM；关于卡片正常；sponsor 无宠物榜 tab', async function () {
+    runner.it('S3A-1 浏览器内无宠物 DOM；关于卡片正常；sponsor 无宠物榜 tab', async function () {
       if (maybeSkip()) return;
       await page.goto(baseUrl + '/#/', { waitUntil: 'domcontentloaded' });
       await page.waitForTimeout(1200);
       const widget = await page.$('.kairo-pet-widget');
-      if (widget) throw new Error('未解锁却出现浮动宠物 DOM');
+      if (widget) throw new Error('浏览器内出现宠物 DOM（v3 已移除网页宠物）');
 
       await page.click('.tool-card[aria-label="关于"]');
       await page.waitForFunction(() => location.hash === '#/about');
@@ -95,7 +92,6 @@ function register(runner, ctx) {
 
     runner.it('S3A-3 10s 内点 5 次，等 11s 再点 1 次 → 不解锁（滑窗清零）', async function () {
       if (maybeSkip()) return;
-      // 先等 >10s 冲掉前面用例（S3A-1）留下的点击时间戳（SPA 不重载，计数器跨页面持久）
       await page.waitForTimeout(11000);
       const clickLog = [];
       for (let i = 0; i < 5; i++) {
@@ -118,25 +114,21 @@ function register(runner, ctx) {
           + ' | after5.enabled=' + (after5.data && after5.data.enabled)
           + ' | afterWait.enabled=' + (afterWait.data && afterWait.data.enabled));
       }
-      const widget = await page.$('.kairo-pet-widget');
-      if (widget) throw new Error('出现宠物 widget（不应解锁）');
     });
   });
 
   runner.describe('S3 宠物彩蛋 - 实例 B 解锁全流程', function () {
-    runner.it('S3B-1 10s 内点「关于」卡片 6 次 → 解锁 + 浮动宠物 Lv1', async function () {
+    runner.it('S3B-1 10s 内点「关于」卡片 6 次 → 解锁 + pet.json 落盘', async function () {
       for (let i = 0; i < 6; i++) {
         await gotoHome(page, baseUrl);
         await clickAboutCard(page);
       }
-      await page.waitForSelector('.kairo-pet-widget', { state: 'visible', timeout: 8000 });
+      await page.waitForTimeout(1000);
       const toastText = await page.evaluate(() => {
         const t = document.querySelector('#toast');
         return t ? t.textContent.trim() : '';
       });
       if (!/宠物/.test(toastText)) throw new Error('解锁 toast 文案异常: ' + toastText);
-      const badge = await page.$eval('.kairo-pet-badge', el => el.textContent.trim()).catch(() => '');
-      if (badge !== 'Lv1') throw new Error('等级徽章应为 Lv1，实际: ' + badge);
       const st = await apiJSON(page, 'GET', '/api/pet/state');
       if (!st.data || !st.data.enabled) throw new Error('API 未返回 enabled:true');
       const petJson = path.join(RUN_DIR, 'data', 'pet.json');
@@ -148,142 +140,6 @@ function register(runner, ctx) {
       await gotoHome(page, baseUrl);
       await clickAboutCard(page);
       await page.waitForFunction(() => location.hash === '#/about');
-    });
-
-    runner.it('S3B-3 拖动到左上角 → 位置持久化 → 刷新后恢复', async function () {
-      await page.evaluate(() => { location.hash = '#/'; });
-      await page.waitForTimeout(800);
-      const box = await page.$eval('.kairo-pet-widget', el => {
-        const r = el.getBoundingClientRect();
-        return { x: r.x, y: r.y, w: r.width, h: r.height };
-      });
-      await page.mouse.move(box.x + box.w / 2, box.y + box.h / 2);
-      await page.mouse.down();
-      for (let i = 1; i <= 25; i++) {
-        await page.mouse.move(box.x + box.w / 2 - i * 60, box.y + box.h / 2 - i * 50, { steps: 2 });
-        await page.waitForTimeout(30);
-      }
-      await page.mouse.up();
-      await page.waitForTimeout(1200);
-
-      const st = await apiJSON(page, 'GET', '/api/pet/state');
-      const pos = st.data && st.data.pos;
-      if (!pos || typeof pos.x !== 'number') throw new Error('pos 未保存: ' + JSON.stringify(st.data));
-      if (pos.x > 0.15 || pos.y > 0.15) throw new Error('pos 未靠近左上角: ' + JSON.stringify(pos));
-
-      await page.reload({ waitUntil: 'domcontentloaded' });
-      await page.waitForSelector('.kairo-pet-widget', { state: 'visible', timeout: 8000 });
-      await page.waitForTimeout(800);
-      const box2 = await page.$eval('.kairo-pet-widget', el => {
-        const r = el.getBoundingClientRect();
-        return { x: r.x, y: r.y };
-      });
-      if (box2.x > 120 || box2.y > 120) throw new Error('刷新后位置未恢复到左上区域: ' + JSON.stringify(box2));
-      await runner.screenshot(page, '31-s3b-drag-topleft');
-    });
-
-    runner.it('S3B-4 窗口缩小后宠物 clamp 回可视区', async function () {
-      await page.setViewportSize({ width: 1024, height: 768 });
-      await page.reload({ waitUntil: 'domcontentloaded' });
-      await page.waitForSelector('.kairo-pet-widget', { state: 'visible', timeout: 8000 });
-      await page.waitForTimeout(800);
-      const box = await page.$eval('.kairo-pet-widget', el => {
-        const r = el.getBoundingClientRect();
-        return { x: r.x, y: r.y, w: r.width, h: r.height };
-      });
-      if (box.x < 0 || box.y < 0 || box.x + box.w > 1024 || box.y + box.h > 768) {
-        throw new Error('缩小视口后宠物越界: ' + JSON.stringify(box));
-      }
-      await runner.screenshot(page, '31-s3b-resize-clamp');
-      await page.setViewportSize({ width: 1366, height: 900 });
-      await page.waitForTimeout(500);
-    });
-
-    runner.it('S3B-5 快速晃动换肤（v2：切到下一款已解锁皮肤）+ 2s 冷却内二次晃动不触发', async function () {
-      await page.evaluate(() => { location.hash = '#/'; });
-      await page.waitForTimeout(800);
-      const stBefore = (await apiJSON(page, 'GET', '/api/pet/state')).data;
-      const skinBefore = String(stBefore.skin);
-      // v2：skin 为语义 id（如 orange-cat），晃动在「已解锁清单」内循环取下一款
-      const unlocked = (stBefore.skins || [])
-        .filter(s => s && s.unlocked)
-        .map(s => String(s.id));
-      if (unlocked.length < 2) throw new Error('Lv1 应有多款默认解锁皮肤（v2 清单）: ' + JSON.stringify(unlocked));
-      const idx = unlocked.indexOf(skinBefore);
-      const expectNext = unlocked[(idx + 1 + unlocked.length) % unlocked.length];
-
-      const shake = async () => {
-        const box = await page.$eval('.kairo-pet-widget', el => {
-          const r = el.getBoundingClientRect();
-          return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
-        });
-        await page.mouse.move(box.x, box.y);
-        await page.mouse.down();
-        for (let i = 0; i < 10; i++) {
-          const dx = (i % 2 === 0) ? 45 : -45;
-          await page.mouse.move(box.x + dx, box.y, { steps: 1 });
-          await page.waitForTimeout(20);
-        }
-        await page.mouse.up();
-      };
-
-      const skinReqsBefore = ctx.networkLogs.filter(l => l.type === 'request' && l.url.includes('/api/pet/skin')).length;
-      await shake();
-      await page.waitForTimeout(1200);
-      const skinReqsAfter1 = ctx.networkLogs.filter(l => l.type === 'request' && l.url.includes('/api/pet/skin')).length;
-      if (skinReqsAfter1 !== skinReqsBefore + 1) throw new Error(`晃动未触发恰好 1 次换肤请求（before=${skinReqsBefore} after=${skinReqsAfter1}）`);
-      const st1 = await apiJSON(page, 'GET', '/api/pet/state');
-      if (String(st1.data.skin) !== expectNext) {
-        throw new Error('晃动后皮肤应为下一款已解锁「' + expectNext + '」, 实际: ' + st1.data.skin);
-      }
-
-      await shake();
-      await page.waitForTimeout(800);
-      const skinReqsAfter2 = ctx.networkLogs.filter(l => l.type === 'request' && l.url.includes('/api/pet/skin')).length;
-      if (skinReqsAfter2 !== skinReqsAfter1) throw new Error('2s 冷却内二次晃动触发了换肤请求');
-      await runner.screenshot(page, '31-s3b-skin-change');
-    });
-
-    runner.it('S3B-6 单击宠物弹出迷你面板（等级/经验/皮肤/改名入口）', async function () {
-      const box = await page.$eval('.kairo-pet-widget', el => {
-        const r = el.getBoundingClientRect();
-        return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
-      });
-      await page.mouse.move(box.x, box.y);
-      await page.mouse.down();
-      await page.mouse.up();
-      await page.waitForSelector('.kairo-pet-panel', { state: 'visible', timeout: 5000 });
-      const text = await page.$eval('.kairo-pet-panel', el => el.textContent);
-      for (const kw of ['Lv', '经验', '皮肤', '确定']) {
-        if (!text.includes(kw)) throw new Error('迷你面板缺少「' + kw + '」');
-      }
-      await runner.screenshot(page, '31-s3b-mini-panel');
-    });
-
-    runner.it('S3B-7 改名「小K2号」→ 气泡复述 + 刷新后保持', async function () {
-      const panel = await page.$('.kairo-pet-panel');
-      if (!panel) {
-        const box = await page.$eval('.kairo-pet-widget', el => {
-          const r = el.getBoundingClientRect();
-          return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
-        });
-        await page.mouse.move(box.x, box.y);
-        await page.mouse.down();
-        await page.mouse.up();
-        await page.waitForSelector('.kairo-pet-panel', { state: 'visible' });
-      }
-      const input = await page.$('.kairo-pet-panel input[maxlength="16"]');
-      await input.fill('小K2号');
-      await page.click('.kairo-pet-panel button:has-text("确定")');
-      await page.waitForTimeout(1000);
-      const st = await apiJSON(page, 'GET', '/api/pet/state');
-      if (st.data.name !== '小K2号') throw new Error('改名未生效: ' + st.data.name);
-
-      await page.reload({ waitUntil: 'domcontentloaded' });
-      await page.waitForTimeout(1200);
-      const st2 = await apiJSON(page, 'GET', '/api/pet/state');
-      if (st2.data.name !== '小K2号') throw new Error('刷新后名字未保持');
-      await runner.screenshot(page, '31-s3b-renamed');
     });
 
     runner.it('S3B-8 sponsor 页出现双 tab；宠物榜未配置端点时本地降级（X5）', async function () {
@@ -302,7 +158,7 @@ function register(runner, ctx) {
       await page.waitForTimeout(2500);
       const boardText = await page.$eval('.pet-board', el => el.textContent).catch(() => '');
       if (!boardText) throw new Error('宠物榜容器无内容');
-      if (!/榜单空空如也|宠物排行榜|第 \d+ 名|未上榜/.test(boardText)) {
+      if (!/榜单空空如也|宠物排行榜|第 \d+ 名|未上榜|未配置|仅本地展示/.test(boardText)) {
         throw new Error('宠物榜内容异常: ' + boardText.substring(0, 120));
       }
 
@@ -330,8 +186,6 @@ function register(runner, ctx) {
       const after = await apiJSON(page, 'GET', '/api/pet/state');
       const expAfter = Number(after.data.total_earned || 0);
       if (expAfter <= expBefore) {
-        // 60min 冷却（http.request 的 target 为空，同 op 全共享冷却）会阻止重复加分；
-        // 此时改验审计链路确实把 http.request 写入，且冷却语义正确（不重复计分）。
         const auditPath = path.join(RUN_DIR, 'logs', 'audit.log');
         const audit = fs.existsSync(auditPath) ? fs.readFileSync(auditPath, 'utf8') : '';
         const lastHttpReq = audit.split('\n').filter(l => l.includes('op":"http.request"')).slice(-1)[0] || '';
