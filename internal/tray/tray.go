@@ -21,6 +21,8 @@ var iconBytes []byte
 type Config struct {
 	Tooltip       string // 托盘 tooltip
 	OnOpenBrowser func() // "打开浏览器"菜单回调
+	OnNewNote     func() // "新建便笺"菜单回调
+	OnToggleNotes func() // "显示/隐藏桌面便笺"菜单回调
 	OnOpenPet     func() // "显示宠物"菜单回调（打开悬浮宠物窗口）
 	OnQuit        func() // "退出"菜单回调（优雅关闭 HTTP server 等）
 

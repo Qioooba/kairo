@@ -174,6 +174,45 @@ func TestValidateWSDLText(t *testing.T) {
 	}
 }
 
+func TestParseWSDL_MixedSOAP11And12Bindings(t *testing.T) {
+	raw := `<?xml version="1.0" encoding="UTF-8"?>
+<wsdl:definitions xmlns:wsdl="http://schemas.xmlsoap.org/wsdl/"
+ xmlns:soap="http://schemas.xmlsoap.org/wsdl/soap/"
+ xmlns:soap12="http://schemas.xmlsoap.org/wsdl/soap12/"
+ xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:tns="urn:mixed" targetNamespace="urn:mixed">
+ <wsdl:types><xs:schema targetNamespace="urn:mixed"><xs:element name="ping"><xs:complexType><xs:sequence><xs:element name="id" type="xs:string"/></xs:sequence></xs:complexType></xs:element></xs:schema></wsdl:types>
+ <wsdl:message name="PingIn"><wsdl:part name="p" element="tns:ping"/></wsdl:message>
+ <wsdl:portType name="PT"><wsdl:operation name="ping"><wsdl:input message="tns:PingIn"/></wsdl:operation></wsdl:portType>
+ <wsdl:binding name="B11" type="tns:PT"><soap:binding style="document" transport="http://schemas.xmlsoap.org/soap/http"/><wsdl:operation name="ping"><soap:operation soapAction="urn:ping11"/><wsdl:input><soap:body use="literal"/></wsdl:input></wsdl:operation></wsdl:binding>
+ <wsdl:binding name="B12" type="tns:PT"><soap12:binding style="document" transport="http://schemas.xmlsoap.org/soap/http"/><wsdl:operation name="ping"><soap12:operation soapAction="urn:ping12"/><wsdl:input><soap12:body use="literal"/></wsdl:input></wsdl:operation></wsdl:binding>
+ <wsdl:service name="Mixed"><wsdl:port name="P11" binding="tns:B11"><soap:address location="http://127.0.0.1/soap11"/></wsdl:port><wsdl:port name="P12" binding="tns:B12"><soap12:address location="http://127.0.0.1/soap12"/></wsdl:port></wsdl:service>
+</wsdl:definitions>`
+	p := ParseWSDL(raw)
+	if p.ParseError != "" {
+		t.Fatal(p.ParseError)
+	}
+	if len(p.Services) != 1 || len(p.Services[0].Ports) != 2 {
+		t.Fatalf("ports=%+v", p.Services)
+	}
+	versions := map[string]string{}
+	for _, port := range p.Services[0].Ports {
+		versions[port.Name] = port.SOAPVersion
+	}
+	if versions["P11"] != "1.1" || versions["P12"] != "1.2" {
+		t.Errorf("port 版本识别错误: %+v", versions)
+	}
+	if len(p.Operations) != 2 {
+		t.Fatalf("同一 operation 的 1.1/1.2 binding 都应保留: %+v", p.Operations)
+	}
+	opVersions := map[string]string{}
+	for _, op := range p.Operations {
+		opVersions[op.Endpoint] = op.SOAPVersion
+	}
+	if opVersions["http://127.0.0.1/soap11"] != "1.1" || opVersions["http://127.0.0.1/soap12"] != "1.2" {
+		t.Errorf("operation binding 版本错误: %+v", opVersions)
+	}
+}
+
 // 两个 schema（targetNamespace 不同）含同名 element/complexType，
 // 且故意让 schema B 排在前面：验证 ns+name 索引按 message part 的 QName 前缀
 // 解析到正确的 schema（旧实现按 name 匹配会拿错 namespace 和参数）。

@@ -15,6 +15,7 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -50,7 +51,6 @@ var (
 
 func SetMode(m string) {
 	modeMu.Lock()
-	defer modeMu.Unlock()
 	switch strings.ToLower(strings.TrimSpace(m)) {
 	case ModeFile:
 		mode = ModeFile
@@ -58,6 +58,16 @@ func SetMode(m string) {
 		mode = ModeDisabled
 	default:
 		mode = ModeKeyring
+	}
+	current := mode
+	modeMu.Unlock()
+	if current != ModeFile {
+		fileMu.Lock()
+		fileInit = false
+		fileKey = nil
+		filePath = ""
+		fileDataDir = ""
+		fileMu.Unlock()
 	}
 }
 
@@ -82,6 +92,14 @@ func guardModeValue(m string) error {
 
 func Key(system, server, username string) string {
 	return strings.Join([]string{system, server, username}, "|")
+}
+
+// ResourceKey 为非 SSH 模块生成无碰撞的通用凭据键。
+// 每段使用 RawURL base64 编码，避免旧的 "a|b|c" 格式在字段本身含 | 时发生碰撞。
+// 旧 SSH API 继续使用 Key，已有钥匙串条目无需迁移。
+func ResourceKey(namespace, resource, username string) string {
+	enc := base64.RawURLEncoding.EncodeToString
+	return "v2|" + enc([]byte(namespace)) + "|" + enc([]byte(resource)) + "|" + enc([]byte(username))
 }
 
 // ---------- file backend ----------
@@ -387,6 +405,18 @@ func Save(system, server, username, password string) error {
 	return nil
 }
 
+// SaveResource 保存通用资源凭据。namespace 用于模块隔离，例如 "database"；
+// resource 使用稳定 ID，避免重命名数据源后丢失密码。
+func SaveResource(namespace, resource, username, password string) error {
+	if strings.TrimSpace(namespace) == "" || strings.TrimSpace(resource) == "" || strings.TrimSpace(username) == "" {
+		return errors.New("credentials: namespace/resource/username 不能为空")
+	}
+	if password == "" {
+		return errors.New("credentials: 密码不能为空")
+	}
+	return saveByKey(ResourceKey(namespace, resource, username), password)
+}
+
 func Get(system, server, username string) (string, error) {
 	if system == "" || server == "" || username == "" {
 		return "", errors.New("credentials: system/server/username 不能为空")
@@ -415,8 +445,26 @@ func Get(system, server, username string) (string, error) {
 	return pw, nil
 }
 
+func GetResource(namespace, resource, username string) (string, error) {
+	if strings.TrimSpace(namespace) == "" || strings.TrimSpace(resource) == "" || strings.TrimSpace(username) == "" {
+		return "", errors.New("credentials: namespace/resource/username 不能为空")
+	}
+	return getByKey(ResourceKey(namespace, resource, username))
+}
+
 func Has(system, server, username string) (bool, error) {
 	_, err := Get(system, server, username)
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, ErrNotSaved) {
+		return false, nil
+	}
+	return false, err
+}
+
+func HasResource(namespace, resource, username string) (bool, error) {
+	_, err := GetResource(namespace, resource, username)
 	if err == nil {
 		return true, nil
 	}
@@ -435,6 +483,80 @@ func Clear(system, server, username string) error {
 		return err
 	}
 	k := Key(system, server, username)
+	if currentMode == ModeFile {
+		if err := fileReady(); err != nil {
+			return err
+		}
+		return fileClear(k)
+	}
+	if err := keyring.Delete(Service, k); err != nil {
+		if errors.Is(err, keyring.ErrNotFound) {
+			return ErrNotSaved
+		}
+		if isUnavailable(err) {
+			return fmt.Errorf("%w: %v", ErrUnavailable, err)
+		}
+		return fmt.Errorf("credentials: 删除钥匙串条目失败: %w", err)
+	}
+	return nil
+}
+
+func ClearResource(namespace, resource, username string) error {
+	if strings.TrimSpace(namespace) == "" || strings.TrimSpace(resource) == "" || strings.TrimSpace(username) == "" {
+		return errors.New("credentials: namespace/resource/username 不能为空")
+	}
+	return clearByKey(ResourceKey(namespace, resource, username))
+}
+
+func saveByKey(k, password string) error {
+	currentMode := Mode()
+	if err := guardModeValue(currentMode); err != nil {
+		return err
+	}
+	if currentMode == ModeFile {
+		if err := fileReady(); err != nil {
+			return err
+		}
+		return fileSave(k, password)
+	}
+	if err := keyring.Set(Service, k, password); err != nil {
+		if isUnavailable(err) {
+			return fmt.Errorf("%w: %v", ErrUnavailable, err)
+		}
+		return fmt.Errorf("credentials: 写入钥匙串失败: %w", err)
+	}
+	return nil
+}
+
+func getByKey(k string) (string, error) {
+	currentMode := Mode()
+	if err := guardModeValue(currentMode); err != nil {
+		return "", err
+	}
+	if currentMode == ModeFile {
+		if err := fileReady(); err != nil {
+			return "", err
+		}
+		return fileGet(k)
+	}
+	pw, err := keyring.Get(Service, k)
+	if err != nil {
+		if errors.Is(err, keyring.ErrNotFound) {
+			return "", ErrNotSaved
+		}
+		if isUnavailable(err) {
+			return "", fmt.Errorf("%w: %v", ErrUnavailable, err)
+		}
+		return "", fmt.Errorf("credentials: 读取钥匙串失败: %w", err)
+	}
+	return pw, nil
+}
+
+func clearByKey(k string) error {
+	currentMode := Mode()
+	if err := guardModeValue(currentMode); err != nil {
+		return err
+	}
 	if currentMode == ModeFile {
 		if err := fileReady(); err != nil {
 			return err

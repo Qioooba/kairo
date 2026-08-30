@@ -163,8 +163,13 @@ func (s *Server) handleWSDLImportURL(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 502, fmt.Errorf("读取 WSDL 失败: %w", err))
 		return
 	}
+	decoded, err := webservice.DecodeXMLBytes(raw, resp.Header.Get("Content-Type"))
+	if err != nil {
+		writeErr(w, 400, fmt.Errorf("WSDL 编码不兼容: %w", err))
+		return
+	}
 
-	p := webservice.ParseWSDL(string(raw), url)
+	p := webservice.ParseWSDL(decoded, url)
 	p.Source = "url"
 	p.SourceURL = url
 	if req.Name != "" {
@@ -188,8 +193,8 @@ func (s *Server) handleWSDLImportFile(w http.ResponseWriter, r *http.Request) {
 		Name        string            `json:"name"`
 		Attachments map[string]string `json:"attachments"`
 	}
-	// 4MB 上限
-	if err := json.NewDecoder(io.LimitReader(r.Body, 4*1024*1024+1024)).Decode(&req); err != nil {
+	// 单文件由前端限制为 4MB；为 WSDL + 多个外部 XSD 预留 20MB JSON 请求空间。
+	if err := json.NewDecoder(io.LimitReader(r.Body, 20*1024*1024)).Decode(&req); err != nil {
 		writeErr(w, 400, fmt.Errorf("JSON 解析失败: %w", err))
 		return
 	}

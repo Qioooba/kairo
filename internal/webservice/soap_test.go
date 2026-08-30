@@ -1,6 +1,7 @@
 package webservice
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -106,6 +107,49 @@ func TestFormatXML_Minify_Validate(t *testing.T) {
 	}
 	if _, err := FormatXML("", "  "); err == nil {
 		t.Error("empty should fail")
+	}
+}
+
+func TestFormatXML_PreservesSignificantWhitespaceAndMixedContent(t *testing.T) {
+	raw := `<Envelope><fixed>  A B  </fixed><mixed>Hello <b>world</b> !</mixed><empty> </empty></Envelope>`
+	formatted, err := FormatXML(raw, "  ")
+	if err != nil {
+		t.Fatalf("FormatXML: %v", err)
+	}
+	for _, want := range []string{
+		`<fixed>  A B  </fixed>`,
+		`<mixed>Hello <b>world</b> !</mixed>`,
+		`<empty> </empty>`,
+	} {
+		if !strings.Contains(formatted, want) {
+			t.Errorf("格式化改变了 XML 文本语义，缺少 %q:\n%s", want, formatted)
+		}
+	}
+	minified, err := MinifyXML(formatted)
+	if err != nil {
+		t.Fatalf("MinifyXML: %v", err)
+	}
+	if minified != raw {
+		t.Errorf("format → minify 应恢复原始紧凑报文\n got: %q\nwant: %q", minified, raw)
+	}
+	if _, err := FormatXML(`<a><b></a>`, "  "); err == nil {
+		t.Error("FormatXML 不应接受标签不匹配的 XML")
+	}
+}
+
+func TestGenerateEnvelope_BareMissingXSDDoesNotDoubleWrap(t *testing.T) {
+	op := Operation{
+		Name:      "queryService",
+		InputName: "QueryRequest",
+		Namespace: "urn:query",
+		InputParams: []Param{{
+			Name: "QueryRequest",
+			Type: "ext:QueryRequest",
+		}},
+	}
+	env := GenerateEnvelope(op, "1.1")
+	if strings.Count(env, "<QueryRequest") != 1 {
+		t.Fatalf("缺外部 XSD 的 bare 请求根元素只能出现一次:\n%s", env)
 	}
 }
 
@@ -260,5 +304,48 @@ func TestSend_GBKRoundTrip(t *testing.T) {
 	// 响应应解码回 "张"
 	if !strings.Contains(resp.Body, "张") {
 		t.Errorf("response not GBK-decoded: %q", resp.Body)
+	}
+}
+
+func TestSend_SOAP12AndEncodingDeclaration(t *testing.T) {
+	var gotCT, gotAction string
+	var gotBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotCT = r.Header.Get("Content-Type")
+		gotAction = r.Header.Get("SOAPAction")
+		gotBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/soap+xml; charset=UTF-8")
+		_, _ = w.Write([]byte(`<ok/>`))
+	}))
+	defer srv.Close()
+
+	resp := Send(SendRequest{
+		Endpoint:    srv.URL,
+		SOAPAction:  `urn:test-action`,
+		SOAPVersion: "1.2",
+		Encoding:    "GBK",
+		Body:        `<?xml version="1.0" encoding="UTF-8"?><请求>中文</请求>`,
+		TimeoutMs:   5000,
+	})
+	if !resp.OK {
+		t.Fatalf("Send: %s", resp.Error)
+	}
+	if gotAction != "" {
+		t.Errorf("SOAP 1.2 不应发送 SOAPAction header, got %q", gotAction)
+	}
+	if !strings.Contains(gotCT, `application/soap+xml`) || !strings.Contains(gotCT, `action="urn:test-action"`) || !strings.Contains(gotCT, `charset=GBK`) {
+		t.Errorf("SOAP 1.2 Content-Type 不完整: %q", gotCT)
+	}
+	decoded, ok := decodeChinese(gotBody, "GBK")
+	if !ok || !strings.Contains(decoded, `encoding="GBK"`) || !strings.Contains(decoded, `中文`) {
+		t.Errorf("线上的 GBK XML declaration/正文不一致: %q", decoded)
+	}
+}
+
+func TestDecodeResponseBody_PrefersValidXMLDeclaration(t *testing.T) {
+	raw := []byte(`<?xml version="1.0" encoding="UTF-8"?><name>张三</name>`)
+	got := decodeResponseBody(raw, "text/xml; charset=GBK", "GBK")
+	if !strings.Contains(got, "张三") {
+		t.Errorf("HTTP charset 错报 GBK、XML 实际 UTF-8 时应避免乱码: %q", got)
 	}
 }

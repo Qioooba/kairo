@@ -289,10 +289,12 @@ func TestManagerFireSkipsStaleSlot(t *testing.T) {
 }
 
 func TestManagerOverlapSkipped(t *testing.T) {
+	t.Setenv(schedtaskHelperEnv, "1")
 	m := newTestManager(t)
 	// 先手动启动一个长跑任务占住 running 位
 	slow := testTask()
-	slow.Command = "sleep 2"
+	slow.Command = helperCommand("wait")
+	slow.TimeoutSec = 30
 	slowAdded, err := m.Add(slow)
 	if err != nil {
 		t.Fatal(err)

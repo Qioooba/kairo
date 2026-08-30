@@ -6,7 +6,7 @@
 
 把 **SSH 远程命令 / 交互式终端 / WebSphere 日志排查 / 任意路径文件下载 / 报文格式化 / WebService 调试 / HTTP 测试 / 定时提醒 / 投喂作者** 收敛到一个零依赖、绿色运行、本地优先的单 exe 中——面向内网运维 / DBA / SRE 的本地工具箱。
 
-[![Go Version](https://img.shields.io/badge/Go-1.20%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
+[![Go Version](https://img.shields.io/badge/Go-1.24%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-4F4F4F)](#)
 [![License](https://img.shields.io/badge/License-Internal%20Use-orange)](#)
 [![Status](https://img.shields.io/badge/Status-v0.15-success)](#)
@@ -49,6 +49,7 @@ Kairo 全栈自绘 5 套主题，深色 / 浅色 / 护眼绿 / 高对比 / 仙�
 | 想追溯谁什么时候拉了哪个文件 | `logs/audit.log` 全操作流水 + `downloads/.kairo-meta.json` 索引 + SSH 凭据零明文 |
 | 密码写在 yaml 里很危险 | OS 钥匙串（Keychain / DPAPI / Secret Service）按 `(system,server,user)` 三元组存储；`file` 模式走 AES-256-GCM + AAD |
 | 老 Java / WebSphere / XFire 的 SOAP 接口要调试，SoapUI 太重 | WebService 调试中心：WSDL 导入（URL/文件）→ 自动生成 Envelope → 一键发送 + 模板 + 历史 + Mock |
+| 生产 Oracle 11g、MySQL、Redis 排查要在多个客户端间切换 | 数据库工作台：集中管理数据源，Oracle/MySQL 流式只读 SQL、元数据浏览与 CSV，Redis 用 SCAN 分页查看 Key |
 | SSH 终端里想直接拖文件、在线编辑 | 内嵌 SFTP 浏览器（list / pwd / preview / download），v0.13.1 起支持在线编辑 + 大文件分片上传 |
 | 容易忘写日报 / 房贷 / 客户跟进 | 定时提醒：单次 / 周循环 / 月循环，托盘弹 Win10+ Toast，暂停今日到次日 0 点 |
 | 想给作者投喂又怕走错链接 | 「投喂作者」页：库迪 / 瑞幸 / 随机奶茶三栏榜 + 真实姓名 + 武林花名前缀 |
@@ -61,7 +62,7 @@ Kairo 全栈自绘 5 套主题，深色 / 浅色 / 护眼绿 / 高对比 / 仙�
 ### 方式 A · 直接运行发版 exe（同事拿到包就这样用）
 
 1. 解压发版 zip 到任意目录，比如 `D:\kairo\`
-2. **双击 `Kairo_win10.exe`**（Win10/11）或 `Kairo_win7.exe`（Win7）：
+2. **双击 `Kairo_win10.exe`**（主线支持 Win10/11）：
    - 无控制台黑窗口弹出（`-H windowsgui`）
    - 浏览器自动打开 `http://127.0.0.1:18092`（端口可在 `config.yaml` 改）
    - **系统托盘**（右下角）出现 Kairo 图标，常驻进程
@@ -77,7 +78,7 @@ cd kairo
 go run .
 ```
 
-需要 Go 1.20+（Win7 兼容）；会自动打开 `http://127.0.0.1:18080`（`config.yaml` 没改时）。
+需要 Go 1.24+；会自动打开 `http://127.0.0.1:18080`（`config.yaml` 没改时）。Win7 版本已与主线解耦，在 legacy 分支独立维护。
 
 ### 第一次跑要做什么
 
@@ -85,7 +86,8 @@ go run .
 2. 录入「业务系统 / 服务器 / 日志目录」（三层：系统 → 服务器 → 目录，支持可视化增删改）
 3. 回到 **日志助手**，选目标 → 列文件 → 搜索 → Tail
 4. 需要 properties / xml / jar 等不在白名单目录的文件？用 **文件下载** 或在 **SSH 终端** 里直接浏览
-5. 第一次跑会要求激活（License 体系，详见下方「FAQ · License 激活失败」与 v0.11-rc1 发布日志）
+5. 需要查库时进入 **数据库工作台**，由管理员创建只读 Oracle/MySQL/Redis 数据源并设置授权用户
+6. 第一次跑会要求激活（License 体系，详见下方「FAQ · License 激活失败」与 v0.11-rc1 发布日志）
 
 ### 启动时会自动恢复哪些用户偏好（不用重设）
 
@@ -111,6 +113,7 @@ go run .
 | WebSphere 上次选的「系统 / 服务器 / 目录 / 用户名」 | `kairo:last:websphere:sel`（老 `dtb:last:websphere:sel` / `otb:last:websphere:sel` 自动迁移） |
 | 文件下载页「当前路径 / 过滤词」 | `kairo:last:files:sel` / `kairo:last:files:filter` |
 | WebSphere 目标区折叠 / 展开 | `kairo:last:websphere:target_collapsed` |
+| 数据库工作台上次使用的数据源 | `kairo:database:last-source`（只存数据源 ID，不存密码） |
 | 提示 banner 关闭状态 | `kairo:dismissed:*`（老 `dtb:dismissed:*` / `otb:dismissed:*` 自动迁移） |
 | 实时 tail 凭据（单次内存 → opener 共享，不进 LS） | `window.opener.Kairo._tailCred` |
 
@@ -122,7 +125,7 @@ go run .
 
 ## <img src="docs/section-icons/modules.svg" width="22" height="22" align="absmiddle"> 功能矩阵
 
-Kairo 当前 **13 个功能模块** · 18 个前端页面（+ 1 个 SFTP 共享工具） · ~90 个 API 端点 · **25 个后端子包**。
+Kairo 按功能拆分前端页面和后端子包；数据库工作台是独立模块，不与 SSH、配置文件或 WebService 逻辑耦合。
 
 ### 1. WebSphere 日志助手
 
@@ -198,9 +201,9 @@ Kairo 当前 **13 个功能模块** · 18 个前端页面（+ 1 个 SFTP 共享�
 
 | 子功能 | 说明 |
 | --- | --- |
-| **WSDL 导入** | URL 拉取（30s 超时）或本地 `.wsdl` / `.xsd` / `.xml` 上传（4MB 上限，支持多文件 attach）；外部 XSD import / include 递归加载；解析失败降级保留 `InputRaw` / `OutputRaw` + Warnings |
+| **WSDL 导入** | URL 拉取（30s 超时）或本地 `.wsdl` / `.xsd` / `.xml` 多选上传（单文件 4MB、合计 16MB）；识别 UTF-8/UTF-16/GBK/GB2312/GB18030；外部 XSD import / include 递归加载；解析失败降级保留 `InputRaw` / `OutputRaw` + Warnings |
 | **SOAP Envelope 生成** | 选中 operation 自动生成 Envelope，输入 / 输出参数树展开；支持 SOAP 1.1 / 1.2；XSD complex content / extension 继承解析 |
-| **接口测试** | 自定义 endpoint / SOAPAction / Headers / Body；超时 + 取消；响应按 status / body / 关键词分块展示 |
+| **接口测试** | 自定义 endpoint / SOAPAction / Headers / Body；Header 支持逐行、JSON、curl 粘贴；UTF-8/GBK/GB2312/GB18030；可关闭单次历史保存；超时 + 取消；响应按 status / body / 关键词分块展示 |
 | **模板管理** | 保存常用请求为模板（按分组），命名 / 编辑 / 删除 |
 | **历史回放** | 最近 500 条请求记录，搜索 / 一键回放 |
 | **Mock 服务端** | 保存 Mock 配置后立即生效；走独立路由前缀 `/mock/{projectId}/{path...}`，**不走** `/api/` 鉴权（mock 地址是给外部系统调用的，不能要求带本工具箱的 token）；record 异步落盘 + 查询 / 清空 |
@@ -309,7 +312,10 @@ v0.7 起实装的客户端静态工具（无后端改动）：
 
 | 依赖 | 版本 | 用途 |
 | --- | --- | --- |
-| **Go** | 1.20+ | 主语言，`go 1.20` directive（兼容 Win7 编译） |
+| **Go** | 1.24+ | 主语言；主线面向 Win10/11，Win7 在 legacy 分支独立维护 |
+| [`github.com/sijms/go-ora/v2`](https://github.com/sijms/go-ora) | v2.8.24 | 纯 Go Oracle 驱动，生产目标为 Oracle 11g，无需 Oracle Instant Client |
+| [`github.com/go-sql-driver/mysql`](https://github.com/go-sql-driver/mysql) | v1.9.3 | MySQL 连接池与只读查询 |
+| [`github.com/redis/go-redis/v9`](https://github.com/redis/go-redis) | v9.20.0 | Redis SCAN 与类型化 Key 预览 |
 | [`github.com/pkg/sftp`](https://github.com/pkg/sftp) | v1.13.6 | SFTP 协议实现：列目录、Stat、下载、Open、Readdir |
 | [`github.com/gorilla/websocket`](https://github.com/gorilla/websocket) | v1.5.3 | SSH 终端双向桥（v0.10 起） |
 | [`golang.org/x/crypto/ssh`](https://pkg.go.dev/golang.org/x/crypto/ssh) | v0.31.0 | SSH 客户端 + 5 套 compat profile；SSH shell 会话（v0.10 起） |
@@ -319,7 +325,7 @@ v0.7 起实装的客户端静态工具（无后端改动）：
 | [`github.com/danieljoos/wincred`](https://github.com/danieljoos/wincred) | v1.2.3 | Windows DPAPI（`go-keyring` 后端） |
 | [`github.com/godbus/dbus/v5`](https://github.com/godbus/dbus) | v5.2.2 | Linux Secret Service / D-Bus |
 | [`gopkg.in/yaml.v3`](https://gopkg.in/yaml.v3) | v3.0.1 | `config.yaml` 解析 + 原子写回 |
-| [`golang.org/x/sys`](https://pkg.go.dev/golang.org/x/sys) | v0.28.0 | 平台特定系统调用 |
+| [`golang.org/x/sys`](https://pkg.go.dev/golang.org/x/sys) | v0.30.0 | 平台特定系统调用 |
 | **标准库** | — | `net/http`、`embed`（静态资源内嵌）、`context`、`os/exec`、`crypto/sha256`、`crypto/aes` |
 
 ### 前端
@@ -327,7 +333,7 @@ v0.7 起实装的客户端静态工具（无后端改动）：
 | 选型 | 说明 |
 | --- | --- |
 | **原生 JavaScript (ES2020)** | 无 React / Vue 依赖，单文件 IIFE |
-| **模块拆分** | `core.js` / `state.js` / `api.js` / `theme.js` / `auth.js`（v0.9 Bearer token 登录遮罩）+ `tail.js`（独立 tail 窗口逻辑）+ `sftp-common.js`（v0.11+ SSH 终端 SFTP 共享工具，非页面）+ `pages/*.js`（**18 个页面**：home / websphere / files / ssh / formatter / commands / diagnostics / config / downloads / http / timestamp / cron / jsonpath / compare / webservice / reminders / sponsor / about） |
+| **模块拆分** | `core.js` / `state.js` / `api.js` / `theme.js` / `auth.js` + `tail.js` + `sftp-common.js` + `pages/*.js`；数据库工作台独立为 `pages/database.js` |
 | **CSS 变量主题** | `:root[data-theme=...]` 5 套主题（dark / light / green / hc / xianxia 仙侠·墨韵青锋）；inline script 在 `<head>` 提前设 `data-theme` 防 FOUC；xterm.js 终端主题跟随联动（v0.10 起） |
 | **Node 单测** | `web/app.test.js` 覆盖 `escapeHtml` / `formatBytes` / `formatTime` / `trimMiddle` / `cssEscape` / `pctText` / `validate` |
 | **go:embed** | `web/` 整个目录内嵌进二进制，无外部静态文件 |
@@ -452,6 +458,21 @@ v0.7 起实装的客户端静态工具（无后端改动）：
 | POST | `/api/license/activate` | 提交激活码，Go 端转发到 Java 激活服务（v0.11-rc1） |
 | GET | `/api/sponsor/leaderboard` | 投喂作者排行榜（v0.14） |
 
+### 数据库工作台（V1）
+
+| Method | Path | 用途 |
+| --- | --- | --- |
+| GET / POST | `/api/database/sources` | 可访问数据源列表 / 新建数据源（POST 为 **admin**） |
+| PUT / DELETE | `/api/database/sources/{id}` | 更新 / 删除数据源与凭据（**admin**） |
+| POST | `/api/database/sources/{id}/test` | 测试连接并返回版本、延迟 |
+| POST | `/api/database/query` | Oracle/MySQL 单条只读 SQL，NDJSON 分批流式返回 |
+| POST | `/api/database/export` | 重新执行受限只读 SQL并流式导出 UTF-8 CSV |
+| GET | `/api/database/metadata/schemas` | Schema / Owner 列表 |
+| GET | `/api/database/metadata/objects` | 表与视图列表（最多 500） |
+| GET | `/api/database/metadata/fields` | 字段与类型 |
+| GET | `/api/database/redis/scan` | Redis SCAN 分页浏览 Key |
+| GET | `/api/database/redis/key` | 通过 `key_base64` 按类型预览 Key、TTL 与有限内容 |
+
 ### SSH / 配置 / 偏好
 
 | Method | Path | 用途 |
@@ -558,7 +579,7 @@ v0.7 起实装的客户端静态工具（无后端改动）：
 | Method | Path | 用途 |
 | --- | --- | --- |
 | POST | `/api/wsdl/import-url` | 从 URL 拉取并解析 WSDL（30s 超时） |
-| POST | `/api/wsdl/import-file` | 上传 `.wsdl` / `.xsd` / `.xml` 文件解析（4MB 上限，支持多文件 attach） |
+| POST | `/api/wsdl/import-file` | 上传 `.wsdl` / `.xsd` / `.xml` 文件解析（单文件 4MB、合计 16MB，支持多文件 attach） |
 | GET / DELETE | `/api/wsdl/projects` | 列出 / 删除已导入的 WSDL 项目 |
 | GET | `/api/wsdl/projects/{id}` | 获取单个 WSDL 项目详情（含 operations） |
 | POST | `/api/soap/generate` | 按 operation 自动生成 SOAP Envelope |
@@ -642,30 +663,15 @@ GOOS=windows GOARCH=amd64 CGO_ENABLED=0 \
 # → dist/kairo-v0.15.0-windows.zip
 ```
 
-### 编译 Win7 兼容版
+### Win7 维护策略
 
-Go 1.21+ **不再支持 Windows 7/8/Server 2008/2012**（要求 Win10/Server 2016+）。要兼容 Win7 **必须**用 Go 1.20.x 编译：
-
-```bash
-# 1) 准备独立 Go 1.20.x
-curl -L -o /tmp/go1.20.14.darwin-amd64.tar.gz \
-  https://go.dev/dl/go1.20.14.darwin-amd64.tar.gz
-mkdir -p ~/sdk/go120
-tar -C ~/sdk/go120 -xzf /tmp/go1.20.14.darwin-amd64.tar.gz --strip-components=1
-
-# 2) 编译（脚本同样会自动 -mod=vendor）
-export GO120_HOME=~/sdk/go120
-./scripts/build_windows_amd64_win7_go120.sh v0.15.0
-# → dist/kairo-v0.15.0-win7/Kairo_win7.exe
-```
+数据库工作台 v1 起，主线基线升级为 Go 1.24+，发布目标为 Win10/11。Win7 / Go 1.20 的依赖树、构建脚本与回归矩阵放在 legacy 分支独立维护，不再让旧平台限制主线驱动与安全更新。
 
 ### 发版给同事要打什么包
 
 ```
 Kairo_win10.exe        # 主程序（Win10/11）— 双击即用，无控制台，托盘常驻
-Kairo_win7.exe         # Win7 兼容版（Go 1.20 编译）
 config.yaml            # 配置文件（端口、凭据模式、SSH 兼容 profile）
-README.md              # 本文件
 ```
 
 > 双击 exe 后自动创建 `downloads/`、`logs/`、`data/` 目录。
@@ -799,7 +805,7 @@ kairo/
 ├── VERSION                            # 单源版本号 v0.14
 ├── config.yaml                        # 运行时配置
 ├── config.yaml.production.example
-├── go.mod / go.sum                    # 依赖锁定（go 1.20）
+├── go.mod / go.sum                    # 依赖锁定（go 1.24）
 ├── vendor/                            # 已固化依赖，clone 后无网可编
 ├── web/                               # 嵌入式前端
 │   ├── index.html                     # SPA 骨架 + 顶部菜单 + 主题 inline 防 FOUC
@@ -881,10 +887,10 @@ kairo/
 │   └── mock-sponsor-server/           # 投喂作者 Mock 服务（v0.14 起，给前端联调用）
 ├── scripts/
 │   ├── build_windows_amd64.sh
-│   ├── build_windows_amd64_win7_go120.sh
-│   ├── build_windows_both.sh          # 同时打 Win10/11 + Win7 两个产物
+│   ├── build_windows_amd64_win7_go120.sh # 旧 CI 迁移提示；主线明确拒绝 Win7 构建
+│   ├── build_windows_both.sh          # 兼容入口，转到主线单版本构建
 │   ├── package_windows.sh             # 打 Windows 发版 zip
-│   ├── package_windows_both.sh        # 打 Windows 双版本合并 zip
+│   ├── package_windows_both.sh        # 兼容入口，转到主线单版本打包
 │   ├── package_source.sh              # 打源码 zip
 │   ├── acceptance_run.py
 │   ├── release.sh / release_smoke_test.sh
@@ -925,6 +931,7 @@ kairo/
 | 版本 | 功能 |
 | --- | --- |
 | **v0.14** | 投喂作者 Web UI + Sponsor 后端 + endpointclient 共享调用器 + About 12 section 懒渲染 |
+| **database-v1** | Oracle 11g / MySQL / Redis 数据库工作台；只读策略、连接池、流式结果、RBAC、审计与性能上限 |
 | **v0.13.1** | SSH 终端 SFTP 在线编辑 + 大文件分片上传 + UI 体验优化 + 8 项 Bug 修复 |
 | **v0.13** | 定时提醒（once/weekly/monthly）+ 浏览器自动打开探测 + 在线编辑（preview.html）+ 自启同步注册表 + 搜索高亮公共模块 + 定时提醒 v1 落地 |
 | **v0.12** | WebService 调试中心（WSDL/SOAP/Mock/模板/历史）+ 老浏览器兼容加固（xterm ES5 转译 + DOM polyfill + FileReader 替代 File.text()） |
@@ -944,7 +951,7 @@ kairo/
 
 | 状态 | 功能 |
 | --- | --- |
-| 🚧 | 数据库连接（MySQL/PG/Redis） |
+| 🚧 | PostgreSQL 数据源与保存查询（数据库工作台 V2 候选） |
 | ❌ | 任意命令执行（SSH 终端里用户连的是自己已声明的服务器，不视作「任意命令」） |
 | ❌ | 日期 / 日历 / 文本处理模块（已从导航移除） |
 
@@ -1000,7 +1007,7 @@ v0.2 起在「系统配置」页直接编辑保存即可，无需重启（COW Ma
 <details>
 <summary><b>Q: Win7 上跑不起来？</b></summary>
 
-必须用 Go 1.20.x 编译的 `Kairo_win7.exe`，主版本在 Win7 上跑不起来（Go 1.21+ 不再支持 Win7）。
+这是预期行为：Go 1.24+ 主线只支持 Win10/11。需要 Win7 时请使用 legacy 分支的独立版本；不要用 Go 1.20 强行编译主线。
 </details>
 
 <details>
@@ -1051,6 +1058,7 @@ v0.11-rc1 起所有 `/api/*`（除 `/api/license/*`）都被 license 网关拦�
 #### 定时任务与 SSH 配置
 
 - 新增 `internal/schedtask/*` + `internal/cronx/*`，支持任务定义、执行、持久化与查看；前端页面 `web/pages/tasks.js` 提供任务列表与状态动作。
+- Windows 任务进程使用 Job Object 管理：隐藏控制台窗口，超时与程序退出时终止完整进程树；运行中任务禁止直接删除，空工作目录稳定指向 Kairo 运行目录。
 - 新增 SSH 配置档案模块 `internal/sshclient/profilestore`，统一 profile 读写路径，提升连接配置一致性。
 - `internal/schedtask` 与 `internal/reminder` 形成统一提醒闭环。
 
@@ -1142,9 +1150,9 @@ v0.11-rc1 起所有 `/api/*`（除 `/api/license/*`）都被 license 网关拦�
 
 #### WebService 调试中心
 
-- **WSDL 导入**：URL 拉取（30s 超时）或本地 `.wsdl` / `.xsd` / `.xml` 上传（4MB 上限，支持多文件 attach）；外部 XSD import / include 递归加载；XSD complex content / extension 继承解析；解析失败降级保留 `InputRaw` / `OutputRaw` + Warnings
+- **WSDL 导入**：URL 拉取（30s 超时）或本地 `.wsdl` / `.xsd` / `.xml` 多选上传（单文件 4MB、合计 16MB）；识别 UTF-8/UTF-16/GBK/GB2312/GB18030；外部 XSD import / include 递归加载；XSD complex content / extension 继承解析；解析失败降级保留 `InputRaw` / `OutputRaw` + Warnings
 - **SOAP 报文生成**：选中 operation 自动生成 Envelope；支持 SOAP 1.1 / 1.2；输入 / 输出参数树展开
-- **接口测试**：自定义 endpoint / SOAPAction / Headers / Body；超时 + 取消；响应按 status / body / 关键词分块
+- **接口测试**：自定义 endpoint / SOAPAction / Headers / Body；Header 支持逐行、JSON、curl 粘贴；UTF-8/GBK/GB2312/GB18030；可关闭单次历史保存；超时 + 取消；响应按 status / body / 关键词分块
 - **模板管理**：保存常用请求为模板（按分组），命名 / 编辑 / 删除
 - **历史回放**：最近 500 条请求记录，搜索 / 一键回放
 - **Mock 服务端**：保存 Mock 配置后立即生效；走独立路由 `/mock/{projectId}/{path...}`，**不走** `/api/` 鉴权（给外部系统调用的）；record 异步落盘（recordQueue + 后台 goroutine，不阻塞热路径）

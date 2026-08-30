@@ -10,7 +10,7 @@
 | 项 | 说明 |
 | --- | --- |
 | 工具包 | `Kairo.exe` + `config.yaml` + `README.md` + `downloads/` + `logs/` + `data/` |
-| Windows 版本 | Win10/11 直接用；Win7 需用 `Kairo_win7.exe`（Go 1.20.x 编译版） |
+| Windows 版本 | 主线支持 Win10/11；Win7 仅在 legacy 分支独立验收 |
 | 启动方式 | **先用 `cmd` 启动**（不要直接双击），看完整日志 |
 | 测试服务器 | 至少准备 1 台 Linux 机器，能 SSH 上、有 WebSphere 日志目录 |
 
@@ -243,7 +243,7 @@ op=logs.context
 - [ ] 第 1、2、3、4、5 节全部用例通过
 - [ ] `go test ./...` 全过
 - [ ] `macOS` 上 `GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build` 成功
-- [ ] `go.mod` 顶部 `go 1.20`（Win7 兼容版编译用）
+- [ ] `go.mod` 顶部为 `go 1.24`，使用 Go 1.24+ 工具链构建主线
 - [ ] 没有外部 CDN / React / Vue / Electron 依赖
 
 满足以上条件即视为第一阶段验收通过，可以进入日常使用和第二阶段规划。
@@ -297,4 +297,3 @@ op=logs.context
 - node web/app.test.js 13/13 pass
 - go.mod x/text 升级（v0.5-D 引用 simplifiedchinese.GBK decoder）
 - 没有破坏 v0.4 接口（向后兼容 targets > servers > server 三模式）
-

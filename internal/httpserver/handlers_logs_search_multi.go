@@ -48,12 +48,12 @@ type logsSearchMultiReq struct {
 	Username       string             `json:"username"`
 	Password       string             `json:"password"`
 	MaxConcurrency int                `json:"max_concurrency"`
-	// v0.13：忽略大小写搜索。所有 grep 命令统一加 -i。
+	// v0.13：忽略大小写搜索。
 	//   - true  → 大小写不敏感（适合大小写不固定的英文关键词、混合日志）
 	//   - false（默认）→ 大小写敏感，保持原行为
 	IgnoreCase bool `json:"ignore_case"`
 	// v0.15：多行窗口匹配。>0 时 && 语义从"同行同时包含"变成
-	// "window 行跨度内出现"（走 awk 窗口匹配）；0（默认）保持原同行 grep 语义。
+	// "window 行跨度内出现"；0（默认）保持同行语义。
 	// 前后端都 clamp 到 0~50。
 	MatchWindow int `json:"match_window"`
 	// v0.5-G #8：搜索范围三种模式（互斥，优先级 selected > glob > latest）
@@ -353,7 +353,7 @@ func (s *Server) runOneServerSearchWithPatterns(
 // 也不能是 . / ..，否则直接返回错误。
 //
 // tw 为时间窗口过滤（仅 latest/glob 模式有效）。
-// ignoreCase v0.13：忽略大小写搜索（透传到 SearchCommand，所有 grep 加 -i）。
+// ignoreCase v0.13：忽略大小写搜索（透传到 SearchCommand）。
 // matchWindow v0.15：>0 时走 WindowSearchCommand 多行窗口匹配，否则走原 SearchCommand。
 func (s *Server) runOneServerSearchWithScope(
 	ctx context.Context,
@@ -468,7 +468,7 @@ func (s *Server) runOneServerSearchWithScope(
 		}
 	}
 
-	// 搜索（v0.15：matchWindow>0 走多行窗口匹配，否则走原同行 grep 管道）
+	// 同行与窗口模式共用同一个字面匹配引擎，只由 matchWindow 切换语义。
 	var searchCmd string
 	if matchWindow > 0 {
 		searchCmd, err = logquery.WindowSearchCommand(ld.Path, fileNames, kw, cur.Search.MaxMatches, cur.Search.TimeoutSeconds, ld.Encoding, ignoreCase, matchWindow)
@@ -491,7 +491,7 @@ func (s *Server) runOneServerSearchWithScope(
 		return res
 	}
 	if code != 0 {
-		// grep exit=1 是"无匹配"，是正常的
+		// 兼容旧执行器：退出码 1 且无输出视为正常的“无匹配”。
 		if code == 1 && strings.TrimSpace(stdout) == "" {
 			res.OK = true
 			res.Hits = []logquery.SearchHit{}

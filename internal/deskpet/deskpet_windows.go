@@ -8,22 +8,22 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"math"
 	"net/http"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 	"unsafe"
+
+	"kairo/internal/winui"
 )
 
 // 桌面宠物（原生 Win32 实现）。
 //
-// 只依赖 Win32 分层窗口 + Go 自解 PNG 精灵图，CGO=0，兼容 Win7/Win10：
+// 只依赖 Win32 分层窗口 + Go 自解 PNG 精灵图，CGO=0；主线目标为 Windows 10/11：
 //   - 宠物窗口：WS_EX_LAYERED + UpdateLayeredWindow 逐帧贴透明 PNG；
 //   - 面板窗口：普通 GDI 窗口，画名字/等级/经验条/皮肤网格，EDIT 控件改名；
 //   - 数据：定时轮询 http://127.0.0.1:port/api/pet/state，差值触发经验漂浮。
@@ -42,9 +42,9 @@ const (
 	panelW = 300
 	panelH = 504
 
-	bubbleH = 44
-	bubblePad = 14
-	bubbleFontH = 17
+	bubbleH      = 44
+	bubblePad    = 14
+	bubbleFontH  = 17
 	bubbleShowMs = 3200
 
 	defaultSkinID = "orange-cat"
@@ -151,16 +151,17 @@ type layeredWin struct {
 type deskpet struct {
 	mu sync.Mutex
 
-	baseURL   string
+	baseURL    string
 	loadSprite func(id string) ([]byte, error)
-	dataDir   string
-	running   bool
+	dataDir    string
+	host       *winui.Host
+	running    bool
 
-	hwndPet   uintptr
-	hwndPanel uintptr
-	hwndEdit  uintptr
+	hwndPet       uintptr
+	hwndPanel     uintptr
+	hwndEdit      uintptr
 	hwndEditOwner uintptr
-	hwndBubble uintptr
+	hwndBubble    uintptr
 
 	shown          bool
 	posInitialized bool
@@ -180,9 +181,9 @@ type deskpet struct {
 	// 轮询线程用此标记避免每秒向隐藏面板的输入框跨线程发同步消息。
 	panelVisible bool
 
-	anim    animState
-	drag    *dragState
-	floats  []expFloat
+	anim     animState
+	drag     *dragState
+	floats   []expFloat
 	floatSeq int
 
 	panelScrollY int32
@@ -194,10 +195,10 @@ type deskpet struct {
 
 	layered *layeredWin
 
-	hFontTitle uintptr
-	hFontText  uintptr
-	hFontSmall uintptr
-	hFontTiny  uintptr
+	hFontTitle  uintptr
+	hFontText   uintptr
+	hFontSmall  uintptr
+	hFontTiny   uintptr
 	hFontBubble uintptr
 }
 
@@ -212,6 +213,9 @@ func Run(o Options) error {
 	if o.BaseURL == "" {
 		return errors.New("deskpet: BaseURL 不能为空")
 	}
+	if o.Host == nil {
+		return errors.New("deskpet: Windows 原生 UI Host 不能为空")
+	}
 	app.mu.Lock()
 	if app.running {
 		app.mu.Unlock()
@@ -220,6 +224,7 @@ func Run(o Options) error {
 	app.baseURL = o.BaseURL
 	app.loadSprite = o.LoadSprite
 	app.dataDir = o.DataDir
+	app.host = o.Host
 	app.running = true
 	if app.sprites == nil {
 		app.sprites = map[string]*sprite{}
@@ -232,7 +237,12 @@ func Run(o Options) error {
 	}
 	app.mu.Unlock()
 
-	go app.messageLoop()
+	if err := o.Host.Invoke(app.createWindows); err != nil {
+		app.mu.Lock()
+		app.running = false
+		app.mu.Unlock()
+		return err
+	}
 	go app.pollLoop()
 	go app.renderLoop()
 	return nil
@@ -257,34 +267,34 @@ func IsShown() bool {
 
 func Shutdown() {
 	app.mu.Lock()
-	hwnd := app.hwndPet
+	host := app.host
 	running := app.running
 	app.mu.Unlock()
-	if !running || hwnd == 0 {
+	if !running || host == nil {
 		return
 	}
-	postMessage(hwnd, wmAppQuit, 0, 0)
+	_ = host.Invoke(func() error {
+		app.closeAll()
+		return nil
+	})
 }
 
-// -------- 消息循环 --------
+// -------- 原生窗口（消息循环由 winui.Host 统一持有） --------
 
-func (d *deskpet) messageLoop() {
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-
-	procSetProcessDPIAware.Call() // Win7+ 可用；失败忽略
-
-	_ = registerClass(petClass, syscall.NewCallback(petWndProc))
-	_ = registerClass(panelClass, syscall.NewCallback(panelWndProc))
-	_ = registerClass(bubbleClass, syscall.NewCallback(bubbleWndProc))
+func (d *deskpet) createWindows() error {
+	if err := registerClass(petClass, syscall.NewCallback(petWndProc)); err != nil {
+		return fmt.Errorf("deskpet: 注册宠物窗口类: %w", err)
+	}
+	if err := registerClass(panelClass, syscall.NewCallback(panelWndProc)); err != nil {
+		return fmt.Errorf("deskpet: 注册面板窗口类: %w", err)
+	}
+	if err := registerClass(bubbleClass, syscall.NewCallback(bubbleWndProc)); err != nil {
+		return fmt.Errorf("deskpet: 注册气泡窗口类: %w", err)
+	}
 
 	hwnd := createWindowEx(wsExLayered|wsExToolwindow|wsExTopmost|wsExNoactivate, wsPopup, petClass, "KairoDeskPet", 0, 0, petW, petH, 0)
 	if hwnd == 0 {
-		log.Printf("deskpet: 创建宠物窗口失败")
-		d.mu.Lock()
-		d.running = false
-		d.mu.Unlock()
-		return
+		return errors.New("deskpet: 创建宠物窗口失败")
 	}
 	d.mu.Lock()
 	d.hwndPet = hwnd
@@ -307,29 +317,7 @@ func (d *deskpet) messageLoop() {
 		d.showBubble("主人，我回来啦～")
 		d.scheduleIdleTalk()
 	}
-
-	var m msg
-	for getMessage(&m) > 0 {
-		translateMessage(&m)
-		dispatchMessage(&m)
-	}
-
-	d.mu.Lock()
-	if d.idleTalkTimer != nil {
-		d.idleTalkTimer.Stop()
-		d.idleTalkTimer = nil
-	}
-	d.hwndPet = 0
-	d.hwndPanel = 0
-	d.hwndEdit = 0
-	d.hwndEditOwner = 0
-	hb := d.hwndBubble
-	d.hwndBubble = 0
-	d.running = false
-	d.mu.Unlock()
-	if hb != 0 {
-		destroyWindow(hb)
-	}
+	return nil
 }
 
 func (d *deskpet) initPosition() {
@@ -733,14 +721,28 @@ func (d *deskpet) closeAll() {
 	d.mu.Lock()
 	p := d.hwndPet
 	panel := d.hwndPanel
+	bubble := d.hwndBubble
+	if d.idleTalkTimer != nil {
+		d.idleTalkTimer.Stop()
+		d.idleTalkTimer = nil
+	}
+	d.hwndPet = 0
+	d.hwndPanel = 0
+	d.hwndEdit = 0
+	d.hwndEditOwner = 0
+	d.hwndBubble = 0
+	d.running = false
 	d.mu.Unlock()
 	if panel != 0 {
 		destroyWindow(panel)
 	}
+	if bubble != 0 {
+		destroyWindow(bubble)
+	}
 	if p != 0 {
 		destroyWindow(p)
 	}
-	postQuitMessage(0)
+	d.cleanupGDI()
 }
 
 func (d *deskpet) closePanel() {
@@ -1611,11 +1613,11 @@ func (d *deskpet) pollOnce() {
 	// 若恰好在 paintPanel 里等 d.mu，两边互相等死：宠物卡死、悬停转圈。
 	// 这里锁内只读写内存字段，所有窗口操作拿到锁外执行。
 	var (
-		bubble       string
-		posApply     bool
-		posX, posY   int32
-		editName     uintptr
-		editOwner    uintptr
+		bubble     string
+		posApply   bool
+		posX, posY int32
+		editName   uintptr
+		editOwner  uintptr
 	)
 	d.mu.Lock()
 	prev := d.state

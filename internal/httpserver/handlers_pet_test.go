@@ -34,13 +34,12 @@ func newTestServerWithPet(t *testing.T) (*Server, *pet.Engine) {
 // （用于测未解锁皮肤的 400 分支）。
 func newTestServerWithPetSkins(t *testing.T, skinsJSON []byte) (*Server, *pet.Engine) {
 	t.Helper()
-	srv, _, _, _ := newTestServer(t)
 	eng, err := pet.NewEngine(pet.DefaultRules(), filepath.Join(t.TempDir(), "pet.json"), nil, skinsJSON)
 	if err != nil {
 		t.Fatalf("NewEngine: %v", err)
 	}
 	t.Cleanup(func() { _ = eng.Close() })
-	srv.SetPet(eng)
+	srv, _, _, _ := newTestServerWithDependencies(t, Dependencies{Pet: eng})
 	return srv, eng
 }
 

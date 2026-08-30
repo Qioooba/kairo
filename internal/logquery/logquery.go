@@ -70,7 +70,7 @@ type ContextLine struct {
 type SearchKeyword struct {
 	Op     string // "and" / "or" / "term"
 	Value  string
-	Negate bool // true 表示这是 !term 形式，最终用 grep -v
+	Negate bool // true 表示这是 !term 形式
 }
 
 // SearchTimeWindow 是"按文件 mtime 过滤搜索命中"的时间窗口（B1 新功能）。
@@ -150,36 +150,21 @@ func FilterHitsByTimeWindow(hits []SearchHit, files []FileEntry, window SearchTi
 	return out
 }
 
-// illegalKeyKey 决定一个 token 是否被整体拒绝。
-//
-// 早期版本禁了一大堆 shell / grep 元字符（`< > ( ) [ ] { } * ? & ; | ! ~ ` $ \` 等），
-// 结果把日志里极其常见的字符（HTML 标签、URL fragment、堆栈里的 `( )`、SQL 里的 `<>`）
-// 一并挡在门外 —— 用户报障搜索 `Exception at com.example.Foo.bar(Foo.java:123)`
-// 都搜不到，因为 `(` `)` 被拒。
-//
-// 现在的设计：
-//   - grep -E 元字符 `(` `)` `[` `]` `{` `}` `*` `?` `.` `+` `^` `|` `\` 全部放行，
-//     因为 `quoteForGrep` 用 `regexp.QuoteMeta` 把它们转成 `\( \)` 等字面匹配。
-//   - shell 元字符 `<` `>` `&` `;` `|` `!` `~` `` ` `` `$` `"` 全部放行：
-//     keyword 经过 `quoteForGrep` 之后，要么包在 `$(printf %b '...')` 的单引号里
-//     （GBK），要么包在 Go `%q` 的双引号里（UTF-8）；再被外层 `sh -c '...'` 单引号
-//     包裹一层，shell 永远不会展开它们。
-//   - 真危险的只剩这几个，必须禁：
-//       `'`  —— 唯一会破坏外层 sh -c '...' / 内部 $(printf %b '...') 单引号包裹的字符
-//       `/`  —— 路径分隔符；保留它会让用户误以为可以搜路径
-//       `\n` `\r` `\t` —— 控制字符；单引号包裹虽字面保留但会让 grep 解析乱
-//       `\x00` —— NUL；远程 grep / ssh 通道都可能截断
-var illegalKeyKey = regexp.MustCompile(`['/\x00\n\r\t]`)
+// illegalKeyKey 只拒绝不能稳定穿过 HTTP / SSH / 文本扫描器的控制字符。
+// 搜索词不再拼进 grep 或 shell 语法，而是统一编码为 \xHH 字节后放入 awk
+// 环境变量；因此引号、斜杠、反引号、$、分号、正则元字符和以 '-' 开头的
+// 内容都可以安全地按字面搜索。
+var illegalKeyKey = regexp.MustCompile(`[\x00\n\r\t]`)
 
 // ToEncodingEscaped 把 UTF-8 字符串按目标编码转成纯 ASCII 的 printf 转义序列。
 //
 // 设计要点：
 //   - 只转"关键词 token"自己，不转 shell 结构、文件路径、&& || ! 等操作符。
 //   - 远端 shell 仍按 UTF-8 解析；只有经过 $(printf %b '...') 展开后的字节流
-//     才会以目标编码出现在 grep pattern 位置。
+//     才会以目标编码出现在 awk 的字面匹配关键词中。
 //   - 输出的全部是 \xHH 形式的 ASCII 字符，注入不到 shell。
 //
-// 用法：grep -nE "$(printf %b '<escaped>')" -- file1 file2 file3
+// 用法：KP_1_1=$(printf %b '<escaped>') awk '...' file1 file2 file3
 // 其中 <escaped> 是本函数返回值，例："\xd0\xc5\xb4\xfb\xcf\xb5\xcd\xb3"（信贷系统 GBK）。
 func ToEncodingEscaped(s string, encoding string) (string, error) {
 	enc, err := pickEncoder(encoding)
@@ -217,14 +202,10 @@ func pickEncoder(name string) (encoding.Encoding, error) {
 var illegalKey = illegalKeyKey
 
 // describeIllegalRune 在错误信息里给用户描述"第一个非法的字符是什么"。
-// 例：'foo/bar' → "斜杠 /"；'a\nb' → "换行符"；"O'Brien" → "单引号 '"。
+// 只有无法稳定穿过 HTTP / SSH / 文本扫描器的控制字符会被拒绝。
 func describeIllegalRune(s string) string {
 	for _, r := range s {
 		switch r {
-		case '\'':
-			return "单引号 '"
-		case '/':
-			return "斜杠 /"
 		case '\n':
 			return "换行符"
 		case '\r':
@@ -244,11 +225,9 @@ func describeIllegalRune(s string) string {
 // 这是 bug：用户输入 `123>` 会被悄悄删成 `123`，远程 grep 搜 `123` 当然查不到
 // `123>`，而且不会报错，调试时极难发现"为啥我搜的关键词好像没生效"。
 //
-// 现在的设计：
-//   - 真危险的字符在 ParseQuery 阶段（illegalKeyKey.MatchString）直接整体拒收，
-//     抛错让前端 toast 提示用户。
-//   - EscapeKeyword 拿到的是已经通过 ParseQuery 校验的 token，**不要再删任何字符**，
-//     也不需要 QuoteMeta（那是 quoteForGrep 在构造 shell 管道时做的）。
+// 现在的设计：ParseQuery 只拒绝控制字符；其他输入由 SearchCommand 编码为
+// 纯 ASCII 字节转义，再通过环境变量交给 awk 按字面匹配。EscapeKeyword 不再
+// 删除或改写用户输入。
 func EscapeKeyword(s string) string {
 	return strings.TrimSpace(s)
 }
@@ -256,7 +235,7 @@ func EscapeKeyword(s string) string {
 // ParseQuery 解析搜索表达式，支持 && || !
 //
 // 状态机校验（v0.4）：明确拒收"语法不完整"或"两个操作符黏在一起"的输入，
-// 不再等到 SearchCommand 阶段才"用 grep 怪招兜底"。
+// 不再等到 SearchCommand 阶段才用执行器行为兜底。
 //
 // 例: "Exception && userinfo" => [{term Exception}, {and}, {term userinfo}]
 // 例: "Exception || Timeout"  => [{term Exception}, {or},  {term Timeout}]
@@ -274,6 +253,9 @@ func EscapeKeyword(s string) string {
 //   - "|| B"        （开头 ||）
 //   - "A && !"      （&& 后立即 ! — 没有 term 可 negate）
 func ParseQuery(q string) ([]SearchKeyword, error) {
+	if illegalKey.MatchString(q) {
+		return nil, fmt.Errorf("搜索表达式不能包含控制字符（NUL / 换行 / 回车 / 制表符）")
+	}
 	q = strings.TrimSpace(q)
 	if q == "" {
 		return nil, fmt.Errorf("搜索关键词为空")
@@ -338,15 +320,10 @@ func ParseQuery(q string) ([]SearchKeyword, error) {
 			negateNext = true
 			// state 不变
 		default:
-			// 拒绝对搜索无意义或危险的字符（v0.14：黑名单缩窄到 6 个真危险的；
-			// 见 illegalKeyKey 注释）。错误信息告诉用户具体哪个字符有问题，
-			// 而不是笼统的"非法字符"。
+			// 只拒绝无法稳定穿过文本协议的控制字符。所有可打印字符都由
+			// buildSearchCommand 编成字节环境变量，不参与 shell / awk 语法。
 			if illegalKey.MatchString(tok) {
-				return nil, fmt.Errorf("关键词不能含 %q（单引号 / 斜杠 / 控制字符；其他特殊字符如 ( ) [ ] { } * ? < > & ; | ! ~ 都可以搜）: %q", describeIllegalRune(tok), tok)
-			}
-			// 拒绝以 - 开头（看起来像 grep 的选项 flag）。
-			if strings.HasPrefix(tok, "-") {
-				return nil, fmt.Errorf("关键词不能以 '-' 开头: %q", tok)
+				return nil, fmt.Errorf("关键词不能含控制字符 %q: %q", describeIllegalRune(tok), tok)
 			}
 			cleaned := EscapeKeyword(tok)
 			if cleaned == "" {
@@ -618,227 +595,49 @@ func ParseListOutputPOSIX(out string) ([]FileEntry, error) {
 	return list, nil
 }
 
-// SearchCommand 构造"在 files 上按关键词搜索"的安全管道命令
+// searchAwkScript 是单行和多行搜索共用的 POSIX awk 执行器。
 //
-// 编码（encoding）：
-//   - utf-8（默认）：keyword 直接作为 UTF-8 字符串传递，远程 grep 按字节匹配；
-//   - gbk / gb18030：keyword 先 UTF-8 → GBK，再用 printf %b '\xHH...' 形式交给远程 sh。
-//     shell 结构、文件路径、&& || ! 都保持原样；只有"关键词 token"按目标编码转字节。
-//     这样 UTF-8 页面输入的中文关键词能匹配 GBK 文件里的中文。
-//
-// ignoreCase（v0.13）：
-//   - true → 所有 grep 加 -i 标志（pattern 与文件内容都转小写匹配）。
-//   - false（默认）→ 大小写敏感，保持原行为。
-//   - 影响所有 grep 调用（首段 AND、OR 分支、neg 的 grep -vE、纯 neg 的 "^"）。
+// 所有关键词都从 KP_*/KN_* 环境变量读取，绝不进入 shell/awk 源码。w=0 时
+// 每个 OR 段只判断当前日志正文；w>0 时维护 w+1 行滚动窗口和每个正关键词的
+// 出现计数。窗口成立后，窗口内所有正关键词行都会被标记。行在离开滚动窗口后
+// 才最终进入定长环形结果缓冲，因此会完整扫描文件并只保留最新 lim 条命中。
+const searchAwkScript = `function keep(l,s,slot){total++;slot=((total-1)%lim)+1;oln[slot]=l;otx[slot]=s}
+function finish(l,g,t){if(l<1)return;if(hit[l])keep(l,raw[l]);for(g=1;g<=ng;g++)for(t=1;t<=np[g];t++)if(pm[g,t,l]){pc[g,t]--;delete pm[g,t,l]}delete hit[l];delete raw[l]}
+BEGIN{split(npos,np,",");split(nneg,nn,",");for(g=1;g<=ng;g++){for(t=1;t<=np[g];t++){pp[g,t]=ENVIRON["KP_" g "_" t];if(ig)pp[g,t]=tolower(pp[g,t])}for(t=1;t<=nn[g];t++){pn[g,t]=ENVIRON["KN_" g "_" t];if(ig)pn[g,t]=tolower(pn[g,t])}}}
+{raw[FNR]=$0;L=$0;if(ig)L=tolower(L);for(g=1;g<=ng;g++){bad=0;for(t=1;t<=nn[g];t++)if(index(L,pn[g,t])>0){bad=1;break}if(np[g]==0){if(!bad)hit[FNR]=1;continue}if(!bad)for(t=1;t<=np[g];t++)if(index(L,pp[g,t])>0){pm[g,t,FNR]=1;pc[g,t]++}}
+for(g=1;g<=ng;g++)if(np[g]>0){all=1;for(t=1;t<=np[g];t++)if(pc[g,t]<1){all=0;break}if(all){lo=FNR-w;if(lo<1)lo=1;for(i=lo;i<=FNR;i++)for(t=1;t<=np[g];t++)if(pm[g,t,i]){hit[i]=1;break}}}finish(FNR-w)}
+END{lo=FNR-w+1;if(lo<1)lo=1;for(i=lo;i<=FNR;i++)finish(i);n=(total<lim?total:lim);for(i=0;i<n;i++){ord=total-i;slot=((ord-1)%lim)+1;printf "%s:%d:%s\n",fname,oln[slot],otx[slot]}}`
+
+// SearchCommand 构造同行匹配命令。A && B 表示同一条日志正文同时包含 A、B；
+// A || B 表示任一 OR 段成立；!X 只排除正文包含 X 的行。
 func SearchCommand(dir string, files []string, kw []SearchKeyword, max, timeoutSec int, encoding string, ignoreCase bool) (string, error) {
-	if strings.TrimSpace(dir) == "" {
-		return "", fmt.Errorf("dir 不能为空")
-	}
-	if len(files) == 0 {
-		return "", fmt.Errorf("files 不能为空")
-	}
-	if len(kw) == 0 {
-		return "", fmt.Errorf("kw 不能为空")
-	}
-	if max <= 0 {
-		max = 200
-	}
-	if timeoutSec <= 0 {
-		timeoutSec = 30
-	}
-	if strings.ContainsAny(dir, "'`$\\;") {
-		return "", fmt.Errorf("dir 含非法字符: %q", dir)
-	}
-	for _, f := range files {
-		if strings.ContainsAny(f, "'`$\\;&|><\n\r*?") {
-			return "", fmt.Errorf("file 含非法字符: %q", f)
-		}
-	}
-
-	// 拆成 OR 段；每段内是 AND
-	groups, err := splitOrGroups(kw)
-	if err != nil {
-		return "", err
-	}
-
-	enc := strings.ToLower(strings.TrimSpace(encoding))
-	// v0.13：ignoreCase 标志，统一附加到所有 grep 命令上（首段 AND / OR 分支 / neg 过滤 / 纯 neg 的 "^"）。
-	// grep 的 -i 放最前面，配合原有的 -HnE 形成 "grep -iHnE" 形式，对所有中间 grep 同样保持 -i。
-	caseFlag := ""
-	if ignoreCase {
-		caseFlag = "i"
-	}
-	// P1-bugfix：每个文件单独 grep -m 限制单文件最大匹配数，确保所有文件都被搜索到。
-	// 原问题：grep file1 file2 file3 | head -n 200 时，如果 file1 匹配了 200+ 行，
-	// head 读完就关管道，grep 收 SIGPIPE 退出，file2/file3 根本没被搜。
-	// 修复策略：
-	//   1. 用 for 循环逐个文件 grep；
-	//   2. 每个 grep 加 -m perFileMax，限制单文件输出上限；
-	//   3. 所有文件结果合并后，再全局 sort -u | head -n max 截断总数。
-	// perFileMax 计算：平均分配 + 缓冲，保证每文件至少 30 行（如果有的话）。
-	perFileMax := max / len(files)
-	if perFileMax < 30 {
-		perFileMax = 30
-	}
-	perFileMax += 20 // 加缓冲，抵消 AND 链后续 grep 过滤掉的行
-	// 单文件场景：不需要循环，直接 grep 单文件（保持原有行为，只是加 -m 保险）
-	singleFile := len(files) == 1
-	// 构造 for 循环的文件列表：用单引号包裹每个文件名，安全拼接
-	quotedFiles := quoteArgs(files)
-	// quoteForGrep 根据目标编码生成 grep 模式部分的 shell token：
-	//   - utf-8：直接用 Go 的 %q 双引号包裹（UTF-8 字节安全）。
-	//   - gbk：用 $(printf %b '\xHH...') 展开 GBK 字节。
-	quoteForGrep := func(term string) (string, error) {
-		pattern := regexp.QuoteMeta(term)
-		if enc == "gbk" || enc == "gb18030" {
-			esc, err := ToEncodingEscaped(pattern, encoding)
-			if err != nil {
-				return "", err
-			}
-			// 单引号包整个 printf 表达式，printf 的格式串再单引号包字节转义。
-			// 整个 token 是纯 ASCII（0-9 a-f \ x ' $ ( ) ），不依赖任何外部变量。
-			return fmt.Sprintf(`$(printf %%b '%s')`, esc), nil
-		}
-		return fmt.Sprintf("%q", pattern), nil
-	}
-
-	// buildPerFileBranch 构建"对单个文件 $f"执行的 grep 管道（一个 OR 分支）。
-	// fileArg 是 grep 读文件的参数——单文件直接传文件名，多文件传循环变量 "$f"。
-	// 第一个 grep 加 -m perFileMax 限制单文件输出，防止单个文件吃光所有配额。
-	buildPerFileBranch := func(g orGroup, fileArg string) (string, error) {
-		var branch string
-		if len(g.pos) > 0 {
-			pat0, err := quoteForGrep(g.pos[0])
-			if err != nil {
-				return "", err
-			}
-			// 关键：grep -H 必须加（即使单文件），保证输出有 filename: 前缀；
-			// grep -m N 限制单文件最大匹配行数，确保后续文件能被搜到。
-			branch = fmt.Sprintf("LC_ALL=C grep -HnE%s -m %d %s -- %s", caseFlag, perFileMax, pat0, fileArg)
-			for _, term := range g.pos[1:] {
-				pat, err := quoteForGrep(term)
-				if err != nil {
-					return "", err
-				}
-				branch += " | LC_ALL=C grep -" + caseFlag + "E " + pat
-			}
-		} else {
-			// 纯 neg（例 "!DEBUG"）：用 "^" 匹配所有行，同样加 -m 限制。
-			branch = fmt.Sprintf("LC_ALL=C grep -HnE%s -m %d %q -- %s", caseFlag, perFileMax, "^", fileArg)
-		}
-		for _, p := range g.neg {
-			pat, err := quoteForGrep(p)
-			if err != nil {
-				return "", err
-			}
-			branch += " | LC_ALL=C grep -v" + caseFlag + "E " + pat
-		}
-		return branch, nil
-	}
-
-	var cmdBody string
-	if singleFile {
-		// 单文件：不需要 for 循环，直接 grep 该文件
-		var allBranches []string
-		for _, g := range groups {
-			b, err := buildPerFileBranch(g, quotedFiles[0])
-			if err != nil {
-				return "", err
-			}
-			allBranches = append(allBranches, b)
-		}
-		if len(allBranches) == 1 {
-			cmdBody = allBranches[0] + " | LC_ALL=C sort -u | head -n " + strconv.Itoa(max)
-		} else {
-			cmdBody = "(" + strings.Join(allBranches, "; ") + ") | LC_ALL=C sort -u | head -n " + strconv.Itoa(max)
-		}
-	} else {
-		// 多文件：for f in ...; do ...; done 循环逐个 grep，每文件用 -m 限制
-		// 结构：
-		//   (for f in 'f1' 'f2' 'f3'; do
-		//     [OR 多分支：( branch1_for_f; branch2_for_f )]
-		//     [单分支：branch1_for_f]
-		//   done) | sort -u | head -n max
-		var perFileParts []string
-		for _, g := range groups {
-			b, err := buildPerFileBranch(g, `"$f"`)
-			if err != nil {
-				return "", err
-			}
-			perFileParts = append(perFileParts, b)
-		}
-		var loopBody string
-		if len(perFileParts) == 1 {
-			loopBody = perFileParts[0]
-		} else {
-			// OR：多分支放进子 shell，保证分支间互不干扰（P0-3 修复语义）
-			loopBody = "(" + strings.Join(perFileParts, "; ") + ")"
-		}
-		fileList := strings.Join(quotedFiles, " ")
-		cmdBody = "(for f in " + fileList + "; do " + loopBody + "; done) | LC_ALL=C sort -u | head -n " + strconv.Itoa(max)
-	}
-
-	// 超时由 Go 客户端 ctx + 内部 timer 控制，这里不再依赖 Linux `timeout` 命令，
-	// 老 Linux / Alpine / 精简镜像也能跑。
-	cmd := fmt.Sprintf("sh -c %s", shellQuote("cd "+shellQuote(dir)+" && "+cmdBody))
-	return cmd, nil
+	return buildSearchCommand(dir, files, kw, max, timeoutSec, encoding, ignoreCase, 0)
 }
 
-// windowAwkScript 是 WindowSearchCommand 用到的 awk 脚本（单行、无单引号，
-// 因为要嵌进 sh -c '...' 的单引号里）。
-//
-// 算法（对单个文件单遍扫描）：
-//   - 每行先按"负"term 检查：命中任意负 term 的行不参与该 OR 段的窗口判定、
-//     也永不输出（负 term 行级生效，语义与 grep -v 一致）；
-//   - 命中"正"term 的行记录行号（ln[g,t]）与原文（tx[g,t]）；
-//   - 当某 OR 段所有正 term 都已出现、且最远两个行号差 <= w 时，窗口成立，
-//     把窗口内所有 term 行输出为命中行（全局 em[] 按行号去重）；
-//   - 纯负 OR 段（np[g]==0）：输出所有不含负 term 的行；
-//   - 输出行数达到 lim 后 exit（等价 grep -m 的单文件配额）。
-//
-// 模式通过 ENVIRON["KP_<g>_<t>"] / ENVIRON["KN_<g>_<t>"] 传入，而不是 -v：
-// -v 的值会被 awk 做转义处理（\t → TAB 等），关键词里的字面反斜杠会被破坏；
-// 环境变量的值是原始字节，index() 按字节做字面匹配，最安全。
-const windowAwkScript = `BEGIN { split(npos, np, ","); split(nneg, nn, ","); for (g = 1; g <= ng; g++) { for (t = 1; t <= np[g]; t++) { pp[g,t] = ENVIRON["KP_" g "_" t]; if (ig) pp[g,t] = tolower(pp[g,t]); } for (t = 1; t <= nn[g]; t++) { pn[g,t] = ENVIRON["KN_" g "_" t]; if (ig) pn[g,t] = tolower(pn[g,t]); } } } { L = $0; if (ig) L = tolower(L); for (g = 1; g <= ng; g++) { if (np[g] == 0) { bad = 0; for (t = 1; t <= nn[g]; t++) if (index(L, pn[g,t]) > 0) { bad = 1; break; } if (!bad && !em[FNR]) { printf "%s:%d:%s\n", fname, FNR, $0; em[FNR] = 1; cnt++; if (cnt >= lim) exit; } continue; } bad = 0; for (t = 1; t <= nn[g]; t++) if (index(L, pn[g,t]) > 0) { bad = 1; break; } if (bad) continue; for (t = 1; t <= np[g]; t++) { if (index(L, pp[g,t]) > 0) { ln[g,t] = FNR; tx[g,t] = $0; has[g,t] = 1; } } all = 1; mn = 0; mx = 0; for (t = 1; t <= np[g]; t++) { if (!has[g,t]) { all = 0; break; } v = ln[g,t]; if (!mn || v < mn) mn = v; if (v > mx) mx = v; } if (all && (mx - mn) <= w) { for (t = 1; t <= np[g]; t++) { l = ln[g,t]; if (!em[l]) { printf "%s:%d:%s\n", fname, l, tx[g,t]; em[l] = 1; cnt++; if (cnt >= lim) exit; } } } } }`
-
-// WindowSearchCommand 构造"多行窗口匹配"的安全命令（v0.15）。
-//
-// 与 SearchCommand 的区别：
-//   - SearchCommand 的 && 是"同一行内同时包含"（grep 管道逐行过滤）；
-//   - 本函数的 && 是"在 window 行跨度内出现"（|行号差| <= window），
-//     由单次 awk 扫描实现；window 对单 term 段 / || / 纯 ! 段不影响语义。
-//
-// 语义约定：
-//   - 每个 OR 段内的所有"正"term 都必须出现，且最远两个匹配行号差 <= window；
-//   - 窗口成立时，窗口内每条 term 行都是命中行（同一行只输出一次）；
-//   - "负"term（!X）行级生效：含 X 的行不参与该段的窗口判定、也永不输出；
-//   - 纯负段（如 !DEBUG）输出所有不含 X 的行（与 grep '^' | grep -v 等价）。
-//
-// 实现要点：
-//   - awk 是 POSIX 工具，AIX / GNU / macOS 都有，且项目里已在用（ContextLinesForHitsCommand）；
-//   - 模式字节通过 $(printf %b '\xHH..') 展开成环境变量值传给 awk（-v 会转义破坏反斜杠），
-//     UTF-8 直接转义原始字节、GBK 走 ToEncodingEscaped 同款机制；
-//   - index() 字面匹配绕开正则转义；忽略大小写用 LC_ALL=C tolower（与 grep -i C locale 一致）；
-//   - 每文件输出行数达到 lim 后 awk exit（等价 SearchCommand 的 grep -m 配额）；
-//   - 输出格式 file:lineno:content，与 grep -HnE 完全一致，下游解析零改动。
+// WindowSearchCommand 构造多行窗口匹配命令。window 是最大行号跨度；窗口成立时
+// 返回其中全部正关键词行，而不是每个关键词最后一次出现的行。
 func WindowSearchCommand(dir string, files []string, kw []SearchKeyword, max, timeoutSec int, encoding string, ignoreCase bool, window int) (string, error) {
-	if strings.TrimSpace(dir) == "" {
-		return "", fmt.Errorf("dir 不能为空")
-	}
-	if len(files) == 0 {
-		return "", fmt.Errorf("files 不能为空")
-	}
-	if len(kw) == 0 {
-		return "", fmt.Errorf("kw 不能为空")
-	}
-	if max <= 0 {
-		max = 200
-	}
 	if window <= 0 {
 		window = 10
 	}
 	if window > 50 {
 		window = 50
+	}
+	return buildSearchCommand(dir, files, kw, max, timeoutSec, encoding, ignoreCase, window)
+}
+
+func buildSearchCommand(dir string, files []string, kw []SearchKeyword, max, timeoutSec int, encoding string, ignoreCase bool, window int) (string, error) {
+	if strings.TrimSpace(dir) == "" {
+		return "", fmt.Errorf("dir 不能为空")
+	}
+	if len(files) == 0 {
+		return "", fmt.Errorf("files 不能为空")
+	}
+	if len(kw) == 0 {
+		return "", fmt.Errorf("kw 不能为空")
+	}
+	if max <= 0 {
+		max = 200
 	}
 	if timeoutSec <= 0 {
 		timeoutSec = 30
@@ -862,13 +661,6 @@ func WindowSearchCommand(dir string, files []string, kw []SearchKeyword, max, ti
 	if ignoreCase {
 		ig = 1
 	}
-
-	// 每文件输出配额（与 SearchCommand 相同的计算方式：平均分配 + 缓冲）
-	perFileMax := max / len(files)
-	if perFileMax < 30 {
-		perFileMax = 30
-	}
-	perFileMax += 20
 
 	// 构造环境变量前缀：KP_<g>_<t>=$(printf %b '\xHH..')（正 term）/ KN_<g>_<t>（负 term）。
 	// 值先按目标编码转字节再 hex 转义，shell 展开后是原始字节，awk ENVIRON 原样拿到。
@@ -900,7 +692,7 @@ func WindowSearchCommand(dir string, files []string, kw []SearchKeyword, max, ti
 		inv := fmt.Sprintf(
 			`LC_ALL=C awk -v ng=%d -v npos=%q -v nneg=%q -v w=%d -v lim=%d -v fname=%s -v ig=%d '%s' %s`,
 			len(groups), strings.Join(nposList, ","), strings.Join(nnegList, ","),
-			window, perFileMax, fnameArg, ig, windowAwkScript, fileArg,
+			window, max, fnameArg, ig, searchAwkScript, fileArg,
 		)
 		if envPrefix != "" {
 			inv = envPrefix + " " + inv
@@ -913,22 +705,21 @@ func WindowSearchCommand(dir string, files []string, kw []SearchKeyword, max, ti
 
 	var cmdBody string
 	if singleFile {
-		cmdBody = buildAwk(quotedFiles[0], quotedFiles[0]) + " | LC_ALL=C sort -u | head -n " + strconv.Itoa(max)
+		cmdBody = buildAwk(quotedFiles[0], quotedFiles[0]) + " | head -n " + strconv.Itoa(max)
 	} else {
 		fileList := strings.Join(quotedFiles, " ")
-		cmdBody = "(for f in " + fileList + "; do " + buildAwk(`"$f"`, `"$f"`) + "; done) | LC_ALL=C sort -u | head -n " + strconv.Itoa(max)
+		cmdBody = "(for f in " + fileList + "; do " + buildAwk(`"$f"`, `"$f"`) + "; done) | head -n " + strconv.Itoa(max)
 	}
 
 	cmd := fmt.Sprintf("sh -c %s", shellQuote("cd "+shellQuote(dir)+" && "+cmdBody))
 	return cmd, nil
 }
 
-// orGroup 是 SearchCommand 把 kw 切分成"OR 段"时用的内部容器：
-//   - pos: 当前段里的"正"term（被 grep -E / grep -HnE 命中的）
-//   - neg: 当前段里的"负"term（被 grep -vE 排除的）
+// orGroup 是搜索引擎把 kw 切分成"OR 段"时用的内部容器：
+//   - pos: 当前段里的正 term
+//   - neg: 当前段里的负 term
 //
-// 每个 group 在 SearchCommand 里会被构造成一个独立分支，
-// 所有分支放进统一子 shell 用 sort -u 合并（P0-3 修复 OR 语义）。
+// awk 对每个原始日志行依次计算所有组；组内为 AND，组间为 OR。
 type orGroup struct {
 	pos []string
 	neg []string

@@ -1,1314 +1,473 @@
 (function () {
   'use strict';
+
   const Kairo = window.Kairo = window.Kairo || {};
   Kairo.pages = Kairo.pages || {};
   const { el, toast } = Kairo.core;
   const { api } = Kairo.api;
 
-  const ICONS = {
-    smFolder: 'M2 5a2 2 0 012-2h5l2 2h9a2 2 0 012 2v11a2 2 0 01-2 2H4a2 2 0 01-2-2V5z',
-    smFile:   'M6 2h6l4 4v14a2 2 0 01-2 2H6a2 2 0 01-2-2V4a2 2 0 012-2zm6 0v4h4',
-    smBulb:   'M9 18h6M10 21h4M12 2a7 7 0 00-4 12.7V17a2 2 0 002 2h4a2 2 0 002-2v-2.3A7 7 0 0012 2z',
-    smCheck:  'M20 6L9 17l-5-5',
-    smChevronDown:  'M6 9l6 6 6-6',
-    smChevronRight: 'M9 18l6-6-6-6',
-  };
-  function svgIcon(name, size) {
-    const d = ICONS[name];
-    if (!d) return '';
-    const s = size || 16;
-    return '<svg xmlns="http://www.w3.org/2000/svg" width="' + s + '" height="' + s + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="' + d + '"/></svg>';
-  }
+  const MAX_INLINE_ROWS = 5000;
+  const LS_OPTIONS = 'kairo:compare:workbench-options';
+  const LS_SOURCES = 'kairo:compare:workbench-sources';
+  let connections = [];
+  let activeScanJob = '';
+  let scanPollTimer = 0;
 
-  let lastResult = null;
-  let outputMode = 'unified';
-  let hideEqualRows = false;
-  const POPUP_NAME = 'kairo_compare_diff';
-
-  let folderScanResult = null;
-  let folderExpanded = new Set();
-  let folderShowOnlyDiff = false;
-  let folderFilter = '';
-  let folderExpandedSnapshot = null;
-  let selectedSuspects = new Set();
-  let isScanning = false;
-  let isDeepChecking = false;
-
-  const LS_IGNORE = 'kairo:compare:ignore';
-  const LS_MODE = 'kairo:compare:mode';
-  const LS_HIDE_EQUAL = 'kairo:compare:hideEqual';
-  const LS_LEFT_FOLDER = 'kairo:compare:left_folder';
-  const LS_RIGHT_FOLDER = 'kairo:compare:right_folder';
-  const LS_SCAN_MODE = 'kairo:compare:scan_mode';
-  const LS_IGNORE_EXTS = 'kairo:compare:ignore_exts';
-
-  function loadIgnore() {
-    try {
-      const raw = localStorage.getItem(LS_IGNORE);
-      if (!raw) return { trim_space: true, ignore_blank: false, ignore_case: false };
-      const v = JSON.parse(raw);
-      return {
-        trim_space: v.trim_space !== false,
-        ignore_blank: !!v.ignore_blank,
-        ignore_case: !!v.ignore_case,
-      };
-    } catch (e) {
-      return { trim_space: true, ignore_blank: false, ignore_case: false };
-    }
-  }
-  function saveIgnore(v) {
-    try { localStorage.setItem(LS_IGNORE, JSON.stringify(v)); } catch (e) {}
-  }
-  function loadMode() {
-    try {
-      const m = localStorage.getItem(LS_MODE);
-      if (m === 'unified' || m === 'side' || m === 'changes') return m;
-    } catch (e) {}
-    return 'unified';
-  }
-  function saveMode(m) {
-    try { localStorage.setItem(LS_MODE, m); } catch (e) {}
-  }
-  function loadHideEqual() {
-    try { return localStorage.getItem(LS_HIDE_EQUAL) === '1'; } catch (e) { return false; }
-  }
-  function saveHideEqual(v) {
-    try { localStorage.setItem(LS_HIDE_EQUAL, v ? '1' : '0'); } catch (e) {}
-  }
-  function loadFolderPath(side) {
-    try {
-      return localStorage.getItem(side === 'left' ? LS_LEFT_FOLDER : LS_RIGHT_FOLDER) || '';
-    } catch (e) { return ''; }
-  }
-  function saveFolderPath(side, path) {
-    try {
-      if (path) localStorage.setItem(side === 'left' ? LS_LEFT_FOLDER : LS_RIGHT_FOLDER, path);
-      else localStorage.removeItem(side === 'left' ? LS_LEFT_FOLDER : LS_RIGHT_FOLDER);
-    } catch (e) {}
-  }
-  function loadScanMode() {
-    try { return localStorage.getItem(LS_SCAN_MODE) === 'deep' ? 'deep' : 'fast'; } catch (e) { return 'fast'; }
-  }
-  function saveScanMode(m) {
-    try { localStorage.setItem(LS_SCAN_MODE, m); } catch (e) {}
-  }
-  function loadIgnoreExts() {
-    try { return localStorage.getItem(LS_IGNORE_EXTS) || ''; } catch (e) { return ''; }
-  }
-  function saveIgnoreExts(v) {
-    try { localStorage.setItem(LS_IGNORE_EXTS, v); } catch (e) {}
-  }
-
-  function pickLocalFile(targetTextarea, onLoaded) {
-    const input = el('input', { type: 'file' });
-    input.style.display = 'none';
-    document.body.appendChild(input);
-    input.addEventListener('change', () => {
-      const f = input.files && input.files[0];
-      if (!f) { cleanup(); return; }
-      if (f.size > 4 * 1024 * 1024) {
-        toast('文件超过 4MB 上限：' + f.name, 'err');
-        cleanup();
-        return;
-      }
-      const reader = new FileReader();
-      reader.onload = () => {
-        targetTextarea.value = String(reader.result || '');
-        const filePath = f.path || f.name;
-        if (typeof onLoaded === 'function') onLoaded(filePath);
-        cleanup();
-      };
-      reader.onerror = () => {
-        toast('读取文件失败：' + f.name, 'err');
-        cleanup();
-      };
-      reader.readAsText(f, 'utf-8');
-    });
-    input.addEventListener('cancel', cleanup);
-    input.click();
-    function cleanup() {
-      if (input.parentNode) input.parentNode.removeChild(input);
-    }
-  }
-
-  function makeDropTarget(ta, fileLabelEl) {
-    const overlay = el('div', { class: 'cmp-drop-hint', text: '松开以读入文件' });
-    overlay.style.display = 'none';
-    if (ta.parentNode) {
-      ta.parentNode.insertBefore(overlay, ta);
-    } else {
-      queueMicrotask(() => {
-        if (ta.parentNode) ta.parentNode.insertBefore(overlay, ta);
-      });
-    }
-
-    let dragDepth = 0;
-    ta.addEventListener('dragenter', (e) => {
-      e.preventDefault();
-      dragDepth++;
-      overlay.style.display = 'flex';
-    });
-    ta.addEventListener('dragover', (e) => { e.preventDefault(); });
-    ta.addEventListener('dragleave', () => {
-      dragDepth = Math.max(0, dragDepth - 1);
-      if (dragDepth === 0) overlay.style.display = 'none';
-    });
-    ta.addEventListener('drop', (e) => {
-      e.preventDefault();
-      dragDepth = 0;
-      overlay.style.display = 'none';
-      const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
-      if (!f) return;
-      if (f.size > 4 * 1024 * 1024) {
-        toast('文件超过 4MB 上限：' + f.name, 'err');
-        return;
-      }
-      const reader = new FileReader();
-      reader.onload = () => {
-        ta.value = String(reader.result || '');
-        const filePath = f.path || f.name;
-        fileLabelEl.textContent = filePath;
-        toast('已读入：' + f.name, 'ok');
-      };
-      reader.onerror = () => toast('读取失败：' + f.name, 'err');
-      reader.readAsText(f, 'utf-8');
-    });
-  }
-
-  function openDiffInNewWindow(unifiedDiff, diffTitle, stats, opts) {
-    opts = opts || {};
-    const mode = opts.mode || outputMode;
-    const hideEq = opts.hideEqual != null ? !!opts.hideEqual : hideEqualRows;
-
-    const win = window.open('', POPUP_NAME);
-    if (!win) {
-      toast('弹窗被浏览器阻止，请允许弹窗后重试', 'err');
-      return null;
-    }
-
-    const theme = (document.documentElement.getAttribute('data-theme') || 'dark');
-    const statsText = stats ? ('新增 ' + stats.added + ' 行·删除 ' + stats.removed + ' 行') : '';
-    const primaryColor = theme === 'light' ? '#2563eb' : theme === 'hc' ? '#00ffff' : theme === 'green' ? '#3f7a3f' : theme === 'xianxia' ? '#4a7a6a' : '#4f8cff';
-    const bgColor = theme === 'light' ? '#ffffff' : theme === 'hc' ? '#000000' : theme === 'green' ? '#fbfdf7' : theme === 'xianxia' ? '#f5f8f7' : '#11161f';
-    const bg2Color = theme === 'light' ? '#f6f8fa' : theme === 'hc' ? '#0a0a0a' : theme === 'green' ? '#eef3e7' : theme === 'xianxia' ? '#e8efe9' : '#1d2532';
-    const lineColor = theme === 'light' ? '#d8dee4' : theme === 'hc' ? '#ffffff' : theme === 'green' ? '#cfd9c0' : theme === 'xianxia' ? '#b8c5be' : '#232b3a';
-    const textColor = theme === 'light' ? '#1f2328' : theme === 'hc' ? '#ffff00' : theme === 'green' ? '#1f2a1f' : theme === 'xianxia' ? '#1a2320' : '#e6edf3';
-    const textDimColor = theme === 'light' ? '#5a6678' : theme === 'hc' ? '#ffffaa' : theme === 'green' ? '#4d5d4d' : theme === 'xianxia' ? '#4a5a54' : '#8b97a8';
-    const textMuteColor = theme === 'light' ? '#8b97a8' : theme === 'hc' ? '#ccc888' : theme === 'green' ? '#6b7a6b' : theme === 'xianxia' ? '#70827b' : '#5a6678';
-
-    const payload = {
-      unified: unifiedDiff || '',
-      title: diffTitle || 'left vs right',
-      stats: stats || null,
-      mode: mode,
-      hideEqual: hideEq,
+  function icon(name) {
+    const paths = {
+      compare: 'M8 7h11M15 3l4 4-4 4M16 17H5M9 13l-4 4 4 4',
+      prev: 'M12 19V5M5 12l7-7 7 7', next: 'M12 5v14M19 12l-7 7-7-7',
+      open: 'M3 7h6l2 2h10v10H3z', save: 'M5 3h12l2 2v16H5zM8 3v6h8V3M8 21v-7h8v7',
+      swap: 'M7 7h12M15 3l4 4-4 4M17 17H5M9 13l-4 4 4 4',
+      left: 'M19 12H5M11 18l-6-6 6-6', right: 'M5 12h14M13 6l6 6-6 6',
+      close: 'M6 6l12 12M18 6L6 18', folder: 'M3 6h7l2 2h9v11H3z',
     };
-    const payloadJson = JSON.stringify(payload);
-    const payloadEscaped = payloadJson.replace(/</g, '\\u003c');
-    const payloadJsLiteral = JSON.stringify(payloadEscaped);
-
-    win.document.write('<!DOCTYPE html><html lang="zh-CN" data-theme="' + theme + '"><head><meta charset="utf-8"><title>Diff ' + (diffTitle || 'left vs right') + '</title>'
-      + '<link rel="stylesheet" href="/static/vendor/diff2html.min.css">'
-      + '<style>'
-      + '*{box-sizing:border-box;margin:0;padding:0}'
-      + 'html,body{height:100%;font-family:ui-monospace,SFMono-Regular,"Cascadia Mono",Menlo,Consolas,monospace;font-size:13px;background:' + bgColor + ';color:' + textColor + ';}'
-      + '.diff-toolbar{position:sticky;top:0;z-index:100;display:flex;align-items:center;gap:12px;padding:8px 16px;background:' + bg2Color + ';border-bottom:1px solid ' + lineColor + ';flex-wrap:wrap;}'
-      + '.diff-toolbar .diff-files{font-weight:600;font-size:13px;}'
-      + '.diff-toolbar .diff-stats-info{color:' + textDimColor + ';font-size:12px;}'
-      + '.diff-toolbar .diff-nav-btns{display:flex;gap:4px;margin:0 auto;}'
-      + '.diff-toolbar .diff-nav-btns button,.diff-toolbar .diff-actions button{background:' + bgColor + ';border:1px solid ' + lineColor + ';color:' + textColor + ';padding:4px 10px;border-radius:6px;cursor:pointer;font-size:12px;font-family:inherit;}'
-      + '.diff-toolbar .diff-nav-btns button:hover,.diff-toolbar .diff-actions button:hover{border-color:' + primaryColor + ';color:' + primaryColor + '}'
-      + '.diff-toolbar .diff-actions{display:flex;gap:4px;}'
-      + '.diff-toolbar .diff-actions .btn-close{color:' + (theme === 'hc' ? '#ff5555' : '#ef4444') + ';}'
-      + '.diff-body{padding:0;overflow:auto;}'
-      + '.diff-body .d2h-wrapper{margin:0;}'
-      + '.diff-body .d2h-file-header{display:none!important;}'
-      + '.diff-body .d2h-code-line,.diff-body .d2h-code-side-line{font-family:ui-monospace,SFMono-Regular,"Cascadia Mono",Menlo,Consolas,monospace!important;font-size:12.5px!important;}'
-      + '.diff-current-hunk{outline:2px solid ' + primaryColor + '!important;outline-offset:-2px;}'
-      + '.diff-kbd{display:inline-block;padding:1px 5px;border:1px solid ' + lineColor + ';border-radius:3px;font-size:11px;background:' + bgColor + ';color:' + textMuteColor + ';margin:0 1px;}'
-      + '</style></head><body>'
-      + '<div class="diff-toolbar">'
-      + '<div><span class="diff-files">' + (diffTitle || 'left vs right') + '</span>'
-      + '<span class="diff-stats-info" id="diffStatsInfo">' + (statsText || '') + '</span></div>'
-      + '<div class="diff-nav-btns">'
-      + '<button id="btnPrev" title="上一处差异 (P/↑)">&uarr; 上一处 <span class="diff-kbd">P</span></button>'
-      + '<button id="btnNext" title="下一处差异 (N/↓)">&darr; 下一处 <span class="diff-kbd">N</span></button>'
-      + '<span id="diffNavPos" style="color:' + textMuteColor + ';font-size:12px;align-self:center;min-width:60px;text-align:center;">-</span>'
-      + '</div>'
-      + '<div class="diff-actions">'
-      + '<button id="btnCopy" title="复制 diff">复制 diff</button>'
-      + '<button id="btnDownload" title="下载 .diff 文件">下载 .diff</button>'
-      + '<button id="btnClose" class="btn-close" title="关闭窗口 (Esc)">关闭</button>'
-      + '</div>'
-      + '</div>'
-      + '<div class="diff-body" id="diffBody"></div>'
-      + '<script>(function() {'
-      + 'window.PAYLOAD_JSON = ' + payloadJsLiteral + ';'
-      + 'var PAYLOAD_JSON = window.PAYLOAD_JSON;'
-      + 'var TITLE_FALLBACK = ' + JSON.stringify(diffTitle || 'left vs right') + ';'
-      + 'function decodePayload() {'
-      + '  try {'
-      + '    return JSON.parse(PAYLOAD_JSON);'
-      + '  } catch (e) {'
-      + '    return { unified: "", title: TITLE_FALLBACK, stats: null, mode: "unified", hideEqual: false };'
-      + '  }'
-      + '}'
-      + 'function escapeHtml(s) {'
-      + '  var d = document.createElement("div");'
-      + '  d.textContent = s;'
-      + '  return d.innerHTML;'
-      + '}'
-      + 'function showToast(msg) {'
-      + '  var t = document.createElement("div");'
-      + '  t.textContent = msg;'
-      + '  t.style.cssText = "position:fixed;bottom:20px;right:20px;background:rgba(0,0,0,0.8);color:#fff;padding:8px 14px;border-radius:6px;font-size:13px;z-index:9999;";'
-      + '  document.body.appendChild(t);'
-      + '  setTimeout(function () { if (t.parentNode) t.parentNode.removeChild(t); }, 1500);'
-      + '}'
-      + 'function renderUnifiedFromText(unified) {'
-      + '  return `<pre style="padding:16px;white-space:pre-wrap;word-break:break-all;">${escapeHtml(unified)}</pre>`;'
-      + '}'
-      + 'function renderChanges(unified) {'
-      + '  var lines = unified.split("\\n");'
-      + '  var html = `<pre class="cmp-changes-only" style="padding:12px;line-height:1.6;font-size:12.5px;">`;'
-      + '  for (var i = 0; i < lines.length; i++) {'
-      + '    var ln = lines[i];'
-      + '    var ch = ln.charAt(0);'
-      + '    var color = "#e6edf3";'
-      + '    var bg = "transparent";'
-      + '    if (ch === "+") { color = "#a3e3a3"; bg = "rgba(46,160,67,0.15)"; }'
-      + '    else if (ch === "-") { color = "#ffa198"; bg = "rgba(248,81,73,0.15)"; }'
-      + '    else if (ch === "@") { color = "#79c0ff"; }'
-      + '    html += `<div style="background:${bg};color:${color};padding:0 8px;">${escapeHtml(ln)}</div>`;'
-      + '  }'
-      + '  html += "</pre>";'
-      + '  return html;'
-      + '}'
-      + 'function collectDiffRows() {'
-      + '  diffRows = [];'
-      + '  var all = document.querySelectorAll(".d2h-ins, .d2h-del, .d2h-cntx.d2h-change, .d2h-info");'
-      + '  var seenTrs = new Set();'
-      + '  all.forEach(function (el) {'
-      + '    var tr = el.closest("tr");'
-      + '    if (tr && !seenTrs.has(tr)) {'
-      + '      var isChanged = tr.querySelector(".d2h-ins, .d2h-del");'
-      + '      if (isChanged) { seenTrs.add(tr); diffRows.push(tr); }'
-      + '    }'
-      + '  });'
-      + '}'
-      + 'function highlightCurrent() {'
-      + '  document.querySelectorAll(".diff-current-hunk").forEach(function (el) { el.classList.remove("diff-current-hunk"); });'
-      + '  if (currentIdx >= 0 && currentIdx < diffRows.length) {'
-      + '    var tr = diffRows[currentIdx];'
-      + '    tr.querySelectorAll("td").forEach(function (td) { td.classList.add("diff-current-hunk"); });'
-      + '    tr.scrollIntoView({ behavior: "smooth", block: "center" });'
-      + '  }'
-      + '}'
-      + 'function updateNavPos() {'
-      + '  var pos = document.getElementById("diffNavPos");'
-      + '  if (!pos) return;'
-      + '  if (diffRows.length === 0) pos.textContent = "无差异";'
-      + '  else pos.textContent = (currentIdx + 1) + " / " + diffRows.length;'
-      + '}'
-      + 'function nextDiff() {'
-      + '  if (diffRows.length === 0) return;'
-      + '  currentIdx = (currentIdx + 1) % diffRows.length;'
-      + '  highlightCurrent(); updateNavPos();'
-      + '}'
-      + 'function prevDiff() {'
-      + '  if (diffRows.length === 0) return;'
-      + '  currentIdx = (currentIdx - 1 + diffRows.length) % diffRows.length;'
-      + '  highlightCurrent(); updateNavPos();'
-      + '}'
-      + 'function copyDiff() {'
-      + '  if (navigator.clipboard && navigator.clipboard.writeText) {'
-      + '    navigator.clipboard.writeText(data.unified).then(function () { showToast("已复制"); }, function () { showToast("复制失败"); });'
-      + '  }'
-      + '}'
-      + 'function downloadDiff() {'
-      + '  var blob = new Blob([data.unified], { type: "text/plain;charset=utf-8" });'
-      + '  var url = URL.createObjectURL(blob);'
-      + '  var a = document.createElement("a");'
-      + '  a.href = url;'
-      + '  a.download = "diff_" + Date.now() + ".diff";'
-      + '  document.body.appendChild(a);'
-      + '  a.click();'
-      + '  setTimeout(function () { URL.revokeObjectURL(url); if (a.parentNode) a.parentNode.removeChild(a); }, 0);'
-      + '}'
-      + 'var data = decodePayload();'
-      + 'var diffRows = [];'
-      + 'var currentIdx = -1;'
-      + 'function init() {'
-      + '  var body = document.getElementById("diffBody");'
-      + '  var fmt = (data.mode === "side") ? "side-by-side" : "line-by-line";'
-      + '  var d2h = (typeof window.Diff2Html !== "undefined") ? window.Diff2Html : null;'
-      + '  if (!d2h || data.mode === "changes") {'
-      + '    body.innerHTML = (data.mode === "changes") ? renderChanges(data.unified) : renderUnifiedFromText(data.unified);'
-      + '    updateNavPos();'
-      + '    return;'
-      + '  }'
-      + '  try {'
-      + '    var html = d2h.html(data.unified, {'
-      + '      outputFormat: fmt,'
-      + '      drawFileList: false,'
-      + '      matching: "lines",'
-      + '      renderNothingWhenEmpty: false,'
-      + '      hideEqualRows: !!data.hideEqual'
-      + '    });'
-      + '    body.innerHTML = html;'
-      + '    collectDiffRows();'
-      + '    if (diffRows.length > 0) { currentIdx = 0; highlightCurrent(); }'
-      + '    updateNavPos();'
-      + '  } catch (e) {'
-      + '    body.innerHTML = `<pre style="padding:16px;color:#f85149;">d2h 渲染失败: ${e.message || e}</pre><pre style="padding:16px;white-space:pre-wrap;">${escapeHtml(data.unified)}</pre>`;'
-      + '    updateNavPos();'
-      + '  }'
-      + '}'
-      + 'function boot() {'
-      + '  if (typeof window.Diff2Html !== "undefined") { init(); return; }'
-      + '  var tries = 0;'
-      + '  var t = setInterval(function () {'
-      + '    if (typeof window.Diff2Html !== "undefined" || tries++ > 40) {'
-      + '      clearInterval(t);'
-      + '      init();'
-      + '    }'
-      + '  }, 25);'
-      + '}'
-      + 'document.getElementById("btnPrev").addEventListener("click", prevDiff);'
-      + 'document.getElementById("btnNext").addEventListener("click", nextDiff);'
-      + 'document.getElementById("btnCopy").addEventListener("click", copyDiff);'
-      + 'document.getElementById("btnDownload").addEventListener("click", downloadDiff);'
-      + 'document.getElementById("btnClose").addEventListener("click", function () { window.close(); });'
-      + 'document.addEventListener("keydown", function (e) {'
-      + '  if (e.key === "Escape") { window.close(); return; }'
-      + '  if (e.target && (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA")) return;'
-      + '  if (e.key === "n" || e.key === "N" || e.key === "ArrowDown") { e.preventDefault(); nextDiff(); }'
-      + '  else if (e.key === "p" || e.key === "P" || e.key === "ArrowUp") { e.preventDefault(); prevDiff(); }'
-      + '});'
-      + 'if (document.readyState === "loading") {'
-      + '  document.addEventListener("DOMContentLoaded", boot);'
-      + '} else {'
-      + '  boot();'
-      + '}'
-      + '})();<' + '/script>'
-      + '<script src="/static/vendor/diff2html.min.js" async onerror="document.getElementById(\'diffBody\').innerHTML=\'<pre style=&quot;padding:16px;&quot;>diff2html.min.js 加载失败，请检查 /static/vendor/ 目录</pre>\'"><' + '/script>'
-      + '</body></html>');
-    win.document.close();
-    return win;
+    return '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="' + (paths[name] || paths.compare) + '"/></svg>';
   }
 
-  async function doCompare(leftTa, rightTa) {
-    const left = leftTa.value || '';
-    const right = rightTa.value || '';
-    if (!left && !right) { toast('左右都为空，没法比对', 'warn'); return; }
-    const ignore = loadIgnore();
+  function loadOptions() {
+    const defaults = { trim_space: true, ignore_blank: false, ignore_case: false, mode: 'side', onlyDiff: false, backup: true };
+    try { return Object.assign(defaults, JSON.parse(localStorage.getItem(LS_OPTIONS) || '{}')); } catch (_) { return defaults; }
+  }
+  function saveOptions(options) { try { localStorage.setItem(LS_OPTIONS, JSON.stringify(options)); } catch (_) {} }
+  function loadSavedSources() {
     try {
-      const r = await api('POST', '/api/diff/compare', {
-        left: left,
-        right: right,
-        left_label: 'left',
-        right_label: 'right',
-        ignore: ignore,
-      });
-      lastResult = r;
-      openDiffInNewWindow(r.unified_diff || '', 'left vs right', r.stats, {
-        mode: outputMode,
-        hideEqual: hideEqualRows,
-      });
-    } catch (e) {
-      toast('比对失败：' + (e.message || e), 'err');
-    }
+      const value = JSON.parse(localStorage.getItem(LS_SOURCES) || '{}');
+      ['left', 'right'].forEach(k => { if (value[k]) value[k].password = ''; });
+      return value;
+    } catch (_) { return {}; }
   }
-
-  function copyToClipboard(text) {
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      return navigator.clipboard.writeText(text);
-    }
-    return new Promise((resolve, reject) => {
-      const ta = el('textarea', { style: 'position:fixed;left:-9999px' });
-      ta.value = text;
-      document.body.appendChild(ta);
-      ta.select();
-      try {
-        const ok = document.execCommand('copy');
-        document.body.removeChild(ta);
-        ok ? resolve() : reject(new Error('execCommand 返回 false'));
-      } catch (e) {
-        document.body.removeChild(ta);
-        reject(e);
-      }
-    });
-  }
-  function downloadAsFile(text, filename) {
-    const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = el('a', { href: url, download: filename });
-    document.body.appendChild(a);
-    a.click();
-    setTimeout(() => {
-      URL.revokeObjectURL(url);
-      if (a.parentNode) a.parentNode.removeChild(a);
-    }, 0);
-  }
-  function makeDiffFilename(leftLabel, rightLabel) {
-    const stamp = new Date().toISOString().replace(/[:.]/g, '-').replace(/T/, '_').slice(0, 19);
-    const safe = (s) => (s || '').replace(/[^a-zA-Z0-9_.\-]/g, '_').slice(-32) || 'side';
-    return 'diff_' + safe(leftLabel) + '_vs_' + safe(rightLabel) + '_' + stamp + '.diff';
-  }
-
-  function getStatusIcon(status) {
-    switch (status) {
-      case 'same': return svgIcon('smCheck', 14);
-      case 'different': return '≠';
-      case 'suspect': return '?';
-      case 'left_only': return '<';
-      case 'right_only': return '>';
-      default: return '';
-    }
-  }
-
-  function getStatusColor(status) {
-    switch (status) {
-      case 'same': return '#22c55e';
-      case 'different': return '#f97316';
-      case 'suspect': return '#eab308';
-      case 'left_only': return '#ef4444';
-      case 'right_only': return '#3b82f6';
-      default: return 'var(--text-dim)';
-    }
-  }
-
-  function formatSize(bytes) {
-    if (bytes == null) return '';
-    if (bytes < 1024) return bytes + ' B';
-    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
-    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
-  }
-
-  function formatTime(ts) {
-    if (!ts) return '';
+  function saveSources(state) {
     try {
-      const d = new Date(ts * 1000);
-      const pad = n => String(n).padStart(2, '0');
-      return pad(d.getMonth()+1) + '-' + pad(d.getDate()) + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
-    } catch (e) { return ''; }
+      const clean = {};
+      ['left', 'right'].forEach(k => { const source = Object.assign({}, state[k].source); delete source.password; clean[k] = source; });
+      localStorage.setItem(LS_SOURCES, JSON.stringify(clean));
+    } catch (_) {}
   }
 
-  function isEntryVisible(entry, sideEntries) {
-    if (entry.depth === 0) return true;
-    const pathParts = entry.path.split('/');
-    for (let d = entry.depth - 1; d >= 0; d--) {
-      const parentPath = pathParts.slice(0, d + 1).join('/');
-      if (!folderExpanded.has(parentPath)) return false;
-    }
-    return true;
+  function defaultSource(side) {
+    return { kind: 'text', path: '', label: side === 'left' ? '左侧文本' : '右侧文本', system: '', server: '', host: '', port: 21, username: '', password: '', tls_mode: '', encoding: 'auto' };
+  }
+  function spec(source) { const out = Object.assign({}, source); delete out.label; return out; }
+  function sourceLabel(source) {
+    if (source.kind === 'text') return source.label || '未命名文本';
+    if (source.kind === 'sftp') return (source.server || 'SFTP') + ':' + source.path;
+    if (source.kind === 'ftp') return (source.host || 'FTP') + ':' + source.path;
+    return source.path || '本地文件';
+  }
+  function joinPath(source, root, rel) {
+    const sep = source.kind === 'local' && /^([A-Za-z]:\\|\\\\)/.test(root) ? '\\' : '/';
+    return String(root || '').replace(/[\\/]$/, '') + sep + String(rel || '').replace(/^[\\/]/, '').replace(/[\\/]/g, sep);
+  }
+  function makeButton(text, name, onclick, className) {
+    return el('button', { class: className || 'btn btn-sm', title: text, onclick, unsafeHtml: (name ? icon(name) : '') + '<span>' + text + '</span>' });
+  }
+  function makeCheck(label, checked, onchange) {
+    const input = el('input', { type: 'checkbox' }); input.checked = !!checked;
+    input.addEventListener('change', () => onchange(input.checked));
+    return el('label', { class: 'cmp-wb-check' }, [input, document.createTextNode(label)]);
   }
 
-  function setAllExpanded(expanded) {
-    folderExpanded = new Set();
-    if (expanded && folderScanResult) {
-      const allDirs = new Set();
-      folderScanResult.left.tree.forEach(e => { if (e.is_dir) allDirs.add(e.rel_path); });
-      folderScanResult.right.tree.forEach(e => { if (e.is_dir) allDirs.add(e.rel_path); });
-      allDirs.forEach(d => folderExpanded.add(d));
-    }
-  }
-
-  function buildTreeEntries(entries, side) {
-    const map = new Map();
-    entries.forEach(e => {
-      map.set(e.rel_path, e);
-    });
-    const result = [];
-    const allPaths = new Set();
-    entries.forEach(e => {
-      const parts = e.rel_path.split('/');
-      for (let i = 1; i <= parts.length; i++) {
-        allPaths.add(parts.slice(0, i).join('/'));
-      }
-    });
-    const sortedPaths = Array.from(allPaths).sort((a, b) => {
-      const aIsDir = entries.some(e => e.rel_path === a && e.is_dir) || !entries.some(e => e.rel_path === a);
-      const bIsDir = entries.some(e => e.rel_path === b && e.is_dir) || !entries.some(e => e.rel_path === b);
-      if (aIsDir && !bIsDir) return -1;
-      if (!aIsDir && bIsDir) return 1;
-      return a.localeCompare(b);
-    });
-    sortedPaths.forEach(relPath => {
-      const parts = relPath.split('/');
-      const name = parts[parts.length - 1];
-      const depth = parts.length - 1;
-      const entry = map.get(relPath);
-      let isDir = true;
-      let size = 0;
-      let mtime = 0;
-      let status = 'same';
-      let fullPath = '';
-      if (entry) {
-        isDir = entry.is_dir;
-        size = entry.size;
-        mtime = entry.mtime;
-        status = entry.status;
-        fullPath = entry.path;
-      } else {
-        const otherSide = side === 'left' ? 'right' : 'left';
-        const otherMap = new Map();
-        (folderScanResult[otherSide].tree || []).forEach(e => otherMap.set(e.rel_path, e));
-        const otherEntry = otherMap.get(relPath);
-        if (otherEntry) {
-          isDir = otherEntry.is_dir;
-          size = otherEntry.size;
-          mtime = otherEntry.mtime;
-          status = otherEntry.status;
-          fullPath = otherEntry.path;
-        }
-      }
-      result.push({
-        name,
-        path: relPath,
-        depth,
-        isDir,
-        size,
-        mtime,
-        status,
-        fullPath,
+  function createEditor(side, onDirty) {
+    const gutter = el('pre', { class: 'cmp-editor-gutter', text: '1' });
+    const textarea = el('textarea', { class: 'cmp-editor-input', spellcheck: 'false', wrap: 'off', placeholder: side === 'left' ? '粘贴原始文本，或打开本地/FTP/SFTP 文件' : '粘贴修改后的文本，或打开本地/FTP/SFTP 文件' });
+    let raf = 0;
+    const updateGutter = () => {
+      cancelAnimationFrame(raf); raf = requestAnimationFrame(() => {
+        const count = textarea.value === '' ? 1 : textarea.value.split('\n').length;
+        let numbers = ''; for (let i = 1; i <= count; i++) numbers += i + '\n';
+        gutter.textContent = numbers;
       });
-    });
-    return result;
-  }
-
-  function renderFolderTree(container) {
-    if (!container || !folderScanResult) return;
-    container.innerHTML = '';
-
-    let leftEntries = buildTreeEntries(folderScanResult.left.tree, 'left');
-    let rightEntries = buildTreeEntries(folderScanResult.right.tree, 'right');
-
-    if (folderFilter) {
-      const q = folderFilter.toLowerCase();
-      const filterEntries = (entries) => {
-        const matchedPaths = new Set();
-        entries.forEach(e => {
-          if (e.name.toLowerCase().includes(q) || e.path.toLowerCase().includes(q)) {
-            const parts = e.path.split('/');
-            for (let d = 1; d <= parts.length; d++) {
-              matchedPaths.add(parts.slice(0, d).join('/'));
-            }
-          }
-        });
-        return entries.filter(e => matchedPaths.has(e.path));
-      };
-      leftEntries = filterEntries(leftEntries);
-      rightEntries = filterEntries(rightEntries);
-      leftEntries.forEach(e => { if (e.isDir) folderExpanded.add(e.path); });
-      rightEntries.forEach(e => { if (e.isDir) folderExpanded.add(e.path); });
-    }
-
-    if (folderShowOnlyDiff) {
-      const hasDiffChild = (entries, entry) => {
-        if (!entry.isDir) return entry.status === 'different' || entry.status === 'suspect' || entry.status === 'left_only' || entry.status === 'right_only';
-        const prefix = entry.path + '/';
-        return entries.some(e => !e.isDir && e.path.startsWith(prefix) && (e.status === 'different' || e.status === 'suspect' || e.status === 'left_only' || e.status === 'right_only'));
-      };
-      leftEntries = leftEntries.filter(e => e.isDir ? hasDiffChild(leftEntries, e) : (e.status === 'different' || e.status === 'suspect' || e.status === 'left_only' || e.status === 'right_only'));
-      rightEntries = rightEntries.filter(e => e.isDir ? hasDiffChild(rightEntries, e) : (e.status === 'different' || e.status === 'suspect' || e.status === 'left_only' || e.status === 'right_only'));
-    }
-
-    const leftPanel = el('div', { class: 'cmp-tree-panel', style: 'flex:1; overflow:auto;' });
-    const rightPanel = el('div', { class: 'cmp-tree-panel', style: 'flex:1; overflow:auto;' });
-
-    const renderNode = (entry, panel, side) => {
-      const isMissing = (side === 'left' && entry.status === 'right_only') || (side === 'right' && entry.status === 'left_only');
-      const isSuspect = entry.status === 'suspect';
-      let bgStyle = '';
-      if (entry.status === 'different' && !entry.isDir) bgStyle = 'background:rgba(249,115,22,0.08);';
-      else if (isSuspect && !entry.isDir) bgStyle = 'background:rgba(234,179,8,0.10);';
-      else if (entry.status === 'left_only' && side === 'left' && !entry.isDir) bgStyle = 'background:rgba(239,68,68,0.08);';
-      else if (entry.status === 'right_only' && side === 'right' && !entry.isDir) bgStyle = 'background:rgba(59,130,246,0.08);';
-
-      const canClick = entry.isDir || (!isMissing && !entry.isDir && entry.status !== 'same');
-      const row = el('div', {
-        class: 'cmp-tree-row',
-        style: 'display:flex; align-items:center; padding:2px 8px; cursor:' + (canClick ? 'pointer' : 'default') + '; font-size:12.5px; line-height:24px; white-space:nowrap; user-select:none;' +
-          'padding-left:' + (entry.depth * 16 + 8) + 'px;' +
-          (isMissing ? 'opacity:0.3;' : '') +
-          bgStyle,
-      });
-
-      if (entry.isDir) {
-        const expanded = folderExpanded.has(entry.path);
-        const arrow = el('span', { style: 'width:14px; display:inline-flex; align-items:center; justify-content:center; color:var(--text-dim); flex-shrink:0;', unsafeHtml: svgIcon(expanded ? 'smChevronDown' : 'smChevronRight', 12) });
-        const icon = el('span', { style: 'margin-right:4px; width:16px; height:16px; display:inline-flex; align-items:center; justify-content:center; color:var(--text-dim);', unsafeHtml: svgIcon('smFolder', 16) });
-        const nameEl = el('span', { style: 'flex:1; overflow:hidden; text-overflow:ellipsis; font-weight:500;', text: entry.name });
-        row.appendChild(arrow);
-        row.appendChild(icon);
-        row.appendChild(nameEl);
-        row.addEventListener('click', (e) => {
-          e.stopPropagation();
-          if (folderExpanded.has(entry.path)) folderExpanded.delete(entry.path);
-          else folderExpanded.add(entry.path);
-          renderFolderTree(container);
-        });
-      } else {
-        if (isMissing) {
-          row.appendChild(el('span', { style: 'width:14px; flex-shrink:0;' }));
-          row.appendChild(el('span', { style: 'width:20px; flex-shrink:0;' }));
-          row.appendChild(el('span', { style: 'flex:1;', text: '' }));
-        } else {
-          if (isSuspect) {
-            const cb = el('input', { type: 'checkbox', style: 'width:14px; flex-shrink:0; margin-right:2px;' });
-            cb.checked = selectedSuspects.has(entry.path);
-            cb.title = '勾选后深度校验此文件';
-            cb.addEventListener('click', (e) => {
-              e.stopPropagation();
-              if (cb.checked) selectedSuspects.add(entry.path);
-              else selectedSuspects.delete(entry.path);
-              updateDeepCheckButton();
-            });
-            row.appendChild(cb);
-          } else {
-            row.appendChild(el('span', { style: 'width:16px; flex-shrink:0;' }));
-          }
-          const statusDot = el('span', { style: 'width:16px; display:inline-flex; align-items:center; justify-content:center; flex-shrink:0; color:' + getStatusColor(entry.status) + ';', unsafeHtml: getStatusIcon(entry.status) });
-          if (isSuspect) {
-            statusDot.title = '大小相同但修改时间不同，需深度校验';
-          }
-          const icon = el('span', { style: 'margin-right:4px; width:16px; height:16px; display:inline-flex; align-items:center; justify-content:center; color:var(--text-dim);', unsafeHtml: svgIcon('smFile', 16) });
-          const nameEl = el('span', { style: 'flex:1; overflow:hidden; text-overflow:ellipsis; font-family:ui-monospace,monospace;', text: entry.name });
-          const sizeEl = el('span', { style: 'margin-left:8px; color:var(--text-dim); font-size:11px; flex-shrink:0; min-width:60px; text-align:right;', text: formatSize(entry.size) });
-          row.appendChild(statusDot);
-          row.appendChild(icon);
-          row.appendChild(nameEl);
-          row.appendChild(sizeEl);
-          if (entry.status === 'different') {
-            row.addEventListener('click', (e) => {
-              e.stopPropagation();
-              viewFileDiff(entry.path);
-            });
-          } else if (entry.status === 'suspect') {
-            row.title = '点击或勾选后深度校验';
-            row.addEventListener('click', (e) => {
-              e.stopPropagation();
-              selectedSuspects.clear();
-              selectedSuspects.add(entry.path);
-              doDeepCheckSelected();
-            });
-          } else if (entry.status === 'same') {
-            row.style.cursor = 'default';
-          }
-        }
-      }
-      panel.appendChild(row);
     };
-
-    const visibleLeft = leftEntries.filter(e => isEntryVisible(e, leftEntries));
-    const visibleRight = rightEntries.filter(e => isEntryVisible(e, rightEntries));
-    visibleLeft.forEach(e => renderNode(e, leftPanel, 'left'));
-    visibleRight.forEach(e => renderNode(e, rightPanel, 'right'));
-
-    const leftCount = folderScanResult.left.tree.filter(e => !e.is_dir).length;
-    const rightCount = folderScanResult.right.tree.filter(e => !e.is_dir).length;
-    const diffObj = folderScanResult.diff || {};
-    const sameCount = (diffObj.same || []).length;
-    const diffCount = (diffObj.different || []).length;
-    const suspectCount = (diffObj.suspect || []).length;
-    const leftOnlyCount = (diffObj.left_only || []).length;
-    const rightOnlyCount = (diffObj.right_only || []).length;
-
-    const leftHeader = el('div', { style: 'padding:8px 12px; border-bottom:1px solid var(--line); font-weight:600; display:flex; justify-content:space-between; align-items:center; background:var(--bg2,#1d2532); flex-shrink:0; gap:8px;' }, [
-      el('span', { style: 'overflow:hidden; text-overflow:ellipsis; white-space:nowrap; display:flex; align-items:center; gap:6px;', unsafeHtml: svgIcon('smFolder', 14) + ' ' + folderScanResult.left.root }),
-      el('span', { style: 'font-size:11px; color:var(--text-dim); font-weight:normal; flex-shrink:0;', text: leftCount + ' 文件' })
-    ]);
-    const rightHeader = el('div', { style: 'padding:8px 12px; border-bottom:1px solid var(--line); border-left:1px solid var(--line); font-weight:600; display:flex; justify-content:space-between; align-items:center; background:var(--bg2,#1d2532); flex-shrink:0; gap:8px;' }, [
-      el('span', { style: 'overflow:hidden; text-overflow:ellipsis; white-space:nowrap; display:flex; align-items:center; gap:6px;', unsafeHtml: svgIcon('smFolder', 14) + ' ' + folderScanResult.right.root }),
-      el('span', { style: 'font-size:11px; color:var(--text-dim); font-weight:normal; flex-shrink:0;', text: rightCount + ' 文件' })
-    ]);
-
-    const leftWrap = el('div', { style: 'display:flex; flex-direction:column; flex:1; min-width:0; height:100%;' }, [leftHeader, leftPanel]);
-    const rightWrap = el('div', { style: 'display:flex; flex-direction:column; flex:1; min-width:0; height:100%;' }, [rightHeader, rightPanel]);
-
-    const scanModeText = folderScanResult.deep_mode ? '深度模式 (MD5校验)' : '快速模式 (大小+mtime)';
-    const scanTimeText = folderScanResult.scan_ms ? '耗时 ' + (folderScanResult.scan_ms < 1000 ? folderScanResult.scan_ms + 'ms' : (folderScanResult.scan_ms/1000).toFixed(1) + 's') : '';
-    const legendBar = el('div', { style: 'padding:4px 12px; border-top:1px solid var(--line); font-size:11px; color:var(--text-dim); display:flex; gap:16px; align-items:center; background:var(--bg2,#1d2532); flex-shrink:0; flex-wrap:wrap;' }, [
-      el('span', { style: 'color:#22c55e; display:inline-flex; align-items:center; gap:4px;', unsafeHtml: svgIcon('smCheck', 12) + ' 相同' }),
-      el('span', { style: 'color:#eab308;', text: '? 待校验' }),
-      el('span', { style: 'color:#f97316;', text: '≠ 不同' }),
-      el('span', { style: 'color:#ef4444;', text: '< 仅左侧' }),
-      el('span', { style: 'color:#3b82f6;', text: '> 仅右侧' }),
-      el('span', { style: 'margin-left:auto;', text: scanModeText + (scanTimeText ? ' · ' + scanTimeText : '') }),
-    ]);
-
-    const statBar = el('div', { style: 'padding:4px 12px; font-size:11px; color:var(--text-dim); display:flex; gap:12px; align-items:center; background:var(--bg,#11161f); flex-shrink:0; flex-wrap:wrap; border-bottom:1px solid var(--line);' }, [
-      el('span', { text: '相同: ' + sameCount }),
-      el('span', { style: 'color:#eab308;', text: '待校验: ' + suspectCount }),
-      el('span', { style: 'color:#f97316;', text: '不同: ' + diffCount }),
-      el('span', { style: 'color:#ef4444;', text: '仅左: ' + leftOnlyCount }),
-      el('span', { style: 'color:#3b82f6;', text: '仅右: ' + rightOnlyCount }),
-    ]);
-
-    const treeContent = el('div', { style: 'display:flex; flex:1; min-height:0;' }, [leftWrap, rightWrap]);
-    const treeWrap = el('div', { class: 'cmp-tree-container', style: 'display:flex; flex-direction:column; border:1px solid var(--line); border-radius:6px; margin-top:8px; height:500px; background:var(--bg);' }, [statBar, treeContent, legendBar]);
-    container.appendChild(treeWrap);
-  }
-
-  function updateDeepCheckButton() {
-    const btn = document.getElementById('btnDeepCheck');
-    if (!btn) return;
-    const count = selectedSuspects.size;
-    btn.disabled = count === 0 || isDeepChecking;
-    btn.textContent = isDeepChecking ? '校验中...' : ('深度校验选中 (' + count + ')');
-  }
-
-  async function doDeepCheckSelected() {
-    if (isDeepChecking) return;
-    if (selectedSuspects.size === 0) {
-      toast('请先勾选要深度校验的文件（? 标记）', 'warn');
-      return;
-    }
-    isDeepChecking = true;
-    updateDeepCheckButton();
-
-    try {
-      const files = [];
-      selectedSuspects.forEach(relPath => {
-        const leftEntry = folderScanResult.left.tree.find(e => e.rel_path === relPath);
-        const rightEntry = folderScanResult.right.tree.find(e => e.rel_path === relPath);
-        if (leftEntry && rightEntry) {
-          files.push({
-            left_path: leftEntry.path,
-            right_path: rightEntry.path,
-            rel_path: relPath,
-          });
-        }
-      });
-      if (files.length === 0) {
-        toast('没有可校验的文件', 'warn');
-        return;
-      }
-      const r = await api('POST', '/api/compare/deep-check', { files });
-      let updated = 0;
-      for (const [relPath, result] of Object.entries(r.results || {})) {
-        const leftEntry = folderScanResult.left.tree.find(e => e.rel_path === relPath);
-        const rightEntry = folderScanResult.right.tree.find(e => e.rel_path === relPath);
-        if (leftEntry && rightEntry) {
-          const newStatus = result === 'same' ? 'same' : result === 'different' ? 'different' : 'suspect';
-          if (leftEntry.status !== newStatus) {
-            leftEntry.status = newStatus;
-            rightEntry.status = newStatus;
-            leftEntry.checked = true;
-            rightEntry.checked = true;
-            updated++;
-            const diffObj = folderScanResult.diff;
-            const suspectIdx = (diffObj.suspect || []).indexOf(relPath);
-            if (suspectIdx >= 0) diffObj.suspect.splice(suspectIdx, 1);
-            if (newStatus === 'same') {
-              if (!diffObj.same.includes(relPath)) diffObj.same.push(relPath);
-              const diffIdx = diffObj.different.indexOf(relPath);
-              if (diffIdx >= 0) diffObj.different.splice(diffIdx, 1);
-            } else if (newStatus === 'different') {
-              if (!diffObj.different.includes(relPath)) diffObj.different.push(relPath);
-              const sameIdx = diffObj.same.indexOf(relPath);
-              if (sameIdx >= 0) diffObj.same.splice(sameIdx, 1);
-            } else {
-              if (!diffObj.suspect.includes(relPath)) diffObj.suspect.push(relPath);
-            }
-          }
-        }
-      }
-      selectedSuspects.clear();
-      if (updated > 0) {
-        toast('深度校验完成，更新了 ' + updated + ' 个文件状态', 'ok');
-      } else {
-        toast('深度校验完成', 'ok');
-      }
-      renderFolderTree(document.getElementById('folderTreeContainer'));
-    } catch (e) {
-      toast('深度校验失败：' + (e.message || e), 'err');
-    } finally {
-      isDeepChecking = false;
-      updateDeepCheckButton();
-    }
-  }
-
-  async function doFolderCompare(leftPathInp, rightPathInp, progressEl, treeContainer, scanMode, ignoreExtsInp, minSizeInp, maxSizeInp) {
-    const leftPath = leftPathInp.value.trim();
-    const rightPath = rightPathInp.value.trim();
-    if (!leftPath || !rightPath) {
-      toast('请输入或选择左右两个文件夹路径', 'warn');
-      return;
-    }
-    saveFolderPath('left', leftPath);
-    saveFolderPath('right', rightPath);
-    saveScanMode(scanMode);
-    saveIgnoreExts(ignoreExtsInp ? ignoreExtsInp.value : '');
-
-    folderScanResult = null;
-    selectedSuspects.clear();
-    treeContainer.innerHTML = '';
-    isScanning = true;
-    if (progressEl) progressEl.innerHTML = '<span style="color:var(--primary,#4f8cff);">⏳ 正在' + (scanMode === 'deep' ? '深度扫描（计算MD5）' : '快速扫描') + '...</span>';
-
-    try {
-      const req = {
-        left_path: leftPath,
-        right_path: rightPath,
-        deep_check: scanMode === 'deep',
-      };
-      if (ignoreExtsInp && ignoreExtsInp.value.trim()) {
-        req.ignore_exts = ignoreExtsInp.value.split(/[,，\s]+/).filter(s => s.trim());
-      }
-      if (minSizeInp && minSizeInp.value) {
-        const v = parseInt(minSizeInp.value);
-        if (!isNaN(v) && v > 0) req.min_size = v;
-      }
-      if (maxSizeInp && maxSizeInp.value) {
-        const v = parseInt(maxSizeInp.value);
-        if (!isNaN(v) && v > 0) req.max_size = v * 1024 * 1024;
-      }
-      const r = await api('POST', '/api/compare/folder-scan', req);
-      folderScanResult = r;
-      setAllExpanded(true);
-      const fileCount = r.left.tree.filter(e => !e.is_dir).length + r.right.tree.filter(e => !e.is_dir).length;
-      const diffObj = r.diff || {};
-      const diffCount = (diffObj.different || []).length + (diffObj.left_only || []).length + (diffObj.right_only || []).length;
-      const suspectCount = (diffObj.suspect || []).length;
-      const timeStr = r.scan_ms ? (' (' + (r.scan_ms < 1000 ? r.scan_ms + 'ms' : (r.scan_ms/1000).toFixed(1) + 's') + ')') : '';
-      if (progressEl) {
-        let msg = '扫描完成' + timeStr + '：共 ' + fileCount + ' 个文件，不同 ' + diffCount + ' 个';
-        if (suspectCount > 0 && !r.deep_mode) {
-          msg += '，<span style="color:#eab308;">' + suspectCount + ' 个待校验</span>';
-        }
-        if (r.truncated) {
-          msg += ' <span style="color:#f97316;">(文件过多已截断)</span>';
-        }
-        progressEl.innerHTML = msg;
-      }
-      renderFolderTree(treeContainer);
-    } catch (e) {
-      if (progressEl) progressEl.textContent = '扫描失败';
-      toast('扫描失败：' + (e.message || e), 'err');
-    } finally {
-      isScanning = false;
-    }
-  }
-
-  async function viewFileDiff(relPath) {
-    if (!folderScanResult) return;
-    const leftEntry = folderScanResult.left.tree.find(e => e.rel_path === relPath);
-    const rightEntry = folderScanResult.right.tree.find(e => e.rel_path === relPath);
-    const leftPath = leftEntry ? leftEntry.path : '';
-    const rightPath = rightEntry ? rightEntry.path : '';
-    if (!leftPath || !rightPath) {
-      toast('无法比对：一侧缺失该文件', 'warn');
-      return;
-    }
-    try {
-      const r = await api('POST', '/api/compare/file-diff', {
-        left_path: leftPath,
-        right_path: rightPath,
-      });
-      openDiffInNewWindow(r.unified || '', relPath, null, {
-        mode: outputMode,
-        hideEqual: hideEqualRows,
-      });
-    } catch (e) {
-      toast('获取diff失败：' + (e.message || e), 'err');
-    }
+    textarea.addEventListener('input', () => { updateGutter(); onDirty(); });
+    textarea.addEventListener('scroll', () => { gutter.scrollTop = textarea.scrollTop; });
+    return { root: el('div', { class: 'cmp-editor' }, [gutter, textarea]), textarea,
+      setValue(value) { textarea.value = value || ''; updateGutter(); }, getValue() { return textarea.value; }, updateGutter };
   }
 
   function renderCompare(view) {
-    folderScanResult = null;
-    folderExpanded = new Set();
-    selectedSuspects = new Set();
-    const ignore = loadIgnore();
-    outputMode = loadMode();
-    hideEqualRows = loadHideEqual();
-    const scanMode = loadScanMode();
-    const savedIgnoreExts = loadIgnoreExts();
-
-    const modeTabBar = el('div', { class: 'cmp-mode-tabs' }, [
-      el('button', {
-        class: 'btn cmp-mode-tab active',
-        'data-mode': 'text',
-        text: '文本比对',
-        onclick: function () { switchMode('text'); },
-      }),
-      el('button', {
-        class: 'btn cmp-mode-tab',
-        'data-mode': 'folder',
-        text: '文件夹比对',
-        onclick: function () { switchMode('folder'); },
-      }),
-    ]);
-
-    const leftTa = el('textarea', {
-      id: 'cmp-left',
-      placeholder: '左侧文本：粘贴代码 / 配置 / 报文，或拖入本地文件 / 点下方"选择本地文件"读入…',
-      spellcheck: 'false',
-    });
-    leftTa.dataset.cmpSide = 'left';
-    const rightTa = el('textarea', {
-      id: 'cmp-right',
-      placeholder: '右侧文本：同上',
-      spellcheck: 'false',
-    });
-    rightTa.dataset.cmpSide = 'right';
-    leftTa.style.minHeight = '260px';
-    rightTa.style.minHeight = '260px';
-
-    const leftFileLabel = el('span', { class: 'muted', text: '未选择文件' });
-    const rightFileLabel = el('span', { class: 'muted', text: '未选择文件' });
-
-    const btnPickLeft = el('button', {
-      class: 'btn',
-      text: '选择本地文件',
-      onclick: () => pickLocalFile(leftTa, (filePath) => { leftFileLabel.textContent = filePath; }),
-    });
-    const btnPickRight = el('button', {
-      class: 'btn',
-      text: '选择本地文件',
-      onclick: () => pickLocalFile(rightTa, (filePath) => { rightFileLabel.textContent = filePath; }),
-    });
-    const btnClearLeft = el('button', {
-      class: 'btn btn-sm',
-      text: '清空',
-      title: '清空左栏',
-      style: 'border-radius:6px;',
-      onclick: () => {
-        leftTa.value = '';
-        leftFileLabel.textContent = '未选择文件';
-      },
-    });
-    const btnClearRight = el('button', {
-      class: 'btn btn-sm',
-      text: '清空',
-      title: '清空右栏',
-      style: 'border-radius:6px;',
-      onclick: () => {
-        rightTa.value = '';
-        rightFileLabel.textContent = '未选择文件';
-      },
-    });
-
-    const cbTrim = el('input', { type: 'checkbox' }); cbTrim.checked = ignore.trim_space;
-    const cbBlank = el('input', { type: 'checkbox' }); cbBlank.checked = ignore.ignore_blank;
-    const cbCase = el('input', { type: 'checkbox' }); cbCase.checked = ignore.ignore_case;
-    function syncIgnore() {
-      saveIgnore({
-        trim_space: cbTrim.checked,
-        ignore_blank: cbBlank.checked,
-        ignore_case: cbCase.checked,
-      });
+    if (scanPollTimer) clearTimeout(scanPollTimer);
+    activeScanJob = '';
+    const options = loadOptions(), saved = loadSavedSources();
+    const state = {
+      left: { source: Object.assign(defaultSource('left'), saved.left || {}), version: null, codec: { encoding: 'utf-8', eol: 'lf', bom: false }, dirty: false },
+      right: { source: Object.assign(defaultSource('right'), saved.right || {}), version: null, codec: { encoding: 'utf-8', eol: 'lf', bom: false }, dirty: false },
+      diff: null, hunks: [], hunkIndex: -1, mode: 'text', scan: null,
+    };
+    const crumb = document.getElementById('crumb'); if (crumb) crumb.textContent = '文件与文本比较';
+    const root = el('div', { class: 'cmp-workbench' });
+    const textTab = el('button', { class: 'cmp-wb-tab active', text: '文本 / 文件比较' });
+    const folderTab = el('button', { class: 'cmp-wb-tab', text: '文件夹比较' });
+    const tabs = el('div', { class: 'cmp-wb-tabs' }, [textTab, folderTab]);
+    const textPanel = el('div', { class: 'cmp-wb-panel' });
+    const folderPanel = el('div', { class: 'cmp-wb-panel', style: 'display:none' });
+    root.append(tabs, textPanel, folderPanel); view.appendChild(root);
+    textTab.onclick = () => switchTab('text'); folderTab.onclick = () => switchTab('folder');
+    function switchTab(mode) {
+      state.mode = mode; textTab.classList.toggle('active', mode === 'text'); folderTab.classList.toggle('active', mode === 'folder');
+      textPanel.style.display = mode === 'text' ? '' : 'none'; folderPanel.style.display = mode === 'folder' ? '' : 'none';
     }
-    cbTrim.addEventListener('change', syncIgnore);
-    cbBlank.addEventListener('change', syncIgnore);
-    cbCase.addEventListener('change', syncIgnore);
+    buildTextWorkbench(textPanel, state, options);
+    buildFolderWorkbench(folderPanel, state, options, switchTab);
+    ensureConnections();
+  }
 
-    const rdoUnified = el('input', { type: 'radio', name: 'cmp-mode', value: 'unified' });
-    const rdoChanges = el('input', { type: 'radio', name: 'cmp-mode', value: 'changes' });
-    const rdoSide = el('input', { type: 'radio', name: 'cmp-mode', value: 'side' });
-    rdoUnified.checked = outputMode === 'unified';
-    rdoChanges.checked = outputMode === 'changes';
-    rdoSide.checked = outputMode === 'side';
-    const cbHideEqual = el('input', { type: 'checkbox' });
-    cbHideEqual.checked = hideEqualRows;
-    const cbHideEqualWrap = el('label', { class: 'cmp-opt', style: 'display:flex; align-items:center; gap:4px;' }, [cbHideEqual, document.createTextNode(' 只看左右不同')]);
-    function syncMode() {
-      const checked = document.querySelector('input[name="cmp-mode"]:checked');
-      if (checked) {
-        outputMode = checked.value;
-        saveMode(outputMode);
-        cbHideEqualWrap.style.display = (outputMode === 'side') ? '' : 'none';
+  function buildTextWorkbench(panel, state, options) {
+    let showingResult = false, syncLock = false;
+    const editorLeft = createEditor('left', () => markDirty('left'));
+    const editorRight = createEditor('right', () => markDirty('right'));
+    const editors = { left: editorLeft, right: editorRight };
+    editorLeft.textarea.addEventListener('scroll', () => syncScroll(editorLeft, editorRight));
+    editorRight.textarea.addEventListener('scroll', () => syncScroll(editorRight, editorLeft));
+    function syncScroll(from, to) {
+      if (syncLock || showingResult) return; syncLock = true;
+      const maxFrom = Math.max(1, from.textarea.scrollHeight - from.textarea.clientHeight);
+      const maxTo = Math.max(0, to.textarea.scrollHeight - to.textarea.clientHeight);
+      to.textarea.scrollTop = (from.textarea.scrollTop / maxFrom) * maxTo; to.textarea.scrollLeft = from.textarea.scrollLeft; syncLock = false;
+    }
+    const sourceHeaders = {};
+    const status = el('div', { class: 'cmp-wb-status', text: '就绪 · Ctrl/⌘ + Enter 开始比较' });
+    const resultHost = el('div', { class: 'cmp-result-host', style: 'display:none' });
+    const editorGrid = el('div', { class: 'cmp-editor-grid' });
+    ['left', 'right'].forEach(side => {
+      const badge = el('span', { class: 'cmp-source-badge', text: '文本' });
+      const label = el('span', { class: 'cmp-source-label', text: sourceLabel(state[side].source), title: sourceLabel(state[side].source) });
+      const meta = el('span', { class: 'cmp-source-meta', text: '' });
+      const dirty = el('span', { class: 'cmp-dirty', text: '' });
+      const openBtn = makeButton('打开', 'open', () => openSourceDialog(state[side].source, false, async source => { state[side].source = source; saveSources(state); await loadSide(side); }));
+      const saveBtn = makeButton('保存', 'save', () => saveSide(side)); saveBtn.disabled = true;
+      sourceHeaders[side] = { badge, label, meta, dirty, saveBtn };
+      editorGrid.appendChild(el('section', { class: 'cmp-editor-pane' }, [el('div', { class: 'cmp-source-header' }, [badge, label, meta, dirty, openBtn, saveBtn]), editors[side].root]));
+    });
+    const compareBtn = makeButton('立即比较', 'compare', compareNow, 'btn btn-primary btn-sm');
+    const editBtn = makeButton('返回编辑', 'open', showEditors); editBtn.style.display = 'none';
+    const prevBtn = makeButton('上一处', 'prev', () => navigateHunk(-1));
+    const nextBtn = makeButton('下一处', 'next', () => navigateHunk(1));
+    const swapBtn = makeButton('交换', 'swap', swapSides);
+    const copyBtn = makeButton('复制 Diff', '', copyDiff), downloadBtn = makeButton('下载 Diff', '', downloadDiff);
+    [prevBtn, nextBtn, copyBtn, downloadBtn].forEach(btn => btn.disabled = true);
+    const modeSelect = el('select', { class: 'cmp-mode-select' }, [el('option', { value: 'side', text: '左右并排' }), el('option', { value: 'unified', text: 'Unified' }), el('option', { value: 'changes', text: '仅差异' })]);
+    modeSelect.value = options.mode || 'side'; modeSelect.onchange = () => { options.mode = modeSelect.value; saveOptions(options); if (state.diff) renderResult(); };
+    const onlyDiff = makeCheck('只显示差异', options.onlyDiff, value => { options.onlyDiff = value; saveOptions(options); if (state.diff) renderResult(); });
+    const trim = makeCheck('忽略行尾空白', options.trim_space, value => { options.trim_space = value; saveOptions(options); });
+    const blank = makeCheck('忽略空行', options.ignore_blank, value => { options.ignore_blank = value; saveOptions(options); });
+    const ignoreCase = makeCheck('忽略大小写', options.ignore_case, value => { options.ignore_case = value; saveOptions(options); });
+    const backup = makeCheck('替换前备份', options.backup, value => { options.backup = value; saveOptions(options); });
+    panel.append(el('div', { class: 'cmp-wb-toolbar' }, [compareBtn, editBtn, el('span', { class: 'cmp-toolbar-sep' }), prevBtn, nextBtn, el('span', { class: 'cmp-toolbar-sep' }), swapBtn, copyBtn, downloadBtn, el('span', { class: 'cmp-toolbar-grow' }), modeSelect, onlyDiff]), el('div', { class: 'cmp-wb-options' }, [trim, blank, ignoreCase, backup]), editorGrid, resultHost, status);
+    panel.addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); compareNow(); } if (e.key === 'F7') { e.preventDefault(); navigateHunk(-1); } if (e.key === 'F8') { e.preventDefault(); navigateHunk(1); } });
+
+    function markDirty(side) { state[side].dirty = true; sourceHeaders[side].dirty.textContent = '● 已修改'; sourceHeaders[side].saveBtn.disabled = state[side].source.kind === 'text'; }
+    function updateHeader(side) {
+      const source = state[side].source; sourceHeaders[side].badge.textContent = source.kind === 'text' ? '文本' : source.kind.toUpperCase();
+      sourceHeaders[side].label.textContent = sourceLabel(source); sourceHeaders[side].label.title = sourceLabel(source);
+      const codec = state[side].codec; sourceHeaders[side].meta.textContent = source.kind === 'text' ? '' : String(codec.encoding || 'utf-8').toUpperCase() + ' · ' + String(codec.eol || 'lf').toUpperCase() + (codec.bom ? ' · BOM' : '');
+      sourceHeaders[side].dirty.textContent = state[side].dirty ? '● 已修改' : ''; sourceHeaders[side].saveBtn.disabled = source.kind === 'text' || !state[side].dirty;
+    }
+    async function loadSide(side) {
+      const source = state[side].source; updateHeader(side); if (source.kind === 'text') return;
+      status.textContent = '正在读取 ' + sourceLabel(source) + '…';
+      try {
+        const response = await api('POST', '/api/compare/read', { source: spec(source) });
+        if (response.binary) throw new Error('检测到二进制文件，文本工作台不支持直接编辑');
+        if (response.truncated) throw new Error('文件超过 8MB 文本编辑上限，请使用文件夹比较进行流式复制');
+        editors[side].setValue(response.text); state[side].version = response.version; state[side].codec = { encoding: response.encoding || 'utf-8', eol: response.eol || 'lf', bom: !!response.bom }; state[side].dirty = false; updateHeader(side);
+        status.textContent = '已读取 ' + sourceLabel(source) + ' · ' + formatBytes(response.entry.size);
+      } catch (error) { toast('读取失败：' + (error.message || error), 'err'); status.textContent = '读取失败'; }
+    }
+    async function saveSide(side) {
+      const item = state[side]; if (item.source.kind === 'text') return;
+      try {
+        await api('POST', '/api/compare/write', { target: spec(item.source), content: editors[side].getValue(), expected: item.version, backup: !!options.backup, encoding: item.codec.encoding, eol: item.codec.eol, bom: !!item.codec.bom });
+        item.dirty = false; updateHeader(side); await loadSide(side); toast('保存成功' + (options.backup ? '，原文件已备份' : ''), 'ok');
+      } catch (error) { toast('保存失败：' + (error.message || error), 'err'); }
+    }
+    async function compareNow() {
+      compareBtn.disabled = true; status.textContent = '正在计算差异…';
+      try {
+        const response = await api('POST', '/api/diff/compare', { left: editorLeft.getValue(), right: editorRight.getValue(), left_label: sourceLabel(state.left.source), right_label: sourceLabel(state.right.source), ignore: { trim_space: !!options.trim_space, ignore_blank: !!options.ignore_blank, ignore_case: !!options.ignore_case } });
+        state.diff = response; state.hunks = buildHunks(response.lines || []); state.hunkIndex = state.hunks.length ? 0 : -1;
+        renderResult(); showResult(); [prevBtn, nextBtn, copyBtn, downloadBtn].forEach(btn => btn.disabled = false);
+        status.textContent = '差异 ' + state.hunks.length + ' 处 · 新增 ' + response.stats.added + ' 行 · 删除 ' + response.stats.removed + ' 行';
+      } catch (error) { toast('比对失败：' + (error.message || error), 'err'); status.textContent = '比对失败'; } finally { compareBtn.disabled = false; }
+    }
+    function showResult() { showingResult = true; editorGrid.style.display = 'none'; resultHost.style.display = ''; editBtn.style.display = ''; compareBtn.style.display = 'none'; }
+    function showEditors() { showingResult = false; editorGrid.style.display = ''; resultHost.style.display = 'none'; editBtn.style.display = 'none'; compareBtn.style.display = ''; }
+    function renderResult() {
+      resultHost.innerHTML = ''; if (!state.diff) return;
+      if (options.mode === 'unified' && (state.diff.lines || []).length <= MAX_INLINE_ROWS && window.Diff2Html) {
+        const wrapper = el('div', { class: 'cmp-inline-unified' }); wrapper.innerHTML = window.Diff2Html.html(state.diff.unified_diff || '', { drawFileList: false, outputFormat: 'line-by-line', matching: 'lines', renderNothingWhenEmpty: false }); resultHost.appendChild(wrapper); return;
+      }
+      const rows = buildAlignedRows(state.diff.lines || [], editorLeft.getValue(), editorRight.getValue(), state.hunks);
+      resultHost.appendChild(createVirtualDiff(rows.filter(row => (!options.onlyDiff && options.mode !== 'changes') || row.status !== 'equal'), state, options.mode, applyHunk));
+    }
+    function navigateHunk(delta) {
+      if (!state.hunks.length) return; state.hunkIndex = (state.hunkIndex + delta + state.hunks.length) % state.hunks.length;
+      const viewport = resultHost.querySelector('.cmp-vdiff'); if (viewport) viewport.scrollTop = (state.hunks[state.hunkIndex].rowIndex || 0) * 25;
+      status.textContent = '差异 ' + (state.hunkIndex + 1) + ' / ' + state.hunks.length;
+    }
+    function applyHunk(index, direction) {
+      const hunk = state.hunks[index]; if (!hunk) return;
+      const target = direction === 'right' ? editorRight : editorLeft, sourceLines = direction === 'right' ? hunk.leftText : hunk.rightText;
+      const start = direction === 'right' ? hunk.rightStart : hunk.leftStart, count = direction === 'right' ? hunk.rightCount : hunk.leftCount;
+      const lines = splitEditorLines(target.getValue()); lines.splice(start, count, ...sourceLines); target.setValue(lines.join('\n'));
+      markDirty(direction === 'right' ? 'right' : 'left'); compareNow();
+    }
+    function swapSides() {
+      const leftText = editorLeft.getValue(); editorLeft.setValue(editorRight.getValue()); editorRight.setValue(leftText);
+      const old = state.left; state.left = state.right; state.right = old; markDirty('left'); markDirty('right'); updateHeader('left'); updateHeader('right'); saveSources(state); if (state.diff) compareNow();
+    }
+    function copyDiff() { if (!state.diff) return; navigator.clipboard.writeText(state.diff.unified_diff || '').then(() => toast('Diff 已复制', 'ok'), () => toast('复制失败', 'err')); }
+    function downloadDiff() {
+      if (!state.diff) return; const blob = new Blob([state.diff.unified_diff || ''], { type: 'text/plain;charset=utf-8' });
+      const url = URL.createObjectURL(blob), a = el('a', { href: url, download: 'compare_' + Date.now() + '.diff' }); document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 0);
+    }
+    state.textWorkbench = { loadPair: async (left, right) => { state.left.source = left; state.right.source = right; updateHeader('left'); updateHeader('right'); await Promise.all([loadSide('left'), loadSide('right')]); compareNow(); } };
+  }
+
+  function splitEditorLines(text) { return text === '' ? [] : String(text).replace(/\r\n/g, '\n').split('\n'); }
+  function buildHunks(lines) {
+    const hunks = []; let current = null, lastLeft = 0, lastRight = 0;
+    lines.forEach(line => {
+      if (line.op === 'equal') { if (current) { hunks.push(current); current = null; } lastLeft = line.left_no; lastRight = line.right_no; return; }
+      if (!current) current = { leftStart: lastLeft, rightStart: lastRight, leftCount: 0, rightCount: 0, leftText: [], rightText: [], rowIndex: 0 };
+      if (line.op === 'delete') { current.leftCount++; current.leftText.push(line.text); lastLeft = line.left_no; }
+      if (line.op === 'insert') { current.rightCount++; current.rightText.push(line.text); lastRight = line.right_no; }
+    });
+    if (current) hunks.push(current); return hunks;
+  }
+  function buildAlignedRows(lines, leftText, rightText, hunks) {
+    const leftRaw = splitEditorLines(leftText), rightRaw = splitEditorLines(rightText), rows = []; let hunkIndex = -1;
+    for (let i = 0; i < lines.length;) {
+      const line = lines[i];
+      if (line.op === 'equal') { rows.push({ status: 'equal', leftNo: line.left_no, rightNo: line.right_no, leftText: leftRaw[line.left_no - 1] || '', rightText: rightRaw[line.right_no - 1] || '', hunk: -1 }); i++; continue; }
+      hunkIndex++; const deletes = [], inserts = [];
+      while (i < lines.length && lines[i].op !== 'equal') { (lines[i].op === 'delete' ? deletes : inserts).push(lines[i]); i++; }
+      const count = Math.max(deletes.length, inserts.length); if (hunks[hunkIndex]) hunks[hunkIndex].rowIndex = rows.length;
+      for (let n = 0; n < count; n++) { const left = deletes[n], right = inserts[n]; rows.push({ status: left && right ? 'changed' : left ? 'deleted' : 'inserted', leftNo: left ? left.left_no : 0, rightNo: right ? right.right_no : 0, leftText: left ? left.text : '', rightText: right ? right.text : '', hunk: hunkIndex, first: n === 0 }); }
+    }
+    return rows;
+  }
+
+  function createVirtualDiff(rows, state, mode, onMerge) {
+    const viewport = el('div', { class: 'cmp-vdiff', tabindex: '0' }), canvas = el('div', { class: 'cmp-vdiff-canvas' }), rowHeight = 25;
+    canvas.style.height = Math.max(1, rows.length * rowHeight) + 'px'; viewport.appendChild(canvas); let renderedStart = -1, renderedEnd = -1;
+    function renderWindow() {
+      const start = Math.max(0, Math.floor(viewport.scrollTop / rowHeight) - 15), end = Math.min(rows.length, start + Math.ceil((viewport.clientHeight || 600) / rowHeight) + 30);
+      if (start === renderedStart && end === renderedEnd) return; renderedStart = start; renderedEnd = end; canvas.innerHTML = '';
+      for (let i = start; i < end; i++) {
+        const row = rows[i]; if (mode === 'changes' && row.status === 'equal') continue;
+        const node = el('div', { class: 'cmp-vrow cmp-vrow-' + row.status, 'data-hunk': row.hunk >= 0 ? String(row.hunk) : '', style: 'transform:translateY(' + (i * rowHeight) + 'px)' });
+        const middle = el('div', { class: 'cmp-merge-cell' });
+        if (row.first) middle.append(el('button', { class: 'cmp-merge-btn', title: '用左侧替换右侧', onclick: () => onMerge(row.hunk, 'right'), unsafeHtml: icon('right') }), el('button', { class: 'cmp-merge-btn', title: '用右侧替换左侧', onclick: () => onMerge(row.hunk, 'left'), unsafeHtml: icon('left') }));
+        node.append(makeDiffCell(row.leftNo, row.leftText, row.status, 'left', row.rightText), middle, makeDiffCell(row.rightNo, row.rightText, row.status, 'right', row.leftText)); canvas.appendChild(node);
       }
     }
-    rdoUnified.addEventListener('change', syncMode);
-    rdoChanges.addEventListener('change', syncMode);
-    rdoSide.addEventListener('change', syncMode);
-    cbHideEqual.addEventListener('change', () => {
-      hideEqualRows = cbHideEqual.checked;
-      saveHideEqual(hideEqualRows);
-    });
-    cbHideEqualWrap.style.display = (outputMode === 'side') ? '' : 'none';
+    viewport.addEventListener('scroll', renderWindow); requestAnimationFrame(renderWindow); return viewport;
+  }
+  function makeDiffCell(lineNo, text, status, side, other) {
+    const code = el('span', { class: 'cmp-code' }); appendWordDiff(code, text || '', other || '', status === 'changed');
+    return el('div', { class: 'cmp-diff-cell cmp-diff-' + side }, [el('span', { class: 'cmp-line-no', text: lineNo ? String(lineNo) : '' }), el('span', { class: 'cmp-line-marker', text: !lineNo ? '' : status === 'equal' ? ' ' : side === 'left' ? '−' : '+' }), code]);
+  }
+  function appendWordDiff(parent, text, other, enabled) {
+    if (!enabled || !text || !other) { parent.textContent = text; return; }
+    let prefix = 0; while (prefix < text.length && prefix < other.length && text[prefix] === other[prefix]) prefix++;
+    let suffix = 0; while (suffix < text.length - prefix && suffix < other.length - prefix && text[text.length - 1 - suffix] === other[other.length - 1 - suffix]) suffix++;
+    if (prefix) parent.appendChild(el('span', { text: text.slice(0, prefix) }));
+    parent.appendChild(el('mark', { class: 'cmp-word-change', text: text.slice(prefix, text.length - suffix) }));
+    if (suffix) parent.appendChild(el('span', { text: text.slice(text.length - suffix) }));
+  }
 
-    const btnSwap = el('button', { class: 'btn', text: '交换左右', onclick: () => {
-      const lt = leftTa.value, rt = rightTa.value;
-      const ll = leftFileLabel.textContent, rl = rightFileLabel.textContent;
-      leftTa.value = rt; rightTa.value = lt;
-      leftFileLabel.textContent = (rl === '未选择文件' ? '未选择文件' : rl);
-      rightFileLabel.textContent = (ll === '未选择文件' ? '未选择文件' : ll);
-    }});
-    const btnClear = el('button', { class: 'btn', text: '清空全部', onclick: () => {
-      leftTa.value = ''; rightTa.value = '';
-      leftFileLabel.textContent = '未选择文件';
-      rightFileLabel.textContent = '未选择文件';
-      lastResult = null;
-    }});
-    const btnCopy = el('button', { class: 'btn', text: '复制 diff', onclick: () => {
-      if (!lastResult || !lastResult.unified_diff) { toast('暂无可复制的 diff', 'warn'); return; }
-      copyToClipboard(lastResult.unified_diff).then(
-        () => toast('已复制 unified diff 到剪贴板', 'ok'),
-        () => toast('复制失败', 'err')
-      );
-    }});
-    const btnDownload = el('button', { class: 'btn', text: '下载 .diff 文件', onclick: () => {
-      if (!lastResult || !lastResult.unified_diff) { toast('暂无可下载的 diff', 'warn'); return; }
-      const fname = makeDiffFilename(leftFileLabel.textContent, rightFileLabel.textContent);
-      downloadAsFile(lastResult.unified_diff, fname);
-    }});
-    const btnGo = el('button', { class: 'btn btn-primary', text: '开始比对', onclick: () => doCompare(leftTa, rightTa) });
-
-    [leftTa, rightTa].forEach((ta) => {
-      ta.addEventListener('keydown', (e) => {
-        if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-          e.preventDefault();
-          doCompare(leftTa, rightTa);
-        }
-      });
+  function buildFolderWorkbench(panel, state, options, switchTab) {
+    const sources = { left: Object.assign({ kind: 'local', path: '', label: '左侧文件夹' }, state.left.source.kind === 'text' ? {} : state.left.source), right: Object.assign({ kind: 'local', path: '', label: '右侧文件夹' }, state.right.source.kind === 'text' ? {} : state.right.source) };
+    const selected = new Set();
+    const resultHost = el('div', { class: 'cmp-folder-results' }), progress = el('div', { class: 'cmp-scan-progress', text: '选择两侧目录后开始比较' });
+    const progressBar = el('div', { class: 'cmp-progress-track' }, [el('div', { class: 'cmp-progress-bar' })]);
+    const cancelBtn = makeButton('取消', 'close', cancelScan); cancelBtn.disabled = true;
+    const deep = el('select', {}, [el('option', { value: 'fast', text: '快速比较（大小 + 时间）' }), el('option', { value: 'deep', text: '内容比较（SHA-256）' })]);
+    const tolerance = el('select', {}, [el('option', { value: '2', text: '时间容差 2 秒' }), el('option', { value: '60', text: '时间容差 1 分钟' }), el('option', { value: '3600', text: '时间容差 1 小时' })]);
+    const statusFilter = el('select', {}, [el('option', { value: 'all', text: '全部状态' }), el('option', { value: 'different', text: '所有差异' }), el('option', { value: 'left_newer', text: '左侧较新' }), el('option', { value: 'right_newer', text: '右侧较新' }), el('option', { value: 'orphans', text: '仅单侧存在' })]);
+    const ignoreExt = el('input', { type: 'text', placeholder: '忽略扩展名：log,tmp,bak' }), search = el('input', { type: 'search', placeholder: '筛选路径…' });
+    const onlyDiff = makeCheck('只看差异', true, renderScan), sourceGrid = el('div', { class: 'cmp-folder-source-grid' });
+    ['left', 'right'].forEach(side => {
+      const badge = el('span', { class: 'cmp-source-badge', text: sources[side].kind.toUpperCase() }), label = el('span', { class: 'cmp-source-label', text: sourceLabel(sources[side]) });
+      sourceGrid.appendChild(el('div', { class: 'cmp-folder-source' }, [badge, label, makeButton('选择目录', 'folder', () => openSourceDialog(sources[side], true, source => { sources[side] = source; badge.textContent = source.kind.toUpperCase(); label.textContent = sourceLabel(source); label.title = sourceLabel(source); }))]));
     });
-
-    const leftFolderPathInp = el('input', {
-      type: 'text',
-      placeholder: '输入或选择文件夹路径',
-      style: 'flex:1; min-width:200px;',
-    });
-    leftFolderPathInp.value = loadFolderPath('left');
-    const rightFolderPathInp = el('input', {
-      type: 'text',
-      placeholder: '输入或选择文件夹路径',
-      style: 'flex:1; min-width:200px;',
-    });
-    rightFolderPathInp.value = loadFolderPath('right');
-
-    const rdoFast = el('input', { type: 'radio', name: 'folder-scan-mode', value: 'fast' });
-    const rdoDeep = el('input', { type: 'radio', name: 'folder-scan-mode', value: 'deep' });
-    rdoFast.checked = scanMode !== 'deep';
-    rdoDeep.checked = scanMode === 'deep';
-    function syncScanMode() {
-      const checked = document.querySelector('input[name="folder-scan-mode"]:checked');
-      if (checked) saveScanMode(checked.value);
+    const startBtn = makeButton('开始文件夹比较', 'compare', startScan, 'btn btn-primary btn-sm');
+    const selectDiffBtn = makeButton('选择全部差异', 'check', selectVisible), syncRightBtn = makeButton('同步选中 →', 'right', () => syncSelected('right')), syncLeftBtn = makeButton('← 同步选中', 'left', () => syncSelected('left'));
+    panel.append(sourceGrid, el('div', { class: 'cmp-wb-toolbar' }, [startBtn, cancelBtn, el('span', { class: 'cmp-toolbar-sep' }), deep, tolerance, ignoreExt, el('span', { class: 'cmp-toolbar-sep' }), selectDiffBtn, syncLeftBtn, syncRightBtn, el('span', { class: 'cmp-toolbar-grow' }), statusFilter, onlyDiff, search]), progressBar, progress, resultHost); search.addEventListener('input', renderScan); statusFilter.addEventListener('change', renderScan);
+    async function startScan() {
+      if (!sources.left.path || !sources.right.path) { toast('请先选择左右两个目录', 'warn'); return; }
+      selected.clear(); startBtn.disabled = true; cancelBtn.disabled = false; resultHost.innerHTML = ''; progress.textContent = '正在创建后台比较任务…';
+      try { const response = await api('POST', '/api/compare/scan', { left: spec(sources.left), right: spec(sources.right), deep: deep.value === 'deep', time_tolerance_seconds: Number(tolerance.value) || 2, ignore_exts: ignoreExt.value.split(/[,，\s]+/).filter(Boolean) }); activeScanJob = response.job_id; pollScan(); }
+      catch (error) { startBtn.disabled = false; cancelBtn.disabled = true; toast('启动失败：' + (error.message || error), 'err'); }
     }
-    rdoFast.addEventListener('change', syncScanMode);
-    rdoDeep.addEventListener('change', syncScanMode);
-
-    const ignoreExtsInp = el('input', {
-      type: 'text',
-      placeholder: '忽略扩展名: log,tmp,bak',
-      style: 'max-width:180px; font-size:12px;',
-      value: savedIgnoreExts,
-    });
-
-    const cbOnlyDiff = el('input', { type: 'checkbox' });
-    cbOnlyDiff.checked = folderShowOnlyDiff;
-    cbOnlyDiff.addEventListener('change', () => {
-      folderShowOnlyDiff = cbOnlyDiff.checked;
-      renderFolderTree(folderTreeContainer);
-    });
-
-    const folderSearchInput = el('input', {
-      type: 'text',
-      placeholder: '搜索文件名...',
-      style: 'max-width:200px;',
-    });
-    folderSearchInput.addEventListener('input', () => {
-      const newFilter = folderSearchInput.value;
-      if (newFilter && !folderFilter) {
-        folderExpandedSnapshot = new Set(folderExpanded);
-      } else if (!newFilter && folderFilter && folderExpandedSnapshot) {
-        folderExpanded = folderExpandedSnapshot;
-        folderExpandedSnapshot = null;
+    async function pollScan() {
+      if (!activeScanJob) return;
+      try {
+        const job = await api('GET', '/api/compare/jobs/' + activeScanJob), percent = job.total ? Math.min(100, Math.round(job.current / job.total * 100)) : 8;
+        progressBar.firstChild.style.width = percent + '%'; progress.textContent = (job.message || job.phase) + (job.total ? ' · ' + job.current + ' / ' + job.total : '');
+        if (job.status === 'completed') { state.scan = job.result; activeScanJob = ''; startBtn.disabled = false; cancelBtn.disabled = true; progressBar.firstChild.style.width = '100%'; renderScan(); return; }
+        if (job.status === 'failed' || job.status === 'cancelled') throw new Error(job.error || '任务已取消');
+        scanPollTimer = setTimeout(pollScan, 400);
+      } catch (error) { activeScanJob = ''; startBtn.disabled = false; cancelBtn.disabled = true; progress.textContent = '比较未完成'; toast(error.message || String(error), 'err'); }
+    }
+    async function cancelScan() { if (!activeScanJob) return; try { await api('DELETE', '/api/compare/jobs/' + activeScanJob); } catch (_) {} activeScanJob = ''; cancelBtn.disabled = true; startBtn.disabled = false; progress.textContent = '已取消'; }
+    function renderScan() {
+      if (!state.scan) return; const query = search.value.trim().toLowerCase(), diffOnly = onlyDiff.querySelector('input').checked;
+      const items = (state.scan.items || []).filter(item => scanStatusVisible(item.status, statusFilter.value) && (!diffOnly || item.status !== 'same') && (!query || item.rel_path.toLowerCase().includes(query)));
+      resultHost.innerHTML = ''; resultHost.appendChild(createVirtualFolder(items, sources, selected, compareFile, copyItem, updateSelectedStatus));
+      const s = state.scan.summary || {}; progress.textContent = '完成 ' + state.scan.elapsed_ms + 'ms · 相同 ' + (s.same || 0) + ' · 不同 ' + (s.different || 0) + ' · 左新 ' + (s.left_newer || 0) + ' · 右新 ' + (s.right_newer || 0) + ' · 仅左 ' + (s.left_only || 0) + ' · 仅右 ' + (s.right_only || 0);
+      updateSelectedStatus();
+    }
+    function visibleItems() {
+      if (!state.scan) return [];
+      const query = search.value.trim().toLowerCase(), diffOnly = onlyDiff.querySelector('input').checked;
+      return (state.scan.items || []).filter(item => scanStatusVisible(item.status, statusFilter.value) && (!diffOnly || item.status !== 'same') && (!query || item.rel_path.toLowerCase().includes(query)));
+    }
+    function selectVisible() {
+      const candidates = visibleItems().filter(item => item.status !== 'same' && ((item.left && !item.left.is_dir) || (item.right && !item.right.is_dir)));
+      const allSelected = candidates.length && candidates.every(item => selected.has(item.rel_path));
+      if (!allSelected && candidates.length > 1000) toast('为保证操作流畅，本次先选择前 1000 项，请分批同步', 'warn');
+      (allSelected ? candidates : candidates.slice(0, 1000)).forEach(item => allSelected ? selected.delete(item.rel_path) : selected.add(item.rel_path));
+      renderScan();
+    }
+    function updateSelectedStatus() {
+      selectDiffBtn.textContent = selected.size ? '已选 ' + selected.size + ' 项' : '选择全部差异';
+      syncRightBtn.disabled = syncLeftBtn.disabled = selected.size === 0;
+    }
+    async function syncSelected(direction) {
+      if (!state.scan || !selected.size) return;
+      if (selected.size > 1000) { toast('单次最多预览并同步 1000 项，请分批操作', 'warn'); return; }
+      const fromLeft = direction === 'right', plan = (state.scan.items || []).filter(item => selected.has(item.rel_path)).filter(item => {
+        const sourceEntry = fromLeft ? item.left : item.right;
+        return sourceEntry && !sourceEntry.is_dir;
+      }).map(item => {
+        const sourceEntry = fromLeft ? item.left : item.right, targetEntry = fromLeft ? item.right : item.left;
+        return { item, sourceEntry, targetEntry, enabled: true, request: { rel_path: item.rel_path, expected: targetEntry ? { size: targetEntry.size, mtime: targetEntry.mtime } : null } };
+      });
+      if (!plan.length) { toast('所选项目在该方向没有可复制的源文件', 'warn'); return; }
+      showSyncPreview(direction, plan);
+    }
+    function showSyncPreview(direction, plan) {
+      const overlay = el('div', { class: 'cmp-source-overlay' }), card = el('div', { class: 'cmp-source-dialog cmp-sync-dialog', role: 'dialog', 'aria-modal': 'true' });
+      let jobID = '', pollTimer = 0;
+      const body = el('div', { class: 'cmp-source-body cmp-sync-body' }), actions = el('div', { class: 'cmp-source-actions' });
+      const close = async () => { if (pollTimer) clearTimeout(pollTimer); if (jobID) { try { await api('DELETE', '/api/compare/jobs/' + jobID); } catch (_) {} } overlay.remove(); updateSelectedStatus(); };
+      const closeBtn = el('button', { class: 'cmp-dialog-close', onclick: close, unsafeHtml: icon('close') });
+      const title = el('strong', { text: '同步预览 · ' + (direction === 'right' ? '左 → 右' : '右 → 左') });
+      const summary = el('div', { class: 'cmp-sync-summary' });
+      const list = el('div', { class: 'cmp-sync-list' });
+      function updateSummary() {
+        const enabled = plan.filter(row => row.enabled), totalBytes = enabled.reduce((sum, row) => sum + (row.sourceEntry.size || 0), 0);
+        summary.textContent = '计划 ' + enabled.length + ' 项 · ' + formatBytes(totalBytes) + ' · ' + (options.backup ? '覆盖前备份' : '不创建备份');
+        start.disabled = enabled.length === 0;
       }
-      folderFilter = newFilter;
-      renderFolderTree(folderTreeContainer);
-    });
-
-    const btnExpandAll = el('button', { class: 'btn btn-sm', text: '展开全部', onclick: () => { setAllExpanded(true); renderFolderTree(folderTreeContainer); } });
-    const btnCollapseAll = el('button', { class: 'btn btn-sm', text: '折叠全部', onclick: () => { setAllExpanded(false); renderFolderTree(folderTreeContainer); } });
-
-    const btnDeepCheck = el('button', {
-      id: 'btnDeepCheck',
-      class: 'btn btn-sm',
-      text: '深度校验选中 (0)',
-      disabled: true,
-      style: 'color:#eab308;',
-      onclick: doDeepCheckSelected,
-    });
-
-    const folderProgressEl = el('div', { class: 'muted', style: 'font-size:12px;', text: '' });
-    const folderTreeContainer = el('div', { id: 'folderTreeContainer' });
-
-    const btnChooseLeftDir = el('button', {
-      class: 'btn btn-sm',
-      text: '选择文件夹',
-      onclick: async () => {
-        try {
-          const r = await api('POST', '/api/choose-dir');
-          if (r && r.path) {
-            leftFolderPathInp.value = r.path;
-            saveFolderPath('left', r.path);
-          } else {
-            toast('未选择文件夹', 'warn');
-          }
-        } catch (e) {
-          toast('选择文件夹失败：' + (e.message || e), 'err');
-        }
-      },
-    });
-    const btnChooseRightDir = el('button', {
-      class: 'btn btn-sm',
-      text: '选择文件夹',
-      onclick: async () => {
-        try {
-          const r = await api('POST', '/api/choose-dir');
-          if (r && r.path) {
-            rightFolderPathInp.value = r.path;
-            saveFolderPath('right', r.path);
-          } else {
-            toast('未选择文件夹', 'warn');
-          }
-        } catch (e) {
-          toast('选择文件夹失败：' + (e.message || e), 'err');
-        }
-      },
-    });
-    const btnClearLeftFolder = el('button', {
-      class: 'btn btn-sm',
-      text: '清空',
-      style: 'border-radius:6px;',
-      onclick: () => {
-        leftFolderPathInp.value = '';
-        saveFolderPath('left', '');
-      },
-    });
-    const btnClearRightFolder = el('button', {
-      class: 'btn btn-sm',
-      text: '清空',
-      style: 'border-radius:6px;',
-      onclick: () => {
-        rightFolderPathInp.value = '';
-        saveFolderPath('right', '');
-      },
-    });
-
-    const btnFolderGo = el('button', {
-      class: 'btn btn-primary',
-      text: '开始比对',
-      onclick: () => {
-        const mode = document.querySelector('input[name="folder-scan-mode"]:checked');
-        doFolderCompare(
-          leftFolderPathInp, rightFolderPathInp,
-          folderProgressEl, folderTreeContainer,
-          mode ? mode.value : 'fast',
-          ignoreExtsInp, null, null
-        );
-      },
-    });
-
-    const cmpOptionsStyle = 'display:flex; align-items:center; gap:8px; flex-wrap:wrap;';
-    const textArea = el('div', { class: 'cmp-text-area', id: 'cmp-text-area' }, [
-      el('div', { class: 'cmp-options', style: cmpOptionsStyle }, [
-        el('span', { class: 'cmp-label', text: '忽略：' }),
-        makeCheckbox(cbTrim, '忽略行尾空白'),
-        makeCheckbox(cbBlank, '忽略空行'),
-        makeCheckbox(cbCase, '忽略大小写'),
-        el('span', { class: 'cmp-spacer', style: 'width:16px;' }),
-        el('span', { class: 'cmp-label', text: '输出：' }),
-        makeRadio(rdoUnified, 'Unified'),
-        makeRadio(rdoChanges, '仅差异行'),
-        makeRadio(rdoSide, 'Side-by-side'),
-        cbHideEqualWrap,
-      ]),
-      el('div', { class: 'pane' }, [
-        el('div', null, [
-          el('div', { class: 'cmp-pane-header', style: 'display:flex; align-items:center; gap:8px; flex-wrap:wrap;' }, [
-            el('label', { text: '左：原始' }),
-            leftFileLabel,
-            btnPickLeft,
-            btnClearLeft,
-          ]),
-          leftTa,
-        ]),
-        el('div', null, [
-          el('div', { class: 'cmp-pane-header', style: 'display:flex; align-items:center; gap:8px; flex-wrap:wrap;' }, [
-            el('label', { text: '右：修改' }),
-            rightFileLabel,
-            btnPickRight,
-            btnClearRight,
-          ]),
-          rightTa,
-        ]),
-      ]),
-      el('div', { class: 'btn-row mt-3' }, [btnGo, btnSwap, btnClear, btnCopy, btnDownload]),
-    ]);
-
-    const folderArea = el('div', { class: 'cmp-folder-area', id: 'cmp-folder-area', style: 'display:none;' }, [
-      el('div', { class: 'cmp-options', style: cmpOptionsStyle }, [
-        el('span', { class: 'cmp-label', text: '扫描模式：' }),
-        makeRadio(rdoFast, '快速（大小+时间，推荐）'),
-        makeRadio(rdoDeep, '深度（MD5校验，慢）'),
-        el('span', { class: 'cmp-spacer', style: 'width:16px;' }),
-        el('span', { class: 'muted', style: 'font-size:11px; display:flex; align-items:center; gap:4px;', unsafeHtml: svgIcon('smBulb', 12) + ' 快速模式秒出结果，? 标记的文件可点击或勾选后深度校验' }),
-      ]),
-      el('div', { class: 'cmp-options', style: cmpOptionsStyle + '; margin-top:4px;' }, [
-        makeCheckbox(cbOnlyDiff, '只显示不同/待校验'),
-        el('span', { class: 'cmp-spacer', style: 'width:8px;' }),
-        ignoreExtsInp,
-        el('span', { class: 'cmp-spacer', style: 'width:8px;' }),
-        btnExpandAll,
-        btnCollapseAll,
-        btnDeepCheck,
-        el('span', { class: 'cmp-spacer', style: 'width:16px;' }),
-        folderSearchInput,
-      ]),
-      el('div', { class: 'pane', style: 'min-height:auto;' }, [
-        el('div', { class: 'cmp-folder-pane' }, [
-          el('div', { class: 'cmp-pane-header', style: 'display:flex; align-items:center; gap:8px; flex-wrap:wrap;' }, [
-            el('label', { text: '左侧文件夹' }),
-            leftFolderPathInp,
-            btnChooseLeftDir,
-            btnClearLeftFolder,
-          ]),
-        ]),
-        el('div', { class: 'cmp-folder-pane' }, [
-          el('div', { class: 'cmp-pane-header', style: 'display:flex; align-items:center; gap:8px; flex-wrap:wrap;' }, [
-            el('label', { text: '右侧文件夹' }),
-            rightFolderPathInp,
-            btnChooseRightDir,
-            btnClearRightFolder,
-          ]),
-        ]),
-      ]),
-      el('div', { class: 'btn-row mt-3' }, [btnFolderGo]),
-      el('div', { style: 'margin-top:8px;' }, [folderProgressEl]),
-      folderTreeContainer,
-    ]);
-
-    function switchMode(mode) {
-      const tabs = modeTabBar.querySelectorAll('.cmp-mode-tab');
-      tabs.forEach((t) => {
-        t.classList.toggle('active', t.getAttribute('data-mode') === mode);
+      plan.forEach(row => {
+        const input = el('input', { type: 'checkbox' }); input.checked = true; input.onchange = () => { row.enabled = input.checked; updateSummary(); };
+        list.appendChild(el('label', { class: 'cmp-sync-row' }, [input, el('span', { class: 'cmp-sync-action', text: row.targetEntry ? '覆盖' : '新增' }), el('span', { class: 'cmp-sync-path', text: row.item.rel_path, title: row.item.rel_path }), el('small', { text: formatBytes(row.sourceEntry.size) })]));
       });
-      textArea.style.display = mode === 'text' ? '' : 'none';
-      folderArea.style.display = mode === 'folder' ? '' : 'none';
+      const cancel = makeButton('取消', '', close), start = makeButton('开始同步', 'right', startSync, 'btn btn-primary');
+      actions.append(cancel, start); body.append(summary, list); card.append(el('div', { class: 'cmp-source-title' }, [title, closeBtn]), body, actions); overlay.appendChild(card); document.body.appendChild(overlay); updateSummary();
+      async function startSync() {
+        const items = plan.filter(row => row.enabled).map(row => row.request); if (!items.length) return;
+        start.disabled = true; cancel.textContent = '取消任务'; list.innerHTML = '';
+        const track = el('div', { class: 'cmp-progress-track cmp-sync-track' }, [el('div', { class: 'cmp-progress-bar' })]), message = el('div', { class: 'cmp-sync-progress', text: '正在创建同步任务…' }); body.innerHTML = ''; body.append(summary, track, message);
+        try {
+          const response = await api('POST', '/api/compare/sync/start', { left: spec(sources.left), right: spec(sources.right), direction, items, backup: !!options.backup }); jobID = response.job_id; poll();
+        } catch (error) { message.textContent = '启动失败：' + (error.message || error); start.disabled = false; }
+        async function poll() {
+          if (!jobID) return;
+          try {
+            const job = await api('GET', '/api/compare/jobs/' + jobID), percent = job.total ? Math.round(job.current / job.total * 100) : 5;
+            track.firstChild.style.width = Math.min(100, percent) + '%'; message.textContent = (job.message || job.phase) + (job.total ? ' · ' + job.current + ' / ' + job.total : '');
+            if (job.status === 'completed') { jobID = ''; const result = job.sync_result || {}; selected.clear(); toast('同步完成：成功 ' + (result.copied || 0) + '，失败 ' + (result.failed || 0), result.failed ? 'warn' : 'ok'); if (result.failed) { renderFailures(result); } else { overlay.remove(); await startScan(); } return; }
+            if (job.status === 'failed' || job.status === 'cancelled') throw new Error(job.error || '任务已取消');
+            pollTimer = setTimeout(poll, 350);
+          } catch (error) { jobID = ''; message.textContent = error.message || String(error); cancel.textContent = '关闭'; }
+        }
+      }
+      function renderFailures(result) {
+        body.innerHTML = ''; body.appendChild(el('div', { class: 'cmp-sync-summary', text: '成功 ' + (result.copied || 0) + ' 项，失败 ' + (result.failed || 0) + ' 项' }));
+        const failures = el('div', { class: 'cmp-sync-list' }); (result.failures || []).forEach(item => failures.appendChild(el('div', { class: 'cmp-sync-row failed' }, [el('span', { class: 'cmp-sync-action', text: '失败' }), el('span', { class: 'cmp-sync-path', text: item.rel_path }), el('small', { text: item.error })]))); body.appendChild(failures);
+        actions.innerHTML = ''; actions.appendChild(makeButton('关闭并重新扫描', '', async () => { overlay.remove(); await startScan(); }, 'btn btn-primary'));
+      }
     }
-
-    view.appendChild(el('div', { class: 'card' }, [
-      modeTabBar,
-      textArea,
-      folderArea,
-    ]));
-
-    makeDropTarget(leftTa, leftFileLabel);
-    makeDropTarget(rightTa, rightFileLabel);
+    async function compareFile(item) {
+      if (!item.left || !item.right || item.left.is_dir || item.right.is_dir) return;
+      const left = Object.assign({}, sources.left, { path: item.left.path, label: item.rel_path }), right = Object.assign({}, sources.right, { path: item.right.path, label: item.rel_path });
+      state.left.source = left; state.right.source = right; switchTab('text'); await state.textWorkbench.loadPair(left, right);
+    }
+    async function copyItem(item, direction) {
+      const fromLeft = direction === 'right', sourceBase = fromLeft ? sources.left : sources.right, targetBase = fromLeft ? sources.right : sources.left;
+      const sourceEntry = fromLeft ? item.left : item.right, targetEntry = fromLeft ? item.right : item.left; if (!sourceEntry || sourceEntry.is_dir) return;
+      const source = Object.assign({}, sourceBase, { path: sourceEntry.path }), target = Object.assign({}, targetBase, { path: targetEntry ? targetEntry.path : joinPath(targetBase, targetBase.path, item.rel_path) });
+      try { await api('POST', '/api/compare/copy', { source: spec(source), target: spec(target), expected: targetEntry ? { size: targetEntry.size, mtime: targetEntry.mtime } : null, backup: !!options.backup }); toast('已复制：' + item.rel_path, 'ok'); startScan(); }
+      catch (error) { toast('复制失败：' + (error.message || error), 'err'); }
+    }
   }
 
-  function makeCheckbox(input, label) {
-    return el('label', { class: 'cmp-opt', style: 'display:flex; align-items:center; gap:4px;' }, [input, document.createTextNode(' ' + label)]);
+  function createVirtualFolder(items, sources, selected, onCompare, onCopy, onSelectionChange) {
+    const header = el('div', { class: 'cmp-folder-table-head' }, [el('span', { text: '选择 / 状态' }), el('span', { text: sourceLabel(sources.left) }), el('span', { text: '操作' }), el('span', { text: sourceLabel(sources.right) })]);
+    const viewport = el('div', { class: 'cmp-folder-viewport' }), canvas = el('div', { class: 'cmp-folder-canvas' }), height = 34;
+    canvas.style.height = Math.max(1, items.length * height) + 'px'; viewport.appendChild(canvas); let oldStart = -1, oldEnd = -1;
+    function render() {
+      const start = Math.max(0, Math.floor(viewport.scrollTop / height) - 10), end = Math.min(items.length, start + Math.ceil((viewport.clientHeight || 540) / height) + 20);
+      if (start === oldStart && end === oldEnd) return; oldStart = start; oldEnd = end; canvas.innerHTML = '';
+      for (let i = start; i < end; i++) {
+        const item = items[i], row = el('div', { class: 'cmp-folder-row status-' + item.status, style: 'transform:translateY(' + (i * height) + 'px)' });
+        const status = { same: '相同', different: '不同', suspect: '待校验', left_newer: '左侧较新', right_newer: '右侧较新', left_only: '仅左', right_only: '仅右', error: '错误' }[item.status] || item.status, ops = el('span', { class: 'cmp-folder-ops' });
+        if (item.left && item.right && !item.left.is_dir && !item.right.is_dir) ops.appendChild(el('button', { text: '查看', onclick: () => onCompare(item) }));
+        if (item.left && !item.left.is_dir) ops.appendChild(el('button', { title: '复制到右侧', onclick: () => onCopy(item, 'right'), unsafeHtml: icon('right') }));
+        if (item.right && !item.right.is_dir) ops.appendChild(el('button', { title: '复制到左侧', onclick: () => onCopy(item, 'left'), unsafeHtml: icon('left') }));
+        const checkbox = el('input', { type: 'checkbox' }); checkbox.checked = selected.has(item.rel_path); checkbox.disabled = item.status === 'same' || !((item.left && !item.left.is_dir) || (item.right && !item.right.is_dir));
+        checkbox.onchange = () => { checkbox.checked ? selected.add(item.rel_path) : selected.delete(item.rel_path); onSelectionChange(); };
+        row.append(el('span', { class: 'cmp-folder-status' }, [checkbox, el('span', { text: status })]), folderCell(item.left, item.rel_path), ops, folderCell(item.right, item.rel_path)); canvas.appendChild(row);
+      }
+    }
+    viewport.addEventListener('scroll', render); requestAnimationFrame(render); return el('div', { class: 'cmp-folder-table' }, [header, viewport]);
   }
-  function makeRadio(input, label) {
-    return el('label', { class: 'cmp-opt', style: 'display:flex; align-items:center; gap:4px;' }, [input, document.createTextNode(' ' + label)]);
+  function scanStatusVisible(status, filter) {
+    if (!filter || filter === 'all') return true;
+    if (filter === 'different') return status !== 'same';
+    if (filter === 'orphans') return status === 'left_only' || status === 'right_only';
+    return status === filter;
   }
+  function folderCell(entry, rel) { if (!entry) return el('span', { class: 'cmp-folder-cell missing', text: '—' }); return el('span', { class: 'cmp-folder-cell', title: entry.path }, [el('span', { class: 'cmp-folder-path', text: rel }), el('small', { text: entry.is_dir ? '目录' : formatBytes(entry.size) })]); }
+
+  async function ensureConnections() { if (connections.length) return connections; try { const response = await api('GET', '/api/compare/connections'); connections = response.sftp || []; } catch (_) { connections = []; } return connections; }
+  async function openSourceDialog(current, directory, onSelect) {
+    await ensureConnections(); const source = Object.assign(defaultSource('left'), current || {}); if (directory && source.kind === 'text') source.kind = 'local';
+    const overlay = el('div', { class: 'cmp-source-overlay' }), card = el('div', { class: 'cmp-source-dialog', role: 'dialog', 'aria-modal': 'true' });
+    const choices = []; if (!directory) choices.push(el('option', { value: 'text', text: '临时文本' })); choices.push(el('option', { value: 'local', text: '本地' }), el('option', { value: 'sftp', text: 'SFTP / SSH' }), el('option', { value: 'ftp', text: 'FTP / FTPS' }));
+    const kind = el('select', {}, choices); kind.value = source.kind;
+    const pathInput = el('input', { type: 'text', value: source.path || '', placeholder: directory ? '目录绝对路径' : '文件绝对路径' });
+    const connection = el('select', {}, [el('option', { value: '', text: '选择已配置的 SSH 服务器' })]);
+    connections.forEach((item, index) => connection.appendChild(el('option', { value: String(index), text: (item.System || item.system) + ' / ' + (item.Name || item.name) + ' (' + (item.Host || item.host) + ')' })));
+    const host = el('input', { type: 'text', value: source.host || '', placeholder: 'FTP 主机' }), port = el('input', { type: 'number', value: source.port || 21, min: 1, max: 65535 });
+    const username = el('input', { type: 'text', value: source.username || '', placeholder: '用户名' }), password = el('input', { type: 'password', value: '', placeholder: '密码（不会保存到浏览器）' });
+    const tlsMode = el('select', {}, [el('option', { value: '', text: '普通 FTP' }), el('option', { value: 'explicit', text: '显式 FTPS' }), el('option', { value: 'implicit', text: '隐式 FTPS' })]); tlsMode.value = source.tls_mode || '';
+    const encoding = el('select', {}, [el('option', { value: 'auto', text: '自动检测' }), el('option', { value: 'utf-8', text: 'UTF-8' }), el('option', { value: 'gb18030', text: 'GBK / GB18030' }), el('option', { value: 'utf-16le', text: 'UTF-16 LE' }), el('option', { value: 'utf-16be', text: 'UTF-16 BE' })]); encoding.value = source.encoding || 'auto';
+    const localBrowse = makeButton(directory ? '浏览目录' : '浏览文件', directory ? 'folder' : 'open', async () => { try { const result = await api('POST', directory ? '/api/choose-dir' : '/api/choose-file'); if (result.path) pathInput.value = result.path; } catch (error) { toast(error.message || String(error), 'err'); } });
+    const localRow = fieldRow('路径', [pathInput, localBrowse]), sftpRow = fieldRow('服务器', [connection]);
+    const encodingRow = fieldRow('编码', [encoding]);
+    const ftpRows = [fieldRow('主机', [host, port]), fieldRow('账户', [username, password]), fieldRow('安全', [tlsMode])];
+    const warning = el('div', { class: 'cmp-source-warning', text: '普通 FTP 会明文传输凭据，生产环境建议使用 SFTP 或 FTPS。' });
+    const close = () => overlay.remove();
+    const confirm = makeButton('确定', 'open', () => {
+      source.kind = kind.value; source.path = pathInput.value.trim(); source.password = password.value; source.encoding = encoding.value;
+      if (source.kind === 'sftp') { const item = connections[Number(connection.value)]; if (!item) { toast('请选择 SFTP 服务器', 'warn'); return; } source.system = item.System || item.system; source.server = item.Name || item.name; source.username = username.value || item.Username || item.username || ''; }
+      if (source.kind === 'ftp') { source.host = host.value.trim(); source.port = Number(port.value) || 21; source.username = username.value; source.tls_mode = tlsMode.value; }
+      if (source.kind !== 'text' && !source.path) { toast('请输入路径', 'warn'); return; } close(); onSelect(source);
+    }, 'btn btn-primary');
+    kind.onchange = update; tlsMode.onchange = update;
+    function update() { const value = kind.value; sftpRow.style.display = value === 'sftp' ? '' : 'none'; ftpRows.forEach(row => row.style.display = value === 'ftp' ? '' : 'none'); localBrowse.style.display = value === 'local' ? '' : 'none'; pathInput.style.display = value === 'text' ? 'none' : ''; encodingRow.style.display = directory || value === 'text' ? 'none' : ''; warning.style.display = value === 'ftp' && !tlsMode.value ? '' : 'none'; }
+    card.append(el('div', { class: 'cmp-source-title' }, [el('strong', { text: directory ? '选择比较目录' : '打开比较文件' }), el('button', { class: 'cmp-dialog-close', onclick: close, unsafeHtml: icon('close') })]), el('div', { class: 'cmp-source-body' }, [fieldRow('数据源', [kind]), sftpRow, ...ftpRows, localRow, encodingRow, warning]), el('div', { class: 'cmp-source-actions' }, [makeButton('取消', '', close), confirm]));
+    overlay.appendChild(card); document.body.appendChild(overlay); update(); overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+  }
+  function fieldRow(label, children) { return el('label', { class: 'cmp-source-row' }, [el('span', { text: label }), el('div', { class: 'cmp-source-fields' }, children)]); }
+  function formatBytes(bytes) { if (!Number.isFinite(bytes)) return ''; if (bytes < 1024) return bytes + ' B'; if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB'; return (bytes / 1048576).toFixed(1) + ' MB'; }
 
   Kairo.pages.compare = renderCompare;
   Kairo.state.routes.compare = renderCompare;
-  Kairo.state.routeNames.compare = '代码比对';
+  Kairo.state.routeNames.compare = '文件与文本比较';
 })();

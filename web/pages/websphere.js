@@ -590,7 +590,7 @@
         dirSel.value = dirSel.options[0].value;
       }
     }
-    sysSel.addEventListener('change', () => { fillCredFromConfig(); renderSrvPick(); if (getCheckedServers().length === 0) { toggleAllSrv(true); } refreshDirs(); refreshCredStatus(); persistSelection(); });
+    sysSel.addEventListener('change', () => { fillCredFromConfig(true); renderSrvPick(); if (getCheckedServers().length === 0) { toggleAllSrv(true); } refreshDirs(); refreshCredStatus(); persistSelection(); });
     // P1-8：renderSrvDirs / renderSrvPick 内部本来就会 persistSelection，所以这里
     // 不需要再额外调 updateTargetSummary。但因为 renderSrvPick 后会重建 srvPickWrap，
     // 摘要需要根据"新勾选列表"重新算；persistSelection 里调一次就够。
@@ -724,12 +724,12 @@
       credStatus, btnForget
     ]);
 
-    function fillCredFromConfig() {
+    function fillCredFromConfig(force) {
       const sys = cfg && cfg.systems ? cfg.systems.find(s => s.name === sysSel.value) : null;
       if (!sys || !sys.servers || !sys.servers.length) return;
       const srv = sys.servers[0];
-      if (srv.username && !userInp.value) userInp.value = srv.username;
-      if (srv.password && !passInp.value) passInp.value = srv.password;
+      if (force || !userInp.value) userInp.value = srv.username || '';
+      if (force || !passInp.value) passInp.value = srv.password || '';
     }
 
     function currentCredKey() {
@@ -1865,7 +1865,7 @@
         const termsForHl = parseSearchTermsForHighlight(queryInp.value);
         renderMultiResults(r, termsForHl, !!ignoreCaseChk.checked, winN);
         let toastMsg = '命中 ' + r.total_hits + ' 条，' + r.ok_count + '/' + targets.length + ' 组成功';
-        if (winN > 0) toastMsg += '（多行窗口 ±' + winN + ' 行）';
+        if (winN > 0) toastMsg += '（多行跨度 ≤ ' + winN + ' 行）';
         if (timeRange.since || timeRange.until) toastMsg += '（时间范围已应用）';
         if (filePatterns) toastMsg += '（文件名过滤：' + filePatterns.join(', ') + '）';
         toast(toastMsg, r.fail_count > 0 ? 'warn' : 'ok');
@@ -1885,7 +1885,7 @@
     function renderMultiResults(r, terms, ignoreCase, matchWindow) {
       hitTableWrap.innerHTML = '';
       hitTableWrap.appendChild(el('h3', { text: '搜索结果 · ' + r.ok_count + '/' + r.servers.length + ' 成功，共 ' + r.total_hits + ' 条命中' }));
-      const winHint = (matchWindow && matchWindow > 0) ? '，多行窗口 ±' + matchWindow + ' 行' : '';
+      const winHint = (matchWindow && matchWindow > 0) ? '，多行跨度 ≤ ' + matchWindow + ' 行' : '';
       hitTableWrap.appendChild(el('div', { class: 'text-dim mb-2', text: '并发 ' + r.max_concurrency + '，按服务器分组展示' + winHint }));
 
       if (!r.servers || !r.servers.length) {
@@ -2141,6 +2141,15 @@ const formCard = el('div', { class: 'card' }, [
     ]));
     targetBody.appendChild(el('div', { class: 'mt-2' }, [srvPickToolbar, srvPickWrap]));
     targetBody.appendChild(el('div', { class: 'mt-2' }, [srvDirsToolbar, srvDirsWrap]));
+    targetBody.appendChild(el('div', { class: 'grid-2 mt-2' }, [
+      el('div', null, [el('label', { text: 'SSH 用户名' }), userInp]),
+      el('div', null, [
+        el('label', { text: 'SSH 密码' }),
+        passInp,
+        el('div', { class: 'mt-1' }, [rememberLbl]),
+        credStatusRow
+      ])
+    ]));
     targetBody.appendChild(el('div', { class: 'btn-row mt-3' }, [btnTest]));
 
     // v0.5 #8：文件名参数 — 单文件 / 多文件 / glob 模糊匹配（空格或逗号分隔）
@@ -2584,7 +2593,7 @@ const formCard = el('div', { class: 'card' }, [
 
     const searchCard = el('div', { class: 'card' }, [
       el('h3', { text: '多目标并行搜索' }),
-      el('div', { class: 'card-desc', unsafeHtml: '语法：<span class="code-inline">A &amp;&amp; B</span>（同包含）、<span class="code-inline">A || B</span>（任一）、<span class="code-inline">!X</span>（排除）。勾选「多行窗口匹配」后 <span class="code-inline">&amp;&amp;</span> 变为“N 行跨度内出现”。结果按服务器 / 目录分组。' }),
+      el('div', { class: 'card-desc', unsafeHtml: '语法：<span class="code-inline">A &amp;&amp; B</span>（同一行同时包含）、<span class="code-inline">A || B</span>（任一）、<span class="code-inline">!X</span>（排除）。勾选「多行窗口匹配」后 <span class="code-inline">&amp;&amp;</span> 变为“关键词行号跨度不超过 N”。关键词按字面匹配，可搜索路径、引号及特殊字符。结果按服务器 / 目录分组。' }),
       el('div', { class: 'grid-3' }, [
         // 搜索表达式 + 忽略大小写 checkbox（视觉绑定：「忽略大小写」修饰的是关键词匹配规则，
         // 跟并发/上下文这类「结果处理参数」不是同一类，放搜索表达式底下更合理）

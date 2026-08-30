@@ -110,12 +110,12 @@ type ToolCheck struct {
 
 // ServerCheck 单台 server 的连通性检查
 type ServerCheck struct {
-	System    string      `json:"system"`
-	Server    string      `json:"server"`
-	Host      string      `json:"host"`
-	Port      int         `json:"port"`
-	DNS       CheckResult `json:"dns"` // 域名解析
-	TCP       CheckResult `json:"tcp"` // TCP 连通性（不发起 SSH 握手）
+	System string      `json:"system"`
+	Server string      `json:"server"`
+	Host   string      `json:"host"`
+	Port   int         `json:"port"`
+	DNS    CheckResult `json:"dns"` // 域名解析
+	TCP    CheckResult `json:"tcp"` // TCP 连通性（不发起 SSH 握手）
 	// Profile 是"连接方案自适应记忆"里这台机器上次连接成功的 SSH compat profile 名。
 	// 空字符串 = 尚未有成功连接（首次自动探测），由 sshclient.RememberedProfileFor 提供。
 	Profile   string `json:"profile,omitempty"`
@@ -139,12 +139,19 @@ type Options struct {
 	// PerServerTimeout 单台 server 检查总超时（DNS+TCP）。
 	// 默认 3s。
 	PerServerTimeout time.Duration
+
+	// LookupHost 允许测试或受控运行环境注入 DNS 解析器。nil 时使用
+	// net.DefaultResolver.LookupHost；生产调用无需设置。
+	LookupHost func(context.Context, string) ([]string, error)
 }
 
 // defaultOptions 默认配置
 func defaultOptions(o Options) Options {
 	if o.PerServerTimeout <= 0 {
 		o.PerServerTimeout = 3 * time.Second
+	}
+	if o.LookupHost == nil {
+		o.LookupHost = net.DefaultResolver.LookupHost
 	}
 	return o
 }
@@ -169,7 +176,7 @@ func Collect(cfg *config.Config, configPath string, opts Options) Report {
 	rep.Servers = []ServerCheck{}
 
 	if opts.CheckServers {
-		rep.Servers = checkServers(cfg, opts.PerServerTimeout)
+		rep.Servers = checkServers(cfg, opts.PerServerTimeout, opts.LookupHost)
 	}
 	rep.Issues = summarizeIssues(rep)
 	return rep
@@ -333,7 +340,7 @@ func findSupportsPrintf() bool {
 	return strings.Contains(strings.ToLower(string(out)), "-printf")
 }
 
-func checkServers(cfg *config.Config, timeout time.Duration) []ServerCheck {
+func checkServers(cfg *config.Config, timeout time.Duration, lookupHost func(context.Context, string) ([]string, error)) []ServerCheck {
 	if cfg == nil {
 		return nil
 	}
@@ -342,13 +349,13 @@ func checkServers(cfg *config.Config, timeout time.Duration) []ServerCheck {
 		sys := &cfg.Systems[si]
 		for ssi := range sys.Servers {
 			srv := &sys.Servers[ssi]
-			out = append(out, checkOneServer(sys.Name, srv, timeout))
+			out = append(out, checkOneServer(sys.Name, srv, timeout, lookupHost))
 		}
 	}
 	return out
 }
 
-func checkOneServer(sysName string, srv *config.ServerConfig, timeout time.Duration) ServerCheck {
+func checkOneServer(sysName string, srv *config.ServerConfig, timeout time.Duration, lookupHost func(context.Context, string) ([]string, error)) ServerCheck {
 	start := time.Now()
 	port := srv.Port
 	if port == 0 {
@@ -379,7 +386,7 @@ func checkOneServer(sysName string, srv *config.ServerConfig, timeout time.Durat
 		sc.DNS.OK = true
 		sc.DNS.Message = "是 IP，无需 DNS"
 	} else {
-		addrs, err := net.DefaultResolver.LookupHost(ctx, host)
+		addrs, err := lookupHost(ctx, host)
 		if err != nil {
 			sc.DNS.Message = "DNS 解析失败：" + err.Error()
 			sc.Error = sc.DNS.Message

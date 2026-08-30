@@ -33,6 +33,10 @@ func boolPtr(b bool) *bool { return &b }
 // newTestServer 构造一个最小可用的 Server，配置 + 1 个系统 / 1 台服务器 / 1 个 log_dir。
 // downloadDir / logDir 落在 t.TempDir() 下；audit 也在那里写。
 func newTestServer(t *testing.T) (*Server, *config.Manager, *audit.Logger, string) {
+	return newTestServerWithDependencies(t, Dependencies{})
+}
+
+func newTestServerWithDependencies(t *testing.T, deps Dependencies) (*Server, *config.Manager, *audit.Logger, string) {
 	t.Helper()
 	tmp := t.TempDir()
 	cfg := &config.Config{
@@ -102,7 +106,7 @@ func newTestServer(t *testing.T) (*Server, *config.Manager, *audit.Logger, strin
 
 	// 嵌入 fs 用真实 web/ 目录（测试用真实 index.html）
 	webFS := os.DirFS(filepath.Join("..", "..", "web"))
-	srv := New(mgr, al, webFS, tailmgr.NewManager(), sshshell.New(0))
+	srv := New(mgr, al, webFS, tailmgr.NewManager(), sshshell.New(0), deps)
 	srv.skipLicenseCheck = true
 	return srv, mgr, al, cfg.DownloadDir()
 }
@@ -847,10 +851,10 @@ func TestLogsSearch_Validations(t *testing.T) {
 	if w := doRequest(srv, "GET", "/api/logs/search", nil); w.Code != 405 {
 		t.Errorf("GET: %d", w.Code)
 	}
-	// v0.14：关键词黑名单缩窄到 `' / \x00`；用 `'` 触发"非法字符 → 400"
+	// 搜索词支持引号、路径及 shell 特殊字符；只有控制字符会被拒绝。
 	if w := doRequest(srv, "POST", "/api/logs/search", map[string]any{
 		"system": "信贷生产", "server": "mock-1", "dir": "SystemOut",
-		"query": "你好'", "username": "u", "password": "p",
+		"query": "你好\t世界", "username": "u", "password": "p",
 	}); w.Code != 400 {
 		t.Errorf("bad query: %d body=%s", w.Code, w.Body.String())
 	}
@@ -895,9 +899,9 @@ func TestLogsSearchMulti_Validations(t *testing.T) {
 	}); w.Code != 400 {
 		t.Errorf("empty dir: %d", w.Code)
 	}
-	// bad query — v0.14：黑名单缩窄后用 `'` 触发 400（`[` 现在合法）
+	// bad query：控制字符无法稳定穿过 SSH / 文本扫描器，必须在拨号前返回 400。
 	if w := doRequest(srv, "POST", "/api/logs/search/multi", map[string]any{
-		"system": "信贷生产", "servers": []string{"mock-1"}, "dir": "SystemOut", "query": "你'",
+		"system": "信贷生产", "servers": []string{"mock-1"}, "dir": "SystemOut", "query": "你\t好",
 		"username": "u", "password": "p",
 	}); w.Code != 400 {
 		t.Errorf("bad query: %d", w.Code)

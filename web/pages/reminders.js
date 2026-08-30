@@ -22,50 +22,7 @@
   const { el, toast, escapeHtml, copyToClipboard } = Kairo.core;
   const { api } = Kairo.api;
 
-  // ---- minimal modal（core.js 文档说有 modal 但实际没暴露，这里 inline）----
-  function modal({ title, body, footer, width }) {
-    const overlay = el('div', { class: 'modal-overlay' });
-    const card = el('div', { class: 'modal-card', role: 'dialog', 'aria-modal': 'true' });
-    if (width) card.style.width = width + 'px';
-    const titleEl = title ? el('div', { class: 'modal-title', text: title, id: 'modal-title-' + Date.now() }) : null;
-    if (titleEl) {
-      card.appendChild(titleEl);
-      card.setAttribute('aria-labelledby', titleEl.id);
-    }
-    if (body) card.appendChild(body);
-    if (footer) card.appendChild(footer);
-    overlay.appendChild(card);
-    document.body.appendChild(overlay);
-
-    const focusable = card.querySelectorAll('button, input, textarea, [href], select');
-    const firstFocusable = focusable[0];
-    const lastFocusable = focusable[focusable.length - 1];
-    if (firstFocusable) firstFocusable.focus();
-
-    let closed = false;
-    function close() {
-      if (closed) return;
-      closed = true;
-      overlay.remove();
-      document.removeEventListener('keydown', onKey);
-    }
-    function onKey(e) {
-      if (e.key === 'Escape') close();
-      if (e.key === 'Tab') {
-        if (e.shiftKey && document.activeElement === firstFocusable) {
-          e.preventDefault();
-          lastFocusable.focus();
-        } else if (!e.shiftKey && document.activeElement === lastFocusable) {
-          e.preventDefault();
-          firstFocusable.focus();
-        }
-      }
-    }
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
-    document.addEventListener('keydown', onKey);
-
-    return { close, el: card };
-  }
+  const { modal } = Kairo.overlays;
 
   const WEEKDAY_LABELS = ['一', '二', '三', '四', '五', '六', '日']; // 1=周一
   const WEEKDAY_NAMES_FULL = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
@@ -92,7 +49,7 @@
     view.appendChild(listWrap);
 
     async function loadAndRender() {
-      // 列表 + 暂停 banner 两个请求无依赖，并行拉取，避免串行等待拖慢交互（Win7 老机器尤其明显）
+      // 列表 + 暂停 banner 两个请求无依赖，并行拉取，避免串行等待拖慢交互。
       await Promise.all([
         (async () => {
           try {
@@ -145,7 +102,7 @@
       const disabled = filtered.filter(r => !r.enabled);
 
       if (filtered.length === 0) {
-        // 原来用 🔔 emoji，Win 7 / 无 emoji 字体环境会显示成方框，改用 icons.js 里的 bell SVG。
+        // 原来用 🔔 emoji，在无 emoji 字体环境会显示成方框，改用 icons.js 里的 bell SVG。
         const bellIcon = (Kairo.icons && Kairo.icons.svg) ? Kairo.icons.svg('bell', 56) : null;
         if (bellIcon) bellIcon.classList.add('empty-icon-svg');
         listWrap.appendChild(el('div', { class: 'empty-state' }, [
@@ -283,15 +240,16 @@
   }
 
   // ---------- 编辑对话框 ----------
-  function openEditor(existing, defaultType, onSaved) {
+  function openEditor(existing, defaultType, onSaved, preset) {
     const isNew = !existing;
+    preset = preset || {};
     const initType = isNew ? defaultType : existing.type;
     const act = existing && existing.action ? existing.action : {};
 
     // 字段 state
     const state = {
       type: initType,
-      content: existing ? existing.content : '',
+      content: existing ? existing.content : (preset.content || ''),
       at: existing && existing.at ? existing.at : defaultOnceAt(),
       weekdays: existing && existing.weekdays ? existing.weekdays.slice() : [1, 2, 3, 4, 5],
       time: existing && existing.time ? existing.time : '17:00',
@@ -303,6 +261,7 @@
       actionCmd: act.command || '',
       actionArgs: act.args ? act.args.join(' ') : '',
       actionWorkDir: act.work_dir || '',
+      sourceNoteId: existing ? (existing.source_note_id || '') : (preset.sourceNoteId || ''),
     };
 
     const typeSelector = el('div', { class: 'editor-type-tabs' });
@@ -550,6 +509,7 @@
       return null;
     }
     const payload = { type: state.type, content: state.content, lead_minutes: state.lead || 0 };
+    if (state.sourceNoteId) payload.source_note_id = state.sourceNoteId;
     if (state.type === 'once') {
       if (!state.at) {
         toast('请选择触发时间', 'err');
@@ -619,4 +579,5 @@
 
   Kairo.state.routes.reminders = renderReminders;
   Kairo.state.routeNames.reminders = '便笺提醒';
+  Kairo.reminders = { render: renderReminders, openEditor };
 })();

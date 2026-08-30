@@ -26,6 +26,8 @@ func run(cfg Config) {
 		}
 
 		mOpen := systray.AddMenuItem("打开浏览器", "在默认浏览器中打开")
+		mNewNote := systray.AddMenuItem("新建便笺", "新建并置顶到桌面")
+		mToggleNotes := systray.AddMenuItem("显示/隐藏桌面便笺", "切换所有桌面便笺")
 		mOpenPet := systray.AddMenuItem("显示宠物", "在桌面上打开悬浮宠物窗口")
 
 		systray.AddSeparator()
@@ -54,6 +56,14 @@ func run(cfg Config) {
 				case <-mOpen.ClickedCh:
 					if cfg.OnOpenBrowser != nil {
 						cfg.OnOpenBrowser()
+					}
+				case <-mNewNote.ClickedCh:
+					if cfg.OnNewNote != nil {
+						cfg.OnNewNote()
+					}
+				case <-mToggleNotes.ClickedCh:
+					if cfg.OnToggleNotes != nil {
+						cfg.OnToggleNotes()
 					}
 				case <-mOpenPet.ClickedCh:
 					if cfg.OnOpenPet != nil {

@@ -99,6 +99,11 @@ type Reminder struct {
 
 	// 触发动作；nil 或 Kind 为空 = popup。
 	Action *Action `json:"action,omitempty"`
+
+	// SourceNoteID is an optional weak link to the note that created this
+	// reminder. Reminder content is a snapshot; deleting or editing the note
+	// never changes scheduling or delivery.
+	SourceNoteID string `json:"source_note_id,omitempty"`
 }
 
 // leadDur 提前量（负值/0 一律视为 0）。

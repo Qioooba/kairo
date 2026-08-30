@@ -1,9 +1,38 @@
 package diff
 
 import (
+	"math/rand"
 	"strings"
 	"testing"
 )
+
+func TestCompare_RandomEditScriptReconstructsBothSides(t *testing.T) {
+	rng := rand.New(rand.NewSource(42))
+	alphabet := []string{"a", "b", "c", "d"}
+	for sample := 0; sample < 500; sample++ {
+		left := make([]string, rng.Intn(24))
+		right := make([]string, rng.Intn(24))
+		for i := range left {
+			left[i] = alphabet[rng.Intn(len(alphabet))]
+		}
+		for i := range right {
+			right[i] = alphabet[rng.Intn(len(alphabet))]
+		}
+		result := Compare(left, right, "left", "right")
+		var rebuiltLeft, rebuiltRight []string
+		for _, line := range result.Lines {
+			if line.Op != OpInsert {
+				rebuiltLeft = append(rebuiltLeft, line.Text)
+			}
+			if line.Op != OpDelete {
+				rebuiltRight = append(rebuiltRight, line.Text)
+			}
+		}
+		if strings.Join(rebuiltLeft, "\x00") != strings.Join(left, "\x00") || strings.Join(rebuiltRight, "\x00") != strings.Join(right, "\x00") {
+			t.Fatalf("sample %d does not reconstruct inputs: left=%v/%v right=%v/%v", sample, rebuiltLeft, left, rebuiltRight, right)
+		}
+	}
+}
 
 func TestCompare_Identical(t *testing.T) {
 	left := []string{"a", "b", "c"}
@@ -143,20 +172,48 @@ func TestCompare_UnifiedDiff_MultipleHunks(t *testing.T) {
 }
 
 func TestCompare_TruncatedGuard(t *testing.T) {
-	// 触发退化：N+M > myersMaxLines
-	left := make([]string, myersMaxLines+1)
-	right := make([]string, myersMaxLines+1)
+	// 超过最大编辑距离时安全退化，但不能再分配 N*M 的矩阵。
+	left := make([]string, maxMyersDistance+1)
+	right := make([]string, maxMyersDistance+1)
 	for i := range left {
-		left[i] = "x"
-		right[i] = "x"
+		left[i] = "left-" + strings.Repeat("x", i%7)
+		right[i] = "right-" + strings.Repeat("y", i%7)
 	}
 	r := Compare(left, right, "l", "r")
 	if !strings.Contains(r.UnifiedDiff, "注：两侧行数过多") {
 		t.Fatalf("expected truncation note in unified diff, got: %q", r.UnifiedDiff)
 	}
 	// 但 stats 仍应正确
-	if r.Stats.LeftLines != myersMaxLines+1 || r.Stats.RightLines != myersMaxLines+1 {
+	if r.Stats.LeftLines != maxMyersDistance+1 || r.Stats.RightLines != maxMyersDistance+1 {
 		t.Fatalf("stats should still report original line counts, got %+v", r.Stats)
+	}
+}
+
+func TestCompare_LargeIdenticalDoesNotTruncate(t *testing.T) {
+	lines := make([]string, maxMyersDistance*3)
+	for i := range lines {
+		lines[i] = "same"
+	}
+	r := Compare(lines, lines, "l", "r")
+	if r.Stats.Common != len(lines) || r.Stats.Added != 0 || r.Stats.Removed != 0 {
+		t.Fatalf("large identical input must remain equal: %+v", r.Stats)
+	}
+	if strings.Contains(r.UnifiedDiff, "已退化") {
+		t.Fatal("large identical input should not truncate")
+	}
+}
+
+func TestCompareWithKeysPreservesOriginalTextAndLineNumbers(t *testing.T) {
+	r := CompareWithKeys(
+		[]string{"Foo  ", "value"}, []string{"foo", "VALUE"},
+		[]string{"foo", "value"}, []string{"foo", "value"},
+		[]int{1, 3}, []int{1, 2}, 3, 2, "left", "right",
+	)
+	if r.Stats.Common != 2 || r.Stats.LeftLines != 3 || r.Stats.RightLines != 2 {
+		t.Fatalf("unexpected stats: %+v", r.Stats)
+	}
+	if got := r.Lines[0]; got.Text != "Foo  " || got.LeftNo != 1 || got.RightNo != 1 {
+		t.Fatalf("original text/line numbers not preserved: %+v", got)
 	}
 }
 
@@ -189,5 +246,21 @@ func TestOpMarshalJSON(t *testing.T) {
 		if string(got) != c.want {
 			t.Errorf("Op(%d).MarshalJSON() = %s, want %s", c.op, got, c.want)
 		}
+	}
+}
+
+func BenchmarkCompareLargeMostlyEqual(b *testing.B) {
+	left := make([]string, 100000)
+	for i := range left {
+		left[i] = "unchanged configuration line"
+	}
+	right := append([]string(nil), left...)
+	for i := 2500; i < len(right); i += 5000 {
+		right[i] = "changed configuration line"
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = Compare(left, right, "left", "right")
 	}
 }

@@ -25,6 +25,43 @@ func TestKey(t *testing.T) {
 	}
 }
 
+func TestResourceKeyIsCollisionSafe(t *testing.T) {
+	a := ResourceKey("database", "prod|oracle", "app")
+	b := ResourceKey("database|prod", "oracle", "app")
+	if a == b {
+		t.Fatalf("resource keys collided: %q", a)
+	}
+	if !strings.HasPrefix(a, "v2|") {
+		t.Fatalf("resource key should be versioned: %q", a)
+	}
+}
+
+func TestFileModeResourceRoundTrip(t *testing.T) {
+	orig := Mode()
+	t.Cleanup(func() {
+		SetMode(orig)
+		_ = Init("", "")
+	})
+	SetMode(ModeFile)
+	if err := Init(t.TempDir(), ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveResource("database", "oracle-prod", "readonly", "secret"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := GetResource("database", "oracle-prod", "readonly")
+	if err != nil || got != "secret" {
+		t.Fatalf("GetResource=(%q,%v)", got, err)
+	}
+	has, err := HasResource("database", "oracle-prod", "readonly")
+	if err != nil || !has {
+		t.Fatalf("HasResource=(%v,%v)", has, err)
+	}
+	if err := ClearResource("database", "oracle-prod", "readonly"); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestValidateInputs(t *testing.T) {
 	// 空 system/server/username 应该报错
 	if err := Save("", "s", "u", "p"); err == nil {

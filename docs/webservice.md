@@ -48,8 +48,10 @@
 
 1. 左侧切到 **WSDL 项目** Tab
 2. 点底部 **"+ 上传文件"**
-3. 选择本地 `.wsdl` / `.xsd` / `.xml` 文件（4MB 上限）
-4. 文件内容会被读取并解析，自动保存
+3. 一次选择本地 `.wsdl` 及它引用的 `.xsd` / `.xml` 文件（单文件 4MB、合计 16MB 上限）
+4. 文件内容会按 XML 声明自动识别 UTF-8（含 BOM）、UTF-16LE/BE、GBK、GB2312、GB18030，解析后自动保存
+
+外部 XSD 不在同一目录或不能由 URL 拉取时，建议一次多选 WSDL 和全部 XSD。若缺少附件，页面会明确提示，并只生成当前信息足够的报文骨架。
 
 ### 解析后展示
 
@@ -95,7 +97,7 @@
 
 请求编辑器按钮：
 - **生成 Envelope**：按当前 operation 重新生成
-- **格式化 / 压缩 / 校验**：XML 辅助操作
+- **格式化 / 压缩 / 校验**：XML 辅助操作（保留业务文本中的前后空格、CDATA 和 mixed content）
 - **复制**：复制请求体到剪贴板
 - **存为模板**：把当前请求保存为模板
 - **发送**：发出请求
@@ -111,16 +113,18 @@
 | endpoint | 目标 URL，必须 `http://` 或 `https://` 开头 |
 | SOAPAction | SOAP 1.1 必填（可空字符串）；1.2 走 Content-Type，不需要 |
 | 版本 | SOAP 1.1（`text/xml`）/ SOAP 1.2（`application/soap+xml`） |
-| 编码 | UTF-8 / GBK（请求体按此编码发送，Content-Type charset 自动跟随） |
+| 编码 | UTF-8 / GBK / GB2312 / GB18030（请求体、XML declaration、Content-Type charset 同步） |
 | 超时(ms) | 默认 30000，硬上限 300000（5 分钟） |
-| Headers | 自定义 HTTP Header，每行一个，格式 `Key: Value` |
+| Headers | 支持逐行 `Key: Value`、JSON 对象、从终端粘贴的 `curl -H` / `--header` |
+| 保存本次请求 | 默认开启；临时联调或含敏感报文时可关闭，不写入历史 |
 | 请求 XML | SOAP Envelope 正文 |
 
 点 **发送** 后：
 - 请求按选定编码序列化发出
 - 响应区显示：HTTP 状态码 / 状态文本 / 耗时 / Body 字节数 / 响应 Headers / 响应 Body
 - 响应 Body 支持 **格式化 / 压缩 / 复制**
-- 自动写入历史（最多 500 条，超出自动丢弃最旧的）
+- 勾选“保存本次请求”时写入历史（最多 500 条，超出自动丢弃最旧的）
+- 响应 Body 超过 2MB 时截断展示并明确提示，避免大报文卡住页面
 - 底部显示 **建议日志搜索关键词**：operation 名、SOAPAction、请求体里的 `serialNo` / `traceNo` / `requestId` / `transId` 等常见 trace 字段值（点击复制）
 
 错误处理：
@@ -142,7 +146,7 @@
 ### 使用模板
 
 1. 左侧切到 **模板** Tab
-2. 点列表里的模板，请求编辑器自动填入 endpoint / SOAPAction / headers / body / encoding / timeout
+2. 点列表里的模板，请求编辑器自动填入 endpoint / SOAPAction / SOAP 版本 / headers / body / encoding / timeout，并保持在模板 Tab
 3. 点 **发送** 即可重发
 
 ### 模板字段
@@ -154,9 +158,10 @@
 | endpoint | 目标 URL |
 | operation | operation 名 |
 | soap_action | SOAPAction |
+| soap_version | SOAP 1.1 / 1.2 |
 | headers | 自定义 HTTP Header |
 | body | 请求 XML |
-| encoding | UTF-8 / GBK |
+| encoding | UTF-8 / GBK / GB2312 / GB18030 |
 | timeout_ms | 超时毫秒 |
 | note | 备注 |
 | created_at / updated_at | 时间戳（自动） |
@@ -167,7 +172,7 @@
 
 ## 5. 历史与回放
 
-每次发送请求（包括 replay）都会自动记录一条历史。
+编辑器勾选“保存本次请求”时会记录发送；历史 replay 会记录一条新历史。
 
 ### 历史字段
 
@@ -253,30 +258,44 @@ Content-Type: text/xml
 
 请求编辑器和响应区都支持：
 
-- **格式化**：`POST /api/ws/xml/format`，缩进 2 空格
-- **压缩**：`POST /api/ws/xml/minify`，去掉多余空白
+- **格式化**：`POST /api/ws/xml/format`，缩进 2 空格；保留元素文本首尾空格、CDATA、mixed content 的语义
+- **压缩**：`POST /api/ws/xml/minify`，只移除结构性缩进，不删除业务文本中的有效空格
 - **校验**：`POST /api/ws/xml/validate`，well-formed 检查（标签匹配、未闭合等）
 
 校验只做 well-formed 检查，不做 XSD 校验。代码结构留有扩展空间。
 
 ---
 
-## 8. GBK / UTF-8 编码说明
+## 8. XML 编码兼容说明
 
 老 WebSphere / 老 Java 系统经常用 GBK 编码。工具箱支持：
 
-- **请求编码**：编辑器里选 UTF-8 或 GBK
+- **WSDL/XSD 导入**：识别 UTF-8（含 BOM）、UTF-16LE/BE（含 BOM 或字节特征）、GBK、GB2312、GB18030，并统一交给解析器处理
+- **请求编码**：编辑器里选 UTF-8、GBK、GB2312 或 GB18030
   - 请求体按选定编码序列化后发送
-  - Content-Type 的 charset 自动跟随（`text/xml; charset=GBK`）
+  - XML declaration 和 Content-Type 的 charset 自动跟随（如 `text/xml; charset=GB18030`）
 - **响应解码**：
-  - 优先按响应 Content-Type 里的 charset 解码
+  - 综合响应 Content-Type 和 XML declaration 判断；两者冲突时避免把合法 UTF-8 错解为 GBK
   - 取不到时用请求编码
-  - 再失败回退 UTF-8 / GBK 自动尝试
+  - 再失败回退 UTF-8 / GB18030 自动尝试
 
 常见问题：
 - **响应乱码**：检查响应 Content-Type 是否声明了 charset；没声明时工具箱会用请求编码解码，确保两者匹配
-- **请求 400**：服务端可能不识别 GBK，尝试切换 UTF-8
+- **请求 400**：服务端可能只接受某一种中文编码，依次核对 WSDL、XML declaration 和接口文档要求
 - **中文占位符**：`${custNo}` 等占位符是 ASCII，不受编码影响
+
+### 兼容范围
+
+| 场景 | 当前支持情况 |
+| --- | --- |
+| WSDL | WSDL 1.1；单文件或附带外部 XSD import/include |
+| SOAP | SOAP 1.1 / 1.2；同一 WSDL 内混合版本会按 binding/port 分别识别 |
+| 消息风格 | document/literal wrapped、bare；rpc/literal 尽力解析并保留原始结构用于降级 |
+| XML 编码 | UTF-8/BOM、UTF-16LE/BE、GBK、GB2312、GB18030 |
+| XML 内容 | 普通元素、namespace、CDATA、mixed content、具有业务含义的文本空格 |
+| 暂未完整覆盖 | WSDL 2.0、SOAP encoded arrays、MTOM/SwA 二进制附件、WS-Security 签名/加密、完整 XSD 约束校验 |
+
+“暂未完整覆盖”的协议不会伪装成已兼容：解析能降级时保留原始片段和 Warning，需要签名、附件或严格 Schema 校验的接口仍应配合专用客户端或后续扩展。
 
 ---
 
@@ -324,13 +343,14 @@ Content-Type: text/xml
 
 - 检查 WSDL 是否是合法 XML（先用「校验」按钮验证）
 - 检查根元素是否是 `<wsdl:definitions>`（local name `definitions`）
-- 复杂 XSD import/include 当前不联网拉取（内网工具不依赖公网），相关 operation 会降级，但其它 operation 照常可用
+- URL 导入会在同源/安全策略允许时递归拉取外部 XSD；本地导入请一次多选 WSDL 和所有引用的 XSD
 - 解析失败不会崩溃，会在项目详情里显示 `parse_error`，并尽量返回已解析到的部分
 
 ### Q5：XSD import 失败怎么办？
 
-- 工具箱会在 Warnings 里提示哪些 XSD import 没拉取
-- 解决方案：把外部 XSD 内容手动合并到 WSDL 的 `<types>` 节点里，再重新导入
+- 工具箱会在 Warnings 里提示哪些 XSD import/include 没加载
+- 优先方案：点“上传文件”，一次选择 WSDL 和所有引用的 XSD；文件名和相对路径应与 `schemaLocation` 对应
+- 仍无法匹配时，再考虑把 XSD 内容合并到 WSDL 的 `<types>` 节点后重新导入
 
 ### Q6：Mock 路径必须以 /mock/ 开头吗？
 
@@ -401,9 +421,9 @@ Content-Type: text/xml
 ## 13. 安全注意事项
 
 - **URL 导入**：30s 超时，最多拉取 4MB
-- **文件导入**：仅接受请求体里的 WSDL 文本，不直接读服务器磁盘任意路径
+- **文件导入**：仅接受请求体里的 WSDL/XSD 文本，不直接读服务器磁盘任意路径；单文件 4MB、合计 16MB
 - **HTML 转义**：所有 API 响应通过 `json.Encoder` 输出，自动转义，避免 XSS
 - **历史清空**：一键清空按钮，敏感数据可随时清除
 - **单 exe 部署**：不引入数据库，不依赖公网，不引入重量级服务
-- **Windows 兼容**：纯 Go 标准库 + `golang.org/x/text`（GBK 编码），无平台依赖
+- **Windows 兼容**：纯 Go 标准库 + `golang.org/x/text`（GBK/GB2312/GB18030 编码），无平台依赖
 - **Mock 路由鉴权**：`/mock/` 前缀不走 `/api/` 鉴权，外部系统可直接调用；但工具箱默认监听 127.0.0.1，外部访问需修改监听地址

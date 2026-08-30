@@ -96,7 +96,7 @@
         input.value = '';
         hideOverlay();
         resolveLoginWaiters(data && data.user);
-        showUser(data && data.user);
+        showUser(data && data.user, data && data.role);
       } catch (e) {
         showErr('网络错误：' + e.message);
       } finally {
@@ -143,17 +143,18 @@
     right.insertBefore(area, right.firstChild);
   }
 
-  function showUser(name) {
+  function showUser(name, role) {
     buildUserArea();
     if (_userLabel) _userLabel.innerHTML = name ? ('<span style="display:inline-flex;align-items:center;gap:6px;">' + svgIcon('smUser', 16) + ' ' + name + '</span>') : '';
     if (_logoutBtn) _logoutBtn.style.display = name ? '' : 'none';
     try { sessionStorage.setItem('kairo_auth_user', name || ''); } catch (e) {}
+    try { sessionStorage.setItem('kairo_auth_role', role || ''); } catch (e) {}
   }
 
   function hideUser() {
     if (_userLabel) _userLabel.textContent = '';
     if (_logoutBtn) _logoutBtn.style.display = 'none';
-    try { sessionStorage.removeItem('kairo_auth_user'); } catch (e) {}
+    try { sessionStorage.removeItem('kairo_auth_user'); sessionStorage.removeItem('kairo_auth_role'); } catch (e) {}
   }
 
   async function doLogout() {
@@ -197,11 +198,11 @@
       if (!resp.ok) return false;
       const data = await resp.json();
       if (data.auth_required) {
-        try { sessionStorage.removeItem('kairo_auth_user'); } catch (e) {}
+        try { sessionStorage.removeItem('kairo_auth_user'); sessionStorage.removeItem('kairo_auth_role'); } catch (e) {}
         await auth.requireLogin();
         return true;
       } else {
-        if (data.user) showUser(data.user);
+        if (data.user) showUser(data.user, data.role); else hideUser();
         return true;
       }
     } catch (e) {
@@ -213,11 +214,16 @@
   auth.getUser = function () {
     try { return sessionStorage.getItem('kairo_auth_user') || ''; } catch (e) { return ''; }
   };
+  auth.getRole = function () {
+    try { return sessionStorage.getItem('kairo_auth_role') || ''; } catch (e) { return ''; }
+  };
 
   function init() {
     let cached = '';
+    let cachedRole = '';
     try { cached = sessionStorage.getItem('kairo_auth_user') || ''; } catch (e) {}
-    if (cached) showUser(cached);
+    try { cachedRole = sessionStorage.getItem('kairo_auth_role') || ''; } catch (e) {}
+    if (cached) showUser(cached, cachedRole);
     auth.checkAuth();
   }
 

@@ -32,11 +32,12 @@ import (
 
 // 运行状态取值。
 const (
-	StatusSuccess = "success" // exit code = 0
-	StatusFailed  = "failed"  // exit code != 0 或启动失败
-	StatusTimeout = "timeout" // 超时被杀
-	StatusSkipped = "skipped" // 上一次还在跑，本次跳过
-	StatusRunning = "running" // 正在运行（仅瞬时状态，不持久化为最终态）
+	StatusSuccess  = "success"  // exit code = 0
+	StatusFailed   = "failed"   // exit code != 0 或启动失败
+	StatusTimeout  = "timeout"  // 超时被杀
+	StatusCanceled = "canceled" // 程序退出等生命周期取消
+	StatusSkipped  = "skipped"  // 上一次还在跑，本次跳过
+	StatusRunning  = "running"  // 正在运行（仅瞬时状态，不持久化为最终态）
 )
 
 const (
@@ -66,11 +67,11 @@ type Task struct {
 	UpdatedAt  string `json:"updated_at"`
 
 	// ---- 运行态（由 manager 维护，PUT 时客户端传入会被忽略）----
-	LastRunAt      string `json:"last_run_at,omitempty"`       // 上次开始运行时间
-	LastStatus     string `json:"last_status,omitempty"`       // success/failed/timeout/skipped/running
-	LastDurationMs int64  `json:"last_duration_ms,omitempty"`  // 上次耗时（毫秒）
-	LastError      string `json:"last_error,omitempty"`        // 上次失败原因摘要（stderr 尾部 / 启动错误）
-	RunCount       int    `json:"run_count"`                   // 累计运行次数（含失败）
+	LastRunAt      string `json:"last_run_at,omitempty"`      // 上次开始运行时间
+	LastStatus     string `json:"last_status,omitempty"`      // success/failed/timeout/canceled/skipped/running
+	LastDurationMs int64  `json:"last_duration_ms,omitempty"` // 上次耗时（毫秒）
+	LastError      string `json:"last_error,omitempty"`       // 上次失败原因摘要（stderr 尾部 / 启动错误）
+	RunCount       int    `json:"run_count"`                  // 累计运行次数（含失败）
 }
 
 // Validate 校验字段合法性，返回首个错误。
@@ -143,10 +144,10 @@ func (t *Task) NextRun(now time.Time) time.Time {
 // RunRecord 一次运行的历史记录。
 type RunRecord struct {
 	TaskID     string `json:"task_id"`
-	StartedAt  string `json:"started_at"`           // RFC3339
-	DurationMs int64  `json:"duration_ms"`          // 耗时毫秒
-	Status     string `json:"status"`               // success/failed/timeout/skipped
-	ExitCode   int    `json:"exit_code"`            // 进程退出码；启动失败为 -1
-	Output     string `json:"output,omitempty"`     // stdout+stderr 合并尾部（截断）
-	Trigger    string `json:"trigger"`              // cron=调度触发 / manual=手动执行
+	StartedAt  string `json:"started_at"`       // RFC3339
+	DurationMs int64  `json:"duration_ms"`      // 耗时毫秒
+	Status     string `json:"status"`           // success/failed/timeout/canceled/skipped
+	ExitCode   int    `json:"exit_code"`        // 进程退出码；启动失败为 -1
+	Output     string `json:"output,omitempty"` // stdout+stderr 合并尾部（截断）
+	Trigger    string `json:"trigger"`          // cron=调度触发 / manual=手动执行
 }

@@ -30,6 +30,8 @@
 
   // 13 个工具卡片图标（彩色实心版）
   const TOOLS = {
+    // 数据库工作台：青色数据库圆柱 + 查询光点
+    'database': `<ellipse cx="11" cy="5" rx="7" ry="3" fill="#0891b2"/><path d="M4 5v6c0 1.7 3.1 3 7 3s7-1.3 7-3V5" fill="#06b6d4"/><path d="M4 11v6c0 1.7 3.1 3 7 3 1.5 0 2.9-.2 4-.6" fill="#22d3ee"/><ellipse cx="11" cy="11" rx="7" ry="3" fill="none" stroke="#ffffff" stroke-width=".7" opacity=".7"/><circle cx="18" cy="17" r="4" fill="#8b5cf6"/><path d="m21 20 2 2" stroke="#8b5cf6" stroke-width="2" stroke-linecap="round"/><circle cx="18" cy="17" r="2" fill="none" stroke="#fff" stroke-width="1.2"/>`,
     // 日志助手：蓝色文件 + 白色文字线
     'file-text': `<path d="M14 3v4a1 1 0 0 0 1 1h4v9a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z" fill="#3b82f6"/><path d="M14 3v4a1 1 0 0 0 1 1h4l-5-5z" fill="#1e40af"/><rect x="8" y="11" width="8" height="1.5" rx="0.5" fill="#ffffff"/><rect x="8" y="14" width="8" height="1.5" rx="0.5" fill="#ffffff"/><circle cx="9.5" cy="8" r="0.8" fill="#ffffff"/>`,
 
@@ -83,6 +85,9 @@
     // 便笺提醒（v0.13 起）：黄色钟铃 + 橙色摆锤
     // 区别于 clock（玫红实心圆 + 白色指针）：这里是「独立的钟 + 提醒感」
     'bell': `<path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z" fill="#fbbf24"/><path d="M6 16V11a6 6 0 0 1 12 0v5" fill="none" stroke="#b45309" stroke-width="0.5" opacity="0.6"/><path d="M10.5 19a1.5 1.5 0 0 0 3 0" stroke="#f59e0b" stroke-width="1.5" fill="none"/><line x1="12" y1="6.5" x2="12" y2="5" stroke="#f59e0b" stroke-width="1.5" stroke-linecap="round"/><circle cx="12" cy="4" r="0.9" fill="#f59e0b"/>`,
+
+    // 便笺：黄色纸张 + 折角 + 三行记录
+    'sticky-note': `<path d="M5 3h11l3 3v15H5z" fill="#facc15"/><path d="M16 3v4h4" fill="#fde68a"/><path d="M16 3l4 4h-4z" fill="#f59e0b"/><rect x="8" y="10" width="8" height="1.4" rx=".7" fill="#92400e" opacity=".75"/><rect x="8" y="13" width="7" height="1.4" rx=".7" fill="#92400e" opacity=".65"/><rect x="8" y="16" width="5" height="1.4" rx=".7" fill="#92400e" opacity=".55"/>`,
 
     // 首页（home）：橙色屋顶 + 烟囱
     'home': `<path d="M3 11.5 12 4l9 7.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z" fill="#f97316"/><path d="M3 11.5 12 4l9 7.5" fill="none" stroke="#ea580c" stroke-width="0.6"/><rect x="14" y="5" width="2" height="2.5" fill="#ea580c"/>`,

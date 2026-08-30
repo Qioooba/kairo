@@ -51,6 +51,7 @@
       headers: '',
       body: '',
       bodyDirty: false, // 用户手动编辑过 body 后置 true，切 operation 时不自动覆盖
+      saveHistory: true,
     },
     requestInFlight: false, // 发送请求进行中标志，防止重复提交
   };
@@ -134,6 +135,59 @@
   function shortId(id) {
     if (!id) return '';
     return id.length > 12 ? id.slice(0, 12) : id;
+  }
+
+  function operationKey(op) {
+    if (!op) return '';
+    return [op.name || '', op.endpoint || '', op.soap_version || '1.1', op.soap_action || ''].join('\u0001');
+  }
+
+  function syncXMLDeclaration(body, encoding) {
+    if (!body) return body || '';
+    return body.replace(/(<\?xml\b[^>]*\bencoding\s*=\s*["'])[^"']+(["'])/i, '$1' + (encoding || 'UTF-8') + '$2');
+  }
+
+  function syncSOAPEnvelopeVersion(body, version) {
+    if (!body) return body || '';
+    const ns = version === '1.2'
+      ? 'http://www.w3.org/2003/05/soap-envelope'
+      : 'http://schemas.xmlsoap.org/soap/envelope/';
+    return body.replace(/http:\/\/schemas\.xmlsoap\.org\/soap\/envelope\/?|http:\/\/www\.w3\.org\/2003\/05\/soap-envelope\/?/g, ns);
+  }
+
+  // 兼容用户常见的三种粘贴习惯：逐行 Key: Value、JSON 对象、curl -H/--header。
+  function parseHeadersText(raw) {
+    const text = String(raw || '').trim();
+    if (!text) return { headers: {}, invalid: [] };
+    if (text.charAt(0) === '{') {
+      try {
+        const obj = JSON.parse(text);
+        if (!obj || Array.isArray(obj) || typeof obj !== 'object') throw new Error('not object');
+        const headers = {};
+        Object.keys(obj).forEach(k => { headers[k] = String(obj[k]); });
+        return { headers, invalid: [] };
+      } catch (e) {
+        return { headers: {}, invalid: ['JSON Header 不是合法对象'] };
+      }
+    }
+    const headers = {};
+    const invalid = [];
+    text.split(/\r?\n/).forEach(function (original) {
+      let line = original.trim();
+      if (!line || line.charAt(0) === '#') return;
+      line = line.replace(/^--header\s+/i, '').replace(/^-H\s+/i, '');
+      if ((line.charAt(0) === '"' && line.charAt(line.length - 1) === '"') ||
+          (line.charAt(0) === "'" && line.charAt(line.length - 1) === "'")) {
+        line = line.slice(1, -1);
+      }
+      const idx = line.indexOf(':');
+      if (idx <= 0) { invalid.push(original); return; }
+      const k = line.slice(0, idx).trim();
+      const v = line.slice(idx + 1).trim();
+      if (!k || /[\s\r\n:]/.test(k)) { invalid.push(original); return; }
+      headers[k] = v;
+    });
+    return { headers, invalid };
   }
 
   function highlight(text) {
@@ -477,6 +531,12 @@
       const w = el('div', { class: 'svc-warn' });
       w.appendChild(el('div', { text: '提示：' }));
       p.warnings.forEach(line => w.appendChild(el('div', { class: 'svc-warn-line', text: '· ' + line })));
+      if (p.warnings.some(line => /(?:import|include|外部\s*XSD|\.xsd)/i.test(line))) {
+        w.appendChild(el('div', {
+          class: 'svc-warn-line',
+          text: '· 建议点「上传文件」，一次选中 WSDL 和它引用的全部 XSD；缺少 XSD 时只能生成可用的报文骨架。',
+        }));
+      }
       card.appendChild(w);
     }
 
@@ -514,7 +574,7 @@
     if (!state.opListCollapsed) {
       const opsList = el('div', { class: 'svc-op-list' });
       ops.forEach(op => {
-        const isActive = state.currentOperation && state.currentOperation.name === op.name;
+        const isActive = operationKey(state.currentOperation) === operationKey(op);
         const opItem = el('div', {
           class: 'svc-op-item' + (isActive ? ' active' : ''),
           onclick: () => selectOperation(op)
@@ -618,17 +678,33 @@
     const d = state.draft;
     const endpointInp = el('input', { type: 'text', class: 'svc-inp-endpoint', id: 'svc-endpoint', placeholder: 'http://host:port/services/Foo', value: d.endpoint, oninput: (e) => { state.draft.endpoint = e.target.value; } });
     const soapActionInp = el('input', { type: 'text', class: 'svc-inp-action', id: 'svc-soapaction', placeholder: 'SOAPAction', value: d.soapAction, oninput: (e) => { state.draft.soapAction = e.target.value; } });
-    const soapVerSel = el('select', { id: 'svc-soapver', onchange: (e) => { state.draft.soapVersion = e.target.value; } }, [
+    const soapVerSel = el('select', { id: 'svc-soapver', onchange: (e) => {
+      state.draft.soapVersion = e.target.value;
+      state.draft.body = syncSOAPEnvelopeVersion(state.draft.body, e.target.value);
+      const bodyInp = document.getElementById('svc-body');
+      if (bodyInp) { bodyInp.value = state.draft.body; autoResizeTextarea(bodyInp); }
+    } }, [
       el('option', { value: '1.1', text: 'SOAP 1.1 (text/xml)' }),
       el('option', { value: '1.2', text: 'SOAP 1.2 (application/soap+xml)' }),
     ]);
     soapVerSel.value = d.soapVersion || '1.1';
-    const encodingSel = el('select', { id: 'svc-encoding', onchange: (e) => { state.draft.encoding = e.target.value; } }, [
+    const encodingSel = el('select', { id: 'svc-encoding', onchange: (e) => {
+      state.draft.encoding = e.target.value;
+      state.draft.body = syncXMLDeclaration(state.draft.body, e.target.value);
+      const bodyInp = document.getElementById('svc-body');
+      if (bodyInp) { bodyInp.value = state.draft.body; autoResizeTextarea(bodyInp); }
+    } }, [
       el('option', { value: 'UTF-8', text: 'UTF-8' }),
       el('option', { value: 'GBK', text: 'GBK' }),
+      el('option', { value: 'GB2312', text: 'GB2312' }),
+      el('option', { value: 'GB18030', text: 'GB18030' }),
     ]);
     encodingSel.value = d.encoding || 'UTF-8';
     const timeoutInp = el('input', { type: 'number', class: 'svc-inp-timeout', id: 'svc-timeout', placeholder: '超时(ms)', value: String(d.timeoutMs || 30000), min: '1000', max: '300000', oninput: (e) => { const v = parseInt(e.target.value, 10); if (!isNaN(v)) state.draft.timeoutMs = v; } });
+    const saveHistoryChk = el('input', { type: 'checkbox', id: 'svc-save-history', checked: d.saveHistory !== false, onchange: (e) => { state.draft.saveHistory = !!e.target.checked; } });
+    const saveHistoryCtl = el('label', { class: 'svc-inline-check', title: '关闭后本次请求不会写入历史，适合敏感报文或临时探测' }, [
+      saveHistoryChk, el('span', { text: '保存本次请求' }),
+    ]);
 
     card.appendChild(el('div', { class: 'svc-form-grid svc-form-grid-1col' }, [
       el('label', { text: 'endpoint' }), endpointInp,
@@ -640,12 +716,12 @@
     card.appendChild(el('div', { class: 'svc-form-grid svc-form-grid-3col' }, [
       el('label', { text: '编码' }), encodingSel,
       el('label', { text: '超时(ms)' }), timeoutInp,
-      el('label', { text: ' ' }), el('span'),
+      el('label', { text: '历史' }), saveHistoryCtl,
     ]));
 
 
     // 自定义 headers
-    const headersArea = el('textarea', { class: 'svc-headers', id: 'svc-headers', placeholder: '自定义 Header（每行一个，格式 Key: Value）', rows: '3', oninput: (e) => { state.draft.headers = e.target.value; autoResizeTextarea(e.target); } });
+    const headersArea = el('textarea', { class: 'svc-headers', id: 'svc-headers', placeholder: '支持 Key: Value、JSON 对象、curl -H / --header', rows: '3', oninput: (e) => { state.draft.headers = e.target.value; autoResizeTextarea(e.target); } });
     headersArea.value = d.headers || '';
     bindAutoResize(headersArea);
     card.appendChild(el('div', { class: 'svc-form-grid svc-form-grid-5col' }, [
@@ -704,6 +780,9 @@
     } else if (!r.ok) {
       card.appendChild(el('div', { class: 'svc-warn', text: 'HTTP 状态非 2xx（' + r.status + '）' }));
     }
+	if (r.truncated) {
+	  card.appendChild(el('div', { class: 'svc-warn', text: '响应体超过 2MB，当前只展示并保存前 2MB' }));
+	}
 
     // 历史重放按钮：仅当响应来自历史（_historyId 存在）时显示
     if (r._historyId) {
@@ -825,7 +904,7 @@
         if (saved && saved.project) {
           toast('WSDL 已导入并保存', 'ok');
           await refreshAll();
-          selectProject(saved.project.id);
+          await selectProject(saved.project.id);
         }
       }
     } catch (e) {
@@ -838,13 +917,45 @@
     if (inp) inp.click();
   }
 
-  // 兼容旧浏览器的文件读取（File.text() 在 Chrome <76 不可用，改用 FileReader）
+  // 读取 WSDL/XSD：兼容 UTF-8(BOM)、UTF-16LE/BE、GBK/GB2312/GB18030。
+  // 老 Java 工程导出的 WSDL 很多不是 UTF-8，直接 readAsText(file) 会把中文和
+  // QName 附近内容读成乱码。解码后统一把 XML declaration 改成 UTF-8 再传后端。
+  function detectXMLFileEncoding(bytes) {
+    if (bytes.length >= 3 && bytes[0] === 0xEF && bytes[1] === 0xBB && bytes[2] === 0xBF) return 'utf-8';
+    if (bytes.length >= 2 && bytes[0] === 0xFF && bytes[1] === 0xFE) return 'utf-16le';
+    if (bytes.length >= 2 && bytes[0] === 0xFE && bytes[1] === 0xFF) return 'utf-16be';
+    if (bytes.length >= 4 && bytes[0] === 0x3C && bytes[1] === 0 && bytes[2] === 0x3F && bytes[3] === 0) return 'utf-16le';
+    if (bytes.length >= 4 && bytes[0] === 0 && bytes[1] === 0x3C && bytes[2] === 0 && bytes[3] === 0x3F) return 'utf-16be';
+    let ascii = '';
+    const n = Math.min(bytes.length, 1024);
+    for (let i = 0; i < n; i++) ascii += String.fromCharCode(bytes[i]);
+    const m = ascii.match(/<\?xml\b[^>]*\bencoding\s*=\s*["']\s*([^"']+)\s*["']/i);
+    return m ? m[1].trim().toLowerCase() : 'utf-8';
+  }
+
   function readFileText(file) {
     return new Promise(function (resolve, reject) {
       var reader = new FileReader();
-      reader.onload = function () { resolve(reader.result); };
+      reader.onload = function () {
+        try {
+          var bytes = new Uint8Array(reader.result);
+          var encoding = detectXMLFileEncoding(bytes);
+          if (typeof TextDecoder === 'function') {
+            var text = new TextDecoder(encoding).decode(bytes);
+            resolve(syncXMLDeclaration(text.replace(/^\uFEFF/, ''), 'UTF-8'));
+            return;
+          }
+          // 旧 WebView 没有 TextDecoder：FileReader 本身支持指定字符集。
+          var fallback = new FileReader();
+          fallback.onload = function () { resolve(syncXMLDeclaration(String(fallback.result || '').replace(/^\uFEFF/, ''), 'UTF-8')); };
+          fallback.onerror = function () { reject(fallback.error || new Error('读取文件失败')); };
+          fallback.readAsText(file, encoding);
+        } catch (err) {
+          reject(err);
+        }
+      };
       reader.onerror = function () { reject(reader.error || new Error('读取文件失败')); };
-      reader.readAsText(file);
+      reader.readAsArrayBuffer(file);
     });
   }
 
@@ -853,12 +964,20 @@
     if (!files || files.length === 0) return;
 
     const maxSize = 4 * 1024 * 1024;
+    const maxTotalSize = 16 * 1024 * 1024;
+    let totalSize = 0;
     for (let i = 0; i < files.length; i++) {
+      totalSize += files[i].size;
       if (files[i].size > maxSize) {
         toast('文件过大（最大 4MB）：' + files[i].name, 'err');
         e.target.value = '';
         return;
       }
+    }
+    if (totalSize > maxTotalSize) {
+      toast('所选文件合计超过 16MB，请减少附件后重试', 'err');
+      e.target.value = '';
+      return;
     }
 
     try {
@@ -908,7 +1027,7 @@
             : '';
           toast('文件已导入并保存' + extra, 'ok');
           await refreshAll();
-          selectProject(saved.project.id);
+          await selectProject(saved.project.id);
         }
       }
     } catch (err) {
@@ -947,6 +1066,9 @@
   }
 
   async function selectProject(id) {
+    if (state.draft.bodyDirty && state.currentProject && state.currentProject.id !== id) {
+      if (!await confirmDialog('当前请求 XML 已修改。切换 WSDL 项目会重新生成报文，是否继续？')) return;
+    }
     try {
       const r = await getJSON('/api/wsdl/projects/' + encodeURIComponent(id));
       if (r && r.project) {
@@ -962,7 +1084,7 @@
           state.draft.soapVersion = firstOp.soap_version || state.draft.soapVersion || '1.1';
           // 自动生成 Envelope（不弹 toast，静默）
           if (!state.draft.bodyDirty) {
-            generateEnvelope(true);
+            await generateEnvelope(true);
           }
         }
         rerenderSidebar();
@@ -988,7 +1110,11 @@
     }
   }
 
-  function selectOperation(op) {
+  async function selectOperation(op) {
+    if (operationKey(state.currentOperation) === operationKey(op)) return;
+    if (state.draft.bodyDirty && state.currentOperation) {
+      if (!await confirmDialog('当前请求 XML 已修改。切换 operation 会按新接口重新生成报文，是否继续？')) return;
+    }
     state.currentOperation = op;
     // 切换 operation 时重置详情折叠状态（默认收起）
     state.opDetailExpanded = false;
@@ -997,9 +1123,10 @@
       state.draft.soapAction = op.soap_action || state.draft.soapAction || '';
       state.draft.soapVersion = op.soap_version || state.draft.soapVersion || '1.1';
     }
-    if (!state.draft.bodyDirty) {
-      generateEnvelope(true);
-    }
+    // operation、endpoint、SOAPAction 和 body 必须作为一个整体切换，
+    // 不能把上一个 operation 的已编辑报文静默发到新 endpoint。
+    state.draft.bodyDirty = false;
+    await generateEnvelope(true);
     rerenderMain();
   }
 
@@ -1046,20 +1173,18 @@
     if (!body.trim()) { toast('请求 XML 不能为空', 'warn'); return; }
 
     // 解析 headers
-    const headers = {};
-    headersRaw.split(/\r?\n/).forEach(line => {
-      const idx = line.indexOf(':');
-      if (idx > 0) {
-        const k = line.slice(0, idx).trim();
-        const v = line.slice(idx + 1).trim();
-        if (k) headers[k] = v;
-      }
-    });
+    const parsedHeaders = parseHeadersText(headersRaw);
+    if (parsedHeaders.invalid.length > 0) {
+      toast('Header 格式错误：' + parsedHeaders.invalid[0], 'warn');
+      return;
+    }
+    const headers = parsedHeaders.headers;
 
     const req = {
       endpoint, soap_action: soapAction, soap_version: soapVer,
       encoding, timeout_ms: timeoutMs, headers, body,
       operation: state.currentOperation ? state.currentOperation.name : '',
+      save_history: d.saveHistory !== false,
     };
 
     state.requestInFlight = true;
@@ -1148,13 +1273,16 @@
     });
     if (!result) return;
     const d = state.draft;
+    const parsedHeaders = parseHeadersText(d.headers || '');
+    if (parsedHeaders.invalid.length > 0) { toast('Header 格式错误：' + parsedHeaders.invalid[0], 'warn'); return; }
     const tpl = {
       name: result.name.trim(),
       group: (result.group || '').trim(),
       endpoint: d.endpoint || '',
       operation: state.currentOperation ? state.currentOperation.name : '',
       soap_action: d.soapAction || '',
-      headers: {},
+      soap_version: d.soapVersion || '1.1',
+      headers: parsedHeaders.headers,
       body: d.body || '',
       encoding: d.encoding || 'UTF-8',
       timeout_ms: d.timeoutMs || 30000,
@@ -1252,20 +1380,13 @@
     if (!result) return;
     const name = result.name.trim();
     const group = result.group.trim();
-    const headersRaw = d.headers || '';
-    const headers = {};
-    headersRaw.split(/\r?\n/).forEach(line => {
-      const idx = line.indexOf(':');
-      if (idx > 0) {
-        const k = line.slice(0, idx).trim();
-        const v = line.slice(idx + 1).trim();
-        if (k) headers[k] = v;
-      }
-    });
+    const parsedHeaders = parseHeadersText(d.headers || '');
+    if (parsedHeaders.invalid.length > 0) { toast('Header 格式错误：' + parsedHeaders.invalid[0], 'warn'); return; }
+    const headers = parsedHeaders.headers;
     const tpl = {
       name, group,
       endpoint: d.endpoint, operation: state.currentOperation ? state.currentOperation.name : '',
-      soap_action: d.soapAction, headers, body,
+      soap_action: d.soapAction, soap_version: d.soapVersion || '1.1', headers, body,
       encoding: d.encoding, timeout_ms: d.timeoutMs || 30000,
     };
     try {
@@ -1293,7 +1414,7 @@
     state.draft.headers = t.headers ? Object.keys(t.headers).map(k => k + ': ' + t.headers[k]).join('\n') : '';
     state.draft.body = t.body || '';
     state.draft.bodyDirty = false; // 加载模板的 body 不算用户编辑
-    state.activeTab = 'wsdl';
+    // 保持在模板 tab：用户点模板就是为了浏览/切换模板，加载后不应突然跳回 WSDL。
     rerenderSidebar();
     rerenderMain();
     toast('已加载模板：' + t.name, 'info');

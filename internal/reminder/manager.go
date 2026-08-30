@@ -201,6 +201,9 @@ func (m *Manager) Update(id string, in Reminder) (Reminder, error) {
 	if in.Action == nil {
 		in.Action = old.Action
 	}
+	if strings.TrimSpace(in.SourceNoteID) == "" {
+		in.SourceNoteID = old.SourceNoteID
+	}
 	m.mu.Unlock()
 	if err := in.Validate(); err != nil {
 		return Reminder{}, err

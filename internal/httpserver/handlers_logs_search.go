@@ -24,8 +24,8 @@ type logsSearchReq struct {
 	Query       string `json:"query"` // 搜索表达式
 	Username    string `json:"username"`
 	Password    string `json:"password"`
-	IgnoreCase  bool   `json:"ignore_case"`  // v0.13：忽略大小写搜索（透传 grep -i）
-	MatchWindow int    `json:"match_window"` // v0.15：>0 时 && 走多行窗口匹配（awk），0 保持同行
+	IgnoreCase  bool   `json:"ignore_case"`  // v0.13：忽略大小写搜索
+	MatchWindow int    `json:"match_window"` // v0.15：>0 时 && 走多行窗口匹配，0 保持同行
 }
 
 func (s *Server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
@@ -127,7 +127,7 @@ func (s *Server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 		fileNames = append(fileNames, f.Name)
 	}
 
-	// v0.15：matchWindow>0 走多行窗口匹配，否则走原同行 grep 管道
+	// 同行与窗口模式共用同一个字面匹配引擎，只由 matchWindow 切换语义。
 	var searchCmd string
 	if matchWindow > 0 {
 		searchCmd, err = logquery.WindowSearchCommand(ld.Path, fileNames, kw, cur.Search.MaxMatches, cur.Search.TimeoutSeconds, ld.Encoding, req.IgnoreCase, matchWindow)
@@ -147,7 +147,7 @@ func (s *Server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if code != 0 {
-		// grep 没匹配到返回 1，是正常的
+		// 兼容旧执行器：退出码 1 且无输出视为正常的“无匹配”。
 		if code == 1 && strings.TrimSpace(stdout) == "" {
 			writeJSON(w, 200, map[string]any{"hits": []any{}})
 			return
@@ -218,10 +218,10 @@ func timeOrEmpty(t time.Time) string {
 }
 
 func parseSearchOutput(out string, server, dir string, files []logquery.FileEntry) []logquery.SearchHit {
-	// 建立 name -> file 映射（白名单），用来校验远端 grep 输出里的 filename
+	// 建立 name -> file 映射（白名单），用来校验远端搜索输出里的 filename
 	// 必须是本次搜索范围内的文件。
-	// 远端 grep 是按 fileList 跑的，正常不会出现白名单外的 file；
-	// 但如果有人改 logquery.go 的 fileList 注入，或者 grep 本身拼错，
+	// 远端引擎是按 fileList 跑的，正常不会出现白名单外的 file；
+	// 但如果有人改 logquery.go 的 fileList 注入，或者输出格式拼错，
 	// 这层校验可以兜底，避免前端解析出"看似合法但实际不在白名单"的命中。
 	//
 	// files 为 nil/空时跳过白名单校验（向后兼容旧测试 / 其他调用方）。

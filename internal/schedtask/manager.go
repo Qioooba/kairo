@@ -43,6 +43,10 @@ type View struct {
 type Manager struct {
 	store *Store
 	now   func() time.Time // 可注入，便于测试
+	// defaultWorkDir 只在任务未显式设置 WorkDir 时生效，不写回任务定义。
+	defaultWorkDir string
+	ctx            context.Context
+	cancel         context.CancelFunc
 
 	mu      sync.Mutex
 	items   map[string]*Task
@@ -50,19 +54,44 @@ type Manager struct {
 	running map[string]bool      // id → 是否有执行中的进程（防重叠）
 	runs    map[string][]RunRecord
 	timer   *time.Timer
+	stopped bool
+	wg      sync.WaitGroup
 
 	persistMu sync.Mutex // 序列化落盘，避免并发快照互相覆盖
 }
 
+// ManagerOptions 配置 Manager 的运行环境。
+type ManagerOptions struct {
+	// DefaultWorkDir 是未填写工作目录时的实际执行目录。桌面程序应传可执行文件
+	// 所在运行目录，避免 Windows 注册表自启时继承到不确定的当前目录。
+	DefaultWorkDir string
+}
+
 // NewManager 构造 Manager。加载任务 + 历史 + Rebuild 调度。
 func NewManager(store *Store) (*Manager, error) {
+	return NewManagerWithOptions(store, ManagerOptions{})
+}
+
+// NewManagerWithOptions 构造 Manager，并显式绑定任务的默认运行目录。
+func NewManagerWithOptions(store *Store, opts ManagerOptions) (*Manager, error) {
+	ctx, cancel := context.WithCancel(context.Background())
 	m := &Manager{
-		store:   store,
-		now:     time.Now,
-		items:   make(map[string]*Task),
-		slots:   make(map[string]time.Time),
-		running: make(map[string]bool),
-		runs:    make(map[string][]RunRecord),
+		store:          store,
+		now:            time.Now,
+		defaultWorkDir: strings.TrimSpace(opts.DefaultWorkDir),
+		ctx:            ctx,
+		cancel:         cancel,
+		items:          make(map[string]*Task),
+		slots:          make(map[string]time.Time),
+		running:        make(map[string]bool),
+		runs:           make(map[string][]RunRecord),
+	}
+	if m.defaultWorkDir != "" {
+		st, err := os.Stat(m.defaultWorkDir)
+		if err != nil || !st.IsDir() {
+			cancel()
+			return nil, fmt.Errorf("默认工作目录不可访问: %s", m.defaultWorkDir)
+		}
 	}
 	loaded, err := store.LoadTasks()
 	if err != nil {
@@ -230,7 +259,11 @@ func (m *Manager) Delete(id string) error {
 		m.mu.Unlock()
 		return fmt.Errorf("%w: %s", ErrNotFound, id)
 	}
-	_, hadRuns := m.runs[id]
+	if m.running[id] {
+		m.mu.Unlock()
+		return ErrRunning
+	}
+	oldRuns, hadRuns := m.runs[id]
 	delete(m.items, id)
 	delete(m.runs, id)
 	m.mu.Unlock()
@@ -238,6 +271,9 @@ func (m *Manager) Delete(id string) error {
 	if err := m.persistTasks(); err != nil {
 		m.mu.Lock()
 		m.items[id] = old
+		if hadRuns {
+			m.runs[id] = oldRuns
+		}
 		m.mu.Unlock()
 		return err
 	}
@@ -282,14 +318,9 @@ func (m *Manager) RunNow(id string) error {
 		m.mu.Unlock()
 		return fmt.Errorf("%w: %s", ErrNotFound, id)
 	}
-	if m.running[id] {
-		m.mu.Unlock()
-		return ErrRunning
-	}
 	snap := *t
 	m.mu.Unlock()
-	m.startRun(snap, "manual")
-	return nil
+	return m.startRun(snap, "manual")
 }
 
 // Runs 返回某任务的运行历史（新的在前）。
@@ -314,6 +345,11 @@ func (m *Manager) Rebuild() {
 	if m.timer != nil {
 		m.timer.Stop()
 		m.timer = nil
+	}
+	if m.stopped {
+		m.slots = make(map[string]time.Time)
+		m.mu.Unlock()
+		return
 	}
 	now := m.now()
 	m.slots = make(map[string]time.Time, len(m.items))
@@ -362,14 +398,26 @@ func (m *Manager) fire() {
 	m.mu.Unlock()
 
 	for _, t := range due {
-		m.startRun(t, "cron")
+		_ = m.startRun(t, "cron")
 	}
 	m.Rebuild()
 }
 
 // startRun 启动一次执行（异步）。调度触发遇到"还在跑"记 skipped 历史。
-func (m *Manager) startRun(t Task, trigger string) {
+func (m *Manager) startRun(t Task, trigger string) error {
 	m.mu.Lock()
+	if m.stopped {
+		m.mu.Unlock()
+		return errors.New("定时任务管理器已停止")
+	}
+	cur, exists := m.items[t.ID]
+	if !exists || (trigger == "cron" && !cur.Enabled) {
+		m.mu.Unlock()
+		return fmt.Errorf("%w: %s", ErrNotFound, t.ID)
+	}
+	// fire/RunNow 只负责提交 ID；真正预占运行位时重新读取当前定义，避免
+	// 与并发 Update 交错后仍执行旧命令。
+	t = *cur
 	if m.running[t.ID] {
 		m.mu.Unlock()
 		// 防重叠：上一次还在跑。调度触发 → 记一条 skipped 历史（便于排查"为什么没跑"）。
@@ -383,13 +431,18 @@ func (m *Manager) startRun(t Task, trigger string) {
 				Trigger:   trigger,
 			})
 		}
-		return
+		return ErrRunning
 	}
+	// 运行预占位与 WaitGroup.Add 在同一把锁下完成，Stop 先设置 stopped 后
+	// 再 Wait，杜绝 Add 与 Wait 并发造成的生命周期竞态。
 	m.running[t.ID] = true
-	if cur, ok := m.items[t.ID]; ok {
-		cur.LastStatus = StatusRunning
-		cur.LastRunAt = m.now().Format(time.RFC3339)
+	cur.LastStatus = StatusRunning
+	cur.LastRunAt = m.now().Format(time.RFC3339)
+	cur.LastError = ""
+	if strings.TrimSpace(t.WorkDir) == "" {
+		t.WorkDir = m.defaultWorkDir
 	}
+	m.wg.Add(1)
 	m.mu.Unlock()
 
 	if err := m.persistTasks(); err != nil {
@@ -397,8 +450,9 @@ func (m *Manager) startRun(t Task, trigger string) {
 	}
 
 	go func() {
+		defer m.wg.Done()
 		start := m.now()
-		res := run(context.Background(), &t)
+		res := run(m.ctx, &t)
 		dur := m.now().Sub(start)
 
 		m.mu.Lock()
@@ -410,6 +464,8 @@ func (m *Manager) startRun(t Task, trigger string) {
 			errText = fmt.Sprintf("退出码 %d", res.exitCode)
 		} else if res.status == StatusTimeout {
 			errText = fmt.Sprintf("超过 %s 未结束", t.Timeout())
+		} else if res.status == StatusCanceled {
+			errText = "任务被取消"
 		}
 		if cur, ok := m.items[t.ID]; ok {
 			cur.LastStatus = res.status
@@ -432,6 +488,7 @@ func (m *Manager) startRun(t Task, trigger string) {
 			log.Printf("schedtask: 状态落盘失败: %v", err)
 		}
 	}()
+	return nil
 }
 
 // appendRun 追加一条运行历史（裁剪到上限 + 落盘）。
@@ -474,12 +531,21 @@ func (m *Manager) persistRuns() error {
 	return m.store.SaveRuns(snap)
 }
 
-// Stop 停止调度（退出时用）。已启动的进程由各自超时兜底。
+// Stop 停止调度并取消、等待全部运行中任务。run 的平台进程控制器保证取消会
+// 回收完整进程树，因此 Stop 返回后不会留下 cmd/git/svn/脚本子进程。
 func (m *Manager) Stop() {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	if m.stopped {
+		m.mu.Unlock()
+		return
+	}
+	m.stopped = true
 	if m.timer != nil {
 		m.timer.Stop()
 		m.timer = nil
 	}
+	m.slots = make(map[string]time.Time)
+	m.cancel()
+	m.mu.Unlock()
+	m.wg.Wait()
 }

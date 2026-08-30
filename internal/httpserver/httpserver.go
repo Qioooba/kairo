@@ -23,9 +23,11 @@ import (
 
 	"kairo/internal/audit"
 	"kairo/internal/config"
+	"kairo/internal/dbconsole"
 	"kairo/internal/dlmanager"
 	"kairo/internal/downloads"
 	"kairo/internal/license"
+	"kairo/internal/note"
 	"kairo/internal/pet"
 	"kairo/internal/reminder"
 	"kairo/internal/schedtask"
@@ -123,9 +125,13 @@ type Server struct {
 	downloads    *dlmanager.Manager
 	shells       *sshshell.Manager
 	uploadStates *uploadStateMap // v1.1：SSH/SFTP 上传会话（独立于 downloads）
+	compares     *compareJobManager
+	database     *dbconsole.Manager
+	databaseErr  error
 
-	// v1.0 便笺提醒：可空（nil 时 /api/reminders 返回 503）。SetReminders 在 main.go 启动 reminder.Manager 后注入。
+	// Optional application services are supplied together through Dependencies.
 	reminders *reminder.Manager
+	notes     *note.Manager
 
 	// 定时任务：可空（nil 时 /api/tasks 返回 503）。SetTasks 在 main.go 启动 schedtask.Manager 后注入。
 	tasks *schedtask.Manager
@@ -143,8 +149,17 @@ type Server struct {
 	cleanupMu sync.Mutex // 防止并发执行清理任务
 }
 
+// Dependencies declares optional application services at construction time.
+// It replaces order-dependent SetX calls after the server has been built.
+type Dependencies struct {
+	Reminders *reminder.Manager
+	Notes     *note.Manager
+	Tasks     *schedtask.Manager
+	Pet       *pet.Engine
+}
+
 // New 构造一个 Server
-func New(cfg *config.Manager, a *audit.Logger, webRoot fs.FS, tails *tailmgr.Manager, shells *sshshell.Manager) *Server {
+func New(cfg *config.Manager, a *audit.Logger, webRoot fs.FS, tails *tailmgr.Manager, shells *sshshell.Manager, deps Dependencies) *Server {
 	wsStore := webservice.NewStore(cfg.Get().DataDir())
 	wsMocks := webservice.NewMockRegistry(wsStore)
 	// 启动时加载已保存的 mock 路由（失败只记日志，不阻断启动）
@@ -153,30 +168,34 @@ func New(cfg *config.Manager, a *audit.Logger, webRoot fs.FS, tails *tailmgr.Man
 		fmt.Fprintln(os.Stderr, "WARN: 加载已保存的 mock 路由失败:", err)
 		a.Write("webservice.mock.reload", "result", "fail", "error", err.Error())
 	}
+	database, databaseErr := dbconsole.NewManager(cfg.Get().DataDir())
+	if databaseErr != nil {
+		fmt.Fprintln(os.Stderr, "WARN: 初始化数据库工作台失败:", databaseErr)
+		a.Write("database.init", "result", "fail", "error", databaseErr.Error())
+	}
 	return &Server{
 		cfg: cfg, audit: a, webRoot: webRoot,
 		tails: tails, downloads: dlmanager.New(), shells: shells,
 		ws: wsStore, wsMocks: wsMocks,
 		uploadStates: newUploadStateMap(),
+		compares:     newCompareJobManager(),
+		database:     database,
+		databaseErr:  databaseErr,
+		reminders:    deps.Reminders,
+		notes:        deps.Notes,
+		tasks:        deps.Tasks,
+		pet:          deps.Pet,
 	}
 }
 
-// SetReminders 注入 reminder.Manager（在 main.go 启动 reminder 后调用）。
-// handler 里检查 nil，未注入时返回 503。
-func (s *Server) SetReminders(m *reminder.Manager) {
-	s.reminders = m
-}
-
-// SetTasks 注入 schedtask.Manager（在 main.go 启动定时任务后调用）。
-// handler 里检查 nil，未注入时返回 503。
-func (s *Server) SetTasks(m *schedtask.Manager) {
-	s.tasks = m
-}
-
-// SetPet 注入 pet.Engine（在 main.go 构造宠物引擎后调用）。
-// handler 里检查 nil，未注入时返回 404。
-func (s *Server) SetPet(e *pet.Engine) {
-	s.pet = e
+// CloseDatabase drains database/sql and Redis pools. Main calls this during a
+// normal shutdown; abrupt process exits are still safe because no source data
+// lives inside the pools.
+func (s *Server) CloseDatabase() error {
+	if s.database == nil {
+		return nil
+	}
+	return s.database.Close()
 }
 
 // TriggerCleanup 触发一次下载清理（同步执行）。
@@ -446,6 +465,26 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleCompareDeepCheck(w, r)
 	case path == "/api/compare/file-diff":
 		s.handleCompareFileDiff(w, r)
+	case path == "/api/compare/connections":
+		s.handleCompareConnections(w, r)
+	case path == "/api/compare/list":
+		s.handleCompareList(w, r)
+	case path == "/api/compare/read":
+		s.handleCompareRead(w, r)
+	case path == "/api/compare/write":
+		s.handleCompareWrite(w, r)
+	case path == "/api/compare/copy":
+		s.handleCompareCopy(w, r)
+	case path == "/api/compare/sync":
+		s.handleCompareSync(w, r)
+	case path == "/api/compare/sync/start":
+		s.handleCompareSyncStart(w, r)
+	case path == "/api/compare/scan":
+		s.handleCompareScanStart(w, r)
+	case strings.HasPrefix(path, "/api/compare/jobs/"):
+		s.handleCompareJob(w, r)
+	case strings.HasPrefix(path, "/api/database/"):
+		s.handleDatabaseDispatch(w, r)
 	case path == "/api/license/status":
 		s.handleLicenseStatus(w, r)
 	case path == "/api/license/activate":
@@ -494,6 +533,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleLogsDownloadEventsOrCancel(w, r)
 	case strings.HasPrefix(path, "/api/logs/tail/"):
 		s.handleTailEventsOrStop(w, r)
+	case strings.HasPrefix(path, "/api/notes"):
+		s.handleNotesDispatch(w, r)
 	// v1.0 便笺提醒：增删改查 / 启用切换 / 立即触发 / 元信息。
 	// 统一进 handleReminderDispatch 收口，按 path 后缀再分发。
 	case strings.HasPrefix(path, "/api/reminders"):

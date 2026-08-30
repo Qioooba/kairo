@@ -30,11 +30,18 @@ BUILD_TIME="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 LDFLAGS="-s -w -H windowsgui -X 'kairo/internal/httpserver.Version=${VER}' -X 'kairo/internal/httpserver.BuildTime=${BUILD_TIME}'"
 
 if ! command -v go >/dev/null 2>&1; then
-  echo "错误：未找到 go 命令，请先安装 Go 1.20+ 并加入 PATH" >&2
+  echo "错误：未找到 go 命令，请先安装 Go 1.24+ 并加入 PATH" >&2
   exit 1
 fi
 
 GO_VERSION="$(go version | awk '{print $3}')"
+GO_MAJOR="$(echo "${GO_VERSION}" | sed -E 's/^go([0-9]+)\..*/\1/')"
+GO_MINOR="$(echo "${GO_VERSION}" | sed -E 's/^go[0-9]+\.([0-9]+).*/\1/')"
+if [[ "${GO_MAJOR}" -lt 1 || ( "${GO_MAJOR}" -eq 1 && "${GO_MINOR}" -lt 24 ) ]]; then
+  echo "错误：主线要求 Go 1.24+，当前为 ${GO_VERSION}" >&2
+  echo "Win7/Go 1.20 版本已移至 legacy 分支，不再参与主线构建。" >&2
+  exit 1
+fi
 echo ">> Go 版本: ${GO_VERSION}"
 echo ">> 目标:    Windows 10/11 amd64"
 

@@ -184,6 +184,10 @@ func (r *realSftpBackend) Stat(path string) (os.FileInfo, error) {
 	return r.c.Stat(path)
 }
 
+func (r *realSftpBackend) Chtimes(path string, atime, mtime time.Time) error {
+	return r.c.Chtimes(path, atime, mtime)
+}
+
 func (r *realSftpBackend) WriteFile(path string, data []byte, perm os.FileMode) error {
 	f, err := r.c.Create(path)
 	if err != nil {
@@ -278,6 +282,13 @@ func (r *realSftpBackend) UploadStream(ctx context.Context, reader io.Reader, re
 	// 收尾回调：保证最终状态（100% 或实际字节数）推给前端
 	if progress != nil {
 		progress(pw.written, pw.written)
+	}
+	return nil
+}
+
+func (r *realSftpBackend) MkdirAll(path string) error {
+	if err := r.c.MkdirAll(path); err != nil {
+		return fmt.Errorf("创建远程目录失败: %w", err)
 	}
 	return nil
 }
@@ -491,6 +502,21 @@ func (c *Client) Stat(path string) (os.FileInfo, error) {
 	return info, nil
 }
 
+// Chtimes best-effort preserves timestamps for compare synchronization. The
+// standard SFTP backend supports it; shell fallbacks may not.
+func (c *Client) Chtimes(path string, atime, mtime time.Time) error {
+	if c == nil || c.b == nil {
+		return fmt.Errorf("sftp 客户端未连接")
+	}
+	setter, ok := c.b.(interface {
+		Chtimes(string, time.Time, time.Time) error
+	})
+	if !ok {
+		return fmt.Errorf("当前 SFTP 后端不支持保留修改时间")
+	}
+	return setter.Chtimes(path, atime, mtime)
+}
+
 // UploadFile 把本地文件上传到远端路径。
 //
 // remotePath 必须由调用方做过白名单校验。
@@ -536,6 +562,18 @@ func (c *Client) UploadStream(ctx context.Context, reader io.Reader, remotePath 
 		return fmt.Errorf("上传文件失败: %w", err)
 	}
 	return nil
+}
+
+// MkdirAll creates a remote directory tree for folder synchronization.
+func (c *Client) MkdirAll(path string) error {
+	if c == nil || c.b == nil {
+		return fmt.Errorf("SFTP 客户端未初始化")
+	}
+	maker, ok := c.b.(interface{ MkdirAll(string) error })
+	if !ok {
+		return fmt.Errorf("当前 SFTP 后端不支持创建目录")
+	}
+	return maker.MkdirAll(path)
 }
 
 // Rename 远端原子重命名。优先 PosixRename（可覆盖已存在目标），失败回退到标准 Rename。
@@ -787,6 +825,18 @@ func (s *shellBackend) UploadStream(ctx context.Context, reader io.Reader, remot
 	// 收尾回调
 	if progress != nil {
 		progress(pw.written, pw.written)
+	}
+	return nil
+}
+
+func (s *shellBackend) MkdirAll(path string) error {
+	cmd := "mkdir -p -- " + shellQuoteArg(path)
+	_, _, code, err := s.run(context.Background(), cmd, 30*time.Second, "utf-8")
+	if err != nil {
+		return fmt.Errorf("创建远程目录失败: %w", err)
+	}
+	if code != 0 {
+		return fmt.Errorf("创建远程目录失败: mkdir 退出码 %d", code)
 	}
 	return nil
 }
@@ -1176,6 +1226,7 @@ func (s *shellBackend) Open(path string) (SftpFile, error) {
 //   - [1-3] ：owner  rwx
 //   - [4-6] ：group  rwx
 //   - [7-9] ：other  rwx
+//
 // setuid/setgid/sticky 把对应位（owner 的 x → s/S、group 的 x → s/S、
 // other 的 x → t/T）的字符替换。
 func FormatMode(m os.FileMode) string {

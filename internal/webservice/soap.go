@@ -50,6 +50,12 @@ func GenerateEnvelope(op Operation, soapVersion string) string {
 	if op.InputName != "" && op.InputName != op.Name {
 		bodyTag = sanitizeXMLElementName(op.InputName)
 		bodyParams = unwrapWrapper(op.InputParams, op.InputName, op.InputName)
+		// 外部 XSD 缺失时，解析器只能保留一个没有 children 的同名占位参数。
+		// 这个占位参数就是 bare body 根元素本身，不能再写一层同名子节点，
+		// 否则会生成 <Request><Request/></Request> 这种无效业务报文。
+		if len(bodyParams) == 1 && bodyParams[0].Name == op.InputName && len(bodyParams[0].Children) == 0 {
+			bodyParams = nil
+		}
 		bareMode = true
 	}
 
@@ -251,13 +257,32 @@ func FormatXML(input, indent string) (string, error) {
 	if indent == "" {
 		indent = "  "
 	}
+	if err := ValidateXML(input); err != nil {
+		return "", err
+	}
 	tokens, err := tokenizeXML(input)
 	if err != nil {
 		return "", err
 	}
+	compact := compactXMLStartTokens(tokens)
 	var buf bytes.Buffer
 	depth := 0
-	for _, tk := range tokens {
+	compactNesting := 0
+	for i, tk := range tokens {
+		// 含文本/CDATA 的元素保持原样内联。XML 文本空白有业务语义，
+		// 不能为了“美化”把 "  A B  " trim 成 "A B"，也不能拆坏 mixed content。
+		if compactNesting > 0 {
+			buf.WriteString(tk.raw)
+			if tk.kind == xmlTkStartTag && !tk.selfClose {
+				compactNesting++
+			} else if tk.kind == xmlTkEndTag {
+				compactNesting--
+				if compactNesting == 0 {
+					buf.WriteByte('\n')
+				}
+			}
+			continue
+		}
 		switch tk.kind {
 		case xmlTkPI, xmlTkComment, xmlTkDirective, xmlTkCDATA:
 			writeIndent(&buf, depth, indent)
@@ -268,6 +293,8 @@ func FormatXML(input, indent string) (string, error) {
 			buf.WriteString(tk.raw)
 			if tk.selfClose {
 				buf.WriteByte('\n')
+			} else if compact[i] {
+				compactNesting = 1
 			} else {
 				buf.WriteByte('\n')
 				depth++
@@ -280,13 +307,13 @@ func FormatXML(input, indent string) (string, error) {
 			buf.WriteString(tk.raw)
 			buf.WriteByte('\n')
 		case xmlTkText:
-			trimmed := strings.TrimSpace(tk.raw)
-			if trimmed == "" {
-				continue
+			// 非空文本所在元素已被 compactXMLStartTokens 标为内联，
+			// 正常不会走到这里；这里只忽略标签间已有的缩进空白。
+			if strings.TrimSpace(tk.raw) != "" {
+				writeIndent(&buf, depth, indent)
+				buf.WriteString(tk.raw)
+				buf.WriteByte('\n')
 			}
-			writeIndent(&buf, depth, indent)
-			buf.WriteString(trimmed)
-			buf.WriteByte('\n')
 		}
 	}
 	out := buf.String()
@@ -312,12 +339,49 @@ func MinifyXML(input string) (string, error) {
 	var b strings.Builder
 	for _, tk := range tokens {
 		if tk.kind == xmlTkText {
-			b.WriteString(strings.TrimSpace(tk.raw))
+			// 只删除纯缩进（含换行）的 text node；元素值和 mixed content
+			// 的空白必须原样保留，否则压缩会改变签名字段/定长字段的值。
+			if strings.TrimSpace(tk.raw) == "" && (strings.Contains(tk.raw, "\n") || strings.Contains(tk.raw, "\r") || strings.Contains(tk.raw, "\t")) {
+				continue
+			}
+			b.WriteString(tk.raw)
 			continue
 		}
 		b.WriteString(tk.raw)
 	}
 	return b.String(), nil
+}
+
+// compactXMLStartTokens 标记必须原样内联输出的元素。
+// 直接包含非空文本、CDATA，或只含一个无换行空格（mixed content 的分隔空格）
+// 的元素都不能在内部插入缩进/换行。
+func compactXMLStartTokens(tokens []xmlToken) map[int]bool {
+	compact := map[int]bool{}
+	var stack []int
+	for i, tk := range tokens {
+		switch tk.kind {
+		case xmlTkStartTag:
+			if !tk.selfClose {
+				stack = append(stack, i)
+			}
+		case xmlTkEndTag:
+			if len(stack) > 0 {
+				stack = stack[:len(stack)-1]
+			}
+		case xmlTkCDATA:
+			if len(stack) > 0 {
+				compact[stack[len(stack)-1]] = true
+			}
+		case xmlTkText:
+			if len(stack) == 0 || tk.raw == "" {
+				continue
+			}
+			if strings.TrimSpace(tk.raw) != "" || (!strings.ContainsAny(tk.raw, "\r\n\t") && strings.TrimSpace(tk.raw) == "") {
+				compact[stack[len(stack)-1]] = true
+			}
+		}
+	}
+	return compact
 }
 
 // ---------- 手写 XML tokenizer（保留原始 prefix）----------
@@ -346,21 +410,6 @@ func tokenizeXML(input string) ([]xmlToken, error) {
 	i := 0
 	n := len(input)
 	for i < n {
-		if isSpace(input[i]) {
-			j := i
-			for j < n && isSpace(input[j]) {
-				j++
-			}
-			if j >= n {
-				break
-			}
-			if input[j] == '<' {
-				i = j
-				continue
-			}
-			i = j
-			continue
-		}
 		if input[i] != '<' {
 			j := i
 			for j < n && input[j] != '<' {
@@ -449,10 +498,6 @@ func findTagEnd(input string, start int) int {
 		}
 	}
 	return -1
-}
-
-func isSpace(c byte) bool {
-	return c == ' ' || c == '\t' || c == '\n' || c == '\r'
 }
 
 func writeIndent(buf *bytes.Buffer, depth int, indent string) {

@@ -8,10 +8,16 @@
  */
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
-const RUN_DIR = process.env.KAIRO_RUN_DIR || '/tmp/kairo-review-2026-08/run';
-const TASK_OUT_FILE = '/tmp/kairo-e2e-task.out';
+const RUN_DIR = process.env.KAIRO_RUN_DIR || path.join(os.tmpdir(), 'kairo-review-2026-08', 'run');
+const TASK_OUT_FILE = path.join(os.tmpdir(), 'kairo-e2e-task.out');
+
+function shellPath(p) {
+  if (process.platform === 'win32') return '"' + p.replace(/"/g, '""') + '"';
+  return "'" + p.replace(/'/g, "'\"'\"'") + "'";
+}
 
 function rowByName(page, name) {
   return page.evaluateHandle((n) => {
@@ -144,7 +150,7 @@ function register(runner, ctx) {
       await page.click('button:has-text("新增任务")');
       await page.waitForSelector('.modal-card', { state: 'visible' });
       await page.fill('.modal-card input[placeholder*="拉取最新代码"]', 'e2e-task-1');
-      await page.fill('.modal-card textarea.editor-content', 'echo hello > ' + TASK_OUT_FILE);
+      await page.fill('.modal-card textarea.editor-content', 'echo hello > ' + shellPath(TASK_OUT_FILE));
       await page.selectOption('.modal-card select.editor-input', '* * * * *');
       await page.waitForTimeout(500);
       await runner.screenshot(page, '30-s2-new-task-modal');
@@ -252,7 +258,7 @@ function register(runner, ctx) {
       });
       await page.waitForSelector('.modal-card', { state: 'visible' });
       const ta = await page.$('.modal-card textarea.editor-content');
-      await ta.fill('echo edited > ' + TASK_OUT_FILE);
+      await ta.fill('echo edited > ' + shellPath(TASK_OUT_FILE));
       await page.click('.modal-card button:has-text("保存")');
       await page.waitForTimeout(1200);
 

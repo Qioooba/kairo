@@ -138,6 +138,7 @@ async function main() {
     './tests/33-ssh-profiles',
     './tests/34-reminders-actions',
     './tests/35-sponsor-pet-board',
+    './tests/36-webservice-deep',
   ];
 
   console.log('📦 注册测试模块...');

@@ -2,14 +2,11 @@ package schedtask
 
 import (
 	"context"
+	"errors"
 	"os/exec"
 	"runtime"
 	"strings"
-	"time"
 	"unicode/utf8"
-
-	"golang.org/x/text/encoding/simplifiedchinese"
-	"golang.org/x/text/transform"
 )
 
 // outputKeepBytes 输出保留上限：只留尾部 32KB。
@@ -60,11 +57,8 @@ func decodeOutput(raw string) string {
 	if utf8.ValidString(raw) {
 		return raw
 	}
-	if runtime.GOOS == "windows" {
-		out, _, err := transform.String(simplifiedchinese.GBK.NewDecoder(), raw)
-		if err == nil {
-			return out
-		}
+	if out, err := decodePlatformOutput([]byte(raw)); err == nil {
+		return out
 	}
 	return raw
 }
@@ -79,15 +73,23 @@ type runResult struct {
 
 // run 同步执行一次任务。调用方负责 goroutine 与超时以外的上下文。
 //
-// 超时：context.WithTimeout 到期后 CommandContext 会 kill 进程。
-// 注意：cmd /C 派生的孙进程可能逃逸 kill（Windows 进程树问题），
-// 对"git/svn/脚本"这类单进程场景够用，不额外引入 job object 复杂度。
+// 超时或上层取消时会终止完整进程树。平台细节由 process_*.go 隔离：
+// Windows 使用 Job Object（无法加入 Job 时退回 taskkill /T），Unix 使用进程组。
 func run(ctx context.Context, t *Task) runResult {
 	name, args := shellCommand(t.Command)
 	tctx, cancel := context.WithTimeout(ctx, t.Timeout())
 	defer cancel()
+	if tctx.Err() != nil {
+		return runResult{
+			exitCode: -1,
+			status:   StatusCanceled,
+			output:   "(任务已取消，未启动进程)",
+		}
+	}
 
-	cmd := exec.CommandContext(tctx, name, args...)
+	// 不使用 exec.CommandContext：它只杀直接子进程，无法保证 cmd /C、sh -c
+	// 派生的整棵进程树被回收。managedCommand 统一负责 start/wait/kill-tree。
+	cmd := exec.Command(name, args...)
 	if dir := strings.TrimSpace(t.WorkDir); dir != "" {
 		cmd.Dir = dir
 	}
@@ -95,16 +97,46 @@ func run(ctx context.Context, t *Task) runResult {
 	cmd.Stdout = out
 	cmd.Stderr = out
 
-	start := time.Now()
-	err := cmd.Run()
-	_ = start // 耗时由 manager 统一记
+	proc, err := startManagedCommand(cmd)
+	if err != nil {
+		return runResult{
+			exitCode: -1,
+			status:   StatusFailed,
+			output:   "(启动失败) " + err.Error(),
+			err:      err,
+		}
+	}
+	defer proc.Close()
+
+	waitCh := make(chan error, 1)
+	go func() { waitCh <- proc.Wait() }()
+
+	var canceled bool
+	select {
+	case err = <-waitCh:
+	case <-tctx.Done():
+		canceled = true
+		killErr := proc.KillTree()
+		err = <-waitCh // 进程树被回收后管道关闭，Wait 应立即返回
+		if killErr != nil && err == nil {
+			err = killErr
+		}
+	}
 	res := runResult{exitCode: 0, output: decodeOutput(out.String())}
 
-	if tctx.Err() == context.DeadlineExceeded {
-		res.status = StatusTimeout
+	if canceled {
 		res.exitCode = -1
-		if res.output == "" {
-			res.output = "(执行超时，进程已被终止)"
+		switch {
+		case errors.Is(tctx.Err(), context.DeadlineExceeded):
+			res.status = StatusTimeout
+			if res.output == "" {
+				res.output = "(执行超时，进程树已被终止)"
+			}
+		default:
+			res.status = StatusCanceled
+			if res.output == "" {
+				res.output = "(任务已取消，进程树已被终止)"
+			}
 		}
 		return res
 	}

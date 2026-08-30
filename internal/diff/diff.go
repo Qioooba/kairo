@@ -10,6 +10,7 @@
 package diff
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 )
@@ -42,6 +43,25 @@ func (o Op) String() string {
 // 不实现的话前端拿到的是 0/1/2，难以读懂也容易写错。
 func (o Op) MarshalJSON() ([]byte, error) {
 	return []byte(`"` + o.String() + `"`), nil
+}
+
+// UnmarshalJSON complements MarshalJSON for API/client round trips and tests.
+func (o *Op) UnmarshalJSON(data []byte) error {
+	var value string
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	switch value {
+	case "equal":
+		*o = OpEqual
+	case "delete":
+		*o = OpDelete
+	case "insert":
+		*o = OpInsert
+	default:
+		return fmt.Errorf("unknown diff op %q", value)
+	}
+	return nil
 }
 
 // Line 是 diff 的最小展示单位。
@@ -77,91 +97,175 @@ type hunk struct {
 	body                           []string // 已经带 +/-/空格 前缀的行
 }
 
-// Compare 对 left / right 做行级 diff，返回编辑脚本 + 统计 + unified diff 字符串。
-//
-// 调用方应自行处理规范化（trim space / 忽略空行 / 忽略大小写），
-// 本包对输入字节流不做任何预处理，确保语义清晰。
+// Compare 对 left / right 做行级 Myers diff。
 func Compare(left, right []string, leftLabel, rightLabel string) *Result {
-	// Myers diff：用 LCS 长度矩阵，回溯得到编辑脚本。
-	// N/M 都很小时（N+M < 20000）用 O(NM) 的内存完全没问题；
-	// 极端情况（几万行）仍能扛，但会占用 (N+1)*(M+1) 个 int ≈ 数百 MB
-	// —— 我们的 4MB 限制下大概 6~8 万行，int 矩阵 ~ 25 GB 会爆。
-	// 所以先做一道保护：超阈值时退化为"全删 + 全增"，仍然给出 stats 与
-	// 完整的 left/right 文本由前端展示，但不强行算逐行 diff。
-	if len(left)+len(right) > myersMaxLines {
-		lines := make([]Line, 0, len(left)+len(right))
-		for i, t := range left {
-			lines = append(lines, Line{Op: OpDelete, LeftNo: i + 1, RightNo: 0, Text: t})
-		}
-		for i, t := range right {
-			lines = append(lines, Line{Op: OpInsert, LeftNo: 0, RightNo: i + 1, Text: t})
-		}
-		return buildResult(lines, left, right, leftLabel, rightLabel, true)
+	leftNos := make([]int, len(left))
+	rightNos := make([]int, len(right))
+	for i := range leftNos {
+		leftNos[i] = i + 1
+	}
+	for i := range rightNos {
+		rightNos[i] = i + 1
+	}
+	return CompareWithKeys(left, right, left, right, leftNos, rightNos, len(left), len(right), leftLabel, rightLabel)
+}
+
+// CompareWithKeys 用 keys 判断两行是否相等，但始终用 originals 生成结果。
+// handler 可借此实现“忽略大小写/空白但保留原文”，lineNos 则让过滤空行后
+// 的结果仍指向用户看到的真实行号。
+func CompareWithKeys(leftOriginal, rightOriginal, leftKeys, rightKeys []string, leftNos, rightNos []int, leftTotal, rightTotal int, leftLabel, rightLabel string) *Result {
+	if len(leftOriginal) != len(leftKeys) || len(rightOriginal) != len(rightKeys) ||
+		len(leftOriginal) != len(leftNos) || len(rightOriginal) != len(rightNos) {
+		panic("diff: originals, keys and line numbers must have equal lengths")
 	}
 
-	// N+1 行 / M+1 列的 LCS 长度矩阵。行 0 / 列 0 全 0（空串的 LCS=0）。
-	N, M := len(left), len(right)
-	dp := make([][]int, N+1)
-	for i := range dp {
-		dp[i] = make([]int, M+1)
+	ops, truncated := myers(leftKeys, rightKeys)
+	lines := make([]Line, 0, len(ops))
+	for _, item := range ops {
+		switch item.op {
+		case OpEqual:
+			lines = append(lines, Line{Op: OpEqual, LeftNo: leftNos[item.left], RightNo: rightNos[item.right], Text: leftOriginal[item.left]})
+		case OpDelete:
+			lines = append(lines, Line{Op: OpDelete, LeftNo: leftNos[item.left], Text: leftOriginal[item.left]})
+		case OpInsert:
+			lines = append(lines, Line{Op: OpInsert, RightNo: rightNos[item.right], Text: rightOriginal[item.right]})
+		}
 	}
-	for i := 1; i <= N; i++ {
-		for j := 1; j <= M; j++ {
-			if left[i-1] == right[j-1] {
-				dp[i][j] = dp[i-1][j-1] + 1
+	return buildResultWithTotals(lines, leftTotal, rightTotal, leftLabel, rightLabel, truncated)
+}
+
+type edit struct {
+	op          Op
+	left, right int
+}
+
+// maxMyersDistance 限制最坏情况下的 trace 内存。相似的大文件通常 D 很小，
+// 能完整算出；完全不同的大文件超过阈值时安全退化为整体替换。
+const maxMyersDistance = 2000
+
+func myers(left, right []string) ([]edit, bool) {
+	n, m := len(left), len(right)
+	max := n + m
+	if max == 0 {
+		return nil, false
+	}
+	offset := max + 1
+	v := make([]int, 2*max+3)
+	for i := range v {
+		v[i] = -1
+	}
+	v[offset+1] = 0
+	trace := make([][]int, 0, minInt(max, maxMyersDistance)+1)
+
+	for d := 0; d <= max && d <= maxMyersDistance; d++ {
+		snapshot := append([]int(nil), v[offset-d-1:offset+d+2]...)
+		trace = append(trace, snapshot)
+		for k := -d; k <= d; k += 2 {
+			var x int
+			if k == -d || (k != d && v[offset+k-1] < v[offset+k+1]) {
+				x = v[offset+k+1]
 			} else {
-				a := dp[i-1][j]
-				b := dp[i][j-1]
-				if a > b {
-					dp[i][j] = a
-				} else {
-					dp[i][j] = b
-				}
+				x = v[offset+k-1] + 1
+			}
+			y := x - k
+			for x < n && y < m && left[x] == right[y] {
+				x++
+				y++
+			}
+			v[offset+k] = x
+			if x >= n && y >= m {
+				return backtrack(trace, left, right, d), false
 			}
 		}
 	}
 
-	// 回溯：从 dp[N][M] 走到 dp[0][0]，逆序产出 Line。
-	lines := make([]Line, 0, N+M)
-	i, j := N, M
-	for i > 0 || j > 0 {
-		switch {
-		case i > 0 && j > 0 && left[i-1] == right[j-1]:
-			lines = append(lines, Line{Op: OpEqual, LeftNo: i, RightNo: j, Text: left[i-1]})
-			i--
-			j--
-		case j > 0 && (i == 0 || dp[i][j-1] >= dp[i-1][j]):
-			lines = append(lines, Line{Op: OpInsert, LeftNo: 0, RightNo: j, Text: right[j-1]})
-			j--
-		default:
-			// i > 0 且 (j==0 或 dp[i-1][j] >= dp[i][j-1]) → 删除
-			lines = append(lines, Line{Op: OpDelete, LeftNo: i, RightNo: 0, Text: left[i-1]})
-			i--
-		}
+	// 编辑距离过大：保留共同前后缀，中间安全地整体替换。
+	prefix := 0
+	for prefix < n && prefix < m && left[prefix] == right[prefix] {
+		prefix++
 	}
-
-	// 逆序产出，正过来。
-	for l, r := 0, len(lines)-1; l < r; l, r = l+1, r-1 {
-		lines[l], lines[r] = lines[r], lines[l]
+	suffix := 0
+	for suffix < n-prefix && suffix < m-prefix && left[n-1-suffix] == right[m-1-suffix] {
+		suffix++
 	}
-
-	return buildResult(lines, left, right, leftLabel, rightLabel, false)
+	result := make([]edit, 0, n+m)
+	for i := 0; i < prefix; i++ {
+		result = append(result, edit{op: OpEqual, left: i, right: i})
+	}
+	for i := prefix; i < n-suffix; i++ {
+		result = append(result, edit{op: OpDelete, left: i, right: -1})
+	}
+	for j := prefix; j < m-suffix; j++ {
+		result = append(result, edit{op: OpInsert, left: -1, right: j})
+	}
+	for i := 0; i < suffix; i++ {
+		result = append(result, edit{op: OpEqual, left: n - suffix + i, right: m - suffix + i})
+	}
+	return result, true
 }
 
-// myersMaxLines 是 Myers diff 的内存安全阈值。
-//
-// 4MB 文本按平均 60 字节/行算约 7 万行，N+M = 14 万；
-// 14 万 * 14 万 int ≈ 80 GB，绝对不行。
-// 实际取 20000（N+M），保证 (N+1)*(M+1)*8 ≤ ~3.2 GB，仍偏高；
-// 真要保险取 10000。给个保守值 15000（N*M ≤ ~5.6e8 ints ≈ 4.5 GB，理论上限，
-// 但 15000 通常意味着 M 或 N 之一 < 7500，另一半更小，矩阵实际更小）。
-// 选 15000 是经验值：实测 1 万行 diff 在毫秒级。
-const myersMaxLines = 15000
+func backtrack(trace [][]int, left, right []string, distance int) []edit {
+	x, y := len(left), len(right)
+	reversed := make([]edit, 0, x+y)
+	for d := distance; d > 0; d-- {
+		k := x - y
+		prev := trace[d]
+		get := func(targetK int) int { return prev[targetK+d+1] }
+		var prevK int
+		if k == -d || (k != d && get(k-1) < get(k+1)) {
+			prevK = k + 1
+		} else {
+			prevK = k - 1
+		}
+		prevX := get(prevK)
+		prevY := prevX - prevK
+		for x > prevX && y > prevY {
+			x--
+			y--
+			reversed = append(reversed, edit{op: OpEqual, left: x, right: y})
+		}
+		if x == prevX {
+			y--
+			reversed = append(reversed, edit{op: OpInsert, left: -1, right: y})
+		} else {
+			x--
+			reversed = append(reversed, edit{op: OpDelete, left: x, right: -1})
+		}
+	}
+	for x > 0 && y > 0 {
+		x--
+		y--
+		reversed = append(reversed, edit{op: OpEqual, left: x, right: y})
+	}
+	for x > 0 {
+		x--
+		reversed = append(reversed, edit{op: OpDelete, left: x, right: -1})
+	}
+	for y > 0 {
+		y--
+		reversed = append(reversed, edit{op: OpInsert, left: -1, right: y})
+	}
+	for l, r := 0, len(reversed)-1; l < r; l, r = l+1, r-1 {
+		reversed[l], reversed[r] = reversed[r], reversed[l]
+	}
+	return reversed
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
 
 func buildResult(lines []Line, left, right []string, leftLabel, rightLabel string, truncated bool) *Result {
+	return buildResultWithTotals(lines, len(left), len(right), leftLabel, rightLabel, truncated)
+}
+
+func buildResultWithTotals(lines []Line, leftTotal, rightTotal int, leftLabel, rightLabel string, truncated bool) *Result {
 	stats := Stats{
-		LeftLines:  len(left),
-		RightLines: len(right),
+		LeftLines:  leftTotal,
+		RightLines: rightTotal,
 	}
 	for _, l := range lines {
 		switch l.Op {

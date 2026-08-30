@@ -10,7 +10,7 @@ import (
 )
 
 // 本文件只放 Win32 API 声明、常量与结构体，不掺业务逻辑。
-// 全部走 golang.org/x/sys/windows 的 LazyDLL，CGO=0 可用，兼容 Win7。
+// 全部走 golang.org/x/sys/windows 的 LazyDLL，CGO=0，服务于 Windows 10/11 主线。
 
 var (
 	user32   = windows.NewLazySystemDLL("user32.dll")

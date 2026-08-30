@@ -17,6 +17,7 @@ type authLoginReq struct {
 type authStatusResp struct {
 	AuthRequired bool   `json:"auth_required"`
 	User         string `json:"user,omitempty"`
+	Role         string `json:"role,omitempty"`
 }
 
 func (s *Server) handleAuthStatus(w http.ResponseWriter, r *http.Request, cur *config.Config) {
@@ -31,7 +32,7 @@ func (s *Server) handleAuthStatus(w http.ResponseWriter, r *http.Request, cur *c
 			token := cur.Auth.LookupToken(tokenStr)
 			ip := clientIP(r)
 			if token != nil && token.IPAllowed(ip) {
-				writeJSON(w, 200, authStatusResp{AuthRequired: false, User: token.Name})
+				writeJSON(w, 200, authStatusResp{AuthRequired: false, User: token.Name, Role: token.Role})
 				return
 			}
 		}
@@ -72,7 +73,7 @@ func (s *Server) handleAuthStatus(w http.ResponseWriter, r *http.Request, cur *c
 			SameSite: http.SameSiteLaxMode,
 			Expires:  time.Now().Add(authCookieTTL),
 		})
-		writeJSON(w, 200, authStatusResp{AuthRequired: false, User: token.Name})
+		writeJSON(w, 200, authStatusResp{AuthRequired: false, User: token.Name, Role: token.Role})
 	default:
 		writeErr(w, http.StatusMethodNotAllowed, errors.New("仅支持 GET/POST"))
 	}

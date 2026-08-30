@@ -18,16 +18,17 @@ import (
 // Add 行为：enabled 缺省视为 true（默认启用）。
 // Update 行为：enabled 缺省保留当前值。
 type reminderReq struct {
-	Type        string           `json:"type"`
-	Enabled     *bool            `json:"enabled,omitempty"`
-	Content     string           `json:"content"`
-	At          string           `json:"at,omitempty"`
-	Weekdays    []int            `json:"weekdays,omitempty"`
-	Time        string           `json:"time,omitempty"`
-	DayOfMonth  *int             `json:"day_of_month,omitempty"`
-	Cron        string           `json:"cron,omitempty"`
-	LeadMinutes *int             `json:"lead_minutes,omitempty"`
-	Action      *reminder.Action `json:"action,omitempty"`
+	Type         string           `json:"type"`
+	Enabled      *bool            `json:"enabled,omitempty"`
+	Content      string           `json:"content"`
+	At           string           `json:"at,omitempty"`
+	Weekdays     []int            `json:"weekdays,omitempty"`
+	Time         string           `json:"time,omitempty"`
+	DayOfMonth   *int             `json:"day_of_month,omitempty"`
+	Cron         string           `json:"cron,omitempty"`
+	LeadMinutes  *int             `json:"lead_minutes,omitempty"`
+	Action       *reminder.Action `json:"action,omitempty"`
+	SourceNoteID string           `json:"source_note_id,omitempty"`
 }
 
 // toReminder 把 DTO 转成 reminder.Reminder，enabled 缺省值由 caller 决定。
@@ -37,14 +38,15 @@ func (r reminderReq) toReminder(enabledDefault bool) reminder.Reminder {
 		enabled = *r.Enabled
 	}
 	out := reminder.Reminder{
-		Type:     reminder.Type(strings.TrimSpace(r.Type)),
-		Enabled:  enabled,
-		Content:  strings.TrimSpace(r.Content),
-		At:       strings.TrimSpace(r.At),
-		Time:     strings.TrimSpace(r.Time),
-		Weekdays: r.Weekdays,
-		Cron:     strings.TrimSpace(r.Cron),
-		Action:   r.Action,
+		Type:         reminder.Type(strings.TrimSpace(r.Type)),
+		Enabled:      enabled,
+		Content:      strings.TrimSpace(r.Content),
+		At:           strings.TrimSpace(r.At),
+		Time:         strings.TrimSpace(r.Time),
+		Weekdays:     r.Weekdays,
+		Cron:         strings.TrimSpace(r.Cron),
+		Action:       r.Action,
+		SourceNoteID: strings.TrimSpace(r.SourceNoteID),
 	}
 	if r.DayOfMonth != nil {
 		out.DayOfMonth = *r.DayOfMonth

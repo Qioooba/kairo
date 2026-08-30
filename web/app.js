@@ -38,13 +38,17 @@
   }
 
   function routeFromHash(hash) {
-    return (hash || '#/home').replace(/^#\//, '').split(/[?#]/)[0] || 'home';
+    const raw = (hash || '#/home').replace(/^#\//, '').split(/[?#]/)[0] || 'home';
+    if (raw === 'reminders' || raw === 'notes/reminders') return { name: 'notes', state: { tab: 'reminders' } };
+    if (raw === 'notes' || raw === 'notes/list') return { name: 'notes', state: { tab: 'list' } };
+    return { name: raw, state: {} };
   }
 
   function navigate() {
     const routes = state.routes || {};
     const names = state.routeNames || {};
-    const requested = routeFromHash(location.hash);
+    const resolved = routeFromHash(location.hash);
+    const requested = resolved.name;
     const name = routes[requested] ? requested : 'home';
 
     // 【v0.5 修复 #20】离开系统配置页时如果有未保存改动，弹 confirm 确认。
@@ -94,13 +98,22 @@
       // 清理 controller 引用（旧 uploadQueue 已被 cancel，下次进 files 页会重新注册）
       try { window.__opsActiveUploads = null; } catch (e) { /* ignore */ }
     }
+    // 离开数据库工作台时中止 fetch 流，后端 QueryContext 会同步收到取消信号。
+    if (Kairo.database && Kairo.database.cancel) {
+      try { Kairo.database.cancel(); } catch (e) { /* ignore */ }
+    }
     const view = $('#view');
     if (!view) return;
+    if (typeof state.currentUnmount === 'function') {
+      try { state.currentUnmount(); } catch (e) { console.warn('route unmount failed', e); }
+      state.currentUnmount = null;
+    }
     view.innerHTML = '';
     // v0.5 P2-14：配置页有 fixed 底部保存栏，给 view 留 padding-bottom 防遮挡
     view.classList.toggle('has-sticky-footer', name === 'config');
     try {
-      routes[name](view);
+      const unmount = routes[name](view, resolved.state);
+      if (typeof unmount === 'function') state.currentUnmount = unmount;
     } catch (e) {
       view.appendChild(Kairo.core.el('div', { class: 'card' }, [
         Kairo.core.el('h3', { text: '页面渲染失败' }),
@@ -116,6 +129,7 @@
       Kairo.core.clearDlBadge();
     }
     state.currentRoute = name;
+    state.currentRouteState = resolved.state;
   }
 
   window.addEventListener('hashchange', navigate);
@@ -147,6 +161,13 @@
     if (Kairo.core && Kairo.core.cancelAllUploadsBeacon) {
       try { Kairo.core.cancelAllUploadsBeacon(); } catch (e) { /* ignore */ }
     }
+    if (Kairo.database && Kairo.database.cancel) {
+      try { Kairo.database.cancel(); } catch (e) { /* ignore */ }
+    }
+    if (typeof state.currentUnmount === 'function') {
+      try { state.currentUnmount(); } catch (e) { /* ignore */ }
+      state.currentUnmount = null;
+    }
   });
   window.addEventListener('load', async () => {
     try {
@@ -176,6 +197,7 @@
       }
     } catch (e) { /* ignore */ }
     state.tailHighlights = state.tailHighlights || [];
+    if (Kairo.notes && Kairo.notes.init) Kairo.notes.init();
     navigate();
     // 宠物彩蛋：静默初始化（未开启 / 失败都不影响主流程）
     if (window.Kairo && Kairo.pet && Kairo.pet.init) {

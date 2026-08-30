@@ -206,6 +206,35 @@ func TestWS_WSDLImportURL(t *testing.T) {
 	}
 }
 
+func TestWS_WSDLImportURL_LegacyGBKDeclaration(t *testing.T) {
+	// 即使主体只有 ASCII，encoding/xml 遇到 encoding="GBK" 也会因没有
+	// CharsetReader 直接失败；URL 导入层必须先统一解码为 UTF-8。
+	legacy := strings.Replace(sampleWSDLForHandler, "UTF-8", "GBK", 1)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/xml; charset=GBK")
+		_, _ = io.WriteString(w, legacy)
+	}))
+	defer ts.Close()
+
+	srv, _, _, _ := newTestServer(t)
+	w := doRequest(srv, "POST", "/api/wsdl/import-url", map[string]any{"url": ts.URL + "/legacy.wsdl"})
+	if w.Code != 200 {
+		t.Fatalf("GBK declaration WSDL import status=%d body=%s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Project struct {
+			ParseError string `json:"parse_error"`
+			Operations []any  `json:"operations"`
+		} `json:"project"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Project.ParseError != "" || len(resp.Project.Operations) == 0 {
+		t.Fatalf("GBK WSDL 未正确解析: %+v", resp.Project)
+	}
+}
+
 // TestWS_WSDLImportURL_InvalidURL 验证非 http URL 报 400。
 func TestWS_WSDLImportURL_InvalidURL(t *testing.T) {
 	srv, _, _, _ := newTestServer(t)

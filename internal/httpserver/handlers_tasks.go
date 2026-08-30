@@ -189,6 +189,10 @@ func (s *Server) handleTaskDelete(w http.ResponseWriter, r *http.Request, id str
 			writeErr(w, 404, err)
 			return
 		}
+		if errors.Is(err, schedtask.ErrRunning) {
+			writeErr(w, 409, err)
+			return
+		}
 		writeErr(w, 500, err)
 		return
 	}

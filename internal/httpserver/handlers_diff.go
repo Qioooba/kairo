@@ -49,11 +49,16 @@ func (s *Server) handleDiffCompare(w http.ResponseWriter, r *http.Request) {
 
 	leftLines := splitLines(req.Left)
 	rightLines := splitLines(req.Right)
+	leftOriginal, leftKeys, leftNos := prepareLines(leftLines, req.Ignore)
+	rightOriginal, rightKeys, rightNos := prepareLines(rightLines, req.Ignore)
 
-	leftLines = applyIgnore(leftLines, req.Ignore)
-	rightLines = applyIgnore(rightLines, req.Ignore)
-
-	res := diff.Compare(leftLines, rightLines, req.LeftLabel, req.RightLabel)
+	res := diff.CompareWithKeys(
+		leftOriginal, rightOriginal,
+		leftKeys, rightKeys,
+		leftNos, rightNos,
+		len(leftLines), len(rightLines),
+		req.LeftLabel, req.RightLabel,
+	)
 
 	writeJSON(w, 200, diffCompareResp{
 		OK:          true,
@@ -82,33 +87,35 @@ func splitLines(s string) []string {
 	return out
 }
 
-// applyIgnore 在拆行后对每行做 ignore 规则处理。
+// prepareLines 同时保留原文和用于匹配的 key，避免忽略规则污染展示和下载结果。
 //
 // 规则：
 //   - TrimSpace：去掉行尾的空白字符（tab / space），不动行首；
 //     这样"  a"和"a"会判等，"a  "和"a"也会判等，但"  a"和"a  "还会判等。
 //     （保持行内字符相对位置，仅消除右端 padding，便于纯文本比对）
-//   - IgnoreBlank：把"trim 后为空"的行替换成空字符串（已经空了）；
-//     这条生效后，前后两份文本的空行数量必须一致才不会产生"伪差异"。
-//     我们的语义：两边都丢掉空行后比对，等价于先压缩空白行再比对。
+//   - IgnoreBlank：从参与比对的行中移除空白行，同时保留真实行号。
 //   - IgnoreCase：转小写。
 //
 // 这三个规则的设计是：先 TrimSpace，再判 IgnoreBlank（此时多数空行已归一），
 // 最后 IgnoreCase。TrimSpace 用 strings.TrimRight(line, " \t")。
-func applyIgnore(lines []string, ig compareIgnore) []string {
-	out := make([]string, len(lines))
+func prepareLines(lines []string, ig compareIgnore) (originals, keys []string, lineNos []int) {
+	originals = make([]string, 0, len(lines))
+	keys = make([]string, 0, len(lines))
+	lineNos = make([]int, 0, len(lines))
 	for i, line := range lines {
 		l := line
 		if ig.TrimSpace {
 			l = strings.TrimRight(l, " \t")
 		}
 		if ig.IgnoreBlank && strings.TrimSpace(l) == "" {
-			l = ""
+			continue
 		}
 		if ig.IgnoreCase {
 			l = strings.ToLower(l)
 		}
-		out[i] = l
+		originals = append(originals, line)
+		keys = append(keys, l)
+		lineNos = append(lineNos, i+1)
 	}
-	return out
+	return originals, keys, lineNos
 }

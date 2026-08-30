@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"net/http/httptest"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -24,7 +25,6 @@ import (
 // newTestServerWithTasks 构造带 schedtask.Manager 的 Server (存储落在 t.TempDir)。
 func newTestServerWithTasks(t *testing.T) (*Server, *schedtask.Manager) {
 	t.Helper()
-	srv, _, _, _ := newTestServer(t)
 	dir := t.TempDir()
 	st := schedtask.NewStore(filepath.Join(dir, "tasks.json"), filepath.Join(dir, "runs.json"))
 	if err := st.EnsurePath(); err != nil {
@@ -35,7 +35,7 @@ func newTestServerWithTasks(t *testing.T) (*Server, *schedtask.Manager) {
 		t.Fatalf("NewManager: %v", err)
 	}
 	t.Cleanup(m.Stop)
-	srv.SetTasks(m)
+	srv, _, _, _ := newTestServerWithDependencies(t, Dependencies{Tasks: m})
 	return srv, m
 }
 
@@ -43,6 +43,13 @@ func newTestServerWithTasks(t *testing.T) (*Server, *schedtask.Manager) {
 func addTask(t *testing.T, srv *Server, body map[string]any) *httptest.ResponseRecorder {
 	t.Helper()
 	return doRequest(srv, "POST", "/api/tasks", body)
+}
+
+func longTaskCommand() string {
+	if runtime.GOOS == "windows" {
+		return "ping.exe -n 11 127.0.0.1 >NUL"
+	}
+	return "sleep 10"
 }
 
 // ---------- 未注入 Manager ----------
@@ -213,7 +220,7 @@ func TestTasksRunAndRuns(t *testing.T) {
 // TestTasksRun_TimeoutKill 命令 sleep 10 + timeout_sec=1 → runs 记录 status=timeout。
 func TestTasksRun_TimeoutKill(t *testing.T) {
 	srv, _ := newTestServerWithTasks(t)
-	w := addTask(t, srv, map[string]any{"name": "超时任务", "cron": "*/5 * * * *", "command": "sleep 10", "timeout_sec": 1})
+	w := addTask(t, srv, map[string]any{"name": "超时任务", "cron": "*/5 * * * *", "command": longTaskCommand(), "timeout_sec": 1})
 	if w.Code != 200 {
 		t.Fatalf("add code=%d body=%s", w.Code, w.Body.String())
 	}
@@ -239,6 +246,27 @@ func TestTasksRun_TimeoutKill(t *testing.T) {
 			t.Fatalf("未在 5s 内出现 timeout 记录: %s", w.Body.String())
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func TestTasksDeleteRunningReturnsConflict(t *testing.T) {
+	srv, _ := newTestServerWithTasks(t)
+	w := addTask(t, srv, map[string]any{
+		"name": "运行中不可删除", "cron": "*/5 * * * *",
+		"command": longTaskCommand(), "timeout_sec": 30,
+	})
+	if w.Code != 200 {
+		t.Fatalf("add code=%d body=%s", w.Code, w.Body.String())
+	}
+	id := decodeJSON(t, w.Body.Bytes())["id"].(string)
+	if w = doRequest(srv, "POST", "/api/tasks/"+id+"/run", nil); w.Code != 200 {
+		t.Fatalf("run code=%d body=%s", w.Code, w.Body.String())
+	}
+	if w = doRequest(srv, "DELETE", "/api/tasks/"+id, nil); w.Code != 409 {
+		t.Fatalf("删除运行中任务 code=%d，期望 409，body=%s", w.Code, w.Body.String())
+	}
+	if _, ok := srv.tasks.Get(id); !ok {
+		t.Fatal("删除被拒后任务不应消失")
 	}
 }
 

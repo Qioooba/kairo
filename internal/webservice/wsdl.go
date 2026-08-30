@@ -401,6 +401,9 @@ type ParseOption any
 // 解析失败不返回 error 中断，而是把错误填到 ParseError + Warnings，
 // 并尽量返回已解析到的 operation 列表（降级原则）。
 func ParseWSDL(raw string, opts ...ParseOption) *WSDLProject {
+	// 上传接口收到的 content 已经是 Unicode 字符串，但 XML declaration 可能
+	// 仍写着 GBK/UTF-16。进入 encoding/xml 前统一声明为 UTF-8。
+	raw = normalizeXMLDeclarationUTF8(strings.TrimPrefix(raw, "\uFEFF"))
 	p := &WSDLProject{
 		Version:  DataVersion,
 		TargetNS: "",
@@ -439,7 +442,8 @@ func ParseWSDL(raw string, opts ...ParseOption) *WSDLProject {
 	}
 	p.TargetNS = defs.TargetNS
 
-	// SOAP 版本检测：优先看 soap12 namespace 是否出现，再看 soap: 出现。
+	// SOAP 版本检测：项目级只作兜底；具体 port/binding 再按 namespace 精确判断，
+	// 兼容同一份 WSDL 同时暴露 SOAP 1.1 与 SOAP 1.2。
 	soap12 := strings.Contains(raw, "http://schemas.xmlsoap.org/wsdl/soap12/") ||
 		strings.Contains(raw, "http://www.w3.org/2003/05/soap-bindings/")
 	soap11 := strings.Contains(raw, "http://schemas.xmlsoap.org/wsdl/soap/") ||
@@ -449,6 +453,7 @@ func ParseWSDL(raw string, opts ...ParseOption) *WSDLProject {
 	} else {
 		p.SOAPVersion = "1.1"
 	}
+	bindingVersions := collectSOAPBindingVersions(raw)
 
 	// 加载外部 XSD import/include
 	var imports []xsdImport
@@ -563,9 +568,10 @@ func ParseWSDL(raw string, opts ...ParseOption) *WSDLProject {
 	for _, sv := range defs.Services {
 		svc := Service{Name: sv.Name}
 		for _, prt := range sv.Ports {
+			bindingName := localName(prt.Binding)
 			port := Port{
 				Name:    prt.Name,
-				Binding: localName(prt.Binding),
+				Binding: bindingName,
 			}
 			loc := ""
 			if prt.SoapAddress != nil && prt.SoapAddress.Location != "" {
@@ -574,7 +580,10 @@ func ParseWSDL(raw string, opts ...ParseOption) *WSDLProject {
 			port.Endpoint = loc
 			// 端口级 SOAP 版本：根据绑定是 soap 还是 soap12 难以从结构区分（local name 相同），
 			// 用项目级版本作为兜底；若 WSDL 同时含 1.1/1.2 默认按 1.1。
-			port.SOAPVersion = p.SOAPVersion
+			port.SOAPVersion = bindingVersions[bindingName]
+			if port.SOAPVersion == "" {
+				port.SOAPVersion = p.SOAPVersion
+			}
 			svc.Ports = append(svc.Ports, port)
 		}
 		p.Services = append(p.Services, svc)
@@ -589,7 +598,10 @@ func ParseWSDL(raw string, opts ...ParseOption) *WSDLProject {
 		}
 		// 该 binding 对应的 endpoint：从 services 里找 binding local name == b.Name 的 port
 		endpoint := ""
-		bindingSOAPVer := p.SOAPVersion
+		bindingSOAPVer := bindingVersions[b.Name]
+		if bindingSOAPVer == "" {
+			bindingSOAPVer = p.SOAPVersion
+		}
 		for _, sv := range p.Services {
 			for _, prt := range sv.Ports {
 				if prt.Binding == b.Name && endpoint == "" {
@@ -704,6 +716,54 @@ func ParseWSDL(raw string, opts ...ParseOption) *WSDLProject {
 		p.Warnings = append(p.Warnings, "未解析到任何 operation（可能是 rpc/encoded 或外部 XSD 未导入）")
 	}
 	return p
+}
+
+// collectSOAPBindingVersions 按 soap:binding 元素的 namespace 判断每个 binding
+// 使用 SOAP 1.1 还是 1.2。只看 local name 会把两种格式混在一起。
+func collectSOAPBindingVersions(raw string) map[string]string {
+	const wsdlNS = "http://schemas.xmlsoap.org/wsdl/"
+	const soap11NS = "http://schemas.xmlsoap.org/wsdl/soap/"
+	const soap12NS = "http://schemas.xmlsoap.org/wsdl/soap12/"
+	out := map[string]string{}
+	dec := xml.NewDecoder(strings.NewReader(raw))
+	var bindingName string
+	var bindingDepth int
+	depth := 0
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return out
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			depth++
+			if t.Name.Space == wsdlNS && t.Name.Local == "binding" {
+				bindingName = ""
+				for _, a := range t.Attr {
+					if a.Name.Local == "name" {
+						bindingName = a.Value
+						break
+					}
+				}
+				bindingDepth = depth
+				continue
+			}
+			if bindingName != "" && t.Name.Local == "binding" {
+				switch t.Name.Space {
+				case soap12NS:
+					out[bindingName] = "1.2"
+				case soap11NS:
+					out[bindingName] = "1.1"
+				}
+			}
+		case xml.EndElement:
+			if bindingName != "" && depth == bindingDepth && t.Name.Space == wsdlNS && t.Name.Local == "binding" {
+				bindingName = ""
+				bindingDepth = 0
+			}
+			depth--
+		}
+	}
 }
 
 // containsLocalName 粗略判断 XML 文本里是否出现某 local name 的开始标签。
@@ -924,7 +984,11 @@ func fetchExternalSchema(sourceURL, schemaLocation string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("读取 XSD 内容失败: %w", err)
 	}
-	return string(data), nil
+	decoded, err := DecodeXMLBytes(data, resp.Header.Get("Content-Type"))
+	if err != nil {
+		return "", fmt.Errorf("解码 XSD 内容失败: %w", err)
+	}
+	return decoded, nil
 }
 
 // parseExternalXSD 解析 XSD 文本，提取 elements/complexTypes/simpleTypes。

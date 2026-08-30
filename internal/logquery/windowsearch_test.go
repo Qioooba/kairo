@@ -156,8 +156,8 @@ func TestWindowSearch_NegExcludesLine(t *testing.T) {
 	dir := t.TempDir()
 	writeFixture(t, dir, "a.log", []string{
 		"l1",
-		"Exception ok",      // 2 → 命中
-		"DEBUG Exception",   // 3 → 含 DEBUG，排除
+		"Exception ok",    // 2 → 命中
+		"DEBUG Exception", // 3 → 含 DEBUG，排除
 		"l4",
 		"Exception another", // 5 → 命中
 	})
@@ -267,7 +267,7 @@ func TestWindowSearch_CommandStructure(t *testing.T) {
 		"KP_1_2=$(printf %b",
 		"-v w=10",
 		"ENVIRON",
-		"sort -u",
+		"function finish",
 		"head -n 200",
 		"sh -c",
 	} {

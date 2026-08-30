@@ -28,10 +28,12 @@ import (
 	"kairo/internal/browserpref"
 	"kairo/internal/config"
 	"kairo/internal/credentials"
+	"kairo/internal/desknote"
 	"kairo/internal/deskpet"
 	"kairo/internal/downloads"
 	"kairo/internal/httpserver"
 	"kairo/internal/license"
+	"kairo/internal/note"
 	"kairo/internal/pet"
 	"kairo/internal/popup"
 	"kairo/internal/reminder"
@@ -42,6 +44,7 @@ import (
 	"kairo/internal/sysutil"
 	"kairo/internal/tailmgr"
 	"kairo/internal/tray"
+	"kairo/internal/winui"
 )
 
 //go:embed web
@@ -369,6 +372,20 @@ func main() {
 		popup.Shutdown()
 	}()
 
+	// 7.75 构造便笺管理器。便笺与提醒是独立领域：便笺负责持续编辑和
+	// 窗口状态，提醒只负责未来触发。
+	nStore := note.NewStore(filepath.Join(cfg.DataDir(), "notes.json"))
+	if err := nStore.EnsurePath(); err != nil {
+		log.Printf("WARNING: 准备 note 数据目录失败: %v", err)
+	}
+	nManager, err := note.NewManager(nStore)
+	if err != nil {
+		log.Printf("WARNING: 初始化 note manager 失败: %v", err)
+		nManager = nil
+	} else {
+		log.Printf("便笺已加载: %d 条", len(nManager.List(note.Filter{})))
+	}
+
 	// 7.8 构造定时任务管理器：存储 + 事件驱动调度器。
 	// 任务定义在 data/sched_tasks.json，运行历史在 data/sched_task_runs.json。
 	// 命令执行失败 / 落盘失败都只记日志，不影响 HTTP 服务。
@@ -379,7 +396,9 @@ func main() {
 	if err := tStore.EnsurePath(); err != nil {
 		log.Printf("WARNING: 准备 schedtask 数据目录失败: %v", err)
 	}
-	tManager, err := schedtask.NewManager(tStore)
+	tManager, err := schedtask.NewManagerWithOptions(tStore, schedtask.ManagerOptions{
+		DefaultWorkDir: runDir,
+	})
 	if err != nil {
 		log.Printf("WARNING: 初始化 schedtask manager 失败: %v", err)
 		tManager = nil
@@ -393,17 +412,17 @@ func main() {
 	}()
 
 	// 8. 构造 HTTP 服务
-	srv := httpserver.New(cfgMgr, auditLog, webSubFS, tails, shells)
-	if rManager != nil {
-		srv.SetReminders(rManager)
-	}
-	if petEngine != nil {
-		srv.SetPet(petEngine)
-	}
-	if tManager != nil {
-		srv.SetTasks(tManager)
-	}
-
+	srv := httpserver.New(cfgMgr, auditLog, webSubFS, tails, shells, httpserver.Dependencies{
+		Reminders: rManager,
+		Notes:     nManager,
+		Tasks:     tManager,
+		Pet:       petEngine,
+	})
+	defer func() {
+		if err := srv.CloseDatabase(); err != nil {
+			log.Printf("WARNING: 关闭数据库连接池失败: %v", err)
+		}
+	}()
 	// 8.5 启动下载历史定期清理（启动时清理一次 + 每小时清理一次）
 	srv.StartPeriodicCleanup()
 
@@ -446,10 +465,25 @@ func main() {
 		go openBrowser(url)
 	}
 
+	// 所有原生窗口共用一个 Windows 10 UI 线程：桌面便笺与桌宠不再各自
+	// 持有消息循环，退出顺序也由同一个 Host 明确管理。
+	nativeHost := winui.New()
+	if err := nativeHost.Start(); err != nil {
+		tray.FatalDialogf("初始化 Windows 原生窗口线程失败: %v", err)
+	}
+	defer nativeHost.Shutdown()
+
+	desktopNotes, err := desknote.New(nativeHost, nManager)
+	if err != nil {
+		tray.FatalDialogf("初始化桌面便笺失败: %v", err)
+	}
+	defer desktopNotes.Shutdown()
+
 	// 桌面宠物：原生 Win32 透明窗口（仅 Windows 生效，非 Windows no-op）。
 	// 展示、拖拽、点击、皮肤面板、经验漂浮都由本模块自绘，不再借用浏览器小窗口。
 	// 皮肤 PNG 直接从 embed.FS 直读，避免逐张走 HTTP 造成面板首屏卡顿。
 	if err := deskpet.Run(deskpet.Options{
+		Host:    nativeHost,
 		BaseURL: url,
 		LoadSprite: func(id string) ([]byte, error) {
 			return webFS.ReadFile("web/img/pet/skins/" + id + ".png")
@@ -469,6 +503,16 @@ func main() {
 	tray.Run(tray.Config{
 		Tooltip:       "Kairo",
 		OnOpenBrowser: func() { openBrowser(url) },
+		OnNewNote: func() {
+			if err := desktopNotes.NewNote(); err != nil {
+				log.Printf("desknote: 新建失败: %v", err)
+			}
+		},
+		OnToggleNotes: func() {
+			if err := desktopNotes.ToggleAll(); err != nil {
+				log.Printf("desknote: 切换显示失败: %v", err)
+			}
+		},
 		OnOpenPet: func() {
 			deskpet.Toggle()
 		},

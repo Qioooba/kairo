@@ -1,6 +1,8 @@
 package diagnostics
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -129,6 +131,9 @@ func TestCollect_ServerCheck_BadDNS(t *testing.T) {
 	rep := Collect(cfg, "/tmp/config.yaml", Options{
 		CheckServers:     true,
 		PerServerTimeout: 500 * time.Millisecond,
+		LookupHost: func(context.Context, string) ([]string, error) {
+			return nil, errors.New("deterministic NXDOMAIN")
+		},
 	})
 	if len(rep.Servers) != 1 {
 		t.Fatalf("期望 1 个 server 检查，实际 %d", len(rep.Servers))

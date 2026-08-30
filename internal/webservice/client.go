@@ -85,12 +85,12 @@ func Send(req SendRequest) SendResponse {
 		return SendResponse{Error: err.Error()}
 	}
 
-	encoding := strings.ToUpper(strings.TrimSpace(req.Encoding))
+	encoding := canonicalEncoding(req.Encoding)
 	if encoding == "" {
 		encoding = "UTF-8"
 	}
-	if encoding != "UTF-8" && encoding != "GBK" {
-		return SendResponse{Error: "encoding 仅支持 UTF-8 / GBK"}
+	if encoding != "UTF-8" && encoding != "GBK" && encoding != "GB2312" && encoding != "GB18030" {
+		return SendResponse{Error: "encoding 仅支持 UTF-8 / GBK / GB2312 / GB18030"}
 	}
 
 	soapVer := strings.TrimSpace(req.SOAPVersion)
@@ -107,7 +107,10 @@ func Send(req SendRequest) SendResponse {
 	}
 
 	// 请求体编码
-	bodyBytes, err := encodeBody(req.Body, encoding)
+	// 传输编码与 XML declaration 必须一致。否则选择 GBK 后报文头仍写 UTF-8，
+	// WebSphere/XFire 会按错误编码解析中文。
+	bodyForWire := syncXMLDeclarationEncoding(req.Body, encoding)
+	bodyBytes, err := encodeBody(bodyForWire, encoding)
 	if err != nil {
 		return SendResponse{Error: "请求体编码失败: " + err.Error()}
 	}
@@ -221,8 +224,12 @@ func Send(req SendRequest) SendResponse {
 
 // encodeBody 把请求体字符串按编码转成字节。
 func encodeBody(body, encoding string) ([]byte, error) {
-	if encoding == "GBK" {
+	switch canonicalEncoding(encoding) {
+	case "GBK", "GB2312":
 		enc := simplifiedchinese.GBK.NewEncoder()
+		return io.ReadAll(transform.NewReader(strings.NewReader(body), enc))
+	case "GB18030":
+		enc := simplifiedchinese.GB18030.NewEncoder()
 		return io.ReadAll(transform.NewReader(strings.NewReader(body), enc))
 	}
 	return []byte(body), nil
@@ -234,20 +241,29 @@ func encodeBody(body, encoding string) ([]byte, error) {
 // 因此当声明为 UTF-8（或未知 charset）但字节不是合法 UTF-8 时，自动回退 GBK 解码。
 func decodeResponseBody(raw []byte, contentType, reqEncoding string) string {
 	cs := parseCharset(contentType)
+	declared := xmlDeclaredEncodingBytes(raw)
+	// 老服务常把 HTTP charset 固定写成 GBK，但 XML declaration 和实际字节是
+	// UTF-8。声明为 UTF-8 且字节也确实合法时，以报文自身为准，避免中文乱码。
+	if canonicalEncoding(declared) == "UTF-8" && utf8.Valid(raw) {
+		return strings.TrimPrefix(string(raw), "\uFEFF")
+	}
+	if cs == "" {
+		cs = declared
+	}
 	if cs == "" {
 		cs = reqEncoding
 	}
-	upper := strings.ToUpper(cs)
+	upper := canonicalEncoding(cs)
 	switch upper {
-	case "UTF-8", "UTF8", "":
+	case "UTF-8", "":
 		if !utf8.Valid(raw) {
-			if s, ok := decodeGBK(raw); ok {
+			if s, ok := decodeChinese(raw, "GB18030"); ok {
 				return s
 			}
 		}
 		return string(raw)
 	case "GBK", "GB2312", "GB18030":
-		if s, ok := decodeGBK(raw); ok {
+		if s, ok := decodeChinese(raw, upper); ok {
 			return s
 		}
 		return string(raw)
@@ -257,7 +273,7 @@ func decodeResponseBody(raw []byte, contentType, reqEncoding string) string {
 		if utf8.Valid(raw) {
 			return string(raw)
 		}
-		if s, ok := decodeGBK(raw); ok {
+		if s, ok := decodeChinese(raw, "GB18030"); ok {
 			return s
 		}
 		return string(raw)
@@ -266,7 +282,14 @@ func decodeResponseBody(raw []byte, contentType, reqEncoding string) string {
 
 // decodeGBK 把字节按 GBK 解码，返回是否成功（transform 出错视为失败）。
 func decodeGBK(raw []byte) (string, bool) {
+	return decodeChinese(raw, "GBK")
+}
+
+func decodeChinese(raw []byte, encoding string) (string, bool) {
 	dec := simplifiedchinese.GBK.NewDecoder()
+	if canonicalEncoding(encoding) == "GB18030" {
+		dec = simplifiedchinese.GB18030.NewDecoder()
+	}
 	out, err := io.ReadAll(transform.NewReader(bytes.NewReader(raw), dec))
 	if err != nil {
 		return "", false

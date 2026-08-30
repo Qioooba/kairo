@@ -72,6 +72,7 @@
     success: { label: '成功',   cls: 'tag-ok' },
     failed:  { label: '失败',   cls: 'tag-err' },
     timeout: { label: '超时',   cls: 'tag-warn' },
+    canceled:{ label: '已取消', cls: 'tag-warn' },
     skipped: { label: '跳过',   cls: '' },
     running: { label: '运行中', cls: 'tag-busy' },
   };
@@ -251,11 +252,19 @@
       });
       if (t.running) runBtn.disabled = true;
 
+      const deleteBtn = el('button', {
+        class: 'btn btn-sm btn-danger', text: '删除', onclick: () => doDelete(t),
+      });
+      if (t.running) {
+        deleteBtn.disabled = true;
+        deleteBtn.title = '请等待任务结束后再删除';
+      }
+
       const actions = el('div', { class: 'reminder-actions' }, [
         runBtn,
         el('button', { class: 'btn btn-sm', text: '日志', onclick: () => openRuns(t) }),
         el('button', { class: 'btn btn-sm', text: '编辑', onclick: () => openEditor(t, loadAndRender) }),
-        el('button', { class: 'btn btn-sm btn-danger', text: '删除', onclick: () => doDelete(t) }),
+        deleteBtn,
       ]);
 
       return el('div', { class: 'reminder-row' + (t.enabled ? '' : ' disabled') }, [

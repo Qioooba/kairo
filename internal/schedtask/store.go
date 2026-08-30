@@ -92,7 +92,7 @@ func (s *Store) LoadRuns() (map[string][]RunRecord, error) {
 		return out, nil
 	}
 	var doc struct {
-		Version int                  `json:"version"`
+		Version int                    `json:"version"`
 		Runs    map[string][]RunRecord `json:"runs"`
 	}
 	if err := json.Unmarshal(data, &doc); err != nil {
@@ -111,7 +111,7 @@ func (s *Store) SaveRuns(runs map[string][]RunRecord) error {
 		runs = map[string][]RunRecord{}
 	}
 	doc := struct {
-		Version int                  `json:"version"`
+		Version int                    `json:"version"`
 		Runs    map[string][]RunRecord `json:"runs"`
 	}{Version: 1, Runs: runs}
 	return s.saveJSON(s.runsPath, ".sched-runs-*.tmp", doc)
@@ -139,6 +139,13 @@ func (s *Store) saveJSON(path, tmpPattern string, doc any) error {
 		_ = os.Remove(tmp.Name())
 		return fmt.Errorf("写临时文件失败: %w", err)
 	}
+	// 先把内容刷到磁盘，再做替换；避免系统异常退出后目标文件已经换名，
+	// 但数据仍只停留在缓存中。
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmp.Name())
+		return fmt.Errorf("同步临时文件失败: %w", err)
+	}
 	if err := tmp.Close(); err != nil {
 		_ = os.Remove(tmp.Name())
 		return fmt.Errorf("关闭临时文件失败: %w", err)
@@ -147,7 +154,7 @@ func (s *Store) saveJSON(path, tmpPattern string, doc any) error {
 		_ = os.Remove(tmp.Name())
 		return fmt.Errorf("收紧权限失败: %w", err)
 	}
-	if err := os.Rename(tmp.Name(), path); err != nil {
+	if err := replaceFile(tmp.Name(), path); err != nil {
 		_ = os.Remove(tmp.Name())
 		return fmt.Errorf("原子替换失败: %w", err)
 	}
