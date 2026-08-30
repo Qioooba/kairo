@@ -235,11 +235,20 @@ function register(runner, ctx) {
       if (after.mounted !== after.lazyCount) throw new Error(`存在未渲染的 section（${after.mounted}/${after.lazyCount}）`);
       if (after.emptyText > 0) throw new Error('存在空白 section: ' + after.emptyText);
 
-      const ver = await page.evaluate(() => {
-        const el = document.querySelector('#footer-version');
-        return el ? el.textContent.trim() : '';
+      const versions = await page.evaluate(async () => {
+        const footer = document.querySelector('#footer-version');
+        const badge = document.querySelector('.about-version-badge');
+        const config = await fetch('/api/config').then(r => r.json());
+        return {
+          api: config.version || '',
+          footer: footer ? footer.textContent.trim() : '',
+          badge: badge ? badge.textContent.trim() : ''
+        };
       });
-      ctx.aboutLazy = { early, after, footerVersion: ver };
+      if (!versions.api) throw new Error('/api/config 未返回版本号');
+      if (!versions.footer.includes(versions.api)) throw new Error(`页脚版本与 API 不一致: ${JSON.stringify(versions)}`);
+      if (versions.badge !== versions.api) throw new Error(`About 徽章版本与 API 不一致: ${JSON.stringify(versions)}`);
+      ctx.aboutLazy = { early, after, versions };
       await runner.screenshot(page, '31-s9-about-scrolled');
     });
   });

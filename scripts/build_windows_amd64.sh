@@ -21,7 +21,9 @@ if [[ -n "${1:-}" ]]; then
 elif [[ -f VERSION ]]; then
   VER="$(tr -d '[:space:]' < VERSION)"
 else
-  VER="v0.15"
+  echo "错误：未指定版本号，且未找到 VERSION 文件" >&2
+  echo "用法: $0 [版本号]  （或在仓库根目录维护 VERSION）" >&2
+  exit 1
 fi
 OUT_DIR="dist/kairo-${VER}"
 mkdir -p "${OUT_DIR}"

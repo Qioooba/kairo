@@ -1,6 +1,6 @@
 {
   "name": "kairo",
-  "version": "1.0.0",
+  "version": "0.16.0",
   "description": "<div align=\"center\">",
   "main": "playwright-e2e.js",
   "directories": {
@@ -9,6 +9,7 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "test:webservice": "node web/pages/webservice.test.js",
+    "check:version": "node scripts/check-version.js",
     "e2e": "node tests/e2e/index.js",
     "e2e:headed": "HEADLESS=false node tests/e2e/index.js",
     "e2e:report": "node tests/e2e/utils/report-generator.js",

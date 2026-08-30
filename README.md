@@ -9,7 +9,7 @@
 [![Go Version](https://img.shields.io/badge/Go-1.24%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-4F4F4F)](#)
 [![License](https://img.shields.io/badge/License-Internal%20Use-orange)](#)
-[![Status](https://img.shields.io/badge/Status-v0.15-success)](#)
+[![Status](https://img.shields.io/badge/Status-v0.16-success)](#)
 [![Dependencies](https://img.shields.io/badge/Deps-zero%20runtime-2ea44f)](#)
 [![Binary](https://img.shields.io/badge/Single%20Exe-%E2%9C%93-success)](#)
 [![SSH](https://img.shields.io/badge/SSH-5%20compat%20profile-6f42c1)](#)
@@ -370,7 +370,7 @@ v0.7 起实装的客户端静态工具（无后端改动）：
 │  │ http    │ webservice│ config │ commands │ downloads│ about       │ │
 │  │ timestamp│ cron    │ jsonpath│ compare  │ reminders│ sponsor     │ │
 │  └─────────┴─────────┴─────────┴──────────┴──────────┴─────────────┘ │
-│           IIFE 风格 · vanilla JS · 5 套主题 · 18 个页面（+ sftp-common.js）  │
+│           IIFE 风格 · vanilla JS · 5 套主题 · 22 个页面（+ sftp-common.js）  │
 │           xterm.js 终端（v0.10 起，独立 ssh.html 窗口）              │
 │           内嵌 SFTP 浏览器（v0.11+）+ 在线编辑 / 上传（v0.13.1+）     │
 └──────────────────────────────────────────────────────────────────────┘
@@ -658,9 +658,9 @@ GOOS=windows GOARCH=amd64 CGO_ENABLED=0 \
   -o Kairo_win10.exe .
 
 # 或用脚本（自动检测 vendor/ 是否存在）
-./scripts/build_windows_amd64.sh v0.15.0
-./scripts/package_windows.sh v0.15.0
-# → dist/kairo-v0.15.0-windows.zip
+./scripts/build_windows_amd64.sh v0.16.0
+./scripts/package_windows.sh v0.16.0
+# → dist/kairo-v0.16.0-windows.zip
 ```
 
 ### Win7 维护策略
@@ -802,7 +802,7 @@ systems:
 ```
 kairo/
 ├── main.go                            # 入口：解析 -workdir / 加载 config / 起 HTTP server / 注入 license & sponsor
-├── VERSION                            # 单源版本号 v0.14
+├── VERSION                            # 单源版本号 v0.16
 ├── config.yaml                        # 运行时配置
 ├── config.yaml.production.example
 ├── go.mod / go.sum                    # 依赖锁定（go 1.24）
@@ -930,6 +930,7 @@ kairo/
 
 | 版本 | 功能 |
 | --- | --- |
+| **v0.16** | Oracle/MySQL/Redis 数据库工作台 + Local/SFTP/FTP/FTPS 比较同步 + Windows 原生宠物/便笺 + WebService/日志/任务可靠性收口 |
 | **v0.14** | 投喂作者 Web UI + Sponsor 后端 + endpointclient 共享调用器 + About 12 section 懒渲染 |
 | **database-v1** | Oracle 11g / MySQL / Redis 数据库工作台；只读策略、连接池、流式结果、RBAC、审计与性能上限 |
 | **v0.13.1** | SSH 终端 SFTP 在线编辑 + 大文件分片上传 + UI 体验优化 + 8 项 Bug 修复 |
@@ -1047,7 +1048,35 @@ v0.11-rc1 起所有 `/api/*`（除 `/api/license/*`）都被 license 网关拦�
 
 ## <img src="docs/section-icons/changelog.svg" width="22" height="22" align="absmiddle"> Release Notes
 
-### v0.15（当前）— 宠物养成 + 定时任务 + SSH/HTTP 增强
+### v0.16（当前）— 综合运维工作台 + Windows 原生桌面 + 全链路质量收口
+
+#### 数据库与文件工作台
+
+- 新增 Oracle 11g / MySQL / Redis 数据库工作台：数据源与凭据管理、连接测试、元数据、单条只读 SQL、NDJSON 流式结果、UTF-8 CSV、Redis SCAN 与大 Key 有限预览。
+- 后端强制 RBAC、只读策略、超时、行数/单元格/总返回体上限；敏感凭据进入 OS keyring 或 AES-256-GCM 文件存储，审计不记录密码和完整查询结果。
+- 代码比对升级为 Local/SFTP/FTP/FTPS 多协议文件任务：扫描、比较、复制、同步、编码识别、冲突策略、进度和取消形成统一生命周期。
+
+#### Windows 原生桌面能力
+
+- 宠物悬浮窗迁移到 `internal/deskpet` Win32 透明窗口，移除 WebView/PowerShell 宿主；皮肤扩充至 108 款，激活码派生稳定宠物 ID。
+- 新增 `internal/desknote` 原生桌面便笺，与浏览器便笺共享 revision；并发修改显式冲突，不静默覆盖。
+- 定时任务按平台拆分 shell 和进程管理；Windows 使用 Job Object，在超时、取消和程序退出时终止完整子孙进程树。
+
+#### WebService、日志与跨平台兼容
+
+- WSDL/XSD 多文件导入支持 SOAP 1.1/1.2、UTF-16、GBK、GB2312、GB18030、递归 import/include；SOAP Header 支持逐行、JSON 与 curl。
+- 日志组合条件、命中窗口和大文件搜索统一目录规范化，兼容 Windows 盘符与远端 Linux/AIX POSIX 路径，同时保持 shell 注入 fail-closed。
+- 便笺提醒命令参数支持中文、空格路径、单/双引号和 Windows 反斜杠的可逆编辑。
+
+#### 质量门与升级要求
+
+- Go 全包测试与 `go vet` 通过；Windows 全量 E2E 为 `1045 passed / 0 failed / 159 条件跳过`，三分辨率矩阵 `42/42`，页面/控制台/网络错误为 0。
+- 新增 `package-lock.json`，`npm ci` 与 Playwright 版本可复现；E2E 使用隔离配置、Windows Mock SSH 和真实命令 fixture。
+- **Breaking Change**：主线基线升级到 Go 1.24+，正式支持 Windows 10/11；Windows 7 由 legacy 分支独立维护。
+
+完整的设计原则、架构调整、18 项分级修复、关键提交与升级注意见应用内「关于 → 版本演进史 → v0.16」。
+
+### v0.15 — 宠物养成 + 定时任务 + SSH/HTTP 增强
 
 #### 宠物系统
 

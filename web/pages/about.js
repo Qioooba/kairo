@@ -3,7 +3,7 @@
  *
  * 设计目标：
  *   - 把"关于"从单页简介升级为一份**带交互的产品技术白皮书**
- *   - 顶部 sticky 锚点导航 + 14 个版本卡片 (accordion 折叠) + 14 个数据区块
+ *   - 顶部 sticky 锚点导航 + 17 个版本卡片 (accordion 折叠) + 14 个数据区块
  *   - 内容 100% 由 commit log / 源码 / README 提取, 不注水
  *   - 几万字正文 + 折叠默认收起, 首屏不卡
  */
@@ -16,7 +16,7 @@
 
   // 与 internal/httpserver/httpserver.go 的 Version 常量保持一致；
   // 后端 /api/config 读取失败时回退到这里（FE-006）。
-  const VERSION = 'v0.15';
+  const VERSION = 'v0.16';
 
   // =====================================================================
   // SVG icon 字典 — 13 个 section icon (Win7 兼容, 不依赖 emoji 字体)
@@ -127,7 +127,7 @@
     { name: 'modules',      fn: renderModulesSection,      min: 800 },
     { name: 'comparison',   fn: renderComparisonSection,   min: 500 },
     { name: 'bugs',         fn: renderBugStoriesSection,   min: 700 },
-    { name: 'history',      fn: renderHistorySection,      min: 900 },  // changelog 14 版本卡
+    { name: 'history',      fn: renderHistorySection,      min: 900 },  // changelog 17 版本卡
     { name: 'faq',          fn: renderFaqSection,          min: 600 },
     { name: 'roadmap',      fn: renderRoadmapSection,      min: 500 }
   ];
@@ -217,16 +217,16 @@
   // §1. 核心数据看板
   // =====================================================================
   const stats = [
-    { label: '总代码量',             value: '60,000+', sub: 'Go 30K · 前端 30K (JS+CSS) · 0 npm 运行时',  tone: 'primary' },
-    { label: '代码行数 (Go)',         value: '30,000+', sub: '94 个源文件 · 25 个子包 · 含测试',          tone: 'primary' },
-    { label: '代码行数 (前端)',       value: '30,000+', sub: 'vanilla JS 24K + CSS 6K · 18 页面 · 零依赖', tone: 'accent'  },
-    { label: '提交次数',              value: '160',     sub: 'v0.1 → v0.15',                              tone: 'success' },
-    { label: '后端模块',              value: '25',      sub: 'internal/* (sshshell/webservice/license/reminder/browserpref/popup/endpointclient/sponsor/iconextract 等)', tone: 'primary' },
-    { label: '前端页面',              value: '18',      sub: 'web/pages/*.js (含 ssh/webservice/reminders/sponsor) + 1 共享模块 sftp-common', tone: 'accent'  },
-    { label: 'API 接口',              value: '90+',     sub: 'REST + SSE + WebSocket',                    tone: 'primary' },
-    { label: '测试用例 (Go)',         value: '740+',    sub: '73 个 _test.go · 单元 + 集成',              tone: 'success' },
+    { label: '总代码量',             value: '99,000+', sub: 'Go 68K · 前端 31K (JS+CSS) · 0 npm 运行时',  tone: 'primary' },
+    { label: '代码行数 (Go)',         value: '68,000+', sub: '259 个 Go 文件 · 36 个后端子包 · 含测试',    tone: 'primary' },
+    { label: '代码行数 (前端)',       value: '31,000+', sub: 'vanilla JS + CSS · 23 页面 · 零运行时依赖',   tone: 'accent'  },
+    { label: '提交次数',              value: '163',     sub: 'v0.1 → v0.16',                              tone: 'success' },
+    { label: '后端模块',              value: '36',      sub: '新增 dbconsole / comparefs / desknote / deskpet / textcodec / winui 等', tone: 'primary' },
+    { label: '前端页面',              value: '22',      sub: '22 个路由页面 + sftp-common 共享模块 + 全局浮层', tone: 'accent'  },
+    { label: 'API 接口',              value: '120+',    sub: 'REST + NDJSON + SSE + WebSocket',            tone: 'primary' },
+    { label: '测试用例 (Go)',         value: '1,000+',  sub: '105 个 _test.go · 单元 + 集成',             tone: 'success' },
     { label: '测试用例 (Node)',       value: '30+',     sub: 'web/app.test.js + sponsor 联调 · 单元',    tone: 'success' },
-    { label: 'E2E 场景 (Playwright)', value: '280+',    sub: '27 个脚本 · 16 测试套',                     tone: 'warn'    },
+    { label: 'E2E 场景 (Playwright)', value: '1,200+',  sub: 'Windows 全量 1045 通过 · 159 条件跳过 · 0 失败', tone: 'warn'    },
     { label: '修复缺陷',              value: '420+',    sub: 'P0/P1/P2 全量',                             tone: 'warn'    },
     { label: '安全设计点',            value: '14',      sub: 'fail-closed 全栈',                          tone: 'error'   },
     { label: 'SSH 兼容 profile',      value: '5',       sub: 'modern → legacy · 自动 fallback',           tone: 'primary' }
@@ -311,10 +311,13 @@
   ];
 
   // =====================================================================
-  // §4. 后端技术栈 (10 依赖逐项)
+  // §4. 后端技术栈 (13 依赖逐项)
   // =====================================================================
   const backendStack = [
-    { name: 'Go', version: '1.20+', role: '主语言', desc: 'go 1.20 directive，向下兼容 Win7 编译；goroutine 调度，静态二进制，零运行时依赖；45,000+ 行单仓代码（含测试）。' },
+    { name: 'Go', version: '1.24+', role: '主语言', desc: '主线面向 Windows 10/11、macOS 与 Linux；goroutine 调度，静态二进制，零运行时依赖；68,000+ 行 Go 代码（含测试）。' },
+    { name: 'github.com/sijms/go-ora/v2', version: 'v2.8.24', role: 'Oracle 驱动', desc: '纯 Go thin driver，无需 Oracle Instant Client；数据库工作台生产兼容目标为 Oracle 11g。' },
+    { name: 'github.com/go-sql-driver/mysql', version: 'v1.9.3', role: 'MySQL 驱动', desc: 'database/sql 连接池、只读查询、元数据与流式结果。' },
+    { name: 'github.com/redis/go-redis/v9', version: 'v9.20.0', role: 'Redis 客户端', desc: 'SCAN 分页、TTL 与类型化 Key 预览；大 Key 采用有限读取，避免阻塞和内存爆炸。' },
     { name: 'golang.org/x/crypto/ssh', version: 'v0.31.0', role: 'SSH 客户端', desc: '深度定制的 SSH 协议栈；5 套 KEX profile 自动 fallback；keyboard-interactive 认证；HostKey 指纹校验 (v0.9 起 fail-closed)。' },
     { name: 'github.com/pkg/sftp', version: 'v1.13.6', role: 'SFTP 子系统', desc: '文件 Open/Stat/Read。v0.4 起抽象出 RemoteFS 接口，支持 SFTPBackend + ShellBackend 双 backend 自动降级。' },
     { name: 'golang.org/x/text', version: 'v0.21.0', role: '字符编码', desc: 'simplifiedchinese.GBK / GB18030 透明编码转换；老 WebSphere / Oracle / AIX 上的 GBK 日志直读不乱码。' },
@@ -322,7 +325,7 @@
     { name: 'github.com/danieljoos/wincred', version: 'v1.2.3', role: 'Windows DPAPI', desc: 'Windows 平台 keyring 后端实现，由 go-keyring 间接依赖。' },
     { name: 'github.com/godbus/dbus/v5', version: 'v5.2.2', role: 'Linux Secret Service', desc: 'Linux 平台通过 D-Bus 与 GNOME Keyring / KWallet 通信，keyring 后端实现。' },
     { name: 'gopkg.in/yaml.v3', version: 'v3.0.1', role: '配置解析', desc: 'config.yaml 解析 + 原子写回；Schema 校验防止非法配置写入；trailing garbage 拒绝。' },
-    { name: 'golang.org/x/sys', version: 'v0.28.0', role: '系统调用', desc: '平台特定系统调用 (Windows Service / 信号 / 文件锁) 的跨平台封装。' },
+    { name: 'golang.org/x/sys', version: 'v0.30.0', role: '系统调用', desc: '平台特定系统调用；Windows Job Object、原生桌面窗口、托盘与进程树生命周期依赖该层。' },
     { name: '标准库', version: '—', role: '运行时', desc: 'net/http (HTTP server + SSE)、embed (web/ 静态资源内嵌)、context (取消传播)、os/exec、crypto/sha256、bufio。' }
   ];
 
@@ -335,7 +338,7 @@
     { name: 'api.js', desc: 'HTTP 客户端 — api(method, path, body) 统一封装；自动加 Bearer token；SSE EventSource 工厂；统一错误处理。' },
     { name: 'theme.js', desc: '主题切换 — dark / light / green / hc / xianxia（玄墨鎏金·武侠风）5 套主题，inline script 在 <head> 提前设 data-theme 防 FOUC。' },
     { name: 'auth.js', desc: '认证层 — 拉 /api/auth/status 探测；token cookie 管理；role-gated UI 显隐。' },
-    { name: 'pages/*.js', desc: '18 个页面 — home / websphere / files / ssh (v0.10) / formatter / commands / diagnostics / config / downloads / http / timestamp / cron / jsonpath / compare / webservice (v0.12) / reminders (v0.13) / sponsor (v0.14) / about。每个页面一个 IIFE，路由切换时整体替换 view。' },
+    { name: 'pages/*.js', desc: '22 个页面 — home / websphere / files / ssh / formatter / commands / diagnostics / config / downloads / http / timestamp / cron / jsonpath / compare / database / webservice / notes / reminders / tasks / pet / sponsor / about。每个页面一个 IIFE，路由切换时整体替换 view。' },
     { name: 'tail.js + tail.html', desc: '独立 tail 窗口 — 从主页面剥离的 tail 流，跟踪 SSE 不影响主页面操作；行级 DOM 节点池 + rAF 批量 flush (50ms/100 行)；v0.13 起支持 Ctrl/⌘+F 页面内搜索高亮，新到达日志自动应用当前搜索词。' },
     { name: 'preview.html', desc: '文件预览子窗口 — 单文件模态 + 新窗口双模式，支持文本 / GBK 编码自动识别；v0.13 起支持页面内搜索高亮 (TreeWalker 遍历文本节点，不破坏关键词高亮 span)。' },
     { name: 'vendor/search-hl.js', desc: '搜索高亮公共模块 (v0.13) — preview.html / tail.html / 上下文窗口三处共用；TreeWalker 遍历文本节点 + mark 标签包裹，Enter/Shift+Enter 跳转匹配，Esc 清除。' }
@@ -394,9 +397,9 @@
   // §9. 质量保障
   // =====================================================================
   const quality = [
-    { tier: 'L1 单元测试', tool: 'go test ./...', coverage: '500+ · >80%', detail: '60 个 _test.go 文件，覆盖 sshclient / sftpclient / sshshell / logquery / dlmanager / tailmgr / diff / downloads / credentials / formatter / config / diagnostics / audit / portreuse / webservice / httpserver 全栈。' },
-    { tier: 'L2 集成测试', tool: 'mock_sshd.py + fake-websphere', coverage: '12 场景', detail: 'Python helper 启动 in-process SSH server，注入 fake sftpDialer，验证 handler 全链路：列文件 / 搜索 / 上下文 / tail / 下载 / 凭据 / RBAC / 路径穿越 / hostkey 拒绝。' },
-    { tier: 'L3 E2E (Playwright)', tool: '8 个 playwright-*.js + 14 e2e/tests/*', coverage: '250+ 用例', detail: '真实浏览器自动化：多主题切换、HTTP 测试页、命令页、tail 高亮持久化、主题视觉一致性、全部功能页面截图回归；tests/e2e/tests/ 按页面切片组织。' },
+    { tier: 'L1 单元测试', tool: 'go test ./...', coverage: '1,000+ 测试函数', detail: '105 个 _test.go 文件，覆盖数据库只读策略、文件工作台、桌面状态、SSH/SFTP、日志、任务进程树、WebService、凭据、配置与 httpserver 全链路。' },
+    { tier: 'L2 集成测试', tool: 'mock_sshd.py + fake-websphere', coverage: 'Windows/Linux shell 双语义', detail: 'Python helper 启动 SSH server；Windows 自动使用 Git Bash/GNU 工具，验证列文件、组合搜索、上下文、tail、下载、凭据、RBAC、路径穿越、host key 与进程回收。' },
+    { tier: 'L3 E2E (Playwright)', tool: 'tests/e2e + 独立运行配置', coverage: '1,204 场景', detail: '真实 Windows Chromium 全量结果：1045 通过、0 失败、159 条件跳过；另以 1366×900、1920×1080、1024×768 跑 42 项页面矩阵，控制台/页面/网络错误均为 0。' },
     { tier: 'L4 手动验收', tool: 'docs/ACCEPTANCE.md + scripts/acceptance_run.py', coverage: '5b/5c/5d 全量', detail: '文件浏览器 / tail / 测试矩阵 / 完整业务路径逐项验收，每项可执行 / 可验证；scripts/acceptance_run.py 一键回归。' },
     { tier: 'L5 静态检查', tool: 'go vet + gofmt', coverage: '100%', detail: '提交前必跑；CI 流水线集成；不允许未格式化代码合入 main。' },
     { tier: 'L6 文档同步', tool: 'README + docs/RELEASE-NOTES + docs/qa/', coverage: '全量', detail: '代码改动同步更新文档；CHANGELOG 与 release notes 双轨；qa 目录存所有 E2E 截图与覆盖率报告；v0.9.0 rebrand 一次性清理 docs 全量。' }
@@ -727,7 +730,7 @@
     { q: '它和 SecureCRT + WinSCP + Postman 比有什么优势？', a: '三大优势：(1) 单一二进制 + Web UI，跨平台一致体验；(2) 受控操作而非任意 shell，安全可审计；(3) 内置 OS 钥匙串凭据管理 + 下载历史 + 诊断中心，是一个工具箱而不是三个工具拼凑。' },
     { q: '为什么不直接用 Ansible / Jenkins？', a: '定位完全不同。Ansible / Jenkins 是自动化平台，跑任务编排；Kairo 是工程师的"快进键"，跑交互式操作。两者互补，不是替代。' },
     { q: '需要安装吗？', a: '零安装。下载一个二进制文件（macOS / Linux / Windows）双击即跑，自动打开浏览器。无需 Python / Node / .NET 运行时。' },
-    { q: '支持哪些操作系统？', a: 'macOS (M1+ / Intel) / Linux (x86_64) / Windows (10/11) / Windows 7 (需 Go 1.20 编译)。三个平台同一份代码同一份二进制行为一致。' },
+    { q: '支持哪些操作系统？', a: '主线支持 macOS (Apple Silicon / Intel)、Linux (x86_64) 与 Windows 10/11。v0.16 起主线使用 Go 1.24+，Windows 7 转入 legacy 分支独立维护；原生宠物、桌面便笺、托盘与 Toast 属于 Windows 专属能力。' },
     { q: '支持 SSH 跳板机 / 堡垒机吗？', a: '支持。sshclient 包支持多跳代理配置（ProxyCommand / ProxyJump）；老堡垒机的 keyboard-interactive 认证也支持（v0.4 起加固）。' },
     { q: '密码存在哪里？安全吗？', a: '三种模式：(1) keyring（默认）→ macOS Keychain / Windows DPAPI / Linux Secret Service；(2) file → AES-256-GCM 加密本地文件 data/credentials.json，密钥绑 AAD 防止替换攻击；(3) disabled → 不持久化，每次手动输入。密码永不写进 audit.log / URL / 错误信息。' },
     { q: '怎么保证我不被中间人攻击？', a: 'v0.9 起 SSH host key 默认强校验（fail-closed）。每台 server 在 config.yaml 配 host_key_sha256，未配 + 未显式允许 insecure → Dial 立即拒绝，不发起网络连接。' },
@@ -762,9 +765,110 @@
   };
 
   // =====================================================================
-  // §13. 版本演进史 (16 个版本, 每版 ~2000 字, accordion 折叠)
+  // §13. 版本演进史 (17 个版本, accordion 折叠)
   // =====================================================================
 const changelog = [
+    {
+      version: 'v0.16',
+      date: '2026-08-30',
+      tag: '运维工作台 · Windows 原生桌面 · 全链路质量收口',
+      codename: 'Atlas · 万象归一',
+      size: 'xl',
+      headline: '从“日志与连接工具箱”升级为覆盖数据库、文件同步、桌面便笺、原生宠物与 WebService 的综合运维工作台，并用真实 Windows 全量回归完成跨平台质量收口。',
+      stats: { commits: 4, fixes: 18, additions: 12, breaks: 1 },
+      principles: [
+        '只读数据库边界必须由后端执行：Oracle/MySQL 只接受单条只读 SQL，Redis 只开放 SCAN 与有限预览；权限、超时、行数和返回体上限不能依赖前端约定。',
+        '桌面能力必须是真正的 Windows 原生能力：宠物与便笺使用 Win32 窗口、托盘和系统通知，不再依赖临时 WebView、浏览器弹窗或 PowerShell 宿主拼接。',
+        '长任务必须可观察、可取消、可回收：文件扫描/比较/复制/同步、SQL 流式查询、SOAP 请求与定时任务都要有明确生命周期，程序退出后不能遗留孤儿进程。',
+        '跨平台路径语义在入口处统一：Windows 盘符、反斜杠、POSIX 根路径、中文及空格路径先规范化再校验，安全边界不能随运行平台改变。',
+        '并发编辑不允许静默覆盖：浏览器便笺与桌面便笺共享 revision，发生版本冲突时显式返回并让用户决定保留哪一份。',
+        '大数据量按流处理：数据库结果、CSV 导出、大文件搜索、超大 Redis Key 与文件任务均采用分页、分批或流式传输，避免一次性读入内存。',
+        '编码是端到端契约：UTF-8、UTF-16、GBK、GB2312、GB18030 从文件/WSDL/SOAP 输入到响应展示统一解码，不能只在界面末端补转码。',
+        '自动化测试必须验证真实交互：选择器绑定稳定 id、命令参数真实执行、Windows 进程树真实终止，并覆盖多分辨率、控制台和网络错误。'
+      ],
+      architecture: {
+        layers: [
+          { name: '数据访问层', detail: '新增 internal/dbconsole，统一 Oracle 11g、MySQL 与 Redis 数据源、凭据、连接测试、元数据、只读策略、流式查询、CSV 导出和 RBAC 审计。' },
+          { name: '文件工作台层', detail: '新增 internal/comparefs 与 compare jobs，使用 Local/SFTP/FTP/FTPS 后端抽象承载扫描、比较、复制、同步、冲突策略、进度与取消。' },
+          { name: 'Windows 桌面层', detail: 'internal/deskpet、internal/desknote、internal/winui 与 tray/popup 组成原生桌面能力；透明窗口、置顶、拖拽、托盘和通知由 Win32 直接管理。' },
+          { name: '文本与服务层', detail: 'internal/textcodec 统一多编码识别；WebService 导入、SOAP 请求和日志搜索在同一编码与超时模型上工作。' },
+          { name: '任务与进程层', detail: 'schedtask 按平台拆分 shell 构造和进程管理；Windows 使用 Job Object，Unix 使用进程组，取消语义由 managedCommand 统一。' },
+          { name: '质量工程层', detail: '根目录 package-lock 固化 Playwright；Windows E2E fixture、Mock SSH、Mock 榜单和自研测试 runner 形成可复现的独立测试环境。' }
+        ],
+        retirements: [
+          '移除 pet-float.html、pet-float-legacy.html、pet-legacy.js 与 PowerShell/WebView 宠物宿主，统一切换到 internal/deskpet 原生实现。',
+          '主线不再承诺 Go 1.20 / Windows 7 构建；Win7 依赖树和验收矩阵转入 legacy 分支独立维护。',
+          '定时任务不再由 runner.go 运行时判断平台并拼 cmd/sh 参数，改为 shell_windows.go 与 shell_unix.go 编译期隔离。'
+        ]
+      },
+      features: [
+        { title: '数据库工作台 V1', desc: '新增数据源管理与独立 database 页面；Oracle 11g 使用纯 Go go-ora、MySQL 使用 go-sql-driver、Redis 使用 go-redis。支持连接测试、版本/延迟显示、Schema/表/视图/字段元数据、只读 SQL、NDJSON 分批结果、UTF-8 CSV 导出、Redis SCAN 与按类型有限预览。' },
+        { title: '数据库安全与资源上限', desc: '数据源增删改由 admin 控制，普通用户只能访问授权 source；SQL 经过单语句与只读策略校验，统一限制超时、最大行数、单元格和总返回体；凭据进入 OS keyring 或 AES-256-GCM 文件存储，审计只记录摘要不记录密码和完整敏感结果。' },
+        { title: '多协议文件比较与同步工作台', desc: 'compare 页面升级为任务化工作台，Local/SFTP/FTP/FTPS 使用统一后端；支持目录扫描、仅左/仅右/内容不同分类、编码感知文本比较、二进制判定、复制与双向同步、覆盖/跳过/重命名冲突策略、进度展示及主动取消。' },
+        { title: 'Windows 原生桌面便笺', desc: '新增 internal/desknote 与全局 notes/overlays 前端模块；便笺可置顶桌面、拖动、最小化、编辑和关闭，并与浏览器管理中心共享数据。revision 乐观并发控制阻止浏览器与桌面窗口互相静默覆盖。' },
+        { title: 'Windows 原生桌面宠物', desc: '新增 internal/deskpet：Win32 透明无边框窗口、像素精灵渲染、拖拽和吸边、右键菜单、气泡与状态动画；替代 WebView 悬浮窗后不再依赖浏览器内核。皮肤扩展到 108 款，激活码 SHA-256 派生稳定宠物 ID，重装不再生成重复排行榜账号。' },
+        { title: '宠物动画与榜单闭环', desc: 'skins.json 成为皮肤单一清单，petgen 同步生成资源；idle/drag/click/levelup/evolve/skin 状态机、轮询退避、经验与榜单服务端认可分形成完整闭环；About 卡片与侧栏“关于”共用同一解锁状态机。' },
+        { title: 'WebService 深度增强', desc: 'WSDL/XSD 支持多文件导入（单文件 4MB、合计 16MB）、递归 import/include、混合 SOAP 1.1/1.2 binding 与复杂类型继承；请求 Header 支持逐行、JSON、curl，提供 GBK/GB2312/GB18030/UTF-16 编解码、取消、超时和按次关闭历史保存。' },
+        { title: '日志组合查询与大文件检索', desc: '日志查询支持多关键词组合、命中窗口上下文、行号聚合与大文件安全搜索；命令构造统一目录规范化，Windows 本地 Git/MSYS sh 可识别盘符路径，远端 POSIX 输入仍保持严格注入拦截。' },
+        { title: '定时任务可靠执行', desc: 'Windows cmd.exe 使用 /D /S /C 原始命令行语义，正确保留中文、空格路径和内部引号；Job Object 在进程恢复前接管任务，超时、取消和 Kairo 退出时回收完整子孙树，输出自动识别 UTF-8/GBK。' },
+        { title: '便笺提醒命令参数', desc: '提醒编辑器新增可逆的参数解析/格式化器：单引号、双引号、空参数与空格路径可往返编辑，Windows 路径反斜杠不再被误当通用转义符；E2E 真实启动 Node fixture 验证保存参数与执行参数完全一致。' },
+        { title: 'Windows 独立 E2E 环境', desc: 'scripts/e2e-prepare-fixtures.js 生成 tmp/e2e/run/config.yaml，隔离用户配置、数据与端口；Mock SSH 在 Windows 使用 Git Bash 与 GNU 工具优先 PATH，Mock 榜单只监听 loopback，测试结束验证端口释放和无孤儿进程。' },
+        { title: '可复现前端测试与小屏布局', desc: '提交 package-lock.json 固化 Playwright 版本；自研 grep runner 支持祖先/后代 suite 匹配并在 hook 前跳过无关树；模态编辑器改为可滚动 body + 固定 footer，在 1024×768 与 1366×900 下仍能完成保存。' }
+      ],
+      fixes: {
+        p0: [
+          'Windows 定时任务由 os/exec 通用参数编码改为 cmd.exe 原生命令行规则，修复带引号和空格路径命令无法执行的问题。',
+          'Windows Job Object 保留 shell CmdLine 与创建标志，在恢复线程前完成进程归组，修复超时后孙进程继续存活和程序退出遗留孤儿进程。',
+          '数据库入口统一只读策略、RBAC、查询超时与结果上限，阻断多语句、写操作和未授权数据源访问。',
+          '浏览器/桌面便笺以 revision 检测并发更新，修复后写覆盖先写且用户无感知的数据丢失风险。'
+        ],
+        p1: [
+          'ResolvePaths 同时识别当前平台与 POSIX 绝对路径，修复 Windows 读取 Linux/AIX 配置时把 /var/... 错拼到 exe 目录。',
+          '下载 safeJoin 统一 slash 并拒绝反斜杠、绝对路径和卷名，修复跨平台迁移后路径边界不一致。',
+          '日志目录校验收口到 normalizeShellDir，补充换行、NUL、反斜杠与 shell 元字符检查，同时允许 Windows 本地盘符转换为 E:/...。',
+          'WebService 多编码入口统一 textcodec，修复 GB2312/GB18030/UTF-16 WSDL、XSD 与 SOAP 报文识别不一致。',
+          'HTTP 深度测试改用 #http2-* 精确控件，修复误点禁用 WebSocket 发送按钮造成的假失败与假通过。',
+          '宠物解锁点击状态从 app.js/home.js 分散实现收口到 pet.js，修复首页 About 卡片与侧栏 About 菜单行为不同。',
+          '提醒命令参数不再用空白正则直接 split，修复中文和空格路径被拆成多个参数、编辑后无法还原的问题。',
+          'Windows Mock SSH 使用 Git Bash 并把 GNU find/sort 提前到 PATH，修复系统 find.exe 参数冲突以及交互终端不可用。'
+        ],
+        p2: [
+          '跨包持久化测试新增 testutil.ReadPrivateFile：Unix 验证 0600，Windows 验证 ACL 平台可观察契约，避免把合成 FileMode 当真实权限。',
+          'SFTP/HTTP 错误路径测试改用“普通文件作为父目录”的确定性失败条件，不再依赖 Windows 系统盘 ACL。',
+          'WebSphere 搜索按钮补稳定 id，页面对象移除 emoji 文本耦合；命令卡测试按当前常显详情 UI 隔离导航状态。',
+          '任务编辑模态框增加视口最大高度和内部滚动，小分辨率下保存/取消按钮不再落到屏幕外。',
+          '主页“代码比对”文案与实际模块对齐，定时任务补“新”标记，避免入口说明与功能不一致。',
+          '根目录 npm 锁文件纳入版本控制，npm ci 从“缺少 lockfile 无法运行”恢复为确定性安装。'
+        ]
+      },
+      commits: [
+        { hash: 'ce72cf5', msg: 'feat(pet): 皮肤 V2 精灵图动画 62 款 + 桌面悬浮窗口兼容 + 审查修复' },
+        { hash: '057f30e', msg: 'feat(pet): v0.16 原生桌面宠物 deskpet 模块 + 皮肤扩充 46 款 + 宠物 ID 绑定激活码' },
+        { hash: 'ec06991', msg: 'feat: expand operations workbench and Windows desktop tools' },
+        { hash: '1cb8c7e', msg: 'fix: harden Windows runtime and e2e coverage' }
+      ],
+      performance: [
+        { label: 'Windows 全量 E2E', before: '缺少 lockfile，npm ci 无法复现', after: '1045 passed / 0 failed / 159 条件跳过', improve: '全量门禁通过' },
+        { label: '三分辨率页面矩阵', before: '小屏模态按钮可能越界', after: '42/42；横向溢出与页面/网络错误均为 0', improve: '1024×768 可完整操作' },
+        { label: 'Go 质量门', before: 'Windows 平台测试存在路径/权限/进程语义失败', after: 'go test 全包通过 + go vet 零告警', improve: '平台契约收口' },
+        { label: '任务取消', before: '仅终止直接 cmd 子进程', after: 'Job Object 回收完整进程树', improve: '孤儿进程 0' }
+      ],
+      breaking: [
+        '主线构建基线升级到 Go 1.24+，正式发布目标为 Windows 10/11；Windows 7 / Go 1.20 版本转入 legacy 分支，不再与主线共用依赖和验收矩阵。'
+      ],
+      migration: [
+        '从 v0.15 升级时建议先备份 config.yaml 与 data/；直接替换 Kairo_win10.exe 即可，现有系统、SSH、提醒、下载和宠物数据继续沿用。',
+        '新增数据库数据源后，凭据按 credential_store 写入 Windows Credential Manager 或 data 下的加密文件；不要把数据库密码直接写进 config.yaml。',
+        '数据库工作台默认 fail-closed：新建/修改/删除数据源要求 admin；普通用户必须在数据源 allowed_users 中获得授权。',
+        '首次打开原生桌面便笺会创建新的 notes 持久化状态；浏览器与桌面同时编辑发生 409 冲突时必须在界面选择保留版本，系统不会自动覆盖。',
+        '文件同步属于显式写操作：运行前确认源/目标方向和冲突策略；取消只停止尚未执行的步骤，已经完成的文件不会自动回滚。',
+        'WebService 上传限制调整为单文件 4MB、合计 16MB；旧项目与模板可直接读取，新编码字段缺失时按自动检测处理。',
+        '任务命令仍由本机 shell 执行；升级后 Windows 引号语义更严格。建议在任务编辑页重新打开并保存包含嵌套引号的历史任务，再执行一次手工验证。',
+        '生产部署继续只监听 127.0.0.1；需要远程访问时必须显式配置 auth token、角色和 allowed_ips，不能仅把 host 改为 0.0.0.0。',
+        '本版根目录新增 package-lock.json，仅用于开发/E2E 的确定性安装；Kairo 发布 exe 仍不需要 Node/npm 运行时。',
+        '发布验证基线：Go 1.24+ 执行 go test/go vet，npm ci 后运行 test:webservice 与 e2e，Windows 构建使用 -mod=vendor -trimpath -ldflags "-H windowsgui"。'
+      ]
+    },
     {
       version: 'v0.15',
       date: '2026-08-17',
@@ -1688,7 +1792,7 @@ const changelog = [
     // 后端技术栈
     const backendTitle = el('h3', { style: 'margin:0 0 12px 0; font-size:16px; display:flex; align-items:center; gap:8px;' }, [
       el('span', { unsafeHtml: svgIcon('smGear', 18) }),
-      document.createTextNode(' 后端 (Go 1.20+)')
+      document.createTextNode(' 后端 (Go 1.24+)')
     ]);
     const backendTable = el('div', { class: 'card', style: 'padding:0; overflow-x:auto;' });
     const tbl = el('table', { style: 'width:100%; border-collapse:collapse; font-size:13px;' });
@@ -1878,7 +1982,7 @@ const changelog = [
         ])
       ]));
     });
-    view.appendChild(renderSection('sec-modules', 'modules', '功能模块', '13 大模块 · 17 页面 · 95+ API 完整能力图谱', wrap));
+    view.appendChild(renderSection('sec-modules', 'modules', '功能模块', '13 个深度能力卡 · 22 页面 · 120+ API（v0.16 新模块详见版本史）', wrap));
   }
 
   // --- 版本演进史 (accordion) ---
@@ -1895,7 +1999,7 @@ const changelog = [
     wrap.appendChild(banner);
     wrap.appendChild(list);
 
-    view.appendChild(renderSection('sec-history', 'history', '版本演进史', 'v0.1 → v0.15 · 16 个版本 (含 v0.13.1 / v0.11-rc1) · 持续迭代 · 160 commit', wrap));
+    view.appendChild(renderSection('sec-history', 'history', '版本演进史', 'v0.1 → v0.16 · 17 个版本 (含 v0.13.1 / v0.11-rc1) · 持续迭代 · 163 commit', wrap));
   }
 
   function renderVersionCard(v, idx) {
@@ -2258,7 +2362,7 @@ const changelog = [
     wrap.appendChild(renderList('已规划 (next 1-2 versions)', roadmap.planned, 'var(--primary)', 'smTarget'));
     wrap.appendChild(renderList('调研中 (considering)', roadmap.considering, 'var(--text-dim)', 'smBulb'));
 
-    view.appendChild(renderSection('sec-roadmap', 'roadmap', '路线图', 'next 1-2 versions + considering · v0.15 以宠物能力深化为先', wrap));
+    view.appendChild(renderSection('sec-roadmap', 'roadmap', '路线图', 'next 1-2 versions + considering · v0.16 以工作台稳定性与真实环境兼容为先', wrap));
   }
 
   // --- Footer ---
@@ -2268,7 +2372,7 @@ const changelog = [
     f.appendChild(el('div', { style: 'position:absolute; top:-1px; left:0; right:0; height:1px; background:linear-gradient(90deg, transparent, var(--primary), var(--accent), var(--primary), transparent); background-size:200% 100%; animation:kairo-shimmer 3s linear infinite;' }));
     // 品牌行：渐变流光文字
     f.appendChild(el('div', { class: 'kairo-shimmer-text', style: 'font-size:17px; font-weight:800; margin-bottom:10px; background-image:repeating-linear-gradient(135deg, var(--primary) 0%, var(--accent) 50%, var(--primary) 100%); letter-spacing:0.5px; background-clip:text; -webkit-background-clip:text; color:transparent; -webkit-text-fill-color:transparent;', text: '© 2026 Kairo · 天命契机' }));
-    f.appendChild(el('div', { style: 'margin-top:6px; font-size:13px;', text: '技术栈：Go 1.20+ · 原生 JavaScript · x/crypto/ssh · pkg/sftp · single-binary deploy · zero runtime deps' }));
+    f.appendChild(el('div', { style: 'margin-top:6px; font-size:13px;', text: '技术栈：Go 1.24+ · 原生 JavaScript · x/crypto/ssh · pkg/sftp · single-binary deploy · zero runtime deps' }));
     f.appendChild(el('div', { style: 'margin-top:6px; font-size:12px;', text: '为运维效率而生 · 让每一次操作都有迹可循 · 让每一次配置都可审计 · 让每一次下载都可追溯' }));
     view.appendChild(f);
   }
