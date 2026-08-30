@@ -1,11 +1,12 @@
 package webservice
 
 import (
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"kairo/internal/testutil"
 )
 
 func newTestStore(t *testing.T) *Store {
@@ -136,13 +137,7 @@ func TestStore_FilesWrittenAtomic(t *testing.T) {
 	_, _, _ = s.SaveTemplate(Template{Name: "t", Group: "g"})
 	// 文件应存在且权限 0600
 	path := filepath.Join(dir, "soap_templates.json")
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatalf("file not written: %v", err)
-	}
-	if info.Mode().Perm() != 0o600 {
-		t.Errorf("perm = %o, want 0600", info.Mode().Perm())
-	}
+	testutil.ReadPrivateFile(t, path)
 }
 
 func TestStore_PersistsAcrossInstances(t *testing.T) {

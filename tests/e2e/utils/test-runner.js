@@ -205,8 +205,9 @@ class TestRunner {
     }
   }
 
-  async _runSuite(suite, ctx, parentHooks) {
+  async _runSuite(suite, ctx, parentHooks, ancestorMatched) {
     parentHooks = parentHooks || { beforeEach: [], afterEach: [] };
+    ancestorMatched = !!ancestorMatched;
     const suiteResults = {
       name: suite.name,
       tests: [],
@@ -214,8 +215,18 @@ class TestRunner {
       summary: { total: 0, passed: 0, failed: 0, skipped: 0 },
     };
 
+    if (this.grep && !ancestorMatched) {
+      const containsMatch = (candidate) => {
+        if (candidate.name.includes(this.grep)) return true;
+        if (candidate.tests.some((test) => test.name.includes(this.grep))) return true;
+        return candidate.suites.some(containsMatch);
+      };
+      if (!containsMatch(suite)) return suiteResults;
+    }
+
     const allBeforeEach = [...parentHooks.beforeEach, ...suite._beforeEach];
     const allAfterEach = [...suite._afterEach, ...parentHooks.afterEach];
+    const suiteMatched = ancestorMatched || !this.grep || suite.name.includes(this.grep);
 
     for (const hook of suite._beforeAll) {
       try {
@@ -226,7 +237,7 @@ class TestRunner {
     }
 
     for (const test of suite.tests) {
-      if (this.grep && !test.name.includes(this.grep) && !suite.name.includes(this.grep)) {
+      if (this.grep && !suiteMatched && !test.name.includes(this.grep)) {
         continue;
       }
 
@@ -311,7 +322,7 @@ class TestRunner {
       const subResult = await this._runSuite(subSuite, ctx, {
         beforeEach: allBeforeEach,
         afterEach: allAfterEach,
-      });
+      }, suiteMatched);
       suiteResults.suites.push(subResult);
       suiteResults.summary.total += subResult.summary.total;
       suiteResults.summary.passed += subResult.summary.passed;
@@ -348,10 +359,8 @@ class TestRunner {
     };
 
     for (const suite of this.suites) {
-      if (this.grep && !suite.name.includes(this.grep)) {
-        continue;
-      }
       const suiteResult = await this._runSuite(suite, runCtx);
+      if (this.grep && suiteResult.summary.total === 0) continue;
       results.suites.push(suiteResult);
       results.summary.total += suiteResult.summary.total;
       results.summary.passed += suiteResult.summary.passed;

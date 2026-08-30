@@ -3,9 +3,9 @@
 const BasePage = require('./base-page');
 
 const TAB_NAMES = {
-  files: '📁 文件 / 下载',
-  search: '🔍 搜索排障',
-  tail: '📺 实时跟踪',
+  files: '文件 / 下载',
+  search: '搜索排障',
+  tail: '实时跟踪',
 };
 
 class WebSpherePage extends BasePage {
@@ -333,9 +333,9 @@ class WebSpherePage extends BasePage {
         throw new Error('搜索输入框未找到: ' + JSON.stringify(summary.inputs.slice(0, 10)));
       }
       const btnSelectors = [
+        '#ws-search-btn',
         'button:has-text("开始搜索")',
         'button:has-text("搜索")',
-        '#ws-search-btn',
         '.ws-search-btn',
       ];
       const clicked = await this.clickFirstVisible(btnSelectors);
@@ -345,6 +345,7 @@ class WebSpherePage extends BasePage {
         throw new Error('搜索按钮未找到: ' + JSON.stringify(summary.buttons.slice(0, 15)));
       }
       const resultSelectors = [
+        '#ws-hits-card',
         '.server-group',
         '.search-result',
         '#ws-search-results',

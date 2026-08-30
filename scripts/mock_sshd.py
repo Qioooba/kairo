@@ -17,7 +17,6 @@ GNU→BSD 兼容：把 `find -printf 'fmt'` 翻译成 `find -exec stat -f 'fmt' 
 """
 
 import os
-import pty
 import re
 import select
 import signal
@@ -25,9 +24,14 @@ import socket
 import struct
 import subprocess
 import sys
-import termios
 import threading
-import fcntl
+import shutil
+
+IS_WINDOWS = os.name == "nt"
+if not IS_WINDOWS:
+    import fcntl
+    import pty
+    import termios
 
 import paramiko
 try:
@@ -61,6 +65,78 @@ PRINTF_RE = re.compile(r"""-printf\s+(['"])([^'"]+)\1""")
 # 交互式 shell session 表：channel id → master pty fd（用于 window-change resize）
 _shell_sessions = {}
 
+EXEC_SHELL = os.environ.get("MOCK_SSHD_SHELL") or shutil.which("sh") or "/bin/sh"
+INTERACTIVE_SHELL = os.environ.get("MOCK_SSHD_BASH") or shutil.which("bash") or EXEC_SHELL
+
+
+def shell_env():
+    env = os.environ.copy()
+    if IS_WINDOWS:
+        # Windows 自带 find.exe / sort.exe 与 POSIX 命令同名，但参数语义完全不同。
+        # mock 必须优先使用 Git for Windows 中与 sh 同目录的 GNU 工具。
+        shell_bin = os.path.dirname(os.path.abspath(EXEC_SHELL))
+        env["PATH"] = shell_bin + os.pathsep + env.get("PATH", "")
+    return env
+
+
+def _handle_shell_channel_windows(channel):
+    """Windows 上用管道连接 Git Bash，提供真实的交互 shell。"""
+    env = shell_env()
+    env["TERM"] = "xterm-256color"
+    env["PS1"] = "[mock] \\u@\\h:\\w\\$ "
+    flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    proc = subprocess.Popen(
+        [INTERACTIVE_SHELL, "--noprofile", "--norc", "-i"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        cwd=FAKE_ROOT,
+        env=env,
+        bufsize=0,
+        creationflags=flags,
+    )
+    stopped = threading.Event()
+
+    def pump_to_channel():
+        try:
+            while not stopped.is_set():
+                data = proc.stdout.read(4096)
+                if not data:
+                    break
+                channel.sendall(data)
+        except Exception:
+            pass
+
+    pump_thread = threading.Thread(target=pump_to_channel, daemon=True)
+    pump_thread.start()
+    channel.settimeout(0.2)
+    try:
+        while proc.poll() is None:
+            try:
+                data = channel.recv(4096)
+                if not data:
+                    break
+                proc.stdin.write(data)
+                proc.stdin.flush()
+            except socket.timeout:
+                continue
+            except Exception:
+                break
+    finally:
+        stopped.set()
+        try:
+            proc.terminate()
+            proc.wait(timeout=2)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+        try:
+            channel.close()
+        except Exception:
+            pass
+
 
 def _handle_shell_channel(channel):
     """处理"SSH 终端"发来的交互式 shell channel。
@@ -71,6 +147,9 @@ def _handle_shell_channel(channel):
     - 两个 goroutine：master → channel 发送、channel.recv → master 写入
     - 客户端断连/关 channel → SIGHUP 杀进程、close master fd
     """
+    if IS_WINDOWS:
+        return _handle_shell_channel_windows(channel)
+
     master_fd, slave_fd = pty.openpty()
     try:
         env = os.environ.copy()
@@ -220,7 +299,8 @@ def translate_for_mock(command):
                 command = command.replace('/\'', FAKE_FILES_ROOT + '/\'')
                 command = command.replace('"/', FAKE_FILES_ROOT + '/"')
 
-    command = gnu_to_bsd_find(command)
+    if sys.platform == "darwin":
+        command = gnu_to_bsd_find(command)
     return command
 
 
@@ -231,11 +311,12 @@ def run_command_streaming(command, on_stdout, on_stderr, timeout=600):
     """
     try:
         proc = subprocess.Popen(
-            ["/bin/sh", "-c", command],
+            [EXEC_SHELL, "-c", command],
             cwd=FAKE_ROOT,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             bufsize=0,
+            env=shell_env(),
         )
     except Exception as e:
         on_stderr(f"mock ssh: exec error: {e}\n".encode("utf-8", errors="replace"))

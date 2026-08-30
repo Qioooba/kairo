@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"os/exec"
-	"runtime"
 	"strings"
 	"unicode/utf8"
 )
@@ -40,15 +39,6 @@ func (b *tailBuffer) Write(p []byte) (int, error) {
 
 func (b *tailBuffer) String() string { return string(b.buf) }
 
-// shellCommand 按平台选 shell。Windows 用 cmd /C（.bat/.cmd 也能跑），
-// 其余用 sh -c（macOS / Linux 都有 POSIX sh）。
-func shellCommand(command string) (string, []string) {
-	if runtime.GOOS == "windows" {
-		return "cmd", []string{"/C", command}
-	}
-	return "sh", []string{"-c", command}
-}
-
 // decodeOutput 尽量转成可读 UTF-8：
 //   - 已是合法 UTF-8 → 原样返回（macOS / Linux 常态）；
 //   - Windows 中文系统 cmd 输出是 GBK → 转 UTF-8；
@@ -76,7 +66,6 @@ type runResult struct {
 // 超时或上层取消时会终止完整进程树。平台细节由 process_*.go 隔离：
 // Windows 使用 Job Object（无法加入 Job 时退回 taskkill /T），Unix 使用进程组。
 func run(ctx context.Context, t *Task) runResult {
-	name, args := shellCommand(t.Command)
 	tctx, cancel := context.WithTimeout(ctx, t.Timeout())
 	defer cancel()
 	if tctx.Err() != nil {
@@ -89,7 +78,7 @@ func run(ctx context.Context, t *Task) runResult {
 
 	// 不使用 exec.CommandContext：它只杀直接子进程，无法保证 cmd /C、sh -c
 	// 派生的整棵进程树被回收。managedCommand 统一负责 start/wait/kill-tree。
-	cmd := exec.Command(name, args...)
+	cmd := shellCommand(t.Command)
 	if dir := strings.TrimSpace(t.WorkDir); dir != "" {
 		cmd.Dir = dir
 	}

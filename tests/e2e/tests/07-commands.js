@@ -96,39 +96,26 @@ function register(runner, ctx) {
     });
   });
 
-  runner.describe('常用命令 - 卡片展开/收起', function () {
-    runner.it('应存在可展开的命令卡片', async function () {
-      const cards = await page.$$('.cmd-card, .command-card, .card');
+  runner.describe('常用命令 - 卡片详情', function () {
+    runner.it('应存在命令卡片', async function () {
+      await page.goto(baseUrl + '/#/commands', { waitUntil: 'domcontentloaded' });
+      await page.waitForSelector('.cmd-card', { state: 'visible' });
+      const cards = await page.$$('.cmd-card');
       if (cards.length === 0) throw new Error('命令卡片未找到');
     });
 
-    runner.it('应能展开卡片查看详情', async function () {
-      const cards = await page.$$('.cmd-card, .command-card, .card');
-      if (cards.length > 0) {
-        const expandBtn = await cards[0].$('button:has-text("展开"), button:has-text("详情"), .expand-btn');
-        if (expandBtn) {
-          await expandBtn.click();
-          await page.waitForTimeout(300);
-        } else {
-          await cards[0].click();
-          await page.waitForTimeout(300);
-        }
+    runner.it('卡片应直接展示语法与说明', async function () {
+      await page.goto(baseUrl + '/#/commands', { waitUntil: 'domcontentloaded' });
+      await page.waitForSelector('.cmd-card', { state: 'visible' });
+      const card = await page.$('.cmd-card');
+      if (!card) throw new Error('命令卡片未找到');
+      const syntax = await card.$('.cmd-syntax-box');
+      const detail = await card.$('.cmd-detail');
+      if (!syntax || !detail) throw new Error('命令卡片缺少语法或说明区');
+      if (!(await syntax.isVisible()) || !(await detail.isVisible())) {
+        throw new Error('命令卡片详情未直接展示');
       }
       await runner.screenshot(page, '07-commands-05-card-expand');
-    });
-
-    runner.it('应能收起卡片', async function () {
-      const cards = await page.$$('.cmd-card, .command-card, .card');
-      if (cards.length > 0) {
-        const collapseBtn = await cards[0].$('button:has-text("收起"), button:has-text("折叠"), .collapse-btn');
-        if (collapseBtn) {
-          await collapseBtn.click();
-          await page.waitForTimeout(300);
-        } else {
-          await cards[0].click();
-          await page.waitForTimeout(300);
-        }
-      }
     });
   });
 }

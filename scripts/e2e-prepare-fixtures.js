@@ -15,19 +15,20 @@
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
-const { execSync, spawn } = require('child_process');
+const { spawn } = require('child_process');
 
 const PROJECT_ROOT = path.resolve(__dirname, '..');
 
 // 测试专用目录
 const E2E_ROOT = path.join(PROJECT_ROOT, 'tmp', 'e2e');
+const E2E_RUN_DIR = path.join(E2E_ROOT, 'run');
 const FAKE_WS_DIR = path.join(E2E_ROOT, 'fake-websphere', 'opt', 'IBM', 'WebSphere', 'AppServer', 'profiles', 'AppSrv01', 'logs', 'server1');
 const FAKE_FILES_DIR = path.join(E2E_ROOT, 'files');
 const FAKE_DOWNLOADS_DIR = path.join(E2E_ROOT, 'downloads');
 
 const MOCK_SSH = {
   host: '127.0.0.1',
-  port: 2222,
+  port: 2225,
   username: 'test',
   password: 'test'
 };
@@ -230,28 +231,38 @@ function generateTestConfig() {
   console.log('\n==> 生成测试专用配置...');
 
   // 把 E2E_ROOT 路径转换为适合 YAML 的格式
-  const wsRoot = path.join(E2E_ROOT, 'fake-websphere');
-  const filesRoot = FAKE_FILES_DIR;
   const downloadsRoot = FAKE_DOWNLOADS_DIR;
 
   const config = `# E2E 测试专用配置
 # 生成时间: ${new Date().toISOString()}
 
-# 服务端口
-port: 18092
+app:
+  name: "Kairo E2E"
+  host: "127.0.0.1"
+  port: 18092
+  auto_open_browser: false
+  download_dir: "${downloadsRoot.replace(/\\/g, '/')}"
+  log_dir: "./logs"
+  data_dir: "./data"
+  auto_start: false
+  enable_free_file_browser: true
+  free_file_roots: ["*"]
+  allow_insecure_host_key: true
+  credential_store: disabled
+  kairo: "111222"
+  allowed_download_roots: ["${downloadsRoot.replace(/\\/g, '/')}"]
+  compare_allowed_roots: ["*"]
 
-# 认证（测试用）
-auth:
-  enabled: true
-  token: "e2e-test-token-12345678"
-
-# Mock SSH 服务器
-ssh:
-  mock_enabled: true
-  default_host: "127.0.0.1"
-  default_port: 2222
-  default_username: "test"
-  default_password: "test"
+internal_endpoints:
+  sponsor_leaderboard:
+    primary: "http://127.0.0.1:18093/credit/httpInterface"
+    auth: "TEST_TOKEN_123"
+    timeout: 2s
+  # 关闭的本地端口用于稳定验证宠物榜无服务时的快速降级。
+  pet_leaderboard:
+    primary: "http://127.0.0.1:1/credit/httpInterface"
+    secondary: "http://127.0.0.1:2/credit/httpInterface"
+    timeout: 200ms
 
 # 业务系统配置
 systems:
@@ -261,54 +272,31 @@ systems:
       - name: "mock-websphere"
         type: "websphere"
         host: "127.0.0.1"
-        port: 2222
+        port: ${MOCK_SSH.port}
         username: "test"
         password: "test"
+        auth_type: "password"
+        ssh_profile: "modern"
         log_paths:
-          - "/opt/IBM/WebSphere/AppServer/profiles/AppSrv01/logs/server1"
-      - name: "mock-files"
-        type: "ftp"
-        host: "127.0.0.1"
-        port: 2222
-        username: "test"
-        password: "test"
-        root: "/"
+        log_dirs:
+          - name: "AppSrv01 server1"
+            path: "/opt/IBM/WebSphere/AppServer/profiles/AppSrv01/logs/server1"
+            patterns: ["SystemOut*.log", "SystemErr*.log", "*.log"]
+            encoding: "utf-8"
 
-# 文件浏览配置
-file_browser:
-  enabled: true
-  free_mode: true
-  free_file_roots:
-    - "${filesRoot.replace(/\\/g, '/')}"
-  allowed_download_roots:
-    - "${downloadsRoot.replace(/\\/g, '/')}"
-
-# WebSphere 日志路径映射（让 mock SSH 能访问）
-websphere:
-  log_root: "${wsRoot.replace(/\\/g, '/')}"
-  path_mapping:
-    "/opt/IBM/WebSphere/AppServer/profiles/AppSrv01/logs/server1":
-      "${wsRoot.replace(/\\/g, '/')}/opt/IBM/WebSphere/AppServer/profiles/AppSrv01/logs/server1"
-
-# 下载配置
-downloads:
-  dir: "${downloadsRoot.replace(/\\/g, '/')}"
-  retention_days: 7
-
-# 日志配置
-logging:
-  level: "warn"
-
-# 开发模式
-dev:
-  enabled: true
-  mock_ssh_auto_start: false
+search:
+  default_latest_files: 3
+  max_matches: 200
+  default_context_lines: 30
+  timeout_seconds: 10
+  max_concurrency: 2
 `;
 
-  const configPath = path.join(E2E_ROOT, 'config.e2e.yaml');
+  ensureDir(E2E_RUN_DIR);
+  const configPath = path.join(E2E_RUN_DIR, 'config.yaml');
   try {
     fs.writeFileSync(configPath, config, 'utf8');
-    console.log('  创建: config.e2e.yaml');
+    console.log('  创建: run/config.yaml');
     console.log('  ✅ 测试专用配置已生成');
     return configPath;
   } catch (e) {
@@ -410,13 +398,20 @@ function startMockSSH() {
   }
 
   try {
-    const proc = spawn('python3', [mockScript, '--port', String(MOCK_SSH.port)], {
+    const python = process.platform === 'win32' ? 'py' : 'python3';
+    const pythonArgs = process.platform === 'win32' ? ['-3', mockScript] : [mockScript];
+    const proc = spawn(python, pythonArgs, {
       cwd: PROJECT_ROOT,
-      detached: true,
-      stdio: 'ignore'
+      detached: false,
+      stdio: 'inherit',
+      env: {
+        ...process.env,
+        MOCK_SSHD_PORT: String(MOCK_SSH.port),
+        MOCK_SSHD_PASSWORD: MOCK_SSH.password,
+        FAKE_ROOT: path.join(E2E_ROOT, 'fake-websphere'),
+        FAKE_FILES_ROOT: FAKE_FILES_DIR,
+      },
     });
-
-    proc.unref();
 
     // 等待服务启动
     return new Promise((resolve) => {
@@ -442,13 +437,7 @@ function stopMockSSH() {
     const client = new net.Socket();
 
     client.connect(MOCK_SSH.port, MOCK_SSH.host, () => {
-      // 找到进程并杀掉
-      try {
-        execSync(`lsof -ti:${MOCK_SSH.port} | xargs kill 2>/dev/null || true`);
-        console.log('  ✅ Mock SSH 已停止');
-      } catch (e) {
-        console.log('  停止命令执行失败（非致命）');
-      }
+      console.log('  Mock SSH 正在运行；请由启动它的测试调度器关闭进程');
       client.destroy();
       resolve();
     });
@@ -483,7 +472,7 @@ async function main() {
     console.log('\n[清理模式] 删除 E2E 测试目录...');
     try {
       if (fs.existsSync(E2E_ROOT)) {
-        execSync(`rm -rf "${E2E_ROOT}"`);
+        fs.rmSync(E2E_ROOT, { recursive: true, force: true });
         console.log('  ✅ 已删除:', E2E_ROOT);
       }
     } catch (e) {
@@ -500,7 +489,7 @@ async function main() {
   if (configPath) {
     console.log('\n  测试专用配置路径:', configPath);
     console.log('\n  启动 Kairo 时使用:');
-    console.log(`    CONFIG_PATH="${configPath}" npm start`);
+    console.log(`    将 Kairo 可执行文件放到 ${E2E_RUN_DIR} 后启动`);
   }
 
   // 检查 Mock SSH
@@ -532,7 +521,7 @@ async function main() {
     }
 
     console.log('\n  下一步:');
-    console.log(`    CONFIG_PATH="${configPath}" npm start`);
+    console.log(`    将 Kairo 可执行文件放到 ${E2E_RUN_DIR} 后启动`);
     console.log('\n  或运行:');
     console.log('    bash scripts/e2e.sh --with-mock');
   }
@@ -549,6 +538,7 @@ if (require.main === module) {
 
 module.exports = {
   E2E_ROOT,
+  E2E_RUN_DIR,
   FAKE_WS_DIR,
   FAKE_FILES_DIR,
   FAKE_DOWNLOADS_DIR,

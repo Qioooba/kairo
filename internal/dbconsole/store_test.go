@@ -1,9 +1,10 @@
 package dbconsole
 
 import (
-	"os"
 	"path/filepath"
 	"testing"
+
+	"kairo/internal/testutil"
 )
 
 func testSource(name string) Source {
@@ -30,12 +31,9 @@ func TestStoreRoundTripAndAtomicFailure(t *testing.T) {
 	if created.ID == "" || len(created.AllowedUsers) != 2 || created.AllowedUsers[0] != "alice" {
 		t.Fatalf("defaults/normalization failed: %#v", created)
 	}
-	raw, err := os.ReadFile(filepath.Join(dir, "database-sources.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if os.FileMode(0o600) != mustMode(t, filepath.Join(dir, "database-sources.json")) || len(raw) == 0 {
-		t.Fatalf("source file must be non-empty and 0600")
+	raw := testutil.ReadPrivateFile(t, filepath.Join(dir, "database-sources.json"))
+	if len(raw) == 0 {
+		t.Fatal("source file must be non-empty")
 	}
 
 	// Point the writer at an existing directory so Rename fails. The update must
@@ -77,13 +75,4 @@ func TestSourceUserAllowedIsFailClosed(t *testing.T) {
 	if !source.UserAllowed("alice", "user") {
 		t.Fatal("explicit wildcard should grant regular users")
 	}
-}
-
-func mustMode(t *testing.T, path string) os.FileMode {
-	t.Helper()
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return info.Mode().Perm()
 }

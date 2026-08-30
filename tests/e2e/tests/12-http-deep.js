@@ -10,6 +10,18 @@
 
 function register(runner, ctx) {
   const { page, baseUrl } = ctx;
+  const methodSelector = '#http2-method';
+  const urlSelector = '#http2-url';
+  const sendSelector = '#http2-url + .http2-send-btn';
+  const headersSelector = '.http2-main > .http2-card:nth-child(2)';
+
+  async function sendRequest() {
+    await page.click(sendSelector);
+    await page.waitForFunction((selector) => {
+      const button = document.querySelector(selector);
+      return button && !button.disabled;
+    }, sendSelector, { timeout: 20000 });
+  }
 
   runner.describe('HTTP 接口测试 - 深度', function () {
     runner.beforeEach(async function () {
@@ -18,8 +30,8 @@ function register(runner, ctx) {
     });
 
     runner.it('页面加载成功', async function () {
-      const hasMethod = await page.$('select[id*="method"], select[class*="method"]');
-      const hasUrl = await page.$('input[placeholder*="URL"], input[id*="url"], input[placeholder*="url"]');
+      const hasMethod = await page.$(methodSelector);
+      const hasUrl = await page.$(urlSelector);
       if (!hasMethod && !hasUrl) {
         const bodyText = await page.evaluate(() => document.body.innerText.trim().substring(0, 200));
         throw new Error('HTTP 测试页面未正确加载: ' + bodyText);
@@ -29,62 +41,58 @@ function register(runner, ctx) {
 
     runner.it('发送 GET 请求到本机接口', async function () {
       // 设置方法
-      const methodSelect = await page.$('select[id*="method"], select[class*="method"]');
+      const methodSelect = await page.$(methodSelector);
       if (methodSelect) {
         await methodSelect.selectOption('GET');
       }
       await page.waitForTimeout(200);
 
       // 设置 URL
-      const urlInput = await page.$('input[placeholder*="URL"], input[id*="url"]');
+      const urlInput = await page.$(urlSelector);
       if (urlInput) {
         await urlInput.fill(baseUrl + '/api/config');
       }
       await page.waitForTimeout(200);
 
       // 点击发送
-      const sendBtn = await page.$('button:has-text("发送"), button:has-text("请求"), button:has-text("Send")');
-      if (sendBtn) await sendBtn.click();
-      await page.waitForTimeout(2000);
+      await sendRequest();
 
       await runner.screenshot(page, '14-http-02-get-local');
     });
 
     runner.it('发送 POST 请求到格式化接口', async function () {
-      const methodSelect = await page.$('select[id*="method"], select[class*="method"]');
+      const methodSelect = await page.$(methodSelector);
       if (methodSelect) {
         await methodSelect.selectOption('POST');
       }
       await page.waitForTimeout(200);
 
-      const urlInput = await page.$('input[placeholder*="URL"], input[id*="url"]');
+      const urlInput = await page.$(urlSelector);
       if (urlInput) {
         await urlInput.fill(baseUrl + '/api/format/json');
       }
       await page.waitForTimeout(200);
 
       // 设置 body
-      const bodyInput = await page.$('textarea[name*="body"], textarea[id*="body"], textarea[placeholder*="body"]');
+      const bodyInput = await page.$('#http2-body');
       if (bodyInput) {
         await bodyInput.fill(JSON.stringify({ action: 'format', data: '{"name":"test"}' }));
       }
       await page.waitForTimeout(200);
 
-      const sendBtn = await page.$('button:has-text("发送"), button:has-text("请求")');
-      if (sendBtn) await sendBtn.click();
-      await page.waitForTimeout(2000);
+      await sendRequest();
 
       await runner.screenshot(page, '14-http-03-post-format');
     });
 
     runner.it('设置 Headers', async function () {
       // 点击添加 header 按钮
-      const addHeaderBtn = await page.$('button:has-text("添加 Header"), button:has-text("+ Header"), button:has-text("Headers")');
+      const addHeaderBtn = await page.$(headersSelector + ' .http2-kv-add');
       if (addHeaderBtn) await addHeaderBtn.click();
       await page.waitForTimeout(300);
 
       // 填写 header
-      const headerInputs = await page.$$('input[placeholder*="Header"], input[placeholder*="header"]');
+      const headerInputs = await page.$$(headersSelector + ' .kv-key, ' + headersSelector + ' .kv-val');
       if (headerInputs.length >= 2) {
         await headerInputs[0].fill('Content-Type');
         await headerInputs[1].fill('application/json');
@@ -96,11 +104,11 @@ function register(runner, ctx) {
 
     runner.it('重复 Header 验证', async function () {
       // 添加第一个 header
-      let addHeaderBtn = await page.$('button:has-text("添加 Header"), button:has-text("+ Header")');
+      let addHeaderBtn = await page.$(headersSelector + ' .http2-kv-add');
       if (addHeaderBtn) await addHeaderBtn.click();
       await page.waitForTimeout(300);
 
-      let headerInputs = await page.$$('input[placeholder*="Header"], input[placeholder*="header"]');
+      let headerInputs = await page.$$(headersSelector + ' .kv-key, ' + headersSelector + ' .kv-val');
       if (headerInputs.length >= 2) {
         await headerInputs[0].fill('X-Custom-Header');
         await headerInputs[1].fill('value1');
@@ -108,11 +116,11 @@ function register(runner, ctx) {
       await page.waitForTimeout(200);
 
       // 添加重复的 header
-      addHeaderBtn = await page.$('button:has-text("添加 Header"), button:has-text("+ Header")');
+      addHeaderBtn = await page.$(headersSelector + ' .http2-kv-add');
       if (addHeaderBtn) await addHeaderBtn.click();
       await page.waitForTimeout(300);
 
-      headerInputs = await page.$$('input[placeholder*="Header"], input[placeholder*="header"]');
+      headerInputs = await page.$$(headersSelector + ' .kv-key, ' + headersSelector + ' .kv-val');
       if (headerInputs.length >= 4) {
         await headerInputs[2].fill('X-Custom-Header');
         await headerInputs[3].fill('value2');
@@ -124,15 +132,13 @@ function register(runner, ctx) {
 
     runner.it('历史记录存在', async function () {
       // 先发送一个请求
-      const urlInput = await page.$('input[placeholder*="URL"], input[id*="url"]');
+      const urlInput = await page.$(urlSelector);
       if (urlInput) {
         await urlInput.fill(baseUrl + '/api/config');
       }
       await page.waitForTimeout(200);
 
-      const sendBtn = await page.$('button:has-text("发送"), button:has-text("请求")');
-      if (sendBtn) await sendBtn.click();
-      await page.waitForTimeout(1500);
+      await sendRequest();
 
       // 检查历史记录
       const historyPanel = await page.$('[class*="history"], [class*="history"], [id*="history"]');
@@ -142,15 +148,13 @@ function register(runner, ctx) {
     });
 
     runner.it('响应高亮检查', async function () {
-      const urlInput = await page.$('input[placeholder*="URL"], input[id*="url"]');
+      const urlInput = await page.$(urlSelector);
       if (urlInput) {
         await urlInput.fill(baseUrl + '/api/config');
       }
       await page.waitForTimeout(200);
 
-      const sendBtn = await page.$('button:has-text("发送"), button:has-text("请求")');
-      if (sendBtn) await sendBtn.click();
-      await page.waitForTimeout(2000);
+      await sendRequest();
 
       // 检查响应是否语法高亮
       const responsePanel = await page.$('[class*="response"], [class*="result"], pre, code');
@@ -163,15 +167,13 @@ function register(runner, ctx) {
     });
 
     runner.it('状态码显示', async function () {
-      const urlInput = await page.$('input[placeholder*="URL"], input[id*="url"]');
+      const urlInput = await page.$(urlSelector);
       if (urlInput) {
         await urlInput.fill(baseUrl + '/api/config');
       }
       await page.waitForTimeout(200);
 
-      const sendBtn = await page.$('button:has-text("发送"), button:has-text("请求")');
-      if (sendBtn) await sendBtn.click();
-      await page.waitForTimeout(2000);
+      await sendRequest();
 
       // 查找状态码
       const statusCode = await page.evaluate(() => {

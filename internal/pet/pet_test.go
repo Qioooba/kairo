@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"kairo/internal/audit"
+	"kairo/internal/testutil"
 )
 
 // TestEnable_Idempotent 解锁幂等：解锁前 false、解锁后 true、文件已创建。
@@ -159,13 +160,7 @@ func TestSigKey_AutoGenerate(t *testing.T) {
 		t.Fatalf("NewEngine: %v", err)
 	}
 	keyPath := filepath.Join(dir, ".petkey")
-	info, err := os.Stat(keyPath)
-	if err != nil {
-		t.Fatalf(".petkey 未创建: %v", err)
-	}
-	if info.Mode().Perm() != 0o600 {
-		t.Fatalf(".petkey 权限应为 0600, 实际 %o", info.Mode().Perm())
-	}
+	testutil.ReadPrivateFile(t, keyPath)
 	if _, err := e1.Enable(); err != nil {
 		t.Fatalf("Enable: %v", err)
 	}

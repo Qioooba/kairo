@@ -12,9 +12,10 @@
  */
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
-const RUN_DIR = process.env.KAIRO_RUN_DIR || '/tmp/kairo-review-2026-08/run';
+const RUN_DIR = process.env.KAIRO_RUN_DIR || path.join(os.tmpdir(), 'kairo-review-2026-08', 'run');
 const PROFILE_FILE = path.join(RUN_DIR, 'data', 'ssh_compat_profiles.json');
 
 async function apiJSON(page, method, url, body) {

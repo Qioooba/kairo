@@ -71,14 +71,16 @@
       { id: 'compare', name: '代码比对', desc: '文本 / 文件 / 文件夹级 diff 差异对比，支持多种视图模式', icon: 'git-compare' },
       { id: 'commands', name: '常用命令速查', desc: 'Linux / Git / Docker / Oracle / MySQL / Redis / Nginx 等 · 实时搜索 + 一键复制', icon: 'square-terminal' },
       { id: 'notes/list', name: '便笺', desc: '随手记录、跨页悬浮，可置顶到桌面或设置定时提醒', icon: 'sticky-note' },
-      { id: 'tasks', name: '定时任务', desc: 'cron 调度执行本地命令：SVN / Git 定时同步、脚本自动运行', icon: 'timer' },
+      { id: 'tasks', name: '定时任务', desc: 'cron 调度执行本地命令：SVN / Git 定时同步、脚本自动运行', icon: 'timer', tag: 'new', tagText: '新' },
     ];
 
     // 「其他」分区：sponsor (v0.14 新增) 在前，about 在后
     // 跟 web/index.html 侧栏 nav-sep "其他" 分组顺序保持一致
     const otherTools = [
       { id: 'sponsor', name: '投喂作者', desc: '咖啡续命小站 · 续命恩人榜 · 二维码打赏', icon: 'coffee', tag: 'new', tagText: '新' },
-      { id: 'about', name: '关于', desc: '版本信息、技术架构、数据统计', icon: 'info' },
+      { id: 'about', name: '关于', desc: '版本信息、技术架构、数据统计', icon: 'info', onCardClick: () => {
+        if (Kairo.pet && Kairo.pet.registerUnlockClick) Kairo.pet.registerUnlockClick();
+      } },
     ];
 
     view.appendChild(Kairo.core.el('div', { class: 'section-title mt-4', style: 'font-size:14px;color:var(--text-dim);' }, '更多工具'));

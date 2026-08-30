@@ -236,9 +236,12 @@ func TestZipFiles_BadDest(t *testing.T) {
 	if err := os.WriteFile(src, []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// 写到 /nonexistent/xx.zip（中间目录不存在）→ zipFiles 先 MkdirAll 再 OpenFile
-	// 但 MkdirAll 失败会报错
-	if err := zipFiles([]string{src}, "/nonexistent_dir_xyz_123/xx.zip"); err == nil {
+	// 普通文件不能作为父目录；该失败不依赖当前用户对系统根目录的权限。
+	blocker := filepath.Join(dir, "not-a-directory")
+	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := zipFiles([]string{src}, filepath.Join(blocker, "xx.zip")); err == nil {
 		t.Error("非法目标路径应报错")
 	}
 }

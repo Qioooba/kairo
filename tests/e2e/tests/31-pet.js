@@ -9,9 +9,10 @@
  */
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
-const RUN_DIR = process.env.KAIRO_RUN_DIR || '/tmp/kairo-review-2026-08/run';
+const RUN_DIR = process.env.KAIRO_RUN_DIR || path.join(os.tmpdir(), 'kairo-review-2026-08', 'run');
 
 async function apiJSON(page, method, url, body) {
   return page.evaluate(async ({ method, url, body }) => {

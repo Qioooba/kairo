@@ -6142,8 +6142,18 @@ input.sftp-autofollow-cb {
   flex-direction: column;
   gap: 14px;
   color: var(--text);
+  max-height: calc(100vh - 40px);
+  overflow: hidden;
 }
 .modal-title { font-size: 16px; font-weight: 600; color: var(--text); }
+.modal-card > .editor-body {
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+.modal-card > .editor-footer {
+  flex: 0 0 auto;
+}
 
 /* ===== 便笺：全局悬浮编辑器 + 管理中心 ===== */
 body.has-open-overlay { overflow: hidden; }

@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -602,7 +603,12 @@ func safeJoin(rootDir, name string) (string, error) {
 	if name == "" {
 		return "", errors.New("name 不能为空")
 	}
-	if strings.Contains(name, "\\") || filepath.IsAbs(name) {
+	// 下载索引中的 name 使用 slash 作为平台无关分隔符。不能只依赖
+	// filepath.IsAbs：它在 Windows 上不把 `/etc/passwd` 视为绝对路径，
+	// 在 Unix 上也不认识 `C:\\Windows`。先统一分隔符，再同时检查
+	// URL/POSIX 根路径和当前平台卷名，保证跨平台迁移后边界不变。
+	normalized := strings.ReplaceAll(name, "\\", "/")
+	if strings.Contains(name, "\\") || path.IsAbs(normalized) || filepath.IsAbs(name) || filepath.VolumeName(name) != "" {
 		return "", errors.New("非法路径")
 	}
 	full := filepath.Join(rootDir, filepath.FromSlash(name))

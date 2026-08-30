@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -110,7 +111,7 @@ type AppConfig struct {
 	// AutoOpenBrowser 用 *bool 而非 bool：v1.x 起默认改 true，老配置文件
 	// 里没这一行的话零值 false 会被误读。指针让"未配置"和"显式 false"
 	// 区分开，配合 AutoOpenBrowserEnabled() 实现"未配置视为默认 true"。
-	AutoOpenBrowser *bool `yaml:"auto_open_browser,omitempty" json:"auto_open_browser,omitempty"`
+	AutoOpenBrowser *bool  `yaml:"auto_open_browser,omitempty" json:"auto_open_browser,omitempty"`
 	DownloadDir     string `yaml:"download_dir" json:"download_dir"`
 	LogDir          string `yaml:"log_dir" json:"log_dir"`
 	DataDir         string `yaml:"data_dir" json:"data_dir"`
@@ -249,6 +250,7 @@ func (a *AppConfig) AutoOpenBrowserEnabled() bool {
 	}
 	return *a.AutoOpenBrowser
 }
+
 // 默认 false（fail-closed）；显式 true 才放行。
 // 仅当 server 未配 host_key_sha256 时本字段才生效；配了 host_key_sha256 总是强校验。
 func (a *AppConfig) AllowInsecureHostKeyEnabled() bool {
@@ -948,7 +950,11 @@ func (c *Config) ResolvePaths(baseDir string) error {
 		if rel == "" {
 			return "", nil
 		}
-		if filepath.IsAbs(rel) {
+		// 配置文件会在 Windows、macOS、Linux 之间复制。filepath.IsAbs
+		// 只认识当前平台语法，Windows 上会把明确的 POSIX 根路径
+		// `/var/kairo` 误当成相对路径并拼进 exeDir。两种本地常见根路径
+		// 都视为调用方明确指定的绝对位置；后续 os 包按当前平台解释。
+		if filepath.IsAbs(rel) || path.IsAbs(filepath.ToSlash(rel)) {
 			return rel, nil
 		}
 		return filepath.Abs(filepath.Join(baseDir, rel))

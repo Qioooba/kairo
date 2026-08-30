@@ -16,6 +16,7 @@
   };
 
   var cur = null; // 最近一次 /api/pet/state 缓存（供榜单页读名字 / 上次同步时间）
+  var unlockClickTimes = [];
 
   function toast(msg) {
     if (Kairo.core && Kairo.core.toast) {
@@ -59,11 +60,21 @@
     });
   }
 
+  function registerUnlockClick() {
+    var now = Date.now();
+    unlockClickTimes = unlockClickTimes.filter(function (t) { return now - t < 10000; });
+    unlockClickTimes.push(now);
+    if (unlockClickTimes.length < 6) return;
+    unlockClickTimes = [];
+    unlock();
+  }
+
   Kairo.pet = {
     init: init,
     state: function () { return cur; },
     isEnabled: isEnabled,
     unlock: unlock,
+    registerUnlockClick: registerUnlockClick,
     refreshBoardTab: refreshBoardTab
   };
 })();

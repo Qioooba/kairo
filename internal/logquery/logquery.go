@@ -12,11 +12,32 @@ import (
 	"golang.org/x/text/transform"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 )
+
+// normalizeShellDir 校验并规范化传给 POSIX shell 模板的目录。
+//
+// 生产请求里的目录通常来自 Linux/AIX；Windows 本地集成测试则会把
+// `E:\\...` 交给 Git/MSYS sh。后者是合法宿主路径，需转成 `E:/...`。
+// 仅在当前宿主为 Windows 且确实存在卷名时做转换，远端 POSIX 路径中
+// 的反斜杠仍被拒绝，避免放宽 SSH 命令注入边界。
+func normalizeShellDir(dir string) (string, error) {
+	dir = strings.TrimSpace(dir)
+	if dir == "" {
+		return "", fmt.Errorf("dir 不能为空")
+	}
+	if runtime.GOOS == "windows" && filepath.VolumeName(dir) != "" {
+		dir = filepath.ToSlash(filepath.Clean(dir))
+	}
+	if strings.ContainsAny(dir, "'`$\\;\n\r\x00") {
+		return "", fmt.Errorf("dir 含非法字符: %q", dir)
+	}
+	return dir, nil
+}
 
 // FileEntry 远程列出的日志文件
 type FileEntry struct {
@@ -354,17 +375,16 @@ func ParseQuery(q string) ([]SearchKeyword, error) {
 // 整体用单引号包，避免内嵌引号转义问题。
 // 超时由 Go 客户端 ctx 控制，不依赖 Linux `timeout` 命令。
 func ListCommand(dir string, patterns []string, max int, listMode string) (string, error) {
-	if strings.TrimSpace(dir) == "" {
-		return "", fmt.Errorf("dir 不能为空")
+	var err error
+	dir, err = normalizeShellDir(dir)
+	if err != nil {
+		return "", err
 	}
 	if len(patterns) == 0 {
 		patterns = []string{"*.log"}
 	}
 	if max <= 0 {
 		max = 100
-	}
-	if strings.ContainsAny(dir, "'`$\\;") {
-		return "", fmt.Errorf("dir 含非法字符: %q", dir)
 	}
 	for _, p := range patterns {
 		if strings.ContainsAny(p, "'`$\\;") {
@@ -627,8 +647,10 @@ func WindowSearchCommand(dir string, files []string, kw []SearchKeyword, max, ti
 }
 
 func buildSearchCommand(dir string, files []string, kw []SearchKeyword, max, timeoutSec int, encoding string, ignoreCase bool, window int) (string, error) {
-	if strings.TrimSpace(dir) == "" {
-		return "", fmt.Errorf("dir 不能为空")
+	var err error
+	dir, err = normalizeShellDir(dir)
+	if err != nil {
+		return "", err
 	}
 	if len(files) == 0 {
 		return "", fmt.Errorf("files 不能为空")
@@ -641,9 +663,6 @@ func buildSearchCommand(dir string, files []string, kw []SearchKeyword, max, tim
 	}
 	if timeoutSec <= 0 {
 		timeoutSec = 30
-	}
-	if strings.ContainsAny(dir, "'`$\\;") {
-		return "", fmt.Errorf("dir 含非法字符: %q", dir)
 	}
 	for _, f := range files {
 		if strings.ContainsAny(f, "'`$\\;&|><\n\r*?") {
@@ -799,8 +818,10 @@ func isShellUnsafePatternRune(r rune) bool {
 // 防止类似 "../etc/passwd" 越过 log_dir 白名单读父目录文件。
 // 实际生产环境还是建议 handler 端再次校验 file 必须在 ListCommand 返回的 files 列表里。
 func ContextCommand(dir, file string, line, before, after, timeoutSec int) (string, error) {
-	if strings.TrimSpace(dir) == "" {
-		return "", fmt.Errorf("dir 不能为空")
+	var err error
+	dir, err = normalizeShellDir(dir)
+	if err != nil {
+		return "", err
 	}
 	if strings.TrimSpace(file) == "" {
 		return "", fmt.Errorf("file 不能为空")
@@ -822,9 +843,6 @@ func ContextCommand(dir, file string, line, before, after, timeoutSec int) (stri
 	}
 	if timeoutSec <= 0 {
 		timeoutSec = 30
-	}
-	if strings.ContainsAny(dir, "'`$\\;") {
-		return "", fmt.Errorf("dir 含非法字符")
 	}
 	if strings.ContainsAny(file, "'`$\\;&|><\n\r*?") {
 		return "", fmt.Errorf("file 含非法字符")
@@ -867,8 +885,10 @@ func ContextCommand(dir, file string, line, before, after, timeoutSec int) (stri
 // 与 ContextCommand 不同：tail 是流式命令，没有"超时"概念（一直跑直到客户端断开）；
 // Go 侧通过 ctx 取消 + ssh session kill 来停。
 func TailCommand(dir, file string, lines int) (string, error) {
-	if strings.TrimSpace(dir) == "" {
-		return "", fmt.Errorf("dir 不能为空")
+	var err error
+	dir, err = normalizeShellDir(dir)
+	if err != nil {
+		return "", err
 	}
 	if strings.TrimSpace(file) == "" {
 		return "", fmt.Errorf("file 不能为空")
@@ -878,9 +898,6 @@ func TailCommand(dir, file string, lines int) (string, error) {
 	}
 	if lines > 1000 {
 		lines = 1000
-	}
-	if strings.ContainsAny(dir, "'`$\\;") {
-		return "", fmt.Errorf("dir 含非法字符")
 	}
 	if strings.ContainsAny(file, "'`$\\;&|><\n\r*?") {
 		return "", fmt.Errorf("file 含非法字符")
@@ -922,14 +939,13 @@ func TailCommand(dir, file string, lines int) (string, error) {
 // 与 TailCommand 的语义区别：这是"一次性命令"，由 Go 端同步调一次拿到 baseline，
 // 不是流式。
 func LineCountCommand(dir, file string) (string, error) {
-	if strings.TrimSpace(dir) == "" {
-		return "", fmt.Errorf("dir 不能为空")
+	var err error
+	dir, err = normalizeShellDir(dir)
+	if err != nil {
+		return "", err
 	}
 	if strings.TrimSpace(file) == "" {
 		return "", fmt.Errorf("file 不能为空")
-	}
-	if strings.ContainsAny(dir, "'`$\\;") {
-		return "", fmt.Errorf("dir 含非法字符")
 	}
 	if strings.ContainsAny(file, "'`$\\;&|><\n\r*?") {
 		return "", fmt.Errorf("file 含非法字符")
@@ -969,8 +985,10 @@ func LineCountCommand(dir, file string) (string, error) {
 // 输出不包含重复行（同一行既是匹配又是上下文时，优先标记为匹配行）。
 // 行按行号升序输出。
 func ContextLinesForHitsCommand(dir, file string, hitLines []int, ctx int) (string, error) {
-	if strings.TrimSpace(dir) == "" {
-		return "", fmt.Errorf("dir 不能为空")
+	var err error
+	dir, err = normalizeShellDir(dir)
+	if err != nil {
+		return "", err
 	}
 	if strings.TrimSpace(file) == "" {
 		return "", fmt.Errorf("file 不能为空")
@@ -980,9 +998,6 @@ func ContextLinesForHitsCommand(dir, file string, hitLines []int, ctx int) (stri
 	}
 	if ctx > 50 {
 		ctx = 50
-	}
-	if strings.ContainsAny(dir, "'`$\\;") {
-		return "", fmt.Errorf("dir 含非法字符")
 	}
 	if strings.ContainsAny(file, "'`$\\;&|><\n\r*?/\\") {
 		return "", fmt.Errorf("file 含非法字符: %q", file)

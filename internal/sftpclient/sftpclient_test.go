@@ -348,8 +348,8 @@ func (m *cancelMockBackend) UploadStream(ctx context.Context, reader io.Reader, 
 	return nil
 }
 func (m *cancelMockBackend) Rename(oldPath, newPath string) error { return nil }
-func (m *cancelMockBackend) Remove(path string) error            { return nil }
-func (m *cancelMockBackend) Close() error                        { _ = m.reader.Close(); return nil }
+func (m *cancelMockBackend) Remove(path string) error             { return nil }
+func (m *cancelMockBackend) Close() error                         { _ = m.reader.Close(); return nil }
 
 type cancelMockFile struct {
 	r *slowReader
@@ -380,8 +380,13 @@ func TestDownloadFile_LocalDirNotWritable(t *testing.T) {
 	c := newWithBackend(backend)
 	defer c.Close()
 
-	// 写到一个不存在的盘符（macOS 上 /nonexistent 也不行，用 /dev/null 父目录）
-	bad := "/this-path-should-not-exist-12345/out.log"
+	// 用普通文件充当父目录，在所有平台都稳定失败；不要依赖根目录 ACL、
+	// 管理员身份或某个盘符恰好不存在。
+	blocker := filepath.Join(dir, "not-a-directory")
+	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bad := filepath.Join(blocker, "out.log")
 	_, err := c.DownloadFile("/x", bad)
 	if err == nil {
 		t.Fatal("expected error for unwritable local path")
@@ -390,7 +395,6 @@ func TestDownloadFile_LocalDirNotWritable(t *testing.T) {
 		!strings.Contains(err.Error(), "创建本地文件失败") {
 		t.Errorf("error msg: %v", err)
 	}
-	_ = dir
 }
 
 func TestDownloadFile_TruncatesExisting(t *testing.T) {

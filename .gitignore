@@ -39,6 +39,8 @@ verify-commands.js
 
 # ===== 临时文件 =====
 *.tmp
+__pycache__/
+*.py[cod]
 
 # ===== 本地临时目录（蒙太奇预览 / 一次性生成脚本等）=====
 /tmp/
@@ -61,9 +63,8 @@ verify-commands.js
 # 配置文件备份
 /config.yaml.bak.*
 .mavis/plans/
-# Playwright E2E（仓库根目录的临时安装，仅供本地调试）
+# Playwright E2E 依赖目录；package-lock.json 需入库以保证 npm ci 可复现。
 /node_modules/
-/package-lock.json
 
 # ===== E2E 测试输出目录（本地跑出来的截图/JSON，不应入 git）=====
 /e2e-*-out/

@@ -602,7 +602,7 @@
     const btnTest = el('button', { class: 'btn', text: '测试连接', onclick: doTest });
     const btnList = el('button', { class: 'btn btn-primary', text: '列出文件', onclick: doList });
     const btnDownload = el('button', { class: 'btn', text: '下载', onclick: doDownload });
-    const btnSearch = el('button', { class: 'btn btn-primary', text: '搜索', onclick: doSearch });
+    const btnSearch = el('button', { id: 'ws-search-btn', class: 'btn btn-primary', text: '搜索', onclick: doSearch });
     // P1-12：下载最新日志也支持 target_dir（自定义本地落点）。
     // 必须提前声明到 btnDownload 同一作用域，doDownload() 会读它的 value。
     const dlTargetDirInp = el('input', {

@@ -259,7 +259,7 @@
       actionKind: act.kind || 'popup',
       actionURL: act.url || '',
       actionCmd: act.command || '',
-      actionArgs: act.args ? act.args.join(' ') : '',
+      actionArgs: act.args ? formatCommandArgs(act.args) : '',
       actionWorkDir: act.work_dir || '',
       sourceNoteId: existing ? (existing.source_note_id || '') : (preset.sourceNoteId || ''),
     };
@@ -560,12 +560,67 @@
         return null;
       }
       action.command = cmd;
-      const args = (state.actionArgs || '').trim().split(/\s+/).filter(Boolean);
+      let args;
+      try {
+        args = parseCommandArgs(state.actionArgs || '');
+      } catch (e) {
+        toast(e.message, 'err');
+        return null;
+      }
       if (args.length) action.args = args;
       if ((state.actionWorkDir || '').trim()) action.work_dir = state.actionWorkDir.trim();
     }
     payload.action = action;
     return payload;
+  }
+
+  // 将命令参数文本解析成 exec.Command 需要的参数数组。
+  // 同时支持单/双引号包裹的空格路径，且不会把 Windows 路径里的
+  // 反斜杠当成通用转义符。只有紧跟当前引号时，反斜杠才转义该引号。
+  function parseCommandArgs(input) {
+    const args = [];
+    let current = '';
+    let quote = '';
+    let hasToken = false;
+    for (let i = 0; i < input.length; i++) {
+      const ch = input[i];
+      if (quote) {
+        if (ch === quote) {
+          quote = '';
+        } else if (ch === '\\' && input[i + 1] === quote) {
+          current += quote;
+          i++;
+        } else {
+          current += ch;
+        }
+        hasToken = true;
+        continue;
+      }
+      if (ch === '"' || ch === "'") {
+        quote = ch;
+        hasToken = true;
+      } else if (/\s/.test(ch)) {
+        if (hasToken) {
+          args.push(current);
+          current = '';
+          hasToken = false;
+        }
+      } else {
+        current += ch;
+        hasToken = true;
+      }
+    }
+    if (quote) throw new Error('参数中的引号未闭合');
+    if (hasToken) args.push(current);
+    return args;
+  }
+
+  function formatCommandArgs(args) {
+    return args.map((arg) => {
+      const value = String(arg);
+      if (value !== '' && !/[\s"']/.test(value)) return value;
+      return '"' + value.replace(/"/g, '\\"') + '"';
+    }).join(' ');
   }
 
   function defaultOnceAt() {
@@ -579,5 +634,5 @@
 
   Kairo.state.routes.reminders = renderReminders;
   Kairo.state.routeNames.reminders = '便笺提醒';
-  Kairo.reminders = { render: renderReminders, openEditor };
+  Kairo.reminders = { render: renderReminders, openEditor, parseCommandArgs, formatCommandArgs };
 })();

@@ -6,11 +6,16 @@
  */
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
-const RUN_DIR = process.env.KAIRO_RUN_DIR || '/tmp/kairo-review-2026-08/run';
-const CMD_OUT_FILE = '/tmp/kairo-e2e-reminder.out';
-const TOUCH_BIN = fs.existsSync('/usr/bin/touch') ? '/usr/bin/touch' : '/bin/touch';
+const RUN_DIR = process.env.KAIRO_RUN_DIR || path.join(os.tmpdir(), 'kairo-review-2026-08', 'run');
+const CMD_OUT_FILE = path.join(os.tmpdir(), 'kairo e2e reminder.out');
+const MARKER_SCRIPT = path.resolve(__dirname, '..', 'fixtures', 'write-marker.js');
+
+function quoteArg(value) {
+  return '"' + String(value).replace(/"/g, '\\"') + '"';
+}
 
 async function apiJSON(page, method, url, body) {
   return page.evaluate(async ({ method, url, body }) => {
@@ -123,8 +128,8 @@ function register(runner, ctx) {
       await page.waitForTimeout(300);
       const inputs = await page.$$('.editor-action-wrap input[type="text"]');
       if (inputs.length < 3) throw new Error('command 动作未渲染三个输入框（命令/参数/工作目录）');
-      await inputs[0].fill(TOUCH_BIN);
-      await inputs[1].fill(CMD_OUT_FILE);
+      await inputs[0].fill(process.execPath);
+      await inputs[1].fill(quoteArg(MARKER_SCRIPT) + ' ' + quoteArg(CMD_OUT_FILE));
       await runner.screenshot(page, '34-s4-editor-command');
       await page.click('.modal-card button:has-text("添加")');
       await page.waitForTimeout(1000);
@@ -132,8 +137,11 @@ function register(runner, ctx) {
       const list = await apiJSON(page, 'GET', '/api/reminders');
       const r = (list.data || []).find(x => x.content === 'e2e-cmd-提醒');
       if (!r) throw new Error('command 提醒未创建');
-      if (!r.action || r.action.kind !== 'command' || r.action.command !== TOUCH_BIN) {
+      if (!r.action || r.action.kind !== 'command' || r.action.command !== process.execPath) {
         throw new Error('command 动作保存异常: ' + JSON.stringify(r.action));
+      }
+      if (!Array.isArray(r.action.args) || r.action.args[0] !== MARKER_SCRIPT || r.action.args[1] !== CMD_OUT_FILE) {
+        throw new Error('含空格参数解析异常: ' + JSON.stringify(r.action.args));
       }
       created.push(r.id);
       ctx.cmdReminderId = r.id;
@@ -189,7 +197,7 @@ function register(runner, ctx) {
       if (!r1) throw new Error('编辑后提醒丢失');
       if (r1.content !== 'e2e-cmd-提醒-已编辑') throw new Error('内容未更新');
       if (r1.at !== r0.at) throw new Error(`时间被改动: ${r0.at} → ${r1.at}`);
-      if (!r1.action || r1.action.kind !== 'command' || r1.action.command !== TOUCH_BIN) {
+      if (!r1.action || r1.action.kind !== 'command' || r1.action.command !== process.execPath) {
         throw new Error('动作被清空/改动: ' + JSON.stringify(r1.action));
       }
       if (JSON.stringify(r1.action.args || []) !== JSON.stringify(r0.action.args || [])) {

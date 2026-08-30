@@ -124,7 +124,7 @@ const homeCards = [
   { name: '时间戳转换', route: 'timestamp' },
   { name: 'Cron 解析', route: 'cron' },
   { name: 'JSONPath 查询', route: 'jsonpath' },
-  { name: '文本比对', route: 'compare' },
+  { name: '代码比对', route: 'compare' },
 ];
 
 module.exports = {

@@ -21,12 +21,14 @@ type windowsManagedCommand struct {
 }
 
 func startManagedCommand(cmd *exec.Cmd) (managedCommand, error) {
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		HideWindow: true,
-		// 挂起创建，先加入 Job Object 再恢复主线程。否则极短命令可能在
-		// AssignProcessToJobObject 前就派生出不受管的孙进程。
-		CreationFlags: windows.CREATE_NEW_PROCESS_GROUP | windows.CREATE_SUSPENDED | windows.CREATE_NO_WINDOW,
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
 	}
+	cmd.SysProcAttr.HideWindow = true
+	// 挂起创建，先加入 Job Object 再恢复主线程。否则极短命令可能在
+	// AssignProcessToJobObject 前就派生出不受管的孙进程。保留 shellCommand
+	// 设置的 CmdLine，因为 cmd.exe 需要自己的原始命令行引号规则。
+	cmd.SysProcAttr.CreationFlags |= windows.CREATE_NEW_PROCESS_GROUP | windows.CREATE_SUSPENDED | windows.CREATE_NO_WINDOW
 
 	job, err := createKillOnCloseJob()
 	if err != nil {
