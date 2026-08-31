@@ -847,7 +847,9 @@ const changelog = [
           '结果表数值使用稳定宽度与溢出策略，长字段通过完整值提示/单记录视图查看，不再挤压相邻列。'
         ]
       },
-      commits: [],
+      commits: [
+        { hash: 'd0bf558', msg: 'feat(workbench): professionalize database notes and compare UX' }
+      ],
       performance: [
         { label: '发布质量门', before: '旧版统计不能代表本次改动', after: 'Go 全包 + vet 通过；完整 E2E 1031 通过；环境失败项按正确目录复测 28/28', improve: '结果可追溯、不用旧报告冒充' },
         { label: '真实 MySQL 查询', before: '静态页面无法验证完整元数据与结果交互', after: 'MySQL 8.4.11 · 120+ 行中文/NULL/JSON fixture · 查询与对象导航通过', improve: '真实数据闭环' },
