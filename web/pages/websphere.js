@@ -1915,13 +1915,20 @@
         } else if (srv.hits_count === 0) {
           grp.appendChild(el('div', { class: 'text-dim', style: 'padding: 8px 12px;', text: '本台无匹配' }));
         } else {
-          const tbl = el('table', { class: 'table' });
+          const tbl = el('table', { class: 'table ws-search-results-table' });
+          const colgroup = el('colgroup', null, [
+            el('col', { class: 'ws-hit-col-file' }),
+            el('col', { class: 'ws-hit-col-line' }),
+            el('col', { class: 'ws-hit-col-content' }),
+            el('col', { class: 'ws-hit-col-actions' })
+          ]);
           const thead = el('thead', null, el('tr', null, [
             el('th', { text: '文件' }),
             el('th', { text: '行号' }),
             el('th', { text: '内容' }),
             el('th', { text: '操作' })
           ]));
+          tbl.appendChild(colgroup);
           tbl.appendChild(thead);
           const tbody = el('tbody');
           srv.hits.forEach(h => {

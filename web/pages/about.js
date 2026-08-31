@@ -16,7 +16,7 @@
 
   // 与 internal/httpserver/httpserver.go 的 Version 常量保持一致；
   // 后端 /api/config 读取失败时回退到这里（FE-006）。
-  const VERSION = 'v0.16';
+  const VERSION = 'v0.17';
 
   // =====================================================================
   // SVG icon 字典 — 13 个 section icon (Win7 兼容, 不依赖 emoji 字体)
@@ -220,7 +220,7 @@
     { label: '总代码量',             value: '99,000+', sub: 'Go 68K · 前端 31K (JS+CSS) · 0 npm 运行时',  tone: 'primary' },
     { label: '代码行数 (Go)',         value: '68,000+', sub: '259 个 Go 文件 · 36 个后端子包 · 含测试',    tone: 'primary' },
     { label: '代码行数 (前端)',       value: '31,000+', sub: 'vanilla JS + CSS · 23 页面 · 零运行时依赖',   tone: 'accent'  },
-    { label: '提交次数',              value: '163',     sub: 'v0.1 → v0.16',                              tone: 'success' },
+    { label: '提交次数',              value: '164+',    sub: 'v0.1 → v0.17',                              tone: 'success' },
     { label: '后端模块',              value: '36',      sub: '新增 dbconsole / comparefs / desknote / deskpet / textcodec / winui 等', tone: 'primary' },
     { label: '前端页面',              value: '22',      sub: '22 个路由页面 + sftp-common 共享模块 + 全局浮层', tone: 'accent'  },
     { label: 'API 接口',              value: '120+',    sub: 'REST + NDJSON + SSE + WebSocket',            tone: 'primary' },
@@ -765,9 +765,111 @@
   };
 
   // =====================================================================
-  // §13. 版本演进史 (17 个版本, accordion 折叠)
+  // §13. 版本演进史 (18 个版本, accordion 折叠)
   // =====================================================================
 const changelog = [
+    {
+      version: 'v0.17',
+      date: '2026-08-31',
+      tag: '数据库工作台专业化 · 桌面交互精修 · 比较引擎准确性',
+      codename: 'Forge · 精工重铸',
+      size: 'xl',
+      headline: '以 PL/SQL Developer、Navicat、DataGrip 与 DBeaver 的高频工作流为参照，重构数据库页面的信息架构和结果交互；同时统一 Windows 桌面便笺语义、修复目录比较漏报与等待反馈，并消除搜索结果展开时的列宽抖动。',
+      stats: { commits: 1, fixes: 16, additions: 14, breaks: 0 },
+      principles: [
+        '数据库工作台首先服务于“连接—定位对象—编写—执行—检查结果”的连续工作流：数据源管理是渐进式入口，保存后必须收起，把稳定空间留给对象树、编辑器与结果。',
+        '错误属于查询结果的一部分：SQL 失败必须在编辑器下方固定结果区域呈现原因、恢复建议和原 SQL，不依赖短暂 Toast，也不能让用户去控制台猜测。',
+        '数据表格是分析工具而不是静态 HTML：列宽、排序、筛选、字段复制、列显隐、网格/单行模式和键盘操作必须形成可持续工作的最小闭环。',
+        '元数据应按用户认知分组：表、视图、函数、存储过程、触发器等对象不能混成扁平列表；Oracle 与 MySQL 的差异由后端适配层收口。',
+        '效率能力必须可配置且可发现：SQL 片段和快捷键提供安全默认值，同时允许用户定义缩写、模板与执行/取消/视图切换按键。',
+        '快速不能以漏报为代价：目录比较默认采用智能内容校验；仅比较大小和时间的元数据模式明确标注可能漏报，避免同大小同时间文件被误判相同。',
+        '展开详情只能改变行高，不能改变列宽：表格使用固定列布局和显式列宽，滚动条空间预留，杜绝点击前后内容横向跳动。',
+        '“桌面便笺”语义必须一致：首页入口与便笺中心的新建动作都直接创建 Windows 原生置顶便笺，浏览器只承担管理与内联编辑。',
+        '弹窗和长任务反馈必须稳定：对话框基于视口居中，扫描进度显示实际发现条目，空结果明确说明筛选状态，不让用户面对无意义的 0/2。',
+        '所有优化都需要真实数据和真实点击证据：使用独立 MySQL 8.4 实例、中文/空格路径文件夹和 Playwright 在目标分辨率执行验收。'
+      ],
+      architecture: {
+        layers: [
+          { name: '数据库元数据适配层', detail: 'internal/dbconsole/metadata.go 为对象增加稳定 Category；Oracle 聚合 TABLE、VIEW、MATERIALIZED VIEW、FUNCTION、PROCEDURE、PACKAGE、SEQUENCE、SYNONYM、TRIGGER，MySQL 聚合 tables、routines 与 triggers，前端只消费统一分类。' },
+          { name: '数据库工作台状态层', detail: 'database.js 统一维护数据源、Schema、对象树、字段、SQL、流式结果、列宽、列显隐、排序筛选、记录游标和偏好设置；渲染与事件绑定按工作区职责拆分，避免旧页面多处分散刷新。' },
+          { name: '可配置效率层', detail: 'SQL snippets 与快捷键以 localStorage 持久化；模板支持 ${cursor} 光标占位，Space/Tab/Enter 可触发展开，执行、取消、网格和记录视图按键可独立调整。' },
+          { name: '结果交互层', detail: '结果区建立 status/error/grid/record 四种明确状态；列宽拖拽、上下文菜单、列管理器、本地筛选与排序共享同一列模型，网格和单记录视图复用同一结果数据。' },
+          { name: '比较任务层', detail: '目录遍历回调报告实际已发现项目；本地深度散列并行处理左右文件，默认模式切换为内容校验，元数据极速模式作为明确的可选降级。' },
+          { name: '桌面便笺协调层', detail: '顶部入口、便笺中心和原生窗口统一调用 notes API；新建时直接写入 desktop.visible、比例坐标和窗口尺寸，浏览器卡片通过双击进入内联编辑。' },
+          { name: '稳定数据表布局层', detail: 'WebSphere/搜索排障结果使用 colgroup + table-layout: fixed + stable scrollbar gutter；详情展开只占据跨列内容行，避免内容长度重新参与列宽计算。' }
+        ],
+        retirements: [
+          '移除数据库页面“数据源表单长期占据顶部”的布局，改为可展开管理区，保存成功立即回到工作台。',
+          '移除 SQL 错误仅依赖短暂消息提示的路径，统一进入可复制、可展开 SQL 的持久错误面板。',
+          '移除结果表格不可调整、不可复制字段、只能单一网格查看的静态展示模型。',
+          '移除首页便笺入口切换浏览器悬浮卡的旧语义，首页入口只创建原生桌面置顶便笺。',
+          '移除便笺中心新建时弹出编辑框的流程，改为立即创建并在卡片上双击编辑。',
+          '移除目录比较默认仅靠 size+mtime 判断内容相同的高风险策略。'
+        ]
+      },
+      features: [
+        { title: '专业数据库工作台布局', desc: '重排为对象导航、SQL 编辑器和结果面板三段式桌面布局；左侧面板可拖拽调整宽度，顶部工具条压缩低频信息，数据源管理保存后自动收起，在 1024×768 仍保持核心工作区可用。' },
+        { title: '完整对象浏览器', desc: '按 Schema 展示表、视图、函数、存储过程、触发器与其他对象，分组显示数量并支持折叠；单击对象加载字段，双击表/视图生成查询，双击函数/过程生成调用骨架。' },
+        { title: '字段面板与快速生成', desc: '字段列表显示字段名、类型、可空和主键信息；支持复制全部字段，降低 SELECT 列清单、排障记录和接口对字段时的重复手工输入。' },
+        { title: '持久 SQL 错误工作区', desc: '执行失败后在结果区显示错误标题、完整原因、可执行的修复提示、原 SQL 展开内容和复制按钮；下一次执行前保持可见，不被 Toast 自动消失。' },
+        { title: '可调整结果表格', desc: '每个列头提供拖拽手柄，列宽写入浏览器偏好；表头点击排序，工具条支持即时筛选，右键菜单支持复制字段名、单元格、整行、整列和隐藏列。' },
+        { title: '列模式与行模式', desc: '网格模式适合横向比较，单记录模式将一行展开为字段/值清单并提供上一条、下一条和复制记录；超宽表无需持续横向滚动。' },
+        { title: '列管理与可见字段复制', desc: '列管理器集中恢复/隐藏字段，复制可见字段按钮按当前列顺序输出名称；隐藏状态不破坏原始结果，切换视图时保持一致。' },
+        { title: 'SQL 片段与自定义快捷键', desc: '默认提供 sf → SELECT * FROM、sel 与 cnt 模板；用户可以新增、修改或删除缩写与模板，并自定义执行、取消、网格/记录切换快捷键。' },
+        { title: '数据源渐进式管理', desc: '新增/编辑数据源时展开配置区，保存后自动选中目标数据源并收起；MySQL 默认优先当前业务数据库而非 information_schema，减少首次进入的空转操作。' },
+        { title: '便笺桌面优先工作流', desc: '首页右上角“新建便笺”直接创建原生 Windows 置顶窗口；便笺中心新建不再弹模态框，卡片整体使用选定颜色，双击标题/正文即可内联修改并保存。' },
+        { title: '智能目录内容比较', desc: '默认比较模式读取内容散列，准确识别大小和修改时间相同但内容不同的文件；显式提供极速元数据模式给可信时间戳场景，并在文案中提示漏报风险。' },
+        { title: '真实扫描进度', desc: '后端遍历过程中按实际发现条目更新进度，本地深度比较左右哈希并发执行；前端筛选为空时展示“当前筛选条件下无文件”而不是空白区域。' },
+        { title: '搜索展开零抖动', desc: '搜索排障/WebSphere 下发结果使用固定布局和显式列宽；展开或收起完整命令、结果、错误信息时列宽保持不变。' },
+        { title: '弹窗定位与缓存更新', desc: '比较源选择对话框在不同视口中水平垂直居中并限制最大高度，相关 CSS/JS 静态资源更新缓存版本，升级后无需等待旧资源自然过期。' }
+      ],
+      fixes: {
+        p0: [
+          '修复目录比较仅根据文件大小与 mtime 判定，导致同大小、同时间但内容不同的文件被错误归入“相同”。',
+          '修复 SQL 执行错误缺少持久可见反馈，用户无法在查询上下文内定位失败原因。',
+          '修复首页便笺入口创建浏览器悬浮便笺而非 Windows 原生桌面置顶便笺的产品语义错误。'
+        ],
+        p1: [
+          '修复 Oracle/MySQL 元数据对象类型过少，左侧只能查表/视图而无法按函数、过程、触发器定位对象。',
+          '修复数据库数据源保存后配置区不收起、工作区被表单长期挤压的问题。',
+          '修复结果列不可拖动宽度、字段名不可复制、无法隐藏列及无法按单行检查记录的问题。',
+          '修复数据库页面 SQL 片段与快捷键不可配置，重复查询需要反复输入的问题。',
+          '修复 WebSphere 搜索结果展开详情后浏览器重新计算列宽，整个列表横向跳动的问题。',
+          '修复比较源弹窗在部分布局下定位到左上角，而非基于当前视口居中的问题。',
+          '修复扫描提示长期停留“0 / 2”且不能反映已发现文件，让快速任务也产生卡死感的问题。',
+          '修复 MySQL 首次加载优先 information_schema，用户已配置业务库却仍需手工切换的问题。'
+        ],
+        p2: [
+          '统一首页便笺按钮与主题按钮的图标尺寸、描边、字体和命中区域，消除局部视觉风格不一致。',
+          '便笺卡片颜色由局部色条改为整体背景色，并补齐内联编辑状态、保存与取消反馈。',
+          '比较结果筛选后无命中时增加带恢复提示的空状态，避免误以为比较没有完成。',
+          '结果列宽偏好、SQL snippets 与快捷键设置本地持久化，页面切换和程序重启后保持工作习惯。',
+          '结果表数值使用稳定宽度与溢出策略，长字段通过完整值提示/单记录视图查看，不再挤压相邻列。'
+        ]
+      },
+      commits: [],
+      performance: [
+        { label: '发布质量门', before: '旧版统计不能代表本次改动', after: 'Go 全包 + vet 通过；完整 E2E 1031 通过；环境失败项按正确目录复测 28/28', improve: '结果可追溯、不用旧报告冒充' },
+        { label: '真实 MySQL 查询', before: '静态页面无法验证完整元数据与结果交互', after: 'MySQL 8.4.11 · 120+ 行中文/NULL/JSON fixture · 查询与对象导航通过', improve: '真实数据闭环' },
+        { label: '目录深度比较', before: '同大小同时间文件可能漏报', after: '中文/空格路径 fixture · 2 个内容差异全部识别 · 后端约 1ms', improve: '准确性优先且无感延迟' },
+        { label: '搜索结果展开', before: '详情内容参与自动列宽计算', after: '固定 colgroup；展开前后各列宽度完全一致', improve: '横向布局位移为 0' },
+        { label: '数据库结果操作', before: '只读静态网格', after: '拖拽列宽 + 排序 + 筛选 + 5 类复制 + 列显隐 + 记录视图', improve: '覆盖日常检查闭环' },
+        { label: '扫描反馈', before: '长时间显示固定 0 / 2', after: '按已发现目录项连续更新', improve: '进度可观察' }
+      ],
+      breaking: [],
+      migration: [
+        'v0.16 可直接替换为 v0.17；数据源、便笺、任务、宠物、WebService 模板与文件连接配置格式保持兼容，无需执行数据库迁移。',
+        '数据库结果列宽、列显隐、SQL snippets 和快捷键保存在当前浏览器 localStorage；清理浏览器站点数据会恢复默认设置，但不会删除后端数据源。',
+        '默认目录比较从“大小+时间”调整为“智能内容比较”。大目录或高延迟远程目录如明确接受元数据风险，可手工选择“极速元数据（可能漏报）”。',
+        '首页便笺按钮现在只创建 Windows 原生桌面便笺，不再在浏览器页面显示浮动卡；所有便笺仍可在“便笺中心”集中管理。',
+        '旧版已保存的 browser floating 字段继续兼容，但新建便笺默认 desktop.visible=true、floating=false。',
+        '升级后建议强制刷新一次页面；index.html 已更新 database、notes、compare、websphere 与 style 的缓存版本，正常重新启动也会拉取新资源。',
+        'Oracle 对象树增加 MATERIALIZED VIEW、PACKAGE、SEQUENCE、SYNONYM 等类型；MySQL 增加 routines/triggers。最终可见范围仍受当前只读账号的数据字典权限约束。',
+        'SQL 工作台仍坚持后端只读边界；片段展开只负责输入效率，不放宽多语句、写操作、超时、行数或返回体限制。',
+        'JSON、超长二进制等受限列仍会返回明确错误和改写建议；可用 CAST/SUBSTRING 等数据库函数把值转换到安全预览范围。',
+        '发布验收使用 Go 1.24+：清测试缓存后运行全包 test/vet，npm ci 后执行 WebService 测试和 Playwright E2E，最终以 -mod=vendor -trimpath -H windowsgui 构建 Windows 10/11 版本。'
+      ]
+    },
     {
       version: 'v0.16',
       date: '2026-08-30',
@@ -1982,7 +2084,7 @@ const changelog = [
         ])
       ]));
     });
-    view.appendChild(renderSection('sec-modules', 'modules', '功能模块', '13 个深度能力卡 · 22 页面 · 120+ API（v0.16 新模块详见版本史）', wrap));
+    view.appendChild(renderSection('sec-modules', 'modules', '功能模块', '13 个深度能力卡 · 22 页面 · 120+ API（v0.17 工作台升级详见版本史）', wrap));
   }
 
   // --- 版本演进史 (accordion) ---
@@ -1999,7 +2101,7 @@ const changelog = [
     wrap.appendChild(banner);
     wrap.appendChild(list);
 
-    view.appendChild(renderSection('sec-history', 'history', '版本演进史', 'v0.1 → v0.16 · 17 个版本 (含 v0.13.1 / v0.11-rc1) · 持续迭代 · 163 commit', wrap));
+    view.appendChild(renderSection('sec-history', 'history', '版本演进史', 'v0.1 → v0.17 · 18 个版本 (含 v0.13.1 / v0.11-rc1) · 持续迭代 · 164+ commit', wrap));
   }
 
   function renderVersionCard(v, idx) {
@@ -2362,7 +2464,7 @@ const changelog = [
     wrap.appendChild(renderList('已规划 (next 1-2 versions)', roadmap.planned, 'var(--primary)', 'smTarget'));
     wrap.appendChild(renderList('调研中 (considering)', roadmap.considering, 'var(--text-dim)', 'smBulb'));
 
-    view.appendChild(renderSection('sec-roadmap', 'roadmap', '路线图', 'next 1-2 versions + considering · v0.16 以工作台稳定性与真实环境兼容为先', wrap));
+    view.appendChild(renderSection('sec-roadmap', 'roadmap', '路线图', 'next 1-2 versions + considering · v0.17 以专业数据库体验与桌面稳定性为先', wrap));
   }
 
   // --- Footer ---

@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"kairo/internal/comparefs"
@@ -575,16 +576,26 @@ func (s *Server) runCompareScan(ctx context.Context, job *compareJob, req compar
 	}
 	defer rightFS.Close()
 
-	job.progress("scanning", 0, 2, "正在扫描两侧目录")
+	job.progress("scanning", 0, 0, "正在扫描两侧目录")
 	var left, right map[string]comparefs.Entry
 	var leftTrunc, rightTrunc bool
 	var leftErr, rightErr error
 	var wg sync.WaitGroup
+	var discovered atomic.Int64
+	reportDiscovered := func(delta int) {
+		current := discovered.Add(int64(delta))
+		if current == int64(delta) || current%100 == 0 {
+			job.progress("scanning", int(current), 0, "正在扫描两侧目录 · 已发现 "+strconv.FormatInt(current, 10)+" 项")
+		}
+	}
 	wg.Add(2)
-	go func() { defer wg.Done(); left, leftTrunc, leftErr = walkCompareFS(ctx, leftFS, req.Left.Path, req) }()
 	go func() {
 		defer wg.Done()
-		right, rightTrunc, rightErr = walkCompareFS(ctx, rightFS, req.Right.Path, req)
+		left, leftTrunc, leftErr = walkCompareFS(ctx, leftFS, req.Left.Path, req, reportDiscovered)
+	}()
+	go func() {
+		defer wg.Done()
+		right, rightTrunc, rightErr = walkCompareFS(ctx, rightFS, req.Right.Path, req, reportDiscovered)
 	}()
 	wg.Wait()
 	if leftErr != nil {
@@ -638,8 +649,18 @@ func (s *Server) runCompareScan(ctx context.Context, job *compareJob, req compar
 		case l.Size != r.Size:
 			item.Status = compareTimeStatus(l.ModTime, r.ModTime, req.TimeToleranceSeconds)
 		case req.Deep:
-			lh, le := hashCompareFile(ctx, leftFS, l.Path)
-			rh, re := hashCompareFile(ctx, rightFS, r.Path)
+			var lh, rh string
+			var le, re error
+			if leftFS.Kind() == "local" && rightFS.Kind() == "local" {
+				var hashWG sync.WaitGroup
+				hashWG.Add(2)
+				go func() { defer hashWG.Done(); lh, le = hashCompareFile(ctx, leftFS, l.Path) }()
+				go func() { defer hashWG.Done(); rh, re = hashCompareFile(ctx, rightFS, r.Path) }()
+				hashWG.Wait()
+			} else {
+				lh, le = hashCompareFile(ctx, leftFS, l.Path)
+				rh, re = hashCompareFile(ctx, rightFS, r.Path)
+			}
 			if le != nil || re != nil {
 				item.Status = "error"
 			} else if lh == rh {
@@ -718,7 +739,7 @@ func addCompareSummary(summary *compareScanSummary, status string) {
 	}
 }
 
-func walkCompareFS(ctx context.Context, fsys comparefs.FS, root string, req compareScanReq) (map[string]comparefs.Entry, bool, error) {
+func walkCompareFS(ctx context.Context, fsys comparefs.FS, root string, req compareScanReq, progress func(int)) (map[string]comparefs.Entry, bool, error) {
 	result := make(map[string]comparefs.Entry)
 	type queued struct{ abs, rel string }
 	queue := []queued{{abs: root}}
@@ -748,6 +769,9 @@ func walkCompareFS(ctx context.Context, fsys comparefs.FS, root string, req comp
 			if entry.IsDir {
 				queue = append(queue, queued{abs: entry.Path, rel: rel})
 			}
+		}
+		if progress != nil && len(entries) > 0 {
+			progress(len(entries))
 		}
 	}
 	return result, false, nil

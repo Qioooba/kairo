@@ -9,7 +9,7 @@
 [![Go Version](https://img.shields.io/badge/Go-1.24%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-4F4F4F)](#)
 [![License](https://img.shields.io/badge/License-Internal%20Use-orange)](#)
-[![Status](https://img.shields.io/badge/Status-v0.16-success)](#)
+[![Status](https://img.shields.io/badge/Status-v0.17-success)](#)
 [![Dependencies](https://img.shields.io/badge/Deps-zero%20runtime-2ea44f)](#)
 [![Binary](https://img.shields.io/badge/Single%20Exe-%E2%9C%93-success)](#)
 [![SSH](https://img.shields.io/badge/SSH-5%20compat%20profile-6f42c1)](#)
@@ -658,9 +658,9 @@ GOOS=windows GOARCH=amd64 CGO_ENABLED=0 \
   -o Kairo_win10.exe .
 
 # 或用脚本（自动检测 vendor/ 是否存在）
-./scripts/build_windows_amd64.sh v0.16.0
-./scripts/package_windows.sh v0.16.0
-# → dist/kairo-v0.16.0-windows.zip
+./scripts/build_windows_amd64.sh v0.17.0
+./scripts/package_windows.sh v0.17.0
+# → dist/kairo-v0.17.0-windows.zip
 ```
 
 ### Win7 维护策略
@@ -802,7 +802,7 @@ systems:
 ```
 kairo/
 ├── main.go                            # 入口：解析 -workdir / 加载 config / 起 HTTP server / 注入 license & sponsor
-├── VERSION                            # 单源版本号 v0.16
+├── VERSION                            # 单源版本号 v0.17
 ├── config.yaml                        # 运行时配置
 ├── config.yaml.production.example
 ├── go.mod / go.sum                    # 依赖锁定（go 1.24）
@@ -930,6 +930,7 @@ kairo/
 
 | 版本 | 功能 |
 | --- | --- |
+| **v0.17** | 数据库工作台专业化重构 + 桌面便笺交互统一 + 文件比较准确性/性能 + 搜索结果表格稳定性 |
 | **v0.16** | Oracle/MySQL/Redis 数据库工作台 + Local/SFTP/FTP/FTPS 比较同步 + Windows 原生宠物/便笺 + WebService/日志/任务可靠性收口 |
 | **v0.14** | 投喂作者 Web UI + Sponsor 后端 + endpointclient 共享调用器 + About 12 section 懒渲染 |
 | **database-v1** | Oracle 11g / MySQL / Redis 数据库工作台；只读策略、连接池、流式结果、RBAC、审计与性能上限 |
@@ -1048,7 +1049,32 @@ v0.11-rc1 起所有 `/api/*`（除 `/api/license/*`）都被 license 网关拦�
 
 ## <img src="docs/section-icons/changelog.svg" width="22" height="22" align="absmiddle"> Release Notes
 
-### v0.16（当前）— 综合运维工作台 + Windows 原生桌面 + 全链路质量收口
+### v0.17（当前）— 数据库工作台专业化 + 桌面交互精修 + 比较准确性
+
+#### 数据库工作台专业化重构
+
+- 参考 PL/SQL Developer、Navicat、DataGrip 与 DBeaver 的高频工作流，重排为对象导航、SQL 编辑器、结果工作区三段式布局；数据源保存后自动收起，左侧元数据面板可拖拽调整宽度。
+- Oracle/MySQL 对象树统一按表、视图、函数、存储过程、触发器及其他对象分组；单击查看字段，双击表/视图生成查询，函数/过程生成调用骨架。
+- SQL 错误进入结果区持久展示，包含完整原因、恢复建议、原 SQL 与复制入口，不再依赖自动消失的 Toast。
+- 结果网格支持拖拽列宽、排序、本地筛选、复制字段名/单元格/行/列、列显隐，以及网格/单记录两种查看模式；列宽和列配置持久化。
+- 新增 SQL snippets 与自定义快捷键：默认 `sf` 展开为 `SELECT * FROM `，支持 Space/Tab/Enter 触发、`${cursor}` 光标位置及执行/取消/视图切换按键配置。
+
+#### 便笺、搜索排障与文件比较
+
+- 首页右上角“新建便笺”直接创建 Windows 原生桌面置顶便笺，不再显示浏览器浮层；便笺中心新建不弹模态框，卡片整体使用所选颜色，双击即可内联编辑。
+- WebSphere/搜索排障结果表采用固定列布局和显式列宽，点击展开完整内容只改变行高，各列宽度保持不变。
+- 文件比较源弹窗在不同视口稳定居中；扫描进度显示真实发现项目，本地左右深度散列并发执行，筛选空结果提供明确提示。
+- 默认比较策略改为“智能内容比较”，准确识别大小和时间相同但内容不同的文件；“极速元数据”保留为明确标注可能漏报的可选模式。
+
+#### 真实环境验证与升级
+
+- 使用独立 MySQL 8.4.11 Windows 实例验证表、视图、函数、过程、字段、中文/NULL/JSON 数据、SQL 错误与多视图结果交互。
+- 使用中文及空格路径的真实左右目录验证相同、内容不同、仅左、仅右和筛选；深度比较能够识别同大小同时间差异文件。
+- v0.16 可直接替换升级，后端配置格式不变；新增列宽、列显隐、SQL snippets 和快捷键偏好保存在浏览器本地。
+
+完整设计原则、架构分层、16 项分级修复、性能对照与迁移说明见应用内「关于 → 版本演进史 → v0.17」。
+
+### v0.16 — 综合运维工作台 + Windows 原生桌面 + 全链路质量收口
 
 #### 数据库与文件工作台
 

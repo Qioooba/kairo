@@ -44,7 +44,8 @@
     initial = initial || {};
     const n = await api('POST', '/api/notes', {
       title: initial.title || '', body: initial.body || '', color: initial.color || 'yellow',
-      pinned: !!initial.pinned, floating: initial.floating !== false
+      pinned: !!initial.pinned, floating: initial.floating !== false,
+      desktop: initial.desktop || null
     });
     replace(n);
     state.activeId = n.floating ? n.id : state.activeId;
@@ -281,16 +282,11 @@
 
   async function toggleFromTopbar() {
     const selection = String(window.getSelection ? window.getSelection() : '').trim();
-    if (selection) {
-      await create({ title: '页面摘录', body: selection, floating: true });
-      toast('已把选中内容加入便笺', 'ok');
-      return;
-    }
-    const visible = state.notes.find(function (n) { return n.floating && !n.archived; });
-    if (visible) { await setFloating(visible.id, false); return; }
-    const recent = state.notes.find(function (n) { return !n.archived; });
-    if (recent) { await setFloating(recent.id, true); return; }
-    await create({ floating: true });
+    await create({
+      title: selection ? '页面摘录' : '', body: selection, floating: false,
+      desktop: { visible: true, x_ratio: .72, y_ratio: .18, width: 340, height: 280 }
+    });
+    toast(selection ? '页面摘录已置顶到桌面' : '已新建桌面便笺', 'ok');
   }
 
   function init() {
@@ -304,8 +300,10 @@
         const icon = el('span', { class: 'icon' });
         icon.appendChild(Kairo.icons.svg('sticky-note'));
         btn.appendChild(icon);
-        btn.appendChild(el('span', { class: 'theme-toggle-label', text: '便笺' }));
+        btn.appendChild(el('span', { class: 'theme-toggle-label', text: '新建便笺' }));
       }
+      btn.title = '新建桌面便笺（Alt+Shift+N）';
+      btn.setAttribute('aria-label', '新建桌面便笺');
       btn.onclick = function () { toggleFromTopbar().catch(function (e) { toast('打开便笺失败：' + e.message, 'err'); }); };
     }
     window.addEventListener('keydown', function (ev) {

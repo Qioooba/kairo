@@ -63,7 +63,9 @@
       });
       filterSel.onchange = function () { filter = filterSel.value; draw(Kairo.notes.state.notes); };
       const newBtn = el('button', { class: 'btn btn-primary', text: '+ 新建便笺', onclick: function () {
-        Kairo.notes.create({ floating: true }).then(function (n) { openEditor(n); }).catch(function (e) { toast(e.message, 'err'); });
+        Kairo.notes.create({ floating: false, desktop: { visible: true, x_ratio: .72, y_ratio: .18, width: 340, height: 280 } })
+          .then(function () { toast('已新建并置顶到桌面，双击卡片即可编辑', 'ok'); })
+          .catch(function (e) { toast(e.message, 'err'); });
       }});
       const toolbar = el('div', { class: 'notes-toolbar' }, [search, filterSel, newBtn]);
       const list = el('div', { class: 'notes-list' });
@@ -97,13 +99,17 @@
         if (n.floating) meta.push('Kairo 内悬浮');
         if (n.desktop && n.desktop.visible) meta.push('桌面置顶');
         if (n.archived) meta.push('已归档');
-        const main = el('button', { class: 'notes-row-main', type: 'button', onclick: function () { openEditor(n); } }, [
+        const main = el('div', { class: 'notes-row-main', tabindex: '0', title: '双击编辑', ondblclick: function () { beginInlineEdit(article, n); }, onkeydown: function (ev) { if (ev.key === 'Enter') beginInlineEdit(article, n); } }, [
           el('div', { class: 'notes-row-title', text: title }),
           el('div', { class: 'notes-row-preview', text: String(n.body || '').slice(0, 240) || '空便笺' }),
           el('div', { class: 'notes-row-meta muted', text: meta.join(' · ') || ('更新于 ' + formatTime(n.updated_at)) })
         ]);
         const actions = el('div', { class: 'notes-row-actions' }, [
-          actionBtn(n.floating ? '收起' : '悬浮', function () { Kairo.notes.setFloating(n.id, !n.floating); }),
+          actionBtn(n.desktop && n.desktop.visible ? '桌面收起' : '桌面置顶', function () {
+            const desktop = Object.assign({ x_ratio: .72, y_ratio: .18, width: 340, height: 280 }, n.desktop || {});
+            desktop.visible = !(n.desktop && n.desktop.visible);
+            return Kairo.notes.update(n.id, { desktop: desktop, floating: false });
+          }),
           actionBtn(n.pinned ? '取消置顶' : '列表置顶', function () { Kairo.notes.update(n.id, { pinned: !n.pinned }); }),
           actionBtn('设提醒', function () { Kairo.notes.state.pendingReminder = n; switchTab('reminders'); }),
           actionBtn(n.archived ? '恢复' : '归档', function () { Kairo.notes.update(n.id, { archived: !n.archived }); }),
@@ -112,7 +118,33 @@
             Kairo.notes.remove(n.id).catch(function (e) { toast(e.message, 'err'); });
           }, 'btn-danger')
         ]);
-        return el('article', { class: 'notes-row note-color-' + n.color }, [main, actions]);
+        const article = el('article', { class: 'notes-row note-color-' + n.color, 'data-note-id': n.id }, [main, actions]);
+        return article;
+      }
+
+      function beginInlineEdit(article, n) {
+        if (!article || article.classList.contains('editing')) return;
+        article.classList.add('editing');
+        const main = article.querySelector('.notes-row-main'), actions = article.querySelector('.notes-row-actions');
+        const title = el('input', { class: 'notes-inline-title', maxlength: '80', placeholder: '标题（可留空）' }); title.value = n.title || '';
+        const body = el('textarea', { class: 'notes-inline-body', maxlength: '20000', placeholder: '直接输入便笺内容…' }); body.value = n.body || '';
+        const colors = el('div', { class: 'notes-inline-colors', 'aria-label': '便笺颜色' });
+        ['yellow','blue','green','pink','gray'].forEach(function (value) {
+          const swatch = el('button', { class: 'note-color-option' + (n.color === value ? ' active' : ''), type: 'button', 'data-color': value, title: value });
+          swatch.onclick = function () { colors.querySelectorAll('.active').forEach(function (x) { x.classList.remove('active'); }); swatch.classList.add('active'); article.className = 'notes-row editing note-color-' + value; };
+          colors.appendChild(swatch);
+        });
+        main.innerHTML = ''; main.append(title, body, colors);
+        actions.innerHTML = '';
+        actions.append(
+          actionBtn('取消', function () { draw(Kairo.notes.state.notes); }),
+          actionBtn('保存', async function () {
+            const active = colors.querySelector('.active');
+            await Kairo.notes.update(n.id, { title: title.value, body: body.value, color: active ? active.dataset.color : n.color, floating: false });
+            toast('便笺已保存', 'ok');
+          })
+        );
+        body.focus();
       }
 
       unsubscribe = Kairo.notes.subscribe(draw);
@@ -123,31 +155,6 @@
       return el('button', { class: 'btn btn-sm ' + (extra || ''), text, onclick: function () {
         Promise.resolve(fn()).catch(function (e) { toast(e.message, 'err'); });
       }});
-    }
-
-    function openEditor(n) {
-      const title = el('input', { class: 'editor-input', type: 'text', maxlength: '80', placeholder: '标题（可留空）' });
-      title.value = n.title || '';
-      const body = el('textarea', { class: 'note-center-editor mono', maxlength: '20000', placeholder: '记录主机、路径、日志片段或下一步…' });
-      body.value = n.body || '';
-      const color = el('select', { class: 'editor-input' });
-      [['yellow','黄色'],['blue','蓝色'],['green','绿色'],['pink','粉色'],['gray','灰色']].forEach(function (pair) {
-        const opt = el('option', { value: pair[0], text: pair[1] }); opt.selected = n.color === pair[0]; color.appendChild(opt);
-      });
-      const modal = Kairo.overlays.modal({
-        title: '编辑便笺',
-        body: el('div', { class: 'editor-fields' }, [title, body, color]),
-        footer: el('div', { class: 'editor-footer' }, [
-          el('button', { class: 'btn', text: '取消', onclick: function () { modal.close(); } }),
-          el('button', { class: 'btn btn-primary', text: '保存', onclick: async function () {
-            try {
-              await Kairo.notes.update(n.id, { title: title.value, body: body.value, color: color.value });
-              modal.close(); toast('便笺已保存', 'ok');
-            } catch (e) { toast('保存失败：' + e.message, 'err'); }
-          }})
-        ]), width: 600
-      });
-      setTimeout(function () { body.focus(); }, 0);
     }
 
     function firstLine(s) {

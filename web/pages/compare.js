@@ -283,7 +283,10 @@
     const resultHost = el('div', { class: 'cmp-folder-results' }), progress = el('div', { class: 'cmp-scan-progress', text: '选择两侧目录后开始比较' });
     const progressBar = el('div', { class: 'cmp-progress-track' }, [el('div', { class: 'cmp-progress-bar' })]);
     const cancelBtn = makeButton('取消', 'close', cancelScan); cancelBtn.disabled = true;
-    const deep = el('select', {}, [el('option', { value: 'fast', text: '快速比较（大小 + 时间）' }), el('option', { value: 'deep', text: '内容比较（SHA-256）' })]);
+    const deep = el('select', {}, [
+      el('option', { value: 'deep', text: '智能内容比较（推荐）' }),
+      el('option', { value: 'fast', text: '极速元数据（可能漏报）' })
+    ]);
     const tolerance = el('select', {}, [el('option', { value: '2', text: '时间容差 2 秒' }), el('option', { value: '60', text: '时间容差 1 分钟' }), el('option', { value: '3600', text: '时间容差 1 小时' })]);
     const statusFilter = el('select', {}, [el('option', { value: 'all', text: '全部状态' }), el('option', { value: 'different', text: '所有差异' }), el('option', { value: 'left_newer', text: '左侧较新' }), el('option', { value: 'right_newer', text: '右侧较新' }), el('option', { value: 'orphans', text: '仅单侧存在' })]);
     const ignoreExt = el('input', { type: 'text', placeholder: '忽略扩展名：log,tmp,bak' }), search = el('input', { type: 'search', placeholder: '筛选路径…' });
@@ -315,7 +318,9 @@
     function renderScan() {
       if (!state.scan) return; const query = search.value.trim().toLowerCase(), diffOnly = onlyDiff.querySelector('input').checked;
       const items = (state.scan.items || []).filter(item => scanStatusVisible(item.status, statusFilter.value) && (!diffOnly || item.status !== 'same') && (!query || item.rel_path.toLowerCase().includes(query)));
-      resultHost.innerHTML = ''; resultHost.appendChild(createVirtualFolder(items, sources, selected, compareFile, copyItem, updateSelectedStatus));
+      resultHost.innerHTML = '';
+      if (items.length) resultHost.appendChild(createVirtualFolder(items, sources, selected, compareFile, copyItem, updateSelectedStatus));
+      else resultHost.appendChild(el('div', { class: 'cmp-folder-empty', text: diffOnly ? '没有差异：两侧目录在当前比较模式下完全一致。' : '当前筛选条件没有匹配项目。' }));
       const s = state.scan.summary || {}; progress.textContent = '完成 ' + state.scan.elapsed_ms + 'ms · 相同 ' + (s.same || 0) + ' · 不同 ' + (s.different || 0) + ' · 左新 ' + (s.left_newer || 0) + ' · 右新 ' + (s.right_newer || 0) + ' · 仅左 ' + (s.left_only || 0) + ' · 仅右 ' + (s.right_only || 0);
       updateSelectedStatus();
     }

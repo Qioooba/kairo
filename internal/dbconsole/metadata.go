@@ -75,9 +75,10 @@ type Schema struct {
 }
 
 type Object struct {
-	Schema string `json:"schema"`
-	Name   string `json:"name"`
-	Type   string `json:"type"`
+	Schema   string `json:"schema"`
+	Name     string `json:"name"`
+	Type     string `json:"type"`
+	Category string `json:"category"`
 }
 
 type Field struct {
@@ -108,7 +109,7 @@ func (m *Manager) Schemas(ctx context.Context, source Source) ([]Schema, error) 
 	}
 	query := "SELECT schema_name FROM information_schema.schemata ORDER BY schema_name"
 	if source.Kind == KindOracle {
-		query = "SELECT DISTINCT owner FROM all_objects WHERE object_type IN ('TABLE','VIEW') ORDER BY owner"
+		query = "SELECT DISTINCT owner FROM all_objects WHERE object_type IN ('TABLE','VIEW','MATERIALIZED VIEW','FUNCTION','PROCEDURE','PACKAGE','SEQUENCE','SYNONYM','TRIGGER') ORDER BY owner"
 	}
 	rows, err := db.QueryContext(ctx, query)
 	if err != nil {
@@ -155,11 +156,21 @@ func (m *Manager) Objects(ctx context.Context, source Source, schema, search str
 	if source.Kind == KindOracle {
 		rows, err = db.QueryContext(ctx, `SELECT owner, object_name, object_type FROM (
 SELECT owner, object_name, object_type FROM all_objects
-WHERE owner = :1 AND object_type IN ('TABLE','VIEW') AND (:2 = '' OR UPPER(object_name) LIKE :3)
+WHERE owner = :1 AND object_type IN ('TABLE','VIEW','MATERIALIZED VIEW','FUNCTION','PROCEDURE','PACKAGE','SEQUENCE','SYNONYM','TRIGGER') AND (:2 = '' OR UPPER(object_name) LIKE :3)
 ORDER BY object_name) WHERE ROWNUM <= 500`, strings.ToUpper(schema), search, "%"+strings.ToUpper(search)+"%")
 	} else {
-		rows, err = db.QueryContext(ctx, `SELECT table_schema, table_name, table_type FROM information_schema.tables
-WHERE table_schema = ? AND (? = '' OR table_name LIKE ?) ORDER BY table_name LIMIT 500`, schema, search, "%"+search+"%")
+		like := "%" + search + "%"
+		rows, err = db.QueryContext(ctx, `SELECT object_schema, object_name, object_type FROM (
+SELECT table_schema AS object_schema, table_name AS object_name,
+       CASE WHEN table_type = 'VIEW' THEN 'VIEW' ELSE 'TABLE' END AS object_type
+FROM information_schema.tables WHERE table_schema = ? AND (? = '' OR table_name LIKE ?)
+UNION ALL
+SELECT routine_schema, routine_name, routine_type
+FROM information_schema.routines WHERE routine_schema = ? AND (? = '' OR routine_name LIKE ?)
+UNION ALL
+SELECT trigger_schema, trigger_name, 'TRIGGER'
+FROM information_schema.triggers WHERE trigger_schema = ? AND (? = '' OR trigger_name LIKE ?)
+) objects ORDER BY object_type, object_name LIMIT 500`, schema, search, like, schema, search, like, schema, search, like)
 	}
 	if err != nil {
 		return nil, err
@@ -171,6 +182,7 @@ WHERE table_schema = ? AND (? = '' OR table_name LIKE ?) ORDER BY table_name LIM
 		if err := rows.Scan(&item.Schema, &item.Name, &item.Type); err != nil {
 			return nil, err
 		}
+		item.Category = objectCategory(item.Type)
 		out = append(out, item)
 	}
 	if err := rows.Err(); err != nil {
@@ -178,6 +190,23 @@ WHERE table_schema = ? AND (? = '' OR table_name LIKE ?) ORDER BY table_name LIM
 	}
 	metadataCacheSet(m, cacheKey, append([]Object(nil), out...))
 	return out, nil
+}
+
+func objectCategory(objectType string) string {
+	switch strings.ToUpper(strings.TrimSpace(objectType)) {
+	case "TABLE", "BASE TABLE":
+		return "tables"
+	case "VIEW", "MATERIALIZED VIEW":
+		return "views"
+	case "FUNCTION":
+		return "functions"
+	case "PROCEDURE", "PACKAGE":
+		return "procedures"
+	case "TRIGGER":
+		return "triggers"
+	default:
+		return "other"
+	}
 }
 
 func (m *Manager) Fields(ctx context.Context, source Source, schema, object string) ([]Field, error) {
