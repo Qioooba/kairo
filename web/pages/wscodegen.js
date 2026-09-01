@@ -12,8 +12,15 @@
   const Kairo = window.Kairo = window.Kairo || {};
   Kairo.pages = Kairo.pages || {};
   const { el, toast, copyToClipboard } = Kairo.core;
-  const { api, postJSON, getJSON } = Kairo.api;
+  const { api, postJSON, getJSON, getPreference, putPreference, preferenceSaver } = Kairo.api;
   const LS_KEY = 'kairo:wscodegen:form';
+  const SESSION_CONTENT_KEY = 'kairo:wscodegen:session-content';
+  const SAFE_FORM_KEYS = [
+    'source', 'wsdl_project_id', 'wsdl_file', 'wsdl_url', 'engine', 'mode',
+    'package', 'java_source', 'jaxws_target', 'jdk_home', 'project_dir',
+    'output_dir', 'classpath_jars', 'extra_flags', 'include_main', 'overwrite',
+    'open_after'
+  ];
   const ENGINE_HINT = {
     portable: '零依赖，Java 1.6，编不过栈时用这个',
     jaxws: 'JDK 6/8 自带 javax.xml.ws',
@@ -53,16 +60,44 @@
     }
   };
 
-  function loadForm() {
+  const persistPreference = preferenceSaver('wscodegen', 500);
+
+  function preferenceForm(source) {
+    const safe = {};
+    SAFE_FORM_KEYS.forEach(function (key) { safe[key] = source[key]; });
+    if (/^[a-z][a-z0-9+.-]*:\/\/[^/]*@/i.test(safe.wsdl_url || '')) safe.wsdl_url = '';
+    return safe;
+  }
+
+  async function loadForm() {
+    let legacy = {};
+    try { legacy = JSON.parse(localStorage.getItem(LS_KEY) || '{}'); } catch (_) { legacy = {}; }
+    let saved = {}, preferenceAvailable = false;
     try {
-      const saved = JSON.parse(localStorage.getItem(LS_KEY) || '{}');
-      Object.keys(state.form).forEach(function (k) {
-        if (saved[k] !== undefined) state.form[k] = saved[k];
-      });
-    } catch (e) { /* ignore */ }
+      const remote = await getPreference('wscodegen');
+      saved = remote && remote.value && typeof remote.value === 'object' ? remote.value : {};
+      if (!remote.exists && Object.keys(legacy).length) {
+        SAFE_FORM_KEYS.forEach(function (key) { if (legacy[key] !== undefined) saved[key] = legacy[key]; });
+        await putPreference('wscodegen', preferenceForm(saved));
+      }
+      preferenceAvailable = true;
+    } catch (_) {
+      SAFE_FORM_KEYS.forEach(function (key) { if (legacy[key] !== undefined) saved[key] = legacy[key]; });
+    }
+    SAFE_FORM_KEYS.forEach(function (key) {
+      if (saved[key] !== undefined) state.form[key] = saved[key];
+    });
+    try {
+      const sessionContent = sessionStorage.getItem(SESSION_CONTENT_KEY);
+      state.form.wsdl_content = sessionContent !== null ? sessionContent : (legacy.wsdl_content || '');
+      if (legacy.wsdl_content && sessionContent === null) sessionStorage.setItem(SESSION_CONTENT_KEY, legacy.wsdl_content);
+      if (preferenceAvailable) localStorage.removeItem(LS_KEY);
+      else localStorage.setItem(LS_KEY, JSON.stringify(preferenceForm(saved)));
+    } catch (_) { state.form.wsdl_content = legacy.wsdl_content || ''; }
   }
   function saveForm() {
-    try { localStorage.setItem(LS_KEY, JSON.stringify(state.form)); } catch (e) { /* ignore */ }
+    persistPreference(preferenceForm(state.form));
+    try { sessionStorage.setItem(SESSION_CONTENT_KEY, state.form.wsdl_content || ''); } catch (_) { /* best effort */ }
   }
 
   function currentEngine() {
@@ -109,11 +144,49 @@
     return row;
   }
 
+  function wsdlDropRow(input, onBrowse) {
+    const row = pathRow(input, onBrowse);
+    row.classList.add('wsc-drop-zone');
+    row.addEventListener('dragover', function (e) { e.preventDefault(); row.classList.add('dragging'); });
+    row.addEventListener('dragleave', function () { row.classList.remove('dragging'); });
+    row.addEventListener('drop', function (e) {
+      e.preventDefault(); row.classList.remove('dragging');
+      const file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+      if (!file) return;
+      if (!/\.wsdl$/i.test(file.name || '')) { toast('请拖入 .wsdl 文件', 'warn'); return; }
+      // Electron/WebView 环境可直接拿到真实路径；普通浏览器出于安全原因不暴露
+      // 绝对路径，此时读取内容并自动切换到“粘贴内容”，无需等待后端再次打开文件。
+      if (file.path) {
+        state.form.wsdl_file = file.path; saveForm(); rerender();
+        toast('已识别 WSDL 路径', 'ok');
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = function () {
+        state.form.wsdl_content = String(reader.result || '');
+        state.form.source = 'paste'; saveForm(); rerender();
+        toast('已读取 ' + file.name + '，并切换到粘贴内容', 'ok');
+      };
+      reader.onerror = function () { toast('读取 WSDL 文件失败', 'err'); };
+      reader.readAsText(file);
+    });
+    return row;
+  }
+
   function bindInput(input, key) {
     input.value = state.form[key] || '';
     input.addEventListener('input', function () {
       state.form[key] = input.value;
       saveForm();
+    });
+    return input;
+  }
+
+  function bindSessionContent(input) {
+    input.value = state.form.wsdl_content || '';
+    input.addEventListener('input', function () {
+      state.form.wsdl_content = input.value;
+      try { sessionStorage.setItem(SESSION_CONTENT_KEY, input.value); } catch (_) { /* best effort */ }
     });
     return input;
   }
@@ -191,16 +264,16 @@
       }));
     } else if (state.form.source === 'file') {
       const inp = bindInput(el('input', { type: 'text', placeholder: 'D:\\proj\\wsdl\\service.wsdl' }), 'wsdl_file');
-      body.appendChild(field('本地 WSDL 文件', pathRow(inp, function () {
+      body.appendChild(field('本地 WSDL 文件', wsdlDropRow(inp, function () {
         chooseFile(function (p) { state.form.wsdl_file = p; saveForm(); rerender(); });
-      }), '同目录的 .xsd 会自动带上。恒力这类拆 XSD 的 WSDL 必须用文件，或先在 WebService 页连 XSD 一起导入。'));
+      }), '可点击“浏览…”或把 .wsdl 直接拖到这里。同目录的 .xsd 会自动带上；普通浏览器拖拽时会直接读取 WSDL 内容。'));
     } else if (state.form.source === 'url') {
       body.appendChild(field('WSDL URL', bindInput(el('input', { type: 'text', placeholder: 'http://10.0.0.1:8080/svc?wsdl' }), 'wsdl_url'),
         '内置模式会先拉取文本；官方工具模式可把 URL 直接交给生成器。'));
     } else {
-      const ta = bindInput(el('textarea', { rows: '5', placeholder: '把 .wsdl 文本粘贴到这里…', spellcheck: 'false' }), 'wsdl_content');
+      const ta = bindSessionContent(el('textarea', { rows: '5', placeholder: '把 .wsdl 文本粘贴到这里…', spellcheck: 'false' }));
       ta.className = 'wsc-paste';
-      body.appendChild(field('WSDL 文本', ta));
+      body.appendChild(field('WSDL 文本', ta, '仅保留在当前浏览器会话，不写入配置或偏好文件；需要长期复用请导入为 WSDL 项目。'));
     }
 
     return el('div', { class: 'card wsc-card-compact' }, [
@@ -264,7 +337,7 @@
 
     return el('div', { class: 'card wsc-card-compact' }, [
       el('h3', { text: '目标引擎' }),
-      el('div', { class: 'card-desc', text: '单选。选工程真正在用的栈，选错 import 一定编不过。' }),
+      el('div', { class: 'card-desc', text: '这些是 Kairo 内置的生成配置，不是内置第三方运行库。选工程真正在用的栈，选错 import 会编译失败。' }),
       grid,
       el('div', { class: 'wsc-mode-label', text: '生成方式（单选）' }),
       modeBar,
@@ -273,13 +346,13 @@
   }
 
   function renderProjectCard() {
-    const projInp = bindInput(el('input', { type: 'text', placeholder: '工程根目录或 WEB-INF/lib 的上一级' }), 'project_dir');
+    const projInp = bindInput(el('input', { type: 'text', placeholder: '例如 C:\\ideaSpaces\\credit\\WebRoot\\WEB-INF\\lib' }), 'project_dir');
     const kids = [
       el('h3', { text: '工程扫描' }),
-      el('div', { class: 'card-desc', text: '扫 WEB-INF/lib 猜栈。XFire 拆包、没有 generator 时会提示用内置。' }),
-      field('项目目录', pathRow(projInp, function () {
+      el('div', { class: 'card-desc', text: '纯 JDK HttpURLConnection 不需要 lib；JAX-WS 内置模式只需目标工程确实有 JDK 6/8 API；CXF / Axis / XFire 必须扫描工程 lib 或手工选择 jar。可直接选择 C:\\ideaSpaces\\credit\\WebRoot\\WEB-INF\\lib。' }),
+      field('工程目录 / WEB-INF/lib', pathRow(projInp, function () {
         chooseDir(function (p) { state.form.project_dir = p; saveForm(); rerender(); scanProject(); });
-      })),
+      }), '不确定就直接选 WEB-INF/lib；扫描只用于识别依赖，不会修改工程。'),
       el('div', { class: 'btn-row' }, [
         el('button', { class: 'btn btn-primary', type: 'button', text: '扫描 lib', onclick: scanProject })
       ])
@@ -655,7 +728,11 @@
   }
 
   async function renderWSCodegen(view) {
-    loadForm();
+    const renderToken = view.dataset.renderToken;
+    view.innerHTML = '<div class="card muted">正在恢复代码生成偏好…</div>';
+    await loadForm();
+    if (view.dataset.renderToken !== renderToken) return;
+    view.innerHTML = '';
     const pid = hashProjectId();
     if (pid) {
       state.form.source = 'project';

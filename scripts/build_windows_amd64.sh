@@ -27,6 +27,8 @@ else
 fi
 OUT_DIR="dist/kairo-${VER}"
 mkdir -p "${OUT_DIR}"
+# 旧构建目录可能残留历史版本打包的 config.yaml；明确清掉，避免新 ZIP 覆盖用户配置。
+rm -f "${OUT_DIR}/config.yaml"
 
 BUILD_TIME="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 LDFLAGS="-s -w -H windowsgui -X 'kairo/internal/httpserver.Version=${VER}' -X 'kairo/internal/httpserver.BuildTime=${BUILD_TIME}'"
@@ -65,32 +67,13 @@ fi
 
 go build "${GO_MOD_FLAGS[@]}" -trimpath -ldflags "${LDFLAGS}" -o "${OUT_DIR}/Kairo_win10.exe" .
 
-# 复制运行所需文件
-# config.yaml 是首选，但发布包里通常只有 config.yaml.production.example（占位 / 模板）。
-# 优先用本地 config.yaml，没有就回退到 example，再没有就报错退出。
-#
-# 注意：无论走哪条路径，都必须剥离开发者白名单行（kairo: ...），
-# 这是开发者自用旁路，不应进入生产分发包。详见 docs/KAIRO-LICENSE.md。
-# 用 ^\s*kairo: 匹配所有非注释的 kairo 行（不管值的格式：引号、点号、空值等），
-# 注释行（# kairo: ...）以 # 开头不会被误伤。
-if [[ -f config.yaml ]]; then
-  grep -v -E "^\s*kairo:" config.yaml \
-    | awk 'BEGIN{skip=0} /^internal_endpoints:[[:space:]]*$/ {skip=1; next} skip==1 && /^[a-zA-Z_]/{skip=0} skip==0 {print}' \
-    > "${OUT_DIR}/config.yaml"
-elif [[ -f config.yaml.production.example ]]; then
-  echo ">> 警告：未找到 config.yaml，使用 config.yaml.production.example 复制为 config.yaml"
-  grep -v -E "^\s*kairo:" config.yaml.production.example \
-    | awk 'BEGIN{skip=0} /^internal_endpoints:[[:space:]]*$/ {skip=1; next} skip==1 && /^[a-zA-Z_]/{skip=0} skip==0 {print}' \
-    > "${OUT_DIR}/config.yaml"
-else
-  echo "错误：找不到 config.yaml 或 config.yaml.production.example" >&2
-  exit 1
-fi
+# config.yaml 已作为首次启动模板嵌入 EXE。运行时副本位于用户配置目录，
+# 因此发布目录只需要二进制，解压新版不会覆盖用户配置。
 # README.md 不再打进产物目录：同事解压后看 README 没什么用，体积也大（68KB）。
 # 文档统一走 docs/ 目录或仓库本身，需要时看 GitHub / GitLab 即可。
 # 不再需要 start.bat：-H windowsgui 让双击 exe 无控制台窗口，
 # 系统托盘提供"打开浏览器"和"退出"菜单。
-# downloads/ logs/ data/ 由 exe 启动时自动创建，无需预置。
+# config.yaml、downloads/、logs/、data/ 均由 exe 在用户配置目录按需创建。
 
 echo
 echo ">> 已生成："

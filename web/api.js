@@ -69,6 +69,52 @@
   apiNs.putJSON = putJSON;
   apiNs.deleteJSON = deleteJSON;
 
+  async function getPreference(namespace) {
+    const data = await api('GET', '/api/preferences/' + encodeURIComponent(namespace));
+    return data || { exists: false, value: {} };
+  }
+  function putPreference(namespace, value) {
+    return api('PUT', '/api/preferences/' + encodeURIComponent(namespace), value);
+  }
+  function deletePreference(namespace) {
+    return api('DELETE', '/api/preferences/' + encodeURIComponent(namespace));
+  }
+  const pendingPreferences = {};
+  function preferenceSaver(namespace, wait) {
+    let timer = 0;
+    let latest = null;
+    let revision = 0;
+    return function save(value) {
+      latest = value;
+      const mine = ++revision;
+      pendingPreferences[namespace] = { revision: mine, value: value };
+      clearTimeout(timer);
+      timer = setTimeout(function () {
+        const snapshot = latest;
+        putPreference(namespace, snapshot).then(function () {
+          if (pendingPreferences[namespace] && pendingPreferences[namespace].revision === mine) delete pendingPreferences[namespace];
+        }).catch(function (err) {
+          if (mine === revision && window.console) console.warn('保存 ' + namespace + ' 偏好失败:', err);
+        });
+      }, wait == null ? 500 : wait);
+    };
+  }
+  window.addEventListener('pagehide', function () {
+    Object.keys(pendingPreferences).forEach(function (namespace) {
+      try {
+        fetch('/api/preferences/' + encodeURIComponent(namespace), {
+          method: 'PUT', credentials: 'same-origin', keepalive: true,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(pendingPreferences[namespace].value)
+        });
+      } catch (_) { /* best effort during page shutdown */ }
+    });
+  });
+  apiNs.getPreference = getPreference;
+  apiNs.putPreference = putPreference;
+  apiNs.deletePreference = deletePreference;
+  apiNs.preferenceSaver = preferenceSaver;
+
   // triggerDownload 通过 fetch 拿 blob 并触发浏览器下载（不被弹窗拦截）。
   // 默认 filename 走 Content-Disposition；可显式指定 override。
   async function triggerDownload(url, overrideFilename) {

@@ -9,7 +9,7 @@
 
 | 项 | 说明 |
 | --- | --- |
-| 工具包 | `Kairo.exe` + `config.yaml` + `README.md` + `downloads/` + `logs/` + `data/` |
+| 工具包 | 仅 `Kairo.exe`；首次启动在用户配置目录创建 `config.yaml`、`downloads/`、`logs/`、`data/` |
 | Windows 版本 | 主线支持 Win10/11；Win7 仅在 legacy 分支独立验收 |
 | 启动方式 | **先用 `cmd` 启动**（不要直接双击），看完整日志 |
 | 测试服务器 | 至少准备 1 台 Linux 机器，能 SSH 上、有 WebSphere 日志目录 |

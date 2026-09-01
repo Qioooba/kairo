@@ -1,10 +1,13 @@
 package wscodegen
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"kairo/internal/webservice"
@@ -74,6 +77,11 @@ func ResolveWSDL(req Request, store *webservice.Store) (resolvedWSDL, error) {
 
 // Generate 根据请求生成 Java 代码。store 仅在使用已导入项目时需要。
 func Generate(req Request, store *webservice.Store) (Result, error) {
+	return GenerateContext(context.Background(), req, store)
+}
+
+// GenerateContext 生成客户端代码，并把调用方取消信号传递给外部生成工具。
+func GenerateContext(ctx context.Context, req Request, store *webservice.Store) (Result, error) {
 	res := Result{Engine: strings.TrimSpace(req.Engine), Mode: strings.TrimSpace(req.Mode)}
 	if res.Engine == "" {
 		res.Engine = EnginePortable
@@ -114,28 +122,35 @@ func Generate(req Request, store *webservice.Store) (Result, error) {
 		res.Notes = compatibilityNotes(req, resolved)
 	case ModeTool:
 		outDir := strings.TrimSpace(req.OutputDir)
-		if outDir == "" {
+		if outDir == "" && !req.DryRun {
 			return res, fmt.Errorf("官方工具模式必须指定输出目录")
 		}
-		abs, err := filepath.Abs(outDir)
+		planDir := "<output-dir>"
+		abs := ""
+		if outDir != "" {
+			var err error
+			abs, err = filepath.Abs(outDir)
+			if err != nil {
+				return res, err
+			}
+			planDir = abs
+		}
+		plan, err := planTool(req, resolved, planDir, !req.DryRun)
 		if err != nil {
 			return res, err
 		}
-		if err := os.MkdirAll(abs, 0o755); err != nil {
-			return res, fmt.Errorf("创建输出目录失败: %w", err)
-		}
-		plan, err := planTool(req, resolved, abs)
-		if err != nil {
-			return res, err
-		}
+		defer plan.Close()
 		res.Command = formatCommand(plan)
 		if req.DryRun {
 			res.OK = true
 			res.OutputDir = abs
-			res.Notes = append(compatibilityNotes(req, resolved), "dry-run：未真正执行官方工具")
+			res.Notes = append(compatibilityNotes(req, resolved), "dry-run：未创建目录、未写临时 WSDL、未执行官方工具")
 			return res, nil
 		}
-		logText, err := runTool(plan)
+		if err := prepareToolOutputDir(abs, req.Overwrite); err != nil {
+			return res, err
+		}
+		logText, err := runTool(ctx, plan)
 		res.ToolLog = trimLog(logText, 8000)
 		if err != nil {
 			return res, err
@@ -180,15 +195,55 @@ func Generate(req Request, store *webservice.Store) (Result, error) {
 }
 
 func fileURI(path string) string {
-	abs, err := filepath.Abs(path)
+	raw := strings.TrimSpace(path)
+	if windowsDrivePathRe.MatchString(raw) {
+		slashed := strings.ReplaceAll(raw, "\\", "/")
+		return (&url.URL{Scheme: "file", Path: "/" + slashed}).String()
+	}
+	if strings.HasPrefix(raw, `\\`) || strings.HasPrefix(raw, "//") {
+		slashed := strings.TrimLeft(strings.ReplaceAll(raw, "\\", "/"), "/")
+		parts := strings.SplitN(slashed, "/", 2)
+		if len(parts) == 2 && parts[0] != "" {
+			return (&url.URL{Scheme: "file", Host: parts[0], Path: "/" + parts[1]}).String()
+		}
+	}
+	abs, err := filepath.Abs(raw)
 	if err != nil {
-		abs = path
+		abs = raw
 	}
-	slashed := filepath.ToSlash(abs)
-	if !strings.HasPrefix(slashed, "/") {
-		slashed = "/" + slashed
+	return (&url.URL{Scheme: "file", Path: filepath.ToSlash(abs)}).String()
+}
+
+var windowsDrivePathRe = regexp.MustCompile(`^[A-Za-z]:[\\/]`)
+
+func prepareToolOutputDir(abs string, overwrite bool) error {
+	st, err := os.Lstat(abs)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return err
+		}
+		if err := os.MkdirAll(abs, 0o755); err != nil {
+			return fmt.Errorf("创建输出目录失败: %w", err)
+		}
+		return nil
 	}
-	return "file://" + slashed
+	if st.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("输出目录是符号链接，拒绝写入")
+	}
+	if !st.IsDir() {
+		return fmt.Errorf("输出路径已存在且不是目录")
+	}
+	if overwrite {
+		return nil
+	}
+	entries, err := os.ReadDir(abs)
+	if err != nil {
+		return err
+	}
+	if len(entries) != 0 {
+		return fmt.Errorf("输出目录不是空目录；未勾选覆盖时拒绝调用官方工具")
+	}
+	return nil
 }
 
 func readXMLFile(path string) (string, error) {

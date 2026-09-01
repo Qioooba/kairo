@@ -153,16 +153,16 @@ func TestProfilesNonEmpty(t *testing.T) {
 
 func TestFileURI(t *testing.T) {
 	got := fileURI(`C:\ideaSpaces\credit\service.wsdl`)
-	if !strings.HasPrefix(got, "file:///") {
-		t.Fatalf("got %s", got)
+	if got != "file:///C:/ideaSpaces/credit/service.wsdl" {
+		t.Fatalf("windows URI = %s", got)
 	}
-	if !strings.Contains(got, "ideaSpaces/credit/service.wsdl") && !strings.Contains(got, "ideaSpaces\\credit") {
-		if !strings.Contains(filepath.ToSlash(got), "service.wsdl") {
-			t.Fatalf("missing filename: %s", got)
-		}
+	unc := fileURI(`\\server\share\credit service.wsdl`)
+	if unc != "file://server/share/credit%20service.wsdl" {
+		t.Fatalf("UNC URI = %s", unc)
 	}
-	if strings.Contains(got, "\\") {
-		t.Fatalf("file URI should use slashes: %s", got)
+	local := fileURI(filepath.Join(t.TempDir(), "中文 空格.wsdl"))
+	if !strings.HasPrefix(local, "file:///") || !strings.Contains(local, "%20") {
+		t.Fatalf("local URI = %s", local)
 	}
 }
 

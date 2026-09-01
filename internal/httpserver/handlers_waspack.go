@@ -69,6 +69,53 @@ func (s *Server) handleWASPackBuild(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, res)
 }
 
+func (s *Server) handleWASPackExtract(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeErr(w, 405, errors.New("仅支持 POST"))
+		return
+	}
+	req, err := decodeWASPackReq(r)
+	if err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	if strings.TrimSpace(req.OutputDir) == "" {
+		writeErr(w, 400, errors.New("请选择目标目录"))
+		return
+	}
+	res, err := waspack.Extract(toWASPackReq(req))
+	if err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	s.audit.Write("waspack.extract", "project", req.ProjectDir, "output", res.OutputDir, "war", res.WarDir, "files", res.Files, "result", "ok")
+	writeJSON(w, 200, res)
+}
+
+func (s *Server) handleWASPackPackage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeErr(w, 405, errors.New("仅支持 POST"))
+		return
+	}
+	var req waspackReq
+	if err := json.NewDecoder(io.LimitReader(r.Body, 32*1024)).Decode(&req); err != nil {
+		writeErr(w, 400, fmt.Errorf("请求体解析失败: %w", err))
+		return
+	}
+	req.OutputDir, req.PackageName = strings.TrimSpace(req.OutputDir), strings.TrimSpace(req.PackageName)
+	if req.OutputDir == "" {
+		writeErr(w, 400, errors.New("请选择目标目录"))
+		return
+	}
+	res, err := waspack.PackageExtracted(toWASPackReq(req))
+	if err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	s.audit.Write("waspack.package", "output", res.OutputDir, "war", res.WarDir, "tar", res.TarFile, "files", res.Files, "result", "ok")
+	writeJSON(w, 200, res)
+}
+
 type waspackOpenReq struct {
 	OutputDir string `json:"output_dir"`
 }

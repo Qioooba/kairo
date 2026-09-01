@@ -3,7 +3,7 @@
  *
  * 设计目标：
  *   - 把"关于"从单页简介升级为一份**带交互的产品技术白皮书**
- *   - 顶部 sticky 锚点导航 + 17 个版本卡片 (accordion 折叠) + 14 个数据区块
+ *   - 顶部 sticky 锚点导航 + 18 个版本卡片 (accordion 折叠) + 14 个数据区块
  *   - 内容 100% 由 commit log / 源码 / README 提取, 不注水
  *   - 几万字正文 + 折叠默认收起, 首屏不卡
  */
@@ -131,7 +131,7 @@
     { name: 'modules',      fn: renderModulesSection,      min: 800 },
     { name: 'comparison',   fn: renderComparisonSection,   min: 500 },
     { name: 'bugs',         fn: renderBugStoriesSection,   min: 700 },
-    { name: 'history',      fn: renderHistorySection,      min: 900 },  // changelog 17 版本卡
+    { name: 'history',      fn: renderHistorySection,      min: 900 },  // changelog 18 版本卡
     { name: 'faq',          fn: renderFaqSection,          min: 600 },
     { name: 'roadmap',      fn: renderRoadmapSection,      min: 500 }
   ];
@@ -412,7 +412,7 @@
   ];
 
   // =====================================================================
-  // §10. 功能模块 (13 大模块深度剖析)
+  // §10. 功能模块 (16 大模块深度剖析)
   // =====================================================================
   const featureModules = [
     {
@@ -470,9 +470,9 @@
     {
       icon: 'compareIc', name: '代码比对系统',
       pages: ['compare'],
-      apis: ['/api/diff/compare', '/api/compare/folder-scan', '/api/compare/file-diff'],
+      apis: ['/api/diff/compare', '/api/compare/scan', '/api/compare/jobs/*', '/api/compare/sync*'],
       pkg: 'internal/diff',
-      desc: '基于 Myers diff 算法的行级文本比对 + 文件夹扫描。diff2html 渲染内核，unified / side-by-side / 仅差异 三种视图模式。',
+      desc: '基于 Myers diff 算法的行级文本比对 + 文件夹扫描 + 受控同步。长任务后台运行并可观察、取消，diff2html 支持 unified / side-by-side / 仅差异三种视图。',
       features: [
         'Myers diff O(ND) 算法：单文件 <4MB / 几万行毫秒级',
         '统一 diff 字符串输出：前端可复制 / 下载 .diff 文件',
@@ -480,7 +480,23 @@
         '12 种忽略规则：空行 / 空白 / 大小写 / 行尾 / 注释 等',
         '三层目录递归扫描 + 边-顶点差异图建模',
         'compare_allowed_roots 白名单：fail-closed，空 roots 一律 403',
+        '后台比较 / 同步任务：实时进度、取消、失败项回显，避免大目录操作阻塞页面',
+        '按选中项单向覆盖并可先备份：不镜像删除，降低生产同步误操作风险',
         '修复 5 个 P0 缺陷：边-顶点图渲染 / 大文件预览 / 取消 / 错误反馈 / 折叠展开'
+      ]
+    },
+    {
+      icon: 'modules', name: 'WAS 投产打包',
+      pages: ['waspack'],
+      apis: ['/api/waspack/preview', '/api/waspack/build', '/api/waspack/open'],
+      pkg: 'internal/waspack + internal/httpserver/handlers_waspack.go',
+      desc: '面向 credit IntelliJ 工程的投产清单打包器：对照 src / WebRoot / WEB-INF/classes 预检文件，生成现网可执行的 tar、备份脚本与执行脚本。',
+      features: [
+        '清单规范化：支持 ./src/...、./WEB-INF/...、工程绝对路径粘贴，自动去重并拒绝越界/绝对路径',
+        '工程布局探测：兼容 IntelliJ src + WebRoot 与 exploded WAR 根目录，缺失项和工程告警先于生成展示',
+        'java ↔ class 自动配对：补齐外部类与内部类 .class，避免只投源码或漏投运行时字节码',
+        '安全生成：输出目录必须为空，拒绝符号链接和覆盖已有文件；上限 3000 项，生成失败自动清理',
+        '固定产物：list.txt、Bak{包名}.sh、{包名}.sh、{包名}.tar，并支持生成后打开输出目录'
       ]
     },
     {
@@ -791,12 +807,12 @@
 const changelog = [
     {
       version: 'v0.17',
-      date: '2026-08-31',
-      tag: '数据库工作台专业化 · 桌面交互精修 · 比较引擎准确性',
+      date: '2026-09-01',
+      tag: '数据库工作台专业化 · WAS 投产打包 · WSDL 代码生成 · 比较任务化',
       codename: 'Forge · 精工重铸',
       size: 'xl',
-      headline: '以 PL/SQL Developer、Navicat、DataGrip 与 DBeaver 的高频工作流为参照，重构数据库页面的信息架构和结果交互；同时统一 Windows 桌面便笺语义、修复目录比较漏报与等待反馈，并消除搜索结果展开时的列宽抖动。',
-      stats: { commits: 1, fixes: 16, additions: 14, breaks: 0 },
+      headline: '以 PL/SQL Developer、Navicat、DataGrip 与 DBeaver 的高频工作流为参照，重构数据库页面的信息架构和结果交互；同时补齐 WAS 投产清单打包、老 Java 工程 WSDL 代码生成与可观察的比较/同步任务，并统一 Windows 桌面便笺语义。',
+      stats: { commits: 2, fixes: 21, additions: 20, breaks: 0 },
       principles: [
         '数据库工作台首先服务于“连接—定位对象—编写—执行—检查结果”的连续工作流：数据源管理是渐进式入口，保存后必须收起，把稳定空间留给对象树、编辑器与结果。',
         '错误属于查询结果的一部分：SQL 失败必须在编辑器下方固定结果区域呈现原因、恢复建议和原 SQL，不依赖短暂 Toast，也不能让用户去控制台猜测。',
@@ -807,7 +823,9 @@ const changelog = [
         '展开详情只能改变行高，不能改变列宽：表格使用固定列布局和显式列宽，滚动条空间预留，杜绝点击前后内容横向跳动。',
         '便笺入口必须分层：顶栏快捷入口创建桌面便笺；中心新建只进列表；页面悬浮和桌面置顶由用户显式打开，系统不替用户弹窗。',
         '弹窗和长任务反馈必须稳定：对话框基于视口居中，扫描进度显示实际发现条目，空结果明确说明筛选状态，不让用户面对无意义的 0/2。',
-        '所有优化都需要真实数据和真实点击证据：使用独立 MySQL 8.4 实例、中文/空格路径文件夹和 Playwright 在目标分辨率执行验收。'
+        '所有优化都需要真实数据和真实点击证据：使用独立 MySQL 8.4 实例、中文/空格路径文件夹和 Playwright 在目标分辨率执行验收。',
+        '投产打包必须先预检再落盘：清单路径、工程布局、缺失文件、自动补齐项和输出目录状态全部可见，生成过程拒绝覆盖已有内容。',
+        '老 Java 工程的代码生成必须服从目标工程：优先扫描工程 JDK 与 lib/WEB-INF/lib，无法确认运行时版本时提供 Java 1.6、零第三方依赖的 portable 保底方案。'
       ],
       architecture: {
         layers: [
@@ -817,7 +835,11 @@ const changelog = [
           { name: '结果交互层', detail: '结果区建立 status/error/grid/record 四种明确状态；列宽拖拽、上下文菜单、列管理器、本地筛选与排序共享同一列模型，网格和单记录视图复用同一结果数据。' },
           { name: '比较任务层', detail: '目录遍历回调报告实际已发现项目；本地深度散列并行处理左右文件，默认模式切换为内容校验，元数据极速模式作为明确的可选降级。' },
           { name: '桌面便笺协调层', detail: '顶栏、便笺中心、页面悬浮层和 Win32 窗口共用 notes API 与 revision；桌面同时可见上限 6 张；布局 PATCH 与正文冲突分开处理，内联编辑不会被窗口移动冲掉。' },
-          { name: '稳定数据表布局层', detail: 'WebSphere/搜索排障结果使用 colgroup + table-layout: fixed + stable scrollbar gutter；详情展开只占据跨列内容行，避免内容长度重新参与列宽计算。' }
+          { name: '稳定数据表布局层', detail: 'WebSphere/搜索排障结果使用 colgroup + table-layout: fixed + stable scrollbar gutter；详情展开只占据跨列内容行，避免内容长度重新参与列宽计算。' },
+          { name: '数据库审查层', detail: '对象详情统一返回字段、索引、约束和 DDL/源码；Oracle 执行计划走只读 PLAN_TABLE 读取，前端复用同一工作台结果区。' },
+          { name: 'WSDL 兼容生成层', detail: 'wscodegen 以六种引擎 profile 描述运行时、生成工具、JDK 下限、依赖 jar 和编译注意事项；内置模式与官方工具模式都经过 WSDL 解析和输出预览。' },
+          { name: 'WAS 清单解析层', detail: 'waspack 把粘贴清单规范化为安全相对路径，再按 src/WebRoot/WEB-INF/classes 布局解析真实文件，可选补齐 java 对应的外部类与内部类。' },
+          { name: '单一版本源层', detail: '根目录 VERSION 通过 go:embed 进入 /api/config，前端页脚与关于页只读运行时版本；sync-version.js 派生 README/npm 版本，check-version.js 负责守门。' }
         ],
         retirements: [
           '移除数据库页面“数据源表单长期占据顶部”的布局，改为可展开管理区，保存成功立即回到工作台。',
@@ -825,7 +847,10 @@ const changelog = [
           '移除结果表格不可调整、不可复制字段、只能单一网格查看的静态展示模型。',
           '移除首页便笺入口切换浏览器悬浮卡的旧语义，首页入口只创建原生桌面置顶便笺。',
           '移除便笺中心新建时弹出编辑框的流程，改为立即创建并在卡片上双击编辑。',
-          '移除目录比较默认仅靠 size+mtime 判断内容相同的高风险策略。'
+          '移除目录比较默认仅靠 size+mtime 判断内容相同的高风险策略。',
+          '移除投产包依赖人工从工程目录复制文件、手工拼 tar 命令的流程。',
+          '移除 WSDL 代码生成默认盲用 PATH 上 JDK、忽略目标工程 jar 的不透明路径。',
+          '移除多个用户可见入口各自维护产品版本号的漂移风险。'
         ]
       },
       features: [
@@ -842,7 +867,13 @@ const changelog = [
         { title: '智能目录内容比较', desc: '默认比较模式读取内容散列，准确识别大小和修改时间相同但内容不同的文件；显式提供极速元数据模式给可信时间戳场景，并在文案中提示漏报风险。' },
         { title: '真实扫描进度', desc: '后端遍历过程中按实际发现条目更新进度，本地深度比较左右哈希并发执行；前端筛选为空时展示“当前筛选条件下无文件”而不是空白区域。' },
         { title: '搜索展开零抖动', desc: '搜索排障/WebSphere 下发结果使用固定布局和显式列宽；展开或收起完整命令、结果、错误信息时列宽保持不变。' },
-        { title: '弹窗定位与缓存更新', desc: '比较源选择对话框在不同视口中水平垂直居中并限制最大高度，相关 CSS/JS 静态资源更新缓存版本，升级后无需等待旧资源自然过期。' }
+        { title: '弹窗定位与缓存更新', desc: '比较源选择对话框在不同视口中水平垂直居中并限制最大高度，相关 CSS/JS 静态资源更新缓存版本，升级后无需等待旧资源自然过期。' },
+        { title: 'WAS 投产清单打包', desc: '粘贴 credit 投产清单后先对照本地 IntelliJ 工程预检，自动识别 src / WebRoot / WEB-INF/classes，补齐同名内部类并生成 list.txt、tar、备份脚本和执行脚本。' },
+        { title: '数据库对象详情与执行计划', desc: '对象浏览器新增字段、索引、约束、DDL/源码分栏；SQL 工作台新增只读执行计划入口，Oracle 使用 PLAN_TABLE，MySQL 返回 EXPLAIN 结果。' },
+        { title: 'WS Java 多引擎代码生成', desc: '新增 portable、JAX-WS、CXF、Axis 1.4、Axis2、XFire 六种引擎，支持 WSDL URL/文件/已导入项目输入，提供生成预览与工程化输出。' },
+        { title: '工程 JDK 与依赖对齐', desc: '探测 JAVA_HOME 与常见 JDK 安装目录，扫描 lib / WEB-INF/lib / pom.xml 中的 Axis、XFire、CXF 等 jar，自动建议引擎并提示 JDK 6/8 的兼容边界。' },
+        { title: '比较与同步后台任务', desc: '目录扫描、深度比较和按选中项同步统一走后台 job，前端轮询进度并支持取消；同步默认单向覆盖、可备份且不镜像删除。' },
+        { title: '版本单源与发布守门', desc: '产品版本只维护根目录 VERSION；Go 运行时通过 embed 注入，前端统一读取 /api/config，README 徽章和 npm 版本由脚本派生并在 release 前校验。' }
       ],
       fixes: {
         p0: [
@@ -865,11 +896,17 @@ const changelog = [
           '便笺卡片颜色由局部色条改为整体背景色，并补齐内联编辑状态、保存与取消反馈。',
           '比较结果筛选后无命中时增加带恢复提示的空状态，避免误以为比较没有完成。',
           '结果列宽偏好、SQL snippets 与快捷键设置本地持久化，页面切换和程序重启后保持工作习惯。',
-          '结果表数值使用稳定宽度与溢出策略，长字段通过完整值提示/单记录视图查看，不再挤压相邻列。'
+          '结果表数值使用稳定宽度与溢出策略，长字段通过完整值提示/单记录视图查看，不再挤压相邻列。',
+          '补齐数据库对象详情与执行计划入口，避免用户需要离开工作台手工查询索引、约束、DDL 或执行计划。',
+          '比较扫描和同步统一提供后台进度、取消和失败结果，长目录任务不再依赖单次请求等待。',
+          'WSDL 代码生成对 URL 跳转、超大预览、JDK 版本和缺失依赖增加明确校验与警告。',
+          'WAS 打包对清单大小、文件数量、符号链接、路径越界和非空输出目录做 fail-closed 校验。',
+          '桌面便笺更新区分正文冲突与窗口布局更新，发生 revision 冲突时改为显式让用户选择保留版本。'
         ]
       },
       commits: [
-        { hash: 'd0bf558', msg: 'feat(workbench): professionalize database notes and compare UX' }
+        { hash: 'd0bf558', msg: 'feat(workbench): professionalize database notes and compare UX' },
+        { hash: 'd89c255', msg: 'feat: add WAS pack and WSDL codegen with workbench polish' }
       ],
       performance: [
         { label: '发布质量门', before: '旧版统计不能代表本次改动', after: 'Go 全包 + vet 通过；完整 E2E 1031 通过；环境失败项按正确目录复测 28/28', improve: '结果可追溯、不用旧报告冒充' },
@@ -877,7 +914,10 @@ const changelog = [
         { label: '目录深度比较', before: '同大小同时间文件可能漏报', after: '中文/空格路径 fixture · 2 个内容差异全部识别 · 后端约 1ms', improve: '准确性优先且无感延迟' },
         { label: '搜索结果展开', before: '详情内容参与自动列宽计算', after: '固定 colgroup；展开前后各列宽度完全一致', improve: '横向布局位移为 0' },
         { label: '数据库结果操作', before: '只读静态网格', after: '拖拽列宽 + 排序 + 筛选 + 5 类复制 + 列显隐 + 记录视图', improve: '覆盖日常检查闭环' },
-        { label: '扫描反馈', before: '长时间显示固定 0 / 2', after: '按已发现目录项连续更新', improve: '进度可观察' }
+        { label: '扫描反馈', before: '长时间显示固定 0 / 2', after: '按已发现目录项连续更新', improve: '进度可观察' },
+        { label: '投产包生成', before: '人工从工程拷文件并拼接 tar / shell', after: '清单预检 + 自动配对 + 四件固定产物', improve: '路径和产物可复核' },
+        { label: 'WSDL 客户端生成', before: '手工猜 JDK / jar / 生成器组合', after: '6 引擎 profile + JDK 探测 + 工程扫描 + 内置预览', improve: '老工程兼容决策可见' },
+        { label: '比较与同步任务', before: '长任务缺少统一生命周期', after: 'job 状态、阶段、进度、取消和失败项统一返回', improve: '长任务可观察可回收' }
       ],
       breaking: [],
       migration: [
@@ -890,6 +930,10 @@ const changelog = [
         'Oracle 对象树增加 MATERIALIZED VIEW、PACKAGE、SEQUENCE、SYNONYM 等类型；MySQL 增加 routines/triggers。最终可见范围仍受当前只读账号的数据字典权限约束。',
         'SQL 工作台仍坚持后端只读边界；片段展开只负责输入效率，不放宽多语句、写操作、超时、行数或返回体限制。',
         'JSON、超长二进制等受限列仍会返回明确错误和改写建议；可用 CAST/SUBSTRING 等数据库函数把值转换到安全预览范围。',
+        'WAS 打包不会覆盖非空输出目录；请准备空目录，并在预检确认缺失项为 0 后再生成投产包。',
+        'WS 代码生成默认优先工程 JDK 与依赖 jar；若只需可编译的轻量客户端，可选择 portable，生成 Java 1.6 源码且不依赖第三方 jar。',
+        '比较同步仍是受控单向覆盖：只处理用户选中的项，可选备份，不镜像删除；长任务可在页面取消。',
+        '升级后运行时版本以根目录 VERSION 为准；如修改版本，请执行 node scripts/sync-version.js，再运行 node scripts/check-version.js。',
         '发布验收使用 Go 1.24+：清测试缓存后运行全包 test/vet，npm ci 后执行 WebService 测试和 Playwright E2E，最终以 -mod=vendor -trimpath -H windowsgui 构建 Windows 10/11 版本。'
       ]
     },
@@ -1627,7 +1671,7 @@ const changelog = [
         'Windows zip 打包不再因反斜杠误判失败：filepath.Abs + os.Open + f.Stat 校验',
         '下载进度 SSE 中文 / Unicode 文件名输出合法 UTF-8：encoding/json.Marshal 替代手写',
         'safeWriter 超过 8MB 后只追加一次 truncated marker',
-        '构建脚本容错：缺 config.yaml 但有 config.yaml.production.example 仍能打包',
+        '配置随程序内置：首次启动自动创建唯一 config.yaml，升级包不会覆盖',
         'SSH Dial 超时统一常量：sshDialOuterTimeout (45s) + sshAttemptTimeout (10s)',
         'SFTP 下载支持取消打断：runFilesDownloadTask 在 ctx 取消时主动关闭 SFTP / SSH',
         '任意路径下载前 Stat 拒绝目录、同名不再覆盖 (本地加 idx 前缀)'
@@ -2107,7 +2151,7 @@ const changelog = [
         ])
       ]));
     });
-    view.appendChild(renderSection('sec-modules', 'modules', '功能模块', '13 个深度能力卡 · 22 页面 · 120+ API（v0.17 工作台升级详见版本史）', wrap));
+    view.appendChild(renderSection('sec-modules', 'modules', '功能模块', '16 个深度能力卡 · 24 页面 · 120+ API（v0.17 最新工作台能力详见版本史）', wrap));
   }
 
   // --- 版本演进史 (accordion) ---
@@ -2124,7 +2168,7 @@ const changelog = [
     wrap.appendChild(banner);
     wrap.appendChild(list);
 
-    view.appendChild(renderSection('sec-history', 'history', '版本演进史', 'v0.1 → v0.17 · 18 个版本 (含 v0.13.1 / v0.11-rc1) · 持续迭代 · 164+ commit', wrap));
+    view.appendChild(renderSection('sec-history', 'history', '版本演进史', 'v0.1 → v0.17 · 18 个版本 (含 v0.13.1 / v0.11-rc1) · 持续迭代 · 165+ commit', wrap));
   }
 
   function renderVersionCard(v, idx) {

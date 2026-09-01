@@ -15,16 +15,17 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"gopkg.in/yaml.v3"
 )
 
 // Config 整个配置文件结构
 type Config struct {
-	App     AppConfig      `yaml:"app" json:"app"`
-	Systems []SystemConfig `yaml:"systems" json:"systems"`
-	Search  SearchConfig   `yaml:"search" json:"search"`
-	Auth    AuthConfig     `yaml:"auth,omitempty" json:"auth,omitempty"`
+	// SchemaVersion 是配置文件格式版本，独立于产品版本。
+	// 缺失时按 v0 读取并由迁移器升级；高于当前版本时拒绝写回，避免旧程序丢字段。
+	SchemaVersion int            `yaml:"schema_version" json:"schema_version"`
+	App           AppConfig      `yaml:"app" json:"app"`
+	Systems       []SystemConfig `yaml:"systems" json:"systems"`
+	Search        SearchConfig   `yaml:"search" json:"search"`
+	Auth          AuthConfig     `yaml:"auth,omitempty" json:"auth,omitempty"`
 	// InternalEndpoints (v0.14 起)：Kairo 内部调用的外部 HTTP 端点配置
 	// (激活服务、赞助排行榜等)。每个 endpoint 自己持有 serviceID / URL params
 	// 等"协议约定" (硬编码到对应包内), config 段只管 IP/端口/认证串/超时
@@ -728,18 +729,8 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("读取配置文件失败: %w", err)
 	}
-	var cfg Config
-	if err := yaml.Unmarshal(raw, &cfg); err != nil {
-		return nil, fmt.Errorf("解析 yaml 失败: %w", err)
-	}
-	cfg.Defaults()
-	if err := cfg.Validate(); err != nil {
-		return nil, err
-	}
-	if err := cfg.Auth.Prepare(); err != nil {
-		return nil, err
-	}
-	return &cfg, nil
+	cfg, _, err := decodeAndMigrate(raw)
+	return cfg, err
 }
 
 // Validate 校验关键字段

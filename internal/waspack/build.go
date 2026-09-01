@@ -35,6 +35,7 @@ type Result struct {
 	CreatedDir    bool     `json:"created_dir"`
 	Warnings      []string `json:"warnings,omitempty"`
 	PairedAdded   int      `json:"paired_added"`
+	WarDir        string   `json:"war_dir,omitempty"`
 }
 
 // SanitizePackageName 只允许字母数字和 ._- ，空则用 credit_YYYYMMDD。

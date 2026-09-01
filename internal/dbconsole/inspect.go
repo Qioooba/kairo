@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
 
 func metadataIdent(name string) error {
@@ -506,13 +507,25 @@ func (m *Manager) Explain(ctx context.Context, source Source, query string) ([]E
 			return rows.Err()
 		}
 		id := "KAIRO" + randomExplainID()
+		conn, err := db.Conn(ctx)
+		if err != nil {
+			return err
+		}
+		defer conn.Close()
 		// EXPLAIN PLAN writes PLAN_TABLE. This is a backend-owned diagnostic, not user DML.
-		if _, err := db.ExecContext(ctx, "EXPLAIN PLAN SET STATEMENT_ID = '"+id+"' FOR "+query); err != nil {
+		// 三个操作固定在同一 Oracle session，避免连接池切换导致计划不可见。
+		if _, err := conn.ExecContext(ctx, "EXPLAIN PLAN SET STATEMENT_ID = '"+id+"' FOR "+query); err != nil {
 			return fmt.Errorf("Oracle 执行计划失败（需要 PLAN_TABLE 写权限）: %w", err)
 		}
-		rows, err := db.QueryContext(ctx, `SELECT PLAN_TABLE_OUTPUT FROM TABLE(DBMS_XPLAN.DISPLAY(NULL, :1, 'TYPICAL'))`, id)
+		defer func() {
+			// 查询取消或读取失败也必须清理 PLAN_TABLE；清理使用独立短上下文，
+			// 避免复用已经超时/取消的请求上下文。
+			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			defer cancel()
+			_, _ = conn.ExecContext(cleanupCtx, `DELETE FROM plan_table WHERE statement_id = :1`, id)
+		}()
+		rows, err := conn.QueryContext(ctx, `SELECT PLAN_TABLE_OUTPUT FROM TABLE(DBMS_XPLAN.DISPLAY(NULL, :1, 'TYPICAL'))`, id)
 		if err != nil {
-			_, _ = db.ExecContext(ctx, `DELETE FROM plan_table WHERE statement_id = :1`, id)
 			return err
 		}
 		defer rows.Close()
@@ -529,7 +542,6 @@ func (m *Manager) Explain(ctx context.Context, source Source, query string) ([]E
 		if err := rows.Err(); err != nil {
 			return err
 		}
-		_, _ = db.ExecContext(ctx, `DELETE FROM plan_table WHERE statement_id = :1`, id)
 		return nil
 	})
 	return rowsOut, err

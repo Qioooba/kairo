@@ -14,11 +14,9 @@ package config
 import (
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"sync"
-	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -28,7 +26,7 @@ type Manager struct {
 	mu      sync.RWMutex
 	cfg     *Config
 	path    string // yaml 文件绝对路径
-	baseDir string // 用于解析相对路径的基础目录（exe 所在目录）
+	baseDir string // 用于解析相对路径的基础目录（通常是用户配置目录）
 }
 
 // NewManager 用一份已加载的 Config 构造 Manager。
@@ -57,26 +55,8 @@ func (m *Manager) Get() *Config {
 
 // backupFile 备份当前配置文件到带时间戳的 .bak 文件
 func (m *Manager) backupFile() error {
-	src, err := os.Open(m.path)
-	if err != nil {
-		return fmt.Errorf("打开原配置文件失败: %w", err)
-	}
-	defer src.Close()
-
-	backupPath := fmt.Sprintf("%s.bak.%s", m.path, time.Now().Format("20060102-150405"))
-	dst, err := os.Create(backupPath)
-	if err != nil {
-		return fmt.Errorf("创建备份文件失败: %w", err)
-	}
-	defer dst.Close()
-
-	if _, err := io.Copy(dst, src); err != nil {
-		return fmt.Errorf("写入备份文件失败: %w", err)
-	}
-	if err := dst.Sync(); err != nil {
-		return fmt.Errorf("同步备份文件失败: %w", err)
-	}
-	return nil
+	_, err := backupPath(m.path)
+	return err
 }
 
 // ImportYAML 从 YAML 文本导入配置，替换当前配置，并备份旧文件。
@@ -91,16 +71,9 @@ func (m *Manager) backupFile() error {
 //  7. 原子写新 yaml
 //  8. 替换内存中的 cfg
 func (m *Manager) ImportYAML(yamlData []byte) error {
-	var newCfg Config
-	if err := yaml.Unmarshal(yamlData, &newCfg); err != nil {
-		return fmt.Errorf("解析 yaml 失败: %w", err)
-	}
-	newCfg.Defaults()
-	if err := newCfg.Validate(); err != nil {
+	newCfg, _, err := decodeAndMigrate(yamlData)
+	if err != nil {
 		return fmt.Errorf("配置校验失败: %w", err)
-	}
-	if err := newCfg.Auth.Prepare(); err != nil {
-		return fmt.Errorf("认证配置初始化失败: %w", err)
 	}
 	if err := newCfg.ResolvePaths(m.baseDir); err != nil {
 		return fmt.Errorf("解析路径失败: %w", err)
@@ -117,11 +90,11 @@ func (m *Manager) ImportYAML(yamlData []byte) error {
 	}
 
 	path := m.path
-	if err := writeYAMLAtomic(path, &newCfg); err != nil {
+	if err := writeYAMLAtomic(path, newCfg); err != nil {
 		return fmt.Errorf("写 yaml 失败: %w", err)
 	}
 
-	m.cfg = &newCfg
+	m.cfg = newCfg
 	return nil
 }
 
@@ -137,6 +110,12 @@ func (m *Manager) Replace(newCfg *Config) error {
 		return errors.New("配置为空")
 	}
 	newCfg = newCfg.Clone()
+	if newCfg.SchemaVersion == 0 {
+		newCfg.SchemaVersion = CurrentSchemaVersion
+	}
+	if newCfg.SchemaVersion != CurrentSchemaVersion {
+		return fmt.Errorf("配置格式版本 %d 与当前支持版本 %d 不一致", newCfg.SchemaVersion, CurrentSchemaVersion)
+	}
 	// 1+2. 标准化 + 校验
 	newCfg.Defaults()
 	if err := newCfg.ResolvePaths(m.baseDir); err != nil {

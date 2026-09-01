@@ -2,6 +2,8 @@ package wscodegen
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -21,9 +23,18 @@ type toolPlan struct {
 	Args      []string
 	WorkDir   string
 	Wsimport  string // 非空时直接跑 wsimport 二进制，不再 java -cp
+	TempWSDL  string // 仅实际执行时物化；Close 统一回收
 }
 
-func planTool(req Request, resolved resolvedWSDL, outDir string) (toolPlan, error) {
+func (p *toolPlan) Close() {
+	if p == nil || p.TempWSDL == "" {
+		return
+	}
+	_ = os.Remove(p.TempWSDL)
+	p.TempWSDL = ""
+}
+
+func planTool(req Request, resolved resolvedWSDL, outDir string, materializeWSDL bool) (plan toolPlan, err error) {
 	jdk, ok := InspectJDKHome(req.JDKHome, "user")
 	if !ok {
 		found := DetectJDKs("")
@@ -36,13 +47,18 @@ func planTool(req Request, resolved resolvedWSDL, outDir string) (toolPlan, erro
 	if !fileExists(javaPath) {
 		javaPath = filepath.Join(jdk.Home, "jre", "bin", javaBinName())
 	}
-	wsdlArg, err := wsdlArgForTool(resolved)
+	wsdlArg, tempWSDL, err := wsdlArgForTool(resolved, materializeWSDL)
 	if err != nil {
 		return toolPlan{}, err
 	}
 	pkg := JavaPackage(req.PackageName)
 	cp := strings.Join(uniqueKeep(req.ClasspathJars), classpathSep())
-	plan := toolPlan{JavaPath: javaPath, ClassPath: cp, WorkDir: outDir}
+	plan = toolPlan{JavaPath: javaPath, ClassPath: cp, WorkDir: outDir, TempWSDL: tempWSDL}
+	defer func() {
+		if err != nil {
+			plan.Close()
+		}
+	}()
 
 	switch req.Engine {
 	case EngineJAXWS:
@@ -111,28 +127,34 @@ func planTool(req Request, resolved resolvedWSDL, outDir string) (toolPlan, erro
 	return plan, nil
 }
 
-func wsdlArgForTool(resolved resolvedWSDL) (string, error) {
+func wsdlArgForTool(resolved resolvedWSDL, materialize bool) (string, string, error) {
 	if resolved.FilePath != "" {
-		return resolved.FilePath, nil
+		return resolved.FilePath, "", nil
 	}
 	if resolved.URL != "" {
-		return resolved.URL, nil
+		return resolved.URL, "", nil
 	}
 	if strings.TrimSpace(resolved.Raw) == "" {
-		return "", fmt.Errorf("没有 WSDL 文件或 URL，官方工具无法运行")
+		return "", "", fmt.Errorf("没有 WSDL 文件或 URL，官方工具无法运行")
+	}
+	if !materialize {
+		return filepath.Join(os.TempDir(), "kairo-wsdl-preview.wsdl"), "", nil
 	}
 	tmp, err := os.CreateTemp("", "kairo-wsdl-*.wsdl")
 	if err != nil {
-		return "", fmt.Errorf("写临时 WSDL 失败: %w", err)
+		return "", "", fmt.Errorf("写临时 WSDL 失败: %w", err)
 	}
+	name := tmp.Name()
 	if _, err := tmp.WriteString(resolved.Raw); err != nil {
-		tmp.Close()
-		return "", err
+		_ = tmp.Close()
+		_ = os.Remove(name)
+		return "", "", err
 	}
 	if err := tmp.Close(); err != nil {
-		return "", err
+		_ = os.Remove(name)
+		return "", "", err
 	}
-	return tmp.Name(), nil
+	return name, name, nil
 }
 
 func formatCommand(plan toolPlan) string {
@@ -156,30 +178,28 @@ func shellJoin(parts []string) string {
 	return strings.Join(out, " ")
 }
 
-func runTool(plan toolPlan) (logText string, err error) {
+func runTool(parent context.Context, plan toolPlan) (logText string, err error) {
+	ctx, cancel := context.WithTimeout(parent, toolTimeout)
+	defer cancel()
 	var cmd *exec.Cmd
 	if plan.Wsimport != "" {
-		cmd = exec.Command(plan.Wsimport, plan.Args...)
+		cmd = exec.CommandContext(ctx, plan.Wsimport, plan.Args...)
 	} else {
 		args := append([]string{"-cp", plan.ClassPath, plan.MainClass}, plan.Args...)
-		cmd = exec.Command(plan.JavaPath, args...)
+		cmd = exec.CommandContext(ctx, plan.JavaPath, args...)
 	}
 	cmd.Dir = plan.WorkDir
 	sysutil.HideConsoleWindow(cmd)
 	var buf bytes.Buffer
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
-	done := make(chan error, 1)
-	go func() { done <- cmd.Run() }()
-	select {
-	case err = <-done:
-	case <-time.After(toolTimeout):
-		if cmd.Process != nil {
-			_ = cmd.Process.Kill()
-		}
-		err = fmt.Errorf("生成超时（%s）", toolTimeout)
-	}
+	err = cmd.Run()
 	logText = buf.String()
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		err = fmt.Errorf("生成超时（%s）", toolTimeout)
+	} else if errors.Is(ctx.Err(), context.Canceled) {
+		err = context.Canceled
+	}
 	if err != nil {
 		if logText == "" {
 			return logText, err

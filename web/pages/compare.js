@@ -4,7 +4,7 @@
   const Kairo = window.Kairo = window.Kairo || {};
   Kairo.pages = Kairo.pages || {};
   const { el, toast } = Kairo.core;
-  const { api } = Kairo.api;
+  const { api, getPreference, putPreference, preferenceSaver } = Kairo.api;
 
   const MAX_INLINE_ROWS = 5000;
   const LS_OPTIONS = 'kairo:compare:workbench-options';
@@ -12,6 +12,8 @@
   let connections = [];
   let activeScanJob = '';
   let scanPollTimer = 0;
+  let persisted = { options: {}, sources: {} };
+  const persistPreference = preferenceSaver('compare', 400);
 
   function icon(name) {
     const paths = {
@@ -25,23 +27,43 @@
     return '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="' + (paths[name] || paths.compare) + '"/></svg>';
   }
 
-  function loadOptions() {
+  function loadLegacyOptions() {
     const defaults = { trim_space: true, ignore_blank: false, ignore_case: false, mode: 'side', onlyDiff: false, backup: true };
     try { return Object.assign(defaults, JSON.parse(localStorage.getItem(LS_OPTIONS) || '{}')); } catch (_) { return defaults; }
   }
-  function saveOptions(options) { try { localStorage.setItem(LS_OPTIONS, JSON.stringify(options)); } catch (_) {} }
-  function loadSavedSources() {
+  function loadLegacySources() {
     try {
       const value = JSON.parse(localStorage.getItem(LS_SOURCES) || '{}');
       ['left', 'right'].forEach(k => { if (value[k]) value[k].password = ''; });
       return value;
     } catch (_) { return {}; }
   }
+  async function loadWorkbenchPreference() {
+    const legacy = { options: loadLegacyOptions(), sources: loadLegacySources() };
+    try {
+      const remote = await getPreference('compare');
+      persisted = remote.exists && remote.value && typeof remote.value === 'object' ? remote.value : legacy;
+      if (!remote.exists) await putPreference('compare', persisted);
+      localStorage.removeItem(LS_OPTIONS);
+      localStorage.removeItem(LS_SOURCES);
+    } catch (_) { persisted = legacy; }
+    persisted.options = Object.assign(loadLegacyOptions(), persisted.options || {});
+    persisted.sources = persisted.sources || {};
+    ['left', 'right'].forEach(function (key) {
+      if (persisted.sources[key]) delete persisted.sources[key].password;
+    });
+    return persisted;
+  }
+  function saveOptions(options) {
+    persisted.options = Object.assign({}, options);
+    persistPreference(persisted);
+  }
   function saveSources(state) {
     try {
       const clean = {};
       ['left', 'right'].forEach(k => { const source = Object.assign({}, state[k].source); delete source.password; clean[k] = source; });
-      localStorage.setItem(LS_SOURCES, JSON.stringify(clean));
+      persisted.sources = clean;
+      persistPreference(persisted);
     } catch (_) {}
   }
 
@@ -85,10 +107,15 @@
       setValue(value) { textarea.value = value || ''; updateGutter(); }, getValue() { return textarea.value; }, updateGutter };
   }
 
-  function renderCompare(view) {
+  async function renderCompare(view) {
+    const renderToken = view.dataset.renderToken;
     if (scanPollTimer) clearTimeout(scanPollTimer);
     activeScanJob = '';
-    const options = loadOptions(), saved = loadSavedSources();
+    view.innerHTML = '<div class="card muted">正在恢复比较工作台偏好…</div>';
+    const preference = await loadWorkbenchPreference();
+    if (view.dataset.renderToken !== renderToken) return;
+    view.innerHTML = '';
+    const options = preference.options, saved = preference.sources;
     const state = {
       left: { source: Object.assign(defaultSource('left'), saved.left || {}), version: null, codec: { encoding: 'utf-8', eol: 'lf', bom: false }, dirty: false },
       right: { source: Object.assign(defaultSource('right'), saved.right || {}), version: null, codec: { encoding: 'utf-8', eol: 'lf', bom: false }, dirty: false },

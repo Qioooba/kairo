@@ -43,8 +43,17 @@ fi
 
 # 清理不需要打进 zip 的内容
 rm -f "${SRC}/audit.log"
+rm -f "${SRC}/config.yaml"
+
+# zip 默认会更新已有归档，已从源目录删除的历史条目仍会残留；每次发版必须全新生成。
+rm -f "${DST}"
 
 (cd "$(dirname "${SRC}")" && zip -r "$(basename "${DST}")" "$(basename "${SRC}")")
+
+if unzip -Z1 "${DST}" | grep -Eq '(^|/)config\.yaml$'; then
+  echo "错误：发布包不应包含会覆盖用户配置的 config.yaml" >&2
+  exit 1
+fi
 
 echo
 echo ">> 已生成：${DST}"

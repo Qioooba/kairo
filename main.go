@@ -53,6 +53,12 @@ var webFS embed.FS
 //go:embed VERSION
 var versionFile string
 
+// config.yaml 是内网发行版的首次启动模板。运行时只写用户配置目录中的副本，
+// 后续升级 EXE 不会覆盖用户已经生成的配置。
+//
+//go:embed config.yaml
+var bootstrapConfigFile []byte
+
 func init() {
 	httpserver.ApplyEmbeddedVersion(versionFile)
 }
@@ -65,18 +71,24 @@ func main() {
 	// 让下次正常启动重新探测。流程跟"主流程"前两段一致（定位 cfg → 加载 →
 	// 解析目录），但失败直接 os.Exit(1) 而不是弹托盘错误框。
 	resetBrowser := flag.Bool("reset-browser", false, "重置浏览器偏好（删除 data/browser_state.json），下次启动重新探测")
+	configPath := flag.String("config", "", "显式指定唯一配置文件路径（开发、测试或定制部署）")
+	portable := flag.Bool("portable", false, "便携模式：配置和运行数据放在程序目录")
 	flag.Parse()
+	location, err := config.ResolveLocation(*configPath, *portable)
+	if err != nil {
+		tray.FatalDialogf("定位用户配置目录失败: %v", err)
+	}
+	bootstrap, err := config.BootstrapDistributionConfig(bootstrapConfigFile)
+	if err != nil {
+		tray.FatalDialogf("准备首次启动配置失败: %v", err)
+	}
+	opened, err := config.Open(location.ConfigPath, bootstrap)
+	if err != nil {
+		tray.FatalDialogf("加载配置失败 (%s): %v", location.ConfigPath, err)
+	}
+	runDir, cfgPath, cfg := location.RootDir, location.ConfigPath, opened.Config
+
 	if *resetBrowser {
-		runDir, cfgPath, err := resolveRunDir()
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "定位运行目录失败:", err)
-			os.Exit(1)
-		}
-		cfg, err := config.Load(cfgPath)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "加载配置失败:", err)
-			os.Exit(1)
-		}
 		if err := cfg.ResolvePaths(runDir); err != nil {
 			fmt.Fprintln(os.Stderr, "解析目录失败:", err)
 			os.Exit(1)
@@ -90,18 +102,7 @@ func main() {
 		return
 	}
 
-	// 1. 确定运行目录。优先用可执行文件目录；若 config.yaml 不在那，
-	// 再回退到当前工作目录，兼容 `go run .` 这类临时二进制路径。
-	runDir, cfgPath, err := resolveRunDir()
-	if err != nil {
-		tray.FatalDialogf("定位运行目录失败: %v", err)
-	}
-	cfg, err := config.Load(cfgPath)
-	if err != nil {
-		tray.FatalDialogf("加载配置失败 (%s): %v", cfgPath, err)
-	}
-
-	// 3. 解析相对目录为基于 exeDir 的绝对路径
+	// 3. 解析相对目录为基于用户配置目录（或 --config 所在目录）的绝对路径
 	if err := cfg.ResolvePaths(runDir); err != nil {
 		tray.FatalDialogf("解析目录失败: %v", err)
 	}
@@ -122,6 +123,12 @@ func main() {
 	}
 	defer logFile.Close()
 	log.SetOutput(io.MultiWriter(os.Stderr, logFile))
+	if opened.Created {
+		log.Printf("首次启动配置已创建: %s", cfgPath)
+	}
+	if opened.Migrated && opened.Backup != "" {
+		log.Printf("配置已升级到 schema_version=%d，旧文件备份: %s", config.CurrentSchemaVersion, opened.Backup)
+	}
 
 	// 4.5 凭据后端模式（项 23）—— 配置加载后立即切换，handler 后续读 Mode() 就知道走哪条路。
 	// 默认值 cfg.App.CredentialStoreEnabled() = "keyring"（向后兼容）。
@@ -552,29 +559,6 @@ func main() {
 		},
 	})
 	log.Println("服务已停止，再见。")
-}
-
-func resolveRunDir() (dir string, cfgPath string, err error) {
-	exeDir, err := exeDirectory()
-	if err != nil {
-		return "", "", err
-	}
-	exeCfg := filepath.Join(exeDir, "config.yaml")
-	if _, statErr := os.Stat(exeCfg); statErr == nil {
-		return exeDir, exeCfg, nil
-	}
-
-	cwd, err := os.Getwd()
-	if err != nil {
-		return "", "", err
-	}
-	cwdCfg := filepath.Join(cwd, "config.yaml")
-	if _, statErr := os.Stat(cwdCfg); statErr == nil {
-		return cwd, cwdCfg, nil
-	}
-
-	// 两边都没有时，保留原行为：优先报告可执行文件目录下的期望路径。
-	return exeDir, exeCfg, nil
 }
 
 // exeDirectory 返回可执行文件所在目录（跨平台）

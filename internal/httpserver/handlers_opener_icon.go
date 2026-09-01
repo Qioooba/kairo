@@ -163,17 +163,17 @@ func (s *Server) handleAdminOpenersExtractIcon(w http.ResponseWriter, r *http.Re
 		// 平台不支持 / 文件无图标 → 返回 200 + 空 base64，前端 fallback
 		if errors.Is(err, iconextract.ErrUnsupported) {
 			writeJSON(w, 200, map[string]any{
-				"png_base64": "",
+				"png_base64":  "",
 				"unsupported": true,
-				"reason": err.Error(),
+				"reason":      err.Error(),
 			})
 			return
 		}
 		// 其他错误（文件不存在 / GDI 失败）也走 fallback，不弹错误
 		writeJSON(w, 200, map[string]any{
-			"png_base64": "",
+			"png_base64":  "",
 			"unsupported": true,
-			"reason": err.Error(),
+			"reason":      err.Error(),
 		})
 		return
 	}
@@ -215,7 +215,11 @@ func (s *Server) handleLocalOpenerIcon(w http.ResponseWriter, r *http.Request) {
 
 	cachePath, ok := s.openerIconCachePath(name)
 	if !ok {
-		writeErr(w, 404, errors.New("图标未缓存（可能非 Windows 平台或提取失败）"))
+		// 图标只是装饰资源。提取失败时返回内置 SVG，而不是 404：既避免控制台
+		// 被可预期的错误刷屏，也让 Notepad++ / VS Code 等配置始终有稳定占位图。
+		w.Header().Set("Content-Type", "image/svg+xml; charset=utf-8")
+		w.Header().Set("Cache-Control", "private, max-age=3600")
+		_, _ = io.WriteString(w, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect x="3" y="2" width="18" height="20" rx="4" fill="#243247"/><path d="M8 8h8M8 12h8M8 16h5" fill="none" stroke="#8fb3ff" stroke-width="1.8" stroke-linecap="round"/></svg>`)
 		return
 	}
 

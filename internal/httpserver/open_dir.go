@@ -1,15 +1,10 @@
 package httpserver
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
-	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
-
-	"kairo/internal/sysutil"
 )
 
 // revealInFileManager 跨平台"在文件管理器里打开并选中文件"。
@@ -24,83 +19,30 @@ import (
 //     比"复制完整路径 → 粘到文件管理器"省 4-5 步；
 //   - 这是 P3 体验项里"让工具箱更顺手"那一类。
 //
-// 平台选择走 build tag 也可以，但这里 runtime.GOOS 在 binary 里被编译期常量替换，
-// 等同于 build tag 效果，但所有平台代码都集中在一个文件里好读。
+// 平台命令由 open_dir_{darwin,unix,windows}.go 在编译期选择。Windows 实现直接
+// 启动 explorer.exe，不经过 cmd.exe，避免合法路径字符被解释成 shell 运算符。
 //
 // 不要在 server 上跑非平台命令：server 默认 macOS 上运行（开发机），
 // 部署到 Linux server 后这个函数仍然有效（只是行为是 xdg-open）。
 //
 // 调用方负责先做路径白名单校验（见 OpenPathAllowed），本函数只负责调命令。
 func revealInFileManager(path string) error {
-	switch runtime.GOOS {
-	case "darwin":
-		// open -R 在 Finder 里 reveal（不打开新窗口选中）
-		cmd := exec.Command("open", "-R", path)
-		// 不等命令退出：open 是 fork+exec 类型，立即返回；
-		// 等它会卡住当前请求。
-		if err := cmd.Start(); err != nil {
-			return fmt.Errorf("open -R 失败: %w", err)
-		}
-		go func() { _ = cmd.Wait() }()
-		return nil
-	case "windows":
-		// explorer.exe /select,<path>：选中文件
-		// 注意 /select 后紧跟逗号，逗号后是路径；逗号必须紧贴、不能用空格分隔
-		// Windows 命令行不支持正斜杠，拼 explorer 参数前先转成反斜杠
-		winPath := strings.ReplaceAll(path, "/", "\\")
-		// v0.11：兼容 Win7
-		// 之前直接 exec.Command("explorer.exe", "/select,"+winPath) 在 Win7 上含空格路径会被
-		// Go 的 CommandLineToArgvW 加引号变成 explorer.exe "/select,C:\path with space\file.log"，
-		// Win7 的 explorer.exe 解析带引号的 /select,"..." 静默失败（Win10/11 修过这个 bug，
-		// 所以 Win10 用户没感知）。改用 cmd /c start "" explorer.exe /select,..."：cmd 内部
-		// 解析引号后 start 启动 explorer，Win7/10/11 都能稳定工作。
-		// start 后那个 "" 是 window title 必填占位（start "<title>" <command>）。
-		cmd := exec.Command("cmd", "/c", "start", "", "explorer.exe", "/select,"+winPath)
-		sysutil.HideConsoleWindow(cmd) // 双击 GUI exe 启动时避免弹 cmd 黑框
-		if err := cmd.Start(); err != nil {
-			return fmt.Errorf("explorer.exe 启动失败: %w", err)
-		}
-		go func() { _ = cmd.Wait() }()
-		return nil
-	default:
-		// Linux：xdg-open 父目录（Linux 文件管理器没统一 reveal 协议）
-		dir := filepath.Dir(path)
-		cmd := exec.Command("xdg-open", dir)
-		if err := cmd.Start(); err != nil {
-			return fmt.Errorf("xdg-open 失败: %w", err)
-		}
-		go func() { _ = cmd.Wait() }()
-		return nil
+	cmd, label := platformRevealCommand(path)
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("%s 失败: %w", label, err)
 	}
+	go func() { _ = cmd.Wait() }()
+	return nil
 }
 
 // openFolderInFileManager 打开目录本身（进入该文件夹），而不是在父目录里选中它。
 func openFolderInFileManager(dir string) error {
-	switch runtime.GOOS {
-	case "darwin":
-		cmd := exec.Command("open", dir)
-		if err := cmd.Start(); err != nil {
-			return fmt.Errorf("open 失败: %w", err)
-		}
-		go func() { _ = cmd.Wait() }()
-		return nil
-	case "windows":
-		winPath := strings.ReplaceAll(dir, "/", "\\")
-		cmd := exec.Command("cmd", "/c", "start", "", "explorer.exe", winPath)
-		sysutil.HideConsoleWindow(cmd)
-		if err := cmd.Start(); err != nil {
-			return fmt.Errorf("explorer.exe 启动失败: %w", err)
-		}
-		go func() { _ = cmd.Wait() }()
-		return nil
-	default:
-		cmd := exec.Command("xdg-open", dir)
-		if err := cmd.Start(); err != nil {
-			return fmt.Errorf("xdg-open 失败: %w", err)
-		}
-		go func() { _ = cmd.Wait() }()
-		return nil
+	cmd, label := platformOpenFolderCommand(dir)
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("%s 失败: %w", label, err)
 	}
+	go func() { _ = cmd.Wait() }()
+	return nil
 }
 
 // openPathAllowed 校验 target 是否在 allowRoot 下。
@@ -147,100 +89,4 @@ func openPathAllowed(allowRoot, target string) error {
 		return fmt.Errorf("target 越界（%s 不在 %s 下）", absTarget, absRoot)
 	}
 	return nil
-}
-
-func chooseFile() (string, error) {
-	switch runtime.GOOS {
-	case "darwin":
-		script := `POSIX path of (choose file with prompt "选择文件" default location (path to downloads folder))`
-		cmd := exec.Command("osascript", "-e", script)
-		var out bytes.Buffer
-		cmd.Stdout = &out
-		cmd.Stderr = &out
-		if err := cmd.Run(); err != nil {
-			if strings.Contains(out.String(), "User canceled") {
-				return "", nil
-			}
-			return "", fmt.Errorf("文件选择失败: %w", err)
-		}
-		return strings.TrimSpace(out.String()), nil
-	case "windows":
-		psScript := `
-Add-Type -AssemblyName System.Windows.Forms
-$dlg = New-Object System.Windows.Forms.OpenFileDialog
-$dlg.Title = "选择文件"
-$dlg.InitialDirectory = [Environment]::GetFolderPath('Desktop')
-$dlg.Filter = "所有文件 (*.*)|*.*"
-$dlg.RestoreDirectory = $true
-if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
-	$dlg.FileName
-}
-`
-		cmd := exec.Command("powershell", "-NoProfile", "-STA", "-WindowStyle", "Hidden", "-Command", psScript)
-		sysutil.HideConsoleWindow(cmd) // CREATE_NO_WINDOW：powershell 启动时也会先建 conhost，加这个彻底消失
-		var out bytes.Buffer
-		cmd.Stdout = &out
-		cmd.Stderr = &out
-		if err := cmd.Run(); err != nil {
-			errStr := out.String()
-			if strings.Contains(errStr, "取消") || strings.Contains(errStr, "cancel") || strings.Contains(errStr, "Cancel") {
-				return "", nil
-			}
-			return "", fmt.Errorf("文件选择失败: %w", err)
-		}
-		result := strings.TrimSpace(out.String())
-		if result == "" {
-			return "", nil
-		}
-		return result, nil
-	default:
-		return "", errors.New("当前平台暂不支持文件选择对话框")
-	}
-}
-
-func chooseDir() (string, error) {
-	switch runtime.GOOS {
-	case "darwin":
-		script := `POSIX path of (choose folder with prompt "选择文件夹" default location (path to downloads folder))`
-		cmd := exec.Command("osascript", "-e", script)
-		var out bytes.Buffer
-		cmd.Stdout = &out
-		cmd.Stderr = &out
-		if err := cmd.Run(); err != nil {
-			if strings.Contains(out.String(), "User canceled") {
-				return "", nil
-			}
-			return "", fmt.Errorf("文件夹选择失败: %w", err)
-		}
-		return strings.TrimSpace(out.String()), nil
-	case "windows":
-		psScript := `
-Add-Type -AssemblyName System.Windows.Forms
-$dlg = New-Object System.Windows.Forms.FolderBrowserDialog
-$dlg.Description = "选择文件夹"
-$dlg.ShowNewFolderButton = $true
-if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
-	$dlg.SelectedPath
-}
-`
-		cmd := exec.Command("powershell", "-NoProfile", "-STA", "-WindowStyle", "Hidden", "-Command", psScript)
-		sysutil.HideConsoleWindow(cmd) // CREATE_NO_WINDOW：powershell 启动时也会先建 conhost，加这个彻底消失
-		var out bytes.Buffer
-		cmd.Stdout = &out
-		cmd.Stderr = &out
-		if err := cmd.Run(); err != nil {
-			errStr := out.String()
-			if strings.Contains(errStr, "取消") || strings.Contains(errStr, "cancel") || strings.Contains(errStr, "Cancel") {
-				return "", nil
-			}
-			return "", fmt.Errorf("文件夹选择失败: %w", err)
-		}
-		result := strings.TrimSpace(out.String())
-		if result == "" {
-			return "", nil
-		}
-		return result, nil
-	default:
-		return "", errors.New("当前平台暂不支持文件夹选择对话框")
-	}
 }

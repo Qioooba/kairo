@@ -2,6 +2,7 @@ package wscodegen
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 
 	"kairo/internal/sysutil"
 )
@@ -122,7 +124,9 @@ func InspectJDKHome(home, source string) (JDKInfo, bool) {
 }
 
 func runJavaVersion(javaPath string) string {
-	cmd := exec.Command(javaPath, "-version")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, javaPath, "-version")
 	sysutil.HideConsoleWindow(cmd)
 	var buf bytes.Buffer
 	cmd.Stdout = &buf

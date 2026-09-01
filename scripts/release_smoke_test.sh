@@ -119,7 +119,7 @@ if ! go build -mod=vendor -o "${BIN}" . 2>&1; then
   echo "   ❌ 编译失败" >&2
   FAIL=1
 else
-  # 创建最小配置（config.yaml 放在二进制同目录，resolveRunDir 会自动找到）
+  # 创建最小配置，并通过 --config 隔离于真实用户配置目录。
   cat > "${BIN_DIR}/config.yaml" <<'YAML'
 app:
   name: smoke-test
@@ -158,7 +158,7 @@ YAML
   mkdir -p "${BIN_DIR}/downloads" "${BIN_DIR}/logs" "${BIN_DIR}/data"
 
   echo "   启动服务（127.0.0.1:18999）..."
-  cd "${BIN_DIR}" && ./kairo-smoke &
+  cd "${BIN_DIR}" && ./kairo-smoke --config "${BIN_DIR}/config.yaml" &
   SRV_PID=$!
   trap 'rm -rf "${TMP_DIR}" "${BIN_DIR}"; kill ${SRV_PID} 2>/dev/null || true' EXIT
 

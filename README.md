@@ -64,21 +64,22 @@ Kairo 全栈自绘 5 套主题，深色 / 浅色 / 护眼绿 / 高对比 / 仙�
 1. 解压发版 zip 到任意目录，比如 `D:\kairo\`
 2. **双击 `Kairo_win10.exe`**（主线支持 Win10/11）：
    - 无控制台黑窗口弹出（`-H windowsgui`）
-   - 浏览器自动打开 `http://127.0.0.1:18092`（端口可在 `config.yaml` 改）
+   - 首次启动在 `%AppData%\Kairo\` 创建唯一 `config.yaml` 和运行目录
+   - 浏览器自动打开 `http://127.0.0.1:18092`（端口可在系统配置页面或该文件中修改）
    - **系统托盘**（右下角）出现 Kairo 图标，常驻进程
 3. 右键托盘图标可 **「打开浏览器」/ 「暂停今日提醒」（v1.0+）/ 「立即恢复」/ 「退出」**
 4. 启动失败会弹 MessageBox 提示错误内容（按 Ctrl+C 可复制），同时写 `crash.log`
-5. 运行日志在 `logs/kairo.log`；审计日志在 `logs/audit.log`（按天滚动为 `audit-YYYY-MM-DD.log`）
+5. 运行日志在 `%AppData%\Kairo\logs\kairo.log`；审计日志同目录保存并按天滚动
 
 ### 方式 B · 开发模式
 
 ```bash
 git clone git@github.com:Qioooba/kairo.git
 cd kairo
-go run .
+go run . --config ./config.yaml
 ```
 
-需要 Go 1.24+；会自动打开 `http://127.0.0.1:18080`（`config.yaml` 没改时）。Win7 版本已与主线解耦，在 legacy 分支独立维护。
+需要 Go 1.24+；`--config` 让开发环境明确使用仓库内唯一配置。省略该参数时与发行版一致，使用系统用户配置目录。Win7 版本已与主线解耦，在 legacy 分支独立维护。
 
 ### 第一次跑要做什么
 
@@ -94,7 +95,10 @@ go run .
 | 偏好 | 存哪 | 何时回填 |
 | --- | --- | --- |
 | **Tail 高亮规则** | `data/preferences.json` 的 `tail.highlights` | 主页 `app.js` 启动时 `GET /api/preferences` 拉到 `Kairo.state.tailHighlights`；websphere tail tab / 独立 tail 窗口共用 |
-| **系统配置** | `config.yaml`（COW Manager 热替换） | 启动时 Load → 立即生效；页面保存后立即写盘 |
+| **工作台偏好** | `data/preferences.json` 的 `users.<用户>.<模块>` | WAS、WSDL 代码生成、比较、数据库偏好按登录用户和模块隔离；0600、原子写；旧 localStorage 安全字段自动迁移 |
+| **数据库数据源** | `data/database-sources.json` + 系统凭据库/`data/credentials.json` | 连接元数据和密码分离，密码不会进入配置或偏好文件 |
+| **便笺** | `data/notes.json` | 内容和桌面布局原子持久化；浏览器悬浮面板位置仍是本机 UI 状态 |
+| **系统配置** | 用户配置目录中的唯一 `config.yaml`（COW Manager 热替换） | 首次启动从内置模板创建；页面保存后立即写盘，升级 EXE 不覆盖 |
 | **凭据模式** | `app.credential_store`（默认 keyring） | 启动时 `credentials.SetMode` |
 | **SSH 日志 / compat profile** | `app.ssh_debug` / `app.ssh_traffic_dump` / `app.ssh_compat_profile` | 启动时 `sshclient.SetLogConfig` / `SetDefaultProfile` |
 | **文件浏览器开关 + 路径白名单** | `app.enable_free_file_browser` / `app.free_file_roots` | 启动时打 WARNING（开）+ handler 即时校验 |
@@ -105,7 +109,7 @@ go run .
 | **License 状态** | `data/.kairo-license`（AES-GCM 加密 + AAD 绑 IP） | 启动时 `license.Check()` 预检；前端 `GET /api/license/status` 实时查询 |
 | **定时提醒** | `data/.kairo-reminders.json` | 启动时 `reminder.Manager` 恢复；到点触发 → 系统通知 |
 
-浏览器侧（localStorage，不进文件）跨刷新保留：
+浏览器侧临时状态（localStorage / sessionStorage，不进文件）：
 
 | 偏好 | 键 |
 | --- | --- |
@@ -113,13 +117,14 @@ go run .
 | WebSphere 上次选的「系统 / 服务器 / 目录 / 用户名」 | `kairo:last:websphere:sel`（老 `dtb:last:websphere:sel` / `otb:last:websphere:sel` 自动迁移） |
 | 文件下载页「当前路径 / 过滤词」 | `kairo:last:files:sel` / `kairo:last:files:filter` |
 | WebSphere 目标区折叠 / 展开 | `kairo:last:websphere:target_collapsed` |
-| 数据库工作台上次使用的数据源 | `kairo:database:last-source`（只存数据源 ID，不存密码） |
 | 提示 banner 关闭状态 | `kairo:dismissed:*`（老 `dtb:dismissed:*` / `otb:dismissed:*` 自动迁移） |
 | 实时 tail 凭据（单次内存 → opener 共享，不进 LS） | `window.opener.Kairo._tailCred` |
+| WAS 清单 / 当次包名 | `sessionStorage[kairo:waspack:session-draft]`（关闭浏览器会话后清除） |
+| 粘贴的 WSDL 内容 | `sessionStorage[kairo:wscodegen:session-content]`（关闭浏览器会话后清除） |
 
 > localStorage 是浏览器本地存储，**换浏览器 / 清缓存 / 隐身模式**会丢；
-> 想跨电脑同步就走 `data/preferences.json`（tail 高亮目前走这条路径）。
-> 如果你想把更多偏好从 localStorage 迁到 preferences.json，在 `web/core.js` 的 `LAST_PREFIX` 相关位置加一对 GET/PUT 调用即可。
+> 工作台长期偏好统一走 `data/preferences.json`；密码、Token、WAS 清单和粘贴 WSDL 会被模块偏好 API 拒绝。
+> `config.yaml` 只放部署与安全配置，不承载页面草稿或“上次选择”状态。
 
 ---
 
@@ -502,8 +507,8 @@ v0.7 起实装的客户端静态工具（无后端改动）：
 | GET | `/api/local/opener-icon` | 读取已缓存的 opener 图标（`<img src>` 直接引用） |
 | GET / PUT | `/api/admin/download-retention` | 下载保留策略读取 / 配置（**admin**，v0.8 起） |
 | GET / PUT | `/api/admin/autostart` | 开机自启开关读取 / 配置（**admin PUT**，v1.0 起） |
-| GET | `/api/preferences` | 用户偏好（前端持久化，落 `data/preferences.json`） |
-| PUT | `/api/preferences` | 写用户偏好（仅 GET / PUT） |
+| GET / PUT | `/api/preferences` | 兼容的全局偏好（Tail 高亮等） |
+| GET / PUT / DELETE | `/api/preferences/{module}` | 按认证用户和模块读写工作台偏好；拒绝密码、Token、清单和粘贴 WSDL |
 
 ### 日志助手
 
@@ -696,12 +701,12 @@ node scripts/check-version.js   # 确认一致；发版脚本会再跑一遍
 
 ```
 Kairo_win10.exe        # 主程序（Win10/11）— 双击即用，无控制台，托盘常驻
-config.yaml            # 配置文件（端口、凭据模式、SSH 兼容 profile）
 ```
 
-> 双击 exe 后自动创建 `downloads/`、`logs/`、`data/` 目录。
+> 双击 exe 后在用户配置目录创建唯一 `config.yaml` 及 `downloads/`、`logs/`、`data/`。
+> 升级只替换 `Kairo_win10.exe`；如需 U 盘便携部署，使用 `--portable`。
 > 启动失败弹 MessageBox（Ctrl+C 可复制）+ 写 `crash.log`。
-> 运行日志在 `logs/kairo.log`，审计日志在 `logs/audit.log`。
+> 运行日志默认在 `%AppData%\Kairo\logs\kairo.log`，审计日志在同目录。
 > 不要把源码、scripts、docs、dist 目录发出去。
 
 ---
@@ -710,7 +715,11 @@ config.yaml            # 配置文件（端口、凭据模式、SSH 兼容 profi
 
 ### `config.yaml` 完整结构
 
+正常安装默认位于系统用户配置目录的 `Kairo/config.yaml`；Windows 通常为 `%AppData%\Kairo\config.yaml`。开发或测试可用 `--config <路径>`，需要把全部数据放在程序旁边时可用 `--portable`。版本升级只替换 EXE，不替换该文件。
+
 ```yaml
+schema_version: 1                  # 配置结构版本，由程序自动迁移，不等于产品版本
+
 app:
   name: Kairo                       # 产品名（主品牌）；副标题「天命契机」用于关于页 / hero 区
   host: 127.0.0.1                   # 默认仅 127.0.0.1 / localhost；启用 auth 后允许 0.0.0.0 / 内网 IP
@@ -828,8 +837,7 @@ systems:
 kairo/
 ├── main.go                            # 入口：解析 -workdir / 加载 config / 起 HTTP server / 注入 license & sponsor
 ├── VERSION                            # 产品版本（唯一手改入口；go:embed）
-├── config.yaml                        # 运行时配置
-├── config.yaml.production.example
+├── config.yaml                        # 首次启动内置模板；运行时使用用户配置目录中的副本
 ├── go.mod / go.sum                    # 依赖锁定（go 1.24）
 ├── vendor/                            # 已固化依赖，clone 后无网可编
 ├── web/                               # 嵌入式前端
@@ -999,7 +1007,7 @@ v1.x 起默认 `auto_open_browser: true`（启动自动打开浏览器）。
 <details>
 <summary><b>Q: 端口被占用？</b></summary>
 
-修改 `app.port`，比如改成 `18090`。`config.yaml.production.example` 是给生产部署用的固定端口 18092 模板。
+修改用户配置目录中唯一 `config.yaml` 的 `app.port`，比如改成 `18090`；也可以在“系统配置”页面保存。
 </details>
 
 <details>
@@ -1404,7 +1412,7 @@ v0.11-rc1 起所有 `/api/*`（除 `/api/license/*`）都被 license 网关拦�
 - **Windows zip 打包不再因反斜杠误判失败**：`filepath.Abs + os.Open + f.Stat` 校验
 - **下载进度 SSE 中文 / Unicode 文件名输出合法 UTF-8**：`encoding/json.Marshal` 替代手写
 - **safeWriter 超过 8MB 后只追加一次 truncated marker**
-- **构建脚本容错**：缺 `config.yaml` 但有 `config.yaml.production.example` 仍能打包
+- **配置随程序内置**：首次启动自动创建唯一 `config.yaml`，升级包不会覆盖
 - **SSH Dial 超时统一常量**：`sshDialOuterTimeout` (45s) + `sshAttemptTimeout` (10s)
 - **SFTP 下载支持取消打断**：`runFilesDownloadTask` 在 ctx 取消时主动关闭 SFTP / SSH
 - **任意路径下载前 Stat 拒绝目录**、**同名不再覆盖**（本地加 idx 前缀）

@@ -1143,15 +1143,20 @@ textarea { resize: vertical; min-height: 60px; font-family: ui-monospace, monosp
   overflow: auto;
 }
 .srv-pick-item {
-  display: flex; align-items: center; gap: 8px;
-  padding: 4px 0;
+  display: grid; grid-template-columns: 18px minmax(140px, 1fr) minmax(170px, auto) minmax(88px, auto); align-items: center; gap: 10px;
+  padding: 6px 4px;
   font-size: 13px;
 }
 .srv-pick-item .name { font-weight: 500; }
-.srv-pick-item .host { color: var(--text-dim); font-family: ui-monospace, monospace; font-size: 12px; }
-.srv-pick-item .status { margin-left: auto; }
+.srv-pick-item .host { color: var(--text-dim); font-family: ui-monospace, monospace; font-size: 12px; white-space: nowrap; }
+.srv-pick-item .status { justify-self: end; white-space: nowrap; }
 .srv-pick-toolbar {
   display: flex; gap: 8px; align-items: center; margin-bottom: 6px; font-size: 12px; color: var(--text-dim);
+}
+@media (max-width: 760px) {
+  .srv-pick-item { grid-template-columns: 18px minmax(0, 1fr) auto; }
+  .srv-pick-item .host { grid-column: 2 / 4; }
+  .srv-pick-item .status { grid-column: 3; grid-row: 1; }
 }
 
 /* v0.5：每台服务器内嵌的日志目录勾选区（多对多用） */
@@ -6700,6 +6705,10 @@ body.has-open-overlay { overflow: hidden; }
 .db-inspect .db-field-list { border-radius: 0 0 5px 5px; flex: 1; }
 .db-ddl { margin: 0; padding: 8px; max-height: 220px; overflow: auto; white-space: pre-wrap; word-break: break-word; font: 11px/1.45 var(--font-mono, ui-monospace, monospace); }
 .db-plan-table td pre { margin: 0; max-width: 420px; white-space: pre-wrap; word-break: break-word; font-size: 11px; }
+.db-plan-head { display: flex; justify-content: space-between; gap: 12px; padding: 9px 12px; border-bottom: 1px solid var(--line); color: var(--text-dim); font-size: 11.5px; }
+.db-plan-head strong { color: var(--text); }
+.db-plan-text { margin: 0; min-height: 320px; max-height: 520px; overflow: auto; padding: 14px 16px; color: var(--text); background: var(--tail-out-bg); font: 12px/1.55 var(--font-mono, ui-monospace, monospace); white-space: pre; }
+.db-meta-retry { margin: 0 10px 10px; }
 #db-history { width: min(220px, 24vw); min-height: 28px; }
 .db-tree-loading, .db-tree-empty { padding: 12px; color: var(--text-mute); font-size: 11.5px; }
 .db-tree-group { border-bottom: 1px solid var(--line); }
@@ -6729,6 +6738,7 @@ body.has-open-overlay { overflow: hidden; }
 .db-editor-bar input[type="number"] { width: 92px; }
 .db-editor-bar > input:not([type="number"]) { flex: 1; min-width: 180px; }
 .db-query-status { margin-left: auto; color: var(--text-dim); font-size: 11.5px; }
+.db-copy-hint { color: var(--text-mute); white-space: nowrap; }
 .db-sql-editor { display: block; width: 100%; min-height: 190px; resize: vertical; border: 0; border-radius: 0; padding: 13px 15px; background: var(--tail-out-bg); color: var(--tail-out-fg); font: 13px/1.6 var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace); tab-size: 2; }
 .db-editor-help { padding: 5px 10px; border-top: 1px solid var(--line); color: var(--text-mute); background: var(--bg-2); font-size: 10.5px; }
 .db-results { padding: 0; min-width: 0; overflow: hidden; }
@@ -6941,6 +6951,8 @@ body.has-open-overlay { overflow: hidden; }
 .wsc-warn { color: var(--warn); }
 .wsc-path-row { display: flex; gap: 8px; }
 .wsc-path-row input { flex: 1; min-width: 0; }
+.wsc-drop-zone { position: relative; border-radius: 8px; outline: 1px dashed transparent; outline-offset: 4px; transition: background .15s ease, outline-color .15s ease; }
+.wsc-drop-zone.dragging { background: color-mix(in srgb, var(--primary) 10%, transparent); outline-color: var(--primary); }
 .wsc-radio-row { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 8px; }
 .wsc-radio, .wsc-engine {
   display: flex; align-items: flex-start; gap: 8px;

@@ -13,6 +13,8 @@ import (
 	"kairo/internal/wscodegen"
 )
 
+const maxFetchedWSDLBytes = 4 * 1024 * 1024
+
 func (s *Server) handleWSCodegenDispatch(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
 	switch {
@@ -82,7 +84,7 @@ func (s *Server) handleWSCodegenGenerate(w http.ResponseWriter, r *http.Request,
 		}
 		req.WSDLContent = raw
 	}
-	res, err := wscodegen.Generate(req, s.ws)
+	res, err := wscodegen.GenerateContext(r.Context(), req, s.ws)
 	if err != nil {
 		writeErr(w, 400, err)
 		return
@@ -141,9 +143,12 @@ func (s *Server) fetchWSDLURL(r *http.Request, rawURL string) (string, error) {
 	if resp.StatusCode >= 400 {
 		return "", fmt.Errorf("WSDL URL 返回 %d", resp.StatusCode)
 	}
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 4*1024*1024))
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxFetchedWSDLBytes+1))
 	if err != nil {
 		return "", err
+	}
+	if len(raw) > maxFetchedWSDLBytes {
+		return "", fmt.Errorf("WSDL 响应超过 %d MiB 上限", maxFetchedWSDLBytes/(1024*1024))
 	}
 	decoded, err := webservice.DecodeXMLBytes(raw, resp.Header.Get("Content-Type"))
 	if err != nil {

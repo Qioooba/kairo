@@ -281,6 +281,27 @@ func TestWSCodegenHengliURLPreview(t *testing.T) {
 	}
 }
 
+func TestWSCodegenURLRejectsOversizedResponseInsteadOfTruncating(t *testing.T) {
+	hs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/xml; charset=utf-8")
+		_, _ = w.Write([]byte(strings.Repeat("x", maxFetchedWSDLBytes+1)))
+	}))
+	t.Cleanup(hs.Close)
+
+	srv, _, _, _ := newTestServer(t)
+	w := doRequest(srv, "POST", "/api/wscodegen/preview", map[string]any{
+		"engine":   "portable",
+		"mode":     "builtin",
+		"wsdl_url": hs.URL + "/oversized.wsdl",
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("code=%d body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "超过") {
+		t.Fatalf("expected explicit size error, body=%s", w.Body.String())
+	}
+}
+
 func TestWSCodegenScanXFire(t *testing.T) {
 	srv, _, _, _ := newTestServer(t)
 	root := t.TempDir()

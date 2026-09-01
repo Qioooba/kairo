@@ -17,6 +17,7 @@ import (
 	"net/http"
 	urlpkg "net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -29,6 +30,7 @@ import (
 	"kairo/internal/license"
 	"kairo/internal/note"
 	"kairo/internal/pet"
+	"kairo/internal/preferences"
 	"kairo/internal/reminder"
 	"kairo/internal/schedtask"
 	"kairo/internal/sshshell"
@@ -143,6 +145,7 @@ type Server struct {
 	compares     *compareJobManager
 	database     *dbconsole.Manager
 	databaseErr  error
+	preferences  *preferences.Store
 
 	// Optional application services are supplied together through Dependencies.
 	reminders *reminder.Manager
@@ -196,6 +199,7 @@ func New(cfg *config.Manager, a *audit.Logger, webRoot fs.FS, tails *tailmgr.Man
 		compares:     newCompareJobManager(),
 		database:     database,
 		databaseErr:  databaseErr,
+		preferences:  preferences.NewStore(filepath.Join(cfg.Get().DataDir(), "preferences.json")),
 		reminders:    deps.Reminders,
 		notes:        deps.Notes,
 		tasks:        deps.Tasks,
@@ -468,6 +472,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleLocalReveal(w, r)
 	case path == "/api/preferences":
 		s.handlePreferences(w, r)
+	case strings.HasPrefix(path, "/api/preferences/"):
+		s.handlePreferenceNamespace(w, r)
 	case path == "/api/local/open-folder":
 		s.handleLocalOpenFolder(w, r)
 	case path == "/api/local/open-with":
@@ -480,6 +486,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleWASPackPreview(w, r)
 	case path == "/api/waspack/build":
 		s.handleWASPackBuild(w, r)
+	case path == "/api/waspack/extract":
+		s.handleWASPackExtract(w, r)
+	case path == "/api/waspack/package":
+		s.handleWASPackPackage(w, r)
 	case path == "/api/waspack/open":
 		s.handleWASPackOpen(w, r)
 	case path == "/api/compare/folder-scan":

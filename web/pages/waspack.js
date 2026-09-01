@@ -7,7 +7,8 @@
   const Kairo = window.Kairo = window.Kairo || {};
   Kairo.pages = Kairo.pages || {};
   const { el, toast, copyToClipboard, lastGet, lastSet, escapeHtml } = Kairo.core;
-  const { api } = Kairo.api;
+  const { api, getPreference, putPreference, preferenceSaver } = Kairo.api;
+  const SESSION_DRAFT_KEY = 'kairo:waspack:session-draft';
 
   const SAMPLE = [
     './CreditManage/CreditApply/FixPrice/MiniFixPriceApplyList.jsp',
@@ -41,7 +42,31 @@
     ]);
   }
 
-  function renderWASPack(view) {
+  async function renderWASPack(view) {
+    const renderToken = view.dataset.renderToken;
+    view.innerHTML = '<div class="card muted">正在恢复 WAS 打包偏好…</div>';
+    let saved = {}, legacy = lastGet('waspack', 'form') || {}, preferenceAvailable = false;
+    try {
+      const remote = await getPreference('waspack');
+      saved = remote && remote.value && typeof remote.value === 'object' ? remote.value : {};
+      if (!remote.exists && Object.keys(legacy).length) {
+        saved = { project_dir: legacy.project_dir || '', output_dir: legacy.output_dir || '', auto_pair: legacy.auto_pair !== false };
+        await putPreference('waspack', saved);
+      }
+      preferenceAvailable = true;
+    } catch (e) {
+      saved = { project_dir: legacy.project_dir || '', output_dir: legacy.output_dir || '', auto_pair: legacy.auto_pair !== false };
+    }
+    let sessionDraft = {};
+    try { sessionDraft = JSON.parse(sessionStorage.getItem(SESSION_DRAFT_KEY) || '{}'); } catch (_) { sessionDraft = {}; }
+    if (!Object.keys(sessionDraft).length && legacy && (legacy.package_name || legacy.manifest)) {
+      sessionDraft = { package_name: legacy.package_name || '', manifest: legacy.manifest || '' };
+      try { sessionStorage.setItem(SESSION_DRAFT_KEY, JSON.stringify(sessionDraft)); } catch (_) {}
+    }
+    if (preferenceAvailable) lastSet('waspack', 'form', null);
+    else lastSet('waspack', 'form', { project_dir: saved.project_dir || '', output_dir: saved.output_dir || '', auto_pair: saved.auto_pair !== false });
+    if (view.dataset.renderToken !== renderToken) return;
+    view.innerHTML = '';
     const projectInp = el('input', {
       type: 'text', id: 'waspack-project',
       placeholder: '例如 C:\\ideaSpaces\\credit',
@@ -70,16 +95,17 @@
       n.setAttribute('autocomplete', 'off');
     });
 
-    const saved = lastGet('waspack', 'form') || {};
     function hasSaved(key) {
       return saved && Object.prototype.hasOwnProperty.call(saved, key);
     }
     if (hasSaved('project_dir')) projectInp.value = saved.project_dir || '';
     if (hasSaved('output_dir')) outputInp.value = saved.output_dir || '';
-    if (hasSaved('package_name') && String(saved.package_name).trim()) pkgInp.value = saved.package_name;
+    if (sessionDraft.package_name && String(sessionDraft.package_name).trim()) pkgInp.value = sessionDraft.package_name;
     else pkgInp.value = 'TT' + todayStamp();
     if (typeof saved.auto_pair === 'boolean') autoPair.checked = saved.auto_pair;
-    if (hasSaved('manifest')) manifestTa.value = saved.manifest || '';
+    if (sessionDraft.manifest) manifestTa.value = sessionDraft.manifest;
+
+    const savePreference = preferenceSaver('waspack', 500);
 
     function pkgBaseName() {
       return (pkgInp.value || '').trim().replace(/\.(tar|sh)$/i, '');
@@ -92,22 +118,34 @@
       }
       tarHint.textContent = '将生成 ' + n + '.tar  ·  ' + n + '.sh  ·  Bak' + n + '.sh  ·  list.txt';
     }
-    function persist() {
-      lastSet('waspack', 'form', {
+    function persistPreferenceFields() {
+      savePreference({
         project_dir: projectInp.value,
         output_dir: outputInp.value,
-        package_name: pkgInp.value,
-        auto_pair: autoPair.checked,
-        manifest: manifestTa.value
+        auto_pair: autoPair.checked
       });
+    }
+    function persistSessionDraft() {
+      try {
+        sessionStorage.setItem(SESSION_DRAFT_KEY, JSON.stringify({ package_name: pkgInp.value, manifest: manifestTa.value }));
+      } catch (_) { /* session draft is best effort */ }
       updateTarHint();
     }
-    [projectInp, outputInp, pkgInp, manifestTa].forEach(function (n) {
-      n.addEventListener('input', persist);
-      n.addEventListener('change', persist);
-      n.addEventListener('blur', persist);
+    function persist() {
+      persistPreferenceFields();
+      persistSessionDraft();
+    }
+    [projectInp, outputInp].forEach(function (n) {
+      n.addEventListener('input', persistPreferenceFields);
+      n.addEventListener('change', persistPreferenceFields);
+      n.addEventListener('blur', persistPreferenceFields);
     });
-    autoPair.addEventListener('change', persist);
+    [pkgInp, manifestTa].forEach(function (n) {
+      n.addEventListener('input', persistSessionDraft);
+      n.addEventListener('change', persistSessionDraft);
+      n.addEventListener('blur', persistSessionDraft);
+    });
+    autoPair.addEventListener('change', persistPreferenceFields);
     updateTarHint();
 
     async function browseInto(inp) {
@@ -185,6 +223,13 @@
         }).join('') + '</ul>';
     }
 
+    function renderExtracted(data) {
+      resultBox.style.display = '';
+      resultBox.innerHTML = '<div class="waspack-ok">第 1 步完成：已抽取 ' + (data.files || 0) + ' 个文件 · ' + fmtBytes(data.bytes) + '</div>' +
+        '<ul class="waspack-artifacts"><li><span>可核对/修改目录</span><code>' + escapeHtml(data.war_dir || '') + '</code></li></ul>' +
+        '<div class="waspack-hint">确认 war 里的内容后，再点“2. 打包”。打包会读取 war 当前内容，因此本地修改会被保留。</div>';
+    }
+
     async function doPreview() {
       persist();
       const body = payload();
@@ -202,21 +247,37 @@
       }
     }
 
-    async function doBuild() {
+    async function doExtract() {
       persist();
       const body = payload();
       if (!body.project_dir) { toast('请选择 credit 工程目录', 'warn'); return; }
       if (!body.output_dir) { toast('请填写要生成的文件夹路径', 'warn'); return; }
       if (!body.manifest.trim()) { toast('请粘贴清单', 'warn'); return; }
-      status.textContent = '正在抽取并打包，不会覆盖已有文件…';
+      status.textContent = '正在把清单文件抽取到目标目录的 war 文件夹…';
       try {
-        const r = await api('POST', '/api/waspack/build', body);
-        renderResult(r);
-        status.textContent = '投产包已生成。';
-        toast('已生成 ' + (r.package_name || '') + '.tar', 'ok');
+        const r = await api('POST', '/api/waspack/extract', body);
+        renderExtracted(r);
+        status.textContent = '抽取完成。可先在 war 目录核对或修改，再执行第 2 步。';
+        toast('已抽取到 war 文件夹', 'ok');
         try {
           await api('POST', '/api/waspack/open', { output_dir: r.output_dir });
         } catch (_) { /* 打开失败不阻断 */ }
+      } catch (e) {
+        status.textContent = e.message || String(e);
+        toast(e.message || String(e), 'err');
+      }
+    }
+
+    async function doPackage() {
+      persist();
+      const body = payload();
+      if (!body.output_dir) { toast('请填写目标目录', 'warn'); return; }
+      status.textContent = '正在按 war 当前内容打包，包内路径保持不变…';
+      try {
+        const r = await api('POST', '/api/waspack/package', { output_dir: body.output_dir, package_name: body.package_name });
+        renderResult(r);
+        status.textContent = '打包完成。';
+        toast('已生成 ' + (r.package_name || '') + '.tar', 'ok');
       } catch (e) {
         status.textContent = e.message || String(e);
         toast(e.message || String(e), 'err');
@@ -236,7 +297,8 @@
     }
 
     const previewBtn = el('button', { type: 'button', class: 'btn', text: '预检清单', onclick: doPreview });
-    const buildBtn = el('button', { type: 'button', class: 'btn btn-primary', text: '一键生成投产包', onclick: doBuild });
+    const extractBtn = el('button', { type: 'button', class: 'btn btn-primary', text: '1. 一键抽取', onclick: doExtract });
+    const packageBtn = el('button', { type: 'button', class: 'btn btn-primary', text: '2. 打包', onclick: doPackage });
     const openFolderBtn = el('button', { type: 'button', class: 'btn', text: '打开打包文件夹', onclick: doOpenFolder });
     const sampleBtn = el('button', { type: 'button', class: 'btn', text: '填入示例清单', onclick: function () {
       if (manifestTa.value.trim() && !confirm('覆盖当前清单？')) return;
@@ -257,7 +319,7 @@
       el('div', { class: 'card' }, [
         el('div', { class: 'waspack-grid' }, [
           pathRow('本地 credit 工程', projectInp, browseProject),
-          pathRow('生成到文件夹（空目录）', outputInp, browseOutput),
+          pathRow('目标目录（抽取到其 war 文件夹）', outputInp, browseOutput),
           el('label', { class: 'waspack-field waspack-field-span' }, [
             el('span', { class: 'waspack-label', text: '包名（执行脚本名）' }),
             pkgInp,
@@ -270,9 +332,10 @@
         ]),
         el('label', { class: 'waspack-field' }, [
           el('span', { class: 'waspack-label', text: '投产清单（每行一个相对路径）' }),
-          manifestTa
+          manifestTa,
+          el('span', { class: 'hint', text: '清单和当次包名仅保留在当前浏览器会话，不写入配置或偏好文件。' })
         ]),
-        el('div', { class: 'waspack-actions' }, [previewBtn, buildBtn, openFolderBtn, sampleBtn, copyListBtn]),
+        el('div', { class: 'waspack-actions' }, [previewBtn, extractBtn, packageBtn, openFolderBtn, sampleBtn, copyListBtn]),
         status,
         previewBox,
         resultBox

@@ -105,4 +105,7 @@ func TestDatabaseCSVEncodingAndFormulaProtection(t *testing.T) {
 	if got := safeCSVCell("中文"); got != "中文" {
 		t.Fatalf("normal UTF-8 text changed: %q", got)
 	}
+	if got := safeCSVCell("/api/original/path"); got != "/api/original/path" {
+		t.Fatalf("slash-containing database text changed: %q", got)
+	}
 }

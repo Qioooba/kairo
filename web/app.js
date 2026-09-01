@@ -101,12 +101,18 @@
       state.currentUnmount = null;
     }
     view.innerHTML = '';
+    const renderToken = String((state.routeRenderToken || 0) + 1);
+    state.routeRenderToken = Number(renderToken);
+    view.dataset.renderToken = renderToken;
     // v0.5 P2-14：配置页有 fixed 底部保存栏，给 view 留 padding-bottom 防遮挡
     view.classList.toggle('has-sticky-footer', name === 'config');
     try {
       const unmount = routes[name](view, resolved.state);
       if (unmount && typeof unmount.then === 'function') {
-        unmount.catch(function (e) {
+        unmount.then(function (cleanup) {
+          if (view.dataset.renderToken === renderToken && typeof cleanup === 'function') state.currentUnmount = cleanup;
+        }).catch(function (e) {
+          if (view.dataset.renderToken !== renderToken) return;
           view.appendChild(Kairo.core.el('div', { class: 'card' }, [
             Kairo.core.el('h3', { text: '页面渲染失败' }),
             Kairo.core.el('div', { class: 'text-err', text: e && e.message ? e.message : String(e) })

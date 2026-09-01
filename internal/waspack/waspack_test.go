@@ -81,11 +81,11 @@ func ideaTree(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
 	writeTree(t, root, map[string]string{
-		"src/cn/com/jscb/www/loan/LoanMeasure/CompanyFixPriceRequestInfo.java":                     "class Company {}",
-		"src/cn/com/jscb/www/loan/LoanMeasure/MiniFixPriceRequestInfo.java":                        "class Mini {}",
+		"src/cn/com/jscb/www/loan/LoanMeasure/CompanyFixPriceRequestInfo.java":                      "class Company {}",
+		"src/cn/com/jscb/www/loan/LoanMeasure/MiniFixPriceRequestInfo.java":                         "class Mini {}",
 		"WebRoot/WEB-INF/classes/cn/com/jscb/www/loan/LoanMeasure/CompanyFixPriceRequestInfo.class": "CLS-C",
-		"WebRoot/WEB-INF/classes/cn/com/jscb/www/loan/LoanMeasure/MiniFixPriceRequestInfo.class":   "CLS",
-		"WebRoot/WEB-INF/classes/cn/com/jscb/www/loan/LoanMeasure/MiniFixPriceRequestInfo$1.class": "INNER",
+		"WebRoot/WEB-INF/classes/cn/com/jscb/www/loan/LoanMeasure/MiniFixPriceRequestInfo.class":    "CLS",
+		"WebRoot/WEB-INF/classes/cn/com/jscb/www/loan/LoanMeasure/MiniFixPriceRequestInfo$1.class":  "INNER",
 		"WebRoot/WEB-INF/web.xml": "<web-app/>",
 		"WebRoot/CreditManage/CreditApply/FixPrice/MiniFixPriceApplyList.jsp": "jsp1",
 		"WebRoot/CreditManage/CreditLine/ProductInfo.jsp":                     "jsp2",
@@ -188,11 +188,11 @@ func TestBuildScriptsMatchBankFormat(t *testing.T) {
 	if strings.Contains(bakS, "#!/bin/sh") || strings.Contains(bakS, "WAS_APP_ROOT") {
 		t.Fatalf("备份脚本不该再带 WAS 包装: %s", bakS)
 	}
-	wantBakPrefix := "tar -cvf Bak" + pkg + ".tar " + BackupHomePrefix + "/"
+	wantBakPrefix := "tar -cvf Bak" + pkg + `.tar "$HOME"'/credit.ear/credit.war/`
 	if !strings.HasPrefix(bakS, wantBakPrefix) {
 		t.Fatalf("备份脚本开头不对:\n%s", bakS)
 	}
-	if !strings.Contains(bakS, BackupHomePrefix+"/CreditManage/CreditLine/ProductInfo.jsp") {
+	if !strings.Contains(bakS, `"$HOME"'/credit.ear/credit.war/CreditManage/CreditLine/ProductInfo.jsp'`) {
 		t.Fatalf("备份脚本缺 jsp: %s", bakS)
 	}
 	if strings.Contains(bakS, "./CreditManage") {
@@ -204,13 +204,13 @@ func TestBuildScriptsMatchBankFormat(t *testing.T) {
 	if strings.Contains(exeS, "\r") {
 		t.Fatal("执行脚本不应含 CR")
 	}
-	if !strings.HasPrefix(exeS, "tar -cvf "+pkg+".tar ./") {
+	if !strings.HasPrefix(exeS, "tar -cvf "+pkg+".tar './") {
 		t.Fatalf("执行脚本开头不对:\n%s", exeS)
 	}
 	if strings.Contains(exeS, BackupHomePrefix) {
 		t.Fatal("执行脚本不应带 $HOME/credit.ear")
 	}
-	if !strings.Contains(exeS, "./CreditManage/CreditLine/ProductInfo.jsp") {
+	if !strings.Contains(exeS, "'./CreditManage/CreditLine/ProductInfo.jsp'") {
 		t.Fatalf("执行脚本缺 jsp: %s", exeS)
 	}
 
@@ -253,6 +253,21 @@ func TestBuildScriptsMatchBankFormat(t *testing.T) {
 	}
 }
 
+func TestScriptsQuoteManifestPathsAsSingleShellArguments(t *testing.T) {
+	rel := `./Credit Manage/a&b$(touch PWN)'s.jsp`
+	files := []ResolvedFile{{Rel: rel}}
+	wantLiteral := shellQuoteArg(rel)
+	execScript := renderExecuteScript("TTsafe", files)
+	if !strings.Contains(execScript, wantLiteral) {
+		t.Fatalf("执行脚本未安全引用路径:\n%s\nwant token %s", execScript, wantLiteral)
+	}
+	backupToken := `"$HOME"` + shellQuoteArg(`/credit.ear/credit.war/`+relNoDot(rel))
+	backupScript := renderBackupScript("TTsafe", files)
+	if !strings.Contains(backupScript, backupToken) {
+		t.Fatalf("备份脚本未安全引用路径:\n%s\nwant token %s", backupScript, backupToken)
+	}
+}
+
 func TestBuildMissingFile(t *testing.T) {
 	project := t.TempDir()
 	writeTree(t, project, map[string]string{"WebRoot/WEB-INF/web.xml": "<web/>"})
@@ -264,6 +279,57 @@ func TestBuildMissingFile(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("缺文件应失败")
+	}
+}
+
+func TestExtractThenPackageUsesEditedWARAndKeepsPaths(t *testing.T) {
+	project := ideaTree(t)
+	out := filepath.Join(t.TempDir(), "staged")
+	req := Request{ProjectDir: project, OutputDir: out, PackageName: "TTstaged", Manifest: "./src/cn/com/jscb/www/loan/LoanMeasure/MiniFixPriceRequestInfo.java\n", AutoPair: true}
+	extracted, err := Extract(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rel := range []string{
+		"src/cn/com/jscb/www/loan/LoanMeasure/MiniFixPriceRequestInfo.java",
+		"WEB-INF/classes/cn/com/jscb/www/loan/LoanMeasure/MiniFixPriceRequestInfo.class",
+		"WEB-INF/classes/cn/com/jscb/www/loan/LoanMeasure/MiniFixPriceRequestInfo$1.class",
+	} {
+		if _, err := os.Stat(filepath.Join(extracted.WarDir, filepath.FromSlash(rel))); err != nil {
+			t.Fatalf("抽取缺少 %s: %v", rel, err)
+		}
+	}
+	edited := filepath.Join(extracted.WarDir, "CreditManage", "manual.jsp")
+	writeTree(t, extracted.WarDir, map[string]string{"CreditManage/manual.jsp": "edited-after-extract"})
+	res, err := PackageExtracted(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Open(res.TarFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	tr := tar.NewReader(f)
+	foundEdited := false
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.HasPrefix(hdr.Name, "./") {
+			t.Fatalf("包内路径变化: %s", hdr.Name)
+		}
+		if hdr.Name == "./CreditManage/manual.jsp" {
+			body, _ := io.ReadAll(tr)
+			foundEdited = string(body) == "edited-after-extract"
+		}
+	}
+	if !foundEdited {
+		t.Fatalf("抽取后新增/修改的文件没有进入 tar: %s", edited)
 	}
 }
 

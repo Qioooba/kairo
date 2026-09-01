@@ -57,7 +57,15 @@ function register(runner, ctx) {
       }
       await page.goto(baseUrl + '/#/wscodegen', { waitUntil: 'domcontentloaded' });
       await page.waitForTimeout(400);
-      await page.evaluate(function () { try { localStorage.removeItem('kairo:wscodegen:form'); } catch (e) { /* ignore */ } });
+      await page.evaluate(async function () {
+        try {
+          localStorage.removeItem('kairo:wscodegen:form');
+          sessionStorage.removeItem('kairo:wscodegen:session-content');
+          await fetch('/api/preferences/wscodegen', { method: 'DELETE', credentials: 'same-origin' });
+        } catch (e) { /* ignore cleanup errors */ }
+      });
+      await page.reload({ waitUntil: 'domcontentloaded' });
+      await page.waitForTimeout(400);
       await cleanupTagged(page);
 
       const files = readHengli();

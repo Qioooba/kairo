@@ -3,10 +3,12 @@
   'use strict';
   const Kairo = window.Kairo = window.Kairo || {};
   const { toast, escapeHtml, copyToClipboard, el } = Kairo.core;
-  const { api } = Kairo.api;
+  const { api, getPreference, putPreference, preferenceSaver } = Kairo.api;
   const LAST_SOURCE = 'kairo:database:last-source';
   const PREFS_KEY = 'kairo:database:workbench-prefs:v2';
   const HISTORY_KEY = 'kairo:database:sql-history:v1';
+  const HISTORY_LIMIT = 20;
+  const HISTORY_ENTRY_MAX = 2000;
   const DEFAULT_PREFS = {
     expandKey: 'Space',
     shortcuts: { run: 'Ctrl+Enter', cancel: 'Escape', grid: 'Alt+1', record: 'Alt+2', explain: 'Ctrl+Shift+E' },
@@ -16,38 +18,42 @@
       { key: 'cnt', text: 'SELECT COUNT(*)\nFROM ${table}', enabled: true }
     ]
   };
+  let persisted = { prefs: null, history: [], last_source: '', column_widths: {}, row_limits: {} };
+  const persistPreference = preferenceSaver('database', 400);
   const state = {
     sources: [], source: null, rows: [], columns: [], controller: null, summary: null, cursor: 0,
     managing: false, workspaceToken: 0, lastSQL: '', lastMaxRows: 0, resultMode: 'grid',
     selectedRow: 0, localFilter: '', hiddenColumns: new Set(), columnWidths: {}, sort: null,
-    prefs: loadPrefs(), lastError: null, inspectTab: 'fields', inspect: null, plan: [], gridReady: false
+    prefs: normalizePrefs({}), lastError: null, inspectTab: 'fields', inspect: null, plan: [], gridReady: false
   };
 
   function h(v) { return escapeHtml(String(v == null ? '' : v)); }
   function q(id) { return document.getElementById(id); }
   function kindLabel(kind) { return kind === 'oracle' ? 'Oracle' : kind === 'mysql' ? 'MySQL' : 'Redis'; }
-  function loadPrefs() {
-    try {
-      const x = JSON.parse(localStorage.getItem(PREFS_KEY) || '{}');
-      return {
-        expandKey: ['Space', 'Tab', 'Enter'].includes(x.expandKey) ? x.expandKey : 'Space',
-        shortcuts: Object.assign({}, DEFAULT_PREFS.shortcuts, x.shortcuts || {}),
-        snippets: Array.isArray(x.snippets) && x.snippets.length ? x.snippets : DEFAULT_PREFS.snippets.map(v => Object.assign({}, v))
-      };
-    } catch (_) {
-      return JSON.parse(JSON.stringify(DEFAULT_PREFS));
-    }
+  function normalizePrefs(x) {
+    x = x && typeof x === 'object' ? x : {};
+    return {
+      expandKey: ['Space', 'Tab', 'Enter'].includes(x.expandKey) ? x.expandKey : 'Space',
+      shortcuts: Object.assign({}, DEFAULT_PREFS.shortcuts, x.shortcuts || {}),
+      snippets: Array.isArray(x.snippets) && x.snippets.length ? x.snippets : DEFAULT_PREFS.snippets.map(v => Object.assign({}, v))
+    };
   }
-  function savePrefs() { localStorage.setItem(PREFS_KEY, JSON.stringify(state.prefs)); }
+  function legacyPrefs() {
+    try { return normalizePrefs(JSON.parse(localStorage.getItem(PREFS_KEY) || '{}')); }
+    catch (_) { return normalizePrefs({}); }
+  }
+  function savePersisted() { persistPreference(persisted); }
+  function savePrefs() { persisted.prefs = state.prefs; savePersisted(); }
   function loadHistory() {
-    try { return JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]'); } catch (_) { return []; }
+    return Array.isArray(persisted.history) ? persisted.history : [];
   }
   function pushHistory(sql) {
     const text = String(sql || '').trim();
-    if (!text) return;
+    if (!text || text.length > HISTORY_ENTRY_MAX) return;
     const items = loadHistory().filter(x => x !== text);
     items.unshift(text);
-    localStorage.setItem(HISTORY_KEY, JSON.stringify(items.slice(0, 50)));
+    persisted.history = items.slice(0, HISTORY_LIMIT);
+    savePersisted();
     refreshHistorySelect();
   }
   function refreshHistorySelect() {
@@ -61,11 +67,45 @@
     select.value = current && items[Number(current)] ? current : '';
   }
   function loadColumnWidths() {
-    try { state.columnWidths = JSON.parse(localStorage.getItem('kairo:database:column-widths:' + (state.source ? state.source.id : 'none')) || '{}'); }
-    catch (_) { state.columnWidths = {}; }
+    state.columnWidths = Object.assign({}, (state.source && persisted.column_widths[state.source.id]) || {});
   }
   function saveColumnWidths() {
-    if (state.source) localStorage.setItem('kairo:database:column-widths:' + state.source.id, JSON.stringify(state.columnWidths));
+    if (!state.source) return;
+    persisted.column_widths[state.source.id] = Object.assign({}, state.columnWidths);
+    savePersisted();
+  }
+
+  async function loadDatabasePreference() {
+    let legacyHistory = [];
+    try { legacyHistory = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]'); } catch (_) {}
+    const legacy = {
+      prefs: legacyPrefs(), history: Array.isArray(legacyHistory) ? legacyHistory.filter(x => typeof x === 'string' && x.length <= HISTORY_ENTRY_MAX).slice(0, HISTORY_LIMIT) : [],
+      last_source: localStorage.getItem(LAST_SOURCE) || '', column_widths: {}, row_limits: {}
+    };
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i), prefix = 'kairo:database:column-widths:';
+        if (key && key.indexOf(prefix) === 0) {
+          try { legacy.column_widths[key.slice(prefix.length)] = JSON.parse(localStorage.getItem(key) || '{}'); } catch (_) {}
+        }
+      }
+      const remote = await getPreference('database');
+      persisted = remote.exists && remote.value && typeof remote.value === 'object' ? remote.value : legacy;
+      if (!remote.exists) await putPreference('database', persisted);
+      const remove = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.indexOf('kairo:database:column-widths:') === 0) remove.push(key);
+      }
+      remove.forEach(key => localStorage.removeItem(key));
+      localStorage.removeItem(PREFS_KEY); localStorage.removeItem(HISTORY_KEY); localStorage.removeItem(LAST_SOURCE);
+    } catch (_) { persisted = legacy; }
+    persisted.prefs = normalizePrefs(persisted.prefs);
+    persisted.history = Array.isArray(persisted.history) ? persisted.history.filter(x => typeof x === 'string' && x.length <= HISTORY_ENTRY_MAX).slice(0, HISTORY_LIMIT) : [];
+    persisted.last_source = String(persisted.last_source || '');
+    persisted.column_widths = persisted.column_widths && typeof persisted.column_widths === 'object' ? persisted.column_widths : {};
+    persisted.row_limits = persisted.row_limits && typeof persisted.row_limits === 'object' ? persisted.row_limits : {};
+    state.prefs = persisted.prefs;
   }
   function cellText(v) {
     if (v == null) return 'NULL';
@@ -96,9 +136,9 @@
   async function loadSources(preferred) {
     const data = await api('GET', '/api/database/sources');
     state.sources = data.sources || [];
-    const wanted = preferred || localStorage.getItem(LAST_SOURCE);
+    const wanted = preferred || persisted.last_source;
     state.source = state.sources.find(s => s.id === wanted) || state.sources[0] || null;
-    if (state.source) localStorage.setItem(LAST_SOURCE, state.source.id);
+    if (state.source) { persisted.last_source = state.source.id; savePersisted(); }
   }
   function sourceOptions() {
     return state.sources.map(s => '<option value="' + h(s.id) + '"' + (state.source && s.id === state.source.id ? ' selected' : '') + '>' + h(s.name) + ' · ' + kindLabel(s.kind) + '</option>').join('');
@@ -110,7 +150,7 @@
     view.innerHTML = '<div class="db-page"><header class="db-topbar card"><div class="db-source-select"><label for="db-source">数据源</label><select id="db-source">' + sourceOptions() + '</select></div><span id="db-source-badge" class="db-kind"></span><button class="btn btn-sm" id="db-test">测试连接</button>' + (canManage ? '<button class="btn btn-sm" id="db-manage" aria-expanded="false">数据源管理</button>' : '') + '<button class="btn btn-sm" id="db-settings">工作台设置</button><span class="db-safe">只读会话 · 行数 / 时长 / 并发保护</span></header><div id="db-manager"></div><div id="db-workspace"></div></div>';
     q('db-source').onchange = function () {
       state.source = state.sources.find(s => s.id === this.value) || null;
-      if (state.source) localStorage.setItem(LAST_SOURCE, state.source.id);
+      if (state.source) { persisted.last_source = state.source.id; savePersisted(); }
       renderWorkspace();
     };
     q('db-test').onclick = testConnection;
@@ -214,7 +254,16 @@
   function renderSQL(host) {
     const initial = state.source.kind === 'oracle' ? 'SELECT SYSDATE AS SERVER_TIME FROM DUAL' : 'SELECT NOW() AS server_time';
     const history = loadHistory();
-    host.innerHTML = '<div class="db-sql-layout"><aside class="card db-meta"><div class="db-pane-title"><span>数据库对象</span><button class="btn btn-xs" id="db-meta-refresh">刷新</button></div><label class="db-compact-label">Schema<select id="db-schema"><option>加载中…</option></select></label><input id="db-object-search" type="search" placeholder="搜索表、视图、函数、过程"><div id="db-objects" class="db-object-list"><div class="db-tree-loading">正在读取元数据…</div></div><div class="db-inspect"><div class="db-inspect-tabs"><button class="db-inspect-tab active" data-tab="fields">字段</button><button class="db-inspect-tab" data-tab="indexes">索引</button><button class="db-inspect-tab" data-tab="constraints">约束</button><button class="db-inspect-tab" data-tab="ddl">DDL</button></div><div id="db-inspect-body" class="db-field-list"><div class="hint">单击对象查看字段、索引、约束和 DDL；双击生成查询。</div></div></div></aside><main class="db-main"><section class="card db-editor-card"><div class="db-editor-tabs"><span class="db-editor-tab active">SQL Console</span><span class="db-dialect">' + kindLabel(state.source.kind) + '</span></div><div class="db-editor-bar"><button class="btn btn-primary" id="db-run">执行 <kbd>' + h(state.prefs.shortcuts.run) + '</kbd></button><button class="btn" id="db-explain">执行计划</button><button class="btn" id="db-cancel" disabled>取消</button><label>最多 <input id="db-max-rows" type="number" min="1" max="' + state.source.max_rows + '" value="' + Math.min(1000, state.source.max_rows) + '"> 行</label><button class="btn" id="db-export" disabled>导出 CSV</button><select id="db-history" title="查询历史"><option value="">历史</option>' + history.map(function (sql, i) { return '<option value="' + i + '">' + h(sql.replace(/\s+/g, ' ').slice(0, 80)) + '</option>'; }).join('') + '</select><span id="db-query-status" class="db-query-status">就绪</span></div><textarea id="db-sql" class="db-sql-editor" spellcheck="false">' + h(initial) + '</textarea><div class="db-editor-help">模板：输入缩写后按 ' + h(state.prefs.expandKey) + ' 展开 · 可在“工作台设置”中自定义</div></section><section class="card db-results"><div class="db-result-toolbar"><div class="db-result-tabs"><button id="db-view-grid" class="db-view-btn active">网格</button><button id="db-view-record" class="db-view-btn">单行记录</button><button id="db-view-plan" class="db-view-btn">执行计划</button></div><input id="db-result-filter" type="search" placeholder="在当前结果中过滤"><button class="btn btn-xs" id="db-copy-columns" disabled>复制字段名</button><button class="btn btn-xs" id="db-column-manager" disabled>显示列</button><span id="db-result-meta">等待执行查询</span></div><div id="db-result-message" class="db-result-message" hidden></div><div id="db-result-grid" class="db-result-grid"></div></section></main></div>';
+    const savedRows = Math.max(1, Math.min(state.source.max_rows, Number(persisted.row_limits[state.source.id]) || Math.min(1000, state.source.max_rows)));
+    host.innerHTML = '<div class="db-sql-layout"><aside class="card db-meta"><div class="db-pane-title"><span>数据库对象</span><button class="btn btn-xs" id="db-meta-refresh">刷新</button></div><label class="db-compact-label">Schema<select id="db-schema"><option>加载中…</option></select></label><input id="db-object-search" type="search" placeholder="搜索表、视图、函数、过程"><div id="db-objects" class="db-object-list"><div class="db-tree-loading">正在读取元数据…</div></div><div class="db-inspect"><div class="db-inspect-tabs"><button class="db-inspect-tab active" data-tab="fields">字段</button><button class="db-inspect-tab" data-tab="indexes">索引</button><button class="db-inspect-tab" data-tab="constraints">约束</button><button class="db-inspect-tab" data-tab="ddl">DDL</button></div><div id="db-inspect-body" class="db-field-list"><div class="hint">单击对象查看字段、索引、约束和 DDL；双击生成查询。</div></div></div></aside><main class="db-main"><section class="card db-editor-card"><div class="db-editor-tabs"><span class="db-editor-tab active">SQL Console</span><span class="db-dialect">' + kindLabel(state.source.kind) + '</span></div><div class="db-editor-bar"><button class="btn btn-primary" id="db-run">执行 <kbd>' + h(state.prefs.shortcuts.run) + '</kbd></button><button class="btn" id="db-explain">执行计划</button><button class="btn" id="db-cancel" disabled>取消</button><label>最多 <input id="db-max-rows" type="number" min="1" max="' + state.source.max_rows + '" value="' + Math.min(1000, state.source.max_rows) + '"> 行</label><button class="btn" id="db-export" disabled>导出 CSV</button><select id="db-history" title="查询历史"><option value="">历史</option>' + history.map(function (sql, i) { return '<option value="' + i + '">' + h(sql.replace(/\s+/g, ' ').slice(0, 80)) + '</option>'; }).join('') + '</select><button class="btn btn-xs" id="db-history-clear" title="查询历史按当前用户保存在 data/preferences.json">清空历史</button><span id="db-query-status" class="db-query-status">就绪</span></div><textarea id="db-sql" class="db-sql-editor" spellcheck="false">' + h(initial) + '</textarea><div class="db-editor-help">模板：输入缩写后按 ' + h(state.prefs.expandKey) + ' 展开 · 可在“工作台设置”中自定义</div></section><section class="card db-results"><div class="db-result-toolbar"><div class="db-result-tabs"><button id="db-view-grid" class="db-view-btn active">网格</button><button id="db-view-record" class="db-view-btn">单行记录</button><button id="db-view-plan" class="db-view-btn">执行计划</button></div><input id="db-result-filter" type="search" placeholder="在当前结果中过滤"><button class="btn btn-xs" id="db-copy-columns" disabled>复制字段名</button><button class="btn btn-xs" id="db-column-manager" disabled>显示列</button><span id="db-result-meta">等待执行查询</span></div><div id="db-result-message" class="db-result-message" hidden></div><div id="db-result-grid" class="db-result-grid"></div></section></main></div>';
+    q('db-sql').value = '';
+    q('db-sql').placeholder = initial;
+    q('db-max-rows').value = savedRows;
+    q('db-max-rows').title = '可自定义；按数据源自动记住';
+    q('db-copy-columns').remove();
+    host.querySelector('.db-editor-help').textContent = '示例 SQL 仅作占位提示，点击输入即消失 · 模板缩写按 ' + state.prefs.expandKey + ' 展开';
+    const copyHint = el('span', { class: 'db-copy-hint', text: '双击单元格复制 · 右键更多' });
+    q('db-result-meta').before(copyHint);
     q('db-run').onclick = runQuery;
     q('db-explain').onclick = runExplain;
     q('db-cancel').onclick = cancelQuery;
@@ -227,13 +276,26 @@
     q('db-view-record').onclick = () => setResultMode('record');
     q('db-view-plan').onclick = () => setResultMode('plan');
     q('db-result-filter').oninput = debounce(function () { state.localFilter = this.value; refreshVisibleResult(); }, 120);
-    q('db-copy-columns').onclick = copyVisibleColumnNames;
     q('db-column-manager').onclick = openColumnManager;
+    q('db-max-rows').onchange = function () {
+      const value = Math.max(1, Math.min(state.source.max_rows, Number(this.value) || 1));
+      this.value = value;
+      persisted.row_limits[state.source.id] = value;
+      savePersisted();
+    };
     q('db-history').onchange = function () {
       const items = loadHistory();
       const sql = items[Number(this.value)];
       if (sql) q('db-sql').value = sql;
       this.value = '';
+    };
+    q('db-history-clear').onclick = function () {
+      if (!persisted.history.length || confirm('清空当前用户保存的全部 SQL 查询历史？')) {
+        persisted.history = [];
+        savePersisted();
+        refreshHistorySelect();
+        toast('查询历史已清空', 'ok');
+      }
     };
     host.querySelectorAll('.db-inspect-tab').forEach(btn => {
       btn.onclick = function () {
@@ -259,8 +321,12 @@
       }
       loadObjects();
     } catch (e) {
-      const o = q('db-objects');
-      if (token === state.workspaceToken && o) o.innerHTML = inlineError('元数据加载失败', e.message);
+      const o = q('db-objects'), schema = q('db-schema');
+      if (token === state.workspaceToken && schema) schema.innerHTML = '<option value="">加载失败</option>';
+      if (token === state.workspaceToken && o) {
+        o.innerHTML = inlineError('元数据加载失败', e.message) + '<button class="btn btn-xs db-meta-retry" id="db-meta-retry">重试</button>';
+        q('db-meta-retry').onclick = () => loadSchemas(true);
+      }
     }
   }
 
@@ -360,9 +426,11 @@
     if (!spec) return false;
     const parts = String(spec).toLowerCase().split('+').map(x => x.trim());
     const key = parts.pop();
-    const actual = String(e.key).toLowerCase();
-    const ok = (key === 'space' && actual === ' ') || actual === key;
-    return ok && e.ctrlKey === parts.includes('ctrl') && e.altKey === parts.includes('alt') && e.shiftKey === parts.includes('shift') && e.metaKey === parts.includes('meta');
+    const actual = String(e.key).toLowerCase(), code = String(e.code).toLowerCase();
+    const wantCtrl = parts.includes('ctrl') || parts.includes('control');
+    const wantMeta = parts.includes('meta') || parts.includes('cmd') || parts.includes('command');
+    const ok = (key === 'space' && actual === ' ') || actual === key || (key === 'enter' && (code === 'enter' || code === 'numpadenter'));
+    return ok && e.ctrlKey === wantCtrl && e.altKey === parts.includes('alt') && e.shiftKey === parts.includes('shift') && e.metaKey === wantMeta;
   }
   function expandSnippet(editor) {
     const pos = editor.selectionStart, before = editor.value.slice(0, pos), match = before.match(/([A-Za-z0-9_.-]+)$/);
@@ -490,7 +558,6 @@
       if (state.resultMode === 'plan') meta.textContent = (state.plan || []).length + ' 步执行计划';
       else meta.textContent = state.columns.length ? visible.length + '/' + state.columns.length + ' 列 · ' + indexes.length + '/' + state.rows.length + ' 行' : '等待执行查询';
     }
-    if (q('db-copy-columns')) q('db-copy-columns').disabled = !state.columns.length;
     if (q('db-column-manager')) q('db-column-manager').disabled = !state.columns.length;
   }
   function refreshVisibleResult() {
@@ -509,6 +576,11 @@
   }
   function renderPlanView(grid) {
     if (!state.plan.length) { grid.innerHTML = '<div class="db-result-empty">点击“执行计划”后，这里显示优化器步骤。不做图形化，便于对照 SQL*Plus / DBMS_XPLAN。</div>'; return; }
+    const rawOnly = state.plan.every(row => row.raw && !row.operation && !row.object && !row.options && !row.cardinality && !row.cost);
+    if (rawOnly) {
+      grid.innerHTML = '<div class="db-plan-head"><strong>Oracle DBMS_XPLAN</strong><span>' + state.plan.length + ' 行 · 保留数据库原始格式</span></div><pre class="db-plan-text">' + h(state.plan.map(row => row.raw).join('\n')) + '</pre>';
+      return;
+    }
     grid.innerHTML = '<div class="db-table-scroll"><table class="table db-table db-plan-table"><thead><tr><th>ID</th><th>操作</th><th>对象</th><th>选项</th><th>行数</th><th>成本</th><th>原文</th></tr></thead><tbody>' + state.plan.map(row => '<tr><td>' + h(row.id) + '</td><td>' + h(row.operation) + '</td><td>' + h(row.object) + '</td><td>' + h(row.options) + '</td><td>' + h(row.cardinality) + '</td><td>' + h(row.cost) + '</td><td><pre>' + h(row.raw || row.extra) + '</pre></td></tr>').join('') + '</tbody></table></div>';
   }
   function renderGridView(grid, indexes, visible) {
@@ -625,7 +697,7 @@
     const overlay = el('div', { class: 'db-settings-overlay' });
     const dialog = el('section', { class: 'db-settings-dialog', role: 'dialog', 'aria-modal': 'true' });
     const close = () => overlay.remove();
-    dialog.innerHTML = '<div class="db-settings-head"><div><h3>SQL 模板与快捷键</h3><p>模板缩写在编辑器中按展开键替换；设置仅保存在当前浏览器。</p></div><button class="btn btn-sm" id="db-settings-close">关闭</button></div><div class="db-settings-body"><section><h4>快捷键</h4><div class="db-shortcut-grid">' + shortcutField('执行查询', 'run') + shortcutField('取消查询', 'cancel') + shortcutField('网格视图', 'grid') + shortcutField('单行记录', 'record') + shortcutField('执行计划', 'explain') + '</div></section><section><div class="db-setting-line"><h4>SQL 模板</h4><label>展开键 <select id="db-expand-key"><option>Space</option><option>Tab</option><option>Enter</option></select></label></div><div id="db-snippet-list" class="db-snippet-list"></div><button class="btn btn-sm" id="db-snippet-add">＋ 添加模板</button></section></div><div class="db-settings-actions"><button class="btn" id="db-settings-reset">恢复默认</button><button class="btn btn-primary" id="db-settings-save">保存设置</button></div>';
+    dialog.innerHTML = '<div class="db-settings-head"><div><h3>SQL 模板与快捷键</h3><p>模板缩写在编辑器中按展开键替换；设置按当前用户保存。</p></div><button class="btn btn-sm" id="db-settings-close">关闭</button></div><div class="db-settings-body"><section><h4>快捷键</h4><div class="db-shortcut-grid">' + shortcutField('执行查询', 'run') + shortcutField('取消查询', 'cancel') + shortcutField('网格视图', 'grid') + shortcutField('单行记录', 'record') + shortcutField('执行计划', 'explain') + '</div></section><section><div class="db-setting-line"><h4>SQL 模板</h4><label>展开键 <select id="db-expand-key"><option>Space</option><option>Tab</option><option>Enter</option></select></label></div><div id="db-snippet-list" class="db-snippet-list"></div><button class="btn btn-sm" id="db-snippet-add">＋ 添加模板</button></section></div><div class="db-settings-actions"><button class="btn" id="db-settings-reset">恢复默认</button><button class="btn btn-primary" id="db-settings-save">保存设置</button></div>';
     overlay.appendChild(dialog); document.body.appendChild(overlay);
     q('db-settings-close').onclick = close;
     overlay.onclick = e => { if (e.target === overlay) close(); };
@@ -706,8 +778,15 @@
   }
   function debounce(fn, wait) { let timer; return function () { const self = this, args = arguments; clearTimeout(timer); timer = setTimeout(() => fn.apply(self, args), wait); }; }
   async function renderDatabase(view) {
-    try { await loadSources(); render(view); }
-    catch (e) { view.innerHTML = '<div class="card text-err">数据库工作台加载失败：' + h(e.message) + '</div>'; }
+    const renderToken = view.dataset.renderToken;
+    try {
+      await loadDatabasePreference();
+      await loadSources();
+      if (view.dataset.renderToken === renderToken) render(view);
+    }
+    catch (e) {
+      if (view.dataset.renderToken === renderToken) view.innerHTML = '<div class="card text-err">数据库工作台加载失败：' + h(e.message) + '</div>';
+    }
   }
   Kairo.state.routes.database = renderDatabase;
   Kairo.state.routeNames.database = '数据库工作台';

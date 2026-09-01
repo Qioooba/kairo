@@ -28,11 +28,19 @@ else
   echo ">> 跳过：未找到 node，无法跑 scripts/check-version.js"
 fi
 
-echo ">>> [2/4] 运行数据库工作台与凭据核心测试"
-go test -mod=vendor ./internal/dbconsole ./internal/credentials
-go test -mod=vendor ./internal/httpserver -run '^TestDatabase' -count=1
+echo ">>> [2/4] 运行项目质量门"
+# 不使用 ./...：开发目录可能带有被 .gitignore 排除的 sdk/，Go 仍会递归进去。
+# 显式覆盖所有产品包，确保新增模块不会因为发布脚本白名单过时而漏测。
+go test -mod=vendor -count=1 . ./cmd/... ./internal/...
+go vet -mod=vendor . ./cmd/... ./internal/...
 if command -v node >/dev/null 2>&1; then
-  node --check web/pages/database.js
+	node --check web/api.js
+	node --check web/app.js
+	node --check web/pages/compare.js
+	node --check web/pages/database.js
+	node --check web/pages/waspack.js
+	node --check web/pages/wscodegen.js
+	node web/pages/webservice.test.js
 fi
 
 echo ">>> [3/4] 编译主线 Windows 版本"
