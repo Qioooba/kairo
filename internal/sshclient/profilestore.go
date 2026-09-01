@@ -27,11 +27,18 @@ import (
 
 // profileStoreFileName 记忆文件的文件名，放在 data 目录下。
 const profileStoreFileName = "ssh_compat_profiles.json"
+const profileStoreVersion = 1
+
+type profileStoreFile struct {
+	Version  int               `json:"version"`
+	Profiles map[string]string `json:"profiles"`
+}
 
 var (
 	storeMu       sync.Mutex
 	storeDir      string
 	storeLoaded   bool
+	storeLoadErr  error
 	storeProfiles map[string]string // key = "host:port"，value = sshCompatProfile.Name
 )
 
@@ -42,6 +49,7 @@ func SetProfileStoreDir(dir string) {
 	defer storeMu.Unlock()
 	storeDir = dir
 	storeLoaded = false // 换目录后下次访问重新从磁盘加载
+	storeLoadErr = nil
 }
 
 func storeFilePath() string {
@@ -65,7 +73,27 @@ func loadProfilesLocked() {
 		}
 		return
 	}
-	_ = json.Unmarshal(data, &storeProfiles)
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(data, &root); err != nil {
+		storeLoadErr = err
+		return
+	}
+	versionRaw, hasVersion := root["version"]
+	profilesRaw, hasProfiles := root["profiles"]
+	var version int
+	if hasVersion && json.Unmarshal(versionRaw, &version) == nil {
+		if !hasProfiles || version < 1 || version > profileStoreVersion {
+			storeLoadErr = errors.New("ssh profile store version is unsupported")
+			return
+		}
+		if err := json.Unmarshal(profilesRaw, &storeProfiles); err != nil {
+			storeLoadErr = err
+			return
+		}
+	} else if err := json.Unmarshal(data, &storeProfiles); err != nil {
+		storeLoadErr = err
+		return
+	}
 	if storeProfiles == nil {
 		storeProfiles = make(map[string]string)
 	}
@@ -80,6 +108,9 @@ func rememberProfile(addr, profileName string) {
 	storeMu.Lock()
 	defer storeMu.Unlock()
 	loadProfilesLocked()
+	if storeLoadErr != nil {
+		return // 损坏或未来版本绝不覆盖；升级/人工修复后再加载。
+	}
 	if storeProfiles[addr] == profileName {
 		return
 	}
@@ -88,7 +119,7 @@ func rememberProfile(addr, profileName string) {
 		return
 	}
 	_ = os.MkdirAll(storeDir, 0o755)
-	data, err := json.MarshalIndent(storeProfiles, "", "  ")
+	data, err := json.MarshalIndent(profileStoreFile{Version: profileStoreVersion, Profiles: storeProfiles}, "", "  ")
 	if err != nil {
 		return
 	}

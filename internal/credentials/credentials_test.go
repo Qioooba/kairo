@@ -1,6 +1,7 @@
 package credentials
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -421,6 +422,64 @@ func TestFileMode_InitNonFileMode(t *testing.T) {
 	SetMode(ModeDisabled)
 	if err := Init(t.TempDir(), ""); err != nil {
 		t.Errorf("Init in disabled mode should be no-op, got err=%v", err)
+	}
+}
+
+func TestFileModeFutureVersionIsNeverOverwritten(t *testing.T) {
+	orig := Mode()
+	t.Cleanup(func() { SetMode(orig) })
+	dir := t.TempDir()
+	SetMode(ModeFile)
+	if err := Init(dir, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "credentials.json")
+	original := []byte(`{"version":99,"entries":{},"future":"keep"}`)
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Save("s", "x", "u", "secret"); err == nil {
+		t.Fatal("future credential format must reject writes")
+	}
+	after, _ := os.ReadFile(path)
+	if string(after) != string(original) {
+		t.Fatal("future credential file was overwritten")
+	}
+}
+
+func TestFileModeReadsLegacyRootMapAndUpgradesOnWrite(t *testing.T) {
+	orig := Mode()
+	t.Cleanup(func() { SetMode(orig) })
+	dir := t.TempDir()
+	SetMode(ModeFile)
+	key := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	if err := Init(dir, key); err != nil {
+		t.Fatal(err)
+	}
+	if err := Save("sys", "srv", "user", "kept-secret"); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "credentials.json")
+	wrappedRaw, _ := os.ReadFile(path)
+	var wrapped credentialFile
+	if err := json.Unmarshal(wrappedRaw, &wrapped); err != nil {
+		t.Fatal(err)
+	}
+	legacyRaw, _ := json.Marshal(wrapped.Entries)
+	if err := os.WriteFile(path, legacyRaw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Get("sys", "srv", "user")
+	if err != nil || got != "kept-secret" {
+		t.Fatalf("legacy root map was not preserved: got=%q err=%v", got, err)
+	}
+	if err := Save("sys", "srv", "user", "updated"); err != nil {
+		t.Fatal(err)
+	}
+	upgradedRaw, _ := os.ReadFile(path)
+	var upgraded credentialFile
+	if err := json.Unmarshal(upgradedRaw, &upgraded); err != nil || upgraded.Version != credentialFileVersion || upgraded.Entries == nil {
+		t.Fatalf("legacy credentials were not upgraded on write: %+v err=%v", upgraded, err)
 	}
 }
 

@@ -28,6 +28,7 @@ import (
 
 // metaIndexFile 索引文件名（隐藏在 downloads/ 根目录里）。
 const metaIndexFile = ".kairo-meta.json"
+const metaIndexVersion = 1
 
 // metaIndex 是元数据索引文件的结构：
 //   - Version: 文件格式版本（未来加字段用）
@@ -181,6 +182,12 @@ func loadMetaIndex(rootDir string) (*metaIndex, time.Time, error) {
 	var idx metaIndex
 	if err := json.Unmarshal(b, &idx); err != nil {
 		return nil, time.Time{}, fmt.Errorf("解析索引失败: %w", err)
+	}
+	if idx.Version < 0 || idx.Version > metaIndexVersion {
+		return nil, time.Time{}, fmt.Errorf("下载索引版本 %d 高于当前支持的 %d", idx.Version, metaIndexVersion)
+	}
+	if idx.Version == 0 {
+		idx.Version = metaIndexVersion
 	}
 	if idx.Files == nil {
 		idx.Files = map[string]Meta{}

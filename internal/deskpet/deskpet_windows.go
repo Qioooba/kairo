@@ -160,11 +160,12 @@ type layeredWin struct {
 type deskpet struct {
 	mu sync.Mutex
 
-	baseURL    string
-	loadSprite func(id string) ([]byte, error)
-	dataDir    string
-	host       *winui.Host
-	running    bool
+	baseURL      string
+	loadSprite   func(id string) ([]byte, error)
+	dataDir      string
+	prefWritable bool
+	host         *winui.Host
+	running      bool
 
 	hwndPet       uintptr
 	hwndPanel     uintptr
@@ -233,6 +234,7 @@ func Run(o Options) error {
 	app.baseURL = o.BaseURL
 	app.loadSprite = o.LoadSprite
 	app.dataDir = o.DataDir
+	app.prefWritable = true
 	app.host = o.Host
 	app.running = true
 	if app.sprites == nil {
@@ -1966,7 +1968,8 @@ func httpGet(url string) (*http.Response, error) {
 // -------- 显示偏好持久化 --------
 
 type petPref struct {
-	Shown bool `json:"shown"`
+	Version int  `json:"version"`
+	Shown   bool `json:"shown"`
 }
 
 func (d *deskpet) prefPath() string {
@@ -1989,16 +1992,20 @@ func (d *deskpet) loadPref() bool {
 	if json.Unmarshal(b, &pref) != nil {
 		return false
 	}
+	if pref.Version < 0 || pref.Version > 1 {
+		d.prefWritable = false
+		return false
+	}
 	return pref.Shown
 }
 
 func (d *deskpet) savePref(shown bool) {
 	p := d.prefPath()
-	if p == "" {
+	if p == "" || !d.prefWritable {
 		return
 	}
-	b, _ := json.Marshal(petPref{Shown: shown})
-	_ = os.WriteFile(p, b, 0o644)
+	b, _ := json.Marshal(petPref{Version: 1, Shown: shown})
+	_ = os.WriteFile(p, b, 0o600)
 }
 
 // -------- 小工具 --------

@@ -53,6 +53,19 @@ func (s *Store) Load() ([]Note, error) {
 func (s *Store) Save(items []Note) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if existing, err := os.ReadFile(s.path); err == nil && len(existing) > 0 {
+		var header struct {
+			Version int `json:"version"`
+		}
+		if err := json.Unmarshal(existing, &header); err != nil {
+			return fmt.Errorf("现有便笺数据损坏，拒绝覆盖: %w", err)
+		}
+		if header.Version > 1 {
+			return fmt.Errorf("现有便笺数据版本 %d 过新，拒绝覆盖", header.Version)
+		}
+	} else if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("检查现有便笺数据失败: %w", err)
+	}
 	if items == nil {
 		items = []Note{}
 	}

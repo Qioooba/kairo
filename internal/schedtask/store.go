@@ -9,6 +9,8 @@ import (
 	"sync"
 )
 
+const dataVersion = 1
+
 // Store 任务定义 + 运行历史的持久化层。
 //
 // 文件格式（两个 JSON 文件同目录）：
@@ -57,6 +59,9 @@ func (s *Store) LoadTasks() ([]Task, error) {
 		_ = backupLocked(s.tasksPath, data)
 		return []Task{}, fmt.Errorf("解析 %s 失败（已备份到 .bak）: %w", s.tasksPath, err)
 	}
+	if doc.Version < 0 || doc.Version > dataVersion {
+		return nil, fmt.Errorf("不支持的定时任务数据版本: %d（当前支持 %d）", doc.Version, dataVersion)
+	}
 	if doc.Tasks == nil {
 		return []Task{}, nil
 	}
@@ -71,7 +76,7 @@ func (s *Store) SaveTasks(items []Task) error {
 	doc := struct {
 		Version int    `json:"version"`
 		Tasks   []Task `json:"tasks"`
-	}{Version: 1, Tasks: items}
+	}{Version: dataVersion, Tasks: items}
 	return s.saveJSON(s.tasksPath, ".sched-tasks-*.tmp", doc)
 }
 
@@ -99,6 +104,9 @@ func (s *Store) LoadRuns() (map[string][]RunRecord, error) {
 		_ = backupLocked(s.runsPath, data)
 		return out, fmt.Errorf("解析 %s 失败（已备份到 .bak）: %w", s.runsPath, err)
 	}
+	if doc.Version < 0 || doc.Version > dataVersion {
+		return nil, fmt.Errorf("不支持的任务运行历史版本: %d（当前支持 %d）", doc.Version, dataVersion)
+	}
 	if doc.Runs != nil {
 		out = doc.Runs
 	}
@@ -113,7 +121,7 @@ func (s *Store) SaveRuns(runs map[string][]RunRecord) error {
 	doc := struct {
 		Version int                    `json:"version"`
 		Runs    map[string][]RunRecord `json:"runs"`
-	}{Version: 1, Runs: runs}
+	}{Version: dataVersion, Runs: runs}
 	return s.saveJSON(s.runsPath, ".sched-runs-*.tmp", doc)
 }
 
@@ -121,6 +129,19 @@ func (s *Store) SaveRuns(runs map[string][]RunRecord) error {
 func (s *Store) saveJSON(path, tmpPattern string, doc any) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if existing, err := os.ReadFile(path); err == nil && len(existing) > 0 {
+		var header struct {
+			Version int `json:"version"`
+		}
+		if err := json.Unmarshal(existing, &header); err != nil {
+			return fmt.Errorf("现有任务数据损坏，拒绝覆盖: %w", err)
+		}
+		if header.Version > dataVersion {
+			return fmt.Errorf("现有任务数据版本 %d 过新，拒绝覆盖", header.Version)
+		}
+	} else if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("检查现有任务数据失败: %w", err)
+	}
 
 	encoded, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {

@@ -9,12 +9,15 @@ BASE_URL="${BASE_URL:-http://127.0.0.1:18092}"
 WITH_MOCK=false
 HEADED=false
 
-MOCK_SSH_PORT=2222
+MOCK_SSH_PORT=2225
 MOCK_SSH_USER=test
 MOCK_SSH_PASS=test
+MOCK_SPONSOR_PORT=18093
+MOCK_SPONSOR_AUTH=TEST_TOKEN_123
 
 MAIN_PID=""
 MOCK_SSH_PID=""
+MOCK_SPONSOR_PID=""
 TEST_EXIT_CODE=0
 
 function print_help() {
@@ -29,6 +32,7 @@ function print_help() {
   echo "环境变量："
   echo "  BASE_URL          服务地址"
   echo "  HEADLESS=false    等价于 --headed"
+  echo "  E2E_GREP         只运行名称包含该文本的测试"
 }
 
 function parse_args() {
@@ -75,14 +79,18 @@ function prepare_fixtures() {
   else
     echo "⚠️  未找到 e2e-prepare-fixtures.js，跳过 fixture 准备" >&2
   fi
+  if [[ -f "${PROJECT_ROOT}/tests/e2e/make-compare-lab.js" ]]; then
+    COMPARE_LAB_ROOT="${PROJECT_ROOT}/tmp/e2e/compare" node "${PROJECT_ROOT}/tests/e2e/make-compare-lab.js" >/dev/null
+    echo "✅ Compare 中文路径 fixtures 准备完成"
+  fi
 }
 
 function check_service() {
   local url="$1"
   echo "==> 检查服务是否可达: ${url}"
   local code
-  code=$(curl -s -o /dev/null -w "%{http_code}" "${url}" --max-time 5 2>/dev/null || echo "000")
-  if [[ "${code}" == "000" ]]; then
+	code=$(curl -s -o /dev/null -w "%{http_code}" "${url}" --max-time 5 2>/dev/null || true)
+	if [[ -z "${code}" || "${code}" == "000" ]]; then
     echo "❌ 服务不可达: ${url}" >&2
     return 1
   fi
@@ -102,11 +110,35 @@ function start_mock_ssh() {
   fi
 }
 
+function start_mock_sponsor() {
+  echo "==> 启动 mock sponsor 服务..."
+  if curl -fsS "http://127.0.0.1:${MOCK_SPONSOR_PORT}/health" --max-time 2 >/dev/null 2>&1; then
+    echo "    已发现可用 mock sponsor 服务，复用现有进程 (port: ${MOCK_SPONSOR_PORT})"
+    return 0
+  fi
+  if ! command -v go >/dev/null 2>&1 || [[ ! -f "${PROJECT_ROOT}/cmd/mock-sponsor-server/main.go" ]]; then
+    echo "❌ 未找到 go 或 mock-sponsor-server" >&2
+    return 1
+  fi
+  (cd "${PROJECT_ROOT}" && go run ./cmd/mock-sponsor-server -addr "127.0.0.1:${MOCK_SPONSOR_PORT}" -auth "${MOCK_SPONSOR_AUTH}") &
+  MOCK_SPONSOR_PID=$!
+  echo "    Mock sponsor PID: ${MOCK_SPONSOR_PID} (port: ${MOCK_SPONSOR_PORT})"
+  for i in {1..30}; do
+    if curl -fsS "http://127.0.0.1:${MOCK_SPONSOR_PORT}/health" --max-time 2 >/dev/null 2>&1; then
+      echo "✅ Mock sponsor 已启动"
+      return 0
+    fi
+    sleep 1
+  done
+  echo "❌ Mock sponsor 启动超时" >&2
+  return 1
+}
+
 function start_main_service() {
   echo "==> 启动主服务..."
   if command -v go >/dev/null 2>&1 && [[ -f "${PROJECT_ROOT}/main.go" ]]; then
     cd "${PROJECT_ROOT}"
-    go run . &
+		go run . --config "${PROJECT_ROOT}/tmp/e2e/run/config.yaml" &
     MAIN_PID=$!
     echo "    主服务 PID: ${MAIN_PID}"
     echo "    等待服务启动..."
@@ -141,9 +173,17 @@ function run_tests() {
   if [[ "${HEADED}" == true ]]; then
     extra_args+=("--headed")
   fi
+  if [[ -n "${E2E_GREP:-}" ]]; then
+    extra_args+=("--grep" "${E2E_GREP}")
+  fi
 
   set +e
-  BASE_URL="${BASE_URL}" node tests/e2e/index.js "${extra_args[@]}"
+	if [[ ${#extra_args[@]} -gt 0 ]]; then
+		KAIRO_RUN_DIR="${PROJECT_ROOT}/tmp/e2e/run" COMPARE_LAB_ROOT="${PROJECT_ROOT}/tmp/e2e/compare" BASE_URL="${BASE_URL}" node tests/e2e/index.js "${extra_args[@]}"
+	else
+		# macOS 自带 Bash 3.2 在 set -u 下展开空数组会报 unbound variable。
+		KAIRO_RUN_DIR="${PROJECT_ROOT}/tmp/e2e/run" COMPARE_LAB_ROOT="${PROJECT_ROOT}/tmp/e2e/compare" BASE_URL="${BASE_URL}" node tests/e2e/index.js
+	fi
   TEST_EXIT_CODE=$?
   set -e
 
@@ -174,6 +214,11 @@ function cleanup() {
     kill "${MOCK_SSH_PID}" 2>/dev/null || true
     wait "${MOCK_SSH_PID}" 2>/dev/null || true
   fi
+  if [[ -n "${MOCK_SPONSOR_PID}" ]]; then
+    echo "    停止 mock sponsor (PID: ${MOCK_SPONSOR_PID})"
+    kill "${MOCK_SPONSOR_PID}" 2>/dev/null || true
+    wait "${MOCK_SPONSOR_PID}" 2>/dev/null || true
+  fi
 }
 
 function main() {
@@ -189,6 +234,7 @@ function main() {
 
   if [[ "${WITH_MOCK}" == true ]]; then
     trap cleanup EXIT
+    start_mock_sponsor
     start_mock_ssh
     start_main_service
   else

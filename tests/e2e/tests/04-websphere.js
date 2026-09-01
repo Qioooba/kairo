@@ -101,7 +101,7 @@ function register(runner, ctx) {
           await wsPage.selectFirstServer();
           const ok = await wsPage.testConnection();
           if (!ok) {
-            runner.skipTest('mock SSH 不可用 (127.0.0.1:2222)');
+            runner.skipTest('mock SSH 不可用 (127.0.0.1:2225)');
             return;
           }
           await runner.screenshot(page, '04-websphere-02-test-connect-ok');

@@ -18,17 +18,18 @@ import (
 //
 // ⚠️ 反编译者能看到底层字符串, 但用户的威胁模型 (内网 + 同事级别) 不防反编译。
 // 安全链:
-//   1) 反编译拿到 AES key → 能解密本地证书
-//   2) 但证书里的 IP 是固定的, 攻击者把证书文件复制到别的机器 → GCM AAD 校验失败
-//   3) 攻击者要伪造一个"在他本机 IP 上有效"的证书 → 需要重新激活
-//   4) 重新激活必须用真实激活码 → 服务端 IP 不匹配 → 拒绝 + 写日志
+//  1. 反编译拿到 AES key → 能解密本地证书
+//  2. 但证书里的 IP 是固定的, 攻击者把证书文件复制到别的机器 → GCM AAD 校验失败
+//  3. 攻击者要伪造一个"在他本机 IP 上有效"的证书 → 需要重新激活
+//  4. 重新激活必须用真实激活码 → 服务端 IP 不匹配 → 拒绝 + 写日志
 //
 // 攻击者真正能做的: 在他自己机器上伪造一个证书, 但服务端会立刻拒绝他的激活。
 // 代价 / 收益完全不划算, 攻击者不如直接找用户要激活码。
 //
 // 如果将来需要更强的保护, 把这个 key 改成:
-//   1) 每台机器独立生成 (用 hardware fingerprint 派生)
-//   2) 或者换成 RSA 非对称签名 (Java 端私钥 + 客户端公钥)
+//  1. 每台机器独立生成 (用 hardware fingerprint 派生)
+//  2. 或者换成 RSA 非对称签名 (Java 端私钥 + 客户端公钥)
+//
 // 但当前 v1.0 需求里没这个必要。
 var cipherKey = sha256Sum("kairo-license-cert-v1-2026")
 
@@ -59,6 +60,7 @@ func aadForCert(ip string) []byte {
 // storedCert 落盘格式 (加密后的本地证书文件内容)。
 // IP 字段明文存一份方便人眼查看; 真正的安全保证在 payload (AES-GCM 密文) 和 AAD 校验。
 type storedCert struct {
+	Version int    `json:"version"`
 	Payload string `json:"payload"` // base64(nonce + ciphertext)
 	IP      string `json:"ip"`      // 明文 IP (仅供调试, GCM AAD 校验才是真校验)
 }
@@ -94,6 +96,9 @@ func loadLocalCert() (*Cert, error) {
 	if err := json.Unmarshal(data, &sc); err != nil {
 		return nil, fmt.Errorf("证书文件 JSON 格式错误: %w", err)
 	}
+	if sc.Version < 0 || sc.Version > 1 {
+		return nil, fmt.Errorf("证书文件版本 %d 过新，当前程序仅支持 1", sc.Version)
+	}
 
 	raw, err := base64.StdEncoding.DecodeString(sc.Payload)
 	if err != nil {
@@ -116,24 +121,24 @@ func loadLocalCert() (*Cert, error) {
 	}
 
 	// AAD = IP + "|" + MAC fingerprint (关键安全点!)
-//
-// AAD 设计要点 (防伪造):
-//   1) 攻击者复制 license.dat 到别的机器:
-//      - sc.IP 是 A 的 IP, B 启动时 AAD 算的是 "A 的 IP + B 的 MAC"
-//      - 但 GCM Open 时 AAD 是 "sc.IP + 本机 MAC" = "A 的 IP + B 的 MAC"
-//      - 跟加密时的 AAD ("A 的 IP + A 的 MAC") 不匹配 → 解密失败
-//      - ✅ 拦截!
-//   2) 攻击者反编译拿到 AES key, 想伪造 cert 给受害者:
-//      - 必须知道受害者的 IP **和** MAC
-//      - 攻击者构造 cert {code: 任意, ip: 受害者 IP}, 用 AES key 加密
-//      - AAD 是 "受害者 IP + 受害者 MAC"
-//      - 但攻击者可能不知道受害者 MAC, 用了自己的 MAC 或猜测
-//      - 受害者启动, AAD 算的是 "受害者 IP + 受害者 MAC"
-//      - 跟攻击者用的 AAD 不匹配 → 解密失败
-//      - ✅ 拦截!
-//
-// 攻击者要成功伪造, 必须**同时**知道 IP + MAC + 拿到 AES key + 主动发给特定受害者。
-// 对内网运维工具 + 同事级别威胁, 这个门槛足够。
+	//
+	// AAD 设计要点 (防伪造):
+	//   1) 攻击者复制 license.dat 到别的机器:
+	//      - sc.IP 是 A 的 IP, B 启动时 AAD 算的是 "A 的 IP + B 的 MAC"
+	//      - 但 GCM Open 时 AAD 是 "sc.IP + 本机 MAC" = "A 的 IP + B 的 MAC"
+	//      - 跟加密时的 AAD ("A 的 IP + A 的 MAC") 不匹配 → 解密失败
+	//      - ✅ 拦截!
+	//   2) 攻击者反编译拿到 AES key, 想伪造 cert 给受害者:
+	//      - 必须知道受害者的 IP **和** MAC
+	//      - 攻击者构造 cert {code: 任意, ip: 受害者 IP}, 用 AES key 加密
+	//      - AAD 是 "受害者 IP + 受害者 MAC"
+	//      - 但攻击者可能不知道受害者 MAC, 用了自己的 MAC 或猜测
+	//      - 受害者启动, AAD 算的是 "受害者 IP + 受害者 MAC"
+	//      - 跟攻击者用的 AAD 不匹配 → 解密失败
+	//      - ✅ 拦截!
+	//
+	// 攻击者要成功伪造, 必须**同时**知道 IP + MAC + 拿到 AES key + 主动发给特定受害者。
+	// 对内网运维工具 + 同事级别威胁, 这个门槛足够。
 	plaintext, err := gcm.Open(nil, nonce, ct, aadForCert(sc.IP))
 	if err != nil {
 		return nil, fmt.Errorf("证书解密失败 (IP 不匹配或文件被篡改): %w", err)
@@ -163,6 +168,14 @@ func saveLocalCert(cert *Cert) error {
 	p, err := certPath()
 	if err != nil {
 		return err
+	}
+	if existing, readErr := os.ReadFile(p); readErr == nil {
+		var header struct {
+			Version int `json:"version"`
+		}
+		if json.Unmarshal(existing, &header) == nil && header.Version > 1 {
+			return fmt.Errorf("现有证书版本 %d 过新，拒绝覆盖", header.Version)
+		}
 	}
 
 	// 确保 ~/.kairo 目录存在
@@ -195,6 +208,7 @@ func saveLocalCert(cert *Cert) error {
 	payload := append(append([]byte{}, nonce...), ct...)
 
 	sc := storedCert{
+		Version: 1,
 		Payload: base64.StdEncoding.EncodeToString(payload),
 		IP:      cert.IP,
 	}

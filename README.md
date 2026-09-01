@@ -693,6 +693,8 @@ node scripts/check-version.js   # 确认一致；发版脚本会再跑一遍
 
 不要再改 `httpserver.Version`、`about.js`、`index.html` 页脚或 `app.js` 的硬编码版本——那些入口已经去掉了。
 
+配置格式、用户数据迁移、降级保护、快照恢复和发版检查见 [`docs/CONFIG-UPGRADES.md`](docs/CONFIG-UPGRADES.md)。
+
 ### Win7 维护策略
 
 数据库工作台 v1 起，主线基线升级为 Go 1.24+，发布目标为 Win10/11。Win7 / Go 1.20 的依赖树、构建脚本与回归矩阵放在 legacy 分支独立维护，不再让旧平台限制主线驱动与安全更新。
@@ -936,6 +938,7 @@ kairo/
 ├── tests/
 │   └── e2e/                           # Playwright 端到端测试（v0.9 起）
 ├── docs/
+│   ├── CONFIG-UPGRADES.md            # 配置/用户数据升级、回滚与降级规范
 │   ├── ACCEPTANCE.md                  # 验收清单
 │   ├── TEST-MATRIX.md                 # 测试矩阵
 │   ├── MANUAL-CLICK-CASES.md          # 手工点击用例

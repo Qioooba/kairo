@@ -1,6 +1,7 @@
 package webservice
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -152,6 +153,32 @@ func TestStore_PersistsAcrossInstances(t *testing.T) {
 	}
 	if len(list) != 1 || list[0].Name != "t1" {
 		t.Errorf("persistence failed: %+v", list)
+	}
+}
+
+func TestStoreReadsLegacyArrayAndNeverOverwritesFutureEnvelope(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "soap_templates.json")
+	legacy := []byte(`[{"id":"legacy","name":"old","group":"g"}]`)
+	if err := os.WriteFile(path, legacy, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	list, err := NewStore(dir).ListTemplates()
+	if err != nil || len(list) != 1 || list[0].ID != "legacy" {
+		t.Fatalf("legacy array was not preserved: list=%+v err=%v", list, err)
+	}
+
+	future := []byte(`{"version":99,"items":[],"future":"keep"}`)
+	if err := os.WriteFile(path, future, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := NewStore(dir)
+	if _, _, err := store.SaveTemplate(Template{Name: "new", Group: "g"}); err == nil {
+		t.Fatal("future webservice format must reject writes")
+	}
+	after, _ := os.ReadFile(path)
+	if string(after) != string(future) {
+		t.Fatal("future webservice file was overwritten")
 	}
 }
 

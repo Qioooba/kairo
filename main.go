@@ -44,6 +44,7 @@ import (
 	"kairo/internal/sysutil"
 	"kairo/internal/tailmgr"
 	"kairo/internal/tray"
+	"kairo/internal/upgrade"
 	"kairo/internal/winui"
 )
 
@@ -71,9 +72,14 @@ func main() {
 	// 让下次正常启动重新探测。流程跟"主流程"前两段一致（定位 cfg → 加载 →
 	// 解析目录），但失败直接 os.Exit(1) 而不是弹托盘错误框。
 	resetBrowser := flag.Bool("reset-browser", false, "重置浏览器偏好（删除 data/browser_state.json），下次启动重新探测")
+	resetConfig := flag.Bool("reset-config", false, "备份当前配置并恢复官方配置（保留全部用户数据及其目录）")
+	restoreUpgrade := flag.String("restore-upgrade", "", "恢复指定的升级快照，恢复前会再次备份当前状态")
 	configPath := flag.String("config", "", "显式指定唯一配置文件路径（开发、测试或定制部署）")
 	portable := flag.Bool("portable", false, "便携模式：配置和运行数据放在程序目录")
 	flag.Parse()
+	if *resetConfig && strings.TrimSpace(*restoreUpgrade) != "" {
+		tray.FatalDialogf("--reset-config 与 --restore-upgrade 不能同时使用")
+	}
 	location, err := config.ResolveLocation(*configPath, *portable)
 	if err != nil {
 		tray.FatalDialogf("定位用户配置目录失败: %v", err)
@@ -82,7 +88,14 @@ func main() {
 	if err != nil {
 		tray.FatalDialogf("准备首次启动配置失败: %v", err)
 	}
-	opened, err := config.Open(location.ConfigPath, bootstrap)
+	resetConfigBackup := ""
+	if *resetConfig {
+		resetConfigBackup, err = config.ResetToDistribution(location.ConfigPath, bootstrap)
+		if err != nil {
+			tray.FatalDialogf("恢复官方配置失败: %v", err)
+		}
+	}
+	opened, err := config.PrepareForUpgrade(location.ConfigPath, bootstrap)
 	if err != nil {
 		tray.FatalDialogf("加载配置失败 (%s): %v", location.ConfigPath, err)
 	}
@@ -111,6 +124,14 @@ func main() {
 	if err := cfg.EnsureDirs(); err != nil {
 		tray.FatalDialogf("创建运行时目录失败: %v", err)
 	}
+	if snapshotPath := strings.TrimSpace(*restoreUpgrade); snapshotPath != "" {
+		result, err := upgrade.RestoreSnapshot(cfg.DataDir(), snapshotPath, upgrade.DefaultAssets(cfgPath, cfg.DataDir(), cfg.DownloadDir()))
+		if err != nil {
+			tray.FatalDialogf("恢复升级快照失败（当前数据未改变）: %v", err)
+		}
+		fmt.Printf("升级快照已恢复。恢复前的当前状态已备份到 %s。请重新启动 Kairo。\n", result.SafetyBackupDir)
+		return
+	}
 
 	// 4.1 设置日志文件输出。
 	// Windows GUI 模式（-H windowsgui）下没有 stdout/stderr，
@@ -128,6 +149,38 @@ func main() {
 	}
 	if opened.Migrated && opened.Backup != "" {
 		log.Printf("配置已升级到 schema_version=%d，旧文件备份: %s", config.CurrentSchemaVersion, opened.Backup)
+	}
+	if *resetConfig {
+		log.Printf("已恢复官方配置；用户数据目录及凭据密钥保持不变；旧配置备份: %s", resetConfigBackup)
+	}
+
+	// 所有用户数据必须先完成统一升级，再交给各模块打开。升级协调器提交清单前会
+	// 快照配置、宠物、便笺、提醒、任务、偏好、凭据等已知文件；任一步失败就恢复。
+	upgradeResult, err := upgrade.Run(upgrade.Options{
+		DataDir:        cfg.DataDir(),
+		ProductVersion: httpserver.Version,
+		Assets:         upgrade.DefaultAssets(cfgPath, cfg.DataDir(), cfg.DownloadDir()),
+	})
+	if err != nil {
+		tray.FatalDialogf("升级用户数据失败（原数据已保留）: %v", err)
+	}
+	if upgradeResult.Adopted {
+		log.Printf("用户数据已纳入升级管理，快照: %s", upgradeResult.BackupDir)
+	}
+	if len(upgradeResult.Migrated) > 0 {
+		log.Printf("用户数据升级完成: %v；快照: %s", upgradeResult.Migrated, upgradeResult.BackupDir)
+	}
+	for _, warning := range upgradeResult.Warnings {
+		log.Printf("WARNING: 升级预检: %s", warning)
+	}
+	// 统一事务已经提交，重新从磁盘加载，保证后续所有模块看到的正是落盘版本。
+	committed, err := config.Open(cfgPath, nil)
+	if err != nil {
+		tray.FatalDialogf("重新加载升级后的配置失败: %v", err)
+	}
+	cfg = committed.Config
+	if err := cfg.ResolvePaths(runDir); err != nil {
+		tray.FatalDialogf("重新解析升级后的目录失败: %v", err)
 	}
 
 	// 4.5 凭据后端模式（项 23）—— 配置加载后立即切换，handler 后续读 Mode() 就知道走哪条路。

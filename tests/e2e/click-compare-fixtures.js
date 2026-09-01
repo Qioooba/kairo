@@ -4,9 +4,10 @@ const fs = require('fs');
 const path = require('path');
 
 const BASE = process.env.BASE_URL || 'http://127.0.0.1:18092';
-const LEFT = 'D:\\kairo-test-runtime\\compare-左 源';
-const RIGHT = 'D:\\kairo-test-runtime\\compare-右 源';
-const SHOT = 'D:\\kairo-test-runtime\\shots';
+const COMPARE_ROOT = process.env.COMPARE_LAB_ROOT || 'D:\\kairo-test-runtime';
+const LEFT = process.env.COMPARE_LAB_ROOT ? path.join(COMPARE_ROOT, 'compare-左 源') : 'D:\\kairo-test-runtime\\compare-左 源';
+const RIGHT = process.env.COMPARE_LAB_ROOT ? path.join(COMPARE_ROOT, 'compare-右 源') : 'D:\\kairo-test-runtime\\compare-右 源';
+const SHOT = process.env.COMPARE_LAB_ROOT ? path.join(COMPARE_ROOT, 'shots') : 'D:\\kairo-test-runtime\\shots';
 fs.mkdirSync(SHOT, { recursive: true });
 
 function fail(msg) {

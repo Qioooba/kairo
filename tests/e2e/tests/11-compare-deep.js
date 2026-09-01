@@ -10,6 +10,9 @@
 
 function register(runner, ctx) {
   const { page, baseUrl } = ctx;
+  const compareRoot = process.env.COMPARE_LAB_ROOT || 'D:\\kairo-test-runtime';
+  const leftFixture = compareRoot + '/compare-左 源';
+  const rightFixture = compareRoot + '/compare-右 源';
 
   runner.describe('代码比对', function () {
     runner.beforeEach(async function () {
@@ -165,9 +168,10 @@ function register(runner, ctx) {
       await compareBtn.click();
       await page.waitForTimeout(800);
       const toRight = await page.$('button[title="用左侧替换右侧"]');
-      const toLeft = await page.$('button[title="用右侧替换左侧"]');
       if (toRight) await toRight.click();
       await page.waitForTimeout(300);
+      // 应用一侧 hunk 会重新渲染 diff DOM，旧 ElementHandle 已失效；重新查询后再反向应用。
+      const toLeft = await page.$('button[title="用右侧替换左侧"]');
       if (toLeft) await toLeft.click();
       await runner.screenshot(page, '13-compare-10-hunk-both-ways');
     });
@@ -189,8 +193,8 @@ function register(runner, ctx) {
 
     runner.it('中文路径夹具：测试、比对、覆盖→ 与 ←覆盖', async function () {
       const fs = require('fs');
-      const left = 'D:\\kairo-test-runtime\\compare-左 源';
-      const right = 'D:\\kairo-test-runtime\\compare-右 源';
+      const left = process.env.COMPARE_LAB_ROOT ? leftFixture : 'D:\\kairo-test-runtime\\compare-左 源';
+      const right = process.env.COMPARE_LAB_ROOT ? rightFixture : 'D:\\kairo-test-runtime\\compare-右 源';
       if (!fs.existsSync(left) || !fs.existsSync(right)) {
         throw new Error('缺少比较夹具目录 ' + left);
       }

@@ -1,14 +1,14 @@
 // License 包单元测试。
 //
 // 覆盖场景:
-//   1. TestDevBypass - 白名单匹配 / 不匹配
-//   2. TestCertEncryptDecryptRoundTrip - 加密 → 解密 → 数据一致
-//   3. TestCertIPMismatch - IP 不匹配时 GCM AAD 校验失败
-//   4. TestCertCorruptedPayload - payload 被改 → 解密失败
-//   5. TestLocalIP - 本机 IP 提取
-//   6. TestCheck_BypassWins - 白名单优先于本地证书
-//   7. TestCheck_LocalCertValid - 本地证书有效时通过
-//   8. TestCheck_NoCert - 没证书时返回 ErrLicenseMissing
+//  1. TestDevBypass - 白名单匹配 / 不匹配
+//  2. TestCertEncryptDecryptRoundTrip - 加密 → 解密 → 数据一致
+//  3. TestCertIPMismatch - IP 不匹配时 GCM AAD 校验失败
+//  4. TestCertCorruptedPayload - payload 被改 → 解密失败
+//  5. TestLocalIP - 本机 IP 提取
+//  6. TestCheck_BypassWins - 白名单优先于本地证书
+//  7. TestCheck_LocalCertValid - 本地证书有效时通过
+//  8. TestCheck_NoCert - 没证书时返回 ErrLicenseMissing
 package license
 
 import (
@@ -65,6 +65,28 @@ func TestCertEncryptDecryptRoundTrip(t *testing.T) {
 	}
 	if got.IP != original.IP {
 		t.Errorf("IP 不一致: got=%q want=%q", got.IP, original.IP)
+	}
+}
+
+func TestFutureCertificateIsNeverOverwritten(t *testing.T) {
+	withCleanCert(t)
+	p, _ := certPath()
+	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	original := []byte(`{"version":99,"payload":"future","ip":"1.2.3.4","future":"keep"}`)
+	if err := os.WriteFile(p, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadLocalCert(); err == nil {
+		t.Fatal("future certificate must be rejected")
+	}
+	if err := saveLocalCert(&Cert{Code: "old", IP: "1.2.3.4"}); err == nil {
+		t.Fatal("old executable must not overwrite a future certificate")
+	}
+	after, _ := os.ReadFile(p)
+	if string(after) != string(original) {
+		t.Fatal("future certificate changed")
 	}
 }
 
@@ -314,9 +336,12 @@ func TestActivate_EmptyCode(t *testing.T) {
 		LicenseServerPrimary = "http://PLACEHOLDER/kairo/auth/activate"
 		LicenseServerSecondary = ""
 		BasicAuthHeader = "TEST"
-		URLParamK1 = ""; URLParamV1 = ""  // 全空, URL 不带参数
-		URLParamK2 = ""; URLParamV2 = ""
-		URLParamK3 = ""; URLParamV3 = ""
+		URLParamK1 = ""
+		URLParamV1 = "" // 全空, URL 不带参数
+		URLParamK2 = ""
+		URLParamV2 = ""
+		URLParamK3 = ""
+		URLParamV3 = ""
 
 		err := Activate("")
 		if err == nil {
@@ -333,9 +358,12 @@ func TestActivate_WhitespaceCode(t *testing.T) {
 		LicenseServerPrimary = "http://PLACEHOLDER/kairo/auth/activate"
 		LicenseServerSecondary = ""
 		BasicAuthHeader = "TEST"
-		URLParamK1 = ""; URLParamV1 = ""
-		URLParamK2 = ""; URLParamV2 = ""
-		URLParamK3 = ""; URLParamV3 = ""
+		URLParamK1 = ""
+		URLParamV1 = ""
+		URLParamK2 = ""
+		URLParamV2 = ""
+		URLParamK3 = ""
+		URLParamV3 = ""
 
 		err := Activate("   ")
 		if err == nil {

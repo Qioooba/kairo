@@ -30,6 +30,8 @@ import (
 // StateVersion 状态文件格式版本号。
 const StateVersion = 1
 
+var ErrFutureStateVersion = errors.New("pet: 状态来自更新版本")
+
 // Pos 浮动宠物位置（相对视口百分比，x/y ∈ [0,1]）。
 type Pos struct {
 	X float64 `json:"x"`
@@ -275,6 +277,9 @@ func loadStateFile(path string, key []byte) (*State, error) {
 		if err := json.Unmarshal(migrated, &st); err != nil {
 			return nil, fmt.Errorf("pet: 迁移旧皮肤字段后解析失败: %w", err)
 		}
+		if st.V < 0 || st.V > StateVersion {
+			return nil, fmt.Errorf("%w: %d 高于当前支持的 %d", ErrFutureStateVersion, st.V, StateVersion)
+		}
 		st.Sig = "" // 迁移后旧签名失效，置空待下次保存重签
 		normalizeState(&st)
 		return &st, nil
@@ -282,6 +287,9 @@ func loadStateFile(path string, key []byte) (*State, error) {
 	st, err := verifyState(raw, key)
 	if err != nil {
 		return nil, err
+	}
+	if st.V < 0 || st.V > StateVersion {
+		return nil, fmt.Errorf("%w: %d 高于当前支持的 %d", ErrFutureStateVersion, st.V, StateVersion)
 	}
 	normalizeState(st)
 	return st, nil

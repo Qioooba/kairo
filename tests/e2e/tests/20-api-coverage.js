@@ -369,7 +369,7 @@ function register(runner, ctx) {
             headers,
             body: JSON.stringify({
               host: '127.0.0.1',
-              port: 2222,
+              port: 2225,
               username: 'test',
               password: 'test'
             })
@@ -393,7 +393,7 @@ function register(runner, ctx) {
             headers,
             body: JSON.stringify({
               host: '127.0.0.1',
-              port: 2222,
+              port: 2225,
               username: 'test',
               password: 'test',
               path: '/opt/IBM/WebSphere/AppServer/profiles/AppSrv01/logs/server1'
@@ -418,7 +418,7 @@ function register(runner, ctx) {
             headers,
             body: JSON.stringify({
               host: '127.0.0.1',
-              port: 2222,
+              port: 2225,
               username: 'test',
               password: 'test',
               path: '/opt/IBM/WebSphere/AppServer/profiles/AppSrv01/logs/server1',
@@ -447,7 +447,7 @@ function register(runner, ctx) {
             headers,
             body: JSON.stringify({
               host: '127.0.0.1',
-              port: 2222,
+              port: 2225,
               username: 'test',
               password: 'test',
               path: '/'
@@ -472,7 +472,7 @@ function register(runner, ctx) {
             headers,
             body: JSON.stringify({
               host: '127.0.0.1',
-              port: 2222,
+              port: 2225,
               username: 'test',
               password: 'test',
               path: '/README.md'

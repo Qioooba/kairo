@@ -61,8 +61,9 @@ type HTTPEnv struct {
 }
 
 type httpCasesFile struct {
-	Cases []HTTPCase `json:"cases"`
-	Envs  []HTTPEnv  `json:"envs"`
+	Version int        `json:"version"`
+	Cases   []HTTPCase `json:"cases"`
+	Envs    []HTTPEnv  `json:"envs"`
 }
 
 var httpCasesMu sync.Mutex
@@ -316,11 +317,31 @@ func (s *Server) loadHTTPCases() (httpCasesFile, error) {
 	if err := json.Unmarshal(data, &f); err != nil {
 		return f, fmt.Errorf("http_cases JSON 解析失败: %w", err)
 	}
+	if f.Version < 0 || f.Version > 1 {
+		return f, fmt.Errorf("http_cases 版本 %d 过新，当前程序仅支持 1；已拒绝覆盖", f.Version)
+	}
+	if f.Version == 0 { // 旧文件没有显式版本，按 v1 读取。
+		f.Version = 1
+	}
 	return f, nil
 }
 
 func (s *Server) saveHTTPCases(f httpCasesFile) error {
+	f.Version = 1
 	path := s.httpCasesPath()
+	if existing, err := os.ReadFile(path); err == nil && len(existing) > 0 {
+		var header struct {
+			Version int `json:"version"`
+		}
+		if err := json.Unmarshal(existing, &header); err != nil {
+			return fmt.Errorf("现有 http_cases 已损坏，拒绝覆盖: %w", err)
+		}
+		if header.Version > 1 {
+			return fmt.Errorf("现有 http_cases 版本 %d 过新，拒绝覆盖", header.Version)
+		}
+	} else if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("检查现有 http_cases 失败: %w", err)
+	}
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("创建 data 目录失败: %w", err)

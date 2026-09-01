@@ -124,7 +124,7 @@ const DANGEROUS_BUTTON_PATTERNS = [
 
 const MOCK_SSH = {
   host: '127.0.0.1',
-  port: 2222,
+  port: 2225,
   username: 'test',
   password: 'test',
 };

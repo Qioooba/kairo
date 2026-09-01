@@ -118,6 +118,13 @@ type encryptedEntry struct {
 	Ciphertext string `json:"c"` // hex
 }
 
+const credentialFileVersion = 1
+
+type credentialFile struct {
+	Version int                       `json:"version"`
+	Entries map[string]encryptedEntry `json:"entries"`
+}
+
 // Init 初始化 file 后端（必须在 SetMode 之后、使用凭据功能之前调用）。
 //
 //   - dataDir: 数据目录绝对路径（cfg.DataDir()）
@@ -268,18 +275,37 @@ func loadFile() (map[string]encryptedEntry, error) {
 	if len(data) == 0 {
 		return entries, nil
 	}
-	var raw map[string]encryptedEntry
-	if err := json.Unmarshal(data, &raw); err != nil {
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(data, &root); err != nil {
 		return nil, fmt.Errorf("credentials: 解析凭据文件失败: %w", err)
 	}
-	if raw != nil {
-		entries = raw
+	versionRaw, hasVersion := root["version"]
+	entriesRaw, hasEntries := root["entries"]
+	var version int
+	versionIsNumber := hasVersion && json.Unmarshal(versionRaw, &version) == nil
+	if versionIsNumber {
+		if !hasEntries || version < 1 || version > credentialFileVersion {
+			return nil, fmt.Errorf("credentials: 不支持的凭据文件版本（当前仅支持 %d）", credentialFileVersion)
+		}
+		if len(entriesRaw) != 0 && string(entriesRaw) != "null" {
+			if err := json.Unmarshal(entriesRaw, &entries); err != nil {
+				return nil, fmt.Errorf("credentials: 解析凭据 entries 失败: %w", err)
+			}
+		}
+	} else {
+		// v0.17 及更早版本直接把凭据 map 放在根节点。
+		if err := json.Unmarshal(data, &entries); err != nil {
+			return nil, fmt.Errorf("credentials: 解析旧凭据文件失败: %w", err)
+		}
+	}
+	if entries == nil {
+		entries = make(map[string]encryptedEntry)
 	}
 	return entries, nil
 }
 
 func saveFile(entries map[string]encryptedEntry) error {
-	data, err := json.MarshalIndent(entries, "", "  ")
+	data, err := json.MarshalIndent(credentialFile{Version: credentialFileVersion, Entries: entries}, "", "  ")
 	if err != nil {
 		return fmt.Errorf("credentials: 序列化凭据失败: %w", err)
 	}

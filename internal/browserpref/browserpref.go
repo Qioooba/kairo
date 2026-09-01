@@ -48,8 +48,9 @@ const (
 // Path 在 kind=chrome 时是 chrome.exe 的绝对路径；
 // kind=default 时为空字符串（rundll32 之类不需要路径）。
 type State struct {
-	Kind      Kind     `json:"kind"`
-	Path      string   `json:"path,omitempty"`
+	Version   int       `json:"version"`
+	Kind      Kind      `json:"kind"`
+	Path      string    `json:"path,omitempty"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
@@ -114,6 +115,12 @@ func Read() (*State, error) {
 	if err := json.Unmarshal(data, &s); err != nil {
 		return nil, fmt.Errorf("browserpref: 解析 state JSON 失败: %w", err)
 	}
+	if s.Version < 0 || s.Version > 1 {
+		return nil, fmt.Errorf("browserpref: 不支持的 state 版本 %d（当前仅支持 1）", s.Version)
+	}
+	if s.Version == 0 { // 兼容没有 version 字段的旧文件。
+		s.Version = 1
+	}
 	// 兜底：未知 kind 视为 default，避免加新 Kind 时老 state 把"打开"逻辑弄崩。
 	if s.Kind != KindChrome && s.Kind != KindDefault {
 		s.Kind = KindDefault
@@ -124,9 +131,9 @@ func Read() (*State, error) {
 // Write 原子写入 state。
 //
 // 实现：
-//   1. 确保 dataDir 存在（0755），不存在则创建
-//   2. 写到同目录下 .browser_state-*.tmp
-//   3. os.Rename 替换目标；Windows 上被杀毒挡住时 sleep 100ms 重试一次
+//  1. 确保 dataDir 存在（0755），不存在则创建
+//  2. 写到同目录下 .browser_state-*.tmp
+//  3. os.Rename 替换目标；Windows 上被杀毒挡住时 sleep 100ms 重试一次
 //
 // 失败只返回 error，不污染现有文件 —— 原子语义的一部分。
 func Write(s *State) error {
@@ -137,9 +144,23 @@ func Write(s *State) error {
 	if err != nil {
 		return err
 	}
+	if existing, readErr := os.ReadFile(path); readErr == nil && len(existing) > 0 {
+		var header struct {
+			Version int `json:"version"`
+		}
+		if err := json.Unmarshal(existing, &header); err != nil {
+			return fmt.Errorf("browserpref: 现有 state 损坏，拒绝覆盖（可先执行重置）: %w", err)
+		}
+		if header.Version > 1 {
+			return fmt.Errorf("browserpref: 现有 state 版本 %d 过新，拒绝覆盖", header.Version)
+		}
+	} else if readErr != nil && !errors.Is(readErr, fs.ErrNotExist) {
+		return fmt.Errorf("browserpref: 检查现有 state 失败: %w", readErr)
+	}
 	if s.UpdatedAt.IsZero() {
 		s.UpdatedAt = time.Now()
 	}
+	s.Version = 1
 
 	dataDirMu.RLock()
 	dir := dataDir

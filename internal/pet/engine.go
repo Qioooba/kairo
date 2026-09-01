@@ -138,6 +138,9 @@ func newEngine(rules Rules, dataPath string, sigKey []byte, skinsJSON []byte, id
 
 	// 加载（失败静默回退，不阻断启动）
 	st, err := loadStateFile(dataPath, key)
+	if errors.Is(err, ErrFutureStateVersion) {
+		return nil, err // 降级运行时绝不把新版本宠物当成损坏数据重建。
+	}
 	if err != nil && !os.IsNotExist(err) {
 		// 文件存在但损坏/签名不匹配：尝试 .bak；再失败才新建
 		if bak, berr := loadStateFile(dataPath+".bak", key); berr == nil {

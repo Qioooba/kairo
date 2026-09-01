@@ -3,7 +3,7 @@
 Mock SSH server for Kairo 模拟验收。
 
 行为：
-- 监听 127.0.0.1:2222
+- 默认监听 127.0.0.1:2225（可通过 MOCK_SSHD_PORT 覆盖）
 - 接受任何用户名 + 密码 ops
 - 把每个命令 chdir 到 FAKE_ROOT 后用 /bin/sh 执行
 - 返回真实 stdout / stderr / exit code

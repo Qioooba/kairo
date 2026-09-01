@@ -1,4 +1,4 @@
-schema_version: 1
+schema_version: 2
 
 app:
   name: Kairo
@@ -42,61 +42,72 @@ internal_endpoints:
     timeout: 10s
 
 systems:
-- name: 信贷应用服务器
+- id: sys-2bde5e81b46de1e3
+  name: 信贷应用服务器
   description: ""
   servers:
-  - name: 信贷测试198
+  - id: srv-13adbde06c250f12
+    name: 信贷测试198
     host: 66.0.34.198
     port: 22
     username: credit
     password: credit
     auth_type: password
     log_dirs:
-    - name: AppSrv01 server1
+    - id: dir-2209862df64f1838
+      name: AppSrv01 server1
       path: /opt/IBM/WebSphere/AppServer/profiles/AppSrv01/logs/server1
       patterns:
       - SystemOut*.log
       - SystemErr*.log
       encoding: gbk
-  - name: 信贷测试199
+  - id: srv-e4204fffe8ae51d7
+    name: 信贷测试199
     host: 66.0.34.199
     port: 22
     username: credit
     password: credit
     auth_type: password
     log_dirs:
-    - name: AppSrv01 server1
+    - id: dir-a2b0563306540e6a
+      name: AppSrv01 server1
       path: /opt/IBM/WebSphere/AppServer/profiles/AppSrv01/logs/server1
       patterns:
       - SystemOut*.log
       - SystemErr*.log
       encoding: gbk
-- name: 信贷批量服务器
+- id: sys-8bbec899f0b23c5a
+  name: 信贷批量服务器
   description: ""
   servers:
-  - name: 信贷测试28
+  - id: srv-bf26ae0db54195c9
+    name: 信贷测试28
     host: 66.2.43.28
     port: 22
     username: creditpl
     password: creditpl
     auth_type: password
     log_dirs:
-    - name: AmarExtract
+    - id: dir-039b6bf0dc43e548
+      name: AmarExtract
       path: /batch/credit/AmarExtract
       patterns:
       - '*.log'
       encoding: gbk
-- name: 本地测试
+- id: sys-e13025e2d9944bdc
+  name: 本地测试
   description: ""
   servers:
-  - name: Mock SSH
+  - id: srv-2702c4111a970477
+    name: Mock SSH
     host: 127.0.0.1
     port: 2226
     username: test
     password: test
     auth_type: password
     log_dirs:
-    - name: 测试目录
+    - id: dir-25b68882048cd393
+      name: 测试目录
       path: /tmp
       patterns:
       - '*.log'

@@ -9,6 +9,8 @@ import (
 	"sync"
 )
 
+const dataVersion = 1
+
 // Store reminders.json 持久化层。
 //
 // 文件格式：
@@ -57,6 +59,9 @@ func (s *Store) Load() ([]Reminder, error) {
 		_ = s.backupLocked(data)
 		return []Reminder{}, fmt.Errorf("解析 %s 失败（已备份到 .bak）: %w", s.path, err)
 	}
+	if doc.Version < 0 || doc.Version > dataVersion {
+		return nil, fmt.Errorf("不支持的提醒数据版本: %d（当前支持 %d）", doc.Version, dataVersion)
+	}
 	if doc.Reminders == nil {
 		return []Reminder{}, nil
 	}
@@ -67,6 +72,19 @@ func (s *Store) Load() ([]Reminder, error) {
 func (s *Store) Save(items []Reminder) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if existing, err := os.ReadFile(s.path); err == nil && len(existing) > 0 {
+		var header struct {
+			Version int `json:"version"`
+		}
+		if err := json.Unmarshal(existing, &header); err != nil {
+			return fmt.Errorf("现有提醒数据损坏，拒绝覆盖: %w", err)
+		}
+		if header.Version > dataVersion {
+			return fmt.Errorf("现有提醒数据版本 %d 过新，拒绝覆盖", header.Version)
+		}
+	} else if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("检查现有提醒数据失败: %w", err)
+	}
 
 	if items == nil {
 		items = []Reminder{}
@@ -74,7 +92,7 @@ func (s *Store) Save(items []Reminder) error {
 	doc := struct {
 		Version   int        `json:"version"`
 		Reminders []Reminder `json:"reminders"`
-	}{Version: 1, Reminders: items}
+	}{Version: dataVersion, Reminders: items}
 
 	encoded, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {

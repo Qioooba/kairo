@@ -163,6 +163,7 @@ crash.log
 # ===== E2E / 测试跑出来的截图与报告产物（本地生成，不入库）=====
 /test-results/
 /tests/test-results/
+/output/
 /v0.13-out/
 /v0.13-xianxia-out/
 /v0.14-*-out/

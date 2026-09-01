@@ -140,6 +140,26 @@ func TestReadCorruptJSON(t *testing.T) {
 	}
 }
 
+func TestReadRejectsFutureVersionWithoutChangingFile(t *testing.T) {
+	tmp := t.TempDir()
+	Init(tmp)
+	path, _ := Path()
+	original := []byte(`{"version":99,"kind":"chrome","future":"keep"}`)
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Read(); err == nil {
+		t.Fatal("future browser state must be rejected")
+	}
+	if err := Write(&State{Kind: KindDefault}); err == nil {
+		t.Fatal("future browser state must reject old-version writes")
+	}
+	after, _ := os.ReadFile(path)
+	if string(after) != string(original) {
+		t.Fatal("future browser state changed")
+	}
+}
+
 func TestReadEmptyFile(t *testing.T) {
 	tmp := t.TempDir()
 	Init(tmp)

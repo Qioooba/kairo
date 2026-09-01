@@ -141,17 +141,24 @@ function register(runner, ctx) {
   });
 
   runner.describe('其他页面 - WS 代码生成', function () {
-    runner.it('应成功加载 WS 代码生成页面', async function () {
-      await page.goto(baseUrl + '/#/wscodegen', { waitUntil: 'load' });
+    async function ensureWSCodegenPage() {
+      // 其它模块存在全局 beforeEach，会在每个用例前初始化文件页；每个 WS 用例都要显式回到目标路由。
+      await page.goto(baseUrl + '/?e2e_route=wscodegen#/wscodegen', { waitUntil: 'domcontentloaded' });
+      await page.waitForFunction(function () { return location.hash === '#/wscodegen'; }, null, { timeout: 10000 });
       await page.waitForTimeout(1000);
+    }
+
+    runner.it('应成功加载 WS 代码生成页面', async function () {
+      await ensureWSCodegenPage();
       await runner.screenshot(page, '09-misc-09-wscodegen-page');
     });
 
     runner.it('应展示引擎选择和预览按钮', async function () {
-      const hasTitle = await page.evaluate(function () {
-        return document.body.textContent.indexOf('WSDL') >= 0 && document.body.textContent.indexOf('Java') >= 0;
-      });
-      if (!hasTitle) throw new Error('WS 代码生成页标题未找到');
+      await ensureWSCodegenPage();
+      await page.waitForFunction(function () {
+        const text = document.body.textContent || '';
+        return text.indexOf('WSDL') >= 0 && text.indexOf('Java') >= 0;
+      }, null, { timeout: 10000 });
       const previewBtn = await page.$('button:has-text("预览代码"), button:has-text("生成到目录")');
       if (!previewBtn) throw new Error('预览/生成按钮未找到');
     });

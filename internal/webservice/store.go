@@ -13,6 +13,7 @@ package webservice
 //   data/soap_mock_records.json — []MockRequestRecord（最多 200 条）
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -31,6 +32,8 @@ const MaxHistoryEntries = 500
 
 // MaxMockRecords Mock 请求记录上限。
 const MaxMockRecords = 200
+
+const storeFileVersion = 1
 
 // Store 线程安全的本地存储。
 type Store struct {
@@ -64,7 +67,25 @@ func loadJSON[T any](path string, out *T) error {
 	if len(data) == 0 {
 		return nil
 	}
-	return json.Unmarshal(data, out)
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) > 0 && trimmed[0] == '[' {
+		// v0.17 及更早版本直接保存数组。
+		return json.Unmarshal(trimmed, out)
+	}
+	var envelope struct {
+		Version int             `json:"version"`
+		Items   json.RawMessage `json:"items"`
+	}
+	if err := json.Unmarshal(trimmed, &envelope); err != nil {
+		return err
+	}
+	if envelope.Version < 1 || envelope.Version > storeFileVersion {
+		return fmt.Errorf("不支持的数据文件版本 %d（当前仅支持 %d）", envelope.Version, storeFileVersion)
+	}
+	if len(envelope.Items) == 0 || string(envelope.Items) == "null" {
+		return nil
+	}
+	return json.Unmarshal(envelope.Items, out)
 }
 
 func saveJSONAtomic(path string, v any) error {
@@ -72,7 +93,11 @@ func saveJSONAtomic(path string, v any) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("创建目录失败: %w", err)
 	}
-	encoded, err := json.MarshalIndent(v, "", "  ")
+	envelope := struct {
+		Version int `json:"version"`
+		Items   any `json:"items"`
+	}{Version: storeFileVersion, Items: v}
+	encoded, err := json.MarshalIndent(envelope, "", "  ")
 	if err != nil {
 		return fmt.Errorf("序列化失败: %w", err)
 	}

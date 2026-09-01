@@ -5,7 +5,9 @@
 package config
 
 import (
+	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/hex"
 	"fmt"
 	"net"
 	"os"
@@ -476,6 +478,7 @@ func (a *AppConfig) ListenAddr() string {
 
 // SystemConfig 一个逻辑系统（业务系统）
 type SystemConfig struct {
+	ID          string         `yaml:"id" json:"id"`
 	Name        string         `yaml:"name" json:"name"`
 	Description string         `yaml:"description" json:"description"`
 	Servers     []ServerConfig `yaml:"servers" json:"servers"`
@@ -483,6 +486,7 @@ type SystemConfig struct {
 
 // ServerConfig 一台目标服务器
 type ServerConfig struct {
+	ID       string `yaml:"id" json:"id"`
 	Name     string `yaml:"name" json:"name"`
 	Host     string `yaml:"host" json:"host"`
 	Port     int    `yaml:"port" json:"port"`
@@ -504,6 +508,7 @@ type ServerConfig struct {
 
 // LogDirEntry 一个允许访问的日志目录
 type LogDirEntry struct {
+	ID       string   `yaml:"id" json:"id"`
 	Name     string   `yaml:"name" json:"name"`
 	Path     string   `yaml:"path" json:"path"`
 	Patterns []string `yaml:"patterns" json:"patterns"`
@@ -611,6 +616,7 @@ type SearchConfig struct {
 //     旧版 Defaults 会把 shift-jis 静默改 utf-8，
 //     掩盖用户配错的事实（看着像 utf-8 在跑，其实是想用 shift-jis）。
 func (c *Config) Defaults() {
+	c.ensureStableIDs()
 	if c.App.Name == "" {
 		c.App.Name = "Kairo"
 	}
@@ -721,6 +727,67 @@ func (c *Config) Defaults() {
 			}
 		}
 	}
+}
+
+// ensureStableIDs 给可由用户增删、改名和排序的配置实体补永久 ID。
+// 以后官方迁移按 ID 定位，不依赖易变的名称或数组位置。复制一项造成 ID 重复时，
+// 只给副本生成新 ID，原项保持不变。
+func (c *Config) ensureStableIDs() {
+	seen := map[string]bool{}
+	claim := func(existing, prefix string, parts ...string) string {
+		if existing != "" && !seen[existing] {
+			seen[existing] = true
+			return existing
+		}
+		for salt := 0; ; salt++ {
+			input := strings.Join(append(parts, strconv.Itoa(salt)), "\x00")
+			sum := sha256.Sum256([]byte(input))
+			candidate := prefix + "-" + hex.EncodeToString(sum[:8])
+			if !seen[candidate] {
+				seen[candidate] = true
+				return candidate
+			}
+		}
+	}
+	for i := range c.Systems {
+		sys := &c.Systems[i]
+		sys.ID = claim(sys.ID, "sys", "system", strconv.Itoa(i), sys.Name)
+		for j := range sys.Servers {
+			srv := &sys.Servers[j]
+			srv.ID = claim(srv.ID, "srv", sys.ID, strconv.Itoa(j), srv.Name, srv.Host, strconv.Itoa(srv.Port), srv.Username)
+			for k := range srv.LogDirs {
+				ld := &srv.LogDirs[k]
+				ld.ID = claim(ld.ID, "dir", srv.ID, strconv.Itoa(k), ld.Name, ld.Path)
+			}
+		}
+	}
+}
+
+func (c *Config) stableIDsComplete() bool {
+	seen := map[string]bool{}
+	check := func(id string) bool {
+		if id == "" || seen[id] {
+			return false
+		}
+		seen[id] = true
+		return true
+	}
+	for i := range c.Systems {
+		if !check(c.Systems[i].ID) {
+			return false
+		}
+		for j := range c.Systems[i].Servers {
+			if !check(c.Systems[i].Servers[j].ID) {
+				return false
+			}
+			for k := range c.Systems[i].Servers[j].LogDirs {
+				if !check(c.Systems[i].Servers[j].LogDirs[k].ID) {
+					return false
+				}
+			}
+		}
+	}
+	return true
 }
 
 // Load 加载并校验 config.yaml

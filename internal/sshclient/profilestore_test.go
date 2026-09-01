@@ -1,6 +1,7 @@
 package sshclient
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -35,6 +36,21 @@ func TestRememberProfile_PersistsAcrossReload(t *testing.T) {
 	got, err := filepath.Glob(filepath.Join(dir, profileStoreFileName))
 	if err != nil || len(got) != 1 {
 		t.Fatalf("expected profile store file to exist, err=%v glob=%v", err, got)
+	}
+}
+
+func TestRememberProfileDoesNotOverwriteFutureStore(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, profileStoreFileName)
+	original := []byte(`{"version":99,"profiles":{"h:22":"future"},"future":"keep"}`)
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	SetProfileStoreDir(dir)
+	rememberProfile("h:22", "no-ecdh")
+	after, _ := os.ReadFile(path)
+	if string(after) != string(original) {
+		t.Fatal("future SSH profile store was overwritten")
 	}
 }
 
