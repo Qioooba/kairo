@@ -118,6 +118,10 @@ func (m *Manager) Add(in Note) (Note, error) {
 		m.mu.Unlock()
 		return Note{}, fmt.Errorf("便笺数量已达到上限 %d", MaxNotes)
 	}
+	if in.DesktopVisible() && m.desktopVisibleLocked("") >= MaxDesktopVisible {
+		m.mu.Unlock()
+		return Note{}, ErrDesktopLimit
+	}
 	now := m.now()
 	in.ID = newID()
 	in.Revision = 1
@@ -199,6 +203,10 @@ func (m *Manager) Patch(id string, p Patch) (Note, error) {
 		m.mu.Unlock()
 		return Note{}, err
 	}
+	if n.DesktopVisible() && !old.DesktopVisible() && m.desktopVisibleLocked(id) >= MaxDesktopVisible {
+		m.mu.Unlock()
+		return Note{}, ErrDesktopLimit
+	}
 	n.Revision++
 	n.UpdatedAt = m.now()
 	previousFloating := map[string]Note{}
@@ -248,6 +256,19 @@ func (m *Manager) Delete(id string) error {
 	m.mu.Unlock()
 	m.broadcast(Event{Kind: "deleted", ID: id})
 	return nil
+}
+
+func (m *Manager) desktopVisibleLocked(except string) int {
+	n := 0
+	for id, item := range m.items {
+		if id == except {
+			continue
+		}
+		if item.DesktopVisible() {
+			n++
+		}
+	}
+	return n
 }
 
 func ptrClone(n Note) *Note {

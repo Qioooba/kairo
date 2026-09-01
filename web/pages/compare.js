@@ -139,7 +139,8 @@
       sourceHeaders[side] = { badge, label, meta, dirty, saveBtn };
       editorGrid.appendChild(el('section', { class: 'cmp-editor-pane' }, [el('div', { class: 'cmp-source-header' }, [badge, label, meta, dirty, openBtn, saveBtn]), editors[side].root]));
     });
-    const compareBtn = makeButton('立即比较', 'compare', compareNow, 'btn btn-primary btn-sm');
+    const compareBtn = makeButton('比对', 'compare', compareNow, 'btn btn-primary btn-sm');
+    compareBtn.setAttribute('data-action', 'text-compare');
     const editBtn = makeButton('返回编辑', 'open', showEditors); editBtn.style.display = 'none';
     const prevBtn = makeButton('上一处', 'prev', () => navigateHunk(-1));
     const nextBtn = makeButton('下一处', 'next', () => navigateHunk(1));
@@ -295,9 +296,27 @@
       const badge = el('span', { class: 'cmp-source-badge', text: sources[side].kind.toUpperCase() }), label = el('span', { class: 'cmp-source-label', text: sourceLabel(sources[side]) });
       sourceGrid.appendChild(el('div', { class: 'cmp-folder-source' }, [badge, label, makeButton('选择目录', 'folder', () => openSourceDialog(sources[side], true, source => { sources[side] = source; badge.textContent = source.kind.toUpperCase(); label.textContent = sourceLabel(source); label.title = sourceLabel(source); }))]));
     });
-    const startBtn = makeButton('开始文件夹比较', 'compare', startScan, 'btn btn-primary btn-sm');
-    const selectDiffBtn = makeButton('选择全部差异', 'check', selectVisible), syncRightBtn = makeButton('同步选中 →', 'right', () => syncSelected('right')), syncLeftBtn = makeButton('← 同步选中', 'left', () => syncSelected('left'));
-    panel.append(sourceGrid, el('div', { class: 'cmp-wb-toolbar' }, [startBtn, cancelBtn, el('span', { class: 'cmp-toolbar-sep' }), deep, tolerance, ignoreExt, el('span', { class: 'cmp-toolbar-sep' }), selectDiffBtn, syncLeftBtn, syncRightBtn, el('span', { class: 'cmp-toolbar-grow' }), statusFilter, onlyDiff, search]), progressBar, progress, resultHost); search.addEventListener('input', renderScan); statusFilter.addEventListener('change', renderScan);
+    const testBtn = makeButton('测试', 'check', testSources);
+    const startBtn = makeButton('比对', 'compare', startScan, 'btn btn-primary btn-sm');
+    const selectDiffBtn = makeButton('选择全部差异', 'check', selectVisible);
+    const coverRightBtn = makeButton('覆盖 →', 'right', () => coverDirection('right'));
+    const coverLeftBtn = makeButton('← 覆盖', 'left', () => coverDirection('left'));
+    testBtn.setAttribute('data-action', 'compare-test');
+    startBtn.setAttribute('data-action', 'compare-scan');
+    coverRightBtn.setAttribute('data-action', 'cover-right');
+    coverLeftBtn.setAttribute('data-action', 'cover-left');
+    panel.append(sourceGrid, el('div', { class: 'cmp-wb-toolbar' }, [testBtn, startBtn, cancelBtn, el('span', { class: 'cmp-toolbar-sep' }), deep, tolerance, ignoreExt, el('span', { class: 'cmp-toolbar-sep' }), selectDiffBtn, coverLeftBtn, coverRightBtn, el('span', { class: 'cmp-toolbar-grow' }), statusFilter, onlyDiff, search]), progressBar, progress, resultHost); search.addEventListener('input', renderScan); statusFilter.addEventListener('change', renderScan);
+    async function testSources() {
+      if (!sources.left.path || !sources.right.path) { toast('请先选择左右两个目录', 'warn'); return; }
+      testBtn.disabled = true; progress.textContent = '正在测试两侧来源…';
+      try {
+        const result = await api('POST', '/api/compare/test', { left: spec(sources.left), right: spec(sources.right) });
+        const sideText = (label, info) => info && info.ok ? label + ' 正常' + (info.is_dir ? '（目录）' : '') : label + ' 失败：' + ((info && info.error) || '未知错误');
+        progress.textContent = sideText('左', result.left) + ' · ' + sideText('右', result.right);
+        toast(result.ok ? '两侧来源可用' : '来源测试失败', result.ok ? 'ok' : 'err');
+      } catch (error) { toast('测试失败：' + (error.message || error), 'err'); }
+      finally { testBtn.disabled = false; }
+    }
     async function startScan() {
       if (!sources.left.path || !sources.right.path) { toast('请先选择左右两个目录', 'warn'); return; }
       selected.clear(); startBtn.disabled = true; cancelBtn.disabled = false; resultHost.innerHTML = ''; progress.textContent = '正在创建后台比较任务…';
@@ -332,17 +351,35 @@
     function selectVisible() {
       const candidates = visibleItems().filter(item => item.status !== 'same' && ((item.left && !item.left.is_dir) || (item.right && !item.right.is_dir)));
       const allSelected = candidates.length && candidates.every(item => selected.has(item.rel_path));
-      if (!allSelected && candidates.length > 1000) toast('为保证操作流畅，本次先选择前 1000 项，请分批同步', 'warn');
-      (allSelected ? candidates : candidates.slice(0, 1000)).forEach(item => allSelected ? selected.delete(item.rel_path) : selected.add(item.rel_path));
+      if (!allSelected && candidates.length > 2500) toast('为保证操作流畅，本次先选择前 2500 项，请分批覆盖', 'warn');
+      (allSelected ? candidates : candidates.slice(0, 2500)).forEach(item => allSelected ? selected.delete(item.rel_path) : selected.add(item.rel_path));
       renderScan();
     }
     function updateSelectedStatus() {
       selectDiffBtn.textContent = selected.size ? '已选 ' + selected.size + ' 项' : '选择全部差异';
-      syncRightBtn.disabled = syncLeftBtn.disabled = selected.size === 0;
+      coverRightBtn.disabled = coverLeftBtn.disabled = !state.scan;
+    }
+    function coverDirection(direction) {
+      if (!state.scan) { toast('请先比对两侧目录', 'warn'); return; }
+      if (!selected.size) {
+        const fromLeft = direction === 'right';
+        (state.scan.items || []).forEach(item => {
+          const sourceEntry = fromLeft ? item.left : item.right;
+          if (!sourceEntry || sourceEntry.is_dir) return;
+          const status = item.status;
+          const match = fromLeft
+            ? (status === 'left_only' || status === 'left_newer' || status === 'different' || status === 'suspect')
+            : (status === 'right_only' || status === 'right_newer' || status === 'different' || status === 'suspect');
+          if (match) selected.add(item.rel_path);
+        });
+        if (!selected.size) { toast('该方向没有可覆盖的更新项或单侧文件', 'warn'); renderScan(); return; }
+        renderScan();
+      }
+      syncSelected(direction);
     }
     async function syncSelected(direction) {
       if (!state.scan || !selected.size) return;
-      if (selected.size > 1000) { toast('单次最多预览并同步 1000 项，请分批操作', 'warn'); return; }
+      if (selected.size > 2500) { toast('单次最多预览并覆盖 2500 项，请分批操作', 'warn'); return; }
       const fromLeft = direction === 'right', plan = (state.scan.items || []).filter(item => selected.has(item.rel_path)).filter(item => {
         const sourceEntry = fromLeft ? item.left : item.right;
         return sourceEntry && !sourceEntry.is_dir;
@@ -359,7 +396,7 @@
       const body = el('div', { class: 'cmp-source-body cmp-sync-body' }), actions = el('div', { class: 'cmp-source-actions' });
       const close = async () => { if (pollTimer) clearTimeout(pollTimer); if (jobID) { try { await api('DELETE', '/api/compare/jobs/' + jobID); } catch (_) {} } overlay.remove(); updateSelectedStatus(); };
       const closeBtn = el('button', { class: 'cmp-dialog-close', onclick: close, unsafeHtml: icon('close') });
-      const title = el('strong', { text: '同步预览 · ' + (direction === 'right' ? '左 → 右' : '右 → 左') });
+      const title = el('strong', { text: '覆盖预览 · ' + (direction === 'right' ? '左 → 右（更新 + 仅左，不删除右侧多余）' : '右 → 左（更新 + 仅右，不删除左侧多余）') });
       const summary = el('div', { class: 'cmp-sync-summary' });
       const list = el('div', { class: 'cmp-sync-list' });
       function updateSummary() {
@@ -371,7 +408,7 @@
         const input = el('input', { type: 'checkbox' }); input.checked = true; input.onchange = () => { row.enabled = input.checked; updateSummary(); };
         list.appendChild(el('label', { class: 'cmp-sync-row' }, [input, el('span', { class: 'cmp-sync-action', text: row.targetEntry ? '覆盖' : '新增' }), el('span', { class: 'cmp-sync-path', text: row.item.rel_path, title: row.item.rel_path }), el('small', { text: formatBytes(row.sourceEntry.size) })]));
       });
-      const cancel = makeButton('取消', '', close), start = makeButton('开始同步', 'right', startSync, 'btn btn-primary');
+      const cancel = makeButton('取消', '', close), start = makeButton('开始覆盖', 'right', startSync, 'btn btn-primary');
       actions.append(cancel, start); body.append(summary, list); card.append(el('div', { class: 'cmp-source-title' }, [title, closeBtn]), body, actions); overlay.appendChild(card); document.body.appendChild(overlay); updateSummary();
       async function startSync() {
         const items = plan.filter(row => row.enabled).map(row => row.request); if (!items.length) return;
@@ -385,7 +422,7 @@
           try {
             const job = await api('GET', '/api/compare/jobs/' + jobID), percent = job.total ? Math.round(job.current / job.total * 100) : 5;
             track.firstChild.style.width = Math.min(100, percent) + '%'; message.textContent = (job.message || job.phase) + (job.total ? ' · ' + job.current + ' / ' + job.total : '');
-            if (job.status === 'completed') { jobID = ''; const result = job.sync_result || {}; selected.clear(); toast('同步完成：成功 ' + (result.copied || 0) + '，失败 ' + (result.failed || 0), result.failed ? 'warn' : 'ok'); if (result.failed) { renderFailures(result); } else { overlay.remove(); await startScan(); } return; }
+            if (job.status === 'completed') { jobID = ''; const result = job.sync_result || {}; selected.clear(); toast('覆盖完成：成功 ' + (result.copied || 0) + '，失败 ' + (result.failed || 0), result.failed ? 'warn' : 'ok'); if (result.failed) { renderFailures(result); } else { overlay.remove(); await startScan(); } return; }
             if (job.status === 'failed' || job.status === 'cancelled') throw new Error(job.error || '任务已取消');
             pollTimer = setTimeout(poll, 350);
           } catch (error) { jobID = ''; message.textContent = error.message || String(error); cancel.textContent = '关闭'; }

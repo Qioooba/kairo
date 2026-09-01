@@ -278,6 +278,28 @@ func TestRename(t *testing.T) {
 	}
 }
 
+// TestSetOwner 主人名可空（闲聊回退「主人」），超长拒绝。
+func TestSetOwner(t *testing.T) {
+	e, _ := newTestEngine(t, DefaultRules())
+	mustEnable(t, e)
+
+	if err := e.SetOwner("阿Q"); err != nil {
+		t.Fatalf("SetOwner: %v", err)
+	}
+	if st := e.State(); st.Owner != "阿Q" {
+		t.Fatalf("owner = %q, 期望 阿Q", st.Owner)
+	}
+	if err := e.SetOwner("   "); err != nil {
+		t.Fatalf("空主人名应允许: %v", err)
+	}
+	if st := e.State(); st.Owner != "" {
+		t.Fatalf("清空后 owner = %q, 期望空串", st.Owner)
+	}
+	if err := e.SetOwner(strings.Repeat("主", 17)); err == nil {
+		t.Fatal("17 个字符的主人名应被拒绝")
+	}
+}
+
 // TestSetPos 位置 clamp 与非法值拒绝。
 func TestSetPos(t *testing.T) {
 	e, _ := newTestEngine(t, DefaultRules())

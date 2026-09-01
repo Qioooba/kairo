@@ -41,6 +41,14 @@ const (
 
 	panelW = 300
 	panelH = 504
+	// 皮肤网格绘制与点击热区必须共用同一起点，否则会出现「点到隔壁皮肤」。
+	panelGridTop int32 = 196
+	skinMargin   int32 = 14
+	skinTileSize int32 = 40
+	skinGap      int32 = 6
+	skinCols           = 6
+	skinCatH     int32 = 22
+	maxNameRunes       = 16
 
 	bubbleH      = 44
 	bubblePad    = 14
@@ -137,6 +145,7 @@ type skinGroup struct {
 type tileHit struct {
 	id       string
 	unlocked bool
+	unlock   int
 	r        rect
 }
 
@@ -711,6 +720,7 @@ func (d *deskpet) handleToggle() {
 		d.showBubble(randPick(talkGreeting))
 		d.scheduleIdleTalk()
 	} else {
+		d.closePanel()
 		d.hideBubble()
 		showWindow(hwnd, swHide)
 	}
@@ -938,17 +948,6 @@ func (d *deskpet) openPanel() {
 		d.hwndPanel = panel
 		d.mu.Unlock()
 		d.createEdit(panel)
-		// 输入框预填当前名字与主人名。
-		d.mu.Lock()
-		e := d.hwndEdit
-		eo := d.hwndEditOwner
-		d.mu.Unlock()
-		if e != 0 && st != nil && st.Name != "" {
-			setWindowText(e, st.Name)
-		}
-		if eo != 0 && st != nil {
-			setWindowText(eo, st.Owner)
-		}
 		if st != nil {
 			// 皮肤全部走异步加载（每款一个 goroutine，完成即触发面板重绘）。
 			// 不要在这里同步解码：108 款 PNG 全量解码在 UI 线程上要阻塞一秒多，
@@ -957,6 +956,27 @@ func (d *deskpet) openPanel() {
 				d.spriteAsync(s.ID)
 			}
 		}
+	}
+
+	// 每次打开都按最新状态填输入框（面板只隐藏不销毁，否则改名后重开会显示旧稿）。
+	d.mu.Lock()
+	e := d.hwndEdit
+	eo := d.hwndEditOwner
+	st = d.state
+	d.mu.Unlock()
+	if e != 0 {
+		name := ""
+		if st != nil {
+			name = st.Name
+		}
+		setWindowText(e, name)
+	}
+	if eo != 0 {
+		owner := ""
+		if st != nil {
+			owner = st.Owner
+		}
+		setWindowText(eo, owner)
 	}
 
 	wr := getWindowRect(hwndPet)
@@ -992,25 +1012,27 @@ func (d *deskpet) createEdit(panel uintptr) {
 	hFont := d.font(13, false)
 
 	// 宠物名字输入框
-	edit := createWindowEx(0, wsChild|wsVisible|wsBorder|wsTabstop, "EDIT", "", 14, 128, 176, 24, panel)
+	edit := createWindowEx(0, wsChild|wsVisible|wsBorder|wsTabstop|esAutohscroll, "EDIT", "", 14, 128, 176, 24, panel)
 	if edit == 0 {
 		return
 	}
 	if hFont != 0 {
 		sendMessage(edit, wmSetfont, hFont, 1)
 	}
+	sendMessage(edit, emSetLimitText, maxNameRunes, 0)
 	d.mu.Lock()
 	d.hwndEdit = edit
 	d.mu.Unlock()
 
 	// 主人的名字输入框
-	owner := createWindowEx(0, wsChild|wsVisible|wsBorder|wsTabstop, "EDIT", "", 56, 156, 134, 24, panel)
+	owner := createWindowEx(0, wsChild|wsVisible|wsBorder|wsTabstop|esAutohscroll, "EDIT", "", 56, 156, 134, 24, panel)
 	if owner == 0 {
 		return
 	}
 	if hFont != 0 {
 		sendMessage(owner, wmSetfont, hFont, 1)
 	}
+	sendMessage(owner, emSetLimitText, maxNameRunes, 0)
 	d.mu.Lock()
 	d.hwndEditOwner = owner
 	d.mu.Unlock()
@@ -1044,15 +1066,18 @@ func (d *deskpet) onPanelDown(_ uintptr, l uintptr) {
 		return
 	}
 	_, _, tiles := computeGrid(st.Skins)
-	gridTop := int32(190)
+	gridTop := panelGridTop
 	curID := st.Skin
 	for _, t := range tiles {
-		if !t.unlocked {
-			continue
-		}
 		sy := t.r.Top - scroll
 		dr := rect{t.r.Left, gridTop + sy, t.r.Right, gridTop + sy + t.r.height()}
 		if x >= dr.Left && x < dr.Right && y >= dr.Top && y < dr.Bottom {
+			if !t.unlocked {
+				if t.unlock > 0 {
+					d.showBubble(fmt.Sprintf("Lv%d 才能穿这身哦", t.unlock))
+				}
+				return
+			}
 			if t.id != curID {
 				go d.applySkin(t.id)
 			}
@@ -1078,10 +1103,14 @@ func (d *deskpet) doRename() {
 	}
 	name := strings.TrimSpace(getWindowText(edit))
 	if name == "" {
+		d.showBubble("名字不能空着哦")
 		return
 	}
-	// 成功后不清空：框里就是用户刚输入的新名字，清空反而让面板显示空框。
-	_ = d.postJSON("/api/pet/name", map[string]any{"name": name})
+	if err := d.postJSON("/api/pet/name", map[string]any{"name": name}); err != nil {
+		d.showBubble("改名失败了…")
+		return
+	}
+	d.showBubble("我叫" + name + "啦")
 	d.pollOnce()
 }
 
@@ -1093,10 +1122,15 @@ func (d *deskpet) doSaveOwner() {
 		return
 	}
 	name := strings.TrimSpace(getWindowText(edit))
-	if name == "" {
+	if err := d.postJSON("/api/pet/owner", map[string]any{"name": name}); err != nil {
+		d.showBubble("没记住名字…")
 		return
 	}
-	_ = d.postJSON("/api/pet/owner", map[string]any{"name": name})
+	if name == "" {
+		d.showBubble("那我还是叫你主人吧")
+	} else {
+		d.showBubble(name + "，我记住啦")
+	}
 	d.pollOnce()
 }
 
@@ -1266,7 +1300,7 @@ func (d *deskpet) paintPanel(hwnd uintptr) {
 	setTextColor(hdc, colDim)
 	textOutW(hdc, 14, 186, "皮肤（点击穿戴，摇晃宠物快速换肤）")
 
-	gridTop := int32(196)
+	gridTop := panelGridTop
 	viewH := client.Bottom - 8 - gridTop
 	if viewH <= 0 {
 		viewH = 1
@@ -1284,7 +1318,7 @@ func (d *deskpet) paintPanel(hwnd uintptr) {
 	if st != nil {
 		skins = st.Skins
 	}
-	_, contentH, tiles := computeGrid(skins)
+	groups, contentH, tiles := computeGrid(skins)
 	maxScroll := contentH - viewH
 	if maxScroll < 0 {
 		maxScroll = 0
@@ -1307,6 +1341,22 @@ func (d *deskpet) paintPanel(hwnd uintptr) {
 	unlockOf := map[string]int{}
 	for _, s := range skins {
 		unlockOf[s.ID] = s.Unlock
+	}
+
+	// 皮肤区裁剪：滚动后不要把格子画到改名/主人输入行上，避免看起来点得到其实点的是标题。
+	intersectClipRect(hdc, 0, gridTop, client.Right, client.Bottom-8)
+
+	cy := int32(0)
+	for _, g := range groups {
+		ly := gridTop + cy - scroll
+		if ly+skinCatH >= gridTop && ly < client.Bottom-8 {
+			selectObject(hdc, fSmall)
+			setTextColor(hdc, colDim)
+			textOutW(hdc, skinMargin, ly+4, g.label)
+		}
+		cy += skinCatH
+		rows := (len(g.skins) + skinCols - 1) / skinCols
+		cy += int32(rows)*(skinTileSize+skinGap) - skinGap + 6
 	}
 
 	for _, t := range tiles {
@@ -1366,13 +1416,6 @@ func drawBorder(hdc uintptr, r rect, t int32, color uint32) {
 }
 
 func computeGrid(skins []skinJSON) (groups []skinGroup, contentH int32, tiles []tileHit) {
-	const (
-		margin   = 14
-		tileSize = 40
-		gap      = 6
-		cols     = 6
-	)
-
 	index := map[string]int{}
 	for _, s := range skins {
 		cat := s.Category
@@ -1390,16 +1433,21 @@ func computeGrid(skins []skinJSON) (groups []skinGroup, contentH int32, tiles []
 
 	y := int32(0)
 	for _, g := range groups {
-		y += 22 // 分类标题行
+		y += skinCatH
 		for i, s := range g.skins {
-			col := i % cols
-			row := i / cols
-			tx := int32(margin) + int32(col)*(tileSize+gap)
-			ty := y + int32(row)*(tileSize+gap)
-			tiles = append(tiles, tileHit{id: s.ID, unlocked: s.Unlocked, r: rect{tx, ty, tx + tileSize, ty + tileSize}})
+			col := i % skinCols
+			row := i / skinCols
+			tx := skinMargin + int32(col)*(skinTileSize+skinGap)
+			ty := y + int32(row)*(skinTileSize+skinGap)
+			tiles = append(tiles, tileHit{
+				id:       s.ID,
+				unlocked: s.Unlocked,
+				unlock:   s.Unlock,
+				r:        rect{tx, ty, tx + skinTileSize, ty + skinTileSize},
+			})
 		}
-		rows := (len(g.skins) + cols - 1) / cols
-		y += int32(rows)*(tileSize+gap) - gap + 6
+		rows := (len(g.skins) + skinCols - 1) / skinCols
+		y += int32(rows)*(skinTileSize+skinGap) - skinGap + 6
 	}
 	contentH = y
 	return groups, contentH, tiles

@@ -286,6 +286,24 @@ func TestConfig_Get(t *testing.T) {
 	if _, ok := got["systems"]; !ok {
 		t.Errorf("missing systems: %v", got)
 	}
+	if _, ok := got["version"]; !ok {
+		t.Errorf("missing version: %v", got)
+	}
+}
+
+func TestApplyEmbeddedVersion(t *testing.T) {
+	if got := applyEmbeddedVersion("dev", "  v0.18  \n"); got != "v0.18" {
+		t.Fatalf("sentinel 应被 VERSION 文件覆盖, got %q", got)
+	}
+	if got := applyEmbeddedVersion("v0.18", "v9.9.9"); got != "v0.18" {
+		t.Fatalf("ldflags/已写入版本不应被再次覆盖, got %q", got)
+	}
+	if got := applyEmbeddedVersion("", ""); got != "" {
+		t.Fatalf("空输入不应写入, got %q", got)
+	}
+	if got := applyEmbeddedVersion("", "v1.2.3"); got != "v1.2.3" {
+		t.Fatalf("空 Version 应被填上, got %q", got)
+	}
 }
 
 // TestConfig_Get_PathsAbsolute 验证 /api/config 暴露绝对路径供前端展示。
@@ -1095,6 +1113,13 @@ func TestServeStatic_IndexHTML(t *testing.T) {
 	w := doRequest(srv, "GET", "/", nil)
 	if w.Code != 200 {
 		t.Errorf("index: %d", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, `id="footer-version"`) {
+		t.Error("index.html 应包含 #footer-version")
+	}
+	if strings.Contains(body, `id="footer-version" class="muted">v`) {
+		t.Error("页脚不得硬编码产品版本，应由 /api/config 回填")
 	}
 }
 

@@ -470,6 +470,10 @@ v0.7 起实装的客户端静态工具（无后端改动）：
 | GET | `/api/database/metadata/schemas` | Schema / Owner 列表 |
 | GET | `/api/database/metadata/objects` | 表与视图列表（最多 500） |
 | GET | `/api/database/metadata/fields` | 字段与类型 |
+| GET | `/api/database/metadata/indexes` | 表索引 |
+| GET | `/api/database/metadata/constraints` | 主键 / 外键 / Check 等约束 |
+| GET | `/api/database/metadata/inspect` | 对象详情：字段、索引、约束、DDL/源码 |
+| POST | `/api/database/explain` | 只读 SQL 的执行计划（Oracle 使用 PLAN_TABLE，非图形） |
 | GET | `/api/database/redis/scan` | Redis SCAN 分页浏览 Key |
 | GET | `/api/database/redis/key` | 通过 `key_base64` 按类型预览 Key、TTL 与有限内容 |
 
@@ -573,6 +577,14 @@ v0.7 起实装的客户端静态工具（无后端改动）：
 | POST | `/api/compare/folder-scan` | 目录对比扫描（v0.9 起，受 `compare_allowed_roots` 白名单约束） |
 | POST | `/api/compare/file-diff` | 单文件 diff（v0.9 起，受 `compare_allowed_roots` 白名单约束） |
 | POST | `/api/compare/deep-check` | 文件夹深度检查（按需展开子目录，受 `compare_allowed_roots` 白名单约束） |
+| GET | `/api/compare/connections` | 比较工作台可用的 SFTP 连接列表 |
+| POST | `/api/compare/test` | 测试左右来源是否可访问（Stat，不扫描内容） |
+| POST | `/api/compare/scan` | 后台文件夹比对任务（支持早停内容比较） |
+| GET / DELETE | `/api/compare/jobs/{id}` | 查询 / 取消比较或覆盖任务 |
+| POST | `/api/compare/read` | 读取一侧文件文本 |
+| POST | `/api/compare/write` | 写入一侧文件（可备份） |
+| POST | `/api/compare/copy` | 单文件复制到对侧 |
+| POST | `/api/compare/sync` / `/api/compare/sync/start` | 按选中项覆盖（更新 + 单侧存在，不镜像删除） |
 
 ### WebService / SOAP / WSDL（v0.12 起）
 
@@ -657,11 +669,24 @@ GOOS=windows GOARCH=amd64 CGO_ENABLED=0 \
   go build -mod=vendor -trimpath -ldflags "-s -w -H windowsgui" \
   -o Kairo_win10.exe .
 
-# 或用脚本（自动检测 vendor/ 是否存在）
-./scripts/build_windows_amd64.sh v0.17.0
-./scripts/package_windows.sh v0.17.0
-# → dist/kairo-v0.17.0-windows.zip
+# 或用脚本（默认读仓库根目录 VERSION；也可显式传入版本号）
+./scripts/build_windows_amd64.sh
+./scripts/package_windows.sh
+# → dist/kairo-<VERSION>-windows.zip
 ```
+
+### 升版
+
+产品版本只改根目录 `VERSION`（例如 `v0.18`）。运行时版本由 `go:embed VERSION` 进入 `/api/config`，前端页脚和关于页只读这个字段。
+
+README 状态徽章和 `package.json` 是派生文件：
+
+```bash
+node scripts/sync-version.js    # 从 VERSION 回写徽章 / npm version
+node scripts/check-version.js   # 确认一致；发版脚本会再跑一遍
+```
+
+不要再改 `httpserver.Version`、`about.js`、`index.html` 页脚或 `app.js` 的硬编码版本——那些入口已经去掉了。
 
 ### Win7 维护策略
 
@@ -802,7 +827,7 @@ systems:
 ```
 kairo/
 ├── main.go                            # 入口：解析 -workdir / 加载 config / 起 HTTP server / 注入 license & sponsor
-├── VERSION                            # 单源版本号 v0.17
+├── VERSION                            # 产品版本（唯一手改入口；go:embed）
 ├── config.yaml                        # 运行时配置
 ├── config.yaml.production.example
 ├── go.mod / go.sum                    # 依赖锁定（go 1.24）
@@ -897,6 +922,7 @@ kairo/
 │   ├── mock_sshd.py / mock_shell_sshd.py  # 假 sshd / 假 shell
 │   ├── fake-websphere/                # 假 WebSphere 日志布局
 │   ├── fake-files/                    # 假远端文件系统（e2e 夹具）
+│   ├── check-version.js / sync-version.js  # VERSION 派生文件校验 / 回写
 │   ├── e2e.sh                         # Playwright e2e 入口（v0.9 起）
 │   └── e2e-prepare-fixtures.js        # e2e 夹具准备脚本
 ├── tests/

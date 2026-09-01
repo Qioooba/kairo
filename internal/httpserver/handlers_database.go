@@ -42,6 +42,14 @@ func (s *Server) handleDatabaseDispatch(w http.ResponseWriter, r *http.Request) 
 		s.handleDatabaseObjects(w, r)
 	case path == "metadata/fields":
 		s.handleDatabaseFields(w, r)
+	case path == "metadata/indexes":
+		s.handleDatabaseIndexes(w, r)
+	case path == "metadata/constraints":
+		s.handleDatabaseConstraints(w, r)
+	case path == "metadata/inspect":
+		s.handleDatabaseInspect(w, r)
+	case path == "explain":
+		s.handleDatabaseExplain(w, r)
 	case path == "redis/scan":
 		s.handleDatabaseRedisScan(w, r)
 	case path == "redis/key":
@@ -404,6 +412,72 @@ func (s *Server) handleDatabaseFields(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{"ok": true, "fields": items})
+}
+
+func (s *Server) handleDatabaseIndexes(w http.ResponseWriter, r *http.Request) {
+	source, ok := s.databaseSourceFromQuery(w, r)
+	if !ok {
+		return
+	}
+	items, err := s.database.Indexes(r.Context(), source, r.URL.Query().Get("schema"), r.URL.Query().Get("object"))
+	if err != nil {
+		writeErrSanitized(w, 502, s.databaseSafeError(source, err))
+		return
+	}
+	writeJSON(w, 200, map[string]any{"ok": true, "indexes": items})
+}
+
+func (s *Server) handleDatabaseConstraints(w http.ResponseWriter, r *http.Request) {
+	source, ok := s.databaseSourceFromQuery(w, r)
+	if !ok {
+		return
+	}
+	items, err := s.database.Constraints(r.Context(), source, r.URL.Query().Get("schema"), r.URL.Query().Get("object"))
+	if err != nil {
+		writeErrSanitized(w, 502, s.databaseSafeError(source, err))
+		return
+	}
+	writeJSON(w, 200, map[string]any{"ok": true, "constraints": items})
+}
+
+func (s *Server) handleDatabaseInspect(w http.ResponseWriter, r *http.Request) {
+	source, ok := s.databaseSourceFromQuery(w, r)
+	if !ok {
+		return
+	}
+	item, err := s.database.InspectObject(r.Context(), source, r.URL.Query().Get("schema"), r.URL.Query().Get("object"), r.URL.Query().Get("type"))
+	if err != nil {
+		writeErrSanitized(w, 502, s.databaseSafeError(source, err))
+		return
+	}
+	writeJSON(w, 200, map[string]any{"ok": true, "inspect": item})
+}
+
+func (s *Server) handleDatabaseExplain(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeErr(w, 405, errors.New("仅支持 POST"))
+		return
+	}
+	var req databaseQueryRequest
+	if err := decodeDatabaseJSON(r, &req); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	source, ok := s.databaseSourceForRequest(w, r, req.SourceID)
+	if !ok {
+		return
+	}
+	if err := dbconsole.ValidateReadOnlySQL(source.Kind, req.SQL); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	rows, err := s.database.Explain(r.Context(), source, req.SQL)
+	if err != nil {
+		writeErrSanitized(w, 502, s.databaseSafeError(source, err))
+		return
+	}
+	s.audit.Write("database.explain", "source_id", source.ID, "kind", source.Kind, "result", "ok", "rows", len(rows))
+	writeJSON(w, 200, map[string]any{"ok": true, "plan": rows})
 }
 
 func (s *Server) handleDatabaseRedisScan(w http.ResponseWriter, r *http.Request) {

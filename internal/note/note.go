@@ -9,9 +9,10 @@ import (
 )
 
 const (
-	MaxNotes      = 200
-	MaxTitleRunes = 80
-	MaxBodyRunes  = 20_000
+	MaxNotes          = 200
+	MaxDesktopVisible = 6
+	MaxTitleRunes     = 80
+	MaxBodyRunes      = 20_000
 )
 
 var allowedColors = map[string]struct{}{
@@ -133,7 +134,18 @@ func (n Note) DisplayTitle() string {
 	return "未命名便笺"
 }
 
-var ErrNotFound = errors.New("便笺不存在")
+func (n Note) DesktopVisible() bool {
+	return !n.Archived && n.Desktop != nil && n.Desktop.Visible
+}
+
+func DefaultDesktop() *DesktopLayout {
+	return &DesktopLayout{Visible: true, XRatio: .72, YRatio: .18, Width: 340, Height: 280}
+}
+
+var (
+	ErrNotFound     = errors.New("便笺不存在")
+	ErrDesktopLimit = fmt.Errorf("桌面便笺最多同时显示 %d 张，请先从桌面收起一张", MaxDesktopVisible)
+)
 
 type ConflictError struct {
 	Current Note

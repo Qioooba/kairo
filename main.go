@@ -50,6 +50,13 @@ import (
 //go:embed web
 var webFS embed.FS
 
+//go:embed VERSION
+var versionFile string
+
+func init() {
+	httpserver.ApplyEmbeddedVersion(versionFile)
+}
+
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 	log.SetPrefix("[Kairo] ")

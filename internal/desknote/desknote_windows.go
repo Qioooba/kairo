@@ -47,11 +47,26 @@ const (
 	wmGetTextLen   = 0x000E
 	enChange       = 0x0300
 	swShow         = 5
-	swRestore      = 9
 	spiGetWorkArea = 0x0030
 	swpNoActivate  = 0x0010
 	swpNoZOrder    = 0x0004
 	defaultGUIFont = 17
+
+	wmUser          = 0x0400
+	emSetBkgndColor = wmUser + 67
+	emSetCharFormat = wmUser + 68
+	emSetEventMask  = wmUser + 69
+	emSetTextMode   = wmUser + 88
+	tmPlaintext     = 1
+	enmChange       = 1
+	scfAll          = 4
+	cfmColor        = 0x40000000
+	mbOk            = 0x00000000
+	mbYesNoCancel   = 0x00000003
+	mbIconWarning   = 0x00000030
+	mbTopmost       = 0x00040000
+	idYes           = 6
+	idNo            = 7
 )
 
 type Controller struct {
@@ -75,6 +90,7 @@ type desktopWindow struct {
 	brush      uintptr
 	suppress   bool
 	dirty      bool
+	conflict   bool
 	sequence   uint64
 }
 
@@ -94,6 +110,18 @@ type wndClassEx struct {
 	HIconSm       uintptr
 }
 
+type charFormatW struct {
+	cbSize          uint32
+	dwMask          uint32
+	dwEffects       uint32
+	yHeight         int32
+	yOffset         int32
+	crTextColor     uint32
+	bCharSet        byte
+	bPitchAndFamily byte
+	szFaceName      [32]uint16
+}
+
 var (
 	user32                    = windows.NewLazySystemDLL("user32.dll")
 	kernel32                  = windows.NewLazySystemDLL("kernel32.dll")
@@ -103,13 +131,13 @@ var (
 	procDefWindowProcW        = user32.NewProc("DefWindowProcW")
 	procDestroyWindow         = user32.NewProc("DestroyWindow")
 	procShowWindow            = user32.NewProc("ShowWindow")
-	procSetForegroundWindow   = user32.NewProc("SetForegroundWindow")
 	procMoveWindow            = user32.NewProc("MoveWindow")
 	procSetWindowPos          = user32.NewProc("SetWindowPos")
 	procGetWindowRect         = user32.NewProc("GetWindowRect")
 	procSystemParametersInfoW = user32.NewProc("SystemParametersInfoW")
 	procSendMessageW          = user32.NewProc("SendMessageW")
 	procSetWindowTextW        = user32.NewProc("SetWindowTextW")
+	procMessageBoxW           = user32.NewProc("MessageBoxW")
 	procGetModuleHandleW      = kernel32.NewProc("GetModuleHandleW")
 	procLoadLibraryW          = kernel32.NewProc("LoadLibraryW")
 	procGetStockObject        = gdi32.NewProc("GetStockObject")
@@ -193,20 +221,16 @@ func (c *Controller) applyNote(n note.Note) error {
 	if w == nil {
 		return c.createWindow(n)
 	}
-	// 保留尚未落盘的本地输入，只推进乐观锁版本；保存定时器随后会把
-	// 当前 EDIT 快照提交到最新 revision，避免 SSE 回显吃掉正在输入的字。
+	if w.conflict {
+		return nil
+	}
 	if w.dirty {
 		w.note.Revision = n.Revision
 		return nil
 	}
 	w.suppress = true
 	defer func() { w.suppress = false }()
-	if w.note.Color != n.Color {
-		if w.brush != 0 {
-			procDeleteObject.Call(w.brush)
-		}
-		w.brush, _, _ = procCreateSolidBrush.Call(uintptr(noteColor(n.Color)))
-	}
+	applyPaper(w, n.Color)
 	w.note = n
 	setTextIfChanged(w.title, n.Title)
 	setTextIfChanged(w.body, n.Body)
@@ -235,8 +259,8 @@ func (c *Controller) createWindow(n note.Note) error {
 	c.windows[n.ID] = w
 	c.mu.Unlock()
 
-	w.title = createEdit(hwnd, n.Title, wsTabStop|esAutoHScroll, 10, 10, width-36, 28)
-	w.body = createEdit(hwnd, n.Body, wsTabStop|wsVScroll|esMultiline|esAutoVScroll|esWantReturn, 10, 46, width-36, height-96)
+	w.title = createChild(hwnd, "EDIT", n.Title, wsTabStop|esAutoHScroll, 10, 10, width-36, 28)
+	w.body = createBody(hwnd, n.Body, n.Color, 10, 46, width-36, height-96)
 	font, _, _ := procGetStockObject.Call(defaultGUIFont)
 	procSendMessageW.Call(w.title, wmSetFont, font, 1)
 	procSendMessageW.Call(w.body, wmSetFont, font, 1)
@@ -245,12 +269,46 @@ func (c *Controller) createWindow(n note.Note) error {
 	return nil
 }
 
-func createEdit(parent uintptr, value string, style uint32, x, y, width, height int32) uintptr {
-	class, _ := windows.UTF16PtrFromString("EDIT")
+func createChild(parent uintptr, className, value string, style uint32, x, y, width, height int32) uintptr {
+	class, _ := windows.UTF16PtrFromString(className)
 	text, _ := windows.UTF16PtrFromString(value)
 	instance, _, _ := procGetModuleHandleW.Call(0)
 	hwnd, _, _ := procCreateWindowExW.Call(wsExClientEdge, uintptr(unsafe.Pointer(class)), uintptr(unsafe.Pointer(text)), uintptr(wsChild|wsVisible|style), uintptr(x), uintptr(y), uintptr(width), uintptr(height), parent, 0, instance, 0)
 	return hwnd
+}
+
+func createBody(parent uintptr, value, color string, x, y, width, height int32) uintptr {
+	style := uint32(wsTabStop | wsVScroll | esMultiline | esAutoVScroll | esWantReturn)
+	hwnd := createChild(parent, "RICHEDIT50W", "", style, x, y, width, height)
+	if hwnd == 0 {
+		return createChild(parent, "EDIT", value, style, x, y, width, height)
+	}
+	procSendMessageW.Call(hwnd, emSetTextMode, tmPlaintext, 0)
+	procSendMessageW.Call(hwnd, emSetEventMask, 0, enmChange)
+	applyRichPaper(hwnd, color)
+	setWindowText(hwnd, value)
+	return hwnd
+}
+
+func applyPaper(w *desktopWindow, color string) {
+	if w.note.Color == color && w.brush != 0 {
+		applyRichPaper(w.body, color)
+		return
+	}
+	if w.brush != 0 {
+		procDeleteObject.Call(w.brush)
+	}
+	w.brush, _, _ = procCreateSolidBrush.Call(uintptr(noteColor(color)))
+	applyRichPaper(w.body, color)
+}
+
+func applyRichPaper(hwnd uintptr, color string) {
+	if hwnd == 0 {
+		return
+	}
+	procSendMessageW.Call(hwnd, emSetBkgndColor, 0, uintptr(noteColor(color)))
+	cf := charFormatW{cbSize: uint32(unsafe.Sizeof(charFormatW{})), dwMask: cfmColor, crTextColor: rgb(45, 39, 29)}
+	procSendMessageW.Call(hwnd, emSetCharFormat, scfAll, uintptr(unsafe.Pointer(&cf)))
 }
 
 func noteWndProc(hwnd, msg, wParam, lParam uintptr) uintptr {
@@ -295,7 +353,7 @@ func noteWndProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 }
 
 func (w *desktopWindow) scheduleSave() {
-	if w.suppress || w.hwnd == 0 {
+	if w.suppress || w.hwnd == 0 || w.conflict {
 		return
 	}
 	w.sequence++
@@ -305,31 +363,81 @@ func (w *desktopWindow) scheduleSave() {
 
 func (w *desktopWindow) save(seq uint64) {
 	type snapshot struct {
-		id          string
-		title, body string
-		layout      note.DesktopLayout
-		revision    uint64
-		valid       bool
+		id        string
+		title     string
+		body      string
+		layout    note.DesktopLayout
+		revision  uint64
+		textDirty bool
+		valid     bool
 	}
 	var s snapshot
 	if err := w.controller.host.Invoke(func() error {
-		if w.hwnd == 0 || w.sequence != seq {
+		if w.hwnd == 0 || w.sequence != seq || w.conflict {
 			return nil
 		}
-		s = snapshot{id: w.note.ID, title: getText(w.title), body: getText(w.body), layout: windowLayout(w.hwnd), revision: w.note.Revision, valid: true}
+		s = snapshot{
+			id: w.note.ID, title: getText(w.title), body: getText(w.body),
+			layout: windowLayout(w.hwnd), revision: w.note.Revision,
+			textDirty: w.dirty, valid: true,
+		}
 		return nil
 	}); err != nil || !s.valid {
 		return
 	}
 	desktop := &s.layout
-	patch := note.Patch{BaseRevision: s.revision, Title: &s.title, Body: &s.body, Desktop: &desktop}
+	patch := note.Patch{BaseRevision: s.revision, Desktop: &desktop}
+	if s.textDirty {
+		patch.Title = &s.title
+		patch.Body = &s.body
+	}
 	updated, err := w.controller.manager.Patch(s.id, patch)
 	if conflict := new(note.ConflictError); errors.As(err, &conflict) {
-		patch.BaseRevision = conflict.Current.Revision
-		updated, err = w.controller.manager.Patch(s.id, patch)
+		if !s.textDirty {
+			patch.BaseRevision = conflict.Current.Revision
+			updated, err = w.controller.manager.Patch(s.id, patch)
+		} else {
+			w.controller.host.Post(func() { w.resolveConflict(conflict.Current, s.title, s.body, s.layout) })
+			return
+		}
 	}
 	if err == nil {
 		w.controller.host.Post(func() { w.note = updated; w.dirty = false })
+	}
+}
+
+func (w *desktopWindow) resolveConflict(server note.Note, localTitle, localBody string, layout note.DesktopLayout) {
+	if w.hwnd == 0 {
+		return
+	}
+	w.conflict = true
+	choice := messageBox(w.hwnd, "这条便笺已在其他窗口更新。\n\n是：保留桌面上正在编辑的内容\n否：改用其他窗口的版本\n取消：先不保存", "便笺版本冲突", mbYesNoCancel|mbIconWarning|mbTopmost)
+	switch choice {
+	case idYes:
+		desktop := &layout
+		updated, err := w.controller.manager.Patch(w.note.ID, note.Patch{
+			BaseRevision: server.Revision, Title: &localTitle, Body: &localBody, Desktop: &desktop,
+		})
+		if err == nil {
+			w.note = updated
+			w.dirty = false
+			w.conflict = false
+			return
+		}
+		messageBox(w.hwnd, err.Error(), "Kairo 便笺", mbOk|mbIconWarning|mbTopmost)
+		w.conflict = false
+	case idNo:
+		w.suppress = true
+		w.note = server
+		w.dirty = false
+		setTextIfChanged(w.title, server.Title)
+		setTextIfChanged(w.body, server.Body)
+		applyPaper(w, server.Color)
+		setWindowText(w.hwnd, server.DisplayTitle()+" · Kairo 便笺")
+		w.suppress = false
+		w.conflict = false
+	default:
+		w.conflict = false
 	}
 }
 
@@ -342,10 +450,18 @@ func (w *desktopWindow) hide() {
 	desktop := &layout
 	title, body := getText(w.title), getText(w.body)
 	procShowWindow.Call(w.hwnd, 0)
-	patch := note.Patch{BaseRevision: w.note.Revision, Title: &title, Body: &body, Desktop: &desktop}
+	patch := note.Patch{BaseRevision: w.note.Revision, Desktop: &desktop}
+	if w.dirty {
+		patch.Title = &title
+		patch.Body = &body
+	}
 	_, err := w.controller.manager.Patch(w.note.ID, patch)
 	if conflict := new(note.ConflictError); errors.As(err, &conflict) {
 		patch.BaseRevision = conflict.Current.Revision
+		if w.dirty {
+			patch.Title = &title
+			patch.Body = &body
+		}
 		_, _ = w.controller.manager.Patch(w.note.ID, patch)
 	}
 }
@@ -372,7 +488,10 @@ func (c *Controller) removeWindow(id string) {
 }
 
 func (c *Controller) NewNote() error {
-	_, err := c.manager.Add(note.Note{Color: "yellow", Desktop: &note.DesktopLayout{Visible: true, XRatio: .72, YRatio: .18, Width: 340, Height: 280}})
+	_, err := c.manager.Add(note.Note{Color: "yellow", Desktop: note.DefaultDesktop()})
+	if err != nil {
+		c.host.Post(func() { messageBox(0, err.Error(), "Kairo 便笺", mbOk|mbIconWarning|mbTopmost) })
+	}
 	return err
 }
 
@@ -380,25 +499,42 @@ func (c *Controller) ToggleAll() error {
 	items := c.manager.List(note.Filter{})
 	visible := false
 	for _, n := range items {
-		if n.Desktop != nil && n.Desktop.Visible && !n.Archived {
+		if n.DesktopVisible() {
 			visible = true
 			break
 		}
 	}
-	changed := false
+	if visible {
+		for _, n := range items {
+			if n.Archived || n.Desktop == nil || !n.Desktop.Visible {
+				continue
+			}
+			layout := *n.Desktop
+			layout.Visible = false
+			desktop := &layout
+			if _, err := c.manager.Patch(n.ID, note.Patch{BaseRevision: n.Revision, Desktop: &desktop}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	shown := 0
 	for _, n := range items {
 		if n.Archived || n.Desktop == nil {
 			continue
 		}
+		if shown >= note.MaxDesktopVisible {
+			break
+		}
 		layout := *n.Desktop
-		layout.Visible = !visible
+		layout.Visible = true
 		desktop := &layout
 		if _, err := c.manager.Patch(n.ID, note.Patch{BaseRevision: n.Revision, Desktop: &desktop}); err != nil {
 			return err
 		}
-		changed = true
+		shown++
 	}
-	if !changed && !visible {
+	if shown == 0 {
 		return c.NewNote()
 	}
 	return nil
@@ -428,11 +564,15 @@ func (c *Controller) Shutdown() {
 					title, body := getText(w.title), getText(w.body)
 					layout := windowLayout(w.hwnd)
 					desktop := &layout
-					patch := note.Patch{BaseRevision: w.note.Revision, Title: &title, Body: &body, Desktop: &desktop}
-					if _, err := c.manager.Patch(id, patch); err != nil {
+					patch := note.Patch{BaseRevision: w.note.Revision, Desktop: &desktop}
+					if w.dirty {
+						patch.Title = &title
+						patch.Body = &body
+					}
+					if _, err := w.controller.manager.Patch(id, patch); err != nil {
 						if conflict := new(note.ConflictError); errors.As(err, &conflict) {
 							patch.BaseRevision = conflict.Current.Revision
-							_, _ = c.manager.Patch(id, patch)
+							_, _ = w.controller.manager.Patch(id, patch)
 						}
 					}
 				}
@@ -498,6 +638,12 @@ func getText(hwnd uintptr) string {
 	buf := make([]uint16, n+1)
 	procSendMessageW.Call(hwnd, wmGetText, n+1, uintptr(unsafe.Pointer(&buf[0])))
 	return windows.UTF16ToString(buf)
+}
+func messageBox(hwnd uintptr, text, caption string, flags uint32) int {
+	t, _ := windows.UTF16PtrFromString(text)
+	c, _ := windows.UTF16PtrFromString(caption)
+	r, _, _ := procMessageBoxW.Call(hwnd, uintptr(unsafe.Pointer(t)), uintptr(unsafe.Pointer(c)), uintptr(flags))
+	return int(r)
 }
 func max32(a, b int32) int32 {
 	if a > b {

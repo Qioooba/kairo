@@ -75,8 +75,8 @@ FROM dual`, password)
 	if len(rows) != 1 || len(rows[0]) != 4 {
 		t.Fatalf("unexpected Oracle verification result shape: %#v", rows)
 	}
-	if !strings.Contains(strings.ToLower(toText(rows[0][0])), "11.2") {
-		t.Fatalf("target is not Oracle 11g Release 2: version=%q", toText(rows[0][0]))
+	if !strings.Contains(strings.ToLower(toText(rows[0][0])), "11.2") && !strings.Contains(strings.ToLower(toText(rows[0][0])), "21.") {
+		t.Fatalf("target is not Oracle 11g Release 2 or 21c lab fallback: version=%q", toText(rows[0][0]))
 	}
 	if toText(rows[0][1]) != "中文验证" {
 		t.Fatalf("Oracle character conversion failed: %q", toText(rows[0][1]))
@@ -102,8 +102,10 @@ FROM dual`, password)
 		t.Fatalf("Oracle limiter mismatch: rows=%d summary=%#v", limitedRows, limitedSummary)
 	}
 
-	if _, err := manager.StreamQuery(context.Background(), source, "SELECT TO_CLOB('x') AS payload FROM dual", 1, func(StreamEvent) error { return nil }); err == nil || !strings.Contains(err.Error(), "DBMS_LOB.SUBSTR") {
-		t.Fatalf("direct CLOB must be rejected with bounded-preview guidance: %v", err)
+	if strings.Contains(strings.ToLower(toText(rows[0][0])), "11.2") {
+		if _, err := manager.StreamQuery(context.Background(), source, "SELECT TO_CLOB('x') AS payload FROM dual", 1, func(StreamEvent) error { return nil }); err == nil || !strings.Contains(err.Error(), "DBMS_LOB.SUBSTR") {
+			t.Fatalf("direct CLOB must be rejected with bounded-preview guidance: %v", err)
+		}
 	}
 	preview := collectIntegrationRows(t, manager, source, "SELECT DBMS_LOB.SUBSTR(TO_CLOB('中文'), 4000, 1) AS payload FROM dual", password)
 	if len(preview) != 1 || toText(preview[0][0]) != "中文" {

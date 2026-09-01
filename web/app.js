@@ -105,7 +105,16 @@
     view.classList.toggle('has-sticky-footer', name === 'config');
     try {
       const unmount = routes[name](view, resolved.state);
-      if (typeof unmount === 'function') state.currentUnmount = unmount;
+      if (unmount && typeof unmount.then === 'function') {
+        unmount.catch(function (e) {
+          view.appendChild(Kairo.core.el('div', { class: 'card' }, [
+            Kairo.core.el('h3', { text: '页面渲染失败' }),
+            Kairo.core.el('div', { class: 'text-err', text: e && e.message ? e.message : String(e) })
+          ]));
+        });
+      } else if (typeof unmount === 'function') {
+        state.currentUnmount = unmount;
+      }
     } catch (e) {
       view.appendChild(Kairo.core.el('div', { class: 'card' }, [
         Kairo.core.el('h3', { text: '页面渲染失败' }),
@@ -167,16 +176,16 @@
       state.bootInfo = info;
       const appName = (info.app && info.app.name) || 'Kairo';
       const appSubtitle = (info.app && info.app.subtitle) || '天命契机';
-      const version = info.version || 'v0.17';
+      const version = info.version || '';
       const dlFolder = info.paths && info.paths.download_dir;
       const listenInfo = document.getElementById('listen-info');
       if (listenInfo) {
-        listenInfo.textContent = '已启动 · ' + appName + ' ' + version + (dlFolder ? ' · 保存到 ' + dlFolder : '');
+        listenInfo.textContent = '已启动 · ' + appName + (version ? ' ' + version : '') + (dlFolder ? ' · 保存到 ' + dlFolder : '');
       }
-      // 更新底部版本号显示（与后端版本保持一致）
+      // 页脚版本只跟 /api/config，不再硬编码产品版本号。
       const footerVersion = document.getElementById('footer-version');
       if (footerVersion) {
-        footerVersion.textContent = version + ' · ' + appName + ' · ' + appSubtitle;
+        footerVersion.textContent = [version, appName, appSubtitle].filter(Boolean).join(' · ');
       }
     } catch (e) { /* 忽略 */ }
     // 启动时拉一次 preferences：把用户上次保存的 tail 高亮规则放到 Kairo.state.tailHighlights，

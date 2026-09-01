@@ -74,6 +74,35 @@ func revealInFileManager(path string) error {
 	}
 }
 
+// openFolderInFileManager 打开目录本身（进入该文件夹），而不是在父目录里选中它。
+func openFolderInFileManager(dir string) error {
+	switch runtime.GOOS {
+	case "darwin":
+		cmd := exec.Command("open", dir)
+		if err := cmd.Start(); err != nil {
+			return fmt.Errorf("open 失败: %w", err)
+		}
+		go func() { _ = cmd.Wait() }()
+		return nil
+	case "windows":
+		winPath := strings.ReplaceAll(dir, "/", "\\")
+		cmd := exec.Command("cmd", "/c", "start", "", "explorer.exe", winPath)
+		sysutil.HideConsoleWindow(cmd)
+		if err := cmd.Start(); err != nil {
+			return fmt.Errorf("explorer.exe 启动失败: %w", err)
+		}
+		go func() { _ = cmd.Wait() }()
+		return nil
+	default:
+		cmd := exec.Command("xdg-open", dir)
+		if err := cmd.Start(); err != nil {
+			return fmt.Errorf("xdg-open 失败: %w", err)
+		}
+		go func() { _ = cmd.Wait() }()
+		return nil
+	}
+}
+
 // openPathAllowed 校验 target 是否在 allowRoot 下。
 //
 // 用 filepath.Abs + filepath.Rel 双保险：

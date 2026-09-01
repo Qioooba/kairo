@@ -35,6 +35,7 @@
       overlay.remove();
       document.body.classList.toggle('has-open-overlay', stack.length > 0);
       if (previousFocus && previousFocus.focus) previousFocus.focus();
+      if (typeof opts.onClose === 'function') opts.onClose();
     }
     function onKey(ev) {
       if (stack[stack.length - 1] !== api) return;

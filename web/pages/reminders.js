@@ -151,9 +151,14 @@
       const typeLabel = { once: '单次', weekly: '周循环', monthly: '月循环', cron: 'Cron' }[r.type] || r.type;
       const typeClass = 'type-badge type-' + r.type;
 
-      const meta = el('div', { class: 'reminder-meta' }, [
+        const meta = el('div', { class: 'reminder-meta' }, [
         el('span', { class: typeClass, text: typeLabel }),
         el('span', { class: 'reminder-schedule', text: humanSchedule(r) }),
+        r.source_note_id ? el('button', {
+          class: 'reminder-source', type: 'button', text: '来自便笺',
+          title: '打开便笺中心',
+          onclick: function (ev) { ev.stopPropagation(); location.hash = '#/notes/list'; }
+        }) : null,
         r.last_fired_at ? el('span', { class: 'reminder-fired', text: `已触发 ${r.fired_count} 次 · 上次 ${formatTime(r.last_fired_at)}` }) : null,
       ].filter(Boolean));
 
@@ -297,6 +302,9 @@
     renderActionRow();
 
     contentArea.appendChild(typeFieldsWrap);
+    if (state.sourceNoteId) {
+      contentArea.appendChild(el('div', { class: 'editor-hint muted', text: '提醒保存的是便笺内容快照，之后改便笺不会自动改这条提醒。' }));
+    }
     contentArea.appendChild(contentLabel);
     contentArea.appendChild(leadRow);
     contentArea.appendChild(actionWrap);
@@ -472,7 +480,7 @@
     const footer = el('div', { class: 'editor-footer' }, [cancelBtn, saveBtn]);
 
     const m = modal({
-      title: isNew ? '新增提醒' : '编辑提醒',
+      title: isNew ? (preset.sourceNoteId ? '从便笺创建提醒' : '新增提醒') : '编辑提醒',
       body,
       footer,
       width: 480,

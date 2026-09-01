@@ -171,6 +171,36 @@ func TestPetName_BadJSON(t *testing.T) {
 	}
 }
 
+// TestPetOwner 主人名可空；超长 400。
+func TestPetOwner(t *testing.T) {
+	srv, eng := newTestServerWithPet(t)
+	if w := doRequest(srv, "POST", "/api/pet/enable", nil); w.Code != 200 {
+		t.Fatalf("enable: %d", w.Code)
+	}
+
+	w := doRequest(srv, "POST", "/api/pet/owner", map[string]any{"name": "小明"})
+	if w.Code != 200 {
+		t.Fatalf("正常主人名应 200, got=%d body=%s", w.Code, w.Body.String())
+	}
+	if st := eng.State(); st.Owner != "小明" {
+		t.Fatalf("owner = %q, 期望 小明", st.Owner)
+	}
+
+	w = doRequest(srv, "POST", "/api/pet/owner", map[string]any{"name": ""})
+	if w.Code != 200 {
+		t.Fatalf("空主人名应 200, got=%d body=%s", w.Code, w.Body.String())
+	}
+	if st := eng.State(); st.Owner != "" {
+		t.Fatalf("清空后 owner = %q", st.Owner)
+	}
+
+	if w := doRequest(srv, "POST", "/api/pet/owner", map[string]any{
+		"name": strings.Repeat("主", 20),
+	}); w.Code != 400 {
+		t.Errorf("超长主人名应 400, got=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
 // ---------- /api/pet/pos ----------
 
 // TestPetPos_Validation 越界坐标 → 400; 正常 → 200 ok。

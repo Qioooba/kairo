@@ -206,6 +206,12 @@ func newTestServerWithFakeSSH(t *testing.T, port int) *Server {
 	return srv
 }
 
+// newTestServerWithFakeSSHAndConfigPass 与 newTestServerWithFakeSSH 相同，
+// 额外把 mock-1 的配置密码写上，模拟「系统配置已配账号密码、请求不再带凭据」。
+func newTestServerWithFakeSSHAndConfigPass(t *testing.T, port int, password string) *Server {
+	return newTestServerWithFakeShellSSH(t, port, password)
+}
+
 func TestSSHTest_Happy(t *testing.T) {
 	addr := startFakeSSH(t, "ops", "testpw")
 	_, portStr, _ := net.SplitHostPort(addr)
@@ -240,6 +246,65 @@ func TestSSHTest_BadPassword(t *testing.T) {
 	// 认证失败响应不应含 password 字面量（P2-5）
 	if strings.Contains(w.Body.String(), "password") {
 		t.Errorf("401 响应泄漏 password 字面量: %s", w.Body.String())
+	}
+}
+
+// TestSSHTest_EmptyCredsUseConfig 模拟日志助手不再传用户名/密码：
+// 请求只带 system/server，凭据必须从系统配置回退。
+func TestSSHTest_EmptyCredsUseConfig(t *testing.T) {
+	addr := startFakeSSH(t, "ops", "testpw")
+	_, portStr, _ := net.SplitHostPort(addr)
+	port, _ := strconv.Atoi(portStr)
+	srv := newTestServerWithFakeSSHAndConfigPass(t, port, "testpw")
+
+	w := doRequest(srv, "POST", "/api/ssh/test", map[string]any{
+		"system": "信贷生产", "server": "mock-1",
+	})
+	if w.Code != 200 {
+		t.Errorf("empty request creds should use config, got %d body=%s", w.Code, w.Body.String())
+	}
+	var got map[string]any
+	_ = jsonDecode(w.Body.Bytes(), &got)
+	src, _ := got["cred_source"].(string)
+	if src != credSourceConfig && src != credSourceConfigFallback && src != credSourceStore && src != credSourceStoreFallback {
+		t.Errorf("expected config/saved cred_source, got %q body=%s", src, w.Body.String())
+	}
+	if src == credSourceManual {
+		t.Errorf("empty request must not report manual creds: %s", w.Body.String())
+	}
+}
+
+func TestSSHTest_EmptyStringsUseConfig(t *testing.T) {
+	addr := startFakeSSH(t, "ops", "testpw")
+	_, portStr, _ := net.SplitHostPort(addr)
+	port, _ := strconv.Atoi(portStr)
+	srv := newTestServerWithFakeSSHAndConfigPass(t, port, "testpw")
+
+	w := doRequest(srv, "POST", "/api/ssh/test", map[string]any{
+		"system": "信贷生产", "server": "mock-1", "username": "", "password": "",
+	})
+	if w.Code != 200 {
+		t.Errorf("empty username/password should use config, got %d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestLogsListTargets_EmptyCredsUseConfig(t *testing.T) {
+	addr := startFakeSSH(t, "ops", "testpw")
+	_, portStr, _ := net.SplitHostPort(addr)
+	port, _ := strconv.Atoi(portStr)
+	srv := newTestServerWithFakeSSHAndConfigPass(t, port, "testpw")
+
+	w := doRequest(srv, "POST", "/api/logs/list/targets", map[string]any{
+		"system":  "信贷生产",
+		"targets": []map[string]string{{"server": "mock-1", "dir": "SystemOut"}},
+	})
+	if w.Code != 200 {
+		t.Fatalf("empty request creds should use config, got %d body=%s", w.Code, w.Body.String())
+	}
+	var got map[string]any
+	_ = jsonDecode(w.Body.Bytes(), &got)
+	if got["servers"] == nil && got["results"] == nil {
+		t.Errorf("响应缺 servers/results: %v", got)
 	}
 }
 

@@ -316,11 +316,14 @@ func (e *Engine) Rename(name string) error {
 	return nil
 }
 
-// SetOwner 设置主人的名字（宠物闲聊时称呼）：校验规则与改名一致。
+// SetOwner 设置主人的名字（宠物闲聊时称呼）。允许空串（未配置时话术回退「主人」），
+// 非空时长度规则与改名一致。
 func (e *Engine) SetOwner(name string) error {
 	cleaned := cleanName(name)
-	if err := validateName(cleaned); err != nil {
-		return err
+	if cleaned != "" {
+		if err := validateName(cleaned); err != nil {
+			return err
+		}
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()

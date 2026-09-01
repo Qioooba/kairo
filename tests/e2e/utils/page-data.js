@@ -4,8 +4,11 @@ const menuList = [
   { route: 'home', name: '首页', hash: '#/home' },
   { route: 'websphere', name: '日志助手', hash: '#/websphere' },
   { route: 'files', name: '文件下载', hash: '#/files' },
+  { route: 'waspack', name: '投产打包', hash: '#/waspack' },
   { route: 'formatter', name: '报文格式化', hash: '#/formatter' },
   { route: 'http', name: 'HTTP 测试', hash: '#/http' },
+  { route: 'webservice', name: 'WebService', hash: '#/webservice' },
+  { route: 'wscodegen', name: 'WS 代码生成', hash: '#/wscodegen' },
   { route: 'commands', name: '常用命令', hash: '#/commands' },
   { route: 'diagnostics', name: '环境自检', hash: '#/diagnostics' },
   { route: 'config', name: '系统配置', hash: '#/config' },
@@ -21,8 +24,11 @@ const pageMeta = {
   home: { name: '首页', expectedCrumb: '首页', expectedTitle: '首页', hasDangerButtons: false },
   websphere: { name: '日志助手', expectedCrumb: 'WebSphere 日志助手', expectedTitle: '日志助手', hasDangerButtons: true },
   files: { name: '文件下载', expectedCrumb: '文件下载', expectedTitle: '文件下载', hasDangerButtons: true },
+  waspack: { name: '投产打包', expectedCrumb: '投产打包', expectedTitle: '投产打包', hasDangerButtons: false },
   formatter: { name: '报文格式化', expectedCrumb: '报文格式化', expectedTitle: '报文格式化', hasDangerButtons: false },
   http: { name: 'HTTP 测试', expectedCrumb: 'HTTP 测试', expectedTitle: 'HTTP 测试', hasDangerButtons: false },
+  webservice: { name: 'WebService', expectedCrumb: 'WebService', expectedTitle: 'WebService', hasDangerButtons: true },
+  wscodegen: { name: 'WS 代码生成', expectedCrumb: 'WS 代码生成', expectedTitle: 'WS 代码生成', hasDangerButtons: false },
   commands: { name: '常用命令', expectedCrumb: '常用命令', expectedTitle: '常用命令', hasDangerButtons: false },
   diagnostics: { name: '环境自检', expectedCrumb: '环境自检', expectedTitle: '环境自检', hasDangerButtons: false },
   config: { name: '系统配置', expectedCrumb: '系统配置', expectedTitle: '系统配置', hasDangerButtons: true },
@@ -32,6 +38,7 @@ const pageMeta = {
   jsonpath: { name: 'JSONPath', expectedCrumb: 'JSONPath 查询', expectedTitle: 'JSONPath 查询', hasDangerButtons: false },
   compare: { name: '代码比对', expectedCrumb: '代码比对', expectedTitle: '文本比对', hasDangerButtons: false },
   about: { name: '关于', expectedCrumb: '关于', expectedTitle: '关于', hasDangerButtons: false },
+  'notes/list': { name: '便笺', expectedCrumb: '便笺', expectedTitle: '便笺', hasDangerButtons: true },
 };
 
 const apiList = [
@@ -81,6 +88,16 @@ const apiList = [
   '/api/local/open-with',
   '/api/choose-file',
   '/api/choose-dir',
+  '/api/wscodegen/engines',
+  '/api/wscodegen/detect-jdk',
+  '/api/wscodegen/scan-project',
+  '/api/wscodegen/preview',
+  '/api/wscodegen/generate',
+  '/api/waspack/preview',
+  '/api/waspack/build',
+  '/api/waspack/open',
+  '/api/notes',
+  '/api/reminders',
 ];
 
 const themes = ['dark', 'light', 'green', 'hc'];
@@ -115,8 +132,10 @@ const MOCK_SSH = {
 const homeCards = [
   { name: '日志助手', route: 'websphere' },
   { name: '文件下载', route: 'files' },
+  { name: '投产打包', route: 'waspack' },
   { name: '报文格式化', route: 'formatter' },
   { name: 'HTTP 接口测试', route: 'http' },
+  { name: 'WS 代码生成', route: 'wscodegen' },
   { name: '常用命令速查', route: 'commands' },
   { name: '环境自检', route: 'diagnostics' },
   { name: '下载历史', route: 'downloads' },
@@ -125,6 +144,7 @@ const homeCards = [
   { name: 'Cron 解析', route: 'cron' },
   { name: 'JSONPath 查询', route: 'jsonpath' },
   { name: '代码比对', route: 'compare' },
+  { name: '便笺', route: 'notes/list' },
 ];
 
 module.exports = {

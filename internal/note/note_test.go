@@ -2,6 +2,7 @@ package note
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -143,6 +144,37 @@ func TestStoreCorruptBackup(t *testing.T) {
 	}
 	if _, err := os.Stat(path + ".bak"); err != nil {
 		t.Fatalf("backup missing: %v", err)
+	}
+}
+
+func TestAddDefaultsToListOnly(t *testing.T) {
+	m, _ := newTestManager(t)
+	n, err := m.Add(Note{Body: "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n.Floating || n.Desktop != nil {
+		t.Fatalf("plain create must stay list-only: %+v", n)
+	}
+}
+
+func TestDesktopVisibleLimit(t *testing.T) {
+	m, _ := newTestManager(t)
+	for i := 0; i < MaxDesktopVisible; i++ {
+		if _, err := m.Add(Note{Body: fmt.Sprintf("d%d", i), Desktop: DefaultDesktop()}); err != nil {
+			t.Fatalf("seed %d: %v", i, err)
+		}
+	}
+	if _, err := m.Add(Note{Body: "overflow", Desktop: DefaultDesktop()}); !errors.Is(err, ErrDesktopLimit) {
+		t.Fatalf("want ErrDesktopLimit, got %v", err)
+	}
+	plain, err := m.Add(Note{Body: "not desktop"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	layout := DefaultDesktop()
+	if _, err := m.Patch(plain.ID, Patch{BaseRevision: plain.Revision, Desktop: &layout}); !errors.Is(err, ErrDesktopLimit) {
+		t.Fatalf("patch want ErrDesktopLimit, got %v", err)
 	}
 }
 

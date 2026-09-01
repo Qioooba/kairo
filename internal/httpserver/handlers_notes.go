@@ -191,6 +191,8 @@ func (s *Server) handleNotePatch(w http.ResponseWriter, r *http.Request, id stri
 			writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error(), "current": conflict.Current})
 		case errors.Is(err, note.ErrNotFound):
 			writeErr(w, 404, err)
+		case errors.Is(err, note.ErrDesktopLimit):
+			writeErr(w, 400, err)
 		default:
 			writeErr(w, 400, err)
 		}

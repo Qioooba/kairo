@@ -3,8 +3,7 @@
 const WebSpherePage = require('../pages/websphere-page');
 
 function register(runner, ctx) {
-  const { page, baseUrl, data, screenshotsDir } = ctx;
-  const MOCK_SSH = data.MOCK_SSH;
+  const { page, baseUrl, screenshotsDir } = ctx;
 
   let wsPage = null;
 
@@ -35,6 +34,18 @@ function register(runner, ctx) {
         );
         if (found.length === 0) {
           throw new Error('未找到主要按钮: ' + JSON.stringify(btnTexts.slice(0, 20)));
+        }
+      });
+
+      runner.it('不应展示 SSH 用户名和密码输入框', async function () {
+        const hasCred = await wsPage.hasCredentialInputs();
+        if (hasCred) {
+          await wsPage.takeStateScreenshot('04-websphere-cred-fields-should-hide');
+          throw new Error('日志助手目标区仍展示 SSH 用户名/密码输入框');
+        }
+        const hint = await page.$('.ws-cred-hint');
+        if (!hint) {
+          throw new Error('未找到「凭据使用系统配置」提示');
         }
       });
 
@@ -84,11 +95,10 @@ function register(runner, ctx) {
     });
 
     runner.describe('测试连接', function () {
-      runner.it('应能填写用户名密码并测试连接（需 mock SSH）', async function () {
+      runner.it('应能使用系统配置凭据测试连接（需 mock SSH）', async function () {
         try {
           await wsPage.selectFirstSystem();
           await wsPage.selectFirstServer();
-          await wsPage.fillCredential(MOCK_SSH.username, MOCK_SSH.password);
           const ok = await wsPage.testConnection();
           if (!ok) {
             runner.skipTest('mock SSH 不可用 (127.0.0.1:2222)');
@@ -106,7 +116,6 @@ function register(runner, ctx) {
         try {
           await wsPage.selectFirstSystem();
           await wsPage.selectFirstServer();
-          await wsPage.fillCredential(MOCK_SSH.username, MOCK_SSH.password);
           const connOk = await wsPage.testConnection();
           if (!connOk) {
             runner.skipTest('mock SSH 不可用，无法测试文件列表');
@@ -133,7 +142,6 @@ function register(runner, ctx) {
         try {
           await wsPage.selectFirstSystem();
           await wsPage.selectFirstServer();
-          await wsPage.fillCredential(MOCK_SSH.username, MOCK_SSH.password);
           const connOk = await wsPage.testConnection();
           if (!connOk) {
             runner.skipTest('mock SSH 不可用');
@@ -182,7 +190,6 @@ function register(runner, ctx) {
         try {
           await wsPage.selectFirstSystem();
           await wsPage.selectFirstServer();
-          await wsPage.fillCredential(MOCK_SSH.username, MOCK_SSH.password);
           const connOk = await wsPage.testConnection();
           if (!connOk) {
             runner.skipTest('mock SSH 不可用');
@@ -232,7 +239,6 @@ function register(runner, ctx) {
           page.on('request', requestHandler);
           await wsPage.selectFirstSystem();
           await wsPage.selectFirstServer();
-          await wsPage.fillCredential(MOCK_SSH.username, MOCK_SSH.password);
           const connOk = await wsPage.testConnection();
           if (!connOk) {
             runner.skipTest('mock SSH 不可用');
@@ -281,7 +287,6 @@ function register(runner, ctx) {
         try {
           await wsPage.selectFirstSystem();
           await wsPage.selectFirstServer();
-          await wsPage.fillCredential(MOCK_SSH.username, MOCK_SSH.password);
           const connOk = await wsPage.testConnection();
           if (!connOk) {
             runner.skipTest('mock SSH 不可用');
@@ -366,7 +371,6 @@ function register(runner, ctx) {
         try {
           await wsPage.selectFirstSystem();
           await wsPage.selectFirstServer();
-          await wsPage.fillCredential(MOCK_SSH.username, MOCK_SSH.password);
           const connOk = await wsPage.testConnection();
           if (!connOk) {
             runner.skipTest('mock SSH 不可用');
@@ -388,7 +392,6 @@ function register(runner, ctx) {
         try {
           await wsPage.selectFirstSystem();
           await wsPage.selectFirstServer();
-          await wsPage.fillCredential(MOCK_SSH.username, MOCK_SSH.password);
           const connOk = await wsPage.testConnection();
           if (!connOk) {
             runner.skipTest('mock SSH 不可用');
@@ -418,7 +421,6 @@ function register(runner, ctx) {
         try {
           await wsPage.selectFirstSystem();
           await wsPage.selectFirstServer();
-          await wsPage.fillCredential(MOCK_SSH.username, MOCK_SSH.password);
           const connOk = await wsPage.testConnection();
           if (!connOk) {
             runner.skipTest('mock SSH 不可用');

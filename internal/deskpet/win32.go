@@ -19,72 +19,73 @@ var (
 )
 
 var (
-	procRegisterClassExW       = user32.NewProc("RegisterClassExW")
-	procCreateWindowExW        = user32.NewProc("CreateWindowExW")
-	procDefWindowProcW         = user32.NewProc("DefWindowProcW")
-	procDestroyWindow          = user32.NewProc("DestroyWindow")
-	procGetModuleHandleW       = kernel32.NewProc("GetModuleHandleW")
-	procGetMessageW            = user32.NewProc("GetMessageW")
-	procTranslateMessage       = user32.NewProc("TranslateMessage")
-	procDispatchMessageW       = user32.NewProc("DispatchMessageW")
-	procPostMessageW           = user32.NewProc("PostMessageW")
-	procPostQuitMessage        = user32.NewProc("PostQuitMessage")
-	procShowWindow             = user32.NewProc("ShowWindow")
-	procSetWindowPos           = user32.NewProc("SetWindowPos")
-	procGetWindowRect          = user32.NewProc("GetWindowRect")
-	procGetClientRect          = user32.NewProc("GetClientRect")
-	procGetCursorPos           = user32.NewProc("GetCursorPos")
-	procSetCapture             = user32.NewProc("SetCapture")
-	procReleaseCapture         = user32.NewProc("ReleaseCapture")
-	procSystemParametersInfoW  = user32.NewProc("SystemParametersInfoW")
-	procGetSystemMetrics       = user32.NewProc("GetSystemMetrics")
-	procSetProcessDPIAware     = user32.NewProc("SetProcessDPIAware")
-	procValidateRect           = user32.NewProc("ValidateRect")
-	procInvalidateRect         = user32.NewProc("InvalidateRect")
-	procUpdateLayeredWindow    = user32.NewProc("UpdateLayeredWindow")
-	procGetDC                  = user32.NewProc("GetDC")
-	procReleaseDC              = user32.NewProc("ReleaseDC")
-	procGetWindowTextW         = user32.NewProc("GetWindowTextW")
-	procSetWindowTextW         = user32.NewProc("SetWindowTextW")
-	procSetFocus               = user32.NewProc("SetFocus")
-	procSetForegroundWindow    = user32.NewProc("SetForegroundWindow")
-	procSendMessageW           = user32.NewProc("SendMessageW")
+	procRegisterClassExW      = user32.NewProc("RegisterClassExW")
+	procCreateWindowExW       = user32.NewProc("CreateWindowExW")
+	procDefWindowProcW        = user32.NewProc("DefWindowProcW")
+	procDestroyWindow         = user32.NewProc("DestroyWindow")
+	procGetModuleHandleW      = kernel32.NewProc("GetModuleHandleW")
+	procGetMessageW           = user32.NewProc("GetMessageW")
+	procTranslateMessage      = user32.NewProc("TranslateMessage")
+	procDispatchMessageW      = user32.NewProc("DispatchMessageW")
+	procPostMessageW          = user32.NewProc("PostMessageW")
+	procPostQuitMessage       = user32.NewProc("PostQuitMessage")
+	procShowWindow            = user32.NewProc("ShowWindow")
+	procSetWindowPos          = user32.NewProc("SetWindowPos")
+	procGetWindowRect         = user32.NewProc("GetWindowRect")
+	procGetClientRect         = user32.NewProc("GetClientRect")
+	procGetCursorPos          = user32.NewProc("GetCursorPos")
+	procSetCapture            = user32.NewProc("SetCapture")
+	procReleaseCapture        = user32.NewProc("ReleaseCapture")
+	procSystemParametersInfoW = user32.NewProc("SystemParametersInfoW")
+	procGetSystemMetrics      = user32.NewProc("GetSystemMetrics")
+	procSetProcessDPIAware    = user32.NewProc("SetProcessDPIAware")
+	procValidateRect          = user32.NewProc("ValidateRect")
+	procInvalidateRect        = user32.NewProc("InvalidateRect")
+	procUpdateLayeredWindow   = user32.NewProc("UpdateLayeredWindow")
+	procGetDC                 = user32.NewProc("GetDC")
+	procReleaseDC             = user32.NewProc("ReleaseDC")
+	procGetWindowTextW        = user32.NewProc("GetWindowTextW")
+	procSetWindowTextW        = user32.NewProc("SetWindowTextW")
+	procSetFocus              = user32.NewProc("SetFocus")
+	procSetForegroundWindow   = user32.NewProc("SetForegroundWindow")
+	procSendMessageW          = user32.NewProc("SendMessageW")
 
-	procCreateCompatibleDC      = gdi32.NewProc("CreateCompatibleDC")
-	procCreateDIBSection        = gdi32.NewProc("CreateDIBSection")
-	procSelectObject            = gdi32.NewProc("SelectObject")
-	procDeleteObject            = gdi32.NewProc("DeleteObject")
-	procDeleteDC                = gdi32.NewProc("DeleteDC")
-	procStretchDIBits           = gdi32.NewProc("StretchDIBits")
-	procCreateFontW             = gdi32.NewProc("CreateFontW")
-	procSetBkMode               = gdi32.NewProc("SetBkMode")
-	procSetTextColor            = gdi32.NewProc("SetTextColor")
-	procTextOutW                = gdi32.NewProc("TextOutW")
-	procSetBkColor              = gdi32.NewProc("SetBkColor")
-	procCreateSolidBrush        = gdi32.NewProc("CreateSolidBrush")
-	procFillRect                = user32.NewProc("FillRect")
-	procGetStockObject          = gdi32.NewProc("GetStockObject")
-	procDeleteObjectBrush       = gdi32.NewProc("DeleteObject")
-	procRoundRect               = gdi32.NewProc("RoundRect")
-	procRectangle               = gdi32.NewProc("Rectangle")
-	procMoveToEx                = gdi32.NewProc("MoveToEx")
-	procLineTo                  = gdi32.NewProc("LineTo")
-	procCreatePen               = gdi32.NewProc("CreatePen")
-	procSetWindowRgn            = user32.NewProc("SetWindowRgn")
-	procCreateRoundRectRgn      = gdi32.NewProc("CreateRoundRectRgn")
-	procCreateRectRgn           = gdi32.NewProc("CreateRectRgn")
-	procKillTimer               = user32.NewProc("KillTimer")
-	procSetTimer                = user32.NewProc("SetTimer")
-	procDrawTextW               = user32.NewProc("DrawTextW")
+	procCreateCompatibleDC = gdi32.NewProc("CreateCompatibleDC")
+	procCreateDIBSection   = gdi32.NewProc("CreateDIBSection")
+	procSelectObject       = gdi32.NewProc("SelectObject")
+	procDeleteObject       = gdi32.NewProc("DeleteObject")
+	procDeleteDC           = gdi32.NewProc("DeleteDC")
+	procStretchDIBits      = gdi32.NewProc("StretchDIBits")
+	procCreateFontW        = gdi32.NewProc("CreateFontW")
+	procSetBkMode          = gdi32.NewProc("SetBkMode")
+	procSetTextColor       = gdi32.NewProc("SetTextColor")
+	procTextOutW           = gdi32.NewProc("TextOutW")
+	procSetBkColor         = gdi32.NewProc("SetBkColor")
+	procCreateSolidBrush   = gdi32.NewProc("CreateSolidBrush")
+	procFillRect           = user32.NewProc("FillRect")
+	procGetStockObject     = gdi32.NewProc("GetStockObject")
+	procDeleteObjectBrush  = gdi32.NewProc("DeleteObject")
+	procRoundRect          = gdi32.NewProc("RoundRect")
+	procRectangle          = gdi32.NewProc("Rectangle")
+	procMoveToEx           = gdi32.NewProc("MoveToEx")
+	procLineTo             = gdi32.NewProc("LineTo")
+	procCreatePen          = gdi32.NewProc("CreatePen")
+	procSetWindowRgn       = user32.NewProc("SetWindowRgn")
+	procCreateRoundRectRgn = gdi32.NewProc("CreateRoundRectRgn")
+	procCreateRectRgn      = gdi32.NewProc("CreateRectRgn")
+	procIntersectClipRect  = gdi32.NewProc("IntersectClipRect")
+	procKillTimer          = user32.NewProc("KillTimer")
+	procSetTimer           = user32.NewProc("SetTimer")
+	procDrawTextW          = user32.NewProc("DrawTextW")
 )
 
 // -------- 窗口样式 --------
 const (
-	wsPopup      = 0x80000000
-	wsChild      = 0x40000000
-	wsVisible    = 0x10000000
-	wsBorder     = 0x00800000
-	wsTabstop    = 0x00010000
+	wsPopup        = 0x80000000
+	wsChild        = 0x40000000
+	wsVisible      = 0x10000000
+	wsBorder       = 0x00800000
+	wsTabstop      = 0x00010000
 	wsClipChildren = 0x02000000
 
 	wsExLayered     = 0x00080000
@@ -113,19 +114,22 @@ const (
 	// 自定义消息：托盘 Toggle 请求 / 触发重绘。
 	wmAppToggle = 0x8000 + 1
 	wmAppQuit   = 0x8000 + 2
+
+	emSetLimitText = 0x00C5 // EM_SETLIMITTEXT
+	esAutohscroll  = 0x0080 // ES_AUTOHSCROLL
 )
 
 // -------- ShowWindow / SetWindowPos --------
 const (
-	swHide          = 0
+	swHide           = 0
 	swShowNoActivate = 4
-	swShow          = 5
+	swShow           = 5
 
-	swpNoSize       = 0x0001
-	swpNoMove       = 0x0002
-	swpNoZOrder     = 0x0004
-	swpNoActivate   = 0x0010
-	swpShowWindow   = 0x0040
+	swpNoSize     = 0x0001
+	swpNoMove     = 0x0002
+	swpNoZOrder   = 0x0004
+	swpNoActivate = 0x0010
+	swpShowWindow = 0x0040
 )
 
 // -------- 系统参数 --------
@@ -133,8 +137,8 @@ const spiGetWorkArea = 0x0030
 
 // -------- 分层窗口 --------
 const (
-	ulwAlpha  = 0x00000002
-	acSrcOver = 0x00
+	ulwAlpha   = 0x00000002
+	acSrcOver  = 0x00
 	acSrcAlpha = 0x01
 )
 
@@ -144,17 +148,17 @@ const (
 	biRGB        = 0
 	srcCopy      = 0x00CC0020
 
-	transparent       = 1
-	opaque            = 2
-	defaultCharset    = 1
-	outDefaultPrecis  = 0
-	clipDefaultPrecis = 0
-	clearTypeQuality  = 5
+	transparent        = 1
+	opaque             = 2
+	defaultCharset     = 1
+	outDefaultPrecis   = 0
+	clipDefaultPrecis  = 0
+	clearTypeQuality   = 5
 	antialiasedQuality = 4
-	defaultQuality    = 0
-	defaultPitch      = 0
-	fwNormal          = 400
-	fwBold            = 700
+	defaultQuality     = 0
+	defaultPitch       = 0
+	fwNormal           = 400
+	fwBold             = 700
 
 	nullBrush = 5
 	psSolid   = 0
@@ -318,7 +322,7 @@ func getCursorPos() point {
 }
 
 func setCapture(hwnd uintptr) { procSetCapture.Call(hwnd) }
-func releaseCapture()        { procReleaseCapture.Call() }
+func releaseCapture()         { procReleaseCapture.Call() }
 
 func workArea() rect {
 	var r rect
@@ -511,6 +515,10 @@ func setWindowRgn(hwnd, hrgn uintptr, redraw bool) {
 func createRoundRectRgn(left, top, right, bottom, w, h int32) uintptr {
 	r, _, _ := procCreateRoundRectRgn.Call(uintptr(left), uintptr(top), uintptr(right), uintptr(bottom), uintptr(w), uintptr(h))
 	return r
+}
+
+func intersectClipRect(hdc uintptr, left, top, right, bottom int32) {
+	procIntersectClipRect.Call(hdc, uintptr(left), uintptr(top), uintptr(right), uintptr(bottom))
 }
 
 func boolToUintptr(b bool) uintptr {

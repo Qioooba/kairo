@@ -60,24 +60,39 @@ const (
 	authQueryParam = "token"
 )
 
-// Version / BuildTime 可在构建时通过 ldflags 注入，例如：
+// Version / BuildTime 可在构建时通过 ldflags 覆盖，例如：
 //
-//	go build -ldflags "-X 'kairo/internal/httpserver.Version=v0.17' \
-//	  -X 'kairo/internal/httpserver.BuildTime=2026-08-31T00:00:00Z'" .
+//	go build -ldflags "-X 'kairo/internal/httpserver.Version=v0.18' \
+//	  -X 'kairo/internal/httpserver.BuildTime=2026-09-01T00:00:00Z'" .
 //
-// 未注入时使用下面的默认值；前端 about 页通过 GET /api/config 读取并回填显示，
-// 读取失败则回退到前端硬编码版本（FE-006）。
-// 版本号强制对齐（六处必须一致，改时一起改）：
-//  1. VERSION 文件
-//  2. 此处 Version 常量
-//  3. web/pages/about.js 的 VERSION 常量
-//  4. web/index.html 的 #footer-version
-//  5. web/app.js 的 info.version || fallback
-//  6. README.md 的 Status 徽章
+// 默认值是哨兵 "dev"。未注入 ldflags 时，main.go 把仓库根目录 VERSION
+// 文件（go:embed）填进来；发版脚本也会用同一份 VERSION 做 ldflags。
+// 前端页脚 / 关于页只读 GET /api/config 的 version，不再硬编码产品版本。
+// 人类发版只改 VERSION；README 徽章和 package.json 用
+// `node scripts/sync-version.js` 派生，`node scripts/check-version.js` 守门。
 var (
-	Version   = "v0.17"
+	Version   = "dev"
 	BuildTime = "unknown"
 )
+
+const embeddedVersionSentinel = "dev"
+
+// ApplyEmbeddedVersion 在 Version 仍是哨兵时，用 VERSION 文件内容填上。
+// ldflags 已写入真实版本时不会覆盖。
+func ApplyEmbeddedVersion(raw string) {
+	Version = applyEmbeddedVersion(Version, raw)
+}
+
+func applyEmbeddedVersion(current, raw string) string {
+	v := strings.TrimSpace(raw)
+	if v == "" {
+		return current
+	}
+	if current == "" || current == embeddedVersionSentinel {
+		return v
+	}
+	return current
+}
 
 type contextKey string
 
@@ -441,6 +456,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		strings.HasPrefix(path, "/api/soap/"),
 		strings.HasPrefix(path, "/api/ws/xml/"):
 		s.handleWSDispatch(w, r)
+	case strings.HasPrefix(path, "/api/wscodegen/"):
+		s.handleWSCodegenDispatch(w, r)
 	case path == "/api/files/list":
 		s.handleFilesList(w, r)
 	case path == "/api/files/preview":
@@ -459,6 +476,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleChooseFile(w, r)
 	case path == "/api/choose-dir":
 		s.handleChooseDir(w, r)
+	case path == "/api/waspack/preview":
+		s.handleWASPackPreview(w, r)
+	case path == "/api/waspack/build":
+		s.handleWASPackBuild(w, r)
+	case path == "/api/waspack/open":
+		s.handleWASPackOpen(w, r)
 	case path == "/api/compare/folder-scan":
 		s.handleCompareFolderScan(w, r)
 	case path == "/api/compare/deep-check":
@@ -481,6 +504,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleCompareSyncStart(w, r)
 	case path == "/api/compare/scan":
 		s.handleCompareScanStart(w, r)
+	case path == "/api/compare/test":
+		s.handleCompareTest(w, r)
 	case strings.HasPrefix(path, "/api/compare/jobs/"):
 		s.handleCompareJob(w, r)
 	case strings.HasPrefix(path, "/api/database/"):

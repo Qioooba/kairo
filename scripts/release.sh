@@ -21,14 +21,21 @@ echo " Kairo 主线发布  版本=${VER}"
 echo " 目标：Windows 10/11 amd64 · Go 1.24+"
 echo "============================================="
 
-echo ">>> [1/3] 运行数据库工作台与凭据核心测试"
+echo ">>> [1/4] 检查 VERSION 与派生文件一致"
+if command -v node >/dev/null 2>&1; then
+  node scripts/check-version.js
+else
+  echo ">> 跳过：未找到 node，无法跑 scripts/check-version.js"
+fi
+
+echo ">>> [2/4] 运行数据库工作台与凭据核心测试"
 go test -mod=vendor ./internal/dbconsole ./internal/credentials
 go test -mod=vendor ./internal/httpserver -run '^TestDatabase' -count=1
 if command -v node >/dev/null 2>&1; then
   node --check web/pages/database.js
 fi
 
-echo ">>> [2/3] 编译主线 Windows 版本"
+echo ">>> [3/4] 编译主线 Windows 版本"
 ./scripts/build_windows_amd64.sh "${VER}"
 
 EXE="dist/kairo-${VER}/Kairo_win10.exe"
@@ -37,7 +44,7 @@ if [[ ! -f "${EXE}" ]]; then
   exit 1
 fi
 
-echo ">>> [3/3] 打包主线 Windows 版本"
+echo ">>> [4/4] 打包主线 Windows 版本"
 ./scripts/package_windows.sh "${VER}"
 
 ZIP="dist/kairo-${VER}-windows.zip"

@@ -2,7 +2,7 @@
  * WebSphere 日志助手 —— 多服务器并行版
  *
  * 4 块：
- *   1. 顶部表单（系统 / 服务器 / 凭据 / 测试 / 列表 / 下载最新 N）
+ *   1. 顶部表单（系统 / 服务器 / 目录 / 测试连接；SSH 凭据走系统配置）
  *   2. 多服务器并行搜索（含时间窗口）
  *   3. 实时 tail（单文件 SSE 流）
  *   4. 文件列表 / 搜索结果 / 上下文
@@ -114,8 +114,6 @@
 
     const sysSel = el('select', { id: 'ws-sys' });
     const dirSel = el('select', { id: 'ws-dir' });
-    const userInp = el('input', { type: 'text', id: 'ws-user', placeholder: 'SSH 用户名（可留空，使用配置默认）' });
-    const passInp = el('input', { type: 'password', id: 'ws-pass', placeholder: 'SSH 密码' });
     const queryInp = el('input', {
       type: 'text', id: 'ws-query',
       placeholder: '例: Exception && userinfo   或   !DEBUG', value: 'Exception',
@@ -422,7 +420,6 @@
       srvPickWrap.querySelectorAll('input[type="checkbox"][data-srv]').forEach(cb => { cb.checked = on; });
       renderSrvDirs();
       persistSelection();
-      refreshCredStatus();
     }
     function toggleOnline() {
       const hasOk = Object.keys(srvStatus).some(k => srvStatus[k] && srvStatus[k].state === 'ok');
@@ -435,7 +432,6 @@
       });
       renderSrvDirs();
       persistSelection();
-      refreshCredStatus();
     }
     // 当前勾选的 (server, dir) targets 列表；页面已经渲染二级目录时，只认用户显式勾选。
     // 目录全不选就返回空，避免隐藏的默认目录替用户执行生产操作。
@@ -477,8 +473,7 @@
         system: sysSel.value,
         servers: checked,
         dir: dirSel.value,
-        dirs: dirs,
-        username: userInp.value
+        dirs: dirs
       });
       // P1-8：勾选变化时实时刷新目标摘要（按 server/dir 组合显示）
       try { updateTargetSummary(); } catch (e) { /* ignore */ }
@@ -507,7 +502,7 @@
           || (lastForSys && lastForSys.indexOf(s.name) !== -1)
           || (prevChecked.length === 0 && !lastForSys);
         if (wasChecked) cb.checked = true;
-        cb.addEventListener('change', () => { renderSrvDirs(); persistSelection(); refreshCredStatus(); });
+        cb.addEventListener('change', () => { renderSrvDirs(); persistSelection(); });
         const item = el('label', { class: 'srv-pick-item' }, [
           cb,
           el('span', { class: 'name', text: s.name }),
@@ -590,14 +585,11 @@
         dirSel.value = dirSel.options[0].value;
       }
     }
-    sysSel.addEventListener('change', () => { fillCredFromConfig(true); renderSrvPick(); if (getCheckedServers().length === 0) { toggleAllSrv(true); } refreshDirs(); refreshCredStatus(); persistSelection(); });
+    sysSel.addEventListener('change', () => { renderSrvPick(); if (getCheckedServers().length === 0) { toggleAllSrv(true); } refreshDirs(); persistSelection(); });
     // P1-8：renderSrvDirs / renderSrvPick 内部本来就会 persistSelection，所以这里
     // 不需要再额外调 updateTargetSummary。但因为 renderSrvPick 后会重建 srvPickWrap，
     // 摘要需要根据"新勾选列表"重新算；persistSelection 里调一次就够。
     dirSel.addEventListener('change', persistSelection);
-    userInp.addEventListener('input', () => { clearTimeout(userInp._t); userInp._t = setTimeout(persistSelection, 500); });
-    userInp.addEventListener('change', refreshCredStatus);
-    userInp.addEventListener('blur', refreshCredStatus);
 
     const btnTest = el('button', { class: 'btn', text: '测试连接', onclick: doTest });
     const btnList = el('button', { class: 'btn btn-primary', text: '列出文件', onclick: doList });
@@ -615,7 +607,7 @@
 
     // ===== v0.7-Redesign（第二波）：目标区可折叠摘要 =====
     // 默认折叠：顶部一行单行摘要 + 「✏️ 修改目标」按钮。
-    // 展开后看到完整表单（业务系统/服务器/目录/凭据/测试连接）。
+    // 展开后看到完整表单（业务系统/服务器/目录/测试连接）。
     // 第三波会把 [列出文件] [下载最新 N] 等"文件 tab 专属"按钮从 formCard 挪走。
     // 折叠状态记忆到 localStorage，跨刷新保持。
     const targetCollapsedKey = 'websphere_target_collapsed';
@@ -684,10 +676,8 @@
       const srvs = [...new Set(targets.map(t => t.server))];
       const srvTxt = srvs.length === 0 ? '未选服务器' : (srvs.length <= 2 ? srvs.join(', ') : (srvs.length + ' 台服务器'));
       const dirTxt = targets.length === 0 ? '未选目录' : (targets.length + ' 个目录');
-      // 凭据状态（不阻塞渲染，没保存就显示"未保存"）
-      const credTxt = passInp.value ? '· 凭据已输入' : (credStatus.textContent && credStatus.textContent.indexOf('已为') !== -1 ? '· 已保存凭据' : '');
       targetSummaryBadge.innerHTML = '';
-      const badgeContent = el('span', { style: 'display:inline-flex; align-items:center; gap:6px;', unsafeHtml: svgIcon('smTarget', 14) + ' ' + sysName + '  ·  ' + srvTxt + '  ·  ' + dirTxt + (credTxt ? '  ' + credTxt : '') });
+      const badgeContent = el('span', { style: 'display:inline-flex; align-items:center; gap:6px;', unsafeHtml: svgIcon('smTarget', 14) + ' ' + sysName + '  ·  ' + srvTxt + '  ·  ' + dirTxt });
       targetSummaryBadge.appendChild(badgeContent);
     }
     // 让外层钩子能拿到这两个函数（保持 v0.6 的约定）
@@ -706,115 +696,7 @@
     const ctxCard = el('div', { class: 'card', style: 'display:none' });
 
     function credsOne(srvName) {
-      return { system: sysSel.value, server: srvName, dir: dirSel.value,
-               username: userInp.value, password: passInp.value };
-    }
-    function credsMulti() {
-      return { system: sysSel.value, dir: dirSel.value,
-               servers: getCheckedServers(),
-               username: userInp.value, password: passInp.value };
-    }
-
-    // ---- 凭据保存（OS 钥匙串）----
-    const rememberChk = el('input', { type: 'checkbox', id: 'ws-remember' });
-    const rememberLbl = el('label', { class: 'inline' }, [rememberChk, document.createTextNode('记住密码（存进系统钥匙串）')]);
-    const credStatus = el('div', { class: 'text-dim mt-1', id: 'ws-cred-status', text: '未保存密码' });
-    const btnForget = el('button', { class: 'btn btn-sm', text: '忘记', onclick: doForget, style: 'display:none' });
-    const credStatusRow = el('div', { class: 'text-dim mt-1', style: 'display:flex; gap:8px; align-items:center;' }, [
-      credStatus, btnForget
-    ]);
-
-    function fillCredFromConfig(force) {
-      const sys = cfg && cfg.systems ? cfg.systems.find(s => s.name === sysSel.value) : null;
-      if (!sys || !sys.servers || !sys.servers.length) return;
-      const srv = sys.servers[0];
-      if (force || !userInp.value) userInp.value = srv.username || '';
-      if (force || !passInp.value) passInp.value = srv.password || '';
-    }
-
-    function currentCredKey() {
-      const srvs = getCheckedServers();
-      var srv0 = srvs[0];
-      if (!srv0 && sysSel.value && cfg) {
-        var sys = cfg.systems.find(function (s) { return s.name === sysSel.value; }) || {};
-        if (sys.servers && sys.servers[0]) srv0 = sys.servers[0].name;
-      }
-      const srv = srv0;
-      return { system: sysSel.value, server: srv, username: userInp.value };
-    }
-
-    async function refreshCredStatus() {
-      const k = currentCredKey();
-      if (!k.system || !k.server || !k.username) {
-        credStatus.textContent = '未保存密码';
-        btnForget.style.display = 'none';
-        return;
-      }
-      try {
-        const r = await api('GET', '/api/credentials/has?system=' + encodeURIComponent(k.system)
-          + '&server=' + encodeURIComponent(k.server)
-          + '&username=' + encodeURIComponent(k.username));
-        if (!r.ok) return;
-        const mode = r.mode || 'keyring';
-        const storeDisabled = (mode === 'disabled') || (mode === 'file');
-        if (storeDisabled) {
-          rememberChk.checked = false;
-          rememberChk.disabled = true;
-          rememberLbl.style.display = 'none';
-          credStatus.textContent = r.reason || ('凭据存储=' + mode);
-          credStatus.style.color = '#999';
-          btnForget.style.display = 'none';
-          return;
-        }
-        rememberChk.disabled = false;
-        rememberLbl.style.display = '';
-        if (!r.available) {
-          credStatus.innerHTML = '<span style="display:inline-flex; align-items:center; gap:4px;">' + svgIcon('smWarn', 14) + ' 系统钥匙串不可用 — 当前无法「记住密码」</span>';
-          credStatus.style.color = '#c00';
-          btnForget.style.display = 'none';
-        } else if (r.has) {
-          credStatus.innerHTML = '<span style="display:inline-flex; align-items:center; gap:4px;">' + svgIcon('smCheck', 14) + ' 已为 ' + k.username + '@' + k.server + ' 保存密码（无需再次输入）</span>';
-          credStatus.style.color = '';
-          btnForget.style.display = '';
-        } else {
-          credStatus.textContent = '未保存密码';
-          credStatus.style.color = '';
-          btnForget.style.display = 'none';
-        }
-      } catch (e) { /* ignore */ }
-    }
-
-    async function doForget() {
-      const k = currentCredKey();
-      if (!k.system || !k.server || !k.username) return;
-      try {
-        await api('POST', '/api/credentials/clear', { system: k.system, server: k.server, username: k.username });
-        toast('已忘记 ' + k.server + ' 上的密码', 'ok');
-        await refreshCredStatus();
-      } catch (e) {
-        toast('清除失败: ' + e.message, 'err');
-      }
-    }
-
-    async function maybeSaveCred(srvName) {
-      if (!rememberChk.checked) return;
-      const pw = passInp.value;
-      if (!pw) return;
-      const k = currentCredKey();
-      const target = srvName || k.server;
-      if (!k.system || !target || !k.username) return;
-      // 手输密码不是这台服务器连上用的那个（后端回退到已保存/配置密码）→ 不覆盖。
-      // 老后端无 cred_source 字段时（空串）保持旧行为：成功即保存。
-      const st = srvStatus[target];
-      if (st && st.credSource && st.credSource.indexOf('fallback') >= 0) return;
-      try {
-        await api('POST', '/api/credentials/save', {
-          system: k.system, server: target, username: k.username, password: pw
-        });
-        await refreshCredStatus();
-      } catch (e) {
-        console.warn('save credential failed:', e);
-      }
+      return { system: sysSel.value, server: srvName, dir: dirSel.value };
     }
 
     async function doTest() {
@@ -822,15 +704,10 @@
       if (!srvs.length) { toast('请先勾选要测试的服务器', 'warn'); return; }
       srvs.forEach(n => { srvStatus[n] = { state: 'busy' }; });
       renderSrvPick();
-      let fallbackUsed = [];
       await Promise.all(srvs.map(async (n) => {
         try {
           const r = await api('POST', '/api/ssh/test', credsOne(n));
           srvStatus[n] = { state: 'ok', credSource: r.cred_source || '' };
-          // 后端用手输密码认证失败、改用已保存/配置密码连上的场景：
-          // 绝不能把手输密码覆盖写入钥匙串（会破坏该服务器正确的已存凭据）
-          if (r.cred_source && r.cred_source.indexOf('fallback') >= 0) fallbackUsed.push(n);
-          await maybeSaveCred(n);
         } catch (e) {
           // P1-BUG-10 修复：保留后端返回的 reason（中文短句），用于 toast 展示
           // —— 旧版只用 e.message 拼文案，遇到"SSH 连接 127.0.0.1:2225 失败: ssh: handshake failed:..."
@@ -863,13 +740,7 @@
       } else {
         toast(okN + '/' + srvs.length + ' 台成功，' + failN + ' 台失败', 'warn');
       }
-      // 手输密码被拒、靠已保存/配置密码连上的服务器单独提示，
-      // 让用户知道输入框里的密码并不是这台的（避免误以为输入框密码全部有效）
-      if (fallbackUsed.length) {
-        toast(fallbackUsed.join('、') + '：手输密码被拒，已用保存的密码连接', 'warn');
-      }
       renderSrvPick();
-      refreshCredStatus();
     }
 
     async function doList() {
@@ -888,8 +759,6 @@
         const r = await api('POST', '/api/logs/list/targets', {
           system: sysSel.value,
           targets: targets,
-          username: userInp.value,
-          password: passInp.value
         });
         const results = Array.isArray(r) ? r : (r.servers || r.results || []);
         results.forEach(srv => {
@@ -911,8 +780,6 @@
         toast((okN === listState.groups.length ? '列出完成：' : '部分失败：') + totalFiles + ' 个文件 / ' + okN + '/' + listState.groups.length + ' 组 · ' + dt + 'ms', okN === listState.groups.length ? 'ok' : 'warn');
         // v0.6：files tab badge 显示文件数
         setTabBadge('files', totalFiles > 0 ? (totalFiles + ' 文件') : '');
-        const firstOk = listState.groups.find(g => !g.error);
-        if (firstOk) await maybeSaveCred(firstOk.server);
       } catch (e) {
         toast('列出文件失败：' + e.message, 'err');
       }
@@ -1520,7 +1387,6 @@
         try {
           const r = await api('POST', '/api/logs/download-latest', {
             system: sysSel.value, server: tgt.server, dir: tgt.dir,
-            username: userInp.value, password: passInp.value,
             latest: latest, zip: zip,
             target_dir: (dlTargetDirInp.value || '').trim()
           });
@@ -1641,10 +1507,6 @@
         dlResults.forEach(r => { totalDl += (r.downloads && r.downloads.length) || 0; });
         if (totalDl > 0 && location.hash !== '#/downloads') Kairo.core.bumpDlBadge(totalDl);
         toast((okGroups === results.length ? '下载完成：' : '部分失败：') + okGroups + '/' + results.length + ' 组', okGroups === results.length ? 'ok' : 'warn');
-        for (const r of results) {
-          if (r.ok) await maybeSaveCred(r.server);
-        }
-        refreshCredStatus();
       }
     }
 
@@ -1841,8 +1703,6 @@
           files: Number(filesNSel.value),
           max_concurrency: conc,
           scope_mode: scope, // v0.5-G：latest/selected/glob
-          username: userInp.value,
-          password: passInp.value
         };
         if (filePatterns) body.file_patterns = filePatterns;
         // v0.13：忽略大小写 checkbox（勾上 → 后端 grep -i）
@@ -1871,10 +1731,6 @@
         toast(toastMsg, r.fail_count > 0 ? 'warn' : 'ok');
         // v0.6：search tab badge 显示命中数
         setTabBadge('search', r.total_hits > 0 ? (r.total_hits + ' 命中') : '0');
-        for (const srv of (r.servers || [])) {
-          if (srv.ok) await maybeSaveCred(srv.server);
-        }
-        refreshCredStatus();
       } catch (e) {
         hitTableWrap.innerHTML = '';
         hitTableWrap.appendChild(el('div', { class: 'text-err', text: '搜索失败：' + e.message }));
@@ -2130,10 +1986,11 @@
     }
 
     // v0.7-Redesign（第二波+第三波）：
-//   formCard 现在只承担"目标选择 + 凭据"两件事，折叠态下只剩一行摘要。
-//   列出文件/下载最新 已经移到 files tab 顶部 toolbar。
-//   测试连接 留在 formCard 底部 —— 它是通用的前置确认动作，所有 tab 都要先看它。
-const formCard = el('div', { class: 'card' }, [
+    //   formCard 现在只承担"目标选择"，折叠态下只剩一行摘要。
+    //   列出文件/下载最新 已经移到 files tab 顶部 toolbar。
+    //   测试连接 留在 formCard 底部 —— 它是通用的前置确认动作，所有 tab 都要先看它。
+    //   SSH 凭据走系统配置，本页不再展示用户名/密码。
+    const formCard = el('div', { class: 'card' }, [
       targetSummaryRow,
       targetBody,
     ]);
@@ -2143,21 +2000,15 @@ const formCard = el('div', { class: 'card' }, [
       class: 'card-desc',
       text: '先选业务系统，再勾选要操作的服务器和日志目录；页面只会操作已勾选的目录。'
     }));
-    targetBody.appendChild(el('div', { class: 'grid-2' }, [
-      el('div', null, [el('label', { text: '业务系统' }), sysSel])
+    targetBody.appendChild(el('div', { class: 'ws-sys-field' }, [
+      el('label', { text: '业务系统' }), sysSel
     ]));
     targetBody.appendChild(el('div', { class: 'mt-2' }, [srvPickToolbar, srvPickWrap]));
     targetBody.appendChild(el('div', { class: 'mt-2' }, [srvDirsToolbar, srvDirsWrap]));
-    targetBody.appendChild(el('div', { class: 'grid-2 mt-2' }, [
-      el('div', null, [el('label', { text: 'SSH 用户名' }), userInp]),
-      el('div', null, [
-        el('label', { text: 'SSH 密码' }),
-        passInp,
-        el('div', { class: 'mt-1' }, [rememberLbl]),
-        credStatusRow
-      ])
+    targetBody.appendChild(el('div', { class: 'ws-target-actions mt-3' }, [
+      btnTest,
+      el('span', { class: 'text-dim ws-cred-hint', text: 'SSH 凭据使用系统配置，无需在此填写' })
     ]));
-    targetBody.appendChild(el('div', { class: 'btn-row mt-3' }, [btnTest]));
 
     // v0.5 #8：文件名参数 — 单文件 / 多文件 / glob 模糊匹配（空格或逗号分隔）
     // P1-08 改进：明确语义 — 填了 glob 后就只用 glob 匹配，N 仍控制"取最新 N 个匹配上的"
@@ -2370,8 +2221,6 @@ const formCard = el('div', { class: 'card' }, [
         const r = await api('POST', '/api/logs/list/targets', {
           system: sysSel.value,
           targets: targets,
-          username: userInp.value,
-          password: passInp.value
         });
         const results = Array.isArray(r) ? r : (r.servers || r.results || []);
         pickerGroups = results.map(srv => ({
@@ -2818,8 +2667,6 @@ const formCard = el('div', { class: 'card' }, [
         const r = await api('POST', '/api/logs/list/targets', {
           system: sysSel.value,
           targets: [{ server: serverName, dir: dirPath }],
-          username: userInp.value,
-          password: passInp.value
         });
         const results = Array.isArray(r) ? r : (r.servers || r.results || []);
         const grp = results.find(s => s.server === serverName && (!s.dir || s.dir === dirPath));
@@ -3003,7 +2850,6 @@ const formCard = el('div', { class: 'card' }, [
       try {
         const r = await api('POST', '/api/logs/tail/start', {
           system: sysSel.value, server: serverName, dir: dirPath,
-          username: userInp.value, password: passInp.value,
           file: file, lines: lines,
         });
         tailId = r.id;
@@ -3060,8 +2906,6 @@ const formCard = el('div', { class: 'card' }, [
         const r = await api('POST', '/api/logs/list/targets', {
           system: sysSel.value,
           targets: [{ server: serverName, dir: dirPath }],
-          username: userInp.value,
-          password: passInp.value
         });
         const results = Array.isArray(r) ? r : (r.servers || r.results || []);
         const grp = results.find(s => s.server === serverName && (!s.dir || s.dir === dirPath));
@@ -3115,15 +2959,6 @@ const formCard = el('div', { class: 'card' }, [
         file: fileName,
         lines: String(Math.max(0, Math.min(1000, Number(tailLinesInp.value) || 0)))
       });
-      // 项 9 修复：把当前已填的凭据存到 Kairo._tailCred，tail 页面 opener 拿
-      // 避免用户每次开新窗口都被要求再输一次密码。
-      try {
-        Kairo._tailCred = Kairo._tailCred || {};
-        Kairo._tailCred[sysSel.value + '::' + serverName] = {
-          username: userInp.value,
-          password: passInp.value
-        };
-      } catch (e) { /* ignore */ }
       window.open('/static/tail.html?' + params.toString(), '_blank');
     }
 
@@ -3578,7 +3413,6 @@ const formCard = el('div', { class: 'card' }, [
       if (lastSel && lastSel.system && info.systems.find(s => s.name === lastSel.system)) {
         sysSel.value = lastSel.system;
       }
-      fillCredFromConfig();
       renderSrvPick();
       // 首次加载如果没有已勾选的服务器，自动全选
       if (getCheckedServers().length === 0) {
@@ -3586,7 +3420,6 @@ const formCard = el('div', { class: 'card' }, [
       }
       refreshDirs();
       if (lastSel && lastSel.dir) dirSel.value = lastSel.dir;
-      refreshCredStatus();
       // v0.13 改造：context input 由 localStorage 控制（用户改过的就记住），后端 default
       // 仅在用户从未手动改过（localStorage 没值）时才作为兜底——
       // 否则每次 config 加载都会把用户调好的值再覆盖回去，很烦人。
@@ -3599,10 +3432,6 @@ const formCard = el('div', { class: 'card' }, [
           }
         }
       } catch (e) { /* ignore */ }
-      // 默认勾上"记住密码"（keyring 模式下；file/disabled 时由 refreshCredStatus 强制取消）
-      rememberChk.checked = true;
-      rememberChk.disabled = false;
-      refreshCredStatus();
       // v0.6：首次加载后初始化 tail tab 的 target select（多 target 时显示警告）
       try { refreshTailTargetSel(); } catch (e) { /* ignore */ }
       // v0.7（第二波）：config 加载完后刷新一次目标摘要（之前 renderTargetSummary

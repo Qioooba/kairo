@@ -87,6 +87,42 @@ type Field struct {
 	Nullable   bool   `json:"nullable"`
 	Ordinal    int    `json:"ordinal"`
 	Definition string `json:"definition,omitempty"`
+	PrimaryKey bool   `json:"primary_key,omitempty"`
+}
+
+type IndexInfo struct {
+	Name       string   `json:"name"`
+	Type       string   `json:"type,omitempty"`
+	Uniqueness string   `json:"uniqueness,omitempty"`
+	Columns    []string `json:"columns"`
+}
+
+type ConstraintInfo struct {
+	Name    string `json:"name"`
+	Type    string `json:"type"`
+	Columns string `json:"columns,omitempty"`
+	Detail  string `json:"detail,omitempty"`
+}
+
+type ObjectInspect struct {
+	Fields      []Field          `json:"fields"`
+	Indexes     []IndexInfo      `json:"indexes"`
+	Constraints []ConstraintInfo `json:"constraints"`
+	DDL         string           `json:"ddl,omitempty"`
+	DDLSource   string           `json:"ddl_source,omitempty"`
+	DDLError    string           `json:"ddl_error,omitempty"`
+	SourceText  string           `json:"source_text,omitempty"`
+}
+
+type ExplainRow struct {
+	ID          string `json:"id,omitempty"`
+	Operation   string `json:"operation,omitempty"`
+	Object      string `json:"object,omitempty"`
+	Options     string `json:"options,omitempty"`
+	Cardinality string `json:"cardinality,omitempty"`
+	Cost        string `json:"cost,omitempty"`
+	Extra       string `json:"extra,omitempty"`
+	Raw         string `json:"raw,omitempty"`
 }
 
 func (m *Manager) Schemas(ctx context.Context, source Source) ([]Schema, error) {
@@ -256,6 +292,9 @@ FROM information_schema.columns WHERE table_schema = ? AND table_name = ? ORDER 
 		out = append(out, item)
 	}
 	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := m.markPrimaryKeys(ctx, db, source, schema, object, out); err != nil {
 		return nil, err
 	}
 	metadataCacheSet(m, cacheKey, append([]Field(nil), out...))

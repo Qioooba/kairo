@@ -250,6 +250,23 @@ type TestResult struct {
 	LatencyMS int64  `json:"latency_ms"`
 }
 
+func (m *Manager) withSQL(ctx context.Context, source Source, fn func(context.Context, *sql.DB) error) error {
+	if source.Kind == KindRedis {
+		return fmt.Errorf("Redis 不支持 SQL 元数据")
+	}
+	ctx, cancel := context.WithTimeout(ctx, source.Timeout())
+	defer cancel()
+	if err := m.acquire(ctx); err != nil {
+		return err
+	}
+	defer m.release()
+	db, err := m.sqlDB(source)
+	if err != nil {
+		return err
+	}
+	return fn(ctx, db)
+}
+
 func (m *Manager) Test(ctx context.Context, source Source) (TestResult, error) {
 	started := time.Now()
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)

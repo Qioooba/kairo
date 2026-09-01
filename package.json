@@ -9,6 +9,7 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "test:webservice": "node web/pages/webservice.test.js",
+    "sync:version": "node scripts/sync-version.js",
     "check:version": "node scripts/check-version.js",
     "e2e": "node tests/e2e/index.js",
     "e2e:headed": "HEADLESS=false node tests/e2e/index.js",

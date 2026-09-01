@@ -95,33 +95,17 @@ class WebSpherePage extends BasePage {
     }
   }
 
-  async fillCredential(username, password) {
-    await this.ensureNoOverlay();
-    try {
-      const userSelectors = [
-        'input#ws-user',
-        '#ws-user',
-        'input[placeholder*="用户名"]',
-        'input[name="username"]',
-      ];
-      const passSelectors = [
-        'input#ws-pass',
-        '#ws-pass',
-        'input[placeholder*="密码"]',
-        'input[type="password"]',
-      ];
-      const userFilled = await this.fillFirstVisible(userSelectors, username);
-      const passFilled = await this.fillFirstVisible(passSelectors, password);
-      if (!userFilled || !passFilled) {
-        await this.takeStateScreenshot('ws-fill-cred-error');
-        const summary = await this.getDomSummary();
-        throw new Error('用户名或密码输入框未找到: ' + JSON.stringify(summary.inputs.slice(0, 10)));
-      }
-      return true;
-    } catch (e) {
-      await this.takeStateScreenshot('ws-fill-cred-fail');
-      throw e;
-    }
+  async fillCredential() {
+    // SSH 凭据已从系统配置读取，本页不再展示用户名/密码输入框。
+    return true;
+  }
+
+  async hasCredentialInputs() {
+    const user = await this.page.$('#ws-user, input[placeholder*="SSH 用户名"]');
+    const pass = await this.page.$('#ws-pass, input[placeholder*="SSH 密码"]');
+    const userVisible = user ? await user.isVisible().catch(() => false) : false;
+    const passVisible = pass ? await pass.isVisible().catch(() => false) : false;
+    return userVisible || passVisible;
   }
 
   async testConnection() {

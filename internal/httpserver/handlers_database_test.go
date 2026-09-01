@@ -85,6 +85,12 @@ func TestDatabaseQueryRejectsMutationBeforeConnect(t *testing.T) {
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("unauthorized query should be rejected: status=%d body=%s", w.Code, w.Body.String())
 	}
+	w = doRequestWithToken(srv, http.MethodPost, "/api/database/explain", rbacUserToken, databaseQueryRequest{
+		SourceID: source.ID, SQL: "DELETE FROM accounts",
+	})
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "只读") {
+		t.Fatalf("explain mutation should be rejected: status=%d body=%s", w.Code, w.Body.String())
+	}
 }
 
 func TestDatabaseCSVEncodingAndFormulaProtection(t *testing.T) {

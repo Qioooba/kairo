@@ -14,9 +14,13 @@
   const { el } = Kairo.core;
   const { api } = Kairo.api || {};
 
-  // 与 internal/httpserver/httpserver.go 的 Version 常量保持一致；
-  // 后端 /api/config 读取失败时回退到这里（FE-006）。
-  const VERSION = 'v0.17';
+  function currentVersion() {
+    try {
+      const boot = Kairo.state && Kairo.state.bootInfo;
+      if (boot && boot.version) return boot.version;
+    } catch (e) { /* ignore */ }
+    return '';
+  }
 
   // =====================================================================
   // SVG icon 字典 — 13 个 section icon (Win7 兼容, 不依赖 emoji 字体)
@@ -205,6 +209,8 @@
   }
 
   async function fetchVersion() {
+    const local = currentVersion();
+    if (local) return local;
     try {
       if (typeof api !== 'function') return null;
       const cfg = await api('GET', '/api/config');
@@ -288,7 +294,7 @@
     },
     {
       layer: 'L3', name: '业务层 (Domain)',
-      detail: 'sshclient · sftpclient · sshshell (v0.10 PTY) · logquery · dlmanager · tailmgr · diff · downloads · formatter · credentials · webservice (v0.12) · license (v0.11) · sponsor (v0.14)',
+      detail: 'sshclient · sftpclient · sshshell (v0.10 PTY) · logquery · dlmanager · tailmgr · diff · downloads · formatter · credentials · webservice (v0.12) · wscodegen · license (v0.11) · sponsor (v0.14)',
       tech: ['x/crypto/ssh', 'pkg/sftp', 'x/text (GBK 透明转换)', 'AES-256-GCM', 'COW Config', 'Worker Pool', 'Myers Diff', 'PTY + WebSocket'],
       duty: '受控 SSH 执行、交互式 PTY 终端、SFTP 文件浏览、命令模板生成、异步任务会话池、实时 SSE 广播、行级 diff、凭据存取。元数据全部集中维护，handler 只负责协议转换。'
     },
@@ -338,7 +344,7 @@
     { name: 'api.js', desc: 'HTTP 客户端 — api(method, path, body) 统一封装；自动加 Bearer token；SSE EventSource 工厂；统一错误处理。' },
     { name: 'theme.js', desc: '主题切换 — dark / light / green / hc / xianxia（玄墨鎏金·武侠风）5 套主题，inline script 在 <head> 提前设 data-theme 防 FOUC。' },
     { name: 'auth.js', desc: '认证层 — 拉 /api/auth/status 探测；token cookie 管理；role-gated UI 显隐。' },
-    { name: 'pages/*.js', desc: '22 个页面 — home / websphere / files / ssh / formatter / commands / diagnostics / config / downloads / http / timestamp / cron / jsonpath / compare / database / webservice / notes / reminders / tasks / pet / sponsor / about。每个页面一个 IIFE，路由切换时整体替换 view。' },
+    { name: 'pages/*.js', desc: '24 个页面 — home / websphere / files / waspack / ssh / formatter / commands / diagnostics / config / downloads / http / timestamp / cron / jsonpath / compare / database / webservice / wscodegen / notes / reminders / tasks / pet / sponsor / about。每个页面一个 IIFE，路由切换时整体替换 view。' },
     { name: 'tail.js + tail.html', desc: '独立 tail 窗口 — 从主页面剥离的 tail 流，跟踪 SSE 不影响主页面操作；行级 DOM 节点池 + rAF 批量 flush (50ms/100 行)；v0.13 起支持 Ctrl/⌘+F 页面内搜索高亮，新到达日志自动应用当前搜索词。' },
     { name: 'preview.html', desc: '文件预览子窗口 — 单文件模态 + 新窗口双模式，支持文本 / GBK 编码自动识别；v0.13 起支持页面内搜索高亮 (TreeWalker 遍历文本节点，不破坏关键词高亮 span)。' },
     { name: 'vendor/search-hl.js', desc: '搜索高亮公共模块 (v0.13) — preview.html / tail.html / 上下文窗口三处共用；TreeWalker 遍历文本节点 + mark 标签包裹，Enter/Shift+Enter 跳转匹配，Esc 清除。' }
@@ -573,6 +579,20 @@
       ]
     },
     {
+      icon: 'modules', name: 'WS Java 代码生成',
+      pages: ['wscodegen'],
+      apis: ['/api/wscodegen/engines', '/api/wscodegen/detect-jdk', '/api/wscodegen/scan-project', '/api/wscodegen/preview', '/api/wscodegen/generate'],
+      pkg: 'internal/wscodegen',
+      desc: '从已导入 WSDL / 本地文件 / URL 生成 Java 客户端。优先对齐工程 JDK 与 lib 里的 Axis / XFire / CXF jar，而不是默默使用本机 PATH 上的 JDK。',
+      features: [
+        '六种引擎：portable HttpURLConnection、JAX-WS、CXF、Axis 1.4、Axis2、XFire 1.2',
+        '内置生成永远可用：Java 1.6 源码，无 diamond / try-with-resources；portable 零第三方依赖',
+        '官方工具模式：用工程 JDK 跑 wsimport / WSDL2Java / Wsdl11Generator，classpath 来自扫描到的 jar',
+        'JDK 探测：JAVA_HOME / 常见安装目录；JDK 8 生成喂 JDK 6 时强制提示 JAX-WS 2.1',
+        '项目扫描：lib / WEB-INF/lib / pom.xml，自动建议引擎并勾选生成器 jar'
+      ]
+    },
+    {
       icon: 'reminderIc', name: '定时提醒 (v0.13 起)',
       pages: ['reminders'],
       apis: ['GET /api/reminders', 'POST /api/reminders', 'PUT /api/reminders/{id}', 'DELETE /api/reminders/{id}', 'POST /api/reminders/{id}/toggle', 'POST /api/reminders/{id}/fire', 'GET /api/reminders/info', 'POST /api/reminders/pause'],
@@ -738,6 +758,7 @@
     { q: '下载到一半断网会怎样？', a: '当前下载项标记为"未完成"并保留半成品文件（.partial 后缀）；其他已完成项不受影响。重连后可手动重试整个下载任务。' },
     { q: '能上传文件到远程吗？', a: '不能。设计上只读不写——这是核心安全策略。如果你需要上传功能，建议用专门的 SCP 工具，Kairo 不提供该能力以避免误删/越权。' },
     { q: 'WebService 调试中心是干什么的？(v0.12 起)', a: '面向老 Java / WebSphere / XFire / SOAP 场景的轻量 SoapUI。导入 WSDL（URL 或上传 .wsdl/.xsd）→ 自动生成 SOAP Envelope → 自定义 endpoint/Headers/Body 发送 → 保存模板 → 历史回放 → 起 Mock 服务端。内置 XML 格式化小工具。适合内网老 SOAP 接口调试，不必再装 SoapUI。' },
+    { q: 'WS 代码生成怎么选 JDK？为什么不直接用本机默认 JDK？', a: '默认 JDK（PATH 上那个）常常是 11/17，生成的 JAX-WS 2.2 代码丢进 JDK 6 工程会缺类；XFire / Axis 还必须用工程 lib 里那一套 jar 跑 wsdl2java，否则 import 对不上。正确做法：选项目目录扫描 jar，再选工程自带的 JDK 6/8。不确定栈时用 portable（纯 HttpURLConnection，Java 1.6，零依赖）。' },
     { q: '老 Chrome / Win7 内网浏览器打不开 SSH 终端？', a: 'v0.12 起已加固：xterm.js 5.5+ 的 ES2020 语法转译到 ES5；replaceChildren / FileReader 等 DOM API 在 core.js 内置 polyfill；文件读取走 FileReader 而非 File.text()。若仍报错，硬刷新一次（Ctrl/Cmd+Shift+R）清缓存即可。' },
     { q: '想贡献代码 / 反馈 bug？', a: '所有 issue / PR 在 GitHub 仓库；反馈 bug 请附 (1) Kairo 版本号 (2) 操作系统 (3) 目标服务器 sshd 版本 (4) 完整操作步骤 (5) logs/ 下最新日志。' }
   ];
@@ -784,7 +805,7 @@ const changelog = [
         '效率能力必须可配置且可发现：SQL 片段和快捷键提供安全默认值，同时允许用户定义缩写、模板与执行/取消/视图切换按键。',
         '快速不能以漏报为代价：目录比较默认采用智能内容校验；仅比较大小和时间的元数据模式明确标注可能漏报，避免同大小同时间文件被误判相同。',
         '展开详情只能改变行高，不能改变列宽：表格使用固定列布局和显式列宽，滚动条空间预留，杜绝点击前后内容横向跳动。',
-        '“桌面便笺”语义必须一致：首页入口与便笺中心的新建动作都直接创建 Windows 原生置顶便笺，浏览器只承担管理与内联编辑。',
+        '便笺入口必须分层：顶栏快捷入口创建桌面便笺；中心新建只进列表；页面悬浮和桌面置顶由用户显式打开，系统不替用户弹窗。',
         '弹窗和长任务反馈必须稳定：对话框基于视口居中，扫描进度显示实际发现条目，空结果明确说明筛选状态，不让用户面对无意义的 0/2。',
         '所有优化都需要真实数据和真实点击证据：使用独立 MySQL 8.4 实例、中文/空格路径文件夹和 Playwright 在目标分辨率执行验收。'
       ],
@@ -795,7 +816,7 @@ const changelog = [
           { name: '可配置效率层', detail: 'SQL snippets 与快捷键以 localStorage 持久化；模板支持 ${cursor} 光标占位，Space/Tab/Enter 可触发展开，执行、取消、网格和记录视图按键可独立调整。' },
           { name: '结果交互层', detail: '结果区建立 status/error/grid/record 四种明确状态；列宽拖拽、上下文菜单、列管理器、本地筛选与排序共享同一列模型，网格和单记录视图复用同一结果数据。' },
           { name: '比较任务层', detail: '目录遍历回调报告实际已发现项目；本地深度散列并行处理左右文件，默认模式切换为内容校验，元数据极速模式作为明确的可选降级。' },
-          { name: '桌面便笺协调层', detail: '顶部入口、便笺中心和原生窗口统一调用 notes API；新建时直接写入 desktop.visible、比例坐标和窗口尺寸，浏览器卡片通过双击进入内联编辑。' },
+          { name: '桌面便笺协调层', detail: '顶栏、便笺中心、页面悬浮层和 Win32 窗口共用 notes API 与 revision；桌面同时可见上限 6 张；布局 PATCH 与正文冲突分开处理，内联编辑不会被窗口移动冲掉。' },
           { name: '稳定数据表布局层', detail: 'WebSphere/搜索排障结果使用 colgroup + table-layout: fixed + stable scrollbar gutter；详情展开只占据跨列内容行，避免内容长度重新参与列宽计算。' }
         ],
         retirements: [
@@ -817,7 +838,7 @@ const changelog = [
         { title: '列管理与可见字段复制', desc: '列管理器集中恢复/隐藏字段，复制可见字段按钮按当前列顺序输出名称；隐藏状态不破坏原始结果，切换视图时保持一致。' },
         { title: 'SQL 片段与自定义快捷键', desc: '默认提供 sf → SELECT * FROM、sel 与 cnt 模板；用户可以新增、修改或删除缩写与模板，并自定义执行、取消、网格/记录切换快捷键。' },
         { title: '数据源渐进式管理', desc: '新增/编辑数据源时展开配置区，保存后自动选中目标数据源并收起；MySQL 默认优先当前业务数据库而非 information_schema，减少首次进入的空转操作。' },
-        { title: '便笺桌面优先工作流', desc: '首页右上角“新建便笺”直接创建原生 Windows 置顶窗口；便笺中心新建不再弹模态框，卡片整体使用选定颜色，双击标题/正文即可内联修改并保存。' },
+        { title: '便笺入口分层', desc: '顶栏“便笺”创建 Windows 桌面置顶窗口（有选中文本则摘录上去）；便笺中心“新建”只创建列表便笺并立即内联编辑。页面悬浮与桌面置顶是卡片上的显式动作。' },
         { title: '智能目录内容比较', desc: '默认比较模式读取内容散列，准确识别大小和修改时间相同但内容不同的文件；显式提供极速元数据模式给可信时间戳场景，并在文案中提示漏报风险。' },
         { title: '真实扫描进度', desc: '后端遍历过程中按实际发现条目更新进度，本地深度比较左右哈希并发执行；前端筛选为空时展示“当前筛选条件下无文件”而不是空白区域。' },
         { title: '搜索展开零抖动', desc: '搜索排障/WebSphere 下发结果使用固定布局和显式列宽；展开或收起完整命令、结果、错误信息时列宽保持不变。' },
@@ -863,8 +884,8 @@ const changelog = [
         'v0.16 可直接替换为 v0.17；数据源、便笺、任务、宠物、WebService 模板与文件连接配置格式保持兼容，无需执行数据库迁移。',
         '数据库结果列宽、列显隐、SQL snippets 和快捷键保存在当前浏览器 localStorage；清理浏览器站点数据会恢复默认设置，但不会删除后端数据源。',
         '默认目录比较从“大小+时间”调整为“智能内容比较”。大目录或高延迟远程目录如明确接受元数据风险，可手工选择“极速元数据（可能漏报）”。',
-        '首页便笺按钮现在只创建 Windows 原生桌面便笺，不再在浏览器页面显示浮动卡；所有便笺仍可在“便笺中心”集中管理。',
-        '旧版已保存的 browser floating 字段继续兼容，但新建便笺默认 desktop.visible=true、floating=false。',
+        '顶栏便笺按钮创建 Windows 原生桌面便笺；便笺中心新建默认只出现在列表，需要时再“页面悬浮”或“置顶到桌面”。旧版已置顶的桌面便笺保持原样。',
+        '旧版 browser floating 字段继续兼容；同时只允许一张页面悬浮便笺。桌面同时可见上限 6 张。',
         '升级后建议强制刷新一次页面；index.html 已更新 database、notes、compare、websphere 与 style 的缓存版本，正常重新启动也会拉取新资源。',
         'Oracle 对象树增加 MATERIALIZED VIEW、PACKAGE、SEQUENCE、SYNONYM 等类型；MySQL 增加 routines/triggers。最终可见范围仍受当前只读账号的数据字典权限约束。',
         'SQL 工作台仍坚持后端只读边界；片段展开只负责输入效率，不放宽多语句、写操作、超时、行数或返回体限制。',
@@ -1731,7 +1752,7 @@ const changelog = [
     const versionBadge = el('span', {
       class: 'tier-badge about-version-badge',
       style: 'display:inline-block; font-size:14px; padding:6px 20px; border-radius:20px; background:linear-gradient(135deg, var(--primary), var(--accent)); color:#fff; font-weight:700; letter-spacing:0.05em;',
-      text: VERSION
+      text: currentVersion() || '…'
     });
     fetchVersion().then(v => { if (v) versionBadge.textContent = v; });
 

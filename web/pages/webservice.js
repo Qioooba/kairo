@@ -296,6 +296,10 @@
     if (state.activeTab === 'wsdl') {
       ops.appendChild(el('button', { class: 'btn', text: '+ 导入 URL', onclick: openImportURLDialog }));
       ops.appendChild(el('button', { class: 'btn', text: '+ 上传文件', onclick: triggerUploadFile }));
+      ops.appendChild(el('button', { class: 'btn btn-primary', text: '生成 Java', onclick: function () {
+        var id = state.currentProject && state.currentProject.id;
+        location.hash = id ? '#/wscodegen?project=' + encodeURIComponent(id) : '#/wscodegen';
+      } }));
       const fileInp = el('input', { type: 'file', id: 'svc-upload-inp', accept: '.wsdl,.xsd,.xml', multiple: true, style: 'display:none', onchange: handleUploadFile });
       ops.appendChild(fileInp);
     } else if (state.activeTab === 'templates') {
@@ -1712,10 +1716,14 @@
   // ---------- 入口 ----------
 
   async function renderWebService(view) {
-    // 初次进入：拉取所有数据
-    await refreshAll();
+    // 先画出空壳，避免 hash 切换时 view 被清空后干等接口，看起来像页面打不开。
     const layout = el('div', { class: 'svc-layout' }, [renderSidebar(), renderMain()]);
     view.appendChild(layout);
+    try {
+      await refreshAll();
+    } catch (e) {
+      toast('加载 WebService 失败：' + (e.message || e), 'err');
+    }
   }
 
   Kairo.pages.webservice = renderWebService;

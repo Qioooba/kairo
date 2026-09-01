@@ -38,6 +38,9 @@
     // 文件下载：绿色文件 + 白色下箭头
     'file-down': `<path d="M14 3v4a1 1 0 0 0 1 1h4v9a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z" fill="#10b981"/><path d="M14 3v4a1 1 0 0 0 1 1h4l-5-5z" fill="#047857"/><path d="M12 15.5v-5" stroke="#ffffff" stroke-width="2" stroke-linecap="round"/><polyline points="9.5 12.5 12 15 14.5 12.5" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>`,
 
+    // 投产打包：琥珀色箱子 + 封条
+    'package': `<path d="M3 7l9-4 9 4v10l-9 4-9-4z" fill="#d97706"/><path d="M3 7l9 4 9-4" fill="none" stroke="#fbbf24" stroke-width="1.6" stroke-linejoin="round"/><path d="M12 11v10" stroke="#fbbf24" stroke-width="1.6"/><path d="M7.5 5l9 4" stroke="#fde68a" stroke-width="1.4" stroke-linecap="round"/><circle cx="12" cy="9" r="1" fill="#fef3c7"/>`,
+
     // 报文格式化：橙色粗描边大括号 + 中心红点（不用手算 fill 路径，避免钩子瑕疵）
     'braces': `<path d="M8 3H7a2 2 0 0 0-2 2v5a2 2 0 0 1-2 2 2 2 0 0 1 2 2v5c0 1.1.9 2 2 2h1" fill="none" stroke="#f59e0b" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M16 21h1a2 2 0 0 0 2-2v-5c0-1.1.9-2 2-2a2 2 0 0 1-2-2V5a2 2 0 0 0-2-2h-1" fill="none" stroke="#f59e0b" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="12" r="1.5" fill="#dc2626"/>`,
 
@@ -74,6 +77,9 @@
 
     // WebService 调试：靛蓝 SOAP 信封 + 橙色齿轮角章
     'soap-envelope': `<path d="M3 6l9 5 9-5-9-5z" fill="#6366f1"/><path d="M3 6v12l9 5V11z" fill="#4f46e5"/><path d="M21 6v12l-9 5V11z" fill="#818cf8"/><path d="M7 9l3 1.5L7 12z" fill="#ffffff" opacity="0.8"/><circle cx="18" cy="18" r="5" fill="#f59e0b"/><path d="M18 16v2l1.5 1" fill="none" stroke="#ffffff" stroke-width="1.4" stroke-linecap="round"/>`,
+
+    // WSDL → Java 代码生成：青绿源文件 + 白色 J
+    'java-code': `<path d="M5 3h10l4 4v14H5z" fill="#0d9488"/><path d="M15 3v4h4" fill="#115e59"/><path d="M15 3l4 4h-4z" fill="#14b8a6"/><path d="M10.2 10.2c0-1.3.9-2.2 2.3-2.2 1.2 0 2.1.6 2.5 1.5l-1.3.7c-.2-.5-.6-.8-1.2-.8-.5 0-.9.3-.9.8 0 1.6 3.5 1.1 3.5 3.7 0 1.4-1 2.4-2.6 2.4-1.4 0-2.4-.7-2.8-1.8l1.4-.6c.2.6.7 1 1.4 1 .6 0 1-.3 1-.9 0-1.7-3.5-1.2-3.5-3.8z" fill="#ffffff"/>`,
 
     // 关于：中性灰圆 + 白色 i（之前 #475569 在 dark 主题下太沉，改亮一档 #64748b）
     'info': `<circle cx="12" cy="12" r="10" fill="#64748b"/><circle cx="12" cy="12" r="9" fill="none" stroke="#ffffff" stroke-width="0.7" opacity="0.45"/><line x1="12" y1="16.5" x2="12" y2="11" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round"/><circle cx="12" cy="8" r="1.3" fill="#ffffff"/>`,

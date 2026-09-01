@@ -140,6 +140,23 @@ function register(runner, ctx) {
     });
   });
 
+  runner.describe('其他页面 - WS 代码生成', function () {
+    runner.it('应成功加载 WS 代码生成页面', async function () {
+      await page.goto(baseUrl + '/#/wscodegen', { waitUntil: 'load' });
+      await page.waitForTimeout(1000);
+      await runner.screenshot(page, '09-misc-09-wscodegen-page');
+    });
+
+    runner.it('应展示引擎选择和预览按钮', async function () {
+      const hasTitle = await page.evaluate(function () {
+        return document.body.textContent.indexOf('WSDL') >= 0 && document.body.textContent.indexOf('Java') >= 0;
+      });
+      if (!hasTitle) throw new Error('WS 代码生成页标题未找到');
+      const previewBtn = await page.$('button:has-text("预览代码"), button:has-text("生成到目录")');
+      if (!previewBtn) throw new Error('预览/生成按钮未找到');
+    });
+  });
+
   runner.describe('其他页面 - 关于页', function () {
     runner.it('应成功加载关于页面', async function () {
       await page.goto(baseUrl + '/#/about', { waitUntil: 'load' });

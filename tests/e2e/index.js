@@ -129,6 +129,7 @@ async function main() {
     './tests/09-misc-pages',
     './tests/10-formatters-deep',
     './tests/11-compare-deep',
+    './tests/14-database-workbench',
     './tests/12-http-deep',
     './tests/13-config-deep',
     './tests/20-api-coverage',
@@ -139,6 +140,8 @@ async function main() {
     './tests/34-reminders-actions',
     './tests/35-sponsor-pet-board',
     './tests/36-webservice-deep',
+    './tests/37-wscodegen-deep',
+    './tests/38-notes-deep',
   ];
 
   console.log('📦 注册测试模块...');

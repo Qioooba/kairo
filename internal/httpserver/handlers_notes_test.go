@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"path/filepath"
 	"testing"
@@ -76,8 +77,14 @@ func TestNotesAPI_DesktopNullAndActions(t *testing.T) {
 	srv, _, _, _ := newTestServer(t)
 	attachTestNotes(t, srv)
 	w := doRequest(srv, http.MethodPost, "/api/notes", map[string]any{"body": "x"})
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s", w.Code, w.Body.String())
+	}
 	var n note.Note
 	_ = json.Unmarshal(w.Body.Bytes(), &n)
+	if n.Desktop != nil || n.Floating {
+		t.Fatalf("plain create must stay list-only: %+v", n)
+	}
 
 	w = doRequest(srv, http.MethodPost, "/api/notes/"+n.ID+"/desktop", map[string]any{
 		"base_revision": n.Revision,
@@ -100,6 +107,26 @@ func TestNotesAPI_DesktopNullAndActions(t *testing.T) {
 	_ = json.Unmarshal(w.Body.Bytes(), &n)
 	if !n.Archived {
 		t.Fatal("archive action did not update note")
+	}
+}
+
+func TestNotesAPI_DesktopLimit(t *testing.T) {
+	srv, _, _, _ := newTestServer(t)
+	attachTestNotes(t, srv)
+	for i := 0; i < note.MaxDesktopVisible; i++ {
+		w := doRequest(srv, http.MethodPost, "/api/notes", map[string]any{
+			"body":    fmt.Sprintf("d%d", i),
+			"desktop": map[string]any{"visible": true, "x_ratio": .5, "y_ratio": .5},
+		})
+		if w.Code != http.StatusCreated {
+			t.Fatalf("seed %d status=%d body=%s", i, w.Code, w.Body.String())
+		}
+	}
+	w := doRequest(srv, http.MethodPost, "/api/notes", map[string]any{
+		"body": "overflow", "desktop": map[string]any{"visible": true},
+	})
+	if w.Code != 400 {
+		t.Fatalf("want 400, got %d %s", w.Code, w.Body.String())
 	}
 }
 
