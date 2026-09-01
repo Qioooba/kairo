@@ -118,7 +118,7 @@ func (l *Local) WriteAtomic(ctx context.Context, name string, src io.Reader, opt
 	}
 	if opts.Backup {
 		if _, err := os.Stat(name); err == nil {
-			backup := name + ".kairo-backup-" + strconv.FormatInt(time.Now().Unix(), 10)
+			backup := name + ".kairo-backup-" + strconv.FormatInt(time.Now().UnixNano(), 10)
 			if err := copyLocalFile(name, backup); err != nil {
 				return fmt.Errorf("create backup: %w", err)
 			}

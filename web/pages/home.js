@@ -56,8 +56,7 @@
       { id: 'database', name: '数据库工作台', desc: 'Oracle 11g / MySQL 流式只读查询与 Redis Key 浏览', icon: 'database', tag: 'ready', tagText: 'V1' },
       { id: 'http', name: 'HTTP 接口测试', desc: 'Postman 风格接口调试，Headers/Body/用例管理/响应高亮', icon: 'globe', tag: 'ready', tagText: 'v0.7' },
       { id: 'webservice', name: 'WebService 调试', desc: 'SOAP/WSDL 调试中心：导入 WSDL、生成报文、发送请求、Mock 服务端', icon: 'soap-envelope', tag: 'ready', tagText: 'v0.12' },
-      { id: 'wscodegen', name: 'WS 代码生成', desc: '从 WSDL / 连接生成 Java 客户端：JDK6/8、JAX-WS、CXF、Axis、XFire', icon: 'java-code', tag: 'new', tagText: '新' },
-      { id: 'formatter', name: '报文格式化', desc: 'JSON / XML / YAML / URL-form 格式化、压缩、校验、互转', icon: 'braces', tag: 'ready', tagText: '已就绪' },
+      { id: 'wscodegen', name: 'WebService 代码生成', desc: '从 WSDL 生成 Java 客户端，可一键下载 ZIP 或写入当前工程', icon: 'java-code', tag: 'new', tagText: '新' },
       { id: 'diagnostics', name: '环境自检', desc: '一键体检：本机 / 网络 / 配置 / 工具 / 每台 server 连通性', icon: 'shield-check', tag: 'ready', tagText: 'v0.4' },
       { id: 'config', name: '系统配置', desc: '在线编辑业务系统 / 服务器 / 日志目录 / 全局设置', icon: 'settings', tag: 'ready', tagText: 'v0.4' },
       { id: 'downloads', name: '下载历史', desc: '浏览 / 删除 / 重新下载 / 外部程序打开已下载文件', icon: 'history', tag: 'ready', tagText: '已就绪' },
@@ -68,6 +67,7 @@
     view.appendChild(grid);
 
     const miniTools = [
+      { id: 'formatter', name: '报文格式化', desc: 'JSON / XML / YAML / URL-form 格式化、压缩、校验、互转', icon: 'braces', tag: 'ready', tagText: '已就绪' },
       { id: 'timestamp', name: '时间戳转换', desc: '时间戳 ↔ 日期互转、时区计算', icon: 'clock' },
       { id: 'cron', name: 'Cron 解析', desc: 'Cron 表达式解析、下次执行时间预览', icon: 'calendar-clock' },
       { id: 'jsonpath', name: 'JSONPath 查询', desc: '在线 JSONPath 表达式求值', icon: 'workflow' },

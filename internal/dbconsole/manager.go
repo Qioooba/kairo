@@ -22,7 +22,7 @@ import (
 type poolEntry struct {
 	fingerprint string
 	sql         *sql.DB
-	redis       *redis.Client
+	redis       redis.UniversalClient
 }
 
 type Manager struct {
@@ -195,7 +195,18 @@ func (m *Manager) sqlDB(source Source) (*sql.DB, error) {
 	return db, nil
 }
 
-func (m *Manager) redisClient(source Source) (*redis.Client, error) {
+func redisTLSConfig(source Source) *tls.Config {
+	if source.TLSMode == "disabled" {
+		return nil
+	}
+	cfg := &tls.Config{ServerName: source.Host, MinVersion: tls.VersionTLS12}
+	if source.TLSMode == "skip-verify" {
+		cfg.InsecureSkipVerify = true // explicit per-source administrative option
+	}
+	return cfg
+}
+
+func (m *Manager) redisClient(source Source) (redis.UniversalClient, error) {
 	fingerprint := sourceFingerprint(source)
 	m.mu.Lock()
 	if entry := m.pools[source.ID]; entry != nil && entry.redis != nil && entry.fingerprint == fingerprint {
@@ -210,24 +221,50 @@ func (m *Manager) redisClient(source Source) (*redis.Client, error) {
 	if errors.Is(err, credentials.ErrNotSaved) {
 		password = ""
 	}
-	opts := &redis.Options{
-		Addr:         net.JoinHostPort(source.Host, strconv.Itoa(source.Port)),
-		Username:     source.Username,
-		Password:     password,
-		DB:           source.RedisDB,
-		DialTimeout:  10 * time.Second,
-		ReadTimeout:  source.Timeout(),
-		WriteTimeout: source.Timeout(),
-		PoolSize:     source.MaxOpenConnections,
-		MinIdleConns: source.MaxIdleConnections,
+	addrs := source.RedisAddrs()
+	tlsConfig := redisTLSConfig(source)
+	var client redis.UniversalClient
+	switch source.RedisTopology() {
+	case "cluster":
+		client = redis.NewClusterClient(&redis.ClusterOptions{
+			Addrs:        addrs,
+			Username:     source.Username,
+			Password:     password,
+			DialTimeout:  10 * time.Second,
+			ReadTimeout:  source.Timeout(),
+			WriteTimeout: source.Timeout(),
+			PoolSize:     source.MaxOpenConnections,
+			MinIdleConns: source.MaxIdleConnections,
+			TLSConfig:    tlsConfig,
+		})
+	case "sentinel":
+		client = redis.NewFailoverClient(&redis.FailoverOptions{
+			MasterName:    source.RedisMasterName,
+			SentinelAddrs: addrs,
+			Username:      source.Username,
+			Password:      password,
+			DB:            source.RedisDB,
+			DialTimeout:   10 * time.Second,
+			ReadTimeout:   source.Timeout(),
+			WriteTimeout:  source.Timeout(),
+			PoolSize:      source.MaxOpenConnections,
+			MinIdleConns:  source.MaxIdleConnections,
+			TLSConfig:     tlsConfig,
+		})
+	default:
+		client = redis.NewClient(&redis.Options{
+			Addr:         addrs[0],
+			Username:     source.Username,
+			Password:     password,
+			DB:           source.RedisDB,
+			DialTimeout:  10 * time.Second,
+			ReadTimeout:  source.Timeout(),
+			WriteTimeout: source.Timeout(),
+			PoolSize:     source.MaxOpenConnections,
+			MinIdleConns: source.MaxIdleConnections,
+			TLSConfig:    tlsConfig,
+		})
 	}
-	if source.TLSMode != "disabled" {
-		opts.TLSConfig = &tls.Config{ServerName: source.Host, MinVersion: tls.VersionTLS12}
-		if source.TLSMode == "skip-verify" {
-			opts.TLSConfig.InsecureSkipVerify = true // explicit per-source administrative option
-		}
-	}
-	client := redis.NewClient(opts)
 	m.mu.Lock()
 	if entry := m.pools[source.ID]; entry != nil && entry.redis != nil && entry.fingerprint == fingerprint {
 		m.mu.Unlock()
@@ -248,6 +285,8 @@ type TestResult struct {
 	Kind      string `json:"kind"`
 	Version   string `json:"version,omitempty"`
 	LatencyMS int64  `json:"latency_ms"`
+	Topology  string `json:"topology,omitempty"`
+	Masters   int    `json:"masters,omitempty"`
 }
 
 func (m *Manager) withSQL(ctx context.Context, source Source, fn func(context.Context, *sql.DB) error) error {
@@ -277,6 +316,7 @@ func (m *Manager) Test(ctx context.Context, source Source) (TestResult, error) {
 	defer m.release()
 	result := TestResult{Kind: source.Kind}
 	if source.Kind == KindRedis {
+		result.Topology = source.RedisTopology()
 		client, err := m.redisClient(source)
 		if err != nil {
 			return result, err
@@ -286,6 +326,12 @@ func (m *Manager) Test(ctx context.Context, source Source) (TestResult, error) {
 			return result, err
 		}
 		result.Version = redisVersion(info)
+		if cluster, ok := client.(*redis.ClusterClient); ok {
+			result.Topology = "cluster"
+			if n, err := clusterMasterCount(ctx, cluster); err == nil {
+				result.Masters = n
+			}
+		}
 	} else {
 		db, err := m.sqlDB(source)
 		if err != nil {

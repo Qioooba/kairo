@@ -286,6 +286,108 @@ function register(runner, ctx) {
       const hasClient = written.some(function (p) { return /Client\.java$/.test(p); });
       if (!hasClient) throw new Error('缺少 Client.java: ' + written.join(','));
     });
+
+    runner.it('预览区应有下载 ZIP 与写入工程按钮', async function () {
+      await page.goto(baseUrl + '/#/wscodegen?project=' + encodeURIComponent(projectId), { waitUntil: 'domcontentloaded' });
+      await page.waitForSelector('#wsc-zip-btn', { timeout: 8000 });
+      const zip = await page.locator('#wsc-zip-btn').innerText();
+      if (zip.indexOf('ZIP') < 0) throw new Error('缺少下载 ZIP 按钮: ' + zip);
+      const push = await page.locator('#wsc-push-btn').innerText();
+      if (push.indexOf('写入工程') < 0) throw new Error('缺少写入工程按钮: ' + push);
+      const disabled = await page.locator('#wsc-push-btn').isDisabled();
+      if (!disabled) throw new Error('未选工程目录时写入工程应禁用');
+    });
+
+    runner.it('下载 ZIP API 应返回 zip 且不需要 output_dir', async function () {
+      const payload = JSON.stringify({
+        engine: 'portable',
+        mode: 'builtin',
+        include_main: true,
+        java_source: '1.6',
+        wsdl_project_id: projectId,
+      });
+      const u = new URL(baseUrl);
+      const result = await new Promise(function (resolve, reject) {
+        const req = http.request({
+          hostname: u.hostname,
+          port: u.port || 80,
+          path: '/api/wscodegen/download-zip',
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) },
+        }, function (res) {
+          const chunks = [];
+          res.on('data', function (c) { chunks.push(c); });
+          res.on('end', function () {
+            resolve({
+              status: res.statusCode,
+              type: res.headers['content-type'],
+              disposition: res.headers['content-disposition'] || '',
+              files: res.headers['x-kairo-files'] || '',
+              body: Buffer.concat(chunks),
+            });
+          });
+        });
+        req.on('error', reject);
+        req.write(payload);
+        req.end();
+      });
+      if (result.status !== 200) throw new Error('zip status=' + result.status);
+      if (String(result.type || '').indexOf('zip') < 0) throw new Error('content-type=' + result.type);
+      if (result.disposition.indexOf('.zip') < 0) throw new Error('disposition=' + result.disposition);
+      if (!result.files || result.files === '0') throw new Error('missing file count');
+      if (result.body.length < 4 || result.body[0] !== 0x50 || result.body[1] !== 0x4b) {
+        throw new Error('response is not zip');
+      }
+    });
+
+    runner.it('写入工程 API 应落到推断的 src', async function () {
+      const proj = fs.mkdtempSync(path.join(os.tmpdir(), 'kairo-wsc-proj-'));
+      const src = path.join(proj, 'src');
+      const lib = path.join(proj, 'WebRoot', 'WEB-INF', 'lib');
+      fs.mkdirSync(src, { recursive: true });
+      fs.mkdirSync(lib, { recursive: true });
+      const payload = JSON.stringify({
+        engine: 'portable',
+        mode: 'builtin',
+        include_main: true,
+        java_source: '1.6',
+        overwrite: true,
+        open_after: false,
+        project_dir: lib,
+        wsdl_project_id: projectId,
+      });
+      const u = new URL(baseUrl);
+      const result = await new Promise(function (resolve, reject) {
+        const req = http.request({
+          hostname: u.hostname,
+          port: u.port || 80,
+          path: '/api/wscodegen/push-project',
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) },
+        }, function (res) {
+          const chunks = [];
+          res.on('data', function (c) { chunks.push(c); });
+          res.on('end', function () {
+            const raw = Buffer.concat(chunks).toString('utf8');
+            let data = null;
+            try { data = JSON.parse(raw); } catch (e) { data = raw; }
+            resolve({ status: res.statusCode, data: data });
+          });
+        });
+        req.on('error', reject);
+        req.write(payload);
+        req.end();
+      });
+      if (result.status !== 200 || !result.data || !result.data.result) {
+        throw new Error('push failed: ' + JSON.stringify(result).slice(0, 500));
+      }
+      const written = result.data.result.written || [];
+      if (!written.length) throw new Error('未写入工程');
+      const client = written.filter(function (p) { return /Client\.java$/.test(p); })[0];
+      if (!client) throw new Error('缺少 Client.java: ' + written.join(','));
+      const onDisk = path.join(src, client.replace(/\//g, path.sep));
+      if (!fs.existsSync(onDisk)) throw new Error('src 下没有 ' + onDisk);
+    });
   });
 }
 

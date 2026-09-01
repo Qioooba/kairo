@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -31,7 +32,10 @@ type Source struct {
 	OracleService        string   `json:"oracle_service,omitempty"`
 	OracleClientCharset  string   `json:"oracle_client_charset,omitempty"`
 	RedisDB              int      `json:"redis_db,omitempty"`
-	TLSMode              string   `json:"tls_mode,omitempty"` // disabled / preferred / required / skip-verify
+	RedisMode            string   `json:"redis_mode,omitempty"`        // standalone / cluster / sentinel
+	RedisMasterName      string   `json:"redis_master_name,omitempty"` // Sentinel master name
+	RedisNodes           []string `json:"redis_nodes,omitempty"`       // extra seed / sentinel host:port
+	TLSMode              string   `json:"tls_mode,omitempty"`          // disabled / preferred / required / skip-verify
 	QueryTimeoutSeconds  int      `json:"query_timeout_seconds"`
 	MaxRows              int      `json:"max_rows"`
 	MaxResultBytes       int64    `json:"max_result_bytes"`
@@ -105,6 +109,25 @@ func (s *Source) Defaults() {
 	if s.TLSMode == "" {
 		s.TLSMode = "disabled"
 	}
+	s.RedisMode = strings.ToLower(strings.TrimSpace(s.RedisMode))
+	if s.Kind == KindRedis && s.RedisMode == "" {
+		s.RedisMode = "standalone"
+	}
+	s.RedisMasterName = strings.TrimSpace(s.RedisMasterName)
+	nodes := make([]string, 0, len(s.RedisNodes))
+	seenNode := make(map[string]struct{}, len(s.RedisNodes))
+	for _, node := range s.RedisNodes {
+		node = strings.TrimSpace(node)
+		if node == "" {
+			continue
+		}
+		if _, ok := seenNode[node]; ok {
+			continue
+		}
+		seenNode[node] = struct{}{}
+		nodes = append(nodes, node)
+	}
+	s.RedisNodes = nodes
 }
 
 func (s Source) Validate() error {
@@ -148,6 +171,30 @@ func (s Source) Validate() error {
 	if s.RedisDB < 0 || s.RedisDB > 1024 {
 		return errors.New("Redis DB 必须在 0..1024 之间")
 	}
+	if s.Kind == KindRedis {
+		switch s.RedisMode {
+		case "standalone", "cluster", "sentinel":
+		default:
+			return errors.New("Redis 拓扑仅支持 standalone / cluster / sentinel")
+		}
+		if s.RedisMode == "cluster" && s.RedisDB != 0 {
+			return errors.New("Redis Cluster 不支持 SELECT，DB 必须为 0")
+		}
+		if s.RedisMode == "sentinel" && s.RedisMasterName == "" {
+			return errors.New("Sentinel 必须填写 Master 名称")
+		}
+		if len(s.RedisMasterName) > 256 {
+			return errors.New("Redis Master 名称不能超过 256 字节")
+		}
+		if len(s.RedisNodes) > 32 {
+			return errors.New("Redis 附加节点不能超过 32 个")
+		}
+		for _, node := range s.RedisNodes {
+			if _, err := parseRedisAddr(node); err != nil {
+				return err
+			}
+		}
+	}
 	switch s.TLSMode {
 	case "disabled", "preferred", "required", "skip-verify":
 	default:
@@ -180,6 +227,51 @@ func (s Source) Validate() error {
 }
 
 func (s Source) Timeout() time.Duration { return time.Duration(s.QueryTimeoutSeconds) * time.Second }
+
+func (s Source) RedisTopology() string {
+	switch strings.ToLower(strings.TrimSpace(s.RedisMode)) {
+	case "cluster", "sentinel":
+		return strings.ToLower(strings.TrimSpace(s.RedisMode))
+	default:
+		return "standalone"
+	}
+}
+
+func (s Source) RedisAddrs() []string {
+	addrs := []string{net.JoinHostPort(s.Host, strconv.Itoa(s.Port))}
+	seen := map[string]struct{}{addrs[0]: {}}
+	for _, node := range s.RedisNodes {
+		addr, err := parseRedisAddr(node)
+		if err != nil {
+			continue
+		}
+		if _, ok := seen[addr]; ok {
+			continue
+		}
+		seen[addr] = struct{}{}
+		addrs = append(addrs, addr)
+	}
+	return addrs
+}
+
+func parseRedisAddr(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", errors.New("Redis 节点地址不能为空")
+	}
+	host, port, err := net.SplitHostPort(raw)
+	if err != nil {
+		return "", fmt.Errorf("Redis 节点 %q 必须是 host:port", raw)
+	}
+	if host == "" || net.ParseIP(host) == nil && !validHostname(host) {
+		return "", fmt.Errorf("Redis 节点主机 %q 非法", host)
+	}
+	p, err := strconv.Atoi(port)
+	if err != nil || p < 1 || p > 65535 {
+		return "", fmt.Errorf("Redis 节点端口 %q 非法", port)
+	}
+	return net.JoinHostPort(host, port), nil
+}
 
 func (s Source) CredentialUser() string {
 	if strings.TrimSpace(s.Username) == "" {

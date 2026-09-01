@@ -22,10 +22,31 @@ func runAppleScriptPicker(script, label string) (string, error) {
 	return strings.TrimSpace(out.String()), nil
 }
 
-func chooseFile() (string, error) {
-	return runAppleScriptPicker(`POSIX path of (choose file with prompt "选择文件" default location (path to downloads folder))`, "文件选择")
+func appleDefaultLocation(initial string) string {
+	start := pickerStartDir(initial)
+	if start == "" {
+		return "(path to downloads folder)"
+	}
+	escaped := strings.ReplaceAll(start, `\`, `\\`)
+	escaped = strings.ReplaceAll(escaped, `"`, `\"`)
+	return `(POSIX file "` + escaped + `")`
 }
 
-func chooseDir() (string, error) {
-	return runAppleScriptPicker(`POSIX path of (choose folder with prompt "选择文件夹" default location (path to downloads folder))`, "文件夹选择")
+func chooseFile() (string, error) { return chooseFileAt("") }
+func chooseDir() (string, error)  { return chooseDirAt("") }
+
+func chooseFileAt(initial string) (string, error) {
+	path, err := runAppleScriptPicker(`POSIX path of (choose file with prompt "选择文件" default location `+appleDefaultLocation(initial)+`)`, "文件选择")
+	if err == nil {
+		rememberPicked(path)
+	}
+	return path, err
+}
+
+func chooseDirAt(initial string) (string, error) {
+	path, err := runAppleScriptPicker(`POSIX path of (choose folder with prompt "选择文件夹" default location `+appleDefaultLocation(initial)+`)`, "文件夹选择")
+	if err == nil {
+		rememberPicked(path)
+	}
+	return path, err
 }

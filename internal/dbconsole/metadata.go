@@ -115,14 +115,16 @@ type ObjectInspect struct {
 }
 
 type ExplainRow struct {
-	ID          string `json:"id,omitempty"`
-	Operation   string `json:"operation,omitempty"`
-	Object      string `json:"object,omitempty"`
-	Options     string `json:"options,omitempty"`
-	Cardinality string `json:"cardinality,omitempty"`
-	Cost        string `json:"cost,omitempty"`
-	Extra       string `json:"extra,omitempty"`
-	Raw         string `json:"raw,omitempty"`
+	ID          string            `json:"id,omitempty"`
+	Operation   string            `json:"operation,omitempty"`
+	Object      string            `json:"object,omitempty"`
+	Options     string            `json:"options,omitempty"`
+	Cardinality string            `json:"cardinality,omitempty"`
+	Cost        string            `json:"cost,omitempty"`
+	Extra       string            `json:"extra,omitempty"`
+	Raw         string            `json:"raw,omitempty"`
+	ColumnOrder []string          `json:"column_order,omitempty"`
+	Cells       map[string]string `json:"cells,omitempty"`
 }
 
 func (m *Manager) Schemas(ctx context.Context, source Source) ([]Schema, error) {

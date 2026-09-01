@@ -1105,7 +1105,9 @@ function testConfigStatePersists() {
     api: (method, p) => {
       if (method === 'GET' && p === '/api/admin/servers') fetchCount++;
       return Promise.resolve({ app: {}, systems: [{ name: 's1', servers: [] }], search: {} });
-    }
+    },
+    browseButton: function () { return { style: {}, appendChild: function () {}, addEventListener: function () {} }; },
+    pathRow: function (input) { return input || { style: {}, appendChild: function () {} }; }
   };
 
   // 3) 加载 config.js（IIFE 会把 routes.config 挂上）
@@ -1196,7 +1198,9 @@ function testConfigEncodingGBK_Preserved() {
         return Promise.resolve({ ok: true, path: '/x/config.yaml', systems: (body && body.systems || []).length });
       }
       return Promise.resolve(serverData);
-    }
+    },
+    browseButton: function () { return { style: {}, appendChild: function () {}, addEventListener: function () {} }; },
+    pathRow: function (input) { return input || { style: {}, appendChild: function () {} }; }
   };
 
   const configSrc = fs2.readFileSync(path2.join(__dirname, 'pages', 'config.js'), 'utf8');
@@ -1281,7 +1285,9 @@ function testConfigSaveClearsDirty() {
       }
       if (method === 'PUT') { putCount++; return Promise.resolve({ ok: true, path: '/x' }); }
       return Promise.resolve(null);
-    }
+    },
+    browseButton: function () { return { style: {}, appendChild: function () {}, addEventListener: function () {} }; },
+    pathRow: function (input) { return input || { style: {}, appendChild: function () {} }; }
   };
 
   const configSrc = fs2.readFileSync(path2.join(__dirname, 'pages', 'config.js'), 'utf8');
@@ -1321,6 +1327,98 @@ function testConfigSaveClearsDirty() {
   });
 }
 
+function testApplyCommandPath() {
+  const apiSrc = fs.readFileSync(path.join(__dirname, 'api.js'), 'utf8');
+  function extractApi(name) {
+    const re = new RegExp('function\\s+' + name + '\\s*\\([^)]*\\)\\s*\\{');
+    const m = apiSrc.match(re);
+    if (!m) throw new Error('not found in api.js: ' + name);
+    const start = m.index;
+    let i = apiSrc.indexOf('{', start);
+    let depth = 1;
+    i++;
+    while (i < apiSrc.length && depth > 0) {
+      const ch = apiSrc[i];
+      if (ch === '{') depth++;
+      else if (ch === '}') depth--;
+      i++;
+    }
+    return apiSrc.slice(start, i);
+  }
+  const quoteLocalPath = new Function(extractApi('quoteLocalPath') + '; return quoteLocalPath;')();
+  const applyCommandPath = new Function(
+    extractApi('quoteLocalPath') + '\n' + extractApi('applyCommandPath') + '; return applyCommandPath;'
+  )();
+  assert.strictEqual(quoteLocalPath('C:\\deploy\\run.bat'), 'C:\\deploy\\run.bat');
+  assert.strictEqual(quoteLocalPath('C:\\deploy scripts\\daily job.bat'), '"C:\\deploy scripts\\daily job.bat"');
+  assert.strictEqual(applyCommandPath('', 'C:\\a.bat'), 'C:\\a.bat');
+  assert.strictEqual(applyCommandPath('C:\\old.bat -Env prod', 'C:\\new.bat'), 'C:\\new.bat -Env prod');
+  assert.strictEqual(applyCommandPath('"C:\\old dir\\a.bat" /now', 'C:\\new dir\\a.bat'), '"C:\\new dir\\a.bat" /now');
+  assert.strictEqual(
+    applyCommandPath('powershell -NoProfile -File "C:\\old.ps1" -Tag daily', 'D:\\n.ps1'),
+    'powershell -NoProfile -File D:\\n.ps1 -Tag daily'
+  );
+  assert.strictEqual(applyCommandPath('cmd /c', 'C:\\a.bat'), 'cmd /c C:\\a.bat');
+  console.log('  applyCommandPath keeps args / quotes spaces ✓');
+}
+
+function loadDatabaseHelpers() {
+  const src = fs.readFileSync(path.join(__dirname, 'pages/database.js'), 'utf8');
+  function extractDb(name) {
+    const re = new RegExp('function\\s+' + name + '\\s*\\([^)]*\\)\\s*\\{');
+    const m = src.match(re);
+    if (!m) throw new Error('not found in database.js: ' + name);
+    const start = m.index;
+    let i = src.indexOf('{', start);
+    let depth = 1;
+    i++;
+    while (i < src.length && depth > 0) {
+      const ch = src[i];
+      if (ch === '{') depth++;
+      else if (ch === '}') depth--;
+      i++;
+    }
+    if (depth !== 0) throw new Error('unbalanced braces for ' + name);
+    return src.slice(start, i);
+  }
+  const kw = src.match(/const SQL_KEYWORDS = new Set\([\s\S]*?\);/);
+  const nl = src.match(/const SQL_NEWLINE_BEFORE = new Set\([\s\S]*?\);/);
+  if (!kw || !nl) throw new Error('missing SQL keyword sets');
+  const h = 'function h(v) { return String(v == null ? "" : v).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }';
+  return new Function(
+    kw[0] + '\n' + nl[0] + '\n' + h + '\n'
+    + extractDb('tokenizeSQL') + '\n'
+    + extractDb('highlightSQL') + '\n'
+    + extractDb('formatSQL') + '\n'
+    + extractDb('completionPrefix') + '\n'
+    + extractDb('suggestSQL') + '\n'
+    + extractDb('matchBrackets') + '\n'
+    + 'return { tokenizeSQL: tokenizeSQL, highlightSQL: highlightSQL, formatSQL: formatSQL, suggestSQL: suggestSQL, matchBrackets: matchBrackets, completionPrefix: completionPrefix };'
+  )();
+}
+
+function testDatabaseSQLHelpers() {
+  const db = loadDatabaseHelpers();
+  const formatted = db.formatSQL("select id, name from dual where name='x'");
+  assert.ok(/SELECT/.test(formatted) && /FROM DUAL/.test(formatted), formatted);
+  assert.ok(/name = 'x'/.test(formatted), formatted);
+  const ac = db.suggestSQL('se', 2, { snippets: [{ key: 'sel', text: 'SELECT *', enabled: true }] });
+  assert.ok(ac.items.some(function (x) { return x.label === 'SELECT'; }), JSON.stringify(ac.items));
+  assert.ok(!ac.items.some(function (x) { return x.kind === 'snippet'; }), 'prefix se should not steal sel snippet');
+  const exact = db.suggestSQL('sel', 3, { snippets: [{ key: 'sel', text: 'SELECT *', enabled: true }] });
+  assert.ok(exact.items.some(function (x) { return x.kind === 'snippet'; }), 'exact sel snippet');
+  const inside = db.suggestSQL("select 'se", 10, {});
+  assert.strictEqual(inside.items.length, 0, 'no complete inside string');
+  const sql = 'SELECT * FROM t WHERE (id = 1)';
+  const match = db.matchBrackets(sql, sql.indexOf('('));
+  assert.ok(match && match.open >= 0 && match.close > match.open, JSON.stringify(match));
+  const bad = db.matchBrackets('SELECT (id', 7);
+  assert.ok(bad && bad.close === -1, JSON.stringify(bad));
+  const html = db.highlightSQL(sql, match);
+  assert.ok(html.indexOf('db-sql-br') >= 0, html);
+  console.log('  database SQL tabs helpers: format / suggest / brackets ✓');
+}
+
 // ---------- 主入口 ----------
 
 async function main() {
@@ -1330,7 +1428,7 @@ async function main() {
     testEscapeRegex, testParseSearchTermsForHighlight, testHighlightAndTrim,
     testCssEscape, testPctText, testValidate, testEl, testConfirmDialog, testXSSInErrorText,
     testGotDoneDedupe, testNormalizeHighlightColor, testRenderHighlightedLine,
-    testTailViewer,
+    testTailViewer, testApplyCommandPath, testDatabaseSQLHelpers,
   ];
   let pass = 0, fail = 0;
   for (const t of tests) {

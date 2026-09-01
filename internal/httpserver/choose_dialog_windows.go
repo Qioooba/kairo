@@ -4,128 +4,333 @@ package httpserver
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"runtime"
 	"syscall"
 	"unsafe"
 )
 
+type winGUID struct {
+	Data1 uint32
+	Data2 uint16
+	Data3 uint16
+	Data4 [8]byte
+}
+
 var (
-	comdlg32                 = syscall.NewLazyDLL("comdlg32.dll")
-	shell32                  = syscall.NewLazyDLL("shell32.dll")
-	ole32                    = syscall.NewLazyDLL("ole32.dll")
-	user32Picker             = syscall.NewLazyDLL("user32.dll")
-	procGetOpenFileNameW     = comdlg32.NewProc("GetOpenFileNameW")
-	procCommDlgExtendedError = comdlg32.NewProc("CommDlgExtendedError")
-	procSHBrowseForFolderW   = shell32.NewProc("SHBrowseForFolderW")
-	procSHGetPathFromIDListW = shell32.NewProc("SHGetPathFromIDListW")
-	procCoTaskMemFree        = ole32.NewProc("CoTaskMemFree")
-	procOleInitialize        = ole32.NewProc("OleInitialize")
-	procOleUninitialize      = ole32.NewProc("OleUninitialize")
-	procGetForegroundWindow  = user32Picker.NewProc("GetForegroundWindow")
-	procSendMessageW         = user32Picker.NewProc("SendMessageW")
+	ole32Picker                     = syscall.NewLazyDLL("ole32.dll")
+	shell32Picker                   = syscall.NewLazyDLL("shell32.dll")
+	user32Picker                    = syscall.NewLazyDLL("user32.dll")
+	procCoCreateInstance            = ole32Picker.NewProc("CoCreateInstance")
+	procCoTaskMemFree               = ole32Picker.NewProc("CoTaskMemFree")
+	procOleInitialize               = ole32Picker.NewProc("OleInitialize")
+	procOleUninitialize             = ole32Picker.NewProc("OleUninitialize")
+	procSHCreateItemFromParsingName = shell32Picker.NewProc("SHCreateItemFromParsingName")
+	procGetForegroundWindow         = user32Picker.NewProc("GetForegroundWindow")
+	procGetAncestor                 = user32Picker.NewProc("GetAncestor")
+	procSetForegroundWindow         = user32Picker.NewProc("SetForegroundWindow")
+	procIsWindowVisible             = user32Picker.NewProc("IsWindowVisible")
+	procGetWindowTextW              = user32Picker.NewProc("GetWindowTextW")
+	procGetWindowTextLengthW        = user32Picker.NewProc("GetWindowTextLengthW")
+	procGetClassNameW               = user32Picker.NewProc("GetClassNameW")
+	procGetWindowRect               = user32Picker.NewProc("GetWindowRect")
+
+	clsidFileOpenDialog = winGUID{Data1: 0xDC1C5A9C, Data2: 0xE88A, Data3: 0x4DDE, Data4: [8]byte{0xA5, 0xA1, 0x60, 0xF8, 0x2A, 0x20, 0xAE, 0xF7}}
+	iidIFileOpenDialog  = winGUID{Data1: 0xD57C7288, Data2: 0xD4AD, Data3: 0x4768, Data4: [8]byte{0xBE, 0x02, 0x9D, 0x96, 0x95, 0x32, 0xD9, 0x60}}
+	iidIShellItem       = winGUID{Data1: 0x43826D1E, Data2: 0xE718, Data3: 0x42EE, Data4: [8]byte{0xBC, 0x55, 0xA1, 0xE2, 0x61, 0xC3, 0x7B, 0xFE}}
 )
 
 const (
-	ofnExplorer         = 0x00080000
-	ofnFileMustExist    = 0x00001000
-	ofnPathMustExist    = 0x00000800
-	ofnNoChangeDir      = 0x00000008
-	bifReturnOnlyFSDirs = 0x00000001
-	bifNewDialogStyle   = 0x00000040
-	bifEditBox          = 0x00000010
-	bffmInitialized     = 1
-	bffmSetSelectionW   = 0x400 + 103
+	clsctxInprocServer = 0x1
+	gaRoot             = 2
+	fosPickFolders     = 0x20
+	fosForceFileSystem = 0x40
+	fosPathMustExist   = 0x800
+	fosFileMustExist   = 0x1000
+	fosNoChangeDir     = 0x8
+	sigdnFileSysPath   = 0x80058000
+	hresultCancel      = 0x800704C7
 )
 
-type openFileNameW struct {
-	structSize, _pad0              uint32
-	hwndOwner, hInstance           uintptr
-	filter, customFilter           *uint16
-	maxCustomFilter, filterIndex   uint32
-	file                           *uint16
-	maxFile                        uint32
-	fileTitle                      *uint16
-	maxFileTitle                   uint32
-	initialDir, title              *uint16
-	flags                          uint32
-	fileOffset, fileExtension      uint16
-	defaultExt                     *uint16
-	customData, hook, templateName uintptr
-	reserved                       unsafe.Pointer
-	reservedSize, flagsEx          uint32
+type iFileOpenDialogVtbl struct {
+	QueryInterface      uintptr
+	AddRef              uintptr
+	Release             uintptr
+	Show                uintptr
+	SetFileTypes        uintptr
+	SetFileTypeIndex    uintptr
+	GetFileTypeIndex    uintptr
+	Advise              uintptr
+	Unadvise            uintptr
+	SetOptions          uintptr
+	GetOptions          uintptr
+	SetDefaultFolder    uintptr
+	SetFolder           uintptr
+	GetFolder           uintptr
+	GetCurrentSelection uintptr
+	SetFileName         uintptr
+	GetFileName         uintptr
+	SetTitle            uintptr
+	GetTitle            uintptr
+	SetOkButtonLabel    uintptr
+	SetFileNameLabel    uintptr
+	GetResult           uintptr
+	AddPlace            uintptr
+	SetDefaultExtension uintptr
+	Close               uintptr
+	SetClientGuid       uintptr
+	ClearClientData     uintptr
+	SetFilter           uintptr
+	GetResults          uintptr
+	GetSelectedItems    uintptr
 }
 
-type browseInfoW struct {
-	hwndOwner, root    uintptr
-	displayName, title *uint16
-	flags              uint32
-	callback, param    uintptr
-	image              int32
+type iFileOpenDialog struct {
+	vtbl *iFileOpenDialogVtbl
 }
 
-func pickerOwner() uintptr {
-	hwnd, _, _ := procGetForegroundWindow.Call()
+type iShellItemVtbl struct {
+	QueryInterface uintptr
+	AddRef         uintptr
+	Release        uintptr
+	BindToHandler  uintptr
+	GetParent      uintptr
+	GetDisplayName uintptr
+	GetAttributes  uintptr
+	Compare        uintptr
+}
+
+type iShellItem struct {
+	vtbl *iShellItemVtbl
+}
+
+func chooseFile() (string, error) { return chooseFileAt("") }
+func chooseDir() (string, error)  { return chooseDirAt("") }
+
+func chooseFileAt(initial string) (string, error) {
+	return invokePicker(func() (string, error) { return pickWindowsPath(false, initial) })
+}
+
+func chooseDirAt(initial string) (string, error) {
+	return invokePicker(func() (string, error) { return pickWindowsPath(true, initial) })
+}
+
+type winRect struct {
+	Left, Top, Right, Bottom int32
+}
+
+func windowTitle(hwnd uintptr) string {
+	n, _, _ := procGetWindowTextLengthW.Call(hwnd)
+	if n == 0 {
+		return ""
+	}
+	buf := make([]uint16, n+2)
+	got, _, _ := procGetWindowTextW.Call(hwnd, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
+	if got == 0 {
+		return ""
+	}
+	return syscall.UTF16ToString(buf)
+}
+
+func windowClass(hwnd uintptr) string {
+	buf := make([]uint16, 256)
+	got, _, _ := procGetClassNameW.Call(hwnd, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
+	if got == 0 {
+		return ""
+	}
+	return syscall.UTF16ToString(buf[:got])
+}
+
+func isVisibleTopWindow(hwnd uintptr) bool {
+	if hwnd == 0 {
+		return false
+	}
+	vis, _, _ := procIsWindowVisible.Call(hwnd)
+	return vis != 0
+}
+
+func windowArea(hwnd uintptr) int {
+	var r winRect
+	procGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&r)))
+	w := int(r.Right - r.Left)
+	h := int(r.Bottom - r.Top)
+	if w < 0 || h < 0 {
+		return 0
+	}
+	return w * h
+}
+
+func normalizeOwnerHWND(hwnd uintptr) uintptr {
+	if hwnd == 0 {
+		return 0
+	}
+	root, _, _ := procGetAncestor.Call(hwnd, gaRoot)
+	if root != 0 {
+		return root
+	}
 	return hwnd
 }
 
-func pickerInitialDir() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	desktop := filepath.Join(home, "Desktop")
-	if st, err := os.Stat(desktop); err == nil && st.IsDir() {
-		return desktop
-	}
-	return home
-}
-
-func chooseFile() (string, error) {
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-	file := make([]uint16, 32768)
-	filter, _ := syscall.UTF16PtrFromString("所有文件 (*.*)\x00*.*\x00")
-	title, _ := syscall.UTF16PtrFromString("选择文件")
-	initial, _ := syscall.UTF16PtrFromString(pickerInitialDir())
-	of := openFileNameW{hwndOwner: pickerOwner(), filter: filter, filterIndex: 1, file: &file[0], maxFile: uint32(len(file)), initialDir: initial, title: title, flags: ofnExplorer | ofnFileMustExist | ofnPathMustExist | ofnNoChangeDir}
-	of.structSize = uint32(unsafe.Sizeof(of))
-	ok, _, callErr := procGetOpenFileNameW.Call(uintptr(unsafe.Pointer(&of)))
-	if ok != 0 {
-		return syscall.UTF16ToString(file), nil
-	}
-	code, _, _ := procCommDlgExtendedError.Call()
-	if code == 0 {
-		return "", nil
-	}
-	return "", fmt.Errorf("文件选择失败（系统错误 0x%x）: %v", code, callErr)
-}
-
-func chooseDir() (string, error) {
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-	_, _, _ = procOleInitialize.Call(0)
-	defer procOleUninitialize.Call()
-	display := make([]uint16, 260)
-	title, _ := syscall.UTF16PtrFromString("选择文件夹")
-	initial, _ := syscall.UTF16PtrFromString(pickerInitialDir())
-	callback := syscall.NewCallback(func(hwnd, msg, _wparam, param uintptr) uintptr {
-		if msg == bffmInitialized && param != 0 {
-			procSendMessageW.Call(hwnd, bffmSetSelectionW, 1, param)
-		}
+func pickerOwnerHWND() uintptr {
+	fg := normalizeOwnerHWND(func() uintptr {
+		hwnd, _, _ := procGetForegroundWindow.Call()
+		return hwnd
+	}())
+	if fg == 0 || !isVisibleTopWindow(fg) {
 		return 0
-	})
-	bi := browseInfoW{hwndOwner: pickerOwner(), displayName: &display[0], title: title, flags: bifReturnOnlyFSDirs | bifNewDialogStyle | bifEditBox, callback: callback, param: uintptr(unsafe.Pointer(initial)), image: -1}
-	pidl, _, callErr := procSHBrowseForFolderW.Call(uintptr(unsafe.Pointer(&bi)))
-	if pidl == 0 {
+	}
+	if !usablePickerOwner(windowClass(fg), windowTitle(fg), windowArea(fg)) {
+		return 0
+	}
+	return fg
+}
+
+func pickWindowsPath(directory bool, initial string) (string, error) {
+	pickerMu.Lock()
+	defer pickerMu.Unlock()
+
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	hr, _, _ := procOleInitialize.Call(0)
+	initializedHere := hr == 0
+	if hr != 0 && hr != 1 {
+		return "", fmt.Errorf("OleInitialize 失败: 0x%x", hr)
+	}
+	if initializedHere {
+		defer procOleUninitialize.Call()
+	}
+
+	var dlg *iFileOpenDialog
+	hr, _, _ = procCoCreateInstance.Call(
+		uintptr(unsafe.Pointer(&clsidFileOpenDialog)),
+		0,
+		clsctxInprocServer,
+		uintptr(unsafe.Pointer(&iidIFileOpenDialog)),
+		uintptr(unsafe.Pointer(&dlg)),
+	)
+	if hr != 0 || dlg == nil {
+		return "", fmt.Errorf("无法创建系统文件对话框: 0x%x", hr)
+	}
+	defer dlg.release()
+
+	options := uintptr(fosForceFileSystem | fosPathMustExist | fosNoChangeDir)
+	if directory {
+		options |= fosPickFolders
+	} else {
+		options |= fosFileMustExist
+	}
+	if r := dlg.setOptions(options); r != 0 {
+		return "", fmt.Errorf("设置对话框选项失败: 0x%x", r)
+	}
+
+	title := "选择文件"
+	if directory {
+		title = "选择文件夹"
+	}
+	if r := dlg.setTitle(title); r != 0 {
+		return "", fmt.Errorf("设置对话框标题失败: 0x%x", r)
+	}
+
+	if start := pickerStartDir(initial); start != "" {
+		if item, err := shCreateItem(start); err == nil {
+			_ = dlg.setDefaultFolder(item)
+			_ = dlg.setFolder(item)
+			item.release()
+		}
+	}
+
+	owner := pickerOwnerHWND()
+	if owner != 0 {
+		_, _, _ = procSetForegroundWindow.Call(owner)
+	}
+	hr = dlg.show(owner)
+	if uint32(hr) == hresultCancel {
 		return "", nil
 	}
-	defer procCoTaskMemFree.Call(pidl)
-	path := make([]uint16, 32768)
-	ok, _, _ := procSHGetPathFromIDListW.Call(pidl, uintptr(unsafe.Pointer(&path[0])))
-	if ok == 0 {
-		return "", fmt.Errorf("文件夹选择失败: %v", callErr)
+	if hr != 0 {
+		return "", fmt.Errorf("打开系统对话框失败: 0x%x", hr)
 	}
-	return syscall.UTF16ToString(path), nil
+
+	item, getHR := dlg.result()
+	if getHR != 0 || item == nil {
+		return "", fmt.Errorf("读取所选路径失败: 0x%x", getHR)
+	}
+	defer item.release()
+	path, err := item.filePath()
+	if err != nil {
+		return "", err
+	}
+	rememberPicked(path)
+	return path, nil
+}
+
+func (d *iFileOpenDialog) show(hwnd uintptr) uintptr {
+	r, _, _ := syscall.SyscallN(d.vtbl.Show, uintptr(unsafe.Pointer(d)), hwnd)
+	return r
+}
+
+func (d *iFileOpenDialog) setOptions(options uintptr) uintptr {
+	r, _, _ := syscall.SyscallN(d.vtbl.SetOptions, uintptr(unsafe.Pointer(d)), options)
+	return r
+}
+
+func (d *iFileOpenDialog) setTitle(title string) uintptr {
+	ptr, err := syscall.UTF16PtrFromString(title)
+	if err != nil {
+		return 0x80070057
+	}
+	r, _, _ := syscall.SyscallN(d.vtbl.SetTitle, uintptr(unsafe.Pointer(d)), uintptr(unsafe.Pointer(ptr)))
+	return r
+}
+
+func (d *iFileOpenDialog) setDefaultFolder(item *iShellItem) uintptr {
+	r, _, _ := syscall.SyscallN(d.vtbl.SetDefaultFolder, uintptr(unsafe.Pointer(d)), uintptr(unsafe.Pointer(item)))
+	return r
+}
+
+func (d *iFileOpenDialog) setFolder(item *iShellItem) uintptr {
+	r, _, _ := syscall.SyscallN(d.vtbl.SetFolder, uintptr(unsafe.Pointer(d)), uintptr(unsafe.Pointer(item)))
+	return r
+}
+
+func (d *iFileOpenDialog) result() (*iShellItem, uintptr) {
+	var item *iShellItem
+	r, _, _ := syscall.SyscallN(d.vtbl.GetResult, uintptr(unsafe.Pointer(d)), uintptr(unsafe.Pointer(&item)))
+	return item, r
+}
+
+func (d *iFileOpenDialog) release() {
+	_, _, _ = syscall.SyscallN(d.vtbl.Release, uintptr(unsafe.Pointer(d)))
+}
+
+func (s *iShellItem) filePath() (string, error) {
+	var name *uint16
+	r, _, _ := syscall.SyscallN(s.vtbl.GetDisplayName, uintptr(unsafe.Pointer(s)), uintptr(sigdnFileSysPath), uintptr(unsafe.Pointer(&name)))
+	if r != 0 || name == nil {
+		return "", fmt.Errorf("读取文件路径失败: 0x%x", r)
+	}
+	defer procCoTaskMemFree.Call(uintptr(unsafe.Pointer(name)))
+	return syscall.UTF16ToString((*[32768]uint16)(unsafe.Pointer(name))[:]), nil
+}
+
+func (s *iShellItem) release() {
+	_, _, _ = syscall.SyscallN(s.vtbl.Release, uintptr(unsafe.Pointer(s)))
+}
+
+func shCreateItem(path string) (*iShellItem, error) {
+	ptr, err := syscall.UTF16PtrFromString(path)
+	if err != nil {
+		return nil, err
+	}
+	var item *iShellItem
+	hr, _, _ := procSHCreateItemFromParsingName.Call(
+		uintptr(unsafe.Pointer(ptr)),
+		0,
+		uintptr(unsafe.Pointer(&iidIShellItem)),
+		uintptr(unsafe.Pointer(&item)),
+	)
+	if hr != 0 || item == nil {
+		return nil, fmt.Errorf("SHCreateItemFromParsingName 失败: 0x%x", hr)
+	}
+	return item, nil
 }

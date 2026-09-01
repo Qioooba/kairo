@@ -46,6 +46,65 @@
       || Object.keys(state.pending).length > 0
       || Object.keys(state.inlineDrafts).length > 0;
   }
+  function haystack(n) {
+    return [n && n.title, n && n.body, n && n.folder].concat((n && n.tags) || []).join('\n').toLowerCase();
+  }
+  function parseQuery(raw) {
+    const tags = [];
+    const text = String(raw || '').replace(/(^|\s)#([^\s#]+)/g, function (_, sp, t) {
+      tags.push(String(t).toLowerCase());
+      return ' ';
+    }).replace(/\s+/g, ' ').trim().toLowerCase();
+    return { text: text, tags: tags };
+  }
+  function matchesQuery(n, raw) {
+    const q = parseQuery(raw);
+    if (q.tags.length) {
+      const have = (n.tags || []).map(function (t) { return String(t).toLowerCase(); });
+      for (let i = 0; i < q.tags.length; i++) {
+        if (have.indexOf(q.tags[i]) < 0) return false;
+      }
+    }
+    if (q.text && haystack(n).indexOf(q.text) < 0) return false;
+    return true;
+  }
+  function foldersOf(items) {
+    const seen = {};
+    const out = [];
+    (items || []).forEach(function (n) {
+      const name = String(n.folder || '').trim();
+      if (!name) return;
+      const key = name.toLowerCase();
+      if (seen[key]) { seen[key].count++; return; }
+      seen[key] = { name: name, count: 1 };
+      out.push(seen[key]);
+    });
+    out.sort(function (a, b) { return a.name.localeCompare(b.name, 'zh'); });
+    return out;
+  }
+  function tagsOf(items) {
+    const seen = {};
+    const out = [];
+    (items || []).forEach(function (n) {
+      (n.tags || []).forEach(function (tag) {
+        const name = String(tag || '').trim();
+        if (!name) return;
+        const key = name.toLowerCase();
+        if (seen[key]) { seen[key].count++; return; }
+        seen[key] = { name: name, count: 1 };
+        out.push(seen[key]);
+      });
+    });
+    out.sort(function (a, b) { return a.name.localeCompare(b.name, 'zh'); });
+    return out;
+  }
+  async function toggleTask(id, index) {
+    const n = find(id);
+    if (!n || !Kairo.notesMd) return n;
+    const next = Kairo.notesMd.toggleTask(n.body || '', index);
+    if (next === n.body) return n;
+    return update(id, { body: next });
+  }
   function reminderContent(n) {
     const title = String(n && n.title || '').trim();
     const body = String(n && n.body || '').trim();
@@ -70,6 +129,7 @@
     initial = initial || {};
     const n = await api('POST', '/api/notes', {
       title: initial.title || '', body: initial.body || '', color: initial.color || 'yellow',
+      folder: initial.folder || '', tags: initial.tags || [],
       pinned: !!initial.pinned, floating: !!initial.floating,
       desktop: initial.desktop || null
     });
@@ -244,7 +304,9 @@
         await create({
           title: ((current && current.title) || '冲突副本'),
           body: mine,
-          color: (current && current.color) || 'yellow'
+          color: (current && current.color) || 'yellow',
+          folder: (current && current.folder) || '',
+          tags: (current && current.tags) || []
         });
         Kairo.core.copyToClipboard(mine);
         toast('已复制内容，并另存一份便笺', 'ok');
@@ -299,13 +361,46 @@
     layer.appendChild(buildFloating(note));
   }
 
+  function paintMarkdown(host, source, onToggle) {
+    host.innerHTML = '';
+    if (!Kairo.notesMd) {
+      host.textContent = source || '';
+      return;
+    }
+    host.appendChild(Kairo.notesMd.render(source, {
+      emptyText: '空便笺',
+      onToggle: onToggle
+    }));
+  }
+
   function buildFloating(note) {
+    let viewMode = 'split';
     const title = el('input', { class: 'floating-note-title', type: 'text', maxlength: '80', 'aria-label': '便笺标题' });
     title.value = note.title || '';
-    const body = el('textarea', { class: 'floating-note-body', maxlength: '20000', 'aria-label': '便笺正文', placeholder: '随手记下主机、路径、request id 或下一步…' });
+    const body = el('textarea', { class: 'floating-note-body', maxlength: '20000', 'aria-label': '便笺正文', placeholder: '支持 Markdown：标题、列表、- [ ] 待办、**加粗**' });
     body.value = note.body || '';
+    const preview = el('div', { class: 'floating-note-preview notes-md-host', 'aria-label': '便笺预览' });
+    function refreshPreview() {
+      paintMarkdown(preview, body.value, function (index) {
+        if (!Kairo.notesMd) return;
+        body.value = Kairo.notesMd.toggleTask(body.value, index);
+        scheduleSave(note.id, { body: body.value });
+        refreshPreview();
+      });
+    }
+    function applyView() {
+      body.hidden = viewMode === 'preview';
+      preview.hidden = viewMode === 'edit';
+      panel.querySelectorAll('.notes-md-mode-btn').forEach(function (btn) {
+        btn.classList.toggle('active', btn.dataset.mode === viewMode);
+      });
+      if (viewMode !== 'edit') refreshPreview();
+    }
     title.addEventListener('input', function () { scheduleSave(note.id, { title: title.value }); });
-    body.addEventListener('input', function () { scheduleSave(note.id, { body: body.value }); });
+    body.addEventListener('input', function () {
+      scheduleSave(note.id, { body: body.value });
+      if (viewMode !== 'edit') refreshPreview();
+    });
     body.addEventListener('blur', function () {
       if (!state.dirty[note.id]) return;
       clearTimeout(state.saveTimers[note.id]);
@@ -322,11 +417,26 @@
       panel.className = 'floating-note note-color-' + color.value;
       update(note.id, { color: color.value }, { silent: true }).catch(function (e) { toast(e.message, 'err'); });
     };
+    const modes = el('div', { class: 'notes-md-modes', role: 'tablist', 'aria-label': '编辑与预览' });
+    [['edit', '编辑'], ['split', '对照'], ['preview', '预览']].forEach(function (pair) {
+      const btn = el('button', { class: 'notes-md-mode-btn', type: 'button', text: pair[1], 'data-mode': pair[0] });
+      btn.onclick = function (ev) { ev.preventDefault(); viewMode = pair[0]; applyView(); };
+      modes.appendChild(btn);
+    });
     const header = el('div', { class: 'floating-note-header' }, [title,
       el('button', { class: 'floating-note-icon-btn', type: 'button', text: '—', title: '收起页面悬浮', 'aria-label': '收起页面悬浮', onclick: function () { setFloating(note.id, false); } })
     ]);
     const footer = el('div', { class: 'floating-note-footer' }, [
       el('span', { class: 'floating-note-status muted', text: state.dirty[note.id] ? '保存中…' : '已保存' }),
+      el('button', { class: 'btn btn-sm', type: 'button', text: '待办', title: '插入待办勾选框', onclick: function () {
+        if (!Kairo.notesMd) return;
+        const next = Kairo.notesMd.insertTaskLine(body.value, body.selectionStart);
+        body.value = next.text;
+        scheduleSave(note.id, { body: next.text });
+        body.focus();
+        try { body.setSelectionRange(next.cursor, next.cursor); } catch (_) {}
+        if (viewMode !== 'edit') refreshPreview();
+      }}),
       color,
       el('button', { class: 'btn btn-sm', text: '设提醒', onclick: function () { openReminder(find(note.id) || note); } }),
       el('button', { class: 'btn btn-sm', text: (note.desktop && note.desktop.visible) ? '从桌面拿走' : '置顶到桌面', onclick: async function () {
@@ -338,8 +448,9 @@
       }}),
       el('button', { class: 'btn btn-sm', text: '管理', onclick: function () { location.hash = '#/notes/list'; } })
     ]);
-    panel.append(header, body, footer);
+    panel.append(header, modes, body, preview, footer);
     panel.dataset.noteId = note.id;
+    applyView();
     const layout = readLayout();
     if (layout.left != null) panel.style.left = Math.max(8, Math.min(window.innerWidth - 260, layout.left)) + 'px';
     if (layout.top != null) panel.style.top = Math.max(56, Math.min(window.innerHeight - 140, layout.top)) + 'px';
@@ -444,6 +555,7 @@
   Kairo.notes = {
     state, colors: COLORS, init, load, create, update, remove,
     setFloating, setDesktop, subscribe, find, capture, openReminder,
-    reminderContent, setInlineDraft, hasUnsaved, defaultDesktop
+    reminderContent, setInlineDraft, hasUnsaved, defaultDesktop,
+    haystack, parseQuery, matchesQuery, foldersOf, tagsOf, toggleTask, paintMarkdown
   };
 })();

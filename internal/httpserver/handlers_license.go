@@ -28,6 +28,10 @@ func (s *Server) handleLicenseStatus(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusMethodNotAllowed, errors.New("仅支持 GET"))
 		return
 	}
+	if s.skipLicenseCheck {
+		writeJSON(w, 200, map[string]any{"licensed": true, "reason": "test"})
+		return
+	}
 	st := license.GetStatus()
 	writeJSON(w, 200, map[string]any{
 		"licensed": st.Licensed,

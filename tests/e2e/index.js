@@ -142,6 +142,7 @@ async function main() {
     './tests/36-webservice-deep',
     './tests/37-wscodegen-deep',
     './tests/38-notes-deep',
+    './tests/39-ui-workbench',
   ];
 
   console.log('📦 注册测试模块...');

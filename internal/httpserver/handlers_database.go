@@ -219,6 +219,8 @@ type databaseQueryRequest struct {
 	SourceID string `json:"source_id"`
 	SQL      string `json:"sql"`
 	MaxRows  int    `json:"max_rows"`
+	Format   string `json:"format"`
+	Table    string `json:"table"`
 }
 
 func (s *Server) handleDatabaseQuery(w http.ResponseWriter, r *http.Request) {
@@ -284,6 +286,11 @@ func (s *Server) handleDatabaseExport(w http.ResponseWriter, r *http.Request) {
 	}
 	hash := sha256.Sum256([]byte(strings.TrimSpace(req.SQL)))
 	queryID := hex.EncodeToString(hash[:8])
+	format, err := dbconsole.NormalizeExportFormat(req.Format)
+	if err != nil {
+		writeErr(w, 400, err)
+		return
+	}
 	safeName := strings.Map(func(r rune) rune {
 		if strings.ContainsRune(`\/:*?"<>|`, r) || r < 0x20 {
 			return '_'
@@ -293,8 +300,40 @@ func (s *Server) handleDatabaseExport(w http.ResponseWriter, r *http.Request) {
 	if safeName == "" {
 		safeName = "query"
 	}
+	filename := safeName + dbconsole.ExportExtension(format)
+	if format != "csv" {
+		table, summary, collectErr := s.database.CollectQuery(r.Context(), source, req.SQL, req.MaxRows)
+		if collectErr != nil {
+			collectErr = s.databaseSafeError(source, collectErr)
+			writeErrSanitized(w, 502, collectErr)
+			s.audit.Write("database.export", "source_id", source.ID, "kind", source.Kind, "query_id", queryID, "format", format, "result", "fail", "error", trim(collectErr.Error(), 300))
+			return
+		}
+		w.Header().Set("Content-Type", dbconsole.ExportContentType(format))
+		w.Header().Set("Content-Disposition", "attachment; filename*=UTF-8''"+url.QueryEscape(filename))
+		w.Header().Set("Cache-Control", "no-store")
+		switch format {
+		case "json":
+			err = dbconsole.WriteJSON(w, table, map[string]any{"source": source.Name, "kind": source.Kind, "sql": req.SQL})
+		case "xlsx":
+			err = dbconsole.WriteXLSX(w, table, source.Name)
+		case "insert":
+			tableName := strings.TrimSpace(req.Table)
+			if tableName == "" {
+				tableName = dbconsole.InferExportTable(req.SQL)
+			}
+			err = dbconsole.WriteINSERT(w, table, source.Kind, tableName)
+		}
+		if err != nil {
+			s.audit.Write("database.export", "source_id", source.ID, "kind", source.Kind, "query_id", queryID, "format", format, "result", "fail", "error", trim(err.Error(), 300))
+			return
+		}
+		s.audit.Write("database.export", "source_id", source.ID, "kind", source.Kind, "query_id", queryID, "format", format,
+			"rows", summary.Rows, "elapsed_ms", summary.ElapsedMS, "truncated", summary.Truncated, "result", "ok")
+		return
+	}
 	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
-	w.Header().Set("Content-Disposition", "attachment; filename*=UTF-8''"+url.QueryEscape(safeName+".csv"))
+	w.Header().Set("Content-Disposition", "attachment; filename*=UTF-8''"+url.QueryEscape(filename))
 	w.Header().Set("Cache-Control", "no-store")
 	csvWriter := csv.NewWriter(w)
 	started := false
@@ -345,10 +384,10 @@ func (s *Server) handleDatabaseExport(w http.ResponseWriter, r *http.Request) {
 			_ = csvWriter.Write(record)
 			csvWriter.Flush()
 		}
-		s.audit.Write("database.export", "source_id", source.ID, "kind", source.Kind, "query_id", queryID, "result", "fail", "error", trim(err.Error(), 300))
+		s.audit.Write("database.export", "source_id", source.ID, "kind", source.Kind, "query_id", queryID, "format", format, "result", "fail", "error", trim(err.Error(), 300))
 		return
 	}
-	s.audit.Write("database.export", "source_id", source.ID, "kind", source.Kind, "query_id", queryID,
+	s.audit.Write("database.export", "source_id", source.ID, "kind", source.Kind, "query_id", queryID, "format", format,
 		"rows", summary.Rows, "elapsed_ms", summary.ElapsedMS, "truncated", summary.Truncated, "result", "ok")
 }
 
@@ -359,6 +398,13 @@ func databaseCSVValue(value any) string {
 	if text, ok := value.(string); ok {
 		return text
 	}
+	if obj, ok := value.(map[string]any); ok {
+		if kind, _ := obj["kind"].(string); kind == "text" {
+			if preview, ok := obj["preview"].(string); ok {
+				return preview
+			}
+		}
+	}
 	if raw, err := json.Marshal(value); err == nil {
 		return string(raw)
 	}
@@ -366,10 +412,19 @@ func databaseCSVValue(value any) string {
 }
 
 func safeCSVCell(value string) string {
-	if value != "" && strings.ContainsRune("=+-@\t\r", rune(value[0])) {
-		return "'" + value
+	if value == "" {
+		return value
 	}
-	return value
+	// Keep database text intact, including paths like /opt/app/config.
+	// Only prefix Excel-executable formula starters; do not rewrite /, -, or digits.
+	switch value[0] {
+	case '=', '+', '@':
+		return "'" + value
+	case '\t', '\r':
+		return "'" + value
+	default:
+		return value
+	}
 }
 
 func (s *Server) handleDatabaseSchemas(w http.ResponseWriter, r *http.Request) {
@@ -485,9 +540,8 @@ func (s *Server) handleDatabaseRedisScan(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		return
 	}
-	cursor, _ := strconv.ParseUint(r.URL.Query().Get("cursor"), 10, 64)
 	count, _ := strconv.ParseInt(r.URL.Query().Get("count"), 10, 64)
-	result, err := s.database.RedisScan(r.Context(), source, cursor, r.URL.Query().Get("pattern"), count)
+	result, err := s.database.RedisScan(r.Context(), source, r.URL.Query().Get("cursor"), r.URL.Query().Get("pattern"), count)
 	if err != nil {
 		writeErrSanitized(w, 502, s.databaseSafeError(source, err))
 		return

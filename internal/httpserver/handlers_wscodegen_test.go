@@ -157,6 +157,95 @@ func TestWSCodegenUnknownPath(t *testing.T) {
 	}
 }
 
+func TestWSCodegenDownloadZip(t *testing.T) {
+	srv, _, _, _ := newTestServer(t)
+	w := doRequest(srv, "POST", "/api/wscodegen/download-zip", map[string]any{
+		"engine":       "portable",
+		"mode":         "builtin",
+		"package":      "com.demo.ws",
+		"include_main": true,
+		"java_source":  "1.6",
+		"wsdl_content": wscodegenSampleWSDL,
+	})
+	if w.Code != 200 {
+		t.Fatalf("code=%d body=%s", w.Code, w.Body.String())
+	}
+	if ct := w.Header().Get("Content-Type"); ct != "application/zip" {
+		t.Fatalf("content-type=%s", ct)
+	}
+	cd := w.Header().Get("Content-Disposition")
+	if !strings.Contains(cd, ".zip") {
+		t.Fatalf("disposition=%s", cd)
+	}
+	if w.Header().Get("X-Kairo-Files") == "" || w.Header().Get("X-Kairo-Files") == "0" {
+		t.Fatalf("missing file count")
+	}
+	raw := w.Body.Bytes()
+	if len(raw) < 4 || raw[0] != 'P' || raw[1] != 'K' {
+		t.Fatalf("not a zip, len=%d", len(raw))
+	}
+}
+
+func TestWSCodegenDownloadZipEmpty(t *testing.T) {
+	srv, _, _, _ := newTestServer(t)
+	w := doRequest(srv, "POST", "/api/wscodegen/download-zip", map[string]any{
+		"engine": "portable",
+		"mode":   "builtin",
+	})
+	if w.Code != 400 {
+		t.Fatalf("code=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestWSCodegenPushProject(t *testing.T) {
+	srv, _, _, _ := newTestServer(t)
+	root := t.TempDir()
+	src := filepath.Join(root, "src")
+	lib := filepath.Join(root, "WebRoot", "WEB-INF", "lib")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(lib, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	w := doRequest(srv, "POST", "/api/wscodegen/push-project", map[string]any{
+		"engine":       "portable",
+		"mode":         "builtin",
+		"package":      "com.demo.ws",
+		"project_dir":  lib,
+		"overwrite":    true,
+		"open_after":   false,
+		"java_source":  "1.6",
+		"wsdl_content": wscodegenSampleWSDL,
+	})
+	if w.Code != 200 {
+		t.Fatalf("code=%d body=%s", w.Code, w.Body.String())
+	}
+	client := filepath.Join(src, "com", "demo", "ws")
+	found := false
+	_ = filepath.Walk(client, func(path string, info os.FileInfo, err error) error {
+		if err == nil && strings.HasSuffix(path, "Client.java") {
+			found = true
+		}
+		return nil
+	})
+	if !found {
+		t.Fatal("expected client java under project src")
+	}
+}
+
+func TestWSCodegenPushProjectMissingDir(t *testing.T) {
+	srv, _, _, _ := newTestServer(t)
+	w := doRequest(srv, "POST", "/api/wscodegen/push-project", map[string]any{
+		"engine":       "portable",
+		"mode":         "builtin",
+		"wsdl_content": wscodegenSampleWSDL,
+	})
+	if w.Code != 400 {
+		t.Fatalf("code=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
 func TestWSCodegenPreviewEmpty(t *testing.T) {
 	srv, _, _, _ := newTestServer(t)
 	w := doRequest(srv, "POST", "/api/wscodegen/preview", map[string]any{

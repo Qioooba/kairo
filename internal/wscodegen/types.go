@@ -75,6 +75,7 @@ type ScanResult struct {
 	Jars              []JarHit `json:"jars"`
 	DetectedEngines   []string `json:"detected_engines"`
 	SuggestedEngine   string   `json:"suggested_engine"`
+	SuggestedSrc      string   `json:"suggested_src,omitempty"`
 	MissingForSuggest []string `json:"missing_for_suggest,omitempty"`
 	PomHints          []string `json:"pom_hints,omitempty"`
 	Notes             []string `json:"notes,omitempty"`
@@ -94,6 +95,7 @@ type Request struct {
 	Mode          string   `json:"mode"`
 	PackageName   string   `json:"package"`
 	OutputDir     string   `json:"output_dir"`
+	ProjectDir    string   `json:"project_dir"`
 	Overwrite     bool     `json:"overwrite"`
 	IncludeMain   bool     `json:"include_main"`
 	JavaSource    string   `json:"java_source"`

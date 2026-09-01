@@ -16,6 +16,8 @@ type noteCreateRequest struct {
 	Title    string              `json:"title"`
 	Body     string              `json:"body"`
 	Color    string              `json:"color"`
+	Folder   string              `json:"folder"`
+	Tags     []string            `json:"tags"`
 	Pinned   bool                `json:"pinned"`
 	Floating bool                `json:"floating"`
 	Desktop  *note.DesktopLayout `json:"desktop,omitempty"`
@@ -26,6 +28,8 @@ type notePatchRequest struct {
 	Title        *string         `json:"title,omitempty"`
 	Body         *string         `json:"body,omitempty"`
 	Color        *string         `json:"color,omitempty"`
+	Folder       *string         `json:"folder,omitempty"`
+	Tags         *[]string       `json:"tags,omitempty"`
 	Pinned       *bool           `json:"pinned,omitempty"`
 	Floating     *bool           `json:"floating,omitempty"`
 	Archived     *bool           `json:"archived,omitempty"`
@@ -38,6 +42,8 @@ func (r notePatchRequest) patch() (note.Patch, error) {
 		Title:        r.Title,
 		Body:         r.Body,
 		Color:        r.Color,
+		Folder:       r.Folder,
+		Tags:         r.Tags,
 		Pinned:       r.Pinned,
 		Floating:     r.Floating,
 		Archived:     r.Archived,
@@ -101,7 +107,11 @@ func (s *Server) handleNotesDispatch(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleNotesList(w http.ResponseWriter, r *http.Request) {
-	f := note.Filter{Query: r.URL.Query().Get("q")}
+	f := note.Filter{
+		Query:  r.URL.Query().Get("q"),
+		Tag:    r.URL.Query().Get("tag"),
+		Folder: r.URL.Query().Get("folder"),
+	}
 	if v := r.URL.Query().Get("archived"); v != "" {
 		b, err := strconv.ParseBool(v)
 		if err != nil {
@@ -131,6 +141,7 @@ func (s *Server) handleNotesCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	out, err := s.notes.Add(note.Note{
 		Title: req.Title, Body: req.Body, Color: req.Color,
+		Folder: req.Folder, Tags: req.Tags,
 		Pinned: req.Pinned, Floating: req.Floating, Desktop: req.Desktop,
 	})
 	if err != nil {

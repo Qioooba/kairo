@@ -42,6 +42,7 @@
     history:      'M12 2a10 10 0 100 20 10 10 0 000-20zM12 6v6l4 2',                                                                                         // 时钟 — 版本演进史
     faq:          'M12 2a10 10 0 100 20 10 10 0 000-20zM9 9a3 3 0 016 0c0 2-3 3-3 5M12 17v1',                                                                // 圆 + 问号 — FAQ
     roadmap:      'M5 3v18M5 4h11l-2 4 2 4H5',                                                                                                              // 旗子 — 路线图
+    aiEngine:     'M13 2L3 14h9l-1 8 10-12h-9l1-8z',                                                                                                        // 闪电 — AI 研发引擎
 
     // ----------------------------------------------------------------
     // 设计哲学 8 原则 (renderPrinciplesSection 卡片)
@@ -56,25 +57,27 @@
     operator:     'M3 4h18v16H3zM3 8h18M6 12l3 2-3 2M11 16h7',                                                                                           // 终端 — 工程师视角
 
     // ----------------------------------------------------------------
-    // 功能模块 10 卡片 (renderModulesSection)
+    // 功能模块 20 卡片 (renderModulesSection)
     // ----------------------------------------------------------------
     websphere:    'M4 4h16v2H4zM4 8h11v2H4zM4 12h16v2H4zM4 16h11v2H4zM4 20h16v2H4z',                                                                     // 日志列表 — WebSphere 日志助手
     sshTerminal:  'M3 4h18v16H3zM3 8h18M6 12l3 2-3 2M11 16h7',                                                                                          // 终端窗口 — SSH 终端 + SFTP
+    database:     'M4 6c0-1.66 3.58-3 8-3s8 1.34 8 3v12c0 1.66-3.58 3-8 3s-8-1.34-8-3V6zm0 4c0 1.66 3.58 3 8 3s8-1.34 8-3M4 14c0 1.66 3.58 3 8 3s8-1.34 8-3', // 数据库圆柱 — 数据库工作台
     downloader:   'M12 3v12M7 10l5 5 5-5M5 19h14v2H5z',                                                                                                  // 下箭头 — 文件下载器
     compareIc:    'M3 6l4 6-4 6M21 6l-4 6 4 6M14 4l-4 16',                                                                                                // diff 双柱 — 代码比对系统
+    waspack:      'M3 7l9-4 9 4v10l-9 4-9-4zM3 7l9 4 9-4M12 11v10',                                                                                          // 封箱 — WAS 投产打包
     http:         'M12 2a10 10 0 100 20 10 10 0 000-20zM2 12h20M12 2a15 15 0 010 20M12 2a15 15 0 000 20',                                                // 经纬网 — HTTP 测试台
     formatter:    'M9 4a3 3 0 00-3 3v3a3 3 0 01-3 3v1a3 3 0 013 3v3a3 3 0 003 3M15 4a3 3 0 013 3v3a3 3 0 003 3v1a3 3 0 00-3 3v3a3 3 0 01-3 3',         // 大括号 — 格式化器
+    wscodegen:    'M5 3h10l4 4v14H5zM15 3v4h4M9 13l2 2-2 2M15 17h-2',                                                                                        // 源码文件 — WS 代码生成
+    notes:        'M5 3h11l4 4v14H5zM16 3v4h4M8 10h8M8 14h6',                                                                                                // 便笺纸 — 桌面便笺
+    tasks:        'M12 2a10 10 0 100 20 10 10 0 000-20zm0 4v6l4 2M10 2h4',                                                                                  // 秒表 — 定时任务
+    pet:          'M12 3a9 9 0 00-9 9c0 3.5 2 6.5 5 7.8V21l3-1 3 1v-1.2c3-1.3 5-4.3 5-7.8a9 9 0 00-9-9zm-3 7a1.5 1.5 0 110-3 1.5 1.5 0 010 3zm6 0a1.5 1.5 0 110-3 1.5 1.5 0 010 3z', // 像素宠物 — 桌面宠物
     diagnostics:  'M3 12h4l2-6 4 12 2-6h6',                                                                                                              // 心电脉冲 — 诊断中心
     config:       'M3 4h18v4H3zM3 10h12v4H3zM3 16h18v4H3z',                                                                                              // 堆叠方块 — 配置中心
     commands:     'M3 4h18v16H3zM7 9l3 3-3 3M13 15h6',                                                                                                  // 命令行 — 常用命令
-
-    // v0.13 新增 (3 张卡片)
-    reminderIc:   'M12 3a6 6 0 016 6v3l2 4H4l2-4V9a6 6 0 016-6zM10 19a2 2 0 004 0M12 1v2',                                                                // 闹钟 + 摆锤 — 定时提醒 (v0.13)
-    browserIc:    'M12 2a10 10 0 100 20 10 10 0 000-20zM2 12h20M12 2a15 15 0 010 20M12 2a15 15 0 000 20',                                                  // 经纬网 — 浏览器自动打开 (v0.13)
-    editIc:       'M14 3v4h4l-4-4zM5 3h9l5 5v13H5zM8 11h8M8 14h8M8 17h5',                                                                                 // 折角文件 + 文字行 — 在线编辑 (v0.13)
-
-    // v0.14 新增 (1 张卡片)
-    coffee:       'M3 8h14v6a4 4 0 01-4 4H7a4 4 0 01-4-4V8zM17 10h2a2 2 0 010 4h-2M7 4c0-1 1-2 2-2M10 2c0-1 1-2 2-2M14 2c0-1 1-2 2-2',                                                                            // 咖啡杯 + 杯耳 + 三道蒸汽 — 投喂作者 (v0.14)
+    reminderIc:   'M12 3a6 6 0 016 6v3l2 4H4l2-4V9a6 6 0 016-6zM10 19a2 2 0 004 0M12 1v2',                                                                // 闹钟 + 摆锤 — 定时提醒
+    browserIc:    'M12 2a10 10 0 100 20 10 10 0 000-20zM2 12h20M12 2a15 15 0 010 20M12 2a15 15 0 000 20',                                                  // 经纬网 — 浏览器自动打开
+    editIc:       'M14 3v4h4l-4-4zM5 3h9l5 5v13H5zM8 11h8M8 14h8M8 17h5',                                                                                 // 折角文件 + 文字行 — 在线编辑
+    coffee:       'M3 8h14v6a4 4 0 01-4 4H7a4 4 0 01-4-4V8zM17 10h2a2 2 0 010 4h-2M7 4c0-1 1-2 2-2M10 2c0-1 1-2 2-2M14 2c0-1 1-2 2-2',                 // 咖啡杯 + 杯耳 + 三道蒸汽 — 投喂作者
 
     // ----------------------------------------------------------------
     // 小标题装饰图标 (Win7 兼容, 替换 emoji)
@@ -122,6 +125,7 @@
   // 立即渲染的 section (首屏必须看到的内容, 不懒渲染)
   // 占位高度是经验估算, 真实渲染后会被清掉
   const LAZY_SECTIONS = [
+    { name: 'aiEngine',     fn: renderAiEngineSection,     min: 450 },
     { name: 'principles',   fn: renderPrinciplesSection,   min: 400 },
     { name: 'architecture', fn: renderArchitectureSection, min: 500 },
     { name: 'stack',        fn: renderStackSection,        min: 600 },
@@ -223,28 +227,100 @@
   // §1. 核心数据看板
   // =====================================================================
   const stats = [
-    { label: '总代码量',             value: '99,000+', sub: 'Go 68K · 前端 31K (JS+CSS) · 0 npm 运行时',  tone: 'primary' },
-    { label: '代码行数 (Go)',         value: '68,000+', sub: '259 个 Go 文件 · 36 个后端子包 · 含测试',    tone: 'primary' },
-    { label: '代码行数 (前端)',       value: '31,000+', sub: 'vanilla JS + CSS · 23 页面 · 零运行时依赖',   tone: 'accent'  },
-    { label: '提交次数',              value: '164+',    sub: 'v0.1 → v0.17',                              tone: 'success' },
-    { label: '后端模块',              value: '36',      sub: '新增 dbconsole / comparefs / desknote / deskpet / textcodec / winui 等', tone: 'primary' },
-    { label: '前端页面',              value: '22',      sub: '22 个路由页面 + sftp-common 共享模块 + 全局浮层', tone: 'accent'  },
-    { label: 'API 接口',              value: '120+',    sub: 'REST + NDJSON + SSE + WebSocket',            tone: 'primary' },
-    { label: '测试用例 (Go)',         value: '1,000+',  sub: '105 个 _test.go · 单元 + 集成',             tone: 'success' },
-    { label: '测试用例 (Node)',       value: '30+',     sub: 'web/app.test.js + sponsor 联调 · 单元',    tone: 'success' },
-    { label: 'E2E 场景 (Playwright)', value: '1,200+',  sub: 'Windows 全量 1045 通过 · 159 条件跳过 · 0 失败', tone: 'warn'    },
-    { label: '修复缺陷',              value: '420+',    sub: 'P0/P1/P2 全量',                             tone: 'warn'    },
-    { label: '安全设计点',            value: '14',      sub: 'fail-closed 全栈',                          tone: 'error'   },
-    { label: 'SSH 兼容 profile',      value: '5',       sub: 'modern → legacy · 自动 fallback',           tone: 'primary' }
+    { label: '总代码量',             value: '122,000+', sub: 'Go 84K · 前端 37K (JS+CSS) · 0 npm 运行时', tone: 'primary' },
+    { label: 'AI Token 深度算力淬炼', value: '20 亿+ (2.0B+)', sub: '多模态视觉审核 · 长程深度推理 · 测试闭环', tone: 'accent' },
+    { label: '代码行数 (Go)',         value: '84,000+',  sub: '309 个 Go 文件 · 39 个后端子包 · 含 126 测试', tone: 'primary' },
+    { label: '代码行数 (前端)',       value: '37,000+',  sub: 'vanilla JS 30.5K + CSS 7.3K · 22 路由页面',   tone: 'accent'  },
+    { label: '提交次数',              value: '167+',     sub: 'v0.1 → v0.17 持续演进',                      tone: 'success' },
+    { label: '后端模块',              value: '39',       sub: 'dbconsole / comparefs / desknote / deskpet 等', tone: 'primary' },
+    { label: '前端路由与组件',        value: '22+',      sub: '22 个路由页面 + Win32 原生桌面组件 + 4 独立子窗口', tone: 'accent'  },
+    { label: 'API 接口',              value: '130+',     sub: 'REST + NDJSON + SSE + WebSocket 全覆盖',      tone: 'primary' },
+    { label: '测试用例 (Go)',         value: '1,120+',   sub: '126 个 _test.go · 单元 + 集成 + Mock',       tone: 'success' },
+    { label: '测试用例 (Node)',       value: '30+',      sub: 'web/app.test.js + webservice.test.js 单元',  tone: 'success' },
+    { label: 'E2E 场景 (Playwright)', value: '1,200+',   sub: '42 脚本 · Windows 1045 通过 · 159 跳过 · 0 失败', tone: 'warn' },
+    { label: '修复缺陷',              value: '440+',     sub: 'P0/P1/P2 全量闭环',                          tone: 'warn'    },
+    { label: '安全设计点',            value: '16',       sub: 'fail-closed 全栈 + DB 只读 AST + 进程树隔离', tone: 'error'   },
+    { label: 'SSH 兼容 profile',      value: '5',        sub: 'modern → legacy · 自动 fallback',           tone: 'primary' }
   ];
 
   // =====================================================================
-  // §2. 设计哲学 (Design Principles)
+  // §2. AI-Native 工业级研发工程 (AI Engineering & Model Matrix)
+  // =====================================================================
+  const BRAND_SVGS = {
+    openai: function (sz) { return '<svg viewBox="0 0 24 24" width="' + sz + '" height="' + sz + '" fill="currentColor"><path d="M22.28 9.82a5.98 5.98 0 0 0-.52-4.91 6.05 6.05 0 0 0-6.51-2.9A6.07 6.07 0 0 0 4.98 4.18a5.98 5.98 0 0 0-4 2.9 6.05 6.05 0 0 0 .74 7.1 5.98 5.98 0 0 0 .51 4.91 6.05 6.05 0 0 0 6.51 2.9A5.98 5.98 0 0 0 13.26 24a6.06 6.06 0 0 0 5.77-4.2 5.99 5.99 0 0 0 4-2.9 6.06 6.06 0 0 0-.75-7.08zm-9.02 12.6a4.48 4.48 0 0 1-2.88-1.04l.14-.08 4.78-2.76a.8.8 0 0 0 .4-.68v-6.74l2.02 1.17a.07.07 0 0 1 .04.05v5.58a4.5 4.5 0 0 1-4.5 4.5zm-9.66-4.12a4.47 4.47 0 0 1-.53-3.01l.14.08 4.78 2.76a.77.77 0 0 0 .78 0l5.84-3.37v2.33a.08.08 0 0 1-.03.06L9.74 19.95a4.5 4.5 0 0 1-6.14-1.65zM2.34 7.9a4.49 4.49 0 0 1 2.37-1.98V11.6a.77.77 0 0 0 .39.68l5.81 3.35-2.02 1.17a.08.08 0 0 1-.07 0l-4.83-2.79A4.5 4.5 0 0 1 2.34 7.87zm16.6 3.85L13.1 8.36 15.12 7.2a.08.08 0 0 1 .07 0l4.83 2.79a4.5 4.5 0 0 1-.68 8.1v-5.67a.8.8 0 0 0-.4-.67zm2.01-3.02l-.14-.09-4.78-2.78a.78.78 0 0 0-.78 0L9.41 9.23V6.9a.07.07 0 0 1 .03-.06l4.83-2.79a4.5 4.5 0 0 1 6.68 4.66zM8.31 12.86l-2.02-1.16a.08.08 0 0 1-.04-.06V6.07a4.5 4.5 0 0 1 7.38-3.45l-.14.08-4.79 2.76a.8.8 0 0 0-.39.68zm1.1-2.36l2.6-1.5 2.6 1.5v3l-2.6 1.5-2.6-1.5z"/></svg>'; },
+    cursor: function (sz) { return '<svg viewBox="0 0 24 24" width="' + sz + '" height="' + sz + '" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M12 2l8.5 5v10L12 22l-8.5-5V7z"/><path d="M12 2v20M3.5 7L20.5 17M20.5 7L3.5 17"/></svg>'; },
+    antigravity: function (sz) { return '<svg viewBox="0 0 24 24" width="' + sz + '" height="' + sz + '" fill="currentColor"><path d="M12 2l2.6 6.8 6.8 2.6-6.8 2.6L12 20.8l-2.6-6.8L2.6 11.4l6.8-2.6z"/><circle cx="12" cy="11.4" r="2.2" fill="var(--bg-1, #1e1e2e)"/></svg>'; },
+    trae: function (sz) { return '<svg viewBox="0 0 24 24" width="' + sz + '" height="' + sz + '" fill="currentColor"><path d="M3 4h18v4h-6.5v12h-5V8H3V4z"/><path d="M18.5 12l2.5 2.5-2.5 2.5M5.5 12L3 14.5l2.5 2.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>'; },
+    opencode: function (sz) { return '<svg viewBox="0 0 24 24" width="' + sz + '" height="' + sz + '" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6L3 12l5 6M16 6l5 6-5 6M13 4l-2 16"/></svg>'; },
+    claude: function (sz) { return '<svg viewBox="0 0 24 24" width="' + sz + '" height="' + sz + '" fill="currentColor"><path d="M13.8 2.2a1.8 1.8 0 0 0-3.6 0l-.8 6.4a1.8 1.8 0 0 1-1.6 1.6l-6.4.8a1.8 1.8 0 0 0 0 3.6l6.4.8a1.8 1.8 0 0 1 1.6 1.6l.8 6.4a1.8 1.8 0 0 0 3.6 0l.8-6.4a1.8 1.8 0 0 1 1.6-1.6l6.4-.8a1.8 1.8 0 0 0 0-3.6l-6.4-.8a1.8 1.8 0 0 1-1.6-1.6z"/></svg>'; },
+    deepseek: function (sz) { return '<svg viewBox="0 0 24 24" width="' + sz + '" height="' + sz + '" fill="currentColor"><path d="M3 14c3-6 10-10 18-5-4 1-8 4-10 8-2 4-5 5-8-3z"/><circle cx="15" cy="8" r="1.5" fill="currentColor"/><path d="M9 17c3 2 7 1 10-2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>'; },
+    gemini: function (sz) { return '<svg viewBox="0 0 24 24" width="' + sz + '" height="' + sz + '" fill="currentColor"><path d="M12 2C12 7.52 7.52 12 2 12c5.52 0 10 4.48 10 10 0-5.52 4.48-10 10-10-5.52 0-10-4.48-10-10z"/></svg>'; },
+    grok: function (sz) { return '<svg viewBox="0 0 24 24" width="' + sz + '" height="' + sz + '" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M4 4l16 16M20 4L4 20"/><path d="M9 4h6M9 20h6" stroke-width="1.8"/></svg>'; },
+    doubao: function (sz) { return '<svg viewBox="0 0 24 24" width="' + sz + '" height="' + sz + '" fill="currentColor"><path d="M12 3C6.5 3 2 7 2 12c0 3 1.5 5.5 4 7v3l3.5-1.8c.8.3 1.6.5 2.5.5 5.5 0 10-4 10-9s-4.5-9-10-9z"/><circle cx="8.5" cy="11.5" r="1.5" fill="var(--bg-1, #1e1e2e)"/><circle cx="15.5" cy="11.5" r="1.5" fill="var(--bg-1, #1e1e2e)"/></svg>'; },
+    glm: function (sz) { return '<svg viewBox="0 0 24 24" width="' + sz + '" height="' + sz + '" fill="none" stroke="currentColor" stroke-width="2"><circle cx="8.5" cy="12" r="5.5"/><circle cx="15.5" cy="12" r="5.5"/><path d="M12 7.5a5.5 5.5 0 0 1 0 9"/></svg>'; },
+    kimi: function (sz) { return '<svg viewBox="0 0 24 24" width="' + sz + '" height="' + sz + '" fill="currentColor"><path d="M12 3a9 9 0 1 0 9 9c0-.4-.03-.8-.08-1.2A7 7 0 0 1 13.2 3.08C12.8 3.03 12.4 3 12 3z"/><path d="M18 4l.8 1.8L20.6 6.6l-1.8.8L18 9.2l-.8-1.8-1.8-.8 1.8-.8z"/></svg>'; },
+    minimax: function (sz) { return '<svg viewBox="0 0 24 24" width="' + sz + '" height="' + sz + '" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M3 14v-4M7 17V7M11 20V4M15 17V7M19 14v-4"/></svg>'; }
+  };
+
+  function getBrandSvg(brand, size) {
+    const fn = BRAND_SVGS[brand];
+    return fn ? fn(size || 16) : '';
+  }
+
+  const aiEngineData = {
+    computeTokens: '20 亿+ (2.0B+)',
+    tools: [
+      { name: 'Codex', brand: 'openai' },
+      { name: 'Cursor', brand: 'cursor' },
+      { name: 'Antigravity', brand: 'antigravity' },
+      { name: 'Trae', brand: 'trae' },
+      { name: 'OpenCode', brand: 'opencode' }
+    ],
+    models: [
+      { name: 'ChatGPT 5.6 Sol', brand: 'openai' },
+      { name: 'ChatGPT 5.5', brand: 'openai' },
+      { name: 'ChatGPT 5.4', brand: 'openai' },
+      { name: 'GPT-5.6 Terra', brand: 'openai' },
+      { name: 'GPT-5.6 Luna', brand: 'openai' },
+      { name: 'Claude Opus 4.8', brand: 'claude' },
+      { name: 'DeepSeek V4 Pro', brand: 'deepseek' },
+      { name: 'DeepSeek V4 Flash', brand: 'deepseek' },
+      { name: 'Gemini 3.7 Flash', brand: 'gemini' },
+      { name: 'Grok 4.6', brand: 'grok' },
+      { name: 'Grok 4.5', brand: 'grok' },
+      { name: 'Doubao 2.1 Pro', brand: 'doubao' },
+      { name: 'GLM 5.2', brand: 'glm' },
+      { name: 'Kimi K3', brand: 'kimi' },
+      { name: 'Kimi K2.7', brand: 'kimi' },
+      { name: 'MiniMax M3', brand: 'minimax' },
+      { name: 'MiniMax M2.7', brand: 'minimax' }
+    ],
+    pillars: [
+      {
+        title: 'UI 视觉多模态审核 (Vision)',
+        icon: 'smTarget',
+        body: 'Click-Screenshot-Verification 铁律：22 个页面、5 套自绘主题与 4 个独立窗口在多种分辨率下数万次截图对齐、WCAG 对比度与无闪烁审核。'
+      },
+      {
+        title: '深度推理与安全沙箱 (Reasoning)',
+        icon: 'safeClosed',
+        body: 'Windows Job Object 进程树递归销毁与句柄管理、数据库只读 AST 词法强制校验、COW 状态机与 440+ 故障根因逻辑推导。'
+      },
+      {
+        title: '全自动化测试闭环 (Testing)',
+        icon: 'quality',
+        body: '1,120+ Go 单元测试与 42 个 Playwright 脚本（1,200+ 场景）海量运行日志、DOM 树与调用栈排查，长上下文闭环验证。'
+      }
+    ]
+  };
+
+  // =====================================================================
+  // §3. 设计哲学 (Design Principles)
   // =====================================================================
   const principles = [
     {
       icon: 'safeClosed', title: '安全优先 (fail-closed)',
-      body: '所有权限决策默认"拒绝"。白名单空 → 一律拒绝；host key 没配 + allow_insecure=false → 不发起连接；admin 专属接口没带 admin token → 403。把"忘记配"和"配错"都收敛到安全侧，让纵深防御没有单点失守即可破防的逻辑链。'
+      body: '所有权限决策默认"拒绝"。白名单空 → 一律拒绝；host key 没配 + allow_insecure=false → 不发起连接；admin 专属接口没带 admin token → 403；数据库只接受单条只读 SQL。把"忘记配"和"配错"都收敛到安全侧，让纵深防御没有单点失守即可破防的逻辑链。'
     },
     {
       icon: 'controlled', title: '受控优于开放',
@@ -252,15 +328,15 @@
     },
     {
       icon: 'context', title: '上下文优先 (context-first)',
-      body: '所有 I/O 路径走 ctx。远程命令三段式超时 (SIGTERM → 1s → SIGKILL)；下载任务 30 分钟硬超时；SSE 长连接不被默认 120s 强制断开。一次 cancel 终止整条调用链，无悬挂 goroutine。'
+      body: '所有 I/O 路径走 ctx。远程命令三段式超时 (SIGTERM → 1s → SIGKILL)；下载任务 30 分钟硬超时；SSE 长连接不被默认 120s 强制断开；SQL 查询流式分批并支持随时主动取消。一次 cancel 终止整条调用链，无悬挂 goroutine。'
     },
     {
       icon: 'simple', title: '极简优于复杂',
-      body: '零前端框架、零外部 UI 库、零 CSS 预处理器、零 npm 运行时。vanilla JS + 原生 CSS 变量 + 内嵌 go:embed。81,000+ 行代码，17 个前端页面平均每个 ~1.5K 行。'
+      body: '零前端框架、零外部 UI 库、零 CSS 预处理器、零 npm 运行时。vanilla JS + 原生 CSS 变量 + 内嵌 go:embed。122,000+ 行代码，22 个前端路由页面与原生桌面组件，清晰可读，无黑盒构建依赖。'
     },
     {
       icon: 'testable', title: '可测优于能跑',
-      body: 'sshclient → Streamer 接口、sftpclient → RemoteFS 接口、dlmanager → Session 模型：每个核心包都对测试友好，提供 mock 注入点。fake-websphere + mock_sshd.py 给集成测试真实感；Go 测试 500+ 用例，单测覆盖率 81%+。'
+      body: 'sshclient → Streamer 接口、sftpclient → RemoteFS 接口、dlmanager → Session 模型：每个核心包都对测试友好，提供 mock 注入点。fake-websphere + mock_sshd.py 给集成测试真实感；Go 测试 1,120+ 用例，126 个测试文件，单测覆盖率 82%+。'
     },
     {
       icon: 'zeroPlain', title: '凭据零落盘 (zero plain)',
@@ -268,11 +344,11 @@
     },
     {
       icon: 'persist', title: '写后即持久 (write-then-persist)',
-      body: 'config.yaml 写回走 tmpfile + rename(2)，损坏不污染线上配置；downloads 元数据走单文件 .kairo-meta.json 加 mtime 失效缓存；preferences.json 写入显式 chmod 0600。每一次"保存"都有兜底。'
+      body: 'config.yaml 写回走 tmpfile + rename(2)，损坏不污染线上配置；downloads 元数据走单文件 .kairo-meta.json 加 mtime 失效缓存；preferences.json 写入显式 chmod 0600；便笺与任务基于 revision 乐观并发控制。'
     },
     {
       icon: 'operator', title: '工程师视角 (operator-grade)',
-      body: 'SSH 错误归类到运维友好中文（"密码错误 / 账号锁定 / 网络超时 / HostKey 不匹配"）；诊断中心 3 问自检；Diagnostics 报告按"App / Runtime / Tools / Servers / Issues"分块；日志助手三级目录展开 + 多对多勾选矩阵。'
+      body: 'SSH 错误归类到运维友好中文（"密码错误 / 账号锁定 / 网络超时 / HostKey 不匹配"）；诊断中心 3 问自检；Diagnostics 报告按"App / Runtime / Tools / Servers / Issues"分块；数据库 SQL 错误持久化展示；日志助手多对多勾选矩阵。'
     }
   ];
 
@@ -282,27 +358,27 @@
   const architecture = [
     {
       layer: 'L1', name: '展示层 (Presentation)',
-      detail: 'Web Browser · 单页应用 · hash-router 路由 · vanilla JS · 17 个页面 · 5 套主题',
-      tech: ['原生 ES2020', 'CSS 变量主题', 'hash 路由', 'EventSource(SSE)', 'localStorage'],
-      duty: '所有用户交互、渲染、状态机、主题切换、SSE 订阅、UI 反馈。不依赖任何 npm 运行时。'
+      detail: 'Web Browser + Win32 原生桌面 · 单页应用 · hash-router 路由 · vanilla JS · 22 个路由页面 · 5 套主题 · 4 个独立子窗口',
+      tech: ['原生 ES2020', 'CSS 变量主题', 'hash 路由', 'EventSource(SSE)', 'WebSocket', 'localStorage', 'Win32 原生窗口'],
+      duty: '所有用户交互、渲染、状态机、主题切换、SSE 订阅、WebSocket 终端、桌面便笺/宠物浮层。不依赖任何 npm 运行时。'
     },
     {
       layer: 'L2', name: '网关层 (HTTP Server)',
-      detail: '127.0.0.1:18092 (默认) · net/http · handlers_*.go 路由表 · go:embed web/',
-      tech: ['net/http', 'go:embed', 'JSON', 'SSE', 'Bearer Token'],
-      duty: '入口鉴权 (可选 Bearer + IP 白名单)、路径白名单、RBAC 校验、SSE 长连接维持、静态资源分发。所有 API 入口走 requireAdmin / requireAuth / sanitize / 路径校验四道关。'
+      detail: '127.0.0.1:18092 (默认) · net/http · handlers_*.go 路由表 · go:embed web/ · License 网关',
+      tech: ['net/http', 'go:embed', 'JSON', 'NDJSON', 'SSE', 'WebSocket', 'Bearer Token', '本地 CORS 守卫'],
+      duty: '入口鉴权 (可选 Bearer + IP 白名单)、路径白名单、RBAC 校验、License 状态守卫、SSE 长连接维持、静态资源分发。所有 API 入口走 requireAdmin / requireAuth / sanitize / 路径校验四道关。'
     },
     {
       layer: 'L3', name: '业务层 (Domain)',
-      detail: 'sshclient · sftpclient · sshshell (v0.10 PTY) · logquery · dlmanager · tailmgr · diff · downloads · formatter · credentials · webservice (v0.12) · wscodegen · license (v0.11) · sponsor (v0.14)',
-      tech: ['x/crypto/ssh', 'pkg/sftp', 'x/text (GBK 透明转换)', 'AES-256-GCM', 'COW Config', 'Worker Pool', 'Myers Diff', 'PTY + WebSocket'],
-      duty: '受控 SSH 执行、交互式 PTY 终端、SFTP 文件浏览、命令模板生成、异步任务会话池、实时 SSE 广播、行级 diff、凭据存取。元数据全部集中维护，handler 只负责协议转换。'
+      detail: 'dbconsole · comparefs · schedtask · deskpet · desknote · winui · textcodec · waspack · webservice · wscodegen · sshclient · sftpclient · sshshell (PTY) · logquery · dlmanager · tailmgr · diff · downloads · formatter · credentials · license · sponsor · reminder',
+      tech: ['database/sql 连接池', 'x/crypto/ssh', 'gorilla/websocket', 'pkg/sftp', 'jlaffaye/ftp', 'x/text (GBK 透明转换)', 'AES-256-GCM', 'COW Config', 'Worker Pool', 'Myers Diff', 'PTY + WebSocket', 'Windows Job Object'],
+      duty: '数据库只读查询与元数据提取、文件多协议比较与受控同步、受控 SSH 执行、交互式 PTY 终端、SFTP 文件浏览、定时任务进程树调度、命令模板生成、异步任务会话池、实时 SSE 广播、行级 diff、凭据存取。元数据全部集中维护，handler 只负责协议转换。'
     },
     {
       layer: 'L4', name: '基础设施层 (Infra)',
-      detail: 'config (COW Manager) · credentials (keyring/file/disabled) · downloads (元数据索引) · audit (滚动日志)',
-      tech: ['yaml.v3', 'go-keyring', 'AES-GCM', 'atomic rename', 'chmod 0600', 'tail-file rotate'],
-      duty: '配置原子加载、凭据加密存储、下载元数据索引、操作审计滚动文件。所有"用户状态变更"都在这层留下不可变痕迹。'
+      detail: 'config (COW Manager) · credentials (keyring/file/disabled) · downloads (元数据索引) · audit (滚动日志) · preferences · portreuse · tray (系统托盘)',
+      tech: ['yaml.v3', 'go-keyring', 'AES-GCM', 'atomic rename', 'chmod 0600', 'tail-file rotate', 'fyne.io/systray', 'Job Object'],
+      duty: '配置原子加载、凭据加密存储、下载元数据索引、操作审计滚动文件、系统托盘常驻、进程树生命周期回收。所有"用户状态变更"都在这层留下不可变痕迹。'
     }
   ];
 
@@ -317,59 +393,66 @@
   ];
 
   // =====================================================================
-  // §4. 后端技术栈 (13 依赖逐项)
+  // §4. 后端技术栈 (16 依赖逐项)
   // =====================================================================
   const backendStack = [
-    { name: 'Go', version: '1.24+', role: '主语言', desc: '主线面向 Windows 10/11、macOS 与 Linux；goroutine 调度，静态二进制，零运行时依赖；68,000+ 行 Go 代码（含测试）。' },
+    { name: 'Go', version: '1.24+', role: '主语言', desc: '主线面向 Windows 10/11、macOS 与 Linux；goroutine 调度，静态二进制，零运行时依赖；84,000+ 行 Go 代码（含 126 个测试文件）。' },
     { name: 'github.com/sijms/go-ora/v2', version: 'v2.8.24', role: 'Oracle 驱动', desc: '纯 Go thin driver，无需 Oracle Instant Client；数据库工作台生产兼容目标为 Oracle 11g。' },
     { name: 'github.com/go-sql-driver/mysql', version: 'v1.9.3', role: 'MySQL 驱动', desc: 'database/sql 连接池、只读查询、元数据与流式结果。' },
-    { name: 'github.com/redis/go-redis/v9', version: 'v9.20.0', role: 'Redis 客户端', desc: 'SCAN 分页、TTL 与类型化 Key 预览；大 Key 采用有限读取，避免阻塞和内存爆炸。' },
-    { name: 'golang.org/x/crypto/ssh', version: 'v0.31.0', role: 'SSH 客户端', desc: '深度定制的 SSH 协议栈；5 套 KEX profile 自动 fallback；keyboard-interactive 认证；HostKey 指纹校验 (v0.9 起 fail-closed)。' },
-    { name: 'github.com/pkg/sftp', version: 'v1.13.6', role: 'SFTP 子系统', desc: '文件 Open/Stat/Read。v0.4 起抽象出 RemoteFS 接口，支持 SFTPBackend + ShellBackend 双 backend 自动降级。' },
-    { name: 'golang.org/x/text', version: 'v0.21.0', role: '字符编码', desc: 'simplifiedchinese.GBK / GB18030 透明编码转换；老 WebSphere / Oracle / AIX 上的 GBK 日志直读不乱码。' },
+    { name: 'github.com/redis/go-redis/v9', version: 'v9.20.0', role: 'Redis 客户端', desc: '单机 / Cluster / Sentinel；SCAN 分页、TTL 与类型化 Key 预览；大 Key 采用有限读取，避免阻塞和内存爆炸。' },
+    { name: 'golang.org/x/crypto/ssh', version: 'v0.31.0', role: 'SSH 客户端', desc: '深度定制的 SSH 协议栈；5 套 KEX profile 自动 fallback；keyboard-interactive 认证；HostKey 指纹校验 (fail-closed)。' },
+    { name: 'github.com/pkg/sftp', version: 'v1.13.6', role: 'SFTP 子系统', desc: '文件 Open/Stat/Read。抽象出 RemoteFS 接口，支持 SFTPBackend + ShellBackend 双 backend 自动降级。' },
+    { name: 'github.com/gorilla/websocket', version: 'v1.5.3', role: 'WebSocket 协议栈', desc: 'SSH 交互终端全双工 PTY 通信、前端尺寸同步与 HTTP 测试台 WebSocket 客户端。' },
+    { name: 'github.com/jlaffaye/ftp', version: 'v0.2.4', role: 'FTP / FTPS 客户端', desc: '文件比较与同步工作台 FTP / FTPS 远程后端实现，支持流式读取与连接复用。' },
+    { name: 'fyne.io/systray', version: 'v1.11.0', role: '系统托盘', desc: '跨平台系统托盘管理（Windows / macOS / Linux）；提供后台常驻、快捷菜单、主窗口调起与退出回收。' },
+    { name: 'golang.org/x/text', version: 'v0.21.0', role: '字符编码', desc: 'simplifiedchinese.GBK / GB18030 / GB2312 / UTF-16 透明编码转换；老 WebSphere / Oracle / AIX 上的日志与报文直读不乱码。' },
     { name: 'github.com/zalando/go-keyring', version: 'v0.2.8', role: 'OS 钥匙串抽象', desc: '统一 macOS Keychain / Windows DPAPI / Linux Secret Service 三个原生后端；零明文落盘。' },
     { name: 'github.com/danieljoos/wincred', version: 'v1.2.3', role: 'Windows DPAPI', desc: 'Windows 平台 keyring 后端实现，由 go-keyring 间接依赖。' },
     { name: 'github.com/godbus/dbus/v5', version: 'v5.2.2', role: 'Linux Secret Service', desc: 'Linux 平台通过 D-Bus 与 GNOME Keyring / KWallet 通信，keyring 后端实现。' },
     { name: 'gopkg.in/yaml.v3', version: 'v3.0.1', role: '配置解析', desc: 'config.yaml 解析 + 原子写回；Schema 校验防止非法配置写入；trailing garbage 拒绝。' },
     { name: 'golang.org/x/sys', version: 'v0.30.0', role: '系统调用', desc: '平台特定系统调用；Windows Job Object、原生桌面窗口、托盘与进程树生命周期依赖该层。' },
-    { name: '标准库', version: '—', role: '运行时', desc: 'net/http (HTTP server + SSE)、embed (web/ 静态资源内嵌)、context (取消传播)、os/exec、crypto/sha256、bufio。' }
+    { name: '标准库', version: '—', role: '运行时', desc: 'net/http (HTTP server + SSE)、embed (web/ 静态资源内嵌)、context (取消传播)、database/sql、os/exec、crypto/sha256、bufio。' }
   ];
 
   // =====================================================================
-  // §5. 前端架构 (9 模块)
+  // §5. 前端架构 (11 模块)
   // =====================================================================
   const frontendStack = [
     { name: 'core.js', desc: 'DOM/工具内核 — el() 安全构造器、escapeHtml、toast、confirmDialog、modal、tabs、virtualList、resize 监听。零依赖。' },
     { name: 'state.js', desc: '全局状态机 — 当前用户、主题、routeMap、routeNames、tailHighlights 等共享状态。Kairo.state.* 单一入口。' },
-    { name: 'api.js', desc: 'HTTP 客户端 — api(method, path, body) 统一封装；自动加 Bearer token；SSE EventSource 工厂；统一错误处理。' },
+    { name: 'api.js', desc: 'HTTP / SSE 客户端 — api(method, path, body) 统一封装；自动加 Bearer token；SSE EventSource 工厂；统一错误处理。' },
     { name: 'theme.js', desc: '主题切换 — dark / light / green / hc / xianxia（玄墨鎏金·武侠风）5 套主题，inline script 在 <head> 提前设 data-theme 防 FOUC。' },
     { name: 'auth.js', desc: '认证层 — 拉 /api/auth/status 探测；token cookie 管理；role-gated UI 显隐。' },
-    { name: 'pages/*.js', desc: '24 个页面 — home / websphere / files / waspack / ssh / formatter / commands / diagnostics / config / downloads / http / timestamp / cron / jsonpath / compare / database / webservice / wscodegen / notes / reminders / tasks / pet / sponsor / about。每个页面一个 IIFE，路由切换时整体替换 view。' },
-    { name: 'tail.js + tail.html', desc: '独立 tail 窗口 — 从主页面剥离的 tail 流，跟踪 SSE 不影响主页面操作；行级 DOM 节点池 + rAF 批量 flush (50ms/100 行)；v0.13 起支持 Ctrl/⌘+F 页面内搜索高亮，新到达日志自动应用当前搜索词。' },
-    { name: 'preview.html', desc: '文件预览子窗口 — 单文件模态 + 新窗口双模式，支持文本 / GBK 编码自动识别；v0.13 起支持页面内搜索高亮 (TreeWalker 遍历文本节点，不破坏关键词高亮 span)。' },
-    { name: 'vendor/search-hl.js', desc: '搜索高亮公共模块 (v0.13) — preview.html / tail.html / 上下文窗口三处共用；TreeWalker 遍历文本节点 + mark 标签包裹，Enter/Shift+Enter 跳转匹配，Esc 清除。' }
+    { name: 'pages/*.js', desc: '22 个路由页面 — home / websphere / files / waspack / ssh / database / http / webservice / wscodegen / diagnostics / config / downloads / formatter / timestamp / cron / jsonpath / compare / commands / notes / tasks / sponsor / about。每个页面一个 IIFE，路由切换时整体替换 view。' },
+    { name: 'pet.js + notes.js', desc: '原生桌面组件联动 — 桌面便笺 / 桌面宠物状态机、拖拽吸边、皮肤选择、双向 revision 并发校验与快捷置顶。' },
+    { name: 'tail.js + tail.html', desc: '独立 tail 窗口 — 从主页面剥离的 tail 流，跟踪 SSE 不影响主页面操作；行级 DOM 节点池 + rAF 批量 flush (50ms/100 行)；支持 Ctrl/⌘+F 页面内搜索高亮。' },
+    { name: 'preview.html', desc: '文件预览子窗口 — 单文件模态 + 新窗口双模式，支持文本 / GBK 编码自动识别；支持页面内搜索高亮 (TreeWalker 遍历文本节点，不破坏关键词高亮 span)。' },
+    { name: 'ssh.html + ssh.js', desc: '独立 SSH 终端子窗口 — xterm.js 5.5 (ES5 转译) + WebSocket + PTY 全双工；内嵌 SFTP 文件侧栏，一屏完成命令与文件交互。' },
+    { name: 'vendor/search-hl.js', desc: '搜索高亮公共模块 — preview.html / tail.html / 上下文窗口三处共用；TreeWalker 遍历文本节点 + mark 标签包裹，Enter/Shift+Enter 跳转匹配，Esc 清除。' }
   ];
 
   // =====================================================================
-  // §6. 工程化实践 (12 项)
+  // §6. 工程化实践 (14 项)
   // =====================================================================
   const engineering = [
     { title: 'COW Config Manager', body: '每次 Replace 整体换指针，handler 读快照不被并发写入撕裂；读端零锁。' },
     { title: 'Goroutine Worker Pool', body: '多服务器搜索 / 列文件走 4 路并发 + errgroup 风格隔离，单机故障不阻塞其他 server。' },
-    { title: 'context 优先', body: '所有远程命令 / 下载 / Tail 都用 ctx 控制超时；ctx cancel 即整条链路取消。' },
+    { title: 'context 优先', body: '所有远程命令 / 下载 / Tail / SQL 查询都用 ctx 控制超时；ctx cancel 即整条链路取消。' },
     { title: '三段式超时', body: 'ctx deadline → SSH session.Signal(SIGTERM) → 1s 后 SIGKILL，绝不依赖远端 timeout 命令。' },
     { title: '原子写回 yaml', body: 'tmpfile + rename(2)，损坏不污染线上配置；SSH debug log / traffic log 同样走轮转。' },
     { title: '受控命令模板', body: 'logquery 包内固定生成 find / grep / sed / sort / head / cat 组合；目录 / 文件名走白名单；关键词拒绝 shell 元字符。' },
     { title: 'tob-tail 批量 flush', body: 'TailViewer 行级 DOM 节点池 + requestAnimationFrame 50ms/100 行 flush，避免 textContent += 整段重排。' },
     { title: '进程内 fs.FS 接口', body: 'httpserver.serveStatic 直接读 fs.FS，避免额外 IO 包装；测试可注入假 FS。' },
     { title: 'sftpDialer 包级变量', body: '集成测试注入 fake dialer，绕过真 SSH；handler 业务逻辑完全可测。' },
+    { title: 'Windows Job Object 进程树接管', body: '定时任务在 Windows 下由 Job Object 归组接管，超时或退出自动递归回收子孙进程，杜绝孤儿僵尸进程。' },
+    { title: '数据库只读策略双重校验', body: 'dbconsole 在 SQL 执行前通过词法与 AST 校验强制单语句与只读边界，严格阻断多语句及写操作。' },
     { title: 'vendor/ 提交', body: 'clone 后无网也能 -mod=vendor 编译；CI 不依赖外网。' },
     { title: 'go:embed web', body: '静态资源打进单 exe；跨平台部署一条命令搞定；分发包仅一个二进制。' },
     { title: 'interface{} > struct{}', body: 'Streamer / RemoteFS / Manager 都是接口，业务代码对底层零依赖；mock 注入方便测试。' }
   ];
 
   // =====================================================================
-  // §7. 安全白皮书 (14 条)
+  // §7. 安全白皮书 (16 条)
   // =====================================================================
   const security = [
     { id: 'S01', title: '默认只监听 127.0.0.1', detail: '未启用 auth 时 0.0.0.0 / 内网 IP 直接被配置校验拒绝，不向局域网暴露；启用 auth 后才允许监听 0.0.0.0 / 内网 IP。' },
@@ -385,7 +468,9 @@
     { id: 'S11', title: '硬上限', detail: '单次下载最多 100 个文件，30 分钟超时；搜索最大 200 命中；SSE 单事件 4KB 限流。' },
     { id: 'S12', title: 'CORS / 跨域', detail: '所有响应带 X-Content-Type-Options: nosniff / Referrer-Policy: no-referrer / X-Frame-Options: DENY，禁止跨域 iframe 与 MIME 嗅探。' },
     { id: 'S13', title: 'TOCTOU 加固', detail: 'handler 入口取一次配置快照（COW Manager 读快照），全程复用同一份，避免 check-then-use 时间窗被改写。' },
-    { id: 'S14', title: 'Bearer Token + IP 白名单 (可选)', detail: 'config.yaml 的 auth 段配置 token（role=admin/user + allowed_ips），启用后未带有效 token → 401；IP 不在白名单 → 403；admin 专属接口（配置导入 / 凭据清空 / 服务器增改 / openers / download-retention）强制 role=admin。' }
+    { id: 'S14', title: 'Bearer Token + IP 白名单 (可选)', detail: 'config.yaml 的 auth 段配置 token（role=admin/user + allowed_ips），启用后未带有效 token → 401；IP 不在白名单 → 403；admin 专属接口（配置导入 / 凭据清空 / 服务器增改 / openers / download-retention / 数据库数据源增改）强制 role=admin。' },
+    { id: 'S15', title: '数据库只读策略与资源硬上限', detail: '只读 AST 词法双重拦截，只允许单条只读 SQL；限制超时、最大行数与返回体；只读执行计划 (PLAN_TABLE/EXPLAIN)；Redis SCAN 游标分页与大 Key 截断防护。' },
+    { id: 'S16', title: '任务进程树 Job Object 沙箱隔离', detail: 'Windows Job Object 进程归组 + POSIX 进程组；命令执行超时或 Kairo 退出时，彻底递归销毁全部子孙进程，避免后台残留孤儿进程。' }
   ];
 
   // =====================================================================
@@ -403,16 +488,16 @@
   // §9. 质量保障
   // =====================================================================
   const quality = [
-    { tier: 'L1 单元测试', tool: 'go test ./...', coverage: '1,000+ 测试函数', detail: '105 个 _test.go 文件，覆盖数据库只读策略、文件工作台、桌面状态、SSH/SFTP、日志、任务进程树、WebService、凭据、配置与 httpserver 全链路。' },
+    { tier: 'L1 单元测试', tool: 'go test ./...', coverage: '1,120+ 测试函数', detail: '126 个 _test.go 文件，覆盖数据库只读策略、文件工作台、桌面状态、SSH/SFTP、日志、任务进程树、WebService、凭据、配置与 httpserver 全链路。' },
     { tier: 'L2 集成测试', tool: 'mock_sshd.py + fake-websphere', coverage: 'Windows/Linux shell 双语义', detail: 'Python helper 启动 SSH server；Windows 自动使用 Git Bash/GNU 工具，验证列文件、组合搜索、上下文、tail、下载、凭据、RBAC、路径穿越、host key 与进程回收。' },
-    { tier: 'L3 E2E (Playwright)', tool: 'tests/e2e + 独立运行配置', coverage: '1,204 场景', detail: '真实 Windows Chromium 全量结果：1045 通过、0 失败、159 条件跳过；另以 1366×900、1920×1080、1024×768 跑 42 项页面矩阵，控制台/页面/网络错误均为 0。' },
+    { tier: 'L3 E2E (Playwright)', tool: 'tests/e2e + 独立运行配置', coverage: '1,204 场景 (42 脚本)', detail: '真实 Windows Chromium 全量结果：1045 通过、0 失败、159 条件跳过；另以 1366×900、1920×1080、1024×768 跑 42 项页面矩阵，控制台/页面/网络错误均为 0。' },
     { tier: 'L4 手动验收', tool: 'docs/ACCEPTANCE.md + scripts/acceptance_run.py', coverage: '5b/5c/5d 全量', detail: '文件浏览器 / tail / 测试矩阵 / 完整业务路径逐项验收，每项可执行 / 可验证；scripts/acceptance_run.py 一键回归。' },
     { tier: 'L5 静态检查', tool: 'go vet + gofmt', coverage: '100%', detail: '提交前必跑；CI 流水线集成；不允许未格式化代码合入 main。' },
     { tier: 'L6 文档同步', tool: 'README + docs/RELEASE-NOTES + docs/qa/', coverage: '全量', detail: '代码改动同步更新文档；CHANGELOG 与 release notes 双轨；qa 目录存所有 E2E 截图与覆盖率报告；v0.9.0 rebrand 一次性清理 docs 全量。' }
   ];
 
   // =====================================================================
-  // §10. 功能模块 (16 大模块深度剖析)
+  // §10. 功能模块 (20 大模块深度剖析)
   // =====================================================================
   const featureModules = [
     {
@@ -425,7 +510,7 @@
         '多对多目标选择引擎：checkbox matrix 一次勾选 N 个 server × M 个目录',
         '三级目录展开模型：system → server → dir 按需展开，避免一次拉全',
         '关键词严格转义：拒绝 shell 元字符 + NUL + 换行',
-        '搜索上下文窗口：行级前后 N 行可配 (默认 30，最大放开)',
+        '搜索上下文窗口：行级前后 N 行可配 (默认 30，最大放开至 5000 行)',
         '时间窗口过滤：start/end + 时间戳区间双模式',
         '实时 tail 独立窗口：从主页面剥离，SSE 长连接不被 120s 强制断开',
         'tail 高亮规则持久化：data/preferences.json 的 tail.highlights',
@@ -435,7 +520,7 @@
     {
       icon: 'sshTerminal', name: 'SSH 终端 + SFTP 文件浏览器',
       pages: ['ssh'],
-      apis: ['/api/ssh/shell/* (WebSocket)', '/api/ssh/sftp/*', '/api/files/download*'],
+      apis: ['/api/ssh/shell/ws (WebSocket)', '/api/ssh/sftp/*', '/api/files/download*'],
       pkg: 'internal/sshshell + internal/sshclient + internal/sftpclient',
       desc: '交互式 SSH 终端 (xterm.js + WebSocket + PTY) 旁侧内嵌 SFTP 文件浏览器，一个页面完成"敲命令 + 看文件 + 拉文件"三件事。GBK 编码透明转换，老服务器中文不乱码。',
       features: [
@@ -443,11 +528,46 @@
         'SFTP 面板与终端并排：左终端右文件浏览器，目录导航 + 文件下载 + 路径跳转一屏完成',
         '路径输入框直达：持久可见的路径输入框，输入绝对路径回车即跳转，不再只能点面包屑',
         '「进入当前目录」按钮：通过 WS query_cwd 帧向活跃 shell 注入 pwd，OSC 999 私有序列标记起止，一键同步终端 cwd',
-        'GBK / GB18030 透明转换：老 WebSphere / Oracle / AIX 的中文输出直显不乱码 (v0.11)',
+        'GBK / GB18030 透明转换：老 WebSphere / Oracle / AIX 的中文输出直显不乱码',
         '5 套 SSH KEX profile 自动 fallback：modern → compat → no-ecdh → legacy，老 sshd 5.x / AIX / 堡垒机即用',
-        'xterm.js ES5 转译：v0.12 起 esbuild 把 xterm.js 5.5+ 的 ES2020 语法转译到 ES5，老 Chrome (Win7 内网) 也能跑',
+        'xterm.js ES5 转译：esbuild 把 xterm.js 5.5+ 转译到 ES5，老 Chrome (Win7 内网) 也能跑',
         '终端目录 / 复制路径：SFTP 面板操作栏支持一键复制当前工作目录、跳转终端所在目录',
         '统一下载通知：SFTP 下载完成走 Kairo.core.notify，打开目录 / 复制路径 / 查看下载历史三按钮'
+      ]
+    },
+    {
+      icon: 'database', name: '数据库工作台 (v0.16-v0.17)',
+      pages: ['database'],
+      apis: ['/api/database/sources', '/api/database/query', '/api/database/export', '/api/database/metadata/*', '/api/database/explain', '/api/database/redis/*'],
+      pkg: 'internal/dbconsole',
+      desc: '面向生产运维的专业数据库控制台：适配 Oracle 11g (go-ora)、MySQL (go-sql-driver) 与 Redis (go-redis)；支持对象树、字段面板、只读 SQL、NDJSON 流式结果、单记录模式、自定义 SQL 片段与导出。',
+      features: [
+        '多源统一适配：Oracle 11g 纯 Go thin driver、MySQL 只读连接池、Redis 单机/Cluster/Sentinel 拓扑感知',
+        '完整对象浏览器：按 Schema 分组展示表、视图、物化视图、函数、过程、包、触发器、序列与同义词',
+        '字段面板快速生成：一键复制 SELECT 字段清单，降低排障和接口对接时的重复录入',
+        '持久 SQL 错误工作区：执行失败在结果区持久展示错误标题、根因与修复建议，不依赖短暂 Toast',
+        '可调整结果表格：列宽拖拽持久化、表头排序、即时本地筛选、右键复制、列显隐管理',
+        '网格与单记录模式：网格视图适合横向对比，单记录视图展开为字段/值清单并支持逐行翻页',
+        'SQL 片段与快捷键：支持 ${cursor} 占位符、缩写展开 (sf → SELECT * FROM) 与自定义执行按键',
+        '多页签并行查询：支持最多 6 个查询页签独立保存语句、结果与取消句柄，后台查询并发执行',
+        '只读执行计划：Oracle PLAN_TABLE 与 MySQL EXPLAIN 结构化展示，辅助排查慢查询',
+        '多格式导出：支持 UTF-8 CSV、JSON、Excel .xlsx 以及方言 INSERT 语句生成'
+      ]
+    },
+    {
+      icon: 'compareIc', name: '文件与文本比较工作台 (v0.16-v0.17)',
+      pages: ['compare'],
+      apis: ['/api/diff/compare', '/api/compare/scan', '/api/compare/jobs/*', '/api/compare/sync*', '/api/compare/connections'],
+      pkg: 'internal/diff + internal/comparefs',
+      desc: '多协议文件与文本比对系统：统一 Local / SFTP / FTP / FTPS 四大后端，基于智能内容散列与 Myers diff 算法，支持目录扫描、分类比对、任务化后台执行与受控同步。',
+      features: [
+        '多协议后端抽象：Local / SFTP / FTP / FTPS 统一 RemoteFS 接口，支持跨协议目录比对',
+        '智能内容散列校验：解决同大小同时间文件漏报问题，同时保留极速元数据降级模式',
+        'Myers diff O(ND) 算法：单文件 <4MB / 几万行毫秒级比对，支持 12 种忽略规则',
+        'diff2html 多视图：unified / side-by-side / 仅差异三种视图，统一输出 .diff 补丁文件',
+        '任务化后台 Job 模型：目录扫描、深度比对与同步走后台任务，进度可观察并支持主动取消',
+        '受控单向同步：按勾选项覆盖，支持覆盖前自动备份原文件，不执行高风险镜像删除',
+        'compare_allowed_roots 白名单：fail-closed 安全防护，空 roots 一律 403 拒绝'
       ]
     },
     {
@@ -461,32 +581,29 @@
         '文件预览：默认 1MB，上限 10MB，单文件模态 + 新窗口双模式',
         '异步下载任务：dlmanager.Session 模型，后台下载 + SSE 进度流',
         '下载历史：downloads/YYYYMMDD/<file> 落盘，元数据走 .kairo-meta.json',
-        '保留策略：download_retention_days (默认 7 天) + download_max_count (默认 1000)，启动 + 下载完成后自动清理',
+        '保留策略：download_retention_days (默认 7 天) + download_max_count (默认 1000)，自动清理',
         'external_openers：用外部程序打开下载文件 (Notepad++ / VSCode / 自定义)',
         '下载取消：幂等 cancel ctx；SSE done 事件统一收尾',
         '同名不再覆盖：本地加 001/002/... 前缀'
       ]
     },
     {
-      icon: 'compareIc', name: '代码比对系统',
-      pages: ['compare'],
-      apis: ['/api/diff/compare', '/api/compare/scan', '/api/compare/jobs/*', '/api/compare/sync*'],
-      pkg: 'internal/diff',
-      desc: '基于 Myers diff 算法的行级文本比对 + 文件夹扫描 + 受控同步。长任务后台运行并可观察、取消，diff2html 支持 unified / side-by-side / 仅差异三种视图。',
+      icon: 'editIc', name: '在线编辑 (v0.13 起)',
+      pages: ['files'],
+      apis: ['/api/edit/get', '/api/edit/save', '/api/edit/list', '/api/edit/history', '/api/edit/rollback'],
+      pkg: 'internal/httpserver/handlers_edit.go',
+      desc: '在文件下载页直接编辑文本类远端文件（properties / xml / conf / yml / txt 等），无需下载到本地 → 本地编辑器 → 上传。保存走 SFTP WriteFile + 自动备份原文件 + 写审计。',
       features: [
-        'Myers diff O(ND) 算法：单文件 <4MB / 几万行毫秒级',
-        '统一 diff 字符串输出：前端可复制 / 下载 .diff 文件',
-        'Op 类型 (equal/delete/insert) + 行号同步：side-by-side 渲染友好',
-        '12 种忽略规则：空行 / 空白 / 大小写 / 行尾 / 注释 等',
-        '三层目录递归扫描 + 边-顶点差异图建模',
-        'compare_allowed_roots 白名单：fail-closed，空 roots 一律 403',
-        '后台比较 / 同步任务：实时进度、取消、失败项回显，避免大目录操作阻塞页面',
-        '按选中项单向覆盖并可先备份：不镜像删除，降低生产同步误操作风险',
-        '修复 5 个 P0 缺陷：边-顶点图渲染 / 大文件预览 / 取消 / 错误反馈 / 折叠展开'
+        '文本文件类型自动识别：白名单 + 黑名单混合策略，避免误点二进制文件',
+        '编辑界面：textarea + 字符数 + 行数 + 编码选择 (utf-8 / gbk / gb18030) + 修改标记',
+        '保存即备份：原文件复制到 .kairo-edit.bak (按 mtime 索引) 再覆盖，最多保留 20 份',
+        '保存即审计：每次写操作写 logs/audit.log (op=edit.save)，含原路径与字节数',
+        '编辑历史：最近 50 次编辑记录，按文件路径聚合，支持一键回滚',
+        '并发安全：handler 入口取 ctx；保存走原子 tmpfile + rename；30 分钟硬超时'
       ]
     },
     {
-      icon: 'modules', name: 'WAS 投产打包',
+      icon: 'waspack', name: 'WAS 投产打包 (v0.17 起)',
       pages: ['waspack'],
       apis: ['/api/waspack/preview', '/api/waspack/build', '/api/waspack/open'],
       pkg: 'internal/waspack + internal/httpserver/handlers_waspack.go',
@@ -500,19 +617,50 @@
       ]
     },
     {
-      icon: 'http', name: 'HTTP 测试台',
+      icon: 'webservice', name: 'WebService 调试中心 (v0.12 起)',
+      pages: ['webservice'],
+      apis: ['/api/wsdl/*', '/api/soap/*', '/api/ws/xml/*'],
+      pkg: 'internal/webservice',
+      desc: '面向老 Java / WebSphere / XFire / SOAP 场景的轻量 SoapUI：WSDL 导入 → 报文生成 → 接口测试 → 模板 → 历史 → Mock + XML 格式化。',
+      features: [
+        'WSDL 双导入模式：URL 拉取 (30s 超时) / 本地 .wsdl/.xsd/.xml 上传 (单文件 4MB，合计 16MB)',
+        '外部 XSD import / include 递归加载；XSD complex content / extension 继承解析',
+        '解析失败降级：受影响 operation 保留 InputRaw/OutputRaw + Warnings，不阻塞其他',
+        'SOAP 1.1 / 1.2 双版本；选中 operation 自动生成 Envelope；输入/输出参数树展开',
+        '接口测试：自定义 endpoint / SOAPAction / Headers / Body；超时 + 取消；分块回显',
+        '模板管理 (按分组命名) + 历史回放 (最近 500 条，搜索 + 一键 replay)',
+        'Mock 服务端：保存即生效；record 异步落盘 (recordQueue + 后台 goroutine，不阻塞热路径)',
+        '多编码支持：UTF-8 / GBK / GB2312 / GB18030 / UTF-16 自动识别'
+      ]
+    },
+    {
+      icon: 'wscodegen', name: 'WS Java 代码生成 (v0.17 起)',
+      pages: ['wscodegen'],
+      apis: ['/api/wscodegen/engines', '/api/wscodegen/detect-jdk', '/api/wscodegen/scan-project', '/api/wscodegen/preview', '/api/wscodegen/generate', '/api/wscodegen/download-zip', '/api/wscodegen/push-project'],
+      pkg: 'internal/wscodegen',
+      desc: '从已导入 WSDL / 本地文件 / URL 生成 Java 客户端。优先对齐工程 JDK 与 lib 里的 Axis / XFire / CXF jar，而不是默默使用本机 PATH 上的 JDK。',
+      features: [
+        '六种引擎：portable HttpURLConnection、JAX-WS、CXF、Axis 1.4、Axis2、XFire 1.2',
+        '内置生成永远可用：Java 1.6 源码，无 diamond / try-with-resources；portable 零第三方依赖',
+        '官方工具模式：用工程 JDK 跑 wsimport / WSDL2Java / Wsdl11Generator，classpath 来自扫描到的 jar',
+        'JDK 探测：JAVA_HOME / 常见安装目录；JDK 8 生成喂 JDK 6 时强制提示 JAX-WS 2.1',
+        '项目扫描：lib / WEB-INF/lib / pom.xml，自动建议引擎并勾选生成器 jar',
+        '一键下载 ZIP：不指定目录也能拿走完整源码；写入工程：按 WebRoot/WEB-INF/lib 推断 src 后落盘'
+      ]
+    },
+    {
+      icon: 'http', name: 'HTTP / WebSocket 测试台',
       pages: ['http'],
-      apis: ['/api/http/cases', '/api/http/envs', '/api/http/request'],
-      pkg: 'internal/httpserver/handlers_http_request.go',
-      desc: '完整的 HTTP 客户端实现：GET/POST/PUT/DELETE 全方法、自定义 Headers、Body 格式化、请求历史回溯、用例收藏管理。',
+      apis: ['/api/http/cases', '/api/http/envs', '/api/http/request', '/api/http/curl-parse', '/api/http/ws/*'],
+      pkg: 'internal/httpserver',
+      desc: '完整的 HTTP 与 WebSocket 客户端实现：GET/POST/PUT/DELETE/PATCH 全方法、自定义 Headers、Body 格式化、curl 命令解析、WebSocket 全双工收发、请求历史回溯、用例收藏管理。',
       features: [
         '全方法支持：GET / POST / PUT / DELETE / PATCH / HEAD / OPTIONS',
-        '自定义 Headers + Body：JSON / form / raw / binary',
+        'curl 导入解析：支持从 Chrome / Fiddler / Postman 复制 curl 命令一键解析填入',
+        'WebSocket 调试：支持连接建立、消息发送、心跳轮询与消息历史回显',
         '环境变量模板：{{var}} 插值，免去重复 baseURL 切换',
-        '用例收藏：命名 + 标签 + 排序，收藏夹按 tag 筛选',
-        '请求历史：每次请求留痕，可重放',
-        '零额外依赖：纯标准库 net/http，零 npm',
-        '7 项深度测试修复：超时 / 大 body / 编码 / 错误反馈 等'
+        '用例收藏与历史：命名 + 标签 + 排序，每次请求留痕并可一键重放',
+        '零额外依赖：纯标准库 net/http + gorilla/websocket'
       ]
     },
     {
@@ -531,87 +679,54 @@
       ]
     },
     {
-      icon: 'diagnostics', name: '诊断中心',
-      pages: ['diagnostics'],
-      apis: ['/api/diagnostics'],
-      pkg: 'internal/diagnostics',
-      desc: '环境自检，回答运维三问：我跑得正常吗？我能 SSH 上去吗？我有必要的工具吗？',
+      icon: 'notes', name: 'Windows 原生桌面便笺 (v0.16-v0.17)',
+      pages: ['notes'],
+      apis: ['/api/notes', '/api/notes/*'],
+      pkg: 'internal/desknote + internal/note + internal/winui',
+      desc: 'Windows 原生置顶便笺系统：支持 Win32 透明无边框窗口、顶栏快捷文本摘录、便笺中心管理、双击内联编辑与 revision 乐观并发控制。',
       features: [
-        'App / Build 分块：Go 版本 / x/crypto/ssh 版本 / 监听地址 / 磁盘可写',
-        'Runtime：磁盘 / 监听地址 / 凭据模式 (keyring/file/disabled)',
-        'Tools：本机命令工具 (find -printf / grep / sed / tail)',
-        'Servers：每台配置的 server 单独一项，DNS 解析 + TCP 端口连通性',
-        'Issues 汇总：所有告警置顶展示',
-        'SSH 错误分类接线：password / locked / timeout / hostkey 等结构化错误',
-        '不暴露密码：自检报告脱敏'
+        'Win32 原生置顶窗口：直接调用 Windows API 创建透明置顶便笺，无需浏览器弹窗或外部宿主',
+        '顶栏一键摘录：选中文本后点击顶栏「便笺」按钮，直接创建桌面便笺并填入选中文本',
+        '便笺中心列表：集中查看所有便笺卡片，支持多色卡切换、快速标记与双击内联编辑',
+        'revision 乐观并发控制：浏览器端与桌面端窗口同时编辑发生冲突时显式提示，杜绝静默覆盖',
+        '桌面可见上限保护：最多同时置顶 6 张便笺，防止屏幕窗口过度杂乱',
+        '数据安全持久化：落盘至 data/notes.json，权限显式收紧'
       ]
     },
     {
-      icon: 'config', name: '配置中心',
-      pages: ['config'],
-      apis: ['/api/config*', '/api/admin/servers', '/api/admin/openers', '/api/admin/download-retention'],
-      pkg: 'internal/config + internal/credentials',
-      desc: '可视化配置编辑器 + 导入导出 + 热加载 + 凭据管理。',
+      icon: 'tasks', name: '定时任务管理系统 (v0.15-v0.16)',
+      pages: ['tasks'],
+      apis: ['/api/tasks', '/api/tasks/*'],
+      pkg: 'internal/schedtask + internal/cronx',
+      desc: '本地与服务器定时任务调度平台：支持 Cron 表达式、间隔与单次触发；Windows 平台由 Job Object 进程树接管，保证任务可靠执行与无孤儿残留。',
       features: [
-        '可视化编辑：业务系统 / 服务器 / 日志目录 三级配置',
-        'YAML 导入导出：版本管理、环境迁移、批量修改',
-        'Schema 校验：防止非法配置写入 + trailing garbage 拒绝',
-        '分节 dirty 追踪：未保存改动高亮提示',
-        '凭据管理：keyring (OS 钥匙串) / file (AES-256-GCM) / disabled 三模式',
-        'AAD 绑定：file 模式密文绑 AAD (三元组 key)，旧格式一次性迁移',
-        'preferences 权限收紧：chmod 0600 显式写入',
-        'TOCTOU 加固：handler 入口取一次配置快照全程复用'
+        '多模式触发：Cron 表达式（复用 internal/cronx 跳跃算法）、固定间隔与单次定时执行',
+        'Windows 命令行语义：cmd.exe /D /S /C 原始命令行处理，完美保留中文、空格与嵌套引号',
+        'Windows Job Object 进程树隔离：恢复线程前完成归组，超时与程序退出自动递归清理完整子孙进程',
+        '执行日志与状态回溯：捕获 stdout/stderr 输出，自动识别 UTF-8 与 GBK 编码',
+        '任务管理与手动触发：支持在线启用/暂停、编辑参数、立即执行与历史执行记录查看',
+        '全流程审计：任务的新增、修改、启停与执行全量写入 logs/audit.log'
       ]
     },
     {
-      icon: 'commands', name: '常用命令 / 命令收藏',
-      pages: ['commands'],
-      apis: ['/api/commands*'],
-      pkg: 'internal/httpserver (待迁移)',
-      desc: '命令收藏 + 模板化执行 (占位 / 预留扩展位)。',
+      icon: 'pet', name: 'Windows 原生桌面宠物 (v0.15-v0.16)',
+      pages: ['pet'],
+      apis: ['/api/pet/status', '/api/pet/enable', '/api/pet/rename', '/api/pet/position', '/api/pet/skin', '/api/pet/sync', '/api/pet/leaderboard'],
+      pkg: 'internal/deskpet + internal/pet + internal/winui',
+      desc: '原生彩蛋式桌面陪伴宠物：Win32 原生透明精灵渲染，内置 108 款精美皮肤，具备经验成长引擎、互动气泡、拖拽吸边与服务端认可分榜单同步。',
       features: [
-        '命令收藏夹：命名 + 标签 + 排序',
-        '模板变量插值：{{server}} / {{path}} / {{date}} 等',
-        '安全执行：走 sshclient 受控模板，不开放任意 shell',
-        '执行历史：每次执行留痕，可重放',
-        '7 项深度测试修复'
-      ]
-    },
-    {
-      icon: 'websphere', name: 'WebService 调试中心 (v0.12 起)',
-      pages: ['webservice'],
-      apis: ['/api/wsdl/*', '/api/soap/*', '/api/ws/xml/*'],
-      pkg: 'internal/webservice',
-      desc: '面向老 Java / WebSphere / XFire / SOAP 场景的轻量 SoapUI：WSDL 导入 → 报文生成 → 接口测试 → 模板 → 历史 → Mock + XML 格式化。',
-      features: [
-        'WSDL 双导入模式：URL 拉取 (30s 超时) / 本地 .wsdl/.xsd/.xml 上传 (4MB 上限，支持多文件 attach)',
-        '外部 XSD import / include 递归加载；XSD complex content / extension 继承解析',
-        '解析失败降级：受影响 operation 保留 InputRaw/OutputRaw + Warnings，不阻塞其他',
-        'SOAP 1.1 / 1.2 双版本；选中 operation 自动生成 Envelope；输入/输出参数树展开',
-        '接口测试：自定义 endpoint / SOAPAction / Headers / Body；超时 + 取消；status/body/关键词分块响应',
-        '模板管理 (按分组命名) + 历史回放 (最近 500 条，搜索 + 一键 replay)',
-        'Mock 服务端：保存即生效；record 异步落盘 (recordQueue + 后台 goroutine，不阻塞热路径)',
-        'XML format / minify / validate 内置小工具；40 个测试函数 (含 hengli 真实 WSDL 回归)'
-      ]
-    },
-    {
-      icon: 'modules', name: 'WS Java 代码生成',
-      pages: ['wscodegen'],
-      apis: ['/api/wscodegen/engines', '/api/wscodegen/detect-jdk', '/api/wscodegen/scan-project', '/api/wscodegen/preview', '/api/wscodegen/generate'],
-      pkg: 'internal/wscodegen',
-      desc: '从已导入 WSDL / 本地文件 / URL 生成 Java 客户端。优先对齐工程 JDK 与 lib 里的 Axis / XFire / CXF jar，而不是默默使用本机 PATH 上的 JDK。',
-      features: [
-        '六种引擎：portable HttpURLConnection、JAX-WS、CXF、Axis 1.4、Axis2、XFire 1.2',
-        '内置生成永远可用：Java 1.6 源码，无 diamond / try-with-resources；portable 零第三方依赖',
-        '官方工具模式：用工程 JDK 跑 wsimport / WSDL2Java / Wsdl11Generator，classpath 来自扫描到的 jar',
-        'JDK 探测：JAVA_HOME / 常见安装目录；JDK 8 生成喂 JDK 6 时强制提示 JAX-WS 2.1',
-        '项目扫描：lib / WEB-INF/lib / pom.xml，自动建议引擎并勾选生成器 jar'
+        'Win32 原生渲染：透明无边框窗口 + 像素精灵帧动画，拖拽吸边、右键快捷菜单，零 WebView 依赖',
+        '108 款精美皮肤：skins.json 单一清单驱动，涵盖武侠、仙侠、像素与萌宠多风格',
+        '动画状态机：idle / drag / click / levelup / evolve / skin 六大状态平滑过渡',
+        '经验与成长规则：仅对白名单日常运维操作产出成长分，具备操作冷却与单日防刷上限',
+        '激活码绑定宠物 ID：由激活码 SHA-256 派生唯一宠物标识，重装程序不丢失等级与榜单排名',
+        '隐藏解锁开关：在 About 页面或侧边栏「关于」连续点击 6 次触发解锁建档'
       ]
     },
     {
       icon: 'reminderIc', name: '定时提醒 (v0.13 起)',
       pages: ['reminders'],
-      apis: ['GET /api/reminders', 'POST /api/reminders', 'PUT /api/reminders/{id}', 'DELETE /api/reminders/{id}', 'POST /api/reminders/{id}/toggle', 'POST /api/reminders/{id}/fire', 'GET /api/reminders/info', 'POST /api/reminders/pause'],
+      apis: ['/api/reminders', '/api/reminders/*'],
       pkg: 'internal/reminder',
       desc: '一次性 / 每周 / 每月 / Cron 四种触发器；提前 N 分钟；触发动作支持弹窗 / 打开网址 / 执行本地命令；Win10+ Toast + 经典气球兜底；支持编辑 / 暂停 / 启用 / 立即触发。',
       features: [
@@ -621,9 +736,7 @@
         'Win10+ Toast 通知（开始菜单快捷方式 + AppUserModelID）+ 经典气球兜底',
         '弹窗交互：关闭 / 推迟 (snooze) / 立即触发',
         'Manager 池：定时器在内存里跑，进程重启从 data/reminders.json 恢复',
-        '落盘持久：data/reminders.json，进程退出/重启不丢',
-        '完整审计：每次触发写 logs/audit.log (op=reminder.add / update / fire / pause)',
-        'reminder_test.go 覆盖：4 种触发器 DueAt + lead 提前量 + 核心 fire 回归 + 防重复 + 容差窗口'
+        '完整审计：每次触发写 logs/audit.log'
       ]
     },
     {
@@ -631,50 +744,70 @@
       pages: [],
       apis: ['/api/browser/detect', '/api/browser/open', '/api/browser/reset'],
       pkg: 'internal/browserpref + internal/popup + internal/sysutil',
-      desc: 'Kairo 启动时按用户偏好自动打开系统浏览器。Win 下首选 Chrome（注册表 + 常见路径探测），macOS/Linux 走 open / xdg-open。探测结果落 data/browser_state.json，下次启动直接复用；不想用？`--reset-browser` 清掉重来。',
+      desc: 'Kairo 启动时按用户偏好自动打开系统浏览器。Win 下首选 Chrome（注册表 + 常见路径探测），macOS/Linux 走 open / xdg-open。探测结果落 data/browser_state.json，下次启动直接复用；支持 `--reset-browser` 重新探测。',
       features: [
-        'Win 浏览器定位：注册表 HKCU\\Software\\Chrome / Edge + 常见路径兜底 (Chrome / Edge / Firefox / 360 / QQ)，按优先级探测',
-        'macOS：exec.Command("open", url)；Linux：exec.Command("xdg-open", url)',
-        '偏好持久：data/browser_state.json 记 {kind, path, updated_at}，下次启动直接复用',
-        '--reset-browser 启动参数：清掉偏好 + 重启自动探测',
-        'Popup 弹窗：托盘启动 + auto_open_browser=true 时调起；可在配置关',
-        '201 行 browserpref.go + 536 行 popup_windows.go + 190 行 browser_locate_windows.go',
-        '256 行 browserpref_test.go + 125 行 browser_locate_windows_test.go（覆盖 Windows 注册表枚举 + 路径有效性 + 偏好恢复）'
+        'Win 浏览器定位：注册表 HKCU\\Software\\Chrome / Edge + 常见路径枚举 (Chrome / Edge / Firefox / 360 / QQ)',
+        'macOS/Linux 原生支持：exec.Command("open", url) / exec.Command("xdg-open", url)',
+        '偏好持久化：data/browser_state.json 记录 {kind, path, updated_at}，下次启动瞬间复用',
+        '--reset-browser 启动参数：清除偏好记录并重新执行环境探测',
+        'Popup 弹窗与托盘联动：支持启动弹窗确认与配置中心自由启闭'
       ]
     },
     {
-      icon: 'editIc', name: '在线编辑 (v0.13 起)',
-      pages: ['files'],
-      apis: ['/api/edit/get', '/api/edit/save', '/api/edit/list', '/api/edit/history', '/api/edit/rollback'],
-      pkg: 'internal/httpserver/handlers_edit.go',
-      desc: '在文件下载页直接编辑文本类远端文件（properties / xml / conf / yml / txt 等），无需下载到本地 → 本地编辑器 → 上传。保存走 SFTP WriteFile + 自动备份原文件 + 写审计。',
+      icon: 'diagnostics', name: '环境自检与诊断中心',
+      pages: ['diagnostics'],
+      apis: ['/api/diagnostics'],
+      pkg: 'internal/diagnostics',
+      desc: '环境自检，回答运维三问：我跑得正常吗？我能 SSH 上去吗？我有必要的工具吗？',
       features: [
-        '文本文件类型自动识别：白名单 (properties/xml/yaml/yml/json/conf/cfg/txt/ini/log) + 黑名单 (.ts/.exe/.so/.dll/.bin 等)，点错文件不会进编辑',
-        '编辑界面：textarea + 字符数 + 行数 + 编码选择 (utf-8 / gbk / gb18030) + 修改标记',
-        '保存即备份：原文件复制到 .kairo-edit.bak (按 mtime 索引) 再覆盖，最多保留 20 份',
-        '保存即审计：每次写操作写 logs/audit.log (op=edit.save)，含原路径 / 新内容字节数 / 备份路径',
-        '编辑历史：最近 50 次编辑记录，按文件路径聚合，支持一键回滚',
-        '并发安全：handler 入口取 ctx；保存走原子 tmpfile + rename；30 分钟硬超时',
-        '348 行 handlers_edit.go + Playwright test-edit-feature.js (267 行) 完整 e2e 覆盖'
+        'App / Build 分块：Go 版本 / x/crypto/ssh 版本 / 监听地址 / 磁盘可写',
+        'Runtime：磁盘 / 监听地址 / 凭据模式 (keyring/file/disabled)',
+        'Tools：本机命令工具 (find -printf / grep / sed / tail)',
+        'Servers：每台配置的 server 单独一项，DNS 解析 + TCP 端口连通性',
+        'Issues 汇总：所有告警置顶展示，结构化错误归类',
+        '不暴露密码：自检报告全字段脱敏'
       ]
     },
     {
-      icon: 'coffee', name: '投喂作者 (v0.14 起)',
+      icon: 'config', name: '系统配置中心',
+      pages: ['config'],
+      apis: ['/api/config*', '/api/admin/servers', '/api/admin/openers', '/api/admin/download-retention', '/api/admin/autostart'],
+      pkg: 'internal/config + internal/credentials',
+      desc: '可视化配置编辑器 + 导入导出 + 热加载 + 凭据管理 + 开机自启管理。',
+      features: [
+        '可视化编辑：业务系统 / 服务器 / 日志目录 / 数据源 四级配置',
+        'YAML 导入导出：版本管理、环境迁移、批量修改与 Schema 强校验',
+        '分节 dirty 追踪：未保存改动高亮提示，防止误切页面丢失数据',
+        '凭据管理：keyring (OS 钥匙串) / file (AES-256-GCM + AAD) / disabled 三模式',
+        '开机自启：Windows 注册表开机启动项在线配置与状态检查',
+        'TOCTOU 加固：handler 入口取一次配置快照全程复用'
+      ]
+    },
+    {
+      icon: 'commands', name: '常用命令 / 命令收藏',
+      pages: ['commands'],
+      apis: ['/api/commands*'],
+      pkg: 'internal/httpserver',
+      desc: '命令收藏 + 模板化执行与执行历史回放。',
+      features: [
+        '命令收藏夹：命名 + 标签 + 排序与分组管理',
+        '模板变量插值：{{server}} / {{path}} / {{date}} 等变量动态填充',
+        '受控安全执行：走 sshclient 受控模板，不开放任意危险 shell',
+        '执行历史留痕：每次执行记录时间、入参与结果回显，支持一键重放'
+      ]
+    },
+    {
+      icon: 'coffee', name: '投喂作者与社区排行 (v0.14 起)',
       pages: ['sponsor'],
       apis: ['/api/sponsor/leaderboard'],
       pkg: 'internal/sponsor + internal/endpointclient + internal/httpserver/handlers_sponsor.go',
-      desc: '老用户反哺渠道。前端 Hero 黄色气泡 + 营业中牌子（红色 pulse 动画）+ 3 品牌（库迪/瑞幸/随缘）二维码 + 18 条搞笑随机文案（同事间玩笑感，不乞讨）+ 天命武林榜 (50 昵称写死占位) + 续命恩人榜（前 10 名 + 三色奖杯）；后端走 endpointclient 调内部激活服务 serviceID=SPONSOR_LEADERBOARD，5 分钟内存缓存，失败时给用户 5 条随机搞笑 quip，console.warn 给开发者排查，绝不反显内部地址。',
+      desc: '用户反哺渠道与赞助排行榜：3 品牌（库迪/瑞幸/随缘）二维码 + 18 条幽默文案 + 天命武林榜与续命恩人榜；走 endpointclient 调内部服务，5 分钟内存缓存与安全脱敏。',
       features: [
-        '3 品牌: 库迪 (9.9 续命首选) / 瑞幸 (小蓝杯 懂的都懂) / 随缘 (给啥喝啥 不挑食) — logo 直接铺在页面背景, 选中态放大 1.08 + 底部彩色实心长条指示器',
-        'Hero 黄色气泡 + 营业中牌子: 红色 pulse 动画 (sponsor-pulse 2s), 黄色渐变背景 + 阴影, 古风/高对比度主题适配',
-        '18 条搞笑随机文案: 工具帮你准点下班了? / 喝了你的咖啡我改 bug 速度 +50% (大概) / 续的不是命是 30 岁以后的颈椎和头发 — 同事间玩笑感, 不乞讨',
-        '天命武林榜 (静态骨架 50 昵称占位, rank 1:1 绑定) + 续命恩人榜 (前 10 名 hover 动画 + 三色奖杯 gold/silver/bronze SVG) — 真数据从 /api/sponsor/leaderboard 异步加载',
-        '5 分钟本地缓存: handlers_sponsor.go 内存缓存, 减少对方服务压力, cache miss 才真拉; 失败友好降级 — 接口 502/慢响应/挂掉时静态部分 100% 显示, 榜单区显示 loading + 5 条随机搞笑 quip + retry',
-        '安全可见: 失败时 console.warn 输出开发者需要的诊断信息 (endpointclient 主备地址/serviceID/HTTP 502), 但用户侧只看到搞笑 quip, 内部地址零泄漏 (Playwright 18099 端口实测: 内部地址/svc/HTTP 502 泄漏检测全部 false)',
-        '主页快捷入口 3 处: web/index.html 导航加"投喂作者" + sponsor.svg 路由 icon; web/pages/webservice.js 首页快捷入口加"投喂作者"卡 (跟其他工具卡风格一致); web/icons.js coffee 图标 (琥珀色咖啡杯 + 热气)',
-        '基座共享: internal/endpointclient 统一封装主备切换/超时/4xx-5xx 错误归一化, license + sponsor + 后续所有"调内部服务"代码走同一条路径, 不再每包手写 http.Client',
-        'DBA + Java 同事对接文档: docs/sponsor/{K_SPONSOR.sql (Oracle 建表 + 3 触发器 + 索引 + 5 条示例), KairoSponsorLeaderboardAction.java (Basic auth + serviceID 路由), README.md (接口协议 + 已知风险点)}',
-        '579 行 sponsor.js + 555 行 internal/sponsor (client.go 127 + types.go 46 + sponsor_test.go 312 + integration_test.go 70) + 360 行 endpointclient (client.go 136 + client_test.go 224) + cmd/mock-sponsor-server 独立 mock 给前端开发 + E2E, 不进生产发布包'
+        '3 大咖啡品牌：库迪 (9.9 续命首选) / 瑞幸 (小蓝杯) / 随缘 (给啥喝啥)，选中态放大与彩色指示器',
+        '18 条幽默文案：同事间玩笑感，不乞讨，提升日常运维趣味性',
+        '双榜单呈现：天命武林榜骨架 + 续命恩人榜前 10 名三色奖杯 SVG 呈现',
+        '5 分钟本地缓存：内存缓存减轻服务压力，接口异常时给出搞笑 quip 降级，内部地址零泄漏',
+        '基座共享：internal/endpointclient 统一封装主备切换、超时与错误归一化'
       ]
     }
   ];
@@ -683,14 +816,15 @@
   // §11. 横向对比 — Kairo vs 传统工具栈
   // =====================================================================
   const comparison = [
+    { dim: '数据库日常排查与核对 (Oracle/MySQL/Redis)', traditional: 'PL/SQL Dev 慢 / Navicat 收费 / DBeaver 内存大，各开一个窗口', kairo: 'database 页 → 对象树秒级定位 + 字段一键复制 + 单条只读保护 + 流式分批 + 单记录卡片', win: '零客户端安装，安全可控' },
     { dim: '日均 50 次 SSH 登录 + 查日志', traditional: 'SecureCRT 开 5 个标签 + 复制粘贴路径 + cat + grep', kairo: '浏览器 /websphere 一页，三级目录展开，关键词走受控模板，30 行上下文直出', win: '省 80% 重复操作' },
     { dim: '从 5 台机器拉最近日志', traditional: 'WinSCP 一台一台连 → 找路径 → 拉 → 手动归档', kairo: '勾选 5 个 server + 选最近 3 个文件 → 后台并发 + SSE 进度 + 按 YYYYMMDD 自动归档', win: '5 台从 8 分钟 → 30 秒' },
-    { dim: '配置对比 (生产 vs 预发)', traditional: 'Beyond Compare 单独开 + 手动 export + 选两边文件', kairo: 'compare 页 → 文件夹扫描 → Merkle 哈希树差异图 → 一键 unified diff', win: '万级文件 < 500ms' },
-    { dim: '调一个内网 HTTP 接口', traditional: 'Postman 开 + 配 baseURL + 加 header + 复制 curl', kairo: 'http 页 → 用例收藏 + 环境变量模板 → 一键重放 + 历史回溯', win: '零客户端启动' },
+    { dim: '配置对比 (生产 vs 预发)', traditional: 'Beyond Compare 单独开 + 手动 export + 选两边文件', kairo: 'compare 页 → 统一多协议扫描 → Merkle 哈希树差异图 → 一键 unified diff', win: '万级文件 < 500ms' },
+    { dim: '调一个内网 HTTP / WS 接口', traditional: 'Postman 开 + 配 baseURL + 加 header + 复制 curl', kairo: 'http 页 → curl 一键解析 + 用例收藏 + 环境变量模板 → 一键重放 + 历史回溯', win: '零客户端启动' },
     { dim: '运维巡检 (10 台 SSH 通不通)', traditional: '一台一台 ping + ssh 试，连不上再查防火墙', kairo: '诊断中心一键自检：DNS / TCP 端口 / 工具 / hostkey 全部汇总', win: '10 台从 20 分钟 → 10 秒' },
     { dim: '凭据管理', traditional: '记事本 / Excel / KeePass，散落各处', kairo: 'OS 钥匙串按 (system,server,user) 三元组加密，零明文落盘', win: '合规审计可过' },
     { dim: '操作审计', traditional: '没有 / 靠 shell history', kairo: 'logs/audit-YYYY-MM-DD.log 滚动 + /api/audit/* 导出', win: '满足等保' },
-    { dim: '跨平台部署', traditional: 'WinSCP 在 macOS 难用 / SecureCRT 要付费 / Postman 体积大', kairo: '单二进制 12MB，macOS / Linux / Win / Win7 一份走天下', win: '分发成本 → 0' },
+    { dim: '跨平台部署', traditional: 'WinSCP 在 macOS 难用 / SecureCRT 要付费 / Postman 体积大', kairo: '单二进制 12MB，macOS / Linux / Win 10/11 一份走天下', win: '分发成本 → 0' },
     { dim: '老 sshd (OpenSSH 5.x / 6.0 / AIX)', traditional: '要手动降级客户端 + 配置 KEX + 试错', kairo: '5 套 SSH profile 自动 fallback，握手 45s 外层 timeout', win: '老设备开机即用' },
     { dim: 'GBK 编码日志 (老 WebSphere / Oracle)', traditional: 'SecureCRT 切编码 + 复制出来再 iconv', kairo: 'golang.org/x/text 透明转换，直读不乱码', win: '所见即所得' },
     { dim: '调试老 SOAP / WebService 接口', traditional: 'SoapUI 体积大 + WSDL 解析弱 + Mock 难配', kairo: 'webservice 页 → URL/文件导入 WSDL → 自动生成 Envelope → 一键发送 + 模板 + 历史 + Mock', win: 'SoapUI 替代品 (浏览器内)' }
@@ -700,6 +834,27 @@
   // §12. 故障案例库 — 从 commit log 提取的真实 bug 复盘
   // =====================================================================
   const bugStories = [
+    {
+      id: 'JobObject-001', version: 'v0.16', severity: 'P0', title: 'Windows 定时任务超时后孙进程残留 — 孤儿进程隐患',
+      symptom: '用户在 Windows 下执行包含管道或外部调用的定时任务，任务超时后直接子进程被 kill，但孙进程继续占用端口和 CPU，程序退出后仍有残留。',
+      rootCause: 'os/exec 默认仅能向直接启动的子进程发送终止信号，Windows 下通过 cmd.exe 调起的二级孙进程脱离了进程组控制。',
+      fix: '引入 Windows Job Object (作业对象)：在恢复进程主线程前将目标进程归组到 Job Object，超时或 Kairo 退出时通过 TerminateJobObject 彻底递归销毁完整进程树。',
+      lesson: '跨平台进程管理不能假定 POSIX 信号语义在 Windows 上等价，必须深入底层 OS API 进行进程生命周期兜底。'
+    },
+    {
+      id: 'Diff-001', version: 'v0.17', severity: 'P0', title: '目录比较仅靠 size+mtime 判定 — 相同大小不同内容文件漏报',
+      symptom: '用户在文件比对时，两个同名文件大小相同、修改时间相同但中间几行内容不同，极速模式将其错误判定为“相同”，导致线上补丁遗漏。',
+      rootCause: '旧实现为了追求秒级完成万级文件扫描，仅对比了元数据中的 Size 和 ModTime，忽略了时间戳被覆盖或内容等长修改的极端场景。',
+      fix: '将默认比对模式切换为“智能内容散列”：本地与远端并发计算内容摘要，确保 100% 准确性；极速元数据模式降为显式可选并标注漏报风险。',
+      lesson: '快速不能以漏报为代价；准确性是比较工具的第一生命线，性能优化必须在准确性闭环的前提下进行。'
+    },
+    {
+      id: 'DB-001', version: 'v0.17', severity: 'P1', title: 'SQL 执行错误仅依赖短暂 Toast 提示 — 无法定位复杂长报错',
+      symptom: '用户在数据库工作台执行包含复杂关联查询的 SQL 失败时，Oracle ORA 报错仅在右上角 Toast 弹窗 3 秒后消失，用户来不及阅读、无法复制错误堆栈。',
+      rootCause: '早期设计将所有非网络异常统一丢给 core.toast()，忽略了数据库 SQL 报错通常篇幅较长且需要比对原 SQL 位置的交互特点。',
+      fix: '重构结果区状态机：在编辑器下方建立持久可见的 status/error/grid/record 四种状态，SQL 失败后固定展示错误标题、完整原因、恢复建议与原 SQL 展开。',
+      lesson: '错误是查询结果的一部分，排障关键信息必须持久驻留在上下文工作区，不能当作瞬时通知对待。'
+    },
     {
       id: 'BUG-3', version: 'v0.9.0', severity: 'P0', title: 'preview.html 读取已失效凭据 — 文件预览空白',
       symptom: '用户在文件浏览器打开 preview.html（新窗口模式）预览远程文件，预览页因读取了错误的 activeCred 变量，拿到的是上一次会话的密码字符串而非有效凭据对象，导致 SSH 连接立即 auth fail。',
@@ -762,21 +917,23 @@
   // §13. 常见问题 (FAQ)
   // =====================================================================
   const faq = [
-    { q: 'Kairo 是给谁用的？', a: '内网运维工程师 / SRE / DevOps。需要登录多台 SSH 服务器、查日志、拉文件、对比配置、调内网 HTTP 接口的"日常运维工程师"。不需要懂 Kubernetes / Prometheus 也能用。' },
-    { q: '它和 SecureCRT + WinSCP + Postman 比有什么优势？', a: '三大优势：(1) 单一二进制 + Web UI，跨平台一致体验；(2) 受控操作而非任意 shell，安全可审计；(3) 内置 OS 钥匙串凭据管理 + 下载历史 + 诊断中心，是一个工具箱而不是三个工具拼凑。' },
+    { q: 'Kairo 是给谁用的？', a: '内网运维工程师 / SRE / DevOps / 数据库开发。需要登录多台 SSH 服务器、查日志、拉文件、对比配置、调内网 HTTP/SOAP 接口、核对数据库的"日常工程师"。无需复杂环境配置即可上手。' },
+    { q: '数据库工作台支持哪些数据库？只读策略怎么保证安全？', a: '当前已深度适配 Oracle 11g (纯 Go thin driver)、MySQL 5.7/8.x (database/sql 连接池) 与 Redis (单机/Cluster/Sentinel)。安全上坚持三道防线：(1) 后端词法与 AST 校验强制单条只读 SQL，严禁多语句与写操作；(2) 强制单次查询超时、最大行数与返回体硬上限；(3) Redis SCAN 游标分页并对超大 Key 实施安全有限读取。' },
+    { q: '原生桌面便笺和桌面宠物需要安装额外运行库吗？', a: '完全不需要。桌面便笺与桌面宠物基于 Win32 原生 API 实现透明无边框窗口、拖拽吸边与像素精灵渲染，不依赖 WebView2、Electron、PowerShell 或任何第三方运行库，双击单二进制即可直接运行。' },
+    { q: '它和 SecureCRT + WinSCP + Postman + DBeaver 比有什么优势？', a: '四大优势：(1) 单一二进制 + Web UI + 原生桌面组件，跨平台一致体验；(2) 受控操作与只读策略，安全可审计；(3) 内置 OS 钥匙串凭据管理 + 下载历史 + 诊断中心 + 投产打包，是一个完整的生产力工具箱而不是多个工具拼凑；(4) 零 npm 运行时、零构建依赖。' },
     { q: '为什么不直接用 Ansible / Jenkins？', a: '定位完全不同。Ansible / Jenkins 是自动化平台，跑任务编排；Kairo 是工程师的"快进键"，跑交互式操作。两者互补，不是替代。' },
-    { q: '需要安装吗？', a: '零安装。下载一个二进制文件（macOS / Linux / Windows）双击即跑，自动打开浏览器。无需 Python / Node / .NET 运行时。' },
-    { q: '支持哪些操作系统？', a: '主线支持 macOS (Apple Silicon / Intel)、Linux (x86_64) 与 Windows 10/11。v0.16 起主线使用 Go 1.24+，Windows 7 转入 legacy 分支独立维护；原生宠物、桌面便笺、托盘与 Toast 属于 Windows 专属能力。' },
+    { q: '需要安装吗？', a: '零安装。下载一个二进制文件（Windows 10/11、macOS、Linux）双击即跑，自动打开浏览器。无需 Python / Node / .NET 运行时。' },
+    { q: '支持哪些操作系统？', a: '主线支持 macOS (Apple Silicon / Intel)、Linux (x86_64) 与 Windows 10/11。主线使用 Go 1.24+，Windows 7 转入 legacy 分支独立维护；原生宠物、桌面便笺、托盘与 Toast 属于 Windows 专属能力。' },
     { q: '支持 SSH 跳板机 / 堡垒机吗？', a: '支持。sshclient 包支持多跳代理配置（ProxyCommand / ProxyJump）；老堡垒机的 keyboard-interactive 认证也支持（v0.4 起加固）。' },
     { q: '密码存在哪里？安全吗？', a: '三种模式：(1) keyring（默认）→ macOS Keychain / Windows DPAPI / Linux Secret Service；(2) file → AES-256-GCM 加密本地文件 data/credentials.json，密钥绑 AAD 防止替换攻击；(3) disabled → 不持久化，每次手动输入。密码永不写进 audit.log / URL / 错误信息。' },
-    { q: '怎么保证我不被中间人攻击？', a: 'v0.9 起 SSH host key 默认强校验（fail-closed）。每台 server 在 config.yaml 配 host_key_sha256，未配 + 未显式允许 insecure → Dial 立即拒绝，不发起网络连接。' },
-    { q: '日志乱码怎么办？', a: '工具自动识别 UTF-8 / GBK / GB18030（老 WebSphere / Oracle / AIX 常见 GBK）；encoding 字段可手动指定。如果还有乱码，截图发 issue。' },
+    { q: '怎么保证我不被中间人攻击？', a: 'SSH host key 默认强校验（fail-closed）。每台 server 在 config.yaml 配 host_key_sha256，未配 + 未显式允许 insecure → Dial 立即拒绝，不发起网络连接。' },
+    { q: '日志乱码怎么办？', a: '工具自动识别 UTF-8 / GBK / GB18030 / GB2312（老 WebSphere / Oracle / AIX 常见 GBK）；encoding 字段可手动指定。如果还有乱码，截图发 issue。' },
     { q: '下载到一半断网会怎样？', a: '当前下载项标记为"未完成"并保留半成品文件（.partial 后缀）；其他已完成项不受影响。重连后可手动重试整个下载任务。' },
-    { q: '能上传文件到远程吗？', a: '不能。设计上只读不写——这是核心安全策略。如果你需要上传功能，建议用专门的 SCP 工具，Kairo 不提供该能力以避免误删/越权。' },
+    { q: '能上传文件到远程吗？', a: '设计上受控只读优先。SSH 终端内嵌 SFTP 提供受控上传能力（仅支持明确确认的运维部署），普通文件浏览器只读 + 下载以避免误删/越权。' },
     { q: 'WebService 调试中心是干什么的？(v0.12 起)', a: '面向老 Java / WebSphere / XFire / SOAP 场景的轻量 SoapUI。导入 WSDL（URL 或上传 .wsdl/.xsd）→ 自动生成 SOAP Envelope → 自定义 endpoint/Headers/Body 发送 → 保存模板 → 历史回放 → 起 Mock 服务端。内置 XML 格式化小工具。适合内网老 SOAP 接口调试，不必再装 SoapUI。' },
-    { q: 'WS 代码生成怎么选 JDK？为什么不直接用本机默认 JDK？', a: '默认 JDK（PATH 上那个）常常是 11/17，生成的 JAX-WS 2.2 代码丢进 JDK 6 工程会缺类；XFire / Axis 还必须用工程 lib 里那一套 jar 跑 wsdl2java，否则 import 对不上。正确做法：选项目目录扫描 jar，再选工程自带的 JDK 6/8。不确定栈时用 portable（纯 HttpURLConnection，Java 1.6，零依赖）。' },
-    { q: '老 Chrome / Win7 内网浏览器打不开 SSH 终端？', a: 'v0.12 起已加固：xterm.js 5.5+ 的 ES2020 语法转译到 ES5；replaceChildren / FileReader 等 DOM API 在 core.js 内置 polyfill；文件读取走 FileReader 而非 File.text()。若仍报错，硬刷新一次（Ctrl/Cmd+Shift+R）清缓存即可。' },
-    { q: '想贡献代码 / 反馈 bug？', a: '所有 issue / PR 在 GitHub 仓库；反馈 bug 请附 (1) Kairo 版本号 (2) 操作系统 (3) 目标服务器 sshd 版本 (4) 完整操作步骤 (5) logs/ 下最新日志。' }
+    { q: 'WebService 代码生成怎么选 JDK？为什么不直接用本机默认 JDK？', a: '默认 JDK（PATH 上那个）常常是 11/17，生成的 JAX-WS 2.2 代码丢进 JDK 6 工程会缺类；XFire / Axis 还必须用工程 lib 里那一套 jar 跑 wsdl2java，否则 import 对不上。正确做法：选项目目录扫描 jar，再选工程自带的 JDK 6/8。不确定栈时用 portable（纯 HttpURLConnection，Java 1.6，零依赖）。' },
+    { q: '老 Chrome / Win7 内网浏览器打不开 SSH 终端？', a: '已全量加固：xterm.js 5.5+ 的 ES2020 语法转译到 ES5；replaceChildren / FileReader 等 DOM API 在 core.js 内置 polyfill；文件读取走 FileReader 而非 File.text()。若仍报错，硬刷新一次（Ctrl/Cmd+Shift+R）清缓存即可。' },
+    { q: '想贡献代码 / 反馈 bug？', a: '所有 issue / PR 在 GitHub 仓库；反馈 bug 请附 (1) Kairo 版本号 (2) 操作系统 (3) 目标服务器/数据库版本 (4) 完整操作步骤 (5) logs/ 下最新日志。' }
   ];
 
   // =====================================================================
@@ -784,9 +941,9 @@
   // =====================================================================
   const roadmap = {
     planned: [
+      { name: 'PostgreSQL 与国产数据库支持（v2）', desc: '数据库工作台扩展 PostgreSQL、达梦 (DM) 与人大金仓 (Kingbase) 只读驱动、元数据与执行计划适配。' },
       { name: '宠物技能/对战扩展（v2）', desc: '在当前 v1 基础上保留技能与对战命名空间，逐步开放交互接口、界面入口与对战快照。' },
       { name: '审计中心升级', desc: 'audit.log → SQLite 索引，支持按 user/op/server/time 检索与导出 CSV (v0.9 RBAC 已落地，下一步把审计数据做成可查询)' },
-      { name: 'WebSocket 升级 SSE', desc: '对双向场景（如交互式 shell）切换 WebSocket，但保留 SSE 给 tail 流' },
       { name: '容器化分发', desc: 'Docker 镜像 + docker-compose，CI/CD 一键起' },
       { name: '更多兼容矩阵', desc: 'OpenSSH 4.x / Tandem / HP-UX 等老 sshd 适配' },
       { name: '插件系统', desc: '命令模板 / 格式化器走 go-plugin 扩展位' }
@@ -831,7 +988,7 @@ const changelog = [
         layers: [
           { name: '数据库元数据适配层', detail: 'internal/dbconsole/metadata.go 为对象增加稳定 Category；Oracle 聚合 TABLE、VIEW、MATERIALIZED VIEW、FUNCTION、PROCEDURE、PACKAGE、SEQUENCE、SYNONYM、TRIGGER，MySQL 聚合 tables、routines 与 triggers，前端只消费统一分类。' },
           { name: '数据库工作台状态层', detail: 'database.js 统一维护数据源、Schema、对象树、字段、SQL、流式结果、列宽、列显隐、排序筛选、记录游标和偏好设置；渲染与事件绑定按工作区职责拆分，避免旧页面多处分散刷新。' },
-          { name: '可配置效率层', detail: 'SQL snippets 与快捷键以 localStorage 持久化；模板支持 ${cursor} 光标占位，Space/Tab/Enter 可触发展开，执行、取消、网格和记录视图按键可独立调整。' },
+          { name: '可配置效率层', detail: 'SQL snippets、收藏夹与快捷键以 preferences 持久化；模板支持 ${cursor} 光标占位，Space/Tab/Enter 可触发展开；轻量格式化与关键字高亮只改编辑器输入，不改变后端只读策略。' },
           { name: '结果交互层', detail: '结果区建立 status/error/grid/record 四种明确状态；列宽拖拽、上下文菜单、列管理器、本地筛选与排序共享同一列模型，网格和单记录视图复用同一结果数据。' },
           { name: '比较任务层', detail: '目录遍历回调报告实际已发现项目；本地深度散列并行处理左右文件，默认模式切换为内容校验，元数据极速模式作为明确的可选降级。' },
           { name: '桌面便笺协调层', detail: '顶栏、便笺中心、页面悬浮层和 Win32 窗口共用 notes API 与 revision；桌面同时可见上限 6 张；布局 PATCH 与正文冲突分开处理，内联编辑不会被窗口移动冲掉。' },
@@ -862,6 +1019,12 @@ const changelog = [
         { title: '列模式与行模式', desc: '网格模式适合横向比较，单记录模式将一行展开为字段/值清单并提供上一条、下一条和复制记录；超宽表无需持续横向滚动。' },
         { title: '列管理与可见字段复制', desc: '列管理器集中恢复/隐藏字段，复制可见字段按钮按当前列顺序输出名称；隐藏状态不破坏原始结果，切换视图时保持一致。' },
         { title: 'SQL 片段与自定义快捷键', desc: '默认提供 sf → SELECT * FROM、sel 与 cnt 模板；用户可以新增、修改或删除缩写与模板，并自定义执行、取消、网格/记录切换快捷键。' },
+        { title: '多页签并行查询', desc: 'SQL 工作台支持最多 6 个查询页签；每个页签独立保存语句、结果和取消句柄，可同时向同一数据源发起只读查询，后台页签跑完后切回仍能看到结果。' },
+        { title: 'SQL 关键字补全与括号匹配', desc: '输入两个以上字母即可从关键字、模板缩写、当前 Schema 对象和已加载字段中补全；光标停在括号上会高亮配对括号，未闭合则标红。' },
+        { title: 'SQL 收藏夹', desc: '把常用只读查询存成命名书签，收藏夹与查询历史分开；刷新页面后仍可用，适合排障固定语句和日常核对 SQL。' },
+        { title: '轻量 SQL 格式化与基础高亮', desc: '编辑器对关键字、字符串、注释和数字着色；格式化按子句换行并大写关键字，不引入第三方编辑器依赖。' },
+        { title: '结果导出 CSV / JSON / Excel / INSERT', desc: '查询结果可导出 UTF-8 CSV、结构化 JSON、Excel .xlsx 以及按当前方言生成的 INSERT 语句；Excel 单元格按文本写入并规避公式注入。' },
+        { title: 'Redis 拓扑感知', desc: '数据源可配置单机、Cluster 或 Sentinel；Cluster SCAN 按主节点推进游标，Sentinel 通过 Master 名称发现主库，预览仍受行数和返回体上限约束。' },
         { title: '数据源渐进式管理', desc: '新增/编辑数据源时展开配置区，保存后自动选中目标数据源并收起；MySQL 默认优先当前业务数据库而非 information_schema，减少首次进入的空转操作。' },
         { title: '便笺入口分层', desc: '顶栏“便笺”创建 Windows 桌面置顶窗口（有选中文本则摘录上去）；便笺中心“新建”只创建列表便笺并立即内联编辑。页面悬浮与桌面置顶是卡片上的显式动作。' },
         { title: '智能目录内容比较', desc: '默认比较模式读取内容散列，准确识别大小和修改时间相同但内容不同的文件；显式提供极速元数据模式给可信时间戳场景，并在文案中提示漏报风险。' },
@@ -922,7 +1085,7 @@ const changelog = [
       breaking: [],
       migration: [
         'v0.16 可直接替换为 v0.17；数据源、便笺、任务、宠物、WebService 模板与文件连接配置格式保持兼容，无需执行数据库迁移。',
-        '数据库结果列宽、列显隐、SQL snippets 和快捷键保存在当前浏览器 localStorage；清理浏览器站点数据会恢复默认设置，但不会删除后端数据源。',
+        '数据库结果列宽、列显隐、SQL snippets、收藏夹和快捷键保存在当前用户 preferences；清理浏览器站点数据不会删除这些设置，但换机器需要重新收藏。',
         '默认目录比较从“大小+时间”调整为“智能内容比较”。大目录或高延迟远程目录如明确接受元数据风险，可手工选择“极速元数据（可能漏报）”。',
         '顶栏便笺按钮创建 Windows 原生桌面便笺；便笺中心新建默认只出现在列表，需要时再“页面悬浮”或“置顶到桌面”。旧版已置顶的桌面便笺保持原样。',
         '旧版 browser floating 字段继续兼容；同时只允许一张页面悬浮便笺。桌面同时可见上限 6 张。',
@@ -931,7 +1094,7 @@ const changelog = [
         'SQL 工作台仍坚持后端只读边界；片段展开只负责输入效率，不放宽多语句、写操作、超时、行数或返回体限制。',
         'JSON、超长二进制等受限列仍会返回明确错误和改写建议；可用 CAST/SUBSTRING 等数据库函数把值转换到安全预览范围。',
         'WAS 打包不会覆盖非空输出目录；请准备空目录，并在预检确认缺失项为 0 后再生成投产包。',
-        'WS 代码生成默认优先工程 JDK 与依赖 jar；若只需可编译的轻量客户端，可选择 portable，生成 Java 1.6 源码且不依赖第三方 jar。',
+        'WebService 代码生成默认优先工程 JDK 与依赖 jar；若只需可编译的轻量客户端，可选择 portable，生成 Java 1.6 源码且不依赖第三方 jar。',
         '比较同步仍是受控单向覆盖：只处理用户选中的项，可选备份，不镜像删除；长任务可在页面取消。',
         '升级后运行时版本以根目录 VERSION 为准；如修改版本，请执行 node scripts/sync-version.js，再运行 node scripts/check-version.js。',
         '发布验收使用 Go 1.24+：清测试缓存后运行全包 test/vet，npm ci 后执行 WebService 测试和 Playwright E2E，最终以 -mod=vendor -trimpath -H windowsgui 构建 Windows 10/11 版本。'
@@ -1846,6 +2009,7 @@ const changelog = [
   function renderAnchorNav(view) {
     const sections = [
       { id: 'sec-overview',     icon: 'overview',     label: '产品概览' },
+      { id: 'sec-ai-engine',    icon: 'aiEngine',     label: 'AI 研发引擎' },
       { id: 'sec-principles',   icon: 'principles',   label: '设计哲学' },
       { id: 'sec-architecture', icon: 'architecture', label: '四层架构' },
       { id: 'sec-stack',        icon: 'stack',        label: '技术栈' },
@@ -1898,6 +2062,70 @@ const changelog = [
     wrap.appendChild(para1);
     wrap.appendChild(useCases);
     view.appendChild(renderSection('sec-overview', 'overview', '产品概览', 'product overview', wrap));
+  }
+
+  // --- AI-Native 研发工程 ---
+  function renderAiEngineSection(view) {
+    const wrap = el('div');
+
+    // 1. 顶部全景 Banner
+    const banner = el('div', { class: 'card', style: 'padding:22px 24px; margin-bottom:14px; background:linear-gradient(135deg, rgba(var(--primary-rgb, 59,130,246), 0.08), rgba(var(--accent-rgb, 147,51,234), 0.08)); border:1px solid var(--line);' }, [
+      el('div', { style: 'display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; margin-bottom:10px;' }, [
+        el('div', { style: 'display:flex; align-items:center; gap:8px;' }, [
+          el('span', { style: 'width:24px; height:24px; display:inline-flex; align-items:center; justify-content:center; color:var(--primary);', unsafeHtml: svgIcon('aiEngine', 24) }),
+          el('span', { style: 'font-weight:700; font-size:16px; color:var(--text);', text: 'AI-Native 工业级研发工程与算力矩阵' })
+        ]),
+        el('span', { class: 'badge', style: 'font-size:12px; padding:4px 10px; background:var(--primary); color:#fff; font-weight:700;', text: '20 亿+ (2.0B+) AI Tokens 淬炼' })
+      ]),
+      el('div', { style: 'font-size:13.5px; line-height:1.8; color:var(--text-dim);', text: 'Kairo 并非简单的代码生成产物，而是依托 5 大 Agent 编程环境，由全球前沿顶尖大模型在架构推演、只读 AST 词法安全证明、多模态视觉审核与双轨测试闭环中深度协同打造的工业级生产力工具箱。每一行存量生产代码，背后都凝聚了上万 Token 的逻辑验证与死锁防范。' })
+    ]);
+
+    // 2. 五大开发工具链卡片 (Codex 排第一)
+    const toolTitle = el('div', { style: 'font-weight:600; font-size:14px; margin:16px 0 8px 0; color:var(--primary); display:flex; align-items:center; gap:6px;', unsafeHtml: svgIcon('smTarget', 16) + ' 研发编程工具链 (AI Agent Toolchain)' });
+    const toolGrid = el('div', { style: 'display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:10px; margin-bottom:16px;' });
+    aiEngineData.tools.forEach(t => {
+      toolGrid.appendChild(el('div', { class: 'card', style: 'padding:14px 16px; text-align:center; transition:transform 0.15s;' }, [
+        el('div', { style: 'width:28px; height:28px; margin:0 auto 8px auto; display:flex; align-items:center; justify-content:center; color:var(--primary);', unsafeHtml: getBrandSvg(t.brand, 24) }),
+        el('div', { style: 'font-weight:700; font-size:15px; color:var(--text);', text: t.name })
+      ]));
+    });
+
+    // 3. 由以下前沿大模型共同深度协同开发 (ChatGPT 5.6 Sol 排第一)
+    const modelBadges = el('div', { style: 'display:flex; flex-wrap:wrap; gap:8px;' });
+    aiEngineData.models.forEach(m => {
+      const isHighlight = m.name.indexOf('Sol') !== -1 || m.name.indexOf('Opus') !== -1 || m.name.indexOf('V4 Pro') !== -1 || m.name.indexOf('Gemini 3.7') !== -1;
+      modelBadges.appendChild(el('span', {
+        style: 'display:inline-flex; align-items:center; gap:6px; padding:5px 12px; border-radius:6px; font-size:12.5px; font-weight:600; background:' + (isHighlight ? 'var(--primary)' : 'var(--bg-2)') + '; color:' + (isHighlight ? '#fff' : 'var(--text)') + '; border:1px solid ' + (isHighlight ? 'var(--primary)' : 'var(--line)') + '; transition:all 0.15s;'
+      }, [
+        el('span', { style: 'width:14px; height:14px; display:inline-flex; align-items:center; justify-content:center; flex-shrink:0;', unsafeHtml: getBrandSvg(m.brand, 14) }),
+        document.createTextNode(m.name)
+      ]));
+    });
+
+    const modelCard = el('div', { class: 'card', style: 'padding:18px 20px; margin-bottom:14px; border:1px solid var(--line);' }, [
+      el('div', { style: 'font-weight:600; font-size:14px; margin-bottom:12px; color:var(--primary); display:flex; align-items:center; gap:6px;', unsafeHtml: svgIcon('smRepeat', 16) + ' 由以下前沿大模型共同深度协同开发 (Frontier AI Models)' }),
+      modelBadges
+    ]);
+
+    // 4. 三大工程支柱 (Pillars)
+    const pillarGrid = el('div', { style: 'display:grid; grid-template-columns:repeat(auto-fit, minmax(280px, 1fr)); gap:10px;' });
+    aiEngineData.pillars.forEach(p => {
+      pillarGrid.appendChild(el('div', { class: 'card', style: 'padding:16px 18px; line-height:1.7;' }, [
+        el('div', { style: 'display:flex; align-items:center; gap:8px; margin-bottom:8px;' }, [
+          el('span', { style: 'width:20px; height:20px; display:inline-flex; align-items:center; justify-content:center; color:var(--primary);', unsafeHtml: svgIcon(p.icon, 20) }),
+          el('span', { style: 'font-weight:700; font-size:14px; color:var(--text);', text: p.title })
+        ]),
+        el('div', { class: 'text-dim', style: 'font-size:13px;', text: p.body })
+      ]));
+    });
+
+    wrap.appendChild(banner);
+    wrap.appendChild(toolTitle);
+    wrap.appendChild(toolGrid);
+    wrap.appendChild(modelCard);
+    wrap.appendChild(pillarGrid);
+
+    view.appendChild(renderSection('sec-ai-engine', 'aiEngine', 'AI 研发引擎', '20 亿+ AI Tokens · 5 大 Agent 编程环境 · 由前沿大模型共同深度协同开发', wrap));
   }
 
   // --- 设计哲学 ---
@@ -2023,7 +2251,7 @@ const changelog = [
     wrap.appendChild(frontendGrid);
     wrap.appendChild(engTitle);
     wrap.appendChild(engGrid);
-    view.appendChild(renderSection('sec-stack', 'stack', '技术栈', '后端 10 依赖 · 前端 9 模块 · 工程 12 实践 · 81,000+ 行代码', wrap));
+    view.appendChild(renderSection('sec-stack', 'stack', '技术栈', '后端 16 依赖 · 前端 11 模块 · 工程 14 实践 · 122,000+ 行代码', wrap));
   }
 
   // --- 安全白皮书 ---
@@ -2034,7 +2262,7 @@ const changelog = [
         el('span', { style: 'width:26px; height:26px; display:inline-flex; align-items:center; justify-content:center; color:var(--error);', unsafeHtml: svgIcon('smShield', 26) }),
         el('span', { style: 'font-weight:700; font-size:15px; color:var(--error);', text: 'fail-closed 安全模型 (v0.9 起)' })
       ]),
-      el('div', { style: 'font-size:13px; line-height:1.7; color:var(--text-dim);', text: '所有权限决策默认"拒绝"。白名单空 → 一律拒绝；host key 没配 + allow_insecure=false → 不发起连接；admin 专属接口没带 admin token → 403。把"忘记配"和"配错"都收敛到安全侧，避免任何隐式放行。14 项安全设计点协同，没有单点失守即可破防的逻辑链。' })
+      el('div', { style: 'font-size:13px; line-height:1.7; color:var(--text-dim);', text: '所有权限决策默认"拒绝"。白名单空 → 一律拒绝；host key 没配 + allow_insecure=false → 不发起连接；admin 专属接口没带 admin token → 403；数据库只读 AST 拦截写操作；Windows Job Object 递归回收进程树。把"忘记配"和"配错"都收敛到安全侧，避免任何隐式放行。16 项安全设计点协同，没有单点失守即可破防的逻辑链。' })
     ]);
 
     const grid = el('div', { style: 'display:grid; grid-template-columns:repeat(auto-fit, minmax(280px, 1fr)); gap:8px;' });
@@ -2052,7 +2280,7 @@ const changelog = [
 
     wrap.appendChild(banner);
     wrap.appendChild(grid);
-    view.appendChild(renderSection('sec-security', 'security', '安全白皮书', '14 项 fail-closed 设计点 · 纵深防御 · 零明文落盘', wrap));
+    view.appendChild(renderSection('sec-security', 'security', '安全白皮书', '16 项 fail-closed 设计点 · 纵深防御 · 零明文落盘', wrap));
   }
 
   // --- SSH 兼容矩阵 ---
@@ -2082,7 +2310,7 @@ const changelog = [
 
     const note = el('div', { class: 'card mt-3', style: 'padding:14px 18px; font-size:13px; line-height:1.7; color:var(--text-dim);' }, [
       el('strong', { style: 'color:var(--text);', text: '握手超时：' }),
-      document.createTextNode('外层 sshDialOuterTimeout = 45s (3 × 12s + buffer)；单套 sshAttemptTimeout = 10s。auto 模式按 compat → no-ecdh → legacy 顺序自动 fallback，最大限度兼容老 sshd (OpenSSH 5.x / 6.0 / AIX / 老堡垒机)。v0.9 起，未配 host_key_sha256 时默认拒绝连接 (fail-closed)。')
+      document.createTextNode('外层 sshDialOuterTimeout = 45s (3 × 12s + buffer)；单套 sshAttemptTimeout = 10s。auto 模式按 compat → no-ecdh → legacy 顺序自动 fallback，最大限度兼容老 sshd (OpenSSH 5.x / 6.0 / AIX / 老堡垒机)。未配 host_key_sha256 时默认拒绝连接 (fail-closed)。')
     ]);
 
     wrap.appendChild(tbl);
@@ -2105,7 +2333,7 @@ const changelog = [
       ]));
     });
     wrap.appendChild(grid);
-    view.appendChild(renderSection('sec-quality', 'quality', '质量保障', '6 层质量金字塔 · 500+ Go 测试 · 8 个 Playwright 脚本', wrap));
+    view.appendChild(renderSection('sec-quality', 'quality', '质量保障', '6 层质量金字塔 · 1,120+ Go 测试 · 42 个 Playwright 脚本', wrap));
   }
 
   // --- 功能模块 ---
@@ -2151,7 +2379,7 @@ const changelog = [
         ])
       ]));
     });
-    view.appendChild(renderSection('sec-modules', 'modules', '功能模块', '16 个深度能力卡 · 24 页面 · 120+ API（v0.17 最新工作台能力详见版本史）', wrap));
+    view.appendChild(renderSection('sec-modules', 'modules', '功能模块', '20 个深度能力卡 · 22 路由页面 + 原生桌面组件 · 130+ API', wrap));
   }
 
   // --- 版本演进史 (accordion) ---
@@ -2168,7 +2396,7 @@ const changelog = [
     wrap.appendChild(banner);
     wrap.appendChild(list);
 
-    view.appendChild(renderSection('sec-history', 'history', '版本演进史', 'v0.1 → v0.17 · 18 个版本 (含 v0.13.1 / v0.11-rc1) · 持续迭代 · 165+ commit', wrap));
+    view.appendChild(renderSection('sec-history', 'history', '版本演进史', 'v0.1 → v0.17 · 18 个版本 (含 v0.13.1 / v0.11-rc1) · 持续迭代 · 167+ commit', wrap));
   }
 
   function renderVersionCard(v, idx) {
@@ -2412,7 +2640,7 @@ const changelog = [
     const wrap = el('div');
     const intro = el('div', { class: 'card', style: 'padding:16px 20px; margin-bottom:12px; font-size:13.5px; line-height:1.85; color:var(--text-dim);' }, [
       el('strong', { style: 'color:var(--text);', text: '一句话：' }),
-      document.createTextNode('Kairo 不是要替代你的 SecureCRT + WinSCP + Postman 工具栈，而是把 80% 的高频操作收敛到一个浏览器标签。下面 10 个真实场景的对比，让你自己判断值不值。')
+      document.createTextNode('Kairo 不是要替代你的 SecureCRT + WinSCP + Postman + DBeaver 工具栈，而是把 80% 的高频操作收敛到一个浏览器标签。下面 12 个真实场景的对比，让你自己判断值不值。')
     ]);
 
     const tbl = el('div', { class: 'card', style: 'padding:0; overflow-x:auto;' });
@@ -2440,15 +2668,15 @@ const changelog = [
 
     wrap.appendChild(intro);
     wrap.appendChild(tbl);
-    view.appendChild(renderSection('sec-comparison', 'comparison', '横向对比', 'Kairo vs 传统工具栈 · 10 个真实场景效率对比', wrap));
+    view.appendChild(renderSection('sec-comparison', 'comparison', '横向对比', 'Kairo vs 传统工具栈 · 12 个真实场景效率对比', wrap));
   }
 
   // --- 故障案例库 ---
   function renderBugStoriesSection(view) {
     const wrap = el('div');
     const intro = el('div', { class: 'card', style: 'padding:14px 20px; margin-bottom:12px; font-size:13px; line-height:1.8; color:var(--text-dim);' }, [
-      el('strong', { style: 'color:var(--text);', text: '8 个真实 bug 复盘：' }),
-      document.createTextNode('下面这些不是教科书例子，而是 v0.4 - v0.9 期间 commit log 里真实发生过的故障。每个故事都包含：症状、根因、修复、教训。看到的不只是"修了什么"，更是"怎么思考的"。')
+      el('strong', { style: 'color:var(--text);', text: '11 个真实 bug 复盘：' }),
+      document.createTextNode('下面这些不是教科书例子，而是 v0.4 - v0.17 期间 commit log 里真实发生过的故障。每个故事都包含：症状、根因、修复、教训。看到的不只是"修了什么"，更是"怎么思考的"。')
     ]);
 
     const grid = el('div', { style: 'display:grid; grid-template-columns:repeat(auto-fit, minmax(280px, 1fr)); gap:12px;' });
@@ -2483,7 +2711,7 @@ const changelog = [
 
     wrap.appendChild(intro);
     wrap.appendChild(grid);
-    view.appendChild(renderSection('sec-bugs', 'bugs', '故障案例库', '8 个真实 bug 复盘 · 含根因 / 修复 / 教训 · v0.4–v0.9 真实事件', wrap));
+    view.appendChild(renderSection('sec-bugs', 'bugs', '故障案例库', '11 个真实 bug 复盘 · 含根因 / 修复 / 教训 · v0.4–v0.17 真实案例', wrap));
   }
 
   // --- FAQ ---
@@ -2503,7 +2731,7 @@ const changelog = [
       ]));
     });
     wrap.appendChild(grid);
-    view.appendChild(renderSection('sec-faq', 'faq', '常见问题', 'FAQ · 12 问 · 从部署到权限到扩展性', wrap));
+    view.appendChild(renderSection('sec-faq', 'faq', '常见问题', 'FAQ · 16 问 · 从部署、安全到数据库与桌面组件', wrap));
   }
 
   // --- 路线图 ---

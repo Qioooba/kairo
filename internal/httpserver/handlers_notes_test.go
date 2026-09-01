@@ -73,6 +73,53 @@ func TestNotesAPI_CRUDAndConflict(t *testing.T) {
 	}
 }
 
+func TestNotesAPI_TagsFolderAndSearch(t *testing.T) {
+	srv, _, _, _ := newTestServer(t)
+	attachTestNotes(t, srv)
+
+	w := doRequest(srv, http.MethodPost, "/api/notes", map[string]any{
+		"title": "WAS", "body": "- [ ] dump", "folder": "排障", "tags": []string{"#WAS", "heap"},
+	})
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s", w.Code, w.Body.String())
+	}
+	var created note.Note
+	if err := json.Unmarshal(w.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	if created.Folder != "排障" || len(created.Tags) != 2 {
+		t.Fatalf("create tags/folder: %+v", created)
+	}
+
+	w = doRequest(srv, http.MethodGet, "/api/notes?tag=was", nil)
+	var byTag []note.Note
+	_ = json.Unmarshal(w.Body.Bytes(), &byTag)
+	if w.Code != 200 || len(byTag) != 1 || byTag[0].ID != created.ID {
+		t.Fatalf("tag query: %d %+v", w.Code, byTag)
+	}
+	w = doRequest(srv, http.MethodGet, "/api/notes?folder="+note.InboxFolder, nil)
+	var inbox []note.Note
+	_ = json.Unmarshal(w.Body.Bytes(), &inbox)
+	if w.Code != 200 || len(inbox) != 0 {
+		t.Fatalf("inbox query: %d %+v", w.Code, inbox)
+	}
+	w = doRequest(srv, http.MethodGet, "/api/notes?q=heap", nil)
+	var byQ []note.Note
+	_ = json.Unmarshal(w.Body.Bytes(), &byQ)
+	if w.Code != 200 || len(byQ) != 1 {
+		t.Fatalf("keyword query: %d %+v", w.Code, byQ)
+	}
+
+	w = doRequest(srv, http.MethodPatch, "/api/notes/"+created.ID, map[string]any{
+		"base_revision": created.Revision,
+		"folder":        "",
+		"tags":          []string{},
+	})
+	if w.Code != 200 {
+		t.Fatalf("patch status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
 func TestNotesAPI_DesktopNullAndActions(t *testing.T) {
 	srv, _, _, _ := newTestServer(t)
 	attachTestNotes(t, srv)

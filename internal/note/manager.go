@@ -58,6 +58,11 @@ func clone(n Note) Note {
 		d := *n.Desktop
 		n.Desktop = &d
 	}
+	if n.Tags != nil {
+		tags := make([]string, len(n.Tags))
+		copy(tags, n.Tags)
+		n.Tags = tags
+	}
 	return n
 }
 
@@ -84,7 +89,13 @@ func (m *Manager) List(f Filter) []Note {
 		if f.DesktopOnly && (n.Desktop == nil || !n.Desktop.Visible) {
 			continue
 		}
-		if q != "" && !strings.Contains(strings.ToLower(n.Title+"\n"+n.Body), q) {
+		if f.Tag != "" && !n.HasTag(f.Tag) {
+			continue
+		}
+		if f.Folder != "" && !n.InFolder(f.Folder) {
+			continue
+		}
+		if q != "" && !strings.Contains(strings.ToLower(n.SearchBlob()), q) {
 			continue
 		}
 		out = append(out, clone(n))
@@ -180,6 +191,12 @@ func (m *Manager) Patch(id string, p Patch) (Note, error) {
 	}
 	if p.Color != nil {
 		n.Color = *p.Color
+	}
+	if p.Folder != nil {
+		n.Folder = *p.Folder
+	}
+	if p.Tags != nil {
+		n.Tags = append([]string(nil), (*p.Tags)...)
 	}
 	if p.Pinned != nil {
 		n.Pinned = *p.Pinned

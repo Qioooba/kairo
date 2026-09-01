@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -28,6 +29,10 @@ func (s *Server) handleWSCodegenDispatch(w http.ResponseWriter, r *http.Request)
 		s.handleWSCodegenGenerate(w, r, true)
 	case path == "/api/wscodegen/generate" && r.Method == http.MethodPost:
 		s.handleWSCodegenGenerate(w, r, false)
+	case path == "/api/wscodegen/download-zip" && r.Method == http.MethodPost:
+		s.handleWSCodegenDownloadZip(w, r)
+	case path == "/api/wscodegen/push-project" && r.Method == http.MethodPost:
+		s.handleWSCodegenPushProject(w, r)
 	default:
 		writeErr(w, 404, errors.New("未知 wscodegen 接口"))
 	}
@@ -67,22 +72,30 @@ func (s *Server) handleWSCodegenScanProject(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, 200, map[string]any{"ok": true, "scan": res})
 }
 
-func (s *Server) handleWSCodegenGenerate(w http.ResponseWriter, r *http.Request, forcePreview bool) {
+func (s *Server) decodeWSCodegenRequest(w http.ResponseWriter, r *http.Request) (wscodegen.Request, bool) {
 	var req wscodegen.Request
-	if err := json.NewDecoder(io.LimitReader(r.Body, 8*1024*1024)).Decode(&req); err != nil {
+	if err := json.NewDecoder(io.LimitReader(r.Body, 8*1024*1024)).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
 		writeErr(w, 400, fmt.Errorf("JSON 解析失败: %w", err))
-		return
-	}
-	if forcePreview {
-		req.DryRun = true
+		return req, false
 	}
 	if strings.TrimSpace(req.WSDLURL) != "" && strings.TrimSpace(req.WSDLContent) == "" && strings.TrimSpace(req.WSDLFile) == "" && strings.TrimSpace(req.WSDLProjectID) == "" {
 		raw, err := s.fetchWSDLURL(r, req.WSDLURL)
 		if err != nil {
 			writeErr(w, 400, err)
-			return
+			return req, false
 		}
 		req.WSDLContent = raw
+	}
+	return req, true
+}
+
+func (s *Server) handleWSCodegenGenerate(w http.ResponseWriter, r *http.Request, forcePreview bool) {
+	req, ok := s.decodeWSCodegenRequest(w, r)
+	if !ok {
+		return
+	}
+	if forcePreview {
+		req.DryRun = true
 	}
 	res, err := wscodegen.GenerateContext(r.Context(), req, s.ws)
 	if err != nil {
@@ -107,6 +120,55 @@ func (s *Server) handleWSCodegenGenerate(w http.ResponseWriter, r *http.Request,
 		action = "wscodegen.preview"
 	}
 	s.audit.Write(action, "engine", res.Engine, "mode", res.Mode, "files", fmt.Sprintf("%d", len(res.Files)), "out", res.OutputDir)
+	writeJSON(w, 200, map[string]any{"ok": true, "result": res})
+}
+
+func (s *Server) handleWSCodegenDownloadZip(w http.ResponseWriter, r *http.Request) {
+	req, ok := s.decodeWSCodegenRequest(w, r)
+	if !ok {
+		return
+	}
+	name, data, n, res, err := wscodegen.PrepareZip(r.Context(), req, s.ws)
+	if err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	s.audit.Write("wscodegen.download_zip", "engine", res.Engine, "mode", res.Mode, "files", strconv.Itoa(n), "name", name)
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", contentDispositionFilename(name))
+	w.Header().Set("X-Kairo-Files", strconv.Itoa(n))
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
+}
+
+func (s *Server) handleWSCodegenPushProject(w http.ResponseWriter, r *http.Request) {
+	req, ok := s.decodeWSCodegenRequest(w, r)
+	if !ok {
+		return
+	}
+	projectDir := strings.TrimSpace(req.ProjectDir)
+	if projectDir == "" {
+		writeErr(w, 400, errors.New("请先选择工程目录"))
+		return
+	}
+	src, notes, err := wscodegen.SuggestProjectSourceDir(projectDir)
+	if err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	req.OutputDir = src
+	req.DryRun = false
+	res, err := wscodegen.GenerateContext(r.Context(), req, s.ws)
+	if err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	res.Notes = append(notes, res.Notes...)
+	if req.OpenAfter && res.OutputDir != "" {
+		_ = revealInFileManager(res.OutputDir)
+	}
+	s.audit.Write("wscodegen.push_project", "engine", res.Engine, "mode", res.Mode, "files", fmt.Sprintf("%d", len(res.Written)), "out", res.OutputDir)
 	writeJSON(w, 200, map[string]any{"ok": true, "result": res})
 }
 

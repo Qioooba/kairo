@@ -473,36 +473,11 @@ func (m *Manager) Explain(ctx context.Context, source Source, query string) ([]E
 				if err := rows.Scan(dest...); err != nil {
 					return err
 				}
-				item := ExplainRow{}
-				for i, col := range cols {
-					value := raw[i].String
-					switch strings.ToLower(col) {
-					case "id":
-						item.ID = value
-					case "select_type", "type":
-						if item.Operation == "" {
-							item.Operation = value
-						} else {
-							item.Options = value
-						}
-					case "table":
-						item.Object = value
-					case "rows":
-						item.Cardinality = value
-					case "extra":
-						item.Extra = value
-					case "possible_keys", "key":
-						if item.Extra != "" {
-							item.Extra += "; "
-						}
-						item.Extra += col + "=" + value
-					}
-					if item.Raw != "" {
-						item.Raw += " | "
-					}
-					item.Raw += col + "=" + value
+				values := make([]string, len(cols))
+				for i := range raw {
+					values[i] = raw[i].String
 				}
-				rowsOut = append(rowsOut, item)
+				rowsOut = append(rowsOut, mysqlExplainRow(cols, values))
 			}
 			return rows.Err()
 		}
@@ -547,25 +522,64 @@ func (m *Manager) Explain(ctx context.Context, source Source, query string) ([]E
 	return rowsOut, err
 }
 
-func parseOraclePlanLine(line string) ExplainRow {
-	trimmed := strings.TrimSpace(line)
-	item := ExplainRow{Raw: line}
-	if strings.Contains(trimmed, "|") {
-		parts := strings.Split(trimmed, "|")
-		if len(parts) >= 4 {
-			item.ID = strings.TrimSpace(parts[1])
-			item.Operation = strings.TrimSpace(parts[2])
-			if len(parts) > 4 {
-				item.Object = strings.TrimSpace(parts[3])
-			}
-			if len(parts) > 6 {
-				item.Cost = strings.TrimSpace(parts[5])
-				item.Cardinality = strings.TrimSpace(parts[6])
-			}
+func mysqlExplainRow(cols, values []string) ExplainRow {
+	item := ExplainRow{
+		ColumnOrder: append([]string(nil), cols...),
+		Cells:       make(map[string]string, len(cols)),
+	}
+	for i, col := range cols {
+		value := ""
+		if i < len(values) {
+			value = values[i]
 		}
+		item.Cells[col] = value
+		switch strings.ToLower(col) {
+		case "id":
+			item.ID = value
+		case "select_type", "type":
+			if item.Operation == "" {
+				item.Operation = value
+			} else {
+				item.Options = value
+			}
+		case "table":
+			item.Object = value
+		case "rows":
+			item.Cardinality = value
+		case "extra":
+			item.Extra = value
+		case "possible_keys", "key":
+			if item.Extra != "" {
+				item.Extra += "; "
+			}
+			item.Extra += col + "=" + value
+		}
+		if item.Raw != "" {
+			item.Raw += " | "
+		}
+		item.Raw += col + "=" + value
+	}
+	return item
+}
+
+func parseOraclePlanLine(line string) ExplainRow {
+	item := ExplainRow{Raw: line}
+	trimmed := strings.TrimSpace(line)
+	if !strings.HasPrefix(trimmed, "|") || strings.HasPrefix(trimmed, "|-") || strings.Contains(trimmed, "Operation") && strings.Contains(trimmed, "Name") {
 		return item
 	}
-	item.Operation = trimmed
+	parts := strings.Split(trimmed, "|")
+	cell := func(i int) string {
+		if i < 0 || i >= len(parts) {
+			return ""
+		}
+		return strings.TrimSpace(parts[i])
+	}
+	item.ID = cell(1)
+	item.Operation = cell(2)
+	item.Object = cell(3)
+	item.Cardinality = cell(4)
+	item.Cost = cell(6)
 	return item
 }
 

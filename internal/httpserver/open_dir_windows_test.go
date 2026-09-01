@@ -16,9 +16,15 @@ func TestExplorerCommandsNeverUseCommandShell(t *testing.T) {
 	if !strings.Contains(reveal.SysProcAttr.CmdLine, `/select,"C:\tmp\release&calc\artifact.zip"`) {
 		t.Fatalf("unexpected reveal command line: %s", reveal.SysProcAttr.CmdLine)
 	}
+	if reveal.SysProcAttr.HideWindow {
+		t.Fatal("explorer reveal must not hide the window; that delays the desktop shell")
+	}
 
 	open, _ := platformOpenFolderCommand(`C:\tmp\release&calc`)
 	if strings.Contains(strings.ToLower(open.Path), "cmd.exe") || strings.Contains(strings.ToLower(open.SysProcAttr.CmdLine), "cmd /c") {
 		t.Fatalf("open command uses command shell: path=%s cmdline=%s", open.Path, open.SysProcAttr.CmdLine)
+	}
+	if open.SysProcAttr.HideWindow {
+		t.Fatal("explorer open-folder must not hide the window")
 	}
 }

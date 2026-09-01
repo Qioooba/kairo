@@ -15,6 +15,13 @@ function register(runner, ctx) {
   const rightFixture = compareRoot + '/compare-右 源';
 
   runner.describe('代码比对', function () {
+    runner.beforeAll(function () {
+      try {
+        delete require.cache[require.resolve('../make-compare-lab')];
+        require('../make-compare-lab');
+      } catch (_) {}
+    });
+
     runner.beforeEach(async function () {
       await page.goto(baseUrl + '#/compare', { waitUntil: 'domcontentloaded' });
       await page.waitForTimeout(1500);
@@ -169,11 +176,30 @@ function register(runner, ctx) {
       await page.waitForTimeout(800);
       const toRight = await page.$('button[title="用左侧替换右侧"]');
       if (toRight) await toRight.click();
-      await page.waitForTimeout(300);
+      await page.waitForTimeout(400);
       // 应用一侧 hunk 会重新渲染 diff DOM，旧 ElementHandle 已失效；重新查询后再反向应用。
       const toLeft = await page.$('button[title="用右侧替换左侧"]');
       if (toLeft) await toLeft.click();
       await runner.screenshot(page, '13-compare-10-hunk-both-ways');
+    });
+
+    runner.it('差异行可直接编辑并按行合并', async function () {
+      const textareas = await page.$$('textarea');
+      if (textareas.length < 2) throw new Error('缺少双侧编辑器');
+      await textareas[0].fill('alpha\nleft-line\nshared\n');
+      await textareas[1].fill('alpha\nright-line\nshared\n');
+      const compareBtn = await page.$('[data-action="text-compare"]');
+      await compareBtn.click();
+      await page.waitForTimeout(800);
+      const editable = await page.$('.cmp-code[contenteditable], .cmp-code[contenteditable="true"], .cmp-code[contenteditable="plaintext-only"]');
+      if (!editable) throw new Error('差异行不可编辑');
+      await editable.click();
+      await page.keyboard.type('-edit');
+      await page.keyboard.press('Enter');
+      await page.waitForTimeout(600);
+      const dirty = await page.$eval('body', el => el.innerText.indexOf('已修改') >= 0);
+      if (!dirty) throw new Error('行内编辑后应标记已修改');
+      await runner.screenshot(page, '13-compare-10b-inline-edit');
     });
 
     runner.it('文件夹比较提供测试、比对和双向覆盖', async function () {
@@ -202,37 +228,42 @@ function register(runner, ctx) {
       await folderTab.click();
       await page.waitForTimeout(400);
       async function pickDir(index, dirPath) {
-        const buttons = await page.$$('button:has-text("选择目录")');
-        await buttons[index].click();
-        await page.waitForTimeout(300);
-        const input = await page.$('input[placeholder="目录绝对路径"]');
-        if (!input) throw new Error('目录对话框没有路径输入框');
-        await input.fill(dirPath);
-        const ok = await page.$('.cmp-source-dialog button:has-text("确定")');
-        await ok.click();
-        await page.waitForTimeout(300);
+        const inputs = await page.$$('.cmp-folder-path');
+        if (inputs.length < 2) throw new Error('文件夹比较没有路径输入框');
+        await inputs[index].fill(dirPath);
+        await page.waitForTimeout(200);
       }
       await pickDir(0, left);
       await pickDir(1, right);
+      const depth = await page.$('#cmp-scan-depth');
+      if (depth) await page.selectOption('#cmp-scan-depth', '1');
       await page.click('[data-action="compare-test"]');
-      await page.waitForFunction(() => (document.body.innerText || '').indexOf('两侧来源可用') >= 0 || (document.body.innerText || '').indexOf('正常') >= 0, { timeout: 15000 });
+      await page.waitForFunction(() => (document.body.innerText || '').indexOf('两侧来源可用') >= 0 || (document.body.innerText || '').indexOf('正常') >= 0, null, { timeout: 15000 });
       await page.click('[data-action="compare-scan"]');
-      await page.waitForFunction(() => (document.body.innerText || '').indexOf('完成') >= 0 && (document.body.innerText || '').indexOf('仅左') >= 0, { timeout: 60000 });
+      await page.waitForFunction(() => (document.body.innerText || '').indexOf('完成') >= 0 && (document.body.innerText || '').indexOf('仅左') >= 0, null, { timeout: 60000 });
       await runner.screenshot(page, '13-compare-12-scan-fixtures');
+      const expand = await page.$('[data-action="expand-folder"]');
+      if (!expand) throw new Error('文件夹结果应是可展开的树');
+      await expand.click();
+      await page.waitForTimeout(1500);
+      await runner.screenshot(page, '13-compare-12b-expand');
       await page.click('[data-action="cover-right"]');
-      await page.waitForTimeout(600);
-      const startCover = await page.$('button:has-text("开始覆盖")');
-      if (!startCover) throw new Error('覆盖预览没有开始覆盖');
-      await startCover.click();
-      await page.waitForFunction(() => (document.body.innerText || '').indexOf('覆盖完成') >= 0 || (document.body.innerText || '').indexOf('完成') >= 0, { timeout: 120000 });
+      await page.waitForSelector('button:has-text("开始覆盖")');
+      await page.click('button:has-text("开始覆盖")');
+      await page.waitForFunction(() => !document.querySelector('.cmp-source-overlay'), null, { timeout: 120000 });
+      await page.waitForFunction(() => {
+        const t = document.querySelector('.cmp-scan-progress');
+        return t && t.textContent.indexOf('完成') >= 0;
+      }, null, { timeout: 90000 });
       await runner.screenshot(page, '13-compare-13-cover-right');
       await page.click('[data-action="cover-left"]');
-      await page.waitForTimeout(600);
-      const startLeft = await page.$('button:has-text("开始覆盖")');
-      if (startLeft) {
-        await startLeft.click();
-        await page.waitForTimeout(4000);
-      }
+      await page.waitForSelector('button:has-text("开始覆盖")');
+      await page.click('button:has-text("开始覆盖")');
+      await page.waitForFunction(() => !document.querySelector('.cmp-source-overlay'), null, { timeout: 120000 });
+      await page.waitForFunction(() => {
+        const t = document.querySelector('.cmp-scan-progress');
+        return t && t.textContent.indexOf('完成') >= 0;
+      }, null, { timeout: 90000 });
       await runner.screenshot(page, '13-compare-14-cover-left');
     });
   });

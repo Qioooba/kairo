@@ -97,7 +97,7 @@ func TestDatabaseCSVEncodingAndFormulaProtection(t *testing.T) {
 	if got := databaseCSVValue(map[string]any{"kind": "binary", "bytes": 3}); !strings.Contains(got, `"kind":"binary"`) {
 		t.Fatalf("structured value should be JSON in CSV: %q", got)
 	}
-	for _, input := range []string{"=cmd", "+1", "-1", "@x", "\tformula", "\rformula"} {
+	for _, input := range []string{"=cmd", "+1", "@x", "\tformula", "\rformula"} {
 		if got := safeCSVCell(input); got != "'"+input {
 			t.Fatalf("formula was not protected: input=%q got=%q", input, got)
 		}
@@ -105,7 +105,9 @@ func TestDatabaseCSVEncodingAndFormulaProtection(t *testing.T) {
 	if got := safeCSVCell("中文"); got != "中文" {
 		t.Fatalf("normal UTF-8 text changed: %q", got)
 	}
-	if got := safeCSVCell("/api/original/path"); got != "/api/original/path" {
-		t.Fatalf("slash-containing database text changed: %q", got)
+	for _, input := range []string{"/api/original/path", "C:\\tmp\\a.log", "-1", "2024-01-02", "a/b-c"} {
+		if got := safeCSVCell(input); got != input {
+			t.Fatalf("database text must stay original: input=%q got=%q", input, got)
+		}
 	}
 }

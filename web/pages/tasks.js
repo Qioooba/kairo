@@ -21,7 +21,7 @@
   const Kairo = window.Kairo = window.Kairo || {};
   Kairo.pages = Kairo.pages || {};
   const { el, toast } = Kairo.core;
-  const { api } = Kairo.api;
+  const { api, pathRow } = Kairo.api;
 
   // ---- minimal modal（与 reminders.js 同款 inline 实现）----
   function modal({ title, body, footer, width }) {
@@ -419,8 +419,11 @@
 
     const fields = el('div', { class: 'editor-fields' }, [
       el('label', { class: 'editor-label' }, [el('span', { text: '任务名称' }), nameInput]),
-      el('label', { class: 'editor-label' }, [el('span', { text: '执行命令' }), cmdInput]),
-      el('label', { class: 'editor-label' }, [el('span', { text: '工作目录' }), dirInput]),
+      el('label', { class: 'editor-label' }, [el('span', { text: '执行命令' }), pathRow(cmdInput, {
+        apply: 'command',
+        title: '选择脚本文件（保留已有参数）'
+      })]),
+      el('label', { class: 'editor-label' }, [el('span', { text: '工作目录' }), pathRow(dirInput, { directory: true })]),
       el('label', { class: 'editor-label' }, [el('span', { text: '调度' }), presetSel, cronInput, previewBox]),
       el('label', { class: 'editor-label' }, [
         el('span', { text: '超时（秒）' }),

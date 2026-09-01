@@ -512,8 +512,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleCompareSync(w, r)
 	case path == "/api/compare/sync/start":
 		s.handleCompareSyncStart(w, r)
-	case path == "/api/compare/scan":
+		case path == "/api/compare/scan":
 		s.handleCompareScanStart(w, r)
+	case path == "/api/compare/scan-level":
+		s.handleCompareScanLevel(w, r)
 	case path == "/api/compare/test":
 		s.handleCompareTest(w, r)
 	case strings.HasPrefix(path, "/api/compare/jobs/"):

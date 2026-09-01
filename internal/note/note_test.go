@@ -119,6 +119,76 @@ func TestListFilterSortAndClone(t *testing.T) {
 	}
 }
 
+func TestTagsFolderAndGlobalSearch(t *testing.T) {
+	m, s := newTestManager(t)
+	a, err := m.Add(Note{
+		Title:  "WAS",
+		Body:   "- [ ] 核对 heap dump\n**host**=was-prod-01",
+		Folder: " 排障 ",
+		Tags:   []string{" #WAS ", "###was", "  ##heap  ", "was"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Folder != "排障" || len(a.Tags) != 2 || a.Tags[0] != "WAS" || a.Tags[1] != "heap" {
+		t.Fatalf("tags/folder not normalized: %+v", a)
+	}
+	b, err := m.Add(Note{Title: "HTTP", Body: "seq_no", Folder: "对账", Tags: []string{"http"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	byTag := m.List(Filter{Tag: "was"})
+	if len(byTag) != 1 || byTag[0].ID != a.ID {
+		t.Fatalf("tag filter: %+v", byTag)
+	}
+	byFolder := m.List(Filter{Folder: "排障"})
+	if len(byFolder) != 1 || byFolder[0].ID != a.ID {
+		t.Fatalf("folder filter: %+v", byFolder)
+	}
+	inbox := m.List(Filter{Folder: InboxFolder})
+	if len(inbox) != 0 {
+		t.Fatalf("inbox should be empty, got %+v", inbox)
+	}
+	byKeyword := m.List(Filter{Query: "heap"})
+	if len(byKeyword) != 1 || byKeyword[0].ID != a.ID {
+		t.Fatalf("tag keyword search missed: %+v", byKeyword)
+	}
+	byFolderWord := m.List(Filter{Query: "对账"})
+	if len(byFolderWord) != 1 || byFolderWord[0].ID != b.ID {
+		t.Fatalf("folder keyword search missed: %+v", byFolderWord)
+	}
+
+	empty := []string{}
+	folder := ""
+	patched, err := m.Patch(a.ID, Patch{BaseRevision: a.Revision, Tags: &empty, Folder: &folder})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if patched.Folder != "" || len(patched.Tags) != 0 {
+		t.Fatalf("clear tags/folder failed: %+v", patched)
+	}
+	if got := m.List(Filter{Folder: InboxFolder}); len(got) != 1 || got[0].ID != a.ID {
+		t.Fatalf("inbox after clear: %+v", got)
+	}
+
+	m2, err := NewManager(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok := m2.Get(b.ID)
+	if !ok || got.Folder != "对账" || len(got.Tags) != 1 || got.Tags[0] != "http" {
+		t.Fatalf("round trip tags/folder: %+v ok=%v", got, ok)
+	}
+
+	if _, err := m.Add(Note{Tags: []string{strings.Repeat("x", MaxTagRunes+1)}}); err == nil {
+		t.Fatal("expected oversized tag error")
+	}
+	if _, err := m.Add(Note{Folder: "a/b"}); err == nil {
+		t.Fatal("expected slash folder error")
+	}
+}
+
 func TestValidationAndLayoutNormalization(t *testing.T) {
 	n := Note{Title: strings.Repeat("x", MaxTitleRunes+1), Color: "yellow"}
 	if err := n.Validate(); err == nil {
