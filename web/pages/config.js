@@ -19,7 +19,7 @@
   const Kairo = window.Kairo = window.Kairo || {};
   Kairo.pages = Kairo.pages || {};
   const { el, $, toast, validate, newSystem, newServer, newLogDir, kvTable, confirmDialog, escapeHtml } = Kairo.core;
-  const { api } = Kairo.api;
+  const { api, browseButton } = Kairo.api;
 
   const ICONS = {
     smClipboard: 'M9 2h6a2 2 0 012 2v16a2 2 0 01-2 2H9a2 2 0 01-2-2V4a2 2 0 012-2zm0 2v2h6V4zM8 12h8M8 16h8M8 8h4',
@@ -577,20 +577,18 @@
 
         const pathWrap = el('div', { style: 'flex:2; display:flex; gap:4px; position:relative;' });
         const pathInp = el('input', { type: 'text', value: op.path || '', placeholder: '可执行文件路径（如 C:\\Windows\\notepad.exe 或 /usr/bin/code）', style: 'flex:1;' });
-        const btnBrowse = el('button', { class: 'btn btn-sm', title: '选择文件', type: 'button', style: 'flex-shrink:0; display:inline-flex; align-items:center; gap:0; width:32px; justify-content:center; padding-left:0; padding-right:0;', unsafeHtml: svgIcon('smFolder', 14) });
-        btnBrowse.addEventListener('click', async () => {
-          try {
-            const r = await api('POST', '/api/choose-file');
-            if (r && r.path) {
-              pathInp.value = r.path;
-              op.path = r.path;
-              markDirty('openers');
-              updateIcon();
-              // 选完 exe 后实时预览图标（调后端 extract-icon）
-              await previewOpenerIcon(op);
-              updateIcon();
-            }
-          } catch (e) { /* ignore */ }
+        const btnBrowse = browseButton({
+          input: pathInp,
+          compact: true,
+          iconOnly: true,
+          title: '选择文件',
+          onPick: async function (path) {
+            op.path = path;
+            markDirty('openers');
+            updateIcon();
+            await previewOpenerIcon(op);
+            updateIcon();
+          }
         });
         pathWrap.appendChild(pathInp);
         pathWrap.appendChild(btnBrowse);

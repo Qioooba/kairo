@@ -12,7 +12,7 @@
   const Kairo = window.Kairo = window.Kairo || {};
   Kairo.pages = Kairo.pages || {};
   const { el, toast, copyToClipboard } = Kairo.core;
-  const { api, postJSON, getJSON, getPreference, putPreference, preferenceSaver } = Kairo.api;
+  const { api, postJSON, getJSON, getPreference, putPreference, preferenceSaver, pathRow, triggerDownload } = Kairo.api;
   const LS_KEY = 'kairo:wscodegen:form';
   const SESSION_CONTENT_KEY = 'kairo:wscodegen:session-content';
   const SAFE_FORM_KEYS = [
@@ -113,39 +113,18 @@
     return m ? decodeURIComponent(m[1]) : '';
   }
 
-  async function chooseDir(setter) {
-    try {
-      const r = await postJSON('/api/choose-dir', {});
-      if (r && r.path) setter(r.path);
-    } catch (e) {
-      toast(e.message || '选择目录失败', 'err');
-    }
-  }
-  async function chooseFile(setter) {
-    try {
-      const r = await postJSON('/api/choose-file', {});
-      if (r && r.path) setter(r.path);
-    } catch (e) {
-      toast(e.message || '选择文件失败', 'err');
-    }
-  }
-
   function field(label, control, hint) {
     const kids = [el('div', { class: 'lbl', text: label }), control];
     if (hint) kids.push(el('div', { class: 'wsc-hint', text: hint }));
     return el('div', { class: 'field' }, kids);
   }
 
-  function pathRow(input, onBrowse) {
-    const row = el('div', { class: 'wsc-path-row' }, [
-      input,
-      el('button', { class: 'btn', type: 'button', text: '浏览…', onclick: onBrowse })
-    ]);
-    return row;
-  }
-
-  function wsdlDropRow(input, onBrowse) {
-    const row = pathRow(input, onBrowse);
+  function wsdlDropRow(input) {
+    const row = pathRow(input, {
+      directory: false,
+      rowClass: 'path-field wsc-path-row',
+      onPick: function (p) { state.form.wsdl_file = p; saveForm(); rerender(); }
+    });
     row.classList.add('wsc-drop-zone');
     row.addEventListener('dragover', function (e) { e.preventDefault(); row.classList.add('dragging'); });
     row.addEventListener('dragleave', function () { row.classList.remove('dragging'); });
@@ -264,9 +243,7 @@
       }));
     } else if (state.form.source === 'file') {
       const inp = bindInput(el('input', { type: 'text', placeholder: 'D:\\proj\\wsdl\\service.wsdl' }), 'wsdl_file');
-      body.appendChild(field('本地 WSDL 文件', wsdlDropRow(inp, function () {
-        chooseFile(function (p) { state.form.wsdl_file = p; saveForm(); rerender(); });
-      }), '可点击“浏览…”或把 .wsdl 直接拖到这里。同目录的 .xsd 会自动带上；普通浏览器拖拽时会直接读取 WSDL 内容。'));
+      body.appendChild(field('本地 WSDL 文件', wsdlDropRow(inp), '可点击「浏览」或把 .wsdl 直接拖到这里。同目录的 .xsd 会自动带上；普通浏览器拖拽时会直接读取 WSDL 内容。'));
     } else if (state.form.source === 'url') {
       body.appendChild(field('WSDL URL', bindInput(el('input', { type: 'text', placeholder: 'http://10.0.0.1:8080/svc?wsdl' }), 'wsdl_url'),
         '内置模式会先拉取文本；官方工具模式可把 URL 直接交给生成器。'));
@@ -350,8 +327,10 @@
     const kids = [
       el('h3', { text: '工程扫描' }),
       el('div', { class: 'card-desc', text: '纯 JDK HttpURLConnection 不需要 lib；JAX-WS 内置模式只需目标工程确实有 JDK 6/8 API；CXF / Axis / XFire 必须扫描工程 lib 或手工选择 jar。可直接选择 C:\\ideaSpaces\\credit\\WebRoot\\WEB-INF\\lib。' }),
-      field('工程目录 / WEB-INF/lib', pathRow(projInp, function () {
-        chooseDir(function (p) { state.form.project_dir = p; saveForm(); rerender(); scanProject(); });
+      field('工程目录 / WEB-INF/lib', pathRow(projInp, {
+        directory: true,
+        rowClass: 'path-field wsc-path-row',
+        onPick: function (p) { state.form.project_dir = p; saveForm(); rerender(); scanProject(); }
       }), '不确定就直接选 WEB-INF/lib；扫描只用于识别依赖，不会修改工程。'),
       el('div', { class: 'btn-row' }, [
         el('button', { class: 'btn btn-primary', type: 'button', text: '扫描 lib', onclick: scanProject })
@@ -373,8 +352,10 @@
         rerender();
       });
       const jdkInp = bindInput(el('input', { type: 'text', placeholder: '例如 D:\\jdk1.6.0_45' }), 'jdk_home');
-      kids.push(field('JDK Home（官方工具才需要）', pathRow(jdkInp, function () {
-        chooseDir(function (p) { state.form.jdk_home = p; saveForm(); rerender(); detectJdk(p); });
+      kids.push(field('JDK Home（官方工具才需要）', pathRow(jdkInp, {
+        directory: true,
+        rowClass: 'path-field wsc-path-row',
+        onPick: function (p) { state.form.jdk_home = p; saveForm(); rerender(); detectJdk(p); }
       }), '优先工程自带的 jdk1.6 / jdk1.8，不要用本机 JDK 17。'));
       kids.push(field('探测到的 JDK', jdkSel));
       state.jdks.forEach(function (j) {
@@ -390,6 +371,9 @@
     if (state.scan) {
       const scanBox = el('div', { class: 'wsc-scan' });
       scanBox.appendChild(el('div', { class: 'wsc-scan-head', text: '建议引擎：' + (state.scan.suggested_engine || 'portable') + ' · ' + ((state.scan.jars || []).length) + ' 个相关 jar' }));
+      if (state.scan.suggested_src) {
+        scanBox.appendChild(el('div', { class: 'wsc-note', text: '写入工程将落到：' + state.scan.suggested_src }));
+      }
       (state.scan.notes || []).forEach(function (n) {
         scanBox.appendChild(el('div', { class: 'wsc-note', text: n }));
       });
@@ -499,9 +483,25 @@
       disabled: state.busy,
       onclick: function () { runGenerate(true); }
     });
+    const btnZip = el('button', {
+      class: 'btn btn-primary', type: 'button', id: 'wsc-zip-btn',
+      text: '下载 ZIP',
+      title: '一键打包全部生成文件，不需要指定输出目录',
+      disabled: state.busy,
+      onclick: downloadZip
+    });
+    const canPush = !!String(state.form.project_dir || '').trim();
+    const btnPush = el('button', {
+      class: 'btn btn-primary', type: 'button', id: 'wsc-push-btn',
+      text: '写入工程',
+      title: canPush ? (projectDestHint() ? ('写进已扫描工程的 src：' + projectDestHint()) : '按左侧工程目录推断 src 后写入') : '请先在左侧选择工程目录',
+      disabled: state.busy || !canPush,
+      onclick: pushProject
+    });
     const btnGen = el('button', {
-      class: 'btn btn-primary', type: 'button', id: 'wsc-generate-btn',
+      class: 'btn', type: 'button', id: 'wsc-generate-btn',
       text: '生成到目录',
+      title: '写出到下方指定的输出目录',
       disabled: state.busy,
       onclick: function () { runGenerate(false); }
     });
@@ -516,10 +516,15 @@
 
     return el('div', { class: 'card wsc-card-compact wsc-preview-card', id: 'wsc-preview-card' }, [
       el('h3', { text: '预览与写出' }),
-      field('输出目录', pathRow(outInp, function () {
-        chooseDir(function (p) { state.form.output_dir = p; saveForm(); rerender(); });
-      })),
-      el('div', { class: 'wsc-actions btn-row' }, [btnPreview, btnGen, btnCopy]),
+      el('div', { class: 'wsc-dest', text: destHint() }),
+      el('div', { class: 'wsc-actions btn-row' }, [btnPreview, btnZip, btnPush]),
+      field('输出目录（可选）', pathRow(outInp, {
+        directory: true,
+        rowClass: 'path-field wsc-path-row',
+        title: '选择已有文件夹；新目录名可再手改',
+        onPick: function (p) { state.form.output_dir = p; saveForm(); rerender(); }
+      }), '下载 ZIP 或写入工程时不必填。只在要落到自定义目录时用「生成到目录」。'),
+      el('div', { class: 'wsc-actions btn-row' }, [btnGen, btnCopy]),
       log,
       el('div', { class: 'wsc-preview' }, [fileCol, code])
     ]);
@@ -554,6 +559,7 @@
       jdk_home: f.jdk_home,
       classpath_jars: f.classpath_jars || [],
       extra_flags: extra ? extra.split(/\s+/) : [],
+      project_dir: f.project_dir,
       open_after: !dryRun && !!f.open_after,
       dry_run: !!dryRun
     };
@@ -594,6 +600,18 @@
     state.selectedFile = idx;
   }
 
+  function projectDestHint() {
+    if (state.scan && state.scan.suggested_src) return state.scan.suggested_src;
+    return '';
+  }
+
+  function destHint() {
+    const dest = projectDestHint();
+    if (dest) return '快捷方式：下载 ZIP 包，或一键写入工程（' + dest + '）。指定目录写出仍可用。';
+    if (state.form.project_dir) return '快捷方式：下载 ZIP 包，或按左侧工程目录推断 src 后写入。扫描 lib 后会显示准确路径。';
+    return '快捷方式：下载 ZIP 不需要目录；写入工程请先在左侧选择工程目录。';
+  }
+
   function showFile(idx) {
     state.selectedFile = idx;
     const files = (state.preview && state.preview.files) || [];
@@ -611,13 +629,80 @@
 
   function setBusyUI(on) {
     state.busy = !!on;
+    const ids = ['wsc-preview-btn', 'wsc-generate-btn', 'wsc-zip-btn', 'wsc-push-btn'];
+    ids.forEach(function (id) {
+      const btn = document.getElementById(id);
+      if (!btn) return;
+      if (id === 'wsc-push-btn' && !String(state.form.project_dir || '').trim()) {
+        btn.disabled = true;
+      } else {
+        btn.disabled = state.busy;
+      }
+    });
     const preview = document.getElementById('wsc-preview-btn');
-    const gen = document.getElementById('wsc-generate-btn');
-    if (preview) {
-      preview.disabled = state.busy;
-      preview.textContent = state.busy ? '处理中…' : '预览代码';
+    if (preview) preview.textContent = state.busy ? '处理中…' : '预览代码';
+  }
+
+  async function downloadZip() {
+    if (state.busy) return;
+    const miss = missingSource();
+    if (miss) {
+      toast(miss, 'warn');
+      return;
     }
-    if (gen) gen.disabled = state.busy;
+    const payload = collectPayload(true);
+    if (payload.mode === 'tool' && payload.engine === 'portable') {
+      toast('portable 没有官方工具，请用内置生成', 'warn');
+      return;
+    }
+    setBusyUI(true);
+    try {
+      const n = await triggerDownload('/api/wscodegen/download-zip', '', {
+        method: 'POST',
+        body: payload
+      });
+      const extra = n && n.fileCount ? '（' + n.fileCount + ' 个文件）' : '';
+      toast('已开始下载 ZIP' + extra, 'ok');
+    } catch (e) {
+      /* triggerDownload 已经 toast */
+    } finally {
+      state.busy = false;
+      rerender();
+    }
+  }
+
+  async function pushProject() {
+    if (state.busy) return;
+    const miss = missingSource();
+    if (miss) {
+      toast(miss, 'warn');
+      return;
+    }
+    if (!String(state.form.project_dir || '').trim()) {
+      toast('请先在左侧选择工程目录', 'warn');
+      return;
+    }
+    const payload = collectPayload(false);
+    if (payload.mode === 'tool' && payload.engine === 'portable') {
+      toast('portable 没有官方工具，请用内置生成', 'warn');
+      return;
+    }
+    setBusyUI(true);
+    try {
+      const r = await postJSON('/api/wscodegen/push-project', payload);
+      state.preview = r.result || r;
+      pickPreviewFile();
+      const written = ((state.preview.written || []).length);
+      const dest = state.preview.output_dir || projectDestHint();
+      toast('已写入工程 ' + written + ' 个文件' + (dest ? ' → ' + dest : ''), 'ok');
+    } catch (e) {
+      toast(e.message || '写入工程失败', 'err');
+    } finally {
+      state.busy = false;
+      rerender();
+      const card = document.getElementById('wsc-preview-card');
+      if (card && state.preview) card.scrollIntoView({ block: 'nearest' });
+    }
   }
 
   async function runGenerate(dryRun) {
@@ -757,5 +842,5 @@
 
   Kairo.pages.wscodegen = renderWSCodegen;
   Kairo.state.routes.wscodegen = renderWSCodegen;
-  Kairo.state.routeNames.wscodegen = 'WS 代码生成';
+  Kairo.state.routeNames.wscodegen = 'WebService 代码生成';
 })();

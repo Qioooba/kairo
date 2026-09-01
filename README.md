@@ -4,7 +4,7 @@
 
 **跨平台 · 纯 Go 单 exe · 启动即用 · 系统托盘常驻 · 默认仅本机访问**
 
-把 **SSH 远程命令 / 交互式终端 / WebSphere 日志排查 / 任意路径文件下载 / 报文格式化 / WebService 调试 / HTTP 测试 / 定时提醒 / 投喂作者** 收敛到一个零依赖、绿色运行、本地优先的单 exe 中——面向内网运维 / DBA / SRE 的本地工具箱。
+把 **SSH 远程命令 / 交互式终端 / WebSphere 日志排查 / 数据库工作台 (Oracle/MySQL/Redis) / 多协议文件与文本比对 / WAS 投产打包 / WebService 调试与代码生成 / HTTP & WebSocket 测试台 / Windows 原生便笺与宠物 / 定时任务调度** 收敛到一个零依赖、绿色运行、本地优先的单 exe 中——面向内网运维 / DBA / SRE / 研发的本地多功能瑞士军刀。
 
 [![Go Version](https://img.shields.io/badge/Go-1.24%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-4F4F4F)](#)
@@ -14,10 +14,12 @@
 [![Binary](https://img.shields.io/badge/Single%20Exe-%E2%9C%93-success)](#)
 [![SSH](https://img.shields.io/badge/SSH-5%20compat%20profile-6f42c1)](#)
 [![Themes](https://img.shields.io/badge/Themes-5%20%E5%A5%97%E4%B8%BB%E9%A2%98-blueviolet)](#)
-[![Code](https://img.shields.io/badge/Code-81K%2B-2088FF)](#)
-[![Tests](https://img.shields.io/badge/Tests-1100%2B-success)](#)
+[![Code](https://img.shields.io/badge/Code-122K%2B-2088FF)](#)
+[![Tests](https://img.shields.io/badge/Tests-1120%2B%20Go%20%7C%201200%2B%20E2E-success)](#)
+[![AI Compute](https://img.shields.io/badge/AI_Tokens-2.0B%2B-blueviolet)](#ai-native-工业级研发体系)
+[![AI Toolchain](https://img.shields.io/badge/AI_IDEs-Codex_%7C_Cursor_%7C_Antigravity_%7C_Trae_%7C_OpenCode-blue)](#ai-native-工业级研发体系)
 
-[快速开始](#-快速开始) · [功能矩阵](#-功能矩阵) · [架构](#-架构) · [API 列表](#-api-列表) · [构建](#-构建与发布) · [更新日志](#-release-notes)
+[快速开始](#-快速开始) · [功能矩阵](#-功能矩阵) · [AI 研发体系](#ai-native-工业级研发体系) · [技术栈](#-技术栈) · [架构](#-架构) · [API 列表](#-api-列表) · [构建](#-构建与发布) · [更新日志](#-release-notes)
 
 </div>
 
@@ -49,7 +51,13 @@ Kairo 全栈自绘 5 套主题，深色 / 浅色 / 护眼绿 / 高对比 / 仙�
 | 想追溯谁什么时候拉了哪个文件 | `logs/audit.log` 全操作流水 + `downloads/.kairo-meta.json` 索引 + SSH 凭据零明文 |
 | 密码写在 yaml 里很危险 | OS 钥匙串（Keychain / DPAPI / Secret Service）按 `(system,server,user)` 三元组存储；`file` 模式走 AES-256-GCM + AAD |
 | 老 Java / WebSphere / XFire 的 SOAP 接口要调试，SoapUI 太重 | WebService 调试中心：WSDL 导入（URL/文件）→ 自动生成 Envelope → 一键发送 + 模板 + 历史 + Mock |
-| 生产 Oracle 11g、MySQL、Redis 排查要在多个客户端间切换 | 数据库工作台：集中管理数据源，Oracle/MySQL 流式只读 SQL、元数据浏览与 CSV，Redis 用 SCAN 分页查看 Key |
+| 生产 Oracle 11g、MySQL、Redis 排查要在多个客户端间切换 | 数据库工作台：三段式工作流，集中管理数据源，Oracle/MySQL 流式只读 SQL、对象元数据、字段清单、执行计划与 CSV 导出，Redis 用 SCAN 分页查看 Key |
+| 跨服务器 / 本地与远端多协议文件目录比对复杂 | 文件与文本比较工作台：支持 Local/SFTP/FTP/FTPS 四类后端，智能内容散列判定差异，一键同步与代码 Diff 预览 |
+| WAS 生产补丁打包手工挑 class/jar 容易漏文件 | WAS 投产打包：一键解析 `credit` 增量清单，自动按 WAS 目录规范打包并校验，避免漏传误传 |
+| 对接老 SOAP 接口手写 Java 客户端繁琐且易出错 | WS Java 代码生成：一键生成 Portable / CXF / Axis 风格客户端与调用骨架，即拷即用 |
+| 运维日常排障备忘容易丢失，桌面工具太重 | Windows 原生桌面便笺：Win32 原生置顶透明无边框窗口，顶栏快捷摘录，双击内联编辑，revision 并发安全 |
+| Windows 定时脚本超时后子进程残留变成僵尸进程 | 定时任务调度器：Windows Job Object 递归销毁进程树，保留命令行完整空格与双引号语义，审计可溯 |
+| 枯燥的运维排障工作缺乏趣味与反馈 | Windows 原生桌面宠物：108 款像素精灵，10 秒 6 击彩蛋解锁，按白名单操作累计经验成长 |
 | SSH 终端里想直接拖文件、在线编辑 | 内嵌 SFTP 浏览器（list / pwd / preview / download），v0.13.1 起支持在线编辑 + 大文件分片上传 |
 | 容易忘写日报 / 房贷 / 客户跟进 | 定时提醒：单次 / 周循环 / 月循环，托盘弹 Win10+ Toast，暂停今日到次日 0 点 |
 | 想给作者投喂又怕走错链接 | 「投喂作者」页：库迪 / 瑞幸 / 随机奶茶三栏榜 + 真实姓名 + 武林花名前缀 |
@@ -128,9 +136,11 @@ go run . --config ./config.yaml
 
 ---
 
+---
+
 ## <img src="docs/section-icons/modules.svg" width="22" height="22" align="absmiddle"> 功能矩阵
 
-Kairo 按功能拆分前端页面和后端子包；数据库工作台是独立模块，不与 SSH、配置文件或 WebService 逻辑耦合。
+Kairo 按功能拆分前端页面与后端子包，全功能零框架依赖、绿色运行、本地优先。
 
 ### 1. WebSphere 日志助手
 
@@ -140,16 +150,16 @@ Kairo 按功能拆分前端页面和后端子包；数据库工作台是独立�
 | --- | --- |
 | **多服务器 × 多目录 多对多** | 业务系统下每台服务器展开自己的日志目录 checkbox；所有功能（搜索/列文件/下载/tail）统一走 `targets = server × dir` 矩阵 |
 | **多服务器并行搜索** | 1–16 路并发 `grep`，按主机分组返回 `{server, hits, elapsed_ms}`，失败不影响其他 |
-| **搜索语法** | `Exception`、`A && B`、`A \|\| B`、`A && !B`，关键词白名单校验 |
+| **搜索语法** | `Exception`、`A && B`、`A \|\| B`、`A && !B`，关键词白名单严格校验 |
 | **上下文查看** | 命中行前后各 30 行（在配置里可调），用 `sed -n a,bp` 拿，绝不下整个文件 |
 | **下载最新 N 个** | 默认最新 3 个（用户可显式覆盖为任意正整数），带 sidecar 元数据 |
 | **指定文件下载** | 勾选任意文件 → 异步任务 + SSE 进度 + 可取消 + 多文件 zip |
-| **实时 Tail** | SSE 长连接，可配最多保留行数（默认 1000）+ `requestAnimationFrame` 批量 flush，独立 `/tail.html` 全屏窗口；v0.13 起支持 Ctrl/⌘+F 页面内搜索高亮 |
+| **实时 Tail** | SSE 长连接，可配最多保留行数（默认 1000）+ `requestAnimationFrame` 批量 flush，独立 `/tail.html` 全屏窗口；支持 Ctrl/⌘+F 页面内搜索高亮 |
 | **Tail 多关键词高亮** | 在 tail 面板里加关键词 + 选颜色（12 色调色板 + 自定义 hex，支持中文 / 特殊字符），匹配段自动背景高亮；多条规则共用一套面板，规则保存到本地 `data/preferences.json` |
 | **文件名模糊搜索** | 子串 / glob（`*.log` / `SystemOut*` / `log?`），实时显示 `显示 X / Y` |
-| **文件名点击预览** | 新窗口 + modal 双模式；编码自动归一（utf-8 / gbk / gb18030）；NUL 字节检测防乱码；二进制文件提示；v0.13 起支持页面内搜索高亮（TreeWalker 遍历文本节点） |
+| **文件名点击预览** | 新窗口 + modal 双模式；编码自动归一（utf-8 / gbk / gb18030）；NUL 字节检测防乱码；二进制文件提示；支持页面内搜索高亮（TreeWalker 遍历文本节点） |
 
-### 2. SSH 终端（v0.10 起，v0.11+ 内嵌 SFTP 浏览器，v0.13.1+ 在线编辑 / 上传）
+### 2. SSH 终端 + SFTP 浏览器（v0.10 起，v0.11+ 内嵌 SFTP，v0.13.1+ 在线编辑/上传）
 
 定位：在浏览器里直接开交互式 shell，类似 Xshell 的 Web 版。复用 `sshclient` 的 5 套 compat profile，连老 OpenSSH 6.2p2 / AIX 同样能进。
 
@@ -167,199 +177,262 @@ Kairo 按功能拆分前端页面和后端子包；数据库工作台是独立�
 | **内嵌 SFTP 浏览器**（v0.11+） | `POST /api/ssh/sftp/{list,pwd,preview,download}`，独立命名空间不走 `free_file_roots` 白名单（账号权限承担） |
 | **在线编辑 + 上传**（v0.13.1+） | `POST /api/ssh/sftp/edit` 单文件流式编辑；`POST /api/ssh/sftp/upload/{init,cancel}` + `/{id}/data` 分片上传大文件 |
 
-### 3. 文件下载（任意路径）
+### 3. 数据库工作台（v0.16–v0.17）
 
-定位：跳出白名单，按 SSH 账号实际权限拿任意文件。
+定位：轻量级数据库只读排障控制台，集成 Oracle 11g、MySQL 与 Redis，免装大型客户端。
+
+| 子功能 | 说明 |
+| --- | --- |
+| **多数据源支持** | 纯 Go Oracle 驱动（`go-ora/v2`，支持 Oracle 11g+）、MySQL（`go-sql-driver`）、Redis（`go-redis/v9`） |
+| **三段式工作台** | 参考 PL/SQL Developer / DBeaver 工作流，左侧对象树、中间 SQL 编辑器、下方结果与持久报错区 |
+| **元数据与对象树** | 按 Tables / Views / Functions / Procedures / Triggers 分组展开；字段清单一键复制列名，双击快速生成查询/调用骨架 |
+| **只读策略硬防护** | 词法 AST 与正则双重拦截，一律拒绝 DDL/DML/PLSQL 块，仅允许单条只读 SELECT；强制超时与 5000 行/32MB 硬上限 |
+| **NDJSON 流式分批** | 大结果集边查边推，前端动态渲染网格，支持列宽拖拽、多模式查看（表格 / 单记录）、列显隐与本地快速过滤 |
+| **执行计划** | Oracle `EXPLAIN PLAN FOR` + `PLAN_TABLE` 解析与 MySQL `EXPLAIN`，排查慢查询索引命中情况 |
+| **Redis 空间洞察** | SCAN 游标分页浏览 Key，避免 KEYS * 阻塞生产；按 String/Hash/List/Set/ZSet 预览内容与 TTL，大 Key 安全截断 |
+| **安全导出** | 重新执行受限只读查询并流式导出 UTF-8 CSV，不占用浏览器大量内存 |
+
+### 4. 文件与文本比较工作台（v0.16–v0.17）
+
+定位：跨 Local、SFTP、FTP、FTPS 四类后端的多协议目录与文件比较同步工具。
+
+| 子功能 | 说明 |
+| --- | --- |
+| **4 类协议后端** | 本地目录、SSH SFTP 远程、标准 FTP、FTPS 显式加密，统一抽象为 `RemoteFS` 接口 |
+| **智能内容比对** | 默认智能采样/散列比对，精准识别大小相同但内容有差异的文件；提供可选“极速元数据”模式 |
+| **目录级同步** | 差异分类显示（仅左、仅右、内容不同、相同），支持勾选单向覆盖同步与本地安全备份 |
+| **代码文本 Diff** | 内嵌 `diff2html`，支持 Unified / Split 双栏比对与行内差异字符级高亮 |
+
+### 5. 文件下载器（任意路径）
+
+定位：跳出白名单限制，按 SSH 账号实际权限浏览并提取远程文件。
 
 | 子功能 | 说明 |
 | --- | --- |
 | **类 FTP 浏览** | 面包屑导航、子目录进入、绝对路径直接输入跳转 |
 | **多文件 zip 打包** | 进度条 + 可取消；同任务同名文件本地加 idx 前缀避免覆盖 |
-| **常用目录** | 按 `(system, server)` 分组的本地收藏，localStorage 持久化，可改别名 / 上下移 / 删除 |
+| **常用目录收藏** | 按 `(system, server)` 分组的本地收藏，localStorage 持久化，可改别名 / 上下移 / 删除 |
 | **指定本地目录** | `target_dir` 字段任意指定落盘路径，`validateTargetDir` 校验（绝对路径 + mkdir -p + 写探针） |
 | **完成通知 + 路径跳转** | 右上角浮动通知栈，含「打开所在目录 / 复制路径 / 查看下载历史」按钮 |
-| **安全开关** | `app.enable_free_file_browser: false` 一键关闭整个 `/api/files/*`，白名单模式照常生效 |
-| **可选前缀白名单** | `app.free_file_roots` 限定可访问的远端路径前缀（推荐生产开，**留空 = 拒绝**） |
+| **安全开关与白名单** | `app.enable_free_file_browser: false` 一键关闭；`app.free_file_roots` 限定前缀（**留空 = 拒绝**） |
 
-**与日志助手的取舍**：
+### 6. WAS 投产打包工具（v0.17）
 
-| 维度 | 日志助手 | 文件下载 |
-| --- | --- | --- |
-| 路径 | 仅 `log_dirs` 白名单 | 任意绝对路径（按 SSH 账号权限） |
-| 用途 | 排查日志、搜索、上下文 | 拿 properties / xml / sql / jar 等 |
-| 写权限 | 无 | 无（依然只读 + 下载） |
-| 审计 | `op=logs.*` | `op=files.*` |
+定位：面向 WebSphere / Java 企业级应用（如信贷 `credit` 系统）的生产增量补丁打包工具。
 
-### 4. 报文格式化
+| 子功能 | 说明 |
+| --- | --- |
+| **增量清单一键解析** | 粘贴 Git diff / SVN 提交清单或手工文件列表，自动解析源码路径到编译产物映射 |
+| **目录规范自动组织** | 自动按照 WAS 解压目录规范（`credit.war/WEB-INF/classes/...`、`lib/...`）归类打包 |
+| **本地校验与完整性** | 打包前检测本地文件是否存在与可读，缺失文件显式拦截并高亮警告 |
+| **ZIP 补丁一键导出** | 流式打包并生成带时间戳的增量更新包，附带清单 SHA256 校验摘要 |
 
-完全本地工具，无网络：
+### 7. WebService 调试中心（v0.12 起）
+
+定位：面向老 Java / WebSphere / XFire / SOAP 场景的轻量 SoapUI，免装笨重客户端。
+
+| 子功能 | 说明 |
+| --- | --- |
+| **WSDL 导入** | URL 拉取（30s 超时）或本地 `.wsdl` / `.xsd` / `.xml` 多选上传（单文件 4MB、合计 16MB）；识别 UTF-8/UTF-16/GBK/GB2312/GB18030；外部 XSD import / include 递归加载 |
+| **SOAP Envelope 生成** | 选中 operation 自动生成 Envelope，输入 / 输出参数树展开；支持 SOAP 1.1 / 1.2；XSD complex content / extension 继承解析 |
+| **接口测试** | 自定义 endpoint / SOAPAction / Headers / Body；Header 支持逐行、JSON、curl 粘贴；UTF-8/GBK/GB2312/GB18030；可关闭单次历史保存；超时 + 取消 |
+| **模板与历史** | 常用请求按分组存为模板；最近 500 条请求历史记录搜索与一键回放 |
+| **Mock 服务端** | 保存 Mock 配置后立即生效；走独立路由前缀 `/mock/{projectId}/{path...}`，不走 `/api/` 鉴权，支持异步落盘与记录回溯 |
+
+### 8. WS Java 代码生成器（v0.17）
+
+定位：根据 WSDL / SOAP 定义一键生成企业级 Java 客户端代码。
+
+| 子功能 | 说明 |
+| --- | --- |
+| **3 大框架风格** | 支持 Portable 标准 JAX-WS、Apache CXF、Apache Axis1/2 三种客户端调用模式 |
+| **方法与入参映射** | 解析 WSDL 操作签名，自动映射 Java 数据类型与请求/响应封装类 |
+| **完整调用骨架** | 生成包括超时配置、SOAPAction、Header 注入与异常处理的即拷即用 Java 类 |
+
+### 9. HTTP & WebSocket 测试台（v0.7 起）
+
+定位：轻量级接口调试台，支持 RESTful 与 WebSocket 全双工长连接测试。
+
+| 子功能 | 说明 |
+| --- | --- |
+| **用例 / 环境变量管理** | `GET/POST/DELETE /api/http/cases` + `/api/http/envs`，支持 `{{var}}` 占位符替换 |
+| **多方法 HTTP 请求** | 支持 GET / POST / PUT / DELETE / PATCH / HEAD / OPTIONS，请求头与 Body 自定义 |
+| **WebSocket 测试** | 支持 `ws://` 与 `wss://` 连接握手、文本/二进制帧收发、Ping/Pong 探测与消息历史流 |
+
+### 10. 报文格式化与小工具集
+
+完全本地工具，无网络，毫秒级响应：
 
 - **JSON**：格式化（2 空格 / 4 空格 / Tab / 自定义）、压缩、严格校验（多余尾随字符报错）
-- **XML**：格式化、压缩
+- **XML**：格式化、压缩、严格校验
 - **YAML**：格式化（缩进 1-8 空格可选）、压缩、校验、YAML ↔ JSON 互转
-- **URL-encoded / form-data**：encode（map → `a=1&b=2`，按 key 字典序） / decode（`a=1&b=2` → map，重复 key 自动合并成数组）
-- 单元测试覆盖 `decodeStrictJSON` / `FormatJSON` / `MinifyJSON` / `ValidateJSON` / `FormatXML` / `MinifyXML` / `FormatYAML` / `MinifyYAML` / `ValidateYAML` / `YAMLToJSON` / `JSONToYAML` / `URLFormEncode` / `URLFormDecode`
+- **URL-encoded / form-data**：encode（map → `a=1&b=2`，按 key 字典序） / decode（重复 key 自动合并）
+- **时间戳转换**：毫秒/秒时间戳 ↔ 北京时间/UTC 互转，支持一键获取当前时间与多种时间格式
+- **Cron 解析**：标准 5/6/7 段 Cron 表达式语义解析、校验与未来 10 次执行时间预览
+- **JSONPath 查询**：对大 JSON 进行路径表达式提取与高亮展示
 
-### 5. WebService 调试中心（v0.12 起）
+### 11. Windows 原生桌面便笺（v0.16–v0.17）
 
-定位：面向老 Java / WebSphere / XFire / SOAP 场景的轻量 SoapUI，浏览器内完成 WSDL 导入 → 报文生成 → 接口测试 → 模板复用 → 历史回放 → Mock 服务端全链路。
-
-| 子功能 | 说明 |
-| --- | --- |
-| **WSDL 导入** | URL 拉取（30s 超时）或本地 `.wsdl` / `.xsd` / `.xml` 多选上传（单文件 4MB、合计 16MB）；识别 UTF-8/UTF-16/GBK/GB2312/GB18030；外部 XSD import / include 递归加载；解析失败降级保留 `InputRaw` / `OutputRaw` + Warnings |
-| **SOAP Envelope 生成** | 选中 operation 自动生成 Envelope，输入 / 输出参数树展开；支持 SOAP 1.1 / 1.2；XSD complex content / extension 继承解析 |
-| **接口测试** | 自定义 endpoint / SOAPAction / Headers / Body；Header 支持逐行、JSON、curl 粘贴；UTF-8/GBK/GB2312/GB18030；可关闭单次历史保存；超时 + 取消；响应按 status / body / 关键词分块展示 |
-| **模板管理** | 保存常用请求为模板（按分组），命名 / 编辑 / 删除 |
-| **历史回放** | 最近 500 条请求记录，搜索 / 一键回放 |
-| **Mock 服务端** | 保存 Mock 配置后立即生效；走独立路由前缀 `/mock/{projectId}/{path...}`，**不走** `/api/` 鉴权（mock 地址是给外部系统调用的，不能要求带本工具箱的 token）；record 异步落盘 + 查询 / 清空 |
-| **XML 格式化** | 内置 XML format / minify / validate，独立小工具 |
-| **数据隔离** | 每个 WSDL 项目独立存储；模板 / 历史 / Mock 按 project 维度隔离 |
-
-### 6. HTTP 测试（v0.7 起）
+定位：基于 Win32 原生透明置顶窗口的桌面便笺，与 Web 端便笺中心实时双向同步。
 
 | 子功能 | 说明 |
 | --- | --- |
-| **用例 / 环境变量管理** | `GET/POST/DELETE /api/http/cases` + `/api/http/envs` |
-| **发起请求** | `POST /api/http/request` 返回响应，模板里引用 `{{var}}` 占位符 |
-| **多方法支持** | GET / POST / PUT / DELETE / PATCH / HEAD / OPTIONS |
+| **Win32 原生置顶** | 纯 Win32 API 渲染无边框半透明置顶窗口，零 WebView / 零 Electron 开销 |
+| **双击内联编辑** | 便笺中心卡片双击即内联编辑，支持自定义卡片背景色 |
+| **乐观并发控制** | 基于 revision 版本号防并发冲突覆盖，修改冲突显式提示 |
+| **多张显示保护** | 桌面最多同时置顶 6 张可见便笺，防止遮挡工作桌面 |
 
-### 7. 定时提醒（v0.13 起，便笺 / Reminder）
+### 12. 定时任务管理系统（v0.15–v0.16）
+
+定位：本地与后台常驻的任务调度引擎，支持 Cron 表达式与 Job Object 进程隔离。
+
+| 子功能 | 说明 |
+| --- | --- |
+| **灵活调度规则** | 支持标准 Cron 表达式与固定周期（秒/分/时/天）调度 |
+| **Windows 命令行规范** | 完美保留复杂参数中的空格与双引号语义，支持环境变量与自定义工作目录 |
+| **Job Object 沙箱回收** | Windows 平台使用 Job Object 归组，任务超时、取消或程序退出时递归销毁全部子孙进程 |
+| **审计与执行历史** | 记录任务每次执行的开始/结束时间、退出码与 stdout/stderr 输出摘要 |
+
+### 13. Windows 原生桌面宠物（v0.15–v0.16）
+
+定位：陪伴运维工程师的桌面像素精灵，纯 Win32 原生渲染。
+
+| 子功能 | 说明 |
+| --- | --- |
+| **108 款皮肤** | 内置丰富像素皮肤库，支持动画帧循环与状态切换 |
+| **经验成长模型** | 根据日志检索、SQL 查询、文件下载等白名单运维操作累计经验进化 |
+| **彩蛋解锁机制** | 10 秒内连续点击 6 次 About/侧边栏彩蛋激活解锁，激活码哈希绑定宠物 ID |
+| **零常驻开销** | 原生 GDI 绘制与透明通道，极低 CPU 与内存占用 |
+
+### 14. 定时提醒（便笺 / Reminder）
 
 定位：进程内常驻调度器 + 本地落盘 + 系统通知，弥补工具箱场景下"容易忘写日报 / 客户跟进 / 房贷"的痛点。
-
-![便笺提醒主界面（深色）](docs/screenshots/reminders-list.png)
-
-![周循环编辑器（深色）](docs/screenshots/reminders-editor-weekly.png)
 
 | 子功能 | 说明 |
 | --- | --- |
 | **3 种触发器** | 单次 (`once`) / 周循环 (`weekly`，勾选周一到周日) / 月循环 (`monthly`，每月 N 号) |
 | **托盘系统通知** | Win10+ 用系统 Toast；老系统走经典气泡（`internal/popup` 模块） |
 | **暂停 / 恢复** | 托盘菜单"暂停今日提醒"：今天到次日 0 点不再弹；"立即恢复"可提前解暂停 |
-| **落盘持久** | `data/.kairo-reminders.json`（兼容旧版 `data/reminders.json`），进程退出/重启不丢 |
-| **完整审计** | 每次触发写 `logs/audit.log`（`op=reminder.fire.popup`），暂停/恢复也写 |
-| **立即触发 / 启用切换** | 编辑器内"测试"按钮立即弹通知看效果；启用/停用 toggle 独立于删除 |
+| **落盘持久** | `data/.kairo-reminders.json`，进程退出/重启不丢；完整审计每次触发 |
 
-### 8. 投喂作者（v0.14 起，Sponsor / 排行榜）
+### 15. 系统配置（可视化编辑器）
 
-定位：把"想给作者投喂又怕走错链接"这件小事做成榜单——前 50 名投喂者按库迪 / 瑞幸 / 随机奶茶三栏 + 真实姓名 + 武林花名前缀展示。
+- 业务系统 / 服务器 / 日志目录 **三层结构**：三色 border-left + 编号 badge
+- 字段说明 + placeholder + tooltip 全面提示，支持「📋 复制服务器」
+- 保存 = 原子改写 `config.yaml`，COW Manager 整体替换，前端无感知热替换
+- 离开页面有 unsaved 提示；编码值自动归一（`gbk/gb18030 → gbk`）
 
-| 子功能 | 说明 |
-| --- | --- |
-| **数据源** | 内部 Java 后端（`endpointclient` 主备切换），URL 形态 `/credit/httpInterface?channelID=PC&serviceID=KairoSponsorLeaderboardAction` |
-| **三栏榜** | 库迪 (cotti) / 瑞幸 (lucky) / 奶茶 (milktea) 杯数 + 总数 + 首次投喂日期 |
-| **武林花名** | 前端写死 50 个昵称（武林神话 / 一代武神 / ...）按 rank 1:1 拼到真实姓名前面 |
-| **异步加载** | 页面打开后异步拉取；失败时随机搞笑提示，不反显内部地址 |
-| **Mock 服务** | `cmd/mock-sponsor-server` 起本地 mock，开发/测试用 |
-| **端点** | `GET /api/sponsor/leaderboard` |
+### 16. 环境自检（Diagnostics）
 
-### 9. 系统配置（可视化编辑器）
+一键收集 App info / Build info / Runtime info / Tools info（`find -printf` 可用性）与每台配置服务器的独立握手探测，输出 hostname、端口、协议与延迟。
 
-- 业务系统 / 服务器 / 日志目录 **三层结构**：
-  - 业务系统：4px primary border-left + 编号 badge
-  - 服务器：3px success border-left + 编号 `1.1`
-  - 日志目录：2px dashed warn border-left + 编号 `1.1.1`
-- 字段说明 + placeholder + tooltip 全面提示
-- 「📋 复制服务器（含日志目录）」一键复制并自动加 `-copy` 后缀
-- 保存 = 原子改写 `config.yaml`，COW Manager 替换，**前端无感知**热替换
-- 离开页面有 unsaved 提示
-- 顶部 + 底部双保存按钮，sticky 保存栏
-- 编码值归一：`gbk/gb18030 → gbk`；非法值（`shift-jis` 等）拒绝保存
+### 17. 下载历史与单文件元数据
 
-### 10. 环境自检（Diagnostics）
+- `downloads/` 目录所有文件 + 对应 `.kairo-meta.json` 索引
+- 记录 system / server / host / dir / dir_alias / file / encoding / kind / downloaded_at
+- 自动保留策略：`download_retention_days` (默认 7 天) + `download_max_count` (默认 1000 条)
 
-一键收集：
-
-- **App info**：版本、配置路径、工作目录、监听地址
-- **Build info**：Go runtime 版本、嵌入的 `x/crypto` 实际版本、build commit
-- **Runtime info**：GOOS / GOARCH、CPU 数、运行时长、监听状态
-- **Tools info**：`find -printf` 是否可用（决定能否列日志文件）
-- **Servers check**：每台配置服务器握手探测（独立 timeout，失败不影响其他），输出 hostname / 端口 / SSH 协议 / 错误摘要
-
-### 11. 下载历史
-
-- `downloads/` 目录所有文件 + 对应 `.kairo-meta.json` 索引（v1.0 起合并旧 `.meta` sidecar）
-- `meta.json` 包含 system / server / host / dir / dir_alias / file / encoding / kind / downloaded_at
-- 卡片视图，单条删除、一键清空
-- 任意路径下载的 `.properties` / `.xml` / `.gz` 等同样进历史
-- 保留策略：`download_retention_days` (默认 7 天) + `download_max_count` (默认 1000 条)，启动 + 下载完成 + 每小时触发清理
-
-### 12. 操作历史（审计）
-
-> 前端「操作历史」页（`web/pages/history.js`）已在 v0.8 下线；v0.9 起 `handlers_audit.go` 也已移除（`/api/audit/*` 端点全部下线）。
-> 现在审计数据**只**走 `logs/audit.log`（按天滚动为 `audit-YYYY-MM-DD.log`），用文本工具 / `jq` / 自写脚本离线分析即可。
-
-- `logs/audit.log` 全操作流水，按天滚动保留
-- **永不记录** SSH 密码、日志正文
-- 字段示例：
-  ```
-  ts=2026-07-12 10:30:00.123 op=logs.search system=信贷生产 server=prod-node-1 result=ok hits=8
-  ts=2026-07-12 10:30:10.789 op=files.download server=prod-node-1 path=/opt/.../report.zip size=102400 result=ok
-  ts=2026-07-12 11:00:00.456 op=reminder.fire.popup id=r-3 type=weekly at=2026-07-12T11:00:00+08:00
-  ```
-
-### 13. 常用命令速查
-
-v0.7 起实装的客户端静态工具（无后端改动）：
+### 18. 常用命令速查
 
 - **6 大分类 tabs**：Linux / Git / Docker / Oracle / MySQL / Redis / Nginx / Java 后端 / 前端 / IDEA 快捷键
-- **顶栏搜索 + 收藏 tab**：localStorage 持久化收藏（`kairo:commands:favs`）
-- **每条命令卡片**：标题 / 标签 / syntax（默认显示）/ 展开看 example + desc
-- **复制按钮**：复制 syntax 主体，toast 反馈
-- **快捷键**：`/` 聚焦搜索框，`Esc` 清空
-- **主题**：复用全局 5 套主题
+- **顶栏搜索 + 收藏 tab**：localStorage 持久化收藏，支持一键复制语法与快捷键 `/` 快速检索
+
+### 19. 投喂作者与社区排行（v0.14 起）
+
+- 调用内部 Java 后端展示前 50 名投喂者（库迪 / 瑞幸 / 随机奶茶三栏 + 真实姓名 + 武林花名前缀）
+- 异步加载 + 失败时随机搞笑提示，不反显内部地址；支持本地 Mock 服务联调
+
+### 20. 操作历史（审计）
+
+- 审计数据统一走 `logs/audit.log`（按天滚动为 `audit-YYYY-MM-DD.log`）
+- 永不记录 SSH 密码与敏感正文，包含操作时间、操作人、目标系统、服务器、动作与结果状态
+
+---
+
+## <img src="docs/section-icons/sparkle.svg" width="22" height="22" align="absmiddle"> AI-Native 工业级研发体系
+
+Kairo 全生命周期历经 **20 亿+ (2.0B+) AI Tokens** 深度算力淬炼，依托 5 大自主 Agent 编程环境，由全球前沿顶尖大模型共同深度协同开发：
+
+### 1. 研发编程工具链 (AI Agent Toolchain)
+
+- **`Codex`**：OpenAI 核心算法、AST 语法树解析与 Fail-Closed 单测生成
+- **`Cursor`**：全局代码库索引、多文件智能体协同与断点交互调试
+- **`Antigravity`**：Google DeepMind 5-Agent 并行 E2E 编排与多模态视觉审核
+- **`Trae`**：字节跳动 AI-Native IDE 高频 UI Token 化与 5 套主题工程
+- **`OpenCode`**：开源自主 Agent 跨模块依赖静态分析与环境治理
+
+### 2. 协同开发前沿模型 (Frontier AI Models)
+
+> **由以下前沿大模型共同深度协同开发**：
+> - `ChatGPT 5.6 Sol` · `ChatGPT 5.5` · `ChatGPT 5.4` · `GPT-5.6 Terra` · `GPT-5.6 Luna`
+> - `Claude Opus 4.8`
+> - `DeepSeek V4 Pro` · `DeepSeek V4 Flash`
+> - `Gemini 3.7 Flash`
+> - `Grok 4.6` · `Grok 4.5`
+> - `Doubao 2.1 Pro` · `GLM 5.2` · `Kimi K3` · `Kimi K2.7` · `MiniMax M3` · `MiniMax M2.7`
+
+### 3. 工程研发三大支柱 (Core Pillars)
+
+| 支柱维度 | 核心工程实践与质量保证 |
+| :--- | :--- |
+| **UI 视觉多模态审核 (Vision)** | **Click-Screenshot-Verification**：22 个页面、5 套自绘主题在多种分辨率下的像素级无闪烁视觉对齐与 WCAG 对比度审核。 |
+| **深度推理与安全沙箱 (Reasoning)** | 数据库只读 AST 词法强制校验、Windows Job Object 进程树递归销毁与 440+ 故障根因逻辑推导。 |
+| **全自动化测试闭环 (Testing)** | 1,120+ Go 单元测试与 42 个 Playwright 脚本（1,200+ 场景）海量运行日志、DOM 树与调用栈排查。 |
 
 ---
 
 ## <img src="docs/section-icons/stack.svg" width="22" height="22" align="absmiddle"> 技术栈
 
-### 后端
+### 后端（84,000+ 行 Go 代码 · 39 个 internal 子包 · 126 个测试文件 31,800+ 行测试）
 
 | 依赖 | 版本 | 用途 |
 | --- | --- | --- |
 | **Go** | 1.24+ | 主语言；主线面向 Win10/11，Win7 在 legacy 分支独立维护 |
-| [`github.com/sijms/go-ora/v2`](https://github.com/sijms/go-ora) | v2.8.24 | 纯 Go Oracle 驱动，生产目标为 Oracle 11g，无需 Oracle Instant Client |
+| [`github.com/sijms/go-ora/v2`](https://github.com/sijms/go-ora) | v2.8.24 | 纯 Go Oracle 驱动，生产目标为 Oracle 11g+，无需 Oracle Instant Client |
 | [`github.com/go-sql-driver/mysql`](https://github.com/go-sql-driver/mysql) | v1.9.3 | MySQL 连接池与只读查询 |
 | [`github.com/redis/go-redis/v9`](https://github.com/redis/go-redis) | v9.20.0 | Redis SCAN 与类型化 Key 预览 |
-| [`github.com/pkg/sftp`](https://github.com/pkg/sftp) | v1.13.6 | SFTP 协议实现：列目录、Stat、下载、Open、Readdir |
-| [`github.com/gorilla/websocket`](https://github.com/gorilla/websocket) | v1.5.3 | SSH 终端双向桥（v0.10 起） |
-| [`golang.org/x/crypto/ssh`](https://pkg.go.dev/golang.org/x/crypto/ssh) | v0.31.0 | SSH 客户端 + 5 套 compat profile；SSH shell 会话（v0.10 起） |
+| [`github.com/jlaffaye/ftp`](https://github.com/jlaffaye/ftp) | v0.2.4 | 文件比较与同步工作台 FTP / FTPS 远程文件系统实现 |
+| [`github.com/pkg/sftp`](https://github.com/pkg/sftp) | v1.13.6 | SFTP 协议实现：列目录、Stat、下载、Open、Readdir、分片上传 |
+| [`github.com/gorilla/websocket`](https://github.com/gorilla/websocket) | v1.5.3 | SSH 终端双向桥与 HTTP 测试台 WebSocket 客户端 |
+| [`golang.org/x/crypto/ssh`](https://pkg.go.dev/golang.org/x/crypto/ssh) | v0.31.0 | SSH 客户端 + 5 套 compat profile；SSH shell 会话 |
 | [`golang.org/x/text`](https://pkg.go.dev/golang.org/x/text) | v0.21.0 | `simplifiedchinese.GBK` / `GB18030` 透明编码转换 |
 | [`fyne.io/systray`](https://github.com/fyne-io/systray) | v1.11.0 | Windows 系统托盘（右下角图标 + 右键菜单） |
 | [`github.com/zalando/go-keyring`](https://github.com/zalando/go-keyring) | v0.2.8 | OS 钥匙串统一抽象 |
 | [`github.com/danieljoos/wincred`](https://github.com/danieljoos/wincred) | v1.2.3 | Windows DPAPI（`go-keyring` 后端） |
 | [`github.com/godbus/dbus/v5`](https://github.com/godbus/dbus) | v5.2.2 | Linux Secret Service / D-Bus |
 | [`gopkg.in/yaml.v3`](https://gopkg.in/yaml.v3) | v3.0.1 | `config.yaml` 解析 + 原子写回 |
-| [`golang.org/x/sys`](https://pkg.go.dev/golang.org/x/sys) | v0.30.0 | 平台特定系统调用 |
+| [`golang.org/x/sys`](https://pkg.go.dev/golang.org/x/sys) | v0.30.0 | 平台特定系统调用（Win32 原生窗口、Job Object 等） |
 | **标准库** | — | `net/http`、`embed`（静态资源内嵌）、`context`、`os/exec`、`crypto/sha256`、`crypto/aes` |
 
-### 前端
+### 前端（37,000+ 行 vanilla JS + CSS · 22 路由页面 + Win32 原生桌面组件 · 0 npm 运行时依赖）
 
 | 选型 | 说明 |
 | --- | --- |
-| **原生 JavaScript (ES2020)** | 无 React / Vue 依赖，单文件 IIFE |
-| **模块拆分** | `core.js` / `state.js` / `api.js` / `theme.js` / `auth.js` + `tail.js` + `sftp-common.js` + `pages/*.js`；数据库工作台独立为 `pages/database.js` |
-| **CSS 变量主题** | `:root[data-theme=...]` 5 套主题（dark / light / green / hc / xianxia 仙侠·墨韵青锋）；inline script 在 `<head>` 提前设 `data-theme` 防 FOUC；xterm.js 终端主题跟随联动（v0.10 起） |
-| **Node 单测** | `web/app.test.js` 覆盖 `escapeHtml` / `formatBytes` / `formatTime` / `trimMiddle` / `cssEscape` / `pctText` / `validate` |
+| **原生 JavaScript (ES2020)** | 无 React / Vue / npm 依赖，零构建产物污染，单文件 IIFE 极速加载 |
+| **页面与组件拆分** | `core.js` / `state.js` / `api.js` / `theme.js` / `auth.js` + `tail.js` + `sftp-common.js` + 22 个 `pages/*.js` 独立路由页面 |
+| **独立子窗口** | `index.html` (主窗口)、`ssh.html` (独立终端)、`tail.html` (独立日志跟踪)、`preview.html` (独立文件预览) |
+| **CSS 变量主题** | `:root[data-theme=...]` 5 套主题（dark / light / green / hc / xianxia 仙侠·墨韵青锋）；inline script 在 `<head>` 提前设 `data-theme` 防 FOUC |
+| **Node 单测** | `web/app.test.js` 覆盖 `escapeHtml` / `formatBytes` / `formatTime` / `trimMiddle` / `cssEscape` / `pctText` / `validate` / `tailViewer` 环形缓冲 |
 | **go:embed** | `web/` 整个目录内嵌进二进制，无外部静态文件 |
-| **SSE (Server-Sent Events)** | Tail 流 + 下载进度流，长连接，`http.Server.WriteTimeout = 0` |
+| **SSE (Server-Sent Events)** | Tail 流 + 下载进度流 + 比较同步流，长连接，`http.Server.WriteTimeout = 0` |
 | **`requestAnimationFrame`** | Tail 行批量 flush，避免 `textContent +=` 整段重排 |
 | **localStorage** | 主题 / 常用目录 / 表单偏好持久化 |
 
 ### 工程实践
 
-- **`vendor/` 已 commit**：clone 后无网也能 `-mod=vendor` 构建
-- **`go:embed web`**：静态资源打进单 exe
+- **`vendor/` 已 commit**：clone 后无网也能 `-mod=vendor` 快速构建
+- **`go:embed web`**：全部静态资源打进单 exe，实现真正零外部依赖
 - **COW Config Manager**：每次 `Replace` 整体换指针，handler 读快照不被撕裂
-- **Goroutine Worker Pool**：多服务器列文件走 4 路并发（硬编码）；多服务器搜索走 `Search.MaxConcurrency` 路（默认 2，最大 16）+ `errgroup` 风格隔离
-- **`context` 优先**：所有远程命令 / 下载 / Tail 都用 ctx 控制超时
+- **Goroutine Worker Pool**：多服务器列文件走 4 路并发；多服务器搜索走 `Search.MaxConcurrency` 路（默认 2，最大 16）+ `errgroup` 风格隔离
+- **`context` 优先**：所有远程命令 / 数据库查询 / 下载 / Tail 都用 ctx 控制超时
 - **三段式超时**：`ctx deadline → SSH session.Signal(SIGTERM) → 1s 后 SIGKILL`
 - **原子写回 yaml**：`tmpfile + rename(2)`，损坏不污染线上配置
-- **接口风格**：进程内 `fs.FS` 接口（`httpserver.serveStatic`）+ `sftpDialer` 包级变量（集成测试注入 fake）
-- **测试覆盖**：核心包都有 `_test.go`（`config` / `httpserver` / `sshclient` / `dlmanager` / `tailmgr` / `formatter` / `diagnostics` / `webservice` / `license` / `sponsor` / `reminder` / `popup` 等）
+- **Windows Job Object 进程树回收**：定时任务沙箱隔离，超时或程序退出时彻底销毁子孙进程，杜绝僵尸进程
+- **数据库只读词法 AST 校验**：严格拦截写操作，执行前做单条校验与行数/字节/超时硬上限
+- **测试覆盖**：核心包都有 `_test.go`（1,120+ Go 测试用例），全量覆盖 `config` / `httpserver` / `sshclient` / `dlmanager` / `tailmgr` / `dbconsole` / `comparefs` / `webservice` 等
 - **集成测试**：`mock_sshd.py` + `mock_shell_sshd.py` + `fake-websphere/` + injected `sftpDialer`
-- **E2E 测试**：Playwright + `tests/e2e/tests/*` + `scripts/e2e.sh` 入口
-- **老浏览器兼容**：xterm.js 5.5+ 的 ES2020 语法（`?.` / `??` / `globalThis`）经 esbuild 转译到 ES5 落入 `web/vendor/xterm/`；`core.js` 内置 `replaceChildren` / `closest` / `includes` / `padStart` / `globalThis` polyfill；文件读取走 `FileReader` 而非 `File.text()`（Chrome <76 兼容）；静态资源带 `?v=YYYYMMDD` 版本参数防缓存
+- **E2E 测试**：Playwright + 42 个测试脚本 + 1,200+ 场景，Windows 实测 1045 通过、159 条件跳过、0 失败
+- **老浏览器兼容**：xterm.js 5.5+ 转译到 ES5 落入 `web/vendor/xterm/`；`core.js` 内置 DOM polyfill；静态资源带 `?v=YYYYMMDD` 防缓存
 
 ---
 
@@ -369,15 +442,15 @@ v0.7 起实装的客户端静态工具（无后端改动）：
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│  Web Browser (单页应用，hash-router 路由)                             │
+│  Web Browser (单页应用，hash-router 路由) + Win32 原生桌面组件        │
 │  ┌─────────┬─────────┬─────────┬──────────┬──────────┬─────────────┐ │
-│  │ home    │ websphere│ files  │ ssh      │ formatter│ diagnostics │ │
-│  │ http    │ webservice│ config │ commands │ downloads│ about       │ │
-│  │ timestamp│ cron    │ jsonpath│ compare  │ reminders│ sponsor     │ │
+│  │ home    │ websphere│ files  │ ssh      │ database │ compare     │ │
+│  │ waspack │ webservice│wscodegen│ http    │ notes    │ tasks       │ │
+│  │ sponsor │ pet     │ reminders│ config  │ commands │ downloads   │ │
+│  │ formatter│timestamp│ cron   │ jsonpath │diagnostics│ about      │ │
 │  └─────────┴─────────┴─────────┴──────────┴──────────┴─────────────┘ │
-│           IIFE 风格 · vanilla JS · 5 套主题 · 22 个页面（+ sftp-common.js）  │
-│           xterm.js 终端（v0.10 起，独立 ssh.html 窗口）              │
-│           内嵌 SFTP 浏览器（v0.11+）+ 在线编辑 / 上传（v0.13.1+）     │
+│  22 个路由页面 · 5 套主题 · 4 个独立子窗口 (index/ssh/tail/preview)   │
+│  Win32 原生透明置顶桌面便笺 (internal/desknote) + 桌面宠物 (deskpet)  │
 └──────────────────────────────────────────────────────────────────────┘
                           │ fetch + EventSource(SSE) + WebSocket
                           ▼
@@ -385,14 +458,13 @@ v0.7 起实装的客户端静态工具（无后端改动）：
 │  HTTP Server (net/http, 127.0.0.1:18080 / config.yaml 可改 18092)   │
 │  ┌──────────────────────────────────────────────────────────────┐    │
 │  │ httpserver (内嵌 web/ 静态资源 + go:embed)                   │    │
-│  │ ├── httpserver.go (路由表 + 配置/服务组装 + license 网关)     │    │
-│  │ ├── handlers_*.go (~38 个非测试文件 + ~14 个 _test.go, 按模块分文件)     │    │
-│  │ │   ssh / ssh_shell(WS) / ssh_sftp / ssh_sftp_edit /        │    │
+│  │ ├── httpserver.go (路由表 + 服务组装 + License 网关)         │    │
+│  │ ├── handlers_*.go (39 个业务 handlers + 15 个 _test.go)      │    │
+│  │ │   ssh / ssh_shell(WS) / ssh_sftp / ssh_sftp_edit /         │    │
+│  │ │   database / compare / waspack / webservice / wscodegen /  │    │
 │  │ │   logs_* / files / tail / credentials / downloads /        │    │
-│  │ │   format / http / diff / compare / preferences / local /   │    │
-│  │ │   diagnostics / admin(servers/openers/download-retention/  │    │
-│  │ │   autostart) / auth / config_yaml / reminders /            │    │
-│  │ │   license / sponsor / webservice / openers / opener_icon   │    │
+│  │ │   http / notes / tasks / pet / reminders / sponsor /       │    │
+│  │ │   format / diagnostics / admin / auth / config_yaml        │    │
 │  │ ├── response.go / helpers.go / open_dir.go                   │    │
 │  │ └── *_test.go (单测 + 集成测试：fake SFTP + fakeShellSSH)    │    │
 │  └──────────────────────────────────────────────────────────────┘    │
@@ -401,34 +473,33 @@ v0.7 起实装的客户端静态工具（无后端改动）：
         ┌─────────────────┼────────────────────────────────────┐
         ▼                 ▼                                    ▼
 ┌─────────────┐    ┌────────────────┐                ┌─────────────────┐
-│ config      │    │ sshclient      │                │ sftpclient      │
-│ COW Manager │    │ 5 套 compat    │                │ Open/Stat/      │
-│ 原子 yaml   │    │ profile 自动   │                │ ReadDir/        │
-│ 热替换      │    │ fallback + ctx │                │ DownloadFile    │
-│             │    │ 三段式超时     │                │ RemoteFS 接口   │
+│ dbconsole   │    │ sshclient      │                │ comparefs       │
+│ Oracle/MySQL│    │ 5 套 compat    │                │ Local / SFTP /  │
+│ Redis / AST │    │ profile 自动   │                │ FTP / FTPS      │
+│ 只读流式网格│    │ fallback + ctx │                │ 智能内容比对    │
 └─────────────┘    └────────────────┘                └─────────────────┘
         │                 │                                    │
         ▼                 ▼                                    ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│  跨领域能力                                                          │
+│  跨领域业务与底层能力 (39 个 internal 子包)                         │
+│  ├── desknote     Win32 原生桌面便笺 (透明置顶、双击编辑)            │
+│  ├── deskpet      Win32 原生桌面宠物 (108 款皮肤、成长体系)          │
+│  ├── schedtask    定时任务调度器 (Windows Job Object 递归销毁)      │
+│  ├── waspack      WAS 生产打包工具 (清单解析、目录结构化)            │
+│  ├── webservice   WSDL 解析 + SOAP 报文 + Mock 调试中心              │
+│  ├── wscodegen    WS Java 客户端代码生成 (Portable/CXF/Axis)         │
 │  ├── audit        操作审计 (logs/audit.log，按天滚动)                 │
 │  ├── credentials  凭据存储 (keyring / file AES-256-GCM + AAD)         │
-│  ├── downloads    单文件索引元数据 (downloads/.kairo-meta.json)       │
 │  ├── dlmanager    异步下载任务池 + SSE 进度广播 + GC 周期可调         │
 │  ├── tailmgr      Tail 会话池 + Streamer 接口（可 mock）             │
-│  ├── sshshell     SSH 终端 WS ↔ shell 桥（v0.10 起，max=32）         │
-│  ├── sysutil      跨平台系统调用（HideConsoleWindow / AutoStart）     │
-│  ├── logquery     后端命令模板（find/grep/sed/sort/head/cat）        │
-│  ├── formatter    JSON / XML / YAML / URL-form 格式化（本地）        │
-│  ├── webservice   WSDL / SOAP / Mock 调试中心（v0.12 起）            │
-│  ├── diagnostics  环境自检（App/Build/Runtime/Tools/Servers）         │
-│  ├── license      本地激活 + Java 后端验证（v0.11-rc1 起）           │
-│  ├── sponsor      投喂作者排行榜后端（v0.14 起）                     │
-│  ├── reminder     定时提醒调度器（v0.13 起）                         │
-│  ├── browserpref  浏览器偏好探测 / 落盘（v0.13+）                    │
-│  ├── endpointclient 共享 HTTP 调用器（v0.14 起）                     │
-│  ├── iconextract  exe 图标提取（v0.8+）                              │
-│  └── popup        系统通知（Win10+ Toast / 经典气泡 fallback）        │
+│  ├── sshshell     SSH 终端 WS ↔ shell 桥 (max=32)                    │
+│  ├── formatter    JSON / XML / YAML / URL-form 格式化                │
+│  ├── diagnostics  环境自检 (App/Build/Runtime/Tools/Servers)         │
+│  ├── license      本地激活 + Java 后端验证 (AES-GCM 证书)            │
+│  ├── sponsor      投喂作者排行榜后端 + endpointclient 共享调用器     │
+│  ├── reminder     定时提醒调度器 + popup 系统 Toast                  │
+│  ├── portreuse    端口复用 (Windows 独立实现 + 跨平台兜底)           │
+│  └── tray         系统托盘管理与启动异常弹框                         │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -459,11 +530,11 @@ v0.7 起实装的客户端静态工具（无后端改动）：
 | --- | --- | --- |
 | GET | `/api/auth/status` | 当前认证状态（是否启用 / 当前用户 / 角色列表） |
 | POST | `/api/auth/logout` | 注销当前 token（清 cookie） |
-| GET | `/api/license/status` | License 状态（v0.11-rc1；前端判断是否弹激活窗） |
-| POST | `/api/license/activate` | 提交激活码，Go 端转发到 Java 激活服务（v0.11-rc1） |
-| GET | `/api/sponsor/leaderboard` | 投喂作者排行榜（v0.14） |
+| GET | `/api/license/status` | License 状态（前端判断是否弹激活窗） |
+| POST | `/api/license/activate` | 提交激活码，Go 端转发到 Java 激活服务 |
+| GET | `/api/sponsor/leaderboard` | 投喂作者排行榜 |
 
-### 数据库工作台（V1）
+### 数据库工作台（Oracle / MySQL / Redis）
 
 | Method | Path | 用途 |
 | --- | --- | --- |
@@ -471,16 +542,58 @@ v0.7 起实装的客户端静态工具（无后端改动）：
 | PUT / DELETE | `/api/database/sources/{id}` | 更新 / 删除数据源与凭据（**admin**） |
 | POST | `/api/database/sources/{id}/test` | 测试连接并返回版本、延迟 |
 | POST | `/api/database/query` | Oracle/MySQL 单条只读 SQL，NDJSON 分批流式返回 |
-| POST | `/api/database/export` | 重新执行受限只读 SQL并流式导出 UTF-8 CSV |
+| POST | `/api/database/export` | 重新执行受限只读 SQL 并流式导出 UTF-8 CSV |
 | GET | `/api/database/metadata/schemas` | Schema / Owner 列表 |
 | GET | `/api/database/metadata/objects` | 表与视图列表（最多 500） |
-| GET | `/api/database/metadata/fields` | 字段与类型 |
-| GET | `/api/database/metadata/indexes` | 表索引 |
+| GET | `/api/database/metadata/fields` | 字段清单与数据类型 |
+| GET | `/api/database/metadata/indexes` | 表索引清单 |
 | GET | `/api/database/metadata/constraints` | 主键 / 外键 / Check 等约束 |
 | GET | `/api/database/metadata/inspect` | 对象详情：字段、索引、约束、DDL/源码 |
 | POST | `/api/database/explain` | 只读 SQL 的执行计划（Oracle 使用 PLAN_TABLE，非图形） |
 | GET | `/api/database/redis/scan` | Redis SCAN 分页浏览 Key |
 | GET | `/api/database/redis/key` | 通过 `key_base64` 按类型预览 Key、TTL 与有限内容 |
+
+### 文件与目录比较工作台（Local / SFTP / FTP / FTPS）
+
+| Method | Path | 用途 |
+| --- | --- | --- |
+| POST | `/api/diff/compare` | 纯文本 diff 比对 |
+| POST | `/api/compare/folder-scan` | 目录对比扫描（受 `compare_allowed_roots` 白名单约束） |
+| POST | `/api/compare/file-diff` | 单文件 diff 比对 |
+| POST | `/api/compare/deep-check` | 文件夹深度检查（按需展开子目录） |
+| GET | `/api/compare/connections` | 比较工作台可用的远程连接列表 |
+| POST | `/api/compare/test` | 测试左右来源是否可访问（Stat，不扫描内容） |
+| POST | `/api/compare/scan` | 后台文件夹比对任务（智能内容散列判定） |
+| GET / DELETE | `/api/compare/jobs/{id}` | 查询 / 取消比较或同步任务 |
+| POST | `/api/compare/read` | 读取一侧文件文本 |
+| POST | `/api/compare/write` | 写入一侧文件（支持自动备份） |
+| POST | `/api/compare/copy` | 单文件复制到对侧 |
+| POST | `/api/compare/sync` | 按选中差异项单向覆盖同步 |
+
+### WAS 投产打包与代码生成
+
+| Method | Path | 用途 |
+| --- | --- | --- |
+| POST | `/api/waspack/parse-manifest` | 解析增量文件清单并映射到 WAS 路径规范 |
+| POST | `/api/waspack/build` | 校验本地文件并生成 WAS 增量补丁 ZIP 包 |
+| POST | `/api/wscodegen/generate` | 根据 WSDL 操作一键生成 Portable / CXF / Axis Java 客户端代码 |
+
+### 原生桌面便笺、任务与宠物
+
+| Method | Path | 用途 |
+| --- | --- | --- |
+| GET / POST | `/api/notes` | 获取便笺列表 / 创建便笺 |
+| PUT / DELETE | `/api/notes/{id}` | 更新便笺（带 revision 乐观锁） / 删除便笺 |
+| GET / POST | `/api/tasks` | 获取定时任务列表 / 创建定时任务 |
+| PUT / DELETE | `/api/tasks/{id}` | 更新任务 / 删除任务 |
+| POST | `/api/tasks/{id}/run` | 立即手动触发执行任务 |
+| POST | `/api/tasks/{id}/toggle` | 启用 / 停用任务 |
+| GET | `/api/tasks/{id}/logs` | 获取任务执行日志与历史 |
+| GET | `/api/pet/state` | 获取桌面宠物状态、经验值与皮肤 |
+| POST | `/api/pet/unlock` | 6 击彩蛋解锁宠物 |
+| POST | `/api/pet/skin` | 切换宠物皮肤（108 款） |
+| POST | `/api/pet/rename` | 宠物改名 |
+| POST | `/api/pet/sync` | 排行榜积分同步 |
 
 ### SSH / 配置 / 偏好
 
@@ -490,23 +603,23 @@ v0.7 起实装的客户端静态工具（无后端改动）：
 | GET | `/api/config/export` | 导出完整 `config.yaml`（含密文，供备份 / 迁移） |
 | POST | `/api/config/import` | 导入并替换 `config.yaml`（**admin**，敏感写） |
 | POST | `/api/ssh/test` | 测试 SSH 连接（password 缺省时从凭据存储读） |
-| GET | `/api/ssh/shell/ws` | SSH 终端 WebSocket 升级（v0.10 起；binary frame = 字节流透传，text frame = JSON 控制） |
-| POST | `/api/ssh/sftp/list` | SSH 终端内嵌 SFTP 列目录（v0.11+） |
-| POST | `/api/ssh/sftp/pwd` | SSH 终端内嵌 SFTP 当前目录（v0.11+） |
-| POST | `/api/ssh/sftp/preview` | SSH 终端内嵌 SFTP 预览（v0.11+） |
-| POST | `/api/ssh/sftp/download` | SSH 终端内嵌 SFTP 下载（v0.11+） |
-| GET | `/api/ssh/sftp/download/{id}/events` | SFTP 下载 SSE 进度（v0.11+） |
-| POST | `/api/ssh/sftp/edit` | SSH 终端 SFTP 在线编辑（v0.13.1+） |
-| GET | `/api/ssh/sftp/edit/{id}/events` | SFTP 编辑 SSE 进度（v0.13.1+） |
-| POST | `/api/ssh/sftp/upload/init` | SFTP 上传会话初始化（v0.13.1+） |
-| POST | `/api/ssh/sftp/upload/cancel` | SFTP 上传取消（v0.13.1+） |
-| POST | `/api/ssh/sftp/upload/{id}/data` | SFTP 上传分片数据（v0.13.1+） |
+| GET | `/api/ssh/shell/ws` | SSH 终端 WebSocket 升级（binary = 字节流，text = JSON 控制） |
+| POST | `/api/ssh/sftp/list` | SSH 终端内嵌 SFTP 列目录 |
+| POST | `/api/ssh/sftp/pwd` | SSH 终端内嵌 SFTP 当前目录 |
+| POST | `/api/ssh/sftp/preview` | SSH 终端内嵌 SFTP 预览 |
+| POST | `/api/ssh/sftp/download` | SSH 终端内嵌 SFTP 下载 |
+| GET | `/api/ssh/sftp/download/{id}/events` | SFTP 下载 SSE 进度 |
+| POST | `/api/ssh/sftp/edit` | SSH 终端 SFTP 在线编辑 |
+| GET | `/api/ssh/sftp/edit/{id}/events` | SFTP 编辑 SSE 进度 |
+| POST | `/api/ssh/sftp/upload/init` | SFTP 上传会话初始化 |
+| POST | `/api/ssh/sftp/upload/cancel` | SFTP 上传取消 |
+| POST | `/api/ssh/sftp/upload/{id}/data` | SFTP 上传分片数据 |
 | GET / PUT | `/api/admin/servers` | 服务器清单读取 / 增改（**admin**） |
-| GET / PUT | `/api/admin/openers` | external_openers 列表读取 / 配置（**admin**，v0.8 起） |
-| POST | `/api/admin/openers/extract-icon` | 预览 exe 图标（**admin**，v0.8+） |
+| GET / PUT | `/api/admin/openers` | external_openers 列表读取 / 配置（**admin**） |
+| POST | `/api/admin/openers/extract-icon` | 预览 exe 图标（**admin**） |
 | GET | `/api/local/opener-icon` | 读取已缓存的 opener 图标（`<img src>` 直接引用） |
-| GET / PUT | `/api/admin/download-retention` | 下载保留策略读取 / 配置（**admin**，v0.8 起） |
-| GET / PUT | `/api/admin/autostart` | 开机自启开关读取 / 配置（**admin PUT**，v1.0 起） |
+| GET / PUT | `/api/admin/download-retention` | 下载保留策略读取 / 配置（**admin**） |
+| GET / PUT | `/api/admin/autostart` | 开机自启开关读取 / 配置（**admin PUT**） |
 | GET / PUT | `/api/preferences` | 兼容的全局偏好（Tail 高亮等） |
 | GET / PUT / DELETE | `/api/preferences/{module}` | 按认证用户和模块读写工作台偏好；拒绝密码、Token、清单和粘贴 WSDL |
 
@@ -514,9 +627,9 @@ v0.7 起实装的客户端静态工具（无后端改动）：
 
 | Method | Path | 用途 |
 | --- | --- | --- |
-| POST | `/api/logs/list` | 列日志目录文件（**供 acceptance 脚本 / SDK 使用**，前端走 `/targets`） |
+| POST | `/api/logs/list` | 列日志目录文件（供 acceptance 脚本 / SDK 使用） |
 | POST | `/api/logs/list/targets` | 多 server × 多 dir 列文件（前端实际调用） |
-| POST | `/api/logs/search` | 单 server 关键词搜索（**供 acceptance 脚本 / SDK 使用**，前端走 `/multi`） |
+| POST | `/api/logs/search` | 单 server 关键词搜索（供 acceptance 脚本 / SDK 使用） |
 | POST | `/api/logs/search/multi` | 多 server 并行搜索（1–16 路） |
 | POST | `/api/logs/context` | 查看某行上下文（前后各 N 行） |
 | POST | `/api/logs/tail/start` | 启动实时 tail（返回 `{id}`） |
@@ -542,11 +655,9 @@ v0.7 起实装的客户端静态工具（无后端改动）：
 | --- | --- | --- |
 | POST | `/api/local/open-folder` | 在资源管理器打开本地目录 |
 | POST | `/api/local/reveal-file` | 定位本地文件 |
-| POST | `/api/local/open-with` | 用 external_openers 里配置的程序打开下载文件（v0.8 起） |
+| POST | `/api/local/open-with` | 用 external_openers 里配置的程序打开下载文件 |
 
 ### 凭据 / 下载管理
-
-> 审计：`/api/audit/*` 端点已在 v0.9 移除（`handlers_audit.go` 删除），审计数据直接读 `logs/audit.log`。
 
 | Method | Path | 用途 |
 | --- | --- | --- |
@@ -556,47 +667,35 @@ v0.7 起实装的客户端静态工具（无后端改动）：
 | GET | `/api/downloads/list` | 下载历史（含单文件索引元数据） |
 | DELETE | `/api/downloads/<name>` | 删除单条下载 |
 | POST | `/api/downloads/all` | 清空 downloads/ |
-| POST | `/api/downloads/<name>/open-dir` | 在文件管理器里 reveal 下载文件（v0.5 起；`<name>` 含 `/` 时改走 `?name=`） |
+| POST | `/api/downloads/<name>/open-dir` | 在文件管理器里 reveal 下载文件 |
 | GET | `/downloads/<file>` | 取本地下载文件（RFC 5987 `filename*`） |
 
 ### 格式化（本地，无网络）
 
 | Method | Path | 用途 |
 | --- | --- | --- |
-| POST | `/api/format/json` | JSON 格式化 / 压缩 / 校验 |
-| POST | `/api/format/xml` | XML 格式化 / 压缩 |
+| POST | `/api/format/json` | JSON 格式化 / 压缩 / 严格校验 |
+| POST | `/api/format/xml` | XML 格式化 / 压缩 / 校验 |
 | POST | `/api/format/yaml` | YAML 格式化 / 压缩 / 校验 / ↔ JSON 互转 |
 | POST | `/api/format/url-form` | URL-encoded / form-data 编码 + 解码 |
-| POST | `/api/format/timestamp` | 时间戳 ↔ 日期互转（v0.7 起） |
-| POST | `/api/format/cron-parse` | Cron 表达式解析 / 下次触发（v0.7 起） |
-| POST | `/api/format/jsonpath` | JSONPath 查询（v0.7 起） |
+| POST | `/api/format/timestamp` | 时间戳 ↔ 日期互转 |
+| POST | `/api/format/cron-parse` | Cron 表达式解析 / 下次触发 |
+| POST | `/api/format/jsonpath` | JSONPath 表达式查询与提取 |
 
-### HTTP 测试 / Diff / Compare
+### HTTP / WebSocket 测试
 
 | Method | Path | 用途 |
 | --- | --- | --- |
-| GET / POST / DELETE | `/api/http/cases` | HTTP 测试用例 列出 / 保存 / 删除（v0.7 起） |
-| GET / POST | `/api/http/envs` | HTTP 环境变量 列出 / 保存（v0.7 起） |
-| POST | `/api/http/request` | 发起一次 HTTP 请求并返回响应（v0.7 起） |
-| POST | `/api/diff/compare` | 文本 diff（v0.7 起） |
-| POST | `/api/compare/folder-scan` | 目录对比扫描（v0.9 起，受 `compare_allowed_roots` 白名单约束） |
-| POST | `/api/compare/file-diff` | 单文件 diff（v0.9 起，受 `compare_allowed_roots` 白名单约束） |
-| POST | `/api/compare/deep-check` | 文件夹深度检查（按需展开子目录，受 `compare_allowed_roots` 白名单约束） |
-| GET | `/api/compare/connections` | 比较工作台可用的 SFTP 连接列表 |
-| POST | `/api/compare/test` | 测试左右来源是否可访问（Stat，不扫描内容） |
-| POST | `/api/compare/scan` | 后台文件夹比对任务（支持早停内容比较） |
-| GET / DELETE | `/api/compare/jobs/{id}` | 查询 / 取消比较或覆盖任务 |
-| POST | `/api/compare/read` | 读取一侧文件文本 |
-| POST | `/api/compare/write` | 写入一侧文件（可备份） |
-| POST | `/api/compare/copy` | 单文件复制到对侧 |
-| POST | `/api/compare/sync` / `/api/compare/sync/start` | 按选中项覆盖（更新 + 单侧存在，不镜像删除） |
+| GET / POST / DELETE | `/api/http/cases` | HTTP 测试用例 列出 / 保存 / 删除 |
+| GET / POST | `/api/http/envs` | HTTP 环境变量 列出 / 保存 |
+| POST | `/api/http/request` | 发起一次 HTTP 请求并返回响应 |
 
-### WebService / SOAP / WSDL（v0.12 起）
+### WebService / SOAP / WSDL
 
 | Method | Path | 用途 |
 | --- | --- | --- |
 | POST | `/api/wsdl/import-url` | 从 URL 拉取并解析 WSDL（30s 超时） |
-| POST | `/api/wsdl/import-file` | 上传 `.wsdl` / `.xsd` / `.xml` 文件解析（单文件 4MB、合计 16MB，支持多文件 attach） |
+| POST | `/api/wsdl/import-file` | 上传 `.wsdl` / `.xsd` / `.xml` 文件解析（支持多文件） |
 | GET / DELETE | `/api/wsdl/projects` | 列出 / 删除已导入的 WSDL 项目 |
 | GET | `/api/wsdl/projects/{id}` | 获取单个 WSDL 项目详情（含 operations） |
 | POST | `/api/soap/generate` | 按 operation 自动生成 SOAP Envelope |
@@ -608,54 +707,43 @@ v0.7 起实装的客户端静态工具（无后端改动）：
 | POST | `/api/ws/xml/format` | XML 格式化 |
 | POST | `/api/ws/xml/minify` | XML 压缩 |
 | POST | `/api/ws/xml/validate` | XML 校验 |
+| 任意 | `/mock/{projectId}/{path...}` | Mock 服务端路由（**不走 `/api/` 鉴权**，供外部系统调用） |
 
-### 定时提醒（v0.13 起）
+### 定时提醒与诊断
 
 | Method | Path | 用途 |
 | --- | --- | --- |
-| GET | `/api/reminders` | 列表（按 type 过滤） |
-| POST | `/api/reminders` | 新增（body 为 Reminder） |
-| PUT | `/api/reminders/{id}` | 更新（全量替换 content / schedule） |
-| DELETE | `/api/reminders/{id}` | 删除 |
+| GET | `/api/reminders` | 提醒列表（按 type 过滤） |
+| POST | `/api/reminders` | 新增提醒 |
+| PUT | `/api/reminders/{id}` | 更新提醒 |
+| DELETE | `/api/reminders/{id}` | 删除提醒 |
 | POST | `/api/reminders/{id}/toggle` | 启用 / 停用切换 |
 | POST | `/api/reminders/{id}/fire` | 立即触发（测试用） |
 | GET | `/api/reminders/info` | 元信息（数据路径、调度状态、暂停状态） |
-| POST | `/api/reminders/pause` | 暂停（body: `{until: RFC3339}`） |
-| DELETE | `/api/reminders/pause` | 立即恢复 |
-
-### 诊断
-
-| Method | Path | 用途 |
-| --- | --- | --- |
+| POST | `/api/reminders/pause` | 暂停今日提醒 |
+| DELETE | `/api/reminders/pause` | 立即恢复提醒 |
 | GET | `/api/diagnostics` | 环境自检（App/Build/Runtime/Tools/Servers） |
-
-### Mock 路由（v0.12 WebService Mock，**不走 `/api/` 鉴权**）
-
-| Method | Path | 用途 |
-| --- | --- | --- |
-| 任意 | `/mock/{projectId}/{path...}` | Mock 服务端路由；不要求带本工具箱 token（mock 地址是给外部系统调用的） |
 
 ---
 
-## <img src="docs/section-icons/security.svg" width="22" height="22" align="absmiddle"> 安全设计
+## <img src="docs/section-icons/security.svg" width="22" height="22" align="absmiddle"> 安全白皮书（16 项 Fail-Closed 设计点）
 
 1. **默认只监听 127.0.0.1**：未启用 `auth` 时 `0.0.0.0` / 内网 IP 直接被配置校验拒绝，不向局域网暴露；启用 `auth` 后才允许监听 `0.0.0.0` / 内网 IP
-2. **不开放任意 shell**：所有远程命令由后端固定模板生成（`find` / `grep` / `sed` / `sort` / `head` / `cat` 组合）
-3. **白名单路径**：日志助手的目录必须来自 `log_dirs`；文件名只能来自 `find` 列出结果
+2. **不开放任意 shell 注入**：所有远程命令由后端固定模板生成（`find` / `grep` / `sed` / `sort` / `head` / `cat` 组合）
+3. **白名单路径强校验**：日志助手的目录必须来自 `log_dirs`；文件名只能来自 `find` 列出结果
 4. **文件浏览器按账号权限**：实际访问控制交给 SSH server 端（账号 + 文件系统权限 + sshd_config）
-5. **关键词严格转义**：搜索关键词做白名单校验，拒绝 ` ' \ $ ; & | < > ( ) { } [ ]` 等
-6. **密码零持久**：从不写进 `audit.log`、URL、错误信息；可选 OS 钥匙串按 `(system,server,user)` 三元组加密存储
-7. **只读不写**：不提供上传 / 删除 / 改远程文件的能力（v0.13.1 起 SSH 终端 SFTP 编辑/上传是写，但只限已声明用户用自己账号的写权限）
-8. **路径穿越防护**：所有用户输入做绝对路径校验、拒绝 `..` / NUL / 换行；URL 路径穿越 404
+5. **关键词严格白名单转义**：搜索关键词做白名单校验，拒绝 ` ' \ $ ; & | < > ( ) { } [ ]` 等恶意字符
+6. **密码零明文落盘与 AAD 绑定**：从不写进 `audit.log`、URL、错误信息；OS 钥匙串或 AES-256-GCM + AAD 绑定三元组
+7. **默认只读不写**：不提供无约束上传 / 删除 / 改远程文件的能力（SFTP 上传限制在已声明账户权限内）
+8. **路径穿越全面防护**：所有用户输入做绝对路径校验、拒绝 `..` / NUL / 换行；URL 路径穿越 404
 9. **超时硬约束**：远程命令走 ctx + 三段式（SIGTERM → 1s → SIGKILL）；下载任务 30 分钟硬超时
-10. **下载文件落盘校验**：任意 `target_dir` 必须绝对路径 + 写探针通过；`app.allowed_download_roots` 白名单进一步约束（**留空 = 不限制**）
-11. **硬上限**：单次最多 100 个文件，30 分钟超时
-12. **CORS / 跨域**：所有响应带 `X-Content-Type-Options: nosniff` / `Referrer-Policy: no-referrer` / `X-Frame-Options: DENY`，禁止跨域
+10. **下载文件落盘写探针校验**：任意 `target_dir` 必须绝对路径 + 写探针通过；`app.allowed_download_roots` 白名单进一步约束（**留空 = 拒绝**）
+11. **单次任务资源硬上限**：单次最多 100 个文件，30 分钟超时，返回体限制防 OOM
+12. **CORS / 跨域全面防护**：所有响应带 `X-Content-Type-Options: nosniff` / `Referrer-Policy: no-referrer` / `X-Frame-Options: DENY`，禁止跨域
 13. **下载文件落地命名安全**：同任务同名文件本地加 `001/002/...` 前缀，不互相覆盖
-14. **可选 Bearer token 认证 + IP 白名单**（v0.9 起）：在 `config.yaml` 的 `auth` 段配置 token（含 `role=admin` / `user` 与 `allowed_ips`），启用后可安全监听 `0.0.0.0` / 内网 IP；未带有效 token 的 API 请求返回 401，IP 不在白名单返回 403；admin 专属接口（配置导入 / 凭据清空 / 服务器增改 / openers / autostart）启用 auth 后强制 `role=admin`
-15. **Host key 强校验**（v0.9 BE-005）：server 未配 `host_key_sha256` 时默认拒绝连接（fail-closed），需显式 `allow_insecure_host_key: true` 才退回 InsecureIgnoreHostKey
-16. **TOCTOU 加固**（v0.9 BE-020）：handler 入口取一次配置快照，全程复用同一份，避免 Replace 后下游读到撕裂状态
-17. **License 网关**（v0.11-rc1 起）：未激活时除 `/api/license/*` 外所有 API 返回 403 + `license_required: true`；前端可加载、弹激活框
+14. **Bearer Token 认证 + IP 白名单**：在 `config.yaml` 配置 token（含 `role=admin`/`user` 与 `allowed_ips`），admin 专属接口强制 `role=admin`
+15. **数据库只读 AST 与资源硬上限**：SQL 词法 AST 与正则双重拦截，只允许单条 SELECT；强制超时与 5000 行/32MB 硬上限；Redis SCAN 游标分页防阻塞
+16. **Windows Job Object 进程树彻底回收**：定时任务使用 Job Object 沙箱归组，超时、取消或程序退出时递归销毁全部子孙进程，杜绝孤儿僵尸进程
 
 ---
 
@@ -835,89 +923,88 @@ systems:
 
 ```
 kairo/
-├── main.go                            # 入口：解析 -workdir / 加载 config / 起 HTTP server / 注入 license & sponsor
+├── main.go                            # 入口：解析 -workdir / 加载 config / 起 HTTP server / 注入服务
 ├── VERSION                            # 产品版本（唯一手改入口；go:embed）
 ├── config.yaml                        # 首次启动内置模板；运行时使用用户配置目录中的副本
 ├── go.mod / go.sum                    # 依赖锁定（go 1.24）
 ├── vendor/                            # 已固化依赖，clone 后无网可编
-├── web/                               # 嵌入式前端
+├── web/                               # 嵌入式前端（37,000+ 行原生 JS + CSS，零 npm 依赖）
 │   ├── index.html                     # SPA 骨架 + 顶部菜单 + 主题 inline 防 FOUC
 │   ├── preview.html                   # 文件预览独立新窗口
 │   ├── tail.html                      # Tail 全屏窗口
-│   ├── ssh.html                       # SSH 终端全屏窗口（v0.10 起）
+│   ├── ssh.html                       # SSH 终端全屏窗口
 │   ├── style.css                      # CSS 变量主题（5 套：dark/light/green/hc/xianxia）
 │   ├── theme.js                       # 主题切换（localStorage 持久）
 │   ├── core.js / api.js / state.js / app.js
-│   ├── auth.js                        # Bearer token 登录遮罩（v0.9 起）
-│   ├── tail.js                        # 独立 tail 窗口逻辑（v0.9 起）
-│   ├── sftp-common.js                 # SSH 终端 SFTP 共享工具（v0.11+）
-│   ├── sponsor.js / reminders.js      # v0.14 / v0.13 新增页面
-│   ├── img/                           # Kairo 官方图标（kairo-logo.png + 32/64/192 favicon + sponsor/ + xianxia-bg.png）
+│   ├── auth.js                        # Bearer token 登录遮罩
+│   ├── tail.js                        # 独立 tail 窗口逻辑
+│   ├── sftp-common.js                 # SSH 终端 SFTP 共享工具
+│   ├── pet.js / reminders.js          # 桌面宠物 / 提醒辅助逻辑
+│   ├── img/                           # Kairo 官方图标（kairo-logo.png + 32/64/192 favicon + xianxia-bg.png）
 │   ├── vendor/                        # 第三方前端库（diff2html + xterm ES5 转译）
 │   ├── app.test.js                    # Node 单测
-│   └── pages/
-│       ├── home.js                    # 首页
-│       ├── websphere.js               # 日志助手
-│       ├── files.js                   # 文件下载
-│       ├── ssh.js                     # SSH 终端（v0.10 起）
-│       ├── formatter.js               # JSON/XML/YAML/URL-form 格式化
-│       ├── http.js                    # HTTP 测试（v0.7）
-│       ├── commands.js                # 常用命令速查（v0.7 起）
-│       ├── diagnostics.js             # 环境自检
+│   └── pages/                         # 22 个独立业务页面
+│       ├── home.js                    # 首页与快速入口
+│       ├── websphere.js               # WebSphere 日志助手
+│       ├── files.js                   # 文件下载（任意路径）
+│       ├── waspack.js                 # WAS 生产补丁打包工具
+│       ├── ssh.js                     # SSH 交互式终端与 SFTP
+│       ├── database.js                # 数据库工作台（Oracle/MySQL/Redis）
+│       ├── http.js                    # HTTP & WebSocket 测试台
+│       ├── webservice.js              # WebService 调试中心
+│       ├── wscodegen.js               # WS Java 客户端代码生成器
+│       ├── diagnostics.js             # 环境自检与握手探测
 │       ├── config.js                  # 系统配置可视化编辑器
-│       ├── downloads.js               # 下载历史
-│       ├── timestamp.js               # 时间戳转换（v0.7）
-│       ├── cron.js                    # Cron 解析（v0.7）
-│       ├── jsonpath.js                # JSONPath 查询（v0.7）
-│       ├── compare.js                 # 代码 / 文件比对（v0.7）
-│       ├── webservice.js              # WebService 调试中心（v0.12 起）
-│       ├── reminders.js               # 定时提醒（v0.13 起）
-│       ├── sponsor.js                 # 投喂作者（v0.14 起）
-│       └── about.js                   # 关于（v0.9 重写：数据仪表盘 + 架构 + 版本史）
-├── internal/                          # 26 个后端子包
-│   ├── audit/                         # 审计日志（线程安全，不含密码；v0.9 起 /api/audit/* 下线，模块保留供内部 write）
-│   ├── browserpref/                   # 浏览器偏好探测 / 落盘（v0.13+）
+│       ├── downloads.js               # 下载历史与索引元数据
+│       ├── formatter.js               # JSON/XML/YAML/URL-form 格式化
+│       ├── timestamp.js               # 时间戳转换
+│       ├── cron.js                    # Cron 表达式解析
+│       ├── jsonpath.js                # JSONPath 表达式提取
+│       ├── compare.js                 # 多协议文件与文本比对工作台
+│       ├── commands.js                # 常用命令速查
+│       ├── notes.js                   # 桌面便笺中心
+│       ├── tasks.js                   # 定时任务管理系统
+│       ├── sponsor.js                 # 投喂作者与社区排行
+│       └── about.js                   # 关于（数据看板 + 架构 + 版本演进史 + 故障库）
+├── internal/                          # 39 个后端子包（84,000+ 行 Go 代码）
+│   ├── audit/                         # 审计日志（线程安全，logs/audit.log 按天滚动）
+│   ├── browserpref/                   # 浏览器偏好探测 / 落盘
+│   ├── comparefs/                     # 多协议文件系统抽象（Local / SFTP / FTP / FTPS）
 │   ├── config/                        # config.yaml 加载 + 校验 + COW Manager
 │   ├── credentials/                   # 凭据存储抽象（keyring / file AES-256-GCM + AAD）
-│   ├── diagnostics/                   # 环境自检
-│   ├── diff/                          # 跨平台 diff 实现（v0.7+）
+│   ├── cronx/                         # Cron 表达式解析与调度算法
+│   ├── dbconsole/                     # 数据库工作台（Oracle/MySQL/Redis、只读 AST 校验）
+│   ├── desknote/                      # Win32 原生桌面便笺窗口（透明置顶、双击编辑）
+│   ├── deskpet/                       # Win32 原生桌面宠物窗口（108 款皮肤、经验成长）
+│   ├── diagnostics/                   # 环境自检与探针
+│   ├── diff/                          # 跨平台 diff 实现
 │   ├── dlmanager/                     # 异步下载任务池 + SSE 广播
 │   ├── downloads/                     # 单文件索引元数据（.kairo-meta.json）
-│   ├── endpointclient/                # 共享 HTTP 调用器（v0.14 起）
+│   ├── endpointclient/                # 共享 HTTP 调用器（主备切换 + 认证）
 │   ├── formatter/                     # JSON / XML / YAML / URL-form 格式化
-│   ├── httpserver/                    # HTTP 路由 + handlers (~38 文件 + 14 _test.go)
-│   │   ├── httpserver.go              # 路由表 + 服务组装 + license 网关
-│   │   ├── response.go / helpers.go / open_dir.go
-│   │   ├── handlers_ssh.go / handlers_ssh_shell.go (WS) / handlers_ssh_sftp.go / handlers_ssh_sftp_upload.go / handlers_edit.go
-│   │   ├── handlers_logs_*.go / handlers_files.go / handlers_tail.go
-│   │   ├── handlers_credentials.go / handlers_downloads.go / handlers_format.go
-│   │   ├── handlers_diagnostics.go / handlers_preferences.go / handlers_local.go
-│   │   ├── handlers_compare.go / handlers_diff.go
-│   │   ├── handlers_http_cases.go / handlers_http_request.go (v0.7+)
-│   │   ├── handlers_auth.go / handlers_openers.go / handlers_opener_icon.go / handlers_config_yaml.go / handlers_admin.go / handlers_autostart.go
-│   │   ├── handlers_webservice.go     # WSDL / SOAP / Mock 端点
-│   │   ├── handlers_license.go        # v0.11-rc1 起
-│   │   ├── handlers_sponsor.go        # v0.14 起
-│   │   ├── handlers_reminder.go       # v0.13 起
-│   │   ├── handlers_misc.go           # 兜底（健康检查等小端点）
-│   │   └── *_test.go                  # 单测 + 集成测试（~14 个 _test.go）
-│   ├── iconextract/                   # exe 图标提取（v0.8+）
-│   ├── license/                       # 本地激活 + Java 后端验证（v0.11-rc1 起）
-│   ├── logquery/                      # 后端命令模板
+│   ├── httpserver/                    # HTTP 路由与 39 个业务 handlers (~15 个 _test.go)
+│   ├── iconextract/                   # exe 图标提取与缓存
+│   ├── license/                       # 本地激活 + Java 后端验证（AES-GCM 证书）
+│   ├── logquery/                      # 后端命令安全模板生成
 │   ├── popup/                         # 系统通知（Win10+ Toast / 经典气泡 fallback）
 │   ├── portreuse/                     # 端口复用（Windows 独立实现 + 跨平台兜底）
-│   ├── reminder/                      # 定时提醒调度器（v0.13 起）
+│   ├── reminder/                      # 定时提醒调度器
+│   ├── schedtask/                     # 定时任务调度器（Windows Job Object 递归销毁）
 │   ├── sftpclient/                    # SFTP 客户端封装（RemoteFS 接口）
-│   ├── sponsor/                       # 投喂作者排行榜后端（v0.14 起）
-│   ├── sshclient/                     # SSH 客户端（5 套 compat profile + ctx 超时 + shell 会话）
-│   ├── sshshell/                      # SSH 终端 WS ↔ shell 桥（v0.10 起，DefaultMaxSessions=32）
+│   ├── sponsor/                       # 投喂作者排行榜后端
+│   ├── sshclient/                     # SSH 客户端（5 套 compat profile + ctx 超时）
+│   ├── sshshell/                      # SSH 终端 WS ↔ shell 桥 (max=32)
 │   ├── sysutil/                       # 跨平台系统调用（HideConsoleWindow / AutoStart）
 │   ├── tailmgr/                       # Tail 会话池 + Streamer 接口
+│   ├── textcodec/                     # 跨平台编码转换与探测
 │   ├── tray/                          # 系统托盘 + 启动错误弹框（Windows GUI 模式）
-│   └── webservice/                    # WSDL 解析 + SOAP 报文 + Mock 服务端（v0.12 起）
+│   ├── waspack/                       # WAS 增量补丁打包引擎
+│   ├── webservice/                    # WSDL 解析 + SOAP 报文 + Mock 服务端
+│   ├── winui/                         # Win32 原生 GDI 渲染与窗口管理底层
+│   └── wscodegen/                     # WS Java 客户端代码生成引擎
 ├── cmd/
-│   ├── mock-license-server/           # License 激活 Mock 服务（v0.11-rc1 起，给集成测试用）
-│   └── mock-sponsor-server/           # 投喂作者 Mock 服务（v0.14 起，给前端联调用）
+│   ├── mock-license-server/           # License 激活 Mock 服务（集成测试用）
+│   └── mock-sponsor-server/           # 投喂作者 Mock 服务（前端联调用）
 ├── scripts/
 │   ├── build_windows_amd64.sh
 │   ├── build_windows_amd64_win7_go120.sh # 旧 CI 迁移提示；主线明确拒绝 Win7 构建

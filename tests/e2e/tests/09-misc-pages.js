@@ -132,6 +132,8 @@ function register(runner, ctx) {
     });
 
     runner.it('代码比对页应包含两个输入区域', async function () {
+      await page.goto(baseUrl + '/#/compare', { waitUntil: 'load' });
+      await page.waitForTimeout(1000);
       const textareas = await page.$$('textarea');
       const hasCompare = await page.evaluate(function () {
         return document.body.textContent.indexOf('比对') >= 0 || document.body.textContent.indexOf('对比') >= 0 || document.body.textContent.indexOf('diff') >= 0;

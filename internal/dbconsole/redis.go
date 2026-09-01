@@ -6,12 +6,20 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
 	"time"
+
+	redis "github.com/redis/go-redis/v9"
 )
 
 type RedisScanResult struct {
 	Keys       []RedisKeyRef `json:"keys"`
-	NextCursor uint64        `json:"next_cursor"`
+	NextCursor string        `json:"next_cursor"`
+	Topology   string        `json:"topology,omitempty"`
+	Masters    int           `json:"masters,omitempty"`
 }
 
 // RedisKeyRef keeps the transport identifier binary-safe. Redis keys are byte
@@ -30,7 +38,7 @@ type RedisKey struct {
 	Truncated bool   `json:"truncated"`
 }
 
-func (m *Manager) RedisScan(ctx context.Context, source Source, cursor uint64, pattern string, count int64) (RedisScanResult, error) {
+func (m *Manager) RedisScan(ctx context.Context, source Source, cursor string, pattern string, count int64) (RedisScanResult, error) {
 	if source.Kind != KindRedis {
 		return RedisScanResult{}, errors.New("数据源不是 Redis")
 	}
@@ -53,7 +61,7 @@ func (m *Manager) RedisScan(ctx context.Context, source Source, cursor uint64, p
 	if err != nil {
 		return RedisScanResult{}, err
 	}
-	keys, next, err := client.Scan(ctx, cursor, pattern, count).Result()
+	keys, next, masters, err := scanRedisKeys(ctx, client, cursor, pattern, count)
 	if err != nil {
 		return RedisScanResult{}, err
 	}
@@ -66,7 +74,109 @@ func (m *Manager) RedisScan(ctx context.Context, source Source, cursor uint64, p
 			Bytes:     len(raw),
 		})
 	}
-	return RedisScanResult{Keys: refs, NextCursor: next}, nil
+	return RedisScanResult{
+		Keys:       refs,
+		NextCursor: next,
+		Topology:   source.RedisTopology(),
+		Masters:    masters,
+	}, nil
+}
+
+func scanRedisKeys(ctx context.Context, client redis.UniversalClient, cursor, pattern string, count int64) ([]string, string, int, error) {
+	if cluster, ok := client.(*redis.ClusterClient); ok {
+		keys, next, masters, err := scanClusterKeys(ctx, cluster, cursor, pattern, count)
+		return keys, next, masters, err
+	}
+	pos, _ := strconv.ParseUint(strings.TrimSpace(cursor), 10, 64)
+	keys, next, err := client.Scan(ctx, pos, pattern, count).Result()
+	return keys, strconv.FormatUint(next, 10), 1, err
+}
+
+func parseClusterCursor(raw string) (node int, cursor uint64) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || raw == "0" {
+		return 0, 0
+	}
+	nodeStr, curStr, ok := strings.Cut(raw, ":")
+	if !ok {
+		cursor, _ = strconv.ParseUint(raw, 10, 64)
+		return 0, cursor
+	}
+	node, _ = strconv.Atoi(nodeStr)
+	cursor, _ = strconv.ParseUint(curStr, 10, 64)
+	if node < 0 {
+		return 0, 0
+	}
+	return node, cursor
+}
+
+func formatClusterCursor(node int, cursor uint64, done bool) string {
+	if done {
+		return "0"
+	}
+	return strconv.Itoa(node) + ":" + strconv.FormatUint(cursor, 10)
+}
+
+func clusterMasterCount(ctx context.Context, cluster *redis.ClusterClient) (int, error) {
+	masters, err := snapshotClusterMasters(ctx, cluster)
+	if err != nil {
+		return 0, err
+	}
+	return len(masters), nil
+}
+
+func snapshotClusterMasters(ctx context.Context, cluster *redis.ClusterClient) ([]*redis.Client, error) {
+	var mu sync.Mutex
+	byAddr := map[string]*redis.Client{}
+	err := cluster.ForEachMaster(ctx, func(ctx context.Context, master *redis.Client) error {
+		addr := master.Options().Addr
+		mu.Lock()
+		byAddr[addr] = master
+		mu.Unlock()
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	addrs := make([]string, 0, len(byAddr))
+	for addr := range byAddr {
+		addrs = append(addrs, addr)
+	}
+	sort.Strings(addrs)
+	out := make([]*redis.Client, 0, len(addrs))
+	for _, addr := range addrs {
+		out = append(out, byAddr[addr])
+	}
+	return out, nil
+}
+
+func scanClusterKeys(ctx context.Context, cluster *redis.ClusterClient, cursor, pattern string, count int64) ([]string, string, int, error) {
+	masters, err := snapshotClusterMasters(ctx, cluster)
+	if err != nil {
+		return nil, "0", 0, err
+	}
+	if len(masters) == 0 {
+		return nil, "0", 0, errors.New("Cluster 没有可用的主节点")
+	}
+	node, inner := parseClusterCursor(cursor)
+	if node >= len(masters) {
+		return nil, "0", len(masters), nil
+	}
+	var keys []string
+	for node < len(masters) && int64(len(keys)) < count {
+		batch, next, err := masters[node].Scan(ctx, inner, pattern, count-int64(len(keys))).Result()
+		if err != nil {
+			return nil, "0", len(masters), err
+		}
+		keys = append(keys, batch...)
+		if next == 0 {
+			node++
+			inner = 0
+			continue
+		}
+		return keys, formatClusterCursor(node, next, false), len(masters), nil
+	}
+	return keys, formatClusterCursor(node, inner, node >= len(masters)), len(masters), nil
 }
 
 func (m *Manager) RedisGet(ctx context.Context, source Source, key string) (RedisKey, error) {

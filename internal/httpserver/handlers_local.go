@@ -199,12 +199,18 @@ func (s *Server) handleLocalOpenWith(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+type choosePathReq struct {
+	Initial string `json:"initial"`
+}
+
 func (s *Server) handleChooseFile(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeErr(w, 405, errors.New("仅支持 POST"))
 		return
 	}
-	path, err := chooseFile()
+	var req choosePathReq
+	_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 8*1024)).Decode(&req)
+	path, err := chooseFileAt(strings.TrimSpace(req.Initial))
 	if err != nil {
 		writeErr(w, 500, err)
 		return
@@ -222,7 +228,9 @@ func (s *Server) handleChooseDir(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 405, errors.New("仅支持 POST"))
 		return
 	}
-	path, err := chooseDir()
+	var req choosePathReq
+	_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 8*1024)).Decode(&req)
+	path, err := chooseDirAt(strings.TrimSpace(req.Initial))
 	if err != nil {
 		writeErr(w, 500, err)
 		return

@@ -165,6 +165,106 @@ crash.log
 /tests/test-results/
 /v0.13-out/
 /v0.13-xianxia-out/
+
+# ===== E2E 测试输出目录（本地跑出来的截图/JSON，不应入 git）=====
+/e2e-*-out/
+/theme-test-out/
+/theme-*-out/
+/playwright-*.js
+/kairo*
+/Kairo_dev
+
+# ===== Windows exe 资源图标（构建产物，不入库）=====
+*.syso
+/Kairo.jpg
+
+# ===== 临时测试/验证脚本 =====
+_tmp-*.js
+screenshot-*.js
+crash.log
+/doubao-toolbox
+/mock-license-server
+/mock-sponsor-server
+/bugfix-*-shots/
+/*.jpg.png
+/web/vendor/xterm-backup/
+
+# ===== 本地 build 产物 =====
+/ops-toolbox
+/ops-toolbox-test
+
+# ===== 根目录临时测试脚本/截图/报告 =====
+/diag-page-info.json
+/sftp-click-test.js
+/sftp-click-test-results.json
+/test-sftp-output/
+/test-sftp-themes-v5.js
+/test-sftp-user-steps.js
+/test-cwd-works.png
+/test-final.png
+/test-nav-subdir1.png
+/test-panel-reopen.png
+/theme-dark.png
+/theme-green.png
+/theme-hc.png
+/theme-light.png
+/theme-xianxia.png
+/theme-step-*.png
+/theme-sftp-*-report.json
+/verify-badge-contrast*.js
+/verify-badge-contrast*.json
+/verify-theme-*.png
+/diagnose-ssh-autoinput.js
+/scripts/theme-screenshot-review.js
+/test-v0.14-about-out/
+/test-v0.14-about-out-archive/
+
+# ===== docs/qa 临时 QA 脚本/报告 =====
+/docs/qa/diag-*.js
+/docs/qa/explore-page.js
+/docs/qa/final-sftp-screenshot.js
+/docs/qa/sftp-*-test.js
+/docs/qa/sftp-header-measure.js
+/docs/qa/ssh-SFTP-*.js
+/docs/qa/ssh_deep_test.js
+/docs/qa/ssh-deep-test-report.json
+/docs/qa/config_deep_test.js
+/docs/qa/config_layout_analysis.js
+/docs/qa/config_retest.js
+/docs/qa/config_test_report.json
+/docs/qa/deep_check.js
+/docs/qa/diag-deep.js
+/docs/qa/diag-sftp.js
+/docs/qa/full_page_test.js
+/docs/qa/full_ui_audit.js
+/docs/qa/full-page-test-report.json
+/docs/qa/full-ui-audit-report.json
+/docs/qa/playwright_smoke.js
+/docs/qa/quick_verify*.js
+/docs/qa/ssh-screenshots/
+/docs/qa/sftp-layout-report*.json
+/docs/qa/sftp-panel-*.png
+/docs/qa/sftp-v2-*.png
+/docs/qa/SFTP-*.png
+/docs/qa/debug-before-theme.png
+/docs/qa/debug-connection-issue.png
+/docs/qa/diag-full.png
+/docs/qa/diag-v013-*.png
+/docs/qa/final-v013*.png
+/docs/qa/green-http-fixed.png
+/docs/qa/hc-websphere-fixed.png
+
+# ===== 测试 mock 临时文件 =====
+# scripts/fake-websphere/opt/ 是 fake-websphere 的"伪文件系统"大目录（模拟 AIX/WebSphere 环境），
+# 由脚本动态生成，不纳入版本控制；fake-websphere 下的其他配置文件（如 shell 脚本等）仍被跟踪。
+# 对应 .gitattributes 里 scripts/fake-websphere/** export-ignore 负责 archive 时排除已跟踪的部分。
+/scripts/fake-websphere/opt/
+
+# ===== E2E / 测试跑出来的截图与报告产物（本地生成，不入库）=====
+/test-results/
+/tests/test-results/
+/v0.13-out/
+/v0.13-xianxia-out/
 /v0.14-*-out/
 /test-*/
 /test-output/
@@ -173,3 +273,6 @@ crash.log
 
 # local dev build output
 build/
+/.playwright-cli/
+/output/
+/scratch/

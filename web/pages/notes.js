@@ -59,10 +59,10 @@
     }
 
     function renderListShell() {
-      const search = el('input', { type: 'search', class: 'notes-search', placeholder: '搜索标题或正文…', 'aria-label': '搜索便笺' });
+      const search = el('input', { type: 'text', class: 'editor-input notes-search', placeholder: '搜索标题或正文…', 'aria-label': '搜索便笺', autocomplete: 'off' });
       search.value = query;
       search.oninput = function () { query = search.value; draw(Kairo.notes.state.notes); };
-      const filterSel = el('select', { class: 'notes-filter', 'aria-label': '筛选便笺' });
+      const filterSel = el('select', { class: 'editor-input notes-filter', 'aria-label': '筛选便笺' });
       [['active', '未归档'], ['floating', '页面悬浮'], ['desktop', '桌面置顶'], ['archived', '已归档'], ['all', '全部']].forEach(function (pair) {
         const opt = el('option', { value: pair[0], text: pair[1] });
         opt.selected = filter === pair[0];
@@ -198,7 +198,7 @@
         Kairo.notes.setInlineDraft(n.id, true);
         const main = article.querySelector('.notes-row-main');
         const actions = article.querySelector('.notes-row-actions');
-        const title = el('input', { class: 'notes-inline-title', maxlength: '80', placeholder: '标题（可留空）', 'aria-label': '便笺标题' });
+        const title = el('input', { type: 'text', class: 'notes-inline-title', maxlength: '80', placeholder: '标题（可留空）', 'aria-label': '便笺标题', autocomplete: 'off' });
         title.value = n.title || '';
         const body = el('textarea', { class: 'notes-inline-body', maxlength: '20000', placeholder: '直接输入便笺内容…', 'aria-label': '便笺正文' });
         body.value = n.body || '';
@@ -221,9 +221,13 @@
         main.onclick = function (ev) { ev.stopPropagation(); };
         actions.innerHTML = '';
         function leaveEdit() {
+          article.classList.remove('editing');
           Kairo.notes.setInlineDraft(n.id, false);
           draw(Kairo.notes.state.notes);
         }
+        const closeEdit = el('button', { class: 'notes-inline-close', type: 'button', title: '关闭', 'aria-label': '关闭', text: '×' });
+        closeEdit.onclick = function (ev) { ev.preventDefault(); ev.stopPropagation(); leaveEdit(); };
+        article.appendChild(closeEdit);
         actions.append(
           actionBtn('取消', function () { leaveEdit(); }),
           actionBtn('保存', async function () {

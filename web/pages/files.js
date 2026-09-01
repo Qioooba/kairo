@@ -14,7 +14,7 @@
   const Kairo = window.Kairo = window.Kairo || {};
   Kairo.pages = Kairo.pages || {};
   const { el, $, toast, setStatus, cssEscape, pctText, formatBytes, formatTime, basenameOf, escapeHtml } = Kairo.core;
-  const { api } = Kairo.api;
+  const { api, pathRow } = Kairo.api;
 
   const ICONS = {
     smFolder:    'M2 5a2 2 0 012-2h5l2 2h9a2 2 0 012 2v11a2 2 0 01-2 2H4a2 2 0 01-2-2V5z',
@@ -202,7 +202,8 @@
       filterLabel, filterClearBtn, filterCountEl,
       el('span', { style: 'flex:1 1 auto;' }),
       el('label', { class: 'inline', style: 'display:inline-flex; align-items:center; gap:6px; white-space:nowrap;' }, [
-        document.createTextNode('本地下载目录：'), dlTargetDirInp
+        document.createTextNode('本地下载目录：'),
+        pathRow(dlTargetDirInp, { directory: true, compact: true, rowClass: 'path-field path-field-inline' })
       ])
     ]));
     // 第二行：选择操作 + 主按钮（下载/上传并排，按钮组不换行）

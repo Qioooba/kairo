@@ -7,7 +7,7 @@
   const Kairo = window.Kairo = window.Kairo || {};
   Kairo.pages = Kairo.pages || {};
   const { el, toast, copyToClipboard, lastGet, lastSet, escapeHtml } = Kairo.core;
-  const { api, getPreference, putPreference, preferenceSaver } = Kairo.api;
+  const { api, getPreference, putPreference, preferenceSaver, pathRow: localPathRow } = Kairo.api;
   const SESSION_DRAFT_KEY = 'kairo:waspack:session-draft';
 
   const SAMPLE = [
@@ -35,10 +35,10 @@
     return (n / (1024 * 1024)).toFixed(2) + ' MB';
   }
 
-  function pathRow(label, input, browseBtn) {
+  function pathRow(label, input, opts) {
     return el('label', { class: 'waspack-field' }, [
       el('span', { class: 'waspack-label', text: label }),
-      el('div', { class: 'waspack-path' }, [input, browseBtn])
+      localPathRow(input, Object.assign({ directory: true, rowClass: 'path-field waspack-path' }, opts || {}))
     ]);
   }
 
@@ -147,17 +147,6 @@
     });
     autoPair.addEventListener('change', persistPreferenceFields);
     updateTarHint();
-
-    async function browseInto(inp) {
-      try {
-        const r = await api('POST', '/api/choose-dir', {});
-        if (r && r.path) { inp.value = r.path; persist(); }
-      } catch (e) {
-        toast(e.message || String(e), 'err');
-      }
-    }
-    const browseProject = el('button', { type: 'button', class: 'btn', text: '浏览', onclick: function () { browseInto(projectInp); } });
-    const browseOutput = el('button', { type: 'button', class: 'btn', text: '浏览', onclick: function () { browseInto(outputInp); } });
 
     const status = el('div', { class: 'waspack-status', text: '粘贴清单后点「预检」，确认 java / class / jsp 都从工程里找到再生成。' });
     const previewBox = el('div', { class: 'waspack-preview', style: 'display:none' });
@@ -318,8 +307,8 @@
       ]),
       el('div', { class: 'card' }, [
         el('div', { class: 'waspack-grid' }, [
-          pathRow('本地 credit 工程', projectInp, browseProject),
-          pathRow('目标目录（抽取到其 war 文件夹）', outputInp, browseOutput),
+          pathRow('本地 credit 工程', projectInp, { onPick: persist }),
+          pathRow('目标目录（抽取到其 war 文件夹）', outputInp, { onPick: persist, title: '选择已有文件夹；新目录名可再手改' }),
           el('label', { class: 'waspack-field waspack-field-span' }, [
             el('span', { class: 'waspack-label', text: '包名（执行脚本名）' }),
             pkgInp,

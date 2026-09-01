@@ -20,7 +20,7 @@
   const Kairo = window.Kairo = window.Kairo || {};
   Kairo.pages = Kairo.pages || {};
   const { el, toast, escapeHtml, copyToClipboard } = Kairo.core;
-  const { api } = Kairo.api;
+  const { api, pathRow } = Kairo.api;
 
   const { modal } = Kairo.overlays;
 
@@ -359,9 +359,11 @@
         const wdIn = el('input', { type: 'text', class: 'editor-input', placeholder: '工作目录，可留空' });
         wdIn.value = state.actionWorkDir;
         wdIn.oninput = () => { state.actionWorkDir = wdIn.value; };
-        actionWrap.appendChild(el('label', { class: 'editor-label' }, [el('span', { text: '可执行文件 / 脚本' }), cmdIn]));
+        actionWrap.appendChild(el('label', { class: 'editor-label' }, [el('span', { text: '可执行文件 / 脚本' }), pathRow(cmdIn, {
+          title: '选择可执行文件或脚本'
+        })]));
         actionWrap.appendChild(el('label', { class: 'editor-label' }, [el('span', { text: '参数' }), argsIn]));
-        actionWrap.appendChild(el('label', { class: 'editor-label' }, [el('span', { text: '工作目录' }), wdIn]));
+        actionWrap.appendChild(el('label', { class: 'editor-label' }, [el('span', { text: '工作目录' }), pathRow(wdIn, { directory: true })]));
       }
     }
 

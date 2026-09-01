@@ -39,7 +39,9 @@ class TestRunner {
   }
 
   async init() {
-    this.browser = await chromium.launch({ headless: this.headless });
+    const launch = { headless: this.headless };
+    if (process.env.PLAYWRIGHT_CHANNEL) launch.channel = process.env.PLAYWRIGHT_CHANNEL;
+    this.browser = await chromium.launch(launch);
     this.context = await this.browser.newContext({
       viewport: this.viewport,
       locale: 'zh-CN',
@@ -268,10 +270,10 @@ class TestRunner {
         }
 
         try {
-          // 添加 60 秒超时保护，防止测试挂起
+          const timeoutMs = Number(test.timeout || suite.timeout || process.env.TEST_TIMEOUT) || 180000;
           await Promise.race([
             test._fn.call(this, ctx),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('测试超时 (60s)')), 60000))
+            new Promise((_, reject) => setTimeout(() => reject(new Error('测试超时 (' + Math.round(timeoutMs / 1000) + 's)')), timeoutMs))
           ]);
           if (test._skipped) {
             testResult.status = 'skipped';

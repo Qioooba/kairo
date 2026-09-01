@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -29,8 +30,10 @@ func TestStoreSeparatesUsersAndNamespaces(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o600 {
-		t.Fatalf("mode=%v err=%v", info.Mode().Perm(), err)
+	if runtime.GOOS != "windows" {
+		if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o600 {
+			t.Fatalf("mode=%v err=%v", info.Mode().Perm(), err)
+		}
 	}
 	if !json.Valid(raw) {
 		t.Fatal("invalid persisted JSON")

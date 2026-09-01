@@ -26,6 +26,12 @@ import (
 const (
 	compareReadLimit = 8 * 1024 * 1024
 	compareMaxFiles  = 50000
+	// compareSampleBytes is the head/tail window for the sampled content probe.
+	// Files smaller than compareSampleMinSize are cheaper to stream sequentially
+	// than to pay two extra seeks.
+	compareSampleBytes   = 4 * 1024
+	compareSampleMinSize = 32 * 1024
+	compareStreamChunk   = 128 * 1024
 )
 
 type compareSourceSpec struct {
@@ -99,6 +105,8 @@ type compareScanReq struct {
 	Left                 compareSourceSpec `json:"left"`
 	Right                compareSourceSpec `json:"right"`
 	Deep                 bool              `json:"deep"`
+	MaxDepth             int               `json:"max_depth,omitempty"`
+	RelPath              string            `json:"rel_path,omitempty"`
 	TimeToleranceSeconds int               `json:"time_tolerance_seconds,omitempty"`
 	IgnoreExts           []string          `json:"ignore_exts,omitempty"`
 	IgnoreDirs           []string          `json:"ignore_dirs,omitempty"`
@@ -108,6 +116,8 @@ type compareScanItem struct {
 	Status  string           `json:"status"`
 	Left    *comparefs.Entry `json:"left,omitempty"`
 	Right   *comparefs.Entry `json:"right,omitempty"`
+	Hashed  bool             `json:"hashed,omitempty"`
+	Pending bool             `json:"pending,omitempty"`
 }
 type compareScanSummary struct {
 	Same       int `json:"same"`
@@ -434,6 +444,7 @@ func (s *Server) performCompareSync(ctx context.Context, req compareSyncReq, pro
 	defer target.Close()
 
 	result := &compareSyncResult{Failures: make([]compareSyncFailure, 0)}
+	syncedDirs := make([]string, 0)
 	for index, item := range req.Items {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -446,33 +457,64 @@ func (s *Server) performCompareSync(ctx context.Context, req compareSyncReq, pro
 			result.Failures = append(result.Failures, compareSyncFailure{RelPath: item.RelPath, Error: "非法相对路径"})
 			continue
 		}
+		alreadyCovered := false
+		for _, dir := range syncedDirs {
+			if strings.HasPrefix(rel, dir+"/") {
+				alreadyCovered = true
+				break
+			}
+		}
+		if alreadyCovered {
+			continue
+		}
 		sourcePath := source.Join(sourceSpec.Path, rel)
 		targetPath := target.Join(targetSpec.Path, rel)
 		entry, statErr := source.Stat(ctx, sourcePath)
-		if statErr != nil || entry.IsDir {
+		if statErr != nil {
 			result.Failures = append(result.Failures, compareSyncFailure{RelPath: item.RelPath, Error: "源文件不存在或不是文件"})
 			continue
 		}
-		reader, openErr := source.Open(ctx, sourcePath)
-		if openErr != nil {
-			result.Failures = append(result.Failures, compareSyncFailure{RelPath: item.RelPath, Error: "打开源文件失败"})
+		if entry.IsDir {
+			syncedDirs = append(syncedDirs, rel)
+			files, _, walkErr := walkCompareFS(ctx, source, sourcePath, compareScanReq{}, nil)
+			if walkErr != nil {
+				result.Failures = append(result.Failures, compareSyncFailure{RelPath: item.RelPath, Error: "展开目录失败"})
+				continue
+			}
+			childRels := make([]string, 0, len(files))
+			for childRel, file := range files {
+				if file.IsDir {
+					continue
+				}
+				childRels = append(childRels, childRel)
+			}
+			sort.Strings(childRels)
+			for _, childRel := range childRels {
+				file := files[childRel]
+				childSrc := file.Path
+				childDst := target.Join(targetPath, childRel)
+				if copyErr := copyCompareEntry(ctx, target, source, childSrc, childDst, file, nil, req.Backup); copyErr != nil {
+					if errors.Is(copyErr, context.Canceled) {
+						return nil, copyErr
+					}
+					message := copyErr.Error()
+					if errors.Is(copyErr, comparefs.ErrConflict) {
+						message = "目标已变化，请重新扫描"
+					}
+					result.Failures = append(result.Failures, compareSyncFailure{RelPath: rel + "/" + childRel, Error: message})
+					continue
+				}
+				result.Copied++
+				result.Bytes += file.Size
+			}
 			continue
 		}
-		targetDir := filepath.Dir(targetPath)
-		if target.Kind() != "local" {
-			targetDir = path.Dir(targetPath)
-		}
-		writeErrValue := target.MkdirAll(ctx, targetDir, 0o755)
-		if writeErrValue == nil {
-			writeErrValue = target.WriteAtomic(ctx, targetPath, reader, comparefs.WriteOptions{Expected: item.Expected, Mode: entry.Mode, Backup: req.Backup, ModTime: entry.ModTime})
-		}
-		_ = reader.Close()
-		if writeErrValue != nil {
-			if errors.Is(writeErrValue, context.Canceled) {
-				return nil, writeErrValue
+		if copyErr := copyCompareEntry(ctx, target, source, sourcePath, targetPath, entry, item.Expected, req.Backup); copyErr != nil {
+			if errors.Is(copyErr, context.Canceled) {
+				return nil, copyErr
 			}
 			message := "复制失败"
-			if errors.Is(writeErrValue, comparefs.ErrConflict) {
+			if errors.Is(copyErr, comparefs.ErrConflict) {
 				message = "目标已变化，请重新扫描"
 			}
 			result.Failures = append(result.Failures, compareSyncFailure{RelPath: item.RelPath, Error: message})
@@ -487,6 +529,22 @@ func (s *Server) performCompareSync(ctx context.Context, req compareSyncReq, pro
 	}
 	s.audit.Write("compare.sync", "direction", req.Direction, "copied", result.Copied, "failed", result.Failed, "bytes", result.Bytes)
 	return result, nil
+}
+
+func copyCompareEntry(ctx context.Context, target, source comparefs.FS, sourcePath, targetPath string, entry comparefs.Entry, expected *comparefs.Version, backup bool) error {
+	reader, err := source.Open(ctx, sourcePath)
+	if err != nil {
+		return err
+	}
+	defer reader.Close()
+	targetDir := filepath.Dir(targetPath)
+	if target.Kind() != "local" {
+		targetDir = path.Dir(targetPath)
+	}
+	if err := target.MkdirAll(ctx, targetDir, 0o755); err != nil {
+		return err
+	}
+	return target.WriteAtomic(ctx, targetPath, reader, comparefs.WriteOptions{Expected: expected, Mode: entry.Mode, Backup: backup, ModTime: entry.ModTime})
 }
 
 func (s *Server) runCompareSync(ctx context.Context, job *compareJob, req compareSyncReq) {
@@ -527,6 +585,27 @@ func (s *Server) handleCompareScanStart(w http.ResponseWriter, r *http.Request) 
 	job, ctx := s.compares.create(context.Background())
 	go s.runCompareScan(ctx, job, req)
 	writeJSON(w, http.StatusAccepted, map[string]any{"job_id": job.ID})
+}
+
+func (s *Server) handleCompareScanLevel(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeErr(w, 405, errors.New("仅支持 POST"))
+		return
+	}
+	var req compareScanReq
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 128*1024)).Decode(&req); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	req.MaxDepth = 1
+	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
+	defer cancel()
+	result, err := s.performCompareScan(ctx, req, nil)
+	if err != nil {
+		writeErrSanitized(w, 400, err)
+		return
+	}
+	writeJSON(w, 200, result)
 }
 
 type compareTestSide struct {
@@ -597,32 +676,60 @@ func (s *Server) handleCompareJob(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) runCompareScan(ctx context.Context, job *compareJob, req compareScanReq) {
-	started := time.Now()
-	finishError := func(err error) {
-		job.mu.Lock()
-		defer job.mu.Unlock()
+	result, err := s.performCompareScan(ctx, req, func(phase string, current, total int, message string) {
+		job.progress(phase, current, total, message)
+	})
+	job.mu.Lock()
+	defer job.mu.Unlock()
+	job.Updated = time.Now()
+	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			job.Status = "cancelled"
+			job.Message = "比较已取消"
 		} else {
 			job.Status = "failed"
 			job.Error = err.Error()
 		}
-		job.Updated = time.Now()
+		return
+	}
+	job.Status = "completed"
+	job.Phase = "done"
+	job.Result = result
+	job.Current = len(result.Items)
+	job.Total = len(result.Items)
+	job.Message = "比较完成"
+}
+
+func (s *Server) performCompareScan(ctx context.Context, req compareScanReq, progress func(phase string, current, total int, message string)) (*compareScanResult, error) {
+	started := time.Now()
+	report := func(phase string, current, total int, message string) {
+		if progress != nil {
+			progress(phase, current, total, message)
+		}
+	}
+	rel, err := cleanCompareRel(req.RelPath)
+	if err != nil {
+		return nil, err
 	}
 	leftFS, err := s.openCompareFS(ctx, req.Left)
 	if err != nil {
-		finishError(err)
-		return
+		return nil, err
 	}
 	defer leftFS.Close()
 	rightFS, err := s.openCompareFS(ctx, req.Right)
 	if err != nil {
-		finishError(err)
-		return
+		return nil, err
 	}
 	defer rightFS.Close()
 
-	job.progress("scanning", 0, 0, "正在扫描两侧目录")
+	leftRoot := req.Left.Path
+	rightRoot := req.Right.Path
+	if rel != "" {
+		leftRoot = leftFS.Join(req.Left.Path, rel)
+		rightRoot = rightFS.Join(req.Right.Path, rel)
+	}
+
+	report("scanning", 0, 0, "正在扫描两侧目录")
 	var left, right map[string]comparefs.Entry
 	var leftTrunc, rightTrunc bool
 	var leftErr, rightErr error
@@ -631,38 +738,40 @@ func (s *Server) runCompareScan(ctx context.Context, job *compareJob, req compar
 	reportDiscovered := func(delta int) {
 		current := discovered.Add(int64(delta))
 		if current == int64(delta) || current%100 == 0 {
-			job.progress("scanning", int(current), 0, "正在扫描两侧目录 · 已发现 "+strconv.FormatInt(current, 10)+" 项")
+			report("scanning", int(current), 0, "正在扫描两侧目录 · 已发现 "+strconv.FormatInt(current, 10)+" 项")
 		}
 	}
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		left, leftTrunc, leftErr = walkCompareFS(ctx, leftFS, req.Left.Path, req, reportDiscovered)
+		left, leftTrunc, leftErr = walkCompareFSOrEmpty(ctx, leftFS, leftRoot, req, reportDiscovered)
 	}()
 	go func() {
 		defer wg.Done()
-		right, rightTrunc, rightErr = walkCompareFS(ctx, rightFS, req.Right.Path, req, reportDiscovered)
+		right, rightTrunc, rightErr = walkCompareFSOrEmpty(ctx, rightFS, rightRoot, req, reportDiscovered)
 	}()
 	wg.Wait()
 	if leftErr != nil {
-		finishError(leftErr)
-		return
+		return nil, leftErr
 	}
 	if rightErr != nil {
-		finishError(rightErr)
-		return
+		return nil, rightErr
+	}
+	if rel != "" {
+		left = prefixCompareRel(left, rel)
+		right = prefixCompareRel(right, rel)
 	}
 
 	paths := make([]string, 0, len(left)+len(right))
 	seen := make(map[string]bool, len(left)+len(right))
-	for rel := range left {
-		seen[rel] = true
+	for p := range left {
+		seen[p] = true
 	}
-	for rel := range right {
-		seen[rel] = true
+	for p := range right {
+		seen[p] = true
 	}
-	for rel := range seen {
-		paths = append(paths, rel)
+	for p := range seen {
+		paths = append(paths, p)
 	}
 	sort.Strings(paths)
 	result := &compareScanResult{Items: make([]compareScanItem, len(paths)), Truncated: leftTrunc || rightTrunc}
@@ -672,15 +781,15 @@ func (s *Server) runCompareScan(ctx context.Context, job *compareJob, req compar
 		leftTime, rightTime time.Time
 	}
 	deep := make([]deepWork, 0)
-	job.progress("comparing", 0, len(paths), "正在比较元数据")
-	for i, rel := range paths {
+	levelOnly := req.MaxDepth == 1
+	report("comparing", 0, len(paths), "正在比较元数据")
+	for i, itemRel := range paths {
 		if err := ctx.Err(); err != nil {
-			finishError(err)
-			return
+			return nil, err
 		}
-		l, hasL := left[rel]
-		r, hasR := right[rel]
-		item := compareScanItem{RelPath: rel}
+		l, hasL := left[itemRel]
+		r, hasR := right[itemRel]
+		item := compareScanItem{RelPath: itemRel}
 		if hasL {
 			copy := l
 			item.Left = &copy
@@ -698,7 +807,12 @@ func (s *Server) runCompareScan(ctx context.Context, job *compareJob, req compar
 		case l.IsDir != r.IsDir:
 			item.Status = "different"
 		case l.IsDir:
-			item.Status = "same"
+			if levelOnly {
+				item.Status = "pending"
+				item.Pending = true
+			} else {
+				item.Status = "same"
+			}
 		case l.Size != r.Size:
 			item.Status = compareTimeStatus(l.ModTime, r.ModTime, req.TimeToleranceSeconds)
 		case req.Deep:
@@ -714,19 +828,19 @@ func (s *Server) runCompareScan(ctx context.Context, job *compareJob, req compar
 			addCompareSummary(&result.Summary, item.Status)
 		}
 		if i%20 == 0 || i+1 == len(paths) {
-			job.progress("comparing", i+1, len(paths), "正在比较 "+strconv.Itoa(i+1)+" / "+strconv.Itoa(len(paths)))
+			report("comparing", i+1, len(paths), "正在比较 "+strconv.Itoa(i+1)+" / "+strconv.Itoa(len(paths)))
 		}
 	}
 	if len(deep) > 0 {
-		job.progress("comparing", 0, len(deep), "正在比较文件内容")
+		report("comparing", 0, len(deep), "正在比较文件内容")
 		sem := make(chan struct{}, 8)
-		var wg sync.WaitGroup
+		var deepWG sync.WaitGroup
 		var done atomic.Int64
 		for _, work := range deep {
 			work := work
-			wg.Add(1)
+			deepWG.Add(1)
 			go func() {
-				defer wg.Done()
+				defer deepWG.Done()
 				select {
 				case <-ctx.Done():
 					result.Items[work.idx].Status = "error"
@@ -737,6 +851,7 @@ func (s *Server) runCompareScan(ctx context.Context, job *compareJob, req compar
 				same, cmpErr := compareFileBytes(ctx, leftFS, rightFS, work.leftPath, work.rightPath)
 				status := "error"
 				if cmpErr == nil {
+					result.Items[work.idx].Hashed = true
 					if same {
 						status = "same"
 					} else {
@@ -746,14 +861,13 @@ func (s *Server) runCompareScan(ctx context.Context, job *compareJob, req compar
 				result.Items[work.idx].Status = status
 				n := int(done.Add(1))
 				if n%20 == 0 || n == len(deep) {
-					job.progress("comparing", n, len(deep), "正在比较内容 "+strconv.Itoa(n)+" / "+strconv.Itoa(len(deep)))
+					report("comparing", n, len(deep), "正在比较内容 "+strconv.Itoa(n)+" / "+strconv.Itoa(len(deep)))
 				}
 			}()
 		}
-		wg.Wait()
+		deepWG.Wait()
 		if err := ctx.Err(); err != nil {
-			finishError(err)
-			return
+			return nil, err
 		}
 		result.Summary = compareScanSummary{}
 		for _, item := range result.Items {
@@ -761,15 +875,7 @@ func (s *Server) runCompareScan(ctx context.Context, job *compareJob, req compar
 		}
 	}
 	result.ElapsedMs = time.Since(started).Milliseconds()
-	job.mu.Lock()
-	job.Status = "completed"
-	job.Phase = "done"
-	job.Result = result
-	job.Current = len(paths)
-	job.Total = len(paths)
-	job.Message = "比较完成"
-	job.Updated = time.Now()
-	job.mu.Unlock()
+	return result, nil
 }
 
 func compareTimesEqual(left, right time.Time, toleranceSeconds int) bool {
@@ -820,9 +926,56 @@ func addCompareSummary(summary *compareScanSummary, status string) {
 	}
 }
 
+func cleanCompareRel(rel string) (string, error) {
+	rel = strings.TrimSpace(rel)
+	if rel == "" || rel == "." {
+		return "", nil
+	}
+	rel = strings.ReplaceAll(rel, "\\", "/")
+	if strings.HasPrefix(rel, "/") || strings.Contains(rel, ":") {
+		return "", errors.New("非法相对路径")
+	}
+	cleaned := path.Clean(rel)
+	if cleaned == "." {
+		return "", nil
+	}
+	if cleaned == ".." || strings.HasPrefix(cleaned, "../") {
+		return "", errors.New("非法相对路径")
+	}
+	return cleaned, nil
+}
+
+func prefixCompareRel(entries map[string]comparefs.Entry, prefix string) map[string]comparefs.Entry {
+	if prefix == "" || len(entries) == 0 {
+		return entries
+	}
+	out := make(map[string]comparefs.Entry, len(entries))
+	for rel, entry := range entries {
+		out[prefix+"/"+rel] = entry
+	}
+	return out
+}
+
+func walkCompareFSOrEmpty(ctx context.Context, fsys comparefs.FS, root string, req compareScanReq, progress func(int)) (map[string]comparefs.Entry, bool, error) {
+	if _, err := fsys.Stat(ctx, root); err != nil {
+		return map[string]comparefs.Entry{}, false, nil
+	}
+	return walkCompareFS(ctx, fsys, root, req, progress)
+}
+
+func compareWalkShouldEnqueue(currentDepth, maxDepth int) bool {
+	if maxDepth <= 0 {
+		return true
+	}
+	return currentDepth+1 < maxDepth
+}
+
 func walkCompareFS(ctx context.Context, fsys comparefs.FS, root string, req compareScanReq, progress func(int)) (map[string]comparefs.Entry, bool, error) {
 	result := make(map[string]comparefs.Entry)
-	type queued struct{ abs, rel string }
+	type queued struct {
+		abs, rel string
+		depth    int
+	}
 	queue := []queued{{abs: root}}
 	for len(queue) > 0 {
 		if err := ctx.Err(); err != nil {
@@ -847,8 +1000,8 @@ func walkCompareFS(ctx context.Context, fsys comparefs.FS, root string, req comp
 			if len(result) >= compareMaxFiles {
 				return result, true, nil
 			}
-			if entry.IsDir {
-				queue = append(queue, queued{abs: entry.Path, rel: rel})
+			if entry.IsDir && compareWalkShouldEnqueue(current.depth, req.MaxDepth) {
+				queue = append(queue, queued{abs: entry.Path, rel: rel, depth: current.depth + 1})
 			}
 		}
 		if progress != nil && len(entries) > 0 {
@@ -861,7 +1014,7 @@ func walkCompareFS(ctx context.Context, fsys comparefs.FS, root string, req comp
 func ignoreCompareEntry(rel string, isDir bool, exts, dirs []string) bool {
 	base := filepath.Base(rel)
 	if isDir {
-		defaults := []string{".git", "node_modules", "__pycache__", "target", "dist", "build", ".idea", ".vscode"}
+		defaults := []string{".git", "node_modules", "__pycache__", "target", "dist", "build", ".idea", ".vscode", ".svn", "vendor", ".next", ".nuxt"}
 		for _, name := range append(defaults, dirs...) {
 			if strings.EqualFold(strings.TrimSpace(name), base) {
 				return true
@@ -889,6 +1042,19 @@ func ignoreCompareEntry(rel string, isDir bool, exts, dirs []string) bool {
 	return false
 }
 
+// compareFileBytes decides content equality in three jumps, without hashing:
+//  1. Size (when both streams seek) — zero payload I/O.
+//  2. Head 4KB + tail 4KB memcmp — cheap reject when the difference sits at
+//     either end. Live two-sided compare does not need a partial SHA-256:
+//     hashing 8KB costs CPU and still requires the same 8KB read.
+//  3. Stream the unread middle with early-exit memcmp. Full SHA-256 would
+//     always finish both files; streaming stops at the first mismatch and
+//     skips hash work on identical bytes.
+//
+// Non-seekable backends (typical FTP REST-less streams) skip jump 1–2 and
+// keep the original sequential compare. Identical files still need a full
+// read; the large speedup only appears when same-size pairs actually differ
+// in the sampled windows.
 func compareFileBytes(ctx context.Context, leftFS, rightFS comparefs.FS, leftPath, rightPath string) (bool, error) {
 	lr, err := leftFS.Open(ctx, leftPath)
 	if err != nil {
@@ -900,8 +1066,110 @@ func compareFileBytes(ctx context.Context, leftFS, rightFS comparefs.FS, leftPat
 		return false, err
 	}
 	defer rr.Close()
-	bufL := make([]byte, 128*1024)
-	bufR := make([]byte, 128*1024)
+	return compareOpenReaders(ctx, lr, rr)
+}
+
+func compareOpenReaders(ctx context.Context, lr, rr io.Reader) (bool, error) {
+	ls, lok := lr.(io.Seeker)
+	rs, rok := rr.(io.Seeker)
+	if lok && rok {
+		leftSize, rightSize, err := compareSeekSizes(ls, rs)
+		if err == nil {
+			if leftSize != rightSize {
+				return false, nil
+			}
+			if leftSize >= compareSampleMinSize {
+				return compareSeekableSampled(ctx, lr, rr, ls, rs, leftSize)
+			}
+		} else {
+			_ = rewindCompareReaders(ls, rs)
+		}
+	}
+	return compareStreaming(ctx, lr, rr)
+}
+
+var errCompareNoSeek = errors.New("compare streams are not independently seekable")
+
+func compareSeekSizes(ls, rs io.Seeker) (int64, int64, error) {
+	leftSize, err := ls.Seek(0, io.SeekEnd)
+	if err != nil {
+		return 0, 0, errCompareNoSeek
+	}
+	rightSize, err := rs.Seek(0, io.SeekEnd)
+	if err != nil {
+		return 0, 0, errCompareNoSeek
+	}
+	if leftSize == rightSize {
+		if _, err := ls.Seek(0, io.SeekStart); err != nil {
+			return 0, 0, err
+		}
+		if _, err := rs.Seek(0, io.SeekStart); err != nil {
+			return 0, 0, err
+		}
+	}
+	return leftSize, rightSize, nil
+}
+
+func rewindCompareReaders(ls, rs io.Seeker) error {
+	if _, err := ls.Seek(0, io.SeekStart); err != nil {
+		return err
+	}
+	_, err := rs.Seek(0, io.SeekStart)
+	return err
+}
+
+func compareSeekableSampled(ctx context.Context, lr, rr io.Reader, ls, rs io.Seeker, size int64) (bool, error) {
+	head := make([]byte, compareSampleBytes)
+	if same, err := compareExactWindow(ctx, lr, rr, head); err != nil || !same {
+		return same, err
+	}
+	tailOff := size - int64(compareSampleBytes)
+	if _, err := ls.Seek(tailOff, io.SeekStart); err != nil {
+		if rewindErr := rewindCompareReaders(ls, rs); rewindErr != nil {
+			return false, rewindErr
+		}
+		return compareStreaming(ctx, lr, rr)
+	}
+	if _, err := rs.Seek(tailOff, io.SeekStart); err != nil {
+		if rewindErr := rewindCompareReaders(ls, rs); rewindErr != nil {
+			return false, rewindErr
+		}
+		return compareStreaming(ctx, lr, rr)
+	}
+	tail := make([]byte, compareSampleBytes)
+	if same, err := compareExactWindow(ctx, lr, rr, tail); err != nil || !same {
+		return same, err
+	}
+	middle := size - int64(2*compareSampleBytes)
+	if middle <= 0 {
+		return true, nil
+	}
+	if _, err := ls.Seek(int64(compareSampleBytes), io.SeekStart); err != nil {
+		return false, err
+	}
+	if _, err := rs.Seek(int64(compareSampleBytes), io.SeekStart); err != nil {
+		return false, err
+	}
+	return compareStreaming(ctx, io.LimitReader(lr, middle), io.LimitReader(rr, middle))
+}
+
+func compareExactWindow(ctx context.Context, lr, rr io.Reader, buf []byte) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	right := make([]byte, len(buf))
+	if _, err := io.ReadFull(lr, buf); err != nil {
+		return false, err
+	}
+	if _, err := io.ReadFull(rr, right); err != nil {
+		return false, err
+	}
+	return bytes.Equal(buf, right), nil
+}
+
+func compareStreaming(ctx context.Context, lr, rr io.Reader) (bool, error) {
+	bufL := make([]byte, compareStreamChunk)
+	bufR := make([]byte, compareStreamChunk)
 	for {
 		if err := ctx.Err(); err != nil {
 			return false, err

@@ -1412,3 +1412,29 @@ func itoa(i int) string {
 	}
 	return string(b[pos:])
 }
+
+// TestManualHTTPServer 用磁盘上的 web/ 起一个免激活 HTTP 服务，方便浏览器 / e2e 验证未 embed 的前端。
+// 用法：KAIRO_MANUAL_HTTP=1 go test ./internal/httpserver -run TestManualHTTPServer -timeout 15m
+func TestManualHTTPServer(t *testing.T) {
+	if os.Getenv("KAIRO_MANUAL_HTTP") != "1" {
+		t.Skip("set KAIRO_MANUAL_HTTP=1 to serve disk web UI")
+	}
+	srv, _, _, _ := newTestServer(t)
+	addr := os.Getenv("KAIRO_MANUAL_HTTP_ADDR")
+	if addr == "" {
+		addr = "127.0.0.1:18199"
+	}
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	url := "http://" + ln.Addr().String()
+	t.Log(url)
+	_ = os.WriteFile(filepath.Join(os.TempDir(), "kairo-manual-http.ready"), []byte(url), 0o644)
+	if _, err := os.Stderr.WriteString("KAIRO_MANUAL_HTTP " + url + "\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := http.Serve(ln, srv); err != nil {
+		t.Fatal(err)
+	}
+}

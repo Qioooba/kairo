@@ -66,15 +66,15 @@ function parseSummary(text) {
   await page.click('button:has-text("文件夹比较")');
   await page.waitForTimeout(400);
   async function pick(i, dir) {
-    const buttons = await page.$$('button:has-text("选择目录")');
-    await buttons[i].click();
-    await page.waitForSelector('input[placeholder="目录绝对路径"]');
-    await page.fill('input[placeholder="目录绝对路径"]', dir);
-    await page.click('.cmp-source-dialog button:has-text("确定")');
-    await page.waitForTimeout(250);
+    const inputs = await page.$$('.cmp-folder-path');
+    if (inputs.length < 2) fail('folder path inputs missing');
+    await inputs[i].fill(dir);
+    await page.waitForTimeout(200);
   }
   await pick(0, LEFT);
   await pick(1, RIGHT);
+  const depth = await page.$('#cmp-scan-depth');
+  if (depth) await page.selectOption('#cmp-scan-depth', '1');
   await page.click('[data-action="compare-test"]');
   await page.waitForFunction(() => document.body.innerText.includes('两侧来源可用') || (document.body.innerText.includes('左 正常') && document.body.innerText.includes('右 正常')), null, { timeout: 15000 });
   await page.screenshot({ path: path.join(SHOT, 'folder-test.png') });
@@ -86,8 +86,8 @@ function parseSummary(text) {
   }, null, { timeout: 90000 });
   const firstSummaryText = await page.$eval('.cmp-scan-progress', el => el.textContent);
   const first = parseSummary(firstSummaryText);
-  if (!first.leftOnly || first.leftOnly < 280) fail('expected ~300 left-only before cover, got ' + firstSummaryText);
-  if (!first.rightOnly || first.rightOnly < 280) fail('expected ~300 right-only before cover, got ' + firstSummaryText);
+  if (!first.leftOnly || first.leftOnly < 1) fail('expected left-only folder at current level, got ' + firstSummaryText);
+  if (!first.rightOnly || first.rightOnly < 1) fail('expected right-only folder at current level, got ' + firstSummaryText);
   await page.screenshot({ path: path.join(SHOT, 'folder-scan.png') });
 
   async function cover(action, shotName) {

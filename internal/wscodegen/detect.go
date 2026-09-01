@@ -3,6 +3,8 @@ package wscodegen
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -341,7 +343,87 @@ func ScanProject(root string) (ScanResult, error) {
 	if res.Truncated {
 		res.Notes = append(res.Notes, "jar 数量超过扫描上限，结果可能不完整。请尽量选 lib / WEB-INF/lib 而不是整个磁盘。")
 	}
+	if src, _, err := SuggestProjectSourceDir(root); err == nil {
+		res.SuggestedSrc = src
+	}
 	return res, nil
+}
+
+// SuggestProjectSourceDir 从工程目录 / WEB-INF/lib 推断 Java 源码根。
+//
+// 信贷这类 Eclipse 工程常见选中 WebRoot/WEB-INF/lib 去扫 jar，源码却在
+// 工程根的 src/。写入工程时必须落到 src，而不是 lib。
+func SuggestProjectSourceDir(projectDir string) (string, []string, error) {
+	var notes []string
+	raw := strings.TrimSpace(projectDir)
+	if raw == "" {
+		return "", nil, errors.New("工程目录不能为空")
+	}
+	if !dirExists(raw) {
+		return "", nil, fmt.Errorf("工程目录不存在: %s", raw)
+	}
+	abs, err := filepath.Abs(raw)
+	if err != nil {
+		return "", nil, err
+	}
+	if looksLikeJavaSourceRoot(abs) {
+		return abs, notes, nil
+	}
+	root := projectRootFrom(abs)
+	for _, cand := range []string{
+		filepath.Join(root, "src", "main", "java"),
+		filepath.Join(root, "src"),
+		filepath.Join(root, "JavaSource"),
+		filepath.Join(root, "src", "java"),
+	} {
+		if !dirExists(cand) {
+			continue
+		}
+		if !filepathEqual(root, abs) {
+			notes = append(notes, fmt.Sprintf("从 %s 推断工程根 %s", abs, root))
+		}
+		notes = append(notes, "写入工程目标："+cand)
+		return cand, notes, nil
+	}
+	dest := filepath.Join(root, "src")
+	notes = append(notes, "工程里没有现成 src，将创建并写入 "+dest)
+	return dest, notes, nil
+}
+
+func projectRootFrom(p string) string {
+	cur := filepath.Clean(p)
+	for i := 0; i < 8; i++ {
+		base := strings.ToLower(filepath.Base(cur))
+		switch base {
+		case "lib", "web-inf", "webinf", "webroot", "webapp", "webcontent", "classes":
+			parent := filepath.Dir(cur)
+			if parent == cur {
+				return cur
+			}
+			cur = parent
+			continue
+		}
+		break
+	}
+	return cur
+}
+
+func looksLikeJavaSourceRoot(p string) bool {
+	base := strings.ToLower(filepath.Base(p))
+	switch base {
+	case "src", "java", "javasource", "source", "sources":
+		return true
+	}
+	return false
+}
+
+func filepathEqual(a, b string) bool {
+	aa, err1 := filepath.Abs(a)
+	bb, err2 := filepath.Abs(b)
+	if err1 != nil || err2 != nil {
+		return filepath.Clean(a) == filepath.Clean(b)
+	}
+	return filepath.Clean(aa) == filepath.Clean(bb)
 }
 
 func classifyJar(lowerName string) (kind, engine string) {

@@ -13,7 +13,7 @@
   const Kairo = window.Kairo = window.Kairo || {};
   Kairo.pages = Kairo.pages || {};
   const { el, $, toast, setStatus, cssEscape, pctText, formatBytes, formatTime, trimMiddle, escapeHtml, highlightAndTrim, parseSearchTermsForHighlight, looksMojibake, basenameOf, copyToClipboard } = Kairo.core;
-  const { api } = Kairo.api;
+  const { api, pathRow } = Kairo.api;
 
   const ICONS = {
     smFolder:    'M2 5a2 2 0 012-2h5l2 2h9a2 2 0 012 2v11a2 2 0 01-2 2H4a2 2 0 01-2-2V5z',
@@ -3379,7 +3379,7 @@
         el('div', { style: 'display:flex; align-items:center; gap:8px; flex-wrap:wrap;' }, [
           dlZipLabel,
           el('span', { class: 'lbl', text: '本地目录：' }),
-          dlTargetDirInp
+          pathRow(dlTargetDirInp, { directory: true, compact: true, rowClass: 'path-field path-field-inline' })
         ])
       ])
     ]);

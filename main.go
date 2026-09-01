@@ -459,6 +459,18 @@ func main() {
 		tray.FatalDialogf("监听 %s 失败: %v", cfg.App.ListenAddr(), err)
 	}
 
+	// 所有原生窗口共用一个 Windows UI 线程；文件选择对话框也派发到此线程，
+	// 避免 HTTP goroutine 把系统对话框弹到屏幕左上角。
+	nativeHost := winui.New()
+	if err := nativeHost.Start(); err != nil {
+		tray.FatalDialogf("初始化 Windows 原生窗口线程失败: %v", err)
+	}
+	httpserver.SetUIInvoker(nativeHost.Invoke)
+	defer func() {
+		httpserver.SetUIInvoker(nil)
+		nativeHost.Shutdown()
+	}()
+
 	// 10. 启动 HTTP server（goroutine）。
 	// 主线程交给系统托盘（Windows）或信号等待（非 Windows）。
 	go func() {
@@ -478,14 +490,6 @@ func main() {
 	if cfg.App.AutoOpenBrowserEnabled() {
 		go openBrowser(url)
 	}
-
-	// 所有原生窗口共用一个 Windows 10 UI 线程：桌面便笺与桌宠不再各自
-	// 持有消息循环，退出顺序也由同一个 Host 明确管理。
-	nativeHost := winui.New()
-	if err := nativeHost.Start(); err != nil {
-		tray.FatalDialogf("初始化 Windows 原生窗口线程失败: %v", err)
-	}
-	defer nativeHost.Shutdown()
 
 	desktopNotes, err := desknote.New(nativeHost, nManager)
 	if err != nil {
