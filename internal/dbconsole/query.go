@@ -3,8 +3,10 @@ package dbconsole
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -28,75 +30,105 @@ type StreamEvent struct {
 type EmitFunc func(StreamEvent) error
 
 func (m *Manager) StreamQuery(ctx context.Context, source Source, query string, requestedMaxRows int, emit EmitFunc) (QuerySummary, error) {
+	return m.StreamQueryPage(ctx, source, query, 1, requestedMaxRows, emit)
+}
+
+// StreamQueryPage executes one bounded page. Events are collected before they
+// are emitted so an idle-timeout connection can be rebuilt and retried once
+// without duplicating already-visible rows in the browser.
+func (m *Manager) StreamQueryPage(ctx context.Context, source Source, query string, page, pageSize int, emit EmitFunc) (QuerySummary, error) {
 	if source.Kind == KindRedis {
 		return QuerySummary{}, fmt.Errorf("Redis 不支持 SQL 查询")
 	}
 	if err := ValidateReadOnlySQL(source.Kind, query); err != nil {
 		return QuerySummary{}, err
 	}
-	limit := requestedMaxRows
-	if limit <= 0 || limit > source.MaxRows {
-		limit = source.MaxRows
+	p := normalizeQueryPage(source, page, pageSize)
+	var last QuerySummary
+	for attempt := 0; attempt < 2; attempt++ {
+		events, summary, err := m.streamQueryAttempt(ctx, source, query, p)
+		summary.RetryCount = attempt
+		last = summary
+		if err == nil {
+			for _, event := range events {
+				if emit != nil {
+					if emitErr := emit(event); emitErr != nil {
+						return summary, emitErr
+					}
+				}
+			}
+			return summary, nil
+		}
+		if attempt == 0 && isConnectionFailure(err) {
+			m.Invalidate(source.ID)
+			continue
+		}
+		return summary, err
 	}
+	return last, fmt.Errorf("连接重试失败")
+}
+
+func (m *Manager) streamQueryAttempt(ctx context.Context, source Source, query string, page QueryPage) ([]StreamEvent, QuerySummary, error) {
 	queryCtx, cancel := context.WithTimeout(ctx, source.Timeout())
 	defer cancel()
 	if err := m.acquire(queryCtx); err != nil {
-		return QuerySummary{}, err
+		return nil, QuerySummary{}, err
 	}
 	defer m.release()
 	db, err := m.sqlDB(source)
 	if err != nil {
-		return QuerySummary{}, err
+		return nil, QuerySummary{}, err
 	}
 	started := time.Now()
-	// Run every user query inside a database-enforced read-only transaction.
-	// MySQL supports this through BeginTx; go-ora does not expose the option, so
-	// Oracle receives SET TRANSACTION READ ONLY as the transaction's first SQL.
 	txOptions := &sql.TxOptions{ReadOnly: source.Kind == KindMySQL}
 	tx, err := db.BeginTx(queryCtx, txOptions)
 	if err != nil {
-		return QuerySummary{}, err
+		return nil, QuerySummary{}, err
 	}
 	defer tx.Rollback()
 	if source.Kind == KindOracle {
 		if _, err := tx.ExecContext(queryCtx, "SET TRANSACTION READ ONLY"); err != nil {
-			return QuerySummary{}, fmt.Errorf("启用 Oracle 只读事务失败: %w", err)
+			return nil, QuerySummary{}, fmt.Errorf("启用 Oracle 只读事务失败: %w", err)
 		}
 	}
-	limitedQuery, err := serverLimitedQuery(source.Kind, query, limit+1)
+	limitedQuery, err := serverPagedQuery(source.Kind, query, page)
 	if err != nil {
-		return QuerySummary{}, err
+		return nil, QuerySummary{}, err
 	}
 	rows, err := tx.QueryContext(queryCtx, limitedQuery)
 	if err != nil {
-		return QuerySummary{}, err
+		return nil, QuerySummary{}, err
 	}
 	defer rows.Close()
 	columns, err := resultColumns(rows)
 	if err != nil {
-		return QuerySummary{}, err
+		return nil, QuerySummary{}, err
 	}
 	if err := rejectLargeObjectColumns(source.Kind, columns); err != nil {
-		return QuerySummary{}, err
+		return nil, QuerySummary{}, err
 	}
-	if err := emit(StreamEvent{Type: "meta", Columns: columns}); err != nil {
-		return QuerySummary{}, err
+	summary := QuerySummary{
+		QueryLimit: page.PageSize, Page: page.Page, PageSize: page.PageSize,
+		Offset: page.Offset(), HasPrev: page.Page > 1, PaginationMode: "page",
+		Ordered: queryHasOrderBy(query),
 	}
-
+	events := []StreamEvent{{Type: "meta", Columns: columns}}
 	batch := make([][]any, 0, rowBatchSize)
-	summary := QuerySummary{QueryLimit: limit}
-	flush := func() error {
+	flush := func() {
 		if len(batch) == 0 {
-			return nil
+			return
 		}
-		out := batch
+		events = append(events, StreamEvent{Type: "rows", Rows: batch})
 		batch = make([][]any, 0, rowBatchSize)
-		return emit(StreamEvent{Type: "rows", Rows: out})
 	}
-	for summary.Rows < limit && rows.Next() {
+	for rows.Next() {
 		row, rowBytes, scanErr := scanRow(rows, len(columns))
 		if scanErr != nil {
-			return summary, scanErr
+			return nil, summary, scanErr
+		}
+		if summary.Rows >= page.PageSize {
+			summary.HasNext = true
+			break
 		}
 		if summary.Bytes+rowBytes > source.MaxResultBytes {
 			summary.Truncated = true
@@ -106,25 +138,16 @@ func (m *Manager) StreamQuery(ctx context.Context, source Source, query string, 
 		summary.Bytes += rowBytes
 		batch = append(batch, row)
 		if len(batch) == rowBatchSize {
-			if err := flush(); err != nil {
-				return summary, err
-			}
+			flush()
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return summary, err
+		return nil, summary, err
 	}
-	if !summary.Truncated && summary.Rows == limit && rows.Next() {
-		summary.Truncated = true
-	}
-	if err := flush(); err != nil {
-		return summary, err
-	}
+	flush()
 	summary.ElapsedMS = time.Since(started).Milliseconds()
-	if err := emit(StreamEvent{Type: "summary", Summary: &summary}); err != nil {
-		return summary, err
-	}
-	return summary, nil
+	events = append(events, StreamEvent{Type: "summary", Summary: &summary})
+	return events, summary, nil
 }
 
 // serverLimitedQuery enforces the result cap at the database boundary. The
@@ -156,6 +179,26 @@ func serverLimitedQuery(kind, query string, maxRows int) (string, error) {
 	default:
 		return "", fmt.Errorf("%s 不是 SQL 数据源", kind)
 	}
+}
+
+func isConnectionFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, driver.ErrBadConn) {
+		return true
+	}
+	text := strings.ToUpper(err.Error())
+	for _, marker := range []string{
+		"MYSQL SERVER HAS GONE AWAY", "ERROR 2006", "ERROR 2013", "BROKEN PIPE",
+		"CONNECTION RESET", "CONNECTION IS CLOSED", "USE OF CLOSED NETWORK CONNECTION",
+		"ORA-03113", "ORA-03114", "ORA-01012", "ORA-12537",
+	} {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func rejectLargeObjectColumns(kind string, columns []Column) error {

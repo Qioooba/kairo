@@ -135,34 +135,28 @@ func (m *Manager) Schemas(ctx context.Context, source Source) ([]Schema, error) 
 	if cached, ok := metadataCacheGet[[]Schema](m, cacheKey); ok {
 		return append([]Schema(nil), cached...), nil
 	}
-	ctx, cancel := context.WithTimeout(ctx, source.Timeout())
-	defer cancel()
-	if err := m.acquire(ctx); err != nil {
-		return nil, err
-	}
-	defer m.release()
-	db, err := m.sqlDB(source)
-	if err != nil {
-		return nil, err
-	}
-	query := "SELECT schema_name FROM information_schema.schemata ORDER BY schema_name"
-	if source.Kind == KindOracle {
-		query = "SELECT DISTINCT owner FROM all_objects WHERE object_type IN ('TABLE','VIEW','MATERIALIZED VIEW','FUNCTION','PROCEDURE','PACKAGE','SEQUENCE','SYNONYM','TRIGGER') ORDER BY owner"
-	}
-	rows, err := db.QueryContext(ctx, query)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
 	var out []Schema
-	for rows.Next() && len(out) < 500 {
-		var item Schema
-		if err := rows.Scan(&item.Name); err != nil {
-			return nil, err
+	err := m.withSQL(ctx, source, func(ctx context.Context, db *sql.DB) error {
+		out = out[:0]
+		query := "SELECT schema_name FROM information_schema.schemata ORDER BY schema_name"
+		if source.Kind == KindOracle {
+			query = "SELECT DISTINCT owner FROM all_objects WHERE object_type IN ('TABLE','VIEW','MATERIALIZED VIEW','FUNCTION','PROCEDURE','PACKAGE','SEQUENCE','SYNONYM','TRIGGER') ORDER BY owner"
 		}
-		out = append(out, item)
-	}
-	if err := rows.Err(); err != nil {
+		rows, err := db.QueryContext(ctx, query)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() && len(out) < 500 {
+			var item Schema
+			if err := rows.Scan(&item.Name); err != nil {
+				return err
+			}
+			out = append(out, item)
+		}
+		return rows.Err()
+	})
+	if err != nil {
 		return nil, err
 	}
 	metadataCacheSet(m, cacheKey, append([]Schema(nil), out...))
@@ -180,25 +174,19 @@ func (m *Manager) Objects(ctx context.Context, source Source, schema, search str
 	if cached, ok := metadataCacheGet[[]Object](m, cacheKey); ok {
 		return append([]Object(nil), cached...), nil
 	}
-	ctx, cancel := context.WithTimeout(ctx, source.Timeout())
-	defer cancel()
-	if err := m.acquire(ctx); err != nil {
-		return nil, err
-	}
-	defer m.release()
-	db, err := m.sqlDB(source)
-	if err != nil {
-		return nil, err
-	}
-	var rows *sql.Rows
-	if source.Kind == KindOracle {
-		rows, err = db.QueryContext(ctx, `SELECT owner, object_name, object_type FROM (
+	var out []Object
+	err := m.withSQL(ctx, source, func(ctx context.Context, db *sql.DB) error {
+		out = out[:0]
+		var rows *sql.Rows
+		var err error
+		if source.Kind == KindOracle {
+			rows, err = db.QueryContext(ctx, `SELECT owner, object_name, object_type FROM (
 SELECT owner, object_name, object_type FROM all_objects
 WHERE owner = :1 AND object_type IN ('TABLE','VIEW','MATERIALIZED VIEW','FUNCTION','PROCEDURE','PACKAGE','SEQUENCE','SYNONYM','TRIGGER') AND (:2 = '' OR UPPER(object_name) LIKE :3)
 ORDER BY object_name) WHERE ROWNUM <= 500`, strings.ToUpper(schema), search, "%"+strings.ToUpper(search)+"%")
-	} else {
-		like := "%" + search + "%"
-		rows, err = db.QueryContext(ctx, `SELECT object_schema, object_name, object_type FROM (
+		} else {
+			like := "%" + search + "%"
+			rows, err = db.QueryContext(ctx, `SELECT object_schema, object_name, object_type FROM (
 SELECT table_schema AS object_schema, table_name AS object_name,
        CASE WHEN table_type = 'VIEW' THEN 'VIEW' ELSE 'TABLE' END AS object_type
 FROM information_schema.tables WHERE table_schema = ? AND (? = '' OR table_name LIKE ?)
@@ -209,21 +197,22 @@ UNION ALL
 SELECT trigger_schema, trigger_name, 'TRIGGER'
 FROM information_schema.triggers WHERE trigger_schema = ? AND (? = '' OR trigger_name LIKE ?)
 ) objects ORDER BY object_type, object_name LIMIT 500`, schema, search, like, schema, search, like, schema, search, like)
-	}
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []Object
-	for rows.Next() {
-		var item Object
-		if err := rows.Scan(&item.Schema, &item.Name, &item.Type); err != nil {
-			return nil, err
 		}
-		item.Category = objectCategory(item.Type)
-		out = append(out, item)
-	}
-	if err := rows.Err(); err != nil {
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var item Object
+			if err := rows.Scan(&item.Schema, &item.Name, &item.Type); err != nil {
+				return err
+			}
+			item.Category = objectCategory(item.Type)
+			out = append(out, item)
+		}
+		return rows.Err()
+	})
+	if err != nil {
 		return nil, err
 	}
 	metadataCacheSet(m, cacheKey, append([]Object(nil), out...))
@@ -258,45 +247,40 @@ func (m *Manager) Fields(ctx context.Context, source Source, schema, object stri
 	if cached, ok := metadataCacheGet[[]Field](m, cacheKey); ok {
 		return append([]Field(nil), cached...), nil
 	}
-	ctx, cancel := context.WithTimeout(ctx, source.Timeout())
-	defer cancel()
-	if err := m.acquire(ctx); err != nil {
-		return nil, err
-	}
-	defer m.release()
-	db, err := m.sqlDB(source)
-	if err != nil {
-		return nil, err
-	}
-	var rows *sql.Rows
-	if source.Kind == KindOracle {
-		rows, err = db.QueryContext(ctx, `SELECT column_name, data_type, nullable, column_id,
+	var out []Field
+	err := m.withSQL(ctx, source, func(ctx context.Context, db *sql.DB) error {
+		out = out[:0]
+		var rows *sql.Rows
+		var err error
+		if source.Kind == KindOracle {
+			rows, err = db.QueryContext(ctx, `SELECT column_name, data_type, nullable, column_id,
 CASE WHEN data_type IN ('VARCHAR2','CHAR','NVARCHAR2','NCHAR','RAW') THEN data_type || '(' || data_length || ')'
      WHEN data_type = 'NUMBER' AND data_precision IS NOT NULL THEN data_type || '(' || data_precision || ',' || NVL(data_scale,0) || ')'
      ELSE data_type END
 FROM all_tab_columns WHERE owner = :1 AND table_name = :2 ORDER BY column_id`, strings.ToUpper(schema), strings.ToUpper(object))
-	} else {
-		rows, err = db.QueryContext(ctx, `SELECT column_name, data_type, is_nullable, ordinal_position, column_type
+		} else {
+			rows, err = db.QueryContext(ctx, `SELECT column_name, data_type, is_nullable, ordinal_position, column_type
 FROM information_schema.columns WHERE table_schema = ? AND table_name = ? ORDER BY ordinal_position`, schema, object)
-	}
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []Field
-	for rows.Next() {
-		var item Field
-		var nullable string
-		if err := rows.Scan(&item.Name, &item.DataType, &nullable, &item.Ordinal, &item.Definition); err != nil {
-			return nil, err
 		}
-		item.Nullable = strings.EqualFold(nullable, "yes") || strings.EqualFold(nullable, "y")
-		out = append(out, item)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	if err := m.markPrimaryKeys(ctx, db, source, schema, object, out); err != nil {
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var item Field
+			var nullable string
+			if err := rows.Scan(&item.Name, &item.DataType, &nullable, &item.Ordinal, &item.Definition); err != nil {
+				return err
+			}
+			item.Nullable = strings.EqualFold(nullable, "yes") || strings.EqualFold(nullable, "y")
+			out = append(out, item)
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		return m.markPrimaryKeys(ctx, db, source, schema, object, out)
+	})
+	if err != nil {
 		return nil, err
 	}
 	metadataCacheSet(m, cacheKey, append([]Field(nil), out...))

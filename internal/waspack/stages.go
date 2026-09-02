@@ -33,7 +33,7 @@ func Extract(req Request) (*ExtractResult, error) {
 	if len(pv.Missing) > 0 {
 		return nil, missingFilesError(pv.Missing)
 	}
-	outAbs, created, err := prepareOutputDir(req.OutputDir)
+	outAbs, created, err := prepareOutputDirWithPolicy(req.OutputDir, req.OutputPolicy, req.ConfirmReplace)
 	if err != nil {
 		return nil, err
 	}
@@ -61,6 +61,9 @@ func Extract(req Request) (*ExtractResult, error) {
 			return nil, fmt.Errorf("抽取 %s 失败: %w", rf.Rel, err)
 		}
 		total += rf.Bytes
+	}
+	if err := writeOutputMarker(outAbs, "", []string{ExtractedWARDirName}); err != nil {
+		return nil, fmt.Errorf("写产物标记失败: %w", err)
 	}
 	ok = true
 	return &ExtractResult{OK: true, OutputDir: outAbs, WarDir: warDir, Files: len(pv.Files), Bytes: total, Warnings: pv.Warnings, PairedAdded: pairedCount(pv.Files)}, nil
@@ -130,12 +133,13 @@ func PackageExtracted(req Request) (*Result, error) {
 	tarPath := filepath.Join(outAbs, TarFileName(pkgName))
 	backupPath := filepath.Join(outAbs, BackupScriptName(pkgName))
 	execPath := filepath.Join(outAbs, ExecuteScriptName(pkgName))
-	for _, p := range []string{listPath, tarPath, backupPath, execPath} {
-		if _, err := os.Lstat(p); err == nil {
-			return nil, fmt.Errorf("目标文件已存在，拒绝覆盖: %s", p)
-		}
-	}
-	cleanup := func() { rollback(outAbs, false, listPath, tarPath, backupPath, execPath) }
+	artifactNames := []string{filepath.Base(listPath), filepath.Base(tarPath), filepath.Base(backupPath), filepath.Base(execPath)}
+	if err := prepareExistingArtifacts(outAbs, req.OutputPolicy, req.ConfirmReplace, artifactNames); err != nil { return nil, err }
+	markerPath := filepath.Join(outAbs, outputMarkerName)
+	// Extract 阶段已写入仅含 war 的 marker，打包阶段需用包含全部产物的新 marker 覆盖。
+	// 默认 fail 策略下 artifacts 尚不存在但旧 marker 已存在，需先移除旧 marker 再写入。
+	_ = os.Remove(markerPath)
+	cleanup := func() { rollback(outAbs, false, listPath, tarPath, backupPath, execPath, markerPath) }
 	if err := writeUnixFile(listPath, listText(files), 0o644); err != nil {
 		cleanup()
 		return nil, fmt.Errorf("写清单失败: %w", err)
@@ -153,7 +157,44 @@ func PackageExtracted(req Request) (*Result, error) {
 		cleanup()
 		return nil, fmt.Errorf("写执行脚本失败: %w", err)
 	}
+	if err := writeOutputMarker(outAbs, pkgName, append([]string{ExtractedWARDirName}, artifactNames...)); err != nil {
+		cleanup()
+		return nil, fmt.Errorf("写产物标记失败: %w", err)
+	}
 	return &Result{OK: true, OutputDir: outAbs, WarDir: warDir, TarFile: tarPath, ListFile: listPath, BackupScript: backupPath, ExecuteScript: execPath, PackageName: pkgName, Files: len(files), Bytes: bytes}, nil
+}
+
+func prepareExistingArtifacts(outAbs, policy string, confirmReplace bool, names []string) error {
+	for _, name := range names {
+		if _, err := os.Lstat(filepath.Join(outAbs, name)); err != nil && !os.IsNotExist(err) { return err }
+	}
+	policy = normalizeOutputPolicy(policy)
+	allowed := map[string]bool{ExtractedWARDirName: true, outputMarkerName: true}
+	for _, name := range names {
+		allowed[name] = true
+	}
+	entries, err := os.ReadDir(outAbs)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if !allowed[entry.Name()] {
+			return fmt.Errorf("输出目录包含未知文件 %q，拒绝混入投产包", entry.Name())
+		}
+	}
+	if policy == OutputPolicyReplace && !confirmReplace { return fmt.Errorf("覆盖已有打包产物需要明确确认") }
+	if policy == OutputPolicyCleanOwned || policy == OutputPolicyReplace {
+		if policy == OutputPolicyCleanOwned {
+			marker, err := readOutputMarker(outAbs); if err != nil { return err }
+			owned := map[string]bool{}; for _, item := range marker.Owned { owned[filepath.Clean(item)] = true }
+			for _, name := range names { if _, err := os.Lstat(filepath.Join(outAbs, name)); err == nil && !owned[name] { return fmt.Errorf("目标文件 %s 不在 Kairo 产物清单中，拒绝覆盖", name) } }
+		}
+		for _, name := range names { if err := os.Remove(filepath.Join(outAbs, name)); err != nil && !os.IsNotExist(err) { return fmt.Errorf("清理旧打包产物失败: %w", err) } }
+		_ = os.Remove(filepath.Join(outAbs, outputMarkerName))
+		return nil
+	}
+	for _, name := range names { if _, err := os.Lstat(filepath.Join(outAbs, name)); err == nil { return fmt.Errorf("目标文件已存在，拒绝覆盖: %s", filepath.Join(outAbs, name)) } }
+	return nil
 }
 
 func filesFromWAR(warDir string) ([]ResolvedFile, error) {

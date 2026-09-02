@@ -19,6 +19,8 @@ type waspackReq struct {
 	PackageName string `json:"package_name"`
 	Manifest    string `json:"manifest"`
 	AutoPair    *bool  `json:"auto_pair"`
+	OutputPolicy string `json:"output_policy"`
+	ConfirmReplace bool `json:"confirm_replace"`
 }
 
 func (s *Server) handleWASPackPreview(w http.ResponseWriter, r *http.Request) {
@@ -197,5 +199,7 @@ func toWASPackReq(req waspackReq) waspack.Request {
 		PackageName: req.PackageName,
 		Manifest:    req.Manifest,
 		AutoPair:    auto,
+		OutputPolicy: strings.TrimSpace(req.OutputPolicy),
+		ConfirmReplace: req.ConfirmReplace,
 	}
 }

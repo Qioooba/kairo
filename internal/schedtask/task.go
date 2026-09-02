@@ -143,6 +143,7 @@ func (t *Task) NextRun(now time.Time) time.Time {
 
 // RunRecord 一次运行的历史记录。
 type RunRecord struct {
+	RunID      string `json:"run_id,omitempty"`
 	TaskID     string `json:"task_id"`
 	StartedAt  string `json:"started_at"`       // RFC3339
 	DurationMs int64  `json:"duration_ms"`      // 耗时毫秒
@@ -150,4 +151,16 @@ type RunRecord struct {
 	ExitCode   int    `json:"exit_code"`        // 进程退出码；启动失败为 -1
 	Output     string `json:"output,omitempty"` // stdout+stderr 合并尾部（截断）
 	Trigger    string `json:"trigger"`          // cron=调度触发 / manual=手动执行
+}
+
+// FailureEvent 是任务最终失败/超时时发出的系统级告警事件。
+type FailureEvent struct {
+	TaskID     string `json:"task_id"`
+	TaskName   string `json:"task_name"`
+	RunID      string `json:"run_id"`
+	Status     string `json:"status"`
+	Error      string `json:"error,omitempty"`
+	StartedAt  string `json:"started_at"`
+	FinishedAt string `json:"finished_at"`
+	Trigger    string `json:"trigger"`
 }

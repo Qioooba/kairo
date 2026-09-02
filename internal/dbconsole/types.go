@@ -35,6 +35,7 @@ type Source struct {
 	RedisMode            string   `json:"redis_mode,omitempty"`        // standalone / cluster / sentinel
 	RedisMasterName      string   `json:"redis_master_name,omitempty"` // Sentinel master name
 	RedisNodes           []string `json:"redis_nodes,omitempty"`       // extra seed / sentinel host:port
+	AllowRedisWrite      bool     `json:"allow_redis_write,omitempty"` // explicit capability gate; default false
 	TLSMode              string   `json:"tls_mode,omitempty"`          // disabled / preferred / required / skip-verify
 	QueryTimeoutSeconds  int      `json:"query_timeout_seconds"`
 	MaxRows              int      `json:"max_rows"`
@@ -324,9 +325,19 @@ type Column struct {
 }
 
 type QuerySummary struct {
-	Rows       int   `json:"rows"`
-	ElapsedMS  int64 `json:"elapsed_ms"`
-	Truncated  bool  `json:"truncated"`
-	Bytes      int64 `json:"bytes"`
-	QueryLimit int   `json:"query_limit"`
+	Rows           int    `json:"rows"`
+	ElapsedMS      int64  `json:"elapsed_ms"`
+	Truncated      bool   `json:"truncated"`
+	Bytes          int64  `json:"bytes"`
+	QueryLimit     int    `json:"query_limit"`
+	Page           int    `json:"page,omitempty"`
+	PageSize       int    `json:"page_size,omitempty"`
+	Offset         int64  `json:"offset,omitempty"`
+	HasNext        bool   `json:"has_next,omitempty"`
+	HasPrev        bool   `json:"has_prev,omitempty"`
+	TotalRows      *int64 `json:"total_rows,omitempty"`
+	TotalKnown     bool   `json:"total_known,omitempty"`
+	PaginationMode string `json:"pagination_mode,omitempty"`
+	RetryCount     int    `json:"retry_count,omitempty"`
+	Ordered        bool   `json:"ordered"`
 }

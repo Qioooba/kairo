@@ -31,7 +31,7 @@
     managing: false, workspaceToken: 0, lastSQL: '', lastMaxRows: 0, resultMode: 'grid',
     selectedRow: 0, localFilter: '', hiddenColumns: new Set(), columnWidths: {}, sort: null,
     prefs: normalizePrefs({}), lastError: null, inspectTab: 'fields', inspect: null, plan: [], gridReady: false,
-    sessions: [], activeId: 0
+    sessions: [], activeId: 0, redisKeyBase64: '', redisType: '', redisCursor: '0', redisNextCursor: '0', redisCursorHistory: [], redisOffset: 0, redisPageSize: 100, redisMembersHasNext: false
   };
   let tabSeq = 0;
   const acState = { open: false, items: [], index: 0, start: 0, end: 0 };
@@ -61,18 +61,26 @@
   function sess() { return state.sessions.find(function (s) { return s.id === state.activeId; }) || state.sessions[0] || null; }
   function effectiveSource() {
     const s = sess();
-    if (s && s.sourceId) {
-      const found = state.sources.find(function (x) { return x.id === s.sourceId; });
-      if (found) return found;
-    }
-    return state.source;
+    if (s && s.sourceId) return state.sources.find(function (x) { return x.id === s.sourceId; }) || null;
+    return state.source || null;
+  }
+  function sessionSourceState(s) {
+    s = s || sess();
+    if (!s || !s.sourceId) return { status: state.source ? 'ready' : 'removed', source: state.source || null };
+    const found = state.sources.find(function (x) { return x.id === s.sourceId; }) || null;
+    return found ? { status: 'ready', source: found } : { status: 'removed', source: null };
+  }
+  function bindSessionSource(s, source) {
+    if (!s || !source) return;
+    s.sourceId = source.id;
+    s.sourceRef = Kairo.workbench && Kairo.workbench.resourceSession ? Kairo.workbench.resourceSession.snapshot(source) : { id: source.id, name: source.name, kind: source.kind };
   }
   function createSession(sql) {
     return {
       id: ++tabSeq, sql: sql || '', rows: [], columns: [], summary: null, lastError: null,
       lastSQL: '', lastMaxRows: 0, resultMode: 'grid', selectedRow: 0, localFilter: '',
       hiddenColumns: new Set(), sort: null, plan: [], gridReady: false, controller: null,
-      runSeq: 0, status: '就绪', sourceId: state.source ? state.source.id : ''
+      runSeq: 0, status: '就绪', sourceId: state.source ? state.source.id : '', sourceRef: state.source && Kairo.workbench && Kairo.workbench.resourceSession ? Kairo.workbench.resourceSession.snapshot(state.source) : null
     };
   }
   function bindSession(s) {
@@ -92,7 +100,7 @@
       s.sort = state.sort; s.lastError = state.lastError; s.plan = state.plan;
       s.rows = state.rows; s.columns = state.columns; s.summary = state.summary;
       s.lastSQL = state.lastSQL; s.lastMaxRows = state.lastMaxRows; s.controller = state.controller;
-      s.sourceId = state.source ? state.source.id : s.sourceId;
+      if (!s.sourceId && state.source) bindSessionSource(s, state.source);
     }
   }
   function tabTitle(s) {
@@ -116,15 +124,16 @@
     if (cancel) cancel.disabled = !s.controller;
     if (exp) exp.disabled = !s.lastSQL || !!s.controller || !(s.rows && s.rows.length);
     if (st) st.textContent = s.status || '就绪';
+    updateDatabasePager();
   }
   function renderTabs() {
     const host = q('db-sql-tabs');
     if (!host) return;
     host.innerHTML = state.sessions.map(function (s) {
-      const src = s.sourceId ? (state.sources.find(function (x) { return x.id === s.sourceId; }) || {}) : {};
-      const srcName = src.name ? ' [' + src.name + ']' : '';
-      const tip = h((s.sourceId ? (src.name || s.sourceId) + ' · ' : '') + (s.sql || tabTitle(s)));
-      return '<button type="button" class="db-editor-tab' + (s.id === state.activeId ? ' active' : '') + (s.controller ? ' running' : '') + '" data-tab="' + s.id + '" title="' + tip + '"><span class="db-tab-dot" aria-hidden="true"></span><span class="db-tab-name">' + h(tabTitle(s)) + h(srcName) + '</span>' + (state.sessions.length > 1 ? '<span class="db-tab-close" data-close="' + s.id + '" title="关闭页签">×</span>' : '') + '</button>';
+       const src = s.sourceId ? (state.sources.find(function (x) { return x.id === s.sourceId; }) || null) : null;
+       const srcName = src ? ' [' + src.name + ']' : (s.sourceRef && s.sourceRef.name ? ' [' + s.sourceRef.name + ' · 已删除]' : ' [未绑定]');
+       const tip = h((s.sourceId ? ((src && src.name) || (s.sourceRef && s.sourceRef.name) || s.sourceId) + ' · ' : '') + (s.sql || tabTitle(s)));
+       return '<button type="button" class="db-editor-tab' + (s.id === state.activeId ? ' active' : '') + (s.controller ? ' running' : '') + (!src && s.sourceId ? ' orphan' : '') + '" data-tab="' + s.id + '" title="' + tip + '"><span class="db-tab-dot" aria-hidden="true"></span><span class="db-tab-name">' + h(tabTitle(s)) + h(srcName) + '</span>' + (state.sessions.length > 1 ? '<span class="db-tab-close" data-close="' + s.id + '" title="关闭页签">×</span>' : '') + '</button>';
     }).join('');
     host.querySelectorAll('[data-tab]').forEach(function (btn) {
       btn.onclick = function (e) {
@@ -164,10 +173,7 @@
       renderWorkspace(true);
       return;
     }
-    bindSession(s);
-    restoreSessionChrome(s);
-    // 同步标签栏的源指示（标题提示含源名）
-    renderTabs();
+    renderWorkspace(true);
   }
   function closeSession(id) {
     if (state.sessions.length <= 1) return;
@@ -186,8 +192,7 @@
       if (select) select.value = nextSource.id;
       renderWorkspace(true);
     } else {
-      bindSession(next);
-      restoreSessionChrome(next);
+      renderWorkspace(true);
     }
   }
   function restoreSessionChrome(s) {
@@ -335,7 +340,7 @@
       saveEditorSQL();
       const next = state.sources.find(s => s.id === this.value) || null;
       const cur = sess();
-      if (cur) cur.sourceId = next ? next.id : '';
+      if (cur && next) bindSessionSource(cur, next);
       state.source = next;
       if (next) { persisted.last_source = next.id; savePersisted(); }
       // #13：数据源属于当前页签。重建可见工作区但保留其它页签及其
@@ -380,12 +385,13 @@
     const kind = q('dbf-kind').value, target = q('dbf-specific');
     if (kind === 'oracle') target.innerHTML = selectField('连接方式', 'dbf-oracle-by', [['service_name', 'Service Name'], ['sid', 'SID']], s.oracle_connect_by || 'service_name') + field('Service/SID', 'dbf-service', s.oracle_service || '') + field('客户端字符集', 'dbf-charset', s.oracle_client_charset || '');
     else if (kind === 'mysql') target.innerHTML = field('Database', 'dbf-database', s.database || '') + '<div class="db-field db-field-span-2"><span class="muted" style="margin-top:24px;font-size:12px;">MySQL 数据库名；留空将默认连接当前用户有权限的全部数据库。</span></div>';
-    else {
+      else {
       const mode = s.redis_mode || 'standalone';
       target.innerHTML = selectField('拓扑', 'dbf-redis-mode', [['standalone', '单机'], ['cluster', 'Cluster'], ['sentinel', 'Sentinel']], mode)
         + field('Redis DB', 'dbf-redis-db', s.redis_db || 0, 'number')
         + field('Master 名称', 'dbf-redis-master', s.redis_master_name || '')
-        + '<label class="db-field db-field-span"><span>附加节点（每行 host:port）</span><textarea id="dbf-redis-nodes" rows="3" placeholder="127.0.0.1:6380">' + h((s.redis_nodes || []).join('\n')) + '</textarea></label>';
+        + '<label class="db-field db-field-span"><span>附加节点（每行 host:port）</span><textarea id="dbf-redis-nodes" rows="3" placeholder="127.0.0.1:6380">' + h((s.redis_nodes || []).join('\n')) + '</textarea></label>'
+        + '<label class="db-field db-field-span db-redis-write-gate"><span><input id="dbf-redis-write" type="checkbox"' + (s.allow_redis_write ? ' checked' : '') + '> 开启受控 TTL 写操作（仅管理员，默认关闭）</span><small>只允许 EXPIRE / PEXPIRE / PERSIST，所有操作需要二次确认并写审计。</small></label>';
       const syncRedis = function () {
         const m = q('dbf-redis-mode').value;
         q('dbf-redis-master').closest('.db-field').hidden = m !== 'sentinel';
@@ -416,6 +422,7 @@
       source.redis_db = Number(q('dbf-redis-db').value);
       source.redis_master_name = q('dbf-redis-master').value.trim();
       source.redis_nodes = q('dbf-redis-nodes').value.split(/[\n,]+/).map(function (x) { return x.trim(); }).filter(Boolean);
+      source.allow_redis_write = !!(q('dbf-redis-write') && q('dbf-redis-write').checked);
     }
     return source;
   }
@@ -427,7 +434,7 @@
       const path = '/api/database/sources' + (old && old.id ? '/' + encodeURIComponent(old.id) : '');
       const data = await api(method, path, body);
       await loadSources(data.source && data.source.id);
-      refreshSourceSelect(); closeManager(); renderWorkspace();
+      refreshSourceSelect(); closeManager(); renderWorkspace(true);
       toast('数据源已保存，管理面板已收起', 'ok');
     } catch (e) { toast('保存失败：' + e.message, 'err'); button.disabled = false; }
   }
@@ -435,7 +442,7 @@
     if (!source.id || !confirm('确定删除数据源“' + source.name + '”及其已保存密码？')) return;
     try {
       await api('DELETE', '/api/database/sources/' + encodeURIComponent(source.id));
-      await loadSources(); refreshSourceSelect(); closeManager(); renderWorkspace();
+      await loadSources(); refreshSourceSelect(); closeManager(); renderWorkspace(true);
       toast('数据源已删除', 'ok');
     } catch (e) { toast('删除失败：' + e.message, 'err'); }
   }
@@ -461,7 +468,7 @@
       state.activeId = 0;
     }
     state.workspaceToken++;
-    if (!state.source) {
+    if (!state.source && !(sess() && sess().sourceId)) {
       q('db-source-badge').textContent = '未配置';
       host.innerHTML = '<div class="card empty-state"><div class="empty-title">尚无数据源</div><div class="empty-desc">打开“数据源管理”创建 Oracle、MySQL 或 Redis 连接。</div></div>';
       return;
@@ -472,9 +479,16 @@
       state.activeId = first.id;
     }
     const active = sess();
-    if (active && !active.sourceId) active.sourceId = state.source.id;
+    if (active && !active.sourceId && state.source) bindSessionSource(active, state.source);
     const activeSource = effectiveSource();
     if (activeSource) state.source = activeSource;
+    if (!activeSource && active && active.sourceId) {
+      renderOrphanWorkspace(host, active);
+      const sourceSelect = q('db-source'); if (sourceSelect) sourceSelect.value = '';
+      const testButton = q('db-test'); if (testButton) { testButton.disabled = true; testButton.title = '当前页签绑定的数据源已删除'; }
+      q('db-source-badge').textContent = '数据源已删除';
+      return;
+    }
     q('db-source-badge').textContent = state.source ? kindLabel(state.source.kind) : '未配置';
     if (keepSessions) {
       bindSession(active);
@@ -489,6 +503,17 @@
     restoreSessionChrome(active);
   }
 
+  function renderOrphanWorkspace(host, session) {
+    host.innerHTML = '<section class="card db-orphan-workspace"><div class="empty-icon">⚠</div><h3>数据源已删除</h3><p>页签“' + h((session.sourceRef && session.sourceRef.name) || session.sourceId) + '”仍保留 SQL 和历史结果，但为避免误发到其他环境，当前已禁用执行、导出和元数据操作。</p><div class="db-orphan-actions"><label>重新绑定数据源<select id="db-orphan-source"><option value="">请选择数据源</option>' + sourceOptions() + '</select></label><button class="btn btn-primary" id="db-orphan-bind">绑定并继续</button></div><div class="db-orphan-sql"><label>当前 SQL</label><textarea id="db-sql" class="db-sql-editor mono" spellcheck="false"></textarea></div></section>';
+    const ta = q('db-sql'); if (ta) { ta.value = session.sql || ''; ta.addEventListener('input', function () { session.sql = ta.value; }); }
+    const select = q('db-orphan-source'); const button = q('db-orphan-bind');
+    if (select && button) button.onclick = function () {
+      const source = state.sources.find(function (x) { return x.id === select.value; });
+      if (!source) return toast('请选择要绑定的数据源', 'warn');
+      bindSessionSource(session, source); state.source = source; renderWorkspace(true); toast('已重新绑定：' + source.name, 'ok');
+    };
+  }
+
   function renderSQL(host) {
     const initial = state.source.kind === 'oracle' ? 'SELECT SYSDATE AS SERVER_TIME FROM DUAL' : 'SELECT NOW() AS server_time';
     const history = loadHistory();
@@ -497,8 +522,9 @@
     host.innerHTML = '<div class="db-sql-layout"><aside class="card db-meta" id="db-meta-pane"><div class="db-pane-title"><span>数据库对象</span><button class="btn btn-xs" id="db-meta-refresh">刷新</button></div><label class="db-compact-label">Schema<select id="db-schema"><option>加载中…</option></select></label><input id="db-object-search" type="search" placeholder="搜索表、视图、函数、过程"><div id="db-objects" class="db-object-list"><div class="db-tree-loading">正在读取元数据…</div></div><div class="db-split-y" id="db-split-y" role="separator" title="上下拖动调整字段区高度"></div><div class="db-inspect"><div class="db-inspect-tabs"><button class="db-inspect-tab active" data-tab="fields">字段</button><button class="db-inspect-tab" data-tab="indexes">索引</button><button class="db-inspect-tab" data-tab="constraints">约束</button><button class="db-inspect-tab" data-tab="ddl">DDL</button></div><div id="db-inspect-body" class="db-field-list"><div class="hint">单击对象查看字段、索引、约束和 DDL；双击生成查询。</div></div></div></aside><div class="db-split-x" id="db-split-x" role="separator" title="左右拖动调整对象栏宽度"></div><main class="db-main"><section class="card db-editor-card"><div class="db-editor-tabs"><div id="db-sql-tabs" class="db-sql-tabs"></div><button type="button" class="btn btn-xs" id="db-tab-add" title="新建查询页签">＋ 页签</button><span class="db-dialect">' + kindLabel(state.source.kind) + '</span></div><div class="db-editor-bar"><button class="btn btn-primary" id="db-run">执行 <kbd>' + h(state.prefs.shortcuts.run) + '</kbd></button><button class="btn" id="db-explain">执行计划</button><button class="btn" id="db-format">格式化</button><button class="btn" id="db-cancel" disabled>取消</button><label>最多 <input id="db-max-rows" type="number" min="1" max="' + state.source.max_rows + '" value="' + savedRows + '"> 行</label><label>显示 <input id="db-grid-rows" type="number" min="6" max="40" value="' + gridRows + '"> 行</label><div class="db-editor-bar-right"><select id="db-export-format" title="导出格式"><option value="csv">CSV</option><option value="json">JSON</option><option value="xlsx">Excel</option><option value="insert">INSERT</option></select><button class="btn" id="db-export" disabled>导出</button><select id="db-bookmark" title="SQL 收藏夹"><option value="">收藏夹</option></select><button class="btn btn-xs" id="db-bookmark-save" title="把当前 SQL 存入收藏夹">收藏</button><button class="btn btn-xs" id="db-bookmark-del" title="删除当前收藏">删收藏</button><select id="db-history" title="查询历史"><option value="">历史</option>' + history.map(function (sql, i) { return '<option value="' + i + '">' + h(sql.replace(/\s+/g, ' ').slice(0, 80)) + '</option>'; }).join('') + '</select><button class="btn btn-xs" id="db-history-clear" title="查询历史按当前用户保存在 data/preferences.json">清空历史</button></div><span id="db-query-status" class="db-query-status">就绪</span></div><div class="db-sql-shell"><pre id="db-sql-highlight" class="db-sql-highlight" aria-hidden="true"></pre><textarea id="db-sql" class="db-sql-editor" spellcheck="false"></textarea><div id="db-sql-ac" class="db-sql-ac" hidden role="listbox" aria-label="SQL 补全"></div></div><div class="db-editor-help">多页签可并行查询 · 输入关键字弹出补全 · 光标停在括号上会匹配另一半 · 格式化 / 收藏夹 · 模板缩写按 ' + h(state.prefs.expandKey) + ' 展开 · ' + h(state.prefs.shortcuts.run) + ' 执行</div></section><section class="card db-results"><div class="db-result-toolbar"><div class="db-result-tabs"><button id="db-view-grid" class="db-view-btn active">网格</button><button id="db-view-record" class="db-view-btn">单行记录</button><button id="db-view-plan" class="db-view-btn">执行计划</button></div><input id="db-result-filter" type="search" placeholder="在当前结果中过滤"><button class="btn btn-xs" id="db-copy-columns" disabled>复制字段名</button><button class="btn btn-xs" id="db-column-manager" disabled>显示列</button><span class="db-copy-hint">单击选行 · 双击进单行 · 点字段名可复制</span><span id="db-result-meta">等待执行查询</span></div><div id="db-result-message" class="db-result-message" hidden></div><div id="db-result-grid" class="db-result-grid"></div></section></main></div>';
     q('db-sql').placeholder = initial;
     q('db-max-rows').value = savedRows;
-    q('db-max-rows').title = '查询最多返回多少行，按数据源记住';
+    q('db-max-rows').title = '每页返回多少行，按数据源记住';
     q('db-grid-rows').title = '结果网格一次显示多少行，可自定义';
+    installDatabasePagination();
     bindPaneSplitters(host);
     ensureWorkbenchKeys();
     q('db-run').onclick = runQuery;
@@ -526,6 +552,7 @@
       gridBtn.onclick = openBookmarkGrid;
       sel.parentNode.insertBefore(gridBtn, sel.nextSibling);
     })();
+    compactDatabaseToolbar();
     q('db-copy-columns').onclick = copyVisibleColumnNames;
     q('db-sql').onkeydown = handleEditorKeydown;
     bindSQLEditor();
@@ -682,7 +709,7 @@
     const srcKind = effectiveSource() ? effectiveSource().kind : (state.source ? state.source.kind : 'oracle');
     let sql = 'SELECT *\nFROM ' + name;
     if (upper === 'FUNCTION') sql = srcKind === 'oracle' ? 'SELECT ' + name + '() AS result FROM DUAL' : 'SELECT ' + name + '() AS result';
-    else if (upper === 'PROCEDURE' || upper === 'PACKAGE') sql = srcKind === 'oracle' ? 'BEGIN\n  ' + name + '();\nEND;' : 'CALL ' + name + '();';
+    else if (upper === 'PROCEDURE' || upper === 'PACKAGE') sql = '-- 只读工作台不执行存储过程/Package。\n-- 请在右侧“DDL”查看定义；以下仅为人工执行模板，需在受控客户端确认后使用：\n-- ' + (srcKind === 'oracle' ? 'BEGIN ' + name + '(); END;' : 'CALL ' + name + '();');
     else if (upper === 'TRIGGER') sql = '-- Trigger: ' + name;
     const e = q('db-sql'); e.value = sql; e.focus(); syncSQLEditor();
   }
@@ -1195,14 +1222,27 @@
       grid.appendChild(card);
     });
   }
+
+  function compactDatabaseToolbar() {
+    const bar = q('db-editor-bar'), right = bar && bar.querySelector('.db-editor-bar-right');
+    if (!bar || !right || q('db-toolbar-more')) return;
+    const details = document.createElement('details'); details.id = 'db-toolbar-more'; details.className = 'db-toolbar-more';
+    const summary = document.createElement('summary'); summary.textContent = '更多';
+    const panel = document.createElement('div'); panel.className = 'db-toolbar-more-panel';
+    const ids = ['db-explain', 'db-format', 'db-export-format', 'db-export', 'db-bookmark', 'db-bookmark-grid', 'db-bookmark-save', 'db-bookmark-del', 'db-history', 'db-history-clear'];
+    ids.forEach(function (id) { const node = q(id); if (node) panel.appendChild(node); });
+    details.append(summary, panel);
+    right.remove(); bar.insertBefore(details, q('db-query-status'));
+    const max = q('db-max-rows'); if (max && max.parentNode && max.parentNode.firstChild && max.parentNode.firstChild.nodeType === 3) max.parentNode.firstChild.textContent = '每页 ';
+  }
   function editorSQL() {
     const box = q('db-sql');
     if (!box) return '';
-    if (typeof box.selectionStart === 'number' && typeof box.selectionEnd === 'number' && box.selectionStart !== box.selectionEnd) {
-      const selected = box.value.substring(box.selectionStart, box.selectionEnd).trim();
-      if (selected) return selected;
-    }
     let sql = box.value.trim();
+    if (sql && Kairo.workbench && Kairo.workbench.statementModel) {
+      const picked = Kairo.workbench.statementModel.normalize(box.value, box.selectionStart, box.selectionStart, box.selectionEnd);
+      sql = picked.text;
+    }
     if (sql) return sql;
     const sample = String(box.placeholder || '').trim();
     if (!sample) return '';
@@ -1221,9 +1261,11 @@
     const sql = editorSQL();
     if (!sql) return showQueryError('SQL 为空', '请输入只读查询后再执行。');
     const maxRows = Number(q('db-max-rows').value);
-    s.sql = sql;
+    s.sql = q('db-sql') ? q('db-sql').value : sql;
     s.lastSQL = sql;
     s.lastMaxRows = maxRows;
+    s.pageSize = maxRows;
+    s.page = Math.max(1, Number(s.page) || 1);
     s.rows = [];
     s.columns = [];
     s.summary = null;
@@ -1249,9 +1291,14 @@
     state.controller = s.controller;
     refreshActiveQueryUI(s);
     const effSrc = effectiveSource();
-    if (!effSrc) return showQueryError('未选择数据源', '请先在顶部选择数据源。');
+    if (!effSrc) {
+      s.controller = null;
+      state.controller = null;
+      refreshActiveQueryUI(s);
+      return showQueryError('未选择数据源', '请先在顶部选择数据源。');
+    }
     try {
-      const response = await fetch('/api/database/query', { method: 'POST', credentials: 'same-origin', signal: s.controller.signal, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ source_id: effSrc.id, sql: sql, max_rows: maxRows }) });
+      const response = await fetch('/api/database/query', { method: 'POST', credentials: 'same-origin', signal: s.controller.signal, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ source_id: effSrc.id, sql: sql, max_rows: maxRows, page: s.page, page_size: s.pageSize, count_mode: 'none' }) });
       if (!response.ok) {
         const body = await response.json().catch(() => ({}));
         throw new Error(body.error || 'HTTP ' + response.status);
@@ -1310,6 +1357,41 @@
     }
   }
 
+  function installDatabasePagination() {
+    const bar = q('db-result-toolbar');
+    if (!bar || q('db-page-nav')) return;
+    const nav = el('div', { id: 'db-page-nav', class: 'db-page-nav', role: 'navigation', 'aria-label': '查询结果分页' });
+    const prev = el('button', { class: 'btn btn-xs', text: '上一页', title: '上一页' });
+    const pageInput = el('input', { class: 'db-page-input', type: 'number', min: '1', value: '1', 'aria-label': '页码' });
+    const next = el('button', { class: 'btn btn-xs', text: '下一页', title: '下一页' });
+    const size = el('select', { class: 'db-page-size', title: '每页行数', 'aria-label': '每页行数' });
+    [50, 100, 200, 500, 1000].forEach(function (n) { size.appendChild(el('option', { value: String(n), text: n + ' 行/页' })); });
+    function go(page) {
+      const s = sess(); if (!s || s.controller) return;
+      s.page = Math.max(1, Number(page) || 1); s.pageSize = Math.max(1, Number(size.value) || 100); s.lastMaxRows = s.pageSize;
+      const max = q('db-max-rows'); if (max) max.value = s.pageSize;
+      runQuery();
+    }
+    prev.onclick = function () { const s = sess(); if (s) go((s.page || 1) - 1); };
+    next.onclick = function () { const s = sess(); if (s) go((s.page || 1) + 1); };
+    pageInput.onkeydown = function (e) { if (e.key === 'Enter') go(pageInput.value); };
+    size.onchange = function () { const s = sess(); if (s) { s.page = 1; go(1); } };
+    nav.append(prev, el('span', { text: '第' }), pageInput, el('span', { text: '页' }), next, size, el('span', { id: 'db-page-hint', class: 'muted' }));
+    bar.appendChild(nav);
+    updateDatabasePager();
+  }
+
+  function updateDatabasePager() {
+    const s = sess(), nav = q('db-page-nav'); if (!nav || !s) return;
+    const summary = s.summary || {}, page = Math.max(1, Number(s.page) || Number(summary.page) || 1);
+    const input = nav.querySelector('.db-page-input'), buttons = nav.querySelectorAll('button'), size = nav.querySelector('.db-page-size'), hint = q('db-page-hint');
+    if (input) input.value = String(page);
+    if (size && s.pageSize) size.value = String(s.pageSize);
+    if (buttons[0]) buttons[0].disabled = !!s.controller || page <= 1;
+    if (buttons[1]) buttons[1].disabled = !!s.controller || !summary.has_next;
+    if (hint) hint.textContent = summary.rows != null && summary.page ? ('本页 ' + summary.rows + ' 行' + (summary.has_next ? ' · 还有下一页' : ' · 已到末页')) : '';
+  }
+
   function consumeQueryEvent(s, seq, e) {
     if (!s || s.runSeq !== seq) return;
     if (e.type === 'meta') {
@@ -1325,8 +1407,9 @@
       }
     } else if (e.type === 'summary') {
       s.summary = e.summary;
-      s.status = e.summary.rows + ' 行 · ' + e.summary.elapsed_ms + ' ms' + (e.summary.truncated ? ' · 已截断' : '');
-      if (s.id === state.activeId) { bindSession(s); refreshVisibleResult(); }
+      if (e.summary && e.summary.page) { s.page = e.summary.page; s.pageSize = e.summary.page_size || s.pageSize; }
+      s.status = e.summary.rows + ' 行 · ' + e.summary.elapsed_ms + ' ms' + (e.summary.retry_count ? ' · 已自动重连' : '') + (e.summary.ordered === false ? ' · 未指定 ORDER BY' : '') + (e.summary.truncated ? ' · 已截断' : '');
+      if (s.id === state.activeId) { bindSession(s); refreshVisibleResult(); updateDatabasePager(); }
       else renderTabs();
     } else if (e.type === 'error') throw new Error(e.error || '查询失败');
   }
@@ -1680,7 +1763,7 @@
     draw();
     q('db-snippet-add').onclick = () => { draft.push({ key: '', text: '', enabled: true }); draw(); };
     q('db-settings-close').onclick = () => dlg.close();
-    q('db-settings-reset').onclick = () => { state.prefs = JSON.parse(JSON.stringify(DEFAULT_PREFS)); savePrefs(); dlg.close(); toast('工作台设置已恢复默认', 'ok'); if (state.source && state.source.kind !== 'redis') renderWorkspace(); };
+    q('db-settings-reset').onclick = () => { state.prefs = JSON.parse(JSON.stringify(DEFAULT_PREFS)); savePrefs(); dlg.close(); toast('工作台设置已恢复默认', 'ok'); if (state.source && state.source.kind !== 'redis') renderWorkspace(true); };
     q('db-settings-save').onclick = () => {
       body.querySelectorAll('[data-key]').forEach(x => draft[Number(x.dataset.key)].key = x.value.trim());
       body.querySelectorAll('[data-text]').forEach(x => draft[Number(x.dataset.text)].text = x.value);
@@ -1691,7 +1774,7 @@
       state.prefs.snippets = items;
       Object.keys(state.prefs.shortcuts).forEach(k => { if (q('db-shortcut-' + k)) state.prefs.shortcuts[k] = q('db-shortcut-' + k).value.trim() || DEFAULT_PREFS.shortcuts[k]; });
       savePrefs(); dlg.close(); toast('工作台设置已保存', 'ok');
-      if (state.source && state.source.kind !== 'redis') renderWorkspace();
+      if (state.source && state.source.kind !== 'redis') renderWorkspace(true);
     };
   }
 
@@ -1718,7 +1801,8 @@
         table = (inputTable || '').trim();
       }
       if (window.showSaveFilePicker) handle = await window.showSaveFilePicker({ suggestedName: filename, types: types });
-      const response = await fetch('/api/database/export', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ source_id: effSrc3.id, sql: state.lastSQL, max_rows: state.lastMaxRows, format: format, table: table }) });
+      const currentSession = sess();
+      const response = await fetch('/api/database/export', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ source_id: effSrc3.id, sql: state.lastSQL, max_rows: state.lastMaxRows, page: currentSession && currentSession.page || 1, page_size: currentSession && currentSession.pageSize || state.lastMaxRows, count_mode: 'none', format: format, table: table }) });
       if (!response.ok) { const body = await response.json().catch(() => ({})); throw new Error(body.error || 'HTTP ' + response.status); }
       if (handle && response.body) { const writable = await handle.createWritable(); await response.body.pipeTo(writable); }
       else { const blob = await response.blob(), a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = filename; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000); }
@@ -1729,14 +1813,36 @@
   }
 
   function renderRedis(host) {
-    state.cursor = '0';
+    state.cursor = '0'; state.redisKeyBase64 = ''; state.redisType = ''; state.redisCursor = '0'; state.redisNextCursor = '0'; state.redisCursorHistory = []; state.redisOffset = 0; state.redisMembersHasNext = false;
     const mode = state.source.redis_mode || 'standalone';
-    host.innerHTML = '<div class="db-redis-workspace"><div class="db-editor-tabs"><div id="db-sql-tabs" class="db-sql-tabs"></div><button type="button" class="btn btn-xs" id="db-tab-add" title="新建查询页签">＋ 页签</button><span class="db-dialect">Redis</span></div><div class="db-redis-layout"><div class="card db-redis-keys"><div class="db-editor-bar"><span class="db-redis-topo">拓扑 ' + h(mode) + (mode === 'cluster' ? ' · 跨主节点 SCAN' : mode === 'sentinel' ? ' · ' + h(state.source.redis_master_name || '') : ' · 单机') + '</span><input id="db-redis-pattern" value="*" placeholder="Key pattern，例如 order:*"><button class="btn btn-primary" id="db-redis-scan">SCAN</button><button class="btn" id="db-redis-next">下一批</button></div><div id="db-redis-list" class="db-redis-list"></div></div><div class="card db-redis-detail"><div class="db-pane-title">Key 详情</div><pre id="db-redis-value">选择左侧 Key 查看类型、TTL 和内容</pre></div></div></div>';
+    host.innerHTML = '<div class="db-redis-workspace"><div class="db-editor-tabs"><div id="db-sql-tabs" class="db-sql-tabs"></div><button type="button" class="btn btn-xs" id="db-tab-add" title="新建查询页签">＋ 页签</button><span class="db-dialect">Redis · 只读命令</span></div><div class="db-redis-layout"><div class="card db-redis-keys"><div class="db-editor-bar"><span class="db-redis-topo">拓扑 ' + h(mode) + (mode === 'cluster' ? ' · 跨主节点 SCAN' : mode === 'sentinel' ? ' · ' + h(state.source.redis_master_name || '') : ' · 单机') + '</span><input id="db-redis-pattern" value="*" placeholder="Key pattern，例如 order:*"><button class="btn btn-primary" id="db-redis-scan">SCAN</button><button class="btn" id="db-redis-next">下一批</button></div><div id="db-redis-list" class="db-redis-list"></div></div><div class="db-redis-center"><div class="card db-redis-detail"><div class="db-pane-title"><span>Key 详情</span><span id="db-redis-type" class="tag"></span></div><div id="db-redis-controls" class="db-redis-controls"></div><pre id="db-redis-value">选择左侧 Key 查看类型、TTL 和内容</pre></div><div class="card db-redis-members"><div class="db-pane-title"><span>成员</span><div><button class="btn btn-xs" id="db-redis-members-prev" disabled>上一页</button><button class="btn btn-xs" id="db-redis-members-next" disabled>下一页</button></div></div><div id="db-redis-members-list" class="db-redis-members-list"><span class="hint">Hash / List / Set / ZSet 选择 Key 后在这里分页查看</span></div></div></div><div class="card db-redis-side"><div class="db-pane-title"><span>运行指标</span><button class="btn btn-xs" id="db-redis-info-refresh">刷新</button></div><div id="db-redis-info" class="db-redis-info"><span class="hint">点击刷新读取 INFO memory / clients / stats / keyspace</span></div><div class="db-pane-title db-redis-command-title">只读命令行</div><div class="db-redis-command-form"><input id="db-redis-command-line" class="db-redis-command-line" placeholder="例如 HGETALL user:1001 或 INFO memory"><select id="db-redis-command"><option>TYPE</option><option>TTL</option><option>PTTL</option><option>GET</option><option>HGET</option><option>HGETALL</option><option>HSCAN</option><option>LLEN</option><option>LRANGE</option><option>SCARD</option><option>SSCAN</option><option>ZCARD</option><option>ZRANGE</option><option>INFO</option><option>DBSIZE</option><option>PING</option></select><input id="db-redis-command-args" placeholder="参数：field 或其他只读参数"><button class="btn btn-primary" id="db-redis-command-run">执行</button></div><div class="hint">命令行仅执行只读白名单，参数按 Redis CLI 习惯拆分；危险命令会被后端拒绝。</div><pre id="db-redis-command-result" class="db-redis-command-result"></pre></div></div></div>';
     renderTabs();
     q('db-tab-add').onclick = addSession;
     q('db-redis-scan').onclick = () => { state.cursor = '0'; scanRedis(true); };
     q('db-redis-next').onclick = () => scanRedis(false);
+    q('db-redis-info-refresh').onclick = loadRedisInfo;
+    q('db-redis-command-run').onclick = runRedisCommand;
+    q('db-redis-members-prev').onclick = function () {
+      if (state.redisType === 'hash' || state.redisType === 'set') {
+        if (!state.redisCursorHistory.length) return;
+        state.redisCursor = state.redisCursorHistory.pop() || '0';
+      } else {
+        state.redisOffset = Math.max(0, state.redisOffset - state.redisPageSize);
+      }
+      loadRedisMembers(false);
+    };
+    q('db-redis-members-next').onclick = function () {
+      if (state.redisType === 'hash' || state.redisType === 'set') {
+        if (!state.redisNextCursor || state.redisNextCursor === '0') return;
+        state.redisCursorHistory.push(state.redisCursor || '0');
+        state.redisCursor = state.redisNextCursor;
+      } else {
+        state.redisOffset += state.redisPageSize;
+      }
+      loadRedisMembers(false);
+    };
     scanRedis(true);
+    loadRedisInfo();
   }
   async function scanRedis(reset) {
     const token = state.workspaceToken, source = state.source;
@@ -1757,8 +1863,102 @@
     try {
       const data = await api('GET', '/api/database/redis/key?source_id=' + encodeURIComponent(source.id) + '&key_base64=' + encodeURIComponent(key));
       const value = q('db-redis-value');
-      if (token === state.workspaceToken && value) value.textContent = JSON.stringify(data.result, null, 2);
+      if (token === state.workspaceToken && value) {
+        const result = data.result || {};
+        state.redisKeyBase64 = key; state.redisType = result.type || '';
+        const type = q('db-redis-type'); if (type) type.textContent = result.type || '';
+        value.textContent = JSON.stringify(result, null, 2);
+        renderRedisTTL(result);
+        state.redisCursor = '0'; state.redisNextCursor = '0'; state.redisCursorHistory = []; state.redisOffset = 0; state.redisMembersHasNext = false;
+        loadRedisMembers(true);
+      }
     } catch (e) { if (token === state.workspaceToken) toast('读取 Key 失败：' + e.message, 'err'); }
+  }
+  function renderRedisTTL(result) {
+    const host = q('db-redis-controls'); if (!host) return;
+    host.innerHTML = '';
+    host.appendChild(el('span', { class: 'muted', text: 'TTL：' + (result.ttl_ms < 0 ? (result.ttl_ms === -1 ? '永不过期' : '不存在') : Math.ceil(result.ttl_ms / 1000) + ' 秒') }));
+    if (!state.source || !state.source.allow_redis_write) return;
+    const op = el('select', {}, [el('option', { value: 'EXPIRE', text: '设置 TTL（秒）' }), el('option', { value: 'PERSIST', text: '取消过期' })]);
+    const seconds = el('input', { type: 'number', min: '0', max: '31536000', value: '3600', placeholder: '秒' });
+    const save = el('button', { class: 'btn btn-xs btn-primary', text: '应用 TTL' });
+    save.onclick = async function () {
+      if (!confirm('确认修改该 Redis Key 的 TTL？')) return;
+      try { await api('POST', '/api/database/redis/mutate', { source_id: state.source.id, key_base64: state.redisKeyBase64, operation: op.value, seconds: Number(seconds.value) || 0, confirm: true }); toast('TTL 已更新', 'ok'); loadRedisKey(state.redisKeyBase64); }
+      catch (e) { toast('TTL 更新失败：' + e.message, 'err'); }
+    };
+    host.append(op, seconds, save);
+  }
+  async function loadRedisMembers(reset) {
+    const source = state.source, key = state.redisKeyBase64, list = q('db-redis-members-list'); if (!source || !key || !list) return;
+    if (reset) { state.redisCursor = '0'; state.redisNextCursor = '0'; state.redisCursorHistory = []; state.redisOffset = 0; state.redisMembersHasNext = false; }
+    const requestCursor = state.redisCursor || '0';
+    const requestOffset = state.redisOffset || 0;
+    const params = new URLSearchParams({ source_id: source.id, key_base64: key, type: state.redisType || '', cursor: requestCursor, offset: String(requestOffset), page_size: String(state.redisPageSize || 100) });
+    try {
+      const data = await api('GET', '/api/database/redis/members?' + params.toString()), result = data.result || {};
+      state.redisCursor = requestCursor; state.redisNextCursor = result.next_cursor || '0'; state.redisMembersHasNext = !!result.has_next; state.redisType = result.type || state.redisType;
+      list.innerHTML = (result.items || []).map(function (item) { return '<div class="db-redis-member-row"><code>' + h(fmtRedisLabel(item.field || item.member || item)) + '</code>' + (item.value !== undefined ? '<span>' + h(fmtRedisLabel(item.value)) + '</span>' : item.score !== undefined ? '<span class="muted">score ' + h(item.score) + '</span>' : '') + '</div>'; }).join('') || '<span class="hint">没有成员</span>';
+      const prev = q('db-redis-members-prev'), next = q('db-redis-members-next');
+      if (prev) prev.disabled = (state.redisType === 'hash' || state.redisType === 'set') ? state.redisCursorHistory.length === 0 : state.redisOffset <= 0;
+      if (next) next.disabled = (state.redisType === 'hash' || state.redisType === 'set') ? state.redisNextCursor === '0' : !state.redisMembersHasNext;
+    } catch (e) { list.innerHTML = '<span class="text-err">成员读取失败：' + h(e.message) + '</span>'; }
+  }
+  async function loadRedisInfo() {
+    const box = q('db-redis-info'), source = state.source; if (!box || !source) return;
+    box.textContent = '读取中…';
+    try {
+      const data = await api('GET', '/api/database/redis/info?source_id=' + encodeURIComponent(source.id) + '&section=memory,clients,stats,keyspace');
+      const sections = data.result && data.result.sections || {};
+      const keys = ['used_memory_human', 'used_memory_peak_human', 'connected_clients', 'blocked_clients', 'instantaneous_ops_per_sec', 'expired_keys', 'db0'];
+      box.innerHTML = keys.map(function (key) { let value = ''; Object.keys(sections).some(function (section) { if (sections[section] && sections[section][key] !== undefined) { value = sections[section][key]; return true; } return false; }); return value === '' ? '' : '<div><span>' + h(key) + '</span><strong>' + h(value) + '</strong></div>'; }).join('') || '<span class="hint">没有可显示的指标</span>';
+    } catch (e) { box.innerHTML = '<span class="text-err">INFO 读取失败：' + h(e.message) + '</span>'; }
+  }
+  function parseRedisCommandLine(raw) {
+    const out = [], text = String(raw || '').trim();
+    let word = '', quote = '', escaped = false;
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      if (escaped) { word += ch; escaped = false; continue; }
+      if (ch === '\\') { escaped = true; continue; }
+      if (quote) {
+        if (ch === quote) quote = ''; else word += ch;
+        continue;
+      }
+      if (ch === '"' || ch === "'") { quote = ch; continue; }
+      if (/\s/.test(ch)) { if (word) { out.push(word); word = ''; } continue; }
+      word += ch;
+    }
+    if (escaped) word += '\\';
+    if (quote) throw new Error('命令行存在未闭合引号');
+    if (word) out.push(word);
+    return out;
+  }
+  function base64UTF8(value) {
+    const bytes = new TextEncoder().encode(String(value || ''));
+    let binary = '';
+    for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    return btoa(binary);
+  }
+  async function runRedisCommand() {
+    const source = state.source, command = q('db-redis-command'), lineInput = q('db-redis-command-line'), argsInput = q('db-redis-command-args'), out = q('db-redis-command-result'); if (!source || !command || !out) return;
+    const lineMode = !!(lineInput && lineInput.value.trim());
+    let tokens;
+    try { tokens = lineMode ? parseRedisCommandLine(lineInput.value) : [command.value].concat((argsInput.value || '').trim() ? parseRedisCommandLine(argsInput.value) : []); }
+    catch (e) { out.textContent = '命令行无效：' + e.message; return; }
+    if (!tokens.length) return;
+    const name = String(tokens[0]).toUpperCase();
+    const keyCommands = new Set(['GET', 'TYPE', 'TTL', 'PTTL', 'STRLEN', 'HGET', 'HGETALL', 'HSCAN', 'LLEN', 'LRANGE', 'SCARD', 'SSCAN', 'ZCARD', 'ZRANGE']);
+    let key = '';
+    let args = tokens.slice(1);
+    if (keyCommands.has(name) && lineMode && args.length) key = args.shift();
+    const selectedKey = state.redisKeyBase64 && keyCommands.has(name) && (!lineMode || !key) ? state.redisKeyBase64 : '';
+    const body = { source_id: source.id, command: name, args: args };
+    if (selectedKey) body.key_base64 = selectedKey;
+    else if (key) body.key_base64 = base64UTF8(key);
+    out.textContent = '执行中…';
+    try { const data = await api('POST', '/api/database/redis/command', body); out.textContent = JSON.stringify(data.result, null, 2); }
+    catch (e) { out.textContent = '执行失败：' + e.message; }
   }
   function debounce(fn, wait) { let timer; return function () { const self = this, args = arguments; clearTimeout(timer); timer = setTimeout(() => fn.apply(self, args), wait); }; }
   async function renderDatabase(view) {

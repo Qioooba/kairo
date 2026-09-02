@@ -454,6 +454,9 @@ func (m *Manager) Explain(ctx context.Context, source Source, query string) ([]E
 	query = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(query), ";"))
 	var rowsOut []ExplainRow
 	err := m.withSQL(ctx, source, func(ctx context.Context, db *sql.DB) error {
+		// withSQL may rebuild an idle connection once. Discard rows collected by
+		// the failed attempt before replaying the same explain request.
+		rowsOut = rowsOut[:0]
 		if source.Kind == KindMySQL {
 			rows, err := db.QueryContext(ctx, "EXPLAIN "+query)
 			if err != nil {

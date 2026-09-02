@@ -170,8 +170,14 @@
         text: '+ 新增任务',
         onclick: () => openEditor(null, loadAndRender),
       });
+      const notifyBtn = el('button', {
+        class: 'btn',
+        text: '告警设置',
+        onclick: openNotificationSettings,
+        title: '配置 Windows 通知、企业微信或钉钉 Webhook'
+      });
       const left = el('div', { style: 'flex:1;min-width:0' }, [desc]);
-      return el('div', { class: 'reminders-header' }, [left, newBtn]);
+      return el('div', { class: 'reminders-header' }, [left, notifyBtn, newBtn]);
     }
 
     function renderList() {
@@ -188,6 +194,14 @@
           el('div', { class: 'empty-desc', text: '点击右上角"新增任务"，内置 SVN / Git / 脚本模板一键预填。' }),
         ]));
         return;
+      }
+      const failed = allItems.filter(t => t.last_status === 'failed' || t.last_status === 'timeout');
+      if (failed.length) {
+        listWrap.appendChild(el('div', { class: 'task-failure-banner' }, [
+          el('strong', { text: '任务失败告警' }),
+          el('span', { text: '最近有 ' + failed.length + ' 个任务执行失败或超时，请查看运行日志。' }),
+          el('span', { class: 'muted', text: failed.slice(0, 3).map(t => t.name).join('、') })
+        ]));
       }
       if (enabled.length > 0) {
         listWrap.appendChild(el('div', { class: 'reminders-group-title', text: `启用中（${enabled.length}）` }));
@@ -301,6 +315,58 @@
     }
 
     loadAndRender(false);
+  }
+
+  async function openNotificationSettings() {
+    let current;
+    try {
+      current = await api('GET', '/api/tasks/notifications');
+    } catch (e) {
+      toast('读取告警设置失败：' + e.message, 'err');
+      return;
+    }
+    const enabled = el('input', { type: 'checkbox' }); enabled.checked = current.enabled !== false;
+    const windows = el('input', { type: 'checkbox' }); windows.checked = current.windows_toast !== false;
+    const wecom = el('input', { type: 'url', class: 'editor-input', placeholder: current.wecom_configured ? '已配置，留空保持不变' : 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?...' });
+    const ding = el('input', { type: 'url', class: 'editor-input', placeholder: current.dingtalk_configured ? '已配置，留空保持不变' : 'https://oapi.dingtalk.com/robot/send?...' });
+    const clearWecom = el('input', { type: 'checkbox' }), clearDing = el('input', { type: 'checkbox' });
+    const status = el('div', { class: 'editor-hint', text: '失败或超时任务会异步发送；Webhook 地址只显示配置状态，不回显密钥。' });
+    const body = el('div', { class: 'editor-body task-notification-form' }, [
+      el('label', { class: 'editor-check' }, [enabled, el('span', { text: '启用任务失败告警' })]),
+      el('label', { class: 'editor-check' }, [windows, el('span', { text: 'Windows 桌面通知（托盘/气泡）' })]),
+      el('label', { class: 'editor-label' }, [el('span', { text: '企业微信 Webhook' }), wecom]),
+      el('label', { class: 'editor-check' }, [clearWecom, el('span', { text: '清除已保存的企业微信地址' })]),
+      el('label', { class: 'editor-label' }, [el('span', { text: '钉钉 Webhook' }), ding]),
+      el('label', { class: 'editor-check' }, [clearDing, el('span', { text: '清除已保存的钉钉地址' })]),
+      status
+    ]);
+    const save = el('button', { class: 'btn btn-primary', text: '保存设置' });
+    const test = el('button', { class: 'btn', text: '发送测试通知' });
+    const cancel = el('button', { class: 'btn', text: '取消' });
+    const footer = el('div', { class: 'editor-footer' }, [cancel, test, save]);
+    const dialog = modal({ title: '任务失败告警设置', body, footer, width: 560 });
+    cancel.onclick = () => dialog.close();
+    function patch() {
+      const out = { enabled: enabled.checked, windows_toast: windows.checked };
+      if (clearWecom.checked || wecom.value.trim()) out.wecom_webhook = clearWecom.checked ? '' : wecom.value.trim();
+      if (clearDing.checked || ding.value.trim()) out.dingtalk_webhook = clearDing.checked ? '' : ding.value.trim();
+      return out;
+    }
+    save.onclick = async function () {
+      save.disabled = test.disabled = true;
+      try {
+        current = await api('PUT', '/api/tasks/notifications', patch());
+        status.textContent = '已保存。企业微信：' + (current.wecom_configured ? '已配置' : '未配置') + '；钉钉：' + (current.dingtalk_configured ? '已配置' : '未配置');
+        toast('告警设置已保存', 'ok');
+      } catch (e) { status.textContent = e.message || String(e); toast('保存告警设置失败：' + status.textContent, 'err'); }
+      finally { save.disabled = test.disabled = false; }
+    };
+    test.onclick = async function () {
+      test.disabled = save.disabled = true;
+      try { await api('POST', '/api/tasks/notifications/test'); toast('测试通知已发送', 'ok'); }
+      catch (e) { toast('测试通知失败：' + e.message, 'err'); }
+      finally { test.disabled = save.disabled = false; }
+    };
   }
 
   // ---------- 时间格式化 ----------

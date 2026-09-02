@@ -99,6 +99,9 @@
   function createEditor(side, onDirty) {
     const gutter = el('pre', { class: 'cmp-editor-gutter', text: '1' });
     const textarea = el('textarea', { class: 'cmp-editor-input', spellcheck: 'false', wrap: 'off', placeholder: side === 'left' ? '粘贴、拖入文本或文件；也可点打开' : '粘贴、拖入修改后的文本或文件' });
+    const highlight = el('pre', { class: 'cmp-editor-highlight', 'aria-hidden': 'true' });
+    let language = 'text';
+    const syntax = Kairo.workbench && Kairo.workbench.syntaxEditor;
     let raf = 0;
     const updateGutter = () => {
       cancelAnimationFrame(raf); raf = requestAnimationFrame(() => {
@@ -107,9 +110,10 @@
         gutter.textContent = numbers;
       });
     };
-    textarea.addEventListener('input', () => { updateGutter(); onDirty(); });
-    textarea.addEventListener('scroll', () => { gutter.scrollTop = textarea.scrollTop; });
-    const root = el('div', { class: 'cmp-editor' }, [gutter, textarea]);
+    textarea.addEventListener('input', () => { updateGutter(); if (syntax) highlight.innerHTML = syntax.highlight(textarea.value, language); onDirty(); });
+    textarea.addEventListener('scroll', () => { gutter.scrollTop = textarea.scrollTop; highlight.scrollTop = textarea.scrollTop; highlight.scrollLeft = textarea.scrollLeft; });
+    const editorLayer = el('div', { class: 'cmp-editor-layer' }, [highlight, textarea]);
+    const root = el('div', { class: 'cmp-editor' }, [gutter, editorLayer]);
     ['dragenter', 'dragover'].forEach(function (type) {
       root.addEventListener(type, function (e) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; root.classList.add('cmp-drop-hover'); });
     });
@@ -120,15 +124,17 @@
       const file = e.dataTransfer.files && e.dataTransfer.files[0];
       if (file && file.type.indexOf('image') !== 0) {
         const reader = new FileReader();
-        reader.onload = function () { textarea.value = String(reader.result || ''); updateGutter(); onDirty(); };
+        reader.onload = function () { textarea.value = String(reader.result || ''); updateGutter(); if (syntax) highlight.innerHTML = syntax.highlight(textarea.value, language); onDirty(); };
         reader.readAsText(file);
         return;
       }
       const text = e.dataTransfer.getData('text/plain');
-      if (text) { textarea.value = text; updateGutter(); onDirty(); }
+      if (text) { textarea.value = text; updateGutter(); if (syntax) highlight.innerHTML = syntax.highlight(textarea.value, language); onDirty(); }
     });
     return { root: root, textarea,
-      setValue(value) { textarea.value = value || ''; updateGutter(); }, getValue() { return textarea.value; }, updateGutter };
+      setValue(value) { textarea.value = value || ''; updateGutter(); if (syntax) highlight.innerHTML = syntax.highlight(textarea.value, language); },
+      setLanguage(value) { language = value || 'text'; if (syntax) highlight.innerHTML = syntax.highlight(textarea.value, language); },
+      getValue() { return textarea.value; }, updateGutter };
   }
 
   async function renderCompare(view) {
@@ -164,14 +170,14 @@
   }
 
   function buildTextWorkbench(panel, state, options) {
-    let showingResult = false, syncLock = false;
-    const editorLeft = createEditor('left', () => markDirty('left'));
-    const editorRight = createEditor('right', () => markDirty('right'));
+    let showingResult = false, syncLock = false, compareSeq = 0;
+    const editorLeft = createEditor('left', () => { markDirty('left'); scheduleRecompare(); });
+    const editorRight = createEditor('right', () => { markDirty('right'); scheduleRecompare(); });
     const editors = { left: editorLeft, right: editorRight };
     editorLeft.textarea.addEventListener('scroll', () => syncScroll(editorLeft, editorRight));
     editorRight.textarea.addEventListener('scroll', () => syncScroll(editorRight, editorLeft));
     function syncScroll(from, to) {
-      if (syncLock || showingResult) return; syncLock = true;
+      if (syncLock) return; syncLock = true;
       const maxFrom = Math.max(1, from.textarea.scrollHeight - from.textarea.clientHeight);
       const maxTo = Math.max(0, to.textarea.scrollHeight - to.textarea.clientHeight);
       to.textarea.scrollTop = (from.textarea.scrollTop / maxFrom) * maxTo; to.textarea.scrollLeft = from.textarea.scrollLeft; syncLock = false;
@@ -185,10 +191,12 @@
       const label = el('span', { class: 'cmp-source-label', text: sourceLabel(state[side].source), title: sourceLabel(state[side].source) });
       const meta = el('span', { class: 'cmp-source-meta', text: '' });
       const dirty = el('span', { class: 'cmp-dirty', text: '' });
+      const language = el('select', { class: 'cmp-language', title: '语法高亮' }, [el('option', { value: 'text', text: '文本' }), el('option', { value: 'java', text: 'Java' }), el('option', { value: 'sql', text: 'SQL' }), el('option', { value: 'xml', text: 'XML' }), el('option', { value: 'json', text: 'JSON' })]);
+      language.onchange = function () { editors[side].setLanguage(language.value); if (state.diff) renderResult(); };
       const openBtn = makeButton('打开', 'open', () => openSourceDialog(state[side].source, false, async source => { state[side].source = source; saveSources(state); await loadSide(side); }));
       const saveBtn = makeButton('保存', 'save', () => saveSide(side)); saveBtn.disabled = true;
-      sourceHeaders[side] = { badge, label, meta, dirty, saveBtn };
-      editorGrid.appendChild(el('section', { class: 'cmp-editor-pane' }, [el('div', { class: 'cmp-source-header' }, [badge, label, meta, dirty, openBtn, saveBtn]), editors[side].root]));
+      sourceHeaders[side] = { badge, label, meta, dirty, saveBtn, language };
+      editorGrid.appendChild(el('section', { class: 'cmp-editor-pane' }, [el('div', { class: 'cmp-source-header' }, [badge, label, meta, dirty, language, openBtn, saveBtn]), editors[side].root]));
     });
     const compareBtn = makeButton('比对', 'compare', compareNow, 'btn btn-primary btn-sm');
     compareBtn.setAttribute('data-action', 'text-compare');
@@ -226,8 +234,8 @@
     function refreshSaveButtons() {
       saveLeftBtn.disabled = state.left.source.kind === 'text' || !state.left.dirty;
       saveRightBtn.disabled = state.right.source.kind === 'text' || !state.right.dirty;
-      saveLeftBtn.style.display = showingResult ? '' : 'none';
-      saveRightBtn.style.display = showingResult ? '' : 'none';
+      saveLeftBtn.style.display = '';
+      saveRightBtn.style.display = '';
       const bits = [];
       if (state.left.dirty) bits.push('左侧已修改');
       if (state.right.dirty) bits.push('右侧已修改');
@@ -242,13 +250,17 @@
       refreshSaveButtons();
     }
     async function loadSide(side) {
-      const source = state[side].source; updateHeader(side); if (source.kind === 'text') return;
+      const source = state[side].source;
+      const inferredLanguage = Kairo.workbench && Kairo.workbench.syntaxEditor ? Kairo.workbench.syntaxEditor.languageFromPath(source.path || source.label, 'text') : 'text';
+      sourceHeaders[side].language.value = inferredLanguage;
+      editors[side].setLanguage(inferredLanguage);
+      updateHeader(side); if (source.kind === 'text') return;
       status.textContent = '正在读取 ' + sourceLabel(source) + '…';
       try {
         const response = await api('POST', '/api/compare/read', { source: spec(source) });
         if (response.binary) throw new Error('检测到二进制文件，文本工作台不支持直接编辑');
         if (response.truncated) throw new Error('文件超过 8MB 文本编辑上限，请使用文件夹比较进行流式复制');
-        editors[side].setValue(response.text); state[side].version = response.version; state[side].codec = { encoding: response.encoding || 'utf-8', eol: response.eol || 'lf', bom: !!response.bom }; state[side].dirty = false; updateHeader(side);
+        editors[side].setLanguage(inferredLanguage); editors[side].setValue(response.text); state[side].version = response.version; state[side].codec = { encoding: response.encoding || 'utf-8', eol: response.eol || 'lf', bom: !!response.bom }; state[side].dirty = false; updateHeader(side);
         status.textContent = '已读取 ' + sourceLabel(source) + ' · ' + formatBytes(response.entry.size);
       } catch (error) { toast('读取失败：' + (error.message || error), 'err'); status.textContent = '读取失败'; }
     }
@@ -260,15 +272,20 @@
       } catch (error) { toast('保存失败：' + (error.message || error), 'err'); }
     }
     async function compareNow() {
+      const requestNo = ++compareSeq;
       compareBtn.disabled = true; status.textContent = '正在计算差异…';
       try {
         const response = await api('POST', '/api/diff/compare', { left: editorLeft.getValue(), right: editorRight.getValue(), left_label: sourceLabel(state.left.source), right_label: sourceLabel(state.right.source), ignore: { trim_space: !!options.trim_space, ignore_blank: !!options.ignore_blank, ignore_case: !!options.ignore_case } });
+        if (requestNo !== compareSeq) return;
         state.diff = response; state.hunks = buildHunks(response.lines || []); state.hunkIndex = state.hunks.length ? 0 : -1;
         renderResult(); showResult(); [prevBtn, nextBtn, copyBtn, downloadBtn].forEach(btn => btn.disabled = false);
         status.textContent = '差异 ' + state.hunks.length + ' 处 · 新增 ' + response.stats.added + ' 行 · 删除 ' + response.stats.removed + ' 行 · 可直接改行，箭头按段或按行合并';
-      } catch (error) { toast('比对失败：' + (error.message || error), 'err'); status.textContent = '比对失败'; } finally { compareBtn.disabled = false; }
+      } catch (error) {
+        if (requestNo !== compareSeq) return;
+        toast('比对失败：' + (error.message || error), 'err'); status.textContent = '比对失败';
+      } finally { if (requestNo === compareSeq) compareBtn.disabled = false; }
     }
-    function showResult() { showingResult = true; editorGrid.style.display = 'none'; resultHost.style.display = ''; editBtn.style.display = ''; compareBtn.style.display = 'none'; refreshSaveButtons(); }
+    function showResult() { showingResult = true; editorGrid.style.display = ''; resultHost.style.display = ''; editBtn.style.display = 'none'; compareBtn.style.display = ''; refreshSaveButtons(); }
     function showEditors() { showingResult = false; editorGrid.style.display = ''; resultHost.style.display = 'none'; editBtn.style.display = 'none'; compareBtn.style.display = ''; refreshSaveButtons(); }
     function renderResult() {
       resultHost.innerHTML = ''; if (!state.diff) return;
@@ -276,7 +293,7 @@
         const wrapper = el('div', { class: 'cmp-inline-unified' }); wrapper.innerHTML = window.Diff2Html.html(state.diff.unified_diff || '', { drawFileList: false, outputFormat: 'line-by-line', matching: 'lines', renderNothingWhenEmpty: false }); resultHost.appendChild(wrapper); return;
       }
       const rows = buildAlignedRows(state.diff.lines || [], editorLeft.getValue(), editorRight.getValue(), state.hunks);
-      resultHost.appendChild(createVirtualDiff(rows.filter(row => (!options.onlyDiff && effectiveMode !== 'changes') || row.status !== 'equal'), state, effectiveMode, { hunk: applyHunk, line: applyLine, edit: commitLineEdit }));
+      resultHost.appendChild(createVirtualDiff(rows.filter(row => (!options.onlyDiff && effectiveMode !== 'changes') || row.status !== 'equal'), state, effectiveMode, { hunk: applyHunk, line: applyLine, edit: commitLineEdit, language: { left: sourceHeaders.left.language.value, right: sourceHeaders.right.language.value } }));
     }
     function scheduleRecompare() {
       clearTimeout(recompareTimer);
@@ -382,17 +399,19 @@
             );
           }
         }
-        node.append(makeDiffCell(row, 'left', onEdit), middle, makeDiffCell(row, 'right', onEdit)); canvas.appendChild(node);
+        node.append(makeDiffCell(row, 'left', onEdit, actions && actions.language && actions.language.left), middle, makeDiffCell(row, 'right', onEdit, actions && actions.language && actions.language.right)); canvas.appendChild(node);
       }
     }
     viewport.addEventListener('scroll', renderWindow); requestAnimationFrame(renderWindow); return viewport;
   }
-  function makeDiffCell(row, side, onEdit) {
+  function makeDiffCell(row, side, onEdit, language) {
     const lineNo = side === 'left' ? row.leftNo : row.rightNo;
     const text = side === 'left' ? row.leftText : row.rightText;
     const other = side === 'left' ? row.rightText : row.leftText;
     const code = el('span', { class: 'cmp-code', spellcheck: 'false' });
-    appendWordDiff(code, text || '', other || '', row.status === 'changed');
+    const syntax = Kairo.workbench && Kairo.workbench.syntaxEditor;
+    if (syntax && language && row.status !== 'changed') code.innerHTML = syntax.highlight(text || '', language);
+    else appendWordDiff(code, text || '', other || '', row.status === 'changed');
     try { code.contentEditable = 'plaintext-only'; } catch (_) { code.contentEditable = 'true'; }
     code.setAttribute('role', 'textbox');
     code.setAttribute('aria-label', (side === 'left' ? '左侧第' : '右侧第') + (lineNo || '新') + '行');

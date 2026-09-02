@@ -50,7 +50,7 @@ function ensureDir(dir) {
 
 async function closeOverlays(page) {
   try {
-    const overlays = await page.$$('.kairo-modal-overlay, .modal-overlay, .kairo-dialog-overlay, .auth-overlay');
+    const overlays = await page.$$('.kairo-modal-overlay, .modal-overlay, .kairo-dialog-overlay, .http2-modal-mask, .auth-overlay');
     for (const ov of overlays) {
       if (await ov.isVisible().catch(() => false)) {
         const closeBtn = await ov.$('.close, button:has-text("关闭"), button:has-text("取消")');

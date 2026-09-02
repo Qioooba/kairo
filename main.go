@@ -34,6 +34,7 @@ import (
 	"kairo/internal/httpserver"
 	"kairo/internal/license"
 	"kairo/internal/note"
+	"kairo/internal/notify"
 	"kairo/internal/pet"
 	"kairo/internal/popup"
 	"kairo/internal/reminder"
@@ -477,12 +478,21 @@ func main() {
 			tManager.Stop()
 		}
 	}()
+	taskNotifier, notifyErr := notify.NewManager(filepath.Join(cfg.DataDir(), "task-notifications.json"))
+	if notifyErr != nil {
+		log.Printf("WARNING: 初始化任务告警失败: %v", notifyErr)
+		taskNotifier = nil
+	}
+	if tManager != nil && taskNotifier != nil {
+		tManager.SetFailureNotifier(taskNotifier.NotifyFailure)
+	}
 
 	// 8. 构造 HTTP 服务
 	srv := httpserver.New(cfgMgr, auditLog, webSubFS, tails, shells, httpserver.Dependencies{
 		Reminders: rManager,
 		Notes:     nManager,
 		Tasks:     tManager,
+		TaskNotify: taskNotifier,
 		Pet:       petEngine,
 	})
 	defer func() {

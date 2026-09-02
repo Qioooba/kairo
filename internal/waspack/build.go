@@ -1,6 +1,7 @@
 package waspack
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -19,6 +20,23 @@ type Request struct {
 	PackageName string
 	Manifest    string
 	AutoPair    bool
+	OutputPolicy string
+	ConfirmReplace bool
+}
+
+const (
+	OutputPolicyFail       = "fail"
+	OutputPolicyCleanOwned = "clean_kairo_artifacts"
+	OutputPolicyReplace    = "replace"
+	outputMarkerName       = ".kairo-waspack.json"
+)
+
+type outputMarker struct {
+	Owner       string   `json:"owner"`
+	Version     int      `json:"version"`
+	PackageName string   `json:"package_name,omitempty"`
+	Owned       []string `json:"owned"`
+	GeneratedAt string   `json:"generated_at"`
 }
 
 // Result 是生成结果。输出目录里固定四样：list.txt、Bak{包名}.sh、{包名}.sh、{包名}.tar。
@@ -53,6 +71,10 @@ func SanitizePackageName(name string) (string, error) {
 }
 
 func prepareOutputDir(path string) (abs string, created bool, err error) {
+	return prepareOutputDirWithPolicy(path, OutputPolicyFail, false)
+}
+
+func prepareOutputDirWithPolicy(path, policy string, confirmReplace bool) (abs string, created bool, err error) {
 	if strings.TrimSpace(path) == "" {
 		return "", false, fmt.Errorf("输出目录不能为空")
 	}
@@ -86,14 +108,89 @@ func prepareOutputDir(path string) (abs string, created bool, err error) {
 	if err != nil {
 		return "", false, err
 	}
-	if len(ents) > 0 {
+	if len(ents) == 0 {
+		return abs, false, nil
+	}
+	switch normalizeOutputPolicy(policy) {
+	case OutputPolicyCleanOwned:
+		if err := cleanOwnedOutput(abs); err != nil { return "", false, err }
+	case OutputPolicyReplace:
+		if !confirmReplace { return "", false, fmt.Errorf("覆盖输出目录需要明确确认") }
+		if err := clearOutputChildren(abs); err != nil { return "", false, err }
+	default:
 		return "", false, fmt.Errorf("输出目录不是空文件夹，拒绝覆盖: %s", abs)
 	}
 	return abs, false, nil
 }
 
+func normalizeOutputPolicy(policy string) string {
+	switch strings.ToLower(strings.TrimSpace(policy)) {
+	case OutputPolicyCleanOwned: return OutputPolicyCleanOwned
+	case OutputPolicyReplace: return OutputPolicyReplace
+	default: return OutputPolicyFail
+	}
+}
+
+func clearOutputChildren(abs string) error {
+	ents, err := os.ReadDir(abs); if err != nil { return err }
+	for _, ent := range ents {
+		if err := os.RemoveAll(filepath.Join(abs, ent.Name())); err != nil { return fmt.Errorf("清理输出目录失败: %w", err) }
+	}
+	return nil
+}
+
+func readOutputMarker(abs string) (outputMarker, error) {
+	raw, err := os.ReadFile(filepath.Join(abs, outputMarkerName))
+	if err != nil { return outputMarker{}, fmt.Errorf("输出目录不是 Kairo 管理的产物目录，拒绝自动清理") }
+	var marker outputMarker
+	if err := json.Unmarshal(raw, &marker); err != nil || marker.Owner != "kairo-waspack" || marker.Version != 1 {
+		return outputMarker{}, fmt.Errorf("Kairo 产物标记无效，拒绝自动清理")
+	}
+	return marker, nil
+}
+
+func cleanOwnedOutput(abs string) error {
+	marker, err := readOutputMarker(abs); if err != nil { return err }
+	owned := map[string]bool{outputMarkerName: true}
+	for _, name := range marker.Owned {
+		name = filepath.Clean(strings.TrimSpace(name))
+		if name == "." || name == ".." || filepath.IsAbs(name) || strings.HasPrefix(name, ".."+string(filepath.Separator)) { return fmt.Errorf("产物标记包含非法路径") }
+		owned[name] = true
+	}
+	ents, err := os.ReadDir(abs); if err != nil { return err }
+	for _, ent := range ents {
+		if !owned[ent.Name()] { return fmt.Errorf("输出目录包含未知文件 %q，拒绝自动清理", ent.Name()) }
+	}
+	for name := range owned {
+		if name == outputMarkerName || name == "." { _ = os.Remove(filepath.Join(abs, name)); continue }
+		_ = os.RemoveAll(filepath.Join(abs, name))
+	}
+	left, err := os.ReadDir(abs); if err != nil { return err }
+	if len(left) > 0 { return fmt.Errorf("输出目录仍包含未清理的文件") }
+	return nil
+}
+
+func writeOutputMarker(abs, packageName string, owned []string) error {
+	marker := outputMarker{Owner: "kairo-waspack", Version: 1, PackageName: packageName, Owned: append([]string(nil), owned...), GeneratedAt: time.Now().UTC().Format(time.RFC3339)}
+	raw, err := json.MarshalIndent(marker, "", "  "); if err != nil { return err }
+	f, err := os.OpenFile(filepath.Join(abs, outputMarkerName), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600); if err != nil { return err }
+	defer f.Close(); _, err = f.Write(append(raw, '\n')); return err
+}
+
 func isSafeLocalPath(p string) bool {
 	if p == "" {
+		return false
+	}
+	clean := filepath.Clean(p)
+	volume := filepath.VolumeName(clean)
+	rest := strings.Trim(clean[len(volume):], `/\\`)
+	// Never allow a drive/UNC root or the process working directory as an
+	// output target. The replace policy is deliberately destructive, so these
+	// two guards prevent a mistyped path from turning into a broad cleanup.
+	if rest == "" {
+		return false
+	}
+	if cwd, err := os.Getwd(); err == nil && filepath.Clean(cwd) == clean {
 		return false
 	}
 	for _, r := range p {
@@ -102,8 +199,8 @@ func isSafeLocalPath(p string) bool {
 		}
 	}
 	vol := filepath.VolumeName(p)
-	rest := strings.TrimPrefix(p, vol)
-	for _, seg := range strings.FieldsFunc(rest, func(r rune) bool {
+	rest2 := strings.TrimPrefix(p, vol)
+	for _, seg := range strings.FieldsFunc(rest2, func(r rune) bool {
 		return r == filepath.Separator || r == '/' || r == '\\'
 	}) {
 		if seg == ".." {
@@ -197,7 +294,7 @@ func Build(req Request) (*Result, error) {
 		return nil, fmt.Errorf("工程里找不到 %d 个文件，请先编译或检查路径: %s", len(pv.Missing), strings.Join(names, ", "))
 	}
 
-	outAbs, created, err := prepareOutputDir(req.OutputDir)
+	outAbs, created, err := prepareOutputDirWithPolicy(req.OutputDir, req.OutputPolicy, req.ConfirmReplace)
 	if err != nil {
 		return nil, err
 	}
@@ -207,7 +304,8 @@ func Build(req Request) (*Result, error) {
 	backupPath := filepath.Join(outAbs, BackupScriptName(pkgName))
 	execPath := filepath.Join(outAbs, ExecuteScriptName(pkgName))
 
-	cleanup := func() { rollback(outAbs, created, listPath, tarPath, backupPath, execPath) }
+	markerPath := filepath.Join(outAbs, outputMarkerName)
+	cleanup := func() { rollback(outAbs, created, listPath, tarPath, backupPath, execPath, markerPath) }
 
 	if err := writeUnixFile(listPath, listText(pv.Files), 0o644); err != nil {
 		cleanup()
@@ -225,6 +323,10 @@ func Build(req Request) (*Result, error) {
 	if err := writeUnixFile(execPath, renderExecuteScript(pkgName, pv.Files), 0o755); err != nil {
 		cleanup()
 		return nil, fmt.Errorf("写执行脚本失败: %w", err)
+	}
+	if err := writeOutputMarker(outAbs, pkgName, []string{filepath.Base(listPath), filepath.Base(tarPath), filepath.Base(backupPath), filepath.Base(execPath)}); err != nil {
+		cleanup()
+		return nil, fmt.Errorf("写产物标记失败: %w", err)
 	}
 
 	return &Result{

@@ -19,8 +19,12 @@ type ExportTable struct {
 }
 
 func (m *Manager) CollectQuery(ctx context.Context, source Source, query string, maxRows int) (ExportTable, QuerySummary, error) {
+	return m.CollectQueryPage(ctx, source, query, 1, maxRows)
+}
+
+func (m *Manager) CollectQueryPage(ctx context.Context, source Source, query string, page, pageSize int) (ExportTable, QuerySummary, error) {
 	var table ExportTable
-	summary, err := m.StreamQuery(ctx, source, query, maxRows, func(event StreamEvent) error {
+	summary, err := m.StreamQueryPage(ctx, source, query, page, pageSize, func(event StreamEvent) error {
 		switch event.Type {
 		case "meta":
 			table.Columns = event.Columns

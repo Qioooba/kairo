@@ -54,6 +54,14 @@ func (s *Server) handleDatabaseDispatch(w http.ResponseWriter, r *http.Request) 
 		s.handleDatabaseRedisScan(w, r)
 	case path == "redis/key":
 		s.handleDatabaseRedisKey(w, r)
+	case path == "redis/command":
+		s.handleDatabaseRedisCommand(w, r)
+	case path == "redis/members":
+		s.handleDatabaseRedisMembers(w, r)
+	case path == "redis/info":
+		s.handleDatabaseRedisInfo(w, r)
+	case path == "redis/mutate":
+		s.handleDatabaseRedisMutate(w, r)
 	default:
 		http.NotFound(w, r)
 	}
@@ -219,8 +227,23 @@ type databaseQueryRequest struct {
 	SourceID string `json:"source_id"`
 	SQL      string `json:"sql"`
 	MaxRows  int    `json:"max_rows"`
+	Page     int    `json:"page"`
+	PageSize int    `json:"page_size"`
+	CountMode string `json:"count_mode"`
 	Format   string `json:"format"`
 	Table    string `json:"table"`
+}
+
+func databaseQueryPage(req databaseQueryRequest) (int, int) {
+	page := req.Page
+	if page < 1 {
+		page = 1
+	}
+	pageSize := req.PageSize
+	if pageSize <= 0 {
+		pageSize = req.MaxRows
+	}
+	return page, pageSize
 }
 
 func (s *Server) handleDatabaseQuery(w http.ResponseWriter, r *http.Request) {
@@ -255,7 +278,8 @@ func (s *Server) handleDatabaseQuery(w http.ResponseWriter, r *http.Request) {
 		}
 		return nil
 	}
-	summary, err := s.database.StreamQuery(r.Context(), source, req.SQL, req.MaxRows, emit)
+	page, pageSize := databaseQueryPage(req)
+	summary, err := s.database.StreamQueryPage(r.Context(), source, req.SQL, page, pageSize, emit)
 	if err != nil {
 		err = s.databaseSafeError(source, err)
 		_ = emit(dbconsole.StreamEvent{Type: "error", Error: trim(err.Error(), 1000)})
@@ -302,7 +326,8 @@ func (s *Server) handleDatabaseExport(w http.ResponseWriter, r *http.Request) {
 	}
 	filename := safeName + dbconsole.ExportExtension(format)
 	if format != "csv" {
-		table, summary, collectErr := s.database.CollectQuery(r.Context(), source, req.SQL, req.MaxRows)
+			page, pageSize := databaseQueryPage(req)
+			table, summary, collectErr := s.database.CollectQueryPage(r.Context(), source, req.SQL, page, pageSize)
 		if collectErr != nil {
 			collectErr = s.databaseSafeError(source, collectErr)
 			writeErrSanitized(w, 502, collectErr)
@@ -373,7 +398,8 @@ func (s *Server) handleDatabaseExport(w http.ResponseWriter, r *http.Request) {
 		}
 		return nil
 	}
-	summary, err := s.database.StreamQuery(r.Context(), source, req.SQL, req.MaxRows, emit)
+	page, pageSize := databaseQueryPage(req)
+	summary, err := s.database.StreamQueryPage(r.Context(), source, req.SQL, page, pageSize, emit)
 	if err != nil {
 		err = s.databaseSafeError(source, err)
 		if !started {
@@ -565,6 +591,73 @@ func (s *Server) handleDatabaseRedisKey(w http.ResponseWriter, r *http.Request) 
 		writeErrSanitized(w, 502, s.databaseSafeError(source, err))
 		return
 	}
+	writeJSON(w, 200, map[string]any{"ok": true, "result": result})
+}
+
+type redisCommandRequest struct {
+	SourceID string   `json:"source_id"`
+	Command  string   `json:"command"`
+	Key      string   `json:"key"`
+	KeyBase64 string  `json:"key_base64"`
+	Args     []string `json:"args"`
+}
+
+func (s *Server) handleDatabaseRedisCommand(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost { writeErr(w, 405, errors.New("仅支持 POST")); return }
+	var req redisCommandRequest
+	if err := decodeDatabaseJSON(r, &req); err != nil { writeErr(w, 400, err); return }
+	source, ok := s.databaseSourceForRequest(w, r, req.SourceID); if !ok { return }
+	key := req.Key
+	if req.KeyBase64 != "" { raw, decodeErr := base64.StdEncoding.DecodeString(req.KeyBase64); if decodeErr != nil { writeErr(w, 400, errors.New("key_base64 无效")); return }; key = string(raw) }
+	result, err := s.database.RedisReadOnlyCommand(r.Context(), source, req.Command, key, req.Args)
+	if err != nil { writeErrSanitized(w, 502, s.databaseSafeError(source, err)); return }
+	s.audit.Write("database.redis.command", "source_id", source.ID, "command", strings.ToUpper(strings.TrimSpace(req.Command)), "result", "ok", "elapsed_ms", result.ElapsedMS)
+	writeJSON(w, 200, map[string]any{"ok": true, "result": result})
+}
+
+func (s *Server) handleDatabaseRedisMembers(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet { writeErr(w, 405, errors.New("仅支持 GET")); return }
+	source, ok := s.databaseSourceFromQuery(w, r); if !ok { return }
+	encodedKey := r.URL.Query().Get("key_base64"); rawKey, err := base64.StdEncoding.DecodeString(encodedKey)
+	if err != nil || len(rawKey) == 0 { writeErr(w, 400, errors.New("key_base64 必须是非空的有效 Base64")); return }
+	offset, _ := strconv.ParseInt(r.URL.Query().Get("offset"), 10, 64)
+	pageSize, _ := strconv.ParseInt(r.URL.Query().Get("page_size"), 10, 64)
+	result, err := s.database.RedisMembers(r.Context(), source, string(rawKey), r.URL.Query().Get("type"), r.URL.Query().Get("cursor"), offset, pageSize)
+	if err != nil { writeErrSanitized(w, 502, s.databaseSafeError(source, err)); return }
+	writeJSON(w, 200, map[string]any{"ok": true, "result": result})
+}
+
+func (s *Server) handleDatabaseRedisInfo(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet { writeErr(w, 405, errors.New("仅支持 GET")); return }
+	source, ok := s.databaseSourceFromQuery(w, r); if !ok { return }
+	sections := make([]string, 0)
+	for _, value := range strings.Split(r.URL.Query().Get("section"), ",") { if strings.TrimSpace(value) != "" { sections = append(sections, value) } }
+	result, err := s.database.RedisInfo(r.Context(), source, sections)
+	if err != nil { writeErrSanitized(w, 502, s.databaseSafeError(source, err)); return }
+	writeJSON(w, 200, map[string]any{"ok": true, "result": result})
+}
+
+type redisMutateRequest struct {
+	SourceID  string `json:"source_id"`
+	Key       string `json:"key"`
+	KeyBase64 string `json:"key_base64"`
+	Operation string `json:"operation"`
+	Seconds   int64  `json:"seconds"`
+	Confirm   bool   `json:"confirm"`
+}
+
+func (s *Server) handleDatabaseRedisMutate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost { writeErr(w, 405, errors.New("仅支持 POST")); return }
+	if !requireAdmin(w, r) { return }
+	var req redisMutateRequest
+	if err := decodeDatabaseJSON(r, &req); err != nil { writeErr(w, 400, err); return }
+	if !req.Confirm { writeErr(w, 400, errors.New("受控 Redis 写操作需要二次确认")); return }
+	source, ok := s.databaseSourceForRequest(w, r, req.SourceID); if !ok { return }
+	key := req.Key
+	if req.KeyBase64 != "" { raw, decodeErr := base64.StdEncoding.DecodeString(req.KeyBase64); if decodeErr != nil { writeErr(w, 400, errors.New("key_base64 无效")); return }; key = string(raw) }
+	result, err := s.database.RedisMutateTTL(r.Context(), source, key, req.Operation, req.Seconds)
+	if err != nil { writeErrSanitized(w, 400, s.databaseSafeError(source, err)); return }
+	s.audit.Write("database.redis.mutate", "source_id", source.ID, "operation", strings.ToUpper(req.Operation), "key_bytes", len(key), "result", "ok")
 	writeJSON(w, 200, map[string]any{"ok": true, "result": result})
 }
 

@@ -295,6 +295,22 @@ func (m *Manager) withSQL(ctx context.Context, source Source, fn func(context.Co
 	}
 	ctx, cancel := context.WithTimeout(ctx, source.Timeout())
 	defer cancel()
+	var last error
+	for attempt := 0; attempt < 2; attempt++ {
+		last = m.withSQLAttempt(ctx, source, fn)
+		if last == nil {
+			return nil
+		}
+		if attempt == 0 && isConnectionFailure(last) {
+			m.Invalidate(source.ID)
+			continue
+		}
+		return last
+	}
+	return fmt.Errorf("连接重试失败: %w", last)
+}
+
+func (m *Manager) withSQLAttempt(ctx context.Context, source Source, fn func(context.Context, *sql.DB) error) error {
 	if err := m.acquire(ctx); err != nil {
 		return err
 	}
@@ -310,6 +326,25 @@ func (m *Manager) Test(ctx context.Context, source Source) (TestResult, error) {
 	started := time.Now()
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
+	var lastResult TestResult
+	var lastErr error
+	for attempt := 0; attempt < 2; attempt++ {
+		lastResult, lastErr = m.testAttempt(ctx, source)
+		if lastErr == nil {
+			lastResult.OK = true
+			lastResult.LatencyMS = time.Since(started).Milliseconds()
+			return lastResult, nil
+		}
+		if attempt == 0 && isConnectionFailure(lastErr) {
+			m.Invalidate(source.ID)
+			continue
+		}
+		return lastResult, lastErr
+	}
+	return lastResult, fmt.Errorf("连接重试失败: %w", lastErr)
+}
+
+func (m *Manager) testAttempt(ctx context.Context, source Source) (TestResult, error) {
 	if err := m.acquire(ctx); err != nil {
 		return TestResult{}, err
 	}
@@ -346,8 +381,6 @@ func (m *Manager) Test(ctx context.Context, source Source) (TestResult, error) {
 		}
 		_ = db.QueryRowContext(ctx, query).Scan(&result.Version) // low-privilege users may not see v$version
 	}
-	result.OK = true
-	result.LatencyMS = time.Since(started).Milliseconds()
 	return result, nil
 }
 

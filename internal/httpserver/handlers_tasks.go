@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"kairo/internal/schedtask"
+	"kairo/internal/notify"
 )
 
 // taskReq 是 API 入参 DTO，用 *bool 区分"未传 enabled"和"显式 enabled=false"
@@ -66,6 +67,24 @@ func (s *Server) handleTaskDispatch(w http.ResponseWriter, r *http.Request) {
 		default:
 			writeErr(w, 405, errors.New("仅支持 GET / POST"))
 		}
+	case path == "/notifications":
+		switch r.Method {
+		case http.MethodGet:
+			s.handleTaskNotificationGet(w, r)
+		case http.MethodPut:
+			if !requireAdmin(w, r) { return }
+			s.handleTaskNotificationPut(w, r)
+		default:
+			writeErr(w, 405, errors.New("仅支持 GET / PUT"))
+		}
+	case path == "/notifications/test":
+		if r.Method != http.MethodPost { writeErr(w, 405, errors.New("仅支持 POST")); return }
+		if !requireAdmin(w, r) { return }
+		s.handleTaskNotificationTest(w, r)
+	case path == "/notifications/config":
+		if r.Method != http.MethodPut { writeErr(w, 405, errors.New("仅支持 PUT")); return }
+		if !requireAdmin(w, r) { return }
+		s.handleTaskNotificationPut(w, r)
 	default:
 		parts := strings.SplitN(strings.TrimPrefix(path, "/"), "/", 2)
 		id := parts[0]
@@ -121,6 +140,35 @@ func (s *Server) handleTaskDispatch(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, 404, fmt.Errorf("未知子路径：%s", action))
 		}
 	}
+}
+
+type taskNotificationReq struct {
+	Enabled      *bool   `json:"enabled"`
+	WindowsToast *bool   `json:"windows_toast"`
+	WeComWebhook *string `json:"wecom_webhook"`
+	DingWebhook  *string `json:"dingtalk_webhook"`
+}
+
+func (s *Server) handleTaskNotificationGet(w http.ResponseWriter, r *http.Request) {
+	if s.taskNotify == nil { writeJSON(w, 200, notify.View{}); return }
+	writeJSON(w, 200, s.taskNotify.View())
+}
+
+func (s *Server) handleTaskNotificationPut(w http.ResponseWriter, r *http.Request) {
+	if s.taskNotify == nil { writeErr(w, 503, errors.New("任务告警服务未初始化")); return }
+	r.Body = http.MaxBytesReader(w, r.Body, 16*1024)
+	var req taskNotificationReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil { writeErr(w, 400, fmt.Errorf("请求体 JSON 解析失败: %w", err)); return }
+	if err := s.taskNotify.UpdatePatch(req.Enabled, req.WindowsToast, req.WeComWebhook, req.DingWebhook); err != nil { writeErr(w, 400, err); return }
+	s.audit.Write("task.notifications.update", "windows_toast", req.WindowsToast != nil && *req.WindowsToast, "wecom_changed", req.WeComWebhook != nil, "dingtalk_changed", req.DingWebhook != nil, "result", "ok")
+	writeJSON(w, 200, s.taskNotify.View())
+}
+
+func (s *Server) handleTaskNotificationTest(w http.ResponseWriter, r *http.Request) {
+	if s.taskNotify == nil { writeErr(w, 503, errors.New("任务告警服务未初始化")); return }
+	if err := s.taskNotify.Test(); err != nil { s.audit.Write("task.notifications.test", "result", "fail", "error", trim(err.Error(), 300)); writeErr(w, 502, err); return }
+	s.audit.Write("task.notifications.test", "result", "ok")
+	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
 func (s *Server) handleTaskList(w http.ResponseWriter, r *http.Request) {

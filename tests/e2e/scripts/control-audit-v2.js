@@ -60,6 +60,7 @@ async function ready(page, route, state) {
   await page.waitForTimeout(450);
   await page.waitForFunction(() => Boolean(document.querySelector('#view')?.innerText?.trim()), null, { timeout: 7000 }).catch(() => {});
   state.resetting = false;
+  await closeTransient(page);
   return instrument(page);
 }
 
@@ -75,7 +76,7 @@ async function setDark(page) {
 
 async function closeTransient(page) {
   for (let i = 0; i < 3; i++) {
-    const overlays = page.locator('.modal-overlay, .kairo-modal-overlay, .kairo-dialog-overlay, .dialog-overlay, [class*="modal-overlay"], [class*="dialog-overlay"]');
+    const overlays = page.locator('.modal-overlay, .kairo-modal-overlay, .kairo-dialog-overlay, .dialog-overlay, .http2-modal-mask, [class*="modal-overlay"], [class*="dialog-overlay"]');
     let closed = false;
     for (let n = 0; n < await overlays.count(); n++) {
       const ov = overlays.nth(n);

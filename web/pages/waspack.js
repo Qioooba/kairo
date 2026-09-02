@@ -105,6 +105,13 @@
     if (typeof saved.auto_pair === 'boolean') autoPair.checked = saved.auto_pair;
     if (sessionDraft.manifest) manifestTa.value = sessionDraft.manifest;
 
+    const outputPolicy = el('select', { id: 'waspack-output-policy' }, [
+      el('option', { value: 'fail', text: '严格模式：目录必须为空' }),
+      el('option', { value: 'clean_kairo_artifacts', text: '清理 Kairo 上次产物后重做' }),
+      el('option', { value: 'replace', text: '确认后清空目录并覆盖' })
+    ]);
+    outputPolicy.value = saved.output_policy || 'fail';
+
     const savePreference = preferenceSaver('waspack', 500);
 
     function pkgBaseName() {
@@ -122,7 +129,8 @@
       savePreference({
         project_dir: projectInp.value,
         output_dir: outputInp.value,
-        auto_pair: autoPair.checked
+        auto_pair: autoPair.checked,
+        output_policy: outputPolicy.value
       });
     }
     function persistSessionDraft() {
@@ -146,6 +154,10 @@
       n.addEventListener('blur', persistSessionDraft);
     });
     autoPair.addEventListener('change', persistPreferenceFields);
+    outputPolicy.addEventListener('change', function () {
+      persistPreferenceFields();
+      if (outputPolicy.value === 'replace') status.textContent = '覆盖模式会清空目标目录；执行前仍需再次确认。';
+    });
     updateTarHint();
 
     const status = el('div', { class: 'waspack-status', text: '粘贴清单后点「预检」，确认 java / class / jsp 都从工程里找到再生成。' });
@@ -158,7 +170,8 @@
         output_dir: outputInp.value.trim(),
         package_name: pkgBaseName(),
         auto_pair: autoPair.checked,
-        manifest: manifestTa.value
+        manifest: manifestTa.value,
+        output_policy: outputPolicy.value
       };
     }
 
@@ -192,7 +205,7 @@
         '<div class="waspack-miss-title">将写入 tar / 脚本的相对路径</div>' +
         '<ul class="waspack-filelist">' + rows + (files.length > 400 ? '<li>…另有 ' + (files.length - 400) + ' 个</li>' : '') + '</ul>';
       if (missing.length) status.textContent = '预检有缺失文件，生成会被拒绝。请先在工程里编译 class，或改清单。';
-      else status.textContent = '预检通过。输出目录必须是空文件夹（不存在则自动创建，不覆盖）。';
+      else status.textContent = '预检通过。当前输出策略：' + outputPolicy.options[outputPolicy.selectedIndex].text + '。';
     }
 
     function renderResult(data) {
@@ -242,8 +255,11 @@
       if (!body.project_dir) { toast('请选择 credit 工程目录', 'warn'); return; }
       if (!body.output_dir) { toast('请填写要生成的文件夹路径', 'warn'); return; }
       if (!body.manifest.trim()) { toast('请粘贴清单', 'warn'); return; }
+      const confirmReplace = outputPolicy.value === 'replace' && window.confirm('覆盖模式会清空目标目录中的全部内容，确定继续吗？');
+      if (outputPolicy.value === 'replace' && !confirmReplace) return;
       status.textContent = '正在把清单文件抽取到目标目录的 war 文件夹…';
       try {
+        body.confirm_replace = confirmReplace;
         const r = await api('POST', '/api/waspack/extract', body);
         renderExtracted(r);
         status.textContent = '抽取完成。可先在 war 目录核对或修改，再执行第 2 步。';
@@ -261,12 +277,36 @@
       persist();
       const body = payload();
       if (!body.output_dir) { toast('请填写目标目录', 'warn'); return; }
+      const confirmReplace = outputPolicy.value === 'replace' && window.confirm('覆盖模式会替换目标目录中的既有打包产物，确定继续吗？');
+      if (outputPolicy.value === 'replace' && !confirmReplace) return;
       status.textContent = '正在按 war 当前内容打包，包内路径保持不变…';
       try {
-        const r = await api('POST', '/api/waspack/package', { output_dir: body.output_dir, package_name: body.package_name });
+        const r = await api('POST', '/api/waspack/package', { output_dir: body.output_dir, package_name: body.package_name, output_policy: body.output_policy, confirm_replace: confirmReplace });
         renderResult(r);
         status.textContent = '打包完成。';
         toast('已生成 ' + (r.package_name || '') + '.tar', 'ok');
+      } catch (e) {
+        status.textContent = e.message || String(e);
+        toast(e.message || String(e), 'err');
+      }
+    }
+
+    async function doBuild() {
+      persist();
+      const body = payload();
+      if (!body.project_dir) { toast('请选择 credit 工程目录', 'warn'); return; }
+      if (!body.output_dir) { toast('请填写要生成的文件夹路径', 'warn'); return; }
+      if (!body.manifest.trim()) { toast('请粘贴清单', 'warn'); return; }
+      const confirmReplace = outputPolicy.value === 'replace' && window.confirm('覆盖模式会清空目标目录中的全部内容，确定一键打包吗？');
+      if (outputPolicy.value === 'replace' && !confirmReplace) return;
+      status.textContent = '正在抽取并生成 tar / list / 脚本…';
+      try {
+        body.confirm_replace = confirmReplace;
+        const r = await api('POST', '/api/waspack/build', body);
+        previewBox.style.display = 'none';
+        renderResult(r);
+        status.textContent = '一键打包完成。';
+        toast('一键打包完成：' + (r.package_name || '') + '.tar', 'ok');
       } catch (e) {
         status.textContent = e.message || String(e);
         toast(e.message || String(e), 'err');
@@ -286,6 +326,7 @@
     }
 
     const previewBtn = el('button', { type: 'button', class: 'btn', text: '预检清单', onclick: doPreview });
+    const buildBtn = el('button', { type: 'button', class: 'btn btn-primary waspack-direct-build', text: '一键直接打包', onclick: doBuild, title: '自动抽取并直接生成 tar、list 和脚本' });
     const extractBtn = el('button', { type: 'button', class: 'btn btn-primary', text: '1. 一键抽取', onclick: doExtract });
     const packageBtn = el('button', { type: 'button', class: 'btn btn-primary', text: '2. 打包', onclick: doPackage });
     const openFolderBtn = el('button', { type: 'button', class: 'btn', text: '打开打包文件夹', onclick: doOpenFolder });
@@ -313,6 +354,11 @@
             el('span', { class: 'waspack-label', text: '包名（执行脚本名）' }),
             pkgInp,
             tarHint
+          ]),
+          el('label', { class: 'waspack-field waspack-output-policy' }, [
+            el('span', { class: 'waspack-label', text: '输出目录处理' }),
+            outputPolicy,
+            el('span', { class: 'hint', text: '默认拒绝覆盖；重做抽取可清理带 Kairo 标记的旧产物。' })
           ])
         ]),
         el('label', { class: 'waspack-check' }, [
@@ -324,7 +370,7 @@
           manifestTa,
           el('span', { class: 'hint', text: '清单和当次包名仅保留在当前浏览器会话，不写入配置或偏好文件。' })
         ]),
-        el('div', { class: 'waspack-actions' }, [previewBtn, extractBtn, packageBtn, openFolderBtn, sampleBtn, copyListBtn]),
+        el('div', { class: 'waspack-actions' }, [buildBtn, previewBtn, extractBtn, packageBtn, openFolderBtn, sampleBtn, copyListBtn]),
         status,
         previewBox,
         resultBox

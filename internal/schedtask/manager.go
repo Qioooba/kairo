@@ -56,8 +56,17 @@ type Manager struct {
 	timer   *time.Timer
 	stopped bool
 	wg      sync.WaitGroup
+	failureNotifier func(FailureEvent)
 
 	persistMu sync.Mutex // 序列化落盘，避免并发快照互相覆盖
+}
+
+// SetFailureNotifier 注册系统级失败通知回调。回调异步执行，通知投递
+// 失败不会影响任务状态和调度器生命周期。
+func (m *Manager) SetFailureNotifier(fn func(FailureEvent)) {
+	m.mu.Lock()
+	m.failureNotifier = fn
+	m.mu.Unlock()
 }
 
 // ManagerOptions 配置 Manager 的运行环境。
@@ -405,6 +414,7 @@ func (m *Manager) fire() {
 
 // startRun 启动一次执行（异步）。调度触发遇到"还在跑"记 skipped 历史。
 func (m *Manager) startRun(t Task, trigger string) error {
+	runID := NewID()
 	m.mu.Lock()
 	if m.stopped {
 		m.mu.Unlock()
@@ -423,6 +433,7 @@ func (m *Manager) startRun(t Task, trigger string) error {
 		// 防重叠：上一次还在跑。调度触发 → 记一条 skipped 历史（便于排查"为什么没跑"）。
 		if trigger == "cron" {
 			m.appendRun(t.ID, RunRecord{
+				RunID:      runID,
 				TaskID:    t.ID,
 				StartedAt: m.now().Format(time.RFC3339),
 				Status:    StatusSkipped,
@@ -476,6 +487,7 @@ func (m *Manager) startRun(t Task, trigger string) error {
 		m.mu.Unlock()
 
 		m.appendRun(t.ID, RunRecord{
+			RunID:      runID,
 			TaskID:     t.ID,
 			StartedAt:  start.Format(time.RFC3339),
 			DurationMs: dur.Milliseconds(),
@@ -484,6 +496,15 @@ func (m *Manager) startRun(t Task, trigger string) error {
 			Output:     res.output,
 			Trigger:    trigger,
 		})
+		if res.status == StatusFailed || res.status == StatusTimeout {
+			m.mu.Lock()
+			notifier := m.failureNotifier
+			m.mu.Unlock()
+			if notifier != nil {
+				event := FailureEvent{TaskID: t.ID, TaskName: t.Name, RunID: runID, Status: res.status, Error: errText, StartedAt: start.Format(time.RFC3339), FinishedAt: m.now().Format(time.RFC3339), Trigger: trigger}
+				go func() { defer func() { _ = recover() }(); notifier(event) }()
+			}
+		}
 		if err := m.persistTasks(); err != nil {
 			log.Printf("schedtask: 状态落盘失败: %v", err)
 		}

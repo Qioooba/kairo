@@ -29,6 +29,7 @@ import (
 	"kairo/internal/downloads"
 	"kairo/internal/license"
 	"kairo/internal/note"
+	"kairo/internal/notify"
 	"kairo/internal/pet"
 	"kairo/internal/preferences"
 	"kairo/internal/reminder"
@@ -153,6 +154,7 @@ type Server struct {
 
 	// 定时任务：可空（nil 时 /api/tasks 返回 503）。SetTasks 在 main.go 启动 schedtask.Manager 后注入。
 	tasks *schedtask.Manager
+	taskNotify *notify.Manager
 
 	// v0.16 宠物彩蛋：可空（nil 时 /api/pet/* 返回 404）。SetPet 在 main.go 构造 pet.Engine 后注入。
 	pet *pet.Engine
@@ -173,6 +175,7 @@ type Dependencies struct {
 	Reminders *reminder.Manager
 	Notes     *note.Manager
 	Tasks     *schedtask.Manager
+	TaskNotify *notify.Manager
 	Pet       *pet.Engine
 }
 
@@ -203,6 +206,7 @@ func New(cfg *config.Manager, a *audit.Logger, webRoot fs.FS, tails *tailmgr.Man
 		reminders:    deps.Reminders,
 		notes:        deps.Notes,
 		tasks:        deps.Tasks,
+		taskNotify:   deps.TaskNotify,
 		pet:          deps.Pet,
 	}
 }

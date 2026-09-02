@@ -534,9 +534,9 @@
     const left = el('div', { class: 'wsc-pane wsc-pane-config' }, [
       renderIntro(),
       renderSourceCard(),
+      renderProjectCard(),
       renderEngineCard(),
-      renderOptionsCard(),
-      renderProjectCard()
+      renderOptionsCard()
     ]);
     const right = el('div', { class: 'wsc-pane wsc-pane-preview' }, [
       renderActionsAndPreview()
