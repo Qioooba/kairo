@@ -1,16 +1,19 @@
 // Package httpserver - sponsor 排行榜相关端点 (v0.14)
 //
 // 端点清单:
-//   GET /api/sponsor/leaderboard    前端拉投喂作者排行榜
+//
+//	GET /api/sponsor/leaderboard    前端拉投喂作者排行榜
 //
 // 流程:
-//   前端 → /api/sponsor/leaderboard → Go 端 sponsor.FetchLeaderboard()
-//                                    → 走 endpointclient (主备切换 + Basic Auth)
-//                                    → Java 端 /credit/httpInterface
-//                                    → 返前 50 名 (按 total 倒序, 含 rank)
+//
+//	前端 → /api/sponsor/leaderboard → Go 端 sponsor.FetchLeaderboard()
+//	                                 → 走 endpointclient (主备切换 + Basic Auth)
+//	                                 → Java 端 /credit/httpInterface
+//	                                 → 返前 50 名 (按 total 倒序, 含 rank)
 //
 // 缓存:
-//   - 实时查询: 每次请求都直接打 Java 端, 不走缓存
+//   - 启动预热和首次请求共享同一把拉取锁，避免冷启动时并发打爆 Java 端
+//   - 短时间内优先返回成功缓存，避免前端首次打开时重复等待冷查询
 //   - 查询成功则更新内存缓存 (sponsorCache), 供后续查询失败时兜底
 //   - 查询失败 (网络错 / Java 端业务失败) 且有历史缓存时, 返回陈旧缓存 (优雅降级)
 //   - 线程安全 (sponsorCacheMu)
@@ -36,14 +39,35 @@ var (
 	sponsorCacheEntries []sponsor.Entry
 	sponsorCacheTime    time.Time
 	sponsorCacheOK      bool
+	sponsorFetchMu      sync.Mutex
 )
+
+const sponsorCacheMaxAge = 5 * time.Minute
 
 func setSponsorCache(entries []sponsor.Entry, ok bool) {
 	sponsorCacheMu.Lock()
 	defer sponsorCacheMu.Unlock()
-	sponsorCacheEntries = entries
+	sponsorCacheEntries = append([]sponsor.Entry(nil), entries...)
 	sponsorCacheOK = ok
 	sponsorCacheTime = time.Now()
+}
+
+func sponsorCacheSnapshot(maxAge time.Duration) ([]sponsor.Entry, bool) {
+	sponsorCacheMu.RLock()
+	defer sponsorCacheMu.RUnlock()
+	if !sponsorCacheOK || sponsorCacheTime.IsZero() || time.Since(sponsorCacheTime) > maxAge {
+		return nil, false
+	}
+	return append([]sponsor.Entry(nil), sponsorCacheEntries...), true
+}
+
+func sponsorStaleSnapshot() ([]sponsor.Entry, bool) {
+	sponsorCacheMu.RLock()
+	defer sponsorCacheMu.RUnlock()
+	if !sponsorCacheOK || sponsorCacheTime.IsZero() {
+		return nil, false
+	}
+	return append([]sponsor.Entry(nil), sponsorCacheEntries...), true
 }
 
 // WarmSponsorCache 启动预热：后台拉排行榜填充缓存，带重试。
@@ -61,7 +85,9 @@ func WarmSponsorCache() {
 			if d > 0 {
 				time.Sleep(d)
 			}
+			sponsorFetchMu.Lock()
 			lr, err := sponsor.FetchLeaderboard()
+			sponsorFetchMu.Unlock()
 			if err == nil && lr != nil && lr.OK {
 				setSponsorCache(lr.Entries, true)
 				log.Printf("sponsor: 启动预热成功（第 %d 次），排行榜缓存 %d 条", i+1, len(lr.Entries))
@@ -98,14 +124,35 @@ func (s *Server) handleSponsorLeaderboard(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	if entries, ok := sponsorCacheSnapshot(sponsorCacheMaxAge); ok {
+		s.audit.Write("sponsor.leaderboard.cache", "count", len(entries))
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":      true,
+			"entries": entries,
+			"cached":  true,
+		})
+		return
+	}
+
+	// WarmSponsorCache may be in flight. Serialize the real fetch and check the
+	// cache again after waiting so the first page request can use its result.
+	sponsorFetchMu.Lock()
+	if entries, ok := sponsorCacheSnapshot(sponsorCacheMaxAge); ok {
+		sponsorFetchMu.Unlock()
+		s.audit.Write("sponsor.leaderboard.cache", "count", len(entries))
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":      true,
+			"entries": entries,
+			"cached":  true,
+		})
+		return
+	}
 	lr, err := sponsor.FetchLeaderboard()
+	sponsorFetchMu.Unlock()
 	if err != nil {
 		s.audit.Write("sponsor.leaderboard.error", "err", err.Error())
 
-		sponsorCacheMu.RLock()
-		hasStale := !sponsorCacheTime.IsZero() && sponsorCacheOK && len(sponsorCacheEntries) > 0
-		staleEntries := sponsorCacheEntries
-		sponsorCacheMu.RUnlock()
+		staleEntries, hasStale := sponsorStaleSnapshot()
 
 		if hasStale {
 			s.audit.Write("sponsor.leaderboard.stale", "count", len(staleEntries))
@@ -124,13 +171,14 @@ func (s *Server) handleSponsorLeaderboard(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	if !lr.OK {
-		s.audit.Write("sponsor.leaderboard.fail", "error", lr.Error)
+	if lr == nil || !lr.OK {
+		reason := "排行榜服务暂时不可用"
+		if lr != nil && lr.Error != "" {
+			reason = lr.Error
+		}
+		s.audit.Write("sponsor.leaderboard.fail", "error", reason)
 
-		sponsorCacheMu.RLock()
-		hasStale := !sponsorCacheTime.IsZero() && sponsorCacheOK && len(sponsorCacheEntries) > 0
-		staleEntries := sponsorCacheEntries
-		sponsorCacheMu.RUnlock()
+		staleEntries, hasStale := sponsorStaleSnapshot()
 
 		if hasStale {
 			s.audit.Write("sponsor.leaderboard.stale", "count", len(staleEntries))
@@ -144,7 +192,7 @@ func (s *Server) handleSponsorLeaderboard(w http.ResponseWriter, r *http.Request
 
 		writeJSON(w, http.StatusOK, map[string]any{
 			"ok":    false,
-			"error": lr.Error,
+			"error": reason,
 		})
 		return
 	}

@@ -101,6 +101,9 @@
 
       function draw(items) {
         items = items || [];
+        // 打开的“更多”菜单会临时挂到 body；数据订阅重绘前移除它，
+        // 避免旧便笺的 fixed 菜单残留在新列表上方。
+        document.querySelectorAll('.notes-more-menu[data-portaled="1"]').forEach(function (menu) { menu.remove(); });
         if (!Kairo.notes.state.initialized) {
           if (!list.querySelector('.notes-loading')) {
             list.innerHTML = '';
@@ -175,13 +178,58 @@
             return Kairo.notes.remove(n.id);
           }, 'btn-danger')
         ]));
+        const summary = more.querySelector('summary');
+        const menu = more.querySelector('.notes-more-menu');
+        function restoreMenu() {
+          if (!menu || menu.dataset.portaled !== '1') return;
+          menu.removeAttribute('data-portaled');
+          menu.style.position = '';
+          menu.style.left = '';
+          menu.style.top = '';
+          menu.style.right = '';
+          menu.style.display = '';
+          menu.style.zIndex = '';
+          more.appendChild(menu);
+        }
+        function positionMenu() {
+          if (!menu || menu.dataset.portaled !== '1' || !summary) return;
+          const rect = summary.getBoundingClientRect();
+          const width = menu.offsetWidth || 168;
+          const left = Math.max(8, Math.min(window.innerWidth - width - 8, rect.right - width));
+          let top = rect.bottom + 6;
+          if (top + menu.offsetHeight > window.innerHeight - 8) top = Math.max(8, rect.top - menu.offsetHeight - 6);
+          menu.style.left = left + 'px';
+          menu.style.top = top + 'px';
+          menu.style.right = 'auto';
+        }
         more.addEventListener('toggle', function () {
-          if (!more.open) { article.style.zIndex = ''; return; }
+          if (!more.open) {
+            restoreMenu();
+            article.style.zIndex = '';
+            return;
+          }
           list.querySelectorAll('.notes-more[open]').forEach(function (d) { if (d !== more) d.removeAttribute('open'); });
           // Chrome <105 no :has, JS fallback to elevate card above siblings
           article.style.zIndex = '20';
           list.querySelectorAll('.notes-row').forEach(function (r) { if (r !== article) r.style.zIndex = ''; });
+          // 脱离卡片/grid 的 stacking context，菜单不会被相邻便笺遮挡。
+          if (menu) {
+            menu.dataset.portaled = '1';
+            menu.style.position = 'fixed';
+            menu.style.display = 'flex';
+            menu.style.zIndex = '30000';
+            document.body.appendChild(menu);
+            requestAnimationFrame(positionMenu);
+          }
         });
+        // 菜单已经脱离 details；用捕获阶段先收起它，避免打开编辑/确认弹窗时
+        // 30000 层的菜单压住新弹窗，也让一次点击后的状态保持一致。
+        menu.addEventListener('click', function () {
+          if (!more.open) return;
+          more.removeAttribute('open');
+          restoreMenu();
+          article.style.zIndex = '';
+        }, true);
         const actions = el('div', { class: 'notes-row-actions' }, [
           actionBtn(n.floating ? '收起悬浮' : '页面悬浮', function () {
             return Kairo.notes.setFloating(n.id, !n.floating);
@@ -267,7 +315,7 @@
       }
 
       function closeMoreMenus(ev) {
-        if (ev.target && ev.target.closest && ev.target.closest('.notes-more')) return;
+        if (ev.target && ev.target.closest && (ev.target.closest('.notes-more') || ev.target.closest('.notes-more-menu'))) return;
         list.querySelectorAll('.notes-more[open]').forEach(function (d) { d.removeAttribute('open'); });
         list.querySelectorAll('.notes-row').forEach(function (r) { r.style.zIndex = ''; });
       }

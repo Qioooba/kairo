@@ -37,6 +37,7 @@
   }
 
   function navigate() {
+    document.body.classList.remove('sidebar-open');
     const routes = state.routes || {};
     const names = state.routeNames || {};
     const resolved = routeFromHash(location.hash);
@@ -100,6 +101,16 @@
       try { state.currentUnmount(); } catch (e) { console.warn('route unmount failed', e); }
       state.currentUnmount = null;
     }
+    // 路由切换时清理上一页的受控弹层，避免旧页面的遮罩/菜单残留到
+    // 新页面上方（尤其是提醒编辑框、收藏夹等可跨页面导航的弹层）。
+    if (Kairo.overlays && Kairo.overlays.closeTop) {
+      for (let i = 0; i < 20 && document.querySelector('.kairo-managed-overlay'); i++) {
+        Kairo.overlays.closeTop();
+      }
+    }
+    // 便笺“更多”菜单为避免卡片裁剪会临时挂到 body；离开页面时也要移除，
+    // 否则它不会随 #view 清空而消失，可能覆盖下一页内容。
+    document.querySelectorAll('.notes-more-menu[data-portaled="1"]').forEach(menu => menu.remove());
     view.innerHTML = '';
     const renderToken = String((state.routeRenderToken || 0) + 1);
     state.routeRenderToken = Number(renderToken);
@@ -176,6 +187,30 @@
       state.currentUnmount = null;
     }
   });
+  function initSidebarDrawer() {
+    const toggle = document.getElementById('sidebar-toggle');
+    const backdrop = document.getElementById('sidebar-backdrop');
+    if (toggle) {
+      toggle.addEventListener('click', function (e) {
+        e.stopPropagation();
+        document.body.classList.toggle('sidebar-open');
+      });
+    }
+    if (backdrop) {
+      backdrop.addEventListener('click', function () {
+        document.body.classList.remove('sidebar-open');
+      });
+    }
+    const nav = document.getElementById('nav');
+    if (nav) {
+      nav.addEventListener('click', function (e) {
+        if (e.target.closest('.nav-item')) {
+          document.body.classList.remove('sidebar-open');
+        }
+      });
+    }
+  }
+
   window.addEventListener('load', async () => {
     try {
       const info = await api('GET', '/api/config');
@@ -211,5 +246,6 @@
       try { Kairo.pet.init(); } catch (e) { /* 宠物彩蛋失败静默 */ }
     }
     bindAboutNavClickUnlock();
+    initSidebarDrawer();
   });
 })();

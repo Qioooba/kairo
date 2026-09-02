@@ -44,6 +44,20 @@
   function h(v) { return escapeHtml(String(v == null ? '' : v)); }
   function q(id) { return document.getElementById(id); }
   function kindLabel(kind) { return kind === 'oracle' ? 'Oracle' : kind === 'mysql' ? 'MySQL' : 'Redis'; }
+  function copyDBText(value, successText) {
+    let pending;
+    try {
+      pending = copyToClipboard(String(value == null ? '' : value));
+    } catch (e) {
+      toast('复制失败：' + (e && e.message ? e.message : '剪贴板不可用'), 'err');
+      return;
+    }
+    Promise.resolve(pending).then(function () {
+      toast(successText, 'ok');
+    }).catch(function (e) {
+      toast('复制失败：' + (e && e.message ? e.message : '剪贴板不可用'), 'err');
+    });
+  }
   function sess() { return state.sessions.find(function (s) { return s.id === state.activeId; }) || state.sessions[0] || null; }
   function effectiveSource() {
     const s = sess();
@@ -139,20 +153,17 @@
     const s = state.sessions.find(function (x) { return x.id === id; });
     if (!s) return;
     cancelGridPaint();
-    // #13 恢复标签对应的数据源
-    if (s.sourceId && s.sourceId !== (state.source && state.source.id)) {
-      const found = state.sources.find(function (x) { return x.id === s.sourceId; });
-      if (found) {
-        state.source = found;
-        const sel = q('db-source');
-        if (sel) sel.value = found.id;
-        q('db-source-badge').textContent = kindLabel(found.kind);
-        // 切换数据源后刷新元数据与提示
-        loadSchemas();
-        loadColumnWidths();
-      }
-    }
     state.activeId = id;
+    // #13：页签保存自己的数据源；切换到不同类型时必须重建可见工作区，
+    // 否则 Redis 页签会继续显示 SQL DOM，或沿用上一数据源的元数据。
+    const found = s.sourceId ? state.sources.find(function (x) { return x.id === s.sourceId; }) : null;
+    if (found) {
+      state.source = found;
+      const sel = q('db-source');
+      if (sel) sel.value = found.id;
+      renderWorkspace(true);
+      return;
+    }
     bindSession(s);
     restoreSessionChrome(s);
     // 同步标签栏的源指示（标题提示含源名）
@@ -168,8 +179,16 @@
     state.sessions.splice(index, 1);
     const next = state.sessions[Math.min(index, state.sessions.length - 1)];
     state.activeId = next.id;
-    bindSession(next);
-    restoreSessionChrome(next);
+    const nextSource = next.sourceId ? state.sources.find(function (x) { return x.id === next.sourceId; }) : null;
+    if (nextSource) {
+      state.source = nextSource;
+      const select = q('db-source');
+      if (select) select.value = nextSource.id;
+      renderWorkspace(true);
+    } else {
+      bindSession(next);
+      restoreSessionChrome(next);
+    }
   }
   function restoreSessionChrome(s) {
     const ta = q('db-sql');
@@ -313,18 +332,15 @@
     const canManage = !user || role === 'admin';
     view.innerHTML = '<div class="db-page"><header class="db-topbar card"><div class="db-source-select"><label for="db-source">数据源</label><select id="db-source">' + sourceOptions() + '</select></div><span id="db-source-badge" class="db-kind"></span><div class="db-topbar-actions"><button class="btn btn-sm" id="db-test">测试连接</button>' + (canManage ? '<button class="btn btn-sm" id="db-manage" aria-expanded="false">数据源管理</button>' : '') + '<button class="btn btn-sm" id="db-settings">工作台设置</button></div><span class="db-safe">只读会话 · 行数 / 时长 / 并发保护</span></header><div id="db-manager"></div><div id="db-workspace"></div></div>';
     q('db-source').onchange = function () {
-      state.source = state.sources.find(s => s.id === this.value) || null;
-      if (state.source) { persisted.last_source = state.source.id; savePersisted(); }
+      saveEditorSQL();
+      const next = state.sources.find(s => s.id === this.value) || null;
       const cur = sess();
-      if (cur) cur.sourceId = state.source ? state.source.id : '';
-      renderTabs();
-      // #13：切换数据源后不清空所有页签，仅刷新当前工作区元数据
-      if (state.sessions.length && state.sessions[0]) {
-        loadColumnWidths();
-        loadSchemas();
-      } else {
-        renderWorkspace();
-      }
+      if (cur) cur.sourceId = next ? next.id : '';
+      state.source = next;
+      if (next) { persisted.last_source = next.id; savePersisted(); }
+      // #13：数据源属于当前页签。重建可见工作区但保留其它页签及其
+      // 查询结果/运行状态，切换 Oracle/MySQL/Redis 时不会再复用错误 DOM。
+      renderWorkspace(true);
     };
     q('db-test').onclick = testConnection;
     q('db-settings').onclick = openSettings;
@@ -434,23 +450,43 @@
     finally { b.disabled = false; b.textContent = '测试连接'; }
   }
 
-  function renderWorkspace() {
+  function renderWorkspace(preserveSessions) {
     const host = q('db-workspace'); if (!host) return;
+    const keepSessions = preserveSessions === true;
     cancelGridPaint();
     gridIndexCache = { rows: null, len: -1, filter: '', sort: null, indexes: null };
-    abortAllSessions();
-    state.sessions = [];
-    state.activeId = 0;
+    if (!keepSessions) {
+      abortAllSessions();
+      state.sessions = [];
+      state.activeId = 0;
+    }
     state.workspaceToken++;
-    q('db-source-badge').textContent = state.source ? kindLabel(state.source.kind) : '未配置';
     if (!state.source) {
+      q('db-source-badge').textContent = '未配置';
       host.innerHTML = '<div class="card empty-state"><div class="empty-title">尚无数据源</div><div class="empty-desc">打开“数据源管理”创建 Oracle、MySQL 或 Redis 连接。</div></div>';
       return;
     }
-    state.rows = []; state.columns = []; state.summary = null; state.lastError = null; state.plan = [];
-    state.hiddenColumns = new Set(); state.sort = null; state.inspect = null; state.gridReady = false;
+    if (!state.sessions.length) {
+      const first = createSession('');
+      state.sessions = [first];
+      state.activeId = first.id;
+    }
+    const active = sess();
+    if (active && !active.sourceId) active.sourceId = state.source.id;
+    const activeSource = effectiveSource();
+    if (activeSource) state.source = activeSource;
+    q('db-source-badge').textContent = state.source ? kindLabel(state.source.kind) : '未配置';
+    if (keepSessions) {
+      bindSession(active);
+    } else {
+      state.rows = []; state.columns = []; state.summary = null; state.lastError = null; state.plan = [];
+      state.hiddenColumns = new Set(); state.sort = null; state.inspect = null; state.gridReady = false;
+    }
     loadColumnWidths();
     state.source.kind === 'redis' ? renderRedis(host) : renderSQL(host);
+    // 数据源切换或页签切换会重建工作区 DOM；把当前页签的编辑器、筛选器、
+    // 结果视图和执行状态恢复回来，否则页签标题还在但 SQL 文本会变空。
+    restoreSessionChrome(active);
   }
 
   function renderSQL(host) {
@@ -458,7 +494,7 @@
     const history = loadHistory();
     const savedRows = Math.max(1, Math.min(state.source.max_rows, Number(persisted.row_limits[state.source.id]) || Math.min(1000, state.source.max_rows)));
     const gridRows = Math.max(6, Math.min(40, Number(state.prefs.gridRows) || 16));
-    host.innerHTML = '<div class="db-sql-layout"><aside class="card db-meta" id="db-meta-pane"><div class="db-pane-title"><span>数据库对象</span><button class="btn btn-xs" id="db-meta-refresh">刷新</button></div><label class="db-compact-label">Schema<select id="db-schema"><option>加载中…</option></select></label><input id="db-object-search" type="search" placeholder="搜索表、视图、函数、过程"><div id="db-objects" class="db-object-list"><div class="db-tree-loading">正在读取元数据…</div></div><div class="db-split-y" id="db-split-y" role="separator" title="上下拖动调整字段区高度"></div><div class="db-inspect"><div class="db-inspect-tabs"><button class="db-inspect-tab active" data-tab="fields">字段</button><button class="db-inspect-tab" data-tab="indexes">索引</button><button class="db-inspect-tab" data-tab="constraints">约束</button><button class="db-inspect-tab" data-tab="ddl">DDL</button></div><div id="db-inspect-body" class="db-field-list"><div class="hint">单击对象查看字段、索引、约束和 DDL；双击生成查询。</div></div></div></aside><div class="db-split-x" id="db-split-x" role="separator" title="左右拖动调整对象栏宽度"></div><main class="db-main"><section class="card db-editor-card"><div class="db-editor-tabs"><div id="db-sql-tabs" class="db-sql-tabs"></div><button type="button" class="btn btn-xs" id="db-tab-add" title="新建查询页签">＋ 页签</button><span class="db-dialect">' + kindLabel(state.source.kind) + '</span></div><div class="db-editor-bar"><button class="btn btn-primary" id="db-run">执行 <kbd>' + h(state.prefs.shortcuts.run) + '</kbd></button><button class="btn" id="db-explain">执行计划</button><button class="btn" id="db-format">格式化</button><button class="btn" id="db-cancel" disabled>取消</button><label>最多 <input id="db-max-rows" type="number" min="1" max="' + state.source.max_rows + '" value="' + savedRows + '"> 行</label><label>显示 <input id="db-grid-rows" type="number" min="6" max="40" value="' + gridRows + '"> 行</label><select id="db-export-format" title="导出格式"><option value="csv">CSV</option><option value="json">JSON</option><option value="xlsx">Excel</option><option value="insert">INSERT</option></select><button class="btn" id="db-export" disabled>导出</button><select id="db-bookmark" title="SQL 收藏夹"><option value="">收藏夹</option></select><button class="btn btn-xs" id="db-bookmark-save" title="把当前 SQL 存入收藏夹">收藏</button><button class="btn btn-xs" id="db-bookmark-del" title="删除当前收藏">删收藏</button><select id="db-history" title="查询历史"><option value="">历史</option>' + history.map(function (sql, i) { return '<option value="' + i + '">' + h(sql.replace(/\s+/g, ' ').slice(0, 80)) + '</option>'; }).join('') + '</select><button class="btn btn-xs" id="db-history-clear" title="查询历史按当前用户保存在 data/preferences.json">清空历史</button><span id="db-query-status" class="db-query-status">就绪</span></div><div class="db-sql-shell"><pre id="db-sql-highlight" class="db-sql-highlight" aria-hidden="true"></pre><textarea id="db-sql" class="db-sql-editor" spellcheck="false"></textarea><div id="db-sql-ac" class="db-sql-ac" hidden role="listbox" aria-label="SQL 补全"></div></div><div class="db-editor-help">多页签可并行查询 · 输入关键字弹出补全 · 光标停在括号上会匹配另一半 · 格式化 / 收藏夹 · 模板缩写按 ' + h(state.prefs.expandKey) + ' 展开 · ' + h(state.prefs.shortcuts.run) + ' 执行</div></section><section class="card db-results"><div class="db-result-toolbar"><div class="db-result-tabs"><button id="db-view-grid" class="db-view-btn active">网格</button><button id="db-view-record" class="db-view-btn">单行记录</button><button id="db-view-plan" class="db-view-btn">执行计划</button></div><input id="db-result-filter" type="search" placeholder="在当前结果中过滤"><button class="btn btn-xs" id="db-copy-columns" disabled>复制字段名</button><button class="btn btn-xs" id="db-column-manager" disabled>显示列</button><span class="db-copy-hint">单击选行 · 双击进单行 · 点字段名可复制</span><span id="db-result-meta">等待执行查询</span></div><div id="db-result-message" class="db-result-message" hidden></div><div id="db-result-grid" class="db-result-grid"></div></section></main></div>';
+    host.innerHTML = '<div class="db-sql-layout"><aside class="card db-meta" id="db-meta-pane"><div class="db-pane-title"><span>数据库对象</span><button class="btn btn-xs" id="db-meta-refresh">刷新</button></div><label class="db-compact-label">Schema<select id="db-schema"><option>加载中…</option></select></label><input id="db-object-search" type="search" placeholder="搜索表、视图、函数、过程"><div id="db-objects" class="db-object-list"><div class="db-tree-loading">正在读取元数据…</div></div><div class="db-split-y" id="db-split-y" role="separator" title="上下拖动调整字段区高度"></div><div class="db-inspect"><div class="db-inspect-tabs"><button class="db-inspect-tab active" data-tab="fields">字段</button><button class="db-inspect-tab" data-tab="indexes">索引</button><button class="db-inspect-tab" data-tab="constraints">约束</button><button class="db-inspect-tab" data-tab="ddl">DDL</button></div><div id="db-inspect-body" class="db-field-list"><div class="hint">单击对象查看字段、索引、约束和 DDL；双击生成查询。</div></div></div></aside><div class="db-split-x" id="db-split-x" role="separator" title="左右拖动调整对象栏宽度"></div><main class="db-main"><section class="card db-editor-card"><div class="db-editor-tabs"><div id="db-sql-tabs" class="db-sql-tabs"></div><button type="button" class="btn btn-xs" id="db-tab-add" title="新建查询页签">＋ 页签</button><span class="db-dialect">' + kindLabel(state.source.kind) + '</span></div><div class="db-editor-bar"><button class="btn btn-primary" id="db-run">执行 <kbd>' + h(state.prefs.shortcuts.run) + '</kbd></button><button class="btn" id="db-explain">执行计划</button><button class="btn" id="db-format">格式化</button><button class="btn" id="db-cancel" disabled>取消</button><label>最多 <input id="db-max-rows" type="number" min="1" max="' + state.source.max_rows + '" value="' + savedRows + '"> 行</label><label>显示 <input id="db-grid-rows" type="number" min="6" max="40" value="' + gridRows + '"> 行</label><div class="db-editor-bar-right"><select id="db-export-format" title="导出格式"><option value="csv">CSV</option><option value="json">JSON</option><option value="xlsx">Excel</option><option value="insert">INSERT</option></select><button class="btn" id="db-export" disabled>导出</button><select id="db-bookmark" title="SQL 收藏夹"><option value="">收藏夹</option></select><button class="btn btn-xs" id="db-bookmark-save" title="把当前 SQL 存入收藏夹">收藏</button><button class="btn btn-xs" id="db-bookmark-del" title="删除当前收藏">删收藏</button><select id="db-history" title="查询历史"><option value="">历史</option>' + history.map(function (sql, i) { return '<option value="' + i + '">' + h(sql.replace(/\s+/g, ' ').slice(0, 80)) + '</option>'; }).join('') + '</select><button class="btn btn-xs" id="db-history-clear" title="查询历史按当前用户保存在 data/preferences.json">清空历史</button></div><span id="db-query-status" class="db-query-status">就绪</span></div><div class="db-sql-shell"><pre id="db-sql-highlight" class="db-sql-highlight" aria-hidden="true"></pre><textarea id="db-sql" class="db-sql-editor" spellcheck="false"></textarea><div id="db-sql-ac" class="db-sql-ac" hidden role="listbox" aria-label="SQL 补全"></div></div><div class="db-editor-help">多页签可并行查询 · 输入关键字弹出补全 · 光标停在括号上会匹配另一半 · 格式化 / 收藏夹 · 模板缩写按 ' + h(state.prefs.expandKey) + ' 展开 · ' + h(state.prefs.shortcuts.run) + ' 执行</div></section><section class="card db-results"><div class="db-result-toolbar"><div class="db-result-tabs"><button id="db-view-grid" class="db-view-btn active">网格</button><button id="db-view-record" class="db-view-btn">单行记录</button><button id="db-view-plan" class="db-view-btn">执行计划</button></div><input id="db-result-filter" type="search" placeholder="在当前结果中过滤"><button class="btn btn-xs" id="db-copy-columns" disabled>复制字段名</button><button class="btn btn-xs" id="db-column-manager" disabled>显示列</button><span class="db-copy-hint">单击选行 · 双击进单行 · 点字段名可复制</span><span id="db-result-meta">等待执行查询</span></div><div id="db-result-message" class="db-result-message" hidden></div><div id="db-result-grid" class="db-result-grid"></div></section></main></div>';
     q('db-sql').placeholder = initial;
     q('db-max-rows').value = savedRows;
     q('db-max-rows').title = '查询最多返回多少行，按数据源记住';
@@ -493,10 +529,8 @@
     q('db-copy-columns').onclick = copyVisibleColumnNames;
     q('db-sql').onkeydown = handleEditorKeydown;
     bindSQLEditor();
-    const first = createSession('');
-    state.sessions = [first];
-    state.activeId = first.id;
-    bindSession(first);
+    const active = sess();
+    bindSession(active);
     renderTabs();
     q('db-tab-add').onclick = addSession;
     refreshBookmarkSelect();
@@ -631,7 +665,7 @@
     body.innerHTML = html;
     const names = (info.fields || []).map(x => x.name);
     const copy = q('db-copy-field-list');
-    if (copy) copy.onclick = () => { copyToClipboard(names.join(', ')); toast('已复制 ' + names.length + ' 个字段名', 'ok'); };
+    if (copy) copy.onclick = () => copyDBText(names.join(', '), '已复制 ' + names.length + ' 个字段名');
     body.querySelectorAll('.db-field-row[data-field]').forEach(btn => {
       btn.ondblclick = () => insertAtCursor(q('db-sql'), quoteIdentifier(btn.dataset.field));
     });
@@ -640,7 +674,7 @@
   function quoteIdentifier(v) {
     const src = effectiveSource();
     const quote = src && src.kind === 'mysql' ? '`' : '"';
-    return quote + String(v).replaceAll(quote, quote + quote) + quote;
+    return quote + String(v).split(quote).join(quote + quote) + quote;
   }
   function insertObjectSQL(schema, object, type) {
     const name = quoteIdentifier(schema) + '.' + quoteIdentifier(object);
@@ -759,9 +793,9 @@
     const snippet = state.prefs.snippets.find(x => x.enabled !== false && x.key === match[1]);
     if (!snippet) return false;
     const schema = q('db-schema') ? q('db-schema').value : '', start = pos - match[1].length;
-    let replacement = String(snippet.text).replaceAll('${schema}', schema || '').replaceAll('${table}', 'table_name');
+    let replacement = String(snippet.text).split('${schema}').join(schema || '').split('${table}').join('table_name');
     const cursor = replacement.indexOf('${cursor}');
-    replacement = replacement.replaceAll('${cursor}', '');
+    replacement = replacement.split('${cursor}').join('');
     editor.setRangeText(replacement, start, pos, 'end');
     if (cursor >= 0) editor.setSelectionRange(start + cursor, start + cursor);
     syncSQLEditor();
@@ -1110,29 +1144,37 @@
     const items = loadBookmarks();
     if (!items.length) return toast('收藏夹为空，先收藏几条 SQL', 'warn');
     const grid = el('div', { class: 'db-bookmark-grid' });
-    items.forEach(function (item, idx) {
+    const body = el('div', { class: 'db-bookmark-modal-body' }, [grid]);
+    const footer = el('div', { class: 'db-bookmark-modal-actions' });
+    const dlg = Kairo.overlays.modal({
+      title: '收藏夹 · 九宫格（点击载入，右键删除）',
+      width: 720,
+      body: body,
+      footer: footer
+    });
+    footer.appendChild(el('button', { class: 'btn', type: 'button', text: '关闭', onclick: function () { dlg.close(); } }));
+    items.forEach(function (item) {
       const card = el('div', { class: 'db-bookmark-card', tabindex: '0', role: 'button', title: '点击载入，右键删除' });
       card.appendChild(el('strong', { text: item.name }));
       card.appendChild(el('pre', { text: item.sql.slice(0, 200) }));
       const meta = el('small', { text: (item.source_id ? (state.sources.find(function (s) { return s.id === item.source_id; }) || {}).name || item.source_id : '通用') + ' · ' + (item.updated_at ? new Date(item.updated_at).toLocaleDateString() : '') });
       card.appendChild(meta);
       card.onclick = function () {
-        q('db-sql').value = item.sql;
-        syncSQLEditor();
         // 同步源至收藏的源（若存在）
         if (item.source_id) {
           const src = state.sources.find(function (s) { return s.id === item.source_id; });
           if (src) {
+            const cur = sess();
+            if (cur) cur.sourceId = src.id;
             state.source = src;
             const sel = q('db-source');
             if (sel) sel.value = src.id;
-            q('db-source-badge').textContent = kindLabel(src.kind);
-            const cur = sess();
-            if (cur) cur.sourceId = src.id;
-            renderTabs();
+            renderWorkspace(true);
           }
         }
-        modal.close();
+        const sql = q('db-sql');
+        if (sql) { sql.value = item.sql; syncSQLEditor(); }
+        dlg.close();
         toast('已载入收藏 “' + item.name + '”', 'ok');
       };
       card.onkeydown = function (e) { if (e.key === 'Enter') card.onclick(); };
@@ -1140,38 +1182,26 @@
         e.preventDefault();
         if (confirm('删除收藏 “' + item.name + '”？')) {
           const cur = loadBookmarks();
-          cur.splice(idx, 1);
+          const index = cur.findIndex(function (x) { return x.name === item.name && x.sql === item.sql; });
+          if (index >= 0) cur.splice(index, 1);
           persisted.bookmarks = cur;
           savePersisted();
           refreshBookmarkSelect();
           card.remove();
-          if (!cur.length) modal.close();
+          if (!cur.length) dlg.close();
           toast('已删除', 'ok');
         }
       };
       grid.appendChild(card);
     });
-    const body = el('div', { class: 'db-bookmark-modal-body' }, [grid]);
-    const head = el('div', { class: 'db-bookmark-modal-head' }, [
-      el('span', { text: '收藏夹 · 九宫格（点击载入，右键删除）' }),
-      el('button', { class: 'btn btn-xs', text: '关闭', onclick: function () { modal.close(); } })
-    ]);
-    const wrap = el('div', { class: 'db-bookmark-modal' }, [head, body]);
-    const overlay = el('div', { class: 'db-bookmark-overlay' }, [wrap]);
-    overlay.onclick = function (e) { if (e.target === overlay) modal.close(); };
-    const modal = { close: function () { overlay.remove(); document.body.classList.remove('has-open-overlay'); } };
-    document.body.appendChild(overlay);
-    document.body.classList.add('has-open-overlay');
-    // 也走 overlays 的栈管理，复用 ESC 关闭
-    if (Kairo.overlays && Kairo.overlays.modal) {
-      // 用原生 overlay 的 ESC 处理：监听一次
-      const esc = function (e) { if (e.key === 'Escape') { modal.close(); document.removeEventListener('keydown', esc, true); } };
-      document.addEventListener('keydown', esc, true);
-    }
   }
   function editorSQL() {
     const box = q('db-sql');
     if (!box) return '';
+    if (typeof box.selectionStart === 'number' && typeof box.selectionEnd === 'number' && box.selectionStart !== box.selectionEnd) {
+      const selected = box.value.substring(box.selectionStart, box.selectionEnd).trim();
+      if (selected) return selected;
+    }
     let sql = box.value.trim();
     if (sql) return sql;
     const sample = String(box.placeholder || '').trim();
@@ -1319,7 +1349,7 @@
     box.hidden = false;
     box.className = 'db-result-message ' + kind;
     box.innerHTML = '<div class="db-message-icon">!</div><div class="db-message-copy"><strong>' + h(title) + '</strong><pre>' + h(message) + '</pre>' + (sql ? '<details><summary>查看本次 SQL</summary><pre>' + h(sql) + '</pre></details>' : '') + '</div><button class="btn btn-xs" id="db-copy-error">复制详情</button>';
-    q('db-copy-error').onclick = () => { copyToClipboard(title + '\n' + message + (sql ? '\n\n' + sql : '')); toast('错误详情已复制', 'ok'); };
+    q('db-copy-error').onclick = () => copyDBText(title + '\n' + message + (sql ? '\n\n' + sql : ''), '错误详情已复制');
   }
 
   function visibleColumns() { return state.columns.map((_, i) => i).filter(i => !state.hiddenColumns.has(i)); }
@@ -1391,11 +1421,11 @@
       }).join('');
       grid.innerHTML = '<div class="db-plan-wrap"><div class="db-plan-head"><strong>执行计划</strong><span>' + tableRows.length + ' 行 · MySQL EXPLAIN 表格</span><button class="btn btn-xs" id="db-copy-plan">复制</button></div><div class="db-plan-table-wrap"><table class="table db-plan-table"><thead><tr>' + head + '</tr></thead><tbody>' + body + '</tbody></table></div></div>';
       const copy = q('db-copy-plan');
-      if (copy) copy.onclick = function () { copyToClipboard(tsv); toast('执行计划已复制', 'ok'); };
+      if (copy) copy.onclick = function () { copyDBText(tsv, '执行计划已复制'); };
     } else {
       grid.innerHTML = '<div class="db-plan-wrap"><div class="db-plan-head"><strong>执行计划</strong><span>' + state.plan.length + ' 行 · 保留数据库原始格式</span><button class="btn btn-xs" id="db-copy-plan">复制</button></div><pre class="db-plan-text">' + h(raw) + '</pre></div>';
       const copy = q('db-copy-plan');
-      if (copy) copy.onclick = function () { copyToClipboard(raw); toast('执行计划已复制', 'ok'); };
+      if (copy) copy.onclick = function () { copyDBText(raw, '执行计划已复制'); };
     }
     applyGridHeight();
   }
@@ -1557,14 +1587,14 @@
     q('db-record-next').onclick = () => { state.selectedRow = indexes[pos + 1]; renderResult(); };
     q('db-record-copy').onclick = () => copyRow(state.selectedRow, visible);
     q('db-record-copy-fields').onclick = copyVisibleColumnNames;
-    grid.querySelectorAll('[data-copy-field]').forEach(btn => btn.onclick = () => { copyToClipboard(state.columns[Number(btn.dataset.copyField)].name); toast('字段名已复制', 'ok'); });
+    grid.querySelectorAll('[data-copy-field]').forEach(btn => btn.onclick = () => copyDBText(state.columns[Number(btn.dataset.copyField)].name, '字段名已复制'));
   }
   function copyVisibleColumnNames() {
     const names = visibleColumns().map(i => state.columns[i].name);
-    copyToClipboard(names.join('\t')); toast('已复制 ' + names.length + ' 个字段名', 'ok');
+    copyDBText(names.join('\t'), '已复制 ' + names.length + ' 个字段名');
   }
   function copyRow(row, columns) {
-    copyToClipboard(columns.map(i => cellText(state.rows[row][i])).join('\t')); toast('已复制整行', 'ok');
+    copyDBText(columns.map(i => cellText(state.rows[row][i])).join('\t'), '已复制整行');
   }
   function closeMenus(e) { document.querySelectorAll('.db-popup-menu').forEach(m => { if (!e || !m.contains(e.target)) m.remove(); }); }
   function keepMenu(menu) {
@@ -1578,12 +1608,12 @@
     closeMenus();
     const menu = el('div', { class: 'db-popup-menu', style: 'left:' + x + 'px;top:' + y + 'px' });
     const add = (text, fn) => menu.appendChild(el('button', { text, onclick: () => { fn(); menu.remove(); } }));
-    add('复制字段名', () => copyToClipboard(state.columns[column].name));
+    add('复制字段名', () => copyDBText(state.columns[column].name, '字段名已复制'));
     if (row != null) {
-      add('复制单元格', () => copyToClipboard(cellText(state.rows[row][column])));
+      add('复制单元格', () => copyDBText(cellText(state.rows[row][column]), '单元格已复制'));
       add('复制整行（TSV）', () => copyRow(row, visibleColumns()));
     }
-    add('复制整列', () => copyToClipboard(filteredRows().map(i => cellText(state.rows[i][column])).join('\n')));
+    add('复制整列', () => copyDBText(filteredRows().map(i => cellText(state.rows[i][column])).join('\n'), '整列已复制'));
     add('隐藏此列', () => { state.hiddenColumns.add(column); state.gridReady = false; renderResult(); });
     document.body.appendChild(menu); keepMenu(menu);
     setTimeout(() => document.addEventListener('pointerdown', closeMenus, { once: true }), 0);
@@ -1701,7 +1731,9 @@
   function renderRedis(host) {
     state.cursor = '0';
     const mode = state.source.redis_mode || 'standalone';
-    host.innerHTML = '<div class="db-redis-layout"><div class="card db-redis-keys"><div class="db-editor-bar"><span class="db-redis-topo">拓扑 ' + h(mode) + (mode === 'cluster' ? ' · 跨主节点 SCAN' : mode === 'sentinel' ? ' · ' + h(state.source.redis_master_name || '') : ' · 单机') + '</span><input id="db-redis-pattern" value="*" placeholder="Key pattern，例如 order:*"><button class="btn btn-primary" id="db-redis-scan">SCAN</button><button class="btn" id="db-redis-next">下一批</button></div><div id="db-redis-list" class="db-redis-list"></div></div><div class="card db-redis-detail"><div class="db-pane-title">Key 详情</div><pre id="db-redis-value">选择左侧 Key 查看类型、TTL 和内容</pre></div></div>';
+    host.innerHTML = '<div class="db-redis-workspace"><div class="db-editor-tabs"><div id="db-sql-tabs" class="db-sql-tabs"></div><button type="button" class="btn btn-xs" id="db-tab-add" title="新建查询页签">＋ 页签</button><span class="db-dialect">Redis</span></div><div class="db-redis-layout"><div class="card db-redis-keys"><div class="db-editor-bar"><span class="db-redis-topo">拓扑 ' + h(mode) + (mode === 'cluster' ? ' · 跨主节点 SCAN' : mode === 'sentinel' ? ' · ' + h(state.source.redis_master_name || '') : ' · 单机') + '</span><input id="db-redis-pattern" value="*" placeholder="Key pattern，例如 order:*"><button class="btn btn-primary" id="db-redis-scan">SCAN</button><button class="btn" id="db-redis-next">下一批</button></div><div id="db-redis-list" class="db-redis-list"></div></div><div class="card db-redis-detail"><div class="db-pane-title">Key 详情</div><pre id="db-redis-value">选择左侧 Key 查看类型、TTL 和内容</pre></div></div></div>';
+    renderTabs();
+    q('db-tab-add').onclick = addSession;
     q('db-redis-scan').onclick = () => { state.cursor = '0'; scanRedis(true); };
     q('db-redis-next').onclick = () => scanRedis(false);
     scanRedis(true);

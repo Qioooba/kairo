@@ -131,34 +131,34 @@ type paintStruct struct {
 // ---------- Procs ----------
 
 var (
-	procRegisterClassExW           = user32DLL().NewProc("RegisterClassExW")
-	procCreateWindowExW            = user32DLL().NewProc("CreateWindowExW")
-	procDefWindowProcW             = user32DLL().NewProc("DefWindowProcW")
-	procDestroyWindow              = user32DLL().NewProc("DestroyWindow")
-	procGetMessageW                = user32DLL().NewProc("GetMessageW")
-	procTranslateMessage           = user32DLL().NewProc("TranslateMessage")
-	procDispatchMessageW           = user32DLL().NewProc("DispatchMessageW")
-	procSetWindowPos               = user32DLL().NewProc("SetWindowPos")
-	procSetLayeredWindowAttributes = user32DLL().NewProc("SetLayeredWindowAttributes")
-	procCreateRoundRectRgn         = gdi32DLL().NewProc("CreateRoundRectRgn")
-	procSetWindowRgn               = user32DLL().NewProc("SetWindowRgn")
-	procDeleteObject               = gdi32DLL().NewProc("DeleteObject")
-	procSystemParametersInfoW      = user32DLL().NewProc("SystemParametersInfoW")
-	procBeginPaint                 = user32DLL().NewProc("BeginPaint")
-	procEndPaint                   = user32DLL().NewProc("EndPaint")
-	procFillRect                   = user32DLL().NewProc("FillRect")
-	procDrawTextW                  = user32DLL().NewProc("DrawTextW")
-	procSetTextColor               = gdi32DLL().NewProc("SetTextColor")
-	procSetBkMode                  = gdi32DLL().NewProc("SetBkMode")
-	procCreateSolidBrush           = gdi32DLL().NewProc("CreateSolidBrush")
-	procSetTimer                   = user32DLL().NewProc("SetTimer")
-	procKillTimer                  = user32DLL().NewProc("KillTimer")
-	procPostQuitMessage            = user32DLL().NewProc("PostQuitMessage")
-	procGetClientRect              = user32DLL().NewProc("GetClientRect")
-	procLoadCursorW                = user32DLL().NewProc("LoadCursorW")
-	procSetCursor                  = user32DLL().NewProc("SetCursor")
-	procGetModuleHandleW           = kernel32DLL().NewProc("GetModuleHandleW")
-	procGradientFill               = gdi32DLL().NewProc("GradientFill")
+	procRegisterClassExW              = user32DLL().NewProc("RegisterClassExW")
+	procCreateWindowExW               = user32DLL().NewProc("CreateWindowExW")
+	procDefWindowProcW                = user32DLL().NewProc("DefWindowProcW")
+	procDestroyWindow                 = user32DLL().NewProc("DestroyWindow")
+	procGetMessageW                   = user32DLL().NewProc("GetMessageW")
+	procTranslateMessage              = user32DLL().NewProc("TranslateMessage")
+	procDispatchMessageW              = user32DLL().NewProc("DispatchMessageW")
+	procSetWindowPos                  = user32DLL().NewProc("SetWindowPos")
+	procSetLayeredWindowAttributes    = user32DLL().NewProc("SetLayeredWindowAttributes")
+	procCreateRoundRectRgn            = gdi32DLL().NewProc("CreateRoundRectRgn")
+	procSetWindowRgn                  = user32DLL().NewProc("SetWindowRgn")
+	procDeleteObject                  = gdi32DLL().NewProc("DeleteObject")
+	procSystemParametersInfoW         = user32DLL().NewProc("SystemParametersInfoW")
+	procBeginPaint                    = user32DLL().NewProc("BeginPaint")
+	procEndPaint                      = user32DLL().NewProc("EndPaint")
+	procFillRect                      = user32DLL().NewProc("FillRect")
+	procDrawTextW                     = user32DLL().NewProc("DrawTextW")
+	procSetTextColor                  = gdi32DLL().NewProc("SetTextColor")
+	procSetBkMode                     = gdi32DLL().NewProc("SetBkMode")
+	procCreateSolidBrush              = gdi32DLL().NewProc("CreateSolidBrush")
+	procSetTimer                      = user32DLL().NewProc("SetTimer")
+	procKillTimer                     = user32DLL().NewProc("KillTimer")
+	procPostQuitMessage               = user32DLL().NewProc("PostQuitMessage")
+	procGetClientRect                 = user32DLL().NewProc("GetClientRect")
+	procLoadCursorW                   = user32DLL().NewProc("LoadCursorW")
+	procSetCursor                     = user32DLL().NewProc("SetCursor")
+	procGetModuleHandleW              = kernel32DLL().NewProc("GetModuleHandleW")
+	procGradientFill                  = gdi32DLL().NewProc("GradientFill")
 	procSetProcessDpiAwarenessContext = user32DLL().NewProc("SetProcessDpiAwarenessContext")
 	procSetThreadDpiAwarenessContext  = user32DLL().NewProc("SetThreadDpiAwarenessContext")
 )
@@ -170,10 +170,12 @@ func kernel32DLL() *windows.LazyDLL { return windows.NewLazySystemDLL("kernel32.
 // ---------- 状态 ----------
 
 var (
-	queueMu sync.Mutex
-	queue   []popupItem
-	showing bool
-	classOK bool
+	queueMu       sync.Mutex
+	queue         []popupItem
+	showing       bool
+	classMu       sync.Mutex
+	classOK       bool
+	classInstance uintptr
 )
 
 type popupItem struct {
@@ -234,12 +236,17 @@ func popupPump() {
 	}
 }
 
-func registerClass() error {
+func registerClass() (uintptr, error) {
+	classMu.Lock()
+	defer classMu.Unlock()
 	if classOK {
-		return nil
+		return classInstance, nil
 	}
 	className, _ := windows.UTF16PtrFromString(popupClassName)
 	hInstance, _, _ := procGetModuleHandleW.Call(0)
+	if hInstance == 0 {
+		return 0, fmt.Errorf("获取进程模块句柄失败")
+	}
 
 	wc := wndClassEx{
 		CbSize:        uint32(unsafe.Sizeof(wndClassEx{})),
@@ -251,10 +258,11 @@ func registerClass() error {
 	}
 	ret, _, err := procRegisterClassExW.Call(uintptr(unsafe.Pointer(&wc)))
 	if ret == 0 && err != syscall.Errno(1410) { // ERROR_CLASS_ALREADY_EXISTS
-		return fmt.Errorf("RegisterClassExW 失败: %v", err)
+		return 0, fmt.Errorf("RegisterClassExW 失败: %v", err)
 	}
 	classOK = true
-	return nil
+	classInstance = hInstance
+	return classInstance, nil
 }
 
 // ---------- WindowProc ----------
@@ -427,7 +435,8 @@ func runPopupWindow(item popupItem) {
 	// -2 = DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE, -4 = PER_MONITOR_AWARE_V2
 	procSetThreadDpiAwarenessContext.Call(uintptr(^uintptr(3)))
 	procSetProcessDpiAwarenessContext.Call(uintptr(^uintptr(3)))
-	if err := registerClass(); err != nil {
+	hInstance, err := registerClass()
+	if err != nil {
 		log.Printf("popup: registerClass 失败: %v", err)
 		return
 	}
@@ -461,17 +470,17 @@ func runPopupWindow(item popupItem) {
 	}
 	winName, _ := windows.UTF16PtrFromString(winTitle)
 
-	hwnd, _, _ := procCreateWindowExW.Call(
+	hwnd, _, createErr := procCreateWindowExW.Call(
 		uintptr(WS_EX_TOPMOST|WS_EX_TOOLWINDOW|WS_EX_LAYERED|WS_EX_NOACTIVATE),
 		uintptr(unsafe.Pointer(className)),
 		uintptr(unsafe.Pointer(winName)),
 		uintptr(WS_POPUP),
 		uintptr(x), uintptr(y),
 		uintptr(popupW), uintptr(popupH),
-		0, 0, 0, 0,
+		0, 0, hInstance, 0,
 	)
 	if hwnd == 0 {
-		log.Printf("popup: CreateWindowExW 失败")
+		log.Printf("popup: CreateWindowExW 失败: %v", createErr)
 		return
 	}
 	defer procDestroyWindow.Call(hwnd)

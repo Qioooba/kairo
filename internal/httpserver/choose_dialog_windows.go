@@ -25,9 +25,12 @@ var (
 	procOleInitialize               = ole32Picker.NewProc("OleInitialize")
 	procOleUninitialize             = ole32Picker.NewProc("OleUninitialize")
 	procSHCreateItemFromParsingName = shell32Picker.NewProc("SHCreateItemFromParsingName")
+	procSHBrowseForFolderW          = shell32Picker.NewProc("SHBrowseForFolderW")
+	procSHGetPathFromIDListW        = shell32Picker.NewProc("SHGetPathFromIDListW")
 	procGetForegroundWindow         = user32Picker.NewProc("GetForegroundWindow")
 	procGetAncestor                 = user32Picker.NewProc("GetAncestor")
 	procSetForegroundWindow         = user32Picker.NewProc("SetForegroundWindow")
+	procSendMessageW                = user32Picker.NewProc("SendMessageW")
 	procIsWindowVisible             = user32Picker.NewProc("IsWindowVisible")
 	procGetWindowTextW              = user32Picker.NewProc("GetWindowTextW")
 	procGetWindowTextLengthW        = user32Picker.NewProc("GetWindowTextLengthW")
@@ -40,16 +43,31 @@ var (
 )
 
 const (
-	clsctxInprocServer = 0x1
-	gaRoot             = 2
-	fosPickFolders     = 0x20
-	fosForceFileSystem = 0x40
-	fosPathMustExist   = 0x800
-	fosFileMustExist   = 0x1000
-	fosNoChangeDir     = 0x8
-	sigdnFileSysPath   = 0x80058000
-	hresultCancel      = 0x800704C7
+	clsctxInprocServer          = 0x1
+	gaRoot                      = 2
+	fosPickFolders              = 0x20
+	fosForceFileSystem          = 0x40
+	fosPathMustExist            = 0x800
+	fosFileMustExist            = 0x1000
+	fosNoChangeDir              = 0x8
+	sigdnFileSysPath            = 0x80058000
+	hresultCancel               = 0x800704C7
+	bifReturnOnlyFileSystemDirs = 0x1
+	bifNewDialogStyle           = 0x40
+	bffmInitialized             = 0x400 + 1
+	bffmSetSelectionW           = 0x400 + 103
 )
+
+type browseInfo struct {
+	hwndOwner      uintptr
+	pidlRoot       uintptr
+	pszDisplayName *uint16
+	lpszTitle      *uint16
+	ulFlags        uint32
+	lpfn           uintptr
+	lParam         uintptr
+	iImage         int32
+}
 
 type iFileOpenDialogVtbl struct {
 	QueryInterface      uintptr
@@ -111,7 +129,11 @@ func chooseFileAt(initial string) (string, error) {
 }
 
 func chooseDirAt(initial string) (string, error) {
-	return invokePicker(func() (string, error) { return pickWindowsPath(true, initial) })
+	// 目录选择使用 Shell 的 BROWSEFORFOLDER 对话框。它仍然是系统原生、
+	// 可由 owner 窗口定位的对话框，但不需要在每次调用中手动创建/释放
+	// IFileOpenDialog 与 IShellItem，避免 RichEdit/COM 宿主在第二次选择后
+	// 进入已释放的 apartment 状态（问题 5/19）。
+	return invokePicker(func() (string, error) { return pickWindowsDirectory(initial) })
 }
 
 type winRect struct {
@@ -184,6 +206,62 @@ func pickerOwnerHWND() uintptr {
 	return fg
 }
 
+func browseFolderCallback(hwnd, message, wParam, lParam uintptr) uintptr {
+	if uint32(message) == bffmInitialized && lParam != 0 {
+		// BFFM_SETSELECTIONW 的 lParam 是仍存活的绝对路径指针；
+		// pickWindowsDirectory 会一直阻塞到对话框关闭，因此指针有效。
+		procSendMessageW.Call(hwnd, bffmSetSelectionW, 1, lParam)
+	}
+	return 0
+}
+
+var browseFolderCallbackPtr = syscall.NewCallback(browseFolderCallback)
+
+func pickWindowsDirectory(initial string) (path string, err error) {
+	pickerMu.Lock()
+	defer pickerMu.Unlock()
+	defer func() {
+		if rv := recover(); rv != nil {
+			err = fmt.Errorf("文件夹选择器异常: %v", rv)
+		}
+	}()
+
+	start := pickerStartDir(initial)
+	var startPtr *uint16
+	if start != "" {
+		startPtr, err = syscall.UTF16PtrFromString(start)
+		if err != nil {
+			return "", fmt.Errorf("准备文件夹选择路径失败: %w", err)
+		}
+	}
+	title, _ := syscall.UTF16PtrFromString("选择文件夹")
+	nameBuf := make([]uint16, 32768)
+	info := browseInfo{
+		hwndOwner:      pickerOwnerHWND(),
+		pszDisplayName: &nameBuf[0],
+		lpszTitle:      title,
+		ulFlags:        bifReturnOnlyFileSystemDirs | bifNewDialogStyle,
+		lpfn:           browseFolderCallbackPtr,
+		lParam:         uintptr(unsafe.Pointer(startPtr)),
+	}
+	pidl, _, _ := procSHBrowseForFolderW.Call(uintptr(unsafe.Pointer(&info)))
+	if pidl == 0 {
+		return "", nil // 用户取消
+	}
+	defer procCoTaskMemFree.Call(pidl)
+	pathBuf := make([]uint16, 32768)
+	ok, _, _ := procSHGetPathFromIDListW.Call(pidl, uintptr(unsafe.Pointer(&pathBuf[0])))
+	if ok == 0 {
+		return "", fmt.Errorf("读取所选文件夹失败")
+	}
+	path = syscall.UTF16ToString(pathBuf)
+	if path == "" {
+		return "", nil
+	}
+	rememberPicked(path)
+	return path, nil
+}
+
 func pickWindowsPath(directory bool, initial string) (out string, err error) {
 	pickerMu.Lock()
 	defer pickerMu.Unlock()
@@ -209,19 +287,10 @@ func pickWindowsPath(directory bool, initial string) (out string, err error) {
 		// 非 host 路径下，对应的 OleUninitialize 由 defer 在 Unlock 之前调用
 		// 但为避免与 host 的“永不反初始化”策略冲突，仅在 needLock 时才	defer Uninitialize
 		defer procOleUninitialize.Call()
-	} else {
-		// host 线程已初始化，此处 OleInitialize 仅为幂等探针，不增加计数
-		h, _, _ := procOleInitialize.Call(0)
-		hr = h
-		if hr != 0 && hr != 1 {
-			return "", fmt.Errorf("OleInitialize 失败: 0x%x", hr)
-		}
-		// 立即平衡：S_FALSE(1) 表示已初始化，无需保留；S_OK(0) 表示我们新加了一次计数，立即减回
-		// 保持 host 线程的初始化计数不变，避免后续 RichEdit 异常
-		if hr == 0 {
-			procOleUninitialize.Call()
-		}
 	}
+	// host 线程在 winui.run 中已经初始化了 OLE，并且会一直保持到消息循环结束。
+	// 这里不要再次调用 OleInitialize/OleUninitialize，避免二次对话框关闭时
+	// Shell/RichEdit 观察到 COM apartment 引用计数变化。
 
 	var dlg *iFileOpenDialog
 	hr, _, _ = procCoCreateInstance.Call(

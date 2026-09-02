@@ -1,0 +1,120 @@
+schema_version: 2
+
+app:
+  name: Kairo
+  host: 127.0.0.1
+  port: 18092
+  auto_open_browser: false
+  download_dir: ./downloads
+  log_dir: ./logs
+  data_dir: ./data
+  auto_start: false
+  free_file_roots:
+  - '*'
+  ssh_debug: false
+  ssh_traffic_dump: false
+  ssh_log_max_mb: 20
+  ssh_log_keep: 3
+  allow_insecure_host_key: true
+  external_openers:
+  - name: NotePad++
+    path: D:\软件\Notepad++\notepad++.exe
+    icon: smFile
+  - name: VS Code
+    path: /usr/local/bin/code
+    icon: smFile
+  - name: 我的 IDE
+    path: /Applications/我的应用/IDE.app/Contents/MacOS/ide
+    icon: smFile
+  download_retention_days: 7
+  download_max_count: 1000
+  compare_allowed_roots:
+  - '*'
+  kairo: '111222'
+  # 注意: 激活服务 / 排行榜的地址和密钥默认硬编码在源码里。
+  # 本地测试时可通过 internal_endpoints 覆盖 (不随发布包提交给用户)。
+  # 详见 internal/license 和 internal/sponsor 包的 var 注释。
+
+internal_endpoints:
+  sponsor_leaderboard:
+    primary: "http://127.0.0.1:18093/credit/httpInterface"
+    auth: "TEST_TOKEN_123"
+    timeout: 10s
+
+systems:
+- id: sys-2bde5e81b46de1e3
+  name: 信贷应用服务器
+  description: ""
+  servers:
+  - id: srv-13adbde06c250f12
+    name: 信贷测试198
+    host: 66.0.34.198
+    port: 22
+    username: credit
+    password: credit
+    auth_type: password
+    log_dirs:
+    - id: dir-2209862df64f1838
+      name: AppSrv01 server1
+      path: /opt/IBM/WebSphere/AppServer/profiles/AppSrv01/logs/server1
+      patterns:
+      - SystemOut*.log
+      - SystemErr*.log
+      encoding: gbk
+  - id: srv-e4204fffe8ae51d7
+    name: 信贷测试199
+    host: 66.0.34.199
+    port: 22
+    username: credit
+    password: credit
+    auth_type: password
+    log_dirs:
+    - id: dir-a2b0563306540e6a
+      name: AppSrv01 server1
+      path: /opt/IBM/WebSphere/AppServer/profiles/AppSrv01/logs/server1
+      patterns:
+      - SystemOut*.log
+      - SystemErr*.log
+      encoding: gbk
+- id: sys-8bbec899f0b23c5a
+  name: 信贷批量服务器
+  description: ""
+  servers:
+  - id: srv-bf26ae0db54195c9
+    name: 信贷测试28
+    host: 66.2.43.28
+    port: 22
+    username: creditpl
+    password: creditpl
+    auth_type: password
+    log_dirs:
+    - id: dir-039b6bf0dc43e548
+      name: AmarExtract
+      path: /batch/credit/AmarExtract
+      patterns:
+      - '*.log'
+      encoding: gbk
+- id: sys-e13025e2d9944bdc
+  name: 本地测试
+  description: ""
+  servers:
+  - id: srv-2702c4111a970477
+    name: Mock SSH
+    host: 127.0.0.1
+    port: 2226
+    username: test
+    password: test
+    auth_type: password
+    log_dirs:
+    - id: dir-25b68882048cd393
+      name: 测试目录
+      path: /tmp
+      patterns:
+      - '*.log'
+      encoding: utf-8
+search:
+  default_latest_files: 3
+  max_matches: 200
+  default_context_lines: 30
+  timeout_seconds: 30
+  max_concurrency: 2

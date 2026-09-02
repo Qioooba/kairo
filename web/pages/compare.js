@@ -202,7 +202,9 @@
     const copyBtn = makeButton('复制 Diff', '', copyDiff), downloadBtn = makeButton('下载 Diff', '', downloadDiff);
     [prevBtn, nextBtn, copyBtn, downloadBtn].forEach(btn => btn.disabled = true);
     const modeSelect = el('select', { class: 'cmp-mode-select' }, [el('option', { value: 'side', text: '左右并排' }), el('option', { value: 'unified', text: 'Unified' }), el('option', { value: 'changes', text: '仅差异' })]);
-    modeSelect.value = options.mode || 'side'; modeSelect.onchange = () => { options.mode = modeSelect.value; saveOptions(options); if (state.diff) renderResult(); };
+    const isNarrow = window.innerWidth < 900;
+    if (isNarrow && !options.mode) options.mode = 'unified';
+    modeSelect.value = options.mode || (isNarrow ? 'unified' : 'side'); modeSelect.onchange = () => { options.mode = modeSelect.value; saveOptions(options); if (state.diff) renderResult(); };
     const onlyDiff = makeCheck('只显示差异', options.onlyDiff, value => { options.onlyDiff = value; saveOptions(options); if (state.diff) renderResult(); });
     const trim = makeCheck('忽略行尾空白', options.trim_space, value => { options.trim_space = value; saveOptions(options); });
     const blank = makeCheck('忽略空行', options.ignore_blank, value => { options.ignore_blank = value; saveOptions(options); });
@@ -274,7 +276,7 @@
         const wrapper = el('div', { class: 'cmp-inline-unified' }); wrapper.innerHTML = window.Diff2Html.html(state.diff.unified_diff || '', { drawFileList: false, outputFormat: 'line-by-line', matching: 'lines', renderNothingWhenEmpty: false }); resultHost.appendChild(wrapper); return;
       }
       const rows = buildAlignedRows(state.diff.lines || [], editorLeft.getValue(), editorRight.getValue(), state.hunks);
-      resultHost.appendChild(createVirtualDiff(rows.filter(row => (!options.onlyDiff && options.mode !== 'changes') || row.status !== 'equal'), state, options.mode, { hunk: applyHunk, line: applyLine, edit: commitLineEdit }));
+      resultHost.appendChild(createVirtualDiff(rows.filter(row => (!options.onlyDiff && effectiveMode !== 'changes') || row.status !== 'equal'), state, effectiveMode, { hunk: applyHunk, line: applyLine, edit: commitLineEdit }));
     }
     function scheduleRecompare() {
       clearTimeout(recompareTimer);
