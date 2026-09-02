@@ -184,20 +184,43 @@ func pickerOwnerHWND() uintptr {
 	return fg
 }
 
-func pickWindowsPath(directory bool, initial string) (string, error) {
+func pickWindowsPath(directory bool, initial string) (out string, err error) {
 	pickerMu.Lock()
 	defer pickerMu.Unlock()
+	defer func() {
+		if rv := recover(); rv != nil {
+			err = fmt.Errorf("pickWindowsPath panic: %v", rv)
+		}
+	}()
 
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-
-	hr, _, _ := procOleInitialize.Call(0)
-	initializedHere := hr == 0
-	if hr != 0 && hr != 1 {
-		return "", fmt.Errorf("OleInitialize 失败: 0x%x", hr)
-	}
-	if initializedHere {
+	// 线程模型：若已通过 winui host 的 UI 线程进入（uiInvoke != nil），则当前
+	// 已是 STA 且已 LockOSThread，无需再次 Lock/OleInitialize，避免破坏 host 的 COM 套间。
+	// 仅当无 host（单测/非 Windows）时，才在当前 goroutine 上初始化 COM。
+	var hr uintptr
+	needLock := uiInvoke == nil
+	if needLock {
+		runtime.LockOSThread()
+		defer runtime.UnlockOSThread()
+		h, _, _ := procOleInitialize.Call(0)
+		hr = h
+		if hr != 0 && hr != 1 {
+			return "", fmt.Errorf("OleInitialize 失败: 0x%x", hr)
+		}
+		// 非 host 路径下，对应的 OleUninitialize 由 defer 在 Unlock 之前调用
+		// 但为避免与 host 的“永不反初始化”策略冲突，仅在 needLock 时才	defer Uninitialize
 		defer procOleUninitialize.Call()
+	} else {
+		// host 线程已初始化，此处 OleInitialize 仅为幂等探针，不增加计数
+		h, _, _ := procOleInitialize.Call(0)
+		hr = h
+		if hr != 0 && hr != 1 {
+			return "", fmt.Errorf("OleInitialize 失败: 0x%x", hr)
+		}
+		// 立即平衡：S_FALSE(1) 表示已初始化，无需保留；S_OK(0) 表示我们新加了一次计数，立即减回
+		// 保持 host 线程的初始化计数不变，避免后续 RichEdit 异常
+		if hr == 0 {
+			procOleUninitialize.Call()
+		}
 	}
 
 	var dlg *iFileOpenDialog

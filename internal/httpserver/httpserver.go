@@ -278,6 +278,16 @@ func (s *Server) cur() *config.Config { return s.cfg.Get() }
 
 // ServeHTTP 入口
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	defer func() {
+		if rv := recover(); rv != nil {
+			log.Printf("http panic recovered: path=%s err=%v", r.URL.Path, rv)
+			// 尽力返回 500，若头部已发送则 writeErr 会静默失败（不再次 panic）
+			func() {
+				defer func() { _ = recover() }()
+				writeErr(w, 500, fmt.Errorf("服务内部错误: %v", rv))
+			}()
+		}
+	}()
 	// 简单防跨域：只允许同源
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Referrer-Policy", "no-referrer")

@@ -204,6 +204,11 @@ type choosePathReq struct {
 }
 
 func (s *Server) handleChooseFile(w http.ResponseWriter, r *http.Request) {
+	defer func() {
+		if rv := recover(); rv != nil {
+			writeErr(w, 500, fmt.Errorf("文件选择器异常: %v", rv))
+		}
+	}()
 	if r.Method != http.MethodPost {
 		writeErr(w, 405, errors.New("仅支持 POST"))
 		return
@@ -224,6 +229,11 @@ func (s *Server) handleChooseFile(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleChooseDir(w http.ResponseWriter, r *http.Request) {
+	defer func() {
+		if rv := recover(); rv != nil {
+			writeErr(w, 500, fmt.Errorf("文件夹选择器异常: %v", rv))
+		}
+	}()
 	if r.Method != http.MethodPost {
 		writeErr(w, 405, errors.New("仅支持 POST"))
 		return

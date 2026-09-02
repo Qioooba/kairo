@@ -632,6 +632,7 @@ func databaseSourceView(source dbconsole.Source, hasPassword bool, user *authUse
 // databaseSafeError removes every representation of the stored secret before
 // a driver error reaches the browser or audit log. Some drivers include a DSN
 // in connection errors, and a DSN can contain a URL-escaped password.
+// 额外将常见 i/o timeout 翻译为用户友好文案，避免直接暴露 read tcp ... 细节。
 func (s *Server) databaseSafeError(source dbconsole.Source, err error) error {
 	if err == nil {
 		return nil
@@ -643,6 +644,14 @@ func (s *Server) databaseSafeError(source dbconsole.Source, err error) error {
 				message = strings.ReplaceAll(message, value, "[REDACTED]")
 			}
 		}
+	}
+	// 将底层网络超时翻译为友好提示，隐藏内部 IP 细节
+	lower := strings.ToLower(message)
+	if strings.Contains(lower, "i/o timeout") || strings.Contains(lower, "io timeout") || strings.Contains(lower, "context deadline exceeded") {
+		return errors.New("连接数据库超时（i/o timeout），请检查数据库地址、端口与网络连通性，或稍后重试")
+	}
+	if strings.Contains(lower, "connection refused") || strings.Contains(lower, "connection reset") {
+		return errors.New("无法连接数据库（connection refused），请检查数据库是否启动及端口是否正确")
 	}
 	return errors.New(message)
 }

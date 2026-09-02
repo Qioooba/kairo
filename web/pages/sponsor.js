@@ -542,13 +542,42 @@
     //   - 同事看到了就知道内网地址 + serviceID, 等于白送
     //   - 真实错误细节走 console.warn 给开发者排查, 后端 audit log 也有 (handlers_sponsor.go
     //     写 audit "sponsor.leaderboard.error" + err.Error()), 页面只显示一句搞笑话
-    function loadHonorList() {
+    // v0.19 修复"第一次运行排行榜加载不出来"：
+    //   Java 网关冷启动时首次请求常超时（>10s），用户等到的只有失败文案。
+    //   后端启动已加预热（WarmSponsorCache 0s/4s/12s 三次），前端这里再兜一层自动重试：
+    //   失败后延迟 2s / 5s 各重试一次（共 3 次尝试），全部失败才显示错误文案。
+    //   手动点「再试一次」会重置计数。api 引用每次动态取，避免脚本加载时序导致未初始化。
+    var honorAttempts = 0;
+    var HONOR_MAX_ATTEMPTS = 3;
+
+    function scheduleHonorRetry() {
+      var delay = honorAttempts === 1 ? 2000 : 5000;
+      setTimeout(function () {
+        // 页面已切走（容器被 navigate 清掉）就不再重试
+        if (!honorList.isConnected) return;
+        loadHonorList(false);
+      }, delay);
+    }
+
+    function getApi() {
+      return (window.Kairo && Kairo.api && Kairo.api.api) || api;
+    }
+
+    function loadHonorList(manual) {
+      if (manual) honorAttempts = 0;
+      honorAttempts++;
       // 先重置回 loading 占位 (cloneNode 是因为 loadingBox 已经被 append 过,
       // 直接重用可能被 detach, clone 出一个干净的)
       honorList.innerHTML = '';
-      honorList.appendChild(loadingBox.cloneNode(true));
+      var box = loadingBox.cloneNode(true);
+      if (honorAttempts > 1) {
+        var hintDivs = box.querySelectorAll('div');
+        var hintText = hintDivs[hintDivs.length - 1];
+        if (hintText) hintText.textContent = '天命服务器还在热身，正在重试（第 ' + honorAttempts + ' 次）…';
+      }
+      honorList.appendChild(box);
 
-      api('GET', '/api/sponsor/leaderboard').then(function (resp) {
+      getApi()('GET', '/api/sponsor/leaderboard').then(function (resp) {
         var entries = null;
         var loadError = null;
         if (resp && resp.ok && Array.isArray(resp.entries)) {
@@ -559,11 +588,19 @@
           // eslint-disable-next-line no-console
           console.warn('[sponsor] leaderboard load failed:', loadError);
         }
+        if (loadError && honorAttempts < HONOR_MAX_ATTEMPTS && honorList.isConnected) {
+          scheduleHonorRetry();
+          return;
+        }
         renderHonorList(entries, loadError);
       }).catch(function (e) {
         // 网络错 / 5xx, 同样 console.warn 不反显
         // eslint-disable-next-line no-console
         console.warn('[sponsor] leaderboard request error:', e && e.message);
+        if (honorAttempts < HONOR_MAX_ATTEMPTS && honorList.isConnected) {
+          scheduleHonorRetry();
+          return;
+        }
         renderHonorList(null, e && e.message ? e.message : '网络错误');
       });
     }
@@ -600,7 +637,7 @@
             class: 'btn',
             style: 'padding:6px 18px;',
             text: '再试一次',
-            onclick: loadHonorList
+            onclick: function () { loadHonorList(true); }
           })
         ]));
       } else if (!entries || entries.length === 0) {

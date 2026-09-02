@@ -79,6 +79,7 @@
   --tail-out-bg: #0a0e14;
   --tail-out-fg: #b8d4a3;
   --code-inline-bg: #0a0e14;
+  --sql-sel-bg: rgba(79,140,255,0.32);
 
   /* 滚动条（跨主题一致可见） */
   --scrollbar-w: 12px;
@@ -222,6 +223,7 @@
   --tail-out-bg: #f3f4f6;
   --tail-out-fg: #1f2937;
   --code-inline-bg: #f1f5f9;
+  --sql-sel-bg: rgba(37,99,235,0.18);
 
   /* 滚动条（浅主题：深灰滑块在浅灰轨道上，保证可见） */
   --scrollbar-w: 12px;
@@ -1928,7 +1930,9 @@ input[type="datetime-local"] {
   --error: #b04545;
   --info: #4a7e8a;
   --tail-out-bg: #f6f9ef;
+  --tail-out-fg: #1f2a1f;
   --code-inline-bg: #e8efdd;
+  --sql-sel-bg: rgba(63,122,63,0.28);
 
   /* 滚动条（绿色护眼主题：深绿灰滑块在浅绿轨道上） */
   --scrollbar-w: 12px;
@@ -2014,7 +2018,9 @@ input[type="datetime-local"] {
   --error: #ff5555;
   --info: #88ccff;
   --tail-out-bg: #0a0a0a;
+  --tail-out-fg: #ffff00;
   --code-inline-bg: #1a1a1a;
+  --sql-sel-bg: rgba(0,255,255,0.35);
 
   /* 滚动条（高对比主题：亮青色滑块在纯黑底上，最醒目） */
   --scrollbar-w: 14px;
@@ -2140,8 +2146,9 @@ input[type="datetime-local"] {
   --tier-srv-color: var(--success);
   --tier-dir-color: var(--text-mute);
 
-  --tail-out-bg: #080a09;
-  --tail-out-fg: #b8c4be;
+  --tail-out-bg: #e8efe9;
+  --tail-out-fg: #1a2320;
+  --sql-sel-bg: rgba(74,122,106,0.28);
   /* v0.11：xianxia 是浅色主题（--text=#1a2320 深色），--code-inline-bg 必须用浅色，
      之前抄了 dark 的 #151a18（深色）→ 黑底黑字，inline code 三个块全黑看不清。
      改成 bg-1 的浅绿（#e8efe9）配 .code-inline 默认 color:var(--text) 深色字，可读。 */
@@ -2759,7 +2766,10 @@ input.cmp-folder-path { min-width: 0; width: 100%; }
 
 .cmp-source-overlay {
   position: fixed;
-  inset: 0;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
   z-index: 10020;
   display: flex;
   align-items: center;
@@ -4250,7 +4260,10 @@ input.cmp-folder-path { min-width: 0; width: 100%; }
 /* v1.4：SFTP 面板拖拽上传提示层（dragenter 时显示，drop/dragleave 后移除） */
 .sftp-drop-hint {
   position: absolute;
-  inset: 0;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
   z-index: 20;
   display: flex;
   align-items: center;
@@ -6334,15 +6347,26 @@ select.editor-input { padding-right: 32px; background-image: var(--field-chevron
 .reminders-list .empty-state .empty-desc { font-size: 12.5px; color: var(--text-mute); }
 
 /* ===== modal（reminders 编辑对话框用） ===== */
+/* v0.18：Chrome 70 不支持 inset 简写（Chrome 87+），导致弹窗停留在左上角，
+   改用 top/right/bottom/left 四向展开（问题4）。
+   v0.19：增加 margin:auto 回退 + -webkit- 前缀，确保极端情况下仍居中。 */
 .modal-overlay {
   position: fixed;
-  inset: 0;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
   background: rgba(0, 0, 0, 0.6);
+  display: -webkit-flex;
   display: flex;
+  -webkit-align-items: center;
   align-items: center;
+  -webkit-justify-content: center;
   justify-content: center;
   z-index: var(--z-modal);
   padding: 20px;
+  /* 回退：老 WebKit 可能 flex 失效，卡片用 margin:auto 仍能居中 */
+  text-align: center;
 }
 .modal-card {
   background: var(--bg-1);
@@ -6351,6 +6375,9 @@ select.editor-input { padding-right: 32px; background-image: var(--field-chevron
   padding: 20px 22px;
   width: 480px;
   max-width: 100%;
+  max-width: min(96vw, 480px);
+  margin: auto;
+  text-align: left;
   box-shadow: var(--shadow);
   display: flex;
   flex-direction: column;
@@ -6495,12 +6522,14 @@ body.has-open-overlay { overflow: hidden; }
   display: flex;
   flex-direction: column;
   min-height: 190px;
-  overflow: hidden;
   color: #2d271d;
   background: #fff2b8;
   border: 1px solid rgba(86, 65, 25, .2);
   border-radius: 11px;
   box-shadow: 0 7px 18px rgba(0, 0, 0, .16);
+  position: relative;
+  overflow: visible;
+  isolation: isolate;
 }
 .notes-row.note-color-blue { background: #d9efff; color: #17344b; }
 .notes-row.note-color-green { background: #dcf5df; color: #193a23; }
@@ -6518,6 +6547,7 @@ body.has-open-overlay { overflow: hidden; }
   color: inherit;
   background: transparent;
   border: 0;
+  border-radius: 10px;
   cursor: pointer;
 }
 .notes-row-main:hover { background: rgba(255,255,255,.18); }
@@ -6525,7 +6555,7 @@ body.has-open-overlay { overflow: hidden; }
 .notes-row-title { font-size: 15px; font-weight: 650; overflow-wrap: anywhere; }
 .notes-row-preview { flex: 1; min-height: 62px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; line-height: 1.55; opacity: .82; }
 .notes-row-meta { font-size: 11px; opacity: .78; }
-.notes-row-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 9px 12px 12px; border-top: 1px solid rgba(55,45,25,.1); }
+.notes-row-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 9px 12px 12px; border-top: 1px solid rgba(55,45,25,.1); position: relative; }
 .notes-row .btn { color: inherit; background: rgba(255,255,255,.45); border-color: rgba(50,45,35,.2); }
 .notes-row .btn:hover { color: inherit; background: rgba(255,255,255,.72); }
 .notes-row .btn.btn-danger {
@@ -6538,11 +6568,12 @@ body.has-open-overlay { overflow: hidden; }
   background: #dc2626;
   border-color: #dc2626;
 }
-.notes-more { position: relative; }
+.notes-more { position: relative; display: inline-flex; align-items: stretch; }
 .notes-more > summary {
   list-style: none;
   display: inline-flex; align-items: center; justify-content: center;
-  min-height: 30px; padding: 4px 10px; font-size: 12px;
+  min-height: 30px; padding: 4px 10px; font-size: 12px; line-height: 1; height: 30px;
+  box-sizing: border-box;
   border: 1px solid rgba(50,45,35,.2); border-radius: 6px;
   background: rgba(255,255,255,.45); cursor: pointer; color: inherit;
 }
@@ -6552,17 +6583,20 @@ body.has-open-overlay { overflow: hidden; }
   display: none;
   position: absolute;
   right: 0;
-  bottom: calc(100% + 6px);
-  min-width: 138px;
+  top: calc(100% + 6px);
+  min-width: 148px;
   padding: 6px;
   flex-direction: column;
   gap: 4px;
-  background: rgba(255,255,255,.96);
+  background: rgba(255,255,255,.98);
   border: 1px solid rgba(50,45,35,.2);
   border-radius: 8px;
   box-shadow: 0 10px 24px rgba(0,0,0,.18);
-  z-index: 6;
+  z-index: 60;
 }
+/* when opened, elevate parent card above siblings so menu not clipped */
+.notes-row:has(.notes-more[open]) { z-index: 20; }
+.notes-more[open] { z-index: 30; }
 .notes-more[open] > .notes-more-menu { display: flex; }
 .notes-more-menu .btn { width: 100%; justify-content: flex-start; }
 .notes-row.editing { min-height: 270px; position: relative; }
@@ -7007,9 +7041,12 @@ body.has-open-overlay { overflow: hidden; }
 .db-sql-editor { display: block; width: 100%; min-height: 190px; resize: vertical; border: 0; border-radius: 0; padding: 13px 15px; background: transparent; color: transparent; -webkit-text-fill-color: transparent; caret-color: var(--tail-out-fg); font: 13px/1.6 var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace); tab-size: 2; box-shadow: none; position: relative; z-index: 1; white-space: pre; overflow: auto; }
 .db-sql-editor:hover, .db-sql-editor:focus { background: transparent; border-color: transparent; box-shadow: none; }
 .db-sql-editor::placeholder { color: var(--text-mute); -webkit-text-fill-color: var(--text-mute); }
-.db-sql-editor::selection { background: color-mix(in srgb, var(--primary) 32%, transparent); color: transparent; }
+/* v0.18（问题10）：Chrome 70 不支持 color-mix/inset，选中底色会整个失效
+   （只剩 color:transparent → 选中完全看不见）。改用主题变量 --sql-sel-bg
+   （各主题均已定义）+ 四向展开定位。 */
+.db-sql-editor::selection { background: var(--sql-sel-bg, rgba(79,140,255,.32)); color: transparent; }
 .db-sql-shell { position: relative; min-height: 190px; background: var(--tail-out-bg); }
-.db-sql-highlight { position: absolute; inset: 0; margin: 0; padding: 13px 15px; overflow: hidden; white-space: pre; word-wrap: normal; pointer-events: none; font: 13px/1.6 var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace); tab-size: 2; color: var(--tail-out-fg); }
+.db-sql-highlight { position: absolute; top: 0; left: 0; right: 0; bottom: 0; margin: 0; padding: 13px 15px; overflow: hidden; white-space: pre; word-wrap: normal; pointer-events: none; font: 13px/1.6 var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace); tab-size: 2; color: var(--tail-out-fg); }
 .db-sql-kw { color: var(--primary); font-weight: 650; }
 .db-sql-str { color: var(--success); }
 .db-sql-cmt { color: var(--text-mute); font-style: italic; }
@@ -7326,3 +7363,56 @@ body.has-open-overlay { overflow: hidden; }
   .wsc-preview { grid-template-columns: 1fr; min-height: 240px; }
   .wsc-engine-grid { grid-template-columns: 1fr; }
 }
+
+/* ===== v0.19 数据库工作台与便笺问题集中修复 ===== */
+/* #6 执行按钮 kbd 在浅色主题下对比不足，改用主题变量 */
+.db-editor-bar kbd { background: color-mix(in srgb, var(--text) 12%, var(--bg-1)); color: var(--text-dim); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; font-size: 11px; }
+/* #7 SQL 编辑框强制可缩放，修复某些主题下 resize 失效 */
+.db-sql-editor { resize: vertical !important; overflow: auto !important; min-height: 190px; max-height: 600px; position: relative; z-index: 2; }
+.db-sql-shell { overflow: visible; min-height: 190px; }
+.db-sql-highlight { overflow: hidden; z-index: 1; }
+/* #8 导出/收藏移到右侧，用 flex 自动推开（首个右侧元素加 margin-left:auto 推动后续） */
+.db-editor-bar { justify-content: flex-start; }
+.db-editor-bar .db-editor-bar-right { margin-left: auto; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+#db-export-format { margin-left: auto; }
+#db-export, #db-bookmark, #db-history { margin-left: 0; }
+/* #10 光标选中在 xianxia/light 等浅色主题下更明显，覆盖各主题 */
+.db-sql-editor::selection { background: var(--sql-sel-bg, rgba(79,140,255,.32)) !important; }
+.db-sql-editor::-moz-selection { background: var(--sql-sel-bg, rgba(79,140,255,.32)) !important; }
+/* #14 网格/单行/执行计划页面缩放文字不竖排，强制横排 */
+.db-table th, .db-table td, .db-record-field > button, .db-record-field > pre, .db-plan-text, .db-plan-table th, .db-plan-table td {
+  writing-mode: horizontal-tb !important;
+  text-orientation: mixed !important;
+  word-break: keep-all;
+  white-space: nowrap;
+}
+.db-record-field > pre { white-space: pre-wrap !important; word-break: break-word !important; }
+.db-plan-text { white-space: pre !important; word-break: break-word !important; }
+/* #15 武侠主题下数据库工作台色彩校正：编辑区与表格用浅色，与整体 xianxia 一致 */
+:root[data-theme="xianxia"] .db-sql-shell { background: #f7fbf9; }
+:root[data-theme="xianxia"] .db-sql-highlight { color: #1a2320; }
+:root[data-theme="xianxia"] .db-sql-editor { caret-color: #1a2320; }
+:root[data-theme="xianxia"] .db-table th { background: #d9e4e0; color: #1a2320; }
+:root[data-theme="xianxia"] .db-table td { background: #f7fbf9; }
+:root[data-theme="xianxia"] .db-table .num { background: #d9e4e0; color: #4a5a54; }
+/* #16 选中行高亮在各主题下更明显 */
+.db-table tr.selected td { background: color-mix(in srgb, var(--primary) 22%, var(--bg-1)) !important; font-weight: 600; outline: 1px solid color-mix(in srgb, var(--primary) 35%, transparent); outline-offset: -1px; }
+:root[data-theme="light"] .db-table tr.selected td { background: rgba(37,99,235,0.14) !important; }
+:root[data-theme="green"] .db-table tr.selected td { background: rgba(63,122,63,0.18) !important; }
+:root[data-theme="xianxia"] .db-table tr.selected td { background: rgba(74,122,106,0.20) !important; }
+:root[data-theme="hc"] .db-table tr.selected td { background: rgba(0,255,255,0.25) !important; color: #ffff00; }
+/* #17 单行记录字段名复制按钮更大更易点 */
+.db-record-field > button { min-height: 34px; padding: 6px 12px; cursor: pointer; border-right: 1px solid var(--line); transition: background .12s, color .12s; }
+.db-record-field > button:hover { background: var(--bg-2); color: var(--primary); }
+.db-record-field > button:active { background: color-mix(in srgb, var(--primary) 12%, var(--bg-2)); }
+/* #18 收藏夹网格弹窗样式 */
+.db-bookmark-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; max-height: 420px; overflow: auto; padding: 8px; }
+.db-bookmark-card { display: flex; flex-direction: column; gap: 6px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg-1); cursor: pointer; text-align: left; transition: border-color .15s, background .15s; min-height: 92px; }
+.db-bookmark-card:hover { border-color: var(--primary); background: var(--bg-2); }
+.db-bookmark-card strong { font-size: 12px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.db-bookmark-card pre { margin: 0; font: 11px/1.4 var(--font-mono, ui-monospace, monospace); color: var(--text-dim); max-height: 56px; overflow: hidden; text-overflow: ellipsis; white-space: pre-wrap; word-break: break-word; }
+.db-bookmark-card small { color: var(--text-mute); font-size: 10px; }
+.db-bookmark-overlay { position: fixed; top:0; left:0; right:0; bottom:0; background: rgba(0,0,0,0.45); display: flex; align-items: center; justify-content: center; z-index: var(--z-modal); padding: 20px; }
+.db-bookmark-modal { background: var(--bg-1); border: 1px solid var(--line); border-radius: 12px; width: min(720px, 96vw); max-height: 80vh; display: flex; flex-direction: column; box-shadow: var(--shadow); }
+.db-bookmark-modal-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px; border-bottom: 1px solid var(--line); font-weight: 600; }
+.db-bookmark-modal-body { flex: 1; overflow: auto; padding: 12px; }

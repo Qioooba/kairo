@@ -4,6 +4,7 @@ package winui
 
 import (
 	"errors"
+	"log"
 	"runtime"
 	"sync"
 	"syscall"
@@ -25,18 +26,21 @@ type hostTask struct {
 }
 
 type windowsHost struct {
-	mu      sync.Mutex
-	hwnd    uintptr
-	queue   []hostTask
-	started bool
-	stopped bool
-	ready   chan error
-	done    chan struct{}
+	mu       sync.Mutex
+	hwnd     uintptr
+	queue    []hostTask
+	started  bool
+	stopped  bool
+	draining bool     // UI 线程正在 drain 任务（含模态对话框期间），防止消息泵重入
+	threadID uint32   // UI 线程 OS 线程 ID，用于 Invoke/Post 在 UI 线程内直接执行
+	ready    chan error
+	done     chan struct{}
 }
 
 var (
 	user32                            = windows.NewLazySystemDLL("user32.dll")
 	kernel32                          = windows.NewLazySystemDLL("kernel32.dll")
+	ole32                             = windows.NewLazySystemDLL("ole32.dll")
 	procRegisterClassExW              = user32.NewProc("RegisterClassExW")
 	procCreateWindowExW               = user32.NewProc("CreateWindowExW")
 	procDefWindowProcW                = user32.NewProc("DefWindowProcW")
@@ -48,6 +52,8 @@ var (
 	procPostQuitMessage               = user32.NewProc("PostQuitMessage")
 	procGetModuleHandleW              = kernel32.NewProc("GetModuleHandleW")
 	procSetProcessDpiAwarenessContext = user32.NewProc("SetProcessDpiAwarenessContext")
+	procGetCurrentThreadId            = kernel32.NewProc("GetCurrentThreadId")
+	procOleInitialize                 = ole32.NewProc("OleInitialize")
 
 	hostsMu             sync.RWMutex
 	hosts               = map[uintptr]*windowsHost{}
@@ -106,6 +112,18 @@ func (n *windowsHost) run() {
 
 	// PER_MONITOR_AWARE_V2. This target intentionally requires Windows 10.
 	procSetProcessDpiAwarenessContext.Call(^uintptr(3))
+
+	// v0.18（问题5/19 修复）：UI 线程启动时初始化一次 OLE，永不反初始化。
+	// 该线程除了派发任务，还承载桌面便笺（Msftedit/RichEdit 内部依赖 OLE）和
+	// IFileOpenDialog 文件选择框。之前选择框在关闭后调用 OleUninitialize，
+	// 会把整个线程的 OLE apartment 拆掉，同线程的 RichEdit 窗口在处理下一条
+	// 消息时访问已释放的 COM 状态 → 进程闪退。COM 规范：长生命周期线程只
+	// 初始化、不反初始化。S_FALSE(1) 表示已初始化，同样可用。
+	if hr, _, _ := procOleInitialize.Call(0); hr != 0 && hr != 1 {
+		// RPC_E_CHANGED_MODE 等失败不致命：选择框内部会再尝试初始化。
+		log.Printf("winui: UI 线程 OleInitialize 返回 0x%x（继续运行）", hr)
+	}
+
 	instance, _, _ := procGetModuleHandleW.Call(0)
 	className, _ := windows.UTF16PtrFromString(hostClass)
 	wc := wndClassEx{CbSize: uint32(unsafe.Sizeof(wndClassEx{})), LpfnWndProc: hostWndProcCallback, HInstance: instance, LpszClassName: className}
@@ -120,8 +138,10 @@ func (n *windowsHost) run() {
 		n.ready <- createErr
 		return
 	}
+	tid, _, _ := procGetCurrentThreadId.Call()
 	n.mu.Lock()
 	n.hwnd = hwnd
+	n.threadID = uint32(tid)
 	n.mu.Unlock()
 	hostsMu.Lock()
 	hosts[hwnd] = n
@@ -175,6 +195,23 @@ func hostWndProc(hwnd, msg, w, l uintptr) uintptr {
 }
 
 func (n *windowsHost) drain() {
+	// v0.18 重入保护：模态对话框（文件选择框）的消息泵会再次派发
+	// wmAppDispatch，若重入 drain，新任务会在模态框内交错执行，甚至
+	// 死锁（如第二个选择框等 pickerMu）。重入时直接返回，任务留给
+	// 外层 drain 循环在当前任务（对话框）结束后继续处理。
+	n.mu.Lock()
+	if n.draining {
+		n.mu.Unlock()
+		return
+	}
+	n.draining = true
+	n.mu.Unlock()
+	defer func() {
+		n.mu.Lock()
+		n.draining = false
+		n.mu.Unlock()
+	}()
+
 	for {
 		n.mu.Lock()
 		if len(n.queue) == 0 {
@@ -205,9 +242,29 @@ func (h *Host) enqueue(task hostTask) bool {
 	return true
 }
 
+// onUIThread 报告当前 goroutine 是否已绑定在 UI 线程上
+//（drain 里的任务、模态对话框消息泵派发的回调都在 UI 线程执行）。
+func (h *Host) onUIThread() bool {
+	n := h.native()
+	n.mu.Lock()
+	tid := n.threadID
+	n.mu.Unlock()
+	if tid == 0 {
+		return false
+	}
+	cur, _, _ := procGetCurrentThreadId.Call()
+	return uint32(cur) == tid
+}
+
 // Post queues fn on the UI thread.
 func (h *Host) Post(fn func()) bool {
 	if fn == nil {
+		return true
+	}
+	// 已在 UI 线程上（如便笺窗口过程/对话框回调里）→ 直接执行，
+	// 否则入队后等自己的消息，必然死锁。
+	if h.onUIThread() {
+		fn()
 		return true
 	}
 	return h.enqueue(hostTask{fn: func() error { fn(); return nil }})
@@ -217,6 +274,9 @@ func (h *Host) Post(fn func()) bool {
 func (h *Host) Invoke(fn func() error) error {
 	if fn == nil {
 		return nil
+	}
+	if h.onUIThread() {
+		return fn()
 	}
 	done := make(chan error, 1)
 	if !h.enqueue(hostTask{fn: fn, done: done}) {

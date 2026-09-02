@@ -176,8 +176,11 @@
           }, 'btn-danger')
         ]));
         more.addEventListener('toggle', function () {
-          if (!more.open) return;
+          if (!more.open) { article.style.zIndex = ''; return; }
           list.querySelectorAll('.notes-more[open]').forEach(function (d) { if (d !== more) d.removeAttribute('open'); });
+          // Chrome <105 no :has, JS fallback to elevate card above siblings
+          article.style.zIndex = '20';
+          list.querySelectorAll('.notes-row').forEach(function (r) { if (r !== article) r.style.zIndex = ''; });
         });
         const actions = el('div', { class: 'notes-row-actions' }, [
           actionBtn(n.floating ? '收起悬浮' : '页面悬浮', function () {
@@ -266,6 +269,7 @@
       function closeMoreMenus(ev) {
         if (ev.target && ev.target.closest && ev.target.closest('.notes-more')) return;
         list.querySelectorAll('.notes-more[open]').forEach(function (d) { d.removeAttribute('open'); });
+        list.querySelectorAll('.notes-row').forEach(function (r) { r.style.zIndex = ''; });
       }
       document.addEventListener('click', closeMoreMenus);
       const unsubNotes = Kairo.notes.subscribe(draw);

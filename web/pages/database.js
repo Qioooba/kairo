@@ -45,12 +45,20 @@
   function q(id) { return document.getElementById(id); }
   function kindLabel(kind) { return kind === 'oracle' ? 'Oracle' : kind === 'mysql' ? 'MySQL' : 'Redis'; }
   function sess() { return state.sessions.find(function (s) { return s.id === state.activeId; }) || state.sessions[0] || null; }
+  function effectiveSource() {
+    const s = sess();
+    if (s && s.sourceId) {
+      const found = state.sources.find(function (x) { return x.id === s.sourceId; });
+      if (found) return found;
+    }
+    return state.source;
+  }
   function createSession(sql) {
     return {
       id: ++tabSeq, sql: sql || '', rows: [], columns: [], summary: null, lastError: null,
       lastSQL: '', lastMaxRows: 0, resultMode: 'grid', selectedRow: 0, localFilter: '',
       hiddenColumns: new Set(), sort: null, plan: [], gridReady: false, controller: null,
-      runSeq: 0, status: '就绪'
+      runSeq: 0, status: '就绪', sourceId: state.source ? state.source.id : ''
     };
   }
   function bindSession(s) {
@@ -70,6 +78,7 @@
       s.sort = state.sort; s.lastError = state.lastError; s.plan = state.plan;
       s.rows = state.rows; s.columns = state.columns; s.summary = state.summary;
       s.lastSQL = state.lastSQL; s.lastMaxRows = state.lastMaxRows; s.controller = state.controller;
+      s.sourceId = state.source ? state.source.id : s.sourceId;
     }
   }
   function tabTitle(s) {
@@ -98,7 +107,10 @@
     const host = q('db-sql-tabs');
     if (!host) return;
     host.innerHTML = state.sessions.map(function (s) {
-      return '<button type="button" class="db-editor-tab' + (s.id === state.activeId ? ' active' : '') + (s.controller ? ' running' : '') + '" data-tab="' + s.id + '" title="' + h(s.sql || tabTitle(s)) + '"><span class="db-tab-dot" aria-hidden="true"></span><span class="db-tab-name">' + h(tabTitle(s)) + '</span>' + (state.sessions.length > 1 ? '<span class="db-tab-close" data-close="' + s.id + '" title="关闭页签">×</span>' : '') + '</button>';
+      const src = s.sourceId ? (state.sources.find(function (x) { return x.id === s.sourceId; }) || {}) : {};
+      const srcName = src.name ? ' [' + src.name + ']' : '';
+      const tip = h((s.sourceId ? (src.name || s.sourceId) + ' · ' : '') + (s.sql || tabTitle(s)));
+      return '<button type="button" class="db-editor-tab' + (s.id === state.activeId ? ' active' : '') + (s.controller ? ' running' : '') + '" data-tab="' + s.id + '" title="' + tip + '"><span class="db-tab-dot" aria-hidden="true"></span><span class="db-tab-name">' + h(tabTitle(s)) + h(srcName) + '</span>' + (state.sessions.length > 1 ? '<span class="db-tab-close" data-close="' + s.id + '" title="关闭页签">×</span>' : '') + '</button>';
     }).join('');
     host.querySelectorAll('[data-tab]').forEach(function (btn) {
       btn.onclick = function (e) {
@@ -127,9 +139,24 @@
     const s = state.sessions.find(function (x) { return x.id === id; });
     if (!s) return;
     cancelGridPaint();
+    // #13 恢复标签对应的数据源
+    if (s.sourceId && s.sourceId !== (state.source && state.source.id)) {
+      const found = state.sources.find(function (x) { return x.id === s.sourceId; });
+      if (found) {
+        state.source = found;
+        const sel = q('db-source');
+        if (sel) sel.value = found.id;
+        q('db-source-badge').textContent = kindLabel(found.kind);
+        // 切换数据源后刷新元数据与提示
+        loadSchemas();
+        loadColumnWidths();
+      }
+    }
     state.activeId = id;
     bindSession(s);
     restoreSessionChrome(s);
+    // 同步标签栏的源指示（标题提示含源名）
+    renderTabs();
   }
   function closeSession(id) {
     if (state.sessions.length <= 1) return;
@@ -288,7 +315,16 @@
     q('db-source').onchange = function () {
       state.source = state.sources.find(s => s.id === this.value) || null;
       if (state.source) { persisted.last_source = state.source.id; savePersisted(); }
-      renderWorkspace();
+      const cur = sess();
+      if (cur) cur.sourceId = state.source ? state.source.id : '';
+      renderTabs();
+      // #13：切换数据源后不清空所有页签，仅刷新当前工作区元数据
+      if (state.sessions.length && state.sessions[0]) {
+        loadColumnWidths();
+        loadSchemas();
+      } else {
+        renderWorkspace();
+      }
     };
     q('db-test').onclick = testConnection;
     q('db-settings').onclick = openSettings;
@@ -440,6 +476,20 @@
       const item = loadBookmarks()[Number(this.value)];
       if (item) { q('db-sql').value = item.sql; syncSQLEditor(); }
     };
+    // #18 九宫格入口：动态插入，避免改动巨大 host.innerHTML 字符串
+    (function () {
+      const sel = q('db-bookmark');
+      if (!sel) return;
+      if (document.getElementById('db-bookmark-grid')) return;
+      const gridBtn = document.createElement('button');
+      gridBtn.type = 'button';
+      gridBtn.id = 'db-bookmark-grid';
+      gridBtn.className = 'btn btn-xs';
+      gridBtn.title = '九宫格查看收藏（多条时更清晰）';
+      gridBtn.textContent = '九宫格';
+      gridBtn.onclick = openBookmarkGrid;
+      sel.parentNode.insertBefore(gridBtn, sel.nextSibling);
+    })();
     q('db-copy-columns').onclick = copyVisibleColumnNames;
     q('db-sql').onkeydown = handleEditorKeydown;
     bindSQLEditor();
@@ -588,15 +638,17 @@
   }
 
   function quoteIdentifier(v) {
-    const quote = state.source.kind === 'mysql' ? '`' : '"';
+    const src = effectiveSource();
+    const quote = src && src.kind === 'mysql' ? '`' : '"';
     return quote + String(v).replaceAll(quote, quote + quote) + quote;
   }
   function insertObjectSQL(schema, object, type) {
     const name = quoteIdentifier(schema) + '.' + quoteIdentifier(object);
     const upper = String(type).toUpperCase();
+    const srcKind = effectiveSource() ? effectiveSource().kind : (state.source ? state.source.kind : 'oracle');
     let sql = 'SELECT *\nFROM ' + name;
-    if (upper === 'FUNCTION') sql = state.source.kind === 'oracle' ? 'SELECT ' + name + '() AS result FROM DUAL' : 'SELECT ' + name + '() AS result';
-    else if (upper === 'PROCEDURE' || upper === 'PACKAGE') sql = state.source.kind === 'oracle' ? 'BEGIN\n  ' + name + '();\nEND;' : 'CALL ' + name + '();';
+    if (upper === 'FUNCTION') sql = srcKind === 'oracle' ? 'SELECT ' + name + '() AS result FROM DUAL' : 'SELECT ' + name + '() AS result';
+    else if (upper === 'PROCEDURE' || upper === 'PACKAGE') sql = srcKind === 'oracle' ? 'BEGIN\n  ' + name + '();\nEND;' : 'CALL ' + name + '();';
     else if (upper === 'TRIGGER') sql = '-- Trigger: ' + name;
     const e = q('db-sql'); e.value = sql; e.focus(); syncSQLEditor();
   }
@@ -896,8 +948,11 @@
         newline = true;
         return;
       }
-      const spacedOp = tok.type === 'punct' && /^(=|<>|!=|<=|>=)$/.test(tok.value);
-      if (!newline && (tok.type !== 'punct' || spacedOp)) out += ' ';
+      // 修复 #9：* 与运算符前后空格。原先只有 = 等四个算子会加空格，导致 "SELECT*" 粘连；
+      // 扩大到所有常见算子，且 * 需空格，括号/逗号等仍不加前空格，且 '(' 后不加空格
+      const spacedOp = tok.type === 'punct' && /^[=<>!+\-*\/%]+$/.test(tok.value);
+      const noSpaceBefore = tok.type === 'punct' && /^[),.;]$/.test(tok.value);
+      if (!newline && !noSpaceBefore && !out.endsWith('(') && !out.endsWith('[') && !out.endsWith('.') && (tok.type !== 'punct' || spacedOp)) out += ' ';
       out += tok.type === 'kw' ? tok.value.toUpperCase() : tok.value;
       newline = tok.value === ';';
       if (tok.value === ';') { out += '\n'; newline = true; }
@@ -1032,8 +1087,9 @@
       ? await Kairo.overlays.prompt({ title: '收藏 SQL 查询', label: '请输入收藏名称：', defaultValue: fallback })
       : (window.prompt('收藏名称', fallback) || '').trim();
     if (!name) return;
+    const eff = effectiveSource();
     const items = loadBookmarks().filter(function (x) { return x.name !== name; });
-    items.unshift({ name: name.slice(0, 80), sql: sql, source_id: state.source && state.source.id || '', updated_at: new Date().toISOString() });
+    items.unshift({ name: name.slice(0, 80), sql: sql, source_id: eff && eff.id || '', updated_at: new Date().toISOString() });
     persisted.bookmarks = items.slice(0, BOOKMARK_LIMIT);
     savePersisted();
     refreshBookmarkSelect();
@@ -1049,6 +1105,69 @@
     savePersisted();
     refreshBookmarkSelect();
     toast(removed ? '已删除收藏 “' + removed.name + '”' : '收藏已删除', 'ok');
+  }
+  function openBookmarkGrid() {
+    const items = loadBookmarks();
+    if (!items.length) return toast('收藏夹为空，先收藏几条 SQL', 'warn');
+    const grid = el('div', { class: 'db-bookmark-grid' });
+    items.forEach(function (item, idx) {
+      const card = el('div', { class: 'db-bookmark-card', tabindex: '0', role: 'button', title: '点击载入，右键删除' });
+      card.appendChild(el('strong', { text: item.name }));
+      card.appendChild(el('pre', { text: item.sql.slice(0, 200) }));
+      const meta = el('small', { text: (item.source_id ? (state.sources.find(function (s) { return s.id === item.source_id; }) || {}).name || item.source_id : '通用') + ' · ' + (item.updated_at ? new Date(item.updated_at).toLocaleDateString() : '') });
+      card.appendChild(meta);
+      card.onclick = function () {
+        q('db-sql').value = item.sql;
+        syncSQLEditor();
+        // 同步源至收藏的源（若存在）
+        if (item.source_id) {
+          const src = state.sources.find(function (s) { return s.id === item.source_id; });
+          if (src) {
+            state.source = src;
+            const sel = q('db-source');
+            if (sel) sel.value = src.id;
+            q('db-source-badge').textContent = kindLabel(src.kind);
+            const cur = sess();
+            if (cur) cur.sourceId = src.id;
+            renderTabs();
+          }
+        }
+        modal.close();
+        toast('已载入收藏 “' + item.name + '”', 'ok');
+      };
+      card.onkeydown = function (e) { if (e.key === 'Enter') card.onclick(); };
+      card.oncontextmenu = function (e) {
+        e.preventDefault();
+        if (confirm('删除收藏 “' + item.name + '”？')) {
+          const cur = loadBookmarks();
+          cur.splice(idx, 1);
+          persisted.bookmarks = cur;
+          savePersisted();
+          refreshBookmarkSelect();
+          card.remove();
+          if (!cur.length) modal.close();
+          toast('已删除', 'ok');
+        }
+      };
+      grid.appendChild(card);
+    });
+    const body = el('div', { class: 'db-bookmark-modal-body' }, [grid]);
+    const head = el('div', { class: 'db-bookmark-modal-head' }, [
+      el('span', { text: '收藏夹 · 九宫格（点击载入，右键删除）' }),
+      el('button', { class: 'btn btn-xs', text: '关闭', onclick: function () { modal.close(); } })
+    ]);
+    const wrap = el('div', { class: 'db-bookmark-modal' }, [head, body]);
+    const overlay = el('div', { class: 'db-bookmark-overlay' }, [wrap]);
+    overlay.onclick = function (e) { if (e.target === overlay) modal.close(); };
+    const modal = { close: function () { overlay.remove(); document.body.classList.remove('has-open-overlay'); } };
+    document.body.appendChild(overlay);
+    document.body.classList.add('has-open-overlay');
+    // 也走 overlays 的栈管理，复用 ESC 关闭
+    if (Kairo.overlays && Kairo.overlays.modal) {
+      // 用原生 overlay 的 ESC 处理：监听一次
+      const esc = function (e) { if (e.key === 'Escape') { modal.close(); document.removeEventListener('keydown', esc, true); } };
+      document.addEventListener('keydown', esc, true);
+    }
   }
   function editorSQL() {
     const box = q('db-sql');
@@ -1099,8 +1218,10 @@
     s.controller = new AbortController();
     state.controller = s.controller;
     refreshActiveQueryUI(s);
+    const effSrc = effectiveSource();
+    if (!effSrc) return showQueryError('未选择数据源', '请先在顶部选择数据源。');
     try {
-      const response = await fetch('/api/database/query', { method: 'POST', credentials: 'same-origin', signal: s.controller.signal, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ source_id: state.source.id, sql: sql, max_rows: maxRows }) });
+      const response = await fetch('/api/database/query', { method: 'POST', credentials: 'same-origin', signal: s.controller.signal, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ source_id: effSrc.id, sql: sql, max_rows: maxRows }) });
       if (!response.ok) {
         const body = await response.json().catch(() => ({}));
         throw new Error(body.error || 'HTTP ' + response.status);
@@ -1146,8 +1267,10 @@
     hideQueryMessage();
     if (s) s.status = '分析计划…';
     if (q('db-query-status')) q('db-query-status').textContent = '分析计划…';
+    const effSrc2 = effectiveSource();
+    if (!effSrc2) return showQueryError('未选择数据源', '请先在顶部选择数据源。');
     try {
-      const data = await api('POST', '/api/database/explain', { source_id: state.source.id, sql: sql });
+      const data = await api('POST', '/api/database/explain', { source_id: effSrc2.id, sql: sql });
       if (s) { s.plan = data.plan || []; s.status = '执行计划 ' + s.plan.length + ' 行'; }
       state.plan = data.plan || [];
       setResultMode('plan');
@@ -1287,6 +1410,26 @@
     grid.innerHTML = '<div class="db-table-scroll"><table class="table db-table"><colgroup>' + cols + '</colgroup><thead><tr><th class="num">#</th>' + headers + '</tr></thead><tbody id="db-result-body"></tbody></table></div>';
     const scroll = grid.firstChild;
     const body = q('db-result-body');
+    // #12 修复：小结果集直接渲染全部行，避免虚拟化在初始 clientHeight=0 时不显示
+    if (indexes.length <= 600) {
+      let html = '';
+      for (let pos = 0; pos < indexes.length; pos++) {
+        const ri = indexes[pos], row = state.rows[ri] || [];
+        html += '<tr data-row="' + ri + '"' + (ri === state.selectedRow ? ' class="selected"' : '') + '><td class="num">' + (ri + 1) + '</td>' + visible.map(i => '<td data-row="' + ri + '" data-col="' + i + '" title="双击查看单行；右键复制或更多操作">' + fmtCell(row[i]) + '</td>').join('') + '</tr>';
+      }
+      body.innerHTML = html;
+      bindGridBody(body);
+      grid.querySelectorAll('[data-sort]').forEach(btn => btn.onclick = () => {
+        const i = Number(btn.dataset.sort);
+        state.sort = state.sort && state.sort.index === i ? (state.sort.dir === 1 ? { index: i, dir: -1 } : null) : { index: i, dir: 1 };
+        state.gridReady = false; renderResult();
+      });
+      grid.querySelectorAll('th[data-col]').forEach(th => th.oncontextmenu = e => { e.preventDefault(); openResultMenu(e.clientX, e.clientY, Number(th.dataset.col), null); });
+      grid.querySelectorAll('[data-resize]').forEach(x => bindColumnResize(x, Number(x.dataset.resize)));
+      state.gridReady = true;
+      applyGridHeight();
+      return;
+    }
     scroll.addEventListener('scroll', function () { scheduleGridPaint(scroll); }, { passive: true });
     bindGridBody(body);
     grid.querySelectorAll('[data-sort]').forEach(btn => btn.onclick = () => {
@@ -1524,13 +1667,15 @@
 
   async function exportResult() {
     if (!state.lastSQL || state.controller) return;
+    const effSrc3 = effectiveSource();
+    if (!effSrc3) return toast('未选择数据源', 'warn');
     const format = (q('db-export-format') && q('db-export-format').value) || 'csv';
     const ext = format === 'json' ? '.json' : format === 'xlsx' ? '.xlsx' : format === 'insert' ? '.sql' : '.csv';
     const types = format === 'json' ? [{ description: 'JSON', accept: { 'application/json': ['.json'] } }]
       : format === 'xlsx' ? [{ description: 'Excel', accept: { 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'] } }]
       : format === 'insert' ? [{ description: 'SQL', accept: { 'text/plain': ['.sql'] } }]
       : [{ description: 'CSV 文件', accept: { 'text/csv': ['.csv'] } }];
-    const safe = (state.source.name || 'query').replace(/[\\/:*?"<>|]/g, '_');
+    const safe = (effSrc3.name || 'query').replace(/[\\/:*?"<>|]/g, '_');
     const filename = safe + '-' + new Date().toISOString().replace(/[:.]/g, '-') + ext;
     const button = q('db-export'); button.disabled = true;
     let handle = null, table = '';
@@ -1543,7 +1688,7 @@
         table = (inputTable || '').trim();
       }
       if (window.showSaveFilePicker) handle = await window.showSaveFilePicker({ suggestedName: filename, types: types });
-      const response = await fetch('/api/database/export', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ source_id: state.source.id, sql: state.lastSQL, max_rows: state.lastMaxRows, format: format, table: table }) });
+      const response = await fetch('/api/database/export', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ source_id: effSrc3.id, sql: state.lastSQL, max_rows: state.lastMaxRows, format: format, table: table }) });
       if (!response.ok) { const body = await response.json().catch(() => ({})); throw new Error(body.error || 'HTTP ' + response.status); }
       if (handle && response.body) { const writable = await handle.createWritable(); await response.body.pipeTo(writable); }
       else { const blob = await response.blob(), a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = filename; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000); }

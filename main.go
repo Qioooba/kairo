@@ -493,6 +493,10 @@ func main() {
 	// 8.5 启动下载历史定期清理（启动时清理一次 + 每小时清理一次）
 	srv.StartPeriodicCleanup()
 
+	// 8.6 预热武林排行榜缓存：Java 网关冷启动时首次请求常超时（用户反馈
+	// "第一次运行排行榜加载不出来，过一会才好"），启动 2s 后后台拉一次填充缓存。
+	httpserver.WarmSponsorCache()
+
 	// WriteTimeout 设为 0：SSE 长连接（/api/logs/tail/{id}/events、
 	// /api/files/download/{id}/events、下载进度流等）需要任意时长的写，
 	// 否则 120 秒后 server 会主动断流。
