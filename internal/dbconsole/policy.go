@@ -2,6 +2,7 @@ package dbconsole
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"unicode"
 )
@@ -16,15 +17,18 @@ type SQLStatementInfo struct {
 
 // ClassifySQL analyzes the given SQL statement and categorizes it.
 func ClassifySQL(kind, query string) (SQLStatementInfo, error) {
-	tokens, _, err := sqlTokens(query)
+	tokens, semicolonContent, err := sqlTokens(query)
 	if err != nil {
 		return SQLStatementInfo{}, err
 	}
 	if len(tokens) == 0 {
 		return SQLStatementInfo{}, errors.New("SQL 不能为空")
 	}
+	if semicolonContent {
+		return SQLStatementInfo{}, errors.New("单次仅允许执行单条 SQL 语句")
+	}
 
-	// Reject dangerous MySQL host filesystem writes / reads
+	// Reject dangerous MySQL host filesystem writes / reads and sleep/lock attacks
 	for i := 0; i < len(tokens); i++ {
 		t := tokens[i]
 		if t == "INTO" && i+1 < len(tokens) && (tokens[i+1] == "OUTFILE" || tokens[i+1] == "DUMPFILE") {
@@ -32,6 +36,9 @@ func ClassifySQL(kind, query string) (SQLStatementInfo, error) {
 		}
 		if t == "LOAD_FILE" {
 			return SQLStatementInfo{}, errors.New("禁止使用 LOAD_FILE 函数")
+		}
+		if t == "SLEEP" || t == "BENCHMARK" || t == "GET_LOCK" || t == "RELEASE_LOCK" {
+			return SQLStatementInfo{}, fmt.Errorf("禁止使用 %s 函数", t)
 		}
 	}
 
@@ -59,7 +66,7 @@ func ClassifySQL(kind, query string) (SQLStatementInfo, error) {
 	case "COMMIT", "ROLLBACK":
 		return SQLStatementInfo{Type: "TRANSACTION", Action: first, IsQuery: false, HasForUpdate: false}, nil
 	default:
-		return SQLStatementInfo{Type: "STATEMENT", Action: first, IsQuery: false, HasForUpdate: false}, nil
+		return SQLStatementInfo{}, fmt.Errorf("不支持或禁止执行此类型语句: %s", first)
 	}
 }
 

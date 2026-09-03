@@ -1,374 +1,3 @@
-
-  /* ---------- 数据库工作台高阶扩展能力 (LOB查看器 / 行内编辑 / 右键增强 / 会话防丢) ---------- */
-
-  function detectTableName() {
-    const s = sess();
-    const sql = String((s && s.sql) || (q('db-sql') && q('db-sql').value) || '').trim();
-    const m = sql.match(/\bFROM\s+([A-Za-z0-9_."$]+)/i);
-    if (m && m[1]) return m[1].replace(/["`]/g, '');
-    if (state.inspectObject) return state.inspectObject;
-    return 'TARGET_TABLE';
-  }
-
-  function sqlValueLiteral(val, dbType) {
-    if (val === null || val === undefined) return 'NULL';
-    if (typeof val === 'object') {
-      if (val.kind === 'clob') return "'" + String(val.text || '').replace(/'/g, "''") + "'";
-      if (val.kind === 'blob') {
-        if (state.source && state.source.kind === 'oracle') return "HEXTORAW('" + (val.hex || '') + "')";
-        return "0x" + (val.hex || '');
-      }
-    }
-    if (typeof val === 'number') return String(val);
-    if (typeof val === 'boolean') return val ? '1' : '0';
-    const str = String(val);
-    if (state.source && state.source.kind === 'oracle' && /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}/.test(str)) {
-      const dStr = str.replace('T', ' ').slice(0, 19);
-      return "TO_DATE('" + dStr + "', 'YYYY-MM-DD HH24:MI:SS')";
-    }
-    return "'" + str.replace(/'/g, "''") + "'";
-  }
-
-  function copyRowAsInsert(rowIdx) {
-    const row = state.rows[rowIdx];
-    if (!row) return;
-    const table = detectTableName();
-    const cols = visibleColumns();
-    const colNames = cols.map(i => state.columns[i].name).join(', ');
-    const valLiterals = cols.map(i => {
-      const dirty = state.dirtyCells && state.dirtyCells[rowIdx + '_' + i];
-      const v = dirty ? dirty.newVal : row[i];
-      return sqlValueLiteral(v, state.columns[i].database_type);
-    }).join(', ');
-    const insertSQL = 'INSERT INTO ' + table + ' (' + colNames + ') VALUES (' + valLiterals + ');';
-    copyDBText(insertSQL, '已复制 INSERT 语句到剪贴板');
-  }
-
-  function copyCellAsUpdate(rowIdx, colIdx) {
-    const row = state.rows[rowIdx];
-    if (!row) return;
-    const table = detectTableName();
-    const colName = state.columns[colIdx].name;
-    const dirty = state.dirtyCells && state.dirtyCells[rowIdx + '_' + colIdx];
-    const val = dirty ? dirty.newVal : row[colIdx];
-    const valLit = sqlValueLiteral(val, state.columns[colIdx].database_type);
-
-    let whereClause = '';
-    const rowidIdx = state.columns.findIndex(c => String(c.name).toUpperCase() === 'ROWID');
-    if (rowidIdx >= 0 && row[rowidIdx]) {
-      whereClause = 'ROWID = \'' + row[rowidIdx] + '\'';
-    } else {
-      const idIdx = state.columns.findIndex(c => String(c.name).toUpperCase() === 'ID' || String(c.name).toUpperCase() === table.toUpperCase() + '_ID');
-      if (idIdx >= 0 && row[idIdx] != null) {
-        whereClause = state.columns[idIdx].name + ' = ' + sqlValueLiteral(row[idIdx], state.columns[idIdx].database_type);
-      } else {
-        const conditions = visibleColumns().slice(0, 5).map(i => {
-          const v = row[i];
-          if (v === null || v === undefined) return state.columns[i].name + ' IS NULL';
-          return state.columns[i].name + ' = ' + sqlValueLiteral(v, state.columns[i].database_type);
-        });
-        whereClause = conditions.join(' AND ');
-      }
-    }
-    const updateSQL = 'UPDATE ' + table + ' SET ' + colName + ' = ' + valLit + ' WHERE ' + whereClause + ';';
-    copyDBText(updateSQL, '已复制 UPDATE 语句到剪贴板');
-  }
-
-  function exportRowAsInsertFile(rowIdx) {
-    const row = state.rows[rowIdx];
-    if (!row) return;
-    const table = detectTableName();
-    const cols = visibleColumns();
-    const colNames = cols.map(i => state.columns[i].name).join(', ');
-    const valLiterals = cols.map(i => {
-      const dirty = state.dirtyCells && state.dirtyCells[rowIdx + '_' + i];
-      const v = dirty ? dirty.newVal : row[i];
-      return sqlValueLiteral(v, state.columns[i].database_type);
-    }).join(', ');
-    const content = '-- Exported from Kairo Database Workbench\nINSERT INTO ' + table + ' (' + colNames + ') VALUES (' + valLiterals + ');\nCOMMIT;\n';
-    downloadBlob(new Blob([content], { type: 'text/sql;charset=utf-8' }), table + '_row_' + (rowIdx + 1) + '.sql');
-  }
-
-  function exportRowAsTxtFile(rowIdx) {
-    const row = state.rows[rowIdx];
-    if (!row) return;
-    const table = detectTableName();
-    const cols = visibleColumns();
-    const header = cols.map(i => state.columns[i].name).join('\t');
-    const values = cols.map(i => {
-      const dirty = state.dirtyCells && state.dirtyCells[rowIdx + '_' + i];
-      return cellText(dirty ? dirty.newVal : row[i]);
-    }).join('\t');
-    const content = header + '\n' + values + '\n';
-    downloadBlob(new Blob([content], { type: 'text/plain;charset=utf-8' }), table + '_row_' + (rowIdx + 1) + '.txt');
-  }
-
-  function downloadBlob(blob, filename) {
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 500);
-  }
-
-  function openLobModal(val, colName) {
-    if (!val) return;
-    const isClob = val.kind === 'clob';
-    const sizeText = formatBytes(val.bytes || 0);
-    const title = (isClob ? '📑 CLOB 文本查看器' : '💾 BLOB / 二进制十六进制检视器') + ' · ' + (colName || '字段') + ' (' + sizeText + ')';
-
-    const body = el('div', { class: 'db-lob-viewer-body' });
-    if (isClob) {
-      const text = String(val.text || '');
-      body.innerHTML = '<div class="db-lob-toolbar"><label class="db-lob-check"><input type="checkbox" id="db-lob-wrap" checked> 自动换行</label><span class="muted">共 ' + text.length + ' 字符 · ' + sizeText + '</span><button class="btn btn-xs" id="db-lob-copy">复制文本</button><button class="btn btn-xs" id="db-lob-download">下载文件</button></div><pre class="db-lob-text" id="db-lob-pre">' + h(text) + '</pre>';
-      const dlg = Kairo.overlays.modal({ title, width: 840, body });
-      const pre = q('db-lob-pre');
-      const wrap = q('db-lob-wrap');
-      if (wrap && pre) wrap.onchange = function () { pre.style.whiteSpace = this.checked ? 'pre-wrap' : 'pre'; };
-      if (q('db-lob-copy')) q('db-lob-copy').onclick = () => copyDBText(text, 'CLOB 文本已复制');
-      if (q('db-lob-download')) q('db-lob-download').onclick = () => downloadBlob(new Blob([text], { type: 'text/plain;charset=utf-8' }), (colName || 'clob') + '.txt');
-    } else {
-      const hex = String(val.hex || '');
-      const b64 = String(val.preview_base64 || '');
-      body.innerHTML = '<div class="db-lob-toolbar"><span class="muted">共 ' + (val.bytes || (hex.length / 2)) + ' 字节</span><button class="btn btn-xs" id="db-lob-copy-hex">复制 Hex</button><button class="btn btn-xs" id="db-lob-download-bin">下载原始二进制</button></div><div class="db-lob-hex-view" id="db-lob-hex"></div>';
-      const dlg = Kairo.overlays.modal({ title, width: 900, body });
-      renderHexDump(q('db-lob-hex'), hex, b64);
-      if (q('db-lob-copy-hex')) q('db-lob-copy-hex').onclick = () => copyDBText(hex, '十六进制数据已复制');
-      if (q('db-lob-download-bin')) q('db-lob-download-bin').onclick = () => {
-        try {
-          const bin = atob(b64);
-          const buf = new Uint8Array(bin.length);
-          for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
-          downloadBlob(new Blob([buf], { type: 'application/octet-stream' }), (colName || 'blob') + '.bin');
-        } catch (e) {
-          toast('生成二进制下载失败：' + e.message, 'err');
-        }
-      };
-    }
-  }
-
-  function renderHexDump(host, hexStr, b64) {
-    if (!host) return;
-    let rawBytes = [];
-    if (b64) {
-      try {
-        const bin = atob(b64);
-        for (let i = 0; i < bin.length; i++) rawBytes.push(bin.charCodeAt(i));
-      } catch (_) {}
-    }
-    if (!rawBytes.length && hexStr) {
-      for (let i = 0; i < hexStr.length; i += 2) {
-        rawBytes.push(parseInt(hexStr.substr(i, 2), 16));
-      }
-    }
-    let lines = [];
-    const chunkSize = 16;
-    for (let i = 0; i < rawBytes.length; i += chunkSize) {
-      const chunk = rawBytes.slice(i, i + chunkSize);
-      const offset = i.toString(16).padStart(8, '0').toUpperCase();
-      const hexPart = chunk.map(b => b.toString(16).padStart(2, '0').toUpperCase()).join(' ');
-      const paddedHex = hexPart.padEnd(chunkSize * 3, ' ');
-      const asciiPart = chunk.map(b => (b >= 32 && b <= 126) ? String.fromCharCode(b) : '.').join('');
-      lines.push(offset + '  ' + paddedHex + '  |' + asciiPart + '|');
-    }
-    host.innerHTML = '<pre class="db-hex-pre">' + h(lines.join('\n')) + '</pre>';
-  }
-
-  function startCellEdit(rowIdx, colIdx, td) {
-    if (!td) {
-      td = q('db-result-grid') && q('db-result-grid').querySelector('td[data-row="' + rowIdx + '"][data-col="' + colIdx + '"]');
-    }
-    if (!td || td.querySelector('input.db-cell-input')) return;
-    const dirtyKey = rowIdx + '_' + colIdx;
-    const currentVal = state.dirtyCells[dirtyKey] ? state.dirtyCells[dirtyKey].newVal : state.rows[rowIdx][colIdx];
-    const textVal = cellText(currentVal);
-    
-    td.innerHTML = '<input class="db-cell-input" value="' + h(textVal) + '">';
-    const input = td.querySelector('input.db-cell-input');
-    input.focus();
-    input.select();
-
-    let committed = false;
-    const finish = (save) => {
-      if (committed) return;
-      committed = true;
-      const newVal = input.value;
-      if (save && newVal !== textVal) {
-        state.dirtyCells[dirtyKey] = {
-          rowIdx, colIdx,
-          oldVal: currentVal,
-          newVal: newVal,
-          colName: state.columns[colIdx].name,
-          row: state.rows[rowIdx]
-        };
-        td.classList.add('db-cell-dirty');
-        td.innerHTML = fmtCell(newVal, rowIdx, colIdx);
-      } else if (!state.dirtyCells[dirtyKey]) {
-        td.classList.remove('db-cell-dirty');
-        td.innerHTML = fmtCell(currentVal, rowIdx, colIdx);
-      } else {
-        td.innerHTML = fmtCell(state.dirtyCells[dirtyKey].newVal, rowIdx, colIdx);
-      }
-      updateTransactionControls();
-    };
-
-    input.onkeydown = (e) => {
-      if (e.key === 'Enter') { e.preventDefault(); finish(true); }
-      else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
-    };
-    input.onblur = () => finish(true);
-  }
-
-  function updateTransactionControls() {
-    const dirtyCount = Object.keys(state.dirtyCells || {}).length;
-    const commitBtn = q('db-btn-commit');
-    const rollbackBtn = q('db-btn-rollback');
-    const modeBtn = q('db-toggle-edit');
-    if (commitBtn) {
-      commitBtn.disabled = dirtyCount === 0;
-      commitBtn.textContent = '💾 提交' + (dirtyCount ? ' (' + dirtyCount + ')' : '');
-    }
-    if (rollbackBtn) {
-      rollbackBtn.disabled = dirtyCount === 0;
-    }
-    if (modeBtn) {
-      modeBtn.textContent = state.isEditMode ? '🔓 编辑中' : '🔒 只读';
-      modeBtn.classList.toggle('is-editing', state.isEditMode);
-    }
-  }
-
-  async function commitPendingEdits() {
-    const dirtyKeys = Object.keys(state.dirtyCells || {});
-    if (!dirtyKeys.length) return;
-    const effSrc = effectiveSource();
-    if (!effSrc) return toast('未绑定有效数据源', 'warn');
-
-    const statements = [];
-    const table = detectTableName();
-    for (const key of dirtyKeys) {
-      const item = state.dirtyCells[key];
-      const row = state.rows[item.rowIdx];
-      const colName = state.columns[item.colIdx].name;
-      const valLit = sqlValueLiteral(item.newVal, state.columns[item.colIdx].database_type);
-
-      let whereClause = '';
-      const rowidIdx = state.columns.findIndex(c => String(c.name).toUpperCase() === 'ROWID');
-      if (rowidIdx >= 0 && row[rowidIdx]) {
-        whereClause = 'ROWID = \'' + row[rowidIdx] + '\'';
-      } else {
-        const idIdx = state.columns.findIndex(c => String(c.name).toUpperCase() === 'ID' || String(c.name).toUpperCase() === table.toUpperCase() + '_ID');
-        if (idIdx >= 0 && row[idIdx] != null) {
-          whereClause = state.columns[idIdx].name + ' = ' + sqlValueLiteral(row[idIdx], state.columns[idIdx].database_type);
-        } else {
-          const conditions = visibleColumns().slice(0, 5).map(i => {
-            const v = row[i];
-            if (v === null || v === undefined) return state.columns[i].name + ' IS NULL';
-            return state.columns[i].name + ' = ' + sqlValueLiteral(v, state.columns[i].database_type);
-          });
-          whereClause = conditions.join(' AND ');
-        }
-      }
-      statements.push('UPDATE ' + table + ' SET ' + colName + ' = ' + valLit + ' WHERE ' + whereClause);
-    }
-
-    try {
-      for (const stmt of statements) {
-        await api('POST', '/api/database/query', {
-          source_id: effSrc.id,
-          sql: stmt,
-          max_rows: 1,
-          page: 1,
-          page_size: 1,
-          count_mode: 'none'
-        });
-      }
-      // Commit transaction
-      await api('POST', '/api/database/query', {
-        source_id: effSrc.id,
-        sql: 'COMMIT',
-        max_rows: 1,
-        page: 1,
-        page_size: 1,
-        count_mode: 'none'
-      }).catch(() => {});
-
-      // Apply changes to local data
-      for (const key of dirtyKeys) {
-        const item = state.dirtyCells[key];
-        state.rows[item.rowIdx][item.colIdx] = item.newVal;
-      }
-      state.dirtyCells = {};
-      updateTransactionControls();
-      refreshVisibleResult();
-      toast('✅ 已成功提交 ' + dirtyKeys.length + ' 处修改至数据库！', 'ok');
-    } catch (e) {
-      toast('提交修改失败：' + e.message, 'err');
-    }
-  }
-
-  function rollbackPendingEdits() {
-    const dirtyCount = Object.keys(state.dirtyCells || {}).length;
-    if (!dirtyCount) return;
-    state.dirtyCells = {};
-    updateTransactionControls();
-    refreshVisibleResult();
-    toast('↩️ 已回滚撤销所有未提交的修改', 'ok');
-  }
-
-  /* 会话定时自动备份与防丢 */
-  function backupDBSessions() {
-    saveEditorSQL();
-    const backup = {
-      activeId: state.activeId,
-      tabSeq: tabSeq,
-      sourceId: state.source ? state.source.id : '',
-      editorHeight: persisted.editor_height,
-      metaCollapsed: persisted.meta_collapsed,
-      sessions: (state.sessions || []).map(x => ({
-        id: x.id,
-        sql: x.sql,
-        sourceId: x.sourceId,
-        page: x.page || 1,
-        pageSize: x.pageSize || 20
-      })),
-      updatedAt: Date.now()
-    };
-    try {
-      localStorage.setItem('kairo_db_sessions_backup', JSON.stringify(backup));
-    } catch (_) {}
-    try {
-      fetch('/api/database/sessions/backup', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(backup)
-      }).catch(() => {});
-    } catch (_) {}
-  }
-
-  function restoreDBSessions() {
-    let data = null;
-    try {
-      const raw = localStorage.getItem('kairo_db_sessions_backup');
-      if (raw) data = JSON.parse(raw);
-    } catch (_) {}
-    if (!data || !data.sessions || !data.sessions.length) return false;
-    state.sessions = data.sessions.map(saved => {
-      const session = createSession(saved.sql);
-      session.id = saved.id;
-      session.sourceId = saved.sourceId;
-      session.page = saved.page || 1;
-      session.pageSize = saved.pageSize || 20;
-      return session;
-    });
-    tabSeq = Math.max(tabSeq, data.tabSeq || data.sessions.length);
-    state.activeId = data.activeId || state.sessions[0].id;
-    if (data.editorHeight) persisted.editor_height = data.editorHeight;
-    if (data.metaCollapsed !== undefined) persisted.meta_collapsed = data.metaCollapsed;
-    return true;
-  }
-
 /* Database Workbench — read-only Oracle/MySQL/Redis console. */
 (function () {
   'use strict';
@@ -400,9 +29,10 @@
   const state = {
     sources: [], source: null, rows: [], columns: [], controller: null, summary: null, cursor: 0,
     managing: false, workspaceToken: 0, lastSQL: '', lastMaxRows: 0, resultMode: 'grid',
-    selectedRow: 0, localFilter: '', hiddenColumns: new Set(), columnWidths: {}, sort: null,
+    selectedRow: 0, selectedCol: 0, localFilter: '', hiddenColumns: new Set(), columnWidths: {}, sort: null,
     prefs: normalizePrefs({}), lastError: null, inspectTab: 'fields', inspect: null, plan: [], gridReady: false,
-    sessions: [], activeId: 0, redisKeyBase64: '', redisType: '', redisCursor: '0', redisNextCursor: '0', redisCursorHistory: [], redisOffset: 0, redisPageSize: 100, redisMembersHasNext: false
+    sessions: [], activeId: 0, redisKeyBase64: '', redisType: '', redisCursor: '0', redisNextCursor: '0', redisCursorHistory: [], redisOffset: 0, redisPageSize: 100, redisMembersHasNext: false,
+    dirtyCells: {}, isEditMode: false
   };
   let tabSeq = 0;
   const acState = { open: false, items: [], index: 0, start: 0, end: 0 };
@@ -702,6 +332,410 @@
     if (v.kind === 'binary') return '[BINARY ' + v.bytes + ' B] ' + (v.preview_base64 || '');
     if (v.kind === 'text') return String(v.preview || '') + '…';
     return JSON.stringify(v);
+  }
+
+  /* ---------- 数据库工作台高阶扩展能力 (LOB查看器 / 行内编辑 / 右键增强 / 会话防丢) ---------- */
+
+  function detectTableName() {
+    const s = sess();
+    const sql = String((s && s.sql) || (q('db-sql') && q('db-sql').value) || '').trim();
+    const m = sql.match(/\bFROM\s+([A-Za-z0-9_."$]+)/i);
+    if (m && m[1]) return m[1].replace(/["`]/g, '');
+    if (state.inspect && state.inspect.object) return state.inspect.object;
+    return 'TARGET_TABLE';
+  }
+
+  function sqlValueLiteral(val, dbType) {
+    if (val === null || val === undefined) return 'NULL';
+    if (typeof val === 'object') {
+      if (val.kind === 'clob') return "'" + String(val.text || '').replace(/'/g, "''") + "'";
+      if (val.kind === 'blob') {
+        if (state.source && state.source.kind === 'oracle') return "HEXTORAW('" + (val.hex || '') + "')";
+        return "0x" + (val.hex || '');
+      }
+    }
+    if (typeof val === 'number') return String(val);
+    if (typeof val === 'boolean') return val ? '1' : '0';
+    const str = String(val);
+    if (state.source && state.source.kind === 'oracle' && /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}/.test(str)) {
+      const dStr = str.replace('T', ' ').slice(0, 19);
+      return "TO_DATE('" + dStr + "', 'YYYY-MM-DD HH24:MI:SS')";
+    }
+    return "'" + str.replace(/'/g, "''") + "'";
+  }
+
+  function copyRowAsInsert(rowIdx) {
+    const row = state.rows[rowIdx];
+    if (!row) return;
+    const table = detectTableName();
+    const cols = visibleColumns();
+    const colNames = cols.map(i => state.columns[i].name).join(', ');
+    const valLiterals = cols.map(i => {
+      const dirty = state.dirtyCells && state.dirtyCells[rowIdx + '_' + i];
+      const v = dirty ? dirty.newVal : row[i];
+      return sqlValueLiteral(v, state.columns[i].database_type);
+    }).join(', ');
+    const insertSQL = 'INSERT INTO ' + table + ' (' + colNames + ') VALUES (' + valLiterals + ');';
+    copyDBText(insertSQL, '已复制 INSERT 语句到剪贴板');
+  }
+
+  function copyCellAsUpdate(rowIdx, colIdx) {
+    const row = state.rows[rowIdx];
+    if (!row) return;
+    const table = detectTableName();
+    const colName = state.columns[colIdx].name;
+    const dirty = state.dirtyCells && state.dirtyCells[rowIdx + '_' + colIdx];
+    const val = dirty ? dirty.newVal : row[colIdx];
+    const valLit = sqlValueLiteral(val, state.columns[colIdx].database_type);
+
+    let whereClause = '';
+    const rowidIdx = state.columns.findIndex(c => String(c.name).toUpperCase() === 'ROWID');
+    if (rowidIdx >= 0 && row[rowidIdx]) {
+      whereClause = 'ROWID = \'' + row[rowidIdx] + '\'';
+    } else {
+      const idIdx = state.columns.findIndex(c => String(c.name).toUpperCase() === 'ID' || String(c.name).toUpperCase() === table.toUpperCase() + '_ID');
+      if (idIdx >= 0 && row[idIdx] != null) {
+        whereClause = state.columns[idIdx].name + ' = ' + sqlValueLiteral(row[idIdx], state.columns[idIdx].database_type);
+      } else {
+        const conditions = visibleColumns().map(i => {
+          const v = row[i];
+          if (v === null || v === undefined) return state.columns[i].name + ' IS NULL';
+          return state.columns[i].name + ' = ' + sqlValueLiteral(v, state.columns[i].database_type);
+        });
+        whereClause = conditions.join(' AND ');
+      }
+    }
+    const updateSQL = 'UPDATE ' + table + ' SET ' + colName + ' = ' + valLit + ' WHERE ' + whereClause + ';';
+    copyDBText(updateSQL, '已复制 UPDATE 语句到剪贴板');
+  }
+
+  function exportRowAsInsertFile(rowIdx) {
+    const row = state.rows[rowIdx];
+    if (!row) return;
+    const table = detectTableName();
+    const cols = visibleColumns();
+    const colNames = cols.map(i => state.columns[i].name).join(', ');
+    const valLiterals = cols.map(i => {
+      const dirty = state.dirtyCells && state.dirtyCells[rowIdx + '_' + i];
+      const v = dirty ? dirty.newVal : row[i];
+      return sqlValueLiteral(v, state.columns[i].database_type);
+    }).join(', ');
+    const content = '-- Exported from Kairo Database Workbench\nINSERT INTO ' + table + ' (' + colNames + ') VALUES (' + valLiterals + ');\nCOMMIT;\n';
+    downloadBlob(new Blob([content], { type: 'text/sql;charset=utf-8' }), table + '_row_' + (rowIdx + 1) + '.sql');
+  }
+
+  function exportRowAsTxtFile(rowIdx) {
+    const row = state.rows[rowIdx];
+    if (!row) return;
+    const table = detectTableName();
+    const cols = visibleColumns();
+    const header = cols.map(i => state.columns[i].name).join('\t');
+    const values = cols.map(i => {
+      const dirty = state.dirtyCells && state.dirtyCells[rowIdx + '_' + i];
+      return cellText(dirty ? dirty.newVal : row[i]);
+    }).join('\t');
+    const content = header + '\n' + values + '\n';
+    downloadBlob(new Blob([content], { type: 'text/plain;charset=utf-8' }), table + '_row_' + (rowIdx + 1) + '.txt');
+  }
+
+  function downloadBlob(blob, filename) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 500);
+  }
+
+  function openLobModal(val, colName) {
+    if (!val) return;
+    const isClob = val.kind === 'clob';
+    const sizeText = formatBytes(val.bytes || 0);
+    const truncNote = val.truncated ? '（已截断预览）' : '';
+    const title = (isClob ? '📑 CLOB 文本查看器' : '💾 BLOB / 二进制十六进制检视器') + ' · ' + (colName || '字段') + ' (' + sizeText + truncNote + ')';
+
+    const body = el('div', { class: 'db-lob-viewer-body' });
+    if (isClob) {
+      const text = String(val.text || '');
+      body.innerHTML = '<div class="db-lob-toolbar"><label class="db-lob-check"><input type="checkbox" id="db-lob-wrap" checked> 自动换行</label><span class="muted">共 ' + text.length + ' 字符 · ' + sizeText + ' ' + truncNote + '</span><button class="btn btn-xs" id="db-lob-copy">复制文本</button><button class="btn btn-xs" id="db-lob-download">下载文件</button></div><pre class="db-lob-text" id="db-lob-pre">' + h(text) + '</pre>';
+      const dlg = Kairo.overlays.modal({ title, width: 840, body });
+      const pre = q('db-lob-pre');
+      const wrap = q('db-lob-wrap');
+      if (wrap && pre) wrap.onchange = function () { pre.style.whiteSpace = this.checked ? 'pre-wrap' : 'pre'; };
+      if (q('db-lob-copy')) q('db-lob-copy').onclick = () => copyDBText(text, 'CLOB 文本已复制');
+      if (q('db-lob-download')) q('db-lob-download').onclick = () => downloadBlob(new Blob([text], { type: 'text/plain;charset=utf-8' }), (colName || 'clob') + '.txt');
+    } else {
+      const hex = String(val.hex || '');
+      const b64 = String(val.preview_base64 || '');
+      body.innerHTML = '<div class="db-lob-toolbar"><span class="muted">共 ' + (val.bytes || (hex.length / 2)) + ' 字节 ' + truncNote + '</span><button class="btn btn-xs" id="db-lob-copy-hex">复制 Hex</button><button class="btn btn-xs" id="db-lob-download-bin">下载原始二进制</button></div><div class="db-lob-hex-view" id="db-lob-hex"></div>';
+      const dlg = Kairo.overlays.modal({ title, width: 900, body });
+      renderHexDump(q('db-lob-hex'), hex, b64);
+      if (q('db-lob-copy-hex')) q('db-lob-copy-hex').onclick = () => copyDBText(hex, '十六进制数据已复制');
+      if (q('db-lob-download-bin')) q('db-lob-download-bin').onclick = () => {
+        try {
+          const bin = atob(b64);
+          const buf = new Uint8Array(bin.length);
+          for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+          downloadBlob(new Blob([buf], { type: 'application/octet-stream' }), (colName || 'blob') + '.bin');
+        } catch (e) {
+          toast('生成二进制下载失败：' + e.message, 'err');
+        }
+      };
+    }
+  }
+
+  function renderHexDump(host, hexStr, b64) {
+    if (!host) return;
+    let rawBytes = [];
+    if (b64) {
+      try {
+        const bin = atob(b64);
+        for (let i = 0; i < bin.length; i++) rawBytes.push(bin.charCodeAt(i));
+      } catch (_) {}
+    }
+    if (!rawBytes.length && hexStr) {
+      for (let i = 0; i < hexStr.length; i += 2) {
+        rawBytes.push(parseInt(hexStr.substr(i, 2), 16));
+      }
+    }
+    let lines = [];
+    const chunkSize = 16;
+    for (let i = 0; i < rawBytes.length; i += chunkSize) {
+      const chunk = rawBytes.slice(i, i + chunkSize);
+      const offset = i.toString(16).padStart(8, '0').toUpperCase();
+      const hexPart = chunk.map(b => b.toString(16).padStart(2, '0').toUpperCase()).join(' ');
+      const paddedHex = hexPart.padEnd(chunkSize * 3, ' ');
+      const asciiPart = chunk.map(b => (b >= 32 && b <= 126) ? String.fromCharCode(b) : '.').join('');
+      lines.push(offset + '  ' + paddedHex + '  |' + asciiPart + '|');
+    }
+    host.innerHTML = '<pre class="db-hex-pre">' + h(lines.join('\n')) + '</pre>';
+  }
+
+  function startCellEdit(rowIdx, colIdx, td) {
+    if (!state.rows || !state.rows[rowIdx] || !state.columns || !state.columns[colIdx]) return;
+    if (!td) {
+      const grid = q('db-result-grid');
+      td = grid && grid.querySelector('td[data-row="' + rowIdx + '"][data-col="' + colIdx + '"]');
+    }
+    if (!td || td.querySelector('input.db-cell-input')) return;
+    const dirtyKey = rowIdx + '_' + colIdx;
+    const currentVal = (state.dirtyCells && state.dirtyCells[dirtyKey]) ? state.dirtyCells[dirtyKey].newVal : state.rows[rowIdx][colIdx];
+    const textVal = cellText(currentVal);
+    
+    td.innerHTML = '<input class="db-cell-input" value="' + h(textVal) + '">';
+    const input = td.querySelector('input.db-cell-input');
+    input.focus();
+    input.select();
+
+    let committed = false;
+    const finish = (save) => {
+      if (committed) return;
+      committed = true;
+      const newVal = input.value;
+      if (save && newVal !== textVal) {
+        if (!state.dirtyCells) state.dirtyCells = {};
+        state.dirtyCells[dirtyKey] = {
+          rowIdx, colIdx,
+          oldVal: currentVal,
+          newVal: newVal,
+          colName: state.columns[colIdx].name,
+          row: state.rows[rowIdx]
+        };
+        td.classList.add('db-cell-dirty');
+        td.innerHTML = fmtCell(newVal, rowIdx, colIdx);
+      } else if (!state.dirtyCells || !state.dirtyCells[dirtyKey]) {
+        td.classList.remove('db-cell-dirty');
+        td.innerHTML = fmtCell(currentVal, rowIdx, colIdx);
+      } else {
+        td.innerHTML = fmtCell(state.dirtyCells[dirtyKey].newVal, rowIdx, colIdx);
+      }
+      updateTransactionControls();
+    };
+
+    input.onkeydown = (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+      else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+    };
+    input.onblur = () => finish(true);
+  }
+
+  function updateTransactionControls() {
+    const dirtyCount = Object.keys(state.dirtyCells || {}).length;
+    const commitBtn = q('db-btn-commit');
+    const rollbackBtn = q('db-btn-rollback');
+    const modeBtn = q('db-toggle-edit');
+    if (commitBtn) {
+      commitBtn.disabled = dirtyCount === 0;
+      commitBtn.textContent = '💾 提交' + (dirtyCount ? ' (' + dirtyCount + ')' : '');
+    }
+    if (rollbackBtn) {
+      rollbackBtn.disabled = dirtyCount === 0;
+    }
+    if (modeBtn) {
+      modeBtn.textContent = state.isEditMode ? '🔓 编辑中' : '🔒 只读';
+      modeBtn.classList.toggle('is-editing', !!state.isEditMode);
+    }
+  }
+
+  async function commitPendingEdits() {
+    const dirtyKeys = Object.keys(state.dirtyCells || {});
+    if (!dirtyKeys.length) return;
+    const effSrc = effectiveSource();
+    if (!effSrc) return toast('未绑定有效数据源', 'warn');
+
+    const table = detectTableName();
+    const rowUpdates = new Map();
+    for (const key of dirtyKeys) {
+      const item = state.dirtyCells[key];
+      if (!rowUpdates.has(item.rowIdx)) rowUpdates.set(item.rowIdx, []);
+      rowUpdates.get(item.rowIdx).push(item);
+    }
+
+    const statements = [];
+    for (const [rowIdx, items] of rowUpdates.entries()) {
+      const row = state.rows[rowIdx];
+      const setClauses = items.map(item => {
+        const col = state.columns[item.colIdx];
+        return col.name + ' = ' + sqlValueLiteral(item.newVal, col.database_type);
+      }).join(', ');
+
+      let whereClause = '';
+      const rowidIdx = state.columns.findIndex(c => String(c.name).toUpperCase() === 'ROWID');
+      if (rowidIdx >= 0 && row[rowidIdx]) {
+        whereClause = 'ROWID = \'' + row[rowidIdx] + '\'';
+      } else {
+        const idIdx = state.columns.findIndex(c => String(c.name).toUpperCase() === 'ID' || String(c.name).toUpperCase() === table.toUpperCase() + '_ID');
+        if (idIdx >= 0 && row[idIdx] != null) {
+          whereClause = state.columns[idIdx].name + ' = ' + sqlValueLiteral(row[idIdx], state.columns[idIdx].database_type);
+        } else {
+          const conditions = visibleColumns().map(i => {
+            const v = row[i];
+            if (v === null || v === undefined) return state.columns[i].name + ' IS NULL';
+            return state.columns[i].name + ' = ' + sqlValueLiteral(v, state.columns[i].database_type);
+          });
+          whereClause = conditions.join(' AND ');
+        }
+      }
+      statements.push('UPDATE ' + table + ' SET ' + setClauses + ' WHERE ' + whereClause);
+    }
+
+    try {
+      for (const stmt of statements) {
+        await api('POST', '/api/database/query', {
+          source_id: effSrc.id,
+          sql: stmt,
+          max_rows: 1,
+          page: 1,
+          page_size: 1,
+          count_mode: 'none'
+        });
+      }
+      // Commit transaction
+      await api('POST', '/api/database/query', {
+        source_id: effSrc.id,
+        sql: 'COMMIT',
+        max_rows: 1,
+        page: 1,
+        page_size: 1,
+        count_mode: 'none'
+      }).catch(() => {});
+
+      // Apply changes to local data
+      for (const key of dirtyKeys) {
+        const item = state.dirtyCells[key];
+        state.rows[item.rowIdx][item.colIdx] = item.newVal;
+      }
+      state.dirtyCells = {};
+      updateTransactionControls();
+      refreshVisibleResult();
+      toast('✅ 已成功提交 ' + dirtyKeys.length + ' 处修改至数据库！', 'ok');
+    } catch (e) {
+      toast('提交修改失败：' + e.message, 'err');
+    }
+  }
+
+  function rollbackPendingEdits() {
+    const dirtyCount = Object.keys(state.dirtyCells || {}).length;
+    if (!dirtyCount) return;
+    state.dirtyCells = {};
+    updateTransactionControls();
+    refreshVisibleResult();
+    toast('↩️ 已回滚撤销所有未提交的修改', 'ok');
+  }
+
+  /* 会话定时自动备份与防丢 */
+  function backupDBSessions() {
+    saveEditorSQL();
+    const backup = {
+      activeId: state.activeId,
+      tabSeq: tabSeq,
+      sourceId: state.source ? state.source.id : '',
+      editorHeight: persisted.editor_height,
+      metaCollapsed: persisted.meta_collapsed,
+      sessions: (state.sessions || []).map(x => ({
+        id: x.id,
+        sql: x.sql,
+        sourceId: x.sourceId,
+        page: x.page || 1,
+        pageSize: x.pageSize || 20
+      })),
+      updatedAt: Date.now()
+    };
+    try {
+      localStorage.setItem('kairo_db_sessions_backup', JSON.stringify(backup));
+    } catch (_) {}
+    try {
+      fetch('/api/database/sessions/backup', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(backup)
+      }).catch(() => {});
+    } catch (_) {}
+  }
+
+  function restoreLocalDBSessions(data) {
+    if (!data || !data.sessions || !data.sessions.length) return false;
+    state.sessions = data.sessions.map(saved => {
+      const session = createSession(saved.sql);
+      session.id = saved.id;
+      session.sourceId = saved.sourceId;
+      session.page = saved.page || 1;
+      session.pageSize = saved.pageSize || 20;
+      return session;
+    });
+    tabSeq = Math.max(tabSeq, data.tabSeq || data.sessions.length);
+    state.activeId = data.activeId || state.sessions[0].id;
+    if (data.editorHeight) persisted.editor_height = data.editorHeight;
+    if (data.metaCollapsed !== undefined) persisted.meta_collapsed = data.metaCollapsed;
+    return true;
+  }
+
+  function restoreDBSessions() {
+    let restored = false;
+    try {
+      const raw = localStorage.getItem('kairo_db_sessions_backup');
+      if (raw) {
+        const data = JSON.parse(raw);
+        restored = restoreLocalDBSessions(data);
+      }
+    } catch (_) {}
+    if (!restored) {
+      fetch('/api/database/sessions/restore', { credentials: 'same-origin' })
+        .then(res => res.ok ? res.json() : null)
+        .then(remote => {
+          const sessData = remote && (remote.session || remote);
+          if (sessData && sessData.sessions && sessData.sessions.length) {
+            if (restoreLocalDBSessions(sessData)) {
+              bindSession(sess());
+              renderTabs();
+            }
+          }
+        })
+        .catch(() => {});
+    }
+    return restored;
   }
 
   async function loadSources(preferred) {
@@ -1327,6 +1361,11 @@
     if (document.body.classList.contains('has-open-overlay')) return;
     const id = e.target && e.target.id;
     if (id && String(id).indexOf('db-shortcut-') === 0) return;
+    if (e.key === 'F2' && state.resultMode === 'grid' && !e.target.closest('input, textarea, select')) {
+      e.preventDefault();
+      startCellEdit(state.selectedRow, state.selectedCol || 0);
+      return;
+    }
     if (matchesShortcut(e, state.prefs.shortcuts.run)) { e.preventDefault(); runQuery(); return; }
     if (matchesShortcut(e, state.prefs.shortcuts.explain)) { e.preventDefault(); runExplain(); return; }
     if (matchesShortcut(e, state.prefs.shortcuts.cancel) && sess() && sess().controller) { e.preventDefault(); cancelQuery(); return; }
@@ -2262,6 +2301,10 @@
         }
         return;
       }
+      const td = e.target.closest('td[data-col]');
+      if (td && body.contains(td)) {
+        state.selectedCol = Number(td.dataset.col);
+      }
       const tr = e.target.closest('tr[data-row]');
       if (!tr || !body.contains(tr)) return;
       state.selectedRow = Number(tr.dataset.row);
@@ -2274,10 +2317,9 @@
         e.stopPropagation();
         const r = Number(td.dataset.row), c = Number(td.dataset.col);
         state.selectedRow = r;
-        if (state.isEditMode || e.altKey || e.shiftKey) {
-          startCellEdit(r, c, td);
-          return;
-        }
+        state.selectedCol = c;
+        startCellEdit(r, c, td);
+        return;
       }
       const tr = e.target.closest('tr[data-row]');
       if (!tr || !body.contains(tr)) return;
@@ -2289,12 +2331,19 @@
       if (!td || !body.contains(td)) return;
       e.preventDefault();
       state.selectedRow = Number(td.dataset.row);
+      state.selectedCol = Number(td.dataset.col);
       const tr = td.parentElement;
       if (tr) {
         body.querySelectorAll('tr.selected').forEach(function (x) { x.classList.remove('selected'); });
         tr.classList.add('selected');
       }
       openResultMenu(e.clientX, e.clientY, Number(td.dataset.col), Number(td.dataset.row));
+    });
+    body.addEventListener('keydown', function (e) {
+      if (e.key === 'F2') {
+        e.preventDefault();
+        startCellEdit(state.selectedRow, state.selectedCol || 0);
+      }
     });
   }
   function paintGridRows(scroll, fromScroll) {
@@ -2322,7 +2371,12 @@
     let html = start ? '<tr class="db-spacer"><td colspan="' + colspan + '" style="height:' + (start * GRID_ROW_H) + 'px"></td></tr>' : '';
     for (let pos = start; pos < end; pos++) {
       const ri = indexes[pos], row = state.rows[ri] || [];
-      html += '<tr data-row="' + ri + '"' + (ri === state.selectedRow ? ' class="selected"' : '') + '><td class="num">' + (ri + 1) + '</td>' + visible.map(i => '<td data-row="' + ri + '" data-col="' + i + '" title="双击查看单行；右键复制或更多操作">' + fmtCell(row[i]) + '</td>').join('') + '</tr>';
+      html += '<tr data-row="' + ri + '"' + (ri === state.selectedRow ? ' class="selected"' : '') + '><td class="num">' + (ri + 1) + '</td>' + visible.map(i => {
+        const dirty = state.dirtyCells && state.dirtyCells[ri + '_' + i];
+        const val = dirty ? dirty.newVal : row[i];
+        const cls = dirty ? ' class="db-cell-dirty"' : '';
+        return '<td data-row="' + ri + '" data-col="' + i + '"' + cls + ' title="双击编辑；右键复制或更多操作">' + fmtCell(val, ri, i) + '</td>';
+      }).join('') + '</tr>';
     }
     if (end < indexes.length) html += '<tr class="db-spacer"><td colspan="' + colspan + '" style="height:' + ((indexes.length - end) * GRID_ROW_H) + 'px"></td></tr>';
     body.innerHTML = html;

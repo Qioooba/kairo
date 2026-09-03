@@ -9,13 +9,13 @@
 [![Go Version](https://img.shields.io/badge/Go-1.24%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-4F4F4F)](#)
 [![License](https://img.shields.io/badge/License-Internal%20Use-orange)](#)
-[![Status](https://img.shields.io/badge/Status-v0.17-success)](#)
+[![Status](https://img.shields.io/badge/Status-v0.18-success)](#)
 [![Dependencies](https://img.shields.io/badge/Deps-zero%20runtime-2ea44f)](#)
 [![Binary](https://img.shields.io/badge/Single%20Exe-%E2%9C%93-success)](#)
 [![SSH](https://img.shields.io/badge/SSH-5%20compat%20profile-6f42c1)](#)
 [![Themes](https://img.shields.io/badge/Themes-5%20%E5%A5%97%E4%B8%BB%E9%A2%98-blueviolet)](#)
-[![Code](https://img.shields.io/badge/Code-122K%2B-2088FF)](#)
-[![Tests](https://img.shields.io/badge/Tests-1120%2B%20Go%20%7C%201200%2B%20E2E-success)](#)
+[![Code](https://img.shields.io/badge/Code-125K%2B-2088FF)](#)
+[![Tests](https://img.shields.io/badge/Tests-1150%2B%20Go%20%7C%201200%2B%20E2E-success)](#)
 [![AI Compute](https://img.shields.io/badge/AI_Tokens-2.0B%2B-blueviolet)](#ai-native-工业级研发体系)
 [![AI Toolchain](https://img.shields.io/badge/AI_IDEs-Codex_%7C_Cursor_%7C_Antigravity_%7C_Trae_%7C_OpenCode-blue)](#ai-native-工业级研发体系)
 
@@ -177,7 +177,7 @@ Kairo 按功能拆分前端页面与后端子包，全功能零框架依赖、�
 | **内嵌 SFTP 浏览器**（v0.11+） | `POST /api/ssh/sftp/{list,pwd,preview,download}`，独立命名空间不走 `free_file_roots` 白名单（账号权限承担） |
 | **在线编辑 + 上传**（v0.13.1+） | `POST /api/ssh/sftp/edit` 单文件流式编辑；`POST /api/ssh/sftp/upload/{init,cancel}` + `/{id}/data` 分片上传大文件 |
 
-### 3. 数据库工作台（v0.16–v0.17）
+### 3. 数据库工作台（v0.16–v0.18）
 
 定位：轻量级数据库只读排障控制台，集成 Oracle 11g、MySQL 与 Redis，免装大型客户端。
 
@@ -185,19 +185,25 @@ Kairo 按功能拆分前端页面与后端子包，全功能零框架依赖、�
 | --- | --- |
 | **多数据源支持** | 纯 Go Oracle 驱动（`go-ora/v2`，支持 Oracle 11g+）、MySQL（`go-sql-driver`）、Redis（`go-redis/v9`） |
 | **三段式工作台** | 参考 PL/SQL Developer / DBeaver 工作流，左侧对象树、中间 SQL 编辑器、下方结果与持久报错区 |
+| **光标语句精准执行** | statementModel 自动识别光标所在 SQL 语句，多重尾部分号智能规整，杜绝批量或误执行 |
+| **流式真实分页** | 支持 `page/page_size/has_next/ordered` 分页协议，Oracle ROWNUM 别名列自动过滤脱敏 |
+| **透明重试与会话治理** | 网络抖动自动单次透明重连，幽灵 Tab 孤儿会话后台自动回收释放 |
 | **元数据与对象树** | 按 Tables / Views / Functions / Procedures / Triggers 分组展开；字段清单一键复制列名，双击快速生成查询/调用骨架 |
 | **只读策略硬防护** | 词法 AST 与正则双重拦截，一律拒绝 DDL/DML/PLSQL 块，仅允许单条只读 SELECT；强制超时与 5000 行/32MB 硬上限 |
 | **NDJSON 流式分批** | 大结果集边查边推，前端动态渲染网格，支持列宽拖拽、多模式查看（表格 / 单记录）、列显隐与本地快速过滤 |
 | **执行计划** | Oracle `EXPLAIN PLAN FOR` + `PLAN_TABLE` 解析与 MySQL `EXPLAIN`，排查慢查询索引命中情况 |
-| **Redis 空间洞察** | SCAN 游标分页浏览 Key，避免 KEYS * 阻塞生产；按 String/Hash/List/Set/ZSet 预览内容与 TTL，大 Key 安全截断 |
+| **Redis 空间洞察** | SCAN 游标分页浏览 Key，避免 KEYS * 阻塞生产；读白名单扩展 (TYPE/TTL/HGET/HSCAN/LRANGE)，受控 TTL 安全审查 |
 | **安全导出** | 重新执行受限只读查询并流式导出 UTF-8 CSV，不占用浏览器大量内存 |
 
-### 4. 文件与文本比较工作台（v0.16–v0.17）
+### 4. 文件与文本比较工作台（v0.16–v0.18）
 
 定位：跨 Local、SFTP、FTP、FTPS 四类后端的多协议目录与文件比较同步工具。
 
 | 子功能 | 说明 |
 | --- | --- |
+| **常驻实时高亮** | syntax-editor 实时语法着色与响应式高度视口自动收缩，支持多步撤销重做 |
+| **实时 Diff 防覆盖** | 按键后自动计算实时 diff，彻底消除异步渲染覆盖旧结果的竞态问题 |
+| **原生对话框防崩溃** | choose_dialog 接入常驻 OleInitialize UI 线程并加固 recover，杜绝闪退与连接重置 |
 | **4 类协议后端** | 本地目录、SSH SFTP 远程、标准 FTP、FTPS 显式加密，统一抽象为 `RemoteFS` 接口 |
 | **智能内容比对** | 默认智能采样/散列比对，精准识别大小相同但内容有差异的文件；提供可选“极速元数据”模式 |
 | **目录级同步** | 差异分类显示（仅左、仅右、内容不同、相同），支持勾选单向覆盖同步与本地安全备份 |
@@ -216,16 +222,18 @@ Kairo 按功能拆分前端页面与后端子包，全功能零框架依赖、�
 | **完成通知 + 路径跳转** | 右上角浮动通知栈，含「打开所在目录 / 复制路径 / 查看下载历史」按钮 |
 | **安全开关与白名单** | `app.enable_free_file_browser: false` 一键关闭；`app.free_file_roots` 限定前缀（**留空 = 拒绝**） |
 
-### 6. WAS 投产打包工具（v0.17）
+### 6. WAS 投产打包工具（v0.17–v0.18）
 
 定位：面向 WebSphere / Java 企业级应用（如信贷 `credit` 系统）的生产增量补丁打包工具。
 
 | 子功能 | 说明 |
 | --- | --- |
+| **一键直接打包** | 提供 `/api/waspack/build` 接口，支持 fail / clean_kairo_artifacts / replace 三种受控输出策略 |
+| **产物 Marker 保护** | 自动植入 `.kairo-artifact-manifest` 标识，目标目录存在未知非 Kairo 资产时严格拒绝覆盖 |
 | **增量清单一键解析** | 粘贴 Git diff / SVN 提交清单或手工文件列表，自动解析源码路径到编译产物映射 |
 | **目录规范自动组织** | 自动按照 WAS 解压目录规范（`credit.war/WEB-INF/classes/...`、`lib/...`）归类打包 |
 | **本地校验与完整性** | 打包前检测本地文件是否存在与可读，缺失文件显式拦截并高亮警告 |
-| **ZIP 补丁一键导出** | 流式打包并生成带时间戳的增量更新包，附带清单 SHA256 校验摘要 |
+| **全套运维产物** | 一键输出 list.txt、Bak{包名}.sh、{包名}.sh 与增量 tar 包 |
 
 ### 7. WebService 调试中心（v0.12 起）
 
@@ -239,7 +247,7 @@ Kairo 按功能拆分前端页面与后端子包，全功能零框架依赖、�
 | **模板与历史** | 常用请求按分组存为模板；最近 500 条请求历史记录搜索与一键回放 |
 | **Mock 服务端** | 保存 Mock 配置后立即生效；走独立路由前缀 `/mock/{projectId}/{path...}`，不走 `/api/` 鉴权，支持异步落盘与记录回溯 |
 
-### 8. WS Java 代码生成器（v0.17）
+### 8. WS Java 代码生成器（v0.17–v0.18）
 
 定位：根据 WSDL / SOAP 定义一键生成企业级 Java 客户端代码。
 
@@ -271,7 +279,7 @@ Kairo 按功能拆分前端页面与后端子包，全功能零框架依赖、�
 - **Cron 解析**：标准 5/6/7 段 Cron 表达式语义解析、校验与未来 10 次执行时间预览
 - **JSONPath 查询**：对大 JSON 进行路径表达式提取与高亮展示
 
-### 11. Windows 原生桌面便笺（v0.16–v0.17）
+### 11. Windows 原生桌面便笺（v0.16–v0.18）
 
 定位：基于 Win32 原生透明置顶窗口的桌面便笺，与 Web 端便笺中心实时双向同步。
 
@@ -279,10 +287,11 @@ Kairo 按功能拆分前端页面与后端子包，全功能零框架依赖、�
 | --- | --- |
 | **Win32 原生置顶** | 纯 Win32 API 渲染无边框半透明置顶窗口，零 WebView / 零 Electron 开销 |
 | **双击内联编辑** | 便笺中心卡片双击即内联编辑，支持自定义卡片背景色 |
+| **层叠穿透修复** | 更多菜单自适应定位与 isolation 独立层叠上下文，杜绝卡片遮挡与对齐偏差 |
 | **乐观并发控制** | 基于 revision 版本号防并发冲突覆盖，修改冲突显式提示 |
 | **多张显示保护** | 桌面最多同时置顶 6 张可见便笺，防止遮挡工作桌面 |
 
-### 12. 定时任务管理系统（v0.15–v0.16）
+### 12. 定时任务管理系统（v0.15–v0.18）
 
 定位：本地与后台常驻的任务调度引擎，支持 Cron 表达式与 Job Object 进程隔离。
 
@@ -376,14 +385,14 @@ Kairo 全生命周期历经 **20 亿+ (2.0B+) AI Tokens** 深度算力淬炼，�
 | 支柱维度 | 核心工程实践与质量保证 |
 | :--- | :--- |
 | **UI 视觉多模态审核 (Vision)** | **Click-Screenshot-Verification**：22 个页面、5 套自绘主题在多种分辨率下的像素级无闪烁视觉对齐与 WCAG 对比度审核。 |
-| **深度推理与安全沙箱 (Reasoning)** | 数据库只读 AST 词法强制校验、Windows Job Object 进程树递归销毁与 440+ 故障根因逻辑推导。 |
-| **全自动化测试闭环 (Testing)** | 1,120+ Go 单元测试与 42 个 Playwright 脚本（1,200+ 场景）海量运行日志、DOM 树与调用栈排查。 |
+| **深度推理与安全沙箱 (Reasoning)** | 数据库只读 AST 词法强制校验、跨文件升级原子事务与 468+ 故障根因逻辑推导。 |
+| **全自动化测试闭环 (Testing)** | 1,150+ Go 单元测试与 42 个 Playwright 脚本（1,200+ 场景）海量运行日志、DOM 树与调用栈排查。 |
 
 ---
 
 ## <img src="docs/section-icons/stack.svg" width="22" height="22" align="absmiddle"> 技术栈
 
-### 后端（84,000+ 行 Go 代码 · 39 个 internal 子包 · 126 个测试文件 31,800+ 行测试）
+### 后端（86,000+ 行 Go 代码 · 40 个 internal 子包 · 130+ 个测试文件 32,000+ 行测试）
 
 | 依赖 | 版本 | 用途 |
 | --- | --- | --- |
@@ -404,7 +413,7 @@ Kairo 全生命周期历经 **20 亿+ (2.0B+) AI Tokens** 深度算力淬炼，�
 | [`golang.org/x/sys`](https://pkg.go.dev/golang.org/x/sys) | v0.30.0 | 平台特定系统调用（Win32 原生窗口、Job Object 等） |
 | **标准库** | — | `net/http`、`embed`（静态资源内嵌）、`context`、`os/exec`、`crypto/sha256`、`crypto/aes` |
 
-### 前端（37,000+ 行 vanilla JS + CSS · 22 路由页面 + Win32 原生桌面组件 · 0 npm 运行时依赖）
+### 前端（39,000+ 行 vanilla JS + CSS · 22 路由页面 + Win32 原生桌面组件 · 0 npm 运行时依赖）
 
 | 选型 | 说明 |
 | --- | --- |
@@ -412,7 +421,7 @@ Kairo 全生命周期历经 **20 亿+ (2.0B+) AI Tokens** 深度算力淬炼，�
 | **页面与组件拆分** | `core.js` / `state.js` / `api.js` / `theme.js` / `auth.js` + `tail.js` + `sftp-common.js` + 22 个 `pages/*.js` 独立路由页面 |
 | **独立子窗口** | `index.html` (主窗口)、`ssh.html` (独立终端)、`tail.html` (独立日志跟踪)、`preview.html` (独立文件预览) |
 | **CSS 变量主题** | `:root[data-theme=...]` 5 套主题（dark / light / green / hc / xianxia 仙侠·墨韵青锋）；inline script 在 `<head>` 提前设 `data-theme` 防 FOUC |
-| **Node 单测** | `web/app.test.js` 覆盖 `escapeHtml` / `formatBytes` / `formatTime` / `trimMiddle` / `cssEscape` / `pctText` / `validate` / `tailViewer` 环形缓冲 |
+| **Node 单测** | `web/app.test.js` + `tests/workbench-unit-tests.js` 覆盖 `escapeHtml` / `statementModel` / `syntax-editor` / `resource-session` / `tailViewer` 环形缓冲 |
 | **go:embed** | `web/` 整个目录内嵌进二进制，无外部静态文件 |
 | **SSE (Server-Sent Events)** | Tail 流 + 下载进度流 + 比较同步流，长连接，`http.Server.WriteTimeout = 0` |
 | **`requestAnimationFrame`** | Tail 行批量 flush，避免 `textContent +=` 整段重排 |
@@ -429,7 +438,7 @@ Kairo 全生命周期历经 **20 亿+ (2.0B+) AI Tokens** 深度算力淬炼，�
 - **原子写回 yaml**：`tmpfile + rename(2)`，损坏不污染线上配置
 - **Windows Job Object 进程树回收**：定时任务沙箱隔离，超时或程序退出时彻底销毁子孙进程，杜绝僵尸进程
 - **数据库只读词法 AST 校验**：严格拦截写操作，执行前做单条校验与行数/字节/超时硬上限
-- **测试覆盖**：核心包都有 `_test.go`（1,120+ Go 测试用例），全量覆盖 `config` / `httpserver` / `sshclient` / `dlmanager` / `tailmgr` / `dbconsole` / `comparefs` / `webservice` 等
+- **测试覆盖**：核心包都有 `_test.go`（1,150+ Go 测试用例），全量覆盖 `upgrade` / `dbconsole` / `comparefs` / `config` / `httpserver` / `sshclient` / `dlmanager` / `tailmgr` / `webservice` 等
 - **集成测试**：`mock_sshd.py` + `mock_shell_sshd.py` + `fake-websphere/` + injected `sftpDialer`
 - **E2E 测试**：Playwright + 42 个测试脚本 + 1,200+ 场景，Windows 实测 1045 通过、159 条件跳过、0 失败
 - **老浏览器兼容**：xterm.js 5.5+ 转译到 ES5 落入 `web/vendor/xterm/`；`core.js` 内置 DOM polyfill；静态资源带 `?v=YYYYMMDD` 防缓存
@@ -481,7 +490,8 @@ Kairo 全生命周期历经 **20 亿+ (2.0B+) AI Tokens** 深度算力淬炼，�
         │                 │                                    │
         ▼                 ▼                                    ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│  跨领域业务与底层能力 (39 个 internal 子包)                         │
+│  跨领域业务与底层能力 (40 个 internal 子包)                         │
+│  ├── upgrade      跨文件原子升级协调器 (快照/链式迁移/回滚/降级防护) │
 │  ├── desknote     Win32 原生桌面便笺 (透明置顶、双击编辑)            │
 │  ├── deskpet      Win32 原生桌面宠物 (108 款皮肤、成长体系)          │
 │  ├── schedtask    定时任务调度器 (Windows Job Object 递归销毁)      │
@@ -497,7 +507,8 @@ Kairo 全生命周期历经 **20 亿+ (2.0B+) AI Tokens** 深度算力淬炼，�
 │  ├── diagnostics  环境自检 (App/Build/Runtime/Tools/Servers)         │
 │  ├── license      本地激活 + Java 后端验证 (AES-GCM 证书)            │
 │  ├── sponsor      投喂作者排行榜后端 + endpointclient 共享调用器     │
-│  ├── reminder     定时提醒调度器 + popup 系统 Toast                  │
+│  ├── notify       任务告警事件总线 (托盘/Webhook)                     │
+│  ├── popup        GDI 原生顶层弹窗 (穿透专注助手)                     │
 │  ├── portreuse    端口复用 (Windows 独立实现 + 跨平台兜底)           │
 │  └── tray         系统托盘管理与启动异常弹框                         │
 └─────────────────────────────────────────────────────────────────────┘
@@ -726,7 +737,7 @@ Kairo 全生命周期历经 **20 亿+ (2.0B+) AI Tokens** 深度算力淬炼，�
 
 ---
 
-## <img src="docs/section-icons/security.svg" width="22" height="22" align="absmiddle"> 安全白皮书（16 项 Fail-Closed 设计点）
+## <img src="docs/section-icons/security.svg" width="22" height="22" align="absmiddle"> 安全白皮书（17 项 Fail-Closed 设计点）
 
 1. **默认只监听 127.0.0.1**：未启用 `auth` 时 `0.0.0.0` / 内网 IP 直接被配置校验拒绝，不向局域网暴露；启用 `auth` 后才允许监听 `0.0.0.0` / 内网 IP
 2. **不开放任意 shell 注入**：所有远程命令由后端固定模板生成（`find` / `grep` / `sed` / `sort` / `head` / `cat` 组合）
@@ -744,6 +755,7 @@ Kairo 全生命周期历经 **20 亿+ (2.0B+) AI Tokens** 深度算力淬炼，�
 14. **Bearer Token 认证 + IP 白名单**：在 `config.yaml` 配置 token（含 `role=admin`/`user` 与 `allowed_ips`），admin 专属接口强制 `role=admin`
 15. **数据库只读 AST 与资源硬上限**：SQL 词法 AST 与正则双重拦截，只允许单条 SELECT；强制超时与 5000 行/32MB 硬上限；Redis SCAN 游标分页防阻塞
 16. **Windows Job Object 进程树彻底回收**：定时任务使用 Job Object 沙箱归组，超时、取消或程序退出时递归销毁全部子孙进程，杜绝孤儿僵尸进程
+17. **跨文件升级原子事务与降级防护**：`internal/upgrade` 升级前全量快照，N->N+1 链式迁移，任一失败全量回滚，强制拒绝旧版本覆写高版本资产
 
 ---
 
@@ -930,7 +942,7 @@ kairo/
 ├── config.yaml                        # 首次启动内置模板；运行时使用用户配置目录中的副本
 ├── go.mod / go.sum                    # 依赖锁定（go 1.24）
 ├── vendor/                            # 已固化依赖，clone 后无网可编
-├── web/                               # 嵌入式前端（37,000+ 行原生 JS + CSS，零 npm 依赖）
+├── web/                               # 嵌入式前端（39,000+ 行原生 JS + CSS，零 npm 依赖）
 │   ├── index.html                     # SPA 骨架 + 顶部菜单 + 主题 inline 防 FOUC
 │   ├── preview.html                   # 文件预览独立新窗口
 │   ├── tail.html                      # Tail 全屏窗口
@@ -968,7 +980,7 @@ kairo/
 │       ├── tasks.js                   # 定时任务管理系统
 │       ├── sponsor.js                 # 投喂作者与社区排行
 │       └── about.js                   # 关于（数据看板 + 架构 + 版本演进史 + 故障库）
-├── internal/                          # 39 个后端子包（84,000+ 行 Go 代码）
+├── internal/                          # 40 个后端子包（86,000+ 行 Go 代码）
 │   ├── audit/                         # 审计日志（线程安全，logs/audit.log 按天滚动）
 │   ├── browserpref/                   # 浏览器偏好探测 / 落盘
 │   ├── comparefs/                     # 多协议文件系统抽象（Local / SFTP / FTP / FTPS）
@@ -984,14 +996,16 @@ kairo/
 │   ├── downloads/                     # 单文件索引元数据（.kairo-meta.json）
 │   ├── endpointclient/                # 共享 HTTP 调用器（主备切换 + 认证）
 │   ├── formatter/                     # JSON / XML / YAML / URL-form 格式化
-│   ├── httpserver/                    # HTTP 路由与 39 个业务 handlers (~15 个 _test.go)
+│   ├── httpserver/                    # HTTP 路由与 39 个业务 handlers (~16 个 _test.go)
 │   ├── iconextract/                   # exe 图标提取与缓存
 │   ├── license/                       # 本地激活 + Java 后端验证（AES-GCM 证书）
 │   ├── logquery/                      # 后端命令安全模板生成
-│   ├── popup/                         # 系统通知（Win10+ Toast / 经典气泡 fallback）
+│   ├── notify/                        # 任务告警事件总线（托盘 + Webhook）
+│   ├── popup/                         # GDI 原生顶层弹窗（穿透专注助手）
 │   ├── portreuse/                     # 端口复用（Windows 独立实现 + 跨平台兜底）
 │   ├── reminder/                      # 定时提醒调度器
 │   ├── schedtask/                     # 定时任务调度器（Windows Job Object 递归销毁）
+│   ├── upgrade/                       # 跨文件原子升级协调器（快照/回滚/降级防护）
 │   ├── sftpclient/                    # SFTP 客户端封装（RemoteFS 接口）
 │   ├── sponsor/                       # 投喂作者排行榜后端
 │   ├── sshclient/                     # SSH 客户端（5 套 compat profile + ctx 超时）
@@ -1054,6 +1068,7 @@ kairo/
 
 | 版本 | 功能 |
 | --- | --- |
+| **v0.18** | 工作台重构闭环（分页协议/光标语句执行/断线重试/常驻语法高亮） + 跨文件升级原子协调 + 19项集中修复 + 全量自动化测试 |
 | **v0.17** | 数据库工作台专业化重构 + 桌面便笺交互统一 + 文件比较准确性/性能 + 搜索结果表格稳定性 |
 | **v0.16** | Oracle/MySQL/Redis 数据库工作台 + Local/SFTP/FTP/FTPS 比较同步 + Windows 原生宠物/便笺 + WebService/日志/任务可靠性收口 |
 | **v0.14** | 投喂作者 Web UI + Sponsor 后端 + endpointclient 共享调用器 + About 12 section 懒渲染 |
@@ -1173,7 +1188,30 @@ v0.11-rc1 起所有 `/api/*`（除 `/api/license/*`）都被 license 网关拦�
 
 ## <img src="docs/section-icons/changelog.svg" width="22" height="22" align="absmiddle"> Release Notes
 
-### v0.17（当前）— 数据库工作台专业化 + 桌面交互精修 + 比较准确性
+### v0.18（当前）— 工作台闭环 + 跨文件升级协调 + 19项深度修复 + 自动化测试全绿
+
+#### 数据库与比对工作台交互闭环
+- **光标所在语句精准执行**：在包含多条 SQL 的编辑器中，输入执行快捷键根据当前光标位置精准执行当前单条语句；支持连续多分号自动规整，防止多语句执行事故。
+- **流式真实分页协议**：后端全面支持 `page / page_size / has_next / ordered` 分页契约，兼容旧版 `max_rows`；Oracle 数据源自动嵌套分页并从展示列中剥离内部 ROWNUM 别名列。
+- **断线透明重试与孤儿会话回收**：针对网络抖动提供单次透明自动重试机制；页签关闭时主动触发孤儿资源会话清理。
+- **小结果集直出渲染**：针对 <=600 行轻量查询结果直接渲染真实 DOM，绕过虚拟滚动首帧计算延迟。
+- **常驻语法高亮与实时比对防竞态**：比对工作台文本区常驻 syntax-editor 实时高亮与响应式视口高度收缩；按键即时 diff 防异步覆盖。
+- **Windows 目录选择防崩溃**：选文件夹对话框调度全面接入常驻 STA/OleInitialize UI 宿主线程，外层注入 recover 兜底，彻底解决 COM 冲突引发的 `ERR_CONNECTION_RESET` 与闪退。
+
+#### 统一升级协调器与系统可靠性
+- **跨文件原子升级事务（internal/upgrade）**：升级启动前对用户配置与资产制作全量快照；严格执行 N->N+1 链式升级契约，任一失败全量原子回滚；并对未版本化与跨大版本逆向降级严格拒绝。
+- **纯 GDI 桌面弹窗提醒（internal/popup）**：自绘 Win32 原生 GDI 顶层弹窗，完全绕过 Windows 10/11 专注助手与通知中心静默拦截，保障运维告警 100% 显式触达。
+- **任务告警事件总线（internal/notify）**：定时任务失败触发系统事件总线，支持 Windows 托盘与企业微信/钉钉 Webhook 告警。
+- **WAS 投产打包一键直接生成**：提供 `/api/waspack/build` 接口，支持 fail / clean_kairo_artifacts / replace 策略，并通过 marker 标识隔离保护未知资产。
+
+#### 19 项体验反馈集中修复与全量测试
+- 修复便笺“更多”菜单自适应 top 定位与 isolation 独立层叠上下文，杜绝卡片遮挡与按钮错位。
+- 修复浅色主题 kbd 快捷键对比度、武侠主题编辑器配色、单行字段复制 34px 易点击区域、九宫格收藏夹弹窗、武林榜冷启预热重试。
+- 全量自动化测试守护：新增前端工作台单元测试 `tests/workbench-unit-tests.js`（statement-model、resource-session、syntax-editor、notice-bus 全部通过），Go 单元测试全绿。
+
+完整设计原则、架构分层、28 项分级修复与迁移说明见应用内「关于 → 版本演进史 → v0.18」。
+
+### v0.17 — 数据库工作台专业化 + 桌面交互精修 + 比较准确性
 
 #### 数据库工作台专业化重构
 

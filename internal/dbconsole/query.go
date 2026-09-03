@@ -213,6 +213,7 @@ func (m *Manager) streamQueryAttempt(ctx context.Context, source Source, query s
 	}
 	flush()
 	summary.ElapsedMS = time.Since(started).Milliseconds()
+	summary.StatementType = info.Type
 	events = append(events, StreamEvent{Type: "summary", Summary: &summary})
 	return events, summary, nil
 }
@@ -320,12 +321,14 @@ func scanRow(rows *sql.Rows, count int, columns []Column, aliasIdx int) ([]any, 
 	return values, int64(len(raw)), nil
 }
 
+const maxLOBPreviewBytes = 256 * 1024 // 256 KB preview limit for CLOB/BLOB
+
 func normalizeColumnValue(value any, dbType string) any {
 	if value == nil {
 		return nil
 	}
 	isClob := strings.Contains(dbType, "CLOB") || dbType == "LONG" || dbType == "LONGTEXT" || dbType == "MEDIUMTEXT"
-	isBlob := strings.Contains(dbType, "BLOB") || dbType == "LONG RAW" || dbType == "RAW" || dbType == "BINARY" || dbType == "VARBINARY"
+	isBlob := strings.Contains(dbType, "BLOB") || dbType == "LONG RAW"
 
 	if isClob {
 		var text string
@@ -337,11 +340,35 @@ func normalizeColumnValue(value any, dbType string) any {
 		default:
 			text = fmt.Sprint(v)
 		}
+		totalBytes := len(text)
+		truncated := false
+		if totalBytes > maxLOBPreviewBytes {
+			cut := maxLOBPreviewBytes
+			for cut > 0 && !utf8.RuneStart(text[cut]) {
+				cut--
+			}
+			text = text[:cut]
+			truncated = true
+		}
 		return map[string]any{
 			"kind":      "clob",
-			"bytes":     len(text),
+			"bytes":     totalBytes,
 			"text":      text,
-			"truncated": false,
+			"truncated": truncated,
+		}
+	}
+
+	if !isBlob && (dbType == "RAW" || dbType == "BINARY" || dbType == "VARBINARY") {
+		// Only treat as LOB if larger than 256 bytes; small RAW (e.g. UUID) remains normal inline value
+		var rawLen int
+		switch v := value.(type) {
+		case []byte:
+			rawLen = len(v)
+		case string:
+			rawLen = len(v)
+		}
+		if rawLen > 256 {
+			isBlob = true
 		}
 	}
 
@@ -355,12 +382,19 @@ func normalizeColumnValue(value any, dbType string) any {
 		default:
 			rawBytes = []byte(fmt.Sprint(v))
 		}
+		totalBytes := len(rawBytes)
+		truncated := false
+		preview := rawBytes
+		if totalBytes > maxLOBPreviewBytes {
+			preview = preview[:maxLOBPreviewBytes]
+			truncated = true
+		}
 		return map[string]any{
 			"kind":           "blob",
-			"bytes":          len(rawBytes),
-			"hex":            hex.EncodeToString(rawBytes),
-			"preview_base64": base64.StdEncoding.EncodeToString(rawBytes),
-			"truncated":      false,
+			"bytes":          totalBytes,
+			"hex":            hex.EncodeToString(preview),
+			"preview_base64": base64.StdEncoding.EncodeToString(preview),
+			"truncated":      truncated,
 		}
 	}
 

@@ -775,17 +775,44 @@ func (s *Server) databaseSafeError(source dbconsole.Source, err error) error {
 }
 
 
+type databaseSessionBackupPayload struct {
+	ActiveID      any              `json:"activeId"`
+	TabSeq        int              `json:"tabSeq"`
+	SourceID      string           `json:"sourceId"`
+	EditorHeight  int              `json:"editorHeight"`
+	MetaCollapsed *bool            `json:"metaCollapsed"`
+	Sessions      []map[string]any `json:"sessions"`
+	UpdatedAt     int64            `json:"updatedAt"`
+}
+
+func databaseSessionFileName(r *http.Request) string {
+	if user, _ := r.Context().Value(authUserKey).(*authUser); user != nil && strings.TrimSpace(user.Name) != "" {
+		hash := sha256.Sum256([]byte(strings.TrimSpace(user.Name)))
+		return fmt.Sprintf("database-sessions-%s.json", hex.EncodeToString(hash[:8]))
+	}
+	return "database-sessions.json"
+}
+
 func (s *Server) handleDatabaseSessionBackup(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeErr(w, 405, errors.New("仅支持 POST"))
 		return
 	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, 10<<20))
+	body, err := io.ReadAll(io.LimitReader(r.Body, databaseBodyLimit))
 	if err != nil {
 		writeErr(w, 400, err)
 		return
 	}
-	filePath := filepath.Join(s.cur().DataDir(), "database-sessions.json")
+	var payload databaseSessionBackupPayload
+	if err := json.Unmarshal(body, &payload); err != nil {
+		writeErr(w, 400, fmt.Errorf("非法会话备份格式: %w", err))
+		return
+	}
+	if len(payload.Sessions) > 50 {
+		writeErr(w, 400, errors.New("页签数量超出限制 (最多 50 个)"))
+		return
+	}
+	filePath := filepath.Join(s.cur().DataDir(), databaseSessionFileName(r))
 	if err := os.WriteFile(filePath, body, 0o644); err != nil {
 		writeErrSanitized(w, 500, err)
 		return
@@ -798,15 +825,22 @@ func (s *Server) handleDatabaseSessionRestore(w http.ResponseWriter, r *http.Req
 		writeErr(w, 405, errors.New("仅支持 GET"))
 		return
 	}
-	filePath := filepath.Join(s.cur().DataDir(), "database-sessions.json")
+	fileName := databaseSessionFileName(r)
+	filePath := filepath.Join(s.cur().DataDir(), fileName)
 	data, err := os.ReadFile(filePath)
 	if err != nil {
-		if os.IsNotExist(err) {
-			writeJSON(w, 200, map[string]any{"ok": true, "session": nil})
+		if fileName != "database-sessions.json" {
+			filePath = filepath.Join(s.cur().DataDir(), "database-sessions.json")
+			data, err = os.ReadFile(filePath)
+		}
+		if err != nil {
+			if os.IsNotExist(err) {
+				writeJSON(w, 200, map[string]any{"ok": true, "session": nil})
+				return
+			}
+			writeErrSanitized(w, 500, err)
 			return
 		}
-		writeErrSanitized(w, 500, err)
-		return
 	}
 	var session any
 	if err := json.Unmarshal(data, &session); err != nil {

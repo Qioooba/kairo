@@ -3,7 +3,7 @@
  *
  * 设计目标：
  *   - 把"关于"从单页简介升级为一份**带交互的产品技术白皮书**
- *   - 顶部 sticky 锚点导航 + 18 个版本卡片 (accordion 折叠) + 14 个数据区块
+ *   - 顶部 sticky 锚点导航 + 19 个版本卡片 (accordion 折叠) + 14 个数据区块
  *   - 内容 100% 由 commit log / 源码 / README 提取, 不注水
  *   - 几万字正文 + 折叠默认收起, 首屏不卡
  */
@@ -135,7 +135,7 @@
     { name: 'modules',      fn: renderModulesSection,      min: 800 },
     { name: 'comparison',   fn: renderComparisonSection,   min: 500 },
     { name: 'bugs',         fn: renderBugStoriesSection,   min: 700 },
-    { name: 'history',      fn: renderHistorySection,      min: 900 },  // changelog 18 版本卡
+    { name: 'history',      fn: renderHistorySection,      min: 900 },  // changelog 19 版本卡
     { name: 'faq',          fn: renderFaqSection,          min: 600 },
     { name: 'roadmap',      fn: renderRoadmapSection,      min: 500 }
   ];
@@ -227,19 +227,19 @@
   // §1. 核心数据看板
   // =====================================================================
   const stats = [
-    { label: '总代码量',             value: '122,000+', sub: 'Go 84K · 前端 37K (JS+CSS) · 0 npm 运行时', tone: 'primary' },
+    { label: '总代码量',             value: '125,000+', sub: 'Go 86K · 前端 39K (JS+CSS) · 0 npm 运行时', tone: 'primary' },
     { label: 'AI Token 深度算力淬炼', value: '20 亿+ (2.0B+)', sub: '多模态视觉审核 · 长程深度推理 · 测试闭环', tone: 'accent' },
-    { label: '代码行数 (Go)',         value: '84,000+',  sub: '309 个 Go 文件 · 39 个后端子包 · 含 126 测试', tone: 'primary' },
-    { label: '代码行数 (前端)',       value: '37,000+',  sub: 'vanilla JS 30.5K + CSS 7.3K · 22 路由页面',   tone: 'accent'  },
-    { label: '提交次数',              value: '167+',     sub: 'v0.1 → v0.17 持续演进',                      tone: 'success' },
-    { label: '后端模块',              value: '39',       sub: 'dbconsole / comparefs / desknote / deskpet 等', tone: 'primary' },
+    { label: '代码行数 (Go)',         value: '86,000+',  sub: '315 个 Go 文件 · 40 个后端子包 · 含 130+ 测试', tone: 'primary' },
+    { label: '代码行数 (前端)',       value: '39,000+',  sub: 'vanilla JS 31K + CSS 8K · 22 路由页面',   tone: 'accent'  },
+    { label: '提交次数',              value: '178+',     sub: 'v0.1 → v0.18 持续演进',                      tone: 'success' },
+    { label: '后端模块',              value: '40',       sub: 'upgrade / dbconsole / comparefs / desknote 等', tone: 'primary' },
     { label: '前端路由与组件',        value: '22+',      sub: '22 个路由页面 + Win32 原生桌面组件 + 4 独立子窗口', tone: 'accent'  },
-    { label: 'API 接口',              value: '130+',     sub: 'REST + NDJSON + SSE + WebSocket 全覆盖',      tone: 'primary' },
-    { label: '测试用例 (Go)',         value: '1,120+',   sub: '126 个 _test.go · 单元 + 集成 + Mock',       tone: 'success' },
-    { label: '测试用例 (Node)',       value: '30+',      sub: 'web/app.test.js + webservice.test.js 单元',  tone: 'success' },
+    { label: 'API 接口',              value: '135+',     sub: 'REST + NDJSON + SSE + WebSocket 全覆盖',      tone: 'primary' },
+    { label: '测试用例 (Go)',         value: '1,150+',   sub: '130+ 个 _test.go · 单元 + 集成 + Mock',      tone: 'success' },
+    { label: '测试用例 (Node)',       value: '40+',      sub: 'workbench-unit + webservice + app.test 单元', tone: 'success' },
     { label: 'E2E 场景 (Playwright)', value: '1,200+',   sub: '42 脚本 · Windows 1045 通过 · 159 跳过 · 0 失败', tone: 'warn' },
-    { label: '修复缺陷',              value: '440+',     sub: 'P0/P1/P2 全量闭环',                          tone: 'warn'    },
-    { label: '安全设计点',            value: '16',       sub: 'fail-closed 全栈 + DB 只读 AST + 进程树隔离', tone: 'error'   },
+    { label: '修复缺陷',              value: '468+',     sub: 'P0/P1/P2 全量闭环',                          tone: 'warn'    },
+    { label: '安全设计点',            value: '17',       sub: '跨文件升级事务 + fail-closed + AST 只读',     tone: 'error'   },
     { label: 'SSH 兼容 profile',      value: '5',        sub: 'modern → legacy · 自动 fallback',           tone: 'primary' }
   ];
 
@@ -304,12 +304,12 @@
       {
         title: '深度推理与安全沙箱 (Reasoning)',
         icon: 'safeClosed',
-        body: 'Windows Job Object 进程树递归销毁与句柄管理、数据库只读 AST 词法强制校验、COW 状态机与 440+ 故障根因逻辑推导。'
+        body: 'Windows Job Object 进程树递归销毁与句柄管理、数据库只读 AST 词法强制校验、跨文件升级原子事务与 468+ 故障根因逻辑推导。'
       },
       {
         title: '全自动化测试闭环 (Testing)',
         icon: 'quality',
-        body: '1,120+ Go 单元测试与 42 个 Playwright 脚本（1,200+ 场景）海量运行日志、DOM 树与调用栈排查，长上下文闭环验证。'
+        body: '1,150+ Go 单元测试与 42 个 Playwright 脚本（1,200+ 场景）海量运行日志、DOM 树与调用栈排查，长上下文闭环验证。'
       }
     ]
   };
@@ -332,11 +332,11 @@
     },
     {
       icon: 'simple', title: '极简优于复杂',
-      body: '零前端框架、零外部 UI 库、零 CSS 预处理器、零 npm 运行时。vanilla JS + 原生 CSS 变量 + 内嵌 go:embed。122,000+ 行代码，22 个前端路由页面与原生桌面组件，清晰可读，无黑盒构建依赖。'
+      body: '零前端框架、零外部 UI 库、零 CSS 预处理器、零 npm 运行时。vanilla JS + 原生 CSS 变量 + 内嵌 go:embed。125,000+ 行代码，22 个前端路由页面与原生桌面组件，清晰可读，无黑盒构建依赖。'
     },
     {
       icon: 'testable', title: '可测优于能跑',
-      body: 'sshclient → Streamer 接口、sftpclient → RemoteFS 接口、dlmanager → Session 模型：每个核心包都对测试友好，提供 mock 注入点。fake-websphere + mock_sshd.py 给集成测试真实感；Go 测试 1,120+ 用例，126 个测试文件，单测覆盖率 82%+。'
+      body: 'sshclient → Streamer 接口、sftpclient → RemoteFS 接口、dlmanager → Session 模型：每个核心包都对测试友好，提供 mock 注入点。fake-websphere + mock_sshd.py 给集成测试真实感；Go 测试 1,150+ 用例，130+ 个测试文件，单测覆盖率 82%+。'
     },
     {
       icon: 'zeroPlain', title: '凭据零落盘 (zero plain)',
@@ -370,15 +370,15 @@
     },
     {
       layer: 'L3', name: '业务层 (Domain)',
-      detail: 'dbconsole · comparefs · schedtask · deskpet · desknote · winui · textcodec · waspack · webservice · wscodegen · sshclient · sftpclient · sshshell (PTY) · logquery · dlmanager · tailmgr · diff · downloads · formatter · credentials · license · sponsor · reminder',
-      tech: ['database/sql 连接池', 'x/crypto/ssh', 'gorilla/websocket', 'pkg/sftp', 'jlaffaye/ftp', 'x/text (GBK 透明转换)', 'AES-256-GCM', 'COW Config', 'Worker Pool', 'Myers Diff', 'PTY + WebSocket', 'Windows Job Object'],
-      duty: '数据库只读查询与元数据提取、文件多协议比较与受控同步、受控 SSH 执行、交互式 PTY 终端、SFTP 文件浏览、定时任务进程树调度、命令模板生成、异步任务会话池、实时 SSE 广播、行级 diff、凭据存取。元数据全部集中维护，handler 只负责协议转换。'
+      detail: 'upgrade · dbconsole · comparefs · schedtask · deskpet · desknote · winui · popup · notify · waspack · webservice · wscodegen · sshclient · sftpclient · sshshell (PTY) · logquery · dlmanager · tailmgr · diff · downloads · formatter · credentials · license · sponsor · reminder',
+      tech: ['database/sql 连接池', 'x/crypto/ssh', 'gorilla/websocket', 'pkg/sftp', 'jlaffaye/ftp', 'x/text (GBK 透明转换)', 'AES-256-GCM', 'COW Config', 'Worker Pool', 'Myers Diff', 'PTY + WebSocket', 'Windows Job Object', 'GDI 原生弹窗', 'STA 宿主线程'],
+      duty: '跨文件升级原子事务、数据库只读查询与元数据提取、文件多协议比较与受控同步、受控 SSH 执行、交互式 PTY 终端、SFTP 文件浏览、定时任务进程树调度、GDI 弹窗与告警总线、命令模板生成、异步任务会话池、实时 SSE 广播、行级 diff、凭据存取。元数据全部集中维护，handler 只负责协议转换。'
     },
     {
       layer: 'L4', name: '基础设施层 (Infra)',
-      detail: 'config (COW Manager) · credentials (keyring/file/disabled) · downloads (元数据索引) · audit (滚动日志) · preferences · portreuse · tray (系统托盘)',
-      tech: ['yaml.v3', 'go-keyring', 'AES-GCM', 'atomic rename', 'chmod 0600', 'tail-file rotate', 'fyne.io/systray', 'Job Object'],
-      duty: '配置原子加载、凭据加密存储、下载元数据索引、操作审计滚动文件、系统托盘常驻、进程树生命周期回收。所有"用户状态变更"都在这层留下不可变痕迹。'
+      detail: 'config (COW Manager + upgrade 协调器) · credentials (keyring/file/disabled) · downloads (元数据索引) · audit (滚动日志) · preferences · portreuse · tray (系统托盘)',
+      tech: ['yaml.v3', 'go-keyring', 'AES-GCM', 'atomic rename', 'chmod 0600', 'tail-file rotate', 'fyne.io/systray', 'Job Object', 'upgrade snapshot'],
+      duty: '配置原子加载与跨文件升级事务、凭据加密存储、下载元数据索引、操作审计滚动文件、系统托盘常驻、进程树生命周期回收。所有"用户状态变更"都在这层留下不可变痕迹，升级失败全量回滚。'
     }
   ];
 
@@ -396,7 +396,7 @@
   // §4. 后端技术栈 (16 依赖逐项)
   // =====================================================================
   const backendStack = [
-    { name: 'Go', version: '1.24+', role: '主语言', desc: '主线面向 Windows 10/11、macOS 与 Linux；goroutine 调度，静态二进制，零运行时依赖；84,000+ 行 Go 代码（含 126 个测试文件）。' },
+    { name: 'Go', version: '1.24+', role: '主语言', desc: '主线面向 Windows 10/11、macOS 与 Linux；goroutine 调度，静态二进制，零运行时依赖；86,000+ 行 Go 代码（含 130+ 个测试文件）。' },
     { name: 'github.com/sijms/go-ora/v2', version: 'v2.8.24', role: 'Oracle 驱动', desc: '纯 Go thin driver，无需 Oracle Instant Client；数据库工作台生产兼容目标为 Oracle 11g。' },
     { name: 'github.com/go-sql-driver/mysql', version: 'v1.9.3', role: 'MySQL 驱动', desc: 'database/sql 连接池、只读查询、元数据与流式结果。' },
     { name: 'github.com/redis/go-redis/v9', version: 'v9.20.0', role: 'Redis 客户端', desc: '单机 / Cluster / Sentinel；SCAN 分页、TTL 与类型化 Key 预览；大 Key 采用有限读取，避免阻塞和内存爆炸。' },
@@ -452,7 +452,7 @@
   ];
 
   // =====================================================================
-  // §7. 安全白皮书 (16 条)
+  // §7. 安全白皮书 (17 条)
   // =====================================================================
   const security = [
     { id: 'S01', title: '默认只监听 127.0.0.1', detail: '未启用 auth 时 0.0.0.0 / 内网 IP 直接被配置校验拒绝，不向局域网暴露；启用 auth 后才允许监听 0.0.0.0 / 内网 IP。' },
@@ -470,7 +470,8 @@
     { id: 'S13', title: 'TOCTOU 加固', detail: 'handler 入口取一次配置快照（COW Manager 读快照），全程复用同一份，避免 check-then-use 时间窗被改写。' },
     { id: 'S14', title: 'Bearer Token + IP 白名单 (可选)', detail: 'config.yaml 的 auth 段配置 token（role=admin/user + allowed_ips），启用后未带有效 token → 401；IP 不在白名单 → 403；admin 专属接口（配置导入 / 凭据清空 / 服务器增改 / openers / download-retention / 数据库数据源增改）强制 role=admin。' },
     { id: 'S15', title: '数据库只读策略与资源硬上限', detail: '只读 AST 词法双重拦截，只允许单条只读 SQL；限制超时、最大行数与返回体；只读执行计划 (PLAN_TABLE/EXPLAIN)；Redis SCAN 游标分页与大 Key 截断防护。' },
-    { id: 'S16', title: '任务进程树 Job Object 沙箱隔离', detail: 'Windows Job Object 进程归组 + POSIX 进程组；命令执行超时或 Kairo 退出时，彻底递归销毁全部子孙进程，避免后台残留孤儿进程。' }
+    { id: 'S16', title: '任务进程树 Job Object 沙箱隔离', detail: 'Windows Job Object 进程归组 + POSIX 进程组；命令执行超时或 Kairo 退出时，彻底递归销毁全部子孙进程，避免后台残留孤儿进程。' },
+    { id: 'S17', title: '跨文件升级原子事务与降级防护', detail: 'internal/upgrade 在升级前对全部用户配置与资产做全量快照，N->N+1 链式迁移，任一失败全量原子回滚，并强制拒绝旧版本覆写高版本资产，杜绝版本撕裂与半更新脏数据。' }
   ];
 
   // =====================================================================
@@ -488,7 +489,7 @@
   // §9. 质量保障
   // =====================================================================
   const quality = [
-    { tier: 'L1 单元测试', tool: 'go test ./...', coverage: '1,120+ 测试函数', detail: '126 个 _test.go 文件，覆盖数据库只读策略、文件工作台、桌面状态、SSH/SFTP、日志、任务进程树、WebService、凭据、配置与 httpserver 全链路。' },
+    { tier: 'L1 单元测试', tool: 'go test ./...', coverage: '1,150+ 测试函数', detail: '130+ 个 _test.go 文件，覆盖升级事务、数据库只读策略、文件工作台、桌面状态、SSH/SFTP、日志、任务进程树、WebService、凭据、配置与 httpserver 全链路。' },
     { tier: 'L2 集成测试', tool: 'mock_sshd.py + fake-websphere', coverage: 'Windows/Linux shell 双语义', detail: 'Python helper 启动 SSH server；Windows 自动使用 Git Bash/GNU 工具，验证列文件、组合搜索、上下文、tail、下载、凭据、RBAC、路径穿越、host key 与进程回收。' },
     { tier: 'L3 E2E (Playwright)', tool: 'tests/e2e + 独立运行配置', coverage: '1,204 场景 (42 脚本)', detail: '真实 Windows Chromium 全量结果：1045 通过、0 失败、159 条件跳过；另以 1366×900、1920×1080、1024×768 跑 42 项页面矩阵，控制台/页面/网络错误均为 0。' },
     { tier: 'L4 手动验收', tool: 'docs/ACCEPTANCE.md + scripts/acceptance_run.py', coverage: '5b/5c/5d 全量', detail: '文件浏览器 / tail / 测试矩阵 / 完整业务路径逐项验收，每项可执行 / 可验证；scripts/acceptance_run.py 一键回归。' },
@@ -536,13 +537,17 @@
       ]
     },
     {
-      icon: 'database', name: '数据库工作台 (v0.16-v0.17)',
+      icon: 'database', name: '数据库工作台 (v0.16-v0.18)',
       pages: ['database'],
       apis: ['/api/database/sources', '/api/database/query', '/api/database/export', '/api/database/metadata/*', '/api/database/explain', '/api/database/redis/*'],
       pkg: 'internal/dbconsole',
-      desc: '面向生产运维的专业数据库控制台：适配 Oracle 11g (go-ora)、MySQL (go-sql-driver) 与 Redis (go-redis)；支持对象树、字段面板、只读 SQL、NDJSON 流式结果、单记录模式、自定义 SQL 片段与导出。',
+      desc: '面向生产运维的专业数据库控制台：适配 Oracle 11g (go-ora)、MySQL (go-sql-driver) 与 Redis (go-redis)；支持对象树、字段面板、只读 SQL、光标所在语句精准执行、流式真实分页、断线透明重连、单记录模式与导出。',
       features: [
         '多源统一适配：Oracle 11g 纯 Go thin driver、MySQL 只读连接池、Redis 单机/Cluster/Sentinel 拓扑感知',
+        '光标所在语句精准执行：statementModel 自动提取光标所在有效 SQL，多重尾部分号智能规整，杜绝批量或误执行',
+        '智能分页协议：支持 page / page_size / has_next / ordered 流式分页，Oracle ROWNUM 别名列自动脱敏过滤',
+        '断线透明重试与会话治理：网络抖动一次透明重连，幽灵 Tab 孤儿态资源会话后台自动释放回收',
+        '小结果集直出渲染：<=600 行轻量查询直接渲染真实 DOM，无缝绕过虚拟滚动初始测量延迟',
         '完整对象浏览器：按 Schema 分组展示表、视图、物化视图、函数、过程、包、触发器、序列与同义词',
         '字段面板快速生成：一键复制 SELECT 字段清单，降低排障和接口对接时的重复录入',
         '持久 SQL 错误工作区：执行失败在结果区持久展示错误标题、根因与修复建议，不依赖短暂 Toast',
@@ -551,16 +556,19 @@
         'SQL 片段与快捷键：支持 ${cursor} 占位符、缩写展开 (sf → SELECT * FROM) 与自定义执行按键',
         '多页签并行查询：支持最多 6 个查询页签独立保存语句、结果与取消句柄，后台查询并发执行',
         '只读执行计划：Oracle PLAN_TABLE 与 MySQL EXPLAIN 结构化展示，辅助排查慢查询',
-        '多格式导出：支持 UTF-8 CSV、JSON、Excel .xlsx 以及方言 INSERT 语句生成'
+        'Redis 安全治理：读白名单扩展 (TYPE/TTL/HGET/HSCAN/LRANGE)，受控 TTL mutation 权限隔离'
       ]
     },
     {
-      icon: 'compareIc', name: '文件与文本比较工作台 (v0.16-v0.17)',
+      icon: 'compareIc', name: '文件与文本比较工作台 (v0.16-v0.18)',
       pages: ['compare'],
       apis: ['/api/diff/compare', '/api/compare/scan', '/api/compare/jobs/*', '/api/compare/sync*', '/api/compare/connections'],
       pkg: 'internal/diff + internal/comparefs',
-      desc: '多协议文件与文本比对系统：统一 Local / SFTP / FTP / FTPS 四大后端，基于智能内容散列与 Myers diff 算法，支持目录扫描、分类比对、任务化后台执行与受控同步。',
+      desc: '多协议文件与文本比对系统：统一 Local / SFTP / FTP / FTPS 四大后端，基于智能内容散列与 Myers diff 算法，支持常驻语法高亮、目录扫描、分类比对、任务化后台执行与受控同步。',
       features: [
+        '常驻语法高亮编辑器：syntax-editor 实时语法着色与响应式高度视口自动收缩，支持多步撤销重做',
+        '实时比对防覆盖状态机：按键后自动计算实时 diff，解决异步渲染覆盖旧结果的竞态问题',
+        'Windows 宿主线程原生对话框：choose_dialog 接入常驻 OleInitialize UI 线程并加固 recover，杜绝闪退与连接重置',
         '多协议后端抽象：Local / SFTP / FTP / FTPS 统一 RemoteFS 接口，支持跨协议目录比对',
         '智能内容散列校验：解决同大小同时间文件漏报问题，同时保留极速元数据降级模式',
         'Myers diff O(ND) 算法：单文件 <4MB / 几万行毫秒级比对，支持 12 种忽略规则',
@@ -603,16 +611,18 @@
       ]
     },
     {
-      icon: 'waspack', name: 'WAS 投产打包 (v0.17 起)',
+      icon: 'waspack', name: 'WAS 投产打包 (v0.17-v0.18)',
       pages: ['waspack'],
       apis: ['/api/waspack/preview', '/api/waspack/build', '/api/waspack/open'],
       pkg: 'internal/waspack + internal/httpserver/handlers_waspack.go',
-      desc: '面向 credit IntelliJ 工程的投产清单打包器：对照 src / WebRoot / WEB-INF/classes 预检文件，生成现网可执行的 tar、备份脚本与执行脚本。',
+      desc: '面向 credit IntelliJ 工程的投产清单打包器：对照 src / WebRoot / WEB-INF/classes 预检文件，一键直接打包，生成现网可执行的 tar、备份脚本与执行脚本。',
       features: [
+        '一键直接打包 (/api/waspack/build)：支持 fail / clean_kairo_artifacts / replace 三种受控输出策略',
+        '产物 marker 与未知文件保护：目标目录存在未知非 Kairo 资产时严格拒绝覆盖，阶段隔离防穿透',
+        '增量批处理清单解析：智能关联批处理脚本自动化联动，支持多模块清单连续配对',
         '清单规范化：支持 ./src/...、./WEB-INF/...、工程绝对路径粘贴，自动去重并拒绝越界/绝对路径',
         '工程布局探测：兼容 IntelliJ src + WebRoot 与 exploded WAR 根目录，缺失项和工程告警先于生成展示',
         'java ↔ class 自动配对：补齐外部类与内部类 .class，避免只投源码或漏投运行时字节码',
-        '安全生成：输出目录必须为空，拒绝符号链接和覆盖已有文件；上限 3000 项，生成失败自动清理',
         '固定产物：list.txt、Bak{包名}.sh、{包名}.sh、{包名}.tar，并支持生成后打开输出目录'
       ]
     },
@@ -679,27 +689,30 @@
       ]
     },
     {
-      icon: 'notes', name: 'Windows 原生桌面便笺 (v0.16-v0.17)',
+      icon: 'notes', name: 'Windows 原生桌面便笺 (v0.16-v0.18)',
       pages: ['notes'],
       apis: ['/api/notes', '/api/notes/*'],
       pkg: 'internal/desknote + internal/note + internal/winui',
-      desc: 'Windows 原生置顶便笺系统：支持 Win32 透明无边框窗口、顶栏快捷文本摘录、便笺中心管理、双击内联编辑与 revision 乐观并发控制。',
+      desc: 'Windows 原生置顶便笺系统：支持 Win32 透明无边框窗口、顶栏快捷文本摘录、便笺中心管理、双击内联编辑、更多菜单自适应穿透与 revision 乐观并发控制。',
       features: [
         'Win32 原生置顶窗口：直接调用 Windows API 创建透明置顶便笺，无需浏览器弹窗或外部宿主',
         '顶栏一键摘录：选中文本后点击顶栏「便笺」按钮，直接创建桌面便笺并填入选中文本',
         '便笺中心列表：集中查看所有便笺卡片，支持多色卡切换、快速标记与双击内联编辑',
+        '更多菜单层叠穿透：自适应 top 定位与 isolation 独立层叠上下文，杜绝卡片滚动与后序元素遮挡',
         'revision 乐观并发控制：浏览器端与桌面端窗口同时编辑发生冲突时显式提示，杜绝静默覆盖',
         '桌面可见上限保护：最多同时置顶 6 张便笺，防止屏幕窗口过度杂乱',
         '数据安全持久化：落盘至 data/notes.json，权限显式收紧'
       ]
     },
     {
-      icon: 'tasks', name: '定时任务管理系统 (v0.15-v0.16)',
+      icon: 'tasks', name: '定时任务与系统通知 (v0.15-v0.18)',
       pages: ['tasks'],
       apis: ['/api/tasks', '/api/tasks/*'],
-      pkg: 'internal/schedtask + internal/cronx',
-      desc: '本地与服务器定时任务调度平台：支持 Cron 表达式、间隔与单次触发；Windows 平台由 Job Object 进程树接管，保证任务可靠执行与无孤儿残留。',
+      pkg: 'internal/schedtask + internal/cronx + internal/notify',
+      desc: '本地与服务器定时任务调度平台：支持 Cron 表达式、间隔与单次触发；Windows 平台由 Job Object 进程树接管，支持失败事件总线与第三方告警联动。',
       features: [
+        '任务失败事件总线 (internal/notify)：任务执行失败即刻触发事件总线，推送至界面横幅',
+        '多渠道报警集成：支持 Windows 系统托盘弹窗 + 企业微信 / 钉钉 Webhook 告警与测试',
         '多模式触发：Cron 表达式（复用 internal/cronx 跳跃算法）、固定间隔与单次定时执行',
         'Windows 命令行语义：cmd.exe /D /S /C 原始命令行处理，完美保留中文、空格与嵌套引号',
         'Windows Job Object 进程树隔离：恢复线程前完成归组，超时与程序退出自动递归清理完整子孙进程',
@@ -724,16 +737,16 @@
       ]
     },
     {
-      icon: 'reminderIc', name: '定时提醒 (v0.13 起)',
+      icon: 'reminderIc', name: '定时提醒 (v0.13-v0.18)',
       pages: ['reminders'],
       apis: ['/api/reminders', '/api/reminders/*'],
-      pkg: 'internal/reminder',
-      desc: '一次性 / 每周 / 每月 / Cron 四种触发器；提前 N 分钟；触发动作支持弹窗 / 打开网址 / 执行本地命令；Win10+ Toast + 经典气球兜底；支持编辑 / 暂停 / 启用 / 立即触发。',
+      pkg: 'internal/reminder + internal/popup',
+      desc: '一次性 / 每周 / 每月 / Cron 四种触发器；提前 N 分钟；触发动作支持纯 GDI 桌面弹窗 / 打开网址 / 执行本地命令；穿透 Win10/11 专注助手与通知中心拦截。',
       features: [
+        '纯 GDI 自绘顶层弹窗：独立 Win32 弹窗绘制，100% 穿透 Windows 10/11 专注助手与免打扰',
         '4 种触发器：once / weekly / monthly / cron（5/6 段表达式，复用 internal/cronx 跳跃算法）',
         '提前 N 分钟（lead_minutes）：如「会前 10 分钟」',
         '触发动作（action）：popup 弹窗 / url 打开网址 / command 执行本地命令（30s 超时 + 审计）',
-        'Win10+ Toast 通知（开始菜单快捷方式 + AppUserModelID）+ 经典气球兜底',
         '弹窗交互：关闭 / 推迟 (snooze) / 立即触发',
         'Manager 池：定时器在内存里跑，进程重启从 data/reminders.json 恢复',
         '完整审计：每次触发写 logs/audit.log'
@@ -769,12 +782,14 @@
       ]
     },
     {
-      icon: 'config', name: '系统配置中心',
+      icon: 'config', name: '统一升级协调与配置中心 (v0.18 加固)',
       pages: ['config'],
       apis: ['/api/config*', '/api/admin/servers', '/api/admin/openers', '/api/admin/download-retention', '/api/admin/autostart'],
-      pkg: 'internal/config + internal/credentials',
-      desc: '可视化配置编辑器 + 导入导出 + 热加载 + 凭据管理 + 开机自启管理。',
+      pkg: 'internal/config + internal/upgrade + internal/credentials',
+      desc: '可视化配置编辑器 + internal/upgrade 跨文件原子升级协调器 + 导入导出 + 热加载 + 凭据管理 + 开机自启。',
       features: [
+        '统一升级事务协调器 (internal/upgrade)：跨文件事务快照、多文件单向 N->N+1 链式升级、全量原子回滚',
+        '降级与未版本化防护：强制拒绝旧版本程序写入高版本配置文件，保护资产免遭静默污染损坏',
         '可视化编辑：业务系统 / 服务器 / 日志目录 / 数据源 四级配置',
         'YAML 导入导出：版本管理、环境迁移、批量修改与 Schema 强校验',
         '分节 dirty 追踪：未保存改动高亮提示，防止误切页面丢失数据',
@@ -834,6 +849,34 @@
   // §12. 故障案例库 — 从 commit log 提取的真实 bug 复盘
   // =====================================================================
   const bugStories = [
+    {
+      id: 'WinUI-001', version: 'v0.18', severity: 'P0', title: 'Windows 选文件夹并发触发 COM 冲突 — ERR_CONNECTION_RESET 或进程崩溃',
+      symptom: '用户在文件比对或 WAS 打包点击“浏览选择文件夹”时，偶发浏览器连接瞬间重置 (ERR_CONNECTION_RESET)，后端进程甚至静默退出。',
+      rootCause: 'HTTP Handler 工作线程直接调用 Win32 IFileDialog，该线程未初始化 STA/OleInitialize；且多请求并发调起原生对话框时引发 COM 线程模型冲突与致命未捕获异常。',
+      fix: '在 winui 模块建立常驻 STA UI 宿主主线程；所有 choose_dialog 调用统一路由至 host 线程调度，外层包裹 recover 兜底，并增加 pickerOwner 主窗口句柄防抢焦。',
+      lesson: 'Windows 原生 GUI 交互绝不能在 Go 随意并发的 goroutine/线程中裸跑，必须通过常驻 STA 宿主管道集中排队与异常隔离。'
+    },
+    {
+      id: 'Upgrade-001', version: 'v0.18', severity: 'P0', title: '跨文件配置升级缺乏原子边界 — 进程异常中断致版本撕裂与数据损坏',
+      symptom: '用户在跨大版本升级或资产迁移时，若遭遇断电、强杀进程或某单个配置文件校验失败，部分文件已升级而其余未升级，导致程序重启后报数据损坏。',
+      rootCause: '旧版各个 store (servers/notes/tasks/db) 分别在加载时自行升级并覆写磁盘，缺少全局事务协调器与全局快照保护机制。',
+      fix: '引入 internal/upgrade 统一升级协调器：升级前先完整制作 pre-upgrade 备份快照；严格执行 N->N+1 链式迁移契约；全部成功后原子落盘 upgrade-state.json；任意步骤失败全量快照原子回滚，并严格拒绝跨大版本逆向降级。',
+      lesson: '持久化资产升级必须有跨文件事务边界 (transaction boundary)，容错设计的底线是“要么全成功，要么完好如初”。'
+    },
+    {
+      id: 'Toast-001', version: 'v0.18', severity: 'P1', title: 'Windows 10/11 定时提醒被系统专注助手静默吞噬 — 告警丢失',
+      symptom: '用户配置了重要巡检与定时提醒，在 Windows 10/11 系统上到点后没有任何弹出反馈，导致关键运维动作被遗漏。',
+      rootCause: '旧版依赖 PowerShell 调用 WinRT Toast 通知中心；在 Windows 开启专注助手 (Focus Assist)、全屏应用或用户未给该 AppUserModelID 授权时，系统会静默拦截通知不弹窗。',
+      fix: '实现 internal/popup 纯 GDI 原生顶层窗口 (popup_windows.go)：绕过 Windows 通知中心，直接通过 Win32 CreateWindowEx/SetWindowPos 创建物理顶层弹窗与倒计时关闭。',
+      lesson: '对生产运维关键告警而言，可靠性高于“系统原生外观”；受第三方策略和系统免打扰影响的管道不可作为唯一路径。'
+    },
+    {
+      id: 'DB-002', version: 'v0.18', severity: 'P1', title: 'Oracle 分页暴露内部 ROWNUM 别名列 & 多分号致空语句报错',
+      symptom: '用户在 Oracle 数据源执行分页查询时，结果表格混入了无业务意义的 RNUM 列；同时若在 SQL 末尾输入了两个以上连续分号，编辑器会弹空语句报错。',
+      rootCause: '后端包装 Oracle ROWNUM 分页时在外层使用了 SELECT *，将内层别名原样投出；前端 statementModel 简单以分号分割，导致末尾空串被当作独立语句下发。',
+      fix: '后端分页查询层增加 Oracle 辅助别名列自动过滤脱敏；前端 statementModel 增加多分号规范化逻辑，并在执行前自动剥离尾部空语句。',
+      lesson: '方言兼容层不仅要让语句能跑通，还要对框架注入的辅助构造进行透明遮蔽，保持用户结果集的纯粹性。'
+    },
     {
       id: 'JobObject-001', version: 'v0.16', severity: 'P0', title: 'Windows 定时任务超时后孙进程残留 — 孤儿进程隐患',
       symptom: '用户在 Windows 下执行包含管道或外部调用的定时任务，任务超时后直接子进程被 kill，但孙进程继续占用端口和 CPU，程序退出后仍有残留。',
@@ -959,9 +1002,116 @@
   };
 
   // =====================================================================
-  // §13. 版本演进史 (18 个版本, accordion 折叠)
+  // §13. 版本演进史 (19 个版本, accordion 折叠)
   // =====================================================================
 const changelog = [
+    {
+      version: 'v0.18',
+      date: '2026-09-04',
+      tag: '工作台重构闭环 · 跨文件升级原子协调 · 19 项深度修复 · 全量自动化测试',
+      codename: 'Nexus · 稳健跃升',
+      size: 'xl',
+      headline: '全面闭环数据库与比对工作台交互体验，引入光标语句提取、真实流式分页协议与断线透明重试；上线 internal/upgrade 统一升级协调器，提供全量快照、原子事务与降级防御；集中修复 19 项多主题/高低分辨率/Windows 原生交互问题，全量前端工作台单元测试与 Go 质量门全绿护航。',
+      stats: { commits: 11, fixes: 28, additions: 22, breaks: 0 },
+      principles: [
+        '数据库多语句必须语义隔离：执行光标所在当前语句，多重尾部分号智能规整，杜绝批量写或语句拼接歧义。',
+        '大结果集分页受控，辅助列不可见：分页协议严格支持 page/page_size/has_next/ordered，Oracle ROWNUM 别名列自动从前端结果剥离。',
+        '网络抖动不应打断分析流：SQL 执行与元数据提取支持断线透明重连，幽灵 Tab 孤儿态资源会话自动回收。',
+        '比对编辑即时反馈，防止旧结果覆盖：常驻语法高亮编辑器，比对结果响应式高度收缩，实时 diff 状态防竞态重叠。',
+        '系统原生交互绝不引起进程崩溃：Windows 文件夹选择对话框经宿主 UI 线程 OleInitialize 调度并增加 recover 兜底，杜绝 COM 线程模型冲突引发的连接重置。',
+        '关键提醒不能被系统专注助手静默吞噬：自绘 GDI 独立弹窗窗口替代 PowerShell Toast，确保运维关键告警 100% 直达桌面。',
+        '升级与迁移必须具备跨文件事务边界：所有用户配置与资产升级前完整快照，单文件链式迁移失败全量原子回滚，且强制拒绝降级覆写。',
+        '打包输出策略明确隔离，保护既有资产：WAS 打包支持 fail / clean_kairo_artifacts / replace 策略，未知非 Kairo 产物一律拒绝覆盖。',
+        '视觉一致性覆盖全主题全分辨率：深浅/武侠/高对比度主题统一保证对比度与可读性，多级菜单在各种嵌套布局下绝不遮挡。',
+        '质量保证必须由自动化测试说话：新增工作台前端单元测试集 (workbench-unit-tests.js) 与后端 Go 测试，严禁依赖手工口头承诺。'
+      ],
+      architecture: {
+        layers: [
+          { name: '统一升级协调层', detail: 'internal/upgrade 建立跨文件事务边界，在升级前拍摄用户配置全量快照；N->N+1 链式迁移每步核验契约，记录 upgrade-state.json，遇到异常全量回滚并强制拒绝降级覆写。' },
+          { name: '工作台分页与执行层', detail: 'internal/dbconsole 与 database.js 建立 statementModel 光标语句提取模型，分页支持 page/page_size/has_next/ordered 协议，Oracle 自动剥离 ROWNUM 别名列，断线支持透明重试一次。' },
+          { name: 'Redis 受控治理层', detail: 'Redis 命令行建立只读扩展白名单 (TYPE/TTL/HGET/HSCAN/LRANGE 等)，只读模式作为默认安全底线，严格审查受控 TTL mutation (EXPIRE/PEXPIRE/PERSIST)。' },
+          { name: '比对常驻高亮视口层', detail: 'compare.js 与 syntax-editor.js 提供常驻语法着色与响应式高度收缩，实时比对消除异步覆盖竞态，历史堆栈操作支持平滑撤销重做。' },
+          { name: 'Windows UI 宿主调度层', detail: 'choose_dialog_windows.go 建立常驻 STA/OleInitialize UI 消息循环，外部对话框调用由主线程受控调度并配置 recover 保护，根除 COM 异常导致 ERR_CONNECTION_RESET。' },
+          { name: '原生 GDI 弹窗告警层', detail: 'popup_windows.go 实现独立 Win32 GDI 弹窗机制，绕过 Windows 10/11 专注助手与通知中心压制，保障运维定时提醒 100% 可见。' },
+          { name: 'WAS 批处理与隔离层', detail: 'internal/waspack 新增 /api/waspack/build 接口，产物植入 .kairo-artifact-manifest 标识，输出目录提供 fail / clean / replace 三种受控模式，隔离未知文件。' },
+          { name: '任务告警事件总线层', detail: 'internal/notify 抽象系统级告警总线，任务执行失败时按策略联动 Windows 托盘弹窗与企业微信/钉钉 Webhook。' },
+          { name: '全量自动化测试层', detail: '新增 tests/workbench-unit-tests.js、internal/dbconsole/oracle_workbench_test.go 等全量测试用例，覆盖 statement-model、session 管理、语法着色与分页逻辑。' }
+        ],
+        retirements: [
+          '移除数据库多语句执行时将整段脚本盲目下发的做法，改为精确执行光标所在单条语句并规范化多分号。',
+          '移除 Oracle 分页在结果表格中展示内部 ROWNUM / RNUM 辅助列的展示瑕疵。',
+          '移除文件比对对话框在并发线程直接唤起导致偶发连接重置与闪退的高危逻辑。',
+          '移除配置迁移各文件各自独立读写、缺乏全量快照与原子回滚的脆弱升级方式。',
+          '移除依赖 PowerShell Toast 导致在 Win10 专注助手下静默失效的提醒通知机制。',
+          '移除 WAS 打包产物与目标目录未隔离、缺乏 marker 标识导致无法安全清理的旧逻辑。'
+        ]
+      },
+      features: [
+        { title: '光标所在语句精准执行', desc: '在编辑器编写多条 SQL 时，根据光标位置自动识别当前语句边界；支持括号内分号、引号字面量与注释保护，支持连续多分号自动规整与单句执行。' },
+        { title: '真实分页协议与 ROWNUM 过滤', desc: '后端支持 page / page_size / has_next / ordered 分页，兼容旧版 max_rows；Oracle 自动构建嵌套 ROWNUM 分页并从结果列中剥离辅助别名列。' },
+        { title: '连接抖动透明重试与孤儿会话回收', desc: '数据库查询与元数据遇到网络短暂抖动时自动透明重试一次；关闭页签时后台自动清理资源孤儿态会话，杜绝连接泄露。' },
+        { title: '小结果集直出渲染', desc: '小于等于 600 行的轻量查询结果直接渲染真实 DOM 节点，无缝绕过虚拟滚动初始测量延迟，响应更迅速。' },
+        { title: '比对常驻编辑与实时语法高亮', desc: '文本比对区引入常驻 syntax-editor 实时着色；左右编辑器提供响应式视口自动收缩，实时比对消除异步竞态覆盖，支持多步撤销重做。' },
+        { title: 'Windows 原生目录选择防崩溃', desc: '文件夹选择对话框经由常驻 UI 线程 OleInitialize 调度，增加 recover 异常保护与超时回收，彻底解决 ERR_CONNECTION_RESET 与主进程闪退。' },
+        { title: '纯 GDI 桌面弹窗提醒引擎', desc: '替换不可靠的 PowerShell Toast 脚本，采用 Win32 原生 GDI 绘制置顶弹窗，100% 穿透 Windows 10/11 专注助手与免打扰模式。' },
+        { title: '跨文件原子升级协调器', desc: '引入 internal/upgrade 统一升级协调器；升级前全自动拍摄 pre-upgrade 快照，多文件单向 N->N+1 链式迁移，任一失败全量原子回滚，并防止低版本覆盖高版本。' },
+        { title: 'WAS 一键直接打包与产物隔离', desc: '提供 /api/waspack/build 接口与批处理解析支持，引入 fail / clean_kairo_artifacts / replace 策略，利用 marker 保护目标目录未知非 Kairo 资产。' },
+        { title: '任务告警事件总线与 Webhook', desc: '构建 internal/notify 告警事件总线，定时任务失败时主动推送桌面托盘并支持企业微信、钉钉等第三方 Webhook 报警。' },
+        { title: '19 项反馈集中闭环', desc: '便笺更多菜单穿透与定位、武林榜冷启重试预热、浅色 kbd 对比度、SQL 选中可见性、九宫格收藏夹弹窗等全量精修。' },
+        { title: '全量自动化测试护航', desc: '新增工作台前端单元测试 workbench-unit-tests.js、Oracle 分页测试、配置升级回滚测试，测试全量绿标通过。' }
+      ],
+      fixes: {
+        p0: [
+          '修复 Windows 文件比较在选择文件夹时因 COM 线程未经 OleInitialize 调度引发 ERR_CONNECTION_RESET 或主进程崩溃闪退。',
+          '修复配置升级在进程异常中断时缺少跨文件事务快照，导致多文件迁移部分成功部分失败造成数据不一致。',
+          '修复 WAS 投产打包在 Extract 之后打包阶段 marker 被覆盖导致未知文件保护失效的问题。'
+        ],
+        p1: [
+          '修复 Windows 10/11 下提醒通知依赖 PowerShell Toast 被系统专注助手/通知中心静默拦截不弹出的缺陷。',
+          '修复 Oracle 数据库工作台分页查询中把辅助别名列暴露给用户结果表格的问题。',
+          '修复代码比对结果展示区在某些分辨率下高度溢出视口且 renderResult 偶现 effectiveMode 未声明的问题。',
+          '修复桌面便笺“更多”菜单在卡片滚动或特定层叠上下文下被后续卡片或底边遮挡的问题。',
+          '修复数据库 SQL 文本框多语句末尾连续分号引发语句解析器空语句报错的问题。',
+          '修复武林榜首次打开因冷启动超时导致前端界面长时间空白的问题。'
+        ],
+        p2: [
+          '修复浅色主题下 SQL 执行快捷键 kbd 样式对比度不足的问题。',
+          '修复武侠主题下数据库工作台与比对编辑器的对比度与行高亮不协调问题。',
+          '修复单行记录字段复制按钮点击命中区域偏小的问题。',
+          '修复 SQL 收藏夹列表过长，新增九宫格书签选择弹窗。',
+          '修复多 Tab 切换时偶发有效数据源绑定错位的问题。'
+        ]
+      },
+      commits: [
+        { hash: 'ce62432', msg: 'feat(workbench): 完善工作台交互、增强后端服务并补充自动化测试' },
+        { hash: '7287e3d', msg: 'feat(workbench): 优化数据库与比对工作台交互并补充单元测试' },
+        { hash: '9b72e93', msg: 'feat(workbench): 完成工作台重构 P0/P1 闭环' },
+        { hash: '6baf8d4', msg: 'fix: 19项反馈集中修复 v20260903-fix19' },
+        { hash: '5a2d477', msg: 'docs: add v0.14→v0.17 visual audit report (530 screenshots, 5 themes×6 viewports)' },
+        { hash: 'e1d3709', msg: 'feat(about): integrate 2.0B+ AI tokens compute matrix, toolchains and brand SVG fleet' },
+        { hash: '0d10bb2', msg: 'feat: add unified upgrade coordinator for config and user data' },
+        { hash: 'b7f127d', msg: 'feat: improve configuration and tooling workflows' },
+        { hash: 'd89c255', msg: 'feat: add WAS pack and WSDL codegen with workbench polish' }
+      ],
+      performance: [
+        { label: '跨文件升级事务', before: '独立读写无事务保护，故障时有半更新脏数据风险', after: '全量快照 + 链式升级 + 任意失败全量原子回滚', improve: '数据 100% 一致性保障' },
+        { label: '文件对话框稳定性', before: '并发工作线程调用 COM 有偶发崩溃/连接重置', after: 'UI 宿主线程常驻 OleInitialize + recover 兜底', improve: '0 崩溃 0 断连' },
+        { label: '桌面告警送达率', before: 'PowerShell Toast 受系统专注助手静默拦截', after: 'Win32 原生 GDI 自绘顶层弹窗', improve: '100% 显式直达桌面' },
+        { label: 'SQL 多语句体验', before: '整段执行容易产生批量误执行或分号解析错误', after: '光标所在单句精准执行 + 多重尾部分号智能规整', improve: '所见即所执' },
+        { label: '数据库分页展示', before: '展示 Oracle 辅助 ROWNUM 别名列污染业务数据', after: '智能分页协议与 ROWNUM 别名列自动脱敏过滤', improve: '结果纯净度 100%' },
+        { label: '比对编辑器视口', before: '固定尺寸容易撑破视口或与旧结果重叠', after: '常驻实时高亮 + 响应式高度收缩 + 竞态状态机', improve: '自适应所有主流分辨率' },
+        { label: '质量与测试保障', before: '缺乏前端工作台单元测试与分页覆盖', after: '新增 workbench-unit-tests.js + Go 单元测试全量绿标', improve: '测试自动化无死角' }
+      ],
+      breaking: [],
+      migration: [
+        'v0.17 可无缝平滑升级至 v0.18；升级过程将由 internal/upgrade 协调器全自动创建 pre-upgrade 快照，所有配置文件在原子事务中链式升级。',
+        '若从旧版本升级，数据库工作台将自动启用智能分页协议并过滤内部辅助列；原有 SQL 片段、书签及快捷键均向前兼容。',
+        'Windows 路径选择对话框已全面迁移至 UI 宿主线程模型，避免任何第三方壳程序或系统 COM 初始化冲突。',
+        'Windows 提醒弹窗默认启用可靠 GDI 原生绘制，无需在操作系统通知中心为应用开启后台唤醒权限。',
+        'WAS 打包直接输出功能默认采用 marker 标识保护已存在目录；如需清空旧产物可选择 clean_kairo_artifacts 策略。',
+        '升级后运行时版本以根目录 VERSION 为准；如修改版本，请执行 node scripts/sync-version.js，再运行 node scripts/check-version.js。'
+      ]
+    },
     {
       version: 'v0.17',
       date: '2026-09-01',
@@ -2230,7 +2380,7 @@ const changelog = [
     // 工程实践
     const engTitle = el('h3', { style: 'margin:24px 0 12px 0; font-size:16px; display:flex; align-items:center; gap:8px;' }, [
       el('span', { unsafeHtml: svgIcon('smTools', 18) }),
-      document.createTextNode(' 工程化实践 (12 项)')
+      document.createTextNode(' 工程化实践 (14 项)')
     ]);
     const engGrid = el('div', { style: 'display:grid; grid-template-columns:repeat(auto-fit, minmax(280px, 1fr)); gap:8px;' });
     engineering.forEach((e, i) => {
@@ -2251,7 +2401,7 @@ const changelog = [
     wrap.appendChild(frontendGrid);
     wrap.appendChild(engTitle);
     wrap.appendChild(engGrid);
-    view.appendChild(renderSection('sec-stack', 'stack', '技术栈', '后端 16 依赖 · 前端 11 模块 · 工程 14 实践 · 122,000+ 行代码', wrap));
+    view.appendChild(renderSection('sec-stack', 'stack', '技术栈', '后端 16 依赖 · 前端 11 模块 · 工程 14 实践 · 125,000+ 行代码', wrap));
   }
 
   // --- 安全白皮书 ---
@@ -2262,7 +2412,7 @@ const changelog = [
         el('span', { style: 'width:26px; height:26px; display:inline-flex; align-items:center; justify-content:center; color:var(--error);', unsafeHtml: svgIcon('smShield', 26) }),
         el('span', { style: 'font-weight:700; font-size:15px; color:var(--error);', text: 'fail-closed 安全模型 (v0.9 起)' })
       ]),
-      el('div', { style: 'font-size:13px; line-height:1.7; color:var(--text-dim);', text: '所有权限决策默认"拒绝"。白名单空 → 一律拒绝；host key 没配 + allow_insecure=false → 不发起连接；admin 专属接口没带 admin token → 403；数据库只读 AST 拦截写操作；Windows Job Object 递归回收进程树。把"忘记配"和"配错"都收敛到安全侧，避免任何隐式放行。16 项安全设计点协同，没有单点失守即可破防的逻辑链。' })
+      el('div', { style: 'font-size:13px; line-height:1.7; color:var(--text-dim);', text: '所有权限决策默认"拒绝"。白名单空 → 一律拒绝；host key 没配 + allow_insecure=false → 不发起连接；admin 专属接口没带 admin token → 403；数据库只读 AST 拦截写操作；跨文件升级原子事务防半更新；Windows Job Object 递归回收进程树。把"忘记配"和"配错"都收敛到安全侧，避免任何隐式放行。17 项安全设计点协同，没有单点失守即可破防的逻辑链。' })
     ]);
 
     const grid = el('div', { style: 'display:grid; grid-template-columns:repeat(auto-fit, minmax(280px, 1fr)); gap:8px;' });
@@ -2280,7 +2430,7 @@ const changelog = [
 
     wrap.appendChild(banner);
     wrap.appendChild(grid);
-    view.appendChild(renderSection('sec-security', 'security', '安全白皮书', '16 项 fail-closed 设计点 · 纵深防御 · 零明文落盘', wrap));
+    view.appendChild(renderSection('sec-security', 'security', '安全白皮书', '17 项 fail-closed 设计点 · 纵深防御 · 零明文落盘', wrap));
   }
 
   // --- SSH 兼容矩阵 ---
@@ -2333,7 +2483,7 @@ const changelog = [
       ]));
     });
     wrap.appendChild(grid);
-    view.appendChild(renderSection('sec-quality', 'quality', '质量保障', '6 层质量金字塔 · 1,120+ Go 测试 · 42 个 Playwright 脚本', wrap));
+    view.appendChild(renderSection('sec-quality', 'quality', '质量保障', '6 层质量金字塔 · 1,150+ Go 测试 · 42 个 Playwright 脚本', wrap));
   }
 
   // --- 功能模块 ---
@@ -2396,7 +2546,7 @@ const changelog = [
     wrap.appendChild(banner);
     wrap.appendChild(list);
 
-    view.appendChild(renderSection('sec-history', 'history', '版本演进史', 'v0.1 → v0.17 · 18 个版本 (含 v0.13.1 / v0.11-rc1) · 持续迭代 · 167+ commit', wrap));
+    view.appendChild(renderSection('sec-history', 'history', '版本演进史', 'v0.1 → v0.18 · 19 个版本 (含 v0.13.1 / v0.11-rc1) · 持续迭代 · 178+ commit', wrap));
   }
 
   function renderVersionCard(v, idx) {
@@ -2675,8 +2825,8 @@ const changelog = [
   function renderBugStoriesSection(view) {
     const wrap = el('div');
     const intro = el('div', { class: 'card', style: 'padding:14px 20px; margin-bottom:12px; font-size:13px; line-height:1.8; color:var(--text-dim);' }, [
-      el('strong', { style: 'color:var(--text);', text: '11 个真实 bug 复盘：' }),
-      document.createTextNode('下面这些不是教科书例子，而是 v0.4 - v0.17 期间 commit log 里真实发生过的故障。每个故事都包含：症状、根因、修复、教训。看到的不只是"修了什么"，更是"怎么思考的"。')
+      el('strong', { style: 'color:var(--text);', text: '15 个真实 bug 复盘：' }),
+      document.createTextNode('下面这些不是教科书例子，而是 v0.4 - v0.18 期间 commit log 里真实发生过的故障。每个故事都包含：症状、根因、修复、教训。看到的不只是"修了什么"，更是"怎么思考的"。')
     ]);
 
     const grid = el('div', { style: 'display:grid; grid-template-columns:repeat(auto-fit, minmax(280px, 1fr)); gap:12px;' });
@@ -2711,7 +2861,7 @@ const changelog = [
 
     wrap.appendChild(intro);
     wrap.appendChild(grid);
-    view.appendChild(renderSection('sec-bugs', 'bugs', '故障案例库', '11 个真实 bug 复盘 · 含根因 / 修复 / 教训 · v0.4–v0.17 真实案例', wrap));
+    view.appendChild(renderSection('sec-bugs', 'bugs', '故障案例库', '15 个真实 bug 复盘 · 含根因 / 修复 / 教训 · v0.4–v0.18 真实案例', wrap));
   }
 
   // --- FAQ ---
@@ -2759,7 +2909,7 @@ const changelog = [
     wrap.appendChild(renderList('已规划 (next 1-2 versions)', roadmap.planned, 'var(--primary)', 'smTarget'));
     wrap.appendChild(renderList('调研中 (considering)', roadmap.considering, 'var(--text-dim)', 'smBulb'));
 
-    view.appendChild(renderSection('sec-roadmap', 'roadmap', '路线图', 'next 1-2 versions + considering · v0.17 以专业数据库体验与桌面稳定性为先', wrap));
+    view.appendChild(renderSection('sec-roadmap', 'roadmap', '路线图', 'next 1-2 versions + considering · v0.18 工作台重构闭环与跨文件原子升级达成', wrap));
   }
 
   // --- Footer ---

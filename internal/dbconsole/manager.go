@@ -136,6 +136,9 @@ func (m *Manager) sqlDB(source Source) (*sql.DB, error) {
 		}
 		if source.OracleClientCharset != "" {
 			options["CLIENT CHARSET"] = source.OracleClientCharset
+		} else {
+			// 默认使用 AL32UTF8 避免 NLS_LANG 未配置时中文 CLOB/NVARCHAR2 出现乱码
+			options["CLIENT CHARSET"] = "AL32UTF8"
 		}
 		if source.TLSMode != "disabled" {
 			options["SSL"] = "ENABLE"
