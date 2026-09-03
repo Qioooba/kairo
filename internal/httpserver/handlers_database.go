@@ -36,6 +36,8 @@ func (s *Server) handleDatabaseDispatch(w http.ResponseWriter, r *http.Request) 
 		s.handleDatabaseSourceItem(w, r, strings.TrimPrefix(path, "sources/"))
 	case path == "query":
 		s.handleDatabaseQuery(w, r)
+	case path == "batch":
+		s.handleDatabaseBatch(w, r)
 	case path == "export":
 		s.handleDatabaseExport(w, r)
 	case path == "metadata/schemas":
@@ -302,6 +304,55 @@ func (s *Server) handleDatabaseQuery(w http.ResponseWriter, r *http.Request) {
 	}
 	s.audit.Write("database.query", "source_id", source.ID, "kind", source.Kind, "query_id", queryID,
 		"rows", summary.Rows, "elapsed_ms", summary.ElapsedMS, "truncated", summary.Truncated, "result", "ok")
+}
+
+type databaseBatchRequest struct {
+	SourceID   string   `json:"source_id"`
+	Statements []string `json:"statements"`
+}
+
+func (s *Server) handleDatabaseBatch(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeErr(w, 405, errors.New("仅支持 POST"))
+		return
+	}
+	var req databaseBatchRequest
+	if err := decodeDatabaseJSON(r, &req); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	source, ok := s.databaseSourceForRequest(w, r, req.SourceID)
+	if !ok {
+		return
+	}
+	user, _ := r.Context().Value(authUserKey).(*authUser)
+	if user != nil && user.Role != "admin" {
+		writeErr(w, 403, errors.New("批量提交仅限管理员"))
+		return
+	}
+	if len(req.Statements) == 0 {
+		writeErr(w, 400, errors.New("statements 不能为空"))
+		return
+	}
+	if len(req.Statements) > 50 {
+		writeErr(w, 400, errors.New("批量语句数量超出限制 (最多 50 条)"))
+		return
+	}
+	for _, stmt := range req.Statements {
+		if _, err := dbconsole.ValidateSQL(source.Kind, stmt); err != nil {
+			writeErr(w, 400, err)
+			return
+		}
+	}
+	summary, err := s.database.ExecuteBatch(r.Context(), source, req.Statements)
+	if err != nil {
+		err = s.databaseSafeError(source, err)
+		writeErrSanitized(w, 502, err)
+		s.audit.Write("database.batch", "source_id", source.ID, "kind", source.Kind, "statements", len(req.Statements), "result", "fail", "error", trim(err.Error(), 300))
+		return
+	}
+	s.audit.Write("database.batch", "source_id", source.ID, "kind", source.Kind, "statements", len(req.Statements), "rows_affected", summary.RowsAffected, "elapsed_ms", summary.ElapsedMS, "result", "ok")
+	writeJSON(w, 200, map[string]any{"ok": true, "summary": summary})
 }
 
 func (s *Server) handleDatabaseExport(w http.ResponseWriter, r *http.Request) {
@@ -812,11 +863,34 @@ func (s *Server) handleDatabaseSessionBackup(w http.ResponseWriter, r *http.Requ
 		writeErr(w, 400, errors.New("页签数量超出限制 (最多 50 个)"))
 		return
 	}
+	// 逐 session 校验：SQL 长度、sourceId 合法性、page 范围
+	for _, sessMap := range payload.Sessions {
+		if sqlVal, ok := sessMap["sql"].(string); ok && len(sqlVal) > 20000 {
+			writeErr(w, 400, errors.New("单条 SQL 超过 20000 字符限制"))
+			return
+		}
+		if srcID, ok := sessMap["sourceId"].(string); ok && srcID != "" {
+			if len(srcID) > 128 {
+				writeErr(w, 400, errors.New("sourceId 非法"))
+				return
+			}
+		}
+	}
+	if payload.EditorHeight < 0 || payload.EditorHeight > 2000 {
+		writeErr(w, 400, errors.New("editorHeight 非法"))
+		return
+	}
 	filePath := filepath.Join(s.cur().DataDir(), databaseSessionFileName(r))
-	if err := os.WriteFile(filePath, body, 0o644); err != nil {
+	if err := os.WriteFile(filePath, body, 0o600); err != nil {
 		writeErrSanitized(w, 500, err)
 		return
 	}
+	user, _ := r.Context().Value(authUserKey).(*authUser)
+	userName := ""
+	if user != nil {
+		userName = user.Name
+	}
+	s.audit.Write("database.session.backup", "user", userName, "file", filepath.Base(filePath), "sessions", len(payload.Sessions), "result", "ok")
 	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
@@ -842,10 +916,22 @@ func (s *Server) handleDatabaseSessionRestore(w http.ResponseWriter, r *http.Req
 			return
 		}
 	}
+	// 校验文件大小与 JSON 合法性，防止异常文件导致前端崩溃
+	if len(data) > databaseBodyLimit {
+		writeJSON(w, 200, map[string]any{"ok": true, "session": nil})
+		return
+	}
 	var session any
 	if err := json.Unmarshal(data, &session); err != nil {
 		writeJSON(w, 200, map[string]any{"ok": true, "session": nil})
 		return
+	}
+	// 对恢复的 session 做轻量校验：若 sessions >50 则视为异常
+	if m, ok := session.(map[string]any); ok {
+		if sessArr, ok := m["sessions"].([]any); ok && len(sessArr) > 50 {
+			writeJSON(w, 200, map[string]any{"ok": true, "session": nil})
+			return
+		}
 	}
 	writeJSON(w, 200, map[string]any{"ok": true, "session": session})
 }

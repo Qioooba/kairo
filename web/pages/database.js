@@ -621,26 +621,12 @@
     }
 
     try {
-      for (const stmt of statements) {
-        await api('POST', '/api/database/query', {
-          source_id: effSrc.id,
-          sql: stmt,
-          max_rows: 1,
-          page: 1,
-          page_size: 1,
-          count_mode: 'none'
-        });
-      }
-      // Commit transaction
-      await api('POST', '/api/database/query', {
+      // P2 批量原子提交：单事务执行全部 UPDATE，失败整体回滚（替代原 N+1 逐条 + 额外 COMMIT）
+      const batchRes = await api('POST', '/api/database/batch', {
         source_id: effSrc.id,
-        sql: 'COMMIT',
-        max_rows: 1,
-        page: 1,
-        page_size: 1,
-        count_mode: 'none'
-      }).catch(() => {});
-
+        statements: statements
+      });
+      const affected = batchRes && batchRes.summary ? batchRes.summary.rows_affected : statements.length;
       // Apply changes to local data
       for (const key of dirtyKeys) {
         const item = state.dirtyCells[key];
@@ -649,9 +635,44 @@
       state.dirtyCells = {};
       updateTransactionControls();
       refreshVisibleResult();
-      toast('✅ 已成功提交 ' + dirtyKeys.length + ' 处修改至数据库！', 'ok');
+      toast('✅ 批量提交成功：' + statements.length + ' 条语句，影响 ' + (affected >= 0 ? affected : dirtyKeys.length) + ' 行', 'ok');
     } catch (e) {
-      toast('提交修改失败：' + e.message, 'err');
+      // 回退到逐条执行以兼容旧后端
+      if (e && e.message && e.message.indexOf('404') >= 0) {
+        try {
+          for (const stmt of statements) {
+            await api('POST', '/api/database/query', {
+              source_id: effSrc.id,
+              sql: stmt,
+              max_rows: 1,
+              page: 1,
+              page_size: 1,
+              count_mode: 'none'
+            });
+          }
+          await api('POST', '/api/database/query', {
+            source_id: effSrc.id,
+            sql: 'COMMIT',
+            max_rows: 1,
+            page: 1,
+            page_size: 1,
+            count_mode: 'none'
+          }).catch(() => {});
+          for (const key of dirtyKeys) {
+            const item = state.dirtyCells[key];
+            state.rows[item.rowIdx][item.colIdx] = item.newVal;
+          }
+          state.dirtyCells = {};
+          updateTransactionControls();
+          refreshVisibleResult();
+          toast('✅ 已成功提交 ' + dirtyKeys.length + ' 处修改（兼容模式）', 'ok');
+          return;
+        } catch (e2) {
+          toast('提交修改失败：' + e2.message, 'err');
+          return;
+        }
+      }
+      toast('批量提交失败（已回滚）：' + e.message, 'err');
     }
   }
 
@@ -2099,12 +2120,24 @@
         showQueryMessage('ok', '执行成功', e.message || '语句执行完成');
         if (q('db-query-status')) q('db-query-status').textContent = s.status;
       }
+    } else if (e.type === 'notice') {
+      // FOR UPDATE 等行锁提示：仅展示不中断流程
+      if (s.id === state.activeId) {
+        toast(e.message || 'FOR UPDATE 行锁已在请求结束时释放', 'warn');
+        showQueryMessage('warn', '行锁提示', e.message || 'FOR UPDATE 查询已执行；行锁随请求结束已释放（HTTP 无状态，不做会话级持锁）');
+      }
     } else if (e.type === 'summary') {
       s.summary = e.summary;
       if (e.summary && e.summary.page) { s.page = e.summary.page; s.pageSize = e.summary.page_size || s.pageSize; }
       s.status = e.summary.rows + ' 行 · ' + e.summary.elapsed_ms + ' ms' + (e.summary.retry_count ? ' · 已自动重连' : '') + (e.summary.ordered === false ? ' · 未指定 ORDER BY' : '') + (e.summary.truncated ? ' · 已截断' : '');
-      if (s.id === state.activeId) { bindSession(s); refreshVisibleResult(); updateDatabasePager(); }
-      else renderTabs();
+      if (s.id === state.activeId) {
+        bindSession(s);
+        refreshVisibleResult();
+        updateDatabasePager();
+        if (e.summary && e.summary.message && e.summary.message.indexOf('FOR UPDATE') >= 0) {
+          showQueryMessage('warn', '行锁提示', e.summary.message);
+        }
+      } else renderTabs();
     } else if (e.type === 'error') throw new Error(e.error || '查询失败');
   }
   function cancelQuery() {

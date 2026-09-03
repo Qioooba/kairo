@@ -123,6 +123,76 @@ func (m *Manager) ExecuteStatement(ctx context.Context, source Source, query str
 	return summary, nil
 }
 
+// ExecuteBatch atomically executes multiple DML statements in a single transaction.
+// All statements are validated via ValidateSQL and must be DML/TRANSACTION; DDL is rejected for batch atomicity.
+// If any statement fails the whole batch is rolled back.
+func (m *Manager) ExecuteBatch(ctx context.Context, source Source, statements []string) (QuerySummary, error) {
+	if len(statements) == 0 {
+		return QuerySummary{}, errors.New("批量语句不能为空")
+	}
+	if len(statements) > 50 {
+		return QuerySummary{}, errors.New("批量语句数量超出限制 (最多 50 条)")
+	}
+	// Pre-validate all statements
+	for _, stmt := range statements {
+		info, err := ValidateSQL(source.Kind, stmt)
+		if err != nil {
+			return QuerySummary{}, err
+		}
+		if info.Type == "DDL" {
+			return QuerySummary{}, fmt.Errorf("批量执行不支持 DDL 语句: %s", info.Action)
+		}
+		if info.IsQuery {
+			return QuerySummary{}, fmt.Errorf("批量执行仅支持 DML/事务语句，禁止查询: %s", stmt)
+		}
+	}
+	queryCtx, cancel := context.WithTimeout(ctx, source.Timeout())
+	defer cancel()
+	if err := m.acquire(queryCtx); err != nil {
+		return QuerySummary{}, err
+	}
+	defer m.release()
+	db, err := m.sqlDB(source)
+	if err != nil {
+		return QuerySummary{}, err
+	}
+	started := time.Now()
+	tx, err := db.BeginTx(queryCtx, nil)
+	if err != nil {
+		return QuerySummary{}, err
+	}
+	defer tx.Rollback()
+	var totalAffected int64
+	for _, stmt := range statements {
+		trimmed := strings.TrimSpace(stmt)
+		upper := strings.ToUpper(trimmed)
+		if upper == "COMMIT" || upper == "ROLLBACK" {
+			continue
+		}
+		clean := strings.TrimRight(strings.TrimSpace(stmt), "; \t\r\n")
+		res, err := tx.ExecContext(queryCtx, clean)
+		if err != nil {
+			return QuerySummary{}, err
+		}
+		if ra, raErr := res.RowsAffected(); raErr == nil && ra >= 0 {
+			totalAffected += ra
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return QuerySummary{}, err
+	}
+	elapsed := time.Since(started).Milliseconds()
+	msg := fmt.Sprintf("批量执行成功: %d 条语句，共影响 %d 行", len(statements), totalAffected)
+	summary := QuerySummary{
+		ElapsedMS:     elapsed,
+		Rows:          int(totalAffected),
+		RowsAffected:  totalAffected,
+		StatementType: "DML_BATCH",
+		Message:       msg,
+	}
+	return summary, nil
+}
+
 func (m *Manager) streamQueryAttempt(ctx context.Context, source Source, query string, page QueryPage, info SQLStatementInfo) ([]StreamEvent, QuerySummary, error) {
 	queryCtx, cancel := context.WithTimeout(ctx, source.Timeout())
 	defer cancel()
@@ -135,6 +205,7 @@ func (m *Manager) streamQueryAttempt(ctx context.Context, source Source, query s
 		return nil, QuerySummary{}, err
 	}
 	started := time.Now()
+	// FOR UPDATE 为行级锁，HTTP 无状态不做会话级持锁：事务在请求结束时立即回滚释放，避免长持锁阻塞生产
 	txOptions := &sql.TxOptions{ReadOnly: !info.HasForUpdate && source.Kind == KindMySQL}
 	tx, err := db.BeginTx(queryCtx, txOptions)
 	if err != nil {
@@ -214,6 +285,11 @@ func (m *Manager) streamQueryAttempt(ctx context.Context, source Source, query s
 	flush()
 	summary.ElapsedMS = time.Since(started).Milliseconds()
 	summary.StatementType = info.Type
+	if info.HasForUpdate {
+		// 告知前端：FOR UPDATE 已执行但锁已随事务回滚释放，非持久会话锁
+		summary.Message = "FOR UPDATE 查询已执行；行锁随请求结束已释放（HTTP 无状态，不做会话级持锁）"
+		events = append(events, StreamEvent{Type: "notice", Message: summary.Message, StatementType: info.Type})
+	}
 	events = append(events, StreamEvent{Type: "summary", Summary: &summary})
 	return events, summary, nil
 }
