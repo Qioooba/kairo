@@ -14,13 +14,15 @@ import (
 )
 
 type waspackReq struct {
-	ProjectDir  string `json:"project_dir"`
-	OutputDir   string `json:"output_dir"`
-	PackageName string `json:"package_name"`
-	Manifest    string `json:"manifest"`
-	AutoPair    *bool  `json:"auto_pair"`
-	OutputPolicy string `json:"output_policy"`
-	ConfirmReplace bool `json:"confirm_replace"`
+	ProjectDir     string `json:"project_dir"`
+	OutputDir      string `json:"output_dir"`
+	PackageName    string `json:"package_name"`
+	Manifest       string `json:"manifest"`
+	AutoPair       *bool  `json:"auto_pair"`
+	OutputPolicy   string `json:"output_policy"`
+	ConfirmReplace bool   `json:"confirm_replace"`
+	PackType       string `json:"pack_type"`
+	BatchBaseDir   string `json:"batch_base_dir"`
 }
 
 func (s *Server) handleWASPackPreview(w http.ResponseWriter, r *http.Request) {
@@ -180,7 +182,7 @@ func decodeWASPackReq(r *http.Request) (waspackReq, error) {
 	req.OutputDir = strings.TrimSpace(req.OutputDir)
 	req.PackageName = strings.TrimSpace(req.PackageName)
 	if req.ProjectDir == "" {
-		return req, errors.New("请选择本地 credit 工程目录")
+		return req, errors.New("请选择本地工程目录")
 	}
 	if strings.TrimSpace(req.Manifest) == "" {
 		return req, errors.New("请粘贴投产清单")
@@ -193,13 +195,23 @@ func toWASPackReq(req waspackReq) waspack.Request {
 	if req.AutoPair != nil {
 		auto = *req.AutoPair
 	}
+	packType := strings.ToLower(strings.TrimSpace(req.PackType))
+	if packType == "" {
+		packType = "app"
+	}
+	batchBaseDir := strings.TrimSpace(req.BatchBaseDir)
+	if batchBaseDir == "" {
+		batchBaseDir = "/batch/credit"
+	}
 	return waspack.Request{
-		ProjectDir:  req.ProjectDir,
-		OutputDir:   req.OutputDir,
-		PackageName: req.PackageName,
-		Manifest:    req.Manifest,
-		AutoPair:    auto,
-		OutputPolicy: strings.TrimSpace(req.OutputPolicy),
+		ProjectDir:     req.ProjectDir,
+		OutputDir:      req.OutputDir,
+		PackageName:    req.PackageName,
+		Manifest:       req.Manifest,
+		AutoPair:       auto,
+		OutputPolicy:   strings.TrimSpace(req.OutputPolicy),
 		ConfirmReplace: req.ConfirmReplace,
+		PackType:       packType,
+		BatchBaseDir:   batchBaseDir,
 	}
 }

@@ -81,3 +81,29 @@ func TestQueryHasOrderBy(t *testing.T) {
 		}
 	}
 }
+
+func TestServerPagedQueryMultipleSemicolons(t *testing.T) {
+	page := QueryPage{Page: 1, PageSize: 10}
+	queries := []string{
+		"SELECT 1;;",
+		"SELECT 1; ; ;\n;",
+		"SELECT id FROM users WHERE status = 1;;;  ",
+	}
+	for _, q := range queries {
+		gotOracle, err := serverPagedQuery(KindOracle, q, page)
+		if err != nil {
+			t.Fatalf("Oracle pagination failed for %q: %v", q, err)
+		}
+		if strings.Contains(gotOracle, ";") {
+			t.Fatalf("Oracle query should not contain any semicolons inside wrapper: %s", gotOracle)
+		}
+
+		gotMySQL, err := serverPagedQuery(KindMySQL, q, page)
+		if err != nil {
+			t.Fatalf("MySQL pagination failed for %q: %v", q, err)
+		}
+		if strings.Contains(gotMySQL, ";") {
+			t.Fatalf("MySQL query should not contain any semicolons inside derived table: %s", gotMySQL)
+		}
+	}
+}

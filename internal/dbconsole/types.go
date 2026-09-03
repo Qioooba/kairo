@@ -340,4 +340,7 @@ type QuerySummary struct {
 	PaginationMode string `json:"pagination_mode,omitempty"`
 	RetryCount     int    `json:"retry_count,omitempty"`
 	Ordered        bool   `json:"ordered"`
+	RowsAffected   int64  `json:"rows_affected,omitempty"`
+	StatementType  string `json:"statement_type,omitempty"`
+	Message        string `json:"message,omitempty"`
 }

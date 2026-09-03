@@ -12,6 +12,8 @@ import (
 	"io/fs"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -62,6 +64,10 @@ func (s *Server) handleDatabaseDispatch(w http.ResponseWriter, r *http.Request) 
 		s.handleDatabaseRedisInfo(w, r)
 	case path == "redis/mutate":
 		s.handleDatabaseRedisMutate(w, r)
+	case path == "sessions/backup":
+		s.handleDatabaseSessionBackup(w, r)
+	case path == "sessions/restore":
+		s.handleDatabaseSessionRestore(w, r)
 	default:
 		http.NotFound(w, r)
 	}
@@ -260,9 +266,17 @@ func (s *Server) handleDatabaseQuery(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := dbconsole.ValidateReadOnlySQL(source.Kind, req.SQL); err != nil {
-		writeErr(w, 400, err)
-		return
+	user, _ := r.Context().Value(authUserKey).(*authUser)
+	if user != nil && user.Role != "admin" {
+		if err := dbconsole.ValidateReadOnlySQL(source.Kind, req.SQL); err != nil {
+			writeErr(w, 400, err)
+			return
+		}
+	} else {
+		if _, err := dbconsole.ValidateSQL(source.Kind, req.SQL); err != nil {
+			writeErr(w, 400, err)
+			return
+		}
 	}
 	hash := sha256.Sum256([]byte(strings.TrimSpace(req.SQL)))
 	queryID := hex.EncodeToString(hash[:8])
@@ -304,7 +318,7 @@ func (s *Server) handleDatabaseExport(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := dbconsole.ValidateReadOnlySQL(source.Kind, req.SQL); err != nil {
+	if _, err := dbconsole.ValidateSQL(source.Kind, req.SQL); err != nil {
 		writeErr(w, 400, err)
 		return
 	}
@@ -569,6 +583,10 @@ func (s *Server) handleDatabaseRedisScan(w http.ResponseWriter, r *http.Request)
 	count, _ := strconv.ParseInt(r.URL.Query().Get("count"), 10, 64)
 	result, err := s.database.RedisScan(r.Context(), source, r.URL.Query().Get("cursor"), r.URL.Query().Get("pattern"), count)
 	if err != nil {
+		if strings.Contains(err.Error(), "cursor 无效") {
+			writeErr(w, 400, err)
+			return
+		}
 		writeErrSanitized(w, 502, s.databaseSafeError(source, err))
 		return
 	}
@@ -623,7 +641,14 @@ func (s *Server) handleDatabaseRedisMembers(w http.ResponseWriter, r *http.Reque
 	offset, _ := strconv.ParseInt(r.URL.Query().Get("offset"), 10, 64)
 	pageSize, _ := strconv.ParseInt(r.URL.Query().Get("page_size"), 10, 64)
 	result, err := s.database.RedisMembers(r.Context(), source, string(rawKey), r.URL.Query().Get("type"), r.URL.Query().Get("cursor"), offset, pageSize)
-	if err != nil { writeErrSanitized(w, 502, s.databaseSafeError(source, err)); return }
+	if err != nil {
+		if strings.Contains(err.Error(), "cursor 无效") || strings.Contains(err.Error(), "偏移量过大") || strings.Contains(err.Error(), "不支持") {
+			writeErr(w, 400, err)
+			return
+		}
+		writeErrSanitized(w, 502, s.databaseSafeError(source, err))
+		return
+	}
 	writeJSON(w, 200, map[string]any{"ok": true, "result": result})
 }
 
@@ -747,4 +772,46 @@ func (s *Server) databaseSafeError(source dbconsole.Source, err error) error {
 		return errors.New("无法连接数据库（connection refused），请检查数据库是否启动及端口是否正确")
 	}
 	return errors.New(message)
+}
+
+
+func (s *Server) handleDatabaseSessionBackup(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeErr(w, 405, errors.New("仅支持 POST"))
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, 10<<20))
+	if err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	filePath := filepath.Join(s.cur().DataDir(), "database-sessions.json")
+	if err := os.WriteFile(filePath, body, 0o644); err != nil {
+		writeErrSanitized(w, 500, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
+func (s *Server) handleDatabaseSessionRestore(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeErr(w, 405, errors.New("仅支持 GET"))
+		return
+	}
+	filePath := filepath.Join(s.cur().DataDir(), "database-sessions.json")
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			writeJSON(w, 200, map[string]any{"ok": true, "session": nil})
+			return
+		}
+		writeErrSanitized(w, 500, err)
+		return
+	}
+	var session any
+	if err := json.Unmarshal(data, &session); err != nil {
+		writeJSON(w, 200, map[string]any{"ok": true, "session": nil})
+		return
+	}
+	writeJSON(w, 200, map[string]any{"ok": true, "session": session})
 }

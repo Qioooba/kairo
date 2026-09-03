@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,11 +21,14 @@ const (
 )
 
 type StreamEvent struct {
-	Type    string        `json:"type"`
-	Columns []Column      `json:"columns,omitempty"`
-	Rows    [][]any       `json:"rows,omitempty"`
-	Summary *QuerySummary `json:"summary,omitempty"`
-	Error   string        `json:"error,omitempty"`
+	Type          string        `json:"type"`
+	Columns       []Column      `json:"columns,omitempty"`
+	Rows          [][]any       `json:"rows,omitempty"`
+	Summary       *QuerySummary `json:"summary,omitempty"`
+	Error         string        `json:"error,omitempty"`
+	Message       string        `json:"message,omitempty"`
+	StatementType string        `json:"statement_type,omitempty"`
+	RowsAffected  int64         `json:"rows_affected,omitempty"`
 }
 
 type EmitFunc func(StreamEvent) error
@@ -40,13 +44,17 @@ func (m *Manager) StreamQueryPage(ctx context.Context, source Source, query stri
 	if source.Kind == KindRedis {
 		return QuerySummary{}, fmt.Errorf("Redis 不支持 SQL 查询")
 	}
-	if err := ValidateReadOnlySQL(source.Kind, query); err != nil {
+	info, err := ValidateSQL(source.Kind, query)
+	if err != nil {
 		return QuerySummary{}, err
+	}
+	if !info.IsQuery {
+		return m.ExecuteStatement(ctx, source, query, info, emit)
 	}
 	p := normalizeQueryPage(source, page, pageSize)
 	var last QuerySummary
 	for attempt := 0; attempt < 2; attempt++ {
-		events, summary, err := m.streamQueryAttempt(ctx, source, query, p)
+		events, summary, err := m.streamQueryAttempt(ctx, source, query, p, info)
 		summary.RetryCount = attempt
 		last = summary
 		if err == nil {
@@ -68,7 +76,54 @@ func (m *Manager) StreamQueryPage(ctx context.Context, source Source, query stri
 	return last, fmt.Errorf("连接重试失败")
 }
 
-func (m *Manager) streamQueryAttempt(ctx context.Context, source Source, query string, page QueryPage) ([]StreamEvent, QuerySummary, error) {
+// ExecuteStatement executes DML (UPDATE, INSERT, DELETE, MERGE) or DDL (CREATE, ALTER, DROP, TRUNCATE) statements.
+func (m *Manager) ExecuteStatement(ctx context.Context, source Source, query string, info SQLStatementInfo, emit EmitFunc) (QuerySummary, error) {
+	queryCtx, cancel := context.WithTimeout(ctx, source.Timeout())
+	defer cancel()
+	if err := m.acquire(queryCtx); err != nil {
+		return QuerySummary{}, err
+	}
+	defer m.release()
+	db, err := m.sqlDB(source)
+	if err != nil {
+		return QuerySummary{}, err
+	}
+	started := time.Now()
+	cleanQuery := strings.TrimRight(strings.TrimSpace(query), "; \t\r\n")
+	res, err := db.ExecContext(queryCtx, cleanQuery)
+	if err != nil {
+		return QuerySummary{}, err
+	}
+	var rowsAffected int64 = -1
+	if ra, raErr := res.RowsAffected(); raErr == nil {
+		rowsAffected = ra
+	}
+	elapsed := time.Since(started).Milliseconds()
+	msg := fmt.Sprintf("执行成功: %s", info.Action)
+	if rowsAffected >= 0 {
+		msg = fmt.Sprintf("执行成功: %s 影响 %d 行", info.Action, rowsAffected)
+	}
+	summary := QuerySummary{
+		ElapsedMS:     elapsed,
+		Rows:          int(rowsAffected),
+		RowsAffected:  rowsAffected,
+		StatementType: info.Type,
+		Message:       msg,
+	}
+	event := StreamEvent{
+		Type:          "mutation",
+		Summary:       &summary,
+		Message:       msg,
+		StatementType: info.Type,
+		RowsAffected:  rowsAffected,
+	}
+	if emit != nil {
+		_ = emit(event)
+	}
+	return summary, nil
+}
+
+func (m *Manager) streamQueryAttempt(ctx context.Context, source Source, query string, page QueryPage, info SQLStatementInfo) ([]StreamEvent, QuerySummary, error) {
 	queryCtx, cancel := context.WithTimeout(ctx, source.Timeout())
 	defer cancel()
 	if err := m.acquire(queryCtx); err != nil {
@@ -80,16 +135,14 @@ func (m *Manager) streamQueryAttempt(ctx context.Context, source Source, query s
 		return nil, QuerySummary{}, err
 	}
 	started := time.Now()
-	txOptions := &sql.TxOptions{ReadOnly: source.Kind == KindMySQL}
+	txOptions := &sql.TxOptions{ReadOnly: !info.HasForUpdate && source.Kind == KindMySQL}
 	tx, err := db.BeginTx(queryCtx, txOptions)
 	if err != nil {
 		return nil, QuerySummary{}, err
 	}
 	defer tx.Rollback()
-	if source.Kind == KindOracle {
-		if _, err := tx.ExecContext(queryCtx, "SET TRANSACTION READ ONLY"); err != nil {
-			return nil, QuerySummary{}, fmt.Errorf("启用 Oracle 只读事务失败: %w", err)
-		}
+	if source.Kind == KindOracle && !info.HasForUpdate {
+		_, _ = tx.ExecContext(queryCtx, "SET TRANSACTION READ ONLY")
 	}
 	limitedQuery, err := serverPagedQuery(source.Kind, query, page)
 	if err != nil {
@@ -106,7 +159,8 @@ func (m *Manager) streamQueryAttempt(ctx context.Context, source Source, query s
 	}
 	aliasIdx := -1
 	for i, c := range columns {
-		if strings.HasPrefix(strings.ToUpper(c.Name), "__KAIRO_RN_") {
+		colName := strings.Trim(strings.ToUpper(c.Name), "\"`[] \t")
+		if strings.HasPrefix(colName, "__KAIRO_RN_") {
 			aliasIdx = i
 			break
 		}
@@ -114,9 +168,7 @@ func (m *Manager) streamQueryAttempt(ctx context.Context, source Source, query s
 	if aliasIdx >= 0 {
 		columns = append(columns[:aliasIdx], columns[aliasIdx+1:]...)
 	}
-	if err := rejectLargeObjectColumns(source.Kind, columns); err != nil {
-		return nil, QuerySummary{}, err
-	}
+	// rejectLargeObjectColumns removed: CLOB/BLOB/LONG RAW are now safely read and formatted
 	summary := QuerySummary{
 		QueryLimit: page.PageSize, Page: page.Page, PageSize: page.PageSize,
 		Offset: page.Offset(), HasPrev: page.Page > 1, PaginationMode: "page",
@@ -136,16 +188,11 @@ func (m *Manager) streamQueryAttempt(ctx context.Context, source Source, query s
 		if aliasIdx >= 0 {
 			scanCount = len(columns) + 1
 		}
-		row, rowBytes, scanErr := scanRow(rows, scanCount)
+		row, rowBytes, scanErr := scanRow(rows, scanCount, columns, aliasIdx)
 		if scanErr != nil {
 			return nil, summary, scanErr
 		}
-		if aliasIdx >= 0 && aliasIdx < len(row) {
-			row = append(row[:aliasIdx], row[aliasIdx+1:]...)
-			if raw, err := json.Marshal(row); err == nil {
-				rowBytes = int64(len(raw))
-			}
-		}
+
 		if summary.Rows >= page.PageSize {
 			summary.HasNext = true
 			break
@@ -174,8 +221,7 @@ func (m *Manager) streamQueryAttempt(ctx context.Context, source Source, query s
 // extra row is used only to report that the visible result was truncated.
 // Oracle deliberately uses ROWNUM rather than FETCH FIRST for 11g support.
 func serverLimitedQuery(kind, query string, maxRows int) (string, error) {
-	query = strings.TrimSpace(query)
-	query = strings.TrimSpace(strings.TrimSuffix(query, ";"))
+	query = strings.TrimSpace(strings.TrimRight(strings.TrimSpace(query), "; \t\r\n"))
 	if query == "" || maxRows < 1 {
 		return "", fmt.Errorf("查询或行数上限无效")
 	}
@@ -251,7 +297,7 @@ func resultColumns(rows *sql.Rows) ([]Column, error) {
 	return columns, nil
 }
 
-func scanRow(rows *sql.Rows, count int) ([]any, int64, error) {
+func scanRow(rows *sql.Rows, count int, columns []Column, aliasIdx int) ([]any, int64, error) {
 	values := make([]any, count)
 	dest := make([]any, count)
 	for i := range values {
@@ -260,11 +306,65 @@ func scanRow(rows *sql.Rows, count int) ([]any, int64, error) {
 	if err := rows.Scan(dest...); err != nil {
 		return nil, 0, err
 	}
+	if aliasIdx >= 0 && aliasIdx < len(values) {
+		values = append(values[:aliasIdx], values[aliasIdx+1:]...)
+	}
 	for i := range values {
-		values[i] = normalizeValue(values[i])
+		dbType := ""
+		if i < len(columns) {
+			dbType = strings.ToUpper(strings.TrimSpace(columns[i].Database))
+		}
+		values[i] = normalizeColumnValue(values[i], dbType)
 	}
 	raw, _ := json.Marshal(values)
 	return values, int64(len(raw)), nil
+}
+
+func normalizeColumnValue(value any, dbType string) any {
+	if value == nil {
+		return nil
+	}
+	isClob := strings.Contains(dbType, "CLOB") || dbType == "LONG" || dbType == "LONGTEXT" || dbType == "MEDIUMTEXT"
+	isBlob := strings.Contains(dbType, "BLOB") || dbType == "LONG RAW" || dbType == "RAW" || dbType == "BINARY" || dbType == "VARBINARY"
+
+	if isClob {
+		var text string
+		switch v := value.(type) {
+		case string:
+			text = v
+		case []byte:
+			text = string(v)
+		default:
+			text = fmt.Sprint(v)
+		}
+		return map[string]any{
+			"kind":      "clob",
+			"bytes":     len(text),
+			"text":      text,
+			"truncated": false,
+		}
+	}
+
+	if isBlob {
+		var rawBytes []byte
+		switch v := value.(type) {
+		case []byte:
+			rawBytes = v
+		case string:
+			rawBytes = []byte(v)
+		default:
+			rawBytes = []byte(fmt.Sprint(v))
+		}
+		return map[string]any{
+			"kind":           "blob",
+			"bytes":          len(rawBytes),
+			"hex":            hex.EncodeToString(rawBytes),
+			"preview_base64": base64.StdEncoding.EncodeToString(rawBytes),
+			"truncated":      false,
+		}
+	}
+
+	return normalizeValue(value)
 }
 
 func normalizeValue(value any) any {

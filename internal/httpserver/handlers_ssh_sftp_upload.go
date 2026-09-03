@@ -183,8 +183,8 @@ func (s *Server) handleSshSftpUploadInit(w http.ResponseWriter, r *http.Request)
 	// 文件大小校验
 	cur := s.cur()
 	maxSize := cur.App.UploadMaxSizeBytes()
-	if req.Size <= 0 {
-		writeErr(w, 400, errors.New("size 必须大于 0"))
+	if req.Size < 0 {
+		writeErr(w, 400, errors.New("size 不能为负数"))
 		return
 	}
 	if maxSize > 0 && req.Size > maxSize {

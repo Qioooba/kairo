@@ -34,7 +34,7 @@ func (p QueryPage) Offset() int64 {
 // serverPagedQuery builds the database-specific wrapper. The original query
 // has already passed ValidateReadOnlySQL before this function is called.
 func serverPagedQuery(kind, query string, page QueryPage) (string, error) {
-	query = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(query), ";"))
+	query = strings.TrimSpace(strings.TrimRight(strings.TrimSpace(query), "; \t\r\n"))
 	if query == "" || page.Page < 1 || page.PageSize < 1 {
 		return "", fmt.Errorf("查询或分页参数无效")
 	}
@@ -45,6 +45,22 @@ func serverPagedQuery(kind, query string, page QueryPage) (string, error) {
 	if len(tokens) == 0 {
 		return "", fmt.Errorf("解析查询失败: SQL 不能为空")
 	}
+	hasForUpdate := false
+	for i := 0; i < len(tokens)-1; i++ {
+		if tokens[i] == "FOR" && tokens[i+1] == "UPDATE" {
+			hasForUpdate = true
+			break
+		}
+	}
+	if hasForUpdate {
+		return query, nil
+	}
+
+	first := tokens[0]
+	if first != "SELECT" && first != "WITH" {
+		return query, nil
+	}
+
 	fetch := page.PageSize + 1
 	if fetch <= page.PageSize {
 		return "", fmt.Errorf("分页大小过大")
@@ -61,12 +77,6 @@ func serverPagedQuery(kind, query string, page QueryPage) (string, error) {
 	case KindOracle:
 		return fmt.Sprintf("SELECT * FROM (\nSELECT kairo_page_q.*, ROWNUM AS %s\nFROM (\n%s\n) kairo_page_q\nWHERE ROWNUM <= %d\n)\nWHERE %s > %d", rowAlias, query, upper, rowAlias, offset), nil
 	case KindMySQL:
-		first := tokens[0]
-		if first != "SELECT" && first != "WITH" {
-			// SHOW/DESC/EXPLAIN keep the old bounded behavior. Their dialect
-			// pagination differs and cannot be wrapped as a derived table.
-			return query, nil
-		}
 		return fmt.Sprintf("SELECT * FROM (\n%s\n) AS kairo_page_q LIMIT %d OFFSET %d", query, fetch, offset), nil
 	default:
 		return "", fmt.Errorf("%s 不是 SQL 数据源", kind)

@@ -400,6 +400,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleSshSftpUploadInit(w, r)
 	case path == "/api/ssh/sftp/upload/cancel":
 		s.handleSshSftpUploadCancel(w, r)
+	case path == "/api/ssh/sftp/mkdir":
+		s.handleSshSftpMkdir(w, r)
+	case path == "/api/ssh/sftp/create":
+		s.handleSshSftpCreate(w, r)
+	case path == "/api/ssh/sftp/rename":
+		s.handleSshSftpRename(w, r)
 	case path == "/api/logs/list":
 		s.handleLogsList(w, r)
 	case path == "/api/logs/list/targets":

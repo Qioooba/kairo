@@ -6,9 +6,69 @@ import (
 	"unicode"
 )
 
-// ValidateReadOnlySQL is defense in depth. The real security boundary remains
-// a database account with SELECT-only grants; lexical validation prevents
-// accidental DML/DDL and multi-statement execution before it reaches the server.
+// SQLStatementInfo describes the classified SQL statement.
+type SQLStatementInfo struct {
+	Type         string `json:"type"`          // "SELECT", "FOR_UPDATE", "DML", "DDL", "TRANSACTION", "COMMAND", "STATEMENT"
+	Action       string `json:"action"`        // "SELECT", "UPDATE", "INSERT", "DELETE", "CREATE", "ALTER", "DROP", "TRUNCATE", ...
+	IsQuery      bool   `json:"is_query"`      // true if statement produces a result set (SELECT, FOR UPDATE, SHOW, DESC, EXPLAIN)
+	HasForUpdate bool   `json:"has_for_update"` // true if query contains FOR UPDATE
+}
+
+// ClassifySQL analyzes the given SQL statement and categorizes it.
+func ClassifySQL(kind, query string) (SQLStatementInfo, error) {
+	tokens, _, err := sqlTokens(query)
+	if err != nil {
+		return SQLStatementInfo{}, err
+	}
+	if len(tokens) == 0 {
+		return SQLStatementInfo{}, errors.New("SQL 不能为空")
+	}
+
+	// Reject dangerous MySQL host filesystem writes / reads
+	for i := 0; i < len(tokens); i++ {
+		t := tokens[i]
+		if t == "INTO" && i+1 < len(tokens) && (tokens[i+1] == "OUTFILE" || tokens[i+1] == "DUMPFILE") {
+			return SQLStatementInfo{}, errors.New("禁止写文件查询 (INTO OUTFILE/DUMPFILE)")
+		}
+		if t == "LOAD_FILE" {
+			return SQLStatementInfo{}, errors.New("禁止使用 LOAD_FILE 函数")
+		}
+	}
+
+	hasForUpdate := false
+	for i := 0; i < len(tokens)-1; i++ {
+		if tokens[i] == "FOR" && tokens[i+1] == "UPDATE" {
+			hasForUpdate = true
+			break
+		}
+	}
+
+	first := tokens[0]
+	switch first {
+	case "SELECT", "WITH":
+		if hasForUpdate {
+			return SQLStatementInfo{Type: "FOR_UPDATE", Action: "FOR UPDATE", IsQuery: true, HasForUpdate: true}, nil
+		}
+		return SQLStatementInfo{Type: "SELECT", Action: first, IsQuery: true, HasForUpdate: false}, nil
+	case "SHOW", "DESC", "DESCRIBE", "EXPLAIN":
+		return SQLStatementInfo{Type: "COMMAND", Action: first, IsQuery: true, HasForUpdate: false}, nil
+	case "UPDATE", "INSERT", "DELETE", "MERGE", "REPLACE":
+		return SQLStatementInfo{Type: "DML", Action: first, IsQuery: false, HasForUpdate: false}, nil
+	case "CREATE", "ALTER", "DROP", "TRUNCATE", "RENAME":
+		return SQLStatementInfo{Type: "DDL", Action: first, IsQuery: false, HasForUpdate: false}, nil
+	case "COMMIT", "ROLLBACK":
+		return SQLStatementInfo{Type: "TRANSACTION", Action: first, IsQuery: false, HasForUpdate: false}, nil
+	default:
+		return SQLStatementInfo{Type: "STATEMENT", Action: first, IsQuery: false, HasForUpdate: false}, nil
+	}
+}
+
+// ValidateSQL classifies and validates a SQL statement for developer workbench execution.
+func ValidateSQL(kind, query string) (SQLStatementInfo, error) {
+	return ClassifySQL(kind, query)
+}
+
+// ValidateReadOnlySQL is kept for callers requiring strictly read-only execution.
 func ValidateReadOnlySQL(kind, query string) error {
 	tokens, semicolonContent, err := sqlTokens(query)
 	if err != nil {
@@ -28,8 +88,6 @@ func ValidateReadOnlySQL(kind, query string) error {
 	if !allowed {
 		return errors.New("一期仅允许只读查询（SELECT/WITH；MySQL 另支持 SHOW/DESC/EXPLAIN）")
 	}
-	// WITH 在 MySQL 8 可以位于 UPDATE/DELETE 前，因此不能只判断首词。
-	// 这些词在合法只读语句中若作为标识符应当使用引号，引号内容不会进入 tokens。
 	denied := map[string]struct{}{
 		"INSERT": {}, "UPDATE": {}, "DELETE": {}, "MERGE": {}, "REPLACE": {},
 		"CREATE": {}, "ALTER": {}, "DROP": {}, "TRUNCATE": {}, "RENAME": {},

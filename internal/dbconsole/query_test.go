@@ -72,3 +72,51 @@ func TestMetadataCacheInvalidation(t *testing.T) {
 		t.Fatal("unrelated source metadata was invalidated")
 	}
 }
+
+func TestStripRowAliasQuotes(t *testing.T) {
+	columns := []Column{
+		{Name: "ID"},
+		{Name: `"__KAIRO_RN_e8f2"`},
+		{Name: "NAME"},
+	}
+	aliasIdx := -1
+	for i, c := range columns {
+		colName := strings.Trim(strings.ToUpper(c.Name), "\"`[] \t")
+		if strings.HasPrefix(colName, "__KAIRO_RN_") {
+			aliasIdx = i
+			break
+		}
+	}
+	if aliasIdx != 1 {
+		t.Fatalf("expected aliasIdx 1, got %d", aliasIdx)
+	}
+}
+
+func TestRedisMutateTTLRejectsZeroOrNegative(t *testing.T) {
+	m := &Manager{}
+	source := Source{Kind: KindRedis, AllowRedisWrite: true}
+
+	// 0 seconds should be rejected
+	_, err := m.RedisMutateTTL(t.Context(), source, "mykey", "EXPIRE", 0)
+	if err == nil || !strings.Contains(err.Error(), "1 秒到 365 天之间") {
+		t.Fatalf("expected TTL 0 to be rejected, got err: %v", err)
+	}
+
+	// -1 seconds should be rejected
+	_, err = m.RedisMutateTTL(t.Context(), source, "mykey", "EXPIRE", -1)
+	if err == nil || !strings.Contains(err.Error(), "1 秒到 365 天之间") {
+		t.Fatalf("expected TTL -1 to be rejected, got err: %v", err)
+	}
+}
+
+func TestRedisCursorValidation(t *testing.T) {
+	_, _, err := parseClusterCursor("abc")
+	if err == nil {
+		t.Fatal("expected invalid cursor 'abc' to return error")
+	}
+
+	_, _, err = parseClusterCursor("node:bad")
+	if err == nil {
+		t.Fatal("expected invalid cluster cursor 'node:bad' to return error")
+	}
+}

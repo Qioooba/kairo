@@ -110,7 +110,54 @@
         gutter.textContent = numbers;
       });
     };
-    textarea.addEventListener('input', () => { updateGutter(); if (syntax) highlight.innerHTML = syntax.highlight(textarea.value, language); onDirty(); });
+    textarea.addEventListener('input', () => { pushHistory(); updateGutter(); if (syntax) highlight.innerHTML = syntax.highlight(textarea.value, language); onDirty(); });
+
+    const history = [textarea.value || ''];
+    let historyIdx = 0;
+    let historyTimer = 0;
+    function pushHistory() {
+      clearTimeout(historyTimer);
+      historyTimer = setTimeout(() => {
+        const val = textarea.value;
+        if (history[historyIdx] !== val) {
+          history.splice(historyIdx + 1);
+          history.push(val);
+          while (history.length > 50) {
+            history.shift();
+          }
+          historyIdx = history.length - 1;
+        }
+      }, 150);
+    }
+    function undo() {
+      if (historyIdx > 0) {
+        historyIdx--;
+        textarea.value = history[historyIdx];
+        updateGutter();
+        if (syntax) highlight.innerHTML = syntax.highlight(textarea.value, language);
+        onDirty();
+      }
+    }
+    function redo() {
+      if (historyIdx < history.length - 1) {
+        historyIdx++;
+        textarea.value = history[historyIdx];
+        updateGutter();
+        if (syntax) highlight.innerHTML = syntax.highlight(textarea.value, language);
+        onDirty();
+      }
+    }
+    textarea.addEventListener('keydown', function(e) {
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) {
+        e.preventDefault();
+        if (e.shiftKey) redo();
+        else undo();
+      } else if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || e.key === 'Y')) {
+        e.preventDefault();
+        redo();
+      }
+    });
+
     textarea.addEventListener('scroll', () => { gutter.scrollTop = textarea.scrollTop; highlight.scrollTop = textarea.scrollTop; highlight.scrollLeft = textarea.scrollLeft; });
     const editorLayer = el('div', { class: 'cmp-editor-layer' }, [highlight, textarea]);
     const root = el('div', { class: 'cmp-editor' }, [gutter, editorLayer]);
@@ -134,7 +181,7 @@
     return { root: root, textarea,
       setValue(value) { textarea.value = value || ''; updateGutter(); if (syntax) highlight.innerHTML = syntax.highlight(textarea.value, language); },
       setLanguage(value) { language = value || 'text'; if (syntax) highlight.innerHTML = syntax.highlight(textarea.value, language); },
-      getValue() { return textarea.value; }, updateGutter };
+      getValue() { return textarea.value; }, undo, redo, updateGutter };
   }
 
   async function renderCompare(view) {
@@ -193,10 +240,12 @@
       const dirty = el('span', { class: 'cmp-dirty', text: '' });
       const language = el('select', { class: 'cmp-language', title: '语法高亮' }, [el('option', { value: 'text', text: '文本' }), el('option', { value: 'java', text: 'Java' }), el('option', { value: 'sql', text: 'SQL' }), el('option', { value: 'xml', text: 'XML' }), el('option', { value: 'json', text: 'JSON' })]);
       language.onchange = function () { editors[side].setLanguage(language.value); if (state.diff) renderResult(); };
+      const undoBtn = makeButton('撤销', 'prev', () => editors[side].undo(), 'btn btn-xs');
+      const redoBtn = makeButton('重做', 'next', () => editors[side].redo(), 'btn btn-xs');
       const openBtn = makeButton('打开', 'open', () => openSourceDialog(state[side].source, false, async source => { state[side].source = source; saveSources(state); await loadSide(side); }));
       const saveBtn = makeButton('保存', 'save', () => saveSide(side)); saveBtn.disabled = true;
-      sourceHeaders[side] = { badge, label, meta, dirty, saveBtn, language };
-      editorGrid.appendChild(el('section', { class: 'cmp-editor-pane' }, [el('div', { class: 'cmp-source-header' }, [badge, label, meta, dirty, language, openBtn, saveBtn]), editors[side].root]));
+      sourceHeaders[side] = { badge, label, meta, dirty, saveBtn, language, undoBtn, redoBtn };
+      editorGrid.appendChild(el('section', { class: 'cmp-editor-pane' }, [el('div', { class: 'cmp-source-header' }, [badge, label, meta, dirty, language, undoBtn, redoBtn, openBtn, saveBtn]), editors[side].root]));
     });
     const compareBtn = makeButton('比对', 'compare', compareNow, 'btn btn-primary btn-sm');
     compareBtn.setAttribute('data-action', 'text-compare');
@@ -204,6 +253,36 @@
     const saveLeftBtn = makeButton('保存左侧', 'save', () => saveSide('left')); saveLeftBtn.setAttribute('data-action', 'save-left'); saveLeftBtn.style.display = 'none';
     const saveRightBtn = makeButton('保存右侧', 'save', () => saveSide('right')); saveRightBtn.setAttribute('data-action', 'save-right'); saveRightBtn.style.display = 'none';
     const dirtyBanner = el('span', { class: 'cmp-dirty-banner', text: '' });
+
+    const toggleEditorsBtn = makeButton('展开原文件编辑', 'open', toggleEditors, 'btn btn-xs');
+    const copySelRightBtn = makeButton('选择覆盖到右侧 ➡', 'right', () => copySelectionToSide('right'), 'btn btn-xs');
+    const copySelLeftBtn = makeButton('⬅ 选择覆盖到左侧', 'left', () => copySelectionToSide('left'), 'btn btn-xs');
+    const diffCountBadge = el('span', { class: 'cmp-diff-count-badge', text: '' });
+
+    function toggleEditors() {
+      const isHidden = editorGrid.style.display === 'none';
+      editorGrid.style.display = isHidden ? '' : 'none';
+      toggleEditorsBtn.textContent = isHidden ? '折叠原文件' : '展开原文件编辑';
+    }
+
+    function copySelectionToSide(toSide) {
+      const fromSide = toSide === 'right' ? 'left' : 'right';
+      const fromTa = editors[fromSide].textarea;
+      const toTa = editors[toSide].textarea;
+      const sel = fromTa.value.substring(fromTa.selectionStart, fromTa.selectionEnd);
+      const textToCopy = sel || fromTa.value;
+      if (!textToCopy) return toast('源文本为空', 'warn');
+      if (toTa.selectionStart != null && toTa.selectionStart !== toTa.selectionEnd) {
+        toTa.setRangeText(textToCopy, toTa.selectionStart, toTa.selectionEnd, 'end');
+      } else {
+        toTa.value = textToCopy;
+      }
+      editors[toSide].updateGutter();
+      markDirty(toSide);
+      scheduleRecompare();
+      toast('已覆盖到' + (toSide === 'right' ? '右侧' : '左侧'), 'ok');
+    }
+
     const prevBtn = makeButton('上一处', 'prev', () => navigateHunk(-1));
     const nextBtn = makeButton('下一处', 'next', () => navigateHunk(1));
     const swapBtn = makeButton('交换', 'swap', swapSides);
@@ -217,7 +296,7 @@
     const blank = makeCheck('忽略空行', options.ignore_blank, value => { options.ignore_blank = value; saveOptions(options); });
     const ignoreCase = makeCheck('忽略大小写', options.ignore_case, value => { options.ignore_case = value; saveOptions(options); });
     const backup = makeCheck('替换前备份', options.backup, value => { options.backup = value; saveOptions(options); });
-    panel.append(el('div', { class: 'cmp-wb-toolbar' }, [compareBtn, editBtn, saveLeftBtn, saveRightBtn, dirtyBanner, el('span', { class: 'cmp-toolbar-sep' }), prevBtn, nextBtn, el('span', { class: 'cmp-toolbar-sep' }), swapBtn, copyBtn, downloadBtn, el('span', { class: 'cmp-toolbar-grow' }), modeSelect, onlyDiff]), el('div', { class: 'cmp-wb-options' }, [trim, blank, ignoreCase, backup]), editorGrid, resultHost, status);
+    panel.append(el('div', { class: 'cmp-wb-toolbar' }, [compareBtn, toggleEditorsBtn, copySelRightBtn, copySelLeftBtn, saveLeftBtn, saveRightBtn, dirtyBanner, diffCountBadge, el('span', { class: 'cmp-toolbar-sep' }), prevBtn, nextBtn, el('span', { class: 'cmp-toolbar-sep' }), swapBtn, copyBtn, downloadBtn, el('span', { class: 'cmp-toolbar-grow' }), modeSelect, onlyDiff]), el('div', { class: 'cmp-wb-options' }, [trim, blank, ignoreCase, backup]), editorGrid, resultHost, status);
     panel.addEventListener('keydown', e => {
       if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); compareNow(); }
       if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
@@ -278,13 +357,15 @@
         if (requestNo !== compareSeq) return;
         state.diff = response; state.hunks = buildHunks(response.lines || []); state.hunkIndex = state.hunks.length ? 0 : -1;
         renderResult(); showResult(); [prevBtn, nextBtn, copyBtn, downloadBtn].forEach(btn => btn.disabled = false);
-        status.textContent = '差异 ' + state.hunks.length + ' 处 · 新增 ' + response.stats.added + ' 行 · 删除 ' + response.stats.removed + ' 行 · 可直接改行，箭头按段或按行合并';
+        const diffMsg = '共 ' + state.hunks.length + ' 处差异 (新增 ' + response.stats.added + ' 行, 删除 ' + response.stats.removed + ' 行)';
+        diffCountBadge.textContent = diffMsg;
+        status.textContent = diffMsg + ' · 可直接在下方编辑，点击箭头合并差异';
       } catch (error) {
         if (requestNo !== compareSeq) return;
         toast('比对失败：' + (error.message || error), 'err'); status.textContent = '比对失败';
       } finally { if (requestNo === compareSeq) compareBtn.disabled = false; }
     }
-    function showResult() { showingResult = true; panel.classList.add('cmp-panel-has-result'); editorGrid.style.display = ''; resultHost.style.display = ''; editBtn.style.display = 'none'; compareBtn.style.display = ''; refreshSaveButtons(); }
+    function showResult() { showingResult = true; panel.classList.add('cmp-panel-has-result'); editorGrid.style.display = 'none'; toggleEditorsBtn.textContent = '展开原文件编辑'; resultHost.style.display = ''; editBtn.style.display = 'none'; compareBtn.style.display = ''; refreshSaveButtons(); }
     function showEditors() { showingResult = false; panel.classList.remove('cmp-panel-has-result'); editorGrid.style.display = ''; resultHost.style.display = 'none'; editBtn.style.display = 'none'; compareBtn.style.display = ''; refreshSaveButtons(); }
     function renderResult() {
       resultHost.innerHTML = ''; if (!state.diff) return;
@@ -402,7 +483,30 @@
         node.append(makeDiffCell(row, 'left', onEdit, actions && actions.language && actions.language.left), middle, makeDiffCell(row, 'right', onEdit, actions && actions.language && actions.language.right)); canvas.appendChild(node);
       }
     }
-    viewport.addEventListener('scroll', renderWindow); requestAnimationFrame(renderWindow); return viewport;
+    
+    const container = el('div', { class: 'cmp-vdiff-container' });
+    const minimap = el('div', { class: 'cmp-vdiff-minimap', title: '点击跳转定位差异' });
+    const totalRows = Math.max(1, rows.length);
+    (state.hunks || []).forEach(function(hunk, idx) {
+      const top = ((hunk.rowIndex || 0) / totalRows) * 100;
+      const h = Math.max(2, ((hunk.rowCount || 1) / totalRows) * 100);
+      const marker = el('div', {
+        class: 'cmp-minimap-marker',
+        style: 'top:' + top + '%;height:' + h + '%;',
+        title: '差异 #' + (idx + 1)
+      });
+      minimap.appendChild(marker);
+    });
+    minimap.addEventListener('click', function(e) {
+      const rect = minimap.getBoundingClientRect();
+      const ratio = Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height));
+      viewport.scrollTop = Math.floor(ratio * totalRows) * rowHeight;
+    });
+    viewport.addEventListener('scroll', renderWindow);
+    requestAnimationFrame(renderWindow);
+    container.append(viewport, minimap);
+    return container;
+
   }
   function makeDiffCell(row, side, onEdit, language) {
     const lineNo = side === 'left' ? row.leftNo : row.rightNo;
@@ -563,16 +667,18 @@
         remote
       ]));
     });
-    const testBtn = makeButton('测试', 'check', testSources);
+    // testBtn removed
     const startBtn = makeButton('比对', 'compare', startScan, 'btn btn-primary btn-sm');
     const selectDiffBtn = makeButton('选择全部差异', 'check', selectVisible);
     const coverRightBtn = makeButton('覆盖 →', 'right', () => coverDirection('right'));
     const coverLeftBtn = makeButton('← 覆盖', 'left', () => coverDirection('left'));
-    testBtn.setAttribute('data-action', 'compare-test');
+    
     startBtn.setAttribute('data-action', 'compare-scan');
     coverRightBtn.setAttribute('data-action', 'cover-right');
     coverLeftBtn.setAttribute('data-action', 'cover-left');
-    panel.append(sourceGrid, el('div', { class: 'cmp-wb-toolbar' }, [testBtn, startBtn, cancelBtn, el('span', { class: 'cmp-toolbar-sep' }), deep, depth, tolerance, ignoreExt, el('span', { class: 'cmp-toolbar-sep' }), selectDiffBtn, coverLeftBtn, coverRightBtn, el('span', { class: 'cmp-toolbar-grow' }), statusFilter, onlyDiff, search]), progressBar, progress, resultHost); search.addEventListener('input', renderScan); statusFilter.addEventListener('change', renderScan);
+    const searchWrap = el('span', { class: 'cmp-search-wrap' }, [el('span', { class: 'cmp-search-label', text: '🔍 过滤' }), search]);
+    search.placeholder = '输入文件名或路径过滤…';
+    panel.append(sourceGrid, el('div', { class: 'cmp-wb-toolbar' }, [startBtn, cancelBtn, el('span', { class: 'cmp-toolbar-sep' }), deep, depth, tolerance, ignoreExt, el('span', { class: 'cmp-toolbar-sep' }), selectDiffBtn, coverLeftBtn, coverRightBtn, el('span', { class: 'cmp-toolbar-grow' }), statusFilter, onlyDiff, searchWrap]), progressBar, progress, resultHost); search.addEventListener('input', renderScan); statusFilter.addEventListener('change', renderScan);
     async function testSources() {
       sources.left.path = (pathInputs.left.value || '').trim();
       sources.right.path = (pathInputs.right.value || '').trim();
@@ -830,10 +936,19 @@
       if (start === oldStart && end === oldEnd) return; oldStart = start; oldEnd = end; canvas.innerHTML = '';
       for (let i = start; i < end; i++) {
         const row = rows[i], item = row.item;
-        const node = el('div', { class: 'cmp-folder-row cmp-folder-tree-row status-' + item.status, style: 'transform:translateY(' + (i * height) + 'px)' });
+        const node = el('div', {
+          class: 'cmp-folder-row cmp-folder-tree-row status-' + item.status,
+          style: 'transform:translateY(' + (i * height) + 'px); cursor:pointer;'
+        });
+        if (row.dir) {
+          node.ondblclick = function() { onToggle(item); };
+        } else if (item.left && item.right) {
+          node.ondblclick = function() { onCompare(item); };
+          node.title = '双击比对文件差异';
+        }
         const status = { same: '相同', different: '不同', suspect: '待校验', pending: '未展开', left_newer: '左侧较新', right_newer: '右侧较新', left_only: '仅左', right_only: '仅右', error: '错误' }[item.status] || item.status;
         const ops = el('span', { class: 'cmp-folder-ops' });
-        if (item.left && item.right && !item.left.is_dir && !item.right.is_dir) ops.appendChild(el('button', { text: '查看', onclick: function () { onCompare(item); } }));
+        // '查看' button removed in favor of double clicking row
         if (item.left && !item.left.is_dir) ops.appendChild(el('button', { title: '复制到右侧', onclick: function () { onCopy(item, 'right'); }, unsafeHtml: icon('right') }));
         if (item.right && !item.right.is_dir) ops.appendChild(el('button', { title: '复制到左侧', onclick: function () { onCopy(item, 'left'); }, unsafeHtml: icon('left') }));
         if (row.dir) {
@@ -853,7 +968,7 @@
         const pad = { style: 'padding-left:' + (8 + row.depth * 16) + 'px' };
         node.append(
           twist,
-          el('span', { class: 'cmp-folder-status' }, [checkbox, el('span', { text: row.loading ? '校验中' : status })]),
+          el('span', { class: 'cmp-folder-status' }, [checkbox, statusBadge]),
           folderCell(item.left, item.rel_path, pad),
           ops,
           folderCell(item.right, item.rel_path, pad)
@@ -874,7 +989,8 @@
     const name = (function () { const i = String(rel || '').lastIndexOf('/'); return i < 0 ? rel : rel.slice(i + 1); })();
     const attrs = { class: 'cmp-folder-cell', title: entry.path };
     if (pad && pad.style) attrs.style = pad.style;
-    return el('span', attrs, [el('span', { class: 'cmp-folder-name', text: name }), el('small', { text: entry.is_dir ? '目录' : formatBytes(entry.size) })]);
+    const typeIcon = el('span', { class: 'cmp-entry-icon', text: entry.is_dir ? '📁 ' : '📄 ' });
+    return el('span', attrs, [typeIcon, el('span', { class: 'cmp-folder-name', text: name }), el('small', { text: entry.is_dir ? '目录' : formatBytes(entry.size) })]);
   }
 
   async function ensureConnections() { if (connections.length) return connections; try { const response = await api('GET', '/api/compare/connections'); connections = response.sftp || []; } catch (_) { connections = []; } return connections; }

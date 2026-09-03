@@ -35,6 +35,82 @@
   }
 
   function renderFiles(view) {
+
+    // ---- 新建文件 / 新建文件夹 / 重命名 ----
+    async function doNewFile() {
+      if (!state.currentSys || !state.currentSrv) {
+        toast('请先选系统和服务器并连接', 'warn'); return;
+      }
+      const name = prompt('请输入新文件名：');
+      if (!name || !name.trim()) return;
+      const fileName = name.trim();
+      const targetPath = (state.currentPath === '/' ? '' : state.currentPath) + '/' + fileName;
+      try {
+        const c = creds();
+        await api('POST', '/api/ssh/sftp/create', {
+          system: state.currentSys,
+          server: state.currentSrv,
+          username: c.username,
+          password: c.password,
+          path: targetPath
+        });
+        toast('文件已创建：' + fileName, 'ok');
+        doListDir(state.currentPath, c);
+      } catch (err) {
+        toast('创建文件失败：' + (err.message || err), 'err');
+      }
+    }
+
+    async function doNewFolder() {
+      if (!state.currentSys || !state.currentSrv) {
+        toast('请先选系统和服务器并连接', 'warn'); return;
+      }
+      const name = prompt('请输入新文件夹名称：');
+      if (!name || !name.trim()) return;
+      const folderName = name.trim();
+      const targetPath = (state.currentPath === '/' ? '' : state.currentPath) + '/' + folderName;
+      try {
+        const c = creds();
+        await api('POST', '/api/ssh/sftp/mkdir', {
+          system: state.currentSys,
+          server: state.currentSrv,
+          username: c.username,
+          password: c.password,
+          path: targetPath
+        });
+        toast('文件夹已创建：' + folderName, 'ok');
+        doListDir(state.currentPath, c);
+      } catch (err) {
+        toast('创建文件夹失败：' + (err.message || err), 'err');
+      }
+    }
+
+    async function doRename(oldName, fullPath, isDir) {
+      if (!state.currentSys || !state.currentSrv) {
+        toast('请先选系统和服务器并连接', 'warn'); return;
+      }
+      const name = prompt('请输入新的' + (isDir ? '文件夹' : '文件') + '名：', oldName);
+      if (!name || !name.trim() || name.trim() === oldName) return;
+      const newName = name.trim();
+      const parent = state.currentPath === '/' ? '' : state.currentPath;
+      const newPath = parent + '/' + newName;
+      try {
+        const c = creds();
+        await api('POST', '/api/ssh/sftp/rename', {
+          system: state.currentSys,
+          server: state.currentSrv,
+          username: c.username,
+          password: c.password,
+          old_path: fullPath,
+          new_path: newPath
+        });
+        toast('重命名成功', 'ok');
+        doListDir(state.currentPath, c);
+      } catch (err) {
+        toast('重命名失败：' + (err.message || err), 'err');
+      }
+    }
+
     const state = {
       cfg: null,
       currentSys: '',
@@ -207,8 +283,10 @@
       ])
     ]));
     // 第二行：选择操作 + 主按钮（下载/上传并排，按钮组不换行）
+    const btnNewFile = el('button', { class: 'btn btn-sm', text: '➕ 新建文件', onclick: doNewFile, title: '在当前目录新建空白文件' });
+    const btnNewFolder = el('button', { class: 'btn btn-sm', text: '📁 新建文件夹', onclick: doNewFolder, title: '在当前目录新建文件夹' });
     const actionGroup = el('div', { style: 'display:flex; gap:8px; align-items:center; flex:0 0 auto; flex-wrap:nowrap;' }, [
-      btnDownload, btnUploadPick, btnCancel
+      btnNewFile, btnNewFolder, btnDownload, btnUploadPick, btnCancel
     ]);
     fileCard.appendChild(el('div', { class: 'file-toolbar', style: 'display:flex; gap:8px; align-items:center; flex-wrap:wrap; padding:8px 0; border-bottom:1px dashed var(--line);' }, [
       btnSelAll, btnSelNone, selCount,
@@ -980,12 +1058,10 @@
       sortedEntries().forEach(entry => {
         const fullPath = (state.currentPath === '/' ? '' : state.currentPath) + '/' + entry.name;
         const tr = el('tr', { 'data-path': fullPath, 'data-name': entry.name, 'data-isdir': entry.isDir ? '1' : '0' });
-        if (!entry.isDir) {
-          tr.addEventListener('contextmenu', (e) => {
-            e.preventDefault();
-            showContextMenu(e, entry, fullPath);
-          });
-        }
+        tr.addEventListener('contextmenu', (e) => {
+          e.preventDefault();
+          showContextMenu(e, entry, fullPath);
+        });
         const cb = el('input', { type: 'checkbox' });
         cb.checked = state.selected.has(entry.name);
         // v1.4：目录允许勾选（后端递归下载 + 强制 zip，见 doDownload zip 计算）
@@ -1081,6 +1157,17 @@
             }
           }
         }
+        const renameBtn = el('button', {
+          class: 'btn btn-sm',
+          text: '重命名',
+          title: '重命名此项',
+          onclick: (e) => {
+            e.stopPropagation();
+            doRename(entry.name, fullPath, entry.isDir);
+          }
+        });
+        actionsCell.appendChild(renameBtn);
+
         tr.appendChild(actionsCell);
 
         tbody.appendChild(tr);
@@ -1769,13 +1856,23 @@
         menu.appendChild(el('div', { class: 'file-context-menu-divider' }));
       }
 
-      addItem('smClipboard', '复制文件路径', () => {
+      addItem('smClipboard', '复制路径', () => {
         copyToClipboard(fullPath);
       });
 
-      addItem('smEye', '预览', () => {
-        openPreviewInNewWindow(fullPath, entry.name);
+      addItem('smClipboard', '重命名', () => {
+        doRename(entry.name, fullPath, entry.isDir);
       });
+
+      if (!entry.isDir) {
+        addItem('smEye', '预览', () => {
+          openPreviewInNewWindow(fullPath, entry.name);
+        });
+      }
+
+      addDivider();
+      addItem('smFile', '新建文件', doNewFile);
+      addItem('smFolder', '新建文件夹', doNewFolder);
 
       addItem('smDownload', '下载', () => {
         doDownloadSingle(fullPath, entry.name);

@@ -18,6 +18,7 @@ package httpserver
 //                 本路由支持 session_id 优先于 (system, server)。
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -683,4 +684,184 @@ func (s *Server) handleSshSftpDownloadEventsOrCancel(w http.ResponseWriter, r *h
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+// ============================================================================
+// handleSshSftpMkdir / handleSshSftpCreate / handleSshSftpRename
+// ============================================================================
+
+type sshSftpMkdirReq struct {
+	System   string `json:"system"`
+	Server   string `json:"server"`
+	Username string `json:"username"`
+	Password string `json:"password"`
+	Path     string `json:"path"`
+}
+
+type sshSftpCreateReq struct {
+	System   string `json:"system"`
+	Server   string `json:"server"`
+	Username string `json:"username"`
+	Password string `json:"password"`
+	Path     string `json:"path"`
+}
+
+type sshSftpRenameReq struct {
+	System   string `json:"system"`
+	Server   string `json:"server"`
+	Username string `json:"username"`
+	Password string `json:"password"`
+	OldPath  string `json:"old_path"`
+	NewPath  string `json:"new_path"`
+}
+
+func (s *Server) handleSshSftpMkdir(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req sshSftpMkdirReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, 400, fmt.Errorf("请求体 JSON 格式错误: %w", err))
+		return
+	}
+	req.Path = strings.TrimSpace(req.Path)
+	if req.Path == "" || !strings.HasPrefix(req.Path, "/") {
+		writeErr(w, 400, errors.New("path 必须是以 / 开头的绝对路径"))
+		return
+	}
+	srv, creds, ok := s.resolveSshSftpCreds(w, req.System, req.Server, req.Username, req.Password)
+	if !ok {
+		return
+	}
+
+	dialCtx, dialCancel := context.WithTimeout(r.Context(), sshDialOuterTimeout)
+	cli, err := sshclient.Dial(dialCtx, sshclient.Server{
+		Name: srv.Name, Host: srv.Host, Port: srv.Port, Username: creds.Username,
+		HostKeySHA256: srv.HostKeySHA256, SSHProfile: srv.SSHProfile,
+		AllowInsecureHostKey: s.cur().App.AllowInsecureHostKeyEnabled(),
+	}, sshclient.Credentials{Password: creds.Password}, sshAttemptTimeout)
+	dialCancel()
+	if err != nil {
+		writeErrSanitized(w, 502, fmt.Errorf("SSH 连接失败: %w", err))
+		return
+	}
+	defer cli.Close()
+
+	runFn := func(c context.Context, cmd string, t time.Duration, enc string) (string, string, int, error) {
+		return cli.Run(c, cmd, t, enc)
+	}
+	sftpCli, err := sftpclient.NewAuto(cli.RawConn(), runFn)
+	if err != nil {
+		writeErrSanitized(w, 502, fmt.Errorf("SFTP 打开失败: %w", err))
+		return
+	}
+	defer sftpCli.Close()
+
+	if err := sftpCli.MkdirAll(req.Path); err != nil {
+		writeErrSanitized(w, 500, fmt.Errorf("新建文件夹失败: %w", err))
+		return
+	}
+	writeJSON(w, 200, map[string]any{"ok": true, "path": req.Path})
+}
+
+func (s *Server) handleSshSftpCreate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req sshSftpCreateReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, 400, fmt.Errorf("请求体 JSON 格式错误: %w", err))
+		return
+	}
+	req.Path = strings.TrimSpace(req.Path)
+	if req.Path == "" || !strings.HasPrefix(req.Path, "/") {
+		writeErr(w, 400, errors.New("path 必须是以 / 开头的绝对路径"))
+		return
+	}
+	srv, creds, ok := s.resolveSshSftpCreds(w, req.System, req.Server, req.Username, req.Password)
+	if !ok {
+		return
+	}
+
+	dialCtx, dialCancel := context.WithTimeout(r.Context(), sshDialOuterTimeout)
+	cli, err := sshclient.Dial(dialCtx, sshclient.Server{
+		Name: srv.Name, Host: srv.Host, Port: srv.Port, Username: creds.Username,
+		HostKeySHA256: srv.HostKeySHA256, SSHProfile: srv.SSHProfile,
+		AllowInsecureHostKey: s.cur().App.AllowInsecureHostKeyEnabled(),
+	}, sshclient.Credentials{Password: creds.Password}, sshAttemptTimeout)
+	dialCancel()
+	if err != nil {
+		writeErrSanitized(w, 502, fmt.Errorf("SSH 连接失败: %w", err))
+		return
+	}
+	defer cli.Close()
+
+	runFn := func(c context.Context, cmd string, t time.Duration, enc string) (string, string, int, error) {
+		return cli.Run(c, cmd, t, enc)
+	}
+	sftpCli, err := sftpclient.NewAuto(cli.RawConn(), runFn)
+	if err != nil {
+		writeErrSanitized(w, 502, fmt.Errorf("SFTP 打开失败: %w", err))
+		return
+	}
+	defer sftpCli.Close()
+
+	if err := sftpCli.UploadStream(r.Context(), bytes.NewReader(nil), req.Path, 0o644, nil); err != nil {
+		writeErrSanitized(w, 500, fmt.Errorf("新建文件失败: %w", err))
+		return
+	}
+	writeJSON(w, 200, map[string]any{"ok": true, "path": req.Path})
+}
+
+func (s *Server) handleSshSftpRename(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req sshSftpRenameReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, 400, fmt.Errorf("请求体 JSON 格式错误: %w", err))
+		return
+	}
+	req.OldPath = strings.TrimSpace(req.OldPath)
+	req.NewPath = strings.TrimSpace(req.NewPath)
+	if req.OldPath == "" || !strings.HasPrefix(req.OldPath, "/") || req.NewPath == "" || !strings.HasPrefix(req.NewPath, "/") {
+		writeErr(w, 400, errors.New("old_path 与 new_path 必须是以 / 开头的绝对路径"))
+		return
+	}
+	srv, creds, ok := s.resolveSshSftpCreds(w, req.System, req.Server, req.Username, req.Password)
+	if !ok {
+		return
+	}
+
+	dialCtx, dialCancel := context.WithTimeout(r.Context(), sshDialOuterTimeout)
+	cli, err := sshclient.Dial(dialCtx, sshclient.Server{
+		Name: srv.Name, Host: srv.Host, Port: srv.Port, Username: creds.Username,
+		HostKeySHA256: srv.HostKeySHA256, SSHProfile: srv.SSHProfile,
+		AllowInsecureHostKey: s.cur().App.AllowInsecureHostKeyEnabled(),
+	}, sshclient.Credentials{Password: creds.Password}, sshAttemptTimeout)
+	dialCancel()
+	if err != nil {
+		writeErrSanitized(w, 502, fmt.Errorf("SSH 连接失败: %w", err))
+		return
+	}
+	defer cli.Close()
+
+	runFn := func(c context.Context, cmd string, t time.Duration, enc string) (string, string, int, error) {
+		return cli.Run(c, cmd, t, enc)
+	}
+	sftpCli, err := sftpclient.NewAuto(cli.RawConn(), runFn)
+	if err != nil {
+		writeErrSanitized(w, 502, fmt.Errorf("SFTP 打开失败: %w", err))
+		return
+	}
+	defer sftpCli.Close()
+
+	if err := sftpCli.Rename(req.OldPath, req.NewPath); err != nil {
+		writeErrSanitized(w, 500, fmt.Errorf("重命名失败: %w", err))
+		return
+	}
+	writeJSON(w, 200, map[string]any{"ok": true, "old_path": req.OldPath, "new_path": req.NewPath})
 }

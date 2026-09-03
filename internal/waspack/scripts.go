@@ -57,3 +57,62 @@ func renderBackupScript(pkgName string, files []ResolvedFile) string {
 func renderExecuteScript(pkgName string, files []ResolvedFile) string {
 	return "tar -cvf " + pkgName + ".tar " + fileArgs(files, true) + "\n"
 }
+
+const ChmodFileName = "chmod.txt"
+
+func isSafeShellArg(arg string) bool {
+	if arg == "" {
+		return false
+	}
+	for _, r := range arg {
+		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '.' || r == '_' || r == '-' || r == '/') {
+			return false
+		}
+	}
+	return true
+}
+
+func shellArg(arg string) string {
+	if isSafeShellArg(arg) {
+		return arg
+	}
+	return shellQuoteArg(arg)
+}
+
+func fileArgsBatch(files []ResolvedFile) string {
+	parts := make([]string, 0, len(files))
+	for _, f := range files {
+		rel := "./" + relNoDot(f.Rel)
+		parts = append(parts, shellArg(rel))
+	}
+	return strings.Join(parts, " ")
+}
+
+// renderBatchBackupScript 批量代码备份脚本：tar -cvf Bak<pkg>.tar ./<path1> ./<path2> ...
+func renderBatchBackupScript(pkgName string, files []ResolvedFile) string {
+	return "tar -cvf Bak" + pkgName + ".tar " + fileArgsBatch(files) + "\n"
+}
+
+// renderBatchExecuteScript 批量代码执行脚本：tar -cvf <pkg>.tar ./<path1> ./<path2> ...
+func renderBatchExecuteScript(pkgName string, files []ResolvedFile) string {
+	return "tar -cvf " + pkgName + ".tar " + fileArgsBatch(files) + "\n"
+}
+
+// renderChmodScript 为所有 .sh 脚本生成 chmod 777 <baseDir>/<rel>
+func renderChmodScript(baseDir string, files []ResolvedFile) string {
+	base := strings.TrimRight(strings.ReplaceAll(baseDir, "\\", "/"), "/")
+	if base == "" {
+		base = "/batch/credit"
+	}
+	var lines []string
+	for _, f := range files {
+		rel := relNoDot(f.Rel)
+		if strings.HasSuffix(strings.ToLower(rel), ".sh") {
+			lines = append(lines, "chmod 777 "+base+"/"+rel)
+		}
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	return strings.Join(lines, "\n") + "\n"
+}

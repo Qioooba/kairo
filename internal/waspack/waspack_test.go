@@ -346,3 +346,76 @@ func TestSanitizePackageName(t *testing.T) {
 		t.Fatal("应拒绝路径包名")
 	}
 }
+
+func TestIsSafeLocalPathRejectsSensitivePaths(t *testing.T) {
+	cases := []string{
+		"~",
+		"~/test",
+		`~\test`,
+		`C:\Windows`,
+		`C:\Windows\System32`,
+		`C:\Program Files`,
+		`C:\Program Files\App`,
+		`C:\Program Files (x86)`,
+		`C:\Program Files (x86)\App`,
+		`C:\ProgramData`,
+		`C:\ProgramData\test`,
+		`C:\Users`,
+		"/bin",
+		"/bin/sh",
+		"/sbin",
+		"/etc",
+		"/etc/nginx",
+		"/usr",
+		"/usr/local",
+		"/var",
+		"/var/log",
+		"/boot",
+		"/root",
+		"/home",
+		"/",
+		`C:\`,
+		"",
+	}
+	for _, c := range cases {
+		if isSafeLocalPath(c) {
+			t.Errorf("isSafeLocalPath(%q) should be false", c)
+		}
+	}
+
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		if isSafeLocalPath(home) {
+			t.Errorf("isSafeLocalPath(%q) [user home] should be false", home)
+		}
+	}
+	if cwd, err := os.Getwd(); err == nil && cwd != "" {
+		if isSafeLocalPath(cwd) {
+			t.Errorf("isSafeLocalPath(%q) [cwd] should be false", cwd)
+		}
+	}
+
+	// Normal valid directory should be safe
+	valid := filepath.Join(t.TempDir(), "subfolder")
+	if !isSafeLocalPath(valid) {
+		t.Errorf("isSafeLocalPath(%q) should be true", valid)
+	}
+}
+
+func TestOutputPolicyReplaceRequiresMarker(t *testing.T) {
+	// A non-empty directory WITHOUT Kairo marker must be rejected even with confirmReplace=true
+	dir := t.TempDir()
+	writeTree(t, dir, map[string]string{"user_file.txt": "do not delete"})
+	_, _, err := prepareOutputDirWithPolicy(dir, OutputPolicyReplace, true)
+	if err == nil || !strings.Contains(err.Error(), "未包含 Kairo 产物标记") {
+		t.Fatalf("expected rejection when replacing non-Kairo directory, got: %v", err)
+	}
+
+	// If directory HAS Kairo marker, replace with confirm=true is allowed
+	if err := writeOutputMarker(dir, "testpkg", []string{"user_file.txt"}); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = prepareOutputDirWithPolicy(dir, OutputPolicyReplace, true)
+	if err != nil {
+		t.Fatalf("expected success when replacing Kairo directory with confirm, got: %v", err)
+	}
+}

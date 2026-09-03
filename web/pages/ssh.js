@@ -577,13 +577,15 @@ btnSearch.appendChild(el('span', { text: '搜索' }));
     }
 
     // ---- 开 tab ----
-    function openTab(sys, srv) {
-      const existing = pageState.tabs.find(function (t) {
-        return t.system === sys.name && t.server === srv.name && !t.closed;
-      });
-      if (existing) {
-        activateTab(existing.id);
-        return;
+    function openTab(sys, srv, forceNew) {
+      if (!forceNew) {
+        const existing = pageState.tabs.find(function (t) {
+          return t.system === sys.name && t.server === srv.name && !t.closed;
+        });
+        if (existing) {
+          activateTab(existing.id);
+          return;
+        }
       }
 
       const TerminalCtor = getTerminalCtor();
@@ -596,6 +598,11 @@ btnSearch.appendChild(el('span', { text: '搜索' }));
 
       const termEl = el('div', { class: 'ssh-term', 'data-tab': String(tabId) });
 
+      const sameCount = pageState.tabs.filter(function (t) {
+        return t.system === sys.name && t.server === srv.name && !t.closed;
+      }).length;
+      const tabTitle = sameCount > 0 ? srv.name + ' (' + (sameCount + 1) + ')' : srv.name;
+
       const tabBtn = el('div', {
         class: 'ssh-tab ssh-tab-state-idle',
         'data-tab': String(tabId),
@@ -603,7 +610,7 @@ btnSearch.appendChild(el('span', { text: '搜索' }));
       }, [
         // Bug#4：tab 状态点（5 状态：idle/connecting/connected/closed/err）
         el('span', { class: 'ssh-tab-status-dot', title: '未连接' }),
-        el('span', { class: 'ssh-tab-name', text: srv.name }),
+        el('span', { class: 'ssh-tab-name', text: tabTitle }),
         el('span', { class: 'ssh-tab-close', text: '×', title: '关闭', onclick: function (e) { e.stopPropagation(); closeTab(tabId); } })
       ]);
 

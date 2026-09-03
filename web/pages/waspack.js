@@ -1,5 +1,6 @@
 /* ===== web/pages/waspack.js =====
- * credit 投产打包：只选工程根 + 粘贴清单 → 按 src / WebRoot 抽取，生成 list.txt、BakTT*.sh、TT*.sh、tar
+ * 投产打包：支持「应用代码（WAS / WAR）」与「批量代码（Batch）」两种模式
+ * 批量模式自动识别 .sh 生成 chmod.txt，并生成 Bak<包名>.sh、<包名>.sh 及 tar 包
  */
 
 (function () {
@@ -10,11 +11,26 @@
   const { api, getPreference, putPreference, preferenceSaver, pathRow: localPathRow } = Kairo.api;
   const SESSION_DRAFT_KEY = 'kairo:waspack:session-draft';
 
-  const SAMPLE = [
+  const SAMPLE_APP = [
     './CreditManage/CreditApply/FixPrice/MiniFixPriceApplyList.jsp',
     './CreditManage/CreditLine/ProductInfo.jsp',
     './src/cn/com/jscb/www/loan/LoanMeasure/CompanyFixPriceRequestInfo.java',
     './WEB-INF/classes/cn/com/jscb/www/loan/LoanMeasure/MiniFixPriceRequestInfo.class'
+  ].join('\n');
+
+  const SAMPLE_BATCH = [
+    './amargci/credit_2nd.sh',
+    './amargci/newcbsdata.sh',
+    './amargci/etc/gci_task_2nd.xml',
+    './AmarExtract/etc/ext_metadata.xml',
+    './AmarExtract/etc/ext_credit_task_ql.xml',
+    './AmarExtract/etc/ext_credit_are_ql.xml',
+    './AmarExtract/src/jsyh/CustomerSpecialInfo.java',
+    './AmarExtract/classes/jsyh/CustomerSpecialInfo.class',
+    './AmarExtract/get_customerspecialinfo.sh',
+    './AmarExtract/run_ql.sh',
+    './AmarExtract/src/jsyh/UpdateExchangeRate.java',
+    './AmarExtract/classes/jsyh/UpdateExchangeRate.class'
   ].join('\n');
 
   function todayStamp() {
@@ -44,54 +60,78 @@
 
   async function renderWASPack(view) {
     const renderToken = view.dataset.renderToken;
-    view.innerHTML = '<div class="card muted">正在恢复 WAS 打包偏好…</div>';
+    view.innerHTML = '<div class="card muted">正在恢复投产打包偏好…</div>';
     let saved = {}, legacy = lastGet('waspack', 'form') || {}, preferenceAvailable = false;
     try {
       const remote = await getPreference('waspack');
       saved = remote && remote.value && typeof remote.value === 'object' ? remote.value : {};
       if (!remote.exists && Object.keys(legacy).length) {
-        saved = { project_dir: legacy.project_dir || '', output_dir: legacy.output_dir || '', auto_pair: legacy.auto_pair !== false };
+        saved = { project_dir: legacy.project_dir || '', output_dir: legacy.output_dir || '', auto_pair: legacy.auto_pair !== false, pack_type: legacy.pack_type || 'app', batch_base_dir: legacy.batch_base_dir || '/batch/credit' };
         await putPreference('waspack', saved);
       }
       preferenceAvailable = true;
     } catch (e) {
-      saved = { project_dir: legacy.project_dir || '', output_dir: legacy.output_dir || '', auto_pair: legacy.auto_pair !== false };
+      saved = { project_dir: legacy.project_dir || '', output_dir: legacy.output_dir || '', auto_pair: legacy.auto_pair !== false, pack_type: legacy.pack_type || 'app', batch_base_dir: legacy.batch_base_dir || '/batch/credit' };
     }
     let sessionDraft = {};
     try { sessionDraft = JSON.parse(sessionStorage.getItem(SESSION_DRAFT_KEY) || '{}'); } catch (_) { sessionDraft = {}; }
     if (!Object.keys(sessionDraft).length && legacy && (legacy.package_name || legacy.manifest)) {
-      sessionDraft = { package_name: legacy.package_name || '', manifest: legacy.manifest || '' };
+      sessionDraft = { package_name: legacy.package_name || '', manifest: legacy.manifest || '', pack_type: legacy.pack_type || 'app' };
       try { sessionStorage.setItem(SESSION_DRAFT_KEY, JSON.stringify(sessionDraft)); } catch (_) {}
     }
     if (preferenceAvailable) lastSet('waspack', 'form', null);
-    else lastSet('waspack', 'form', { project_dir: saved.project_dir || '', output_dir: saved.output_dir || '', auto_pair: saved.auto_pair !== false });
+    else lastSet('waspack', 'form', { project_dir: saved.project_dir || '', output_dir: saved.output_dir || '', auto_pair: saved.auto_pair !== false, pack_type: saved.pack_type || 'app', batch_base_dir: saved.batch_base_dir || '/batch/credit' });
     if (view.dataset.renderToken !== renderToken) return;
     view.innerHTML = '';
+
+    let currentType = sessionDraft.pack_type || saved.pack_type || 'app';
+
+    // 顶部模式切换单选按钮栏
+    const typeAppRadio = el('input', { type: 'radio', name: 'waspack-type', id: 'type-app', value: 'app' });
+    const typeBatchRadio = el('input', { type: 'radio', name: 'waspack-type', id: 'type-batch', value: 'batch' });
+    if (currentType === 'batch') typeBatchRadio.checked = true;
+    else typeAppRadio.checked = true;
+
+    const heroDesc = el('div', { class: 'card-desc', text: '' });
+
     const projectInp = el('input', {
       type: 'text', id: 'waspack-project',
-      placeholder: '例如 C:\\ideaSpaces\\credit',
+      placeholder: '',
       spellcheck: 'false'
     });
     const outputInp = el('input', {
       type: 'text', id: 'waspack-output',
-      placeholder: '例如 D:\\packs\\TT' + todayStamp() + '（必须不存在或为空）',
+      placeholder: '',
       spellcheck: 'false'
     });
     const pkgInp = el('input', {
       type: 'text', id: 'waspack-pkg',
-      placeholder: '例如 TT20260709qijunV1',
+      placeholder: '',
       spellcheck: 'false',
       autocomplete: 'off'
     });
+    const batchBaseInp = el('input', {
+      type: 'text', id: 'waspack-batch-base',
+      placeholder: '例如 /batch/credit',
+      value: saved.batch_base_dir || '/batch/credit',
+      spellcheck: 'false',
+      autocomplete: 'off'
+    });
+    const batchBaseRow = el('label', { class: 'waspack-field waspack-field-batch-base' }, [
+      el('span', { class: 'waspack-label', text: '批量部署根路径（chmod.txt 路径前缀）' }),
+      batchBaseInp,
+      el('span', { class: 'hint', text: '清单中的 .sh 脚本将生成：chmod 777 <此路径>/<脚本路径>' })
+    ]);
+
     const tarHint = el('span', { class: 'waspack-tar-hint', text: '' });
     const autoPair = el('input', { type: 'checkbox', id: 'waspack-autopair' });
     autoPair.checked = true;
     const manifestTa = el('textarea', {
       id: 'waspack-manifest',
       spellcheck: 'false',
-      placeholder: SAMPLE
+      placeholder: ''
     });
-    [projectInp, outputInp, pkgInp].forEach(function (n) {
+    [projectInp, outputInp, pkgInp, batchBaseInp].forEach(function (n) {
       n.setAttribute('autocomplete', 'off');
     });
 
@@ -101,7 +141,7 @@
     if (hasSaved('project_dir')) projectInp.value = saved.project_dir || '';
     if (hasSaved('output_dir')) outputInp.value = saved.output_dir || '';
     if (sessionDraft.package_name && String(sessionDraft.package_name).trim()) pkgInp.value = sessionDraft.package_name;
-    else pkgInp.value = 'TT' + todayStamp();
+    else pkgInp.value = (currentType === 'batch' ? 'DDD' : 'TT') + todayStamp() + 'qijunV1';
     if (typeof saved.auto_pair === 'boolean') autoPair.checked = saved.auto_pair;
     if (sessionDraft.manifest) manifestTa.value = sessionDraft.manifest;
 
@@ -117,25 +157,70 @@
     function pkgBaseName() {
       return (pkgInp.value || '').trim().replace(/\.(tar|sh)$/i, '');
     }
+
     function updateTarHint() {
       const n = pkgBaseName();
+      const isBatch = currentType === 'batch';
+      const chmodPart = isBatch ? '  ·  chmod.txt' : '';
       if (!n) {
-        tarHint.textContent = '将生成 包名.tar、包名.sh、Bak包名.sh、list.txt';
+        tarHint.textContent = '将生成 包名.tar、包名.sh、Bak包名.sh、list.txt' + (isBatch ? '、chmod.txt' : '');
         return;
       }
-      tarHint.textContent = '将生成 ' + n + '.tar  ·  ' + n + '.sh  ·  Bak' + n + '.sh  ·  list.txt';
+      tarHint.textContent = '将生成 ' + n + '.tar  ·  ' + n + '.sh  ·  Bak' + n + '.sh  ·  list.txt' + chmodPart;
     }
+
+    function syncTypeUI() {
+      const isBatch = currentType === 'batch';
+      if (isBatch) {
+        heroDesc.textContent = '批量代码打包：直接使用各子模块相对路径（如 ./amargci/credit_2nd.sh、./AmarExtract/...）。自动抽取文件并生成 list.txt、chmod.txt、Bak*.sh、*.sh 和 tar 包。';
+        projectInp.placeholder = '例如 D:\\projects\\batch 或 C:\\ideaSpaces\\batch';
+        outputInp.placeholder = '例如 D:\\packs\\DDD' + todayStamp() + '（必须不存在或为空）';
+        manifestTa.placeholder = SAMPLE_BATCH;
+        batchBaseRow.style.display = '';
+        extractBtn.style.display = 'none';
+        packageBtn.style.display = 'none';
+      } else {
+        heroDesc.textContent = '应用代码打包：只选本地 credit 工程根（例如 C:\\ideaSpaces\\credit）。清单按投产相对路径写：JSP 相对 WebRoot，java 写 ./src/…，class 写 ./WEB-INF/classes/…。不必再配 src / WebRoot / 服务器路径。';
+        projectInp.placeholder = '例如 C:\\ideaSpaces\\credit';
+        outputInp.placeholder = '例如 D:\\packs\\TT' + todayStamp() + '（必须不存在或为空）';
+        manifestTa.placeholder = SAMPLE_APP;
+        batchBaseRow.style.display = 'none';
+        extractBtn.style.display = '';
+        packageBtn.style.display = '';
+      }
+      updateTarHint();
+    }
+
+    typeAppRadio.addEventListener('change', function () {
+      if (typeAppRadio.checked) {
+        currentType = 'app';
+        if (!pkgInp.value || pkgInp.value.startsWith('DDD')) pkgInp.value = 'TT' + todayStamp() + 'qijunV1';
+        syncTypeUI();
+        persist();
+      }
+    });
+    typeBatchRadio.addEventListener('change', function () {
+      if (typeBatchRadio.checked) {
+        currentType = 'batch';
+        if (!pkgInp.value || pkgInp.value.startsWith('TT')) pkgInp.value = 'DDD' + todayStamp() + 'qijunV1';
+        syncTypeUI();
+        persist();
+      }
+    });
+
     function persistPreferenceFields() {
       savePreference({
         project_dir: projectInp.value,
         output_dir: outputInp.value,
         auto_pair: autoPair.checked,
-        output_policy: outputPolicy.value
+        output_policy: outputPolicy.value,
+        pack_type: currentType,
+        batch_base_dir: batchBaseInp.value
       });
     }
     function persistSessionDraft() {
       try {
-        sessionStorage.setItem(SESSION_DRAFT_KEY, JSON.stringify({ package_name: pkgInp.value, manifest: manifestTa.value }));
+        sessionStorage.setItem(SESSION_DRAFT_KEY, JSON.stringify({ package_name: pkgInp.value, manifest: manifestTa.value, pack_type: currentType }));
       } catch (_) { /* session draft is best effort */ }
       updateTarHint();
     }
@@ -143,7 +228,7 @@
       persistPreferenceFields();
       persistSessionDraft();
     }
-    [projectInp, outputInp].forEach(function (n) {
+    [projectInp, outputInp, batchBaseInp].forEach(function (n) {
       n.addEventListener('input', persistPreferenceFields);
       n.addEventListener('change', persistPreferenceFields);
       n.addEventListener('blur', persistPreferenceFields);
@@ -153,16 +238,15 @@
       n.addEventListener('change', persistSessionDraft);
       n.addEventListener('blur', persistSessionDraft);
     });
+    const status = el('div', { class: 'waspack-status', text: '粘贴清单后点「预检」，确认文件都从工程里找到再一键打包。' });
+    const previewBox = el('div', { class: 'waspack-preview', style: 'display:none' });
+    const resultBox = el('div', { class: 'waspack-result', style: 'display:none' });
+
     autoPair.addEventListener('change', persistPreferenceFields);
     outputPolicy.addEventListener('change', function () {
       persistPreferenceFields();
       if (outputPolicy.value === 'replace') status.textContent = '覆盖模式会清空目标目录；执行前仍需再次确认。';
     });
-    updateTarHint();
-
-    const status = el('div', { class: 'waspack-status', text: '粘贴清单后点「预检」，确认 java / class / jsp 都从工程里找到再生成。' });
-    const previewBox = el('div', { class: 'waspack-preview', style: 'display:none' });
-    const resultBox = el('div', { class: 'waspack-result', style: 'display:none' });
 
     function payload() {
       return {
@@ -171,7 +255,9 @@
         package_name: pkgBaseName(),
         auto_pair: autoPair.checked,
         manifest: manifestTa.value,
-        output_policy: outputPolicy.value
+        output_policy: outputPolicy.value,
+        pack_type: currentType,
+        batch_base_dir: batchBaseInp.value.trim()
       };
     }
 
@@ -212,13 +298,18 @@
       resultBox.style.display = '';
       const items = [
         { k: '输出目录', v: data.output_dir },
-        { k: '清单', v: data.list_file },
+        { k: '清单文件', v: data.list_file }
+      ];
+      if (data.chmod_file) {
+        items.push({ k: '赋权脚本', v: data.chmod_file });
+      }
+      items.push(
         { k: '备份脚本', v: data.backup_script },
         { k: '执行脚本', v: data.execute_script },
-        { k: 'tar 包', v: data.tar_file }
-      ];
+        { k: 'tar 压缩包', v: data.tar_file }
+      );
       resultBox.innerHTML =
-        '<div class="waspack-ok">已生成 ' + (data.files || 0) + ' 个文件 · ' + fmtBytes(data.bytes) +
+        '<div class="waspack-ok">✅ 投产打包完成：已打包 ' + (data.files || 0) + ' 个文件 · ' + fmtBytes(data.bytes) +
           (data.paired_added ? ' · 自动补了 ' + data.paired_added + ' 个 class/java' : '') + '</div>' +
         '<ul class="waspack-artifacts">' + items.map(function (it) {
           return '<li><span>' + escapeHtml(it.k) + '</span><code>' + escapeHtml(it.v || '') + '</code></li>';
@@ -235,7 +326,7 @@
     async function doPreview() {
       persist();
       const body = payload();
-      if (!body.project_dir) { toast('请选择 credit 工程目录', 'warn'); return; }
+      if (!body.project_dir) { toast('请选择本地工程目录', 'warn'); return; }
       if (!body.manifest.trim()) { toast('请粘贴清单', 'warn'); return; }
       status.textContent = '正在对照工程目录预检…';
       try {
@@ -252,7 +343,7 @@
     async function doExtract() {
       persist();
       const body = payload();
-      if (!body.project_dir) { toast('请选择 credit 工程目录', 'warn'); return; }
+      if (!body.project_dir) { toast('请选择工程目录', 'warn'); return; }
       if (!body.output_dir) { toast('请填写要生成的文件夹路径', 'warn'); return; }
       if (!body.manifest.trim()) { toast('请粘贴清单', 'warn'); return; }
       const confirmReplace = outputPolicy.value === 'replace' && window.confirm('覆盖模式会清空目标目录中的全部内容，确定继续吗？');
@@ -294,7 +385,7 @@
     async function doBuild() {
       persist();
       const body = payload();
-      if (!body.project_dir) { toast('请选择 credit 工程目录', 'warn'); return; }
+      if (!body.project_dir) { toast('请选择工程目录', 'warn'); return; }
       if (!body.output_dir) { toast('请填写要生成的文件夹路径', 'warn'); return; }
       if (!body.manifest.trim()) { toast('请粘贴清单', 'warn'); return; }
       const confirmReplace = outputPolicy.value === 'replace' && window.confirm('覆盖模式会清空目标目录中的全部内容，确定一键打包吗？');
@@ -332,7 +423,7 @@
     const openFolderBtn = el('button', { type: 'button', class: 'btn', text: '打开打包文件夹', onclick: doOpenFolder });
     const sampleBtn = el('button', { type: 'button', class: 'btn', text: '填入示例清单', onclick: function () {
       if (manifestTa.value.trim() && !confirm('覆盖当前清单？')) return;
-      manifestTa.value = SAMPLE;
+      manifestTa.value = currentType === 'batch' ? SAMPLE_BATCH : SAMPLE_APP;
       persist();
     }});
     const copyListBtn = el('button', { type: 'button', class: 'btn', text: '复制清单', onclick: function () {
@@ -342,23 +433,38 @@
       );
     }});
 
+    const typeSelector = el('div', { class: 'waspack-type-selector' }, [
+      el('label', { class: 'waspack-type-option' }, [
+        typeAppRadio,
+        el('span', { class: 'waspack-type-text', text: '📱 应用代码（WAS / WAR）' })
+      ]),
+      el('label', { class: 'waspack-type-option' }, [
+        typeBatchRadio,
+        el('span', { class: 'waspack-type-text', text: '⚙️ 批量代码（Batch 批量工程）' })
+      ])
+    ]);
+
+    syncTypeUI();
+
     view.appendChild(el('div', { class: 'waspack-page' }, [
       el('div', { class: 'card waspack-hero' }, [
-        el('div', { class: 'card-desc', text: '只选本地 credit 工程根（例如 C:\\ideaSpaces\\credit）。清单按投产相对路径写：JSP 相对 WebRoot，java 写 ./src/…，class 写 ./WEB-INF/classes/…。不必再配 src / WebRoot / 服务器路径。' })
+        typeSelector,
+        heroDesc
       ]),
       el('div', { class: 'card' }, [
         el('div', { class: 'waspack-grid' }, [
-          pathRow('本地 credit 工程', projectInp, { onPick: persist }),
-          pathRow('目标目录（抽取到其 war 文件夹）', outputInp, { onPick: persist, title: '选择已有文件夹；新目录名可再手改' }),
+          pathRow('本地工程根目录', projectInp, { onPick: persist }),
+          pathRow('打包目标目录', outputInp, { onPick: persist, title: '选择已有文件夹；新目录名可再手改' }),
           el('label', { class: 'waspack-field waspack-field-span' }, [
             el('span', { class: 'waspack-label', text: '包名（执行脚本名）' }),
             pkgInp,
             tarHint
           ]),
+          batchBaseRow,
           el('label', { class: 'waspack-field waspack-output-policy' }, [
             el('span', { class: 'waspack-label', text: '输出目录处理' }),
             outputPolicy,
-            el('span', { class: 'hint', text: '默认拒绝覆盖；重做抽取可清理带 Kairo 标记的旧产物。' })
+            el('span', { class: 'hint', text: '默认拒绝覆盖；重做可清理旧产物。' })
           ])
         ]),
         el('label', { class: 'waspack-check' }, [

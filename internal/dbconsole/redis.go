@@ -111,27 +111,41 @@ func scanRedisKeys(ctx context.Context, client redis.UniversalClient, cursor, pa
 		keys, next, masters, err := scanClusterKeys(ctx, cluster, cursor, pattern, count)
 		return keys, next, masters, err
 	}
-	pos, _ := strconv.ParseUint(strings.TrimSpace(cursor), 10, 64)
+	cursor = strings.TrimSpace(cursor)
+	var pos uint64
+	if cursor != "" && cursor != "0" {
+		var err error
+		pos, err = strconv.ParseUint(cursor, 10, 64)
+		if err != nil {
+			return nil, "", 0, fmt.Errorf("Redis cursor 无效: %w", err)
+		}
+	}
 	keys, next, err := client.Scan(ctx, pos, pattern, count).Result()
 	return keys, strconv.FormatUint(next, 10), 1, err
 }
 
-func parseClusterCursor(raw string) (node int, cursor uint64) {
+func parseClusterCursor(raw string) (node int, cursor uint64, err error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" || raw == "0" {
-		return 0, 0
+		return 0, 0, nil
 	}
 	nodeStr, curStr, ok := strings.Cut(raw, ":")
 	if !ok {
-		cursor, _ = strconv.ParseUint(raw, 10, 64)
-		return 0, cursor
+		cursor, err = strconv.ParseUint(raw, 10, 64)
+		if err != nil {
+			return 0, 0, fmt.Errorf("Redis cursor 无效: %w", err)
+		}
+		return 0, cursor, nil
 	}
-	node, _ = strconv.Atoi(nodeStr)
-	cursor, _ = strconv.ParseUint(curStr, 10, 64)
-	if node < 0 {
-		return 0, 0
+	node, err = strconv.Atoi(nodeStr)
+	if err != nil || node < 0 {
+		return 0, 0, fmt.Errorf("Redis cursor 节点无效: %q", nodeStr)
 	}
-	return node, cursor
+	cursor, err = strconv.ParseUint(curStr, 10, 64)
+	if err != nil {
+		return 0, 0, fmt.Errorf("Redis cursor 无效: %w", err)
+	}
+	return node, cursor, nil
 }
 
 func formatClusterCursor(node int, cursor uint64, done bool) string {
@@ -182,7 +196,10 @@ func scanClusterKeys(ctx context.Context, cluster *redis.ClusterClient, cursor, 
 	if len(masters) == 0 {
 		return nil, "0", 0, errors.New("Cluster 没有可用的主节点")
 	}
-	node, inner := parseClusterCursor(cursor)
+	node, inner, err := parseClusterCursor(cursor)
+	if err != nil {
+		return nil, "0", 0, err
+	}
 	if node >= len(masters) {
 		return nil, "0", len(masters), nil
 	}
@@ -502,12 +519,28 @@ func (m *Manager) RedisMembers(ctx context.Context, source Source, key, typ, cur
 	out := RedisMembersResult{Key: normalizeBytes([]byte(key)), Type: typ, PageSize: pageSize, Offset: offset}
 	switch typ {
 	case "hash":
-		pos, _ := strconv.ParseUint(strings.TrimSpace(cursor), 10, 64)
+		cursor = strings.TrimSpace(cursor)
+		var pos uint64
+		if cursor != "" && cursor != "0" {
+			var parseErr error
+			pos, parseErr = strconv.ParseUint(cursor, 10, 64)
+			if parseErr != nil {
+				return out, fmt.Errorf("Redis cursor 无效: %w", parseErr)
+			}
+		}
 		items, next, callErr := client.HScan(ctx, key, pos, "*", pageSize).Result(); if callErr != nil { return out, callErr }
 		for i := 0; i+1 < len(items); i += 2 { out.Items = append(out.Items, map[string]any{"field": normalizeBytes([]byte(items[i])), "value": normalizeBytes([]byte(items[i+1]))}) }
 		out.NextCursor = strconv.FormatUint(next, 10); out.HasNext = next != 0
 	case "set":
-		pos, _ := strconv.ParseUint(strings.TrimSpace(cursor), 10, 64)
+		cursor = strings.TrimSpace(cursor)
+		var pos uint64
+		if cursor != "" && cursor != "0" {
+			var parseErr error
+			pos, parseErr = strconv.ParseUint(cursor, 10, 64)
+			if parseErr != nil {
+				return out, fmt.Errorf("Redis cursor 无效: %w", parseErr)
+			}
+		}
 		items, next, callErr := client.SScan(ctx, key, pos, "*", pageSize).Result(); if callErr != nil { return out, callErr }
 		for _, item := range items { out.Items = append(out.Items, normalizeBytes([]byte(item))) }
 		out.NextCursor = strconv.FormatUint(next, 10); out.HasNext = next != 0
@@ -522,7 +555,19 @@ func (m *Manager) RedisMembers(ctx context.Context, source Source, key, typ, cur
 		for _, item := range items { out.Items = append(out.Items, map[string]any{"member": normalizeValue(item.Member), "score": item.Score}) }
 		length, callErr := client.ZCard(ctx, key).Result(); if callErr != nil { return out, callErr }; out.Total = length; out.HasNext = offset+int64(len(items)) < length
 	}
-	if raw, marshalErr := json.Marshal(out.Items); marshalErr != nil || int64(len(raw)) > source.MaxResultBytes { out.Items = out.Items[:0]; out.Truncated = true }
+	budget := source.MaxResultBytes
+	if budget <= 0 {
+		budget = 8 << 20
+	}
+	var used int64
+	truncatedItems := make([]any, 0, len(out.Items))
+	for _, item := range out.Items {
+		if !appendRedisPreview(&truncatedItems, item, &used, budget) {
+			out.Truncated = true
+			break
+		}
+	}
+	out.Items = truncatedItems
 	return out, nil
 }
 

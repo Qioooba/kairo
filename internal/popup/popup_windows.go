@@ -158,13 +158,15 @@ var (
 	procLoadCursorW                   = user32DLL().NewProc("LoadCursorW")
 	procSetCursor                     = user32DLL().NewProc("SetCursor")
 	procGetModuleHandleW              = kernel32DLL().NewProc("GetModuleHandleW")
-	procGradientFill                  = gdi32DLL().NewProc("GradientFill")
+	procGradientFill                  = msimg32DLL().NewProc("GradientFill")
+	procGdiGradientFill               = gdi32DLL().NewProc("GdiGradientFill")
 	procSetProcessDpiAwarenessContext = user32DLL().NewProc("SetProcessDpiAwarenessContext")
 	procSetThreadDpiAwarenessContext  = user32DLL().NewProc("SetThreadDpiAwarenessContext")
 )
 
 func user32DLL() *windows.LazyDLL   { return windows.NewLazySystemDLL("user32.dll") }
 func gdi32DLL() *windows.LazyDLL    { return windows.NewLazySystemDLL("gdi32.dll") }
+func msimg32DLL() *windows.LazyDLL  { return windows.NewLazySystemDLL("msimg32.dll") }
 func kernel32DLL() *windows.LazyDLL { return windows.NewLazySystemDLL("kernel32.dll") }
 
 // ---------- 状态 ----------
@@ -217,6 +219,14 @@ func queueLength() int {
 // ---------- Pump ----------
 
 func popupPump() {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("popup: popupPump panic recovered: %v", r)
+		}
+		queueMu.Lock()
+		showing = false
+		queueMu.Unlock()
+	}()
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
@@ -414,14 +424,34 @@ func drawAccentGradient(hdc uintptr, x1, y1, x2, y2 int32, colAccent uint32) {
 	gRect := gradientRect{UpperLeft: 0, LowerRight: 1}
 
 	// GRADIENT_FILL_RECT_V = 0x00000001
-	procGradientFill.Call(
-		hdc,
-		uintptr(unsafe.Pointer(&verts[0])),
-		2,
-		uintptr(unsafe.Pointer(&gRect)),
-		1,
-		0x00000001,
-	)
+	if procGradientFill.Find() == nil {
+		procGradientFill.Call(
+			hdc,
+			uintptr(unsafe.Pointer(&verts[0])),
+			2,
+			uintptr(unsafe.Pointer(&gRect)),
+			1,
+			0x00000001,
+		)
+		return
+	}
+	if procGdiGradientFill.Find() == nil {
+		procGdiGradientFill.Call(
+			hdc,
+			uintptr(unsafe.Pointer(&verts[0])),
+			2,
+			uintptr(unsafe.Pointer(&gRect)),
+			1,
+			0x00000001,
+		)
+		return
+	}
+	rc := rect{Left: x1, Top: y1, Right: x2, Bottom: y2}
+	b, _, _ := procCreateSolidBrush.Call(uintptr(colAccent))
+	if b != 0 {
+		procFillRect.Call(hdc, uintptr(unsafe.Pointer(&rc)), b)
+		procDeleteObject.Call(b)
+	}
 }
 
 func isCloseHit(x, y int32) bool {
@@ -431,10 +461,19 @@ func isCloseHit(x, y int32) bool {
 // ---------- 窗口生命周期 ----------
 
 func runPopupWindow(item popupItem) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("popup: runPopupWindow panic recovered: %v", r)
+		}
+	}()
 	// Win10 下确保 DPI 感知，避免坐标被缩放导致窗口飞出屏幕
 	// -2 = DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE, -4 = PER_MONITOR_AWARE_V2
-	procSetThreadDpiAwarenessContext.Call(uintptr(^uintptr(3)))
-	procSetProcessDpiAwarenessContext.Call(uintptr(^uintptr(3)))
+	if procSetThreadDpiAwarenessContext.Find() == nil {
+		procSetThreadDpiAwarenessContext.Call(uintptr(^uintptr(3)))
+	}
+	if procSetProcessDpiAwarenessContext.Find() == nil {
+		procSetProcessDpiAwarenessContext.Call(uintptr(^uintptr(3)))
+	}
 	hInstance, err := registerClass()
 	if err != nil {
 		log.Printf("popup: registerClass 失败: %v", err)
