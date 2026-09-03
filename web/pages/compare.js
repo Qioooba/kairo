@@ -210,9 +210,8 @@
     const copyBtn = makeButton('复制 Diff', '', copyDiff), downloadBtn = makeButton('下载 Diff', '', downloadDiff);
     [prevBtn, nextBtn, copyBtn, downloadBtn].forEach(btn => btn.disabled = true);
     const modeSelect = el('select', { class: 'cmp-mode-select' }, [el('option', { value: 'side', text: '左右并排' }), el('option', { value: 'unified', text: 'Unified' }), el('option', { value: 'changes', text: '仅差异' })]);
-    const isNarrow = window.innerWidth < 900;
-    if (isNarrow && !options.mode) options.mode = 'unified';
-    modeSelect.value = options.mode || (isNarrow ? 'unified' : 'side'); modeSelect.onchange = () => { options.mode = modeSelect.value; saveOptions(options); if (state.diff) renderResult(); };
+    options.mode = options.mode || 'side';
+    modeSelect.value = options.mode; modeSelect.onchange = () => { options.mode = modeSelect.value; saveOptions(options); if (state.diff) renderResult(); };
     const onlyDiff = makeCheck('只显示差异', options.onlyDiff, value => { options.onlyDiff = value; saveOptions(options); if (state.diff) renderResult(); });
     const trim = makeCheck('忽略行尾空白', options.trim_space, value => { options.trim_space = value; saveOptions(options); });
     const blank = makeCheck('忽略空行', options.ignore_blank, value => { options.ignore_blank = value; saveOptions(options); });
@@ -285,13 +284,14 @@
         toast('比对失败：' + (error.message || error), 'err'); status.textContent = '比对失败';
       } finally { if (requestNo === compareSeq) compareBtn.disabled = false; }
     }
-    function showResult() { showingResult = true; editorGrid.style.display = ''; resultHost.style.display = ''; editBtn.style.display = 'none'; compareBtn.style.display = ''; refreshSaveButtons(); }
-    function showEditors() { showingResult = false; editorGrid.style.display = ''; resultHost.style.display = 'none'; editBtn.style.display = 'none'; compareBtn.style.display = ''; refreshSaveButtons(); }
+    function showResult() { showingResult = true; panel.classList.add('cmp-panel-has-result'); editorGrid.style.display = ''; resultHost.style.display = ''; editBtn.style.display = 'none'; compareBtn.style.display = ''; refreshSaveButtons(); }
+    function showEditors() { showingResult = false; panel.classList.remove('cmp-panel-has-result'); editorGrid.style.display = ''; resultHost.style.display = 'none'; editBtn.style.display = 'none'; compareBtn.style.display = ''; refreshSaveButtons(); }
     function renderResult() {
       resultHost.innerHTML = ''; if (!state.diff) return;
       if (options.mode === 'unified' && (state.diff.lines || []).length <= MAX_INLINE_ROWS && window.Diff2Html) {
         const wrapper = el('div', { class: 'cmp-inline-unified' }); wrapper.innerHTML = window.Diff2Html.html(state.diff.unified_diff || '', { drawFileList: false, outputFormat: 'line-by-line', matching: 'lines', renderNothingWhenEmpty: false }); resultHost.appendChild(wrapper); return;
       }
+      const effectiveMode = options.mode || 'side';
       const rows = buildAlignedRows(state.diff.lines || [], editorLeft.getValue(), editorRight.getValue(), state.hunks);
       resultHost.appendChild(createVirtualDiff(rows.filter(row => (!options.onlyDiff && effectiveMode !== 'changes') || row.status !== 'equal'), state, effectiveMode, { hunk: applyHunk, line: applyLine, edit: commitLineEdit, language: { left: sourceHeaders.left.language.value, right: sourceHeaders.right.language.value } }));
     }

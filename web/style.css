@@ -7652,8 +7652,9 @@ body.has-open-overlay { overflow: hidden; }
 .cmp-language { min-width:64px; max-width:82px; }
 .cmp-wb-toolbar { position:sticky; top:0; z-index:5; }
 .cmp-result-host { max-height:34vh; overflow:auto; margin-top:10px; }
-.cmp-wb-toolbar, .cmp-wb-options { min-height:30px; padding-top:3px; padding-bottom:3px; }
 .cmp-editor { height:min(68vh, 720px); min-height:300px; }
+.cmp-wb-panel.cmp-panel-has-result .cmp-editor { height:min(28vh, 260px); min-height:140px; }
+.cmp-wb-panel.cmp-panel-has-result .cmp-result-host { max-height:52vh; flex:1; }
 
 @media (max-width:1100px) {
   .db-editor-bar { gap:5px; }

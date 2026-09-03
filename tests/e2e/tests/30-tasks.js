@@ -11,7 +11,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const RUN_DIR = process.env.KAIRO_RUN_DIR || path.join(os.tmpdir(), 'kairo-review-2026-08', 'run');
+const RUN_DIR = process.env.KAIRO_RUN_DIR || (fs.existsSync(path.join(process.cwd(), 'data', 'sched_tasks.json')) ? process.cwd() : path.join(os.tmpdir(), 'kairo-review-2026-08', 'run'));
 const TASK_OUT_FILE = path.join(os.tmpdir(), 'kairo-e2e-task.out');
 
 function shellPath(p) {

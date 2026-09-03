@@ -34,14 +34,13 @@
       if (c === '/' && n === '*') { state = 'block'; i++; continue; }
       if (c === '/' && n === '/' && (i === 0 || /\s/.test(text[i - 1]))) { state = 'line'; i++; continue; }
       if (c === '\'' || c === '"' || c === '`') { state = 'quote'; quote = c; continue; }
-      // Oracle q'[ ... ]', q'{ ... }', q'< ... >', q'( ... )' strings.
+      // Oracle q'[ ... ]', q'{ ... }', q'< ... >', q'( ... )', q'!...!' etc.
       if ((c === 'q' || c === 'Q') && n === '\'' && i + 2 < text.length) {
         const opener = text[i + 2];
-        const closer = opener === '[' ? ']' : opener === '{' ? '}' : opener === '(' ? ')' : opener === '<' ? '>' : opener;
-        if (closer !== opener || opener === ']') {
-          const end = text.indexOf(closer + '\'', i + 3);
-          if (end >= 0) { i = end + 1; continue; }
-        }
+        const closerMap = { '[': ']', '{': '}', '(': ')', '<': '>' };
+        const closer = closerMap[opener] || opener;
+        const end = text.indexOf(closer + '\'', i + 3);
+        if (end >= 0) { i = end + 1; continue; }
       }
       if (c === ';') {
         cuts.push({ start: start, end: i + 1, delimiter: i });
@@ -90,7 +89,9 @@
     current: currentStatement,
     normalize: function (text, cursor, selectionStart, selectionEnd) {
       const r = currentStatement(text, cursor, selectionStart, selectionEnd);
-      return Object.assign({}, r, { text: String(r.text || '').replace(/^\s+|\s+$/g, '') });
+      let s = String(r.text || '').replace(/^\s+|\s+$/g, '');
+      while (s.endsWith(';')) s = s.slice(0, -1).trim();
+      return Object.assign({}, r, { text: s });
     }
   };
 })();

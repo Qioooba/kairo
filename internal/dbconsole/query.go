@@ -104,6 +104,16 @@ func (m *Manager) streamQueryAttempt(ctx context.Context, source Source, query s
 	if err != nil {
 		return nil, QuerySummary{}, err
 	}
+	aliasIdx := -1
+	for i, c := range columns {
+		if strings.HasPrefix(strings.ToUpper(c.Name), "__KAIRO_RN_") {
+			aliasIdx = i
+			break
+		}
+	}
+	if aliasIdx >= 0 {
+		columns = append(columns[:aliasIdx], columns[aliasIdx+1:]...)
+	}
 	if err := rejectLargeObjectColumns(source.Kind, columns); err != nil {
 		return nil, QuerySummary{}, err
 	}
@@ -122,9 +132,19 @@ func (m *Manager) streamQueryAttempt(ctx context.Context, source Source, query s
 		batch = make([][]any, 0, rowBatchSize)
 	}
 	for rows.Next() {
-		row, rowBytes, scanErr := scanRow(rows, len(columns))
+		scanCount := len(columns)
+		if aliasIdx >= 0 {
+			scanCount = len(columns) + 1
+		}
+		row, rowBytes, scanErr := scanRow(rows, scanCount)
 		if scanErr != nil {
 			return nil, summary, scanErr
+		}
+		if aliasIdx >= 0 && aliasIdx < len(row) {
+			row = append(row[:aliasIdx], row[aliasIdx+1:]...)
+			if raw, err := json.Marshal(row); err == nil {
+				rowBytes = int64(len(raw))
+			}
 		}
 		if summary.Rows >= page.PageSize {
 			summary.HasNext = true

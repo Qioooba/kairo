@@ -123,8 +123,16 @@ function register(runner, ctx) {
       if (virt && (virt.before > 80 || virt.after > 80)) {
         throw new Error('网格应只渲染视口附近行，实际: ' + JSON.stringify(virt));
       }
-      const explain = await page.$('#db-explain');
+      let explain = await page.$('#db-explain');
       if (explain) {
+        if (!(await explain.isVisible())) {
+          const moreSummary = await page.$('#db-toolbar-more summary');
+          if (moreSummary) {
+            await moreSummary.click();
+            await page.waitForTimeout(300);
+            explain = await page.$('#db-explain');
+          }
+        }
         await explain.click();
         await page.waitForTimeout(2000);
         const plan = await page.$('#db-view-plan');

@@ -1224,7 +1224,7 @@
   }
 
   function compactDatabaseToolbar() {
-    const bar = q('db-editor-bar'), right = bar && bar.querySelector('.db-editor-bar-right');
+    const bar = q('db-editor-bar') || document.querySelector('.db-editor-bar'), right = bar && bar.querySelector('.db-editor-bar-right');
     if (!bar || !right || q('db-toolbar-more')) return;
     const details = document.createElement('details'); details.id = 'db-toolbar-more'; details.className = 'db-toolbar-more';
     const summary = document.createElement('summary'); summary.textContent = '更多';
@@ -1358,7 +1358,7 @@
   }
 
   function installDatabasePagination() {
-    const bar = q('db-result-toolbar');
+    const bar = q('db-result-toolbar') || document.querySelector('.db-result-toolbar');
     if (!bar || q('db-page-nav')) return;
     const nav = el('div', { id: 'db-page-nav', class: 'db-page-nav', role: 'navigation', 'aria-label': '查询结果分页' });
     const prev = el('button', { class: 'btn btn-xs', text: '上一页', title: '上一页' });
