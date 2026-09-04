@@ -52,7 +52,7 @@ echo ">> 目标:    Windows 10/11 amd64"
 export GOOS=windows
 export GOARCH=amd64
 export CGO_ENABLED=0
-export GOTOOLCHAIN=local
+export GOTOOLCHAIN="${GOTOOLCHAIN:-auto}"
 
 # 优先用 vendor 模式编译：保证产物的依赖版本与仓库一致，
 # 避免"开发机 go.sum 跟生产机 GOMODCACHE 不一致"导致的构建漂移。
