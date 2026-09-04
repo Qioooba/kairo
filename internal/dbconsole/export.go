@@ -46,8 +46,10 @@ func NormalizeExportFormat(format string) (string, error) {
 		return "xlsx", nil
 	case "insert", "sql":
 		return "insert", nil
+	case "update":
+		return "update", nil
 	default:
-		return "", fmt.Errorf("不支持的导出格式 %q，可选 csv / json / xlsx / insert", format)
+		return "", fmt.Errorf("不支持的导出格式 %q，可选 csv / json / xlsx / insert / update", format)
 	}
 }
 
@@ -57,7 +59,7 @@ func ExportExtension(format string) string {
 		return ".json"
 	case "xlsx":
 		return ".xlsx"
-	case "insert":
+	case "insert", "update":
 		return ".sql"
 	default:
 		return ".csv"
@@ -70,7 +72,7 @@ func ExportContentType(format string) string {
 		return "application/json; charset=utf-8"
 	case "xlsx":
 		return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-	case "insert":
+	case "insert", "update":
 		return "text/plain; charset=utf-8"
 	default:
 		return "text/csv; charset=utf-8"
@@ -248,6 +250,102 @@ func WriteINSERT(w io.Writer, table ExportTable, kind, tableName string) error {
 	}
 	return nil
 }
+
+// SplitSchemaObject parses "schema.table" or "table" into (schema, table).
+func SplitSchemaObject(name string) (string, string) {
+	name = strings.TrimSpace(name)
+	if idx := strings.Index(name, "."); idx >= 0 {
+		schema := strings.Trim(strings.TrimSpace(name[:idx]), `"`+"`")
+		object := strings.Trim(strings.TrimSpace(name[idx+1:]), `"`+"`")
+		return schema, object
+	}
+	return "", strings.Trim(name, `"`+"`")
+}
+
+// WriteUPDATE exports rows as SQL UPDATE statements, requiring PK in WHERE clause.
+func WriteUPDATE(w io.Writer, table ExportTable, kind, tableName string, pkCols []string) error {
+	if len(table.Columns) == 0 {
+		return fmt.Errorf("没有可导出的列")
+	}
+	quotedTable := QuoteIdent(kind, tableName)
+	pkSet := make(map[string]struct{})
+	for _, pk := range pkCols {
+		pkSet[strings.ToUpper(pk)] = struct{}{}
+	}
+	if len(pkSet) == 0 {
+		for _, col := range table.Columns {
+			upper := strings.ToUpper(col.Name)
+			if upper == "ROWID" {
+				pkSet["ROWID"] = struct{}{}
+				break
+			}
+		}
+	}
+	if len(pkSet) == 0 {
+		_, cleanObj := SplitSchemaObject(tableName)
+		cleanUpper := strings.ToUpper(cleanObj)
+		for _, col := range table.Columns {
+			upper := strings.ToUpper(col.Name)
+			if upper == "ID" || upper == cleanUpper+"_ID" {
+				pkSet[upper] = struct{}{}
+				break
+			}
+		}
+	}
+
+	var setIndices []int
+	var whereIndices []int
+	for i, col := range table.Columns {
+		upper := strings.ToUpper(col.Name)
+		if _, isPK := pkSet[upper]; isPK {
+			whereIndices = append(whereIndices, i)
+		} else {
+			setIndices = append(setIndices, i)
+		}
+	}
+	if len(whereIndices) == 0 {
+		for i := range table.Columns {
+			whereIndices = append(whereIndices, i)
+			setIndices = append(setIndices, i)
+		}
+	} else if len(setIndices) == 0 {
+		setIndices = whereIndices
+	}
+
+	for _, row := range table.Rows {
+		var setParts []string
+		for _, idx := range setIndices {
+			var value any
+			if idx < len(row) {
+				value = row[idx]
+			}
+			setParts = append(setParts, QuoteIdent(kind, table.Columns[idx].Name)+" = "+ExportSQLLiteral(value))
+		}
+		var whereParts []string
+		for _, idx := range whereIndices {
+			var value any
+			if idx < len(row) {
+				value = row[idx]
+			}
+			if value == nil {
+				whereParts = append(whereParts, QuoteIdent(kind, table.Columns[idx].Name)+" IS NULL")
+			} else {
+				whereParts = append(whereParts, QuoteIdent(kind, table.Columns[idx].Name)+" = "+ExportSQLLiteral(value))
+			}
+		}
+		stmt := "UPDATE " + quotedTable + " SET " + strings.Join(setParts, ", ") + " WHERE " + strings.Join(whereParts, " AND ") + ";\n"
+		if _, err := io.WriteString(w, stmt); err != nil {
+			return err
+		}
+	}
+	if kind == KindOracle {
+		if _, err := io.WriteString(w, "COMMIT;\n"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 
 func WriteXLSX(w io.Writer, table ExportTable, sheetName string) error {
 	sheetName = sanitizeSheetName(sheetName)

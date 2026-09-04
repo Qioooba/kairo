@@ -133,26 +133,47 @@ func PackageExtracted(req Request) (*Result, error) {
 	artifactNames := []string{filepath.Base(listPath), filepath.Base(tarPath), filepath.Base(backupPath), filepath.Base(execPath)}
 	if err := prepareExistingArtifacts(outAbs, req.OutputPolicy, req.ConfirmReplace, artifactNames); err != nil { return nil, err }
 	// Extract 阶段已写入仅含 war 的 marker，打包阶段需用包含全部产物的新 marker 覆盖。
-	// 旧 marker 在产物全部写成前保持存在，并在成功后原子覆盖，避免中间失败导致 marker 丢失。
-	cleanup := func() { rollback(outAbs, false, listPath, tarPath, backupPath, execPath) }
+	isBatch := strings.ToLower(strings.TrimSpace(req.PackType)) == "batch" || strings.HasPrefix(pkgName, "DDD")
+	var chmodPath, chmodContent string
+	if isBatch {
+		chmodContent = renderChmodScript(req.BatchBaseDir, files)
+		if chmodContent != "" {
+			chmodPath = filepath.Join(outAbs, ChmodFileName)
+		}
+	}
+	cleanup := func() { rollback(outAbs, false, listPath, tarPath, backupPath, execPath, chmodPath) }
 	if err := writeUnixFile(listPath, listText(files), 0o644); err != nil {
 		cleanup()
 		return nil, fmt.Errorf("写清单失败: %w", err)
 	}
-	bytes, err := writeTar(tarPath, files)
+	if chmodPath != "" && chmodContent != "" {
+		if err := writeUnixFile(chmodPath, chmodContent, 0o644); err != nil {
+			cleanup()
+			return nil, fmt.Errorf("写赋权脚本失败: %w", err)
+		}
+	}
+	bytes, err := writeTar(tarPath, files, isBatch)
 	if err != nil {
 		cleanup()
 		return nil, err
 	}
-	if err := writeUnixFile(backupPath, renderBackupScript(pkgName, files), 0o755); err != nil {
+	var backupContent, execContent string
+	if isBatch {
+		backupContent = renderBatchBackupScript(pkgName, files)
+		execContent = renderBatchExecuteScript(pkgName, files)
+	} else {
+		backupContent = renderBackupScript(pkgName, files)
+		execContent = renderExecuteScript(pkgName, files)
+	}
+	if err := writeUnixFile(backupPath, backupContent, 0o755); err != nil {
 		cleanup()
 		return nil, fmt.Errorf("写备份脚本失败: %w", err)
 	}
-	if err := writeUnixFile(execPath, renderExecuteScript(pkgName, files), 0o755); err != nil {
+	if err := writeUnixFile(execPath, execContent, 0o755); err != nil {
 		cleanup()
 		return nil, fmt.Errorf("写执行脚本失败: %w", err)
 	}
-	return &Result{OK: true, OutputDir: outAbs, WarDir: warDir, TarFile: tarPath, ListFile: listPath, BackupScript: backupPath, ExecuteScript: execPath, PackageName: pkgName, Files: len(files), Bytes: bytes}, nil
+	return &Result{OK: true, OutputDir: outAbs, WarDir: warDir, TarFile: tarPath, ListFile: listPath, ChmodFile: chmodPath, ChmodContent: chmodContent, BackupScript: backupPath, ExecuteScript: execPath, PackageName: pkgName, Files: len(files), Bytes: bytes, PackType: req.PackType}, nil
 }
 
 func prepareExistingArtifacts(outAbs, policy string, confirmReplace bool, names []string) error {

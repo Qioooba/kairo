@@ -60,6 +60,18 @@ func TestWriteJSONAndINSERT(t *testing.T) {
 	if !strings.Contains(got, "NULL") || !strings.Contains(got, "'O''Hara'") {
 		t.Fatalf("literals: %s", got)
 	}
+
+	var updateBuf bytes.Buffer
+	if err := WriteUPDATE(&updateBuf, table, KindOracle, "CREDIT.T_USER", []string{"ID"}); err != nil {
+		t.Fatal(err)
+	}
+	updateGot := updateBuf.String()
+	if !strings.Contains(updateGot, `UPDATE "CREDIT"."T_USER" SET "NAME" = 'alice' WHERE "ID" = 1;`) {
+		t.Fatalf("unexpected update output: %s", updateGot)
+	}
+	if !strings.Contains(updateGot, "COMMIT;") {
+		t.Fatalf("missing Oracle COMMIT: %s", updateGot)
+	}
 }
 
 func TestWriteXLSXIsZipWithSheet(t *testing.T) {

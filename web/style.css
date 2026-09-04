@@ -7376,6 +7376,7 @@ body.has-open-overlay { overflow: hidden; }
 .waspack-path input,
 .wsc-path-row input { flex: 1; min-width: 0; }
 .path-field-inline { flex: 1 1 180px; max-width: 420px; }
+.waspack-history-select { flex-shrink: 0; max-width: 140px; font-size: 12px; height: 32px; padding: 2px 6px; border-radius: 4px; border: 1px solid var(--border); background: var(--bg-card); color: var(--text); cursor: pointer; }
 .path-field-browse {
   flex-shrink: 0;
   display: inline-flex;
@@ -7895,7 +7896,7 @@ body.has-open-overlay { overflow: hidden; }
 
 /* Database category badges */
 .db-cat-badge { margin-left: auto; padding: 1px 6px; border-radius: 10px; font-size: 11px; background: var(--bg-2); color: var(--text-dim); }
-.db-cat-content { padding-left: 8px; }
+.db-cat-content { padding-left: 8px; max-height: 280px; overflow-y: auto; overflow-x: hidden; }
 
 /* Compare Diff Minimap & Overview Ruler */
 .cmp-vdiff-container { display: flex; flex-direction: row; position: relative; width: 100%; min-height: 520px; flex: 1; }
@@ -8129,3 +8130,185 @@ body.has-open-overlay { overflow: hidden; }
   color: #ef4444 !important;
   border-color: #ef4444 !important;
 }
+
+/* Database Object Viewer (PL/SQL Developer / DBeaver style tab) */
+.db-object-tab .db-tab-name {
+  font-weight: 500;
+}
+.db-object-viewer {
+  display: flex;
+  flex-direction: column;
+  min-height: 480px;
+  max-height: calc(100vh - 160px);
+  overflow: hidden;
+  background: var(--bg-1, #1e1e1e);
+  border: 1px solid var(--line, #333);
+  border-radius: 8px;
+  padding: 14px 16px;
+  box-sizing: border-box;
+}
+.db-obj-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line, #333);
+  margin-bottom: 10px;
+}
+.db-obj-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.db-obj-title h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text, #fff);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.db-obj-kind-tag {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--primary, #3b82f6) 15%, transparent);
+  color: var(--primary, #3b82f6);
+  border: 1px solid color-mix(in srgb, var(--primary, #3b82f6) 30%, transparent);
+  text-transform: uppercase;
+}
+.db-obj-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.db-obj-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--line, #333);
+  padding-bottom: 6px;
+}
+.db-obj-tab {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 5px 12px;
+  font-size: 13px;
+  cursor: pointer;
+  color: var(--text-dim, #888);
+  transition: all 0.15s ease;
+}
+.db-obj-tab:hover {
+  background: var(--bg-2, rgba(255,255,255,0.06));
+  color: var(--text, #fff);
+}
+.db-obj-tab.active {
+  background: color-mix(in srgb, var(--primary, #3b82f6) 16%, transparent);
+  color: var(--primary, #3b82f6);
+  font-weight: 600;
+  border-color: color-mix(in srgb, var(--primary, #3b82f6) 30%, transparent);
+}
+.db-obj-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 0;
+}
+.db-obj-field-tools {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.db-obj-field-tools input {
+  max-width: 320px;
+}
+.db-obj-table-wrap {
+  flex: 1;
+  overflow: auto;
+  border: 1px solid var(--line, #333);
+  border-radius: 6px;
+  background: var(--bg-0, #141414);
+}
+.db-obj-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.db-obj-table th {
+  position: sticky;
+  top: 0;
+  background: var(--bg-2, #242424);
+  z-index: 2;
+  padding: 8px 10px;
+  text-align: left;
+  border-bottom: 1px solid var(--line, #333);
+  white-space: nowrap;
+  color: var(--text-dim, #999);
+}
+.db-obj-table td {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line, #2a2a2a);
+}
+.db-obj-table tr:hover td {
+  background: var(--bg-1, #1e1e1e);
+}
+.db-field-comment {
+  max-width: 360px;
+  word-break: break-word;
+}
+.db-field-comment .comment-text {
+  color: #3fb950;
+  font-weight: 400;
+}
+.db-field-cmt {
+  color: #3fb950 !important;
+  font-size: 11px;
+  margin-left: 4px;
+}
+.db-obj-ddl-tools {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
+}
+.db-obj-ddl-code {
+  flex: 1;
+  overflow: auto;
+  margin: 0;
+  padding: 12px;
+  background: var(--bg-0, #141414);
+  color: var(--text, #d4d4d4);
+  border-radius: 6px;
+  border: 1px solid var(--line, #333);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.db-obj-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 48px 0;
+  color: var(--text-dim);
+}
+.db-obj-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 32px 0;
+}
+.db-selected-actions {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+

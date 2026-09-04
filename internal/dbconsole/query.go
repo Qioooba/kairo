@@ -1,12 +1,12 @@
 package dbconsole
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"database/sql/driver"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -37,9 +37,9 @@ func (m *Manager) StreamQuery(ctx context.Context, source Source, query string, 
 	return m.StreamQueryPage(ctx, source, query, 1, requestedMaxRows, emit)
 }
 
-// StreamQueryPage executes one bounded page. Events are collected before they
-// are emitted so an idle-timeout connection can be rebuilt and retried once
-// without duplicating already-visible rows in the browser.
+// StreamQueryPage executes one bounded page. Events are emitted in a true streaming
+// fashion as batches are read from the database, preventing resident memory accumulation.
+// Idle-timeout connection rebuilding and retrying is performed safely before any data is emitted.
 func (m *Manager) StreamQueryPage(ctx context.Context, source Source, query string, page, pageSize int, emit EmitFunc) (QuerySummary, error) {
 	if source.Kind == KindRedis {
 		return QuerySummary{}, fmt.Errorf("Redis 不支持 SQL 查询")
@@ -54,20 +54,22 @@ func (m *Manager) StreamQueryPage(ctx context.Context, source Source, query stri
 	p := normalizeQueryPage(source, page, pageSize)
 	var last QuerySummary
 	for attempt := 0; attempt < 2; attempt++ {
-		events, summary, err := m.streamQueryAttempt(ctx, source, query, p, info)
+		startedEmit := false
+		safeEmit := func(event StreamEvent) error {
+			startedEmit = true
+			if emit != nil {
+				return emit(event)
+			}
+			return nil
+		}
+		summary, err := m.streamQueryAttempt(ctx, source, query, p, info, safeEmit)
 		summary.RetryCount = attempt
 		last = summary
 		if err == nil {
-			for _, event := range events {
-				if emit != nil {
-					if emitErr := emit(event); emitErr != nil {
-						return summary, emitErr
-					}
-				}
-			}
 			return summary, nil
 		}
-		if attempt == 0 && isConnectionFailure(err) {
+		// 重试仅在尚未向客户端输出任何数据且属于连接故障时允许
+		if attempt == 0 && !startedEmit && isConnectionFailure(err) {
 			m.Invalidate(source.ID)
 			continue
 		}
@@ -193,23 +195,23 @@ func (m *Manager) ExecuteBatch(ctx context.Context, source Source, statements []
 	return summary, nil
 }
 
-func (m *Manager) streamQueryAttempt(ctx context.Context, source Source, query string, page QueryPage, info SQLStatementInfo) ([]StreamEvent, QuerySummary, error) {
+func (m *Manager) streamQueryAttempt(ctx context.Context, source Source, query string, page QueryPage, info SQLStatementInfo, emit EmitFunc) (QuerySummary, error) {
 	queryCtx, cancel := context.WithTimeout(ctx, source.Timeout())
 	defer cancel()
 	if err := m.acquire(queryCtx); err != nil {
-		return nil, QuerySummary{}, err
+		return QuerySummary{}, err
 	}
 	defer m.release()
 	db, err := m.sqlDB(source)
 	if err != nil {
-		return nil, QuerySummary{}, err
+		return QuerySummary{}, err
 	}
 	started := time.Now()
 	// FOR UPDATE 为行级锁，HTTP 无状态不做会话级持锁：事务在请求结束时立即回滚释放，避免长持锁阻塞生产
 	txOptions := &sql.TxOptions{ReadOnly: !info.HasForUpdate && source.Kind == KindMySQL}
 	tx, err := db.BeginTx(queryCtx, txOptions)
 	if err != nil {
-		return nil, QuerySummary{}, err
+		return QuerySummary{}, err
 	}
 	defer tx.Rollback()
 	if source.Kind == KindOracle && !info.HasForUpdate {
@@ -217,16 +219,16 @@ func (m *Manager) streamQueryAttempt(ctx context.Context, source Source, query s
 	}
 	limitedQuery, err := serverPagedQuery(source.Kind, query, page)
 	if err != nil {
-		return nil, QuerySummary{}, err
+		return QuerySummary{}, err
 	}
 	rows, err := tx.QueryContext(queryCtx, limitedQuery)
 	if err != nil {
-		return nil, QuerySummary{}, err
+		return QuerySummary{}, err
 	}
 	defer rows.Close()
 	columns, err := resultColumns(rows)
 	if err != nil {
-		return nil, QuerySummary{}, err
+		return QuerySummary{}, err
 	}
 	aliasIdx := -1
 	for i, c := range columns {
@@ -239,29 +241,27 @@ func (m *Manager) streamQueryAttempt(ctx context.Context, source Source, query s
 	if aliasIdx >= 0 {
 		columns = append(columns[:aliasIdx], columns[aliasIdx+1:]...)
 	}
-	// rejectLargeObjectColumns removed: CLOB/BLOB/LONG RAW are now safely read and formatted
+
+	// 此时连接与首包已就绪，立即向调用方流式发射元数据
+	if emit != nil {
+		if err := emit(StreamEvent{Type: "meta", Columns: columns}); err != nil {
+			return QuerySummary{}, err
+		}
+	}
+
 	summary := QuerySummary{
 		QueryLimit: page.PageSize, Page: page.Page, PageSize: page.PageSize,
 		Offset: page.Offset(), HasPrev: page.Page > 1, PaginationMode: "page",
 		Ordered: queryHasOrderBy(query),
 	}
-	events := []StreamEvent{{Type: "meta", Columns: columns}}
+
 	batch := make([][]any, 0, rowBatchSize)
-	flush := func() {
-		if len(batch) == 0 {
-			return
-		}
-		events = append(events, StreamEvent{Type: "rows", Rows: batch})
-		batch = make([][]any, 0, rowBatchSize)
-	}
+	scanner := newRowScanner(columns, aliasIdx)
+
 	for rows.Next() {
-		scanCount := len(columns)
-		if aliasIdx >= 0 {
-			scanCount = len(columns) + 1
-		}
-		row, rowBytes, scanErr := scanRow(rows, scanCount, columns, aliasIdx)
+		row, rowBytes, scanErr := scanner.Scan(rows)
 		if scanErr != nil {
-			return nil, summary, scanErr
+			return summary, scanErr
 		}
 
 		if summary.Rows >= page.PageSize {
@@ -276,22 +276,39 @@ func (m *Manager) streamQueryAttempt(ctx context.Context, source Source, query s
 		summary.Bytes += rowBytes
 		batch = append(batch, row)
 		if len(batch) == rowBatchSize {
-			flush()
+			if emit != nil {
+				if err := emit(StreamEvent{Type: "rows", Rows: batch}); err != nil {
+					return summary, err
+				}
+			}
+			// 立即重新分配批次，断开对旧批次行的强引用，让 Go GC 可以在查询持续进行期间平滑回收内存
+			batch = make([][]any, 0, rowBatchSize)
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, summary, err
+		return summary, err
 	}
-	flush()
+	if len(batch) > 0 {
+		if emit != nil {
+			if err := emit(StreamEvent{Type: "rows", Rows: batch}); err != nil {
+				return summary, err
+			}
+		}
+		batch = nil
+	}
 	summary.ElapsedMS = time.Since(started).Milliseconds()
 	summary.StatementType = info.Type
 	if info.HasForUpdate {
 		// 告知前端：FOR UPDATE 已执行但锁已随事务回滚释放，非持久会话锁
 		summary.Message = "FOR UPDATE 查询已执行；行锁随请求结束已释放（HTTP 无状态，不做会话级持锁）"
-		events = append(events, StreamEvent{Type: "notice", Message: summary.Message, StatementType: info.Type})
+		if emit != nil {
+			_ = emit(StreamEvent{Type: "notice", Message: summary.Message, StatementType: info.Type})
+		}
 	}
-	events = append(events, StreamEvent{Type: "summary", Summary: &summary})
-	return events, summary, nil
+	if emit != nil {
+		_ = emit(StreamEvent{Type: "summary", Summary: &summary})
+	}
+	return summary, nil
 }
 
 // serverLimitedQuery enforces the result cap at the database boundary. The
@@ -374,27 +391,110 @@ func resultColumns(rows *sql.Rows) ([]Column, error) {
 	return columns, nil
 }
 
-func scanRow(rows *sql.Rows, count int, columns []Column, aliasIdx int) ([]any, int64, error) {
-	values := make([]any, count)
+type boundedCellScanner struct {
+	dbType string
+	value  any
+}
+
+func (s *boundedCellScanner) Scan(src any) error {
+	s.value = normalizeColumnValue(src, s.dbType)
+	return nil
+}
+
+type rowScanner struct {
+	scanners []boundedCellScanner
+	dest     []any
+	columns  []Column
+	aliasIdx int
+}
+
+func newRowScanner(columns []Column, aliasIdx int) *rowScanner {
+	count := len(columns)
+	if aliasIdx >= 0 {
+		count = len(columns) + 1
+	}
+	scanners := make([]boundedCellScanner, count)
 	dest := make([]any, count)
-	for i := range values {
-		dest[i] = &values[i]
-	}
-	if err := rows.Scan(dest...); err != nil {
-		return nil, 0, err
-	}
-	if aliasIdx >= 0 && aliasIdx < len(values) {
-		values = append(values[:aliasIdx], values[aliasIdx+1:]...)
-	}
-	for i := range values {
+	for i := range scanners {
 		dbType := ""
-		if i < len(columns) {
+		if aliasIdx >= 0 {
+			if i < aliasIdx && i < len(columns) {
+				dbType = strings.ToUpper(strings.TrimSpace(columns[i].Database))
+			} else if i > aliasIdx && i-1 < len(columns) {
+				dbType = strings.ToUpper(strings.TrimSpace(columns[i-1].Database))
+			}
+		} else if i < len(columns) {
 			dbType = strings.ToUpper(strings.TrimSpace(columns[i].Database))
 		}
-		values[i] = normalizeColumnValue(values[i], dbType)
+		scanners[i].dbType = dbType
+		dest[i] = &scanners[i]
 	}
-	raw, _ := json.Marshal(values)
-	return values, int64(len(raw)), nil
+	return &rowScanner{
+		scanners: scanners,
+		dest:     dest,
+		columns:  columns,
+		aliasIdx: aliasIdx,
+	}
+}
+
+func (rs *rowScanner) Scan(rows *sql.Rows) ([]any, int64, error) {
+	if err := rows.Scan(rs.dest...); err != nil {
+		return nil, 0, err
+	}
+	values := make([]any, len(rs.columns))
+	valIdx := 0
+	for i := range rs.scanners {
+		if i == rs.aliasIdx {
+			continue
+		}
+		values[valIdx] = rs.scanners[i].value
+		rs.scanners[i].value = nil // 立即解除对单格对象的引用，辅助 GC 回收
+		valIdx++
+	}
+	return values, fastRowBytes(values), nil
+}
+
+func scanRow(rows *sql.Rows, count int, columns []Column, aliasIdx int) ([]any, int64, error) {
+	scanner := newRowScanner(columns, aliasIdx)
+	return scanner.Scan(rows)
+}
+
+func fastRowBytes(row []any) int64 {
+	var total int64
+	for _, v := range row {
+		if v == nil {
+			total += 4 // "null"
+			continue
+		}
+		switch val := v.(type) {
+		case string:
+			total += int64(len(val)) + 2 // 包含 JSON 引号
+		case []byte:
+			total += int64(len(val))
+		case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
+			total += 8
+		case float32, float64:
+			total += 16
+		case bool:
+			total += 5
+		case time.Time:
+			total += 35
+		case map[string]any:
+			if b, ok := val["bytes"].(int); ok {
+				total += int64(b)
+			} else if t, ok := val["text"].(string); ok {
+				total += int64(len(t))
+			} else if p, ok := val["preview"].(string); ok {
+				total += int64(len(p))
+			} else {
+				total += 128
+			}
+		default:
+			total += 64
+		}
+		total += 1 // 字段分隔符
+	}
+	return total
 }
 
 const maxLOBPreviewBytes = 256 * 1024 // 256 KB preview limit for CLOB/BLOB
@@ -423,7 +523,9 @@ func normalizeColumnValue(value any, dbType string) any {
 			for cut > 0 && !utf8.RuneStart(text[cut]) {
 				cut--
 			}
-			text = text[:cut]
+			// 使用 strings.Clone 彻底断开与原始巨型 string/[]byte 底层数组的内存引用，
+			// 确保几十甚至上百 MB 的原始大对象在截断后能够被 Go GC 立即回收。
+			text = strings.Clone(text[:cut])
 			truncated = true
 		}
 		return map[string]any{
@@ -460,10 +562,13 @@ func normalizeColumnValue(value any, dbType string) any {
 		}
 		totalBytes := len(rawBytes)
 		truncated := false
-		preview := rawBytes
+		var preview []byte
 		if totalBytes > maxLOBPreviewBytes {
-			preview = preview[:maxLOBPreviewBytes]
+			// 使用 bytes.Clone 断开与底层大切片的共享引用
+			preview = bytes.Clone(rawBytes[:maxLOBPreviewBytes])
 			truncated = true
+		} else {
+			preview = rawBytes
 		}
 		return map[string]any{
 			"kind":           "blob",
@@ -499,19 +604,21 @@ func normalizeValue(value any) any {
 }
 
 func normalizeBytes(value []byte) any {
-	copyValue := append([]byte(nil), value...)
+	copyValue := bytes.Clone(value)
 	if utf8.Valid(copyValue) {
 		return truncateText(string(copyValue))
 	}
 	preview := copyValue
+	truncated := false
 	if len(preview) > 4096 {
-		preview = preview[:4096]
+		preview = bytes.Clone(copyValue[:4096])
+		truncated = true
 	}
 	return map[string]any{
 		"kind":           "binary",
 		"bytes":          len(copyValue),
 		"preview_base64": base64.StdEncoding.EncodeToString(preview),
-		"truncated":      len(preview) < len(copyValue),
+		"truncated":      truncated,
 	}
 }
 
@@ -526,7 +633,7 @@ func truncateText(value string) any {
 	return map[string]any{
 		"kind":      "text",
 		"bytes":     len(value),
-		"preview":   value[:cut],
+		"preview":   strings.Clone(value[:cut]),
 		"truncated": true,
 	}
 }

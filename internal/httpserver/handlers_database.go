@@ -413,6 +413,24 @@ func (s *Server) handleDatabaseExport(w http.ResponseWriter, r *http.Request) {
 				tableName = dbconsole.InferExportTable(req.SQL)
 			}
 			err = dbconsole.WriteINSERT(w, table, source.Kind, tableName)
+		case "update":
+			tableName := strings.TrimSpace(req.Table)
+			if tableName == "" {
+				tableName = dbconsole.InferExportTable(req.SQL)
+			}
+			var pkCols []string
+			schema, obj := dbconsole.SplitSchemaObject(tableName)
+			if obj != "" {
+				fields, errFields := s.database.Fields(r.Context(), source, schema, obj)
+				if errFields == nil {
+					for _, f := range fields {
+						if f.PrimaryKey {
+							pkCols = append(pkCols, f.Name)
+						}
+					}
+				}
+			}
+			err = dbconsole.WriteUPDATE(w, table, source.Kind, tableName, pkCols)
 		}
 		if err != nil {
 			s.audit.Write("database.export", "source_id", source.ID, "kind", source.Kind, "query_id", queryID, "format", format, "result", "fail", "error", trim(err.Error(), 300))
@@ -865,8 +883,8 @@ func (s *Server) handleDatabaseSessionBackup(w http.ResponseWriter, r *http.Requ
 	}
 	// 逐 session 校验：SQL 长度、sourceId 合法性、page 范围
 	for _, sessMap := range payload.Sessions {
-		if sqlVal, ok := sessMap["sql"].(string); ok && len(sqlVal) > 20000 {
-			writeErr(w, 400, errors.New("单条 SQL 超过 20000 字符限制"))
+		if sqlVal, ok := sessMap["sql"].(string); ok && len(sqlVal) > 500000 {
+			writeErr(w, 400, errors.New("单条 SQL 超过 500000 字符限制"))
 			return
 		}
 		if srcID, ok := sessMap["sourceId"].(string); ok && srcID != "" {
@@ -876,9 +894,8 @@ func (s *Server) handleDatabaseSessionBackup(w http.ResponseWriter, r *http.Requ
 			}
 		}
 	}
-	if payload.EditorHeight < 0 || payload.EditorHeight > 2000 {
-		writeErr(w, 400, errors.New("editorHeight 非法"))
-		return
+	if payload.EditorHeight < 0 || payload.EditorHeight > 4000 {
+		payload.EditorHeight = 0
 	}
 	filePath := filepath.Join(s.cur().DataDir(), databaseSessionFileName(r))
 	if err := os.WriteFile(filePath, body, 0o600); err != nil {

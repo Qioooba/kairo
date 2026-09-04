@@ -120,3 +120,105 @@ func TestRedisCursorValidation(t *testing.T) {
 		t.Fatal("expected invalid cluster cursor 'node:bad' to return error")
 	}
 }
+
+func TestFastRowBytesCalculation(t *testing.T) {
+	row := []any{
+		12345,
+		"hello world",
+		true,
+		nil,
+		map[string]any{"kind": "clob", "bytes": 1000, "text": "preview"},
+	}
+	bytesCount := fastRowBytes(row)
+	if bytesCount <= 0 {
+		t.Fatalf("expected positive row bytes, got %d", bytesCount)
+	}
+	// 验证空行
+	if emptyBytes := fastRowBytes(nil); emptyBytes != 0 {
+		t.Fatalf("expected 0 bytes for empty row, got %d", emptyBytes)
+	}
+}
+
+func BenchmarkFastRowBytes(b *testing.B) {
+	row := []any{
+		12345,
+		"hello world this is a test column value",
+		true,
+		nil,
+		map[string]any{"kind": "clob", "bytes": 1000, "text": "preview content"},
+		9999.88,
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = fastRowBytes(row)
+	}
+}
+
+func TestNormalizeColumnValueLOBTruncationMemoryIsolation(t *testing.T) {
+	// 构造 500 KB 大文本
+	largeStr := strings.Repeat("A", 500*1024)
+	result := normalizeColumnValue(largeStr, "CLOB")
+	clobMap, ok := result.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map[string]any for CLOB, got %T", result)
+	}
+	if clobMap["kind"] != "clob" {
+		t.Fatalf("expected kind clob, got %v", clobMap["kind"])
+	}
+	if clobMap["bytes"] != 500*1024 {
+		t.Fatalf("expected original bytes 512000, got %v", clobMap["bytes"])
+	}
+	if clobMap["truncated"] != true {
+		t.Fatalf("expected truncated=true, got %v", clobMap["truncated"])
+	}
+	previewText, ok := clobMap["text"].(string)
+	if !ok || len(previewText) != maxLOBPreviewBytes {
+		t.Fatalf("expected preview text length %d, got %d", maxLOBPreviewBytes, len(previewText))
+	}
+
+	// 构造 500 KB 大 BLOB
+	largeBlob := make([]byte, 500*1024)
+	for i := range largeBlob {
+		largeBlob[i] = byte(i % 256)
+	}
+	blobResult := normalizeColumnValue(largeBlob, "BLOB")
+	blobMap, ok := blobResult.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map[string]any for BLOB, got %T", blobResult)
+	}
+	if blobMap["kind"] != "blob" {
+		t.Fatalf("expected kind blob, got %v", blobMap["kind"])
+	}
+	if blobMap["truncated"] != true {
+		t.Fatalf("expected truncated=true, got %v", blobMap["truncated"])
+	}
+
+	// 验证 bytes.Clone 保证的独立内存：修改原始切片不影响已截断对象
+	largeBlob[0] = 0xFF
+	if hexVal, ok := blobMap["hex"].(string); ok {
+		// 原切片首字节为 0，经 hex.EncodeToString 后前两位应为 "00"，而不是修改后的 "ff"
+		if !strings.HasPrefix(hexVal, "00") {
+			t.Fatalf("expected preview to be memory isolated, got prefix: %s", hexVal[:4])
+		}
+	}
+}
+
+func TestBoundedCellScanner(t *testing.T) {
+	scanner := boundedCellScanner{dbType: "VARCHAR2"}
+	if err := scanner.Scan("normal text"); err != nil {
+		t.Fatalf("scan failed: %v", err)
+	}
+	if scanner.value != "normal text" {
+		t.Fatalf("expected 'normal text', got %v", scanner.value)
+	}
+
+	// 测试 NULL 值
+	if err := scanner.Scan(nil); err != nil {
+		t.Fatalf("scan nil failed: %v", err)
+	}
+	if scanner.value != nil {
+		t.Fatalf("expected nil value, got %v", scanner.value)
+	}
+}
+

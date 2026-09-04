@@ -24,7 +24,7 @@
       { key: 'cnt', text: 'SELECT COUNT(*)\nFROM ${table}', enabled: true }
     ]
   };
-  let persisted = { prefs: null, history: [], last_source: '', column_widths: {}, row_limits: {} };
+  let persisted = { prefs: null, history: [], last_source: '', column_widths: {}, row_limits: {}, meta_collapsed: true };
   const persistPreference = preferenceSaver('database', 400);
   const state = {
     sources: [], source: null, rows: [], columns: [], controller: null, summary: null, cursor: 0,
@@ -106,6 +106,10 @@
     }
   }
   function tabTitle(s) {
+    if (s.type === 'object') {
+      const icon = s.objectType === 'TABLE' ? '📋 ' : s.objectType === 'VIEW' ? '👁️ ' : s.objectType === 'PROCEDURE' ? '⚙️ ' : s.objectType === 'FUNCTION' ? 'ƒ ' : '📦 ';
+      return icon + s.objectName;
+    }
     const text = String(s.sql || '').replace(/\s+/g, ' ').trim();
     return text ? text.slice(0, 18) : ('查询 ' + s.id);
   }
@@ -120,6 +124,7 @@
     s = s || sess();
     renderTabs();
     if (!s || s.id !== state.activeId) return;
+    if (s.type === 'object') return;
     bindSession(s);
     const run = q('db-run'), cancel = q('db-cancel'), exp = q('db-export'), st = q('db-query-status');
     if (run) run.disabled = !!s.controller;
@@ -132,6 +137,11 @@
     const host = q('db-sql-tabs');
     if (!host) return;
     host.innerHTML = state.sessions.map(function (s) {
+       if (s.type === 'object') {
+         const icon = s.objectType === 'TABLE' ? '📋 ' : s.objectType === 'VIEW' ? '👁️ ' : s.objectType === 'PROCEDURE' ? '⚙️ ' : s.objectType === 'FUNCTION' ? 'ƒ ' : '📦 ';
+         const tip = h((s.schema ? s.schema + '.' : '') + s.objectName + ' · ' + (s.objectType || '对象'));
+         return '<button type="button" class="db-editor-tab db-object-tab' + (s.id === state.activeId ? ' active' : '') + '" data-tab="' + s.id + '" title="' + tip + '"><span class="db-tab-name">' + icon + h(s.objectName) + '</span><span class="db-tab-close" data-close="' + s.id + '" title="关闭页签">×</span></button>';
+       }
        const src = s.sourceId ? (state.sources.find(function (x) { return x.id === s.sourceId; }) || null) : null;
        const srcName = src ? ' [' + src.name + ']' : (s.sourceRef && s.sourceRef.name ? ' [' + s.sourceRef.name + ' · 已删除]' : ' [未绑定]');
        const tip = h((s.sourceId ? ((src && src.name) || (s.sourceRef && s.sourceRef.name) || s.sourceId) + ' · ' : '') + (s.sql || tabTitle(s)));
@@ -151,7 +161,7 @@
     });
   }
   function addSession() {
-    if (state.sessions.length >= TAB_LIMIT) return toast('最多 ' + TAB_LIMIT + ' 个查询页签', 'warn');
+    if (state.sessions.length >= TAB_LIMIT + 4) return toast('已达到页签上限', 'warn');
     saveEditorSQL();
     const s = createSession('');
     state.sessions.push(s);
@@ -165,17 +175,22 @@
     if (!s) return;
     cancelGridPaint();
     state.activeId = id;
-    // #13：页签保存自己的数据源；切换到不同类型时必须重建可见工作区，
-    // 否则 Redis 页签会继续显示 SQL DOM，或沿用上一数据源的元数据。
+    renderTabs();
+    if (s.type === 'object') {
+      renderObjectViewer(s);
+      return;
+    }
+    hideObjectSession();
+    // #13：页签保存自己的数据源；切换到不同类型时必须重建可见工作区
     const found = s.sourceId ? state.sources.find(function (x) { return x.id === s.sourceId; }) : null;
-    if (found) {
+    if (found && (!state.source || state.source.id !== found.id)) {
       state.source = found;
       const sel = q('db-source');
       if (sel) sel.value = found.id;
       renderWorkspace(true);
       return;
     }
-    renderWorkspace(true);
+    restoreSessionChrome(s);
   }
   function closeSession(id) {
     if (state.sessions.length <= 1) return;
@@ -187,27 +202,243 @@
     state.sessions.splice(index, 1);
     const next = state.sessions[Math.min(index, state.sessions.length - 1)];
     state.activeId = next.id;
+    if (next.type === 'object') {
+      renderTabs();
+      renderObjectViewer(next);
+      return;
+    }
+    hideObjectSession();
     const nextSource = next.sourceId ? state.sources.find(function (x) { return x.id === next.sourceId; }) : null;
-    if (nextSource) {
+    if (nextSource && (!state.source || state.source.id !== nextSource.id)) {
       state.source = nextSource;
       const select = q('db-source');
       if (select) select.value = nextSource.id;
       renderWorkspace(true);
     } else {
-      renderWorkspace(true);
+      renderTabs();
+      restoreSessionChrome(next);
+    }
+  }
+  function hideObjectSession() {
+    const viewer = q('db-object-viewer');
+    if (viewer) viewer.hidden = true;
+    const editorBody = q('db-editor-body'), resultsSec = q('db-results-section');
+    if (editorBody) editorBody.hidden = false;
+    if (resultsSec) resultsSec.hidden = false;
+  }
+  function openObjectTab(schema, object, type) {
+    schema = schema || (q('db-schema') && q('db-schema').value) || '';
+    let existing = state.sessions.find(function (s) {
+      return s.type === 'object' && s.schema === schema && s.objectName === object;
+    });
+    if (existing) {
+      switchSession(existing.id);
+      return;
+    }
+    if (state.sessions.length >= TAB_LIMIT + 3) {
+      const oldObjIdx = state.sessions.findIndex(function (s) { return s.type === 'object'; });
+      if (oldObjIdx >= 0) {
+        state.sessions.splice(oldObjIdx, 1);
+      }
+    }
+    saveEditorSQL();
+    const s = {
+      id: ++tabSeq,
+      type: 'object',
+      schema: schema,
+      objectName: object,
+      objectType: (type || 'TABLE').toUpperCase(),
+      inspectTab: 'fields',
+      inspectData: null,
+      inspectLoading: false,
+      inspectError: null,
+      fieldFilter: '',
+      sourceId: state.source ? state.source.id : '',
+      sourceRef: state.source && Kairo.workbench && Kairo.workbench.resourceSession ? Kairo.workbench.resourceSession.snapshot(state.source) : null
+    };
+    state.sessions.push(s);
+    switchSession(s.id);
+    loadObjectTabInspect(s);
+  }
+  async function loadObjectTabInspect(s, refresh) {
+    s.inspectLoading = true;
+    s.inspectError = null;
+    renderTabs();
+    if (state.activeId === s.id) renderObjectViewer(s);
+    try {
+      const source = s.sourceId ? (state.sources.find(x => x.id === s.sourceId) || state.source) : state.source;
+      if (!source) throw new Error('未选择数据源');
+      const data = await api('GET', '/api/database/metadata/inspect?source_id=' + encodeURIComponent(source.id) + '&schema=' + encodeURIComponent(s.schema) + '&object=' + encodeURIComponent(s.objectName) + '&type=' + encodeURIComponent(s.objectType || '') + (refresh ? '&refresh=1' : ''));
+      s.inspectData = data.inspect || {};
+      s.inspectLoading = false;
+    } catch (err) {
+      s.inspectLoading = false;
+      s.inspectError = err.message || '加载详情失败';
+    }
+    renderTabs();
+    if (state.activeId === s.id) renderObjectViewer(s);
+  }
+  function renderObjectViewer(s) {
+    const viewer = q('db-object-viewer');
+    if (!viewer) return;
+    viewer.hidden = false;
+    const editorBody = q('db-editor-body'), resultsSec = q('db-results-section');
+    if (editorBody) editorBody.hidden = true;
+    if (resultsSec) resultsSec.hidden = true;
+
+    if (s.inspectLoading) {
+      viewer.innerHTML = '<div class="db-obj-loading"><span class="spinner"></span><span>正在读取 ' + h(s.objectName) + ' 详情…</span></div>';
+      return;
+    }
+    if (s.inspectError) {
+      viewer.innerHTML = '<div class="db-obj-error">' + inlineError('读取失败', s.inspectError) + '<button class="btn btn-xs" id="db-obj-retry">重试</button></div>';
+      const retry = q('db-obj-retry');
+      if (retry) retry.onclick = () => loadObjectTabInspect(s, true);
+      return;
+    }
+    const info = s.inspectData || {};
+    const fields = info.fields || [];
+    const indexes = info.indexes || [];
+    const constraints = info.constraints || [];
+    const activeTab = s.inspectTab || 'fields';
+
+    let subTabNav = '<div class="db-obj-tabs">' +
+      '<button class="db-obj-tab' + (activeTab === 'fields' ? ' active' : '') + '" data-otab="fields">字段 (' + fields.length + ')</button>' +
+      '<button class="db-obj-tab' + (activeTab === 'indexes' ? ' active' : '') + '" data-otab="indexes">索引 (' + indexes.length + ')</button>' +
+      '<button class="db-obj-tab' + (activeTab === 'constraints' ? ' active' : '') + '" data-otab="constraints">约束 (' + constraints.length + ')</button>' +
+      '<button class="db-obj-tab' + (activeTab === 'ddl' ? ' active' : '') + '" data-otab="ddl">DDL 定义</button>' +
+      '</div>';
+
+    let headerActions = '<div class="db-obj-actions">' +
+      '<button class="btn btn-xs btn-primary" id="db-obj-action-query">🔍 查询数据</button>' +
+      '<button class="btn btn-xs" id="db-obj-action-insert">📝 INSERT 模板</button>' +
+      '<button class="btn btn-xs" id="db-obj-action-copy-ddl">📋 复制 DDL</button>' +
+      '<button class="btn btn-xs" id="db-obj-action-refresh">🔄 刷新</button>' +
+      '</div>';
+
+    let bodyHTML = '';
+    if (activeTab === 'fields') {
+      bodyHTML = '<div class="db-obj-field-tools">' +
+        '<input type="search" id="db-obj-field-filter" placeholder="搜索字段名、类型或注释..." class="editor-input" value="' + h(s.fieldFilter || '') + '">' +
+        '<button class="btn btn-xs" id="db-obj-copy-cols">复制所有列名</button>' +
+        '</div>' +
+        '<div class="db-obj-table-wrap"><table class="table db-obj-table">' +
+        '<thead><tr><th style="width:40px">#</th><th>字段名</th><th>数据类型</th><th>主键</th><th>允许为空</th><th>默认值</th><th>注释 (Comment)</th></tr></thead>' +
+        '<tbody>' +
+        fields.filter(f => {
+          if (!s.fieldFilter) return true;
+          const q = s.fieldFilter.toLowerCase();
+          return String(f.name || '').toLowerCase().includes(q) ||
+                 String(f.definition || f.data_type || '').toLowerCase().includes(q) ||
+                 String(f.comment || '').toLowerCase().includes(q);
+        }).map((f, i) => {
+          return '<tr>' +
+            '<td class="num">' + (i + 1) + '</td>' +
+            '<td class="db-field-name"><strong>' + h(f.name) + '</strong></td>' +
+            '<td class="mono">' + h(f.definition || f.data_type || '') + '</td>' +
+            '<td>' + (f.primary_key ? '<span class="tag tag-ok">PK</span>' : '-') + '</td>' +
+            '<td>' + (f.nullable ? '<span class="hint">NULL</span>' : '<span class="tag tag-warn">NOT NULL</span>') + '</td>' +
+            '<td class="mono hint">' + h(f.default_value || '-') + '</td>' +
+            '<td class="db-field-comment">' + (f.comment ? '<span class="comment-text">' + h(f.comment) + '</span>' : '<span class="hint">-</span>') + '</td>' +
+            '</tr>';
+        }).join('') +
+        '</tbody></table></div>';
+    } else if (activeTab === 'indexes') {
+      bodyHTML = '<div class="db-obj-table-wrap"><table class="table db-obj-table">' +
+        '<thead><tr><th style="width:40px">#</th><th>索引名</th><th>唯一性</th><th>包含列</th></tr></thead>' +
+        '<tbody>' +
+        (indexes.length ? indexes.map((idx, i) => '<tr><td class="num">' + (i + 1) + '</td><td><strong>' + h(idx.name) + '</strong></td><td>' + (idx.uniqueness === 'UNIQUE' ? '<span class="tag tag-ok">UNIQUE</span>' : '<span class="hint">NORMAL</span>') + '</td><td class="mono">' + h((idx.columns || []).join(', ')) + '</td></tr>').join('') : '<tr><td colspan="4" class="hint db-empty-td">无索引信息</td></tr>') +
+        '</tbody></table></div>';
+    } else if (activeTab === 'constraints') {
+      bodyHTML = '<div class="db-obj-table-wrap"><table class="table db-obj-table">' +
+        '<thead><tr><th style="width:40px">#</th><th>约束名</th><th>约束类型</th><th>关联列</th></tr></thead>' +
+        '<tbody>' +
+        (constraints.length ? constraints.map((c, i) => '<tr><td class="num">' + (i + 1) + '</td><td><strong>' + h(c.name) + '</strong></td><td><span class="tag">' + h(c.type) + '</span></td><td class="mono">' + h(c.columns || '-') + '</td></tr>').join('') : '<tr><td colspan="4" class="hint db-empty-td">无约束信息</td></tr>') +
+        '</tbody></table></div>';
+    } else if (activeTab === 'ddl') {
+      const rawDDL = info.ddl || info.source_text || info.ddl_error || '-- 无 DDL';
+      const formatted = formatSQL(rawDDL);
+      const highlighted = highlightSQL(formatted);
+      bodyHTML = '<div class="db-obj-ddl-tools">' +
+        '<button class="btn btn-xs" id="db-obj-ddl-copy">复制 DDL</button>' +
+        '</div>' +
+        '<pre class="db-obj-ddl-code mono">' + highlighted + '</pre>';
+    }
+
+    viewer.innerHTML = '<div class="db-obj-header">' +
+      '<div class="db-obj-title">' +
+      '<span class="db-obj-kind-tag">' + h(s.objectType || '对象') + '</span>' +
+      '<h3>' + h((s.schema ? s.schema + '.' : '') + s.objectName) + '</h3>' +
+      '</div>' +
+      headerActions +
+      '</div>' +
+      subTabNav +
+      '<div class="db-obj-body">' + bodyHTML + '</div>';
+
+    viewer.querySelectorAll('[data-otab]').forEach(b => {
+      b.onclick = () => {
+        s.inspectTab = b.dataset.otab;
+        renderObjectViewer(s);
+      };
+    });
+    const filterInp = q('db-obj-field-filter');
+    if (filterInp) {
+      filterInp.oninput = debounce(function () {
+        s.fieldFilter = this.value.trim();
+        renderObjectViewer(s);
+      }, 150);
+    }
+    const copyCols = q('db-obj-copy-cols');
+    if (copyCols) {
+      copyCols.onclick = () => {
+        const names = fields.map(f => f.name).join(', ');
+        copyDBText(names, '已复制 ' + fields.length + ' 个列名');
+      };
+    }
+    const btnQuery = q('db-obj-action-query');
+    if (btnQuery) {
+      btnQuery.onclick = () => {
+        const sql = 'SELECT *\nFROM ' + quoteIdentifier(s.schema) + '.' + quoteIdentifier(s.objectName);
+        const querySess = createSession(sql);
+        state.sessions.push(querySess);
+        switchSession(querySess.id);
+        runQuery();
+      };
+    }
+    const btnInsert = q('db-obj-action-insert');
+    if (btnInsert) {
+      btnInsert.onclick = () => {
+        insertObjectSQL(s.schema, s.objectName, s.objectType);
+      };
+    }
+    const btnCopyDDL = q('db-obj-action-copy-ddl') || q('db-obj-ddl-copy');
+    if (btnCopyDDL) {
+      btnCopyDDL.onclick = () => {
+        const raw = (info.ddl || info.source_text || '');
+        copyDBText(formatSQL(raw), '已复制格式化 DDL');
+      };
+    }
+    const btnRefresh = q('db-obj-action-refresh');
+    if (btnRefresh) {
+      btnRefresh.onclick = () => loadObjectTabInspect(s, true);
     }
   }
   function restoreSessionChrome(s) {
+    if (s && s.type === 'object') {
+      renderObjectViewer(s);
+      return;
+    }
+    hideObjectSession();
     const ta = q('db-sql');
-    if (ta) ta.value = s.sql || '';
+    if (ta) ta.value = (s && s.sql) || '';
     syncSQLEditor();
     const filter = q('db-result-filter');
-    if (filter) filter.value = s.localFilter || '';
+    if (filter) filter.value = (s && s.localFilter) || '';
     ['grid', 'record', 'plan'].forEach(function (name) {
       const btn = q('db-view-' + name);
-      if (btn) btn.classList.toggle('active', s.resultMode === name);
+      if (btn) btn.classList.toggle('active', (s && s.resultMode) === name);
     });
-    if (s.lastError) showQueryMessage('error', s.lastError.title, s.lastError.message, s.lastError.sql);
+    if (s && s.lastError) showQueryMessage('error', s.lastError.title, s.lastError.message, s.lastError.sql);
     else hideQueryMessage();
     refreshActiveQueryUI(s);
     renderResult();
@@ -291,6 +522,7 @@
     persisted.bookmarks = normalizeBookmarks(persisted.bookmarks);
     persisted.meta_width = Math.max(META_WIDTH_MIN, Math.min(META_WIDTH_MAX, Number(persisted.meta_width) || 300));
     persisted.inspect_height = Math.max(140, Math.min(480, Number(persisted.inspect_height) || 220));
+    persisted.meta_collapsed = persisted.meta_collapsed !== undefined ? Boolean(persisted.meta_collapsed) : true;
     state.prefs = persisted.prefs;
   }
   function cellText(v) {
@@ -379,7 +611,62 @@
     copyDBText(insertSQL, '已复制 INSERT 语句到剪贴板');
   }
 
-  function copyCellAsUpdate(rowIdx, colIdx) {
+  state.tablePKCache = state.tablePKCache || {};
+  async function getTablePrimaryKeys(tableName) {
+    if (!tableName || tableName === 'TARGET_TABLE') return [];
+    if (state.tablePKCache[tableName]) return state.tablePKCache[tableName];
+    let schema = (q('db-schema') && q('db-schema').value) || '';
+    let obj = tableName;
+    if (tableName.includes('.')) {
+      const parts = tableName.split('.');
+      schema = parts[0].replace(/["`]/g, '');
+      obj = parts[1].replace(/["`]/g, '');
+    }
+    const source = effectiveSource();
+    if (!source) return [];
+    try {
+      const data = await api('GET', '/api/database/metadata/fields?source_id=' + encodeURIComponent(source.id) + '&schema=' + encodeURIComponent(schema) + '&object=' + encodeURIComponent(obj));
+      const pks = (data.fields || []).filter(f => f.primary_key).map(f => f.name);
+      state.tablePKCache[tableName] = pks;
+      return pks;
+    } catch (_) {
+      return [];
+    }
+  }
+
+  function buildWhereClause(row, pks) {
+    if (pks && pks.length) {
+      const matched = [];
+      for (const pk of pks) {
+        const colIdx = state.columns.findIndex(c => String(c.name).toUpperCase() === String(pk).toUpperCase());
+        if (colIdx >= 0) {
+          const v = row[colIdx];
+          if (v === null || v === undefined) matched.push(state.columns[colIdx].name + ' IS NULL');
+          else matched.push(state.columns[colIdx].name + ' = ' + sqlValueLiteral(v, state.columns[colIdx].database_type));
+        }
+      }
+      if (matched.length === pks.length) {
+        return matched.join(' AND ');
+      }
+    }
+    const rowidIdx = state.columns.findIndex(c => String(c.name).toUpperCase() === 'ROWID');
+    if (rowidIdx >= 0 && row[rowidIdx]) {
+      return 'ROWID = \'' + row[rowidIdx] + '\'';
+    }
+    const table = detectTableName();
+    const idIdx = state.columns.findIndex(c => String(c.name).toUpperCase() === 'ID' || String(c.name).toUpperCase() === table.toUpperCase() + '_ID');
+    if (idIdx >= 0 && row[idIdx] != null) {
+      return state.columns[idIdx].name + ' = ' + sqlValueLiteral(row[idIdx], state.columns[idIdx].database_type);
+    }
+    const conditions = visibleColumns().map(i => {
+      const v = row[i];
+      if (v === null || v === undefined) return state.columns[i].name + ' IS NULL';
+      return state.columns[i].name + ' = ' + sqlValueLiteral(v, state.columns[i].database_type);
+    });
+    return conditions.join(' AND ');
+  }
+
+  async function copyCellAsUpdate(rowIdx, colIdx) {
     const row = state.rows[rowIdx];
     if (!row) return;
     const table = detectTableName();
@@ -387,26 +674,46 @@
     const dirty = state.dirtyCells && state.dirtyCells[rowIdx + '_' + colIdx];
     const val = dirty ? dirty.newVal : row[colIdx];
     const valLit = sqlValueLiteral(val, state.columns[colIdx].database_type);
-
-    let whereClause = '';
-    const rowidIdx = state.columns.findIndex(c => String(c.name).toUpperCase() === 'ROWID');
-    if (rowidIdx >= 0 && row[rowidIdx]) {
-      whereClause = 'ROWID = \'' + row[rowidIdx] + '\'';
-    } else {
-      const idIdx = state.columns.findIndex(c => String(c.name).toUpperCase() === 'ID' || String(c.name).toUpperCase() === table.toUpperCase() + '_ID');
-      if (idIdx >= 0 && row[idIdx] != null) {
-        whereClause = state.columns[idIdx].name + ' = ' + sqlValueLiteral(row[idIdx], state.columns[idIdx].database_type);
-      } else {
-        const conditions = visibleColumns().map(i => {
-          const v = row[i];
-          if (v === null || v === undefined) return state.columns[i].name + ' IS NULL';
-          return state.columns[i].name + ' = ' + sqlValueLiteral(v, state.columns[i].database_type);
-        });
-        whereClause = conditions.join(' AND ');
-      }
-    }
+    const pks = await getTablePrimaryKeys(table);
+    const whereClause = buildWhereClause(row, pks);
     const updateSQL = 'UPDATE ' + table + ' SET ' + colName + ' = ' + valLit + ' WHERE ' + whereClause + ';';
     copyDBText(updateSQL, '已复制 UPDATE 语句到剪贴板');
+  }
+
+  async function copyRowAsUpdate(rowIdx) {
+    const row = state.rows[rowIdx];
+    if (!row) return;
+    const table = detectTableName();
+    const pks = await getTablePrimaryKeys(table);
+    const pkSet = new Set((pks || []).map(k => k.toUpperCase()));
+    const cols = visibleColumns().filter(i => !pkSet.has(String(state.columns[i].name).toUpperCase()));
+    const targetCols = cols.length ? cols : visibleColumns();
+    const setClauses = targetCols.map(i => {
+      const dirty = state.dirtyCells && state.dirtyCells[rowIdx + '_' + i];
+      const val = dirty ? dirty.newVal : row[i];
+      return state.columns[i].name + ' = ' + sqlValueLiteral(val, state.columns[i].database_type);
+    }).join(', ');
+    const whereClause = buildWhereClause(row, pks);
+    const updateSQL = 'UPDATE ' + table + ' SET ' + setClauses + ' WHERE ' + whereClause + ';';
+    copyDBText(updateSQL, '已复制整行 UPDATE 语句到剪贴板');
+  }
+
+  async function exportRowAsUpdateFile(rowIdx) {
+    const row = state.rows[rowIdx];
+    if (!row) return;
+    const table = detectTableName();
+    const pks = await getTablePrimaryKeys(table);
+    const pkSet = new Set((pks || []).map(k => k.toUpperCase()));
+    const cols = visibleColumns().filter(i => !pkSet.has(String(state.columns[i].name).toUpperCase()));
+    const targetCols = cols.length ? cols : visibleColumns();
+    const setClauses = targetCols.map(i => {
+      const dirty = state.dirtyCells && state.dirtyCells[rowIdx + '_' + i];
+      const val = dirty ? dirty.newVal : row[i];
+      return state.columns[i].name + ' = ' + sqlValueLiteral(val, state.columns[i].database_type);
+    }).join(', ');
+    const whereClause = buildWhereClause(row, pks);
+    const content = '-- Exported from Kairo Database Workbench\nUPDATE ' + table + ' SET ' + setClauses + ' WHERE ' + whereClause + ';\nCOMMIT;\n';
+    downloadBlob(new Blob([content], { type: 'text/sql;charset=utf-8' }), table + '_row_' + (rowIdx + 1) + '_update.sql');
   }
 
   function exportRowAsInsertFile(rowIdx) {
@@ -592,6 +899,7 @@
       rowUpdates.get(item.rowIdx).push(item);
     }
 
+    const pks = await getTablePrimaryKeys(table);
     const statements = [];
     for (const [rowIdx, items] of rowUpdates.entries()) {
       const row = state.rows[rowIdx];
@@ -600,23 +908,7 @@
         return col.name + ' = ' + sqlValueLiteral(item.newVal, col.database_type);
       }).join(', ');
 
-      let whereClause = '';
-      const rowidIdx = state.columns.findIndex(c => String(c.name).toUpperCase() === 'ROWID');
-      if (rowidIdx >= 0 && row[rowidIdx]) {
-        whereClause = 'ROWID = \'' + row[rowidIdx] + '\'';
-      } else {
-        const idIdx = state.columns.findIndex(c => String(c.name).toUpperCase() === 'ID' || String(c.name).toUpperCase() === table.toUpperCase() + '_ID');
-        if (idIdx >= 0 && row[idIdx] != null) {
-          whereClause = state.columns[idIdx].name + ' = ' + sqlValueLiteral(row[idIdx], state.columns[idIdx].database_type);
-        } else {
-          const conditions = visibleColumns().map(i => {
-            const v = row[i];
-            if (v === null || v === undefined) return state.columns[i].name + ' IS NULL';
-            return state.columns[i].name + ' = ' + sqlValueLiteral(v, state.columns[i].database_type);
-          });
-          whereClause = conditions.join(' AND ');
-        }
-      }
+      const whereClause = buildWhereClause(row, pks);
       statements.push('UPDATE ' + table + ' SET ' + setClauses + ' WHERE ' + whereClause);
     }
 
@@ -961,7 +1253,7 @@
     const history = loadHistory();
     const savedRows = Math.max(1, Math.min(state.source.max_rows, Number(persisted.row_limits[state.source.id]) || Math.min(1000, state.source.max_rows)));
     const gridRows = Math.max(6, Math.min(40, Number(state.prefs.gridRows) || 16));
-    host.innerHTML = '<div class="db-sql-layout"><aside class="card db-meta" id="db-meta-pane"><div class="db-pane-title"><span>数据库对象</span><div class="db-pane-actions"><button class="btn btn-xs" id="db-meta-refresh" title="刷新对象树">刷新</button><button class="btn btn-xs db-meta-toggle-btn" id="db-meta-toggle" title="收起对象栏 (Alt+O)">◀</button></div></div><div class="db-meta-collapsed-bar" id="db-meta-collapsed-bar" title="展开数据库对象 (Alt+O)"><span class="db-meta-collapsed-icon">📁</span><span class="db-meta-collapsed-text">对象</span></div><label class="db-compact-label">Schema<select id="db-schema"><option>加载中…</option></select></label><input id="db-object-search" type="search" placeholder="搜索表、视图、函数、过程"><div id="db-objects" class="db-object-list"><div class="db-tree-loading">正在读取元数据…</div></div><div class="db-split-y" id="db-split-y" role="separator" title="上下拖动调整字段区高度"></div><div class="db-inspect"><div class="db-inspect-tabs"><button class="db-inspect-tab active" data-tab="fields">字段</button><button class="db-inspect-tab" data-tab="indexes">索引</button><button class="db-inspect-tab" data-tab="constraints">约束</button><button class="db-inspect-tab" data-tab="ddl">DDL</button></div><div id="db-inspect-body" class="db-field-list"><div class="hint">单击对象查看字段、索引、约束和 DDL；双击生成查询。</div></div></div></aside><div class="db-split-x" id="db-split-x" role="separator" title="左右拖动调整对象栏宽度"></div><main class="db-main"><section class="card db-editor-card"><div class="db-editor-tabs"><div id="db-sql-tabs" class="db-sql-tabs"></div><button type="button" class="btn btn-xs" id="db-tab-add" title="新建查询页签">＋ 页签</button><span class="db-dialect">' + kindLabel(state.source.kind) + '</span></div><div class="db-editor-bar"><button class="btn db-btn-run" id="db-run" title="执行当前查询或选中 SQL (' + h(state.prefs.shortcuts.run || 'Ctrl+Enter') + ')"><span class="db-btn-run-icon">▶</span> 执行 <kbd class="db-run-kbd">' + h(state.prefs.shortcuts.run || 'Ctrl+Enter') + '</kbd></button><button class="btn btn-xs db-btn-mode" id="db-toggle-edit" title="切换在线编辑模式 (类似 PL/SQL，双击单元格直接改值)">🔒 只读</button><button class="btn btn-xs db-btn-commit" id="db-btn-commit" disabled title="提交修改 (Commit)">💾 提交</button><button class="btn btn-xs db-btn-rollback" id="db-btn-rollback" disabled title="回滚撤销 (Rollback)">↩️ 回滚</button><button class="btn btn-xs" id="db-btn-export-sql" title="导出当前页签 SQL 脚本">📤 导出 SQL</button><button class="btn" id="db-explain">执行计划</button><button class="btn" id="db-format">格式化</button><button class="btn" id="db-cancel" disabled>取消</button><label>最多 <input id="db-max-rows" type="number" min="1" max="' + state.source.max_rows + '" value="' + savedRows + '"> 行</label><label>显示 <input id="db-grid-rows" type="number" min="6" max="40" value="' + gridRows + '"> 行</label><div class="db-editor-bar-right"><select id="db-export-format" title="导出格式"><option value="csv">CSV</option><option value="json">JSON</option><option value="xlsx">Excel</option><option value="insert">INSERT</option></select><button class="btn" id="db-export" disabled>导出</button><select id="db-bookmark" title="SQL 收藏夹"><option value="">收藏夹</option></select><button class="btn btn-xs" id="db-bookmark-save" title="把当前 SQL 存入收藏夹">收藏</button><button class="btn btn-xs" id="db-bookmark-del" title="删除当前收藏">删收藏</button><select id="db-history" title="查询历史"><option value="">历史</option>' + history.map(function (sql, i) { return '<option value="' + i + '">' + h(sql.replace(/\s+/g, ' ').slice(0, 80)) + '</option>'; }).join('') + '</select><button class="btn btn-xs" id="db-history-clear" title="查询历史按当前用户保存在 data/preferences.json">清空历史</button></div><span id="db-query-status" class="db-query-status">就绪</span></div><div class="db-sql-shell"><pre id="db-sql-highlight" class="db-sql-highlight" aria-hidden="true"></pre><textarea id="db-sql" class="db-sql-editor" spellcheck="false"></textarea><div id="db-sql-ac" class="db-sql-ac" hidden role="listbox" aria-label="SQL 补全"></div></div><div class="db-sql-resizer" id="db-sql-resizer" role="separator" title="上下拖动调整 SQL 输入框高度"><div class="db-sql-resizer-line"></div></div><div class="db-editor-help">多页签可并行查询 · 输入关键字弹出补全 · 光标停在括号上会匹配另一半 · 格式化 / 收藏夹 · 模板缩写按 ' + h(state.prefs.expandKey) + ' 展开 · ' + h(state.prefs.shortcuts.run) + ' 执行</div></section><section class="card db-results"><div class="db-result-toolbar"><div class="db-result-tabs"><button id="db-view-grid" class="db-view-btn active">网格</button><button id="db-view-record" class="db-view-btn">单行记录</button><button id="db-view-plan" class="db-view-btn">执行计划</button></div><input id="db-result-filter" type="search" placeholder="在当前结果中过滤"><button class="btn btn-xs" id="db-copy-columns" disabled>复制字段名</button><button class="btn btn-xs" id="db-column-manager" disabled>显示列</button><span class="db-copy-hint">单击选行 · 双击进单行 · 点字段名可复制</span><span id="db-result-meta">等待执行查询</span></div><div id="db-result-message" class="db-result-message" hidden></div><div id="db-result-grid" class="db-result-grid"></div></section></main></div>';
+    host.innerHTML = '<div class="db-sql-layout"><aside class="card db-meta" id="db-meta-pane"><div class="db-pane-title"><span>数据库对象</span><div class="db-pane-actions"><button class="btn btn-xs" id="db-meta-refresh" title="刷新对象树">刷新</button><button class="btn btn-xs db-meta-toggle-btn" id="db-meta-toggle" title="收起对象栏 (Alt+O)">◀</button></div></div><div class="db-meta-collapsed-bar" id="db-meta-collapsed-bar" title="展开数据库对象 (Alt+O)"><span class="db-meta-collapsed-icon">📁</span><span class="db-meta-collapsed-text">对象</span></div><label class="db-compact-label">Schema<select id="db-schema"><option>加载中…</option></select></label><input id="db-object-search" type="search" placeholder="搜索表、视图、函数、过程"><div id="db-objects" class="db-object-list"><div class="db-tree-loading">正在读取元数据…</div></div><div class="db-split-y" id="db-split-y" role="separator" title="上下拖动调整字段区高度"></div><div class="db-inspect"><div class="db-inspect-tabs"><button class="db-inspect-tab active" data-tab="fields">字段</button><button class="db-inspect-tab" data-tab="indexes">索引</button><button class="db-inspect-tab" data-tab="constraints">约束</button><button class="db-inspect-tab" data-tab="ddl">DDL</button></div><div id="db-inspect-body" class="db-field-list"><div class="hint">单击对象查看字段、索引、约束和 DDL；双击生成查询。</div></div></div></aside><div class="db-split-x" id="db-split-x" role="separator" title="左右拖动调整对象栏宽度"></div><main class="db-main"><section class="card db-editor-card"><div class="db-editor-tabs"><div id="db-sql-tabs" class="db-sql-tabs"></div><button type="button" class="btn btn-xs" id="db-tab-add" title="新建查询页签">＋ 页签</button><span class="db-dialect">' + kindLabel(state.source.kind) + '</span></div><div id="db-object-viewer" class="db-object-viewer" hidden></div><div id="db-editor-body" class="db-editor-body"><div class="db-editor-bar"><button class="btn db-btn-run" id="db-run" title="执行当前查询或选中 SQL (' + h(state.prefs.shortcuts.run || 'Ctrl+Enter') + ')"><span class="db-btn-run-icon">▶</span> 执行 <kbd class="db-run-kbd">' + h(state.prefs.shortcuts.run || 'Ctrl+Enter') + '</kbd></button><button class="btn btn-xs db-btn-mode" id="db-toggle-edit" title="切换在线编辑模式 (类似 PL/SQL，双击单元格直接改值)">🔒 只读</button><button class="btn btn-xs db-btn-commit" id="db-btn-commit" disabled title="提交修改 (Commit)">💾 提交</button><button class="btn btn-xs db-btn-rollback" id="db-btn-rollback" disabled title="回滚撤销 (Rollback)">↩️ 回滚</button><button class="btn btn-xs" id="db-btn-export-sql" title="导出当前页签 SQL 脚本">📤 导出 SQL</button><button class="btn" id="db-explain">执行计划</button><button class="btn" id="db-format">格式化</button><button class="btn" id="db-cancel" disabled>取消</button><label>最多 <input id="db-max-rows" type="number" min="1" max="' + state.source.max_rows + '" value="' + savedRows + '"> 行</label><label>显示 <input id="db-grid-rows" type="number" min="6" max="40" value="' + gridRows + '"> 行</label><div class="db-editor-bar-right"><select id="db-export-format" title="导出格式"><option value="csv">CSV</option><option value="json">JSON</option><option value="xlsx">Excel</option><option value="insert">INSERT</option><option value="update">UPDATE</option></select><button class="btn" id="db-export" disabled>导出</button><select id="db-bookmark" title="SQL 收藏夹"><option value="">收藏夹</option></select><button class="btn btn-xs" id="db-bookmark-save" title="把当前 SQL 存入收藏夹">收藏</button><button class="btn btn-xs" id="db-bookmark-del" title="删除当前收藏">删收藏</button><select id="db-history" title="查询历史"><option value="">历史</option>' + history.map(function (sql, i) { return '<option value="' + i + '">' + h(sql.replace(/\s+/g, ' ').slice(0, 80)) + '</option>'; }).join('') + '</select><button class="btn btn-xs" id="db-history-clear" title="查询历史按当前用户保存在 data/preferences.json">清空历史</button></div><span id="db-query-status" class="db-query-status">就绪</span></div><div class="db-sql-shell"><pre id="db-sql-highlight" class="db-sql-highlight" aria-hidden="true"></pre><textarea id="db-sql" class="db-sql-editor" spellcheck="false"></textarea><div id="db-sql-ac" class="db-sql-ac" hidden role="listbox" aria-label="SQL 补全"></div></div><div class="db-sql-resizer" id="db-sql-resizer" role="separator" title="上下拖动调整 SQL 输入框高度"><div class="db-sql-resizer-line"></div></div><div class="db-editor-help">多页签可并行查询 · 输入关键字弹出补全 · 光标停在括号上会匹配另一半 · 格式化 / 收藏夹 · 模板缩写按 ' + h(state.prefs.expandKey) + ' 展开 · ' + h(state.prefs.shortcuts.run) + ' 执行</div></div></section><section class="card db-results" id="db-results-section"><div class="db-result-toolbar"><div class="db-result-tabs"><button id="db-view-grid" class="db-view-btn active">网格</button><button id="db-view-record" class="db-view-btn">单行记录</button><button id="db-view-plan" class="db-view-btn">执行计划</button></div><input id="db-result-filter" type="search" placeholder="在当前结果中过滤"><button class="btn btn-xs" id="db-copy-columns" disabled>复制字段名</button><button class="btn btn-xs" id="db-column-manager" disabled>显示列</button><span class="db-copy-hint">单击选行 · 双击进单行 · 点字段名可复制</span><span id="db-result-meta">等待执行查询</span></div><div id="db-result-message" class="db-result-message" hidden></div><div id="db-result-grid" class="db-result-grid"></div></section></main></div>';
     q('db-sql').placeholder = initial;
     q('db-max-rows').value = savedRows;
     q('db-max-rows').title = '每页返回多少行，按数据源记住';
@@ -1102,10 +1394,13 @@
         renderInspect();
       };
     });
-    loadSchemas();
+    if (!persisted.meta_collapsed) {
+      loadSchemas();
+    }
   }
 
   async function loadSchemas(refresh) {
+    state.schemasLoaded = true;
     const token = state.workspaceToken, source = state.source;
     try {
       const data = await api('GET', '/api/database/metadata/schemas?source_id=' + encodeURIComponent(source.id) + (refresh === true ? '&refresh=1' : ''));
@@ -1180,6 +1475,7 @@
           btn.onclick = () => {
             q('db-objects').querySelectorAll('.db-object.active').forEach(x => x.classList.remove('active'));
             btn.classList.add('active');
+            openObjectTab(schema, btn.dataset.name, btn.dataset.type);
             loadInspect(schema, btn.dataset.name, btn.dataset.type);
           };
           btn.ondblclick = () => insertObjectSQL(schema, btn.dataset.name, btn.dataset.type);
@@ -1202,11 +1498,12 @@
       const groups = [['tables', '表'], ['views', '视图'], ['functions', '函数'], ['procedures', '存储过程 / 包'], ['triggers', '触发器'], ['other', '其他对象']];
       const by = {};
       (data.objects || []).forEach(x => (by[x.category || 'other'] = by[x.category || 'other'] || []).push(x));
-      objects.innerHTML = groups.filter(g => by[g[0]] && by[g[0]].length).map(g => '<details class="db-tree-group"' + (hasSearch ? ' open' : '') + '><summary><span>' + h(g[1]) + '</span><small>' + by[g[0]].length + '</small></summary><div>' + by[g[0]].map(x => '<button class="db-object" data-name="' + h(x.name) + '" data-type="' + h(x.type) + '"><span class="db-object-icon">' + h(String(x.type || '?').slice(0, 1)) + '</span><span class="db-object-name">' + h(x.name) + '</span><small>' + h(x.type) + '</small></button>').join('') + '</div></details>').join('') || '<div class="hint db-tree-empty">没有匹配对象</div>';
+      objects.innerHTML = groups.filter(g => by[g[0]] && by[g[0]].length).map(g => '<details class="db-tree-group"' + (hasSearch ? ' open' : '') + '><summary><span>' + h(g[1]) + '</span><small>' + by[g[0]].length + '</small></summary><div class="db-cat-content">' + by[g[0]].map(x => '<button class="db-object" data-name="' + h(x.name) + '" data-type="' + h(x.type) + '"><span class="db-object-icon">' + h(String(x.type || '?').slice(0, 1)) + '</span><span class="db-object-name">' + h(x.name) + '</span><small>' + h(x.type) + '</small></button>').join('') + '</div></details>').join('') || '<div class="hint db-tree-empty">没有匹配对象</div>';
       objects.querySelectorAll('.db-object').forEach(btn => {
         btn.onclick = () => {
           objects.querySelectorAll('.db-object.active').forEach(x => x.classList.remove('active'));
           btn.classList.add('active');
+          openObjectTab(schema, btn.dataset.name, btn.dataset.type);
           loadInspect(schema, btn.dataset.name, btn.dataset.type);
         };
         btn.ondblclick = () => insertObjectSQL(schema, btn.dataset.name, btn.dataset.type);
@@ -1235,18 +1532,21 @@
     const info = state.inspect;
     if (!info) { body.innerHTML = '<div class="hint">单击对象查看字段、索引、约束和 DDL；双击生成查询。</div>'; return; }
     const tab = state.inspectTab;
-    let html = '<div class="db-selected-object"><span>' + h(info.object) + '</span><button class="btn btn-xs" id="db-copy-field-list">复制字段</button></div>';
+    let html = '<div class="db-selected-object"><span>' + h(info.object) + '</span><div class="db-selected-actions"><button class="btn btn-xs" id="db-open-object-tab" title="在右侧打开大窗口">⤢ 大窗口</button><button class="btn btn-xs" id="db-copy-field-list">复制字段</button></div></div>';
     if (tab === 'indexes') {
       html += (info.indexes || []).length ? info.indexes.map(x => '<div class="db-field-row"><span>' + h(x.name) + (x.uniqueness === 'UNIQUE' ? ' <b>U</b>' : '') + '</span><small>' + h((x.columns || []).join(', ')) + '</small></div>').join('') : '<div class="hint">没有索引</div>';
     } else if (tab === 'constraints') {
       html += (info.constraints || []).length ? info.constraints.map(x => '<div class="db-field-row"><span>' + h(x.name) + '</span><small>' + h(x.type) + (x.columns ? ' · ' + x.columns : '') + '</small></div>').join('') : '<div class="hint">没有约束</div>';
     } else if (tab === 'ddl') {
-      html += '<pre class="db-ddl">' + h(info.ddl || info.source_text || info.ddl_error || '没有 DDL') + '</pre>';
+      const raw = info.ddl || info.source_text || info.ddl_error || '没有 DDL';
+      html += '<pre class="db-ddl mono">' + highlightSQL(formatSQL(raw)) + '</pre>';
     } else {
       const fields = info.fields || [];
-      html += fields.map(x => '<button class="db-field-row" data-field="' + h(x.name) + '"><span>' + h(x.name) + (x.primary_key ? ' <b title="主键">PK</b>' : '') + (x.nullable ? '' : ' <b title="非空">•</b>') + '</span><small>' + h(x.definition || x.data_type) + '</small></button>').join('') || '<div class="hint">没有字段</div>';
+      html += fields.map(x => '<button class="db-field-row" data-field="' + h(x.name) + '"><span>' + h(x.name) + (x.primary_key ? ' <b title="主键">PK</b>' : '') + (x.nullable ? '' : ' <b title="非空">•</b>') + (x.comment ? ' <small class="db-field-cmt" title="' + h(x.comment) + '">[' + h(x.comment) + ']</small>' : '') + '</span><small>' + h(x.definition || x.data_type) + '</small></button>').join('') || '<div class="hint">没有字段</div>';
     }
     body.innerHTML = html;
+    const openBtn = q('db-open-object-tab');
+    if (openBtn) openBtn.onclick = () => openObjectTab(info.schema || '', info.object, info.type || '');
     const names = (info.fields || []).map(x => x.name);
     const copy = q('db-copy-field-list');
     if (copy) copy.onclick = () => copyDBText(names.join(', '), '已复制 ' + names.length + ' 个字段名');
@@ -1295,6 +1595,9 @@
       if (splitX) splitX.style.display = collapsed ? 'none' : '';
       persisted.meta_collapsed = collapsed;
       savePersisted();
+      if (!collapsed && !state.schemasLoaded) {
+        loadSchemas();
+      }
     }
     if (toggleBtn) toggleBtn.onclick = () => toggleMeta();
     if (collapsedBar) collapsedBar.onclick = () => toggleMeta(false);
@@ -1394,20 +1697,51 @@
     if (matchesShortcut(e, state.prefs.shortcuts.record)) { e.preventDefault(); setResultMode('record'); return; }
   }
 
+  function isSnippetExpandKey(e, trigger) {
+    if (!e || e.ctrlKey || e.altKey || e.metaKey) return false;
+    if (trigger === 'Space') return e.key === ' ' || e.key === 'Space' || e.code === 'Space';
+    if (trigger === 'Tab') return !e.shiftKey && (e.key === 'Tab' || e.code === 'Tab');
+    if (trigger === 'Enter') return !e.shiftKey && (e.key === 'Enter' || e.code === 'Enter' || e.code === 'NumpadEnter');
+    return false;
+  }
+
   function handleEditorKeydown(e) {
-    if (acState.open) {
-      if (e.key === 'ArrowDown') { e.preventDefault(); moveComplete(1); return; }
-      if (e.key === 'ArrowUp') { e.preventDefault(); moveComplete(-1); return; }
-      if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); acceptComplete(); return; }
-      if (e.key === 'Escape') { e.preventDefault(); hideComplete(); return; }
-    }
     if (matchesShortcut(e, state.prefs.shortcuts.run) || matchesShortcut(e, state.prefs.shortcuts.explain) || matchesShortcut(e, state.prefs.shortcuts.cancel) || matchesShortcut(e, state.prefs.shortcuts.grid) || matchesShortcut(e, state.prefs.shortcuts.record)) {
+      if (acState.open) hideComplete();
       e.preventDefault();
       return;
     }
-    const trigger = state.prefs.expandKey;
-    if ((trigger === 'Space' && e.key === ' ') || (trigger === 'Tab' && e.key === 'Tab') || (trigger === 'Enter' && e.key === 'Enter')) {
-      if (expandSnippet(e.currentTarget)) e.preventDefault();
+    const trigger = state.prefs.expandKey || 'Space';
+    if (acState.open) {
+      if (e.key === 'ArrowDown') { e.preventDefault(); moveComplete(1); return; }
+      if (e.key === 'ArrowUp') { e.preventDefault(); moveComplete(-1); return; }
+      if (e.key === 'Escape') { e.preventDefault(); hideComplete(); return; }
+      const curItem = acState.items[acState.index];
+      if (curItem && curItem.kind === 'snippet') {
+        if (isSnippetExpandKey(e, trigger)) {
+          e.preventDefault();
+          expandSnippet(e.currentTarget);
+          hideComplete();
+          return;
+        }
+        if (e.key === 'Enter' || e.key === 'Tab') {
+          hideComplete();
+          return;
+        }
+      } else {
+        if (e.key === 'Enter' || e.key === 'Tab') {
+          e.preventDefault();
+          acceptComplete();
+          return;
+        }
+      }
+    }
+    if (isSnippetExpandKey(e, trigger)) {
+      if (expandSnippet(e.currentTarget)) {
+        e.preventDefault();
+        hideComplete();
+        return;
+      }
     }
   }
   function matchesShortcut(e, spec) {
@@ -1440,7 +1774,10 @@
     replacement = replacement.split('${cursor}').join('');
     editor.setRangeText(replacement, start, pos, 'end');
     if (cursor >= 0) editor.setSelectionRange(start + cursor, start + cursor);
+    hideComplete();
     syncSQLEditor();
+    const s = sess();
+    if (s) s.sql = editor.value;
     return true;
   }
   function insertAtCursor(editor, text) { editor.setRangeText(text, editor.selectionStart, editor.selectionEnd, 'end'); editor.focus(); syncSQLEditor(); }
@@ -1704,6 +2041,11 @@
     const ta = q('db-sql');
     const item = acState.items[acState.index];
     if (!ta || !item) { hideComplete(); return; }
+    if (item.kind === 'snippet') {
+      expandSnippet(ta);
+      hideComplete();
+      return;
+    }
     const insert = String(item.insert || item.label);
     ta.setRangeText(insert, acState.start, acState.end, 'end');
     hideComplete();
@@ -2250,8 +2592,9 @@
     grid.innerHTML = '<div class="db-table-scroll"><table class="table db-table"><colgroup>' + cols + '</colgroup><thead><tr><th class="num">#</th>' + headers + '</tr></thead><tbody id="db-result-body"></tbody></table></div>';
     const scroll = grid.firstChild;
     const body = q('db-result-body');
-    // #12 修复：小结果集直接渲染全部行，避免虚拟化在初始 clientHeight=0 时不显示
-    if (indexes.length <= 600) {
+    // 小结果集（行数<=25 且单元格总数<=500）直接渲染全部行；
+    // 宽表（列数多）或较大行集强制进入虚拟化，避免几百列造成浏览器卡死
+    if (indexes.length <= 25 && indexes.length * visible.length <= 500) {
       let html = '';
       for (let pos = 0; pos < indexes.length; pos++) {
         const ri = indexes[pos], row = state.rows[ri] || [];
@@ -2287,6 +2630,7 @@
     grid.querySelectorAll('[data-resize]').forEach(x => bindColumnResize(x, Number(x.dataset.resize)));
     state.gridReady = true;
     applyGridHeight();
+    paintGridRows(scroll, false);
   }
   function setGridSlice(indexes, visible) {
     gridView.indexes = indexes;
@@ -2383,10 +2727,36 @@
     const body = q('db-result-body'); if (!body || !scroll) return;
     const indexes = gridView.indexes, visible = gridView.visible, colspan = visible.length + 1;
     const count = Math.max(1, Math.ceil((scroll.clientHeight || 0) / GRID_ROW_H));
-    const start = Math.max(0, Math.floor((scroll.scrollTop || 0) / GRID_ROW_H) - GRID_BUFFER);
-    const end = Math.min(indexes.length, start + count + GRID_BUFFER * 2);
+    const vBuffer = visible.length > 50 ? 4 : GRID_BUFFER;
+    const start = Math.max(0, Math.floor((scroll.scrollTop || 0) / GRID_ROW_H) - vBuffer);
+    const end = Math.min(indexes.length, start + count + vBuffer * 2);
     const marks = gridSliceMarks(indexes, start, end);
-    const sameWindow = gridView.start === start && gridView.end === end && gridView.head === marks.head && gridView.tail === marks.tail && gridView.mid === marks.mid;
+
+    // 水平虚拟化 / 可见列窗口（针对 600+ 列宽表优化，只渲染视口内可见列）
+    let cStart = 0, cEnd = visible.length;
+    if (visible.length > 40) {
+      const scrollLeft = scroll.scrollLeft || 0;
+      const clientWidth = scroll.clientWidth || 1000;
+      let cumX = 54; // # 序号列宽度
+      let foundStart = false;
+      for (let ci = 0; ci < visible.length; ci++) {
+        const colIdx = visible[ci];
+        const w = Math.max(72, state.columnWidths[colIdx] || 150);
+        if (!foundStart && (cumX + w >= scrollLeft - 250)) {
+          cStart = Math.max(0, ci - 2);
+          foundStart = true;
+        }
+        if (foundStart && (cumX > scrollLeft + clientWidth + 250)) {
+          cEnd = Math.min(visible.length, ci + 3);
+          break;
+        }
+        cumX += w;
+      }
+    }
+
+    const sameWindow = gridView.start === start && gridView.end === end &&
+      gridView.cStart === cStart && gridView.cEnd === cEnd &&
+      gridView.head === marks.head && gridView.tail === marks.tail && gridView.mid === marks.mid;
     if (sameWindow && body.querySelector('tr[data-row]')) {
       if (fromScroll && gridView.length === indexes.length) return;
       if (gridView.length !== indexes.length) {
@@ -2397,19 +2767,30 @@
     }
     gridView.start = start;
     gridView.end = end;
+    gridView.cStart = cStart;
+    gridView.cEnd = cEnd;
     gridView.length = indexes.length;
     gridView.head = marks.head;
     gridView.tail = marks.tail;
     gridView.mid = marks.mid;
+
     let html = start ? '<tr class="db-spacer"><td colspan="' + colspan + '" style="height:' + (start * GRID_ROW_H) + 'px"></td></tr>' : '';
+    const sliceCols = (visible.length > 40) ? visible.slice(cStart, cEnd) : visible;
+    const colSpanBefore = (visible.length > 40 && cStart > 0) ? cStart : 0;
+    const colSpanAfter = (visible.length > 40 && cEnd < visible.length) ? (visible.length - cEnd) : 0;
+
     for (let pos = start; pos < end; pos++) {
       const ri = indexes[pos], row = state.rows[ri] || [];
-      html += '<tr data-row="' + ri + '"' + (ri === state.selectedRow ? ' class="selected"' : '') + '><td class="num">' + (ri + 1) + '</td>' + visible.map(i => {
+      html += '<tr data-row="' + ri + '"' + (ri === state.selectedRow ? ' class="selected"' : '') + '><td class="num">' + (ri + 1) + '</td>';
+      if (colSpanBefore > 0) html += '<td colspan="' + colSpanBefore + '" style="padding:0;border:none;"></td>';
+      html += sliceCols.map(i => {
         const dirty = state.dirtyCells && state.dirtyCells[ri + '_' + i];
         const val = dirty ? dirty.newVal : row[i];
         const cls = dirty ? ' class="db-cell-dirty"' : '';
         return '<td data-row="' + ri + '" data-col="' + i + '"' + cls + ' title="双击编辑；右键复制或更多操作">' + fmtCell(val, ri, i) + '</td>';
-      }).join('') + '</tr>';
+      }).join('');
+      if (colSpanAfter > 0) html += '<td colspan="' + colSpanAfter + '" style="padding:0;border:none;"></td>';
+      html += '</tr>';
     }
     if (end < indexes.length) html += '<tr class="db-spacer"><td colspan="' + colspan + '" style="height:' + ((indexes.length - end) * GRID_ROW_H) + 'px"></td></tr>';
     body.innerHTML = html;
@@ -2463,8 +2844,10 @@
       add('复制单元格', () => copyDBText(cellText(state.rows[row][column]), '单元格已复制'));
       add('复制整行（TSV）', () => copyRow(row, visibleColumns()));
       add('📋 复制为 INSERT 语句', () => copyRowAsInsert(row));
-      add('📋 复制为 UPDATE 语句', () => copyCellAsUpdate(row, column));
+      add('📋 复制为 UPDATE 语句 (单字段)', () => copyCellAsUpdate(row, column));
+      add('📋 复制整行为 UPDATE 语句', () => copyRowAsUpdate(row));
       add('💾 导出选中行为 INSERT (.sql)', () => exportRowAsInsertFile(row));
+      add('💾 导出选中行为 UPDATE (.sql)', () => exportRowAsUpdateFile(row));
       add('💾 导出选中行为 TXT (.txt)', () => exportRowAsTxtFile(row));
       add('✏️ 编辑此单元格 (F2)', () => startCellEdit(row, column));
     }
@@ -2510,14 +2893,15 @@
   }
   function openSettings() {
     const body = el('div', { class: 'db-settings-body' });
-    body.innerHTML = '<section><h4>快捷键</h4><p class="muted">点输入框后按下组合键即可，保存后立即生效。</p><div class="db-shortcut-grid">' + shortcutField('执行查询', 'run') + shortcutField('取消查询', 'cancel') + shortcutField('网格视图', 'grid') + shortcutField('单行记录', 'record') + shortcutField('执行计划', 'explain') + '</div></section><section><div class="db-setting-line"><h4>SQL 模板</h4><label class="editor-label-inline">展开键<select id="db-expand-key" class="editor-input db-expand-key"><option>Space</option><option>Tab</option><option>Enter</option></select></label></div><div id="db-snippet-list" class="db-snippet-list"></div><button type="button" class="btn btn-sm" id="db-snippet-add">＋ 添加模板</button></section>';
+    body.innerHTML = '<section><h4>快捷键</h4><p class="muted">点输入框后按下组合键即可，保存后立即生效。</p><div class="db-shortcut-grid">' + shortcutField('执行查询', 'run') + shortcutField('取消查询', 'cancel') + shortcutField('网格视图', 'grid') + shortcutField('单行记录', 'record') + shortcutField('执行计划', 'explain') + '</div></section><section><div class="db-setting-line"><h4>SQL 模板</h4><label class="editor-label-inline">展开键<select id="db-expand-key" class="editor-input db-expand-key"><option value="Space">Space</option><option value="Tab">Tab</option><option value="Enter">Enter</option></select></label></div><div id="db-snippet-list" class="db-snippet-list"></div><button type="button" class="btn btn-sm" id="db-snippet-add">＋ 添加模板</button></section>';
     const footer = el('div', { class: 'editor-footer db-settings-actions' }, [
       el('button', { class: 'btn', type: 'button', id: 'db-settings-reset', text: '恢复默认' }),
       el('button', { class: 'btn', type: 'button', id: 'db-settings-close', text: '关闭' }),
       el('button', { class: 'btn btn-primary', id: 'db-settings-save', text: '保存设置' })
     ]);
     const dlg = Kairo.overlays.modal({ title: 'SQL 模板与快捷键', width: 760, body: body, footer: footer });
-    q('db-expand-key').value = state.prefs.expandKey;
+    const expandSelect = body.querySelector('#db-expand-key') || q('db-expand-key');
+    if (expandSelect) expandSelect.value = state.prefs.expandKey || 'Space';
     Object.keys(state.prefs.shortcuts).forEach(k => {
       const input = q('db-shortcut-' + k);
       if (input) { input.value = state.prefs.shortcuts[k]; captureShortcut(input); }
@@ -2542,7 +2926,8 @@
       body.querySelectorAll('[data-enabled]').forEach(x => draft[Number(x.dataset.enabled)].enabled = x.checked);
       const items = draft.filter(x => x.key && x.text);
       if (new Set(items.map(x => x.key)).size !== items.length) return toast('模板缩写不能重复', 'warn');
-      state.prefs.expandKey = q('db-expand-key').value;
+      const curExpandSelect = body.querySelector('#db-expand-key') || q('db-expand-key');
+      state.prefs.expandKey = (curExpandSelect && curExpandSelect.value) || 'Space';
       state.prefs.snippets = items;
       Object.keys(state.prefs.shortcuts).forEach(k => { if (q('db-shortcut-' + k)) state.prefs.shortcuts[k] = q('db-shortcut-' + k).value.trim() || DEFAULT_PREFS.shortcuts[k]; });
       savePrefs(); dlg.close(); toast('工作台设置已保存', 'ok');
@@ -2555,20 +2940,22 @@
     const effSrc3 = effectiveSource();
     if (!effSrc3) return toast('未选择数据源', 'warn');
     const format = (q('db-export-format') && q('db-export-format').value) || 'csv';
-    const ext = format === 'json' ? '.json' : format === 'xlsx' ? '.xlsx' : format === 'insert' ? '.sql' : '.csv';
+    const ext = format === 'json' ? '.json' : format === 'xlsx' ? '.xlsx' : (format === 'insert' || format === 'update') ? '.sql' : '.csv';
     const types = format === 'json' ? [{ description: 'JSON', accept: { 'application/json': ['.json'] } }]
       : format === 'xlsx' ? [{ description: 'Excel', accept: { 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'] } }]
-      : format === 'insert' ? [{ description: 'SQL', accept: { 'text/plain': ['.sql'] } }]
+      : (format === 'insert' || format === 'update') ? [{ description: 'SQL', accept: { 'text/plain': ['.sql'] } }]
       : [{ description: 'CSV 文件', accept: { 'text/csv': ['.csv'] } }];
     const safe = (effSrc3.name || 'query').replace(/[\\/:*?"<>|]/g, '_');
     const filename = safe + '-' + new Date().toISOString().replace(/[:.]/g, '-') + ext;
     const button = q('db-export'); button.disabled = true;
     let handle = null, table = '';
     try {
-      if (format === 'insert') {
+      if (format === 'insert' || format === 'update') {
+        const title = format === 'update' ? '导出 UPDATE 语句' : '导出 INSERT 语句';
+        const label = format === 'update' ? '请输入 UPDATE 目标表名（可含 schema，留空自动从 SQL 推断）：' : '请输入 INSERT 目标表名（可含 schema，留空自动从 SQL 推断）：';
         const inputTable = Kairo.overlays && Kairo.overlays.prompt
-          ? await Kairo.overlays.prompt({ title: '导出 INSERT 语句', label: '请输入 INSERT 目标表名（可含 schema，留空自动从 SQL 推断）：', placeholder: '如 sys_user' })
-          : (window.prompt('INSERT 目标表（可含 schema）', '') || '').trim();
+          ? await Kairo.overlays.prompt({ title: title, label: label, placeholder: '如 sys_user' })
+          : (window.prompt(label, '') || '').trim();
         if (inputTable == null) { button.disabled = false; return; }
         table = (inputTable || '').trim();
       }
@@ -2754,6 +3141,7 @@
     tokenizeSQL: tokenizeSQL,
     suggestSQL: suggestSQL,
     matchBrackets: matchBrackets,
-    completionPrefix: completionPrefix
+    completionPrefix: completionPrefix,
+    isSnippetExpandKey: isSnippetExpandKey
   };
 })();

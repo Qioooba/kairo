@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-func writeTar(dest string, files []ResolvedFile) (int64, error) {
+func writeTar(dest string, files []ResolvedFile, isBatch ...bool) (int64, error) {
 	f, err := os.OpenFile(dest, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
 	if err != nil {
 		return 0, fmt.Errorf("创建 tar: %w", err)
@@ -25,9 +25,10 @@ func writeTar(dest string, files []ResolvedFile) (int64, error) {
 	tw := tar.NewWriter(f)
 	defer tw.Close()
 
+	batchMode := len(isBatch) > 0 && isBatch[0]
 	var written int64
 	for _, rf := range files {
-		n, err := addTarFile(tw, rf)
+		n, err := addTarFile(tw, rf, batchMode)
 		if err != nil {
 			return 0, err
 		}
@@ -40,7 +41,7 @@ func writeTar(dest string, files []ResolvedFile) (int64, error) {
 	return written, nil
 }
 
-func addTarFile(tw *tar.Writer, rf ResolvedFile) (int64, error) {
+func addTarFile(tw *tar.Writer, rf ResolvedFile, isBatch bool) (int64, error) {
 	src, err := os.Open(rf.Abs)
 	if err != nil {
 		return 0, fmt.Errorf("打开 %s: %w", rf.Rel, err)
@@ -54,11 +55,19 @@ func addTarFile(tw *tar.Writer, rf ResolvedFile) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	hdr.Name = strings.TrimPrefix(rf.Rel, "./")
-	if !strings.HasPrefix(hdr.Name, "./") {
-		hdr.Name = "./" + hdr.Name
+	cleanRel := strings.TrimPrefix(rf.Rel, "./")
+	cleanRel = strings.ReplaceAll(cleanRel, "\\", "/")
+	if isBatch {
+		// 批量打包：压缩包内第一层目录直接为清单目录（如 amargci、AmarExtract）
+		hdr.Name = cleanRel
+	} else {
+		// 应用代码打包：保留 ./ 路径前缀与银行历史脚本规范对齐
+		if !strings.HasPrefix(cleanRel, "./") {
+			hdr.Name = "./" + cleanRel
+		} else {
+			hdr.Name = cleanRel
+		}
 	}
-	hdr.Name = strings.ReplaceAll(hdr.Name, "\\", "/")
 	hdr.Format = tar.FormatGNU
 	hdr.Uid = 0
 	hdr.Gid = 0

@@ -207,4 +207,135 @@ assert.ok(inserted.includes('SELECT * FROM old_table'), 'Original SQL must not b
 assert.ok(inserted.includes('SELECT 2 FROM DUAL'), 'New SQL must be inserted');
 console.log('  ✓ SQL cursor insertion preserves existing editor content');
 
+console.log('=== 9. Testing SQL template expand key dispatching & isolation ===');
+function simulateKeydown(event, prefs, acState, editorState) {
+  let defaultPrevented = false;
+  let expanded = false;
+  let acceptedKeyword = false;
+  const e = Object.assign({ preventDefault: () => { defaultPrevented = true; } }, event);
+
+  function isSnippetExpandKey(ev, trigger) {
+    if (!ev || ev.ctrlKey || ev.altKey || ev.metaKey) return false;
+    if (trigger === 'Space') return ev.key === ' ' || ev.key === 'Space' || ev.code === 'Space';
+    if (trigger === 'Tab') return !ev.shiftKey && (ev.key === 'Tab' || ev.code === 'Tab');
+    if (trigger === 'Enter') return !ev.shiftKey && (ev.key === 'Enter' || ev.code === 'Enter' || ev.code === 'NumpadEnter');
+    return false;
+  }
+
+  function expandSnippet() {
+    const pos = editorState.selectionStart, before = editorState.value.slice(0, pos), match = before.match(/([A-Za-z0-9_.-]+)$/);
+    if (!match) return false;
+    const snippet = prefs.snippets.find(x => x.enabled !== false && x.key === match[1]);
+    if (!snippet) return false;
+    const start = pos - match[1].length;
+    let replacement = String(snippet.text).replace('${table}', 'table_name');
+    editorState.value = editorState.value.slice(0, start) + replacement + editorState.value.slice(pos);
+    editorState.selectionStart = start + replacement.length;
+    acState.open = false;
+    expanded = true;
+    return true;
+  }
+
+  const trigger = prefs.expandKey || 'Space';
+  if (acState.open) {
+    const curItem = acState.items[acState.index || 0];
+    if (curItem && curItem.kind === 'snippet') {
+      if (isSnippetExpandKey(e, trigger)) {
+        e.preventDefault();
+        expandSnippet();
+        acState.open = false;
+        return { defaultPrevented, expanded, acceptedKeyword };
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        acState.open = false;
+        return { defaultPrevented, expanded, acceptedKeyword };
+      }
+    } else {
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault();
+        acceptedKeyword = true;
+        acState.open = false;
+        return { defaultPrevented, expanded, acceptedKeyword };
+      }
+    }
+  }
+  if (isSnippetExpandKey(e, trigger)) {
+    if (expandSnippet()) {
+      e.preventDefault();
+      acState.open = false;
+      return { defaultPrevented, expanded, acceptedKeyword };
+    }
+  }
+  return { defaultPrevented, expanded, acceptedKeyword };
+}
+
+const defaultSnippets = [{ key: 'sf', text: 'SELECT * FROM ', enabled: true }];
+
+// Case 1: expandKey = 'Space'
+{
+  const prefs = { expandKey: 'Space', snippets: defaultSnippets };
+  const ac = { open: true, items: [{ kind: 'snippet', label: 'sf' }], index: 0 };
+  const ed1 = { value: 'sf', selectionStart: 2 };
+  const resSpace = simulateKeydown({ key: ' ' }, prefs, Object.assign({}, ac), ed1);
+  assert.strictEqual(resSpace.expanded, true, 'Space must expand when expandKey is Space');
+  assert.strictEqual(ed1.value, 'SELECT * FROM ');
+
+  const ed2 = { value: 'sf', selectionStart: 2 };
+  const resEnter = simulateKeydown({ key: 'Enter' }, prefs, Object.assign({}, ac), ed2);
+  assert.strictEqual(resEnter.expanded, false, 'Enter must NOT expand when expandKey is Space');
+  assert.strictEqual(ed2.value, 'sf');
+
+  const ed3 = { value: 'sf', selectionStart: 2 };
+  const resTab = simulateKeydown({ key: 'Tab' }, prefs, Object.assign({}, ac), ed3);
+  assert.strictEqual(resTab.expanded, false, 'Tab must NOT expand when expandKey is Space');
+  assert.strictEqual(ed3.value, 'sf');
+}
+
+// Case 2: expandKey = 'Tab'
+{
+  const prefs = { expandKey: 'Tab', snippets: defaultSnippets };
+  const ac = { open: true, items: [{ kind: 'snippet', label: 'sf' }], index: 0 };
+  const ed1 = { value: 'sf', selectionStart: 2 };
+  const resSpace = simulateKeydown({ key: ' ' }, prefs, Object.assign({}, ac), ed1);
+  assert.strictEqual(resSpace.expanded, false, 'Space must NOT expand when expandKey is Tab');
+
+  const ed2 = { value: 'sf', selectionStart: 2 };
+  const resEnter = simulateKeydown({ key: 'Enter' }, prefs, Object.assign({}, ac), ed2);
+  assert.strictEqual(resEnter.expanded, false, 'Enter must NOT expand when expandKey is Tab');
+
+  const ed3 = { value: 'sf', selectionStart: 2 };
+  const resTab = simulateKeydown({ key: 'Tab' }, prefs, Object.assign({}, ac), ed3);
+  assert.strictEqual(resTab.expanded, true, 'Tab must expand when expandKey is Tab');
+  assert.strictEqual(ed3.value, 'SELECT * FROM ');
+}
+
+// Case 3: expandKey = 'Enter'
+{
+  const prefs = { expandKey: 'Enter', snippets: defaultSnippets };
+  const ac = { open: true, items: [{ kind: 'snippet', label: 'sf' }], index: 0 };
+  const ed1 = { value: 'sf', selectionStart: 2 };
+  const resSpace = simulateKeydown({ key: ' ' }, prefs, Object.assign({}, ac), ed1);
+  assert.strictEqual(resSpace.expanded, false, 'Space must NOT expand when expandKey is Enter');
+
+  const ed2 = { value: 'sf', selectionStart: 2 };
+  const resTab = simulateKeydown({ key: 'Tab' }, prefs, Object.assign({}, ac), ed2);
+  assert.strictEqual(resTab.expanded, false, 'Tab must NOT expand when expandKey is Enter');
+
+  const ed3 = { value: 'sf', selectionStart: 2 };
+  const resEnter = simulateKeydown({ key: 'Enter' }, prefs, Object.assign({}, ac), ed3);
+  assert.strictEqual(resEnter.expanded, true, 'Enter must expand when expandKey is Enter');
+  assert.strictEqual(ed3.value, 'SELECT * FROM ');
+}
+
+// Case 4: Non-snippet completion (keyword) accepts on Enter/Tab regardless of expandKey
+{
+  const prefs = { expandKey: 'Space', snippets: defaultSnippets };
+  const ac = { open: true, items: [{ kind: 'keyword', label: 'SELECT' }], index: 0 };
+  const ed = { value: 'SEL', selectionStart: 3 };
+  const res = simulateKeydown({ key: 'Enter' }, prefs, Object.assign({}, ac), ed);
+  assert.strictEqual(res.acceptedKeyword, true, 'Keyword completion must accept on Enter');
+}
+
+console.log('  ✓ SQL template expandKey isolation verified for Space, Tab, and Enter');
+
 console.log('\n✅ ALL WORKBENCH FRONTEND UNIT TESTS PASSED!');

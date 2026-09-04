@@ -1021,6 +1021,7 @@
           twist.onclick = function (ev) { ev.stopPropagation(); onToggle(item); };
         }
         const pad = { style: 'padding-left:' + (8 + row.depth * 16) + 'px' };
+        const statusBadge = el('span', { class: 'cmp-status-badge ' + item.status, text: row.loading ? '校验中' : status });
         node.append(
           twist,
           el('span', { class: 'cmp-folder-status' }, [checkbox, statusBadge]),

@@ -88,6 +88,7 @@ type Field struct {
 	Ordinal    int    `json:"ordinal"`
 	Definition string `json:"definition,omitempty"`
 	PrimaryKey bool   `json:"primary_key,omitempty"`
+	Comment    string `json:"comment,omitempty"`
 }
 
 type IndexInfo struct {
@@ -253,13 +254,16 @@ func (m *Manager) Fields(ctx context.Context, source Source, schema, object stri
 		var rows *sql.Rows
 		var err error
 		if source.Kind == KindOracle {
-			rows, err = db.QueryContext(ctx, `SELECT column_name, data_type, nullable, column_id,
-CASE WHEN data_type IN ('VARCHAR2','CHAR','NVARCHAR2','NCHAR','RAW') THEN data_type || '(' || data_length || ')'
-     WHEN data_type = 'NUMBER' AND data_precision IS NOT NULL THEN data_type || '(' || data_precision || ',' || NVL(data_scale,0) || ')'
-     ELSE data_type END
-FROM all_tab_columns WHERE owner = :1 AND table_name = :2 ORDER BY column_id`, strings.ToUpper(schema), strings.ToUpper(object))
+			rows, err = db.QueryContext(ctx, `SELECT c.column_name, c.data_type, c.nullable, c.column_id,
+CASE WHEN c.data_type IN ('VARCHAR2','CHAR','NVARCHAR2','NCHAR','RAW') THEN c.data_type || '(' || c.data_length || ')'
+     WHEN c.data_type = 'NUMBER' AND c.data_precision IS NOT NULL THEN c.data_type || '(' || c.data_precision || ',' || NVL(c.data_scale,0) || ')'
+     ELSE c.data_type END,
+NVL(com.comments, '')
+FROM all_tab_columns c
+LEFT JOIN all_col_comments com ON c.owner = com.owner AND c.table_name = com.table_name AND c.column_name = com.column_name
+WHERE c.owner = :1 AND c.table_name = :2 ORDER BY c.column_id`, strings.ToUpper(schema), strings.ToUpper(object))
 		} else {
-			rows, err = db.QueryContext(ctx, `SELECT column_name, data_type, is_nullable, ordinal_position, column_type
+			rows, err = db.QueryContext(ctx, `SELECT column_name, data_type, is_nullable, ordinal_position, column_type, COALESCE(column_comment, '')
 FROM information_schema.columns WHERE table_schema = ? AND table_name = ? ORDER BY ordinal_position`, schema, object)
 		}
 		if err != nil {
@@ -269,10 +273,12 @@ FROM information_schema.columns WHERE table_schema = ? AND table_name = ? ORDER 
 		for rows.Next() {
 			var item Field
 			var nullable string
-			if err := rows.Scan(&item.Name, &item.DataType, &nullable, &item.Ordinal, &item.Definition); err != nil {
+			var comment sql.NullString
+			if err := rows.Scan(&item.Name, &item.DataType, &nullable, &item.Ordinal, &item.Definition, &comment); err != nil {
 				return err
 			}
 			item.Nullable = strings.EqualFold(nullable, "yes") || strings.EqualFold(nullable, "y")
+			item.Comment = strings.TrimSpace(comment.String)
 			out = append(out, item)
 		}
 		if err := rows.Err(); err != nil {

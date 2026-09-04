@@ -51,10 +51,12 @@
     return (n / (1024 * 1024)).toFixed(2) + ' MB';
   }
 
-  function pathRow(label, input, opts) {
+  function pathRow(label, input, opts, extra) {
+    const row = localPathRow(input, Object.assign({ directory: true, rowClass: 'path-field waspack-path' }, opts || {}));
+    if (extra) row.appendChild(extra);
     return el('label', { class: 'waspack-field' }, [
       el('span', { class: 'waspack-label', text: label }),
-      localPathRow(input, Object.assign({ directory: true, rowClass: 'path-field waspack-path' }, opts || {}))
+      row
     ]);
   }
 
@@ -146,13 +148,42 @@
     if (sessionDraft.manifest) manifestTa.value = sessionDraft.manifest;
 
     const outputPolicy = el('select', { id: 'waspack-output-policy' }, [
-      el('option', { value: 'fail', text: '严格模式：目录必须为空' }),
-      el('option', { value: 'clean_kairo_artifacts', text: '清理 Kairo 上次产物后重做' }),
-      el('option', { value: 'replace', text: '确认后清空目录并覆盖' })
+      el('option', { value: 'fail', text: '严格模式：目录必须为空（推荐首次打包）' }),
+      el('option', { value: 'clean_kairo_artifacts', text: '清理 Kairo 上次产物后重做（保留其他文件）' }),
+      el('option', { value: 'replace', text: '清空上次 Kairo 打包目录并覆盖 (需包含 Kairo 标记)' })
     ]);
     outputPolicy.value = saved.output_policy || 'fail';
 
     const savePreference = preferenceSaver('waspack', 500);
+
+    const projectHistorySelect = el('select', { class: 'waspack-history-select', title: '选择历史工程根目录' });
+    function fillProjectHistory() {
+      projectHistorySelect.innerHTML = '';
+      projectHistorySelect.appendChild(el('option', { value: '', text: '📁 历史工程…' }));
+      const hist = Array.isArray(saved.project_dir_history) ? saved.project_dir_history : [];
+      hist.forEach(function (dir) {
+        projectHistorySelect.appendChild(el('option', { value: dir, text: dir }));
+      });
+      projectHistorySelect.style.display = hist.length ? '' : 'none';
+    }
+    fillProjectHistory();
+    projectHistorySelect.addEventListener('change', function () {
+      if (this.value) {
+        projectInp.value = this.value;
+        persist();
+      }
+      this.value = '';
+    });
+    function rememberProjectDir(dir) {
+      dir = String(dir || '').trim();
+      if (!dir) return;
+      saved.project_dir_history = Array.isArray(saved.project_dir_history) ? saved.project_dir_history : [];
+      saved.project_dir_history = saved.project_dir_history.filter(function (it) { return it !== dir; });
+      saved.project_dir_history.unshift(dir);
+      if (saved.project_dir_history.length > 12) saved.project_dir_history = saved.project_dir_history.slice(0, 12);
+      fillProjectHistory();
+      persistPreferenceFields();
+    }
 
     function pkgBaseName() {
       return (pkgInp.value || '').trim().replace(/\.(tar|sh)$/i, '');
@@ -177,17 +208,15 @@
         outputInp.placeholder = '例如 D:\\packs\\DDD' + todayStamp() + '（必须不存在或为空）';
         manifestTa.placeholder = SAMPLE_BATCH;
         batchBaseRow.style.display = '';
-        extractBtn.style.display = 'none';
-        packageBtn.style.display = 'none';
       } else {
         heroDesc.textContent = '应用代码打包：只选本地 credit 工程根（例如 C:\\ideaSpaces\\credit）。清单按投产相对路径写：JSP 相对 WebRoot，java 写 ./src/…，class 写 ./WEB-INF/classes/…。不必再配 src / WebRoot / 服务器路径。';
         projectInp.placeholder = '例如 C:\\ideaSpaces\\credit';
         outputInp.placeholder = '例如 D:\\packs\\TT' + todayStamp() + '（必须不存在或为空）';
         manifestTa.placeholder = SAMPLE_APP;
         batchBaseRow.style.display = 'none';
-        extractBtn.style.display = '';
-        packageBtn.style.display = '';
       }
+      extractBtn.style.display = '';
+      packageBtn.style.display = '';
       updateTarHint();
     }
 
@@ -211,6 +240,7 @@
     function persistPreferenceFields() {
       savePreference({
         project_dir: projectInp.value,
+        project_dir_history: saved.project_dir_history || [],
         output_dir: outputInp.value,
         auto_pair: autoPair.checked,
         output_policy: outputPolicy.value,
@@ -350,6 +380,7 @@
       if (outputPolicy.value === 'replace' && !confirmReplace) return;
       status.textContent = '正在把清单文件抽取到目标目录的 war 文件夹…';
       try {
+        rememberProjectDir(body.project_dir);
         body.confirm_replace = confirmReplace;
         const r = await api('POST', '/api/waspack/extract', body);
         renderExtracted(r);
@@ -359,8 +390,13 @@
           await api('POST', '/api/waspack/open', { output_dir: r.output_dir });
         } catch (_) { /* 打开失败不阻断 */ }
       } catch (e) {
-        status.textContent = e.message || String(e);
-        toast(e.message || String(e), 'err');
+        const msg = e.message || String(e);
+        status.textContent = msg;
+        if (msg.indexOf('未包含 Kairo 产物标记') >= 0) {
+          toast('目标目录非空且未包含 Kairo 产物标记。为保护文件安全，请选择空目录或新建目录。', 'warn');
+        } else {
+          toast(msg, 'err');
+        }
       }
     }
 
@@ -372,13 +408,19 @@
       if (outputPolicy.value === 'replace' && !confirmReplace) return;
       status.textContent = '正在按 war 当前内容打包，包内路径保持不变…';
       try {
-        const r = await api('POST', '/api/waspack/package', { output_dir: body.output_dir, package_name: body.package_name, output_policy: body.output_policy, confirm_replace: confirmReplace });
+        rememberProjectDir(body.project_dir);
+        const r = await api('POST', '/api/waspack/package', { output_dir: body.output_dir, package_name: body.package_name, output_policy: body.output_policy, confirm_replace: confirmReplace, pack_type: body.pack_type, batch_base_dir: body.batch_base_dir });
         renderResult(r);
         status.textContent = '打包完成。';
         toast('已生成 ' + (r.package_name || '') + '.tar', 'ok');
       } catch (e) {
-        status.textContent = e.message || String(e);
-        toast(e.message || String(e), 'err');
+        const msg = e.message || String(e);
+        status.textContent = msg;
+        if (msg.indexOf('未包含 Kairo 产物标记') >= 0) {
+          toast('目标目录非空且未包含 Kairo 产物标记。为保护文件安全，请选择空目录或新建目录。', 'warn');
+        } else {
+          toast(msg, 'err');
+        }
       }
     }
 
@@ -392,6 +434,7 @@
       if (outputPolicy.value === 'replace' && !confirmReplace) return;
       status.textContent = '正在抽取并生成 tar / list / 脚本…';
       try {
+        rememberProjectDir(body.project_dir);
         body.confirm_replace = confirmReplace;
         const r = await api('POST', '/api/waspack/build', body);
         previewBox.style.display = 'none';
@@ -399,8 +442,13 @@
         status.textContent = '一键打包完成。';
         toast('一键打包完成：' + (r.package_name || '') + '.tar', 'ok');
       } catch (e) {
-        status.textContent = e.message || String(e);
-        toast(e.message || String(e), 'err');
+        const msg = e.message || String(e);
+        status.textContent = msg;
+        if (msg.indexOf('未包含 Kairo 产物标记') >= 0) {
+          toast('目标目录非空且未包含 Kairo 产物标记。为保护文件安全，请选择空目录或新建目录。', 'warn');
+        } else {
+          toast(msg, 'err');
+        }
       }
     }
 
@@ -453,7 +501,7 @@
       ]),
       el('div', { class: 'card' }, [
         el('div', { class: 'waspack-grid' }, [
-          pathRow('本地工程根目录', projectInp, { onPick: persist }),
+          pathRow('本地工程根目录', projectInp, { onPick: function (p) { rememberProjectDir(p); persist(); } }, projectHistorySelect),
           pathRow('打包目标目录', outputInp, { onPick: persist, title: '选择已有文件夹；新目录名可再手改' }),
           el('label', { class: 'waspack-field waspack-field-span' }, [
             el('span', { class: 'waspack-label', text: '包名（执行脚本名）' }),
@@ -464,7 +512,7 @@
           el('label', { class: 'waspack-field waspack-output-policy' }, [
             el('span', { class: 'waspack-label', text: '输出目录处理' }),
             outputPolicy,
-            el('span', { class: 'hint', text: '默认拒绝覆盖；重做可清理旧产物。' })
+            el('span', { class: 'hint', text: '首次打包请指定空目录或不存在的目录；覆盖模式仅清空由 Kairo 既往生成的产物目录，避免误删非打包文件。' })
           ])
         ]),
         el('label', { class: 'waspack-check' }, [

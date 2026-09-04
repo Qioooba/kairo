@@ -1,6 +1,8 @@
 package waspack
 
 import (
+	"archive/tar"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -97,6 +99,35 @@ func TestBatchProjectPackaging(t *testing.T) {
 	}
 	if !strings.HasPrefix(string(execData), "tar -cvf "+pkgName+".tar ./") {
 		t.Errorf("Exec script format mismatch: %s", string(execData))
+	}
+
+	// Verify tar entries do NOT have ./ prefix and start with manifest dirs like amargci/ or AmarExtract/
+	tarFilePath := filepath.Join(outDir, pkgName+".tar")
+	tf, err := os.Open(tarFilePath)
+	if err != nil {
+		t.Fatalf("Failed to open tar: %v", err)
+	}
+	defer tf.Close()
+	tr := tar.NewReader(tf)
+	tarCount := 0
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		tarCount++
+		if strings.HasPrefix(hdr.Name, "./") {
+			t.Errorf("批量打包 tar 内路径不应包含 ./ 前缀，得到: %s", hdr.Name)
+		}
+		if !strings.HasPrefix(hdr.Name, "amargci/") && !strings.HasPrefix(hdr.Name, "AmarExtract/") {
+			t.Errorf("批量打包压缩包第一层应为清单目录，得到: %s", hdr.Name)
+		}
+	}
+	if tarCount != len(files) {
+		t.Errorf("tar 条目数量期望 %d，实际 %d", len(files), tarCount)
 	}
 
 	// Verify .kairo-waspack.json is NOT created

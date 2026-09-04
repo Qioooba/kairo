@@ -432,7 +432,7 @@ func Build(req Request) (*Result, error) {
 			return nil, fmt.Errorf("写赋权脚本失败: %w", err)
 		}
 	}
-	bytes, err := writeTar(tarPath, pv.Files)
+	bytes, err := writeTar(tarPath, pv.Files, isBatch)
 	if err != nil {
 		cleanup()
 		return nil, err

@@ -82,7 +82,7 @@ func (s *Source) Defaults() {
 		s.OracleConnectBy = "service_name"
 	}
 	if s.QueryTimeoutSeconds == 0 {
-		s.QueryTimeoutSeconds = 30
+		s.QueryTimeoutSeconds = 60
 	}
 	if s.MaxRows == 0 {
 		s.MaxRows = 1000

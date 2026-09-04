@@ -127,9 +127,9 @@ func (m *Manager) sqlDB(source Source) (*sql.DB, error) {
 			"TIMEOUT":            strconv.Itoa(source.QueryTimeoutSeconds),
 			"CONNECTION TIMEOUT": "10",
 			"LOB FETCH":          "STREAM",
-			// go-ora defaults to 25 rows. A moderate prefetch reduces Oracle 11g
-			// network round trips without letting wide rows inflate memory sharply.
-			"PREFETCH_ROWS": "50",
+			// Oracle 11g 优化：将驱动预取从 50 下调至 15 行。
+			// 既减少网络往返，又彻底避免宽表或包含大对象（LOB）时驱动网络缓冲区一次性膨胀数 GB。
+			"PREFETCH_ROWS": "15",
 		}
 		if source.OracleConnectBy == "sid" {
 			options["SID"] = source.OracleService
@@ -296,7 +296,11 @@ func (m *Manager) withSQL(ctx context.Context, source Source, fn func(context.Co
 	if source.Kind == KindRedis {
 		return fmt.Errorf("Redis 不支持 SQL 元数据")
 	}
-	ctx, cancel := context.WithTimeout(ctx, source.Timeout())
+	timeout := source.Timeout()
+	if timeout < 60*time.Second {
+		timeout = 60 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	var last error
 	for attempt := 0; attempt < 2; attempt++ {

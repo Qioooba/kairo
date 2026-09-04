@@ -1393,7 +1393,8 @@ function loadDatabaseHelpers() {
     + extractDb('completionPrefix') + '\n'
     + extractDb('suggestSQL') + '\n'
     + extractDb('matchBrackets') + '\n'
-    + 'return { tokenizeSQL: tokenizeSQL, highlightSQL: highlightSQL, formatSQL: formatSQL, suggestSQL: suggestSQL, matchBrackets: matchBrackets, completionPrefix: completionPrefix };'
+    + extractDb('isSnippetExpandKey') + '\n'
+    + 'return { tokenizeSQL: tokenizeSQL, highlightSQL: highlightSQL, formatSQL: formatSQL, suggestSQL: suggestSQL, matchBrackets: matchBrackets, completionPrefix: completionPrefix, isSnippetExpandKey: isSnippetExpandKey };'
   )();
 }
 
@@ -1416,7 +1417,21 @@ function testDatabaseSQLHelpers() {
   assert.ok(bad && bad.close === -1, JSON.stringify(bad));
   const html = db.highlightSQL(sql, match);
   assert.ok(html.indexOf('db-sql-br') >= 0, html);
-  console.log('  database SQL tabs helpers: format / suggest / brackets ✓');
+
+  // isSnippetExpandKey tests
+  assert.strictEqual(db.isSnippetExpandKey({ key: ' ' }, 'Space'), true, 'Space on Space');
+  assert.strictEqual(db.isSnippetExpandKey({ key: 'Tab' }, 'Space'), false, 'Tab on Space');
+  assert.strictEqual(db.isSnippetExpandKey({ key: 'Enter' }, 'Space'), false, 'Enter on Space');
+  assert.strictEqual(db.isSnippetExpandKey({ key: 'Enter', ctrlKey: true }, 'Space'), false, 'Ctrl+Enter on Space');
+  assert.strictEqual(db.isSnippetExpandKey({ key: 'Tab' }, 'Tab'), true, 'Tab on Tab');
+  assert.strictEqual(db.isSnippetExpandKey({ key: ' ' }, 'Tab'), false, 'Space on Tab');
+  assert.strictEqual(db.isSnippetExpandKey({ key: 'Enter' }, 'Tab'), false, 'Enter on Tab');
+  assert.strictEqual(db.isSnippetExpandKey({ key: 'Enter' }, 'Enter'), true, 'Enter on Enter');
+  assert.strictEqual(db.isSnippetExpandKey({ key: 'Enter', code: 'NumpadEnter' }, 'Enter'), true, 'NumpadEnter on Enter');
+  assert.strictEqual(db.isSnippetExpandKey({ key: ' ' }, 'Enter'), false, 'Space on Enter');
+  assert.strictEqual(db.isSnippetExpandKey({ key: 'Tab' }, 'Enter'), false, 'Tab on Enter');
+
+  console.log('  database SQL tabs helpers: format / suggest / brackets / snippetExpandKey ✓');
 }
 
 // ---------- 主入口 ----------
