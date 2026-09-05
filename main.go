@@ -804,7 +804,11 @@ func chooseBrowser(url string) (args []string, kind browserpref.Kind, path strin
 		log.Printf("读取浏览器偏好失败（回落探测）: %v", err)
 	}
 	if s != nil && s.Kind != browserpref.KindDefault && s.Path != "" {
-		if _, statErr := os.Stat(s.Path); statErr == nil {
+		validRememberedPath := filepath.IsAbs(s.Path)
+		if runtime.GOOS == "windows" {
+			validRememberedPath = validRememberedPath && strings.EqualFold(filepath.Ext(s.Path), ".exe")
+		}
+		if info, statErr := os.Stat(s.Path); statErr == nil && info.Mode().IsRegular() && validRememberedPath {
 			return []string{s.Path, url}, s.Kind, s.Path, true
 		}
 		// path 失效 → 留一行 log，下次启动会重新探测。

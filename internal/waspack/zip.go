@@ -31,6 +31,9 @@ type ZipResult struct {
 // 没有 war 目录，则读取同名 tar 生成 ZIP。两条操作路径都能自然衔接第 5 步。
 // 例如包名 AP2026qijunV1，则 zip 内为 AP2026qijunV1/xxx，zip 文件为 AP2026qijunV1.zip。
 func BuildZip(req Request) (*ZipResult, error) {
+	if err := validateReplaceAuthorization(req); err != nil {
+		return nil, err
+	}
 	unlock, err := lockOutputDir(req.OutputDir)
 	if err != nil {
 		return nil, err
@@ -69,6 +72,7 @@ func buildZipLocked(req Request) (*ZipResult, error) {
 		if st.Mode()&os.ModeSymlink != 0 || !st.IsDir() {
 			return nil, fmt.Errorf("war 路径不是安全文件夹，拒绝打 ZIP")
 		}
+		var walkedBytes int64
 		err = filepath.Walk(warDir, func(p string, info os.FileInfo, walkErr error) error {
 			if walkErr != nil {
 				return walkErr
@@ -79,6 +83,13 @@ func buildZipLocked(req Request) (*ZipResult, error) {
 			if info.IsDir() {
 				return nil
 			}
+			if info.Size() < 0 || walkedBytes > MaxArchiveBytes-info.Size() {
+				return fmt.Errorf("war 内容超过 %d 字节上限", MaxArchiveBytes)
+			}
+			if len(entries) >= MaxFiles {
+				return fmt.Errorf("war 文件数超过 %d 上限", MaxFiles)
+			}
+			walkedBytes += info.Size()
 			rel, err := filepath.Rel(warDir, p)
 			if err != nil {
 				return err
@@ -193,7 +204,8 @@ func safeTarZipRel(name string) (string, error) {
 		name = strings.TrimPrefix(name, "./")
 	}
 	clean := path.Clean(name)
-	if clean == "." || path.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, "../") {
+	isDrivePath := len(clean) >= 2 && clean[1] == ':' && (clean[0] >= 'a' && clean[0] <= 'z' || clean[0] >= 'A' && clean[0] <= 'Z')
+	if clean == "." || path.IsAbs(clean) || isDrivePath || clean == ".." || strings.HasPrefix(clean, "../") {
 		return "", fmt.Errorf("tar 包含非法路径 %q，拒绝生成 ZIP", name)
 	}
 	return clean, nil
@@ -224,6 +236,12 @@ func scanTarForZip(tarPath string) (files int, total int64, err error) {
 			return 0, 0, err
 		}
 		files++
+		if files > MaxFiles {
+			return 0, 0, fmt.Errorf("tar 文件数超过 %d 上限", MaxFiles)
+		}
+		if hdr.Size < 0 || total > MaxArchiveBytes-hdr.Size {
+			return 0, 0, fmt.Errorf("tar 内容超过 %d 字节上限", MaxArchiveBytes)
+		}
 		total += hdr.Size
 	}
 	if files == 0 {
@@ -240,6 +258,7 @@ func copyTarIntoZip(zw *zip.Writer, tarPath, pkgName string) (int64, error) {
 	defer f.Close()
 	tr := tar.NewReader(f)
 	var total int64
+	files := 0
 	for {
 		hdr, nextErr := tr.Next()
 		if nextErr == io.EOF {
@@ -250,6 +269,10 @@ func copyTarIntoZip(zw *zip.Writer, tarPath, pkgName string) (int64, error) {
 		}
 		if hdr.FileInfo().IsDir() {
 			continue
+		}
+		files++
+		if files > MaxFiles {
+			return total, fmt.Errorf("tar 文件数超过 %d 上限", MaxFiles)
 		}
 		rel, relErr := safeTarZipRel(hdr.Name)
 		if relErr != nil {
@@ -264,6 +287,9 @@ func copyTarIntoZip(zw *zip.Writer, tarPath, pkgName string) (int64, error) {
 			return total, fmt.Errorf("写 zip 内容 %s: %w", rel, copyErr)
 		}
 		total += n
+		if total > MaxArchiveBytes {
+			return total, fmt.Errorf("tar 内容超过 %d 字节上限", MaxArchiveBytes)
+		}
 	}
 	return total, nil
 }

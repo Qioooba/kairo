@@ -4,6 +4,7 @@
 package dbconsole
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -62,7 +63,8 @@ type Source struct {
 	TLSClientKeyFile     string           `json:"tls_client_key_file,omitempty"`
 	TLSServerName        string           `json:"tls_server_name,omitempty"`
 	Environment          string           `json:"environment,omitempty"` // development / staging / production
-	ReadOnly             bool             `json:"read_only,omitempty"`   // server-enforced source write lock
+	ReadOnly             bool             `json:"read_only"`             // server-enforced source write lock
+	ReadOnlyConfigured   bool             `json:"-"`                     // distinguishes an explicit false from an omitted field
 	AllowDDL             bool             `json:"allow_ddl,omitempty"`   // explicit DDL capability gate
 	SSHTunnel            *SSHTunnelConfig `json:"ssh_tunnel,omitempty"`
 	QueryTimeoutSeconds  int              `json:"query_timeout_seconds"`
@@ -76,7 +78,36 @@ type Source struct {
 	UpdatedAt            string           `json:"updated_at"`
 }
 
+// UnmarshalJSON remembers whether read_only was present. A plain bool cannot
+// distinguish an explicit writable choice from an omitted field; security
+// defaults must never treat omission as permission to write.
+func (s *Source) UnmarshalJSON(data []byte) error {
+	type sourceAlias Source
+	var decoded sourceAlias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	*s = Source(decoded)
+	if raw, ok := fields["read_only"]; ok && string(raw) != "null" {
+		var value bool
+		if err := json.Unmarshal(raw, &value); err != nil {
+			return err
+		}
+		s.ReadOnly = value
+		s.ReadOnlyConfigured = true
+	}
+	return nil
+}
+
 func (s *Source) Defaults() {
+	if !s.ReadOnlyConfigured {
+		s.ReadOnly = true
+		s.ReadOnlyConfigured = true
+	}
 	s.Kind = strings.ToLower(strings.TrimSpace(s.Kind))
 	s.Host = strings.TrimSpace(s.Host)
 	s.Name = strings.TrimSpace(s.Name)
@@ -140,7 +171,7 @@ func (s *Source) Defaults() {
 	}
 	s.Environment = strings.ToLower(strings.TrimSpace(s.Environment))
 	if s.Environment == "" {
-		s.Environment = "development"
+		s.Environment = "production"
 	}
 	s.TLSCAFile = strings.TrimSpace(s.TLSCAFile)
 	s.TLSClientCertFile = strings.TrimSpace(s.TLSClientCertFile)

@@ -179,7 +179,7 @@ Kairo 按功能拆分前端页面与后端子包，全功能零框架依赖、�
 
 ### 3. 数据库工作台（v0.16–v0.18）
 
-定位：轻量级数据库只读排障控制台，集成 Oracle 11g、MySQL 与 Redis，免装大型客户端。
+定位：轻量级数据库排障控制台，集成 Oracle 11g、MySQL 与 Redis，免装大型客户端。新数据源默认“生产 + 只读”；只有管理员显式解除只读并按环境确认后才开放受控写能力。
 
 | 子功能 | 说明 |
 | --- | --- |
@@ -189,7 +189,7 @@ Kairo 按功能拆分前端页面与后端子包，全功能零框架依赖、�
 | **流式真实分页** | 支持 `page/page_size/has_next/ordered` 分页协议，Oracle ROWNUM 别名列自动过滤脱敏 |
 | **透明重试与会话治理** | 网络抖动自动单次透明重连，幽灵 Tab 孤儿会话后台自动回收释放 |
 | **元数据与对象树** | 按 Tables / Views / Functions / Procedures / Triggers 分组展开；字段清单一键复制列名，双击快速生成查询/调用骨架 |
-| **只读策略硬防护** | 词法 AST 与正则双重拦截，一律拒绝 DDL/DML/PLSQL 块，仅允许单条只读 SELECT；强制超时与 5000 行/32MB 硬上限 |
+| **默认只读与写入门禁** | 新数据源默认生产只读；普通用户始终只能执行只读 SQL。管理员须显式解除只读，生产写入还需逐次确认，DDL 另需独立能力开关；匿名 PL/SQL 块一律拒绝 |
 | **NDJSON 流式分批** | 大结果集边查边推，前端动态渲染网格，支持列宽拖拽、多模式查看（表格 / 单记录）、列显隐与本地快速过滤 |
 | **执行计划** | Oracle `EXPLAIN PLAN FOR` + `PLAN_TABLE` 解析与 MySQL `EXPLAIN`，排查慢查询索引命中情况 |
 | **Redis 空间洞察** | SCAN 游标分页浏览 Key，避免 KEYS * 阻塞生产；读白名单扩展 (TYPE/TTL/HGET/HSCAN/LRANGE)，受控 TTL 安全审查 |
@@ -437,7 +437,7 @@ Kairo 全生命周期历经 **20 亿+ (2.0B+) AI Tokens** 深度算力淬炼，�
 - **三段式超时**：`ctx deadline → SSH session.Signal(SIGTERM) → 1s 后 SIGKILL`
 - **原子写回 yaml**：`tmpfile + rename(2)`，损坏不污染线上配置
 - **Windows Job Object 进程树回收**：定时任务沙箱隔离，超时或程序退出时彻底销毁子孙进程，杜绝僵尸进程
-- **数据库只读词法 AST 校验**：严格拦截写操作，执行前做单条校验与行数/字节/超时硬上限
+- **数据库默认只读与词法 AST 校验**：普通用户严格拦截写操作；管理员写入受数据源只读锁、生产确认和 DDL 独立开关约束；查询仍有单条、行数、字节与超时硬上限
 - **测试覆盖**：核心包都有 `_test.go`（1,150+ Go 测试用例），全量覆盖 `upgrade` / `dbconsole` / `comparefs` / `config` / `httpserver` / `sshclient` / `dlmanager` / `tailmgr` / `webservice` 等
 - **集成测试**：`mock_sshd.py` + `mock_shell_sshd.py` + `fake-websphere/` + injected `sftpDialer`
 - **E2E 测试**：Playwright + 42 个测试脚本 + 1,200+ 场景，Windows 实测 1045 通过、159 条件跳过、0 失败
@@ -552,7 +552,7 @@ Kairo 全生命周期历经 **20 亿+ (2.0B+) AI Tokens** 深度算力淬炼，�
 | GET / POST | `/api/database/sources` | 可访问数据源列表 / 新建数据源（POST 为 **admin**） |
 | PUT / DELETE | `/api/database/sources/{id}` | 更新 / 删除数据源与凭据（**admin**） |
 | POST | `/api/database/sources/{id}/test` | 测试连接并返回版本、延迟 |
-| POST | `/api/database/query` | Oracle/MySQL 单条只读 SQL，NDJSON 分批流式返回 |
+| POST | `/api/database/query` | 普通用户执行单条只读 SQL；管理员写入受数据源能力与生产确认约束；查询以 NDJSON 分批返回 |
 | POST | `/api/database/export` | 重新执行受限只读 SQL 并流式导出 UTF-8 CSV |
 | GET | `/api/database/metadata/schemas` | Schema / Owner 列表 |
 | GET | `/api/database/metadata/objects` | 表与视图列表（最多 500） |

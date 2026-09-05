@@ -149,6 +149,7 @@ type Server struct {
 	databaseErr    error
 	preferences    *preferences.Store
 	waspackHistory *waspack.HistoryStore
+	waspackReplace *waspackReplaceTokenManager
 
 	// Optional application services are supplied together through Dependencies.
 	reminders *reminder.Manager
@@ -206,6 +207,7 @@ func New(cfg *config.Manager, a *audit.Logger, webRoot fs.FS, tails *tailmgr.Man
 		databaseErr:    databaseErr,
 		preferences:    preferences.NewStore(filepath.Join(cfg.Get().DataDir(), "preferences.json")),
 		waspackHistory: waspack.NewHistoryStore(filepath.Join(cfg.Get().DataDir(), "waspack-history.json")),
+		waspackReplace: newWASPackReplaceTokenManager(),
 		reminders:      deps.Reminders,
 		notes:          deps.Notes,
 		tasks:          deps.Tasks,
@@ -510,6 +512,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleChooseDir(w, r)
 	case path == "/api/waspack/preview":
 		s.handleWASPackPreview(w, r)
+	case path == "/api/waspack/replace-token":
+		s.handleWASPackReplaceToken(w, r)
 	case path == "/api/waspack/build":
 		s.handleWASPackBuild(w, r)
 	case path == "/api/waspack/extract":

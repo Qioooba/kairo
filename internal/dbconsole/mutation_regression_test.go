@@ -96,6 +96,15 @@ func TestScriptRejectsTransactionControlBeforeExecution(t *testing.T) {
 	}
 }
 
+func TestScriptRejectsAnonymousPLSQLBeforeExecution(t *testing.T) {
+	m, source, d := mutationManager(t)
+	source.Kind = KindOracle
+	_, err := m.ExecuteScript(context.Background(), source, "BEGIN DBMS_OUTPUT.PUT_LINE('x'); UPDATE accounts SET balance = 0; END;", "", nil, ScriptOptions{})
+	if err == nil || !strings.Contains(err.Error(), "匿名 PL/SQL") || len(d.queries) != 0 {
+		t.Fatalf("anonymous block escaped script gate: err=%v queries=%v", err, d.queries)
+	}
+}
+
 func TestScriptStopKeepsPendingTransaction(t *testing.T) {
 	m, source, d := mutationManager(t)
 	d.failAt = 2

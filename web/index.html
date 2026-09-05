@@ -47,14 +47,6 @@
   <link rel="stylesheet" href="/static/style.css?v=20260905-waspack-fixes" />
   <link rel="stylesheet" href="/static/pages/compare-workbench.css?v=20260905-redesign2-handoff" />
   <link rel="stylesheet" href="/static/pages/waspack.css?v=20260905-phase3b" />
-  <script>
-    if (String(location.hash || '').indexOf('#figmacapture=') === 0) {
-      var figmaCaptureScript = document.createElement('script');
-      figmaCaptureScript.src = 'https://mcp.figma.com/mcp/html-to-design/capture.js';
-      figmaCaptureScript.async = true;
-      document.head.appendChild(figmaCaptureScript);
-    }
-  </script>
   <style>
     .auth-overlay{position:fixed;top:0;right:0;bottom:0;left:0;background:rgba(0,0,0,.72);-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);z-index:99999;display:none;align-items:center;justify-content:center;padding:20px}
     /* v0.13 bug-2：激活弹窗原来吃 --bg-card / --text / --text-dim 等会随主题切换的变量，

@@ -1,6 +1,37 @@
 package dbconsole
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
+
+func TestSourceSecurityDefaultsAndExplicitWritableJSON(t *testing.T) {
+	var omitted Source
+	if err := json.Unmarshal([]byte(`{"kind":"mysql"}`), &omitted); err != nil {
+		t.Fatal(err)
+	}
+	omitted.Defaults()
+	if !omitted.ReadOnly || omitted.Environment != "production" || omitted.MutationAllowed() {
+		t.Fatalf("omitted security policy must fail closed: %+v", omitted)
+	}
+	var nullPolicy Source
+	if err := json.Unmarshal([]byte(`{"kind":"mysql","read_only":null}`), &nullPolicy); err != nil {
+		t.Fatal(err)
+	}
+	nullPolicy.Defaults()
+	if !nullPolicy.ReadOnly || nullPolicy.MutationAllowed() {
+		t.Fatalf("null read_only must fail closed: %+v", nullPolicy)
+	}
+
+	var explicit Source
+	if err := json.Unmarshal([]byte(`{"kind":"mysql","read_only":false,"environment":"development"}`), &explicit); err != nil {
+		t.Fatal(err)
+	}
+	explicit.Defaults()
+	if explicit.ReadOnly || !explicit.MutationAllowed() || explicit.Environment != "development" {
+		t.Fatalf("explicit writable policy was not preserved: %+v", explicit)
+	}
+}
 
 func TestRedisTopologyValidation(t *testing.T) {
 	source := Source{ID: "r1", Name: "cache", Kind: KindRedis, Host: "127.0.0.1", Port: 6379, RedisMode: "cluster", RedisDB: 1, MaxResultBytes: 1 << 20}

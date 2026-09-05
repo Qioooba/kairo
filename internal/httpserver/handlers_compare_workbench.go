@@ -196,10 +196,40 @@ func (s *Server) openCompareFS(ctx context.Context, spec compareSourceSpec) (com
 		if strings.ContainsAny(spec.Host, "\x00\r\n") || strings.TrimSpace(spec.Host) == "" {
 			return nil, errors.New("FTP 主机不能为空或包含非法字符")
 		}
+		if !s.compareFTPServerAllowed(spec) {
+			return nil, errors.New("FTP 地址不在已配置服务器白名单内")
+		}
+		s.audit.Write("compare.ftp.connect", "host", spec.Host, "port", normalizedCompareFTPPort(spec), "result", "allowed")
 		return comparefs.DialFTP(ctx, comparefs.FTPConfig{Host: spec.Host, Port: spec.Port, Username: spec.Username, Password: spec.Password, TLSMode: spec.TLSMode, InsecureSkipVerify: spec.InsecureSkipVerify})
 	default:
 		return nil, fmt.Errorf("不支持的数据源类型: %s", spec.Kind)
 	}
+}
+
+func normalizedCompareFTPPort(spec compareSourceSpec) int {
+	if spec.Port > 0 {
+		return spec.Port
+	}
+	if strings.EqualFold(strings.TrimSpace(spec.TLSMode), "implicit") {
+		return 990
+	}
+	return 21
+}
+
+func (s *Server) compareFTPServerAllowed(spec compareSourceSpec) bool {
+	host := strings.TrimSpace(spec.Host)
+	port := normalizedCompareFTPPort(spec)
+	if port < 1 || port > 65535 {
+		return false
+	}
+	for _, system := range s.cur().Systems {
+		for _, server := range system.Servers {
+			if strings.EqualFold(strings.TrimSpace(server.Host), host) && server.Port == port {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (s *Server) handleCompareList(w http.ResponseWriter, r *http.Request) {
@@ -446,7 +476,11 @@ func (s *Server) handleCompareSyncStart(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, 400, err)
 		return
 	}
-	job, ctx := s.compares.create(context.Background())
+	job, ctx, createErr := s.compares.tryCreate(context.Background())
+	if createErr != nil {
+		writeErr(w, http.StatusTooManyRequests, createErr)
+		return
+	}
 	go s.runCompareSync(ctx, job, req)
 	writeJSON(w, http.StatusAccepted, map[string]any{"job_id": job.ID})
 }
@@ -770,6 +804,9 @@ func (s *Server) handleCompareScanStart(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, 405, errors.New("仅支持 POST"))
 		return
 	}
+	if !requireAdmin(w, r) {
+		return
+	}
 	var req compareScanReq
 	if !decodeCompareJSON(w, r, 128*1024, &req) {
 		return
@@ -778,7 +815,11 @@ func (s *Server) handleCompareScanStart(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	job, ctx := s.compares.create(context.Background())
+	job, ctx, createErr := s.compares.tryCreate(context.Background())
+	if createErr != nil {
+		writeErr(w, http.StatusTooManyRequests, createErr)
+		return
+	}
 	go s.runCompareScan(ctx, job, req)
 	writeJSON(w, http.StatusAccepted, map[string]any{"job_id": job.ID})
 }
@@ -813,6 +854,9 @@ func validateCompareScanReq(req compareScanReq) error {
 	}
 	if req.MaxDepth < 0 {
 		return errors.New("max_depth 不能为负数")
+	}
+	if req.MaxDepth > 32 {
+		return errors.New("max_depth 不能超过 32")
 	}
 	if _, err := cleanCompareRel(req.RelPath); err != nil {
 		return err
@@ -1217,7 +1261,7 @@ func cleanCompareRel(rel string) (string, error) {
 		return "", nil
 	}
 	rel = strings.ReplaceAll(rel, "\\", "/")
-	if strings.HasPrefix(rel, "/") || strings.Contains(rel, ":") {
+	if strings.HasPrefix(rel, "/") || len(rel) >= 2 && rel[1] == ':' && (rel[0] >= 'a' && rel[0] <= 'z' || rel[0] >= 'A' && rel[0] <= 'Z') {
 		return "", errors.New("非法相对路径")
 	}
 	cleaned := path.Clean(rel)
@@ -1322,9 +1366,13 @@ func walkCompareFSWithMeta(ctx context.Context, fsys comparefs.FS, root string, 
 			return nil, false, nil, err
 		}
 		for _, entry := range entries {
-			rel := entry.Name
+			name, nameErr := cleanCompareEntryName(entry.Name)
+			if nameErr != nil {
+				return nil, false, nil, nameErr
+			}
+			rel := name
 			if current.rel != "" {
-				rel = current.rel + "/" + entry.Name
+				rel = current.rel + "/" + name
 			}
 			if ignoreCompareEntry(rel, entry.IsDir, req.IgnoreExts, req.IgnoreDirs) {
 				continue
@@ -1350,6 +1398,18 @@ func walkCompareFSWithMeta(ctx context.Context, fsys comparefs.FS, root string, 
 		}
 	}
 	return result, false, pending, nil
+}
+
+func cleanCompareEntryName(name string) (string, error) {
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" || trimmed == "." || trimmed == ".." || strings.ContainsAny(trimmed, "/\\") {
+		return "", fmt.Errorf("远端目录返回非法条目名 %q", name)
+	}
+	cleaned, err := cleanCompareRel(trimmed)
+	if err != nil || cleaned != trimmed {
+		return "", fmt.Errorf("远端目录返回非法条目名 %q", name)
+	}
+	return cleaned, nil
 }
 
 func ignoreCompareEntry(rel string, isDir bool, exts, dirs []string) bool {

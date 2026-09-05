@@ -26,12 +26,16 @@ type Request struct {
 	AutoPair       bool
 	OutputPolicy   string
 	ConfirmReplace bool
-	PackType       string // "app" (默认) 或 "batch"
-	BatchBaseDir   string // 批量部署根路径，默认 /batch/credit
-	ChmodMode      string // 批量 chmod 权限，默认 777（兼容现网，可显式配置）
-	IncludeZip     bool   // 历史/重建请求是否同时生成 ZIP
-	MetadataDir    string // 外部 provenance/ownership 元数据目录（由 HTTP Server 注入）
-	StageToken     string // Extract 返回的 WAR stage token
+	ReplaceToken   string
+	// ReplaceAuthorized is set only after the HTTP layer consumes a one-time
+	// token bound to OutputDir. A boolean confirmation alone is insufficient.
+	ReplaceAuthorized bool
+	PackType          string // "app" (默认) 或 "batch"
+	BatchBaseDir      string // 批量部署根路径，默认 /batch/credit
+	ChmodMode         string // 批量 chmod 权限，默认 777（兼容现网，可显式配置）
+	IncludeZip        bool   // 历史/重建请求是否同时生成 ZIP
+	MetadataDir       string // 外部 provenance/ownership 元数据目录（由 HTTP Server 注入）
+	StageToken        string // Extract 返回的 WAR stage token
 }
 
 const (
@@ -601,6 +605,10 @@ func isSafeLocalPath(p string) bool {
 		}
 	}
 	if isBlockedSystemPath(clean) {
+		tempRoot := filepath.Clean(os.TempDir())
+		if !isSamePath(clean, tempRoot) && isSubpathOrEqual(clean, tempRoot) {
+			return true
+		}
 		return false
 	}
 	return true
@@ -745,6 +753,9 @@ func PreviewRequest(req Request) (*Preview, error) {
 	if strings.TrimSpace(req.ProjectDir) == "" {
 		return nil, fmt.Errorf("请选择本地工程目录")
 	}
+	if _, err := validateProjectDir(req.ProjectDir); err != nil {
+		return nil, err
+	}
 	listed, err := ParseManifest(req.Manifest, req.ProjectDir)
 	if err != nil {
 		return nil, err
@@ -755,14 +766,36 @@ func PreviewRequest(req Request) (*Preview, error) {
 	return Resolve(req.ProjectDir, listed, req.AutoPair)
 }
 
+func validateProjectDir(projectDir string) (string, error) {
+	abs, err := filepath.Abs(strings.TrimSpace(projectDir))
+	if err != nil || !isSafeLocalPath(abs) {
+		return "", fmt.Errorf("工程目录非法")
+	}
+	info, err := os.Lstat(abs)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return "", fmt.Errorf("工程目录无效或为符号链接")
+	}
+	return abs, nil
+}
+
 // Build 创建空输出目录，写入 list.txt、tar、备份脚本、执行脚本（批量时另写 chmod.txt）。
 func Build(req Request) (*Result, error) {
+	if err := validateReplaceAuthorization(req); err != nil {
+		return nil, err
+	}
 	unlock, err := lockOutputDir(req.OutputDir)
 	if err != nil {
 		return nil, err
 	}
 	defer unlock()
 	return buildLocked(req)
+}
+
+func validateReplaceAuthorization(req Request) error {
+	if normalizeOutputPolicy(req.OutputPolicy) == OutputPolicyReplace && (!req.ConfirmReplace || strings.TrimSpace(req.ReplaceToken) == "" || !req.ReplaceAuthorized) {
+		return fmt.Errorf("覆盖输出目录需要有效的一次性确认凭据")
+	}
+	return nil
 }
 
 func buildLocked(req Request) (*Result, error) {

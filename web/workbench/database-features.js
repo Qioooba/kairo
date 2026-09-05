@@ -976,8 +976,8 @@
     const env = id('dbf-environment');
     if (!env) return;
     item = item || {};
-    env.value = item.environment || 'development';
-    const readOnly = id('dbf-read-only'); if (readOnly) readOnly.checked = !!(item.read_only || item.readOnly);
+    env.value = item.environment || 'production';
+    const readOnly = id('dbf-read-only'); if (readOnly) readOnly.checked = item.id ? !!(item.read_only || item.readOnly) : true;
     const ddl = id('dbf-allow-ddl'); if (ddl) ddl.checked = !!(item.allow_ddl || item.allowDDL);
     const tunnel = item.ssh_tunnel || {};
     const set = function (name, value) { const input = id(name); if (input && value != null) input.value = value; };

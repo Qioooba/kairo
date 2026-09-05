@@ -83,7 +83,7 @@ func TestDefaults_AppliesMissing(t *testing.T) {
 	c := &Config{}
 	c.Defaults()
 	if c.App.Name != "Kairo" {
-	t.Errorf("App.Name default: %q", c.App.Name)
+		t.Errorf("App.Name default: %q", c.App.Name)
 	}
 	if c.App.Host != "127.0.0.1" {
 		t.Errorf("App.Host default: %q", c.App.Host)
@@ -962,15 +962,15 @@ func TestTargetDirAllowed(t *testing.T) {
 	}
 }
 
-// TestComparePathAllowed 验证 compare_allowed_roots 白名单（fail-open，向后兼容）。
+// TestComparePathAllowed 验证 compare_allowed_roots 白名单（fail-closed）。
 func TestComparePathAllowed(t *testing.T) {
-	// 空 roots → 一律放行（fail-open，旧行为）
+	// 空 roots → 一律拒绝（fail-closed）
 	a := AppConfig{}
-	if !a.ComparePathAllowed("/etc/passwd") {
-		t.Error("空 roots 应放行 /etc/passwd（fail-open）")
+	if a.ComparePathAllowed("/etc/passwd") {
+		t.Error("空 roots 不应放行 /etc/passwd（fail-closed）")
 	}
-	if !a.ComparePathAllowed("/var/log/app") {
-		t.Error("空 roots 应放行 /var/log/app（fail-open）")
+	if a.ComparePathAllowed("/var/log/app") {
+		t.Error("空 roots 不应放行 /var/log/app（fail-closed）")
 	}
 	// 显式 "*" → 全放行
 	a.CompareAllowedRoots = []string{"*"}

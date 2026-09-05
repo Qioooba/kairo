@@ -24,6 +24,9 @@ func (s *Server) handleDatabaseTransactionStatus(w http.ResponseWriter, r *http.
 		writeErr(w, http.StatusMethodNotAllowed, errors.New("仅支持 GET"))
 		return
 	}
+	if !requireAdmin(w, r) {
+		return
+	}
 	source, ok := s.databaseSourceFromQuery(w, r)
 	if !ok {
 		return
@@ -173,6 +176,9 @@ func (s *Server) handleDatabaseImportPreview(w http.ResponseWriter, r *http.Requ
 		writeErr(w, http.StatusMethodNotAllowed, errors.New("仅支持 POST"))
 		return
 	}
+	if !requireAdmin(w, r) {
+		return
+	}
 	var req databaseImportPreviewRequest
 	if err := decodeDatabaseJSONLimit(r, &req, 12<<20); err != nil {
 		writeErr(w, http.StatusBadRequest, err)
@@ -192,6 +198,7 @@ func (s *Server) handleDatabaseImportPreview(w http.ResponseWriter, r *http.Requ
 		writeErrSanitized(w, http.StatusBadGateway, s.databaseSafeError(source, err))
 		return
 	}
+	s.audit.Write("database.import.preview", "source_id", source.ID, "schema", req.Schema, "table", req.Table, "rows", preview.PreviewRows, "result", "ok")
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "preview": preview})
 }
 

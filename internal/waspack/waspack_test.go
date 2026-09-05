@@ -571,6 +571,8 @@ func TestScopedOwnershipReconcilesPackageSwitchAndPreservesUserFiles(t *testing.
 	third.PackageName = "Gamma"
 	third.OutputPolicy = OutputPolicyReplace
 	third.ConfirmReplace = true
+	third.ReplaceToken = "test-confirmation"
+	third.ReplaceAuthorized = true
 	if _, err := Build(third); err != nil {
 		t.Fatalf("replace build Gamma: %v", err)
 	}
@@ -676,7 +678,7 @@ func TestExtractPublicationFailureRestoresPreviousOutput(t *testing.T) {
 		return originalRename(src, dst)
 	}
 	defer func() { waspackRename = originalRename }()
-	_, err := Extract(Request{ProjectDir: project, OutputDir: out, PackageName: "TTrestore", Manifest: "./WEB-INF/web.xml\n", OutputPolicy: OutputPolicyReplace, ConfirmReplace: true})
+	_, err := Extract(Request{ProjectDir: project, OutputDir: out, PackageName: "TTrestore", Manifest: "./WEB-INF/web.xml\n", OutputPolicy: OutputPolicyReplace, ConfirmReplace: true, ReplaceToken: "test-confirmation", ReplaceAuthorized: true})
 	if err == nil {
 		t.Fatal("expected injected publication failure")
 	}
@@ -711,7 +713,7 @@ func TestZipPublicationFailureRestoresPreviousZip(t *testing.T) {
 		return originalRename(src, dst)
 	}
 	defer func() { waspackRename = originalRename }()
-	_, err := BuildZip(Request{OutputDir: out, PackageName: "Demo", OutputPolicy: OutputPolicyReplace, ConfirmReplace: true})
+	_, err := BuildZip(Request{OutputDir: out, PackageName: "Demo", OutputPolicy: OutputPolicyReplace, ConfirmReplace: true, ReplaceToken: "test-confirmation", ReplaceAuthorized: true})
 	if err == nil {
 		t.Fatal("expected injected ZIP publication failure")
 	}
@@ -738,7 +740,7 @@ func TestBuildPublicationFailureRestoresPreviousArtifacts(t *testing.T) {
 		return originalRename(src, dst)
 	}
 	defer func() { waspackRename = originalRename }()
-	_, err := Build(Request{ProjectDir: project, OutputDir: out, PackageName: pkg, Manifest: "./WEB-INF/web.xml\n", OutputPolicy: OutputPolicyReplace, ConfirmReplace: true})
+	_, err := Build(Request{ProjectDir: project, OutputDir: out, PackageName: pkg, Manifest: "./WEB-INF/web.xml\n", OutputPolicy: OutputPolicyReplace, ConfirmReplace: true, ReplaceToken: "test-confirmation", ReplaceAuthorized: true})
 	if err == nil {
 		t.Fatal("expected injected build publication failure")
 	}
@@ -762,7 +764,7 @@ func TestPublicationRollbackFailureRetainsRecoveryBackup(t *testing.T) {
 		return originalRename(src, dst)
 	}
 	defer func() { waspackRename = originalRename }()
-	_, err := Extract(Request{ProjectDir: project, OutputDir: out, PackageName: "TTrestore", Manifest: "./WEB-INF/web.xml\n", OutputPolicy: OutputPolicyReplace, ConfirmReplace: true})
+	_, err := Extract(Request{ProjectDir: project, OutputDir: out, PackageName: "TTrestore", Manifest: "./WEB-INF/web.xml\n", OutputPolicy: OutputPolicyReplace, ConfirmReplace: true, ReplaceToken: "test-confirmation", ReplaceAuthorized: true})
 	if err == nil || !strings.Contains(err.Error(), "备份保留于") {
 		t.Fatalf("expected recoverable rollback error, got %v", err)
 	}

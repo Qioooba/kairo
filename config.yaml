@@ -28,8 +28,8 @@ app:
     icon: smFile
   download_retention_days: 7
   download_max_count: 1000
-  compare_allowed_roots:
-  - '*'
+  # 本地目录比对默认拒绝；启用时请显式填写允许的绝对目录。
+  compare_allowed_roots: []
   kairo: '111222'
   # 注意: 激活服务 / 排行榜的地址和密钥默认硬编码在源码里。
   # 本地测试时可通过 internal_endpoints 覆盖 (不随发布包提交给用户)。

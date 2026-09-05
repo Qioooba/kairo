@@ -27,6 +27,9 @@ type ExtractResult struct {
 // Extract 只抽取，不创建 tar / list / shell 脚本。目标目录必须为空，避免把旧文件
 // 混入新投产包。$1/$2 等内部类已经在 Resolve 的 autoPair 阶段一并收集。
 func Extract(req Request) (*ExtractResult, error) {
+	if err := validateReplaceAuthorization(req); err != nil {
+		return nil, err
+	}
 	unlock, err := lockOutputDir(req.OutputDir)
 	if err != nil {
 		return nil, err
@@ -147,6 +150,9 @@ func copyExtractedFile(src, dst string) error {
 // PackageExtracted 是第二步“打包”。它以 war 目录当前内容为准，因此用户在抽取后
 // 做的本地修改会进入包；tar 内路径仍与旧的一步打包完全一致。
 func PackageExtracted(req Request) (*Result, error) {
+	if err := validateReplaceAuthorization(req); err != nil {
+		return nil, err
+	}
 	unlock, err := lockOutputDir(req.OutputDir)
 	if err != nil {
 		return nil, err
@@ -386,6 +392,7 @@ func publishSingleStagedArtifactWithMetadata(stage, outAbs, policy string, confi
 
 func filesFromWAR(warDir string) ([]ResolvedFile, error) {
 	var files []ResolvedFile
+	var total int64
 	err := filepath.Walk(warDir, func(p string, info os.FileInfo, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -396,6 +403,13 @@ func filesFromWAR(warDir string) ([]ResolvedFile, error) {
 		if info.IsDir() {
 			return nil
 		}
+		if info.Size() < 0 || total > MaxArchiveBytes-info.Size() {
+			return fmt.Errorf("war 内容超过 %d 字节上限", MaxArchiveBytes)
+		}
+		if len(files) >= MaxFiles {
+			return fmt.Errorf("war 文件数超过 %d 上限", MaxFiles)
+		}
+		total += info.Size()
 		rel, err := filepath.Rel(warDir, p)
 		if err != nil {
 			return err

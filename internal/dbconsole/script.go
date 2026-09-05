@@ -329,6 +329,9 @@ func (m *Manager) ExecuteScript(ctx context.Context, source Source, script, sess
 		if info.Type == "TRANSACTION" {
 			return ScriptResult{}, fmt.Errorf("脚本第 %d 条包含事务控制；请使用页签提交/回滚或脚本事务选项", i+1)
 		}
+		if info.Type == "PLSQL" {
+			return ScriptResult{}, fmt.Errorf("脚本第 %d 条是匿名 PL/SQL 块；为防止绕过 DML/DDL 门禁，脚本执行接口不允许匿名块", i+1)
+		}
 		if info.IsQuery {
 			return ScriptResult{}, fmt.Errorf("脚本第 %d 条是查询；请使用查询接口获取结果集", i+1)
 		}

@@ -17,6 +17,7 @@ import (
 // not prevent a link inside an allowed directory from reaching outside it.
 type Local struct {
 	allowedRoots []string
+	restricted   bool
 }
 
 func NewLocal() *Local { return &Local{} }
@@ -38,7 +39,7 @@ func NewLocalWithAllowedRoots(roots []string) *Local {
 			normalized = append(normalized, root)
 		}
 	}
-	return &Local{allowedRoots: normalized}
+	return &Local{allowedRoots: normalized, restricted: true}
 }
 func (l *Local) Kind() string             { return "local" }
 func (l *Local) DisplayName() string      { return "本地" }
@@ -264,8 +265,11 @@ func (l *Local) safePath(name string, forWrite bool) (string, error) {
 		return "", fmt.Errorf("%w: path contains NUL", ErrPathOutsideRoot)
 	}
 	cleaned := localAbsolutePath(name)
-	if len(l.allowedRoots) == 0 {
+	if !l.restricted {
 		return cleaned, nil
+	}
+	if len(l.allowedRoots) == 0 {
+		return "", fmt.Errorf("%w: no local roots configured", ErrPathOutsideRoot)
 	}
 	actual, err := resolveLocalPath(cleaned, forWrite)
 	if err != nil {

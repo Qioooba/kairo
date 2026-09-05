@@ -31,6 +31,9 @@ type waspackHistorySummary struct {
 }
 
 func (s *Server) handleWASPackHistory(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
 	const prefix = "/api/waspack/history"
 	suffix := strings.TrimPrefix(r.URL.Path, prefix)
 	if suffix == "" || suffix == "/" {
@@ -142,6 +145,7 @@ type waspackRebuildReq struct {
 	OutputDir      string `json:"output_dir"`
 	OutputPolicy   string `json:"output_policy"`
 	ConfirmReplace bool   `json:"confirm_replace"`
+	ReplaceToken   string `json:"replace_token"`
 	IncludeZip     *bool  `json:"include_zip"`
 }
 
@@ -156,8 +160,13 @@ func (s *Server) handleWASPackHistoryRebuild(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	var body waspackRebuildReq
-	if err := json.NewDecoder(io.LimitReader(r.Body, 32*1024)).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
-		writeErr(w, http.StatusBadRequest, fmt.Errorf("请求体解析失败: %w", err))
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 32*1024)).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeErr(w, http.StatusRequestEntityTooLarge, errors.New("请求体超过 32768 字节上限"))
+		} else {
+			writeErr(w, http.StatusBadRequest, fmt.Errorf("请求体解析失败: %w", err))
+		}
 		return
 	}
 	snapshot := source.Request
@@ -183,7 +192,19 @@ func (s *Server) handleWASPackHistoryRebuild(w http.ResponseWriter, r *http.Requ
 		Manifest: snapshot.Manifest, AutoPair: snapshot.AutoPair, PackType: snapshot.PackType,
 		BatchBaseDir: snapshot.BatchBaseDir, ChmodMode: snapshot.ChmodMode,
 		OutputPolicy: policy, ConfirmReplace: body.ConfirmReplace,
-		MetadataDir: s.cur().DataDir(),
+		ReplaceToken: strings.TrimSpace(body.ReplaceToken),
+		MetadataDir:  s.cur().DataDir(),
+	}
+	if policy == waspack.OutputPolicyReplace {
+		if !body.ConfirmReplace {
+			writeErr(w, http.StatusBadRequest, errors.New("本次重建覆盖输出目录需要 confirm_replace=true；不会继承历史确认"))
+			return
+		}
+		if !s.waspackReplace.consume(outputDir, body.ReplaceToken) {
+			writeErr(w, http.StatusBadRequest, errors.New("覆盖输出目录需要有效的一次性确认凭据"))
+			return
+		}
+		packReq.ReplaceAuthorized = true
 	}
 	includeZip := snapshot.IncludeZip
 	if body.IncludeZip != nil {

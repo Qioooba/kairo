@@ -12,6 +12,7 @@ import (
 const (
 	MaxManifestBytes = 1 << 20
 	MaxFiles         = 3000
+	MaxArchiveBytes  = int64(2 << 30)
 	ListFileName     = "list.txt"
 )
 

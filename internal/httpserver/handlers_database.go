@@ -594,9 +594,38 @@ func (s *Server) handleDatabaseExport(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if _, err := dbconsole.ValidateSQL(source.Kind, req.SQL); err != nil {
-		writeErr(w, 400, err)
-		return
+	user, _ := r.Context().Value(authUserKey).(*authUser)
+	var statementInfo dbconsole.SQLStatementInfo
+	var err error
+	if user != nil && user.Role != "admin" {
+		if err := dbconsole.ValidateReadOnlySQL(source.Kind, req.SQL); err != nil {
+			writeErr(w, 400, err)
+			return
+		}
+	} else {
+		statementInfo, err = dbconsole.ValidateSQL(source.Kind, req.SQL)
+		if err != nil {
+			writeErr(w, 400, err)
+			return
+		}
+		if !statementInfo.IsQuery {
+			if !source.MutationAllowed() {
+				writeErr(w, http.StatusForbidden, errors.New("该数据源处于只读锁定状态"))
+				return
+			}
+			if source.IsProduction() && !req.Confirm {
+				writeErr(w, http.StatusBadRequest, errors.New("生产数据源写操作需要 confirm=true"))
+				return
+			}
+			if statementInfo.Type == "DDL" && !source.DDLAllowed() {
+				writeErr(w, http.StatusForbidden, errors.New("该数据源未开启 DDL 能力或处于只读锁定状态"))
+				return
+			}
+			// Export has no transaction lifecycle and must not become an
+			// alternate autocommit write endpoint.
+			writeErr(w, http.StatusBadRequest, errors.New("导出接口仅支持查询语句"))
+			return
+		}
 	}
 	hash := sha256.Sum256([]byte(strings.TrimSpace(req.SQL)))
 	queryID := hex.EncodeToString(hash[:8])

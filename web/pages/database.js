@@ -719,7 +719,7 @@
     }
     const rowidIdx = state.columns.findIndex(c => String(c.name).toUpperCase() === 'ROWID');
     if (rowidIdx >= 0 && row[rowidIdx]) {
-      return 'ROWID = \'' + row[rowidIdx] + '\'';
+      return 'ROWID = ' + sqlValueLiteral(row[rowidIdx], state.columns[rowidIdx].database_type);
     }
     const table = detectTableName();
     const idIdx = state.columns.findIndex(c => String(c.name).toUpperCase() === 'ID' || String(c.name).toUpperCase() === table.toUpperCase() + '_ID');
@@ -1374,8 +1374,8 @@
     const oldTunnel = old && old.ssh_tunnel ? old.ssh_tunnel : null;
     const valueOrOld = function (name, fallback) { const input = q(name); return input ? input.value.trim() : (fallback == null ? '' : String(fallback)); };
     const checkedOrOld = function (name, fallback) { const input = q(name); return input ? !!input.checked : !!fallback; };
-    source.environment = valueOrOld('dbf-environment', old && old.environment || 'development');
-    source.read_only = checkedOrOld('dbf-read-only', old && old.read_only);
+    source.environment = valueOrOld('dbf-environment', old && old.environment || 'production');
+    source.read_only = checkedOrOld('dbf-read-only', old ? old.read_only : true);
     source.allow_ddl = checkedOrOld('dbf-allow-ddl', old && old.allow_ddl);
     source.tls_server_name = valueOrOld('dbf-tls-server-name', old && old.tls_server_name);
     source.tls_ca_file = valueOrOld('dbf-tls-ca-file', old && old.tls_ca_file);

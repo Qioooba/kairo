@@ -22,6 +22,7 @@ type waspackReq struct {
 	AutoPair       *bool  `json:"auto_pair"`
 	OutputPolicy   string `json:"output_policy"`
 	ConfirmReplace bool   `json:"confirm_replace"`
+	ReplaceToken   string `json:"replace_token"`
 	PackType       string `json:"pack_type"`
 	BatchBaseDir   string `json:"batch_base_dir"`
 	ChmodMode      string `json:"chmod_mode"`
@@ -32,6 +33,9 @@ type waspackReq struct {
 func (s *Server) handleWASPackPreview(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeErr(w, 405, errors.New("仅支持 POST"))
+		return
+	}
+	if !requireAdmin(w, r) {
 		return
 	}
 	req, err := decodeWASPackReq(r)
@@ -59,6 +63,9 @@ func (s *Server) handleWASPackBuild(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 405, errors.New("仅支持 POST"))
 		return
 	}
+	if !requireAdmin(w, r) {
+		return
+	}
 	started := time.Now().UTC()
 	req, err := decodeWASPackReq(r)
 	if err != nil {
@@ -67,6 +74,9 @@ func (s *Server) handleWASPackBuild(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	packReq := s.waspackRequest(req)
+	if !s.authorizeWASPackReplace(w, req, &packReq) {
+		return
+	}
 	if strings.TrimSpace(req.OutputDir) == "" {
 		err := errors.New("请填写要生成的文件夹路径")
 		s.recordWASPackFailure("build", packReq, started, err, nil, nil)
@@ -109,6 +119,9 @@ func (s *Server) handleWASPackExtract(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 405, errors.New("仅支持 POST"))
 		return
 	}
+	if !requireAdmin(w, r) {
+		return
+	}
 	started := time.Now().UTC()
 	req, err := decodeWASPackReq(r)
 	if err != nil {
@@ -117,6 +130,9 @@ func (s *Server) handleWASPackExtract(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	packReq := s.waspackRequest(req)
+	if !s.authorizeWASPackReplace(w, req, &packReq) {
+		return
+	}
 	if strings.TrimSpace(req.OutputDir) == "" {
 		err := errors.New("请选择目标目录")
 		s.recordWASPackFailure("extract", packReq, started, err, nil, nil)
@@ -141,6 +157,9 @@ func (s *Server) handleWASPackPackage(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 405, errors.New("仅支持 POST"))
 		return
 	}
+	if !requireAdmin(w, r) {
+		return
+	}
 	started := time.Now().UTC()
 	req, err := decodeWASPackReq(r)
 	if err != nil {
@@ -149,6 +168,9 @@ func (s *Server) handleWASPackPackage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	packReq := s.waspackRequest(req)
+	if !s.authorizeWASPackReplace(w, req, &packReq) {
+		return
+	}
 	if req.OutputDir == "" {
 		err := errors.New("请选择目标目录")
 		s.recordWASPackFailure("package", packReq, started, err, nil, nil)
@@ -179,6 +201,9 @@ func (s *Server) handleWASPackZip(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 405, errors.New("仅支持 POST"))
 		return
 	}
+	if !requireAdmin(w, r) {
+		return
+	}
 	started := time.Now().UTC()
 	req, err := decodeWASPackPayload(r)
 	if err != nil {
@@ -188,6 +213,9 @@ func (s *Server) handleWASPackZip(w http.ResponseWriter, r *http.Request) {
 	}
 	req.OutputDir, req.PackageName = strings.TrimSpace(req.OutputDir), strings.TrimSpace(req.PackageName)
 	packReq := s.waspackRequest(req)
+	if !s.authorizeWASPackReplace(w, req, &packReq) {
+		return
+	}
 	if req.OutputDir == "" {
 		err := errors.New("请选择目标目录")
 		s.recordWASPackFailure("zip", packReq, started, err, nil, nil)
@@ -220,6 +248,9 @@ type waspackOpenReq struct {
 func (s *Server) handleWASPackOpen(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeErr(w, 405, errors.New("仅支持 POST"))
+		return
+	}
+	if !requireAdmin(w, r) {
 		return
 	}
 	var req waspackOpenReq
@@ -321,6 +352,7 @@ func toWASPackReq(req waspackReq) waspack.Request {
 		AutoPair:       auto,
 		OutputPolicy:   strings.TrimSpace(req.OutputPolicy),
 		ConfirmReplace: req.ConfirmReplace,
+		ReplaceToken:   strings.TrimSpace(req.ReplaceToken),
 		PackType:       packType,
 		BatchBaseDir:   batchBaseDir,
 		ChmodMode:      strings.TrimSpace(req.ChmodMode),

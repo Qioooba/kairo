@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -294,8 +295,14 @@ func TestCompareCopyRejectsDirectoryTarget(t *testing.T) {
 
 func TestCompareJobManagerKeepsParallelJobsIndependent(t *testing.T) {
 	manager := newCompareJobManager()
-	first, firstCtx := manager.create(context.Background())
-	second, secondCtx := manager.create(context.Background())
+	first, firstCtx, err := manager.tryCreate(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, secondCtx, err := manager.tryCreate(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
 	select {
 	case <-firstCtx.Done():
 		t.Fatal("creating a new job cancelled the previous job")
@@ -341,7 +348,7 @@ func (f *syntheticCompareFS) ListLimited(_ context.Context, _ string, max int) (
 func (f *syntheticCompareFS) entries() []comparefs.Entry {
 	entries := make([]comparefs.Entry, f.count)
 	for i := range entries {
-		entries[i] = comparefs.Entry{Name: "f" + strings.Repeat("0", 4) + string(rune(i)), Path: "/root/f", Size: 1}
+		entries[i] = comparefs.Entry{Name: fmt.Sprintf("f%05d", i), Path: "/root/f", Size: 1}
 	}
 	return entries
 }
