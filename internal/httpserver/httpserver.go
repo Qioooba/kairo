@@ -184,7 +184,17 @@ type Dependencies struct {
 
 // New 构造一个 Server
 func New(cfg *config.Manager, a *audit.Logger, webRoot fs.FS, tails *tailmgr.Manager, shells *sshshell.Manager, deps Dependencies) *Server {
-	wsStore := webservice.NewStore(cfg.Get().DataDir())
+	current := cfg.Get()
+	listenHost := strings.TrimSpace(current.App.Host)
+	if listenHost == "" {
+		listenHost = "127.0.0.1"
+	}
+	if !current.Auth.EffectiveEnabled() && !isLocalWebHost(listenHost) {
+		message := "认证未启用但监听地址不是 loopback，管理接口将按本机信任模式放行；请立即启用 auth 或改绑 127.0.0.1"
+		fmt.Fprintln(os.Stderr, "WARNING:", message)
+		a.Write("security.auth.disabled_non_loopback", "host", listenHost, "result", "warning")
+	}
+	wsStore := webservice.NewStore(current.DataDir())
 	wsMocks := webservice.NewMockRegistry(wsStore)
 	// 启动时加载已保存的 mock 路由（失败只记日志，不阻断启动）
 	if err := wsMocks.Reload(); err != nil {

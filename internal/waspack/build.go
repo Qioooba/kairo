@@ -563,7 +563,17 @@ func cleanKnownOutputArtifacts(abs string, packageNames ...string) error {
 }
 
 func isSafeLocalPath(p string) bool {
+	return isSafeLocalPathForGOOS(p, runtime.GOOS)
+}
+
+func isSafeLocalPathForGOOS(p, goos string) bool {
 	if p == "" {
+		return false
+	}
+	// A foreign Windows drive path is only a relative filename on Unix-like
+	// hosts. Reject it explicitly instead of letting platform-specific
+	// filepath semantics bypass the sensitive-path checks below.
+	if goos != "windows" && hasWindowsDrivePrefix(p) {
 		return false
 	}
 	if strings.HasPrefix(p, "~") {
@@ -644,7 +654,7 @@ func isSubpathOrEqual(target, base string) bool {
 }
 
 func isBlockedSystemPath(clean string) bool {
-	slashClean := strings.ToLower(filepath.ToSlash(clean))
+	slashClean := portableSlashPath(clean)
 	unixRoots := []string{"/bin", "/sbin", "/etc", "/usr", "/var", "/boot", "/dev", "/proc", "/sys", "/root"}
 	for _, r := range unixRoots {
 		if slashClean == r || strings.HasPrefix(slashClean, r+"/") {
@@ -656,10 +666,10 @@ func isBlockedSystemPath(clean string) bool {
 	}
 
 	winPrefixes := []string{
-		"C:\\Windows",
-		"C:\\Program Files",
-		"C:\\Program Files (x86)",
-		"C:\\ProgramData",
+		"C:/Windows",
+		"C:/Program Files",
+		"C:/Program Files (x86)",
+		"C:/ProgramData",
 	}
 	for _, env := range []string{"SystemRoot", "windir", "ProgramFiles", "ProgramFiles(x86)", "ProgramData"} {
 		if val := os.Getenv(env); val != "" {
@@ -667,18 +677,32 @@ func isBlockedSystemPath(clean string) bool {
 		}
 	}
 	for _, pref := range winPrefixes {
-		if isSubpathOrEqual(clean, pref) {
+		normalizedPrefix := portableSlashPath(pref)
+		if slashClean == normalizedPrefix || strings.HasPrefix(slashClean, normalizedPrefix+"/") {
 			return true
 		}
 	}
-	usersDir := "C:\\Users"
+	usersDir := "C:/Users"
 	if drive := os.Getenv("SystemDrive"); drive != "" {
-		usersDir = drive + "\\Users"
+		usersDir = drive + "/Users"
 	}
-	if isSamePath(clean, usersDir) {
+	if slashClean == portableSlashPath(usersDir) {
 		return true
 	}
 	return false
+}
+
+func hasWindowsDrivePrefix(p string) bool {
+	p = strings.TrimSpace(p)
+	return len(p) >= 2 && p[1] == ':' && (p[0] >= 'a' && p[0] <= 'z' || p[0] >= 'A' && p[0] <= 'Z')
+}
+
+func portableSlashPath(p string) string {
+	p = strings.ReplaceAll(strings.TrimSpace(p), "\\", "/")
+	for strings.Contains(p, "//") {
+		p = strings.ReplaceAll(p, "//", "/")
+	}
+	return strings.ToLower(strings.TrimSuffix(p, "/"))
 }
 
 func writeUnixFile(path, content string, perm os.FileMode) error {

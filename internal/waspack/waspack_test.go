@@ -389,6 +389,8 @@ func TestIsSafeLocalPathRejectsSensitivePaths(t *testing.T) {
 		`C:\Program Files (x86)\App`,
 		`C:\ProgramData`,
 		`C:\ProgramData\test`,
+		`c:/windows/system32`,
+		`C:/Program Files/tool`,
 		`C:\Users`,
 		"/bin",
 		"/bin/sh",
@@ -405,6 +407,11 @@ func TestIsSafeLocalPathRejectsSensitivePaths(t *testing.T) {
 		"/",
 		`C:\`,
 		"",
+	}
+	for _, foreign := range []string{`C:\Windows\System32`, `C:\`, `D:\work`} {
+		if isSafeLocalPathForGOOS(foreign, "darwin") {
+			t.Errorf("darwin accepted foreign Windows drive path %q", foreign)
+		}
 	}
 	for _, c := range cases {
 		if isSafeLocalPath(c) {
