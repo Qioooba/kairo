@@ -1,17 +1,19 @@
 package waspack
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
-	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 )
+
+var waspackRename = os.Rename
+var waspackRemoveAll = os.RemoveAll
 
 var pkgNameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$`)
 
@@ -26,41 +28,39 @@ type Request struct {
 	ConfirmReplace bool
 	PackType       string // "app" (默认) 或 "batch"
 	BatchBaseDir   string // 批量部署根路径，默认 /batch/credit
+	ChmodMode      string // 批量 chmod 权限，默认 777（兼容现网，可显式配置）
+	IncludeZip     bool   // 历史/重建请求是否同时生成 ZIP
+	MetadataDir    string // 外部 provenance/ownership 元数据目录（由 HTTP Server 注入）
+	StageToken     string // Extract 返回的 WAR stage token
 }
 
 const (
 	OutputPolicyFail       = "fail"
 	OutputPolicyCleanOwned = "clean_kairo_artifacts"
 	OutputPolicyReplace    = "replace"
-	outputMarkerName       = ".kairo-waspack.json"
+	legacyOutputMarkerName = ".kairo-waspack.json"
 )
-
-type outputMarker struct {
-	Owner       string   `json:"owner"`
-	Version     int      `json:"version"`
-	PackageName string   `json:"package_name,omitempty"`
-	Owned       []string `json:"owned"`
-	GeneratedAt string   `json:"generated_at"`
-}
 
 // Result 是生成结果。输出目录里包含 list.txt、chmod.txt（批量时）、Bak{包名}.sh、{包名}.sh、{包名}.tar。
 type Result struct {
-	OK            bool     `json:"ok"`
-	OutputDir     string   `json:"output_dir"`
-	TarFile       string   `json:"tar_file"`
-	ListFile      string   `json:"list_file"`
-	ChmodFile     string   `json:"chmod_file,omitempty"`
-	ChmodContent  string   `json:"chmod_content,omitempty"`
-	BackupScript  string   `json:"backup_script"`
-	ExecuteScript string   `json:"execute_script"`
-	PackageName   string   `json:"package_name"`
-	Files         int      `json:"files"`
-	Bytes         int64    `json:"bytes"`
-	CreatedDir    bool     `json:"created_dir"`
-	Warnings      []string `json:"warnings,omitempty"`
-	PairedAdded   int      `json:"paired_added"`
-	WarDir        string   `json:"war_dir,omitempty"`
-	PackType      string   `json:"pack_type,omitempty"`
+	OK            bool             `json:"ok"`
+	OutputDir     string           `json:"output_dir"`
+	TarFile       string           `json:"tar_file"`
+	ListFile      string           `json:"list_file"`
+	ChmodFile     string           `json:"chmod_file,omitempty"`
+	ChmodContent  string           `json:"chmod_content,omitempty"`
+	BackupScript  string           `json:"backup_script"`
+	ExecuteScript string           `json:"execute_script"`
+	PackageName   string           `json:"package_name"`
+	Files         int              `json:"files"`
+	Bytes         int64            `json:"bytes"`
+	CreatedDir    bool             `json:"created_dir"`
+	Warnings      []string         `json:"warnings,omitempty"`
+	PairedAdded   int              `json:"paired_added"`
+	WarDir        string           `json:"war_dir,omitempty"`
+	PackType      string           `json:"pack_type,omitempty"`
+	ChmodMode     string           `json:"chmod_mode,omitempty"`
+	Artifacts     []ArtifactDigest `json:"artifacts,omitempty"`
 }
 
 // SanitizePackageName 只允许字母数字和 ._- ，空则用 credit_YYYYMMDD。
@@ -81,7 +81,366 @@ func prepareOutputDir(path string) (abs string, created bool, err error) {
 	return prepareOutputDirWithPolicy(path, OutputPolicyFail, false)
 }
 
-func prepareOutputDirWithPolicy(path, policy string, confirmReplace bool) (abs string, created bool, err error) {
+// prepareOutputDirForStaging validates policy without mutating existing
+// contents. Generation happens in a sibling temporary directory, then the
+// completed artifacts are published together. This keeps a previous good
+// package intact when preview, tar, or script generation fails.
+func prepareOutputDirForStaging(path, policy string, confirmReplace bool, packageName string) (string, bool, error) {
+	if strings.TrimSpace(path) == "" {
+		return "", false, fmt.Errorf("输出目录不能为空")
+	}
+	abs, err := filepath.Abs(strings.TrimSpace(path))
+	if err != nil || !isSafeLocalPath(abs) {
+		return "", false, fmt.Errorf("输出目录非法")
+	}
+	st, err := os.Lstat(abs)
+	if os.IsNotExist(err) {
+		if err := os.MkdirAll(abs, 0o755); err != nil {
+			return "", false, fmt.Errorf("创建输出目录失败: %w", err)
+		}
+		return abs, true, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	if st.Mode()&os.ModeSymlink != 0 || !st.IsDir() {
+		return "", false, fmt.Errorf("输出路径不是安全目录")
+	}
+	ents, err := os.ReadDir(abs)
+	if err != nil {
+		return "", false, err
+	}
+	if len(ents) == 0 {
+		return abs, false, nil
+	}
+	switch normalizeOutputPolicy(policy) {
+	case OutputPolicyReplace:
+		if !confirmReplace {
+			return "", false, fmt.Errorf("覆盖输出目录需要明确确认")
+		}
+	case OutputPolicyCleanOwned:
+		// Existing files are removed only after the staged package has fully
+		// validated. This is intentionally non-destructive at this point.
+		_ = packageName
+	default:
+		return "", false, fmt.Errorf("输出目录不是空文件夹，拒绝覆盖: %s", abs)
+	}
+	return abs, false, nil
+}
+
+func publishStagedArtifacts(stage, outAbs, policy string, confirmReplace bool, names []string) error {
+	return publishStagedArtifactsWithMetadata(stage, outAbs, policy, confirmReplace, names, "")
+}
+
+func publishStagedArtifactsWithMetadata(stage, outAbs, policy string, confirmReplace bool, names []string, metadataDir string) error {
+	mode := normalizeOutputPolicy(policy)
+	for _, name := range names {
+		if !validOwnedChildName(name) {
+			return fmt.Errorf("非法产物名 %q", name)
+		}
+		if _, err := os.Lstat(filepath.Join(stage, name)); err != nil {
+			return fmt.Errorf("临时产物缺失 %s: %w", name, err)
+		}
+	}
+	backup, err := os.MkdirTemp(filepath.Dir(outAbs), ".kairo-waspack-old-")
+	if err != nil {
+		return fmt.Errorf("创建旧产物备份目录失败: %w", err)
+	}
+	// Remove empty backups on validation/fully restored failures, but preserve
+	// any files left by an incomplete rollback for manual recovery.
+	defer os.Remove(backup)
+	if mode == OutputPolicyReplace {
+		if !confirmReplace {
+			return fmt.Errorf("覆盖输出目录需要明确确认")
+		}
+		if err := moveChildrenToBackup(outAbs, backup); err != nil {
+			return err
+		}
+	} else if mode == OutputPolicyCleanOwned {
+		recordedNames, hasRecord, ownershipErr := ownedArtifactsAt(outAbs, metadataDir)
+		if ownershipErr != nil {
+			return fmt.Errorf("读取输出目录归属失败: %w", ownershipErr)
+		}
+		ownedNames := recordedNames
+		if !hasRecord {
+			// Legacy marker is only allowed to authorize the historical,
+			// currently requested artifact names. Without it, a same-named
+			// user file must fail closed.
+			ownedNames = knownArtifactNames(namesToPackageNames(names)...)
+			existingOwnedNames := existingChildren(outAbs, ownedNames)
+			if _, err := os.Lstat(filepath.Join(outAbs, legacyOutputMarkerName)); os.IsNotExist(err) && len(existingOwnedNames) > 0 {
+				return ownershipError(outAbs)
+			}
+		}
+		owned := make(map[string]bool, len(ownedNames))
+		for _, name := range ownedNames {
+			owned[name] = true
+		}
+		for _, name := range names {
+			if _, err := os.Lstat(filepath.Join(outAbs, name)); err == nil {
+				if !owned[name] {
+					return ownershipError(outAbs)
+				}
+			} else if !os.IsNotExist(err) {
+				return err
+			}
+		}
+		if err := moveNamedToBackup(outAbs, backup, ownedNames); err != nil {
+			return err
+		}
+	} else {
+		ents, err := os.ReadDir(outAbs)
+		if err != nil {
+			return err
+		}
+		if len(ents) != 0 {
+			return fmt.Errorf("发布前输出目录已被其他进程写入，拒绝覆盖")
+		}
+	}
+	published := make([]string, 0, len(names))
+	for _, name := range names {
+		src := filepath.Join(stage, name)
+		if _, err := os.Lstat(src); err != nil {
+			if rollbackErr := rollbackPublished(outAbs, backup, published); rollbackErr != nil {
+				return fmt.Errorf("临时产物缺失 %s: %w；回滚失败，旧产物备份保留于 %s: %v", name, err, backup, rollbackErr)
+			}
+			_ = waspackRemoveAll(backup)
+			return fmt.Errorf("临时产物缺失 %s: %w", name, err)
+		}
+		if err := waspackRename(src, filepath.Join(outAbs, name)); err != nil {
+			if rollbackErr := rollbackPublished(outAbs, backup, published); rollbackErr != nil {
+				return fmt.Errorf("发布产物 %s 失败: %w；回滚失败，旧产物备份保留于 %s: %v", name, err, backup, rollbackErr)
+			}
+			_ = waspackRemoveAll(backup)
+			return fmt.Errorf("发布产物 %s 失败: %w", name, err)
+		}
+		published = append(published, name)
+	}
+	if err := waspackRemoveAll(backup); err != nil {
+		return fmt.Errorf("产物已发布，但旧产物备份无法清理，请手动检查 %s: %w", backup, err)
+	}
+	return nil
+}
+
+func namesToPackageNames(names []string) []string {
+	out := make([]string, 0, len(names))
+	for _, n := range names {
+		if strings.HasSuffix(n, ".tar") {
+			out = append(out, strings.TrimSuffix(n, ".tar"))
+		}
+	}
+	return out
+}
+
+func knownArtifactNames(packageNames ...string) []string {
+	set := map[string]bool{legacyOutputMarkerName: true, ExtractedWARDirName: true, ListFileName: true, ChmodFileName: true}
+	for _, name := range packageNames {
+		if name == "" {
+			continue
+		}
+		set[TarFileName(name)] = true
+		set[BackupScriptName(name)] = true
+		set[ExecuteScriptName(name)] = true
+		set[name+".zip"] = true
+	}
+	out := make([]string, 0, len(set))
+	for name := range set {
+		out = append(out, name)
+	}
+	return out
+}
+
+func existingChildren(dir string, names []string) []string {
+	existing := make([]string, 0, len(names))
+	for _, name := range names {
+		if !validOwnedChildName(name) {
+			continue
+		}
+		if _, err := os.Lstat(filepath.Join(dir, name)); err == nil {
+			existing = append(existing, name)
+		}
+	}
+	return existing
+}
+
+func moveChildrenToBackup(outAbs, backup string) error {
+	ents, err := os.ReadDir(outAbs)
+	if err != nil {
+		return err
+	}
+	for _, ent := range ents {
+		if err := waspackRename(filepath.Join(outAbs, ent.Name()), filepath.Join(backup, ent.Name())); err != nil {
+			if rollbackErr := rollbackPublished(outAbs, backup, nil); rollbackErr != nil {
+				return fmt.Errorf("备份旧产物失败: %w；回滚失败，备份保留于 %s: %v", err, backup, rollbackErr)
+			}
+			return fmt.Errorf("备份旧产物失败: %w", err)
+		}
+	}
+	return nil
+}
+
+func moveNamedToBackup(outAbs, backup string, names []string) error {
+	for _, name := range names {
+		src := filepath.Join(outAbs, name)
+		if _, err := os.Lstat(src); os.IsNotExist(err) {
+			continue
+		} else if err != nil {
+			return err
+		}
+		if err := waspackRename(src, filepath.Join(backup, name)); err != nil {
+			if rollbackErr := rollbackPublished(outAbs, backup, nil); rollbackErr != nil {
+				return fmt.Errorf("备份旧产物失败: %w；回滚失败，备份保留于 %s: %v", err, backup, rollbackErr)
+			}
+			return fmt.Errorf("备份旧产物失败: %w", err)
+		}
+	}
+	return nil
+}
+
+func rollbackPublished(outAbs, backup string, published []string) error {
+	var failures []string
+	for _, name := range published {
+		if err := waspackRemoveAll(filepath.Join(outAbs, name)); err != nil {
+			failures = append(failures, "删除新产物 "+name+": "+err.Error())
+		}
+	}
+	ents, err := os.ReadDir(backup)
+	if err != nil {
+		return err
+	}
+	for _, ent := range ents {
+		if err := waspackRename(filepath.Join(backup, ent.Name()), filepath.Join(outAbs, ent.Name())); err != nil {
+			failures = append(failures, "恢复 "+ent.Name()+": "+err.Error())
+		}
+	}
+	if len(failures) > 0 {
+		return fmt.Errorf("%s", strings.Join(failures, "; "))
+	}
+	return nil
+}
+
+type outputLockEntry struct {
+	mu   sync.Mutex
+	refs int
+}
+
+var outputLocks = struct {
+	sync.Mutex
+	entries map[string]*outputLockEntry
+}{entries: map[string]*outputLockEntry{}}
+
+func lockOutputDir(raw string) (func(), error) {
+	if strings.TrimSpace(raw) == "" {
+		return func() {}, fmt.Errorf("输出目录不能为空")
+	}
+	abs, err := filepath.Abs(strings.TrimSpace(raw))
+	if err != nil {
+		return func() {}, err
+	}
+	key, err := canonicalPath(abs)
+	if err != nil {
+		// For a new path, canonicalPath can only fail if no ancestor exists;
+		// Abs is still a stable lock key and validation will report the real
+		// filesystem error later.
+		key = filepath.Clean(abs)
+	}
+	if runtime.GOOS == "windows" {
+		key = strings.ToLower(key)
+	}
+	outputLocks.Lock()
+	entry := outputLocks.entries[key]
+	if entry == nil {
+		entry = &outputLockEntry{}
+		outputLocks.entries[key] = entry
+	}
+	entry.refs++
+	outputLocks.Unlock()
+	entry.mu.Lock()
+	return func() {
+		entry.mu.Unlock()
+		outputLocks.Lock()
+		entry.refs--
+		if entry.refs == 0 {
+			delete(outputLocks.entries, key)
+		}
+		outputLocks.Unlock()
+	}, nil
+}
+
+// canonicalPath resolves the nearest existing parent before appending the
+// non-existent suffix. EvalSymlinks alone cannot protect a new output path
+// beneath a symlink/junction parent; resolving the ancestor closes that gap.
+func canonicalPath(raw string) (string, error) {
+	abs, err := filepath.Abs(strings.TrimSpace(raw))
+	if err != nil {
+		return "", err
+	}
+	abs = filepath.Clean(abs)
+	cur := abs
+	suffix := make([]string, 0, 4)
+	for {
+		st, statErr := os.Lstat(cur)
+		if statErr == nil {
+			if st.Mode()&os.ModeSymlink != 0 && cur == abs {
+				return "", fmt.Errorf("路径本身是符号链接")
+			}
+			real, evalErr := filepath.EvalSymlinks(cur)
+			if evalErr != nil {
+				return "", evalErr
+			}
+			for i := len(suffix) - 1; i >= 0; i-- {
+				real = filepath.Join(real, suffix[i])
+			}
+			return filepath.Clean(real), nil
+		}
+		if !os.IsNotExist(statErr) {
+			return "", statErr
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return "", fmt.Errorf("路径没有可解析的父目录")
+		}
+		suffix = append(suffix, filepath.Base(cur))
+		cur = parent
+	}
+}
+
+// validateOutputAgainstProject prevents destructive output policies from
+// touching the project itself, one of its ancestors, or a path which reaches
+// the project through a symlink/junction parent. The project argument may be
+// empty for the extracted-WAR packaging endpoint, where the staged metadata
+// is not available to the caller.
+func validateOutputAgainstProject(projectDir, outputDir string) (string, error) {
+	abs, err := filepath.Abs(strings.TrimSpace(outputDir))
+	if err != nil || !isSafeLocalPath(abs) {
+		return "", fmt.Errorf("输出目录非法")
+	}
+	canonOut, err := canonicalPath(abs)
+	if err != nil {
+		return "", fmt.Errorf("输出目录无法解析: %w", err)
+	}
+	if strings.TrimSpace(projectDir) == "" {
+		return canonOut, nil
+	}
+	projectAbs, err := filepath.Abs(strings.TrimSpace(projectDir))
+	if err != nil {
+		return "", fmt.Errorf("工程目录无效: %w", err)
+	}
+	projectInfo, err := os.Stat(projectAbs)
+	if err != nil || !projectInfo.IsDir() {
+		return "", fmt.Errorf("工程目录无效")
+	}
+	canonProject, err := canonicalPath(projectAbs)
+	if err != nil {
+		return "", fmt.Errorf("工程目录无法解析: %w", err)
+	}
+	if isSubpathOrEqual(canonOut, canonProject) || isSubpathOrEqual(canonProject, canonOut) {
+		return "", fmt.Errorf("输出目录不能是工程目录本身、工程子目录或工程祖先目录")
+	}
+	return canonOut, nil
+}
+
+func prepareOutputDirWithPolicy(path, policy string, confirmReplace bool, packageNames ...string) (abs string, created bool, err error) {
 	if strings.TrimSpace(path) == "" {
 		return "", false, fmt.Errorf("输出目录不能为空")
 	}
@@ -120,13 +479,18 @@ func prepareOutputDirWithPolicy(path, policy string, confirmReplace bool) (abs s
 	}
 	switch normalizeOutputPolicy(policy) {
 	case OutputPolicyCleanOwned:
-		if err := cleanOwnedOutput(abs); err != nil { return "", false, err }
-	case OutputPolicyReplace:
-		if !confirmReplace { return "", false, fmt.Errorf("覆盖输出目录需要明确确认") }
-		if _, err := readOutputMarker(abs); err != nil {
-			return "", false, fmt.Errorf("输出目录非空且未包含 Kairo 产物标记，拒绝清空非 Kairo 目录: %w", err)
+		if err := cleanKnownOutputArtifacts(abs, packageNames...); err != nil {
+			return "", false, err
 		}
-		if err := clearOutputChildren(abs); err != nil { return "", false, err }
+	case OutputPolicyReplace:
+		if !confirmReplace {
+			return "", false, fmt.Errorf("覆盖输出目录需要明确确认")
+		}
+		// 第三项为强制清空：只要用户已二次确认且路径通过安全校验，就清空目录内全部内容，
+		// 不再要求必须是 Kairo 产物目录（含 marker）。误删风险由前端二次确认承担。
+		if err := clearOutputChildren(abs); err != nil {
+			return "", false, err
+		}
 	default:
 		return "", false, fmt.Errorf("输出目录不是空文件夹，拒绝覆盖: %s", abs)
 	}
@@ -135,67 +499,60 @@ func prepareOutputDirWithPolicy(path, policy string, confirmReplace bool) (abs s
 
 func normalizeOutputPolicy(policy string) string {
 	switch strings.ToLower(strings.TrimSpace(policy)) {
-	case OutputPolicyCleanOwned: return OutputPolicyCleanOwned
-	case OutputPolicyReplace: return OutputPolicyReplace
-	default: return OutputPolicyFail
+	case OutputPolicyCleanOwned:
+		return OutputPolicyCleanOwned
+	case OutputPolicyReplace:
+		return OutputPolicyReplace
+	default:
+		return OutputPolicyFail
 	}
 }
 
 func clearOutputChildren(abs string) error {
-	ents, err := os.ReadDir(abs); if err != nil { return err }
-	for _, ent := range ents {
-		if err := os.RemoveAll(filepath.Join(abs, ent.Name())); err != nil { return fmt.Errorf("清理输出目录失败: %w", err) }
-	}
-	return nil
-}
-
-func readOutputMarker(abs string) (outputMarker, error) {
-	raw, err := os.ReadFile(filepath.Join(abs, outputMarkerName))
-	if err != nil { return outputMarker{}, fmt.Errorf("输出目录不是 Kairo 管理的产物目录，拒绝自动清理") }
-	var marker outputMarker
-	if err := json.Unmarshal(raw, &marker); err != nil || marker.Owner != "kairo-waspack" || marker.Version != 1 {
-		return outputMarker{}, fmt.Errorf("Kairo 产物标记无效，拒绝自动清理")
-	}
-	return marker, nil
-}
-
-func cleanOwnedOutput(abs string) error {
-	marker, err := readOutputMarker(abs); if err != nil { return err }
-	owned := map[string]bool{outputMarkerName: true}
-	for _, name := range marker.Owned {
-		name = filepath.Clean(strings.TrimSpace(name))
-		if name == "." || name == ".." || filepath.IsAbs(name) || strings.HasPrefix(name, ".."+string(filepath.Separator)) { return fmt.Errorf("产物标记包含非法路径") }
-		owned[name] = true
-	}
-	ents, err := os.ReadDir(abs); if err != nil { return err }
-	for _, ent := range ents {
-		if !owned[ent.Name()] { return fmt.Errorf("输出目录包含未知文件 %q，拒绝自动清理", ent.Name()) }
-	}
-	for name := range owned {
-		if name == outputMarkerName || name == "." { _ = os.Remove(filepath.Join(abs, name)); continue }
-		_ = os.RemoveAll(filepath.Join(abs, name))
-	}
-	left, err := os.ReadDir(abs); if err != nil { return err }
-	if len(left) > 0 { return fmt.Errorf("输出目录仍包含未清理的文件") }
-	return nil
-}
-
-func writeOutputMarker(abs, packageName string, owned []string) error {
-	marker := outputMarker{Owner: "kairo-waspack", Version: 1, PackageName: packageName, Owned: append([]string(nil), owned...), GeneratedAt: time.Now().UTC().Format(time.RFC3339)}
-	raw, err := json.MarshalIndent(marker, "", "  ")
+	ents, err := os.ReadDir(abs)
 	if err != nil {
 		return err
 	}
-	tmpName := filepath.Join(abs, outputMarkerName+".tmp."+strconv.FormatInt(time.Now().UnixNano(), 10))
-	targetName := filepath.Join(abs, outputMarkerName)
-	if err := os.WriteFile(tmpName, append(raw, '\n'), 0o600); err != nil {
-		return err
+	for _, ent := range ents {
+		if err := os.RemoveAll(filepath.Join(abs, ent.Name())); err != nil {
+			return fmt.Errorf("清理输出目录失败: %w", err)
+		}
 	}
-	if err := os.Rename(tmpName, targetName); err != nil {
-		_ = os.Remove(targetName)
-		if renameErr := os.Rename(tmpName, targetName); renameErr != nil {
-			_ = os.Remove(tmpName)
-			return renameErr
+	return nil
+}
+
+func cleanKnownOutputArtifacts(abs string, packageNames ...string) error {
+	owned := map[string]bool{
+		legacyOutputMarkerName: true,
+		ExtractedWARDirName:    true,
+		ListFileName:           true,
+		ChmodFileName:          true,
+	}
+	for _, rawName := range packageNames {
+		if strings.TrimSpace(rawName) == "" {
+			continue
+		}
+		name, err := SanitizePackageName(rawName)
+		if err != nil {
+			return err
+		}
+		owned[TarFileName(name)] = true
+		owned[BackupScriptName(name)] = true
+		owned[ExecuteScriptName(name)] = true
+		owned[name+".zip"] = true
+	}
+	ownedNames := make([]string, 0, len(owned))
+	for name := range owned {
+		if _, err := os.Lstat(filepath.Join(abs, name)); err == nil {
+			ownedNames = append(ownedNames, name)
+		}
+	}
+	if _, err := os.Lstat(filepath.Join(abs, legacyOutputMarkerName)); os.IsNotExist(err) && len(ownedNames) > 0 && !ownsArtifacts(abs, ownedNames) {
+		return ownershipError(abs)
+	}
+	for name := range owned {
+		if err := os.RemoveAll(filepath.Join(abs, name)); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("清理旧打包产物失败: %w", err)
 		}
 	}
 	return nil
@@ -331,13 +688,34 @@ func writeUnixFile(path, content string, perm os.FileMode) error {
 	return err
 }
 
+// IsBatchPack 统一判断是否为批量打包：显式 pack_type 为准，空时按包名前缀 DDD 兼容。
+func IsBatchPack(packType, packageName string) bool {
+	t := strings.ToLower(strings.TrimSpace(packType))
+	if t == "batch" {
+		return true
+	}
+	if t == "app" {
+		return false
+	}
+	return strings.HasPrefix(strings.ToUpper(strings.TrimSpace(packageName)), "DDD")
+}
+
 func listText(files []ResolvedFile) string {
+	return listTextBatch(files, false)
+}
+
+// listTextBatch 批量与应用一致：统一带 ./ 前缀（如 ./amargci/...），
+// 保证预检清单、list.txt、tar、脚本四者完全一致。
+func listTextBatch(files []ResolvedFile, isBatch bool) string {
 	var b strings.Builder
 	for i, rf := range files {
 		if i > 0 {
 			b.WriteByte('\n')
 		}
-		b.WriteString(rf.Rel)
+		_ = isBatch
+		clean := strings.TrimPrefix(strings.ReplaceAll(rf.Rel, "\\", "/"), "./")
+		clean = strings.TrimLeft(clean, "/")
+		b.WriteString("./" + clean)
 	}
 	b.WriteByte('\n')
 	return b.String()
@@ -371,7 +749,7 @@ func PreviewRequest(req Request) (*Preview, error) {
 	if err != nil {
 		return nil, err
 	}
-	if strings.ToLower(strings.TrimSpace(req.PackType)) == "batch" {
+	if IsBatchPack(req.PackType, req.PackageName) {
 		return ResolveBatch(req.ProjectDir, listed, req.AutoPair)
 	}
 	return Resolve(req.ProjectDir, listed, req.AutoPair)
@@ -379,6 +757,15 @@ func PreviewRequest(req Request) (*Preview, error) {
 
 // Build 创建空输出目录，写入 list.txt、tar、备份脚本、执行脚本（批量时另写 chmod.txt）。
 func Build(req Request) (*Result, error) {
+	unlock, err := lockOutputDir(req.OutputDir)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	return buildLocked(req)
+}
+
+func buildLocked(req Request) (*Result, error) {
 	pkgName, err := SanitizePackageName(req.PackageName)
 	if err != nil {
 		return nil, err
@@ -399,29 +786,49 @@ func Build(req Request) (*Result, error) {
 		}
 		return nil, fmt.Errorf("工程里找不到 %d 个文件，请先编译或检查路径: %s", len(pv.Missing), strings.Join(names, ", "))
 	}
-
-	outAbs, created, err := prepareOutputDirWithPolicy(req.OutputDir, req.OutputPolicy, req.ConfirmReplace)
-	if err != nil {
+	if _, err := validateOutputAgainstProject(req.ProjectDir, req.OutputDir); err != nil {
 		return nil, err
 	}
 
-	listPath := filepath.Join(outAbs, ListFileName)
-	tarPath := filepath.Join(outAbs, TarFileName(pkgName))
-	backupPath := filepath.Join(outAbs, BackupScriptName(pkgName))
-	execPath := filepath.Join(outAbs, ExecuteScriptName(pkgName))
+	outAbs, created, err := prepareOutputDirForStaging(req.OutputDir, req.OutputPolicy, req.ConfirmReplace, pkgName)
+	if err != nil {
+		return nil, err
+	}
+	stage, err := os.MkdirTemp(filepath.Dir(outAbs), ".kairo-waspack-stage-")
+	if err != nil {
+		if created {
+			_ = os.Remove(outAbs)
+		}
+		return nil, fmt.Errorf("创建临时打包目录失败: %w", err)
+	}
+	defer os.RemoveAll(stage)
 
-	isBatch := strings.ToLower(strings.TrimSpace(req.PackType)) == "batch"
+	listPath := filepath.Join(stage, ListFileName)
+	tarPath := filepath.Join(stage, TarFileName(pkgName))
+	backupPath := filepath.Join(stage, BackupScriptName(pkgName))
+	execPath := filepath.Join(stage, ExecuteScriptName(pkgName))
+
+	isBatch := IsBatchPack(req.PackType, pkgName)
 	var chmodPath, chmodContent string
 	if isBatch {
-		chmodContent = renderChmodScript(req.BatchBaseDir, pv.Files)
+		chmodContent, err = renderChmodScriptSafe(req.BatchBaseDir, pv.Files, req.ChmodMode)
+		if err != nil {
+			cleanup := func() {
+				if created {
+					_ = os.Remove(outAbs)
+				}
+			}
+			cleanup()
+			return nil, err
+		}
 		if chmodContent != "" {
-			chmodPath = filepath.Join(outAbs, ChmodFileName)
+			chmodPath = filepath.Join(stage, ChmodFileName)
 		}
 	}
 
-	cleanup := func() { rollback(outAbs, created, listPath, tarPath, backupPath, execPath, chmodPath) }
+	cleanup := func() { rollback(stage, false, listPath, tarPath, backupPath, execPath, chmodPath) }
 
-	listContent := listText(pv.Files)
+	listContent := listTextBatch(pv.Files, isBatch)
 	if err := writeUnixFile(listPath, listContent, 0o644); err != nil {
 		cleanup()
 		return nil, fmt.Errorf("写清单失败: %w", err)
@@ -440,7 +847,11 @@ func Build(req Request) (*Result, error) {
 
 	var backupContent, execContent string
 	if isBatch {
-		backupContent = renderBatchBackupScript(pkgName, pv.Files)
+		backupContent, err = renderBatchBackupScriptAtRoot(pkgName, pv.Files, req.BatchBaseDir)
+		if err != nil {
+			cleanup()
+			return nil, err
+		}
 		execContent = renderBatchExecuteScript(pkgName, pv.Files)
 	} else {
 		backupContent = renderBackupScript(pkgName, pv.Files)
@@ -455,8 +866,29 @@ func Build(req Request) (*Result, error) {
 		cleanup()
 		return nil, fmt.Errorf("写执行脚本失败: %w", err)
 	}
+	artifactNames := []string{ListFileName, TarFileName(pkgName), BackupScriptName(pkgName), ExecuteScriptName(pkgName)}
+	if chmodPath != "" {
+		artifactNames = append(artifactNames, ChmodFileName)
+	}
+	if err := publishStagedArtifactsWithMetadata(stage, outAbs, req.OutputPolicy, req.ConfirmReplace, artifactNames, req.MetadataDir); err != nil {
+		if created {
+			_ = os.Remove(outAbs)
+		}
+		return nil, err
+	}
+	listPath = filepath.Join(outAbs, ListFileName)
+	tarPath = filepath.Join(outAbs, TarFileName(pkgName))
+	backupPath = filepath.Join(outAbs, BackupScriptName(pkgName))
+	execPath = filepath.Join(outAbs, ExecuteScriptName(pkgName))
+	if chmodPath != "" {
+		chmodPath = filepath.Join(outAbs, ChmodFileName)
+	}
+	warnings := append([]string(nil), pv.Warnings...)
+	if ownershipErr := reconcileOwnedArtifactsAt(outAbs, req.MetadataDir, artifactNames); ownershipErr != nil {
+		warnings = append(warnings, "无法写入清理归属元数据："+ownershipErr.Error())
+	}
 
-	return &Result{
+	result := &Result{
 		OK:            true,
 		OutputDir:     outAbs,
 		TarFile:       tarPath,
@@ -469,8 +901,13 @@ func Build(req Request) (*Result, error) {
 		Files:         len(pv.Files),
 		Bytes:         bytes,
 		CreatedDir:    created,
-		Warnings:      pv.Warnings,
+		Warnings:      warnings,
 		PairedAdded:   pairedCount(pv.Files),
 		PackType:      req.PackType,
-	}, nil
+		ChmodMode:     req.ChmodMode,
+	}
+	artifacts, digestWarnings := ResultArtifacts(result)
+	result.Artifacts = artifacts
+	result.Warnings = append(result.Warnings, digestWarnings...)
+	return result, nil
 }

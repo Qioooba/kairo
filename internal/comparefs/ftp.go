@@ -9,6 +9,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	ftpclient "github.com/jlaffaye/ftp"
@@ -26,6 +27,10 @@ type FTPConfig struct {
 type FTP struct {
 	client *ftpclient.ServerConn
 	name   string
+	// jlaffaye/ftp's ServerConn has a single control channel and is not safe
+	// for concurrent commands.  This token is part of the FTP backend's
+	// protocol contract; Open holds it until the data stream is closed.
+	opToken chan struct{}
 }
 
 func DialFTP(ctx context.Context, cfg FTPConfig) (*FTP, error) {
@@ -54,16 +59,44 @@ func DialFTP(ctx context.Context, cfg FTPConfig) (*FTP, error) {
 		_ = c.Quit()
 		return nil, err
 	}
-	return &FTP{client: c, name: "FTP " + addr}, nil
+	return &FTP{client: c, name: "FTP " + addr, opToken: make(chan struct{}, 1)}, nil
 }
 
 func (f *FTP) Kind() string                  { return "ftp" }
 func (f *FTP) DisplayName() string           { return f.name }
 func (f *FTP) Clean(name string) string      { return RemoteClean(name) }
 func (f *FTP) Join(base, name string) string { return path.Join(RemoteClean(base), name) }
-func (f *FTP) Close() error                  { return f.client.Quit() }
+func (f *FTP) CompareConcurrency() int       { return 1 }
+func (f *FTP) acquire(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	select {
+	case f.opToken <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+func (f *FTP) release() { <-f.opToken }
+
+func (f *FTP) Close() error {
+	if err := f.acquire(context.Background()); err != nil {
+		return err
+	}
+	defer f.release()
+	return f.client.Quit()
+}
 
 func (f *FTP) Stat(ctx context.Context, name string) (Entry, error) {
+	if err := f.acquire(ctx); err != nil {
+		return Entry{}, err
+	}
+	defer f.release()
+	return f.statLocked(ctx, name)
+}
+
+func (f *FTP) statLocked(ctx context.Context, name string) (Entry, error) {
 	if err := ctx.Err(); err != nil {
 		return Entry{}, err
 	}
@@ -74,7 +107,7 @@ func (f *FTP) Stat(ctx context.Context, name string) (Entry, error) {
 		return Entry{Name: path.Base(cleaned), Path: cleaned, Size: size, ModTime: mtime}, nil
 	}
 	parent := path.Dir(cleaned)
-	entries, err := f.List(ctx, parent)
+	entries, err := f.listLocked(ctx, parent, 0)
 	if err != nil {
 		return Entry{}, sizeErr
 	}
@@ -83,10 +116,21 @@ func (f *FTP) Stat(ctx context.Context, name string) (Entry, error) {
 			return entry, nil
 		}
 	}
-	return Entry{}, sizeErr
+	return Entry{}, ErrNotFound
 }
 
 func (f *FTP) List(ctx context.Context, dir string) ([]Entry, error) {
+	if err := f.acquire(ctx); err != nil {
+		return nil, err
+	}
+	defer f.release()
+	return f.listLocked(ctx, dir, 0)
+}
+
+func (f *FTP) listLocked(ctx context.Context, dir string, max int) ([]Entry, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	items, err := f.client.List(RemoteClean(dir))
 	if err != nil {
 		return nil, err
@@ -99,19 +143,56 @@ func (f *FTP) List(ctx context.Context, dir string) ([]Entry, error) {
 		if item.Name == "." || item.Name == ".." {
 			continue
 		}
+		if max > 0 && len(entries) >= max {
+			break
+		}
 		entries = append(entries, Entry{Name: item.Name, Path: path.Join(RemoteClean(dir), item.Name), Size: int64(item.Size), ModTime: item.Time, IsDir: item.Type == ftpclient.EntryTypeFolder})
 	}
 	return entries, nil
 }
 
+// ListLimited is intentionally conservative: FTP LIST does not expose a
+// portable count without consuming the full response, so we return all entries
+// and let the compare walker enforce its global cap.  The ServerConn remains
+// serialized by the protocol token above.
+func (f *FTP) ListLimited(ctx context.Context, dir string, max int) ([]Entry, bool, error) {
+	if err := f.acquire(ctx); err != nil {
+		return nil, false, err
+	}
+	defer f.release()
+	entries, err := f.listLocked(ctx, dir, 0)
+	if err != nil {
+		return nil, false, err
+	}
+	if max > 0 && len(entries) > max {
+		return entries[:max], true, nil
+	}
+	return entries, false, nil
+}
+
 func (f *FTP) Open(ctx context.Context, name string) (io.ReadCloser, error) {
-	if err := ctx.Err(); err != nil {
+	if err := f.acquire(ctx); err != nil {
 		return nil, err
 	}
-	return f.client.Retr(RemoteClean(name))
+	r, err := f.client.Retr(RemoteClean(name))
+	if err != nil {
+		f.release()
+		return nil, err
+	}
+	reader := &ftpReadCloser{ReadCloser: r, release: f.release, done: make(chan struct{})}
+	go reader.watch(ctx)
+	return reader, nil
 }
 
 func (f *FTP) MkdirAll(ctx context.Context, dir string, mode uint32) error {
+	if err := f.acquire(ctx); err != nil {
+		return err
+	}
+	defer f.release()
+	return f.mkdirAllLocked(ctx, dir, mode)
+}
+
+func (f *FTP) mkdirAllLocked(ctx context.Context, dir string, mode uint32) error {
 	cleaned := RemoteClean(dir)
 	current := "/"
 	for _, part := range strings.Split(strings.TrimPrefix(cleaned, "/"), "/") {
@@ -124,8 +205,12 @@ func (f *FTP) MkdirAll(ctx context.Context, dir string, mode uint32) error {
 		current = path.Join(current, part)
 		if err := f.client.MakeDir(current); err != nil {
 			// Many FTP servers report an error when the directory already exists.
-			if _, statErr := f.Stat(ctx, current); statErr != nil {
+			entry, statErr := f.statLocked(ctx, current)
+			if statErr != nil {
 				return err
+			}
+			if !entry.IsDir {
+				return ErrTypeConflict
 			}
 		}
 	}
@@ -133,12 +218,30 @@ func (f *FTP) MkdirAll(ctx context.Context, dir string, mode uint32) error {
 }
 
 func (f *FTP) WriteAtomic(ctx context.Context, name string, src io.Reader, opts WriteOptions) error {
+	if err := f.acquire(ctx); err != nil {
+		return err
+	}
+	defer f.release()
+	return f.writeAtomicLocked(ctx, name, src, opts)
+}
+
+func (f *FTP) writeAtomicLocked(ctx context.Context, name string, src io.Reader, opts WriteOptions) error {
 	cleaned := RemoteClean(name)
-	if opts.Expected != nil {
-		current, err := f.Stat(ctx, cleaned)
-		if err != nil || !SameVersion(current, *opts.Expected) {
+	current, statErr := f.statLocked(ctx, cleaned)
+	if statErr == nil {
+		if current.IsDir {
+			return ErrTypeConflict
+		}
+		if opts.ExpectedMissing {
 			return ErrConflict
 		}
+		if opts.Expected != nil && !SameVersion(current, *opts.Expected) {
+			return ErrConflict
+		}
+	} else if !IsNotFound(statErr) {
+		return statErr
+	} else if opts.Expected != nil {
+		return ErrConflict
 	}
 	stamp := strconv.FormatInt(time.Now().UnixNano(), 36)
 	partial := cleaned + ".kairo-" + stamp + ".partial"
@@ -146,8 +249,27 @@ func (f *FTP) WriteAtomic(ctx context.Context, name string, src io.Reader, opts 
 		_ = f.client.Delete(partial)
 		return err
 	}
+	// Recheck after upload, before any backup rename.  This is required for
+	// directory sync plans where ExpectedMissing protects a newly created file.
+	current, statErr = f.statLocked(ctx, cleaned)
+	if statErr == nil {
+		if current.IsDir {
+			_ = f.client.Delete(partial)
+			return ErrTypeConflict
+		}
+		if opts.ExpectedMissing || (opts.Expected != nil && !SameVersion(current, *opts.Expected)) {
+			_ = f.client.Delete(partial)
+			return ErrConflict
+		}
+	} else if !IsNotFound(statErr) || opts.Expected != nil {
+		_ = f.client.Delete(partial)
+		if IsNotFound(statErr) && opts.Expected != nil {
+			return ErrConflict
+		}
+		return statErr
+	}
 	if opts.Backup {
-		if _, err := f.Stat(ctx, cleaned); err == nil {
+		if _, err := f.statLocked(ctx, cleaned); err == nil {
 			backup := cleaned + ".kairo-backup-" + stamp
 			if err := f.client.Rename(cleaned, backup); err != nil {
 				_ = f.client.Delete(partial)
@@ -164,6 +286,9 @@ func (f *FTP) WriteAtomic(ctx context.Context, name string, src io.Reader, opts 
 				}
 			}
 			return nil
+		} else if !IsNotFound(err) {
+			_ = f.client.Delete(partial)
+			return err
 		}
 	}
 	if err := f.client.Rename(partial, cleaned); err != nil {
@@ -176,6 +301,31 @@ func (f *FTP) WriteAtomic(ctx context.Context, name string, src io.Reader, opts 
 		}
 	}
 	return nil
+}
+
+type ftpReadCloser struct {
+	io.ReadCloser
+	release func()
+	done    chan struct{}
+	once    sync.Once
+}
+
+func (r *ftpReadCloser) Close() error {
+	var err error
+	r.once.Do(func() {
+		close(r.done)
+		err = r.ReadCloser.Close()
+		r.release()
+	})
+	return err
+}
+
+func (r *ftpReadCloser) watch(ctx context.Context) {
+	select {
+	case <-ctx.Done():
+		_ = r.Close()
+	case <-r.done:
+	}
 }
 
 type contextReader struct {

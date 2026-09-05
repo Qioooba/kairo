@@ -174,8 +174,7 @@
   var BOOL_PROPS = {
     disabled: 1, checked: 1, selected: 1, readonly: 1, required: 1,
     autofocus: 1, multiple: 1, nowrap: 1, hidden: 1, open: 1,
-    defer: 1, async: 1, autoplay: 1, controls: 1, loop: 1, muted: 1,
-    draggable: 1, contenteditable: 1, spellcheck: 1
+    defer: 1, async: 1, autoplay: 1, controls: 1, loop: 1, muted: 1
   };
   function el(tag, attrs, children) {
     const e = document.createElement(tag);

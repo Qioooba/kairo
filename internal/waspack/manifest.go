@@ -12,7 +12,7 @@ import (
 const (
 	MaxManifestBytes = 1 << 20
 	MaxFiles         = 3000
-	ListFileName = "list.txt"
+	ListFileName     = "list.txt"
 )
 
 // FileKind 按投产清单里的后缀分类，便于预检统计。

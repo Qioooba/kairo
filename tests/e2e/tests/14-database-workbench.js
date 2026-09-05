@@ -11,6 +11,16 @@ function register(runner, ctx) {
   runner.describe('数据库工作台', function () {
     runner.beforeEach(async function () {
       await page.goto(baseUrl + '#/home', { waitUntil: 'domcontentloaded' });
+      // Keep every case independent from the workbench's intentional session
+      // backup/restore feature. Otherwise accumulated tabs can hit the tab cap
+      // and a later "new tab" assertion would unknowingly keep using the old tab.
+      await page.evaluate(function () {
+        localStorage.setItem('kairo_db_sessions_backup', JSON.stringify({
+          activeId: 1,
+          tabSeq: 1,
+          sessions: [{ id: 1, sql: '', sourceId: '', page: 1, pageSize: 20 }]
+        }));
+      });
       await page.goto(baseUrl + '#/database', { waitUntil: 'domcontentloaded' });
       await page.waitForTimeout(1200);
     });
@@ -32,12 +42,17 @@ function register(runner, ctx) {
       await page.waitForSelector('#dbf-kind', { timeout: 4000 });
       const options = await page.$$eval('#dbf-kind option', els => els.map(e => e.value));
       if (!options.includes('oracle')) throw new Error('缺少 Oracle 类型');
-      const tlsHidden = await page.evaluate(function () {
+      await page.waitForSelector('#dbf-environment', { timeout: 2000 });
+      const advancedFields = await page.evaluate(function () {
+        return ['dbf-environment', 'dbf-read-only', 'dbf-allow-ddl', 'dbf-tls-server-name', 'dbf-tls-ca-file', 'dbf-tls-client-cert', 'dbf-tls-client-key', 'dbf-ssh-enabled', 'dbf-ssh-host', 'dbf-ssh-port', 'dbf-ssh-user', 'dbf-ssh-remote-host', 'dbf-ssh-remote-port', 'dbf-ssh-host-key', 'dbf-ssh-profile', 'dbf-ssh-insecure'].every(function (id) { return !!document.getElementById(id); });
+      });
+      if (!advancedFields) throw new Error('环境、TLS 或 SSH 数据源字段未完整接入');
+      const tlsVisible = await page.evaluate(function () {
         const tls = document.getElementById('dbf-tls');
         const field = tls && tls.closest('.db-field');
-        return !!(field && field.hidden);
+        return !!(field && !field.hidden);
       });
-      if (!tlsHidden) throw new Error('Oracle 表单不应显示 TLS');
+      if (!tlsVisible) throw new Error('Oracle 表单应显示 TLS 模式以支持 required/skip-verify');
       await runner.screenshot(page, '14-database-02-manager');
       const close = await page.$('#dbf-close');
       if (close) await close.click();
@@ -83,16 +98,28 @@ function register(runner, ctx) {
         await runner.screenshot(page, '14-database-03-no-source');
         return;
       }
-      const inspectTabs = await page.$$('.db-inspect-tab');
-      if (inspectTabs.length < 4) throw new Error('缺少字段/索引/约束/DDL 页签');
-      await inspectTabs[0].click();
-      await page.waitForTimeout(200);
-      await inspectTabs[1].click();
-      await page.waitForTimeout(200);
-      await inspectTabs[2].click();
-      await page.waitForTimeout(200);
-      await inspectTabs[3].click();
-      await page.waitForTimeout(200);
+      const metaPane = await page.$('#db-meta-pane');
+      if (metaPane && await metaPane.evaluate(function (el) { return el.classList.contains('is-collapsed'); })) {
+        await page.click('#db-meta-collapsed-bar');
+        await page.waitForTimeout(200);
+      }
+      if ((await page.$$('.db-inspect-tab')).length) throw new Error('左侧不应再重复展示字段/索引/约束/DDL');
+      await page.waitForSelector('.db-tree-folder', { timeout: 5000 });
+      const folders = await page.$$('.db-tree-folder');
+      if (folders.length < 3) throw new Error('对象分类未使用文件夹外观');
+      const firstGroup = page.locator('.db-tree-group > summary').first();
+      if (await firstGroup.count()) {
+        await firstGroup.click();
+        await page.waitForTimeout(600);
+        const firstObject = page.locator('.db-object').first();
+        if (await firstObject.count()) {
+          await firstObject.click();
+          await page.waitForTimeout(500);
+          if (!(await page.$('#db-sql-tabs .db-object-tab.active'))) throw new Error('单击对象没有在右侧打开详情页签');
+          const queryTab = page.locator('#db-sql-tabs .db-editor-tab:not(.db-object-tab)').first();
+          if (await queryTab.count()) { await queryTab.click(); await page.waitForTimeout(250); }
+        }
+      }
 
       const sql = await page.$('#db-sql');
       if (sql) {
@@ -174,7 +201,7 @@ function register(runner, ctx) {
 
     runner.it('结果网格虚拟滚动只渲染视口附近的行', async function () {
       if (!(await page.$('#db-sql'))) return;
-      const total = 5000;
+      const total = 20000;
       await page.route('**/api/database/query', async function (route) {
         const columns = [{ name: 'ID', database_type: 'NUMBER' }, { name: 'NAME', database_type: 'VARCHAR2' }];
         const parts = [JSON.stringify({ type: 'meta', columns }) + '\n'];
@@ -196,7 +223,7 @@ function register(runner, ctx) {
           const ta = document.getElementById('db-sql');
           const max = document.getElementById('db-max-rows');
           if (max) {
-            max.value = '5000';
+            max.value = '20000';
             max.dispatchEvent(new Event('change', { bubbles: true }));
           }
           if (ta) {
@@ -209,7 +236,7 @@ function register(runner, ctx) {
         await page.waitForFunction(function () {
           const body = document.getElementById('db-result-body');
           const meta = document.getElementById('db-result-meta');
-          return body && body.querySelectorAll('tr[data-row]').length > 0 && meta && meta.textContent.indexOf('5000') >= 0;
+          return body && body.querySelectorAll('tr[data-row]').length > 0 && meta && meta.textContent.indexOf('20000') >= 0;
         }, null, { timeout: 15000 });
         const top = await page.evaluate(function () {
           const body = document.getElementById('db-result-body');
@@ -218,16 +245,16 @@ function register(runner, ctx) {
         });
         if (top.painted > 120) throw new Error('虚拟滚动渲染了过多行: ' + JSON.stringify(top));
         if (top.first !== 0) throw new Error('初始窗口应从头开始: ' + JSON.stringify(top));
-        await page.fill('#db-result-filter', 'row-4999');
+        await page.fill('#db-result-filter', 'row-19999');
         await page.waitForFunction(function () {
           const meta = document.getElementById('db-result-meta');
-          return meta && meta.textContent.indexOf('1/5000') >= 0;
+          return meta && meta.textContent.indexOf('1/20000') >= 0;
         }, null, { timeout: 5000 });
         const filtered = await page.evaluate(function () {
           const rows = Array.from(document.querySelectorAll('#db-result-body tr[data-row]')).map(function (tr) { return tr.textContent; });
           return { painted: rows.length, text: rows.join('|') };
         });
-        if (filtered.painted !== 1 || filtered.text.indexOf('row-4999') < 0) throw new Error('过滤未收敛到目标行: ' + JSON.stringify(filtered));
+        if (filtered.painted !== 1 || filtered.text.indexOf('row-19999') < 0) throw new Error('过滤未收敛到目标行: ' + JSON.stringify(filtered));
         await page.fill('#db-result-filter', '');
         await page.waitForFunction(function () {
           return document.querySelectorAll('#db-result-body tr[data-row]').length > 10;
@@ -278,7 +305,7 @@ function register(runner, ctx) {
         });
         await page.waitForFunction(function () {
           const rows = document.querySelectorAll('#db-result-body tr[data-row]');
-          return rows.length && Number(rows[rows.length - 1].dataset.row) >= 4900;
+          return rows.length && Number(rows[rows.length - 1].dataset.row) >= 19900;
         }, null, { timeout: 5000 });
         const bottom = await page.evaluate(function () {
           const body = document.getElementById('db-result-body');
@@ -286,7 +313,7 @@ function register(runner, ctx) {
           return { painted: rows.length, first: rows[0], last: rows[rows.length - 1] };
         });
         if (bottom.painted > 120) throw new Error('滚动后仍渲染过多行: ' + JSON.stringify(bottom));
-        if (bottom.last < 4900) throw new Error('滚动到底未露出末行: ' + JSON.stringify(bottom));
+        if (bottom.last < 19900) throw new Error('滚动到底未露出末行: ' + JSON.stringify(bottom));
         await runner.screenshot(page, '14-database-05-virtual-scroll');
       } finally {
         await page.unroute('**/api/database/query');
@@ -300,6 +327,8 @@ function register(runner, ctx) {
       await page.waitForTimeout(200);
       const tabs = await page.$$('#db-sql-tabs .db-editor-tab');
       if (tabs.length < 2) throw new Error('新建页签失败: ' + tabs.length);
+      const activeSession = await page.evaluate(function () { return window.Kairo.database.getActiveSession(); });
+      if (!activeSession || !activeSession.sessionId || !activeSession.sourceId) throw new Error('增强功能未取得当前页签 session_id/source_id');
       await page.fill('#db-sql', 'se');
       await page.waitForTimeout(250);
       const open = await page.$('#db-sql-ac:not([hidden])');
@@ -316,10 +345,12 @@ function register(runner, ctx) {
         const pos = ta.value.indexOf('(');
         ta.focus();
         ta.setSelectionRange(pos, pos);
-        ta.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }));
+        if (typeof ta._syncHighlight !== 'function') throw new Error('SQL 高亮同步器未绑定');
+        ta._syncHighlight();
       });
-      const html = await page.$eval('#db-sql-highlight', function (el) { return el.innerHTML; });
-      if (html.indexOf('db-sql-br') < 0) throw new Error('括号匹配高亮缺失');
+      await page.waitForFunction(function () {
+        return !!document.querySelector('#db-sql-highlight .db-sql-br');
+      }, null, { timeout: 1500 });
       await runner.screenshot(page, '14-database-06-tabs-complete');
     });
 
@@ -347,6 +378,136 @@ function register(runner, ctx) {
       } finally {
         await page.unroute('**/api/database/query');
       }
+    });
+
+    runner.it('未提交网格修改按页签隔离，切回后仍可放弃', async function () {
+      if (!(await page.$('#db-sql'))) return;
+      await page.route('**/api/database/query', async function (route) {
+        const body = JSON.stringify({ type: 'meta', columns: [{ name: 'ID', database_type: 'NUMBER' }, { name: 'NAME', database_type: 'VARCHAR2' }] }) + '\n'
+          + JSON.stringify({ type: 'rows', rows: [[1, 'before']] }) + '\n'
+          + JSON.stringify({ type: 'summary', summary: { rows: 1, elapsed_ms: 1, truncated: false, bytes: 8, query_limit: 20 } }) + '\n';
+        await route.fulfill({ status: 200, contentType: 'application/x-ndjson; charset=utf-8', body: body });
+      });
+      try {
+        await page.fill('#db-sql', 'SELECT ID, NAME FROM tab_isolation_probe');
+        await page.click('#db-run');
+        await page.waitForSelector('#db-result-body td[data-col="1"]', { timeout: 5000 });
+        const originalTab = await page.$eval('#db-sql-tabs .db-editor-tab.active', function (el) { return el.dataset.tab; });
+        const editPressed = await page.$eval('#db-toggle-edit', function (el) { return el.getAttribute('aria-pressed') === 'true'; });
+        if (!editPressed) await page.click('#db-toggle-edit');
+        await page.dblclick('#db-result-body td[data-col="1"]');
+        await page.fill('#db-result-body td[data-col="1"] input', 'changed');
+        await page.keyboard.press('Enter');
+        const pendingBefore = await page.$eval('#db-btn-commit', function (el) { return el.textContent.trim(); });
+        if (pendingBefore.indexOf('网格 1') < 0) throw new Error('原页签没有记录待提交修改: ' + pendingBefore);
+
+        await page.click('#db-tab-add');
+        const newTab = await page.$eval('#db-sql-tabs .db-editor-tab.active', function (el) { return el.dataset.tab; });
+        const isolated = await page.$eval('#db-btn-commit', function (el) { return { disabled: el.disabled, text: el.textContent.trim() }; });
+        if (!isolated.disabled || isolated.text.indexOf('网格 1') >= 0) throw new Error('新页签泄漏了旧页签的网格修改: ' + JSON.stringify(isolated));
+
+        await page.click('#db-sql-tabs .db-editor-tab[data-tab="' + originalTab + '"]');
+        const restored = await page.evaluate(function () {
+          return {
+            pending: document.getElementById('db-btn-commit').textContent.trim(),
+            cell: (document.querySelector('#db-result-body td[data-col="1"]') || {}).textContent || '',
+            edit: document.getElementById('db-toggle-edit').getAttribute('aria-pressed')
+          };
+        });
+        if (restored.pending.indexOf('网格 1') < 0 || restored.cell.indexOf('changed') < 0 || restored.edit !== 'true') {
+          throw new Error('切回原页签后未完整恢复网格编辑状态: ' + JSON.stringify(restored));
+        }
+        await page.click('#db-btn-rollback');
+        const rolledBack = await page.$eval('#db-result-body td[data-col="1"]', function (el) { return el.textContent.trim(); });
+        if (rolledBack !== 'before') throw new Error('放弃修改后未恢复原值: ' + rolledBack);
+        await page.evaluate(function (id) {
+          const close = document.querySelector('#db-sql-tabs [data-close="' + id + '"]');
+          if (close) close.click();
+        }, newTab);
+      } finally {
+        await page.unroute('**/api/database/query');
+      }
+    });
+
+    runner.it('V2 权限、事务提示、消息语义、对象栏快捷键和输入法保护一致', async function () {
+      if (!(await page.$('#db-sql'))) return;
+      const status = await page.$eval('.db-safe', function (el) { return { text: el.textContent, write: el.classList.contains('is-write') }; });
+      if (status.write && (status.text.indexOf('DML 页签事务') < 0 || status.text.indexOf('手动提交') < 0)) {
+        throw new Error('可写会话没有明确事务语义: ' + status.text);
+      }
+      if (status.write && status.text.indexOf('只读会话') >= 0) throw new Error('V2 可写会话仍显示只读文案');
+      const editLabel = await page.$eval('#db-toggle-edit', function (el) { return el.textContent.trim(); });
+      if (editLabel.indexOf('网格编辑') < 0) throw new Error('编辑开关没有限定为网格编辑: ' + editLabel);
+      const restored = await page.evaluate(function () {
+        const sql = (document.getElementById('db-sql').value || '').replace(/\s+/g, ' ').trim();
+        const title = (document.querySelector('#db-sql-tabs .db-editor-tab.active .db-tab-name') || {}).textContent || '';
+        return { sql: sql, title: title };
+      });
+      if (restored.sql && restored.title.indexOf(restored.sql.slice(0, 18)) < 0) {
+        throw new Error('恢复后的页签标题与 SQL 正文不同步: ' + JSON.stringify(restored));
+      }
+      if (!restored.sql && restored.title.indexOf('查询 ') < 0) {
+        throw new Error('恢复后的页签标题显示旧 SQL，但编辑器为空: ' + JSON.stringify(restored));
+      }
+
+      const collapsedBefore = await page.$eval('#db-meta-pane', function (el) { return el.classList.contains('is-collapsed'); });
+      await page.keyboard.press('Alt+O');
+      await page.waitForTimeout(180);
+      const collapsedAfter = await page.$eval('#db-meta-pane', function (el) { return el.classList.contains('is-collapsed'); });
+      if (collapsedAfter === collapsedBefore) throw new Error('Alt+O 未切换对象栏');
+      await page.keyboard.press('Alt+O');
+
+      let queryCalls = 0;
+      let transactionCalls = 0;
+      await page.route('**/api/database/query', async function (route) {
+        queryCalls++;
+        const body = JSON.stringify({ type: 'mutation', message: '已执行 UPDATE，影响 1 行，等待提交', summary: { rows: 1, rows_affected: 1, elapsed_ms: 2, statement_type: 'DML', transaction_pending: true } }) + '\n';
+        await route.fulfill({ status: 200, contentType: 'application/x-ndjson; charset=utf-8', body: body });
+      });
+      await page.route('**/api/database/transaction', async function (route) {
+        transactionCalls++;
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, summary: { statement_type: 'TRANSACTION', message: '事务已提交' } }) });
+      });
+      try {
+        await page.fill('#db-sql', 'UPDATE audit_table SET name = \'ok\' WHERE id = 1');
+        await page.click('#db-run');
+        await page.waitForSelector('#db-result-message.ok:not([hidden])', { timeout: 5000 });
+        const message = await page.$eval('#db-result-message', function (el) {
+          return { icon: el.querySelector('.db-message-icon').textContent.trim(), role: el.getAttribute('role'), color: getComputedStyle(el).color };
+        });
+        if (message.icon !== '✓' || message.role !== 'status') throw new Error('成功消息语义错误: ' + JSON.stringify(message));
+
+        await page.fill('#db-sql', 'COMMIT');
+        await page.click('#db-run');
+        await page.waitForTimeout(150);
+        if (queryCalls !== 1 || transactionCalls !== 1) throw new Error('COMMIT 应提交当前页签事务: query=' + queryCalls + ' transaction=' + transactionCalls);
+
+        await page.fill('#db-sql', 'SELECT 1 FROM DUAL');
+        await page.evaluate(function () {
+          const el = document.getElementById('db-sql');
+          const ev = new KeyboardEvent('keydown', { key: 'E', code: 'KeyE', ctrlKey: true, shiftKey: true, bubbles: true, cancelable: true, isComposing: true });
+          el.dispatchEvent(ev);
+        });
+        await page.waitForTimeout(120);
+        const imeSQL = await page.$eval('#db-sql', function (el) { return el.value; });
+        if (imeSQL !== 'SELECT 1 FROM DUAL' || queryCalls !== 1) throw new Error('输入法组合期间不应污染 SQL 或触发执行');
+
+        let dangerDialog = '';
+        const rememberDialog = function (dialog) { dangerDialog = dialog.message(); };
+        page.on('dialog', rememberDialog);
+        await page.fill('#db-sql', 'DELETE FROM audit_table');
+        await page.click('#db-run');
+        await page.waitForTimeout(180);
+        page.off('dialog', rememberDialog);
+        if (dangerDialog.indexOf('没有 WHERE') < 0 || dangerDialog.indexOf('手动提交') < 0) {
+          throw new Error('无 WHERE DELETE 未显示完整危险确认: ' + dangerDialog);
+        }
+        if (queryCalls !== 2) throw new Error('确认危险 SQL 后请求次数异常: ' + queryCalls);
+      } finally {
+        await page.unroute('**/api/database/query');
+        await page.unroute('**/api/database/transaction');
+      }
+      await runner.screenshot(page, '14-database-07-v2-semantics');
     });
   });
 }

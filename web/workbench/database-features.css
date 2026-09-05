@@ -1,0 +1,211 @@
+/* Database feature layer.  Keep this file dependency-free: the workbench is
+ * frequently used in low-memory cloud desktops where a component framework or
+ * GPU-heavy editor would cost more than it adds. */
+.db-pro-quick-actions,
+.db-pro-grid-actions,
+.db-pro-action-grid {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+.db-pro-action-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.db-pro-button { min-height: 28px; white-space: nowrap; }
+.db-pro-grid-actions { margin-left: 6px; padding-left: 6px; border-left: 1px solid var(--line); }
+.db-pro-grid-pending {
+  min-height: 22px;
+  padding: 2px 7px;
+  border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--line));
+  border-radius: 999px;
+  color: var(--warn);
+  background: var(--bg-2);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.db-pro-grid-pending[hidden] { display: none; }
+
+/* The modal deliberately uses an opaque backdrop.  Backdrop-filter is one of
+ * the most visible sources of jank on the customer's non-GPU cloud desktop. */
+.db-pro-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 13000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  background: rgba(3, 8, 20, .58);
+}
+.db-pro-modal {
+  width: min(94vw, 940px);
+  max-height: min(88vh, 820px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--bg-1);
+  color: var(--text);
+  box-shadow: 0 12px 34px rgba(0, 0, 0, .3);
+}
+.db-pro-modal-head,
+.db-pro-modal-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: var(--bg-2);
+}
+.db-pro-modal-head { justify-content: space-between; border-bottom: 1px solid var(--line); }
+.db-pro-modal-head h2 { margin: 0; font-size: 15px; font-weight: 650; }
+.db-pro-modal-head .db-pro-modal-close { min-width: 28px; font-size: 16px; }
+.db-pro-modal-body { min-height: 0; overflow: auto; padding: 14px; contain: content; }
+.db-pro-modal-foot { justify-content: flex-end; border-top: 1px solid var(--line); }
+.db-pro-modal-note,
+.db-pro-conflict-note,
+.db-pro-designer-note { margin: 0 0 10px; color: var(--text-dim); font-size: 12px; line-height: 1.55; }
+.db-pro-conflict-note { padding: 8px 10px; border-left: 3px solid var(--warn); background: var(--bg-2); }
+.db-pro-conflict-note code,
+.db-pro-modal-note code { font-family: var(--font-mono, ui-monospace, monospace); color: var(--primary-2); }
+
+.db-pro-find-grid,
+.db-pro-bind-grid,
+.db-pro-import-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 11px 14px; }
+.db-pro-find-grid label,
+.db-pro-bind-grid label,
+.db-pro-import-options label,
+.db-pro-row-grid label { display: grid; gap: 5px; min-width: 0; color: var(--text-dim); font-size: 12px; }
+.db-pro-find-grid input,
+.db-pro-bind-grid input,
+.db-pro-import-options input,
+.db-pro-import-options select { width: 100%; min-width: 0; }
+.db-pro-check { display: inline-flex !important; grid-template-columns: auto 1fr !important; align-items: center; gap: 6px !important; min-height: 30px; }
+.db-pro-check input { width: auto !important; }
+.db-pro-find-status { min-height: 24px; margin-top: 8px; color: var(--text-dim); font-size: 12px; }
+
+.db-pro-script-list { display: grid; gap: 7px; max-height: 390px; margin: 0 0 12px; padding-left: 23px; overflow: auto; }
+.db-pro-script-list pre { margin: 0; max-height: 120px; overflow: auto; padding: 7px 9px; border: 1px solid var(--line); border-radius: 5px; background: var(--bg-2); color: var(--text); font: 11.5px/1.45 var(--font-mono, ui-monospace, monospace); white-space: pre-wrap; word-break: break-word; }
+
+/* Rich highlighting remains a plain pre/textarea overlay.  There is no
+ * contenteditable tree, so IME, selection and 2K scrolling stay native. */
+.db-pro-sql-kw { color: var(--primary); font-weight: 650; }
+.db-pro-sql-string { color: var(--success); }
+.db-pro-sql-comment { color: var(--text-mute); font-style: italic; }
+.db-pro-sql-number { color: var(--warn); }
+.db-pro-sql-param { color: var(--accent); text-decoration: underline; text-decoration-style: dotted; }
+.db-pro-sql-function { color: var(--primary-2); }
+.db-pro-sql-object { color: #d6a85c; }
+.db-pro-sql-field { color: #70c0aa; }
+.db-pro-sql-quoted { color: #c6a0e8; }
+.db-pro-sql-bracket { color: var(--primary-2); }
+.db-pro-sql-operator { color: var(--text-dim); }
+
+.db-pro-ac {
+  position: absolute;
+  z-index: 8;
+  min-width: 220px;
+  max-width: min(360px, calc(100% - 8px));
+  max-height: 240px;
+  overflow: auto;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg-1);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, .25);
+}
+.db-pro-ac[hidden] { display: none; }
+.db-pro-ac-item { display: flex; align-items: center; justify-content: space-between; gap: 9px; width: 100%; min-height: 29px; padding: 4px 8px; border: 0; border-radius: 4px; color: var(--text); background: transparent; text-align: left; cursor: pointer; font: 12px/1.4 var(--font-mono, ui-monospace, monospace); }
+.db-pro-ac-item small { color: var(--text-mute); font-size: 10px; font-family: inherit; line-height: 1.2; }
+.db-pro-ac-item:hover,
+.db-pro-ac-item.active { background: color-mix(in srgb, var(--primary) 14%, var(--bg-1)); }
+
+.db-pro-history-toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.db-pro-history-toolbar input { flex: 1; min-width: 0; }
+.db-pro-history-toolbar select { width: 110px; }
+.db-pro-history-list { display: grid; gap: 8px; max-height: 58vh; overflow: auto; content-visibility: auto; }
+.db-pro-history-card { display: grid; gap: 7px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 7px; background: var(--bg-0); }
+.db-pro-history-card header,
+.db-pro-history-card footer { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; color: var(--text-dim); font-size: 11px; }
+.db-pro-history-card header strong { color: var(--text); }
+.db-pro-history-card header span:last-child { margin-left: auto; }
+.db-pro-history-card pre { max-height: 180px; margin: 0; overflow: auto; padding: 8px 9px; border-radius: 5px; background: var(--bg-2); color: var(--text); font: 11.5px/1.5 var(--font-mono, ui-monospace, monospace); white-space: pre-wrap; word-break: break-word; }
+.db-pro-history-card footer { justify-content: flex-end; }
+.db-pro-history-status { padding: 2px 6px; border-radius: 4px; background: var(--bg-2); }
+.db-pro-history-status.success { color: var(--success); }
+.db-pro-history-status.error { color: var(--error); }
+.db-pro-history-status.running { color: var(--warn); }
+.db-pro-history-empty { padding: 34px 10px; color: var(--text-mute); text-align: center; }
+
+.db-pro-row-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px 13px; max-height: 49vh; overflow: auto; }
+.db-pro-file-picker { display: inline-flex; align-items: center; gap: 8px; min-height: 34px; margin-bottom: 12px; color: var(--text-dim); font-size: 12px; }
+.db-pro-file-picker input { max-width: 290px; }
+.db-pro-import-preview { min-height: 70px; margin-bottom: 12px; overflow: hidden; border: 1px solid var(--line); border-radius: 6px; background: var(--bg-2); }
+.db-pro-import-summary { padding: 7px 9px; border-bottom: 1px solid var(--line); color: var(--text-dim); font-size: 11px; }
+.db-pro-import-table-wrap { max-height: 280px; overflow: auto; }
+.db-pro-import-table { width: max-content; min-width: 100%; border-collapse: collapse; font: 11px/1.4 var(--font-mono, ui-monospace, monospace); }
+.db-pro-import-table th,
+.db-pro-import-table td { max-width: 260px; padding: 5px 8px; border-bottom: 1px solid var(--line); overflow: hidden; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
+.db-pro-import-table th { position: sticky; top: 0; background: var(--bg-1); color: var(--text-dim); }
+
+.db-pro-designer-tabs { display: flex; gap: 3px; margin: -2px 0 12px; border-bottom: 1px solid var(--line); }
+.db-pro-designer-tabs button { min-height: 31px; padding: 4px 10px; border: 0; border-bottom: 2px solid transparent; color: var(--text-dim); background: transparent; cursor: pointer; font-size: 12px; }
+.db-pro-designer-tabs button.active { border-bottom-color: var(--primary); color: var(--text); font-weight: 650; }
+.db-pro-designer-list { display: grid; gap: 7px; max-height: 45vh; margin-bottom: 9px; overflow: auto; }
+.db-pro-designer-row { display: grid; grid-template-columns: minmax(110px, 1fr) minmax(130px, 1fr) auto minmax(120px, 1fr) auto; align-items: center; gap: 7px; }
+.db-pro-designer-row[data-index] { grid-template-columns: minmax(110px, 1fr) minmax(150px, 1.3fr) auto auto; }
+.db-pro-designer-row[data-constraint] { grid-template-columns: minmax(110px, 1fr) minmax(200px, 2fr) auto; }
+.db-pro-designer-row[data-row] { grid-template-columns: minmax(100px, 1fr) minmax(120px, 1fr) auto auto minmax(100px, 1fr) minmax(120px, 1fr) auto; }
+.db-pro-designer-row[data-constraint] { grid-template-columns: minmax(110px, 1fr) minmax(130px, 1fr) minmax(110px, 1fr) minmax(130px, 1fr) minmax(130px, 1fr) minmax(130px, 1fr) minmax(130px, 1fr) auto; }
+.db-pro-designer-row .editor-input { min-width: 0; }
+.db-pro-designer-empty { padding: 20px; color: var(--text-mute); text-align: center; }
+#db-pro-designer-ddl { width: 100%; min-height: 300px; resize: vertical; font: 12px/1.5 var(--font-mono, ui-monospace, monospace); }
+
+.db-pro-function-toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.db-pro-function-status { flex: 1; min-width: 0; color: var(--text-dim); font-size: 11px; }
+.db-pro-function-source { display: block; width: 100%; min-height: 430px; resize: vertical; padding: 10px 11px; border: 1px solid var(--line); border-radius: 6px; background: var(--tail-out-bg); color: var(--tail-out-fg); caret-color: var(--tail-out-fg); font: 12px/1.55 var(--font-mono, ui-monospace, monospace); tab-size: 2; }
+.db-pro-function-errors { display: grid; gap: 5px; margin-top: 8px; }
+.db-pro-function-error-summary { padding: 7px 9px; color: var(--error); background: var(--bg-2); font-size: 12px; }
+.db-pro-function-error-row { display: grid; grid-template-columns: 58px 140px minmax(0, 1fr); gap: 8px; align-items: center; width: 100%; padding: 6px 8px; border: 1px solid color-mix(in srgb, var(--error) 30%, var(--line)); border-radius: 4px; color: var(--text); background: var(--bg-1); text-align: left; cursor: pointer; font-size: 11px; }
+.db-pro-function-error-row:hover { background: var(--bg-2); }
+.db-pro-function-error-row span { color: var(--error); }
+.db-pro-function-error-row strong { color: var(--text-dim); font-weight: 500; }
+.db-pro-function-error-row em { overflow: hidden; color: var(--text); font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
+.db-pro-function-success { padding: 7px 9px; color: var(--success); background: var(--bg-2); font-size: 12px; }
+.db-pro-jump-error { margin-left: auto; flex: 0 0 auto; }
+.db-pro-visually-hidden { position: fixed !important; width: 1px !important; height: 1px !important; margin: -1px !important; padding: 0 !important; overflow: hidden !important; clip: rect(0 0 0 0) !important; border: 0 !important; }
+
+/* Low-spec profile: no decorative transitions and less retained paint. */
+.db-low-spec .db-pro-modal,
+.db-low-spec .db-pro-ac { box-shadow: 0 4px 12px rgba(0, 0, 0, .22); }
+.db-low-spec .db-pro-history-list,
+.db-low-spec .db-pro-import-table-wrap,
+.db-low-spec .db-pro-designer-list { contain: strict; }
+.db-low-spec .db-sql-highlight { content-visibility: auto; }
+.db-low-spec .db-pro-button,
+.db-low-spec .db-pro-ac-item,
+.db-low-spec .db-pro-designer-tabs button { transition: none !important; }
+
+@media (prefers-reduced-motion: reduce) {
+  .db-pro-modal-overlay *,
+  .db-page * { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+}
+@media (max-width: 900px) {
+  .db-pro-action-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .db-pro-designer-row,
+  .db-pro-designer-row[data-index],
+  .db-pro-designer-row[data-constraint] { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; }
+  .db-pro-designer-row .db-pro-check { grid-column: 1; }
+}
+@media (max-width: 600px) {
+  .db-pro-modal-overlay { align-items: flex-end; padding: 0; }
+  .db-pro-modal { width: 100%; max-height: 92vh; border-radius: 9px 9px 0 0; }
+  .db-pro-find-grid,
+  .db-pro-bind-grid,
+  .db-pro-row-grid,
+  .db-pro-import-options { grid-template-columns: 1fr; }
+  .db-pro-action-grid { grid-template-columns: 1fr 1fr; }
+  .db-pro-history-toolbar { align-items: stretch; flex-direction: column; }
+  .db-pro-history-toolbar select { width: 100%; }
+  .db-pro-function-error-row { grid-template-columns: 48px 1fr; }
+  .db-pro-function-error-row em { grid-column: 1 / -1; }
+}

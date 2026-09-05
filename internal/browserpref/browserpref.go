@@ -39,8 +39,11 @@ import (
 type Kind string
 
 const (
-	KindChrome  Kind = "chrome"  // Chrome.exe（系统装了 Chrome，走专用路径）
-	KindDefault Kind = "default" // 系统默认浏览器（rundll32/open/xdg-open）
+	KindChrome    Kind = "chrome"    // Chrome.exe（系统装了 Google Chrome，走专用路径）
+	Kind360Chrome Kind = "360chrome" // 360chrome.exe（360 极速浏览器 / 360 极速 X）
+	Kind360SE     Kind = "360se"     // 360se.exe（360 安全浏览器）
+	KindEdge      Kind = "edge"      // msedge.exe（Microsoft Edge）
+	KindDefault   Kind = "default"   // 系统默认浏览器（rundll32/open/xdg-open）
 )
 
 // State 持久化的浏览器偏好。
@@ -122,7 +125,10 @@ func Read() (*State, error) {
 		s.Version = 1
 	}
 	// 兜底：未知 kind 视为 default，避免加新 Kind 时老 state 把"打开"逻辑弄崩。
-	if s.Kind != KindChrome && s.Kind != KindDefault {
+	switch s.Kind {
+	case KindChrome, Kind360Chrome, Kind360SE, KindEdge, KindDefault:
+		// 允许的有效 Kind
+	default:
 		s.Kind = KindDefault
 	}
 	return &s, nil

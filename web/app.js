@@ -30,6 +30,7 @@
   }
 
   function routeFromHash(hash) {
+    if (String(hash || '').indexOf('#figmacapture=') === 0) return { name: 'compare', state: {} };
     const raw = (hash || '#/home').replace(/^#\//, '').split(/[?#]/)[0] || 'home';
     if (raw === 'reminders' || raw === 'notes/reminders') return { name: 'notes', state: { tab: 'reminders' } };
     if (raw === 'notes' || raw === 'notes/list') return { name: 'notes', state: { tab: 'list' } };

@@ -2,6 +2,7 @@ package waspack
 
 import (
 	"archive/tar"
+	"archive/zip"
 	"io"
 	"os"
 	"path/filepath"
@@ -81,14 +82,17 @@ func TestBatchProjectPackaging(t *testing.T) {
 		}
 	}
 
-	// Verify Bak script
+	// Verify Bak script: 批量与应用一致，统一带 ./ 前缀，与 list/tar/预检一致
 	bakFile := filepath.Join(outDir, "Bak"+pkgName+".sh")
 	bakData, err := os.ReadFile(bakFile)
 	if err != nil {
 		t.Fatalf("Failed to read Bak script: %v", err)
 	}
-	if !strings.HasPrefix(string(bakData), "tar -cvf Bak"+pkgName+".tar ./") {
+	if !strings.HasPrefix(string(bakData), "tar -C /batch/credit -cvf Bak"+pkgName+".tar ./amargci/") {
 		t.Errorf("Bak script format mismatch: %s", string(bakData))
+	}
+	if !strings.Contains(string(bakData), "./amargci/") || !strings.Contains(string(bakData), "./AmarExtract/") {
+		t.Errorf("批量脚本应包含 ./ 前缀: %s", string(bakData))
 	}
 
 	// Verify Exec script
@@ -97,11 +101,23 @@ func TestBatchProjectPackaging(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to read exec script: %v", err)
 	}
-	if !strings.HasPrefix(string(execData), "tar -cvf "+pkgName+".tar ./") {
+	if !strings.HasPrefix(string(execData), "tar -cvf "+pkgName+".tar ./amargci/") {
 		t.Errorf("Exec script format mismatch: %s", string(execData))
 	}
 
-	// Verify tar entries do NOT have ./ prefix and start with manifest dirs like amargci/ or AmarExtract/
+	// Verify list.txt 统一带 ./，与 tar/脚本/预检一致
+	listData, err := os.ReadFile(filepath.Join(outDir, "list.txt"))
+	if err != nil {
+		t.Fatalf("Failed to read list.txt: %v", err)
+	}
+	if !strings.Contains(string(listData), "./amargci/") || !strings.Contains(string(listData), "./AmarExtract/") {
+		t.Errorf("批量 list.txt 应包含 ./ 前缀: %s", string(listData))
+	}
+	if !strings.Contains(string(listData), "./amargci/credit_2nd.sh") || !strings.Contains(string(listData), "./AmarExtract/run_ql.sh") {
+		t.Errorf("list.txt 缺少批量文件: %s", string(listData))
+	}
+
+	// Verify tar entries 统一带 ./ 前缀，如 ./amargci/...、./AmarExtract/...
 	tarFilePath := filepath.Join(outDir, pkgName+".tar")
 	tf, err := os.Open(tarFilePath)
 	if err != nil {
@@ -119,10 +135,10 @@ func TestBatchProjectPackaging(t *testing.T) {
 			t.Fatal(err)
 		}
 		tarCount++
-		if strings.HasPrefix(hdr.Name, "./") {
-			t.Errorf("批量打包 tar 内路径不应包含 ./ 前缀，得到: %s", hdr.Name)
+		if !strings.HasPrefix(hdr.Name, "./") {
+			t.Errorf("批量打包 tar 内路径应包含 ./ 前缀，得到: %s", hdr.Name)
 		}
-		if !strings.HasPrefix(hdr.Name, "amargci/") && !strings.HasPrefix(hdr.Name, "AmarExtract/") {
+		if !strings.HasPrefix(hdr.Name, "./amargci/") && !strings.HasPrefix(hdr.Name, "./AmarExtract/") {
 			t.Errorf("批量打包压缩包第一层应为清单目录，得到: %s", hdr.Name)
 		}
 	}
@@ -130,9 +146,34 @@ func TestBatchProjectPackaging(t *testing.T) {
 		t.Errorf("tar 条目数量期望 %d，实际 %d", len(files), tarCount)
 	}
 
-	// Verify .kairo-waspack.json is NOT created
+	// 投产目录只保留实际交付物，不应混入 Kairo 内部标记文件。
 	markerFile := filepath.Join(outDir, ".kairo-waspack.json")
 	if _, err := os.Stat(markerFile); !os.IsNotExist(err) {
-		t.Errorf(".kairo-waspack.json should NOT be created, but exists!")
+		t.Errorf(".kairo-waspack.json should not be created, got: %v", err)
+	}
+
+	// “一键直接打包”不会创建 war；第 5 步应自动读取刚生成的 tar 来打 ZIP。
+	zipRes, err := BuildZip(req)
+	if err != nil {
+		t.Fatalf("BuildZip after direct batch build failed: %v", err)
+	}
+	if zipRes.Source != "tar" || zipRes.Files != len(files) {
+		t.Fatalf("unexpected ZIP source/result: source=%q files=%d", zipRes.Source, zipRes.Files)
+	}
+	zr, err := zip.OpenReader(zipRes.ZipFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer zr.Close()
+	if len(zr.File) != len(files) {
+		t.Fatalf("ZIP entries expected %d, got %d", len(files), len(zr.File))
+	}
+	for _, entry := range zr.File {
+		if !strings.HasPrefix(entry.Name, pkgName+"/") {
+			t.Errorf("ZIP entry should use package top folder: %s", entry.Name)
+		}
+		if strings.Contains(entry.Name, ".kairo-waspack.json") {
+			t.Errorf("ZIP must not include Kairo marker: %s", entry.Name)
+		}
 	}
 }

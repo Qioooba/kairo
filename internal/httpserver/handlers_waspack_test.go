@@ -113,6 +113,35 @@ func TestWASPackPreviewRejectsEmpty(t *testing.T) {
 	}
 }
 
+func TestWASPackPackageRequiresStageToken(t *testing.T) {
+	srv, _, _, _ := newTestServer(t)
+	project := t.TempDir()
+	classPath := filepath.Join(project, "WebRoot", "WEB-INF", "classes", "demo", "Foo.class")
+	if err := os.MkdirAll(filepath.Dir(classPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(classPath, []byte("CLS"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(t.TempDir(), "package-stage")
+	body := map[string]any{
+		"project_dir":  project,
+		"output_dir":   out,
+		"package_name": "Demo",
+		"manifest":     "./WEB-INF/classes/demo/Foo.class",
+		"auto_pair":    false,
+	}
+	extracted := doRequest(srv, "POST", "/api/waspack/extract", body)
+	if extracted.Code != 200 {
+		t.Fatalf("extract %d: %s", extracted.Code, extracted.Body.String())
+	}
+
+	packaged := doRequest(srv, "POST", "/api/waspack/package", body)
+	if packaged.Code != 400 || !strings.Contains(packaged.Body.String(), "阶段凭据") {
+		t.Fatalf("空 stage_token 应拒绝，实际 %d %s", packaged.Code, packaged.Body.String())
+	}
+}
+
 func TestWASPackOpenFolder(t *testing.T) {
 	srv, _, _, _ := newTestServer(t)
 	if w := doRequest(srv, "GET", "/api/waspack/open", nil); w.Code != 405 {

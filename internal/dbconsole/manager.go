@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"kairo/internal/credentials"
+	"kairo/internal/sshclient"
 
 	mysqldriver "github.com/go-sql-driver/mysql"
 	redis "github.com/redis/go-redis/v9"
@@ -23,14 +25,32 @@ type poolEntry struct {
 	fingerprint string
 	sql         *sql.DB
 	redis       redis.UniversalClient
+	ssh         *sshclient.Client
+}
+
+type transactionEntry struct {
+	mu          sync.Mutex
+	tx          *sql.Tx
+	cancel      context.CancelFunc
+	sourceID    string
+	fingerprint string
+	sessionID   string
+	createdAt   time.Time
+	updatedAt   time.Time
 }
 
 type Manager struct {
-	store         *Store
-	mu            sync.Mutex
-	pools         map[string]*poolEntry
-	metadataCache map[string]metadataCacheEntry
-	global        chan struct{}
+	store               *Store
+	mu                  sync.Mutex
+	pools               map[string]*poolEntry
+	metadataCache       map[string]metadataCacheEntry
+	transactions        map[string]*transactionEntry
+	global              chan struct{}
+	transactionTTL      time.Duration
+	transactionMax      int
+	transactionStop     chan struct{}
+	transactionDone     chan struct{}
+	transactionStopOnce sync.Once
 }
 
 func NewManager(dataDir string) (*Manager, error) {
@@ -38,17 +58,25 @@ func NewManager(dataDir string) (*Manager, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Manager{
-		store:         store,
-		pools:         make(map[string]*poolEntry),
-		metadataCache: make(map[string]metadataCacheEntry),
-		global:        make(chan struct{}, 8),
-	}, nil
+	m := &Manager{
+		store:           store,
+		pools:           make(map[string]*poolEntry),
+		metadataCache:   make(map[string]metadataCacheEntry),
+		transactions:    make(map[string]*transactionEntry),
+		global:          make(chan struct{}, 8),
+		transactionTTL:  defaultTransactionIdleTTL,
+		transactionMax:  defaultTransactionMax,
+		transactionStop: make(chan struct{}),
+		transactionDone: make(chan struct{}),
+	}
+	go m.transactionJanitor()
+	return m, nil
 }
 
 func (m *Manager) Store() *Store { return m.store }
 
 func (m *Manager) Close() error {
+	m.stopTransactionJanitor()
 	m.mu.Lock()
 	entries := make([]*poolEntry, 0, len(m.pools))
 	for id, entry := range m.pools {
@@ -56,8 +84,23 @@ func (m *Manager) Close() error {
 		delete(m.pools, id)
 	}
 	clear(m.metadataCache)
+	txs := make([]*transactionEntry, 0, len(m.transactions))
+	for id, entry := range m.transactions {
+		txs = append(txs, entry)
+		delete(m.transactions, id)
+	}
 	m.mu.Unlock()
 	var errs []error
+	for _, entry := range txs {
+		entry.mu.Lock()
+		if entry.tx != nil {
+			errs = append(errs, entry.tx.Rollback())
+		}
+		if entry.cancel != nil {
+			entry.cancel()
+		}
+		entry.mu.Unlock()
+	}
 	for _, entry := range entries {
 		errs = append(errs, closePoolEntry(entry))
 	}
@@ -69,10 +112,46 @@ func (m *Manager) Invalidate(id string) {
 	entry := m.pools[id]
 	delete(m.pools, id)
 	m.invalidateMetadataLocked(id)
+	var txs []*transactionEntry
+	for key, tx := range m.transactions {
+		if tx.sourceID == id {
+			txs = append(txs, tx)
+			delete(m.transactions, key)
+		}
+	}
 	m.mu.Unlock()
+	for _, tx := range txs {
+		tx.mu.Lock()
+		if tx.tx != nil {
+			_ = tx.tx.Rollback()
+		}
+		if tx.cancel != nil {
+			tx.cancel()
+		}
+		tx.mu.Unlock()
+	}
 	if entry != nil {
 		// sql.DB.Close can wait for in-flight queries. Source edits must not block
 		// the admin request; active users already have a bounded QueryContext.
+		go func() { _ = closePoolEntry(entry) }()
+	}
+}
+
+// A retry must not tear down unrelated tabs or their shared SSH transport.
+// With live transactions, let database/sql discard broken idle connections.
+func (m *Manager) invalidatePool(id string) {
+	m.mu.Lock()
+	for _, tx := range m.transactions {
+		if tx != nil && tx.sourceID == id {
+			m.mu.Unlock()
+			return
+		}
+	}
+	entry := m.pools[id]
+	delete(m.pools, id)
+	m.invalidateMetadataLocked(id)
+	m.mu.Unlock()
+	if entry != nil {
 		go func() { _ = closePoolEntry(entry) }()
 	}
 }
@@ -87,6 +166,9 @@ func closePoolEntry(entry *poolEntry) error {
 	}
 	if entry.redis != nil {
 		errs = append(errs, entry.redis.Close())
+	}
+	if entry.ssh != nil {
+		errs = append(errs, entry.ssh.Close())
 	}
 	return errors.Join(errs...)
 }
@@ -119,7 +201,27 @@ func (m *Manager) sqlDB(source Source) (*sql.DB, error) {
 	if err != nil {
 		return nil, err
 	}
+	tunnel, err := openSSHTunnel(context.Background(), source)
+	if err != nil {
+		return nil, err
+	}
+	closeTunnelOnError := true
+	defer func() {
+		if closeTunnelOnError && tunnel != nil {
+			_ = tunnel.Close()
+		}
+	}()
+	tlsConfig, err := tlsConfigForSource(source)
+	if err != nil {
+		return nil, err
+	}
+	targetHost, targetPort := sourceConnectionTarget(source)
+	var dialer funcDialer
+	if tunnel != nil {
+		dialer = funcDialer{dial: sshTunnelDialer{client: tunnel.RawConn()}}
+	}
 	var driverName, dsn string
+	var connector driver.Connector
 	switch source.Kind {
 	case KindOracle:
 		driverName = "oracle"
@@ -150,32 +252,45 @@ func (m *Manager) sqlDB(source Source) (*sql.DB, error) {
 		if source.OracleConnectBy == "sid" {
 			service = ""
 		}
-		dsn = go_ora.BuildUrl(source.Host, source.Port, service, source.Username, password, options)
+		dsn = go_ora.BuildUrl(targetHost, targetPort, service, source.Username, password, options)
+		oraConnector := go_ora.NewConnector(dsn)
+		if c, ok := oraConnector.(*go_ora.OracleConnector); ok {
+			if tunnel != nil {
+				c.Dialer(dialer)
+			}
+			if tlsConfig != nil {
+				c.WithTLSConfig(tlsConfig)
+			}
+		}
+		connector = oraConnector
 	case KindMySQL:
 		driverName = "mysql"
 		cfg := mysqldriver.NewConfig()
 		cfg.User = source.Username
 		cfg.Passwd = password
 		cfg.Net = "tcp"
-		cfg.Addr = net.JoinHostPort(source.Host, strconv.Itoa(source.Port))
+		cfg.Addr = net.JoinHostPort(targetHost, strconv.Itoa(targetPort))
 		cfg.DBName = source.Database
 		cfg.ParseTime = true
 		cfg.Timeout = 10 * time.Second
 		cfg.ReadTimeout = source.Timeout()
 		cfg.WriteTimeout = source.Timeout()
-		switch source.TLSMode {
-		case "preferred":
-			cfg.TLSConfig = "preferred"
-		case "required":
-			cfg.TLSConfig = "true"
-		case "skip-verify":
-			cfg.TLSConfig = "skip-verify"
+		if tlsConfig != nil {
+			cfg.TLS = tlsConfig
+		}
+		if tunnel != nil {
+			cfg.DialFunc = dialer.DialContext
 		}
 		dsn = cfg.FormatDSN()
 	default:
 		return nil, fmt.Errorf("%s 不是 SQL 数据源", source.Kind)
 	}
-	db, err := sql.Open(driverName, dsn)
+	var db *sql.DB
+	if connector != nil {
+		db = sql.OpenDB(connector)
+	} else {
+		db, err = sql.Open(driverName, dsn)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -187,11 +302,15 @@ func (m *Manager) sqlDB(source Source) (*sql.DB, error) {
 	if entry := m.pools[source.ID]; entry != nil && entry.sql != nil && entry.fingerprint == fingerprint {
 		m.mu.Unlock()
 		_ = db.Close()
+		if tunnel != nil {
+			_ = tunnel.Close()
+		}
 		return entry.sql, nil
 	}
 	old := m.pools[source.ID]
-	m.pools[source.ID] = &poolEntry{fingerprint: fingerprint, sql: db}
+	m.pools[source.ID] = &poolEntry{fingerprint: fingerprint, sql: db, ssh: tunnel}
 	m.mu.Unlock()
+	closeTunnelOnError = false
 	if old != nil {
 		go func() { _ = closePoolEntry(old) }()
 	}
@@ -199,12 +318,9 @@ func (m *Manager) sqlDB(source Source) (*sql.DB, error) {
 }
 
 func redisTLSConfig(source Source) *tls.Config {
-	if source.TLSMode == "disabled" {
+	cfg, err := tlsConfigForSource(source)
+	if err != nil {
 		return nil
-	}
-	cfg := &tls.Config{ServerName: source.Host, MinVersion: tls.VersionTLS12}
-	if source.TLSMode == "skip-verify" {
-		cfg.InsecureSkipVerify = true // explicit per-source administrative option
 	}
 	return cfg
 }
@@ -224,8 +340,27 @@ func (m *Manager) redisClient(source Source) (redis.UniversalClient, error) {
 	if errors.Is(err, credentials.ErrNotSaved) {
 		password = ""
 	}
-	addrs := source.RedisAddrs()
-	tlsConfig := redisTLSConfig(source)
+	tlsConfig, err := tlsConfigForSource(source)
+	if err != nil {
+		return nil, err
+	}
+	tunnel, err := openSSHTunnel(context.Background(), source)
+	if err != nil {
+		return nil, err
+	}
+	addrs := redisConnectionAddrs(source)
+	closeTunnelOnError := true
+	defer func() {
+		if closeTunnelOnError && tunnel != nil {
+			_ = tunnel.Close()
+		}
+	}()
+	var dialer funcDialer
+	var dialFunc func(context.Context, string, string) (net.Conn, error)
+	if tunnel != nil {
+		dialer = funcDialer{dial: sshTunnelDialer{client: tunnel.RawConn()}}
+		dialFunc = dialer.DialContext
+	}
 	var client redis.UniversalClient
 	switch source.RedisTopology() {
 	case "cluster":
@@ -239,6 +374,7 @@ func (m *Manager) redisClient(source Source) (redis.UniversalClient, error) {
 			PoolSize:     source.MaxOpenConnections,
 			MinIdleConns: source.MaxIdleConnections,
 			TLSConfig:    tlsConfig,
+			Dialer:       dialFunc,
 		})
 	case "sentinel":
 		client = redis.NewFailoverClient(&redis.FailoverOptions{
@@ -253,6 +389,7 @@ func (m *Manager) redisClient(source Source) (redis.UniversalClient, error) {
 			PoolSize:      source.MaxOpenConnections,
 			MinIdleConns:  source.MaxIdleConnections,
 			TLSConfig:     tlsConfig,
+			Dialer:        dialFunc,
 		})
 	default:
 		client = redis.NewClient(&redis.Options{
@@ -266,17 +403,22 @@ func (m *Manager) redisClient(source Source) (redis.UniversalClient, error) {
 			PoolSize:     source.MaxOpenConnections,
 			MinIdleConns: source.MaxIdleConnections,
 			TLSConfig:    tlsConfig,
+			Dialer:       dialFunc,
 		})
 	}
 	m.mu.Lock()
 	if entry := m.pools[source.ID]; entry != nil && entry.redis != nil && entry.fingerprint == fingerprint {
 		m.mu.Unlock()
 		_ = client.Close()
+		if tunnel != nil {
+			_ = tunnel.Close()
+		}
 		return entry.redis, nil
 	}
 	old := m.pools[source.ID]
-	m.pools[source.ID] = &poolEntry{fingerprint: fingerprint, redis: client}
+	m.pools[source.ID] = &poolEntry{fingerprint: fingerprint, redis: client, ssh: tunnel}
 	m.mu.Unlock()
+	closeTunnelOnError = false
 	if old != nil {
 		go func() { _ = closePoolEntry(old) }()
 	}
@@ -309,7 +451,7 @@ func (m *Manager) withSQL(ctx context.Context, source Source, fn func(context.Co
 			return nil
 		}
 		if attempt == 0 && isConnectionFailure(last) {
-			m.Invalidate(source.ID)
+			m.invalidatePool(source.ID)
 			continue
 		}
 		return last
@@ -343,7 +485,7 @@ func (m *Manager) Test(ctx context.Context, source Source) (TestResult, error) {
 			return lastResult, nil
 		}
 		if attempt == 0 && isConnectionFailure(lastErr) {
-			m.Invalidate(source.ID)
+			m.invalidatePool(source.ID)
 			continue
 		}
 		return lastResult, lastErr

@@ -618,7 +618,7 @@
       desc: '面向 credit IntelliJ 工程的投产清单打包器：对照 src / WebRoot / WEB-INF/classes 预检文件，一键直接打包，生成现网可执行的 tar、备份脚本与执行脚本。',
       features: [
         '一键直接打包 (/api/waspack/build)：支持 fail / clean_kairo_artifacts / replace 三种受控输出策略',
-        '产物 marker 与未知文件保护：目标目录存在未知非 Kairo 资产时严格拒绝覆盖，阶段隔离防穿透',
+        '产物白名单清理：按当次包名只清理明确的打包产物并保留其他文件，投产目录不写入内部标记',
         '增量批处理清单解析：智能关联批处理脚本自动化联动，支持多模块清单连续配对',
         '清单规范化：支持 ./src/...、./WEB-INF/...、工程绝对路径粘贴，自动去重并拒绝越界/绝对路径',
         '工程布局探测：兼容 IntelliJ src + WebRoot 与 exploded WAR 根目录，缺失项和工程告警先于生成展示',
@@ -1021,7 +1021,7 @@ const changelog = [
         '系统原生交互绝不引起进程崩溃：Windows 文件夹选择对话框经宿主 UI 线程 OleInitialize 调度并增加 recover 兜底，杜绝 COM 线程模型冲突引发的连接重置。',
         '关键提醒不能被系统专注助手静默吞噬：自绘 GDI 独立弹窗窗口替代 PowerShell Toast，确保运维关键告警 100% 直达桌面。',
         '升级与迁移必须具备跨文件事务边界：所有用户配置与资产升级前完整快照，单文件链式迁移失败全量原子回滚，且强制拒绝降级覆写。',
-        '打包输出策略明确隔离，保护既有资产：WAS 打包支持 fail / clean_kairo_artifacts / replace 策略，未知非 Kairo 产物一律拒绝覆盖。',
+        '打包输出策略明确隔离，保护既有资产：严格模式拒绝非空目录，清理模式只重做当次包名产物，强制覆盖必须二次确认。',
         '视觉一致性覆盖全主题全分辨率：深浅/武侠/高对比度主题统一保证对比度与可读性，多级菜单在各种嵌套布局下绝不遮挡。',
         '质量保证必须由自动化测试说话：新增工作台前端单元测试集 (workbench-unit-tests.js) 与后端 Go 测试，严禁依赖手工口头承诺。'
       ],
@@ -1033,7 +1033,7 @@ const changelog = [
           { name: '比对常驻高亮视口层', detail: 'compare.js 与 syntax-editor.js 提供常驻语法着色与响应式高度收缩，实时比对消除异步覆盖竞态，历史堆栈操作支持平滑撤销重做。' },
           { name: 'Windows UI 宿主调度层', detail: 'choose_dialog_windows.go 建立常驻 STA/OleInitialize UI 消息循环，外部对话框调用由主线程受控调度并配置 recover 保护，根除 COM 异常导致 ERR_CONNECTION_RESET。' },
           { name: '原生 GDI 弹窗告警层', detail: 'popup_windows.go 实现独立 Win32 GDI 弹窗机制，绕过 Windows 10/11 专注助手与通知中心压制，保障运维定时提醒 100% 可见。' },
-          { name: 'WAS 批处理与隔离层', detail: 'internal/waspack 新增 /api/waspack/build 接口，产物植入 .kairo-artifact-manifest 标识，输出目录提供 fail / clean / replace 三种受控模式，隔离未知文件。' },
+          { name: 'WAS 批处理与隔离层', detail: 'internal/waspack 提供 /api/waspack/build 接口，输出目录采用 fail / clean / replace 三种受控模式，按确定产物名安全清理，不向交付目录写入内部标记。' },
           { name: '任务告警事件总线层', detail: 'internal/notify 抽象系统级告警总线，任务执行失败时按策略联动 Windows 托盘弹窗与企业微信/钉钉 Webhook。' },
           { name: '全量自动化测试层', detail: '新增 tests/workbench-unit-tests.js、internal/dbconsole/oracle_workbench_test.go 等全量测试用例，覆盖 statement-model、session 管理、语法着色与分页逻辑。' }
         ],
@@ -1043,7 +1043,7 @@ const changelog = [
           '移除文件比对对话框在并发线程直接唤起导致偶发连接重置与闪退的高危逻辑。',
           '移除配置迁移各文件各自独立读写、缺乏全量快照与原子回滚的脆弱升级方式。',
           '移除依赖 PowerShell Toast 导致在 Win10 专注助手下静默失效的提醒通知机制。',
-          '移除 WAS 打包产物与目标目录未隔离、缺乏 marker 标识导致无法安全清理的旧逻辑。'
+          '移除 WAS 打包产物与目标目录未隔离、无法区分清理范围的旧逻辑。'
         ]
       },
       features: [
@@ -1055,7 +1055,7 @@ const changelog = [
         { title: 'Windows 原生目录选择防崩溃', desc: '文件夹选择对话框经由常驻 UI 线程 OleInitialize 调度，增加 recover 异常保护与超时回收，彻底解决 ERR_CONNECTION_RESET 与主进程闪退。' },
         { title: '纯 GDI 桌面弹窗提醒引擎', desc: '替换不可靠的 PowerShell Toast 脚本，采用 Win32 原生 GDI 绘制置顶弹窗，100% 穿透 Windows 10/11 专注助手与免打扰模式。' },
         { title: '跨文件原子升级协调器', desc: '引入 internal/upgrade 统一升级协调器；升级前全自动拍摄 pre-upgrade 快照，多文件单向 N->N+1 链式迁移，任一失败全量原子回滚，并防止低版本覆盖高版本。' },
-        { title: 'WAS 一键直接打包与产物隔离', desc: '提供 /api/waspack/build 接口与批处理解析支持，引入 fail / clean_kairo_artifacts / replace 策略，利用 marker 保护目标目录未知非 Kairo 资产。' },
+        { title: 'WAS 一键直接打包与产物隔离', desc: '提供 /api/waspack/build 接口与批处理解析支持，引入 fail / clean_kairo_artifacts / replace 策略，按当次包名清理明确产物并保留其他文件。' },
         { title: '任务告警事件总线与 Webhook', desc: '构建 internal/notify 告警事件总线，定时任务失败时主动推送桌面托盘并支持企业微信、钉钉等第三方 Webhook 报警。' },
         { title: '19 项反馈集中闭环', desc: '便笺更多菜单穿透与定位、武林榜冷启重试预热、浅色 kbd 对比度、SQL 选中可见性、九宫格收藏夹弹窗等全量精修。' },
         { title: '全量自动化测试护航', desc: '新增工作台前端单元测试 workbench-unit-tests.js、Oracle 分页测试、配置升级回滚测试，测试全量绿标通过。' }
@@ -1108,7 +1108,7 @@ const changelog = [
         '若从旧版本升级，数据库工作台将自动启用智能分页协议并过滤内部辅助列；原有 SQL 片段、书签及快捷键均向前兼容。',
         'Windows 路径选择对话框已全面迁移至 UI 宿主线程模型，避免任何第三方壳程序或系统 COM 初始化冲突。',
         'Windows 提醒弹窗默认启用可靠 GDI 原生绘制，无需在操作系统通知中心为应用开启后台唤醒权限。',
-        'WAS 打包直接输出功能默认采用 marker 标识保护已存在目录；如需清空旧产物可选择 clean_kairo_artifacts 策略。',
+        'WAS 打包直接输出不再向交付目录写入内部标记；如需重做当次包名产物可选择 clean_kairo_artifacts 策略。',
         '升级后运行时版本以根目录 VERSION 为准；如修改版本，请执行 node scripts/sync-version.js，再运行 node scripts/check-version.js。'
       ]
     },

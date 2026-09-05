@@ -2,6 +2,40 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8" />
+  <!-- 浏览器内核适配：360/搜狗/QQ等双核浏览器强制极速(webkit)模式，禁用IE兼容视图 -->
+  <meta name="renderer" content="webkit" />
+  <meta name="force-rendering" content="webkit" />
+  <meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1" />
+  <script>
+    /* 360/双核浏览器 IE 兼容模式拦截与极速引导（纯 ES3 规范，杜绝语法解析错误） */
+    (function () {
+      var isTrident = !window.Promise || !!window.ActiveXObject || ('ActiveXObject' in window) || (navigator.userAgent && navigator.userAgent.indexOf('Trident') > -1);
+      if (isTrident) {
+        var onReady = function () {
+          var box = document.createElement('div');
+          box.id = 'kairo-trident-warning';
+          box.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:#0f172a;color:#f87171;z-index:99999999;padding:48px 20px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;text-align:center;box-sizing:border-box;display:block;';
+          box.innerHTML = '<div style="max-width:540px;margin:30px auto;background:#1e293b;border:1px solid #ef4444;border-radius:12px;padding:32px;box-shadow:0 24px 48px rgba(0,0,0,0.6);">' +
+            '<h2 style="margin:0 0 16px;color:#fca5a5;font-size:20px;">⚠️ 浏览器内核不兼容提示</h2>' +
+            '<p style="color:#cbd5e1;font-size:14px;line-height:1.8;text-align:left;margin-bottom:18px;">' +
+            '检测到您当前处于 360 / 双核浏览器的<b>【兼容模式】</b>（Trident/IE 内核）。<br>' +
+            '本系统采用现代 Web 标准开发，不支持旧版 IE 内核。' +
+            '</p>' +
+            '<div style="background:#0f172a;border:1px solid #334155;border-radius:8px;padding:16px;margin-bottom:24px;text-align:left;font-size:13px;color:#93c5fd;line-height:1.8;">' +
+            '💡 <b>解决方法（推荐）：</b><br>' +
+            '1. 点击地址栏右侧的内核图标（形如 <b style="color:#ef4444;">e</b> 图标或兼容性图标）<br>' +
+            '2. 切换为<b>【极速模式】</b>（闪电图标 ⚡）<br>' +
+            '3. 页面将自动刷新并恢复正常使用。<br>' +
+            '（也可直接使用 Google Chrome 或 Microsoft Edge 浏览器访问）' +
+            '</div>' +
+            '<button onclick="location.reload()" style="background:#3b82f6;color:#fff;border:none;padding:9px 24px;border-radius:6px;font-size:14px;cursor:pointer;font-weight:bold;">切换后点击刷新</button>' +
+            '</div>';
+          document.body ? document.body.appendChild(box) : document.documentElement.appendChild(box);
+        };
+        window.addEventListener ? window.addEventListener('load', onReady) : (window.onload = onReady);
+      }
+    })();
+  </script>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <link rel="icon" type="image/png" sizes="32x32" href="/static/img/favicon-32.png" />
   <link rel="icon" type="image/png" sizes="64x64" href="/static/img/favicon-64.png" />
@@ -10,7 +44,17 @@
   <!-- TODO(FE-019): vendor 资源建议加 integrity（SRI）属性；内网工具低优先级，需计算文件 hash -->
   <link rel="stylesheet" href="/static/vendor/diff2html.min.css?v=20260627" />
   <link rel="stylesheet" href="/static/vendor/xterm/xterm.css?v=20260708" />
-  <link rel="stylesheet" href="/static/style.css?v=20260903-workbench" />
+  <link rel="stylesheet" href="/static/style.css?v=20260905-waspack-fixes" />
+  <link rel="stylesheet" href="/static/pages/compare-workbench.css?v=20260905-redesign2-handoff" />
+  <link rel="stylesheet" href="/static/pages/waspack.css?v=20260905-phase3b" />
+  <script>
+    if (String(location.hash || '').indexOf('#figmacapture=') === 0) {
+      var figmaCaptureScript = document.createElement('script');
+      figmaCaptureScript.src = 'https://mcp.figma.com/mcp/html-to-design/capture.js';
+      figmaCaptureScript.async = true;
+      document.head.appendChild(figmaCaptureScript);
+    }
+  </script>
   <style>
     .auth-overlay{position:fixed;top:0;right:0;bottom:0;left:0;background:rgba(0,0,0,.72);-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);z-index:99999;display:none;align-items:center;justify-content:center;padding:20px}
     /* v0.13 bug-2：激活弹窗原来吃 --bg-card / --text / --text-dim 等会随主题切换的变量，
@@ -117,7 +161,7 @@
   <div id="toast" class="toast"></div>
 
   <!-- 模块加载顺序：core → icons → theme → api → auth → state → pages → app 入口 -->
-  <script src="/static/core.js?v=20260708"></script>
+  <script src="/static/core.js?v=20260904-waspack-picker"></script>
   <script src="/static/icons.js?v=20260901-wscodegen"></script>
   <script src="/static/theme.js?v=20260708"></script>
   <script src="/static/api.js?v=20260901-pathbrowse"></script>
@@ -131,7 +175,7 @@
   <script src="/static/state.js?v=20260708"></script>
   <script src="/static/overlays.js?v=20260901-ui17c"></script>
   <script src="/static/notes.js?v=20260901-notes2"></script>
-  <script src="/static/app.js?v=20260901-async"></script>
+  <script src="/static/app.js?v=20260905-capture-route"></script>
   <script src="/static/pages/home.js?v=20260901-wsczip"></script>
   <script src="/static/pages/websphere.js?v=20260901-pathbrowse"></script>
   <script src="/static/pages/sftp-common.js?v=20260708"></script>
@@ -148,8 +192,8 @@
   <script src="/static/pages/cron.js?v=20260708"></script>
   <script src="/static/pages/jsonpath.js?v=20260708"></script>
   <script src="/static/vendor/diff2html.min.js?v=20260627"></script>
-  <script src="/static/pages/compare.js?v=20260903-workbench"></script>
-  <script src="/static/pages/waspack.js?v=20260903-workbench"></script>
+  <script src="/static/pages/compare.js?v=20260905-redesign4-handoff"></script>
+  <script src="/static/pages/waspack.js?v=20260905-waspack-history"></script>
   <!-- v1.0 便笺提醒编辑页（CRUD + 三种调度类型） -->
   <script src="/static/pages/reminders.js?v=20260901-pathbrowse"></script>
   <script src="/static/pages/notes.js?v=20260903-fix19"></script>
@@ -163,6 +207,9 @@
   <script src="/static/vendor/xterm/xterm-addon-web-links.min.js?v=20260708"></script>
   <script src="/static/pages/ssh.js?v=20260820"></script>
   <script src="/static/pages/database.js?v=20260903-workbench"></script>
+  <link rel="stylesheet" href="/static/workbench/database-features.css?v=20260905-features" />
+  <script src="/static/workbench/database-features.js?v=20260905-features"></script>
+  <script src="/static/workbench/database-object-designer.js?v=20260905-features"></script>
   <script src="/static/pages/about.js?v=20260902-brandicons"></script>
   <script src="/static/pages/sponsor.js?v=20260903-fix19"></script>
   <!-- 宠物彩蛋：仅保留解锁 + 武林页宠物排行榜联动（宠物本体在原生桌面宠物） -->

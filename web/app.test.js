@@ -49,7 +49,7 @@ const formatTime = new Function(extract('formatTime') + '; return formatTime;')(
 //   - document.createTextNode(text) 返回 {nodeType: 'text', data: text}。
 // el() 内部引用了外层 var BOOL_PROPS（core.js:174），extract('el') 只抽函数体拿不到。
 // 这里把 BOOL_PROPS 定义拼到 el 函数体前面，保持与 core.js 一致。
-const BOOL_PROPS_SRC = 'var BOOL_PROPS = { disabled:1, checked:1, selected:1, readonly:1, required:1, autofocus:1, multiple:1, nowrap:1, hidden:1, open:1, defer:1, async:1, autoplay:1, controls:1, loop:1, muted:1, draggable:1, contenteditable:1, spellcheck:1 };';
+const BOOL_PROPS_SRC = 'var BOOL_PROPS = { disabled:1, checked:1, selected:1, readonly:1, required:1, autofocus:1, multiple:1, nowrap:1, hidden:1, open:1, defer:1, async:1, autoplay:1, controls:1, loop:1, muted:1 };';
 
 const el = new Function(
   'document',
@@ -538,6 +538,11 @@ function testEl() {
   const e = el('input', { type: 'text', placeholder: 'p' });
   assert.strictEqual(e._attrs.type, 'text', 'setAttribute: type');
   assert.strictEqual(e._attrs.placeholder, 'p', 'setAttribute: placeholder');
+
+  // spellcheck / draggable / contenteditable 是枚举属性，不是 HTML 布尔属性。
+  // 必须保留字符串 "false"；写成空属性反而会让浏览器继续开启拼写检查。
+  const noSpellcheck = el('textarea', { spellcheck: 'false' });
+  assert.strictEqual(noSpellcheck._attrs.spellcheck, 'false', 'spellcheck=false 必须保留显式属性值');
 
   // children 数组 / 字符串 / null
   const f = el('div', null, [
@@ -1434,6 +1439,270 @@ function testDatabaseSQLHelpers() {
   console.log('  database SQL tabs helpers: format / suggest / brackets / snippetExpandKey ✓');
 }
 
+function loadCompareHelpers() {
+  const file = path.join(__dirname, 'pages', 'compare.js');
+  const src = fs.readFileSync(file, 'utf8');
+  function extractFn(name) {
+    const p = src.indexOf('function ' + name + '(');
+    if (p < 0) throw new Error('function not found: ' + name);
+    let depth = 0, start = p, i = p;
+    while (i < src.length && src[i] !== '{') i++;
+    depth = 1;
+    i++;
+    while (i < src.length && depth > 0) {
+      if (src[i] === '{') depth++;
+      else if (src[i] === '}') depth--;
+      i++;
+    }
+    return src.slice(start, i);
+  }
+  return new Function(
+    extractFn('parentRel') + '\n' +
+    extractFn('baseName') + '\n' +
+    extractFn('isDirItem') + '\n' +
+    extractFn('rollupAllFolders') + '\n' +
+    extractFn('joinPath') + '\n' +
+    extractFn('splitEditorLines') + '\n' +
+    extractFn('replaceEditorLine') + '\n' +
+    extractFn('textMetrics') + '\n' +
+    'const AUTO_COMPARE_MAX_CHARS = 200000; const AUTO_COMPARE_MAX_LINES = 12000;\n' +
+    extractFn('isLargeText') + '\n' +
+    extractFn('createEditorHistory') + '\n' +
+    extractFn('resolveSaveSide') + '\n' +
+     extractFn('makeCompareKey') + '\n' +
+     extractFn('folderRowHeight') + '\n' +
+     extractFn('folderStatusText') + '\n' +
+     extractFn('isTypeConflict') + '\n' +
+     extractFn('isBulkActionable') + '\n' +
+     extractFn('autoExpandDiffFolderRows') + '\n' +
+     extractFn('sourceIdentity') + '\n' +
+     extractFn('normalizeFolderHistoryEntry') + '\n' +
+     extractFn('sourceSecurityLabel') + '\n' +
+     extractFn('sourceProtocolLabel') + '\n' +
+     extractFn('sourceIdentityLabel') + '\n' +
+     'const WASPACK_HANDOFF_PREFIX = \'kairo:waspack:compare-handoff:\'; const WASPACK_HANDOFF_MAX_AGE = 10 * 60 * 1000;\n' +
+     extractFn('handoffPathKey') + '\n' +
+     extractFn('validateWaspackHandoff') + '\n' +
+     extractFn('consumeWaspackHandoff') + '\n' +
+     extractFn('handoffNonceFromHash') + '\n' +
+     'return { parentRel, baseName, isDirItem, rollupAllFolders, joinPath, replaceEditorLine, folderRowHeight, folderStatusText, textMetrics, isLargeText, createEditorHistory, resolveSaveSide, makeCompareKey, isTypeConflict, isBulkActionable, autoExpandDiffFolderRows, sourceIdentity, normalizeFolderHistoryEntry, sourceSecurityLabel, sourceIdentityLabel, handoffPathKey, validateWaspackHandoff, consumeWaspackHandoff, handoffNonceFromHash };'
+  )();
+}
+
+function loadWaspackHelpers() {
+  const file = path.join(__dirname, 'pages', 'waspack.js');
+  const source = fs.readFileSync(file, 'utf8');
+  function extractFn(name) {
+    const p = source.indexOf('function ' + name + '(');
+    if (p < 0) throw new Error('function not found: ' + name);
+    let depth = 0, i = source.indexOf('{', p);
+    depth = 1; i++;
+    while (i < source.length && depth > 0) {
+      if (source[i] === '{') depth++;
+      else if (source[i] === '}') depth--;
+      i++;
+    }
+    return source.slice(p, i);
+  }
+  return new Function(
+    extractFn('normalizeManifest') + '\n' +
+    extractFn('packageBaseName') + '\n' +
+    extractFn('normalizeBuildResponse') + '\n' +
+    extractFn('canonicalStageSignature') + '\n' +
+    extractFn('windowsPathKey') + '\n' +
+    extractFn('sameWindowsPath') + '\n' +
+    extractFn('comparableHistoryItem') + '\n' +
+    extractFn('previousComparable') + '\n' +
+    extractFn('makeHandoffPayload') + '\n' +
+    extractFn('createHandoff') + '\n' +
+    extractFn('handoffTargetURL') + '\n' +
+    'return { normalizeBuildResponse, canonicalStageSignature, windowsPathKey, sameWindowsPath, comparableHistoryItem, previousComparable, makeHandoffPayload, createHandoff, handoffTargetURL };'
+  )();
+}
+
+function testWaspackHelpers() {
+  const wp = loadWaspackHelpers();
+  const body = { project_dir: 'D:\\src', output_dir: 'D:\\out', package_name: 'REL20260905.tar', manifest: 'a\\r\\nb', auto_pair: true, pack_type: 'app', batch_base_dir: '', chmod_mode: '777', output_policy: 'fail' };
+  const signature = wp.canonicalStageSignature(body);
+  assert.strictEqual(signature, wp.canonicalStageSignature(Object.assign({}, body, { output_policy: 'replace' })), '输出策略不应进入阶段签名或持久化身份');
+  assert.notStrictEqual(signature, wp.canonicalStageSignature(Object.assign({}, body, { manifest: 'other' })), '清单变化必须使阶段凭据失效');
+  assert.strictEqual(wp.sameWindowsPath('C:\\Deploy\\Current\\', 'c:/deploy/current'), true, 'Windows 目录比较应忽略斜杠和大小写');
+  assert.strictEqual(wp.sameWindowsPath('C:\\Deploy\\One', 'C:\\Deploy\\Two'), false);
+
+  const history = [
+    { operation: 'build', status: 'success', output_dir: 'C:\\current' },
+    { operation: 'preview', status: 'success', output_dir: 'C:\\preview' },
+    { operation: 'package', status: 'success', output_dir: 'C:\\previous' },
+    { operation: 'build', status: 'failed', output_dir: 'C:\\failed' }
+  ];
+  assert.strictEqual(wp.previousComparable(history, 0), history[2], '上一可比记录应跳过预检和失败操作');
+  assert.strictEqual(wp.previousComparable(history, 2), null);
+
+  const wrapped = wp.normalizeBuildResponse({ ok: true, build: { artifacts: [{ path: 'a.tar' }] }, zip: { path: 'a.zip' } });
+  assert.strictEqual(wrapped.build.artifacts[0].path, 'a.tar');
+  assert.strictEqual(wrapped.zip.path, 'a.zip');
+  assert.strictEqual(wp.normalizeBuildResponse({ artifacts: [{ path: 'plain.tar' }] }).build.artifacts[0].path, 'plain.tar');
+
+  const payload = wp.makeHandoffPayload('C:\\previous', 'C:\\current', '2026-09-05T00:00:00.000Z');
+  assert.deepStrictEqual(payload.left, { kind: 'local', path: 'C:\\previous' });
+  assert.strictEqual(payload.source, 'waspack-history');
+  assert.ok(/^wp-/.test(wp.createHandoff('C:\\previous', 'C:\\current').nonce));
+  assert.strictEqual(wp.handoffTargetURL({ origin: 'https://kairo.test', pathname: '/app/', search: '?tenant=1', hash: '#/old' }, 'wp-test'), 'https://kairo.test/app/?tenant=1#/compare?handoff=wp-test', '交接 URL 必须是绝对同源且丢弃旧 hash');
+  const source = fs.readFileSync(path.join(__dirname, 'pages', 'waspack.js'), 'utf8');
+  assert.ok(!/output_policy\s*:/.test(source.match(/function savePreferences\(\)[\s\S]*?\n    \}/)[0]), '偏好保存不得包含 output_policy');
+  console.log('  waspack helpers: output policy / stage signature / history / handoff ✓');
+}
+
+function testCompareHelpers() {
+  const cmp = loadCompareHelpers();
+
+  // 1. joinPath 跨平台路径测试
+  assert.strictEqual(cmp.joinPath({ kind: 'local' }, 'D:\\myproject', 'sub/file.txt'), 'D:\\myproject\\sub\\file.txt');
+  assert.strictEqual(cmp.joinPath({ kind: 'local' }, 'D:/myproject/', 'sub/file.txt'), 'D:\\myproject\\sub\\file.txt');
+  assert.strictEqual(cmp.joinPath({ kind: 'sftp' }, '/var/www', 'sub/file.txt'), '/var/www/sub/file.txt');
+  assert.strictEqual(cmp.joinPath({ kind: 'sftp' }, '/var/www/', '/sub/file.txt'), '/var/www/sub/file.txt');
+
+  // 2. parentRel & baseName & isDirItem
+  assert.strictEqual(cmp.parentRel('src/components/btn.js'), 'src/components');
+  assert.strictEqual(cmp.parentRel('src'), '');
+  assert.strictEqual(cmp.baseName('src/components/btn.js'), 'btn.js');
+  assert.strictEqual(cmp.baseName('src'), 'src');
+  assert.strictEqual(cmp.isDirItem({ left: { is_dir: true } }), true);
+  assert.strictEqual(cmp.isDirItem({ left: { is_dir: false } }), false);
+
+  // 3. rollupAllFolders: 确保子目录中的差异能自底向上正确传递给父文件夹，防止被只看差异模式过滤隐藏
+  const itemsWithDiff = [
+    { rel_path: 'src', left: { is_dir: true }, right: { is_dir: true }, status: 'same' },
+    { rel_path: 'src/components', left: { is_dir: true }, right: { is_dir: true }, status: 'same' },
+    { rel_path: 'src/components/btn.js', left: { size: 10 }, right: { size: 20 }, status: 'different' },
+    { rel_path: 'src/components/icon.js', left: { size: 50 }, right: { size: 50 }, status: 'same' },
+    { rel_path: 'docs', left: { is_dir: true }, right: { is_dir: true }, status: 'same' },
+    { rel_path: 'docs/readme.md', left: { size: 100 }, right: { size: 100 }, status: 'same' },
+    { rel_path: 'new_folder', left: { is_dir: true }, right: null, status: 'left_only' },
+    { rel_path: 'pending_folder', left: { is_dir: true }, right: { is_dir: true }, status: 'pending', pending: true }
+  ];
+
+  cmp.rollupAllFolders(itemsWithDiff, new Set(['', 'src', 'src/components', 'docs']));
+  const map = {};
+  itemsWithDiff.forEach(it => { map[it.rel_path] = it; });
+
+  assert.strictEqual(map['src/components'].status, 'different', '含有差异文件的子目录状态应置为 different');
+  assert.strictEqual(map['src'].status, 'different', '含差异子目录的父目录状态也应置为 different');
+  assert.strictEqual(map['docs'].status, 'same', '全部相同文件的目录保持 same');
+  assert.strictEqual(map['new_folder'].status, 'left_only', '单侧目录保留 left_only');
+  assert.strictEqual(map['pending_folder'].status, 'pending', '未展开目录保留 pending');
+
+  // 4. 结果区就地编辑允许回车拆成多行
+  assert.strictEqual(cmp.replaceEditorLine('alpha\nbeta', 1, 'one\ntwo', 0), 'one\ntwo\nbeta');
+  assert.strictEqual(cmp.replaceEditorLine('alpha\nbeta', 0, 'one\ntwo', 2), 'alpha\none\ntwo\nbeta');
+
+  // 5. pending 明确表达尚未验证，不能伪装成完成
+  assert.strictEqual(cmp.folderStatusText('pending', false), '待验证');
+  assert.strictEqual(cmp.folderStatusText('pending', true), '校验中');
+  assert.strictEqual(cmp.folderStatusText('different', false), '不同');
+
+  // 7. 虚拟树行高必须与 CSS 命中区一致，焦点应落在 composite treegrid 上
+  assert.strictEqual(cmp.folderRowHeight(), 48, '虚拟树行高至少 48px');
+  const compareSource = fs.readFileSync(path.join(__dirname, 'pages', 'compare.js'), 'utf8');
+  const compareCss = fs.readFileSync(path.join(__dirname, 'pages', 'compare-workbench.css'), 'utf8');
+  assert.ok(compareCss.includes('--cmp-folder-row-height: 48px'), 'CSS 应声明 48px 虚拟行高');
+  assert.ok(compareCss.includes('min-height: var(--cmp-folder-row-height)'), '行内控件应使用统一命中区高度');
+  assert.ok(compareSource.includes("role: 'treegrid', tabindex: '0'"), 'treegrid 应承担键盘焦点');
+  assert.ok(compareSource.includes("table.addEventListener('keydown'"), '键盘事件应绑定 treegrid');
+  assert.ok(compareSource.includes("table.setAttribute('aria-activedescendant'"), '活动后代应绑定 treegrid');
+  assert.ok(!compareSource.includes("class: 'cmp-folder-viewport', tabindex: '0'"), 'rowgroup 不应承载 composite tabindex');
+  assert.ok(compareSource.includes('return { startScan: startScan }'), '文件夹工作台应暴露延迟扫描句柄');
+
+  // 6. 远程来源历史只保存身份，不保存凭据，并能识别类型冲突
+  const ftp = cmp.sourceIdentity({ kind: 'ftp', host: 'example.test', port: 2121, tls_mode: 'explicit', path: '/drop', password: 'secret' });
+  assert.strictEqual(ftp.password, undefined, '历史身份不得携带密码');
+  assert.strictEqual(ftp.tls, 'explicit');
+  assert.strictEqual(cmp.normalizeFolderHistoryEntry('C:\\drop').kind, 'local');
+  const conflict = { status: 'different', left: { is_dir: false }, right: { is_dir: true } };
+  assert.strictEqual(cmp.isTypeConflict(conflict), true);
+  assert.strictEqual(cmp.isBulkActionable(conflict), false);
+
+  // 7. 自动展开只处理已经拿到直接子项的目录，边界目录首次点击应触发懒扫描
+  const expanded = new Set();
+  cmp.autoExpandDiffFolderRows([
+    { rel_path: 'boundary', left: { is_dir: true }, right: { is_dir: true }, status: 'different' },
+    { rel_path: 'loaded', left: { is_dir: true }, right: { is_dir: true }, status: 'different' },
+    { rel_path: 'loaded/file.txt', left: { size: 1 }, right: { size: 2 }, status: 'different' },
+    { rel_path: 'left-only', left: { is_dir: true }, right: null, status: 'left_only' }
+  ], expanded, 300);
+  assert.strictEqual(expanded.has('loaded'), true, '有直接子项的差异目录应自动展开');
+  assert.strictEqual(expanded.has('boundary'), false, '扫描边界目录应保持收起');
+  assert.strictEqual(expanded.has('left-only'), false, '无子项的单侧目录应保持收起');
+
+  // 6. 编辑器历史：加载后的快照是撤销边界，第一次撤销不能回到空文本
+  const history = cmp.createEditorHistory('loaded text', 10);
+  history.schedule('loaded text\nchanged');
+  assert.strictEqual(history.undo('loaded text\nchanged'), 'loaded text', '第一次撤销应回到加载内容');
+  assert.strictEqual(history.redo('loaded text'), 'loaded text\nchanged', '重做应恢复编辑内容');
+  history.reset('new file');
+  history.schedule('new file\nedit');
+  assert.strictEqual(history.undo('new file\nedit'), 'new file', 'reset 后历史不应包含旧文件');
+  assert.strictEqual(history.canUndo(), false, '回到加载快照后不可继续撤销');
+  history.dispose();
+
+  // 7. 保存快捷键的焦点解析：无法确定侧别时返回 null，绝不默认为左侧
+  function node(className, side, parent) {
+    return {
+      className: className || '',
+      parentElement: parent || null,
+      getAttribute: function (key) {
+        if (key === 'class') return this.className;
+        if (key === 'data-side') return side || null;
+        return null;
+      }
+    };
+  }
+  const rightCell = node('cmp-code', null, node('cmp-diff-cell cmp-diff-right', null, null));
+  assert.strictEqual(cmp.resolveSaveSide(rightCell), 'right');
+  assert.strictEqual(cmp.resolveSaveSide(node('cmp-editor-input', null, node('cmp-editor', 'left', null))), 'left');
+  assert.strictEqual(cmp.resolveSaveSide(node('cmp-wb-panel', null, null)), null);
+
+  // 8. 自动比较 key 包含真正影响结果的选项，但 backup 仅影响写入，不触发 diff
+  const keyA = cmp.makeCompareKey('a', 'b', { trim_space: true, backup: true }, 'L', 'R');
+  const keyB = cmp.makeCompareKey('a', 'b', { trim_space: true, backup: false }, 'L', 'R');
+  const keyC = cmp.makeCompareKey('a', 'b', { trim_space: false }, 'L', 'R');
+  assert.strictEqual(keyA, keyB, 'backup 不应改变 diff key');
+  assert.notStrictEqual(keyA, keyC, 'trim_space 应改变 diff key');
+
+  // 9. 大文本策略按字符数或行数触发降级
+  assert.strictEqual(cmp.isLargeText('x'.repeat(200000)), false);
+  assert.strictEqual(cmp.isLargeText('x'.repeat(200001)), true);
+  assert.strictEqual(cmp.isLargeText(Array(12001).fill('x').join('\n')), true);
+
+  // 10. 投产历史交接一次性消费、校验时效和 URL hash 解析
+  const nonce = 'wp-test-1234';
+  const storage = {
+    data: {},
+    getItem: function (key) { return this.data[key] || null; },
+    removeItem: function (key) { delete this.data[key]; }
+  };
+  storage.data['kairo:waspack:compare-handoff:' + nonce] = JSON.stringify({
+    left: { kind: 'local', path: 'D:\\release\\previous' },
+    right: { kind: 'local', path: 'd:/release/current/' },
+    created_at: new Date(1000).toISOString(), source: 'waspack-history'
+  });
+  const consumed = cmp.consumeWaspackHandoff(nonce, storage, 1500);
+  assert.strictEqual(consumed.ok, true);
+  assert.strictEqual(storage.getItem('kairo:waspack:compare-handoff:' + nonce), null, '交接消费后必须立即移除，防止重放');
+  assert.strictEqual(cmp.consumeWaspackHandoff(nonce, storage, 1500).ok, false);
+  assert.strictEqual(cmp.validateWaspackHandoff({
+    left: { kind: 'local', path: 'D:\\same' }, right: { kind: 'local', path: 'd:/SAME/' },
+    created_at: new Date(1000).toISOString(), source: 'waspack-history'
+  }, 1500).ok, false, '相同目录不得形成比较快照');
+  assert.strictEqual(cmp.validateWaspackHandoff({
+    left: { kind: 'local', path: 'D:\\old' }, right: { kind: 'local', path: 'D:\\new' },
+    created_at: new Date(0).toISOString(), source: 'waspack-history'
+  }, 10 * 60 * 1000 + 1).ok, false, '超过时效的交接必须拒绝');
+  assert.strictEqual(cmp.handoffNonceFromHash('#/compare?handoff=wp-test-1234'), nonce);
+
+  console.log('  compare helpers: joinPath / rollupAllFolders / path parsing / source identity ✓');
+}
+
 // ---------- 主入口 ----------
 
 async function main() {
@@ -1443,7 +1712,7 @@ async function main() {
     testEscapeRegex, testParseSearchTermsForHighlight, testHighlightAndTrim,
     testCssEscape, testPctText, testValidate, testEl, testConfirmDialog, testXSSInErrorText,
     testGotDoneDedupe, testNormalizeHighlightColor, testRenderHighlightedLine,
-    testTailViewer, testApplyCommandPath, testDatabaseSQLHelpers,
+    testTailViewer, testApplyCommandPath, testDatabaseSQLHelpers, testCompareHelpers, testWaspackHelpers,
   ];
   let pass = 0, fail = 0;
   for (const t of tests) {

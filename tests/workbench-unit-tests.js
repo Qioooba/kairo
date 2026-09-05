@@ -54,6 +54,16 @@ const splitsQ = W.statementModel.split(sqlQQuote);
 assert.strictEqual(splitsQ.length, 2, 'Oracle q-quote should not split');
 console.log('  ✓ Oracle q-quotes do not split');
 
+// Oracle PL/SQL blocks use a slash on its own line as the client terminator;
+// internal semicolons must stay inside the same statement.
+const sqlPLSQL = "CREATE OR REPLACE FUNCTION demo_fn(p NUMBER) RETURN NUMBER IS\nBEGIN\n  RETURN p + 1;\nEND;\n/\nSELECT demo_fn(1) FROM dual;";
+const splitsPLSQL = W.statementModel.split(sqlPLSQL);
+assert.strictEqual(splitsPLSQL.length, 2, 'Oracle PL/SQL block and following SQL should be two statements');
+assert.ok(splitsPLSQL[0].text.includes('RETURN p + 1;'), 'PL/SQL internal semicolon must remain in the block');
+assert.ok(!splitsPLSQL[0].text.trimEnd().endsWith('/'), 'SQL*Plus slash terminator must not be sent as SQL');
+assert.ok(splitsPLSQL[1].text.includes('SELECT demo_fn'), 'SQL after slash terminator should remain executable');
+console.log('  ✓ Oracle PL/SQL slash terminator and internal semicolons work');
+
 // Selection priority
 const cSel = W.statementModel.current(sql1, 0, 20, 39);
 assert.ok(cSel.selected, 'Selection should have priority');

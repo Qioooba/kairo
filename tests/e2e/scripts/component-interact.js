@@ -149,6 +149,10 @@ async function run() {
         inputDetails.push({ ...info, index: i, status: 'SKIPPED', reason: '不可见或只读/禁用' });
         continue;
       }
+      if (pg.id === 'waspack' && ['waspack-project', 'waspack-output', 'waspack-batch-base', 'waspack-output-policy'].includes(info.id)) {
+        inputDetails.push({ ...info, index: i, status: 'SKIPPED', reason: '该字段会持久化真实打包路径，组件扫描不得写入 QA 占位值' });
+        continue;
+      }
 
       try {
         if (info.tag === 'select') {
@@ -196,6 +200,11 @@ async function run() {
       if (b.disabled) {
         buttonsSkipped++;
         buttonDetails.push({ ...b, status: 'SKIPPED', reason: '按钮处于禁用状态(正常UI约束)' });
+        continue;
+      }
+      if (String(b.className || '').includes('path-field-browse')) {
+        buttonsSkipped++;
+        buttonDetails.push({ ...b, status: 'SKIPPED', reason: '原生文件选择器不适合在 headless 组件扫描中触发' });
         continue;
       }
       if (isDangerous(b.text)) {

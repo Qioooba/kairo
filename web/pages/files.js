@@ -1899,13 +1899,27 @@
     }
 
     function copyToClipboard(text) {
+      // 优先安全上下文 clipboard，http内网/老核走 execCommand，最后才 prompt 手动复制
+      function legacyCopy(t) {
+        try {
+          const ta = document.createElement('textarea');
+          ta.value = t; ta.style.position = 'fixed'; ta.style.opacity = '0';
+          document.body.appendChild(ta); ta.select();
+          const ok = document.execCommand('copy');
+          document.body.removeChild(ta);
+          return !!ok;
+        } catch (_) { return false; }
+      }
       try {
-        if (navigator.clipboard && navigator.clipboard.writeText) {
+        if (navigator.clipboard && window.isSecureContext && navigator.clipboard.writeText) {
           navigator.clipboard.writeText(text).then(() => {
             toast('路径已复制', 'ok');
           }).catch(() => {
-            window.prompt('复制此路径：', text);
+            if (legacyCopy(text)) toast('路径已复制', 'ok');
+            else window.prompt('复制此路径：', text);
           });
+        } else if (legacyCopy(text)) {
+          toast('路径已复制', 'ok');
         } else {
           window.prompt('复制此路径：', text);
         }

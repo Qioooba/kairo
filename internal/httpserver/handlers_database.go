@@ -38,6 +38,20 @@ func (s *Server) handleDatabaseDispatch(w http.ResponseWriter, r *http.Request) 
 		s.handleDatabaseQuery(w, r)
 	case path == "batch":
 		s.handleDatabaseBatch(w, r)
+	case path == "transaction":
+		s.handleDatabaseTransaction(w, r)
+	case path == "transaction/status":
+		s.handleDatabaseTransactionStatus(w, r)
+	case path == "transactions":
+		s.handleDatabaseTransactionList(w, r)
+	case path == "script":
+		s.handleDatabaseScript(w, r)
+	case path == "grid":
+		s.handleDatabaseGrid(w, r)
+	case path == "import/preview":
+		s.handleDatabaseImportPreview(w, r)
+	case path == "import/apply":
+		s.handleDatabaseImportApply(w, r)
 	case path == "export":
 		s.handleDatabaseExport(w, r)
 	case path == "metadata/schemas":
@@ -52,6 +66,16 @@ func (s *Server) handleDatabaseDispatch(w http.ResponseWriter, r *http.Request) 
 		s.handleDatabaseConstraints(w, r)
 	case path == "metadata/inspect":
 		s.handleDatabaseInspect(w, r)
+	case path == "metadata/source":
+		s.handleDatabaseFunctionSource(w, r)
+	case path == "compile":
+		s.handleDatabaseFunctionCompileLegacy(w, r)
+	case path == "ddl":
+		s.handleDatabaseDDLLegacy(w, r)
+	case path == "object-studio":
+		s.handleDatabaseObjectStudio(w, r, "")
+	case strings.HasPrefix(path, "object-studio/"):
+		s.handleDatabaseObjectStudio(w, r, strings.TrimPrefix(path, "object-studio/"))
 	case path == "explain":
 		s.handleDatabaseExplain(w, r)
 	case path == "redis/scan":
@@ -76,8 +100,9 @@ func (s *Server) handleDatabaseDispatch(w http.ResponseWriter, r *http.Request) 
 }
 
 type databaseSourceRequest struct {
-	Source   dbconsole.Source `json:"source"`
-	Password string           `json:"password"`
+	Source      dbconsole.Source `json:"source"`
+	Password    string           `json:"password"`
+	SSHPassword string           `json:"ssh_password,omitempty"`
 }
 
 func (s *Server) handleDatabaseSources(w http.ResponseWriter, r *http.Request) {
@@ -94,7 +119,13 @@ func (s *Server) handleDatabaseSources(w http.ResponseWriter, r *http.Request) {
 			if user == nil || user.Role == "admin" {
 				has, _ = credentials.HasResource(dbconsole.CredentialNamespace, source.ID, source.CredentialUser())
 			}
-			views = append(views, databaseSourceView(source, has, user))
+			view := databaseSourceView(source, has, user)
+			if user == nil || user.Role == "admin" {
+				if source.SSHTunnel != nil && source.SSHTunnel.Enabled {
+					view.HasSSHPassword, _ = credentials.HasResource(dbconsole.SSHCredentialNamespace, source.ID, source.SSHTunnel.Username)
+				}
+			}
+			views = append(views, view)
 		}
 		writeJSON(w, 200, map[string]any{"ok": true, "sources": views})
 	case http.MethodPost:
@@ -126,8 +157,27 @@ func (s *Server) handleDatabaseSources(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+		if req.Source.SSHTunnel != nil && req.Source.SSHTunnel.Enabled {
+			if strings.TrimSpace(req.SSHPassword) == "" {
+				_, _ = s.database.Store().Delete(source.ID)
+				if req.Password != "" {
+					_ = credentials.ClearResource(dbconsole.CredentialNamespace, source.ID, source.CredentialUser())
+				}
+				writeErr(w, 400, errors.New("启用 SSH 隧道时 ssh_password 不能为空"))
+				return
+			}
+			if err := credentials.SaveResource(dbconsole.SSHCredentialNamespace, source.ID, source.SSHTunnel.Username, req.SSHPassword); err != nil {
+				_, _ = s.database.Store().Delete(source.ID)
+				if req.Password != "" {
+					_ = credentials.ClearResource(dbconsole.CredentialNamespace, source.ID, source.CredentialUser())
+				}
+				writeErrSanitized(w, 500, err)
+				return
+			}
+		}
 		s.audit.Write("database.source.create", "source_id", source.ID, "kind", source.Kind, "name", source.Name, "result", "ok")
-		writeJSON(w, 201, map[string]any{"ok": true, "source": dbconsole.SourceView{Source: source, HasPassword: req.Password != ""}})
+		view := dbconsole.SourceView{Source: source, HasPassword: req.Password != "", HasSSHPassword: source.SSHTunnel != nil && source.SSHTunnel.Enabled && req.SSHPassword != ""}
+		writeJSON(w, 201, map[string]any{"ok": true, "source": view})
 	default:
 		writeErr(w, 405, errors.New("仅支持 GET/POST"))
 	}
@@ -184,36 +234,106 @@ func (s *Server) handleDatabaseSourceItem(w http.ResponseWriter, r *http.Request
 		}
 		req.Source.ID = id
 		req.Source.CreatedAt = old.CreatedAt
+		// Normalize before deriving credential identities. Store.Save applies the
+		// same defaults, and doing it here keeps the staged credential plan in
+		// lock-step with the source that will be persisted.
+		req.Source.Defaults()
 		credentialIdentityChanged := !strings.EqualFold(strings.TrimSpace(req.Source.Kind), old.Kind) || req.Source.CredentialUser() != old.CredentialUser()
+		oldTunnelUser := ""
+		if old.SSHTunnel != nil && old.SSHTunnel.Enabled {
+			oldTunnelUser = old.SSHTunnel.Username
+		}
+		newTunnelUser := ""
+		if req.Source.SSHTunnel != nil && req.Source.SSHTunnel.Enabled {
+			newTunnelUser = req.Source.SSHTunnel.Username
+		}
+		sshIdentityChanged := oldTunnelUser != newTunnelUser || old.SSHTunnel != nil && req.Source.SSHTunnel != nil && old.SSHTunnel.Host != req.Source.SSHTunnel.Host || oldTunnelUser == "" && newTunnelUser != ""
 		if credentialIdentityChanged && req.Password == "" && !strings.EqualFold(strings.TrimSpace(req.Source.Kind), dbconsole.KindRedis) {
 			writeErr(w, 400, errors.New("修改数据库类型或用户名时必须重新输入密码"))
 			return
 		}
-		updated, err := s.database.Store().Save(req.Source)
-		if err != nil {
-			writeErr(w, 400, err)
+		if newTunnelUser != "" && (sshIdentityChanged || oldTunnelUser == "") && strings.TrimSpace(req.SSHPassword) == "" {
+			writeErr(w, 400, errors.New("新增或修改 SSH 隧道账号时必须重新输入 ssh_password"))
 			return
 		}
+
+		oldDBKey := databaseCredentialKey{namespace: dbconsole.CredentialNamespace, resource: id, username: old.CredentialUser()}
+		newDBKey := databaseCredentialKey{namespace: dbconsole.CredentialNamespace, resource: id, username: req.Source.CredentialUser()}
+		oldSSHKey := databaseCredentialKey{namespace: dbconsole.SSHCredentialNamespace, resource: id, username: oldTunnelUser}
+		newSSHKey := databaseCredentialKey{namespace: dbconsole.SSHCredentialNamespace, resource: id, username: newTunnelUser}
+		credentialKeys := make([]databaseCredentialKey, 0, 4)
+		if credentialIdentityChanged || req.Password != "" {
+			credentialKeys = append(credentialKeys, oldDBKey)
+			if req.Password != "" {
+				credentialKeys = append(credentialKeys, newDBKey)
+			}
+		}
+		if sshIdentityChanged || req.SSHPassword != "" {
+			credentialKeys = append(credentialKeys, oldSSHKey)
+			if req.SSHPassword != "" {
+				credentialKeys = append(credentialKeys, newSSHKey)
+			}
+		}
+		snapshots, err := snapshotDatabaseCredentials(credentialKeys)
+		if err != nil {
+			writeErrSanitized(w, 500, err)
+			return
+		}
+		rollbackCredentials := func() {
+			if rollbackErr := restoreDatabaseCredentials(snapshots); rollbackErr != nil {
+				s.audit.Write("database.source.update.credential_rollback", "source_id", id, "result", "fail", "error", trim(rollbackErr.Error(), 300))
+			}
+		}
+		// Stage every new secret first. In particular, do not clear the old DB
+		// credential before the SSH SaveResource call succeeds.
 		if req.Password != "" {
-			if err := credentials.SaveResource(dbconsole.CredentialNamespace, id, updated.CredentialUser(), req.Password); err != nil {
-				// 配置与凭据必须作为一个逻辑事务提交；凭据失败时恢复旧配置。
-				if _, rollbackErr := s.database.Store().Save(old); rollbackErr != nil {
-					s.audit.Write("database.source.update.rollback", "source_id", id, "result", "fail", "error", trim(rollbackErr.Error(), 300))
-				}
+			if err := credentials.SaveResource(newDBKey.namespace, newDBKey.resource, newDBKey.username, req.Password); err != nil {
+				rollbackCredentials()
 				writeErrSanitized(w, 500, err)
 				return
 			}
-			if old.CredentialUser() != updated.CredentialUser() {
-				_ = credentials.ClearResource(dbconsole.CredentialNamespace, id, old.CredentialUser())
+		}
+		if newTunnelUser != "" && req.SSHPassword != "" {
+			if err := credentials.SaveResource(newSSHKey.namespace, newSSHKey.resource, newSSHKey.username, req.SSHPassword); err != nil {
+				rollbackCredentials()
+				writeErrSanitized(w, 500, err)
+				return
 			}
-		} else if credentialIdentityChanged {
-			// 切换到无密码 Redis 时不能沿用旧数据库密码。
-			_ = credentials.ClearResource(dbconsole.CredentialNamespace, id, old.CredentialUser())
+		}
+
+		updated, err := s.database.Store().Save(req.Source)
+		if err != nil {
+			rollbackCredentials()
+			writeErr(w, 400, err)
+			return
+		}
+		// Remove superseded entries only after all new entries and the source
+		// configuration have succeeded. A clear failure rolls back both sides.
+		clearKeys := make([]databaseCredentialKey, 0, 2)
+		if (credentialIdentityChanged || req.Password != "") && !oldDBKey.equal(newDBKey) {
+			clearKeys = append(clearKeys, oldDBKey)
+		}
+		if (sshIdentityChanged || req.SSHPassword != "") && !oldSSHKey.empty() && !oldSSHKey.equal(newSSHKey) {
+			clearKeys = append(clearKeys, oldSSHKey)
+		}
+		for _, key := range clearKeys {
+			if err := clearDatabaseCredential(key); err != nil {
+				if _, rollbackErr := s.database.Store().Save(old); rollbackErr != nil {
+					s.audit.Write("database.source.update.rollback", "source_id", id, "result", "fail", "error", trim(rollbackErr.Error(), 300))
+				}
+				rollbackCredentials()
+				writeErrSanitized(w, 500, err)
+				return
+			}
 		}
 		s.database.Invalidate(id)
 		has, _ := credentials.HasResource(dbconsole.CredentialNamespace, id, updated.CredentialUser())
 		s.audit.Write("database.source.update", "source_id", id, "kind", updated.Kind, "name", updated.Name, "result", "ok")
-		writeJSON(w, 200, map[string]any{"ok": true, "source": dbconsole.SourceView{Source: updated, HasPassword: has}})
+		hasSSH := false
+		if updated.SSHTunnel != nil && updated.SSHTunnel.Enabled {
+			hasSSH, _ = credentials.HasResource(dbconsole.SSHCredentialNamespace, id, updated.SSHTunnel.Username)
+		}
+		writeJSON(w, 200, map[string]any{"ok": true, "source": dbconsole.SourceView{Source: updated, HasPassword: has, HasSSHPassword: hasSSH}})
 	case http.MethodDelete:
 		deleted, err := s.database.Store().Delete(id)
 		if err != nil {
@@ -224,6 +344,11 @@ func (s *Server) handleDatabaseSourceItem(w http.ResponseWriter, r *http.Request
 		if err := credentials.ClearResource(dbconsole.CredentialNamespace, id, deleted.CredentialUser()); err != nil && !errors.Is(err, credentials.ErrNotSaved) && !errors.Is(err, credentials.ErrUnavailable) {
 			s.audit.Write("database.source.credential.delete", "source_id", id, "result", "fail", "error", trim(err.Error(), 300))
 		}
+		if deleted.SSHTunnel != nil && deleted.SSHTunnel.Enabled {
+			if err := credentials.ClearResource(dbconsole.SSHCredentialNamespace, id, deleted.SSHTunnel.Username); err != nil && !errors.Is(err, credentials.ErrNotSaved) && !errors.Is(err, credentials.ErrUnavailable) {
+				s.audit.Write("database.source.ssh_credential.delete", "source_id", id, "result", "fail", "error", trim(err.Error(), 300))
+			}
+		}
 		s.audit.Write("database.source.delete", "source_id", id, "kind", deleted.Kind, "name", deleted.Name, "result", "ok")
 		writeJSON(w, 200, map[string]any{"ok": true})
 	default:
@@ -232,14 +357,71 @@ func (s *Server) handleDatabaseSourceItem(w http.ResponseWriter, r *http.Request
 }
 
 type databaseQueryRequest struct {
-	SourceID string `json:"source_id"`
-	SQL      string `json:"sql"`
-	MaxRows  int    `json:"max_rows"`
-	Page     int    `json:"page"`
-	PageSize int    `json:"page_size"`
-	CountMode string `json:"count_mode"`
-	Format   string `json:"format"`
-	Table    string `json:"table"`
+	SourceID   string                    `json:"source_id"`
+	SessionID  string                    `json:"session_id,omitempty"`
+	SQL        string                    `json:"sql"`
+	Parameters []dbconsole.BindParameter `json:"parameters,omitempty"`
+	Confirm    bool                      `json:"confirm,omitempty"`
+	MaxRows    int                       `json:"max_rows"`
+	Page       int                       `json:"page"`
+	PageSize   int                       `json:"page_size"`
+	CountMode  string                    `json:"count_mode"`
+	Format     string                    `json:"format"`
+	Table      string                    `json:"table"`
+}
+
+type databaseTransactionRequest struct {
+	SourceID  string `json:"source_id"`
+	SessionID string `json:"session_id"`
+	Action    string `json:"action"`
+}
+
+func (s *Server) handleDatabaseTransaction(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeErr(w, 405, errors.New("仅支持 POST"))
+		return
+	}
+	if !requireAdmin(w, r) {
+		return
+	}
+	var req databaseTransactionRequest
+	if err := decodeDatabaseJSON(r, &req); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	if !validDatabaseSessionID(req.SessionID) {
+		writeErr(w, 400, errors.New("session_id 无效"))
+		return
+	}
+	source, ok := s.databaseSourceForRequest(w, r, req.SourceID)
+	if !ok {
+		return
+	}
+	action := strings.ToUpper(strings.TrimSpace(req.Action))
+	if action != "COMMIT" && action != "ROLLBACK" {
+		writeErr(w, 400, errors.New("action 仅支持 COMMIT/ROLLBACK"))
+		return
+	}
+	summary, err := s.database.ControlSessionTransaction(r.Context(), source, req.SessionID, action)
+	if err != nil {
+		writeErrSanitized(w, 502, s.databaseSafeError(source, err))
+		return
+	}
+	s.audit.Write("database.transaction", "source_id", source.ID, "action", action, "session_id", req.SessionID, "result", "ok")
+	writeJSON(w, 200, map[string]any{"ok": true, "summary": summary})
+}
+
+func validDatabaseSessionID(value string) bool {
+	if value == "" || len(value) > 128 {
+		return false
+	}
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' || r == ':' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func databaseQueryPage(req databaseQueryRequest) (int, int) {
@@ -264,21 +446,50 @@ func (s *Server) handleDatabaseQuery(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err)
 		return
 	}
+	if req.SessionID != "" && !validDatabaseSessionID(req.SessionID) {
+		writeErr(w, 400, errors.New("session_id 无效"))
+		return
+	}
 	source, ok := s.databaseSourceForRequest(w, r, req.SourceID)
 	if !ok {
 		return
 	}
 	user, _ := r.Context().Value(authUserKey).(*authUser)
+	var statementInfo dbconsole.SQLStatementInfo
 	if user != nil && user.Role != "admin" {
 		if err := dbconsole.ValidateReadOnlySQL(source.Kind, req.SQL); err != nil {
 			writeErr(w, 400, err)
 			return
 		}
 	} else {
-		if _, err := dbconsole.ValidateSQL(source.Kind, req.SQL); err != nil {
+		var err error
+		statementInfo, err = dbconsole.ValidateSQL(source.Kind, req.SQL)
+		if err != nil {
 			writeErr(w, 400, err)
 			return
 		}
+		if !statementInfo.IsQuery {
+			if !source.MutationAllowed() {
+				writeErr(w, http.StatusForbidden, errors.New("该数据源处于只读锁定状态"))
+				return
+			}
+			if source.IsProduction() && !req.Confirm {
+				writeErr(w, http.StatusBadRequest, errors.New("生产数据源写操作需要 confirm=true"))
+				return
+			}
+			if statementInfo.Type == "DDL" && !source.DDLAllowed() {
+				writeErr(w, http.StatusForbidden, errors.New("该数据源未开启 DDL 能力或处于只读锁定状态"))
+				return
+			}
+		}
+		if !statementInfo.IsQuery && req.SessionID == "" {
+			writeErr(w, 400, errors.New("写语句必须绑定页签事务 session_id"))
+			return
+		}
+	}
+	if _, _, err := dbconsole.BindSQLParameters(source.Kind, req.SQL, req.Parameters); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
 	}
 	hash := sha256.Sum256([]byte(strings.TrimSpace(req.SQL)))
 	queryID := hex.EncodeToString(hash[:8])
@@ -295,7 +506,7 @@ func (s *Server) handleDatabaseQuery(w http.ResponseWriter, r *http.Request) {
 		return nil
 	}
 	page, pageSize := databaseQueryPage(req)
-	summary, err := s.database.StreamQueryPage(r.Context(), source, req.SQL, page, pageSize, emit)
+	summary, err := s.database.StreamSessionQueryPageWithParams(r.Context(), source, req.SQL, page, pageSize, req.SessionID, req.Parameters, emit)
 	if err != nil {
 		err = s.databaseSafeError(source, err)
 		_ = emit(dbconsole.StreamEvent{Type: "error", Error: trim(err.Error(), 1000)})
@@ -308,7 +519,9 @@ func (s *Server) handleDatabaseQuery(w http.ResponseWriter, r *http.Request) {
 
 type databaseBatchRequest struct {
 	SourceID   string   `json:"source_id"`
+	SessionID  string   `json:"session_id,omitempty"`
 	Statements []string `json:"statements"`
+	Confirm    bool     `json:"confirm,omitempty"`
 }
 
 func (s *Server) handleDatabaseBatch(w http.ResponseWriter, r *http.Request) {
@@ -321,8 +534,20 @@ func (s *Server) handleDatabaseBatch(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err)
 		return
 	}
+	if !validDatabaseSessionID(req.SessionID) {
+		writeErr(w, 400, errors.New("session_id 无效"))
+		return
+	}
 	source, ok := s.databaseSourceForRequest(w, r, req.SourceID)
 	if !ok {
+		return
+	}
+	if !source.MutationAllowed() {
+		writeErr(w, http.StatusForbidden, errors.New("该数据源处于只读锁定状态"))
+		return
+	}
+	if source.IsProduction() && !req.Confirm {
+		writeErr(w, http.StatusBadRequest, errors.New("生产数据源批量写入需要 confirm=true"))
 		return
 	}
 	user, _ := r.Context().Value(authUserKey).(*authUser)
@@ -344,7 +569,7 @@ func (s *Server) handleDatabaseBatch(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	summary, err := s.database.ExecuteBatch(r.Context(), source, req.Statements)
+	summary, err := s.database.ExecuteSessionBatch(r.Context(), source, req.SessionID, req.Statements)
 	if err != nil {
 		err = s.databaseSafeError(source, err)
 		writeErrSanitized(w, 502, err)
@@ -391,8 +616,8 @@ func (s *Server) handleDatabaseExport(w http.ResponseWriter, r *http.Request) {
 	}
 	filename := safeName + dbconsole.ExportExtension(format)
 	if format != "csv" {
-			page, pageSize := databaseQueryPage(req)
-			table, summary, collectErr := s.database.CollectQueryPage(r.Context(), source, req.SQL, page, pageSize)
+		page, pageSize := databaseQueryPage(req)
+		table, summary, collectErr := s.database.CollectQueryPage(r.Context(), source, req.SQL, page, pageSize)
 		if collectErr != nil {
 			collectErr = s.databaseSafeError(source, collectErr)
 			writeErrSanitized(w, 502, collectErr)
@@ -682,31 +907,60 @@ func (s *Server) handleDatabaseRedisKey(w http.ResponseWriter, r *http.Request) 
 }
 
 type redisCommandRequest struct {
-	SourceID string   `json:"source_id"`
-	Command  string   `json:"command"`
-	Key      string   `json:"key"`
-	KeyBase64 string  `json:"key_base64"`
-	Args     []string `json:"args"`
+	SourceID  string   `json:"source_id"`
+	Command   string   `json:"command"`
+	Key       string   `json:"key"`
+	KeyBase64 string   `json:"key_base64"`
+	Args      []string `json:"args"`
 }
 
 func (s *Server) handleDatabaseRedisCommand(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost { writeErr(w, 405, errors.New("仅支持 POST")); return }
+	if r.Method != http.MethodPost {
+		writeErr(w, 405, errors.New("仅支持 POST"))
+		return
+	}
 	var req redisCommandRequest
-	if err := decodeDatabaseJSON(r, &req); err != nil { writeErr(w, 400, err); return }
-	source, ok := s.databaseSourceForRequest(w, r, req.SourceID); if !ok { return }
+	if err := decodeDatabaseJSON(r, &req); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	source, ok := s.databaseSourceForRequest(w, r, req.SourceID)
+	if !ok {
+		return
+	}
 	key := req.Key
-	if req.KeyBase64 != "" { raw, decodeErr := base64.StdEncoding.DecodeString(req.KeyBase64); if decodeErr != nil { writeErr(w, 400, errors.New("key_base64 无效")); return }; key = string(raw) }
+	if req.KeyBase64 != "" {
+		raw, decodeErr := base64.StdEncoding.DecodeString(req.KeyBase64)
+		if decodeErr != nil {
+			writeErr(w, 400, errors.New("key_base64 无效"))
+			return
+		}
+		key = string(raw)
+	}
 	result, err := s.database.RedisReadOnlyCommand(r.Context(), source, req.Command, key, req.Args)
-	if err != nil { writeErrSanitized(w, 502, s.databaseSafeError(source, err)); return }
+	if err != nil {
+		writeErrSanitized(w, 502, s.databaseSafeError(source, err))
+		return
+	}
 	s.audit.Write("database.redis.command", "source_id", source.ID, "command", strings.ToUpper(strings.TrimSpace(req.Command)), "result", "ok", "elapsed_ms", result.ElapsedMS)
 	writeJSON(w, 200, map[string]any{"ok": true, "result": result})
 }
 
 func (s *Server) handleDatabaseRedisMembers(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet { writeErr(w, 405, errors.New("仅支持 GET")); return }
-	source, ok := s.databaseSourceFromQuery(w, r); if !ok { return }
-	encodedKey := r.URL.Query().Get("key_base64"); rawKey, err := base64.StdEncoding.DecodeString(encodedKey)
-	if err != nil || len(rawKey) == 0 { writeErr(w, 400, errors.New("key_base64 必须是非空的有效 Base64")); return }
+	if r.Method != http.MethodGet {
+		writeErr(w, 405, errors.New("仅支持 GET"))
+		return
+	}
+	source, ok := s.databaseSourceFromQuery(w, r)
+	if !ok {
+		return
+	}
+	encodedKey := r.URL.Query().Get("key_base64")
+	rawKey, err := base64.StdEncoding.DecodeString(encodedKey)
+	if err != nil || len(rawKey) == 0 {
+		writeErr(w, 400, errors.New("key_base64 必须是非空的有效 Base64"))
+		return
+	}
 	offset, _ := strconv.ParseInt(r.URL.Query().Get("offset"), 10, 64)
 	pageSize, _ := strconv.ParseInt(r.URL.Query().Get("page_size"), 10, 64)
 	result, err := s.database.RedisMembers(r.Context(), source, string(rawKey), r.URL.Query().Get("type"), r.URL.Query().Get("cursor"), offset, pageSize)
@@ -722,12 +976,25 @@ func (s *Server) handleDatabaseRedisMembers(w http.ResponseWriter, r *http.Reque
 }
 
 func (s *Server) handleDatabaseRedisInfo(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet { writeErr(w, 405, errors.New("仅支持 GET")); return }
-	source, ok := s.databaseSourceFromQuery(w, r); if !ok { return }
+	if r.Method != http.MethodGet {
+		writeErr(w, 405, errors.New("仅支持 GET"))
+		return
+	}
+	source, ok := s.databaseSourceFromQuery(w, r)
+	if !ok {
+		return
+	}
 	sections := make([]string, 0)
-	for _, value := range strings.Split(r.URL.Query().Get("section"), ",") { if strings.TrimSpace(value) != "" { sections = append(sections, value) } }
+	for _, value := range strings.Split(r.URL.Query().Get("section"), ",") {
+		if strings.TrimSpace(value) != "" {
+			sections = append(sections, value)
+		}
+	}
 	result, err := s.database.RedisInfo(r.Context(), source, sections)
-	if err != nil { writeErrSanitized(w, 502, s.databaseSafeError(source, err)); return }
+	if err != nil {
+		writeErrSanitized(w, 502, s.databaseSafeError(source, err))
+		return
+	}
 	writeJSON(w, 200, map[string]any{"ok": true, "result": result})
 }
 
@@ -741,16 +1008,40 @@ type redisMutateRequest struct {
 }
 
 func (s *Server) handleDatabaseRedisMutate(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost { writeErr(w, 405, errors.New("仅支持 POST")); return }
-	if !requireAdmin(w, r) { return }
+	if r.Method != http.MethodPost {
+		writeErr(w, 405, errors.New("仅支持 POST"))
+		return
+	}
+	if !requireAdmin(w, r) {
+		return
+	}
 	var req redisMutateRequest
-	if err := decodeDatabaseJSON(r, &req); err != nil { writeErr(w, 400, err); return }
-	if !req.Confirm { writeErr(w, 400, errors.New("受控 Redis 写操作需要二次确认")); return }
-	source, ok := s.databaseSourceForRequest(w, r, req.SourceID); if !ok { return }
+	if err := decodeDatabaseJSON(r, &req); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	if !req.Confirm {
+		writeErr(w, 400, errors.New("受控 Redis 写操作需要二次确认"))
+		return
+	}
+	source, ok := s.databaseSourceForRequest(w, r, req.SourceID)
+	if !ok {
+		return
+	}
 	key := req.Key
-	if req.KeyBase64 != "" { raw, decodeErr := base64.StdEncoding.DecodeString(req.KeyBase64); if decodeErr != nil { writeErr(w, 400, errors.New("key_base64 无效")); return }; key = string(raw) }
+	if req.KeyBase64 != "" {
+		raw, decodeErr := base64.StdEncoding.DecodeString(req.KeyBase64)
+		if decodeErr != nil {
+			writeErr(w, 400, errors.New("key_base64 无效"))
+			return
+		}
+		key = string(raw)
+	}
 	result, err := s.database.RedisMutateTTL(r.Context(), source, key, req.Operation, req.Seconds)
-	if err != nil { writeErrSanitized(w, 400, s.databaseSafeError(source, err)); return }
+	if err != nil {
+		writeErrSanitized(w, 400, s.databaseSafeError(source, err))
+		return
+	}
 	s.audit.Write("database.redis.mutate", "source_id", source.ID, "operation", strings.ToUpper(req.Operation), "key_bytes", len(key), "result", "ok")
 	writeJSON(w, 200, map[string]any{"ok": true, "result": result})
 }
@@ -778,7 +1069,12 @@ func (s *Server) databaseSourceForRequest(w http.ResponseWriter, r *http.Request
 }
 
 func decodeDatabaseJSON(r *http.Request, target any) error {
-	dec := json.NewDecoder(io.LimitReader(r.Body, databaseBodyLimit))
+	return decodeDatabaseJSONLimit(r, target, databaseBodyLimit)
+}
+
+func decodeDatabaseJSONLimit(r *http.Request, target any, limit int64) error {
+	dec := json.NewDecoder(io.LimitReader(r.Body, limit))
+	dec.UseNumber()
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(target); err != nil {
 		return err
@@ -804,6 +1100,11 @@ func databaseSourceView(source dbconsole.Source, hasPassword bool, user *authUse
 		source.OracleClientCharset = ""
 		source.RedisDB = 0
 		source.TLSMode = ""
+		source.TLSCAFile = ""
+		source.TLSClientCertFile = ""
+		source.TLSClientKeyFile = ""
+		source.TLSServerName = ""
+		source.SSHTunnel = nil
 		source.MaxResultBytes = 0
 		source.MaxOpenConnections = 0
 		source.MaxIdleConnections = 0
@@ -842,7 +1143,6 @@ func (s *Server) databaseSafeError(source dbconsole.Source, err error) error {
 	}
 	return errors.New(message)
 }
-
 
 type databaseSessionBackupPayload struct {
 	ActiveID      any              `json:"activeId"`

@@ -2,6 +2,40 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8" />
+  <!-- 浏览器内核适配：双核浏览器强制极速(webkit)模式 -->
+  <meta name="renderer" content="webkit" />
+  <meta name="force-rendering" content="webkit" />
+  <meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1" />
+  <script>
+    /* 360/双核浏览器 IE 兼容模式拦截与极速引导（纯 ES3 规范，杜绝语法解析错误） */
+    (function () {
+      var isTrident = !window.Promise || !!window.ActiveXObject || ('ActiveXObject' in window) || (navigator.userAgent && navigator.userAgent.indexOf('Trident') > -1);
+      if (isTrident) {
+        var onReady = function () {
+          var box = document.createElement('div');
+          box.id = 'kairo-trident-warning';
+          box.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:#0f172a;color:#f87171;z-index:99999999;padding:48px 20px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;text-align:center;box-sizing:border-box;display:block;';
+          box.innerHTML = '<div style="max-width:540px;margin:30px auto;background:#1e293b;border:1px solid #ef4444;border-radius:12px;padding:32px;box-shadow:0 24px 48px rgba(0,0,0,0.6);">' +
+            '<h2 style="margin:0 0 16px;color:#fca5a5;font-size:20px;">⚠️ 浏览器内核不兼容提示</h2>' +
+            '<p style="color:#cbd5e1;font-size:14px;line-height:1.8;text-align:left;margin-bottom:18px;">' +
+            '检测到您当前处于 360 / 双核浏览器的<b>【兼容模式】</b>（Trident/IE 内核）。<br>' +
+            '本系统采用现代 Web 标准开发，不支持旧版 IE 内核。' +
+            '</p>' +
+            '<div style="background:#0f172a;border:1px solid #334155;border-radius:8px;padding:16px;margin-bottom:24px;text-align:left;font-size:13px;color:#93c5fd;line-height:1.8;">' +
+            '💡 <b>解决方法（推荐）：</b><br>' +
+            '1. 点击地址栏右侧的内核图标（形如 <b style="color:#ef4444;">e</b> 图标或兼容性图标）<br>' +
+            '2. 切换为<b>【极速模式】</b>（闪电图标 ⚡）<br>' +
+            '3. 页面将自动刷新并恢复正常使用。<br>' +
+            '（也可直接使用 Google Chrome 或 Microsoft Edge 浏览器访问）' +
+            '</div>' +
+            '<button onclick="location.reload()" style="background:#3b82f6;color:#fff;border:none;padding:9px 24px;border-radius:6px;font-size:14px;cursor:pointer;font-weight:bold;">切换后点击刷新</button>' +
+            '</div>';
+          document.body ? document.body.appendChild(box) : document.documentElement.appendChild(box);
+        };
+        window.addEventListener ? window.addEventListener('load', onReady) : (window.onload = onReady);
+      }
+    })();
+  </script>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <link rel="icon" type="image/png" sizes="32x32" href="/static/img/favicon-32.png" />
   <link rel="icon" type="image/png" sizes="64x64" href="/static/img/favicon-64.png" />

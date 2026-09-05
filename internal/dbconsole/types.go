@@ -20,32 +20,60 @@ const (
 
 const CredentialNamespace = "database"
 
+// SSHCredentialNamespace deliberately differs from CredentialNamespace.  A
+// jump-host password must never be accidentally reused as the database
+// password (or returned through the database source API).
+const SSHCredentialNamespace = "database_ssh"
+
+// SSHTunnelConfig describes an optional local-to-remote database tunnel.  The
+// database password and SSH password are stored independently in the
+// credentials backend; this struct contains connection policy only.
+type SSHTunnelConfig struct {
+	Enabled              bool   `json:"enabled,omitempty"`
+	Host                 string `json:"host,omitempty"`
+	Port                 int    `json:"port,omitempty"`
+	Username             string `json:"username,omitempty"`
+	RemoteHost           string `json:"remote_host,omitempty"`
+	RemotePort           int    `json:"remote_port,omitempty"`
+	HostKeySHA256        string `json:"host_key_sha256,omitempty"`
+	SSHProfile           string `json:"ssh_profile,omitempty"`
+	AllowInsecureHostKey bool   `json:"allow_insecure_host_key,omitempty"`
+}
+
 type Source struct {
-	ID                   string   `json:"id"`
-	Name                 string   `json:"name"`
-	Kind                 string   `json:"kind"`
-	Host                 string   `json:"host"`
-	Port                 int      `json:"port"`
-	Username             string   `json:"username"`
-	Database             string   `json:"database,omitempty"`
-	OracleConnectBy      string   `json:"oracle_connect_by,omitempty"` // service_name / sid
-	OracleService        string   `json:"oracle_service,omitempty"`
-	OracleClientCharset  string   `json:"oracle_client_charset,omitempty"`
-	RedisDB              int      `json:"redis_db,omitempty"`
-	RedisMode            string   `json:"redis_mode,omitempty"`        // standalone / cluster / sentinel
-	RedisMasterName      string   `json:"redis_master_name,omitempty"` // Sentinel master name
-	RedisNodes           []string `json:"redis_nodes,omitempty"`       // extra seed / sentinel host:port
-	AllowRedisWrite      bool     `json:"allow_redis_write,omitempty"` // explicit capability gate; default false
-	TLSMode              string   `json:"tls_mode,omitempty"`          // disabled / preferred / required / skip-verify
-	QueryTimeoutSeconds  int      `json:"query_timeout_seconds"`
-	MaxRows              int      `json:"max_rows"`
-	MaxResultBytes       int64    `json:"max_result_bytes"`
-	MaxOpenConnections   int      `json:"max_open_connections"`
-	MaxIdleConnections   int      `json:"max_idle_connections"`
-	ConnectionMaxMinutes int      `json:"connection_max_minutes"`
-	AllowedUsers         []string `json:"allowed_users,omitempty"`
-	CreatedAt            string   `json:"created_at"`
-	UpdatedAt            string   `json:"updated_at"`
+	ID                   string           `json:"id"`
+	Name                 string           `json:"name"`
+	Kind                 string           `json:"kind"`
+	Host                 string           `json:"host"`
+	Port                 int              `json:"port"`
+	Username             string           `json:"username"`
+	Database             string           `json:"database,omitempty"`
+	OracleConnectBy      string           `json:"oracle_connect_by,omitempty"` // service_name / sid
+	OracleService        string           `json:"oracle_service,omitempty"`
+	OracleClientCharset  string           `json:"oracle_client_charset,omitempty"`
+	RedisDB              int              `json:"redis_db,omitempty"`
+	RedisMode            string           `json:"redis_mode,omitempty"`        // standalone / cluster / sentinel
+	RedisMasterName      string           `json:"redis_master_name,omitempty"` // Sentinel master name
+	RedisNodes           []string         `json:"redis_nodes,omitempty"`       // extra seed / sentinel host:port
+	AllowRedisWrite      bool             `json:"allow_redis_write,omitempty"` // explicit capability gate; default false
+	TLSMode              string           `json:"tls_mode,omitempty"`          // disabled / preferred / required / skip-verify
+	TLSCAFile            string           `json:"tls_ca_file,omitempty"`
+	TLSClientCertFile    string           `json:"tls_client_cert_file,omitempty"`
+	TLSClientKeyFile     string           `json:"tls_client_key_file,omitempty"`
+	TLSServerName        string           `json:"tls_server_name,omitempty"`
+	Environment          string           `json:"environment,omitempty"` // development / staging / production
+	ReadOnly             bool             `json:"read_only,omitempty"`   // server-enforced source write lock
+	AllowDDL             bool             `json:"allow_ddl,omitempty"`   // explicit DDL capability gate
+	SSHTunnel            *SSHTunnelConfig `json:"ssh_tunnel,omitempty"`
+	QueryTimeoutSeconds  int              `json:"query_timeout_seconds"`
+	MaxRows              int              `json:"max_rows"`
+	MaxResultBytes       int64            `json:"max_result_bytes"`
+	MaxOpenConnections   int              `json:"max_open_connections"`
+	MaxIdleConnections   int              `json:"max_idle_connections"`
+	ConnectionMaxMinutes int              `json:"connection_max_minutes"`
+	AllowedUsers         []string         `json:"allowed_users,omitempty"`
+	CreatedAt            string           `json:"created_at"`
+	UpdatedAt            string           `json:"updated_at"`
 }
 
 func (s *Source) Defaults() {
@@ -109,6 +137,29 @@ func (s *Source) Defaults() {
 	}
 	if s.TLSMode == "" {
 		s.TLSMode = "disabled"
+	}
+	s.Environment = strings.ToLower(strings.TrimSpace(s.Environment))
+	if s.Environment == "" {
+		s.Environment = "development"
+	}
+	s.TLSCAFile = strings.TrimSpace(s.TLSCAFile)
+	s.TLSClientCertFile = strings.TrimSpace(s.TLSClientCertFile)
+	s.TLSClientKeyFile = strings.TrimSpace(s.TLSClientKeyFile)
+	s.TLSServerName = strings.TrimSpace(s.TLSServerName)
+	if s.SSHTunnel != nil {
+		s.SSHTunnel.Host = strings.TrimSpace(s.SSHTunnel.Host)
+		s.SSHTunnel.Username = strings.TrimSpace(s.SSHTunnel.Username)
+		s.SSHTunnel.RemoteHost = strings.TrimSpace(s.SSHTunnel.RemoteHost)
+		s.SSHTunnel.SSHProfile = strings.ToLower(strings.TrimSpace(s.SSHTunnel.SSHProfile))
+		if s.SSHTunnel.Port == 0 {
+			s.SSHTunnel.Port = 22
+		}
+		if s.SSHTunnel.RemotePort == 0 {
+			s.SSHTunnel.RemotePort = s.Port
+		}
+		if s.SSHTunnel.RemoteHost == "" {
+			s.SSHTunnel.RemoteHost = s.Host
+		}
 	}
 	s.RedisMode = strings.ToLower(strings.TrimSpace(s.RedisMode))
 	if s.Kind == KindRedis && s.RedisMode == "" {
@@ -204,6 +255,41 @@ func (s Source) Validate() error {
 	if s.TLSMode == "preferred" && s.Kind != KindMySQL {
 		return errors.New("TLS preferred 仅 MySQL 支持；Oracle/Redis 请选择 required 或 disabled")
 	}
+	if s.Environment != "development" && s.Environment != "staging" && s.Environment != "production" {
+		return errors.New("environment 仅支持 development / staging / production")
+	}
+	for name, value := range map[string]string{
+		"tls_ca_file": s.TLSCAFile, "tls_client_cert_file": s.TLSClientCertFile,
+		"tls_client_key_file": s.TLSClientKeyFile, "tls_server_name": s.TLSServerName,
+	} {
+		if len(value) > 1024 || strings.ContainsAny(value, "\r\n\x00") {
+			return fmt.Errorf("%s 非法", name)
+		}
+	}
+	if (s.TLSClientCertFile == "") != (s.TLSClientKeyFile == "") {
+		return errors.New("tls_client_cert_file 与 tls_client_key_file 必须同时填写")
+	}
+	if s.SSHTunnel != nil && s.SSHTunnel.Enabled {
+		t := s.SSHTunnel
+		if t.Host == "" || !validHostname(t.Host) && net.ParseIP(t.Host) == nil {
+			return errors.New("SSH 隧道 host 必须是有效 IP 或主机名")
+		}
+		if t.Port < 1 || t.Port > 65535 || t.RemotePort < 1 || t.RemotePort > 65535 {
+			return errors.New("SSH 隧道端口必须在 1..65535 之间")
+		}
+		if t.Username == "" || len(t.Username) > 256 {
+			return errors.New("SSH 隧道 username 不能为空且不能超过 256 字节")
+		}
+		if t.RemoteHost == "" || !validHostname(t.RemoteHost) && net.ParseIP(t.RemoteHost) == nil {
+			return errors.New("SSH 隧道 remote_host 必须是有效 IP 或主机名")
+		}
+		if len(t.HostKeySHA256) > 256 || strings.ContainsAny(t.HostKeySHA256, "\r\n\x00") {
+			return errors.New("SSH 隧道 host_key_sha256 非法")
+		}
+		if t.SSHProfile != "" && t.SSHProfile != "auto" && t.SSHProfile != "modern" && t.SSHProfile != "compat" && t.SSHProfile != "no-ecdh" && t.SSHProfile != "legacy" {
+			return errors.New("SSH 隧道 ssh_profile 非法")
+		}
+	}
 	if s.QueryTimeoutSeconds < 1 || s.QueryTimeoutSeconds > 600 {
 		return errors.New("query_timeout_seconds 必须在 1..600 之间")
 	}
@@ -228,6 +314,22 @@ func (s Source) Validate() error {
 }
 
 func (s Source) Timeout() time.Duration { return time.Duration(s.QueryTimeoutSeconds) * time.Second }
+
+// IsProduction is intentionally strict and case-insensitive after Defaults;
+// callers that receive a hand-built Source still get the same behaviour.
+func (s Source) IsProduction() bool {
+	return strings.EqualFold(strings.TrimSpace(s.Environment), "production")
+}
+
+// MutationAllowed reports the source-level write capability.  Production
+// confirmation is a request concern and is checked by the HTTP layer; this
+// method only enforces the durable read-only lock.
+func (s Source) MutationAllowed() bool { return !s.ReadOnly }
+
+// DDLAllowed reports whether the source explicitly permits schema-changing
+// statements.  Existing sources default false so a production/admin policy
+// cannot be broadened by an omitted field.
+func (s Source) DDLAllowed() bool { return s.AllowDDL && !s.ReadOnly }
 
 func (s Source) RedisTopology() string {
 	switch strings.ToLower(strings.TrimSpace(s.RedisMode)) {
@@ -315,7 +417,8 @@ func validHostname(host string) bool {
 
 type SourceView struct {
 	Source
-	HasPassword bool `json:"has_password"`
+	HasPassword    bool `json:"has_password"`
+	HasSSHPassword bool `json:"has_ssh_password,omitempty"`
 }
 
 type Column struct {
@@ -325,22 +428,23 @@ type Column struct {
 }
 
 type QuerySummary struct {
-	Rows           int    `json:"rows"`
-	ElapsedMS      int64  `json:"elapsed_ms"`
-	Truncated      bool   `json:"truncated"`
-	Bytes          int64  `json:"bytes"`
-	QueryLimit     int    `json:"query_limit"`
-	Page           int    `json:"page,omitempty"`
-	PageSize       int    `json:"page_size,omitempty"`
-	Offset         int64  `json:"offset,omitempty"`
-	HasNext        bool   `json:"has_next,omitempty"`
-	HasPrev        bool   `json:"has_prev,omitempty"`
-	TotalRows      *int64 `json:"total_rows,omitempty"`
-	TotalKnown     bool   `json:"total_known,omitempty"`
-	PaginationMode string `json:"pagination_mode,omitempty"`
-	RetryCount     int    `json:"retry_count,omitempty"`
-	Ordered        bool   `json:"ordered"`
-	RowsAffected   int64  `json:"rows_affected,omitempty"`
-	StatementType  string `json:"statement_type,omitempty"`
-	Message        string `json:"message,omitempty"`
+	Rows               int    `json:"rows"`
+	ElapsedMS          int64  `json:"elapsed_ms"`
+	Truncated          bool   `json:"truncated"`
+	Bytes              int64  `json:"bytes"`
+	QueryLimit         int    `json:"query_limit"`
+	Page               int    `json:"page,omitempty"`
+	PageSize           int    `json:"page_size,omitempty"`
+	Offset             int64  `json:"offset,omitempty"`
+	HasNext            bool   `json:"has_next,omitempty"`
+	HasPrev            bool   `json:"has_prev,omitempty"`
+	TotalRows          *int64 `json:"total_rows,omitempty"`
+	TotalKnown         bool   `json:"total_known,omitempty"`
+	PaginationMode     string `json:"pagination_mode,omitempty"`
+	RetryCount         int    `json:"retry_count,omitempty"`
+	Ordered            bool   `json:"ordered"`
+	RowsAffected       int64  `json:"rows_affected,omitempty"`
+	StatementType      string `json:"statement_type,omitempty"`
+	Message            string `json:"message,omitempty"`
+	TransactionPending bool   `json:"transaction_pending,omitempty"`
 }

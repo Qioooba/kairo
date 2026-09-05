@@ -25,6 +25,7 @@ func (s *SFTP) Kind() string                  { return "sftp" }
 func (s *SFTP) DisplayName() string           { return s.name }
 func (s *SFTP) Clean(name string) string      { return RemoteClean(name) }
 func (s *SFTP) Join(base, name string) string { return path.Join(RemoteClean(base), name) }
+func (s *SFTP) CompareConcurrency() int       { return 4 }
 
 func (s *SFTP) Close() error {
 	err := s.client.Close()
@@ -48,7 +49,7 @@ func (s *SFTP) Stat(ctx context.Context, name string) (Entry, error) {
 }
 
 func (s *SFTP) List(ctx context.Context, dir string) ([]Entry, error) {
-	infos, _, err := s.client.ListLimited(dir, 50000)
+	infos, _, err := s.client.ListLimited(dir, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -60,6 +61,27 @@ func (s *SFTP) List(ctx context.Context, dir string) ([]Entry, error) {
 		entries = append(entries, sftpEntry(path.Join(dir, info.Name()), info))
 	}
 	return entries, nil
+}
+
+// ListLimited preserves the remote backend's exact truncation signal.  The
+// compare walker uses this optional capability to stop safely instead of
+// treating an SFTP-side cap as a complete directory.
+func (s *SFTP) ListLimited(ctx context.Context, dir string, max int) ([]Entry, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
+	infos, truncated, err := s.client.ListLimited(dir, max)
+	if err != nil {
+		return nil, false, err
+	}
+	entries := make([]Entry, 0, len(infos))
+	for _, info := range infos {
+		if err := ctx.Err(); err != nil {
+			return nil, false, err
+		}
+		entries = append(entries, sftpEntry(path.Join(dir, info.Name()), info))
+	}
+	return entries, truncated, nil
 }
 
 func sftpEntry(name string, info os.FileInfo) Entry {
@@ -81,11 +103,21 @@ func (s *SFTP) MkdirAll(ctx context.Context, dir string, mode uint32) error {
 }
 
 func (s *SFTP) WriteAtomic(ctx context.Context, name string, src io.Reader, opts WriteOptions) error {
-	if opts.Expected != nil {
-		current, err := s.Stat(ctx, name)
-		if err != nil || !SameVersion(current, *opts.Expected) {
+	current, statErr := s.Stat(ctx, name)
+	if statErr == nil {
+		if current.IsDir {
+			return ErrTypeConflict
+		}
+		if opts.ExpectedMissing {
 			return ErrConflict
 		}
+		if opts.Expected != nil && !SameVersion(current, *opts.Expected) {
+			return ErrConflict
+		}
+	} else if !IsNotFound(statErr) {
+		return statErr
+	} else if opts.Expected != nil {
+		return ErrConflict
 	}
 	mode := os.FileMode(opts.Mode)
 	if mode == 0 {
@@ -96,6 +128,26 @@ func (s *SFTP) WriteAtomic(ctx context.Context, name string, src io.Reader, opts
 	if err := s.client.UploadStream(ctx, src, partial, mode, nil); err != nil {
 		_ = s.client.Remove(partial)
 		return err
+	}
+	// Recheck the expected destination after uploading the temporary file.  A
+	// concurrent writer must not be silently overwritten while this request was
+	// transferring data.
+	current, statErr = s.Stat(ctx, name)
+	if statErr == nil {
+		if current.IsDir {
+			_ = s.client.Remove(partial)
+			return ErrTypeConflict
+		}
+		if opts.ExpectedMissing || (opts.Expected != nil && !SameVersion(current, *opts.Expected)) {
+			_ = s.client.Remove(partial)
+			return ErrConflict
+		}
+	} else if !IsNotFound(statErr) || opts.Expected != nil {
+		_ = s.client.Remove(partial)
+		if IsNotFound(statErr) && opts.Expected != nil {
+			return ErrConflict
+		}
+		return statErr
 	}
 	if opts.Backup {
 		if _, err := s.client.Stat(name); err == nil {
@@ -113,6 +165,9 @@ func (s *SFTP) WriteAtomic(ctx context.Context, name string, src io.Reader, opts
 				_ = s.client.Chtimes(name, opts.ModTime, opts.ModTime)
 			}
 			return nil
+		} else if !IsNotFound(err) {
+			_ = s.client.Remove(partial)
+			return err
 		}
 	}
 	if err := s.client.Rename(partial, name); err != nil {

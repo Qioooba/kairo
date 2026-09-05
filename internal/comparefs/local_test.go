@@ -10,6 +10,17 @@ import (
 	"time"
 )
 
+func TestLocalAllowedVolumeRootAndSiblingBoundary(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.VolumeName(dir) + string(os.PathSeparator)
+	if !localPathAllowed(dir, []string{root}) {
+		t.Fatalf("volume root %q must allow %q", root, dir)
+	}
+	if localPathAllowed(dir+"-outside", []string{dir}) {
+		t.Fatal("directory prefix must not admit siblings")
+	}
+}
+
 func TestLocalWriteAtomicAndConflict(t *testing.T) {
 	root := t.TempDir()
 	name := filepath.Join(root, "nested", "target.txt")
@@ -68,5 +79,25 @@ func TestLocalWriteAtomicPreservesModTime(t *testing.T) {
 	}
 	if !info.ModTime().Equal(want) {
 		t.Fatalf("mtime=%s want=%s", info.ModTime(), want)
+	}
+}
+
+func TestLocalPathsAreAbsolute(t *testing.T) {
+	root := t.TempDir()
+	t.Chdir(root)
+	if err := os.WriteFile("relative.txt", []byte("value"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fsys := NewLocal()
+	entry, err := fsys.Stat(context.Background(), "relative.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(root, "relative.txt")
+	if entry.Path != want {
+		t.Fatalf("entry path=%q want absolute path %q", entry.Path, want)
+	}
+	if got := fsys.Join(".", "nested/file.txt"); got != filepath.Join(root, "nested", "file.txt") {
+		t.Fatalf("joined path=%q", got)
 	}
 }

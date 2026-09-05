@@ -143,6 +143,7 @@ async function main() {
     './tests/37-wscodegen-deep',
     './tests/38-notes-deep',
     './tests/39-ui-workbench',
+	'./tests/40-database-write-regression',
   ];
 
   console.log('📦 注册测试模块...');

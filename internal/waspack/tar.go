@@ -55,19 +55,13 @@ func addTarFile(tw *tar.Writer, rf ResolvedFile, isBatch bool) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	cleanRel := strings.TrimPrefix(rf.Rel, "./")
-	cleanRel = strings.ReplaceAll(cleanRel, "\\", "/")
-	if isBatch {
-		// 批量打包：压缩包内第一层目录直接为清单目录（如 amargci、AmarExtract）
-		hdr.Name = cleanRel
-	} else {
-		// 应用代码打包：保留 ./ 路径前缀与银行历史脚本规范对齐
-		if !strings.HasPrefix(cleanRel, "./") {
-			hdr.Name = "./" + cleanRel
-		} else {
-			hdr.Name = cleanRel
-		}
-	}
+	cleanRel := strings.TrimPrefix(strings.ReplaceAll(rf.Rel, "\\", "/"), "./")
+	cleanRel = strings.TrimLeft(cleanRel, "/")
+	// 应用与批量一致：统一保留 ./ 前缀（如 ./amargci/...、./src/...），
+	// 与银行历史脚本规范对齐，保证 list.txt、tar、脚本、预检清单四者完全一致。
+	// isBatch 保留参数兼容旧调用，行为不再区分。
+	_ = isBatch
+	hdr.Name = "./" + cleanRel
 	hdr.Format = tar.FormatGNU
 	hdr.Uid = 0
 	hdr.Gid = 0

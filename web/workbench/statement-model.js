@@ -5,12 +5,21 @@
   const K = window.Kairo = window.Kairo || {};
   const W = K.workbench = K.workbench || {};
 
+  function isOracleBlockPrefix(value) {
+    const cleaned = String(value || '')
+      .replace(/^\uFEFF/, '')
+      .replace(/^\s*(?:(?:--[^\r\n]*(?:\r?\n|$))|(?:\/\*[\s\S]*?\*\/\s*))*/g, '')
+      .trimStart();
+    return /^(?:DECLARE\b|BEGIN\b|CREATE\s+(?:OR\s+REPLACE\s+)?(?:EDITIONABLE\s+|NONEDITIONABLE\s+)?(?:FUNCTION|PROCEDURE|PACKAGE(?:\s+BODY)?|TRIGGER|TYPE(?:\s+BODY)?)\b)/i.test(cleaned);
+  }
+
   function scanSegments(text) {
     text = String(text == null ? '' : text);
     const cuts = [];
     let state = 'normal';
     let quote = '';
     let start = 0;
+    let oracleBlock = false;
     for (let i = 0; i < text.length; i++) {
       const c = text[i], n = text[i + 1];
       if (state === 'line') {
@@ -42,7 +51,25 @@
         const end = text.indexOf(closer + '\'', i + 3);
         if (end >= 0) { i = end + 1; continue; }
       }
+      if (oracleBlock && c === '/') {
+        const lineStart = text.lastIndexOf('\n', i - 1) + 1;
+        let lineEnd = text.indexOf('\n', i + 1);
+        if (lineEnd < 0) lineEnd = text.length;
+        if (text.slice(lineStart, lineEnd).trim() === '/') {
+          let end = lineStart;
+          while (end > start && /[\r\n]/.test(text[end - 1])) end--;
+          cuts.push({ start: start, end: end, delimiter: i });
+          start = lineEnd < text.length ? lineEnd + 1 : lineEnd;
+          oracleBlock = false;
+          i = lineEnd;
+          continue;
+        }
+      }
       if (c === ';') {
+        if (oracleBlock || isOracleBlockPrefix(text.slice(start, i + 1))) {
+          oracleBlock = true;
+          continue;
+        }
         cuts.push({ start: start, end: i + 1, delimiter: i });
         start = i + 1;
       }

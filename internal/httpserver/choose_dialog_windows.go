@@ -129,11 +129,11 @@ func chooseFileAt(initial string) (string, error) {
 }
 
 func chooseDirAt(initial string) (string, error) {
-	// 目录选择使用 Shell 的 BROWSEFORFOLDER 对话框。它仍然是系统原生、
-	// 可由 owner 窗口定位的对话框，但不需要在每次调用中手动创建/释放
-	// IFileOpenDialog 与 IShellItem，避免 RichEdit/COM 宿主在第二次选择后
-	// 进入已释放的 apartment 状态（问题 5/19）。
-	return invokePicker(func() (string, error) { return pickWindowsDirectory(initial) })
+	// BROWSEFORFOLDER 在无可见 owner（例如 headless UI 审计）时可能永久阻塞
+	// WinUI dispatcher，之后浏览器里的所有“浏览”按钮都会一直停在“选择中”。
+	// IFileOpenDialog 支持 FOS_PICKFOLDERS，并且当前常驻 UI 线程只初始化一次
+	// OLE、不会在关闭选择器时 OleUninitialize，因此不会影响 RichEdit 宿主。
+	return invokePicker(func() (string, error) { return pickWindowsPath(true, initial) })
 }
 
 type winRect struct {

@@ -9,6 +9,8 @@ import (
 )
 
 // ResolveBatch 把清单映射到本地批量工程（直接相对工程根目录），可选补 java↔class（含内部类）。
+// 批量模式下 Rel 统一带 ./ 前缀（如 ./amargci/credit_2nd.sh），与应用包一致，
+// 保证预检清单、list.txt、tar 包、脚本四者完全一致。
 func ResolveBatch(projectDir string, listed []Entry, autoPair bool) (*Preview, error) {
 	absProject, err := filepath.Abs(projectDir)
 	if err != nil {
@@ -24,11 +26,16 @@ func ResolveBatch(projectDir string, listed []Entry, autoPair bool) (*Preview, e
 
 	pv := &Preview{Files: make([]ResolvedFile, 0, len(listed)), Warnings: nil}
 	seen := map[string]struct{}{}
+	normalizeBatchRel := func(rel string) string {
+		clean := strings.TrimPrefix(strings.ReplaceAll(rel, "\\", "/"), "./")
+		return strings.TrimLeft(clean, "/")
+	}
 	add := func(rel, source string) {
-		if _, ok := seen[rel]; ok {
+		key := normalizeBatchRel(rel)
+		if _, ok := seen[key]; ok {
 			return
 		}
-		seen[rel] = struct{}{}
+		seen[key] = struct{}{}
 		rf := locateBatch(absProject, rel, source)
 		if rf.Exists {
 			pv.Files = append(pv.Files, rf)
@@ -112,6 +119,15 @@ func classFilesForJavaBatch(projectDir, javaRel string) []Entry {
 	return scanClassDir(absDir, classDirRel, base)
 }
 
+func ensureDotBatch(entries []Entry) []Entry {
+	for i := range entries {
+		clean := strings.TrimPrefix(strings.ReplaceAll(entries[i].Rel, "\\", "/"), "./")
+		clean = strings.TrimLeft(clean, "/")
+		entries[i].Rel = "./" + clean
+	}
+	return entries
+}
+
 func javaAndInnersForClassBatch(projectDir, classRel string) []Entry {
 	rel := strings.TrimPrefix(strings.ReplaceAll(classRel, "\\", "/"), "./")
 	if !strings.HasSuffix(rel, ".class") {
@@ -130,15 +146,19 @@ func javaAndInnersForClassBatch(projectDir, classRel string) []Entry {
 	}
 
 	name := strings.TrimSuffix(path.Base(pkgFile), ".class")
-	if strings.Contains(name, "$") {
-		return nil
+	// Resolve an inner-class-only manifest entry (Foo$1.class) through its
+	// outer class so the matching Java source and sibling inner classes join
+	// the package automatically.
+	outerName := name
+	if i := strings.IndexByte(outerName, '$'); i > 0 {
+		outerName = outerName[:i]
 	}
 
 	var javaRel string
 	if module != "" {
-		javaRel = "./" + module + "/src/" + strings.TrimSuffix(pkgFile, ".class") + ".java"
+		javaRel = "./" + module + "/src/" + path.Join(path.Dir(pkgFile), outerName+".java")
 	} else {
-		javaRel = "./src/" + strings.TrimSuffix(pkgFile, ".class") + ".java"
+		javaRel = "./src/" + path.Join(path.Dir(pkgFile), outerName+".java")
 	}
 
 	out := []Entry{{Rel: javaRel, Kind: KindJava, Source: "paired"}}
@@ -153,6 +173,6 @@ func javaAndInnersForClassBatch(projectDir, classRel string) []Entry {
 		classDirRel = path.Join(classDirRel, pkgDir)
 	}
 	absDir := filepath.Join(projectDir, filepath.FromSlash(classDirRel))
-	out = append(out, scanClassDir(absDir, classDirRel, name)...)
+	out = append(out, ensureDotBatch(scanClassDir(absDir, classDirRel, outerName))...)
 	return out
 }

@@ -1,0 +1,1616 @@
+/* Database Workbench feature layer.
+ *
+ * This module intentionally sits beside pages/database.js instead of reaching
+ * into its private state.  The page owns query execution and result rendering;
+ * this layer owns editor ergonomics, local drafts and UI contracts.  Backends
+ * can subscribe to the custom events (or install an adapter) without forcing a
+ * second frontend implementation.
+ */
+(function () {
+  'use strict';
+
+  const K = window.Kairo = window.Kairo || {};
+  const W = K.workbench = K.workbench || {};
+  const F = K.databaseFeatures = K.databaseFeatures || {};
+  const STORAGE_HISTORY = 'kairo:database:history:v2';
+  const STORAGE_DRAFTS = 'kairo:database:file-drafts:v1';
+  const MAX_HISTORY = 200;
+  const MAX_SQL_HIGHLIGHT = 220000;
+  const MAX_IMPORT_ROWS = 20000;
+  const SQL_WORD = /[A-Za-z_$#\u0080-\uffff]/;
+  const SQL_WORD_CONT = /[A-Za-z0-9_$#\u0080-\uffff]/;
+  const KEYWORDS = new Set((
+    'select from where with as distinct all union intersect minus except into values insert update delete merge '
+    + 'set returning output join left right full inner outer cross natural on using group by having order asc desc '
+    + 'limit offset fetch first next rows only for share lock wait nowait skip locked connect start prior '
+    + 'case when then else end exists in not and or is null like between regexp escape over partition window '
+    + 'create alter drop truncate table view materialized index unique primary key foreign references constraint '
+    + 'sequence synonym trigger procedure function package body declare begin exception loop while repeat until '
+    + 'if elsif else raise return cursor type record bulk collect forall open close execute immediate commit rollback '
+    + 'grant revoke analyze explain describe show use database schema call begin end '
+    + 'count sum avg min max cast convert coalesce nvl nvl2 decode ifnull nullif to_char to_date to_number '
+    + 'varchar varchar2 nvarchar nchar number numeric decimal integer int bigint smallint tinyint date datetime '
+    + 'timestamp time clob blob raw json xml boolean true false sysdate systimestamp current_date current_timestamp '
+    + 'dual rownum rowid regexp_substr regexp_replace substr substring instr length trim ltrim rtrim lower upper '
+    + 'listen notify returning limit offset fetch next now '
+  ).split(/\s+/).filter(Boolean));
+  const CLAUSE_BREAKS = new Set((
+    'select from where group having order union intersect minus except join left right full inner outer cross '
+    + 'on using values set returning into limit offset fetch connect start model qualify window'
+  ).split(/\s+/));
+  const BLOCK_OPEN = new Set(['begin', 'declare', 'loop', 'if', 'case', 'package', 'procedure', 'function', 'trigger']);
+  const BLOCK_CLOSE = new Set(['end', 'exception', 'elsif', 'else']);
+  const TYPE_NUMBER = /^(number|numeric|decimal|int(?:eger)?|bigint|smallint|tinyint|float|double|real|binary_float|binary_double|serial)/i;
+  const TYPE_DATE = /^(date|datetime|timestamp|time)/i;
+  const TYPE_BOOL = /^(bool(?:ean)?|bit)$/i;
+
+  const state = {
+    observed: false,
+    view: null,
+    root: null,
+    editor: null,
+    highlight: null,
+    ac: null,
+    acItems: [],
+    acIndex: 0,
+    acStart: 0,
+    acEnd: 0,
+    acRequest: 0,
+    raf: 0,
+    pendingRun: null,
+    runObserver: null,
+    runObserverRoot: null,
+    editorInput: null,
+    fileInput: null,
+    importInput: null,
+    modal: null,
+    focusedBeforeModal: null,
+    history: [],
+    historyKey: '',
+    bindings: Object.create(null),
+    gridMutations: [],
+    fieldCache: Object.create(null),
+    sourceCatalog: Object.create(null),
+    sourceCatalogLoaded: false,
+    deepLinkApplied: '',
+    adapters: {
+      script: null,
+      bind: null,
+      grid: null,
+      import: null,
+      compile: null,
+      loadSource: null,
+      ddl: null
+    }
+  };
+
+  function esc(value) {
+    const fn = K.core && K.core.escapeHtml;
+    if (fn) return fn(String(value == null ? '' : value));
+    return String(value == null ? '' : value).replace(/[&<>"']/g, function (c) {
+      return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c];
+    });
+  }
+  function id(name) { return document.getElementById(name); }
+  function toast(message, type) {
+    if (K.core && K.core.toast) K.core.toast(String(message), type || 'info');
+  }
+  function api(method, path, body) {
+    if (K.api && K.api.api) return K.api.api(method, path, body);
+    return fetch(path, {
+      method: method,
+      credentials: 'same-origin',
+      headers: body === undefined ? {} : { 'Content-Type': 'application/json' },
+      body: body === undefined ? undefined : JSON.stringify(body)
+    }).then(function (response) {
+      return response.json().catch(function () { return {}; }).then(function (data) {
+        if (!response.ok) {
+          const error = new Error(data && data.error ? data.error : 'HTTP ' + response.status);
+          error.status = response.status;
+          error.data = data;
+          throw error;
+        }
+        return data;
+      });
+    });
+  }
+  // Keep endpoint churn out of the feature UI.  Newer servers expose the
+  // typed script/grid routes while older workbench builds only have batch;
+  // a 404 is the one safe signal that permits a compatibility fallback.
+  function apiFallback(method, paths, body) {
+    const candidates = Array.isArray(paths) ? paths : [paths];
+    let index = 0;
+    const next = function () {
+      const path = candidates[index++];
+      return api(method, path, body).catch(function (error) {
+        if (error && Number(error.status) === 404 && index < candidates.length) return next();
+        throw error;
+      });
+    };
+    return next();
+  }
+  function emit(type, detail) {
+    let event;
+    try { event = new CustomEvent(type, { detail: detail }); }
+    catch (_) { event = document.createEvent('CustomEvent'); event.initCustomEvent(type, false, false, detail); }
+    window.dispatchEvent(event);
+    return event;
+  }
+  function sourceId() {
+    const select = id('db-source');
+    return select && select.value ? String(select.value) : '';
+  }
+  function sourceName() {
+    const select = id('db-source');
+    if (!select || !select.selectedOptions || !select.selectedOptions[0]) return '';
+    const item = state.sourceCatalog[select.value];
+    return item && item.name ? String(item.name) : select.selectedOptions[0].textContent.trim();
+  }
+  function sourceCatalogItem() {
+    const select = id('db-source'), option = select && select.selectedOptions && select.selectedOptions[0];
+    const item = option && state.sourceCatalog[option.value];
+    return item || (option && option.dataset ? { id: option.value, name: option.textContent.trim(), environment: option.dataset.environment || '', read_only: option.dataset.readOnly === '1', allow_ddl: option.dataset.allowDdl === '1' } : null);
+  }
+  function sourceIsProduction() {
+    const item = sourceCatalogItem();
+    return !!(item && String(item.environment || '').toLowerCase() === 'production');
+  }
+  function sourceIsReadOnly() {
+    const item = sourceCatalogItem();
+    return !!(item && (item.read_only === true || item.readOnly === true));
+  }
+  function dialect() {
+    const badge = id('db-source-badge');
+    const value = badge && badge.textContent ? badge.textContent.trim().toLowerCase() : '';
+    return value.indexOf('mysql') >= 0 ? 'mysql' : value.indexOf('redis') >= 0 ? 'redis' : 'oracle';
+  }
+  function editor() { return id('db-sql'); }
+  function sqlText() { const e = editor(); return e ? String(e.value || '') : ''; }
+  function activeSession() {
+    const getter = K.database && K.database.getActiveSession;
+    if (typeof getter === 'function') {
+      try {
+        const value = getter();
+        if (value) return value;
+      } catch (_) {}
+    }
+    const e = editor();
+    return {
+      sessionId: (e && e.dataset && e.dataset.sessionId) || (state.root && state.root.dataset && state.root.dataset.sessionId) || '',
+      sourceId: sourceId()
+    };
+  }
+  function syncMutationTransaction(detail, result, forceSuccess) {
+    const database = K.database;
+    if (!database || typeof database.markTransactionPending !== 'function' || !detail || !detail.sessionId) return;
+    const payload = result && result.result ? result.result : result;
+    if (!forceSuccess && (!payload || (payload.transaction_pending == null && !payload.committed && !payload.rolled_back && !payload.committed))) return;
+    const pending = detail.commit ? false : payload && payload.transaction_pending != null ? !!payload.transaction_pending : !(payload && (payload.committed || payload.rolled_back));
+    database.markTransactionPending(pending, detail.sessionId);
+    if (typeof database.refreshTransactionState === 'function') database.refreshTransactionState();
+  }
+  function dispatchEditorInput(e) {
+    if (!e) return;
+    try { e.dispatchEvent(new Event('input', { bubbles: true })); }
+    catch (_) { const ev = document.createEvent('Event'); ev.initEvent('input', true, false); e.dispatchEvent(ev); }
+  }
+  function safeJSONParse(value, fallback) {
+    try { return JSON.parse(value); } catch (_) { return fallback; }
+  }
+  function schedule(fn) {
+    if (window.requestAnimationFrame) return window.requestAnimationFrame(fn);
+    return setTimeout(fn, 0);
+  }
+
+  /** Tokenize SQL without ever interpreting text inside strings/comments. */
+  function tokenizeSQL(source) {
+    const text = String(source == null ? '' : source);
+    const tokens = [];
+    let i = 0;
+    function push(type, start, end, extra) {
+      const token = { type: type, value: text.slice(start, end), start: start, end: end };
+      if (extra) Object.keys(extra).forEach(function (key) { token[key] = extra[key]; });
+      tokens.push(token);
+    }
+    while (i < text.length) {
+      const start = i;
+      const c = text[i], n = text[i + 1];
+      if (c === '-' && n === '-') {
+        i += 2;
+        while (i < text.length && text[i] !== '\n') i++;
+        push('comment', start, i);
+        continue;
+      }
+      if (c === '#' && (i === 0 || /\s/.test(text[i - 1]))) {
+        i++;
+        while (i < text.length && text[i] !== '\n') i++;
+        push('comment', start, i);
+        continue;
+      }
+      if (c === '/' && n === '*') {
+        i += 2;
+        while (i < text.length && !(text[i] === '*' && text[i + 1] === '/')) i++;
+        if (i < text.length) i += 2;
+        push('comment', start, i);
+        continue;
+      }
+      // Oracle q'[ ... ]' and the other paired delimiters.
+      if ((c === 'q' || c === 'Q') && n === "'" && i + 2 < text.length) {
+        const open = text[i + 2];
+        const close = ({ '[': ']', '{': '}', '(': ')', '<': '>' })[open] || open;
+        const marker = close + "'";
+        const end = text.indexOf(marker, i + 3);
+        if (end >= 0) {
+          i = end + marker.length;
+          push('string', start, i);
+          continue;
+        }
+      }
+      // PostgreSQL dollar quote, e.g. $$body$$ or $tag$body$tag$.
+      if (c === '$') {
+        const markerMatch = text.slice(i).match(/^\$[A-Za-z_0-9]*\$/);
+        if (markerMatch) {
+          const marker = markerMatch[0], end = text.indexOf(marker, i + marker.length);
+          if (end >= 0) {
+            i = end + marker.length;
+            push('string', start, i);
+            continue;
+          }
+        }
+      }
+      if (c === "'" || c === '"' || c === '`') {
+        const quote = c;
+        i++;
+        while (i < text.length) {
+          if (text[i] === quote) {
+            if (text[i + 1] === quote) { i += 2; continue; }
+            i++;
+            break;
+          }
+          if (text[i] === '\\' && quote !== '`') i += 2;
+          else i++;
+        }
+        push(quote === "'" ? 'string' : 'quoted-ident', start, i);
+        continue;
+      }
+      if (c === ':' && n === ':') { i += 2; push('operator', start, i); continue; }
+      if (c === ':' && SQL_WORD.test(text[i + 1] || '')) {
+        i += 1;
+        while (i < text.length && SQL_WORD_CONT.test(text[i])) i++;
+        push('param', start, i, { name: text.slice(start + 1, i) });
+        continue;
+      }
+      if (c === '?' || (c === '{' && n === '{')) {
+        if (c === '{') {
+          const end = text.indexOf('}}', i + 2);
+          if (end >= 0) { i = end + 2; push('param', start, i, { name: text.slice(start + 2, end).trim() }); continue; }
+        }
+        i++;
+        push('param', start, i, { name: '?' });
+        continue;
+      }
+      if (/\s/.test(c)) {
+        i++;
+        while (i < text.length && /\s/.test(text[i])) i++;
+        push('space', start, i);
+        continue;
+      }
+      if (/[0-9]/.test(c) || (c === '.' && /[0-9]/.test(n || ''))) {
+        i++;
+        while (i < text.length && /[0-9A-Fa-f_xX.eE+-]/.test(text[i])) i++;
+        push('number', start, i);
+        continue;
+      }
+      if (SQL_WORD.test(c)) {
+        i++;
+        while (i < text.length && SQL_WORD_CONT.test(text[i])) i++;
+        const value = text.slice(start, i);
+        push(KEYWORDS.has(value.toLowerCase()) ? 'keyword' : 'ident', start, i);
+        continue;
+      }
+      if ('()[]{}'.indexOf(c) >= 0) { i++; push('bracket', start, i); continue; }
+      if ('=<>!+-*/%|&^~'.indexOf(c) >= 0) {
+        i++;
+        if (i < text.length && '=<>|&'.indexOf(text[i]) >= 0) i++;
+        push('operator', start, i);
+        continue;
+      }
+      i++;
+      push('punct', start, i);
+    }
+    return tokens;
+  }
+
+  function completionPrefix(text, cursor) {
+    const source = String(text || ''), pos = Math.max(0, Math.min(source.length, Number(cursor) || 0));
+    const tokens = tokenizeSQL(source);
+    for (let i = 0; i < tokens.length; i++) {
+      const token = tokens[i];
+      if ((token.type === 'string' || token.type === 'comment' || token.type === 'quoted-ident') && pos > token.start && pos <= token.end) return null;
+    }
+    const before = source.slice(0, pos);
+    const match = before.match(/(?:([A-Za-z_$#\u0080-\uffff][A-Za-z0-9_$#\u0080-\uffff]*)\.)?([A-Za-z_$#\u0080-\uffff][A-Za-z0-9_$#\u0080-\uffff]*)$/);
+    if (!match) return null;
+    return { qualifier: match[1] || '', prefix: match[2], start: pos - match[2].length, end: pos };
+  }
+
+  function identifierSets() {
+    const objects = new Set(), fields = new Set();
+    document.querySelectorAll('#db-objects .db-object-name, .db-object-name').forEach(function (node) { if (node.textContent.trim()) objects.add(node.textContent.trim()); });
+    document.querySelectorAll('.db-field-name, .db-field-row strong, .db-obj-table .db-field-name').forEach(function (node) { if (node.textContent.trim()) fields.add(node.textContent.trim()); });
+    return { objects: objects, fields: fields };
+  }
+  function highlightSQL(source, options) {
+    options = options || {};
+    const text = String(source == null ? '' : source);
+    if (text.length > MAX_SQL_HIGHLIGHT) return esc(text);
+    const known = identifierSets();
+    const tokens = tokenizeSQL(text);
+    const chunks = [];
+    tokens.forEach(function (token, index) {
+      const body = esc(token.value);
+      let cls = '';
+      if (token.type === 'keyword') cls = 'db-pro-sql-kw';
+      else if (token.type === 'string' || token.type === 'quoted-ident') cls = token.type === 'string' ? 'db-pro-sql-string' : 'db-pro-sql-quoted';
+      else if (token.type === 'comment') cls = 'db-pro-sql-comment';
+      else if (token.type === 'number') cls = 'db-pro-sql-number';
+      else if (token.type === 'param') cls = 'db-pro-sql-param';
+      else if (token.type === 'bracket') cls = 'db-pro-sql-bracket';
+      else if (token.type === 'operator') cls = 'db-pro-sql-operator';
+      else if (token.type === 'ident') {
+        const next = tokens[index + 1];
+        const valueLower = token.value.toLowerCase();
+        if (next && next.type === 'punct' && next.value === '(') cls = 'db-pro-sql-function';
+        else if (known.objects.has(token.value) || known.objects.has(valueLower)) cls = 'db-pro-sql-object';
+        else if (known.fields.has(token.value) || known.fields.has(valueLower)) cls = 'db-pro-sql-field';
+      }
+      chunks.push(cls ? '<span class="' + cls + '">' + body + '</span>' : body);
+    });
+    return chunks.join('') || ' ';
+  }
+
+  function appendSpace(line) {
+    if (!line) return '';
+    const last = line.slice(-1);
+    return /\s/.test(last) || last === '(' || last === '[' || last === '.' ? line : line + ' ';
+  }
+  function formatSQL(source) {
+    const text = String(source == null ? '' : source).replace(/\r\n?/g, '\n');
+    if (!text.trim()) return '';
+    const tokens = tokenizeSQL(text);
+    const lines = [], indentUnit = '  ';
+    let indent = 0, line = '';
+    let lastType = '', lastValue = '';
+    function flush(force) {
+      const value = line.replace(/[ \t]+$/g, '');
+      if (value || force) lines.push(indentUnit.repeat(Math.max(0, indent)) + value);
+      line = '';
+    }
+    function word(value) { return /^[A-Za-z_$#\u0080-\uffff]/.test(value); }
+    function beforeWord() {
+      if (line) line = appendSpace(line);
+    }
+    tokens.forEach(function (token, index) {
+      const value = token.value, lower = value.toLowerCase();
+      if (token.type === 'space') return;
+      if (token.type === 'comment') {
+        if (line.trim()) beforeWord();
+        line += value;
+        if (value.indexOf('\n') >= 0 || value.indexOf('--') === 0 || value.indexOf('#') === 0) {
+          const pieces = line.split('\n');
+          pieces.forEach(function (piece, i) { if (i < pieces.length - 1) { line = piece; flush(false); } else line = piece; });
+          flush(false);
+        } else line += ' ';
+        lastType = token.type; lastValue = value;
+        return;
+      }
+      if (token.type === 'keyword' && BLOCK_CLOSE.has(lower)) {
+        if (lower === 'end' || lower === 'exception' || lower === 'else' || lower === 'elsif') {
+          if (line.trim()) flush(false);
+          indent = Math.max(0, indent - 1);
+        }
+        if (lower === 'exception' || lower === 'else' || lower === 'elsif') flush(false);
+      }
+      if (token.type === 'keyword' && CLAUSE_BREAKS.has(lower) && line.trim()) flush(false);
+      if (token.type === 'punct' && value === ';') {
+        line = line.replace(/[ \t]+$/g, '') + ';';
+        flush(false);
+        lastType = token.type; lastValue = value;
+        return;
+      }
+      if (token.type === 'punct' && value === ',') {
+        line = line.replace(/[ \t]+$/g, '') + ',';
+        flush(false);
+        lastType = token.type; lastValue = value;
+        return;
+      }
+      if (token.type === 'bracket' && (value === ')' || value === ']' || value === '}')) {
+        line = line.replace(/[ \t]+$/g, '') + value;
+      } else if (token.type === 'bracket' && (value === '(' || value === '[' || value === '{')) {
+        if (word(lastValue) || lastValue === ')') line = line.replace(/[ \t]+$/g, '') + value;
+        else line += value;
+      } else if (token.type === 'operator') {
+        line = line.replace(/[ \t]+$/g, '');
+        if (line) line += ' ';
+        line += value + ' ';
+      } else if (token.type === 'punct' && value === '.') {
+        line = line.replace(/[ \t]+$/g, '') + '.';
+      } else {
+        if (token.type === 'keyword') beforeWord();
+        else if (token.type === 'ident' || token.type === 'number' || token.type === 'string' || token.type === 'quoted-ident' || token.type === 'param') beforeWord();
+        line += token.type === 'keyword' ? value.toUpperCase() : value;
+      }
+      if (token.type === 'keyword' && BLOCK_OPEN.has(lower) && lower !== 'case') indent++;
+      if (token.type === 'keyword' && lower === 'end') indent = Math.max(0, indent - 0);
+      lastType = token.type; lastValue = value;
+      // Keep long SELECT lists readable but do not split function arguments.
+      const next = tokens[index + 1];
+      if (token.type === 'keyword' && lower === 'select' && next && next.type !== 'space') line += ' ';
+    });
+    if (line.trim()) flush(false);
+    // The standalone Oracle slash is a block delimiter; never leave it glued
+    // to END or a comment when formatting a PL/SQL script.
+    return lines.join('\n')
+      .replace(/[ \t]+\n/g, '\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .replace(/\n[ \t]*\//g, '\n/')
+      .trim();
+  }
+
+  function splitStatements(source) {
+    if (W.statementModel && W.statementModel.split) return W.statementModel.split(String(source || ''));
+    const text = String(source || ''), result = [], tokens = tokenizeSQL(text);
+    let start = 0;
+    tokens.forEach(function (token) {
+      if (token.type === 'punct' && token.value === ';') {
+        const value = text.slice(start, token.end);
+        if (value.trim()) result.push({ start: start, end: token.end, text: value, index: result.length });
+        start = token.end;
+      }
+    });
+    if (text.slice(start).trim() || !result.length) result.push({ start: start, end: text.length, text: text.slice(start), index: result.length });
+    return result;
+  }
+  function findParameters(source) {
+    const seen = new Set(), result = [];
+    tokenizeSQL(source).forEach(function (token) {
+      if (token.type !== 'param' || !token.name || token.name === '?') return;
+      const key = token.name.toLowerCase();
+      if (seen.has(key)) return;
+      seen.add(key);
+      result.push({ name: token.name, token: token.value });
+    });
+    const qCount = tokenizeSQL(source).filter(function (token) { return token.type === 'param' && token.name === '?'; }).length;
+    // The API contract uses the parameter name as the bind key.  Positional
+    // placeholders therefore use the same pure numeric keys as Oracle's :1,
+    // :2 binds; the question mark remains only the source token/label.
+    for (let i = 0; i < qCount; i++) result.push({ name: String(i + 1), token: '?' });
+    return result;
+  }
+  function typedParameters(values) {
+    values = values || {};
+    return Object.keys(values).map(function (name) {
+      const value = values[name], text = String(value == null ? '' : value).trim();
+      return {
+        name: name,
+        type: text === '' ? 'null' : /^[-+]?\d+$/.test(text) ? 'int64' : /^[-+]?(?:\d+\.\d*|\.\d+)(?:e[-+]?\d+)?$/i.test(text) ? 'number' : /^(true|false)$/i.test(text) ? 'bool' : 'string',
+        value: value,
+        null: text === ''
+      };
+    });
+  }
+  function pruneBindings() {
+    const params = findParameters(sqlText()), allowed = Object.create(null), current = state.bindings || {};
+    params.forEach(function (param) { allowed[String(param.name).toLowerCase()] = param.name; });
+    const next = Object.create(null);
+    Object.keys(current).forEach(function (name) { const canonical = allowed[String(name).toLowerCase()]; if (canonical) next[canonical] = current[name]; });
+    state.bindings = next;
+  }
+  function parseErrorLocation(message) {
+    const text = String(message || '');
+    let match = text.match(/(?:line|行)\s*[:：]?\s*(\d+)(?:\s*[,，]\s*(?:column|列|col)\s*[:：]?\s*(\d+))?/i);
+    if (match) return { line: Number(match[1]), column: Number(match[2] || 1), source: 'line-column' };
+    match = text.match(/(?:position|位置)\s*[:：]?\s*(\d+)/i);
+    if (match) return { offset: Math.max(0, Number(match[1]) - 1), source: 'position' };
+    match = text.match(/at\s+line\s+(\d+)/i);
+    if (match) return { line: Number(match[1]), column: 1, source: 'line' };
+    return null;
+  }
+  function locationOffset(source, location) {
+    if (!location) return -1;
+    if (location.offset != null) return Math.max(0, Math.min(String(source || '').length, location.offset));
+    const lines = String(source || '').split('\n'), line = Math.max(1, Number(location.line) || 1), column = Math.max(1, Number(location.column) || 1);
+    let offset = 0;
+    for (let i = 0; i < line - 1 && i < lines.length; i++) offset += lines[i].length + 1;
+    return Math.max(0, Math.min(String(source || '').length, offset + column - 1));
+  }
+  function jumpToLocation(target, location) {
+    const source = target && typeof target.value === 'string' ? target.value : '';
+    const offset = locationOffset(source, location);
+    if (!target || offset < 0) return false;
+    target.focus();
+    target.setSelectionRange(offset, Math.min(source.length, offset + 1));
+    const line = source.slice(0, offset).split('\n').length;
+    const style = window.getComputedStyle ? getComputedStyle(target) : null;
+    const lineH = style ? parseFloat(style.lineHeight) || 21 : 21;
+    target.scrollTop = Math.max(0, (line - 3) * lineH);
+    if (target._syncHighlight) target._syncHighlight();
+    scheduleHighlight();
+    return true;
+  }
+
+  function loadHistory() {
+    const key = sourceId() || '*';
+    if (state.historyKey === key) return state.history;
+    let raw = '{}';
+    try { raw = localStorage.getItem(STORAGE_HISTORY) || '{}'; } catch (_) {}
+    const all = safeJSONParse(raw, {});
+    state.historyKey = key;
+    state.history = Array.isArray(all[key]) ? all[key].filter(function (entry) { return entry && entry.sql; }) : [];
+    return state.history;
+  }
+  function saveHistory() {
+    let raw = '{}';
+    try { raw = localStorage.getItem(STORAGE_HISTORY) || '{}'; } catch (_) {}
+    const all = safeJSONParse(raw, {});
+    all[state.historyKey || sourceId() || '*'] = state.history.slice(0, MAX_HISTORY);
+    try { localStorage.setItem(STORAGE_HISTORY, JSON.stringify(all)); } catch (_) { /* storage may be disabled */ }
+  }
+  function addHistory(entry) {
+    if (!entry || !String(entry.sql || '').trim()) return;
+    loadHistory();
+    const sql = String(entry.sql).trim();
+    const runId = entry.runId || '';
+    const existingIndex = runId ? state.history.findIndex(function (item) { return item && item.runId === runId; }) : -1;
+    const defaults = Object.assign({
+      id: 'q-' + Date.now().toString(36),
+      sourceId: sourceId(), sourceName: sourceName(), dialect: dialect(),
+      startedAt: Date.now(), endedAt: Date.now(), elapsedMs: 0, status: 'unknown', rows: null, error: ''
+    }, entry, { sql: sql });
+    if (existingIndex >= 0) {
+      // A run is first stored as "running" so a page refresh does not lose
+      // the audit trail.  Upgrade that same entry when the result arrives;
+      // do not create a duplicate row with the same SQL.
+      state.history[existingIndex] = Object.assign({}, state.history[existingIndex], defaults, { id: state.history[existingIndex].id });
+      saveHistory();
+      return;
+    }
+    state.history = state.history.filter(function (item) { return item.sql !== sql; });
+    state.history.unshift(defaults);
+    state.history = state.history.slice(0, MAX_HISTORY);
+    saveHistory();
+  }
+  function parseRowsMeta(value) {
+    const match = String(value || '').match(/([0-9][0-9,]*)\s*(?:行|rows?)/i);
+    return match ? Number(match[1].replace(/,/g, '')) : null;
+  }
+  function watchRunState() {
+    const root = id('db-workspace') || document.body;
+    if (state.runObserver && state.runObserverRoot === root) return;
+    if (state.runObserver) state.runObserver.disconnect();
+    state.runObserver = new MutationObserver(function () {
+      if (!state.pendingRun) return;
+      const status = (id('db-query-status') && id('db-query-status').textContent || '').trim();
+      const result = id('db-result-meta');
+      const message = id('db-result-message');
+      const done = message && !message.hidden ? 'error' : /完成|成功|失败|取消|就绪/.test(status) && !/执行中|查询中|加载|运行/.test(status);
+      if (!done) return;
+      const pending = state.pendingRun;
+      state.pendingRun = null;
+      addHistory({
+        sql: pending.sql,
+        runId: pending.runId,
+        startedAt: pending.startedAt,
+        endedAt: Date.now(),
+        elapsedMs: Date.now() - pending.startedAt,
+        status: message && !message.hidden ? 'error' : /失败|取消/.test(status) ? 'error' : 'success',
+        rows: parseRowsMeta(result && result.textContent),
+        error: message && !message.hidden ? message.textContent.trim().slice(0, 500) : ''
+      });
+    });
+    state.runObserverRoot = root;
+    state.runObserver.observe(root, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['hidden', 'class'] });
+  }
+  function beginRunCapture(target) {
+    const e = editor();
+    if (!e || target.disabled) return;
+    state.pendingRun = { sql: e.value, runId: 'run-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7), startedAt: Date.now() };
+    // Some query responses do not mutate the status node (notably an empty
+    // DML result). Persist a running entry immediately; the observer upgrades
+    // it when a result/error arrives.
+    addHistory({ sql: e.value, runId: state.pendingRun.runId, startedAt: state.pendingRun.startedAt, status: 'running' });
+    watchRunState();
+  }
+
+  function createModal(options) {
+    closeModal();
+    options = options || {};
+    const overlay = document.createElement('div');
+    overlay.className = 'db-pro-modal-overlay';
+    overlay.setAttribute('role', 'presentation');
+    const card = document.createElement('section');
+    card.className = 'db-pro-modal';
+    card.setAttribute('role', 'dialog');
+    card.setAttribute('aria-modal', 'true');
+    card.setAttribute('aria-labelledby', 'db-pro-modal-title');
+    card.innerHTML = '<header class="db-pro-modal-head"><h2 id="db-pro-modal-title">' + esc(options.title || '数据库工作台') + '</h2><button type="button" class="btn btn-xs db-pro-modal-close" aria-label="关闭">×</button></header><div class="db-pro-modal-body"></div><footer class="db-pro-modal-foot"></footer>';
+    const body = card.querySelector('.db-pro-modal-body'), foot = card.querySelector('.db-pro-modal-foot');
+    if (typeof Node !== 'undefined' && options.body instanceof Node) body.appendChild(options.body); else body.innerHTML = String(options.body || '');
+    (options.actions || [{ text: '关闭', className: 'btn', close: true }]).forEach(function (action) {
+      const button = document.createElement('button');
+      button.type = 'button'; button.className = action.className || 'btn'; button.textContent = action.text || '关闭';
+      if (action.id) button.id = action.id;
+      if (action.title) button.title = action.title;
+      button.addEventListener('click', function () {
+        if (action.onClick) action.onClick(button, { overlay: overlay, card: card, body: body });
+        if (action.close !== false && !action.keepOpen) closeModal();
+      });
+      foot.appendChild(button);
+    });
+    overlay.appendChild(card);
+    document.body.appendChild(overlay);
+    state.focusedBeforeModal = document.activeElement;
+    state.modal = overlay;
+    const close = function () { closeModal(); };
+    card.querySelector('.db-pro-modal-close').addEventListener('click', close);
+    overlay.addEventListener('pointerdown', function (event) { if (event.target === overlay) close(); });
+    overlay.addEventListener('keydown', function (event) {
+      if (event.key === 'Escape') { event.preventDefault(); close(); return; }
+      if (event.key !== 'Tab') return;
+      const focusables = Array.from(card.querySelectorAll('button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'));
+      if (!focusables.length) return;
+      const first = focusables[0], last = focusables[focusables.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    });
+    const focusTarget = card.querySelector('[autofocus]') || card.querySelector('input, textarea, select, button');
+    if (focusTarget) schedule(function () { focusTarget.focus(); });
+    return { overlay: overlay, card: card, body: body, foot: foot, close: close };
+  }
+  function closeModal() {
+    if (!state.modal) return;
+    const modal = state.modal;
+    state.modal = null;
+    if (modal.parentNode) modal.parentNode.removeChild(modal);
+    if (state.focusedBeforeModal && state.focusedBeforeModal.focus) {
+      try { state.focusedBeforeModal.focus(); } catch (_) {}
+    }
+  }
+
+  function setEditorValue(value, focus) {
+    const e = editor();
+    if (!e) return false;
+    e.value = String(value == null ? '' : value);
+    dispatchEditorInput(e);
+    pruneBindings();
+    if (focus !== false) e.focus();
+    scheduleHighlight();
+    return true;
+  }
+  function downloadText(text, filename, mime) {
+    const blob = new Blob([String(text || '')], { type: mime || 'text/plain;charset=utf-8' });
+    const link = document.createElement('a'), url = URL.createObjectURL(blob);
+    link.href = url; link.download = filename || 'query.sql'; link.rel = 'noopener';
+    document.body.appendChild(link); link.click(); link.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 0);
+  }
+  function currentFilename() {
+    const text = sqlText().trim(), first = text.replace(/\s+/g, ' ').slice(0, 36).replace(/[^A-Za-z0-9_-]+/g, '_');
+    return (first || 'query') + '.sql';
+  }
+  async function saveSQL(asFile) {
+    const text = sqlText();
+    if (!text.trim()) { toast('编辑器为空，无法保存 SQL', 'warn'); return; }
+    const filename = currentFilename();
+    try {
+      if (asFile && window.showSaveFilePicker) {
+        const handle = await window.showSaveFilePicker({ suggestedName: filename, types: [{ description: 'SQL 文件', accept: { 'text/plain': ['.sql'] } }] });
+        const writable = await handle.createWritable(); await writable.write(text); await writable.close();
+        persistDraft(handle.name || filename, text);
+      } else {
+        downloadText(text, filename, 'text/sql;charset=utf-8');
+        persistDraft(filename, text);
+      }
+      toast('SQL 已保存：' + filename, 'ok');
+    } catch (error) {
+      if (error && error.name === 'AbortError') return;
+      toast('保存 SQL 失败：' + (error && error.message ? error.message : error), 'err');
+    }
+  }
+  function persistDraft(name, text) {
+    const drafts = safeJSONParse(localStorage.getItem(STORAGE_DRAFTS) || '[]', []);
+    drafts.unshift({ name: name, text: String(text || ''), updatedAt: Date.now() });
+    try { localStorage.setItem(STORAGE_DRAFTS, JSON.stringify(drafts.slice(0, 10))); } catch (_) {}
+  }
+  function openSQLInput() {
+    if (!state.fileInput) {
+      state.fileInput = document.createElement('input');
+      state.fileInput.type = 'file'; state.fileInput.accept = '.sql,.pls,.pkb,.pks,.prc,.fnc,.trg,text/plain';
+      state.fileInput.className = 'db-pro-visually-hidden';
+      document.body.appendChild(state.fileInput);
+      state.fileInput.addEventListener('change', function () {
+        const file = state.fileInput.files && state.fileInput.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = function () { setEditorValue(reader.result || '', true); persistDraft(file.name, reader.result || ''); toast('已打开 SQL：' + file.name, 'ok'); };
+        reader.onerror = function () { toast('读取 SQL 文件失败', 'err'); };
+        reader.readAsText(file);
+        state.fileInput.value = '';
+      });
+    }
+    state.fileInput.click();
+  }
+  function openFindReplace(replaceMode) {
+    const body = document.createElement('div');
+    body.innerHTML = '<div class="db-pro-find-grid"><label>查找<input id="db-pro-find" class="editor-input" type="search" autocomplete="off" autofocus></label><label>替换为<input id="db-pro-replace" class="editor-input" type="text" autocomplete="off"></label><label class="db-pro-check"><input id="db-pro-find-case" type="checkbox"> 区分大小写</label><label class="db-pro-check"><input id="db-pro-find-regex" type="checkbox"> 正则表达式</label></div><div class="db-pro-find-status" id="db-pro-find-status" role="status"></div>';
+    const modal = createModal({
+      title: replaceMode ? '查找与替换' : '查找 SQL',
+      body: body,
+      actions: [
+        { id: 'db-pro-find-next', text: '查找下一个', className: 'btn btn-primary', close: false, onClick: function () { findNext(false); } },
+        { id: 'db-pro-replace-one', text: '替换', className: 'btn', close: false, onClick: function () { replaceOne(); } },
+        { id: 'db-pro-replace-all', text: '全部替换', className: 'btn btn-danger', close: false, onClick: function () { replaceAll(); } },
+        { text: '关闭', className: 'btn', close: true }
+      ]
+    });
+    const find = modal.body.querySelector('#db-pro-find'), replacement = modal.body.querySelector('#db-pro-replace'), caseBox = modal.body.querySelector('#db-pro-find-case'), regexBox = modal.body.querySelector('#db-pro-find-regex'), status = modal.body.querySelector('#db-pro-find-status');
+    if (!replaceMode) { replacement.parentElement.hidden = true; modal.card.querySelector('#db-pro-replace-one').hidden = true; modal.card.querySelector('#db-pro-replace-all').hidden = true; }
+    function matcher() {
+      const needle = find.value;
+      if (!needle) return null;
+      try { return regexBox.checked ? new RegExp(needle, caseBox.checked ? 'g' : 'gi') : new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), caseBox.checked ? 'g' : 'gi'); }
+      catch (error) { status.textContent = '正则表达式无效：' + error.message; return null; }
+    }
+    function countMatches(text, re) { if (!re) return 0; const flags = re.flags.indexOf('g') >= 0 ? re.flags : re.flags + 'g'; re = new RegExp(re.source, flags); return (String(text).match(re) || []).length; }
+    function findNext(announce) {
+      const e = editor(), re = matcher(); if (!e || !re) return;
+      const text = e.value, start = e.selectionEnd || 0, flags = re.flags.replace('g', '') + 'g', all = new RegExp(re.source, flags);
+      all.lastIndex = start; let match = all.exec(text); if (!match) { all.lastIndex = 0; match = all.exec(text); }
+      if (match) { e.focus(); e.setSelectionRange(match.index, match.index + match[0].length); status.textContent = '已定位到第 ' + (text.slice(0, match.index).split('\n').length) + ' 行'; }
+      else status.textContent = '未找到匹配内容';
+      if (announce) toast(status.textContent, match ? 'ok' : 'warn');
+    }
+    function replaceOne() {
+      const e = editor(), re = matcher(); if (!e || !re) return;
+      if (e.selectionStart !== e.selectionEnd && new RegExp(re.source, re.flags.replace('g', '')).test(e.value.slice(e.selectionStart, e.selectionEnd))) {
+        e.setRangeText(replacement.value, e.selectionStart, e.selectionEnd, 'end'); dispatchEditorInput(e);
+      }
+      findNext(true);
+    }
+    function replaceAll() {
+      const e = editor(), re = matcher(); if (!e || !re) return;
+      const count = countMatches(e.value, re); if (!count) { status.textContent = '未找到匹配内容'; return; }
+      e.value = e.value.replace(re, replacement.value); dispatchEditorInput(e); status.textContent = '已替换 ' + count + ' 处'; toast(status.textContent, 'ok');
+    }
+    find.addEventListener('input', function () { if (find.value) findNext(false); });
+    find.addEventListener('keydown', function (event) { if (event.key === 'Enter') { event.preventDefault(); findNext(true); } });
+    if (!replaceMode) modal.card.querySelector('#db-pro-find-next').focus();
+  }
+
+  function openParameterDialog() {
+    const params = findParameters(sqlText());
+    if (!params.length) { toast('当前 SQL 没有发现绑定参数（支持 :name、{{name}} 和 ?）', 'info'); return; }
+    const body = document.createElement('div');
+    body.innerHTML = '<p class="db-pro-modal-note">绑定值会发送到 <code>kairo:database-bindings</code> 事件。后端接入绑定变量后可直接执行；默认不把值拼回 SQL。</p><div class="db-pro-bind-grid">' + params.map(function (param, index) { return '<label>' + esc(param.name) + '<input class="editor-input db-pro-bind-value" data-name="' + esc(param.name) + '" data-index="' + index + '" type="text" autocomplete="off"></label>'; }).join('') + '</div><label class="db-pro-check"><input id="db-pro-bind-apply" type="checkbox"> 仅本地预览：将值安全转义后替换到编辑器</label>';
+    createModal({
+      title: '绑定参数', body: body,
+      actions: [
+        { text: '应用绑定', className: 'btn btn-primary', close: false, onClick: function () {
+          const values = {}; body.querySelectorAll('.db-pro-bind-value').forEach(function (input) { values[input.dataset.name] = input.value; });
+          state.bindings = values;
+          const detail = { sourceId: sourceId(), sql: sqlText(), parameters: params, values: values, dialect: dialect() };
+          emit('kairo:database-bindings', detail);
+          if (body.querySelector('#db-pro-bind-apply').checked) setEditorValue(applyBindings(sqlText(), values), true);
+          toast('绑定参数已准备，可由后端适配器执行', 'ok');
+        } },
+        { text: '关闭', className: 'btn', close: true }
+      ]
+    });
+  }
+  function literal(value) {
+    if (value == null || value === '') return 'NULL';
+    if (/^(true|false)$/i.test(String(value))) return String(value).toUpperCase();
+    if (/^-?(?:\d+\.?\d*|\.\d+)$/.test(String(value).trim())) return String(value).trim();
+    return "'" + String(value).replace(/'/g, "''") + "'";
+  }
+  function applyBindings(source, values) {
+    return tokenizeSQL(source).map(function (token) {
+      if (token.type === 'param' && token.name && token.name !== '?') return literal(values[token.name] == null ? values[String(token.name).toLowerCase()] : values[token.name]);
+      return token.value;
+    }).join('');
+  }
+
+  function runScript() {
+    const text = sqlText(), statements = splitStatements(text).map(function (item) { return String(item.text || '').trim(); }).filter(Boolean);
+    if (!statements.length) { toast('脚本为空', 'warn'); return; }
+    const body = document.createElement('div');
+    body.innerHTML = '<p class="db-pro-modal-note">将按顺序执行 <strong>' + statements.length + '</strong> 条语句。字符串、注释和 Oracle q-quote 内的分号不会拆分。</p><ol class="db-pro-script-list">' + statements.map(function (statement) { return '<li><pre>' + esc(statement.slice(0, 1200)) + (statement.length > 1200 ? '\n…' : '') + '</pre></li>'; }).join('') + '</ol><div class="db-pro-conflict-note">写入脚本需要后端提供页签 session_id；执行结果会通过 <code>kairo:database-script-result</code> 回传。</div>';
+    createModal({
+      title: '运行脚本', body: body,
+      actions: [
+        { text: '执行脚本', className: 'btn btn-primary', close: false, onClick: async function (button) {
+          button.disabled = true; button.textContent = '执行中…';
+          const session = activeSession();
+          const boundValues = state.bindings || {};
+          const boundParameters = typedParameters(boundValues);
+          const detail = { sourceId: sourceId(), sourceName: sourceName(), sessionId: session.sessionId || '', statements: statements, script: text, dialect: dialect(), options: { failure_policy: 'rollback', transaction_mode: session.sessionId ? 'session' : 'auto', commit: false }, parameters: boundParameters };
+          if (sourceIsProduction()) { const productionConfirm = window.confirm('当前数据源标记为生产环境，确认执行脚本？'); if (!productionConfirm) { button.disabled = false; button.textContent = '执行脚本'; return; } detail.confirm = true; }
+          emit('kairo:database-script', detail);
+          if (state.adapters.script) {
+              try { const result = await state.adapters.script(detail); syncMutationTransaction(detail, result, true); emit('kairo:database-script-result', { ok: true, result: result, request: detail }); toast('脚本执行完成', 'ok'); }
+            catch (error) { emit('kairo:database-script-result', { ok: false, error: error, request: detail }); toast('脚本执行失败：' + error.message, 'err'); }
+          } else {
+            try {
+              let result;
+              try {
+                // The typed endpoint uses DisallowUnknownFields, so keep this
+                // payload exact.  Do not mix its fields with the legacy batch
+                // contract when falling back after a 404.
+                result = await api('POST', '/api/database/script', {
+                  source_id: detail.sourceId,
+                  session_id: detail.sessionId,
+                  sql: detail.script,
+                  parameters: detail.parameters,
+                  options: detail.options,
+                  confirm: detail.confirm
+                });
+              } catch (error) {
+                if (!error || Number(error.status) !== 404) throw error;
+                result = await api('POST', '/api/database/batch', {
+                  source_id: detail.sourceId,
+                  session_id: detail.sessionId,
+                  statements: detail.statements
+                });
+              }
+              syncMutationTransaction(detail, result, true); emit('kairo:database-script-result', { ok: true, result: result, request: detail }); toast('脚本执行完成', 'ok');
+            } catch (error) {
+              syncMutationTransaction(detail, error && error.data, false);
+              emit('kairo:database-script-result', { ok: false, error: error, request: detail });
+              if (error && Number(error.status) === 400 && !detail.sessionId) toast('脚本执行需要当前页签 session_id，请先选择可执行查询页签', 'warn');
+              else if (error && Number(error.status) === 404) toast('脚本执行接口尚未部署（可先使用单条执行）', 'info');
+              else toast('脚本执行失败：' + (error.message || error), 'err');
+            }
+          }
+          button.disabled = false; button.textContent = '执行脚本';
+        } },
+        { text: '关闭', className: 'btn', close: true }
+      ]
+    });
+  }
+
+  function buildDeepLink(options) {
+    options = options || {};
+    const base = location.href.split('#')[0];
+    const params = new URLSearchParams();
+    const source = options.sourceId || sourceId(); if (source) params.set('source', source);
+    const sql = options.sql == null ? sqlText() : String(options.sql); if (sql) params.set('sql', sql);
+    if (options.autoRun) params.set('autorun', '1');
+    return base + '#/database' + (Array.from(params).length ? '?' + params.toString() : '');
+  }
+  function openIsolatedWindow(url) {
+    // Browsers are allowed to return null for a successful window.open when
+    // "noopener" is supplied in the features string. Open synchronously from
+    // the user gesture, then sever opener immediately so null still means a
+    // genuine popup-blocker decision instead of a false warning.
+    const child = window.open(url, '_blank');
+    if (child) {
+      try { child.opener = null; } catch (_) {}
+    }
+    return child;
+  }
+  function openNewWindow() {
+    const url = buildDeepLink({ autoRun: false });
+    const child = openIsolatedWindow(url);
+    if (!child) { toast('浏览器阻止了新窗口，请允许本站弹出窗口', 'warn'); return; }
+    toast('已在新窗口打开数据库工作台', 'ok');
+  }
+  function copyDeepLink() {
+    const url = buildDeepLink({ autoRun: true });
+    const copy = K.core && K.core.copyToClipboard;
+    const done = copy ? copy(url) : Promise.reject(new Error('剪贴板不可用'));
+    Promise.resolve(done).then(function () { toast('查询深链接已复制，可放入收藏夹', 'ok'); }).catch(function () { window.prompt('复制下面的数据库工作台链接：', url); });
+  }
+  function applyDeepLink() {
+    const hash = String(location.hash || ''), marker = '#/database';
+    if (hash.indexOf(marker) !== 0 || state.deepLinkApplied === hash) return;
+    const query = hash.slice(marker.length).replace(/^\?/, '');
+    if (!query) return;
+    let params; try { params = new URLSearchParams(query); } catch (_) { return; }
+    const sql = params.get('sql');
+    const wantedSource = params.get('source');
+    if (wantedSource) {
+      const select = id('db-source');
+      if (select && select.value !== wantedSource && Array.from(select.options).some(function (option) { return option.value === wantedSource; })) {
+        select.value = wantedSource;
+        dispatchEditorInput(select);
+        select.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+    }
+    if (sql == null) { state.deepLinkApplied = hash; return; }
+    state.deepLinkApplied = hash;
+    // Source changes rebuild the editor asynchronously. Re-check for a short
+    // bounded window so a deep link works with both cached and remote sources.
+    let tries = 0;
+    const apply = function () {
+      const e = editor();
+      if (!e && tries++ < 20) { setTimeout(apply, 100); return; }
+      if (!e) return;
+      setEditorValue(sql, false);
+      if (params.get('autorun') === '1' && id('db-run')) setTimeout(function () { id('db-run').click(); }, 80);
+    };
+    apply();
+  }
+
+  function environmentLabel(value) {
+    const key = String(value || '').toLowerCase();
+    return key === 'production' ? '生产' : key === 'staging' ? '测试' : '开发';
+  }
+  function sourceAdvancedHTML(item) {
+    item = item || {};
+    const tunnel = item.ssh_tunnel || {};
+    return '<fieldset class="db-pro-source-advanced"><legend>环境与安全连接</legend>' +
+      '<div class="db-form-grid db-pro-source-grid">' +
+      '<label class="db-field"><span>环境</span><select id="dbf-environment" class="editor-input"><option value="development">开发</option><option value="staging">测试</option><option value="production">生产</option></select></label>' +
+      '<label class="db-field db-pro-inline-check"><span><input id="dbf-read-only" type="checkbox"> 服务端只读</span><small>禁止 DML、网格写入、脚本和对象修改</small></label>' +
+      '<label class="db-field db-pro-inline-check"><span><input id="dbf-allow-ddl" type="checkbox"> 允许 DDL</span><small>仅用于对象设计器和 Function 编译</small></label>' +
+      '<label class="db-field"><span>TLS Server Name</span><input id="dbf-tls-server-name" class="editor-input" value="' + esc(item.tls_server_name || '') + '" placeholder="证书中的主机名"></label>' +
+      '<label class="db-field"><span>TLS CA 文件</span><input id="dbf-tls-ca-file" class="editor-input" value="' + esc(item.tls_ca_file || '') + '" placeholder="服务器上的 PEM 路径"></label>' +
+      '<label class="db-field"><span>TLS 客户端证书</span><input id="dbf-tls-client-cert" class="editor-input" value="' + esc(item.tls_client_cert_file || '') + '" placeholder="mTLS cert PEM 路径"></label>' +
+      '<label class="db-field"><span>TLS 客户端私钥</span><input id="dbf-tls-client-key" class="editor-input" value="' + esc(item.tls_client_key_file || '') + '" placeholder="mTLS key PEM 路径"></label>' +
+      '</div>' +
+      '<div class="db-pro-source-subhead">SSH 隧道（跳板机）</div>' +
+      '<div class="db-form-grid db-pro-source-grid">' +
+      '<label class="db-field db-pro-inline-check"><span><input id="dbf-ssh-enabled" type="checkbox"> 启用 SSH 隧道</span><small>数据库密码与 SSH 凭据分开保存</small></label>' +
+      '<label class="db-field"><span>SSH 主机</span><input id="dbf-ssh-host" class="editor-input" value="' + esc(tunnel.host || '') + '"></label>' +
+      '<label class="db-field"><span>SSH 端口</span><input id="dbf-ssh-port" class="editor-input" type="number" min="1" max="65535" value="' + esc(tunnel.port || 22) + '"></label>' +
+      '<label class="db-field"><span>SSH 用户</span><input id="dbf-ssh-user" class="editor-input" value="' + esc(tunnel.username || '') + '"></label>' +
+      '<label class="db-field"><span>' + (item.has_ssh_password ? 'SSH 密码（留空不改）' : 'SSH 密码') + '</span><input id="dbf-ssh-password" class="editor-input" type="password" autocomplete="new-password" value="" placeholder="' + (item.has_ssh_password ? '已保存，留空不改' : '必填') + '"></label>' +
+      '<label class="db-field"><span>远端数据库主机</span><input id="dbf-ssh-remote-host" class="editor-input" value="' + esc(tunnel.remote_host || '') + '"></label>' +
+      '<label class="db-field"><span>远端数据库端口</span><input id="dbf-ssh-remote-port" class="editor-input" type="number" min="1" max="65535" value="' + esc(tunnel.remote_port || '') + '"></label>' +
+      '<label class="db-field"><span>Host Key SHA256</span><input id="dbf-ssh-host-key" class="editor-input" value="' + esc(tunnel.host_key_sha256 || '') + '" placeholder="推荐填写，禁止未知主机"></label>' +
+      '<label class="db-field"><span>SSH Profile</span><select id="dbf-ssh-profile" class="editor-input"><option value="auto">auto</option><option value="modern">modern</option><option value="compat">compat</option><option value="no-ecdh">no-ecdh</option><option value="legacy">legacy</option></select></label>' +
+      '<label class="db-field db-pro-inline-check"><span><input id="dbf-ssh-insecure" type="checkbox"> 允许未知 Host Key</span><small>仅排障时临时开启</small></label>' +
+      '</div></fieldset>';
+  }
+  function syncSourceAdvanced(item) {
+    const env = id('dbf-environment');
+    if (!env) return;
+    item = item || {};
+    env.value = item.environment || 'development';
+    const readOnly = id('dbf-read-only'); if (readOnly) readOnly.checked = !!(item.read_only || item.readOnly);
+    const ddl = id('dbf-allow-ddl'); if (ddl) ddl.checked = !!(item.allow_ddl || item.allowDDL);
+    const tunnel = item.ssh_tunnel || {};
+    const set = function (name, value) { const input = id(name); if (input && value != null) input.value = value; };
+    const check = function (name, value) { const input = id(name); if (input) input.checked = !!value; };
+    check('dbf-ssh-enabled', tunnel.enabled); check('dbf-ssh-insecure', tunnel.allow_insecure_host_key);
+    set('dbf-ssh-profile', tunnel.ssh_profile || 'auto');
+  }
+  function ensureSourceManager(root) {
+    const manager = (root && root.querySelector && root.querySelector('#db-manager')) || id('db-manager');
+    if (!manager) return;
+    const panel = manager.querySelector('.db-manager'), marker = manager.querySelector('[data-db-pro-source-advanced]');
+    if (!panel || marker) return;
+    const target = panel.querySelector('.db-form-actions') || panel.lastElementChild;
+    if (!target) return;
+    const select = id('db-edit-existing'), item = select && state.sourceCatalog[select.value] || {};
+    const holder = document.createElement('div'); holder.dataset.dbProSourceAdvanced = '1'; holder.innerHTML = sourceAdvancedHTML(item);
+    target.parentNode.insertBefore(holder, target);
+    syncSourceAdvanced(item);
+    const enabled = id('dbf-ssh-enabled'), sshFields = ['dbf-ssh-host', 'dbf-ssh-port', 'dbf-ssh-user', 'dbf-ssh-password', 'dbf-ssh-remote-host', 'dbf-ssh-remote-port', 'dbf-ssh-host-key', 'dbf-ssh-profile', 'dbf-ssh-insecure'];
+    const toggle = function () { const on = !!(enabled && enabled.checked); sshFields.forEach(function (name) { const input = id(name); if (input) input.disabled = !on; }); };
+    if (enabled) enabled.addEventListener('change', toggle); toggle();
+  }
+  function updateSourceStatus() {
+    const select = id('db-source'), option = select && select.selectedOptions && select.selectedOptions[0], item = option && state.sourceCatalog[option.value];
+    if (!select || !item) return;
+    const env = String(item.environment || 'development').toLowerCase();
+    const envText = environmentLabel(env), readonly = item.read_only || item.readOnly ? ' · 只读' : item.allow_ddl ? ' · 可写/DDL' : ' · 可写';
+    if (option) { option.textContent = (item.name || option.textContent).replace(/\s+·\s+(开发|测试|生产)(?:\s+·\s+(?:只读|可写|可写\/DDL))?$/, '') + ' · ' + envText + readonly; option.dataset.environment = env; option.dataset.readOnly = item.read_only || item.readOnly ? '1' : '0'; option.dataset.allowDdl = item.allow_ddl ? '1' : '0'; }
+    const badge = id('db-source-badge');
+    if (badge) { const kind = String(item.kind || '').toLowerCase(); badge.textContent = (kind === 'oracle' ? 'Oracle' : kind === 'mysql' ? 'MySQL' : kind === 'redis' ? 'Redis' : kind) + ' · ' + envText + readonly; badge.dataset.environment = env; badge.dataset.readOnly = item.read_only || item.readOnly ? '1' : '0'; }
+  }
+  function enhanceSourceSelect() {
+    const select = id('db-source');
+    if (!select) return;
+    Array.from(select.options || []).forEach(function (option) {
+      const item = state.sourceCatalog[option.value];
+      if (!item) return;
+      option.dataset.environment = String(item.environment || 'development').toLowerCase();
+      option.dataset.readOnly = item.read_only || item.readOnly ? '1' : '0';
+      option.dataset.allowDdl = item.allow_ddl ? '1' : '0';
+    });
+    if (select.dataset.dbProSourceBound !== '1') {
+      select.dataset.dbProSourceBound = '1';
+      select.addEventListener('change', updateSourceStatus);
+      // Parameter values belong to a source/session. Never carry a bind from
+      // one environment into another after the base page switches sources.
+      select.addEventListener('change', function () { state.bindings = Object.create(null); state.fieldCache = Object.create(null); });
+    }
+    updateSourceStatus();
+  }
+  function loadSourceCatalog() {
+    if (state.sourceCatalogLoaded) { enhanceSourceSelect(); ensureSourceManager(document); return; }
+    state.sourceCatalogLoaded = true;
+    api('GET', '/api/database/sources').then(function (data) {
+      (data.sources || data.items || []).forEach(function (item) { if (item && item.id) state.sourceCatalog[item.id] = item; });
+      enhanceSourceSelect(); ensureSourceManager(document);
+    }).catch(function () {
+      // The base page still remains usable when an old server omits source
+      // metadata; the advanced form simply stays hidden until it is available.
+      state.sourceCatalogLoaded = false;
+    });
+  }
+  function refreshSourceCatalog() {
+    // database.js owns the source CRUD form.  Clear the feature-side copy
+    // after a save/delete so environment/read-only badges and the advanced
+    // editor never keep rendering a removed or stale source.
+    state.sourceCatalogLoaded = false;
+    state.sourceCatalog = Object.create(null);
+    loadSourceCatalog();
+  }
+
+  function createQuickButton(idValue, label, title, handler) {
+    const button = document.createElement('button');
+    button.type = 'button'; button.id = idValue; button.className = 'btn btn-xs db-pro-button'; button.textContent = label; button.title = title || label; button.setAttribute('aria-label', title || label); button.addEventListener('click', handler); return button;
+  }
+  function ensureToolbar(root) {
+    const bar = root.querySelector('.db-editor-bar');
+    if (!bar || bar.dataset.dbFeaturesBound === '1') return;
+    bar.dataset.dbFeaturesBound = '1';
+    const tools = root.querySelector('.db-bar-tools-group') || bar;
+    const quick = document.createElement('span'); quick.className = 'db-pro-quick-actions';
+    quick.appendChild(createQuickButton('db-pro-find-button', '查找', '查找 SQL（Ctrl+F）', function () { openFindReplace(false); }));
+    quick.appendChild(createQuickButton('db-pro-open-button', '打开', '打开 SQL 文件（Ctrl+O）', openSQLInput));
+    quick.appendChild(createQuickButton('db-pro-save-button', '保存', '保存 SQL（Ctrl+S）', function () { saveSQL(false); }));
+    tools.appendChild(quick);
+    const panel = root.querySelector('.db-toolbar-more-panel');
+    if (panel) {
+      const section = document.createElement('div'); section.className = 'db-more-section db-pro-tools-section';
+      section.innerHTML = '<div class="db-more-title">脚本、参数与工作台</div><div class="db-pro-action-grid"></div>';
+      const actions = section.querySelector('.db-pro-action-grid');
+      actions.appendChild(createQuickButton('db-pro-script', '运行脚本', '拆分并执行整个 SQL 脚本', runScript));
+      actions.appendChild(createQuickButton('db-pro-replace', '查找替换', '查找并替换 SQL（Ctrl+H）', function () { openFindReplace(true); }));
+      actions.appendChild(createQuickButton('db-pro-params', '绑定参数', '填写 :name / {{name}} 绑定参数', openParameterDialog));
+      actions.appendChild(createQuickButton('db-pro-history', '查询历史', '打开可搜索的结构化查询历史', openHistory));
+      actions.appendChild(createQuickButton('db-pro-save-as', '另存为', '选择文件名保存 SQL', function () { saveSQL(true); }));
+      actions.appendChild(createQuickButton('db-pro-open-new', '新窗口', '在新窗口打开当前数据库查询', openNewWindow));
+      actions.appendChild(createQuickButton('db-pro-copy-link', '复制链接', '复制可放入收藏夹的查询深链接', copyDeepLink));
+      actions.appendChild(createQuickButton('db-pro-import', '导入数据', '打开 CSV/TSV 数据导入向导', openImportWizard));
+      panel.appendChild(section);
+    }
+    ensureEditor(root);
+    ensureGridToolbar(root);
+    watchRunState();
+    applyDeepLink();
+  }
+
+  function ensureEditor(root) {
+    const e = editor();
+    if (!e) return;
+    if (state.editorInput === e) return;
+    state.bindings = Object.create(null);
+    state.editor = e; state.editorInput = e;
+    e.addEventListener('input', function () { pruneBindings(); }, { passive: true });
+    e.addEventListener('scroll', function () { if (state.ac) positionCompletion(e); }, { passive: true });
+    e.addEventListener('keyup', function () { scheduleHighlight(); maybeContextCompletion(false); }, { passive: true });
+    e.addEventListener('click', function () { scheduleHighlight(); maybeContextCompletion(false); }, { passive: true });
+    scheduleHighlight();
+  }
+  function scheduleHighlight() {
+    if (state.raf) return;
+    state.raf = schedule(function () {
+      state.raf = 0;
+      // database.js owns the single syntax overlay and its input/scroll
+      // listeners. The feature layer only asks that owner to synchronize;
+      // it never writes the overlay DOM itself.
+      const e = editor();
+      if (e && typeof e._syncHighlight === 'function') e._syncHighlight();
+    });
+  }
+
+  function knownObjects() {
+    const sets = identifierSets(), result = [];
+    sets.objects.forEach(function (name) { result.push({ label: name, kind: 'object', insert: name }); });
+    sets.fields.forEach(function (name) { result.push({ label: name, kind: 'field', insert: name }); });
+    return result;
+  }
+  function findTableForQualifier(text, qualifier) {
+    const regex = /\b(?:from|join|update|into|delete\s+from)\s+((?:[A-Za-z_$#][\w$#]*\.)?[A-Za-z_$#][\w$#]*)(?:\s+(?:as\s+)?([A-Za-z_$#][\w$#]*))?/ig;
+    let match;
+    while ((match = regex.exec(text))) {
+      const table = match[1], alias = match[2];
+      if (!qualifier || alias && alias.toLowerCase() === qualifier.toLowerCase() || table.split('.').pop().toLowerCase() === qualifier.toLowerCase()) return table;
+    }
+    return qualifier || '';
+  }
+  async function loadFields(table) {
+    if (!table) return [];
+    const source = sourceId(), schemaInput = id('db-schema'), schema = schemaInput && schemaInput.value ? schemaInput.value : '';
+    const key = source + '|' + schema + '|' + table;
+    if (state.fieldCache[key]) return state.fieldCache[key];
+    const parts = table.replace(/["`]/g, '').split('.');
+    const object = parts.pop(), effectiveSchema = parts.join('.') || schema;
+    if (!source) return [];
+    try {
+      const result = await api('GET', '/api/database/metadata/fields?source_id=' + encodeURIComponent(source) + '&schema=' + encodeURIComponent(effectiveSchema) + '&object=' + encodeURIComponent(object));
+      const fields = (result.fields || result.items || []).map(function (field) { return typeof field === 'string' ? field : field.name; }).filter(Boolean);
+      state.fieldCache[key] = fields; return fields;
+    } catch (_) { return []; }
+  }
+  function showCompletion(items, start, end) {
+    const e = editor(); if (!e || !items.length) { hideCompletion(); return; }
+    let box = id('db-pro-ac');
+    if (!box) { box = document.createElement('div'); box.id = 'db-pro-ac'; box.className = 'db-pro-ac'; box.setAttribute('role', 'listbox'); box.setAttribute('aria-label', '数据库字段联想'); (e.parentElement || document.body).appendChild(box); }
+    state.ac = box; state.acItems = items.slice(0, 20); state.acIndex = 0; state.acStart = start; state.acEnd = end; box.hidden = false;
+    box.innerHTML = state.acItems.map(function (item, index) { return '<button type="button" class="db-pro-ac-item' + (index === 0 ? ' active' : '') + '" data-index="' + index + '" role="option" aria-selected="' + (index === 0 ? 'true' : 'false') + '"><span>' + esc(item.label) + '</span><small>' + esc(item.kind === 'field' ? '字段' : item.kind === 'object' ? '对象' : '关键字') + '</small></button>'; }).join('');
+    box.querySelectorAll('[data-index]').forEach(function (button) { button.addEventListener('mousedown', function (event) { event.preventDefault(); state.acIndex = Number(button.dataset.index); acceptCompletion(); }); });
+    positionCompletion(e);
+  }
+  function positionCompletion(e) {
+    const box = state.ac; if (!box || box.hidden) return;
+    const style = window.getComputedStyle(e), lineH = parseFloat(style.lineHeight) || 21, padT = parseFloat(style.paddingTop) || 13, padL = parseFloat(style.paddingLeft) || 15;
+    const before = e.value.slice(0, state.acStart).split('\n'), row = before.length - 1, colText = before[before.length - 1];
+    const canvas = positionCompletion.canvas || (positionCompletion.canvas = document.createElement('canvas')), ctx = canvas.getContext('2d'); ctx.font = style.font;
+    box.style.left = Math.max(4, Math.min(e.clientWidth - 260, padL + ctx.measureText(colText).width - e.scrollLeft)) + 'px';
+    box.style.top = Math.max(4, padT + (row + 1) * lineH - e.scrollTop) + 'px';
+  }
+  function hideCompletion() { if (state.ac) { state.ac.hidden = true; state.ac.innerHTML = ''; } state.ac = null; state.acItems = []; }
+  function acceptCompletion() {
+    const e = editor(), item = state.acItems[state.acIndex]; if (!e || !item) return hideCompletion();
+    e.setRangeText(item.insert || item.label, state.acStart, state.acEnd, 'end'); dispatchEditorInput(e); hideCompletion(); scheduleHighlight();
+  }
+  async function maybeContextCompletion(force) {
+    const e = editor(); if (!e) return;
+    const prefix = completionPrefix(e.value, e.selectionStart); if (!prefix) { hideCompletion(); return; }
+    if (!force && !prefix.qualifier) return;
+    const request = ++state.acRequest;
+    let names;
+    if (prefix.qualifier) {
+      names = await loadFields(findTableForQualifier(e.value, prefix.qualifier));
+      if (!names.length) names = Array.from(identifierSets().fields);
+    } else names = knownObjects().map(function (item) { return item.label; });
+    if (request !== state.acRequest || editor() !== e) return;
+    const needle = prefix.prefix.toLowerCase();
+    const items = names.filter(function (name) { return String(name).toLowerCase().indexOf(needle) === 0; }).map(function (name) { return { label: name, insert: name, kind: prefix.qualifier ? 'field' : 'object' }; });
+    if (items.length) showCompletion(items, prefix.start, prefix.end); else hideCompletion();
+  }
+
+  function gridContext() {
+    return K.database && K.database.getGridContext ? K.database.getGridContext() : null;
+  }
+  function getGridInfo() {
+    const context = gridContext();
+    if (!context) return null;
+    return { columns: context.columns, selected: context.values.length > 0, rowIndex: context.rowIndex, values: context.values, context: context };
+  }
+  function inferType(column, value) {
+    const name = String(column && column.name || '').toLowerCase(), type = String(column && column.type || '').toLowerCase();
+    if (TYPE_DATE.test(type) || /(^|_)(date|time|at|on)$/.test(name)) return 'datetime-local';
+    if (TYPE_BOOL.test(type) || /(^|_)(is|has|enabled|active)$/.test(name)) return 'checkbox';
+    if (TYPE_NUMBER.test(type) || /(^|_)(id|count|num|amount|price|total|sort|order)$/.test(name)) return 'number';
+    return 'text';
+  }
+  function gridRevision(info) {
+    const value = JSON.stringify({ sourceId: sourceId(), rowIndex: info.rowIndex, values: info.values, columns: info.columns.map(function (c) { return c.name; }) });
+    let hash = 2166136261;
+    for (let i = 0; i < value.length; i++) { hash ^= value.charCodeAt(i); hash = Math.imul(hash, 16777619); }
+    return ('00000000' + (hash >>> 0).toString(16)).slice(-8);
+  }
+  // Grid writes are allowed only for an unambiguous single-table projection.
+  // Resolve from executed SQL, never from subsequently edited editor text.
+  function resolveGridTarget(text, defaultSchema) {
+    const tokens = tokenizeSQL(text).filter(function (t) { return t.type !== 'space' && t.type !== 'comment'; });
+    const word = function (i) { return tokens[i] ? tokens[i].value.toUpperCase() : ''; };
+    const ident = function (t) { return t && (t.type === 'ident' || t.type === 'quoted-ident'); };
+    const name = function (t) { return t.type === 'quoted-ident' ? t.value.slice(1, -1).replace(/""/g, '"').replace(/``/g, '`') : t.value; };
+    if (word(0) !== 'SELECT') return null;
+    if (tokens.some(function (t, i) { return t.type === 'keyword' && (/^(JOIN|UNION|INTERSECT|MINUS|EXCEPT|GROUP|DISTINCT|WITH)$/.test(t.value.toUpperCase()) || i > 0 && t.value.toUpperCase() === 'SELECT'); })) return null;
+    const from = tokens.findIndex(function (t) { return t.type === 'keyword' && t.value.toUpperCase() === 'FROM'; });
+    if (from < 2) return null;
+    let i = 1;
+    while (i < from) {
+      if (word(i) === '*') i++;
+      else {
+        if (!ident(tokens[i++])) return null;
+        if (word(i) === '.') { i++; if (word(i) !== '*' && !ident(tokens[i])) return null; i++; }
+      }
+      if (i === from) break;
+      if (word(i++) !== ',' || i === from) return null;
+    }
+    i = from + 1;
+    if (!ident(tokens[i])) return null;
+    let schema = defaultSchema || '', table = name(tokens[i++]);
+    if (word(i) === '.') { i++; if (!ident(tokens[i])) return null; schema = table; table = name(tokens[i++]); }
+    if (word(i) === 'AS') i++;
+    if (ident(tokens[i])) i++;
+    if (i < tokens.length && !/^(WHERE|ORDER|FETCH|LIMIT|OFFSET|FOR|;)$/.test(word(i))) return null;
+    return { schema: schema, table: table };
+  }
+  function gridTarget() {
+    const context = gridContext();
+    return context ? { schema: context.schema, table: context.table } : { schema: '', table: '' };
+  }
+  function gridContextKey(context) {
+    return context ? JSON.stringify([context.sourceId, context.sessionId, context.schema, context.table, context.sql]) : '';
+  }
+  function pendingGridMutations(context) {
+    const key = gridContextKey(context || gridContext());
+    return key ? state.gridMutations.filter(function (item) { return item.contextKey === key; }) : [];
+  }
+  function clearGridMutations(items) {
+    const removed = new Set(items || pendingGridMutations());
+    state.gridMutations = state.gridMutations.filter(function (item) { return !removed.has(item); });
+    updateGridPendingBadge();
+  }
+  function objectValues(columns, values) {
+    const result = {};
+    (columns || []).forEach(function (column, index) {
+      const name = typeof column === 'string' ? column : column && column.name;
+      if (name) result[name] = values && values[index] !== undefined ? values[index] : null;
+    });
+    return result;
+  }
+  async function gridPrimaryKeys(target) {
+    const source = target && target.sourceId || sourceId();
+    if (!target || !target.table || !source) return [];
+    const key = source + '|' + target.schema + '|' + target.table + '|meta';
+    if (state.fieldCache[key]) return state.fieldCache[key];
+    try {
+      const data = await api('GET', '/api/database/metadata/fields?source_id=' + encodeURIComponent(source) + '&schema=' + encodeURIComponent(target.schema || '') + '&object=' + encodeURIComponent(target.table));
+      const fields = (data.fields || data.items || []).map(function (field) { return typeof field === 'string' ? { name: field } : field; });
+      const keys = fields.filter(function (field) { return field.primary_key || field.primaryKey; }).map(function (field) { return field.name; }).filter(Boolean);
+      state.fieldCache[key] = keys;
+      return keys;
+    } catch (_) { return []; }
+  }
+  async function applyGridMutations(commit) {
+    const context = gridContext(), queued = pendingGridMutations(context);
+    if (!queued.length) { toast('没有待应用的网格变更', 'info'); return; }
+    if (!context || !context.editable || context.applying) { toast('请先开启网格编辑并等待当前操作完成', 'warn'); return; }
+    if (sourceIsReadOnly()) { toast('当前数据源为只读，不能应用网格变更', 'warn'); return; }
+    const target = context, session = context;
+    if (!target.table) { toast('无法从当前 SQL 推断目标表，请使用 FROM/UPDATE/INSERT INTO 语句', 'warn'); return; }
+    if (!session.sessionId) { toast('网格变更需要当前页签 session_id，请先选择可执行查询页签', 'warn'); return; }
+    if (state.gridApplying) return;
+    state.gridApplying = true;
+    try {
+    const primaryKey = await gridPrimaryKeys(target);
+    const mutations = queued.map(function (item) {
+      const values = objectValues(item.columns, item.values);
+      return {
+        action: item.kind,
+        values: item.kind === 'insert' ? values : {},
+        original: item.kind === 'delete' ? objectValues(item.columns, item.expectedValues) : {},
+        key: item.kind === 'delete' ? objectValues(item.columns, item.expectedValues) : {},
+        primary_key: primaryKey,
+        rowid: item.rowid || '',
+        use_rowid: !!item.useRowID,
+        confirm: false
+      };
+    });
+    if (mutations.some(function (item) { return item.action === 'delete' && !item.primary_key.length && !item.use_rowid; })) {
+      toast('目标表没有检测到主键；删除需后端提供主键或 Oracle ROWID', 'warn'); return;
+    }
+    const production = context.production;
+    const confirm = production ? window.confirm('当前数据源标记为生产环境，确认应用网格变更？') : false;
+    if (production && !confirm) return;
+    const detail = { sourceId: context.sourceId, schema: target.schema, table: target.table, sessionId: session.sessionId, mutations: mutations, commit: !!commit, confirm: !!confirm, dialect: dialect() };
+    emit('kairo:database-grid-commit', detail);
+    try {
+      const adapter = state.adapters.grid;
+      const result = adapter ? await adapter(detail) : await apiFallback('POST', ['/api/database/grid', '/api/database/grid/mutate'], {
+        source_id: detail.sourceId, schema: detail.schema, table: detail.table, session_id: detail.sessionId,
+        mutations: detail.mutations, commit: detail.commit, confirm: detail.confirm
+      });
+      clearGridMutations(queued);
+      syncMutationTransaction(detail, result, true);
+      emit('kairo:database-grid-applied', { request: detail, result: result });
+      toast('网格变更已应用' + (commit ? '并提交' : '，仍在当前事务中'), 'ok');
+    } catch (error) {
+      syncMutationTransaction(detail, error && error.data, false);
+      emit('kairo:database-grid-applied', { request: detail, result: null, error: error });
+      if (error && Number(error.status) === 404) toast('网格写入接口尚未部署，请先使用 SQL 修改', 'info');
+      else toast('网格变更失败：' + (error.message || error), 'err');
+    }
+    } finally { state.gridApplying = false; }
+  }
+  function queueGridMutation(mutation, context) {
+    mutation.contextKey = gridContextKey(context || gridContext());
+    if (!mutation.contextKey) return;
+    state.gridMutations.push(mutation);
+    const detail = { sourceId: sourceId(), sourceName: sourceName(), mutations: state.gridMutations.slice(), dialect: dialect() };
+    emit('kairo:database-grid-change', detail);
+    updateGridPendingBadge();
+  }
+  function updateGridPendingBadge() {
+    const badge = id('db-pro-grid-pending'); if (!badge) return;
+    const count = pendingGridMutations().length;
+    badge.textContent = count ? '待应用 ' + count : '';
+    badge.hidden = !count;
+  }
+  function openGridRowModal(mode) {
+    const info = getGridInfo(); if (!info) { toast('请先执行返回结果的查询', 'warn'); return; }
+    if (!info.context.editable) { toast('请先开启网格编辑', 'warn'); return; }
+    if (mode === 'delete' && !info.selected) { toast('请先选中要删除的行', 'warn'); return; }
+    const isInsert = mode === 'insert';
+    const values = isInsert ? info.columns.map(function () { return ''; }) : info.values;
+    const body = document.createElement('div');
+    body.innerHTML = '<p class="db-pro-modal-note">' + (isInsert ? '新增行会作为待提交变更保存。' : '删除使用主键/唯一键或整行旧值匹配；提交时后端必须校验 rows_affected=1。') + '</p><div class="db-pro-row-grid">' + info.columns.map(function (column, index) { const type = inferType(column, values[index]); const input = type === 'checkbox' ? '<input type="checkbox" class="db-pro-row-value" data-col="' + index + '">' : '<input class="editor-input db-pro-row-value" data-col="' + index + '" type="' + type + '" value="' + esc(values[index] || '') + '">'; return '<label><span>' + esc(column.name) + '</span>' + input + '</label>'; }).join('') + '</div><div class="db-pro-conflict-note">并发保护：revision ' + esc(gridRevision(info)) + '；后端接入时请同时发送 expected_values。</div>';
+    createModal({
+      title: isInsert ? '新增数据行' : '删除数据行', body: body,
+      actions: [
+        { text: isInsert ? '加入待提交' : '加入删除队列', className: isInsert ? 'btn btn-primary' : 'btn btn-danger', close: false, onClick: function () {
+          const next = Array.from(body.querySelectorAll('.db-pro-row-value')).map(function (input) { return input.type === 'checkbox' ? input.checked : input.value; });
+          queueGridMutation({ kind: isInsert ? 'insert' : 'delete', rowIndex: info.rowIndex, values: next, expectedValues: isInsert ? null : info.values, columns: info.columns.map(function (c) { return c.name; }), revision: gridRevision(info) }, info.context);
+          closeModal(); toast(isInsert ? '新增行已加入待提交队列' : '删除行已加入待提交队列', 'ok');
+        } },
+        { text: '关闭', className: 'btn', close: true }
+      ]
+    });
+  }
+  function ensureGridToolbar(root) {
+    const actions = root.querySelector('.db-result-actions'); if (!actions || actions.dataset.dbGridFeatures === '1') return;
+    actions.dataset.dbGridFeatures = '1';
+    const group = document.createElement('span'); group.className = 'db-pro-grid-actions';
+    group.appendChild(createQuickButton('db-pro-grid-add', '新增行', '新增待提交数据行', function () { openGridRowModal('insert'); }));
+    group.appendChild(createQuickButton('db-pro-grid-delete', '删除行', '删除选中待提交数据行', function () { openGridRowModal('delete'); }));
+    group.appendChild(createQuickButton('db-pro-grid-apply', '应用变更', '应用待提交网格变更到当前页签事务', function () { applyGridMutations(false); }));
+    group.appendChild(createQuickButton('db-pro-grid-clear', '清空变更', '清空尚未提交的网格变更', function () { if (!pendingGridMutations().length || window.confirm('清空尚未提交的网格变更？')) clearGridMutations(); }));
+    const badge = document.createElement('span'); badge.id = 'db-pro-grid-pending'; badge.className = 'db-pro-grid-pending'; badge.hidden = true; badge.setAttribute('role', 'status'); group.appendChild(badge);
+    actions.appendChild(group);
+    updateGridPendingBadge();
+  }
+
+  function parseCSV(text, delimiter) {
+    const input = String(text == null ? '' : text).replace(/^\uFEFF/, ''), sep = delimiter || (input.indexOf('\t') >= 0 && input.indexOf(',') < 0 ? '\t' : ',');
+    const rows = [], row = []; let field = '', quoted = false;
+    for (let i = 0; i < input.length; i++) {
+      const c = input[i], n = input[i + 1];
+      if (quoted) {
+        if (c === '"' && n === '"') { field += '"'; i++; }
+        else if (c === '"') quoted = false;
+        else field += c;
+      } else if (c === '"' && field === '') quoted = true;
+      else if (c === sep) { row.push(field); field = ''; }
+      else if (c === '\n' || c === '\r') {
+        if (c === '\r' && n === '\n') i++;
+        row.push(field); field = '';
+        if (row.some(function (value) { return value !== ''; })) rows.push(row.splice(0, row.length));
+      } else field += c;
+    }
+    row.push(field); if (row.some(function (value) { return value !== ''; })) rows.push(row);
+    return rows;
+  }
+  function openImportWizard() {
+    const body = document.createElement('div');
+    const guessed = gridTarget();
+    body.innerHTML = '<div class="db-pro-import-target"><label>Schema<input id="db-pro-import-schema" class="editor-input" value="' + esc(guessed.schema || '') + '"></label><label>目标表<input id="db-pro-import-table" class="editor-input" value="' + esc(guessed.table || '') + '" placeholder="例如 ORDERS" required></label></div><label class="db-pro-file-picker">选择 CSV/XLSX 文件<input id="db-pro-import-file" type="file" accept=".csv,.tsv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"></label><div id="db-pro-import-preview" class="db-pro-import-preview"><span class="hint">选择文件后先调用后端预览，确认字段映射再导入。</span></div><div id="db-pro-import-mapping" class="db-pro-import-mapping"></div><div class="db-pro-conflict-note">仅执行 INSERT。导入请求带 session_id，默认加入当前页签事务；后端会返回逐行错误与 rows_affected。</div>';
+    let parsedRows = [], fileName = '', format = '', encoded = '', previewData = null, previewTarget = null, previewVersion = 0;
+    const modal = createModal({
+      title: '数据导入向导', body: body,
+      actions: [
+        { text: '提交导入', className: 'btn btn-primary', close: false, onClick: async function (button) {
+          if (!previewData) { toast('请先选择文件并完成后端预览', 'warn'); return; }
+          const table = body.querySelector('#db-pro-import-table').value.trim(), schema = body.querySelector('#db-pro-import-schema').value.trim(), session = activeSession();
+          if (!table) { toast('请填写目标表', 'warn'); return; }
+          if (!session.sessionId) { toast('导入需要当前页签 session_id，请先打开可执行查询页签', 'warn'); return; }
+          const mappings = Array.from(body.querySelectorAll('[data-import-map]')).map(function (row) { const target = row.querySelector('[data-map-target]'), type = row.querySelector('[data-map-type]'), nullable = row.querySelector('[data-map-nullable]'); return { source_index: Number(row.dataset.sourceIndex), source_name: row.dataset.sourceName || '', target: target && target.value || '', type: type && type.value || 'string', nullable: !!(nullable && nullable.checked) }; }).filter(function (item) { return item.target; });
+          if (!previewTarget || previewTarget.sourceId !== sourceId() || previewTarget.schema !== schema || previewTarget.table !== table) { toast('目标已改变，请重新选择文件并预览', 'warn'); return; }
+          const rows = parsedRows.length ? parsedRows.slice(1) : [];
+          if (!previewData.total_rows || !mappings.length) { toast('没有可导入的数据或目标列映射', 'warn'); return; }
+          const production = sourceIsProduction(), confirm = production ? window.confirm('当前数据源标记为生产环境，确认导入数据？') : false;
+          if (production && !confirm) return;
+          button.disabled = true; button.textContent = '提交中…';
+          const detail = { sourceId: sourceId(), sourceName: sourceName(), fileName: fileName, format: format, schema: schema, table: table, mappings: mappings, rows: rows, dataBase64: encoded, totalRows: previewData.total_rows, sessionId: session.sessionId, commit: false, confirm: !!confirm, dialect: dialect() };
+          emit('kairo:database-import', detail);
+          try {
+            let result;
+            if (state.adapters.import) result = await state.adapters.import(Object.assign({ phase: 'apply' }, detail));
+            else result = await api('POST', '/api/database/import/apply', { source_id: detail.sourceId, schema: detail.schema, table: detail.table, mappings: detail.mappings, format: detail.format, data_base64: detail.dataBase64, session_id: detail.sessionId, commit: detail.commit, confirm: detail.confirm });
+            syncMutationTransaction(detail, result, true);
+            renderImportResults(body, result && (result.result || result));
+            toast('导入完成，共处理 ' + ((result.result || result).processed || 0) + ' 行', 'ok');
+            previewData = null; // A successful import cannot be resubmitted accidentally.
+          } catch (error) {
+            syncMutationTransaction(detail, error && error.data, false);
+            renderImportResults(body, error && error.data && (error.data.result || error.data));
+            if (error && Number(error.status) === 409) toast('导入存在冲突，请查看逐行错误', 'warn');
+            else toast('导入失败：' + (error.message || error), 'err');
+          } finally { button.disabled = false; button.textContent = '提交导入'; }
+        } },
+        { text: '关闭', className: 'btn', close: true }
+      ]
+    });
+    const file = body.querySelector('#db-pro-import-file'), preview = body.querySelector('#db-pro-import-preview'), mappingHost = body.querySelector('#db-pro-import-mapping');
+    function renderLocalPreview(rows) {
+      const shown = rows.slice(0, 21), headers = rows[0] || [];
+      preview.innerHTML = shown.length ? '<div class="db-pro-import-summary">本地预览 · ' + esc(fileName) + ' · ' + Math.max(0, rows.length - 1) + ' 行 · ' + headers.length + ' 列</div><div class="db-pro-import-table-wrap"><table class="db-pro-import-table"><thead><tr>' + headers.map(function (value) { return '<th>' + esc(value) + '</th>'; }).join('') + '</tr></thead><tbody>' + shown.slice(1).map(function (row) { return '<tr>' + headers.map(function (_, index) { return '<td>' + esc(row[index] || '') + '</td>'; }).join('') + '</tr>'; }).join('') + '</tbody></table></div>' : '<span class="text-err">文件没有可导入内容</span>';
+    }
+    function renderMapping(data) {
+      const table = data && data.table || {}, headers = table.headers || [], fields = data && data.fields || [], suggested = data && data.suggested_mapping || [];
+      const options = '<option value="">跳过此列</option>' + fields.map(function (field) { const name = typeof field === 'string' ? field : field.name; return '<option value="' + esc(name || '') + '">' + esc(name || '') + '</option>'; }).join('');
+      mappingHost.innerHTML = headers.map(function (header, index) { const item = suggested[index] || {}, target = item.target || ''; return '<div class="db-pro-import-map-row" data-import-map data-source-index="' + index + '" data-source-name="' + esc(header) + '"><strong>' + esc(header) + '</strong><select class="editor-input" data-map-target aria-label="' + esc(header) + ' 目标列">' + options + '</select><select class="editor-input" data-map-type aria-label="' + esc(header) + ' 类型"><option value="string">string</option><option value="int64">int64</option><option value="decimal">decimal</option><option value="float">float</option><option value="bool">bool</option><option value="date">date</option><option value="datetime">datetime</option><option value="json">json</option><option value="bytes">bytes</option></select><label class="db-pro-check"><input type="checkbox" data-map-nullable> 空值为 NULL</label></div>'; }).join('');
+      mappingHost.querySelectorAll('[data-import-map]').forEach(function (row, index) { const item = suggested[index] || {}, target = row.querySelector('[data-map-target]'), type = row.querySelector('[data-map-type]'), nullable = row.querySelector('[data-map-nullable]'); if (target) target.value = item.target || ''; if (type) type.value = item.type || 'string'; if (nullable) nullable.checked = !!item.nullable; });
+    }
+    function readAsBase64(picked, version) {
+      const reader = new FileReader(); reader.onload = function () { if (version !== previewVersion) return; const data = String(reader.result || ''), comma = data.indexOf(','); encoded = comma >= 0 ? data.slice(comma + 1) : data; requestPreview(version); }; reader.onerror = function () { toast('读取文件失败', 'err'); }; reader.readAsDataURL(picked);
+    }
+    function encodeTextBase64(value) {
+      const text = String(value || '');
+      if (window.TextEncoder && window.btoa) { const bytes = new TextEncoder().encode(text); let binary = ''; for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000)); return btoa(binary); }
+      return window.btoa(unescape(encodeURIComponent(text)));
+    }
+    function rowsAsCSV(rows) {
+      return rows.map(function (row) { return row.map(function (value) { const text = String(value == null ? '' : value); return /[",\r\n]/.test(text) ? '"' + text.replace(/"/g, '""') + '"' : text; }).join(','); }).join('\r\n');
+    }
+    function requestPreview(version) {
+      const schema = body.querySelector('#db-pro-import-schema').value.trim(), table = body.querySelector('#db-pro-import-table').value.trim();
+      if (!sourceId() || !table) { toast('请先选择数据源并填写目标表', 'warn'); return; }
+      if (version !== previewVersion) return;
+      const target = { sourceId: sourceId(), schema: schema, table: table };
+      preview.innerHTML = '<span class="hint">正在读取目标表字段并生成映射…</span>';
+      api('POST', '/api/database/import/preview', { source_id: sourceId(), schema: schema, table: table, format: format || 'csv', data_base64: encoded }).then(function (data) { if (version !== previewVersion) return; previewTarget = target; previewData = data.preview || data; renderMapping(previewData); if (!parsedRows.length && previewData.table && previewData.table.rows) { preview.innerHTML = '<div class="db-pro-import-summary">后端预览 · ' + esc(fileName) + ' · 共 ' + esc(previewData.total_rows || previewData.table.rows.length) + ' 行</div>'; } }).catch(function (error) { if (version !== previewVersion) return; previewData = null; mappingHost.innerHTML = ''; if (parsedRows.length) renderLocalPreview(parsedRows); toast('导入预览失败：' + (error.message || error), 'err'); });
+    }
+    file.addEventListener('change', function () {
+      const version = ++previewVersion; previewData = null; previewTarget = null; encoded = ''; parsedRows = []; mappingHost.innerHTML = '';
+      const picked = file.files && file.files[0]; if (!picked) return; fileName = picked.name;
+      if (picked.size > 8 * 1024 * 1024) { toast('文件不能超过 8 MiB', 'warn'); return; }
+      format = /\.xlsx$/i.test(fileName) ? 'xlsx' : 'csv';
+      if (format === 'csv') { const reader = new FileReader(); reader.onload = function () { if (version !== previewVersion) return; const isTSV = /\.tsv$/i.test(fileName); parsedRows = parseCSV(reader.result || '', isTSV ? '\t' : undefined); renderLocalPreview(parsedRows); if (isTSV) { encoded = encodeTextBase64(rowsAsCSV(parsedRows)); requestPreview(version); } else readAsBase64(picked, version); }; reader.readAsText(picked); }
+      else { parsedRows = []; preview.innerHTML = '<span class="hint">XLSX 将由后端解析…</span>'; readAsBase64(picked, version); }
+    });
+  }
+
+  function renderImportResults(body, result) {
+    const rows = result && (result.rows || result.results);
+    if (!Array.isArray(rows)) return;
+    let host = body.querySelector('#db-pro-import-results');
+    if (!host) { host = document.createElement('div'); host.id = 'db-pro-import-results'; host.className = 'db-pro-import-results'; body.appendChild(host); }
+    host.innerHTML = '<div class="db-pro-import-summary">影响行数：' + esc(result.rows_affected == null ? '-' : result.rows_affected) + ' · 成功处理：' + esc(result.processed == null ? rows.length : result.processed) + '</div><table class="db-pro-import-table"><thead><tr><th>行</th><th>状态</th><th>错误</th></tr></thead><tbody>' + rows.map(function (row) { return '<tr><td>' + esc(row.row == null ? row.index : row.row) + '</td><td>' + esc(row.status || '') + '</td><td>' + esc(row.error || '') + '</td></tr>'; }).join('') + '</tbody></table>';
+  }
+
+  function openHistory() {
+    loadHistory();
+    const body = document.createElement('div');
+    body.innerHTML = '<div class="db-pro-history-toolbar"><input id="db-pro-history-search" class="editor-input" type="search" placeholder="搜索 SQL、数据源、状态…" autofocus><select id="db-pro-history-status" class="editor-input"><option value="">全部状态</option><option value="success">成功</option><option value="error">失败</option><option value="running">执行中</option></select></div><div id="db-pro-history-list" class="db-pro-history-list"></div>';
+    const modal = createModal({
+      title: '查询历史', body: body,
+      actions: [
+        { text: '清空当前数据源', className: 'btn btn-danger', close: false, onClick: function () { if (!state.history.length || window.confirm('清空当前数据源的查询历史？')) { state.history = []; saveHistory(); draw(); toast('查询历史已清空', 'ok'); } } },
+        { text: '关闭', className: 'btn', close: true }
+      ]
+    });
+    const search = body.querySelector('#db-pro-history-search'), status = body.querySelector('#db-pro-history-status'), list = body.querySelector('#db-pro-history-list');
+    function draw() {
+      const needle = search.value.trim().toLowerCase(), wanted = status.value;
+      const items = state.history.filter(function (entry) { const hay = [entry.sql, entry.sourceName, entry.status, entry.error].join(' ').toLowerCase(); return (!needle || hay.indexOf(needle) >= 0) && (!wanted || entry.status === wanted); });
+      list.innerHTML = items.slice(0, 100).map(function (entry, index) { const date = entry.startedAt ? new Date(entry.startedAt).toLocaleString() : '-'; return '<article class="db-pro-history-card"><header><strong>' + esc(date) + '</strong><span>' + esc(entry.sourceName || entry.sourceId || '未绑定') + '</span><span class="db-pro-history-status ' + esc(entry.status || 'unknown') + '">' + esc(entry.status === 'success' ? '成功' : entry.status === 'error' ? '失败' : entry.status === 'running' ? '执行中' : '未知') + '</span><span>' + esc(entry.elapsedMs == null ? '-' : entry.elapsedMs + ' ms') + '</span></header><pre>' + esc(entry.sql) + '</pre><footer><button type="button" class="btn btn-xs" data-history-insert="' + index + '">插入</button><button type="button" class="btn btn-xs" data-history-link="' + index + '">新窗口链接</button><button type="button" class="btn btn-xs btn-danger" data-history-delete="' + index + '">删除</button></footer></article>'; }).join('') || '<div class="db-pro-history-empty">没有匹配的查询历史</div>';
+      list.querySelectorAll('[data-history-insert]').forEach(function (button) { button.onclick = function () { const item = items[Number(button.dataset.historyInsert)]; if (item) { setEditorValue(item.sql, true); closeModal(); } }; });
+      list.querySelectorAll('[data-history-link]').forEach(function (button) { button.onclick = function () { const item = items[Number(button.dataset.historyLink)]; if (!item) return; const url = buildDeepLink({ sourceId: item.sourceId, sql: item.sql, autoRun: true }); const copy = K.core && K.core.copyToClipboard; Promise.resolve(copy ? copy(url) : null).then(function () { toast('历史查询深链接已复制', 'ok'); }); }; });
+      list.querySelectorAll('[data-history-delete]').forEach(function (button) { button.onclick = function () { const item = items[Number(button.dataset.historyDelete)]; if (!item) return; state.history = state.history.filter(function (x) { return x.id !== item.id; }); saveHistory(); draw(); }; });
+    }
+    search.addEventListener('input', draw); status.addEventListener('change', draw); draw();
+  }
+
+  function annotateErrorMessage(root) {
+    const box = root.querySelector('#db-result-message'); if (!box || box.dataset.dbProErrorBound === '1' || box.hidden) return;
+    const location = parseErrorLocation(box.textContent); if (!location) return;
+    box.dataset.dbProErrorBound = '1';
+    const button = document.createElement('button'); button.type = 'button'; button.className = 'btn btn-xs db-pro-jump-error'; button.textContent = '跳转到第 ' + (location.line || '?') + ' 行' + (location.column ? '第 ' + location.column + ' 列' : ''); button.title = '将编辑器光标定位到数据库错误位置';
+    button.onclick = function () { if (!jumpToLocation(editor(), location)) toast('当前编辑器不可用', 'warn'); };
+    box.appendChild(button);
+  }
+  function enhanceBookmarks() {
+    document.querySelectorAll('.db-bookmark-card').forEach(function (card) {
+      if (card.dataset.dbProLinkBound === '1') return;
+      const pre = card.querySelector('pre'), name = card.querySelector('strong'); if (!pre) return;
+      card.dataset.dbProLinkBound = '1';
+      const button = createQuickButton('', '新窗口', '在新窗口打开该收藏查询', function () {
+        const bookmarkSourceId = card.dataset.sourceId || card.getAttribute('data-source-id') || '';
+        const child = openIsolatedWindow(buildDeepLink({ sourceId: bookmarkSourceId || sourceId(), sql: pre.textContent || '', autoRun: true }));
+        if (!child) toast('浏览器阻止了新窗口', 'warn');
+      });
+      (card.querySelector('.db-bookmark-card-actions') || card).appendChild(button);
+      if (name) name.title = '点击新窗口打开收藏：' + name.textContent;
+    });
+  }
+  function bindGlobalKeys() {
+    if (bindGlobalKeys.bound) return; bindGlobalKeys.bound = true;
+    document.addEventListener('click', function (event) {
+      if (String(location.hash || '').indexOf('#/database') !== 0) return;
+      const target = event.target && event.target.closest ? event.target.closest('#db-run') : null;
+      if (target) beginRunCapture(target);
+    }, true);
+    document.addEventListener('keydown', function (event) {
+      if (String(location.hash || '').indexOf('#/database') !== 0) return;
+      const e = editor(); if (!e || event.target !== e) return;
+      if (event.key === 'Escape' && state.ac) { event.preventDefault(); event.stopImmediatePropagation(); hideCompletion(); return; }
+      if (event.ctrlKey && !event.altKey && !event.metaKey && event.key.toLowerCase() === 'f') { event.preventDefault(); event.stopImmediatePropagation(); openFindReplace(false); return; }
+      if (event.ctrlKey && !event.altKey && !event.metaKey && event.key.toLowerCase() === 'h') { event.preventDefault(); event.stopImmediatePropagation(); openFindReplace(true); return; }
+      if (event.ctrlKey && !event.altKey && !event.metaKey && event.key.toLowerCase() === 's') { event.preventDefault(); event.stopImmediatePropagation(); saveSQL(false); return; }
+      if (event.ctrlKey && !event.altKey && !event.metaKey && event.key.toLowerCase() === 'o') { event.preventDefault(); event.stopImmediatePropagation(); openSQLInput(); return; }
+      if (event.ctrlKey && event.code === 'Space') { event.preventDefault(); event.stopImmediatePropagation(); maybeContextCompletion(true); return; }
+      if (!state.ac || state.ac.hidden) return;
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); event.stopImmediatePropagation(); state.acIndex = (state.acIndex + (event.key === 'ArrowDown' ? 1 : -1) + state.acItems.length) % state.acItems.length; state.ac.querySelectorAll('.db-pro-ac-item').forEach(function (item, index) { item.classList.toggle('active', index === state.acIndex); item.setAttribute('aria-selected', index === state.acIndex ? 'true' : 'false'); }); return; }
+      if (event.key === 'Enter' || event.key === 'Tab') { event.preventDefault(); event.stopImmediatePropagation(); acceptCompletion(); }
+    }, true);
+  }
+
+  function install(root) {
+    if (!root || !root.querySelector) return;
+    // Source management is rendered beside #db-workspace and can exist even
+    // on the empty-state page, so mount/sync it before requiring an editor.
+    loadSourceCatalog(); ensureSourceManager(document);
+    const editorNode = root.querySelector('#db-sql'), layout = root.querySelector('.db-sql-layout');
+    if (!editorNode && !layout) return;
+    state.root = root; ensureToolbar(root); annotateErrorMessage(root); enhanceBookmarks();
+    ensureSourceManager(root);
+    const viewer = root.querySelector('#db-object-viewer'); if (viewer && viewer.hidden === false) emit('kairo:database-object-viewer', { viewer: viewer });
+  }
+  function start() {
+    if (state.observed) return; state.observed = true; bindGlobalKeys();
+    const nav = typeof navigator !== 'undefined' ? navigator : null, connection = nav && nav.connection;
+    const lowSpec = (nav && nav.hardwareConcurrency && nav.hardwareConcurrency <= 4) || (nav && nav.deviceMemory && nav.deviceMemory <= 4) || (connection && connection.saveData);
+    if (lowSpec && document.documentElement) document.documentElement.classList.add('db-low-spec');
+    state.view = document.getElementById('view') || document.body;
+    const observer = new MutationObserver(function () {
+      if (String(location.hash || '').indexOf('#/database') !== 0) return;
+      // One animation-frame for a complete route render avoids a cascade of
+      // layout reads while database.js replaces its workspace DOM.
+      if (start.scheduled) return;
+      start.scheduled = true;
+      schedule(function () { start.scheduled = false; const root = document.getElementById('db-workspace') || state.view; install(root); });
+    });
+    observer.observe(state.view, { subtree: true, childList: true, attributes: true, attributeFilter: ['hidden', 'class'] });
+    if (String(location.hash || '').indexOf('#/database') === 0) install(document.getElementById('db-workspace') || state.view);
+  }
+
+  F.tokenizeSQL = tokenizeSQL;
+  F.highlightSQL = highlightSQL;
+  F.formatSQL = formatSQL;
+  F.splitStatements = splitStatements;
+  F.findParameters = findParameters;
+  F.getBoundParameters = function () { pruneBindings(); return typedParameters(state.bindings); };
+  F.parseErrorLocation = parseErrorLocation;
+  F.locationOffset = locationOffset;
+  F.jumpToLocation = jumpToLocation;
+  F.parseCSV = parseCSV;
+  F.buildDeepLink = buildDeepLink;
+  F.openFindReplace = openFindReplace;
+  F.openParameterDialog = openParameterDialog;
+  F.runScript = runScript;
+  F.openHistory = openHistory;
+  F.openImportWizard = openImportWizard;
+  F.saveSQL = saveSQL;
+  F.openSQL = openSQLInput;
+  F.refreshSourceCatalog = refreshSourceCatalog;
+  // The base page owns the source CRUD form, while this module owns the
+  // advanced environment/TLS/SSH metadata cache. Keep the two views in sync
+  // after a save/delete so a later edit cannot resurrect stale security flags.
+  F.syncSource = function (item) {
+    if (!item || !item.id) return;
+    state.sourceCatalog[item.id] = item;
+    state.sourceCatalogLoaded = true;
+    enhanceSourceSelect();
+  };
+  F.removeSource = function (sourceIdValue) {
+    if (!sourceIdValue) return;
+    delete state.sourceCatalog[String(sourceIdValue)];
+    enhanceSourceSelect();
+  };
+  // Kept public for the optional object designer module.  The implementation
+  // remains here so every database feature shares one keyboard/focus-safe
+  // modal and there is no second visual shell to maintain.
+  F.createModal = createModal;
+  F.closeModal = closeModal;
+  F.setEditorValue = setEditorValue;
+  F.literal = literal;
+  F.setAdapter = function (name, adapter) { if (Object.prototype.hasOwnProperty.call(state.adapters, name)) state.adapters[name] = typeof adapter === 'function' ? adapter : null; };
+  F.getAdapter = function (name) { return state.adapters[name] || null; };
+  F.getPendingGridMutations = function () { return pendingGridMutations().slice(); };
+  F.clearPendingGridMutations = clearGridMutations;
+  F.resolveGridTarget = resolveGridTarget;
+  F.start = start;
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start); else start();
+})();

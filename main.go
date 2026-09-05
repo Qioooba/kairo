@@ -76,6 +76,7 @@ func main() {
 	resetConfig := flag.Bool("reset-config", false, "备份当前配置并恢复官方配置（保留全部用户数据及其目录）")
 	restoreUpgrade := flag.String("restore-upgrade", "", "恢复指定的升级快照，恢复前会再次备份当前状态")
 	configPath := flag.String("config", "", "显式指定唯一配置文件路径（开发、测试或定制部署）")
+	webDir := flag.String("web-dir", "", "开发模式：显式指定前端静态资源目录；默认使用内嵌资源")
 	portable := flag.Bool("portable", false, "便携模式：配置和运行数据放在程序目录")
 	flag.Parse()
 	if *resetConfig && strings.TrimSpace(*restoreUpgrade) != "" {
@@ -293,8 +294,9 @@ func main() {
 		}
 	}()
 
-	// 6. 嵌入的 web 静态资源
-	webSubFS, err := fs.Sub(webFS, "web")
+	// Production always serves matching embedded assets. Development overrides
+	// are explicit so launching from an unrelated working directory is safe.
+	webSubFS, err := resolveWebRoot(*webDir)
 	if err != nil {
 		tray.FatalDialogf("加载 web 资源失败: %v", err)
 	}
@@ -489,11 +491,11 @@ func main() {
 
 	// 8. 构造 HTTP 服务
 	srv := httpserver.New(cfgMgr, auditLog, webSubFS, tails, shells, httpserver.Dependencies{
-		Reminders: rManager,
-		Notes:     nManager,
-		Tasks:     tManager,
+		Reminders:  rManager,
+		Notes:      nManager,
+		Tasks:      tManager,
 		TaskNotify: taskNotifier,
-		Pet:       petEngine,
+		Pet:        petEngine,
 	})
 	defer func() {
 		if err := srv.CloseDatabase(); err != nil {
@@ -630,6 +632,25 @@ func main() {
 		},
 	})
 	log.Println("服务已停止，再见。")
+}
+
+func resolveWebRoot(directory string) (fs.FS, error) {
+	if strings.TrimSpace(directory) == "" {
+		return fs.Sub(webFS, "web")
+	}
+	abs, err := filepath.Abs(directory)
+	if err != nil {
+		return nil, err
+	}
+	info, err := os.Stat(filepath.Join(abs, "index.html"))
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("静态资源目录缺少有效 index.html")
+	}
+	log.Printf("[web] 使用开发静态资源目录: %s", abs)
+	return os.DirFS(abs), nil
 }
 
 // exeDirectory 返回可执行文件所在目录（跨平台）
@@ -782,21 +803,21 @@ func chooseBrowser(url string) (args []string, kind browserpref.Kind, path strin
 	if err != nil {
 		log.Printf("读取浏览器偏好失败（回落探测）: %v", err)
 	}
-	if s != nil && s.Kind == browserpref.KindChrome && s.Path != "" {
+	if s != nil && s.Kind != browserpref.KindDefault && s.Path != "" {
 		if _, statErr := os.Stat(s.Path); statErr == nil {
-			return []string{s.Path, url}, browserpref.KindChrome, s.Path, true
+			return []string{s.Path, url}, s.Kind, s.Path, true
 		}
 		// path 失效 → 留一行 log，下次启动会重新探测。
-		log.Printf("浏览器偏好中记录的 Chrome 路径已失效: %s，回落到探测", s.Path)
+		log.Printf("浏览器偏好中记录的 %s 路径已失效: %s，回落到探测", s.Kind, s.Path)
 	}
 
 	// 2) 探测链。
 	if runtime.GOOS == "windows" {
-		if chromePath, ok := sysutil.FindChrome(); ok {
-			log.Printf("探测到 Chrome: %s", chromePath)
-			return []string{chromePath, url}, browserpref.KindChrome, chromePath, false
+		if browser, ok := sysutil.FindModernBrowser(); ok {
+			log.Printf("探测到现代浏览器 (%s): %s", browser.Name, browser.Path)
+			return []string{browser.Path, url}, browser.Kind, browser.Path, false
 		}
-		// 没 Chrome → 走系统默认浏览器（rundll32 走 shell32 间接层，
+		// 没找到现代浏览器 → 走系统默认浏览器（rundll32 走 shell32 间接层，
 		// 由 Windows 根据"设置 → 默认应用 → Web 浏览器"决定开哪个）。
 		return []string{"rundll32", "url.dll,FileProtocolHandler", url}, browserpref.KindDefault, "", false
 	}

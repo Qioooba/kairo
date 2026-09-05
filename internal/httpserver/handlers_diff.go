@@ -3,12 +3,41 @@ package httpserver
 import (
 	"encoding/json"
 	"errors"
-	"io"
+	"fmt"
 	"net/http"
 	"strings"
 
 	"kairo/internal/diff"
 )
+
+// compareReadLimit is the per-text payload cap shared by file reads and the
+// in-memory diff endpoint. JSON escaping can expand one decoded byte to six
+// bytes (for example, NUL as "\\u0000"). Keep the envelope bound derived from
+// the two text fields so the documented 8 MiB-per-side contract also holds for
+// worst-case escaped JSON; decoded fields are still checked against
+// compareReadLimit below.
+const (
+	compareJSONEscapeMaxBytes = 6
+	compareJSONEnvelopeBytes  = 256 * 1024
+	compareJSONBodyLimit      = 2*compareReadLimit*compareJSONEscapeMaxBytes + compareJSONEnvelopeBytes
+)
+
+func decodeCompareJSON(w http.ResponseWriter, r *http.Request, limit int64, dst any) bool {
+	if limit <= 0 {
+		limit = compareJSONBodyLimit
+	}
+	err := json.NewDecoder(http.MaxBytesReader(w, r.Body, limit)).Decode(dst)
+	if err == nil {
+		return true
+	}
+	var tooLarge *http.MaxBytesError
+	if errors.As(err, &tooLarge) {
+		writeErr(w, http.StatusRequestEntityTooLarge, fmt.Errorf("请求体超过允许大小（上限 %d 字节）", limit))
+	} else {
+		writeErr(w, http.StatusBadRequest, err)
+	}
+	return false
+}
 
 // compareReq 是 /api/diff/compare 的请求体。
 //
@@ -42,8 +71,11 @@ func (s *Server) handleDiffCompare(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req compareReq
-	if err := json.NewDecoder(io.LimitReader(r.Body, 4*1024*1024)).Decode(&req); err != nil {
-		writeErr(w, 400, err)
+	if !decodeCompareJSON(w, r, compareJSONBodyLimit, &req) {
+		return
+	}
+	if int64(len([]byte(req.Left))) > compareReadLimit || int64(len([]byte(req.Right))) > compareReadLimit {
+		writeErr(w, http.StatusRequestEntityTooLarge, fmt.Errorf("单侧文本超过 %d 字节上限", compareReadLimit))
 		return
 	}
 

@@ -1,29 +1,17 @@
 //go:build windows
 
-// Package sysutil / browser_locate_windows.go — Windows 平台的 Chrome 探测。
+// Package sysutil / browser_locate_windows.go — Windows 平台现代浏览器探测。
 //
-// 探测优先级：
+// 支持探测：
+//  1. Google Chrome (chrome.exe)
+//  2. 360 极速浏览器 / 360 极速浏览器 X (360chrome.exe)
+//  3. Microsoft Edge (msedge.exe)
+//  4. 360 安全浏览器 (360se.exe)
 //
-//  1. 常见安装路径（os.Stat，最快，< 1ms，命中 95%+ 用户）：
-//     - C:\Program Files\Google\Chrome\Application\chrome.exe   (64-bit)
-//     - C:\Program Files (x86)\Google\Chrome\Application\chrome.exe  (32-bit on x64)
-//     - %LOCALAPPDATA%\Google\Chrome\Application\chrome.exe     (per-user)
-//
-//  2. 注册表兜底（< 5ms，处理"装在非标准路径"的边角用户）：
-//     - HKLM\SOFTWARE\Google\Chrome\Application\path           (64-bit chrome on 64-bit / 32-bit on 32-bit)
-//     - HKLM\SOFTWARE\WOW6432Node\Google\Chrome\Application\path  (32-bit chrome on 64-bit)
-//     - HKLM\SOFTWARE\Google\Chrome\Application\(default)      (有些版本 key 不带 path value)
-//
-// 注册表 API 走 syscall 直绑 advapi32.dll，跟 autostart_windows.go 同套路 ——
-// 项目刻意不依赖 golang.org/x/sys/windows/registry（vendor 里没有），保持 Go 1.20 兼容。
-//
-// Win7 / Win10 / Win11 兼容性：
-//   - Chrome 自 110 起官方放弃 Win7/8/8.1；但 Win7 用户装的旧版 Chrome
-//     安装路径跟新版本完全一致（同一 %ProgramFiles% 路径），探测不动
-//     旁路即可。Chrome 110+ 不再装 Win7，但已装 Win7 的用户的 Chrome 路径
-//     跟探测列表里的路径形态完全一致。
-//   - RegQueryValueExW 从 Win7 起行为一致；HKLM vs WOW6432Node 区分
-//     是从 Win7 x64 edition 起就有的，不是新平台的特性。
+// 探测策略：
+//   - 优先查各浏览器的常见安装路径（os.Stat，< 1ms，命中 95%+ 用户）
+//   - 次查注册表 App Paths 与软件安装路径（< 5ms，处理自定义安装目录）
+//   - 注册表 API 直绑 advapi32.dll，不引入额外三方依赖，保持 Win7/10/11 兼容性。
 package sysutil
 
 import (
@@ -32,69 +20,173 @@ import (
 	"strings"
 	"syscall"
 	"unsafe"
+
+	"kairo/internal/browserpref"
 )
 
-// 常见 Chrome 安装路径（在哪些 PATH 下找 chrome.exe）。
-//
-// 顺序：先 64-bit system → 32-bit on x64 → user-local。
-// 命中率递减，但 64-bit system 装 Win10/11 + Chrome 默认下载器都是走这里。
+// BrowserCandidate 描述探测到的现代浏览器信息。
+type BrowserCandidate struct {
+	Kind browserpref.Kind
+	Name string
+	Path string
+}
+
+// candidateEnvDirs 返回常见环境变量对应的系统应用根目录列表。
+func candidateEnvDirs() []string {
+	var dirs []string
+	for _, env := range []string{"ProgramFiles", "ProgramW6432", "ProgramFiles(x86)", "LOCALAPPDATA", "APPDATA"} {
+		if d := os.Getenv(env); d != "" {
+			dirs = append(dirs, d)
+		}
+	}
+	return dirs
+}
+
+// 常见 Chrome 安装路径。
 func chromeCandidatePaths() []string {
 	var paths []string
-	// 64-bit Chrome on 64-bit Windows / 32-bit Chrome on 32-bit Windows.
 	for _, env := range []string{"ProgramFiles", "ProgramW6432"} {
 		if dir := os.Getenv(env); dir != "" {
 			paths = append(paths, filepath.Join(dir, "Google", "Chrome", "Application", "chrome.exe"))
 		}
 	}
-	// 32-bit Chrome on 64-bit Windows（Program Files (x86)）。
 	if dir := os.Getenv("ProgramFiles(x86)"); dir != "" {
 		paths = append(paths, filepath.Join(dir, "Google", "Chrome", "Application", "chrome.exe"))
 	}
-	// Per-user / portable style install。
 	if local := os.Getenv("LOCALAPPDATA"); local != "" {
 		paths = append(paths, filepath.Join(local, "Google", "Chrome", "Application", "chrome.exe"))
 	}
 	return paths
 }
 
-// FindChrome 探测系统上是否安装了 Chrome。
-//
-// 返回 (path, true) 表示找到 chrome.exe 绝对路径；
-// 返回 ("", false) 表示没找到（os.Stat + 注册表查询都失败）。
-//
-// 实现：先走常见路径快速命中（< 1ms），失败再读注册表"Application\path"
-// 字段（< 5ms）。任何一步失败都安静地进入下一步 —— 不抛错，
-// 让调用方决定要不要回落到系统默认浏览器。
-func FindChrome() (string, bool) {
-	// 1. 常见路径探测（最高命中率）。
-	for _, p := range chromeCandidatePaths() {
-		if _, err := os.Stat(p); err == nil {
+// 常见 360 极速浏览器 / 360 极速浏览器 X 安装路径。
+func chrome360CandidatePaths() []string {
+	var paths []string
+	for _, dir := range candidateEnvDirs() {
+		// 360 极速浏览器常规版本
+		paths = append(paths, filepath.Join(dir, "360", "360Chrome", "Chrome", "Application", "360chrome.exe"))
+		paths = append(paths, filepath.Join(dir, "360Chrome", "Chrome", "Application", "360chrome.exe"))
+		// 360 极速浏览器 X（64 位 Chromium 新架构版）
+		paths = append(paths, filepath.Join(dir, "360", "360ChromeX", "Chrome", "Application", "360chrome.exe"))
+		paths = append(paths, filepath.Join(dir, "360ChromeX", "Chrome", "Application", "360chrome.exe"))
+	}
+	return paths
+}
+
+// 常见 Microsoft Edge (Chromium 内核) 安装路径。
+func edgeCandidatePaths() []string {
+	var paths []string
+	for _, dir := range candidateEnvDirs() {
+		paths = append(paths, filepath.Join(dir, "Microsoft", "Edge", "Application", "msedge.exe"))
+	}
+	return paths
+}
+
+// 常见 360 安全浏览器安装路径。
+func se360CandidatePaths() []string {
+	var paths []string
+	for _, dir := range candidateEnvDirs() {
+		paths = append(paths, filepath.Join(dir, "360", "360se6", "Application", "360se.exe"))
+		paths = append(paths, filepath.Join(dir, "360se6", "Application", "360se.exe"))
+	}
+	return paths
+}
+
+type regQuery struct {
+	root      uintptr
+	subkey    string
+	valueName string
+}
+
+func chromeRegistryKeys() []regQuery {
+	return []regQuery{
+		{hkeyLocalMachine, `SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe`, ""},
+		{hkeyCurrentUser, `SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe`, ""},
+		{hkeyLocalMachine, `SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe`, ""},
+		{hkeyLocalMachine, `SOFTWARE\Google\Chrome\Application`, "path"},
+		{hkeyLocalMachine, `SOFTWARE\WOW6432Node\Google\Chrome\Application`, "path"},
+	}
+}
+
+func chrome360RegistryKeys() []regQuery {
+	return []regQuery{
+		{hkeyLocalMachine, `SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\360chrome.exe`, ""},
+		{hkeyCurrentUser, `SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\360chrome.exe`, ""},
+		{hkeyLocalMachine, `SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths\360chrome.exe`, ""},
+		{hkeyLocalMachine, `SOFTWARE\360\360Chrome`, "path"},
+		{hkeyLocalMachine, `SOFTWARE\WOW6432Node\360\360Chrome`, "path"},
+	}
+}
+
+func edgeRegistryKeys() []regQuery {
+	return []regQuery{
+		{hkeyLocalMachine, `SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\msedge.exe`, ""},
+		{hkeyCurrentUser, `SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\msedge.exe`, ""},
+		{hkeyLocalMachine, `SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths\msedge.exe`, ""},
+	}
+}
+
+func se360RegistryKeys() []regQuery {
+	return []regQuery{
+		{hkeyLocalMachine, `SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\360se.exe`, ""},
+		{hkeyCurrentUser, `SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\360se.exe`, ""},
+		{hkeyLocalMachine, `SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths\360se.exe`, ""},
+	}
+}
+
+var disableRegistryForTest = false
+
+// findPathWithCandidates 优先检测指定文件路径，若未命中再遍历注册表项。
+func findPathWithCandidates(filePaths []string, regQueries []regQuery) (string, bool) {
+	for _, p := range filePaths {
+		if p != "" {
+			if _, err := os.Stat(p); err == nil {
+				return cleanPath(p), true
+			}
+		}
+	}
+	if disableRegistryForTest {
+		return "", false
+	}
+	for _, q := range regQueries {
+		if p := readPathFromRegistry(q.root, q.subkey, q.valueName); p != "" {
 			return cleanPath(p), true
 		}
 	}
-
-	// 2. 注册表兜底：先查 64-bit 视图，再查 WOW6432Node (32-bit on 64-bit)。
-	for _, subkey := range []string{
-		`SOFTWARE\Google\Chrome\Application`,
-		`SOFTWARE\WOW6432Node\Google\Chrome\Application`,
-	} {
-		if path := readChromePathFromRegistry(subkey); path != "" {
-			return cleanPath(path), true
-		}
-	}
-
 	return "", false
 }
 
-// cleanPath 把 chrome.exe 路径里的相对部分、奇怪分隔符归一。
-//
-// registry 偶尔写出 `C:\...\` 之类的带尾分隔符的 path，stat 路径不存在
-// 的概率极小但不为 0；这里 trim 一下，保证返回的 path 可直接被 exec.Command 用。
+// FindModernBrowser 探测系统上安装的现代化 Chromium / WebKit 浏览器。
+// 探测优先级：Chrome → 360 极速浏览器 → Microsoft Edge → 360 安全浏览器。
+func FindModernBrowser() (BrowserCandidate, bool) {
+	if p, ok := findPathWithCandidates(chromeCandidatePaths(), chromeRegistryKeys()); ok {
+		return BrowserCandidate{Kind: browserpref.KindChrome, Name: "Google Chrome", Path: p}, true
+	}
+	if p, ok := findPathWithCandidates(chrome360CandidatePaths(), chrome360RegistryKeys()); ok {
+		return BrowserCandidate{Kind: browserpref.Kind360Chrome, Name: "360极速浏览器", Path: p}, true
+	}
+	if p, ok := findPathWithCandidates(edgeCandidatePaths(), edgeRegistryKeys()); ok {
+		return BrowserCandidate{Kind: browserpref.KindEdge, Name: "Microsoft Edge", Path: p}, true
+	}
+	if p, ok := findPathWithCandidates(se360CandidatePaths(), se360RegistryKeys()); ok {
+		return BrowserCandidate{Kind: browserpref.Kind360SE, Name: "360安全浏览器", Path: p}, true
+	}
+	return BrowserCandidate{}, false
+}
+
+// FindChrome 探测系统上是否安装了 Chrome（保留此函数向后兼容现有调用与单测）。
+func FindChrome() (string, bool) {
+	return findPathWithCandidates(chromeCandidatePaths(), chromeRegistryKeys())
+}
+
+// cleanPath 规范化浏览器可执行文件路径（去除多余引号与尾斜杠）。
 func cleanPath(p string) string {
+	p = strings.TrimSpace(p)
+	p = strings.Trim(p, `"`)
 	return strings.TrimRight(p, `\/`)
 }
 
-// ---------- 注册表读 path ----------
+// ---------- 注册表查询底层实现 ----------
 
 const (
 	hkeyLocalMachine uintptr = 0x80000002
@@ -103,32 +195,20 @@ const (
 )
 
 var (
-	// 重新 bind，避免和 autostart_windows.go 的同名变量冲突。
-	// （同一进程内同一个 advapi32.dll 的 NewProc 多次调用是 idempotent 的，
-	//  但起新名字让 linter 看清是另外一组绑定。）
 	procRegOpenKeyExWLocate    = modAdvapi32.NewProc("RegOpenKeyExW")
 	procRegQueryValueExWLocate = modAdvapi32.NewProc("RegQueryValueExW")
 	procRegCloseKeyLocate      = modAdvapi32.NewProc("RegCloseKey")
 )
 
-// readChromePathFromRegistry 从 HKLM\<subkey> 读 "path" value。
-//
-// 步骤：
-//  1. RegOpenKeyExW(HKLM, subkey, KEY_QUERY_VALUE) → hKey
-//  2. RegQueryValueExW(hKey, "path", NULL, lpcbData) 两遍：
-//     - 第一遍 lpcbData=0 → 拿到真实 cbData
-//     - 第二遍拿真实数据
-//  3. RegCloseKey
-//
-// 返回："path" 不存在 / 任何 API 错误 → ""（不是 error，因为这步是探测链的一环）
-func readChromePathFromRegistry(subkey string) string {
+// readPathFromRegistry 从注册表读取指定键路径字符串。
+func readPathFromRegistry(root uintptr, subkey, valueName string) string {
 	keyPathPtr, err := syscall.UTF16PtrFromString(subkey)
 	if err != nil {
 		return ""
 	}
 	var hKey uintptr
 	ret, _, _ := procRegOpenKeyExWLocate.Call(
-		hkeyLocalMachine,
+		root,
 		uintptr(unsafe.Pointer(keyPathPtr)),
 		0,
 		uintptr(keyQueryValue),
@@ -139,12 +219,15 @@ func readChromePathFromRegistry(subkey string) string {
 	}
 	defer procRegCloseKeyLocate.Call(hKey)
 
-	valueNamePtr, err := syscall.UTF16PtrFromString("path")
-	if err != nil {
-		return ""
+	var valueNamePtr *uint16
+	if valueName != "" {
+		p, err := syscall.UTF16PtrFromString(valueName)
+		if err != nil {
+			return ""
+		}
+		valueNamePtr = p
 	}
 
-	// 第一次：拿 cbData。
 	var dataType uint32
 	var dataSize uint32
 	ret, _, _ = procRegQueryValueExWLocate.Call(
@@ -159,7 +242,6 @@ func readChromePathFromRegistry(subkey string) string {
 		return ""
 	}
 
-	// 第二次：拿真实数据（dataSize 是字节数，含 NUL 终止符）。
 	buf := make([]uint16, dataSize/2)
 	ret, _, _ = procRegQueryValueExWLocate.Call(
 		hKey,
@@ -173,13 +255,8 @@ func readChromePathFromRegistry(subkey string) string {
 		return ""
 	}
 
-	// 砍掉尾 NUL，转 UTF-8。
 	raw := syscall.UTF16ToString(buf)
-	if raw == "" {
-		return ""
-	}
-
-	// 验证：必须是已存在的 .exe 文件；不然可能是注册表残留（卸载过 Chrome）。
+	raw = cleanPath(raw)
 	if !strings.HasSuffix(strings.ToLower(raw), ".exe") {
 		return ""
 	}

@@ -1037,10 +1037,10 @@
 
     const casesWrap = el('div', { class: 'http2-cases-wrap' });
 
-    const btnExportAll = el('button', { class: 'btn', text: '导出', onclick: exportCases });
-    const btnImportBtn = el('button', { class: 'btn', text: '导入', onclick: importCases });
-    const btnImportCurl = el('button', { class: 'btn', text: '导入 cURL', title: '粘贴 curl 命令，解析并回填请求', onclick: importCurl });
-    const btnNewCaseBtn = el('button', { class: 'btn', text: '+ 新用例', onclick: () => {
+    const btnExportAll = el('button', { class: 'btn btn-sm http2-btn-sub', text: '导出', title: '导出全部用例为 JSON', onclick: exportCases });
+    const btnImportBtn = el('button', { class: 'btn btn-sm http2-btn-sub', text: '导入', title: '从 JSON 文件导入用例', onclick: importCases });
+    const btnImportCurl = el('button', { class: 'btn btn-sm http2-btn-sub', text: '导入 cURL', title: '粘贴 curl 命令，解析并回填请求', onclick: importCurl });
+    const btnNewCaseBtn = el('button', { class: 'btn btn-primary http2-btn-new', text: '+ 新用例', title: '清空当前请求，新建用例', onclick: () => {
       // 清空 + 聚焦 URL 输入
       urlInp.value = '';
       methodSel.value = 'POST';
@@ -1061,7 +1061,8 @@
       updateSaveMeta();
       urlInp.focus();
     }});
-    const sidebarTools = el('div', { class: 'http2-sidebar-tools' }, [btnImportCurl, btnExportAll, btnImportBtn, btnNewCaseBtn]);
+    const sidebarToolsSub = el('div', { class: 'http2-sidebar-tools-sub' }, [btnImportCurl, btnImportBtn, btnExportAll]);
+    const sidebarTools = el('div', { class: 'http2-sidebar-tools' }, [btnNewCaseBtn, sidebarToolsSub]);
 
     const sidebar = el('div', { class: 'http2-sidebar' }, [
       el('h3', { text: '已保存用例' }),

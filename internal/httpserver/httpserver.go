@@ -36,6 +36,7 @@ import (
 	"kairo/internal/schedtask"
 	"kairo/internal/sshshell"
 	"kairo/internal/tailmgr"
+	"kairo/internal/waspack"
 	"kairo/internal/webservice"
 )
 
@@ -136,24 +137,25 @@ func requireAdmin(w http.ResponseWriter, r *http.Request) bool {
 
 // Server 持有配置（线程安全 Manager）、审计日志、嵌入式静态资源、tail 会话池、下载任务池、SSH shell 会话池
 type Server struct {
-	cfg          *config.Manager
-	audit        *audit.Logger
-	webRoot      fs.FS
-	tails        *tailmgr.Manager
-	downloads    *dlmanager.Manager
-	shells       *sshshell.Manager
-	uploadStates *uploadStateMap // v1.1：SSH/SFTP 上传会话（独立于 downloads）
-	compares     *compareJobManager
-	database     *dbconsole.Manager
-	databaseErr  error
-	preferences  *preferences.Store
+	cfg            *config.Manager
+	audit          *audit.Logger
+	webRoot        fs.FS
+	tails          *tailmgr.Manager
+	downloads      *dlmanager.Manager
+	shells         *sshshell.Manager
+	uploadStates   *uploadStateMap // v1.1：SSH/SFTP 上传会话（独立于 downloads）
+	compares       *compareJobManager
+	database       *dbconsole.Manager
+	databaseErr    error
+	preferences    *preferences.Store
+	waspackHistory *waspack.HistoryStore
 
 	// Optional application services are supplied together through Dependencies.
 	reminders *reminder.Manager
 	notes     *note.Manager
 
 	// 定时任务：可空（nil 时 /api/tasks 返回 503）。SetTasks 在 main.go 启动 schedtask.Manager 后注入。
-	tasks *schedtask.Manager
+	tasks      *schedtask.Manager
 	taskNotify *notify.Manager
 
 	// v0.16 宠物彩蛋：可空（nil 时 /api/pet/* 返回 404）。SetPet 在 main.go 构造 pet.Engine 后注入。
@@ -172,11 +174,11 @@ type Server struct {
 // Dependencies declares optional application services at construction time.
 // It replaces order-dependent SetX calls after the server has been built.
 type Dependencies struct {
-	Reminders *reminder.Manager
-	Notes     *note.Manager
-	Tasks     *schedtask.Manager
+	Reminders  *reminder.Manager
+	Notes      *note.Manager
+	Tasks      *schedtask.Manager
 	TaskNotify *notify.Manager
-	Pet       *pet.Engine
+	Pet        *pet.Engine
 }
 
 // New 构造一个 Server
@@ -198,16 +200,17 @@ func New(cfg *config.Manager, a *audit.Logger, webRoot fs.FS, tails *tailmgr.Man
 		cfg: cfg, audit: a, webRoot: webRoot,
 		tails: tails, downloads: dlmanager.New(), shells: shells,
 		ws: wsStore, wsMocks: wsMocks,
-		uploadStates: newUploadStateMap(),
-		compares:     newCompareJobManager(),
-		database:     database,
-		databaseErr:  databaseErr,
-		preferences:  preferences.NewStore(filepath.Join(cfg.Get().DataDir(), "preferences.json")),
-		reminders:    deps.Reminders,
-		notes:        deps.Notes,
-		tasks:        deps.Tasks,
-		taskNotify:   deps.TaskNotify,
-		pet:          deps.Pet,
+		uploadStates:   newUploadStateMap(),
+		compares:       newCompareJobManager(),
+		database:       database,
+		databaseErr:    databaseErr,
+		preferences:    preferences.NewStore(filepath.Join(cfg.Get().DataDir(), "preferences.json")),
+		waspackHistory: waspack.NewHistoryStore(filepath.Join(cfg.Get().DataDir(), "waspack-history.json")),
+		reminders:      deps.Reminders,
+		notes:          deps.Notes,
+		tasks:          deps.Tasks,
+		taskNotify:     deps.TaskNotify,
+		pet:            deps.Pet,
 	}
 }
 
@@ -296,6 +299,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	w.Header().Set("X-Frame-Options", "DENY")
+	// 浏览器内核适配：360/搜狗/QQ 等双核浏览器强制极速模式，禁用 IE 兼容视图
+	w.Header().Set("X-UA-Compatible", "IE=edge,chrome=1")
+	w.Header().Set("Renderer", "webkit")
 
 	path := r.URL.Path
 	if strings.HasPrefix(path, "/api/") && !allowLocalOrigin(r) {
@@ -510,6 +516,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleWASPackExtract(w, r)
 	case path == "/api/waspack/package":
 		s.handleWASPackPackage(w, r)
+	case path == "/api/waspack/zip":
+		s.handleWASPackZip(w, r)
+	case path == "/api/waspack/history" || strings.HasPrefix(path, "/api/waspack/history/"):
+		s.handleWASPackHistory(w, r)
 	case path == "/api/waspack/open":
 		s.handleWASPackOpen(w, r)
 	case path == "/api/compare/folder-scan":
@@ -532,7 +542,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleCompareSync(w, r)
 	case path == "/api/compare/sync/start":
 		s.handleCompareSyncStart(w, r)
-		case path == "/api/compare/scan":
+	case path == "/api/compare/scan":
 		s.handleCompareScanStart(w, r)
 	case path == "/api/compare/scan-level":
 		s.handleCompareScanLevel(w, r)
@@ -730,10 +740,13 @@ func (s *Server) serveStatic(w http.ResponseWriter, r *http.Request, name string
 		http.NotFound(w, r)
 		return
 	}
-	// 设置 content-type
+	// 设置 content-type 与双核浏览器内核控制头
 	switch {
 	case strings.HasSuffix(name, ".html"):
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("X-UA-Compatible", "IE=edge,chrome=1")
+		w.Header().Set("Renderer", "webkit")
+		w.Header().Set("Force-Rendering", "webkit")
 	case strings.HasSuffix(name, ".css"):
 		w.Header().Set("Content-Type", "text/css; charset=utf-8")
 	case strings.HasSuffix(name, ".js"):

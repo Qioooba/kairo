@@ -11,6 +11,20 @@
 // 调用方在非 Windows 上直接走 open/xdg-open（即"系统默认浏览器"），逻辑在 main.go。
 package sysutil
 
+import "kairo/internal/browserpref"
+
+// BrowserCandidate 描述探测到的现代浏览器信息。
+type BrowserCandidate struct {
+	Kind browserpref.Kind
+	Name string
+	Path string
+}
+
+// FindModernBrowser 在非 Windows 平台是 no-op —— 永远返回 (BrowserCandidate{}, false)。
+func FindModernBrowser() (BrowserCandidate, bool) {
+	return BrowserCandidate{}, false
+}
+
 // FindChrome 在非 Windows 平台是 no-op —— 永远返回 ("", false)。
 //
 // 调用方：main.go openBrowser() 的探测链。

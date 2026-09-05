@@ -8,6 +8,14 @@ import (
 	"time"
 )
 
+const (
+	// A compare job owns remote connections and potentially many goroutines.
+	// Bound it even when the browser disappears so those resources are not
+	// retained forever.
+	compareJobTimeout = 15 * time.Minute
+	compareJobTTL     = 30 * time.Minute
+)
+
 type compareJob struct {
 	mu         sync.RWMutex
 	ID         string             `json:"id"`
@@ -50,6 +58,12 @@ func (j *compareJob) progress(phase string, current, total int, message string) 
 	j.Phase, j.Current, j.Total, j.Message, j.Updated = phase, current, total, message, time.Now()
 }
 
+func (j *compareJob) release() {
+	if j.cancel != nil {
+		j.cancel()
+	}
+}
+
 type compareJobManager struct {
 	mu   sync.RWMutex
 	jobs map[string]*compareJob
@@ -63,14 +77,17 @@ func (m *compareJobManager) create(parent context.Context) (*compareJob, context
 	raw := make([]byte, 12)
 	_, _ = rand.Read(raw)
 	id := hex.EncodeToString(raw)
-	ctx, cancel := context.WithCancel(parent)
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parent, compareJobTimeout)
 	now := time.Now()
 	job := &compareJob{ID: id, Status: "running", Phase: "starting", Started: now, Updated: now, cancel: cancel}
 	m.mu.Lock()
 	m.jobs[id] = job
 	// Opportunistic cleanup keeps completed job results bounded without another ticker.
 	for key, old := range m.jobs {
-		if key != id && old.view().Updated.Before(now.Add(-30*time.Minute)) {
+		if key != id && old.view().Updated.Before(now.Add(-compareJobTTL)) {
 			delete(m.jobs, key)
 		}
 	}

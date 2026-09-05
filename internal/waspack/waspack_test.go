@@ -2,6 +2,7 @@ package waspack
 
 import (
 	"archive/tar"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -134,6 +135,34 @@ func TestResolveIntelliJWebRoot(t *testing.T) {
 	} {
 		if !rels[want] {
 			t.Errorf("缺少 %s, got %+v", want, rels)
+		}
+	}
+}
+
+func TestResolveInnerClassOnlyAddsOuterJavaAndSiblings(t *testing.T) {
+	root := ideaTree(t)
+	listed, err := ParseManifest("./WEB-INF/classes/cn/com/jscb/www/loan/LoanMeasure/MiniFixPriceRequestInfo$1.class\n", root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pv, err := Resolve(root, listed, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pv.Missing) != 0 {
+		t.Fatalf("missing: %+v", pv.Missing)
+	}
+	got := map[string]bool{}
+	for _, f := range pv.Files {
+		got[f.Rel] = true
+	}
+	for _, want := range []string{
+		"./src/cn/com/jscb/www/loan/LoanMeasure/MiniFixPriceRequestInfo.java",
+		"./WEB-INF/classes/cn/com/jscb/www/loan/LoanMeasure/MiniFixPriceRequestInfo.class",
+		"./WEB-INF/classes/cn/com/jscb/www/loan/LoanMeasure/MiniFixPriceRequestInfo$1.class",
+	} {
+		if !got[want] {
+			t.Errorf("missing paired entry %s: %+v", want, got)
 		}
 	}
 }
@@ -401,21 +430,364 @@ func TestIsSafeLocalPathRejectsSensitivePaths(t *testing.T) {
 	}
 }
 
-func TestOutputPolicyReplaceRequiresMarker(t *testing.T) {
-	// A non-empty directory WITHOUT Kairo marker must be rejected even with confirmReplace=true
+func TestOutputPolicyReplaceRequiresConfirmation(t *testing.T) {
+	// 第三项为强制清空：无论是否为 Kairo 目录，只要二次确认都应清空。
 	dir := t.TempDir()
 	writeTree(t, dir, map[string]string{"user_file.txt": "do not delete"})
-	_, _, err := prepareOutputDirWithPolicy(dir, OutputPolicyReplace, true)
-	if err == nil || !strings.Contains(err.Error(), "未包含 Kairo 产物标记") {
-		t.Fatalf("expected rejection when replacing non-Kairo directory, got: %v", err)
+	abs, _, err := prepareOutputDirWithPolicy(dir, OutputPolicyReplace, true)
+	if err != nil {
+		t.Fatalf("expected force-clear success without marker, got: %v", err)
+	}
+	if ents, _ := os.ReadDir(abs); len(ents) != 0 {
+		t.Fatalf("强制清空后目录应为空，剩余: %+v", ents)
 	}
 
-	// If directory HAS Kairo marker, replace with confirm=true is allowed
-	if err := writeOutputMarker(dir, "testpkg", []string{"user_file.txt"}); err != nil {
+	// 未确认时仍应拒绝
+	dir2 := t.TempDir()
+	writeTree(t, dir2, map[string]string{"user_file.txt": "do not delete"})
+	if _, _, err := prepareOutputDirWithPolicy(dir2, OutputPolicyReplace, false); err == nil {
+		t.Fatalf("未确认时应拒绝覆盖")
+	}
+
+	// 确认后应允许，不依赖输出目录里的内部标记文件。
+	if _, _, err = prepareOutputDirWithPolicy(dir2, OutputPolicyReplace, true); err != nil {
+		t.Fatalf("expected success after confirmation, got: %v", err)
+	}
+}
+
+func TestBuildRejectsProjectOverlapAndSymlinkParent(t *testing.T) {
+	project := ideaTree(t)
+	for _, output := range []string{project, filepath.Dir(project), filepath.Join(project, "out")} {
+		_, err := Build(Request{ProjectDir: project, OutputDir: output, PackageName: "TT-overlap", Manifest: "./WEB-INF/web.xml\n"})
+		if err == nil {
+			t.Errorf("output %q should not overlap project", output)
+		}
+	}
+	// A symlink/junction parent must be compared after canonicalisation. Some
+	// Windows environments disallow symlink creation; skip only that setup.
+	linkRoot := filepath.Join(t.TempDir(), "project-link")
+	if err := os.Symlink(project, linkRoot); err == nil {
+		_, err = Build(Request{ProjectDir: project, OutputDir: filepath.Join(linkRoot, "out"), PackageName: "TT-link", Manifest: "./WEB-INF/web.xml\n"})
+		if err == nil {
+			t.Fatal("output under symlinked project should be rejected")
+		}
+	}
+}
+
+func TestLargeBatchScriptsUseTarListFile(t *testing.T) {
+	files := make([]ResolvedFile, 0, 5000)
+	for i := 0; i < 5000; i++ {
+		files = append(files, ResolvedFile{Rel: fmt.Sprintf("./module/file-%04d-%s.xml", i, strings.Repeat("x", 18))})
+	}
+	if got := renderBatchExecuteScript("DDDlarge", files); !strings.Contains(got, "-T list.txt") || len(got) > 256 {
+		t.Fatalf("large batch script should avoid argv expansion: %q", got)
+	}
+	if got := renderBatchBackupScript("DDDlarge", files); !strings.Contains(got, "-T list.txt") || len(got) > 256 {
+		t.Fatalf("large batch backup should avoid argv expansion: %q", got)
+	}
+	if got, err := renderBatchBackupScriptAtRoot("DDDlarge", files, "/batch/credit"); err != nil || !strings.Contains(got, "SCRIPT_DIR=") || !strings.Contains(got, `-T "$SCRIPT_DIR/list.txt"`) || !strings.Contains(got, `"$SCRIPT_DIR/BakDDDlarge.tar"`) {
+		t.Fatalf("large batch backup should use deployment root/list: %q, %v", got, err)
+	}
+	if got, err := renderBatchBackupScriptAtRoot("DDDsafe", []ResolvedFile{{Rel: "./scripts/safe name's.sh"}}, "/batch/deploy root"); err != nil || !strings.Contains(got, `tar -C '/batch/deploy root'`) || strings.Contains(got, "$(touch") {
+		t.Fatalf("backup script root/path quoting unsafe: %q, %v", got, err)
+	}
+}
+
+func TestOutputPolicyCleanKnownArtifactsWithoutMarker(t *testing.T) {
+	dir := t.TempDir()
+	writeTree(t, dir, map[string]string{
+		"list.txt":               "old list",
+		"chmod.txt":              "old chmod",
+		"Demo.tar":               "old tar",
+		"Demo.sh":                "old execute",
+		"BakDemo.sh":             "old backup",
+		"Demo.zip":               "old zip",
+		".kairo-waspack.json":    "legacy marker",
+		"keep-user-file.txt":     "must stay",
+		"other-package-data.tar": "must stay",
+	})
+	writeTree(t, filepath.Join(dir, ExtractedWARDirName), map[string]string{"WEB-INF/a.class": "old"})
+
+	abs, _, err := prepareOutputDirWithPolicy(dir, OutputPolicyCleanOwned, false, "Demo")
+	if err != nil {
+		t.Fatalf("clean known artifacts without marker: %v", err)
+	}
+	for _, name := range []string{"list.txt", "chmod.txt", "Demo.tar", "Demo.sh", "BakDemo.sh", "Demo.zip", ".kairo-waspack.json", ExtractedWARDirName} {
+		if _, err := os.Stat(filepath.Join(abs, name)); !os.IsNotExist(err) {
+			t.Errorf("known artifact %q should be removed, got: %v", name, err)
+		}
+	}
+	for _, name := range []string{"keep-user-file.txt", "other-package-data.tar"} {
+		if _, err := os.Stat(filepath.Join(abs, name)); err != nil {
+			t.Errorf("unrelated file %q should be preserved: %v", name, err)
+		}
+	}
+}
+
+func TestOutputPolicyCleanRejectsUnownedKnownNames(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ListFileName), []byte("user list"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_, _, err = prepareOutputDirWithPolicy(dir, OutputPolicyReplace, true)
+	if _, _, err := prepareOutputDirWithPolicy(dir, OutputPolicyCleanOwned, false, "Demo"); err == nil {
+		t.Fatal("clean policy must not delete an unowned list.txt")
+	}
+}
+
+func TestScopedOwnershipReconcilesPackageSwitchAndPreservesUserFiles(t *testing.T) {
+	project := ideaTree(t)
+	out := filepath.Join(t.TempDir(), "out")
+	metadata := filepath.Join(t.TempDir(), "metadata")
+	if err := os.MkdirAll(out, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	base := Request{ProjectDir: project, OutputDir: out, Manifest: "./WEB-INF/web.xml\n", AutoPair: true, MetadataDir: metadata}
+	first := base
+	first.PackageName = "Alpha"
+	if _, err := Build(first); err != nil {
+		t.Fatalf("build Alpha: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(out, "keep.txt"), []byte("user"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	second := base
+	second.PackageName = "Beta"
+	second.OutputPolicy = OutputPolicyCleanOwned
+	if _, err := Build(second); err != nil {
+		t.Fatalf("clean build Beta: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(out, "Alpha.tar")); !os.IsNotExist(err) {
+		t.Fatalf("old Alpha artifact should be removed, err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(out, "Beta.tar")); err != nil {
+		t.Fatalf("new Beta artifact missing: %v", err)
+	}
+	if body, err := os.ReadFile(filepath.Join(out, "keep.txt")); err != nil || string(body) != "user" {
+		t.Fatalf("unrelated user file changed: %q %v", body, err)
+	}
+	// A subsequent replacement drops Alpha from ownership. A later user file
+	// with that name must therefore not be deleted by another clean build.
+	third := base
+	third.PackageName = "Gamma"
+	third.OutputPolicy = OutputPolicyReplace
+	third.ConfirmReplace = true
+	if _, err := Build(third); err != nil {
+		t.Fatalf("replace build Gamma: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(out, "Alpha.tar"), []byte("user alpha"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fourth := base
+	fourth.PackageName = "Delta"
+	fourth.OutputPolicy = OutputPolicyCleanOwned
+	if _, err := Build(fourth); err != nil {
+		t.Fatalf("clean build Delta: %v", err)
+	}
+	if body, err := os.ReadFile(filepath.Join(out, "Alpha.tar")); err != nil || string(body) != "user alpha" {
+		t.Fatalf("unowned recreated Alpha artifact changed: %q %v", body, err)
+	}
+}
+
+func TestCleanOwnedRejectsNewPackageNameCollision(t *testing.T) {
+	project := ideaTree(t)
+	out := filepath.Join(t.TempDir(), "out")
+	req := Request{ProjectDir: project, OutputDir: out, Manifest: "./WEB-INF/web.xml\n", PackageName: "Alpha", MetadataDir: t.TempDir()}
+	if _, err := Build(req); err != nil {
+		t.Fatal(err)
+	}
+	name := filepath.Join(out, "Beta.tar")
+	if err := os.WriteFile(name, []byte("user archive"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	req.PackageName = "Beta"
+	req.OutputPolicy = OutputPolicyCleanOwned
+	if _, err := Build(req); err == nil {
+		t.Fatal("new package overwrote an unowned filename")
+	}
+	if data, err := os.ReadFile(name); err != nil || string(data) != "user archive" {
+		t.Fatalf("user file changed: %q %v", data, err)
+	}
+	if _, err := os.Stat(filepath.Join(out, "Alpha.tar")); err != nil {
+		t.Fatal("failed validation removed previous package", err)
+	}
+}
+
+func TestScopedOwnershipPackageKeepsExtractedWAR(t *testing.T) {
+	project := ideaTree(t)
+	out := filepath.Join(t.TempDir(), "out")
+	metadata := filepath.Join(t.TempDir(), "metadata")
+	req := Request{ProjectDir: project, OutputDir: out, PackageName: "Demo", Manifest: "./WEB-INF/web.xml\n", MetadataDir: metadata}
+	extracted, err := Extract(req)
 	if err != nil {
-		t.Fatalf("expected success when replacing Kairo directory with confirm, got: %v", err)
+		t.Fatal(err)
+	}
+	if extracted.StageToken == "" {
+		t.Fatal("expected stage token")
+	}
+	packageReq := req
+	packageReq.OutputPolicy = OutputPolicyCleanOwned
+	packageReq.StageToken = extracted.StageToken
+	result, err := PackageExtracted(packageReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.WarDir == "" {
+		t.Fatal("package result should retain WAR path")
+	}
+	if _, err := os.Stat(filepath.Join(out, ExtractedWARDirName, "WEB-INF", "web.xml")); err != nil {
+		t.Fatalf("clean named package must preserve WAR: %v", err)
+	}
+}
+
+func TestScopedOwnershipCorruptMetadataFailsClosed(t *testing.T) {
+	project := ideaTree(t)
+	out := filepath.Join(t.TempDir(), "out")
+	metadata := filepath.Join(t.TempDir(), "metadata")
+	if err := os.MkdirAll(out, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(metadata, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(metadata, "waspack-ownership.json"), []byte("corrupt"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(out, "user.txt"), []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Build(Request{ProjectDir: project, OutputDir: out, PackageName: "Demo", Manifest: "./WEB-INF/web.xml\n", MetadataDir: metadata, OutputPolicy: OutputPolicyCleanOwned})
+	if err == nil || !strings.Contains(err.Error(), "归属") {
+		t.Fatalf("corrupt ownership should fail closed: %v", err)
+	}
+	if body, readErr := os.ReadFile(filepath.Join(out, "user.txt")); readErr != nil || string(body) != "keep" {
+		t.Fatalf("user output changed after corrupt metadata: %q %v", body, readErr)
+	}
+}
+
+func TestExtractPublicationFailureRestoresPreviousOutput(t *testing.T) {
+	project := ideaTree(t)
+	out := filepath.Join(t.TempDir(), "out")
+	writeTree(t, out, map[string]string{"war/old.txt": "previous", "keep.txt": "user"})
+	originalRename := waspackRename
+	waspackRename = func(src, dst string) error {
+		if strings.Contains(src, ".kairo-waspack-stage-") {
+			return fmt.Errorf("injected publish failure")
+		}
+		return originalRename(src, dst)
+	}
+	defer func() { waspackRename = originalRename }()
+	_, err := Extract(Request{ProjectDir: project, OutputDir: out, PackageName: "TTrestore", Manifest: "./WEB-INF/web.xml\n", OutputPolicy: OutputPolicyReplace, ConfirmReplace: true})
+	if err == nil {
+		t.Fatal("expected injected publication failure")
+	}
+	if body, readErr := os.ReadFile(filepath.Join(out, "war", "old.txt")); readErr != nil || string(body) != "previous" {
+		t.Fatalf("old war lost: %q %v", body, readErr)
+	}
+	if body, readErr := os.ReadFile(filepath.Join(out, "keep.txt")); readErr != nil || string(body) != "user" {
+		t.Fatalf("user file lost: %q %v", body, readErr)
+	}
+}
+
+func TestZipCleanRefusesUnownedExistingZip(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "out")
+	writeTree(t, out, map[string]string{"war/file.txt": "content", "Demo.zip": "user-owned"})
+	_, err := BuildZip(Request{OutputDir: out, PackageName: "Demo", OutputPolicy: OutputPolicyCleanOwned})
+	if err == nil {
+		t.Fatal("clean ZIP should reject an unowned existing archive")
+	}
+	if body, readErr := os.ReadFile(filepath.Join(out, "Demo.zip")); readErr != nil || string(body) != "user-owned" {
+		t.Fatalf("unowned zip changed: %q %v", body, readErr)
+	}
+}
+
+func TestZipPublicationFailureRestoresPreviousZip(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "out")
+	writeTree(t, out, map[string]string{"war/file.txt": "content", "Demo.zip": "previous-zip"})
+	originalRename := waspackRename
+	waspackRename = func(src, dst string) error {
+		if strings.Contains(src, ".kairo-waspack-stage-") {
+			return fmt.Errorf("injected zip publish failure")
+		}
+		return originalRename(src, dst)
+	}
+	defer func() { waspackRename = originalRename }()
+	_, err := BuildZip(Request{OutputDir: out, PackageName: "Demo", OutputPolicy: OutputPolicyReplace, ConfirmReplace: true})
+	if err == nil {
+		t.Fatal("expected injected ZIP publication failure")
+	}
+	if body, readErr := os.ReadFile(filepath.Join(out, "Demo.zip")); readErr != nil || string(body) != "previous-zip" {
+		t.Fatalf("old zip lost: %q %v", body, readErr)
+	}
+}
+
+func TestBuildPublicationFailureRestoresPreviousArtifacts(t *testing.T) {
+	project := ideaTree(t)
+	out := filepath.Join(t.TempDir(), "out")
+	pkg := "TTrestore"
+	writeTree(t, out, map[string]string{
+		"list.txt":          "previous-list",
+		pkg + ".tar":        "previous-tar",
+		pkg + ".sh":         "previous-exec",
+		"Bak" + pkg + ".sh": "previous-backup",
+	})
+	originalRename := waspackRename
+	waspackRename = func(src, dst string) error {
+		if strings.Contains(src, ".kairo-waspack-stage-") {
+			return fmt.Errorf("injected build publish failure")
+		}
+		return originalRename(src, dst)
+	}
+	defer func() { waspackRename = originalRename }()
+	_, err := Build(Request{ProjectDir: project, OutputDir: out, PackageName: pkg, Manifest: "./WEB-INF/web.xml\n", OutputPolicy: OutputPolicyReplace, ConfirmReplace: true})
+	if err == nil {
+		t.Fatal("expected injected build publication failure")
+	}
+	for name, want := range map[string]string{"list.txt": "previous-list", pkg + ".tar": "previous-tar", pkg + ".sh": "previous-exec", "Bak" + pkg + ".sh": "previous-backup"} {
+		body, readErr := os.ReadFile(filepath.Join(out, name))
+		if readErr != nil || string(body) != want {
+			t.Errorf("old artifact %s lost: %q %v", name, body, readErr)
+		}
+	}
+}
+
+func TestPublicationRollbackFailureRetainsRecoveryBackup(t *testing.T) {
+	project := ideaTree(t)
+	out := filepath.Join(t.TempDir(), "out")
+	writeTree(t, out, map[string]string{"war/old.txt": "previous"})
+	originalRename := waspackRename
+	waspackRename = func(src, dst string) error {
+		if strings.Contains(src, ".kairo-waspack-stage-") || strings.Contains(src, ".kairo-waspack-old-") {
+			return fmt.Errorf("injected rename failure")
+		}
+		return originalRename(src, dst)
+	}
+	defer func() { waspackRename = originalRename }()
+	_, err := Extract(Request{ProjectDir: project, OutputDir: out, PackageName: "TTrestore", Manifest: "./WEB-INF/web.xml\n", OutputPolicy: OutputPolicyReplace, ConfirmReplace: true})
+	if err == nil || !strings.Contains(err.Error(), "备份保留于") {
+		t.Fatalf("expected recoverable rollback error, got %v", err)
+	}
+}
+
+func TestSafeTarZipRelRejectsTraversal(t *testing.T) {
+	for _, name := range []string{"../secret.txt", "./../../secret.txt", "/absolute.txt", `..\secret.txt`} {
+		if _, err := safeTarZipRel(name); err == nil {
+			t.Errorf("safeTarZipRel(%q) should reject traversal/absolute path", name)
+		}
+	}
+	if got, err := safeTarZipRel("./WEB-INF/classes/A.class"); err != nil || got != "WEB-INF/classes/A.class" {
+		t.Fatalf("safe tar path mismatch: got=%q err=%v", got, err)
+	}
+}
+
+func TestRenderChmodScriptRejectsUnsafeDeploymentPath(t *testing.T) {
+	files := []ResolvedFile{{Rel: "./scripts/run.sh"}}
+	for _, base := range []string{"batch/credit", "/batch/../credit", "/batch//credit", "/batch/credit\n$(touch PWN)", `C:\batch\credit`, "/"} {
+		if _, err := renderChmodScriptSafe(base, files, "755"); err == nil {
+			t.Errorf("unsafe base %q should be rejected", base)
+		}
+	}
+	content, err := renderChmodScriptSafe("/batch/credit", []ResolvedFile{{Rel: "./scripts/safe name.sh"}}, "755")
+	if err != nil || !strings.Contains(content, "chmod 755 '/batch/credit/scripts/safe name.sh'") {
+		t.Fatalf("safe quoting failed: %q, %v", content, err)
 	}
 }

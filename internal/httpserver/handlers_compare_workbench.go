@@ -3,7 +3,6 @@ package httpserver
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -96,10 +95,11 @@ type compareSyncFailure struct {
 	Error   string `json:"error"`
 }
 type compareSyncResult struct {
-	Copied   int                  `json:"copied"`
-	Failed   int                  `json:"failed"`
-	Bytes    int64                `json:"bytes"`
-	Failures []compareSyncFailure `json:"failures,omitempty"`
+	Copied    int                  `json:"copied"`
+	Failed    int                  `json:"failed"`
+	Bytes     int64                `json:"bytes"`
+	Truncated bool                 `json:"truncated,omitempty"`
+	Failures  []compareSyncFailure `json:"failures,omitempty"`
 }
 type compareScanReq struct {
 	Left                 compareSourceSpec `json:"left"`
@@ -112,12 +112,13 @@ type compareScanReq struct {
 	IgnoreDirs           []string          `json:"ignore_dirs,omitempty"`
 }
 type compareScanItem struct {
-	RelPath string           `json:"rel_path"`
-	Status  string           `json:"status"`
-	Left    *comparefs.Entry `json:"left,omitempty"`
-	Right   *comparefs.Entry `json:"right,omitempty"`
-	Hashed  bool             `json:"hashed,omitempty"`
-	Pending bool             `json:"pending,omitempty"`
+	RelPath    string           `json:"rel_path"`
+	Status     string           `json:"status"`
+	Left       *comparefs.Entry `json:"left,omitempty"`
+	Right      *comparefs.Entry `json:"right,omitempty"`
+	Hashed     bool             `json:"hashed,omitempty"`
+	Pending    bool             `json:"pending,omitempty"`
+	Incomplete bool             `json:"incomplete,omitempty"`
 }
 type compareScanSummary struct {
 	Same       int `json:"same"`
@@ -128,12 +129,14 @@ type compareScanSummary struct {
 	LeftOnly   int `json:"left_only"`
 	RightOnly  int `json:"right_only"`
 	Errors     int `json:"errors"`
+	Pending    int `json:"pending"`
 }
 type compareScanResult struct {
-	Items     []compareScanItem  `json:"items"`
-	Summary   compareScanSummary `json:"summary"`
-	Truncated bool               `json:"truncated"`
-	ElapsedMs int64              `json:"elapsed_ms"`
+	Items      []compareScanItem  `json:"items"`
+	Summary    compareScanSummary `json:"summary"`
+	Truncated  bool               `json:"truncated"`
+	Incomplete bool               `json:"incomplete,omitempty"`
+	ElapsedMs  int64              `json:"elapsed_ms"`
 }
 
 func (s *Server) handleCompareConnections(w http.ResponseWriter, r *http.Request) {
@@ -163,7 +166,7 @@ func (s *Server) openCompareFS(ctx context.Context, spec compareSourceSpec) (com
 		if !s.cur().App.ComparePathAllowed(spec.Path) {
 			return nil, errors.New("路径不在 compare_allowed_roots 白名单内")
 		}
-		return comparefs.NewLocal(), nil
+		return comparefs.NewLocalWithAllowedRoots(s.cur().App.CompareAllowedRoots), nil
 	case "sftp":
 		cur := s.cur()
 		_, srv, ok := cur.FindServer(spec.System, spec.Server)
@@ -205,8 +208,7 @@ func (s *Server) handleCompareList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req compareListReq
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64*1024)).Decode(&req); err != nil {
-		writeErr(w, 400, err)
+	if !decodeCompareJSON(w, r, 64*1024, &req) {
 		return
 	}
 	fsys, err := s.openCompareFS(r.Context(), req.Source)
@@ -215,7 +217,7 @@ func (s *Server) handleCompareList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer fsys.Close()
-	entries, err := fsys.List(r.Context(), req.Source.Path)
+	entries, truncated, err := listCompareEntries(r.Context(), fsys, req.Source.Path, compareMaxFiles)
 	if err != nil {
 		writeErrSanitized(w, 400, err)
 		return
@@ -226,7 +228,7 @@ func (s *Server) handleCompareList(w http.ResponseWriter, r *http.Request) {
 		}
 		return strings.ToLower(entries[i].Name) < strings.ToLower(entries[j].Name)
 	})
-	writeJSON(w, 200, map[string]any{"entries": entries, "source_name": fsys.DisplayName()})
+	writeJSON(w, 200, map[string]any{"entries": entries, "source_name": fsys.DisplayName(), "truncated": truncated})
 }
 
 func (s *Server) handleCompareRead(w http.ResponseWriter, r *http.Request) {
@@ -235,12 +237,15 @@ func (s *Server) handleCompareRead(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req compareReadReq
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64*1024)).Decode(&req); err != nil {
-		writeErr(w, 400, err)
+	if !decodeCompareJSON(w, r, 64*1024, &req) {
 		return
 	}
 	limit := req.MaxBytes
-	if limit <= 0 || limit > compareReadLimit {
+	if limit < 0 || limit > compareReadLimit {
+		writeErr(w, http.StatusRequestEntityTooLarge, fmt.Errorf("读取上限必须在 0 到 %d 字节之间", compareReadLimit))
+		return
+	}
+	if limit == 0 {
 		limit = compareReadLimit
 	}
 	fsys, err := s.openCompareFS(r.Context(), req.Source)
@@ -250,8 +255,16 @@ func (s *Server) handleCompareRead(w http.ResponseWriter, r *http.Request) {
 	}
 	defer fsys.Close()
 	entry, err := fsys.Stat(r.Context(), req.Source.Path)
-	if err != nil || entry.IsDir {
-		writeErr(w, 400, errors.New("目标不是可读取文件"))
+	if err != nil {
+		if comparefs.IsNotFound(err) {
+			writeErr(w, http.StatusNotFound, errors.New("目标文件不存在"))
+		} else {
+			writeErrSanitized(w, http.StatusBadGateway, err)
+		}
+		return
+	}
+	if entry.IsDir {
+		writeErr(w, http.StatusBadRequest, errors.New("目标不是可读取文件"))
 		return
 	}
 	reader, err := fsys.Open(r.Context(), req.Source.Path)
@@ -287,8 +300,7 @@ func (s *Server) handleCompareWrite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req compareWriteReq
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, compareReadLimit+128*1024)).Decode(&req); err != nil {
-		writeErr(w, 400, err)
+	if !decodeCompareJSON(w, r, compareJSONBodyLimit, &req) {
 		return
 	}
 	fsys, err := s.openCompareFS(r.Context(), req.Target)
@@ -302,9 +314,17 @@ func (s *Server) handleCompareWrite(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, fmt.Errorf("文本编码失败: %w", err))
 		return
 	}
+	if int64(len(encoded)) > compareReadLimit {
+		writeErr(w, http.StatusRequestEntityTooLarge, fmt.Errorf("写入文本超过 %d 字节上限", compareReadLimit))
+		return
+	}
 	if err := fsys.WriteAtomic(r.Context(), req.Target.Path, bytes.NewReader(encoded), comparefs.WriteOptions{Expected: req.Expected, Backup: req.Backup}); err != nil {
 		if errors.Is(err, comparefs.ErrConflict) {
 			writeErr(w, 409, errors.New("目标文件已变化，请重新比较后再保存"))
+			return
+		}
+		if errors.Is(err, comparefs.ErrTypeConflict) {
+			writeErr(w, 409, errors.New("目标是目录，不能保存为文件"))
 			return
 		}
 		writeErrSanitized(w, 400, err)
@@ -323,8 +343,7 @@ func (s *Server) handleCompareCopy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req compareCopyReq
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 128*1024)).Decode(&req); err != nil {
-		writeErr(w, 400, err)
+	if !decodeCompareJSON(w, r, 128*1024, &req) {
 		return
 	}
 	source, err := s.openCompareFS(r.Context(), req.Source)
@@ -340,27 +359,42 @@ func (s *Server) handleCompareCopy(w http.ResponseWriter, r *http.Request) {
 	}
 	defer target.Close()
 	entry, err := source.Stat(r.Context(), req.Source.Path)
-	if err != nil || entry.IsDir {
+	if err != nil {
+		if comparefs.IsNotFound(err) {
+			writeErr(w, http.StatusNotFound, errors.New("源文件不存在"))
+			return
+		}
+		writeErrSanitized(w, http.StatusBadGateway, err)
+		return
+	}
+	if entry.IsDir {
 		writeErr(w, 400, errors.New("源必须是文件"))
 		return
 	}
-	reader, err := source.Open(r.Context(), req.Source.Path)
+	expected, expectedMissing, err := snapshotCompareTarget(r.Context(), target, req.Target.Path)
 	if err != nil {
-		writeErrSanitized(w, 400, err)
+		if errors.Is(err, comparefs.ErrTypeConflict) {
+			writeErr(w, http.StatusConflict, errors.New("目标是目录，不能覆盖为文件"))
+			return
+		}
+		writeErrSanitized(w, http.StatusBadGateway, err)
 		return
 	}
-	defer reader.Close()
-	targetDir := filepath.Dir(req.Target.Path)
-	if req.Target.Kind != "local" && req.Target.Kind != "" {
-		targetDir = path.Dir(req.Target.Path)
+	if req.Expected != nil {
+		expected = req.Expected
+		expectedMissing = false
 	}
-	if err := target.MkdirAll(r.Context(), target.Clean(targetDir), 0o755); err != nil {
-		writeErr(w, 400, err)
-		return
-	}
-	if err := target.WriteAtomic(r.Context(), req.Target.Path, reader, comparefs.WriteOptions{Expected: req.Expected, Mode: entry.Mode, Backup: req.Backup, ModTime: entry.ModTime}); err != nil {
+	if err := copyCompareEntry(r.Context(), target, source, req.Source.Path, req.Target.Path, entry, expected, expectedMissing, req.Backup); err != nil {
 		if errors.Is(err, comparefs.ErrConflict) {
 			writeErr(w, 409, errors.New("目标文件已变化，请重新扫描后再复制"))
+			return
+		}
+		if errors.Is(err, comparefs.ErrSourceConflict) {
+			writeErr(w, 409, errors.New("源文件已变化，请重新扫描后再复制"))
+			return
+		}
+		if errors.Is(err, comparefs.ErrTypeConflict) {
+			writeErr(w, 409, errors.New("目标是目录，不能覆盖为文件"))
 			return
 		}
 		writeErrSanitized(w, 400, err)
@@ -379,20 +413,21 @@ func (s *Server) handleCompareSync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req compareSyncReq
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2*1024*1024)).Decode(&req); err != nil {
-		writeErr(w, 400, err)
+	if !decodeCompareJSON(w, r, 2*1024*1024, &req) {
 		return
 	}
 	if err := validateCompareSyncReq(req); err != nil {
 		writeErr(w, 400, err)
 		return
 	}
-	result, err := s.performCompareSync(r.Context(), req, nil)
+	ctx, cancel := context.WithTimeout(r.Context(), compareJobTimeout)
+	defer cancel()
+	result, err := s.performCompareSync(ctx, req, nil)
 	if err != nil {
 		writeErrSanitized(w, 400, err)
 		return
 	}
-	writeJSON(w, 200, map[string]any{"ok": result.Failed == 0, "copied": result.Copied, "failed": result.Failed, "bytes": result.Bytes, "failures": result.Failures})
+	writeJSON(w, 200, map[string]any{"ok": result.Failed == 0 && !result.Truncated, "copied": result.Copied, "failed": result.Failed, "bytes": result.Bytes, "truncated": result.Truncated, "failures": result.Failures})
 }
 
 func (s *Server) handleCompareSyncStart(w http.ResponseWriter, r *http.Request) {
@@ -404,8 +439,7 @@ func (s *Server) handleCompareSyncStart(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var req compareSyncReq
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2*1024*1024)).Decode(&req); err != nil {
-		writeErr(w, 400, err)
+	if !decodeCompareJSON(w, r, 2*1024*1024, &req) {
 		return
 	}
 	if err := validateCompareSyncReq(req); err != nil {
@@ -423,6 +457,9 @@ func validateCompareSyncReq(req compareSyncReq) error {
 	}
 	if req.Direction != "right" && req.Direction != "left" {
 		return errors.New("同步方向必须是 left 或 right")
+	}
+	if strings.TrimSpace(req.Left.Path) == "" || strings.TrimSpace(req.Right.Path) == "" {
+		return errors.New("同步两侧路径不能为空")
 	}
 	return nil
 }
@@ -444,16 +481,22 @@ func (s *Server) performCompareSync(ctx context.Context, req compareSyncReq, pro
 	defer target.Close()
 
 	result := &compareSyncResult{Failures: make([]compareSyncFailure, 0)}
+	type syncPlanItem struct {
+		relPath         string
+		sourcePath      string
+		targetPath      string
+		entry           comparefs.Entry
+		expected        *comparefs.Version
+		expectedMissing bool
+	}
+	plans := make([]syncPlanItem, 0, len(req.Items))
 	syncedDirs := make([]string, 0)
-	for index, item := range req.Items {
+	for _, item := range req.Items {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		if progress != nil {
-			progress(index, len(req.Items), "正在同步 "+item.RelPath)
-		}
-		rel := strings.TrimPrefix(path.Clean("/"+strings.ReplaceAll(item.RelPath, "\\", "/")), "/")
-		if rel == "" || rel == "." || strings.HasPrefix(rel, "../") {
+		rel, relErr := cleanCompareRel(item.RelPath)
+		if relErr != nil || rel == "" {
 			result.Failures = append(result.Failures, compareSyncFailure{RelPath: item.RelPath, Error: "非法相对路径"})
 			continue
 		}
@@ -471,14 +514,23 @@ func (s *Server) performCompareSync(ctx context.Context, req compareSyncReq, pro
 		targetPath := target.Join(targetSpec.Path, rel)
 		entry, statErr := source.Stat(ctx, sourcePath)
 		if statErr != nil {
-			result.Failures = append(result.Failures, compareSyncFailure{RelPath: item.RelPath, Error: "源文件不存在或不是文件"})
+			result.Failures = append(result.Failures, compareSyncFailure{RelPath: item.RelPath, Error: compareSyncErrorMessage(statErr, "源路径不存在或不可访问")})
 			continue
 		}
 		if entry.IsDir {
+			if err := ensureCompareTargetDir(ctx, target, targetPath); err != nil {
+				result.Failures = append(result.Failures, compareSyncFailure{RelPath: item.RelPath, Error: compareSyncErrorMessage(err, "目标目录不可用")})
+				continue
+			}
 			syncedDirs = append(syncedDirs, rel)
-			files, _, walkErr := walkCompareFS(ctx, source, sourcePath, compareScanReq{}, nil)
+			files, truncated, _, walkErr := walkCompareFSWithMeta(ctx, source, sourcePath, compareScanReq{}, nil)
 			if walkErr != nil {
-				result.Failures = append(result.Failures, compareSyncFailure{RelPath: item.RelPath, Error: "展开目录失败"})
+				result.Failures = append(result.Failures, compareSyncFailure{RelPath: item.RelPath, Error: compareSyncErrorMessage(walkErr, "展开目录失败")})
+				continue
+			}
+			if truncated {
+				result.Truncated = true
+				result.Failures = append(result.Failures, compareSyncFailure{RelPath: item.RelPath, Error: fmt.Sprintf("目录条目超过 %d 项，已停止同步以避免部分覆盖", compareMaxFiles)})
 				continue
 			}
 			childRels := make([]string, 0, len(files))
@@ -491,47 +543,116 @@ func (s *Server) performCompareSync(ctx context.Context, req compareSyncReq, pro
 			sort.Strings(childRels)
 			for _, childRel := range childRels {
 				file := files[childRel]
-				childSrc := file.Path
-				childDst := target.Join(targetPath, childRel)
-				if copyErr := copyCompareEntry(ctx, target, source, childSrc, childDst, file, nil, req.Backup); copyErr != nil {
-					if errors.Is(copyErr, context.Canceled) {
-						return nil, copyErr
-					}
-					message := copyErr.Error()
-					if errors.Is(copyErr, comparefs.ErrConflict) {
-						message = "目标已变化，请重新扫描"
-					}
-					result.Failures = append(result.Failures, compareSyncFailure{RelPath: rel + "/" + childRel, Error: message})
+				expected, expectedMissing, snapshotErr := snapshotCompareTarget(ctx, target, target.Join(targetPath, childRel))
+				if snapshotErr != nil {
+					result.Failures = append(result.Failures, compareSyncFailure{RelPath: rel + "/" + childRel, Error: compareSyncErrorMessage(snapshotErr, "目标状态不可用")})
 					continue
 				}
-				result.Copied++
-				result.Bytes += file.Size
+				plans = append(plans, syncPlanItem{
+					relPath: rel + "/" + childRel, sourcePath: file.Path,
+					targetPath: target.Join(targetPath, childRel), entry: file,
+					expected: expected, expectedMissing: expectedMissing,
+				})
 			}
 			continue
 		}
-		if copyErr := copyCompareEntry(ctx, target, source, sourcePath, targetPath, entry, item.Expected, req.Backup); copyErr != nil {
+		expected, expectedMissing, snapshotErr := snapshotCompareTarget(ctx, target, targetPath)
+		if snapshotErr != nil {
+			result.Failures = append(result.Failures, compareSyncFailure{RelPath: item.RelPath, Error: compareSyncErrorMessage(snapshotErr, "目标状态不可用")})
+			continue
+		}
+		// A client-provided expected version still wins for an existing target;
+		// for an absent target, retain ExpectedMissing to protect the create race.
+		if item.Expected != nil {
+			expected = item.Expected
+			expectedMissing = false
+		}
+		plans = append(plans, syncPlanItem{relPath: rel, sourcePath: sourcePath, targetPath: targetPath, entry: entry, expected: expected, expectedMissing: expectedMissing})
+	}
+	// A truncated directory is never partially applied.  The caller can rerun
+	// after narrowing the selection or raising the scan cap.
+	if result.Truncated {
+		result.Failed = len(result.Failures)
+		return result, nil
+	}
+	for index, plan := range plans {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if progress != nil {
+			progress(index, len(plans), "正在同步 "+plan.relPath)
+		}
+		if copyErr := copyCompareEntry(ctx, target, source, plan.sourcePath, plan.targetPath, plan.entry, plan.expected, plan.expectedMissing, req.Backup); copyErr != nil {
 			if errors.Is(copyErr, context.Canceled) {
 				return nil, copyErr
 			}
-			message := "复制失败"
-			if errors.Is(copyErr, comparefs.ErrConflict) {
-				message = "目标已变化，请重新扫描"
-			}
-			result.Failures = append(result.Failures, compareSyncFailure{RelPath: item.RelPath, Error: message})
+			result.Failures = append(result.Failures, compareSyncFailure{RelPath: plan.relPath, Error: compareSyncErrorMessage(copyErr, "复制失败")})
 			continue
 		}
 		result.Copied++
-		result.Bytes += entry.Size
+		result.Bytes += plan.entry.Size
 	}
 	result.Failed = len(result.Failures)
 	if progress != nil {
-		progress(len(req.Items), len(req.Items), "同步完成")
+		progress(len(plans), len(plans), "同步完成")
 	}
 	s.audit.Write("compare.sync", "direction", req.Direction, "copied", result.Copied, "failed", result.Failed, "bytes", result.Bytes)
 	return result, nil
 }
 
-func copyCompareEntry(ctx context.Context, target, source comparefs.FS, sourcePath, targetPath string, entry comparefs.Entry, expected *comparefs.Version, backup bool) error {
+func ensureCompareTargetDir(ctx context.Context, target comparefs.FS, targetPath string) error {
+	entry, err := target.Stat(ctx, targetPath)
+	if err == nil {
+		if !entry.IsDir {
+			return comparefs.ErrTypeConflict
+		}
+		return nil
+	}
+	if comparefs.IsNotFound(err) {
+		return nil
+	}
+	return err
+}
+
+func snapshotCompareTarget(ctx context.Context, target comparefs.FS, targetPath string) (*comparefs.Version, bool, error) {
+	entry, err := target.Stat(ctx, targetPath)
+	if err == nil {
+		if entry.IsDir {
+			return nil, false, comparefs.ErrTypeConflict
+		}
+		version := entry.Version()
+		return &version, false, nil
+	}
+	if comparefs.IsNotFound(err) {
+		return nil, true, nil
+	}
+	return nil, false, err
+}
+
+func copyCompareEntry(ctx context.Context, target, source comparefs.FS, sourcePath, targetPath string, entry comparefs.Entry, expected *comparefs.Version, expectedMissing bool, backup bool) error {
+	currentSource, err := source.Stat(ctx, sourcePath)
+	if err != nil {
+		return err
+	}
+	if currentSource.IsDir || !comparefs.SameVersion(currentSource, entry.Version()) {
+		return comparefs.ErrSourceConflict
+	}
+	currentTarget, targetErr := target.Stat(ctx, targetPath)
+	if targetErr == nil {
+		if currentTarget.IsDir {
+			return comparefs.ErrTypeConflict
+		}
+		if expectedMissing {
+			return comparefs.ErrConflict
+		}
+		if expected != nil && !comparefs.SameVersion(currentTarget, *expected) {
+			return comparefs.ErrConflict
+		}
+	} else if !comparefs.IsNotFound(targetErr) {
+		return targetErr
+	} else if expected != nil {
+		return comparefs.ErrConflict
+	}
 	reader, err := source.Open(ctx, sourcePath)
 	if err != nil {
 		return err
@@ -544,31 +665,103 @@ func copyCompareEntry(ctx context.Context, target, source comparefs.FS, sourcePa
 	if err := target.MkdirAll(ctx, targetDir, 0o755); err != nil {
 		return err
 	}
-	return target.WriteAtomic(ctx, targetPath, reader, comparefs.WriteOptions{Expected: expected, Mode: entry.Mode, Backup: backup, ModTime: entry.ModTime})
+	verified := &compareVerifiedReader{reader: reader, expectedSize: entry.Size, verify: func() error {
+		latest, err := source.Stat(ctx, sourcePath)
+		if err != nil {
+			return err
+		}
+		if latest.IsDir || !comparefs.SameVersion(latest, entry.Version()) {
+			return comparefs.ErrSourceConflict
+		}
+		return nil
+	}}
+	return target.WriteAtomic(ctx, targetPath, verified, comparefs.WriteOptions{Expected: expected, ExpectedMissing: expectedMissing, Mode: entry.Mode, Backup: backup, ModTime: entry.ModTime})
+}
+
+// Validate the source at EOF while the destination is still a temporary file.
+// Close first: FTP's control channel is owned by the data stream until Close.
+type compareVerifiedReader struct {
+	reader             io.ReadCloser
+	verify             func() error
+	expectedSize, read int64
+	done               bool
+	err                error
+}
+
+func (r *compareVerifiedReader) Read(p []byte) (int, error) {
+	if r.done {
+		return 0, r.err
+	}
+	n, err := r.reader.Read(p)
+	r.read += int64(n)
+	if err == io.EOF {
+		r.done = true
+		if closeErr := r.reader.Close(); closeErr != nil {
+			err = closeErr
+		} else if r.read != r.expectedSize {
+			err = comparefs.ErrSourceConflict
+		} else if verifyErr := r.verify(); verifyErr != nil {
+			err = verifyErr
+		}
+		r.err = err
+	}
+	return n, err
+}
+
+func compareSyncErrorMessage(err error, fallback string) string {
+	switch {
+	case errors.Is(err, comparefs.ErrConflict):
+		return "目标已变化，请重新扫描"
+	case errors.Is(err, comparefs.ErrSourceConflict):
+		return "源文件已变化，请重新扫描"
+	case errors.Is(err, comparefs.ErrTypeConflict):
+		return "目标类型冲突（文件与目录不能互相覆盖）"
+	case errors.Is(err, context.Canceled):
+		return "同步已取消"
+	case err == nil:
+		return fallback
+	default:
+		// Keep remote protocol details out of the batch result while retaining
+		// a useful local/network diagnostic when it is safe to show.
+		if strings.TrimSpace(err.Error()) == "" {
+			return fallback
+		}
+		return sshclient.SanitizeError(err.Error())
+	}
 }
 
 func (s *Server) runCompareSync(ctx context.Context, job *compareJob, req compareSyncReq) {
+	defer job.release()
 	result, err := s.performCompareSync(ctx, req, func(current, total int, message string) {
 		job.progress("syncing", current, total, message)
 	})
 	job.mu.Lock()
 	defer job.mu.Unlock()
 	job.Updated = time.Now()
+	if err == nil && ctx.Err() != nil {
+		job.Status = "cancelled"
+		job.Message = "同步已取消"
+		return
+	}
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			job.Status = "cancelled"
 			job.Message = "同步已取消"
+		} else if errors.Is(err, context.DeadlineExceeded) {
+			job.Status = "failed"
+			job.Message = "同步任务超时"
+			job.Error = "compare job timed out"
 		} else {
 			job.Status = "failed"
-			job.Error = err.Error()
+			job.Error = sshclient.SanitizeError(err.Error())
 		}
 		return
 	}
 	job.Status = "completed"
 	job.Phase = "done"
 	job.Message = "同步完成"
-	job.Current = len(req.Items)
-	job.Total = len(req.Items)
+	job.Current = result.Copied + result.Failed
+	job.Total = result.Copied + result.Failed
 	job.SyncResult = result
 }
 
@@ -578,8 +771,11 @@ func (s *Server) handleCompareScanStart(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var req compareScanReq
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 128*1024)).Decode(&req); err != nil {
-		writeErr(w, 400, err)
+	if !decodeCompareJSON(w, r, 128*1024, &req) {
+		return
+	}
+	if err := validateCompareScanReq(req); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
 	job, ctx := s.compares.create(context.Background())
@@ -593,8 +789,11 @@ func (s *Server) handleCompareScanLevel(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var req compareScanReq
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 128*1024)).Decode(&req); err != nil {
-		writeErr(w, 400, err)
+	if !decodeCompareJSON(w, r, 128*1024, &req) {
+		return
+	}
+	if err := validateCompareScanReq(req); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
 	req.MaxDepth = 1
@@ -606,6 +805,19 @@ func (s *Server) handleCompareScanLevel(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	writeJSON(w, 200, result)
+}
+
+func validateCompareScanReq(req compareScanReq) error {
+	if strings.TrimSpace(req.Left.Path) == "" || strings.TrimSpace(req.Right.Path) == "" {
+		return errors.New("比较两侧路径不能为空")
+	}
+	if req.MaxDepth < 0 {
+		return errors.New("max_depth 不能为负数")
+	}
+	if _, err := cleanCompareRel(req.RelPath); err != nil {
+		return err
+	}
+	return nil
 }
 
 type compareTestSide struct {
@@ -626,8 +838,7 @@ func (s *Server) handleCompareTest(w http.ResponseWriter, r *http.Request) {
 		Left  compareSourceSpec `json:"left"`
 		Right compareSourceSpec `json:"right"`
 	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64*1024)).Decode(&req); err != nil {
-		writeErr(w, 400, err)
+	if !decodeCompareJSON(w, r, 64*1024, &req) {
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
@@ -676,19 +887,29 @@ func (s *Server) handleCompareJob(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) runCompareScan(ctx context.Context, job *compareJob, req compareScanReq) {
+	defer job.release()
 	result, err := s.performCompareScan(ctx, req, func(phase string, current, total int, message string) {
 		job.progress(phase, current, total, message)
 	})
 	job.mu.Lock()
 	defer job.mu.Unlock()
 	job.Updated = time.Now()
+	if err == nil && ctx.Err() != nil {
+		job.Status = "cancelled"
+		job.Message = "比较已取消"
+		return
+	}
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			job.Status = "cancelled"
 			job.Message = "比较已取消"
+		} else if errors.Is(err, context.DeadlineExceeded) {
+			job.Status = "failed"
+			job.Message = "比较任务超时"
+			job.Error = "compare job timed out"
 		} else {
 			job.Status = "failed"
-			job.Error = err.Error()
+			job.Error = sshclient.SanitizeError(err.Error())
 		}
 		return
 	}
@@ -701,6 +922,9 @@ func (s *Server) runCompareScan(ctx context.Context, job *compareJob, req compar
 }
 
 func (s *Server) performCompareScan(ctx context.Context, req compareScanReq, progress func(phase string, current, total int, message string)) (*compareScanResult, error) {
+	if req.MaxDepth < 0 {
+		return nil, errors.New("max_depth 不能为负数")
+	}
 	started := time.Now()
 	report := func(phase string, current, total int, message string) {
 		if progress != nil {
@@ -731,6 +955,7 @@ func (s *Server) performCompareScan(ctx context.Context, req compareScanReq, pro
 
 	report("scanning", 0, 0, "正在扫描两侧目录")
 	var left, right map[string]comparefs.Entry
+	var leftPending, rightPending map[string]bool
 	var leftTrunc, rightTrunc bool
 	var leftErr, rightErr error
 	var wg sync.WaitGroup
@@ -744,11 +969,11 @@ func (s *Server) performCompareScan(ctx context.Context, req compareScanReq, pro
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		left, leftTrunc, leftErr = walkCompareFSOrEmpty(ctx, leftFS, leftRoot, req, reportDiscovered)
+		left, leftTrunc, leftPending, leftErr = walkCompareFSWithMetaOrEmpty(ctx, leftFS, leftRoot, req, reportDiscovered)
 	}()
 	go func() {
 		defer wg.Done()
-		right, rightTrunc, rightErr = walkCompareFSOrEmpty(ctx, rightFS, rightRoot, req, reportDiscovered)
+		right, rightTrunc, rightPending, rightErr = walkCompareFSWithMetaOrEmpty(ctx, rightFS, rightRoot, req, reportDiscovered)
 	}()
 	wg.Wait()
 	if leftErr != nil {
@@ -760,6 +985,8 @@ func (s *Server) performCompareScan(ctx context.Context, req compareScanReq, pro
 	if rel != "" {
 		left = prefixCompareRel(left, rel)
 		right = prefixCompareRel(right, rel)
+		leftPending = prefixCompareBool(leftPending, rel)
+		rightPending = prefixCompareBool(rightPending, rel)
 	}
 
 	paths := make([]string, 0, len(left)+len(right))
@@ -775,6 +1002,7 @@ func (s *Server) performCompareScan(ctx context.Context, req compareScanReq, pro
 	}
 	sort.Strings(paths)
 	result := &compareScanResult{Items: make([]compareScanItem, len(paths)), Truncated: leftTrunc || rightTrunc}
+	result.Incomplete = result.Truncated
 	type deepWork struct {
 		idx                 int
 		leftPath, rightPath string
@@ -807,9 +1035,11 @@ func (s *Server) performCompareScan(ctx context.Context, req compareScanReq, pro
 		case l.IsDir != r.IsDir:
 			item.Status = "different"
 		case l.IsDir:
-			if levelOnly {
+			if levelOnly || leftPending[itemRel] || rightPending[itemRel] {
 				item.Status = "pending"
 				item.Pending = true
+				item.Incomplete = true
+				result.Incomplete = true
 			} else {
 				item.Status = "same"
 			}
@@ -823,6 +1053,11 @@ func (s *Server) performCompareScan(ctx context.Context, req compareScanReq, pro
 		default:
 			item.Status = compareTimeStatus(l.ModTime, r.ModTime, req.TimeToleranceSeconds)
 		}
+		if (hasL && l.IsDir && leftPending[itemRel]) || (hasR && r.IsDir && rightPending[itemRel]) {
+			item.Pending = true
+			item.Incomplete = true
+			result.Incomplete = true
+		}
 		result.Items[i] = item
 		if !needsDeep {
 			addCompareSummary(&result.Summary, item.Status)
@@ -833,38 +1068,60 @@ func (s *Server) performCompareScan(ctx context.Context, req compareScanReq, pro
 	}
 	if len(deep) > 0 {
 		report("comparing", 0, len(deep), "正在比较文件内容")
-		sem := make(chan struct{}, 8)
+		concurrency := minCompareConcurrency(compareFSConcurrency(leftFS), compareFSConcurrency(rightFS))
+		if concurrency > len(deep) {
+			concurrency = len(deep)
+		}
+		jobs := make(chan deepWork)
 		var deepWG sync.WaitGroup
 		var done atomic.Int64
-		for _, work := range deep {
-			work := work
-			deepWG.Add(1)
+		deepWG.Add(concurrency)
+		for worker := 0; worker < concurrency; worker++ {
 			go func() {
 				defer deepWG.Done()
-				select {
-				case <-ctx.Done():
-					result.Items[work.idx].Status = "error"
-					return
-				case sem <- struct{}{}:
-				}
-				defer func() { <-sem }()
-				same, cmpErr := compareFileBytes(ctx, leftFS, rightFS, work.leftPath, work.rightPath)
-				status := "error"
-				if cmpErr == nil {
-					result.Items[work.idx].Hashed = true
-					if same {
-						status = "same"
-					} else {
-						status = compareTimeStatus(work.leftTime, work.rightTime, req.TimeToleranceSeconds)
+				for {
+					var work deepWork
+					var ok bool
+					select {
+					case <-ctx.Done():
+						return
+					case work, ok = <-jobs:
+						if !ok {
+							return
+						}
 					}
-				}
-				result.Items[work.idx].Status = status
-				n := int(done.Add(1))
-				if n%20 == 0 || n == len(deep) {
-					report("comparing", n, len(deep), "正在比较内容 "+strconv.Itoa(n)+" / "+strconv.Itoa(len(deep)))
+					if err := ctx.Err(); err != nil {
+						return
+					}
+					same, cmpErr := compareFileBytes(ctx, leftFS, rightFS, work.leftPath, work.rightPath)
+					status := "error"
+					if cmpErr == nil {
+						result.Items[work.idx].Hashed = true
+						if same {
+							status = "same"
+						} else {
+							status = compareTimeStatus(work.leftTime, work.rightTime, req.TimeToleranceSeconds)
+						}
+					}
+					result.Items[work.idx].Status = status
+					n := int(done.Add(1))
+					if n%20 == 0 || n == len(deep) {
+						report("comparing", n, len(deep), "正在比较内容 "+strconv.Itoa(n)+" / "+strconv.Itoa(len(deep)))
+					}
 				}
 			}()
 		}
+		for _, work := range deep {
+			select {
+			case <-ctx.Done():
+				break
+			case jobs <- work:
+			}
+			if ctx.Err() != nil {
+				break
+			}
+		}
+		close(jobs)
 		deepWG.Wait()
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -923,7 +1180,35 @@ func addCompareSummary(summary *compareScanSummary, status string) {
 		summary.RightOnly++
 	case "error":
 		summary.Errors++
+	case "pending":
+		summary.Pending++
 	}
+}
+
+type compareConcurrencyProvider interface {
+	CompareConcurrency() int
+}
+
+func compareFSConcurrency(fsys comparefs.FS) int {
+	if provider, ok := fsys.(compareConcurrencyProvider); ok {
+		if n := provider.CompareConcurrency(); n > 0 {
+			return n
+		}
+	}
+	return 4
+}
+
+func minCompareConcurrency(left, right int) int {
+	if left <= 0 {
+		left = 1
+	}
+	if right <= 0 {
+		right = 1
+	}
+	if left < right {
+		return left
+	}
+	return right
 }
 
 func cleanCompareRel(rel string) (string, error) {
@@ -956,11 +1241,32 @@ func prefixCompareRel(entries map[string]comparefs.Entry, prefix string) map[str
 	return out
 }
 
-func walkCompareFSOrEmpty(ctx context.Context, fsys comparefs.FS, root string, req compareScanReq, progress func(int)) (map[string]comparefs.Entry, bool, error) {
-	if _, err := fsys.Stat(ctx, root); err != nil {
-		return map[string]comparefs.Entry{}, false, nil
+func prefixCompareBool(entries map[string]bool, prefix string) map[string]bool {
+	if prefix == "" || len(entries) == 0 {
+		return entries
 	}
-	return walkCompareFS(ctx, fsys, root, req, progress)
+	out := make(map[string]bool, len(entries))
+	for rel, value := range entries {
+		if value {
+			out[prefix+"/"+rel] = true
+		}
+	}
+	return out
+}
+
+func walkCompareFSOrEmpty(ctx context.Context, fsys comparefs.FS, root string, req compareScanReq, progress func(int)) (map[string]comparefs.Entry, bool, error) {
+	entries, truncated, _, err := walkCompareFSWithMetaOrEmpty(ctx, fsys, root, req, progress)
+	return entries, truncated, err
+}
+
+func walkCompareFSWithMetaOrEmpty(ctx context.Context, fsys comparefs.FS, root string, req compareScanReq, progress func(int)) (map[string]comparefs.Entry, bool, map[string]bool, error) {
+	if _, err := fsys.Stat(ctx, root); err != nil {
+		if comparefs.IsNotFound(err) {
+			return map[string]comparefs.Entry{}, false, map[string]bool{}, nil
+		}
+		return nil, false, nil, err
+	}
+	return walkCompareFSWithMeta(ctx, fsys, root, req, progress)
 }
 
 func compareWalkShouldEnqueue(currentDepth, maxDepth int) bool {
@@ -971,7 +1277,31 @@ func compareWalkShouldEnqueue(currentDepth, maxDepth int) bool {
 }
 
 func walkCompareFS(ctx context.Context, fsys comparefs.FS, root string, req compareScanReq, progress func(int)) (map[string]comparefs.Entry, bool, error) {
+	entries, truncated, _, err := walkCompareFSWithMeta(ctx, fsys, root, req, progress)
+	return entries, truncated, err
+}
+
+// compareLimitedLister is optional so the existing FS interface remains
+// source-compatible.  SFTP/FTP/local implementations use it to propagate a
+// real "there are more entries" signal instead of guessing at the limit.
+type compareLimitedLister interface {
+	ListLimited(ctx context.Context, dir string, max int) ([]comparefs.Entry, bool, error)
+}
+
+func listCompareEntries(ctx context.Context, fsys comparefs.FS, dir string, max int) ([]comparefs.Entry, bool, error) {
+	if limited, ok := fsys.(compareLimitedLister); ok {
+		return limited.ListLimited(ctx, dir, max)
+	}
+	entries, err := fsys.List(ctx, dir)
+	return entries, false, err
+}
+
+// walkCompareFSWithMeta returns entries plus directories whose descendants
+// could not be inspected because max_depth stopped at their boundary.  A
+// boundary directory is intentionally not classified as equal by the caller.
+func walkCompareFSWithMeta(ctx context.Context, fsys comparefs.FS, root string, req compareScanReq, progress func(int)) (map[string]comparefs.Entry, bool, map[string]bool, error) {
 	result := make(map[string]comparefs.Entry)
+	pending := make(map[string]bool)
 	type queued struct {
 		abs, rel string
 		depth    int
@@ -979,13 +1309,17 @@ func walkCompareFS(ctx context.Context, fsys comparefs.FS, root string, req comp
 	queue := []queued{{abs: root}}
 	for len(queue) > 0 {
 		if err := ctx.Err(); err != nil {
-			return nil, false, err
+			return nil, false, nil, err
+		}
+		if len(result) >= compareMaxFiles {
+			return result, true, pending, nil
 		}
 		current := queue[0]
 		queue = queue[1:]
-		entries, err := fsys.List(ctx, current.abs)
+		remaining := compareMaxFiles - len(result)
+		entries, listTruncated, err := listCompareEntries(ctx, fsys, current.abs, remaining)
 		if err != nil {
-			return nil, false, err
+			return nil, false, nil, err
 		}
 		for _, entry := range entries {
 			rel := entry.Name
@@ -995,20 +1329,27 @@ func walkCompareFS(ctx context.Context, fsys comparefs.FS, root string, req comp
 			if ignoreCompareEntry(rel, entry.IsDir, req.IgnoreExts, req.IgnoreDirs) {
 				continue
 			}
+			if len(result) >= compareMaxFiles {
+				return result, true, pending, nil
+			}
 			entry.Path = fsys.Join(root, rel)
 			result[rel] = entry
-			if len(result) >= compareMaxFiles {
-				return result, true, nil
+			if entry.IsDir {
+				if compareWalkShouldEnqueue(current.depth, req.MaxDepth) {
+					queue = append(queue, queued{abs: entry.Path, rel: rel, depth: current.depth + 1})
+				} else {
+					pending[rel] = true
+				}
 			}
-			if entry.IsDir && compareWalkShouldEnqueue(current.depth, req.MaxDepth) {
-				queue = append(queue, queued{abs: entry.Path, rel: rel, depth: current.depth + 1})
-			}
+		}
+		if listTruncated {
+			return result, true, pending, nil
 		}
 		if progress != nil && len(entries) > 0 {
 			progress(len(entries))
 		}
 	}
-	return result, false, nil
+	return result, false, pending, nil
 }
 
 func ignoreCompareEntry(rel string, isDir bool, exts, dirs []string) bool {

@@ -40,7 +40,10 @@ func TestFindChromeWithFakeProgramFiles(t *testing.T) {
 }
 
 func TestFindChromeNotInstalled(t *testing.T) {
-	// 所有候选路径都指向不存在的目录，期望返回 ("", false)。
+	// 隔离真实注册表查询，验证候选路径全落空时的行为。
+	disableRegistryForTest = true
+	defer func() { disableRegistryForTest = false }()
+
 	empty := t.TempDir()
 	t.Setenv("ProgramFiles", empty)
 	t.Setenv("ProgramW6432", "")
@@ -122,4 +125,70 @@ func TestFindChromeRegistryMiss(t *testing.T) {
 	// 不管注册表里有没有，反正公共路径没有就期望 false。
 	// 在没装 Chrome 的环境下必为 false；装了的环境也至少保证不 panic。
 	_ = ok
+}
+
+func TestFindModernBrowser360Chrome(t *testing.T) {
+	disableRegistryForTest = true
+	defer func() { disableRegistryForTest = false }()
+
+	tmp := t.TempDir()
+	// 仅构造 fake 360 极速浏览器路径
+	chrome360Dir := filepath.Join(tmp, "360", "360Chrome", "Chrome", "Application")
+	if err := os.MkdirAll(chrome360Dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	exePath := filepath.Join(chrome360Dir, "360chrome.exe")
+	if err := os.WriteFile(exePath, []byte("fake"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("ProgramFiles", tmp)
+	t.Setenv("ProgramW6432", "")
+	t.Setenv("ProgramFiles(x86)", "")
+	t.Setenv("LOCALAPPDATA", "")
+	t.Setenv("APPDATA", "")
+
+	b, ok := FindModernBrowser()
+	if !ok {
+		t.Fatal("FindModernBrowser() = false, want true for 360chrome")
+	}
+	if b.Kind != "360chrome" {
+		t.Errorf("FindModernBrowser() Kind = %q, want %q", b.Kind, "360chrome")
+	}
+	if !strings.EqualFold(b.Path, exePath) {
+		t.Errorf("FindModernBrowser() Path = %q, want %q", b.Path, exePath)
+	}
+}
+
+func TestFindModernBrowserEdge(t *testing.T) {
+	disableRegistryForTest = true
+	defer func() { disableRegistryForTest = false }()
+
+	tmp := t.TempDir()
+	// 仅构造 fake Edge 路径
+	edgeDir := filepath.Join(tmp, "Microsoft", "Edge", "Application")
+	if err := os.MkdirAll(edgeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	exePath := filepath.Join(edgeDir, "msedge.exe")
+	if err := os.WriteFile(exePath, []byte("fake"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("ProgramFiles", tmp)
+	t.Setenv("ProgramW6432", "")
+	t.Setenv("ProgramFiles(x86)", "")
+	t.Setenv("LOCALAPPDATA", "")
+	t.Setenv("APPDATA", "")
+
+	b, ok := FindModernBrowser()
+	if !ok {
+		t.Fatal("FindModernBrowser() = false, want true for edge")
+	}
+	if b.Kind != "edge" {
+		t.Errorf("FindModernBrowser() Kind = %q, want %q", b.Kind, "edge")
+	}
+	if !strings.EqualFold(b.Path, exePath) {
+		t.Errorf("FindModernBrowser() Path = %q, want %q", b.Path, exePath)
+	}
 }

@@ -6,12 +6,41 @@ import (
 	"context"
 	"errors"
 	"io"
+	"io/fs"
 	"path"
 	"strings"
 	"time"
 )
 
 var ErrConflict = errors.New("target changed since it was compared")
+
+// ErrSourceConflict reports that a source file changed while a compare/sync
+// operation was preparing to copy it.  It is deliberately distinct from
+// ErrConflict so callers can tell the user which side changed.
+var ErrSourceConflict = errors.New("source changed while it was being copied")
+
+// ErrTypeConflict is returned when a file operation targets a directory (or a
+// directory operation encounters a file).  Treating this as a normal write
+// error made file/directory name collisions look like a successful sync plan.
+var ErrTypeConflict = errors.New("file and directory types conflict")
+
+// ErrPathOutsideRoot is returned by the local backend when a path (including
+// the path reached through a symbolic link) escapes the configured compare
+// roots.
+var ErrPathOutsideRoot = errors.New("path escapes compare allowed roots")
+
+// IsNotFound is the one place where compare handlers decide whether a failed
+// Stat means an absent path.  Permission, transport and protocol errors must
+// not be silently interpreted as an empty directory.
+func IsNotFound(err error) bool {
+	return err != nil && (errors.Is(err, ErrNotFound) || errors.Is(err, fs.ErrNotExist))
+}
+
+// ErrNotFound is used by remote adapters when they can positively establish
+// that an entry is absent (for example after successfully listing its parent).
+// Local and SFTP adapters retain fs.ErrNotExist compatibility through
+// IsNotFound above.
+var ErrNotFound = errors.New("path does not exist")
 
 type Version struct {
 	Size    int64     `json:"size"`
@@ -31,8 +60,12 @@ func (e Entry) Version() Version { return Version{Size: e.Size, ModTime: e.ModTi
 
 type WriteOptions struct {
 	Expected *Version
-	Mode     uint32
-	Backup   bool
+	// ExpectedMissing requires the destination to remain absent until the
+	// atomic replacement.  This closes the create-after-scan race for directory
+	// sync plans; a nil Expected historically meant "do not check".
+	ExpectedMissing bool
+	Mode            uint32
+	Backup          bool
 	// ModTime preserves the source timestamp during copy/synchronization. A zero
 	// value keeps the backend's normal "written now" behavior used by text edits.
 	ModTime time.Time

@@ -41,36 +41,63 @@ func (m *Manager) StreamQuery(ctx context.Context, source Source, query string, 
 // fashion as batches are read from the database, preventing resident memory accumulation.
 // Idle-timeout connection rebuilding and retrying is performed safely before any data is emitted.
 func (m *Manager) StreamQueryPage(ctx context.Context, source Source, query string, page, pageSize int, emit EmitFunc) (QuerySummary, error) {
+	return m.StreamSessionQueryPage(ctx, source, query, page, pageSize, "", emit)
+}
+
+// StreamSessionQueryPage binds DML and transaction control to one browser tab.
+// An empty sessionID preserves the legacy stateless behavior for internal callers.
+func (m *Manager) StreamSessionQueryPage(ctx context.Context, source Source, query string, page, pageSize int, sessionID string, emit EmitFunc) (QuerySummary, error) {
+	return m.StreamSessionQueryPageWithParams(ctx, source, query, page, pageSize, sessionID, nil, emit)
+}
+
+// StreamSessionQueryPageWithParams is the parameterized counterpart used by
+// the HTTP query endpoint.  Binding happens before any database call and the
+// rewritten SQL is still passed through the same classifier/paginator.
+func (m *Manager) StreamSessionQueryPageWithParams(ctx context.Context, source Source, query string, page, pageSize int, sessionID string, params []BindParameter, emit EmitFunc) (QuerySummary, error) {
 	if source.Kind == KindRedis {
 		return QuerySummary{}, fmt.Errorf("Redis 不支持 SQL 查询")
 	}
-	info, err := ValidateSQL(source.Kind, query)
+	boundQuery, boundArgs, bindErr := BindSQLParameters(source.Kind, query, params)
+	if bindErr != nil {
+		return QuerySummary{}, bindErr
+	}
+	info, err := ValidateSQL(source.Kind, boundQuery)
 	if err != nil {
 		return QuerySummary{}, err
 	}
 	if !info.IsQuery {
-		return m.ExecuteStatement(ctx, source, query, info, emit)
+		if sessionID != "" {
+			return m.executeSessionStatement(ctx, source, boundQuery, boundArgs, info, sessionID, emit)
+		}
+		return m.executeStatementWithArgs(ctx, source, boundQuery, boundArgs, info, emit)
 	}
 	p := normalizeQueryPage(source, page, pageSize)
+	hadSessionTransaction := sessionID != "" && m.SessionTransactionPending(source, sessionID)
 	var last QuerySummary
 	for attempt := 0; attempt < 2; attempt++ {
-		startedEmit := false
+		emittedRows := false
 		safeEmit := func(event StreamEvent) error {
-			startedEmit = true
+			// Oracle may expose column metadata before ORA-01466 is raised while
+			// fetching the first row after a concurrent DDL.  Retrying is still
+			// safe until an actual data row has reached the client; a repeated
+			// metadata event is idempotent for the streaming consumers.
+			if len(event.Rows) > 0 {
+				emittedRows = true
+			}
 			if emit != nil {
 				return emit(event)
 			}
 			return nil
 		}
-		summary, err := m.streamQueryAttempt(ctx, source, query, p, info, safeEmit)
+		summary, err := m.streamQueryAttempt(ctx, source, boundQuery, boundArgs, p, info, sessionID, safeEmit)
 		summary.RetryCount = attempt
 		last = summary
 		if err == nil {
 			return summary, nil
 		}
-		// 重试仅在尚未向客户端输出任何数据且属于连接故障时允许
-		if attempt == 0 && !startedEmit && isConnectionFailure(err) {
-			m.Invalidate(source.ID)
+		// 重试仅在尚未向客户端输出任何数据行且属于可恢复故障时允许。
+		if attempt == 0 && !hadSessionTransaction && !emittedRows && isRetryableQueryFailure(err) {
+			m.invalidatePool(source.ID)
 			continue
 		}
 		return summary, err
@@ -78,8 +105,93 @@ func (m *Manager) StreamQueryPage(ctx context.Context, source Source, query stri
 	return last, fmt.Errorf("连接重试失败")
 }
 
+// Oracle can return ORA-01466 for the first read-only transaction opened on
+// a pooled connection immediately after this workbench changes an object's
+// definition. Reopening the pool gives the retry a fresh snapshot while still
+// preserving the read-only transaction guard.
+func isRetryableQueryFailure(err error) bool {
+	if isConnectionFailure(err) {
+		return true
+	}
+	return err != nil && strings.Contains(strings.ToUpper(err.Error()), "ORA-01466")
+}
+
+func (m *Manager) ExecuteSessionStatement(ctx context.Context, source Source, query string, info SQLStatementInfo, sessionID string, emit EmitFunc) (QuerySummary, error) {
+	return m.executeSessionStatement(ctx, source, query, nil, info, sessionID, emit)
+}
+
+func (m *Manager) executeSessionStatement(ctx context.Context, source Source, query string, args []any, info SQLStatementInfo, sessionID string, emit EmitFunc) (QuerySummary, error) {
+	if info.Type == "TRANSACTION" {
+		summary, err := m.ControlSessionTransaction(ctx, source, sessionID, info.Action)
+		if err == nil && emit != nil {
+			_ = emit(StreamEvent{Type: "mutation", Summary: &summary, Message: summary.Message, StatementType: summary.StatementType})
+		}
+		return summary, err
+	}
+	if info.Type == "DDL" {
+		if m.SessionTransactionPending(source, sessionID) {
+			return QuerySummary{}, errors.New("当前页签有未提交 DML；请先提交或回滚，再执行会被数据库隐式提交的 DDL")
+		}
+		summary, err := m.executeStatementWithArgs(ctx, source, query, args, info, nil)
+		if err != nil {
+			return summary, err
+		}
+		summary.Message = "DDL 已执行；该数据库会隐式提交 DDL，无法纳入手动事务"
+		summary.StatementType = "DDL_AUTOCOMMIT"
+		if emit != nil {
+			_ = emit(StreamEvent{Type: "mutation", Summary: &summary, Message: summary.Message, StatementType: summary.StatementType})
+		}
+		return summary, nil
+	}
+	if info.Type != "DML" {
+		return QuerySummary{}, fmt.Errorf("不支持在事务会话中执行 %s", info.Action)
+	}
+	queryCtx, cancel := context.WithTimeout(ctx, source.Timeout())
+	defer cancel()
+	if err := m.acquire(queryCtx); err != nil {
+		return QuerySummary{}, err
+	}
+	defer m.release()
+	entry, err := m.transactionForContext(queryCtx, source, sessionID, true)
+	if err != nil {
+		return QuerySummary{}, err
+	}
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+	started := time.Now()
+	cleanQuery := strings.TrimRight(strings.TrimSpace(query), "; \t\r\n")
+	result, err := entry.tx.ExecContext(queryCtx, cleanQuery, args...)
+	if err != nil {
+		if queryCtx.Err() != nil || isConnectionFailure(err) {
+			m.rollbackEntryLocked(source.ID, sessionID, entry)
+		}
+		return QuerySummary{}, err
+	}
+	rowsAffected := int64(-1)
+	if affected, affectedErr := result.RowsAffected(); affectedErr == nil {
+		rowsAffected = affected
+	}
+	entry.updatedAt = time.Now()
+	message := fmt.Sprintf("已执行 %s，等待提交", info.Action)
+	if rowsAffected >= 0 {
+		message = fmt.Sprintf("已执行 %s，影响 %d 行，等待提交", info.Action, rowsAffected)
+	}
+	summary := QuerySummary{ElapsedMS: time.Since(started).Milliseconds(), Rows: int(rowsAffected), RowsAffected: rowsAffected, StatementType: info.Type, Message: message, TransactionPending: true}
+	if emit != nil {
+		_ = emit(StreamEvent{Type: "mutation", Summary: &summary, Message: message, StatementType: info.Type, RowsAffected: rowsAffected})
+	}
+	return summary, nil
+}
+
 // ExecuteStatement executes DML (UPDATE, INSERT, DELETE, MERGE) or DDL (CREATE, ALTER, DROP, TRUNCATE) statements.
 func (m *Manager) ExecuteStatement(ctx context.Context, source Source, query string, info SQLStatementInfo, emit EmitFunc) (QuerySummary, error) {
+	return m.executeStatementWithArgs(ctx, source, query, nil, info, emit)
+}
+
+func (m *Manager) executeStatementWithArgs(ctx context.Context, source Source, query string, args []any, info SQLStatementInfo, emit EmitFunc) (QuerySummary, error) {
+	if info.Type == "TRANSACTION" {
+		return QuerySummary{}, fmt.Errorf("独立的 %s 不受支持：SQL 编辑器使用无状态请求，DML/DDL 每条自动提交；结果网格修改请使用批量提交或放弃", info.Action)
+	}
 	queryCtx, cancel := context.WithTimeout(ctx, source.Timeout())
 	defer cancel()
 	if err := m.acquire(queryCtx); err != nil {
@@ -92,7 +204,7 @@ func (m *Manager) ExecuteStatement(ctx context.Context, source Source, query str
 	}
 	started := time.Now()
 	cleanQuery := strings.TrimRight(strings.TrimSpace(query), "; \t\r\n")
-	res, err := db.ExecContext(queryCtx, cleanQuery)
+	res, err := db.ExecContext(queryCtx, cleanQuery, args...)
 	if err != nil {
 		return QuerySummary{}, err
 	}
@@ -195,7 +307,7 @@ func (m *Manager) ExecuteBatch(ctx context.Context, source Source, statements []
 	return summary, nil
 }
 
-func (m *Manager) streamQueryAttempt(ctx context.Context, source Source, query string, page QueryPage, info SQLStatementInfo, emit EmitFunc) (QuerySummary, error) {
+func (m *Manager) streamQueryAttempt(ctx context.Context, source Source, query string, args []any, page QueryPage, info SQLStatementInfo, sessionID string, emit EmitFunc) (QuerySummary, error) {
 	queryCtx, cancel := context.WithTimeout(ctx, source.Timeout())
 	defer cancel()
 	if err := m.acquire(queryCtx); err != nil {
@@ -207,22 +319,43 @@ func (m *Manager) streamQueryAttempt(ctx context.Context, source Source, query s
 		return QuerySummary{}, err
 	}
 	started := time.Now()
-	// FOR UPDATE 为行级锁，HTTP 无状态不做会话级持锁：事务在请求结束时立即回滚释放，避免长持锁阻塞生产
-	txOptions := &sql.TxOptions{ReadOnly: !info.HasForUpdate && source.Kind == KindMySQL}
-	tx, err := db.BeginTx(queryCtx, txOptions)
-	if err != nil {
-		return QuerySummary{}, err
+	var queryTx *sql.Tx
+	var sessionTx *transactionEntry
+	if sessionID != "" {
+		sessionTx, err = m.transactionFor(source, sessionID, false)
+		if err != nil {
+			return QuerySummary{}, err
+		}
 	}
-	defer tx.Rollback()
-	if source.Kind == KindOracle && !info.HasForUpdate {
-		_, _ = tx.ExecContext(queryCtx, "SET TRANSACTION READ ONLY")
+	if sessionTx != nil {
+		sessionTx.mu.Lock()
+		defer sessionTx.mu.Unlock()
+		sessionTx.updatedAt = time.Now()
+		queryTx = sessionTx.tx
+	} else {
+		// 无待提交 DML 时使用请求级只读事务，查询结束立即释放连接。
+		txOptions := &sql.TxOptions{ReadOnly: !info.HasForUpdate && source.Kind == KindMySQL}
+		queryTx, err = db.BeginTx(queryCtx, txOptions)
+		if err != nil {
+			return QuerySummary{}, err
+		}
+		defer queryTx.Rollback()
+		// Do not issue Oracle SET TRANSACTION READ ONLY here. Oracle can keep a
+		// stale read-only snapshot immediately after this workbench executes DDL
+		// and then fail the first fetch with ORA-01466. The query has already
+		// passed ValidateSQL as a SELECT, remains inside this request-scoped
+		// transaction, and is always rolled back below, so the extra session
+		// command adds no write protection but does make metadata work unreliable.
 	}
 	limitedQuery, err := serverPagedQuery(source.Kind, query, page)
 	if err != nil {
 		return QuerySummary{}, err
 	}
-	rows, err := tx.QueryContext(queryCtx, limitedQuery)
+	rows, err := queryTx.QueryContext(queryCtx, limitedQuery, args...)
 	if err != nil {
+		if sessionTx != nil && (queryCtx.Err() != nil || isConnectionFailure(err)) {
+			m.rollbackEntryLocked(source.ID, sessionID, sessionTx)
+		}
 		return QuerySummary{}, err
 	}
 	defer rows.Close()
@@ -251,7 +384,8 @@ func (m *Manager) streamQueryAttempt(ctx context.Context, source Source, query s
 
 	summary := QuerySummary{
 		QueryLimit: page.PageSize, Page: page.Page, PageSize: page.PageSize,
-		Offset: page.Offset(), HasPrev: page.Page > 1, PaginationMode: "page",
+		TransactionPending: sessionTx != nil,
+		Offset:             page.Offset(), HasPrev: page.Page > 1, PaginationMode: "page",
 		Ordered: queryHasOrderBy(query),
 	}
 
@@ -261,6 +395,9 @@ func (m *Manager) streamQueryAttempt(ctx context.Context, source Source, query s
 	for rows.Next() {
 		row, rowBytes, scanErr := scanner.Scan(rows)
 		if scanErr != nil {
+			if sessionTx != nil && (queryCtx.Err() != nil || isConnectionFailure(scanErr)) {
+				m.rollbackEntryLocked(source.ID, sessionID, sessionTx)
+			}
 			return summary, scanErr
 		}
 
@@ -286,6 +423,9 @@ func (m *Manager) streamQueryAttempt(ctx context.Context, source Source, query s
 		}
 	}
 	if err := rows.Err(); err != nil {
+		if sessionTx != nil && (queryCtx.Err() != nil || isConnectionFailure(err)) {
+			m.rollbackEntryLocked(source.ID, sessionID, sessionTx)
+		}
 		return summary, err
 	}
 	if len(batch) > 0 {
@@ -299,8 +439,12 @@ func (m *Manager) streamQueryAttempt(ctx context.Context, source Source, query s
 	summary.ElapsedMS = time.Since(started).Milliseconds()
 	summary.StatementType = info.Type
 	if info.HasForUpdate {
-		// 告知前端：FOR UPDATE 已执行但锁已随事务回滚释放，非持久会话锁
-		summary.Message = "FOR UPDATE 查询已执行；行锁随请求结束已释放（HTTP 无状态，不做会话级持锁）"
+		if sessionTx != nil {
+			summary.Message = "FOR UPDATE 行锁已保留在当前页签事务中，提交或回滚后释放"
+			summary.TransactionPending = true
+		} else {
+			summary.Message = "FOR UPDATE 查询已执行；当前没有待提交事务，行锁随请求结束已释放"
+		}
 		if emit != nil {
 			_ = emit(StreamEvent{Type: "notice", Message: summary.Message, StatementType: info.Type})
 		}

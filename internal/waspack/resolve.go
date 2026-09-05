@@ -146,11 +146,15 @@ func javaAndInnersForClass(layout Layout, classRel string) []Entry {
 		return nil
 	}
 	name := strings.TrimSuffix(path.Base(rel), ".class")
-	if strings.Contains(name, "$") {
-		return nil
+	// A manifest often contains only an inner class (Foo$1.class). Resolve
+	// from the outer class name so the source and all sibling inner classes
+	// are included as one deployable unit.
+	outerName := name
+	if i := strings.IndexByte(outerName, '$'); i > 0 {
+		outerName = outerName[:i]
 	}
 	pkgFile := strings.TrimPrefix(rel, "WEB-INF/classes/")
-	javaRel := "./src/" + strings.TrimSuffix(pkgFile, ".class") + ".java"
+	javaRel := "./src/" + path.Join(path.Dir(pkgFile), outerName+".java")
 	out := []Entry{{Rel: javaRel, Kind: KindJava, Source: "paired"}}
 	pkgDir := path.Dir(pkgFile)
 	classDirRel := "WEB-INF/classes"
@@ -161,7 +165,7 @@ func javaAndInnersForClass(layout Layout, classRel string) []Entry {
 	if pkgDir == "." {
 		absDir = layout.ClassesDir
 	}
-	out = append(out, scanClassDir(absDir, classDirRel, name)...)
+	out = append(out, scanClassDir(absDir, classDirRel, outerName)...)
 	return out
 }
 

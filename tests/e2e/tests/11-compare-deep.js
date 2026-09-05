@@ -151,7 +151,7 @@ function register(runner, ctx) {
       }
       await page.waitForTimeout(300);
 
-      const clearBtn = await page.$('button:has-text("清空"), button:has-text("重置")');
+      const clearBtn = await page.$('button:visible:has-text("清空"), button:visible:has-text("重置")');
       if (clearBtn) {
         await clearBtn.click();
         await page.waitForTimeout(300);
@@ -191,11 +191,11 @@ function register(runner, ctx) {
       const compareBtn = await page.$('[data-action="text-compare"]');
       await compareBtn.click();
       await page.waitForTimeout(800);
-      const editable = await page.$('.cmp-code[contenteditable], .cmp-code[contenteditable="true"], .cmp-code[contenteditable="plaintext-only"]');
+      const editable = await page.$('.cmp-code');
       if (!editable) throw new Error('差异行不可编辑');
-      await editable.click();
+      await editable.dblclick();
       await page.keyboard.type('-edit');
-      await page.keyboard.press('Enter');
+      await page.keyboard.press('Control+Enter');
       await page.waitForTimeout(600);
       const dirty = await page.$eval('body', el => el.innerText.indexOf('已修改') >= 0);
       if (!dirty) throw new Error('行内编辑后应标记已修改');
@@ -236,7 +236,10 @@ function register(runner, ctx) {
       await pickDir(0, left);
       await pickDir(1, right);
       const depth = await page.$('#cmp-scan-depth');
-      if (depth) await page.selectOption('#cmp-scan-depth', '1');
+      if (depth) {
+        await page.click('summary:has-text("扫描设置")');
+        await page.selectOption('#cmp-scan-depth', '1');
+      }
       await page.click('[data-action="compare-test"]');
       await page.waitForFunction(() => (document.body.innerText || '').indexOf('两侧来源可用') >= 0 || (document.body.innerText || '').indexOf('正常') >= 0, null, { timeout: 15000 });
       await page.click('[data-action="compare-scan"]');
@@ -247,19 +250,34 @@ function register(runner, ctx) {
       await expand.click();
       await page.waitForTimeout(1500);
       await runner.screenshot(page, '13-compare-12b-expand');
+      await page.check('.cmp2-table-select-head input');
+      if (await page.isEnabled('[data-action="cover-right"]')) {
+        throw new Error('目录尚未完整验证时不应允许批量覆盖');
+      }
+      if (!(await page.isVisible('#cmp-scan-depth'))) {
+        await page.click('summary:has-text("扫描设置")');
+      }
+      await page.selectOption('#cmp-scan-depth', '0');
+      await page.click('[data-action="compare-scan"]');
+      await page.waitForFunction(() => {
+        const progress = document.querySelector('.cmp-scan-progress');
+        return progress && progress.textContent.startsWith('完成');
+      }, null, { timeout: 60000 });
+      await page.check('.cmp2-table-select-head input');
       await page.click('[data-action="cover-right"]');
       await page.waitForSelector('button:has-text("开始覆盖")');
       await page.click('button:has-text("开始覆盖")');
-      await page.waitForFunction(() => !document.querySelector('.cmp-source-overlay'), null, { timeout: 120000 });
+      await page.waitForFunction(() => !document.querySelector('.cmp-sync-dialog'), null, { timeout: 120000 });
       await page.waitForFunction(() => {
         const t = document.querySelector('.cmp-scan-progress');
         return t && t.textContent.indexOf('完成') >= 0;
       }, null, { timeout: 90000 });
       await runner.screenshot(page, '13-compare-13-cover-right');
+      await page.check('.cmp2-table-select-head input');
       await page.click('[data-action="cover-left"]');
       await page.waitForSelector('button:has-text("开始覆盖")');
       await page.click('button:has-text("开始覆盖")');
-      await page.waitForFunction(() => !document.querySelector('.cmp-source-overlay'), null, { timeout: 120000 });
+      await page.waitForFunction(() => !document.querySelector('.cmp-sync-dialog'), null, { timeout: 120000 });
       await page.waitForFunction(() => {
         const t = document.querySelector('.cmp-scan-progress');
         return t && t.textContent.indexOf('完成') >= 0;

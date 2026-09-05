@@ -84,10 +84,10 @@ Kairo 全栈自绘 5 套主题，深色 / 浅色 / 护眼绿 / 高对比 / 仙�
 ```bash
 git clone git@github.com:Qioooba/kairo.git
 cd kairo
-go run . --config ./config.yaml
+go run . --config ./config.yaml --web-dir ./web
 ```
 
-需要 Go 1.24+；`--config` 让开发环境明确使用仓库内唯一配置。省略该参数时与发行版一致，使用系统用户配置目录。Win7 版本已与主线解耦，在 legacy 分支独立维护。
+需要 Go 1.24+；`--config` 让开发环境明确使用仓库内唯一配置。省略该参数时与发行版一致，使用系统用户配置目录。`--web-dir ./web` 显式开启本地前端资源热更新；省略时使用与二进制一起构建的内嵌资源。Win7 版本已与主线解耦，在 legacy 分支独立维护。
 
 ### 第一次跑要做什么
 
