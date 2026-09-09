@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"kairo/internal/dbconsole"
 )
@@ -174,3 +175,80 @@ func (s *Server) handleDatabaseOracleClientInfo(w http.ResponseWriter, r *http.R
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "client": info, "hint": hint})
 }
+
+// POST /api/database/lob/token  按需为懒加载的 LOB 签发短期安全 Token
+func (s *Server) handleDatabaseLobToken(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeErr(w, http.StatusMethodNotAllowed, errors.New("仅支持 POST"))
+		return
+	}
+	var req databaseLobRequest
+	if err := decodeDatabaseJSON(r, &req); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	if strings.TrimSpace(req.SourceID) == "" || strings.TrimSpace(req.Table) == "" || strings.TrimSpace(req.Column) == "" {
+		writeErr(w, http.StatusBadRequest, errors.New("source_id/table/column 不能为空"))
+		return
+	}
+	source, ok := s.databaseSourceForRequest(w, r, req.SourceID)
+	if !ok {
+		return
+	}
+	if source.Kind != dbconsole.KindOracle {
+		writeErr(w, http.StatusBadRequest, errors.New("LOB 仅支持 Oracle"))
+		return
+	}
+	if scope := databaseSessionScope(r); req.SessionID != "" && scope != "" && !strings.HasPrefix(req.SessionID, scope) {
+		writeErr(w, http.StatusForbidden, errors.New("LOB 事务不属于当前用户，请重新查询"))
+		return
+	}
+	if req.Owner == "" {
+		req.Owner = source.Username
+	}
+	if len(req.Keys) == 0 && !req.UseRowID && strings.TrimSpace(req.RowID) == "" {
+		writeErr(w, http.StatusBadRequest, errors.New("缺少行主键或定位信息"))
+		return
+	}
+	pkCols := req.PrimaryKey
+	if len(pkCols) == 0 && !req.UseRowID {
+		fields, err := s.database.Fields(r.Context(), source, req.Owner, req.Table)
+		if err == nil {
+			for _, f := range fields {
+				if f.PrimaryKey {
+					pkCols = append(pkCols, f.Name)
+				}
+			}
+		}
+	}
+	if len(pkCols) == 0 && !req.UseRowID {
+		for k := range req.Keys {
+			pkCols = append(pkCols, k)
+		}
+	}
+	colType := req.ColumnType
+	if colType == "" {
+		colType = "CLOB"
+	}
+	token, err := dbconsole.GenerateSignedLOBToken(
+		source.ID,
+		source.Username,
+		req.Owner,
+		req.Table,
+		req.Column,
+		colType,
+		req.RowID,
+		req.Keys,
+		pkCols,
+		req.SessionID,
+		5*time.Minute,
+	)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"token": token,
+	})
+}
+

@@ -139,8 +139,19 @@ func TestBuildLOBProjectedQuery(t *testing.T) {
 	if !strings.Contains(sql, `ROWIDTOCHAR("D".ROWID) AS "__KAIRO_ROWID__"`) {
 		t.Errorf("missing ROWIDTOCHAR: %s", sql)
 	}
-	if !strings.Contains(sql, `ORDER BY "D"."ID"`) {
-		t.Errorf("missing deterministic order by with primary key: %s", sql)
+	// 按照性能规范：用户未显式指定 ORDER BY 时，不再强制全表排序
+	if strings.Contains(sql, `ORDER BY`) {
+		t.Errorf("unexpected ORDER BY when not specified: %s", sql)
+	}
+	// 用户指定 ORDER BY 时，应保留并补充主键
+	infoWithOrder := *infoLOB
+	infoWithOrder.OrderByClause = `"D"."ID" ASC`
+	rwOrder, err := compileLOBProjectedQuery(&infoWithOrder, tableFields)
+	if err != nil {
+		t.Fatalf("compileLOBProjectedQuery with order failed: %v", err)
+	}
+	if !strings.Contains(rwOrder.SQL, `ORDER BY "D"."ID" ASC, "D"."ID"`) {
+		t.Errorf("missing deterministic order by with primary key: %s", rwOrder.SQL)
 	}
 	if len(rw.Columns) != 4 {
 		t.Errorf("expected 4 user columns, got %d", len(rw.Columns))

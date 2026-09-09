@@ -79,8 +79,14 @@ func serverPagedQuery(kind, query string, page QueryPage) (string, error) {
 	rowAlias := `"__KAIRO_RN_` + suffix + `"`
 	switch kind {
 	case KindOracle:
+		if offset == 0 {
+			return fmt.Sprintf("SELECT /*+ FIRST_ROWS(%d) */ * FROM (\n%s\n) WHERE ROWNUM <= %d", fetch, query, upper), nil
+		}
 		return fmt.Sprintf("SELECT * FROM (\nSELECT kairo_page_q.*, ROWNUM AS %s\nFROM (\n%s\n) kairo_page_q\nWHERE ROWNUM <= %d\n)\nWHERE %s > %d", rowAlias, query, upper, rowAlias, offset), nil
 	case KindMySQL:
+		if offset == 0 {
+			return fmt.Sprintf("SELECT * FROM (\n%s\n) AS kairo_page_q LIMIT %d", query, fetch), nil
+		}
 		return fmt.Sprintf("SELECT * FROM (\n%s\n) AS kairo_page_q LIMIT %d OFFSET %d", query, fetch, offset), nil
 	default:
 		return "", fmt.Errorf("%s 不是 SQL 数据源", kind)

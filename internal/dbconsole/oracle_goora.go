@@ -13,7 +13,7 @@ func openOracleViaGoOraStub(source Source, password string, dialer funcDialer, t
 		"TIMEOUT":            strconv.Itoa(source.QueryTimeoutSeconds),
 		"CONNECTION TIMEOUT": "10",
 		"LOB FETCH":          "STREAM", // 结论 1.2: STREAM / POST 模式避开 INLINE 错位
-		"PREFETCH_ROWS":      "15",
+		"PREFETCH_ROWS":      "100",
 	}
 	if source.OracleConnectBy == "sid" {
 		options["SID"] = source.OracleService

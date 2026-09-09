@@ -133,3 +133,26 @@ func TestDatabaseSafeErrorTTC(t *testing.T) {
 	}
 }
 
+func TestDatabaseSessionBackupFloatEditorHeight(t *testing.T) {
+	srv := newTestServerWithAuth(t, databaseTokens())
+	payload := map[string]any{
+		"activeId":     1,
+		"tabSeq":       1,
+		"sourceId":     "",
+		"editorHeight": 169.18753051757812,
+		"sessions": []map[string]any{
+			{"id": 1, "sql": "SELECT 1"},
+		},
+		"updatedAt": 1700000000000,
+	}
+	w := doRequestWithToken(srv, http.MethodPost, "/api/database/sessions/backup", rbacUserToken, payload)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 for backup with float editorHeight, got %d: %s", w.Code, w.Body.String())
+	}
+
+	wRestore := doRequestWithToken(srv, http.MethodGet, "/api/database/sessions/restore", rbacUserToken, nil)
+	if wRestore.Code != http.StatusOK {
+		t.Fatalf("expected 200 for restore, got %d: %s", wRestore.Code, wRestore.Body.String())
+	}
+}
+

@@ -53,7 +53,7 @@ func TestReviewUnwrappedQueryPage(t *testing.T) {
 				t.Fatal(err)
 			}
 			var values [][]any
-			summary, err := m.streamQueryAttempt(context.Background(), source, query, nil, QueryPage{Page: 2, PageSize: 2}, info, "", func(event StreamEvent) error { values = append(values, event.Rows...); return nil })
+			summary, err := m.streamQueryAttempt(context.Background(), source, query, nil, QueryPage{Page: 2, PageSize: 2}, info, "", QueryOptions{}, func(event StreamEvent) error { values = append(values, event.Rows...); return nil })
 			if err != nil || len(values) != 2 || values[0][0] != int64(3) || values[1][0] != int64(4) || !summary.HasNext {
 				t.Fatalf("%v %+v %v", values, summary, err)
 			}

@@ -18,7 +18,10 @@ func TestOracleWorkbenchFullLifecycle(t *testing.T) {
 	var oracleSource *Source
 	for _, s := range sources {
 		if s.Kind == KindOracle {
-			oracleSource = &s
+			srcCopy := s
+			srcCopy.ReadOnly = false
+			srcCopy.AllowDDL = true
+			oracleSource = &srcCopy
 			break
 		}
 	}

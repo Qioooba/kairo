@@ -81,6 +81,22 @@ type Source struct {
 	UpdatedAt            string           `json:"updated_at"`
 }
 
+// Clone returns a deep copy of the Source, isolating slices and pointer fields.
+func (s Source) Clone() Source {
+	out := s
+	if len(s.AllowedUsers) > 0 {
+		out.AllowedUsers = append([]string(nil), s.AllowedUsers...)
+	}
+	if len(s.RedisNodes) > 0 {
+		out.RedisNodes = append([]string(nil), s.RedisNodes...)
+	}
+	if s.SSHTunnel != nil {
+		tunnelCopy := *s.SSHTunnel
+		out.SSHTunnel = &tunnelCopy
+	}
+	return out
+}
+
 // UnmarshalJSON remembers whether read_only was present. A plain bool cannot
 // distinguish an explicit writable choice from an omitted field; security
 // defaults must never treat omission as permission to write.

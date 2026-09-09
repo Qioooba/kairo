@@ -99,4 +99,36 @@ func TestClassifySQL(t *testing.T) {
 			t.Errorf("ClassifySQL(%q) expected error, but got nil", q)
 		}
 	}
+
+	// Barewords as column names should NOT be blocked
+	allowedBarewords := []string{
+		"SELECT sleep FROM health_tracker",
+		"SELECT benchmark FROM benchmarks",
+		"SELECT get_lock, release_lock FROM lock_audit",
+	}
+	for _, q := range allowedBarewords {
+		if _, err := ClassifySQL(KindMySQL, q); err != nil {
+			t.Errorf("ClassifySQL(%q) should allow bareword column names, got: %v", q, err)
+		}
+		if err := ValidateReadOnlySQL(KindMySQL, q); err != nil {
+			t.Errorf("ValidateReadOnlySQL(%q) should allow bareword column names, got: %v", q, err)
+		}
+	}
+
+	// EXPLAIN with writes or ANALYZE requires mutation permission
+	explainWriteTests := []string{
+		"EXPLAIN ANALYZE DELETE FROM t",
+		"EXPLAIN UPDATE t SET a = 1",
+		"EXPLAIN INSERT INTO t VALUES (1)",
+		"EXPLAIN DROP TABLE t",
+	}
+	for _, q := range explainWriteTests {
+		info, err := ClassifySQL(KindMySQL, q)
+		if err != nil {
+			t.Fatalf("ClassifySQL(%q) failed: %v", q, err)
+		}
+		if !info.RequiresMutation {
+			t.Errorf("ClassifySQL(%q) should require mutation, got info: %+v", q, info)
+		}
+	}
 }

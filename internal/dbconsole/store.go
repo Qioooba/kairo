@@ -67,9 +67,9 @@ func (s *Store) load() error {
 func (s *Store) List() []Source {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	out := append([]Source(nil), s.data.Sources...)
-	for i := range out {
-		out[i].AllowedUsers = append([]string(nil), out[i].AllowedUsers...)
+	out := make([]Source, len(s.data.Sources))
+	for i, source := range s.data.Sources {
+		out[i] = source.Clone()
 	}
 	sort.SliceStable(out, func(i, j int) bool { return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name) })
 	return out
@@ -80,14 +80,14 @@ func (s *Store) Get(id string) (Source, bool) {
 	defer s.mu.RUnlock()
 	for _, source := range s.data.Sources {
 		if source.ID == id {
-			source.AllowedUsers = append([]string(nil), source.AllowedUsers...)
-			return source, true
+			return source.Clone(), true
 		}
 	}
 	return Source{}, false
 }
 
 func (s *Store) Save(source Source) (Source, error) {
+	source = source.Clone()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now().UTC().Format(time.RFC3339)
@@ -109,14 +109,17 @@ func (s *Store) Save(source Source) (Source, error) {
 			return Source{}, fmt.Errorf("数据源名称 %q 已存在", source.Name)
 		}
 	}
-	next := storeFile{Version: s.data.Version, Sources: append([]Source(nil), s.data.Sources...)}
+	next := storeFile{Version: s.data.Version, Sources: make([]Source, len(s.data.Sources))}
+	for i, item := range s.data.Sources {
+		next.Sources[i] = item.Clone()
+	}
 	found := false
 	for i := range next.Sources {
 		if next.Sources[i].ID == source.ID {
 			if source.CreatedAt == "" {
 				source.CreatedAt = next.Sources[i].CreatedAt
 			}
-			next.Sources[i] = source
+			next.Sources[i] = source.Clone()
 			found = true
 			break
 		}
@@ -125,13 +128,13 @@ func (s *Store) Save(source Source) (Source, error) {
 		if len(next.Sources) >= 100 {
 			return Source{}, errors.New("数据源数量不能超过 100")
 		}
-		next.Sources = append(next.Sources, source)
+		next.Sources = append(next.Sources, source.Clone())
 	}
 	if err := s.writeLocked(next); err != nil {
 		return Source{}, err
 	}
 	s.data = next
-	return source, nil
+	return source.Clone(), nil
 }
 
 func (s *Store) Delete(id string) (Source, error) {
@@ -142,13 +145,17 @@ func (s *Store) Delete(id string) (Source, error) {
 			continue
 		}
 		next := storeFile{Version: s.data.Version, Sources: make([]Source, 0, len(s.data.Sources)-1)}
-		next.Sources = append(next.Sources, s.data.Sources[:i]...)
-		next.Sources = append(next.Sources, s.data.Sources[i+1:]...)
+		for _, item := range s.data.Sources[:i] {
+			next.Sources = append(next.Sources, item.Clone())
+		}
+		for _, item := range s.data.Sources[i+1:] {
+			next.Sources = append(next.Sources, item.Clone())
+		}
 		if err := s.writeLocked(next); err != nil {
 			return Source{}, err
 		}
 		s.data = next
-		return source, nil
+		return source.Clone(), nil
 	}
 	return Source{}, fs.ErrNotExist
 }

@@ -174,10 +174,19 @@ func (m *Manager) buildLOBProjectedQuery(ctx context.Context, source Source, inf
 
 // Read metadata on the query's own connection: no nested pool/semaphore lease,
 // and CURRENT_SCHEMA is resolved in the same Oracle session as the result.
-func buildLOBProjectionOn(ctx context.Context, q lobQueryer, info *SingleTableQueryInfo) (*LOBRewrittenQuery, error) {
+func (m *Manager) buildLOBProjectionOn(ctx context.Context, q lobQueryer, sourceID string, info *SingleTableQueryInfo) (*LOBRewrittenQuery, error) {
 	if info.Schema == "" {
 		if err := q.QueryRowContext(ctx, `SELECT SYS_CONTEXT('USERENV','CURRENT_SCHEMA') FROM dual`).Scan(&info.Schema); err != nil {
 			return nil, err
+		}
+	}
+	cacheKey := fmt.Sprintf("%s\x00lob_proj_fields\x00%s\x00%s", sourceID, strings.ToUpper(info.Schema), strings.ToUpper(info.Table))
+	if m != nil && sourceID != "" {
+		if cachedFields, ok := metadataCacheGet[[]Field](m, cacheKey); ok {
+			if len(cachedFields) == 0 {
+				return nil, nil
+			}
+			return compileLOBProjectedQuery(info, cachedFields)
 		}
 	}
 	var count int
@@ -185,6 +194,9 @@ func buildLOBProjectionOn(ctx context.Context, q lobQueryer, info *SingleTableQu
 		return nil, err
 	}
 	if count != 1 {
+		if m != nil && sourceID != "" {
+			metadataCacheSet(m, cacheKey, []Field{})
+		}
 		return nil, nil
 	}
 	rows, err := q.QueryContext(ctx, `SELECT c.column_name, c.data_type, c.nullable, c.column_id,
@@ -208,6 +220,9 @@ FROM all_tab_columns c WHERE c.owner=:1 AND c.table_name=:2 AND c.column_id IS N
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
+	}
+	if m != nil && sourceID != "" {
+		metadataCacheSet(m, cacheKey, append([]Field(nil), fields...))
 	}
 	return compileLOBProjectedQuery(info, fields)
 }
@@ -312,7 +327,8 @@ func compileLOBProjectedQuery(info *SingleTableQueryInfo, fields []Field) (*LOBR
 	projParts = append(projParts, fmt.Sprintf("ROWIDTOCHAR(%s.ROWID) AS \"__KAIRO_ROWID__\"", info.TableAlias))
 	underlyingColIdx++
 
-	// 确定性排序（结论 2.5）：在 ORDER BY 末尾追加主键或 ROWID 保证分页结果稳定
+	// 确定性排序（结论 2.5）：仅在用户显式指定 ORDER BY 时追加主键或 ROWID 保证稳定；
+	// 若用户未指定 ORDER BY，严禁强行追加全表排序（避免千万级大表全表排序 SORT ORDER BY 耗费数十秒）
 	stableOrderBy := ""
 	if strings.TrimSpace(info.OrderByClause) != "" {
 		stableOrderBy = "ORDER BY " + info.OrderByClause
@@ -325,17 +341,6 @@ func compileLOBProjectedQuery(info *SingleTableQueryInfo, fields []Field) (*LOBR
 			stableOrderBy += ", " + strings.Join(pkParts, ", ")
 		} else {
 			stableOrderBy += ", " + info.TableAlias + ".ROWID"
-		}
-	} else {
-		if len(primaryKeyCols) > 0 {
-			var pkParts []string
-			for _, pk := range primaryKeyCols {
-				pkQ, _ := quoteGridIdentifier(KindOracle, pk, "主键")
-				pkParts = append(pkParts, info.TableAlias+"."+pkQ)
-			}
-			stableOrderBy = "ORDER BY " + strings.Join(pkParts, ", ")
-		} else {
-			stableOrderBy = "ORDER BY " + info.TableAlias + ".ROWID"
 		}
 	}
 

@@ -20,6 +20,9 @@ func (m *Manager) transactionFor(source Source, sessionID string, create bool) (
 }
 
 func (m *Manager) transactionForContext(ctx context.Context, source Source, sessionID string, create bool) (*transactionEntry, error) {
+	if m.closed.Load() {
+		return nil, errors.New("dbconsole manager is closed")
+	}
 	if strings.TrimSpace(sessionID) == "" {
 		return nil, errors.New("事务会话 id 不能为空")
 	}
@@ -102,6 +105,12 @@ func (m *Manager) transactionForContext(ctx context.Context, source Source, sess
 	now := time.Now()
 	created := &transactionEntry{tx: tx, cancel: cancel, sourceID: source.ID, sessionID: sessionID, fingerprint: fingerprint, createdAt: now, updatedAt: now}
 	m.mu.Lock()
+	if m.closed.Load() {
+		m.mu.Unlock()
+		_ = tx.Rollback()
+		cancel()
+		return nil, errors.New("dbconsole manager is closed")
+	}
 	if m.transactions == nil {
 		m.transactions = make(map[string]*transactionEntry)
 	}
@@ -218,6 +227,9 @@ func (m *Manager) ControlSessionTransaction(ctx context.Context, source Source, 
 // ExecuteSessionBatch stages grid UPDATE statements in the same tab transaction.
 // The caller must explicitly COMMIT or ROLLBACK afterwards.
 func (m *Manager) ExecuteSessionBatch(ctx context.Context, source Source, sessionID string, statements []string) (QuerySummary, error) {
+	if !source.MutationAllowed() {
+		return QuerySummary{}, errors.New("该数据源处于只读锁定状态")
+	}
 	if len(statements) == 0 {
 		return QuerySummary{}, errors.New("批量语句不能为空")
 	}

@@ -27,6 +27,7 @@ func TestObjectStudioRejectsUnsafeValues(t *testing.T) {
 	unsafe := []ObjectStudioChange{
 		{Action: "create", ObjectType: "table", Schema: "APP", Name: "T;DROP TABLE X", Columns: []ObjectStudioColumn{{Name: "ID", DataType: "NUMBER"}}},
 		{Action: "create", ObjectType: "table", Schema: "APP", Name: "T", Columns: []ObjectStudioColumn{{Name: "ID", DataType: "NUMBER", Default: "1); DROP TABLE X"}}},
+		{Action: "create", ObjectType: "table", Schema: "APP", Name: "T", Columns: []ObjectStudioColumn{{Name: "ID", DataType: "VARCHAR2(50)", Default: "TO_DATE('2026-01-01','YYYY-MM-DD'), CONSTRAINT evil CHECK(1=1)"}}},
 		{Action: "create", ObjectType: "view", Schema: "APP", Name: "V", Definition: "SELECT 1; DROP TABLE X"},
 		{Action: "drop", ObjectType: "table", Schema: "APP", Name: "T"},
 	}

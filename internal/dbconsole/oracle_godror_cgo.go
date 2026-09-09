@@ -28,7 +28,7 @@ func oracleLoadedClientVersion(ctx context.Context, db *sql.DB) (string, error) 
 }
 
 func oracleGridArgs(args []any) []any {
-	return append(append([]any(nil), args...), godror.LobAsReader(), godror.FetchArraySize(20))
+	return append(append([]any(nil), args...), godror.LobAsReader(), godror.FetchArraySize(200))
 }
 
 func oracleLOBPreview(src any, dbType string) (any, bool, error) {

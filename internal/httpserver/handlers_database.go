@@ -42,6 +42,8 @@ func (s *Server) handleDatabaseDispatch(w http.ResponseWriter, r *http.Request) 
 		s.handleDatabaseTransaction(w, r)
 	case path == "lob":
 		s.handleDatabaseLob(w, r)
+	case path == "lob/token":
+		s.handleDatabaseLobToken(w, r)
 	case path == "oracle/client-info":
 		s.handleDatabaseOracleClientInfo(w, r)
 	case path == "transaction/status":
@@ -372,6 +374,7 @@ type databaseQueryRequest struct {
 	CountMode  string                    `json:"count_mode"`
 	Format     string                    `json:"format"`
 	Table      string                    `json:"table"`
+	Fast       *bool                     `json:"fast,omitempty"`
 }
 
 type databaseTransactionRequest struct {
@@ -490,7 +493,7 @@ func (s *Server) handleDatabaseQuery(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, 400, err)
 			return
 		}
-		if !statementInfo.IsQuery || statementInfo.HasForUpdate {
+		if !statementInfo.IsQuery || statementInfo.HasForUpdate || statementInfo.RequiresMutation {
 			if !source.MutationAllowed() {
 				writeErr(w, http.StatusForbidden, errors.New("该数据源处于只读锁定状态"))
 				return
@@ -528,7 +531,11 @@ func (s *Server) handleDatabaseQuery(w http.ResponseWriter, r *http.Request) {
 		return nil
 	}
 	page, pageSize := databaseQueryPage(req)
-	summary, err := s.database.StreamSessionQueryPageWithParams(r.Context(), source, req.SQL, page, pageSize, scopedDatabaseSessionID(r, req.SessionID), req.Parameters, emit)
+	isFast := page <= 1
+	if req.Fast != nil {
+		isFast = *req.Fast
+	}
+	summary, err := s.database.StreamSessionQueryPageWithParamsAndOptions(r.Context(), source, req.SQL, page, pageSize, scopedDatabaseSessionID(r, req.SessionID), req.Parameters, dbconsole.QueryOptions{Fast: isFast}, emit)
 	if err != nil {
 		err = s.databaseSafeError(source, err)
 		_ = emit(dbconsole.StreamEvent{Type: "error", Error: trim(err.Error(), 1000)})
@@ -630,7 +637,7 @@ func (s *Server) handleDatabaseExport(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, 400, err)
 			return
 		}
-		if !statementInfo.IsQuery {
+		if !statementInfo.IsQuery || statementInfo.RequiresMutation {
 			if !source.MutationAllowed() {
 				writeErr(w, http.StatusForbidden, errors.New("该数据源处于只读锁定状态"))
 				return
@@ -1240,7 +1247,7 @@ type databaseSessionBackupPayload struct {
 	ActiveID      any              `json:"activeId"`
 	TabSeq        int              `json:"tabSeq"`
 	SourceID      string           `json:"sourceId"`
-	EditorHeight  int              `json:"editorHeight"`
+	EditorHeight  float64          `json:"editorHeight"`
 	MetaCollapsed *bool            `json:"metaCollapsed"`
 	Sessions      []map[string]any `json:"sessions"`
 	UpdatedAt     int64            `json:"updatedAt"`

@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"regexp"
@@ -106,8 +107,9 @@ func QuoteIdent(kind, name string) string {
 			continue
 		}
 		if isQuotedIdent(part) {
-			out = append(out, part)
-			continue
+			part = part[1 : len(part)-1]
+			part = strings.ReplaceAll(part, `""`, `"`)
+			part = strings.ReplaceAll(part, "``", "`")
 		}
 		out = append(out, quoteIdentPart(kind, part))
 	}
@@ -326,11 +328,9 @@ func WriteUPDATE(w io.Writer, table ExportTable, kind, tableName string, pkCols 
 		}
 	}
 	if len(whereIndices) == 0 {
-		for i := range table.Columns {
-			whereIndices = append(whereIndices, i)
-			setIndices = append(setIndices, i)
-		}
-	} else if len(setIndices) == 0 {
+		return errors.New("导出 UPDATE 语句需要目标表定义主键，或请选用 INSERT/CSV 格式")
+	}
+	if len(setIndices) == 0 {
 		setIndices = whereIndices
 	}
 

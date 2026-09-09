@@ -625,16 +625,16 @@
     if (v == null) return '<span class="db-null">NULL</span>';
     if (typeof v === 'object') {
       if (v.kind === 'clob') {
-        const sz = v.token ? Number(v.length || 0).toLocaleString() + ' 字符' : formatBytes(v.bytes || 0);
+        const sz = v.token ? (Number(v.length || 0).toLocaleString() + ' 字符') : (v.lazy ? '待加载' : formatBytes(v.bytes || 0));
         const lobLabel = v.database_type === 'NCLOB' ? 'NCLOB' : 'CLOB';
-        const tokenCls = v.token ? ' db-lob-token' : '';
-        const title = v.token ? '点击查看/流式下载完整 CLOB (' + sz + ')' : '点击查看 CLOB 文本 (' + sz + ')';
+        const tokenCls = (v.token || v.lazy) ? ' db-lob-token' : '';
+        const title = v.lazy ? '点击在线预览/流式加载完整 CLOB' : (v.token ? '点击查看/流式下载完整 CLOB (' + sz + ')' : '点击查看 CLOB 文本 (' + sz + ')');
         return '<button type="button" class="db-lob-badge db-lob-clob' + tokenCls + '" data-lob-type="clob" data-lob-row="' + rowIdx + '" data-lob-col="' + colIdx + '" title="' + h(title) + '">' + lobLabel + ' (' + sz + ')</button>';
       }
       if (v.kind === 'blob') {
-        const sz = formatBytes(v.token ? v.length : v.bytes || 0);
-        const tokenCls = v.token ? ' db-lob-token' : '';
-        const title = v.token ? '点击查看/流式下载完整 BLOB (' + sz + ')' : '点击查看十六进制检视器 (' + sz + ')';
+        const sz = v.token ? formatBytes(v.length) : (v.lazy ? '待加载' : formatBytes(v.bytes || 0));
+        const tokenCls = (v.token || v.lazy) ? ' db-lob-token' : '';
+        const title = v.lazy ? '点击在线预览 Hex / 流式加载完整 BLOB' : (v.token ? '点击查看/流式下载完整 BLOB (' + sz + ')' : '点击查看十六进制检视器 (' + sz + ')');
         return '<button type="button" class="db-lob-badge db-lob-blob' + tokenCls + '" data-lob-type="blob" data-lob-row="' + rowIdx + '" data-lob-col="' + colIdx + '" title="' + h(title) + '">BLOB (' + sz + ')</button>';
       }
       if (v.kind === 'text') return h(v.preview) + '<span class="db-cut">(截断 ' + h(v.bytes) + ' B)</span>';
@@ -1064,6 +1064,50 @@
         isToken: true
       };
     }
+    if (targetVal && typeof targetVal === 'object' && targetVal.lazy) {
+      const rowKeys = {};
+      if (state.columns && state.rows[rowIdx]) {
+        state.columns.forEach(function (c, idx) {
+          if (c && c.name && state.rows[rowIdx][idx] !== undefined) {
+            const cellVal = state.rows[rowIdx][idx];
+            if (cellVal === null || typeof cellVal !== 'object') {
+              rowKeys[c.name] = cellVal;
+            }
+          }
+        });
+      }
+      const tName = targetVal.table || detectTableName();
+      const effSrc = effectiveSource() || {};
+      try {
+        const tokenResp = await fetch('/api/database/lob/token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            source_id: effSrc.id,
+            session_id: (sess() || {}).transactionId || '',
+            owner: (q('db-schema') && q('db-schema').value) || '',
+            table: tName,
+            column: colName,
+            column_type: targetVal.database_type || (isClob ? 'CLOB' : 'BLOB'),
+            keys: rowKeys
+          })
+        });
+        if (tokenResp.ok) {
+          const tokenData = await tokenResp.json();
+          if (tokenData && tokenData.token) {
+            targetVal.token = tokenData.token;
+            return {
+              payload: { token: tokenData.token },
+              table: tName,
+              useRowId: false,
+              isToken: true
+            };
+          }
+        }
+      } catch (err) {
+        console.error('按需获取 LOB Token 失败', err);
+      }
+    }
     toast('该查询结果没有稳定行标识，无法重新下载。请使用单表浏览获取完整内容。', 'warn');
     return null;
   }
@@ -1302,6 +1346,7 @@
     if (!current || current.transactionBusy) return;
     const dirtyCount = Object.keys(current.dirtyCells || {}).length;
     if (!dirtyCount && !current.transactionPending) return toast('当前页签没有可回滚的事务', 'warn');
+    if (!source) return toast('未选择有效的数据源', 'warn');
     current.transactionBusy = true;
     try {
       if (current.transactionPending) {
@@ -1333,7 +1378,7 @@
       activeId: state.activeId,
       tabSeq: tabSeq,
       sourceId: state.source ? state.source.id : '',
-      editorHeight: persisted.editor_height,
+      editorHeight: Math.round(Number(persisted.editor_height) || 0),
       metaCollapsed: persisted.meta_collapsed,
       sessions: (state.sessions || []).map(x => ({
         id: x.id,
@@ -1367,9 +1412,9 @@
       session.id = saved.id;
       const sourceExists = saved.sourceId && state.sources.some(s => s.id === saved.sourceId);
       session.sourceId = sourceExists ? saved.sourceId : (state.source ? state.source.id : '');
-      session.transactionId = saved.transactionId || newTransactionID();
-      session.transactionPending = !!saved.transactionPending;
-      session.gridEditsStaged = !!saved.gridEditsStaged;
+      session.transactionId = newTransactionID();
+      session.transactionPending = false;
+      session.gridEditsStaged = false;
       const srcObj = state.sources.find(s => s.id === session.sourceId);
       if (srcObj) bindSessionSource(session, srcObj);
       session.page = saved.page || 1;
@@ -2181,7 +2226,8 @@
       if (!items) {
         // 真·按需懒加载：仅针对该类别发起轻量查询，各自缓存。
         const data = await api('GET', '/api/database/metadata/objects?source_id=' + encodeURIComponent(source.id) + '&schema=' + encodeURIComponent(schema) + '&category=' + encodeURIComponent(category));
-        if (token !== state.workspaceToken) return;
+        const currentSchema = q('db-schema') && q('db-schema').value;
+        if (token !== state.workspaceToken || currentSchema !== schema || (state.source && state.source.id !== source.id)) return;
         items = data.objects || [];
         state.schemaCategoryCache[cacheKey] = items;
         if (category === 'tables') {
@@ -2192,23 +2238,28 @@
           state.metadataCache[schema] = Array.from(new Set([].concat(state.metadataCache[schema] || [], names)));
         }
       }
-      if (token !== state.workspaceToken) return;
+      const currentSchema = q('db-schema') && q('db-schema').value;
+      if (token !== state.workspaceToken || currentSchema !== schema || (state.source && state.source.id !== source.id)) return;
       renderCategoryItems(groupEl, schema, category, items);
     } catch (e) {
       groupEl._loaded = false;
-      if (content) content.innerHTML = inlineError('查询失败', e.message);
+      const currentSchema = q('db-schema') && q('db-schema').value;
+      if (token === state.workspaceToken && currentSchema === schema && content) content.innerHTML = inlineError('查询失败', e.message);
     }
   }
 
   async function loadObjects() {
+    state.metaSeq = (state.metaSeq || 0) + 1;
+    const seq = state.metaSeq;
     const token = state.workspaceToken, source = state.source, schema = q('db-schema') && q('db-schema').value, objects = q('db-objects');
-    if (!schema) return;
+    if (!schema || !source) return;
     if (objects) objects.innerHTML = '<div class="db-tree-loading">正在读取对象…</div>';
     try {
       const search = q('db-object-search');
       const hasSearch = !!(search && search.value.trim());
       const data = await api('GET', '/api/database/metadata/objects?source_id=' + encodeURIComponent(source.id) + '&schema=' + encodeURIComponent(schema) + '&search=' + encodeURIComponent(hasSearch ? search.value : ''));
-      if (token !== state.workspaceToken || !objects) return;
+      const currentSchema = q('db-schema') && q('db-schema').value;
+      if (seq !== state.metaSeq || token !== state.workspaceToken || !objects || currentSchema !== schema || (state.source && state.source.id !== source.id)) return;
       const groups = [['tables', '表'], ['views', '视图'], ['functions', '函数'], ['procedures', '存储过程 / 包'], ['triggers', '触发器'], ['other', '其他对象']];
       const by = {};
       (data.objects || []).forEach(x => (by[x.category || 'other'] = by[x.category || 'other'] || []).push(x));
@@ -2217,20 +2268,24 @@
         bindObjectButton(btn, schema);
       });
     } catch (e) {
-      if (token === state.workspaceToken && objects) objects.innerHTML = inlineError('对象加载失败', e.message);
+      const currentSchema = q('db-schema') && q('db-schema').value;
+      if (seq === state.metaSeq && token === state.workspaceToken && objects && currentSchema === schema) objects.innerHTML = inlineError('对象加载失败', e.message);
     }
   }
 
   async function loadInspect(schema, object, type) {
+    state.inspectSeq = (state.inspectSeq || 0) + 1;
+    const seq = state.inspectSeq;
     const token = state.workspaceToken, source = state.source, body = q('db-inspect-body');
+    if (!source) return;
     if (body) body.innerHTML = '<div class="db-selected-object">' + h(object) + '<small>' + h(type) + '</small></div><div class="db-tree-loading">正在读取详情…</div>';
     try {
       const data = await api('GET', '/api/database/metadata/inspect?source_id=' + encodeURIComponent(source.id) + '&schema=' + encodeURIComponent(schema) + '&object=' + encodeURIComponent(object) + '&type=' + encodeURIComponent(type || ''));
-      if (token !== state.workspaceToken) return;
+      if (seq !== state.inspectSeq || token !== state.workspaceToken || (state.source && state.source.id !== source.id)) return;
       state.inspect = Object.assign({ object: object, type: type, schema: schema }, data.inspect || {});
       renderInspect();
     } catch (e) {
-      if (token === state.workspaceToken && body) body.innerHTML = inlineError('对象详情加载失败', e.message);
+      if (seq === state.inspectSeq && token === state.workspaceToken && body) body.innerHTML = inlineError('对象详情加载失败', e.message);
     }
   }
 
@@ -2327,7 +2382,7 @@
         const startY = e.clientY;
         const startH = shell.getBoundingClientRect().height;
         const move = function (ev) {
-          const newH = Math.max(80, Math.min(650, startH + (ev.clientY - startY)));
+          const newH = Math.round(Math.max(80, Math.min(650, startH + (ev.clientY - startY))));
           shell.style.height = newH + 'px';
           const ta = q('db-sql'), hl = q('db-sql-highlight');
           if (ta) ta.style.height = newH + 'px';
@@ -2349,7 +2404,7 @@
         e.preventDefault();
         const startX = e.clientX, startW = meta ? meta.getBoundingClientRect().width : (persisted.meta_width || 260);
         const move = function (ev) {
-          persisted.meta_width = Math.max(META_WIDTH_MIN, Math.min(META_WIDTH_MAX, startW + ev.clientX - startX));
+          persisted.meta_width = Math.round(Math.max(META_WIDTH_MIN, Math.min(META_WIDTH_MAX, startW + ev.clientX - startX)));
           if (meta) meta.style.width = persisted.meta_width + 'px';
         };
         const up = function () { document.removeEventListener('pointermove', move); document.removeEventListener('pointerup', up); savePersisted(); };
@@ -2362,7 +2417,7 @@
         e.preventDefault();
         const startY = e.clientY, startH = inspect ? inspect.getBoundingClientRect().height : (persisted.inspect_height || 220);
         const move = function (ev) {
-          persisted.inspect_height = Math.max(180, Math.min(560, startH + (startY - ev.clientY)));
+          persisted.inspect_height = Math.round(Math.max(180, Math.min(560, startH + (startY - ev.clientY))));
           if (inspect) inspect.style.flexBasis = persisted.inspect_height + 'px';
         };
         const up = function () { document.removeEventListener('pointermove', move); document.removeEventListener('pointerup', up); savePersisted(); };
@@ -3153,7 +3208,14 @@
     if ((action === 'UPDATE' || action === 'DELETE') && !/\bWHERE\b/i.test(normalized.slice(actionIndex + action.length))) {
       return { action: action, warning: action + ' 没有 WHERE 条件，将影响目标表的全部匹配行；执行后仍需手动提交。' };
     }
-    return { action: action, writes: !/^(SELECT|WITH|SHOW|DESC|DESCRIBE|EXPLAIN)$/.test(action) || /\bFOR\s+UPDATE\b/i.test(normalized) };
+    let explainWrites = false;
+    if (first === 'EXPLAIN') {
+      const rest = normalized.slice(actionIndex + action.length).trim();
+      if (/\b(INSERT|UPDATE|DELETE|DROP|TRUNCATE|ALTER|REPLACE|MERGE)\b/i.test(rest) || (/\bANALYZE\b/i.test(rest) && !/^(SELECT|SHOW|WITH|DESC|DESCRIBE)\b/i.test(rest.replace(/\bANALYZE\b/i, '').trim()))) {
+        explainWrites = true;
+      }
+    }
+    return { action: action, writes: explainWrites || !/^(SELECT|WITH|SHOW|DESC|DESCRIBE|EXPLAIN)$/.test(action) || /\bFOR\s+UPDATE\b/i.test(normalized) };
   }
 
   async function runQuery(keepPage) {
@@ -3182,7 +3244,9 @@
       replaceDirtyCells({});
       updateTransactionControls();
     }
-    const maxRows = Number(q('db-max-rows').value);
+    const maxAllowed = Math.max(1, (querySource && querySource.max_rows) || 1000);
+    const inputRows = Number(q('db-max-rows') && q('db-max-rows').value);
+    const maxRows = Math.max(1, Math.min(maxAllowed, Number.isFinite(inputRows) && inputRows > 0 ? Math.floor(inputRows) : Math.min(1000, maxAllowed)));
     const prevSQL = s.lastSQL;
     s.sql = q('db-sql') ? q('db-sql').value : sql;
     s.lastSQL = sql;
@@ -3246,8 +3310,9 @@
       }
       productionConfirm = true;
     }
-    try {
-      const queryBody = { source_id: effSrc.id, session_id: s.transactionId, sql: sql, max_rows: maxRows, page: s.page, page_size: s.pageSize, count_mode: 'none' };
+      s.startTime = performance.now();
+      s.firstRowsTime = 0;
+      const queryBody = { source_id: effSrc.id, session_id: s.transactionId, sql: sql, max_rows: maxRows, page: s.page, page_size: s.pageSize, count_mode: 'none', fast: true };
       // Bound values are optional so older servers remain compatible for
       // ordinary queries. New query handlers consume this typed array for
       // SELECT :name / {{name}} without exposing raw UI state.
@@ -3409,11 +3474,18 @@
       s.gridReady = false;
       if (s.id === state.activeId) { bindSession(s); renderResult(); }
     } else if (e.type === 'rows') {
+      if (!s.firstRowsTime) {
+        s.firstRowsTime = performance.now();
+      }
       s.rows.push.apply(s.rows, e.rows || []);
+      const firstPacketTime = Math.round(s.firstRowsTime - (s.startTime || s.firstRowsTime));
+      s.status = '已返回 ' + s.rows.length + ' 行（首包 ' + firstPacketTime + ' ms）…';
       if (s.id === state.activeId) {
         bindSession(s);
         if (state.resultMode === 'grid' && state.gridReady) refreshVisibleResult();
         else renderResult();
+        const st = q('db-query-status');
+        if (st) st.textContent = s.status;
       }
     } else if (e.type === 'mutation') {
       s.rows = [];
@@ -3437,11 +3509,19 @@
     } else if (e.type === 'summary') {
       s.summary = e.summary;
       if (e.summary && e.summary.page) { s.page = e.summary.page; s.pageSize = e.summary.page_size || s.pageSize; }
-      s.status = e.summary.rows + ' 行 · ' + e.summary.elapsed_ms + ' ms' + (e.summary.retry_count ? ' · 已自动重连' : '') + (e.summary.ordered === false ? ' · 未指定 ORDER BY' : '') + (e.summary.truncated ? ' · 已截断' : '');
+      const totalTime = s.startTime ? Math.round(performance.now() - s.startTime) : null;
+      const firstPacketTime = (s.firstRowsTime && s.startTime) ? Math.round(s.firstRowsTime - s.startTime) : null;
+      let timingStr = e.summary.elapsed_ms + ' ms';
+      if (firstPacketTime !== null && totalTime !== null) {
+        timingStr = e.summary.elapsed_ms + ' ms（首包 ' + firstPacketTime + ' ms / 总 ' + totalTime + ' ms）';
+      }
+      s.status = e.summary.rows + ' 行 · ' + timingStr + (e.summary.retry_count ? ' · 已自动重连' : '') + (e.summary.ordered === false ? ' · 未指定 ORDER BY' : '') + (e.summary.truncated ? ' · 已截断' : '');
       if (s.id === state.activeId) {
         bindSession(s);
         refreshVisibleResult();
         updateDatabasePager();
+        const st = q('db-query-status');
+        if (st) st.textContent = s.status;
         if (e.summary && e.summary.message && e.summary.message.indexOf('FOR UPDATE') >= 0) {
           showQueryMessage('warn', '行锁提示', e.summary.message);
         }

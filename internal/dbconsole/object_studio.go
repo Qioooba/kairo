@@ -370,6 +370,9 @@ func validateStudioDefault(value string) error {
 		if !balancedParentheses(v) {
 			return errors.New("默认值括号不匹配")
 		}
+		if !validateTopLevelParenthesized(v) {
+			return errors.New("默认值表达式结构非法或包含游离逗号")
+		}
 		for _, r := range v {
 			if !(r == '\'' || r == '(' || r == ')' || r == ',' || r == ' ' || r == '_' || r == '-' || r == ':' || r == '.' || r == '/' || r >= '0' && r <= '9' || r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z') {
 				return errors.New("默认值表达式包含非法字符")
@@ -378,6 +381,49 @@ func validateStudioDefault(value string) error {
 		return nil
 	}
 	return errors.New("默认值只支持数字、字符串、NULL、当前时间或受控日期函数")
+}
+
+func validateTopLevelParenthesized(value string) bool {
+	depth := 0
+	inString := false
+	sawClose := false
+	for i := 0; i < len(value); i++ {
+		c := value[i]
+		switch c {
+		case '\'':
+			if inString && i+1 < len(value) && value[i+1] == '\'' {
+				i++
+				continue
+			}
+			inString = !inString
+		case '(':
+			if !inString {
+				if sawClose {
+					return false
+				}
+				depth++
+			}
+		case ')':
+			if !inString {
+				depth--
+				if depth < 0 {
+					return false
+				}
+				if depth == 0 {
+					sawClose = true
+				}
+			}
+		case ',':
+			if !inString && depth == 0 {
+				return false
+			}
+		default:
+			if !inString && depth == 0 && sawClose && c != ' ' && c != '\t' {
+				return false
+			}
+		}
+	}
+	return depth == 0 && sawClose && !inString
 }
 
 func balancedParentheses(value string) bool {

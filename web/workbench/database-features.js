@@ -15,8 +15,9 @@
   const STORAGE_HISTORY = 'kairo:database:history:v2';
   const STORAGE_DRAFTS = 'kairo:database:file-drafts:v1';
   const MAX_HISTORY = 200;
+  const MAX_HISTORY_SQL_LEN = 30000;
   const MAX_SQL_HIGHLIGHT = 220000;
-  const MAX_IMPORT_ROWS = 20000;
+  const MAX_IMPORT_ROWS = 10000;
   const SQL_WORD = /[A-Za-z_$#\u0080-\uffff]/;
   const SQL_WORD_CONT = /[A-Za-z0-9_$#\u0080-\uffff]/;
   const KEYWORDS = new Set((
@@ -560,7 +561,10 @@
   function addHistory(entry) {
     if (!entry || !String(entry.sql || '').trim()) return;
     loadHistory();
-    const sql = String(entry.sql).trim();
+    let sql = String(entry.sql).trim();
+    if (sql.length > MAX_HISTORY_SQL_LEN) {
+      sql = sql.slice(0, MAX_HISTORY_SQL_LEN) + '\n/* -- [kairo: 历史记录超长截断] -- */';
+    }
     const runId = entry.runId || '';
     const existingIndex = runId ? state.history.findIndex(function (item) { return item && item.runId === runId; }) : -1;
     const defaults = Object.assign({
@@ -1427,6 +1431,7 @@
           if (!previewTarget || previewTarget.sourceId !== sourceId() || previewTarget.schema !== schema || previewTarget.table !== table) { toast('目标已改变，请重新选择文件并预览', 'warn'); return; }
           const rows = parsedRows.length ? parsedRows.slice(1) : [];
           if (!previewData.total_rows || !mappings.length) { toast('没有可导入的数据或目标列映射', 'warn'); return; }
+          if ((previewData.total_rows || rows.length) > MAX_IMPORT_ROWS) { toast('导入行数超过最大限制（' + MAX_IMPORT_ROWS + ' 行）', 'warn'); return; }
           const production = sourceIsProduction(), confirm = production ? window.confirm('当前数据源标记为生产环境，确认导入数据？') : false;
           if (production && !confirm) return;
           button.disabled = true; button.textContent = '提交中…';
@@ -1478,14 +1483,50 @@
       if (version !== previewVersion) return;
       const target = { sourceId: sourceId(), schema: schema, table: table };
       preview.innerHTML = '<span class="hint">正在读取目标表字段并生成映射…</span>';
-      api('POST', '/api/database/import/preview', { source_id: sourceId(), schema: schema, table: table, format: format || 'csv', data_base64: encoded }).then(function (data) { if (version !== previewVersion) return; previewTarget = target; previewData = data.preview || data; renderMapping(previewData); if (!parsedRows.length && previewData.table && previewData.table.rows) { preview.innerHTML = '<div class="db-pro-import-summary">后端预览 · ' + esc(fileName) + ' · 共 ' + esc(previewData.total_rows || previewData.table.rows.length) + ' 行</div>'; } }).catch(function (error) { if (version !== previewVersion) return; previewData = null; mappingHost.innerHTML = ''; if (parsedRows.length) renderLocalPreview(parsedRows); toast('导入预览失败：' + (error.message || error), 'err'); });
+      api('POST', '/api/database/import/preview', { source_id: sourceId(), schema: schema, table: table, format: format || 'csv', data_base64: encoded }).then(function (data) {
+        if (version !== previewVersion) return;
+        previewTarget = target;
+        previewData = data.preview || data;
+        renderMapping(previewData);
+        if (previewData.total_rows > MAX_IMPORT_ROWS) {
+          toast('文件包含 ' + previewData.total_rows + ' 行，超过最大导入行数限制（' + MAX_IMPORT_ROWS + ' 行）', 'warn');
+        }
+        if (!parsedRows.length && previewData.table && previewData.table.rows) {
+          preview.innerHTML = '<div class="db-pro-import-summary">后端预览 · ' + esc(fileName) + ' · 共 ' + esc(previewData.total_rows || previewData.table.rows.length) + ' 行</div>';
+        }
+      }).catch(function (error) {
+        if (version !== previewVersion) return;
+        previewData = null;
+        mappingHost.innerHTML = '';
+        if (parsedRows.length) renderLocalPreview(parsedRows);
+        toast('导入预览失败：' + (error.message || error), 'err');
+      });
     }
     file.addEventListener('change', function () {
       const version = ++previewVersion; previewData = null; previewTarget = null; encoded = ''; parsedRows = []; mappingHost.innerHTML = '';
       const picked = file.files && file.files[0]; if (!picked) return; fileName = picked.name;
       if (picked.size > 8 * 1024 * 1024) { toast('文件不能超过 8 MiB', 'warn'); return; }
       format = /\.xlsx$/i.test(fileName) ? 'xlsx' : 'csv';
-      if (format === 'csv') { const reader = new FileReader(); reader.onload = function () { if (version !== previewVersion) return; const isTSV = /\.tsv$/i.test(fileName); parsedRows = parseCSV(reader.result || '', isTSV ? '\t' : undefined); renderLocalPreview(parsedRows); if (isTSV) { encoded = encodeTextBase64(rowsAsCSV(parsedRows)); requestPreview(version); } else readAsBase64(picked, version); }; reader.readAsText(picked); }
+      if (format === 'csv') {
+        const reader = new FileReader();
+        reader.onload = function () {
+          if (version !== previewVersion) return;
+          const isTSV = /\.tsv$/i.test(fileName);
+          parsedRows = parseCSV(reader.result || '', isTSV ? '\t' : undefined);
+          const dataRowCount = Math.max(0, parsedRows.length - 1);
+          if (dataRowCount > MAX_IMPORT_ROWS) {
+            file.value = '';
+            parsedRows = [];
+            preview.innerHTML = '<span class="text-err">文件包含 ' + dataRowCount + ' 行，超过最大导入行数限制（' + MAX_IMPORT_ROWS + ' 行）</span>';
+            toast('导入行数不能超过 ' + MAX_IMPORT_ROWS + ' 行', 'warn');
+            return;
+          }
+          renderLocalPreview(parsedRows);
+          if (isTSV) { encoded = encodeTextBase64(rowsAsCSV(parsedRows)); requestPreview(version); }
+          else readAsBase64(picked, version);
+        };
+        reader.readAsText(picked);
+      }
       else { parsedRows = []; preview.innerHTML = '<span class="hint">XLSX 将由后端解析…</span>'; readAsBase64(picked, version); }
     });
   }

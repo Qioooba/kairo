@@ -50,10 +50,17 @@ func (m *Manager) StreamSessionQueryPage(ctx context.Context, source Source, que
 	return m.StreamSessionQueryPageWithParams(ctx, source, query, page, pageSize, sessionID, nil, emit)
 }
 
-// StreamSessionQueryPageWithParams is the parameterized counterpart used by
-// the HTTP query endpoint.  Binding happens before any database call and the
-// rewritten SQL is still passed through the same classifier/paginator.
-func (m *Manager) StreamSessionQueryPageWithParams(ctx context.Context, source Source, query string, page, pageSize int, sessionID string, params []BindParameter, emit EmitFunc) (qs QuerySummary, qerr error) {
+type QueryOptions struct {
+	Fast bool
+}
+
+// StreamSessionQueryPageWithParams binds DML and transaction control to one browser tab.
+func (m *Manager) StreamSessionQueryPageWithParams(ctx context.Context, source Source, query string, page, pageSize int, sessionID string, params []BindParameter, emit EmitFunc) (QuerySummary, error) {
+	return m.StreamSessionQueryPageWithParamsAndOptions(ctx, source, query, page, pageSize, sessionID, params, QueryOptions{Fast: page <= 1}, emit)
+}
+
+// StreamSessionQueryPageWithParamsAndOptions is the parameterized counterpart with explicit query options.
+func (m *Manager) StreamSessionQueryPageWithParamsAndOptions(ctx context.Context, source Source, query string, page, pageSize int, sessionID string, params []BindParameter, opts QueryOptions, emit EmitFunc) (qs QuerySummary, qerr error) {
 	defer func() {
 		if r := recover(); r != nil {
 			qerr = fmt.Errorf("%w: 查询 panic 已捕获（可能为 TTC 解析错位，连接已销毁）: %v", driver.ErrBadConn, r)
@@ -77,6 +84,14 @@ func (m *Manager) StreamSessionQueryPageWithParams(ctx context.Context, source S
 	info, err := ValidateSQL(source.Kind, boundQuery)
 	if err != nil {
 		return QuerySummary{}, err
+	}
+	if !info.IsQuery || info.HasForUpdate || info.RequiresMutation {
+		if !source.MutationAllowed() {
+			return QuerySummary{}, errors.New("该数据源处于只读锁定状态")
+		}
+	}
+	if info.Type == "DDL" && !source.DDLAllowed() {
+		return QuerySummary{}, errors.New("该数据源未开启 DDL 能力或处于只读锁定状态")
 	}
 	if !info.IsQuery {
 		if sessionID != "" {
@@ -102,7 +117,7 @@ func (m *Manager) StreamSessionQueryPageWithParams(ctx context.Context, source S
 			}
 			return nil
 		}
-		summary, err := m.streamQueryAttempt(ctx, source, boundQuery, boundArgs, p, info, sessionID, safeEmit)
+		summary, err := m.streamQueryAttempt(ctx, source, boundQuery, boundArgs, p, info, sessionID, opts, safeEmit)
 		summary.RetryCount = attempt
 		last = summary
 		if err == nil {
@@ -257,6 +272,9 @@ func (m *Manager) executeStatementWithArgs(ctx context.Context, source Source, q
 // All statements are validated via ValidateSQL and must be DML/TRANSACTION; DDL is rejected for batch atomicity.
 // If any statement fails the whole batch is rolled back.
 func (m *Manager) ExecuteBatch(ctx context.Context, source Source, statements []string) (QuerySummary, error) {
+	if !source.MutationAllowed() {
+		return QuerySummary{}, errors.New("该数据源处于只读锁定状态")
+	}
 	if len(statements) == 0 {
 		return QuerySummary{}, errors.New("批量语句不能为空")
 	}
@@ -323,7 +341,7 @@ func (m *Manager) ExecuteBatch(ctx context.Context, source Source, statements []
 	return summary, nil
 }
 
-func (m *Manager) streamQueryAttempt(ctx context.Context, source Source, query string, args []any, page QueryPage, info SQLStatementInfo, sessionID string, emit EmitFunc) (QuerySummary, error) {
+func (m *Manager) streamQueryAttempt(ctx context.Context, source Source, query string, args []any, page QueryPage, info SQLStatementInfo, sessionID string, opts QueryOptions, emit EmitFunc) (QuerySummary, error) {
 	queryCtx, cancel := context.WithTimeout(ctx, source.Timeout())
 	defer cancel()
 	if err := m.acquire(queryCtx); err != nil {
@@ -367,11 +385,14 @@ func (m *Manager) streamQueryAttempt(ctx context.Context, source Source, query s
 	var lobRewrite *LOBRewrittenQuery
 	var lobSingleInfo *SingleTableQueryInfo
 
-	// 结论 2.1: 仅对安全单表浏览查询重写 LOB 投影；任意复杂 SQL 保持原样执行
-	if source.Kind == KindOracle && !info.HasForUpdate {
+	isFast := opts.Fast && page.Page == 1 && !info.HasForUpdate
+
+	// 结论 2.1: 仅对安全单表浏览查询重写 LOB 投影；任意复杂 SQL 保持原样执行；
+	// 在 Fast 极速模式下（如首屏），跳过字典与投影改写，对齐 PL/SQL 秒开体验
+	if source.Kind == KindOracle && !info.HasForUpdate && !isFast {
 		if sInfo, ok := parseSafeSingleTableQuery(query); ok {
 			lobSingleInfo = sInfo
-			if rw, rerr := buildLOBProjectionOn(queryCtx, queryTx, sInfo); rerr != nil {
+			if rw, rerr := m.buildLOBProjectionOn(queryCtx, queryTx, source.ID, sInfo); rerr != nil {
 				return QuerySummary{}, rerr
 			} else if rw != nil {
 				lobRewrite = rw
@@ -466,7 +487,7 @@ func (m *Manager) streamQueryAttempt(ctx context.Context, source Source, query s
 		}
 		scanner = newLOBRowScanner(lobRewrite, source, schema, table, lobSessionID, aliasIdx)
 	} else {
-		scanner = newRowScanner(columns, aliasIdx)
+		scanner = newRowScanner(columns, aliasIdx, isFast)
 	}
 
 	// Commands and locking queries cannot use the derived-table wrapper.
@@ -502,7 +523,15 @@ func (m *Manager) streamQueryAttempt(ctx context.Context, source Source, query s
 		summary.Rows++
 		summary.Bytes += rowBytes
 		batch = append(batch, row)
-		if len(batch) == rowBatchSize {
+		// 渐进式流：首屏前 5 行（视口首眼区域）或达 pageSize 时立刻发射，使前端在几十毫秒内完成首眼绘制
+		firstBatchCutoff := 5
+		if page.PageSize > 0 && page.PageSize < firstBatchCutoff {
+			firstBatchCutoff = page.PageSize
+		}
+		shouldEmit := len(batch) == rowBatchSize ||
+			(page.PageSize > 0 && len(batch) >= page.PageSize) ||
+			(summary.Rows == len(batch) && len(batch) == firstBatchCutoff)
+		if shouldEmit {
 			if emit != nil {
 				if err := emit(StreamEvent{Type: "rows", Rows: batch}); err != nil {
 					return summary, err
@@ -627,10 +656,28 @@ func resultColumns(rows *sql.Rows) ([]Column, error) {
 
 type boundedCellScanner struct {
 	dbType string
+	fast   bool
 	value  any
 }
 
 func (s *boundedCellScanner) Scan(src any) error {
+	if s.fast && isLOBType(s.dbType) {
+		if src == nil {
+			s.value = nil
+			return nil
+		}
+		lobKind := "clob"
+		if isBlobType(s.dbType) {
+			lobKind = "blob"
+		}
+		s.value = map[string]any{
+			"kind":          lobKind,
+			"display":       fmt.Sprintf("(%s)", strings.ToUpper(lobKind)),
+			"database_type": s.dbType,
+			"lazy":          true,
+		}
+		return nil
+	}
 	if value, handled, err := oracleLOBPreview(src, s.dbType); handled {
 		s.value = value
 		return err
@@ -646,7 +693,7 @@ type rowScanner struct {
 	aliasIdx int
 }
 
-func newRowScanner(columns []Column, aliasIdx int) *rowScanner {
+func newRowScanner(columns []Column, aliasIdx int, fast bool) *rowScanner {
 	count := len(columns)
 	if aliasIdx >= 0 {
 		count = len(columns) + 1
@@ -665,6 +712,7 @@ func newRowScanner(columns []Column, aliasIdx int) *rowScanner {
 			dbType = strings.ToUpper(strings.TrimSpace(columns[i].Database))
 		}
 		scanners[i].dbType = dbType
+		scanners[i].fast = fast
 		dest[i] = &scanners[i]
 	}
 	return &rowScanner{
@@ -693,7 +741,7 @@ func (rs *rowScanner) Scan(rows *sql.Rows) ([]any, int64, error) {
 }
 
 func scanRow(rows *sql.Rows, count int, columns []Column, aliasIdx int) ([]any, int64, error) {
-	scanner := newRowScanner(columns, aliasIdx)
+	scanner := newRowScanner(columns, aliasIdx, false)
 	return scanner.Scan(rows)
 }
 
@@ -746,25 +794,46 @@ func normalizeColumnValue(value any, dbType string) any {
 
 	if isClob {
 		var text string
+		var totalBytes int
+		truncated := false
 		switch v := value.(type) {
 		case string:
-			text = v
-		case []byte:
-			text = string(v)
-		default:
-			text = fmt.Sprint(v)
-		}
-		totalBytes := len(text)
-		truncated := false
-		if totalBytes > maxLOBPreviewBytes {
-			cut := maxLOBPreviewBytes
-			for cut > 0 && !utf8.RuneStart(text[cut]) {
-				cut--
+			totalBytes = len(v)
+			if totalBytes > maxLOBPreviewBytes {
+				cut := maxLOBPreviewBytes
+				for cut > 0 && !utf8.RuneStart(v[cut]) {
+					cut--
+				}
+				text = strings.Clone(v[:cut])
+				truncated = true
+			} else {
+				text = v
 			}
-			// 使用 strings.Clone 彻底断开与原始巨型 string/[]byte 底层数组的内存引用，
-			// 确保几十甚至上百 MB 的原始大对象在截断后能够被 Go GC 立即回收。
-			text = strings.Clone(text[:cut])
-			truncated = true
+		case []byte:
+			totalBytes = len(v)
+			if totalBytes > maxLOBPreviewBytes {
+				cut := maxLOBPreviewBytes
+				for cut > 0 && !utf8.RuneStart(v[cut]) {
+					cut--
+				}
+				text = string(v[:cut])
+				truncated = true
+			} else {
+				text = string(v)
+			}
+		default:
+			s := fmt.Sprint(v)
+			totalBytes = len(s)
+			if totalBytes > maxLOBPreviewBytes {
+				cut := maxLOBPreviewBytes
+				for cut > 0 && !utf8.RuneStart(s[cut]) {
+					cut--
+				}
+				text = strings.Clone(s[:cut])
+				truncated = true
+			} else {
+				text = s
+			}
 		}
 		return map[string]any{
 			"kind":      "clob",
@@ -789,24 +858,35 @@ func normalizeColumnValue(value any, dbType string) any {
 	}
 
 	if isBlob {
-		var rawBytes []byte
-		switch v := value.(type) {
-		case []byte:
-			rawBytes = v
-		case string:
-			rawBytes = []byte(v)
-		default:
-			rawBytes = []byte(fmt.Sprint(v))
-		}
-		totalBytes := len(rawBytes)
+		var totalBytes int
 		truncated := false
 		var preview []byte
-		if totalBytes > maxLOBPreviewBytes {
-			// 使用 bytes.Clone 断开与底层大切片的共享引用
-			preview = bytes.Clone(rawBytes[:maxLOBPreviewBytes])
-			truncated = true
-		} else {
-			preview = rawBytes
+		switch v := value.(type) {
+		case []byte:
+			totalBytes = len(v)
+			if totalBytes > maxLOBPreviewBytes {
+				preview = bytes.Clone(v[:maxLOBPreviewBytes])
+				truncated = true
+			} else {
+				preview = bytes.Clone(v)
+			}
+		case string:
+			totalBytes = len(v)
+			if totalBytes > maxLOBPreviewBytes {
+				preview = []byte(v[:maxLOBPreviewBytes])
+				truncated = true
+			} else {
+				preview = []byte(v)
+			}
+		default:
+			s := fmt.Sprint(v)
+			totalBytes = len(s)
+			if totalBytes > maxLOBPreviewBytes {
+				preview = []byte(s[:maxLOBPreviewBytes])
+				truncated = true
+			} else {
+				preview = []byte(s)
+			}
 		}
 		return map[string]any{
 			"kind":           "blob",
@@ -842,6 +922,18 @@ func normalizeValue(value any) any {
 }
 
 func normalizeBytes(value []byte) any {
+	if len(value) > maxCellBytes {
+		if utf8.Valid(value[:maxCellBytes]) {
+			return truncateText(string(value[:maxCellBytes]))
+		}
+		preview := bytes.Clone(value[:4096])
+		return map[string]any{
+			"kind":           "binary",
+			"bytes":          len(value),
+			"preview_base64": base64.StdEncoding.EncodeToString(preview),
+			"truncated":      true,
+		}
+	}
 	copyValue := bytes.Clone(value)
 	if utf8.Valid(copyValue) {
 		return truncateText(string(copyValue))

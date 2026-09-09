@@ -119,4 +119,26 @@ func TestQuoteIdentMySQL(t *testing.T) {
 	if got := QuoteIdent(KindMySQL, "db.t`x"); got != "`db`.`t``x`" {
 		t.Fatalf("got %s", got)
 	}
+	// Verify that injection strings wrapped in quotes are safely unquoted and escaped
+	injected := `"t"; DROP TABLE users; -- "`
+	quotedOracle := QuoteIdent(KindOracle, injected)
+	if quotedOracle != `"t""; DROP TABLE users; -- "` {
+		t.Fatalf("QuoteIdent Oracle expected doubled quotes for inner quote, got: %s", quotedOracle)
+	}
+}
+
+func TestWriteUPDATEWithoutPKRejects(t *testing.T) {
+	var buf bytes.Buffer
+	table := ExportTable{
+		Columns: []Column{{Name: "CITY"}, {Name: "TEMPERATURE"}},
+		Rows:    [][]any{{"Beijing", 25}},
+	}
+	// Call WriteUPDATE on table without primary key and without pkCols
+	err := WriteUPDATE(&buf, table, KindOracle, "WEATHER", nil)
+	if err == nil {
+		t.Fatal("expected WriteUPDATE without PK to return error, but got nil")
+	}
+	if !strings.Contains(err.Error(), "主键") {
+		t.Fatalf("expected error mentioning primary key, got: %v", err)
+	}
 }

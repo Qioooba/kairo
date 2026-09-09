@@ -9,10 +9,11 @@ import (
 
 // SQLStatementInfo describes the classified SQL statement.
 type SQLStatementInfo struct {
-	Type         string `json:"type"`           // "SELECT", "FOR_UPDATE", "DML", "DDL", "TRANSACTION", "COMMAND", "STATEMENT"
-	Action       string `json:"action"`         // "SELECT", "UPDATE", "INSERT", "DELETE", "CREATE", "ALTER", "DROP", "TRUNCATE", ...
-	IsQuery      bool   `json:"is_query"`       // true if statement produces a result set (SELECT, FOR UPDATE, SHOW, DESC, EXPLAIN)
-	HasForUpdate bool   `json:"has_for_update"` // true if query contains FOR UPDATE
+	Type             string `json:"type"`                        // "SELECT", "FOR_UPDATE", "DML", "DDL", "TRANSACTION", "COMMAND", "STATEMENT"
+	Action           string `json:"action"`                      // "SELECT", "UPDATE", "INSERT", "DELETE", "CREATE", "ALTER", "DROP", "TRUNCATE", ...
+	IsQuery          bool   `json:"is_query"`                    // true if statement produces a result set (SELECT, FOR UPDATE, SHOW, DESC, EXPLAIN)
+	HasForUpdate     bool   `json:"has_for_update"`              // true if query contains FOR UPDATE
+	RequiresMutation bool   `json:"requires_mutation,omitempty"` // true if statement can mutate state (e.g. EXPLAIN ANALYZE write) or requires write permissions
 }
 
 // ClassifySQL analyzes the given SQL statement and categorizes it.
@@ -37,7 +38,7 @@ func ClassifySQL(kind, query string) (SQLStatementInfo, error) {
 		if t == "LOAD_FILE" {
 			return SQLStatementInfo{}, errors.New("禁止使用 LOAD_FILE 函数")
 		}
-		if t == "SLEEP" || t == "BENCHMARK" || t == "GET_LOCK" || t == "RELEASE_LOCK" {
+		if (t == "SLEEP" || t == "BENCHMARK" || t == "GET_LOCK" || t == "RELEASE_LOCK") && isFunctionCallInQuery(query, t) {
 			return SQLStatementInfo{}, fmt.Errorf("禁止使用 %s 函数", t)
 		}
 	}
@@ -72,7 +73,38 @@ func ClassifySQL(kind, query string) (SQLStatementInfo, error) {
 			return SQLStatementInfo{Type: "FOR_UPDATE", Action: "FOR UPDATE", IsQuery: true, HasForUpdate: true}, nil
 		}
 		return SQLStatementInfo{Type: "SELECT", Action: first, IsQuery: true, HasForUpdate: false}, nil
-	case "SHOW", "DESC", "DESCRIBE", "EXPLAIN":
+	case "SHOW", "DESC", "DESCRIBE":
+		return SQLStatementInfo{Type: "COMMAND", Action: first, IsQuery: true, HasForUpdate: false}, nil
+	case "EXPLAIN":
+		hasAnalyze := false
+		writeAction := ""
+		for i := 1; i < len(tokens); i++ {
+			tok := tokens[i]
+			if tok == "ANALYZE" {
+				hasAnalyze = true
+			}
+			switch tok {
+			case "UPDATE", "INSERT", "DELETE", "MERGE", "REPLACE", "CREATE", "ALTER", "DROP", "TRUNCATE", "RENAME":
+				if writeAction == "" {
+					writeAction = tok
+				}
+			}
+		}
+		if writeAction != "" || hasAnalyze {
+			action := "EXPLAIN"
+			if writeAction != "" {
+				action = "EXPLAIN " + writeAction
+			} else if hasAnalyze {
+				action = "EXPLAIN ANALYZE"
+			}
+			return SQLStatementInfo{
+				Type:             "COMMAND",
+				Action:           action,
+				IsQuery:          true,
+				HasForUpdate:     hasForUpdate,
+				RequiresMutation: true,
+			}, nil
+		}
 		return SQLStatementInfo{Type: "COMMAND", Action: first, IsQuery: true, HasForUpdate: false}, nil
 	case "UPDATE", "INSERT", "DELETE", "MERGE", "REPLACE":
 		return SQLStatementInfo{Type: "DML", Action: first, IsQuery: false, HasForUpdate: false}, nil
@@ -120,6 +152,9 @@ func ValidateReadOnlySQL(kind, query string) error {
 	for i := 0; i < len(tokens); i++ {
 		t := tokens[i]
 		if _, blocked := denied[t]; blocked {
+			if (t == "SLEEP" || t == "BENCHMARK" || t == "GET_LOCK" || t == "RELEASE_LOCK") && !isFunctionCallInQuery(query, t) {
+				continue
+			}
 			return errors.New("查询包含写入、DDL 或执行型关键字，已被只读策略拒绝")
 		}
 		if t == "FOR" && i+1 < len(tokens) && tokens[i+1] == "UPDATE" {
@@ -130,6 +165,32 @@ func ValidateReadOnlySQL(kind, query string) error {
 		}
 	}
 	return nil
+}
+
+func isFunctionCallInQuery(query, funcName string) bool {
+	upper := strings.ToUpper(query)
+	target := strings.ToUpper(funcName)
+	idx := 0
+	for {
+		pos := strings.Index(upper[idx:], target)
+		if pos < 0 {
+			return false
+		}
+		actualPos := idx + pos
+		idx = actualPos + len(target)
+		// Check word boundary before target
+		if actualPos > 0 {
+			prev := query[actualPos-1]
+			if unicode.IsLetter(rune(prev)) || unicode.IsDigit(rune(prev)) || prev == '_' || prev == '$' {
+				continue
+			}
+		}
+		// Check word boundary and '(' after target
+		remaining := strings.TrimLeft(query[idx:], " \t\r\n")
+		if strings.HasPrefix(remaining, "(") {
+			return true
+		}
+	}
 }
 
 func sqlTokens(query string) ([]string, bool, error) {

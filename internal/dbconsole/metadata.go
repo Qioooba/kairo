@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	metadataCacheTTL        = 2 * time.Minute
+	metadataCacheTTL        = 5 * time.Minute
 	metadataCacheMaxEntries = 512
 )
 

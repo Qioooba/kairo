@@ -11,6 +11,7 @@ import (
 	"net"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"kairo/internal/credentials"
@@ -41,6 +42,7 @@ type transactionEntry struct {
 type Manager struct {
 	store               *Store
 	mu                  sync.Mutex
+	closed              atomic.Bool
 	pools               map[string]*poolEntry
 	metadataCache       map[string]metadataCacheEntry
 	transactions        map[string]*transactionEntry
@@ -75,6 +77,9 @@ func NewManager(dataDir string) (*Manager, error) {
 func (m *Manager) Store() *Store { return m.store }
 
 func (m *Manager) Close() error {
+	if m.closed.Swap(true) {
+		return nil
+	}
 	m.stopTransactionJanitor()
 	m.mu.Lock()
 	entries := make([]*poolEntry, 0, len(m.pools))
@@ -173,8 +178,15 @@ func closePoolEntry(entry *poolEntry) error {
 }
 
 func (m *Manager) acquire(ctx context.Context) error {
+	if m.closed.Load() {
+		return errors.New("dbconsole manager is closed")
+	}
 	select {
 	case m.global <- struct{}{}:
+		if m.closed.Load() {
+			m.release()
+			return errors.New("dbconsole manager is closed")
+		}
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
@@ -189,8 +201,15 @@ func sourceFingerprint(source Source) string {
 }
 
 func (m *Manager) sqlDB(source Source) (*sql.DB, error) {
+	if m.closed.Load() {
+		return nil, errors.New("dbconsole manager is closed")
+	}
 	fingerprint := sourceFingerprint(source)
 	m.mu.Lock()
+	if m.closed.Load() {
+		m.mu.Unlock()
+		return nil, errors.New("dbconsole manager is closed")
+	}
 	if entry := m.pools[source.ID]; entry != nil && entry.sql != nil && entry.fingerprint == fingerprint {
 		m.mu.Unlock()
 		return entry.sql, nil
@@ -267,6 +286,14 @@ func (m *Manager) sqlDB(source Source) (*sql.DB, error) {
 	db.SetConnMaxLifetime(time.Duration(source.ConnectionMaxMinutes) * time.Minute)
 	db.SetConnMaxIdleTime(5 * time.Minute)
 	m.mu.Lock()
+	if m.closed.Load() {
+		m.mu.Unlock()
+		_ = db.Close()
+		if tunnel != nil {
+			_ = tunnel.Close()
+		}
+		return nil, errors.New("dbconsole manager is closed")
+	}
 	if entry := m.pools[source.ID]; entry != nil && entry.sql != nil && entry.fingerprint == fingerprint {
 		m.mu.Unlock()
 		_ = db.Close()
@@ -294,8 +321,15 @@ func redisTLSConfig(source Source) *tls.Config {
 }
 
 func (m *Manager) redisClient(source Source) (redis.UniversalClient, error) {
+	if m.closed.Load() {
+		return nil, errors.New("dbconsole manager is closed")
+	}
 	fingerprint := sourceFingerprint(source)
 	m.mu.Lock()
+	if m.closed.Load() {
+		m.mu.Unlock()
+		return nil, errors.New("dbconsole manager is closed")
+	}
 	if entry := m.pools[source.ID]; entry != nil && entry.redis != nil && entry.fingerprint == fingerprint {
 		m.mu.Unlock()
 		return entry.redis, nil
@@ -375,6 +409,14 @@ func (m *Manager) redisClient(source Source) (redis.UniversalClient, error) {
 		})
 	}
 	m.mu.Lock()
+	if m.closed.Load() {
+		m.mu.Unlock()
+		_ = client.Close()
+		if tunnel != nil {
+			_ = tunnel.Close()
+		}
+		return nil, errors.New("dbconsole manager is closed")
+	}
 	if entry := m.pools[source.ID]; entry != nil && entry.redis != nil && entry.fingerprint == fingerprint {
 		m.mu.Unlock()
 		_ = client.Close()

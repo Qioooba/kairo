@@ -63,3 +63,39 @@ func TestDatabaseLOBFailureIsNotSuccessfulEmptyDownload(t *testing.T) {
 		t.Fatalf("unexpected failure: %s", w.Body.String())
 	}
 }
+
+func TestDatabaseLOBTokenLazyIssue(t *testing.T) {
+	srv := newTestServerWithAuth(t, databaseTokens())
+	source, err := srv.database.Store().Save(dbconsole.Source{Name: "lab Oracle", Kind: dbconsole.KindOracle, Host: "127.0.0.1", Port: 1521, Username: "HR", OracleService: "XE", AllowedUsers: []string{"user1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reqBody := databaseLobRequest{
+		SourceID: source.ID,
+		Table:    "DOCS",
+		Column:   "CONTENT",
+		Keys:     map[string]any{"ID": 1001},
+	}
+	w := doRequestWithToken(srv, http.MethodPost, "/api/database/lob/token", rbacUserToken, reqBody)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	token, ok := resp["token"].(string)
+	if !ok || token == "" {
+		t.Fatalf("missing token in response: %v", resp)
+	}
+
+	payload, ref, err := dbconsole.VerifySignedLOBToken(token)
+	if err != nil {
+		t.Fatalf("issued token verification failed: %v", err)
+	}
+	if payload.Table != "DOCS" || payload.Column != "CONTENT" || ref.Table != "DOCS" {
+		t.Fatalf("unexpected payload or ref: %+v %+v", payload, ref)
+	}
+}
+

@@ -388,11 +388,22 @@ func (m *Manager) RedisReadOnlyCommand(ctx context.Context, source Source, comma
 		if err == nil {
 			argv := make([]any, 0, len(args)+2)
 			argv = append(argv, command)
-			if key != "" {
-				argv = append(argv, key)
-			}
-			for _, arg := range args {
-				argv = append(argv, arg)
+			if strings.EqualFold(command, "XINFO") && len(args) > 0 {
+				// Redis XINFO syntax is: XINFO <STREAM|GROUPS|CONSUMERS> <key> [args...]
+				argv = append(argv, args[0])
+				if key != "" {
+					argv = append(argv, key)
+				}
+				for _, arg := range args[1:] {
+					argv = append(argv, arg)
+				}
+			} else {
+				if key != "" {
+					argv = append(argv, key)
+				}
+				for _, arg := range args {
+					argv = append(argv, arg)
+				}
 			}
 			value, callErr := client.Do(ctx, argv...).Result()
 			if callErr == nil {
