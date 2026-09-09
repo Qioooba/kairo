@@ -52,6 +52,9 @@ type Source struct {
 	OracleConnectBy      string           `json:"oracle_connect_by,omitempty"` // service_name / sid
 	OracleService        string           `json:"oracle_service,omitempty"`
 	OracleClientCharset  string           `json:"oracle_client_charset,omitempty"`
+	OracleDriver         string           `json:"oracle_driver,omitempty"`     // godror (OCI, Windows企业默认) / go-ora (纯 Go 便携/降级)
+	OracleLibDir         string           `json:"oracle_lib_dir,omitempty"`    // 自定义 Oracle Client / Instant Client 目录
+	OracleConfigDir      string           `json:"oracle_config_dir,omitempty"` // 自定义 tnsnames.ora / sqlnet.ora 目录
 	RedisDB              int              `json:"redis_db,omitempty"`
 	RedisMode            string           `json:"redis_mode,omitempty"`        // standalone / cluster / sentinel
 	RedisMasterName      string           `json:"redis_master_name,omitempty"` // Sentinel master name

@@ -248,7 +248,7 @@ func TestLocalAllowedRootsRejectSymlinkEscape(t *testing.T) {
 	}
 }
 
-func TestLocalAllowedRootsMixedWildcardIsUnrestricted(t *testing.T) {
+func TestLocalAllowedRootsMixedWildcardRemainsRestricted(t *testing.T) {
 	allowed, outside := t.TempDir(), t.TempDir()
 	outsideFile := filepath.Join(outside, "visible.txt")
 	if err := os.WriteFile(outsideFile, []byte("visible"), 0o600); err != nil {
@@ -256,8 +256,8 @@ func TestLocalAllowedRootsMixedWildcardIsUnrestricted(t *testing.T) {
 	}
 	for _, wildcard := range []string{"*", "ANY"} {
 		fsys := comparefs.NewLocalWithAllowedRoots([]string{allowed, wildcard})
-		if _, err := fsys.Stat(context.Background(), outsideFile); err != nil {
-			t.Fatalf("mixed wildcard %q should disable root restriction: %v", wildcard, err)
+		if _, err := fsys.Stat(context.Background(), outsideFile); !errors.Is(err, comparefs.ErrPathOutsideRoot) {
+			t.Fatalf("mixed wildcard %q must preserve restriction: %v", wildcard, err)
 		}
 	}
 }

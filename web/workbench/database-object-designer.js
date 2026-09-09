@@ -390,9 +390,15 @@
   function start() {
     if (state.started) return; state.started = true;
     const view = document.getElementById('view') || document.body;
-    state.observer = new MutationObserver(function () { if (String(location.hash || '').indexOf('#/database') !== 0) return; if (state.scheduled) return; state.scheduled = true; requestAnimationFrame(function () { state.scheduled = false; install(document.getElementById('db-workspace') || view); }); });
-    state.observer.observe(view, { subtree: true, childList: true, attributes: true, attributeFilter: ['hidden', 'class'] });
-    install(document.getElementById('db-workspace') || view);
+    state.observer = new MutationObserver(function () { if (String(location.hash || '').indexOf('#/database') !== 0) return; if (state.scheduled) return; state.scheduled = true; requestAnimationFrame(function () { state.scheduled = false; if (String(location.hash || '').indexOf('#/database') !== 0) return; install(document.getElementById('db-workspace') || view); }); });
+    const syncRoute = function () {
+      state.observer.disconnect();
+      if (String(location.hash || '').indexOf('#/database') !== 0) { state.viewer = null; state.current = null; return; }
+      state.observer.observe(view, { subtree: true, childList: true, attributes: true, attributeFilter: ['hidden', 'class'] });
+      install(document.getElementById('db-workspace') || view);
+    };
+    window.addEventListener('hashchange', syncRoute);
+    syncRoute();
   }
 
   D.openDesigner = openDesigner;

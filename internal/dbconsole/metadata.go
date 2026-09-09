@@ -142,14 +142,14 @@ func (m *Manager) Schemas(ctx context.Context, source Source) ([]Schema, error) 
 		out = out[:0]
 		query := "SELECT schema_name FROM information_schema.schemata ORDER BY schema_name"
 		if source.Kind == KindOracle {
-			query = "SELECT DISTINCT owner FROM all_objects WHERE object_type IN ('TABLE','VIEW','MATERIALIZED VIEW','FUNCTION','PROCEDURE','PACKAGE','SEQUENCE','SYNONYM','TRIGGER') ORDER BY owner"
+			query = "SELECT username FROM all_users ORDER BY username"
 		}
 		rows, err := db.QueryContext(ctx, query)
 		if err != nil {
 			return err
 		}
 		defer rows.Close()
-		for rows.Next() && len(out) < 500 {
+		for rows.Next() && len(out) < 1000 {
 			var item Schema
 			if err := rows.Scan(&item.Name); err != nil {
 				return err
@@ -165,14 +165,15 @@ func (m *Manager) Schemas(ctx context.Context, source Source) ([]Schema, error) 
 	return out, nil
 }
 
-func (m *Manager) Objects(ctx context.Context, source Source, schema, search string) ([]Object, error) {
+func (m *Manager) Objects(ctx context.Context, source Source, schema, search, category string) ([]Object, error) {
 	if source.Kind == KindRedis {
 		return nil, errors.New("Redis 没有表对象")
 	}
 	if schema == "" || len(schema) > 256 || len(search) > 256 {
 		return nil, errors.New("schema 不能为空，且 schema/search 不能超过 256 字节")
 	}
-	cacheKey := fmt.Sprintf("%s\x00objects\x00%s\x00%s", source.ID, strings.ToUpper(schema), strings.ToUpper(search))
+	cat := strings.ToLower(strings.TrimSpace(category))
+	cacheKey := fmt.Sprintf("%s\x00objects\x00%s\x00%s\x00%s", source.ID, strings.ToUpper(schema), strings.ToUpper(cat), strings.ToUpper(search))
 	if cached, ok := metadataCacheGet[[]Object](m, cacheKey); ok {
 		return append([]Object(nil), cached...), nil
 	}
@@ -181,14 +182,73 @@ func (m *Manager) Objects(ctx context.Context, source Source, schema, search str
 		out = out[:0]
 		var rows *sql.Rows
 		var err error
+		like := "%" + search + "%"
+		upperSchema := strings.ToUpper(schema)
+		upperSearch := strings.ToUpper(search)
+		upperLike := "%" + upperSearch + "%"
+
 		if source.Kind == KindOracle {
-			rows, err = db.QueryContext(ctx, `SELECT owner, object_name, object_type FROM (
+			switch cat {
+			case "tables":
+				rows, err = db.QueryContext(ctx, `SELECT owner, table_name, 'TABLE' FROM (
+SELECT owner, table_name FROM all_tables
+WHERE owner = :1 AND (:2 = '' OR UPPER(table_name) LIKE :3)
+ORDER BY table_name) WHERE ROWNUM <= 1000`, upperSchema, search, upperLike)
+			case "views":
+				rows, err = db.QueryContext(ctx, `SELECT owner, view_name, 'VIEW' FROM (
+SELECT owner, view_name FROM all_views
+WHERE owner = :1 AND (:2 = '' OR UPPER(view_name) LIKE :3)
+ORDER BY view_name) WHERE ROWNUM <= 1000`, upperSchema, search, upperLike)
+			case "functions":
+				rows, err = db.QueryContext(ctx, `SELECT owner, object_name, object_type FROM (
+SELECT owner, object_name, object_type FROM all_objects
+WHERE owner = :1 AND object_type = 'FUNCTION' AND (:2 = '' OR UPPER(object_name) LIKE :3)
+ORDER BY object_name) WHERE ROWNUM <= 1000`, upperSchema, search, upperLike)
+			case "procedures":
+				rows, err = db.QueryContext(ctx, `SELECT owner, object_name, object_type FROM (
+SELECT owner, object_name, object_type FROM all_objects
+WHERE owner = :1 AND object_type IN ('PROCEDURE','PACKAGE') AND (:2 = '' OR UPPER(object_name) LIKE :3)
+ORDER BY object_name) WHERE ROWNUM <= 1000`, upperSchema, search, upperLike)
+			case "triggers":
+				rows, err = db.QueryContext(ctx, `SELECT owner, trigger_name, 'TRIGGER' FROM (
+SELECT owner, trigger_name FROM all_triggers
+WHERE owner = :1 AND (:2 = '' OR UPPER(trigger_name) LIKE :3)
+ORDER BY trigger_name) WHERE ROWNUM <= 1000`, upperSchema, search, upperLike)
+			default:
+				rows, err = db.QueryContext(ctx, `SELECT owner, object_name, object_type FROM (
 SELECT owner, object_name, object_type FROM all_objects
 WHERE owner = :1 AND object_type IN ('TABLE','VIEW','MATERIALIZED VIEW','FUNCTION','PROCEDURE','PACKAGE','SEQUENCE','SYNONYM','TRIGGER') AND (:2 = '' OR UPPER(object_name) LIKE :3)
-ORDER BY object_name) WHERE ROWNUM <= 500`, strings.ToUpper(schema), search, "%"+strings.ToUpper(search)+"%")
+ORDER BY object_name) WHERE ROWNUM <= 1000`, upperSchema, search, upperLike)
+			}
 		} else {
-			like := "%" + search + "%"
-			rows, err = db.QueryContext(ctx, `SELECT object_schema, object_name, object_type FROM (
+			switch cat {
+			case "tables":
+				rows, err = db.QueryContext(ctx, `SELECT table_schema AS object_schema, table_name AS object_name, 'TABLE' AS object_type
+FROM information_schema.tables
+WHERE table_schema = ? AND table_type = 'BASE TABLE' AND (? = '' OR table_name LIKE ?)
+ORDER BY table_name LIMIT 1000`, schema, search, like)
+			case "views":
+				rows, err = db.QueryContext(ctx, `SELECT table_schema AS object_schema, table_name AS object_name, 'VIEW' AS object_type
+FROM information_schema.tables
+WHERE table_schema = ? AND table_type = 'VIEW' AND (? = '' OR table_name LIKE ?)
+ORDER BY table_name LIMIT 1000`, schema, search, like)
+			case "functions":
+				rows, err = db.QueryContext(ctx, `SELECT routine_schema, routine_name, routine_type
+FROM information_schema.routines
+WHERE routine_schema = ? AND routine_type = 'FUNCTION' AND (? = '' OR routine_name LIKE ?)
+ORDER BY routine_name LIMIT 1000`, schema, search, like)
+			case "procedures":
+				rows, err = db.QueryContext(ctx, `SELECT routine_schema, routine_name, routine_type
+FROM information_schema.routines
+WHERE routine_schema = ? AND routine_type = 'PROCEDURE' AND (? = '' OR routine_name LIKE ?)
+ORDER BY routine_name LIMIT 1000`, schema, search, like)
+			case "triggers":
+				rows, err = db.QueryContext(ctx, `SELECT trigger_schema, trigger_name, 'TRIGGER'
+FROM information_schema.triggers
+WHERE trigger_schema = ? AND (? = '' OR trigger_name LIKE ?)
+ORDER BY trigger_name LIMIT 1000`, schema, search, like)
+			default:
+				rows, err = db.QueryContext(ctx, `SELECT object_schema, object_name, object_type FROM (
 SELECT table_schema AS object_schema, table_name AS object_name,
        CASE WHEN table_type = 'VIEW' THEN 'VIEW' ELSE 'TABLE' END AS object_type
 FROM information_schema.tables WHERE table_schema = ? AND (? = '' OR table_name LIKE ?)
@@ -198,7 +258,8 @@ FROM information_schema.routines WHERE routine_schema = ? AND (? = '' OR routine
 UNION ALL
 SELECT trigger_schema, trigger_name, 'TRIGGER'
 FROM information_schema.triggers WHERE trigger_schema = ? AND (? = '' OR trigger_name LIKE ?)
-) objects ORDER BY object_type, object_name LIMIT 500`, schema, search, like, schema, search, like, schema, search, like)
+) objects ORDER BY object_type, object_name LIMIT 1000`, schema, search, like, schema, search, like, schema, search, like)
+			}
 		}
 		if err != nil {
 			return err

@@ -1350,7 +1350,7 @@ func TestFilesDownload_EventsOrCancel_BadPath(t *testing.T) {
 }
 
 // TestAllowLocalOrigin_OriginNull 验证：桌面工具 / file:// 页面发 "Origin: null"
-// 且请求目标是本机地址时，不应被跨源检查拒绝（v0.14 修复）。
+// 必须拒绝，包括本机目标；sandbox iframe 同样能发送 null。
 func TestAllowLocalOrigin_OriginNull(t *testing.T) {
 	srv, _, _, _ := newTestServer(t)
 
@@ -1365,12 +1365,12 @@ func TestAllowLocalOrigin_OriginNull(t *testing.T) {
 		return w.Code
 	}
 
-	// 本机 Host + Origin: null → 放行（不再 403）
-	if code := do("null", "127.0.0.1:18080"); code == http.StatusForbidden {
-		t.Errorf("Origin:null to localhost should be allowed, got 403")
+	// 本机 Host + Origin: null → 拒绝
+	if code := do("null", "127.0.0.1:18080"); code != http.StatusForbidden {
+		t.Errorf("Origin:null must be rejected")
 	}
-	if code := do("null", "localhost:18080"); code == http.StatusForbidden {
-		t.Errorf("Origin:null to localhost should be allowed, got 403")
+	if code := do("null", "localhost:18080"); code != http.StatusForbidden {
+		t.Errorf("Origin:null must be rejected")
 	}
 	// 非本机 Host + Origin: null → 仍拒绝
 	if code := do("null", "10.0.0.99:18080"); code != http.StatusForbidden {

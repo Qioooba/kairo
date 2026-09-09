@@ -728,8 +728,8 @@
     });
 
     function refreshSaveButtons() {
-      saveLeftBtn.disabled = state.left.source.kind === 'text' || !state.left.dirty || state.left.saving;
-      saveRightBtn.disabled = state.right.source.kind === 'text' || !state.right.dirty || state.right.saving;
+      saveLeftBtn.disabled = !canSaveComparedFile(state.left);
+      saveRightBtn.disabled = !canSaveComparedFile(state.right);
       saveLeftBtn.style.display = '';
       saveRightBtn.style.display = '';
       const bits = [];
@@ -765,14 +765,14 @@
       if (item.loadState === 'error') { item.loadState = 'ready'; item.loadError = null; }
       if (state.diff) state.diffStale = true;
       sourceHeaders[side].dirty.textContent = '● 已修改';
-      sourceHeaders[side].saveBtn.disabled = item.source.kind === 'text' || item.saving;
+      sourceHeaders[side].saveBtn.disabled = !canSaveComparedFile(item);
       refreshSaveButtons();
     }
     function updateHeader(side) {
       const source = state[side].source; sourceHeaders[side].badge.textContent = source.kind === 'text' ? '文本' : source.kind.toUpperCase();
       sourceHeaders[side].label.textContent = sourceLabel(source); sourceHeaders[side].label.title = sourceLabel(source);
       const codec = state[side].codec; sourceHeaders[side].meta.textContent = source.kind === 'text' ? '' : String(codec.encoding || 'utf-8').toUpperCase() + ' · ' + String(codec.eol || 'lf').toUpperCase() + (codec.bom ? ' · BOM' : '');
-      sourceHeaders[side].dirty.textContent = state[side].dirty ? '● 已修改' : ''; sourceHeaders[side].saveBtn.disabled = source.kind === 'text' || !state[side].dirty || state[side].saving;
+      sourceHeaders[side].dirty.textContent = state[side].dirty ? '● 已修改' : ''; sourceHeaders[side].saveBtn.disabled = !canSaveComparedFile(state[side]);
       refreshSaveButtons();
     }
     async function loadSide(side) {
@@ -835,7 +835,7 @@
     async function saveSide(side) {
       if (disposed) return false;
       const item = state[side];
-      if (item.source.kind === 'text' || !item.dirty || item.saving) return false;
+      if (!canSaveComparedFile(item)) return false;
       const sourceAtSave = spec(item.source);
       const loadNo = item.loadSeq;
       const editNo = item.editSeq;
@@ -1480,6 +1480,12 @@
     });
   }
 
+  function canSaveComparedFile(item) {
+    // Only a successful full read supplies the version needed for safe writes.
+    // Typing after a failed/binary/truncated read must not enable replacement.
+    return !!(item && item.source && item.source.kind !== 'text' && item.version && item.loadState === 'ready' && item.dirty && !item.saving);
+  }
+
   function rollupAllFolders(items, loadedDirs) {
     if (!items || !items.length) return;
     const itemMap = new Map();
@@ -1506,8 +1512,10 @@
     sortedDirs.forEach(function (dirRel) {
       const folder = itemMap.get(dirRel);
       if (!folder) return;
+      if (folder.error || folder.status === 'error' || folder.status === 'errors' || isTypeConflict(folder)) return;
       if (folder.status === 'left_only' || folder.status === 'right_only') {
-        folder.pending = false;
+        folder.pending = !!folder.incomplete && !(loadedDirs && loadedDirs.has(dirRel));
+        folder.incomplete = folder.pending;
         return;
       }
       const kids = childrenMap.get(dirRel) || [];
@@ -1518,11 +1526,16 @@
         if (loadedDirs && !loadedDirs.has(dirRel)) {
           folder.status = 'pending';
           folder.pending = true;
+        } else if (loadedDirs && loadedDirs.has(dirRel) && !folder.error && !isTypeConflict(folder)) {
+          folder.status = 'same';
+          folder.pending = false;
+          folder.incomplete = false;
         }
         return;
       }
       const hasDiff = kids.some(function (k) { return k.status && k.status !== 'same' && k.status !== 'pending'; });
       const hasPending = kids.some(function (k) { return k.pending || k.status === 'pending'; });
+      folder.incomplete = !!(loadedDirs && !loadedDirs.has(dirRel)) || kids.some(function (k) { return k.incomplete || k.pending; });
       if (hasDiff) {
         folder.status = 'different';
         folder.pending = false;
@@ -1638,6 +1651,7 @@
         const history = (persisted.folder_history[side] || []).map(normalizeFolderHistoryEntry).filter(Boolean);
         const next = index >= 0 && history[index] ? history[index] : sourceIdentity({ kind: 'local', path: this.value });
         Object.assign(sources[side], next);
+        invalidateSourceScan();
         pathInput.value = sources[side].path || '';
         rememberFolderPath(side, sources[side]);
         updateSourceCard();
@@ -1651,9 +1665,11 @@
         placeholder: side === 'left' ? '左侧目录绝对路径，可粘贴' : '右侧目录绝对路径，可粘贴'
       });
       pathInputs[side] = pathInput;
+      pathInput.addEventListener('input', invalidateSourceScan);
       pathInput.addEventListener('change', function () {
         sources[side].kind = sources[side].kind === 'text' ? 'local' : (sources[side].kind || 'local');
         sources[side].path = pathInput.value.trim();
+        invalidateSourceScan();
         rememberFolderPath(side, sources[side]);
         fillSelect();
         updateSourceCard();
@@ -1663,6 +1679,7 @@
         directory: true,
         compact: true,
         onPick: function (path) {
+          invalidateSourceScan();
           sources[side].kind = 'local';
           sources[side].path = path;
           rememberFolderPath(side, sources[side]);
@@ -1676,6 +1693,7 @@
           // Keep the credential only in live memory for this scan. The history
           // writer below stores a sanitized identity and never persists it.
           sources[side] = Object.assign({}, source);
+          invalidateSourceScan();
           pathInput.value = source.path || '';
           rememberFolderPath(side, sources[side]);
           fillSelect();
@@ -1830,6 +1848,27 @@
       return integrity;
     }
 
+    function invalidateSourceScan() {
+      scanSequence++;
+      if (scanPollTimer) { clearTimeout(scanPollTimer); scanPollTimer = 0; }
+      const staleJob = activeScanJob;
+      activeScanJob = '';
+      if (staleJob) api('DELETE', '/api/compare/jobs/' + staleJob).catch(function () {});
+      state.scan = null;
+      selected.clear(); expanded.clear(); loadingDirs.clear();
+      loadedDirs.clear(); loadedDirs.add('');
+      invalidateFolderIndex();
+      resultHost.innerHTML = '';
+      resultsBar.hidden = true;
+      selectionBar.hidden = true;
+      scanAlert.hidden = true;
+      startBtn.disabled = false;
+      cancelBtn.disabled = true; cancelBtn.hidden = true;
+      progressBar.firstChild.style.width = '0%';
+      progressBar.setAttribute('aria-valuenow', '0');
+      progress.textContent = '来源已更改，请重新比较';
+    }
+
     async function testSources() {
       sources.left.path = (pathInputs.left.value || '').trim();
       sources.right.path = (pathInputs.right.value || '').trim();
@@ -1924,7 +1963,10 @@
           time_tolerance_seconds: Number(tolerance.value) || 2,
           ignore_exts: ignoreExt.value.split(/[,，\s]+/).filter(Boolean)
         });
-        if (currentSeq !== scanSequence) return;
+        if (currentSeq !== scanSequence) {
+          if (response.job_id) api('DELETE', '/api/compare/jobs/' + response.job_id).catch(function () {});
+          return;
+        }
         activeScanJob = response.job_id;
         pollScan(currentSeq);
       } catch (error) {
@@ -1955,6 +1997,11 @@
           cancelBtn.hidden = true;
           progressBar.firstChild.style.width = '100%';
           progressBar.setAttribute('aria-valuenow', '100');
+          (state.scan.items || []).forEach(function (item) {
+            if (isDirItem(item) && !item.pending && !item.incomplete && item.status === 'same') {
+              loadedDirs.add(item.rel_path);
+            }
+          });
           invalidateFolderIndex();
           rollupAllFolders(state.scan.items, loadedDirs);
           recalculateSummary();
@@ -2021,6 +2068,7 @@
     }
 
     async function toggleFolder(item) {
+      const sourceSequence = scanSequence;
       const rel = item.rel_path;
       if (expanded.has(rel)) {
         expanded.delete(rel);
@@ -2038,16 +2086,25 @@
             deep: deep.value === 'deep', time_tolerance_seconds: Number(tolerance.value) || 2,
             ignore_exts: ignoreExt.value.split(/[,，\s]+/).filter(Boolean)
           });
+          if (sourceSequence !== scanSequence) return;
           mergeScanItems(result.items || []);
+          if (result.truncated || result.error) {
+            state.scan.truncated = state.scan.truncated || result.truncated;
+            throw new Error(result.error || '目录结果已截断，请缩小范围后重新扫描');
+          }
           loadedDirs.add(rel);
           rollupAllFolders(state.scan.items, loadedDirs);
+          state.scan.incomplete = !!state.scan.truncated || (state.scan.items || []).some(function (it) { return it.incomplete || it.pending; });
           recalculateSummary();
         } catch (error) {
+          if (sourceSequence !== scanSequence) return;
           expanded.delete(rel);
           toast('展开失败：' + (error.message || error), 'err');
         } finally {
-          loadingDirs.delete(rel);
-          renderScan();
+          if (sourceSequence === scanSequence) {
+            loadingDirs.delete(rel);
+            renderScan();
+          }
         }
         return;
       }
@@ -2330,7 +2387,7 @@
               jobID = '';
               const result = job.sync_result || {};
               selected.clear();
-              toast('覆盖完成：成功 ' + (result.copied || 0) + '，失败 ' + (result.failed || 0) + (result.bytes ? ' · ' + formatBytes(result.bytes) : ''), result.failed ? 'warn' : 'ok');
+              toast('覆盖完成：文件 ' + (result.copied || 0) + '，目录 ' + (result.directories || 0) + '，失败 ' + (result.failed || 0) + (result.bytes ? ' · ' + formatBytes(result.bytes) : ''), result.failed ? 'warn' : 'ok');
               if (result.failed) {
                 renderFailures(result);
               } else {
@@ -2353,7 +2410,7 @@
 
       function renderFailures(result) {
         body.innerHTML = '';
-        body.appendChild(el('div', { class: 'cmp-sync-summary is-error', role: 'alert', text: '成功 ' + (result.copied || 0) + ' 项，失败 ' + (result.failed || 0) + ' 项；失败项目未被忽略，请检查后重试。' }));
+        body.appendChild(el('div', { class: 'cmp-sync-summary is-error', role: 'alert', text: '成功：文件 ' + (result.copied || 0) + '，目录 ' + (result.directories || 0) + '；失败 ' + (result.failed || 0) + ' 项；失败项目未被忽略，请检查后重试。' }));
         const failures = el('div', { class: 'cmp-sync-list', role: 'list', 'aria-label': '覆盖失败项目' });
         (result.failures || []).forEach(item => failures.appendChild(el('div', { class: 'cmp-sync-row failed', role: 'listitem' }, [
           el('span', { class: 'cmp-sync-action', text: '失败' }),
@@ -2733,6 +2790,7 @@
   Kairo.state.routes.compare = renderCompare;
   Kairo.state.routeNames.compare = '文件与文本比较';
   Kairo.compareTest = {
+    canSaveComparedFile,
     rollupAllFolders,
     parentRel,
     baseName,

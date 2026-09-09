@@ -9,15 +9,15 @@ import (
 
 // SQLStatementInfo describes the classified SQL statement.
 type SQLStatementInfo struct {
-	Type         string `json:"type"`          // "SELECT", "FOR_UPDATE", "DML", "DDL", "TRANSACTION", "COMMAND", "STATEMENT"
-	Action       string `json:"action"`        // "SELECT", "UPDATE", "INSERT", "DELETE", "CREATE", "ALTER", "DROP", "TRUNCATE", ...
-	IsQuery      bool   `json:"is_query"`      // true if statement produces a result set (SELECT, FOR UPDATE, SHOW, DESC, EXPLAIN)
+	Type         string `json:"type"`           // "SELECT", "FOR_UPDATE", "DML", "DDL", "TRANSACTION", "COMMAND", "STATEMENT"
+	Action       string `json:"action"`         // "SELECT", "UPDATE", "INSERT", "DELETE", "CREATE", "ALTER", "DROP", "TRUNCATE", ...
+	IsQuery      bool   `json:"is_query"`       // true if statement produces a result set (SELECT, FOR UPDATE, SHOW, DESC, EXPLAIN)
 	HasForUpdate bool   `json:"has_for_update"` // true if query contains FOR UPDATE
 }
 
 // ClassifySQL analyzes the given SQL statement and categorizes it.
 func ClassifySQL(kind, query string) (SQLStatementInfo, error) {
-	tokens, semicolonContent, err := sqlTokens(query)
+	tokens, semicolonContent, err := sqlTokensDialect(kind, query)
 	if err != nil {
 		return SQLStatementInfo{}, err
 	}
@@ -51,6 +51,21 @@ func ClassifySQL(kind, query string) (SQLStatementInfo, error) {
 	}
 
 	first := tokens[0]
+	// CTE bodies can contain writes, and WITH can precede a DML statement.
+	// Until the classifier models the full CTE grammar, refuse these forms
+	// instead of routing them through the query path and skipping write guards.
+	if first == "WITH" {
+		for i, token := range tokens {
+			switch token {
+			case "INSERT", "DELETE", "MERGE", "REPLACE":
+				return SQLStatementInfo{}, errors.New("暂不支持 WITH 写语句，请使用独立 DML 语句")
+			case "UPDATE":
+				if i == 0 || tokens[i-1] != "FOR" {
+					return SQLStatementInfo{}, errors.New("暂不支持 WITH 写语句，请使用独立 DML 语句")
+				}
+			}
+		}
+	}
 	switch first {
 	case "SELECT", "WITH":
 		if hasForUpdate {
@@ -77,7 +92,7 @@ func ValidateSQL(kind, query string) (SQLStatementInfo, error) {
 
 // ValidateReadOnlySQL is kept for callers requiring strictly read-only execution.
 func ValidateReadOnlySQL(kind, query string) error {
-	tokens, semicolonContent, err := sqlTokens(query)
+	tokens, semicolonContent, err := sqlTokensDialect(kind, query)
 	if err != nil {
 		return err
 	}
@@ -118,6 +133,10 @@ func ValidateReadOnlySQL(kind, query string) error {
 }
 
 func sqlTokens(query string) ([]string, bool, error) {
+	return sqlTokensDialect(KindOracle, query)
+}
+
+func sqlTokensDialect(kind, query string) ([]string, bool, error) {
 	var tokens []string
 	var word strings.Builder
 	state := byte(0) // 0 normal, ', ", `, line comment L, block comment B
@@ -150,12 +169,39 @@ func sqlTokens(query string) ([]string, bool, error) {
 					continue
 				}
 				state = 0
-			} else if c == '\\' && i+1 < len(query) {
+			} else if c == '\\' && kind == KindMySQL && state != '`' && i+1 < len(query) {
 				i++
 			}
 			continue
 		}
-		if c == '-' && i+1 < len(query) && query[i+1] == '-' {
+		if kind == KindOracle && (c == 'q' || c == 'Q') && i+2 < len(query) && query[i+1] == '\'' && word.Len() == 0 {
+			closer := query[i+2]
+			switch closer {
+			case '[':
+				closer = ']'
+			case '{':
+				closer = '}'
+			case '(':
+				closer = ')'
+			case '<':
+				closer = '>'
+			}
+			end := strings.Index(query[i+3:], string([]byte{closer, '\''}))
+			if end < 0 {
+				return nil, false, errors.New("SQL 中存在未闭合的 q 字符串")
+			}
+			if semicolon {
+				contentAfterSemicolon = true
+			}
+			i += end + 4
+			continue
+		}
+		if kind == KindMySQL && c == '#' {
+			flush()
+			state = 'L'
+			continue
+		}
+		if c == '-' && i+1 < len(query) && query[i+1] == '-' && (kind != KindMySQL || i+2 == len(query) || query[i+2] <= ' ') {
 			flush()
 			state = 'L'
 			i++

@@ -26,10 +26,10 @@ func NewLocalWithAllowedRoots(roots []string) *Local {
 	for _, root := range roots {
 		root = strings.TrimSpace(root)
 		if root == "*" || strings.EqualFold(root, "ANY") {
-			// Wildcards are an explicit opt-out from root restriction, even
-			// when they appear alongside concrete roots (same semantics as
-			// config.ComparePathAllowed).
-			return &Local{}
+			if len(roots) == 1 {
+				return &Local{}
+			}
+			continue
 		}
 		if root == "" {
 			continue
@@ -83,7 +83,12 @@ func (l *Local) List(ctx context.Context, dir string) ([]Entry, error) {
 	if err != nil {
 		return nil, err
 	}
-	items, err := os.ReadDir(cleaned)
+	dirFile, err := l.openChecked(cleaned)
+	if err != nil {
+		return nil, err
+	}
+	defer dirFile.Close()
+	items, err := dirFile.ReadDir(-1)
 	if err != nil {
 		return nil, err
 	}
@@ -104,8 +109,8 @@ func (l *Local) List(ctx context.Context, dir string) ([]Entry, error) {
 }
 
 // ListLimited is used by folder scans to preserve a reliable truncation bit
-// without first allocating an unbounded []DirEntry.  os.ReadDir still lets the
-// platform enumerate the directory, but the returned slice is bounded.
+// without first allocating an unbounded []DirEntry. Read at most max+1
+// entries from the directory handle to determine whether it was truncated.
 func (l *Local) ListLimited(ctx context.Context, dir string, max int) ([]Entry, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
@@ -114,8 +119,17 @@ func (l *Local) ListLimited(ctx context.Context, dir string, max int) ([]Entry, 
 	if err != nil {
 		return nil, false, err
 	}
-	items, err := os.ReadDir(cleaned)
+	dirFile, err := l.openChecked(cleaned)
 	if err != nil {
+		return nil, false, err
+	}
+	defer dirFile.Close()
+	count := -1
+	if max > 0 {
+		count = max + 1
+	}
+	items, err := dirFile.ReadDir(count)
+	if err != nil && err != io.EOF {
 		return nil, false, err
 	}
 	entries := make([]Entry, 0, minLocalEntries(len(items), max))
@@ -149,7 +163,7 @@ func (l *Local) Open(ctx context.Context, name string) (io.ReadCloser, error) {
 	if err != nil {
 		return nil, err
 	}
-	return os.Open(cleaned)
+	return l.openChecked(cleaned)
 }
 
 func (l *Local) MkdirAll(ctx context.Context, dir string, mode uint32) error {
@@ -265,6 +279,9 @@ func (l *Local) safePath(name string, forWrite bool) (string, error) {
 		return "", fmt.Errorf("%w: path contains NUL", ErrPathOutsideRoot)
 	}
 	cleaned := localAbsolutePath(name)
+	if os.PathSeparator == '\\' && strings.Contains(cleaned[len(filepath.VolumeName(cleaned)):], ":") {
+		return "", fmt.Errorf("%w: alternate data stream", ErrPathOutsideRoot)
+	}
 	if !l.restricted {
 		return cleaned, nil
 	}
@@ -408,4 +425,29 @@ func copyLocalFile(from, to string) error {
 	}
 	ok = true
 	return nil
+}
+
+// Anchor reads to an allowed directory handle so a concurrent parent-link
+// replacement cannot redirect the open outside the configured root.
+func (l *Local) openChecked(name string) (*os.File, error) {
+	if !l.restricted {
+		return os.Open(name)
+	}
+	for _, allowed := range l.allowedRoots {
+		if !localPathAllowed(name, []string{allowed}) {
+			continue
+		}
+		rel, err := filepath.Rel(allowed, name)
+		if err != nil {
+			return nil, err
+		}
+		root, err := os.OpenRoot(allowed)
+		if err != nil {
+			return nil, err
+		}
+		f, err := root.Open(rel)
+		root.Close()
+		return f, err
+	}
+	return nil, ErrPathOutsideRoot
 }

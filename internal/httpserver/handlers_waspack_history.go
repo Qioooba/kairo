@@ -150,6 +150,10 @@ type waspackRebuildReq struct {
 }
 
 func (s *Server) handleWASPackHistoryRebuild(w http.ResponseWriter, r *http.Request, sourceID string) {
+	if sourceID == "" || len(sourceID) > 160 || strings.ContainsAny(sourceID, "/\\\x00\r\n") {
+		writeErr(w, http.StatusBadRequest, errors.New("invalid history ID"))
+		return
+	}
 	source, err := s.waspackHistory.Get(sourceID)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -212,14 +216,6 @@ func (s *Server) handleWASPackHistoryRebuild(w http.ResponseWriter, r *http.Requ
 	}
 	packReq.IncludeZip = includeZip
 	started := time.Now().UTC()
-	if policy == waspack.OutputPolicyReplace && !body.ConfirmReplace {
-		err := errors.New("本次重建覆盖输出目录需要 confirm_replace=true；不会继承历史确认")
-		if historyErr := s.recordWASPack("rebuild", packReq, started, "failure", 0, 0, nil, nil, err, source.ID); historyErr != nil {
-			s.audit.Write("waspack.history.append", "operation", "rebuild", "status", "failure", "result", "fail", "error", trimHistoryError(historyErr.Error()))
-		}
-		writeErr(w, http.StatusBadRequest, err)
-		return
-	}
 	buildRes, buildErr := waspack.Build(packReq)
 	if buildErr != nil {
 		if historyErr := s.recordWASPack("rebuild", packReq, started, "failure", 0, 0, nil, nil, buildErr, source.ID); historyErr != nil {

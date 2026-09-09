@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
+	"io"
 	"strings"
 	"sync"
 	"testing"
@@ -18,17 +19,60 @@ type mutationDriver struct {
 	queries            []string
 	args               [][]driver.NamedValue
 	commitErr          error
+	prepares           int
+	queryRows          [][]driver.Value
 	failAt             int
 	commits, rollbacks int
 }
 type mutationConn struct{ d *mutationDriver }
 type mutationTx struct{ d *mutationDriver }
+type mutationStmt struct {
+	conn  *mutationConn
+	query string
+}
 
 func (d *mutationDriver) Connect(context.Context) (driver.Conn, error) { return &mutationConn{d}, nil }
 func (d *mutationDriver) Driver() driver.Driver                        { return d }
 func (d *mutationDriver) Open(string) (driver.Conn, error)             { return &mutationConn{d}, nil }
-func (c *mutationConn) Prepare(string) (driver.Stmt, error) {
-	return nil, errors.New("unexpected prepare")
+func (c *mutationConn) Prepare(query string) (driver.Stmt, error) {
+	c.d.mu.Lock()
+	c.d.prepares++
+	c.d.mu.Unlock()
+	return &mutationStmt{conn: c, query: query}, nil
+}
+
+type mutationRows struct {
+	rows  [][]driver.Value
+	index int
+}
+
+func (r *mutationRows) Columns() []string { return []string{"ID"} }
+func (r *mutationRows) Close() error      { return nil }
+func (r *mutationRows) Next(dest []driver.Value) error {
+	if r.index >= len(r.rows) {
+		return io.EOF
+	}
+	copy(dest, r.rows[r.index])
+	r.index++
+	return nil
+}
+func (c *mutationConn) QueryContext(context.Context, string, []driver.NamedValue) (driver.Rows, error) {
+	return &mutationRows{rows: c.d.queryRows}, nil
+}
+func (s *mutationStmt) Close() error  { return nil }
+func (s *mutationStmt) NumInput() int { return -1 }
+func (s *mutationStmt) Exec(values []driver.Value) (driver.Result, error) {
+	args := make([]driver.NamedValue, len(values))
+	for i, value := range values {
+		args[i] = driver.NamedValue{Ordinal: i + 1, Value: value}
+	}
+	return s.conn.ExecContext(context.Background(), s.query, args)
+}
+func (s *mutationStmt) Query([]driver.Value) (driver.Rows, error) {
+	return nil, errors.New("unexpected query")
+}
+func (s *mutationStmt) ExecContext(ctx context.Context, args []driver.NamedValue) (driver.Result, error) {
+	return s.conn.ExecContext(ctx, s.query, args)
 }
 func (c *mutationConn) Close() error              { return nil }
 func (c *mutationConn) Begin() (driver.Tx, error) { return &mutationTx{c.d}, nil }

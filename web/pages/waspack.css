@@ -45,7 +45,21 @@
 .waspack-config-head p { margin: 3px 0 0; color: var(--wp-muted); font-size: 12px; }
 .waspack-config-body { padding: 16px; }
 .waspack-segmented { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 4px; margin-bottom: 16px; border: 1px solid var(--wp-line); border-radius: 8px; background: var(--wp-surface-2); }
-.waspack-segment { position: relative; display: flex; align-items: center; min-height: 44px; padding: 0 12px; border-radius: 6px; cursor: pointer; color: var(--wp-muted); font-size: 13px; font-weight: 600; }
+.waspack-segment {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  min-height: 44px;
+  padding: 0 16px;
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--wp-muted);
+  font-size: 13px;
+  font-weight: 600;
+  transition: background .15s, color .15s, box-shadow .15s;
+}
 .waspack-segment input { position: absolute; opacity: 0; pointer-events: none; }
 .waspack-segment:has(input:checked), .waspack-segment.is-checked { color: var(--wp-text); background: var(--wp-surface); box-shadow: 0 1px 3px rgba(15,23,42,.14); }
 .waspack-segment:focus-within { outline: 3px solid color-mix(in srgb, var(--wp-accent) 32%, transparent); outline-offset: 1px; }

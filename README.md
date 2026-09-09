@@ -373,12 +373,13 @@ Kairo 全生命周期历经 **20 亿+ (2.0B+) AI Tokens** 深度算力淬炼，�
 ### 2. 协同开发前沿模型 (Frontier AI Models)
 
 > **由以下前沿大模型共同深度协同开发**：
-> - `ChatGPT 5.6 Sol` · `ChatGPT 5.5` · `ChatGPT 5.4` · `GPT-5.6 Terra` · `GPT-5.6 Luna`
+> - `GPT-6 Astra` · `ChatGPT 5.6 Sol` · `ChatGPT 5.5` · `ChatGPT 5.4` · `GPT-5.6 Terra` · `GPT-5.6 Luna`
 > - `Claude Opus 4.8`
 > - `DeepSeek V4 Pro` · `DeepSeek V4 Flash`
-> - `Gemini 3.7 Flash`
+> - `Gemini 3.8 Flash` · `Gemini 3.7 Flash`
 > - `Grok 4.6` · `Grok 4.5`
 > - `Doubao 2.1 Pro` · `GLM 5.2` · `Kimi K3` · `Kimi K2.7` · `MiniMax M3` · `MiniMax M2.7`
+> - `Muse Spark 1.3` · `Muse Spark 1.2` · `MiMo V2.5` · `Ling 3.0 Flash`
 
 ### 3. 工程研发三大支柱 (Core Pillars)
 
@@ -1210,6 +1211,20 @@ v0.11-rc1 起所有 `/api/*`（除 `/api/license/*`）都被 license 网关拦�
 - 全量自动化测试守护：新增前端工作台单元测试 `tests/workbench-unit-tests.js`（statement-model、resource-session、syntax-editor、notice-bus 全部通过），Go 单元测试全绿。
 
 完整设计原则、架构分层、28 项分级修复与迁移说明见应用内「关于 → 版本演进史 → v0.18」。
+
+### v0.19-dev（开发中，当前 VERSION 仍为 v0.18）— 工作台深化 + 安全边界收紧
+
+这是 v0.18 发布后的连续开发记录，不代表正式 v0.19 已发布：
+
+- **数据库工作台继续深化**：新增网格/单记录写入、批量导入、脚本与事务边界；CLOB/BLOB 改为预览、令牌和完整下载分离；查询、导出和会话错误统一脱敏。
+- **数据库安全与一致性**：写操作绑定服务端请求范围会话，限制大结果与大字段读取，补齐 Redis 受控读取/TTL mutation、Oracle 字段与对象工作流回归覆盖。
+- **比较工作台收口**：来源变化、扫描截断、目录未完成和过期 job 会阻止旧结果保存/同步；本地、SFTP、FTP、FTPS 的路径、并发和输入体积统一受控。
+- **WAS 打包安全加固**：输出目录跨平台 fail-closed 校验，拒绝系统敏感目录/UNC/越界路径；归档读取校验文件身份，历史 manifest 受总量预算限制，provenance 使用随机 nonce。
+- **代码生成与通知可靠性**：WSDL 生成补齐 timeout、相对 XSD 定位和并发写入保护；企业微信/钉钉 Webhook 识别 HTTP 200 下的业务失败并限制响应体大小。
+- **前端与文件操作稳定性**：生成页面处理路由销毁、异步竞态和输入法组合输入；文件名/错误输出统一转义；SFTP 新建文件改为 exclusive create；比较输入增加极端行数保护。
+- **测试与发布边界**：扩充数据库写入、LOB、会话隔离、比较任务、WAS 历史/路径和前端工作台测试；正式发布前仍需收敛工作区改动、更新 VERSION 并重新执行 release 门禁。
+
+完整设计原则、架构调整、修复与迁移注意见应用内「关于 → 版本演进史 → v0.19-dev」。
 
 ### v0.17 — 数据库工作台专业化 + 桌面交互精修 + 比较准确性
 

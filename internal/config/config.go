@@ -298,7 +298,7 @@ func (a *AppConfig) UploadMaxSizeBytes() int64 {
 //
 // 规则（v0.9 起 fail-closed）：
 //   - roots 为空 → 返回 false（默认安全，禁止任意远端路径访问）
-//   - roots 含 "*" 或 "ANY"（trim+upper 后）→ 返回 true（显式放行）
+//   - roots 唯一项为 "*" 或 "ANY" → 显式放行；混用时仅使用具体目录
 //   - 其它非空 → path 必须以列表中任一 root 为目录边界前缀
 //
 // 匹配按 / 边界："/var/log" 匹配 "/var/log" 和 "/var/log/app.log"，但不匹配 "/var/logs"。
@@ -342,12 +342,12 @@ func (a *AppConfig) FreeFileRootsConfigured() bool {
 //
 // 规则（fail-closed）：
 //   - roots 为空 → 返回 false（未配置时拒绝本地路径）
-//   - roots 含 "*" 或 "ANY"（trim+upper 后）→ 返回 true（显式放行）
+//   - roots 唯一项为 "*" 或 "ANY" → 显式放行；混用时仅使用具体目录
 //   - 其它非空 → path 必须以列表中任一 root 为目录边界前缀
 //
 // 路径匹配按目录边界（与 FreeFileRootsEnabled 同规则）："/foo/bar" 匹配
 // "/foo/bar" 和 "/foo/bar/baz.txt"，但不匹配 "/foo/barbaz"。
-// 大小写敏感（远端 Linux 系统路径区分大小写）；Windows 路径需用户自行确保前缀正确。
+// 本地 Windows 路径不区分大小写；其它平台保留大小写。
 func (a *AppConfig) ComparePathAllowed(path string) bool {
 	if len(a.CompareAllowedRoots) == 0 {
 		return false
@@ -363,9 +363,16 @@ func (a *AppConfig) ComparePathAllowed(path string) bool {
 		}
 		// 显式放行标记
 		if root == "*" || strings.EqualFold(root, "ANY") {
-			return true
+			if len(a.CompareAllowedRoots) == 1 {
+				return true
+			}
+			continue
 		}
 		rootCleaned := filepath.ToSlash(filepath.Clean(root))
+		if runtime.GOOS == "windows" {
+			cleaned = strings.ToLower(cleaned)
+			rootCleaned = strings.ToLower(rootCleaned)
+		}
 		if cleaned == rootCleaned {
 			return true
 		}
@@ -389,7 +396,7 @@ func (a *AppConfig) AllowCustomDownloadDirEnabled() bool {
 //
 // 规则（v0.9 起 fail-closed）：
 //   - roots 为空 → 返回 false（默认安全，禁止下载到任意本地目录）
-//   - roots 含 "*" 或 "ANY"（trim+upper 后）→ 返回 true（显式放行）
+//   - roots 唯一项为 "*" 或 "ANY" → 显式放行；混用时仅使用具体目录
 //   - 其它非空 → absolutePath 必须以任一 root 为目录边界前缀（按 / 或 \ 边界）
 //
 // 注意：
@@ -1185,6 +1192,21 @@ func (c *Config) Clone() *Config {
 		return nil
 	}
 	out := *c // 顶层字段值拷贝（Search / AppConfig 大部分字段）
+	if c.App.AutoOpenBrowser != nil {
+		v := *c.App.AutoOpenBrowser
+		out.App.AutoOpenBrowser = &v
+	}
+	if c.App.UploadMaxSize != nil {
+		v := *c.App.UploadMaxSize
+		out.App.UploadMaxSize = &v
+	}
+	if c.Pet.NotifyUp != nil {
+		v := *c.Pet.NotifyUp
+		out.Pet.NotifyUp = &v
+	}
+	out.Pet.ExpRules = cloneConfigMap(c.Pet.ExpRules)
+	out.Pet.StageLevels = cloneConfigMap(c.Pet.StageLevels)
+	out.Pet.OpDailyMax = cloneConfigMap(c.Pet.OpDailyMax)
 
 	// AppConfig.EnableFreeFileBrowser 是 *bool，需要独立复制
 	if c.App.EnableFreeFileBrowser != nil {
@@ -1251,6 +1273,7 @@ func (c *Config) Clone() *Config {
 		for i := range c.Systems {
 			srcSys := &c.Systems[i]
 			dstSys := &out.Systems[i]
+			dstSys.ID = srcSys.ID
 			dstSys.Name = srcSys.Name
 			dstSys.Description = srcSys.Description
 			if srcSys.Servers != nil {
@@ -1276,4 +1299,15 @@ func (c *Config) Clone() *Config {
 	}
 
 	return &out
+}
+
+func cloneConfigMap[V any](source map[string]V) map[string]V {
+	if source == nil {
+		return nil
+	}
+	out := make(map[string]V, len(source))
+	for key, value := range source {
+		out[key] = value
+	}
+	return out
 }

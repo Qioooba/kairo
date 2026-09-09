@@ -37,7 +37,7 @@ func normalizeWASPackReplacePath(raw string) (string, error) {
 	if strings.TrimSpace(raw) == "" || strings.ContainsAny(raw, "\x00\r\n") {
 		return "", errors.New("输出目录无效")
 	}
-	abs, err := filepath.Abs(strings.TrimSpace(raw))
+	abs, err := waspack.ValidateOutputPath(strings.TrimSpace(raw))
 	if err != nil {
 		return "", errors.New("输出目录无效")
 	}

@@ -2152,10 +2152,13 @@
       if (v === 'latest') r.checked = true;
       r.addEventListener('change', updateScopeVisibility);
       scopeRadios[v] = r;
-      scopeRadios[v + 'Label'] = el('label', { class: 'inline' }, [r, document.createTextNode(' ' + lbl)]);
+      scopeRadios[v + 'Label'] = el('label', { class: 'inline ws-scope-label', style: 'display:inline-flex; align-items:center; gap:6px; cursor:pointer; user-select:none;' }, [
+        r,
+        el('span', { class: 'ws-scope-text', text: lbl, style: 'font-size:12.5px; line-height:18px;' })
+      ]);
     });
-    const scopeRow = el('div', { class: 'mt-2', style: 'display:flex; gap:14px; align-items:center; flex-wrap:wrap;' }, [
-      el('span', { class: 'lbl', text: '搜索文件范围：' }),
+    const scopeRow = el('div', { class: 'mt-2 ws-scope-row', style: 'display:flex; gap:16px; align-items:center; flex-wrap:wrap; margin:10px 0 6px;' }, [
+      el('span', { class: 'lbl ws-scope-prefix', text: '搜索文件范围：', style: 'margin:0; font-size:12.5px; display:inline-flex; align-items:center;' }),
       scopeRadios.latestLabel, scopeRadios.globLabel, scopeRadios.selectedLabel
     ]);
     const searchSelSummary = el('div', { class: 'text-dim', id: 'ws-search-sel-summary', text: '尚未选择文件' });

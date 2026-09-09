@@ -53,7 +53,20 @@ func (m *Manager) StreamSessionQueryPage(ctx context.Context, source Source, que
 // StreamSessionQueryPageWithParams is the parameterized counterpart used by
 // the HTTP query endpoint.  Binding happens before any database call and the
 // rewritten SQL is still passed through the same classifier/paginator.
-func (m *Manager) StreamSessionQueryPageWithParams(ctx context.Context, source Source, query string, page, pageSize int, sessionID string, params []BindParameter, emit EmitFunc) (QuerySummary, error) {
+func (m *Manager) StreamSessionQueryPageWithParams(ctx context.Context, source Source, query string, page, pageSize int, sessionID string, params []BindParameter, emit EmitFunc) (qs QuerySummary, qerr error) {
+	defer func() {
+		if r := recover(); r != nil {
+			qerr = fmt.Errorf("%w: 查询 panic 已捕获（可能为 TTC 解析错位，连接已销毁）: %v", driver.ErrBadConn, r)
+			if source.ID != "" {
+				m.invalidatePool(source.ID)
+			}
+		} else if qerr != nil && isTTCError(qerr) {
+			qerr = mapTTCError(qerr)
+			m.invalidatePool(source.ID)
+		} else if qerr != nil && isConnectionFailure(qerr) {
+			m.invalidatePool(source.ID)
+		}
+	}()
 	if source.Kind == KindRedis {
 		return QuerySummary{}, fmt.Errorf("Redis 不支持 SQL 查询")
 	}
@@ -99,6 +112,9 @@ func (m *Manager) StreamSessionQueryPageWithParams(ctx context.Context, source S
 		if attempt == 0 && !hadSessionTransaction && !emittedRows && isRetryableQueryFailure(err) {
 			m.invalidatePool(source.ID)
 			continue
+		}
+		if isConnectionFailure(err) {
+			m.invalidatePool(source.ID)
 		}
 		return summary, err
 	}
@@ -279,7 +295,7 @@ func (m *Manager) ExecuteBatch(ctx context.Context, source Source, statements []
 	var totalAffected int64
 	for _, stmt := range statements {
 		trimmed := strings.TrimSpace(stmt)
-		upper := strings.ToUpper(trimmed)
+		upper := strings.ToUpper(strings.TrimRight(trimmed, "; \t\r\n"))
 		if upper == "COMMIT" || upper == "ROLLBACK" {
 			continue
 		}
@@ -347,11 +363,34 @@ func (m *Manager) streamQueryAttempt(ctx context.Context, source Source, query s
 		// transaction, and is always rolled back below, so the extra session
 		// command adds no write protection but does make metadata work unreliable.
 	}
-	limitedQuery, err := serverPagedQuery(source.Kind, query, page)
+	actualQuery := query
+	var lobRewrite *LOBRewrittenQuery
+	var lobSingleInfo *SingleTableQueryInfo
+
+	// 结论 2.1: 仅对安全单表浏览查询重写 LOB 投影；任意复杂 SQL 保持原样执行
+	if source.Kind == KindOracle && !info.HasForUpdate {
+		if sInfo, ok := parseSafeSingleTableQuery(query); ok {
+			lobSingleInfo = sInfo
+			if rw, rerr := buildLOBProjectionOn(queryCtx, queryTx, sInfo); rerr != nil {
+				return QuerySummary{}, rerr
+			} else if rw != nil {
+				lobRewrite = rw
+				actualQuery = rw.SQL
+			}
+		}
+	}
+
+	limitedQuery, err := serverPagedQuery(source.Kind, actualQuery, page)
 	if err != nil {
 		return QuerySummary{}, err
 	}
-	rows, err := queryTx.QueryContext(queryCtx, limitedQuery, args...)
+	queryArgs := args
+	cursorCtx := queryCtx
+	if source.Kind == KindOracle && m.ResolveOracleBackend(source).Name() == "godror" {
+		queryArgs = oracleGridArgs(args)
+		cursorCtx = oracleCursorContext(queryCtx)
+	}
+	rows, err := queryTx.QueryContext(cursorCtx, limitedQuery, queryArgs...)
 	if err != nil {
 		if sessionTx != nil && (queryCtx.Err() != nil || isConnectionFailure(err)) {
 			m.rollbackEntryLocked(source.ID, sessionID, sessionTx)
@@ -359,20 +398,38 @@ func (m *Manager) streamQueryAttempt(ctx context.Context, source Source, query s
 		return QuerySummary{}, err
 	}
 	defer rows.Close()
-	columns, err := resultColumns(rows)
-	if err != nil {
-		return QuerySummary{}, err
-	}
+
+	var columns []Column
 	aliasIdx := -1
-	for i, c := range columns {
-		colName := strings.Trim(strings.ToUpper(c.Name), "\"`[] \t")
-		if strings.HasPrefix(colName, "__KAIRO_RN_") {
-			aliasIdx = i
-			break
+
+	if lobRewrite != nil {
+		// 对外暴露的元数据列是原表的真实业务列（名称与数据类型正确），
+		// 不暴露 __LP_* / __LL_* / __KAIRO_ROWID__ 辅助列
+		columns = lobRewrite.Columns
+
+		rawCols, _ := rows.Columns()
+		for i, c := range rawCols {
+			colName := strings.Trim(strings.ToUpper(c), "\"`[] \t")
+			if strings.HasPrefix(colName, "__KAIRO_RN_") {
+				aliasIdx = i
+				break
+			}
 		}
-	}
-	if aliasIdx >= 0 {
-		columns = append(columns[:aliasIdx], columns[aliasIdx+1:]...)
+	} else {
+		columns, err = resultColumns(rows)
+		if err != nil {
+			return QuerySummary{}, err
+		}
+		for i, c := range columns {
+			colName := strings.Trim(strings.ToUpper(c.Name), "\"`[] \t")
+			if strings.HasPrefix(colName, "__KAIRO_RN_") {
+				aliasIdx = i
+				break
+			}
+		}
+		if aliasIdx >= 0 {
+			columns = append(columns[:aliasIdx], columns[aliasIdx+1:]...)
+		}
 	}
 
 	// 此时连接与首包已就绪，立即向调用方流式发射元数据
@@ -386,13 +443,46 @@ func (m *Manager) streamQueryAttempt(ctx context.Context, source Source, query s
 		QueryLimit: page.PageSize, Page: page.Page, PageSize: page.PageSize,
 		TransactionPending: sessionTx != nil,
 		Offset:             page.Offset(), HasPrev: page.Page > 1, PaginationMode: "page",
-		Ordered: queryHasOrderBy(query),
+		Ordered: queryHasOrderBy(actualQuery),
 	}
 
 	batch := make([][]any, 0, rowBatchSize)
-	scanner := newRowScanner(columns, aliasIdx)
 
+	type rowScannerInterface interface {
+		Scan(rows *sql.Rows) ([]any, int64, error)
+	}
+
+	var scanner rowScannerInterface
+	if lobRewrite != nil {
+		schema := ""
+		table := ""
+		if lobSingleInfo != nil {
+			schema = lobSingleInfo.Schema
+			table = lobSingleInfo.Table
+		}
+		lobSessionID := ""
+		if sessionTx != nil {
+			lobSessionID = sessionID
+		}
+		scanner = newLOBRowScanner(lobRewrite, source, schema, table, lobSessionID, aliasIdx)
+	} else {
+		scanner = newRowScanner(columns, aliasIdx)
+	}
+
+	// Commands and locking queries cannot use the derived-table wrapper.
+	// Apply their page offset while consuming the original cursor instead.
+	var skipRows int64
+	if info.HasForUpdate || (info.Action != "SELECT" && info.Action != "WITH") {
+		skipRows = page.Offset()
+	}
 	for rows.Next() {
+		if err := queryCtx.Err(); err != nil {
+			return summary, err
+		}
+		if skipRows > 0 {
+			skipRows--
+			continue
+		}
 		row, rowBytes, scanErr := scanner.Scan(rows)
 		if scanErr != nil {
 			if sessionTx != nil && (queryCtx.Err() != nil || isConnectionFailure(scanErr)) {
@@ -496,7 +586,7 @@ func isConnectionFailure(err error) bool {
 	for _, marker := range []string{
 		"MYSQL SERVER HAS GONE AWAY", "ERROR 2006", "ERROR 2013", "BROKEN PIPE",
 		"CONNECTION RESET", "CONNECTION IS CLOSED", "USE OF CLOSED NETWORK CONNECTION",
-		"ORA-03113", "ORA-03114", "ORA-01012", "ORA-12537",
+		"ORA-03113", "ORA-03114", "ORA-01012", "ORA-12537", "TTC ERROR",
 	} {
 		if strings.Contains(text, marker) {
 			return true
@@ -541,6 +631,10 @@ type boundedCellScanner struct {
 }
 
 func (s *boundedCellScanner) Scan(src any) error {
+	if value, handled, err := oracleLOBPreview(src, s.dbType); handled {
+		s.value = value
+		return err
+	}
 	s.value = normalizeColumnValue(src, s.dbType)
 	return nil
 }

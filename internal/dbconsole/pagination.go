@@ -38,7 +38,11 @@ func serverPagedQuery(kind, query string, page QueryPage) (string, error) {
 	if query == "" || page.Page < 1 || page.PageSize < 1 {
 		return "", fmt.Errorf("查询或分页参数无效")
 	}
-	tokens, _, err := sqlTokens(query)
+	// Bound both wrapped OFFSET queries and cursor-skipped command pages.
+	if int64(page.Page-1) > 10000000/int64(page.PageSize) {
+		return "", fmt.Errorf("分页偏移量超过 1000 万行，请缩小查询范围")
+	}
+	tokens, _, err := sqlTokensDialect(kind, query)
 	if err != nil {
 		return "", fmt.Errorf("解析查询失败: %w", err)
 	}

@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -267,7 +266,7 @@ func (s *Server) handleWASPackOpen(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, errors.New("路径含非法字符"))
 		return
 	}
-	abs, err := filepath.Abs(dir)
+	abs, err := waspack.ValidateOutputPath(dir)
 	if err != nil {
 		writeErr(w, 400, fmt.Errorf("路径无效: %w", err))
 		return

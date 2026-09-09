@@ -3,7 +3,7 @@
  *
  * 设计目标：
  *   - 把"关于"从单页简介升级为一份**带交互的产品技术白皮书**
- *   - 顶部 sticky 锚点导航 + 19 个版本卡片 (accordion 折叠) + 14 个数据区块
+ *   - 顶部 sticky 锚点导航 + 20 个版本卡片 (accordion 折叠) + 14 个数据区块
  *   - 内容 100% 由 commit log / 源码 / README 提取, 不注水
  *   - 几万字正文 + 折叠默认收起, 首屏不卡
  */
@@ -231,7 +231,7 @@
     { label: 'AI Token 深度算力淬炼', value: '20 亿+ (2.0B+)', sub: '多模态视觉审核 · 长程深度推理 · 测试闭环', tone: 'accent' },
     { label: '代码行数 (Go)',         value: '86,000+',  sub: '315 个 Go 文件 · 40 个后端子包 · 含 130+ 测试', tone: 'primary' },
     { label: '代码行数 (前端)',       value: '39,000+',  sub: 'vanilla JS 31K + CSS 8K · 22 路由页面',   tone: 'accent'  },
-    { label: '提交次数',              value: '178+',     sub: 'v0.1 → v0.18 持续演进',                      tone: 'success' },
+    { label: '提交次数',              value: '184+',     sub: 'v0.1 → v0.19-dev 持续演进',                  tone: 'success' },
     { label: '后端模块',              value: '40',       sub: 'upgrade / dbconsole / comparefs / desknote 等', tone: 'primary' },
     { label: '前端路由与组件',        value: '22+',      sub: '22 个路由页面 + Win32 原生桌面组件 + 4 独立子窗口', tone: 'accent'  },
     { label: 'API 接口',              value: '135+',     sub: 'REST + NDJSON + SSE + WebSocket 全覆盖',      tone: 'primary' },
@@ -259,7 +259,10 @@
     doubao: function (sz) { return '<svg viewBox="0 0 24 24" width="' + sz + '" height="' + sz + '" fill="currentColor"><path d="M12 3C6.5 3 2 7 2 12c0 3 1.5 5.5 4 7v3l3.5-1.8c.8.3 1.6.5 2.5.5 5.5 0 10-4 10-9s-4.5-9-10-9z"/><circle cx="8.5" cy="11.5" r="1.5" fill="var(--bg-1, #1e1e2e)"/><circle cx="15.5" cy="11.5" r="1.5" fill="var(--bg-1, #1e1e2e)"/></svg>'; },
     glm: function (sz) { return '<svg viewBox="0 0 24 24" width="' + sz + '" height="' + sz + '" fill="none" stroke="currentColor" stroke-width="2"><circle cx="8.5" cy="12" r="5.5"/><circle cx="15.5" cy="12" r="5.5"/><path d="M12 7.5a5.5 5.5 0 0 1 0 9"/></svg>'; },
     kimi: function (sz) { return '<svg viewBox="0 0 24 24" width="' + sz + '" height="' + sz + '" fill="currentColor"><path d="M12 3a9 9 0 1 0 9 9c0-.4-.03-.8-.08-1.2A7 7 0 0 1 13.2 3.08C12.8 3.03 12.4 3 12 3z"/><path d="M18 4l.8 1.8L20.6 6.6l-1.8.8L18 9.2l-.8-1.8-1.8-.8 1.8-.8z"/></svg>'; },
-    minimax: function (sz) { return '<svg viewBox="0 0 24 24" width="' + sz + '" height="' + sz + '" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M3 14v-4M7 17V7M11 20V4M15 17V7M19 14v-4"/></svg>'; }
+    minimax: function (sz) { return '<svg viewBox="0 0 24 24" width="' + sz + '" height="' + sz + '" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M3 14v-4M7 17V7M11 20V4M15 17V7M19 14v-4"/></svg>'; },
+    muse: function (sz) { return '<svg viewBox="0 0 24 24" width="' + sz + '" height="' + sz + '" fill="currentColor"><path d="M12 2l1.8 6.2L20 10l-6.2 1.8L12 18l-1.8-6.2L4 10l6.2-1.8L12 2z"/><path d="M18.5 15l.8 2.7L22 18.5l-2.7.8L18.5 22l-.8-2.7-2.7-.8 2.7-.8.8-2.7z"/></svg>'; },
+    mimo: function (sz) { return '<svg viewBox="0 0 24 24" width="' + sz + '" height="' + sz + '" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M12 2l8 4.5v9L12 20l-8-4.5v-9L12 2z"/><path d="M12 2v9m8-4.5l-8 4.5m-8-4.5l8 4.5m0 0v9"/></svg>'; },
+    ling: function (sz) { return '<svg viewBox="0 0 24 24" width="' + sz + '" height="' + sz + '" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 7c2.5-3 6.5-3 9 0s2.5 6 5 7"/><path d="M5 17c2.5 3 6.5 3 9 0s2.5-6 5-7"/></svg>'; }
   };
 
   function getBrandSvg(brand, size) {
@@ -277,6 +280,7 @@
       { name: 'OpenCode', brand: 'opencode' }
     ],
     models: [
+      { name: 'GPT-6 Astra', brand: 'openai' },
       { name: 'ChatGPT 5.6 Sol', brand: 'openai' },
       { name: 'ChatGPT 5.5', brand: 'openai' },
       { name: 'ChatGPT 5.4', brand: 'openai' },
@@ -285,6 +289,7 @@
       { name: 'Claude Opus 4.8', brand: 'claude' },
       { name: 'DeepSeek V4 Pro', brand: 'deepseek' },
       { name: 'DeepSeek V4 Flash', brand: 'deepseek' },
+      { name: 'Gemini 3.8 Flash', brand: 'gemini' },
       { name: 'Gemini 3.7 Flash', brand: 'gemini' },
       { name: 'Grok 4.6', brand: 'grok' },
       { name: 'Grok 4.5', brand: 'grok' },
@@ -293,7 +298,11 @@
       { name: 'Kimi K3', brand: 'kimi' },
       { name: 'Kimi K2.7', brand: 'kimi' },
       { name: 'MiniMax M3', brand: 'minimax' },
-      { name: 'MiniMax M2.7', brand: 'minimax' }
+      { name: 'MiniMax M2.7', brand: 'minimax' },
+      { name: 'Muse Spark 1.3', brand: 'muse' },
+      { name: 'Muse Spark 1.2', brand: 'muse' },
+      { name: 'MiMo V2.5', brand: 'mimo' },
+      { name: 'Ling 3.0 Flash', brand: 'ling' }
     ],
     pillars: [
       {
@@ -537,7 +546,7 @@
       ]
     },
     {
-      icon: 'database', name: '数据库工作台 (v0.16-v0.18)',
+      icon: 'database', name: '数据库工作台 (v0.16-v0.19-dev)',
       pages: ['database'],
       apis: ['/api/database/sources', '/api/database/query', '/api/database/export', '/api/database/metadata/*', '/api/database/explain', '/api/database/redis/*'],
       pkg: 'internal/dbconsole',
@@ -560,7 +569,7 @@
       ]
     },
     {
-      icon: 'compareIc', name: '文件与文本比较工作台 (v0.16-v0.18)',
+      icon: 'compareIc', name: '文件与文本比较工作台 (v0.16-v0.19-dev)',
       pages: ['compare'],
       apis: ['/api/diff/compare', '/api/compare/scan', '/api/compare/jobs/*', '/api/compare/sync*', '/api/compare/connections'],
       pkg: 'internal/diff + internal/comparefs',
@@ -611,7 +620,7 @@
       ]
     },
     {
-      icon: 'waspack', name: 'WAS 投产打包 (v0.17-v0.18)',
+      icon: 'waspack', name: 'WAS 投产打包 (v0.17-v0.19-dev)',
       pages: ['waspack'],
       apis: ['/api/waspack/preview', '/api/waspack/build', '/api/waspack/open'],
       pkg: 'internal/waspack + internal/httpserver/handlers_waspack.go',
@@ -705,7 +714,7 @@
       ]
     },
     {
-      icon: 'tasks', name: '定时任务与系统通知 (v0.15-v0.18)',
+      icon: 'tasks', name: '定时任务与系统通知 (v0.15-v0.19-dev)',
       pages: ['tasks'],
       apis: ['/api/tasks', '/api/tasks/*'],
       pkg: 'internal/schedtask + internal/cronx + internal/notify',
@@ -782,7 +791,7 @@
       ]
     },
     {
-      icon: 'config', name: '统一升级协调与配置中心 (v0.18 加固)',
+      icon: 'config', name: '统一升级协调与配置中心 (v0.18+ 持续加固)',
       pages: ['config'],
       apis: ['/api/config*', '/api/admin/servers', '/api/admin/openers', '/api/admin/download-retention', '/api/admin/autostart'],
       pkg: 'internal/config + internal/upgrade + internal/credentials',
@@ -1002,9 +1011,100 @@
   };
 
   // =====================================================================
-  // §13. 版本演进史 (19 个版本, accordion 折叠)
+  // §13. 版本演进史 (20 个版本, 含 v0.19-dev, accordion 折叠)
   // =====================================================================
 const changelog = [
+    {
+      version: 'v0.19-dev',
+      date: '2026-09-09',
+      tag: 'v0.18 后续开发 · 工作台深化 · 安全边界收紧 · 性能与稳定性优化',
+      codename: 'Sentinel · 守界加固',
+      size: 'xl',
+      headline: '本卡记录 v0.18 发布后的连续开发工作：数据库从“可查询”继续走向可控写入与大字段工作流；文件比对、WAS 打包和代码生成补齐边界校验；同时收紧 API、会话、路径、错误信息与 Webhook 的安全和可靠性。当前根目录 VERSION 仍为 v0.18，v0.19-dev 尚未作为正式发行版发布。',
+      stats: { commits: 5, fixes: 16, additions: 11, breaks: 0 },
+      principles: [
+        '写操作必须可预览、可确认、可回滚：网格编辑、批量导入与脚本执行统一经过会话、确认和事务边界。',
+        '大字段与大结果必须受控：CLOB/BLOB、虚拟投影和流式下载不能因为一次预览把整份数据拉入内存。',
+        '任何本地路径都不能默认可信：数据库导出、文件比对和 WAS 产物输出统一做路径归一化、越界拦截与敏感目录拒绝。',
+        '异步任务必须可观察且可取消：扫描、同步、打包和通知都要有明确状态、超时与失败反馈。',
+        '错误信息对用户有用但不能泄露凭据：审计和 API 响应保留根因，隐藏 DSN、密码与内部敏感路径。',
+        '兼容性优化必须有回归证据：前端工作台单元测试、Go 回归测试和真实数据库验收同步扩充。'
+      ],
+      architecture: {
+        layers: [
+          { name: '数据库写工作台层', detail: 'internal/dbconsole 与 database.js 扩展网格编辑、单记录编辑、批量导入、脚本执行、事务提交/回滚和对象工作流，所有写入按数据源会话隔离。' },
+          { name: 'LOB 与大结果受控层', detail: 'CLOB/BLOB 采用预览、令牌和完整下载分离的模型；查询结果限制单元格、总字节与行数，避免大字段或海量换行导致内存峰值。' },
+          { name: '比对并发与来源版本层', detail: '比较任务对来源变更、截断、未完成目录和过期 job 做显式标记；保存前要求成功读取得到的版本信息，防止旧内容覆盖新文件。' },
+          { name: 'WAS 输出与 provenance 层', detail: '输出目录共享 fail-closed 路径策略；归档读取校验常规文件与文件身份，历史清理受 manifest 总量预算约束，阶段 provenance 使用随机 nonce。' },
+          { name: 'API 会话与错误治理层', detail: '数据库会话绑定请求上下文，敏感系统配置脱敏返回；比较、导出、代码生成与工具接口增加权限、来源、并发槽位和响应体边界。' },
+          { name: '通知与生成稳定性层', detail: 'Webhook 校验业务成功码与响应上限；WSDL 代码生成补齐 timeout 配置、相对 WSDL 定位与并发写入保护。' }
+        ],
+        retirements: [
+          '移除数据库写接口直接信任前端 session ID 的路径，改为服务端请求范围绑定。',
+          '移除本地输出目录只做字符串判断的路径策略，统一经过跨平台敏感路径与项目边界校验。',
+          '移除大字段默认整块读取和归档阶段无身份校验的文件打开方式。',
+          '移除 Webhook 仅看 HTTP 200、不检查企业微信/钉钉业务错误码的误报路径。'
+        ]
+      },
+      features: [
+        { title: '数据库网格写入与批量导入', desc: '支持单元格/单记录编辑、批量 mutation、CSV/结构化数据导入、映射预览、逐行结果和显式提交/回滚；失败时保留可操作的结果上下文。' },
+        { title: 'CLOB/BLOB 与大结果工作流', desc: '大字段以类型、大小、截断状态和下载令牌呈现，支持在线预览、复制预览、十六进制检视、完整下载与受控分页，避免一次性读取全部内容。' },
+        { title: '数据库会话安全与错误脱敏', desc: '写操作和脚本执行绑定请求范围会话；审计保留操作结果但隐藏 DSN、密码和内部敏感信息；未认证的非本机 API 访问默认拒绝。' },
+        { title: '比较任务状态一致性', desc: '来源输入变化会使扫描结果失效并取消旧任务；目录未完整加载、结果截断和类型冲突都会阻止误保存或误同步。' },
+        { title: '跨协议本地文件安全读取', desc: 'Local/SFTP/FTP/FTPS 比较继续复用统一 RemoteFS 抽象；本地敏感路径、符号链接、并发槽位和请求体大小统一受控。' },
+        { title: 'WAS 打包输出与历史治理', desc: '输出路径跨平台 fail-closed 校验，归档阶段校验文件身份与常规文件类型，历史 manifest 增加总量预算，stage provenance 使用不可预测随机 nonce。' },
+        { title: 'WSDL 代码生成稳定性', desc: '生成的 JAX-WS/兼容客户端补齐连接与请求 timeout，保留 WSDL system ID 解析相对 XSD，并对并发生成输出加锁。' },
+        { title: 'Webhook 失败可观测性', desc: '企业微信/钉钉响应体受大小限制，HTTP 200 但 errcode 非零时也报告业务失败，避免通知“已发送”却实际丢失。' },
+        { title: '前端异步与输入状态稳定性', desc: '代码生成页面在路由销毁、输入法组合输入和异步响应返回时保持状态一致；比较页面对来源变更、过期请求和大行数输入做显式保护。' },
+        { title: '文件操作输出安全', desc: '文件名、下载错误和结果提示统一转义；SFTP 新建文件改为 exclusive create，避免“新建”误覆盖已有文件。' },
+        { title: '工作台回归测试扩充', desc: '新增数据库写入、LOB、会话隔离、比较后台任务、WAS 历史/路径与前端工作台交互测试，覆盖真实失败边界。' }
+      ],
+      fixes: {
+        p0: [
+          '修复数据库写接口可跨请求复用 session ID 的会话越界风险，改为服务端请求范围绑定并统一错误脱敏。',
+          '修复 WAS、文件比较和导出路径在不同平台下可能指向系统敏感目录或越出允许范围的问题。'
+        ],
+        p1: [
+          '修复 CLOB/BLOB 与超大查询结果默认完整读取造成的内存峰值，改为预览、令牌和流式下载。',
+          '修复比较来源修改后仍可使用旧扫描结果保存/同步的问题，增加序列号、版本和完整性状态校验。',
+          '修复归档构建阶段文件被替换或软链接指向外部目标时仍被读取的问题。',
+          '修复 Webhook 返回 HTTP 200 但业务 errcode 失败时被误判为成功的问题。',
+          '修复 WSDL 相对 XSD 导入丢失 system ID，以及代码生成并发写入可能互相覆盖的问题。',
+          '修复未认证 API 绑定非 loopback 地址时仍可被远端访问的边界问题。',
+          '修复 SFTP 新建文件通过空上传可能覆盖已有文件的问题，改为服务端 exclusive create。'
+        ],
+        p2: [
+          '优化数据库查询分批与导出路径，降低大结果集的临时分配和峰值内存。',
+          '统一比较任务的取消、截断、失败和空结果提示，减少前端状态歧义。',
+          '限制历史 manifest、Webhook 响应和比较输入体积，避免异常数据无限增长。',
+          '补齐 Redis 受控读取/TTL mutation、Oracle 复杂字段和对象详情的回归覆盖。',
+          '收紧代码生成引擎、WAS 历史接口和本地工具接口的权限与参数校验。',
+          '修复文件名、下载错误和任务错误状态进入 unsafeHtml 时的输出转义问题。',
+          '限制代码比对单侧行数，避免极端换行输入造成不必要的切片分配。'
+        ]
+      },
+      commits: [
+        { hash: '0a3a440', msg: 'feat(workbench): 完善数据库、比对与打包工作台并修复数据一致性问题' },
+        { hash: 'e874953', msg: 'feat(database): 批量原子提交与会话安全加固' },
+        { hash: 'b974403', msg: 'feat(workbench): 优化数据库查询内存性能与批量打包路径规范' },
+        { hash: 'c9c4b4e', msg: 'fix(security): 收紧数据库、比对与打包权限边界' },
+        { hash: '4b848da', msg: 'fix(waspack): 跨平台拦截敏感输出路径' }
+      ],
+      performance: [
+        { label: '大结果查询', before: '整批结果更容易产生高峰内存', after: '分批读取、受控行数与字段体积', improve: '峰值内存更可控' },
+        { label: '大字段查看', before: '预览与完整内容边界不清', after: '预览 / 令牌 / 流式下载分离', improve: '避免无意拉取全文' },
+        { label: 'WAS 输出安全', before: '平台差异可能漏掉敏感路径', after: '统一跨平台 fail-closed 校验', improve: '拒绝策略一致' },
+        { label: '比较保存正确性', before: '旧扫描结果可能覆盖新来源', after: '来源序列、版本和完整状态联动', improve: '过期结果不可写入' }
+      ],
+      breaking: [],
+      migration: [
+        '这是 v0.18 发布后的开发记录，不代表正式 v0.19 已发布；当前运行时版本仍由根目录 VERSION 提供，为 v0.18。',
+        '数据库新增写入、导入和脚本能力均需显式会话与确认；旧版只读配置不会被自动改写。',
+        '未启用认证时，API 继续只建议绑定 loopback；绑定非本机地址时将被服务端拒绝。',
+        'WAS 输出目录、文件比较和导出路径现在会拒绝系统敏感目录、UNC 路径和越界路径；请改用明确的工作目录。',
+        '若继续开发 v0.19，正式发版前需要把本卡的工作区改动收敛、更新 VERSION/README，并重新执行 release 门禁。'
+      ]
+    },
     {
       version: 'v0.18',
       date: '2026-09-04',
@@ -2240,10 +2340,10 @@ const changelog = [
       ]));
     });
 
-    // 3. 由以下前沿大模型共同深度协同开发 (ChatGPT 5.6 Sol 排第一)
+    // 3. 由以下前沿大模型共同深度协同开发 (GPT-6 Astra / ChatGPT 5.6 Sol 排前)
     const modelBadges = el('div', { style: 'display:flex; flex-wrap:wrap; gap:8px;' });
     aiEngineData.models.forEach(m => {
-      const isHighlight = m.name.indexOf('Sol') !== -1 || m.name.indexOf('Opus') !== -1 || m.name.indexOf('V4 Pro') !== -1 || m.name.indexOf('Gemini 3.7') !== -1;
+      const isHighlight = m.name.indexOf('Astra') !== -1 || m.name.indexOf('Sol') !== -1 || m.name.indexOf('Opus') !== -1 || m.name.indexOf('V4 Pro') !== -1 || m.name.indexOf('Gemini 3.8') !== -1 || m.name.indexOf('Muse Spark 1.3') !== -1 || m.name.indexOf('MiMo V2.5') !== -1 || m.name.indexOf('Ling 3.0') !== -1;
       modelBadges.appendChild(el('span', {
         style: 'display:inline-flex; align-items:center; gap:6px; padding:5px 12px; border-radius:6px; font-size:12.5px; font-weight:600; background:' + (isHighlight ? 'var(--primary)' : 'var(--bg-2)') + '; color:' + (isHighlight ? '#fff' : 'var(--text)') + '; border:1px solid ' + (isHighlight ? 'var(--primary)' : 'var(--line)') + '; transition:all 0.15s;'
       }, [
@@ -2546,7 +2646,7 @@ const changelog = [
     wrap.appendChild(banner);
     wrap.appendChild(list);
 
-    view.appendChild(renderSection('sec-history', 'history', '版本演进史', 'v0.1 → v0.18 · 19 个版本 (含 v0.13.1 / v0.11-rc1) · 持续迭代 · 178+ commit', wrap));
+    view.appendChild(renderSection('sec-history', 'history', '版本演进史', 'v0.1 → v0.19-dev · ' + changelog.length + ' 个版本 (含开发中记录 / v0.13.1 / v0.11-rc1) · 持续迭代 · 184+ commit', wrap));
   }
 
   function renderVersionCard(v, idx) {

@@ -218,7 +218,7 @@ func Run(opts Options) (*Result, error) {
 			return nil, cause
 		}
 		if restoreErr := snapshot.restore(); restoreErr != nil {
-			return nil, fmt.Errorf("%v; rollback also failed: %w", cause, restoreErr)
+			return nil, fmt.Errorf("%w; rollback also failed: %w", cause, restoreErr)
 		}
 		return nil, cause
 	}

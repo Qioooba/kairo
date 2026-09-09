@@ -184,7 +184,7 @@
     const database = K.database;
     if (!database || typeof database.markTransactionPending !== 'function' || !detail || !detail.sessionId) return;
     const payload = result && result.result ? result.result : result;
-    if (!forceSuccess && (!payload || (payload.transaction_pending == null && !payload.committed && !payload.rolled_back && !payload.committed))) return;
+    if (!payload || (payload.transaction_pending == null && !payload.committed && !payload.rolled_back)) return;
     const pending = detail.commit ? false : payload && payload.transaction_pending != null ? !!payload.transaction_pending : !(payload && (payload.committed || payload.rolled_back));
     database.markTransactionPending(pending, detail.sessionId);
     if (typeof database.refreshTransactionState === 'function') database.refreshTransactionState();
@@ -379,7 +379,7 @@
     if (!text.trim()) return '';
     const tokens = tokenizeSQL(text);
     const lines = [], indentUnit = '  ';
-    let indent = 0, line = '';
+    let indent = 0, line = '', bracketDepth = 0;
     let lastType = '', lastValue = '';
     function flush(force) {
       const value = line.replace(/[ \t]+$/g, '');
@@ -407,7 +407,7 @@
       if (token.type === 'keyword' && BLOCK_CLOSE.has(lower)) {
         if (lower === 'end' || lower === 'exception' || lower === 'else' || lower === 'elsif') {
           if (line.trim()) flush(false);
-          indent = Math.max(0, indent - 1);
+          if (lower === 'end') indent = Math.max(0, indent - 1);
         }
         if (lower === 'exception' || lower === 'else' || lower === 'elsif') flush(false);
       }
@@ -420,13 +420,15 @@
       }
       if (token.type === 'punct' && value === ',') {
         line = line.replace(/[ \t]+$/g, '') + ',';
-        flush(false);
+        if (bracketDepth === 0) flush(false); else line += ' ';
         lastType = token.type; lastValue = value;
         return;
       }
       if (token.type === 'bracket' && (value === ')' || value === ']' || value === '}')) {
+        bracketDepth = Math.max(0, bracketDepth - 1);
         line = line.replace(/[ \t]+$/g, '') + value;
       } else if (token.type === 'bracket' && (value === '(' || value === '[' || value === '{')) {
+        bracketDepth++;
         if (word(lastValue) || lastValue === ')') line = line.replace(/[ \t]+$/g, '') + value;
         else line += value;
       } else if (token.type === 'operator') {
@@ -440,8 +442,7 @@
         else if (token.type === 'ident' || token.type === 'number' || token.type === 'string' || token.type === 'quoted-ident' || token.type === 'param') beforeWord();
         line += token.type === 'keyword' ? value.toUpperCase() : value;
       }
-      if (token.type === 'keyword' && BLOCK_OPEN.has(lower) && lower !== 'case') indent++;
-      if (token.type === 'keyword' && lower === 'end') indent = Math.max(0, indent - 0);
+      if (token.type === 'keyword' && BLOCK_OPEN.has(lower) && String(lastValue).toLowerCase() !== 'end') indent++;
       lastType = token.type; lastValue = value;
       // Keep long SELECT lists readable but do not split function arguments.
       const next = tokens[index + 1];
@@ -458,7 +459,7 @@
   }
 
   function splitStatements(source) {
-    if (W.statementModel && W.statementModel.split) return W.statementModel.split(String(source || ''));
+    if (W.statementModel && W.statementModel.split) return W.statementModel.split(String(source || ''), { dialect: dialect() });
     const text = String(source || ''), result = [], tokens = tokenizeSQL(text);
     let start = 0;
     tokens.forEach(function (token) {
@@ -692,7 +693,7 @@
     const link = document.createElement('a'), url = URL.createObjectURL(blob);
     link.href = url; link.download = filename || 'query.sql'; link.rel = 'noopener';
     document.body.appendChild(link); link.click(); link.remove();
-    setTimeout(function () { URL.revokeObjectURL(url); }, 0);
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
   }
   function currentFilename() {
     const text = sqlText().trim(), first = text.replace(/\s+/g, ' ').slice(0, 36).replace(/[^A-Za-z0-9_-]+/g, '_');
@@ -884,7 +885,10 @@
     const params = new URLSearchParams();
     const source = options.sourceId || sourceId(); if (source) params.set('source', source);
     const sql = options.sql == null ? sqlText() : String(options.sql); if (sql) params.set('sql', sql);
-    if (options.autoRun) params.set('autorun', '1');
+    if (params.toString().length > 16000) {
+      params.delete('sql');
+      toast('SQL 过长，链接仅包含数据源；请通过 SQL 文件传递查询。', 'warn');
+    }
     return base + '#/database' + (Array.from(params).length ? '?' + params.toString() : '');
   }
   function openIsolatedWindow(url) {
@@ -936,7 +940,7 @@
       if (!e && tries++ < 20) { setTimeout(apply, 100); return; }
       if (!e) return;
       setEditorValue(sql, false);
-      if (params.get('autorun') === '1' && id('db-run')) setTimeout(function () { id('db-run').click(); }, 80);
+      if (params.get('autorun') === '1') toast('链接中的 SQL 已载入，请检查后手动执行。', 'warn');
     };
     apply();
   }
@@ -953,14 +957,18 @@
       '<label class="db-field"><span>环境</span><select id="dbf-environment" class="editor-input"><option value="development">开发</option><option value="staging">测试</option><option value="production">生产</option></select></label>' +
       '<label class="db-field db-pro-inline-check"><span><input id="dbf-read-only" type="checkbox"> 服务端只读</span><small>禁止 DML、网格写入、脚本和对象修改</small></label>' +
       '<label class="db-field db-pro-inline-check"><span><input id="dbf-allow-ddl" type="checkbox"> 允许 DDL</span><small>仅用于对象设计器和 Function 编译</small></label>' +
+      '</div>' +
+      '<div class="db-pro-tls-grid">' +
       '<label class="db-field"><span>TLS Server Name</span><input id="dbf-tls-server-name" class="editor-input" value="' + esc(item.tls_server_name || '') + '" placeholder="证书中的主机名"></label>' +
       '<label class="db-field"><span>TLS CA 文件</span><input id="dbf-tls-ca-file" class="editor-input" value="' + esc(item.tls_ca_file || '') + '" placeholder="服务器上的 PEM 路径"></label>' +
       '<label class="db-field"><span>TLS 客户端证书</span><input id="dbf-tls-client-cert" class="editor-input" value="' + esc(item.tls_client_cert_file || '') + '" placeholder="mTLS cert PEM 路径"></label>' +
       '<label class="db-field"><span>TLS 客户端私钥</span><input id="dbf-tls-client-key" class="editor-input" value="' + esc(item.tls_client_key_file || '') + '" placeholder="mTLS key PEM 路径"></label>' +
       '</div>' +
       '<div class="db-pro-source-subhead">SSH 隧道（跳板机）</div>' +
-      '<div class="db-form-grid db-pro-source-grid">' +
-      '<label class="db-field db-pro-inline-check"><span><input id="dbf-ssh-enabled" type="checkbox"> 启用 SSH 隧道</span><small>数据库密码与 SSH 凭据分开保存</small></label>' +
+      '<div class="db-ssh-toggle-row">' +
+      '<label class="db-field db-pro-inline-check db-field-span"><span><input id="dbf-ssh-enabled" type="checkbox"> 启用 SSH 隧道</span><small>数据库密码与 SSH 凭据分开保存</small></label>' +
+      '</div>' +
+      '<div class="db-form-grid db-pro-source-grid db-ssh-fields" id="dbf-ssh-fields">' +
       '<label class="db-field"><span>SSH 主机</span><input id="dbf-ssh-host" class="editor-input" value="' + esc(tunnel.host || '') + '"></label>' +
       '<label class="db-field"><span>SSH 端口</span><input id="dbf-ssh-port" class="editor-input" type="number" min="1" max="65535" value="' + esc(tunnel.port || 22) + '"></label>' +
       '<label class="db-field"><span>SSH 用户</span><input id="dbf-ssh-user" class="editor-input" value="' + esc(tunnel.username || '') + '"></label>' +
@@ -997,7 +1005,12 @@
     target.parentNode.insertBefore(holder, target);
     syncSourceAdvanced(item);
     const enabled = id('dbf-ssh-enabled'), sshFields = ['dbf-ssh-host', 'dbf-ssh-port', 'dbf-ssh-user', 'dbf-ssh-password', 'dbf-ssh-remote-host', 'dbf-ssh-remote-port', 'dbf-ssh-host-key', 'dbf-ssh-profile', 'dbf-ssh-insecure'];
-    const toggle = function () { const on = !!(enabled && enabled.checked); sshFields.forEach(function (name) { const input = id(name); if (input) input.disabled = !on; }); };
+    const toggle = function () {
+      const on = !!(enabled && enabled.checked);
+      sshFields.forEach(function (name) { const input = id(name); if (input) input.disabled = !on; });
+      const wrap = id('dbf-ssh-fields');
+      if (wrap) wrap.classList.toggle('is-disabled', !on);
+    };
     if (enabled) enabled.addEventListener('change', toggle); toggle();
   }
   function updateSourceStatus() {
@@ -1088,12 +1101,20 @@
     const e = editor();
     if (!e) return;
     if (state.editorInput === e) return;
+    if (state.disposeEditor) state.disposeEditor();
     state.bindings = Object.create(null);
     state.editor = e; state.editorInput = e;
-    e.addEventListener('input', function () { pruneBindings(); }, { passive: true });
-    e.addEventListener('scroll', function () { if (state.ac) positionCompletion(e); }, { passive: true });
-    e.addEventListener('keyup', function () { scheduleHighlight(); maybeContextCompletion(false); }, { passive: true });
-    e.addEventListener('click', function () { scheduleHighlight(); maybeContextCompletion(false); }, { passive: true });
+    const handlers = {
+      input: function () { pruneBindings(); },
+      scroll: function () { if (state.ac) positionCompletion(e); },
+      keyup: function () { scheduleHighlight(); maybeContextCompletion(false); },
+      click: function () { scheduleHighlight(); maybeContextCompletion(false); }
+    };
+    Object.keys(handlers).forEach(function (name) { e.addEventListener(name, handlers[name], { passive: true }); });
+    state.disposeEditor = function () {
+      Object.keys(handlers).forEach(function (name) { e.removeEventListener(name, handlers[name]); });
+      state.editor = null; state.editorInput = null; state.disposeEditor = null;
+    };
     scheduleHighlight();
   }
   function scheduleHighlight() {
@@ -1160,6 +1181,8 @@
     e.setRangeText(item.insert || item.label, state.acStart, state.acEnd, 'end'); dispatchEditorInput(e); hideCompletion(); scheduleHighlight();
   }
   async function maybeContextCompletion(force) {
+    // database.js owns completion whenever its editor is mounted.
+    if (id('db-sql-ac')) { hideCompletion(); return; }
     const e = editor(); if (!e) return;
     const prefix = completionPrefix(e.value, e.selectionStart); if (!prefix) { hideCompletion(); return; }
     if (!force && !prefix.qualifier) return;
@@ -1198,11 +1221,11 @@
   }
   // Grid writes are allowed only for an unambiguous single-table projection.
   // Resolve from executed SQL, never from subsequently edited editor text.
-  function resolveGridTarget(text, defaultSchema) {
+  function resolveGridTarget(text, defaultSchema, sourceKind) {
     const tokens = tokenizeSQL(text).filter(function (t) { return t.type !== 'space' && t.type !== 'comment'; });
     const word = function (i) { return tokens[i] ? tokens[i].value.toUpperCase() : ''; };
     const ident = function (t) { return t && (t.type === 'ident' || t.type === 'quoted-ident'); };
-    const name = function (t) { return t.type === 'quoted-ident' ? t.value.slice(1, -1).replace(/""/g, '"').replace(/``/g, '`') : t.value; };
+    const name = function (t) { return t.type === 'quoted-ident' ? t.value.slice(1, -1).replace(/""/g, '"').replace(/``/g, '`') : sourceKind === 'oracle' ? t.value.toUpperCase() : t.value; };
     if (word(0) !== 'SELECT') return null;
     if (tokens.some(function (t, i) { return t.type === 'keyword' && (/^(JOIN|UNION|INTERSECT|MINUS|EXCEPT|GROUP|DISTINCT|WITH)$/.test(t.value.toUpperCase()) || i > 0 && t.value.toUpperCase() === 'SELECT'); })) return null;
     const from = tokens.findIndex(function (t) { return t.type === 'keyword' && t.value.toUpperCase() === 'FROM'; });
@@ -1277,11 +1300,16 @@
     const primaryKey = await gridPrimaryKeys(target);
     const mutations = queued.map(function (item) {
       const values = objectValues(item.columns, item.values);
+      const original = objectValues(item.columns, item.expectedValues);
+      (item.columns || []).forEach(function (column) {
+        const name = typeof column === 'string' ? column : column.name;
+        if (original[name] != null && (typeof original[name] === 'object' || /CLOB|BLOB|LONG|XML|JSON|GEOMETRY/i.test(column.database_type || column.database || column.type || ''))) delete original[name];
+      });
       return {
         action: item.kind,
         values: item.kind === 'insert' ? values : {},
-        original: item.kind === 'delete' ? objectValues(item.columns, item.expectedValues) : {},
-        key: item.kind === 'delete' ? objectValues(item.columns, item.expectedValues) : {},
+        original: item.kind === 'delete' ? original : {},
+        key: item.kind === 'delete' ? original : {},
         primary_key: primaryKey,
         rowid: item.rowid || '',
         use_rowid: !!item.useRowID,
@@ -1375,7 +1403,8 @@
       else if (c === '\n' || c === '\r') {
         if (c === '\r' && n === '\n') i++;
         row.push(field); field = '';
-        if (row.some(function (value) { return value !== ''; })) rows.push(row.splice(0, row.length));
+        if (row.some(function (value) { return value !== ''; })) rows.push(row.slice());
+        row.length = 0;
       } else field += c;
     }
     row.push(field); if (row.some(function (value) { return value !== ''; })) rows.push(row);
@@ -1529,7 +1558,7 @@
       if (event.ctrlKey && !event.altKey && !event.metaKey && event.key.toLowerCase() === 'h') { event.preventDefault(); event.stopImmediatePropagation(); openFindReplace(true); return; }
       if (event.ctrlKey && !event.altKey && !event.metaKey && event.key.toLowerCase() === 's') { event.preventDefault(); event.stopImmediatePropagation(); saveSQL(false); return; }
       if (event.ctrlKey && !event.altKey && !event.metaKey && event.key.toLowerCase() === 'o') { event.preventDefault(); event.stopImmediatePropagation(); openSQLInput(); return; }
-      if (event.ctrlKey && event.code === 'Space') { event.preventDefault(); event.stopImmediatePropagation(); maybeContextCompletion(true); return; }
+      if (event.ctrlKey && event.code === 'Space' && !id('db-sql-ac')) { event.preventDefault(); event.stopImmediatePropagation(); maybeContextCompletion(true); return; }
       if (!state.ac || state.ac.hidden) return;
       if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); event.stopImmediatePropagation(); state.acIndex = (state.acIndex + (event.key === 'ArrowDown' ? 1 : -1) + state.acItems.length) % state.acItems.length; state.ac.querySelectorAll('.db-pro-ac-item').forEach(function (item, index) { item.classList.toggle('active', index === state.acIndex); item.setAttribute('aria-selected', index === state.acIndex ? 'true' : 'false'); }); return; }
       if (event.key === 'Enter' || event.key === 'Tab') { event.preventDefault(); event.stopImmediatePropagation(); acceptCompletion(); }
@@ -1559,10 +1588,21 @@
       // layout reads while database.js replaces its workspace DOM.
       if (start.scheduled) return;
       start.scheduled = true;
-      schedule(function () { start.scheduled = false; const root = document.getElementById('db-workspace') || state.view; install(root); });
+      schedule(function () { start.scheduled = false; if (String(location.hash || '').indexOf('#/database') !== 0) return; const root = document.getElementById('db-workspace') || state.view; install(root); });
     });
-    observer.observe(state.view, { subtree: true, childList: true, attributes: true, attributeFilter: ['hidden', 'class'] });
-    if (String(location.hash || '').indexOf('#/database') === 0) install(document.getElementById('db-workspace') || state.view);
+    const syncRoute = function () {
+      observer.disconnect();
+      if (String(location.hash || '').indexOf('#/database') === 0) {
+        observer.observe(state.view, { subtree: true, childList: true, attributes: true, attributeFilter: ['hidden', 'class'] });
+        install(document.getElementById('db-workspace') || state.view);
+      } else {
+        if (state.disposeEditor) state.disposeEditor();
+        hideCompletion();
+        state.root = null;
+      }
+    };
+    window.addEventListener('hashchange', syncRoute);
+    syncRoute();
   }
 
   F.tokenizeSQL = tokenizeSQL;

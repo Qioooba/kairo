@@ -30,6 +30,14 @@ func (m *Manager) transactionForContext(ctx context.Context, source Source, sess
 		m.transactions = make(map[string]*transactionEntry)
 	}
 	_, maxTransactions := m.transactionPolicyLocked()
+	maxSourceTransactions := defaultTransactionMaxSource
+	if source.MaxOpenConnections == 1 {
+		maxSourceTransactions = 1
+	}
+	if source.MaxOpenConnections > 1 && source.MaxOpenConnections-1 < maxSourceTransactions {
+		// Reserve a connection for metadata and reads while tabs hold transactions.
+		maxSourceTransactions = source.MaxOpenConnections - 1
+	}
 	entry := m.transactions[key]
 	if entry != nil && entry.fingerprint == fingerprint {
 		m.mu.Unlock()
@@ -67,9 +75,9 @@ func (m *Manager) transactionForContext(ctx context.Context, source Source, sess
 			perSource++
 		}
 	}
-	if perSource >= defaultTransactionMaxSource {
+	if perSource >= maxSourceTransactions {
 		m.mu.Unlock()
-		return nil, fmt.Errorf("数据源事务会话数量已达到上限（最多 %d 个）", defaultTransactionMaxSource)
+		return nil, fmt.Errorf("数据源事务会话数量已达到上限（最多 %d 个）", maxSourceTransactions)
 	}
 	m.mu.Unlock()
 	db, err := m.sqlDB(source)
@@ -109,7 +117,7 @@ func (m *Manager) transactionForContext(ctx context.Context, source Source, sess
 			perSource++
 		}
 	}
-	if len(m.transactions) >= maxTransactions || perSource >= defaultTransactionMaxSource {
+	if len(m.transactions) >= maxTransactions || perSource >= maxSourceTransactions {
 		m.mu.Unlock()
 		_ = tx.Rollback()
 		cancel()

@@ -88,7 +88,6 @@ type iFileOpenDialogVtbl struct {
 	SetFileName         uintptr
 	GetFileName         uintptr
 	SetTitle            uintptr
-	GetTitle            uintptr
 	SetOkButtonLabel    uintptr
 	SetFileNameLabel    uintptr
 	GetResult           uintptr
@@ -218,6 +217,15 @@ func browseFolderCallback(hwnd, message, wParam, lParam uintptr) uintptr {
 var browseFolderCallbackPtr = syscall.NewCallback(browseFolderCallback)
 
 func pickWindowsDirectory(initial string) (path string, err error) {
+	if uiInvoke == nil {
+		runtime.LockOSThread()
+		defer runtime.UnlockOSThread()
+		hr, _, _ := procOleInitialize.Call(0)
+		if hr != 0 && hr != 1 {
+			return "", fmt.Errorf("OleInitialize failed: 0x%x", hr)
+		}
+		defer procOleUninitialize.Call()
+	}
 	pickerMu.Lock()
 	defer pickerMu.Unlock()
 	defer func() {
@@ -245,6 +253,7 @@ func pickWindowsDirectory(initial string) (path string, err error) {
 		lParam:         uintptr(unsafe.Pointer(startPtr)),
 	}
 	pidl, _, _ := procSHBrowseForFolderW.Call(uintptr(unsafe.Pointer(&info)))
+	runtime.KeepAlive(startPtr)
 	if pidl == 0 {
 		return "", nil // 用户取消
 	}

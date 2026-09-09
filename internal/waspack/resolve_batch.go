@@ -70,6 +70,7 @@ func locateBatch(projectDir, rel, source string) ResolvedFile {
 	if err != nil || st.IsDir() || st.Mode()&os.ModeSymlink != 0 {
 		return rf
 	}
+	rf.info = st
 	rf.Exists = true
 	rf.Bytes = st.Size()
 	return rf

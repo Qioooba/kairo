@@ -1,6 +1,7 @@
 package waspack
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -105,12 +106,16 @@ func WriteStageProvenance(req Request, outputDir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	nonce := make([]byte, 32)
+	if _, err := rand.Read(nonce); err != nil {
+		return "", fmt.Errorf("create stage token: %w", err)
+	}
 	now := time.Now().UTC()
 	seed, _ := json.Marshal(struct {
 		Fingerprint provenanceFingerprint `json:"fingerprint"`
 		CreatedAt   time.Time             `json:"created_at"`
 		Nonce       string                `json:"nonce"`
-	}{fingerprint, now, NewHistoryID()})
+	}{fingerprint, now, hex.EncodeToString(nonce)})
 	sum := sha256.Sum256(seed)
 	record := StageProvenance{
 		Token:          "stage-" + hex.EncodeToString(sum[:]),

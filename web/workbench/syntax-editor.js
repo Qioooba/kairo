@@ -14,17 +14,18 @@
     json: /("(?:\\.|[^"\\])*"\s*:|\b(?:true|false|null)\b|-?\b\d+(?:\.\d+)?\b)/g
   };
   function highlight(source, language) {
-    let value = escape(source);
+    const raw = String(source == null ? '' : source);
+    const value = escape(raw);
     language = String(language || 'text').toLowerCase();
-    if (language === 'text' || language === 'plain') return value;
+    if (raw.length > 220000 || language === 'text' || language === 'plain') return value;
     if (language === 'xml') return value.replace(keywords.xml, '<span class="syn-tag">$1</span>');
     const re = keywords[language] || keywords.sql;
     // Tokenize first so quotes/comments are not colored as keywords.
-    const parts = value.split(/("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\/\/[^\n]*|--[^\n]*|\/\*[\s\S]*?\*\/)/g);
+    const parts = raw.split(/("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\/\/[^\n]*|--[^\n]*|\/\*[\s\S]*?\*\/)/g);
     return parts.map(function (part, i) {
       if (!part) return '';
-      if (/^("|'|\/\/|--|\/\*)/.test(part)) return '<span class="syn-string">' + part + '</span>';
-      return part.replace(re, '<span class="syn-keyword">$1</span>');
+      if (/^("|'|\/\/|--|\/\*)/.test(part)) return '<span class="syn-string">' + escape(part) + '</span>';
+      return escape(part).replace(re, '<span class="syn-keyword">$1</span>');
     }).join('');
   }
   function languageFromPath(path, fallback) {
@@ -33,15 +34,23 @@
   }
   function bind(textarea, code, options) {
     options = options || {};
-    const sync = function () {
-      code.innerHTML = highlight(textarea.value, options.language || 'text');
+    let lastValue = null, lastLanguage = null;
+    const scroll = function () {
       code.scrollTop = textarea.scrollTop; code.scrollLeft = textarea.scrollLeft;
+    };
+    const sync = function () {
+      const language = options.language || 'text';
+      if (lastValue !== textarea.value || lastLanguage !== language) {
+        code.innerHTML = highlight(textarea.value, language);
+        lastValue = textarea.value; lastLanguage = language;
+      }
+      scroll();
       if (options.onInput) options.onInput(textarea.value);
     };
     textarea.addEventListener('input', sync);
-    textarea.addEventListener('scroll', sync);
+    textarea.addEventListener('scroll', scroll);
     sync();
-    return { refresh: sync, setLanguage: function (language) { options.language = language; sync(); } };
+    return { dispose: function () { textarea.removeEventListener('input', sync); textarea.removeEventListener('scroll', scroll); }, refresh: sync, setLanguage: function (language) { options.language = language; sync(); } };
   }
   W.syntaxEditor = { escape: escape, highlight: highlight, languageFromPath: languageFromPath, bind: bind };
 })();

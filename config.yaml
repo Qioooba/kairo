@@ -9,13 +9,12 @@ app:
   log_dir: ./logs
   data_dir: ./data
   auto_start: false
-  free_file_roots:
-  - '*'
+  free_file_roots: []
   ssh_debug: false
   ssh_traffic_dump: false
   ssh_log_max_mb: 20
   ssh_log_keep: 3
-  allow_insecure_host_key: true
+  allow_insecure_host_key: false
   external_openers:
   - name: NotePad++
     path: D:\软件\Notepad++\notepad++.exe
@@ -30,16 +29,9 @@ app:
   download_max_count: 1000
   # 本地目录比对默认拒绝；启用时请显式填写允许的绝对目录。
   compare_allowed_roots: []
-  kairo: '111222'
   # 注意: 激活服务 / 排行榜的地址和密钥默认硬编码在源码里。
   # 本地测试时可通过 internal_endpoints 覆盖 (不随发布包提交给用户)。
   # 详见 internal/license 和 internal/sponsor 包的 var 注释。
-
-internal_endpoints:
-  sponsor_leaderboard:
-    primary: "http://127.0.0.1:18093/credit/httpInterface"
-    auth: "TEST_TOKEN_123"
-    timeout: 10s
 
 systems:
 - id: sys-2bde5e81b46de1e3
@@ -51,7 +43,6 @@ systems:
     host: 66.0.34.198
     port: 22
     username: credit
-    password: credit
     auth_type: password
     log_dirs:
     - id: dir-2209862df64f1838
@@ -66,7 +57,6 @@ systems:
     host: 66.0.34.199
     port: 22
     username: credit
-    password: credit
     auth_type: password
     log_dirs:
     - id: dir-a2b0563306540e6a
@@ -85,7 +75,6 @@ systems:
     host: 66.2.43.28
     port: 22
     username: creditpl
-    password: creditpl
     auth_type: password
     log_dirs:
     - id: dir-039b6bf0dc43e548
@@ -103,7 +92,6 @@ systems:
     host: 127.0.0.1
     port: 2226
     username: test
-    password: test
     auth_type: password
     log_dirs:
     - id: dir-25b68882048cd393

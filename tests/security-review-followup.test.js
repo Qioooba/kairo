@@ -1,0 +1,18 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const window = {};
+vm.runInNewContext(fs.readFileSync('web/workbench/syntax-editor.js', 'utf8'), { window });
+const syntax = window.Kairo.workbench.syntaxEditor;
+const sql = syntax.highlight("SELECT 'SELECT <script>alert(1)</script>' FROM test", 'sql');
+assert.match(sql, /syn-string">&#39;SELECT &lt;script&gt;/);
+assert.equal((sql.match(/syn-keyword/g) || []).length, 2);
+assert.ok(!sql.includes('<script>'));
+const java = syntax.highlight('String x = "class <img onerror=bad>";', 'java');
+assert.match(java, /syn-string">&quot;class &lt;img/);
+assert.equal((java.match(/syn-keyword/g) || []).length, 1);
+const listeners = new Map();
+const textarea = { value: '', addEventListener: (k, v) => listeners.set(k, v), removeEventListener: (k, v) => { assert.equal(listeners.get(k), v); listeners.delete(k); } };
+syntax.bind(textarea, {}, {}).dispose();
+assert.equal(listeners.size, 0);
+console.log('Security review frontend regressions passed');

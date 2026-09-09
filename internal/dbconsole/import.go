@@ -439,6 +439,21 @@ func (m *Manager) ApplyImport(ctx context.Context, source Source, req ImportAppl
 	if len(req.Rows) == 0 || len(req.Rows) > maxImportRows {
 		return ImportApplyResult{}, fmt.Errorf("导入行数必须在 1..%d 之间", maxImportRows)
 	}
+	totalBytes := 0
+	for _, row := range req.Rows {
+		if len(row) > maxImportCols {
+			return ImportApplyResult{}, errors.New("导入列数超过限制")
+		}
+		for _, cell := range row {
+			if len(cell) > maxCellBytes {
+				return ImportApplyResult{}, errors.New("导入单元格超过 256KB 限制")
+			}
+			totalBytes += len(cell)
+			if totalBytes > maxImportBytes {
+				return ImportApplyResult{}, errors.New("导入数据超过 8MB 限制")
+			}
+		}
+	}
 	queryCtx, cancel := context.WithTimeout(ctx, source.Timeout())
 	defer cancel()
 	if err := m.acquire(queryCtx); err != nil {
@@ -453,6 +468,12 @@ func (m *Manager) ApplyImport(ctx context.Context, source Source, req ImportAppl
 	defer entry.mu.Unlock()
 	started := time.Now()
 	result := ImportApplyResult{Rows: make([]ImportRowResult, len(req.Rows))}
+	var prepared *sql.Stmt
+	defer func() {
+		if prepared != nil {
+			_ = prepared.Close()
+		}
+	}()
 	for i, row := range req.Rows {
 		result.Rows[i] = ImportRowResult{Row: i + 1, Status: "failed"}
 		statement, args, buildErr := buildImportInsert(source.Kind, req.Schema, req.Table, req.Mappings, row)
@@ -462,7 +483,17 @@ func (m *Manager) ApplyImport(ctx context.Context, source Source, req ImportAppl
 			result.RolledBack = true
 			return result, buildErr
 		}
-		execResult, execErr := entry.tx.ExecContext(queryCtx, statement, args...)
+		if prepared == nil {
+			var prepareErr error
+			prepared, prepareErr = entry.tx.PrepareContext(queryCtx, statement)
+			if prepareErr != nil {
+				result.Rows[i].Error = prepareErr.Error()
+				m.rollbackEntryLocked(source.ID, req.SessionID, entry)
+				result.RolledBack = true
+				return result, prepareErr
+			}
+		}
+		execResult, execErr := prepared.ExecContext(queryCtx, args...)
 		if execErr != nil {
 			result.Rows[i].Error = execErr.Error()
 			m.rollbackEntryLocked(source.ID, req.SessionID, entry)

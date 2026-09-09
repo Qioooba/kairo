@@ -190,7 +190,7 @@ func New(cfg *config.Manager, a *audit.Logger, webRoot fs.FS, tails *tailmgr.Man
 		listenHost = "127.0.0.1"
 	}
 	if !current.Auth.EffectiveEnabled() && !isLocalWebHost(listenHost) {
-		message := "认证未启用但监听地址不是 loopback，管理接口将按本机信任模式放行；请立即启用 auth 或改绑 127.0.0.1"
+		message := "认证未启用且监听地址不是 loopback，API 已禁用；请启用 auth 或改绑 127.0.0.1"
 		fmt.Fprintln(os.Stderr, "WARNING:", message)
 		a.Write("security.auth.disabled_non_loopback", "host", listenHost, "result", "warning")
 	}
@@ -316,6 +316,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Renderer", "webkit")
 
 	path := r.URL.Path
+	if isAPIRequest(path) {
+		w.Header().Set("Cache-Control", "no-store")
+	}
 	if strings.HasPrefix(path, "/api/") && !allowLocalOrigin(r) {
 		origin := r.Header.Get("Origin")
 		referer := r.Header.Get("Referer")
@@ -331,6 +334,13 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cur := s.cur()
+	if isAPIRequest(path) && !cur.Auth.EffectiveEnabled() {
+		host := strings.TrimSpace(cur.App.Host)
+		if host != "" && !isLocalWebHost(host) {
+			writeErr(w, http.StatusForbidden, errors.New("non-loopback API access requires authentication"))
+			return
+		}
+	}
 	ip := clientIP(r)
 
 	if path == "/api/auth/status" {
@@ -376,6 +386,27 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if path == "/api/diff/compare" {
+		select {
+		case diffRequestSlots <- struct{}{}:
+			defer func() { <-diffRequestSlots }()
+		default:
+			writeErr(w, http.StatusTooManyRequests, errors.New("diff is busy; retry later"))
+			return
+		}
+	}
+	if strings.HasPrefix(path, "/api/compare/") && !strings.HasPrefix(path, "/api/compare/jobs/") && path != "/api/compare/connections" {
+		select {
+		case compareRequestSlots <- struct{}{}:
+			defer func() { <-compareRequestSlots }()
+		default:
+			writeErr(w, http.StatusTooManyRequests, errors.New("compare is busy; retry later"))
+			return
+		}
+	}
+	if strings.HasPrefix(path, "/api/compare/") && !requireAdmin(w, r) {
+		return
+	}
 	switch {
 	case path == "/" || path == "/index.html":
 		s.serveStatic(w, r, "index.html")
@@ -637,11 +668,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func allowLocalOrigin(r *http.Request) bool {
 	origin := strings.TrimSpace(r.Header.Get("Origin"))
 	if origin != "" {
-		// 桌面工具（Postman/Apifox 等）或 file:// 页面会发字面量 "null"，
-		// 这不是真实跨站源（URL 无法解析）。仅当请求目标是本机地址时放行；
-		// 远程站点经 sandbox iframe 打本机 IP 时 Host 非 loopback，仍会被拦。
+		// Sandboxed web pages can send Origin:null to loopback too.
 		if origin == "null" {
-			return isLocalRequestHost(r.Host)
+			return false
 		}
 		return isAllowedOrigin(origin, r.Host)
 	}
@@ -712,18 +741,7 @@ func extractToken(r *http.Request) string {
 }
 
 func clientIP(r *http.Request) string {
-	xff := r.Header.Get("X-Forwarded-For")
-	if xff != "" {
-		parts := strings.Split(xff, ",")
-		ip := strings.TrimSpace(parts[0])
-		if ip != "" {
-			return ip
-		}
-	}
-	xri := r.Header.Get("X-Real-IP")
-	if xri != "" {
-		return strings.TrimSpace(xri)
-	}
+	// No forwarding header is trusted without a trusted-proxy policy.
 	host, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr))
 	if err != nil {
 		return strings.TrimSpace(r.RemoteAddr)
@@ -823,7 +841,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, 200, configView{
 		App:     sanitizeAppConfig(cur.App),
-		Systems: cur.Systems,
+		Systems: sanitizeSystems(cur.Systems),
 		Search:  cur.Search,
 		Auth:    authView,
 		Paths: configViewPaths{
@@ -844,3 +862,17 @@ func sanitizeAppConfig(a config.AppConfig) config.AppConfig {
 	a.KairoInternalToken = ""
 	return a
 }
+
+func sanitizeSystems(systems []config.SystemConfig) []config.SystemConfig {
+	out := append([]config.SystemConfig(nil), systems...)
+	for i := range out {
+		out[i].Servers = append([]config.ServerConfig(nil), out[i].Servers...)
+		for j := range out[i].Servers {
+			out[i].Servers[j].Password = ""
+		}
+	}
+	return out
+}
+
+var diffRequestSlots = make(chan struct{}, 1)
+var compareRequestSlots = make(chan struct{}, 4)

@@ -16,6 +16,7 @@ type ResolvedFile struct {
 	Source string   `json:"source"`
 	Bytes  int64    `json:"bytes"`
 	Exists bool     `json:"exists"`
+	info   os.FileInfo
 }
 
 // Preview 是预检结果：会打包的文件 + 缺失项 + 告警。
@@ -105,6 +106,7 @@ func locate(layout Layout, rel, source string) ResolvedFile {
 	if err != nil || st.IsDir() || st.Mode()&os.ModeSymlink != 0 {
 		return rf
 	}
+	rf.info = st
 	rf.Exists = true
 	rf.Bytes = st.Size()
 	return rf

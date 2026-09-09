@@ -40,6 +40,10 @@ func (s *Server) handleDatabaseDispatch(w http.ResponseWriter, r *http.Request) 
 		s.handleDatabaseBatch(w, r)
 	case path == "transaction":
 		s.handleDatabaseTransaction(w, r)
+	case path == "lob":
+		s.handleDatabaseLob(w, r)
+	case path == "oracle/client-info":
+		s.handleDatabaseOracleClientInfo(w, r)
 	case path == "transaction/status":
 		s.handleDatabaseTransactionStatus(w, r)
 	case path == "transactions":
@@ -402,7 +406,7 @@ func (s *Server) handleDatabaseTransaction(w http.ResponseWriter, r *http.Reques
 		writeErr(w, 400, errors.New("action 仅支持 COMMIT/ROLLBACK"))
 		return
 	}
-	summary, err := s.database.ControlSessionTransaction(r.Context(), source, req.SessionID, action)
+	summary, err := s.database.ControlSessionTransaction(r.Context(), source, scopedDatabaseSessionID(r, req.SessionID), action)
 	if err != nil {
 		writeErrSanitized(w, 502, s.databaseSafeError(source, err))
 		return
@@ -422,6 +426,24 @@ func validDatabaseSessionID(value string) bool {
 		return false
 	}
 	return true
+}
+
+// Never use a client-selected tab ID as a cross-user transaction identity.
+func databaseSessionScope(r *http.Request) string {
+	user, _ := r.Context().Value(authUserKey).(*authUser)
+	if user == nil {
+		return ""
+	}
+	hash := sha256.Sum256([]byte(user.Name))
+	return "u:" + hex.EncodeToString(hash[:16]) + ":"
+}
+
+func scopedDatabaseSessionID(r *http.Request, id string) string {
+	if id == "" || databaseSessionScope(r) == "" {
+		return id
+	}
+	hash := sha256.Sum256([]byte(id))
+	return databaseSessionScope(r) + hex.EncodeToString(hash[:16])
 }
 
 func databaseQueryPage(req databaseQueryRequest) (int, int) {
@@ -468,7 +490,7 @@ func (s *Server) handleDatabaseQuery(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, 400, err)
 			return
 		}
-		if !statementInfo.IsQuery {
+		if !statementInfo.IsQuery || statementInfo.HasForUpdate {
 			if !source.MutationAllowed() {
 				writeErr(w, http.StatusForbidden, errors.New("该数据源处于只读锁定状态"))
 				return
@@ -506,7 +528,7 @@ func (s *Server) handleDatabaseQuery(w http.ResponseWriter, r *http.Request) {
 		return nil
 	}
 	page, pageSize := databaseQueryPage(req)
-	summary, err := s.database.StreamSessionQueryPageWithParams(r.Context(), source, req.SQL, page, pageSize, req.SessionID, req.Parameters, emit)
+	summary, err := s.database.StreamSessionQueryPageWithParams(r.Context(), source, req.SQL, page, pageSize, scopedDatabaseSessionID(r, req.SessionID), req.Parameters, emit)
 	if err != nil {
 		err = s.databaseSafeError(source, err)
 		_ = emit(dbconsole.StreamEvent{Type: "error", Error: trim(err.Error(), 1000)})
@@ -569,7 +591,7 @@ func (s *Server) handleDatabaseBatch(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	summary, err := s.database.ExecuteSessionBatch(r.Context(), source, req.SessionID, req.Statements)
+	summary, err := s.database.ExecuteSessionBatch(r.Context(), source, scopedDatabaseSessionID(r, req.SessionID), req.Statements)
 	if err != nil {
 		err = s.databaseSafeError(source, err)
 		writeErrSanitized(w, 502, err)
@@ -652,6 +674,13 @@ func (s *Server) handleDatabaseExport(w http.ResponseWriter, r *http.Request) {
 			writeErrSanitized(w, 502, collectErr)
 			s.audit.Write("database.export", "source_id", source.ID, "kind", source.Kind, "query_id", queryID, "format", format, "result", "fail", "error", trim(collectErr.Error(), 300))
 			return
+		}
+		for _, row := range table.Rows {
+			for _, cell := range row {
+				if obj, ok := cell.(map[string]any); ok {
+					delete(obj, "token")
+				}
+			}
 		}
 		w.Header().Set("Content-Type", dbconsole.ExportContentType(format))
 		w.Header().Set("Content-Disposition", "attachment; filename*=UTF-8''"+url.QueryEscape(filename))
@@ -755,6 +784,11 @@ func (s *Server) handleDatabaseExport(w http.ResponseWriter, r *http.Request) {
 }
 
 func databaseCSVValue(value any) string {
+	if obj, ok := value.(map[string]any); ok {
+		if _, hasToken := obj["token"]; hasToken {
+			return dbconsole.ExportCellText(obj)
+		}
+	}
 	if value == nil {
 		return ""
 	}
@@ -779,12 +813,17 @@ func safeCSVCell(value string) string {
 		return value
 	}
 	// Keep database text intact, including paths like /opt/app/config.
-	// Only prefix Excel-executable formula starters; do not rewrite /, -, or digits.
+	// Preserve negative numbers, but neutralize expressions beginning with '-'.
 	switch value[0] {
 	case '=', '+', '@':
 		return "'" + value
 	case '\t', '\r':
 		return "'" + value
+	case '-':
+		if _, err := strconv.ParseFloat(value, 64); err != nil {
+			return "'" + value
+		}
+		return value
 	default:
 		return value
 	}
@@ -811,7 +850,11 @@ func (s *Server) handleDatabaseObjects(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	items, err := s.database.Objects(r.Context(), source, r.URL.Query().Get("schema"), r.URL.Query().Get("search"))
+	category := r.URL.Query().Get("category")
+	if category == "" {
+		category = r.URL.Query().Get("type")
+	}
+	items, err := s.database.Objects(r.Context(), source, r.URL.Query().Get("schema"), r.URL.Query().Get("search"), category)
 	if err != nil {
 		writeErrSanitized(w, 502, s.databaseSafeError(source, err))
 		return
@@ -1155,7 +1198,24 @@ func (s *Server) databaseSafeError(source dbconsole.Source, err error) error {
 		return nil
 	}
 	message := err.Error()
-	if secret, getErr := credentials.GetResource(dbconsole.CredentialNamespace, source.ID, source.CredentialUser()); getErr == nil && secret != "" {
+	keys := [][2]string{{dbconsole.CredentialNamespace, source.CredentialUser()}}
+	if source.SSHTunnel != nil && source.SSHTunnel.Enabled {
+		keys = append(keys, [2]string{dbconsole.SSHCredentialNamespace, source.SSHTunnel.Username})
+	}
+	for _, key := range keys {
+		if source.ID == "" || key[1] == "" {
+			continue
+		}
+		secret, getErr := credentials.GetResource(key[0], source.ID, key[1])
+		if errors.Is(getErr, credentials.ErrNotSaved) {
+			continue
+		}
+		if getErr != nil {
+			return errors.New("数据库操作失败，凭据脱敏暂不可用，请检查凭据存储")
+		}
+		if secret == "" {
+			continue
+		}
 		for _, value := range []string{secret, url.QueryEscape(secret), url.PathEscape(secret)} {
 			if value != "" {
 				message = strings.ReplaceAll(message, value, "[REDACTED]")
@@ -1169,6 +1229,9 @@ func (s *Server) databaseSafeError(source dbconsole.Source, err error) error {
 	}
 	if strings.Contains(lower, "connection refused") || strings.Contains(lower, "connection reset") {
 		return errors.New("无法连接数据库（connection refused），请检查数据库是否启动及端口是否正确")
+	}
+	if strings.Contains(lower, "ttc error") {
+		return fmt.Errorf("Oracle TTC 协议报文解析异常（%s）。常见原因：表中含有 CLOB/BLOB 大字段、XMLType、LONG 或多行换行长文本，导致驱动报文解包错位。排查建议：① 避免使用 SELECT *，改用具体字段投影；② 对 CLOB 字段使用 DBMS_LOB.SUBSTR(列名, 4000, 1) 做受控预览；③ 对 XMLType 字段使用 列名.getStringVal() 转换；④ 检查单行（WHERE ROWNUM <= 1）排查特殊记录", message)
 	}
 	return errors.New(message)
 }

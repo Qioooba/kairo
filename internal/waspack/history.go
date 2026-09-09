@@ -130,6 +130,16 @@ func (s *HistoryStore) Append(record HistoryRecord) error {
 	if len(doc.Records) > retention {
 		doc.Records = doc.Records[:retention]
 	}
+	// Keep complete replay requests, but evict oldest records once their
+	// aggregate manifest payload exceeds the budget.
+	manifestBytes := 0
+	for i, item := range doc.Records {
+		manifestBytes += len(item.Request.Manifest)
+		if manifestBytes > 8*1024*1024 {
+			doc.Records = doc.Records[:i]
+			break
+		}
+	}
 	return s.writeLocked(doc)
 }
 

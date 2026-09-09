@@ -218,6 +218,53 @@ func (r *realSftpBackend) WriteFile(path string, data []byte, perm os.FileMode) 
 // Write 内部会因 channel close 返回 ctx.Err）。
 //
 // 注意：sftp.File 本身不支持 ctx 取消传递，所以这里通过 closeWatch 主动关文件。
+// CreateExclusive never truncates an existing remote file.
+func (c *Client) CreateExclusive(ctx context.Context, remotePath string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if strings.ContainsAny(remotePath, "\x00\r\n") {
+		return fmt.Errorf("文件路径含非法字符")
+	}
+	if c == nil || c.b == nil {
+		return fmt.Errorf("SFTP 客户端未初始化")
+	}
+	creator, ok := c.b.(interface {
+		CreateExclusive(context.Context, string) error
+	})
+	if !ok {
+		return fmt.Errorf("当前后端不支持安全新建文件")
+	}
+	return creator.CreateExclusive(ctx, remotePath)
+}
+
+func (r *realSftpBackend) CreateExclusive(ctx context.Context, remotePath string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	f, err := r.c.OpenFile(remotePath, os.O_WRONLY|os.O_CREATE|os.O_EXCL)
+	if err != nil {
+		return fmt.Errorf("无法新建文件（目标可能已存在）: %w", err)
+	}
+	return f.Close()
+}
+
+func (s *shellBackend) CreateExclusive(ctx context.Context, remotePath string) error {
+	q := shellQuoteArg(remotePath)
+	cmd := "(set -C; if [ -e " + q + " ] || [ -L " + q + " ]; then exit 1; fi; : > " + q + ")"
+	_, _, code, err := s.run(ctx, cmd, 30*time.Second, "utf-8")
+	if err != nil {
+		return err
+	}
+	if code != 0 {
+		return fmt.Errorf("无法新建文件（目标可能已存在）")
+	}
+	return nil
+}
+
 func (r *realSftpBackend) UploadStream(ctx context.Context, reader io.Reader, remotePath string, perm os.FileMode, progress func(written, total int64)) error {
 	f, err := r.c.Create(remotePath)
 	if err != nil {

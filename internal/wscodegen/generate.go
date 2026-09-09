@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 
 	"kairo/internal/webservice"
 )
@@ -324,31 +325,115 @@ func missingExternalXSDWarning(p *webservice.WSDLProject) string {
 	return "WSDL 引用了外部 XSD，但参数树是空的。请把 .xsd 放在 WSDL 同目录后选「本地文件」，或先在 WebService 页把 WSDL+XSD 一起导入再选已导入项目。"
 }
 
+var generatedFilesMu sync.Mutex
+
 func writeFiles(root string, files []GeneratedFile, overwrite bool) ([]string, error) {
+	generatedFilesMu.Lock()
+	defer generatedFilesMu.Unlock()
+	// Validate the entire plan before publishing any generated file.
+	seen := map[string]bool{}
+	for _, f := range files {
+		rel := filepath.ToSlash(f.RelPath)
+		dest := filepath.Join(root, filepath.FromSlash(rel))
+		key := dest
+		if os.PathSeparator == '\\' {
+			key = strings.ToLower(key)
+		}
+		if rel == "" || strings.Contains(rel, "..") || filepath.IsAbs(rel) || !isInside(root, dest) || seen[key] {
+			return nil, fmt.Errorf("非法或重复输出路径: %s", f.RelPath)
+		}
+		seen[key] = true
+		for probe := dest; ; probe = filepath.Dir(probe) {
+			info, err := os.Lstat(probe)
+			if err != nil && !os.IsNotExist(err) {
+				return nil, err
+			}
+			if err == nil {
+				if info.Mode()&os.ModeSymlink != 0 {
+					return nil, fmt.Errorf("输出路径包含符号链接: %s", probe)
+				}
+				if probe == dest && (!overwrite || !info.Mode().IsRegular()) {
+					return nil, fmt.Errorf("文件已存在或不可覆盖: %s", rel)
+				}
+				if probe != dest && !info.IsDir() {
+					return nil, fmt.Errorf("输出父路径不是目录: %s", probe)
+				}
+			}
+			if filepath.Dir(probe) == probe {
+				break
+			}
+		}
+	}
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return nil, err
 	}
-	var written []string
-	for _, f := range files {
-		rel := filepath.ToSlash(f.RelPath)
-		if rel == "" || strings.Contains(rel, "..") || filepath.IsAbs(rel) {
-			return written, fmt.Errorf("非法输出路径: %s", f.RelPath)
+	stage, err := os.MkdirTemp(root, ".kairo-codegen-")
+	if err != nil {
+		return nil, err
+	}
+	keepStage := false
+	defer func() {
+		if !keepStage {
+			_ = os.RemoveAll(stage)
 		}
-		dest := filepath.Join(root, filepath.FromSlash(rel))
-		if !isInside(root, dest) {
-			return written, fmt.Errorf("拒绝写出到输出目录之外: %s", f.RelPath)
-		}
-		if !overwrite {
-			if _, err := os.Stat(dest); err == nil {
-				return written, fmt.Errorf("文件已存在（未勾选覆盖）: %s", rel)
+	}()
+	type publication struct {
+		dest, backup string
+		installed    bool
+	}
+	var published []publication
+	rollback := func(cause error) ([]string, error) {
+		for i := len(published) - 1; i >= 0; i-- {
+			p := published[i]
+			if p.installed {
+				if err := os.Remove(p.dest); err != nil && !os.IsNotExist(err) {
+					keepStage = true
+				}
+			}
+			if p.backup != "" {
+				if err := os.Rename(p.backup, p.dest); err != nil {
+					keepStage = true
+				}
 			}
 		}
+		if keepStage {
+			return nil, fmt.Errorf("%w；回滚未完成，恢复文件保留在 %s", cause, stage)
+		}
+		return nil, cause
+	}
+	for i, f := range files {
+		if err := os.WriteFile(filepath.Join(stage, fmt.Sprintf("new-%d", i)), []byte(f.Content), 0o644); err != nil {
+			return nil, err
+		}
+	}
+	var written []string
+	for i, f := range files {
+		rel := filepath.ToSlash(f.RelPath)
+		dest := filepath.Join(root, filepath.FromSlash(rel))
 		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
-			return written, err
+			return rollback(err)
 		}
-		if err := os.WriteFile(dest, []byte(f.Content), 0o644); err != nil {
-			return written, err
+		p := publication{dest: dest}
+		if overwrite {
+			if info, err := os.Lstat(dest); err == nil {
+				if !info.Mode().IsRegular() {
+					return rollback(fmt.Errorf("输出目标不再是普通文件: %s", rel))
+				}
+				p.backup = filepath.Join(stage, fmt.Sprintf("old-%d", i))
+				if err := os.Rename(dest, p.backup); err != nil {
+					return rollback(err)
+				}
+			} else if !os.IsNotExist(err) {
+				return rollback(err)
+			}
 		}
+		published = append(published, p)
+		// Linking is an atomic create-if-absent, including when a target appeared
+		// after preflight. It cannot silently replace another writer's file.
+		if err := os.Link(filepath.Join(stage, fmt.Sprintf("new-%d", i)), dest); err != nil {
+			return rollback(err)
+		}
+		published[len(published)-1].installed = true
 		written = append(written, rel)
 	}
 	return written, nil

@@ -463,7 +463,7 @@ func TestRunCriticalCorruptionBlocksButOptionalCorruptionWarns(t *testing.T) {
 	}
 }
 
-func TestRunRecoversStaleLockAndRejectsActiveLock(t *testing.T) {
+func TestRunRejectsStaleAndActiveLocks(t *testing.T) {
 	for _, stale := range []bool{false, true} {
 		t.Run(map[bool]string{false: "active", true: "stale"}[stale], func(t *testing.T) {
 			dataDir := t.TempDir()
@@ -475,8 +475,8 @@ func TestRunRecoversStaleLockAndRejectsActiveLock(t *testing.T) {
 				_ = os.Chtimes(lock, old, old)
 			}
 			_, err := Run(Options{DataDir: dataDir, ProductVersion: "v1", Now: fixedNow})
-			if stale && err != nil {
-				t.Fatalf("stale lock should recover: %v", err)
+			if stale && err == nil {
+				t.Fatal("old lock must not be stolen")
 			}
 			if !stale && err == nil {
 				t.Fatal("active lock should block")
@@ -710,7 +710,14 @@ func TestLockReleaseNeverDeletesForeignLock(t *testing.T) {
 	if err := os.Chtimes(lock, stale, stale); err != nil {
 		t.Fatal(err)
 	}
-	releaseB, err := acquireLock(lock, fixedNow()) // B 接管 A 的陈旧锁
+	if _, err := acquireLock(lock, fixedNow()); err == nil {
+		t.Fatal("live old lock was stolen")
+	}
+	// Simulate external replacement to verify the release ownership check.
+	if err := os.Remove(lock); err != nil {
+		t.Fatal(err)
+	}
+	releaseB, err := acquireLock(lock, fixedNow())
 	if err != nil {
 		t.Fatal(err)
 	}

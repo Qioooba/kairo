@@ -33,8 +33,8 @@ import (
 const (
 	popupClassName = "KairoReminderPopupClass_v1"
 
-	popupW      = 360
-	popupH      = 140
+	popupW      = 384
+	popupH      = 164
 	popupMargin = 16 // 距工作区右下角
 	popupGap    = 1200 * time.Millisecond
 	popupLive   = 8 * time.Second
@@ -46,6 +46,7 @@ const (
 	WM_TIMER       = 0x0113
 	WM_LBUTTONDOWN = 0x0201
 	WM_MOUSEMOVE   = 0x0200
+	WM_SETCURSOR   = 0x0020
 
 	WS_POPUP         = 0x80000000
 	WS_EX_TOPMOST    = 0x00000008
@@ -71,7 +72,8 @@ const (
 	DT_NOPREFIX     = 0x00000800
 	DT_END_ELLIPSIS = 0x00008000
 
-	IDC_HAND = 32649
+	IDC_ARROW = 32512
+	IDC_HAND  = 32649
 
 	timerClose = 1
 
@@ -157,6 +159,10 @@ var (
 	procGetClientRect                 = user32DLL().NewProc("GetClientRect")
 	procLoadCursorW                   = user32DLL().NewProc("LoadCursorW")
 	procSetCursor                     = user32DLL().NewProc("SetCursor")
+	procGetCursorPos                  = user32DLL().NewProc("GetCursorPos")
+	procScreenToClient                = user32DLL().NewProc("ScreenToClient")
+	procCreateFontW                   = gdi32DLL().NewProc("CreateFontW")
+	procSelectObject                  = gdi32DLL().NewProc("SelectObject")
 	procGetModuleHandleW              = kernel32DLL().NewProc("GetModuleHandleW")
 	procGradientFill                  = msimg32DLL().NewProc("GradientFill")
 	procGdiGradientFill               = gdi32DLL().NewProc("GdiGradientFill")
@@ -258,11 +264,13 @@ func registerClass() (uintptr, error) {
 		return 0, fmt.Errorf("获取进程模块句柄失败")
 	}
 
+	arrow, _, _ := procLoadCursorW.Call(0, IDC_ARROW)
 	wc := wndClassEx{
 		CbSize:        uint32(unsafe.Sizeof(wndClassEx{})),
 		Style:         0,
 		LpfnWndProc:   syscall.NewCallback(wndProc),
 		HInstance:     hInstance,
+		HCursor:       arrow,
 		HbrBackground: 0,
 		LpszClassName: className,
 	}
@@ -281,6 +289,14 @@ var lastPopupContent string // wndProc 拿不到 item 引用，用全局变量�
 
 func wndProc(hwnd, uMsg, wParam, lParam uintptr) uintptr {
 	switch uMsg {
+	case WM_SETCURSOR:
+		if lParam&0xffff == 1 { // HTCLIENT: always replace a stale busy cursor.
+			var pt point
+			procGetCursorPos.Call(uintptr(unsafe.Pointer(&pt)))
+			procScreenToClient.Call(hwnd, uintptr(unsafe.Pointer(&pt)))
+			setPopupCursor(pt.X, pt.Y)
+			return 1
+		}
 	case WM_PAINT:
 		onPaint(hwnd, lastPopupContent)
 		return 0
@@ -294,12 +310,7 @@ func wndProc(hwnd, uMsg, wParam, lParam uintptr) uintptr {
 	case WM_MOUSEMOVE:
 		x := int16(lParam & 0xFFFF)
 		y := int16((lParam >> 16) & 0xFFFF)
-		if isCloseHit(int32(x), int32(y)) {
-			hc, _, _ := procLoadCursorW.Call(0, uintptr(IDC_HAND))
-			if hc != 0 {
-				procSetCursor.Call(hc)
-			}
-		}
+		setPopupCursor(int32(x), int32(y))
 		return 0
 	case WM_TIMER:
 		if wParam == timerClose {
@@ -315,6 +326,35 @@ func wndProc(hwnd, uMsg, wParam, lParam uintptr) uintptr {
 }
 
 // ---------- 渲染 ----------
+
+func setPopupCursor(x, y int32) {
+	id := uintptr(IDC_ARROW)
+	if isCloseHit(x, y) {
+		id = IDC_HAND
+	}
+	if cursor, _, _ := procLoadCursorW.Call(0, id); cursor != 0 {
+		procSetCursor.Call(cursor)
+	}
+}
+
+// Palette values are RGB; GDI COLORREF expects BGR.
+func colorRef(rgb int) uintptr {
+	return uintptr((rgb&0xff)<<16 | rgb&0xff00 | (rgb>>16)&0xff)
+}
+
+func selectPopupFont(hdc uintptr, size, weight int32) func() {
+	face := windows.StringToUTF16Ptr("Microsoft YaHei UI")
+	font, _, _ := procCreateFontW.Call(uintptr(-size), 0, 0, 0, uintptr(weight),
+		0, 0, 0, 1, 0, 0, 5, 0, uintptr(unsafe.Pointer(face))) // ClearType quality
+	if font == 0 {
+		return func() {}
+	}
+	old, _, _ := procSelectObject.Call(hdc, font)
+	return func() {
+		procSelectObject.Call(hdc, old)
+		procDeleteObject.Call(font)
+	}
+}
 
 func onPaint(hwnd uintptr, content string) {
 	var ps paintStruct
@@ -336,64 +376,70 @@ func onPaint(hwnd uintptr, content string) {
 	}
 
 	// 1) 背景
-	bg, _, _ := procCreateSolidBrush.Call(uintptr(colBg))
+	bg, _, _ := procCreateSolidBrush.Call(colorRef(colBg))
 	procFillRect.Call(hdc, uintptr(unsafe.Pointer(&rc)), bg)
 	procDeleteObject.Call(bg)
 
 	// 2) 左侧 6px accent 条（垂直渐变：上原色下暗化，比纯色更有质感）
-	drawAccentGradient(hdc, rc.Left, rc.Top, rc.Left+6, rc.Bottom, uint32(colAccent))
+	drawAccentGradient(hdc, rc.Left, rc.Top, rc.Left+4, rc.Bottom, uint32(colAccent))
 
 	procSetBkMode.Call(hdc, uintptr(TRANSPARENT))
+	restoreTitle := selectPopupFont(hdc, 15, 600)
 
 	// 3) 标题（"Kairo · 便笺提醒"）
 	title := "Kairo · 便笺提醒"
 	titlePtr, _ := windows.UTF16PtrFromString(title)
-	procSetTextColor.Call(hdc, uintptr(colTitle))
+	procSetTextColor.Call(hdc, colorRef(colTitle))
 	titleRect := rect{
-		Left:   rc.Left + 18,
-		Top:    rc.Top + 12,
-		Right:  rc.Right - 36,
-		Bottom: rc.Top + 36,
+		Left:   rc.Left + 24,
+		Top:    rc.Top + 18,
+		Right:  rc.Right - 48,
+		Bottom: rc.Top + 42,
 	}
 	procDrawTextW.Call(
 		hdc,
 		uintptr(unsafe.Pointer(titlePtr)),
-		uintptr(len([]rune(title))),
+		^uintptr(0),
 		uintptr(unsafe.Pointer(&titleRect)),
 		DT_SINGLELINE|DT_NOPREFIX,
 	)
+	restoreTitle()
+	restoreClose := selectPopupFont(hdc, 22, 400)
 
 	// 4) 关闭按钮 ×
 	xMark := "×"
 	xPtr, _ := windows.UTF16PtrFromString(xMark)
-	procSetTextColor.Call(hdc, uintptr(colClose))
+	procSetTextColor.Call(hdc, colorRef(colClose))
 	xRect := rect{
-		Left:   rc.Right - 30,
-		Top:    rc.Top + 2,
-		Right:  rc.Right - 4,
-		Bottom: rc.Top + 30,
+		Left:   rc.Right - 44,
+		Top:    rc.Top + 10,
+		Right:  rc.Right - 8,
+		Bottom: rc.Top + 46,
 	}
 	procDrawTextW.Call(
 		hdc,
 		uintptr(unsafe.Pointer(xPtr)),
 		1,
 		uintptr(unsafe.Pointer(&xRect)),
-		DT_SINGLELINE|DT_NOPREFIX,
+		DT_SINGLELINE|DT_NOPREFIX|0x0001|0x0004, // centered horizontally and vertically
 	)
+	restoreClose()
+	restoreBody := selectPopupFont(hdc, 17, 400)
+	defer restoreBody()
 
 	// 5) 内容（自动换行，超出省略号截断）
-	procSetTextColor.Call(hdc, uintptr(colBody))
+	procSetTextColor.Call(hdc, colorRef(colBody))
 	contentPtr, _ := windows.UTF16PtrFromString(content)
 	contentRect := rect{
-		Left:   rc.Left + 18,
-		Top:    rc.Top + 44,
-		Right:  rc.Right - 18,
-		Bottom: rc.Bottom - 14,
+		Left:   rc.Left + 24,
+		Top:    rc.Top + 54,
+		Right:  rc.Right - 24,
+		Bottom: rc.Bottom - 20,
 	}
 	procDrawTextW.Call(
 		hdc,
 		uintptr(unsafe.Pointer(contentPtr)),
-		uintptr(lenRunes(content)),
+		^uintptr(0), // -1: count UTF-16 code units, including emoji surrogate pairs.
 		uintptr(unsafe.Pointer(&contentRect)),
 		DT_WORDBREAK|DT_NOPREFIX|DT_END_ELLIPSIS,
 	)
@@ -447,7 +493,7 @@ func drawAccentGradient(hdc uintptr, x1, y1, x2, y2 int32, colAccent uint32) {
 		return
 	}
 	rc := rect{Left: x1, Top: y1, Right: x2, Bottom: y2}
-	b, _, _ := procCreateSolidBrush.Call(uintptr(colAccent))
+	b, _, _ := procCreateSolidBrush.Call(colorRef(int(colAccent)))
 	if b != 0 {
 		procFillRect.Call(hdc, uintptr(unsafe.Pointer(&rc)), b)
 		procDeleteObject.Call(b)
@@ -455,7 +501,7 @@ func drawAccentGradient(hdc uintptr, x1, y1, x2, y2 int32, colAccent uint32) {
 }
 
 func isCloseHit(x, y int32) bool {
-	return x >= popupW-32 && x <= popupW-4 && y >= 2 && y <= 32
+	return x >= popupW-44 && x < popupW-8 && y >= 10 && y < 46
 }
 
 // ---------- 窗口生命周期 ----------
@@ -531,8 +577,8 @@ func runPopupWindow(item popupItem) {
 		// hrgn 由系统接管，不再 DeleteObject
 	}
 
-	// 整体 alpha（230 / 255 ≈ 90% 不透明）
-	procSetLayeredWindowAttributes.Call(hwnd, 0, 230, LWA_ALPHA)
+	// Opaque background keeps text contrast independent of the desktop wallpaper.
+	procSetLayeredWindowAttributes.Call(hwnd, 0, 255, LWA_ALPHA)
 
 	// 显示（NOACTIVATE：不抢焦点）
 	procSetWindowPos.Call(

@@ -542,7 +542,7 @@ func bindSQLParametersAt(kind, statement string, params []BindParameter, allowUn
 				continue
 			}
 		}
-		if c == '?' && strings.EqualFold(strings.TrimSpace(kind), KindMySQL) {
+		if c == '?' {
 			positional++
 			name := strconv.Itoa(positional)
 			value, ok := lookup[name]
@@ -550,8 +550,20 @@ func bindSQLParametersAt(kind, statement string, params []BindParameter, allowUn
 				return "", nil, fmt.Errorf("缺少第 %d 个位置参数", positional)
 			}
 			used[name] = true
-			out.WriteByte('?')
-			args = append(args, value.Value)
+			if strings.EqualFold(strings.TrimSpace(kind), KindMySQL) {
+				out.WriteByte('?')
+				args = append(args, value.Value)
+			} else {
+				bindName := "kairo_pos_" + name
+				for {
+					if _, exists := lookup[strings.ToUpper(bindName)]; !exists {
+						break
+					}
+					bindName += "_"
+				}
+				out.WriteString(":" + bindName)
+				args = append(args, sql.Named(bindName, value.Value))
+			}
 			continue
 		}
 		out.WriteByte(c)

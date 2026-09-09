@@ -97,6 +97,10 @@ func prepareOutputDirForStaging(path, policy string, confirmReplace bool, packag
 	if err != nil || !isSafeLocalPath(abs) {
 		return "", false, fmt.Errorf("输出目录非法")
 	}
+	abs, err = ValidateOutputPath(path)
+	if err != nil {
+		return "", false, err
+	}
 	st, err := os.Lstat(abs)
 	if os.IsNotExist(err) {
 		if err := os.MkdirAll(abs, 0o755); err != nil {
@@ -415,6 +419,9 @@ func canonicalPath(raw string) (string, error) {
 // empty for the extracted-WAR packaging endpoint, where the staged metadata
 // is not available to the caller.
 func validateOutputAgainstProject(projectDir, outputDir string) (string, error) {
+	if !isSafeLocalPath(strings.TrimSpace(outputDir)) {
+		return "", fmt.Errorf("invalid output path")
+	}
 	abs, err := filepath.Abs(strings.TrimSpace(outputDir))
 	if err != nil || !isSafeLocalPath(abs) {
 		return "", fmt.Errorf("输出目录非法")
@@ -422,6 +429,9 @@ func validateOutputAgainstProject(projectDir, outputDir string) (string, error) 
 	canonOut, err := canonicalPath(abs)
 	if err != nil {
 		return "", fmt.Errorf("输出目录无法解析: %w", err)
+	}
+	if !isSafeLocalPath(canonOut) {
+		return "", fmt.Errorf("输出目录解析后指向受保护路径")
 	}
 	if strings.TrimSpace(projectDir) == "" {
 		return canonOut, nil
@@ -457,6 +467,10 @@ func prepareOutputDirWithPolicy(path, policy string, confirmReplace bool, packag
 	}
 	if !isSafeLocalPath(abs) {
 		return "", false, fmt.Errorf("输出目录非法")
+	}
+	abs, err = ValidateOutputPath(path)
+	if err != nil {
+		return "", false, err
 	}
 	st, err := os.Lstat(abs)
 	if err != nil {
@@ -567,6 +581,9 @@ func isSafeLocalPath(p string) bool {
 }
 
 func isSafeLocalPathForGOOS(p, goos string) bool {
+	if strings.HasPrefix(strings.ReplaceAll(p, "\\", "/"), "//") {
+		return false
+	}
 	if p == "" {
 		return false
 	}
@@ -655,6 +672,17 @@ func isSubpathOrEqual(target, base string) bool {
 
 func isBlockedSystemPath(clean string) bool {
 	slashClean := portableSlashPath(clean)
+	if hasWindowsDrivePrefix(slashClean) {
+		rest := strings.TrimPrefix(slashClean[2:], "/")
+		for _, dir := range []string{"windows", "program files", "program files (x86)", "programdata"} {
+			if rest == dir || strings.HasPrefix(rest, dir+"/") {
+				return true
+			}
+		}
+		if rest == "" || rest == "users" {
+			return true
+		}
+	}
 	unixRoots := []string{"/bin", "/sbin", "/etc", "/usr", "/var", "/boot", "/dev", "/proc", "/sys", "/root"}
 	for _, r := range unixRoots {
 		if slashClean == r || strings.HasPrefix(slashClean, r+"/") {
@@ -967,4 +995,12 @@ func buildLocked(req Request) (*Result, error) {
 	result.Artifacts = artifacts
 	result.Warnings = append(result.Warnings, digestWarnings...)
 	return result, nil
+}
+
+// ValidateOutputPath shares the output security policy with HTTP authorization.
+func ValidateOutputPath(p string) (string, error) {
+	if !isSafeLocalPath(p) {
+		return "", fmt.Errorf("输出目录非法")
+	}
+	return validateOutputAgainstProject("", p)
 }

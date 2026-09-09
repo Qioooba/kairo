@@ -36,7 +36,7 @@ func (s *Server) handleDatabaseTransactionStatus(w http.ResponseWriter, r *http.
 		writeErr(w, http.StatusBadRequest, errors.New("session_id 无效"))
 		return
 	}
-	state := s.database.GetTransactionStatus(source, sessionID)
+	state := s.database.GetTransactionStatus(source, scopedDatabaseSessionID(r, sessionID))
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "transaction": state})
 }
 
@@ -89,9 +89,9 @@ func (s *Server) handleDatabaseScript(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, errors.New("生产数据源脚本执行需要 confirm=true"))
 		return
 	}
-	result, err := s.database.ExecuteScript(r.Context(), source, req.SQL, req.SessionID, req.Parameters, req.Options)
+	result, err := s.database.ExecuteScript(r.Context(), source, req.SQL, scopedDatabaseSessionID(r, req.SessionID), req.Parameters, req.Options)
 	if err != nil {
-		s.audit.Write("database.script", "source_id", source.ID, "result", "fail", "error", trim(err.Error(), 300))
+		s.audit.Write("database.script", "source_id", source.ID, "result", "fail", "error", trim(s.databaseSafeError(source, err).Error(), 300))
 		// The per-statement errors are useful to the UI, while the outer error is
 		// kept generic to avoid exposing DSN/password material.
 		if len(result.Statements) > 0 {
@@ -137,10 +137,10 @@ func (s *Server) handleDatabaseGrid(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	result, err := s.database.ApplyGridMutations(r.Context(), source, dbconsole.GridMutationRequest{
-		Schema: req.Schema, Table: req.Table, Mutations: req.Mutations, SessionID: req.SessionID, Commit: req.Commit, Confirm: req.Confirm,
+		Schema: req.Schema, Table: req.Table, Mutations: req.Mutations, SessionID: scopedDatabaseSessionID(r, req.SessionID), Commit: req.Commit, Confirm: req.Confirm,
 	})
 	if err != nil {
-		s.audit.Write("database.grid", "source_id", source.ID, "result", "fail", "error", trim(err.Error(), 300))
+		s.audit.Write("database.grid", "source_id", source.ID, "result", "fail", "error", trim(s.databaseSafeError(source, err).Error(), 300))
 		if len(result.Results) > 0 {
 			writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "result": result, "error": trim(s.databaseSafeError(source, err).Error(), 1000)})
 		} else {
@@ -260,11 +260,15 @@ func (s *Server) handleDatabaseImportApply(w http.ResponseWriter, r *http.Reques
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
+	if !validDatabaseSessionID(req.SessionID) {
+		writeErr(w, http.StatusBadRequest, errors.New("session_id 无效"))
+		return
+	}
 	result, err := s.database.ApplyImport(r.Context(), source, dbconsole.ImportApplyRequest{
-		Schema: req.Schema, Table: req.Table, Mappings: req.Mappings, Rows: rows, SessionID: req.SessionID, Commit: req.Commit, Confirm: req.Confirm,
+		Schema: req.Schema, Table: req.Table, Mappings: req.Mappings, Rows: rows, SessionID: scopedDatabaseSessionID(r, req.SessionID), Commit: req.Commit, Confirm: req.Confirm,
 	})
 	if err != nil {
-		s.audit.Write("database.import", "source_id", source.ID, "result", "fail", "error", trim(err.Error(), 300))
+		s.audit.Write("database.import", "source_id", source.ID, "result", "fail", "error", trim(s.databaseSafeError(source, err).Error(), 300))
 		if len(result.Rows) > 0 {
 			writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "result": result, "error": trim(s.databaseSafeError(source, err).Error(), 1000)})
 		} else {

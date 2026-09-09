@@ -56,7 +56,13 @@ func NewStore(dataDir string) *Store {
 
 func (s *Store) path(name string) string { return filepath.Join(s.dir, name) }
 
-func loadJSON[T any](path string, out *T) error {
+func loadJSON[T any](path string, out *T) (err error) {
+	defer func() {
+		if err != nil {
+			var zero T
+			*out = zero
+		}
+	}()
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -88,7 +94,21 @@ func loadJSON[T any](path string, out *T) error {
 	return json.Unmarshal(envelope.Items, out)
 }
 
+func saveCachedJSON[T any](path string, cache *[]T) error {
+	if err := saveJSONAtomic(path, *cache); err != nil {
+		*cache = nil
+		return err
+	}
+	return nil
+}
+
 func saveJSONAtomic(path string, v any) error {
+	// Check the durable file even if the store already has a warm cache.
+	// A failed read or a newer format must never turn into an empty overwrite.
+	var existing json.RawMessage
+	if err := loadJSON(path, &existing); err != nil {
+		return fmt.Errorf("现有数据不可读取，拒绝覆盖: %w", err)
+	}
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("创建目录失败: %w", err)
@@ -244,7 +264,7 @@ func (s *Store) SaveProject(p WSDLProject) (WSDLProject, error) {
 	if !replaced {
 		s.projects = append(s.projects, p)
 	}
-	return p, saveJSONAtomic(s.projectsPath(), s.projects)
+	return p, saveCachedJSON(s.projectsPath(), &s.projects)
 }
 
 // DeleteProject 按 ID 删除。
@@ -268,7 +288,7 @@ func (s *Store) DeleteProject(id string) (bool, error) {
 		return false, nil
 	}
 	s.projects = append(s.projects[:idx], s.projects[idx+1:]...)
-	return true, saveJSONAtomic(s.projectsPath(), s.projects)
+	return true, saveCachedJSON(s.projectsPath(), &s.projects)
 }
 
 // ---------- 模板 ----------
@@ -326,7 +346,7 @@ func (s *Store) SaveTemplate(t Template) (Template, bool, error) {
 	if !replaced {
 		s.templates = append(s.templates, t)
 	}
-	return t, replaced, saveJSONAtomic(s.templatesPath(), s.templates)
+	return t, replaced, saveCachedJSON(s.templatesPath(), &s.templates)
 }
 
 // DeleteTemplate 按 ID 删除。
@@ -350,7 +370,7 @@ func (s *Store) DeleteTemplate(id string) (bool, error) {
 		return false, nil
 	}
 	s.templates = append(s.templates[:idx], s.templates[idx+1:]...)
-	return true, saveJSONAtomic(s.templatesPath(), s.templates)
+	return true, saveCachedJSON(s.templatesPath(), &s.templates)
 }
 
 // ---------- 历史 ----------
@@ -397,7 +417,7 @@ func (s *Store) AppendHistory(h HistoryEntry) (HistoryEntry, error) {
 	if len(s.history) > MaxHistoryEntries {
 		s.history = s.history[len(s.history)-MaxHistoryEntries:]
 	}
-	return h, saveJSONAtomic(s.historyPath(), s.history)
+	return h, saveCachedJSON(s.historyPath(), &s.history)
 }
 
 // GetHistory 按 ID 取一条历史。
@@ -419,7 +439,7 @@ func (s *Store) ClearHistory() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.history = []HistoryEntry{}
-	return saveJSONAtomic(s.historyPath(), s.history)
+	return saveCachedJSON(s.historyPath(), &s.history)
 }
 
 // ---------- Mock 配置 ----------
@@ -474,7 +494,7 @@ func (s *Store) SaveMock(m MockConfig) (MockConfig, bool, error) {
 	if !replaced {
 		s.mocks = append(s.mocks, m)
 	}
-	return m, replaced, saveJSONAtomic(s.mocksPath(), s.mocks)
+	return m, replaced, saveCachedJSON(s.mocksPath(), &s.mocks)
 }
 
 // DeleteMock 按 ID 删除。
@@ -498,7 +518,7 @@ func (s *Store) DeleteMock(id string) (bool, error) {
 		return false, nil
 	}
 	s.mocks = append(s.mocks[:idx], s.mocks[idx+1:]...)
-	return true, saveJSONAtomic(s.mocksPath(), s.mocks)
+	return true, saveCachedJSON(s.mocksPath(), &s.mocks)
 }
 
 // ---------- Mock 请求记录 ----------
@@ -540,7 +560,7 @@ func (s *Store) AppendMockRecord(r MockRequestRecord) error {
 	if len(s.mockRecs) > MaxMockRecords {
 		s.mockRecs = s.mockRecs[len(s.mockRecs)-MaxMockRecords:]
 	}
-	return saveJSONAtomic(s.mockRecordsPath(), s.mockRecs)
+	return saveCachedJSON(s.mockRecordsPath(), &s.mockRecs)
 }
 
 // ClearMockRecords 清空 mock 请求记录。
@@ -548,5 +568,5 @@ func (s *Store) ClearMockRecords() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.mockRecs = []MockRequestRecord{}
-	return saveJSONAtomic(s.mockRecordsPath(), s.mockRecs)
+	return saveCachedJSON(s.mockRecordsPath(), &s.mockRecs)
 }

@@ -10,7 +10,7 @@
 # 产物：
 #   ./dist/kairo-<ver>/Kairo_win10.exe
 #
-# 注意：本脚本默认用本地 Go 工具链（不下载更新版本）。
+# 默认 GOTOOLCHAIN=auto，必要时自动下载匹配工具链；离线构建请预装所需 Go 并设置 GOTOOLCHAIN=local。
 
 set -euo pipefail
 
@@ -51,18 +51,49 @@ echo ">> 目标:    Windows 10/11 amd64"
 
 export GOOS=windows
 export GOARCH=amd64
-export CGO_ENABLED=0
+# 企业版 Windows 默认 godror/OCI（需本机 gcc + Oracle Client 运行时）
+# 构建机需安装 MinGW-w64（winget: BrechtSanders.WinLibs.POSIX.UCRT）
+# 运行时仍为单 exe，但依赖本机 oci.dll（PL/SQL Developer 同款 Oracle Client）
+# A release must never silently change its driver capabilities.
+export CGO_ENABLED="${CGO_ENABLED:-1}"
+if [[ "${CGO_ENABLED}" == "1" ]]; then
+  export CC="${CC:-gcc}"
+  if ! command -v "${CC}" >/dev/null 2>&1; then
+    echo "错误：OCI 企业版需要 Windows C 编译器；设置 CC，或显式设置 CGO_ENABLED=0 构建便携版" >&2
+    exit 1
+  fi
+fi
 export GOTOOLCHAIN="${GOTOOLCHAIN:-auto}"
 
 # 优先用 vendor 模式编译：保证产物的依赖版本与仓库一致，
 # 避免"开发机 go.sum 跟生产机 GOMODCACHE 不一致"导致的构建漂移。
 # 如果 vendor/ 目录缺失（例如刚 clone 完没跑过 go mod vendor），
 # 回退到默认 module 模式，并打印一次性提示。
+# 注意：vendor 需以 CGO_ENABLED=1 生成才能包含 godror；否则按需回落
 GO_MOD_FLAGS=()
 if [[ -d vendor && -f vendor/modules.txt ]]; then
-  GO_MOD_FLAGS=(-mod=vendor)
+  if grep -q "godror" vendor/modules.txt 2>/dev/null; then
+    GO_MOD_FLAGS=(-mod=vendor)
+  else
+    if [[ "${CGO_ENABLED}" == "1" ]]; then
+      echo ">> vendor 缺少 godror，自动执行 go mod vendor（CGO_ENABLED=1）..."
+      go mod vendor || true
+      if grep -q "godror" vendor/modules.txt 2>/dev/null; then
+        GO_MOD_FLAGS=(-mod=vendor)
+      fi
+    fi
+    if [[ "${#GO_MOD_FLAGS[@]}" -eq 0 ]]; then
+      echo ">> 警告：vendor 缺少 godror，回落到 module 模式"
+    fi
+  fi
 else
   echo ">> 提示：vendor/ 目录缺失，回退到 module 模式（建议先跑 go mod vendor）"
+fi
+
+if [[ "${CGO_ENABLED}" == "1" ]]; then
+  echo ">> 企业版构建：CGO_ENABLED=1，产物将动态链接 Oracle Client（oci.dll），运行时需本机已装 64 位 Oracle Client（与 PL/SQL Developer 同源，但需位数一致）"
+else
+  echo ">> 便携版构建：CGO_ENABLED=0（纯 Go，未启用 OCI）"
 fi
 
 go build "${GO_MOD_FLAGS[@]}" -trimpath -ldflags "${LDFLAGS}" -o "${OUT_DIR}/Kairo_win10.exe" .

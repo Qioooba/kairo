@@ -85,7 +85,7 @@ func extractLocked(req Request) (*ExtractResult, error) {
 		clean = strings.TrimLeft(clean, "/")
 		rel := filepath.FromSlash(clean)
 		dst := filepath.Join(warDir, rel)
-		if err := copyExtractedFile(rf.Abs, dst); err != nil {
+		if err := copyExtractedFile(rf.Abs, dst, rf.info); err != nil {
 			return nil, fmt.Errorf("抽取 %s 失败: %w", rf.Rel, err)
 		}
 		total += rf.Bytes
@@ -110,11 +110,11 @@ func extractLocked(req Request) (*ExtractResult, error) {
 	return &ExtractResult{OK: true, OutputDir: outAbs, WarDir: warDir, Files: len(pv.Files), Bytes: total, Warnings: warnings, PairedAdded: pairedCount(pv.Files), StageToken: stageToken}, nil
 }
 
-func copyExtractedFile(src, dst string) error {
+func copyExtractedFile(src, dst string, expected ...os.FileInfo) error {
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return err
 	}
-	in, err := os.Open(src)
+	in, err := openRegularFile(src, expected...)
 	if err != nil {
 		return err
 	}
@@ -415,7 +415,7 @@ func filesFromWAR(warDir string) ([]ResolvedFile, error) {
 			return err
 		}
 		rel = "./" + filepath.ToSlash(rel)
-		files = append(files, ResolvedFile{Rel: rel, Abs: p, Kind: kindOf(rel), Source: "war", Bytes: info.Size(), Exists: true})
+		files = append(files, ResolvedFile{Rel: rel, Abs: p, Kind: kindOf(rel), Source: "war", Bytes: info.Size(), Exists: true, info: info})
 		return nil
 	})
 	if err != nil {

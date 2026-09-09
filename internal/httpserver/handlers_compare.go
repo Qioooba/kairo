@@ -1,6 +1,7 @@
 package httpserver
 
 import (
+	"context"
 	"crypto/md5"
 	"encoding/hex"
 	"encoding/json"
@@ -14,6 +15,8 @@ import (
 	"strings"
 	"time"
 
+	"kairo/internal/comparefs"
+	"kairo/internal/config"
 	"kairo/internal/diff"
 )
 
@@ -27,14 +30,14 @@ type folderScanReq struct {
 }
 
 type fileEntry struct {
-	Path     string `json:"path"`
-	RelPath  string `json:"rel_path"`
-	Size     int64  `json:"size"`
-	ModTime  int64  `json:"mtime"`
-	IsDir    bool   `json:"is_dir"`
-	Hash     string `json:"hash,omitempty"`
-	Status   string `json:"status"`
-	Checked  bool   `json:"checked,omitempty"`
+	Path    string `json:"path"`
+	RelPath string `json:"rel_path"`
+	Size    int64  `json:"size"`
+	ModTime int64  `json:"mtime"`
+	IsDir   bool   `json:"is_dir"`
+	Hash    string `json:"hash,omitempty"`
+	Status  string `json:"status"`
+	Checked bool   `json:"checked,omitempty"`
 }
 
 type folderScanResp struct {
@@ -126,8 +129,8 @@ func shouldIgnoreByExt(relPath string, ignoreExts []string) bool {
 	return false
 }
 
-func hashFile(path string) (string, error) {
-	f, err := os.Open(path)
+func hashFile(path string, roots ...string) (string, error) {
+	f, err := comparefs.NewLocalWithAllowedRoots(roots).Open(context.Background(), path)
 	if err != nil {
 		return "", err
 	}
@@ -171,6 +174,9 @@ func scanDir(root string, opts folderScanReq) (entries map[string]fileEntry, tru
 			return nil
 		}
 		relSlash := filepath.ToSlash(relPath)
+		if d.Type()&os.ModeSymlink != 0 {
+			return nil
+		}
 		if d.IsDir() {
 			if shouldIgnoreScanPath(relSlash) {
 				return filepath.SkipDir
@@ -242,7 +248,7 @@ func (s *Server) handleCompareFolderScan(w http.ResponseWriter, r *http.Request)
 	}
 
 	cur := s.cfg.Get()
-	if !cur.App.ComparePathAllowed(req.LeftPath) || !cur.App.ComparePathAllowed(req.RightPath) {
+	if !legacyComparePathAllowed(&cur.App, req.LeftPath) || !legacyComparePathAllowed(&cur.App, req.RightPath) {
 		writeErr(w, 403, errors.New("路径不在 compare_allowed_roots 白名单内"))
 		return
 	}
@@ -308,8 +314,8 @@ func (s *Server) handleCompareFolderScan(w http.ResponseWriter, r *http.Request)
 					if left.Size > maxHashFileSize || right.Size > maxHashFileSize {
 						status = "suspect"
 					} else {
-						leftHash, err1 := hashFile(left.Path)
-						rightHash, err2 := hashFile(right.Path)
+						leftHash, err1 := hashFile(left.Path, cur.App.CompareAllowedRoots...)
+						rightHash, err2 := hashFile(right.Path, cur.App.CompareAllowedRoots...)
 						if err1 != nil || err2 != nil || leftHash != rightHash {
 							status = "different"
 						} else {
@@ -377,7 +383,7 @@ func (s *Server) handleCompareDeepCheck(w http.ResponseWriter, r *http.Request) 
 	results := make(map[string]string)
 
 	for _, f := range req.Files {
-		if !cur.App.ComparePathAllowed(f.LeftPath) || !cur.App.ComparePathAllowed(f.RightPath) {
+		if !legacyComparePathAllowed(&cur.App, f.LeftPath) || !legacyComparePathAllowed(&cur.App, f.RightPath) {
 			results[f.RelPath] = "denied"
 			continue
 		}
@@ -399,8 +405,8 @@ func (s *Server) handleCompareDeepCheck(w http.ResponseWriter, r *http.Request) 
 			results[f.RelPath] = "suspect"
 			continue
 		}
-		leftHash, err1 := hashFile(f.LeftPath)
-		rightHash, err2 := hashFile(f.RightPath)
+		leftHash, err1 := hashFile(f.LeftPath, cur.App.CompareAllowedRoots...)
+		rightHash, err2 := hashFile(f.RightPath, cur.App.CompareAllowedRoots...)
 		if err1 != nil || err2 != nil || leftHash != rightHash {
 			results[f.RelPath] = "different"
 		} else {
@@ -433,18 +439,18 @@ func (s *Server) handleCompareFileDiff(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cur := s.cfg.Get()
-	if !cur.App.ComparePathAllowed(req.LeftPath) || !cur.App.ComparePathAllowed(req.RightPath) {
+	if !legacyComparePathAllowed(&cur.App, req.LeftPath) || !legacyComparePathAllowed(&cur.App, req.RightPath) {
 		writeErr(w, 403, errors.New("路径不在 compare_allowed_roots 白名单内"))
 		return
 	}
 
 	const maxBytes = 4 * 1024 * 1024
-	leftBytes, err := os.ReadFile(req.LeftPath)
+	leftBytes, err := readLegacyCompareFile(req.LeftPath, maxBytes, cur.App.CompareAllowedRoots...)
 	if err != nil {
 		writeErr(w, 400, fmt.Errorf("读取左侧文件失败: %w", err))
 		return
 	}
-	rightBytes, err := os.ReadFile(req.RightPath)
+	rightBytes, err := readLegacyCompareFile(req.RightPath, maxBytes, cur.App.CompareAllowedRoots...)
 	if err != nil {
 		writeErr(w, 400, fmt.Errorf("读取右侧文件失败: %w", err))
 		return
@@ -463,4 +469,20 @@ func (s *Server) handleCompareFileDiff(w http.ResponseWriter, r *http.Request) {
 
 	res := diff.Compare(leftLines, rightLines, req.LeftPath, req.RightPath)
 	writeJSON(w, 200, fileDiffResp{Unified: res.UnifiedDiff})
+}
+
+func legacyComparePathAllowed(app *config.AppConfig, name string) bool {
+	if !app.ComparePathAllowed(name) {
+		return false
+	}
+	actual, err := filepath.EvalSymlinks(name)
+	return err == nil && app.ComparePathAllowed(actual)
+}
+func readLegacyCompareFile(name string, limit int64, roots ...string) ([]byte, error) {
+	f, err := comparefs.NewLocalWithAllowedRoots(roots).Open(context.Background(), name)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return io.ReadAll(io.LimitReader(f, limit+1))
 }

@@ -37,6 +37,9 @@ func (p *toolPlan) Close() {
 func planTool(req Request, resolved resolvedWSDL, outDir string, materializeWSDL bool) (plan toolPlan, err error) {
 	jdk, ok := InspectJDKHome(req.JDKHome, "user")
 	if !ok {
+		if strings.TrimSpace(req.JDKHome) != "" {
+			return toolPlan{}, fmt.Errorf("指定的 JDK Home 不可用: %s", req.JDKHome)
+		}
 		found := DetectJDKs("")
 		if len(found) == 0 {
 			return toolPlan{}, fmt.Errorf("没有可用的 JDK。请选择工程自带的 JDK Home，不要依赖本机 PATH 上那个可能过新的 java")

@@ -147,6 +147,15 @@ func ExportCellText(value any) string {
 	case json.Number:
 		return v.String()
 	case map[string]any:
+		if _, ok := v["token"]; ok {
+			copy := make(map[string]any, len(v))
+			for key, value := range v {
+				if key != "token" {
+					copy[key] = value
+				}
+			}
+			return ExportCellText(copy)
+		}
 		if kind, _ := v["kind"].(string); kind == "text" {
 			if preview, ok := v["preview"].(string); ok {
 				return preview
@@ -189,6 +198,19 @@ func ExportSQLLiteral(value any) string {
 
 func quoteSQLString(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "''") + "'"
+}
+
+// Hex-encoded UTF-8 avoids dependence on MySQL NO_BACKSLASH_ESCAPES when
+// exporting paths, control characters, or quote/backslash combinations.
+func exportSQLLiteralForKind(kind string, value any) string {
+	literal := ExportSQLLiteral(value)
+	if kind == KindMySQL && strings.HasPrefix(literal, "'") {
+		text := ExportCellText(value)
+		if strings.ContainsAny(text, "\\\x00\r\n\x1a") {
+			return fmt.Sprintf("CONVERT(X'%x' USING utf8mb4)", []byte(text))
+		}
+	}
+	return literal
 }
 
 func WriteJSON(w io.Writer, table ExportTable, extra map[string]any) error {
@@ -242,7 +264,7 @@ func WriteINSERT(w io.Writer, table ExportTable, kind, tableName string) error {
 			if i < len(row) {
 				value = row[i]
 			}
-			values[i] = ExportSQLLiteral(value)
+			values[i] = exportSQLLiteralForKind(kind, value)
 		}
 		if _, err := io.WriteString(w, prefix+strings.Join(values, ", ")+");\n"); err != nil {
 			return err
@@ -319,7 +341,7 @@ func WriteUPDATE(w io.Writer, table ExportTable, kind, tableName string, pkCols 
 			if idx < len(row) {
 				value = row[idx]
 			}
-			setParts = append(setParts, QuoteIdent(kind, table.Columns[idx].Name)+" = "+ExportSQLLiteral(value))
+			setParts = append(setParts, QuoteIdent(kind, table.Columns[idx].Name)+" = "+exportSQLLiteralForKind(kind, value))
 		}
 		var whereParts []string
 		for _, idx := range whereIndices {
@@ -330,7 +352,7 @@ func WriteUPDATE(w io.Writer, table ExportTable, kind, tableName string, pkCols 
 			if value == nil {
 				whereParts = append(whereParts, QuoteIdent(kind, table.Columns[idx].Name)+" IS NULL")
 			} else {
-				whereParts = append(whereParts, QuoteIdent(kind, table.Columns[idx].Name)+" = "+ExportSQLLiteral(value))
+				whereParts = append(whereParts, QuoteIdent(kind, table.Columns[idx].Name)+" = "+exportSQLLiteralForKind(kind, value))
 			}
 		}
 		stmt := "UPDATE " + quotedTable + " SET " + strings.Join(setParts, ", ") + " WHERE " + strings.Join(whereParts, " AND ") + ";\n"
@@ -345,7 +367,6 @@ func WriteUPDATE(w io.Writer, table ExportTable, kind, tableName string, pkCols 
 	}
 	return nil
 }
-
 
 func WriteXLSX(w io.Writer, table ExportTable, sheetName string) error {
 	sheetName = sanitizeSheetName(sheetName)
@@ -456,8 +477,12 @@ func sanitizeXLSXCell(value string) string {
 		cleaned = string([]rune(cleaned)[:32767])
 	}
 	switch cleaned[0] {
-	case '=', '+', '@':
+	case '=', '+', '@', '\t', '\r':
 		return "'" + cleaned
+	case '-':
+		if _, err := strconv.ParseFloat(cleaned, 64); err != nil {
+			return "'" + cleaned
+		}
 	}
 	return cleaned
 }

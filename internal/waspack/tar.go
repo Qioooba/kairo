@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -42,7 +43,7 @@ func writeTar(dest string, files []ResolvedFile, isBatch ...bool) (int64, error)
 }
 
 func addTarFile(tw *tar.Writer, rf ResolvedFile, isBatch bool) (int64, error) {
-	src, err := os.Open(rf.Abs)
+	src, err := openRegularFile(rf.Abs, rf.info)
 	if err != nil {
 		return 0, fmt.Errorf("打开 %s: %w", rf.Rel, err)
 	}
@@ -78,4 +79,34 @@ func addTarFile(tw *tar.Writer, rf ResolvedFile, isBatch bool) (int64, error) {
 		return 0, fmt.Errorf("写 tar 内容 %s: %w", hdr.Name, err)
 	}
 	return n, nil
+}
+
+// Open through a directory handle and verify the same regular file observed
+// before opening. Root.Open prevents a swapped leaf link from escaping it.
+func openRegularFile(name string, expected ...os.FileInfo) (*os.File, error) {
+	before, err := os.Lstat(name)
+	if err != nil {
+		return nil, err
+	}
+	if len(expected) > 0 && expected[0] != nil && !os.SameFile(expected[0], before) {
+		return nil, fmt.Errorf("source changed after scan: %s", name)
+	}
+	if !before.Mode().IsRegular() {
+		return nil, fmt.Errorf("not a regular file: %s", name)
+	}
+	root, err := os.OpenRoot(filepath.Dir(name))
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	f, err := root.Open(filepath.Base(name))
+	if err != nil {
+		return nil, err
+	}
+	after, err := f.Stat()
+	if err != nil || !after.Mode().IsRegular() || !os.SameFile(before, after) {
+		f.Close()
+		return nil, fmt.Errorf("source changed while opening: %s", name)
+	}
+	return f, nil
 }

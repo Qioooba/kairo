@@ -18,7 +18,6 @@ import (
 
 	mysqldriver "github.com/go-sql-driver/mysql"
 	redis "github.com/redis/go-redis/v9"
-	go_ora "github.com/sijms/go-ora/v2"
 )
 
 type poolEntry struct {
@@ -225,44 +224,13 @@ func (m *Manager) sqlDB(source Source) (*sql.DB, error) {
 	switch source.Kind {
 	case KindOracle:
 		driverName = "oracle"
-		options := map[string]string{
-			"TIMEOUT":            strconv.Itoa(source.QueryTimeoutSeconds),
-			"CONNECTION TIMEOUT": "10",
-			"LOB FETCH":          "STREAM",
-			// Oracle 11g 优化：将驱动预取从 50 下调至 15 行。
-			// 既减少网络往返，又彻底避免宽表或包含大对象（LOB）时驱动网络缓冲区一次性膨胀数 GB。
-			"PREFETCH_ROWS": "15",
+		hasDialer := tunnel != nil
+		c, dsnStr, err := m.ResolveOracleBackend(source).OpenConnector(source, password, dialer, hasDialer, tlsConfig, targetHost, targetPort)
+		if err != nil {
+			return nil, err
 		}
-		if source.OracleConnectBy == "sid" {
-			options["SID"] = source.OracleService
-		}
-		if source.OracleClientCharset != "" {
-			options["CLIENT CHARSET"] = source.OracleClientCharset
-		} else {
-			// 默认使用 AL32UTF8 避免 NLS_LANG 未配置时中文 CLOB/NVARCHAR2 出现乱码
-			options["CLIENT CHARSET"] = "AL32UTF8"
-		}
-		if source.TLSMode != "disabled" {
-			options["SSL"] = "ENABLE"
-			if source.TLSMode == "skip-verify" {
-				options["SSL VERIFY"] = "FALSE"
-			}
-		}
-		service := source.OracleService
-		if source.OracleConnectBy == "sid" {
-			service = ""
-		}
-		dsn = go_ora.BuildUrl(targetHost, targetPort, service, source.Username, password, options)
-		oraConnector := go_ora.NewConnector(dsn)
-		if c, ok := oraConnector.(*go_ora.OracleConnector); ok {
-			if tunnel != nil {
-				c.Dialer(dialer)
-			}
-			if tlsConfig != nil {
-				c.WithTLSConfig(tlsConfig)
-			}
-		}
-		connector = oraConnector
+		connector = c
+		dsn = dsnStr
 	case KindMySQL:
 		driverName = "mysql"
 		cfg := mysqldriver.NewConfig()

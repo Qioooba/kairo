@@ -247,7 +247,8 @@
           if (state.dirty[data.note.id] || state.inlineDrafts[data.note.id]) {
             const local = find(data.note.id);
             if (local) {
-              local.revision = data.note.revision;
+              // Keep the revision the draft was based on. Advancing it without
+              // accepting the remote text would silently bypass PATCH conflicts.
               local.updated_at = data.note.updated_at;
               local.desktop = data.note.desktop;
               local.floating = data.note.floating;

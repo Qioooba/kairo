@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -111,3 +112,24 @@ func TestDatabaseCSVEncodingAndFormulaProtection(t *testing.T) {
 		}
 	}
 }
+
+func TestDatabaseSafeErrorTTC(t *testing.T) {
+	s := &Server{}
+	source := dbconsole.Source{ID: "src1", Kind: dbconsole.KindOracle}
+	ttcErr := errors.New("TTC error: received code 10 during response reading")
+	safeErr := s.databaseSafeError(source, ttcErr)
+	if safeErr == nil {
+		t.Fatal("expected error, got nil")
+	}
+	msg := safeErr.Error()
+	if !strings.Contains(msg, "Oracle TTC 协议报文解析异常") {
+		t.Fatalf("expected diagnostic prefix, got: %s", msg)
+	}
+	if !strings.Contains(msg, "received code 10") {
+		t.Fatalf("expected original error details preserved, got: %s", msg)
+	}
+	if !strings.Contains(msg, "DBMS_LOB.SUBSTR") {
+		t.Fatalf("expected actionable advice, got: %s", msg)
+	}
+}
+

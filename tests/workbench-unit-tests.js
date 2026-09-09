@@ -348,4 +348,109 @@ const defaultSnippets = [{ key: 'sf', text: 'SELECT * FROM ', enabled: true }];
 
 console.log('  ✓ SQL template expandKey isolation verified for Space, Tab, and Enter');
 
+console.log('=== 10. Testing SQL template batch parsing & formatting (PL/SQL mode) ===');
+{
+  function extractFn(src, name) {
+    const m = src.match(new RegExp('function\\s+' + name + '\\s*\\([^)]*\\)\\s*\\{'));
+    if (!m) throw new Error('function not found: ' + name);
+    let depth = 1, i = src.indexOf('{', m.index) + 1;
+    while (i < src.length && depth > 0) {
+      if (src[i] === '{') depth++;
+      else if (src[i] === '}') depth--;
+      i++;
+    }
+    return src.slice(m.index, i);
+  }
+  const dbSrc = fs.readFileSync(path.join(__dirname, '..', 'web/pages/database.js'), 'utf8');
+  const parseSnippetsText = new Function('raw', extractFn(dbSrc, 'parseSnippetsText') + '\nreturn parseSnippetsText(raw);');
+  const formatSnippetsText = new Function('items', extractFn(dbSrc, 'formatSnippetsText') + '\nreturn formatSnippetsText(items);');
+
+  // Test 1: PL/SQL shortcuts.txt format with trailing spaces
+  const plsql = [
+    '# PL/SQL Developer shortcuts.txt',
+    's=SELECT * FROM ',
+    'sc=SELECT COUNT(*) FROM ',
+    'w = WHERE ',
+    'df=DELETE FROM ',
+    'ob = ORDER BY '
+  ].join('\n');
+  const r1 = parseSnippetsText(plsql);
+  assert.strictEqual(r1.items.length, 5, 'Should parse 5 rules');
+  assert.strictEqual(r1.duplicates.length, 0, 'Should have 0 duplicates');
+  assert.strictEqual(r1.items[0].key, 's');
+  assert.strictEqual(r1.items[0].text, 'SELECT * FROM ', 'Must preserve trailing space for table input');
+  assert.strictEqual(r1.items[0].enabled, true);
+  assert.strictEqual(r1.items[2].key, 'w');
+  assert.strictEqual(r1.items[2].text, 'WHERE ');
+  console.log('  ✓ PL/SQL shortcuts.txt format parsed and trailing spaces preserved');
+
+  // Test 2: TSV / Excel tab-separated paste
+  const tsv = 'sel\tSELECT * FROM ${table}\ncnt\tSELECT COUNT(*) FROM ${table}';
+  const r2 = parseSnippetsText(tsv);
+  assert.strictEqual(r2.items.length, 2);
+  assert.strictEqual(r2.items[0].key, 'sel');
+  assert.strictEqual(r2.items[0].text, 'SELECT * FROM ${table}');
+  console.log('  ✓ TSV / Excel tab delimiter parsed accurately');
+
+  // Test 3: Multi-line with \n and continuation lines
+  const multi = 'q1=SELECT *\n  FROM t\n  WHERE a = 1\nq2=SELECT 2\\nFROM dual';
+  const r3 = parseSnippetsText(multi);
+  assert.strictEqual(r3.items.length, 2);
+  assert.strictEqual(r3.items[0].text, 'SELECT *\nFROM t\nWHERE a = 1');
+  assert.strictEqual(r3.items[1].text, 'SELECT 2\nFROM dual');
+  console.log('  ✓ Multi-line SQL with \\n and indented continuation lines parsed accurately');
+
+  // Test 4: Disabled items and comments
+  const mixed = '# comment\n-- sql comment\n# [disabled] old=SELECT 1\nactive=SELECT 2';
+  const r4 = parseSnippetsText(mixed);
+  assert.strictEqual(r4.items.length, 2);
+  assert.strictEqual(r4.items[0].key, 'old');
+  assert.strictEqual(r4.items[0].enabled, false);
+  assert.strictEqual(r4.items[1].key, 'active');
+  assert.strictEqual(r4.items[1].enabled, true);
+  console.log('  ✓ Comments ignored and [disabled] items recognized correctly');
+
+  // Test 5: Duplicate key detection
+  const dupes = 'sf=SELECT 1\nsf=SELECT 2\nsf=SELECT 3\nother=4';
+  const r5 = parseSnippetsText(dupes);
+  assert.strictEqual(r5.duplicates.length, 1);
+  assert.strictEqual(r5.duplicates[0], 'sf');
+  console.log('  ✓ Duplicate snippet keys detected');
+
+  // Test 6: Serialization and roundtrip
+  const formatted = formatSnippetsText(r4.items);
+  const roundtrip = parseSnippetsText(formatted);
+  assert.deepStrictEqual(roundtrip.items, r4.items);
+  console.log('  ✓ formatSnippetsText roundtrip matches parsed items');
+
+  // Test 7: 回归 — Tab 前后空格 / TSV 首空格一致性
+  const r7a = parseSnippetsText('sf \tSELECT 1');
+  assert.strictEqual(r7a.items.length, 1, '空格+Tab 也应解析为1条');
+  assert.strictEqual(r7a.items[0].key, 'sf');
+  assert.strictEqual(r7a.items[0].text, 'SELECT 1');
+  const r7b = parseSnippetsText('sf\t SELECT 1');
+  assert.strictEqual(r7b.items[0].text, 'SELECT 1', 'TSV 值首空格应与 = 保持一致被剥离');
+  console.log('  ✓ TSV 空格容错与首空格一致性');
+
+  // Test 8: 回归 — 缩进续行保留尾空格
+  const r8 = parseSnippetsText('q1=SELECT *\n  FROM t   ');
+  assert.strictEqual(r8.items[0].text, 'SELECT *\nFROM t   ', '续行尾空格必须保留');
+  console.log('  ✓ 缩进续行保留尾空格');
+
+  // Test 9: 回归 — 非缩进垃圾行不再污染上一条
+  const r9 = parseSnippetsText('sf=SELECT 1\ngarbage line without equals');
+  assert.strictEqual(r9.items.length, 1);
+  assert.strictEqual(r9.items[0].text, 'SELECT 1', '垃圾行不应并入上一条');
+  assert.strictEqual(r9.ignored, 1, '垃圾行应计入 ignored');
+  console.log('  ✓ 非缩进无效行被忽略且计数');
+
+  // Test 10: 回归 — 空 key 不应序列化
+  const f10 = formatSnippetsText([{ key: '', text: 'hi' }, { key: 'a', text: 'b' }]);
+  assert.ok(f10.indexOf('=hi') < 0, '空 key 行不应输出: ' + f10);
+  assert.ok(f10.indexOf('a=b') >= 0, f10);
+  const r10 = parseSnippetsText(f10);
+  assert.strictEqual(r10.items.length, 1);
+  console.log('  ✓ formatSnippetsText 过滤空 key');
+}
+
 console.log('\n✅ ALL WORKBENCH FRONTEND UNIT TESTS PASSED!');

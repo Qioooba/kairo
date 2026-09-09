@@ -129,11 +129,14 @@ func emptyDocument() document {
 
 func (s *Store) loadLocked() (document, error) {
 	raw, err := os.ReadFile(s.path)
-	if errors.Is(err, fs.ErrNotExist) || len(raw) == 0 {
+	if errors.Is(err, fs.ErrNotExist) {
 		return emptyDocument(), nil
 	}
 	if err != nil {
 		return document{}, fmt.Errorf("读取偏好失败: %w", err)
+	}
+	if len(raw) == 0 {
+		return emptyDocument(), nil
 	}
 	var doc document
 	if err := json.Unmarshal(raw, &doc); err == nil && doc.Version == Version && doc.Global != nil && doc.Users != nil {

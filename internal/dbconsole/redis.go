@@ -370,6 +370,9 @@ func (m *Manager) RedisReadOnlyCommand(ctx context.Context, source Source, comma
 	if argBytes > 32768 {
 		return RedisCommandResult{}, errors.New("Redis 命令参数总长度不能超过 32768 字节")
 	}
+	if command == "HGETALL" {
+		return RedisCommandResult{}, errors.New("HGETALL 无法限制返回大小，请改用 HSCAN key 0 COUNT 100 分页读取")
+	}
 	if !redisReadOnlyCommandAllowed(command, args) {
 		return RedisCommandResult{}, fmt.Errorf("Redis 命令 %s 不在只读白名单中", command)
 	}
@@ -419,7 +422,7 @@ func (m *Manager) RedisReadOnlyCommand(ctx context.Context, source Source, comma
 func redisReadOnlyCommandAllowed(command string, args []string) bool {
 	allowed := map[string]bool{
 		"GET": true, "TYPE": true, "TTL": true, "PTTL": true, "STRLEN": true,
-		"HGET": true, "HGETALL": true, "HSCAN": true,
+		"HGET": true, "HSCAN": true,
 		"LLEN": true, "LRANGE": true, "SCARD": true, "SSCAN": true,
 		"ZCARD": true, "ZRANGE": true, "XINFO": true, "XRANGE": true,
 		"INFO": true, "DBSIZE": true, "PING": true,
@@ -442,15 +445,34 @@ func redisReadOnlyCommandAllowed(command string, args []string) bool {
 		return len(args) <= 4 && redisScanArgsAllowed(args)
 	}
 	if command == "ZRANGE" {
-		return len(args) <= 3 && (len(args) < 3 || strings.EqualFold(args[2], "WITHSCORES"))
+		return (len(args) == 2 || len(args) == 3 && strings.EqualFold(args[2], "WITHSCORES")) && boundedRedisRange(args)
 	}
-	if command == "LRANGE" || command == "XRANGE" {
-		return len(args) <= 4
+	if command == "LRANGE" {
+		return len(args) == 2 && boundedRedisRange(args)
+	}
+	if command == "XRANGE" {
+		if len(args) != 4 || !strings.EqualFold(args[2], "COUNT") {
+			return false
+		}
+		n, err := strconv.Atoi(args[3])
+		return err == nil && n > 0 && n <= 500
 	}
 	if command == "XINFO" {
 		return len(args) >= 1 && len(args) <= 3 && (strings.EqualFold(args[0], "STREAM") || strings.EqualFold(args[0], "GROUPS") || strings.EqualFold(args[0], "CONSUMERS"))
 	}
 	return true
+}
+
+func boundedRedisRange(args []string) bool {
+	if len(args) < 2 {
+		return false
+	}
+	start, e1 := strconv.ParseInt(args[0], 10, 64)
+	end, e2 := strconv.ParseInt(args[1], 10, 64)
+	if e1 != nil || e2 != nil || (start < 0) != (end < 0) || end < start {
+		return false
+	}
+	return end-start < 500
 }
 
 func redisScanArgsAllowed(args []string) bool {
@@ -462,12 +484,18 @@ func redisScanArgsAllowed(args []string) bool {
 	}
 	for i := 1; i < len(args); i++ {
 		if strings.EqualFold(args[i], "COUNT") {
-			if i+1 >= len(args) { return false }
+			if i+1 >= len(args) {
+				return false
+			}
 			n, err := strconv.ParseInt(args[i+1], 10, 64)
-			if err != nil || n < 1 || n > 500 { return false }
+			if err != nil || n < 1 || n > 500 {
+				return false
+			}
 			i++
 		} else if strings.EqualFold(args[i], "MATCH") {
-			if i+1 >= len(args) || len(args[i+1]) > 512 { return false }
+			if i+1 >= len(args) || len(args[i+1]) > 512 {
+				return false
+			}
 			i++
 		} else {
 			return false
@@ -477,7 +505,9 @@ func redisScanArgsAllowed(args []string) bool {
 }
 
 func redisInfoSectionAllowed(section string) bool {
-	if strings.TrimSpace(section) == "" { return true }
+	if strings.TrimSpace(section) == "" {
+		return true
+	}
 	switch strings.ToLower(strings.TrimSpace(section)) {
 	case "memory", "clients", "stats", "keyspace", "server", "replication", "cpu":
 		return true
@@ -489,28 +519,56 @@ func redisInfoSectionAllowed(section string) bool {
 func normalizeRedisAny(value any) any {
 	switch v := value.(type) {
 	case nil, string, bool, int64, float64:
-		if text, ok := v.(string); ok { return normalizeBytes([]byte(text)) }
+		if text, ok := v.(string); ok {
+			return normalizeBytes([]byte(text))
+		}
 		return v
 	case []byte:
 		return normalizeBytes(v)
 	case []any:
-		out := make([]any, len(v)); for i := range v { out[i] = normalizeRedisAny(v[i]) }; return out
+		out := make([]any, len(v))
+		for i := range v {
+			out[i] = normalizeRedisAny(v[i])
+		}
+		return out
 	case map[any]any:
-		out := make(map[string]any, len(v)); for k, item := range v { out[fmt.Sprint(k)] = normalizeRedisAny(item) }; return out
+		out := make(map[string]any, len(v))
+		for k, item := range v {
+			out[fmt.Sprint(k)] = normalizeRedisAny(item)
+		}
+		return out
 	default:
 		return normalizeValue(v)
 	}
 }
 
 func (m *Manager) RedisMembers(ctx context.Context, source Source, key, typ, cursor string, offset, pageSize int64) (RedisMembersResult, error) {
-	if source.Kind != KindRedis || strings.TrimSpace(key) == "" { return RedisMembersResult{}, errors.New("Redis key 不能为空") }
-	if len(key) > 4096 { return RedisMembersResult{}, errors.New("key 不能超过 4096 字节") }
-	if pageSize <= 0 || pageSize > 500 { pageSize = 100 }
-	ctx, cancel := context.WithTimeout(ctx, source.Timeout()); defer cancel()
-	if err := m.acquire(ctx); err != nil { return RedisMembersResult{}, err }; defer m.release()
-	client, err := m.redisClient(source); if err != nil { return RedisMembersResult{}, err }
+	if source.Kind != KindRedis || strings.TrimSpace(key) == "" {
+		return RedisMembersResult{}, errors.New("Redis key 不能为空")
+	}
+	if len(key) > 4096 {
+		return RedisMembersResult{}, errors.New("key 不能超过 4096 字节")
+	}
+	if pageSize <= 0 || pageSize > 500 {
+		pageSize = 100
+	}
+	ctx, cancel := context.WithTimeout(ctx, source.Timeout())
+	defer cancel()
+	if err := m.acquire(ctx); err != nil {
+		return RedisMembersResult{}, err
+	}
+	defer m.release()
+	client, err := m.redisClient(source)
+	if err != nil {
+		return RedisMembersResult{}, err
+	}
 	typ = strings.ToLower(strings.TrimSpace(typ))
-	if typ == "" { typ, err = client.Type(ctx, key).Result(); if err != nil { return RedisMembersResult{}, err } }
+	if typ == "" {
+		typ, err = client.Type(ctx, key).Result()
+		if err != nil {
+			return RedisMembersResult{}, err
+		}
+	}
 	switch typ {
 	case "hash", "list", "set", "zset":
 	default:
@@ -528,9 +586,15 @@ func (m *Manager) RedisMembers(ctx context.Context, source Source, key, typ, cur
 				return out, fmt.Errorf("Redis cursor 无效: %w", parseErr)
 			}
 		}
-		items, next, callErr := client.HScan(ctx, key, pos, "*", pageSize).Result(); if callErr != nil { return out, callErr }
-		for i := 0; i+1 < len(items); i += 2 { out.Items = append(out.Items, map[string]any{"field": normalizeBytes([]byte(items[i])), "value": normalizeBytes([]byte(items[i+1]))}) }
-		out.NextCursor = strconv.FormatUint(next, 10); out.HasNext = next != 0
+		items, next, callErr := client.HScan(ctx, key, pos, "*", pageSize).Result()
+		if callErr != nil {
+			return out, callErr
+		}
+		for i := 0; i+1 < len(items); i += 2 {
+			out.Items = append(out.Items, map[string]any{"field": normalizeBytes([]byte(items[i])), "value": normalizeBytes([]byte(items[i+1]))})
+		}
+		out.NextCursor = strconv.FormatUint(next, 10)
+		out.HasNext = next != 0
 	case "set":
 		cursor = strings.TrimSpace(cursor)
 		var pos uint64
@@ -541,19 +605,49 @@ func (m *Manager) RedisMembers(ctx context.Context, source Source, key, typ, cur
 				return out, fmt.Errorf("Redis cursor 无效: %w", parseErr)
 			}
 		}
-		items, next, callErr := client.SScan(ctx, key, pos, "*", pageSize).Result(); if callErr != nil { return out, callErr }
-		for _, item := range items { out.Items = append(out.Items, normalizeBytes([]byte(item))) }
-		out.NextCursor = strconv.FormatUint(next, 10); out.HasNext = next != 0
+		items, next, callErr := client.SScan(ctx, key, pos, "*", pageSize).Result()
+		if callErr != nil {
+			return out, callErr
+		}
+		for _, item := range items {
+			out.Items = append(out.Items, normalizeBytes([]byte(item)))
+		}
+		out.NextCursor = strconv.FormatUint(next, 10)
+		out.HasNext = next != 0
 	case "list":
-		if offset < 0 || offset > 1<<62-pageSize { return out, errors.New("Redis 分页偏移量过大") }
-		items, callErr := client.LRange(ctx, key, offset, offset+pageSize-1).Result(); if callErr != nil { return out, callErr }
-		for _, item := range items { out.Items = append(out.Items, normalizeBytes([]byte(item))) }
-		length, callErr := client.LLen(ctx, key).Result(); if callErr != nil { return out, callErr }; out.Total = length; out.HasNext = offset+int64(len(items)) < length
+		if offset < 0 || offset > 1<<62-pageSize {
+			return out, errors.New("Redis 分页偏移量过大")
+		}
+		items, callErr := client.LRange(ctx, key, offset, offset+pageSize-1).Result()
+		if callErr != nil {
+			return out, callErr
+		}
+		for _, item := range items {
+			out.Items = append(out.Items, normalizeBytes([]byte(item)))
+		}
+		length, callErr := client.LLen(ctx, key).Result()
+		if callErr != nil {
+			return out, callErr
+		}
+		out.Total = length
+		out.HasNext = offset+int64(len(items)) < length
 	case "zset":
-		if offset < 0 || offset > 1<<62-pageSize { return out, errors.New("Redis 分页偏移量过大") }
-		items, callErr := client.ZRangeWithScores(ctx, key, offset, offset+pageSize-1).Result(); if callErr != nil { return out, callErr }
-		for _, item := range items { out.Items = append(out.Items, map[string]any{"member": normalizeValue(item.Member), "score": item.Score}) }
-		length, callErr := client.ZCard(ctx, key).Result(); if callErr != nil { return out, callErr }; out.Total = length; out.HasNext = offset+int64(len(items)) < length
+		if offset < 0 || offset > 1<<62-pageSize {
+			return out, errors.New("Redis 分页偏移量过大")
+		}
+		items, callErr := client.ZRangeWithScores(ctx, key, offset, offset+pageSize-1).Result()
+		if callErr != nil {
+			return out, callErr
+		}
+		for _, item := range items {
+			out.Items = append(out.Items, map[string]any{"member": normalizeValue(item.Member), "score": item.Score})
+		}
+		length, callErr := client.ZCard(ctx, key).Result()
+		if callErr != nil {
+			return out, callErr
+		}
+		out.Total = length
+		out.HasNext = offset+int64(len(items)) < length
 	}
 	budget := source.MaxResultBytes
 	if budget <= 0 {
@@ -572,15 +666,32 @@ func (m *Manager) RedisMembers(ctx context.Context, source Source, key, typ, cur
 }
 
 func (m *Manager) RedisInfo(ctx context.Context, source Source, sections []string) (RedisInfoResult, error) {
-	if source.Kind != KindRedis { return RedisInfoResult{}, errors.New("数据源不是 Redis") }
-	if len(sections) == 0 { sections = []string{"memory", "clients", "stats", "keyspace"} }
-	ctx, cancel := context.WithTimeout(ctx, source.Timeout()); defer cancel()
-	if err := m.acquire(ctx); err != nil { return RedisInfoResult{}, err }; defer m.release()
-	client, err := m.redisClient(source); if err != nil { return RedisInfoResult{}, err }
+	if source.Kind != KindRedis {
+		return RedisInfoResult{}, errors.New("数据源不是 Redis")
+	}
+	if len(sections) == 0 {
+		sections = []string{"memory", "clients", "stats", "keyspace"}
+	}
+	ctx, cancel := context.WithTimeout(ctx, source.Timeout())
+	defer cancel()
+	if err := m.acquire(ctx); err != nil {
+		return RedisInfoResult{}, err
+	}
+	defer m.release()
+	client, err := m.redisClient(source)
+	if err != nil {
+		return RedisInfoResult{}, err
+	}
 	out := RedisInfoResult{Sections: map[string]map[string]string{}, ReadAt: time.Now().Format(time.RFC3339)}
 	for _, section := range sections {
-		section = strings.ToLower(strings.TrimSpace(section)); if !redisInfoSectionAllowed(section) { return RedisInfoResult{}, fmt.Errorf("不支持的 Redis INFO 分区 %s", section) }
-		raw, callErr := client.Info(ctx, section).Result(); if callErr != nil { return RedisInfoResult{}, callErr }
+		section = strings.ToLower(strings.TrimSpace(section))
+		if !redisInfoSectionAllowed(section) {
+			return RedisInfoResult{}, fmt.Errorf("不支持的 Redis INFO 分区 %s", section)
+		}
+		raw, callErr := client.Info(ctx, section).Result()
+		if callErr != nil {
+			return RedisInfoResult{}, callErr
+		}
 		out.Sections[section] = parseRedisInfo(raw)
 	}
 	return out, nil
@@ -589,8 +700,13 @@ func (m *Manager) RedisInfo(ctx context.Context, source Source, sections []strin
 func parseRedisInfo(raw string) map[string]string {
 	out := map[string]string{}
 	for _, line := range splitLines(raw) {
-		line = strings.TrimSpace(line); if line == "" || strings.HasPrefix(line, "#") { continue }
-		if key, value, ok := strings.Cut(line, ":"); ok { out[key] = value }
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if key, value, ok := strings.Cut(line, ":"); ok {
+			out[key] = value
+		}
 	}
 	return out
 }

@@ -13,8 +13,9 @@
     return /^(?:DECLARE\b|BEGIN\b|CREATE\s+(?:OR\s+REPLACE\s+)?(?:EDITIONABLE\s+|NONEDITIONABLE\s+)?(?:FUNCTION|PROCEDURE|PACKAGE(?:\s+BODY)?|TRIGGER|TYPE(?:\s+BODY)?)\b)/i.test(cleaned);
   }
 
-  function scanSegments(text) {
+  function scanSegments(text, options) {
     text = String(text == null ? '' : text);
+    const mysql = options && options.dialect === 'mysql';
     const cuts = [];
     let state = 'normal';
     let quote = '';
@@ -34,22 +35,26 @@
         if (c === quote) {
           if (n === quote) { i++; continue; }
           state = 'normal';
-        } else if (c === '\\' && quote !== '"') {
+        } else if (c === '\\' && mysql && quote !== '`') {
           i++;
         }
         continue;
       }
       if (c === '-' && n === '-') { state = 'line'; i++; continue; }
+      if (mysql && c === '#') { state = 'line'; continue; }
       if (c === '/' && n === '*') { state = 'block'; i++; continue; }
       if (c === '/' && n === '/' && (i === 0 || /\s/.test(text[i - 1]))) { state = 'line'; i++; continue; }
       if (c === '\'' || c === '"' || c === '`') { state = 'quote'; quote = c; continue; }
       // Oracle q'[ ... ]', q'{ ... }', q'< ... >', q'( ... )', q'!...!' etc.
-      if ((c === 'q' || c === 'Q') && n === '\'' && i + 2 < text.length) {
+      if (!mysql && (c === 'q' || c === 'Q') && n === '\'' && i + 2 < text.length) {
         const opener = text[i + 2];
         const closerMap = { '[': ']', '{': '}', '(': ')', '<': '>' };
         const closer = closerMap[opener] || opener;
         const end = text.indexOf(closer + '\'', i + 3);
         if (end >= 0) { i = end + 1; continue; }
+        // An unfinished literal consumes the remainder; do not turn its
+        // semicolons into executable statement boundaries.
+        break;
       }
       if (oracleBlock && c === '/') {
         const lineStart = text.lastIndexOf('\n', i - 1) + 1;
@@ -83,14 +88,14 @@
     return value.length > 0 && value !== ';';
   }
 
-  function splitStatements(text) {
+  function splitStatements(text, options) {
     text = String(text == null ? '' : text);
-    return scanSegments(text).filter(function (r) { return nonEmptyRange(text, r); }).map(function (r, i) {
+    return scanSegments(text, options).filter(function (r) { return nonEmptyRange(text, r); }).map(function (r, i) {
       return { index: i, start: r.start, end: r.end, text: text.slice(r.start, r.end), delimiter: r.delimiter };
     });
   }
 
-  function currentStatement(text, cursor, selectionStart, selectionEnd) {
+  function currentStatement(text, cursor, selectionStart, selectionEnd, options) {
     text = String(text == null ? '' : text);
     const ss = Number.isFinite(selectionStart) ? selectionStart : 0;
     const se = Number.isFinite(selectionEnd) ? selectionEnd : 0;
@@ -99,7 +104,7 @@
       if (selected) return { start: ss, end: se, text: selected, selected: true, index: -1 };
     }
     const pos = Math.max(0, Math.min(text.length, Number.isFinite(cursor) ? cursor : 0));
-    const ranges = splitStatements(text);
+    const ranges = splitStatements(text, options);
     if (!ranges.length) return { start: 0, end: text.length, text: text.trim(), selected: false, index: 0 };
     let previous = null;
     for (let i = 0; i < ranges.length; i++) {
@@ -114,10 +119,10 @@
   W.statementModel = {
     split: splitStatements,
     current: currentStatement,
-    normalize: function (text, cursor, selectionStart, selectionEnd) {
-      const r = currentStatement(text, cursor, selectionStart, selectionEnd);
+    normalize: function (text, cursor, selectionStart, selectionEnd, options) {
+      const r = currentStatement(text, cursor, selectionStart, selectionEnd, options);
       let s = String(r.text || '').replace(/^\s+|\s+$/g, '');
-      while (s.endsWith(';')) s = s.slice(0, -1).trim();
+      if (!isOracleBlockPrefix(s)) while (s.endsWith(';')) s = s.slice(0, -1).trim();
       return Object.assign({}, r, { text: s });
     }
   };

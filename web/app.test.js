@@ -1367,7 +1367,7 @@ function testApplyCommandPath() {
   console.log('  applyCommandPath keeps args / quotes spaces ✓');
 }
 
-function loadDatabaseHelpers() {
+function loadDatabaseHelpers(navigatorMock) {
   const src = fs.readFileSync(path.join(__dirname, 'pages/database.js'), 'utf8');
   function extractDb(name) {
     const re = new RegExp('function\\s+' + name + '\\s*\\([^)]*\\)\\s*\\{');
@@ -1391,16 +1391,25 @@ function loadDatabaseHelpers() {
   if (!kw || !nl) throw new Error('missing SQL keyword sets');
   const h = 'function h(v) { return String(v == null ? "" : v).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }';
   return new Function(
+    'navigator',
     kw[0] + '\n' + nl[0] + '\n' + h + '\n'
     + extractDb('tokenizeSQL') + '\n'
+    + extractDb('completionPrefix') + '\n'
+    + extractDb('isMacPlatform') + '\n'
+    + extractDb('sqlTableContext') + '\n'
+    + extractDb('suggestSQL') + '\n'
     + extractDb('highlightSQL') + '\n'
     + extractDb('formatSQL') + '\n'
-    + extractDb('completionPrefix') + '\n'
-    + extractDb('suggestSQL') + '\n'
     + extractDb('matchBrackets') + '\n'
+    + extractDb('matchesShortcut') + '\n'
     + extractDb('isSnippetExpandKey') + '\n'
-    + 'return { tokenizeSQL: tokenizeSQL, highlightSQL: highlightSQL, formatSQL: formatSQL, suggestSQL: suggestSQL, matchBrackets: matchBrackets, completionPrefix: completionPrefix, isSnippetExpandKey: isSnippetExpandKey };'
-  )();
+    + extractDb('formatBytes') + '\n'
+    + extractDb('cellText') + '\n'
+    + extractDb('fmtCell') + '\n'
+    + extractDb('parseSnippetsText') + '\n'
+    + extractDb('formatSnippetsText') + '\n'
+    + 'return { tokenizeSQL: tokenizeSQL, highlightSQL: highlightSQL, formatSQL: formatSQL, suggestSQL: suggestSQL, sqlTableContext: sqlTableContext, matchesShortcut: matchesShortcut, matchBrackets: matchBrackets, completionPrefix: completionPrefix, isSnippetExpandKey: isSnippetExpandKey, parseSnippetsText: parseSnippetsText, formatSnippetsText: formatSnippetsText, formatBytes: formatBytes, cellText: cellText, fmtCell: fmtCell };'
+  )(navigatorMock || {});
 }
 
 function testDatabaseSQLHelpers() {
@@ -1436,7 +1445,122 @@ function testDatabaseSQLHelpers() {
   assert.strictEqual(db.isSnippetExpandKey({ key: ' ' }, 'Enter'), false, 'Space on Enter');
   assert.strictEqual(db.isSnippetExpandKey({ key: 'Tab' }, 'Enter'), false, 'Tab on Enter');
 
-  console.log('  database SQL tabs helpers: format / suggest / brackets / snippetExpandKey ✓');
+  // parseSnippetsText & formatSnippetsText tests (PL/SQL batch mode)
+  const plsqlText = [
+    '# PL/SQL Developer shortcuts.txt comments',
+    's=SELECT * FROM ',
+    'sc=SELECT COUNT(*) FROM ',
+    'w = WHERE ',
+    'df\tDELETE FROM ',
+    'sel=SELECT *\\nFROM ${table}',
+    '# [disabled] old=SELECT 1 FROM dual'
+  ].join('\n');
+
+  const parsed = db.parseSnippetsText(plsqlText);
+  assert.strictEqual(parsed.items.length, 6, 'parsed 6 snippets');
+  assert.strictEqual(parsed.duplicates.length, 0, 'no duplicates');
+  assert.strictEqual(parsed.items[0].key, 's');
+  assert.strictEqual(parsed.items[0].text, 'SELECT * FROM ', 'preserves trailing space');
+  assert.strictEqual(parsed.items[0].enabled, true);
+  assert.strictEqual(parsed.items[1].key, 'sc');
+  assert.strictEqual(parsed.items[2].key, 'w');
+  assert.strictEqual(parsed.items[2].text, 'WHERE ');
+  assert.strictEqual(parsed.items[3].key, 'df');
+  assert.strictEqual(parsed.items[3].text, 'DELETE FROM ', 'supports tab delimiter');
+  assert.strictEqual(parsed.items[4].key, 'sel');
+  assert.strictEqual(parsed.items[4].text, 'SELECT *\nFROM ${table}', 'supports \\n escape');
+  assert.strictEqual(parsed.items[5].key, 'old');
+  assert.strictEqual(parsed.items[5].enabled, false, 'supports disabled item');
+
+  // Duplicate detection test
+  const dupeText = 'sf=SELECT 1\nsf=SELECT 2\nw=WHERE';
+  const dupeParsed = db.parseSnippetsText(dupeText);
+  assert.strictEqual(dupeParsed.duplicates.length, 1);
+  assert.strictEqual(dupeParsed.duplicates[0], 'sf');
+
+  // formatSnippetsText test
+  const formattedText = db.formatSnippetsText(parsed.items);
+  assert.ok(formattedText.indexOf('s=SELECT * FROM ') >= 0, formattedText);
+  assert.ok(formattedText.indexOf('sel=SELECT *\\nFROM ${table}') >= 0, formattedText);
+  assert.ok(formattedText.indexOf('# [disabled] old=SELECT 1 FROM dual') >= 0, formattedText);
+
+  // Roundtrip test
+  const roundtrip = db.parseSnippetsText(formattedText);
+  assert.strictEqual(roundtrip.items.length, 6);
+  assert.deepStrictEqual(roundtrip.items, parsed.items);
+
+  console.log('  database SQL tabs helpers: format / suggest / brackets / snippetExpandKey / parseSnippetsText / formatSnippetsText ✓');
+}
+
+// ---------- 数据库工作台懒加载 / 联想解耦 / 快捷键重构 ----------
+function testDatabaseWorkbenchLazy() {
+  const dbSrc = fs.readFileSync(path.join(__dirname, 'pages/database.js'), 'utf8');
+
+  // 1. FROM us 场景：解耦 DOM 后表名仍可联想（schemaTableCache 预热池直供）。
+  const db = loadDatabaseHelpers({});
+  const fromUs = db.suggestSQL('SELECT * FROM us', 16, { objects: ['users', 'user_logs'], snippets: [] });
+  assert.ok(fromUs.items.some(function (x) { return x.label === 'users' && x.kind === 'object'; }), 'FROM us 应联想出 users: ' + JSON.stringify(fromUs.items));
+  assert.ok(fromUs.items.some(function (x) { return x.label === 'user_logs'; }), 'FROM us 应联想出 user_logs');
+
+  // 2. FROM ord 场景：表名必须排在 ORDER 关键字之前（上下文提权）。
+  const fromOrd = db.suggestSQL('SELECT * FROM ord', 17, { objects: ['orders', 'order_items'], snippets: [] });
+  const idxOrders = fromOrd.items.findIndex(function (x) { return x.label === 'orders'; });
+  const idxOrder = fromOrd.items.findIndex(function (x) { return x.label === 'ORDER'; });
+  assert.ok(idxOrders >= 0, 'orders 应在候选: ' + JSON.stringify(fromOrd.items));
+  assert.ok(idxOrder < 0 || idxOrders < idxOrder, 'orders(' + idxOrders + ') 应排在 ORDER(' + idxOrder + ') 之前: ' + JSON.stringify(fromOrd.items.map(function (x) { return x.label + ':' + x.kind; })));
+
+  // 非表上下文保持原排序：关键字优先（零回归）。
+  const plain = db.suggestSQL('se', 2, { objects: [], snippets: [] });
+  assert.ok(plain.items.length && plain.items[0].kind === 'keyword', '非 FROM 上下文关键字仍优先: ' + JSON.stringify(plain.items.slice(0, 3)));
+
+  // sqlTableContext 直接断言。
+  assert.strictEqual(db.sqlTableContext('SELECT * FROM us', 16), true, 'FROM 后应为表上下文');
+  assert.strictEqual(db.sqlTableContext('SELECT * FROM ', 14), true, 'FROM + 空格应为表上下文');
+  assert.strictEqual(db.sqlTableContext('SELECT se', 9), false, 'SELECT 后非表上下文');
+  assert.strictEqual(db.sqlTableContext('SELECT * FROM t JOIN or', 22), true, 'JOIN 后应为表上下文');
+
+  // 3. 快捷键：Windows Ctrl+Enter 与 macOS Cmd+Enter 一致。
+  const dbWin = loadDatabaseHelpers({ platform: 'Win32', userAgent: 'Windows' });
+  const dbMac = loadDatabaseHelpers({ platform: 'MacIntel', userAgent: 'Macintosh' });
+  assert.strictEqual(dbWin.matchesShortcut({ key: 'Enter', code: 'Enter', ctrlKey: true, altKey: false, shiftKey: false, metaKey: false }, 'Ctrl+Enter'), true, 'Win Ctrl+Enter');
+  assert.strictEqual(dbWin.matchesShortcut({ key: 'Enter', code: 'Enter', ctrlKey: false, altKey: false, shiftKey: false, metaKey: true }, 'Ctrl+Enter'), false, 'Win Cmd 不应误触 Ctrl+Enter');
+  assert.strictEqual(dbMac.matchesShortcut({ key: 'Enter', code: 'Enter', ctrlKey: true, altKey: false, shiftKey: false, metaKey: false }, 'Ctrl+Enter'), true, 'Mac Ctrl+Enter 仍可用');
+  assert.strictEqual(dbMac.matchesShortcut({ key: 'Enter', code: 'Enter', ctrlKey: false, altKey: false, shiftKey: false, metaKey: true }, 'Ctrl+Enter'), true, 'Mac Cmd+Enter 等价执行');
+  assert.strictEqual(dbMac.matchesShortcut({ key: 'o', code: 'KeyO', ctrlKey: false, altKey: true, shiftKey: false, metaKey: false }, 'Alt+O'), true, 'Alt+O 正常');
+
+  // 4. Escape 在联想菜单打开时独立响应：源码契约断言。
+  // onWorkbenchKey 必须在 cancelQuery 分支之前优先关闭补全并 stopPropagation。
+  const escGuard = dbSrc.indexOf("e.key === 'Escape' && acState.open");
+  const cancelPos = dbSrc.indexOf('cancelQuery()');
+  assert.ok(escGuard >= 0, 'onWorkbenchKey 应包含 Escape+acState.open 优先 guard');
+  assert.ok(escGuard < cancelPos, 'Escape 关补全必须在 cancelQuery 之前');
+  assert.ok(dbSrc.indexOf('stopPropagation') >= 0, 'Escape 关闭补全应 stopPropagation 防冒泡误杀查询');
+
+  // 5. 按需懒加载契约：category 参数 + 分类缓存 + 表名池。
+  assert.ok(dbSrc.indexOf('&category=') >= 0, 'loadCategoryObjects 应传 category 参数');
+  assert.ok(dbSrc.indexOf('schemaCategoryCache') >= 0, '应使用 schemaCategoryCache 按分类缓存');
+  assert.ok(dbSrc.indexOf('schemaTableCache') >= 0, '应使用 schemaTableCache 预热表名');
+  assert.ok(dbSrc.indexOf('warmupSchemaTables') >= 0, '应存在 warmupSchemaTables 静默预热');
+  assert.ok(dbSrc.indexOf('state.schemaTableCache[schema]') >= 0, 'completionExtras 应优先读 schemaTableCache');
+
+  // 6. LOB 单元格呈现与防错位投影契约断言
+  assert.ok(dbSrc.indexOf('db-lob-badge') >= 0, '应包含 db-lob-badge 徽章');
+  assert.ok(dbSrc.indexOf('db-lob-token') >= 0, '应包含 db-lob-token 样式支持');
+  assert.ok(dbSrc.indexOf('resolveLobPayload') >= 0, '应包含 resolveLobPayload 统一解析逻辑');
+
+  // LOB 格式化测试
+  assert.strictEqual(db.cellText({ kind: 'clob', text: 'select *' }), 'select *');
+  assert.strictEqual(db.cellText({ kind: 'clob', bytes: 2048 }), '(CLOB 2.0 KB)');
+  assert.strictEqual(db.cellText({ kind: 'blob', bytes: 1048576 }), '(BLOB 1.0 MB)');
+
+  const clobWithToken = db.fmtCell({ kind: 'clob', bytes: 1024, token: 'signed-token-123' }, 2, 5);
+  assert.ok(clobWithToken.includes('db-lob-clob'), '应渲染 clob 徽章');
+  assert.ok(clobWithToken.includes('db-lob-token'), '包含 token 时应附加 db-lob-token 类');
+  assert.ok(clobWithToken.includes('data-lob-row="2"'), '带有对应行索引');
+  assert.ok(clobWithToken.includes('data-lob-col="5"'), '带有对应列索引');
+  assert.ok(clobWithToken.includes('CLOB (1.0 KB)'), '正确格式化 LOB 大小');
+
+  console.log('  database workbench lazy-load / suggest / shortcuts / LOB tokens ✓');
 }
 
 function loadCompareHelpers() {
@@ -1506,6 +1630,7 @@ function loadWaspackHelpers() {
   }
   return new Function(
     extractFn('normalizeManifest') + '\n' +
+    extractFn('duplicateManifestMessage') + '\n' +
     extractFn('packageBaseName') + '\n' +
     extractFn('normalizeBuildResponse') + '\n' +
     extractFn('canonicalStageSignature') + '\n' +
@@ -1516,12 +1641,14 @@ function loadWaspackHelpers() {
     extractFn('makeHandoffPayload') + '\n' +
     extractFn('createHandoff') + '\n' +
     extractFn('handoffTargetURL') + '\n' +
-    'return { normalizeBuildResponse, canonicalStageSignature, windowsPathKey, sameWindowsPath, comparableHistoryItem, previousComparable, makeHandoffPayload, createHandoff, handoffTargetURL };'
+    'return { normalizeManifest, duplicateManifestMessage, normalizeBuildResponse, canonicalStageSignature, windowsPathKey, sameWindowsPath, comparableHistoryItem, previousComparable, makeHandoffPayload, createHandoff, handoffTargetURL };'
   )();
 }
 
 function testWaspackHelpers() {
   const wp = loadWaspackHelpers();
+  assert.strictEqual(wp.duplicateManifestMessage('src\\com\\qa\\Demo.java\nsrc/com/qa/Demo.java'), '第 2 行与第 1 行重复。', '投产清单重复路径应在前端明确定位');
+  assert.strictEqual(wp.duplicateManifestMessage('# comment\n\nsrc/com/qa/Demo.java'), '', '注释和空行不应被当作重复清单');
   const body = { project_dir: 'D:\\src', output_dir: 'D:\\out', package_name: 'REL20260905.tar', manifest: 'a\\r\\nb', auto_pair: true, pack_type: 'app', batch_base_dir: '', chmod_mode: '777', output_policy: 'fail' };
   const signature = wp.canonicalStageSignature(body);
   assert.strictEqual(signature, wp.canonicalStageSignature(Object.assign({}, body, { output_policy: 'replace' })), '输出策略不应进入阶段签名或持久化身份');
@@ -1712,7 +1839,7 @@ async function main() {
     testEscapeRegex, testParseSearchTermsForHighlight, testHighlightAndTrim,
     testCssEscape, testPctText, testValidate, testEl, testConfirmDialog, testXSSInErrorText,
     testGotDoneDedupe, testNormalizeHighlightColor, testRenderHighlightedLine,
-    testTailViewer, testApplyCommandPath, testDatabaseSQLHelpers, testCompareHelpers, testWaspackHelpers,
+    testTailViewer, testApplyCommandPath, testDatabaseSQLHelpers, testDatabaseWorkbenchLazy, testCompareHelpers, testWaspackHelpers,
   ];
   let pass = 0, fail = 0;
   for (const t of tests) {

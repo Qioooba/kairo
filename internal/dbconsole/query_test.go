@@ -2,6 +2,7 @@ package dbconsole
 
 import (
 	"encoding/base64"
+	"errors"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -222,3 +223,17 @@ func TestBoundedCellScanner(t *testing.T) {
 	}
 }
 
+func TestOracleTTCErrorHandling(t *testing.T) {
+	ttcErr := errors.New("TTC error: received code 10 during response reading")
+	if !isConnectionFailure(ttcErr) {
+		t.Fatalf("expected TTC error to be recognized as connection failure, but got false")
+	}
+	if !isRetryableQueryFailure(ttcErr) {
+		t.Fatalf("expected TTC error to be retryable query failure for pool invalidation, but got false")
+	}
+
+	normalErr := errors.New("ORA-00942: table or view does not exist")
+	if isConnectionFailure(normalErr) {
+		t.Fatalf("expected normal ORA error to not be connection failure, but got true")
+	}
+}

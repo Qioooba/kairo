@@ -644,6 +644,7 @@
   }
 
   async function downloadZip() {
+    const requestRoot = root;
     if (state.busy) return;
     const miss = missingSource();
     if (miss) {
@@ -667,11 +668,13 @@
       /* triggerDownload 已经 toast */
     } finally {
       state.busy = false;
+      if (root !== requestRoot || !requestRoot || !requestRoot.isConnected) return;
       rerender();
     }
   }
 
   async function pushProject() {
+    const requestRoot = root;
     if (state.busy) return;
     const miss = missingSource();
     if (miss) {
@@ -690,6 +693,7 @@
     setBusyUI(true);
     try {
       const r = await postJSON('/api/wscodegen/push-project', payload);
+      if (root !== requestRoot || !requestRoot || !requestRoot.isConnected) return;
       state.preview = r.result || r;
       pickPreviewFile();
       const written = ((state.preview.written || []).length);
@@ -699,6 +703,7 @@
       toast(e.message || '写入工程失败', 'err');
     } finally {
       state.busy = false;
+      if (root !== requestRoot || !requestRoot || !requestRoot.isConnected) return;
       rerender();
       const card = document.getElementById('wsc-preview-card');
       if (card && state.preview) card.scrollIntoView({ block: 'nearest' });
@@ -706,6 +711,7 @@
   }
 
   async function runGenerate(dryRun) {
+    const requestRoot = root;
     if (state.busy) return;
     const miss = missingSource();
     if (miss) {
@@ -725,6 +731,7 @@
     try {
       const path = dryRun ? '/api/wscodegen/preview' : '/api/wscodegen/generate';
       const r = await postJSON(path, payload);
+      if (root !== requestRoot || !requestRoot || !requestRoot.isConnected) return;
       state.preview = r.result || r;
       pickPreviewFile();
       toast(dryRun ? '预览完成' : ('已写出 ' + ((state.preview.written || []).length) + ' 个文件'), 'ok');
@@ -732,6 +739,7 @@
       toast(e.message || '生成失败', 'err');
     } finally {
       state.busy = false;
+      if (root !== requestRoot || !requestRoot || !requestRoot.isConnected) return;
       rerender();
       const card = document.getElementById('wsc-preview-card');
       if (card && state.preview) card.scrollIntoView({ block: 'nearest' });
@@ -753,8 +761,10 @@
   }
 
   async function detectJdk(home, silent) {
+    const requestRoot = root;
     try {
       const r = await postJSON('/api/wscodegen/detect-jdk', { jdk_home: home || '' });
+      if (root !== requestRoot || !requestRoot || !requestRoot.isConnected) return;
       state.jdks = r.jdks || [];
       if (home && state.jdks.length) {
         state.form.jdk_home = home;
@@ -777,12 +787,14 @@
   }
 
   async function scanProject() {
+    const requestRoot = root;
     if (!state.form.project_dir) {
       toast('请先选择项目目录', 'warn');
       return;
     }
     try {
       const r = await postJSON('/api/wscodegen/scan-project', { project_dir: state.form.project_dir });
+      if (root !== requestRoot || !requestRoot || !requestRoot.isConnected) return;
       state.scan = r.scan || r;
       const jars = (state.scan.jars || []).map(function (j) { return j.path; });
       state.form.classpath_jars = jars;
@@ -802,7 +814,8 @@
 
   let root = null;
   function rerender() {
-    if (!root) return;
+    if (!root || !root.isConnected) return;
+    if (root.dataset.composing === "true") { root.dataset.pendingRender = "true"; return; }
     const cfg = root.querySelector('.wsc-pane-config');
     const y = cfg ? cfg.scrollTop : ((root.parentElement && root.parentElement.scrollTop) || window.scrollY || 0);
     root.innerHTML = '';
@@ -825,12 +838,21 @@
     }
     root = el('div', { class: 'wsc-page' });
     view.appendChild(root);
+    const mountedRoot = root;
+    mountedRoot.addEventListener('compositionstart', function () { mountedRoot.dataset.composing = 'true'; });
+    mountedRoot.addEventListener('compositionend', function () {
+      mountedRoot.dataset.composing = 'false';
+      if (mountedRoot.dataset.pendingRender === 'true' && root === mountedRoot) {
+        delete mountedRoot.dataset.pendingRender; rerender();
+      }
+    });
     rerender();
     try {
       const [eng, projects] = await Promise.all([
         getJSON('/api/wscodegen/engines'),
         getJSON('/api/wsdl/projects').catch(function () { return { projects: [] }; })
       ]);
+      if (view.dataset.renderToken !== renderToken || !root || !root.isConnected) return;
       state.engines = (eng && eng.engines) || [];
       state.projects = (projects && projects.projects) || [];
       rerender();

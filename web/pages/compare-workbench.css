@@ -135,6 +135,7 @@
   color: var(--text-dim);
   font-size: 12px;
   white-space: nowrap;
+  margin: 0;
 }
 
 .cmp2-field-inline select,

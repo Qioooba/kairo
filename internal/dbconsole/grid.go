@@ -3,6 +3,7 @@ package dbconsole
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"fmt"
 	"sort"
@@ -122,6 +123,13 @@ func BuildGridMutationSQL(kind, schema, table string, mutation GridMutation) (st
 	kind = strings.ToLower(strings.TrimSpace(kind))
 	if kind != KindOracle && kind != KindMySQL {
 		return "", nil, errors.New("网格编辑仅支持 Oracle/MySQL")
+	}
+	for _, values := range []map[string]any{mutation.Values, mutation.Key, mutation.Original} {
+		for name, value := range values {
+			if _, err := driver.DefaultParameterConverter.ConvertValue(value); err != nil {
+				return "", nil, fmt.Errorf("列 %s 包含复杂或截断值，请排除 LOB 预览后重新编辑", name)
+			}
+		}
 	}
 	tableSQL, err := gridQualifiedTable(kind, schema, table)
 	if err != nil {

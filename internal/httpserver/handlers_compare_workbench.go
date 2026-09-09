@@ -95,11 +95,12 @@ type compareSyncFailure struct {
 	Error   string `json:"error"`
 }
 type compareSyncResult struct {
-	Copied    int                  `json:"copied"`
-	Failed    int                  `json:"failed"`
-	Bytes     int64                `json:"bytes"`
-	Truncated bool                 `json:"truncated,omitempty"`
-	Failures  []compareSyncFailure `json:"failures,omitempty"`
+	Copied      int                  `json:"copied"`
+	Directories int                  `json:"directories"`
+	Failed      int                  `json:"failed"`
+	Bytes       int64                `json:"bytes"`
+	Truncated   bool                 `json:"truncated,omitempty"`
+	Failures    []compareSyncFailure `json:"failures,omitempty"`
 }
 type compareScanReq struct {
 	Left                 compareSourceSpec `json:"left"`
@@ -200,6 +201,9 @@ func (s *Server) openCompareFS(ctx context.Context, spec compareSourceSpec) (com
 			return nil, errors.New("FTP 地址不在已配置服务器白名单内")
 		}
 		s.audit.Write("compare.ftp.connect", "host", spec.Host, "port", normalizedCompareFTPPort(spec), "result", "allowed")
+		if spec.InsecureSkipVerify {
+			return nil, errors.New("FTP TLS certificate verification cannot be disabled")
+		}
 		return comparefs.DialFTP(ctx, comparefs.FTPConfig{Host: spec.Host, Port: spec.Port, Username: spec.Username, Password: spec.Password, TLSMode: spec.TLSMode, InsecureSkipVerify: spec.InsecureSkipVerify})
 	default:
 		return nil, fmt.Errorf("不支持的数据源类型: %s", spec.Kind)
@@ -457,7 +461,7 @@ func (s *Server) handleCompareSync(w http.ResponseWriter, r *http.Request) {
 		writeErrSanitized(w, 400, err)
 		return
 	}
-	writeJSON(w, 200, map[string]any{"ok": result.Failed == 0 && !result.Truncated, "copied": result.Copied, "failed": result.Failed, "bytes": result.Bytes, "truncated": result.Truncated, "failures": result.Failures})
+	writeJSON(w, 200, map[string]any{"ok": result.Failed == 0 && !result.Truncated, "copied": result.Copied, "directories": result.Directories, "failed": result.Failed, "bytes": result.Bytes, "truncated": result.Truncated, "failures": result.Failures})
 }
 
 func (s *Server) handleCompareSyncStart(w http.ResponseWriter, r *http.Request) {
@@ -568,8 +572,10 @@ func (s *Server) performCompareSync(ctx context.Context, req compareSyncReq, pro
 				continue
 			}
 			childRels := make([]string, 0, len(files))
+			plans = append(plans, syncPlanItem{relPath: rel, sourcePath: sourcePath, targetPath: targetPath, entry: entry})
 			for childRel, file := range files {
 				if file.IsDir {
+					plans = append(plans, syncPlanItem{relPath: rel + "/" + childRel, sourcePath: file.Path, targetPath: target.Join(targetPath, childRel), entry: file})
 					continue
 				}
 				childRels = append(childRels, childRel)
@@ -615,6 +621,14 @@ func (s *Server) performCompareSync(ctx context.Context, req compareSyncReq, pro
 		}
 		if progress != nil {
 			progress(index, len(plans), "正在同步 "+plan.relPath)
+		}
+		if plan.entry.IsDir {
+			if dirErr := target.MkdirAll(ctx, plan.targetPath, 0o755); dirErr != nil {
+				result.Failures = append(result.Failures, compareSyncFailure{RelPath: plan.relPath, Error: compareSyncErrorMessage(dirErr, "创建目录失败")})
+			} else {
+				result.Directories++
+			}
+			continue
 		}
 		if copyErr := copyCompareEntry(ctx, target, source, plan.sourcePath, plan.targetPath, plan.entry, plan.expected, plan.expectedMissing, req.Backup); copyErr != nil {
 			if errors.Is(copyErr, context.Canceled) {
@@ -794,8 +808,8 @@ func (s *Server) runCompareSync(ctx context.Context, job *compareJob, req compar
 	job.Status = "completed"
 	job.Phase = "done"
 	job.Message = "同步完成"
-	job.Current = result.Copied + result.Failed
-	job.Total = result.Copied + result.Failed
+	job.Current = result.Copied + result.Directories + result.Failed
+	job.Total = result.Copied + result.Directories + result.Failed
 	job.SyncResult = result
 }
 

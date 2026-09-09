@@ -60,9 +60,10 @@ func buildZipLocked(req Request) (*ZipResult, error) {
 	warDir := filepath.Join(outAbs, ExtractedWARDirName)
 	source := "war"
 	type zipEntry struct {
-		abs string
-		rel string // 相对 war 的 slash 路径
-		sz  int64
+		abs  string
+		rel  string // 相对 war 的 slash 路径
+		info os.FileInfo
+		sz   int64
 	}
 	var entries []zipEntry
 	tarPath := filepath.Join(outAbs, TarFileName(pkgName))
@@ -95,7 +96,7 @@ func buildZipLocked(req Request) (*ZipResult, error) {
 				return err
 			}
 			rel = filepath.ToSlash(rel)
-			entries = append(entries, zipEntry{abs: p, rel: rel, sz: info.Size()})
+			entries = append(entries, zipEntry{abs: p, rel: rel, sz: info.Size(), info: info})
 			return nil
 		})
 		if err != nil {
@@ -153,18 +154,22 @@ func buildZipLocked(req Request) (*ZipResult, error) {
 				err = fmt.Errorf("写 zip 条目 %s: %w", zipName, createErr)
 				break
 			}
-			in, openErr := os.Open(e.abs)
+			in, openErr := openRegularFile(e.abs, e.info)
 			if openErr != nil {
 				err = fmt.Errorf("打开 %s: %w", e.rel, openErr)
 				break
 			}
-			n, copyErr := io.Copy(w, in)
+			n, copyErr := io.Copy(w, io.LimitReader(in, MaxArchiveBytes-total+1))
 			_ = in.Close()
 			if copyErr != nil {
 				err = fmt.Errorf("写 zip 内容 %s: %w", zipName, copyErr)
 				break
 			}
 			total += n
+			if total > MaxArchiveBytes {
+				err = fmt.Errorf("archive exceeds size limit")
+				break
+			}
 		}
 	}
 	if err != nil {
@@ -212,7 +217,7 @@ func safeTarZipRel(name string) (string, error) {
 }
 
 func scanTarForZip(tarPath string) (files int, total int64, err error) {
-	f, err := os.Open(tarPath)
+	f, err := openRegularFile(tarPath)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -251,7 +256,7 @@ func scanTarForZip(tarPath string) (files int, total int64, err error) {
 }
 
 func copyTarIntoZip(zw *zip.Writer, tarPath, pkgName string) (int64, error) {
-	f, err := os.Open(tarPath)
+	f, err := openRegularFile(tarPath)
 	if err != nil {
 		return 0, err
 	}
@@ -269,6 +274,9 @@ func copyTarIntoZip(zw *zip.Writer, tarPath, pkgName string) (int64, error) {
 		}
 		if hdr.FileInfo().IsDir() {
 			continue
+		}
+		if hdr.Typeflag != tar.TypeReg && hdr.Typeflag != tar.TypeRegA {
+			return total, fmt.Errorf("unsupported tar entry type")
 		}
 		files++
 		if files > MaxFiles {

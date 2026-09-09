@@ -13,11 +13,12 @@ const (
 	// A compare job owns remote connections and potentially many goroutines.
 	// Bound it even when the browser disappears so those resources are not
 	// retained forever.
-	compareJobTimeout  = 15 * time.Minute
-	compareJobTTL      = 30 * time.Minute
-	compareJobLimit    = 8
-	compareStartLimit  = 16
-	compareStartWindow = time.Minute
+	compareJobTimeout       = 15 * time.Minute
+	compareJobTTL           = 30 * time.Minute
+	compareJobLimit         = 8
+	compareJobRetainedLimit = 16
+	compareStartLimit       = 16
+	compareStartWindow      = time.Minute
 )
 
 type compareJob struct {
@@ -107,6 +108,22 @@ func (m *compareJobManager) tryCreate(parent context.Context) (*compareJob, cont
 	if len(m.starts) >= compareStartLimit {
 		return nil, nil, errors.New("compare 任务创建过于频繁，请稍后重试")
 	}
+	// Evict completed results before admitting another job. Running jobs remain
+	// counted until their worker exits, even after cancellation.
+	for len(m.jobs) >= compareJobRetainedLimit {
+		var oldestKey string
+		var oldest time.Time
+		for key, job := range m.jobs {
+			v := job.view()
+			if v.Status != "running" && (oldestKey == "" || v.Updated.Before(oldest)) {
+				oldestKey, oldest = key, v.Updated
+			}
+		}
+		if oldestKey == "" {
+			break
+		}
+		delete(m.jobs, oldestKey)
+	}
 	raw := make([]byte, 12)
 	if _, err := rand.Read(raw); err != nil {
 		return nil, nil, errors.New("无法创建 compare 任务标识")
@@ -119,6 +136,16 @@ func (m *compareJobManager) tryCreate(parent context.Context) (*compareJob, cont
 	job := &compareJob{ID: id, Status: "running", Phase: "starting", Started: now, Updated: now, cancel: cancel}
 	m.jobs[id] = job
 	m.starts = append(m.starts, now)
+	// One bounded timer per admitted job also collects results when no more
+	// requests arrive; no permanent background goroutine is needed.
+	time.AfterFunc(compareJobTimeout+compareJobTTL, func() {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		if current, ok := m.jobs[id]; ok {
+			current.release()
+			delete(m.jobs, id)
+		}
+	})
 	return job, ctx, nil
 }
 

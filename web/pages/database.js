@@ -32,7 +32,8 @@
     selectedRow: 0, selectedCol: 0, localFilter: '', hiddenColumns: new Set(), columnWidths: {}, sort: null,
     prefs: normalizePrefs({}), lastError: null, inspectTab: 'fields', inspect: null, plan: [], gridReady: false,
     sessions: [], activeId: 0, redisKeyBase64: '', redisType: '', redisCursor: '0', redisNextCursor: '0', redisCursorHistory: [], redisOffset: 0, redisPageSize: 100, redisMembersHasNext: false,
-    dirtyCells: {}, isEditMode: false
+    dirtyCells: {}, isEditMode: false,
+    schemaTableCache: {}, schemaCategoryCache: {}, metadataCache: {}
   };
   let tabSeq = 0;
   let editorComposing = false;
@@ -211,7 +212,7 @@
     });
   }
   function addSession() {
-    if (state.sessions.length >= TAB_LIMIT + 4) return toast('已达到页签上限', 'warn');
+    if (state.sessions.length >= TAB_LIMIT) return toast('已达到页签上限', 'warn');
     saveEditorSQL();
     const s = createSession('');
     state.sessions.push(s);
@@ -242,20 +243,28 @@
     }
     restoreSessionChrome(s);
   }
-  function closeSession(id) {
+  async function closeSession(id) {
     if (state.sessions.length <= 1) return;
-    const index = state.sessions.findIndex(function (x) { return x.id === id; });
+    let index = state.sessions.findIndex(function (x) { return x.id === id; });
     if (index < 0) return;
     const dying = state.sessions[index];
     if (dying.transactionBusy) return toast('事务操作进行中，请稍后关闭页签', 'warn');
+    if (dying.controller) { dying.controller.abort(); return toast('正在取消查询，请查询结束后再关闭页签', 'info'); }
     if (id === state.activeId) saveEditorSQL();
     const dirtyCount = Object.keys(dying.dirtyCells || {}).length;
     const hasTransaction = !!dying.transactionPending;
     if ((dirtyCount || hasTransaction) && !confirm('关闭该页签将回滚未提交事务' + (dirtyCount ? '并放弃 ' + dirtyCount + ' 处网格修改' : '') + '，确定继续吗？')) return;
     if (hasTransaction && dying.sourceId) {
-      api('POST', '/api/database/transaction', { source_id: dying.sourceId, session_id: dying.transactionId, action: 'ROLLBACK' }).catch(function () {});
+      dying.transactionBusy = true;
+      try {
+        await api('POST', '/api/database/transaction', { source_id: dying.sourceId, session_id: dying.transactionId, action: 'ROLLBACK' });
+        dying.transactionPending = false; dying.gridEditsStaged = false; dying.dirtyCells = {};
+      } catch (error) { toast('回滚失败，已保留页签和修改：' + error.message, 'err'); return; }
+      finally { dying.transactionBusy = false; updateTransactionControls(); }
     }
     if (dying.controller) { try { dying.controller.abort(); } catch (_) {} }
+    index = state.sessions.indexOf(dying);
+    if (index < 0 || state.sessions.length <= 1) return;
     state.sessions.splice(index, 1);
     const next = state.sessions[Math.min(index, state.sessions.length - 1)];
     state.activeId = next.id;
@@ -293,7 +302,7 @@
       switchSession(existing.id);
       return;
     }
-    if (state.sessions.length >= TAB_LIMIT + 3) {
+    if (state.sessions.length >= TAB_LIMIT) {
       const oldObjIdx = state.sessions.findIndex(function (s) { return s.type === 'object'; });
       if (oldObjIdx >= 0) {
         state.sessions.splice(oldObjIdx, 1);
@@ -517,7 +526,7 @@
       expandKey: ['Space', 'Tab', 'Enter'].includes(x.expandKey) ? x.expandKey : 'Space',
       shortcuts: shortcuts,
       gridRows: Math.max(6, Math.min(40, Number(x.gridRows) || DEFAULT_PREFS.gridRows)),
-      snippets: Array.isArray(x.snippets) && x.snippets.length ? x.snippets : DEFAULT_PREFS.snippets.map(v => Object.assign({}, v))
+      snippets: Array.isArray(x.snippets) ? x.snippets : DEFAULT_PREFS.snippets.map(v => Object.assign({}, v))
     };
   }
   function legacyPrefs() {
@@ -596,8 +605,10 @@
   function cellText(v) {
     if (v == null) return 'NULL';
     if (typeof v === 'object') {
+      if (v.kind === 'clob') return v.text !== undefined && v.text !== null ? String(v.text) : (v.display ? v.display : '(CLOB ' + formatBytes(v.bytes || 0) + ')');
+      if (v.kind === 'blob') return v.display ? v.display : '(BLOB ' + formatBytes(v.bytes || 0) + ')';
       if (v.kind === 'text') return String(v.preview || '');
-      if (v.kind === 'binary') return '[BINARY ' + v.bytes + ' B]';
+      if (v.kind === 'binary') return '[BINARY ' + (v.bytes || 0) + ' B]';
       return JSON.stringify(v);
     }
     return String(v);
@@ -609,27 +620,34 @@
     if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
     return (bytes / 1048576).toFixed(1) + ' MB';
   }
+
   function fmtCell(v, rowIdx, colIdx) {
     if (v == null) return '<span class="db-null">NULL</span>';
     if (typeof v === 'object') {
       if (v.kind === 'clob') {
-        const sz = formatBytes(v.bytes || 0);
-        return '<span class="db-lob-badge db-lob-clob" data-lob-type="clob" data-lob-row="' + rowIdx + '" data-lob-col="' + colIdx + '" title="点击查看 CLOB 文本 (' + sz + ')">CLOB (' + sz + ')</span>';
+        const sz = v.token ? Number(v.length || 0).toLocaleString() + ' 字符' : formatBytes(v.bytes || 0);
+        const lobLabel = v.database_type === 'NCLOB' ? 'NCLOB' : 'CLOB';
+        const tokenCls = v.token ? ' db-lob-token' : '';
+        const title = v.token ? '点击查看/流式下载完整 CLOB (' + sz + ')' : '点击查看 CLOB 文本 (' + sz + ')';
+        return '<button type="button" class="db-lob-badge db-lob-clob' + tokenCls + '" data-lob-type="clob" data-lob-row="' + rowIdx + '" data-lob-col="' + colIdx + '" title="' + h(title) + '">' + lobLabel + ' (' + sz + ')</button>';
       }
       if (v.kind === 'blob') {
-        const sz = formatBytes(v.bytes || 0);
-        return '<span class="db-lob-badge db-lob-blob" data-lob-type="blob" data-lob-row="' + rowIdx + '" data-lob-col="' + colIdx + '" title="点击查看十六进制检视器 (' + sz + ')">BLOB (' + sz + ')</span>';
+        const sz = formatBytes(v.token ? v.length : v.bytes || 0);
+        const tokenCls = v.token ? ' db-lob-token' : '';
+        const title = v.token ? '点击查看/流式下载完整 BLOB (' + sz + ')' : '点击查看十六进制检视器 (' + sz + ')';
+        return '<button type="button" class="db-lob-badge db-lob-blob' + tokenCls + '" data-lob-type="blob" data-lob-row="' + rowIdx + '" data-lob-col="' + colIdx + '" title="' + h(title) + '">BLOB (' + sz + ')</button>';
       }
-      if (v.kind === 'text') return h(v.preview) + '<span class="db-cut">…(' + h(v.bytes) + ' B)</span>';
+      if (v.kind === 'text') return h(v.preview) + '<span class="db-cut">(截断 ' + h(v.bytes) + ' B)</span>';
       if (v.kind === 'binary') return '<span class="db-binary">BINARY ' + h(v.bytes) + ' B</span>';
       return h(JSON.stringify(v));
     }
     return h(v);
   }
+
   function fmtRedisLabel(v) {
     if (v == null) return '';
     if (typeof v !== 'object') return String(v);
-    if (v.kind === 'binary') return '[BINARY ' + v.bytes + ' B] ' + (v.preview_base64 || '');
+    if (v.kind === 'binary') return '[BINARY ' + (v.bytes || 0) + ' B] ' + (v.preview_base64 || '');
     if (v.kind === 'text') return String(v.preview || '') + '…';
     return JSON.stringify(v);
   }
@@ -637,27 +655,29 @@
   /* ---------- 数据库工作台高阶扩展能力 (LOB查看器 / 行内编辑 / 右键增强 / 会话防丢) ---------- */
 
   function detectTableName() {
-    const s = sess();
-    const sql = String((s && s.lastSQL) || '').trim();
-    const m = sql.match(/\bFROM\s+([A-Za-z0-9_."$]+)/i);
-    if (m && m[1]) return m[1].replace(/["`]/g, '');
-    if (state.inspect && state.inspect.object) return state.inspect.object;
+    const target = getGridContext();
+    if (target) return (target.schema ? quoteIdentifier(target.schema) + '.' : '') + quoteIdentifier(target.table);
     return 'TARGET_TABLE';
   }
 
   function sqlValueLiteral(val, dbType) {
     if (val === null || val === undefined) return 'NULL';
     if (typeof val === 'object') {
-      if (val.kind === 'clob') return "'" + String(val.text || '').replace(/'/g, "''") + "'";
+      if (val.kind === 'clob') return sqlValueLiteral(String(val.text || ''), dbType);
       if (val.kind === 'blob') {
-        if (state.source && state.source.kind === 'oracle') return "HEXTORAW('" + (val.hex || '') + "')";
+        if (effectiveSource() && effectiveSource().kind === 'oracle') return "HEXTORAW('" + (val.hex || '') + "')";
         return "0x" + (val.hex || '');
       }
     }
     if (typeof val === 'number') return String(val);
     if (typeof val === 'boolean') return val ? '1' : '0';
     const str = String(val);
-    if (state.source && state.source.kind === 'oracle' && /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}/.test(str)) {
+    if (effectiveSource() && effectiveSource().kind === 'mysql' && /[\\\u0000\r\n\u001a]/.test(str)) {
+      const bytes = new TextEncoder().encode(str);
+      const hex = Array.from(bytes, function (value) { return value.toString(16).padStart(2, '0'); }).join('');
+      return "CONVERT(X'" + hex + "' USING utf8mb4)";
+    }
+    if (effectiveSource() && effectiveSource().kind === 'oracle' && /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}/.test(str)) {
       const dStr = str.replace('T', ' ').slice(0, 19);
       return "TO_DATE('" + dStr + "', 'YYYY-MM-DD HH24:MI:SS')";
     }
@@ -669,7 +689,7 @@
     if (!row) return;
     const table = detectTableName();
     const cols = visibleColumns();
-    const colNames = cols.map(i => state.columns[i].name).join(', ');
+    const colNames = cols.map(i => quoteIdentifier(state.columns[i].name)).join(', ');
     const valLiterals = cols.map(i => {
       const dirty = state.dirtyCells && state.dirtyCells[rowIdx + '_' + i];
       const v = dirty ? dirty.newVal : row[i];
@@ -682,20 +702,17 @@
   state.tablePKCache = state.tablePKCache || {};
   async function getTablePrimaryKeys(tableName) {
     if (!tableName || tableName === 'TARGET_TABLE') return [];
-    if (state.tablePKCache[tableName]) return state.tablePKCache[tableName];
-    let schema = (q('db-schema') && q('db-schema').value) || '';
-    let obj = tableName;
-    if (tableName.includes('.')) {
-      const parts = tableName.split('.');
-      schema = parts[0].replace(/["`]/g, '');
-      obj = parts[1].replace(/["`]/g, '');
-    }
+    const target = getGridContext();
+    if (!target) return [];
+    const schema = target.schema, obj = target.table;
     const source = effectiveSource();
     if (!source) return [];
+    const cacheKey = JSON.stringify([source.id, schema, obj]);
+    if (state.tablePKCache[cacheKey]) return state.tablePKCache[cacheKey];
     try {
       const data = await api('GET', '/api/database/metadata/fields?source_id=' + encodeURIComponent(source.id) + '&schema=' + encodeURIComponent(schema) + '&object=' + encodeURIComponent(obj));
       const pks = (data.fields || []).filter(f => f.primary_key).map(f => f.name);
-      state.tablePKCache[tableName] = pks;
+      state.tablePKCache[cacheKey] = pks;
       return pks;
     } catch (_) {
       return [];
@@ -709,8 +726,8 @@
         const colIdx = state.columns.findIndex(c => String(c.name).toUpperCase() === String(pk).toUpperCase());
         if (colIdx >= 0) {
           const v = row[colIdx];
-          if (v === null || v === undefined) matched.push(state.columns[colIdx].name + ' IS NULL');
-          else matched.push(state.columns[colIdx].name + ' = ' + sqlValueLiteral(v, state.columns[colIdx].database_type));
+          if (v === null || v === undefined) matched.push(quoteIdentifier(state.columns[colIdx].name) + ' IS NULL');
+          else matched.push(quoteIdentifier(state.columns[colIdx].name) + ' = ' + sqlValueLiteral(v, state.columns[colIdx].database_type));
         }
       }
       if (matched.length === pks.length) {
@@ -724,12 +741,12 @@
     const table = detectTableName();
     const idIdx = state.columns.findIndex(c => String(c.name).toUpperCase() === 'ID' || String(c.name).toUpperCase() === table.toUpperCase() + '_ID');
     if (idIdx >= 0 && row[idIdx] != null) {
-      return state.columns[idIdx].name + ' = ' + sqlValueLiteral(row[idIdx], state.columns[idIdx].database_type);
+      return quoteIdentifier(state.columns[idIdx].name) + ' = ' + sqlValueLiteral(row[idIdx], state.columns[idIdx].database_type);
     }
     const conditions = visibleColumns().map(i => {
       const v = row[i];
-      if (v === null || v === undefined) return state.columns[i].name + ' IS NULL';
-      return state.columns[i].name + ' = ' + sqlValueLiteral(v, state.columns[i].database_type);
+      if (v === null || v === undefined) return quoteIdentifier(state.columns[i].name) + ' IS NULL';
+      return quoteIdentifier(state.columns[i].name) + ' = ' + sqlValueLiteral(v, state.columns[i].database_type);
     });
     return conditions.join(' AND ');
   }
@@ -738,7 +755,7 @@
     const row = state.rows[rowIdx];
     if (!row) return;
     const table = detectTableName();
-    const colName = state.columns[colIdx].name;
+    const colName = quoteIdentifier(state.columns[colIdx].name);
     const dirty = state.dirtyCells && state.dirtyCells[rowIdx + '_' + colIdx];
     const val = dirty ? dirty.newVal : row[colIdx];
     const valLit = sqlValueLiteral(val, state.columns[colIdx].database_type);
@@ -759,7 +776,7 @@
     const setClauses = targetCols.map(i => {
       const dirty = state.dirtyCells && state.dirtyCells[rowIdx + '_' + i];
       const val = dirty ? dirty.newVal : row[i];
-      return state.columns[i].name + ' = ' + sqlValueLiteral(val, state.columns[i].database_type);
+      return quoteIdentifier(state.columns[i].name) + ' = ' + sqlValueLiteral(val, state.columns[i].database_type);
     }).join(', ');
     const whereClause = buildWhereClause(row, pks);
     const updateSQL = 'UPDATE ' + table + ' SET ' + setClauses + ' WHERE ' + whereClause + ';';
@@ -777,7 +794,7 @@
     const setClauses = targetCols.map(i => {
       const dirty = state.dirtyCells && state.dirtyCells[rowIdx + '_' + i];
       const val = dirty ? dirty.newVal : row[i];
-      return state.columns[i].name + ' = ' + sqlValueLiteral(val, state.columns[i].database_type);
+      return quoteIdentifier(state.columns[i].name) + ' = ' + sqlValueLiteral(val, state.columns[i].database_type);
     }).join(', ');
     const whereClause = buildWhereClause(row, pks);
     const content = '-- Exported from Kairo Database Workbench\nUPDATE ' + table + ' SET ' + setClauses + ' WHERE ' + whereClause + ';\nCOMMIT;\n';
@@ -789,7 +806,7 @@
     if (!row) return;
     const table = detectTableName();
     const cols = visibleColumns();
-    const colNames = cols.map(i => state.columns[i].name).join(', ');
+    const colNames = cols.map(i => quoteIdentifier(state.columns[i].name)).join(', ');
     const valLiterals = cols.map(i => {
       const dirty = state.dirtyCells && state.dirtyCells[rowIdx + '_' + i];
       const v = dirty ? dirty.newVal : row[i];
@@ -823,44 +840,266 @@
     setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 500);
   }
 
-  function openLobModal(val, colName) {
+  function openLobModal(val, colName, rowIdx, colIdx) {
     if (!val) return;
     const isClob = val.kind === 'clob';
-    const sizeText = formatBytes(val.bytes || 0);
-    const truncNote = val.truncated ? '（已截断预览）' : '';
-    const title = (isClob ? 'CLOB 文本查看器' : 'BLOB / 二进制十六进制检视器') + ' · ' + (colName || '字段') + ' (' + sizeText + truncNote + ')';
+    const sizeText = val.token && isClob ? Number(val.length || 0).toLocaleString() + ' 字符' : formatBytes(val.token ? val.length : val.bytes || 0);
+    const truncNote = val.truncated ? '（预览已截断）' : '';
+    const textType = val.database_type === 'NCLOB' ? 'NCLOB' : 'CLOB';
+    const title = (isClob ? textType + ' 文本查看器' : 'BLOB / 二进制十六进制检视器') + ' · ' + (colName || '字段') + ' (' + sizeText + truncNote + ')';
 
     const body = el('div', { class: 'db-lob-viewer-body' });
     if (isClob) {
-      const text = String(val.text || '');
-      body.innerHTML = '<div class="db-lob-toolbar"><label class="db-lob-check"><input type="checkbox" id="db-lob-wrap" checked> 自动换行</label><span class="muted">共 ' + text.length + ' 字符 · ' + sizeText + ' ' + truncNote + '</span><button class="btn btn-xs" id="db-lob-copy">复制文本</button><button class="btn btn-xs" id="db-lob-download">下载文件</button></div><pre class="db-lob-text" id="db-lob-pre">' + h(text) + '</pre>';
-      const dlg = Kairo.overlays.modal({ title, width: 840, body });
-      const pre = q('db-lob-pre');
-      const wrap = q('db-lob-wrap');
-      if (wrap && pre) wrap.onchange = function () { pre.style.whiteSpace = this.checked ? 'pre-wrap' : 'pre'; };
-      if (q('db-lob-copy')) q('db-lob-copy').onclick = () => copyDBText(text, 'CLOB 文本已复制');
-      if (q('db-lob-download')) q('db-lob-download').onclick = () => downloadBlob(new Blob([text], { type: 'text/plain;charset=utf-8' }), (colName || 'clob') + '.txt');
+      const hasContent = val.text !== undefined && val.text !== null;
+      if (hasContent) {
+        const text = String(val.text || '');
+        body.innerHTML = '<div class="db-lob-toolbar">' +
+          '<label class="db-lob-check"><input type="checkbox" id="db-lob-wrap" checked> 自动换行</label>' +
+          '<span class="muted">当前预览 ' + new TextEncoder().encode(text).byteLength.toLocaleString() + ' 字节 · 字段大小 ' + sizeText + ' ' + truncNote + '</span>' +
+          '<button class="btn btn-xs" id="db-lob-copy">复制文本</button>' +
+          '<button class="btn btn-xs" id="db-lob-download">下载预览</button>' +
+          '<button class="btn btn-primary btn-xs" id="db-lob-full">下载完整内容</button>' +
+          '</div>' +
+          '<pre class="db-lob-text" id="db-lob-pre">' + h(text) + '</pre>' +
+          '<div class="muted" style="margin-top:6px;font-size:11px">可下载当前预览；完整下载需要有效的单表浏览引用。</div>';
+        const dlg = Kairo.overlays.modal({ title, width: 840, body });
+        const pre = q('db-lob-pre');
+        const wrap = q('db-lob-wrap');
+        if (wrap && pre) wrap.onchange = function () { pre.style.whiteSpace = this.checked ? 'pre-wrap' : 'pre'; };
+        if (q('db-lob-copy')) q('db-lob-copy').onclick = () => copyDBText(text, 'CLOB 文本已复制');
+        if (q('db-lob-download')) q('db-lob-download').onclick = () => downloadBlob(new Blob([text], { type: 'text/plain;charset=utf-8' }), (colName || 'clob') + '.txt');
+        if (q('db-lob-full')) q('db-lob-full').onclick = () => downloadFullLob(rowIdx, colIdx, colName, isClob, val);
+      } else {
+        // 虚拟投影 LOB：未预先拉取正文（阻断 TTC Code 10），提供在线预览与下载
+        body.innerHTML = '<div class="db-lob-toolbar">' +
+          '<span class="muted">字段大小：' + sizeText + '</span>' +
+          '<button class="btn btn-primary btn-xs" id="db-lob-fetch-preview">在线预览文本</button>' +
+          '<button class="btn btn-primary btn-xs" id="db-lob-full">下载完整内容</button>' +
+          '</div>' +
+          '<div class="db-lob-placeholder" id="db-lob-placeholder" style="padding:28px 16px;text-align:center;background:var(--bg-1);border:1px dashed var(--line);border-radius:6px;">' +
+          '<div style="font-size:14px;font-weight:600;margin-bottom:8px;">CLOB 列已安全投影</div>' +
+          '<div class="muted" style="font-size:12px;line-height:1.6;max-width:540px;margin:0 auto 16px;">' +
+          '正文尚未加载。可在线预览前 256 KB，或下载完整内容。' +
+          '</div>' +
+          '<div style="display:inline-flex;gap:10px;">' +
+          '<button class="btn btn-sm btn-primary" id="db-lob-big-preview">在线加载预览文本</button>' +
+          '<button class="btn btn-sm" id="db-lob-big-full">流式下载完整内容</button>' +
+          '</div>' +
+          '</div>' +
+          '<pre class="db-lob-text" id="db-lob-pre" style="display:none;"></pre>' +
+          '<div class="muted" style="margin-top:6px;font-size:11px">下载引用在 5 分钟后过期，过期后请重新查询。</div>';
+        const dlg = Kairo.overlays.modal({ title, width: 840, body });
+        const loadPreview = async (btn) => {
+          if (btn) { btn.disabled = true; btn.textContent = '正在加载…'; }
+          const resolved = await resolveLobPayload(rowIdx, colIdx, colName, isClob, val);
+          if (!resolved) { if (btn) { btn.disabled = false; btn.textContent = '在线预览文本'; } return; }
+          try {
+            const resp = await fetch('/api/database/lob', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(resolved.payload)
+            });
+            if (!resp.ok) {
+              let msg = '加载预览失败：HTTP ' + resp.status;
+              try { const j = await resp.json(); if (j && j.error) msg = j.error; } catch (_) {}
+              toast(msg, 'err');
+              if (btn) { btn.disabled = false; btn.textContent = '重试加载预览'; }
+              return;
+            }
+            const reader = resp.body.getReader();
+            const decoder = new TextDecoder();
+            let text = '', total = 0;
+            const LIMIT = 262144; // 256KB
+            let truncated = false;
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) { text += decoder.decode(); break; }
+              const remain = LIMIT - total;
+              const accepted = value.subarray(0, Math.max(0, remain));
+              text += decoder.decode(accepted, { stream: true });
+              total += accepted.length;
+              if (value.length > remain || total === LIMIT) {
+                truncated = true;
+                await reader.cancel();
+                break;
+              }
+            }
+            val.text = text;
+            val.truncated = truncated || total > LIMIT;
+            dlg.close();
+            openLobModal(val, colName, rowIdx, colIdx);
+            toast('CLOB 预览文本已加载', 'ok');
+          } catch (e) {
+            toast('加载异常：' + (e && e.message ? e.message : e), 'err');
+            if (btn) { btn.disabled = false; btn.textContent = '重试加载预览'; }
+          }
+        };
+        if (q('db-lob-fetch-preview')) q('db-lob-fetch-preview').onclick = function () { loadPreview(this); };
+        if (q('db-lob-big-preview')) q('db-lob-big-preview').onclick = function () { loadPreview(this); };
+        if (q('db-lob-full')) q('db-lob-full').onclick = () => downloadFullLob(rowIdx, colIdx, colName, isClob, val);
+        if (q('db-lob-big-full')) q('db-lob-big-full').onclick = () => downloadFullLob(rowIdx, colIdx, colName, isClob, val);
+      }
     } else {
-      const hex = String(val.hex || '');
-      const b64 = String(val.preview_base64 || '');
-      body.innerHTML = '<div class="db-lob-toolbar"><span class="muted">共 ' + (val.bytes || (hex.length / 2)) + ' 字节 ' + truncNote + '</span><button class="btn btn-xs" id="db-lob-copy-hex">复制 Hex</button><button class="btn btn-xs" id="db-lob-download-bin">下载原始二进制</button></div><div class="db-lob-hex-view" id="db-lob-hex"></div>';
-      const dlg = Kairo.overlays.modal({ title, width: 900, body });
-      renderHexDump(q('db-lob-hex'), hex, b64);
-      if (q('db-lob-copy-hex')) q('db-lob-copy-hex').onclick = () => copyDBText(hex, '十六进制数据已复制');
-      if (q('db-lob-download-bin')) q('db-lob-download-bin').onclick = () => {
-        try {
-          const bin = atob(b64);
-          const buf = new Uint8Array(bin.length);
-          for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
-          downloadBlob(new Blob([buf], { type: 'application/octet-stream' }), (colName || 'blob') + '.bin');
-        } catch (e) {
-          toast('生成二进制下载失败：' + e.message, 'err');
-        }
-      };
+      const hasContent = Boolean(val.hex || val.preview_base64);
+      if (hasContent) {
+        const hex = String(val.hex || '');
+        const b64 = String(val.preview_base64 || '');
+        body.innerHTML = '<div class="db-lob-toolbar"><span class="muted">共 ' + (val.bytes || (hex.length / 2)) + ' 字节 ' + truncNote + '</span><button class="btn btn-xs" id="db-lob-copy-hex">复制 Hex</button><button class="btn btn-xs" id="db-lob-download-bin">下载预览</button><button class="btn btn-primary btn-xs" id="db-lob-full-blob">下载完整内容</button></div><div class="db-lob-hex-view" id="db-lob-hex"></div><div class="muted" style="margin-top:6px;font-size:11px">下载引用在 5 分钟后过期，过期后请重新查询。</div>';
+        const dlg = Kairo.overlays.modal({ title, width: 900, body });
+        renderHexDump(q('db-lob-hex'), hex, b64);
+        if (q('db-lob-copy-hex')) q('db-lob-copy-hex').onclick = () => copyDBText(hex, '十六进制数据已复制');
+        if (q('db-lob-download-bin')) q('db-lob-download-bin').onclick = () => {
+          try {
+            const bin = atob(b64);
+            const buf = new Uint8Array(bin.length);
+            for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+            downloadBlob(new Blob([buf], { type: 'application/octet-stream' }), (colName || 'blob') + '.bin');
+          } catch (e) {
+            toast('生成二进制下载失败：' + e.message, 'err');
+          }
+        };
+        if (q('db-lob-full-blob')) q('db-lob-full-blob').onclick = () => downloadFullLob(rowIdx, colIdx, colName, isClob, val);
+      } else {
+        // 虚拟投影 BLOB
+        body.innerHTML = '<div class="db-lob-toolbar">' +
+          '<span class="muted">元数据大小：共 ' + (val.length || val.bytes || 0) + ' 字节 · ' + sizeText + '（单表安全投影模式）</span>' +
+          '<button class="btn btn-primary btn-xs" id="db-lob-fetch-blob-preview">在线预览 Hex</button>' +
+          '<button class="btn btn-primary btn-xs" id="db-lob-full-blob">下载完整内容</button>' +
+          '</div>' +
+          '<div class="db-lob-placeholder" id="db-lob-blob-placeholder" style="padding:28px 16px;text-align:center;background:var(--bg-1);border:1px dashed var(--line);border-radius:6px;">' +
+          '<div style="font-size:14px;font-weight:600;margin-bottom:8px;">BLOB 列已安全投影</div>' +
+          '<div class="muted" style="font-size:12px;line-height:1.6;max-width:540px;margin:0 auto 16px;">' +
+          '二进制内容尚未加载。可在线预览，或下载完整文件。' +
+          '</div>' +
+          '<div style="display:inline-flex;gap:10px;">' +
+          '<button class="btn btn-sm btn-primary" id="db-lob-big-blob-preview">在线加载预览 Hex</button>' +
+          '<button class="btn btn-sm" id="db-lob-big-blob-full">流式下载完整内容</button>' +
+          '</div>' +
+          '</div>' +
+          '<div class="db-lob-hex-view" id="db-lob-hex" style="display:none;"></div>' +
+          '<div class="muted" style="margin-top:6px;font-size:11px">下载引用在 5 分钟后过期，过期后请重新查询。</div>';
+        const dlg = Kairo.overlays.modal({ title, width: 900, body });
+        const loadBlobPreview = async (btn) => {
+          if (btn) { btn.disabled = true; btn.textContent = '正在加载…'; }
+          const resolved = await resolveLobPayload(rowIdx, colIdx, colName, isClob, val);
+          if (!resolved) { if (btn) { btn.disabled = false; btn.textContent = '在线预览 Hex'; } return; }
+          try {
+            const resp = await fetch('/api/database/lob', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(resolved.payload)
+            });
+            if (!resp.ok) {
+              let msg = '加载预览失败：HTTP ' + resp.status;
+              try { const j = await resp.json(); if (j && j.error) msg = j.error; } catch (_) {}
+              toast(msg, 'err');
+              if (btn) { btn.disabled = false; btn.textContent = '重试在线预览'; }
+              return;
+            }
+            const reader = resp.body.getReader();
+            const chunks = [];
+            let total = 0;
+            const LIMIT = 65536; // 64KB
+            let truncated = false;
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              if (value) {
+                total += value.length;
+                if (total - value.length < LIMIT) {
+                  const need = LIMIT - (total - value.length);
+                  if (value.length > need) {
+                    chunks.push(value.slice(0, need));
+                    truncated = true;
+                    reader.cancel();
+                    break;
+                  } else {
+                    chunks.push(value);
+                  }
+                } else {
+                  truncated = true;
+                  reader.cancel();
+                  break;
+                }
+              }
+            }
+            const allBytes = new Uint8Array(chunks.reduce((acc, c) => acc + c.length, 0));
+            let offset = 0;
+            for (const c of chunks) { allBytes.set(c, offset); offset += c.length; }
+            let hex = '';
+            for (let i = 0; i < allBytes.length; i++) {
+              hex += allBytes[i].toString(16).padStart(2, '0');
+            }
+            val.hex = hex;
+            let binStr = '';
+            for (let i = 0; i < allBytes.length; i++) binStr += String.fromCharCode(allBytes[i]);
+            val.preview_base64 = btoa(binStr);
+            val.truncated = truncated || total > LIMIT;
+            dlg.close();
+            openLobModal(val, colName, rowIdx, colIdx);
+            toast('BLOB 预览已加载', 'ok');
+          } catch (e) {
+            toast('加载异常：' + (e && e.message ? e.message : e), 'err');
+            if (btn) { btn.disabled = false; btn.textContent = '重试在线预览'; }
+          }
+        };
+        if (q('db-lob-fetch-blob-preview')) q('db-lob-fetch-blob-preview').onclick = function () { loadBlobPreview(this); };
+        if (q('db-lob-big-blob-preview')) q('db-lob-big-blob-preview').onclick = function () { loadBlobPreview(this); };
+        if (q('db-lob-full-blob')) q('db-lob-full-blob').onclick = () => downloadFullLob(rowIdx, colIdx, colName, isClob, val);
+        if (q('db-lob-big-blob-full')) q('db-lob-big-blob-full').onclick = () => downloadFullLob(rowIdx, colIdx, colName, isClob, val);
+      }
     }
   }
 
-  function renderHexDump(host, hexStr, b64) {
+  // 统一解析 LOB 请求载荷（优先 Signed Token，其次 ROWID，最后主键）
+  async function resolveLobPayload(rowIdx, colIdx, colName, isClob, valObj) {
+    const targetVal = valObj || (state.rows[rowIdx] && state.rows[rowIdx][colIdx]);
+    if (targetVal && typeof targetVal === 'object' && targetVal.token) {
+      return {
+        payload: {
+          token: targetVal.token
+        },
+        table: targetVal.table || detectTableName(),
+        useRowId: false,
+        isToken: true
+      };
+    }
+    toast('该查询结果没有稳定行标识，无法重新下载。请使用单表浏览获取完整内容。', 'warn');
+    return null;
+  }
+
+  // 企业版：按 Token/主键/ROWID 重查并流式下载完整 LOB（结论 2.3/2.6/3.3）
+  async function downloadFullLob(rowIdx, colIdx, colName, isClob, valObj) {
+    const resolved = await resolveLobPayload(rowIdx, colIdx, colName, isClob, valObj);
+    if (!resolved) return;
+    const { payload, table, useRowId, isToken } = resolved;
+    const label = isToken ? 'Token' : (useRowId ? 'ROWID' : '主键');
+    toast('正在按 ' + label + ' 重查并流式下载完整 ' + (isClob ? 'CLOB' : 'BLOB') + '…', 'info');
+    try {
+      const resp = await fetch('/api/database/lob', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (!resp.ok) {
+        let msg = '下载失败：HTTP ' + resp.status;
+        try { const j = await resp.json(); if (j && j.error) msg = j.error; } catch (_) { try { msg = await resp.text(); } catch (_) {} }
+        toast(msg, 'err');
+        return;
+      }
+      const blob = await resp.blob();
+      const cd = resp.headers.get('Content-Disposition') || '';
+      let fname = ((table || 'lob') + '_' + colName + (isClob ? '.txt' : '.bin'));
+      const m = cd.match(/filename*=UTF-8''([^;]+)/);
+      if (m) try { fname = decodeURIComponent(m[1]); } catch (_) {}
+      downloadBlob(blob, fname);
+      toast('完整 ' + (isClob ? 'CLOB' : 'BLOB') + ' 已下载（' + formatBytes(blob.size) + '）', 'ok');
+    } catch (e) {
+      toast('下载异常：' + (e && e.message ? e.message : e), 'err');
+    }
+  }
+
+    function renderHexDump(host, hexStr, b64) {
     if (!host) return;
     let rawBytes = [];
     if (b64) {
@@ -887,7 +1126,7 @@
     host.innerHTML = '<pre class="db-hex-pre">' + h(lines.join('\n')) + '</pre>';
   }
 
-  function startCellEdit(rowIdx, colIdx, td) {
+  function startCellEdit(rowIdx, colIdx, td, setNull) {
     if (sess() && (sess().transactionBusy || sess().gridEditsStaged)) return;
     if (!canWriteDatabase()) {
       toast('当前账号只有查询权限，不能编辑结果', 'warn');
@@ -905,19 +1144,24 @@
     if (!td || td.querySelector('input.db-cell-input')) return;
     const dirtyKey = rowIdx + '_' + colIdx;
     const currentVal = (state.dirtyCells && state.dirtyCells[dirtyKey]) ? state.dirtyCells[dirtyKey].newVal : state.rows[rowIdx][colIdx];
-    const textVal = cellText(currentVal);
+    if (currentVal && typeof currentVal === 'object') return toast('复杂字段请使用专用查看器，不能直接编辑预览值', 'warn');
+    const textVal = currentVal == null ? '' : cellText(currentVal);
     
-    td.innerHTML = '<input class="db-cell-input" value="' + h(textVal) + '">';
-    const input = td.querySelector('input.db-cell-input');
+    const input = document.createElement('input');
+    input.className = 'db-cell-input'; input.value = textVal;
+    input.title = 'Enter 保存；Escape 取消；Ctrl+Delete 设为 SQL NULL';
+    input.placeholder = currentVal == null ? 'SQL NULL' : '';
+    td.replaceChildren(input);
     input.focus();
     input.select();
 
-    let committed = false;
-    const finish = (save) => {
+    let committed = false, inputChanged = false;
+    input.oninput = () => { inputChanged = true; };
+    const finish = (save, asNull) => {
       if (committed) return;
       committed = true;
-      const newVal = input.value;
-      if (save && newVal !== textVal) {
+      const newVal = asNull || currentVal == null && !inputChanged && input.value === '' ? null : input.value;
+      if (save && (newVal === null ? currentVal != null : currentVal == null || newVal !== textVal)) {
         if (!state.dirtyCells) state.dirtyCells = {};
         state.dirtyCells[dirtyKey] = {
           rowIdx, colIdx,
@@ -938,10 +1182,12 @@
     };
 
     input.onkeydown = (e) => {
-      if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+      if (e.ctrlKey && e.key === 'Delete') { e.preventDefault(); finish(true, true); }
+      else if (e.key === 'Enter') { e.preventDefault(); finish(true); }
       else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
     };
     input.onblur = () => finish(true);
+    if (setNull) finish(true, true);
     return true;
   }
 
@@ -972,7 +1218,7 @@
   function getGridContext() {
     const current = sess(), source = effectiveSource(), features = Kairo.databaseFeatures;
     if (!current || current.type === 'object' || !source || !features || !features.resolveGridTarget) return null;
-    const target = features.resolveGridTarget(current.lastSQL, current.resultSchema || '');
+    const target = features.resolveGridTarget(current.lastSQL, current.resultSchema || '', source.kind);
     if (!target) return null;
     return {
       sourceId: source.id, sessionId: current.transactionId, schema: target.schema, table: target.table,
@@ -988,6 +1234,7 @@
     if (!dirtyKeys.length && !current.transactionPending) return toast('当前页签没有待提交事务', 'warn');
     const source = effectiveSource(), context = getGridContext();
     if (!source) return toast('未绑定有效数据源', 'warn');
+    if (!canWriteDatabase() || source.read_only) return toast('当前账号或数据源只有查询权限', 'warn');
     if (dirtyKeys.length && !context) return toast('仅支持直接查询单表列的网格修改，请重新查询目标表', 'warn');
     const confirmWrite = String(source.environment || '').toLowerCase() === 'production';
     if (dirtyKeys.length && confirmWrite && !confirm('当前为生产数据源，确认提交网格修改？')) return;
@@ -1002,15 +1249,18 @@
           const edit = edits[key], row = current.rows[edit.rowIdx], column = current.columns[edit.colIdx];
           if (!rows.has(edit.rowIdx)) {
             const original = {};
-            current.columns.forEach(function (c, i) { original[c.name] = row[i]; });
+            current.columns.forEach(function (c, i) {
+              if (row[i] != null && (typeof row[i] === 'object' || /CLOB|BLOB|LONG|XML|JSON|GEOMETRY/i.test(c.database_type || c.database || c.type || ''))) return;
+              original[c.name] = row[i];
+            });
             rows.set(edit.rowIdx, { action: 'update', values: {}, original: original, key: original, primary_key: primaryKey });
           }
           rows.get(edit.rowIdx).values[column.name] = edit.newVal;
         });
         const response = await api('POST', '/api/database/grid', { source_id: source.id, session_id: current.transactionId, schema: context.schema, table: context.table, mutations: Array.from(rows.values()), confirm: confirmWrite });
-        affected = response.result.rows_affected;
         current.transactionPending = true;
         current.gridEditsStaged = true;
+        affected = Number(response && response.result && response.result.rows_affected) || 0;
       }
       await api('POST', '/api/database/transaction', { source_id: source.id, session_id: current.transactionId, action: 'COMMIT' });
       dirtyKeys.forEach(function (key) { const item = edits[key]; current.rows[item.rowIdx][item.colIdx] = item.newVal; });
@@ -1073,6 +1323,10 @@
   }
 
   /* 会话定时自动备份与防丢 */
+  window.addEventListener('hashchange', function () {
+    if (String(location.hash || '').indexOf('#/database') === 0) return;
+    if (window._dbBackupTimer) { clearInterval(window._dbBackupTimer); window._dbBackupTimer = null; }
+  });
   function backupDBSessions() {
     saveEditorSQL();
     const backup = {
@@ -1246,7 +1500,7 @@
     const role = Kairo.auth && Kairo.auth.getRole ? Kairo.auth.getRole() : '';
     const canManage = !user || role === 'admin';
     const accessText = canWriteDatabase() ? '可写权限 · DML 页签事务 · 手动提交' : '只读权限 · 行数 / 时长 / 并发保护';
-    view.innerHTML = '<div class="db-page"><header class="db-topbar card"><div class="db-source-select"><label for="db-source">数据源</label><select id="db-source" aria-label="当前数据源">' + sourceOptions() + '</select></div><span id="db-source-badge" class="db-kind"></span><div class="db-topbar-actions"><button class="btn btn-sm" id="db-test">测试连接</button>' + (canManage ? '<button class="btn btn-sm" id="db-manage" aria-expanded="false" aria-controls="db-manager">数据源管理</button>' : '') + '<button class="btn btn-sm" id="db-settings">工作台设置</button></div><span class="db-safe' + (canWriteDatabase() ? ' is-write' : ' is-readonly') + '" role="status">' + accessText + '</span></header><div id="db-manager"></div><div id="db-workspace"></div></div>';
+    view.innerHTML = '<div class="db-page"><header class="db-topbar card"><div class="db-source-select"><label for="db-source">数据源</label><select id="db-source" aria-label="当前数据源">' + sourceOptions() + '</select></div><span id="db-source-badge" class="db-kind"></span><span id="db-oracle-client" class="db-client-badge" title="企业版 OCI 客户端自检"></span><div class="db-topbar-actions"><button class="btn btn-sm" id="db-test">测试连接</button>' + (canManage ? '<button class="btn btn-sm" id="db-manage" aria-expanded="false" aria-controls="db-manager">数据源管理</button>' : '') + '<button class="btn btn-sm" id="db-settings">工作台设置</button></div><span class="db-safe' + (canWriteDatabase() ? ' is-write' : ' is-readonly') + '" role="status">' + accessText + '</span></header><div id="db-manager"></div><div id="db-workspace"></div></div>';
     q('db-source').onchange = async function () {
       saveEditorSQL();
       const current = sess();
@@ -1479,6 +1733,22 @@
     try {
       const r = await api('POST', '/api/database/sources/' + encodeURIComponent(state.source.id) + '/test', {});
       toast('连接成功 · ' + (r.topology && r.topology !== 'standalone' ? r.topology + (r.masters ? ' ×' + r.masters : '') + ' · ' : '') + (r.version || kindLabel(r.kind)) + ' · ' + r.latency_ms + ' ms', 'ok');
+      // 企业版 OCI 自检（仅 Oracle，直连时）
+      if (state.source.kind === 'oracle') {
+        try {
+          const info = await api('GET', '/api/database/oracle/client-info?source_id=' + encodeURIComponent(state.source.id));
+          const c = info && info.client;
+          if (c) {
+            const badge = q('db-oracle-client');
+            if (badge) {
+              badge.textContent = (c.backend || 'oracle') + ' · ' + (c.available ? '可用' : '不可用') + ' · ' + (c.bitness || '') + (c.client_version ? ' · ' + c.client_version : '');
+              badge.className = 'db-client-badge ' + (c.available ? 'ok' : 'warn');
+              badge.title = (c.detail || '') + (info.hint ? '\n' + info.hint : '') + '\nlibDir=' + (c.lib_dir || '-') + '\nconfigDir=' + (c.config_dir || '-');
+            }
+            if (!c.available) toast('Oracle Client 不可用：' + (c.detail || ''), 'warn');
+          }
+        } catch (_) {}
+      }
     } catch (e) { toast('连接失败：' + e.message, 'err'); }
     finally { b.disabled = false; b.textContent = '测试连接'; }
   }
@@ -1724,11 +1994,15 @@
     refreshBookmarkSelect();
     q('db-meta-refresh').onclick = () => {
       state.schemaObjectsCache = {};
+      state.schemaCategoryCache = {};
+      state.schemaTableCache = {};
       loadSchemas(true);
     };
     q('db-schema').onchange = () => {
       state.schemaObjectsCache = {};
       renderCategoryList();
+      const cur = q('db-schema') && q('db-schema').value;
+      if (cur) warmupSchemaTables(cur);
     };
     q('db-object-search').oninput = debounce(function () {
       if (this.value.trim()) {
@@ -1803,12 +2077,14 @@
         if (preferred && Array.from(schema.options).some(x => x.value === preferred)) schema.value = preferred;
       }
       renderCategoryList();
+      // 选库后静默轻量预热表名（仅 category=tables 单列索引），与左侧 DOM 解耦。
+      if (schema.value) warmupSchemaTables(schema.value);
     } catch (e) {
       const o = q('db-objects'), schema = q('db-schema');
       if (token === state.workspaceToken && schema) schema.innerHTML = '<option value="">加载失败</option>';
       if (token === state.workspaceToken && o) {
         o.innerHTML = inlineError('元数据加载失败', e.message) + '<button class="btn btn-xs db-meta-retry" id="db-meta-retry">重试</button>';
-        q('db-meta-retry').onclick = () => loadSchemas(true);
+        if (q('db-meta-retry')) q('db-meta-retry').onclick = () => loadSchemas(true);
       }
     }
   }
@@ -1853,43 +2129,73 @@
     };
   }
 
+  // 表名联想与左侧 DOM 完全解耦：选库后静默轻量预热 category=tables，
+  // 存入全局内存 state.schemaTableCache[schema]，编辑器打字即时可用。
+  async function warmupSchemaTables(schema) {
+    const source = state.source;
+    if (!source || !schema) return;
+    state.schemaTableCache = state.schemaTableCache || {};
+    if (state.schemaTableCache[schema]) return;
+    const token = state.workspaceToken;
+    try {
+      const data = await api('GET', '/api/database/metadata/objects?source_id=' + encodeURIComponent(source.id) + '&schema=' + encodeURIComponent(schema) + '&category=tables');
+      if (token !== state.workspaceToken) return;
+      const names = (data.objects || []).map(x => x.name).filter(Boolean);
+      state.schemaTableCache[schema] = names;
+      state.metadataCache = state.metadataCache || {};
+      state.metadataCache[schema] = Array.from(new Set([].concat(state.metadataCache[schema] || [], names)));
+      // 同步预填分类缓存，展开表文件夹时可零请求秒开。
+      state.schemaCategoryCache = state.schemaCategoryCache || {};
+      state.schemaCategoryCache[schema + ':tables'] = data.objects || [];
+    } catch (e) {
+      // 静默预热失败不打扰用户：联想降级为空，展开文件夹时再按需重试。
+    }
+  }
+
+  function renderCategoryItems(groupEl, schema, category, items) {
+    const content = groupEl && groupEl.querySelector('.db-cat-content');
+    const badge = groupEl && groupEl.querySelector('.db-cat-badge');
+    groupEl._loaded = true;
+    if (badge) badge.textContent = items.length;
+    if (!items.length) {
+      if (content) content.innerHTML = '<div class="hint db-tree-empty">无 ' + h(category) + '</div>';
+      return;
+    }
+    if (content) {
+      content.innerHTML = items.map(x => '<button class="db-object" data-name="' + h(x.name) + '" data-type="' + h(x.type) + '"><span class="db-object-icon">' + h(String(x.type || '?').slice(0, 1)) + '</span><span class="db-object-name">' + h(x.name) + '</span><small>' + h(x.type) + '</small></button>').join('');
+      content.querySelectorAll('.db-object').forEach(btn => {
+        bindObjectButton(btn, schema);
+      });
+    }
+  }
+
   async function loadCategoryObjects(groupEl, category) {
     const token = state.workspaceToken, source = state.source, schema = q('db-schema') && q('db-schema').value;
-    if (!schema || !groupEl) return;
+    if (!schema || !source || !groupEl) return;
     const content = groupEl.querySelector('.db-cat-content');
-    const badge = groupEl.querySelector('.db-cat-badge');
     if (content) content.innerHTML = '<div class="db-tree-loading">正在查询 ' + h(category) + '…</div>';
     try {
-      const search = q('db-object-search');
-      const searchVal = search ? search.value.trim() : '';
-      state.metadataCache = state.metadataCache || {};
-      state.metadataCache[schema] = state.metadataCache[schema] || [];
-      state.schemaObjectsCache = state.schemaObjectsCache || {};
-      const cacheKey = source.id + ':' + schema + ':' + searchVal;
-      let allObjects = state.schemaObjectsCache[cacheKey];
-      if (!allObjects) {
-        const data = await api('GET', '/api/database/metadata/objects?source_id=' + encodeURIComponent(source.id) + '&schema=' + encodeURIComponent(schema) + '&search=' + encodeURIComponent(searchVal));
+      state.schemaCategoryCache = state.schemaCategoryCache || {};
+      const cacheKey = schema + ':' + category;
+      let items = state.schemaCategoryCache[cacheKey];
+      if (!items) {
+        // 真·按需懒加载：仅针对该类别发起轻量查询，各自缓存。
+        const data = await api('GET', '/api/database/metadata/objects?source_id=' + encodeURIComponent(source.id) + '&schema=' + encodeURIComponent(schema) + '&category=' + encodeURIComponent(category));
         if (token !== state.workspaceToken) return;
-        allObjects = data.objects || [];
-        state.schemaObjectsCache[cacheKey] = allObjects;
-        allObjects.forEach(x => {
-          if (!state.metadataCache[schema].includes(x.name)) state.metadataCache[schema].push(x.name);
-        });
+        items = data.objects || [];
+        state.schemaCategoryCache[cacheKey] = items;
+        if (category === 'tables') {
+          state.schemaTableCache = state.schemaTableCache || {};
+          const names = items.map(x => x.name).filter(Boolean);
+          if (!state.schemaTableCache[schema] || !state.schemaTableCache[schema].length) state.schemaTableCache[schema] = names;
+          state.metadataCache = state.metadataCache || {};
+          state.metadataCache[schema] = Array.from(new Set([].concat(state.metadataCache[schema] || [], names)));
+        }
       }
-      const items = allObjects.filter(x => (x.category || 'other') === category);
-      groupEl._loaded = true;
-      if (badge) badge.textContent = items.length;
-      if (!items.length) {
-        if (content) content.innerHTML = '<div class="hint db-tree-empty">无 ' + h(category) + '</div>';
-        return;
-      }
-      if (content) {
-        content.innerHTML = items.map(x => '<button class="db-object" data-name="' + h(x.name) + '" data-type="' + h(x.type) + '"><span class="db-object-icon">' + h(String(x.type || '?').slice(0, 1)) + '</span><span class="db-object-name">' + h(x.name) + '</span><small>' + h(x.type) + '</small></button>').join('');
-        content.querySelectorAll('.db-object').forEach(btn => {
-          bindObjectButton(btn, schema);
-        });
-      }
+      if (token !== state.workspaceToken) return;
+      renderCategoryItems(groupEl, schema, category, items);
     } catch (e) {
+      groupEl._loaded = false;
       if (content) content.innerHTML = inlineError('查询失败', e.message);
     }
   }
@@ -1963,7 +2269,7 @@
     return quote + String(v).split(quote).join(quote + quote) + quote;
   }
   function insertObjectSQL(schema, object, type) {
-    const name = quoteIdentifier(schema) + '.' + quoteIdentifier(object);
+    const name = (schema ? quoteIdentifier(schema) + '.' : '') + quoteIdentifier(object);
     const upper = String(type).toUpperCase();
     const srcKind = effectiveSource() ? effectiveSource().kind : (state.source ? state.source.kind : 'oracle');
     let sql = 'SELECT *\nFROM ' + name;
@@ -2093,6 +2399,13 @@
     if (document.body.classList.contains('has-open-overlay')) return;
     const id = e.target && e.target.id;
     if (id && String(id).indexOf('db-shortcut-') === 0) return;
+    // 防冲突：补全浮层打开时 Escape 仅关闭浮层，严禁误杀正在运行的查询。
+    if (e.key === 'Escape' && acState.open) {
+      e.preventDefault();
+      if (e.stopPropagation) e.stopPropagation();
+      hideComplete();
+      return;
+    }
     if (e.key === 'F2' && state.resultMode === 'grid' && !e.target.closest('input, textarea, select')) {
       e.preventDefault();
       if (state.isEditMode) startCellEdit(state.selectedRow, state.selectedCol || 0);
@@ -2121,6 +2434,83 @@
     return false;
   }
 
+  function parseSnippetsText(raw) {
+    const lines = String(raw || '').split(/\r?\n/);
+    const items = [];
+    const seenKeys = new Set();
+    const duplicates = [];
+    let ignored = 0;
+    let cur = null;
+
+    for (let i = 0; i < lines.length; i++) {
+      const rawLine = lines[i];
+      const trimmed = rawLine.trim();
+
+      if (!trimmed) continue;
+
+      if (trimmed.startsWith('#') || trimmed.startsWith('--') || trimmed.startsWith('//') || trimmed.startsWith(';')) {
+        const disMatch = trimmed.match(/^(?:#|--|\/\/|;)\s*\[(?:disabled|off|禁用)\]\s*([A-Za-z0-9_.-]+)(?:\s*[:=]\s*|\s*\t+\s*)(.*)$/i);
+        if (disMatch) {
+          const k = disMatch[1].trim();
+          const v = disMatch[2].replace(/\\n/g, '\n');
+          if (seenKeys.has(k) && !duplicates.includes(k)) duplicates.push(k);
+          seenKeys.add(k);
+          cur = { key: k, text: v, enabled: false };
+          items.push(cur);
+          continue;
+        }
+        continue;
+      }
+
+      const match = rawLine.match(/^\s*([A-Za-z0-9_.-]+)(?:\s*[:=]\s*|\s*\t+\s*)(.*)$/);
+      if (match) {
+        const k = match[1].trim();
+        const v = match[2].replace(/\\n/g, '\n');
+        if (seenKeys.has(k) && !duplicates.includes(k)) duplicates.push(k);
+        seenKeys.add(k);
+        cur = { key: k, text: v, enabled: true };
+        items.push(cur);
+      } else if (cur && (rawLine.startsWith(' ') || rawLine.startsWith('\t'))) {
+        // 仅缩进行才视为上一条的多行续行：去首缩进、保留尾空格。
+        // 非缩进的无分隔符行视为无效行计入 ignored，不再静默并入上一条，避免拼写错误污染模板。
+        cur.text += '\n' + rawLine.replace(/^\s+/, '');
+      } else {
+        ignored++;
+      }
+    }
+
+    return { items: items, duplicates: duplicates, ignored: ignored };
+  }
+
+  function formatSnippetsText(items) {
+    if (!Array.isArray(items)) return '';
+    return items
+      .filter(x => x && String(x.key || '').trim())
+      .map(x => {
+        const k = String(x.key || '').trim();
+        const rawText = String(x.text || '');
+        const v = rawText.replace(/\r?\n/g, '\\n');
+        const prefix = (x.enabled === false) ? '# [disabled] ' : '';
+        return prefix + k + '=' + v;
+      })
+      .join('\n');
+  }
+
+  const SAMPLE_SNIPPETS_TEXT = [
+    '# PL/SQL 格式常用 SQL 模板（每行一条：缩写=模板内容）',
+    '# 支持 ${schema}、${table}、${cursor} 变量；多行 SQL 可用 \\n 表示',
+    'sf=SELECT * FROM ',
+    'sc=SELECT COUNT(*) FROM ',
+    'w=WHERE ',
+    'df=DELETE FROM ',
+    'ob=ORDER BY ',
+    'gb=GROUP BY ',
+    'sel=SELECT *\\nFROM ${table}',
+    'cnt=SELECT COUNT(*)\\nFROM ${table}',
+    'ins=INSERT INTO ${table} () VALUES ()',
+    'upd=UPDATE ${table} SET  WHERE '
+  ].join('\n');
+
   function handleEditorKeydown(e) {
     if (e.isComposing || editorComposing || e.keyCode === 229) return;
     if (matchesShortcut(e, state.prefs.shortcuts.run) || matchesShortcut(e, state.prefs.shortcuts.explain) || matchesShortcut(e, state.prefs.shortcuts.cancel) || matchesShortcut(e, state.prefs.shortcuts.grid) || matchesShortcut(e, state.prefs.shortcuts.record) || matchesShortcut(e, state.prefs.shortcuts.objects)) {
@@ -2132,7 +2522,7 @@
     if (acState.open) {
       if (e.key === 'ArrowDown') { e.preventDefault(); moveComplete(1); return; }
       if (e.key === 'ArrowUp') { e.preventDefault(); moveComplete(-1); return; }
-      if (e.key === 'Escape') { e.preventDefault(); hideComplete(); return; }
+      if (e.key === 'Escape') { e.preventDefault(); if (e.stopPropagation) e.stopPropagation(); hideComplete(); return; }
       const curItem = acState.items[acState.index];
       if (curItem && curItem.kind === 'snippet') {
         if (isSnippetExpandKey(e, trigger)) {
@@ -2161,8 +2551,14 @@
       }
     }
   }
+  function isMacPlatform() {
+    try {
+      const probe = String((typeof navigator !== 'undefined' && (navigator.platform || '')) || '') + ' ' + String((typeof navigator !== 'undefined' && (navigator.userAgent || '')) || '');
+      return /mac|iphone|ipad|darwin/i.test(probe);
+    } catch (err) { return false; }
+  }
   function matchesShortcut(e, spec) {
-    if (!spec) return false;
+    if (!spec || !e) return false;
     const parts = String(spec).toLowerCase().replace(/\s+/g, '').split('+').filter(Boolean);
     let wantCtrl = false, wantAlt = false, wantShift = false, wantMeta = false, key = '';
     parts.forEach(function (part) {
@@ -2178,7 +2574,15 @@
       || (key === 'esc' && actual === 'escape')
       || (key === 'escape' && actual === 'escape')
       || (key === 'space' && (actual === ' ' || actual === 'space' || code === 'space'));
-    return keyOk && e.ctrlKey === wantCtrl && e.altKey === wantAlt && e.shiftKey === wantShift && e.metaKey === wantMeta;
+    if (!keyOk) return false;
+    const altOk = !!e.altKey === wantAlt;
+    const shiftOk = !!e.shiftKey === wantShift;
+    // macOS 兼容：设置要求 Ctrl 时允许 Cmd（meta）匹配，保证 Cmd+Enter 可执行查询。
+    if (wantCtrl && !wantMeta && isMacPlatform()) {
+      const ctrlOk = !!(e.ctrlKey || e.metaKey);
+      return ctrlOk && altOk && shiftOk;
+    }
+    return keyOk && !!e.ctrlKey === wantCtrl && altOk && shiftOk && !!e.metaKey === wantMeta;
   }
   function expandSnippet(editor) {
     const pos = editor.selectionStart, before = editor.value.slice(0, pos), match = before.match(/([A-Za-z0-9_.-]+)$/);
@@ -2316,6 +2720,29 @@
     if (!m) return null;
     return { prefix: m[0], start: cursor - m[0].length, end: cursor };
   }
+  // SQL 上下文感知：FROM / JOIN / INTO / UPDATE / TABLE 后表名提权至最高，
+  // 解决 SELECT * FROM ord 时 ORDER 压制 orders 的问题。
+  function sqlTableContext(text, cursor) {
+    const tokens = tokenizeSQL(String(text || '').slice(0, cursor));
+    for (let i = tokens.length - 1; i >= 0; i--) {
+      const tok = tokens[i];
+      if (tok.type === 'space' || tok.type === 'comment') continue;
+      // 当前前缀本身是一个 ident，往前再找一个有效 token。
+      if (tok.type === 'ident' && tok.start + tok.value.length >= cursor - 64) {
+        for (let j = i - 1; j >= 0; j--) {
+          const prev = tokens[j];
+          if (prev.type === 'space' || prev.type === 'comment') continue;
+          const w = String(prev.value || '').toLowerCase();
+          if (w === 'from' || w === 'join' || w === 'into' || w === 'update' || w === 'table') return true;
+          return false;
+        }
+        return false;
+      }
+      const w = String(tok.value || '').toLowerCase();
+      return w === 'from' || w === 'join' || w === 'into' || w === 'update' || w === 'table';
+    }
+    return false;
+  }
   function suggestSQL(text, cursor, extras) {
     extras = extras || {};
     const ctx = completionPrefix(text, cursor);
@@ -2335,8 +2762,11 @@
     SQL_KEYWORDS.forEach(function (k) { add(k.toUpperCase(), 'keyword'); });
     (extras.objects || []).forEach(function (n) { add(n, 'object'); });
     (extras.fields || []).forEach(function (n) { add(n, 'field'); });
+    const tableCtx = sqlTableContext(text, cursor);
     items.sort(function (a, b) {
-      const rank = { snippet: 0, keyword: 1, object: 2, field: 3 };
+      const rank = tableCtx
+        ? { snippet: 1, object: 0, field: 2, keyword: 3 }
+        : { snippet: 0, keyword: 1, object: 2, field: 3 };
       return (rank[a.kind] - rank[b.kind]) || a.label.localeCompare(b.label);
     });
     return { items: items.slice(0, 12), start: ctx.start, end: ctx.end };
@@ -2438,11 +2868,17 @@
   }
   function completionExtras() {
     const objSet = new Set();
-    document.querySelectorAll('#db-objects .db-object-name').forEach(function (el) { objSet.add(el.textContent); });
+    // 表名联想与 DOM 完全解耦：优先从后台预热的 schemaTableCache 取数，
+    // 无论左侧对象栏折叠与否、是否展开过表文件夹，始终就绪。
     const schema = q('db-schema') && q('db-schema').value;
-    if (schema && state.metadataCache && state.metadataCache[schema]) {
-      state.metadataCache[schema].forEach(function (name) { objSet.add(name); });
+    if (schema && state.schemaTableCache && state.schemaTableCache[schema]) {
+      state.schemaTableCache[schema].forEach(function (name) { if (name) objSet.add(name); });
     }
+    if (schema && state.metadataCache && state.metadataCache[schema]) {
+      state.metadataCache[schema].forEach(function (name) { if (name) objSet.add(name); });
+    }
+    // DOM 仅作兜底补充（例如搜索模式下全量渲染的对象名）。
+    document.querySelectorAll('#db-objects .db-object-name').forEach(function (el) { if (el.textContent) objSet.add(el.textContent); });
     const fields = ((state.inspect && state.inspect.fields) || []).map(function (f) { return f.name; });
     return { objects: Array.from(objSet), fields: fields, snippets: state.prefs.snippets || [] };
   }
@@ -2687,7 +3123,7 @@
     if (!box) return '';
     let sql = box.value.trim();
     if (sql && Kairo.workbench && Kairo.workbench.statementModel) {
-      const picked = Kairo.workbench.statementModel.normalize(box.value, box.selectionStart, box.selectionStart, box.selectionEnd);
+      const picked = Kairo.workbench.statementModel.normalize(box.value, box.selectionStart, box.selectionStart, box.selectionEnd, { dialect: (effectiveSource() || {}).kind });
       sql = picked.text;
     }
     if (sql) return sql;
@@ -2699,11 +3135,10 @@
   }
 
   function sqlGuardInfo(sql) {
-    const cleaned = String(sql || '')
-      .replace(/\/\*[\s\S]*?\*\//g, ' ')
-      .replace(/--[^\r\n]*/g, ' ')
-      .trim();
-    const normalized = cleaned.replace(/'(?:''|[^'])*'/g, ' ');
+    const features = Kairo.databaseFeatures;
+    const normalized = features && features.tokenizeSQL ? features.tokenizeSQL(String(sql || '')).map(function (token) {
+      return /^(comment|string|quoted-ident)$/.test(token.type) ? ' ' : token.value;
+    }).join('').trim() : String(sql || '').trim();
     const first = ((normalized.match(/^([A-Za-z]+)/) || [])[1] || '').toUpperCase();
     let action = first;
     let actionIndex = 0;
@@ -2718,7 +3153,7 @@
     if ((action === 'UPDATE' || action === 'DELETE') && !/\bWHERE\b/i.test(normalized.slice(actionIndex + action.length))) {
       return { action: action, warning: action + ' 没有 WHERE 条件，将影响目标表的全部匹配行；执行后仍需手动提交。' };
     }
-    return { action: action };
+    return { action: action, writes: !/^(SELECT|WITH|SHOW|DESC|DESCRIBE|EXPLAIN)$/.test(action) || /\bFOR\s+UPDATE\b/i.test(normalized) };
   }
 
   async function runQuery(keepPage) {
@@ -2733,6 +3168,10 @@
     const guard = sqlGuardInfo(sql);
     if (guard.action === 'COMMIT') return commitPendingEdits();
     if (guard.action === 'ROLLBACK') return rollbackPendingEdits();
+    const querySource = effectiveSource();
+    if (!querySource) return showQueryError('未选择数据源', '请先在顶部选择数据源。');
+    const writes = guard.writes || /^(INSERT|UPDATE|DELETE|MERGE|REPLACE|CREATE|ALTER|DROP|TRUNCATE|RENAME)$/.test(guard.action);
+    if (writes && (!canWriteDatabase() || querySource.read_only)) return showQueryError('只有查询权限', '当前账号或数据源不允许写入或加锁查询。');
     if (guard.warning && !confirm('危险 SQL 确认\n\n' + guard.warning + '\n\n确定继续执行吗？')) {
       toast('已取消危险 SQL', 'warn');
       return;
@@ -2795,10 +3234,10 @@
       refreshActiveQueryUI(s);
       return showQueryError('未选择数据源', '请先在顶部选择数据源。');
     }
-    const productionDML = String(effSrc.environment || '').toLowerCase() === 'production' && /^(INSERT|UPDATE|DELETE|MERGE|REPLACE)$/.test(guard.action);
+    const productionDML = String(effSrc.environment || '').toLowerCase() === 'production' && writes;
     let productionConfirm = false;
     if (productionDML) {
-      if (!confirm('当前数据源标记为生产环境，确认执行该 DML？\n\n执行后仍需手动提交事务。')) {
+      if (!confirm('当前数据源标记为生产环境，确认执行写入或加锁操作？\n\nDML 需要手动提交，DDL 可能由数据库隐式提交。')) {
         s.controller = null;
         state.controller = null;
         refreshActiveQueryUI(s);
@@ -2808,14 +3247,14 @@
       productionConfirm = true;
     }
     try {
-      var queryBody = { source_id: effSrc.id, session_id: s.transactionId, sql: sql, max_rows: maxRows, page: s.page, page_size: s.pageSize, count_mode: 'none' };
+      const queryBody = { source_id: effSrc.id, session_id: s.transactionId, sql: sql, max_rows: maxRows, page: s.page, page_size: s.pageSize, count_mode: 'none' };
       // Bound values are optional so older servers remain compatible for
       // ordinary queries. New query handlers consume this typed array for
       // SELECT :name / {{name}} without exposing raw UI state.
-      var boundParameters = Kairo.databaseFeatures && typeof Kairo.databaseFeatures.getBoundParameters === 'function' ? Kairo.databaseFeatures.getBoundParameters() : [];
+      const boundParameters = Kairo.databaseFeatures && typeof Kairo.databaseFeatures.getBoundParameters === 'function' ? Kairo.databaseFeatures.getBoundParameters() : [];
       if (boundParameters && boundParameters.length) queryBody.parameters = boundParameters;
       if (productionConfirm) queryBody.confirm = true;
-      var fetchOpts = { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(queryBody) };
+      const fetchOpts = { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(queryBody) };
       if (s.controller && s.controller.signal) fetchOpts.signal = s.controller.signal;
       const response = await fetch('/api/database/query', fetchOpts);
       if (!response.ok) {
@@ -2834,7 +3273,7 @@
         }
       } else {
         const reader = response.body.getReader();
-        var decoder;
+        let decoder;
         try { decoder = new TextDecoder(); } catch (_) { throw new Error('当前浏览器不支持 TextDecoder，请用极速模式/Chrome。'); }
         let pending = '';
         while (true) {
@@ -2860,6 +3299,7 @@
     } finally {
       if (s.runSeq === seq) {
         s.controller = null;
+        if (s.id === state.activeId) state.controller = null;
         if (!s.status || s.status === '查询中…') s.status = s.summary ? (s.summary.rows + ' 行') : (s.lastError ? '执行失败' : '就绪');
         refreshActiveQueryUI(s);
         if (s.id === state.activeId) {
@@ -2901,7 +3341,7 @@
     function go(page) {
       const s = sess(); if (!s || s.controller) return;
       s.page = Math.max(1, Number(page) || 1);
-      s.pageSize = Math.max(1, Number(size ? size.value : 20) || 20);
+      s.pageSize = Math.max(1, Number(s.pageSize) || 20);
       s.lastMaxRows = s.pageSize;
       const max = q('db-max-rows'); if (max) max.value = s.pageSize;
       runQuery(true);
@@ -2930,9 +3370,8 @@
         }
       };
       const initialPageSize = (sess() && sess().pageSize) || (persisted.row_limits && state.source && persisted.row_limits[state.source.id]) || (q('db-max-rows') && Number(q('db-max-rows').value)) || 20;
-      size.value = String(initialPageSize);
       const curS = sess();
-      if (curS && !curS.pageSize) curS.pageSize = Number(size.value);
+      if (curS && !curS.pageSize) curS.pageSize = Number(initialPageSize);
     }
     updateDatabasePager();
   }
@@ -2946,7 +3385,18 @@
     const size = q('db-page-size') || nav.querySelector('.db-page-size');
     const hint = q('db-page-hint');
     if (input) input.value = String(page);
-    if (size && s.pageSize) size.value = String(s.pageSize);
+    if (size && s.pageSize) {
+      const value = String(s.pageSize);
+      Array.from(size.querySelectorAll('option[data-custom]')).forEach(option => option.remove());
+      if (!Array.from(size.options).some(option => option.value === value)) {
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = value + ' 行/页';
+        option.dataset.custom = 'true';
+        size.appendChild(option);
+      }
+      size.value = value;
+    }
     if (prev) prev.disabled = !!s.controller || page <= 1;
     if (next) next.disabled = !!s.controller || !summary.has_next;
     if (hint) hint.textContent = summary.rows != null && summary.page ? ('本页 ' + summary.rows + ' 行' + (summary.has_next ? ' · 还有下一页' : ' · 已到末页')) : '';
@@ -3019,8 +3469,37 @@
     box.hidden = false;
     box.className = 'db-result-message ' + kind;
     box.setAttribute('role', kind === 'error' ? 'alert' : 'status');
-    box.innerHTML = '<div class="db-message-icon" aria-hidden="true">' + icon + '</div><div class="db-message-copy"><strong>' + h(title) + '</strong><pre>' + h(message) + '</pre>' + (sql ? '<details><summary>查看本次 SQL</summary><pre>' + h(sql) + '</pre></details>' : '') + '</div><button class="btn btn-xs" id="db-copy-message">' + copyLabel + '</button>';
+    let extraActions = '';
+    const isTTC = (message && (message.indexOf('TTC error') !== -1 || message.indexOf('TTC 协议') !== -1));
+    let tableName = '', tableOwner = '';
+    if (isTTC && sql) {
+      const features = Kairo.databaseFeatures;
+      if (features && features.resolveGridTarget(sql, '')) {
+        const tokens = features.tokenizeSQL(sql).filter(function (token) { return token.type !== 'space' && token.type !== 'comment'; });
+        const from = tokens.findIndex(function (token) { return token.type === 'keyword' && token.value.toUpperCase() === 'FROM'; });
+        const name = function (token) { return token.type === 'quoted-ident' ? token.value.slice(1, -1).replace(/""/g, '"') : token.value.toUpperCase(); };
+        tableName = name(tokens[from + 1]);
+        if (tokens[from + 2] && tokens[from + 2].value === '.') { tableOwner = tableName; tableName = name(tokens[from + 3]); }
+      }
+    }
+    if (tableName) {
+      extraActions = '<button class="btn btn-xs btn-primary" id="db-inspect-ttc-cols" title="在编辑器自动生成查看该表字段结构的查询，排查致错大字段">查看 ' + h(tableName) + ' 字段结构</button>';
+    }
+    box.innerHTML = '<div class="db-message-icon" aria-hidden="true">' + icon + '</div><div class="db-message-copy"><strong>' + h(title) + '</strong><pre>' + h(message) + '</pre>' + (sql ? '<details><summary>查看本次 SQL</summary><pre>' + h(sql) + '</pre></details>' : '') + '</div><div class="db-message-actions" style="display:flex;gap:6px;align-items:center;flex-shrink:0;">' + extraActions + '<button class="btn btn-xs" id="db-copy-message">' + copyLabel + '</button></div>';
     q('db-copy-message').onclick = () => copyDBText(title + '\n' + message + (sql ? '\n\n' + sql : ''), '详情已复制');
+    if (tableName && q('db-inspect-ttc-cols')) {
+      q('db-inspect-ttc-cols').onclick = () => {
+        const inspectSQL = "SELECT column_name, data_type, data_length, nullable FROM all_tab_cols WHERE owner = " + (tableOwner ? "'" + tableOwner.replace(/'/g, "''") + "'" : 'USER') + " AND table_name = '" + tableName.replace(/'/g, "''") + "' ORDER BY column_id";
+        const sqlBox = q('db-sql');
+        if (sqlBox) {
+          sqlBox.value = inspectSQL;
+          if (typeof syncSQLEditor === 'function') syncSQLEditor();
+          const s = sess();
+          if (s) s.sql = inspectSQL;
+          runQuery();
+        }
+      };
+    }
   }
 
   function visibleColumns() { return state.columns.map((_, i) => i).filter(i => !state.hiddenColumns.has(i)); }
@@ -3198,7 +3677,7 @@
         e.stopPropagation();
         const r = Number(lob.dataset.lobRow), c = Number(lob.dataset.lobCol);
         if (state.rows[r] && state.columns[c]) {
-          openLobModal(state.rows[r][c], state.columns[c].name);
+          openLobModal(state.rows[r][c], state.columns[c].name, r, c);
         }
         return;
       }
@@ -3376,7 +3855,10 @@
       add('导出选中行为 INSERT (.sql)', () => exportRowAsInsertFile(row));
       add('导出选中行为 UPDATE (.sql)', () => exportRowAsUpdateFile(row));
       add('导出选中行为 TXT (.txt)', () => exportRowAsTxtFile(row));
-      if (state.isEditMode && canWriteDatabase()) add('编辑此单元格 (F2)', () => startCellEdit(row, column));
+      if (state.isEditMode && canWriteDatabase()) {
+        add('编辑此单元格 (F2)', () => startCellEdit(row, column));
+        add('设为 SQL NULL', () => startCellEdit(row, column, null, true));
+      }
     }
     add('复制整列', () => copyDBText(filteredRows().map(i => cellText(state.rows[i][column])).join('\n'), '整列已复制'));
     add('隐藏此列', () => { state.hiddenColumns.add(column); state.gridReady = false; renderResult(); });
@@ -3419,8 +3901,48 @@
     });
   }
   function openSettings() {
+    let currentMode = 'list';
+    try {
+      const saved = localStorage.getItem('kairo:database:snippet-mode');
+      if (saved === 'text' || saved === 'list') currentMode = saved;
+    } catch (_) {}
+
     const body = el('div', { class: 'db-settings-body' });
-    body.innerHTML = '<section><h4>快捷键</h4><p class="muted">点输入框后按下组合键即可，保存后立即生效；输入法正在组合文字时不会触发工作台快捷键。</p><div class="db-shortcut-grid">' + shortcutField('执行查询', 'run') + shortcutField('取消查询', 'cancel') + shortcutField('网格视图', 'grid') + shortcutField('单行记录', 'record') + shortcutField('执行计划', 'explain') + shortcutField('对象栏', 'objects') + '</div></section><section><div class="db-setting-line"><h4>SQL 模板</h4><label class="editor-label-inline">展开键<select id="db-expand-key" class="editor-input db-expand-key"><option value="Space">Space</option><option value="Tab">Tab</option><option value="Enter">Enter</option></select></label></div><div id="db-snippet-list" class="db-snippet-list"></div><button type="button" class="btn btn-sm" id="db-snippet-add">添加模板</button></section>';
+    body.innerHTML = '<section><h4>快捷键</h4><p class="muted">点输入框后按下组合键即可，保存后立即生效；输入法正在组合文字时不会触发工作台快捷键。</p><div class="db-shortcut-grid">'
+      + shortcutField('执行查询', 'run') + shortcutField('取消查询', 'cancel') + shortcutField('网格视图', 'grid')
+      + shortcutField('单行记录', 'record') + shortcutField('执行计划', 'explain') + shortcutField('对象栏', 'objects')
+      + '</div></section><section>'
+      + '<div class="db-setting-line">'
+      + '  <div class="db-snippet-heading">'
+      + '    <h4>SQL 模板</h4>'
+      + '    <div class="db-snippet-tabs">'
+      + '      <button type="button" class="btn btn-xs db-snippet-tab' + (currentMode === 'list' ? ' active' : '') + '" id="db-snippet-tab-list">列表编辑</button>'
+      + '      <button type="button" class="btn btn-xs db-snippet-tab' + (currentMode === 'text' ? ' active' : '') + '" id="db-snippet-tab-text">批量文本框 (PL/SQL)</button>'
+      + '    </div>'
+      + '  </div>'
+      + '  <label class="editor-label-inline">展开键<select id="db-expand-key" class="editor-input db-expand-key"><option value="Space">Space</option><option value="Tab">Tab</option><option value="Enter">Enter</option></select></label>'
+      + '</div>'
+      + '<div id="db-snippet-panel-list" class="db-snippet-panel"' + (currentMode === 'list' ? '' : ' style="display:none;"') + '>'
+      + '  <div id="db-snippet-list" class="db-snippet-list"></div>'
+      + '  <div class="db-snippet-actions">'
+      + '    <button type="button" class="btn btn-sm" id="db-snippet-add">＋ 添加模板</button>'
+      + '    <button type="button" class="btn btn-sm" id="db-snippet-go-text" title="切换到多行文本框进行批量编辑或粘贴">批量粘贴 / 文本模式</button>'
+      + '  </div>'
+      + '</div>'
+      + '<div id="db-snippet-panel-text" class="db-snippet-panel"' + (currentMode === 'text' ? '' : ' style="display:none;"') + '>'
+      + '  <p class="muted db-snippet-help">支持像 PL/SQL (shortcuts.txt) 直接粘贴多条规则（每行一条：<code>缩写=SQL模板</code>）。<br>支持 <code>${schema}</code>、<code>${table}</code>、<code>${cursor}</code> 变量；单行内多行内容可用 <code>\\n</code> 或后续行缩进；以 <code>#</code> 开头为注释。</p>'
+      + '  <textarea id="db-snippet-textarea" class="editor-content db-snippet-textarea" rows="12" spellcheck="false" placeholder="sf=SELECT * FROM \nsc=SELECT COUNT(*) FROM \nw=WHERE \ndf=DELETE FROM \nsel=SELECT *\\nFROM ${table}"></textarea>'
+      + '  <div class="db-snippet-text-footer">'
+      + '    <span id="db-snippet-text-count" class="muted db-snippet-count">已解析 0 条模板</span>'
+      + '    <div class="db-snippet-btn-row">'
+      + '      <button type="button" class="btn btn-xs" id="db-snippet-copy-text" title="复制文本框中的所有模板规则">复制全部</button>'
+      + '      <button type="button" class="btn btn-xs" id="db-snippet-load-sample" title="填入常用的 PL/SQL 快捷替换模板示例">填入示例</button>'
+      + '      <button type="button" class="btn btn-xs" id="db-snippet-clear-text" title="清空文本框内容">清空</button>'
+      + '      <button type="button" class="btn btn-xs btn-primary" id="db-snippet-sync-list" title="将文本内容解析并同步到列表模式">同步到列表</button>'
+      + '    </div>'
+      + '  </div>'
+      + '</div></section>';
+
     const footer = el('div', { class: 'editor-footer db-settings-actions' }, [
       el('button', { class: 'btn', type: 'button', id: 'db-settings-reset', text: '恢复默认' }),
       el('button', { class: 'btn', type: 'button', id: 'db-settings-close', text: '关闭' }),
@@ -3433,35 +3955,222 @@
       const input = q('db-shortcut-' + k);
       if (input) { input.value = state.prefs.shortcuts[k]; captureShortcut(input); }
     });
-    const draft = state.prefs.snippets.map(x => Object.assign({}, x));
+
+    let draft = state.prefs.snippets.map(x => Object.assign({}, x));
+    const ta = body.querySelector('#db-snippet-textarea');
+    const countEl = body.querySelector('#db-snippet-text-count');
+
+    function syncFromListToDraft() {
+      body.querySelectorAll('[data-key]').forEach(x => {
+        const idx = Number(x.dataset.key);
+        if (draft[idx]) draft[idx].key = x.value.trim();
+      });
+      body.querySelectorAll('[data-text]').forEach(x => {
+        const idx = Number(x.dataset.text);
+        if (draft[idx]) draft[idx].text = x.value;
+      });
+      body.querySelectorAll('[data-enabled]').forEach(x => {
+        const idx = Number(x.dataset.enabled);
+        if (draft[idx]) draft[idx].enabled = x.checked;
+      });
+    }
+
+    function updateTextCounter() {
+      if (!ta || !countEl) return null;
+      const parsed = parseSnippetsText(ta.value);
+      const ignoredSuffix = (parsed.ignored ? '，已忽略 ' + parsed.ignored + ' 行无效内容' : '');
+      if (parsed.duplicates.length > 0) {
+        countEl.className = 'db-snippet-count has-warning';
+        countEl.textContent = '已解析 ' + parsed.items.length + ' 条模板（⚠️ 存在重复缩写: ' + parsed.duplicates.join(', ') + '）' + ignoredSuffix;
+      } else {
+        countEl.className = 'muted db-snippet-count';
+        countEl.textContent = '已解析 ' + parsed.items.length + ' 条模板' + ignoredSuffix;
+      }
+      return parsed;
+    }
+
     const draw = () => {
-      const list = q('db-snippet-list'); list.innerHTML = '';
+      const list = body.querySelector('#db-snippet-list') || q('db-snippet-list');
+      if (!list) return;
+      list.innerHTML = '';
       draft.forEach((s, i) => {
         const row = el('div', { class: 'db-snippet-row' });
         row.innerHTML = '<label class="db-snippet-enable" title="启用"><input type="checkbox" data-enabled="' + i + '"' + (s.enabled !== false ? ' checked' : '') + '></label><input type="text" class="editor-input" data-key="' + i + '" value="' + h(s.key) + '" placeholder="缩写" autocomplete="off"><textarea class="editor-content" data-text="' + i + '" rows="2" placeholder="SQL 模板；支持 ${schema} 和 ${table}">' + h(s.text) + '</textarea><button type="button" class="btn btn-sm btn-danger" data-remove="' + i + '">删除</button>';
         list.appendChild(row);
       });
-      list.querySelectorAll('[data-remove]').forEach(b => b.onclick = () => { draft.splice(Number(b.dataset.remove), 1); draw(); });
+      list.querySelectorAll('[data-remove]').forEach(b => b.onclick = () => {
+        syncFromListToDraft();
+        draft.splice(Number(b.dataset.remove), 1);
+        draw();
+      });
     };
+
+    function switchMode(newMode) {
+      if (currentMode === newMode) return;
+      if (newMode === 'text') {
+        syncFromListToDraft();
+        if (ta) {
+          ta.value = formatSnippetsText(draft);
+          updateTextCounter();
+        }
+      } else {
+        if (ta) {
+          const parsed = parseSnippetsText(ta.value);
+          if (parsed.duplicates.length > 0) {
+            toast('存在重复缩写: ' + parsed.duplicates.join(', ') + '，已为您标注', 'warn');
+          }
+          draft = parsed.items;
+          draw();
+        }
+      }
+      currentMode = newMode;
+      try { localStorage.setItem('kairo:database:snippet-mode', newMode); } catch (_) {}
+      const listTab = body.querySelector('#db-snippet-tab-list');
+      const textTab = body.querySelector('#db-snippet-tab-text');
+      const listPanel = body.querySelector('#db-snippet-panel-list');
+      const textPanel = body.querySelector('#db-snippet-panel-text');
+      if (listTab) listTab.classList.toggle('active', currentMode === 'list');
+      if (textTab) textTab.classList.toggle('active', currentMode === 'text');
+      if (listPanel) listPanel.style.display = currentMode === 'list' ? '' : 'none';
+      if (textPanel) {
+        textPanel.style.display = currentMode === 'text' ? '' : 'none';
+        if (currentMode === 'text' && ta) setTimeout(() => ta.focus(), 50);
+      }
+    }
+
     draw();
-    q('db-snippet-add').onclick = () => { draft.push({ key: '', text: '', enabled: true }); draw(); };
+    if (ta) {
+      ta.value = formatSnippetsText(draft);
+      updateTextCounter();
+      ta.addEventListener('input', updateTextCounter);
+    }
+
+    const tabListBtn = body.querySelector('#db-snippet-tab-list');
+    const tabTextBtn = body.querySelector('#db-snippet-tab-text');
+    const goTextBtn = body.querySelector('#db-snippet-go-text');
+    const addBtn = body.querySelector('#db-snippet-add');
+    const copyBtn = body.querySelector('#db-snippet-copy-text');
+    const sampleBtn = body.querySelector('#db-snippet-load-sample');
+    const clearBtn = body.querySelector('#db-snippet-clear-text');
+    const syncListBtn = body.querySelector('#db-snippet-sync-list');
+
+    if (tabListBtn) tabListBtn.onclick = () => switchMode('list');
+    if (tabTextBtn) tabTextBtn.onclick = () => switchMode('text');
+    if (goTextBtn) goTextBtn.onclick = () => switchMode('text');
+    if (addBtn) addBtn.onclick = () => {
+      syncFromListToDraft();
+      draft.push({ key: '', text: '', enabled: true });
+      draw();
+    };
+
+    if (copyBtn) copyBtn.onclick = () => {
+      if (!ta || !ta.value.trim()) return toast('文本框内容为空', 'warn');
+      copyToClipboard(ta.value)
+        .then(() => toast('已复制全部模板规则到剪贴板', 'ok'))
+        .catch(() => toast('复制失败', 'err'));
+    };
+
+    if (sampleBtn) sampleBtn.onclick = () => {
+      if (!ta) return;
+      if (!ta.value.trim()) {
+        ta.value = SAMPLE_SNIPPETS_TEXT;
+      } else {
+        // 去重追加：已存在的缩写不再重复填入，避免一点就制造重复导致保存被拦。
+        const existingKeys = new Set(parseSnippetsText(ta.value).items.map(x => x.key));
+        const missing = parseSnippetsText(SAMPLE_SNIPPETS_TEXT).items.filter(x => !existingKeys.has(x.key));
+        if (!missing.length) {
+          toast('示例模板已存在，无需重复填入', 'warn');
+          return;
+        }
+        ta.value = ta.value.trimEnd() + '\n' + formatSnippetsText(missing);
+      }
+      updateTextCounter();
+      toast('已填入常用示例模板', 'ok');
+    };
+
+    if (clearBtn) clearBtn.onclick = () => {
+      if (!ta) return;
+      ta.value = '';
+      updateTextCounter();
+    };
+
+    if (syncListBtn) syncListBtn.onclick = () => {
+      const parsed = parseSnippetsText(ta ? ta.value : '');
+      if (parsed.duplicates.length > 0) {
+        return toast('模板缩写不能重复: ' + parsed.duplicates.join(', '), 'warn');
+      }
+      draft = parsed.items;
+      draw();
+      switchMode('list');
+      toast('已同步到列表视图（共 ' + draft.length + ' 条' + (parsed.ignored ? '，已忽略 ' + parsed.ignored + ' 行无效内容' : '') + '）', 'ok');
+    };
+
     q('db-settings-close').onclick = () => dlg.close();
-    q('db-settings-reset').onclick = () => { state.prefs = JSON.parse(JSON.stringify(DEFAULT_PREFS)); savePrefs(); dlg.close(); toast('工作台设置已恢复默认', 'ok'); if (state.source && state.source.kind !== 'redis') renderWorkspace(true); };
+    q('db-settings-reset').onclick = () => {
+      state.prefs = JSON.parse(JSON.stringify(DEFAULT_PREFS));
+      savePrefs();
+      dlg.close();
+      toast('工作台设置已恢复默认', 'ok');
+      if (state.source && state.source.kind !== 'redis') renderWorkspace(true);
+    };
+
     q('db-settings-save').onclick = () => {
-      body.querySelectorAll('[data-key]').forEach(x => draft[Number(x.dataset.key)].key = x.value.trim());
-      body.querySelectorAll('[data-text]').forEach(x => draft[Number(x.dataset.text)].text = x.value);
-      body.querySelectorAll('[data-enabled]').forEach(x => draft[Number(x.dataset.enabled)].enabled = x.checked);
-      const items = draft.filter(x => x.key && x.text);
-      if (new Set(items.map(x => x.key)).size !== items.length) return toast('模板缩写不能重复', 'warn');
+      let finalItems = [];
+      let ignoredNote = '';
+      if (currentMode === 'text' && ta) {
+        const parsed = parseSnippetsText(ta.value);
+        if (parsed.duplicates.length > 0) {
+          return toast('模板缩写不能重复: ' + parsed.duplicates.join(', '), 'warn');
+        }
+        finalItems = parsed.items.filter(x => x.key && x.text);
+        const dropped = (parsed.items.length - finalItems.length) + (parsed.ignored || 0);
+        if (dropped > 0) ignoredNote = '（已忽略 ' + dropped + ' 条空行/无效行）';
+      } else {
+        syncFromListToDraft();
+        const before = draft.length;
+        finalItems = draft.filter(x => x.key && x.text);
+        if (before > finalItems.length) ignoredNote = '（已忽略 ' + (before - finalItems.length) + ' 条空行）';
+        const keys = finalItems.map(x => x.key);
+        if (new Set(keys).size !== keys.length) {
+          const dupes = keys.filter((k, idx) => keys.indexOf(k) !== idx);
+          return toast('模板缩写不能重复: ' + Array.from(new Set(dupes)).join(', '), 'warn');
+        }
+      }
       const curExpandSelect = body.querySelector('#db-expand-key') || q('db-expand-key');
       state.prefs.expandKey = (curExpandSelect && curExpandSelect.value) || 'Space';
-      state.prefs.snippets = items;
-      Object.keys(state.prefs.shortcuts).forEach(k => { if (q('db-shortcut-' + k)) state.prefs.shortcuts[k] = q('db-shortcut-' + k).value.trim() || DEFAULT_PREFS.shortcuts[k]; });
-      savePrefs(); dlg.close(); toast('工作台设置已保存', 'ok');
+      state.prefs.snippets = finalItems;
+      Object.keys(state.prefs.shortcuts).forEach(k => {
+        if (q('db-shortcut-' + k)) state.prefs.shortcuts[k] = q('db-shortcut-' + k).value.trim() || DEFAULT_PREFS.shortcuts[k];
+      });
+      savePrefs();
+      dlg.close();
+      toast('工作台设置已保存（共 ' + finalItems.length + ' 条模板）' + ignoredNote, 'ok');
       if (state.source && state.source.kind !== 'redis') renderWorkspace(true);
     };
   }
 
+  async function boundedExportBlob(response, maxBytes) {
+    const size = Number(response.headers.get('Content-Length'));
+    if (size > maxBytes) throw new Error('导出超过浏览器内存下载上限，请使用支持直接保存文件的浏览器或缩小结果范围');
+    if (!response.body || typeof response.body.getReader !== 'function') {
+      if (!size) throw new Error('当前浏览器无法安全读取未知大小的导出，请使用支持流式下载的浏览器');
+      const blob = await response.blob();
+      if (blob.size > maxBytes) throw new Error('导出文件超过内存下载上限');
+      return blob;
+    }
+    const reader = response.body.getReader(), chunks = [];
+    let bytes = 0;
+    try {
+      while (true) {
+        const item = await reader.read();
+        if (item.done) break;
+        bytes += item.value.byteLength;
+        if (bytes > maxBytes) { await reader.cancel(); throw new Error('导出超过 64MB 内存下载上限，请直接保存文件或缩小结果范围'); }
+        chunks.push(item.value);
+      }
+      return new Blob(chunks, { type: response.headers.get('Content-Type') || 'application/octet-stream' });
+    } finally { reader.releaseLock(); }
+  }
   async function exportResult() {
     if (!state.lastSQL || state.controller) return;
     const effSrc3 = effectiveSource();
@@ -3476,6 +4185,9 @@
     const filename = safe + '-' + new Date().toISOString().replace(/[:.]/g, '-') + ext;
     const button = q('db-export'); button.disabled = true;
     let handle = null, table = '';
+    const exportController = new AbortController();
+    const cancelExportOnLeave = function () { if (String(location.hash || '').indexOf('#/database') !== 0) exportController.abort(); };
+    window.addEventListener('hashchange', cancelExportOnLeave);
     try {
       if (format === 'insert' || format === 'update') {
         const title = format === 'update' ? '导出 UPDATE 语句' : '导出 INSERT 语句';
@@ -3488,20 +4200,20 @@
       }
       if (window.showSaveFilePicker) handle = await window.showSaveFilePicker({ suggestedName: filename, types: types });
       const currentSession = sess();
-      const response = await fetch('/api/database/export', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ source_id: effSrc3.id, sql: state.lastSQL, max_rows: state.lastMaxRows, page: currentSession && currentSession.page || 1, page_size: currentSession && currentSession.pageSize || state.lastMaxRows, count_mode: 'none', format: format, table: table }) });
+      const response = await fetch('/api/database/export', { method: 'POST', signal: exportController.signal, credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ source_id: effSrc3.id, sql: state.lastSQL, max_rows: state.lastMaxRows, page: currentSession && currentSession.page || 1, page_size: currentSession && currentSession.pageSize || state.lastMaxRows, count_mode: 'none', format: format, table: table }) });
       if (!response.ok) { const body = await response.json().catch(() => ({})); throw new Error(body.error || 'HTTP ' + response.status); }
-      if (handle && response.body) { const writable = await handle.createWritable(); await response.body.pipeTo(writable); }
-      else { const blob = await response.blob(); downloadBlob(blob, filename); }
+      if (handle && response.body) { const writable = await handle.createWritable(); await response.body.pipeTo(writable, { signal: exportController.signal }); }
+      else { const blob = await boundedExportBlob(response, 64 * 1024 * 1024); downloadBlob(blob, filename); }
       toast((format === 'xlsx' ? 'Excel' : format.toUpperCase()) + ' 导出完成', 'ok');
     } catch (e) {
       if (e.name !== 'AbortError') toast('导出失败：' + e.message, 'err');
-    } finally { button.disabled = state.rows.length === 0; }
+    } finally { window.removeEventListener('hashchange', cancelExportOnLeave); button.disabled = state.rows.length === 0; }
   }
 
   function renderRedis(host) {
     state.cursor = '0'; state.redisKeyBase64 = ''; state.redisType = ''; state.redisCursor = '0'; state.redisNextCursor = '0'; state.redisCursorHistory = []; state.redisOffset = 0; state.redisMembersHasNext = false;
     const mode = state.source.redis_mode || 'standalone';
-    host.innerHTML = '<div class="db-redis-workspace"><div class="db-editor-tabs"><div id="db-sql-tabs" class="db-sql-tabs"></div><button type="button" class="btn btn-xs" id="db-tab-add" title="新建查询页签">＋ 页签</button><span class="db-dialect">Redis · 只读命令</span></div><div class="db-redis-layout"><div class="card db-redis-keys"><div class="db-editor-bar"><span class="db-redis-topo">拓扑 ' + h(mode) + (mode === 'cluster' ? ' · 跨主节点 SCAN' : mode === 'sentinel' ? ' · ' + h(state.source.redis_master_name || '') : ' · 单机') + '</span><input id="db-redis-pattern" value="*" placeholder="Key pattern，例如 order:*"><button class="btn btn-primary" id="db-redis-scan">SCAN</button><button class="btn" id="db-redis-next">下一批</button></div><div id="db-redis-list" class="db-redis-list"></div></div><div class="db-redis-center"><div class="card db-redis-detail"><div class="db-pane-title"><span>Key 详情</span><span id="db-redis-type" class="tag"></span></div><div id="db-redis-controls" class="db-redis-controls"></div><pre id="db-redis-value">选择左侧 Key 查看类型、TTL 和内容</pre></div><div class="card db-redis-members"><div class="db-pane-title"><span>成员</span><div><button class="btn btn-xs" id="db-redis-members-prev" disabled>上一页</button><button class="btn btn-xs" id="db-redis-members-next" disabled>下一页</button></div></div><div id="db-redis-members-list" class="db-redis-members-list"><span class="hint">Hash / List / Set / ZSet 选择 Key 后在这里分页查看</span></div></div></div><div class="card db-redis-side"><div class="db-pane-title"><span>运行指标</span><button class="btn btn-xs" id="db-redis-info-refresh">刷新</button></div><div id="db-redis-info" class="db-redis-info"><span class="hint">点击刷新读取 INFO memory / clients / stats / keyspace</span></div><div class="db-pane-title db-redis-command-title">只读命令行</div><div class="db-redis-command-form"><input id="db-redis-command-line" class="db-redis-command-line" placeholder="例如 HGETALL user:1001 或 INFO memory"><select id="db-redis-command"><option>TYPE</option><option>TTL</option><option>PTTL</option><option>GET</option><option>HGET</option><option>HGETALL</option><option>HSCAN</option><option>LLEN</option><option>LRANGE</option><option>SCARD</option><option>SSCAN</option><option>ZCARD</option><option>ZRANGE</option><option>INFO</option><option>DBSIZE</option><option>PING</option></select><input id="db-redis-command-args" placeholder="参数：field 或其他只读参数"><button class="btn btn-primary" id="db-redis-command-run">执行</button></div><div class="hint">命令行仅执行只读白名单，参数按 Redis CLI 习惯拆分；危险命令会被后端拒绝。</div><pre id="db-redis-command-result" class="db-redis-command-result"></pre></div></div></div>';
+    host.innerHTML = '<div class="db-redis-workspace"><div class="db-editor-tabs"><div id="db-sql-tabs" class="db-sql-tabs"></div><button type="button" class="btn btn-xs" id="db-tab-add" title="新建查询页签">＋ 页签</button><span class="db-dialect">Redis · 只读命令</span></div><div class="db-redis-layout"><div class="card db-redis-keys"><div class="db-editor-bar"><span class="db-redis-topo">拓扑 ' + h(mode) + (mode === 'cluster' ? ' · 跨主节点 SCAN' : mode === 'sentinel' ? ' · ' + h(state.source.redis_master_name || '') : ' · 单机') + '</span><input id="db-redis-pattern" value="*" placeholder="Key pattern，例如 order:*"><button class="btn btn-primary" id="db-redis-scan">SCAN</button><button class="btn" id="db-redis-next">下一批</button></div><div id="db-redis-list" class="db-redis-list"></div></div><div class="db-redis-center"><div class="card db-redis-detail"><div class="db-pane-title"><span>Key 详情</span><span id="db-redis-type" class="tag"></span></div><div id="db-redis-controls" class="db-redis-controls"></div><pre id="db-redis-value">选择左侧 Key 查看类型、TTL 和内容</pre></div><div class="card db-redis-members"><div class="db-pane-title"><span>成员</span><div><button class="btn btn-xs" id="db-redis-members-prev" disabled>上一页</button><button class="btn btn-xs" id="db-redis-members-next" disabled>下一页</button></div></div><div id="db-redis-members-list" class="db-redis-members-list"><span class="hint">Hash / List / Set / ZSet 选择 Key 后在这里分页查看</span></div></div></div><div class="card db-redis-side"><div class="db-pane-title"><span>运行指标</span><button class="btn btn-xs" id="db-redis-info-refresh">刷新</button></div><div id="db-redis-info" class="db-redis-info"><span class="hint">点击刷新读取 INFO memory / clients / stats / keyspace</span></div><div class="db-pane-title db-redis-command-title">只读命令行</div><div class="db-redis-command-form"><input id="db-redis-command-line" class="db-redis-command-line" placeholder="例如 HSCAN user:1001 0 COUNT 100"><select id="db-redis-command"><option>TYPE</option><option>TTL</option><option>PTTL</option><option>GET</option><option>HGET</option><option>HSCAN</option><option>LLEN</option><option>LRANGE</option><option>SCARD</option><option>SSCAN</option><option>ZCARD</option><option>ZRANGE</option><option>INFO</option><option>DBSIZE</option><option>PING</option></select><input id="db-redis-command-args" placeholder="参数：field 或其他只读参数"><button class="btn btn-primary" id="db-redis-command-run">执行</button></div><div class="hint">命令行仅执行只读白名单，参数按 Redis CLI 习惯拆分；危险命令会被后端拒绝。</div><pre id="db-redis-command-result" class="db-redis-command-result"></pre></div></div></div>';
     renderTabs();
     q('db-tab-add').onclick = addSession;
     q('db-redis-scan').onclick = () => { state.cursor = '0'; scanRedis(true); };
@@ -3682,8 +4394,15 @@
     highlightSQL: highlightSQL,
     tokenizeSQL: tokenizeSQL,
     suggestSQL: suggestSQL,
+    sqlTableContext: sqlTableContext,
+    matchesShortcut: matchesShortcut,
+    completionExtras: completionExtras,
+    warmupSchemaTables: warmupSchemaTables,
+    loadCategoryObjects: loadCategoryObjects,
     matchBrackets: matchBrackets,
     completionPrefix: completionPrefix,
-    isSnippetExpandKey: isSnippetExpandKey
+    isSnippetExpandKey: isSnippetExpandKey,
+    parseSnippetsText: parseSnippetsText,
+    formatSnippetsText: formatSnippetsText
   };
 })();

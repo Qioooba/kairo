@@ -18,7 +18,6 @@ package httpserver
 //                 本路由支持 session_id 优先于 (system, server)。
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -808,7 +807,7 @@ func (s *Server) handleSshSftpCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	defer sftpCli.Close()
 
-	if err := sftpCli.UploadStream(r.Context(), bytes.NewReader(nil), req.Path, 0o644, nil); err != nil {
+	if err := sftpCli.CreateExclusive(r.Context(), req.Path); err != nil {
 		writeErrSanitized(w, 500, fmt.Errorf("新建文件失败: %w", err))
 		return
 	}

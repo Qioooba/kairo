@@ -79,6 +79,12 @@ func (s *Server) handleDiffCompare(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Bound the per-line slices before splitLines allocates them. A small
+	// byte payload containing millions of newlines is still expensive.
+	if strings.Count(req.Left, "\n") >= 200000 || strings.Count(req.Right, "\n") >= 200000 {
+		writeErr(w, http.StatusRequestEntityTooLarge, errors.New("text exceeds 200000 lines per side"))
+		return
+	}
 	leftLines := splitLines(req.Left)
 	rightLines := splitLines(req.Right)
 	leftOriginal, leftKeys, leftNos := prepareLines(leftLines, req.Ignore)

@@ -18,6 +18,10 @@ const maxFetchedWSDLBytes = 4 * 1024 * 1024
 
 func (s *Server) handleWSCodegenDispatch(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
+	// All operations except the static engine catalog access local files or tools.
+	if path != "/api/wscodegen/engines" && !requireAdmin(w, r) {
+		return
+	}
 	switch {
 	case path == "/api/wscodegen/engines" && r.Method == http.MethodGet:
 		writeJSON(w, 200, map[string]any{"ok": true, "engines": wscodegen.Profiles()})

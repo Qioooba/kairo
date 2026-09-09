@@ -140,7 +140,7 @@ var disableRegistryForTest = false
 func findPathWithCandidates(filePaths []string, regQueries []regQuery) (string, bool) {
 	for _, p := range filePaths {
 		if p != "" {
-			if _, err := os.Stat(p); err == nil {
+			if info, err := os.Stat(p); err == nil && info.Mode().IsRegular() {
 				return cleanPath(p), true
 			}
 		}
@@ -238,7 +238,7 @@ func readPathFromRegistry(root uintptr, subkey, valueName string) string {
 		0,
 		uintptr(unsafe.Pointer(&dataSize)),
 	)
-	if ret != 0 || dataSize == 0 {
+	if ret != 0 || dataSize < 2 || dataSize > 1024*1024 || dataSize%2 != 0 || (dataType != 1 && dataType != 2) {
 		return ""
 	}
 
@@ -260,7 +260,7 @@ func readPathFromRegistry(root uintptr, subkey, valueName string) string {
 	if !strings.HasSuffix(strings.ToLower(raw), ".exe") {
 		return ""
 	}
-	if _, err := os.Stat(raw); err != nil {
+	if info, err := os.Stat(raw); err != nil || !info.Mode().IsRegular() {
 		return ""
 	}
 	return raw

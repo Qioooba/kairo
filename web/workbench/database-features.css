@@ -4,11 +4,11 @@
 .db-pro-quick-actions,
 .db-pro-grid-actions,
 .db-pro-action-grid {
-  display: inline-flex;
   align-items: center;
   gap: 5px;
   flex-wrap: wrap;
 }
+.db-pro-quick-actions, .db-pro-grid-actions { display: inline-flex; }
 .db-pro-action-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .db-pro-button { min-height: 28px; white-space: nowrap; }
 .db-pro-grid-actions { margin-left: 6px; padding-left: 6px; border-left: 1px solid var(--line); }
@@ -153,7 +153,6 @@
 .db-pro-designer-list { display: grid; gap: 7px; max-height: 45vh; margin-bottom: 9px; overflow: auto; }
 .db-pro-designer-row { display: grid; grid-template-columns: minmax(110px, 1fr) minmax(130px, 1fr) auto minmax(120px, 1fr) auto; align-items: center; gap: 7px; }
 .db-pro-designer-row[data-index] { grid-template-columns: minmax(110px, 1fr) minmax(150px, 1.3fr) auto auto; }
-.db-pro-designer-row[data-constraint] { grid-template-columns: minmax(110px, 1fr) minmax(200px, 2fr) auto; }
 .db-pro-designer-row[data-row] { grid-template-columns: minmax(100px, 1fr) minmax(120px, 1fr) auto auto minmax(100px, 1fr) minmax(120px, 1fr) auto; }
 .db-pro-designer-row[data-constraint] { grid-template-columns: minmax(110px, 1fr) minmax(130px, 1fr) minmax(110px, 1fr) minmax(130px, 1fr) minmax(130px, 1fr) minmax(130px, 1fr) minmax(130px, 1fr) auto; }
 .db-pro-designer-row .editor-input { min-width: 0; }
@@ -208,4 +207,69 @@
   .db-pro-history-toolbar select { width: 100%; }
   .db-pro-function-error-row { grid-template-columns: 48px 1fr; }
   .db-pro-function-error-row em { grid-column: 1 / -1; }
+}
+
+/* 数据源高级设置：环境、TLS 与 SSH 隧道 */
+.db-pro-source-advanced {
+  margin: 10px 0 0;
+  padding: 10px 14px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg-2);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.db-pro-source-advanced legend {
+  padding: 0 8px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+}
+.db-pro-source-subhead {
+  margin: 2px 0 0;
+  padding-top: 8px;
+  border-top: 1px dashed var(--line);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+}
+.db-pro-tls-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(140px, 1fr));
+  gap: 10px;
+}
+.db-ssh-toggle-row {
+  display: flex;
+  align-items: center;
+}
+.db-ssh-fields.is-disabled {
+  opacity: 0.55;
+  pointer-events: none;
+  user-select: none;
+  transition: opacity 0.2s ease;
+}
+@media (max-width: 900px) {
+  .db-pro-source-grid {
+    grid-template-columns: 1fr;
+  }
+  .db-pro-tls-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 600px) {
+  .db-pro-tls-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* 高级设置内所有文本框与下拉框统一 36px 高度与盒模型，与主表单严格齐平 */
+.db-pro-source-advanced input:not([type="checkbox"]):not([type="radio"]),
+.db-pro-source-advanced select {
+  height: 36px;
+  min-height: 36px;
+  max-height: 36px;
+  padding: 7px 11px;
+  font-size: 13px;
+  box-sizing: border-box;
 }

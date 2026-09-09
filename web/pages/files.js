@@ -873,7 +873,7 @@
           class: 'btn btn-sm',
           title: item.path,
           style: 'display:inline-flex; align-items:center; gap:4px;',
-          unsafeHtml: svgIcon('smFolder', 14) + ' ' + item.name,
+          unsafeHtml: svgIcon('smFolder', 14) + ' ' + escapeHtml(item.name),
           onclick: (e) => {
             e.preventDefault();
             pathInp.value = item.path;
@@ -1239,7 +1239,7 @@
         return span;
       }
       if (st.status === 'fail') {
-        const span = el('span', { class: 'dl-pct', style: 'color:#ef4444; display:inline-flex; align-items:center; gap:4px;', unsafeHtml: svgIcon('smX', 14) + ' ' + (st.error || '失败') });
+        const span = el('span', { class: 'dl-pct', style: 'color:#ef4444; display:inline-flex; align-items:center; gap:4px;', unsafeHtml: svgIcon('smX', 14) + ' ' + escapeHtml(st.error || '失败') });
         return span;
       }
       return null;
@@ -1783,7 +1783,7 @@
         const span = el('span', { class: 'dl-pct', style: 'color:#10b981; display:inline-flex; align-items:center; gap:4px;', unsafeHtml: svgIcon('smCheck', 14) + ' 完成 · ' + formatBytes(task.bytes) });
         progCell.appendChild(span);
       } else if (task.status === 'fail') {
-        const span = el('span', { class: 'dl-pct', style: 'color:#ef4444; display:inline-flex; align-items:center; gap:4px;', unsafeHtml: svgIcon('smX', 14) + ' ' + (task.error || '失败') });
+        const span = el('span', { class: 'dl-pct', style: 'color:#ef4444; display:inline-flex; align-items:center; gap:4px;', unsafeHtml: svgIcon('smX', 14) + ' ' + escapeHtml(task.error || '失败') });
         progCell.appendChild(span);
       } else if (task.status === 'cancel') {
         progCell.appendChild(el('span', { class: 'dl-pct', style: 'color:var(--text-dim);', text: '已取消' }));

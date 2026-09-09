@@ -134,14 +134,7 @@ func acquireLock(path string, now time.Time) (func(), error) {
 		return os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	}
 	file, err := create()
-	if errors.Is(err, fs.ErrExist) {
-		info, statErr := os.Stat(path)
-		if statErr == nil && now.Sub(info.ModTime()) > 15*time.Minute {
-			if removeErr := os.Remove(path); removeErr == nil {
-				file, err = create()
-			}
-		}
-	}
+	// Age is not proof that the owner exited; never steal an upgrade lock.
 	if err != nil {
 		return nil, fmt.Errorf("upgrade: another upgrade may be running (%s): %w", path, err)
 	}
