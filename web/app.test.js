@@ -1901,6 +1901,197 @@ function testCompareHelpers() {
   console.log('  compare helpers: joinPath / rollupAllFolders / path parsing / source identity ✓');
 }
 
+async function testRouteScopeLifecycleAndAsyncUnmount() {
+  const vm = require('vm');
+  const routeScopeSrc = fs.readFileSync(path.join(__dirname, 'workbench', 'route-scope.js'), 'utf8');
+  const appSrc = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8');
+
+  // Test 1: RouteScope direct unit tests
+  const vmContext = { window: {}, console, setTimeout, clearTimeout, setInterval, clearInterval, AbortController };
+  vmContext.window = vmContext;
+  vm.runInNewContext(routeScopeSrc, vmContext);
+  const { createRouteScope, once } = vmContext.window.Kairo.workbench;
+
+  // 1a. Double dispose idempotency
+  let cleanupCalls = 0;
+  const scope1 = createRouteScope(1);
+  scope1.add(() => cleanupCalls++);
+  scope1.add(() => cleanupCalls++);
+  assert.strictEqual(cleanupCalls, 0);
+  scope1.dispose();
+  assert.strictEqual(cleanupCalls, 2);
+  scope1.dispose();
+  assert.strictEqual(cleanupCalls, 2, 'double dispose must be idempotent');
+
+  // 1b. Post-disposal resource creation
+  let postCleanupCalls = 0;
+  scope1.add(() => postCleanupCalls++);
+  assert.strictEqual(postCleanupCalls, 1, 'disposer added to dead scope must execute immediately');
+
+  let timerRan = false;
+  scope1.timeout(() => { timerRan = true; }, 10);
+  await new Promise(r => setTimeout(r, 20));
+  assert.strictEqual(timerRan, false, 'timer on dead scope must not execute');
+
+  const ctrl = scope1.controller();
+  assert.strictEqual(ctrl.signal.aborted, true, 'controller on dead scope must be aborted immediately');
+
+  // 1c. Timer cancellation on dispose
+  const scope2 = createRouteScope(2);
+  let timer2Ran = false;
+  scope2.timeout(() => { timer2Ran = true; }, 50);
+  scope2.dispose();
+  await new Promise(r => setTimeout(r, 60));
+  assert.strictEqual(timer2Ran, false, 'timer must be cleared on scope disposal');
+
+  // 1d. Event listener removal on dispose
+  const scope3 = createRouteScope(3);
+  let eventCalls = 0;
+  const listeners = {};
+  const mockTarget = {
+    addEventListener: (type, fn) => { listeners[type] = fn; },
+    removeEventListener: (type, fn) => { if (listeners[type] === fn) delete listeners[type]; }
+  };
+  scope3.event(mockTarget, 'click', () => eventCalls++);
+  assert.strictEqual(typeof listeners.click, 'function');
+  scope3.dispose();
+  assert.strictEqual(listeners.click, undefined, 'event listener must be removed on scope disposal');
+
+  // Test 2: Full navigation lifecycle in app.js
+  let unmountACalls = 0, unmountBCalls = 0, unmountA2Calls = 0;
+  let resolveA;
+  const promiseA = new Promise(r => { resolveA = r; });
+
+  const mockView = {
+    innerHTML: '',
+    dataset: {},
+    classList: { toggle: () => {}, remove: () => {} },
+    appendChild: (child) => { mockView.innerHTML += (child && child.text) || ''; }
+  };
+
+  const navListeners = {};
+  const navDoc = {
+    body: { classList: { remove: () => {} } },
+    querySelector: () => null,
+    querySelectorAll: () => [],
+    getElementById: () => null
+  };
+  const navWin = {
+    Kairo: {
+      core: { el: (tag, attrs) => ({ tag, text: attrs && attrs.text }), $: () => mockView, $$: () => [] },
+      workbench: vmContext.window.Kairo.workbench,
+      state: {
+        routes: {
+          a: (view, state, scope) => promiseA.then(() => () => { unmountACalls++; }),
+          b: (view, state, scope) => () => { unmountBCalls++; },
+          a2: (view, state, scope) => () => { unmountA2Calls++; }
+        },
+        routeNames: { a: 'A', b: 'B', a2: 'A2' }
+      }
+    },
+    addEventListener: (type, fn) => { navListeners[type] = fn; },
+    location: { hash: '#/a' },
+    document: navDoc,
+    console,
+    history: {}
+  };
+  navWin.window = navWin;
+  const navCtx = { window: navWin, document: navDoc, location: navWin.location, history: {}, console, setTimeout, clearTimeout, AbortController };
+  vm.runInNewContext(routeScopeSrc + '\n' + appSrc, navCtx);
+
+  navWin.Kairo.core.$ = () => mockView;
+
+  // Navigate to A
+  navWin.location.hash = '#/a';
+  navListeners.hashchange();
+  assert.strictEqual(mockView.dataset.renderToken, '1');
+
+  // Navigate to B before A resolves
+  navWin.location.hash = '#/b';
+  navListeners.hashchange();
+  assert.strictEqual(mockView.dataset.renderToken, '2');
+
+  // Now Route A resolves late
+  resolveA();
+  await promiseA;
+  await new Promise(r => setImmediate(r));
+
+  // A晚返回 cleanup: must execute immediately, NOT overwrite B's unmount
+  assert.strictEqual(unmountACalls, 1, 'late cleanup from route A must run immediately on stale branch');
+  assert.strictEqual(unmountBCalls, 0, 'route B is still active');
+
+  // Navigate away from B -> B's unmount must be called exactly once
+  navWin.location.hash = '#/a2';
+  navListeners.hashchange();
+  assert.strictEqual(unmountBCalls, 1, 'route B unmount must execute when leaving B');
+
+  // A-B-A navigation test
+  let resolveA_first, resolveA_second;
+  const pA1 = new Promise(r => { resolveA_first = r; });
+  const pA2 = new Promise(r => { resolveA_second = r; });
+  let unmountA1 = 0, unmountA2 = 0;
+
+  navWin.Kairo.state.routes.aba = (view, state, scope) => {
+    if (scope.renderToken === 4) {
+      return pA1.then(() => () => { unmountA1++; });
+    }
+    return pA2.then(() => () => { unmountA2++; });
+  };
+
+  // 1. Enter ABA (token 4)
+  navWin.location.hash = '#/aba';
+  navListeners.hashchange();
+  assert.strictEqual(mockView.dataset.renderToken, '4');
+
+  // 2. Switch to B (token 5)
+  navWin.location.hash = '#/b';
+  navListeners.hashchange();
+  assert.strictEqual(mockView.dataset.renderToken, '5');
+
+  // 3. Switch back to ABA (token 6)
+  navWin.location.hash = '#/aba';
+  navListeners.hashchange();
+  assert.strictEqual(mockView.dataset.renderToken, '6');
+
+  // First ABA resolves now
+  resolveA_first();
+  await pA1;
+  await new Promise(r => setImmediate(r));
+  assert.strictEqual(unmountA1, 1, 'first ABA cleanup executed immediately when late');
+
+  // Second ABA resolves now
+  resolveA_second();
+  await pA2;
+  await new Promise(r => setImmediate(r));
+  assert.strictEqual(unmountA2, 0, 'current ABA is active, not unmounted');
+
+  // Switch away from second ABA -> unmounts once
+  navWin.location.hash = '#/b';
+  navListeners.hashchange();
+  assert.strictEqual(unmountA2, 1, 'current ABA unmounted on navigation');
+
+  // Stale error rejection does NOT write to new page DOM
+  let rejectC;
+  const pC = new Promise((_, rej) => { rejectC = rej; });
+  navWin.Kairo.state.routes.c = () => pC;
+  navWin.location.hash = '#/c';
+  navListeners.hashchange(); // token 8
+  assert.strictEqual(mockView.dataset.renderToken, '8');
+
+  navWin.location.hash = '#/b';
+  navListeners.hashchange(); // token 9
+  assert.strictEqual(mockView.dataset.renderToken, '9');
+  mockView.innerHTML = 'PAGE_B_CONTENT';
+
+  rejectC(new Error('late failure in C'));
+  try { await pC; } catch (_) {}
+  await new Promise(r => setImmediate(r));
+
+  assert.strictEqual(mockView.innerHTML, 'PAGE_B_CONTENT', 'late rejection from C must not write error to B');
+
+  console.log('  route scope and async unmount lifecycle ✓');
+}
+
 // ---------- 主入口 ----------
 
 async function main() {
@@ -1911,6 +2102,7 @@ async function main() {
     testCssEscape, testPctText, testValidate, testEl, testConfirmDialog, testXSSInErrorText,
     testGotDoneDedupe, testNormalizeHighlightColor, testRenderHighlightedLine,
     testTailViewer, testApplyCommandPath, testDatabaseSQLHelpers, testDatabaseWorkbenchLazy, testCompareHelpers, testWaspackHelpers,
+    testRouteScopeLifecycleAndAsyncUnmount,
   ];
   let pass = 0, fail = 0;
   for (const t of tests) {

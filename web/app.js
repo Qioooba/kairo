@@ -97,6 +97,10 @@
     }
     const view = $('#view');
     if (!view) return;
+    if (state.currentScope) {
+      try { state.currentScope.dispose(); } catch (e) { console.warn('route scope dispose failed', e); }
+      state.currentScope = null;
+    }
     if (typeof state.currentUnmount === 'function') {
       try { state.currentUnmount(); } catch (e) { console.warn('route unmount failed', e); }
       state.currentUnmount = null;
@@ -115,22 +119,51 @@
     const renderToken = String((state.routeRenderToken || 0) + 1);
     state.routeRenderToken = Number(renderToken);
     view.dataset.renderToken = renderToken;
+    const createScope = (Kairo.workbench && Kairo.workbench.createRouteScope) || function (token) {
+      let d = false;
+      const fns = [];
+      return {
+        renderToken: token,
+        isCurrent: function (t) { return !d && (t === undefined || t === token); },
+        add: function (fn) {
+          if (typeof fn !== 'function') return function () {};
+          if (d) { try { fn(); } catch (_) {} return function () {}; }
+          let ran = false;
+          const safe = function () { if (ran) return; ran = true; try { fn(); } catch (_) {} };
+          fns.push(safe);
+          return safe;
+        },
+        dispose: function () {
+          if (d) return;
+          d = true;
+          while (fns.length) { const f = fns.pop(); try { f(); } catch (_) {} }
+        }
+      };
+    };
+    const scope = createScope(Number(renderToken));
+    state.currentScope = scope;
     // v0.5 P2-14：配置页有 fixed 底部保存栏，给 view 留 padding-bottom 防遮挡
     view.classList.toggle('has-sticky-footer', name === 'config');
     try {
-      const unmount = routes[name](view, resolved.state);
+      const unmount = routes[name](view, resolved.state, scope);
       if (unmount && typeof unmount.then === 'function') {
         unmount.then(function (cleanup) {
-          if (view.dataset.renderToken === renderToken && typeof cleanup === 'function') state.currentUnmount = cleanup;
+          if (typeof cleanup !== 'function') return;
+          if (scope.isCurrent() && view.dataset.renderToken === renderToken) {
+            state.currentUnmount = scope.add(cleanup);
+          } else {
+            // UI-01: 页面已切走（stale 分支），立即执行旧路由返回的 cleanup 避免泄漏
+            try { cleanup(); } catch (e) { console.warn('stale route cleanup failed', e); }
+          }
         }).catch(function (e) {
-          if (view.dataset.renderToken !== renderToken) return;
+          if (!scope.isCurrent() || view.dataset.renderToken !== renderToken) return;
           view.appendChild(Kairo.core.el('div', { class: 'card' }, [
             Kairo.core.el('h3', { text: '页面渲染失败' }),
             Kairo.core.el('div', { class: 'text-err', text: e && e.message ? e.message : String(e) })
           ]));
         });
       } else if (typeof unmount === 'function') {
-        state.currentUnmount = unmount;
+        state.currentUnmount = scope.add(unmount);
       }
     } catch (e) {
       view.appendChild(Kairo.core.el('div', { class: 'card' }, [
@@ -181,6 +214,10 @@
     }
     if (Kairo.database && Kairo.database.cancel) {
       try { Kairo.database.cancel(); } catch (e) { /* ignore */ }
+    }
+    if (state.currentScope) {
+      try { state.currentScope.dispose(); } catch (e) { /* ignore */ }
+      state.currentScope = null;
     }
     if (typeof state.currentUnmount === 'function') {
       try { state.currentUnmount(); } catch (e) { /* ignore */ }
