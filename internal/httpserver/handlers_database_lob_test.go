@@ -71,6 +71,11 @@ func TestDatabaseLOBTokenLazyIssue(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	srv.database.SetCachedFields(source.ID, "HR", "DOCS", []dbconsole.Field{
+		{Name: "ID", DataType: "NUMBER", PrimaryKey: true},
+		{Name: "CONTENT", DataType: "CLOB"},
+	})
+
 	reqBody := databaseLobRequest{
 		SourceID:   source.ID,
 		Table:      "DOCS",
@@ -101,9 +106,13 @@ func TestDatabaseLOBTokenLazyIssue(t *testing.T) {
 	}
 
 	// Without PK and without ROWID, must be rejected with 400
+	srv.database.SetCachedFields(source.ID, "HR", "NOPK_TABLE", []dbconsole.Field{
+		{Name: "FOO", DataType: "VARCHAR2(100)"},
+		{Name: "CONTENT", DataType: "CLOB"},
+	})
 	reqNoPK := databaseLobRequest{
 		SourceID:   source.ID,
-		Table:      "DOCS",
+		Table:      "NOPK_TABLE",
 		Column:     "CONTENT",
 		ColumnType: "CLOB",
 		Keys:       map[string]any{"FOO": "BAR"},
@@ -111,6 +120,146 @@ func TestDatabaseLOBTokenLazyIssue(t *testing.T) {
 	wNoPK := doRequestWithToken(srv, http.MethodPost, "/api/database/lob/token", rbacUserToken, reqNoPK)
 	if wNoPK.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400 for table without PK/ROWID, got %d: %s", wNoPK.Code, wNoPK.Body.String())
+	}
+}
+
+func TestDatabaseLOB_SessionMappingAndNoTransaction(t *testing.T) {
+	srv := newTestServerWithAuth(t, databaseTokens())
+	source, err := srv.database.Store().Save(dbconsole.Source{Name: "test-src", Kind: dbconsole.KindOracle, Host: "127.0.0.1", Port: 1521, Username: "HR", OracleService: "XE", AllowedUsers: []string{"user1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.database.SetCachedFields(source.ID, "HR", "DOCS", []dbconsole.Field{
+		{Name: "ID", DataType: "NUMBER", PrimaryKey: true},
+		{Name: "CONTENT", DataType: "CLOB"},
+	})
+
+	// 1. Plain SELECT with raw client session ID -> server maps ID, sees no transaction -> token.SessionID is ""
+	reqPlain := databaseLobRequest{
+		SourceID:           source.ID,
+		SessionID:          "dbtab-raw-12345",
+		TransactionPending: false,
+		Table:              "DOCS",
+		Column:             "CONTENT",
+		Keys:               map[string]any{"ID": 1},
+	}
+	wPlain := doRequestWithToken(srv, http.MethodPost, "/api/database/lob/token", rbacUserToken, reqPlain)
+	if wPlain.Code != http.StatusOK {
+		t.Fatalf("expected 200 for plain select, got %d: %s", wPlain.Code, wPlain.Body.String())
+	}
+	var respPlain map[string]any
+	json.Unmarshal(wPlain.Body.Bytes(), &respPlain)
+	payloadPlain, _, _ := dbconsole.VerifySignedLOBToken(respPlain["token"].(string))
+	if payloadPlain.SessionID != "" {
+		t.Fatalf("plain select token must have empty sessionID, got %q", payloadPlain.SessionID)
+	}
+
+	// 2. Client declares transaction_pending=true, but transaction is absent/expired on server -> 409 Conflict
+	reqExpired := databaseLobRequest{
+		SourceID:           source.ID,
+		SessionID:          "dbtab-raw-12345",
+		TransactionPending: true,
+		Table:              "DOCS",
+		Column:             "CONTENT",
+		Keys:               map[string]any{"ID": 1},
+	}
+	wExpired := doRequestWithToken(srv, http.MethodPost, "/api/database/lob/token", rbacUserToken, reqExpired)
+	if wExpired.Code != http.StatusConflict {
+		t.Fatalf("expected 409 Conflict for expired transaction, got %d: %s", wExpired.Code, wExpired.Body.String())
+	}
+}
+
+func TestDatabaseLOB_TrustedLocatorCompositePKAndROWID(t *testing.T) {
+	srv := newTestServerWithAuth(t, databaseTokens())
+	source, err := srv.database.Store().Save(dbconsole.Source{Name: "test-src2", Kind: dbconsole.KindOracle, Host: "127.0.0.1", Port: 1521, Username: "HR", OracleService: "XE", AllowedUsers: []string{"user1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Table with composite PK: TENANT_ID, DOC_ID
+	srv.database.SetCachedFields(source.ID, "HR", "COMP_DOCS", []dbconsole.Field{
+		{Name: "TENANT_ID", DataType: "NUMBER", PrimaryKey: true},
+		{Name: "DOC_ID", DataType: "NUMBER", PrimaryKey: true},
+		{Name: "BODY", DataType: "CLOB"},
+	})
+
+	// Missing DOC_ID -> must be rejected with 400
+	reqMissingPart := databaseLobRequest{
+		SourceID: source.ID, Table: "COMP_DOCS", Column: "BODY",
+		Keys: map[string]any{"TENANT_ID": 1},
+	}
+	wMissing := doRequestWithToken(srv, http.MethodPost, "/api/database/lob/token", rbacUserToken, reqMissingPart)
+	if wMissing.Code != http.StatusBadRequest || !strings.Contains(wMissing.Body.String(), "DOC_ID") {
+		t.Fatalf("expected 400 missing composite key, got %d: %s", wMissing.Code, wMissing.Body.String())
+	}
+
+	// Full composite PK provided -> success
+	reqFullPK := databaseLobRequest{
+		SourceID: source.ID, Table: "COMP_DOCS", Column: "BODY",
+		Keys: map[string]any{"TENANT_ID": 1, "DOC_ID": 42},
+	}
+	wFull := doRequestWithToken(srv, http.MethodPost, "/api/database/lob/token", rbacUserToken, reqFullPK)
+	if wFull.Code != http.StatusOK {
+		t.Fatalf("expected 200 for full composite PK, got %d: %s", wFull.Code, wFull.Body.String())
+	}
+
+	// Table with no PK, but valid ROWID provided -> success
+	srv.database.SetCachedFields(source.ID, "HR", "LOGS", []dbconsole.Field{
+		{Name: "MESSAGE", DataType: "CLOB"},
+	})
+	reqROWID := databaseLobRequest{
+		SourceID: source.ID, Table: "LOGS", Column: "MESSAGE",
+		UseRowID: true, RowID: "AAAB12AADAAAAwPAAA",
+	}
+	wROWID := doRequestWithToken(srv, http.MethodPost, "/api/database/lob/token", rbacUserToken, reqROWID)
+	if wROWID.Code != http.StatusOK {
+		t.Fatalf("expected 200 for valid ROWID, got %d: %s", wROWID.Code, wROWID.Body.String())
+	}
+
+	// Malformed ROWID with injection chars -> rejected
+	reqBadROWID := databaseLobRequest{
+		SourceID: source.ID, Table: "LOGS", Column: "MESSAGE",
+		UseRowID: true, RowID: "AAAB12' OR 1=1--",
+	}
+	wBadROWID := doRequestWithToken(srv, http.MethodPost, "/api/database/lob/token", rbacUserToken, reqBadROWID)
+	if wBadROWID.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for illegal ROWID, got %d: %s", wBadROWID.Code, wBadROWID.Body.String())
+	}
+}
+
+func TestDatabaseLOB_SourceConfigChangedInvalidation(t *testing.T) {
+	srv := newTestServerWithAuth(t, databaseTokens())
+	source, err := srv.database.Store().Save(dbconsole.Source{Name: "src-mutate", Kind: dbconsole.KindOracle, Host: "127.0.0.1", Port: 1521, Username: "HR", OracleService: "XE", AllowedUsers: []string{"user1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.database.SetCachedFields(source.ID, "HR", "DOCS", []dbconsole.Field{
+		{Name: "ID", DataType: "NUMBER", PrimaryKey: true},
+		{Name: "CONTENT", DataType: "CLOB"},
+	})
+
+	// 1. Issue token with original source config
+	wToken := doRequestWithToken(srv, http.MethodPost, "/api/database/lob/token", rbacUserToken, databaseLobRequest{
+		SourceID: source.ID, Table: "DOCS", Column: "CONTENT", Keys: map[string]any{"ID": 1},
+	})
+	if wToken.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", wToken.Code, wToken.Body.String())
+	}
+	var resp map[string]any
+	json.Unmarshal(wToken.Body.Bytes(), &resp)
+	token := resp["token"].(string)
+
+	// 2. Change source configuration (e.g. port changed)
+	source.Port = 1522
+	_, err = srv.database.Store().Save(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 3. Attempt download with old token -> must be rejected with 403 Forbidden
+	wLob := doRequestWithToken(srv, http.MethodPost, "/api/database/lob", rbacUserToken, databaseLobRequest{Token: token})
+	if wLob.Code != http.StatusForbidden || !strings.Contains(wLob.Body.String(), "数据源配置已变化") {
+		t.Fatalf("expected 403 Forbidden for changed source config, got %d: %s", wLob.Code, wLob.Body.String())
 	}
 }
 

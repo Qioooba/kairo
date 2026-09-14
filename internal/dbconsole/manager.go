@@ -197,6 +197,11 @@ func (m *Manager) acquire(ctx context.Context) error {
 
 func (m *Manager) release() { <-m.global }
 
+// SourceFingerprint generates a stable configuration fingerprint for a Source.
+func SourceFingerprint(source Source) string {
+	return sourceFingerprint(source)
+}
+
 func sourceFingerprint(source Source) string {
 	b, _ := json.Marshal(source)
 	return string(b)

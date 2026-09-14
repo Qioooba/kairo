@@ -898,6 +898,8 @@
         const dlg = Kairo.overlays.modal({ title, width: 840, body });
         const loadPreview = async (btn) => {
           if (btn) { btn.disabled = true; btn.textContent = '正在加载…'; }
+          const capturedTabId = (sess() || {}).id;
+          const capturedRunSeq = (sess() || {}).runSeq;
           const resolved = await resolveLobPayload(rowIdx, colIdx, colName, isClob, val);
           if (!resolved) { if (btn) { btn.disabled = false; btn.textContent = '在线预览文本'; } return; }
           try {
@@ -930,6 +932,10 @@
                 await reader.cancel();
                 break;
               }
+            }
+            const activeSess = sess();
+            if (!activeSess || activeSess.id !== capturedTabId || activeSess.runSeq !== capturedRunSeq) {
+              return;
             }
             val.text = text;
             val.truncated = truncated || total > LIMIT;
@@ -988,6 +994,8 @@
         const dlg = Kairo.overlays.modal({ title, width: 900, body });
         const loadBlobPreview = async (btn) => {
           if (btn) { btn.disabled = true; btn.textContent = '正在加载…'; }
+          const capturedTabId = (sess() || {}).id;
+          const capturedRunSeq = (sess() || {}).runSeq;
           const resolved = await resolveLobPayload(rowIdx, colIdx, colName, isClob, val);
           if (!resolved) { if (btn) { btn.disabled = false; btn.textContent = '在线预览 Hex'; } return; }
           try {
@@ -1029,6 +1037,10 @@
                   break;
                 }
               }
+            }
+            const activeSess = sess();
+            if (!activeSess || activeSess.id !== capturedTabId || activeSess.runSeq !== capturedRunSeq) {
+              return;
             }
             const allBytes = new Uint8Array(chunks.reduce((acc, c) => acc + c.length, 0));
             let offset = 0;
@@ -1085,17 +1097,21 @@
       }
       const tName = targetVal.table || detectTableName();
       const effSrc = effectiveSource() || {};
+      const activeS = sess() || {};
       try {
         const tokenResp = await fetch('/api/database/lob/token', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             source_id: effSrc.id,
-            session_id: (sess() || {}).transactionId || '',
+            session_id: activeS.transactionId || '',
+            transaction_pending: !!activeS.transactionPending,
             owner: (targetVal.owner || (q('db-schema') && q('db-schema').value) || '').toUpperCase(),
             table: (tName || '').toUpperCase(),
             column: (colName || '').toUpperCase(),
             column_type: (targetVal.database_type || (isClob ? 'CLOB' : 'BLOB')).toUpperCase(),
+            use_rowid: !!targetVal.rowid,
+            rowid: targetVal.rowid || '',
             keys: rowKeys
           })
         });
@@ -1130,8 +1146,11 @@
     const resolved = await resolveLobPayload(rowIdx, colIdx, colName, isClob, valObj);
     if (!resolved) return;
     const { payload, table, useRowId, isToken } = resolved;
+    const activeS = sess() || {};
     const label = isToken ? 'Token' : (useRowId ? 'ROWID' : '主键');
-    toast('正在按 ' + label + ' 重查并流式下载完整 ' + (isClob ? 'CLOB' : 'BLOB') + '…', 'info');
+    const isPendingTx = !!activeS.transactionPending;
+    const actionDesc = isPendingTx ? '重查' : '按当前行重新读取';
+    toast('正在按 ' + label + actionDesc + '并流式下载完整 ' + (isClob ? 'CLOB' : 'BLOB') + '…', 'info');
     try {
       const resp = await fetch('/api/database/lob', {
         method: 'POST',

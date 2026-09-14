@@ -31,23 +31,24 @@ func getLOBTokenSecret() []byte {
 
 // SignedLOBTokenPayload 结论 2.6: LOB 下载 Token 包含完整防篡改上下文信息
 type SignedLOBTokenPayload struct {
-	SourceID     string            `json:"sid"`
-	DatabaseUser string            `json:"usr,omitempty"`
-	Owner        string            `json:"own"`
-	Table        string            `json:"tbl"`
-	Column       string            `json:"col"`
-	ColumnType   string            `json:"ctp,omitempty"`
-	RowID        string            `json:"rid,omitempty"`
-	UseRowID     bool              `json:"urid,omitempty"`
-	PrimaryKey   []string          `json:"pks,omitempty"`
-	Keys         map[string]any    `json:"kys,omitempty"`
-	KeyTypes     map[string]string `json:"kty,omitempty"`
-	SessionID    string            `json:"ses,omitempty"`
-	ExpiresAt    int64             `json:"exp"`
+	SourceID          string            `json:"sid"`
+	SourceFingerprint string            `json:"sfp,omitempty"`
+	DatabaseUser      string            `json:"usr,omitempty"`
+	Owner             string            `json:"own"`
+	Table             string            `json:"tbl"`
+	Column            string            `json:"col"`
+	ColumnType        string            `json:"ctp,omitempty"`
+	RowID             string            `json:"rid,omitempty"`
+	UseRowID          bool              `json:"urid,omitempty"`
+	PrimaryKey        []string          `json:"pks,omitempty"`
+	Keys              map[string]any    `json:"kys,omitempty"`
+	KeyTypes          map[string]string `json:"kty,omitempty"`
+	SessionID         string            `json:"ses,omitempty"`
+	ExpiresAt         int64             `json:"exp"`
 }
 
-// GenerateSignedLOBToken 生成一个防篡改、短期有效的 LOB 下载 Token
-func GenerateSignedLOBToken(sourceID, dbUser, owner, table, column, colType, rowid string, keys map[string]any, pks []string, sessionID string, ttl time.Duration) (string, error) {
+// GenerateSignedLOBTokenWithFingerprint 生成一个防篡改、短期有效且绑定数据源配置指纹的 LOB 下载 Token
+func GenerateSignedLOBTokenWithFingerprint(sourceID, sourceFingerprint, dbUser, owner, table, column, colType, rowid string, keys map[string]any, pks []string, sessionID string, ttl time.Duration) (string, error) {
 	if ttl == 0 {
 		ttl = 5 * time.Minute
 	}
@@ -64,19 +65,20 @@ func GenerateSignedLOBToken(sourceID, dbUser, owner, table, column, colType, row
 		}
 	}
 	payload := SignedLOBTokenPayload{
-		SourceID:     sourceID,
-		DatabaseUser: dbUser,
-		Owner:        owner,
-		Table:        table,
-		Column:       column,
-		ColumnType:   colType,
-		RowID:        rowid,
-		UseRowID:     len(pks) == 0 && strings.TrimSpace(rowid) != "",
-		PrimaryKey:   pks,
-		Keys:         keyValues,
-		KeyTypes:     keyTypes,
-		SessionID:    sessionID,
-		ExpiresAt:    time.Now().Add(ttl).Unix(),
+		SourceID:          sourceID,
+		SourceFingerprint: sourceFingerprint,
+		DatabaseUser:      dbUser,
+		Owner:             owner,
+		Table:             table,
+		Column:            column,
+		ColumnType:        colType,
+		RowID:             rowid,
+		UseRowID:          len(pks) == 0 && strings.TrimSpace(rowid) != "",
+		PrimaryKey:        pks,
+		Keys:              keyValues,
+		KeyTypes:          keyTypes,
+		SessionID:         sessionID,
+		ExpiresAt:         time.Now().Add(ttl).Unix(),
 	}
 
 	data, err := json.Marshal(payload)
@@ -90,6 +92,11 @@ func GenerateSignedLOBToken(sourceID, dbUser, owner, table, column, colType, row
 	sigHex := hex.EncodeToString(mac.Sum(nil))
 
 	return payloadB64 + "." + sigHex, nil
+}
+
+// GenerateSignedLOBToken 生成一个防篡改、短期有效的 LOB 下载 Token (向后兼容)
+func GenerateSignedLOBToken(sourceID, dbUser, owner, table, column, colType, rowid string, keys map[string]any, pks []string, sessionID string, ttl time.Duration) (string, error) {
+	return GenerateSignedLOBTokenWithFingerprint(sourceID, "", dbUser, owner, table, column, colType, rowid, keys, pks, sessionID, ttl)
 }
 
 // VerifySignedLOBToken 校验 Token 签名与有效期，并反序列化为 LOBRef 与 SourceID

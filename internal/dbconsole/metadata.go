@@ -299,6 +299,12 @@ func objectCategory(objectType string) string {
 	}
 }
 
+// SetCachedFields stores fields in the metadata cache (useful for mocking and fast lookups).
+func (m *Manager) SetCachedFields(sourceID, schema, object string, fields []Field) {
+	cacheKey := fmt.Sprintf("%s\x00fields\x00%s\x00%s", sourceID, schema, object)
+	metadataCacheSet(m, cacheKey, append([]Field(nil), fields...))
+}
+
 func (m *Manager) Fields(ctx context.Context, source Source, schema, object string) ([]Field, error) {
 	if source.Kind == KindRedis {
 		return nil, errors.New("Redis 没有字段")

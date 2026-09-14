@@ -49,3 +49,24 @@ func TestSignedLOBTokenExpired(t *testing.T) {
 		t.Fatal("expected expiration error")
 	}
 }
+
+func TestSignedLOBTokenWithFingerprint(t *testing.T) {
+	src := Source{ID: "src1", Kind: KindOracle, Username: "scott", Host: "127.0.0.1", Port: 1521}
+	fp := SourceFingerprint(src)
+	keys := map[string]any{"ID": 101}
+	pks := []string{"ID"}
+
+	token, err := GenerateSignedLOBTokenWithFingerprint(src.ID, fp, src.Username, "HR", "EMPLOYEES", "RESUME", "CLOB", "", keys, pks, "sess-1", 1*time.Hour)
+	if err != nil {
+		t.Fatalf("GenerateSignedLOBTokenWithFingerprint failed: %v", err)
+	}
+
+	payload, _, err := VerifySignedLOBToken(token)
+	if err != nil {
+		t.Fatalf("VerifySignedLOBToken failed: %v", err)
+	}
+
+	if payload.SourceFingerprint != fp {
+		t.Fatalf("expected fingerprint %s, got %s", fp, payload.SourceFingerprint)
+	}
+}

@@ -13,17 +13,18 @@ import (
 )
 
 type databaseLobRequest struct {
-	SourceID   string         `json:"source_id"`
-	SessionID  string         `json:"session_id,omitempty"`
-	Owner      string         `json:"owner"`
-	Table      string         `json:"table"`
-	Column     string         `json:"column"`
-	ColumnType string         `json:"column_type,omitempty"`
-	RowID      string         `json:"rowid,omitempty"`
-	UseRowID   bool           `json:"use_rowid,omitempty"`
-	Keys       map[string]any `json:"keys,omitempty"`
-	Token      string         `json:"token,omitempty"`
-	PrimaryKey []string       `json:"primary_key,omitempty"`
+	SourceID           string         `json:"source_id"`
+	SessionID          string         `json:"session_id,omitempty"`
+	TransactionPending bool           `json:"transaction_pending,omitempty"`
+	Owner              string         `json:"owner"`
+	Table              string         `json:"table"`
+	Column             string         `json:"column"`
+	ColumnType         string         `json:"column_type,omitempty"`
+	RowID              string         `json:"rowid,omitempty"`
+	UseRowID           bool           `json:"use_rowid,omitempty"`
+	Keys               map[string]any `json:"keys,omitempty"`
+	Token              string         `json:"token,omitempty"`
+	PrimaryKey         []string       `json:"primary_key,omitempty"`
 }
 
 // POST /api/database/lob  流式下载完整 LOB（结论 2.4/2.6/3.3：按主键/ROWID 重查，绑定变量，流式输出）
@@ -74,6 +75,10 @@ func (s *Server) handleDatabaseLob(w http.ResponseWriter, r *http.Request) {
 	}
 	if payload.DatabaseUser != source.Username {
 		writeErr(w, http.StatusForbidden, errors.New("数据源用户已变化，请重新查询"))
+		return
+	}
+	if payload.SourceFingerprint != "" && payload.SourceFingerprint != dbconsole.SourceFingerprint(source) {
+		writeErr(w, http.StatusForbidden, errors.New("数据源配置已变化，请重新查询后下载 LOB"))
 		return
 	}
 	ref := *signedRef
@@ -202,10 +207,30 @@ func (s *Server) handleDatabaseLobToken(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, http.StatusBadRequest, errors.New("LOB 仅支持 Oracle"))
 		return
 	}
-	if scope := databaseSessionScope(r); req.SessionID != "" && scope != "" && !strings.HasPrefix(req.SessionID, scope) {
-		writeErr(w, http.StatusForbidden, errors.New("LOB 事务不属于当前用户，请重新查询"))
-		return
+
+	tokenSessionID := ""
+	if req.SessionID != "" {
+		if !validDatabaseSessionID(req.SessionID) {
+			writeErr(w, http.StatusBadRequest, errors.New("session_id 无效"))
+			return
+		}
+		scopedSessionID := scopedDatabaseSessionID(r, req.SessionID)
+		txStatus := s.database.GetTransactionStatus(source, scopedSessionID)
+		if req.TransactionPending {
+			if !txStatus.Active {
+				writeErr(w, http.StatusConflict, errors.New("原查询事务已结束或失效，请重新查询"))
+				return
+			}
+			tokenSessionID = scopedSessionID
+		} else {
+			if txStatus.Active {
+				tokenSessionID = scopedSessionID
+			} else {
+				tokenSessionID = ""
+			}
+		}
 	}
+
 	if req.Owner == "" {
 		req.Owner = source.Username
 	}
@@ -217,28 +242,48 @@ func (s *Server) handleDatabaseLobToken(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, http.StatusBadRequest, errors.New("缺少行主键或定位信息"))
 		return
 	}
-	pkCols := req.PrimaryKey
-	var fields []dbconsole.Field
-	if len(pkCols) == 0 && !req.UseRowID {
-		var err error
-		fields, err = s.database.Fields(r.Context(), source, req.Owner, req.Table)
-		if err == nil {
-			for _, f := range fields {
-				if f.PrimaryKey {
-					pkCols = append(pkCols, f.Name)
-				}
+
+	fields, err := s.database.Fields(r.Context(), source, req.Owner, req.Table)
+	var pkCols []string
+	if err == nil {
+		for _, f := range fields {
+			if f.PrimaryKey {
+				pkCols = append(pkCols, f.Name)
 			}
 		}
-	}
-	if len(pkCols) == 0 && !req.UseRowID && strings.TrimSpace(req.RowID) == "" {
-		writeErr(w, http.StatusBadRequest, errors.New("目标表未定义主键且无 ROWID，无法安全定位 LOB，请通过单表浏览或包含 ROWID 查询"))
+	} else if len(req.PrimaryKey) > 0 {
+		writeErr(w, http.StatusBadRequest, fmt.Errorf("读取数据字典元数据失败: %w", err))
 		return
 	}
+
+	if len(pkCols) > 0 {
+		for _, pk := range pkCols {
+			val, found := req.Keys[pk]
+			if !found {
+				for k, v := range req.Keys {
+					if strings.EqualFold(k, pk) {
+						val = v
+						found = true
+						break
+					}
+				}
+			}
+			if !found || val == nil || val == "" {
+				writeErr(w, http.StatusBadRequest, fmt.Errorf("缺少主键列 %s 的有效值，无法定位 LOB", pk))
+				return
+			}
+		}
+	} else {
+		if (req.UseRowID || strings.TrimSpace(req.RowID) != "") && !strings.ContainsAny(req.RowID, "\x00\r\n'\"") {
+			req.UseRowID = true
+		} else {
+			writeErr(w, http.StatusBadRequest, errors.New("目标表未定义主键且无受信任的 ROWID，无法安全定位 LOB，请通过单表浏览或包含 ROWID 查询"))
+			return
+		}
+	}
+
 	colType := strings.ToUpper(strings.TrimSpace(req.ColumnType))
 	if colType == "" {
-		if len(fields) == 0 {
-			fields, _ = s.database.Fields(r.Context(), source, req.Owner, req.Table)
-		}
 		for _, f := range fields {
 			if strings.EqualFold(f.Name, req.Column) {
 				colType = strings.ToUpper(f.DataType)
@@ -250,8 +295,11 @@ func (s *Server) handleDatabaseLobToken(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 	}
-	token, err := dbconsole.GenerateSignedLOBToken(
+
+	fingerprint := dbconsole.SourceFingerprint(source)
+	token, err := dbconsole.GenerateSignedLOBTokenWithFingerprint(
 		source.ID,
+		fingerprint,
 		source.Username,
 		req.Owner,
 		req.Table,
@@ -260,7 +308,7 @@ func (s *Server) handleDatabaseLobToken(w http.ResponseWriter, r *http.Request) 
 		req.RowID,
 		req.Keys,
 		pkCols,
-		req.SessionID,
+		tokenSessionID,
 		5*time.Minute,
 	)
 	if err != nil {
@@ -271,4 +319,5 @@ func (s *Server) handleDatabaseLobToken(w http.ResponseWriter, r *http.Request) 
 		"token": token,
 	})
 }
+
 

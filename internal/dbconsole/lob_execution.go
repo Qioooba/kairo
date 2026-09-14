@@ -69,6 +69,19 @@ func (m *Manager) withLOBQuery(ctx context.Context, source Source, ref LOBRef, f
 		return err
 	}
 	defer conn.Close()
+
+	// Consistent snapshot for standalone read:
+	// Establish a read transaction on this connection to ensure multi-chunk consistency.
+	tx, err := conn.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err == nil {
+		defer tx.Rollback()
+		return fn(ctx, tx)
+	}
+	tx, err = conn.BeginTx(ctx, nil)
+	if err == nil {
+		defer tx.Rollback()
+		return fn(ctx, tx)
+	}
 	return fn(ctx, conn)
 }
 
