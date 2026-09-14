@@ -65,9 +65,20 @@ type WSDLProject struct {
 	TargetNS    string      `json:"target_ns,omitempty"`
 	Services    []Service   `json:"services"`
 	Operations  []Operation `json:"operations"`
-	Warnings    []string    `json:"warnings,omitempty"`
-	ParseError  string      `json:"parse_error,omitempty"`
-	RawWSDL     string      `json:"raw_wsdl,omitempty"` // 原始 WSDL 文本（便于回显/重解析）
+	Warnings     []string           `json:"warnings,omitempty"`
+	ParseError   string             `json:"parse_error,omitempty"`
+	RawWSDL      string             `json:"raw_wsdl,omitempty"` // 原始 WSDL 文本（便于回显/重解析）
+	Dependencies []SchemaDependency `json:"dependencies,omitempty"`
+}
+
+// SchemaDependency 记录一个引用的外部 XSD 依赖项及其解析状态。
+type SchemaDependency struct {
+	URI       string `json:"uri"`
+	Namespace string `json:"namespace,omitempty"`
+	Source    string `json:"source,omitempty"` // "file", "http", "attachment"
+	Status    string `json:"status"`           // "loaded", "unresolved", "conflict", "error"
+	SizeBytes int64  `json:"size_bytes,omitempty"`
+	Error     string `json:"error,omitempty"`
 }
 
 // Template 是保存的 SOAP 请求模板。

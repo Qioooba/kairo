@@ -122,10 +122,11 @@ type Result struct {
 	OutputDir   string          `json:"output_dir,omitempty"`
 	Files       []GeneratedFile `json:"files"`
 	Written     []string        `json:"written,omitempty"`
-	Command     string          `json:"command,omitempty"`
-	ToolLog     string          `json:"tool_log,omitempty"`
-	Warnings    []string        `json:"warnings,omitempty"`
-	Notes       []string        `json:"notes,omitempty"`
+	Command      string                        `json:"command,omitempty"`
+	ToolLog      string                        `json:"tool_log,omitempty"`
+	Warnings     []string                      `json:"warnings,omitempty"`
+	Notes        []string                      `json:"notes,omitempty"`
+	Dependencies []webservice.SchemaDependency `json:"dependencies,omitempty"`
 }
 
 // resolvedWSDL 是内部用的、已经解析好的 WSDL 输入。

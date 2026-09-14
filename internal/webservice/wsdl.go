@@ -12,6 +12,7 @@ package webservice
 //     不影响其它能解析的 operation。
 
 import (
+	"context"
 	"crypto/tls"
 	"encoding/xml"
 	"errors"
@@ -19,7 +20,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"path"
 	"regexp"
 	"strings"
 	"time"
@@ -35,10 +35,16 @@ type wsdlDefinitions struct {
 	XMLName   xml.Name       `xml:"definitions"`
 	TargetNS  string         `xml:"targetNamespace,attr"`
 	Types     *wsdlTypes     `xml:"types"`
+	Imports   []wsdlImport   `xml:"import"`
 	Messages  []wsdlMessage  `xml:"message"`
 	PortTypes []wsdlPortType `xml:"portType"`
 	Bindings  []wsdlBinding  `xml:"binding"`
 	Services  []wsdlService  `xml:"service"`
+}
+
+type wsdlImport struct {
+	Namespace string `xml:"namespace,attr"`
+	Location  string `xml:"location,attr"`
 }
 
 type wsdlTypes struct {
@@ -412,12 +418,37 @@ func ParseWSDL(raw string, opts ...ParseOption) *WSDLProject {
 	// 解析可选参数
 	var sourceURL string
 	var attachments map[string]string
+	var resCfg *SchemaResolverConfig
 	for _, o := range opts {
 		switch v := o.(type) {
 		case string:
 			sourceURL = v
 		case map[string]string:
 			attachments = v
+		case SchemaResolverConfig:
+			cfgCopy := v
+			resCfg = &cfgCopy
+		case *SchemaResolverConfig:
+			resCfg = v
+		case context.Context:
+			if resCfg == nil {
+				resCfg = &SchemaResolverConfig{Context: v}
+			} else {
+				resCfg.Context = v
+			}
+		}
+	}
+	if resCfg == nil {
+		resCfg = &SchemaResolverConfig{
+			BaseURI:     sourceURL,
+			Attachments: attachments,
+		}
+	} else {
+		if sourceURL != "" && resCfg.BaseURI == "" {
+			resCfg.BaseURI = sourceURL
+		}
+		if attachments != nil && resCfg.Attachments == nil {
+			resCfg.Attachments = attachments
 		}
 	}
 	trimmed := strings.TrimSpace(raw)
@@ -457,6 +488,11 @@ func ParseWSDL(raw string, opts ...ParseOption) *WSDLProject {
 
 	// 加载外部 XSD import/include
 	var imports []xsdImport
+	for _, wimp := range defs.Imports {
+		if wimp.Location != "" || wimp.Namespace != "" {
+			imports = append(imports, xsdImport{Namespace: wimp.Namespace, SchemaLocation: wimp.Location})
+		}
+	}
 	if defs.Types != nil {
 		for _, sch := range defs.Types.Schemas {
 			imports = append(imports, sch.Imports...)
@@ -478,73 +514,30 @@ func ParseWSDL(raw string, opts ...ParseOption) *WSDLProject {
 			idx.addSchema(sch, ctx)
 		}
 	}
-	// 加载外部 XSD（递归处理 XSD 内部的 import）
-	hasSource := sourceURL != "" || len(attachments) > 0
+	// 使用规范 URI SchemaResolver 统一解析外部 XSD 依赖图
+	hasSource := resCfg.BaseURI != "" || len(resCfg.Attachments) > 0
 	if hasSource {
-		loaded := map[string]bool{} // 防止循环引用
-		queue := imports
-		for len(queue) > 0 {
-			imp := queue[0]
-			queue = queue[1:]
-			if imp.SchemaLocation == "" || loaded[imp.SchemaLocation] {
-				continue
-			}
-			loaded[imp.SchemaLocation] = true
-			// 优先从 attachments 里按文件名取（上传模式），再从 URL 下载（URL 导入模式）
-			var xsdRaw string
-			var err error
-			// schemaLocation 可能是 URL（用 / 分隔）或 Windows 路径（用 \ 分隔），
-			// path.Base 只认 /，这里归一化后再取文件名，兼容两种写法。
-			basename := path.Base(strings.ReplaceAll(imp.SchemaLocation, "\\", "/"))
-			if v, ok := attachments[basename]; ok {
-				xsdRaw = v
-			} else if v, ok = attachments[imp.SchemaLocation]; ok {
-				xsdRaw = v
-			} else if sourceURL != "" {
-				xsdRaw, err = fetchExternalSchema(sourceURL, imp.SchemaLocation)
-			} else {
-				p.Warnings = append(p.Warnings,
-					fmt.Sprintf("外部 XSD 未找到（namespace=%s, location=%s），附件中无此文件，相关类型参数可能无法展开",
-						imp.Namespace, imp.SchemaLocation))
-				continue
-			}
-			if err != nil {
-				p.Warnings = append(p.Warnings,
-					fmt.Sprintf("外部 XSD 加载失败（namespace=%s, location=%s）：%v，相关类型参数可能无法展开",
-						imp.Namespace, imp.SchemaLocation, err))
-				continue
-			}
-			extSchema, err := parseExternalXSD(xsdRaw)
-			if err != nil {
-				p.Warnings = append(p.Warnings,
-					fmt.Sprintf("外部 XSD 解析失败（location=%s）：%v", imp.SchemaLocation, err))
-				continue
-			}
-			extRootNS, _ := collectNSContexts(xsdRaw)
-			idx.addSchema(*extSchema, nsContext{prefixes: extRootNS, self: extSchema.TargetNS})
-			_ = extSchema.SimpleTypes
-			// 递归加载 XSD 内部的 import/include
-			for _, nestedImp := range extSchema.Imports {
-				if nestedImp.SchemaLocation != "" {
-					queue = append(queue, nestedImp)
-				}
-			}
-			for _, nestedInc := range extSchema.Includes {
-				if nestedInc.SchemaLocation != "" {
-					queue = append(queue, nestedInc)
-				}
-			}
-		}
+		resolver := NewSchemaResolver(*resCfg)
+		deps, warns := resolver.ResolveGraph(imports, idx)
+		p.Dependencies = deps
+		p.Warnings = append(p.Warnings, warns...)
 	} else {
-		// 没有 sourceURL 也没有 attachments，无法解析外部 XSD，仅记录 warning
+		// 没有 sourceURL 也没有 attachments，无法解析外部 XSD，记录 warning
 		for _, imp := range imports {
 			if imp.SchemaLocation != "" {
 				p.Warnings = append(p.Warnings,
 					fmt.Sprintf("外部 XSD 未加载（namespace=%s, location=%s），无 sourceURL 也无附件，相关类型参数可能无法展开",
 						imp.Namespace, imp.SchemaLocation))
+				p.Dependencies = append(p.Dependencies, SchemaDependency{
+					URI:       imp.SchemaLocation,
+					Namespace: imp.Namespace,
+					Status:    "unresolved",
+					Error:     "无 sourceURL 也无附件",
+				})
 			}
 		}
 	}
+
 
 	// message 查找表（按 local name）
 	msgs := map[string]wsdlMessage{}

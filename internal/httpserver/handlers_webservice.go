@@ -95,11 +95,12 @@ func (s *Server) handleWSDispatchSOAP(w http.ResponseWriter, r *http.Request) {
 // ---------- WSDL 导入 ----------
 
 type wsdlImportURLReq struct {
-	URL  string `json:"url"`
-	Name string `json:"name"` // 可选，用户命名
+	URL     string            `json:"url"`
+	Name    string            `json:"name"` // 可选，用户命名
+	Headers map[string]string `json:"headers,omitempty"`
 }
 
-// POST /api/wsdl/import-url  body: {url, name}
+// POST /api/wsdl/import-url  body: {url, name, headers}
 // 拉取 WSDL URL（30s 超时），解析后返回 WSDLProject（未保存）。
 func (s *Server) handleWSDLImportURL(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -133,9 +134,12 @@ func (s *Server) handleWSDLImportURL(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpReq.Header.Set("User-Agent", "kairo-wsdl/0.1")
+	for k, v := range req.Headers {
+		httpReq.Header.Set(k, v)
+	}
 	// WSDL URL 拉取：拒绝 link-local（含云元数据 169.254.169.254）/ unspecified / 组播，
 	// 私有网段放行（内网 WebService 是核心场景）。DialContext 做拨号时二次校验
-	// （防 DNS rebinding），CheckRedirect 对重定向逐跳校验。
+	// （防 DNS rebinding），CheckRedirect 对重定向逐跳校验，且跨源重定向剥离凭据。
 	client := &http.Client{
 		Timeout: 30 * time.Second,
 		Transport: &http.Transport{
@@ -144,7 +148,21 @@ func (s *Server) handleWSDLImportURL(w http.ResponseWriter, r *http.Request) {
 			DialContext:           webservice.SafeDialContext,
 		},
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			return webservice.ValidateEndpointURL(req.URL.String())
+			if len(via) >= 10 {
+				return errors.New("重定向次数过多")
+			}
+			if err := webservice.ValidateEndpointURL(req.URL.String()); err != nil {
+				return err
+			}
+			prev := via[len(via)-1]
+			prevOrigin := prev.URL.Scheme + "://" + prev.URL.Host
+			newOrigin := req.URL.Scheme + "://" + req.URL.Host
+			if !strings.EqualFold(prevOrigin, newOrigin) {
+				req.Header.Del("Authorization")
+				req.Header.Del("Proxy-Authorization")
+				req.Header.Del("Cookie")
+			}
+			return nil
 		},
 	}
 	resp, err := client.Do(httpReq)
@@ -169,7 +187,11 @@ func (s *Server) handleWSDLImportURL(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	p := webservice.ParseWSDL(decoded, url)
+	p := webservice.ParseWSDL(decoded, webservice.SchemaResolverConfig{
+		BaseURI:     url,
+		Context:     ctx,
+		AuthHeaders: req.Headers,
+	})
 	p.Source = "url"
 	p.SourceURL = url
 	if req.Name != "" {

@@ -33,22 +33,31 @@ func ResolveWSDL(req Request, store *webservice.Store) (resolvedWSDL, error) {
 		return out, nil
 	}
 	if f := strings.TrimSpace(req.WSDLFile); f != "" {
-		decoded, err := readXMLFile(f)
+		absPath, err := filepath.Abs(f)
+		if err != nil {
+			return out, fmt.Errorf("解析 WSDL 路径失败: %w", err)
+		}
+		decoded, err := readXMLFile(absPath)
 		if err != nil {
 			return out, fmt.Errorf("读取 WSDL 文件失败: %w", err)
 		}
-		atts := loadLocalXSDs(f)
-		var p *webservice.WSDLProject
-		if len(atts) > 0 {
-			p = webservice.ParseWSDL(decoded, atts)
-		} else {
-			p = webservice.ParseWSDL(decoded)
+		baseURI := webservice.PathToFileURI(absPath)
+		cfg := webservice.SchemaResolverConfig{
+			BaseURI:        baseURI,
+			AllowedRootDir: filepath.Dir(absPath),
 		}
+		p := webservice.ParseWSDL(decoded, cfg)
 		p.Source = "file"
 		out.Project = p
 		out.Raw = p.RawWSDL
-		out.FilePath = f
-		out.SiblingXSDCount = len(atts)
+		out.FilePath = absPath
+		loadedCount := 0
+		for _, d := range p.Dependencies {
+			if d.Status == "loaded" {
+				loadedCount++
+			}
+		}
+		out.SiblingXSDCount = loadedCount
 		return out, nil
 	}
 	if u := strings.TrimSpace(req.WSDLURL); u != "" {
@@ -57,8 +66,8 @@ func ResolveWSDL(req Request, store *webservice.Store) (resolvedWSDL, error) {
 	if c := strings.TrimSpace(req.WSDLContent); c != "" {
 		var p *webservice.WSDLProject
 		if out.URL != "" {
-			// 相对 schemaLocation 要从 WSDL URL 解析，否则恒力这类拆 XSD 的服务参数树是空的。
-			p = webservice.ParseWSDL(c, out.URL)
+			// 相对 schemaLocation 要从 WSDL URL 解析，否则拆 XSD 的服务参数树是空的。
+			p = webservice.ParseWSDL(c, webservice.SchemaResolverConfig{BaseURI: out.URL})
 			p.Source = "url"
 			p.SourceURL = out.URL
 		} else {
@@ -185,8 +194,11 @@ func GenerateContext(ctx context.Context, req Request, store *webservice.Store) 
 	if req.DryRun && res.Mode == ModeBuiltin {
 		res.Notes = append(res.Notes, "预览模式：未写入磁盘")
 	}
+	if resolved.Project != nil {
+		res.Dependencies = resolved.Project.Dependencies
+	}
 	if resolved.SiblingXSDCount > 0 {
-		res.Notes = append(res.Notes, fmt.Sprintf("已从 WSDL 同目录加载 %d 个 XSD。", resolved.SiblingXSDCount))
+		res.Notes = append(res.Notes, fmt.Sprintf("已从 WSDL 依赖图加载 %d 个 XSD。", resolved.SiblingXSDCount))
 	}
 	if w := missingExternalXSDWarning(resolved.Project); w != "" {
 		res.Warnings = append(res.Warnings, w)
@@ -259,47 +271,24 @@ func readXMLFile(path string) (string, error) {
 	return decoded, nil
 }
 
-// loadLocalXSDs 把 WSDL 同目录（及一层子目录）的 .xsd 按文件名收成附件，
-// 给 ParseWSDL 展开相对 schemaLocation。恒力 WSDL 的 Core.xsd / esb.xsd 就靠这个。
-func loadLocalXSDs(wsdlPath string) map[string]string {
-	dir := filepath.Dir(wsdlPath)
-	atts := map[string]string{}
-	add := func(path string) {
-		if !strings.EqualFold(filepath.Ext(path), ".xsd") {
-			return
-		}
-		text, err := readXMLFile(path)
-		if err != nil || strings.TrimSpace(text) == "" {
-			return
-		}
-		atts[filepath.Base(path)] = text
-	}
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return atts
-	}
-	for _, e := range entries {
-		p := filepath.Join(dir, e.Name())
-		if e.IsDir() {
-			subs, err := os.ReadDir(p)
-			if err != nil {
-				continue
-			}
-			for _, se := range subs {
-				if se.IsDir() {
-					continue
-				}
-				add(filepath.Join(p, se.Name()))
-			}
-			continue
-		}
-		add(p)
-	}
-	return atts
-}
-
 func missingExternalXSDWarning(p *webservice.WSDLProject) string {
-	if p == nil || !strings.Contains(p.RawWSDL, "schemaLocation") {
+	if p == nil {
+		return ""
+	}
+	var failedDeps []string
+	for _, d := range p.Dependencies {
+		if d.Status != "loaded" {
+			errMsg := d.Error
+			if errMsg == "" {
+				errMsg = d.Status
+			}
+			failedDeps = append(failedDeps, fmt.Sprintf("%s (%s)", d.URI, errMsg))
+		}
+	}
+	if len(failedDeps) > 0 {
+		return fmt.Sprintf("外部 XSD 依赖未完全加载: %s，相关类型参数可能无法展开", strings.Join(failedDeps, "; "))
+	}
+	if !strings.Contains(p.RawWSDL, "schemaLocation") {
 		return ""
 	}
 	if len(p.Operations) == 0 {
@@ -322,7 +311,7 @@ func missingExternalXSDWarning(p *webservice.WSDLProject) string {
 			return ""
 		}
 	}
-	return "WSDL 引用了外部 XSD，但参数树是空的。请把 .xsd 放在 WSDL 同目录后选「本地文件」，或先在 WebService 页把 WSDL+XSD 一起导入再选已导入项目。"
+	return "WSDL 引用了外部 XSD，但参数树是空的。请确认外部 XSD 路径正确且类型完整。"
 }
 
 var generatedFilesMu sync.Mutex

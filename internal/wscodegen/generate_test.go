@@ -202,3 +202,116 @@ func joinContents(files []GeneratedFile) string {
 	}
 	return b.String()
 }
+
+func TestGenerate_MultiDirSameNameXSD_PreservesBothBeans(t *testing.T) {
+	tempDir := t.TempDir()
+	dirA := filepath.Join(tempDir, "a")
+	dirB := filepath.Join(tempDir, "b")
+	if err := os.MkdirAll(dirA, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dirB, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	commonA := `<?xml version="1.0" encoding="UTF-8"?>
+<xsd:schema xmlns:xsd="http://www.w3.org/2001/XMLSchema" targetNamespace="http://example.com/nsA">
+  <xsd:complexType name="TypeA">
+    <xsd:sequence><xsd:element name="fieldA" type="xsd:string"/></xsd:sequence>
+  </xsd:complexType>
+</xsd:schema>`
+
+	commonB := `<?xml version="1.0" encoding="UTF-8"?>
+<xsd:schema xmlns:xsd="http://www.w3.org/2001/XMLSchema" targetNamespace="http://example.com/nsB">
+  <xsd:complexType name="TypeB">
+    <xsd:sequence><xsd:element name="fieldB" type="xsd:int"/></xsd:sequence>
+  </xsd:complexType>
+</xsd:schema>`
+
+	if err := os.WriteFile(filepath.Join(dirA, "common.xsd"), []byte(commonA), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dirB, "common.xsd"), []byte(commonB), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	wsdl := `<?xml version="1.0" encoding="UTF-8"?>
+<wsdl:definitions xmlns:wsdl="http://schemas.xmlsoap.org/wsdl/"
+  xmlns:soap="http://schemas.xmlsoap.org/wsdl/soap/"
+  xmlns:tns="http://example.com/main"
+  xmlns:a="http://example.com/nsA"
+  xmlns:b="http://example.com/nsB"
+  xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+  targetNamespace="http://example.com/main">
+  <wsdl:types>
+    <xsd:schema targetNamespace="http://example.com/main">
+      <xsd:import namespace="http://example.com/nsA" schemaLocation="a/common.xsd"/>
+      <xsd:import namespace="http://example.com/nsB" schemaLocation="b/common.xsd"/>
+      <xsd:element name="combine">
+        <xsd:complexType>
+          <xsd:sequence>
+            <xsd:element name="itemA" type="a:TypeA"/>
+            <xsd:element name="itemB" type="b:TypeB"/>
+          </xsd:sequence>
+        </xsd:complexType>
+      </xsd:element>
+      <xsd:element name="combineResponse">
+        <xsd:complexType><xsd:sequence><xsd:element name="result" type="xsd:string"/></xsd:sequence></xsd:complexType>
+      </xsd:element>
+    </xsd:schema>
+  </wsdl:types>
+  <wsdl:message name="combineReq"><wsdl:part name="p" element="tns:combine"/></wsdl:message>
+  <wsdl:message name="combineResp"><wsdl:part name="p" element="tns:combineResponse"/></wsdl:message>
+  <wsdl:portType name="CombinePT">
+    <wsdl:operation name="combine">
+      <wsdl:input message="tns:combineReq"/>
+      <wsdl:output message="tns:combineResp"/>
+    </wsdl:operation>
+  </wsdl:portType>
+  <wsdl:binding name="CombineBinding" type="tns:CombinePT">
+    <soap:binding style="document" transport="http://schemas.xmlsoap.org/soap/http"/>
+    <wsdl:operation name="combine">
+      <soap:operation soapAction=""/>
+      <wsdl:input><soap:body use="literal"/></wsdl:input>
+      <wsdl:output><soap:body use="literal"/></wsdl:output>
+    </wsdl:operation>
+  </wsdl:binding>
+  <wsdl:service name="CombineService">
+    <wsdl:port name="CombinePort" binding="tns:CombineBinding">
+      <soap:address location="http://127.0.0.1/ws"/>
+    </wsdl:port>
+  </wsdl:service>
+</wsdl:definitions>`
+
+	wsdlPath := filepath.Join(tempDir, "service.wsdl")
+	if err := os.WriteFile(wsdlPath, []byte(wsdl), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := Generate(Request{
+		Engine:      EnginePortable,
+		Mode:        ModeBuiltin,
+		DryRun:      true,
+		IncludeMain: false,
+		JavaSource:  JavaSource16,
+		WSDLFile:    wsdlPath,
+	}, nil)
+	if err != nil {
+		t.Fatalf("Generate 失败: %v", err)
+	}
+	if !res.OK {
+		t.Fatalf("res.OK = false, warnings = %v", res.Warnings)
+	}
+
+	joined := joinContents(res.Files)
+	if !strings.Contains(joined, "class ItemA") || !strings.Contains(joined, "fieldA") || !strings.Contains(joined, "xsd=a:TypeA") {
+		t.Errorf("未能生成 a/common.xsd 中的 ItemA(TypeA) 类，生成文件内容:\n%s", joined)
+	}
+	if !strings.Contains(joined, "class ItemB") || !strings.Contains(joined, "fieldB") || !strings.Contains(joined, "xsd=b:TypeB") {
+		t.Errorf("未能生成 b/common.xsd 中的 ItemB(TypeB) 类，生成文件内容:\n%s", joined)
+	}
+	if len(res.Dependencies) < 2 {
+		t.Errorf("res.Dependencies 数量 = %d, want >= 2: %+v", len(res.Dependencies), res.Dependencies)
+	}
+}
+
