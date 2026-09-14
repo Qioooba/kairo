@@ -23,6 +23,7 @@ func TestValidateReadOnlySQL(t *testing.T) {
 		"select * from t for update",
 		"select 1 from dual; delete from t",
 		"select * from t into outfile '/tmp/x'",
+		"comment on table t is 'test'",
 	}
 	for _, q := range bad {
 		if err := ValidateReadOnlySQL(KindMySQL, q); err == nil {
@@ -59,6 +60,7 @@ func TestClassifySQL(t *testing.T) {
 		{"CREATE TABLE t (id INT)", "DDL", false},
 		{"ALTER TABLE t ADD col VARCHAR(20)", "DDL", false},
 		{"DROP TABLE t", "DDL", false},
+		{"COMMENT ON TABLE t IS 'test'", "DDL", false},
 		{"COMMIT", "TRANSACTION", false},
 		{"ROLLBACK", "TRANSACTION", false},
 		{"SHOW TABLES", "COMMAND", true},
@@ -100,18 +102,38 @@ func TestClassifySQL(t *testing.T) {
 		}
 	}
 
-	// Barewords as column names should NOT be blocked
+	// Barewords as column names should NOT be blocked, nor should literals
 	allowedBarewords := []string{
 		"SELECT sleep FROM health_tracker",
 		"SELECT benchmark FROM benchmarks",
 		"SELECT get_lock, release_lock FROM lock_audit",
+		"SELECT 'SLEEP(1)' FROM dual",
+		"SELECT 'SLEEP(1)', sleep FROM health_tracker",
+		"SELECT 中文SLEEP(1) FROM dual",
+		"SELECT q'[SLEEP(1)]' FROM dual",
 	}
 	for _, q := range allowedBarewords {
 		if _, err := ClassifySQL(KindMySQL, q); err != nil {
-			t.Errorf("ClassifySQL(%q) should allow bareword column names, got: %v", q, err)
+			t.Errorf("ClassifySQL(%q) should allow bareword column names and literals, got: %v", q, err)
 		}
 		if err := ValidateReadOnlySQL(KindMySQL, q); err != nil {
-			t.Errorf("ValidateReadOnlySQL(%q) should allow bareword column names, got: %v", q, err)
+			t.Errorf("ValidateReadOnlySQL(%q) should allow bareword column names and literals, got: %v", q, err)
+		}
+	}
+
+	// Function calls with comments must NOT bypass check
+	blockedWithComments := []string{
+		"SELECT SLEEP/**/(1)",
+		"SELECT SLEEP/* foo */(1)",
+		"SELECT SLEEP -- comment\n(1)",
+		"SELECT BENCHMARK/**/(1000, MD5(1))",
+	}
+	for _, q := range blockedWithComments {
+		if _, err := ClassifySQL(KindMySQL, q); err == nil {
+			t.Errorf("ClassifySQL(%q) should reject commented function call, got nil", q)
+		}
+		if err := ValidateReadOnlySQL(KindMySQL, q); err == nil {
+			t.Errorf("ValidateReadOnlySQL(%q) should reject commented function call, got nil", q)
 		}
 	}
 

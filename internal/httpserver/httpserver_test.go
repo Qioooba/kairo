@@ -16,6 +16,7 @@ import (
 	"testing"
 	"testing/fstest"
 	"time"
+	"unicode/utf8"
 
 	"kairo/internal/audit"
 	"kairo/internal/config"
@@ -170,7 +171,7 @@ func TestSanitize(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"hello", "hello"},
 		{"", "x"},
-		{"a/b\\c:d*e?f\"g<h>i|j k", "a_b_c_d_e_f_g_h_i_j_k"},
+		{"a/b\\c:d*e?f\"g<h>i|j k", "a_b_c_d_e_f_g_h_i_j k"},
 		{"中文/路径\\分隔", "中文_路径_分隔"},
 	}
 	for _, c := range cases {
@@ -183,6 +184,15 @@ func TestSanitize(t *testing.T) {
 	got := sanitize(long)
 	if len(got) > 80 {
 		t.Errorf("len=%d, want <=80", len(got))
+	}
+	// 超长中文：确保 rune 截断不会损坏 UTF-8 字节序
+	longChinese := strings.Repeat("系统日志分析测试文件报告", 10)
+	gotChinese := sanitize(longChinese)
+	if !utf8.ValidString(gotChinese) {
+		t.Fatalf("sanitize(%q) produced invalid UTF-8: %x", longChinese, gotChinese)
+	}
+	if len([]rune(gotChinese)) > 80 {
+		t.Errorf("len(runes)=%d, want <=80", len([]rune(gotChinese)))
 	}
 }
 

@@ -72,10 +72,12 @@ func TestDatabaseLOBTokenLazyIssue(t *testing.T) {
 	}
 
 	reqBody := databaseLobRequest{
-		SourceID: source.ID,
-		Table:    "DOCS",
-		Column:   "CONTENT",
-		Keys:     map[string]any{"ID": 1001},
+		SourceID:   source.ID,
+		Table:      "DOCS",
+		Column:     "CONTENT",
+		ColumnType: "CLOB",
+		PrimaryKey: []string{"ID"},
+		Keys:       map[string]any{"ID": 1001},
 	}
 	w := doRequestWithToken(srv, http.MethodPost, "/api/database/lob/token", rbacUserToken, reqBody)
 	if w.Code != http.StatusOK {
@@ -96,6 +98,19 @@ func TestDatabaseLOBTokenLazyIssue(t *testing.T) {
 	}
 	if payload.Table != "DOCS" || payload.Column != "CONTENT" || ref.Table != "DOCS" {
 		t.Fatalf("unexpected payload or ref: %+v %+v", payload, ref)
+	}
+
+	// Without PK and without ROWID, must be rejected with 400
+	reqNoPK := databaseLobRequest{
+		SourceID:   source.ID,
+		Table:      "DOCS",
+		Column:     "CONTENT",
+		ColumnType: "CLOB",
+		Keys:       map[string]any{"FOO": "BAR"},
+	}
+	wNoPK := doRequestWithToken(srv, http.MethodPost, "/api/database/lob/token", rbacUserToken, reqNoPK)
+	if wNoPK.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for table without PK/ROWID, got %d: %s", wNoPK.Code, wNoPK.Body.String())
 	}
 }
 

@@ -594,7 +594,13 @@
     if (state.runObserver && state.runObserverRoot === root) return;
     if (state.runObserver) state.runObserver.disconnect();
     state.runObserver = new MutationObserver(function () {
-      if (!state.pendingRun) return;
+      if (!state.pendingRun) {
+        if (state.runObserver) {
+          state.runObserver.disconnect();
+          state.runObserver.takeRecords();
+        }
+        return;
+      }
       const status = (id('db-query-status') && id('db-query-status').textContent || '').trim();
       const result = id('db-result-meta');
       const message = id('db-result-message');
@@ -602,6 +608,10 @@
       if (!done) return;
       const pending = state.pendingRun;
       state.pendingRun = null;
+      if (state.runObserver) {
+        state.runObserver.disconnect();
+        state.runObserver.takeRecords();
+      }
       addHistory({
         sql: pending.sql,
         runId: pending.runId,
@@ -959,8 +969,6 @@
     return '<fieldset class="db-pro-source-advanced"><legend>环境与安全连接</legend>' +
       '<div class="db-form-grid db-pro-source-grid">' +
       '<label class="db-field"><span>环境</span><select id="dbf-environment" class="editor-input"><option value="development">开发</option><option value="staging">测试</option><option value="production">生产</option></select></label>' +
-      '<label class="db-field db-pro-inline-check"><span><input id="dbf-read-only" type="checkbox"> 服务端只读</span><small>禁止 DML、网格写入、脚本和对象修改</small></label>' +
-      '<label class="db-field db-pro-inline-check"><span><input id="dbf-allow-ddl" type="checkbox"> 允许 DDL</span><small>仅用于对象设计器和 Function 编译</small></label>' +
       '</div>' +
       '<div class="db-pro-tls-grid">' +
       '<label class="db-field"><span>TLS Server Name</span><input id="dbf-tls-server-name" class="editor-input" value="' + esc(item.tls_server_name || '') + '" placeholder="证书中的主机名"></label>' +
@@ -991,6 +999,10 @@
     env.value = item.environment || 'production';
     const readOnly = id('dbf-read-only'); if (readOnly) readOnly.checked = item.id ? !!(item.read_only || item.readOnly) : true;
     const ddl = id('dbf-allow-ddl'); if (ddl) ddl.checked = !!(item.allow_ddl || item.allowDDL);
+    if (readOnly && ddl) {
+      ddl.onchange = function () { if (this.checked && readOnly) readOnly.checked = false; };
+      readOnly.onchange = function () { if (this.checked && ddl) ddl.checked = false; };
+    }
     const tunnel = item.ssh_tunnel || {};
     const set = function (name, value) { const input = id(name); if (input && value != null) input.value = value; };
     const check = function (name, value) { const input = id(name); if (input) input.checked = !!value; };
@@ -1022,9 +1034,24 @@
     if (!select || !item) return;
     const env = String(item.environment || 'development').toLowerCase();
     const envText = environmentLabel(env), readonly = item.read_only || item.readOnly ? ' · 只读' : item.allow_ddl ? ' · 可写/DDL' : ' · 可写';
-    if (option) { option.textContent = (item.name || option.textContent).replace(/\s+·\s+(开发|测试|生产)(?:\s+·\s+(?:只读|可写|可写\/DDL))?$/, '') + ' · ' + envText + readonly; option.dataset.environment = env; option.dataset.readOnly = item.read_only || item.readOnly ? '1' : '0'; option.dataset.allowDdl = item.allow_ddl ? '1' : '0'; }
+    if (option) {
+      const nextOpt = (item.name || option.textContent).replace(/\s+·\s+(开发|测试|生产)(?:\s+·\s+(?:只读|可写|可写\/DDL))?$/, '') + ' · ' + envText + readonly;
+      if (option.textContent !== nextOpt) option.textContent = nextOpt;
+      if (option.dataset.environment !== env) option.dataset.environment = env;
+      const ro = item.read_only || item.readOnly ? '1' : '0';
+      if (option.dataset.readOnly !== ro) option.dataset.readOnly = ro;
+      const ddl = item.allow_ddl ? '1' : '0';
+      if (option.dataset.allowDdl !== ddl) option.dataset.allowDdl = ddl;
+    }
     const badge = id('db-source-badge');
-    if (badge) { const kind = String(item.kind || '').toLowerCase(); badge.textContent = (kind === 'oracle' ? 'Oracle' : kind === 'mysql' ? 'MySQL' : kind === 'redis' ? 'Redis' : kind) + ' · ' + envText + readonly; badge.dataset.environment = env; badge.dataset.readOnly = item.read_only || item.readOnly ? '1' : '0'; }
+    if (badge) {
+      const kind = String(item.kind || '').toLowerCase();
+      const nextBadge = (kind === 'oracle' ? 'Oracle' : kind === 'mysql' ? 'MySQL' : kind === 'redis' ? 'Redis' : kind) + ' · ' + envText + readonly;
+      if (badge.textContent !== nextBadge) badge.textContent = nextBadge;
+      if (badge.dataset.environment !== env) badge.dataset.environment = env;
+      const ro = item.read_only || item.readOnly ? '1' : '0';
+      if (badge.dataset.readOnly !== ro) badge.dataset.readOnly = ro;
+    }
   }
   function enhanceSourceSelect() {
     const select = id('db-source');
@@ -1623,19 +1650,38 @@
     const lowSpec = (nav && nav.hardwareConcurrency && nav.hardwareConcurrency <= 4) || (nav && nav.deviceMemory && nav.deviceMemory <= 4) || (connection && connection.saveData);
     if (lowSpec && document.documentElement) document.documentElement.classList.add('db-low-spec');
     state.view = document.getElementById('view') || document.body;
+    let updating = false;
+    const safeInstall = function (target) {
+      if (updating) return;
+      updating = true;
+      try {
+        observer.disconnect();
+        install(target || document.getElementById('db-workspace') || state.view);
+      } finally {
+        observer.takeRecords();
+        if (String(location.hash || '').indexOf('#/database') === 0) {
+          observer.observe(state.view, { subtree: true, childList: true, attributes: true, attributeFilter: ['hidden', 'class'] });
+        }
+        updating = false;
+      }
+    };
     const observer = new MutationObserver(function () {
       if (String(location.hash || '').indexOf('#/database') !== 0) return;
+      if (updating) return;
       // One animation-frame for a complete route render avoids a cascade of
       // layout reads while database.js replaces its workspace DOM.
       if (start.scheduled) return;
       start.scheduled = true;
-      schedule(function () { start.scheduled = false; if (String(location.hash || '').indexOf('#/database') !== 0) return; const root = document.getElementById('db-workspace') || state.view; install(root); });
+      schedule(function () {
+        start.scheduled = false;
+        if (String(location.hash || '').indexOf('#/database') !== 0) return;
+        safeInstall();
+      });
     });
     const syncRoute = function () {
       observer.disconnect();
       if (String(location.hash || '').indexOf('#/database') === 0) {
-        observer.observe(state.view, { subtree: true, childList: true, attributes: true, attributeFilter: ['hidden', 'class'] });
-        install(document.getElementById('db-workspace') || state.view);
+        safeInstall();
       } else {
         if (state.disposeEditor) state.disposeEditor();
         hideCompletion();

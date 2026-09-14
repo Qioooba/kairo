@@ -353,7 +353,9 @@ func (m *Manager) ExecuteScript(ctx context.Context, source Source, script, sess
 		return ScriptResult{}, errors.New("transaction_mode=session 必须绑定 session_id")
 	}
 	if sessionID != "" && hasDDL {
-		return ScriptResult{}, errors.New("页签事务脚本不允许混合 DDL；请先提交/回滚后单独执行 DDL")
+		if m.SessionTransactionPending(source, sessionID) {
+			return ScriptResult{}, errors.New("当前页签有未提交 DML；请先提交/回滚后单独执行 DDL")
+		}
 	}
 	if hasDDL && options.TransactionMode == "single" {
 		return ScriptResult{}, errors.New("包含 DDL 的脚本不能使用 single 原子事务")

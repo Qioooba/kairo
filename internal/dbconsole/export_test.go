@@ -142,3 +142,19 @@ func TestWriteUPDATEWithoutPKRejects(t *testing.T) {
 		t.Fatalf("expected error mentioning primary key, got: %v", err)
 	}
 }
+
+func TestQuoteIdentWithQuotedDots(t *testing.T) {
+	input := `"my.schema".col`
+	gotOracle := QuoteIdent(KindOracle, input)
+	wantOracle := `"my.schema"."col"`
+	if gotOracle != wantOracle {
+		t.Fatalf("QuoteIdent(%q) = %q, want %q", input, gotOracle, wantOracle)
+	}
+
+	inputMySQL := "`my.schema`.`col`"
+	gotMySQL := QuoteIdent(KindMySQL, inputMySQL)
+	wantMySQL := "`my.schema`.`col`"
+	if gotMySQL != wantMySQL {
+		t.Fatalf("QuoteIdent(%q) = %q, want %q", inputMySQL, gotMySQL, wantMySQL)
+	}
+}

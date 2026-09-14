@@ -43,7 +43,7 @@ func TestIsLOBType(t *testing.T) {
 	if isLOBType("VARCHAR2") {
 		t.Fatal("not lob")
 	}
-	if !isBlobType("BLOB") || isBlobType("CLOB") {
+	if !isBlobType("BLOB") || isBlobType("CLOB") || isBlobType("RAW") {
 		t.Fatal("blob type")
 	}
 }

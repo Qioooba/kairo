@@ -45,6 +45,13 @@ func (m *Manager) ResolveOracleBackend(source Source) OracleBackend {
 		return &GoOraBackend{}
 	}
 
+	// 若此前发生过 DPI 客户端错误，自动平滑降级为 go-ora
+	if m != nil && source.ID != "" {
+		if _, failed := m.dpiFailedSources.Load(source.ID); failed {
+			return &GoOraBackend{}
+		}
+	}
+
 	// 自动模式：检查 godror 是否可用（构建标签启用 CGO 且本地有兼容 64 位 OCI Client）
 	if godrorBackend.Capabilities().NativeOCI {
 		cands, _, _, _ := DetectSystemOracleClients(source)
@@ -114,4 +121,18 @@ func (m *Manager) OracleBackendName(source Source) string {
 		return backend.Name()
 	}
 	return "go-ora"
+}
+
+// IsOracleDPIError 判断是否为 ODPI-C 底层客户端不可用/版本不支持引发的驱动错误。
+// 涵盖 DPI-1072, DPI-1050, DPI-1047 等客户端 DLL 缺失、架构不匹配或版本不受支持的场景。
+func IsOracleDPIError(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := strings.ToLower(err.Error())
+	return strings.Contains(s, "dpi-") ||
+		strings.Contains(s, "oracle client") ||
+		strings.Contains(s, "oci.dll") ||
+		strings.Contains(s, "cannot locate a 64-bit oracle client") ||
+		strings.Contains(s, "version is unsupported")
 }

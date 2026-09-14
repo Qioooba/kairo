@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 // SQLStatementInfo describes the classified SQL statement.
@@ -108,7 +109,7 @@ func ClassifySQL(kind, query string) (SQLStatementInfo, error) {
 		return SQLStatementInfo{Type: "COMMAND", Action: first, IsQuery: true, HasForUpdate: false}, nil
 	case "UPDATE", "INSERT", "DELETE", "MERGE", "REPLACE":
 		return SQLStatementInfo{Type: "DML", Action: first, IsQuery: false, HasForUpdate: false}, nil
-	case "CREATE", "ALTER", "DROP", "TRUNCATE", "RENAME":
+	case "CREATE", "ALTER", "DROP", "TRUNCATE", "RENAME", "COMMENT":
 		return SQLStatementInfo{Type: "DDL", Action: first, IsQuery: false, HasForUpdate: false}, nil
 	case "COMMIT", "ROLLBACK":
 		return SQLStatementInfo{Type: "TRANSACTION", Action: first, IsQuery: false, HasForUpdate: false}, nil
@@ -146,7 +147,7 @@ func ValidateReadOnlySQL(kind, query string) error {
 		"INSERT": {}, "UPDATE": {}, "DELETE": {}, "MERGE": {}, "REPLACE": {},
 		"CREATE": {}, "ALTER": {}, "DROP": {}, "TRUNCATE": {}, "RENAME": {},
 		"GRANT": {}, "REVOKE": {}, "COMMIT": {}, "ROLLBACK": {}, "CALL": {},
-		"EXEC": {}, "EXECUTE": {}, "LOCK": {}, "ANALYZE": {},
+		"EXEC": {}, "EXECUTE": {}, "LOCK": {}, "ANALYZE": {}, "COMMENT": {},
 		"LOAD_FILE": {}, "GET_LOCK": {}, "RELEASE_LOCK": {}, "SLEEP": {}, "BENCHMARK": {},
 	}
 	for i := 0; i < len(tokens); i++ {
@@ -167,8 +168,93 @@ func ValidateReadOnlySQL(kind, query string) error {
 	return nil
 }
 
+func stripSQLCommentsAndStrings(query string) string {
+	var b strings.Builder
+	b.Grow(len(query))
+	n := len(query)
+	for i := 0; i < n; {
+		c := query[i]
+
+		// Oracle quoted literal: q'[...]' or Q'[...]'
+		if (c == 'q' || c == 'Q') && i+2 < n && query[i+1] == '\'' {
+			closer := query[i+2]
+			switch closer {
+			case '[':
+				closer = ']'
+			case '{':
+				closer = '}'
+			case '(':
+				closer = ')'
+			case '<':
+				closer = '>'
+			}
+			closerSeq := string([]byte{closer, '\''})
+			end := strings.Index(query[i+3:], closerSeq)
+			if end >= 0 {
+				b.WriteString("''")
+				i += 3 + end + 2
+				continue
+			}
+		}
+
+		// Single-quoted string literal: '...'
+		if c == '\'' {
+			b.WriteString("''")
+			i++
+			for i < n {
+				if query[i] == '\\' && i+1 < n {
+					i += 2
+					continue
+				}
+				if query[i] == '\'' {
+					if i+1 < n && query[i+1] == '\'' {
+						i += 2
+						continue
+					}
+					i++
+					break
+				}
+				i++
+			}
+			continue
+		}
+
+		// Line comments: -- or #
+		if (c == '-' && i+1 < n && query[i+1] == '-') || c == '#' {
+			for i < n && query[i] != '\n' {
+				i++
+			}
+			b.WriteByte('\n')
+			if i < n && query[i] == '\n' {
+				i++
+			}
+			continue
+		}
+
+		// Block comments: /* ... */
+		if c == '/' && i+1 < n && query[i+1] == '*' {
+			i += 2
+			for i+1 < n && !(query[i] == '*' && query[i+1] == '/') {
+				i++
+			}
+			if i+1 < n {
+				i += 2
+			} else {
+				i = n
+			}
+			b.WriteByte(' ')
+			continue
+		}
+
+		b.WriteByte(c)
+		i++
+	}
+	return b.String()
+}
+
 func isFunctionCallInQuery(query, funcName string) bool {
-	upper := strings.ToUpper(query)
+	stripped := stripSQLCommentsAndStrings(query)
+	upper := strings.ToUpper(stripped)
 	target := strings.ToUpper(funcName)
 	idx := 0
 	for {
@@ -178,15 +264,15 @@ func isFunctionCallInQuery(query, funcName string) bool {
 		}
 		actualPos := idx + pos
 		idx = actualPos + len(target)
-		// Check word boundary before target
+		// Check word boundary before target using UTF-8 rune decoding
 		if actualPos > 0 {
-			prev := query[actualPos-1]
-			if unicode.IsLetter(rune(prev)) || unicode.IsDigit(rune(prev)) || prev == '_' || prev == '$' {
+			prevRune, _ := utf8.DecodeLastRuneInString(stripped[:actualPos])
+			if unicode.IsLetter(prevRune) || unicode.IsDigit(prevRune) || prevRune == '_' || prevRune == '$' {
 				continue
 			}
 		}
-		// Check word boundary and '(' after target
-		remaining := strings.TrimLeft(query[idx:], " \t\r\n")
+		// Check word boundary and '(' after target, skipping any whitespace
+		remaining := strings.TrimLeft(stripped[idx:], " \t\r\n")
 		if strings.HasPrefix(remaining, "(") {
 			return true
 		}

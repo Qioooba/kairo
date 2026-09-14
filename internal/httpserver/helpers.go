@@ -101,6 +101,7 @@ func zipFiles(srcPaths []string, destPath string) error {
 			Name:     name,
 			Method:   zip.Deflate,
 			Modified: st.ModTime(),
+			Flags:    1 << 11,
 		}
 		w, err := zw.CreateHeader(header)
 		if err != nil {
@@ -195,6 +196,7 @@ func zipFilesNamed(sources []ZipSource, destPath string) error {
 			Name:     name,
 			Method:   zip.Deflate,
 			Modified: st.ModTime(),
+			Flags:    1 << 11,
 		}
 		w, err := zw.CreateHeader(header)
 		if err != nil {
@@ -247,18 +249,28 @@ func sanitizeZipName(name string) string {
 	return path.Join(clean...)
 }
 
+// remoteBase 返回远程路径的文件名/末级名，兼容 Linux (/) 和 Windows (\) 路径分隔符。
+func remoteBase(p string) string {
+	return path.Base(strings.ReplaceAll(p, "\\", "/"))
+}
+
 // sanitize 把字符串清成安全文件名片段
 func sanitize(s string) string {
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return "x"
 	}
-	bad := []string{"/", "\\", ":", "*", "?", "\"", "<", ">", "|", " "}
+	bad := []string{"/", "\\", ":", "*", "?", "\"", "<", ">", "|"}
 	for _, b := range bad {
 		s = strings.ReplaceAll(s, b, "_")
 	}
-	if len(s) > 80 {
-		s = s[:80]
+	runes := []rune(s)
+	if len(runes) > 80 {
+		runes = runes[:80]
+	}
+	s = strings.TrimRight(string(runes), ". ")
+	if s == "" {
+		return "x"
 	}
 	return s
 }

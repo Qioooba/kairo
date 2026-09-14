@@ -17,7 +17,7 @@
   const DEFAULT_PREFS = {
     expandKey: 'Space',
     shortcuts: { run: 'Ctrl+Enter', cancel: 'Escape', grid: 'Alt+1', record: 'Alt+2', explain: 'Ctrl+Alt+P', objects: 'Alt+O' },
-    gridRows: 16,
+    gridRows: 25,
     snippets: [
       { key: 'sf', text: 'SELECT * FROM ', enabled: true },
       { key: 'sel', text: 'SELECT *\nFROM ${table}', enabled: true },
@@ -522,10 +522,17 @@
     const shortcuts = Object.assign({}, DEFAULT_PREFS.shortcuts, x.shortcuts || {});
     // V2 migration: Ctrl+Shift+E conflicts with common Windows Chinese IMEs.
     if (shortcuts.explain === 'Ctrl+Shift+E') shortcuts.explain = DEFAULT_PREFS.shortcuts.explain;
+    let gridRows = Number(x.gridRows);
+    if (!Number.isFinite(gridRows) || gridRows <= 0) {
+      gridRows = 25;
+    } else if (x.version !== 2 && gridRows === 16) {
+      gridRows = 25;
+    }
     return {
+      version: 2,
       expandKey: ['Space', 'Tab', 'Enter'].includes(x.expandKey) ? x.expandKey : 'Space',
       shortcuts: shortcuts,
-      gridRows: Math.max(6, Math.min(40, Number(x.gridRows) || DEFAULT_PREFS.gridRows)),
+      gridRows: Math.max(6, Math.min(100, gridRows)),
       snippets: Array.isArray(x.snippets) ? x.snippets : DEFAULT_PREFS.snippets.map(v => Object.assign({}, v))
     };
   }
@@ -625,7 +632,7 @@
     if (v == null) return '<span class="db-null">NULL</span>';
     if (typeof v === 'object') {
       if (v.kind === 'clob') {
-        const sz = v.token ? (Number(v.length || 0).toLocaleString() + ' 字符') : (v.lazy ? '待加载' : formatBytes(v.bytes || 0));
+        const sz = v.token ? (v.length != null ? (Number(v.length).toLocaleString() + ' 字符') : formatBytes(v.bytes || 0)) : (v.lazy ? '待加载' : formatBytes(v.bytes || 0));
         const lobLabel = v.database_type === 'NCLOB' ? 'NCLOB' : 'CLOB';
         const tokenCls = (v.token || v.lazy) ? ' db-lob-token' : '';
         const title = v.lazy ? '点击在线预览/流式加载完整 CLOB' : (v.token ? '点击查看/流式下载完整 CLOB (' + sz + ')' : '点击查看 CLOB 文本 (' + sz + ')');
@@ -1085,10 +1092,10 @@
           body: JSON.stringify({
             source_id: effSrc.id,
             session_id: (sess() || {}).transactionId || '',
-            owner: (q('db-schema') && q('db-schema').value) || '',
-            table: tName,
-            column: colName,
-            column_type: targetVal.database_type || (isClob ? 'CLOB' : 'BLOB'),
+            owner: (targetVal.owner || (q('db-schema') && q('db-schema').value) || '').toUpperCase(),
+            table: (tName || '').toUpperCase(),
+            column: (colName || '').toUpperCase(),
+            column_type: (targetVal.database_type || (isClob ? 'CLOB' : 'BLOB')).toUpperCase(),
             keys: rowKeys
           })
         });
@@ -1102,6 +1109,12 @@
               useRowId: false,
               isToken: true
             };
+          }
+        } else {
+          const errData = await tokenResp.json().catch(() => ({}));
+          if (errData && errData.error) {
+            toast('获取 LOB 失败：' + errData.error, 'warn');
+            return null;
           }
         }
       } catch (err) {
@@ -1264,10 +1277,11 @@
     if (!current || current.type === 'object' || !source || !features || !features.resolveGridTarget) return null;
     const target = features.resolveGridTarget(current.lastSQL, current.resultSchema || '', source.kind);
     if (!target) return null;
+    const isOrdered = !(current.summary && current.summary.ordered === false);
     return {
       sourceId: source.id, sessionId: current.transactionId, schema: target.schema, table: target.table,
       sql: current.lastSQL, columns: current.columns.slice(), values: (current.rows[state.selectedRow] || []).slice(), rowIndex: state.selectedRow,
-      editable: canWriteDatabase() && !source.read_only && !!current.isEditMode && !current.controller && !current.transactionBusy,
+      editable: isOrdered && canWriteDatabase() && !source.read_only && !!current.isEditMode && !current.controller && !current.transactionBusy,
       production: String(source.environment || '').toLowerCase() === 'production'
     };
   }
@@ -1585,8 +1599,8 @@
     };
     renderWorkspace();
   }
-  function field(label, id, value, type) {
-    return '<label class="db-field"><span>' + h(label) + '</span><input id="' + id + '" type="' + (type || 'text') + '" value="' + h(value) + '"></label>';
+  function field(label, id, value, type, placeholder) {
+    return '<label class="db-field"><span>' + h(label) + '</span><input id="' + id + '" type="' + (type || 'text') + '" value="' + h(value) + '"' + (placeholder ? ' placeholder="' + h(placeholder) + '"' : '') + '></label>';
   }
   function selectField(label, id, options, value) {
     return '<label class="db-field"><span>' + h(label) + '</span><select id="' + id + '">' + options.map(o => '<option value="' + o[0] + '"' + (o[0] === value ? ' selected' : '') + '>' + h(o[1]) + '</option>').join('') + '</select></label>';
@@ -1602,15 +1616,20 @@
     if (!host) return;
     if (!state.managing) { host.innerHTML = ''; return; }
     const s = edit || { kind: 'oracle', port: 1521, oracle_connect_by: 'service_name', query_timeout_seconds: 30, max_rows: 1000, max_result_bytes: 16777216, max_open_connections: 4, max_idle_connections: 1, connection_max_minutes: 10, tls_mode: 'disabled' };
-    host.innerHTML = '<section class="card db-manager" role="dialog" aria-modal="true" aria-labelledby="db-manager-title"><div class="db-manager-head"><div><h3 id="db-manager-title">' + (s.id ? '编辑数据源' : '新建数据源') + '</h3><div class="muted">连接信息保存在系统凭据库；保存后自动关闭。</div></div><div class="db-manager-head-actions"><label class="sr-only" for="db-edit-existing">选择已有数据源</label><select id="db-edit-existing" aria-label="选择已有数据源"><option value="">新建数据源</option>' + state.sources.map(x => '<option value="' + h(x.id) + '"' + (x.id === s.id ? ' selected' : '') + '>' + h(x.name) + '</option>').join('') + '</select><button class="btn btn-xs db-manager-close" id="dbf-close-x" title="关闭" aria-label="关闭数据源管理">' + actionIcon('close') + '</button></div></div><div class="db-form-grid">' + field('名称', 'dbf-name', s.name || '') + selectField('类型', 'dbf-kind', [['oracle', 'Oracle 11g+'], ['mysql', 'MySQL'], ['redis', 'Redis']], s.kind) + field('主机', 'dbf-host', s.host || '') + field('端口', 'dbf-port', s.port || '', 'number') + field('用户名', 'dbf-user', s.username || '') + field(s.has_password ? '密码（留空不改）' : '密码', 'dbf-pass', '', 'password') + '</div><div id="dbf-specific" class="db-form-specific"></div><div class="db-form-grid db-form-limits">' + selectField('TLS', 'dbf-tls', [['disabled', '关闭'], ['preferred', '优先（仅 MySQL）'], ['required', '必须且校验证书'], ['skip-verify', '必须但跳过校验']], s.tls_mode || 'disabled') + field('超时（秒）', 'dbf-timeout', s.query_timeout_seconds || 30, 'number') + field('最大行数', 'dbf-rows', s.max_rows || 1000, 'number') + field('最大连接', 'dbf-open', s.max_open_connections || 4, 'number') + field('空闲连接', 'dbf-idle', s.max_idle_connections == null ? 1 : s.max_idle_connections, 'number') + field('授权用户（逗号；*=全员）', 'dbf-users', (s.allowed_users || []).join(', ')) + '</div><div class="db-form-actions"><button class="btn btn-primary" id="dbf-save">保存并关闭</button>' + (s.id ? '<button class="btn btn-danger" id="dbf-delete">删除</button>' : '') + '<button class="btn" id="dbf-close">取消</button><span class="hint">密码不会写入配置文件或返回页面。</span></div></section>';
+    host.innerHTML = '<section class="card db-manager" role="dialog" aria-modal="true" aria-labelledby="db-manager-title"><div class="db-manager-head"><div><h3 id="db-manager-title">' + (s.id ? '编辑数据源' : '新建数据源') + '</h3><div class="muted">连接信息保存在系统凭据库；保存后自动关闭。</div></div><div class="db-manager-head-actions"><label class="sr-only" for="db-edit-existing">选择已有数据源</label><select id="db-edit-existing" aria-label="选择已有数据源"><option value="">新建数据源</option>' + state.sources.map(x => '<option value="' + h(x.id) + '"' + (x.id === s.id ? ' selected' : '') + '>' + h(x.name) + '</option>').join('') + '</select><button class="btn btn-xs db-manager-close" id="dbf-close-x" title="关闭" aria-label="关闭数据源管理">' + actionIcon('close') + '</button></div></div><div class="db-form-grid">' + field('名称', 'dbf-name', s.name || '') + selectField('类型', 'dbf-kind', [['oracle', 'Oracle 11g+'], ['mysql', 'MySQL'], ['redis', 'Redis']], s.kind) + field('主机', 'dbf-host', s.host || '') + field('端口', 'dbf-port', s.port || '', 'number') + field('用户名', 'dbf-user', s.username || '') + field(s.has_password ? '密码（留空不改）' : '密码', 'dbf-pass', '', 'password') + '</div><div id="dbf-specific" class="db-form-specific"></div><div class="db-form-grid db-form-limits">' + selectField('TLS', 'dbf-tls', [['disabled', '关闭'], ['preferred', '优先（仅 MySQL）'], ['required', '必须且校验证书'], ['skip-verify', '必须但跳过校验']], s.tls_mode || 'disabled') + field('超时（秒）', 'dbf-timeout', s.query_timeout_seconds || 30, 'number') + field('最大行数', 'dbf-rows', s.max_rows || 1000, 'number') + field('最大连接', 'dbf-open', s.max_open_connections || 4, 'number') + field('空闲连接', 'dbf-idle', s.max_idle_connections == null ? 1 : s.max_idle_connections, 'number') + field('授权用户（逗号；*=全员）', 'dbf-users', (s.allowed_users || []).join(', ')) + '</div><div class="db-form-grid db-security-grid"><label class="db-field db-pro-inline-check"><span><input id="dbf-read-only" type="checkbox"' + (s.read_only ? ' checked' : '') + '> 服务端只读</span><small>禁止 DML、网格写入与脚本修改</small></label><label class="db-field db-pro-inline-check"><span><input id="dbf-allow-ddl" type="checkbox"' + (s.allow_ddl ? ' checked' : '') + '> 支持 DDL</span><small>允许执行 CREATE / ALTER / DROP / TRUNCATE / COMMENT 及对象设计器</small></label></div><div class="db-form-actions"><button class="btn btn-primary" id="dbf-save">保存并关闭</button><button class="btn" id="dbf-test-draft">测试连接</button>' + (s.id ? '<button class="btn btn-danger" id="dbf-delete">删除</button>' : '') + '<button class="btn" id="dbf-close">取消</button><span class="hint">密码不会写入配置文件或返回页面。</span></div><div id="dbf-test-result" class="dbf-test-result" style="display:none;"></div></section>';
     q('db-edit-existing').onchange = function () { renderManager(state.sources.find(x => x.id === this.value)); };
     q('dbf-kind').onchange = () => renderSpecific(s);
     q('dbf-save').onclick = () => saveSource(s);
+    if (q('dbf-test-draft')) q('dbf-test-draft').onclick = () => testDraftSource(s);
     q('dbf-close').onclick = closeManager;
     q('dbf-close-x').onclick = closeManager;
-    host.onclick = function (e) { if (e.target === host) closeManager(); };
-    host.onkeydown = function (e) { if (e.key === 'Escape') { e.preventDefault(); closeManager(); } };
-    if (q('dbf-delete')) q('dbf-delete').onclick = () => deleteSource(s);
+    const del = q('dbf-delete');
+    if (del) del.onclick = () => deleteSource(s);
+    const ro = q('dbf-read-only'), ddl = q('dbf-allow-ddl');
+    if (ro && ddl) {
+      ddl.onchange = function () { if (this.checked && ro) ro.checked = false; };
+      ro.onchange = function () { if (this.checked && ddl) ddl.checked = false; };
+    }
     renderSpecific(s);
     ['dbf-name', 'dbf-host', 'dbf-port'].forEach(function (id) { const input = q(id); if (input) input.required = true; });
     const port = q('dbf-port'); if (port) { port.min = '1'; port.max = '65535'; port.inputMode = 'numeric'; }
@@ -1622,9 +1641,19 @@
   }
   function renderSpecific(s) {
     const kind = q('dbf-kind').value, target = q('dbf-specific');
-    if (kind === 'oracle') target.innerHTML = selectField('连接方式', 'dbf-oracle-by', [['service_name', 'Service Name'], ['sid', 'SID']], s.oracle_connect_by || 'service_name') + field('Service/SID', 'dbf-service', s.oracle_service || '') + field('客户端字符集', 'dbf-charset', s.oracle_client_charset || '');
-    else if (kind === 'mysql') target.innerHTML = field('Database', 'dbf-database', s.database || '') + '<div class="db-field db-field-span-2"><span class="muted" style="margin-top:24px;font-size:12px;">MySQL 数据库名；留空将默认连接当前用户有权限的全部数据库。</span></div>';
-      else {
+    if (kind === 'oracle') {
+      const driverOptions = [
+        ['', '智能自动（优先 OCI 加速，不兼容自动降级纯 Go）'],
+        ['go-ora', '纯 Go 驱动 (go-ora，推荐，免配置无需本地 Oracle 客户端)'],
+        ['godror', '原生 OCI 驱动 (godror，需安装 64 位 Instant Client 19c+)']
+      ];
+      target.innerHTML = selectField('连接方式', 'dbf-oracle-by', [['service_name', 'Service Name'], ['sid', 'SID']], s.oracle_connect_by || 'service_name')
+        + field('Service/SID', 'dbf-service', s.oracle_service || '')
+        + selectField('驱动模式', 'dbf-oracle-driver', driverOptions, s.oracle_driver || '')
+        + field('客户端字符集', 'dbf-charset', s.oracle_client_charset || '')
+        + field('自定义 OCI 目录 (选填)', 'dbf-oracle-lib-dir', s.oracle_lib_dir || '', 'text', '例如 C:\\oracle\\instantclient_19_24，留空自动检测');
+    } else if (kind === 'mysql') target.innerHTML = field('Database', 'dbf-database', s.database || '') + '<div class="db-field db-field-span-2"><span class="muted" style="margin-top:24px;font-size:12px;">MySQL 数据库名；留空将默认连接当前用户有权限的全部数据库。</span></div>';
+    else {
       const mode = s.redis_mode || 'standalone';
       target.innerHTML = selectField('拓扑', 'dbf-redis-mode', [['standalone', '单机'], ['cluster', 'Cluster'], ['sentinel', 'Sentinel']], mode)
         + field('Redis DB', 'dbf-redis-db', s.redis_db || 0, 'number')
@@ -1656,7 +1685,13 @@
   function sourceFromForm(old) {
     const kind = q('dbf-kind').value;
     const source = { name: q('dbf-name').value.trim(), kind, host: q('dbf-host').value.trim(), port: Number(q('dbf-port').value), username: q('dbf-user').value.trim(), tls_mode: q('dbf-tls').value, query_timeout_seconds: Number(q('dbf-timeout').value), max_rows: Number(q('dbf-rows').value), max_result_bytes: (old && old.max_result_bytes) || 16777216, max_open_connections: Number(q('dbf-open').value), max_idle_connections: Number(q('dbf-idle').value), connection_max_minutes: (old && old.connection_max_minutes) || 10, allowed_users: q('dbf-users').value.split(',').map(x => x.trim()).filter(Boolean) };
-    if (kind === 'oracle') { source.oracle_connect_by = q('dbf-oracle-by').value; source.oracle_service = q('dbf-service').value.trim(); source.oracle_client_charset = q('dbf-charset').value.trim(); }
+    if (kind === 'oracle') {
+      source.oracle_connect_by = q('dbf-oracle-by').value;
+      source.oracle_service = q('dbf-service').value.trim();
+      source.oracle_client_charset = q('dbf-charset').value.trim();
+      if (q('dbf-oracle-driver')) source.oracle_driver = q('dbf-oracle-driver').value.trim();
+      if (q('dbf-oracle-lib-dir')) source.oracle_lib_dir = q('dbf-oracle-lib-dir').value.trim();
+    }
     if (kind === 'mysql') source.database = q('dbf-database').value.trim();
     if (kind === 'redis') {
       source.redis_mode = q('dbf-redis-mode').value;
@@ -1676,6 +1711,9 @@
     source.environment = valueOrOld('dbf-environment', old && old.environment || 'production');
     source.read_only = checkedOrOld('dbf-read-only', old ? old.read_only : true);
     source.allow_ddl = checkedOrOld('dbf-allow-ddl', old && old.allow_ddl);
+    if (source.allow_ddl) {
+      source.read_only = false;
+    }
     source.tls_server_name = valueOrOld('dbf-tls-server-name', old && old.tls_server_name);
     source.tls_ca_file = valueOrOld('dbf-tls-ca-file', old && old.tls_ca_file);
     source.tls_client_cert_file = valueOrOld('dbf-tls-client-cert', old && old.tls_client_cert_file);
@@ -1775,6 +1813,7 @@
   async function testConnection() {
     if (!state.source) return toast('请先创建数据源', 'warn');
     const b = q('db-test'); b.disabled = true; b.textContent = '连接中…';
+    hideQueryMessage();
     try {
       const r = await api('POST', '/api/database/sources/' + encodeURIComponent(state.source.id) + '/test', {});
       toast('连接成功 · ' + (r.topology && r.topology !== 'standalone' ? r.topology + (r.masters ? ' ×' + r.masters : '') + ' · ' : '') + (r.version || kindLabel(r.kind)) + ' · ' + r.latency_ms + ' ms', 'ok');
@@ -1794,8 +1833,195 @@
           }
         } catch (_) {}
       }
-    } catch (e) { toast('连接失败：' + e.message, 'err'); }
+    } catch (e) {
+      showConnectionError(state.source, e.message);
+    }
     finally { b.disabled = false; b.textContent = '测试连接'; }
+  }
+
+  function diagnoseConnectionError(message, source) {
+    const msg = String(message || '');
+    if (/未保存密码|password not saved|ErrNotSaved/i.test(msg)) {
+      return {
+        category: '凭据缺失',
+        tips: [
+          '本地凭据管理器中未找到该数据源的密码记录（或已被清理）。',
+          '请在「数据源管理」中选中该数据源，在密码框中重新输入密码并点击「保存」。'
+        ]
+      };
+    }
+    if (/DPI-1072|DPI-1050|DPI-1047|unsupported Oracle Client|OCIEnvCreate/i.test(msg)) {
+      return {
+        category: 'Oracle 客户端库兼容性异常',
+        tips: [
+          '本地 Oracle Client / Instant Client 动态链接库版本不兼容或缺失依赖。',
+          '推荐方案：编辑该数据源，将「驱动模式」切换为「纯 Go 驱动 (go-ora，推荐)」，无需本地客户端即可直连。',
+          '若必须使用 OCI 原生驱动，请下载安装 64 位 Oracle Instant Client 19c+，并在数据源配置中填入 OCI 目录。'
+        ]
+      };
+    }
+    if (/ORA-12541|TNS:no listener/i.test(msg)) {
+      return {
+        category: 'Oracle 监听未启动 (ORA-12541)',
+        tips: [
+          '目标机器的 Oracle 监听程序 (Listener) 未在指定端口启动。',
+          '请登录 Oracle 服务器执行 lsnrctl status 检查监听状态，若未启动请执行 lsnrctl start。',
+          '请核对端口配置是否正确（默认通常为 1521）。'
+        ]
+      };
+    }
+    if (/ORA-12514|listener does not currently know of service/i.test(msg)) {
+      return {
+        category: '服务名不存在或未注册 (ORA-12514)',
+        tips: [
+          'Oracle 监听器未识别到请求的 Service Name。',
+          '请检查 Service Name 拼写和大小写（例如 XE, ORCL, XEPDB1, FREEPDB1 等）。',
+          '如果数据库使用的是 SID 而非 Service Name，请将连接方式切换为「SID」。',
+          '可在服务器端执行 lsnrctl status 查看当前已注册的服务名列表 (Service Summary)。'
+        ]
+      };
+    }
+    if (/ORA-01017|invalid username\/password|Access denied for user/i.test(msg)) {
+      return {
+        category: '用户名或密码错误',
+        tips: [
+          '数据库鉴权失败，用户名或密码不匹配。',
+          '注意密码字母大小写（Oracle 11g+ 默认区分大小写）。',
+          '若使用的是管理员账号（如 SYS），需要以 SYSDBA 身份或确保对应远程登录权限已配置。',
+          '请在数据源管理中重新核对用户名并重新输入密码保存。'
+        ]
+      };
+    }
+    if (/i\/o timeout|context deadline exceeded|timed out|连接超时/i.test(msg)) {
+      return {
+        category: '网络连接超时 (Timeout)',
+        tips: [
+          '无法在限定时间内与目标主机建立 TCP 连接，可能由于网络不通或防火墙拦截。',
+          '若目标数据库部署在隔离的内网或私有云中，请在数据源配置中开启「SSH 隧道 / 跳板机」。',
+          '请核对主机 IP / 域名是否能连通，确认 VPN 或相关内网专线已连接。',
+          '可在本地命令行使用 ping 或 Test-NetConnection -ComputerName ' + ((source && source.host) || 'host') + ' -Port ' + ((source && source.port) || '1521') + ' 测试端口连通性。'
+        ]
+      };
+    }
+    if (/connection refused|积极拒绝|目标计算机积极拒绝|拒绝连接/i.test(msg)) {
+      return {
+        category: '目标端口拒绝连接 (Connection Refused)',
+        tips: [
+          '网络可达，但目标主机在该端口上未监听任何服务，或被服务器防火墙/安全组明确拒绝。',
+          '请核对端口号是否填写正确（Oracle 默认 1521，MySQL 默认 3306，Redis 默认 6379）。',
+          '请登录目标服务器确认数据库服务处于运行状态，且监听绑定的 IP 允许远程访问（避免绑定为 127.0.0.1）。'
+        ]
+      };
+    }
+    if (/no route to host|无法连接到网络/i.test(msg)) {
+      return {
+        category: '主机不可达 (No Route to Host)',
+        tips: [
+          '网络路由不可达，目标 IP 可能不存在或处于不可路由的网段。',
+          '请核对主机 IP 拼写，并检查路由表或 VPN 拨号状态。'
+        ]
+      };
+    }
+
+    return {
+      category: '连接异常',
+      tips: [
+        '请核对数据源配置中的主机、端口、用户名及数据库/服务名是否准确。',
+        '请检查本机与目标数据库服务器之间的网络连通性及防火墙规则。',
+        '若有详细错误日志，可点击「复制错误详情」发送给系统管理员或 DBA 进行排查。'
+      ]
+    };
+  }
+
+  function showConnectionError(source, message) {
+    const src = source || state.source || {};
+    const diag = diagnoseConnectionError(message, src);
+    const box = q('db-result-message');
+    const sourceLabel = src.name ? (src.name + ' (' + (src.host || '') + (src.port ? ':' + src.port : '') + ')') : '当前数据源';
+
+    toast('连接失败：' + (diag.category || '请检查配置'), 'err');
+
+    if (!box) return;
+    box.hidden = false;
+    box.className = 'db-result-message error';
+    box.setAttribute('role', 'alert');
+
+    const copyFull = '[数据源]: ' + (src.name || '未命名') + ' (' + (src.kind || '') + ' ' + (src.host || '') + ':' + (src.port || '') + ')'
+      + '\n[诊断分类]: ' + diag.category
+      + '\n[详细报错]: ' + message
+      + '\n\n[排查建议]:\n' + diag.tips.map((t, i) => (i + 1) + '. ' + t).join('\n');
+
+    box.innerHTML = '<div class="db-message-icon" aria-hidden="true">!</div>'
+      + '<div class="db-message-copy">'
+      +   '<div class="db-conn-err-header">'
+      +     '<strong>连接失败 · ' + h(sourceLabel) + '</strong>'
+      +     '<span class="db-conn-err-badge">' + h(diag.category) + '</span>'
+      +   '</div>'
+      +   '<div class="db-conn-err-section">'
+      +     '<span class="db-conn-err-label">准确报错：</span>'
+      +     '<pre class="db-conn-err-pre">' + h(message) + '</pre>'
+      +   '</div>'
+      +   '<div class="db-conn-err-section">'
+      +     '<span class="db-conn-err-label">排查建议：</span>'
+      +     '<ul class="db-conn-tips-list">' + diag.tips.map(t => '<li>' + h(t) + '</li>').join('') + '</ul>'
+      +   '</div>'
+      + '</div>'
+      + '<div class="db-message-actions" style="display:flex;gap:6px;align-items:flex-start;flex-shrink:0;">'
+      +   '<button class="btn btn-xs" id="db-copy-conn-err">复制错误详情</button>'
+      + '</div>';
+
+    const copyBtn = q('db-copy-conn-err');
+    if (copyBtn) copyBtn.onclick = () => copyDBText(copyFull, '已复制连接报错与排查建议');
+  }
+
+  async function testDraftSource(old) {
+    if (!validateSourceForm()) return;
+    const passInput = q('dbf-pass');
+    const pass = passInput ? passInput.value : '';
+    const kind = q('dbf-kind') ? q('dbf-kind').value : 'oracle';
+    if (!pass && kind !== 'redis' && (!old || !old.id || !old.has_password)) {
+      toast('测试连接请先输入密码', 'warn');
+      if (passInput) passInput.focus();
+      return;
+    }
+    const btn = q('dbf-test-draft');
+    const resultBox = q('dbf-test-result');
+    if (btn) { btn.disabled = true; btn.textContent = '测试中…'; }
+    if (resultBox) {
+      resultBox.style.display = 'block';
+      resultBox.className = 'dbf-test-result';
+      resultBox.innerHTML = '正在发起连接测试，请稍候…';
+    }
+    const source = sourceFromForm(old);
+    const sshPass = q('dbf-ssh-password') ? q('dbf-ssh-password').value : '';
+    const body = { source: source, password: pass, ssh_password: sshPass };
+    const path = (old && old.id) ? ('/api/database/sources/' + encodeURIComponent(old.id) + '/test') : '/api/database/sources/test';
+    try {
+      const r = await api('POST', path, body);
+      if (resultBox) {
+        resultBox.className = 'dbf-test-result ok';
+        const info = (r.topology && r.topology !== 'standalone' ? r.topology + ' · ' : '') + (r.version || kindLabel(r.kind)) + ' · 延迟 ' + r.latency_ms + ' ms';
+        resultBox.innerHTML = '<div style="font-weight:600;display:flex;align-items:center;gap:6px;">✓ 连接测试成功</div><div style="margin-top:2px;">' + h(info) + '</div>';
+      }
+      toast('连接测试成功 (' + r.latency_ms + ' ms)', 'ok');
+    } catch (e) {
+      const diag = diagnoseConnectionError(e.message, source);
+      if (resultBox) {
+        resultBox.className = 'dbf-test-result err';
+        resultBox.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;">'
+          + '<strong style="font-size:12.5px;">✗ 连接测试失败 (' + h(diag.category) + ')</strong>'
+          + '<button type="button" class="btn btn-xs" id="dbf-copy-test-err">复制报错</button>'
+          + '</div>'
+          + '<pre>' + h(e.message) + '</pre>'
+          + '<div style="font-weight:600;margin-top:6px;">建议排查方案：</div>'
+          + '<ul>' + diag.tips.map(t => '<li>' + h(t) + '</li>').join('') + '</ul>';
+        const copyBtn = q('dbf-copy-test-err');
+        if (copyBtn) copyBtn.onclick = () => copyDBText(e.message, '已复制报错信息');
+      }
+      toast('连接失败：' + (e.message.length > 60 ? e.message.slice(0, 60) + '…' : e.message), 'err');
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = '测试连接'; }
+    }
   }
 
   function renderWorkspace(preserveSessions) {
@@ -1875,7 +2101,7 @@
     const initial = state.source.kind === 'oracle' ? 'SELECT SYSDATE AS SERVER_TIME FROM DUAL' : 'SELECT NOW() AS server_time';
     const history = loadHistory();
     const savedRows = Math.max(1, Math.min(state.source.max_rows, Number(persisted.row_limits[state.source.id]) || Math.min(1000, state.source.max_rows)));
-    const gridRows = Math.max(6, Math.min(40, Number(state.prefs.gridRows) || 16));
+    const gridRows = Math.max(6, Math.min(100, Number(state.prefs.gridRows) || 25));
     host.innerHTML = '<div class="db-sql-layout">'
       + '<aside class="card db-meta" id="db-meta-pane">'
       + '<div class="db-pane-title"><span>数据库对象</span><div class="db-pane-actions"><button class="btn btn-xs" id="db-meta-refresh" title="刷新对象树">刷新</button><button class="btn btn-xs db-meta-toggle-btn" id="db-meta-toggle" title="收起对象栏 (' + h(state.prefs.shortcuts.objects || 'Alt+O') + ')" aria-label="收起数据库对象栏">' + actionIcon('panel') + '</button></div></div>'
@@ -1913,7 +2139,7 @@
       + '<div class="db-bar-divider"></div>'
       + '<div class="db-bar-group db-bar-limits-group">'
       + '<label class="db-bar-label">每页返回 <input id="db-max-rows" type="number" min="1" max="' + state.source.max_rows + '" value="' + savedRows + '" aria-label="当前查询每页返回行数"> 行</label>'
-      + '<label class="db-bar-label">显示 <input id="db-grid-rows" type="number" min="6" max="40" value="' + gridRows + '"> 行</label>'
+      + '<label class="db-bar-label">显示 <input id="db-grid-rows" type="number" min="6" max="100" value="' + gridRows + '"> 行</label>'
       + '</div>'
       + '<div class="db-bar-group db-bar-more-group">'
       + '<details id="db-toolbar-more" class="db-toolbar-more">'
@@ -1975,6 +2201,7 @@
       + '</div>'
       + '<div id="db-result-message" class="db-result-message" hidden></div>'
       + '<div id="db-result-grid" class="db-result-grid"></div>'
+      + '<div class="db-grid-resizer" id="db-grid-resizer" role="separator" title="上下拖动调整结果表格高度"><div class="db-grid-resizer-line"></div></div>'
       + '</section>'
       + '</main>'
       + '</div>';
@@ -1992,8 +2219,12 @@
     q('db-format').onclick = formatCurrentSQL;
     if (q('db-toggle-edit')) q('db-toggle-edit').onclick = function () {
       if (!canWriteDatabase()) { toast('当前账号只有查询权限', 'warn'); return; }
-      state.isEditMode = !state.isEditMode;
       const current = sess();
+      if (!state.isEditMode && current && current.summary && current.summary.ordered === false) {
+        toast('无序分页结果不稳定（多页可能重复或漏行），网格编辑要求 SQL 包含显式 ORDER BY 排序', 'warn');
+        return;
+      }
+      state.isEditMode = !state.isEditMode;
       if (current) current.isEditMode = state.isEditMode;
       updateTransactionControls();
       refreshVisibleResult(true);
@@ -2083,7 +2314,7 @@
       }
     };
     q('db-grid-rows').onchange = function () {
-      const value = Math.max(6, Math.min(40, Number(this.value) || 16));
+      const value = Math.max(6, Math.min(100, Number(this.value) || 25));
       this.value = value;
       state.prefs.gridRows = value;
       savePrefs();
@@ -2131,6 +2362,7 @@
         o.innerHTML = inlineError('元数据加载失败', e.message) + '<button class="btn btn-xs db-meta-retry" id="db-meta-retry">重试</button>';
         if (q('db-meta-retry')) q('db-meta-retry').onclick = () => loadSchemas(true);
       }
+      showConnectionError(source, '读取数据库元数据失败：' + e.message);
     }
   }
 
@@ -2425,10 +2657,38 @@
         document.addEventListener('pointerup', up);
       };
     }
+    // Result Grid vertical resizer
+    const gridResizer = q('db-grid-resizer');
+    if (gridResizer) {
+      gridResizer.onpointerdown = function (e) {
+        e.preventDefault();
+        gridResizer.classList.add('dragging');
+        const startY = e.clientY;
+        const scroll = q('db-result-grid') && q('db-result-grid').querySelector('.db-table-scroll');
+        const startH = scroll ? scroll.getBoundingClientRect().height : ((Number(state.prefs.gridRows) || 25) * GRID_ROW_H + GRID_HEAD_H);
+        const move = function (ev) {
+          const delta = ev.clientY - startY;
+          const newH = Math.max(220, Math.min(3200, startH + delta));
+          const rows = Math.max(6, Math.min(100, Math.round((newH - GRID_HEAD_H) / GRID_ROW_H)));
+          const input = q('db-grid-rows');
+          if (input) input.value = rows;
+          state.prefs.gridRows = rows;
+          applyGridHeight();
+        };
+        const up = function () {
+          gridResizer.classList.remove('dragging');
+          document.removeEventListener('pointermove', move);
+          document.removeEventListener('pointerup', up);
+          savePrefs();
+        };
+        document.addEventListener('pointermove', move);
+        document.addEventListener('pointerup', up);
+      };
+    }
     applyGridHeight();
   }
   function applyGridHeight() {
-    const rows = Math.max(6, Math.min(40, Number(q('db-grid-rows') && q('db-grid-rows').value) || state.prefs.gridRows || 16));
+    const rows = Math.max(6, Math.min(100, Number(q('db-grid-rows') && q('db-grid-rows').value) || state.prefs.gridRows || 25));
     const scroll = q('db-result-grid') && q('db-result-grid').querySelector('.db-table-scroll');
     const plan = q('db-result-grid') && q('db-result-grid').querySelector('.db-plan-text, .db-plan-table-wrap');
     const height = (rows * GRID_ROW_H + GRID_HEAD_H) + 'px';
@@ -3232,8 +3492,15 @@
     if (guard.action === 'ROLLBACK') return rollbackPendingEdits();
     const querySource = effectiveSource();
     if (!querySource) return showQueryError('未选择数据源', '请先在顶部选择数据源。');
-    const writes = guard.writes || /^(INSERT|UPDATE|DELETE|MERGE|REPLACE|CREATE|ALTER|DROP|TRUNCATE|RENAME)$/.test(guard.action);
-    if (writes && (!canWriteDatabase() || querySource.read_only)) return showQueryError('只有查询权限', '当前账号或数据源不允许写入或加锁查询。');
+    const writes = guard.writes || /^(INSERT|UPDATE|DELETE|MERGE|REPLACE)$/.test(guard.action);
+    const isDDL = /^(CREATE|ALTER|DROP|TRUNCATE|RENAME|COMMENT)$/i.test(guard.action);
+    if (isDDL) {
+      if (!querySource.allow_ddl || querySource.read_only) {
+        return showQueryError('未开启 DDL', '当前数据源未开启 DDL 支持（或处于服务端只读锁定）。请在“数据源管理”中勾选“支持 DDL”并取消“服务端只读”。');
+      }
+    } else {
+      if (writes && (!canWriteDatabase() || querySource.read_only)) return showQueryError('只有查询权限', '当前账号或数据源不允许写入或加锁查询。');
+    }
     if (guard.warning && !confirm('危险 SQL 确认\n\n' + guard.warning + '\n\n确定继续执行吗？')) {
       toast('已取消危险 SQL', 'warn');
       return;
@@ -3291,14 +3558,7 @@
       state.controller = null;
     }
     refreshActiveQueryUI(s);
-    const effSrc = effectiveSource();
-    if (!effSrc) {
-      s.controller = null;
-      state.controller = null;
-      refreshActiveQueryUI(s);
-      return showQueryError('未选择数据源', '请先在顶部选择数据源。');
-    }
-    const productionDML = String(effSrc.environment || '').toLowerCase() === 'production' && writes;
+    const productionDML = String(querySource.environment || '').toLowerCase() === 'production' && (writes || isDDL);
     let productionConfirm = false;
     if (productionDML) {
       if (!confirm('当前数据源标记为生产环境，确认执行写入或加锁操作？\n\nDML 需要手动提交，DDL 可能由数据库隐式提交。')) {
@@ -3310,9 +3570,10 @@
       }
       productionConfirm = true;
     }
+    try {
       s.startTime = performance.now();
       s.firstRowsTime = 0;
-      const queryBody = { source_id: effSrc.id, session_id: s.transactionId, sql: sql, max_rows: maxRows, page: s.page, page_size: s.pageSize, count_mode: 'none', fast: true };
+      const queryBody = { source_id: querySource.id, session_id: s.transactionId, sql: sql, max_rows: maxRows, page: s.page, page_size: s.pageSize, count_mode: 'none', fast: true };
       // Bound values are optional so older servers remain compatible for
       // ordinary queries. New query handlers consume this typed array for
       // SELECT :name / {{name}} without exposing raw UI state.
@@ -3495,8 +3756,8 @@
       s.status = e.message || '执行成功';
       if (s.id === state.activeId) {
         bindSession(s);
-        const ddlAutoCommit = e.summary && e.summary.statement_type === 'DDL_AUTOCOMMIT';
-        showQueryMessage(ddlAutoCommit ? 'warn' : 'ok', ddlAutoCommit ? 'DDL 已执行（数据库隐式提交）' : (s.transactionPending ? '执行成功（等待提交）' : '执行成功'), e.message || '语句执行完成');
+        const ddlAutoCommit = e.summary && (e.summary.statement_type === 'DDL_AUTOCOMMIT' || e.summary.statement_type === 'DDL');
+        showQueryMessage('ok', ddlAutoCommit ? 'DDL 已执行（已自动提交）' : (s.transactionPending ? '执行成功（等待提交）' : '执行成功'), e.message || '语句执行完成');
         updateTransactionControls();
         if (q('db-query-status')) q('db-query-status').textContent = s.status;
       }
@@ -3565,8 +3826,19 @@
     if (tableName) {
       extraActions = '<button class="btn btn-xs btn-primary" id="db-inspect-ttc-cols" title="在编辑器自动生成查看该表字段结构的查询，排查致错大字段">查看 ' + h(tableName) + ' 字段结构</button>';
     }
-    box.innerHTML = '<div class="db-message-icon" aria-hidden="true">' + icon + '</div><div class="db-message-copy"><strong>' + h(title) + '</strong><pre>' + h(message) + '</pre>' + (sql ? '<details><summary>查看本次 SQL</summary><pre>' + h(sql) + '</pre></details>' : '') + '</div><div class="db-message-actions" style="display:flex;gap:6px;align-items:center;flex-shrink:0;">' + extraActions + '<button class="btn btn-xs" id="db-copy-message">' + copyLabel + '</button></div>';
-    q('db-copy-message').onclick = () => copyDBText(title + '\n' + message + (sql ? '\n\n' + sql : ''), '详情已复制');
+    let tipsHTML = '';
+    let diag = null;
+    if (kind === 'error' && message) {
+      diag = diagnoseConnectionError(message, state.source);
+      if (diag && diag.category !== '连接异常') {
+        tipsHTML = '<div class="db-conn-err-section" style="margin-top:8px;">'
+          + '<span class="db-conn-err-label" style="display:flex;align-items:center;gap:6px;">排查建议 <span class="db-conn-err-badge">' + h(diag.category) + '</span></span>'
+          + '<ul class="db-conn-tips-list">' + diag.tips.map(t => '<li>' + h(t) + '</li>').join('') + '</ul>'
+          + '</div>';
+      }
+    }
+    box.innerHTML = '<div class="db-message-icon" aria-hidden="true">' + icon + '</div><div class="db-message-copy"><strong>' + h(title) + '</strong><pre>' + h(message) + '</pre>' + (sql ? '<details><summary>查看本次 SQL</summary><pre>' + h(sql) + '</pre></details>' : '') + tipsHTML + '</div><div class="db-message-actions" style="display:flex;gap:6px;align-items:center;flex-shrink:0;">' + extraActions + '<button class="btn btn-xs" id="db-copy-message">' + copyLabel + '</button></div>';
+    q('db-copy-message').onclick = () => copyDBText(title + '\n' + message + (sql ? '\n\n' + sql : '') + (diag && diag.category !== '连接异常' ? '\n\n[排查建议 (' + diag.category + ')]\n' + diag.tips.map((t, i) => (i + 1) + '. ' + t).join('\n') : ''), '详情已复制');
     if (tableName && q('db-inspect-ttc-cols')) {
       q('db-inspect-ttc-cols').onclick = () => {
         const inspectSQL = "SELECT column_name, data_type, data_length, nullable FROM all_tab_cols WHERE owner = " + (tableOwner ? "'" + tableOwner.replace(/'/g, "''") + "'" : 'USER') + " AND table_name = '" + tableName.replace(/'/g, "''") + "' ORDER BY column_id";
@@ -4280,6 +4552,11 @@
       }
       if (window.showSaveFilePicker) handle = await window.showSaveFilePicker({ suggestedName: filename, types: types });
       const currentSession = sess();
+      if (currentSession && currentSession.summary && currentSession.summary.ordered === false && (currentSession.page || 1) > 1) {
+        toast('无序分页在第 2 页及之后可能存在重复或漏行，请在 SQL 中补充 ORDER BY 确保导出数据完整准确', 'warn');
+        button.disabled = false;
+        return;
+      }
       const response = await fetch('/api/database/export', { method: 'POST', signal: exportController.signal, credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ source_id: effSrc3.id, sql: state.lastSQL, max_rows: state.lastMaxRows, page: currentSession && currentSession.page || 1, page_size: currentSession && currentSession.pageSize || state.lastMaxRows, count_mode: 'none', format: format, table: table }) });
       if (!response.ok) { const body = await response.json().catch(() => ({})); throw new Error(body.error || 'HTTP ' + response.status); }
       if (handle && response.body) { const writable = await handle.createWritable(); await response.body.pipeTo(writable, { signal: exportController.signal }); }

@@ -237,3 +237,22 @@ func TestOracleTTCErrorHandling(t *testing.T) {
 		t.Fatalf("expected normal ORA error to not be connection failure, but got true")
 	}
 }
+
+func TestNormalizeBytesLargeUTF8RuneBoundary(t *testing.T) {
+	// Construct a large UTF-8 byte slice where index maxCellBytes cuts right in the middle of a 3-byte Chinese rune
+	prefix := strings.Repeat("a", maxCellBytes-1)
+	chinese := "中文测试数据"
+	full := []byte(prefix + chinese)
+	res := normalizeBytes(full)
+	m, ok := res.(map[string]any)
+	if !ok {
+		t.Fatalf("expected truncated text map, got %T: %v", res, res)
+	}
+	if m["kind"] != "text" {
+		t.Fatalf("expected text kind, got: %v (falsely classified as binary!)", m["kind"])
+	}
+	preview, ok := m["preview"].(string)
+	if !ok || !utf8.ValidString(preview) {
+		t.Fatalf("preview should be valid UTF-8 string, got: %v", preview)
+	}
+}

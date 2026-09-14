@@ -275,7 +275,7 @@ func isLOBType(t string) bool {
 
 func isBlobType(t string) bool {
 	ut := strings.ToUpper(strings.TrimSpace(t))
-	return ut == "BLOB" || ut == "LONG RAW" || ut == "RAW" || ut == "BFILE" || strings.HasSuffix(ut, "BLOB")
+	return ut == "BLOB" || ut == "LONG RAW" || ut == "BFILE" || strings.HasSuffix(ut, "BLOB")
 }
 
 func isTTCError(err error) bool {

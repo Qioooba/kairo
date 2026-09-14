@@ -58,6 +58,14 @@
     try { return decodeURIComponent(match[1]); } catch (_) { return ''; }
   }
 
+  function formatCompareError(error) {
+    const msg = String((error && error.message) || error || '');
+    if (msg.includes('compare_allowed_roots')) {
+      return '本地路径受限：请在 config.yaml 的 compare_allowed_roots 中添加允许的本地目录（例如 ["*"] 或指定路径）';
+    }
+    return msg;
+  }
+
   function icon(name) {
     const paths = {
       compare: 'M8 7h11M15 3l4 4-4 4M16 17H5M9 13l-4 4 4 4',
@@ -660,7 +668,7 @@
       }
       editors[toSide].setValue(nextValue);
       markDirty(toSide);
-      scheduleRecompare();
+      compareNow(true);
       toast('已覆盖到' + (toSide === 'right' ? '右侧' : '左侧'), 'ok');
     }
 
@@ -701,15 +709,64 @@
         saveLeftBtn, saveRightBtn, prevLineBtn, nextLineBtn
       ])
     ]);
+    const findBtn = makeButton('查找', 'selectAll', () => {
+      if (currentVirtualDiff && currentVirtualDiff.openSearch) currentVirtualDiff.openSearch();
+      else toast('请先开始比较', 'idle');
+    }, 'btn btn-sm');
+    findBtn.title = '在比对结果中查找 (Ctrl+F)';
     const toolbar = el('div', { class: 'cmp2-commandbar' }, [
-      el('div', { class: 'cmp2-commandbar-primary' }, [compareBtn, navGroup, dirtyBanner]),
+      el('div', { class: 'cmp2-commandbar-primary' }, [compareBtn, navGroup, findBtn, dirtyBanner]),
       el('div', { class: 'cmp2-commandbar-secondary' }, [
         el('label', { class: 'cmp2-field-inline' }, [el('span', { text: '视图' }), modeSelect]),
         optionDetails, moreDetails
       ])
     ]);
+    const leftPathInp = el('input', { type: 'text', placeholder: '输入或粘贴左侧文件完整路径', value: state.left.source.path || '', 'aria-label': '左侧文件路径' });
+    const rightPathInp = el('input', { type: 'text', placeholder: '输入或粘贴右侧文件完整路径', value: state.right.source.path || '', 'aria-label': '右侧文件路径' });
+    const leftBrowse = browseButton({ input: leftPathInp, directory: false, compact: true, label: '浏览', title: '浏览选择左侧文件' });
+    const rightBrowse = browseButton({ input: rightPathInp, directory: false, compact: true, label: '浏览', title: '浏览选择右侧文件' });
+    const loadFilesBtn = el('button', { class: 'btn btn-sm btn-primary cmp2-file-load-btn', type: 'button', text: '载入并比对', title: '读取两侧指定文件并直接比对' });
+    async function loadInputsAndCompare() {
+      const lPath = leftPathInp.value.trim();
+      const rPath = rightPathInp.value.trim();
+      if (!lPath && !rPath) {
+        toast('请至少输入一侧文件路径', 'warn');
+        return;
+      }
+      if (lPath) {
+        state.left.source = { kind: 'local', path: lPath, encoding: 'auto' };
+      }
+      if (rPath) {
+        state.right.source = { kind: 'local', path: rPath, encoding: 'auto' };
+      }
+      saveSources(state);
+      status.textContent = '正在载入文件…';
+      const tasks = [];
+      if (lPath) tasks.push(loadSide('left'));
+      if (rPath) tasks.push(loadSide('right'));
+      const results = await Promise.all(tasks);
+      if (results.every(Boolean)) {
+        compareNow(false, true);
+      }
+    }
+    loadFilesBtn.onclick = loadInputsAndCompare;
+    leftPathInp.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); loadInputsAndCompare(); } });
+    rightPathInp.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); loadInputsAndCompare(); } });
+    const fileInputsBar = el('div', { class: 'cmp2-file-inputs-bar' }, [
+      el('div', { class: 'cmp2-file-side-input' }, [
+        el('span', { class: 'cmp2-file-side-tag', text: '左侧文件' }),
+        leftPathInp,
+        leftBrowse
+      ]),
+      el('div', { class: 'cmp2-file-side-input' }, [
+        el('span', { class: 'cmp2-file-side-tag', text: '右侧文件' }),
+        rightPathInp,
+        rightBrowse
+      ]),
+      loadFilesBtn
+    ]);
     const stickyHeader = el('div', { class: 'cmp-text-sticky-head cmp2-text-head' }, [toolbar]);
-    panel.append(stickyHeader, editorGrid, resultHost, status);
+    panel.append(stickyHeader, fileInputsBar, editorGrid, resultHost, status);
     panel.addEventListener('keydown', e => {
       if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); compareNow(false, true); }
       if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
@@ -717,6 +774,12 @@
         const side = resolveSaveSide(document.activeElement);
         if (side) saveSide(side);
         else status.textContent = '请先把焦点放在左侧或右侧编辑器/差异行，再保存';
+      }
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'f' || e.key === 'F')) {
+        if (showingResult && currentVirtualDiff && currentVirtualDiff.openSearch) {
+          e.preventDefault();
+          currentVirtualDiff.openSearch();
+        }
       }
       if ((e.altKey && e.key === 'ArrowUp') || e.key === 'F7') { e.preventDefault(); navigateHunk(-1); }
       if ((e.altKey && e.key === 'ArrowDown') || e.key === 'F8') { e.preventDefault(); navigateHunk(1); }
@@ -773,6 +836,8 @@
       sourceHeaders[side].label.textContent = sourceLabel(source); sourceHeaders[side].label.title = sourceLabel(source);
       const codec = state[side].codec; sourceHeaders[side].meta.textContent = source.kind === 'text' ? '' : String(codec.encoding || 'utf-8').toUpperCase() + ' · ' + String(codec.eol || 'lf').toUpperCase() + (codec.bom ? ' · BOM' : '');
       sourceHeaders[side].dirty.textContent = state[side].dirty ? '● 已修改' : ''; sourceHeaders[side].saveBtn.disabled = !canSaveComparedFile(state[side]);
+      if (side === 'left' && state.left.source && state.left.source.path && leftPathInp) leftPathInp.value = state.left.source.path;
+      if (side === 'right' && state.right.source && state.right.source.path && rightPathInp) rightPathInp.value = state.right.source.path;
       refreshSaveButtons();
     }
     async function loadSide(side) {
@@ -827,7 +892,7 @@
         editors[side].setValue('', { resetHistory: true });
         editors[side].textarea.disabled = false;
         updateHeader(side);
-        toast('读取失败：' + item.loadError, 'err');
+        toast('读取失败：' + formatCompareError(item.loadError), 'err');
         status.textContent = (side === 'left' ? '左侧' : '右侧') + '读取失败，请修正来源后重试';
         return false;
       }
@@ -835,20 +900,57 @@
     async function saveSide(side) {
       if (disposed) return false;
       const item = state[side];
-      if (!canSaveComparedFile(item)) return false;
+      const sideName = side === 'left' ? '左侧' : '右侧';
+      if (item.source && item.source.kind === 'text') {
+        toast(sideName + '当前为临时文本，请先指定保存文件路径', 'warn');
+        openSourceDialog(item.source, false, async source => {
+          state[side].source = source;
+          saveSources(state);
+          const content = editors[side].getValue();
+          try {
+            await api('POST', '/api/compare/write', {
+              target: spec(source),
+              content,
+              backup: !!options.backup,
+              encoding: item.codec.encoding,
+              eol: item.codec.eol,
+              bom: !!item.codec.bom
+            });
+            item.dirty = false;
+            await loadSide(side);
+            toast('已成功保存至 ' + sourceLabel(source) + (options.backup ? '（原文件已备份）' : ''), 'ok');
+          } catch (e) {
+            toast('保存失败：' + (e.message || e), 'err');
+          }
+        });
+        return false;
+      }
+      if (!item.dirty) {
+        toast(sideName + '文件内容未修改，无需保存', 'idle');
+        return false;
+      }
+      if (!item.version) {
+        toast(sideName + '正在重新校验版本…', 'idle');
+        const reloaded = await loadSide(side);
+        if (!reloaded || !item.version) {
+          toast(sideName + '获取文件版本失败，保存中止', 'err');
+          return false;
+        }
+      }
       const sourceAtSave = spec(item.source);
       const loadNo = item.loadSeq;
       const editNo = item.editSeq;
       const content = editors[side].getValue();
       item.saving = true;
       updateHeader(side);
+      toast('正在保存' + sideName + '…', 'idle');
       try {
         await api('POST', '/api/compare/write', { target: sourceAtSave, content, expected: item.version, backup: !!options.backup, encoding: item.codec.encoding, eol: item.codec.eol, bom: !!item.codec.bom });
         if (disposed || item.loadSeq !== loadNo || item.editSeq !== editNo || JSON.stringify(spec(item.source)) !== JSON.stringify(sourceAtSave)) return false;
         item.dirty = false;
         updateHeader(side);
         await loadSide(side);
-        if (!disposed) toast('保存成功' + (options.backup ? '，原文件已备份' : ''), 'ok');
+        if (!disposed) toast(sideName + '保存成功' + (options.backup ? '（原文件已备份）' : ''), 'ok');
         return true;
       } catch (error) {
         if (!disposed) toast('保存失败：' + (error.message || error), 'err');
@@ -963,6 +1065,7 @@
       currentVirtualDiff = createVirtualDiff(filtered, state, effectiveMode, {
         hunk: applyHunk,
         line: applyLine,
+        batch: (indices, dir) => applyBatch(filtered, indices, dir),
         edit: commitLineEdit,
         language: { left: sourceHeaders.left.language.value, right: sourceHeaders.right.language.value },
         onHunkChange: function(idx, total) {
@@ -1029,6 +1132,46 @@
       editors[targetSide].setValue(lines.join('\n'));
       markDirty(targetSide); compareNow(true);
       toast('已' + (direction === 'right' ? '覆盖本行到右侧' : '覆盖本行到左侧'), 'ok');
+    }
+    function applyBatch(diffRows, selectedIndices, direction) {
+      if (!selectedIndices || !selectedIndices.length) return;
+      const targetSide = direction === 'right' ? 'right' : 'left';
+      const selRows = selectedIndices
+        .map(idx => ({ idx, row: diffRows[idx] }))
+        .filter(item => item.row && item.row.status !== 'equal');
+      if (!selRows.length) {
+        toast('选中的行无差异需要覆盖', 'warn');
+        return;
+      }
+      selRows.sort((a, b) => b.idx - a.idx);
+      const lines = splitEditorLines(editors[targetSide].getValue());
+      for (const item of selRows) {
+        const row = item.row;
+        const sourceText = direction === 'right' ? row.leftText : row.rightText;
+        const targetNo = direction === 'right' ? row.rightNo : row.leftNo;
+        const otherNo = direction === 'right' ? row.leftNo : row.rightNo;
+        if (row.status === 'changed') {
+          if (targetNo > 0 && targetNo <= lines.length) lines[targetNo - 1] = sourceText;
+        } else if (direction === 'right') {
+          if (row.status === 'deleted') {
+            const insertIdx = otherNo > 0 ? Math.min(otherNo - 1, lines.length) : lines.length;
+            lines.splice(insertIdx, 0, sourceText);
+          } else if (row.status === 'inserted') {
+            if (targetNo > 0 && targetNo <= lines.length) lines.splice(targetNo - 1, 1);
+          }
+        } else {
+          if (row.status === 'inserted') {
+            const insertIdx = otherNo > 0 ? Math.min(otherNo - 1, lines.length) : lines.length;
+            lines.splice(insertIdx, 0, sourceText);
+          } else if (row.status === 'deleted') {
+            if (targetNo > 0 && targetNo <= lines.length) lines.splice(targetNo - 1, 1);
+          }
+        }
+      }
+      editors[targetSide].setValue(lines.join('\n'));
+      markDirty(targetSide);
+      compareNow(true);
+      toast('已批量覆盖 ' + selRows.length + ' 行到' + (direction === 'right' ? '右侧' : '左侧'), 'ok');
     }
     function commitLineEdit(side, lineNo, newText, row) {
       const current = editors[side].getValue();
@@ -1131,8 +1274,19 @@
   function createVirtualDiff(rows, state, mode, actions) {
     const onMerge = actions && (typeof actions === 'function' ? actions : actions.hunk);
     const onLine = actions && actions.line;
+    const onBatch = actions && actions.batch;
     const onEdit = actions && actions.edit;
     const rowHeight = 25;
+
+    // Search state
+    let searchQuery = '';
+    let searchCaseSensitive = false;
+    let searchMatches = [];
+    let activeMatchIndex = -1;
+
+    // Selection state
+    const selectedRowIndices = new Set();
+    let lastCheckedRow = -1;
 
     // 准确映射各差异块在当前过滤视图下的起始行号与行数
     const hunkMap = {};
@@ -1164,6 +1318,216 @@
     viewport.appendChild(canvas);
     let renderedStart = -1, renderedEnd = -1;
 
+    // Search UI Elements
+    const searchBar = el('div', { class: 'cmp-diff-search-bar', style: 'display:none;' });
+    const searchInput = el('input', {
+      type: 'text',
+      class: 'cmp-diff-search-input',
+      placeholder: '在比对结果中查找 (Enter 下一个，Shift+Enter 上一个，Esc 退出)...',
+      'aria-label': '查找文本'
+    });
+    const searchCaseBtn = el('button', {
+      type: 'button',
+      class: 'btn btn-sm',
+      text: 'Aa',
+      title: '区分大小写'
+    });
+    searchCaseBtn.onclick = function () {
+      searchCaseSensitive = !searchCaseSensitive;
+      searchCaseBtn.classList.toggle('btn-primary', searchCaseSensitive);
+      executeSearch(searchInput.value);
+    };
+    const searchCount = el('span', { class: 'cmp-diff-search-count', text: '' });
+    const searchPrevBtn = el('button', {
+      type: 'button',
+      class: 'btn btn-sm',
+      text: '▲',
+      title: '上一个匹配项 (Shift+Enter)'
+    });
+    searchPrevBtn.onclick = function () { navigateSearch(-1); };
+    const searchNextBtn = el('button', {
+      type: 'button',
+      class: 'btn btn-sm',
+      text: '▼',
+      title: '下一个匹配项 (Enter)'
+    });
+    searchNextBtn.onclick = function () { navigateSearch(1); };
+    const searchCloseBtn = el('button', {
+      type: 'button',
+      class: 'btn btn-sm',
+      text: '✕',
+      title: '关闭 (Esc)'
+    });
+    searchCloseBtn.onclick = function () { closeSearch(); };
+    searchBar.append(searchInput, searchCaseBtn, searchCount, searchPrevBtn, searchNextBtn, searchCloseBtn);
+
+    searchInput.addEventListener('input', function () {
+      executeSearch(searchInput.value);
+    });
+    searchInput.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        navigateSearch(e.shiftKey ? -1 : 1);
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        closeSearch();
+      }
+    });
+
+    function executeSearch(query) {
+      searchQuery = String(query || '');
+      searchMatches = [];
+      activeMatchIndex = -1;
+      if (!searchQuery) {
+        searchCount.textContent = '';
+        renderedStart = -1;
+        renderedEnd = -1;
+        renderWindow();
+        return;
+      }
+      const target = searchCaseSensitive ? searchQuery : searchQuery.toLowerCase();
+      rows.forEach((r, idx) => {
+        if (mode === 'changes' && r.status === 'equal') return;
+        const left = searchCaseSensitive ? (r.leftText || '') : (r.leftText || '').toLowerCase();
+        const right = searchCaseSensitive ? (r.rightText || '') : (r.rightText || '').toLowerCase();
+        if (left.includes(target) || right.includes(target)) {
+          searchMatches.push(idx);
+        }
+      });
+      if (searchMatches.length > 0) {
+        activeMatchIndex = 0;
+        searchCount.textContent = '1 / ' + searchMatches.length;
+        jumpToSearchMatch(0);
+      } else {
+        searchCount.textContent = '0 / 0';
+        renderedStart = -1;
+        renderedEnd = -1;
+        renderWindow();
+      }
+    }
+
+    function navigateSearch(delta) {
+      if (!searchMatches.length) return;
+      activeMatchIndex = (activeMatchIndex + delta + searchMatches.length) % searchMatches.length;
+      searchCount.textContent = (activeMatchIndex + 1) + ' / ' + searchMatches.length;
+      jumpToSearchMatch(activeMatchIndex);
+    }
+
+    function jumpToSearchMatch(matchIdx) {
+      const targetRow = searchMatches[matchIdx];
+      if (targetRow == null) return;
+      activeRowIndex = targetRow;
+      const targetScroll = (targetRow * rowHeight) - Math.floor((viewport.clientHeight || 500) / 2) + Math.floor(rowHeight / 2);
+      viewport.scrollTop = Math.max(0, targetScroll);
+      renderedStart = -1;
+      renderedEnd = -1;
+      renderWindow();
+      updateActiveHighlights();
+    }
+
+    function openSearch() {
+      searchBar.style.display = 'flex';
+      searchInput.focus();
+      searchInput.select();
+      if (searchInput.value) executeSearch(searchInput.value);
+    }
+
+    function closeSearch() {
+      searchBar.style.display = 'none';
+      searchQuery = '';
+      searchMatches = [];
+      activeMatchIndex = -1;
+      searchCount.textContent = '';
+      renderedStart = -1;
+      renderedEnd = -1;
+      renderWindow();
+      viewport.focus();
+    }
+
+    // Batch UI Elements
+    const batchBar = el('div', { class: 'cmp-vdiff-batch-bar', style: 'display:none;' });
+    const batchCount = el('span', { class: 'cmp-batch-count', text: '' });
+    const batchToLeftBtn = el('button', {
+      class: 'btn btn-sm btn-primary',
+      type: 'button',
+      text: '← 一键覆盖到左侧',
+      title: '将选中的行批量从右侧覆盖到左侧'
+    });
+    batchToLeftBtn.onclick = function () {
+      if (onBatch) {
+        onBatch(Array.from(selectedRowIndices), 'left');
+        clearSelection();
+      }
+    };
+    const batchToRightBtn = el('button', {
+      class: 'btn btn-sm btn-primary',
+      type: 'button',
+      text: '一键覆盖到右侧 →',
+      title: '将选中的行批量从左侧覆盖到右侧'
+    });
+    batchToRightBtn.onclick = function () {
+      if (onBatch) {
+        onBatch(Array.from(selectedRowIndices), 'right');
+        clearSelection();
+      }
+    };
+    const selectAllDiffBtn = el('button', {
+      class: 'btn btn-sm',
+      type: 'button',
+      text: '选择全部差异行',
+      title: '勾选所有存在差异的行'
+    });
+    selectAllDiffBtn.onclick = function () {
+      rows.forEach((r, idx) => {
+        if (r.status !== 'equal') selectedRowIndices.add(idx);
+      });
+      updateSelectionUI();
+    };
+    const clearSelBtn = el('button', {
+      class: 'btn btn-sm',
+      type: 'button',
+      text: '取消选择',
+      title: '清空当前选中项'
+    });
+    clearSelBtn.onclick = function () {
+      clearSelection();
+    };
+    batchBar.append(batchCount, batchToLeftBtn, batchToRightBtn, selectAllDiffBtn, clearSelBtn);
+
+    function handleRowSelect(index, ev) {
+      const isChecked = ev.target.checked;
+      if (ev.shiftKey && lastCheckedRow >= 0) {
+        const start = Math.min(lastCheckedRow, index);
+        const end = Math.max(lastCheckedRow, index);
+        for (let r = start; r <= end; r++) {
+          if (isChecked) selectedRowIndices.add(r);
+          else selectedRowIndices.delete(r);
+        }
+        lastCheckedRow = index;
+      } else {
+        if (isChecked) selectedRowIndices.add(index);
+        else selectedRowIndices.delete(index);
+        lastCheckedRow = index;
+      }
+      updateSelectionUI();
+    }
+
+    function updateSelectionUI() {
+      if (selectedRowIndices.size > 0) {
+        batchBar.style.display = 'inline-flex';
+        batchCount.textContent = '已选中 ' + selectedRowIndices.size + ' 行';
+      } else {
+        batchBar.style.display = 'none';
+      }
+      updateActiveHighlights();
+    }
+
+    function clearSelection() {
+      selectedRowIndices.clear();
+      lastCheckedRow = -1;
+      updateSelectionUI();
+    }
+
     function renderWindow() {
       const start = Math.max(0, Math.floor(viewport.scrollTop / rowHeight) - 15);
       const end = Math.min(rows.length, start + Math.ceil((viewport.clientHeight || 600) / rowHeight) + 30);
@@ -1176,8 +1540,10 @@
         if (mode === 'changes' && row.status === 'equal') continue;
         const isCurrentHunk = row.hunk >= 0 && row.hunk === state.hunkIndex;
         const isCurrentLine = i === activeRowIndex;
+        const isSelected = selectedRowIndices.has(i);
+        const isCurrentSearch = activeMatchIndex >= 0 && searchMatches[activeMatchIndex] === i;
         const node = el('div', {
-          class: 'cmp-vrow cmp-vrow-' + row.status + (isCurrentHunk ? ' is-active-hunk' : '') + (isCurrentLine ? ' is-active-line' : ''),
+          class: 'cmp-vrow cmp-vrow-' + row.status + (isCurrentHunk ? ' is-active-hunk' : '') + (isCurrentLine ? ' is-active-line' : '') + (isSelected ? ' is-diff-selected' : ''),
           role: 'listitem',
           'data-hunk': row.hunk >= 0 ? String(row.hunk) : '',
           'data-row': String(i),
@@ -1191,6 +1557,15 @@
           }
           updateActiveHighlights();
         });
+
+        const chk = el('input', { type: 'checkbox', 'aria-label': '选择行', title: '勾选此行参与批量覆盖（Shift 支持连选）' });
+        chk.checked = isSelected;
+        chk.addEventListener('click', function (ev) {
+          ev.stopPropagation();
+          handleRowSelect(i, ev);
+        });
+        const selectCell = el('div', { class: 'cmp-vrow-select' }, [chk]);
+
         const middle = el('div', { class: 'cmp-merge-cell' });
         if (row.hunk >= 0) {
           if (row.first) {
@@ -1206,9 +1581,10 @@
           }
         }
         node.append(
-          makeDiffCell(row, 'left', onEdit, actions && actions.language && actions.language.left),
+          selectCell,
+          makeDiffCell(row, 'left', onEdit, actions && actions.language && actions.language.left, searchQuery, searchCaseSensitive, isCurrentSearch),
           middle,
-          makeDiffCell(row, 'right', onEdit, actions && actions.language && actions.language.right)
+          makeDiffCell(row, 'right', onEdit, actions && actions.language && actions.language.right, searchQuery, searchCaseSensitive, isCurrentSearch)
         );
         canvas.appendChild(node);
       }
@@ -1219,10 +1595,15 @@
       canvas.querySelectorAll('.cmp-vrow').forEach(node => {
         const hunkAttr = node.getAttribute('data-hunk');
         const rowAttr = node.getAttribute('data-row');
+        const rIdx = Number(rowAttr);
         const isHunkActive = hunkAttr !== '' && Number(hunkAttr) === state.hunkIndex;
-        const isLineActive = rowAttr !== '' && Number(rowAttr) === activeRowIndex;
+        const isLineActive = rowAttr !== '' && rIdx === activeRowIndex;
+        const isSelected = selectedRowIndices.has(rIdx);
         node.classList.toggle('is-active-hunk', !!isHunkActive);
         node.classList.toggle('is-active-line', !!isLineActive);
+        node.classList.toggle('is-diff-selected', !!isSelected);
+        const chk = node.querySelector('.cmp-vrow-select input');
+        if (chk) chk.checked = isSelected;
       });
     }
 
@@ -1321,17 +1702,24 @@
       updateMinimapThumb();
     });
     container.append(viewport, minimap);
-    return { element: container, jumpToHunk, navigateHunk, navigateLine };
+    const wrapper = el('div', { class: 'cmp-vdiff-wrapper' }, [searchBar, container, batchBar]);
+    return { element: wrapper, jumpToHunk, navigateHunk, navigateLine, openSearch, closeSearch, clearSelection };
   }
 
-  function makeDiffCell(row, side, onEdit, language) {
+  function makeDiffCell(row, side, onEdit, language, searchQuery, searchCaseSensitive, isCurrentSearchMatch) {
     const lineNo = side === 'left' ? row.leftNo : row.rightNo;
     const text = side === 'left' ? row.leftText : row.rightText;
     const other = side === 'left' ? row.rightText : row.leftText;
     const code = el('span', { class: 'cmp-code', spellcheck: 'false', tabindex: '0', 'aria-readonly': 'true', 'aria-multiline': 'true', title: '按 Enter 或双击编辑；Enter 换行，Ctrl/⌘ + Enter 完成，Esc 取消' });
     const syntax = Kairo.workbench && Kairo.workbench.syntaxEditor;
-    if (syntax && language && row.status !== 'changed') code.innerHTML = syntax.highlight(text || '', language);
-    else appendWordDiff(code, text || '', other || '', row.status === 'changed');
+    const hasSearchMatch = searchQuery && text && (searchCaseSensitive ? text.includes(searchQuery) : text.toLowerCase().includes(searchQuery.toLowerCase()));
+    if (hasSearchMatch) {
+      highlightSearchInText(code, text, searchQuery, searchCaseSensitive, isCurrentSearchMatch);
+    } else if (syntax && language && row.status !== 'changed') {
+      code.innerHTML = syntax.highlight(text || '', language);
+    } else {
+      appendWordDiff(code, text || '', other || '', row.status === 'changed');
+    }
 
     code.setAttribute('role', 'textbox');
     code.setAttribute('aria-label', (side === 'left' ? '左侧第' : '右侧第') + (lineNo || '新') + '行');
@@ -1411,6 +1799,33 @@
       el('span', { class: 'cmp-line-marker', text: !lineNo ? '' : row.status === 'equal' ? ' ' : side === 'left' ? '−' : '+' }),
       code
     ]);
+  }
+  function highlightSearchInText(parent, text, query, caseSensitive, isCurrentMatch) {
+    if (!query || !text) { parent.textContent = text || ''; return; }
+    try {
+      const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const re = new RegExp(escaped, caseSensitive ? 'g' : 'gi');
+      let lastIndex = 0;
+      let match;
+      parent.textContent = '';
+      while ((match = re.exec(text)) !== null) {
+        if (match.index > lastIndex) {
+          parent.appendChild(document.createTextNode(text.substring(lastIndex, match.index)));
+        }
+        const mark = el('mark', {
+          class: 'cmp-search-highlight' + (isCurrentMatch ? ' cmp-search-highlight-current' : ''),
+          text: match[0]
+        });
+        parent.appendChild(mark);
+        lastIndex = match.index + match[0].length;
+        if (match.index === re.lastIndex) re.lastIndex++;
+      }
+      if (lastIndex < text.length) {
+        parent.appendChild(document.createTextNode(text.substring(lastIndex)));
+      }
+    } catch (_) {
+      parent.textContent = text || '';
+    }
   }
   function appendWordDiff(parent, text, other, enabled) {
     if (!enabled || !text || !other) { parent.textContent = text; return; }
@@ -1890,8 +2305,8 @@
           toast('来源测试通过', 'ok');
         } else {
           const failures = [];
-          if (!leftOK) failures.push('左侧：' + ((response.left && response.left.error) || '不是目录'));
-          if (!rightOK) failures.push('右侧：' + ((response.right && response.right.error) || '不是目录'));
+          if (!leftOK) failures.push('左侧：' + formatCompareError((response.left && response.left.error) || '不是目录'));
+          if (!rightOK) failures.push('右侧：' + formatCompareError((response.right && response.right.error) || '不是目录'));
           testStatus.textContent = '来源不可用';
           testStatus.className = 'cmp2-test-status is-error';
           toast(failures.join('；'), 'err');
@@ -1899,7 +2314,7 @@
       } catch (error) {
         testStatus.textContent = '测试失败';
         testStatus.className = 'cmp2-test-status is-error';
-        toast('来源测试失败：' + (error.message || error), 'err');
+        toast('来源测试失败：' + formatCompareError(error.message || error), 'err');
       } finally {
         testBtn.disabled = false;
       }
@@ -1975,7 +2390,7 @@
         cancelBtn.disabled = true;
         cancelBtn.hidden = true;
         resultHost.innerHTML = '';
-        toast('启动失败：' + (error.message || error), 'err');
+        toast('启动失败：' + formatCompareError(error.message || error), 'err');
       }
     }
 
@@ -2143,13 +2558,26 @@
       nextFolderDiffBtn.disabled = false;
       const integrity = updateScanIntegrity();
       const rows = flattenFolderRows();
+      const prevScrollTop = (currentFolderTree && currentFolderTree.viewport)
+        ? currentFolderTree.viewport.scrollTop
+        : (resultHost.querySelector('.cmp-folder-viewport') ? resultHost.querySelector('.cmp-folder-viewport').scrollTop : 0);
       resultHost.innerHTML = '';
       if (rows.length) {
         currentFolderTree = createFolderTree(rows, sources, selected, compareFile, copyItem, updateSelectedStatus, toggleFolder, activeFolderRel, function (rel) {
           // 只更新选中状态，不重建虚拟列表；否则第一次点击会换掉 DOM，第二次点击无法触发 dblclick。
           activeFolderRel = rel;
-        }, selectVisible);
+        }, selectVisible, prevScrollTop);
         resultHost.appendChild(currentFolderTree.element);
+        if (prevScrollTop > 0 && currentFolderTree.viewport) {
+          currentFolderTree.viewport.scrollTop = prevScrollTop;
+          if (typeof requestAnimationFrame === 'function') {
+            requestAnimationFrame(function () {
+              if (currentFolderTree && currentFolderTree.viewport) {
+                currentFolderTree.viewport.scrollTop = prevScrollTop;
+              }
+            });
+          }
+        }
       } else {
         currentFolderTree = null;
         resultHost.appendChild(el('div', {
@@ -2470,9 +2898,9 @@
     return { startScan: startScan };
   }
 
-  function folderRowHeight() { return 48; }
+  function folderRowHeight() { return 28; }
 
-  function createFolderTree(rows, sources, selected, onCompare, onCopy, onSelectionChange, onToggle, activeRel, onActiveChange, onSelectAll) {
+  function createFolderTree(rows, sources, selected, onCompare, onCopy, onSelectionChange, onToggle, activeRel, onActiveChange, onSelectAll, initialScrollTop) {
     const selectable = rows.filter(function(row) { return isBulkActionable(row.item); });
     const selectAll = el('input', { type: 'checkbox', title: '选择当前筛选结果', 'aria-label': '选择当前筛选结果' });
     selectAll.checked = selectable.length > 0 && selectable.every(function(row) { return selected.has(row.item.rel_path); });
@@ -2486,6 +2914,9 @@
       el('span', { role: 'columnheader', text: sourceLabel(sources.right) })
     ]);
     const viewport = el('div', { class: 'cmp-folder-viewport', role: 'rowgroup', 'aria-label': '比较结果行' });
+    if (initialScrollTop > 0) {
+      viewport.scrollTop = initialScrollTop;
+    }
     const canvas = el('div', { class: 'cmp-folder-canvas' });
     const height = folderRowHeight();
     canvas.style.height = Math.max(1, rows.length * height) + 'px';
@@ -2702,6 +3133,7 @@
     requestAnimationFrame(render);
     return {
       element: table,
+      viewport: viewport,
       scrollToRow: scrollToFolderRow
     };
   }

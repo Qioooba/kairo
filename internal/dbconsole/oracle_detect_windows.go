@@ -355,3 +355,36 @@ func detectOracleRegistryHomes(addCandidate func(path, label string)) {
 		winRegCloseKey(hOracle)
 	}
 }
+
+// InspectOCIClientVersion 尝试从 oci.dll 加载并执行 OCIClientVersion 符号。
+// 若加载失败、符号未导出或版本号为 0，则说明该客户端不受 ODPI-C 支持（会导致 DPI-1072），
+// 返回 supported = false。
+func InspectOCIClientVersion(ociPath string) (version string, supported bool, err error) {
+	if ociPath == "" {
+		return "", false, fmt.Errorf("oci 路径为空")
+	}
+	h, err := syscall.LoadLibrary(ociPath)
+	if err != nil {
+		return "", false, fmt.Errorf("加载 DLL 失败: %w", err)
+	}
+	defer syscall.FreeLibrary(h)
+
+	proc, err := syscall.GetProcAddress(h, "OCIClientVersion")
+	if err != nil {
+		return "", false, fmt.Errorf("未导出 OCIClientVersion 符号（客户端版本过旧或不完整，ODPI-C 会触发 DPI-1072）")
+	}
+
+	var major, minor, update, patch, port int32
+	_, _, _ = syscall.SyscallN(proc,
+		uintptr(unsafe.Pointer(&major)),
+		uintptr(unsafe.Pointer(&minor)),
+		uintptr(unsafe.Pointer(&update)),
+		uintptr(unsafe.Pointer(&patch)),
+		uintptr(unsafe.Pointer(&port)),
+	)
+	if major == 0 {
+		return "", false, fmt.Errorf("OCIClientVersion 返回版本号为 0（ODPI-C 会触发 DPI-1072）")
+	}
+	verStr := fmt.Sprintf("%d.%d.%d.%d", major, minor, update, patch)
+	return verStr, true, nil
+}

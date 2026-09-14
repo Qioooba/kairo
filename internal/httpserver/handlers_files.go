@@ -1032,8 +1032,8 @@ func (s *Server) downloadSeriesFree(
 			// 目录：递归展开。顶层本地目录名用 uniqueLocalName 防冲突，
 			// zip 内保留远端原始目录名。
 			hadDir = true
-			topLocalName := uniqueLocalName(targetDir, sanitize(path.Base(remote)), sanitize(srv.Name))
-			entries, err := expandRemoteDir(sftpCli, remote, path.Base(remote),
+			topLocalName := uniqueLocalName(targetDir, sanitize(remoteBase(remote)), sanitize(srv.Name))
+			entries, err := expandRemoteDir(sftpCli, remote, remoteBase(remote),
 				filepath.Join(targetDir, topLocalName), 0)
 			if err != nil {
 				return nil, hadDir, err
@@ -1043,13 +1043,13 @@ func (s *Server) downloadSeriesFree(
 		}
 
 		// 普通文件：沿用原逻辑
-		base := filepath.Base(remote)
+		base := remoteBase(remote)
 		localName := uniqueLocalName(targetDir, sanitize(base), sanitize(srv.Name))
 		localPath := filepath.Join(targetDir, localName)
 		plan = append(plan, dirPlanEntry{
 			remote:    remote,
 			localPath: localPath,
-			zipName:   path.Base(remote),
+			zipName:   remoteBase(remote),
 		})
 	}
 
@@ -1094,7 +1094,7 @@ func (s *Server) downloadSeriesFree(
 
 		relLocal, _ := filepath.Rel(targetDir, pe.localPath)
 		results = append(results, dlmanager.Item{
-			File:    path.Base(pe.remote),
+			File:    remoteBase(pe.remote),
 			Local:   filepath.ToSlash(relLocal),
 			Bytes:   strconv.FormatInt(bytes, 10),
 			Remote:  pe.remote,
@@ -1107,7 +1107,7 @@ func (s *Server) downloadSeriesFree(
 			System: sess.System,
 			Server: srv.Name,
 			Host:   fmt.Sprintf("%s:%d", srv.Host, srv.Port),
-			File:   path.Base(pe.remote),
+			File:   remoteBase(pe.remote),
 			Files:  []string{pe.remote},
 			Kind:   "file",
 		})

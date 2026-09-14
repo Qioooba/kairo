@@ -80,7 +80,10 @@ func serverPagedQuery(kind, query string, page QueryPage) (string, error) {
 	switch kind {
 	case KindOracle:
 		if offset == 0 {
-			return fmt.Sprintf("SELECT /*+ FIRST_ROWS(%d) */ * FROM (\n%s\n) WHERE ROWNUM <= %d", fetch, query, upper), nil
+			if fetch <= 100 {
+				return fmt.Sprintf("SELECT /*+ FIRST_ROWS(%d) */ * FROM (\n%s\n) WHERE ROWNUM <= %d", fetch, query, upper), nil
+			}
+			return fmt.Sprintf("SELECT * FROM (\n%s\n) WHERE ROWNUM <= %d", query, upper), nil
 		}
 		return fmt.Sprintf("SELECT * FROM (\nSELECT kairo_page_q.*, ROWNUM AS %s\nFROM (\n%s\n) kairo_page_q\nWHERE ROWNUM <= %d\n)\nWHERE %s > %d", rowAlias, query, upper, rowAlias, offset), nil
 	case KindMySQL:
@@ -91,6 +94,11 @@ func serverPagedQuery(kind, query string, page QueryPage) (string, error) {
 	default:
 		return "", fmt.Errorf("%s 不是 SQL 数据源", kind)
 	}
+}
+
+// QueryHasOrderBy reports whether query contains an ORDER BY clause.
+func QueryHasOrderBy(query string) bool {
+	return queryHasOrderBy(query)
 }
 
 func queryHasOrderBy(query string) bool {

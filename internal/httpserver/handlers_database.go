@@ -1,6 +1,7 @@
 package httpserver
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/csv"
@@ -32,6 +33,8 @@ func (s *Server) handleDatabaseDispatch(w http.ResponseWriter, r *http.Request) 
 	switch {
 	case path == "sources":
 		s.handleDatabaseSources(w, r)
+	case path == "sources/test" || path == "test":
+		s.handleDatabaseSourceTestDraft(w, r)
 	case strings.HasPrefix(path, "sources/"):
 		s.handleDatabaseSourceItem(w, r, strings.TrimPrefix(path, "sources/"))
 	case path == "query":
@@ -209,14 +212,23 @@ func (s *Server) handleDatabaseSourceItem(w http.ResponseWriter, r *http.Request
 		if !ok {
 			return
 		}
-		result, err := s.database.Test(r.Context(), source)
+		var req databaseSourceRequest
+		_ = decodeDatabaseJSON(r, &req)
+		testSource := source
+		if req.Source.Host != "" {
+			req.Source.ID = id
+			req.Source.CreatedAt = source.CreatedAt
+			req.Source.Defaults()
+			testSource = req.Source
+		}
+		result, err := s.database.TestWithCredentials(r.Context(), testSource, req.Password, req.SSHPassword)
 		if err != nil {
-			err = s.databaseSafeError(source, err)
-			s.audit.Write("database.source.test", "source_id", id, "kind", source.Kind, "result", "fail", "error", trim(err.Error(), 300))
+			err = s.databaseSafeError(testSource, err)
+			s.audit.Write("database.source.test", "source_id", id, "kind", testSource.Kind, "result", "fail", "error", trim(err.Error(), 300))
 			writeErrSanitized(w, 502, err)
 			return
 		}
-		s.audit.Write("database.source.test", "source_id", id, "kind", source.Kind, "latency_ms", result.LatencyMS, "result", "ok")
+		s.audit.Write("database.source.test", "source_id", id, "kind", testSource.Kind, "latency_ms", result.LatencyMS, "result", "ok")
 		writeJSON(w, 200, result)
 		return
 	}
@@ -362,6 +374,36 @@ func (s *Server) handleDatabaseSourceItem(w http.ResponseWriter, r *http.Request
 	}
 }
 
+func (s *Server) handleDatabaseSourceTestDraft(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeErr(w, 405, errors.New("仅支持 POST"))
+		return
+	}
+	if !requireAdmin(w, r) {
+		return
+	}
+	var req databaseSourceRequest
+	if err := decodeDatabaseJSON(r, &req); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	req.Source.Defaults()
+	if err := req.Source.Validate(); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	result, err := s.database.TestWithCredentials(r.Context(), req.Source, req.Password, req.SSHPassword)
+	if err != nil {
+		err = s.databaseSafeError(req.Source, err)
+		s.audit.Write("database.source.test", "kind", req.Source.Kind, "name", req.Source.Name, "result", "fail", "error", trim(err.Error(), 300))
+		writeErrSanitized(w, 502, err)
+		return
+	}
+	s.audit.Write("database.source.test", "kind", req.Source.Kind, "name", req.Source.Name, "latency_ms", result.LatencyMS, "result", "ok")
+	writeJSON(w, 200, result)
+}
+
+
 type databaseQueryRequest struct {
 	SourceID   string                    `json:"source_id"`
 	SessionID  string                    `json:"session_id,omitempty"`
@@ -494,16 +536,19 @@ func (s *Server) handleDatabaseQuery(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if !statementInfo.IsQuery || statementInfo.HasForUpdate || statementInfo.RequiresMutation {
-			if !source.MutationAllowed() {
-				writeErr(w, http.StatusForbidden, errors.New("该数据源处于只读锁定状态"))
-				return
+			if statementInfo.Type == "DDL" {
+				if !source.DDLAllowed() {
+					writeErr(w, http.StatusForbidden, errors.New("该数据源未开启 DDL 能力（请在数据源配置中开启“支持 DDL”）"))
+					return
+				}
+			} else {
+				if !source.MutationAllowed() {
+					writeErr(w, http.StatusForbidden, errors.New("该数据源处于只读锁定状态"))
+					return
+				}
 			}
 			if source.IsProduction() && !req.Confirm {
 				writeErr(w, http.StatusBadRequest, errors.New("生产数据源写操作需要 confirm=true"))
-				return
-			}
-			if statementInfo.Type == "DDL" && !source.DDLAllowed() {
-				writeErr(w, http.StatusForbidden, errors.New("该数据源未开启 DDL 能力或处于只读锁定状态"))
 				return
 			}
 		}
@@ -673,8 +718,12 @@ func (s *Server) handleDatabaseExport(w http.ResponseWriter, r *http.Request) {
 		safeName = "query"
 	}
 	filename := safeName + dbconsole.ExportExtension(format)
+	page, pageSize := databaseQueryPage(req)
+	if page > 1 && !dbconsole.QueryHasOrderBy(req.SQL) {
+		writeErrSanitized(w, http.StatusBadRequest, errors.New("第 2 页及以后的分页导出必须包含显式 ORDER BY 排序，以避免结果重复或遗漏"))
+		return
+	}
 	if format != "csv" {
-		page, pageSize := databaseQueryPage(req)
 		table, summary, collectErr := s.database.CollectQueryPage(r.Context(), source, req.SQL, page, pageSize)
 		if collectErr != nil {
 			collectErr = s.databaseSafeError(source, collectErr)
@@ -689,20 +738,26 @@ func (s *Server) handleDatabaseExport(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		w.Header().Set("Content-Type", dbconsole.ExportContentType(format))
-		w.Header().Set("Content-Disposition", "attachment; filename*=UTF-8''"+url.QueryEscape(filename))
-		w.Header().Set("Cache-Control", "no-store")
+		var buf bytes.Buffer
+		var outWriter io.Writer = w
+		if format == "update" {
+			outWriter = &buf
+		} else {
+			w.Header().Set("Content-Type", dbconsole.ExportContentType(format))
+			w.Header().Set("Content-Disposition", "attachment; filename*=UTF-8''"+url.QueryEscape(filename))
+			w.Header().Set("Cache-Control", "no-store")
+		}
 		switch format {
 		case "json":
-			err = dbconsole.WriteJSON(w, table, map[string]any{"source": source.Name, "kind": source.Kind, "sql": req.SQL})
+			err = dbconsole.WriteJSON(outWriter, table, map[string]any{"source": source.Name, "kind": source.Kind, "sql": req.SQL})
 		case "xlsx":
-			err = dbconsole.WriteXLSX(w, table, source.Name)
+			err = dbconsole.WriteXLSX(outWriter, table, source.Name)
 		case "insert":
 			tableName := strings.TrimSpace(req.Table)
 			if tableName == "" {
 				tableName = dbconsole.InferExportTable(req.SQL)
 			}
-			err = dbconsole.WriteINSERT(w, table, source.Kind, tableName)
+			err = dbconsole.WriteINSERT(outWriter, table, source.Kind, tableName)
 		case "update":
 			tableName := strings.TrimSpace(req.Table)
 			if tableName == "" {
@@ -720,9 +775,17 @@ func (s *Server) handleDatabaseExport(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 			}
-			err = dbconsole.WriteUPDATE(w, table, source.Kind, tableName, pkCols)
+			err = dbconsole.WriteUPDATE(&buf, table, source.Kind, tableName, pkCols)
+			if err == nil {
+				w.Header().Set("Content-Type", dbconsole.ExportContentType(format))
+				w.Header().Set("Content-Disposition", "attachment; filename*=UTF-8''"+url.QueryEscape(filename))
+				w.Header().Set("Cache-Control", "no-store")
+				_, err = io.Copy(w, &buf)
+			}
 		}
 		if err != nil {
+			w.Header().Del("Content-Disposition")
+			writeErrSanitized(w, http.StatusBadRequest, err)
 			s.audit.Write("database.export", "source_id", source.ID, "kind", source.Kind, "query_id", queryID, "format", format, "result", "fail", "error", trim(err.Error(), 300))
 			return
 		}
@@ -771,7 +834,6 @@ func (s *Server) handleDatabaseExport(w http.ResponseWriter, r *http.Request) {
 		}
 		return nil
 	}
-	page, pageSize := databaseQueryPage(req)
 	summary, err := s.database.StreamQueryPage(r.Context(), source, req.SQL, page, pageSize, emit)
 	if err != nil {
 		err = s.databaseSafeError(source, err)
@@ -1229,14 +1291,23 @@ func (s *Server) databaseSafeError(source dbconsole.Source, err error) error {
 			}
 		}
 	}
-	// 将底层网络超时翻译为友好提示，隐藏内部 IP 细节
+	// 底层网络超时或连接被拒时，带上友好排查指引与脱敏后的详细信息
 	lower := strings.ToLower(message)
 	if strings.Contains(lower, "i/o timeout") || strings.Contains(lower, "io timeout") || strings.Contains(lower, "context deadline exceeded") {
-		return errors.New("连接数据库超时（i/o timeout），请检查数据库地址、端口与网络连通性，或稍后重试")
+		targetDesc := ""
+		if source.Host != "" {
+			targetDesc = fmt.Sprintf(" [%s:%d]", source.Host, source.Port)
+		}
+		return fmt.Errorf("连接数据库超时（i/o timeout%s）：%s。排查建议：请检查数据库地址、端口与网络连通性；若在金融内网或云服务器，请开启「SSH 隧道 / 跳板机」", targetDesc, message)
 	}
 	if strings.Contains(lower, "connection refused") || strings.Contains(lower, "connection reset") {
-		return errors.New("无法连接数据库（connection refused），请检查数据库是否启动及端口是否正确")
+		targetDesc := ""
+		if source.Host != "" {
+			targetDesc = fmt.Sprintf(" [%s:%d]", source.Host, source.Port)
+		}
+		return fmt.Errorf("无法连接数据库（connection refused%s）：%s。排查建议：请检查数据库监听进程（lsnrctl）是否启动、端口是否正确及防火墙放行规则", targetDesc, message)
 	}
+
 	if strings.Contains(lower, "ttc error") {
 		return fmt.Errorf("Oracle TTC 协议报文解析异常（%s）。常见原因：表中含有 CLOB/BLOB 大字段、XMLType、LONG 或多行换行长文本，导致驱动报文解包错位。排查建议：① 避免使用 SELECT *，改用具体字段投影；② 对 CLOB 字段使用 DBMS_LOB.SUBSTR(列名, 4000, 1) 做受控预览；③ 对 XMLType 字段使用 列名.getStringVal() 转换；④ 检查单行（WHERE ROWNUM <= 1）排查特殊记录", message)
 	}

@@ -58,3 +58,8 @@ func DetectSystemOracleClients(source Source) (candidates []OracleCandidateClien
 
 	return candidates, false, "", ""
 }
+
+// InspectOCIClientVersion 非 Windows 系统的占位
+func InspectOCIClientVersion(ociPath string) (version string, supported bool, err error) {
+	return "unknown", true, nil
+}

@@ -1548,6 +1548,65 @@ function testDatabaseWorkbenchLazy() {
   assert.ok(dbSrc.indexOf('db-lob-token') >= 0, '应包含 db-lob-token 样式支持');
   assert.ok(dbSrc.indexOf('resolveLobPayload') >= 0, '应包含 resolveLobPayload 统一解析逻辑');
 
+  console.log('  database SQL tabs helpers: format / suggest / brackets / snippetExpandKey / parseSnippetsText / formatSnippetsText ✓');
+}
+
+// ---------- 数据库工作台懒加载 / 联想解耦 / 快捷键重构 ----------
+function testDatabaseWorkbenchLazy() {
+  const dbSrc = fs.readFileSync(path.join(__dirname, 'pages/database.js'), 'utf8');
+
+  // 1. FROM us 场景：解耦 DOM 后表名仍可联想（schemaTableCache 预热池直供）。
+  const db = loadDatabaseHelpers({});
+  const fromUs = db.suggestSQL('SELECT * FROM us', 16, { objects: ['users', 'user_logs'], snippets: [] });
+  assert.ok(fromUs.items.some(function (x) { return x.label === 'users' && x.kind === 'object'; }), 'FROM us 应联想出 users: ' + JSON.stringify(fromUs.items));
+  assert.ok(fromUs.items.some(function (x) { return x.label === 'user_logs'; }), 'FROM us 应联想出 user_logs');
+
+  // 2. FROM ord 场景：表名必须排在 ORDER 关键字之前（上下文提权）。
+  const fromOrd = db.suggestSQL('SELECT * FROM ord', 17, { objects: ['orders', 'order_items'], snippets: [] });
+  const idxOrders = fromOrd.items.findIndex(function (x) { return x.label === 'orders'; });
+  const idxOrder = fromOrd.items.findIndex(function (x) { return x.label === 'ORDER'; });
+  assert.ok(idxOrders >= 0, 'orders 应在候选: ' + JSON.stringify(fromOrd.items));
+  assert.ok(idxOrder < 0 || idxOrders < idxOrder, 'orders(' + idxOrders + ') 应排在 ORDER(' + idxOrder + ') 之前: ' + JSON.stringify(fromOrd.items.map(function (x) { return x.label + ':' + x.kind; })));
+
+  // 非表上下文保持原排序：关键字优先（零回归）。
+  const plain = db.suggestSQL('se', 2, { objects: [], snippets: [] });
+  assert.ok(plain.items.length && plain.items[0].kind === 'keyword', '非 FROM 上下文关键字仍优先: ' + JSON.stringify(plain.items.slice(0, 3)));
+
+  // sqlTableContext 直接断言。
+  assert.strictEqual(db.sqlTableContext('SELECT * FROM us', 16), true, 'FROM 后应为表上下文');
+  assert.strictEqual(db.sqlTableContext('SELECT * FROM ', 14), true, 'FROM + 空格应为表上下文');
+  assert.strictEqual(db.sqlTableContext('SELECT se', 9), false, 'SELECT 后非表上下文');
+  assert.strictEqual(db.sqlTableContext('SELECT * FROM t JOIN or', 22), true, 'JOIN 后应为表上下文');
+
+  // 3. 快捷键：Windows Ctrl+Enter 与 macOS Cmd+Enter 一致。
+  const dbWin = loadDatabaseHelpers({ platform: 'Win32', userAgent: 'Windows' });
+  const dbMac = loadDatabaseHelpers({ platform: 'MacIntel', userAgent: 'Macintosh' });
+  assert.strictEqual(dbWin.matchesShortcut({ key: 'Enter', code: 'Enter', ctrlKey: true, altKey: false, shiftKey: false, metaKey: false }, 'Ctrl+Enter'), true, 'Win Ctrl+Enter');
+  assert.strictEqual(dbWin.matchesShortcut({ key: 'Enter', code: 'Enter', ctrlKey: false, altKey: false, shiftKey: false, metaKey: true }, 'Ctrl+Enter'), false, 'Win Cmd 不应误触 Ctrl+Enter');
+  assert.strictEqual(dbMac.matchesShortcut({ key: 'Enter', code: 'Enter', ctrlKey: true, altKey: false, shiftKey: false, metaKey: false }, 'Ctrl+Enter'), true, 'Mac Ctrl+Enter 仍可用');
+  assert.strictEqual(dbMac.matchesShortcut({ key: 'Enter', code: 'Enter', ctrlKey: false, altKey: false, shiftKey: false, metaKey: true }, 'Ctrl+Enter'), true, 'Mac Cmd+Enter 等价执行');
+  assert.strictEqual(dbMac.matchesShortcut({ key: 'o', code: 'KeyO', ctrlKey: false, altKey: true, shiftKey: false, metaKey: false }, 'Alt+O'), true, 'Alt+O 正常');
+
+  // 4. Escape 在联想菜单打开时独立响应：源码契约断言。
+  // onWorkbenchKey 必须在 cancelQuery 分支之前优先关闭补全并 stopPropagation。
+  const escGuard = dbSrc.indexOf("e.key === 'Escape' && acState.open");
+  const cancelPos = dbSrc.indexOf('cancelQuery()');
+  assert.ok(escGuard >= 0, 'onWorkbenchKey 应包含 Escape+acState.open 优先 guard');
+  assert.ok(escGuard < cancelPos, 'Escape 关补全必须在 cancelQuery 之前');
+  assert.ok(dbSrc.indexOf('stopPropagation') >= 0, 'Escape 关闭补全应 stopPropagation 防冒泡误杀查询');
+
+  // 5. 按需懒加载契约：category 参数 + 分类缓存 + 表名池。
+  assert.ok(dbSrc.indexOf('&category=') >= 0, 'loadCategoryObjects 应传 category 参数');
+  assert.ok(dbSrc.indexOf('schemaCategoryCache') >= 0, '应使用 schemaCategoryCache 按分类缓存');
+  assert.ok(dbSrc.indexOf('schemaTableCache') >= 0, '应使用 schemaTableCache 预热表名');
+  assert.ok(dbSrc.indexOf('warmupSchemaTables') >= 0, '应存在 warmupSchemaTables 静默预热');
+  assert.ok(dbSrc.indexOf('state.schemaTableCache[schema]') >= 0, 'completionExtras 应优先读 schemaTableCache');
+
+  // 6. LOB 单元格呈现与防错位投影契约断言
+  assert.ok(dbSrc.indexOf('db-lob-badge') >= 0, '应包含 db-lob-badge 徽章');
+  assert.ok(dbSrc.indexOf('db-lob-token') >= 0, '应包含 db-lob-token 样式支持');
+  assert.ok(dbSrc.indexOf('resolveLobPayload') >= 0, '应包含 resolveLobPayload 统一解析逻辑');
+
   // LOB 格式化测试
   assert.strictEqual(db.cellText({ kind: 'clob', text: 'select *' }), 'select *');
   assert.strictEqual(db.cellText({ kind: 'clob', bytes: 2048 }), '(CLOB 2.0 KB)');
@@ -1560,7 +1619,19 @@ function testDatabaseWorkbenchLazy() {
   assert.ok(clobWithToken.includes('data-lob-col="5"'), '带有对应列索引');
   assert.ok(clobWithToken.includes('CLOB (1.0 KB)'), '正确格式化 LOB 大小');
 
-  console.log('  database workbench lazy-load / suggest / shortcuts / LOB tokens ✓');
+  // 7. runQuery 作用域与 DDL/写入守卫断言：防 querySource / writes 作用域回归
+  const runQueryMatch = dbSrc.match(/async function runQuery\([\s\S]*?\n  \}/);
+  assert.ok(runQueryMatch, 'database.js 应包含 runQuery');
+  const runQueryBody = runQueryMatch[0];
+  const qSrcIdx = runQueryBody.indexOf('const querySource = effectiveSource();');
+  const writesIdx = runQueryBody.indexOf('const writes =');
+  const isDDLIdx = runQueryBody.indexOf('const isDDL =');
+  const guardIdx = runQueryBody.indexOf('const guard = sqlGuardInfo(sql);');
+  assert.ok(guardIdx >= 0 && qSrcIdx > guardIdx, 'querySource 必须在 guard 之后立即声明');
+  assert.ok(writesIdx > qSrcIdx && isDDLIdx > writesIdx, 'writes 与 isDDL 必须在最外层作用域声明并位于守卫判断前');
+  assert.ok(runQueryBody.indexOf('const effSrc = effectiveSource()') < 0, '不应存在多余延迟声明的 effSrc');
+
+  console.log('  database workbench lazy-load / suggest / shortcuts / LOB tokens / runQuery scoping ✓');
 }
 
 function loadCompareHelpers() {
@@ -1729,10 +1800,10 @@ function testCompareHelpers() {
   assert.strictEqual(cmp.folderStatusText('different', false), '不同');
 
   // 7. 虚拟树行高必须与 CSS 命中区一致，焦点应落在 composite treegrid 上
-  assert.strictEqual(cmp.folderRowHeight(), 48, '虚拟树行高至少 48px');
+  assert.strictEqual(cmp.folderRowHeight(), 28, '虚拟树行高紧凑模式 28px');
   const compareSource = fs.readFileSync(path.join(__dirname, 'pages', 'compare.js'), 'utf8');
   const compareCss = fs.readFileSync(path.join(__dirname, 'pages', 'compare-workbench.css'), 'utf8');
-  assert.ok(compareCss.includes('--cmp-folder-row-height: 48px'), 'CSS 应声明 48px 虚拟行高');
+  assert.ok(compareCss.includes('--cmp-folder-row-height: 28px'), 'CSS 应声明 28px 虚拟行高');
   assert.ok(compareCss.includes('min-height: var(--cmp-folder-row-height)'), '行内控件应使用统一命中区高度');
   assert.ok(compareSource.includes("role: 'treegrid', tabindex: '0'"), 'treegrid 应承担键盘焦点');
   assert.ok(compareSource.includes("table.addEventListener('keydown'"), '键盘事件应绑定 treegrid');

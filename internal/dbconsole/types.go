@@ -377,7 +377,7 @@ func (s Source) IsProduction() bool {
 func (s Source) MutationAllowed() bool { return !s.ReadOnly }
 
 // DDLAllowed reports whether the source explicitly permits schema-changing
-// statements.  Existing sources default false so a production/admin policy
+// statements. Existing sources default false so a production/admin policy
 // cannot be broadened by an omitted field.
 func (s Source) DDLAllowed() bool { return s.AllowDDL && !s.ReadOnly }
 

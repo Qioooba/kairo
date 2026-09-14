@@ -99,7 +99,7 @@ func QuoteIdent(kind, name string) string {
 	if name == "" {
 		return quoteIdentPart(kind, "exported_rows")
 	}
-	parts := strings.Split(name, ".")
+	parts := splitIdentParts(name)
 	out := make([]string, 0, len(parts))
 	for _, part := range parts {
 		part = strings.TrimSpace(part)
@@ -117,6 +117,51 @@ func QuoteIdent(kind, name string) string {
 		return quoteIdentPart(kind, "exported_rows")
 	}
 	return strings.Join(out, ".")
+}
+
+func splitIdentParts(name string) []string {
+	var parts []string
+	var current strings.Builder
+	inDouble := false
+	inBacktick := false
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		switch c {
+		case '"':
+			if !inBacktick {
+				if inDouble && i+1 < len(name) && name[i+1] == '"' {
+					current.WriteByte('"')
+					current.WriteByte('"')
+					i++
+					continue
+				}
+				inDouble = !inDouble
+			}
+			current.WriteByte(c)
+		case '`':
+			if !inDouble {
+				if inBacktick && i+1 < len(name) && name[i+1] == '`' {
+					current.WriteByte('`')
+					current.WriteByte('`')
+					i++
+					continue
+				}
+				inBacktick = !inBacktick
+			}
+			current.WriteByte(c)
+		case '.':
+			if inDouble || inBacktick {
+				current.WriteByte('.')
+			} else {
+				parts = append(parts, current.String())
+				current.Reset()
+			}
+		default:
+			current.WriteByte(c)
+		}
+	}
+	parts = append(parts, current.String())
+	return parts
 }
 
 func isQuotedIdent(name string) bool {

@@ -20,6 +20,12 @@ if [[ -n "${1:-}" ]]; then
   VER="${1}"
 elif [[ -f VERSION ]]; then
   VER="$(tr -d '[:space:]' < VERSION)"
+  if git rev-parse --short HEAD >/dev/null 2>&1; then
+    COMMIT="$(git rev-parse --short HEAD)"
+    if git log -n 5 --pretty=%B 2>/dev/null | grep -q "v0.19-dev"; then
+      VER="v0.19-dev-${COMMIT}"
+    fi
+  fi
 else
   echo "错误：未指定版本号，且未找到 VERSION 文件" >&2
   echo "用法: $0 [版本号]  （或在仓库根目录维护 VERSION）" >&2
@@ -94,6 +100,22 @@ if [[ "${CGO_ENABLED}" == "1" ]]; then
   echo ">> 企业版构建：CGO_ENABLED=1，产物将动态链接 Oracle Client（oci.dll），运行时需本机已装 64 位 Oracle Client（与 PL/SQL Developer 同源，但需位数一致）"
 else
   echo ">> 便携版构建：CGO_ENABLED=0（纯 Go，未启用 OCI）"
+fi
+
+# 嵌入 Windows EXE 图标（若存在 rsrc 工具）
+if [[ -f "internal/tray/icon.ico" ]]; then
+  RSRC_BIN=""
+  if command -v rsrc >/dev/null 2>&1; then
+    RSRC_BIN="rsrc"
+  elif [[ -x "$(go env GOPATH 2>/dev/null)/bin/rsrc.exe" ]]; then
+    RSRC_BIN="$(go env GOPATH)/bin/rsrc.exe"
+  elif [[ -x "${HOME}/go/bin/rsrc" ]]; then
+    RSRC_BIN="${HOME}/go/bin/rsrc"
+  fi
+  if [[ -n "${RSRC_BIN}" ]]; then
+    echo ">> 正在嵌入 Windows 图标资源（rsrc_windows_amd64.syso）..."
+    "${RSRC_BIN}" -ico "internal/tray/icon.ico" -arch amd64 -o "rsrc_windows_amd64.syso"
+  fi
 fi
 
 go build "${GO_MOD_FLAGS[@]}" -trimpath -ldflags "${LDFLAGS}" -o "${OUT_DIR}/Kairo_win10.exe" .

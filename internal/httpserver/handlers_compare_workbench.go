@@ -1045,6 +1045,20 @@ func (s *Server) performCompareScan(ctx context.Context, req compareScanReq, pro
 		right = prefixCompareRel(right, rel)
 		leftPending = prefixCompareBool(leftPending, rel)
 		rightPending = prefixCompareBool(rightPending, rel)
+	} else if len(left) == 1 && len(right) == 1 {
+		var lKey, rKey string
+		var lEntry, rEntry comparefs.Entry
+		for k, v := range left {
+			lKey, lEntry = k, v
+		}
+		for k, v := range right {
+			rKey, rEntry = k, v
+		}
+		if !lEntry.IsDir && !rEntry.IsDir && lKey != rKey {
+			commonKey := lKey
+			left = map[string]comparefs.Entry{commonKey: lEntry}
+			right = map[string]comparefs.Entry{commonKey: rEntry}
+		}
 	}
 
 	paths := make([]string, 0, len(left)+len(right))
@@ -1318,11 +1332,22 @@ func walkCompareFSOrEmpty(ctx context.Context, fsys comparefs.FS, root string, r
 }
 
 func walkCompareFSWithMetaOrEmpty(ctx context.Context, fsys comparefs.FS, root string, req compareScanReq, progress func(int)) (map[string]comparefs.Entry, bool, map[string]bool, error) {
-	if _, err := fsys.Stat(ctx, root); err != nil {
+	st, err := fsys.Stat(ctx, root)
+	if err != nil {
 		if comparefs.IsNotFound(err) {
 			return map[string]comparefs.Entry{}, false, map[string]bool{}, nil
 		}
 		return nil, false, nil, err
+	}
+	if !st.IsDir {
+		st.Path = root
+		base := filepath.Base(root)
+		if base == "" || base == "." {
+			base = "file"
+		}
+		return map[string]comparefs.Entry{
+			base: st,
+		}, false, map[string]bool{}, nil
 	}
 	return walkCompareFSWithMeta(ctx, fsys, root, req, progress)
 }

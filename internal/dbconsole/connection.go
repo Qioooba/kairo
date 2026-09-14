@@ -145,13 +145,21 @@ func tlsConfigForSource(source Source) (*tls.Config, error) {
 // The target is intentionally not dialled here: each database connection
 // obtains its own SSH channel through the one pooled SSH transport.
 func openSSHTunnel(ctx context.Context, source Source) (*sshclient.Client, error) {
+	return openSSHTunnelWithPassword(ctx, source, "")
+}
+
+func openSSHTunnelWithPassword(ctx context.Context, source Source, customPassword string) (*sshclient.Client, error) {
 	t := source.SSHTunnel
 	if t == nil || !t.Enabled {
 		return nil, nil
 	}
-	password, err := credentials.GetResource(SSHCredentialNamespace, source.ID, t.Username)
-	if err != nil {
-		return nil, fmt.Errorf("读取 SSH 隧道凭据失败: %w", err)
+	password := customPassword
+	if password == "" {
+		var err error
+		password, err = credentials.GetResource(SSHCredentialNamespace, source.ID, t.Username)
+		if err != nil {
+			return nil, fmt.Errorf("读取 SSH 隧道凭据失败: %w", err)
+		}
 	}
 	timeout := source.Timeout()
 	if timeout < 10*time.Second {
@@ -165,3 +173,4 @@ func openSSHTunnel(ctx context.Context, source Source) (*sshclient.Client, error
 		AllowInsecureHostKey: t.AllowInsecureHostKey,
 	}, sshclient.Credentials{Password: password}, timeout)
 }
+

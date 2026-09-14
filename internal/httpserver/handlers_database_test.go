@@ -156,3 +156,73 @@ func TestDatabaseSessionBackupFloatEditorHeight(t *testing.T) {
 	}
 }
 
+func TestDatabaseSafeErrorConnection(t *testing.T) {
+	s := &Server{}
+	source := dbconsole.Source{
+		ID:   "oracle_test",
+		Kind: dbconsole.KindOracle,
+		Host: "192.168.1.50",
+		Port: 1521,
+	}
+
+	timeoutErr := errors.New("dial tcp 192.168.1.50:1521: i/o timeout")
+	safeErr := s.databaseSafeError(source, timeoutErr)
+	if safeErr == nil {
+		t.Fatal("expected error, got nil")
+	}
+	msg := safeErr.Error()
+	if !strings.Contains(msg, "[192.168.1.50:1521]") || !strings.Contains(msg, "连接数据库超时") {
+		t.Fatalf("expected target host and diagnostic in timeout error, got: %s", msg)
+	}
+
+	refusedErr := errors.New("dial tcp 192.168.1.50:1521: connection refused")
+	safeErr2 := s.databaseSafeError(source, refusedErr)
+	if safeErr2 == nil {
+		t.Fatal("expected error, got nil")
+	}
+	msg2 := safeErr2.Error()
+	if !strings.Contains(msg2, "[192.168.1.50:1521]") || !strings.Contains(msg2, "无法连接数据库") {
+		t.Fatalf("expected target host and diagnostic in connection refused error, got: %s", msg2)
+	}
+}
+
+func TestDatabaseQueryDDLGate(t *testing.T) {
+	srv := newTestServerWithAuth(t, databaseTokens())
+	// Source with AllowDDL = false
+	srcNoDDL, err := srv.database.Store().Save(dbconsole.Source{
+		Name: "no-ddl-source", Kind: dbconsole.KindOracle, Host: "127.0.0.1", Port: 1521,
+		Username: "app", OracleService: "ORCL", AllowDDL: false, AllowedUsers: []string{"admin1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := databaseQueryRequest{
+		SourceID:  srcNoDDL.ID,
+		SessionID: "sess-1",
+		SQL:       "CREATE TABLE test_tab (id INT)",
+	}
+	w := doRequestWithToken(srv, http.MethodPost, "/api/database/query", rbacAdminToken, req)
+	if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "DDL") {
+		t.Fatalf("expected 403 DDL rejected when AllowDDL=false, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Source with AllowDDL = true, ReadOnly = true
+	srcRO, err := srv.database.Store().Save(dbconsole.Source{
+		Name: "ro-ddl-source", Kind: dbconsole.KindOracle, Host: "127.0.0.1", Port: 1521,
+		Username: "app", OracleService: "ORCL", AllowDDL: true, AllowedUsers: []string{"admin1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reqRO := databaseQueryRequest{
+		SourceID:  srcRO.ID,
+		SessionID: "sess-2",
+		SQL:       "CREATE TABLE test_tab (id INT)",
+	}
+	wRO := doRequestWithToken(srv, http.MethodPost, "/api/database/query", rbacAdminToken, reqRO)
+	if wRO.Code != http.StatusForbidden || !strings.Contains(wRO.Body.String(), "DDL") {
+		t.Fatalf("expected 403 when ReadOnly=true, got %d: %s", wRO.Code, wRO.Body.String())
+	}
+}
+
+

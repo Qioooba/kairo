@@ -86,12 +86,15 @@ func (m *Manager) StreamSessionQueryPageWithParamsAndOptions(ctx context.Context
 		return QuerySummary{}, err
 	}
 	if !info.IsQuery || info.HasForUpdate || info.RequiresMutation {
-		if !source.MutationAllowed() {
-			return QuerySummary{}, errors.New("该数据源处于只读锁定状态")
+		if info.Type == "DDL" {
+			if !source.DDLAllowed() {
+				return QuerySummary{}, errors.New("该数据源未开启 DDL 能力（请在数据源配置中开启“支持 DDL”）")
+			}
+		} else {
+			if !source.MutationAllowed() {
+				return QuerySummary{}, errors.New("该数据源处于只读锁定状态")
+			}
 		}
-	}
-	if info.Type == "DDL" && !source.DDLAllowed() {
-		return QuerySummary{}, errors.New("该数据源未开启 DDL 能力或处于只读锁定状态")
 	}
 	if !info.IsQuery {
 		if sessionID != "" {
@@ -125,6 +128,9 @@ func (m *Manager) StreamSessionQueryPageWithParamsAndOptions(ctx context.Context
 		}
 		// 重试仅在尚未向客户端输出任何数据行且属于可恢复故障时允许。
 		if attempt == 0 && !hadSessionTransaction && !emittedRows && isRetryableQueryFailure(err) {
+			if source.Kind == KindOracle && IsOracleDPIError(err) && strings.ToLower(strings.TrimSpace(source.OracleDriver)) != "godror" && source.ID != "" {
+				m.dpiFailedSources.Store(source.ID, true)
+			}
 			m.invalidatePool(source.ID)
 			continue
 		}
@@ -142,6 +148,9 @@ func (m *Manager) StreamSessionQueryPageWithParamsAndOptions(ctx context.Context
 // preserving the read-only transaction guard.
 func isRetryableQueryFailure(err error) bool {
 	if isConnectionFailure(err) {
+		return true
+	}
+	if IsOracleDPIError(err) {
 		return true
 	}
 	return err != nil && strings.Contains(strings.ToUpper(err.Error()), "ORA-01466")
@@ -385,18 +394,21 @@ func (m *Manager) streamQueryAttempt(ctx context.Context, source Source, query s
 	var lobRewrite *LOBRewrittenQuery
 	var lobSingleInfo *SingleTableQueryInfo
 
-	isFast := opts.Fast && page.Page == 1 && !info.HasForUpdate
-
-	// 结论 2.1: 仅对安全单表浏览查询重写 LOB 投影；任意复杂 SQL 保持原样执行；
-	// 在 Fast 极速模式下（如首屏），跳过字典与投影改写，对齐 PL/SQL 秒开体验
-	if source.Kind == KindOracle && !info.HasForUpdate && !isFast {
+	isFast := false
+	// Fast 极速模式仅对安全单表浏览生效；任意复杂查询（JOIN、聚合、子查询等）走正常路径
+	if source.Kind == KindOracle && !info.HasForUpdate {
 		if sInfo, ok := parseSafeSingleTableQuery(query); ok {
 			lobSingleInfo = sInfo
-			if rw, rerr := m.buildLOBProjectionOn(queryCtx, queryTx, source.ID, sInfo); rerr != nil {
-				return QuerySummary{}, rerr
-			} else if rw != nil {
-				lobRewrite = rw
-				actualQuery = rw.SQL
+			if opts.Fast {
+				isFast = true
+			} else {
+				lobCtx, cancelLob := context.WithTimeout(queryCtx, 2*time.Second)
+				rw, rerr := m.buildLOBProjectionOn(lobCtx, queryTx, source.ID, sInfo)
+				cancelLob()
+				if rerr == nil && rw != nil {
+					lobRewrite = rw
+					actualQuery = rw.SQL
+				}
 			}
 		}
 	}
@@ -467,7 +479,12 @@ func (m *Manager) streamQueryAttempt(ctx context.Context, source Source, query s
 		Ordered: queryHasOrderBy(actualQuery),
 	}
 
-	batch := make([][]any, 0, rowBatchSize)
+	firstBatchCutoff := 5
+	if page.PageSize > 0 && page.PageSize < firstBatchCutoff {
+		firstBatchCutoff = page.PageSize
+	}
+	currentBatchTarget := firstBatchCutoff
+	batch := make([][]any, 0, currentBatchTarget)
 
 	type rowScannerInterface interface {
 		Scan(rows *sql.Rows) ([]any, int64, error)
@@ -487,7 +504,13 @@ func (m *Manager) streamQueryAttempt(ctx context.Context, source Source, query s
 		}
 		scanner = newLOBRowScanner(lobRewrite, source, schema, table, lobSessionID, aliasIdx)
 	} else {
-		scanner = newRowScanner(columns, aliasIdx, isFast)
+		schema := ""
+		table := ""
+		if lobSingleInfo != nil {
+			schema = lobSingleInfo.Schema
+			table = lobSingleInfo.Table
+		}
+		scanner = newRowScanner(columns, aliasIdx, isFast, schema, table)
 	}
 
 	// Commands and locking queries cannot use the derived-table wrapper.
@@ -523,22 +546,19 @@ func (m *Manager) streamQueryAttempt(ctx context.Context, source Source, query s
 		summary.Rows++
 		summary.Bytes += rowBytes
 		batch = append(batch, row)
-		// 渐进式流：首屏前 5 行（视口首眼区域）或达 pageSize 时立刻发射，使前端在几十毫秒内完成首眼绘制
-		firstBatchCutoff := 5
-		if page.PageSize > 0 && page.PageSize < firstBatchCutoff {
-			firstBatchCutoff = page.PageSize
-		}
-		shouldEmit := len(batch) == rowBatchSize ||
-			(page.PageSize > 0 && len(batch) >= page.PageSize) ||
-			(summary.Rows == len(batch) && len(batch) == firstBatchCutoff)
-		if shouldEmit {
+		// 渐进式流：首包 5 行（视口首眼区域），后续 min(100, pageSize) 批量发射
+		if len(batch) >= currentBatchTarget {
 			if emit != nil {
 				if err := emit(StreamEvent{Type: "rows", Rows: batch}); err != nil {
 					return summary, err
 				}
 			}
+			currentBatchTarget = rowBatchSize
+			if page.PageSize > 0 && page.PageSize < currentBatchTarget {
+				currentBatchTarget = page.PageSize
+			}
 			// 立即重新分配批次，断开对旧批次行的强引用，让 Go GC 可以在查询持续进行期间平滑回收内存
-			batch = make([][]any, 0, rowBatchSize)
+			batch = make([][]any, 0, currentBatchTarget)
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -657,6 +677,8 @@ func resultColumns(rows *sql.Rows) ([]Column, error) {
 type boundedCellScanner struct {
 	dbType string
 	fast   bool
+	schema string
+	table  string
 	value  any
 }
 
@@ -670,12 +692,19 @@ func (s *boundedCellScanner) Scan(src any) error {
 		if isBlobType(s.dbType) {
 			lobKind = "blob"
 		}
-		s.value = map[string]any{
+		m := map[string]any{
 			"kind":          lobKind,
 			"display":       fmt.Sprintf("(%s)", strings.ToUpper(lobKind)),
 			"database_type": s.dbType,
 			"lazy":          true,
 		}
+		if s.table != "" {
+			m["table"] = strings.ToUpper(s.table)
+		}
+		if s.schema != "" {
+			m["owner"] = strings.ToUpper(s.schema)
+		}
+		s.value = m
 		return nil
 	}
 	if value, handled, err := oracleLOBPreview(src, s.dbType); handled {
@@ -693,7 +722,7 @@ type rowScanner struct {
 	aliasIdx int
 }
 
-func newRowScanner(columns []Column, aliasIdx int, fast bool) *rowScanner {
+func newRowScanner(columns []Column, aliasIdx int, fast bool, schema, table string) *rowScanner {
 	count := len(columns)
 	if aliasIdx >= 0 {
 		count = len(columns) + 1
@@ -713,6 +742,8 @@ func newRowScanner(columns []Column, aliasIdx int, fast bool) *rowScanner {
 		}
 		scanners[i].dbType = dbType
 		scanners[i].fast = fast
+		scanners[i].schema = schema
+		scanners[i].table = table
 		dest[i] = &scanners[i]
 	}
 	return &rowScanner{
@@ -741,7 +772,7 @@ func (rs *rowScanner) Scan(rows *sql.Rows) ([]any, int64, error) {
 }
 
 func scanRow(rows *sql.Rows, count int, columns []Column, aliasIdx int) ([]any, int64, error) {
-	scanner := newRowScanner(columns, aliasIdx, false)
+	scanner := newRowScanner(columns, aliasIdx, false, "", "")
 	return scanner.Scan(rows)
 }
 
@@ -923,8 +954,17 @@ func normalizeValue(value any) any {
 
 func normalizeBytes(value []byte) any {
 	if len(value) > maxCellBytes {
-		if utf8.Valid(value[:maxCellBytes]) {
-			return truncateText(string(value[:maxCellBytes]))
+		cut := maxCellBytes
+		for cut > 0 && !utf8.RuneStart(value[cut]) {
+			cut--
+		}
+		if utf8.Valid(value[:cut]) {
+			return map[string]any{
+				"kind":      "text",
+				"bytes":     len(value),
+				"preview":   string(value[:cut]),
+				"truncated": true,
+			}
 		}
 		preview := bytes.Clone(value[:4096])
 		return map[string]any{

@@ -1,6 +1,7 @@
 package dbconsole
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -105,5 +106,41 @@ func TestFindTNSAdmin(t *testing.T) {
 	found, ok := FindTNSAdmin(filepath.Join(tmp, "bin"))
 	if !ok || filepath.Clean(found) != filepath.Clean(adminDir) {
 		t.Fatalf("FindTNSAdmin failed: found=%s ok=%v", found, ok)
+	}
+}
+
+func TestIsOracleDPIError(t *testing.T) {
+	cases := []struct {
+		errText  string
+		expected bool
+	}{
+		{"ORA-00000: DPI-1072: the Oracle Client library version is unsupported", true},
+		{"DPI-1047: Cannot locate a 64-bit Oracle Client library", true},
+		{"DPI-1050: Oracle Client library is at version 11.2 but version 19.1 or higher is needed", true},
+		{"load library oci.dll failed", true},
+		{"the Oracle Client library version is unsupported", true},
+		{"ORA-00942: table or view does not exist", false},
+		{"ORA-01017: invalid username/password", false},
+	}
+	for _, tc := range cases {
+		err := fmt.Errorf("%s", tc.errText)
+		actual := IsOracleDPIError(err)
+		if actual != tc.expected {
+			t.Errorf("IsOracleDPIError(%q) = %v, expected %v", tc.errText, actual, tc.expected)
+		}
+	}
+}
+
+func TestResolveOracleBackendFallback(t *testing.T) {
+	m := &Manager{}
+	src := Source{
+		ID:   "test_src",
+		Kind: KindOracle,
+	}
+	// 模拟该数据源触发过 DPI 错误
+	m.dpiFailedSources.Store("test_src", true)
+	backend := m.ResolveOracleBackend(src)
+	if backend.Name() != "go-ora" {
+		t.Fatalf("expected fallback to go-ora when dpiFailedSources is set, got %s", backend.Name())
 	}
 }

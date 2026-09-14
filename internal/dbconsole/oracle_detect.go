@@ -2,6 +2,7 @@ package dbconsole
 
 import (
 	"debug/pe"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -172,12 +173,25 @@ func EvaluateCandidate(path, sourceLabel string) *OracleCandidateClient {
 	hasCompanion := CheckClientCompanionFiles(clientDir)
 
 	detail := ""
+	clientVer := ""
 	if !compatible {
 		detail = "位数不匹配：此客户端为 " + bitness + "，当前应用程序为 " + runtime.GOARCH + "（无法跨位数动态加载 DLL）"
 	} else if !hasCompanion {
 		detail = "缺少配套运行时 DLL（可能为孤立 oci.dll 文件，需完整 Instant Client 目录）"
 	} else {
-		detail = "可用并兼容（" + bitness + "）"
+		// 校验 OCIClientVersion 符号与可用性，防范 DPI-1072 致命报错
+		if runtime.GOOS == "windows" {
+			ver, ok, vErr := InspectOCIClientVersion(ociPath)
+			if !ok {
+				compatible = false
+				detail = fmt.Sprintf("Oracle Client 库不受支持（%v），已自动标记为不可用以防 DPI-1072", vErr)
+			} else {
+				clientVer = ver
+				detail = fmt.Sprintf("可用并兼容（%s，客户端版本 %s）", bitness, ver)
+			}
+		} else {
+			detail = "可用并兼容（" + bitness + "）"
+		}
 	}
 
 	return &OracleCandidateClient{
@@ -189,6 +203,7 @@ func EvaluateCandidate(path, sourceLabel string) *OracleCandidateClient {
 		ConfigDir:     configDir,
 		HasTNS:        hasTns,
 		HasClientDLLs: hasCompanion,
+		Version:       clientVer,
 		Detail:        detail,
 	}
 }

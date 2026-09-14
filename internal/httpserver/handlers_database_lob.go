@@ -77,6 +77,9 @@ func (s *Server) handleDatabaseLob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ref := *signedRef
+	ref.Owner = strings.ToUpper(strings.TrimSpace(ref.Owner))
+	ref.Table = strings.ToUpper(strings.TrimSpace(ref.Table))
+	ref.Column = strings.ToUpper(strings.TrimSpace(ref.Column))
 	if err := ref.Validate(); err != nil {
 		writeErr(w, http.StatusBadRequest, err)
 		return
@@ -206,13 +209,19 @@ func (s *Server) handleDatabaseLobToken(w http.ResponseWriter, r *http.Request) 
 	if req.Owner == "" {
 		req.Owner = source.Username
 	}
+	req.Owner = strings.ToUpper(strings.TrimSpace(req.Owner))
+	req.Table = strings.ToUpper(strings.TrimSpace(req.Table))
+	req.Column = strings.ToUpper(strings.TrimSpace(req.Column))
+
 	if len(req.Keys) == 0 && !req.UseRowID && strings.TrimSpace(req.RowID) == "" {
 		writeErr(w, http.StatusBadRequest, errors.New("缺少行主键或定位信息"))
 		return
 	}
 	pkCols := req.PrimaryKey
+	var fields []dbconsole.Field
 	if len(pkCols) == 0 && !req.UseRowID {
-		fields, err := s.database.Fields(r.Context(), source, req.Owner, req.Table)
+		var err error
+		fields, err = s.database.Fields(r.Context(), source, req.Owner, req.Table)
 		if err == nil {
 			for _, f := range fields {
 				if f.PrimaryKey {
@@ -221,14 +230,25 @@ func (s *Server) handleDatabaseLobToken(w http.ResponseWriter, r *http.Request) 
 			}
 		}
 	}
-	if len(pkCols) == 0 && !req.UseRowID {
-		for k := range req.Keys {
-			pkCols = append(pkCols, k)
-		}
+	if len(pkCols) == 0 && !req.UseRowID && strings.TrimSpace(req.RowID) == "" {
+		writeErr(w, http.StatusBadRequest, errors.New("目标表未定义主键且无 ROWID，无法安全定位 LOB，请通过单表浏览或包含 ROWID 查询"))
+		return
 	}
-	colType := req.ColumnType
+	colType := strings.ToUpper(strings.TrimSpace(req.ColumnType))
 	if colType == "" {
-		colType = "CLOB"
+		if len(fields) == 0 {
+			fields, _ = s.database.Fields(r.Context(), source, req.Owner, req.Table)
+		}
+		for _, f := range fields {
+			if strings.EqualFold(f.Name, req.Column) {
+				colType = strings.ToUpper(f.DataType)
+				break
+			}
+		}
+		if colType == "" {
+			writeErr(w, http.StatusBadRequest, errors.New("无法识别 LOB 列类型，请确认表与列名"))
+			return
+		}
 	}
 	token, err := dbconsole.GenerateSignedLOBToken(
 		source.ID,
