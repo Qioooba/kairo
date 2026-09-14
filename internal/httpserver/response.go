@@ -31,3 +31,24 @@ func writeErr(w http.ResponseWriter, code int, err error) {
 func writeErrSanitized(w http.ResponseWriter, code int, err error) {
 	writeJSON(w, code, map[string]string{"error": sshclient.SanitizeError(err.Error())})
 }
+
+// StructuredErrorResponse 提供向后兼容的前端结构化错误响应
+type StructuredErrorResponse struct {
+	OK           bool   `json:"ok"`
+	Error        string `json:"error"`
+	Code         string `json:"code,omitempty"`
+	OperationID  string `json:"operation_id,omitempty"`
+	Retryable    bool   `json:"retryable"`
+	EffectStatus string `json:"effect_status,omitempty"` // not_applied | applied | unknown
+}
+
+func writeStructuredErr(w http.ResponseWriter, code int, err error, errCode string, retryable bool, effectStatus string) {
+	resp := StructuredErrorResponse{
+		OK:           false,
+		Error:        sshclient.SanitizeError(err.Error()),
+		Code:         errCode,
+		Retryable:    retryable,
+		EffectStatus: effectStatus,
+	}
+	writeJSON(w, code, resp)
+}

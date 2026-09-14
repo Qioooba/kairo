@@ -235,12 +235,36 @@ func ExportSQLLiteral(value any) string {
 	case json.Number:
 		return v.String()
 	case map[string]any:
+		if lazy, _ := v["lazy"].(bool); lazy {
+			return "NULL"
+		}
 		if kind, _ := v["kind"].(string); kind == "binary" {
 			return "NULL"
 		}
 		return quoteSQLString(ExportCellText(v))
 	}
 	return quoteSQLString(ExportCellText(value))
+}
+
+func exportSQLLiteralStrict(kind string, value any, colName string, rowIdx int) (string, error) {
+	if value == nil {
+		return "NULL", nil
+	}
+	if obj, ok := value.(map[string]any); ok {
+		if lazy, _ := obj["lazy"].(bool); lazy {
+			return "", fmt.Errorf("第 %d 行的列 %s 包含未加载的 LOB 内容，无法生成完整 SQL 字面量，请先加载或选用 CSV 格式", rowIdx+1, colName)
+		}
+		if kindStr, _ := obj["kind"].(string); kindStr == "clob" || kindStr == "blob" {
+			return "", fmt.Errorf("第 %d 行的列 %s 包含 LOB 描述符，无法生成完整 SQL 字面量", rowIdx+1, colName)
+		}
+		if trunc, _ := obj["truncated"].(bool); trunc {
+			return "", fmt.Errorf("第 %d 行的列 %s 文本已被截断，无法作为完整 SQL 字面量导出", rowIdx+1, colName)
+		}
+		if kindStr, _ := obj["kind"].(string); kindStr == "binary" {
+			return "", fmt.Errorf("第 %d 行的列 %s 包含二进制内容，无法作为 SQL 字面量无损导出，请选用文件导出或 CSV", rowIdx+1, colName)
+		}
+	}
+	return exportSQLLiteralForKind(kind, value), nil
 }
 
 func quoteSQLString(value string) string {
@@ -261,6 +285,13 @@ func exportSQLLiteralForKind(kind string, value any) string {
 }
 
 func WriteJSON(w io.Writer, table ExportTable, extra map[string]any) error {
+	colSeen := make(map[string]struct{}, len(table.Columns))
+	for _, col := range table.Columns {
+		if _, exists := colSeen[col.Name]; exists {
+			return fmt.Errorf("结果集包含重复列名 %q，以 JSON 对象格式导出将丢失数据；请为重复列指定不同别名", col.Name)
+		}
+		colSeen[col.Name] = struct{}{}
+	}
 	rows := make([]map[string]any, 0, len(table.Rows))
 	for _, row := range table.Rows {
 		item := make(map[string]any, len(table.Columns))
@@ -304,14 +335,18 @@ func WriteINSERT(w io.Writer, table ExportTable, kind, tableName string) error {
 		names[i] = QuoteIdent(kind, column.Name)
 	}
 	prefix := "INSERT INTO " + quoted + " (" + strings.Join(names, ", ") + ") VALUES ("
-	for _, row := range table.Rows {
+	for rIdx, row := range table.Rows {
 		values := make([]string, len(table.Columns))
 		for i := range table.Columns {
 			var value any
 			if i < len(row) {
 				value = row[i]
 			}
-			values[i] = exportSQLLiteralForKind(kind, value)
+			lit, err := exportSQLLiteralStrict(kind, value, table.Columns[i].Name, rIdx)
+			if err != nil {
+				return err
+			}
+			values[i] = lit
 		}
 		if _, err := io.WriteString(w, prefix+strings.Join(values, ", ")+");\n"); err != nil {
 			return err
@@ -333,60 +368,38 @@ func SplitSchemaObject(name string) (string, string) {
 
 // WriteUPDATE exports rows as SQL UPDATE statements, requiring PK in WHERE clause.
 func WriteUPDATE(w io.Writer, table ExportTable, kind, tableName string, pkCols []string) error {
-	if len(table.Columns) == 0 {
-		return fmt.Errorf("没有可导出的列")
+	plan, err := BuildExportTargetPlan(kind, tableName, "", table.Columns, pkCols, false)
+	if err != nil {
+		return err
 	}
-	quotedTable := QuoteIdent(kind, tableName)
-	pkSet := make(map[string]struct{})
-	for _, pk := range pkCols {
-		pkSet[strings.ToUpper(pk)] = struct{}{}
-	}
-	if len(pkSet) == 0 {
-		for _, col := range table.Columns {
-			upper := strings.ToUpper(col.Name)
-			if upper == "ROWID" {
-				pkSet["ROWID"] = struct{}{}
-				break
-			}
-		}
-	}
-	if len(pkSet) == 0 {
-		_, cleanObj := SplitSchemaObject(tableName)
-		cleanUpper := strings.ToUpper(cleanObj)
-		for _, col := range table.Columns {
-			upper := strings.ToUpper(col.Name)
-			if upper == "ID" || upper == cleanUpper+"_ID" {
-				pkSet[upper] = struct{}{}
-				break
-			}
-		}
-	}
+	return WriteUPDATEWithPlan(w, table, plan)
+}
 
-	var setIndices []int
-	var whereIndices []int
-	for i, col := range table.Columns {
-		upper := strings.ToUpper(col.Name)
-		if _, isPK := pkSet[upper]; isPK {
-			whereIndices = append(whereIndices, i)
-		} else {
-			setIndices = append(setIndices, i)
-		}
+// WriteUPDATEWithPlan exports rows using a validated ExportTargetPlan.
+func WriteUPDATEWithPlan(w io.Writer, table ExportTable, plan ExportTargetPlan) error {
+	whereIndices := plan.KeyIndices
+	if plan.UseRowID && plan.RowIDIndex >= 0 {
+		whereIndices = []int{plan.RowIDIndex}
 	}
 	if len(whereIndices) == 0 {
 		return errors.New("导出 UPDATE 语句需要目标表定义主键，或请选用 INSERT/CSV 格式")
 	}
-	if len(setIndices) == 0 {
-		setIndices = whereIndices
-	}
 
-	for _, row := range table.Rows {
+	for rIdx, row := range table.Rows {
+		if err := plan.ValidateRowValues(table.Columns, row, rIdx); err != nil {
+			return err
+		}
 		var setParts []string
-		for _, idx := range setIndices {
+		for _, idx := range plan.SetIndices {
 			var value any
 			if idx < len(row) {
 				value = row[idx]
 			}
-			setParts = append(setParts, QuoteIdent(kind, table.Columns[idx].Name)+" = "+exportSQLLiteralForKind(kind, value))
+			lit, err := exportSQLLiteralStrict(plan.Kind, value, table.Columns[idx].Name, rIdx)
+			if err != nil {
+				return err
+			}
+			setParts = append(setParts, QuoteIdent(plan.Kind, table.Columns[idx].Name)+" = "+lit)
 		}
 		var whereParts []string
 		for _, idx := range whereIndices {
@@ -394,18 +407,18 @@ func WriteUPDATE(w io.Writer, table ExportTable, kind, tableName string, pkCols 
 			if idx < len(row) {
 				value = row[idx]
 			}
-			if value == nil {
-				whereParts = append(whereParts, QuoteIdent(kind, table.Columns[idx].Name)+" IS NULL")
-			} else {
-				whereParts = append(whereParts, QuoteIdent(kind, table.Columns[idx].Name)+" = "+exportSQLLiteralForKind(kind, value))
+			lit, err := exportSQLLiteralStrict(plan.Kind, value, table.Columns[idx].Name, rIdx)
+			if err != nil {
+				return err
 			}
+			whereParts = append(whereParts, QuoteIdent(plan.Kind, table.Columns[idx].Name)+" = "+lit)
 		}
-		stmt := "UPDATE " + quotedTable + " SET " + strings.Join(setParts, ", ") + " WHERE " + strings.Join(whereParts, " AND ") + ";\n"
+		stmt := "UPDATE " + plan.FullTarget + " SET " + strings.Join(setParts, ", ") + " WHERE " + strings.Join(whereParts, " AND ") + ";\n"
 		if _, err := io.WriteString(w, stmt); err != nil {
 			return err
 		}
 	}
-	if kind == KindOracle {
+	if plan.Kind == KindOracle {
 		if _, err := io.WriteString(w, "COMMIT;\n"); err != nil {
 			return err
 		}

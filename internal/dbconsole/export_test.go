@@ -61,8 +61,15 @@ func TestWriteJSONAndINSERT(t *testing.T) {
 		t.Fatalf("literals: %s", got)
 	}
 
+	validUpdateTable := ExportTable{
+		Columns: []Column{{Name: "ID"}, {Name: "NAME"}},
+		Rows: [][]any{
+			{int64(1), "alice"},
+			{int64(2), "bob"},
+		},
+	}
 	var updateBuf bytes.Buffer
-	if err := WriteUPDATE(&updateBuf, table, KindOracle, "CREDIT.T_USER", []string{"ID"}); err != nil {
+	if err := WriteUPDATE(&updateBuf, validUpdateTable, KindOracle, "CREDIT.T_USER", []string{"ID"}); err != nil {
 		t.Fatal(err)
 	}
 	updateGot := updateBuf.String()
@@ -71,6 +78,114 @@ func TestWriteJSONAndINSERT(t *testing.T) {
 	}
 	if !strings.Contains(updateGot, "COMMIT;") {
 		t.Fatalf("missing Oracle COMMIT: %s", updateGot)
+	}
+}
+
+func TestWriteUPDATE_NullPKRejects(t *testing.T) {
+	table := ExportTable{
+		Columns: []Column{{Name: "ID"}, {Name: "NAME"}},
+		Rows: [][]any{
+			{nil, "alice"},
+		},
+	}
+	var buf bytes.Buffer
+	err := WriteUPDATE(&buf, table, KindOracle, "CREDIT.T_USER", []string{"ID"})
+	if err == nil || !strings.Contains(err.Error(), "NULL") {
+		t.Fatalf("expected error for NULL PK, got: %v", err)
+	}
+}
+
+func TestWriteUPDATE_CompositePKMissingColumnRejects(t *testing.T) {
+	// Table has composite PK (TENANT_ID, ROW_ID), but query only returned TENANT_ID and NAME
+	table := ExportTable{
+		Columns: []Column{{Name: "TENANT_ID"}, {Name: "NAME"}},
+		Rows: [][]any{
+			{"T1", "alice"},
+		},
+	}
+	var buf bytes.Buffer
+	err := WriteUPDATE(&buf, table, KindOracle, "CREDIT.T_USER", []string{"TENANT_ID", "ROW_ID"})
+	if err == nil || !strings.Contains(err.Error(), "缺少主键列 ROW_ID") {
+		t.Fatalf("expected error for missing composite PK column, got: %v", err)
+	}
+}
+
+func TestWriteUPDATE_CompositePKCompleteSucceeds(t *testing.T) {
+	table := ExportTable{
+		Columns: []Column{{Name: "TENANT_ID"}, {Name: "ROW_ID"}, {Name: "NAME"}},
+		Rows: [][]any{
+			{"T1", int64(100), "alice"},
+		},
+	}
+	var buf bytes.Buffer
+	err := WriteUPDATE(&buf, table, KindOracle, "CREDIT.T_USER", []string{"TENANT_ID", "ROW_ID"})
+	if err != nil {
+		t.Fatalf("expected success for complete composite PK, got: %v", err)
+	}
+	got := buf.String()
+	if !strings.Contains(got, `WHERE "TENANT_ID" = 'T1' AND "ROW_ID" = 100`) {
+		t.Fatalf("unexpected where clause for composite PK: %s", got)
+	}
+}
+
+func TestBuildExportTargetPlan_ForgedROWIDAliasRejects(t *testing.T) {
+	// SELECT 1 AS ROWID ... should NOT be treated as trusted physical ROWID
+	querySQL := `SELECT 1 AS ROWID, name FROM users`
+	cols := []Column{{Name: "ROWID"}, {Name: "NAME"}}
+	_, err := BuildExportTargetPlan(KindOracle, "users", querySQL, cols, nil, true)
+	if err == nil {
+		t.Fatal("expected forged ROWID alias to be rejected when table has no PK, but got nil")
+	}
+}
+
+func TestBuildExportTargetPlan_JOINRejects(t *testing.T) {
+	querySQL := `SELECT a.id, b.name FROM a JOIN b ON a.id = b.id`
+	cols := []Column{{Name: "ID"}, {Name: "NAME"}}
+	_, err := BuildExportTargetPlan(KindOracle, "a", querySQL, cols, []string{"ID"}, false)
+	if err == nil || !strings.Contains(err.Error(), "JOIN") {
+		t.Fatalf("expected JOIN query to be rejected for UPDATE plan, got: %v", err)
+	}
+}
+
+func TestExportSQLLiteral_IncompleteLOBAndBinaryRejects(t *testing.T) {
+	lazyLOB := map[string]any{"kind": "clob", "lazy": true, "column": "CONTENT"}
+	table := ExportTable{
+		Columns: []Column{{Name: "ID"}, {Name: "CONTENT"}},
+		Rows: [][]any{
+			{int64(1), lazyLOB},
+		},
+	}
+	var buf bytes.Buffer
+	err := WriteUPDATE(&buf, table, KindOracle, "DOCS", []string{"ID"})
+	if err == nil || !strings.Contains(err.Error(), "未加载") {
+		t.Fatalf("expected error for lazy LOB in WriteUPDATE, got: %v", err)
+	}
+
+	binaryVal := map[string]any{"kind": "binary", "bytes": 128}
+	tableBinary := ExportTable{
+		Columns: []Column{{Name: "ID"}, {Name: "AVATAR"}},
+		Rows: [][]any{
+			{int64(1), binaryVal},
+		},
+	}
+	buf.Reset()
+	errBinary := WriteUPDATE(&buf, tableBinary, KindOracle, "USERS", []string{"ID"})
+	if errBinary == nil || !strings.Contains(errBinary.Error(), "二进制") {
+		t.Fatalf("expected error for binary in WriteUPDATE, got: %v", errBinary)
+	}
+}
+
+func TestWriteJSON_DuplicateColumnRejects(t *testing.T) {
+	table := ExportTable{
+		Columns: []Column{{Name: "ID"}, {Name: "ID"}},
+		Rows: [][]any{
+			{int64(1), int64(2)},
+		},
+	}
+	var buf bytes.Buffer
+	err := WriteJSON(&buf, table, nil)
+	if err == nil || !strings.Contains(err.Error(), "重复列名") {
+		t.Fatalf("expected error for duplicate column in WriteJSON, got: %v", err)
 	}
 }
 

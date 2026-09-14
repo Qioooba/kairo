@@ -720,14 +720,51 @@ func (s *Server) handleDatabaseExport(w http.ResponseWriter, r *http.Request) {
 	filename := safeName + dbconsole.ExportExtension(format)
 	page, pageSize := databaseQueryPage(req)
 	if page > 1 && !dbconsole.QueryHasOrderBy(req.SQL) {
-		writeErrSanitized(w, http.StatusBadRequest, errors.New("第 2 页及以后的分页导出必须包含显式 ORDER BY 排序，以避免结果重复或遗漏"))
+		writeStructuredErr(w, http.StatusBadRequest, errors.New("第 2 页及以后的分页导出必须包含显式 ORDER BY 排序，以避免结果重复或遗漏"), "EXPORT_UNORDERED_PAGE", false, "not_applied")
 		return
 	}
+
+	if format == "update" {
+		if err := dbconsole.ValidateSingleTableQuery(req.SQL); err != nil {
+			writeStructuredErr(w, http.StatusUnprocessableEntity, err, "AMBIGUOUS_ROW_LOCATOR", false, "not_applied")
+			return
+		}
+		tableName := strings.TrimSpace(req.Table)
+		if tableName == "" {
+			tableName = dbconsole.InferExportTable(req.SQL)
+		}
+		schema, obj := dbconsole.SplitSchemaObject(tableName)
+		if schema == "" {
+			if source.Kind == dbconsole.KindOracle {
+				schema = source.Username
+			} else if source.Kind == dbconsole.KindMySQL {
+				schema = source.Database
+			}
+		}
+		var pkCols []string
+		if obj != "" && schema != "" {
+			fields, errFields := s.database.Fields(r.Context(), source, schema, obj)
+			if errFields != nil {
+				writeStructuredErr(w, http.StatusUnprocessableEntity, fmt.Errorf("无法读取目标表 %s 的字典主键元数据: %w", tableName, errFields), "EXPORT_DICTIONARY_FAILED", false, "not_applied")
+				return
+			}
+			for _, f := range fields {
+				if f.PrimaryKey {
+					pkCols = append(pkCols, f.Name)
+				}
+			}
+		}
+		if len(pkCols) == 0 {
+			writeStructuredErr(w, http.StatusUnprocessableEntity, fmt.Errorf("目标表 %q 未定义主键且无法安全定位，不能生成安全的 UPDATE 脚本；请选用 INSERT 或 CSV/JSON 格式", tableName), "EXPORT_UNSAFE_KEY", false, "not_applied")
+			return
+		}
+	}
+
 	if format != "csv" {
 		table, summary, collectErr := s.database.CollectQueryPage(r.Context(), source, req.SQL, page, pageSize)
 		if collectErr != nil {
 			collectErr = s.databaseSafeError(source, collectErr)
-			writeErrSanitized(w, 502, collectErr)
+			writeStructuredErr(w, 502, collectErr, "EXPORT_FAILED", false, "not_applied")
 			s.audit.Write("database.export", "source_id", source.ID, "kind", source.Kind, "query_id", queryID, "format", format, "result", "fail", "error", trim(collectErr.Error(), 300))
 			return
 		}
@@ -739,70 +776,72 @@ func (s *Server) handleDatabaseExport(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		var buf bytes.Buffer
-		var outWriter io.Writer = w
-		if format == "update" {
-			outWriter = &buf
-		} else {
-			w.Header().Set("Content-Type", dbconsole.ExportContentType(format))
-			w.Header().Set("Content-Disposition", "attachment; filename*=UTF-8''"+url.QueryEscape(filename))
-			w.Header().Set("Cache-Control", "no-store")
-		}
 		switch format {
 		case "json":
-			err = dbconsole.WriteJSON(outWriter, table, map[string]any{"source": source.Name, "kind": source.Kind, "sql": req.SQL})
+			err = dbconsole.WriteJSON(&buf, table, map[string]any{"source": source.Name, "kind": source.Kind, "sql": req.SQL})
 		case "xlsx":
-			err = dbconsole.WriteXLSX(outWriter, table, source.Name)
+			err = dbconsole.WriteXLSX(&buf, table, source.Name)
 		case "insert":
 			tableName := strings.TrimSpace(req.Table)
 			if tableName == "" {
 				tableName = dbconsole.InferExportTable(req.SQL)
 			}
-			err = dbconsole.WriteINSERT(outWriter, table, source.Kind, tableName)
+			err = dbconsole.WriteINSERT(&buf, table, source.Kind, tableName)
 		case "update":
 			tableName := strings.TrimSpace(req.Table)
 			if tableName == "" {
 				tableName = dbconsole.InferExportTable(req.SQL)
 			}
-			var pkCols []string
 			schema, obj := dbconsole.SplitSchemaObject(tableName)
-			if obj != "" {
+			if schema == "" {
+				if source.Kind == dbconsole.KindOracle {
+					schema = source.Username
+				} else if source.Kind == dbconsole.KindMySQL {
+					schema = source.Database
+				}
+			}
+			var pkCols []string
+			if obj != "" && schema != "" {
 				fields, errFields := s.database.Fields(r.Context(), source, schema, obj)
-				if errFields == nil {
-					for _, f := range fields {
-						if f.PrimaryKey {
-							pkCols = append(pkCols, f.Name)
-						}
+				if errFields != nil {
+					err = fmt.Errorf("读取主键元数据失败: %w", errFields)
+					break
+				}
+				for _, f := range fields {
+					if f.PrimaryKey {
+						pkCols = append(pkCols, f.Name)
 					}
 				}
 			}
-			err = dbconsole.WriteUPDATE(&buf, table, source.Kind, tableName, pkCols)
-			if err == nil {
-				w.Header().Set("Content-Type", dbconsole.ExportContentType(format))
-				w.Header().Set("Content-Disposition", "attachment; filename*=UTF-8''"+url.QueryEscape(filename))
-				w.Header().Set("Cache-Control", "no-store")
-				_, err = io.Copy(w, &buf)
+			plan, planErr := dbconsole.BuildExportTargetPlan(source.Kind, tableName, req.SQL, table.Columns, pkCols, false)
+			if planErr != nil {
+				err = planErr
+				break
 			}
+			err = dbconsole.WriteUPDATEWithPlan(&buf, table, plan)
 		}
 		if err != nil {
-			w.Header().Del("Content-Disposition")
-			writeErrSanitized(w, http.StatusBadRequest, err)
+			writeStructuredErr(w, http.StatusUnprocessableEntity, err, "EXPORT_FAILED", false, "not_applied")
 			s.audit.Write("database.export", "source_id", source.ID, "kind", source.Kind, "query_id", queryID, "format", format, "result", "fail", "error", trim(err.Error(), 300))
 			return
 		}
+		w.Header().Set("Content-Type", dbconsole.ExportContentType(format))
+		w.Header().Set("Content-Disposition", "attachment; filename*=UTF-8''"+url.QueryEscape(filename))
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Content-Length", strconv.Itoa(buf.Len()))
+		_, _ = io.Copy(w, &buf)
 		s.audit.Write("database.export", "source_id", source.ID, "kind", source.Kind, "query_id", queryID, "format", format,
 			"rows", summary.Rows, "elapsed_ms", summary.ElapsedMS, "truncated", summary.Truncated, "result", "ok")
 		return
 	}
-	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
-	w.Header().Set("Content-Disposition", "attachment; filename*=UTF-8''"+url.QueryEscape(filename))
-	w.Header().Set("Cache-Control", "no-store")
-	csvWriter := csv.NewWriter(w)
-	started := false
+
+	var csvBuf bytes.Buffer
+	csvWriter := csv.NewWriter(&csvBuf)
 	columnCount := 0
 	emit := func(event dbconsole.StreamEvent) error {
 		switch event.Type {
 		case "meta":
-			if _, err := io.WriteString(w, "\ufeff"); err != nil {
+			if _, err := io.WriteString(&csvBuf, "\ufeff"); err != nil {
 				return err
 			}
 			columnCount = len(event.Columns)
@@ -813,7 +852,6 @@ func (s *Server) handleDatabaseExport(w http.ResponseWriter, r *http.Request) {
 			if err := csvWriter.Write(record); err != nil {
 				return err
 			}
-			started = true
 		case "rows":
 			for _, row := range event.Rows {
 				record := make([]string, len(row))
@@ -825,29 +863,25 @@ func (s *Server) handleDatabaseExport(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		csvWriter.Flush()
-		if err := csvWriter.Error(); err != nil {
-			return err
-		}
-		if flusher, ok := w.(http.Flusher); ok {
-			flusher.Flush()
-		}
 		return nil
 	}
 	summary, err := s.database.StreamQueryPage(r.Context(), source, req.SQL, page, pageSize, emit)
 	if err != nil {
 		err = s.databaseSafeError(source, err)
-		if !started {
-			writeErrSanitized(w, 502, err)
-		} else {
-			record := make([]string, max(columnCount, 1))
-			record[0] = "导出中断: " + trim(err.Error(), 500)
-			_ = csvWriter.Write(record)
-			csvWriter.Flush()
-		}
+		writeStructuredErr(w, 502, err, "EXPORT_FAILED", false, "not_applied")
 		s.audit.Write("database.export", "source_id", source.ID, "kind", source.Kind, "query_id", queryID, "format", format, "result", "fail", "error", trim(err.Error(), 300))
 		return
 	}
+	csvWriter.Flush()
+	if err := csvWriter.Error(); err != nil {
+		writeStructuredErr(w, http.StatusInternalServerError, err, "EXPORT_FAILED", false, "not_applied")
+		return
+	}
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+	w.Header().Set("Content-Disposition", "attachment; filename*=UTF-8''"+url.QueryEscape(filename))
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Length", strconv.Itoa(csvBuf.Len()))
+	_, _ = io.Copy(w, &csvBuf)
 	s.audit.Write("database.export", "source_id", source.ID, "kind", source.Kind, "query_id", queryID, "format", format,
 		"rows", summary.Rows, "elapsed_ms", summary.ElapsedMS, "truncated", summary.Truncated, "result", "ok")
 }

@@ -225,4 +225,49 @@ func TestDatabaseQueryDDLGate(t *testing.T) {
 	}
 }
 
+func TestDatabaseExport_PrecheckAndSafeKeys(t *testing.T) {
+	srv := newTestServerWithAuth(t, databaseTokens())
+	src, err := srv.database.Store().Save(dbconsole.Source{
+		Name: "test-src", Kind: dbconsole.KindOracle, Host: "127.0.0.1", Port: 1521,
+		Username: "app", OracleService: "ORCL", AllowedUsers: []string{"admin1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. JOIN query for UPDATE export -> rejected with 422 AMBIGUOUS_ROW_LOCATOR and no attachment
+	wJoin := doRequestWithToken(srv, http.MethodPost, "/api/database/export", rbacAdminToken, databaseQueryRequest{
+		SourceID: src.ID,
+		SQL:      "SELECT a.id, b.name FROM table_a a JOIN table_b b ON a.id = b.id",
+		Format:   "update",
+		Table:    "table_a",
+	})
+	if wJoin.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422 for JOIN query UPDATE export, got: %d (%s)", wJoin.Code, wJoin.Body.String())
+	}
+	if disp := wJoin.Header().Get("Content-Disposition"); disp != "" {
+		t.Fatalf("expected no Content-Disposition on error, got: %s", disp)
+	}
+	if !strings.Contains(wJoin.Body.String(), "AMBIGUOUS_ROW_LOCATOR") {
+		t.Fatalf("expected AMBIGUOUS_ROW_LOCATOR in body: %s", wJoin.Body.String())
+	}
+
+	// 2. Table without primary key -> rejected with 422 EXPORT_UNSAFE_KEY
+	wNoPK := doRequestWithToken(srv, http.MethodPost, "/api/database/export", rbacAdminToken, databaseQueryRequest{
+		SourceID: src.ID,
+		SQL:      "SELECT id, note FROM audit_logs",
+		Format:   "update",
+		Table:    "audit_logs",
+	})
+	if wNoPK.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422 for table without primary key, got: %d (%s)", wNoPK.Code, wNoPK.Body.String())
+	}
+	if disp := wNoPK.Header().Get("Content-Disposition"); disp != "" {
+		t.Fatalf("expected no Content-Disposition on error, got: %s", disp)
+	}
+	if !strings.Contains(wNoPK.Body.String(), "EXPORT_UNSAFE_KEY") && !strings.Contains(wNoPK.Body.String(), "EXPORT_DICTIONARY_FAILED") {
+		t.Fatalf("expected EXPORT_UNSAFE_KEY or EXPORT_DICTIONARY_FAILED in body: %s", wNoPK.Body.String())
+	}
+}
+
 
