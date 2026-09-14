@@ -1,0 +1,65 @@
+#!/bin/sh
+# Git commit-msg hook: 强制要求提交信息标明执行提交的模型及版本
+
+COMMIT_MSG_FILE="$1"
+
+# 1. 过滤 Git 注释行 (#) 及空行
+CLEAN_MSG=$(grep -v '^[[:space:]]*#' "$COMMIT_MSG_FILE" | tr -d '\r')
+
+# 2. 如果是自动生成的合并提交 (Merge commit)，允许跳过校验
+FIRST_LINE=$(echo "$CLEAN_MSG" | head -n 1)
+case "$FIRST_LINE" in
+    Merge\ branch*|Merge\ remote-tracking\ branch*|Merge\ pull\ request*)
+        exit 0
+        ;;
+esac
+
+# 3. 检查是否包含 Model: 或 AI-Model: 标签行
+MODEL_LINE=$(echo "$CLEAN_MSG" | grep -Ei '^(AI-)?Model:[[:space:]]*[^[:space:]]+')
+
+if [ -z "$MODEL_LINE" ]; then
+    echo ""
+    echo "================================================================================"
+    echo "[ERROR] Git Commit 校验失败：提交信息必须注明模型全称与具体版本！"
+    echo "--------------------------------------------------------------------------------"
+    echo "原因: 提交信息末尾未找到 'Model: <精确模型版本>' 标识。"
+    echo ""
+    echo "正确格式示例："
+    echo "    feat(workbench): 修复 runQuery 作用域与 DDL 守卫"
+    echo ""
+    echo "    - 修复 database.js 中 querySource 作用域问题"
+    echo ""
+    echo "    Model: Gemini 3.8 Flash"
+    echo ""
+    echo "提示："
+    echo "  - AI 提交必须精确到具体版本（如 Gemini 3.8 Flash / Claude 3.7 Sonnet / GPT-4o）"
+    echo "  - 人类开发者手动提交可标注: Model: Human"
+    echo "  - 紧急情况可使用 'git commit --no-verify' 跳过门禁"
+    echo "================================================================================"
+    echo ""
+    exit 1
+fi
+
+# 4. 提取模型名称并去除两端空白
+MODEL_VAL=$(echo "$MODEL_LINE" | sed -E 's/^([a-zA-Z-]+)?[Mm]odel:[[:space:]]*//' | tr -d '\r\n')
+
+# 5. 拦截模糊、不包含版本的宽泛名称
+case "$(echo "$MODEL_VAL" | tr '[:upper:]' '[:lower:]')" in
+    "ai"|"llm"|"bot"|"assistant"|"gemini"|"claude"|"gpt"|"deepseek"|"qwen"|"openai"|"anthropic"|"google")
+        echo ""
+        echo "================================================================================"
+        echo "[ERROR] Git Commit 校验失败：模型名称过于模糊，未精确到具体版本！"
+        echo "--------------------------------------------------------------------------------"
+        echo "当前填写: $MODEL_VAL"
+        echo "必须指明版本号，例如："
+        echo "    Model: Gemini 3.8 Flash"
+        echo "    Model: Claude 3.7 Sonnet"
+        echo "    Model: GPT-4o"
+        echo "    Model: DeepSeek-V3"
+        echo "================================================================================"
+        echo ""
+        exit 1
+        ;;
+esac
+
+exit 0

@@ -22,3 +22,6 @@ scripts/release_smoke_test.sh export-ignore
 docs/qa/**/*.js               export-ignore
 docs/qa/**/*.json             export-ignore
 docs/qa/package.json          -export-ignore
+
+# --- Git Hooks 保持 LF 换行 ---
+.githooks/*                   text eol=lf
