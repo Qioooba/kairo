@@ -3,8 +3,10 @@ package dbconsole
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"fmt"
+	"net"
 	"strings"
 	"time"
 )
@@ -146,6 +148,59 @@ func (m *Manager) removeTransaction(sourceID, sessionID string, expected *transa
 	m.mu.Unlock()
 }
 
+// CommitUncertainError indicates that a commit request encountered an error
+// (such as a lost connection, driver error, or network timeout) where the server
+// may or may not have committed the transaction.
+type CommitUncertainError struct {
+	Err     error
+	Message string
+}
+
+func (e *CommitUncertainError) Error() string {
+	if e.Message != "" {
+		if e.Err != nil {
+			return e.Message + " (" + e.Err.Error() + ")"
+		}
+		return e.Message
+	}
+	if e.Err != nil {
+		return e.Err.Error()
+	}
+	return "commit outcome unknown"
+}
+
+func (e *CommitUncertainError) Unwrap() error {
+	return e.Err
+}
+
+func isCommitUncertainError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, driver.ErrBadConn) {
+		return true
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return true
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return true
+	}
+	text := strings.ToUpper(err.Error())
+	for _, marker := range []string{
+		"MYSQL SERVER HAS GONE AWAY", "ERROR 2006", "ERROR 2013", "BROKEN PIPE",
+		"CONNECTION RESET", "CONNECTION IS CLOSED", "USE OF CLOSED NETWORK CONNECTION",
+		"ORA-03113", "ORA-03114", "ORA-01012", "ORA-12537", "TTC ERROR",
+		"EOF", "I/O TIMEOUT", "CLIENT.TIMEOUT", "CONNECTION LOST", "UNEXPECTED EOF",
+	} {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
+}
+
 // rollbackEntryLocked is used while the caller already owns entry.mu.  It is
 // deliberately idempotent and removes the map entry immediately so a dropped
 // HTTP request cannot leave a connection/lock behind until the next sweep.
@@ -160,6 +215,7 @@ func (m *Manager) rollbackEntryLocked(sourceID, sessionID string, entry *transac
 		entry.cancel()
 	}
 	m.removeTransaction(sourceID, sessionID, entry)
+	m.recordTerminalState(sourceID, sessionID, entry.fingerprint, OutcomeRolledBack, "事务已回滚")
 }
 
 // Commit always ends the driver transaction, including when the server's
@@ -172,7 +228,18 @@ func (m *Manager) commitEntryLocked(sourceID, sessionID string, entry *transacti
 	if entry.tx == nil {
 		return sql.ErrTxDone
 	}
-	return entry.tx.Commit()
+	err := entry.tx.Commit()
+	if err == nil {
+		m.recordTerminalState(sourceID, sessionID, entry.fingerprint, OutcomeCommitted, "事务已提交")
+		return nil
+	}
+	if isCommitUncertainError(err) {
+		msg := "提交确认丢失或连接中断，事务最终状态未知，请核对目标数据，切勿盲目重试写入"
+		m.recordTerminalState(sourceID, sessionID, entry.fingerprint, OutcomeUnknown, msg)
+		return &CommitUncertainError{Err: err, Message: msg}
+	}
+	m.recordTerminalState(sourceID, sessionID, entry.fingerprint, OutcomeRolledBack, "事务提交失败已回滚: "+err.Error())
+	return err
 }
 
 func (m *Manager) SessionTransactionPending(source Source, sessionID string) bool {
@@ -191,6 +258,36 @@ func (m *Manager) ControlSessionTransaction(ctx context.Context, source Source, 
 	}
 	started := time.Now()
 	if entry == nil {
+		if rec, found := m.getTerminalRecord(source.ID, sessionID); found && rec.Fingerprint == sourceFingerprint(source) {
+			switch rec.Outcome {
+			case OutcomeUnknown:
+				if action == "COMMIT" {
+					return QuerySummary{}, &CommitUncertainError{
+						Err:     errors.New("transaction outcome unknown"),
+						Message: rec.Message,
+					}
+				}
+				return QuerySummary{
+					StatementType: "TRANSACTION",
+					Message:       "事务已在服务端结束（最终状态未知），本地已解除锁定",
+				}, nil
+			case OutcomeCommitted:
+				if action == "COMMIT" {
+					return QuerySummary{StatementType: "TRANSACTION", Message: "事务已提交（重复操作已忽略）"}, nil
+				}
+				return QuerySummary{}, errors.New("事务已提交，无法回滚")
+			case OutcomeRolledBack:
+				if action == "ROLLBACK" {
+					return QuerySummary{StatementType: "TRANSACTION", Message: "事务已回滚（重复操作已忽略）"}, nil
+				}
+				return QuerySummary{}, errors.New("事务已回滚，无法提交")
+			case OutcomeExpired:
+				if action == "ROLLBACK" {
+					return QuerySummary{StatementType: "TRANSACTION", Message: "事务已过期回滚（重复操作已忽略）"}, nil
+				}
+				return QuerySummary{}, errors.New("事务已过期回滚，无法提交")
+			}
+		}
 		message := "当前页签没有待提交事务"
 		return QuerySummary{StatementType: "TRANSACTION", Message: message}, nil
 	}
@@ -213,6 +310,7 @@ func (m *Manager) ControlSessionTransaction(ctx context.Context, source Source, 
 			entry.cancel()
 		}
 		m.removeTransaction(source.ID, sessionID, entry)
+		m.recordTerminalState(source.ID, sessionID, entry.fingerprint, OutcomeRolledBack, "事务已回滚")
 	}
 	if controlErr != nil && (action == "COMMIT" || !errors.Is(controlErr, sql.ErrTxDone)) {
 		return QuerySummary{}, controlErr
@@ -264,6 +362,7 @@ func (m *Manager) ExecuteSessionBatch(ctx context.Context, source Source, sessio
 		result, execErr := entry.tx.ExecContext(queryCtx, clean)
 		if execErr != nil {
 			m.rollbackEntryLocked(source.ID, sessionID, entry)
+			m.recordTerminalState(source.ID, sessionID, entry.fingerprint, OutcomeRolledBack, "批量修改执行失败已回滚: "+execErr.Error())
 			return QuerySummary{}, execErr
 		}
 		if affected, affectedErr := result.RowsAffected(); affectedErr == nil && affected >= 0 {

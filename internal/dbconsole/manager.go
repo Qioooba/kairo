@@ -47,9 +47,12 @@ type Manager struct {
 	pools               map[string]*poolEntry
 	metadataCache       map[string]metadataCacheEntry
 	transactions        map[string]*transactionEntry
+	terminalRecords     map[string]TransactionTerminalRecord
 	global              chan struct{}
 	transactionTTL      time.Duration
 	transactionMax      int
+	terminalTTL         time.Duration
+	terminalMax         int
 	transactionStop     chan struct{}
 	transactionDone     chan struct{}
 	transactionStopOnce sync.Once
@@ -66,9 +69,12 @@ func NewManager(dataDir string) (*Manager, error) {
 		pools:           make(map[string]*poolEntry),
 		metadataCache:   make(map[string]metadataCacheEntry),
 		transactions:    make(map[string]*transactionEntry),
+		terminalRecords: make(map[string]TransactionTerminalRecord),
 		global:          make(chan struct{}, 8),
 		transactionTTL:  defaultTransactionIdleTTL,
 		transactionMax:  defaultTransactionMax,
+		terminalTTL:     defaultTransactionIdleTTL,
+		terminalMax:     defaultTransactionMax * 4,
 		transactionStop: make(chan struct{}),
 		transactionDone: make(chan struct{}),
 	}
@@ -95,6 +101,7 @@ func (m *Manager) Close() error {
 		txs = append(txs, entry)
 		delete(m.transactions, id)
 	}
+	clear(m.terminalRecords)
 	m.mu.Unlock()
 	var errs []error
 	for _, entry := range txs {
@@ -123,6 +130,11 @@ func (m *Manager) Invalidate(id string) {
 		if tx.sourceID == id {
 			txs = append(txs, tx)
 			delete(m.transactions, key)
+		}
+	}
+	for key, r := range m.terminalRecords {
+		if r.SourceID == id {
+			delete(m.terminalRecords, key)
 		}
 	}
 	m.mu.Unlock()

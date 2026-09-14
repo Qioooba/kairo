@@ -71,5 +71,52 @@ console.log('Database review regressions passed');
   assert.strictEqual(state.sessions.length,2);
   assert.strictEqual(dying.transactionPending,true);
   assert.ok(dying.dirtyCells.one);
+
+  // DB-09: outcome_unknown guards and state preservation
+  const txSession = { id: 3, sourceId: 'src', transactionId: 'tab-tx', transactionPending: true, gridEditsStaged: true, dirtyCells: { '0_0': { newVal: 'updated' } } };
+  let toasts = [], queryMsgs = [];
+  const txContext = {
+    sess: () => txSession,
+    effectiveSource: () => ({ id: 'src', read_only: false }),
+    canWriteDatabase: () => true,
+    getGridContext: () => ({ schema: 'test', table: 'users' }),
+    api: async (method, path, body) => {
+      if (body && body.action === 'COMMIT') {
+        const err = new Error('提交确认丢失或连接中断，事务最终状态未知');
+        err.data = { ok: false, code: 'OUTCOME_UNKNOWN', outcome: 'outcome_unknown', effect_status: 'unknown' };
+        throw err;
+      }
+      return { ok: true };
+    },
+    toast: (msg, type) => toasts.push({ msg, type }),
+    showQueryMessage: (kind, title, msg) => queryMsgs.push({ kind, title, msg }),
+    bindSession: () => {},
+    refreshVisibleResult: () => {},
+    updateTransactionControls: () => {},
+    state: { dirtyCells: txSession.dirtyCells },
+    window: {}
+  };
+  const commitCode = page.slice(page.indexOf('  async function commitPendingEdits('), page.indexOf('  // Public bridge for feature modules'));
+  const rollbackCode = page.slice(page.indexOf('  async function rollbackPendingEdits('), page.indexOf('  /* 会话定时自动备份与防丢 */'));
+  vm.runInNewContext(commitCode + '\n' + rollbackCode + '\nwindow.commitPending=commitPendingEdits;\nwindow.rollbackPending=rollbackPendingEdits;', txContext);
+
+  await txContext.window.commitPending();
+  assert.strictEqual(txSession.outcomeUnknown, true, 'must set outcomeUnknown to true on commit failure');
+  assert.strictEqual(txSession.transactionPending, false, 'transaction on server is terminated');
+  assert.ok(txSession.dirtyCells['0_0'], 'dirty cells must be preserved for user inspection');
+  assert.ok(toasts.some(t => t.msg.includes('最终状态未知') || t.msg.includes('结果未知')), 'must warn user about unknown outcome');
+
+  // Attempting to re-commit while outcomeUnknown is blocked
+  let commitCalled = false;
+  txContext.api = async () => { commitCalled = true; };
+  await txContext.window.commitPending();
+  assert.strictEqual(commitCalled, false, 'must block blind re-commit when outcome is unknown');
+
+  // Rollback on outcomeUnknown resets state gracefully
+  await txContext.window.rollbackPending();
+  assert.strictEqual(txSession.outcomeUnknown, false, 'rollback must clear outcomeUnknown');
+  assert.strictEqual(Object.keys(txSession.dirtyCells).length, 0, 'rollback must clear dirtyCells');
+
   console.log('Bounded export regression passed');
+  console.log('DB-09 outcome_unknown regression passed');
 })().catch(error=>{console.error(error);process.exitCode=1;});

@@ -40,15 +40,21 @@ type StructuredErrorResponse struct {
 	OperationID  string `json:"operation_id,omitempty"`
 	Retryable    bool   `json:"retryable"`
 	EffectStatus string `json:"effect_status,omitempty"` // not_applied | applied | unknown
+	Outcome      string `json:"outcome,omitempty"`
 }
 
 func writeStructuredErr(w http.ResponseWriter, code int, err error, errCode string, retryable bool, effectStatus string) {
+	outcome := effectStatus
+	if effectStatus == "unknown" {
+		outcome = "outcome_unknown"
+	}
 	resp := StructuredErrorResponse{
 		OK:           false,
 		Error:        sshclient.SanitizeError(err.Error()),
 		Code:         errCode,
 		Retryable:    retryable,
 		EffectStatus: effectStatus,
+		Outcome:      outcome,
 	}
 	writeJSON(w, code, resp)
 }

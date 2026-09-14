@@ -453,6 +453,12 @@ func (s *Server) handleDatabaseTransaction(w http.ResponseWriter, r *http.Reques
 	}
 	summary, err := s.database.ControlSessionTransaction(r.Context(), source, scopedDatabaseSessionID(r, req.SessionID), action)
 	if err != nil {
+		var uncertainErr *dbconsole.CommitUncertainError
+		if errors.As(err, &uncertainErr) {
+			s.audit.Write("database.transaction", "source_id", source.ID, "action", action, "session_id", req.SessionID, "result", "outcome_unknown", "error", uncertainErr.Error())
+			writeStructuredErr(w, http.StatusBadGateway, err, "OUTCOME_UNKNOWN", false, "unknown")
+			return
+		}
 		writeErrSanitized(w, 502, s.databaseSafeError(source, err))
 		return
 	}

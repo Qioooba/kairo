@@ -1272,16 +1272,17 @@
     const current = sess();
     const transactionPending = !!(current && current.transactionPending);
     const hasPending = dirtyCount > 0 || transactionPending;
+    const isUnknown = !!(current && current.outcomeUnknown);
     const commitBtn = q('db-btn-commit');
     const rollbackBtn = q('db-btn-rollback');
     const modeBtn = q('db-toggle-edit');
     if (commitBtn) {
-      commitBtn.disabled = !hasPending || !!(sess() && sess().transactionBusy);
-      commitBtn.innerHTML = actionIcon('commit') + '<span>提交' + (dirtyCount ? '（网格 ' + dirtyCount + '）' : transactionPending ? '（有事务）' : '') + '</span>';
+      commitBtn.disabled = isUnknown || !hasPending || !!(sess() && sess().transactionBusy);
+      commitBtn.innerHTML = actionIcon('commit') + '<span>' + (isUnknown ? '提交（结果未知待核对）' : '提交' + (dirtyCount ? '（网格 ' + dirtyCount + '）' : transactionPending ? '（有事务）' : '')) + '</span>';
     }
     if (rollbackBtn) {
-      rollbackBtn.disabled = !hasPending || !!(sess() && sess().transactionBusy);
-      rollbackBtn.innerHTML = actionIcon('rollback') + '<span>回滚</span>';
+      rollbackBtn.disabled = (!hasPending && !isUnknown) || !!(sess() && sess().transactionBusy);
+      rollbackBtn.innerHTML = actionIcon('rollback') + '<span>' + (isUnknown ? '清除未知状态' : '回滚') + '</span>';
     }
     if (modeBtn) {
       modeBtn.innerHTML = actionIcon(state.isEditMode ? 'unlock' : 'lock') + '<span>' + (state.isEditMode ? '网格编辑开启' : '网格编辑关闭') + '</span>';
@@ -1307,6 +1308,10 @@
   async function commitPendingEdits() {
     const current = sess();
     if (!current || current.transactionBusy) return;
+    if (current.outcomeUnknown) {
+      toast('当前页签上次提交结果未知，请先刷新核对数据或重新查询，切勿盲目重试提交！', 'warn');
+      return;
+    }
     const edits = Object.assign({}, current.dirtyCells), dirtyKeys = Object.keys(edits);
     if (!dirtyKeys.length && !current.transactionPending) return toast('当前页签没有待提交事务', 'warn');
     const source = effectiveSource(), context = getGridContext();
@@ -1353,9 +1358,22 @@
       }
       toast('事务已提交', 'ok');
     } catch (e) {
-      const result = e.data && e.data.result;
-      if (result && result.rolled_back) { current.transactionPending = false; current.gridEditsStaged = false; }
-      toast('提交失败，请检查事务状态后再操作：' + e.message, 'err');
+      const data = (e && e.data) || {};
+      const result = data.result;
+      if (data.code === 'OUTCOME_UNKNOWN' || data.outcome === 'outcome_unknown' || data.effect_status === 'unknown' || (e.message && e.message.indexOf('最终状态未知') !== -1)) {
+        current.outcomeUnknown = true;
+        current.transactionPending = false;
+        current.gridEditsStaged = false;
+        current.status = '提交结果未知 (请核对数据，切勿盲目重试)';
+        if (sess() === current) {
+          bindSession(current);
+          showQueryMessage('error', '事务提交结果未知', e.message || '提交确认丢失或连接中断，事务最终状态未知。请核对目标数据，切勿盲目重试写入！');
+        }
+        toast('事务提交结果未知，请核对实际数据，切勿盲目重试！', 'err');
+      } else {
+        if (result && result.rolled_back) { current.transactionPending = false; current.gridEditsStaged = false; }
+        toast('提交失败，请检查事务状态后再操作：' + e.message, 'err');
+      }
     } finally {
       current.transactionBusy = false;
       updateTransactionControls();
@@ -1377,6 +1395,22 @@
   async function rollbackPendingEdits() {
     const current = sess(), source = effectiveSource();
     if (!current || current.transactionBusy) return;
+    if (current.outcomeUnknown) {
+      current.outcomeUnknown = false;
+      current.transactionPending = false;
+      current.gridEditsStaged = false;
+      current.dirtyCells = {};
+      if (current.summary) current.summary.transaction_pending = false;
+      current.status = '就绪';
+      if (sess() === current) {
+        bindSession(current);
+        refreshVisibleResult(true);
+        showQueryMessage('ok', '状态已重置', '本地未提交修改已丢弃，未知状态标记已清除。');
+      }
+      toast('本地状态已重置', 'ok');
+      updateTransactionControls();
+      return;
+    }
     const dirtyCount = Object.keys(current.dirtyCells || {}).length;
     if (!dirtyCount && !current.transactionPending) return toast('当前页签没有可回滚的事务', 'warn');
     if (!source) return toast('未选择有效的数据源', 'warn');
@@ -3520,6 +3554,9 @@
     } else {
       if (writes && (!canWriteDatabase() || querySource.read_only)) return showQueryError('只有查询权限', '当前账号或数据源不允许写入或加锁查询。');
     }
+    if (writes && s.outcomeUnknown) {
+      return showQueryError('提交结果未知', '当前页签上次提交结果未知，请先执行 SELECT 核对目标数据实际状态，切勿盲目再次写入！');
+    }
     if (guard.warning && !confirm('危险 SQL 确认\n\n' + guard.warning + '\n\n确定继续执行吗？')) {
       toast('已取消危险 SQL', 'warn');
       return;
@@ -3545,6 +3582,7 @@
     s.columns = [];
     s.summary = null;
     s.lastError = null;
+    s.outcomeUnknown = false;
     s.sort = null;
     s.hiddenColumns = new Set();
     s.selectedRow = 0;

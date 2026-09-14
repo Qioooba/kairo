@@ -306,4 +306,97 @@ func TestDatabaseExport_ParameterAndSessionContext(t *testing.T) {
 	}
 }
 
+func TestDatabaseTransaction_TerminalStateAndUncertainCommit(t *testing.T) {
+	srv := newTestServerWithAuth(t, databaseTokens())
+	src, err := srv.database.Store().Save(dbconsole.Source{
+		Name: "test-tx-source", Kind: dbconsole.KindMySQL, Host: "127.0.0.1", Port: 3306,
+		Username: "root", Database: "testdb", AllowedUsers: []string{"admin1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rawSID := "tab-tx-test"
+	fingerprint := dbconsole.SourceFingerprint(src)
+
+	// 1. Initially no transaction exists
+	wStatus := doRequestWithToken(srv, http.MethodGet, "/api/database/transaction/status?source_id="+src.ID+"&session_id="+rawSID, rbacAdminToken, nil)
+	if wStatus.Code != http.StatusOK {
+		t.Fatalf("expected 200 for status, got: %d (%s)", wStatus.Code, wStatus.Body.String())
+	}
+	var resAbsent struct {
+		OK          bool                       `json:"ok"`
+		Transaction dbconsole.TransactionState `json:"transaction"`
+	}
+	if err := json.Unmarshal(wStatus.Body.Bytes(), &resAbsent); err != nil {
+		t.Fatal(err)
+	}
+	if resAbsent.Transaction.Active || resAbsent.Transaction.Reason != "server_transaction_absent" {
+		t.Fatalf("expected absent transaction, got %+v", resAbsent.Transaction)
+	}
+
+	scopedSID := resAbsent.Transaction.SessionID
+
+	// 2. Set terminal state to outcome_unknown
+	unknownMsg := "提交确认丢失或连接中断，事务最终状态未知，请核对目标数据，切勿盲目重试写入"
+	srv.database.SetTerminalRecordForTest(src.ID, scopedSID, fingerprint, dbconsole.OutcomeUnknown, unknownMsg)
+
+	// Verify status endpoint reflects outcome_unknown
+	wStatusUnknown := doRequestWithToken(srv, http.MethodGet, "/api/database/transaction/status?source_id="+src.ID+"&session_id="+rawSID, rbacAdminToken, nil)
+	if wStatusUnknown.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", wStatusUnknown.Code)
+	}
+	var resUnknown struct {
+		OK          bool                       `json:"ok"`
+		Transaction dbconsole.TransactionState `json:"transaction"`
+	}
+	if err := json.Unmarshal(wStatusUnknown.Body.Bytes(), &resUnknown); err != nil {
+		t.Fatal(err)
+	}
+	if resUnknown.Transaction.Active || resUnknown.Transaction.TerminalOutcome != dbconsole.OutcomeUnknown {
+		t.Fatalf("expected outcome_unknown in status, got %+v", resUnknown.Transaction)
+	}
+
+	// 3. Repeated COMMIT request on outcome_unknown returns 502 with OUTCOME_UNKNOWN and retryable=false
+	wCommit := doRequestWithToken(srv, http.MethodPost, "/api/database/transaction", rbacAdminToken, databaseTransactionRequest{
+		SourceID:  src.ID,
+		SessionID: rawSID,
+		Action:    "COMMIT",
+	})
+	if wCommit.Code != http.StatusBadGateway {
+		t.Fatalf("expected 502 Bad Gateway for uncertain commit, got %d (%s)", wCommit.Code, wCommit.Body.String())
+	}
+	var errResp StructuredErrorResponse
+	if err := json.Unmarshal(wCommit.Body.Bytes(), &errResp); err != nil {
+		t.Fatal(err)
+	}
+	if errResp.Code != "OUTCOME_UNKNOWN" || errResp.EffectStatus != "unknown" || errResp.Retryable {
+		t.Fatalf("expected structured error with OUTCOME_UNKNOWN non-retryable, got %+v", errResp)
+	}
+
+	// 4. ROLLBACK request on outcome_unknown succeeds and dismisses state
+	wRollback := doRequestWithToken(srv, http.MethodPost, "/api/database/transaction", rbacAdminToken, databaseTransactionRequest{
+		SourceID:  src.ID,
+		SessionID: rawSID,
+		Action:    "ROLLBACK",
+	})
+	if wRollback.Code != http.StatusOK {
+		t.Fatalf("expected 200 for graceful rollback on outcome_unknown, got %d (%s)", wRollback.Code, wRollback.Body.String())
+	}
+	if !strings.Contains(wRollback.Body.String(), "最终状态未知") {
+		t.Fatalf("expected summary acknowledging unknown outcome dismissal, got: %s", wRollback.Body.String())
+	}
+
+	// 5. Set terminal state to committed and verify idempotency
+	srv.database.SetTerminalRecordForTest(src.ID, scopedSID, fingerprint, dbconsole.OutcomeCommitted, "事务已提交")
+	wCommitRepeat := doRequestWithToken(srv, http.MethodPost, "/api/database/transaction", rbacAdminToken, databaseTransactionRequest{
+		SourceID:  src.ID,
+		SessionID: rawSID,
+		Action:    "COMMIT",
+	})
+	if wCommitRepeat.Code != http.StatusOK || !strings.Contains(wCommitRepeat.Body.String(), "重复操作已忽略") {
+		t.Fatalf("expected 200 idempotent ignore for committed transaction, got %d (%s)", wCommitRepeat.Code, wCommitRepeat.Body.String())
+	}
+}
+
 

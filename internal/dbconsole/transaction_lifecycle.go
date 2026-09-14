@@ -15,20 +15,42 @@ const (
 	transactionSweepInterval    = 30 * time.Second
 )
 
+type TerminalOutcome string
+
+const (
+	OutcomeCommitted  TerminalOutcome = "committed"
+	OutcomeRolledBack TerminalOutcome = "rolled_back"
+	OutcomeUnknown    TerminalOutcome = "outcome_unknown"
+	OutcomeExpired    TerminalOutcome = "expired"
+)
+
+type TransactionTerminalRecord struct {
+	SourceID    string          `json:"source_id"`
+	SessionID   string          `json:"session_id"`
+	Fingerprint string          `json:"fingerprint"`
+	Outcome     TerminalOutcome `json:"outcome"`
+	Message     string          `json:"message"`
+	RecordedAt  time.Time       `json:"recorded_at"`
+	ExpiresAt   time.Time       `json:"expires_at"`
+}
+
 // TransactionState is the safe, driver-independent view returned to the UI.
 // It deliberately contains no *sql.Tx or connection details.
 type TransactionState struct {
-	SourceID        string    `json:"source_id"`
-	SessionID       string    `json:"session_id"`
-	Active          bool      `json:"active"`
-	Pending         bool      `json:"pending"`
-	CreatedAt       time.Time `json:"created_at,omitempty"`
-	UpdatedAt       time.Time `json:"updated_at,omitempty"`
-	IdleMS          int64     `json:"idle_ms,omitempty"`
-	IdleTTLMS       int64     `json:"idle_ttl_ms,omitempty"`
-	ExpiresAt       time.Time `json:"expires_at,omitempty"`
-	MaxTransactions int       `json:"max_transactions,omitempty"`
-	Reason          string    `json:"reason,omitempty"`
+	SourceID        string          `json:"source_id"`
+	SessionID       string          `json:"session_id"`
+	Active          bool            `json:"active"`
+	Pending         bool            `json:"pending"`
+	CreatedAt       time.Time       `json:"created_at,omitempty"`
+	UpdatedAt       time.Time       `json:"updated_at,omitempty"`
+	IdleMS          int64           `json:"idle_ms,omitempty"`
+	IdleTTLMS       int64           `json:"idle_ttl_ms,omitempty"`
+	ExpiresAt       time.Time       `json:"expires_at,omitempty"`
+	MaxTransactions int             `json:"max_transactions,omitempty"`
+	Reason          string          `json:"reason,omitempty"`
+	TerminalOutcome TerminalOutcome `json:"terminal_outcome,omitempty"`
+	TerminalMessage string          `json:"terminal_message,omitempty"`
+	TerminalAt      time.Time       `json:"terminal_at,omitempty"`
 }
 
 // SetTransactionPolicy configures the in-memory transaction guard.  A zero
@@ -39,9 +61,11 @@ func (m *Manager) SetTransactionPolicy(idleTTL time.Duration, maxTransactions in
 	defer m.mu.Unlock()
 	if idleTTL > 0 {
 		m.transactionTTL = idleTTL
+		m.terminalTTL = idleTTL
 	}
 	if maxTransactions > 0 {
 		m.transactionMax = maxTransactions
+		m.terminalMax = maxTransactions * 4
 	}
 }
 
@@ -57,6 +81,85 @@ func (m *Manager) transactionPolicyLocked() (time.Duration, int) {
 		m.transactionMax = max
 	}
 	return ttl, max
+}
+
+func (m *Manager) terminalPolicyLocked() (time.Duration, int) {
+	ttl := m.terminalTTL
+	if ttl <= 0 {
+		ttl = m.transactionTTL
+		if ttl <= 0 {
+			ttl = defaultTransactionIdleTTL
+		}
+		m.terminalTTL = ttl
+	}
+	max := m.terminalMax
+	if max <= 0 {
+		max = m.transactionMax * 4
+		if max < 256 {
+			max = 256
+		}
+		m.terminalMax = max
+	}
+	return ttl, max
+}
+
+func (m *Manager) recordTerminalState(sourceID, sessionID, fingerprint string, outcome TerminalOutcome, message string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.terminalRecords == nil {
+		m.terminalRecords = make(map[string]TransactionTerminalRecord)
+	}
+	ttl, max := m.terminalPolicyLocked()
+	now := time.Now()
+	key := transactionKey(sourceID, sessionID)
+	m.terminalRecords[key] = TransactionTerminalRecord{
+		SourceID:    sourceID,
+		SessionID:   sessionID,
+		Fingerprint: fingerprint,
+		Outcome:     outcome,
+		Message:     message,
+		RecordedAt:  now,
+		ExpiresAt:   now.Add(ttl),
+	}
+	if len(m.terminalRecords) > max {
+		for k, r := range m.terminalRecords {
+			if now.After(r.ExpiresAt) {
+				delete(m.terminalRecords, k)
+			}
+		}
+		if len(m.terminalRecords) > max {
+			for k := range m.terminalRecords {
+				delete(m.terminalRecords, k)
+				if len(m.terminalRecords) <= max {
+					break
+				}
+			}
+		}
+	}
+}
+
+func (m *Manager) getTerminalRecord(sourceID, sessionID string) (TransactionTerminalRecord, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.terminalRecords == nil {
+		return TransactionTerminalRecord{}, false
+	}
+	key := transactionKey(sourceID, sessionID)
+	rec, ok := m.terminalRecords[key]
+	if !ok {
+		return TransactionTerminalRecord{}, false
+	}
+	if time.Now().After(rec.ExpiresAt) {
+		delete(m.terminalRecords, key)
+		return TransactionTerminalRecord{}, false
+	}
+	return rec, true
+}
+
+// SetTerminalRecordForTest allows integration tests to establish a terminal
+// transaction state for verification of status endpoints and idempotency.
+func (m *Manager) SetTerminalRecordForTest(sourceID, sessionID, fingerprint string, outcome TerminalOutcome, message string) {
+	m.recordTerminalState(sourceID, sessionID, fingerprint, outcome, message)
 }
 
 // transactionJanitor is intentionally a single low-frequency goroutine.  It
@@ -104,6 +207,11 @@ func (m *Manager) cleanupExpiredTransactions(now time.Time) int {
 			entry *transactionEntry
 		}{key: key, entry: entry})
 	}
+	for k, r := range m.terminalRecords {
+		if now.After(r.ExpiresAt) {
+			delete(m.terminalRecords, k)
+		}
+	}
 	m.mu.Unlock()
 
 	cleaned := 0
@@ -132,6 +240,7 @@ func (m *Manager) cleanupExpiredTransactions(now time.Time) int {
 		if entry.cancel != nil {
 			entry.cancel()
 		}
+		m.recordTerminalState(entry.sourceID, entry.sessionID, entry.fingerprint, OutcomeExpired, "事务已超时过期并自动回滚")
 		entry.mu.Unlock()
 		cleaned++
 	}
@@ -151,9 +260,25 @@ func (m *Manager) GetTransactionStatus(source Source, sessionID string) Transact
 	m.mu.Lock()
 	entry := m.transactions[key]
 	ttl, max := m.transactionPolicyLocked()
+	rec, hasTerminal := m.terminalRecords[key]
+	if hasTerminal && time.Now().After(rec.ExpiresAt) {
+		delete(m.terminalRecords, key)
+		hasTerminal = false
+	}
 	m.mu.Unlock()
 	state.MaxTransactions = max
 	if entry == nil {
+		if hasTerminal {
+			if rec.Fingerprint != sourceFingerprint(source) {
+				state.Reason = "source_changed"
+			} else {
+				state.Reason = string(rec.Outcome)
+			}
+			state.TerminalOutcome = rec.Outcome
+			state.TerminalMessage = rec.Message
+			state.TerminalAt = rec.RecordedAt
+			return state
+		}
 		state.Reason = "server_transaction_absent"
 		return state
 	}
@@ -256,6 +381,7 @@ func (m *Manager) RollbackTransaction(source Source, sessionID, reason string) (
 	if reason == "" {
 		reason = "client_disconnect"
 	}
+	m.recordTerminalState(source.ID, sessionID, entry.fingerprint, OutcomeRolledBack, "事务已回滚: "+reason)
 	if err != nil {
 		return true, fmt.Errorf("回滚事务失败（%s）: %w", reason, err)
 	}
