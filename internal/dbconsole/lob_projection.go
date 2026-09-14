@@ -180,7 +180,7 @@ func (m *Manager) buildLOBProjectionOn(ctx context.Context, q lobQueryer, source
 			return nil, err
 		}
 	}
-	cacheKey := fmt.Sprintf("%s\x00lob_proj_fields\x00%s\x00%s", sourceID, strings.ToUpper(info.Schema), strings.ToUpper(info.Table))
+	cacheKey := fmt.Sprintf("%s\x00lob_proj_fields\x00%s\x00%s", sourceID, info.Schema, info.Table)
 	if m != nil && sourceID != "" {
 		if cachedFields, ok := metadataCacheGet[[]Field](m, cacheKey); ok {
 			if len(cachedFields) == 0 {

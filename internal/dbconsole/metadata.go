@@ -306,7 +306,7 @@ func (m *Manager) Fields(ctx context.Context, source Source, schema, object stri
 	if schema == "" || object == "" || len(schema) > 256 || len(object) > 256 {
 		return nil, errors.New("schema/object 不能为空且不能超过 256 字节")
 	}
-	cacheKey := fmt.Sprintf("%s\x00fields\x00%s\x00%s", source.ID, strings.ToUpper(schema), strings.ToUpper(object))
+	cacheKey := fmt.Sprintf("%s\x00fields\x00%s\x00%s", source.ID, schema, object)
 	if cached, ok := metadataCacheGet[[]Field](m, cacheKey); ok {
 		return append([]Field(nil), cached...), nil
 	}

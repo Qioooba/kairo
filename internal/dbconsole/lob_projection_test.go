@@ -2,6 +2,7 @@ package dbconsole
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -155,5 +156,71 @@ func TestBuildLOBProjectedQuery(t *testing.T) {
 	}
 	if len(rw.Columns) != 4 {
 		t.Errorf("expected 4 user columns, got %d", len(rw.Columns))
+	}
+}
+
+func TestLOBProjection_MetadataCacheIdentityAndNegativeCacheIsolation(t *testing.T) {
+	// 1. Unquoted identifiers are normalized to uppercase, hitting the same logical object
+	info1, ok1 := parseSafeSingleTableQuery("SELECT * FROM hr.foo")
+	info2, ok2 := parseSafeSingleTableQuery("SELECT * FROM HR.FOO")
+	if !ok1 || !ok2 {
+		t.Fatal("expected unquoted queries to parse safely")
+	}
+	if info1.Table != "FOO" || info2.Table != "FOO" {
+		t.Fatalf("unquoted identifiers should normalize to uppercase, got %s and %s", info1.Table, info2.Table)
+	}
+
+	// 2. Quoted identifiers preserve exact case and do not collide
+	infoQuotedFoo, okFoo := parseSafeSingleTableQuery(`SELECT * FROM "HR"."Foo"`)
+	infoQuotedFOO, okFOO := parseSafeSingleTableQuery(`SELECT * FROM "HR"."FOO"`)
+	if !okFoo || !okFOO {
+		t.Fatal("expected quoted queries to parse safely")
+	}
+	if infoQuotedFoo.Table != "Foo" {
+		t.Fatalf(`expected table "Foo", got %s`, infoQuotedFoo.Table)
+	}
+	if infoQuotedFOO.Table != "FOO" {
+		t.Fatalf(`expected table "FOO", got %s`, infoQuotedFOO.Table)
+	}
+
+	// 3. Cache isolation: negative cache on "Foo" must NOT contaminate "FOO"
+	m := &Manager{metadataCache: make(map[string]metadataCacheEntry)}
+	srcID := "test-oracle-src"
+
+	keyFoo := fmt.Sprintf("%s\x00lob_proj_fields\x00%s\x00%s", srcID, infoQuotedFoo.Schema, infoQuotedFoo.Table)
+	keyFOO := fmt.Sprintf("%s\x00lob_proj_fields\x00%s\x00%s", srcID, infoQuotedFOO.Schema, infoQuotedFOO.Table)
+
+	if keyFoo == keyFOO {
+		t.Fatalf("cache keys for Foo and FOO must not collide: %s vs %s", keyFoo, keyFOO)
+	}
+
+	// Negative cache on "Foo"
+	metadataCacheSet(m, keyFoo, []Field{})
+	// Valid LOB fields on "FOO"
+	validFOOFields := []Field{
+		{Name: "ID", DataType: "NUMBER", PrimaryKey: true},
+		{Name: "DATA", DataType: "CLOB"},
+	}
+	metadataCacheSet(m, keyFOO, validFOOFields)
+
+	// Verify "Foo" returns negative cache (empty slice)
+	cachedFoo, ok := metadataCacheGet[[]Field](m, keyFoo)
+	if !ok || len(cachedFoo) != 0 {
+		t.Fatalf("expected negative cache hit for Foo, got ok=%v, len=%d", ok, len(cachedFoo))
+	}
+
+	// Verify "FOO" returns valid fields (not contaminated)
+	cachedFOO, ok := metadataCacheGet[[]Field](m, keyFOO)
+	if !ok || len(cachedFOO) != 2 {
+		t.Fatalf("expected valid cache hit for FOO, got ok=%v, len=%d", ok, len(cachedFOO))
+	}
+
+	// 4. Cache invalidation clears entries
+	m.InvalidateMetadata(srcID)
+	if _, ok := metadataCacheGet[[]Field](m, keyFoo); ok {
+		t.Fatal("expected keyFoo to be invalidated")
+	}
+	if _, ok := metadataCacheGet[[]Field](m, keyFOO); ok {
+		t.Fatal("expected keyFOO to be invalidated")
 	}
 }

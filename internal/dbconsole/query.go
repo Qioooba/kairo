@@ -413,10 +413,11 @@ func (m *Manager) streamQueryAttempt(ctx context.Context, source Source, query s
 		}
 	}
 
-	limitedQuery, err := serverPagedQuery(source.Kind, actualQuery, page)
+	pagedPlan, err := serverPagedPlan(source.Kind, actualQuery, page)
 	if err != nil {
 		return QuerySummary{}, err
 	}
+	limitedQuery := pagedPlan.SQL
 	queryArgs := args
 	cursorCtx := queryCtx
 	if source.Kind == KindOracle && m.ResolveOracleBackend(source).Name() == "godror" {
@@ -440,12 +441,14 @@ func (m *Manager) streamQueryAttempt(ctx context.Context, source Source, query s
 		// 不暴露 __LP_* / __LL_* / __KAIRO_ROWID__ 辅助列
 		columns = lobRewrite.Columns
 
-		rawCols, _ := rows.Columns()
-		for i, c := range rawCols {
-			colName := strings.Trim(strings.ToUpper(c), "\"`[] \t")
-			if strings.HasPrefix(colName, "__KAIRO_RN_") {
-				aliasIdx = i
-				break
+		if pagedPlan.HasHelperColumn {
+			rawCols, _ := rows.Columns()
+			for i, c := range rawCols {
+				colName := strings.Trim(strings.ToUpper(c), "\"`[] \t")
+				if strings.EqualFold(colName, pagedPlan.HelperColumnName) {
+					aliasIdx = i
+					break
+				}
 			}
 		}
 	} else {
@@ -453,15 +456,17 @@ func (m *Manager) streamQueryAttempt(ctx context.Context, source Source, query s
 		if err != nil {
 			return QuerySummary{}, err
 		}
-		for i, c := range columns {
-			colName := strings.Trim(strings.ToUpper(c.Name), "\"`[] \t")
-			if strings.HasPrefix(colName, "__KAIRO_RN_") {
-				aliasIdx = i
-				break
+		if pagedPlan.HasHelperColumn {
+			for i, c := range columns {
+				colName := strings.Trim(strings.ToUpper(c.Name), "\"`[] \t")
+				if strings.EqualFold(colName, pagedPlan.HelperColumnName) {
+					aliasIdx = i
+					break
+				}
 			}
-		}
-		if aliasIdx >= 0 {
-			columns = append(columns[:aliasIdx], columns[aliasIdx+1:]...)
+			if aliasIdx >= 0 {
+				columns = append(columns[:aliasIdx], columns[aliasIdx+1:]...)
+			}
 		}
 	}
 
@@ -476,7 +481,7 @@ func (m *Manager) streamQueryAttempt(ctx context.Context, source Source, query s
 		QueryLimit: page.PageSize, Page: page.Page, PageSize: page.PageSize,
 		TransactionPending: sessionTx != nil,
 		Offset:             page.Offset(), HasPrev: page.Page > 1, PaginationMode: "page",
-		Ordered: queryHasOrderBy(actualQuery),
+		Ordered:            QueryHasTopLevelOrderBy(source.Kind, actualQuery),
 	}
 
 	firstBatchCutoff := 5

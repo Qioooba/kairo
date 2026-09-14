@@ -107,3 +107,65 @@ func TestServerPagedQueryMultipleSemicolons(t *testing.T) {
 		}
 	}
 }
+
+func TestPaginationPlan_ExplicitHelperColumn(t *testing.T) {
+	// Oracle Page 1: offset == 0 -> HasHelperColumn should be FALSE
+	p1Oracle, err := serverPagedPlan(KindOracle, "SELECT id, name FROM users", QueryPage{Page: 1, PageSize: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p1Oracle.HasHelperColumn {
+		t.Errorf("Oracle Page 1 should not inject helper column, got %v", p1Oracle.HasHelperColumn)
+	}
+
+	// Oracle Page 2: offset > 0 -> HasHelperColumn should be TRUE and HelperColumnName set
+	p2Oracle, err := serverPagedPlan(KindOracle, "SELECT id, name FROM users", QueryPage{Page: 2, PageSize: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !p2Oracle.HasHelperColumn || !strings.HasPrefix(p2Oracle.HelperColumnName, "__KAIRO_RN_") {
+		t.Errorf("Oracle Page 2 must inject helper column, got: has=%v name=%s", p2Oracle.HasHelperColumn, p2Oracle.HelperColumnName)
+	}
+
+	// MySQL Page 1 and Page 2: HasHelperColumn should be FALSE (LIMIT/OFFSET without helper columns)
+	p1MySQL, err := serverPagedPlan(KindMySQL, "SELECT id, name FROM users", QueryPage{Page: 1, PageSize: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p1MySQL.HasHelperColumn {
+		t.Errorf("MySQL Page 1 should not inject helper column")
+	}
+	p2MySQL, err := serverPagedPlan(KindMySQL, "SELECT id, name FROM users", QueryPage{Page: 2, PageSize: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p2MySQL.HasHelperColumn {
+		t.Errorf("MySQL Page 2 should not inject helper column")
+	}
+}
+
+func TestQueryHasOrderBy_ParenAware(t *testing.T) {
+	cases := []struct {
+		name     string
+		sql      string
+		expected bool
+	}{
+		{"Top-level ORDER BY", "SELECT id FROM users ORDER BY id", true},
+		{"Top-level ORDER BY desc", "SELECT id FROM users ORDER BY id DESC", true},
+		{"Window function OVER (ORDER BY)", "SELECT id, ROW_NUMBER() OVER (ORDER BY id) AS rn FROM users", false},
+		{"Window function with top-level", "SELECT id, ROW_NUMBER() OVER (ORDER BY id) AS rn FROM users ORDER BY id", true},
+		{"CTE inner ORDER BY", "WITH cte AS (SELECT * FROM users ORDER BY id) SELECT * FROM cte", false},
+		{"CTE inner with top-level", "WITH cte AS (SELECT * FROM users ORDER BY id) SELECT * FROM cte ORDER BY name", true},
+		{"String literal", "SELECT id, 'ORDER BY' AS note FROM users", false},
+		{"Comment", "SELECT id FROM users /* ORDER BY id */", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := QueryHasTopLevelOrderBy(KindOracle, tc.sql)
+			if got != tc.expected {
+				t.Errorf("QueryHasTopLevelOrderBy(%q) = %v, want %v", tc.sql, got, tc.expected)
+			}
+		})
+	}
+}
+
