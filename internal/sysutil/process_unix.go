@@ -1,6 +1,6 @@
 //go:build !windows
 
-package schedtask
+package sysutil
 
 import (
 	"errors"
@@ -13,7 +13,8 @@ type unixManagedCommand struct {
 	cmd *exec.Cmd
 }
 
-func startManagedCommand(cmd *exec.Cmd) (managedCommand, error) {
+// StartManagedCommand 启动受监管的命令，在 Unix 上建立独立进程组以支持 KillTree。
+func StartManagedCommand(cmd *exec.Cmd) (ManagedCommand, error) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
 		return nil, err

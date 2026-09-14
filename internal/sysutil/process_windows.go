@@ -1,6 +1,6 @@
 //go:build windows
 
-package schedtask
+package sysutil
 
 import (
 	"errors"
@@ -13,21 +13,20 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// windowsManagedCommand 把 cmd.exe 放入 KILL_ON_JOB_CLOSE Job Object。
+// windowsManagedCommand 把命令放入 KILL_ON_JOB_CLOSE Job Object。
 // Job Object 是 Windows 上唯一能可靠表达“整个任务进程树”生命周期的原生机制。
 type windowsManagedCommand struct {
 	cmd *exec.Cmd
 	job windows.Handle
 }
 
-func startManagedCommand(cmd *exec.Cmd) (managedCommand, error) {
+// StartManagedCommand 启动受监管的命令，保证超时或取消时能够终止包括子孙进程在内的整棵进程树。
+func StartManagedCommand(cmd *exec.Cmd) (ManagedCommand, error) {
 	if cmd.SysProcAttr == nil {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}
 	}
 	cmd.SysProcAttr.HideWindow = true
-	// 挂起创建，先加入 Job Object 再恢复主线程。否则极短命令可能在
-	// AssignProcessToJobObject 前就派生出不受管的孙进程。保留 shellCommand
-	// 设置的 CmdLine，因为 cmd.exe 需要自己的原始命令行引号规则。
+	// 挂起创建，先加入 Job Object 再恢复主线程，避免派生出不受管的孙进程
 	cmd.SysProcAttr.CreationFlags |= windows.CREATE_NEW_PROCESS_GROUP | windows.CREATE_SUSPENDED | windows.CREATE_NO_WINDOW
 
 	job, err := createKillOnCloseJob()
@@ -50,7 +49,6 @@ func startManagedCommand(cmd *exec.Cmd) (managedCommand, error) {
 	err = windows.AssignProcessToJobObject(job, proc)
 	_ = windows.CloseHandle(proc)
 	if err != nil {
-		// 不允许任务降级为“无进程树管理”运行；失败比留下后台脚本安全。
 		return failSuspendedCommand(cmd, job, fmt.Errorf("加入 Windows Job Object 失败: %w", err))
 	}
 	if err := resumeProcess(cmd.Process.Pid); err != nil {
@@ -59,8 +57,7 @@ func startManagedCommand(cmd *exec.Cmd) (managedCommand, error) {
 	return &windowsManagedCommand{cmd: cmd, job: job}, nil
 }
 
-func failSuspendedCommand(cmd *exec.Cmd, job windows.Handle, cause error) (managedCommand, error) {
-	// 关闭 KILL_ON_JOB_CLOSE job 会结束已分配的进程；尚未分配时再显式 Kill。
+func failSuspendedCommand(cmd *exec.Cmd, job windows.Handle, cause error) (ManagedCommand, error) {
 	_ = windows.CloseHandle(job)
 	if cmd.Process != nil {
 		_ = cmd.Process.Kill()
@@ -126,7 +123,6 @@ func (p *windowsManagedCommand) KillTree() error {
 		if err := windows.TerminateJobObject(p.job, 1); err == nil || errors.Is(err, os.ErrProcessDone) {
 			return nil
 		}
-		// KILL_ON_JOB_CLOSE 是第二条原生终止路径。
 		err := windows.CloseHandle(p.job)
 		p.job = 0
 		return err

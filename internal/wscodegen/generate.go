@@ -135,7 +135,6 @@ func GenerateContext(ctx context.Context, req Request, store *webservice.Store) 
 		if outDir == "" && !req.DryRun {
 			return res, fmt.Errorf("官方工具模式必须指定输出目录")
 		}
-		planDir := "<output-dir>"
 		abs := ""
 		if outDir != "" {
 			var err error
@@ -143,31 +142,73 @@ func GenerateContext(ctx context.Context, req Request, store *webservice.Store) 
 			if err != nil {
 				return res, err
 			}
-			planDir = abs
 		}
-		plan, err := planTool(req, resolved, planDir, !req.DryRun)
-		if err != nil {
-			return res, err
-		}
-		defer plan.Close()
-		res.Command = formatCommand(plan)
 		if req.DryRun {
+			planDir := abs
+			if planDir == "" {
+				planDir = "<output-dir>"
+			}
+			plan, err := planTool(req, resolved, planDir, false)
+			if err != nil {
+				return res, err
+			}
+			defer plan.Close()
+			res.Command = formatCommand(plan)
 			res.OK = true
 			res.OutputDir = abs
 			res.Notes = append(compatibilityNotes(req, resolved), "dry-run：未创建目录、未写临时 WSDL、未执行官方工具")
 			return res, nil
 		}
+
+		// 1. 目标目录互斥与预检
+		unlockDir := targetDirLock.acquire(abs)
+		defer unlockDir()
+
 		if err := prepareToolOutputDir(abs, req.Overwrite); err != nil {
 			return res, err
 		}
+
+		// 2. 隔离临时工作目录
+		stageDir, err := os.MkdirTemp(os.TempDir(), "kairo-wstool-stage-")
+		if err != nil {
+			return res, fmt.Errorf("创建工具临时目录失败: %w", err)
+		}
+		defer os.RemoveAll(stageDir)
+
+		plan, err := planTool(req, resolved, stageDir, true)
+		if err != nil {
+			return res, err
+		}
+		defer plan.Close()
+		res.Command = formatCommand(plan)
+
+		// 3. 全局工具并发限制
+		select {
+		case toolSem <- struct{}{}:
+			defer func() { <-toolSem }()
+		case <-ctx.Done():
+			return res, ctx.Err()
+		}
+
 		logText, err := runTool(ctx, plan)
 		res.ToolLog = trimLog(logText, 8000)
 		if err != nil {
 			return res, err
 		}
-		files, written, err := collectWrittenJava(abs)
+
+		// 4. 收集并校验生成产物
+		files, err := collectAndValidateGeneratedFiles(stageDir)
 		if err != nil {
-			return res, err
+			return res, fmt.Errorf("校验工具产物失败: %w", err)
+		}
+		if len(files) == 0 {
+			return res, fmt.Errorf("官方工具执行成功但未生成任何文件")
+		}
+
+		// 5. 安全发布到目标目录（与内置模式共用备份与回滚机制）
+		written, err := writeFilesLocked(abs, files, req.Overwrite)
+		if err != nil {
+			return res, fmt.Errorf("发布生成文件失败: %w", err)
 		}
 		res.Files = files
 		res.Written = written
@@ -314,11 +355,122 @@ func missingExternalXSDWarning(p *webservice.WSDLProject) string {
 	return "WSDL 引用了外部 XSD，但参数树是空的。请确认外部 XSD 路径正确且类型完整。"
 }
 
-var generatedFilesMu sync.Mutex
+type dirLockManager struct {
+	mu    sync.Mutex
+	locks map[string]*dirLockRef
+}
+
+type dirLockRef struct {
+	mu       sync.Mutex
+	refCount int
+}
+
+func (m *dirLockManager) acquire(dir string) func() {
+	key := filepath.Clean(dir)
+	if os.PathSeparator == '\\' {
+		key = strings.ToLower(key)
+	}
+	m.mu.Lock()
+	ref, ok := m.locks[key]
+	if !ok {
+		ref = &dirLockRef{}
+		m.locks[key] = ref
+	}
+	ref.refCount++
+	m.mu.Unlock()
+
+	ref.mu.Lock()
+	return func() {
+		ref.mu.Unlock()
+		m.mu.Lock()
+		ref.refCount--
+		if ref.refCount == 0 {
+			delete(m.locks, key)
+		}
+		m.mu.Unlock()
+	}
+}
+
+var (
+	targetDirLock = &dirLockManager{locks: make(map[string]*dirLockRef)}
+	toolSem       = make(chan struct{}, 4)
+)
+
+func collectAndValidateGeneratedFiles(stageDir string) ([]GeneratedFile, error) {
+	var files []GeneratedFile
+	fileCount := 0
+	var totalBytes int64
+
+	const (
+		maxFilesCount = 1000
+		maxSingleSize = 10 * 1024 * 1024 // 10MB
+		maxTotalSize  = 50 * 1024 * 1024 // 50MB
+	)
+
+	err := filepath.Walk(stageDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info == nil || info.IsDir() {
+			return nil
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("检测到符号链接产物，拒绝发布: %s", path)
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("检测到非常规文件产物: %s", path)
+		}
+
+		rel, err := filepath.Rel(stageDir, path)
+		if err != nil {
+			return err
+		}
+		relSlash := filepath.ToSlash(rel)
+		if relSlash == ".." || strings.HasPrefix(relSlash, "../") {
+			return fmt.Errorf("产物路径越界: %s", rel)
+		}
+
+		fileCount++
+		if fileCount > maxFilesCount {
+			return fmt.Errorf("产物文件数量超过上限 %d", maxFilesCount)
+		}
+		size := info.Size()
+		if size > maxSingleSize {
+			return fmt.Errorf("单个产物文件 %s 大小 %d 超过限制 %d", rel, size, maxSingleSize)
+		}
+		totalBytes += size
+		if totalBytes > maxTotalSize {
+			return fmt.Errorf("产物总大小超过上限 %d", maxTotalSize)
+		}
+
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("读取工具产物失败 %s: %w", rel, err)
+		}
+
+		kind := "txt"
+		ext := strings.ToLower(filepath.Ext(path))
+		if ext == ".java" {
+			kind = "java"
+		}
+		files = append(files, GeneratedFile{
+			RelPath: relSlash,
+			Content: string(data),
+			Kind:    kind,
+		})
+		return nil
+	})
+
+	return files, err
+}
 
 func writeFiles(root string, files []GeneratedFile, overwrite bool) ([]string, error) {
-	generatedFilesMu.Lock()
-	defer generatedFilesMu.Unlock()
+	unlock := targetDirLock.acquire(root)
+	defer unlock()
+	return writeFilesLocked(root, files, overwrite)
+}
+
+func writeFilesLocked(root string, files []GeneratedFile, overwrite bool) ([]string, error) {
 	// Validate the entire plan before publishing any generated file.
 	seen := map[string]bool{}
 	for _, f := range files {
@@ -417,10 +569,16 @@ func writeFiles(root string, files []GeneratedFile, overwrite bool) ([]string, e
 			}
 		}
 		published = append(published, p)
-		// Linking is an atomic create-if-absent, including when a target appeared
-		// after preflight. It cannot silently replace another writer's file.
-		if err := os.Link(filepath.Join(stage, fmt.Sprintf("new-%d", i)), dest); err != nil {
-			return rollback(err)
+		srcFile := filepath.Join(stage, fmt.Sprintf("new-%d", i))
+		if err := os.Link(srcFile, dest); err != nil {
+			// Hardlink failed (cross-device / filesystem), fall back to copy
+			data, rerr := os.ReadFile(srcFile)
+			if rerr != nil {
+				return rollback(err)
+			}
+			if werr := os.WriteFile(dest, data, 0o644); werr != nil {
+				return rollback(werr)
+			}
 		}
 		published[len(published)-1].installed = true
 		written = append(written, rel)

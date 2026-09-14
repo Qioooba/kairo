@@ -186,21 +186,43 @@ func runTool(parent context.Context, plan toolPlan) (logText string, err error) 
 	defer cancel()
 	var cmd *exec.Cmd
 	if plan.Wsimport != "" {
-		cmd = exec.CommandContext(ctx, plan.Wsimport, plan.Args...)
+		cmd = exec.Command(plan.Wsimport, plan.Args...)
 	} else {
 		args := append([]string{"-cp", plan.ClassPath, plan.MainClass}, plan.Args...)
-		cmd = exec.CommandContext(ctx, plan.JavaPath, args...)
+		cmd = exec.Command(plan.JavaPath, args...)
 	}
 	cmd.Dir = plan.WorkDir
 	sysutil.HideConsoleWindow(cmd)
 	var buf bytes.Buffer
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
-	err = cmd.Run()
+
+	proc, startErr := sysutil.StartManagedCommand(cmd)
+	if startErr != nil {
+		return "", startErr
+	}
+	defer proc.Close()
+
+	waitCh := make(chan error, 1)
+	go func() { waitCh <- proc.Wait() }()
+
+	var timedOut, canceled bool
+	select {
+	case err = <-waitCh:
+	case <-ctx.Done():
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			timedOut = true
+		} else {
+			canceled = true
+		}
+		_ = proc.KillTree()
+		err = <-waitCh
+	}
+
 	logText = buf.String()
-	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+	if timedOut {
 		err = fmt.Errorf("生成超时（%s）", toolTimeout)
-	} else if errors.Is(ctx.Err(), context.Canceled) {
+	} else if canceled {
 		err = context.Canceled
 	}
 	if err != nil {
