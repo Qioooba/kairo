@@ -121,7 +121,44 @@ func createSnapshot(dataDir string, assets []preparedAsset, now time.Time) (*sna
 	return s, nil
 }
 
+func loadSnapshot(dir string) (*snapshot, error) {
+	metaRaw, err := os.ReadFile(filepath.Join(dir, "snapshot.json"))
+	if err != nil {
+		return nil, fmt.Errorf("upgrade: read snapshot manifest: %w", err)
+	}
+	var meta struct {
+		Assets []snapshotEntry `json:"assets"`
+	}
+	if err := json.Unmarshal(metaRaw, &meta); err != nil {
+		return nil, fmt.Errorf("upgrade: parse snapshot manifest: %w", err)
+	}
+	return &snapshot{dir: dir, entries: meta.Assets}, nil
+}
+
+func (s *snapshot) verify() error {
+	for _, entry := range s.entries {
+		if !entry.Existed {
+			continue
+		}
+		if entry.Backup == "" {
+			return fmt.Errorf("upgrade: snapshot entry %s missing backup filename", entry.Name)
+		}
+		backupPath := filepath.Join(s.dir, entry.Backup)
+		raw, err := os.ReadFile(backupPath)
+		if err != nil {
+			return fmt.Errorf("read backup %s (%s): %w", entry.Name, backupPath, err)
+		}
+		if entry.SHA256 != "" && digest(raw) != entry.SHA256 {
+			return fmt.Errorf("corrupted backup %s: expected checksum %s, got %s", entry.Name, entry.SHA256, digest(raw))
+		}
+	}
+	return nil
+}
+
 func (s *snapshot) restore() error {
+	if err := s.verify(); err != nil {
+		return fmt.Errorf("upgrade: verify snapshot before restore: %w", err)
+	}
 	var errs []error
 	for _, entry := range s.entries {
 		if !entry.Existed {
@@ -145,3 +182,4 @@ func (s *snapshot) restore() error {
 	}
 	return errors.Join(errs...)
 }
+

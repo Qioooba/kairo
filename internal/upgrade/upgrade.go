@@ -61,30 +61,37 @@ type Manifest struct {
 }
 
 type Options struct {
-	DataDir        string
-	ProductVersion string
-	Assets         []Asset
-	Now            func() time.Time
+	DataDir           string
+	ProductVersion    string
+	Assets            []Asset
+	Now               func() time.Time
 	// writeAtomic is intentionally private: production callers always use the
 	// durable atomic writer. Tests may inject a commit failure to prove that a
 	// partially committed upgrade is rolled back before returning an error.
-	writeAtomic func(path string, raw []byte, mode fs.FileMode) error
+	writeAtomic       func(path string, raw []byte, mode fs.FileMode) error
+	OnPhaseTransition func(phase JournalPhase, j *Journal) error
+	OnAssetCommitted  func(assetName string) error
 }
 
 type Result struct {
-	Adopted   bool
-	BackupDir string
-	Migrated  []string
-	Warnings  []string
-	Previous  Manifest
-	Current   Manifest
+	Adopted           bool
+	Recovered         bool
+	RecoveryBackupDir string
+	BackupDir         string
+	Migrated          []string
+	Warnings          []string
+	Previous          Manifest
+	Current           Manifest
 }
 
 type preparedAsset struct {
-	asset Asset
-	raw   []byte
-	state AssetState
+	asset       Asset
+	raw         []byte
+	oldRaw      []byte
+	fromVersion int
+	state       AssetState
 }
+
 
 // Run validates and upgrades every registered file before application modules open them.
 func Run(opts Options) (*Result, error) {
@@ -110,6 +117,11 @@ func Run(opts Options) (*Result, error) {
 	}
 	defer release()
 
+	recoveryRes, err := recoverIncompleteUpgrade(opts)
+	if err != nil {
+		return nil, err
+	}
+
 	manifestPath := filepath.Join(opts.DataDir, manifestFileName)
 	previous, exists, err := readManifest(manifestPath)
 	manifestWarning := ""
@@ -131,6 +143,10 @@ func Run(opts Options) (*Result, error) {
 	}
 
 	result := &Result{Adopted: !exists, Previous: previous}
+	if recoveryRes != nil && recoveryRes.Recovered {
+		result.Recovered = true
+		result.RecoveryBackupDir = recoveryRes.RecoveryBackupDir
+	}
 	if manifestWarning != "" {
 		result.Warnings = append(result.Warnings, manifestWarning)
 	}
@@ -154,7 +170,7 @@ func Run(opts Options) (*Result, error) {
 				return false
 			}
 			result.Warnings = append(result.Warnings, message)
-			prepared = append(prepared, preparedAsset{asset: asset, raw: raw, state: AssetState{Version: asset.CurrentVersion, SHA256: digest(raw)}})
+			prepared = append(prepared, preparedAsset{asset: asset, raw: raw, oldRaw: raw, fromVersion: asset.CurrentVersion, state: AssetState{Version: asset.CurrentVersion, SHA256: digest(raw)}})
 			return true
 		}
 		if asset.Validate != nil {
@@ -186,6 +202,7 @@ func Run(opts Options) (*Result, error) {
 			return nil, fmt.Errorf("upgrade: %s format %d is newer than supported %d", asset.Name, from, asset.CurrentVersion)
 		}
 		original := append([]byte(nil), raw...)
+		initialFrom := from
 		for from < asset.CurrentVersion {
 			migration := asset.Migrations[from]
 			if migration == nil {
@@ -201,7 +218,7 @@ func Run(opts Options) (*Result, error) {
 			needsSnapshot = true
 			result.Migrated = append(result.Migrated, asset.Name)
 		}
-		prepared = append(prepared, preparedAsset{asset: asset, raw: raw, state: AssetState{Version: from, SHA256: digest(raw)}})
+		prepared = append(prepared, preparedAsset{asset: asset, raw: raw, oldRaw: original, fromVersion: initialFrom, state: AssetState{Version: from, SHA256: digest(raw)}})
 	}
 
 	var snapshot *snapshot
@@ -211,25 +228,6 @@ func Run(opts Options) (*Result, error) {
 			return nil, err
 		}
 		result.BackupDir = snapshot.dir
-	}
-
-	rollback := func(cause error) (*Result, error) {
-		if snapshot == nil {
-			return nil, cause
-		}
-		if restoreErr := snapshot.restore(); restoreErr != nil {
-			return nil, fmt.Errorf("%w; rollback also failed: %w", cause, restoreErr)
-		}
-		return nil, cause
-	}
-
-	for _, item := range prepared {
-		if len(item.raw) == 0 || !contains(result.Migrated, item.asset.Name) {
-			continue
-		}
-		if err := commitWrite(item.asset.Path, item.raw, 0o600); err != nil {
-			return rollback(fmt.Errorf("upgrade: commit %s: %w", item.asset.Name, err))
-		}
 	}
 
 	current := Manifest{
@@ -245,19 +243,153 @@ func Run(opts Options) (*Result, error) {
 		}
 		current.Assets[item.asset.Name] = state
 	}
+
 	// 幂等启动：清单与磁盘内容一致（同产品版本、同资产状态）时跳过重写，
 	// 避免 updated_at 抖动，也让只读数据目录下的重复启动不再制造无意义写入。
 	if exists && manifestWarning == "" && manifestsEquivalent(previous, current) {
 		result.Current = current
 		return result, nil
 	}
+
 	manifestRaw, err := json.MarshalIndent(current, "", "  ")
 	if err != nil {
-		return rollback(fmt.Errorf("upgrade: marshal manifest: %w", err))
+		return nil, fmt.Errorf("upgrade: marshal manifest: %w", err)
 	}
+
+	var journal *Journal
+	if snapshot != nil {
+		journalAssets := make([]JournalAsset, 0, len(prepared)+1)
+		for _, item := range prepared {
+			oldSHA := ""
+			if len(item.oldRaw) > 0 {
+				oldSHA = digest(item.oldRaw)
+			}
+			newSHA := item.state.SHA256
+			if newSHA == "" && len(item.raw) > 0 {
+				newSHA = digest(item.raw)
+			}
+			journalAssets = append(journalAssets, JournalAsset{
+				Name:       item.asset.Name,
+				Path:       item.asset.Path,
+				Existed:    len(item.oldRaw) > 0,
+				OldVersion: item.fromVersion,
+				NewVersion: item.state.Version,
+				OldSHA256:  oldSHA,
+				NewSHA256:  newSHA,
+				Migrated:   contains(result.Migrated, item.asset.Name),
+			})
+		}
+		manifestOldRaw, _ := os.ReadFile(manifestPath)
+		manifestOldSHA := ""
+		if len(manifestOldRaw) > 0 {
+			manifestOldSHA = digest(manifestOldRaw)
+		}
+		journalAssets = append(journalAssets, JournalAsset{
+			Name:       "upgrade-manifest",
+			Path:       manifestPath,
+			Existed:    exists,
+			OldVersion: previous.SchemaVersion,
+			NewVersion: current.SchemaVersion,
+			OldSHA256:  manifestOldSHA,
+			NewSHA256:  digest(manifestRaw),
+			Migrated:   true,
+		})
+		journal = &Journal{
+			UpgradeID:         fmt.Sprintf("upg-%s-%s", opts.Now().Format("20060102-150405"), randomToken(8)),
+			Phase:             PhasePrepared,
+			OldProductVersion: previous.ProductVersion,
+			NewProductVersion: opts.ProductVersion,
+			SnapshotDir:       snapshot.dir,
+			ManifestPath:      manifestPath,
+			Assets:            journalAssets,
+			CreatedAt:         opts.Now().UTC().Format(time.RFC3339Nano),
+		}
+		if err := writeJournal(opts.DataDir, journal, opts.Now()); err != nil {
+			return nil, fmt.Errorf("upgrade: write journal: %w", err)
+		}
+		if opts.OnPhaseTransition != nil {
+			if err := opts.OnPhaseTransition(PhasePrepared, journal); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	rollback := func(cause error) (*Result, error) {
+		if snapshot == nil {
+			return nil, cause
+		}
+		if journal != nil {
+			journal.Phase = PhaseRecovering
+			_ = writeJournal(opts.DataDir, journal, opts.Now())
+		}
+		if restoreErr := snapshot.restore(); restoreErr != nil {
+			if journal != nil {
+				journal.Phase = PhaseRecoveryFailed
+				journal.Error = restoreErr.Error()
+				_ = writeJournal(opts.DataDir, journal, opts.Now())
+			}
+			return nil, fmt.Errorf("%w; rollback also failed: %w", cause, restoreErr)
+		}
+		if journal != nil {
+			journal.Phase = PhaseRestored
+			_ = writeJournal(opts.DataDir, journal, opts.Now())
+			journal.Phase = PhaseComplete
+			_ = writeJournal(opts.DataDir, journal, opts.Now())
+		}
+		return nil, cause
+	}
+
+	if journal != nil && len(result.Migrated) > 0 {
+		journal.Phase = PhaseApplying
+		if err := writeJournal(opts.DataDir, journal, opts.Now()); err != nil {
+			return rollback(fmt.Errorf("upgrade: update journal to applying: %w", err))
+		}
+		if opts.OnPhaseTransition != nil {
+			if err := opts.OnPhaseTransition(PhaseApplying, journal); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	for _, item := range prepared {
+		if len(item.raw) == 0 || !contains(result.Migrated, item.asset.Name) {
+			continue
+		}
+		if err := commitWrite(item.asset.Path, item.raw, 0o600); err != nil {
+			return rollback(fmt.Errorf("upgrade: commit %s: %w", item.asset.Name, err))
+		}
+		if opts.OnAssetCommitted != nil {
+			if err := opts.OnAssetCommitted(item.asset.Name); err != nil {
+				return nil, err
+			}
+		}
+	}
+
 	if err := commitWrite(manifestPath, manifestRaw, 0o600); err != nil {
 		return rollback(fmt.Errorf("upgrade: commit manifest: %w", err))
 	}
+
+	if journal != nil {
+		journal.Phase = PhaseManifestCommitted
+		if err := writeJournal(opts.DataDir, journal, opts.Now()); err != nil {
+			return rollback(fmt.Errorf("upgrade: update journal to manifest_committed: %w", err))
+		}
+		if opts.OnPhaseTransition != nil {
+			if err := opts.OnPhaseTransition(PhaseManifestCommitted, journal); err != nil {
+				return nil, err
+			}
+		}
+		journal.Phase = PhaseComplete
+		if err := writeJournal(opts.DataDir, journal, opts.Now()); err != nil {
+			result.Warnings = append(result.Warnings, fmt.Sprintf("failed to finalize upgrade journal: %v", err))
+		}
+		if opts.OnPhaseTransition != nil {
+			if err := opts.OnPhaseTransition(PhaseComplete, journal); err != nil {
+				return nil, err
+			}
+		}
+	}
+
 	result.Current = current
 	return result, nil
 }
