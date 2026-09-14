@@ -23,9 +23,10 @@ func (m *Manager) CollectQuery(ctx context.Context, source Source, query string,
 	return m.CollectQueryPage(ctx, source, query, 1, maxRows)
 }
 
-func (m *Manager) CollectQueryPage(ctx context.Context, source Source, query string, page, pageSize int) (ExportTable, QuerySummary, error) {
+// CollectSessionQueryPageWithParams executes a query page with session and parameters, collecting results for export.
+func (m *Manager) CollectSessionQueryPageWithParams(ctx context.Context, source Source, query string, page, pageSize int, sessionID string, params []BindParameter, opts QueryOptions) (ExportTable, QuerySummary, error) {
 	var table ExportTable
-	summary, err := m.StreamQueryPage(ctx, source, query, page, pageSize, func(event StreamEvent) error {
+	summary, err := m.StreamSessionQueryPageWithParamsAndOptions(ctx, source, query, page, pageSize, sessionID, params, opts, func(event StreamEvent) error {
 		switch event.Type {
 		case "meta":
 			table.Columns = event.Columns
@@ -35,6 +36,10 @@ func (m *Manager) CollectQueryPage(ctx context.Context, source Source, query str
 		return nil
 	})
 	return table, summary, err
+}
+
+func (m *Manager) CollectQueryPage(ctx context.Context, source Source, query string, page, pageSize int) (ExportTable, QuerySummary, error) {
+	return m.CollectSessionQueryPageWithParams(ctx, source, query, page, pageSize, "", nil, QueryOptions{Fast: page <= 1})
 }
 
 func NormalizeExportFormat(format string) (string, error) {

@@ -760,8 +760,25 @@ func (s *Server) handleDatabaseExport(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	var scopedSessionID string
+	if req.SessionID != "" {
+		if !validDatabaseSessionID(req.SessionID) {
+			writeErr(w, http.StatusBadRequest, errors.New("session_id 无效"))
+			return
+		}
+		scopedSessionID = scopedDatabaseSessionID(r, req.SessionID)
+	}
+	if _, _, err := dbconsole.BindSQLParameters(source.Kind, req.SQL, req.Parameters); err != nil {
+		writeStructuredErr(w, http.StatusBadRequest, err, "PARAM_BIND_FAILED", false, "not_applied")
+		return
+	}
+	isFast := page <= 1
+	if req.Fast != nil {
+		isFast = *req.Fast
+	}
+
 	if format != "csv" {
-		table, summary, collectErr := s.database.CollectQueryPage(r.Context(), source, req.SQL, page, pageSize)
+		table, summary, collectErr := s.database.CollectSessionQueryPageWithParams(r.Context(), source, req.SQL, page, pageSize, scopedSessionID, req.Parameters, dbconsole.QueryOptions{Fast: isFast})
 		if collectErr != nil {
 			collectErr = s.databaseSafeError(source, collectErr)
 			writeStructuredErr(w, 502, collectErr, "EXPORT_FAILED", false, "not_applied")
@@ -865,7 +882,7 @@ func (s *Server) handleDatabaseExport(w http.ResponseWriter, r *http.Request) {
 		}
 		return nil
 	}
-	summary, err := s.database.StreamQueryPage(r.Context(), source, req.SQL, page, pageSize, emit)
+	summary, err := s.database.StreamSessionQueryPageWithParamsAndOptions(r.Context(), source, req.SQL, page, pageSize, scopedSessionID, req.Parameters, dbconsole.QueryOptions{Fast: isFast}, emit)
 	if err != nil {
 		err = s.databaseSafeError(source, err)
 		writeStructuredErr(w, 502, err, "EXPORT_FAILED", false, "not_applied")

@@ -3597,6 +3597,7 @@
       // ordinary queries. New query handlers consume this typed array for
       // SELECT :name / {{name}} without exposing raw UI state.
       const boundParameters = Kairo.databaseFeatures && typeof Kairo.databaseFeatures.getBoundParameters === 'function' ? Kairo.databaseFeatures.getBoundParameters() : [];
+      s.lastParameters = boundParameters || [];
       if (boundParameters && boundParameters.length) queryBody.parameters = boundParameters;
       if (productionConfirm) queryBody.confirm = true;
       const fetchOpts = { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(queryBody) };
@@ -4576,7 +4577,24 @@
         button.disabled = false;
         return;
       }
-      const response = await fetch('/api/database/export', { method: 'POST', signal: exportController.signal, credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ source_id: effSrc3.id, sql: state.lastSQL, max_rows: state.lastMaxRows, page: currentSession && currentSession.page || 1, page_size: currentSession && currentSession.pageSize || state.lastMaxRows, count_mode: 'none', format: format, table: table }) });
+      const response = await fetch('/api/database/export', {
+        method: 'POST',
+        signal: exportController.signal,
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          source_id: effSrc3.id,
+          session_id: currentSession && currentSession.transactionId || '',
+          parameters: currentSession && currentSession.lastParameters || [],
+          sql: state.lastSQL,
+          max_rows: state.lastMaxRows,
+          page: currentSession && currentSession.page || 1,
+          page_size: currentSession && currentSession.pageSize || state.lastMaxRows,
+          count_mode: 'none',
+          format: format,
+          table: table
+        })
+      });
       if (!response.ok) { const body = await response.json().catch(() => ({})); throw new Error(body.error || 'HTTP ' + response.status); }
       if (handle && response.body) { const writable = await handle.createWritable(); await response.body.pipeTo(writable, { signal: exportController.signal }); }
       else { const blob = await boundedExportBlob(response, 64 * 1024 * 1024); downloadBlob(blob, filename); }

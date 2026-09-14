@@ -270,4 +270,40 @@ func TestDatabaseExport_PrecheckAndSafeKeys(t *testing.T) {
 	}
 }
 
+func TestDatabaseExport_ParameterAndSessionContext(t *testing.T) {
+	srv := newTestServerWithAuth(t, databaseTokens())
+	src, err := srv.database.Store().Save(dbconsole.Source{
+		Name: "test-export-params", Kind: dbconsole.KindOracle, Host: "127.0.0.1", Port: 1521,
+		Username: "app", OracleService: "ORCL", AllowedUsers: []string{"admin1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Invalid session ID format -> rejected with 400
+	wBadSess := doRequestWithToken(srv, http.MethodPost, "/api/database/export", rbacAdminToken, databaseQueryRequest{
+		SourceID:  src.ID,
+		SessionID: "invalid session id with spaces!!",
+		SQL:       "SELECT 1 FROM dual",
+		Format:    "csv",
+	})
+	if wBadSess.Code != http.StatusBadRequest || !strings.Contains(wBadSess.Body.String(), "session_id") {
+		t.Fatalf("expected 400 for invalid session_id, got %d: %s", wBadSess.Code, wBadSess.Body.String())
+	}
+
+	// 2. Mismatched named/positional parameters validation -> rejected with 400 PARAM_BIND_FAILED
+	wBadParam := doRequestWithToken(srv, http.MethodPost, "/api/database/export", rbacAdminToken, databaseQueryRequest{
+		SourceID: src.ID,
+		SQL:      "SELECT id FROM users WHERE id = :id AND name = :name",
+		Parameters: []dbconsole.BindParameter{
+			{Name: "id", Value: 1},
+			// missing :name parameter
+		},
+		Format: "csv",
+	})
+	if wBadParam.Code != http.StatusBadRequest || !strings.Contains(wBadParam.Body.String(), "PARAM_BIND_FAILED") {
+		t.Fatalf("expected 400 PARAM_BIND_FAILED for missing parameter, got %d: %s", wBadParam.Code, wBadParam.Body.String())
+	}
+}
+
 
