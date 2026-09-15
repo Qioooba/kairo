@@ -81,8 +81,8 @@
 | T071 | SEC-01 | 认证模式+本地模式 | 不同用户/权限回收/猜测ID；访问LOB/任务/文件/数据库 | 每次校验授权；来源/权限不凭前端隐藏 | 未执行 |
 | T072 | SEC-01 | HTTP/WS安全测试 | 跨站Origin/Host、TLS错误、自签CA；尝试敏感操作/连接 | 按策略拒绝/诊断；不移除内网合法请求能力 | 未执行 |
 | T073 | SEC-01 | 错误与日志测试 | 连接秘密、SQL参数含敏感值；触发失败并导出诊断 | 普通日志/URL/产物无明文秘密；有关联ID | 未执行 |
-| T074 | PERF-01 | 固定机器+固定fixture | 冷/热缓存，宽行/LOB，多Tab与慢网络；采集首屏/RSS/heap/取消/连接/UI长任务 | 提供原始采样与基线对比；不把模拟当真实性能 | 未执行 |
-| T075 | PERF-01 | 大目录+多任务 | 达到既有并发/文件数量限制；持续创建/取消并等待保留期 | 资源有界、过期释放，UI说明限制不伪装完成 | 未执行 |
+| T074 | PERF-01 | 固定机器+固定fixture | 冷/热缓存，宽行/LOB，多Tab与慢网络；采集首屏/RSS/heap/取消/连接/UI长任务 | 提供原始采样与基线对比；不把模拟当真实性能 | 通过 (BenchmarkMetadataCache_ColdVsHot, BenchmarkRowProcessing_NarrowVsWideVsLOB, TestT074_QueryCancellationResponsiveness, TestT074_MultiTabConcurrentLoad) |
+| T075 | PERF-01 | 大目录+多任务 | 达到既有并发/文件数量限制；持续创建/取消并等待保留期 | 资源有界、过期释放，UI说明限制不伪装完成 | 通过 (TestT075_CompareJobsConcurrencyAndRetentionLimits, TestT075_CompareJobsCancellationResponsiveness) |
 
 ## 结果记录格式
 
