@@ -1,6 +1,7 @@
 package httpserver
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -136,3 +137,31 @@ func TestUrlEncodePath(t *testing.T) {
 		}
 	}
 }
+
+func TestDiagnosticsEndpoint(t *testing.T) {
+	srv, _, _, _ := newTestServer(t)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", "/api/diagnostics?check_servers=false", nil)
+	srv.ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var rep struct {
+		App      map[string]any `json:"app"`
+		Runtime  map[string]any `json:"runtime"`
+		Database struct {
+			Backend    string `json:"backend"`
+			AppBitness string `json:"app_bitness"`
+			Detail     string `json:"detail"`
+		} `json:"database"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &rep); err != nil {
+		t.Fatalf("unmarshal diagnostics: %v", err)
+	}
+	if rep.Database.Backend == "" {
+		t.Fatalf("expected database backend to be populated")
+	}
+}
+

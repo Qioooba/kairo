@@ -42,9 +42,24 @@ type Report struct {
 	App         AppInfo       `json:"app"`
 	Build       BuildInfo     `json:"build"`
 	Runtime     RuntimeInfo   `json:"runtime"`
+	Database    DatabaseInfo  `json:"database"`
 	Tools       ToolsInfo     `json:"tools"`
 	Servers     []ServerCheck `json:"servers"`
 	Issues      []string      `json:"issues"` // 文字列表，适合前端置顶红条
+}
+
+// DatabaseInfo 描述数据库工作台与驱动兼容性诊断
+type DatabaseInfo struct {
+	Backend            string `json:"backend"`
+	NativeOCIAvailable bool   `json:"native_oci_available"`
+	ClientBitness      string `json:"client_bitness,omitempty"`
+	AppBitness         string `json:"app_bitness,omitempty"`
+	BitnessMismatch    bool   `json:"bitness_mismatch"`
+	LibDir             string `json:"lib_dir,omitempty"`
+	PLSQLDetected      bool   `json:"plsql_detected"`
+	PLSQLBitness       string `json:"plsql_bitness,omitempty"`
+	PLSQLDetail        string `json:"plsql_detail,omitempty"`
+	Detail             string `json:"detail"`
 }
 
 // AppInfo 应用自身信息（来自 config）
@@ -143,6 +158,9 @@ type Options struct {
 	// LookupHost 允许测试或受控运行环境注入 DNS 解析器。nil 时使用
 	// net.DefaultResolver.LookupHost；生产调用无需设置。
 	LookupHost func(context.Context, string) ([]string, error)
+
+	// DatabaseDiag 允许传入数据库工作台及驱动兼容性诊断收集器
+	DatabaseDiag func() DatabaseInfo
 }
 
 // defaultOptions 默认配置
@@ -172,6 +190,15 @@ func Collect(cfg *config.Config, configPath string, opts Options) Report {
 	rep.App = buildAppInfo(cfg, configPath)
 	rep.Build = buildBuildInfo()
 	rep.Runtime = buildRuntimeInfo(cfg)
+	if opts.DatabaseDiag != nil {
+		rep.Database = opts.DatabaseDiag()
+	} else {
+		rep.Database = DatabaseInfo{
+			Backend:    "go-ora",
+			AppBitness: runtime.GOARCH,
+			Detail:     "纯 Go go-ora thin 驱动就绪，无需本地 Oracle Client",
+		}
+	}
 	rep.Tools = buildToolsInfo()
 	rep.Servers = []ServerCheck{}
 
@@ -468,6 +495,9 @@ func summarizeIssues(rep Report) []string {
 	}
 	if rep.App.CredentialStore == "file" {
 		issues = append(issues, "ℹ credential_store=file 暂未实现（v0.4 占位），凭据不会被持久化")
+	}
+	if rep.Database.BitnessMismatch {
+		issues = append(issues, "⚠ Oracle 客户端架构不匹配："+rep.Database.PLSQLDetail+"。Kairo 已安全回落为纯 Go go-ora 驱动。")
 	}
 	for _, s := range rep.Servers {
 		if !s.DNS.OK {

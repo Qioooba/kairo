@@ -2276,6 +2276,36 @@ async function testUI02_NavigationPolicyAndGuards() {
   console.log('  UI-02 navigation policy, canLeave guards, and upload/download task persistence ✓');
 }
 
+function testT069_ThemeIntegrityAndTokens() {
+  const cssPath = path.join(__dirname, 'style.css');
+  const css = fs.readFileSync(cssPath, 'utf8');
+
+  // Must declare 5 themes
+  const expectedThemes = ['dark', 'light', 'green', 'hc', 'xianxia'];
+  for (const th of expectedThemes) {
+    const sel = `[data-theme="${th}"]`;
+    assert.ok(css.includes(sel), `style.css must contain rules for theme ${th}`);
+  }
+
+  // Check essential design tokens are declared across themes
+  const coreTokens = [
+    '--bg-0', '--bg-1', '--bg-2', '--bg-3',
+    '--line', '--text', '--text-dim', '--primary',
+    '--error', '--warn', '--success'
+  ];
+  for (const token of coreTokens) {
+    assert.ok(css.includes(token + ':'), `style.css must define core token ${token}`);
+  }
+
+  // HC theme must define high-contrast specific overrides
+  assert.ok(css.includes(':root[data-theme="hc"]'), 'hc theme must be defined on :root');
+  assert.ok(css.includes(':root[data-theme="light"]'), 'light theme must be defined on :root');
+  assert.ok(css.includes(':root[data-theme="green"]'), 'green theme must be defined on :root');
+  assert.ok(css.includes(':root[data-theme="xianxia"]'), 'xianxia theme must be defined on :root');
+
+  console.log('  T069 theme tokens, contrast styles, and 5-theme integrity ✓');
+}
+
 // ---------- 主入口 ----------
 
 async function main() {
@@ -2287,6 +2317,7 @@ async function main() {
     testGotDoneDedupe, testNormalizeHighlightColor, testRenderHighlightedLine,
     testTailViewer, testApplyCommandPath, testDatabaseSQLHelpers, testDatabaseWorkbenchLazy, testCompareHelpers, testWaspackHelpers,
     testRouteScopeLifecycleAndAsyncUnmount, testUI02_NavigationPolicyAndGuards,
+    testT069_ThemeIntegrityAndTokens,
   ];
   let pass = 0, fail = 0;
   for (const t of tests) {

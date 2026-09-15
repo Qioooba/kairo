@@ -228,3 +228,39 @@ func TestHostPort(t *testing.T) {
 		t.Errorf("hostPort()=%q", got)
 	}
 }
+
+func TestCollect_DatabaseDiagnosticsAndBitnessMismatch(t *testing.T) {
+	cfg := makeCfg(t)
+	rep := Collect(cfg, "/tmp/config.yaml", Options{
+		CheckServers: false,
+		DatabaseDiag: func() DatabaseInfo {
+			return DatabaseInfo{
+				Backend:         "go-ora",
+				AppBitness:      "amd64",
+				ClientBitness:   "32-bit",
+				BitnessMismatch: true,
+				PLSQLDetected:   true,
+				PLSQLBitness:    "32-bit",
+				PLSQLDetail:     "PL/SQL Developer (32-bit Instant Client)",
+				Detail:          "检测到 32 位客户端，已自动降级为 go-ora",
+			}
+		},
+	})
+	if rep.Database.Backend != "go-ora" {
+		t.Fatalf("expected backend go-ora, got %s", rep.Database.Backend)
+	}
+	if !rep.Database.BitnessMismatch {
+		t.Fatalf("expected BitnessMismatch to be true")
+	}
+	hasMismatchIssue := false
+	for _, issue := range rep.Issues {
+		if strings.Contains(issue, "架构不匹配") {
+			hasMismatchIssue = true
+			break
+		}
+	}
+	if !hasMismatchIssue {
+		t.Fatalf("expected Issues to mention 架构不匹配, got: %+v", rep.Issues)
+	}
+}
+

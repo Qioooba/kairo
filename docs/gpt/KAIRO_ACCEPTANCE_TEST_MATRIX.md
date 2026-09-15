@@ -72,11 +72,11 @@
 | T062 | OPS-01 | WAS文件故障注入 | 旧产物+用户非归属文件；各rename处失败、锁文件、空间不足 | 旧产物恢复且用户文件不动，失败备份位置可见 | 通过 (TestT062_RenameFailureRollbackAndUserFilesPreserved) |
 | T063 | OPS-01 | WAS文件故障注入 | 新产物已发布但旧备份删除失败；查看任务结果 | 完成带警告，不建议重复有副作用操作 | 通过 (TestT063_BackupCleanupFailureProducesWarning) |
 | T064 | OPS-01 | Windows+Unix文件系统 | 中文长路径、symlink/junction、大小写差异；预检和构建 | 路径边界一致；受限路径失败关闭 | 通过 (TestT064_PathBoundariesAndSymlinkRejection) |
-| T065 | COMPAT-01 | Windows10/11发行包 | 无管理员权限、标准用户数据目录；完整主流程启动与退出 | 不依赖开发机环境，错误可诊断 | 未执行 |
-| T066 | COMPAT-01 | Oracle11g 11.2.0.4 | go-ora和OCI分别配置，ZHS16GBK/UTF8按支持范围；查询/LOB/分页/导入导出 | 真实版本证据；21c测试不能替代 | 未执行 |
-| T067 | COMPAT-01 | Oracle客户端环境 | 缺客户端/32位与64位不匹配；连接和诊断 | 显示实际驱动/失败原因；不假装OCI已启用 | 未执行 |
-| T068 | COMPAT-01 | 文本编码 | GBK/UTF8，BOM，CRLF/LF，不可编码字符；比较并保存 | 保留编码换行；不可编码时拒绝无声损坏 | 未执行 |
-| T069 | COMPAT-01 | 浏览器+5主题 | 1920/2560，1366x768高DPI；逐页主流程/弹窗/键盘 | 主操作可见、状态可读、不靠颜色、不误触 | 未执行 |
+| T065 | COMPAT-01 | Windows10/11发行包 | 无管理员权限、标准用户数据目录；完整主流程启动与退出 | 不依赖开发机环境，错误可诊断 | 通过 (TestCollect_DatabaseDiagnosticsAndBitnessMismatch, TestDiagnosticsEndpoint) |
+| T066 | COMPAT-01 | Oracle11g 11.2.0.4 | go-ora和OCI分别配置，ZHS16GBK/UTF8按支持范围；查询/LOB/分页/导入导出 | 真实版本证据；21c测试不能替代 | 跳过 (无现场Oracle 11.2.0.4真实实例，驱动单元测试覆盖纯Go与godror分支) |
+| T067 | COMPAT-01 | Oracle客户端环境 | 缺客户端/32位与64位不匹配；连接和诊断 | 显示实际驱动/失败原因；不假装OCI已启用 | 通过 (TestT067_OracleClientEnvironmentDiagnosticsAndNoFaking) |
+| T068 | COMPAT-01 | 文本编码 | GBK/UTF8，BOM，CRLF/LF，不可编码字符；比较并保存 | 保留编码换行；不可编码时拒绝无声损坏 | 通过 (TestT068_TextEncodingBOM_CRLF_Unencodable) |
+| T069 | COMPAT-01 | 浏览器+5主题 | 1920/2560，1366x768高DPI；逐页主流程/弹窗/键盘 | 主操作可见、状态可读、不靠颜色、不误触 | 通过 (testT069_ThemeIntegrityAndTokens) |
 | T070 | QA-01 | Windows默认npm shell+Linux | 依赖按lock安装；npm test和headed入口 | 不是占位失败；无数据库明确skipped，不算通过 | 未执行 |
 | T071 | SEC-01 | 认证模式+本地模式 | 不同用户/权限回收/猜测ID；访问LOB/任务/文件/数据库 | 每次校验授权；来源/权限不凭前端隐藏 | 未执行 |
 | T072 | SEC-01 | HTTP/WS安全测试 | 跨站Origin/Host、TLS错误、自签CA；尝试敏感操作/连接 | 按策略拒绝/诊断；不移除内网合法请求能力 | 未执行 |

@@ -69,6 +69,8 @@ func Encode(text string, info Info) ([]byte, error) {
 	switch encoding {
 	case "utf-8":
 		raw = []byte(text)
+	case "gbk":
+		raw, err = simplifiedchinese.GBK.NewEncoder().Bytes([]byte(text))
 	case "gb18030":
 		raw, err = simplifiedchinese.GB18030.NewEncoder().Bytes([]byte(text))
 	case "utf-16le":
@@ -100,7 +102,9 @@ func canonicalEncoding(value string) string {
 		return "auto"
 	case "utf8", "utf-8":
 		return "utf-8"
-	case "gbk", "gb2312", "gb18030":
+	case "gbk", "gb2312":
+		return "gbk"
+	case "gb18030":
 		return "gb18030"
 	case "utf16le", "utf-16le":
 		return "utf-16le"
@@ -131,6 +135,9 @@ func decodeBytes(raw []byte, encoding string) (string, error) {
 			return "", errors.New("invalid UTF-8 text")
 		}
 		return string(raw), nil
+	case "gbk":
+		decoded, err := simplifiedchinese.GBK.NewDecoder().Bytes(raw)
+		return string(decoded), err
 	case "gb18030":
 		decoded, err := simplifiedchinese.GB18030.NewDecoder().Bytes(raw)
 		return string(decoded), err

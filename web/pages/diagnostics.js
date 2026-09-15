@@ -114,6 +114,20 @@
         ['PID', String(r.runtime.pid)],
         ['Goroutine 数', String(r.runtime.num_goroutine)]
       ]));
+      if (r.database) {
+        sectionsWrap.appendChild(groupedKvCard('数据库与驱动兼容性', [
+          ['当前 Oracle 驱动', r.database.backend || 'go-ora'],
+          ['OCI 原生加速', r.database.native_oci_available ? yesNo(true) : { html: '<span style="display:inline-flex;align-items:center;gap:4px;color:var(--text-dim);">未启用（纯 Go 驱动）</span>' }],
+          ['程序架构', r.database.app_bitness || r.build.goarch || 'amd64'],
+          ['客户端架构', r.database.client_bitness || '未检测到'],
+          ['PL/SQL Developer', r.database.plsql_detected ? (r.database.plsql_bitness + ' · ' + (r.database.plsql_detail || '已检测到')) : '未检测到'],
+          ['架构兼容状态', r.database.bitness_mismatch
+            ? { html: '<span style="display:inline-flex;align-items:center;gap:4px;color:#f59e0b;">' + svgIcon('smWarn', 14) + ' 32/64 位不匹配（已自动降级为 go-ora 保证连接）</span>' }
+            : yesNo(true)
+          ],
+          ['驱动与环境说明', r.database.detail || '正常']
+        ]));
+      }
 
       toolsWrap.appendChild(el('div', { class: 'card' }, [
         el('h3', { text: '本机命令工具' }),

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"runtime"
+	"strings"
 )
 
 func oracleOpenResult(source Source, password string, dialer funcDialer, _ bool, tlsConfig *tls.Config, targetHost string, targetPort int) (driver.Connector, string, error) {
@@ -45,7 +46,7 @@ func (b *GodrorBackendStub) ClientInfo(ctx context.Context, source Source) (Orac
 }
 
 func (b *GodrorBackendStub) OpenConnector(source Source, password string, dialer funcDialer, hasDialer bool, tlsConfig *tls.Config, targetHost string, targetPort int) (driver.Connector, string, error) {
-	return openOracleViaGoOraStub(source, password, dialer, tlsConfig, targetHost, targetPort)
+	return oracleOpenResult(source, password, dialer, hasDialer, tlsConfig, targetHost, targetPort)
 }
 
 func (b *GodrorBackendStub) StreamLOB(ctx context.Context, m *Manager, source Source, ref LOBRef, dst io.Writer) error {
@@ -70,9 +71,16 @@ func oracleClientInfoImpl(ctx context.Context, source Source) (OracleClientInfo,
 		detail += fmt.Sprintf(" 检测到本地 %d 个 Oracle 候选路径，但未找到与当前架构 (%s) 完全匹配的 64 位完整客户端。", len(cands), runtime.GOARCH)
 	}
 
+	backendName := "go-ora"
+	available := true
+	if strings.ToLower(strings.TrimSpace(source.OracleDriver)) == "godror" {
+		backendName = "godror"
+		available = false
+	}
+
 	info := OracleClientInfo{
-		Backend:       "go-ora",
-		Available:     true,
+		Backend:       backendName,
+		Available:     available,
 		Bitness:       bitnessStub(),
 		Candidates:    cands,
 		PLSQLDetected: plsqlFound,

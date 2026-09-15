@@ -1,6 +1,7 @@
 package dbconsole
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -144,3 +145,52 @@ func TestResolveOracleBackendFallback(t *testing.T) {
 		t.Fatalf("expected fallback to go-ora when dpiFailedSources is set, got %s", backend.Name())
 	}
 }
+
+func TestT067_OracleClientEnvironmentDiagnosticsAndNoFaking(t *testing.T) {
+	m := &Manager{}
+
+	// 1. Auto mode with no compatible OCI client: accurately selects go-ora backend
+	autoSrc := Source{
+		ID:   "ora_auto",
+		Kind: KindOracle,
+	}
+	backend := m.ResolveOracleBackend(autoSrc)
+	info, err := backend.ClientInfo(context.Background(), autoSrc)
+	if err != nil {
+		t.Fatalf("ClientInfo failed: %v", err)
+	}
+	if backend.Name() != "go-ora" && !backend.Capabilities().NativeOCI {
+		t.Fatalf("expected go-ora when native OCI is unavailable, got %s", backend.Name())
+	}
+	if info.Backend != "go-ora" && !backend.Capabilities().NativeOCI {
+		t.Fatalf("expected ClientInfo backend to show go-ora, got %s", info.Backend)
+	}
+
+	// 2. Explicit godror selection when OCI is not compiled/available:
+	// must report actual status (Available=false) and refuse to pretend OCI is working
+	godrorSrc := Source{
+		ID:           "ora_godror",
+		Kind:         KindOracle,
+		OracleDriver: "godror",
+	}
+	godrorBackend := m.ResolveOracleBackend(godrorSrc)
+	godrorInfo, err := godrorBackend.ClientInfo(context.Background(), godrorSrc)
+	if err != nil {
+		t.Fatalf("ClientInfo failed: %v", err)
+	}
+	if !godrorBackend.Capabilities().NativeOCI {
+		if godrorInfo.Available {
+			t.Fatalf("expected godror Available=false when NativeOCI is false, got true")
+		}
+		if godrorInfo.Backend != "godror" {
+			t.Fatalf("expected Backend to be reported as godror, got %s", godrorInfo.Backend)
+		}
+		// Attempting to open connector must fail and not silently fake OCI
+		_, _, connErr := godrorBackend.OpenConnector(godrorSrc, "pass", funcDialer{}, false, nil, "127.0.0.1", 1521)
+		if connErr == nil {
+			t.Fatalf("expected error opening connector with unavailable godror, got nil")
+		}
+	}
+}
+
+
