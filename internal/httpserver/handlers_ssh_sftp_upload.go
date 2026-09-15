@@ -447,11 +447,13 @@ func (s *Server) handleSshSftpUploadData(w http.ResponseWriter, r *http.Request)
 		s.audit.Write("ssh.sftp.upload", "system", state.System, "server", state.Server,
 			"result", "fail", "stage", "upload", "upload_id", id,
 			"path", finalPath, "size", state.Size, "err", err.Error())
-		// 区分取消与失败
+		// 区分取消与失败；permission denied 给精准提示（含用户/目录/排查命令），不再堆“上传失败:上传文件失败:创建失败”。
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			writeErrSanitized(w, 499, fmt.Errorf("上传已取消: %w", err))
+		} else if sftpclient.IsPermissionDenied(err) {
+			writeErrSanitized(w, 403, fmt.Errorf("用户 %q 无权限写入目录 %q: 创建 %q 失败(permission denied)，请在SSH终端执行 whoami; ls -ld %q 确认写权限，或换 /tmp/家目录重试: %w", state.Creds.Username, state.TargetDir, partialPath, state.TargetDir, err))
 		} else {
-			writeErrSanitized(w, 502, fmt.Errorf("上传失败: %w", err))
+			writeErrSanitized(w, 502, fmt.Errorf("上传 %q 失败(目录 %q): %w", state.Filename, state.TargetDir, err))
 		}
 		s.uploadStates.Delete(id)
 		state.cancel()
@@ -468,7 +470,11 @@ func (s *Server) handleSshSftpUploadData(w http.ResponseWriter, r *http.Request)
 			s.audit.Write("ssh.sftp.upload", "system", state.System, "server", state.Server,
 				"result", "fail", "stage", "backup", "upload_id", id,
 				"path", finalPath, "err", err.Error())
-			writeErrSanitized(w, 502, fmt.Errorf("备份原文件失败，已取消上传: %w", err))
+			if sftpclient.IsPermissionDenied(err) {
+				writeErrSanitized(w, 403, fmt.Errorf("用户 %q 无权限覆盖 %q (permission denied)，请检查目录写权限(ls -ld %q): %w", state.Creds.Username, finalPath, state.TargetDir, err))
+			} else {
+				writeErrSanitized(w, 502, fmt.Errorf("备份原文件 %q 失败，已取消上传: %w", finalPath, err))
+			}
 			s.uploadStates.Delete(id)
 			state.cancel()
 			return
@@ -480,7 +486,11 @@ func (s *Server) handleSshSftpUploadData(w http.ResponseWriter, r *http.Request)
 			s.audit.Write("ssh.sftp.upload", "system", state.System, "server", state.Server,
 				"result", "fail", "stage", "rename", "upload_id", id,
 				"path", finalPath, "err", err.Error())
-			writeErrSanitized(w, 502, fmt.Errorf("覆盖失败（原文件已恢复）: %w", err))
+			if sftpclient.IsPermissionDenied(err) {
+				writeErrSanitized(w, 403, fmt.Errorf("用户 %q 无权限落盘到 %q (permission denied)，原文件已恢复，请检查目录写权限(ls -ld %q): %w", state.Creds.Username, finalPath, state.TargetDir, err))
+			} else {
+				writeErrSanitized(w, 502, fmt.Errorf("覆盖 %q 失败（原文件已恢复）: %w", finalPath, err))
+			}
 			s.uploadStates.Delete(id)
 			state.cancel()
 			return
@@ -498,7 +508,11 @@ func (s *Server) handleSshSftpUploadData(w http.ResponseWriter, r *http.Request)
 			s.audit.Write("ssh.sftp.upload", "system", state.System, "server", state.Server,
 				"result", "fail", "stage", "rename", "upload_id", id,
 				"path", finalPath, "err", err.Error())
-			writeErrSanitized(w, 502, fmt.Errorf("重命名失败: %w", err))
+			if sftpclient.IsPermissionDenied(err) {
+				writeErrSanitized(w, 403, fmt.Errorf("用户 %q 无权限落盘到 %q (permission denied)，请检查目录写权限(ls -ld %q): %w", state.Creds.Username, finalPath, state.TargetDir, err))
+			} else {
+				writeErrSanitized(w, 502, fmt.Errorf("重命名 %q 落盘失败: %w", partialPath, err))
+			}
 			s.uploadStates.Delete(id)
 			state.cancel()
 			return

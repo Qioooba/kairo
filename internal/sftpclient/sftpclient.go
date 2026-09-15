@@ -18,10 +18,12 @@ package sftpclient
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"os"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -191,14 +193,14 @@ func (r *realSftpBackend) Chtimes(path string, atime, mtime time.Time) error {
 func (r *realSftpBackend) WriteFile(path string, data []byte, perm os.FileMode) error {
 	f, err := r.c.Create(path)
 	if err != nil {
-		return fmt.Errorf("创建远程文件失败: %w", err)
+		return friendlyCreateError(path, err)
 	}
 	defer f.Close()
 	if _, err := f.Write(data); err != nil {
-		return fmt.Errorf("写入远程文件失败: %w", err)
+		return fmt.Errorf("写入远程文件 %q 失败: %w", path, err)
 	}
 	if err := f.Close(); err != nil {
-		return fmt.Errorf("关闭远程文件失败: %w", err)
+		return fmt.Errorf("关闭远程文件 %q 失败: %w", path, err)
 	}
 	if perm != 0 {
 		if err := r.c.Chmod(path, perm); err != nil {
@@ -268,7 +270,7 @@ func (s *shellBackend) CreateExclusive(ctx context.Context, remotePath string) e
 func (r *realSftpBackend) UploadStream(ctx context.Context, reader io.Reader, remotePath string, perm os.FileMode, progress func(written, total int64)) error {
 	f, err := r.c.Create(remotePath)
 	if err != nil {
-		return fmt.Errorf("创建远程文件失败: %w", err)
+		return friendlyCreateError(remotePath, err)
 	}
 
 	// ctx 取消时主动 Close 文件，让正在进行的 Write 返回错误。
@@ -309,14 +311,14 @@ func (r *realSftpBackend) UploadStream(ctx context.Context, reader io.Reader, re
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return fmt.Errorf("上传被取消: %w", ctxErr)
 		}
-		return fmt.Errorf("写入远程文件失败: %w", err)
+		return friendlyWriteError(remotePath, err)
 	}
 	if err := safeClose(); err != nil {
 		// sftp.File.Close 会 flush 缓冲区，可能因 ctx 已取消报错
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return fmt.Errorf("上传被取消: %w", ctxErr)
 		}
-		return fmt.Errorf("关闭远程文件失败: %w", err)
+		return fmt.Errorf("关闭远程文件 %q 失败: %w", remotePath, err)
 	}
 	if perm != 0 {
 		if err := r.c.Chmod(remotePath, perm); err != nil {
@@ -335,7 +337,10 @@ func (r *realSftpBackend) UploadStream(ctx context.Context, reader io.Reader, re
 
 func (r *realSftpBackend) MkdirAll(path string) error {
 	if err := r.c.MkdirAll(path); err != nil {
-		return fmt.Errorf("创建远程目录失败: %w", err)
+		if IsPermissionDenied(err) {
+			return fmt.Errorf("无权限创建远端目录 %q (permission denied): 请检查父目录写权限(ls -ld %q): %w", path, path, err)
+		}
+		return fmt.Errorf("创建远程目录 %q 失败: %w", path, err)
 	}
 	return nil
 }
@@ -348,7 +353,10 @@ func (r *realSftpBackend) Rename(oldPath, newPath string) error {
 		return nil
 	}
 	if err := r.c.Rename(oldPath, newPath); err != nil {
-		return fmt.Errorf("重命名失败: %w", err)
+		if IsPermissionDenied(err) {
+			return fmt.Errorf("无权限重命名 %q -> %q (permission denied): 请检查目录写权限: %w", oldPath, newPath, err)
+		}
+		return fmt.Errorf("重命名 %q -> %q 失败: %w", oldPath, newPath, err)
 	}
 	return nil
 }
@@ -356,13 +364,49 @@ func (r *realSftpBackend) Rename(oldPath, newPath string) error {
 // Remove 删除远端文件（不递归，删除目录用 RemoveDirectory）。
 func (r *realSftpBackend) Remove(path string) error {
 	if err := r.c.Remove(path); err != nil {
-		return fmt.Errorf("删除失败: %w", err)
+		return fmt.Errorf("删除 %q 失败: %w", path, err)
 	}
 	return nil
 }
 
 func (r *realSftpBackend) Close() error {
 	return r.c.Close()
+}
+
+// IsPermissionDenied 判断 err 是否为远端无权限（SFTP permission denied）。
+//
+// pkg/sftp 的 normaliseError 会把 SSH_FX_PERMISSION_DENIED 转成 os.ErrPermission，
+// 所以 errors.Is(os.ErrPermission) 能命中；再加字符串兜底（shellBackend 的
+// cat 报错、不同 server 的 Failure 文案）。
+func IsPermissionDenied(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, os.ErrPermission) {
+		return true
+	}
+	lower := strings.ToLower(err.Error())
+	return strings.Contains(lower, "permission denied") ||
+		strings.Contains(lower, "ssh_fx_permission_denied")
+}
+
+// friendlyCreateError 给 Create 失败拼精准提示：带远端路径 + 目录 + 排查命令。
+// permission denied 时直接给可执行建议，避免前端只看到一句英文。
+func friendlyCreateError(remotePath string, err error) error {
+	if IsPermissionDenied(err) {
+		dir := path.Dir(remotePath)
+		return fmt.Errorf("无权限在远端创建文件 %q (permission denied): 请检查目录可写权限(ls -ld %q)及当前用户(whoami)，或换 /tmp/家目录重试: %w", remotePath, dir, err)
+	}
+	return fmt.Errorf("创建远程文件 %q 失败: %w", remotePath, err)
+}
+
+// friendlyWriteError 给写入中失败拼精准提示（配额/断连/权限都可能在这里爆）。
+func friendlyWriteError(remotePath string, err error) error {
+	if IsPermissionDenied(err) {
+		dir := path.Dir(remotePath)
+		return fmt.Errorf("无权限写入远端文件 %q (permission denied): 请检查目录可写权限(ls -ld %q)及磁盘配额(df -h %q): %w", remotePath, dir, dir, err)
+	}
+	return fmt.Errorf("写入远程文件 %q 失败: %w", remotePath, err)
 }
 
 // Close 关闭
@@ -574,13 +618,18 @@ func (c *Client) UploadFile(localPath, remotePath string, perm os.FileMode) erro
 	}
 	data, err := os.ReadFile(localPath)
 	if err != nil {
-		return fmt.Errorf("读取本地文件失败: %w", err)
+		return fmt.Errorf("读取本地文件 %q 失败: %w", localPath, err)
 	}
 	if perm == 0 {
 		perm = 0o644
 	}
 	if err := c.b.WriteFile(remotePath, data, perm); err != nil {
-		return fmt.Errorf("上传文件失败: %w", err)
+		// backend 已带精准路径+排查建议（friendlyCreateError），permission denied 时直接透传，
+		// 避免“上传失败:上传文件失败:创建失败”三层堆叠。
+		if IsPermissionDenied(err) {
+			return err
+		}
+		return fmt.Errorf("上传 %q 失败: %w", remotePath, err)
 	}
 	return nil
 }
@@ -606,7 +655,11 @@ func (c *Client) UploadStream(ctx context.Context, reader io.Reader, remotePath 
 		perm = 0o644
 	}
 	if err := c.b.UploadStream(ctx, reader, remotePath, perm, progress); err != nil {
-		return fmt.Errorf("上传文件失败: %w", err)
+		// backend 已精准（含路径+排查建议），permission/取消直接透传，不再包“上传文件失败”堆叠。
+		if IsPermissionDenied(err) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return err
+		}
+		return fmt.Errorf("上传 %q 失败: %w", remotePath, err)
 	}
 	return nil
 }
@@ -629,7 +682,10 @@ func (c *Client) Rename(oldPath, newPath string) error {
 		return fmt.Errorf("sftp 客户端未连接")
 	}
 	if err := c.b.Rename(oldPath, newPath); err != nil {
-		return fmt.Errorf("重命名失败: %w", err)
+		if IsPermissionDenied(err) {
+			return err
+		}
+		return fmt.Errorf("重命名 %q -> %q 失败: %w", oldPath, newPath, err)
 	}
 	return nil
 }
@@ -640,7 +696,7 @@ func (c *Client) Remove(path string) error {
 		return fmt.Errorf("sftp 客户端未连接")
 	}
 	if err := c.b.Remove(path); err != nil {
-		return fmt.Errorf("删除失败: %w", err)
+		return fmt.Errorf("删除 %q 失败: %w", path, err)
 	}
 	return nil
 }
