@@ -344,6 +344,9 @@ btnSearch.appendChild(el('span', { text: '搜索' }));
     }
 
     Kairo.core.setActiveShells({
+      hasActive: function () {
+        return pageState.tabs.some(function (t) { return t.ws && t.ws.readyState === 1 && !t.closed; });
+      },
       closeAll: function () { closeAllTabs(); }
     });
 
@@ -351,6 +354,11 @@ btnSearch.appendChild(el('span', { text: '搜索' }));
     // 路由切走（app.js navigate）时 core 调 cancelAll 取消所有 tab 上传；
     // beforeunload 时走 cancelAllBeacon（sendBeacon 异步通知后端）。
     Kairo.core.setActiveUploads({
+      hasActive: function () {
+        return pageState.tabs.some(function (t) {
+          return (t.uploadQueue || []).some(function (u) { return u.status === 'uploading' || u.status === 'pending'; });
+        });
+      },
       cancelAll: function () { cancelAllTabsUploads(); },
       cancelAllBeacon: function () { cancelAllTabsUploads(); }
     });

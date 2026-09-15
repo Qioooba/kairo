@@ -111,6 +111,9 @@
           const fn = disposers.pop();
           try { fn(); } catch (e) { /* ignore */ }
         }
+      },
+      setCanLeave: function (fn) {
+        scope.canLeave = fn;
       }
     };
 

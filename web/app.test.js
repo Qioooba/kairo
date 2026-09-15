@@ -2092,6 +2092,190 @@ async function testRouteScopeLifecycleAndAsyncUnmount() {
   console.log('  route scope and async unmount lifecycle ✓');
 }
 
+async function testUI02_NavigationPolicyAndGuards() {
+  const vm = require('vm');
+  const routeScopeSrc = fs.readFileSync(path.join(__dirname, 'workbench', 'route-scope.js'), 'utf8');
+  const appSrc = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8');
+
+  let confirmResult = true;
+  let confirmMessages = [];
+  const mockConfirm = (msg) => {
+    confirmMessages.push(msg);
+    return confirmResult;
+  };
+
+  const mockView = {
+    innerHTML: '',
+    dataset: {},
+    classList: { toggle: () => {}, remove: () => {} },
+    appendChild: (child) => { mockView.innerHTML += (child && child.text) || ''; }
+  };
+
+  const navListeners = {};
+  const navDoc = {
+    body: { classList: { remove: () => {} } },
+    querySelector: () => null,
+    querySelectorAll: () => [],
+    getElementById: () => null
+  };
+
+  let discardedWorkCalls = 0;
+  let cancelUploadCalls = 0;
+  let apiCalls = [];
+
+  let dbHasPending = true;
+  let hasUploads = false;
+  let activeDLClosed = false;
+
+  const navWin = {
+    Kairo: {
+      core: {
+        el: (tag, attrs) => ({ tag, text: attrs && attrs.text }),
+        $: () => mockView,
+        $$: () => [],
+        hasActiveUploads: () => hasUploads,
+        cancelAllUploads: () => { cancelUploadCalls++; },
+        getActiveDL: () => ({ id: 'dl-task-001', evtsrc: { close: () => { activeDLClosed = true; } } }),
+        clearActiveDL: () => {}
+      },
+      api: {
+        api: (method, url, body) => {
+          apiCalls.push({ method, url, body });
+          return Promise.resolve({});
+        }
+      },
+      database: {
+        hasPendingWork: () => dbHasPending ? { hasTransaction: true, dirtyCount: 2, pending: true } : { hasTransaction: false, dirtyCount: 0, pending: false },
+        discardPendingWork: () => { discardedWorkCalls++; },
+        cancel: () => {}
+      },
+      state: {
+        routes: {
+          home: (view, state, scope) => () => {},
+          database: (view, state, scope) => () => {},
+          files: (view, state, scope) => () => {},
+          scoped: (view, state, scope) => {
+            scope.setCanLeave((target) => target === 'home');
+            return () => {};
+          }
+        },
+        routeNames: { home: '首页', database: '数据库', files: '文件', scoped: '受保护页' }
+      }
+    },
+    confirm: mockConfirm,
+    addEventListener: (type, fn) => { navListeners[type] = fn; },
+    location: { hash: '#/home' },
+    document: navDoc,
+    console,
+    history: {
+      replaceState: (state, title, url) => {
+        navWin.location.hash = url;
+      }
+    }
+  };
+  navWin.window = navWin;
+
+  const navCtx = {
+    window: navWin,
+    document: navDoc,
+    location: navWin.location,
+    history: navWin.history,
+    console,
+    setTimeout,
+    clearTimeout,
+    AbortController,
+    URLSearchParams
+  };
+
+  vm.runInNewContext(routeScopeSrc + '\n' + appSrc, navCtx);
+  navWin.Kairo.core.$ = () => mockView;
+
+  // 1. Initial navigation to database page
+  navWin.location.hash = '#/database';
+  navListeners.hashchange();
+  assert.strictEqual(navWin.Kairo.state.currentRoute, 'database');
+  assert.strictEqual(mockView.dataset.renderToken, '1');
+
+  // 2. T046: Database has uncommitted transaction; user tries to navigate to home and CANCELS
+  confirmResult = false;
+  confirmMessages = [];
+  navWin.location.hash = '#/home';
+  navListeners.hashchange();
+
+  assert.strictEqual(confirmMessages.length, 1, 'confirm should be prompted');
+  assert.ok(confirmMessages[0].includes('未提交的事务'), 'message mentions uncommitted transaction');
+  assert.strictEqual(navWin.location.hash, '#/database', 'hash must be restored to #/database on cancel');
+  assert.strictEqual(navWin.Kairo.state.currentRoute, 'database', 'route must remain database');
+  assert.strictEqual(discardedWorkCalls, 0, 'discardPendingWork must NOT be called on cancel');
+
+  // 3. T046: User tries to navigate to home and CONFIRMS (leave and rollback)
+  confirmResult = true;
+  navWin.location.hash = '#/home';
+  navListeners.hashchange();
+
+  assert.strictEqual(discardedWorkCalls, 1, 'discardPendingWork must be called to roll back cleanly on leave');
+  assert.strictEqual(navWin.Kairo.state.currentRoute, 'home', 'route must transition to home');
+  assert.strictEqual(mockView.dataset.renderToken, '2');
+
+  // 4. T047: Backend download task persistence across route changes
+  apiCalls = [];
+  activeDLClosed = false;
+  navWin.location.hash = '#/files';
+  navListeners.hashchange();
+  assert.strictEqual(navWin.Kairo.state.currentRoute, 'files');
+
+  // Navigate from files to home while backend download task is active
+  navWin.location.hash = '#/home';
+  navListeners.hashchange();
+
+  assert.strictEqual(activeDLClosed, true, 'SSE subscription closed on navigation');
+  const cancelCalls = apiCalls.filter(c => c.url.includes('/cancel'));
+  assert.strictEqual(cancelCalls.length, 0, 'backend download task must NOT be cancelled on page switch (retrievable in downloads)');
+
+  // 5. T047: Frontend-only upload task guard
+  hasUploads = true;
+  confirmResult = false;
+  confirmMessages = [];
+  cancelUploadCalls = 0;
+
+  // Navigate while uploads active, user CANCELS
+  navWin.location.hash = '#/files';
+  navListeners.hashchange();
+
+  assert.strictEqual(confirmMessages.length, 1, 'upload warning prompt shown');
+  assert.ok(confirmMessages[0].includes('上传'), 'message mentions upload cancellation');
+  assert.strictEqual(cancelUploadCalls, 0, 'upload must not be cancelled on cancel');
+  assert.strictEqual(navWin.Kairo.state.currentRoute, 'home', 'stays on current page');
+
+  // User CONFIRMS leave -> upload cancelled
+  confirmResult = true;
+  navWin.location.hash = '#/files';
+  navListeners.hashchange();
+
+  assert.strictEqual(cancelUploadCalls, 1, 'upload cancelled on confirmed leave');
+  assert.strictEqual(navWin.Kairo.state.currentRoute, 'files', 'navigates to files');
+
+  // 6. RouteScope custom canLeave guard
+  hasUploads = false;
+  dbHasPending = false;
+  navWin.location.hash = '#/scoped';
+  navListeners.hashchange();
+  assert.strictEqual(navWin.Kairo.state.currentRoute, 'scoped');
+
+  // Trying to navigate to files (scoped allows only home)
+  navWin.location.hash = '#/files';
+  navListeners.hashchange();
+  assert.strictEqual(navWin.location.hash, '#/scoped', 'custom canLeave rejected files navigation');
+  assert.strictEqual(navWin.Kairo.state.currentRoute, 'scoped');
+
+  // Navigating to home (allowed by scoped)
+  navWin.location.hash = '#/home';
+  navListeners.hashchange();
+  assert.strictEqual(navWin.Kairo.state.currentRoute, 'home');
+
+  console.log('  UI-02 navigation policy, canLeave guards, and upload/download task persistence ✓');
+}
+
 // ---------- 主入口 ----------
 
 async function main() {
@@ -2102,7 +2286,7 @@ async function main() {
     testCssEscape, testPctText, testValidate, testEl, testConfirmDialog, testXSSInErrorText,
     testGotDoneDedupe, testNormalizeHighlightColor, testRenderHighlightedLine,
     testTailViewer, testApplyCommandPath, testDatabaseSQLHelpers, testDatabaseWorkbenchLazy, testCompareHelpers, testWaspackHelpers,
-    testRouteScopeLifecycleAndAsyncUnmount,
+    testRouteScopeLifecycleAndAsyncUnmount, testUI02_NavigationPolicyAndGuards,
   ];
   let pass = 0, fail = 0;
   for (const t of tests) {
@@ -2131,3 +2315,4 @@ async function main() {
   if (fail > 0) process.exit(1);
 }
 main();
+

@@ -829,9 +829,16 @@
     }
     window.__opsActiveShells = null;
   }
+  function hasActiveShells() {
+    if (window.__opsActiveShells && typeof window.__opsActiveShells.hasActive === 'function') {
+      try { return window.__opsActiveShells.hasActive(); } catch (_) { return false; }
+    }
+    return false;
+  }
   core.setActiveShells = setActiveShells;
   core.getActiveShells = getActiveShells;
   core.clearActiveShells = clearActiveShells;
+  core.hasActiveShells = hasActiveShells;
 
   // -------- 上传任务清理 hook（v1.2 上传 Bug 1 修复） --------
   //
@@ -850,6 +857,13 @@
       try { c.cancelAll(); } catch (e) { /* ignore */ }
     }
   }
+  function hasActiveUploads() {
+    const c = window.__opsActiveUploads;
+    if (c && typeof c.hasActive === 'function') {
+      try { return c.hasActive(); } catch (_) { return false; }
+    }
+    return false;
+  }
   // beforeunload 路径：调 controller.cancelAllBeacon()，里面用 sendBeacon 异步通知后端，
   // 不阻塞 unload；前端 XHR 也 abort。
   function cancelAllUploadsBeacon() {
@@ -864,6 +878,7 @@
   core.getActiveUploads = getActiveUploads;
   core.cancelAllUploads = cancelAllUploads;
   core.cancelAllUploadsBeacon = cancelAllUploadsBeacon;
+  core.hasActiveUploads = hasActiveUploads;
 
   // -------- "上次选择" 记忆（系统 / 服务器 / 日志目录 / 凭据） --------
   //

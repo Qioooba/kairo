@@ -2041,6 +2041,10 @@ loadCfg().then(refreshCredStatus).catch(e => toast('配置加载失败：' + e.m
     // navigate 切走 / beforeunload 时 core 会调 cancelAll / cancelAllBeacon 取消进行中的上传。
     // （防止后台 XHR 继续跑 + 回调访问已被卸载的 DOM）
     Kairo.core.setActiveUploads({
+      hasActive: () => {
+        const tasks = (state && state.uploadQueue) || [];
+        return tasks.some(t => t.status === 'uploading' || t.status === 'pending');
+      },
       cancelAll: () => {
         // 同步：abort XHR + 通知后端 cancel（异步）
         try { cancelAllUploads(); } catch (e) { /* ignore */ }

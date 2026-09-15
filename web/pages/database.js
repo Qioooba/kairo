@@ -4802,11 +4802,37 @@
       if (view.dataset.renderToken === renderToken) view.innerHTML = '<div class="card text-err">数据库工作台加载失败：' + h(e.message) + '</div>';
     }
   }
+  function hasPendingWork() {
+    let hasTx = false;
+    let dirtyCount = 0;
+    for (let i = 0; i < state.sessions.length; i++) {
+      const s = state.sessions[i];
+      if (s && s.transactionPending) hasTx = true;
+      const d = Object.keys((s && s.dirtyCells) || {}).length;
+      if (d > 0) dirtyCount += d;
+    }
+    return { hasTransaction: hasTx, dirtyCount: dirtyCount, pending: hasTx || dirtyCount > 0 };
+  }
+  function discardPendingWork() {
+    for (let i = 0; i < state.sessions.length; i++) {
+      const s = state.sessions[i];
+      if (s && s.transactionPending && s.sourceId) {
+        api('POST', '/api/database/transaction', { source_id: s.sourceId, session_id: s.transactionId, action: 'ROLLBACK' }).catch(() => {});
+        s.transactionPending = false;
+        s.gridEditsStaged = false;
+      }
+      if (s) s.dirtyCells = {};
+    }
+    state.dirtyCells = {};
+    updateTransactionControls();
+  }
   Kairo.state.routes.database = renderDatabase;
   Kairo.state.routeNames.database = '数据库工作台';
   Kairo.state.routeSubs.database = 'Oracle 11g / MySQL / Redis · 安全只读查询';
   Kairo.database = {
     cancel: cancelQuery,
+    hasPendingWork: hasPendingWork,
+    discardPendingWork: discardPendingWork,
     markTransactionPending: markTransactionPending,
     refreshTransactionState: function () { updateTransactionControls(); return !!(sess() && sess().transactionPending); },
     getGridContext: getGridContext,

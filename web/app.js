@@ -44,31 +44,95 @@
     const requested = resolved.name;
     const name = routes[requested] ? requested : 'home';
 
-    // 【v0.5 修复 #20】离开系统配置页时如果有未保存改动，弹 confirm 确认。
-    // 走 confirm() 而不是阻止默认行为：浏览器原生 hashchange 没有"取消"语义，
-    // confirm 取消后 hash 已被改了，但 view.innerHTML='' 还没执行就 return，
-    // 用户感知到"没切走"。回到正确路由靠下面 hash 修正。
-    if (state.unsavedConfig && state.currentRoute === 'config' && name !== 'config') {
-      if (!window.confirm('系统配置有未保存的改动，确定要离开吗？\n（点"取消"留在配置页）')) {
-        // 用户取消：把 hash 改回 config，让链接保持一致
-        if (history && history.replaceState) {
-          history.replaceState(null, '', '#/config');
-        } else {
-          location.hash = '#/config';
+    function abortNavigation(prevRoute, prevState) {
+      let query = '';
+      if (prevState && typeof URLSearchParams !== 'undefined') {
+        try {
+          const qs = new URLSearchParams(prevState).toString();
+          if (qs) query = '?' + qs;
+        } catch (_) {}
+      }
+      const prevHash = prevRoute ? '#/' + prevRoute + query : '#/';
+      if (typeof history !== 'undefined' && history.replaceState) {
+        history.replaceState(null, '', prevHash);
+      } else if (typeof location !== 'undefined') {
+        location.hash = prevHash;
+      }
+    }
+
+    // UI-02: 操作级导航策略与 canLeave 守卫
+    // 1. 路由作用域级守卫 (RouteScope.canLeave)
+    if (state.currentScope && typeof state.currentScope.canLeave === 'function') {
+      try {
+        if (state.currentScope.canLeave(name) === false) {
+          abortNavigation(state.currentRoute, state.currentRouteState);
+          return;
         }
+      } catch (e) {
+        console.warn('currentScope.canLeave failed', e);
+      }
+    }
+
+    // 2. 系统配置未保存改动守卫
+    if (state.unsavedConfig && state.currentRoute === 'config' && name !== 'config') {
+      if (typeof window !== 'undefined' && window.confirm && !window.confirm('系统配置有未保存的改动，确定要离开吗？\n（点"取消"留在配置页）')) {
+        abortNavigation('config', state.currentRouteState);
         return;
       }
     }
-    // 离开页面：清理进行中的下载（关闭 SSE + 通知后端取消）
+
+    // 3. 数据库工作台未提交事务 / 未保存修改守卫 (T046: 未提交事务/脏编辑；点击其他导航并选择留下 -> 路由不变，草稿与事务不被静默丢弃)
+    if (state.currentRoute === 'database' && name !== 'database' && Kairo.database && typeof Kairo.database.hasPendingWork === 'function') {
+      const dbWork = Kairo.database.hasPendingWork();
+      if (dbWork && (dbWork.hasTransaction || dbWork.dirtyCount > 0)) {
+        const desc = dbWork.hasTransaction
+          ? '数据库工作台存在未提交的事务' + (dbWork.dirtyCount ? '及 ' + dbWork.dirtyCount + ' 处未保存的网格修改' : '')
+          : '数据库工作台存在 ' + dbWork.dirtyCount + ' 处未保存的网格修改';
+        if (typeof window !== 'undefined' && window.confirm && !window.confirm(desc + '。\n离开将回滚事务并丢弃修改，确定要离开吗？\n（点"取消"留在当前页，点"确定"回滚并离开）')) {
+          abortNavigation('database', state.currentRouteState);
+          return;
+        }
+        // 用户明确确认离开：显式回滚待处理事务，避免隐式提交或连接悬挂
+        if (typeof Kairo.database.discardPendingWork === 'function') {
+          try { Kairo.database.discardPendingWork(); } catch (e) { console.warn('discardPendingWork failed', e); }
+        }
+      }
+    }
+
+    // 4. 纯前端上传任务确认取消守卫 (T047: 仅前端直传不支持后台断点续传，离开前确认取消，不虚构续传)
+    if (Kairo.core && typeof Kairo.core.hasActiveUploads === 'function' && Kairo.core.hasActiveUploads()) {
+      if (typeof window !== 'undefined' && window.confirm && !window.confirm('当前有正在进行的上传任务。由于前端直传不支持后台断点续传，离开页面将取消上传。\n确定离开并取消上传吗？\n（点"取消"留在当前页）')) {
+        abortNavigation(state.currentRoute, state.currentRouteState);
+        return;
+      }
+    }
+
+    // 5. SSH 活动终端会话确认断开守卫
+    if (state.currentRoute === 'ssh' && name !== 'ssh' && Kairo.core && typeof Kairo.core.hasActiveShells === 'function' && Kairo.core.hasActiveShells()) {
+      if (typeof window !== 'undefined' && window.confirm && !window.confirm('当前存在活动的 SSH 终端会话。离开页面将断开连接（远端后台进程若未配置 nohup/screen 可能随之终止）。\n确定离开吗？\n（点"取消"留在当前页）')) {
+        abortNavigation('ssh', state.currentRouteState);
+        return;
+      }
+    }
+
+    // 6. 执行经确认后的清理动作：
+    // (a) 上传：若有上传控制器则取消并清空
+    if (Kairo.core && Kairo.core.cancelAllUploads) {
+      try { Kairo.core.cancelAllUploads(); } catch (e) { /* ignore */ }
+      try { window.__opsActiveUploads = null; } catch (e) { /* ignore */ }
+    }
+    // (b) SSH 终端：关闭活动连接
+    if (Kairo.core && Kairo.core.clearActiveShells) {
+      try { Kairo.core.clearActiveShells(); } catch (e) { /* ignore */ }
+    }
+    // (c) 离开页面：清理进行中的下载
+    // UI-02 (T047): 已由后端 dlmanager 持有的下载任务在切页时保留后端执行，卸载前端 SSE 订阅即可，统一在“下载历史”找回；不调用后端 cancel 接口
     if (Kairo.core && Kairo.core.getActiveDL && Kairo.core.getActiveDL()) {
       const dl = Kairo.core.getActiveDL();
       try { dl.evtsrc && dl.evtsrc.close(); } catch (e) { /* ignore */ }
-      if (dl.id) {
-        api('POST', '/api/files/download/' + dl.id + '/cancel', {}).catch(() => {});
-      }
       Kairo.core.clearActiveDL();
     }
-    // 离开页面：清理进行中的 tail（关闭 SSE + 通知后端停止）
+    // (d) 离开页面：清理进行中的 tail（关闭 SSE + 通知后端停止）
     if (Kairo.core && Kairo.core.getActiveTail && Kairo.core.getActiveTail()) {
       const tail = Kairo.core.getActiveTail();
       try { tail.evtsrc && tail.evtsrc.close(); } catch (e) { /* ignore */ }
@@ -77,21 +141,7 @@
       }
       Kairo.core.clearActiveTail();
     }
-    // 离开页面：清理 SSH 终端 WS 连接（v0.10）
-    if (Kairo.core && Kairo.core.clearActiveShells) {
-      Kairo.core.clearActiveShells();
-    }
-    // 离开页面：清理进行中的上传（v1.2 上传 P1）
-    // 修 Bug 1：用户在文件页上传未完成就切走 → 上传后台 XHR 还在跑，
-    // 但下次回到文件页会重建 uploadQueue / state，原 XHR 引用的 task 已经不在 queue，
-    // 回调里 task.xhr / task.file 引用仍然指向旧对象，可能导致 UI 错乱或内存泄漏。
-    // 这里在 view.innerHTML = '' 之前 cancel 所有上传，关掉 XHR + 通知后端 cancel。
-    if (Kairo.core && Kairo.core.cancelAllUploads) {
-      try { Kairo.core.cancelAllUploads(); } catch (e) { /* ignore */ }
-      // 清理 controller 引用（旧 uploadQueue 已被 cancel，下次进 files 页会重新注册）
-      try { window.__opsActiveUploads = null; } catch (e) { /* ignore */ }
-    }
-    // 离开数据库工作台时中止 fetch 流，后端 QueryContext 会同步收到取消信号。
+    // (e) 离开数据库工作台时中止 fetch 流，后端 QueryContext 会同步收到取消信号。
     if (Kairo.database && Kairo.database.cancel) {
       try { Kairo.database.cancel(); } catch (e) { /* ignore */ }
     }
