@@ -1,6 +1,7 @@
 package waspack
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -91,12 +92,21 @@ func extractLocked(req Request) (*ExtractResult, error) {
 		total += rf.Bytes
 	}
 	finalWar := filepath.Join(outAbs, ExtractedWARDirName)
+	var stageWarn string
 	if err := publishSingleStagedArtifactWithMetadata(stage, outAbs, req.OutputPolicy, req.ConfirmReplace, ExtractedWARDirName, req.MetadataDir); err != nil {
-		return nil, err
+		var warn *BackupCleanupWarning
+		if errors.As(err, &warn) {
+			stageWarn = warn.Error()
+		} else {
+			return nil, err
+		}
 	}
 	warDir = finalWar
 	ok = true
 	warnings := append([]string(nil), pv.Warnings...)
+	if stageWarn != "" {
+		warnings = append(warnings, stageWarn)
+	}
 	if ownershipErr := reconcileOwnedArtifactsAt(outAbs, req.MetadataDir, []string{ExtractedWARDirName}); ownershipErr != nil {
 		warnings = append(warnings, "无法写入清理归属元数据："+ownershipErr.Error())
 	}
@@ -259,8 +269,14 @@ func packageExtractedLocked(req Request) (*Result, error) {
 		cleanup()
 		return nil, fmt.Errorf("写执行脚本失败: %w", err)
 	}
+	var publishWarning string
 	if err := publishNamedStagedArtifactsWithMetadata(stage, outAbs, req.OutputPolicy, req.ConfirmReplace, artifactNames, req.MetadataDir); err != nil {
-		return nil, err
+		var warn *BackupCleanupWarning
+		if errors.As(err, &warn) {
+			publishWarning = warn.Error()
+		} else {
+			return nil, err
+		}
 	}
 	listPath = filepath.Join(outAbs, ListFileName)
 	tarPath = filepath.Join(outAbs, TarFileName(pkgName))
@@ -271,6 +287,9 @@ func packageExtractedLocked(req Request) (*Result, error) {
 	}
 	_ = os.Remove(filepath.Join(outAbs, legacyOutputMarkerName))
 	warnings := []string(nil)
+	if publishWarning != "" {
+		warnings = append(warnings, publishWarning)
+	}
 	if ownershipErr := reconcileOwnedArtifactsAt(outAbs, req.MetadataDir, artifactNames); ownershipErr != nil {
 		warnings = append(warnings, "无法写入清理归属元数据："+ownershipErr.Error())
 	}
@@ -373,7 +392,8 @@ func publishNamedStagedArtifactsWithMetadata(stage, outAbs, policy string, confi
 		published = append(published, name)
 	}
 	if err := waspackRemoveAll(backup); err != nil {
-		return fmt.Errorf("产物已发布，但旧产物备份无法清理，请手动检查 %s: %w", backup, err)
+		keepBackup = true
+		return &BackupCleanupWarning{BackupDir: backup, Cause: err}
 	}
 	keepBackup = false
 	return nil

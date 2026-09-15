@@ -1,6 +1,7 @@
 package waspack
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -136,6 +137,15 @@ func prepareOutputDirForStaging(path, policy string, confirmReplace bool, packag
 	return abs, false, nil
 }
 
+type BackupCleanupWarning struct {
+	BackupDir string
+	Cause     error
+}
+
+func (w *BackupCleanupWarning) Error() string {
+	return fmt.Sprintf("产物已发布，但旧产物备份清理失败（保留于 %s: %v），无需重新打包", w.BackupDir, w.Cause)
+}
+
 func publishStagedArtifacts(stage, outAbs, policy string, confirmReplace bool, names []string) error {
 	return publishStagedArtifactsWithMetadata(stage, outAbs, policy, confirmReplace, names, "")
 }
@@ -225,7 +235,7 @@ func publishStagedArtifactsWithMetadata(stage, outAbs, policy string, confirmRep
 		published = append(published, name)
 	}
 	if err := waspackRemoveAll(backup); err != nil {
-		return fmt.Errorf("产物已发布，但旧产物备份无法清理，请手动检查 %s: %w", backup, err)
+		return &BackupCleanupWarning{BackupDir: backup, Cause: err}
 	}
 	return nil
 }
@@ -955,11 +965,17 @@ func buildLocked(req Request) (*Result, error) {
 	if chmodPath != "" {
 		artifactNames = append(artifactNames, ChmodFileName)
 	}
+	var publishWarning string
 	if err := publishStagedArtifactsWithMetadata(stage, outAbs, req.OutputPolicy, req.ConfirmReplace, artifactNames, req.MetadataDir); err != nil {
-		if created {
-			_ = os.Remove(outAbs)
+		var warn *BackupCleanupWarning
+		if errors.As(err, &warn) {
+			publishWarning = warn.Error()
+		} else {
+			if created {
+				_ = os.Remove(outAbs)
+			}
+			return nil, err
 		}
-		return nil, err
 	}
 	listPath = filepath.Join(outAbs, ListFileName)
 	tarPath = filepath.Join(outAbs, TarFileName(pkgName))
@@ -969,6 +985,9 @@ func buildLocked(req Request) (*Result, error) {
 		chmodPath = filepath.Join(outAbs, ChmodFileName)
 	}
 	warnings := append([]string(nil), pv.Warnings...)
+	if publishWarning != "" {
+		warnings = append(warnings, publishWarning)
+	}
 	if ownershipErr := reconcileOwnedArtifactsAt(outAbs, req.MetadataDir, artifactNames); ownershipErr != nil {
 		warnings = append(warnings, "无法写入清理归属元数据："+ownershipErr.Error())
 	}

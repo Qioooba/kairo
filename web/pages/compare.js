@@ -2824,7 +2824,18 @@
               }
               return;
             }
-            if (job.status === 'failed' || job.status === 'cancelled') throw new Error(job.error || '任务已取消');
+            if (job.status === 'failed' || job.status === 'cancelled') {
+              const res = job.sync_result;
+              if (res && (res.copied > 0 || res.cancelled > 0 || res.failed > 0)) {
+                jobID = '';
+                toast((job.status === 'cancelled' ? '同步已取消' : '同步失败') + '：已复制 ' + (res.copied || 0) + '，取消 ' + (res.cancelled || 0) + '，失败 ' + (res.failed || 0), 'warn');
+                if (res.failed || (res.failures && res.failures.length > 0)) {
+                  renderFailures(res);
+                  return;
+                }
+              }
+              throw new Error(job.error || (job.status === 'cancelled' ? '同步已取消' : '任务失败'));
+            }
             pollTimer = setTimeout(poll, 350);
           } catch (error) {
             jobID = '';
@@ -2988,7 +2999,7 @@
           node.title = item.rel_path;
         }
 
-        const status = isTypeConflict(item) ? '类型冲突' : folderStatusText(item.status, row.loading);
+        const status = isTypeConflict(item) ? '类型冲突' : folderStatusText(item.status, row.loading, item);
         node.setAttribute('aria-label', item.rel_path + '，' + status + (row.dir ? '，目录' : '，文件'));
         const ops = el('span', { class: 'cmp-folder-ops', role: 'gridcell', 'aria-label': '操作' });
 
@@ -3061,7 +3072,7 @@
           twist.onclick = function (ev) { ev.stopPropagation(); onToggle(item); };
         }
         const pad = { style: 'padding-left:' + (8 + row.depth * 16) + 'px' };
-        const statusBadge = el('span', { class: 'cmp-status-badge cmp-status-' + (isTypeConflict(item) ? 'type_conflict' : item.status), text: isTypeConflict(item) ? '类型冲突' : folderStatusText(item.status, row.loading) });
+        const statusBadge = el('span', { class: 'cmp-status-badge cmp-status-' + (isTypeConflict(item) ? 'type_conflict' : item.status), text: isTypeConflict(item) ? '类型冲突' : folderStatusText(item.status, row.loading, item) });
         node.append(
           el('span', { role: 'gridcell', class: 'cmp-folder-expander-cell' }, [twist]),
           el('span', { class: 'cmp-folder-status', role: 'gridcell', 'aria-label': status }, [checkbox, statusBadge]),
@@ -3137,9 +3148,14 @@
       scrollToRow: scrollToFolderRow
     };
   }
-  function folderStatusText(status, loading) {
+  function folderStatusText(status, loading, item) {
     if (loading) return '校验中';
     if (status === 'pending') return '待验证';
+    if (status === 'same') {
+      if (item && item.hashed) return '内容一致';
+      if (item && !item.hashed && ((item.left && !item.left.is_dir) || (item.right && !item.right.is_dir))) return '元数据相同（未核验内容）';
+      return '相同';
+    }
     return { same: '相同', different: '不同', suspect: '待校验', pending: '待验证', left_newer: '左侧较新', right_newer: '右侧较新', left_only: '仅左', right_only: '仅右', error: '错误', errors: '错误', type_conflict: '类型冲突', 'type-conflict': '类型冲突' }[status] || status || '';
   }
   function scanStatusVisible(status, filter, item) {

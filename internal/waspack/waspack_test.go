@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -800,3 +801,201 @@ func TestRenderChmodScriptRejectsUnsafeDeploymentPath(t *testing.T) {
 		t.Fatalf("safe quoting failed: %q, %v", content, err)
 	}
 }
+
+func TestT062_RenameFailureRollbackAndUserFilesPreserved(t *testing.T) {
+	project := ideaTree(t)
+	out := filepath.Join(t.TempDir(), "out")
+	pkg := "T062Pkg"
+	writeTree(t, out, map[string]string{
+		"list.txt":            "previous-list",
+		pkg + ".tar":          "previous-tar",
+		".kairo-waspack.json": "{}",
+		"custom.txt":          "important-user-content",
+		"notes.md":            "# User Notes",
+	})
+
+	originalRename := waspackRename
+	waspackRename = func(src, dst string) error {
+		if strings.HasSuffix(dst, pkg+".tar") && strings.Contains(src, ".kairo-waspack-stage-") {
+			return fmt.Errorf("injected rename failure for tar file")
+		}
+		return originalRename(src, dst)
+	}
+	defer func() { waspackRename = originalRename }()
+
+	_, err := Build(Request{
+		ProjectDir:        project,
+		OutputDir:         out,
+		PackageName:       pkg,
+		Manifest:          "./WEB-INF/web.xml\n",
+		OutputPolicy:      OutputPolicyCleanOwned,
+		ConfirmReplace:    true,
+		ReplaceToken:      "test-confirmation",
+		ReplaceAuthorized: true,
+	})
+	if err == nil {
+		t.Fatal("expected build failure due to injected rename failure")
+	}
+
+	// 1. Verify user-owned files were NEVER touched or modified
+	if body, readErr := os.ReadFile(filepath.Join(out, "custom.txt")); readErr != nil || string(body) != "important-user-content" {
+		t.Fatalf("user file custom.txt modified or lost: %q %v", body, readErr)
+	}
+	if body, readErr := os.ReadFile(filepath.Join(out, "notes.md")); readErr != nil || string(body) != "# User Notes" {
+		t.Fatalf("user file notes.md modified or lost: %q %v", body, readErr)
+	}
+
+	// 2. Verify previous artifacts were rolled back to out
+	if body, readErr := os.ReadFile(filepath.Join(out, "list.txt")); readErr != nil || string(body) != "previous-list" {
+		t.Fatalf("previous list.txt not restored: %q %v", body, readErr)
+	}
+	if body, readErr := os.ReadFile(filepath.Join(out, pkg+".tar")); readErr != nil || string(body) != "previous-tar" {
+		t.Fatalf("previous tar not restored: %q %v", body, readErr)
+	}
+
+	// 3. Test scenario where rollback itself fails: backup location must be retained and reported
+	out2 := filepath.Join(t.TempDir(), "out2")
+	writeTree(t, out2, map[string]string{
+		"list.txt":            "previous-list-2",
+		pkg + ".tar":          "previous-tar-2",
+		".kairo-waspack.json": "{}",
+	})
+	waspackRename = func(src, dst string) error {
+		if strings.Contains(src, ".kairo-waspack-stage-") || strings.Contains(src, ".kairo-waspack-old-") {
+			return fmt.Errorf("injected catastrophic rename failure")
+		}
+		return originalRename(src, dst)
+	}
+	_, err2 := Build(Request{
+		ProjectDir:        project,
+		OutputDir:         out2,
+		PackageName:       pkg,
+		Manifest:          "./WEB-INF/web.xml\n",
+		OutputPolicy:      OutputPolicyCleanOwned,
+		ConfirmReplace:    true,
+		ReplaceToken:      "test-confirmation",
+		ReplaceAuthorized: true,
+	})
+	if err2 == nil || !strings.Contains(err2.Error(), "旧产物备份保留于") {
+		t.Fatalf("expected error mentioning backup location, got: %v", err2)
+	}
+}
+
+func TestT063_BackupCleanupFailureProducesWarning(t *testing.T) {
+	project := ideaTree(t)
+	out := filepath.Join(t.TempDir(), "out")
+	pkg := "T063Pkg"
+	writeTree(t, out, map[string]string{
+		"list.txt":            "old-list",
+		pkg + ".tar":          "old-tar",
+		".kairo-waspack.json": "{}",
+	})
+
+	originalRemoveAll := waspackRemoveAll
+	waspackRemoveAll = func(path string) error {
+		if strings.Contains(path, ".kairo-waspack-old-") {
+			return fmt.Errorf("injected permission denied when deleting backup dir")
+		}
+		return originalRemoveAll(path)
+	}
+	defer func() { waspackRemoveAll = originalRemoveAll }()
+
+	res, err := Build(Request{
+		ProjectDir:        project,
+		OutputDir:         out,
+		PackageName:       pkg,
+		Manifest:          "./WEB-INF/web.xml\n",
+		OutputPolicy:      OutputPolicyCleanOwned,
+		ConfirmReplace:    true,
+		ReplaceToken:      "test-confirmation",
+		ReplaceAuthorized: true,
+	})
+	if err != nil {
+		t.Fatalf("build should succeed with warning when backup cleanup fails, got error: %v", err)
+	}
+	if !res.OK {
+		t.Fatalf("res.OK should be true, got false")
+	}
+
+	// Output dir must contain new published artifacts
+	if body, readErr := os.ReadFile(filepath.Join(out, "list.txt")); readErr != nil || string(body) == "old-list" {
+		t.Fatalf("expected new list.txt in output dir, got err=%v body=%q", readErr, body)
+	}
+
+	// Must contain warning indicating backup removal failed and where backup is located
+	hasWarning := false
+	for _, w := range res.Warnings {
+		if strings.Contains(w, "旧产物备份清理失败") && strings.Contains(w, ".kairo-waspack-old-") {
+			hasWarning = true
+			break
+		}
+	}
+	if !hasWarning {
+		t.Fatalf("expected warning about backup cleanup failure, got warnings: %+v", res.Warnings)
+	}
+}
+
+func TestT064_PathBoundariesAndSymlinkRejection(t *testing.T) {
+	project := ideaTree(t)
+
+	// 1. Chinese and long path support
+	chineseOut := filepath.Join(t.TempDir(), "投产输出目录_测试2026_中文路径", "多层级长路径_SubDir_AlphaBetaGamma")
+	res, err := Build(Request{
+		ProjectDir:  project,
+		OutputDir:   chineseOut,
+		PackageName: "T064Chinese",
+		Manifest:    "./WEB-INF/web.xml\n",
+	})
+	if err != nil || !res.OK {
+		t.Fatalf("build to Chinese long path failed: res=%+v, err=%v", res, err)
+	}
+	if _, statErr := os.Stat(filepath.Join(chineseOut, "T064Chinese.tar")); statErr != nil {
+		t.Fatalf("artifact not found in Chinese long path: %v", statErr)
+	}
+
+	// 2. Traversal and invalid root paths
+	traversalPaths := []string{
+		"../relative/escaped",
+		"folder/../../escaped",
+	}
+	for _, p := range traversalPaths {
+		if _, err := ValidateOutputPath(p); err == nil {
+			t.Errorf("ValidateOutputPath should reject traversal path %q", p)
+		}
+	}
+
+	// Root path rejection
+	rootPath := "/"
+	if runtime.GOOS == "windows" {
+		rootPath = "C:\\"
+	}
+	if _, err := ValidateOutputPath(rootPath); err == nil {
+		t.Errorf("ValidateOutputPath should reject drive/filesystem root %q", rootPath)
+	}
+
+	// 3. Project and output subpath / ancestor collision
+	if _, err := validateOutputAgainstProject(project, project); err == nil {
+		t.Errorf("output cannot be project dir itself")
+	}
+	if _, err := validateOutputAgainstProject(project, filepath.Join(project, "nested_out")); err == nil {
+		t.Errorf("output cannot be subdirectory of project")
+	}
+	if _, err := validateOutputAgainstProject(filepath.Join(project, "sub_proj"), project); err == nil {
+		t.Errorf("output cannot be ancestor directory of project")
+	}
+
+	// 4. Symlink rejection
+	symlinkTarget := filepath.Join(t.TempDir(), "symlink_real_target")
+	if mkErr := os.MkdirAll(symlinkTarget, 0o755); mkErr == nil {
+		symlinkDir := filepath.Join(t.TempDir(), "symlink_pointer")
+		if symlinkErr := os.Symlink(symlinkTarget, symlinkDir); symlinkErr == nil {
+			// Using symlink as output dir must fail closed
+			_, _, prepErr := prepareOutputDirWithPolicy(symlinkDir, OutputPolicyFail, false)
+			if prepErr == nil || !strings.Contains(prepErr.Error(), "符号链接") {
+				t.Fatalf("prepareOutputDirWithPolicy should reject symlink output path, got: %v", prepErr)
+			}
+		}
+	}
+}
+
+

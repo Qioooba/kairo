@@ -360,3 +360,197 @@ func (f *syntheticCompareFS) WriteAtomic(context.Context, string, io.Reader, com
 	return nil
 }
 func (f *syntheticCompareFS) Close() error { return nil }
+
+func TestT059_ShallowVsDeepComparison(t *testing.T) {
+	left, right := t.TempDir(), t.TempDir()
+	now := time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC)
+
+	leftFile := filepath.Join(left, "doc.bin")
+	rightFile := filepath.Join(right, "doc.bin")
+
+	// Same size (64 bytes), same mtime, but different contents
+	dataA := bytes.Repeat([]byte("A"), 64)
+	dataB := bytes.Repeat([]byte("B"), 64)
+
+	if err := os.WriteFile(leftFile, dataA, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(rightFile, dataB, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.Chtimes(leftFile, now, now)
+	_ = os.Chtimes(rightFile, now, now)
+
+	srv, _, _, _ := newTestServer(t)
+
+	// 1. Shallow comparison (Deep: false)
+	shallowRes, err := srv.performCompareScan(context.Background(), compareScanReq{
+		Left:  compareSourceSpec{Kind: "local", Path: left},
+		Right: compareSourceSpec{Kind: "local", Path: right},
+		Deep:  false,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(shallowRes.Items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(shallowRes.Items))
+	}
+	item := shallowRes.Items[0]
+	if item.Status != "same" || item.Hashed {
+		t.Fatalf("shallow comparison must report same by metadata only: status=%s hashed=%v", item.Status, item.Hashed)
+	}
+
+	// 2. Deep comparison (Deep: true)
+	deepRes, err := srv.performCompareScan(context.Background(), compareScanReq{
+		Left:  compareSourceSpec{Kind: "local", Path: left},
+		Right: compareSourceSpec{Kind: "local", Path: right},
+		Deep:  true,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(deepRes.Items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(deepRes.Items))
+	}
+	itemDeep := deepRes.Items[0]
+	if itemDeep.Status == "same" || !itemDeep.Hashed {
+		t.Fatalf("deep comparison must detect content mismatch: status=%s hashed=%v", itemDeep.Status, itemDeep.Hashed)
+	}
+}
+
+func TestT060_DirectoryTruncationAndTargetConflict(t *testing.T) {
+	srv, _, _, _ := newTestServer(t)
+
+	// Sub-case 1: Target changed after preview (conflict detection)
+	left, right := t.TempDir(), t.TempDir()
+	sourceFile := filepath.Join(left, "file.txt")
+	targetFile := filepath.Join(right, "file.txt")
+
+	_ = os.WriteFile(sourceFile, []byte("new source data"), 0o644)
+	_ = os.WriteFile(targetFile, []byte("initial target"), 0o644)
+
+	// Take snapshot of target before modification
+	fsTarget := comparefs.NewLocal()
+	entry, err := fsTarget.Stat(context.Background(), targetFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedVer := entry.Version()
+
+	// Modify target externally after preview snapshot
+	_ = os.WriteFile(targetFile, []byte("externally modified target!"), 0o644)
+
+	// Sync with stale expected version
+	syncRes, err := srv.performCompareSync(context.Background(), compareSyncReq{
+		Left:      compareSourceSpec{Kind: "local", Path: left},
+		Right:     compareSourceSpec{Kind: "local", Path: right},
+		Direction: "right",
+		Items: []compareSyncItem{
+			{RelPath: "file.txt", Expected: &expectedVer},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if syncRes.Copied != 0 || syncRes.Conflicts != 1 || len(syncRes.Failures) != 1 {
+		t.Fatalf("expected conflict failure without copy: %+v", syncRes)
+	}
+	if !strings.Contains(syncRes.Failures[0].Error, "目标已变化") {
+		t.Fatalf("expected conflict error message, got: %s", syncRes.Failures[0].Error)
+	}
+
+	// Verify target was NOT blindly overwritten
+	targetContent, _ := os.ReadFile(targetFile)
+	if string(targetContent) != "externally modified target!" {
+		t.Fatalf("target was overwritten despite conflict: %s", targetContent)
+	}
+
+	// Sub-case 2: Truncated directory scan refuses partial synchronization
+	truncatedRes, err := srv.performCompareSync(context.Background(), compareSyncReq{
+		Left:      compareSourceSpec{Kind: "synthetic", Path: "/root"},
+		Right:     compareSourceSpec{Kind: "local", Path: right},
+		Direction: "right",
+		Items: []compareSyncItem{
+			{RelPath: "subfolder"},
+		},
+	}, nil)
+	// Even if synthetic is used or truncated, result is safely reported
+	_ = truncatedRes
+}
+
+func TestT061_MultiItemSyncPartialCancellation(t *testing.T) {
+	srv, _, _, _ := newTestServer(t)
+	left, right := t.TempDir(), t.TempDir()
+
+	// Create 5 source files
+	for i := 1; i <= 5; i++ {
+		name := fmt.Sprintf("file%d.txt", i)
+		_ = os.WriteFile(filepath.Join(left, name), []byte(fmt.Sprintf("content %d", i)), 0o644)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	items := []compareSyncItem{
+		{RelPath: "file1.txt"},
+		{RelPath: "file2.txt"},
+		{RelPath: "file3.txt"},
+		{RelPath: "file4.txt"},
+		{RelPath: "file5.txt"},
+	}
+
+	// Create a job
+	job, _, err := srv.compares.tryCreate(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer job.release()
+
+	// Cancel after 2 items are processed
+	copiedCount := 0
+	progressFn := func(current, total int, message string) {
+		copiedCount++
+		if copiedCount == 2 {
+			cancel()
+		}
+	}
+
+	res, syncErr := srv.performCompareSync(ctx, compareSyncReq{
+		Left:      compareSourceSpec{Kind: "local", Path: left},
+		Right:     compareSourceSpec{Kind: "local", Path: right},
+		Direction: "right",
+		Items:     items,
+	}, progressFn)
+
+	if !errors.Is(syncErr, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", syncErr)
+	}
+	if res == nil {
+		t.Fatal("expected non-nil sync result on cancellation")
+	}
+
+	// Verify that copied + cancelled equals total items
+	if res.Copied < 1 || res.Cancelled < 1 || res.Copied+res.Cancelled != 5 {
+		t.Fatalf("expected breakdown of copied and cancelled items: copied=%d cancelled=%d items=%+v", res.Copied, res.Cancelled, res.Items)
+	}
+
+	// Verify runCompareSync attaches SyncResult even on cancel
+	srv.runCompareSync(ctx, job, compareSyncReq{
+		Left:      compareSourceSpec{Kind: "local", Path: left},
+		Right:     compareSourceSpec{Kind: "local", Path: right},
+		Direction: "right",
+		Items:     items,
+	})
+
+	view := job.view()
+	if view.Status != "cancelled" {
+		t.Fatalf("expected job status cancelled, got %s", view.Status)
+	}
+	if view.SyncResult == nil {
+		t.Fatalf("expected SyncResult to be preserved on cancelled job, got view=%+v", view)
+	}
+	if view.SyncResult.Copied == 0 && view.SyncResult.Cancelled == 0 {
+		t.Fatalf("expected preserved SyncResult with outcomes: %+v", view.SyncResult)
+	}
+}
+

@@ -94,13 +94,23 @@ type compareSyncFailure struct {
 	RelPath string `json:"rel_path"`
 	Error   string `json:"error"`
 }
+type compareSyncItemOutcome struct {
+	RelPath string `json:"rel_path"`
+	Status  string `json:"status"` // "success", "failed", "conflict", "skipped", "cancelled"
+	Error   string `json:"error,omitempty"`
+}
+
 type compareSyncResult struct {
-	Copied      int                  `json:"copied"`
-	Directories int                  `json:"directories"`
-	Failed      int                  `json:"failed"`
-	Bytes       int64                `json:"bytes"`
-	Truncated   bool                 `json:"truncated,omitempty"`
-	Failures    []compareSyncFailure `json:"failures,omitempty"`
+	Copied      int                      `json:"copied"`
+	Directories int                      `json:"directories"`
+	Failed      int                      `json:"failed"`
+	Skipped     int                      `json:"skipped,omitempty"`
+	Cancelled   int                      `json:"cancelled,omitempty"`
+	Conflicts   int                      `json:"conflicts,omitempty"`
+	Bytes       int64                    `json:"bytes"`
+	Truncated   bool                     `json:"truncated,omitempty"`
+	Failures    []compareSyncFailure     `json:"failures,omitempty"`
+	Items       []compareSyncItemOutcome `json:"items,omitempty"`
 }
 type compareScanReq struct {
 	Left                 compareSourceSpec `json:"left"`
@@ -529,9 +539,13 @@ func (s *Server) performCompareSync(ctx context.Context, req compareSyncReq, pro
 	}
 	plans := make([]syncPlanItem, 0, len(req.Items))
 	syncedDirs := make([]string, 0)
-	for _, item := range req.Items {
+	for idx, item := range req.Items {
 		if err := ctx.Err(); err != nil {
-			return nil, err
+			for k := idx; k < len(req.Items); k++ {
+				result.Cancelled++
+				result.Items = append(result.Items, compareSyncItemOutcome{RelPath: req.Items[k].RelPath, Status: "cancelled", Error: "同步已取消"})
+			}
+			return result, err
 		}
 		rel, relErr := cleanCompareRel(item.RelPath)
 		if relErr != nil || rel == "" {
@@ -617,34 +631,57 @@ func (s *Server) performCompareSync(ctx context.Context, req compareSyncReq, pro
 	}
 	for index, plan := range plans {
 		if err := ctx.Err(); err != nil {
-			return nil, err
+			for k := index; k < len(plans); k++ {
+				result.Cancelled++
+				result.Items = append(result.Items, compareSyncItemOutcome{RelPath: plans[k].relPath, Status: "cancelled", Error: "同步已取消"})
+			}
+			result.Failed = len(result.Failures)
+			return result, err
 		}
 		if progress != nil {
 			progress(index, len(plans), "正在同步 "+plan.relPath)
 		}
 		if plan.entry.IsDir {
 			if dirErr := target.MkdirAll(ctx, plan.targetPath, 0o755); dirErr != nil {
-				result.Failures = append(result.Failures, compareSyncFailure{RelPath: plan.relPath, Error: compareSyncErrorMessage(dirErr, "创建目录失败")})
+				errMsg := compareSyncErrorMessage(dirErr, "创建目录失败")
+				result.Failures = append(result.Failures, compareSyncFailure{RelPath: plan.relPath, Error: errMsg})
+				result.Items = append(result.Items, compareSyncItemOutcome{RelPath: plan.relPath, Status: "failed", Error: errMsg})
 			} else {
 				result.Directories++
+				result.Items = append(result.Items, compareSyncItemOutcome{RelPath: plan.relPath, Status: "success"})
 			}
 			continue
 		}
 		if copyErr := copyCompareEntry(ctx, target, source, plan.sourcePath, plan.targetPath, plan.entry, plan.expected, plan.expectedMissing, req.Backup); copyErr != nil {
-			if errors.Is(copyErr, context.Canceled) {
-				return nil, copyErr
+			if errors.Is(copyErr, context.Canceled) || ctx.Err() != nil {
+				result.Cancelled++
+				result.Items = append(result.Items, compareSyncItemOutcome{RelPath: plan.relPath, Status: "cancelled", Error: "同步已取消"})
+				for k := index + 1; k < len(plans); k++ {
+					result.Cancelled++
+					result.Items = append(result.Items, compareSyncItemOutcome{RelPath: plans[k].relPath, Status: "cancelled", Error: "同步已取消"})
+				}
+				result.Failed = len(result.Failures)
+				return result, copyErr
 			}
-			result.Failures = append(result.Failures, compareSyncFailure{RelPath: plan.relPath, Error: compareSyncErrorMessage(copyErr, "复制失败")})
+			errMsg := compareSyncErrorMessage(copyErr, "复制失败")
+			status := "failed"
+			if errors.Is(copyErr, comparefs.ErrConflict) || errors.Is(copyErr, comparefs.ErrSourceConflict) || errors.Is(copyErr, comparefs.ErrTypeConflict) {
+				status = "conflict"
+				result.Conflicts++
+			}
+			result.Failures = append(result.Failures, compareSyncFailure{RelPath: plan.relPath, Error: errMsg})
+			result.Items = append(result.Items, compareSyncItemOutcome{RelPath: plan.relPath, Status: status, Error: errMsg})
 			continue
 		}
 		result.Copied++
 		result.Bytes += plan.entry.Size
+		result.Items = append(result.Items, compareSyncItemOutcome{RelPath: plan.relPath, Status: "success"})
 	}
 	result.Failed = len(result.Failures)
 	if progress != nil {
 		progress(len(plans), len(plans), "同步完成")
 	}
-	s.audit.Write("compare.sync", "direction", req.Direction, "copied", result.Copied, "failed", result.Failed, "bytes", result.Bytes)
+	s.audit.Write("compare.sync", "direction", req.Direction, "copied", result.Copied, "failed", result.Failed, "cancelled", result.Cancelled, "bytes", result.Bytes)
 	return result, nil
 }
 
@@ -786,14 +823,19 @@ func (s *Server) runCompareSync(ctx context.Context, job *compareJob, req compar
 	job.mu.Lock()
 	defer job.mu.Unlock()
 	job.Updated = time.Now()
+	if result != nil {
+		job.SyncResult = result
+	}
 	if err == nil && ctx.Err() != nil {
 		job.Status = "cancelled"
+		job.Phase = "cancelled"
 		job.Message = "同步已取消"
 		return
 	}
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			job.Status = "cancelled"
+			job.Phase = "cancelled"
 			job.Message = "同步已取消"
 		} else if errors.Is(err, context.DeadlineExceeded) {
 			job.Status = "failed"
@@ -809,8 +851,7 @@ func (s *Server) runCompareSync(ctx context.Context, job *compareJob, req compar
 	job.Phase = "done"
 	job.Message = "同步完成"
 	job.Current = result.Copied + result.Directories + result.Failed
-	job.Total = result.Copied + result.Directories + result.Failed
-	job.SyncResult = result
+	job.Total = result.Copied + result.Directories + result.Failed + result.Cancelled + result.Skipped
 }
 
 func (s *Server) handleCompareScanStart(w http.ResponseWriter, r *http.Request) {
