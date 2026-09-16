@@ -2,7 +2,7 @@ package httpserver
 
 // handlers_compare_test.go — compare 白名单行为测试：
 // /api/compare/file-diff、/api/compare/folder-scan 按 app.compare_allowed_roots
-// 做白名单校验。默认 fail-closed（空 roots 拒绝）；
+// 做白名单校验。默认 fail-open（空 roots 放行，本机/内网无校验）；
 // 配了非 "*" 的 roots 后，越界路径 403。
 
 import (
@@ -12,10 +12,10 @@ import (
 	"testing"
 )
 
-// TestCompare_FileDiff_NoRoots_DeniedByDefault 验证默认 fail-closed。
+// TestCompare_FileDiff_NoRoots_AllowedByDefault 验证默认 fail-open（空 roots 放行到下游）。
 func TestCompare_FileDiff_NoRoots_DeniedByDefault(t *testing.T) {
 	srv, mgr, _, _ := newTestServer(t)
-	// 显式清空 roots，模拟默认 fail-closed 行为
+	// 显式清空 roots，模拟默认 fail-open 行为
 	cfg := mgr.Get()
 	cfg.App.CompareAllowedRoots = nil
 	if err := mgr.Replace(cfg); err != nil {
@@ -32,15 +32,15 @@ func TestCompare_FileDiff_NoRoots_DeniedByDefault(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			w := doRequest(srv, "POST", "/api/compare/file-diff", tc.body)
-			if w.Code != 403 {
-				t.Errorf("fail-closed: 空 roots 时 %v 应返 403，得到 %d body=%s",
+			if w.Code == 403 {
+				t.Errorf("fail-open: 空 roots 时 %v 不应返 403（默认无校验），得到 %d body=%s",
 					tc.body, w.Code, w.Body.String())
 			}
 		})
 	}
 }
 
-// TestCompare_FolderScan_NoRoots_DeniedByDefault 同样验证 folder-scan。
+// TestCompare_FolderScan_NoRoots_AllowedByDefault 同样验证 folder-scan 默认放行。
 func TestCompare_FolderScan_NoRoots_DeniedByDefault(t *testing.T) {
 	srv, mgr, _, _ := newTestServer(t)
 	cfg := mgr.Get()
@@ -52,8 +52,8 @@ func TestCompare_FolderScan_NoRoots_DeniedByDefault(t *testing.T) {
 		"left_path":  "/etc",
 		"right_path": "/etc",
 	})
-	if w.Code != 403 {
-		t.Errorf("folder-scan 空 roots 应返 403，得到 %d body=%s", w.Code, w.Body.String())
+	if w.Code == 403 {
+		t.Errorf("folder-scan 空 roots 不应返 403（fail-open），得到 %d body=%s", w.Code, w.Body.String())
 	}
 }
 

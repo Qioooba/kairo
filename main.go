@@ -551,6 +551,7 @@ func main() {
 	// 11. 启动并自动打开浏览器
 	url := fmt.Sprintf("http://%s", cfg.App.ListenAddr())
 	log.Printf("工具箱已启动: %s", url)
+	log.Printf("版本: %s (构建时间 %s)", httpserver.Version, httpserver.BuildTime)
 	log.Printf("工作目录: %s", runDir)
 	log.Printf("下载目录: %s", cfg.DownloadDir())
 	log.Printf("审计日志: %s", filepath.Join(cfg.LogDir(), "audit.log"))

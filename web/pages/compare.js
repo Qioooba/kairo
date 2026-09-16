@@ -432,6 +432,16 @@
       } else if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || e.key === 'Y')) {
         e.preventDefault();
         redo();
+      } else if (e.key === 'Tab' && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+        // 最小改：Tab 插入两个空格，避免焦点跳走；Shift+Tab 保留原生焦点行为。
+        e.preventDefault();
+        const start = textarea.selectionStart != null ? textarea.selectionStart : textarea.value.length;
+        const end = textarea.selectionEnd != null ? textarea.selectionEnd : start;
+        textarea.value = textarea.value.slice(0, start) + '  ' + textarea.value.slice(end);
+        textarea.selectionStart = textarea.selectionEnd = start + 2;
+        history.schedule(textarea.value);
+        scheduleVisuals();
+        onDirty();
       }
     });
 
@@ -483,8 +493,8 @@
     view.innerHTML = '';
     const options = preference.options, saved = preference.sources;
     const state = {
-      left: { source: Object.assign(defaultSource('left'), saved.left || {}), version: null, codec: { encoding: 'utf-8', eol: 'lf', bom: false }, dirty: false, loadState: 'ready', loadError: null, loadSeq: 0, editSeq: 0, saving: false },
-      right: { source: Object.assign(defaultSource('right'), saved.right || {}), version: null, codec: { encoding: 'utf-8', eol: 'lf', bom: false }, dirty: false, loadState: 'ready', loadError: null, loadSeq: 0, editSeq: 0, saving: false },
+      left: { source: Object.assign(defaultSource('left'), saved.left || {}), version: null, codec: { encoding: 'utf-8', eol: 'lf', bom: false }, dirty: false, baseline: '', loadState: 'ready', loadError: null, loadSeq: 0, editSeq: 0, saving: false },
+      right: { source: Object.assign(defaultSource('right'), saved.right || {}), version: null, codec: { encoding: 'utf-8', eol: 'lf', bom: false }, dirty: false, baseline: '', loadState: 'ready', loadError: null, loadSeq: 0, editSeq: 0, saving: false },
       diff: null, hunks: [], hunkIndex: -1, mode: 'text', scan: null,
     };
     const crumb = document.getElementById('crumb'); if (crumb) crumb.textContent = '文件与文本比较';
@@ -559,6 +569,8 @@
   function buildTextWorkbench(panel, state, options) {
     let showingResult = false, syncLock = false, compareSeq = 0;
     let disposed = false, compareInFlight = null, lastCompareKey = '', recompareTimer = 0;
+    // 最小改：搜索态提升到工作台级，重比/重渲染后可恢复，不再丢查询。
+    let savedSearch = { query: '', caseSensitive: false, open: false };
     const editorLeft = createEditor('left', () => { markDirty('left'); scheduleRecompare(); });
     const editorRight = createEditor('right', () => { markDirty('right'); scheduleRecompare(); });
     const editors = { left: editorLeft, right: editorRight };
@@ -821,13 +833,20 @@
     }
     function markDirty(side) {
       const item = state[side];
-      item.dirty = true;
       item.editSeq = (item.editSeq || 0) + 1;
+      // 最小改：按内容判定脏，而非一输入就脏；undo 回原样可自动消脏，避免误保存。
+      try {
+        const current = editors[side] ? editors[side].getValue() : '';
+        const base = item.baseline != null ? item.baseline : '';
+        item.dirty = current !== base;
+      } catch (_) {
+        item.dirty = true;
+      }
       // 读取失败后，用户主动输入代表明确的替代内容，可以重新参与比较；
       // 加载中的编辑器会被禁用，不会误把异步响应覆盖掉。
       if (item.loadState === 'error') { item.loadState = 'ready'; item.loadError = null; }
       if (state.diff) state.diffStale = true;
-      sourceHeaders[side].dirty.textContent = '● 已修改';
+      sourceHeaders[side].dirty.textContent = item.dirty ? '● 已修改' : '';
       sourceHeaders[side].saveBtn.disabled = !canSaveComparedFile(item);
       refreshSaveButtons();
     }
@@ -856,12 +875,14 @@
         item.version = null;
         item.codec = { encoding: 'utf-8', eol: 'lf', bom: false };
         item.dirty = false;
+        item.baseline = '';
         invalidateComparison('正在读取 ' + sourceLabel(source) + '…');
       } else {
         editors[side].setValue('', { resetHistory: true });
         item.version = null;
         item.codec = { encoding: 'utf-8', eol: 'lf', bom: false };
         item.dirty = false;
+        item.baseline = '';
         invalidateComparison('已切换为手动文本');
       }
       updateHeader(side); if (source.kind === 'text') return true;
@@ -878,6 +899,7 @@
         item.version = response.version;
         item.codec = { encoding: response.encoding || 'utf-8', eol: response.eol || 'lf', bom: !!response.bom };
         item.dirty = false;
+        try { item.baseline = editors[side].getValue(); } catch (_) { item.baseline = String(response.text || ''); }
         item.loadState = 'ready';
         editors[side].textarea.disabled = false;
         updateHeader(side);
@@ -889,6 +911,7 @@
         item.loadError = error && error.message ? error.message : String(error);
         item.version = null;
         item.dirty = false;
+        item.baseline = '';
         editors[side].setValue('', { resetHistory: true });
         editors[side].textarea.disabled = false;
         updateHeader(side);
@@ -903,6 +926,7 @@
       const sideName = side === 'left' ? '左侧' : '右侧';
       if (item.source && item.source.kind === 'text') {
         toast(sideName + '当前为临时文本，请先指定保存文件路径', 'warn');
+        const wasShowingTemp = showingResult && !!state.diff;
         openSourceDialog(item.source, false, async source => {
           state[side].source = source;
           saveSources(state);
@@ -919,6 +943,9 @@
             item.dirty = false;
             await loadSide(side);
             toast('已成功保存至 ' + sourceLabel(source) + (options.backup ? '（原文件已备份）' : ''), 'ok');
+            if (!disposed && wasShowingTemp) {
+              try { await compareNow(false, true); } catch (_) {}
+            }
           } catch (e) {
             toast('保存失败：' + (e.message || e), 'err');
           }
@@ -941,6 +968,8 @@
       const loadNo = item.loadSeq;
       const editNo = item.editSeq;
       const content = editors[side].getValue();
+      // 最小改：记住保存前的视图，保存后自动重比，避免差异视图被清空后需手动点。
+      const wasShowing = showingResult && !!state.diff;
       item.saving = true;
       updateHeader(side);
       toast('正在保存' + sideName + '…', 'idle');
@@ -951,6 +980,9 @@
         updateHeader(side);
         await loadSide(side);
         if (!disposed) toast(sideName + '保存成功' + (options.backup ? '（原文件已备份）' : ''), 'ok');
+        if (!disposed && wasShowing) {
+          try { await compareNow(false, true); } catch (_) {}
+        }
         return true;
       } catch (error) {
         if (!disposed) toast('保存失败：' + (error.message || error), 'err');
@@ -1070,11 +1102,19 @@
         language: { left: sourceHeaders.left.language.value, right: sourceHeaders.right.language.value },
         onHunkChange: function(idx, total) {
           diffCountBadge.textContent = total > 0 ? ('差异 ' + (idx + 1) + ' / ' + total) : '无差异';
+        },
+        onSearchChange: function(next) {
+          savedSearch = { query: String((next && next.query) || ''), caseSensitive: !!(next && next.caseSensitive), open: !!(next && next.open) };
         }
       });
       resultHost.appendChild(currentVirtualDiff.element);
+      // 最小改：重渲染后恢复搜索（只高亮不跳滚动），再定位差异块。
+      if (savedSearch.query || savedSearch.open) {
+        try { currentVirtualDiff.restoreSearch(savedSearch.query, savedSearch.caseSensitive, savedSearch.open); } catch (_) {}
+      }
       if (state.hunks && state.hunks.length) {
-        currentVirtualDiff.jumpToHunk(Math.max(0, state.hunkIndex));
+        // 有搜索命中时优先保留搜索位置，不强制跳到首个差异块。
+        if (!savedSearch.query) currentVirtualDiff.jumpToHunk(Math.max(0, state.hunkIndex));
       }
     }
     function scheduleRecompare(delay, allowHidden) {
@@ -1276,6 +1316,7 @@
     const onLine = actions && actions.line;
     const onBatch = actions && actions.batch;
     const onEdit = actions && actions.edit;
+    const onSearchChange = actions && actions.onSearchChange;
     const rowHeight = 25;
 
     // Search state
@@ -1283,6 +1324,7 @@
     let searchCaseSensitive = false;
     let searchMatches = [];
     let activeMatchIndex = -1;
+    let searchDebounce = 0;
 
     // Selection state
     const selectedRowIndices = new Set();
@@ -1337,6 +1379,13 @@
       searchCaseBtn.classList.toggle('btn-primary', searchCaseSensitive);
       executeSearch(searchInput.value);
     };
+    function notifySearch() {
+      try {
+        if (typeof onSearchChange === 'function') {
+          onSearchChange({ query: searchQuery, caseSensitive: searchCaseSensitive, open: searchBar.style.display !== 'none' });
+        }
+      } catch (_) {}
+    }
     const searchCount = el('span', { class: 'cmp-diff-search-count', text: '' });
     const searchPrevBtn = el('button', {
       type: 'button',
@@ -1362,11 +1411,15 @@
     searchBar.append(searchInput, searchCaseBtn, searchCount, searchPrevBtn, searchNextBtn, searchCloseBtn);
 
     searchInput.addEventListener('input', function () {
-      executeSearch(searchInput.value);
+      // 最小改：输入防抖 150ms，大结果集下连续输入不再每次全量扫描。
+      if (searchDebounce) clearTimeout(searchDebounce);
+      const value = searchInput.value;
+      searchDebounce = setTimeout(function () { searchDebounce = 0; executeSearch(value); }, 150);
     });
     searchInput.addEventListener('keydown', function (e) {
       if (e.key === 'Enter') {
         e.preventDefault();
+        if (searchDebounce) { clearTimeout(searchDebounce); searchDebounce = 0; executeSearch(searchInput.value); }
         navigateSearch(e.shiftKey ? -1 : 1);
       } else if (e.key === 'Escape') {
         e.preventDefault();
@@ -1383,6 +1436,7 @@
         renderedStart = -1;
         renderedEnd = -1;
         renderWindow();
+        notifySearch();
         return;
       }
       const target = searchCaseSensitive ? searchQuery : searchQuery.toLowerCase();
@@ -1404,6 +1458,41 @@
         renderedEnd = -1;
         renderWindow();
       }
+      notifySearch();
+    }
+    // 最小改：重渲染后恢复搜索，高亮但不抢滚动/焦点，避免自动重比时跳走。
+    function restoreSearch(query, caseSensitive, open) {
+      searchCaseSensitive = !!caseSensitive;
+      searchCaseBtn.classList.toggle('btn-primary', searchCaseSensitive);
+      searchInput.value = String(query || '');
+      searchBar.style.display = open ? 'flex' : 'none';
+      searchQuery = String(query || '');
+      searchMatches = [];
+      activeMatchIndex = -1;
+      if (!searchQuery) {
+        searchCount.textContent = '';
+        renderedStart = -1;
+        renderedEnd = -1;
+        renderWindow();
+        return;
+      }
+      const target = searchCaseSensitive ? searchQuery : searchQuery.toLowerCase();
+      rows.forEach((r, idx) => {
+        if (mode === 'changes' && r.status === 'equal') return;
+        const left = searchCaseSensitive ? (r.leftText || '') : (r.leftText || '').toLowerCase();
+        const right = searchCaseSensitive ? (r.rightText || '') : (r.rightText || '').toLowerCase();
+        if (left.includes(target) || right.includes(target)) searchMatches.push(idx);
+      });
+      if (searchMatches.length > 0) {
+        activeMatchIndex = 0;
+        searchCount.textContent = '1 / ' + searchMatches.length;
+      } else {
+        searchCount.textContent = '0 / 0';
+      }
+      renderedStart = -1;
+      renderedEnd = -1;
+      renderWindow();
+      updateActiveHighlights();
     }
 
     function navigateSearch(delta) {
@@ -1430,9 +1519,11 @@
       searchInput.focus();
       searchInput.select();
       if (searchInput.value) executeSearch(searchInput.value);
+      else notifySearch();
     }
 
     function closeSearch() {
+      if (searchDebounce) { clearTimeout(searchDebounce); searchDebounce = 0; }
       searchBar.style.display = 'none';
       searchQuery = '';
       searchMatches = [];
@@ -1441,6 +1532,7 @@
       renderedStart = -1;
       renderedEnd = -1;
       renderWindow();
+      notifySearch();
       viewport.focus();
     }
 
@@ -1703,7 +1795,7 @@
     });
     container.append(viewport, minimap);
     const wrapper = el('div', { class: 'cmp-vdiff-wrapper' }, [searchBar, container, batchBar]);
-    return { element: wrapper, jumpToHunk, navigateHunk, navigateLine, openSearch, closeSearch, clearSelection };
+    return { element: wrapper, jumpToHunk, navigateHunk, navigateLine, openSearch, closeSearch, clearSelection, restoreSearch };
   }
 
   function makeDiffCell(row, side, onEdit, language, searchQuery, searchCaseSensitive, isCurrentSearchMatch) {
@@ -1713,12 +1805,21 @@
     const code = el('span', { class: 'cmp-code', spellcheck: 'false', tabindex: '0', 'aria-readonly': 'true', 'aria-multiline': 'true', title: '按 Enter 或双击编辑；Enter 换行，Ctrl/⌘ + Enter 完成，Esc 取消' });
     const syntax = Kairo.workbench && Kairo.workbench.syntaxEditor;
     const hasSearchMatch = searchQuery && text && (searchCaseSensitive ? text.includes(searchQuery) : text.toLowerCase().includes(searchQuery.toLowerCase()));
-    if (hasSearchMatch) {
-      highlightSearchInText(code, text, searchQuery, searchCaseSensitive, isCurrentSearchMatch);
-    } else if (syntax && language && row.status !== 'changed') {
+    // 最小改：先渲染底色（语法高亮/词级差异/纯文本），再把搜索高亮叠加上去，不再盖掉差异。
+    if (syntax && language && row.status !== 'changed') {
       code.innerHTML = syntax.highlight(text || '', language);
     } else {
       appendWordDiff(code, text || '', other || '', row.status === 'changed');
+    }
+    if (hasSearchMatch) {
+      overlaySearchHighlight(code, searchQuery, searchCaseSensitive, isCurrentSearchMatch);
+      // 兜底：命中跨越词级切分边界时按节点包裹会漏标（如 CREATED 被切成 CREATE+D），
+      // 此时回退到整行搜索高亮，保证不漏命中（仅该行丢词级底色）。
+      try {
+        if (code.querySelectorAll('mark.cmp-search-highlight').length === 0) {
+          highlightSearchInText(code, text || '', searchQuery, searchCaseSensitive, isCurrentSearchMatch);
+        }
+      } catch (_) {}
     }
 
     code.setAttribute('role', 'textbox');
@@ -1825,6 +1926,44 @@
       }
     } catch (_) {
       parent.textContent = text || '';
+    }
+  }
+  // 最小改：搜索叠加高亮。遍历已渲染的文本节点做字面量子串包裹，
+  // 保留语法高亮 span 与词级 mark.cmp-word-change，只在命中处再套一层 mark。
+  function overlaySearchHighlight(codeEl, query, caseSensitive, isCurrentMatch) {
+    if (!codeEl || !query) return;
+    try {
+      const needle = caseSensitive ? String(query) : String(query).toLowerCase();
+      if (!needle) return;
+      const doc = (codeEl.ownerDocument || document);
+      const walker = doc.createTreeWalker(codeEl, 4 /* NodeFilter.SHOW_TEXT */, null);
+      const nodes = [];
+      let node = walker.nextNode();
+      while (node) { nodes.push(node); node = walker.nextNode(); }
+      const highlightClass = 'cmp-search-highlight' + (isCurrentMatch ? ' cmp-search-highlight-current' : '');
+      nodes.forEach(function (textNode) {
+        const original = textNode.nodeValue || '';
+        if (!original) return;
+        const haystack = caseSensitive ? original : original.toLowerCase();
+        let from = 0;
+        let pos = haystack.indexOf(needle, from);
+        if (pos < 0) return;
+        const frag = doc.createDocumentFragment();
+        while (pos >= 0) {
+          if (pos > from) frag.appendChild(doc.createTextNode(original.slice(from, pos)));
+          const mark = doc.createElement('mark');
+          mark.className = highlightClass;
+          mark.textContent = original.slice(pos, pos + needle.length);
+          frag.appendChild(mark);
+          from = pos + needle.length;
+          if (from >= original.length) break;
+          pos = haystack.indexOf(needle, from);
+        }
+        if (from < original.length) frag.appendChild(doc.createTextNode(original.slice(from)));
+        if (textNode.parentNode) textNode.parentNode.replaceChild(frag, textNode);
+      });
+    } catch (_) {
+      // 高亮失败不影响正文展示。
     }
   }
   function appendWordDiff(parent, text, other, enabled) {

@@ -40,6 +40,13 @@ if (!/Version\s*=\s*"dev"/.test(goSrc)) {
   failures.push('后端 Version 默认值必须是哨兵 "dev"，真实版本由 VERSION embed / ldflags 注入');
 }
 
+// 构建脚本不得按 commit 信息自动拼版本号：VERSION 是唯一真相源，
+// dev / 预发版本必须显式传参（./scripts/build_windows_amd64.sh v0.19-dev-xxx）。
+const buildSrc = read('scripts/build_windows_amd64.sh');
+if (/git\s+(log|rev-parse)/.test(buildSrc)) {
+  failures.push('scripts/build_windows_amd64.sh 不得按 commit 信息拼版本号，请只读 VERSION 或显式参数');
+}
+
 const aboutSrc = read('web/pages/about.js');
 if (/const VERSION\s*=\s*'v[\d.]+'/.test(aboutSrc)) {
   failures.push('web/pages/about.js 不得再硬编码产品 VERSION 常量，请从 /api/config 读取');

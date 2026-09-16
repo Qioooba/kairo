@@ -584,7 +584,7 @@
         'diff2html 多视图：unified / side-by-side / 仅差异三种视图，统一输出 .diff 补丁文件',
         '任务化后台 Job 模型：目录扫描、深度比对与同步走后台任务，进度可观察并支持主动取消',
         '受控单向同步：按勾选项覆盖，支持覆盖前自动备份原文件，不执行高风险镜像删除',
-        'compare_allowed_roots 白名单：fail-closed 安全防护，空 roots 一律 403 拒绝'
+        'compare_allowed_roots 白名单：默认空=无校验（本机/内网直接比对），配了目录才按白名单限制'
       ]
     },
     {

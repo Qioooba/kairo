@@ -962,15 +962,15 @@ func TestTargetDirAllowed(t *testing.T) {
 	}
 }
 
-// TestComparePathAllowed 验证 compare_allowed_roots 白名单（fail-closed）。
+// TestComparePathAllowed 验证 compare_allowed_roots 白名单（fail-open，默认无校验）。
 func TestComparePathAllowed(t *testing.T) {
-	// 空 roots → 一律拒绝（fail-closed）
+	// 空 roots → 默认放行（本机/内网无校验）
 	a := AppConfig{}
-	if a.ComparePathAllowed("/etc/passwd") {
-		t.Error("空 roots 不应放行 /etc/passwd（fail-closed）")
+	if !a.ComparePathAllowed("/etc/passwd") {
+		t.Error("空 roots 应放行 /etc/passwd（fail-open 默认无校验）")
 	}
-	if a.ComparePathAllowed("/var/log/app") {
-		t.Error("空 roots 不应放行 /var/log/app（fail-closed）")
+	if !a.ComparePathAllowed("/var/log/app") {
+		t.Error("空 roots 应放行 /var/log/app（fail-open 默认无校验）")
 	}
 	// 显式 "*" → 全放行
 	a.CompareAllowedRoots = []string{"*"}

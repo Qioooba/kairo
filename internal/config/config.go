@@ -209,11 +209,10 @@ type AppConfig struct {
 	UploadMaxSize *int64 `yaml:"upload_max_size,omitempty" json:"upload_max_size,omitempty"`
 
 	// CompareAllowedRoots v0.9 起：/api/compare/file-diff、/api/compare/folder-scan
-	// 路径白名单（绝对路径或相对路径前缀），fail-closed：
-	//   - 空切片 → 一律 403（默认安全，禁止任意本地文件读）
-	//   - 包含 "*" 或 "ANY" → 全部放行（用户显式同意承担风险）
+	// 路径白名单（绝对路径或相对路径前缀），fail-open（本机/内网默认无校验）：
+	//   - 空切片 → 全部放行（默认无校验，想限制再显式配置目录）
+	//   - 包含 "*" 或 "ANY" → 全部放行（显式写法，向后兼容）
 	//   - 其它非空 → path 必须以列表中某项为目录边界前缀
-	// 用途：BE-001 修复，避免 compare 接口读 /etc/passwd、C:\Windows 等敏感文件。
 	CompareAllowedRoots []string `yaml:"compare_allowed_roots,omitempty" json:"compare_allowed_roots,omitempty"`
 
 	KairoInternalToken string `yaml:"kairo,omitempty" json:"kairo,omitempty"`
@@ -340,8 +339,8 @@ func (a *AppConfig) FreeFileRootsConfigured() bool {
 
 // ComparePathAllowed 判断 path 是否可被 /api/compare/* 接口读取。
 //
-// 规则（fail-closed）：
-//   - roots 为空 → 返回 false（未配置时拒绝本地路径）
+// 规则（fail-open，本机/内网默认无校验）：
+//   - roots 为空（或全是空白项）→ 放行任意非空本地路径
 //   - roots 唯一项为 "*" 或 "ANY" → 显式放行；混用时仅使用具体目录
 //   - 其它非空 → path 必须以列表中任一 root 为目录边界前缀
 //
@@ -349,11 +348,18 @@ func (a *AppConfig) FreeFileRootsConfigured() bool {
 // "/foo/bar" 和 "/foo/bar/baz.txt"，但不匹配 "/foo/barbaz"。
 // 本地 Windows 路径不区分大小写；其它平台保留大小写。
 func (a *AppConfig) ComparePathAllowed(path string) bool {
-	if len(a.CompareAllowedRoots) == 0 {
-		return false
-	}
 	if path == "" {
 		return false
+	}
+	hasEffectiveRoot := false
+	for _, root := range a.CompareAllowedRoots {
+		if strings.TrimSpace(root) != "" {
+			hasEffectiveRoot = true
+			break
+		}
+	}
+	if !hasEffectiveRoot {
+		return true
 	}
 	cleaned := filepath.ToSlash(filepath.Clean(path))
 	for _, root := range a.CompareAllowedRoots {

@@ -19,13 +19,9 @@ cd "$(dirname "$0")/.."
 if [[ -n "${1:-}" ]]; then
   VER="${1}"
 elif [[ -f VERSION ]]; then
+  # VERSION 是唯一真相源：不按 commit 信息自动拼版本号。
+  # 需要 dev / 预发版本时显式传参，例如 ./scripts/build_windows_amd64.sh vX.Y-dev-<short-sha>
   VER="$(tr -d '[:space:]' < VERSION)"
-  if git rev-parse --short HEAD >/dev/null 2>&1; then
-    COMMIT="$(git rev-parse --short HEAD)"
-    if git log -n 5 --pretty=%B 2>/dev/null | grep -q "v0.19-dev"; then
-      VER="v0.19-dev-${COMMIT}"
-    fi
-  fi
 else
   echo "错误：未指定版本号，且未找到 VERSION 文件" >&2
   echo "用法: $0 [版本号]  （或在仓库根目录维护 VERSION）" >&2

@@ -476,7 +476,14 @@ func legacyComparePathAllowed(app *config.AppConfig, name string) bool {
 		return false
 	}
 	actual, err := filepath.EvalSymlinks(name)
-	return err == nil && app.ComparePathAllowed(actual)
+	if err != nil {
+		// 路径不存在时交由下游返回 400（目录不存在/读取失败），而不是误报 403 白名单。
+		if os.IsNotExist(err) {
+			return true
+		}
+		return false
+	}
+	return app.ComparePathAllowed(actual)
 }
 func readLegacyCompareFile(name string, limit int64, roots ...string) ([]byte, error) {
 	f, err := comparefs.NewLocalWithAllowedRoots(roots).Open(context.Background(), name)

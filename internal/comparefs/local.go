@@ -15,6 +15,7 @@ import (
 // operation validates both the lexical path and the path after resolving
 // symbolic links.  The latter is important because filepath.Clean alone does
 // not prevent a link inside an allowed directory from reaching outside it.
+// Empty roots means unrestricted (fail-open for local/intranet use).
 type Local struct {
 	allowedRoots []string
 	restricted   bool
@@ -22,6 +23,16 @@ type Local struct {
 
 func NewLocal() *Local { return &Local{} }
 func NewLocalWithAllowedRoots(roots []string) *Local {
+	hasEffectiveRoot := false
+	for _, root := range roots {
+		if strings.TrimSpace(root) != "" {
+			hasEffectiveRoot = true
+			break
+		}
+	}
+	if !hasEffectiveRoot {
+		return &Local{}
+	}
 	normalized := make([]string, 0, len(roots))
 	for _, root := range roots {
 		root = strings.TrimSpace(root)

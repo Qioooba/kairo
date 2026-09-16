@@ -19,13 +19,13 @@
       'aria-label': t.name,
       onclick: () => {
         if (t.onCardClick) { try { t.onCardClick(); } catch (e) { /* 彩蛋点击异常不打断跳转 */ } }
-        location.hash = '#/' + t.id;
+        location.hash = t.hash || '#/' + t.id;
       },
       onkeydown: (ev) => {
         if (ev.key === 'Enter' || ev.key === ' ') {
           ev.preventDefault();
           if (t.onCardClick) { try { t.onCardClick(); } catch (e) { /* ignore */ } }
-          location.hash = '#/' + t.id;
+          location.hash = t.hash || '#/' + t.id;
         }
       }
     }, [
@@ -49,7 +49,8 @@
     // 之前用 ASCII 字符 [L] {} 等是因为 Win 7 没有现代 emoji 字体，
     // 现在改内联 SVG 跨平台一致。
     const mainTools = [
-      { id: 'websphere', name: '日志助手', desc: '多服务器日志并行搜索、上下文查看、实时 Tail、日志下载', icon: 'file-text', tag: 'ready', tagText: '已就绪' },
+      // 日志助手入口显式带 ?tab=files：点卡片永远落在「文件 / 下载」，而不是上次残留的搜索 tab
+      { id: 'websphere', hash: '#/websphere?tab=files', name: '日志助手', desc: '多服务器日志并行搜索、上下文查看、实时 Tail、日志下载', icon: 'file-text', tag: 'ready', tagText: '已就绪' },
       { id: 'files', name: '文件下载', desc: '按 SSH 账号权限浏览任意目录，像 FTP 一样层层进入并下载', icon: 'file-down', tag: 'ready', tagText: 'v0.3' },
       { id: 'waspack', name: '投产打包', desc: '按清单从 credit 工程抽取 java/jsp/class，生成 tar、清单和备份/执行脚本', icon: 'package', tag: 'new', tagText: '新' },
       { id: 'ssh', name: 'SSH 终端', desc: '浏览器里直接开交互式 shell，多 tab、复用老 SSH 兼容配置', icon: 'terminal', tag: 'ready', tagText: 'v0.10' },

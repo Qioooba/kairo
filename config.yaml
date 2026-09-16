@@ -27,9 +27,9 @@ app:
     icon: smFile
   download_retention_days: 7
   download_max_count: 1000
-  # 本地目录比对白名单 (BE-001 fail-closed 安全基线)；默认空切片，禁止任意本地路径读取
-  # 可配置允许比对的本地目录前缀，如 ["D:/projects", "C:/Users"]；
-  # 显式配置 ["*"] 则表示放行本地任意合法路径（单机可信环境）。
+  # 本地目录比对白名单；默认空=无校验（本机/内网直接比任意路径）
+  # 如需限制再配置允许比对的本地目录前缀，如 ["D:/projects", "C:/Users"]；
+  # ["*"] 同样表示放行全部（显式写法，向后兼容）。
   compare_allowed_roots: []
   # 注意: 激活服务 / 排行榜的地址和密钥默认硬编码在源码里。
   # 本地测试时可通过 internal_endpoints 覆盖 (不随发布包提交给用户)。

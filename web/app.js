@@ -305,6 +305,7 @@
       const appName = (info.app && info.app.name) || 'Kairo';
       const appSubtitle = (info.app && info.app.subtitle) || '天命契机';
       const version = info.version || '';
+      const buildTime = info.build_time || '';
       const dlFolder = info.paths && info.paths.download_dir;
       const listenInfo = document.getElementById('listen-info');
       if (listenInfo) {
@@ -314,6 +315,8 @@
       const footerVersion = document.getElementById('footer-version');
       if (footerVersion) {
         footerVersion.textContent = [version, appName, appSubtitle].filter(Boolean).join(' · ');
+        // 可观测：悬停显示构建时间，方便确认当前跑的是哪个包（版本跳变时一眼定位）。
+        if (buildTime) footerVersion.title = '构建时间 ' + buildTime;
       }
     } catch (e) { /* 忽略 */ }
     // 启动时拉一次 preferences：把用户上次保存的 tail 高亮规则放到 Kairo.state.tailHighlights，

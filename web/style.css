@@ -7343,12 +7343,20 @@ body.has-open-overlay { overflow: hidden; }
 .db-form-specific { display: grid; grid-template-columns: repeat(3, minmax(180px, 1fr)); gap: 12px; }
 .db-field { display: grid; align-content: start; gap: 5px; min-width: 0; }
 .db-field[hidden] { display: none !important; }
-.db-field input, .db-field select, .db-field textarea { width: 100%; min-width: 0; }
+.db-field input:not([type="checkbox"]):not([type="radio"]), .db-field select, .db-field textarea { width: 100%; min-width: 0; }
 .db-field-span { grid-column: 1 / -1; }
 .db-field-span-2 { grid-column: span 2; }
 .db-field textarea { min-height: 72px; resize: vertical; font: 12px/1.45 var(--font-mono, ui-monospace, monospace); }
 .db-form-actions { display: flex; align-items: center; gap: 9px; margin-top: 14px; }
 .db-form-actions .hint { margin-left: auto; }
+/* 新建/编辑数据源：安全区复选框（服务端只读 / 支持 DDL）与 SSH 开关的行内对齐。
+   根因：.db-field input{width:100%} 会把 checkbox 拉伸成整行宽度，导致方框独占一行、
+   文字被挤到下一行。span 用 inline-flex 让方框与文字同行居中，input 强制回 auto 尺寸。 */
+.db-security-grid { grid-template-columns: repeat(2, minmax(180px, 1fr)); }
+.db-pro-inline-check, .db-redis-write-gate { gap: 6px; justify-items: start; align-content: start; }
+.db-pro-inline-check > span, .db-redis-write-gate > span { display: inline-flex; align-items: center; gap: 8px; min-width: 0; color: var(--text); font-size: 13px; font-weight: 600; line-height: 1.4; }
+.db-pro-inline-check input[type="checkbox"], .db-pro-inline-check input[type="radio"], .db-redis-write-gate input[type="checkbox"], .db-redis-write-gate input[type="radio"] { width: 16px !important; height: 16px !important; min-width: 16px !important; min-height: 16px !important; flex: 0 0 auto; margin: 0; padding: 0; accent-color: var(--primary); cursor: pointer; vertical-align: middle; box-sizing: border-box; }
+.db-pro-inline-check > small, .db-redis-write-gate > small { margin: 0; color: var(--text-dim); font-size: 11.5px; line-height: 1.5; }
 
 .db-sql-layout { display: flex; align-items: stretch; gap: 0; min-height: 860px; }
 .db-meta { width: 300px; min-width: 220px; max-width: 720px; padding: 10px; display: flex; flex-direction: column; gap: 8px; min-height: 0; overflow: hidden; }

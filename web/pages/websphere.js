@@ -3401,6 +3401,9 @@
     applyTargetPanelState();
     renderTargetSummary();
 
+    // 入口 tab：无参数默认 'files'（文件 / 下载）。
+    // 侧栏 + 首页卡片均显式跳 '#/websphere?tab=files'，所以点「日志助手」永远落在文件页；
+    // 只有显式带 ?tab=search|tail 的深链（如刷新、书签）才恢复对应 tab。
     try {
       const params = new URLSearchParams(location.hash.split('?')[1] || '');
       const tab = params.get('tab');

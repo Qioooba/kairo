@@ -48,7 +48,7 @@ func newTestServerWithDependencies(t *testing.T, deps Dependencies) (*Server, *c
 			DownloadDir: "downloads",
 			LogDir:      "logs",
 			DataDir:     "data",
-			// v0.9 起 FreeFileRoots / AllowedDownloadRoots / CompareAllowedRoots 都 fail-closed。
+			// v0.9 起 FreeFileRoots / AllowedDownloadRoots fail-closed；CompareAllowedRoots 例外 fail-open（默认无校验）。
 			// 测试基础设施默认显式放行，模拟"已正确配置"的环境；BE-001/BE-007 专门测试
 			// 用单独的 cfg 验证空 roots 行为。
 			FreeFileRoots:        []string{"*"},
