@@ -1434,9 +1434,11 @@
     finally { current.transactionBusy = false; updateTransactionControls(); }
   }
 
-  /* 会话定时自动备份与防丢 */
-  window.addEventListener('hashchange', function () {
-    if (String(location.hash || '').indexOf('#/database') === 0) return;
+  /* 会话定时自动备份与防丢（Tab 保活：后台 Tab 也要继续备份，
+     只在 Tab 关闭时停。旧的一次性 hashchange 会在首次切走后永久停掉备份。） */
+  window.addEventListener('kairo:tab-close', function (ev) {
+    if (!ev || !ev.detail || ev.detail.route !== 'database') return;
+    try { backupDBSessions(); } catch (_) {} // 关闭前最后刷一次，防丢
     if (window._dbBackupTimer) { clearInterval(window._dbBackupTimer); window._dbBackupTimer = null; }
   });
   function backupDBSessions() {

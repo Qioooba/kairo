@@ -1,13 +1,18 @@
-/* ===== web/app.js — 入口 =====
+/* ===== web/app.js — 入口（Tab 保活重构版） =====
  *
- * 拆分后的启动器。所有 page 模块已自己注册到 window.Kairo.state.routes
- * 和 window.Kairo.state.routeNames。本文件只剩：
- *   1. listenInfo（启动信息）从 /api/config 拿
- *   2. navigate 路由切换
- *   3. hashchange + load 监听
+ * 重构说明（单 view 销毁 → 多 Tab 保活）：
+ *   - 路由渲染所有权移交给 window.Kairo.tabs（web/tabs.js）：
+ *     每个路由最多 1 个 Tab，pane 独立、scope 独立，切换只隐藏/显示。
+ *   - 切换 Tab：不销毁、不释放资源（后台 tail/SSH/上传保持运行）、不弹确认。
+ *     旧 navigate() 里的“切页即关 SSE/WS/XHR”逻辑已删除，由关闭 Tab 时
+ *     按 Tab 维度释放（core.releaseTabResources）。
+ *   - 确认守卫从“切换时拦截”改为“关闭时拦截”：通过 tabs.addCloseGuard 注册，
+ *     由 TabManager.requestClose / beforeunload 统一执行。DOM 保活后切换
+ *     不再丢失草稿/事务，拦截切换只会打断“边查日志边操作数据库”的体验。
+ *   - hash 始终镜像活动 Tab（可分享/刷新恢复单页）；Tab 列表存 sessionStorage。
  *
  * 加载顺序（index.html）：
- *   core.js → api.js → state.js → pages/*.js → app.js
+ *   core.js → api.js → state.js → overlays.js → tabs.js → pages/*.js → app.js
  */
 
 (function () {
@@ -16,6 +21,7 @@
   const { $ = () => null, $$ = () => [] } = Kairo.core || {};
   const { api } = Kairo.api || {};
   const state = Kairo.state = Kairo.state || {};
+  const tabs = function () { return Kairo.tabs; };
 
   // 侧边栏“关于”菜单：10 秒内点击 6 次，触发宠物解锁（配合隐藏彩蛋）
   function bindAboutNavClickUnlock() {
@@ -36,244 +42,128 @@
     return { name: raw, state: {} };
   }
 
-  function navigate() {
-    document.body.classList.remove('sidebar-open');
-    const routes = state.routes || {};
-    const names = state.routeNames || {};
-    const resolved = routeFromHash(location.hash);
-    const requested = resolved.name;
-    const name = routes[requested] ? requested : 'home';
+  // ---------- 关闭守卫（只在关闭 Tab / 关浏览器时执行，不拦截切换） ----------
 
-    function abortNavigation(prevRoute, prevState) {
-      let query = '';
-      if (prevState && typeof URLSearchParams !== 'undefined') {
-        try {
-          const qs = new URLSearchParams(prevState).toString();
-          if (qs) query = '?' + qs;
-        } catch (_) {}
-      }
-      const prevHash = prevRoute ? '#/' + prevRoute + query : '#/';
-      if (typeof history !== 'undefined' && history.replaceState) {
-        history.replaceState(null, '', prevHash);
-      } else if (typeof location !== 'undefined') {
-        location.hash = prevHash;
-      }
-    }
+  function registerCloseGuards() {
+    const T = tabs();
+    if (!T || typeof T.addCloseGuard !== 'function') return;
 
-    // UI-02: 操作级导航策略与 canLeave 守卫
-    // 1. 路由作用域级守卫 (RouteScope.canLeave)
-    if (state.currentScope && typeof state.currentScope.canLeave === 'function') {
-      try {
-        if (state.currentScope.canLeave(name) === false) {
-          abortNavigation(state.currentRoute, state.currentRouteState);
-          return;
-        }
-      } catch (e) {
-        console.warn('currentScope.canLeave failed', e);
+    // 系统配置未保存改动
+    T.addCloseGuard(function (tab) {
+      if (tab.route === 'config' && state.unsavedConfig) {
+        return '系统配置有未保存的改动，关闭将丢失修改。确定关闭吗？';
       }
-    }
-
-    // 2. 系统配置未保存改动守卫
-    if (state.unsavedConfig && state.currentRoute === 'config' && name !== 'config') {
-      if (typeof window !== 'undefined' && window.confirm && !window.confirm('系统配置有未保存的改动，确定要离开吗？\n（点"取消"留在配置页）')) {
-        abortNavigation('config', state.currentRouteState);
-        return;
-      }
-    }
-
-    // 3. 数据库工作台未提交事务 / 未保存修改守卫 (T046: 未提交事务/脏编辑；点击其他导航并选择留下 -> 路由不变，草稿与事务不被静默丢弃)
-    if (state.currentRoute === 'database' && name !== 'database' && Kairo.database && typeof Kairo.database.hasPendingWork === 'function') {
-      const dbWork = Kairo.database.hasPendingWork();
-      if (dbWork && (dbWork.hasTransaction || dbWork.dirtyCount > 0)) {
-        const desc = dbWork.hasTransaction
-          ? '数据库工作台存在未提交的事务' + (dbWork.dirtyCount ? '及 ' + dbWork.dirtyCount + ' 处未保存的网格修改' : '')
-          : '数据库工作台存在 ' + dbWork.dirtyCount + ' 处未保存的网格修改';
-        if (typeof window !== 'undefined' && window.confirm && !window.confirm(desc + '。\n离开将回滚事务并丢弃修改，确定要离开吗？\n（点"取消"留在当前页，点"确定"回滚并离开）')) {
-          abortNavigation('database', state.currentRouteState);
-          return;
-        }
-        // 用户明确确认离开：显式回滚待处理事务，避免隐式提交或连接悬挂
-        if (typeof Kairo.database.discardPendingWork === 'function') {
-          try { Kairo.database.discardPendingWork(); } catch (e) { console.warn('discardPendingWork failed', e); }
-        }
-      }
-    }
-
-    // 4. 纯前端上传任务确认取消守卫 (T047: 仅前端直传不支持后台断点续传，离开前确认取消，不虚构续传)
-    if (Kairo.core && typeof Kairo.core.hasActiveUploads === 'function' && Kairo.core.hasActiveUploads()) {
-      if (typeof window !== 'undefined' && window.confirm && !window.confirm('当前有正在进行的上传任务。由于前端直传不支持后台断点续传，离开页面将取消上传。\n确定离开并取消上传吗？\n（点"取消"留在当前页）')) {
-        abortNavigation(state.currentRoute, state.currentRouteState);
-        return;
-      }
-    }
-
-    // 5. SSH 活动终端会话确认断开守卫
-    if (state.currentRoute === 'ssh' && name !== 'ssh' && Kairo.core && typeof Kairo.core.hasActiveShells === 'function' && Kairo.core.hasActiveShells()) {
-      if (typeof window !== 'undefined' && window.confirm && !window.confirm('当前存在活动的 SSH 终端会话。离开页面将断开连接（远端后台进程若未配置 nohup/screen 可能随之终止）。\n确定离开吗？\n（点"取消"留在当前页）')) {
-        abortNavigation('ssh', state.currentRouteState);
-        return;
-      }
-    }
-
-    // 6. 执行经确认后的清理动作：
-    // (a) 上传：若有上传控制器则取消并清空
-    if (Kairo.core && Kairo.core.cancelAllUploads) {
-      try { Kairo.core.cancelAllUploads(); } catch (e) { /* ignore */ }
-      try { window.__opsActiveUploads = null; } catch (e) { /* ignore */ }
-    }
-    // (b) SSH 终端：关闭活动连接
-    if (Kairo.core && Kairo.core.clearActiveShells) {
-      try { Kairo.core.clearActiveShells(); } catch (e) { /* ignore */ }
-    }
-    // (c) 离开页面：清理进行中的下载
-    // UI-02 (T047): 已由后端 dlmanager 持有的下载任务在切页时保留后端执行，卸载前端 SSE 订阅即可，统一在“下载历史”找回；不调用后端 cancel 接口
-    if (Kairo.core && Kairo.core.getActiveDL && Kairo.core.getActiveDL()) {
-      const dl = Kairo.core.getActiveDL();
-      try { dl.evtsrc && dl.evtsrc.close(); } catch (e) { /* ignore */ }
-      Kairo.core.clearActiveDL();
-    }
-    // (d) 离开页面：清理进行中的 tail（关闭 SSE + 通知后端停止）
-    if (Kairo.core && Kairo.core.getActiveTail && Kairo.core.getActiveTail()) {
-      const tail = Kairo.core.getActiveTail();
-      try { tail.evtsrc && tail.evtsrc.close(); } catch (e) { /* ignore */ }
-      if (tail.id) {
-        api('POST', '/api/logs/tail/' + tail.id + '/stop', {}).catch(() => {});
-      }
-      Kairo.core.clearActiveTail();
-    }
-    // (e) 离开数据库工作台时中止 fetch 流，后端 QueryContext 会同步收到取消信号。
-    if (Kairo.database && Kairo.database.cancel) {
-      try { Kairo.database.cancel(); } catch (e) { /* ignore */ }
-    }
-    const view = $('#view');
-    if (!view) return;
-    if (state.currentScope) {
-      try { state.currentScope.dispose(); } catch (e) { console.warn('route scope dispose failed', e); }
-      state.currentScope = null;
-    }
-    if (typeof state.currentUnmount === 'function') {
-      try { state.currentUnmount(); } catch (e) { console.warn('route unmount failed', e); }
-      state.currentUnmount = null;
-    }
-    // 路由切换时清理上一页的受控弹层，避免旧页面的遮罩/菜单残留到
-    // 新页面上方（尤其是提醒编辑框、收藏夹等可跨页面导航的弹层）。
-    if (Kairo.overlays && Kairo.overlays.closeTop) {
-      for (let i = 0; i < 20 && document.querySelector('.kairo-managed-overlay'); i++) {
-        Kairo.overlays.closeTop();
-      }
-    }
-    // 便笺“更多”菜单为避免卡片裁剪会临时挂到 body；离开页面时也要移除，
-    // 否则它不会随 #view 清空而消失，可能覆盖下一页内容。
-    document.querySelectorAll('.notes-more-menu[data-portaled="1"]').forEach(menu => menu.remove());
-    view.innerHTML = '';
-    const renderToken = String((state.routeRenderToken || 0) + 1);
-    state.routeRenderToken = Number(renderToken);
-    view.dataset.renderToken = renderToken;
-    const createScope = (Kairo.workbench && Kairo.workbench.createRouteScope) || function (token) {
-      let d = false;
-      const fns = [];
-      return {
-        renderToken: token,
-        isCurrent: function (t) { return !d && (t === undefined || t === token); },
-        add: function (fn) {
-          if (typeof fn !== 'function') return function () {};
-          if (d) { try { fn(); } catch (_) {} return function () {}; }
-          let ran = false;
-          const safe = function () { if (ran) return; ran = true; try { fn(); } catch (_) {} };
-          fns.push(safe);
-          return safe;
-        },
-        dispose: function () {
-          if (d) return;
-          d = true;
-          while (fns.length) { const f = fns.pop(); try { f(); } catch (_) {} }
-        }
-      };
-    };
-    const scope = createScope(Number(renderToken));
-    state.currentScope = scope;
-    // v0.5 P2-14：配置页有 fixed 底部保存栏，给 view 留 padding-bottom 防遮挡
-    view.classList.toggle('has-sticky-footer', name === 'config');
-    try {
-      const unmount = routes[name](view, resolved.state, scope);
-      if (unmount && typeof unmount.then === 'function') {
-        unmount.then(function (cleanup) {
-          if (typeof cleanup !== 'function') return;
-          if (scope.isCurrent() && view.dataset.renderToken === renderToken) {
-            state.currentUnmount = scope.add(cleanup);
-          } else {
-            // UI-01: 页面已切走（stale 分支），立即执行旧路由返回的 cleanup 避免泄漏
-            try { cleanup(); } catch (e) { console.warn('stale route cleanup failed', e); }
-          }
-        }).catch(function (e) {
-          if (!scope.isCurrent() || view.dataset.renderToken !== renderToken) return;
-          view.appendChild(Kairo.core.el('div', { class: 'card' }, [
-            Kairo.core.el('h3', { text: '页面渲染失败' }),
-            Kairo.core.el('div', { class: 'text-err', text: e && e.message ? e.message : String(e) })
-          ]));
-        });
-      } else if (typeof unmount === 'function') {
-        state.currentUnmount = scope.add(unmount);
-      }
-    } catch (e) {
-      view.appendChild(Kairo.core.el('div', { class: 'card' }, [
-        Kairo.core.el('h3', { text: '页面渲染失败' }),
-        Kairo.core.el('div', { class: 'text-err', text: e.message })
-      ]));
-    }
-    const crumbs = $('#crumbs');
-    if (crumbs) crumbs.textContent = names[name] || '未知';
-    Array.from(document.querySelectorAll('.nav-item')).forEach(a => {
-      a.classList.toggle('active', a.getAttribute('data-route') === name);
+      return null;
     });
-    if (name === 'downloads' && Kairo.core.clearDlBadge) {
-      Kairo.core.clearDlBadge();
-    }
-    state.currentRoute = name;
-    state.currentRouteState = resolved.state;
+
+    // 数据库工作台：未提交事务 / 脏网格（T046 语义保留到关闭时）
+    T.addCloseGuard(function (tab) {
+      if (tab.route !== 'database' || !Kairo.database || typeof Kairo.database.hasPendingWork !== 'function') return null;
+      const dbWork = Kairo.database.hasPendingWork();
+      if (!dbWork || (!dbWork.hasTransaction && !(dbWork.dirtyCount > 0))) return null;
+      return (dbWork.hasTransaction
+        ? '数据库工作台存在未提交的事务' + (dbWork.dirtyCount ? '及 ' + dbWork.dirtyCount + ' 处未保存的网格修改' : '')
+        : '数据库工作台存在 ' + dbWork.dirtyCount + ' 处未保存的网格修改')
+        + '。关闭将回滚事务并丢弃修改，确定关闭吗？';
+    });
+
+    // 纯前端上传任务（T047：前端直传无后台断点续传，关闭即取消）
+    T.addCloseGuard(function (tab) {
+      if (Kairo.core && typeof Kairo.core.hasActiveUploadsFor === 'function'
+        && Kairo.core.hasActiveUploadsFor(tab.id)) {
+        return '该页面有正在进行的上传任务。前端直传不支持后台断点续传，关闭将取消上传。确定关闭吗？';
+      }
+      // 兼容旧控制器（未按 Tab 注册时退回全局判断，仅当该 Tab 是活动 Tab）
+      if (Kairo.core && typeof Kairo.core.hasActiveUploads === 'function'
+        && tabs().isActive(tab.id) && Kairo.core.hasActiveUploads()) {
+        return '该页面有正在进行的上传任务。前端直传不支持后台断点续传，关闭将取消上传。确定关闭吗？';
+      }
+      return null;
+    });
+
+    // SSH 活动终端会话
+    T.addCloseGuard(function (tab) {
+      if (tab.route !== 'ssh') return null;
+      let active = false;
+      if (Kairo.core && typeof Kairo.core.hasActiveShellsFor === 'function') {
+        try { active = Kairo.core.hasActiveShellsFor(tab.id); } catch (_) {}
+      }
+      if (!active && Kairo.core && typeof Kairo.core.hasActiveShells === 'function'
+        && tabs().isActive(tab.id)) {
+        try { active = Kairo.core.hasActiveShells(); } catch (_) {}
+      }
+      if (active) {
+        return '该页面存在活动的 SSH 终端会话。关闭将断开连接（远端后台进程若未配置 nohup/screen 可能随之终止）。确定关闭吗？';
+      }
+      return null;
+    });
   }
 
+  // ---------- 导航：hash → 打开或激活 Tab（不销毁其他 Tab） ----------
+
+  function navigate() {
+    const T = tabs();
+    if (!T) return;
+    document.body.classList.remove('sidebar-open');
+    const routes = state.routes || {};
+    const resolved = routeFromHash(location.hash);
+    const name = routes[resolved.name] ? resolved.name : 'home';
+    T.openRoute(name, resolved.state || {});
+  }
+
+  // ---------- 页面卸载：释放所有 Tab 资源 + 守卫提示 ----------
+
+  function collectUnloadBlockers() {
+    const T = tabs();
+    const msgs = [];
+    if (T && typeof T.closeBlockers === 'function' && typeof T.getOpenIds === 'function') {
+      T.getOpenIds().forEach(function (id) {
+        try {
+          T.closeBlockers(id).forEach(function (b) {
+            if (b && b.message && msgs.indexOf(b.message) < 0) msgs.push(b.message);
+          });
+        } catch (_) {}
+      });
+    }
+    return msgs;
+  }
+
+  function releaseAllForUnload() {
+    const core = Kairo.core || {};
+    try {
+      const ids = (tabs() && typeof tabs().getOpenIds === 'function') ? tabs().getOpenIds() : [];
+      // 下载：关 SSE + beacon 通知后端 cancel（fire-and-forget）
+      ids.forEach(function (id) {
+        const dl = core.getActiveDL ? core.getActiveDL(id) : null;
+        try { dl && dl.evtsrc && dl.evtsrc.close(); } catch (_) {}
+        if (dl && dl.id && navigator.sendBeacon) {
+          try { navigator.sendBeacon('/api/files/download/' + dl.id + '/cancel', ''); } catch (_) {}
+        }
+        const tail = core.getActiveTail ? core.getActiveTail(id) : null;
+        try { tail && tail.evtsrc && tail.evtsrc.close(); } catch (_) {}
+        if (tail && tail.id && navigator.sendBeacon) {
+          try { navigator.sendBeacon('/api/logs/tail/' + tail.id + '/stop', ''); } catch (_) {}
+        }
+      });
+    } catch (_) {}
+    try { if (core.releaseAllTabResources) core.releaseAllTabResources(); } catch (_) {}
+    try { if (core.cancelAllUploadsBeacon) core.cancelAllUploadsBeacon(); } catch (_) {}
+    try { if (Kairo.database && Kairo.database.cancel) Kairo.database.cancel(); } catch (_) {}
+  }
+
+  // 关闭守卫在模块加载时即注册（不依赖 load 事件，纯函数注册表）。
+  registerCloseGuards();
+
   window.addEventListener('hashchange', navigate);
-  window.addEventListener('beforeunload', () => {
-    // 页面卸载时清理进行中的下载
-    if (Kairo.core && Kairo.core.getActiveDL && Kairo.core.getActiveDL()) {
-      const dl = Kairo.core.getActiveDL();
-      try { dl.evtsrc && dl.evtsrc.close(); } catch (e) { /* ignore */ }
-      if (dl.id && navigator.sendBeacon) {
-        try { navigator.sendBeacon('/api/files/download/' + dl.id + '/cancel', ''); } catch (e) { /* ignore */ }
-      }
-      Kairo.core.clearActiveDL();
+  window.addEventListener('beforeunload', function (ev) {
+    const msgs = collectUnloadBlockers();
+    if (msgs.length) {
+      ev.preventDefault();
+      ev.returnValue = msgs[0];
     }
-    // 页面卸载时清理进行中的 tail
-    if (Kairo.core && Kairo.core.getActiveTail && Kairo.core.getActiveTail()) {
-      const tail = Kairo.core.getActiveTail();
-      try { tail.evtsrc && tail.evtsrc.close(); } catch (e) { /* ignore */ }
-      if (tail.id && navigator.sendBeacon) {
-        try { navigator.sendBeacon('/api/logs/tail/' + tail.id + '/stop', ''); } catch (e) { /* ignore */ }
-      }
-      Kairo.core.clearActiveTail();
-    }
-    // 页面卸载时清理 SSH 终端 WS 连接
-    if (Kairo.core && Kairo.core.clearActiveShells) {
-      Kairo.core.clearActiveShells();
-    }
-    // 页面卸载时清理进行中的上传（v1.2）
-    // 用 sendBeacon 异步通知后端 cancel，前端 fire-and-forget。
-    if (Kairo.core && Kairo.core.cancelAllUploadsBeacon) {
-      try { Kairo.core.cancelAllUploadsBeacon(); } catch (e) { /* ignore */ }
-    }
-    if (Kairo.database && Kairo.database.cancel) {
-      try { Kairo.database.cancel(); } catch (e) { /* ignore */ }
-    }
-    if (state.currentScope) {
-      try { state.currentScope.dispose(); } catch (e) { /* ignore */ }
-      state.currentScope = null;
-    }
-    if (typeof state.currentUnmount === 'function') {
-      try { state.currentUnmount(); } catch (e) { /* ignore */ }
-      state.currentUnmount = null;
-    }
+    releaseAllForUnload();
   });
+
   function initSidebarDrawer() {
     const toggle = document.getElementById('sidebar-toggle');
     const backdrop = document.getElementById('sidebar-backdrop');
@@ -305,7 +195,6 @@
       const appName = (info.app && info.app.name) || 'Kairo';
       const appSubtitle = (info.app && info.app.subtitle) || '天命契机';
       const version = info.version || '';
-      const buildTime = info.build_time || '';
       const dlFolder = info.paths && info.paths.download_dir;
       const listenInfo = document.getElementById('listen-info');
       if (listenInfo) {
@@ -315,8 +204,6 @@
       const footerVersion = document.getElementById('footer-version');
       if (footerVersion) {
         footerVersion.textContent = [version, appName, appSubtitle].filter(Boolean).join(' · ');
-        // 可观测：悬停显示构建时间，方便确认当前跑的是哪个包（版本跳变时一眼定位）。
-        if (buildTime) footerVersion.title = '构建时间 ' + buildTime;
       }
     } catch (e) { /* 忽略 */ }
     // 启动时拉一次 preferences：把用户上次保存的 tail 高亮规则放到 Kairo.state.tailHighlights，
@@ -330,6 +217,10 @@
     } catch (e) { /* ignore */ }
     state.tailHighlights = state.tailHighlights || [];
     if (Kairo.notes && Kairo.notes.init) Kairo.notes.init();
+    // TabManager 初始化 → 按 hash 打开首个 Tab（关闭守卫已在模块加载时注册）
+    try {
+      if (Kairo.tabs && Kairo.tabs.init) Kairo.tabs.init({});
+    } catch (e) { if (console && console.warn) console.warn('tabs init failed', e); }
     navigate();
     // 宠物彩蛋：静默初始化（未开启 / 失败都不影响主流程）
     if (window.Kairo && Kairo.pet && Kairo.pet.init) {

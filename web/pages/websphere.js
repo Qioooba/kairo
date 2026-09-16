@@ -2862,6 +2862,11 @@
         setTabBadge('tail', '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#22c55e;vertical-align:middle;"></span>', true);
         if (window.EventSource) {
           tailEvtSrc = new EventSource('/api/logs/tail/' + tailId + '/events');
+          // Tab 保活：按 Tab 注册 tail，会话归属当前 Tab；关闭该 Tab 时释放，
+          // 切换 Tab 时保留（后台保持运行）。旧架构下这里从未注册，切页即泄漏。
+          if (Kairo.core && Kairo.core.setActiveTail) {
+            try { Kairo.core.setActiveTail({ id: tailId, evtsrc: tailEvtSrc }); } catch (_) {}
+          }
           // v0.6-fix：v0.5 旧 bug 修复 —— onerror 不再只是 append，必须调 stopTailUI
           // 否则 mock_sshd tail 流立即结束 / 真实环境网络断开时，按钮会一起卡死。
           tailEvtSrc.onmessage = (ev) => {
@@ -2998,6 +3003,9 @@
 
     function stopTailUI() {
       if (tailEvtSrc) { tailEvtSrc.close(); tailEvtSrc = null; }
+      if (Kairo.core && Kairo.core.clearActiveTail) {
+        try { Kairo.core.clearActiveTail(); } catch (_) {}
+      }
       tailId = null;
       btnTailStart.disabled = false;
       btnTailStop.disabled = true;

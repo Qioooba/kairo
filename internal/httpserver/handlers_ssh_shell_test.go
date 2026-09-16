@@ -516,6 +516,81 @@ func TestSSHShell_MaxSessions(t *testing.T) {
 	}
 }
 
+// TestSSHShell_GBKStdinEncodesToGBK GBK 模式下前端 UTF-8 输入应转 GBK 再发远端。
+// 回归"乱码文件夹进不去"：之前 stdin 未编码，`cd 中文目录` 发 UTF-8 字节，
+// GBK 磁盘文件名对不上，报 No such file。
+func TestSSHShell_GBKStdinEncodesToGBK(t *testing.T) {
+	gotCh := make(chan []byte, 1)
+	onShell := func(ch ssh.Channel, stdin io.Reader) {
+		_, _ = io.WriteString(ch, "ready\r\n")
+		buf := make([]byte, 1024)
+		n, err := stdin.Read(buf)
+		if n > 0 {
+			cp := make([]byte, n)
+			copy(cp, buf[:n])
+			select {
+			case gotCh <- cp:
+			default:
+			}
+			_, _ = ch.Write(cp) // echo 回去，便于 WS 侧确认
+		}
+		if err != nil {
+			_, _ = ch.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{0}))
+			return
+		}
+		// 保持会话，别立刻退出
+		for {
+			if _, err := stdin.Read(buf); err != nil {
+				_, _ = ch.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{0}))
+				return
+			}
+		}
+	}
+	addr := startFakeShellSSH(t, "ops", "testpw", onShell)
+	_, portStr, _ := net.SplitHostPort(addr)
+	port, _ := strconv.Atoi(portStr)
+	srv := newTestServerWithFakeShellSSH(t, port, "testpw")
+	httpSrv := httptest.NewServer(srv)
+	defer httpSrv.Close()
+
+	// 带 encoding=gbk 的 WS dial（wsDial 默认不带 encoding）
+	u, _ := url.Parse(httpSrv.URL)
+	u.Scheme = "ws"
+	u.Path = "/api/ssh/shell/ws"
+	q := u.Query()
+	q.Set("system", "信贷生产")
+	q.Set("server", "mock-1")
+	q.Set("rows", "24")
+	q.Set("cols", "80")
+	q.Set("encoding", "gbk")
+	u.RawQuery = q.Encode()
+	dialer := websocket.Dialer{HandshakeTimeout: 5 * time.Second}
+	conn, _, err := dialer.Dial(u.String(), nil)
+	if err != nil {
+		t.Fatalf("ws dial gbk: %v", err)
+	}
+	defer conn.Close()
+
+	// 等 ready banner
+	if _, ok := readBinary(t, conn, 5*time.Second); !ok {
+		t.Fatal("expected ready banner")
+	}
+	// 前端永远发 UTF-8："你好" = E4 BD A0 E5 A5 BD
+	utf8hello := []byte("你好")
+	if err := conn.WriteMessage(websocket.BinaryMessage, utf8hello); err != nil {
+		t.Fatalf("write utf8: %v", err)
+	}
+	select {
+	case got := <-gotCh:
+		want := []byte{0xC4, 0xE3, 0xBA, 0xC3}
+		if string(got) != string(want) {
+			t.Fatalf("GBK stdin: server got %x, want GBK %x (frontend sent UTF-8 %x)", got, want, utf8hello)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout waiting for server stdin")
+	}
+}
+
 // ---------- 测试辅助 ----------
 
 // httpClient 是标准 http client，用于非 WS 的 400 测试。

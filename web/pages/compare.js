@@ -605,13 +605,18 @@
     const compareBtn = makeButton('开始比较', 'compare', () => compareNow(false, true), 'btn btn-primary btn-sm');
     compareBtn.setAttribute('data-action', 'text-compare');
     const editBtn = makeButton('返回编辑', 'open', showEditors, 'btn btn-sm'); editBtn.style.display = 'none';
-    const saveLeftBtn = makeButton('保存左侧', 'save', () => saveSide('left'), 'btn btn-sm'); saveLeftBtn.setAttribute('data-action', 'save-left'); saveLeftBtn.style.display = 'none';
-    const saveRightBtn = makeButton('保存右侧', 'save', () => saveSide('right'), 'btn btn-sm'); saveRightBtn.setAttribute('data-action', 'save-right'); saveRightBtn.style.display = 'none';
+    const saveLeftBtn = makeButton('保存左侧', 'save', () => saveSide('left'), 'btn btn-sm'); saveLeftBtn.setAttribute('data-action', 'save-left'); saveLeftBtn.title = '仅此时才写文件：未点保存磁盘不变'; saveLeftBtn.disabled = true;
+    const saveRightBtn = makeButton('保存右侧', 'save', () => saveSide('right'), 'btn btn-sm'); saveRightBtn.setAttribute('data-action', 'save-right'); saveRightBtn.title = '仅此时才写文件：未点保存磁盘不变'; saveRightBtn.disabled = true;
     const dirtyBanner = el('span', { class: 'cmp-dirty-banner', text: '' });
 
     const toggleEditorsBtn = makeButton('展开原文件编辑', 'expand', toggleEditors, 'btn btn-sm');
+    toggleEditorsBtn.setAttribute('data-action', 'toggle-editors');
     const copySelRightBtn = makeButton('覆盖到右侧 →', 'right', () => copySelectionToSide('right'), 'btn btn-sm');
+    copySelRightBtn.setAttribute('data-action', 'cover-sel-right');
+    copySelRightBtn.title = '将左侧选中/全部内容覆盖到右侧（仅改内存，需保存才落盘）';
     const copySelLeftBtn = makeButton('← 覆盖到左侧', 'left', () => copySelectionToSide('left'), 'btn btn-sm');
+    copySelLeftBtn.setAttribute('data-action', 'cover-sel-left');
+    copySelLeftBtn.title = '将右侧选中/全部内容覆盖到左侧（仅改内存，需保存才落盘）';
     const selectAllBtn = makeButton('全选内容', 'selectAll', selectAllDiff, 'btn btn-sm');
     const copyLeftAllBtn = makeButton('复制左侧全部', 'copy', () => copySideAll('left'), 'btn btn-sm');
     const copyRightAllBtn = makeButton('复制右侧全部', 'copy', () => copySideAll('right'), 'btn btn-sm');
@@ -693,6 +698,8 @@
     const nextLineBtn = makeButton('下一行', 'next', () => navigateLine(1), 'btn btn-sm');
     nextLineBtn.title = '移动到下一行 (↓)';
     const swapBtn = makeButton('交换', 'swap', swapSides, 'btn btn-sm');
+    swapBtn.setAttribute('data-action', 'swap-sides');
+    swapBtn.title = '交换左右内容与来源';
     const copyBtn = makeButton('复制 Diff', 'copy', copyDiff, 'btn btn-sm'), downloadBtn = makeButton('下载 Diff', 'download', downloadDiff, 'btn btn-sm');
     [prevBtn, nextBtn, prevLineBtn, nextLineBtn, copyBtn, downloadBtn].forEach(btn => btn.disabled = true);
     const modeSelect = el('select', { class: 'cmp-mode-select' }, [el('option', { value: 'side', text: '左右并排' }), el('option', { value: 'unified', text: 'Unified' }), el('option', { value: 'changes', text: '仅差异' })]);
@@ -716,9 +723,9 @@
     const moreDetails = el('details', { class: 'cmp2-popover cmp2-more' }, [
       el('summary', { text: '更多操作' }),
       el('div', { class: 'cmp2-popover-panel cmp2-menu-panel' }, [
-        toggleEditorsBtn, copySelRightBtn, copySelLeftBtn, selectAllBtn,
-        copyLeftAllBtn, copyRightAllBtn, copyBtn, downloadBtn, swapBtn,
-        saveLeftBtn, saveRightBtn, prevLineBtn, nextLineBtn
+        selectAllBtn,
+        copyLeftAllBtn, copyRightAllBtn, copyBtn, downloadBtn,
+        prevLineBtn, nextLineBtn
       ])
     ]);
     const findBtn = makeButton('查找', 'selectAll', () => {
@@ -726,10 +733,13 @@
       else toast('请先开始比较', 'idle');
     }, 'btn btn-sm');
     findBtn.title = '在比对结果中查找 (Ctrl+F)';
+    // 高频操作直接放在工具栏：展开/覆盖/交换/保存；低频的复制/下载/行级导航留在更多里。
     const toolbar = el('div', { class: 'cmp2-commandbar' }, [
       el('div', { class: 'cmp2-commandbar-primary' }, [compareBtn, navGroup, findBtn, dirtyBanner]),
       el('div', { class: 'cmp2-commandbar-secondary' }, [
         el('label', { class: 'cmp2-field-inline' }, [el('span', { text: '视图' }), modeSelect]),
+        toggleEditorsBtn, copySelRightBtn, copySelLeftBtn, swapBtn,
+        saveLeftBtn, saveRightBtn,
         optionDetails, moreDetails
       ])
     ]);
@@ -805,8 +815,6 @@
     function refreshSaveButtons() {
       saveLeftBtn.disabled = !canSaveComparedFile(state.left);
       saveRightBtn.disabled = !canSaveComparedFile(state.right);
-      saveLeftBtn.style.display = '';
-      saveRightBtn.style.display = '';
       const bits = [];
       if (state.left.dirty) bits.push('左侧已修改');
       if (state.right.dirty) bits.push('右侧已修改');

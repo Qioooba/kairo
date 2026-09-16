@@ -463,8 +463,27 @@ btnSearch.appendChild(el('span', { text: '搜索' }));
       applyBgMode();
     }
     window.addEventListener('kairo:themechange', onThemeChange);
+    // Tab 保活：外层 Tab 从隐藏切回显示时，xterm 画布在 display:none 期间尺寸为 0，
+    // 必须 refit 否则终端显示错乱。复用内部 activateTab 的 fit 逻辑（只 fit 不改 active）。
+    function onOuterTabShow(ev) {
+      if (!ev || !ev.detail || ev.detail.route !== 'ssh') return;
+      if (pageState.disposed) return;
+      const tab = getActiveTab();
+      if (tab && tab.fitAddon && !tab.closed) {
+        setTimeout(function () {
+          if (pageState.disposed || tab.closed) return;
+          try { tab.fitAddon.fit(); } catch (e) { /* ignore */ }
+          if (tab.term) {
+            tab.cols = tab.term.cols || tab.cols;
+            tab.rows = tab.term.rows || tab.rows;
+          }
+        }, 30);
+      }
+    }
+    window.addEventListener('kairo:tab-show', onOuterTabShow);
     // Ctrl+Shift+F：终端搜索快捷键（仅 SSH 页面激活时生效）
-    window.addEventListener('keydown', function (e) {
+    // 具名函数：Tab 关闭时在 closeAllTabs 里移除，避免每次重开叠加一个监听。
+    function onGlobalKeydown(e) {
       if (e.ctrlKey && e.shiftKey && (e.key === 'F' || e.key === 'f')) {
         // 只在 SSH 路由激活时响应（避免拦截其他页面的搜索）
         const route = (Kairo.state && Kairo.state.currentRoute) || '';
@@ -472,7 +491,8 @@ btnSearch.appendChild(el('span', { text: '搜索' }));
         e.preventDefault();
         searchInTerminal();
       }
-    });
+    }
+    window.addEventListener('keydown', onGlobalKeydown);
     applyBgMode();
     updateToolbarButtons();
     paintBgToggleBtn();
@@ -1200,6 +1220,8 @@ function updateTabStatus(tab) {
       }
       pageState.disposed = true;
       window.removeEventListener('kairo:themechange', onThemeChange);
+      window.removeEventListener('kairo:tab-show', onOuterTabShow);
+      window.removeEventListener('keydown', onGlobalKeydown);
       Kairo.core.setActiveShells(null);
     }
 

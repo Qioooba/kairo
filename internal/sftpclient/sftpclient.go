@@ -468,19 +468,46 @@ func (c *Client) DownloadFileContext(ctx context.Context, remotePath, localPath 
 	}
 
 	// 下载前 Stat：拿 total + 提前拒绝目录，避免 Open(目录) 在不同 server 行为不一致。
-	info, statErr := c.b.Stat(remotePath)
-	if statErr != nil {
-		return 0, fmt.Errorf("stat 远程文件失败: %w", statErr)
+	// GBK 自适应：Stat 与 Open 必须用同一个候选路径（否则 Stat 通了 Open 还拿旧串又不通），
+	// 这里按候选逐个试 Stat+Open，首个全通的即为解析结果。
+	var info os.FileInfo
+	var src SftpFile
+	var lastErr error
+	var statOK, openFailed bool
+	resolved := false
+	for _, cand := range EncodePathCandidates(remotePath) {
+		si, serr := c.b.Stat(cand)
+		if serr != nil {
+			lastErr = serr
+			continue
+		}
+		statOK = true
+		if si.IsDir() {
+			return 0, fmt.Errorf("暂不支持直接下载目录: %s", remotePath)
+		}
+		f, oerr := c.b.Open(cand)
+		if oerr != nil {
+			lastErr = oerr
+			openFailed = true
+			continue
+		}
+		info, src = si, f
+		resolved = true
+		break
 	}
-	if info.IsDir() {
-		return 0, fmt.Errorf("暂不支持直接下载目录: %s", remotePath)
+	if !resolved {
+		if lastErr == nil {
+			lastErr = fmt.Errorf("无可用候选路径")
+		}
+		// Stat 通但 Open 全败（如权限/文件被删）：保持老文案"打开远程文件失败"，
+		// 否则调用方分不清是"文件不存在"还是"打不开"。
+		if statOK && openFailed {
+			return 0, fmt.Errorf("打开远程文件失败: %w", lastErr)
+		}
+		return 0, fmt.Errorf("stat 远程文件失败: %w", lastErr)
 	}
 	total := info.Size()
 
-	src, err := c.b.Open(remotePath)
-	if err != nil {
-		return 0, fmt.Errorf("打开远程文件失败: %w", err)
-	}
 	defer src.Close()
 
 	if err := os.MkdirAll(filepath.Dir(localPath), 0o755); err != nil {
@@ -526,15 +553,22 @@ func (c *Client) DownloadFileContext(ctx context.Context, remotePath, localPath 
 //
 // 注意：path 不做白名单校验，调用方决定传什么路径；
 // 真实访问控制由远端 SSH 服务器的账号权限承担。
+//
+// GBK 自适应（names.go）：展示路径先按 UTF-8 试，不通再按 GBK 字节试，
+// GBK 盘的中文文件预览/下载才能打开。
 func (c *Client) Open(path string) (SftpFile, error) {
 	if c == nil || c.b == nil {
 		return nil, fmt.Errorf("sftp 客户端未连接")
 	}
-	f, err := c.b.Open(path)
-	if err != nil {
-		return nil, fmt.Errorf("打开远端文件失败: %w", err)
+	var lastErr error
+	for _, cand := range EncodePathCandidates(path) {
+		f, err := c.b.Open(cand)
+		if err == nil {
+			return f, nil
+		}
+		lastErr = err
 	}
-	return f, nil
+	return nil, fmt.Errorf("打开远端文件失败: %w", lastErr)
 }
 
 // ReadDir 列出 path 下的所有条目（文件和目录）。
@@ -545,15 +579,22 @@ func (c *Client) Open(path string) (SftpFile, error) {
 //
 // v1.0 起：10w 文件目录会爆内存，调用方应该改用 ListLimited(path, max)。
 // ReadDir 保留仅为向后兼容（v0.x 老代码）。
+//
+// GBK 自适应（names.go）：返回前把条目名解成 UTF-8 展示名（JSON 不再丢字节），
+// 入参按 [UTF-8, GBK] 顺序回退，乱码目录可点进。
 func (c *Client) ReadDir(path string) ([]os.FileInfo, error) {
 	if c == nil || c.b == nil {
 		return nil, fmt.Errorf("sftp 客户端未连接")
 	}
-	infos, err := c.b.ReadDir(path)
-	if err != nil {
-		return nil, fmt.Errorf("列出目录失败: %w", err)
+	var lastErr error
+	for _, cand := range EncodePathCandidates(path) {
+		infos, err := c.b.ReadDir(cand)
+		if err == nil {
+			return wrapDecoded(infos), nil
+		}
+		lastErr = err
 	}
-	return infos, nil
+	return nil, fmt.Errorf("列出目录失败: %w", lastErr)
 }
 
 // ListLimited 列出 path 下最多 max 个条目（v1.0 新增）。
@@ -563,34 +604,44 @@ func (c *Client) ReadDir(path string) ([]os.FileInfo, error) {
 //   - Shell backend：远端 head（治本，远端 ls 截断后才传回）
 //
 // 返回：
-//   - entries: 实际条目（最多 max 条）
+//   - entries: 实际条目（最多 max 条，Name 已是 UTF-8 展示名）
 //   - truncated: true 表示远端实际条目数 > max
 //   - err: 协议 / 网络 / 权限错误
 //
 // max <= 0 时不截断（行为同 ReadDir，truncated=false）。
+// GBK 自适应同 ReadDir。
 func (c *Client) ListLimited(path string, max int) ([]os.FileInfo, bool, error) {
 	if c == nil || c.b == nil {
 		return nil, false, fmt.Errorf("sftp 客户端未连接")
 	}
-	entries, truncated, err := c.b.ListLimited(path, max)
-	if err != nil {
-		return nil, false, fmt.Errorf("列出目录失败: %w", err)
+	var lastErr error
+	for _, cand := range EncodePathCandidates(path) {
+		entries, truncated, err := c.b.ListLimited(cand, max)
+		if err == nil {
+			return wrapDecoded(entries), truncated, nil
+		}
+		lastErr = err
 	}
-	return entries, truncated, nil
+	return nil, false, fmt.Errorf("列出目录失败: %w", lastErr)
 }
 
 // Stat 拿到 path 对应的文件信息（大小、修改时间、是否为目录、权限位）。
 //
 // 用于"文件浏览器"页：先 Stat 判断是文件还是目录，再决定是进子目录还是直接下载。
+// GBK 自适应同 ReadDir；返回的 Name() 已是展示名。
 func (c *Client) Stat(path string) (os.FileInfo, error) {
 	if c == nil || c.b == nil {
 		return nil, fmt.Errorf("sftp 客户端未连接")
 	}
-	info, err := c.b.Stat(path)
-	if err != nil {
-		return nil, fmt.Errorf("stat 失败: %w", err)
+	var lastErr error
+	for _, cand := range EncodePathCandidates(path) {
+		info, err := c.b.Stat(cand)
+		if err == nil {
+			return wrapDecodedOne(info), nil
+		}
+		lastErr = err
 	}
-	return info, nil
+	return nil, fmt.Errorf("stat 失败: %w", lastErr)
 }
 
 // Chtimes best-effort preserves timestamps for compare synchronization. The
@@ -677,28 +728,43 @@ func (c *Client) MkdirAll(path string) error {
 }
 
 // Rename 远端原子重命名。优先 PosixRename（可覆盖已存在目标），失败回退到标准 Rename。
+// GBK 自适应：源路径（已存在）按候选回退解析，目标路径保持用户输入不转
+// （避免"试错建文件"造出错误编码的重名文件）。
 func (c *Client) Rename(oldPath, newPath string) error {
 	if c == nil || c.b == nil {
 		return fmt.Errorf("sftp 客户端未连接")
 	}
-	if err := c.b.Rename(oldPath, newPath); err != nil {
-		if IsPermissionDenied(err) {
-			return err
+	var lastErr error
+	for _, cand := range EncodePathCandidates(oldPath) {
+		if err := c.b.Rename(cand, newPath); err == nil {
+			return nil
+		} else {
+			lastErr = err
+			if IsPermissionDenied(err) {
+				return err
+			}
 		}
-		return fmt.Errorf("重命名 %q -> %q 失败: %w", oldPath, newPath, err)
 	}
-	return nil
+	if IsPermissionDenied(lastErr) {
+		return lastErr
+	}
+	return fmt.Errorf("重命名 %q -> %q 失败: %w", oldPath, newPath, lastErr)
 }
 
-// Remove 删除远端文件（不递归）。
+// Remove 删除远端文件（不递归）。GBK 自适应同 Open（按候选回退）。
 func (c *Client) Remove(path string) error {
 	if c == nil || c.b == nil {
 		return fmt.Errorf("sftp 客户端未连接")
 	}
-	if err := c.b.Remove(path); err != nil {
-		return fmt.Errorf("删除 %q 失败: %w", path, err)
+	var lastErr error
+	for _, cand := range EncodePathCandidates(path) {
+		if err := c.b.Remove(cand); err == nil {
+			return nil
+		} else {
+			lastErr = err
+		}
 	}
-	return nil
+	return fmt.Errorf("删除 %q 失败: %w", path, lastErr)
 }
 
 // progressInterval 进度回调最小间隔（字节）。64KB 对内网 SFTP

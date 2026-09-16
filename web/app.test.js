@@ -1901,10 +1901,120 @@ function testCompareHelpers() {
   console.log('  compare helpers: joinPath / rollupAllFolders / path parsing / source identity ✓');
 }
 
+// ---------- Tab 保活测试共用 mock DOM / vm 环境 ----------
+//
+// tabs.js + app.js 跑在 vm 里，需要最小 DOM：
+//   - document.createElement/getElementById/querySelector(All)
+//   - viewRoot / tabBar 容器（pane 的挂载点）
+//   - sessionStorage / CustomEvent / history.replaceState / window.confirm
+function makeTabMockEl(tag) {
+  const el = {
+    tag: tag || 'div',
+    children: [],
+    dataset: {},
+    style: {},
+    textContent: '',
+    title: '',
+    parentNode: null,
+    scrollTop: 0,
+    _cls: new Set(),
+    _attrs: {},
+    _listeners: {}
+  };
+  el.classList = {
+    add(c) { el._cls.add(c); },
+    remove(c) { el._cls.delete(c); },
+    toggle(c, f) {
+      if (f === undefined) { if (el._cls.has(c)) el._cls.delete(c); else el._cls.add(c); }
+      else if (f) el._cls.add(c); else el._cls.delete(c);
+    },
+    contains(c) { return el._cls.has(c); }
+  };
+  el.setAttribute = (k, v) => { el._attrs[k] = v; };
+  el.getAttribute = (k) => (k in el._attrs ? el._attrs[k] : null);
+  el.appendChild = (c) => { if (c) { c.parentNode = el; el.children.push(c); } return c; };
+  el.removeChild = (c) => {
+    const i = el.children.indexOf(c);
+    if (i >= 0) el.children.splice(i, 1);
+    if (c) c.parentNode = null;
+    return c;
+  };
+  el.remove = () => { if (el.parentNode) el.parentNode.removeChild(el); };
+  el.addEventListener = (t, f) => { (el._listeners[t] = el._listeners[t] || []).push(f); };
+  el.removeEventListener = () => {};
+  el.querySelector = () => null;
+  el.querySelectorAll = () => [];
+  el.scrollIntoView = () => {};
+  Object.defineProperty(el, 'isConnected', { get: () => !!el.parentNode });
+  Object.defineProperty(el, 'innerHTML', { get: () => '', set: () => { el.children = []; } });
+  return el;
+}
+
+// 跑真实 route-scope.js + tabs.js + app.js，返回可驱动的句柄。
+// opts: { hash, routes, routeNames, database, core(merge), confirm }
+function makeTabsVmEnv(opts) {
+  opts = opts || {};
+  const vm = require('vm');
+  const routeScopeSrc = fs.readFileSync(path.join(__dirname, 'workbench', 'route-scope.js'), 'utf8');
+  const tabsSrc = fs.readFileSync(path.join(__dirname, 'tabs.js'), 'utf8');
+  const appSrc = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8');
+
+  const listeners = {};
+  const viewRoot = makeTabMockEl('section');
+  const barEl = makeTabMockEl('div');
+  const ext = opts.extra || {};
+  const core = Object.assign({
+    el: (tag, attrs) => ({ tag, text: attrs && attrs.text }),
+    $: () => null,
+    $$: () => [],
+    clearDlBadge() {},
+    toast() {},
+    releaseTabResources() {},
+    hasActiveUploadsFor: () => false,
+    hasActiveShellsFor: () => false
+  }, ext.core || opts.core || {});
+  const win = {
+    Kairo: {
+      core,
+      state: { routes: opts.routes || {}, routeNames: opts.routeNames || {} },
+      database: opts.database
+    },
+    addEventListener: (type, fn) => { listeners[type] = fn; },
+    dispatchEvent: () => {},
+    confirm: opts.confirm || (() => true),
+    location: { hash: opts.hash || '#/home' },
+    document: {
+      body: { classList: { remove() {}, add() {}, toggle() {} } },
+      createElement: (t) => makeTabMockEl(t),
+      getElementById: (id) => (id === 'view' ? viewRoot : id === 'tab-bar' ? barEl : null),
+      querySelector: () => null,
+      querySelectorAll: () => []
+    },
+    console,
+    history: { replaceState: (s, t, url) => { win.location.hash = url; } }
+  };
+  win.window = win;
+  const ctx = {
+    window: win,
+    document: win.document,
+    location: win.location,
+    history: win.history,
+    console,
+    setTimeout, clearTimeout, setInterval, clearInterval,
+    AbortController, URLSearchParams,
+    sessionStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+    CustomEvent: class TabTestEvent {
+      constructor(n, o) { this.type = n; this.detail = (o && o.detail) || null; }
+    }
+  };
+  vm.runInNewContext(routeScopeSrc + '\n' + tabsSrc + '\n' + appSrc, ctx);
+  win.Kairo.tabs.init({ viewRoot, barEl });
+  return { win, listeners, viewRoot, barEl, core };
+}
+
 async function testRouteScopeLifecycleAndAsyncUnmount() {
   const vm = require('vm');
   const routeScopeSrc = fs.readFileSync(path.join(__dirname, 'workbench', 'route-scope.js'), 'utf8');
-  const appSrc = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8');
 
   // Test 1: RouteScope direct unit tests
   const vmContext = { window: {}, console, setTimeout, clearTimeout, setInterval, clearInterval, AbortController };
@@ -1957,323 +2067,266 @@ async function testRouteScopeLifecycleAndAsyncUnmount() {
   scope3.dispose();
   assert.strictEqual(listeners.click, undefined, 'event listener must be removed on scope disposal');
 
-  // Test 2: Full navigation lifecycle in app.js
-  let unmountACalls = 0, unmountBCalls = 0, unmountA2Calls = 0;
+  // Test 2: Tab keep-alive lifecycle（Tab 保活新语义）
+  //   - 首次打开渲染一次；切换只隐藏/显示，不销毁、不重渲染
+  //   - 隐藏期间 late 到达的异步 cleanup 存入该 Tab，不执行、不污染活动页
+  //   - 关闭才 dispose + unmount（恰好一次）；stale 拒绝不写活动页 DOM
+  let unmountACalls = 0, unmountBCalls = 0;
+  let renderA = 0, renderB = 0;
   let resolveA;
   const promiseA = new Promise(r => { resolveA = r; });
 
-  const mockView = {
-    innerHTML: '',
-    dataset: {},
-    classList: { toggle: () => {}, remove: () => {} },
-    appendChild: (child) => { mockView.innerHTML += (child && child.text) || ''; }
-  };
-
-  const navListeners = {};
-  const navDoc = {
-    body: { classList: { remove: () => {} } },
-    querySelector: () => null,
-    querySelectorAll: () => [],
-    getElementById: () => null
-  };
-  const navWin = {
-    Kairo: {
-      core: { el: (tag, attrs) => ({ tag, text: attrs && attrs.text }), $: () => mockView, $$: () => [] },
-      workbench: vmContext.window.Kairo.workbench,
-      state: {
-        routes: {
-          a: (view, state, scope) => promiseA.then(() => () => { unmountACalls++; }),
-          b: (view, state, scope) => () => { unmountBCalls++; },
-          a2: (view, state, scope) => () => { unmountA2Calls++; }
-        },
-        routeNames: { a: 'A', b: 'B', a2: 'A2' }
-      }
+  const env = makeTabsVmEnv({
+    hash: '#/a',
+    routes: {
+      home: () => () => {},
+      a: () => { renderA++; return promiseA.then(() => () => { unmountACalls++; }); },
+      b: () => { renderB++; return () => { unmountBCalls++; }; }
     },
-    addEventListener: (type, fn) => { navListeners[type] = fn; },
-    location: { hash: '#/a' },
-    document: navDoc,
-    console,
-    history: {}
-  };
-  navWin.window = navWin;
-  const navCtx = { window: navWin, document: navDoc, location: navWin.location, history: {}, console, setTimeout, clearTimeout, AbortController };
-  vm.runInNewContext(routeScopeSrc + '\n' + appSrc, navCtx);
+    routeNames: { home: '首页', a: 'A', b: 'B' }
+  });
+  const T = env.win.Kairo.tabs;
+  const go = (hash) => { env.win.location.hash = hash; env.listeners.hashchange(); };
 
-  navWin.Kairo.core.$ = () => mockView;
+  // 打开 A：渲染一次，pane token 递增
+  go('#/a');
+  assert.strictEqual(renderA, 1, '首次打开 A 渲染一次');
+  const paneA = T.getActive().pane;
+  assert.ok(paneA, 'A 有独立 pane');
+  assert.strictEqual(paneA.dataset.renderToken, '1', 'A pane token 1');
+  assert.strictEqual(env.win.Kairo.state.currentRoute, 'a');
 
-  // Navigate to A
-  navWin.location.hash = '#/a';
-  navListeners.hashchange();
-  assert.strictEqual(mockView.dataset.renderToken, '1');
+  // 切到 B：A 不卸载，只是隐藏
+  go('#/b');
+  assert.strictEqual(renderB, 1, '首次打开 B 渲染一次');
+  assert.strictEqual(unmountACalls, 0, '切换 Tab 不得卸载隐藏页');
+  assert.strictEqual(paneA.style.display, 'none', '隐藏 pane display:none');
 
-  // Navigate to B before A resolves
-  navWin.location.hash = '#/b';
-  navListeners.hashchange();
-  assert.strictEqual(mockView.dataset.renderToken, '2');
-
-  // Now Route A resolves late
+  // A 的异步 cleanup 在隐藏期间 late 到达：存入 A，不执行、不污染 B
   resolveA();
   await promiseA;
   await new Promise(r => setImmediate(r));
+  assert.strictEqual(unmountACalls, 0, '隐藏 Tab 的 late cleanup 只存储不执行');
+  assert.strictEqual(unmountBCalls, 0, '活动页 B 不受隐藏页 late 回调影响');
 
-  // A晚返回 cleanup: must execute immediately, NOT overwrite B's unmount
-  assert.strictEqual(unmountACalls, 1, 'late cleanup from route A must run immediately on stale branch');
-  assert.strictEqual(unmountBCalls, 0, 'route B is still active');
+  // 切回 A：不重渲染，同一 pane 重新显示
+  go('#/a');
+  assert.strictEqual(renderA, 1, '切回不得重渲染');
+  assert.strictEqual(T.getActive().pane, paneA, '同一 pane 实例');
+  assert.strictEqual(paneA.style.display, '', 'pane 重新显示');
 
-  // Navigate away from B -> B's unmount must be called exactly once
-  navWin.location.hash = '#/a2';
-  navListeners.hashchange();
-  assert.strictEqual(unmountBCalls, 1, 'route B unmount must execute when leaving B');
+  // 关闭非活动 B：卸载恰好一次，A 保持活动
+  T.requestClose('b');
+  assert.strictEqual(unmountBCalls, 1, '关闭时卸载恰好一次');
+  assert.strictEqual(T.getActiveId(), 'a', 'A 仍是活动页');
 
-  // A-B-A navigation test
-  let resolveA_first, resolveA_second;
-  const pA1 = new Promise(r => { resolveA_first = r; });
-  const pA2 = new Promise(r => { resolveA_second = r; });
-  let unmountA1 = 0, unmountA2 = 0;
+  // 新语义：仅剩一个 Tab 时拒绝关闭（保证总有活动 Tab，不再回落新建 home）
+  T.requestClose('a');
+  assert.strictEqual(unmountACalls, 0, '仅剩一个 Tab 时不得卸载');
+  assert.strictEqual(T.getActiveId(), 'a', '仅剩一个 Tab 时关闭被拒绝');
+  assert.ok(T.has('a'), '仅剩一个 Tab 时保留');
 
-  navWin.Kairo.state.routes.aba = (view, state, scope) => {
-    if (scope.renderToken === 4) {
-      return pA1.then(() => () => { unmountA1++; });
-    }
-    return pA2.then(() => () => { unmountA2++; });
-  };
+  // 从别的页主动点回首页：保留多 Tab（home 与 a 共存）
+  go('#/home');
+  assert.ok(T.has('a'), '主动回首页不销毁后台 Tab');
+  assert.strictEqual(T.getActiveId(), 'home');
 
-  // 1. Enter ABA (token 4)
-  navWin.location.hash = '#/aba';
-  navListeners.hashchange();
-  assert.strictEqual(mockView.dataset.renderToken, '4');
-
-  // 2. Switch to B (token 5)
-  navWin.location.hash = '#/b';
-  navListeners.hashchange();
-  assert.strictEqual(mockView.dataset.renderToken, '5');
-
-  // 3. Switch back to ABA (token 6)
-  navWin.location.hash = '#/aba';
-  navListeners.hashchange();
-  assert.strictEqual(mockView.dataset.renderToken, '6');
-
-  // First ABA resolves now
-  resolveA_first();
-  await pA1;
-  await new Promise(r => setImmediate(r));
-  assert.strictEqual(unmountA1, 1, 'first ABA cleanup executed immediately when late');
-
-  // Second ABA resolves now
-  resolveA_second();
-  await pA2;
-  await new Promise(r => setImmediate(r));
-  assert.strictEqual(unmountA2, 0, 'current ABA is active, not unmounted');
-
-  // Switch away from second ABA -> unmounts once
-  navWin.location.hash = '#/b';
-  navListeners.hashchange();
-  assert.strictEqual(unmountA2, 1, 'current ABA unmounted on navigation');
-
-  // Stale error rejection does NOT write to new page DOM
+  // stale 拒绝不写活动页 DOM：从首页打开 C（自动收掉首页）后立即关闭 C，
+  // 再让它 late 拒绝；回落到 A 且不得写 A 的 DOM
   let rejectC;
   const pC = new Promise((_, rej) => { rejectC = rej; });
-  navWin.Kairo.state.routes.c = () => pC;
-  navWin.location.hash = '#/c';
-  navListeners.hashchange(); // token 8
-  assert.strictEqual(mockView.dataset.renderToken, '8');
-
-  navWin.location.hash = '#/b';
-  navListeners.hashchange(); // token 9
-  assert.strictEqual(mockView.dataset.renderToken, '9');
-  mockView.innerHTML = 'PAGE_B_CONTENT';
-
+  env.win.Kairo.state.routes.c = () => pC;
+  env.win.Kairo.state.routeNames.c = 'C';
+  const aKids = paneA.children.length;
+  go('#/c');
+  assert.ok(!T.has('home'), '从首页打开别的页面时自动收掉首页');
+  assert.strictEqual(T.getActiveId(), 'c');
+  T.requestClose('c');
   rejectC(new Error('late failure in C'));
   try { await pC; } catch (_) {}
   await new Promise(r => setImmediate(r));
-
-  assert.strictEqual(mockView.innerHTML, 'PAGE_B_CONTENT', 'late rejection from C must not write error to B');
+  assert.strictEqual(T.getActive().pane, paneA, '回落后仍是 A 同一 pane');
+  assert.strictEqual(paneA.children.length, aKids, 'stale 拒绝不得写活动页 DOM');
 
   console.log('  route scope and async unmount lifecycle ✓');
 }
 
 async function testUI02_NavigationPolicyAndGuards() {
-  const vm = require('vm');
-  const routeScopeSrc = fs.readFileSync(path.join(__dirname, 'workbench', 'route-scope.js'), 'utf8');
-  const appSrc = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8');
-
+  // Tab 保活新语义：
+  //   - 切换 Tab 永不拦截、永不销毁（后台保持运行，草稿/事务都在）
+  //   - 关闭 Tab / 关浏览器时才执行守卫（confirm / 静默阻止 + toast）
   let confirmResult = true;
-  let confirmMessages = [];
+  const confirmMessages = [];
   const mockConfirm = (msg) => {
     confirmMessages.push(msg);
     return confirmResult;
   };
-
-  const mockView = {
-    innerHTML: '',
-    dataset: {},
-    classList: { toggle: () => {}, remove: () => {} },
-    appendChild: (child) => { mockView.innerHTML += (child && child.text) || ''; }
-  };
-
-  const navListeners = {};
-  const navDoc = {
-    body: { classList: { remove: () => {} } },
-    querySelector: () => null,
-    querySelectorAll: () => [],
-    getElementById: () => null
-  };
-
-  let discardedWorkCalls = 0;
-  let cancelUploadCalls = 0;
-  let apiCalls = [];
+  const clearMsgs = () => { confirmMessages.length = 0; };
 
   let dbHasPending = true;
   let hasUploads = false;
-  let activeDLClosed = false;
+  let discardedWorkCalls = 0;
+  let cancelUploadCalls = 0;
+  const released = [];
+  const toasts = [];
 
-  const navWin = {
-    Kairo: {
-      core: {
-        el: (tag, attrs) => ({ tag, text: attrs && attrs.text }),
-        $: () => mockView,
-        $$: () => [],
-        hasActiveUploads: () => hasUploads,
-        cancelAllUploads: () => { cancelUploadCalls++; },
-        getActiveDL: () => ({ id: 'dl-task-001', evtsrc: { close: () => { activeDLClosed = true; } } }),
-        clearActiveDL: () => {}
-      },
-      api: {
-        api: (method, url, body) => {
-          apiCalls.push({ method, url, body });
-          return Promise.resolve({});
-        }
-      },
-      database: {
-        hasPendingWork: () => dbHasPending ? { hasTransaction: true, dirtyCount: 2, pending: true } : { hasTransaction: false, dirtyCount: 0, pending: false },
-        discardPendingWork: () => { discardedWorkCalls++; },
-        cancel: () => {}
-      },
-      state: {
-        routes: {
-          home: (view, state, scope) => () => {},
-          database: (view, state, scope) => () => {},
-          files: (view, state, scope) => () => {},
-          scoped: (view, state, scope) => {
-            scope.setCanLeave((target) => target === 'home');
-            return () => {};
-          }
-        },
-        routeNames: { home: '首页', database: '数据库', files: '文件', scoped: '受保护页' }
+  const env = makeTabsVmEnv({
+    hash: '#/home',
+    confirm: mockConfirm,
+    routes: {
+      home: () => () => {},
+      database: () => () => {},
+      files: () => () => {},
+      scoped: (view, st, scope) => {
+        scope.setCanLeave(() => false);
+        return () => {};
       }
     },
-    confirm: mockConfirm,
-    addEventListener: (type, fn) => { navListeners[type] = fn; },
-    location: { hash: '#/home' },
-    document: navDoc,
-    console,
-    history: {
-      replaceState: (state, title, url) => {
-        navWin.location.hash = url;
-      }
+    routeNames: { home: '首页', database: '数据库', files: '文件', scoped: '受保护页' },
+    database: {
+      hasPendingWork: () => dbHasPending
+        ? { hasTransaction: true, dirtyCount: 2, pending: true }
+        : { hasTransaction: false, dirtyCount: 0, pending: false },
+      discardPendingWork: () => { discardedWorkCalls++; },
+      cancel: () => {}
+    },
+    core: {
+      toast: (msg) => { toasts.push(msg); },
+      releaseTabResources: (id) => {
+        released.push(id);
+        if (id === 'files' && hasUploads) cancelUploadCalls++;
+      },
+      hasActiveUploadsFor: (id) => hasUploads && id === 'files',
+      hasActiveShellsFor: () => false
     }
-  };
-  navWin.window = navWin;
+  });
+  const T = env.win.Kairo.tabs;
+  const S = env.win.Kairo.state;
+  const go = (hash) => { env.win.location.hash = hash; env.listeners.hashchange(); };
 
-  const navCtx = {
-    window: navWin,
-    document: navDoc,
-    location: navWin.location,
-    history: navWin.history,
-    console,
-    setTimeout,
-    clearTimeout,
-    AbortController,
-    URLSearchParams
-  };
+  // 1. 打开 database，切到 home：切换永不确认、不销毁（边查日志边操作 DB）
+  go('#/database');
+  assert.strictEqual(S.currentRoute, 'database');
+  go('#/home');
+  assert.strictEqual(confirmMessages.length, 0, '切换 Tab 不得弹确认');
+  assert.strictEqual(S.currentRoute, 'home');
+  assert.ok(T.has('database'), 'database Tab 在后台保留');
+  assert.strictEqual(discardedWorkCalls, 0, '切换不得回滚事务');
 
-  vm.runInNewContext(routeScopeSrc + '\n' + appSrc, navCtx);
-  navWin.Kairo.core.$ = () => mockView;
-
-  // 1. Initial navigation to database page
-  navWin.location.hash = '#/database';
-  navListeners.hashchange();
-  assert.strictEqual(navWin.Kairo.state.currentRoute, 'database');
-  assert.strictEqual(mockView.dataset.renderToken, '1');
-
-  // 2. T046: Database has uncommitted transaction; user tries to navigate to home and CANCELS
+  // 2. T046改：关闭有未提交事务的 database，用户取消 → 保留
   confirmResult = false;
-  confirmMessages = [];
-  navWin.location.hash = '#/home';
-  navListeners.hashchange();
+  clearMsgs();
+  T.requestClose('database');
+  assert.strictEqual(confirmMessages.length, 1, '关闭时弹确认');
+  assert.ok(confirmMessages[0].includes('未提交的事务'), '文案提到未提交事务');
+  assert.ok(T.has('database'), '取消后 Tab 保留');
+  assert.strictEqual(discardedWorkCalls, 0, '取消后不回滚');
 
-  assert.strictEqual(confirmMessages.length, 1, 'confirm should be prompted');
-  assert.ok(confirmMessages[0].includes('未提交的事务'), 'message mentions uncommitted transaction');
-  assert.strictEqual(navWin.location.hash, '#/database', 'hash must be restored to #/database on cancel');
-  assert.strictEqual(navWin.Kairo.state.currentRoute, 'database', 'route must remain database');
-  assert.strictEqual(discardedWorkCalls, 0, 'discardPendingWork must NOT be called on cancel');
-
-  // 3. T046: User tries to navigate to home and CONFIRMS (leave and rollback)
+  // 3. T046改：确认关闭 → 回滚 + 销毁
   confirmResult = true;
-  navWin.location.hash = '#/home';
-  navListeners.hashchange();
+  clearMsgs();
+  T.requestClose('database');
+  assert.strictEqual(discardedWorkCalls, 1, '确认关闭后回滚一次');
+  assert.ok(!T.has('database'), 'Tab 已销毁');
+  assert.strictEqual(T.getActiveId(), 'home');
 
-  assert.strictEqual(discardedWorkCalls, 1, 'discardPendingWork must be called to roll back cleanly on leave');
-  assert.strictEqual(navWin.Kairo.state.currentRoute, 'home', 'route must transition to home');
-  assert.strictEqual(mockView.dataset.renderToken, '2');
+  // 4. T047改：下载任务切换不释放（后台保持运行），关闭才释放
+  go('#/files');
+  go('#/home');
+  assert.ok(!released.includes('files'), '切换不得释放后台 Tab 资源');
+  T.requestClose('files');
+  assert.ok(released.includes('files'), '关闭才释放该 Tab 资源');
 
-  // 4. T047: Backend download task persistence across route changes
-  apiCalls = [];
-  activeDLClosed = false;
-  navWin.location.hash = '#/files';
-  navListeners.hashchange();
-  assert.strictEqual(navWin.Kairo.state.currentRoute, 'files');
-
-  // Navigate from files to home while backend download task is active
-  navWin.location.hash = '#/home';
-  navListeners.hashchange();
-
-  assert.strictEqual(activeDLClosed, true, 'SSE subscription closed on navigation');
-  const cancelCalls = apiCalls.filter(c => c.url.includes('/cancel'));
-  assert.strictEqual(cancelCalls.length, 0, 'backend download task must NOT be cancelled on page switch (retrievable in downloads)');
-
-  // 5. T047: Frontend-only upload task guard
+  // 5. T047改：上传任务切换不确认不取消；关闭才确认/取消
   hasUploads = true;
+  clearMsgs();
+  go('#/files');
+  const cancelBefore = cancelUploadCalls;
+  go('#/home');
+  assert.strictEqual(confirmMessages.length, 0, '上传中切换也不确认');
+  assert.strictEqual(cancelUploadCalls, cancelBefore, '切换不取消上传');
   confirmResult = false;
-  confirmMessages = [];
-  cancelUploadCalls = 0;
-
-  // Navigate while uploads active, user CANCELS
-  navWin.location.hash = '#/files';
-  navListeners.hashchange();
-
-  assert.strictEqual(confirmMessages.length, 1, 'upload warning prompt shown');
-  assert.ok(confirmMessages[0].includes('上传'), 'message mentions upload cancellation');
-  assert.strictEqual(cancelUploadCalls, 0, 'upload must not be cancelled on cancel');
-  assert.strictEqual(navWin.Kairo.state.currentRoute, 'home', 'stays on current page');
-
-  // User CONFIRMS leave -> upload cancelled
+  clearMsgs();
+  T.requestClose('files');
+  assert.strictEqual(confirmMessages.length, 1, '关闭上传中的 Tab 才确认');
+  assert.ok(confirmMessages[0].includes('上传'), '文案提到上传');
+  assert.strictEqual(cancelUploadCalls, cancelBefore, '取消关闭则不取消上传');
+  assert.ok(T.has('files'), '取消后 Tab 保留');
   confirmResult = true;
-  navWin.location.hash = '#/files';
-  navListeners.hashchange();
+  T.requestClose('files');
+  assert.strictEqual(cancelUploadCalls, cancelBefore + 1, '确认关闭才取消上传');
+  assert.ok(!T.has('files'), '上传 Tab 已销毁');
 
-  assert.strictEqual(cancelUploadCalls, 1, 'upload cancelled on confirmed leave');
-  assert.strictEqual(navWin.Kairo.state.currentRoute, 'files', 'navigates to files');
-
-  // 6. RouteScope custom canLeave guard
+  // 6. scope.canLeave 返回 false → 切换不受影响，关闭被静默阻止（toast）
   hasUploads = false;
-  dbHasPending = false;
-  navWin.location.hash = '#/scoped';
-  navListeners.hashchange();
-  assert.strictEqual(navWin.Kairo.state.currentRoute, 'scoped');
+  go('#/scoped');
+  assert.strictEqual(S.currentRoute, 'scoped');
+  go('#/files');
+  assert.strictEqual(S.currentRoute, 'files', '切换不受 canLeave 阻止');
+  clearMsgs();
+  const toastBefore = toasts.length;
+  T.requestClose('scoped');
+  assert.strictEqual(confirmMessages.length, 0, '静默阻止不弹 confirm');
+  assert.strictEqual(toasts.length, toastBefore + 1, '静默阻止给 toast 提示');
+  assert.ok(T.has('scoped'), '被阻止的 Tab 保留');
 
-  // Trying to navigate to files (scoped allows only home)
-  navWin.location.hash = '#/files';
-  navListeners.hashchange();
-  assert.strictEqual(navWin.location.hash, '#/scoped', 'custom canLeave rejected files navigation');
-  assert.strictEqual(navWin.Kairo.state.currentRoute, 'scoped');
+  console.log('  UI-02 tab close guards, background keep-alive, and task release ✓');
+}
 
-  // Navigating to home (allowed by scoped)
-  navWin.location.hash = '#/home';
-  navListeners.hashchange();
-  assert.strictEqual(navWin.Kairo.state.currentRoute, 'home');
+function testHomeTabCloseAndAutoDismiss() {
+  // 新语义：首页是普通落地页
+  //   - 仅剩一个 Tab 时（包括首页）不给关，保证总有活动 Tab
+  //   - 有其他 Tab 时首页可关闭
+  //   - 从首页打开别的页面时自动收掉首页；从别的页点回首页则保留多 Tab
+  const env = makeTabsVmEnv({
+    hash: '#/home',
+    routes: {
+      home: () => () => {},
+      files: () => () => {},
+      ssh: () => () => {}
+    },
+    routeNames: { home: '首页', files: '文件', ssh: '终端' }
+  });
+  const T = env.win.Kairo.tabs;
+  const go = (hash) => { env.win.location.hash = hash; env.listeners.hashchange(); };
+  const closeVisible = (id) => {
+    const btn = env.barEl.children.find((c) => c.getAttribute && c.getAttribute('data-tab') === id);
+    if (!btn) return false;
+    return btn.children.some((c) => c.className === 'app-tab-close' || c._className === 'app-tab-close');
+  };
 
-  console.log('  UI-02 navigation policy, canLeave guards, and upload/download task persistence ✓');
+  go('#/home');
+  assert.strictEqual(T.getActiveId(), 'home');
+  assert.strictEqual(closeVisible('home'), false, '仅剩首页时不给 ×');
+
+  // 仅剩一个 Tab 时拒绝关闭（含程序化调用）
+  T.requestClose('home');
+  assert.ok(T.has('home'), '仅剩首页时关闭被拒绝');
+  assert.strictEqual(T.getActiveId(), 'home');
+
+  // 从首页打开文件：自动收掉首页
+  go('#/files');
+  assert.strictEqual(T.getActiveId(), 'files');
+  assert.ok(!T.has('home'), '从首页打开别的页面时自动收掉首页');
+  assert.strictEqual(closeVisible('files'), false, '收掉首页后只剩文件，不给 ×');
+
+  // 从别的页点回首页：保留多 Tab，且首页可关
+  go('#/home');
+  assert.ok(T.has('files'), '主动回首页不销毁后台 Tab');
+  assert.strictEqual(T.getActiveId(), 'home');
+  assert.strictEqual(closeVisible('home'), true, '有多 Tab 时首页给 ×');
+  assert.strictEqual(closeVisible('files'), true, '有多 Tab 时文件给 ×');
+
+  T.requestClose('home');
+  assert.ok(!T.has('home'), '有多 Tab 时首页可关闭');
+  assert.strictEqual(T.getActiveId(), 'files');
+
+  // 后台没有 home 时再开别的页：不凭空造 home
+  go('#/ssh');
+  assert.ok(T.has('files'), '非首页之间切换保留后台 Tab');
+  assert.ok(!T.has('home'), '后台没有 home 时不凭空出现');
+
+  console.log('  home tab close rules and auto-dismiss on leaving home ✓');
 }
 
 function testT069_ThemeIntegrityAndTokens() {
@@ -2317,6 +2370,7 @@ async function main() {
     testGotDoneDedupe, testNormalizeHighlightColor, testRenderHighlightedLine,
     testTailViewer, testApplyCommandPath, testDatabaseSQLHelpers, testDatabaseWorkbenchLazy, testCompareHelpers, testWaspackHelpers,
     testRouteScopeLifecycleAndAsyncUnmount, testUI02_NavigationPolicyAndGuards,
+    testHomeTabCloseAndAutoDismiss,
     testT069_ThemeIntegrityAndTokens,
   ];
   let pass = 0, fail = 0;

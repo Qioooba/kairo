@@ -1053,8 +1053,11 @@
     categorySel.addEventListener('change', () => { updateFavOnlyVisibility(); renderList(); });
     document.getElementById('cmd-favonly').addEventListener('change', renderList);
 
-    // 快捷键
+    // 快捷键（Tab 保活：render 只跑一次，监听常驻但用路由门卫隔离，
+    // 不再靠一次性 hashchange 拆除 —— 否则切走一次快捷键就永久失效）
     function onKey(e) {
+      // 只在常用命令页激活时响应（避免拦截其他页面的按键）
+      if (!window.Kairo || !Kairo.state || Kairo.state.currentRoute !== 'commands') return;
       // "/" 聚焦搜索框（仅当焦点不在 input/textarea 且不是 contenteditable）
       const tag = (e.target && e.target.tagName) || '';
       const inEditable = tag === 'INPUT' || tag === 'TEXTAREA' || (e.target && e.target.isContentEditable);
@@ -1076,9 +1079,12 @@
     }
     document.addEventListener('keydown', onKey);
 
-    // 卸载时清理全局监听（避免 hashchange 后污染别的页面）
-    const cleanup = () => document.removeEventListener('keydown', onKey);
-    window.addEventListener('hashchange', cleanup, { once: true });
+    // Tab 关闭时清理全局监听（pane 销毁后闭包里的 searchInp 已 detached）
+    window.addEventListener('kairo:tab-close', function onTabClose(ev) {
+      if (!ev || !ev.detail || ev.detail.route !== 'commands') return;
+      try { document.removeEventListener('keydown', onKey); } catch (_) {}
+      try { window.removeEventListener('kairo:tab-close', onTabClose); } catch (_) {}
+    });
 
     // 首屏
     renderList();

@@ -21,9 +21,22 @@
     return svg;
   }
 
+  function activeTabId() {
+    try {
+      if (window.Kairo && Kairo.tabs && typeof Kairo.tabs.getActiveId === 'function') {
+        return Kairo.tabs.getActiveId();
+      }
+    } catch (_) { /* ignore */ }
+    return null;
+  }
+
   function modal(opts) {
     opts = opts || {};
+    // Tab 归属：默认归属打开时刻的活动 Tab；关闭 Tab 时只关自己的弹层，
+    // 切换 Tab 时隐藏非活动 Tab 的弹层（setActiveTab），避免 A 页遮罩盖住 B 页。
+    const ownerTab = opts.tabId || opts.ownerTab || activeTabId();
     const overlay = el('div', { class: 'modal-overlay kairo-managed-overlay' });
+    if (ownerTab) overlay.setAttribute('data-tab', ownerTab);
     const card = el('div', { class: 'modal-card', role: 'dialog', 'aria-modal': 'true' });
     if (opts.width) card.style.width = opts.width + 'px';
     const head = el('div', { class: 'modal-head' });
@@ -82,7 +95,7 @@
         ev.preventDefault(); first.focus();
       }
     }
-    const api = { close, el: card, overlay };
+    const api = { close, el: card, overlay, tabId: ownerTab };
     stack.push(api);
     overlay.style.zIndex = 'calc(var(--z-modal) + ' + stack.length + ')';
     overlay.addEventListener('click', function (ev) { if (ev.target === overlay) close(); });
@@ -157,9 +170,33 @@
   Kairo.overlays = {
     modal,
     prompt,
-    closeTop: function () {
-      const top = stack[stack.length - 1];
-      if (top) top.close();
+    closeTop: function (tabId) {
+      if (tabId === undefined || tabId === null) {
+        const top = stack[stack.length - 1];
+        if (top) top.close();
+        return;
+      }
+      for (let i = stack.length - 1; i >= 0; i--) {
+        if (stack[i] && stack[i].tabId === tabId) { stack[i].close(); return; }
+      }
+    },
+    // 关闭某 Tab 拥有的全部弹层（关闭 Tab 时调用；无归属的全局弹层不受影响）
+    closeTabOverlays: function (tabId) {
+      if (tabId === undefined || tabId === null) return;
+      Array.from(stack).reverse().forEach(function (entry) {
+        if (entry && entry.tabId === tabId) {
+          try { entry.close(); } catch (_) { /* ignore */ }
+        }
+      });
+    },
+    // 切换 Tab 时调用：隐藏非活动 Tab 的弹层，恢复活动 Tab 的
+    setActiveTab: function (tabId) {
+      stack.forEach(function (entry) {
+        if (!entry || !entry.overlay) return;
+        try {
+          entry.overlay.style.display = (!entry.tabId || entry.tabId === tabId) ? '' : 'none';
+        } catch (_) { /* ignore */ }
+      });
     }
   };
 })();

@@ -763,122 +763,242 @@
   }
   core.kvTable = kvTable;
 
-  // -------- 全局 activeDL 管理（websphere / files 页下载时注册，navigate 切走时清理）--------
+  // -------- 按 Tab 隔离的资源注册表（Tab 保活重构） --------
+  //
+  // 背景：旧架构是单 view 切页即销毁，全局只存一份 __opsActive*。
+  // Tab 保活后多页并存（日志 tail 跑着的同时操作数据库），单例会被后挂载覆盖。
+  // 重构：dl / tail / shells / uploads 四类资源按 tabId 分桶存放。
+  //   - set*(res, tabId?)：不传 tabId 则归属当前活动 Tab（Kairo.tabs.getActiveId），
+  //     传 null 则显式注销该 Tab 条目（兼容旧页面的 setActiveShells(null) 自注销）。
+  //   - get*/has*For(tabId?)：不传看活动 Tab；has*() 看所有 Tab（供 beforeunload）。
+  //   - releaseTabResources(tabId)：只释放该 Tab 的资源，不碰其他 Tab。
+  //     关闭 Tab 时由 TabManager 调用；切换 Tab 时不调用（后台保持运行）。
+  //   - window.__ops* 保留为“活动 Tab 别名”，供可能存在的直接读取方兼容。
+  const _tabRes = { dl: new Map(), tail: new Map(), shells: new Map(), uploads: new Map() };
 
-  // 全局进行中的下载任务（用于 navigate 清理）
-  // 引用挂这里而不是闭包里，是因为 renderWebsphere 重建后旧 EventSource 没人能关。
+  function _tabIdOf(explicit) {
+    if (explicit !== undefined && explicit !== null && explicit !== '') return explicit;
+    try {
+      if (typeof window !== 'undefined' && window.Kairo && Kairo.tabs && typeof Kairo.tabs.getActiveId === 'function') {
+        const id = Kairo.tabs.getActiveId();
+        if (id) return id;
+      }
+    } catch (_) { /* ignore */ }
+    return '__global';
+  }
+
+  function _syncLegacyActive() {
+    if (typeof window === 'undefined') return;
+    try {
+      const aid = _tabIdOf();
+      window.__opsActiveDL = _tabRes.dl.get(aid) || null;
+      window.__opsActiveTail = _tabRes.tail.get(aid) || null;
+      window.__opsActiveShells = _tabRes.shells.get(aid) || null;
+      window.__opsActiveUploads = _tabRes.uploads.get(aid) || null;
+    } catch (_) { /* ignore */ }
+  }
+
   if (typeof window !== 'undefined') {
     window.__opsActiveDL = window.__opsActiveDL || null;
+    window.__opsActiveTail = window.__opsActiveTail || null;
+    window.__opsActiveShells = window.__opsActiveShells || null;
   }
 
-  function setActiveDL(dl) {
-    window.__opsActiveDL = dl;
-  }
-  function getActiveDL() {
-    return window.__opsActiveDL;
-  }
-  function clearActiveDL() {
-    if (window.__opsActiveDL) {
-      try { window.__opsActiveDL.evtsrc && window.__opsActiveDL.evtsrc.close(); } catch (e) { /* ignore */ }
+  function _closeEvtSrc(entry) {
+    if (entry) {
+      try { entry.evtsrc && entry.evtsrc.close(); } catch (e) { /* ignore */ }
     }
-    window.__opsActiveDL = null;
+  }
+
+  // ---- 下载 SSE（websphere / files） ----
+  function setActiveDL(dl, tabId) {
+    const id = _tabIdOf(tabId === null ? undefined : tabId);
+    if (dl == null || tabId === null) _tabRes.dl.delete(tabId === null ? _tabIdOf() : id);
+    else _tabRes.dl.set(id, dl);
+    _syncLegacyActive();
+  }
+  function getActiveDL(tabId) {
+    if (tabId !== undefined && tabId !== null) return _tabRes.dl.get(tabId) || null;
+    return _tabRes.dl.get(_tabIdOf()) || null;
+  }
+  function clearActiveDL(tabId) {
+    const id = tabId !== undefined && tabId !== null ? tabId : _tabIdOf();
+    _closeEvtSrc(_tabRes.dl.get(id));
+    _tabRes.dl.delete(id);
+    _syncLegacyActive();
   }
   core.setActiveDL = setActiveDL;
   core.getActiveDL = getActiveDL;
   core.clearActiveDL = clearActiveDL;
 
-  // -------- 全局 activeTail 管理（websphere 页 tail 时注册，navigate 切走时清理）--------
-
-  if (typeof window !== 'undefined') {
-    window.__opsActiveTail = window.__opsActiveTail || null;
+  // ---- tail SSE（websphere） ----
+  function setActiveTail(tail, tabId) {
+    const id = _tabIdOf(tabId === null ? undefined : tabId);
+    if (tail == null || tabId === null) _tabRes.tail.delete(tabId === null ? _tabIdOf() : id);
+    else _tabRes.tail.set(id, tail);
+    _syncLegacyActive();
   }
-
-  function setActiveTail(tail) {
-    window.__opsActiveTail = tail;
+  function getActiveTail(tabId) {
+    if (tabId !== undefined && tabId !== null) return _tabRes.tail.get(tabId) || null;
+    return _tabRes.tail.get(_tabIdOf()) || null;
   }
-  function getActiveTail() {
-    return window.__opsActiveTail;
-  }
-  function clearActiveTail() {
-    if (window.__opsActiveTail) {
-      try { window.__opsActiveTail.evtsrc && window.__opsActiveTail.evtsrc.close(); } catch (e) { /* ignore */ }
-    }
-    window.__opsActiveTail = null;
+  function clearActiveTail(tabId) {
+    const id = tabId !== undefined && tabId !== null ? tabId : _tabIdOf();
+    _closeEvtSrc(_tabRes.tail.get(id));
+    _tabRes.tail.delete(id);
+    _syncLegacyActive();
   }
   core.setActiveTail = setActiveTail;
   core.getActiveTail = getActiveTail;
   core.clearActiveTail = clearActiveTail;
 
-  // -------- 全局 activeShells 管理（ssh 页打开的 WS 终端，navigate 切走时清理）--------
-
-  if (typeof window !== 'undefined') {
-    window.__opsActiveShells = window.__opsActiveShells || null;
+  // ---- SSH 终端 WS（ssh 页） ----
+  // 控制器结构：{ hasActive: () => bool, closeAll: () => void }
+  function setActiveShells(controller, tabId) {
+    const id = _tabIdOf(tabId === null ? undefined : tabId);
+    if (controller == null || tabId === null) _tabRes.shells.delete(tabId === null ? _tabIdOf() : id);
+    else _tabRes.shells.set(id, controller);
+    _syncLegacyActive();
   }
-
-  // setActiveShells 注册一个 shells 控制器，结构：{ closeAll: () => void }
-  // ssh 页 mount 时注册，unmount / navigate 切走时 clearActiveShells 会调 closeAll。
-  function setActiveShells(controller) {
-    window.__opsActiveShells = controller;
+  function getActiveShells(tabId) {
+    if (tabId !== undefined && tabId !== null) return _tabRes.shells.get(tabId) || null;
+    return _tabRes.shells.get(_tabIdOf()) || null;
   }
-  function getActiveShells() {
-    return window.__opsActiveShells;
-  }
-  function clearActiveShells() {
-    if (window.__opsActiveShells && typeof window.__opsActiveShells.closeAll === 'function') {
-      try { window.__opsActiveShells.closeAll(); } catch (e) { /* ignore */ }
+  function clearActiveShells(tabId) {
+    const id = tabId !== undefined && tabId !== null ? tabId : _tabIdOf();
+    const c = _tabRes.shells.get(id);
+    if (c && typeof c.closeAll === 'function') {
+      try { c.closeAll(); } catch (e) { /* ignore */ }
     }
-    window.__opsActiveShells = null;
+    _tabRes.shells.delete(id);
+    _syncLegacyActive();
   }
-  function hasActiveShells() {
-    if (window.__opsActiveShells && typeof window.__opsActiveShells.hasActive === 'function') {
-      try { return window.__opsActiveShells.hasActive(); } catch (_) { return false; }
-    }
-    return false;
-  }
-  core.setActiveShells = setActiveShells;
-  core.getActiveShells = getActiveShells;
-  core.clearActiveShells = clearActiveShells;
-  core.hasActiveShells = hasActiveShells;
-
-  // -------- 上传任务清理 hook（v1.2 上传 Bug 1 修复） --------
-  //
-  // files 页 mount 时通过 setActiveUploads(controller) 注册，
-  // navigate 切走 / beforeunload 时调 cancelAllUploads / cancelAllUploadsBeacon。
-  // 注册对象需实现 cancelAll()：取消所有 pending/uploading + abort XHR + 通知后端 cancel。
-  function setActiveUploads(controller) {
-    window.__opsActiveUploads = controller;
-  }
-  function getActiveUploads() {
-    return window.__opsActiveUploads;
-  }
-  function cancelAllUploads() {
-    const c = window.__opsActiveUploads;
-    if (c && typeof c.cancelAll === 'function') {
-      try { c.cancelAll(); } catch (e) { /* ignore */ }
-    }
-  }
-  function hasActiveUploads() {
-    const c = window.__opsActiveUploads;
+  function _shellsActive(c) {
     if (c && typeof c.hasActive === 'function') {
       try { return c.hasActive(); } catch (_) { return false; }
     }
     return false;
   }
-  // beforeunload 路径：调 controller.cancelAllBeacon()，里面用 sendBeacon 异步通知后端，
-  // 不阻塞 unload；前端 XHR 也 abort。
-  function cancelAllUploadsBeacon() {
-    const c = window.__opsActiveUploads;
-    if (c && typeof c.cancelAllBeacon === 'function') {
-      try { c.cancelAllBeacon(); } catch (e) { /* ignore */ }
-    } else if (c && typeof c.cancelAll === 'function') {
+  function hasActiveShells() {
+    for (const c of _tabRes.shells.values()) { if (_shellsActive(c)) return true; }
+    return false;
+  }
+  function hasActiveShellsFor(tabId) {
+    if (tabId === undefined || tabId === null) return _shellsActive(getActiveShells());
+    return _shellsActive(_tabRes.shells.get(tabId));
+  }
+  core.setActiveShells = setActiveShells;
+  core.getActiveShells = getActiveShells;
+  core.clearActiveShells = clearActiveShells;
+  core.hasActiveShells = hasActiveShells;
+  core.hasActiveShellsFor = hasActiveShellsFor;
+
+  // ---- 上传任务（files / ssh） ----
+  // 控制器结构：{ hasActive, cancelAll, cancelAllBeacon? }
+  function setActiveUploads(controller, tabId) {
+    const id = _tabIdOf(tabId === null ? undefined : tabId);
+    if (controller == null || tabId === null) _tabRes.uploads.delete(tabId === null ? _tabIdOf() : id);
+    else _tabRes.uploads.set(id, controller);
+    _syncLegacyActive();
+  }
+  function getActiveUploads(tabId) {
+    if (tabId !== undefined && tabId !== null) return _tabRes.uploads.get(tabId) || null;
+    return _tabRes.uploads.get(_tabIdOf()) || null;
+  }
+  function _uploadsActive(c) {
+    if (c && typeof c.hasActive === 'function') {
+      try { return c.hasActive(); } catch (_) { return false; }
+    }
+    return false;
+  }
+  function cancelAllUploads(tabId) {
+    if (tabId !== undefined && tabId !== null) {
+      const c = _tabRes.uploads.get(tabId);
+      if (c && typeof c.cancelAll === 'function') {
+        try { c.cancelAll(); } catch (e) { /* ignore */ }
+      }
+      return;
+    }
+    const c = getActiveUploads();
+    if (c && typeof c.cancelAll === 'function') {
       try { c.cancelAll(); } catch (e) { /* ignore */ }
     }
+  }
+  function hasActiveUploads() {
+    for (const c of _tabRes.uploads.values()) { if (_uploadsActive(c)) return true; }
+    return false;
+  }
+  function hasActiveUploadsFor(tabId) {
+    if (tabId === undefined || tabId === null) return _uploadsActive(getActiveUploads());
+    return _uploadsActive(_tabRes.uploads.get(tabId));
+  }
+  function cancelAllUploadsBeacon(tabId) {
+    const targets = (tabId !== undefined && tabId !== null)
+      ? [_tabRes.uploads.get(tabId)]
+      : Array.from(_tabRes.uploads.values());
+    targets.forEach(function (c) {
+      if (!c) return;
+      if (typeof c.cancelAllBeacon === 'function') {
+        try { c.cancelAllBeacon(); } catch (e) { /* ignore */ }
+      } else if (typeof c.cancelAll === 'function') {
+        try { c.cancelAll(); } catch (e) { /* ignore */ }
+      }
+    });
   }
   core.setActiveUploads = setActiveUploads;
   core.getActiveUploads = getActiveUploads;
   core.cancelAllUploads = cancelAllUploads;
   core.cancelAllUploadsBeacon = cancelAllUploadsBeacon;
   core.hasActiveUploads = hasActiveUploads;
+  core.hasActiveUploadsFor = hasActiveUploadsFor;
+
+  // ---- 按 Tab 释放（关闭 Tab / beforeunload 时用；切换 Tab 时不用） ----
+  function releaseTabResources(tabId) {
+    if (tabId === undefined || tabId === null) return;
+    _closeEvtSrc(_tabRes.dl.get(tabId));
+    _tabRes.dl.delete(tabId);
+    _closeEvtSrc(_tabRes.tail.get(tabId));
+    _tabRes.tail.delete(tabId);
+    const sh = _tabRes.shells.get(tabId);
+    if (sh && typeof sh.closeAll === 'function') {
+      try { sh.closeAll(); } catch (e) { /* ignore */ }
+    }
+    _tabRes.shells.delete(tabId);
+    const up = _tabRes.uploads.get(tabId);
+    if (up && typeof up.cancelAll === 'function') {
+      try { up.cancelAll(); } catch (e) { /* ignore */ }
+    }
+    _tabRes.uploads.delete(tabId);
+    _syncLegacyActive();
+  }
+  function releaseAllTabResources() {
+    Array.from(_tabRes.dl.keys()).forEach(function (id) {
+      _closeEvtSrc(_tabRes.dl.get(id));
+    });
+    _tabRes.dl.clear();
+    Array.from(_tabRes.tail.keys()).forEach(function (id) {
+      _closeEvtSrc(_tabRes.tail.get(id));
+    });
+    _tabRes.tail.clear();
+    _tabRes.shells.forEach(function (c) {
+      if (c && typeof c.closeAll === 'function') {
+        try { c.closeAll(); } catch (e) { /* ignore */ }
+      }
+    });
+    _tabRes.shells.clear();
+    _tabRes.uploads.forEach(function (c) {
+      if (!c) return;
+      if (typeof c.cancelAllBeacon === 'function') {
+        try { c.cancelAllBeacon(); } catch (e) { /* ignore */ }
+      } else if (typeof c.cancelAll === 'function') {
+        try { c.cancelAll(); } catch (e) { /* ignore */ }
+      }
+    });
+    _tabRes.uploads.clear();
+    _syncLegacyActive();
+  }
+  core.releaseTabResources = releaseTabResources;
+  core.releaseAllTabResources = releaseAllTabResources;
 
   // -------- "上次选择" 记忆（系统 / 服务器 / 日志目录 / 凭据） --------
   //
