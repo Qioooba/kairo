@@ -597,16 +597,20 @@
       const redoBtn = makeButton('重做', 'redo', () => editors[side].redo(), 'btn btn-sm');
       const openBtn = makeButton('打开', 'open', () => openSourceDialog(state[side].source, false, async source => { state[side].source = source; saveSources(state); await loadSide(side); }), 'btn btn-sm');
       const saveBtn = makeButton('保存', 'save', () => saveSide(side), 'btn btn-sm'); saveBtn.disabled = true;
-      sourceHeaders[side] = { badge, label, meta, dirty, saveBtn, language, undoBtn, redoBtn };
+      const revertBtn = makeButton('退回', 'undo', () => revertSide(side), 'btn btn-sm'); revertBtn.disabled = true;
+      revertBtn.title = '放弃' + (side === 'left' ? '左侧' : '右侧') + '未保存修改，恢复到打开时的内容';
+      sourceHeaders[side] = { badge, label, meta, dirty, saveBtn, revertBtn, language, undoBtn, redoBtn };
       const info = el('div', { class: 'cmp-source-info' }, [badge, label, meta, dirty]);
-      const actions = el('div', { class: 'cmp-source-actions cmp2-source-actions' }, [language, undoBtn, redoBtn, openBtn, saveBtn]);
+      const actions = el('div', { class: 'cmp-source-actions cmp2-source-actions' }, [language, undoBtn, redoBtn, openBtn, saveBtn, revertBtn]);
        editorGrid.appendChild(el('section', { class: 'cmp-editor-pane cmp2-editor-pane', 'data-side': side }, [el('div', { class: 'cmp-source-header cmp2-source-header' }, [info, actions]), editors[side].root]));
     });
     const compareBtn = makeButton('开始比较', 'compare', () => compareNow(false, true), 'btn btn-primary btn-sm');
     compareBtn.setAttribute('data-action', 'text-compare');
     const editBtn = makeButton('返回编辑', 'open', showEditors, 'btn btn-sm'); editBtn.style.display = 'none';
     const saveLeftBtn = makeButton('保存左侧', 'save', () => saveSide('left'), 'btn btn-sm'); saveLeftBtn.setAttribute('data-action', 'save-left'); saveLeftBtn.title = '仅此时才写文件：未点保存磁盘不变'; saveLeftBtn.disabled = true;
+    const revertLeftBtn = makeButton('退回左侧', 'undo', () => revertSide('left'), 'btn btn-sm'); revertLeftBtn.setAttribute('data-action', 'revert-left'); revertLeftBtn.title = '放弃左侧未保存修改，恢复到打开时的内容'; revertLeftBtn.disabled = true;
     const saveRightBtn = makeButton('保存右侧', 'save', () => saveSide('right'), 'btn btn-sm'); saveRightBtn.setAttribute('data-action', 'save-right'); saveRightBtn.title = '仅此时才写文件：未点保存磁盘不变'; saveRightBtn.disabled = true;
+    const revertRightBtn = makeButton('退回右侧', 'undo', () => revertSide('right'), 'btn btn-sm'); revertRightBtn.setAttribute('data-action', 'revert-right'); revertRightBtn.title = '放弃右侧未保存修改，恢复到打开时的内容'; revertRightBtn.disabled = true;
     const dirtyBanner = el('span', { class: 'cmp-dirty-banner', text: '' });
 
     const toggleEditorsBtn = makeButton('展开原文件编辑', 'expand', toggleEditors, 'btn btn-sm');
@@ -739,7 +743,7 @@
       el('div', { class: 'cmp2-commandbar-secondary' }, [
         el('label', { class: 'cmp2-field-inline' }, [el('span', { text: '视图' }), modeSelect]),
         toggleEditorsBtn, copySelRightBtn, copySelLeftBtn, swapBtn,
-        saveLeftBtn, saveRightBtn,
+        saveLeftBtn, revertLeftBtn, saveRightBtn, revertRightBtn,
         optionDetails, moreDetails
       ])
     ]);
@@ -793,9 +797,24 @@
       if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); compareNow(false, true); }
       if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
         e.preventDefault();
-        const side = resolveSaveSide(document.activeElement);
+        let side = resolveSaveSide(document.activeElement);
+        if (!side) {
+          if (state.right.dirty && !state.left.dirty) side = 'right';
+          else if (state.left.dirty && !state.right.dirty) side = 'left';
+          else if (state.right.dirty && state.left.dirty) {
+            saveSide('left');
+            saveSide('right');
+            return;
+          }
+        }
         if (side) saveSide(side);
-        else status.textContent = '请先把焦点放在左侧或右侧编辑器/差异行，再保存';
+        else toast('内容未修改，无需保存', 'idle');
+      }
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z') && (!document.activeElement || !document.activeElement.isContentEditable)) {
+        e.preventDefault();
+        let side = resolveSaveSide(document.activeElement) || (state.right.dirty ? 'right' : 'left');
+        if (e.shiftKey) editors[side].redo();
+        else editors[side].undo();
       }
       if ((e.ctrlKey || e.metaKey) && (e.key === 'f' || e.key === 'F')) {
         if (showingResult && currentVirtualDiff && currentVirtualDiff.openSearch) {
@@ -815,6 +834,10 @@
     function refreshSaveButtons() {
       saveLeftBtn.disabled = !canSaveComparedFile(state.left);
       saveRightBtn.disabled = !canSaveComparedFile(state.right);
+      revertLeftBtn.disabled = !state.left.dirty;
+      revertRightBtn.disabled = !state.right.dirty;
+      if (sourceHeaders.left && sourceHeaders.left.revertBtn) sourceHeaders.left.revertBtn.disabled = !state.left.dirty;
+      if (sourceHeaders.right && sourceHeaders.right.revertBtn) sourceHeaders.right.revertBtn.disabled = !state.right.dirty;
       const bits = [];
       if (state.left.dirty) bits.push('左侧已修改');
       if (state.right.dirty) bits.push('右侧已修改');
@@ -1000,6 +1023,22 @@
         if (!disposed) updateHeader(side);
       }
     }
+    function revertSide(side) {
+      if (disposed) return;
+      const item = state[side];
+      const sideName = side === 'left' ? '左侧' : '右侧';
+      if (!item || !item.dirty) {
+        toast(sideName + '未做修改，无需退回', 'idle');
+        return;
+      }
+      editors[side].setValue(item.baseline != null ? item.baseline : '', { resetHistory: true });
+      item.dirty = false;
+      item.editSeq = (item.editSeq || 0) + 1;
+      sourceHeaders[side].dirty.textContent = '';
+      refreshSaveButtons();
+      compareNow(true);
+      toast('已退回' + sideName + '的修改，恢复到打开时的内容', 'ok');
+    }
     function comparisonBlocked() {
       const failed = ['left', 'right'].filter(side => state[side].loadState !== 'ready');
       if (!failed.length) return '';
@@ -1046,8 +1085,17 @@
           state.diffSourceKey = key;
           state.diffStale = false;
           state.hunks = buildHunks(result.lines || []);
-          state.hunkIndex = state.hunks.length ? 0 : -1;
-          renderResult();
+          if (!auto) {
+            state.hunkIndex = state.hunks.length ? 0 : -1;
+            renderResult(false);
+          } else {
+            if (state.hunks.length) {
+              state.hunkIndex = Math.min(Math.max(0, state.hunkIndex), state.hunks.length - 1);
+            } else {
+              state.hunkIndex = -1;
+            }
+            renderResult(true);
+          }
           if (auto && revealAutoResult) {
             // 自动刷新时不强制隐藏原文件编辑区，避免输入过程中光标丢失、无法继续输入
             showingResult = true;
@@ -1094,13 +1142,19 @@
     function showResult() { showingResult = true; panel.classList.add('cmp-panel-has-result'); editorGrid.style.display = 'none'; const label = toggleEditorsBtn.querySelector('span'); if (label) label.textContent = '展开原文件编辑'; else toggleEditorsBtn.textContent = '展开原文件编辑'; const svg = toggleEditorsBtn.querySelector('svg'); if (svg) svg.innerHTML = '<path d="M9 18l6-6-6-6"/>'; resultHost.style.display = ''; editBtn.style.display = 'none'; compareBtn.style.display = ''; refreshSaveButtons(); }
     function showEditors() { showingResult = false; panel.classList.remove('cmp-panel-has-result'); editorGrid.style.display = ''; resultHost.style.display = 'none'; editBtn.style.display = 'none'; compareBtn.style.display = ''; refreshSaveButtons(); }
     let currentVirtualDiff = null;
-    function renderResult() {
+    function renderResult(preserveView) {
+      const viewToRestore = (preserveView && typeof preserveView === 'object')
+        ? preserveView
+        : (preserveView && currentVirtualDiff && typeof currentVirtualDiff.getViewState === 'function'
+          ? currentVirtualDiff.getViewState()
+          : null);
       resultHost.innerHTML = ''; if (!state.diff) return;
       if (options.mode === 'unified' && (state.diff.lines || []).length <= MAX_INLINE_ROWS && window.Diff2Html) {
         const wrapper = el('div', { class: 'cmp-inline-unified' }); wrapper.innerHTML = window.Diff2Html.html(state.diff.unified_diff || '', { drawFileList: false, outputFormat: 'line-by-line', matching: 'lines', renderNothingWhenEmpty: false }); resultHost.appendChild(wrapper); return;
       }
       const effectiveMode = options.mode || 'side';
       const rows = buildAlignedRows(state.diff.lines || [], editorLeft.getValue(), editorRight.getValue(), state.hunks);
+      state.alignedRows = rows;
       const filtered = rows.filter(row => effectiveMode !== 'changes' || row.status !== 'equal');
       currentVirtualDiff = createVirtualDiff(filtered, state, effectiveMode, {
         hunk: applyHunk,
@@ -1120,7 +1174,9 @@
       if (savedSearch.query || savedSearch.open) {
         try { currentVirtualDiff.restoreSearch(savedSearch.query, savedSearch.caseSensitive, savedSearch.open); } catch (_) {}
       }
-      if (state.hunks && state.hunks.length) {
+      if (viewToRestore && typeof currentVirtualDiff.restoreViewState === 'function') {
+        currentVirtualDiff.restoreViewState(viewToRestore);
+      } else if (state.hunks && state.hunks.length) {
         // 有搜索命中时优先保留搜索位置，不强制跳到首个差异块。
         if (!savedSearch.query) currentVirtualDiff.jumpToHunk(Math.max(0, state.hunkIndex));
       }
@@ -1147,76 +1203,43 @@
     }
     function applyHunk(index, direction) {
       const hunk = state.hunks[index]; if (!hunk) return;
-      const target = direction === 'right' ? editorRight : editorLeft, sourceLines = direction === 'right' ? hunk.leftText : hunk.rightText;
-      const start = direction === 'right' ? hunk.rightStart : hunk.leftStart, count = direction === 'right' ? hunk.rightCount : hunk.leftCount;
-      const lines = splitEditorLines(target.getValue()); lines.splice(start, count, ...sourceLines); target.setValue(lines.join('\n'));
-      markDirty(direction === 'right' ? 'right' : 'left'); compareNow(true);
+      const targetSide = direction === 'right' ? 'right' : 'left';
+      const allRows = state.alignedRows;
+      if (allRows && allRows.length) {
+        const hunkRows = allRows.filter(r => r.hunk === index);
+        const newLines = reconstructTargetLines(allRows, new Set(hunkRows), direction);
+        editors[targetSide].setValue(newLines.join('\n'));
+      } else {
+        const target = direction === 'right' ? editorRight : editorLeft, sourceLines = direction === 'right' ? hunk.leftText : hunk.rightText;
+        const start = direction === 'right' ? hunk.rightStart : hunk.leftStart, count = direction === 'right' ? hunk.rightCount : hunk.leftCount;
+        const lines = splitEditorLines(target.getValue()); lines.splice(start, count, ...sourceLines); target.setValue(lines.join('\n'));
+      }
+      markDirty(targetSide); compareNow(true);
       toast('已' + (direction === 'right' ? '覆盖到右侧' : '覆盖到左侧'), 'ok');
     }
     function applyLine(row, direction) {
-      if (!row) return;
+      if (!row || row.status === 'equal') return;
       const targetSide = direction === 'right' ? 'right' : 'left';
-      const sourceText = direction === 'right' ? row.leftText : row.rightText;
-      const targetNo = direction === 'right' ? row.rightNo : row.leftNo;
-      const otherNo = direction === 'right' ? row.leftNo : row.rightNo;
-      const lines = splitEditorLines(editors[targetSide].getValue());
-      if (row.status === 'changed') {
-        if (targetNo > 0 && targetNo <= lines.length) lines[targetNo - 1] = sourceText;
-      } else if (direction === 'right') {
-        if (row.status === 'deleted') {
-          const insertIdx = otherNo > 0 ? Math.min(otherNo - 1, lines.length) : lines.length;
-          lines.splice(insertIdx, 0, sourceText);
-        } else if (row.status === 'inserted') {
-          if (targetNo > 0 && targetNo <= lines.length) lines.splice(targetNo - 1, 1);
-        }
-      } else {
-        if (row.status === 'inserted') {
-          const insertIdx = otherNo > 0 ? Math.min(otherNo - 1, lines.length) : lines.length;
-          lines.splice(insertIdx, 0, sourceText);
-        } else if (row.status === 'deleted') {
-          if (targetNo > 0 && targetNo <= lines.length) lines.splice(targetNo - 1, 1);
-        }
-      }
-      editors[targetSide].setValue(lines.join('\n'));
-      markDirty(targetSide); compareNow(true);
+      const allRows = state.alignedRows || [row];
+      const newLines = reconstructTargetLines(allRows, new Set([row]), direction);
+      editors[targetSide].setValue(newLines.join('\n'));
+      markDirty(targetSide);
+      compareNow(true);
       toast('已' + (direction === 'right' ? '覆盖本行到右侧' : '覆盖本行到左侧'), 'ok');
     }
     function applyBatch(diffRows, selectedIndices, direction) {
       if (!selectedIndices || !selectedIndices.length) return;
       const targetSide = direction === 'right' ? 'right' : 'left';
       const selRows = selectedIndices
-        .map(idx => ({ idx, row: diffRows[idx] }))
-        .filter(item => item.row && item.row.status !== 'equal');
+        .map(idx => diffRows[idx])
+        .filter(row => row && row.status !== 'equal');
       if (!selRows.length) {
         toast('选中的行无差异需要覆盖', 'warn');
         return;
       }
-      selRows.sort((a, b) => b.idx - a.idx);
-      const lines = splitEditorLines(editors[targetSide].getValue());
-      for (const item of selRows) {
-        const row = item.row;
-        const sourceText = direction === 'right' ? row.leftText : row.rightText;
-        const targetNo = direction === 'right' ? row.rightNo : row.leftNo;
-        const otherNo = direction === 'right' ? row.leftNo : row.rightNo;
-        if (row.status === 'changed') {
-          if (targetNo > 0 && targetNo <= lines.length) lines[targetNo - 1] = sourceText;
-        } else if (direction === 'right') {
-          if (row.status === 'deleted') {
-            const insertIdx = otherNo > 0 ? Math.min(otherNo - 1, lines.length) : lines.length;
-            lines.splice(insertIdx, 0, sourceText);
-          } else if (row.status === 'inserted') {
-            if (targetNo > 0 && targetNo <= lines.length) lines.splice(targetNo - 1, 1);
-          }
-        } else {
-          if (row.status === 'inserted') {
-            const insertIdx = otherNo > 0 ? Math.min(otherNo - 1, lines.length) : lines.length;
-            lines.splice(insertIdx, 0, sourceText);
-          } else if (row.status === 'deleted') {
-            if (targetNo > 0 && targetNo <= lines.length) lines.splice(targetNo - 1, 1);
-          }
-        }
-      }
-      editors[targetSide].setValue(lines.join('\n'));
+      const allRows = state.alignedRows || diffRows;
+      const newLines = reconstructTargetLines(allRows, new Set(selRows), direction);
+      editors[targetSide].setValue(newLines.join('\n'));
       markDirty(targetSide);
       compareNow(true);
       toast('已批量覆盖 ' + selRows.length + ' 行到' + (direction === 'right' ? '右侧' : '左侧'), 'ok');
@@ -1319,6 +1342,37 @@
     return rows;
   }
 
+  function reconstructTargetLines(allRows, selectedRows, direction) {
+    const selectedSet = selectedRows instanceof Set ? selectedRows : new Set(selectedRows || []);
+    const newLines = [];
+    for (let i = 0; i < allRows.length; i++) {
+      const row = allRows[i];
+      const isSelected = selectedSet.has(row) || selectedSet.has(i);
+      if (direction === 'right') {
+        if (isSelected) {
+          if (row.leftNo > 0) {
+            newLines.push(row.leftText != null ? row.leftText : '');
+          }
+        } else {
+          if (row.rightNo > 0) {
+            newLines.push(row.rightText != null ? row.rightText : '');
+          }
+        }
+      } else {
+        if (isSelected) {
+          if (row.rightNo > 0) {
+            newLines.push(row.rightText != null ? row.rightText : '');
+          }
+        } else {
+          if (row.leftNo > 0) {
+            newLines.push(row.leftText != null ? row.leftText : '');
+          }
+        }
+      }
+    }
+    return newLines;
+  }
+
   function createVirtualDiff(rows, state, mode, actions) {
     const onMerge = actions && (typeof actions === 'function' ? actions : actions.hunk);
     const onLine = actions && actions.line;
@@ -1361,10 +1415,24 @@
       }
     });
 
+    let maxLeftChars = 0, maxRightChars = 0;
+    for (let idx = 0; idx < rows.length; idx++) {
+      const r = rows[idx];
+      if (r.leftText && r.leftText.length > maxLeftChars) maxLeftChars = r.leftText.length;
+      if (r.rightText && r.rightText.length > maxRightChars) maxRightChars = r.rightText.length;
+    }
+    const baseColWidth = 380;
+    const leftColWidth = Math.max(baseColWidth, Math.ceil(maxLeftChars * 7.8) + 76);
+    const rightColWidth = Math.max(baseColWidth, Math.ceil(maxRightChars * 7.8) + 76);
+    const totalCanvasWidth = 24 + leftColWidth + 54 + rightColWidth;
+    const rowGridColumns = '24px minmax(' + leftColWidth + 'px, 1fr) 54px minmax(' + rightColWidth + 'px, 1fr)';
+
     let activeRowIndex = -1;
     const viewport = el('div', { class: 'cmp-vdiff', tabindex: '0', role: 'region', 'aria-label': '文本差异结果' });
     const canvas = el('div', { class: 'cmp-vdiff-canvas', role: 'list' });
     canvas.style.height = Math.max(1, rows.length * rowHeight) + 'px';
+    canvas.style.minWidth = totalCanvasWidth + 'px';
+    canvas.style.width = 'max-content';
     viewport.appendChild(canvas);
     let renderedStart = -1, renderedEnd = -1;
 
@@ -1595,13 +1663,19 @@
     batchBar.append(batchCount, batchToLeftBtn, batchToRightBtn, selectAllDiffBtn, clearSelBtn);
 
     function handleRowSelect(index, ev) {
+      activeRowIndex = index;
+      const r = rows[index];
+      if (r && r.hunk >= 0) {
+        state.hunkIndex = r.hunk;
+        if (actions.onHunkChange) actions.onHunkChange(state.hunkIndex, state.hunks.length);
+      }
       const isChecked = ev.target.checked;
       if (ev.shiftKey && lastCheckedRow >= 0) {
         const start = Math.min(lastCheckedRow, index);
         const end = Math.max(lastCheckedRow, index);
-        for (let r = start; r <= end; r++) {
-          if (isChecked) selectedRowIndices.add(r);
-          else selectedRowIndices.delete(r);
+        for (let idx = start; idx <= end; idx++) {
+          if (isChecked) selectedRowIndices.add(idx);
+          else selectedRowIndices.delete(idx);
         }
         lastCheckedRow = index;
       } else {
@@ -1647,7 +1721,7 @@
           role: 'listitem',
           'data-hunk': row.hunk >= 0 ? String(row.hunk) : '',
           'data-row': String(i),
-          style: 'transform:translateY(' + (i * rowHeight) + 'px)'
+          style: 'transform:translateY(' + (i * rowHeight) + 'px); min-width:' + totalCanvasWidth + 'px; width:100%; grid-template-columns:' + rowGridColumns + ';'
         });
         node.addEventListener('click', function(e) {
           activeRowIndex = i;
@@ -1656,6 +1730,15 @@
             if (actions.onHunkChange) actions.onHunkChange(state.hunkIndex, state.hunks.length);
           }
           updateActiveHighlights();
+          if (!e.target.closest('.cmp-code') && !e.target.closest('button') && !e.target.closest('input')) {
+            const isLeft = !!e.target.closest('.cmp-diff-left');
+            const preferCell = isLeft
+              ? (node.querySelector('.cmp-diff-left .cmp-code') || node.querySelector('.cmp-diff-right .cmp-code'))
+              : (node.querySelector('.cmp-diff-right .cmp-code') || node.querySelector('.cmp-diff-left .cmp-code'));
+            if (preferCell && typeof preferCell.enableEdit === 'function') {
+              preferCell.enableEdit({ selectAll: false, caretAtEnd: true });
+            }
+          }
         });
 
         const chk = el('input', { type: 'checkbox', 'aria-label': '选择行', title: '勾选此行参与批量覆盖（Shift 支持连选）' });
@@ -1682,9 +1765,9 @@
         }
         node.append(
           selectCell,
-          makeDiffCell(row, 'left', onEdit, actions && actions.language && actions.language.left, searchQuery, searchCaseSensitive, isCurrentSearch),
+          makeDiffCell(row, 'left', onEdit, actions && actions.language && actions.language.left, searchQuery, searchCaseSensitive, isCurrentSearch, navigateLine),
           middle,
-          makeDiffCell(row, 'right', onEdit, actions && actions.language && actions.language.right, searchQuery, searchCaseSensitive, isCurrentSearch)
+          makeDiffCell(row, 'right', onEdit, actions && actions.language && actions.language.right, searchQuery, searchCaseSensitive, isCurrentSearch, navigateLine)
         );
         canvas.appendChild(node);
       }
@@ -1692,18 +1775,13 @@
     }
 
     function updateActiveHighlights() {
-      canvas.querySelectorAll('.cmp-vrow').forEach(node => {
-        const hunkAttr = node.getAttribute('data-hunk');
-        const rowAttr = node.getAttribute('data-row');
-        const rIdx = Number(rowAttr);
-        const isHunkActive = hunkAttr !== '' && Number(hunkAttr) === state.hunkIndex;
-        const isLineActive = rowAttr !== '' && rIdx === activeRowIndex;
-        const isSelected = selectedRowIndices.has(rIdx);
-        node.classList.toggle('is-active-hunk', !!isHunkActive);
-        node.classList.toggle('is-active-line', !!isLineActive);
-        node.classList.toggle('is-diff-selected', !!isSelected);
-        const chk = node.querySelector('.cmp-vrow-select input');
-        if (chk) chk.checked = isSelected;
+      const rows = canvas.querySelectorAll('.cmp-vrow');
+      rows.forEach(r => {
+        const h = r.dataset.hunk;
+        const rowIdx = Number(r.dataset.row);
+        r.classList.toggle('is-active-hunk', h !== '' && Number(h) === state.hunkIndex);
+        r.classList.toggle('is-active-line', rowIdx === activeRowIndex);
+        r.classList.toggle('is-diff-selected', selectedRowIndices.has(rowIdx));
       });
     }
 
@@ -1734,7 +1812,7 @@
       jumpToHunk(validHunkIndices[curr]);
     }
 
-    function navigateLine(delta) {
+    function navigateLine(delta, focusCode) {
       if (!rows.length) return;
       if (activeRowIndex < 0) activeRowIndex = delta > 0 ? 0 : rows.length - 1;
       else activeRowIndex = Math.max(0, Math.min(rows.length - 1, activeRowIndex + delta));
@@ -1749,6 +1827,15 @@
       renderedEnd = -1;
       renderWindow();
       updateActiveHighlights();
+      if (focusCode) {
+        const rowNode = canvas.querySelector('.cmp-vrow[data-row="' + activeRowIndex + '"]');
+        if (rowNode) {
+          const preferCell = rowNode.querySelector('.cmp-diff-right .cmp-code') || rowNode.querySelector('.cmp-diff-left .cmp-code');
+          if (preferCell && typeof preferCell.enableEdit === 'function') {
+            preferCell.enableEdit({ selectAll: false, caretAtEnd: true });
+          }
+        }
+      }
     }
 
     const container = el('div', { class: 'cmp-vdiff-container' });
@@ -1803,32 +1890,80 @@
     });
     container.append(viewport, minimap);
     const wrapper = el('div', { class: 'cmp-vdiff-wrapper' }, [searchBar, container, batchBar]);
-    return { element: wrapper, jumpToHunk, navigateHunk, navigateLine, openSearch, closeSearch, clearSelection, restoreSearch };
+
+    function getViewState() {
+      return {
+        scrollTop: viewport.scrollTop,
+        scrollLeft: viewport.scrollLeft,
+        activeRowIndex: activeRowIndex,
+        hunkIndex: state.hunkIndex
+      };
+    }
+    function restoreViewState(vs) {
+      if (!vs) return;
+      if (typeof vs.activeRowIndex === 'number' && vs.activeRowIndex >= 0) {
+        activeRowIndex = Math.min(vs.activeRowIndex, rows.length - 1);
+      }
+      if (typeof vs.hunkIndex === 'number' && vs.hunkIndex >= 0 && state.hunks && state.hunks.length) {
+        state.hunkIndex = Math.min(vs.hunkIndex, state.hunks.length - 1);
+        if (actions && actions.onHunkChange) actions.onHunkChange(state.hunkIndex, state.hunks.length);
+      }
+      const restoreScroll = () => {
+        if (typeof vs.scrollTop === 'number' && vs.scrollTop > 0) {
+          viewport.scrollTop = vs.scrollTop;
+        } else if (activeRowIndex >= 0) {
+          const targetScroll = (activeRowIndex * rowHeight) - Math.floor((viewport.clientHeight || 500) / 2) + Math.floor(rowHeight / 2);
+          viewport.scrollTop = Math.max(0, targetScroll);
+        }
+        if (typeof vs.scrollLeft === 'number') {
+          viewport.scrollLeft = vs.scrollLeft;
+        }
+      };
+      restoreScroll();
+      renderedStart = -1;
+      renderedEnd = -1;
+      renderWindow();
+      updateActiveHighlights();
+      updateMinimapThumb();
+      requestAnimationFrame(() => {
+        restoreScroll();
+        renderWindow();
+        updateMinimapThumb();
+      });
+    }
+
+    return { element: wrapper, jumpToHunk, navigateHunk, navigateLine, openSearch, closeSearch, clearSelection, restoreSearch, getViewState, restoreViewState };
   }
 
-  function makeDiffCell(row, side, onEdit, language, searchQuery, searchCaseSensitive, isCurrentSearchMatch) {
+  function makeDiffCell(row, side, onEdit, language, searchQuery, searchCaseSensitive, isCurrentSearchMatch, onNavigateLine) {
     const lineNo = side === 'left' ? row.leftNo : row.rightNo;
     const text = side === 'left' ? row.leftText : row.rightText;
     const other = side === 'left' ? row.rightText : row.leftText;
-    const code = el('span', { class: 'cmp-code', spellcheck: 'false', tabindex: '0', 'aria-readonly': 'true', 'aria-multiline': 'true', title: '按 Enter 或双击编辑；Enter 换行，Ctrl/⌘ + Enter 完成，Esc 取消' });
+    const code = el('span', { class: 'cmp-code', spellcheck: 'false', tabindex: '0', 'aria-readonly': 'true', 'aria-multiline': 'true', title: '点击或按 Enter 编辑；Enter 换行，Ctrl/⌘ + Enter 完成，Esc 取消' });
     const syntax = Kairo.workbench && Kairo.workbench.syntaxEditor;
     const hasSearchMatch = searchQuery && text && (searchCaseSensitive ? text.includes(searchQuery) : text.toLowerCase().includes(searchQuery.toLowerCase()));
-    // 最小改：先渲染底色（语法高亮/词级差异/纯文本），再把搜索高亮叠加上去，不再盖掉差异。
-    if (syntax && language && row.status !== 'changed') {
-      code.innerHTML = syntax.highlight(text || '', language);
-    } else {
-      appendWordDiff(code, text || '', other || '', row.status === 'changed');
-    }
-    if (hasSearchMatch) {
-      overlaySearchHighlight(code, searchQuery, searchCaseSensitive, isCurrentSearchMatch);
-      // 兜底：命中跨越词级切分边界时按节点包裹会漏标（如 CREATED 被切成 CREATE+D），
-      // 此时回退到整行搜索高亮，保证不漏命中（仅该行丢词级底色）。
-      try {
-        if (code.querySelectorAll('mark.cmp-search-highlight').length === 0) {
-          highlightSearchInText(code, text || '', searchQuery, searchCaseSensitive, isCurrentSearchMatch);
+
+    function refreshCodeDisplay(val) {
+      code.innerHTML = '';
+      if (syntax && language && row.status !== 'changed') {
+        try {
+          code.innerHTML = syntax.highlight(val || '', language);
+        } catch (_) {
+          code.textContent = val || '';
         }
-      } catch (_) {}
+      } else {
+        appendWordDiff(code, val || '', other || '', row.status === 'changed');
+      }
+      if (hasSearchMatch) {
+        overlaySearchHighlight(code, searchQuery, searchCaseSensitive, isCurrentSearchMatch);
+        try {
+          if (code.querySelectorAll('mark.cmp-search-highlight').length === 0) {
+            highlightSearchInText(code, val || '', searchQuery, searchCaseSensitive, isCurrentSearchMatch);
+          }
+        } catch (_) {}
+      }
     }
+    refreshCodeDisplay(text || '');
 
     code.setAttribute('role', 'textbox');
     code.setAttribute('aria-label', (side === 'left' ? '左侧第' : '右侧第') + (lineNo || '新') + '行');
@@ -1837,7 +1972,7 @@
     let original = text || '';
     let skip = false, editing = false;
 
-    function enableEdit() {
+    function enableEdit(opts) {
       if (editing) return;
       editing = true;
       original = text || '';
@@ -1846,7 +1981,17 @@
       code.setAttribute('aria-readonly', 'false');
       code.focus();
       const sel = window.getSelection();
-      if (sel) sel.selectAllChildren(code);
+      if (sel) {
+        if (opts && opts.selectAll) {
+          sel.selectAllChildren(code);
+        } else if (opts && opts.caretAtEnd) {
+          const range = document.createRange();
+          range.selectNodeContents(code);
+          range.collapse(false);
+          sel.removeAllRanges();
+          sel.addRange(range);
+        }
+      }
     }
     function finishEdit() {
       if (!editing) return;
@@ -1858,21 +2003,40 @@
       if (!skip && onEdit && next !== original) {
         original = next;
         onEdit(side, lineNo, next, row);
+      } else {
+        refreshCodeDisplay(original);
       }
       skip = false;
     }
 
+    code.enableEdit = enableEdit;
+
+    code.addEventListener('mousedown', function (e) {
+      if (!editing) {
+        enableEdit({ selectAll: false });
+      }
+    });
     code.addEventListener('dblclick', function (e) {
       e.stopPropagation();
-      enableEdit();
+      enableEdit({ selectAll: true });
     });
     code.addEventListener('keydown', function (e) {
       if (!editing) {
         if (e.key === 'Enter' || e.key === 'F2') {
           e.preventDefault();
-          enableEdit();
+          enableEdit({ selectAll: true });
         }
         return;
+      }
+      if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+        if (!e.altKey && !e.shiftKey) {
+          e.preventDefault();
+          finishEdit();
+          if (typeof onNavigateLine === 'function') {
+            onNavigateLine(e.key === 'ArrowUp' ? -1 : 1, true);
+          }
+          return;
+        }
       }
       if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
@@ -1880,7 +2044,6 @@
         finishEdit();
         code.blur();
       } else if (e.key === 'Enter') {
-        // 普通回车保留给编辑器插入换行，不再把它当成“完成编辑”。
         e.stopPropagation();
       }
       if (e.key === 'Escape') {
@@ -1890,6 +2053,7 @@
         editing = false;
         code.contentEditable = 'false';
         code.setAttribute('aria-readonly', 'true');
+        refreshCodeDisplay(original);
         code.blur();
       }
     });
@@ -3402,6 +3566,7 @@
     createEditorHistory,
     resolveSaveSide,
     makeCompareKey,
+    reconstructTargetLines,
     handoffPathKey,
     validateWaspackHandoff,
     consumeWaspackHandoff,

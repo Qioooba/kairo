@@ -759,3 +759,23 @@
   flex: 1 1 auto;
 }
 
+.cmp2-workbench .cmp-vdiff {
+  overflow-x: auto;
+  overflow-y: auto;
+  contain: layout paint;
+}
+
+.cmp2-workbench .cmp-vdiff-canvas {
+  width: max-content;
+  min-width: 100%;
+}
+
+.cmp-code {
+  caret-color: var(--primary);
+  cursor: text;
+}
+
+.cmp-code:focus {
+  outline: none;
+}
+

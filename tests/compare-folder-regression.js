@@ -41,7 +41,7 @@ const context = {
 };
 vm.runInNewContext(source, context, { filename: 'web/pages/compare.js' });
 
-const { rollupAllFolders, canSaveComparedFile } = Kairo.compareTest;
+const { rollupAllFolders, canSaveComparedFile, reconstructTargetLines } = Kairo.compareTest;
 const dir = (rel, status = 'same', extra = {}) => ({
   rel_path: rel,
   left: { is_dir: true },
@@ -110,4 +110,44 @@ const file = (rel, status = 'same', extra = {}) => ({
   assert.strictEqual(canSaveComparedFile({ ...valid, saving: true }), false);
 }
 
-console.log('compare-folder-regression: 10 cases passed');
+// reconstructTargetLines accurately syncs checked lines to target without line-drift
+{
+  const mockAlignedRows = [
+    { status: 'equal', leftNo: 1, rightNo: 1, leftText: 'line1', rightText: 'line1', hunk: -1 },
+    { status: 'changed', leftNo: 2, rightNo: 2, leftText: 'line2-left', rightText: 'line2-right', hunk: 0 },
+    { status: 'equal', leftNo: 3, rightNo: 3, leftText: 'line3', rightText: 'line3', hunk: -1 },
+    { status: 'deleted', leftNo: 4, rightNo: 0, leftText: 'line4-left', rightText: '', hunk: 1 },
+    { status: 'inserted', leftNo: 0, rightNo: 4, leftText: '', rightText: 'line5-right', hunk: 2 }
+  ];
+
+  // Case A: Checked changed row (index 1) and deleted row (index 3) to right
+  const resToRight = reconstructTargetLines(mockAlignedRows, new Set([mockAlignedRows[1], mockAlignedRows[3]]), 'right');
+  assert.deepStrictEqual([...resToRight], [
+    'line1',
+    'line2-left',
+    'line3',
+    'line4-left',
+    'line5-right'
+  ], 'Right side should receive line2-left and line4-left at exact corresponding positions');
+
+  // Case B: Checked inserted row (index 4) to right -> deletes extra right line since left has nothing
+  const resDeleteInsertedOnRight = reconstructTargetLines(mockAlignedRows, new Set([mockAlignedRows[4]]), 'right');
+  assert.deepStrictEqual([...resDeleteInsertedOnRight], [
+    'line1',
+    'line2-right',
+    'line3'
+  ], 'Right side should delete line5-right because left side is blank at that row');
+
+  // Case C: Checked inserted row (index 4) to left -> copies line5-right into left
+  const resToLeft = reconstructTargetLines(mockAlignedRows, new Set([mockAlignedRows[4]]), 'left');
+  assert.deepStrictEqual([...resToLeft], [
+    'line1',
+    'line2-left',
+    'line3',
+    'line4-left',
+    'line5-right'
+  ], 'Left side should receive line5-right at exact corresponding position');
+}
+
+console.log('compare-folder-regression: 13 cases passed');
+
