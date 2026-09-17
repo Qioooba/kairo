@@ -90,11 +90,14 @@ type filesListTarget struct {
 
 // filesEntry 目录条目（用于前端表格）
 type filesEntry struct {
-	Name  string `json:"name"`
-	Size  int64  `json:"size"`
-	IsDir bool   `json:"isDir"`
-	Mode  string `json:"mode"`  // 例如 "drwxr-xr-x"，便于 UI 显示
-	MTime string `json:"mtime"` // RFC3339
+	Name     string `json:"name"`
+	RawName  string `json:"raw_name,omitempty"`
+	Encoding string `json:"encoding,omitempty"`
+	PathID   string `json:"path_id,omitempty"`
+	Size     int64  `json:"size"`
+	IsDir    bool   `json:"isDir"`
+	Mode     string `json:"mode"`  // 例如 "drwxr-xr-x"，便于 UI 显示
+	MTime    string `json:"mtime"` // RFC3339
 }
 
 // filesListServerResult 多服务器列目录时单台结果
@@ -416,12 +419,21 @@ func (s *Server) listOneServer(
 
 	entries := make([]filesEntry, 0, len(infos))
 	for _, info := range infos {
+		rawName := sftpclient.RawNameOf(info)
+		enc := sftpclient.EncodingOf(info)
+		var pathID string
+		if rawName != info.Name() || enc != "utf-8" {
+			pathID = sftpclient.PathIDOf(path, info)
+		}
 		entries = append(entries, filesEntry{
-			Name:  info.Name(),
-			Size:  info.Size(),
-			IsDir: info.IsDir(),
-			Mode:  sftpclient.FormatMode(info.Mode()),
-			MTime: info.ModTime().UTC().Format(time.RFC3339),
+			Name:     info.Name(),
+			RawName:  rawName,
+			Encoding: enc,
+			PathID:   pathID,
+			Size:     info.Size(),
+			IsDir:    info.IsDir(),
+			Mode:     sftpclient.FormatMode(info.Mode()),
+			MTime:    info.ModTime().UTC().Format(time.RFC3339),
 		})
 	}
 	return entries, truncated, nil

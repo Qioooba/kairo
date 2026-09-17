@@ -23,8 +23,12 @@ package sftpclient
 
 import (
 	"bytes"
+	"encoding/hex"
+	"errors"
 	"io"
 	"os"
+	"path"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -32,18 +36,93 @@ import (
 	"golang.org/x/text/transform"
 )
 
+var (
+	// ErrAmbiguousPath 当同目录下存在同名但不同编码的文件时返回，防止非幂等操作误伤其他文件。
+	ErrAmbiguousPath = errors.New("目标路径存在多个同名但不同编码的文件，无法唯一定位")
+)
+
+// PathIdentityPrefix 是强绑定文件服务端身份的前缀
+const PathIdentityPrefix = "kairo-raw:"
+
+// DecodeServerNameWithEncoding 把 server 发来的原始文件名转成前端展示的 UTF-8 并返回识别编码。
+func DecodeServerNameWithEncoding(raw string) (decoded string, encoding string) {
+	if raw == "" {
+		return "", "utf-8"
+	}
+	if utf8.ValidString(raw) {
+		return raw, "utf-8"
+	}
+	if dec, err := io.ReadAll(transform.NewReader(
+		bytes.NewReader([]byte(raw)), simplifiedchinese.GB18030.NewDecoder(),
+	)); err == nil && len(dec) > 0 && utf8.ValidString(string(dec)) {
+		return string(dec), "gb18030"
+	}
+	return raw, "unknown"
+}
+
 // DecodeServerName 把 server 发来的原始文件名转成前端可展示的 UTF-8。
 // 合法 UTF-8（含纯 ASCII）零成本直通；GBK 字节解码成中文；实在解不出才原样返回。
 func DecodeServerName(raw string) string {
-	if raw == "" || utf8.ValidString(raw) {
-		return raw
+	dec, _ := DecodeServerNameWithEncoding(raw)
+	return dec
+}
+
+// EncodePathIdentity 将服务端原始路径转为不透明路径标识。
+func EncodePathIdentity(rawPath string) string {
+	if rawPath == "" {
+		return ""
 	}
-	if decoded, err := io.ReadAll(transform.NewReader(
-		bytes.NewReader([]byte(raw)), simplifiedchinese.GB18030.NewDecoder(),
-	)); err == nil && len(decoded) > 0 && utf8.ValidString(string(decoded)) {
-		return string(decoded)
+	return PathIdentityPrefix + hex.EncodeToString([]byte(rawPath))
+}
+
+// DecodePathIdentity 解析路径标识。如果是 kairo-raw: 开头且合法绝对路径，则还原为原始字节串。
+func DecodePathIdentity(p string) (string, bool) {
+	if strings.HasPrefix(p, PathIdentityPrefix) {
+		hexStr := strings.TrimPrefix(p, PathIdentityPrefix)
+		rawBytes, err := hex.DecodeString(hexStr)
+		if err == nil {
+			raw := string(rawBytes)
+			if strings.HasPrefix(raw, "/") && !strings.ContainsAny(raw, "\x00\r\n") {
+				return path.Clean(raw), true
+			}
+		}
 	}
-	return raw
+	return p, false
+}
+
+// PathIDOf 返回指定目录下 FileInfo 的唯一路径标识。
+func PathIDOf(parentDir string, fi os.FileInfo) string {
+	if fi == nil {
+		return ""
+	}
+	rawName := RawNameOf(fi)
+	rawPath := path.Join(parentDir, rawName)
+	return EncodePathIdentity(rawPath)
+}
+
+// RawNameOf 返回 FileInfo 在服务端的原始物理名。
+func RawNameOf(fi os.FileInfo) string {
+	if fi == nil {
+		return ""
+	}
+	if r, ok := fi.(interface{ RawName() string }); ok {
+		return r.RawName()
+	}
+	return fi.Name()
+}
+
+// EncodingOf 返回 FileInfo 在服务端的文件名编码 ("utf-8", "gb18030", "unknown")。
+func EncodingOf(fi os.FileInfo) string {
+	if fi == nil {
+		return "utf-8"
+	}
+	if r, ok := fi.(interface{ Encoding() string }); ok {
+		return r.Encoding()
+	}
+	if utf8.ValidString(fi.Name()) {
+		return "utf-8"
+	}
+	return "unknown"
 }
 
 // EncodePathCandidates 把前端发来的 UTF-8 展示路径转成候选 server 路径。
@@ -70,21 +149,24 @@ func EncodePathCandidates(display string) []string {
 	return []string{display, string(gbk)}
 }
 
-// decodedFileInfo 包装 os.FileInfo，只覆盖 Name() 为解码后的展示名，
-// Size/Mode/ModTime/IsDir/Sys 全部透传，避免改动 backend 解析逻辑。
+// decodedFileInfo 包装 os.FileInfo，Name() 为展示名，同时保留 RawName() 和 Encoding()
 type decodedFileInfo struct {
-	inner os.FileInfo
-	name  string
+	inner    os.FileInfo
+	name     string
+	rawName  string
+	encoding string
 }
 
 func (d decodedFileInfo) Name() string       { return d.name }
+func (d decodedFileInfo) RawName() string    { return d.rawName }
+func (d decodedFileInfo) Encoding() string   { return d.encoding }
 func (d decodedFileInfo) Size() int64        { return d.inner.Size() }
 func (d decodedFileInfo) Mode() os.FileMode  { return d.inner.Mode() }
 func (d decodedFileInfo) ModTime() time.Time { return d.inner.ModTime() }
 func (d decodedFileInfo) IsDir() bool        { return d.inner.IsDir() }
 func (d decodedFileInfo) Sys() interface{}   { return d.inner.Sys() }
 
-// wrapDecoded 批量把 infos 的 Name() 换成展示名。已是合法 UTF-8 的零分配直通。
+// wrapDecoded 批量包装 FileInfo，暴露展示名并保留原始名与编码。
 func wrapDecoded(infos []os.FileInfo) []os.FileInfo {
 	out := make([]os.FileInfo, len(infos))
 	for i, fi := range infos {
@@ -93,10 +175,12 @@ func wrapDecoded(infos []os.FileInfo) []os.FileInfo {
 			continue
 		}
 		raw := fi.Name()
-		if dec := DecodeServerName(raw); dec != raw {
-			out[i] = decodedFileInfo{inner: fi, name: dec}
-		} else {
-			out[i] = fi
+		dec, enc := DecodeServerNameWithEncoding(raw)
+		out[i] = decodedFileInfo{
+			inner:    fi,
+			name:     dec,
+			rawName:  raw,
+			encoding: enc,
 		}
 	}
 	return out
@@ -107,8 +191,12 @@ func wrapDecodedOne(fi os.FileInfo) os.FileInfo {
 	if fi == nil {
 		return nil
 	}
-	if dec := DecodeServerName(fi.Name()); dec != fi.Name() {
-		return decodedFileInfo{inner: fi, name: dec}
+	raw := fi.Name()
+	dec, enc := DecodeServerNameWithEncoding(raw)
+	return decodedFileInfo{
+		inner:    fi,
+		name:     dec,
+		rawName:  raw,
+		encoding: enc,
 	}
-	return fi
 }

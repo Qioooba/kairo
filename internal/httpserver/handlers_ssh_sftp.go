@@ -55,11 +55,14 @@ type sshSftpListReq struct {
 
 // sshSftpEntry 目录条目（与 filesEntry 一致，便于前端复用渲染逻辑）
 type sshSftpEntry struct {
-	Name  string `json:"name"`
-	Size  int64  `json:"size"`
-	IsDir bool   `json:"isDir"`
-	Mode  string `json:"mode"`
-	MTime string `json:"mtime"`
+	Name     string `json:"name"`
+	RawName  string `json:"raw_name,omitempty"`
+	Encoding string `json:"encoding,omitempty"`
+	PathID   string `json:"path_id,omitempty"`
+	Size     int64  `json:"size"`
+	IsDir    bool   `json:"isDir"`
+	Mode     string `json:"mode"`
+	MTime    string `json:"mtime"`
 }
 
 // sshSftpListResp 列目录响应
@@ -241,12 +244,21 @@ func (s *Server) sshSftpListOne(
 
 	entries := make([]sshSftpEntry, 0, len(infos))
 	for _, info := range infos {
+		rawName := sftpclient.RawNameOf(info)
+		enc := sftpclient.EncodingOf(info)
+		var pathID string
+		if rawName != info.Name() || enc != "utf-8" {
+			pathID = sftpclient.PathIDOf(remotePath, info)
+		}
 		entries = append(entries, sshSftpEntry{
-			Name:  info.Name(),
-			Size:  info.Size(),
-			IsDir: info.IsDir(),
-			Mode:  sftpclient.FormatMode(info.Mode()),
-			MTime: info.ModTime().UTC().Format(time.RFC3339),
+			Name:     info.Name(),
+			RawName:  rawName,
+			Encoding: enc,
+			PathID:   pathID,
+			Size:     info.Size(),
+			IsDir:    info.IsDir(),
+			Mode:     sftpclient.FormatMode(info.Mode()),
+			MTime:    info.ModTime().UTC().Format(time.RFC3339),
 		})
 	}
 	return entries, sftpCli.Backend(), nil
