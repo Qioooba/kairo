@@ -114,6 +114,46 @@
       },
       setCanLeave: function (fn) {
         scope.canLeave = fn;
+      },
+      registerShells: function (c) {
+        if (typeof window !== 'undefined' && window.Kairo && window.Kairo.core && window.Kairo.core.setActiveShells) {
+          const owner = scope.tabId || scope.owner;
+          window.Kairo.core.setActiveShells(c, owner);
+          return scope.add(function () {
+            window.Kairo.core.setActiveShells(null, owner, c);
+          });
+        }
+        return function () {};
+      },
+      registerUploads: function (c) {
+        if (typeof window !== 'undefined' && window.Kairo && window.Kairo.core && window.Kairo.core.setActiveUploads) {
+          const owner = scope.tabId || scope.owner;
+          window.Kairo.core.setActiveUploads(c, owner);
+          return scope.add(function () {
+            window.Kairo.core.setActiveUploads(null, owner, c);
+          });
+        }
+        return function () {};
+      },
+      registerDL: function (dl) {
+        if (typeof window !== 'undefined' && window.Kairo && window.Kairo.core && window.Kairo.core.setActiveDL) {
+          const owner = scope.tabId || scope.owner;
+          window.Kairo.core.setActiveDL(dl, owner);
+          return scope.add(function () {
+            window.Kairo.core.setActiveDL(null, owner, dl);
+          });
+        }
+        return function () {};
+      },
+      registerTail: function (tail) {
+        if (typeof window !== 'undefined' && window.Kairo && window.Kairo.core && window.Kairo.core.setActiveTail) {
+          const owner = scope.tabId || scope.owner;
+          window.Kairo.core.setActiveTail(tail, owner);
+          return scope.add(function () {
+            window.Kairo.core.setActiveTail(null, owner, tail);
+          });
+        }
+        return function () {};
       }
     };
 

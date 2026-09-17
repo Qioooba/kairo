@@ -97,6 +97,18 @@
       }
       return null;
     });
+
+    // 便笺：未保存行内草稿（关闭将丢失页面输入的草稿）
+    T.addCloseGuard(function (tab) {
+      if (tab.route !== 'notes') return null;
+      if (Kairo.notes && Kairo.notes.state && Kairo.notes.state.inlineDrafts) {
+        const ids = Object.keys(Kairo.notes.state.inlineDrafts);
+        if (ids.length > 0) {
+          return '便笺页面有未保存的草稿，关闭将丢失修改。确定关闭吗？';
+        }
+      }
+      return null;
+    });
   }
 
   // ---------- 导航：hash → 打开或激活 Tab（不销毁其他 Tab） ----------
@@ -160,7 +172,12 @@
     if (msgs.length) {
       ev.preventDefault();
       ev.returnValue = msgs[0];
+      return msgs[0];
     }
+  });
+  window.addEventListener('pagehide', function (ev) {
+    // 若页面进入 bfcache（ev.persisted === true），不销毁页面状态
+    if (ev && ev.persisted) return;
     releaseAllForUnload();
   });
 

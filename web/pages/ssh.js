@@ -103,7 +103,7 @@
     return window.WebLinksAddon && window.WebLinksAddon.WebLinksAddon;
   }
 
-  function renderSSH(view) {
+  function renderSSH(view, routeState, scope) {
     const pageState = {
       cfg: null,
       tabs: [],
@@ -343,17 +343,20 @@ btnSearch.appendChild(el('span', { text: '搜索' }));
       }
     }
 
-    Kairo.core.setActiveShells({
+    const owner = (scope && (scope.tabId || scope.owner)) || (view && view.getAttribute && view.getAttribute('data-tab')) || 'ssh';
+
+    const shellController = {
       hasActive: function () {
         return pageState.tabs.some(function (t) { return t.ws && t.ws.readyState === 1 && !t.closed; });
       },
       closeAll: function () { closeAllTabs(); }
-    });
+    };
+    Kairo.core.setActiveShells(shellController, owner);
 
     // v1.4+：注册上传 controller 到 Kairo.core（与 files.js 同机制）。
     // 路由切走（app.js navigate）时 core 调 cancelAll 取消所有 tab 上传；
     // beforeunload 时走 cancelAllBeacon（sendBeacon 异步通知后端）。
-    Kairo.core.setActiveUploads({
+    const uploadController = {
       hasActive: function () {
         return pageState.tabs.some(function (t) {
           return (t.uploadQueue || []).some(function (u) { return u.status === 'uploading' || u.status === 'pending'; });
@@ -361,7 +364,8 @@ btnSearch.appendChild(el('span', { text: '搜索' }));
       },
       cancelAll: function () { cancelAllTabsUploads(); },
       cancelAllBeacon: function () { cancelAllTabsUploads(); }
-    });
+    };
+    Kairo.core.setActiveUploads(uploadController, owner);
 
     // ===== v0.13+ 终端背景模式切换（跟随主题 / 强制深色） =====
     const BG_MODE_KEY = 'kairo_ssh_bg_mode';
@@ -1222,7 +1226,8 @@ function updateTabStatus(tab) {
       window.removeEventListener('kairo:themechange', onThemeChange);
       window.removeEventListener('kairo:tab-show', onOuterTabShow);
       window.removeEventListener('keydown', onGlobalKeydown);
-      Kairo.core.setActiveShells(null);
+      Kairo.core.setActiveShells(null, owner, shellController);
+      Kairo.core.setActiveUploads(null, owner, uploadController);
     }
 
     // Bug#19：tab 持久化（设计文档 §5.2）。

@@ -97,7 +97,7 @@ console.log('Database review regressions passed');
     window: {}
   };
   const commitCode = page.slice(page.indexOf('  async function commitPendingEdits('), page.indexOf('  // Public bridge for feature modules'));
-  const rollbackCode = page.slice(page.indexOf('  async function rollbackPendingEdits('), page.indexOf('  /* 会话定时自动备份与防丢 */'));
+  const rollbackCode = page.slice(page.indexOf('  async function rollbackPendingEdits('), page.indexOf('  /* 会话定时自动备份与防丢'));
   vm.runInNewContext(commitCode + '\n' + rollbackCode + '\nwindow.commitPending=commitPendingEdits;\nwindow.rollbackPending=rollbackPendingEdits;', txContext);
 
   await txContext.window.commitPending();

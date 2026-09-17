@@ -106,7 +106,8 @@
       + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
   }
 
-  function renderWebsphere(view) {
+  function renderWebsphere(view, routeState, scope) {
+    const tabOwner = (scope && (scope.tabId || scope.owner)) || (view && view.getAttribute && view.getAttribute('data-tab')) || 'websphere';
     let cfg = null;
     let listState = { files: [], serverName: '', dlId: null, dlEvtSrc: null, fileStates: {}, lastDownloadFolder: '', dlMode: null, dlApiBase: '', dlLatestUi: null, dlAbort: null, fileSortKey: 'mtime', fileSortDesc: true };
     let searchSelectedFiles = [];
@@ -1159,7 +1160,7 @@
           if (!window.EventSource) { toast('浏览器不支持 EventSource', 'err'); break; }
           const es = new EventSource(listState.dlApiBase + dlId + '/events');
           listState.dlEvtSrc = es;
-          Kairo.core.setActiveDL({ id: dlId, evtsrc: es });
+          Kairo.core.setActiveDL({ id: dlId, evtsrc: es }, tabOwner);
           runReason = await new Promise((resolve) => {
             let gotDone = false;
             let active = true;
@@ -1170,7 +1171,7 @@
               listState.dlAbort = null;
               try { es.close(); } catch (_) { /* ignore */ }
               if (listState.dlEvtSrc === es) { listState.dlEvtSrc = null; }
-              Kairo.core.clearActiveDL();
+              Kairo.core.clearActiveDL(tabOwner, { id: dlId });
               resolve(reason);
             };
             listState.dlAbort = () => finish('cancel');
@@ -1396,7 +1397,7 @@
           if (!window.EventSource) { toast('浏览器不支持 EventSource', 'err'); break; }
           const es = new EventSource(listState.dlApiBase + dlId + '/events');
           listState.dlEvtSrc = es;
-          Kairo.core.setActiveDL({ id: dlId, evtsrc: es });
+          Kairo.core.setActiveDL({ id: dlId, evtsrc: es }, tabOwner);
           runReason = await new Promise((resolve) => {
             let gotDone = false;
             let active = true;
@@ -1407,7 +1408,7 @@
               listState.dlAbort = null;
               try { es.close(); } catch (_) { /* ignore */ }
               if (listState.dlEvtSrc === es) { listState.dlEvtSrc = null; }
-              Kairo.core.clearActiveDL();
+              Kairo.core.clearActiveDL(tabOwner, { id: dlId });
               resolve(reason);
             };
             listState.dlAbort = () => finish('cancel');
@@ -2865,7 +2866,7 @@
           // Tab 保活：按 Tab 注册 tail，会话归属当前 Tab；关闭该 Tab 时释放，
           // 切换 Tab 时保留（后台保持运行）。旧架构下这里从未注册，切页即泄漏。
           if (Kairo.core && Kairo.core.setActiveTail) {
-            try { Kairo.core.setActiveTail({ id: tailId, evtsrc: tailEvtSrc }); } catch (_) {}
+            try { Kairo.core.setActiveTail({ id: tailId, evtsrc: tailEvtSrc }, tabOwner); } catch (_) {}
           }
           // v0.6-fix：v0.5 旧 bug 修复 —— onerror 不再只是 append，必须调 stopTailUI
           // 否则 mock_sshd tail 流立即结束 / 真实环境网络断开时，按钮会一起卡死。
@@ -3004,7 +3005,7 @@
     function stopTailUI() {
       if (tailEvtSrc) { tailEvtSrc.close(); tailEvtSrc = null; }
       if (Kairo.core && Kairo.core.clearActiveTail) {
-        try { Kairo.core.clearActiveTail(); } catch (_) {}
+        try { Kairo.core.clearActiveTail(tabOwner); } catch (_) {}
       }
       tailId = null;
       btnTailStart.disabled = false;

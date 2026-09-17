@@ -779,9 +779,15 @@
   function _tabIdOf(explicit) {
     if (explicit !== undefined && explicit !== null && explicit !== '') return explicit;
     try {
-      if (typeof window !== 'undefined' && window.Kairo && Kairo.tabs && typeof Kairo.tabs.getActiveId === 'function') {
-        const id = Kairo.tabs.getActiveId();
-        if (id) return id;
+      if (typeof window !== 'undefined' && window.Kairo && window.Kairo.tabs) {
+        if (typeof window.Kairo.tabs.getRenderingId === 'function') {
+          const rid = window.Kairo.tabs.getRenderingId();
+          if (rid) return rid;
+        }
+        if (typeof window.Kairo.tabs.getActiveId === 'function') {
+          const id = window.Kairo.tabs.getActiveId();
+          if (id) return id;
+        }
       }
     } catch (_) { /* ignore */ }
     return '__global';
@@ -811,42 +817,62 @@
   }
 
   // ---- 下载 SSE（websphere / files） ----
-  function setActiveDL(dl, tabId) {
+  function setActiveDL(dl, tabId, expectedInstance) {
     const id = _tabIdOf(tabId === null ? undefined : tabId);
-    if (dl == null || tabId === null) _tabRes.dl.delete(tabId === null ? _tabIdOf() : id);
-    else _tabRes.dl.set(id, dl);
+    if (dl == null || tabId === null) {
+      const targetId = (tabId !== null && tabId !== undefined) ? tabId : _tabIdOf();
+      const current = _tabRes.dl.get(targetId);
+      if (!expectedInstance || current === expectedInstance || (current && expectedInstance && current.id === expectedInstance.id)) {
+        _tabRes.dl.delete(targetId);
+      }
+    } else {
+      _tabRes.dl.set(id, dl);
+    }
     _syncLegacyActive();
   }
   function getActiveDL(tabId) {
     if (tabId !== undefined && tabId !== null) return _tabRes.dl.get(tabId) || null;
     return _tabRes.dl.get(_tabIdOf()) || null;
   }
-  function clearActiveDL(tabId) {
+  function clearActiveDL(tabId, expectedInstance) {
     const id = tabId !== undefined && tabId !== null ? tabId : _tabIdOf();
-    _closeEvtSrc(_tabRes.dl.get(id));
-    _tabRes.dl.delete(id);
-    _syncLegacyActive();
+    const current = _tabRes.dl.get(id);
+    if (!expectedInstance || current === expectedInstance || (current && expectedInstance && current.id === expectedInstance.id)) {
+      _closeEvtSrc(current);
+      _tabRes.dl.delete(id);
+      _syncLegacyActive();
+    }
   }
   core.setActiveDL = setActiveDL;
   core.getActiveDL = getActiveDL;
   core.clearActiveDL = clearActiveDL;
 
   // ---- tail SSE（websphere） ----
-  function setActiveTail(tail, tabId) {
+  function setActiveTail(tail, tabId, expectedInstance) {
     const id = _tabIdOf(tabId === null ? undefined : tabId);
-    if (tail == null || tabId === null) _tabRes.tail.delete(tabId === null ? _tabIdOf() : id);
-    else _tabRes.tail.set(id, tail);
+    if (tail == null || tabId === null) {
+      const targetId = (tabId !== null && tabId !== undefined) ? tabId : _tabIdOf();
+      const current = _tabRes.tail.get(targetId);
+      if (!expectedInstance || current === expectedInstance || (current && expectedInstance && current.id === expectedInstance.id)) {
+        _tabRes.tail.delete(targetId);
+      }
+    } else {
+      _tabRes.tail.set(id, tail);
+    }
     _syncLegacyActive();
   }
   function getActiveTail(tabId) {
     if (tabId !== undefined && tabId !== null) return _tabRes.tail.get(tabId) || null;
     return _tabRes.tail.get(_tabIdOf()) || null;
   }
-  function clearActiveTail(tabId) {
+  function clearActiveTail(tabId, expectedInstance) {
     const id = tabId !== undefined && tabId !== null ? tabId : _tabIdOf();
-    _closeEvtSrc(_tabRes.tail.get(id));
-    _tabRes.tail.delete(id);
-    _syncLegacyActive();
+    const current = _tabRes.tail.get(id);
+    if (!expectedInstance || current === expectedInstance || (current && expectedInstance && current.id === expectedInstance.id)) {
+      _closeEvtSrc(current);
+      _tabRes.tail.delete(id);
+      _syncLegacyActive();
+    }
   }
   core.setActiveTail = setActiveTail;
   core.getActiveTail = getActiveTail;
@@ -854,24 +880,33 @@
 
   // ---- SSH 终端 WS（ssh 页） ----
   // 控制器结构：{ hasActive: () => bool, closeAll: () => void }
-  function setActiveShells(controller, tabId) {
+  function setActiveShells(controller, tabId, expectedInstance) {
     const id = _tabIdOf(tabId === null ? undefined : tabId);
-    if (controller == null || tabId === null) _tabRes.shells.delete(tabId === null ? _tabIdOf() : id);
-    else _tabRes.shells.set(id, controller);
+    if (controller == null || tabId === null) {
+      const targetId = (tabId !== null && tabId !== undefined) ? tabId : _tabIdOf();
+      const current = _tabRes.shells.get(targetId);
+      if (!expectedInstance || current === expectedInstance) {
+        _tabRes.shells.delete(targetId);
+      }
+    } else {
+      _tabRes.shells.set(id, controller);
+    }
     _syncLegacyActive();
   }
   function getActiveShells(tabId) {
     if (tabId !== undefined && tabId !== null) return _tabRes.shells.get(tabId) || null;
     return _tabRes.shells.get(_tabIdOf()) || null;
   }
-  function clearActiveShells(tabId) {
+  function clearActiveShells(tabId, expectedInstance) {
     const id = tabId !== undefined && tabId !== null ? tabId : _tabIdOf();
     const c = _tabRes.shells.get(id);
-    if (c && typeof c.closeAll === 'function') {
-      try { c.closeAll(); } catch (e) { /* ignore */ }
+    if (!expectedInstance || c === expectedInstance) {
+      if (c && typeof c.closeAll === 'function') {
+        try { c.closeAll(); } catch (e) { /* ignore */ }
+      }
+      _tabRes.shells.delete(id);
+      _syncLegacyActive();
     }
-    _tabRes.shells.delete(id);
-    _syncLegacyActive();
   }
   function _shellsActive(c) {
     if (c && typeof c.hasActive === 'function') {
@@ -895,10 +930,17 @@
 
   // ---- 上传任务（files / ssh） ----
   // 控制器结构：{ hasActive, cancelAll, cancelAllBeacon? }
-  function setActiveUploads(controller, tabId) {
+  function setActiveUploads(controller, tabId, expectedInstance) {
     const id = _tabIdOf(tabId === null ? undefined : tabId);
-    if (controller == null || tabId === null) _tabRes.uploads.delete(tabId === null ? _tabIdOf() : id);
-    else _tabRes.uploads.set(id, controller);
+    if (controller == null || tabId === null) {
+      const targetId = (tabId !== null && tabId !== undefined) ? tabId : _tabIdOf();
+      const current = _tabRes.uploads.get(targetId);
+      if (!expectedInstance || current === expectedInstance) {
+        _tabRes.uploads.delete(targetId);
+      }
+    } else {
+      _tabRes.uploads.set(id, controller);
+    }
     _syncLegacyActive();
   }
   function getActiveUploads(tabId) {
@@ -945,8 +987,20 @@
       }
     });
   }
+  function clearActiveUploads(tabId, expectedInstance) {
+    const id = tabId !== undefined && tabId !== null ? tabId : _tabIdOf();
+    const c = _tabRes.uploads.get(id);
+    if (!expectedInstance || c === expectedInstance) {
+      if (c && typeof c.cancelAll === 'function') {
+        try { c.cancelAll(); } catch (e) { /* ignore */ }
+      }
+      _tabRes.uploads.delete(id);
+      _syncLegacyActive();
+    }
+  }
   core.setActiveUploads = setActiveUploads;
   core.getActiveUploads = getActiveUploads;
+  core.clearActiveUploads = clearActiveUploads;
   core.cancelAllUploads = cancelAllUploads;
   core.cancelAllUploadsBeacon = cancelAllUploadsBeacon;
   core.hasActiveUploads = hasActiveUploads;

@@ -4,12 +4,26 @@
   const Kairo = window.Kairo = window.Kairo || {};
   const { el, toast, confirmDialog } = Kairo.core;
 
-  function renderNotes(view, routeState) {
+  function renderNotes(view, routeState, scope) {
     routeState = routeState || {};
     let tab = routeState.tab === 'reminders' ? 'reminders' : 'list';
     let query = '';
     let filter = 'active';
     let unsubscribe = null;
+
+    function onRouteState(ev) {
+      const s = (ev && ev.detail) || {};
+      const next = s.tab === 'reminders' ? 'reminders' : 'list';
+      if (next !== tab) {
+        tab = next;
+        renderTab();
+      }
+    }
+    if (scope && typeof scope.event === 'function') {
+      scope.event(view, 'kairo:route-state', onRouteState);
+    } else {
+      view.addEventListener('kairo:route-state', onRouteState);
+    }
 
     const tabs = el('div', { class: 'tabs-bar notes-center-tabs' });
     const content = el('div', { class: 'notes-center-content' });
@@ -27,8 +41,12 @@
 
     function switchTab(next) {
       tab = next;
-      const target = next === 'reminders' ? '#/notes/reminders' : '#/notes/list';
-      if (location.hash !== target && history && history.replaceState) history.replaceState(null, '', target);
+      if (Kairo.tabs && typeof Kairo.tabs.setRouteState === 'function') {
+        Kairo.tabs.setRouteState('notes', { tab: next });
+      } else {
+        const target = next === 'reminders' ? '#/notes/reminders' : '#/notes/list';
+        if (location.hash !== target && history && history.replaceState) history.replaceState(null, '', target);
+      }
       renderTab();
     }
 

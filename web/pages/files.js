@@ -34,7 +34,8 @@
     return '<svg xmlns="http://www.w3.org/2000/svg" width="' + s + '" height="' + s + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="' + d + '"/></svg>';
   }
 
-  function renderFiles(view) {
+  function renderFiles(view, routeState, scope) {
+    const tabOwner = (scope && (scope.tabId || scope.owner)) || (view && view.getAttribute && view.getAttribute('data-tab')) || 'files';
 
     // ---- 新建文件 / 新建文件夹 / 重命名 ----
     async function doNewFile() {
@@ -1289,7 +1290,7 @@
         if (!window.EventSource) { toast('浏览器不支持 EventSource', 'err'); return; }
         const es = new EventSource('/api/files/download/' + r.id + '/events');
         state.dlEvtSrc = es;
-        Kairo.core.setActiveDL({ id: r.id, evtsrc: es });
+        Kairo.core.setActiveDL({ id: r.id, evtsrc: es }, tabOwner);
         let gotDone = false;
         // P1-BUG-4 修复：done 一旦见到，**立刻** es.close() + 清 onerror/onmessage，
         // 防止 EventSource 自动重连把 404 刷到 network log。
@@ -1965,7 +1966,7 @@
         if (!window.EventSource) { toast('浏览器不支持 EventSource', 'err'); return; }
         const es = new EventSource('/api/files/download/' + r.id + '/events');
         state.dlEvtSrc = es;
-        Kairo.core.setActiveDL({ id: r.id, evtsrc: es });
+        Kairo.core.setActiveDL({ id: r.id, evtsrc: es }, tabOwner);
         let gotDone = false;
         // P1-BUG-4：参考上面 doDownload 的修复——done 见到立即卸监听器 + close。
         const onDoneSeen = (reason) => {
@@ -2040,7 +2041,7 @@ loadCfg().then(refreshCredStatus).catch(e => toast('配置加载失败：' + e.m
     // v1.2 Bug 1 修复：注册上传 controller 到 Kairo.core，
     // navigate 切走 / beforeunload 时 core 会调 cancelAll / cancelAllBeacon 取消进行中的上传。
     // （防止后台 XHR 继续跑 + 回调访问已被卸载的 DOM）
-    Kairo.core.setActiveUploads({
+    const uploadController = {
       hasActive: () => {
         const tasks = (state && state.uploadQueue) || [];
         return tasks.some(t => t.status === 'uploading' || t.status === 'pending');
@@ -2062,7 +2063,14 @@ loadCfg().then(refreshCredStatus).catch(e => toast('配置加载失败：' + e.m
           if (t.xhr) { try { t.xhr.abort(); } catch (e) { /* ignore */ } }
         });
       }
-    });
+    };
+    Kairo.core.setActiveUploads(uploadController, tabOwner);
+    if (scope && typeof scope.add === 'function') {
+      scope.add(() => {
+        Kairo.core.setActiveUploads(null, tabOwner, uploadController);
+        Kairo.core.clearActiveDL(tabOwner);
+      });
+    }
   }
 
   Kairo.pages.files = renderFiles;

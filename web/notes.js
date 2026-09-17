@@ -41,6 +41,9 @@
     if (on) state.inlineDrafts[id] = true;
     else delete state.inlineDrafts[id];
   }
+  function clearInlineDrafts() {
+    state.inlineDrafts = {};
+  }
   function hasUnsaved() {
     return Object.keys(state.dirty).some(function (k) { return state.dirty[k]; })
       || Object.keys(state.pending).length > 0
@@ -556,7 +559,7 @@
   Kairo.notes = {
     state, colors: COLORS, init, load, create, update, remove,
     setFloating, setDesktop, subscribe, find, capture, openReminder,
-    reminderContent, setInlineDraft, hasUnsaved, defaultDesktop,
+    reminderContent, setInlineDraft, clearInlineDrafts, hasUnsaved, defaultDesktop,
     haystack, parseQuery, matchesQuery, foldersOf, tagsOf, toggleTask, paintMarkdown
   };
 })();

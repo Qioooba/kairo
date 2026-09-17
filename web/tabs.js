@@ -153,6 +153,8 @@
     } catch (_) { /* ignore */ }
   }
 
+  let renderingTabId = null;
+
   // ---------- 渲染单个 Tab pane ----------
 
   function renderTabPane(tab) {
@@ -169,6 +171,8 @@
     viewRoot.appendChild(pane);
 
     const scope = createScope(tab.renderToken);
+    scope.tabId = tab.id;
+    scope.owner = tab.id;
     tab.scope = scope;
     tab.unmount = null;
 
@@ -182,6 +186,7 @@
       }
     }
 
+    renderingTabId = tab.id;
     try {
       const ret = render(pane, tab.routeState || {}, scope);
       if (ret && typeof ret.then === 'function') {
@@ -194,6 +199,8 @@
       }
     } catch (e) {
       showRenderError(pane, e);
+    } finally {
+      renderingTabId = null;
     }
   }
 
@@ -227,8 +234,27 @@
       // 同路由新子状态（如 notes list↔reminders）：notes 页内自己会切 tab，
       // 这里只需更新记录 + hash；pane 不重建（保活）。
       tab.routeState = routeState;
+      if (tab.pane) {
+        try {
+          tab.pane.dispatchEvent(new CustomEvent('kairo:route-state', { detail: routeState }));
+        } catch (_) {}
+      }
     }
     return tab;
+  }
+
+  function setRouteState(tabId, routeState) {
+    const tab = tabs.get(tabId);
+    if (!tab) return;
+    tab.routeState = routeState || {};
+    if (tab.pane) {
+      try {
+        tab.pane.dispatchEvent(new CustomEvent('kairo:route-state', { detail: routeState }));
+      } catch (_) {}
+    }
+    if (tab.id === activeId) {
+      syncChrome(tab);
+    }
   }
 
   function openRoute(route, routeState, opts) {
@@ -245,7 +271,13 @@
     if (!routes[route]) route = 'home';
     const leavingHome = (activeId === 'home' && route !== 'home');
     const tab = ensureTab(route, routeState);
-    if (!tab.pane) renderTabPane(tab);
+    if (!tab.pane) {
+      renderTabPane(tab);
+    } else if (routeState) {
+      try {
+        tab.pane.dispatchEvent(new CustomEvent('kairo:route-state', { detail: routeState }));
+      } catch (_) {}
+    }
     // notes 子状态变化时通知页内（页内 switchTab 用 replaceState 改 hash，
     // 外部 hash 进来时页内需跟进；页内监听该事件即可，v1 先保证 hash/记录一致）
     activate(tab.id, opts);
@@ -353,6 +385,9 @@
     if (Kairo.core && typeof Kairo.core.releaseTabResources === 'function') {
       try { Kairo.core.releaseTabResources(id); } catch (_) {}
     }
+    if (id === 'notes' && Kairo.notes && typeof Kairo.notes.clearInlineDrafts === 'function') {
+      try { Kairo.notes.clearInlineDrafts(); } catch (_) {}
+    }
     // 3. scope + unmount（unmount 经 scope.add 包过 once，dispose 后再调不会重复执行）
     const doomedScope = tab.scope;
     const doomedUnmount = tab.unmount;
@@ -387,6 +422,9 @@
       // 用户确认关闭：显式回滚 DB 事务类副作用（各 guard 自带 onConfirm 亦可，此处统一处理 database）
       if (Kairo.database && typeof Kairo.database.discardPendingWork === 'function' && id === 'database') {
         try { Kairo.database.discardPendingWork(); } catch (e) { if (console && console.warn) console.warn('discardPendingWork failed', e); }
+      }
+      if (Kairo.notes && typeof Kairo.notes.clearInlineDrafts === 'function' && id === 'notes') {
+        try { Kairo.notes.clearInlineDrafts(); } catch (e) { if (console && console.warn) console.warn('clearInlineDrafts failed', e); }
       }
     }
     const wasActive = (id === activeId);
@@ -448,10 +486,13 @@
     init, openRoute, activate, requestClose,
     addCloseGuard, closeBlockers,
     getActiveId: function () { return activeId; },
+    getRenderingId: function () { return renderingTabId; },
     getActive: function () { return activeId ? tabs.get(activeId) : null; },
     getOpenIds: function () { return order.slice(); },
     has: function (id) { return tabs.has(id); },
+    hasTab: function (id) { return tabs.has(id); },
     isActive: function (id) { return activeId === id; },
+    setRouteState: setRouteState,
     setBadge, hashFor,
     // 供 beforeunload / 诊断用（只读快照）
     _debug: function () { return { open: order.slice(), active: activeId }; }
