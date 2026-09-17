@@ -395,7 +395,7 @@ func WriteUPDATEWithPlan(w io.Writer, table ExportTable, plan ExportTargetPlan) 
 			return err
 		}
 		var setParts []string
-		for _, idx := range plan.SetIndices {
+		for i, idx := range plan.SetIndices {
 			var value any
 			if idx < len(row) {
 				value = row[idx]
@@ -404,10 +404,14 @@ func WriteUPDATEWithPlan(w io.Writer, table ExportTable, plan ExportTargetPlan) 
 			if err != nil {
 				return err
 			}
-			setParts = append(setParts, QuoteIdent(plan.Kind, table.Columns[idx].Name)+" = "+lit)
+			physCol := table.Columns[idx].Name
+			if i < len(plan.SetPhysicalNames) && plan.SetPhysicalNames[i] != "" {
+				physCol = plan.SetPhysicalNames[i]
+			}
+			setParts = append(setParts, QuoteIdent(plan.Kind, physCol)+" = "+lit)
 		}
 		var whereParts []string
-		for _, idx := range whereIndices {
+		for i, idx := range whereIndices {
 			var value any
 			if idx < len(row) {
 				value = row[idx]
@@ -416,7 +420,11 @@ func WriteUPDATEWithPlan(w io.Writer, table ExportTable, plan ExportTargetPlan) 
 			if err != nil {
 				return err
 			}
-			whereParts = append(whereParts, QuoteIdent(plan.Kind, table.Columns[idx].Name)+" = "+lit)
+			physCol := table.Columns[idx].Name
+			if !plan.UseRowID && i < len(plan.KeyPhysicalNames) && plan.KeyPhysicalNames[i] != "" {
+				physCol = plan.KeyPhysicalNames[i]
+			}
+			whereParts = append(whereParts, QuoteIdent(plan.Kind, physCol)+" = "+lit)
 		}
 		stmt := "UPDATE " + plan.FullTarget + " SET " + strings.Join(setParts, ", ") + " WHERE " + strings.Join(whereParts, " AND ") + ";\n"
 		if _, err := io.WriteString(w, stmt); err != nil {

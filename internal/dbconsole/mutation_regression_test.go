@@ -23,6 +23,7 @@ type mutationDriver struct {
 	queryRows          [][]driver.Value
 	failAt             int
 	commits, rollbacks int
+	onCommit           func()
 }
 type mutationConn struct{ d *mutationDriver }
 type mutationTx struct{ d *mutationDriver }
@@ -94,9 +95,14 @@ func (c *mutationConn) ExecContext(ctx context.Context, query string, args []dri
 }
 func (tx *mutationTx) Commit() error {
 	tx.d.mu.Lock()
-	defer tx.d.mu.Unlock()
+	fn := tx.d.onCommit
 	tx.d.commits++
-	return tx.d.commitErr
+	err := tx.d.commitErr
+	tx.d.mu.Unlock()
+	if fn != nil {
+		fn()
+	}
+	return err
 }
 func (tx *mutationTx) Rollback() error {
 	tx.d.mu.Lock()

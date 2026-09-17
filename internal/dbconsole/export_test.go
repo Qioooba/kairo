@@ -147,6 +147,86 @@ func TestBuildExportTargetPlan_JOINRejects(t *testing.T) {
 	}
 }
 
+func TestBuildExportTargetPlan_ComputedExpressionAndForgedPKRejects(t *testing.T) {
+	cases := []struct {
+		name    string
+		sql     string
+		cols    []Column
+		pks     []string
+		wantErr string
+	}{
+		{
+			name:    "arithmetic expression aliased as PK",
+			sql:     "SELECT ID + 1 AS ID, BALANCE FROM T WHERE ID = 1",
+			cols:    []Column{{Name: "ID"}, {Name: "BALANCE"}},
+			pks:     []string{"ID"},
+			wantErr: "表达式",
+		},
+		{
+			name:    "constant aliased as PK",
+			sql:     "SELECT 1 AS ID, BALANCE FROM T",
+			cols:    []Column{{Name: "ID"}, {Name: "BALANCE"}},
+			pks:     []string{"ID"},
+			wantErr: "常量",
+		},
+		{
+			name:    "other column aliased as PK",
+			sql:     "SELECT OTHER_COL AS ID, BALANCE FROM T",
+			cols:    []Column{{Name: "ID"}, {Name: "BALANCE"}},
+			pks:     []string{"ID"},
+			wantErr: "别名",
+		},
+		{
+			name:    "duplicate PK projection",
+			sql:     "SELECT ID, ID AS ID2, BALANCE FROM T",
+			cols:    []Column{{Name: "ID"}, {Name: "ID2"}, {Name: "BALANCE"}},
+			pks:     []string{"ID"},
+			wantErr: "重复",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := BuildExportTargetPlan(KindOracle, "T", tc.sql, tc.cols, tc.pks, false)
+			if err == nil {
+				t.Fatalf("expected error containing %q, got nil", tc.wantErr)
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("expected error containing %q, got %v", tc.wantErr, err)
+			}
+		})
+	}
+}
+
+func TestBuildExportTargetPlan_AliasedColumnUsesPhysicalName(t *testing.T) {
+	sql := "SELECT ID, BALANCE AS B_VAL FROM T"
+	cols := []Column{{Name: "ID"}, {Name: "B_VAL"}}
+	plan, err := BuildExportTargetPlan(KindOracle, "T", sql, cols, []string{"ID"}, false)
+	if err != nil {
+		t.Fatalf("expected valid plan, got: %v", err)
+	}
+	table := ExportTable{
+		Columns: cols,
+		Rows: [][]any{
+			{int64(1), int64(100)},
+		},
+	}
+	var buf bytes.Buffer
+	if err := WriteUPDATEWithPlan(&buf, table, plan); err != nil {
+		t.Fatalf("failed to write update: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, `SET "BALANCE" = 100`) {
+		t.Fatalf("expected SET to use physical column name BALANCE, got: %s", out)
+	}
+	if strings.Contains(out, `SET "B_VAL"`) {
+		t.Fatalf("SET must NOT use display alias B_VAL: %s", out)
+	}
+	if !strings.Contains(out, `WHERE "ID" = 1`) {
+		t.Fatalf("expected WHERE to use ID, got: %s", out)
+	}
+}
+
 func TestExportSQLLiteral_IncompleteLOBAndBinaryRejects(t *testing.T) {
 	lazyLOB := map[string]any{"kind": "clob", "lazy": true, "column": "CONTENT"}
 	table := ExportTable{

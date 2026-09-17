@@ -38,6 +38,10 @@ type transactionEntry struct {
 	sessionID   string
 	createdAt   time.Time
 	updatedAt   time.Time
+	done        bool
+	outcome     TerminalOutcome
+	outcomeErr  error
+	outcomeMsg  string
 }
 
 type Manager struct {

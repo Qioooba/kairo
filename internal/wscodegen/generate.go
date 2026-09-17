@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -14,7 +15,10 @@ import (
 	"kairo/internal/webservice"
 )
 
-var errNoWSDL = errors.New("请提供 WSDL：已导入项目 / 本地文件 / URL / 粘贴内容 四选一")
+var (
+	errNoWSDL          = errors.New("请提供 WSDL：已导入项目 / 本地文件 / URL / 粘贴内容 四选一")
+	testBeforeLinkHook func(stageDir, dest string)
+)
 
 // ResolveWSDL 把请求里的四种来源收成已解析的 WSDL。store 可为 nil。
 func ResolveWSDL(req Request, store *webservice.Store) (resolvedWSDL, error) {
@@ -570,17 +574,42 @@ func writeFilesLocked(root string, files []GeneratedFile, overwrite bool) ([]str
 		}
 		published = append(published, p)
 		srcFile := filepath.Join(stage, fmt.Sprintf("new-%d", i))
+		if testBeforeLinkHook != nil {
+			testBeforeLinkHook(stage, dest)
+		}
 		if err := os.Link(srcFile, dest); err != nil {
-			// Hardlink failed (cross-device / filesystem), fall back to copy
-			data, rerr := os.ReadFile(srcFile)
-			if rerr != nil {
+			if errors.Is(err, os.ErrExist) || os.IsExist(err) {
+				return rollback(fmt.Errorf("目标文件已存在且未开启覆盖: %s (%w)", rel, err))
+			}
+			// Hardlink failed (cross-device / filesystem not supported), fall back to copy
+			var flag int
+			if overwrite {
+				flag = os.O_WRONLY | os.O_CREATE | os.O_TRUNC
+			} else {
+				flag = os.O_WRONLY | os.O_CREATE | os.O_EXCL
+			}
+			outF, err := os.OpenFile(dest, flag, 0o644)
+			if err != nil {
 				return rollback(err)
 			}
-			if werr := os.WriteFile(dest, data, 0o644); werr != nil {
-				return rollback(werr)
+			published[len(published)-1].installed = true
+			inF, err := os.Open(srcFile)
+			if err != nil {
+				_ = outF.Close()
+				return rollback(err)
 			}
+			_, copyErr := io.Copy(outF, inF)
+			_ = inF.Close()
+			closeErr := outF.Close()
+			if copyErr != nil {
+				return rollback(copyErr)
+			}
+			if closeErr != nil {
+				return rollback(closeErr)
+			}
+		} else {
+			published[len(published)-1].installed = true
 		}
-		published[len(published)-1].installed = true
 		written = append(written, rel)
 	}
 	return written, nil

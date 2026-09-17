@@ -315,3 +315,39 @@ func TestGenerate_MultiDirSameNameXSD_PreservesBothBeans(t *testing.T) {
 	}
 }
 
+func TestWriteFilesLocked_InjectedFileBetweenPrecheckAndLinkPreventsOverwrite(t *testing.T) {
+	root := t.TempDir()
+	rel := "client/Service.java"
+	dest := filepath.Join(root, filepath.FromSlash(rel))
+	userOriginal := "USER VALUABLE WORK THAT MUST NEVER BE OVERWRITTEN"
+
+	files := []GeneratedFile{
+		{
+			RelPath: rel,
+			Content: "GENERATED CONTENT",
+			Kind:    "java",
+		},
+	}
+
+	testBeforeLinkHook = func(stageDir, targetDest string) {
+		if targetDest == dest {
+			_ = os.MkdirAll(filepath.Dir(dest), 0o755)
+			_ = os.WriteFile(dest, []byte(userOriginal), 0o644)
+		}
+	}
+	defer func() { testBeforeLinkHook = nil }()
+
+	_, err := writeFiles(root, files, false)
+	if err == nil {
+		t.Fatal("expected writeFiles to fail when file appears before link, got nil")
+	}
+
+	content, rerr := os.ReadFile(dest)
+	if rerr != nil {
+		t.Fatalf("failed to read dest: %v", rerr)
+	}
+	if string(content) != userOriginal {
+		t.Fatalf("user file was overwritten! got %q, want %q", string(content), userOriginal)
+	}
+}
+

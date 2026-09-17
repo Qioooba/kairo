@@ -135,6 +135,9 @@ func (m *Manager) transactionForContext(ctx context.Context, source Source, sess
 		return nil, fmt.Errorf("事务会话数量已达到上限（最多 %d 个）", maxTransactions)
 	}
 	m.transactions[key] = created
+	if m.terminalRecords != nil {
+		delete(m.terminalRecords, key)
+	}
 	m.mu.Unlock()
 	return created, nil
 }
@@ -201,44 +204,70 @@ func isCommitUncertainError(err error) bool {
 	return false
 }
 
-// rollbackEntryLocked is used while the caller already owns entry.mu.  It is
+// rollbackEntryLocked is used while the caller already owns entry.mu. It is
 // deliberately idempotent and removes the map entry immediately so a dropped
 // HTTP request cannot leave a connection/lock behind until the next sweep.
-func (m *Manager) rollbackEntryLocked(sourceID, sessionID string, entry *transactionEntry) {
+func (m *Manager) rollbackEntryLocked(sourceID, sessionID string, entry *transactionEntry) error {
 	if entry == nil {
-		return
+		return nil
 	}
-	if entry.tx != nil {
-		_ = entry.tx.Rollback()
+	if entry.done {
+		return entry.outcomeErr
 	}
+	entry.done = true
+	entry.outcome = OutcomeRolledBack
+	entry.outcomeMsg = "事务已回滚"
+	defer m.removeTransaction(sourceID, sessionID, entry)
 	if entry.cancel != nil {
-		entry.cancel()
+		defer entry.cancel()
 	}
-	m.removeTransaction(sourceID, sessionID, entry)
+	var err error
+	if entry.tx != nil {
+		err = entry.tx.Rollback()
+	}
 	m.recordTerminalState(sourceID, sessionID, entry.fingerprint, OutcomeRolledBack, "事务已回滚")
+	if errors.Is(err, sql.ErrTxDone) {
+		return nil
+	}
+	return err
 }
 
 // Commit always ends the driver transaction, including when the server's
 // acknowledgement is lost. Release its context and registry entry on both paths.
 func (m *Manager) commitEntryLocked(sourceID, sessionID string, entry *transactionEntry) error {
+	if entry.done {
+		return entry.outcomeErr
+	}
 	defer m.removeTransaction(sourceID, sessionID, entry)
 	if entry.cancel != nil {
 		defer entry.cancel()
 	}
 	if entry.tx == nil {
+		entry.done = true
+		entry.outcome = OutcomeRolledBack
+		entry.outcomeErr = sql.ErrTxDone
 		return sql.ErrTxDone
 	}
 	err := entry.tx.Commit()
+	entry.done = true
 	if err == nil {
+		entry.outcome = OutcomeCommitted
+		entry.outcomeMsg = "事务已提交"
 		m.recordTerminalState(sourceID, sessionID, entry.fingerprint, OutcomeCommitted, "事务已提交")
 		return nil
 	}
 	if isCommitUncertainError(err) {
 		msg := "提交确认丢失或连接中断，事务最终状态未知，请核对目标数据，切勿盲目重试写入"
+		entry.outcome = OutcomeUnknown
+		entry.outcomeErr = err
+		entry.outcomeMsg = msg
 		m.recordTerminalState(sourceID, sessionID, entry.fingerprint, OutcomeUnknown, msg)
 		return &CommitUncertainError{Err: err, Message: msg}
 	}
-	m.recordTerminalState(sourceID, sessionID, entry.fingerprint, OutcomeRolledBack, "事务提交失败已回滚: "+err.Error())
+	entry.outcome = OutcomeRolledBack
+	entry.outcomeErr = err
+	entry.outcomeMsg = "事务提交失败已回滚: " + err.Error()
+	m.recordTerminalState(sourceID, sessionID, entry.fingerprint, OutcomeRolledBack, entry.outcomeMsg)
 	return err
 }
 
@@ -299,18 +328,44 @@ func (m *Manager) ControlSessionTransaction(ctx context.Context, source Source, 
 	defer m.release()
 	entry.mu.Lock()
 	defer entry.mu.Unlock()
+
+	// 关键防护：如果该 entry 已在并发请求中终态完成，直接返回确定结果，禁止再次调用驱动或覆盖终态
+	if entry.done {
+		switch entry.outcome {
+		case OutcomeUnknown:
+			if action == "COMMIT" {
+				return QuerySummary{}, &CommitUncertainError{
+					Err:     entry.outcomeErr,
+					Message: entry.outcomeMsg,
+				}
+			}
+			return QuerySummary{
+				StatementType: "TRANSACTION",
+				Message:       "事务已在服务端结束（最终状态未知），本地已解除锁定",
+			}, nil
+		case OutcomeCommitted:
+			if action == "COMMIT" {
+				return QuerySummary{StatementType: "TRANSACTION", Message: "事务已提交（重复操作已忽略）"}, nil
+			}
+			return QuerySummary{}, errors.New("事务已提交，无法回滚")
+		case OutcomeRolledBack:
+			if action == "ROLLBACK" {
+				return QuerySummary{StatementType: "TRANSACTION", Message: "事务已回滚（重复操作已忽略）"}, nil
+			}
+			return QuerySummary{}, errors.New("事务已回滚，无法提交")
+		case OutcomeExpired:
+			if action == "ROLLBACK" {
+				return QuerySummary{StatementType: "TRANSACTION", Message: "事务已过期回滚（重复操作已忽略）"}, nil
+			}
+			return QuerySummary{}, errors.New("事务已过期回滚，无法提交")
+		}
+	}
+
 	var controlErr error
 	if action == "COMMIT" {
 		controlErr = m.commitEntryLocked(source.ID, sessionID, entry)
 	} else {
-		if entry.tx != nil {
-			controlErr = entry.tx.Rollback()
-		}
-		if entry.cancel != nil {
-			entry.cancel()
-		}
-		m.removeTransaction(source.ID, sessionID, entry)
-		m.recordTerminalState(source.ID, sessionID, entry.fingerprint, OutcomeRolledBack, "事务已回滚")
+		controlErr = m.rollbackEntryLocked(source.ID, sessionID, entry)
 	}
 	if controlErr != nil && (action == "COMMIT" || !errors.Is(controlErr, sql.ErrTxDone)) {
 		return QuerySummary{}, controlErr

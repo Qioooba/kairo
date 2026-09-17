@@ -15,7 +15,9 @@ type ExportTargetPlan struct {
 	FullTarget        string   // 带引号的完整表名 (用于 SQL 语句)
 	PrimaryKeys       []string // 必须匹配的所有主键列名
 	KeyIndices        []int    // 每个主键列在 table.Columns 中的索引 (必须全长对应)
+	KeyPhysicalNames  []string // 每个主键列对应的目标表物理列名 (用于 WHERE)
 	SetIndices        []int    // SET 子句中包含的列索引
+	SetPhysicalNames  []string // 每个 SET 列对应的目标表物理列名 (用于 SET)
 	UseRowID          bool     // 是否使用可信真实 ROWID 进行定位
 	RowIDIndex        int      // ROWID 在 table.Columns 中的索引
 	SourceFingerprint string
@@ -53,6 +55,501 @@ func ValidateSingleTableQuery(sql string) error {
 	return nil
 }
 
+func isSpaceOrPunct(c byte) bool {
+	return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '(' || c == ')' || c == ',' || c == ';'
+}
+
+func isIdent(s string) bool {
+	if s == "" {
+		return false
+	}
+	if len(s) >= 2 && ((s[0] == '"' && s[len(s)-1] == '"') || (s[0] == '`' && s[len(s)-1] == '`')) {
+		return true
+	}
+	for i, r := range s {
+		if i == 0 {
+			if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r == '_') {
+				return false
+			}
+		} else {
+			if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '$' || r == '#') {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+var reservedSQLKeywords = map[string]bool{
+	"NULL":              true,
+	"TRUE":              true,
+	"FALSE":             true,
+	"UNKNOWN":           true,
+	"CURRENT_DATE":      true,
+	"CURRENT_TIME":      true,
+	"CURRENT_TIMESTAMP": true,
+	"SYSDATE":           true,
+	"SYSTIMESTAMP":      true,
+	"USER":              true,
+	"ROWNUM":            true,
+	"LEVEL":             true,
+}
+
+// stripSQLComments removes /* ... */ and -- / # comments while preserving quoted strings.
+func stripSQLComments(sql string) string {
+	var b strings.Builder
+	b.Grow(len(sql))
+	n := len(sql)
+	inSingle := false
+	inDouble := false
+	inBacktick := false
+
+	for i := 0; i < n; i++ {
+		c := sql[i]
+		if inSingle {
+			b.WriteByte(c)
+			if c == '\'' {
+				if i+1 < n && sql[i+1] == '\'' {
+					b.WriteByte(sql[i+1])
+					i++
+				} else {
+					inSingle = false
+				}
+			}
+			continue
+		}
+		if inDouble {
+			b.WriteByte(c)
+			if c == '"' {
+				inDouble = false
+			}
+			continue
+		}
+		if inBacktick {
+			b.WriteByte(c)
+			if c == '`' {
+				inBacktick = false
+			}
+			continue
+		}
+
+		if c == '\'' {
+			inSingle = true
+			b.WriteByte(c)
+			continue
+		}
+		if c == '"' {
+			inDouble = true
+			b.WriteByte(c)
+			continue
+		}
+		if c == '`' {
+			inBacktick = true
+			b.WriteByte(c)
+			continue
+		}
+
+		// Block comment
+		if c == '/' && i+1 < n && sql[i+1] == '*' {
+			i += 2
+			for i+1 < n && !(sql[i] == '*' && sql[i+1] == '/') {
+				i++
+			}
+			i++ // skip '/'
+			b.WriteByte(' ')
+			continue
+		}
+		// Line comments: -- or #
+		if (c == '-' && i+1 < n && sql[i+1] == '-') || c == '#' {
+			for i < n && sql[i] != '\n' && sql[i] != '\r' {
+				i++
+			}
+			b.WriteByte(' ')
+			continue
+		}
+
+		b.WriteByte(c)
+	}
+	return b.String()
+}
+
+// extractSelectProjections extracts the raw projection items between SELECT and FROM.
+func extractSelectProjections(sql string) ([]string, error) {
+	clean := strings.TrimSpace(stripSQLComments(sql))
+	clean = strings.TrimRight(clean, "; \t\r\n")
+	upper := strings.ToUpper(clean)
+	if !strings.HasPrefix(upper, "SELECT") {
+		return nil, errors.New("仅支持以 SELECT 开头的单表查询导出 UPDATE 脚本")
+	}
+
+	inSingle := false
+	inDouble := false
+	inBacktick := false
+	depth := 0
+	fromIdx := -1
+	n := len(clean)
+
+	for i := 6; i < n; i++ {
+		c := clean[i]
+		if inSingle {
+			if c == '\'' {
+				if i+1 < n && clean[i+1] == '\'' {
+					i++
+				} else {
+					inSingle = false
+				}
+			}
+			continue
+		}
+		if inDouble {
+			if c == '"' {
+				inDouble = false
+			}
+			continue
+		}
+		if inBacktick {
+			if c == '`' {
+				inBacktick = false
+			}
+			continue
+		}
+
+		if c == '\'' {
+			inSingle = true
+			continue
+		}
+		if c == '"' {
+			inDouble = true
+			continue
+		}
+		if c == '`' {
+			inBacktick = true
+			continue
+		}
+
+		if c == '(' {
+			depth++
+			continue
+		}
+		if c == ')' {
+			depth--
+			continue
+		}
+
+		if depth == 0 {
+			if i+4 <= n && strings.EqualFold(clean[i:i+4], "FROM") {
+				prev := clean[i-1]
+				next := byte(' ')
+				if i+4 < n {
+					next = clean[i+4]
+				}
+				if isSpaceOrPunct(prev) && isSpaceOrPunct(next) {
+					fromIdx = i
+					break
+				}
+			}
+		}
+	}
+
+	if fromIdx < 0 {
+		return nil, errors.New("无法定位查询的 FROM 子句，不能确定 UPDATE 目标基表")
+	}
+
+	projStr := strings.TrimSpace(clean[6:fromIdx])
+	upperProj := strings.ToUpper(projStr)
+	if strings.HasPrefix(upperProj, "DISTINCT") && len(projStr) > 8 && isSpaceOrPunct(projStr[8]) {
+		projStr = strings.TrimSpace(projStr[8:])
+	} else if strings.HasPrefix(upperProj, "ALL") && len(projStr) > 3 && isSpaceOrPunct(projStr[3]) {
+		projStr = strings.TrimSpace(projStr[3:])
+	}
+
+	var items []string
+	start := 0
+	depth = 0
+	inSingle = false
+	inDouble = false
+	inBacktick = false
+	for i := 0; i < len(projStr); i++ {
+		c := projStr[i]
+		if inSingle {
+			if c == '\'' {
+				if i+1 < len(projStr) && projStr[i+1] == '\'' {
+					i++
+				} else {
+					inSingle = false
+				}
+			}
+			continue
+		}
+		if inDouble {
+			if c == '"' {
+				inDouble = false
+			}
+			continue
+		}
+		if inBacktick {
+			if c == '`' {
+				inBacktick = false
+			}
+			continue
+		}
+
+		if c == '\'' {
+			inSingle = true
+			continue
+		}
+		if c == '"' {
+			inDouble = true
+			continue
+		}
+		if c == '`' {
+			inBacktick = true
+			continue
+		}
+
+		if c == '(' {
+			depth++
+			continue
+		}
+		if c == ')' {
+			depth--
+			continue
+		}
+
+		if c == ',' && depth == 0 {
+			items = append(items, strings.TrimSpace(projStr[start:i]))
+			start = i + 1
+		}
+	}
+	if start < len(projStr) {
+		items = append(items, strings.TrimSpace(projStr[start:]))
+	}
+
+	return items, nil
+}
+
+func parseProjectionItem(item string) (physName, alias string, isWildcard bool, err error) {
+	trimmed := strings.TrimSpace(item)
+	if trimmed == "" {
+		return "", "", false, errors.New("投影列不能为空")
+	}
+	if trimmed == "*" || strings.HasSuffix(trimmed, ".*") {
+		return "", "", true, nil
+	}
+
+	inSingle := false
+	inDouble := false
+	inBacktick := false
+	hasParen := false
+	hasOperator := false
+
+	for i := 0; i < len(trimmed); i++ {
+		c := trimmed[i]
+		if inSingle {
+			if c == '\'' {
+				if i+1 < len(trimmed) && trimmed[i+1] == '\'' {
+					i++
+				} else {
+					inSingle = false
+				}
+			}
+			continue
+		}
+		if inDouble {
+			if c == '"' {
+				inDouble = false
+			}
+			continue
+		}
+		if inBacktick {
+			if c == '`' {
+				inBacktick = false
+			}
+			continue
+		}
+
+		if c == '\'' {
+			inSingle = true
+			continue
+		}
+		if c == '"' {
+			inDouble = true
+			continue
+		}
+		if c == '`' {
+			inBacktick = true
+			continue
+		}
+
+		if c == '(' || c == ')' {
+			hasParen = true
+		}
+		if c == '+' || c == '-' || c == '*' || c == '/' || c == '%' ||
+			c == '&' || c == '|' || c == '^' || c == '~' || c == '!' ||
+			c == '<' || c == '>' || c == '=' {
+			hasOperator = true
+		}
+	}
+
+	if hasParen {
+		return "", "", false, fmt.Errorf("列投影 %q 包含函数或子查询表达式，无法证明基表物理列来源，不能生成安全的 UPDATE 脚本", item)
+	}
+	if hasOperator {
+		return "", "", false, fmt.Errorf("列投影 %q 包含计算表达式，无法证明基表物理列来源，不能生成安全的 UPDATE 脚本", item)
+	}
+
+	sourcePart := trimmed
+	aliasPart := ""
+
+	asIdx := -1
+	inSingle = false
+	inDouble = false
+	inBacktick = false
+	for i := 0; i+3 < len(trimmed); i++ {
+		c := trimmed[i]
+		if inSingle {
+			if c == '\'' {
+				if i+1 < len(trimmed) && trimmed[i+1] == '\'' {
+					i++
+				} else {
+					inSingle = false
+				}
+			}
+			continue
+		}
+		if inDouble {
+			if c == '"' {
+				inDouble = false
+			}
+			continue
+		}
+		if inBacktick {
+			if c == '`' {
+				inBacktick = false
+			}
+			continue
+		}
+		if c == '\'' {
+			inSingle = true
+			continue
+		}
+		if c == '"' {
+			inDouble = true
+			continue
+		}
+		if c == '`' {
+			inBacktick = true
+			continue
+		}
+
+		if (i == 0 || isSpaceOrPunct(trimmed[i-1])) &&
+			strings.EqualFold(trimmed[i:i+2], "AS") &&
+			isSpaceOrPunct(trimmed[i+2]) {
+			asIdx = i
+			break
+		}
+	}
+
+	if asIdx >= 0 {
+		sourcePart = strings.TrimSpace(trimmed[:asIdx])
+		aliasPart = strings.TrimSpace(trimmed[asIdx+2:])
+	} else {
+		lastSpace := -1
+		inSingle = false
+		inDouble = false
+		inBacktick = false
+		for i := 0; i < len(trimmed); i++ {
+			c := trimmed[i]
+			if inSingle {
+				if c == '\'' {
+					if i+1 < len(trimmed) && trimmed[i+1] == '\'' {
+						i++
+					} else {
+						inSingle = false
+					}
+				}
+				continue
+			}
+			if inDouble {
+				if c == '"' {
+					inDouble = false
+				}
+				continue
+			}
+			if inBacktick {
+				if c == '`' {
+					inBacktick = false
+				}
+				continue
+			}
+			if c == '\'' {
+				inSingle = true
+				continue
+			}
+			if c == '"' {
+				inDouble = true
+				continue
+			}
+			if c == '`' {
+				inBacktick = true
+				continue
+			}
+			if c == ' ' || c == '\t' {
+				lastSpace = i
+			}
+		}
+		if lastSpace >= 0 {
+			sourcePart = strings.TrimSpace(trimmed[:lastSpace])
+			aliasPart = strings.TrimSpace(trimmed[lastSpace+1:])
+		}
+	}
+
+	dotIdx := -1
+	inSingle = false
+	inDouble = false
+	inBacktick = false
+	for i := len(sourcePart) - 1; i >= 0; i-- {
+		c := sourcePart[i]
+		if c == '"' || c == '`' || c == '\'' {
+			continue
+		}
+		if c == '.' {
+			dotIdx = i
+			break
+		}
+	}
+	colName := sourcePart
+	if dotIdx >= 0 {
+		colName = strings.TrimSpace(sourcePart[dotIdx+1:])
+	}
+
+	if strings.HasPrefix(colName, "'") || (len(colName) > 0 && colName[0] >= '0' && colName[0] <= '9') {
+		return "", "", false, fmt.Errorf("列投影 %q 为常量，无法证明基表物理列来源，不能生成安全的 UPDATE 脚本", item)
+	}
+
+	cleanCol := strings.Trim(colName, `"`+"`")
+	if !isIdent(colName) || cleanCol == "" {
+		return "", "", false, fmt.Errorf("列投影 %q 格式非法，无法证明基表物理列来源", item)
+	}
+	if reservedSQLKeywords[strings.ToUpper(cleanCol)] {
+		return "", "", false, fmt.Errorf("列投影 %q 为系统保留字或伪列，不能生成安全的 UPDATE 脚本", item)
+	}
+
+	physName = cleanCol
+
+	if aliasPart != "" {
+		cleanAlias := strings.Trim(aliasPart, `"`+"`")
+		if !isIdent(aliasPart) || cleanAlias == "" {
+			return "", "", false, fmt.Errorf("列别名 %q 格式非法", aliasPart)
+		}
+		alias = cleanAlias
+	} else {
+		alias = physName
+	}
+
+	return physName, alias, false, nil
+}
+
 // BuildExportTargetPlan 构建并校验 UPDATE 导出的目标计划
 func BuildExportTargetPlan(kind, tableName, querySQL string, columns []Column, pkCols []string, hasTrustedROWID bool) (ExportTargetPlan, error) {
 	plan := ExportTargetPlan{
@@ -83,6 +580,42 @@ func BuildExportTargetPlan(kind, tableName, querySQL string, columns []Column, p
 		return plan, errors.New("没有可导出的列")
 	}
 
+	// 解析并验证 SQL 投影列，获取基表物理列映射
+	physicalNames := make([]string, len(columns))
+	if querySQL != "" {
+		items, err := extractSelectProjections(querySQL)
+		if err != nil {
+			return plan, err
+		}
+		if len(items) == 1 && (items[0] == "*" || strings.HasSuffix(items[0], ".*")) {
+			for i, col := range columns {
+				physicalNames[i] = strings.Trim(col.Name, `"`+"`")
+			}
+		} else {
+			if len(items) != len(columns) {
+				return plan, errors.New("查询投影列数与结果集列数不一致，无法确定物理列映射")
+			}
+			for i, item := range items {
+				phys, alias, isWild, err := parseProjectionItem(item)
+				if err != nil {
+					return plan, err
+				}
+				if isWild {
+					return plan, errors.New("不支持通配符与显式列混合投影")
+				}
+				cleanCol := strings.Trim(columns[i].Name, `"`+"`")
+				if !strings.EqualFold(cleanCol, alias) {
+					return plan, fmt.Errorf("结果列 %q 与查询投影 %q 别名不匹配", columns[i].Name, item)
+				}
+				physicalNames[i] = phys
+			}
+		}
+	} else {
+		for i, col := range columns {
+			physicalNames[i] = strings.Trim(col.Name, `"`+"`")
+		}
+	}
+
 	// 1. 检查真实单表 ROWID
 	// 只有经后端单表查询证明且非 "expr AS ROWID" 别名的真实物理行标识才允许使用
 	isForgedRowID := querySQL != "" && aliasRowIDRe.MatchString(querySQL)
@@ -109,34 +642,29 @@ func BuildExportTargetPlan(kind, tableName, querySQL string, columns []Column, p
 			if pkTrim == "" {
 				continue
 			}
-			isQuotedPK := len(pkTrim) >= 2 && pkTrim[0] == '"' && pkTrim[len(pkTrim)-1] == '"'
 			cleanPK := strings.Trim(pkTrim, `"`+"`")
-			matchIdx := -1
+			var matchIdxs []int
 
 			for i, col := range columns {
-				colTrim := strings.TrimSpace(col.Name)
-				isQuotedCol := len(colTrim) >= 2 && colTrim[0] == '"' && colTrim[len(colTrim)-1] == '"'
-				cleanCol := strings.Trim(colTrim, `"`+"`")
+				cleanCol := strings.Trim(col.Name, `"`+"`")
+				phys := physicalNames[i]
 
-				if isQuotedPK || isQuotedCol {
-					// 引号标识符要求严格大小写匹配
-					if cleanCol == cleanPK {
-						matchIdx = i
-						break
-					}
-				} else {
-					// 未加引号的普通标识符按方言规则进行大小写不敏感匹配
-					if strings.EqualFold(cleanCol, cleanPK) {
-						matchIdx = i
-						break
-					}
+				if strings.EqualFold(phys, cleanPK) {
+					matchIdxs = append(matchIdxs, i)
+				} else if strings.EqualFold(cleanCol, cleanPK) {
+					return plan, fmt.Errorf("列别名 %q 伪装为主键列 %s，无法证明基表物理列来源", col.Name, pkTrim)
 				}
 			}
 
-			if matchIdx < 0 {
+			if len(matchIdxs) == 0 {
 				return plan, fmt.Errorf("缺少主键列 %s：目标表的主键必须完整包含在结果集中才能生成安全的 UPDATE 语句", pkTrim)
 			}
+			if len(matchIdxs) > 1 {
+				return plan, fmt.Errorf("主键列 %s 存在重复投影，无法确定唯一物理主键映射", pkTrim)
+			}
+			matchIdx := matchIdxs[0]
 			plan.KeyIndices = append(plan.KeyIndices, matchIdx)
+			plan.KeyPhysicalNames = append(plan.KeyPhysicalNames, physicalNames[matchIdx])
 			keyIndexMap[matchIdx] = struct{}{}
 		}
 
@@ -146,20 +674,24 @@ func BuildExportTargetPlan(kind, tableName, querySQL string, columns []Column, p
 		for i := range columns {
 			if _, isPK := keyIndexMap[i]; !isPK {
 				plan.SetIndices = append(plan.SetIndices, i)
+				plan.SetPhysicalNames = append(plan.SetPhysicalNames, physicalNames[i])
 			}
 		}
 		if len(plan.SetIndices) == 0 {
 			plan.SetIndices = append([]int(nil), plan.KeyIndices...)
+			plan.SetPhysicalNames = append([]string(nil), plan.KeyPhysicalNames...)
 		}
 	} else {
 		// 使用 ROWID 时，除 ROWID 本身外的所有列都放入 SET
 		for i := range columns {
 			if i != plan.RowIDIndex {
 				plan.SetIndices = append(plan.SetIndices, i)
+				plan.SetPhysicalNames = append(plan.SetPhysicalNames, physicalNames[i])
 			}
 		}
 		if len(plan.SetIndices) == 0 {
 			plan.SetIndices = append(plan.SetIndices, plan.RowIDIndex)
+			plan.SetPhysicalNames = append(plan.SetPhysicalNames, physicalNames[plan.RowIDIndex])
 		}
 	}
 
