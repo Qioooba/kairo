@@ -29,6 +29,13 @@
   --radius: 10px;
   /* FE-007：主侧栏宽度统一变量，body grid-template-columns 与 .cfg-save-footer-bar 等共用，避免硬编码 240px 耦合。 */
   --sidebar-width: 240px;
+}
+
+:root[data-sidebar="collapsed"] {
+  --sidebar-width: 0px !important;
+}
+
+:root {
   /* 全局浮层层级：页面 < 桌面内便笺 < 通知 < 模态框 < 登录门禁。 */
   --z-sticky: 40;
   --z-floating: 80;
@@ -283,6 +290,7 @@ body {
   height: auto;
   overflow: hidden;
   overflow-y: auto;
+  transition: grid-template-columns 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .sidebar {
@@ -296,6 +304,32 @@ body {
   top: 0;
   align-self: start;
   max-height: 100vh;
+  width: var(--sidebar-width);
+  min-width: 0;
+  box-sizing: border-box;
+  white-space: nowrap;
+  transition: width 0.25s cubic-bezier(0.4, 0, 0.2, 1),
+              padding 0.25s cubic-bezier(0.4, 0, 0.2, 1),
+              border-color 0.25s ease,
+              opacity 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.sidebar > * {
+  min-width: 212px;
+  transition: opacity 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+:root[data-sidebar="collapsed"] .sidebar {
+  width: 0 !important;
+  min-width: 0 !important;
+  padding-left: 0 !important;
+  padding-right: 0 !important;
+  border-right-width: 0 !important;
+  border-right-color: transparent !important;
+  opacity: 0 !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+:root[data-sidebar="collapsed"] .sidebar > * {
+  opacity: 0 !important;
 }
 .brand {
   display: flex; align-items: center; gap: 10px;
@@ -912,6 +946,7 @@ textarea { resize: vertical; min-height: 100px; font-family: ui-monospace, SFMon
   border-top: 1px solid var(--line);
   box-shadow: 0 -6px 16px rgba(0, 0, 0, 0.08);
   display: flex; gap: 8px; justify-content: flex-end;
+  transition: left 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
 .cfg-save-footer-bar .btn-primary { min-width: 80px; }
 .cfg-save-footer[disabled] { opacity: 0.55; cursor: not-allowed; }
@@ -7569,6 +7604,32 @@ body.has-open-overlay { overflow: hidden; }
 .dbf-test-result ul { margin: 4px 0 0; padding-left: 18px; line-height: 1.5; }
 .db-result-empty { display: grid; place-items: center; min-height: 300px; color: var(--text-mute); font-size: 12px; }
 .db-result-grid { min-width: 0; }
+.db-table-top-scroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+  height: 12px;
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--line);
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+  flex-shrink: 0;
+}
+.db-table-top-scroll::-webkit-scrollbar {
+  height: 10px;
+}
+.db-table-top-scroll::-webkit-scrollbar-track {
+  background: var(--bg-2);
+}
+.db-table-top-scroll::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 5px;
+}
+.db-table-top-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+}
+.db-table-top-scroll-inner {
+  height: 1px;
+}
 .db-table-scroll { min-height: 240px; height: min(810px, calc(100vh - 320px)); overflow: auto; contain: strict; scrollbar-gutter: stable; }
 .db-grid-resizer { height: 10px; cursor: row-resize; display: flex; align-items: center; justify-content: center; background: transparent; user-select: none; margin-top: 2px; touch-action: none; }
 .db-grid-resizer:hover, .db-grid-resizer.dragging { background: rgba(79,140,255,0.08); }
@@ -7578,8 +7639,18 @@ body.has-open-overlay { overflow: hidden; }
 .db-table th { position: sticky; top: 0; z-index: 2; padding: 0 !important; background: var(--bg-2); white-space: nowrap; }
 .db-table th, .db-table td { height: 31px; max-width: 420px; padding: 5px 9px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono, ui-monospace, monospace); font-size: 11.5px; }
 .db-table .num { position: sticky; left: 0; z-index: 1; min-width: 54px; color: var(--text-mute); background: var(--bg-2); text-align: right; }
-.db-table th.num { z-index: 4; padding: 5px 9px !important; }
+.db-table th.num { z-index: 4; padding: 5px 9px !important; cursor: pointer; }
 .db-table tr.selected td { background: rgba(79,140,255,.13); background: color-mix(in srgb, var(--primary) 13%, var(--bg-1)); }
+.db-col-header { display: flex; align-items: center; width: 100%; height: 100%; min-width: 0; padding: 0 4px 0 8px; box-sizing: border-box; }
+.db-col-name { flex: 1; min-width: 0; height: 100%; padding: 0; margin: 0; border: 0; background: transparent; color: var(--text); font: inherit; font-size: 11.5px; font-weight: 600; text-align: left; text-overflow: ellipsis; overflow: hidden; white-space: nowrap; cursor: pointer; }
+.db-col-name:hover { color: var(--primary-2); }
+.db-col-sort-btn { flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; padding: 0; margin-left: 2px; border: 0; border-radius: 3px; background: transparent; color: var(--text-mute); cursor: pointer; font-size: 9px; line-height: 1; opacity: 0.45; transition: opacity 0.15s, color 0.15s, background-color 0.15s; }
+.db-col-sort-btn:hover { opacity: 1; color: var(--primary-2); background: var(--hover-bg, rgba(127, 127, 127, 0.15)); }
+.db-col-sort-btn.active { opacity: 1; color: var(--primary); font-weight: bold; }
+.db-table th.col-selected { background: color-mix(in srgb, var(--primary) 22%, var(--bg-2)) !important; color: var(--primary-2); box-shadow: inset 0 -2px 0 var(--primary); }
+.db-table th.col-selected .db-col-name { color: var(--primary-2); font-weight: 700; }
+.db-table td.col-selected { background: color-mix(in srgb, var(--primary) 10%, var(--bg-1)); }
+.db-table tr.selected td.col-selected { background: color-mix(in srgb, var(--primary) 28%, var(--bg-1)) !important; font-weight: 600; }
 .db-column-title { width: 100%; height: 31px; padding: 5px 16px 5px 8px; overflow: hidden; border: 0; color: var(--text); background: transparent; text-align: left; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; font: inherit; }
 .db-column-title:hover { color: var(--primary-2); }
 .db-col-resizer { position: absolute; top: 0; right: -2px; bottom: 0; z-index: 3; width: 7px; cursor: col-resize; }
@@ -7969,24 +8040,47 @@ body.has-open-overlay { overflow: hidden; }
 .db-bookmark-modal-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px; border-bottom: 1px solid var(--line); font-weight: 600; }
 .db-bookmark-modal-body { flex: 1; overflow: auto; padding: 12px; }
 
-/* 移动端顶栏汉堡按钮与侧栏抽屉遮罩 (BUG-01) */
+/* 顶栏侧边栏切换按钮 (支持桌面端全折叠与移动端抽屉) */
 .sidebar-toggle {
-  display: none;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 32px;
   height: 32px;
-  margin-right: 8px;
+  margin-right: 10px;
   background: transparent;
   border: 1px solid var(--line);
-  border-radius: 6px;
-  color: var(--text);
+  border-radius: 8px;
+  color: var(--text-dim);
   cursor: pointer;
   flex: 0 0 auto;
+  transition: background .15s, color .15s, border-color .15s, transform .1s, box-shadow .15s;
 }
 .sidebar-toggle:hover {
   background: var(--bg-2);
-  border-color: var(--line-2);
+  color: var(--text);
+  border-color: var(--text-dim);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+.sidebar-toggle:active {
+  transform: scale(0.94);
+}
+.sidebar-toggle:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+:root[data-sidebar="collapsed"] .sidebar-toggle {
+  color: var(--primary);
+  border-color: rgba(79, 140, 255, 0.4);
+  background: rgba(79, 140, 255, 0.08);
+}
+:root[data-sidebar="collapsed"] .sidebar-toggle:hover {
+  border-color: var(--primary);
+  background: rgba(79, 140, 255, 0.16);
+  color: var(--primary-2);
+}
+:root[data-sidebar="collapsed"] .sidebar-toggle .sidebar-icon-fill {
+  opacity: 0;
 }
 .sidebar-backdrop {
   display: none;
@@ -8014,8 +8108,14 @@ body.has-open-overlay { overflow: hidden; }
     box-shadow: 0 0 24px rgba(0,0,0,0.5);
     background: var(--sidebar-bg, var(--bg-1)) !important;
     border-right: 1px solid var(--line);
-    padding: 20px 14px;
+    padding: 20px 14px !important;
     overflow-y: auto;
+    visibility: visible !important;
+    opacity: 1 !important;
+    pointer-events: auto !important;
+  }
+  .sidebar > * {
+    opacity: 1 !important;
   }
   body.sidebar-open .sidebar {
     transform: translateX(0);

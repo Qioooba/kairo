@@ -231,7 +231,7 @@
     { label: 'AI Token 深度算力淬炼', value: '20 亿+ (2.0B+)', sub: '多模态视觉审核 · 长程深度推理 · 测试闭环', tone: 'accent' },
     { label: '代码行数 (Go)',         value: '86,000+',  sub: '315 个 Go 文件 · 40 个后端子包 · 含 130+ 测试', tone: 'primary' },
     { label: '代码行数 (前端)',       value: '39,000+',  sub: 'vanilla JS 31K + CSS 8K · 22 路由页面',   tone: 'accent'  },
-    { label: '提交次数',              value: '184+',     sub: 'v0.1 → v0.19-dev 持续演进',                  tone: 'success' },
+    { label: '提交次数',              value: '211+',     sub: 'v0.1 → v0.20 持续演进',                  tone: 'success' },
     { label: '后端模块',              value: '40',       sub: 'upgrade / dbconsole / comparefs / desknote 等', tone: 'primary' },
     { label: '前端路由与组件',        value: '22+',      sub: '22 个路由页面 + Win32 原生桌面组件 + 4 独立子窗口', tone: 'accent'  },
     { label: 'API 接口',              value: '135+',     sub: 'REST + NDJSON + SSE + WebSocket 全覆盖',      tone: 'primary' },
@@ -546,7 +546,7 @@
       ]
     },
     {
-      icon: 'database', name: '数据库工作台 (v0.16-v0.19-dev)',
+      icon: 'database', name: '数据库工作台 (v0.16-v0.20)',
       pages: ['database'],
       apis: ['/api/database/sources', '/api/database/query', '/api/database/export', '/api/database/metadata/*', '/api/database/explain', '/api/database/redis/*'],
       pkg: 'internal/dbconsole',
@@ -569,7 +569,7 @@
       ]
     },
     {
-      icon: 'compareIc', name: '文件与文本比较工作台 (v0.16-v0.19-dev)',
+      icon: 'compareIc', name: '文件与文本比较工作台 (v0.16-v0.20)',
       pages: ['compare'],
       apis: ['/api/diff/compare', '/api/compare/scan', '/api/compare/jobs/*', '/api/compare/sync*', '/api/compare/connections'],
       pkg: 'internal/diff + internal/comparefs',
@@ -620,7 +620,7 @@
       ]
     },
     {
-      icon: 'waspack', name: 'WAS 投产打包 (v0.17-v0.19-dev)',
+      icon: 'waspack', name: 'WAS 投产打包 (v0.17-v0.20)',
       pages: ['waspack'],
       apis: ['/api/waspack/preview', '/api/waspack/build', '/api/waspack/open'],
       pkg: 'internal/waspack + internal/httpserver/handlers_waspack.go',
@@ -698,7 +698,7 @@
       ]
     },
     {
-      icon: 'notes', name: 'Windows 原生桌面便笺 (v0.16-v0.18)',
+      icon: 'notes', name: 'Windows 原生桌面便笺 (v0.16-v0.20)',
       pages: ['notes'],
       apis: ['/api/notes', '/api/notes/*'],
       pkg: 'internal/desknote + internal/note + internal/winui',
@@ -714,7 +714,7 @@
       ]
     },
     {
-      icon: 'tasks', name: '定时任务与系统通知 (v0.15-v0.19-dev)',
+      icon: 'tasks', name: '定时任务与系统通知 (v0.15-v0.20)',
       pages: ['tasks'],
       apis: ['/api/tasks', '/api/tasks/*'],
       pkg: 'internal/schedtask + internal/cronx + internal/notify',
@@ -746,7 +746,7 @@
       ]
     },
     {
-      icon: 'reminderIc', name: '定时提醒 (v0.13-v0.18)',
+      icon: 'reminderIc', name: '定时提醒 (v0.13-v0.20)',
       pages: ['reminders'],
       apis: ['/api/reminders', '/api/reminders/*'],
       pkg: 'internal/reminder + internal/popup',
@@ -791,7 +791,7 @@
       ]
     },
     {
-      icon: 'config', name: '统一升级协调与配置中心 (v0.18+ 持续加固)',
+      icon: 'config', name: '统一升级协调与配置中心 (v0.18-v0.20 持续加固)',
       pages: ['config'],
       apis: ['/api/config*', '/api/admin/servers', '/api/admin/openers', '/api/admin/download-retention', '/api/admin/autostart'],
       pkg: 'internal/config + internal/upgrade + internal/credentials',
@@ -1011,7 +1011,7 @@
   };
 
   // =====================================================================
-  // §13. 版本演进史 (20 个版本, 含 v0.19-dev, accordion 折叠)
+  // §13. 版本演进史 (21 个版本, 正式版 v0.20, accordion 折叠)
   // =====================================================================
 const changelog = [
     {
@@ -2646,7 +2646,7 @@ const changelog = [
     wrap.appendChild(banner);
     wrap.appendChild(list);
 
-    view.appendChild(renderSection('sec-history', 'history', '版本演进史', 'v0.1 → v0.19-dev · ' + changelog.length + ' 个版本 (含开发中记录 / v0.13.1 / v0.11-rc1) · 持续迭代 · 184+ commit', wrap));
+    view.appendChild(renderSection('sec-history', 'history', '版本演进史', 'v0.1 → v0.20 · ' + changelog.length + ' 个版本 (正式版 / v0.13.1 / v0.11-rc1) · 持续迭代 · 211+ commit', wrap));
   }
 
   function renderVersionCard(v, idx) {
@@ -2926,7 +2926,7 @@ const changelog = [
     const wrap = el('div');
     const intro = el('div', { class: 'card', style: 'padding:14px 20px; margin-bottom:12px; font-size:13px; line-height:1.8; color:var(--text-dim);' }, [
       el('strong', { style: 'color:var(--text);', text: '15 个真实 bug 复盘：' }),
-      document.createTextNode('下面这些不是教科书例子，而是 v0.4 - v0.18 期间 commit log 里真实发生过的故障。每个故事都包含：症状、根因、修复、教训。看到的不只是"修了什么"，更是"怎么思考的"。')
+      document.createTextNode('下面这些不是教科书例子，而是 v0.4 - v0.20 期间 commit log 里真实发生过的故障。每个故事都包含：症状、根因、修复、教训。看到的不只是"修了什么"，更是"怎么思考的"。')
     ]);
 
     const grid = el('div', { style: 'display:grid; grid-template-columns:repeat(auto-fit, minmax(280px, 1fr)); gap:12px;' });
@@ -2961,7 +2961,7 @@ const changelog = [
 
     wrap.appendChild(intro);
     wrap.appendChild(grid);
-    view.appendChild(renderSection('sec-bugs', 'bugs', '故障案例库', '15 个真实 bug 复盘 · 含根因 / 修复 / 教训 · v0.4–v0.18 真实案例', wrap));
+    view.appendChild(renderSection('sec-bugs', 'bugs', '故障案例库', '15 个真实 bug 复盘 · 含根因 / 修复 / 教训 · v0.4–v0.20 真实案例', wrap));
   }
 
   // --- FAQ ---
@@ -3009,7 +3009,7 @@ const changelog = [
     wrap.appendChild(renderList('已规划 (next 1-2 versions)', roadmap.planned, 'var(--primary)', 'smTarget'));
     wrap.appendChild(renderList('调研中 (considering)', roadmap.considering, 'var(--text-dim)', 'smBulb'));
 
-    view.appendChild(renderSection('sec-roadmap', 'roadmap', '路线图', 'next 1-2 versions + considering · v0.18 工作台重构闭环与跨文件原子升级达成', wrap));
+    view.appendChild(renderSection('sec-roadmap', 'roadmap', '路线图', 'next 1-2 versions + considering · v0.20 正式版重磅发布达成', wrap));
   }
 
   // --- Footer ---

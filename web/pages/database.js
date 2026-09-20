@@ -29,7 +29,7 @@
   const state = {
     sources: [], source: null, rows: [], columns: [], controller: null, summary: null, cursor: 0,
     managing: false, workspaceToken: 0, lastSQL: '', lastMaxRows: 0, resultMode: 'grid',
-    selectedRow: 0, selectedCol: 0, localFilter: '', hiddenColumns: new Set(), columnWidths: {}, sort: null,
+    selectedRow: 0, selectedCol: 0, colSelected: -1, localFilter: '', hiddenColumns: new Set(), columnWidths: {}, sort: null,
     prefs: normalizePrefs({}), lastError: null, inspectTab: 'fields', inspect: null, plan: [], gridReady: false,
     sessions: [], activeId: 0, redisKeyBase64: '', redisType: '', redisCursor: '0', redisNextCursor: '0', redisCursorHistory: [], redisOffset: 0, redisPageSize: 100, redisMembersHasNext: false,
     dirtyCells: {}, isEditMode: false,
@@ -123,7 +123,7 @@
     const defaultPageSize = (persisted.row_limits && state.source && Number(persisted.row_limits[state.source.id])) || (q('db-max-rows') && Number(q('db-max-rows').value)) || 20;
     return {
       id: ++tabSeq, sql: sql || '', rows: [], columns: [], summary: null, lastError: null,
-      lastSQL: '', lastMaxRows: 0, page: 1, pageSize: defaultPageSize, resultMode: 'grid', selectedRow: 0, localFilter: '',
+      lastSQL: '', lastMaxRows: 0, page: 1, pageSize: defaultPageSize, resultMode: 'grid', selectedRow: 0, selectedCol: 0, colSelected: -1, localFilter: '',
       hiddenColumns: new Set(), sort: null, plan: [], gridReady: false, controller: null,
       dirtyCells: {}, isEditMode: false, gridEditsStaged: false,
       transactionId: newTransactionID(), transactionPending: false,
@@ -135,6 +135,7 @@
     state.rows = s.rows; state.columns = s.columns; state.controller = s.controller;
     state.summary = s.summary; state.lastSQL = s.lastSQL; state.lastMaxRows = s.lastMaxRows;
     state.resultMode = s.resultMode; state.selectedRow = s.selectedRow; state.localFilter = s.localFilter;
+    state.colSelected = s.colSelected == null ? -1 : s.colSelected;
     state.hiddenColumns = s.hiddenColumns; state.sort = s.sort; state.lastError = s.lastError;
     state.plan = s.plan; state.gridReady = false;
     state.dirtyCells = s.dirtyCells || {};
@@ -149,7 +150,7 @@
     const s = sess(), ta = q('db-sql');
     if (s && ta) s.sql = ta.value;
     if (s) {
-      s.resultMode = state.resultMode; s.selectedRow = state.selectedRow;
+      s.resultMode = state.resultMode; s.selectedRow = state.selectedRow; s.colSelected = state.colSelected;
       s.localFilter = state.localFilter; s.hiddenColumns = state.hiddenColumns;
       s.sort = state.sort; s.lastError = state.lastError; s.plan = state.plan;
       s.rows = state.rows; s.columns = state.columns; s.summary = state.summary;
@@ -661,9 +662,28 @@
 
   /* ---------- 数据库工作台高阶扩展能力 (LOB查看器 / 行内编辑 / 右键增强 / 会话防丢) ---------- */
 
+  function cleanIdent(v) {
+    if (v == null) return '';
+    return String(v).trim().replace(/^[`"]+|[`"]+$/g, '');
+  }
+
   function detectTableName() {
     const target = getGridContext();
-    if (target) return (target.schema ? quoteIdentifier(target.schema) + '.' : '') + quoteIdentifier(target.table);
+    if (target && target.table) {
+      let t = cleanIdent(target.table);
+      if (t.indexOf('.') >= 0) t = t.split('.').pop();
+      return cleanIdent(t) || 'TARGET_TABLE';
+    }
+    const sql = (sess() && sess().lastSQL) || state.lastSQL || '';
+    if (sql) {
+      const m = sql.match(/\bFROM\s+([`"'\w\.]+)/i);
+      if (m && m[1]) {
+        let raw = cleanIdent(m[1]);
+        if (raw.indexOf('.') >= 0) raw = raw.split('.').pop();
+        raw = cleanIdent(raw);
+        if (raw) return raw;
+      }
+    }
     return 'TARGET_TABLE';
   }
 
@@ -696,7 +716,7 @@
     if (!row) return;
     const table = detectTableName();
     const cols = visibleColumns();
-    const colNames = cols.map(i => quoteIdentifier(state.columns[i].name)).join(', ');
+    const colNames = cols.map(i => cleanIdent(state.columns[i].name)).join(', ');
     const valLiterals = cols.map(i => {
       const dirty = state.dirtyCells && state.dirtyCells[rowIdx + '_' + i];
       const v = dirty ? dirty.newVal : row[i];
@@ -730,30 +750,35 @@
     if (pks && pks.length) {
       const matched = [];
       for (const pk of pks) {
-        const colIdx = state.columns.findIndex(c => String(c.name).toUpperCase() === String(pk).toUpperCase());
+        const colIdx = state.columns.findIndex(c => cleanIdent(c.name).toUpperCase() === cleanIdent(pk).toUpperCase());
         if (colIdx >= 0) {
+          const colName = cleanIdent(state.columns[colIdx].name);
           const v = row[colIdx];
-          if (v === null || v === undefined) matched.push(quoteIdentifier(state.columns[colIdx].name) + ' IS NULL');
-          else matched.push(quoteIdentifier(state.columns[colIdx].name) + ' = ' + sqlValueLiteral(v, state.columns[colIdx].database_type));
+          if (v === null || v === undefined) matched.push(colName + ' IS NULL');
+          else matched.push(colName + ' = ' + sqlValueLiteral(v, state.columns[colIdx].database_type));
         }
       }
       if (matched.length === pks.length) {
         return matched.join(' AND ');
       }
     }
-    const rowidIdx = state.columns.findIndex(c => String(c.name).toUpperCase() === 'ROWID');
+    const rowidIdx = state.columns.findIndex(c => cleanIdent(c.name).toUpperCase() === 'ROWID');
     if (rowidIdx >= 0 && row[rowidIdx]) {
       return 'ROWID = ' + sqlValueLiteral(row[rowidIdx], state.columns[rowidIdx].database_type);
     }
     const table = detectTableName();
-    const idIdx = state.columns.findIndex(c => String(c.name).toUpperCase() === 'ID' || String(c.name).toUpperCase() === table.toUpperCase() + '_ID');
+    const idIdx = state.columns.findIndex(c => {
+      const upper = cleanIdent(c.name).toUpperCase();
+      return upper === 'ID' || upper === table.toUpperCase() + '_ID';
+    });
     if (idIdx >= 0 && row[idIdx] != null) {
-      return quoteIdentifier(state.columns[idIdx].name) + ' = ' + sqlValueLiteral(row[idIdx], state.columns[idIdx].database_type);
+      return cleanIdent(state.columns[idIdx].name) + ' = ' + sqlValueLiteral(row[idIdx], state.columns[idIdx].database_type);
     }
     const conditions = visibleColumns().map(i => {
+      const colName = cleanIdent(state.columns[i].name);
       const v = row[i];
-      if (v === null || v === undefined) return quoteIdentifier(state.columns[i].name) + ' IS NULL';
-      return quoteIdentifier(state.columns[i].name) + ' = ' + sqlValueLiteral(v, state.columns[i].database_type);
+      if (v === null || v === undefined) return colName + ' IS NULL';
+      return colName + ' = ' + sqlValueLiteral(v, state.columns[i].database_type);
     });
     return conditions.join(' AND ');
   }
@@ -762,7 +787,7 @@
     const row = state.rows[rowIdx];
     if (!row) return;
     const table = detectTableName();
-    const colName = quoteIdentifier(state.columns[colIdx].name);
+    const colName = cleanIdent(state.columns[colIdx].name);
     const dirty = state.dirtyCells && state.dirtyCells[rowIdx + '_' + colIdx];
     const val = dirty ? dirty.newVal : row[colIdx];
     const valLit = sqlValueLiteral(val, state.columns[colIdx].database_type);
@@ -777,13 +802,13 @@
     if (!row) return;
     const table = detectTableName();
     const pks = await getTablePrimaryKeys(table);
-    const pkSet = new Set((pks || []).map(k => k.toUpperCase()));
-    const cols = visibleColumns().filter(i => !pkSet.has(String(state.columns[i].name).toUpperCase()));
+    const pkSet = new Set((pks || []).map(k => cleanIdent(k).toUpperCase()));
+    const cols = visibleColumns().filter(i => !pkSet.has(cleanIdent(state.columns[i].name).toUpperCase()));
     const targetCols = cols.length ? cols : visibleColumns();
     const setClauses = targetCols.map(i => {
       const dirty = state.dirtyCells && state.dirtyCells[rowIdx + '_' + i];
       const val = dirty ? dirty.newVal : row[i];
-      return quoteIdentifier(state.columns[i].name) + ' = ' + sqlValueLiteral(val, state.columns[i].database_type);
+      return cleanIdent(state.columns[i].name) + ' = ' + sqlValueLiteral(val, state.columns[i].database_type);
     }).join(', ');
     const whereClause = buildWhereClause(row, pks);
     const updateSQL = 'UPDATE ' + table + ' SET ' + setClauses + ' WHERE ' + whereClause + ';';
@@ -795,13 +820,13 @@
     if (!row) return;
     const table = detectTableName();
     const pks = await getTablePrimaryKeys(table);
-    const pkSet = new Set((pks || []).map(k => k.toUpperCase()));
-    const cols = visibleColumns().filter(i => !pkSet.has(String(state.columns[i].name).toUpperCase()));
+    const pkSet = new Set((pks || []).map(k => cleanIdent(k).toUpperCase()));
+    const cols = visibleColumns().filter(i => !pkSet.has(cleanIdent(state.columns[i].name).toUpperCase()));
     const targetCols = cols.length ? cols : visibleColumns();
     const setClauses = targetCols.map(i => {
       const dirty = state.dirtyCells && state.dirtyCells[rowIdx + '_' + i];
       const val = dirty ? dirty.newVal : row[i];
-      return quoteIdentifier(state.columns[i].name) + ' = ' + sqlValueLiteral(val, state.columns[i].database_type);
+      return cleanIdent(state.columns[i].name) + ' = ' + sqlValueLiteral(val, state.columns[i].database_type);
     }).join(', ');
     const whereClause = buildWhereClause(row, pks);
     const content = '-- Exported from Kairo Database Workbench\nUPDATE ' + table + ' SET ' + setClauses + ' WHERE ' + whereClause + ';\nCOMMIT;\n';
@@ -813,7 +838,7 @@
     if (!row) return;
     const table = detectTableName();
     const cols = visibleColumns();
-    const colNames = cols.map(i => quoteIdentifier(state.columns[i].name)).join(', ');
+    const colNames = cols.map(i => cleanIdent(state.columns[i].name)).join(', ');
     const valLiterals = cols.map(i => {
       const dirty = state.dirtyCells && state.dirtyCells[rowIdx + '_' + i];
       const v = dirty ? dirty.newVal : row[i];
@@ -2749,6 +2774,14 @@
     const height = (rows * GRID_ROW_H + GRID_HEAD_H) + 'px';
     if (scroll) scroll.style.height = height;
     if (plan) plan.style.maxHeight = height;
+    const topScroll = q('db-result-grid') && q('db-result-grid').querySelector('.db-table-top-scroll');
+    if (topScroll && scroll) {
+      const needs = scroll.scrollWidth > scroll.clientWidth;
+      topScroll.style.display = needs ? 'block' : 'none';
+      if (needs && topScroll.firstElementChild) {
+        topScroll.firstElementChild.style.width = scroll.scrollWidth + 'px';
+      }
+    }
     if (scroll && state.gridReady && state.resultMode === 'grid') paintGridRows(scroll, false);
   }
   let workbenchKeysBound = false;
@@ -3995,17 +4028,104 @@
     }
     applyGridHeight();
   }
+  let isSyncingScroll = false;
+  function selectGridColumn(colIdx) {
+    state.colSelected = colIdx;
+    state.selectedCol = colIdx >= 0 ? colIdx : state.selectedCol;
+    const grid = q('db-result-grid');
+    if (!grid) return;
+    grid.querySelectorAll('th.col-selected, td.col-selected').forEach(el => el.classList.remove('col-selected'));
+    if (colIdx != null && colIdx >= 0) {
+      grid.querySelectorAll('th[data-col="' + colIdx + '"], td[data-col="' + colIdx + '"]').forEach(el => el.classList.add('col-selected'));
+    }
+  }
+  function bindGridHeaders(grid) {
+    grid.querySelectorAll('.db-col-sort-btn[data-sort]').forEach(btn => {
+      btn.onclick = e => {
+        e.stopPropagation();
+        const i = Number(btn.dataset.sort);
+        state.sort = state.sort && state.sort.index === i ? (state.sort.dir === 1 ? { index: i, dir: -1 } : null) : { index: i, dir: 1 };
+        state.gridReady = false;
+        renderResult();
+      };
+    });
+    grid.querySelectorAll('.db-col-name[data-col]').forEach(btn => {
+      btn.onclick = e => {
+        e.stopPropagation();
+        selectGridColumn(Number(btn.dataset.col));
+      };
+    });
+    grid.querySelectorAll('th[data-col]').forEach(th => {
+      th.onclick = e => {
+        if (e.target.closest('.db-col-sort-btn') || e.target.closest('.db-col-resizer')) return;
+        selectGridColumn(Number(th.dataset.col));
+      };
+      th.oncontextmenu = e => {
+        e.preventDefault();
+        openResultMenu(e.clientX, e.clientY, Number(th.dataset.col), null);
+      };
+    });
+    const numTh = grid.querySelector('th.num');
+    if (numTh) {
+      numTh.onclick = () => selectGridColumn(-1);
+    }
+    grid.querySelectorAll('[data-resize]').forEach(x => bindColumnResize(x, Number(x.dataset.resize)));
+  }
+  function bindScrollSync(grid) {
+    const topScroll = grid.querySelector('.db-table-top-scroll');
+    const scroll = grid.querySelector('.db-table-scroll');
+    if (!topScroll || !scroll) return;
+
+    function syncVisibility() {
+      const needs = scroll.scrollWidth > scroll.clientWidth;
+      topScroll.style.display = needs ? 'block' : 'none';
+      if (needs && topScroll.firstElementChild) {
+        topScroll.firstElementChild.style.width = scroll.scrollWidth + 'px';
+        topScroll.scrollLeft = scroll.scrollLeft;
+      }
+    }
+    syncVisibility();
+
+    topScroll.onscroll = function () {
+      if (isSyncingScroll) return;
+      isSyncingScroll = true;
+      scroll.scrollLeft = topScroll.scrollLeft;
+      isSyncingScroll = false;
+    };
+
+    scroll.addEventListener('scroll', function () {
+      if (!isSyncingScroll) {
+        isSyncingScroll = true;
+        topScroll.scrollLeft = scroll.scrollLeft;
+        isSyncingScroll = false;
+      }
+    }, { passive: true });
+  }
   function renderGridView(grid, indexes, visible) {
     cancelGridPaint();
     setGridSlice(indexes, visible);
     const cols = '<col style="width:54px">' + visible.map(i => '<col data-col="' + i + '" style="width:' + gridColumnWidth(i) + 'px">').join('');
     const tableWidth = 54 + visible.reduce(function (sum, i) { return sum + gridColumnWidth(i); }, 0);
     const headers = visible.map(i => {
-      const c = state.columns[i], sort = state.sort && state.sort.index === i ? (state.sort.dir === 1 ? ' ▲' : ' ▼') : '';
-      return '<th data-col="' + i + '" title="' + h(c.database_type || '') + '"><button class="db-column-title" data-sort="' + i + '">' + h(c.name) + h(sort) + '</button><span class="db-col-resizer" data-resize="' + i + '"></span></th>';
+      const c = state.columns[i];
+      const isSorted = state.sort && state.sort.index === i;
+      const isAsc = isSorted && state.sort.dir === 1;
+      const isDesc = isSorted && state.sort.dir === -1;
+      const sortBadge = isAsc ? '▲' : '▼';
+      const sortCls = isSorted ? (' active' + (isAsc ? ' is-asc' : ' is-desc')) : '';
+      const sortTitle = isAsc ? '当前升序，点击切换为降序' : (isDesc ? '当前降序，点击取消排序' : '点击按此列排序');
+      const thCls = state.colSelected === i ? ' class="col-selected"' : '';
+      return '<th data-col="' + i + '"' + thCls + ' title="' + h(c.database_type || '') + '">'
+        + '<div class="db-col-header">'
+        + '<button type="button" class="db-col-name" data-col="' + i + '" title="点击选中整列: ' + h(c.name) + '">' + h(c.name) + '</button>'
+        + '<button type="button" class="db-col-sort-btn' + sortCls + '" data-sort="' + i + '" title="' + sortTitle + '">' + sortBadge + '</button>'
+        + '</div>'
+        + '<span class="db-col-resizer" data-resize="' + i + '"></span>'
+        + '</th>';
     }).join('');
-    grid.innerHTML = '<div class="db-table-scroll"><table class="table db-table" style="width:' + tableWidth + 'px"><colgroup>' + cols + '</colgroup><thead><tr><th class="num">#</th>' + headers + '</tr></thead><tbody id="db-result-body"></tbody></table></div>';
-    const scroll = grid.firstChild;
+    grid.innerHTML = '<div class="db-table-top-scroll"><div class="db-table-top-scroll-inner" style="width:' + tableWidth + 'px"></div></div>'
+      + '<div class="db-table-scroll"><table class="table db-table" style="width:' + tableWidth + 'px"><colgroup>' + cols + '</colgroup><thead><tr><th class="num" title="点击取消列选择">#</th>' + headers + '</tr></thead><tbody id="db-result-body"></tbody></table></div>';
+    const scroll = grid.querySelector('.db-table-scroll');
     const body = q('db-result-body');
     // 小结果集（行数<=25 且单元格总数<=500）直接渲染全部行；
     // 宽表（列数多）或较大行集强制进入虚拟化，避免几百列造成浏览器卡死
@@ -4014,35 +4134,27 @@
       for (let pos = 0; pos < indexes.length; pos++) {
         const ri = indexes[pos], row = state.rows[ri] || [];
         html += '<tr data-row="' + ri + '"' + (ri === state.selectedRow ? ' class="selected"' : '') + '><td class="num">' + (ri + 1) + '</td>' + visible.map(i => {
-        const dirtyKey = ri + '_' + i;
-        const isDirty = state.dirtyCells && state.dirtyCells[dirtyKey];
-        const cellVal = isDirty ? isDirty.newVal : row[i];
-        const dirtyCls = isDirty ? ' db-cell-dirty' : '';
-        return '<td data-row="' + ri + '" data-col="' + i + '" class="' + dirtyCls + '" title="' + (state.isEditMode ? '双击行内修改此单元格' : '双击单行；右键更多操作') + '">' + fmtCell(cellVal, ri, i) + '</td>';
-      }).join('') + '</tr>';
+          const dirtyKey = ri + '_' + i;
+          const isDirty = state.dirtyCells && state.dirtyCells[dirtyKey];
+          const cellVal = isDirty ? isDirty.newVal : row[i];
+          const dirtyCls = isDirty ? ' db-cell-dirty' : '';
+          const colSelectedCls = state.colSelected === i ? ' col-selected' : '';
+          const cls = (dirtyCls + colSelectedCls).trim();
+          return '<td data-row="' + ri + '" data-col="' + i + '"' + (cls ? ' class="' + cls + '"' : '') + ' title="' + (state.isEditMode ? '双击行内修改此单元格' : '双击单行；右键更多操作') + '">' + fmtCell(cellVal, ri, i) + '</td>';
+        }).join('') + '</tr>';
       }
       body.innerHTML = html;
       bindGridBody(body);
-      grid.querySelectorAll('[data-sort]').forEach(btn => btn.onclick = () => {
-        const i = Number(btn.dataset.sort);
-        state.sort = state.sort && state.sort.index === i ? (state.sort.dir === 1 ? { index: i, dir: -1 } : null) : { index: i, dir: 1 };
-        state.gridReady = false; renderResult();
-      });
-      grid.querySelectorAll('th[data-col]').forEach(th => th.oncontextmenu = e => { e.preventDefault(); openResultMenu(e.clientX, e.clientY, Number(th.dataset.col), null); });
-      grid.querySelectorAll('[data-resize]').forEach(x => bindColumnResize(x, Number(x.dataset.resize)));
+      bindGridHeaders(grid);
+      bindScrollSync(grid);
       state.gridReady = true;
       applyGridHeight();
       return;
     }
     scroll.addEventListener('scroll', function () { scheduleGridPaint(scroll); }, { passive: true });
     bindGridBody(body);
-    grid.querySelectorAll('[data-sort]').forEach(btn => btn.onclick = () => {
-      const i = Number(btn.dataset.sort);
-      state.sort = state.sort && state.sort.index === i ? (state.sort.dir === 1 ? { index: i, dir: -1 } : null) : { index: i, dir: 1 };
-      state.gridReady = false; renderResult();
-    });
-    grid.querySelectorAll('th[data-col]').forEach(th => th.oncontextmenu = e => { e.preventDefault(); openResultMenu(e.clientX, e.clientY, Number(th.dataset.col), null); });
-    grid.querySelectorAll('[data-resize]').forEach(x => bindColumnResize(x, Number(x.dataset.resize)));
+    bindGridHeaders(grid);
+    bindScrollSync(grid);
     state.gridReady = true;
     applyGridHeight();
     paintGridRows(scroll, false);
@@ -4102,6 +4214,9 @@
       state.selectedRow = Number(tr.dataset.row);
       body.querySelectorAll('tr.selected').forEach(function (x) { x.classList.remove('selected'); });
       tr.classList.add('selected');
+      if (state.colSelected >= 0) {
+        selectGridColumn(-1);
+      }
     });
     body.addEventListener('dblclick', function (e) {
       const td = e.target.closest('td[data-col]');
@@ -4203,9 +4318,11 @@
       html += sliceCols.map(i => {
         const dirty = state.dirtyCells && state.dirtyCells[ri + '_' + i];
         const val = dirty ? dirty.newVal : row[i];
-        const cls = dirty ? ' class="db-cell-dirty"' : '';
+        const dirtyCls = dirty ? ' db-cell-dirty' : '';
+        const colSelectedCls = state.colSelected === i ? ' col-selected' : '';
+        const cls = (dirtyCls + colSelectedCls).trim();
         const cellTitle = state.isEditMode ? '双击编辑；右键复制或更多操作' : '双击打开单行记录；右键复制或更多操作';
-        return '<td data-row="' + ri + '" data-col="' + i + '"' + cls + ' title="' + cellTitle + '">' + fmtCell(val, ri, i) + '</td>';
+        return '<td data-row="' + ri + '" data-col="' + i + '"' + (cls ? ' class="' + cls + '"' : '') + ' title="' + cellTitle + '">' + fmtCell(val, ri, i) + '</td>';
       }).join('');
       if (colSpanAfter > 0) html += '<td colspan="' + colSpanAfter + '" style="padding:0;border:none;"></td>';
       html += '</tr>';
@@ -4219,8 +4336,21 @@
       const th = handle.parentElement, start = e.clientX, width = th.getBoundingClientRect().width;
       const move = ev => {
         state.columnWidths[index] = Math.max(72, Math.min(420, width + ev.clientX - start));
-        const col = q('db-result-grid').querySelector('col[data-col="' + index + '"]');
+        const grid = q('db-result-grid');
+        if (!grid) return;
+        const col = grid.querySelector('col[data-col="' + index + '"]');
         if (col) col.style.width = state.columnWidths[index] + 'px';
+        const visible = visibleColumns();
+        const totalW = 54 + visible.reduce((sum, ci) => sum + gridColumnWidth(ci), 0);
+        const tbl = grid.querySelector('.db-table');
+        if (tbl) tbl.style.width = totalW + 'px';
+        const topInner = grid.querySelector('.db-table-top-scroll-inner');
+        if (topInner) topInner.style.width = totalW + 'px';
+        const topScroll = grid.querySelector('.db-table-top-scroll');
+        const scroll = grid.querySelector('.db-table-scroll');
+        if (topScroll && scroll) {
+          topScroll.style.display = scroll.scrollWidth > scroll.clientWidth ? 'block' : 'none';
+        }
       };
       const up = () => { document.removeEventListener('pointermove', move); document.removeEventListener('pointerup', up); saveColumnWidths(); };
       document.addEventListener('pointermove', move);

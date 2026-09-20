@@ -184,10 +184,46 @@
   function initSidebarDrawer() {
     const toggle = document.getElementById('sidebar-toggle');
     const backdrop = document.getElementById('sidebar-backdrop');
+    const nav = document.getElementById('nav');
+
+    function isDesktop() {
+      return window.innerWidth > 768;
+    }
+
+    function updateToggleUI(collapsed) {
+      if (!toggle) return;
+      toggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+      toggle.title = collapsed ? '展开侧边栏 (Ctrl+B)' : '收起侧边栏 (Ctrl+B)';
+      toggle.setAttribute('aria-label', toggle.title);
+    }
+
+    function setDesktopCollapsed(collapsed) {
+      if (collapsed) {
+        document.documentElement.setAttribute('data-sidebar', 'collapsed');
+        try { localStorage.setItem('kairo_sidebar_collapsed', 'true'); } catch (_) {}
+      } else {
+        document.documentElement.removeAttribute('data-sidebar');
+        try { localStorage.setItem('kairo_sidebar_collapsed', 'false'); } catch (_) {}
+      }
+      updateToggleUI(collapsed);
+      setTimeout(function () {
+        window.dispatchEvent(new Event('resize'));
+      }, 260);
+    }
+
+    function toggleSidebar() {
+      if (isDesktop()) {
+        const isCollapsed = document.documentElement.getAttribute('data-sidebar') === 'collapsed';
+        setDesktopCollapsed(!isCollapsed);
+      } else {
+        document.body.classList.toggle('sidebar-open');
+      }
+    }
+
     if (toggle) {
       toggle.addEventListener('click', function (e) {
         e.stopPropagation();
-        document.body.classList.toggle('sidebar-open');
+        toggleSidebar();
       });
     }
     if (backdrop) {
@@ -195,14 +231,33 @@
         document.body.classList.remove('sidebar-open');
       });
     }
-    const nav = document.getElementById('nav');
     if (nav) {
       nav.addEventListener('click', function (e) {
-        if (e.target.closest('.nav-item')) {
+        if (e.target.closest('.nav-item') && !isDesktop()) {
           document.body.classList.remove('sidebar-open');
         }
       });
     }
+
+    // 全局快捷键 Ctrl+B / Cmd+B (桌面端)
+    window.addEventListener('keydown', function (e) {
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'b' || e.key === 'B')) {
+        const target = e.target;
+        const isInput = target && (
+          target.isContentEditable ||
+          (target.tagName === 'INPUT' && !['checkbox', 'radio', 'button', 'submit'].includes(target.type)) ||
+          target.tagName === 'TEXTAREA'
+        );
+        if (!isInput) {
+          e.preventDefault();
+          toggleSidebar();
+        }
+      }
+    });
+
+    // 初始化 UI 状态
+    const initCollapsed = document.documentElement.getAttribute('data-sidebar') === 'collapsed';
+    updateToggleUI(initCollapsed);
   }
 
   window.addEventListener('load', async () => {
