@@ -4,7 +4,8 @@ app:
   name: Kairo
   host: 127.0.0.1
   port: 18092
-  auto_open_browser: true
+  kairo: "111222"
+  auto_open_browser: false
   download_dir: ./downloads
   log_dir: ./logs
   data_dir: ./data
