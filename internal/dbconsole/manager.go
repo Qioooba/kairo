@@ -2,9 +2,11 @@ package dbconsole
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"database/sql"
 	"database/sql/driver"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -220,7 +222,8 @@ func SourceFingerprint(source Source) string {
 
 func sourceFingerprint(source Source) string {
 	b, _ := json.Marshal(source)
-	return string(b)
+	h := sha256.Sum256(b)
+	return hex.EncodeToString(h[:])
 }
 
 func (m *Manager) sqlDB(source Source) (*sql.DB, error) {

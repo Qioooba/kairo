@@ -353,3 +353,49 @@ func TestQuoteIdentWithQuotedDots(t *testing.T) {
 		t.Fatalf("QuoteIdent(%q) = %q, want %q", inputMySQL, gotMySQL, wantMySQL)
 	}
 }
+
+func TestValidateSingleTableQuery_RejectsDerivedSubqueryAndCTE(t *testing.T) {
+	derivedSQL := "SELECT * FROM (SELECT ID + 1 AS ID, BALANCE FROM T WHERE ID = 1)"
+	if err := ValidateSingleTableQuery(derivedSQL); err == nil {
+		t.Fatalf("expected ValidateSingleTableQuery to reject derived table %q, but got nil", derivedSQL)
+	}
+
+	cteSQL := "WITH sub AS (SELECT ID, BALANCE FROM T) SELECT * FROM sub"
+	if err := ValidateSingleTableQuery(cteSQL); err == nil {
+		t.Fatalf("expected ValidateSingleTableQuery to reject CTE %q, but got nil", cteSQL)
+	}
+
+	if table := InferExportTable(derivedSQL); table != "exported_rows" {
+		t.Fatalf("expected InferExportTable to return 'exported_rows' for derived table, got: %s", table)
+	}
+}
+
+func TestBuildExportTargetPlan_OracleUnquotedCaseNormalization(t *testing.T) {
+	querySQL := "SELECT id, balance AS amount FROM T"
+	cols := []Column{{Name: "id"}, {Name: "amount"}}
+	pkCols := []string{"ID"}
+
+	plan, err := BuildExportTargetPlan(KindOracle, "T", querySQL, cols, pkCols, false)
+	if err != nil {
+		t.Fatalf("BuildExportTargetPlan failed: %v", err)
+	}
+	if len(plan.KeyPhysicalNames) != 1 || plan.KeyPhysicalNames[0] != "ID" {
+		t.Fatalf("expected KeyPhysicalNames to be ['ID'], got %v", plan.KeyPhysicalNames)
+	}
+	if len(plan.SetPhysicalNames) != 1 || plan.SetPhysicalNames[0] != "BALANCE" {
+		t.Fatalf("expected SetPhysicalNames to be ['BALANCE'], got %v", plan.SetPhysicalNames)
+	}
+
+	var buf bytes.Buffer
+	table := ExportTable{
+		Columns: cols,
+		Rows:    [][]any{{int64(1), int64(100)}},
+	}
+	if err := WriteUPDATEWithPlan(&buf, table, plan); err != nil {
+		t.Fatalf("WriteUPDATEWithPlan failed: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, `UPDATE "T" SET "BALANCE" = 100 WHERE "ID" = 1;`) {
+		t.Fatalf("unexpected UPDATE output: %s", out)
+	}
+}

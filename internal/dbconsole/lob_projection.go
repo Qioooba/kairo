@@ -375,12 +375,13 @@ type lobRowScanner struct {
 	plan        *LOBRewrittenQuery
 	rawScanners []any
 	rawDests    []any
-	sourceID    string
-	dbUser      string
-	owner       string
-	table       string
-	sessionID   string
-	aliasIdx    int // pagination alias column index if any
+	sourceID          string
+	sourceFingerprint string
+	dbUser            string
+	owner             string
+	table             string
+	sessionID         string
+	aliasIdx          int // pagination alias column index if any
 }
 
 func newLOBRowScanner(plan *LOBRewrittenQuery, source Source, owner, table, sessionID string, aliasIdx int) *lobRowScanner {
@@ -402,15 +403,16 @@ func newLOBRowScanner(plan *LOBRewrittenQuery, source Source, owner, table, sess
 	}
 
 	return &lobRowScanner{
-		plan:        plan,
-		rawScanners: rawScanners,
-		rawDests:    rawDests,
-		sourceID:    source.ID,
-		dbUser:      source.Username,
-		owner:       owner,
-		table:       table,
-		sessionID:   sessionID,
-		aliasIdx:    aliasIdx,
+		plan:              plan,
+		rawScanners:       rawScanners,
+		rawDests:          rawDests,
+		sourceID:          source.ID,
+		sourceFingerprint: SourceFingerprint(source),
+		dbUser:            source.Username,
+		owner:             owner,
+		table:             table,
+		sessionID:         sessionID,
+		aliasIdx:          aliasIdx,
 	}
 }
 
@@ -504,8 +506,9 @@ func (s *lobRowScanner) Scan(rows *sql.Rows) ([]any, int64, error) {
 			}
 		}
 
-		token, tokenErr := GenerateSignedLOBToken(
+		token, tokenErr := GenerateSignedLOBTokenWithFingerprint(
 			s.sourceID,
+			s.sourceFingerprint,
 			s.dbUser,
 			s.owner,
 			s.table,

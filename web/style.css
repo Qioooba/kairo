@@ -14,7 +14,8 @@
   --field-border-hover: #5b6b84;
   --field-ring: rgba(79, 140, 255, 0.22);
   --field-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
-  --field-placeholder: #6e7a8c;
+  --field-placeholder: #64748b;
+  --textarea-placeholder: #526071;
   --field-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23c5d0e0' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
   --text: #e6edf3;
   --text-dim: #8b97a8;
@@ -31,8 +32,10 @@
   --sidebar-width: 240px;
 }
 
-:root[data-sidebar="collapsed"] {
-  --sidebar-width: 0px !important;
+@media (min-width: 769px) {
+  :root[data-sidebar="collapsed"] {
+    --sidebar-width: 0px !important;
+  }
 }
 
 :root {
@@ -168,7 +171,8 @@
   --field-border-hover: #98a8c0;
   --field-ring: rgba(37, 99, 235, 0.16);
   --field-shadow: inset 0 1px 1px rgba(15, 30, 60, 0.05);
-  --field-placeholder: #8b97a8;
+  --field-placeholder: #94a3b8;
+  --textarea-placeholder: #a0aec0;
   --field-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%235a6678' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
   --text: #1c2330;
   --text-dim: #5a6678;
@@ -317,19 +321,21 @@ body {
   min-width: 212px;
   transition: opacity 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
-:root[data-sidebar="collapsed"] .sidebar {
-  width: 0 !important;
-  min-width: 0 !important;
-  padding-left: 0 !important;
-  padding-right: 0 !important;
-  border-right-width: 0 !important;
-  border-right-color: transparent !important;
-  opacity: 0 !important;
-  visibility: hidden !important;
-  pointer-events: none !important;
-}
-:root[data-sidebar="collapsed"] .sidebar > * {
-  opacity: 0 !important;
+@media (min-width: 769px) {
+  :root[data-sidebar="collapsed"] .sidebar {
+    width: 0 !important;
+    min-width: 0 !important;
+    padding-left: 0 !important;
+    padding-right: 0 !important;
+    border-right-width: 0 !important;
+    border-right-color: transparent !important;
+    opacity: 0 !important;
+    visibility: hidden !important;
+    pointer-events: none !important;
+  }
+  :root[data-sidebar="collapsed"] .sidebar > * {
+    opacity: 0 !important;
+  }
 }
 .brand {
   display: flex; align-items: center; gap: 10px;
@@ -1263,9 +1269,14 @@ input[type="datetime-local"] {
   -webkit-appearance: auto;
   color-scheme: inherit;
 }
-input::placeholder,
-textarea::placeholder {
+input::placeholder {
   color: var(--field-placeholder);
+  opacity: 1;
+}
+textarea::placeholder,
+.editor-content::placeholder {
+  color: var(--textarea-placeholder, var(--field-placeholder));
+  -webkit-text-fill-color: var(--textarea-placeholder, var(--field-placeholder));
   opacity: 1;
 }
 input:hover, select:hover, textarea:hover {
@@ -2080,7 +2091,8 @@ input[type="datetime-local"] {
   --field-border-hover: #8aa076;
   --field-ring: rgba(63, 122, 63, 0.18);
   --field-shadow: inset 0 1px 1px rgba(31, 42, 31, 0.05);
-  --field-placeholder: #6b7a6b;
+  --field-placeholder: #889a88;
+  --textarea-placeholder: #9cb09c;
   --field-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%234d5d4d' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
   --line-2: #b8c5a3;
   --text: #1f2a1f;
@@ -2168,7 +2180,8 @@ input[type="datetime-local"] {
   --field-border-hover: #ffff00;
   --field-ring: rgba(0, 255, 255, 0.32);
   --field-shadow: none;
-  --field-placeholder: #ccc888;
+  --field-placeholder: #aaa766;
+  --textarea-placeholder: #888655;
   --field-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23ffff00' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
   --line-2: #cccccc;
   --text: #ffff00;
@@ -2253,7 +2266,8 @@ input[type="datetime-local"] {
   --field-border-hover: #7a9086;
   --field-ring: rgba(74, 122, 106, 0.22);
   --field-shadow: inset 0 1px 1px rgba(26, 35, 32, 0.05);
-  --field-placeholder: #70827b;
+  --field-placeholder: #889990;
+  --textarea-placeholder: #9eb0a8;
   --field-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%234a5a54' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
   --line-2: #a0b0a8;
   --text: #1a2320;
@@ -3029,7 +3043,7 @@ input[type="datetime-local"] {
   padding-bottom: 16px;
   border: 0;
   border-radius: 0;
-  font: 12.5px/20px ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+  font: var(--cmp-code-font-size, 12.5px)/20px ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
   white-space: pre;
   tab-size: 4;
 }
@@ -3109,10 +3123,10 @@ input[type="datetime-local"] {
   display: grid;
   grid-template-columns: 24px minmax(0, 1fr) 54px minmax(0, 1fr);
   width: 100%;
-  height: var(--cmp-row-h);
+  height: var(--cmp-row-h, 25px);
   border-bottom: 1px solid var(--line);
   border-bottom: 1px solid color-mix(in srgb, var(--line) 55%, transparent);
-  font: 12px/24px ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+  font: var(--cmp-code-font-size, 12px)/var(--cmp-row-h, 25px) ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
   user-select: text;
 }
 .cmp-vrow.is-active-hunk {
@@ -3124,12 +3138,12 @@ input[type="datetime-local"] {
   outline: 1px solid var(--primary);
   outline-offset: -1px;
 }
-.cmp-diff-cell { display: grid; grid-template-columns: 48px 18px minmax(0, 1fr); min-width: 0; overflow: hidden; user-select: text; }
+.cmp-diff-cell { display: grid; grid-template-columns: 48px 18px minmax(0, 1fr); min-width: 0; overflow: hidden; user-select: text; font-size: inherit; line-height: inherit; }
 .cmp-diff-left { border-right: 1px solid var(--line); }
-.cmp-line-no { padding-right: 7px; text-align: right; color: var(--text-mute); background: var(--bg-2); user-select: none; }
-.cmp-line-marker { text-align: center; color: var(--text-dim); user-select: none; }
-.cmp-code-wrap { min-width: 0; width: 100%; overflow-x: hidden; overflow-y: hidden; white-space: pre; position: relative; }
-.cmp-code { overflow: visible; display: inline-block; padding: 0 8px; white-space: pre !important; text-overflow: clip; min-width: max-content; user-select: text; cursor: text; caret-color: var(--primary); }
+.cmp-line-no { padding-right: 7px; text-align: right; color: var(--text-mute); background: var(--bg-2); user-select: none; font-size: inherit; line-height: inherit; }
+.cmp-line-marker { text-align: center; color: var(--text-dim); user-select: none; font-size: inherit; line-height: inherit; }
+.cmp-code-wrap { min-width: 0; width: 100%; overflow-x: hidden; overflow-y: hidden; white-space: pre; position: relative; font-size: inherit; line-height: inherit; }
+.cmp-code { overflow: visible; display: inline-block; padding: 0 8px; white-space: pre !important; text-overflow: clip; min-width: max-content; user-select: text; cursor: text; caret-color: var(--primary); font-size: inherit; line-height: inherit; }
 .cmp-code[contenteditable] { cursor: text; outline: none; caret-color: var(--primary); }
 .cmp-code[contenteditable]:focus {
   position: relative;
@@ -7576,7 +7590,7 @@ body.has-open-overlay { overflow: hidden; }
 .db-sql-panel[hidden] { display: none !important; }
 .db-sql-editor { display: block; width: 100%; min-height: 190px; resize: vertical; border: 0; border-radius: 0; padding: 13px 15px; background: transparent; color: transparent; -webkit-text-fill-color: transparent; caret-color: var(--tail-out-fg); font: 13px/1.6 var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace); tab-size: 2; box-shadow: none; position: relative; z-index: 1; white-space: pre; overflow: auto; }
 .db-sql-editor:hover, .db-sql-editor:focus { background: transparent; border-color: transparent; box-shadow: none; }
-.db-sql-editor::placeholder { color: var(--text-mute); -webkit-text-fill-color: var(--text-mute); }
+.db-sql-editor::placeholder { color: var(--textarea-placeholder, var(--field-placeholder)); -webkit-text-fill-color: var(--textarea-placeholder, var(--field-placeholder)); }
 /* v0.18（问题10）：Chrome 70 不支持 color-mix/inset，选中底色会整个失效
    （只剩 color:transparent → 选中完全看不见）。改用主题变量 --sql-sel-bg
    （各主题均已定义）+ 四向展开定位。 */
@@ -8681,9 +8695,12 @@ body.has-open-overlay { overflow: hidden; }
 .cmp-editor-layer .cmp-editor-input { z-index:1; resize:none; color:transparent; -webkit-text-fill-color:transparent; caret-color:var(--text); background:transparent; }
 .cmp-editor-layer .cmp-editor-input:focus { background:transparent !important; outline:none; }
 .cmp-editor-layer .cmp-editor-input::selection { background:rgba(79,140,255,.30); }
-.syn-keyword { color:#82aaff; }
-.syn-string { color:#c3e88d; }
-.syn-tag { color:#f78c6c; }
+.syn-keyword { color: var(--syn-key, #82aaff); }
+.syn-string { color: var(--syn-string, #c3e88d); }
+.syn-tag { color: var(--syn-tag, #f78c6c); }
+.syn-comment { color: var(--syn-comment, #64748b); font-style: italic; }
+.syn-attr { color: var(--syn-attr, #fcd34d); }
+.syn-number { color: var(--syn-number, #f59e0b); }
 .cmp-language { min-width:64px; max-width:82px; }
 .cmp-wb-toolbar { position:sticky; top:0; z-index:5; }
 .cmp-result-host { max-height:34vh; overflow:auto; margin-top:10px; }

@@ -541,8 +541,8 @@
     return true;
   }
 
-  function loadHistory() {
-    const key = sourceId() || '*';
+  function loadHistory(targetSourceId) {
+    const key = targetSourceId || sourceId() || '*';
     let raw = '{}';
     try { raw = localStorage.getItem(STORAGE_HISTORY) || '{}'; } catch (_) {}
     const all = safeJSONParse(raw, {});
@@ -558,7 +558,7 @@
         knownSqls.add(sqlStr);
         list.push({
           id: 'ext-' + Math.random().toString(36).slice(2, 9),
-          sourceId: sourceId(),
+          sourceId: key !== '*' ? key : sourceId(),
           sourceName: sourceName(),
           dialect: dialect(),
           startedAt: Date.now(),
@@ -572,10 +572,13 @@
       });
     }
 
-    // Auto-fix any stale entries where status === 'running'
+    // Auto-fix any stale entries where status === 'running' (mark as interrupted, not success)
     list.forEach(function (entry) {
       if (entry.status === 'running') {
-        entry.status = 'success';
+        const isPending = state.pendingRuns && state.pendingRuns.has(entry.runId);
+        if (!isPending) {
+          entry.status = 'interrupted';
+        }
       }
     });
 
@@ -591,7 +594,8 @@
   }
   function addHistory(entry) {
     if (!entry || !String(entry.sql || '').trim()) return;
-    loadHistory();
+    const targetSourceId = entry.sourceId || sourceId() || '*';
+    loadHistory(targetSourceId);
     let sql = String(entry.sql).trim();
     if (sql.length > MAX_HISTORY_SQL_LEN) {
       sql = sql.slice(0, MAX_HISTORY_SQL_LEN) + '\n/* -- [kairo: 历史记录超长截断] -- */';
@@ -600,7 +604,7 @@
     const existingIndex = runId ? state.history.findIndex(function (item) { return item && item.runId === runId; }) : -1;
     const defaults = Object.assign({
       id: 'q-' + Date.now().toString(36),
-      sourceId: sourceId(), sourceName: sourceName(), dialect: dialect(),
+      sourceId: targetSourceId, sourceName: sourceName(), dialect: dialect(),
       startedAt: Date.now(), endedAt: Date.now(), elapsedMs: 0, status: 'unknown', rows: null, error: ''
     }, entry, { sql: sql });
     if (existingIndex >= 0) {
@@ -616,28 +620,53 @@
     state.history = state.history.slice(0, MAX_HISTORY);
     saveHistory();
   }
-  function recordQueryStart(sql, runId) {
+  function recordQueryStart(sql, runId, sourceInfo) {
     if (!sql || !String(sql).trim()) return null;
     runId = runId || ('run-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7));
-    state.pendingRun = { sql: String(sql).trim(), runId: runId, startedAt: Date.now() };
-    addHistory({ sql: state.pendingRun.sql, runId: runId, startedAt: state.pendingRun.startedAt, status: 'running' });
+    const targetSourceId = (sourceInfo && sourceInfo.sourceId) || sourceId();
+    const targetSourceName = (sourceInfo && sourceInfo.sourceName) || sourceName();
+    const targetDialect = (sourceInfo && sourceInfo.dialect) || dialect();
+    state.pendingRuns = state.pendingRuns || new Map();
+    state.pendingRuns.set(runId, {
+      sql: String(sql).trim(),
+      runId: runId,
+      startedAt: Date.now(),
+      sourceId: targetSourceId,
+      sourceName: targetSourceName,
+      dialect: targetDialect
+    });
+    state.pendingRun = state.pendingRuns.get(runId);
+    addHistory({
+      sql: String(sql).trim(),
+      runId: runId,
+      startedAt: Date.now(),
+      status: 'running',
+      sourceId: targetSourceId,
+      sourceName: targetSourceName,
+      dialect: targetDialect
+    });
     watchRunState();
     return runId;
   }
   function recordQueryResult(runId, result) {
     result = result || {};
-    const pending = state.pendingRun && state.pendingRun.runId === runId ? state.pendingRun : null;
-    const startedAt = (pending && pending.startedAt) || result.startedAt || (Date.now() - (result.elapsedMs || 0));
-    const sql = (pending && pending.sql) || result.sql;
-    if (pending) state.pendingRun = null;
+    state.pendingRuns = state.pendingRuns || new Map();
+    const pending = state.pendingRuns.get(runId) || (state.pendingRun && state.pendingRun.runId === runId ? state.pendingRun : null);
+    if (pending) state.pendingRuns.delete(runId);
+    if (state.pendingRun && state.pendingRun.runId === runId) state.pendingRun = null;
     if (state.runObserver) {
       state.runObserver.disconnect();
       state.runObserver.takeRecords();
     }
+    const sql = result.sql || (pending && pending.sql);
     if (!sql) return;
+    const startedAt = (pending && pending.startedAt) || result.startedAt || (Date.now() - (result.elapsedMs || 0));
     addHistory({
       sql: sql,
       runId: runId,
+      sourceId: result.sourceId || (pending && pending.sourceId) || sourceId(),
+      sourceName: (pending && pending.sourceName) || sourceName(),
+      dialect: (pending && pending.dialect) || dialect(),
       startedAt: startedAt,
       endedAt: Date.now(),
       elapsedMs: result.elapsedMs != null ? result.elapsedMs : (Date.now() - startedAt),

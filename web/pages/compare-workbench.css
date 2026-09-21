@@ -3,6 +3,8 @@
   --cmp2-control-h: 34px;
   --cmp2-gap: 10px;
   --cmp-folder-row-height: 28px;
+  --cmp-code-font-size: 12px;
+  --cmp-row-h: 25px;
   width: 100%;
   min-width: 0;
 }
@@ -182,6 +184,32 @@
   border-radius: 9px;
   background: var(--bg-1);
   box-shadow: 0 14px 36px rgba(0, 0, 0, .24);
+}
+
+.cmp2-view-options-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+  margin-top: 4px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+.cmp2-view-options-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.cmp2-view-options-grid select {
+  min-height: 28px;
+  height: 28px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--bg-2);
+  color: var(--text);
+  font-size: 12px;
+  padding: 0 6px;
 }
 
 .cmp2-menu-panel { grid-template-columns: repeat(2, minmax(132px, 1fr)); min-width: 320px; }

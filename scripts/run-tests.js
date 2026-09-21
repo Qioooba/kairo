@@ -27,7 +27,8 @@ const UNIT_TESTS = [
   'tests/database-review-regression.js',
   'tests/compare-folder-regression.js',
   'tests/security-review-followup.test.js',
-  'tests/tab-lifecycle-review-regression.test.js'
+  'tests/tab-lifecycle-review-regression.test.js',
+  'tests/database-update-multi-col-scroll.test.js'
 ];
 
 function checkService(url) {

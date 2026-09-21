@@ -18,6 +18,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"time"
 
 	"kairo/internal/credentials"
 	"kairo/internal/dbconsole"
@@ -792,6 +793,12 @@ func (s *Server) handleDatabaseExport(w http.ResponseWriter, r *http.Request) {
 			s.audit.Write("database.export", "source_id", source.ID, "kind", source.Kind, "query_id", queryID, "format", format, "result", "fail", "error", trim(collectErr.Error(), 300))
 			return
 		}
+		if summary.Truncated {
+			err = errors.New("导出数据超过单页字节上限，数据已截断，无法保证成品完整性")
+			writeStructuredErr(w, http.StatusUnprocessableEntity, err, "EXPORT_LIMIT_EXCEEDED", false, "not_applied")
+			s.audit.Write("database.export", "source_id", source.ID, "kind", source.Kind, "query_id", queryID, "format", format, "result", "fail", "error", "truncated")
+			return
+		}
 		for _, row := range table.Rows {
 			for _, cell := range row {
 				if obj, ok := cell.(map[string]any); ok {
@@ -894,6 +901,12 @@ func (s *Server) handleDatabaseExport(w http.ResponseWriter, r *http.Request) {
 		err = s.databaseSafeError(source, err)
 		writeStructuredErr(w, 502, err, "EXPORT_FAILED", false, "not_applied")
 		s.audit.Write("database.export", "source_id", source.ID, "kind", source.Kind, "query_id", queryID, "format", format, "result", "fail", "error", trim(err.Error(), 300))
+		return
+	}
+	if summary.Truncated {
+		err = errors.New("导出数据超过单页字节上限，数据已截断，无法保证成品完整性")
+		writeStructuredErr(w, http.StatusUnprocessableEntity, err, "EXPORT_LIMIT_EXCEEDED", false, "not_applied")
+		s.audit.Write("database.export", "source_id", source.ID, "kind", source.Kind, "query_id", queryID, "format", format, "result", "fail", "error", "truncated")
 		return
 	}
 	csvWriter.Flush()
@@ -1460,7 +1473,13 @@ func (s *Server) handleDatabaseSessionBackup(w http.ResponseWriter, r *http.Requ
 			}
 		}
 	}
-	if err := os.WriteFile(filePath, body, 0o600); err != nil {
+	tmpPath := filePath + fmt.Sprintf(".tmp.%d", time.Now().UnixNano())
+	if err := os.WriteFile(tmpPath, body, 0o600); err != nil {
+		writeErrSanitized(w, 500, err)
+		return
+	}
+	if err := os.Rename(tmpPath, filePath); err != nil {
+		_ = os.Remove(tmpPath)
 		writeErrSanitized(w, 500, err)
 		return
 	}

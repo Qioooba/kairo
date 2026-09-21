@@ -1232,7 +1232,7 @@
       listState.dlEvtSrc = null;
       listState.dlLatestUi = null;
       listState.dlAbort = null;
-      Kairo.core.clearActiveDL();
+      Kairo.core.clearActiveDL(tabOwner, listState.dlId ? { id: listState.dlId } : null);
       setStatus('idle');
       if (!cancelled) {
         // 所有组结束后统一渲染下载结果（不再每组 done 单独渲染）
@@ -1297,7 +1297,7 @@
         try { listState.dlEvtSrc.close(); } catch (_) { /* ignore */ }
         listState.dlEvtSrc = null;
       }
-      Kairo.core.clearActiveDL();
+      Kairo.core.clearActiveDL(tabOwner, listState.dlId ? { id: listState.dlId } : null);
       const tb = fileTableWrap._toolbar;
       if (tb) { tb.btnCancel.disabled = true; }
       if (listState.dlMode === 'latest' && listState.dlLatestUi) {
@@ -1496,7 +1496,7 @@
       listState.dlEvtSrc = null;
       listState.dlLatestUi = null;
       listState.dlAbort = null;
-      Kairo.core.clearActiveDL();
+      Kairo.core.clearActiveDL(tabOwner, listState.dlId ? { id: listState.dlId } : null);
       setStatus('idle');
 
       if (cancelled) {

@@ -410,14 +410,18 @@ func (m *Manager) ExecuteSessionBatch(ctx context.Context, source Source, sessio
 	}
 	entry.mu.Lock()
 	defer entry.mu.Unlock()
+	if entry.done {
+		return QuerySummary{}, errors.New("事务已结束，无法执行批量修改")
+	}
 	started := time.Now()
 	var totalAffected int64
 	for _, statement := range statements {
 		clean := strings.TrimRight(strings.TrimSpace(statement), "; \t\r\n")
 		result, execErr := entry.tx.ExecContext(queryCtx, clean)
 		if execErr != nil {
-			m.rollbackEntryLocked(source.ID, sessionID, entry)
-			m.recordTerminalState(source.ID, sessionID, entry.fingerprint, OutcomeRolledBack, "批量修改执行失败已回滚: "+execErr.Error())
+			if !entry.done {
+				m.rollbackEntryLocked(source.ID, sessionID, entry)
+			}
 			return QuerySummary{}, execErr
 		}
 		if affected, affectedErr := result.RowsAffected(); affectedErr == nil && affected >= 0 {

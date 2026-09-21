@@ -34,13 +34,20 @@ func ValidateSingleTableQuery(sql string) error {
 	if trimmed == "" {
 		return errors.New("查询 SQL 不能为空")
 	}
-	if joinOrComplexRe.MatchString(trimmed) {
+	noComments := stripSQLComments(trimmed)
+	if regexp.MustCompile(`(?is)^\s*WITH\b`).MatchString(noComments) {
+		return errors.New("CTE 查询无法确定 UPDATE 目标基表，请选用 INSERT 或 CSV/JSON 格式")
+	}
+	if regexp.MustCompile(`(?is)\bFROM\s*\(`).MatchString(noComments) {
+		return errors.New("派生表或子查询来源歧义，无法确定 UPDATE 目标基表，请选用 INSERT 或 CSV/JSON 格式")
+	}
+	if joinOrComplexRe.MatchString(noComments) {
 		return errors.New("JOIN、聚合或复合查询来源歧义，无法确定 UPDATE 目标基表，请选用 INSERT 或 CSV/JSON 格式")
 	}
 	// 检查 FROM 子句中是否有逗号分隔的多表 (笛卡尔积/隐式连接)
-	match := fromTableRe.FindStringSubmatch(trimmed)
+	match := fromTableRe.FindStringSubmatch(noComments)
 	if len(match) > 1 {
-		rest := trimmed[strings.Index(trimmed, match[0])+len(match[0]):]
+		rest := noComments[strings.Index(noComments, match[0])+len(match[0]):]
 		// 如果在 WHERE/ORDER/GROUP/LIMIT 之前存在逗号，说明有多表连接
 		beforeClause := rest
 		for _, sep := range []string{"WHERE", "ORDER", "GROUP", "LIMIT", "FOR"} {
@@ -328,7 +335,7 @@ func extractSelectProjections(sql string) ([]string, error) {
 	return items, nil
 }
 
-func parseProjectionItem(item string) (physName, alias string, isWildcard bool, err error) {
+func parseProjectionItem(kind, item string) (physName, alias string, isWildcard bool, err error) {
 	trimmed := strings.TrimSpace(item)
 	if trimmed == "" {
 		return "", "", false, errors.New("投影列不能为空")
@@ -536,6 +543,9 @@ func parseProjectionItem(item string) (physName, alias string, isWildcard bool, 
 	}
 
 	physName = cleanCol
+	if !isQuotedIdent(colName) && kind == KindOracle {
+		physName = strings.ToUpper(cleanCol)
+	}
 
 	if aliasPart != "" {
 		cleanAlias := strings.Trim(aliasPart, `"`+"`")
@@ -544,7 +554,7 @@ func parseProjectionItem(item string) (physName, alias string, isWildcard bool, 
 		}
 		alias = cleanAlias
 	} else {
-		alias = physName
+		alias = cleanCol
 	}
 
 	return physName, alias, false, nil
@@ -589,14 +599,18 @@ func BuildExportTargetPlan(kind, tableName, querySQL string, columns []Column, p
 		}
 		if len(items) == 1 && (items[0] == "*" || strings.HasSuffix(items[0], ".*")) {
 			for i, col := range columns {
-				physicalNames[i] = strings.Trim(col.Name, `"`+"`")
+				c := strings.Trim(col.Name, `"`+"`")
+				if kind == KindOracle && !isQuotedIdent(col.Name) {
+					c = strings.ToUpper(c)
+				}
+				physicalNames[i] = c
 			}
 		} else {
 			if len(items) != len(columns) {
 				return plan, errors.New("查询投影列数与结果集列数不一致，无法确定物理列映射")
 			}
 			for i, item := range items {
-				phys, alias, isWild, err := parseProjectionItem(item)
+				phys, alias, isWild, err := parseProjectionItem(kind, item)
 				if err != nil {
 					return plan, err
 				}
@@ -612,7 +626,11 @@ func BuildExportTargetPlan(kind, tableName, querySQL string, columns []Column, p
 		}
 	} else {
 		for i, col := range columns {
-			physicalNames[i] = strings.Trim(col.Name, `"`+"`")
+			c := strings.Trim(col.Name, `"`+"`")
+			if kind == KindOracle && !isQuotedIdent(col.Name) {
+				c = strings.ToUpper(c)
+			}
+			physicalNames[i] = c
 		}
 	}
 
@@ -643,10 +661,16 @@ func BuildExportTargetPlan(kind, tableName, querySQL string, columns []Column, p
 				continue
 			}
 			cleanPK := strings.Trim(pkTrim, `"`+"`")
+			if kind == KindOracle && !isQuotedIdent(pkTrim) {
+				cleanPK = strings.ToUpper(cleanPK)
+			}
 			var matchIdxs []int
 
 			for i, col := range columns {
 				cleanCol := strings.Trim(col.Name, `"`+"`")
+				if kind == KindOracle && !isQuotedIdent(col.Name) {
+					cleanCol = strings.ToUpper(cleanCol)
+				}
 				phys := physicalNames[i]
 
 				if strings.EqualFold(phys, cleanPK) {

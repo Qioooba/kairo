@@ -288,8 +288,14 @@ func (m *Manager) GetTransactionStatus(source Source, sessionID string) Transact
 	}
 	entry.mu.Lock()
 	defer entry.mu.Unlock()
-	// An entry is created only after BeginTx succeeds; treating its presence as
-	// active also makes status useful while a driver is returning sql.ErrTxDone.
+	if entry.done {
+		state.Active = false
+		state.Pending = false
+		state.TerminalOutcome = entry.outcome
+		state.TerminalMessage = entry.outcomeMsg
+		state.Reason = string(entry.outcome)
+		return state
+	}
 	state.Active = true
 	state.Pending = true
 	state.CreatedAt = entry.createdAt

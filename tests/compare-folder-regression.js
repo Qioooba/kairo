@@ -147,7 +147,41 @@ const file = (rel, status = 'same', extra = {}) => ({
     'line4-left',
     'line5-right'
   ], 'Left side should receive line5-right at exact corresponding position');
+  // Case D: C01 Regression - reconstructTargetLines with targetRaw weaves omitted blank lines
+  {
+    // Left: header\n\nnew\n\nfooter\n
+    // Right: header\n\nold\n\nfooter\n
+    // With ignore_blank, rows only contains non-blank lines:
+    const ignoreBlankRows = [
+      { status: 'equal', leftNo: 1, rightNo: 1, leftText: 'header', rightText: 'header', hunk: -1 },
+      { status: 'changed', leftNo: 3, rightNo: 3, leftText: 'new', rightText: 'old', hunk: 0 },
+      { status: 'equal', leftNo: 5, rightNo: 5, leftText: 'footer', rightText: 'footer', hunk: -1 }
+    ];
+    const targetRawRight = ['header', '', 'old', '', 'footer', ''];
+    // Merge changed line (row 1) to right
+    const resWeaveToRight = reconstructTargetLines(ignoreBlankRows, new Set([ignoreBlankRows[1]]), 'right', targetRawRight);
+    assert.deepStrictEqual([...resWeaveToRight], [
+      'header',
+      '',
+      'new',
+      '',
+      'footer',
+      ''
+    ], 'Target blank lines and trailing newline must be 100% preserved under ignore_blank');
+
+    // Merge changed line to left
+    const targetRawLeft = ['header', '', 'new', '', 'footer', ''];
+    const resWeaveToLeft = reconstructTargetLines(ignoreBlankRows, new Set([ignoreBlankRows[1]]), 'left', targetRawLeft);
+    assert.deepStrictEqual([...resWeaveToLeft], [
+      'header',
+      '',
+      'old',
+      '',
+      'footer',
+      ''
+    ], 'Source blank lines and trailing newline must be 100% preserved under ignore_blank');
+  }
 }
 
-console.log('compare-folder-regression: 13 cases passed');
+console.log('compare-folder-regression: 14 cases passed');
 

@@ -195,6 +195,52 @@ func TestControlSessionTransaction_ConcurrentRollbackDoesNotOverwriteCommitted(t
 	}
 }
 
+func TestControlSessionTransaction_ConcurrentBatchDoesNotOverwriteCommitted(t *testing.T) {
+	m, source, d := mutationManager(t)
+	sid := "tab-concurrent-batch"
+
+	summary, err := m.ExecuteSessionBatch(context.Background(), source, sid, []string{"UPDATE t SET v=1 WHERE id=1"})
+	if err != nil || !summary.TransactionPending {
+		t.Fatalf("unexpected batch result: summary=%+v err=%v", summary, err)
+	}
+
+	commitStarted := make(chan struct{})
+	commitRelease := make(chan struct{})
+	d.onCommit = func() {
+		close(commitStarted)
+		<-commitRelease
+	}
+
+	done1 := make(chan struct{})
+	go func() {
+		defer close(done1)
+		_, _ = m.ControlSessionTransaction(context.Background(), source, sid, "COMMIT")
+	}()
+
+	<-commitStarted
+
+	done2 := make(chan struct{})
+	var err2 error
+	go func() {
+		defer close(done2)
+		_, err2 = m.ExecuteSessionBatch(context.Background(), source, sid, []string{"UPDATE t SET v=2 WHERE id=1"})
+	}()
+
+	time.Sleep(20 * time.Millisecond)
+	close(commitRelease)
+	<-done1
+	<-done2
+
+	if err2 == nil {
+		t.Fatal("concurrent batch on committed transaction must return error, got nil")
+	}
+
+	status := m.GetTransactionStatus(source, sid)
+	if status.TerminalOutcome != OutcomeCommitted {
+		t.Fatalf("terminal outcome overwritten to %s! message: %s", status.TerminalOutcome, status.TerminalMessage)
+	}
+}
+
 func TestTransactionTerminalStateCommitUnknown(t *testing.T) {
 	m, source, d := mutationManager(t)
 	sid := "tab-commit-unknown"

@@ -39,7 +39,15 @@
     ]));
     view.appendChild(content);
 
+    const listPane = el('div', { class: 'notes-tab-pane' });
+    const remindersPane = el('div', { class: 'notes-tab-pane', style: 'display:none' });
+    content.appendChild(listPane);
+    content.appendChild(remindersPane);
+
+    let listShellRendered = false;
+
     function switchTab(next) {
+      if (next === tab) return;
       tab = next;
       if (Kairo.tabs && typeof Kairo.tabs.setRouteState === 'function') {
         Kairo.tabs.setRouteState('notes', { tab: next });
@@ -51,19 +59,20 @@
     }
 
     function renderTab() {
-      if (unsubscribe) { unsubscribe(); unsubscribe = null; }
       listBtn.classList.toggle('active', tab === 'list');
       reminderBtn.classList.toggle('active', tab === 'reminders');
-      content.innerHTML = '';
       if (tab === 'reminders') {
-        Kairo.reminders.render(content);
+        listPane.style.display = 'none';
+        remindersPane.style.display = '';
+        remindersPane.innerHTML = '';
+        Kairo.reminders.render(remindersPane);
         const pending = Kairo.notes.state.pendingReminder;
         if (pending) {
           Kairo.notes.state.pendingReminder = null;
           const snapshot = Kairo.notes.reminderContent(pending);
           setTimeout(function () {
             Kairo.reminders.openEditor(null, 'once', function () {
-              Kairo.reminders.render(content);
+              Kairo.reminders.render(remindersPane);
             }, {
               content: snapshot,
               sourceNoteId: pending.id
@@ -73,7 +82,12 @@
         }
         return;
       }
-      renderListShell();
+      remindersPane.style.display = 'none';
+      listPane.style.display = '';
+      if (!listShellRendered) {
+        listShellRendered = true;
+        renderListShell();
+      }
     }
 
     function renderListShell() {
@@ -90,7 +104,7 @@
       const newBtn = el('button', { class: 'btn btn-primary', text: '+ 新建便笺', onclick: function () { createAndEdit(); } });
       const toolbar = el('div', { class: 'notes-toolbar' }, [search, filterSel, newBtn]);
       const list = el('div', { class: 'notes-list' });
-      content.appendChild(toolbar); content.appendChild(list);
+      listPane.appendChild(toolbar); listPane.appendChild(list);
 
       function filteredItems(items) {
         const q = query.trim().toLowerCase();

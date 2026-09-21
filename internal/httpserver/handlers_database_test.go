@@ -288,6 +288,20 @@ func TestDatabaseExport_PrecheckAndSafeKeys(t *testing.T) {
 	if !strings.Contains(wNoPK.Body.String(), "EXPORT_UNSAFE_KEY") && !strings.Contains(wNoPK.Body.String(), "EXPORT_DICTIONARY_FAILED") {
 		t.Fatalf("expected EXPORT_UNSAFE_KEY or EXPORT_DICTIONARY_FAILED in body: %s", wNoPK.Body.String())
 	}
+
+	// 3. Derived table query for UPDATE export -> rejected with 422
+	wDerived := doRequestWithToken(srv, http.MethodPost, "/api/database/export", rbacAdminToken, databaseQueryRequest{
+		SourceID: src.ID,
+		SQL:      "SELECT * FROM (SELECT ID + 1 AS ID, BALANCE FROM T WHERE ID = 1)",
+		Format:   "update",
+		Table:    "T",
+	})
+	if wDerived.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422 for derived table UPDATE export, got: %d (%s)", wDerived.Code, wDerived.Body.String())
+	}
+	if disp := wDerived.Header().Get("Content-Disposition"); disp != "" {
+		t.Fatalf("expected no Content-Disposition on error, got: %s", disp)
+	}
 }
 
 func TestDatabaseExport_ParameterAndSessionContext(t *testing.T) {

@@ -21,6 +21,7 @@
   let connections = [];
   let activeScanJob = '';
   let scanPollTimer = 0;
+  let activeWorkbenchState = null;
   let persisted = { options: {}, sources: {}, folder_history: { left: [], right: [] } };
   const persistPreference = preferenceSaver('compare', 400);
 
@@ -94,7 +95,7 @@
   }
 
   function loadLegacyOptions() {
-    const defaults = { trim_space: true, ignore_blank: false, ignore_case: false, mode: 'side', onlyDiff: false, backup: true, max_depth: 1 };
+    const defaults = { trim_space: true, ignore_blank: false, ignore_case: false, mode: 'side', onlyDiff: false, backup: true, max_depth: 1, font_size: '12', line_height: '25' };
     try { return Object.assign(defaults, JSON.parse(localStorage.getItem(LS_OPTIONS) || '{}')); } catch (_) { return defaults; }
   }
   function loadLegacySources() {
@@ -427,6 +428,7 @@
     textarea.addEventListener('keydown', function(e) {
       if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) {
         e.preventDefault();
+        e.stopPropagation();
         if (e.shiftKey) redo();
         else undo();
       } else if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || e.key === 'Y')) {
@@ -446,6 +448,12 @@
     });
 
     textarea.addEventListener('scroll', () => { gutter.scrollTop = textarea.scrollTop; highlight.scrollTop = textarea.scrollTop; highlight.scrollLeft = textarea.scrollLeft; });
+    textarea.addEventListener('wheel', (e) => {
+      if (e.ctrlKey && Math.abs(e.deltaY) > 0) {
+        e.preventDefault();
+        textarea.scrollLeft += e.deltaY;
+      }
+    }, { passive: false });
     const editorLayer = el('div', { class: 'cmp-editor-layer' }, [highlight, textarea]);
     const root = el('div', { class: 'cmp-editor', 'data-side': side, role: 'group', 'aria-label': side === 'left' ? '左侧原文' : '右侧原文' }, [gutter, editorLayer]);
     ['dragenter', 'dragover'].forEach(function (type) {
@@ -497,6 +505,7 @@
       right: { source: Object.assign(defaultSource('right'), saved.right || {}), version: null, codec: { encoding: 'utf-8', eol: 'lf', bom: false }, dirty: false, baseline: '', loadState: 'ready', loadError: null, loadSeq: 0, editSeq: 0, saving: false },
       diff: null, hunks: [], hunkIndex: -1, mode: 'text', scan: null,
     };
+    activeWorkbenchState = state;
     const crumb = document.getElementById('crumb'); if (crumb) crumb.textContent = '文件与文本比较';
     const compareID = 'cmp-' + Date.now().toString(36);
     const root = el('div', { class: 'cmp-workbench cmp2-workbench', 'data-compare-root': compareID });
@@ -563,7 +572,10 @@
       }, 0);
     }
     ensureConnections();
-    return function () { if (typeof textCleanup === 'function') textCleanup(); };
+    return function () {
+      if (activeWorkbenchState === state) activeWorkbenchState = null;
+      if (typeof textCleanup === 'function') textCleanup();
+    };
   }
 
   function buildTextWorkbench(panel, state, options) {
@@ -670,8 +682,12 @@
     const undoStack = [];
     function pushUndoSnapshot(name) {
       undoStack.push({
-        left: editorLeft.getValue(),
-        right: editorRight.getValue(),
+        leftText: editorLeft.getValue(),
+        rightText: editorRight.getValue(),
+        leftSource: JSON.parse(JSON.stringify((state.left && state.left.source) || {})),
+        rightSource: JSON.parse(JSON.stringify((state.right && state.right.source) || {})),
+        leftCodec: JSON.parse(JSON.stringify((state.left && state.left.codec) || {})),
+        rightCodec: JSON.parse(JSON.stringify((state.right && state.right.codec) || {})),
         name: name || 'edit'
       });
       if (undoStack.length > 50) undoStack.shift();
@@ -683,8 +699,17 @@
         return;
       }
       const snap = undoStack.pop();
-      editorLeft.setValue(snap.left);
-      editorRight.setValue(snap.right);
+      editorLeft.setValue(snap.leftText != null ? snap.leftText : snap.left);
+      editorRight.setValue(snap.rightText != null ? snap.rightText : snap.right);
+      if (snap.leftSource && snap.rightSource && (snap.leftSource.kind || snap.leftSource.path)) {
+        state.left.source = snap.leftSource;
+        state.right.source = snap.rightSource;
+        if (snap.leftCodec) state.left.codec = snap.leftCodec;
+        if (snap.rightCodec) state.right.codec = snap.rightCodec;
+        updateHeader('left');
+        updateHeader('right');
+        saveSources(state);
+      }
       markDirty('left');
       markDirty('right');
       if (undoBtn) undoBtn.disabled = undoStack.length === 0;
@@ -698,9 +723,12 @@
 
     const handleWorkbenchKeyDown = function (e) {
       if (disposed) return;
+      if (typeof Kairo !== 'undefined' && Kairo.tabs && typeof Kairo.tabs.activeRoute === 'function') {
+        if (Kairo.tabs.activeRoute() !== 'compare') return;
+      }
       if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'z') {
         const active = document.activeElement;
-        if (active && (active.tagName === 'TEXTAREA' || (active.tagName === 'INPUT' && active.type === 'text'))) return;
+        if (active && (active.tagName === 'TEXTAREA' || (active.tagName === 'INPUT' && active.type === 'text') || active.isContentEditable)) return;
         e.preventDefault();
         e.stopPropagation();
         performUndo();
@@ -972,6 +1000,8 @@
         item.version = response.version;
         item.codec = { encoding: response.encoding || 'utf-8', eol: response.eol || 'lf', bom: !!response.bom };
         item.dirty = false;
+        undoStack.length = 0;
+        if (undoBtn) undoBtn.disabled = true;
         try { item.baseline = editors[side].getValue(); } catch (_) { item.baseline = String(response.text || ''); }
         item.loadState = 'ready';
         editors[side].textarea.disabled = false;
@@ -1243,12 +1273,14 @@
     }
     function applyHunk(index, direction) {
       const hunk = state.hunks[index]; if (!hunk) return;
+      if (state.diffStale) { toast('差异正在更新中，请稍候…', 'warn'); return; }
       pushUndoSnapshot('applyHunk');
       const targetSide = direction === 'right' ? 'right' : 'left';
       const allRows = state.alignedRows;
+      const targetRaw = splitEditorLines(editors[targetSide].getValue());
       if (allRows && allRows.length) {
         const hunkRows = allRows.filter(r => r.hunk === index);
-        const newLines = reconstructTargetLines(allRows, new Set(hunkRows), direction);
+        const newLines = reconstructTargetLines(allRows, new Set(hunkRows), direction, targetRaw);
         editors[targetSide].setValue(newLines.join('\n'));
       } else {
         const target = direction === 'right' ? editorRight : editorLeft, sourceLines = direction === 'right' ? hunk.leftText : hunk.rightText;
@@ -1261,10 +1293,12 @@
     }
     function applyLine(row, direction) {
       if (!row || row.status === 'equal') return;
+      if (state.diffStale) { toast('差异正在更新中，请稍候…', 'warn'); return; }
       pushUndoSnapshot('applyLine');
       const targetSide = direction === 'right' ? 'right' : 'left';
       const allRows = state.alignedRows || [row];
-      const newLines = reconstructTargetLines(allRows, new Set([row]), direction);
+      const targetRaw = splitEditorLines(editors[targetSide].getValue());
+      const newLines = reconstructTargetLines(allRows, new Set([row]), direction, targetRaw);
       editors[targetSide].setValue(newLines.join('\n'));
       markDirty(targetSide);
       compareNow(false, true);
@@ -1272,6 +1306,7 @@
     }
     function applyBatch(diffRows, selectedIndices, direction) {
       if (!selectedIndices || !selectedIndices.length) return;
+      if (state.diffStale) { toast('差异正在更新中，请稍候…', 'warn'); return; }
       const targetSide = direction === 'right' ? 'right' : 'left';
       const selRows = selectedIndices
         .map(idx => diffRows[idx])
@@ -1282,7 +1317,8 @@
       }
       pushUndoSnapshot('applyBatch');
       const allRows = state.alignedRows || diffRows;
-      const newLines = reconstructTargetLines(allRows, new Set(selRows), direction);
+      const targetRaw = splitEditorLines(editors[targetSide].getValue());
+      const newLines = reconstructTargetLines(allRows, new Set(selRows), direction, targetRaw);
       editors[targetSide].setValue(newLines.join('\n'));
       markDirty(targetSide);
       compareNow(false, true);
@@ -1333,6 +1369,8 @@
         state.right.source = Object.assign(defaultSource('right'), right || {});
         updateHeader('left');
         updateHeader('right');
+        undoStack.length = 0;
+        if (undoBtn) undoBtn.disabled = true;
         const loaded = await Promise.all([loadSide('left'), loadSide('right')]);
         if (disposed || !loaded.every(Boolean)) return false;
         return compareNow(false, true);
@@ -1388,34 +1426,75 @@
     return rows;
   }
 
-  function reconstructTargetLines(allRows, selectedRows, direction) {
-    const selectedSet = selectedRows instanceof Set ? selectedRows : new Set(selectedRows || []);
-    const newLines = [];
-    for (let i = 0; i < allRows.length; i++) {
-      const row = allRows[i];
-      const isSelected = selectedSet.has(row) || selectedSet.has(i);
-      if (direction === 'right') {
-        if (isSelected) {
-          if (row.leftNo > 0) {
-            newLines.push(row.leftText != null ? row.leftText : '');
+  function reconstructTargetLines(allRows, selectedRows, direction, targetRaw) {
+    if (!targetRaw || !Array.isArray(targetRaw)) {
+      const selectedSet = selectedRows instanceof Set ? selectedRows : new Set(selectedRows || []);
+      const newLines = [];
+      for (let i = 0; i < allRows.length; i++) {
+        const row = allRows[i];
+        const isSelected = selectedSet.has(row) || selectedSet.has(i);
+        if (direction === 'right') {
+          if (isSelected) {
+            if (row.leftNo > 0) {
+              newLines.push(row.leftText != null ? row.leftText : '');
+            }
+          } else {
+            if (row.rightNo > 0) {
+              newLines.push(row.rightText != null ? row.rightText : '');
+            }
           }
         } else {
-          if (row.rightNo > 0) {
-            newLines.push(row.rightText != null ? row.rightText : '');
-          }
-        }
-      } else {
-        if (isSelected) {
-          if (row.rightNo > 0) {
-            newLines.push(row.rightText != null ? row.rightText : '');
-          }
-        } else {
-          if (row.leftNo > 0) {
-            newLines.push(row.leftText != null ? row.leftText : '');
+          if (isSelected) {
+            if (row.rightNo > 0) {
+              newLines.push(row.rightText != null ? row.rightText : '');
+            }
+          } else {
+            if (row.leftNo > 0) {
+              newLines.push(row.leftText != null ? row.leftText : '');
+            }
           }
         }
       }
+      return newLines;
     }
+
+    const selectedSet = selectedRows instanceof Set ? selectedRows : new Set(selectedRows || []);
+    const newLines = [];
+    let cursor = 0;
+
+    for (let i = 0; i < allRows.length; i++) {
+      const row = allRows[i];
+      const isSelected = selectedSet.has(row) || selectedSet.has(i);
+      const targetLineNo = direction === 'right' ? row.rightNo : row.leftNo;
+      const sourceLineNo = direction === 'right' ? row.leftNo : row.rightNo;
+      const targetText = direction === 'right' ? row.rightText : row.leftText;
+      const sourceText = direction === 'right' ? row.leftText : row.rightText;
+
+      if (targetLineNo > 0) {
+        while (cursor < targetLineNo - 1 && cursor < targetRaw.length) {
+          newLines.push(targetRaw[cursor]);
+          cursor++;
+        }
+        if (isSelected) {
+          if (sourceLineNo > 0) {
+            newLines.push(sourceText != null ? sourceText : '');
+          }
+        } else {
+          newLines.push(cursor < targetRaw.length ? targetRaw[cursor] : (targetText != null ? targetText : ''));
+        }
+        cursor++;
+      } else {
+        if (isSelected && sourceLineNo > 0) {
+          newLines.push(sourceText != null ? sourceText : '');
+        }
+      }
+    }
+
+    while (cursor < targetRaw.length) {
+      newLines.push(targetRaw[cursor]);
+      cursor++;
+    }
+
     return newLines;
   }
 
@@ -1519,7 +1598,7 @@
     rightTrack.addEventListener('scroll', () => syncHScroll(rightTrack, leftTrack), { passive: true });
 
     viewport.addEventListener('wheel', (e) => {
-      if (e.shiftKey && Math.abs(e.deltaY) > 0) {
+      if ((e.ctrlKey || e.shiftKey) && Math.abs(e.deltaY) > 0) {
         e.preventDefault();
         leftTrack.scrollLeft += e.deltaY;
       } else if (Math.abs(e.deltaX) > 0) {
@@ -1527,6 +1606,15 @@
         leftTrack.scrollLeft += e.deltaX;
       }
     }, { passive: false });
+
+    const handleTrackCtrlWheel = (e) => {
+      if (e.ctrlKey && Math.abs(e.deltaY) > 0) {
+        e.preventDefault();
+        leftTrack.scrollLeft += e.deltaY;
+      }
+    };
+    leftTrack.addEventListener('wheel', handleTrackCtrlWheel, { passive: false });
+    rightTrack.addEventListener('wheel', handleTrackCtrlWheel, { passive: false });
 
     canvas.addEventListener('scroll', (e) => {
       const wrap = e.target && e.target.closest && e.target.closest('.cmp-code-wrap');
@@ -1910,9 +1998,12 @@
       rows.forEach(r => {
         const h = r.dataset.hunk;
         const rowIdx = Number(r.dataset.row);
+        const isSel = selectedRowIndices.has(rowIdx);
         r.classList.toggle('is-active-hunk', h !== '' && Number(h) === state.hunkIndex);
         r.classList.toggle('is-active-line', rowIdx === activeRowIndex);
-        r.classList.toggle('is-diff-selected', selectedRowIndices.has(rowIdx));
+        r.classList.toggle('is-diff-selected', isSel);
+        const chk = r.querySelector('input[type="checkbox"]');
+        if (chk && chk.checked !== isSel) chk.checked = isSel;
       });
     }
 
@@ -3682,6 +3773,16 @@
   Kairo.pages.compare = renderCompare;
   Kairo.state.routes.compare = renderCompare;
   Kairo.state.routeNames.compare = '文件与文本比较';
+  Kairo.compare = {
+    hasPendingWork: function () {
+      if (activeWorkbenchState) {
+        const leftDirty = !!(activeWorkbenchState.left && activeWorkbenchState.left.dirty);
+        const rightDirty = !!(activeWorkbenchState.right && activeWorkbenchState.right.dirty);
+        return leftDirty || rightDirty;
+      }
+      return false;
+    }
+  };
   Kairo.compareTest = {
     canSaveComparedFile,
     rollupAllFolders,

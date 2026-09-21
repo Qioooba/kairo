@@ -60,15 +60,19 @@ type gbkDecoder struct {
 	r io.Reader // = transform.NewReader(src, decoder)
 }
 
-func newGBKDecoder(src io.Reader) *gbkDecoder {
-	return &gbkDecoder{r: transform.NewReader(src, simplifiedchinese.GBK.NewDecoder())}
+func newGBKDecoder(src io.Reader, enc ...string) *gbkDecoder {
+	encoding := simplifiedchinese.GBK
+	if len(enc) > 0 && strings.EqualFold(strings.TrimSpace(enc[0]), "gb18030") {
+		encoding = simplifiedchinese.GB18030
+	}
+	return &gbkDecoder{r: transform.NewReader(src, encoding.NewDecoder())}
 }
 
 // Read 把内部 transform.Reader 当成普通 io.Reader 透传 ——
 // 它自己负责 multi-byte GBK 字符跨 Read 边界的拼接 + 非法字节的 replacement 字符替换。
 func (d *gbkDecoder) Read(p []byte) (int, error) { return d.r.Read(p) }
 
-// gbkStdinEncoder 把前端发来的 UTF-8 字节流实时转成 GBK 再写到远端 shell stdin。
+// gbkStdinEncoder 把前端发来的 UTF-8 字节流实时转成 GBK/GB18030 再写到远端 shell stdin。
 //
 // 背景（乱码文件夹进不去）：
 //   - 老 WebSphere / AIX 中文目录名在磁盘上是 GBK 字节，shell 在 zh_CN.GBK locale 下
@@ -79,8 +83,7 @@ func (d *gbkDecoder) Read(p []byte) (int, error) { return d.r.Read(p) }
 //     "No such file or directory"，用户观感就是"乱码文件夹进不去"。
 //
 // 实现：transform.NewWriter 内部维护不完整 UTF-8 序列缓冲，跨 Write 边界不会截断汉字。
-// Write 返回的是消费掉的源字节数（符合 io.Writer 语义）；不可编码字符（如 emoji）
-// 按 x/text 默认替换为 '?'，不阻断终端流。并发安全：wsReader 与 cwd 重试注入会并发
+// Write 返回消费的源字节数和底层写错误。并发安全：wsReader 与 cwd 重试注入会并发
 // Write，用 mutex 串行化（底层 ssh stdin pipe 本身也不保证并发写安全）。
 type gbkStdinEncoder struct {
 	mu  sync.Mutex
@@ -88,9 +91,13 @@ type gbkStdinEncoder struct {
 	raw io.WriteCloser
 }
 
-func newGBKStdinEncoder(dst io.WriteCloser) *gbkStdinEncoder {
+func newGBKStdinEncoder(dst io.WriteCloser, enc ...string) *gbkStdinEncoder {
+	encoding := simplifiedchinese.GBK
+	if len(enc) > 0 && strings.EqualFold(strings.TrimSpace(enc[0]), "gb18030") {
+		encoding = simplifiedchinese.GB18030
+	}
 	return &gbkStdinEncoder{
-		tw:  transform.NewWriter(dst, simplifiedchinese.GBK.NewEncoder()),
+		tw:  transform.NewWriter(dst, encoding.NewEncoder()),
 		raw: dst,
 	}
 }
@@ -100,17 +107,7 @@ func newGBKStdinEncoder(dst io.WriteCloser) *gbkStdinEncoder {
 func (e *gbkStdinEncoder) Write(p []byte) (int, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	n, err := e.tw.Write(p)
-	if err != nil {
-		// 编码器出错（如非法 UTF-8）时不阻断终端：已转换部分已写入，
-		// 这里按"全部消费"返回，避免上层 wsReader 误判 stdin 断开而关会话。
-		return len(p), nil
-	}
-	// transform.Writer 正常时 n == len(p)；防御性兜底。
-	if n != len(p) {
-		return len(p), nil
-	}
-	return n, nil
+	return e.tw.Write(p)
 }
 
 // Close 关闭底层 stdin（让远端 shell 收到 EOF），不额外 flush ——
@@ -260,8 +257,8 @@ func (c *Client) Shell(ctx context.Context, term string, rows, cols int, env []s
 	var stdoutReader io.Reader = stdout
 	var stdinWriter io.WriteCloser = stdin
 	if useGBK {
-		stdoutReader = newGBKDecoder(stdout)
-		stdinWriter = newGBKStdinEncoder(stdin)
+		stdoutReader = newGBKDecoder(stdout, encoding)
+		stdinWriter = newGBKStdinEncoder(stdin, encoding)
 	}
 
 	return &ShellSession{

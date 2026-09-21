@@ -29,7 +29,7 @@
   const state = {
     sources: [], source: null, rows: [], columns: [], controller: null, summary: null, cursor: 0,
     managing: false, workspaceToken: 0, lastSQL: '', lastMaxRows: 0, resultMode: 'grid',
-    selectedRow: 0, selectedCol: 0, colSelected: -1, localFilter: '', hiddenColumns: new Set(), columnWidths: {}, sort: null,
+    selectedRow: 0, selectedCol: 0, colSelected: -1, selectedCols: new Set(), lastColSelected: -1, localFilter: '', hiddenColumns: new Set(), columnWidths: {}, sort: null,
     prefs: normalizePrefs({}), lastError: null, inspectTab: 'fields', inspect: null, plan: [], gridReady: false,
     sessions: [], activeId: 0, redisKeyBase64: '', redisType: '', redisCursor: '0', redisNextCursor: '0', redisCursorHistory: [], redisOffset: 0, redisPageSize: 100, redisMembersHasNext: false,
     dirtyCells: {}, isEditMode: false,
@@ -141,7 +141,7 @@
     const defaultPageSize = (persisted.row_limits && state.source && Number(persisted.row_limits[state.source.id])) || (q('db-max-rows') && Number(q('db-max-rows').value)) || 20;
     return {
       id: ++tabSeq, sql: sql || '', rows: [], columns: [], summary: null, lastError: null,
-      lastSQL: '', lastMaxRows: 0, page: 1, pageSize: defaultPageSize, resultMode: 'grid', selectedRow: 0, selectedCol: 0, colSelected: -1, localFilter: '',
+      lastSQL: '', lastMaxRows: 0, page: 1, pageSize: defaultPageSize, resultMode: 'grid', selectedRow: 0, selectedCol: 0, colSelected: -1, selectedCols: new Set(), lastColSelected: -1, localFilter: '',
       hiddenColumns: new Set(), sort: null, plan: [], gridReady: false, controller: null,
       dirtyCells: {}, isEditMode: false, gridEditsStaged: false,
       transactionId: newTransactionID(), transactionPending: false,
@@ -154,6 +154,8 @@
     state.summary = s.summary; state.lastSQL = s.lastSQL; state.lastMaxRows = s.lastMaxRows;
     state.resultMode = s.resultMode; state.selectedRow = s.selectedRow; state.localFilter = s.localFilter;
     state.colSelected = s.colSelected == null ? -1 : s.colSelected;
+    state.selectedCols = s.selectedCols || new Set();
+    state.lastColSelected = s.lastColSelected == null ? -1 : s.lastColSelected;
     state.hiddenColumns = s.hiddenColumns; state.sort = s.sort; state.lastError = s.lastError;
     state.plan = s.plan; state.gridReady = false;
     state.dirtyCells = s.dirtyCells || {};
@@ -164,18 +166,19 @@
     const s = sess();
     if (s && s.type !== 'object') s.dirtyCells = state.dirtyCells;
   }
-  function saveEditorSQL() {
+  function saveEditorSQL(expectedSessionId) {
     const s = sess(), ta = q('db-sql');
-    if (s && ta) s.sql = ta.value;
-    if (s) {
-      s.resultMode = state.resultMode; s.selectedRow = state.selectedRow; s.colSelected = state.colSelected;
-      s.localFilter = state.localFilter; s.hiddenColumns = state.hiddenColumns;
-      s.sort = state.sort; s.lastError = state.lastError; s.plan = state.plan;
-      s.rows = state.rows; s.columns = state.columns; s.summary = state.summary;
-      s.lastSQL = state.lastSQL; s.lastMaxRows = state.lastMaxRows; s.controller = state.controller;
-      s.dirtyCells = state.dirtyCells || {}; s.isEditMode = !!state.isEditMode;
-      if (!s.sourceId && state.source) bindSessionSource(s, state.source);
-    }
+    if (!s) return;
+    if (expectedSessionId && s.id !== expectedSessionId) return;
+    if (ta && s.type !== 'object') s.sql = ta.value;
+    s.resultMode = state.resultMode; s.selectedRow = state.selectedRow; s.colSelected = state.colSelected;
+    s.selectedCols = state.selectedCols; s.lastColSelected = state.lastColSelected;
+    s.localFilter = state.localFilter; s.hiddenColumns = state.hiddenColumns;
+    s.sort = state.sort; s.lastError = state.lastError; s.plan = state.plan;
+    s.rows = state.rows; s.columns = state.columns; s.summary = state.summary;
+    s.lastSQL = state.lastSQL; s.lastMaxRows = state.lastMaxRows; s.controller = state.controller;
+    s.dirtyCells = state.dirtyCells || {}; s.isEditMode = !!state.isEditMode;
+    if (!s.sourceId && state.source) bindSessionSource(s, state.source);
   }
   function extractFirstSQL(sql) {
     if (!sql) return '';
@@ -274,22 +277,41 @@
   }
   async function closeSessionsList(list, targetActiveId) {
     if (!list || !list.length) return;
-    saveEditorSQL();
-    const dirtySessions = list.filter(function (s) { return Object.keys(s.dirtyCells || {}).length > 0 || !!s.transactionPending; });
+    saveEditorSQL(state.activeId);
+    const actualList = list.filter(function (s) { return state.sessions.some(function (item) { return item.id === s.id; }); });
+    if (!actualList.length) return;
+    if (actualList.some(function (s) { return s.transactionBusy; })) {
+      return toast('部分待关闭页签事务处理中，请稍候再操作', 'warn');
+    }
+    const dirtySessions = actualList.filter(function (s) { return Object.keys(s.dirtyCells || {}).length > 0 || !!s.transactionPending; });
     if (dirtySessions.length > 0) {
       if (!confirm('待关闭的页签中存在未提交的事务或网格修改，确定关闭并回滚吗？')) return;
     }
-    for (const s of list) {
+    const successfullyClosed = [];
+    const failedRollbacks = [];
+    for (const s of actualList) {
       if (s.transactionPending && s.sourceId) {
+        s.transactionBusy = true;
         try {
           await api('POST', '/api/database/transaction', { source_id: s.sourceId, session_id: s.transactionId, action: 'ROLLBACK' });
-        } catch (_) {}
+          s.transactionPending = false; s.gridEditsStaged = false; s.dirtyCells = {};
+          successfullyClosed.push(s);
+        } catch (err) {
+          failedRollbacks.push({ session: s, error: err });
+        } finally {
+          s.transactionBusy = false;
+        }
+      } else {
+        successfullyClosed.push(s);
       }
       if (s.controller) {
         try { s.controller.abort(); } catch (_) {}
       }
     }
-    const removeSet = new Set(list.map(function (s) { return s.id; }));
+    if (failedRollbacks.length > 0) {
+      toast(failedRollbacks.length + ' 个页签回滚失败，已保留原页签与事务状态', 'err');
+    }
+    const removeSet = new Set(successfullyClosed.map(function (s) { return s.id; }));
     state.sessions = state.sessions.filter(function (s) { return !removeSet.has(s.id); });
     if (!state.sessions.length) {
       const fresh = createSession('');
@@ -297,22 +319,23 @@
       state.activeId = fresh.id;
       renderTabs();
       restoreSessionChrome(fresh);
+      backupDBSessions({ delay: 500 });
       return;
     }
-    if (targetActiveId && state.sessions.some(function (s) { return s.id === targetActiveId; })) {
-      switchSession(targetActiveId);
-    } else {
-      const next = state.sessions[0];
-      state.activeId = next.id;
-      if (next.type === 'object') {
-        renderTabs();
-        renderObjectViewer(next);
-      } else {
-        hideObjectSession();
-        renderTabs();
-        restoreSessionChrome(next);
-      }
+    let nextActive = state.sessions.find(function (s) { return s.id === targetActiveId; });
+    if (!nextActive) {
+      nextActive = state.sessions.find(function (s) { return s.id === state.activeId; }) || state.sessions[0];
     }
+    state.activeId = nextActive.id;
+    if (nextActive.type === 'object') {
+      renderTabs();
+      renderObjectViewer(nextActive);
+    } else {
+      hideObjectSession();
+      renderTabs();
+      restoreSessionChrome(nextActive);
+    }
+    backupDBSessions({ delay: 500 });
   }
   function closeSessionsLeft(tabId) {
     const idx = state.sessions.findIndex(function (s) { return s.id === tabId; });
@@ -363,6 +386,7 @@
     host.ondblclick = function (e) {
       if (e.target.closest('.db-editor-tab') || e.target.closest('button')) return;
       e.preventDefault();
+      e.stopPropagation();
       addSession();
     };
     const bar = host.parentElement;
@@ -376,16 +400,20 @@
     }
   }
   function addSession() {
-    saveEditorSQL();
+    if (state.sessions.length >= 50) {
+      toast('已达到最大页签上限 (50 个)', 'warn');
+      return;
+    }
+    saveEditorSQL(state.activeId);
     const s = createSession('');
     state.sessions.push(s);
     switchSession(s.id);
-    backupDBSessions({ delay: 1000 });
+    backupDBSessions({ delay: 500 });
   }
   function switchSession(id) {
     if (id === state.activeId) return;
     hideComplete();
-    saveEditorSQL();
+    saveEditorSQL(state.activeId);
     const s = state.sessions.find(function (x) { return x.id === id; });
     if (!s) return;
     cancelGridPaint();
@@ -406,7 +434,7 @@
       return;
     }
     restoreSessionChrome(s);
-    backupDBSessions({ delay: 2000 });
+    backupDBSessions({ delay: 1000 });
   }
   async function closeSession(id) {
     if (state.sessions.length <= 1) return;
@@ -415,7 +443,7 @@
     const dying = state.sessions[index];
     if (dying.transactionBusy) return toast('事务操作进行中，请稍后关闭页签', 'warn');
     if (dying.controller) { dying.controller.abort(); return toast('正在取消查询，请查询结束后再关闭页签', 'info'); }
-    if (id === state.activeId) saveEditorSQL();
+    if (id === state.activeId) saveEditorSQL(id);
     const dirtyCount = Object.keys(dying.dirtyCells || {}).length;
     const hasTransaction = !!dying.transactionPending;
     if ((dirtyCount || hasTransaction) && !confirm('关闭该页签将回滚未提交事务' + (dirtyCount ? '并放弃 ' + dirtyCount + ' 处网格修改' : '') + '，确定继续吗？')) return;
@@ -433,23 +461,23 @@
     state.sessions.splice(index, 1);
     const next = state.sessions[Math.min(index, state.sessions.length - 1)];
     state.activeId = next.id;
-    backupDBSessions({ delay: 1000 });
     if (next.type === 'object') {
       renderTabs();
       renderObjectViewer(next);
-      return;
-    }
-    hideObjectSession();
-    const nextSource = next.sourceId ? state.sources.find(function (x) { return x.id === next.sourceId; }) : null;
-    if (nextSource && (!state.source || state.source.id !== nextSource.id)) {
-      state.source = nextSource;
-      const select = q('db-source');
-      if (select) select.value = nextSource.id;
-      renderWorkspace(true);
     } else {
-      renderTabs();
-      restoreSessionChrome(next);
+      hideObjectSession();
+      const nextSource = next.sourceId ? state.sources.find(function (x) { return x.id === next.sourceId; }) : null;
+      if (nextSource && (!state.source || state.source.id !== nextSource.id)) {
+        state.source = nextSource;
+        const select = q('db-source');
+        if (select) select.value = nextSource.id;
+        renderWorkspace(true);
+      } else {
+        renderTabs();
+        restoreSessionChrome(next);
+      }
     }
+    backupDBSessions({ delay: 500 });
   }
   function hideObjectSession() {
     const viewer = q('db-object-viewer');
@@ -855,27 +883,46 @@
     return String(v).trim().replace(/^[`"]+|[`"]+$/g, '');
   }
 
-  function detectTableName() {
+  function detectTableTarget() {
     const target = getGridContext();
     if (target && target.table) {
       let t = cleanIdent(target.table);
-      if (t.indexOf('.') >= 0) t = t.split('.').pop();
-      t = cleanIdent(t);
-      if (t && t !== 'TARGET_TABLE') return t;
+      if (t.indexOf('.') >= 0) {
+        const parts = t.split('.');
+        const s = cleanIdent(parts[0]);
+        const tbl = cleanIdent(parts[1]);
+        return { schema: s, table: tbl, fullTable: s + '.' + tbl };
+      }
+      const schema = target.schema || currentSchema();
+      return { schema: schema, table: t, fullTable: schema ? schema + '.' + t : t };
     }
     const sql = (sess() && sess().lastSQL) || state.lastSQL || '';
     if (sql) {
       const m = sql.match(/\bFROM\s+([^\s,;()]+)/i);
       if (m && m[1]) {
         let raw = cleanIdent(m[1]);
-        if (raw.indexOf('.') >= 0) raw = raw.split('.').pop();
-        raw = cleanIdent(raw);
-        if (raw && raw !== 'TARGET_TABLE') return raw;
+        if (raw.indexOf('.') >= 0) {
+          const parts = raw.split('.');
+          const s = cleanIdent(parts[0]);
+          const tbl = cleanIdent(parts[1]);
+          return { schema: s, table: tbl, fullTable: s + '.' + tbl };
+        }
+        const s = currentSchema();
+        return { schema: s, table: raw, fullTable: s ? s + '.' + raw : raw };
       }
     }
     const s = sess();
-    if (s && s.objectName) return cleanIdent(s.objectName);
-    return 'TARGET_TABLE';
+    if (s && s.objectName) {
+      const raw = cleanIdent(s.objectName);
+      const schema = currentSchema();
+      return { schema: schema, table: raw, fullTable: schema ? schema + '.' + raw : raw };
+    }
+    return { schema: currentSchema(), table: 'TARGET_TABLE', fullTable: 'TARGET_TABLE' };
+  }
+
+  function detectTableName() {
+    const target = detectTableTarget();
+    return target && target.table ? target.table : 'TARGET_TABLE';
   }
 
   function sqlValueLiteral(val, dbType) {
@@ -919,12 +966,17 @@
 
   state.tablePKCache = state.tablePKCache || {};
   async function getTablePrimaryKeys(tableName) {
-    if (!tableName || tableName === 'TARGET_TABLE') return [];
-    const target = getGridContext();
-    if (!target) return [];
-    const schema = target.schema, obj = target.table;
+    const target = detectTableTarget();
     const source = effectiveSource();
     if (!source) return [];
+    let schema = target.schema || currentSchema();
+    let obj = (tableName && tableName !== 'TARGET_TABLE') ? tableName : target.table;
+    if (!obj || obj === 'TARGET_TABLE') return [];
+    if (obj.indexOf('.') >= 0) {
+      const parts = obj.split('.');
+      schema = cleanIdent(parts[0]);
+      obj = cleanIdent(parts[1]);
+    }
     const cacheKey = JSON.stringify([source.id, schema, obj]);
     if (state.tablePKCache[cacheKey]) return state.tablePKCache[cacheKey];
     try {
@@ -937,9 +989,43 @@
     }
   }
 
-  function buildWhereClause(row, pks) {
+  async function executeQuickQuery(sourceId, sql) {
+    try {
+      const res = await fetch('/api/database/query', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source_id: sourceId, sql: sql, max_rows: 1, fast: true })
+      });
+      if (!res.ok) return null;
+      const text = await res.text();
+      let cols = [];
+      let rows = [];
+      const lines = text.split('\n');
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim();
+        if (!line) continue;
+        try {
+          const ev = JSON.parse(line);
+          if (ev.type === 'meta') cols = ev.columns || [];
+          if (ev.type === 'rows' && ev.rows) rows.push(...ev.rows);
+        } catch (_) {}
+      }
+      return { cols, rows };
+    } catch (_) {
+      return null;
+    }
+  }
+
+  async function buildWhereClause(row, pks, tableName, rowIdx) {
+    tableName = tableName || detectTableName();
+    if ((!pks || !pks.length) && tableName && tableName !== 'TARGET_TABLE') {
+      pks = await getTablePrimaryKeys(tableName);
+    }
+    // 1. 若表定义了主键约束：
     if (pks && pks.length) {
       const matched = [];
+      const missingPKs = [];
       for (const pk of pks) {
         const colIdx = state.columns.findIndex(c => cleanIdent(c.name).toUpperCase() === cleanIdent(pk).toUpperCase());
         if (colIdx >= 0) {
@@ -947,17 +1033,76 @@
           const v = row[colIdx];
           if (v === null || v === undefined) matched.push(colName + ' IS NULL');
           else matched.push(colName + ' = ' + sqlValueLiteral(v, state.columns[colIdx].database_type));
+        } else {
+          missingPKs.push(pk);
         }
       }
+      // 1.1 若查询结果包含完整主键列，严格仅以主键为 WHERE 条件
       if (matched.length === pks.length) {
         return matched.join(' AND ');
       }
+      // 1.2 若 SELECT 只有部分字段、未投影主键列（用户核心诉求 1）：
+      // 优先读取行上缓存的主键
+      if (row && row._pks) {
+        const cachedMatched = [];
+        for (const pk of pks) {
+          const cleanPk = cleanIdent(pk);
+          if (row._pks[cleanPk] !== undefined) {
+            const v = row._pks[cleanPk];
+            if (v === null || v === undefined) cachedMatched.push(cleanPk + ' IS NULL');
+            else cachedMatched.push(cleanPk + ' = ' + sqlValueLiteral(v));
+          }
+        }
+        if (cachedMatched.length === pks.length) {
+          return cachedMatched.join(' AND ');
+        }
+      }
+      // 依据当前行已知字段动态回查基表对应主键
+      const source = effectiveSource();
+      if (source && tableName && tableName !== 'TARGET_TABLE') {
+        const target = detectTableTarget();
+        const fullTable = target.fullTable || tableName;
+        const rowConditions = visibleColumns().map(i => {
+          const colName = cleanIdent(state.columns[i].name);
+          const v = row[i];
+          if (v === null || v === undefined) return colName + ' IS NULL';
+          return colName + ' = ' + sqlValueLiteral(v, state.columns[i].database_type);
+        }).join(' AND ');
+
+        let pkQuery = 'SELECT ' + pks.map(cleanIdent).join(', ') + ' FROM ' + fullTable;
+        if (rowConditions) pkQuery += ' WHERE ' + rowConditions;
+        if (source.kind === 'oracle') {
+          pkQuery += (rowConditions ? ' AND ' : ' WHERE ') + 'ROWNUM <= 1';
+        } else {
+          pkQuery += ' LIMIT 1';
+        }
+
+        const res = await executeQuickQuery(source.id, pkQuery);
+        if (res && res.rows && res.rows.length > 0) {
+          const fetchedRow = res.rows[0];
+          row._pks = row._pks || {};
+          const dbMatched = [];
+          pks.forEach((pk, idx) => {
+            const val = fetchedRow[idx];
+            row._pks[cleanIdent(pk)] = val;
+            if (val === null || val === undefined) dbMatched.push(cleanIdent(pk) + ' IS NULL');
+            else dbMatched.push(cleanIdent(pk) + ' = ' + sqlValueLiteral(val, res.cols[idx] ? res.cols[idx].database_type : ''));
+          });
+          if (dbMatched.length === pks.length) {
+            return dbMatched.join(' AND ');
+          }
+        }
+      }
     }
+
+    // 2. Oracle 物理行 ROWID 检查
     const rowidIdx = state.columns.findIndex(c => cleanIdent(c.name).toUpperCase() === 'ROWID');
     if (rowidIdx >= 0 && row[rowidIdx]) {
       return 'ROWID = ' + sqlValueLiteral(row[rowidIdx], state.columns[rowidIdx].database_type);
     }
-    const table = detectTableName();
+
+    // 3. 查找常规 ID 列
+    const table = tableName || detectTableName();
     const idIdx = state.columns.findIndex(c => {
       const upper = cleanIdent(c.name).toUpperCase();
       return upper === 'ID' || upper === table.toUpperCase() + '_ID';
@@ -965,6 +1110,8 @@
     if (idIdx >= 0 && row[idIdx] != null) {
       return cleanIdent(state.columns[idIdx].name) + ' = ' + sqlValueLiteral(row[idIdx], state.columns[idIdx].database_type);
     }
+
+    // 4. 兜底匹配行原值
     const conditions = visibleColumns().map(i => {
       const colName = cleanIdent(state.columns[i].name);
       const v = row[i];
@@ -983,9 +1130,24 @@
     const val = dirty ? dirty.newVal : row[colIdx];
     const valLit = sqlValueLiteral(val, state.columns[colIdx].database_type);
     const pks = await getTablePrimaryKeys(table);
-    const whereClause = buildWhereClause(row, pks);
+    const whereClause = await buildWhereClause(row, pks, table, rowIdx);
     const updateSQL = 'UPDATE ' + table + ' SET ' + colName + ' = ' + valLit + ' WHERE ' + whereClause + ';';
     copyDBText(updateSQL, '已复制 UPDATE 语句到剪贴板');
+  }
+
+  async function copyColsAsUpdate(rowIdx, colIndices) {
+    const row = state.rows[rowIdx];
+    if (!row || !colIndices || !colIndices.length) return;
+    const table = detectTableName();
+    const pks = await getTablePrimaryKeys(table);
+    const setClauses = colIndices.map(i => {
+      const dirty = state.dirtyCells && state.dirtyCells[rowIdx + '_' + i];
+      const val = dirty ? dirty.newVal : row[i];
+      return cleanIdent(state.columns[i].name) + ' = ' + sqlValueLiteral(val, state.columns[i].database_type);
+    }).join(', ');
+    const whereClause = await buildWhereClause(row, pks, table, rowIdx);
+    const updateSQL = 'UPDATE ' + table + ' SET ' + setClauses + ' WHERE ' + whereClause + ';';
+    copyDBText(updateSQL, '已复制 ' + colIndices.length + ' 列 UPDATE 语句到剪贴板');
   }
 
   async function copyRowAsUpdate(rowIdx) {
@@ -1001,7 +1163,7 @@
       const val = dirty ? dirty.newVal : row[i];
       return cleanIdent(state.columns[i].name) + ' = ' + sqlValueLiteral(val, state.columns[i].database_type);
     }).join(', ');
-    const whereClause = buildWhereClause(row, pks);
+    const whereClause = await buildWhereClause(row, pks, table, rowIdx);
     const updateSQL = 'UPDATE ' + table + ' SET ' + setClauses + ' WHERE ' + whereClause + ';';
     copyDBText(updateSQL, '已复制整行 UPDATE 语句到剪贴板');
   }
@@ -1019,7 +1181,7 @@
       const val = dirty ? dirty.newVal : row[i];
       return cleanIdent(state.columns[i].name) + ' = ' + sqlValueLiteral(val, state.columns[i].database_type);
     }).join(', ');
-    const whereClause = buildWhereClause(row, pks);
+    const whereClause = await buildWhereClause(row, pks, table, rowIdx);
     const content = '-- Exported from Kairo Database Workbench\nUPDATE ' + table + ' SET ' + setClauses + ' WHERE ' + whereClause + ';\nCOMMIT;\n';
     downloadBlob(new Blob([content], { type: 'text/sql;charset=utf-8' }), table + '_row_' + (rowIdx + 1) + '_update.sql');
   }
@@ -1177,11 +1339,11 @@
         loadPreview(q('db-lob-big-preview'));
       }
     } else {
-      const hasContent = Boolean(val.hex || val.preview_base64);
+      const hasContent = !!val.loaded || (val.hex !== undefined && val.hex !== null) || (val.preview_base64 !== undefined && val.preview_base64 !== null);
       if (hasContent) {
         const hex = String(val.hex || '');
         const b64 = String(val.preview_base64 || '');
-        body.innerHTML = '<div class="db-lob-toolbar"><span class="muted">共 ' + (val.bytes || (hex.length / 2)) + ' 字节 ' + truncNote + '</span><button class="btn btn-xs" id="db-lob-copy-hex">复制 Hex</button><button class="btn btn-xs" id="db-lob-download-bin">下载预览</button><button class="btn btn-primary btn-xs" id="db-lob-full-blob">下载完整内容</button></div><div class="db-lob-hex-view" id="db-lob-hex"></div><div class="muted" style="margin-top:6px;font-size:11px">下载引用在 5 分钟后过期，过期后请重新查询。</div>';
+        body.innerHTML = '<div class="db-lob-toolbar"><span class="muted">共 ' + (val.bytes != null ? val.bytes : (hex.length / 2)) + ' 字节 ' + truncNote + '</span><button class="btn btn-xs" id="db-lob-copy-hex">复制 Hex</button><button class="btn btn-xs" id="db-lob-download-bin">下载预览</button><button class="btn btn-primary btn-xs" id="db-lob-full-blob">下载完整内容</button></div><div class="db-lob-hex-view" id="db-lob-hex"></div><div class="muted" style="margin-top:6px;font-size:11px">下载引用在 5 分钟后过期，过期后请重新查询。</div>';
         const dlg = Kairo.overlays.modal({ title, width: 900, body });
         renderHexDump(q('db-lob-hex'), hex, b64);
         if (q('db-lob-copy-hex')) q('db-lob-copy-hex').onclick = () => copyDBText(hex, '十六进制数据已复制');
@@ -1216,11 +1378,15 @@
           '<div class="db-lob-hex-view" id="db-lob-hex" style="display:none;"></div>' +
           '<div class="muted" style="margin-top:6px;font-size:11px">下载引用在 5 分钟后过期，过期后请重新查询。</div>';
         let closedByUser = false;
+        const abortCtrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
         const dlg = Kairo.overlays.modal({
           title,
           width: 900,
           body,
-          onClose: () => { closedByUser = true; }
+          onClose: () => {
+            closedByUser = true;
+            if (abortCtrl) { try { abortCtrl.abort(); } catch (_) {} }
+          }
         });
         const loadBlobPreview = async (btn) => {
           if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner" style="vertical-align:middle;margin-right:6px;"></span>正在流式加载预览…'; }
@@ -1229,11 +1395,13 @@
           const resolved = await resolveLobPayload(rowIdx, colIdx, colName, isClob, val);
           if (!resolved) { if (btn) { btn.disabled = false; btn.textContent = '重试在线预览'; } return; }
           try {
-            const resp = await fetch('/api/database/lob', {
+            const fetchOpts = {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify(resolved.payload)
-            });
+            };
+            if (abortCtrl && abortCtrl.signal) fetchOpts.signal = abortCtrl.signal;
+            const resp = await fetch('/api/database/lob', fetchOpts);
             if (!resp.ok) {
               let msg = '加载预览失败：HTTP ' + resp.status;
               try { const j = await resp.json(); if (j && j.error) msg = j.error; } catch (_) {}
@@ -1279,6 +1447,7 @@
             for (let i = 0; i < allBytes.length; i++) {
               hex += allBytes[i].toString(16).padStart(2, '0');
             }
+            val.loaded = true;
             val.hex = hex;
             let binStr = '';
             for (let i = 0; i < allBytes.length; i++) binStr += String.fromCharCode(allBytes[i]);
@@ -1288,6 +1457,7 @@
             openLobModal(val, colName, rowIdx, colIdx);
             toast('BLOB 预览已加载', 'ok');
           } catch (e) {
+            if (e.name === 'AbortError' || closedByUser) return;
             toast('加载异常：' + (e && e.message ? e.message : e), 'err');
             if (btn) { btn.disabled = false; btn.textContent = '重试在线预览'; }
           }
@@ -1438,6 +1608,10 @@
       for (let i = 0; i < hexStr.length; i += 2) {
         rawBytes.push(parseInt(hexStr.substr(i, 2), 16));
       }
+    }
+    if (!rawBytes.length) {
+      host.innerHTML = '<div class="muted" style="padding:16px;text-align:center;">（0 字节空二进制内容）</div>';
+      return;
     }
     let lines = [];
     const chunkSize = 16;
@@ -1655,6 +1829,7 @@
     if (!current || current.transactionBusy) return;
     if (current.outcomeUnknown) {
       current.outcomeUnknown = false;
+      current.transactionId = typeof newTransactionID === 'function' ? newTransactionID() : ('tx-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8));
       current.transactionPending = false;
       current.gridEditsStaged = false;
       current.dirtyCells = {};
@@ -1663,9 +1838,9 @@
       if (sess() === current) {
         bindSession(current);
         refreshVisibleResult(true);
-        showQueryMessage('ok', '状态已重置', '本地未提交修改已丢弃，未知状态标记已清除。');
+        showQueryMessage('ok', '状态已重置', '本地未提交修改已丢弃，未知状态标记已清除，已切换为新事务上下文。');
       }
-      toast('本地状态已重置', 'ok');
+      toast('本地状态已重置为新事务上下文', 'ok');
       updateTransactionControls();
       return;
     }
@@ -1695,7 +1870,9 @@
   /* 会话定时自动备份与防丢（Tab 保活：后台 Tab 也要继续备份，
      只在 Tab 关闭时停。旧的一次性 hashchange 会在首次切走后永久停掉备份。） */
   let lastLocalBackupFingerprint = '';
-  let lastRemoteBackupFingerprint = '';
+  let acknowledgedRemoteFingerprint = '';
+  let inFlightRemoteFingerprint = null;
+  let hasPendingRemoteFlush = false;
   let remoteBackupTimer = null;
 
   window.addEventListener('kairo:tab-close', function (ev) {
@@ -1710,23 +1887,37 @@
   });
 
   function serializeDBSessions() {
-    saveEditorSQL();
     return {
       activeId: state.activeId,
       tabSeq: tabSeq,
       sourceId: state.source ? state.source.id : '',
       editorHeight: Math.round(Number(persisted.editor_height) || 0),
       metaCollapsed: !!persisted.meta_collapsed,
-      sessions: (state.sessions || []).map(x => ({
-        id: x.id,
-        sql: x.sql || '',
-        sourceId: x.sourceId || '',
-        transactionId: x.transactionId || '',
-        transactionPending: !!x.transactionPending,
-        gridEditsStaged: !!x.gridEditsStaged,
-        page: x.page || 1,
-        pageSize: x.pageSize || 20
-      }))
+      sessions: (state.sessions || []).slice(0, 50).map(x => {
+        if (x.type === 'object') {
+          return {
+            id: x.id,
+            type: 'object',
+            schema: x.schema || '',
+            objectName: x.objectName || '',
+            objectType: x.objectType || 'TABLE',
+            sourceId: x.sourceId || '',
+            page: 1,
+            pageSize: 20
+          };
+        }
+        return {
+          id: x.id,
+          type: 'query',
+          sql: x.sql || '',
+          sourceId: x.sourceId || '',
+          transactionId: x.transactionId || '',
+          transactionPending: !!x.transactionPending,
+          gridEditsStaged: !!x.gridEditsStaged,
+          page: x.page || 1,
+          pageSize: x.pageSize || 20
+        };
+      })
     };
   }
 
@@ -1737,22 +1928,26 @@
 
     // 1. 本地 localStorage 保存：当数据变更或强制保存时，快速写入本地，防断电/崩盘
     if (opts.forceLocal || fingerprint !== lastLocalBackupFingerprint) {
-      lastLocalBackupFingerprint = fingerprint;
       try {
         const full = Object.assign({}, data, { updatedAt: Date.now() });
         localStorage.setItem('kairo_db_sessions_backup', JSON.stringify(full));
+        lastLocalBackupFingerprint = fingerprint;
       } catch (_) {}
     }
 
     // 2. 远端服务器备份：
-    // 若会话内容相对上次远程同步未发生任何改变，直接跳过网络请求，彻底消除定时重复发包！
-    if (fingerprint === lastRemoteBackupFingerprint) {
+    // 若当前内容与上次服务端已确认指纹一致，取消待发防抖任务并清理挂起
+    if (fingerprint === acknowledgedRemoteFingerprint) {
+      if (remoteBackupTimer) {
+        clearTimeout(remoteBackupTimer);
+        remoteBackupTimer = null;
+      }
       return;
     }
 
     // 立即同步（如页面关闭前、切出前）
     if (opts.immediate) {
-      flushRemoteDBSessionsBackup(data, fingerprint);
+      flushRemoteDBSessionsBackup();
       return;
     }
 
@@ -1761,20 +1956,24 @@
     const delay = typeof opts.delay === 'number' ? opts.delay : 3000;
     remoteBackupTimer = setTimeout(() => {
       remoteBackupTimer = null;
-      flushRemoteDBSessionsBackup(data, fingerprint);
+      flushRemoteDBSessionsBackup();
     }, delay);
   }
 
-  function flushRemoteDBSessionsBackup(data, fingerprint) {
+  function flushRemoteDBSessionsBackup() {
     if (remoteBackupTimer) {
       clearTimeout(remoteBackupTimer);
       remoteBackupTimer = null;
     }
-    data = data || serializeDBSessions();
-    fingerprint = fingerprint || JSON.stringify(data);
-    if (fingerprint === lastRemoteBackupFingerprint) return;
+    if (inFlightRemoteFingerprint !== null) {
+      hasPendingRemoteFlush = true;
+      return;
+    }
+    const data = serializeDBSessions();
+    const fingerprint = JSON.stringify(data);
+    if (fingerprint === acknowledgedRemoteFingerprint) return;
 
-    lastRemoteBackupFingerprint = fingerprint;
+    inFlightRemoteFingerprint = fingerprint;
     const payload = Object.assign({}, data, { updatedAt: Date.now() });
     try {
       fetch('/api/database/sessions/backup', {
@@ -1782,13 +1981,49 @@
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
-      }).catch(() => {});
-    } catch (_) {}
+      })
+      .then(res => {
+        if (res.ok) {
+          acknowledgedRemoteFingerprint = fingerprint;
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        inFlightRemoteFingerprint = null;
+        if (hasPendingRemoteFlush) {
+          hasPendingRemoteFlush = false;
+          flushRemoteDBSessionsBackup();
+        }
+      });
+    } catch (_) {
+      inFlightRemoteFingerprint = null;
+    }
   }
 
   function restoreLocalDBSessions(data) {
     if (!data || !data.sessions || !data.sessions.length) return false;
-    state.sessions = data.sessions.map(saved => {
+    state.sessions = data.sessions.slice(0, 50).map(saved => {
+      if (saved.type === 'object') {
+        const objSession = {
+          id: saved.id,
+          type: 'object',
+          schema: saved.schema || '',
+          objectName: saved.objectName || '',
+          objectType: (saved.objectType || 'TABLE').toUpperCase(),
+          inspectTab: 'fields',
+          inspectData: null,
+          inspectLoading: false,
+          inspectError: null,
+          fieldFilter: '',
+          sourceId: saved.sourceId || '',
+          sourceRef: null
+        };
+        const sourceExists = saved.sourceId && state.sources.some(s => s.id === saved.sourceId);
+        objSession.sourceId = sourceExists ? saved.sourceId : (state.source ? state.source.id : '');
+        const srcObj = state.sources.find(s => s.id === objSession.sourceId);
+        if (srcObj) bindSessionSource(objSession, srcObj);
+        return objSession;
+      }
       const session = createSession(saved.sql);
       session.id = saved.id;
       const sourceExists = saved.sourceId && state.sources.some(s => s.id === saved.sourceId);
@@ -1807,10 +2042,9 @@
     if (data.editorHeight) persisted.editor_height = data.editorHeight;
     if (data.metaCollapsed !== undefined) persisted.meta_collapsed = data.metaCollapsed;
 
-    // 恢复成功后将当前快照记录为已同步，防止初次加载页面时立刻向服务器发出无意义备份请求
+    // 纯模型指纹记录本地已存
     const currentFp = JSON.stringify(serializeDBSessions());
     lastLocalBackupFingerprint = currentFp;
-    lastRemoteBackupFingerprint = currentFp;
     return true;
   }
 
@@ -1830,6 +2064,8 @@
           const sessData = remote && (remote.session || remote);
           if (sessData && sessData.sessions && sessData.sessions.length) {
             if (restoreLocalDBSessions(sessData)) {
+              const currentFp = JSON.stringify(serializeDBSessions());
+              acknowledgedRemoteFingerprint = currentFp;
               bindSession(sess());
               restoreSessionChrome(sess());
             }
@@ -1837,7 +2073,7 @@
             // 服务端无历史，标记当前状态为已同步，避免刚打开就发空备份
             const initialFp = JSON.stringify(serializeDBSessions());
             lastLocalBackupFingerprint = initialFp;
-            lastRemoteBackupFingerprint = initialFp;
+            acknowledgedRemoteFingerprint = initialFp;
           }
         })
         .catch(() => {});
@@ -2677,6 +2913,18 @@
     q('db-view-grid').onclick = () => setResultMode('grid');
     q('db-view-record').onclick = () => setResultMode('record');
     q('db-view-plan').onclick = () => setResultMode('plan');
+    const resultGrid = q('db-result-grid');
+    if (resultGrid) {
+      resultGrid.addEventListener('wheel', function (e) {
+        if (e.ctrlKey && Math.abs(e.deltaY) > 0) {
+          const sc = resultGrid.querySelector('.db-table-scroll') || resultGrid.querySelector('.db-plan-table-wrap');
+          if (sc && sc.scrollWidth > sc.clientWidth) {
+            e.preventDefault();
+            sc.scrollLeft += e.deltaY;
+          }
+        }
+      }, { passive: false });
+    }
     q('db-result-filter').oninput = debounce(function () {
       state.localFilter = this.value;
       const s = sess();
@@ -3919,6 +4167,7 @@
     const prevSQL = s.lastSQL;
     s.sql = q('db-sql') ? q('db-sql').value : sql;
     s.lastSQL = sql;
+    s.executedSQL = sql;
     s.resultSchema = currentSchema();
     s.lastMaxRows = maxRows;
     s.pageSize = maxRows;
@@ -3928,7 +4177,6 @@
     s.columns = [];
     s.summary = null;
     s.lastError = null;
-    s.outcomeUnknown = false;
     s.sort = null;
     s.hiddenColumns = new Set();
     s.selectedRow = 0;
@@ -3951,7 +4199,7 @@
     pushHistory(sql);
     s.runId = 'run-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
     if (Kairo.databaseFeatures && typeof Kairo.databaseFeatures.recordQueryStart === 'function') {
-      Kairo.databaseFeatures.recordQueryStart(sql, s.runId);
+      Kairo.databaseFeatures.recordQueryStart(sql, s.runId, { sourceId: querySource.id, sourceName: querySource.name, dialect: querySource.kind });
     }
     // 内核兼容：IE/极老核无 AbortController/fetch 时给明确提示而非首行抛错
     if (typeof fetch !== 'function') {
@@ -4023,8 +4271,9 @@
       if (s.runSeq !== seq) return;
       if (Kairo.databaseFeatures && typeof Kairo.databaseFeatures.recordQueryResult === 'function') {
         Kairo.databaseFeatures.recordQueryResult(s.runId, {
-          sql: sql,
-          status: 'error',
+          sql: s.executedSQL || sql,
+          sourceId: querySource ? querySource.id : s.sourceId,
+          status: e.name === 'AbortError' ? 'canceled' : 'error',
           error: e.name === 'AbortError' ? '已取消' : (e.message || '查询失败')
         });
       }
@@ -4171,7 +4420,8 @@
       s.status = e.message || '执行成功';
       if (Kairo.databaseFeatures && typeof Kairo.databaseFeatures.recordQueryResult === 'function') {
         Kairo.databaseFeatures.recordQueryResult(s.runId, {
-          sql: s.sql || s.lastSQL,
+          sql: s.executedSQL || s.lastSQL || s.sql,
+          sourceId: s.sourceId,
           status: 'success',
           elapsedMs: (e.summary && e.summary.elapsed_ms != null) ? e.summary.elapsed_ms : (s.startTime ? Math.round(performance.now() - s.startTime) : 0),
           rows: (e.summary && e.summary.rows_affected != null) ? e.summary.rows_affected : 0
@@ -4202,7 +4452,8 @@
       s.status = e.summary.rows + ' 行 · ' + timingStr + (e.summary.retry_count ? ' · 已自动重连' : '') + (e.summary.ordered === false ? ' · 未指定 ORDER BY' : '') + (e.summary.truncated ? ' · 已截断' : '');
       if (Kairo.databaseFeatures && typeof Kairo.databaseFeatures.recordQueryResult === 'function') {
         Kairo.databaseFeatures.recordQueryResult(s.runId, {
-          sql: s.sql || s.lastSQL,
+          sql: s.executedSQL || s.lastSQL || s.sql,
+          sourceId: s.sourceId,
           status: 'success',
           elapsedMs: e.summary.elapsed_ms,
           rows: e.summary.rows
@@ -4367,14 +4618,46 @@
     applyGridHeight();
   }
   let isSyncingScroll = false;
-  function selectGridColumn(colIdx) {
-    state.colSelected = colIdx;
+  function isColSelected(i) {
+    return (state.selectedCols && state.selectedCols.has(i)) || state.colSelected === i;
+  }
+  function selectGridColumn(colIdx, isMulti, isRange) {
+    if (!state.selectedCols) state.selectedCols = new Set();
+    if (colIdx == null || colIdx < 0) {
+      state.selectedCols.clear();
+      state.colSelected = -1;
+      state.lastColSelected = -1;
+    } else if (isRange && state.lastColSelected >= 0) {
+      const min = Math.min(state.lastColSelected, colIdx);
+      const max = Math.max(state.lastColSelected, colIdx);
+      state.selectedCols.clear();
+      for (let i = min; i <= max; i++) {
+        state.selectedCols.add(i);
+      }
+      state.colSelected = colIdx;
+    } else if (isMulti) {
+      if (state.selectedCols.has(colIdx)) {
+        state.selectedCols.delete(colIdx);
+        state.colSelected = state.selectedCols.size > 0 ? Array.from(state.selectedCols)[state.selectedCols.size - 1] : -1;
+      } else {
+        state.selectedCols.add(colIdx);
+        state.colSelected = colIdx;
+      }
+      state.lastColSelected = colIdx;
+    } else {
+      state.selectedCols.clear();
+      state.selectedCols.add(colIdx);
+      state.colSelected = colIdx;
+      state.lastColSelected = colIdx;
+    }
     state.selectedCol = colIdx >= 0 ? colIdx : state.selectedCol;
     const grid = q('db-result-grid');
     if (!grid) return;
     grid.querySelectorAll('th.col-selected, td.col-selected').forEach(el => el.classList.remove('col-selected'));
-    if (colIdx != null && colIdx >= 0) {
-      grid.querySelectorAll('th[data-col="' + colIdx + '"], td[data-col="' + colIdx + '"]').forEach(el => el.classList.add('col-selected'));
+    if (state.selectedCols && state.selectedCols.size > 0) {
+      state.selectedCols.forEach(c => {
+        grid.querySelectorAll('th[data-col="' + c + '"], td[data-col="' + c + '"]').forEach(el => el.classList.add('col-selected'));
+      });
     }
   }
   function bindGridHeaders(grid) {
@@ -4390,17 +4673,23 @@
     grid.querySelectorAll('.db-col-name[data-col]').forEach(btn => {
       btn.onclick = e => {
         e.stopPropagation();
-        selectGridColumn(Number(btn.dataset.col));
+        selectGridColumn(Number(btn.dataset.col), e.ctrlKey || e.metaKey, e.shiftKey);
       };
     });
     grid.querySelectorAll('th[data-col]').forEach(th => {
       th.onclick = e => {
         if (e.target.closest('.db-col-sort-btn') || e.target.closest('.db-col-resizer')) return;
-        selectGridColumn(Number(th.dataset.col));
+        selectGridColumn(Number(th.dataset.col), e.ctrlKey || e.metaKey, e.shiftKey);
       };
       th.oncontextmenu = e => {
         e.preventDefault();
-        openResultMenu(e.clientX, e.clientY, Number(th.dataset.col), null);
+        const col = Number(th.dataset.col);
+        if (!state.selectedCols || !state.selectedCols.has(col)) {
+          if (!e.ctrlKey && !e.metaKey) {
+            selectGridColumn(col, false, false);
+          }
+        }
+        openResultMenu(e.clientX, e.clientY, col, null);
       };
     });
     const numTh = grid.querySelector('th.num');
@@ -4413,6 +4702,15 @@
     const topScroll = grid.querySelector('.db-table-top-scroll');
     const scroll = grid.querySelector('.db-table-scroll');
     if (!topScroll || !scroll) return;
+
+    function onTableCtrlWheel(e) {
+      if (e.ctrlKey && Math.abs(e.deltaY) > 0) {
+        e.preventDefault();
+        scroll.scrollLeft += e.deltaY;
+      }
+    }
+    scroll.addEventListener('wheel', onTableCtrlWheel, { passive: false });
+    topScroll.addEventListener('wheel', onTableCtrlWheel, { passive: false });
 
     function syncVisibility() {
       const needs = scroll.scrollWidth > scroll.clientWidth;
@@ -4452,7 +4750,7 @@
       const sortBadge = isAsc ? '▲' : '▼';
       const sortCls = isSorted ? (' active' + (isAsc ? ' is-asc' : ' is-desc')) : '';
       const sortTitle = isAsc ? '当前升序，点击切换为降序' : (isDesc ? '当前降序，点击取消排序' : '点击按此列排序');
-      const thCls = state.colSelected === i ? ' class="col-selected"' : '';
+      const thCls = isColSelected(i) ? ' class="col-selected"' : '';
       return '<th data-col="' + i + '"' + thCls + ' title="' + h(c.database_type || '') + '">'
         + '<div class="db-col-header">'
         + '<button type="button" class="db-col-name" data-col="' + i + '" title="点击选中整列: ' + h(c.name) + '">' + h(c.name) + '</button>'
@@ -4476,7 +4774,7 @@
           const isDirty = state.dirtyCells && state.dirtyCells[dirtyKey];
           const cellVal = isDirty ? isDirty.newVal : row[i];
           const dirtyCls = isDirty ? ' db-cell-dirty' : '';
-          const colSelectedCls = state.colSelected === i ? ' col-selected' : '';
+          const colSelectedCls = isColSelected(i) ? ' col-selected' : '';
           const cls = (dirtyCls + colSelectedCls).trim();
           return '<td data-row="' + ri + '" data-col="' + i + '"' + (cls ? ' class="' + cls + '"' : '') + ' title="' + (state.isEditMode ? '双击行内修改此单元格' : '双击单行；右键更多操作') + '">' + fmtCell(cellVal, ri, i) + '</td>';
         }).join('') + '</tr>';
@@ -4545,15 +4843,23 @@
       }
       const td = e.target.closest('td[data-col]');
       if (td && body.contains(td)) {
-        state.selectedCol = Number(td.dataset.col);
+        const c = Number(td.dataset.col);
+        state.selectedCol = c;
+        if (e.ctrlKey || e.metaKey) {
+          selectGridColumn(c, true, false);
+        } else if (!e.shiftKey && state.selectedCols && state.selectedCols.size > 0 && !state.selectedCols.has(c)) {
+          selectGridColumn(-1);
+        }
       }
       const tr = e.target.closest('tr[data-row]');
       if (!tr || !body.contains(tr)) return;
       state.selectedRow = Number(tr.dataset.row);
       body.querySelectorAll('tr.selected').forEach(function (x) { x.classList.remove('selected'); });
       tr.classList.add('selected');
-      if (state.colSelected >= 0) {
-        selectGridColumn(-1);
+      if (!e.ctrlKey && !e.metaKey && !e.shiftKey && (!td || !td.hasAttribute('data-col'))) {
+        if (state.colSelected >= 0) {
+          selectGridColumn(-1);
+        }
       }
     });
     body.addEventListener('dblclick', function (e) {
@@ -4576,14 +4882,20 @@
       const td = e.target.closest('td[data-col]');
       if (!td || !body.contains(td)) return;
       e.preventDefault();
+      const col = Number(td.dataset.col);
       state.selectedRow = Number(td.dataset.row);
-      state.selectedCol = Number(td.dataset.col);
+      state.selectedCol = col;
       const tr = td.parentElement;
       if (tr) {
         body.querySelectorAll('tr.selected').forEach(function (x) { x.classList.remove('selected'); });
         tr.classList.add('selected');
       }
-      openResultMenu(e.clientX, e.clientY, Number(td.dataset.col), Number(td.dataset.row));
+      if (!state.selectedCols || !state.selectedCols.has(col)) {
+        if (!e.ctrlKey && !e.metaKey) {
+          selectGridColumn(col, false, false);
+        }
+      }
+      openResultMenu(e.clientX, e.clientY, col, Number(td.dataset.row));
     });
     body.addEventListener('keydown', function (e) {
       if (e.key === 'F2') {
@@ -4657,7 +4969,7 @@
         const dirty = state.dirtyCells && state.dirtyCells[ri + '_' + i];
         const val = dirty ? dirty.newVal : row[i];
         const dirtyCls = dirty ? ' db-cell-dirty' : '';
-        const colSelectedCls = state.colSelected === i ? ' col-selected' : '';
+        const colSelectedCls = isColSelected(i) ? ' col-selected' : '';
         const cls = (dirtyCls + colSelectedCls).trim();
         const cellTitle = state.isEditMode ? '双击编辑；右键复制或更多操作' : '双击打开单行记录；右键复制或更多操作';
         return '<td data-row="' + ri + '" data-col="' + i + '"' + (cls ? ' class="' + cls + '"' : '') + ' title="' + cellTitle + '">' + fmtCell(val, ri, i) + '</td>';
@@ -4725,12 +5037,32 @@
     closeMenus();
     const menu = el('div', { class: 'db-popup-menu', style: 'left:' + x + 'px;top:' + y + 'px' });
     const add = (text, fn) => menu.appendChild(el('button', { text, onclick: () => { fn(); menu.remove(); } }));
-    add('复制字段名', () => copyDBText(state.columns[column].name, '字段名已复制'));
+
+    // 获取当前选中的所有列索引（若用户多选了列并且右键点击的列在多选中）
+    let activeCols = [];
+    if (state.selectedCols && state.selectedCols.size > 1 && (column == null || state.selectedCols.has(column))) {
+      activeCols = Array.from(state.selectedCols).filter(ci => state.columns[ci]).sort((a, b) => a - b);
+    } else if (column != null && state.columns[column]) {
+      activeCols = [column];
+    }
+    const isMultiCol = activeCols.length > 1;
+
+    if (isMultiCol) {
+      add('复制字段名（已选 ' + activeCols.length + ' 列）', () => copyDBText(activeCols.map(i => state.columns[i].name).join(', '), '已复制 ' + activeCols.length + ' 个字段名'));
+    } else if (column != null && state.columns[column]) {
+      add('复制字段名', () => copyDBText(state.columns[column].name, '字段名已复制'));
+    }
+
     if (row != null) {
-      add('复制单元格', () => copyDBText(cellText(state.rows[row][column]), '单元格已复制'));
+      if (isMultiCol) {
+        add('复制单元格（TSV）', () => copyDBText(activeCols.map(i => cellText(state.rows[row][i])).join('\t'), '单元格已复制'));
+        add('复制为 UPDATE 语句（已选 ' + activeCols.length + ' 列）', () => copyColsAsUpdate(row, activeCols));
+      } else {
+        add('复制单元格', () => copyDBText(cellText(state.rows[row][column]), '单元格已复制'));
+        add('复制为 UPDATE 语句（单字段）', () => copyCellAsUpdate(row, column));
+      }
       add('复制整行（TSV）', () => copyRow(row, visibleColumns()));
       add('复制为 INSERT 语句', () => copyRowAsInsert(row));
-      add('复制为 UPDATE 语句（单字段）', () => copyCellAsUpdate(row, column));
       add('复制整行为 UPDATE 语句', () => copyRowAsUpdate(row));
       add('导出选中行为 INSERT (.sql)', () => exportRowAsInsertFile(row));
       add('导出选中行为 UPDATE (.sql)', () => exportRowAsUpdateFile(row));
@@ -4739,9 +5071,34 @@
         add('编辑此单元格 (F2)', () => startCellEdit(row, column));
         add('设为 SQL NULL', () => startCellEdit(row, column, null, true));
       }
+    } else {
+      // 表头右键
+      const targetRow = (state.selectedRow != null && state.rows[state.selectedRow]) ? state.selectedRow : 0;
+      if (state.rows && state.rows.length) {
+        if (isMultiCol) {
+          add('复制为 UPDATE 语句（已选 ' + activeCols.length + ' 列）', () => copyColsAsUpdate(targetRow, activeCols));
+        } else if (column != null) {
+          add('复制为 UPDATE 语句（单字段）', () => copyCellAsUpdate(targetRow, column));
+        }
+      }
     }
-    add('复制整列', () => copyDBText(filteredRows().map(i => cellText(state.rows[i][column])).join('\n'), '整列已复制'));
-    add('隐藏此列', () => { state.hiddenColumns.add(column); state.gridReady = false; renderResult(); });
+
+    if (isMultiCol) {
+      add('复制已选整列（' + activeCols.length + ' 列 TSV）', () => {
+        const lines = filteredRows().map(r => activeCols.map(c => cellText(state.rows[r][c])).join('\t'));
+        copyDBText(lines.join('\n'), '已复制选中整列');
+      });
+      add('隐藏已选列', () => {
+        activeCols.forEach(i => state.hiddenColumns.add(i));
+        selectGridColumn(-1);
+        state.gridReady = false;
+        renderResult();
+      });
+    } else if (column != null) {
+      add('复制整列', () => copyDBText(filteredRows().map(i => cellText(state.rows[i][column])).join('\n'), '整列已复制'));
+      add('隐藏此列', () => { state.hiddenColumns.add(column); selectGridColumn(-1); state.gridReady = false; renderResult(); });
+    }
+
     document.body.appendChild(menu); keepMenu(menu);
     setTimeout(() => document.addEventListener('pointerdown', closeMenus, { once: true }), 0);
   }
@@ -5299,7 +5656,10 @@
   Kairo.state.routes.database = renderDatabase;
   Kairo.state.routeNames.database = '数据库工作台';
   Kairo.state.routeSubs.database = 'Oracle 11g / MySQL / Redis · 安全只读查询';
-  Kairo.database = {
+  Kairo.database = Object.assign(Kairo.database || {}, {
+    getHistory: function () {
+      return Array.isArray(persisted.history) ? persisted.history.slice() : [];
+    },
     cancel: cancelQuery,
     hasPendingWork: hasPendingWork,
     discardPendingWork: discardPendingWork,
@@ -5333,5 +5693,5 @@
     isSnippetExpandKey: isSnippetExpandKey,
     parseSnippetsText: parseSnippetsText,
     formatSnippetsText: formatSnippetsText
-  };
+  });
 })();

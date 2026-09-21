@@ -109,6 +109,15 @@
       }
       return null;
     });
+
+    // 文本/文件比对：未保存的修改
+    T.addCloseGuard(function (tab) {
+      if (tab.route !== 'compare' || !Kairo.compare || typeof Kairo.compare.hasPendingWork !== 'function') return null;
+      if (Kairo.compare.hasPendingWork()) {
+        return '比对页面存在未保存的修改，关闭将丢失改动。确定关闭吗？';
+      }
+      return null;
+    });
   }
 
   // ---------- 导航：hash → 打开或激活 Tab（不销毁其他 Tab） ----------

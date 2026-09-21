@@ -227,15 +227,15 @@
   // §1. 核心数据看板
   // =====================================================================
   const stats = [
-    { label: '总代码量',             value: '125,000+', sub: 'Go 86K · 前端 39K (JS+CSS) · 0 npm 运行时', tone: 'primary' },
+    { label: '总代码量',             value: '171,000+', sub: 'Go 117K · 前端 54K (JS+CSS+HTML) · 0 npm 运行时', tone: 'primary' },
     { label: 'AI Token 深度算力淬炼', value: '20 亿+ (2.0B+)', sub: '多模态视觉审核 · 长程深度推理 · 测试闭环', tone: 'accent' },
-    { label: '代码行数 (Go)',         value: '86,000+',  sub: '315 个 Go 文件 · 40 个后端子包 · 含 130+ 测试', tone: 'primary' },
-    { label: '代码行数 (前端)',       value: '39,000+',  sub: 'vanilla JS 31K + CSS 8K · 22 路由页面',   tone: 'accent'  },
+    { label: '代码行数 (Go)',         value: '117,000+',  sub: '411 个 Go 文件 · 41 个后端子包 · 含 184 测试', tone: 'primary' },
+    { label: '代码行数 (前端)',       value: '54,000+',  sub: 'vanilla JS 42K + CSS 10K · 23 路由页面',   tone: 'accent'  },
     { label: '提交次数',              value: '211+',     sub: 'v0.1 → v0.20 持续演进',                  tone: 'success' },
-    { label: '后端模块',              value: '40',       sub: 'upgrade / dbconsole / comparefs / desknote 等', tone: 'primary' },
-    { label: '前端路由与组件',        value: '22+',      sub: '22 个路由页面 + Win32 原生桌面组件 + 4 独立子窗口', tone: 'accent'  },
+    { label: '后端模块',              value: '41',       sub: 'upgrade / dbconsole / comparefs / desknote 等', tone: 'primary' },
+    { label: '前端路由与组件',        value: '23',      sub: '23 个路由页面（22 导航可见 + reminders 隐藏） + Win32 原生桌面组件 + 4 独立子窗口', tone: 'accent'  },
     { label: 'API 接口',              value: '135+',     sub: 'REST + NDJSON + SSE + WebSocket 全覆盖',      tone: 'primary' },
-    { label: '测试用例 (Go)',         value: '1,150+',   sub: '130+ 个 _test.go · 单元 + 集成 + Mock',      tone: 'success' },
+    { label: '测试用例 (Go)',         value: '1,150+',   sub: '184 个 _test.go · 单元 + 集成 + Mock',      tone: 'success' },
     { label: '测试用例 (Node)',       value: '40+',      sub: 'workbench-unit + webservice + app.test 单元', tone: 'success' },
     { label: 'E2E 场景 (Playwright)', value: '1,200+',   sub: '42 脚本 · Windows 1045 通过 · 159 跳过 · 0 失败', tone: 'warn' },
     { label: '修复缺陷',              value: '468+',     sub: 'P0/P1/P2 全量闭环',                          tone: 'warn'    },
@@ -341,11 +341,11 @@
     },
     {
       icon: 'simple', title: '极简优于复杂',
-      body: '零前端框架、零外部 UI 库、零 CSS 预处理器、零 npm 运行时。vanilla JS + 原生 CSS 变量 + 内嵌 go:embed。125,000+ 行代码，22 个前端路由页面与原生桌面组件，清晰可读，无黑盒构建依赖。'
+      body: '零前端框架、零外部 UI 库、零 CSS 预处理器、零 npm 运行时。vanilla JS + 原生 CSS 变量 + 内嵌 go:embed。171,000+ 行代码，23 个前端路由页面与原生桌面组件，清晰可读，无黑盒构建依赖。'
     },
     {
       icon: 'testable', title: '可测优于能跑',
-      body: 'sshclient → Streamer 接口、sftpclient → RemoteFS 接口、dlmanager → Session 模型：每个核心包都对测试友好，提供 mock 注入点。fake-websphere + mock_sshd.py 给集成测试真实感；Go 测试 1,150+ 用例，130+ 个测试文件，单测覆盖率 82%+。'
+      body: 'sshclient → Streamer 接口、sftpclient → RemoteFS 接口、dlmanager → Session 模型：每个核心包都对测试友好，提供 mock 注入点。fake-websphere + mock_sshd.py 给集成测试真实感；Go 测试 1,150+ 用例，184 个测试文件，单测覆盖率 82%+。'
     },
     {
       icon: 'zeroPlain', title: '凭据零落盘 (zero plain)',
@@ -367,7 +367,7 @@
   const architecture = [
     {
       layer: 'L1', name: '展示层 (Presentation)',
-      detail: 'Web Browser + Win32 原生桌面 · 单页应用 · hash-router 路由 · vanilla JS · 22 个路由页面 · 5 套主题 · 4 个独立子窗口',
+      detail: 'Web Browser + Win32 原生桌面 · 单页应用 · hash-router 路由 · vanilla JS · 23 个路由页面（22 导航可见 + reminders 隐藏） · 5 套主题 · 4 个独立子窗口',
       tech: ['原生 ES2020', 'CSS 变量主题', 'hash 路由', 'EventSource(SSE)', 'WebSocket', 'localStorage', 'Win32 原生窗口'],
       duty: '所有用户交互、渲染、状态机、主题切换、SSE 订阅、WebSocket 终端、桌面便笺/宠物浮层。不依赖任何 npm 运行时。'
     },
@@ -405,7 +405,7 @@
   // §4. 后端技术栈 (16 依赖逐项)
   // =====================================================================
   const backendStack = [
-    { name: 'Go', version: '1.24+', role: '主语言', desc: '主线面向 Windows 10/11、macOS 与 Linux；goroutine 调度，静态二进制，零运行时依赖；86,000+ 行 Go 代码（含 130+ 个测试文件）。' },
+    { name: 'Go', version: '1.24+', role: '主语言', desc: '主线面向 Windows 10/11、macOS 与 Linux；goroutine 调度，静态二进制，零运行时依赖；117,000+ 行 Go 代码（含 184 个测试文件）。' },
     { name: 'github.com/sijms/go-ora/v2', version: 'v2.8.24', role: 'Oracle 驱动', desc: '纯 Go thin driver，无需 Oracle Instant Client；数据库工作台生产兼容目标为 Oracle 11g。' },
     { name: 'github.com/go-sql-driver/mysql', version: 'v1.9.3', role: 'MySQL 驱动', desc: 'database/sql 连接池、只读查询、元数据与流式结果。' },
     { name: 'github.com/redis/go-redis/v9', version: 'v9.20.0', role: 'Redis 客户端', desc: '单机 / Cluster / Sentinel；SCAN 分页、TTL 与类型化 Key 预览；大 Key 采用有限读取，避免阻塞和内存爆炸。' },
@@ -432,7 +432,7 @@
     { name: 'api.js', desc: 'HTTP / SSE 客户端 — api(method, path, body) 统一封装；自动加 Bearer token；SSE EventSource 工厂；统一错误处理。' },
     { name: 'theme.js', desc: '主题切换 — dark / light / green / hc / xianxia（玄墨鎏金·武侠风）5 套主题，inline script 在 <head> 提前设 data-theme 防 FOUC。' },
     { name: 'auth.js', desc: '认证层 — 拉 /api/auth/status 探测；token cookie 管理；role-gated UI 显隐。' },
-    { name: 'pages/*.js', desc: '22 个路由页面 — home / websphere / files / waspack / ssh / database / http / webservice / wscodegen / diagnostics / config / downloads / formatter / timestamp / cron / jsonpath / compare / commands / notes / tasks / sponsor / about。每个页面一个 IIFE，路由切换时整体替换 view。' },
+    { name: 'pages/*.js', desc: '23 个路由页面 — home / websphere / files / waspack / ssh / database / http / webservice / wscodegen / diagnostics / config / downloads / formatter / timestamp / cron / jsonpath / compare / commands / notes / tasks / reminders / sponsor / about。每个页面一个 IIFE，路由切换时整体替换 view。' },
     { name: 'pet.js + notes.js', desc: '原生桌面组件联动 — 桌面便笺 / 桌面宠物状态机、拖拽吸边、皮肤选择、双向 revision 并发校验与快捷置顶。' },
     { name: 'tail.js + tail.html', desc: '独立 tail 窗口 — 从主页面剥离的 tail 流，跟踪 SSE 不影响主页面操作；行级 DOM 节点池 + rAF 批量 flush (50ms/100 行)；支持 Ctrl/⌘+F 页面内搜索高亮。' },
     { name: 'preview.html', desc: '文件预览子窗口 — 单文件模态 + 新窗口双模式，支持文本 / GBK 编码自动识别；支持页面内搜索高亮 (TreeWalker 遍历文本节点，不破坏关键词高亮 span)。' },
@@ -498,7 +498,7 @@
   // §9. 质量保障
   // =====================================================================
   const quality = [
-    { tier: 'L1 单元测试', tool: 'go test ./...', coverage: '1,150+ 测试函数', detail: '130+ 个 _test.go 文件，覆盖升级事务、数据库只读策略、文件工作台、桌面状态、SSH/SFTP、日志、任务进程树、WebService、凭据、配置与 httpserver 全链路。' },
+    { tier: 'L1 单元测试', tool: 'go test ./...', coverage: '1,150+ 测试函数', detail: '184 个 _test.go 文件，覆盖升级事务、数据库只读策略、文件工作台、桌面状态、SSH/SFTP、日志、任务进程树、WebService、凭据、配置与 httpserver 全链路。' },
     { tier: 'L2 集成测试', tool: 'mock_sshd.py + fake-websphere', coverage: 'Windows/Linux shell 双语义', detail: 'Python helper 启动 SSH server；Windows 自动使用 Git Bash/GNU 工具，验证列文件、组合搜索、上下文、tail、下载、凭据、RBAC、路径穿越、host key 与进程回收。' },
     { tier: 'L3 E2E (Playwright)', tool: 'tests/e2e + 独立运行配置', coverage: '1,204 场景 (42 脚本)', detail: '真实 Windows Chromium 全量结果：1045 通过、0 失败、159 条件跳过；另以 1366×900、1920×1080、1024×768 跑 42 项页面矩阵，控制台/页面/网络错误均为 0。' },
     { tier: 'L4 手动验收', tool: 'docs/ACCEPTANCE.md + scripts/acceptance_run.py', coverage: '5b/5c/5d 全量', detail: '文件浏览器 / tail / 测试矩阵 / 完整业务路径逐项验收，每项可执行 / 可验证；scripts/acceptance_run.py 一键回归。' },
@@ -2501,7 +2501,7 @@ const changelog = [
     wrap.appendChild(frontendGrid);
     wrap.appendChild(engTitle);
     wrap.appendChild(engGrid);
-    view.appendChild(renderSection('sec-stack', 'stack', '技术栈', '后端 16 依赖 · 前端 11 模块 · 工程 14 实践 · 125,000+ 行代码', wrap));
+    view.appendChild(renderSection('sec-stack', 'stack', '技术栈', '后端 16 依赖 · 前端 11 模块 · 工程 14 实践 · 171,000+ 行代码', wrap));
   }
 
   // --- 安全白皮书 ---
@@ -2629,7 +2629,7 @@ const changelog = [
         ])
       ]));
     });
-    view.appendChild(renderSection('sec-modules', 'modules', '功能模块', '20 个深度能力卡 · 22 路由页面 + 原生桌面组件 · 130+ API', wrap));
+    view.appendChild(renderSection('sec-modules', 'modules', '功能模块', '20 个深度能力卡 · 23 路由页面 + 原生桌面组件 · 130+ API', wrap));
   }
 
   // --- 版本演进史 (accordion) ---

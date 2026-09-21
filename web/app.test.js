@@ -2370,7 +2370,8 @@ function testT069_ThemeIntegrityAndTokens() {
   const coreTokens = [
     '--bg-0', '--bg-1', '--bg-2', '--bg-3',
     '--line', '--text', '--text-dim', '--primary',
-    '--error', '--warn', '--success'
+    '--error', '--warn', '--success',
+    '--field-placeholder', '--textarea-placeholder'
   ];
   for (const token of coreTokens) {
     assert.ok(css.includes(token + ':'), `style.css must define core token ${token}`);

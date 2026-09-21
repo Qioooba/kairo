@@ -88,7 +88,11 @@ func ExportContentType(format string) string {
 var fromTableRe = regexp.MustCompile(`(?is)\bFROM\s+((?:"[^"]+"|` + "`[^`]+`" + `|[A-Za-z0-9_$#]+)(?:\s*\.\s*(?:"[^"]+"|` + "`[^`]+`" + `|[A-Za-z0-9_$#]+))?)`)
 
 func InferExportTable(sql string) string {
-	match := fromTableRe.FindStringSubmatch(sql)
+	noComments := stripSQLComments(sql)
+	if regexp.MustCompile(`(?is)^\s*WITH\b|\bFROM\s*\(`).MatchString(noComments) {
+		return "exported_rows"
+	}
+	match := fromTableRe.FindStringSubmatch(noComments)
 	if len(match) < 2 {
 		return "exported_rows"
 	}
