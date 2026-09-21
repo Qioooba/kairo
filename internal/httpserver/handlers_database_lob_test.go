@@ -263,3 +263,46 @@ func TestDatabaseLOB_SourceConfigChangedInvalidation(t *testing.T) {
 	}
 }
 
+func TestDatabaseLOB_PlaceholderOwnerAndLocatorNormalization(t *testing.T) {
+	srv := newTestServerWithAuth(t, databaseTokens())
+	source, err := srv.database.Store().Save(dbconsole.Source{Name: "test-src", Kind: dbconsole.KindOracle, Host: "127.0.0.1", Port: 1521, Username: "HR", OracleService: "XE", AllowedUsers: []string{"user1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.database.SetCachedFields(source.ID, "HR", "HTTP_REQ_LOG", []dbconsole.Field{
+		{Name: "SEQNO", DataType: "VARCHAR2(64)", PrimaryKey: true},
+		{Name: "REQUEST_BODY_CLOB", DataType: "CLOB"},
+	})
+
+	for _, badOwner := range []string{"加载中…", "加载中...", "加载失败", ""} {
+		req := databaseLobRequest{
+			SourceID:   source.ID,
+			Owner:      badOwner,
+			Table:      "HTTP_REQ_LOG",
+			Column:     "REQUEST_BODY_CLOB",
+			ColumnType: "OCICLOBLOCATOR",
+			Keys:       map[string]any{"SEQNO": "243f21d5cc744d53b113d4e7c79ed240"},
+		}
+		w := doRequestWithToken(srv, http.MethodPost, "/api/database/lob/token", rbacUserToken, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("owner=%q: expected 200, got %d: %s", badOwner, w.Code, w.Body.String())
+		}
+		var resp map[string]any
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatal(err)
+		}
+		token := resp["token"].(string)
+		payload, ref, err := dbconsole.VerifySignedLOBToken(token)
+		if err != nil {
+			t.Fatalf("owner=%q: token verification failed: %v", badOwner, err)
+		}
+		if payload.Owner != "HR" || ref.Owner != "HR" {
+			t.Fatalf("owner=%q: expected normalized Owner HR, got payload=%q ref=%q", badOwner, payload.Owner, ref.Owner)
+		}
+		if payload.ColumnType != "CLOB" || ref.ColumnType != "CLOB" {
+			t.Fatalf("expected normalized ColumnType CLOB, got payload=%q ref=%q", payload.ColumnType, ref.ColumnType)
+		}
+	}
+}
+
+

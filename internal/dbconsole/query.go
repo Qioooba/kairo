@@ -398,6 +398,7 @@ func (m *Manager) streamQueryAttempt(ctx context.Context, source Source, query s
 	// Fast 极速模式仅对安全单表浏览生效；任意复杂查询（JOIN、聚合、子查询等）走正常路径
 	if source.Kind == KindOracle && !info.HasForUpdate {
 		if sInfo, ok := parseSafeSingleTableQuery(query); ok {
+			sInfo.Schema = ResolveSchema(source, sInfo.Schema)
 			lobSingleInfo = sInfo
 			if opts.Fast {
 				isFast = true
@@ -500,7 +501,7 @@ func (m *Manager) streamQueryAttempt(ctx context.Context, source Source, query s
 		schema := ""
 		table := ""
 		if lobSingleInfo != nil {
-			schema = lobSingleInfo.Schema
+			schema = ResolveSchema(source, lobSingleInfo.Schema)
 			table = lobSingleInfo.Table
 		}
 		lobSessionID := ""
@@ -512,7 +513,7 @@ func (m *Manager) streamQueryAttempt(ctx context.Context, source Source, query s
 		schema := ""
 		table := ""
 		if lobSingleInfo != nil {
-			schema = lobSingleInfo.Schema
+			schema = ResolveSchema(source, lobSingleInfo.Schema)
 			table = lobSingleInfo.Table
 		}
 		scanner = newRowScanner(columns, aliasIdx, isFast, schema, table)

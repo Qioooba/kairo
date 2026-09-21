@@ -130,6 +130,9 @@ func parseSafeSingleTableQuery(query string) (*SingleTableQueryInfo, bool) {
 	if i != len(tokens) {
 		return nil, false
 	}
+	if info.Schema == "加载中…" || info.Schema == "加载中..." || info.Schema == "加载失败" || strings.Contains(info.Schema, "加载中") {
+		info.Schema = ""
+	}
 	alias := info.Alias
 	if alias == "" {
 		alias = info.Table

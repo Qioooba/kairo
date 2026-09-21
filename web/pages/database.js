@@ -108,10 +108,15 @@
     if (s && s.sourceId) return state.sources.find(function (x) { return x.id === s.sourceId; }) || null;
     return state.source || null;
   }
+  function isPlaceholderSchema(v) {
+    if (!v) return true;
+    const s = String(v).trim();
+    return s === '' || s === '加载中…' || s === '加载中...' || s === '加载失败' || s.indexOf('加载中') !== -1;
+  }
   function currentSchema() {
     const select = q('db-schema');
     const val = select && select.value ? select.value.trim() : '';
-    if (val && val !== '加载中…' && val !== '加载失败') {
+    if (!isPlaceholderSchema(val)) {
       return val;
     }
     const source = effectiveSource();
@@ -455,6 +460,15 @@
     if (!schema || schema === '加载中…' || schema === '加载失败') {
       schema = currentSchema();
     }
+    if (isPlaceholderSchema(schema)) {
+      schema = currentSchema();
+    }
+    if (isPlaceholderSchema(schema)) {
+      const src = effectiveSource();
+      if (src && src.kind === 'oracle' && src.username) schema = src.username.toUpperCase();
+      else if (src && src.kind === 'mysql' && src.database) schema = src.database;
+      else schema = '';
+    }
     let existing = state.sessions.find(function (s) {
       return s.type === 'object' && s.schema === schema && s.objectName === object;
     });
@@ -491,6 +505,11 @@
       if (!source) throw new Error('未选择数据源');
       if (!s.schema || s.schema === '加载中…' || s.schema === '加载失败') {
         s.schema = currentSchema();
+      }
+      if (isPlaceholderSchema(s.schema)) {
+        if (source.kind === 'oracle' && source.username) s.schema = source.username.toUpperCase();
+        else if (source.kind === 'mysql' && source.database) s.schema = source.database;
+        else s.schema = '';
       }
       const data = await api('GET', '/api/database/metadata/inspect?source_id=' + encodeURIComponent(source.id) + '&schema=' + encodeURIComponent(s.schema) + '&object=' + encodeURIComponent(s.objectName) + '&type=' + encodeURIComponent(s.objectType || '') + (refresh ? '&refresh=1' : ''));
       s.inspectData = data.inspect || {};
@@ -623,7 +642,10 @@
     const btnQuery = q('db-obj-action-query');
     if (btnQuery) {
       btnQuery.onclick = () => {
-        const sql = 'SELECT *\nFROM ' + quoteIdentifier(s.schema) + '.' + quoteIdentifier(s.objectName);
+        let sch = s.schema;
+        if (isPlaceholderSchema(sch)) sch = currentSchema();
+        if (isPlaceholderSchema(sch)) sch = '';
+        const sql = 'SELECT *\nFROM ' + (sch ? quoteIdentifier(sch) + '.' : '') + quoteIdentifier(s.objectName);
         const querySess = createSession(sql);
         state.sessions.push(querySess);
         switchSession(querySess.id);
@@ -835,18 +857,21 @@
     if (target && target.table) {
       let t = cleanIdent(target.table);
       if (t.indexOf('.') >= 0) t = t.split('.').pop();
-      return cleanIdent(t) || 'TARGET_TABLE';
+      t = cleanIdent(t);
+      if (t && t !== 'TARGET_TABLE') return t;
     }
     const sql = (sess() && sess().lastSQL) || state.lastSQL || '';
     if (sql) {
-      const m = sql.match(/\bFROM\s+([`"'\w\.]+)/i);
+      const m = sql.match(/\bFROM\s+([^\s,;()]+)/i);
       if (m && m[1]) {
         let raw = cleanIdent(m[1]);
         if (raw.indexOf('.') >= 0) raw = raw.split('.').pop();
         raw = cleanIdent(raw);
-        if (raw) return raw;
+        if (raw && raw !== 'TARGET_TABLE') return raw;
       }
     }
+    const s = sess();
+    if (s && s.objectName) return cleanIdent(s.objectName);
     return 'TARGET_TABLE';
   }
 
@@ -1072,24 +1097,30 @@
           '<button class="btn btn-primary btn-xs" id="db-lob-full">下载完整内容</button>' +
           '</div>' +
           '<div class="db-lob-placeholder" id="db-lob-placeholder" style="padding:28px 16px;text-align:center;background:var(--bg-1);border:1px dashed var(--line);border-radius:6px;">' +
-          '<div style="font-size:14px;font-weight:600;margin-bottom:8px;">CLOB 列已安全投影</div>' +
+          '<div style="font-size:14px;font-weight:600;margin-bottom:8px;">CLOB 列在线流式预览</div>' +
           '<div class="muted" style="font-size:12px;line-height:1.6;max-width:540px;margin:0 auto 16px;">' +
-          '正文尚未加载。可在线预览前 256 KB，或下载完整内容。' +
+          '正在为您流式加载前 256 KB 预览（支持任意超大文件毫秒级秒开）…' +
           '</div>' +
-          '<div style="display:inline-flex;gap:10px;">' +
-          '<button class="btn btn-sm btn-primary" id="db-lob-big-preview">在线加载预览文本</button>' +
+          '<div style="display:inline-flex;gap:10px;align-items:center;">' +
+          '<button class="btn btn-sm btn-primary" id="db-lob-big-preview"><span class="spinner" style="vertical-align:middle;margin-right:6px;"></span>正在流式加载预览…</button>' +
           '<button class="btn btn-sm" id="db-lob-big-full">流式下载完整内容</button>' +
           '</div>' +
           '</div>' +
           '<pre class="db-lob-text" id="db-lob-pre" style="display:none;"></pre>' +
           '<div class="muted" style="margin-top:6px;font-size:11px">下载引用在 5 分钟后过期，过期后请重新查询。</div>';
-        const dlg = Kairo.overlays.modal({ title, width: 840, body });
+        let closedByUser = false;
+        const dlg = Kairo.overlays.modal({
+          title,
+          width: 840,
+          body,
+          onClose: () => { closedByUser = true; }
+        });
         const loadPreview = async (btn) => {
-          if (btn) { btn.disabled = true; btn.textContent = '正在加载…'; }
+          if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner" style="vertical-align:middle;margin-right:6px;"></span>正在流式加载预览…'; }
           const capturedTabId = (sess() || {}).id;
           const capturedRunSeq = (sess() || {}).runSeq;
           const resolved = await resolveLobPayload(rowIdx, colIdx, colName, isClob, val);
-          if (!resolved) { if (btn) { btn.disabled = false; btn.textContent = '在线预览文本'; } return; }
+          if (!resolved) { if (btn) { btn.disabled = false; btn.textContent = '重试在线预览'; } return; }
           try {
             const resp = await fetch('/api/database/lob', {
               method: 'POST',
@@ -1122,7 +1153,7 @@
               }
             }
             const activeSess = sess();
-            if (!activeSess || activeSess.id !== capturedTabId || activeSess.runSeq !== capturedRunSeq) {
+            if (!activeSess || activeSess.id !== capturedTabId || activeSess.runSeq !== capturedRunSeq || closedByUser) {
               return;
             }
             val.text = text;
@@ -1139,6 +1170,8 @@
         if (q('db-lob-big-preview')) q('db-lob-big-preview').onclick = function () { loadPreview(this); };
         if (q('db-lob-full')) q('db-lob-full').onclick = () => downloadFullLob(rowIdx, colIdx, colName, isClob, val);
         if (q('db-lob-big-full')) q('db-lob-big-full').onclick = () => downloadFullLob(rowIdx, colIdx, colName, isClob, val);
+        // 打开弹窗自动触发流式首屏快速预览
+        loadPreview(q('db-lob-big-preview'));
       }
     } else {
       const hasContent = Boolean(val.hex || val.preview_base64);
@@ -1168,24 +1201,30 @@
           '<button class="btn btn-primary btn-xs" id="db-lob-full-blob">下载完整内容</button>' +
           '</div>' +
           '<div class="db-lob-placeholder" id="db-lob-blob-placeholder" style="padding:28px 16px;text-align:center;background:var(--bg-1);border:1px dashed var(--line);border-radius:6px;">' +
-          '<div style="font-size:14px;font-weight:600;margin-bottom:8px;">BLOB 列已安全投影</div>' +
+          '<div style="font-size:14px;font-weight:600;margin-bottom:8px;">BLOB 列在线流式预览</div>' +
           '<div class="muted" style="font-size:12px;line-height:1.6;max-width:540px;margin:0 auto 16px;">' +
-          '二进制内容尚未加载。可在线预览，或下载完整文件。' +
+          '正在为您流式加载 Hex 预览（支持任意超大文件毫秒级秒开）…' +
           '</div>' +
-          '<div style="display:inline-flex;gap:10px;">' +
-          '<button class="btn btn-sm btn-primary" id="db-lob-big-blob-preview">在线加载预览 Hex</button>' +
+          '<div style="display:inline-flex;gap:10px;align-items:center;">' +
+          '<button class="btn btn-sm btn-primary" id="db-lob-big-blob-preview"><span class="spinner" style="vertical-align:middle;margin-right:6px;"></span>正在流式加载预览…</button>' +
           '<button class="btn btn-sm" id="db-lob-big-blob-full">流式下载完整内容</button>' +
           '</div>' +
           '</div>' +
           '<div class="db-lob-hex-view" id="db-lob-hex" style="display:none;"></div>' +
           '<div class="muted" style="margin-top:6px;font-size:11px">下载引用在 5 分钟后过期，过期后请重新查询。</div>';
-        const dlg = Kairo.overlays.modal({ title, width: 900, body });
+        let closedByUser = false;
+        const dlg = Kairo.overlays.modal({
+          title,
+          width: 900,
+          body,
+          onClose: () => { closedByUser = true; }
+        });
         const loadBlobPreview = async (btn) => {
-          if (btn) { btn.disabled = true; btn.textContent = '正在加载…'; }
+          if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner" style="vertical-align:middle;margin-right:6px;"></span>正在流式加载预览…'; }
           const capturedTabId = (sess() || {}).id;
           const capturedRunSeq = (sess() || {}).runSeq;
           const resolved = await resolveLobPayload(rowIdx, colIdx, colName, isClob, val);
-          if (!resolved) { if (btn) { btn.disabled = false; btn.textContent = '在线预览 Hex'; } return; }
+          if (!resolved) { if (btn) { btn.disabled = false; btn.textContent = '重试在线预览'; } return; }
           try {
             const resp = await fetch('/api/database/lob', {
               method: 'POST',
@@ -1227,7 +1266,7 @@
               }
             }
             const activeSess = sess();
-            if (!activeSess || activeSess.id !== capturedTabId || activeSess.runSeq !== capturedRunSeq) {
+            if (!activeSess || activeSess.id !== capturedTabId || activeSess.runSeq !== capturedRunSeq || closedByUser) {
               return;
             }
             const allBytes = new Uint8Array(chunks.reduce((acc, c) => acc + c.length, 0));
@@ -1254,6 +1293,8 @@
         if (q('db-lob-big-blob-preview')) q('db-lob-big-blob-preview').onclick = function () { loadBlobPreview(this); };
         if (q('db-lob-full-blob')) q('db-lob-full-blob').onclick = () => downloadFullLob(rowIdx, colIdx, colName, isClob, val);
         if (q('db-lob-big-blob-full')) q('db-lob-big-blob-full').onclick = () => downloadFullLob(rowIdx, colIdx, colName, isClob, val);
+        // 打开弹窗自动触发流式首屏快速预览
+        loadBlobPreview(q('db-lob-big-blob-preview'));
       }
     }
   }
@@ -1283,9 +1324,27 @@
           }
         });
       }
-      const tName = targetVal.table || detectTableName();
+      let tName = targetVal.table || detectTableName();
       const effSrc = effectiveSource() || {};
       const activeS = sess() || {};
+      if ((!tName || tName === 'TARGET_TABLE') && activeS && activeS.objectName) {
+        tName = activeS.objectName;
+      }
+      let ownerVal = targetVal.owner;
+      if (!ownerVal || isPlaceholderSchema(ownerVal)) {
+        ownerVal = currentSchema();
+      }
+      if (isPlaceholderSchema(ownerVal)) {
+        ownerVal = '';
+      }
+      let colType = targetVal.database_type || (isClob ? 'CLOB' : 'BLOB');
+      const upperColType = String(colType || '').toUpperCase();
+      if (upperColType.includes('CLOB')) {
+        colType = 'CLOB';
+      } else if (upperColType.includes('BLOB')) {
+        colType = 'BLOB';
+      }
+
       try {
         const tokenResp = await fetch('/api/database/lob/token', {
           method: 'POST',
@@ -1294,10 +1353,10 @@
             source_id: effSrc.id,
             session_id: activeS.transactionId || '',
             transaction_pending: !!activeS.transactionPending,
-            owner: (targetVal.owner || currentSchema() || '').toUpperCase(),
+            owner: (ownerVal || '').toUpperCase(),
             table: (tName || '').toUpperCase(),
             column: (colName || '').toUpperCase(),
-            column_type: (targetVal.database_type || (isClob ? 'CLOB' : 'BLOB')).toUpperCase(),
+            column_type: colType.toUpperCase(),
             use_rowid: !!targetVal.rowid,
             rowid: targetVal.rowid || '',
             keys: rowKeys
@@ -1484,12 +1543,12 @@
     const current = sess(), source = effectiveSource(), features = Kairo.databaseFeatures;
     if (!current || current.type === 'object' || !source || !features || !features.resolveGridTarget) return null;
     let schemaHint = current.resultSchema;
-    if (!schemaHint || schemaHint === '加载中…' || schemaHint === '加载失败') {
+    if (!schemaHint || schemaHint === '加载中…' || schemaHint === '加载失败' || isPlaceholderSchema(schemaHint)) {
       schemaHint = currentSchema();
     }
     const target = features.resolveGridTarget(current.lastSQL, schemaHint || '', source.kind);
     if (!target) return null;
-    if (!target.schema || target.schema === '加载中…' || target.schema === '加载失败') {
+    if (!target.schema || target.schema === '加载中…' || target.schema === '加载失败' || isPlaceholderSchema(target.schema)) {
       target.schema = currentSchema();
     }
     const isOrdered = !(current.summary && current.summary.ordered === false);
@@ -2758,7 +2817,7 @@
   }
 
   async function loadInspect(schema, object, type) {
-    if (!schema || schema === '加载中…' || schema === '加载失败') {
+    if (!schema || schema === '加载中…' || schema === '加载失败' || isPlaceholderSchema(schema)) {
       schema = currentSchema();
     }
     state.inspectSeq = (state.inspectSeq || 0) + 1;
@@ -2811,7 +2870,7 @@
     return quote + String(v).split(quote).join(quote + quote) + quote;
   }
   function insertObjectSQL(schema, object, type) {
-    if (!schema || schema === '加载中…' || schema === '加载失败') {
+    if (!schema || schema === '加载中…' || schema === '加载失败' || isPlaceholderSchema(schema)) {
       schema = currentSchema();
     }
     const name = (schema ? quoteIdentifier(schema) + '.' : '') + quoteIdentifier(object);

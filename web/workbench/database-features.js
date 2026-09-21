@@ -1311,7 +1311,7 @@
   // Grid writes are allowed only for an unambiguous single-table projection.
   // Resolve from executed SQL, never from subsequently edited editor text.
   function resolveGridTarget(text, defaultSchema, sourceKind) {
-    if (defaultSchema === '加载中…' || defaultSchema === '加载失败') defaultSchema = '';
+    if (!defaultSchema || defaultSchema === '加载中…' || defaultSchema === '加载失败' || defaultSchema.indexOf('加载中') !== -1) defaultSchema = '';
     const tokens = tokenizeSQL(text).filter(function (t) { return t.type !== 'space' && t.type !== 'comment'; });
     const word = function (i) { return tokens[i] ? tokens[i].value.toUpperCase() : ''; };
     const ident = function (t) { return t && (t.type === 'ident' || t.type === 'quoted-ident'); };
@@ -1334,7 +1334,7 @@
     if (!ident(tokens[i])) return null;
     let schema = defaultSchema || '', table = name(tokens[i++]);
     if (word(i) === '.') { i++; if (!ident(tokens[i])) return null; schema = table; table = name(tokens[i++]); }
-    if (schema === '加载中…' || schema === '加载失败') schema = '';
+    if (!schema || schema === '加载中…' || schema === '加载失败' || schema.indexOf('加载中') !== -1) schema = '';
     if (word(i) === 'AS') i++;
     if (ident(tokens[i])) i++;
     if (i < tokens.length && !/^(WHERE|ORDER|FETCH|LIMIT|OFFSET|FOR|;)$/.test(word(i))) return null;

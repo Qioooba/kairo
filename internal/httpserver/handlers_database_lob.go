@@ -231,7 +231,8 @@ func (s *Server) handleDatabaseLobToken(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
-	if req.Owner == "" {
+	req.Owner = dbconsole.ResolveSchema(source, req.Owner)
+	if req.Owner == "" || req.Owner == "加载中…" || req.Owner == "加载中..." || req.Owner == "加载失败" {
 		req.Owner = source.Username
 	}
 	req.Owner = strings.ToUpper(strings.TrimSpace(req.Owner))
@@ -244,6 +245,12 @@ func (s *Server) handleDatabaseLobToken(w http.ResponseWriter, r *http.Request) 
 	}
 
 	fields, err := s.database.Fields(r.Context(), source, req.Owner, req.Table)
+	if (err != nil || len(fields) == 0) && req.Table != "" {
+		if realOwner, oerr := s.database.FindTableOwner(r.Context(), source, req.Table); oerr == nil && realOwner != "" && realOwner != req.Owner {
+			req.Owner = realOwner
+			fields, err = s.database.Fields(r.Context(), source, req.Owner, req.Table)
+		}
+	}
 	var pkCols []string
 	if err == nil {
 		for _, f := range fields {
@@ -254,6 +261,19 @@ func (s *Server) handleDatabaseLobToken(w http.ResponseWriter, r *http.Request) 
 	} else if len(req.PrimaryKey) > 0 {
 		writeErr(w, http.StatusBadRequest, fmt.Errorf("读取数据字典元数据失败: %w", err))
 		return
+	}
+
+	if len(pkCols) == 0 && !req.UseRowID && strings.TrimSpace(req.RowID) == "" {
+		// 优先探测表上的可用唯一约束或唯一索引
+		if uks := s.database.FindUniqueKeyColumns(r.Context(), source, req.Owner, req.Table, req.Keys); len(uks) > 0 {
+			pkCols = uks
+		} else if len(req.Keys) > 0 {
+			// 若无任何唯一约束（如常规高并发日志表），通过行标量特征键动态向 Oracle 回查物理 ROWID
+			if rowID, rerr := s.database.ResolveRowIDByKeys(r.Context(), source, req.Owner, req.Table, req.Keys, fields); rerr == nil && rowID != "" {
+				req.RowID = rowID
+				req.UseRowID = true
+			}
+		}
 	}
 
 	if len(pkCols) > 0 {
@@ -283,17 +303,26 @@ func (s *Server) handleDatabaseLobToken(w http.ResponseWriter, r *http.Request) 
 	}
 
 	colType := strings.ToUpper(strings.TrimSpace(req.ColumnType))
-	if colType == "" {
+	if colType == "" || colType == "OCICLOBLOCATOR" || colType == "OCIBLOBLOCATOR" {
 		for _, f := range fields {
 			if strings.EqualFold(f.Name, req.Column) {
 				colType = strings.ToUpper(f.DataType)
 				break
 			}
 		}
-		if colType == "" {
+		if colType == "OCICLOBLOCATOR" || (colType == "" && strings.Contains(strings.ToUpper(req.ColumnType), "CLOB")) {
+			colType = "CLOB"
+		} else if colType == "OCIBLOBLOCATOR" || (colType == "" && strings.Contains(strings.ToUpper(req.ColumnType), "BLOB")) {
+			colType = "BLOB"
+		} else if colType == "" {
 			writeErr(w, http.StatusBadRequest, errors.New("无法识别 LOB 列类型，请确认表与列名"))
 			return
 		}
+	}
+	if strings.Contains(colType, "CLOB") {
+		colType = "CLOB"
+	} else if strings.Contains(colType, "BLOB") {
+		colType = "BLOB"
 	}
 
 	fingerprint := dbconsole.SourceFingerprint(source)
