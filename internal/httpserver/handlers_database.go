@@ -976,11 +976,15 @@ func (s *Server) handleDatabaseObjects(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if r.URL.Query().Get("refresh") == "1" {
+		s.database.InvalidateMetadata(source.ID)
+	}
 	category := r.URL.Query().Get("category")
 	if category == "" {
 		category = r.URL.Query().Get("type")
 	}
-	items, err := s.database.Objects(r.Context(), source, r.URL.Query().Get("schema"), r.URL.Query().Get("search"), category)
+	schema := dbconsole.ResolveSchema(source, r.URL.Query().Get("schema"))
+	items, err := s.database.Objects(r.Context(), source, schema, r.URL.Query().Get("search"), category)
 	if err != nil {
 		writeErrSanitized(w, 502, s.databaseSafeError(source, err))
 		return
@@ -993,7 +997,11 @@ func (s *Server) handleDatabaseFields(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	items, err := s.database.Fields(r.Context(), source, r.URL.Query().Get("schema"), r.URL.Query().Get("object"))
+	if r.URL.Query().Get("refresh") == "1" {
+		s.database.InvalidateMetadata(source.ID)
+	}
+	schema := dbconsole.ResolveSchema(source, r.URL.Query().Get("schema"))
+	items, err := s.database.Fields(r.Context(), source, schema, r.URL.Query().Get("object"))
 	if err != nil {
 		writeErrSanitized(w, 502, s.databaseSafeError(source, err))
 		return
@@ -1006,7 +1014,11 @@ func (s *Server) handleDatabaseIndexes(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	items, err := s.database.Indexes(r.Context(), source, r.URL.Query().Get("schema"), r.URL.Query().Get("object"))
+	if r.URL.Query().Get("refresh") == "1" {
+		s.database.InvalidateMetadata(source.ID)
+	}
+	schema := dbconsole.ResolveSchema(source, r.URL.Query().Get("schema"))
+	items, err := s.database.Indexes(r.Context(), source, schema, r.URL.Query().Get("object"))
 	if err != nil {
 		writeErrSanitized(w, 502, s.databaseSafeError(source, err))
 		return
@@ -1019,7 +1031,11 @@ func (s *Server) handleDatabaseConstraints(w http.ResponseWriter, r *http.Reques
 	if !ok {
 		return
 	}
-	items, err := s.database.Constraints(r.Context(), source, r.URL.Query().Get("schema"), r.URL.Query().Get("object"))
+	if r.URL.Query().Get("refresh") == "1" {
+		s.database.InvalidateMetadata(source.ID)
+	}
+	schema := dbconsole.ResolveSchema(source, r.URL.Query().Get("schema"))
+	items, err := s.database.Constraints(r.Context(), source, schema, r.URL.Query().Get("object"))
 	if err != nil {
 		writeErrSanitized(w, 502, s.databaseSafeError(source, err))
 		return
@@ -1032,7 +1048,11 @@ func (s *Server) handleDatabaseInspect(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	item, err := s.database.InspectObject(r.Context(), source, r.URL.Query().Get("schema"), r.URL.Query().Get("object"), r.URL.Query().Get("type"))
+	if r.URL.Query().Get("refresh") == "1" {
+		s.database.InvalidateMetadata(source.ID)
+	}
+	schema := dbconsole.ResolveSchema(source, r.URL.Query().Get("schema"))
+	item, err := s.database.InspectObject(r.Context(), source, schema, r.URL.Query().Get("object"), r.URL.Query().Get("type"))
 	if err != nil {
 		writeErrSanitized(w, 502, s.databaseSafeError(source, err))
 		return

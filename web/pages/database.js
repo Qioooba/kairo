@@ -308,7 +308,9 @@
     if (resultsSec) resultsSec.hidden = false;
   }
   function openObjectTab(schema, object, type) {
-    schema = schema || currentSchema();
+    if (!schema || schema === '加载中…' || schema === '加载失败') {
+      schema = currentSchema();
+    }
     let existing = state.sessions.find(function (s) {
       return s.type === 'object' && s.schema === schema && s.objectName === object;
     });
@@ -349,6 +351,9 @@
     try {
       const source = s.sourceId ? (state.sources.find(x => x.id === s.sourceId) || state.source) : state.source;
       if (!source) throw new Error('未选择数据源');
+      if (!s.schema || s.schema === '加载中…' || s.schema === '加载失败') {
+        s.schema = currentSchema();
+      }
       const data = await api('GET', '/api/database/metadata/inspect?source_id=' + encodeURIComponent(source.id) + '&schema=' + encodeURIComponent(s.schema) + '&object=' + encodeURIComponent(s.objectName) + '&type=' + encodeURIComponent(s.objectType || '') + (refresh ? '&refresh=1' : ''));
       s.inspectData = data.inspect || {};
       s.inspectLoading = false;
@@ -426,16 +431,16 @@
         }).join('') +
         '</tbody></table></div>';
     } else if (activeTab === 'indexes') {
-      bodyHTML = '<div class="db-obj-table-wrap"><table class="table db-obj-table" style="width:754px"><colgroup><col style="width:44px"><col style="width:240px"><col style="width:110px"><col style="width:360px"></colgroup>' +
+      bodyHTML = '<div class="db-obj-table-wrap"><table class="table db-obj-table" style="width:100%;min-width:754px"><colgroup><col style="width:44px"><col style="width:240px"><col style="width:110px"><col style="width:360px"></colgroup>' +
         '<thead><tr><th style="width:40px">#</th><th>索引名</th><th>唯一性</th><th>包含列</th></tr></thead>' +
         '<tbody>' +
-        (indexes.length ? indexes.map((idx, i) => '<tr><td class="num">' + (i + 1) + '</td><td><strong>' + h(idx.name) + '</strong></td><td>' + (idx.uniqueness === 'UNIQUE' ? '<span class="tag tag-ok">UNIQUE</span>' : '<span class="hint">NORMAL</span>') + '</td><td class="mono">' + h((idx.columns || []).join(', ')) + '</td></tr>').join('') : '<tr><td colspan="4" class="hint db-empty-td">无索引信息</td></tr>') +
+        (indexes.length ? indexes.map((idx, i) => '<tr><td class="num">' + (i + 1) + '</td><td><strong>' + h(idx.name) + '</strong>' + (idx.type && idx.type !== 'NORMAL' ? ' <small class="hint mono">(' + h(idx.type) + ')</small>' : '') + '</td><td>' + (idx.uniqueness === 'UNIQUE' ? '<span class="tag tag-ok">UNIQUE</span>' : '<span class="hint">NORMAL</span>') + '</td><td class="mono">' + h((idx.columns || []).join(', ')) + '</td></tr>').join('') : '<tr><td colspan="4" class="hint db-empty-td">无索引信息</td></tr>') +
         '</tbody></table></div>';
     } else if (activeTab === 'constraints') {
-      bodyHTML = '<div class="db-obj-table-wrap"><table class="table db-obj-table" style="width:804px"><colgroup><col style="width:44px"><col style="width:260px"><col style="width:140px"><col style="width:360px"></colgroup>' +
-        '<thead><tr><th style="width:40px">#</th><th>约束名</th><th>约束类型</th><th>关联列</th></tr></thead>' +
+      bodyHTML = '<div class="db-obj-table-wrap"><table class="table db-obj-table" style="width:100%;min-width:804px"><colgroup><col style="width:44px"><col style="width:260px"><col style="width:140px"><col style="width:360px"></colgroup>' +
+        '<thead><tr><th style="width:40px">#</th><th>约束名</th><th>约束类型</th><th>关联列 / 详情</th></tr></thead>' +
         '<tbody>' +
-        (constraints.length ? constraints.map((c, i) => '<tr><td class="num">' + (i + 1) + '</td><td><strong>' + h(c.name) + '</strong></td><td><span class="tag">' + h(c.type) + '</span></td><td class="mono">' + h(c.columns || '-') + '</td></tr>').join('') : '<tr><td colspan="4" class="hint db-empty-td">无约束信息</td></tr>') +
+        (constraints.length ? constraints.map((c, i) => '<tr><td class="num">' + (i + 1) + '</td><td><strong>' + h(c.name) + '</strong></td><td><span class="tag">' + h(c.type) + '</span></td><td class="mono">' + h(c.columns || '-') + (c.detail ? '<div class="hint mono" style="font-size:11px;margin-top:2px">' + h(c.detail) + '</div>' : '') + '</td></tr>').join('') : '<tr><td colspan="4" class="hint db-empty-td">无约束信息</td></tr>') +
         '</tbody></table></div>';
     } else if (activeTab === 'ddl') {
       const rawDDL = info.ddl || info.source_text || info.ddl_error || '-- 无 DDL';
@@ -2608,6 +2613,9 @@
   }
 
   async function loadInspect(schema, object, type) {
+    if (!schema || schema === '加载中…' || schema === '加载失败') {
+      schema = currentSchema();
+    }
     state.inspectSeq = (state.inspectSeq || 0) + 1;
     const seq = state.inspectSeq;
     const token = state.workspaceToken, source = state.source, body = q('db-inspect-body');
@@ -2643,7 +2651,7 @@
     }
     body.innerHTML = html;
     const openBtn = q('db-open-object-tab');
-    if (openBtn) openBtn.onclick = () => openObjectTab(info.schema || '', info.object, info.type || '');
+    if (openBtn) openBtn.onclick = () => openObjectTab(info.schema || currentSchema(), info.object, info.type || '');
     const names = (info.fields || []).map(x => x.name);
     const copy = q('db-copy-field-list');
     if (copy) copy.onclick = () => copyDBText(names.join(', '), '已复制 ' + names.length + ' 个字段名');
@@ -2658,6 +2666,9 @@
     return quote + String(v).split(quote).join(quote + quote) + quote;
   }
   function insertObjectSQL(schema, object, type) {
+    if (!schema || schema === '加载中…' || schema === '加载失败') {
+      schema = currentSchema();
+    }
     const name = (schema ? quoteIdentifier(schema) + '.' : '') + quoteIdentifier(object);
     const upper = String(type).toUpperCase();
     const srcKind = effectiveSource() ? effectiveSource().kind : (state.source ? state.source.kind : 'oracle');

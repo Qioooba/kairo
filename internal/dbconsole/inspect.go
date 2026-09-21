@@ -19,7 +19,12 @@ func metadataIdent(name string) error {
 }
 
 func (m *Manager) InspectObject(ctx context.Context, source Source, schema, object, objectType string) (ObjectInspect, error) {
-	out := ObjectInspect{}
+	schema = ResolveSchema(source, schema)
+	out := ObjectInspect{
+		Fields:      []Field{},
+		Indexes:     []IndexInfo{},
+		Constraints: []ConstraintInfo{},
+	}
 	fields, err := m.Fields(ctx, source, schema, object)
 	if err != nil {
 		return out, err
@@ -27,12 +32,12 @@ func (m *Manager) InspectObject(ctx context.Context, source Source, schema, obje
 	out.Fields = fields
 	indexes, err := m.Indexes(ctx, source, schema, object)
 	if err != nil {
-		return out, err
+		indexes = []IndexInfo{}
 	}
 	out.Indexes = indexes
 	constraints, err := m.Constraints(ctx, source, schema, object)
 	if err != nil {
-		return out, err
+		constraints = []ConstraintInfo{}
 	}
 	out.Constraints = constraints
 	ddl, sourceKind, ddlErr := m.objectDDL(ctx, source, schema, object, objectType)
@@ -47,6 +52,7 @@ func (m *Manager) InspectObject(ctx context.Context, source Source, schema, obje
 }
 
 func (m *Manager) Indexes(ctx context.Context, source Source, schema, object string) ([]IndexInfo, error) {
+	schema = ResolveSchema(source, schema)
 	if err := metadataIdent(schema); err != nil {
 		return nil, err
 	}
@@ -62,16 +68,18 @@ func (m *Manager) Indexes(ctx context.Context, source Source, schema, object str
 		var rows *sql.Rows
 		var queryErr error
 		if source.Kind == KindOracle {
-			rows, queryErr = db.QueryContext(ctx, `SELECT i.index_name, i.index_type, i.uniqueness, c.column_name
+			rows, queryErr = db.QueryContext(ctx, `SELECT i.index_name, NVL(i.index_type, ''), NVL(i.uniqueness, 'NONUNIQUE'), NVL(c.column_name, '')
 FROM all_indexes i
-JOIN all_ind_columns c ON i.owner = c.index_owner AND i.index_name = c.index_name
-WHERE i.table_owner = :1 AND i.table_name = :2
-ORDER BY i.index_name, c.column_position`, strings.ToUpper(schema), strings.ToUpper(object))
+LEFT JOIN all_ind_columns c ON i.owner = c.index_owner AND i.index_name = c.index_name AND i.table_owner = c.table_owner AND i.table_name = c.table_name
+WHERE (i.table_owner = :1 OR i.table_owner = UPPER(:1))
+  AND (i.table_name = :2 OR UPPER(i.table_name) = UPPER(:2))
+ORDER BY i.index_name, c.column_position`, schema, object)
 		} else {
 			rows, queryErr = db.QueryContext(ctx, `SELECT index_name, index_type, non_unique, column_name
 FROM information_schema.statistics
-WHERE table_schema = ? AND table_name = ?
-ORDER BY index_name, seq_in_index`, schema, object)
+WHERE (table_schema = ? OR LOWER(table_schema) = LOWER(?))
+  AND (table_name = ? OR LOWER(table_name) = LOWER(?))
+ORDER BY index_name, seq_in_index`, schema, schema, object, object)
 		}
 		if queryErr != nil {
 			return queryErr
@@ -80,30 +88,40 @@ ORDER BY index_name, seq_in_index`, schema, object)
 		byName := map[string]*IndexInfo{}
 		order := make([]string, 0)
 		for rows.Next() {
-			var name, idxType, uniqueness, column string
+			var name, idxType, uniqueness, column sql.NullString
 			if source.Kind == KindOracle {
 				if err := rows.Scan(&name, &idxType, &uniqueness, &column); err != nil {
 					return err
 				}
 			} else {
-				var nonUnique int
+				var nonUnique sql.NullInt64
 				if err := rows.Scan(&name, &idxType, &nonUnique, &column); err != nil {
 					return err
 				}
-				if nonUnique == 0 {
-					uniqueness = "UNIQUE"
+				if nonUnique.Valid && nonUnique.Int64 == 0 {
+					uniqueness.String = "UNIQUE"
 				} else {
-					uniqueness = "NONUNIQUE"
+					uniqueness.String = "NONUNIQUE"
 				}
 			}
-			item := byName[name]
-			if item == nil {
-				item = &IndexInfo{Name: name, Type: idxType, Uniqueness: uniqueness}
-				byName[name] = item
-				order = append(order, name)
+			idxName := strings.TrimSpace(name.String)
+			if idxName == "" {
+				continue
 			}
-			if column != "" {
-				item.Columns = append(item.Columns, column)
+			item := byName[idxName]
+			if item == nil {
+				item = &IndexInfo{
+					Name:       idxName,
+					Type:       strings.TrimSpace(idxType.String),
+					Uniqueness: strings.TrimSpace(uniqueness.String),
+					Columns:    []string{},
+				}
+				byName[idxName] = item
+				order = append(order, idxName)
+			}
+			col := strings.TrimSpace(column.String)
+			if col != "" {
+				item.Columns = append(item.Columns, col)
 			}
 		}
 		if err := rows.Err(); err != nil {
@@ -123,6 +141,7 @@ ORDER BY index_name, seq_in_index`, schema, object)
 }
 
 func (m *Manager) Constraints(ctx context.Context, source Source, schema, object string) ([]ConstraintInfo, error) {
+	schema = ResolveSchema(source, schema)
 	if err := metadataIdent(schema); err != nil {
 		return nil, err
 	}
@@ -141,9 +160,10 @@ func (m *Manager) Constraints(ctx context.Context, source Source, schema, object
 			rows, queryErr = db.QueryContext(ctx, `SELECT c.constraint_name, c.constraint_type, NVL(cc.column_name, ''),
        NVL(NVL2(c.r_constraint_name, c.r_owner || '.' || c.r_constraint_name, ''), '')
 FROM all_constraints c
-LEFT JOIN all_cons_columns cc ON c.owner = cc.owner AND c.constraint_name = cc.constraint_name
-WHERE c.owner = :1 AND c.table_name = :2
-ORDER BY DECODE(c.constraint_type,'P',1,'U',2,'R',3,'C',4,5), c.constraint_name, cc.position`, strings.ToUpper(schema), strings.ToUpper(object))
+LEFT JOIN all_cons_columns cc ON c.owner = cc.owner AND c.constraint_name = cc.constraint_name AND c.table_name = cc.table_name
+WHERE (c.owner = :1 OR c.owner = UPPER(:1))
+  AND (c.table_name = :2 OR UPPER(c.table_name) = UPPER(:2))
+ORDER BY DECODE(c.constraint_type,'P',1,'U',2,'R',3,'C',4,5), c.constraint_name, cc.position`, schema, object)
 		} else {
 			rows, queryErr = db.QueryContext(ctx, `SELECT tc.constraint_name, tc.constraint_type,
        GROUP_CONCAT(kcu.column_name ORDER BY kcu.ordinal_position SEPARATOR ', '),
@@ -151,9 +171,10 @@ ORDER BY DECODE(c.constraint_type,'P',1,'U',2,'R',3,'C',4,5), c.constraint_name,
 FROM information_schema.table_constraints tc
 LEFT JOIN information_schema.key_column_usage kcu
   ON tc.constraint_schema = kcu.constraint_schema AND tc.constraint_name = kcu.constraint_name AND tc.table_name = kcu.table_name
-WHERE tc.table_schema = ? AND tc.table_name = ?
+WHERE (tc.table_schema = ? OR LOWER(tc.table_schema) = LOWER(?))
+  AND (tc.table_name = ? OR LOWER(tc.table_name) = LOWER(?))
 GROUP BY tc.constraint_name, tc.constraint_type, kcu.referenced_table_name
-ORDER BY tc.constraint_type, tc.constraint_name`, schema, object)
+ORDER BY tc.constraint_type, tc.constraint_name`, schema, schema, object, object)
 		}
 		if queryErr != nil {
 			return queryErr
@@ -163,22 +184,30 @@ ORDER BY tc.constraint_type, tc.constraint_name`, schema, object)
 			byName := map[string]*ConstraintInfo{}
 			order := make([]string, 0)
 			for rows.Next() {
-				var name, ctype string
-				var column, detail sql.NullString
+				var name, ctype, column, detail sql.NullString
 				if err := rows.Scan(&name, &ctype, &column, &detail); err != nil {
 					return err
 				}
-				item := byName[name]
-				if item == nil {
-					item = &ConstraintInfo{Name: name, Type: constraintLabel(ctype), Detail: detail.String}
-					byName[name] = item
-					order = append(order, name)
+				cName := strings.TrimSpace(name.String)
+				if cName == "" {
+					continue
 				}
-				if column.String != "" {
+				item := byName[cName]
+				if item == nil {
+					item = &ConstraintInfo{
+						Name:   cName,
+						Type:   constraintLabel(ctype.String),
+						Detail: strings.TrimSpace(detail.String),
+					}
+					byName[cName] = item
+					order = append(order, cName)
+				}
+				col := strings.TrimSpace(column.String)
+				if col != "" {
 					if item.Columns != "" {
 						item.Columns += ", "
 					}
-					item.Columns += column.String
+					item.Columns += col
 				}
 			}
 			if err := rows.Err(); err != nil {
@@ -191,14 +220,20 @@ ORDER BY tc.constraint_type, tc.constraint_name`, schema, object)
 			return nil
 		}
 		for rows.Next() {
-			var item ConstraintInfo
-			var cols, detail sql.NullString
-			if err := rows.Scan(&item.Name, &item.Type, &cols, &detail); err != nil {
+			var name, ctype, cols, detail sql.NullString
+			if err := rows.Scan(&name, &ctype, &cols, &detail); err != nil {
 				return err
 			}
-			item.Columns = cols.String
-			item.Detail = detail.String
-			item.Type = constraintLabel(item.Type)
+			cName := strings.TrimSpace(name.String)
+			if cName == "" {
+				continue
+			}
+			item := ConstraintInfo{
+				Name:    cName,
+				Type:    constraintLabel(ctype.String),
+				Columns: strings.TrimSpace(cols.String),
+				Detail:  strings.TrimSpace(detail.String),
+			}
 			out = append(out, item)
 		}
 		return rows.Err()
@@ -220,6 +255,10 @@ func constraintLabel(code string) string {
 		return "FOREIGN KEY"
 	case "C", "CHECK":
 		return "CHECK"
+	case "V", "CHECK OPTION":
+		return "CHECK OPTION"
+	case "O", "READ ONLY":
+		return "READ ONLY"
 	default:
 		return strings.ToUpper(code)
 	}
@@ -232,12 +271,16 @@ func (m *Manager) markPrimaryKeys(ctx context.Context, db *sql.DB, source Source
 	if source.Kind == KindOracle {
 		rows, err = db.QueryContext(ctx, `SELECT cc.column_name
 FROM all_constraints c
-JOIN all_cons_columns cc ON c.owner = cc.owner AND c.constraint_name = cc.constraint_name
-WHERE c.constraint_type = 'P' AND c.owner = :1 AND c.table_name = :2`, strings.ToUpper(schema), strings.ToUpper(object))
+JOIN all_cons_columns cc ON c.owner = cc.owner AND c.constraint_name = cc.constraint_name AND c.table_name = cc.table_name
+WHERE c.constraint_type = 'P'
+  AND (c.owner = :1 OR c.owner = UPPER(:1))
+  AND (c.table_name = :2 OR UPPER(c.table_name) = UPPER(:2))`, schema, object)
 	} else {
 		rows, err = db.QueryContext(ctx, `SELECT column_name
 FROM information_schema.key_column_usage
-WHERE table_schema = ? AND table_name = ? AND constraint_name = 'PRIMARY'`, schema, object)
+WHERE (table_schema = ? OR LOWER(table_schema) = LOWER(?))
+  AND (table_name = ? OR LOWER(table_name) = LOWER(?))
+  AND constraint_name = 'PRIMARY'`, schema, schema, object, object)
 	}
 	if err != nil {
 		return err

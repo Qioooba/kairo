@@ -1653,6 +1653,10 @@ function testDatabaseWorkbenchLazy() {
   const targetExplicit = resolveGridTargetFn('SELECT * FROM "HR"."BUSINESS_APPLY"', '加载中…', 'oracle');
   assert.deepStrictEqual(targetExplicit, { schema: 'HR', table: 'BUSINESS_APPLY' }, '显式 schema 应优先解析');
 
+  assert.ok(dbSrc.indexOf('function openObjectTab(schema, object, type)') >= 0, 'database.js 应声明 openObjectTab');
+  assert.ok(dbSrc.indexOf("if (!schema || schema === '加载中…' || schema === '加载失败')") >= 0, 'openObjectTab 应安全防御加载中占位符');
+  assert.ok(dbSrc.indexOf("if (!s.schema || s.schema === '加载中…' || s.schema === '加载失败')") >= 0, 'loadObjectTabInspect 应安全防御加载中占位符');
+
   console.log('  database workbench lazy-load / suggest / shortcuts / LOB tokens / runQuery scoping / schema placeholder guard ✓');
 }
 
