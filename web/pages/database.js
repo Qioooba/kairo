@@ -172,12 +172,27 @@
       if (!s.sourceId && state.source) bindSessionSource(s, state.source);
     }
   }
+  function extractFirstSQL(sql) {
+    if (!sql) return '';
+    let text = String(sql).trim();
+    if (!text) return '';
+    // Strip comments
+    text = text.replace(/\/\*[\s\S]*?\*\//g, ' ');
+    text = text.replace(/--.*$/gm, ' ');
+    text = text.trim();
+    if (!text) return '';
+    // Take first statement up to first semicolon
+    const semiIdx = text.indexOf(';');
+    const firstStmt = (semiIdx >= 0 ? text.slice(0, semiIdx) : text).replace(/\s+/g, ' ').trim();
+    if (!firstStmt) return '';
+    return firstStmt.length > 22 ? firstStmt.slice(0, 22) + '…' : firstStmt;
+  }
   function tabTitle(s) {
     if (s.type === 'object') {
       return objectTypeLabel(s.objectType) + ' ' + s.objectName;
     }
-    const text = String(s.sql || '').replace(/\s+/g, ' ').trim();
-    return text ? text.slice(0, 18) : ('查询 ' + s.id);
+    const firstSQL = extractFirstSQL(s.sql);
+    return firstSQL || ('查询 ' + s.id);
   }
   function abortAllSessions() {
     (state.sessions || []).forEach(function (s) {
@@ -199,6 +214,117 @@
     if (st) st.textContent = s.status || '就绪';
     updateDatabasePager();
   }
+  function hideTabContextMenu() {
+    const old = q('db-tab-context-menu');
+    if (old) old.remove();
+    document.removeEventListener('click', hideTabContextMenu);
+    document.removeEventListener('keydown', handleTabMenuEsc);
+  }
+  function handleTabMenuEsc(ev) {
+    if (ev.key === 'Escape') hideTabContextMenu();
+  }
+  function showTabContextMenu(e, tabId) {
+    hideTabContextMenu();
+    const idx = state.sessions.findIndex(function (s) { return s.id === tabId; });
+    if (idx < 0) return;
+    const total = state.sessions.length;
+
+    const menu = document.createElement('div');
+    menu.id = 'db-tab-context-menu';
+    menu.className = 'db-tab-context-menu card';
+    menu.setAttribute('role', 'menu');
+
+    const items = [
+      { id: 'close-cur', text: '关闭当前页签', disabled: total <= 1, action: function () { closeSession(tabId); } },
+      { id: 'close-left', text: '关闭左侧页签', disabled: idx <= 0, action: function () { closeSessionsLeft(tabId); } },
+      { id: 'close-right', text: '关闭右侧页签', disabled: idx >= total - 1, action: function () { closeSessionsRight(tabId); } },
+      { id: 'close-other', text: '关闭其他页签', disabled: total <= 1, action: function () { closeSessionsOther(tabId); } },
+      { id: 'close-all', text: '一键关闭全部', disabled: false, action: function () { closeSessionsAll(); } }
+    ];
+
+    items.forEach(function (item) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'db-tab-menu-item' + (item.disabled ? ' disabled' : '');
+      btn.textContent = item.text;
+      if (item.disabled) btn.disabled = true;
+      btn.onclick = function (ev) {
+        ev.stopPropagation();
+        hideTabContextMenu();
+        if (!item.disabled) item.action();
+      };
+      menu.appendChild(btn);
+    });
+
+    document.body.appendChild(menu);
+    const x = Math.min(e.clientX, (window.innerWidth || 1200) - (menu.offsetWidth || 150) - 8);
+    const y = Math.min(e.clientY, (window.innerHeight || 800) - (menu.offsetHeight || 160) - 8);
+    menu.style.left = Math.max(8, x) + 'px';
+    menu.style.top = Math.max(8, y) + 'px';
+
+    setTimeout(function () {
+      document.addEventListener('click', hideTabContextMenu);
+      document.addEventListener('keydown', handleTabMenuEsc);
+    }, 10);
+  }
+  async function closeSessionsList(list, targetActiveId) {
+    if (!list || !list.length) return;
+    saveEditorSQL();
+    const dirtySessions = list.filter(function (s) { return Object.keys(s.dirtyCells || {}).length > 0 || !!s.transactionPending; });
+    if (dirtySessions.length > 0) {
+      if (!confirm('待关闭的页签中存在未提交的事务或网格修改，确定关闭并回滚吗？')) return;
+    }
+    for (const s of list) {
+      if (s.transactionPending && s.sourceId) {
+        try {
+          await api('POST', '/api/database/transaction', { source_id: s.sourceId, session_id: s.transactionId, action: 'ROLLBACK' });
+        } catch (_) {}
+      }
+      if (s.controller) {
+        try { s.controller.abort(); } catch (_) {}
+      }
+    }
+    const removeSet = new Set(list.map(function (s) { return s.id; }));
+    state.sessions = state.sessions.filter(function (s) { return !removeSet.has(s.id); });
+    if (!state.sessions.length) {
+      const fresh = createSession('');
+      state.sessions.push(fresh);
+      state.activeId = fresh.id;
+      renderTabs();
+      restoreSessionChrome(fresh);
+      return;
+    }
+    if (targetActiveId && state.sessions.some(function (s) { return s.id === targetActiveId; })) {
+      switchSession(targetActiveId);
+    } else {
+      const next = state.sessions[0];
+      state.activeId = next.id;
+      if (next.type === 'object') {
+        renderTabs();
+        renderObjectViewer(next);
+      } else {
+        hideObjectSession();
+        renderTabs();
+        restoreSessionChrome(next);
+      }
+    }
+  }
+  function closeSessionsLeft(tabId) {
+    const idx = state.sessions.findIndex(function (s) { return s.id === tabId; });
+    if (idx <= 0) return;
+    closeSessionsList(state.sessions.slice(0, idx), tabId);
+  }
+  function closeSessionsRight(tabId) {
+    const idx = state.sessions.findIndex(function (s) { return s.id === tabId; });
+    if (idx < 0 || idx >= state.sessions.length - 1) return;
+    closeSessionsList(state.sessions.slice(idx + 1), tabId);
+  }
+  function closeSessionsOther(tabId) {
+    closeSessionsList(state.sessions.filter(function (s) { return s.id !== tabId; }), tabId);
+  }
+  function closeSessionsAll() {
+    closeSessionsList(state.sessions.slice(), null);
+  }
   function renderTabs() {
     const host = q('db-sql-tabs');
     if (!host) return;
@@ -217,6 +343,11 @@
         if (e.target.closest('[data-close]')) return;
         switchSession(Number(btn.dataset.tab));
       };
+      btn.oncontextmenu = function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        showTabContextMenu(e, Number(btn.dataset.tab));
+      };
     });
     host.querySelectorAll('[data-close]').forEach(function (btn) {
       btn.onclick = function (e) {
@@ -224,9 +355,22 @@
         closeSession(Number(btn.dataset.close));
       };
     });
+    host.ondblclick = function (e) {
+      if (e.target.closest('.db-editor-tab') || e.target.closest('button')) return;
+      e.preventDefault();
+      addSession();
+    };
+    const bar = host.parentElement;
+    if (bar && bar.dataset.dbTabsDblBound !== '1') {
+      bar.dataset.dbTabsDblBound = '1';
+      bar.addEventListener('dblclick', function (e) {
+        if (e.target.closest('.db-editor-tab') || e.target.closest('button') || e.target.closest('.db-dialect')) return;
+        e.preventDefault();
+        addSession();
+      });
+    }
   }
   function addSession() {
-    if (state.sessions.length >= TAB_LIMIT) return toast('已达到页签上限', 'warn');
     saveEditorSQL();
     const s = createSession('');
     state.sessions.push(s);
@@ -317,12 +461,6 @@
     if (existing) {
       switchSession(existing.id);
       return;
-    }
-    if (state.sessions.length >= TAB_LIMIT) {
-      const oldObjIdx = state.sessions.findIndex(function (s) { return s.type === 'object'; });
-      if (oldObjIdx >= 0) {
-        state.sessions.splice(oldObjIdx, 1);
-      }
     }
     saveEditorSQL();
     const s = {
@@ -564,6 +702,10 @@
   function loadHistory() {
     return Array.isArray(persisted.history) ? persisted.history : [];
   }
+  Kairo.database = Kairo.database || {};
+  Kairo.database.getHistory = function () {
+    return Array.isArray(persisted.history) ? persisted.history.slice() : [];
+  };
   function pushHistory(sql) {
     const text = String(sql || '').trim();
     if (!text || text.length > HISTORY_ENTRY_MAX) return;
@@ -572,6 +714,9 @@
     persisted.history = items.slice(0, HISTORY_LIMIT);
     savePersisted();
     refreshHistorySelect();
+    if (Kairo.databaseFeatures && typeof Kairo.databaseFeatures.addHistory === 'function') {
+      Kairo.databaseFeatures.addHistory({ sql: text, status: 'success' });
+    }
   }
   function refreshHistorySelect() {
     const select = q('db-history');
@@ -3671,6 +3816,10 @@
     hideQueryMessage();
     renderResult();
     pushHistory(sql);
+    s.runId = 'run-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
+    if (Kairo.databaseFeatures && typeof Kairo.databaseFeatures.recordQueryStart === 'function') {
+      Kairo.databaseFeatures.recordQueryStart(sql, s.runId);
+    }
     // 内核兼容：IE/极老核无 AbortController/fetch 时给明确提示而非首行抛错
     if (typeof fetch !== 'function') {
       return showQueryError('浏览器过旧', '当前内核不支持 fetch，请用 360极速模式 / Chrome 打开。');
@@ -3739,6 +3888,13 @@
       }
     } catch (e) {
       if (s.runSeq !== seq) return;
+      if (Kairo.databaseFeatures && typeof Kairo.databaseFeatures.recordQueryResult === 'function') {
+        Kairo.databaseFeatures.recordQueryResult(s.runId, {
+          sql: sql,
+          status: 'error',
+          error: e.name === 'AbortError' ? '已取消' : (e.message || '查询失败')
+        });
+      }
       if (e.name !== 'AbortError') {
         s.lastError = { title: '查询执行失败', message: e.message, sql: sql };
         s.status = '执行失败';
@@ -3880,6 +4036,14 @@
       s.summary = e.summary;
       s.transactionPending = !!(e.summary && e.summary.transaction_pending);
       s.status = e.message || '执行成功';
+      if (Kairo.databaseFeatures && typeof Kairo.databaseFeatures.recordQueryResult === 'function') {
+        Kairo.databaseFeatures.recordQueryResult(s.runId, {
+          sql: s.sql || s.lastSQL,
+          status: 'success',
+          elapsedMs: (e.summary && e.summary.elapsed_ms != null) ? e.summary.elapsed_ms : (s.startTime ? Math.round(performance.now() - s.startTime) : 0),
+          rows: (e.summary && e.summary.rows_affected != null) ? e.summary.rows_affected : 0
+        });
+      }
       if (s.id === state.activeId) {
         bindSession(s);
         const ddlAutoCommit = e.summary && (e.summary.statement_type === 'DDL_AUTOCOMMIT' || e.summary.statement_type === 'DDL');
@@ -3903,6 +4067,14 @@
         timingStr = e.summary.elapsed_ms + ' ms（首包 ' + firstPacketTime + ' ms / 总 ' + totalTime + ' ms）';
       }
       s.status = e.summary.rows + ' 行 · ' + timingStr + (e.summary.retry_count ? ' · 已自动重连' : '') + (e.summary.ordered === false ? ' · 未指定 ORDER BY' : '') + (e.summary.truncated ? ' · 已截断' : '');
+      if (Kairo.databaseFeatures && typeof Kairo.databaseFeatures.recordQueryResult === 'function') {
+        Kairo.databaseFeatures.recordQueryResult(s.runId, {
+          sql: s.sql || s.lastSQL,
+          status: 'success',
+          elapsedMs: e.summary.elapsed_ms,
+          rows: e.summary.rows
+        });
+      }
       if (s.id === state.activeId) {
         bindSession(s);
         refreshVisibleResult();

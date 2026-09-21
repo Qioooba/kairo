@@ -570,7 +570,7 @@
     let showingResult = false, syncLock = false, compareSeq = 0;
     let disposed = false, compareInFlight = null, lastCompareKey = '', recompareTimer = 0;
     // 最小改：搜索态提升到工作台级，重比/重渲染后可恢复，不再丢查询。
-    let savedSearch = { query: '', caseSensitive: false, open: false };
+    let savedSearch = { query: '', caseSensitive: false, open: false, side: 'all' };
     const editorLeft = createEditor('left', () => { markDirty('left'); scheduleRecompare(); });
     const editorRight = createEditor('right', () => { markDirty('right'); scheduleRecompare(); });
     const editors = { left: editorLeft, right: editorRight };
@@ -667,6 +667,47 @@
       toast('已全选比对内容，可直接 Ctrl+C 复制', 'ok');
     }
 
+    const undoStack = [];
+    function pushUndoSnapshot(name) {
+      undoStack.push({
+        left: editorLeft.getValue(),
+        right: editorRight.getValue(),
+        name: name || 'edit'
+      });
+      if (undoStack.length > 50) undoStack.shift();
+      if (undoBtn) undoBtn.disabled = undoStack.length === 0;
+    }
+    function performUndo() {
+      if (!undoStack.length) {
+        toast('没有可撤回的操作', 'info');
+        return;
+      }
+      const snap = undoStack.pop();
+      editorLeft.setValue(snap.left);
+      editorRight.setValue(snap.right);
+      markDirty('left');
+      markDirty('right');
+      if (undoBtn) undoBtn.disabled = undoStack.length === 0;
+      compareNow(false, true);
+      toast('已撤回操作', 'ok');
+    }
+    const undoBtn = makeButton('撤回', 'undo', performUndo, 'btn btn-sm');
+    undoBtn.setAttribute('data-action', 'undo-diff');
+    undoBtn.title = '撤回最近一次比对操作 (Ctrl+Z)';
+    undoBtn.disabled = true;
+
+    const handleWorkbenchKeyDown = function (e) {
+      if (disposed) return;
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'z') {
+        const active = document.activeElement;
+        if (active && (active.tagName === 'TEXTAREA' || (active.tagName === 'INPUT' && active.type === 'text'))) return;
+        e.preventDefault();
+        e.stopPropagation();
+        performUndo();
+      }
+    };
+    document.addEventListener('keydown', handleWorkbenchKeyDown);
+
     function copySelectionToSide(toSide) {
       const fromSide = toSide === 'right' ? 'left' : 'right';
       const fromTa = editors[fromSide].textarea;
@@ -687,9 +728,10 @@
       } else {
         nextValue = textToCopy;
       }
+      pushUndoSnapshot('copySelection');
       editors[toSide].setValue(nextValue);
       markDirty(toSide);
-      compareNow(true);
+      compareNow(false, true);
       toast('已覆盖到' + (toSide === 'right' ? '右侧' : '左侧'), 'ok');
     }
 
@@ -739,7 +781,7 @@
     findBtn.title = '在比对结果中查找 (Ctrl+F)';
     // 高频操作直接放在工具栏：展开/覆盖/交换/保存；低频的复制/下载/行级导航留在更多里。
     const toolbar = el('div', { class: 'cmp2-commandbar' }, [
-      el('div', { class: 'cmp2-commandbar-primary' }, [compareBtn, navGroup, findBtn, dirtyBanner]),
+      el('div', { class: 'cmp2-commandbar-primary' }, [compareBtn, navGroup, findBtn, undoBtn, dirtyBanner]),
       el('div', { class: 'cmp2-commandbar-secondary' }, [
         el('label', { class: 'cmp2-field-inline' }, [el('span', { text: '视图' }), modeSelect]),
         toggleEditorsBtn, copySelRightBtn, copySelLeftBtn, swapBtn,
@@ -1085,20 +1127,13 @@
           state.diffSourceKey = key;
           state.diffStale = false;
           state.hunks = buildHunks(result.lines || []);
-          if (!auto) {
-            state.hunkIndex = state.hunks.length ? 0 : -1;
-            renderResult(false);
+          if (state.hunks.length) {
+            state.hunkIndex = Math.min(Math.max(0, state.hunkIndex), state.hunks.length - 1);
           } else {
-            if (state.hunks.length) {
-              state.hunkIndex = Math.min(Math.max(0, state.hunkIndex), state.hunks.length - 1);
-            } else {
-              state.hunkIndex = -1;
-            }
-            renderResult(true);
+            state.hunkIndex = -1;
           }
-          if (auto && revealAutoResult) {
-            // 自动刷新时不强制隐藏原文件编辑区，避免输入过程中光标丢失、无法继续输入
-            showingResult = true;
+          renderResult(showingResult);
+          if (showingResult) {
             panel.classList.add('cmp-panel-has-result');
             resultHost.style.display = '';
             editBtn.style.display = 'none';
@@ -1166,13 +1201,18 @@
           diffCountBadge.textContent = total > 0 ? ('差异 ' + (idx + 1) + ' / ' + total) : '无差异';
         },
         onSearchChange: function(next) {
-          savedSearch = { query: String((next && next.query) || ''), caseSensitive: !!(next && next.caseSensitive), open: !!(next && next.open) };
+          savedSearch = {
+            query: String((next && next.query) || ''),
+            caseSensitive: !!(next && next.caseSensitive),
+            side: (next && next.side) || 'all',
+            open: !!(next && next.open)
+          };
         }
       });
       resultHost.appendChild(currentVirtualDiff.element);
       // 最小改：重渲染后恢复搜索（只高亮不跳滚动），再定位差异块。
       if (savedSearch.query || savedSearch.open) {
-        try { currentVirtualDiff.restoreSearch(savedSearch.query, savedSearch.caseSensitive, savedSearch.open); } catch (_) {}
+        try { currentVirtualDiff.restoreSearch(savedSearch.query, savedSearch.caseSensitive, savedSearch.open, savedSearch.side); } catch (_) {}
       }
       if (viewToRestore && typeof currentVirtualDiff.restoreViewState === 'function') {
         currentVirtualDiff.restoreViewState(viewToRestore);
@@ -1203,6 +1243,7 @@
     }
     function applyHunk(index, direction) {
       const hunk = state.hunks[index]; if (!hunk) return;
+      pushUndoSnapshot('applyHunk');
       const targetSide = direction === 'right' ? 'right' : 'left';
       const allRows = state.alignedRows;
       if (allRows && allRows.length) {
@@ -1214,17 +1255,19 @@
         const start = direction === 'right' ? hunk.rightStart : hunk.leftStart, count = direction === 'right' ? hunk.rightCount : hunk.leftCount;
         const lines = splitEditorLines(target.getValue()); lines.splice(start, count, ...sourceLines); target.setValue(lines.join('\n'));
       }
-      markDirty(targetSide); compareNow(true);
+      markDirty(targetSide);
+      compareNow(false, true);
       toast('已' + (direction === 'right' ? '覆盖到右侧' : '覆盖到左侧'), 'ok');
     }
     function applyLine(row, direction) {
       if (!row || row.status === 'equal') return;
+      pushUndoSnapshot('applyLine');
       const targetSide = direction === 'right' ? 'right' : 'left';
       const allRows = state.alignedRows || [row];
       const newLines = reconstructTargetLines(allRows, new Set([row]), direction);
       editors[targetSide].setValue(newLines.join('\n'));
       markDirty(targetSide);
-      compareNow(true);
+      compareNow(false, true);
       toast('已' + (direction === 'right' ? '覆盖本行到右侧' : '覆盖本行到左侧'), 'ok');
     }
     function applyBatch(diffRows, selectedIndices, direction) {
@@ -1237,11 +1280,12 @@
         toast('选中的行无差异需要覆盖', 'warn');
         return;
       }
+      pushUndoSnapshot('applyBatch');
       const allRows = state.alignedRows || diffRows;
       const newLines = reconstructTargetLines(allRows, new Set(selRows), direction);
       editors[targetSide].setValue(newLines.join('\n'));
       markDirty(targetSide);
-      compareNow(true);
+      compareNow(false, true);
       toast('已批量覆盖 ' + selRows.length + ' 行到' + (direction === 'right' ? '右侧' : '左侧'), 'ok');
     }
     function commitLineEdit(side, lineNo, newText, row) {
@@ -1249,13 +1293,15 @@
       const otherNo = side === 'left' ? row.rightNo : row.leftNo;
       const next = replaceEditorLine(current, lineNo, newText, otherNo);
       if (next === current) return;
+      pushUndoSnapshot('editLine');
       editors[side].setValue(next);
       markDirty(side);
-      scheduleRecompare();
+      compareNow(false, true);
     }
     function swapSides() {
+      pushUndoSnapshot('swapSides');
       const leftText = editorLeft.getValue(); editorLeft.setValue(editorRight.getValue()); editorRight.setValue(leftText);
-      const old = state.left; state.left = state.right; state.right = old; markDirty('left'); markDirty('right'); updateHeader('left'); updateHeader('right'); saveSources(state); if (state.diff) compareNow(true);
+      const old = state.left; state.left = state.right; state.right = old; markDirty('left'); markDirty('right'); updateHeader('left'); updateHeader('right'); saveSources(state); if (state.diff) compareNow(false, true);
     }
     function copyDiff() {
       if (!state.diff) return;
@@ -1298,7 +1344,7 @@
       clearTimeout(recompareTimer);
       recompareTimer = 0;
       compareSeq++;
-      compareInFlight = null;
+      document.removeEventListener('keydown', handleWorkbenchKeyDown);
       editorLeft.dispose();
       editorRight.dispose();
       if (state.textWorkbench && state.textWorkbench.loadPair) delete state.textWorkbench.loadPair;
@@ -1384,6 +1430,7 @@
     // Search state
     let searchQuery = '';
     let searchCaseSensitive = false;
+    let searchSide = 'all';
     let searchMatches = [];
     let activeMatchIndex = -1;
     let searchDebounce = 0;
@@ -1421,20 +1468,72 @@
       if (r.leftText && r.leftText.length > maxLeftChars) maxLeftChars = r.leftText.length;
       if (r.rightText && r.rightText.length > maxRightChars) maxRightChars = r.rightText.length;
     }
-    const baseColWidth = 380;
-    const leftColWidth = Math.max(baseColWidth, Math.ceil(maxLeftChars * 7.8) + 76);
-    const rightColWidth = Math.max(baseColWidth, Math.ceil(maxRightChars * 7.8) + 76);
-    const totalCanvasWidth = 24 + leftColWidth + 54 + rightColWidth;
-    const rowGridColumns = '24px minmax(' + leftColWidth + 'px, 1fr) 54px minmax(' + rightColWidth + 'px, 1fr)';
+    const maxChars = Math.max(maxLeftChars, maxRightChars);
+    const maxCodeWidth = Math.max(600, Math.ceil(maxChars * 8.2) + 80);
+    const rowGridColumns = '24px minmax(0, 1fr) 54px minmax(0, 1fr)';
 
     let activeRowIndex = -1;
+    let hScrollLeft = 0;
     const viewport = el('div', { class: 'cmp-vdiff', tabindex: '0', role: 'region', 'aria-label': '文本差异结果' });
     const canvas = el('div', { class: 'cmp-vdiff-canvas', role: 'list' });
     canvas.style.height = Math.max(1, rows.length * rowHeight) + 'px';
-    canvas.style.minWidth = totalCanvasWidth + 'px';
-    canvas.style.width = 'max-content';
+    canvas.style.width = '100%';
+    canvas.style.minWidth = '0';
     viewport.appendChild(canvas);
     let renderedStart = -1, renderedEnd = -1;
+
+    // 底部横向联动滚动条：左右两侧自适应并由下方滚动条联动
+    const bottomBar = el('div', { class: 'cmp-diff-bottom-bar' });
+    const leftTrack = el('div', { class: 'cmp-hscroll-track cmp-hscroll-left', tabindex: '-1', title: '左右拖动滚动代码' }, [
+      el('div', { class: 'cmp-hscroll-dummy', style: 'width:' + maxCodeWidth + 'px;height:1px;' })
+    ]);
+    const rightTrack = el('div', { class: 'cmp-hscroll-track cmp-hscroll-right', tabindex: '-1', title: '左右拖动滚动代码' }, [
+      el('div', { class: 'cmp-hscroll-dummy', style: 'width:' + maxCodeWidth + 'px;height:1px;' })
+    ]);
+    bottomBar.append(
+      el('div', { class: 'cmp-hscroll-spacer cmp-hscroll-select-spacer' }),
+      leftTrack,
+      el('div', { class: 'cmp-hscroll-spacer cmp-hscroll-middle-spacer' }),
+      rightTrack
+    );
+
+    let syncingHScroll = false;
+    function syncHScroll(srcTrack, dstTrack) {
+      if (syncingHScroll) return;
+      syncingHScroll = true;
+      try {
+        hScrollLeft = srcTrack.scrollLeft;
+        if (dstTrack && Math.abs(dstTrack.scrollLeft - hScrollLeft) > 1) {
+          dstTrack.scrollLeft = hScrollLeft;
+        }
+        const wraps = canvas.querySelectorAll('.cmp-code-wrap');
+        for (let i = 0; i < wraps.length; i++) {
+          wraps[i].scrollLeft = hScrollLeft;
+        }
+      } finally {
+        syncingHScroll = false;
+      }
+    }
+
+    leftTrack.addEventListener('scroll', () => syncHScroll(leftTrack, rightTrack), { passive: true });
+    rightTrack.addEventListener('scroll', () => syncHScroll(rightTrack, leftTrack), { passive: true });
+
+    viewport.addEventListener('wheel', (e) => {
+      if (e.shiftKey && Math.abs(e.deltaY) > 0) {
+        e.preventDefault();
+        leftTrack.scrollLeft += e.deltaY;
+      } else if (Math.abs(e.deltaX) > 0) {
+        e.preventDefault();
+        leftTrack.scrollLeft += e.deltaX;
+      }
+    }, { passive: false });
+
+    canvas.addEventListener('scroll', (e) => {
+      const wrap = e.target && e.target.closest && e.target.closest('.cmp-code-wrap');
+      if (wrap && !syncingHScroll) {
+        leftTrack.scrollLeft = wrap.scrollLeft;
+      }
+    }, { capture: true, passive: true });
 
     // Search UI Elements
     const searchBar = el('div', { class: 'cmp-diff-search-bar', style: 'display:none;' });
@@ -1455,10 +1554,31 @@
       searchCaseBtn.classList.toggle('btn-primary', searchCaseSensitive);
       executeSearch(searchInput.value);
     };
+
+    const searchSideSelect = el('select', {
+      class: 'cmp-diff-search-side',
+      'aria-label': '查找范围',
+      title: '选择在两侧、仅左侧或仅右侧查找'
+    }, [
+      el('option', { value: 'all', text: '全部两侧' }),
+      el('option', { value: 'left', text: '仅左侧' }),
+      el('option', { value: 'right', text: '仅右侧' })
+    ]);
+    searchSideSelect.value = searchSide;
+    searchSideSelect.addEventListener('change', function () {
+      searchSide = searchSideSelect.value;
+      executeSearch(searchInput.value);
+    });
+
     function notifySearch() {
       try {
         if (typeof onSearchChange === 'function') {
-          onSearchChange({ query: searchQuery, caseSensitive: searchCaseSensitive, open: searchBar.style.display !== 'none' });
+          onSearchChange({
+            query: searchQuery,
+            caseSensitive: searchCaseSensitive,
+            side: searchSide,
+            open: searchBar.style.display !== 'none'
+          });
         }
       } catch (_) {}
     }
@@ -1484,7 +1604,7 @@
       title: '关闭 (Esc)'
     });
     searchCloseBtn.onclick = function () { closeSearch(); };
-    searchBar.append(searchInput, searchCaseBtn, searchCount, searchPrevBtn, searchNextBtn, searchCloseBtn);
+    searchBar.append(searchInput, searchCaseBtn, searchSideSelect, searchCount, searchPrevBtn, searchNextBtn, searchCloseBtn);
 
     searchInput.addEventListener('input', function () {
       // 最小改：输入防抖 150ms，大结果集下连续输入不再每次全量扫描。
@@ -1516,11 +1636,13 @@
         return;
       }
       const target = searchCaseSensitive ? searchQuery : searchQuery.toLowerCase();
+      const checkLeft = searchSide === 'all' || searchSide === 'left';
+      const checkRight = searchSide === 'all' || searchSide === 'right';
       rows.forEach((r, idx) => {
         if (mode === 'changes' && r.status === 'equal') return;
-        const left = searchCaseSensitive ? (r.leftText || '') : (r.leftText || '').toLowerCase();
-        const right = searchCaseSensitive ? (r.rightText || '') : (r.rightText || '').toLowerCase();
-        if (left.includes(target) || right.includes(target)) {
+        const left = checkLeft ? (searchCaseSensitive ? (r.leftText || '') : (r.leftText || '').toLowerCase()) : '';
+        const right = checkRight ? (searchCaseSensitive ? (r.rightText || '') : (r.rightText || '').toLowerCase()) : '';
+        if ((checkLeft && left.includes(target)) || (checkRight && right.includes(target))) {
           searchMatches.push(idx);
         }
       });
@@ -1537,9 +1659,13 @@
       notifySearch();
     }
     // 最小改：重渲染后恢复搜索，高亮但不抢滚动/焦点，避免自动重比时跳走。
-    function restoreSearch(query, caseSensitive, open) {
+    function restoreSearch(query, caseSensitive, open, side) {
       searchCaseSensitive = !!caseSensitive;
       searchCaseBtn.classList.toggle('btn-primary', searchCaseSensitive);
+      if (side && (side === 'all' || side === 'left' || side === 'right')) {
+        searchSide = side;
+      }
+      searchSideSelect.value = searchSide;
       searchInput.value = String(query || '');
       searchBar.style.display = open ? 'flex' : 'none';
       searchQuery = String(query || '');
@@ -1553,11 +1679,13 @@
         return;
       }
       const target = searchCaseSensitive ? searchQuery : searchQuery.toLowerCase();
+      const checkLeft = searchSide === 'all' || searchSide === 'left';
+      const checkRight = searchSide === 'all' || searchSide === 'right';
       rows.forEach((r, idx) => {
         if (mode === 'changes' && r.status === 'equal') return;
-        const left = searchCaseSensitive ? (r.leftText || '') : (r.leftText || '').toLowerCase();
-        const right = searchCaseSensitive ? (r.rightText || '') : (r.rightText || '').toLowerCase();
-        if (left.includes(target) || right.includes(target)) searchMatches.push(idx);
+        const left = checkLeft ? (searchCaseSensitive ? (r.leftText || '') : (r.leftText || '').toLowerCase()) : '';
+        const right = checkRight ? (searchCaseSensitive ? (r.rightText || '') : (r.rightText || '').toLowerCase()) : '';
+        if ((checkLeft && left.includes(target)) || (checkRight && right.includes(target))) searchMatches.push(idx);
       });
       if (searchMatches.length > 0) {
         activeMatchIndex = 0;
@@ -1721,7 +1849,7 @@
           role: 'listitem',
           'data-hunk': row.hunk >= 0 ? String(row.hunk) : '',
           'data-row': String(i),
-          style: 'transform:translateY(' + (i * rowHeight) + 'px); min-width:' + totalCanvasWidth + 'px; width:100%; grid-template-columns:' + rowGridColumns + ';'
+          style: 'transform:translateY(' + (i * rowHeight) + 'px); width:100%; grid-template-columns:' + rowGridColumns + ';'
         });
         node.addEventListener('click', function(e) {
           activeRowIndex = i;
@@ -1765,12 +1893,15 @@
         }
         node.append(
           selectCell,
-          makeDiffCell(row, 'left', onEdit, actions && actions.language && actions.language.left, searchQuery, searchCaseSensitive, isCurrentSearch, navigateLine),
+          makeDiffCell(row, 'left', onEdit, actions && actions.language && actions.language.left, searchQuery, searchCaseSensitive, isCurrentSearch, navigateLine, searchSide, hScrollLeft),
           middle,
-          makeDiffCell(row, 'right', onEdit, actions && actions.language && actions.language.right, searchQuery, searchCaseSensitive, isCurrentSearch, navigateLine)
+          makeDiffCell(row, 'right', onEdit, actions && actions.language && actions.language.right, searchQuery, searchCaseSensitive, isCurrentSearch, navigateLine, searchSide, hScrollLeft)
         );
         canvas.appendChild(node);
       }
+      const sbWidth = Math.max(0, viewport.offsetWidth - viewport.clientWidth);
+      if (sbWidth > 0) bottomBar.style.paddingRight = sbWidth + 'px';
+      else bottomBar.style.paddingRight = '0';
       updateMinimapThumb();
     }
 
@@ -1888,13 +2019,14 @@
       renderWindow();
       updateMinimapThumb();
     });
-    container.append(viewport, minimap);
+    const viewportCol = el('div', { class: 'cmp-vdiff-main-col', style: 'display:flex; flex-direction:column; flex:1 1 auto; min-width:0; overflow:hidden;' }, [viewport, bottomBar]);
+    container.append(viewportCol, minimap);
     const wrapper = el('div', { class: 'cmp-vdiff-wrapper' }, [searchBar, container, batchBar]);
 
     function getViewState() {
       return {
         scrollTop: viewport.scrollTop,
-        scrollLeft: viewport.scrollLeft,
+        scrollLeft: hScrollLeft,
         activeRowIndex: activeRowIndex,
         hunkIndex: state.hunkIndex
       };
@@ -1908,6 +2040,11 @@
         state.hunkIndex = Math.min(vs.hunkIndex, state.hunks.length - 1);
         if (actions && actions.onHunkChange) actions.onHunkChange(state.hunkIndex, state.hunks.length);
       }
+      if (typeof vs.scrollLeft === 'number' && vs.scrollLeft >= 0) {
+        hScrollLeft = vs.scrollLeft;
+        if (leftTrack) leftTrack.scrollLeft = hScrollLeft;
+        if (rightTrack) rightTrack.scrollLeft = hScrollLeft;
+      }
       const restoreScroll = () => {
         if (typeof vs.scrollTop === 'number' && vs.scrollTop > 0) {
           viewport.scrollTop = vs.scrollTop;
@@ -1915,8 +2052,11 @@
           const targetScroll = (activeRowIndex * rowHeight) - Math.floor((viewport.clientHeight || 500) / 2) + Math.floor(rowHeight / 2);
           viewport.scrollTop = Math.max(0, targetScroll);
         }
-        if (typeof vs.scrollLeft === 'number') {
-          viewport.scrollLeft = vs.scrollLeft;
+        if (typeof vs.scrollLeft === 'number' && vs.scrollLeft >= 0) {
+          hScrollLeft = vs.scrollLeft;
+          if (leftTrack) leftTrack.scrollLeft = hScrollLeft;
+          if (rightTrack) rightTrack.scrollLeft = hScrollLeft;
+          canvas.querySelectorAll('.cmp-code-wrap').forEach(w => { w.scrollLeft = hScrollLeft; });
         }
       };
       restoreScroll();
@@ -1935,13 +2075,14 @@
     return { element: wrapper, jumpToHunk, navigateHunk, navigateLine, openSearch, closeSearch, clearSelection, restoreSearch, getViewState, restoreViewState };
   }
 
-  function makeDiffCell(row, side, onEdit, language, searchQuery, searchCaseSensitive, isCurrentSearchMatch, onNavigateLine) {
+  function makeDiffCell(row, side, onEdit, language, searchQuery, searchCaseSensitive, isCurrentSearchMatch, onNavigateLine, searchSide, hScroll) {
     const lineNo = side === 'left' ? row.leftNo : row.rightNo;
     const text = side === 'left' ? row.leftText : row.rightText;
     const other = side === 'left' ? row.rightText : row.leftText;
     const code = el('span', { class: 'cmp-code', spellcheck: 'false', tabindex: '0', 'aria-readonly': 'true', 'aria-multiline': 'true', title: '点击或按 Enter 编辑；Enter 换行，Ctrl/⌘ + Enter 完成，Esc 取消' });
     const syntax = Kairo.workbench && Kairo.workbench.syntaxEditor;
-    const hasSearchMatch = searchQuery && text && (searchCaseSensitive ? text.includes(searchQuery) : text.toLowerCase().includes(searchQuery.toLowerCase()));
+    const isTargetSide = (!searchSide || searchSide === 'all' || searchSide === side);
+    const hasSearchMatch = isTargetSide && searchQuery && text && (searchCaseSensitive ? text.includes(searchQuery) : text.toLowerCase().includes(searchQuery.toLowerCase()));
 
     function refreshCodeDisplay(val) {
       code.innerHTML = '';
@@ -2067,10 +2208,15 @@
       finishEdit();
     });
 
+    const codeWrap = el('div', { class: 'cmp-code-wrap' }, [code]);
+    if (typeof hScroll === 'number' && hScroll > 0) {
+      codeWrap.scrollLeft = hScroll;
+    }
+
     return el('div', { class: 'cmp-diff-cell cmp-diff-' + side }, [
       el('span', { class: 'cmp-line-no', text: lineNo ? String(lineNo) : '' }),
       el('span', { class: 'cmp-line-marker', text: !lineNo ? '' : row.status === 'equal' ? ' ' : side === 'left' ? '−' : '+' }),
-      code
+      codeWrap
     ]);
   }
   function highlightSearchInText(parent, text, query, caseSensitive, isCurrentMatch) {
@@ -2343,8 +2489,6 @@
     const statusFilter = el('select', { 'aria-label': '按状态筛选' }, [
       el('option', { value: 'all', text: '全部状态' }),
       el('option', { value: 'different', text: '所有差异' }),
-      el('option', { value: 'left_newer', text: '左侧较新' }),
-      el('option', { value: 'right_newer', text: '右侧较新' }),
       el('option', { value: 'orphans', text: '仅单侧存在' }),
       el('option', { value: 'pending', text: '待验证/未展开' }),
       el('option', { value: 'blocked', text: '错误/类型冲突' })
@@ -2897,7 +3041,8 @@
         }));
       }
       const s = state.scan.summary || {};
-      progress.textContent = (integrity.unsafe ? '结果未完全验证' : '完成') + ' · ' + (state.scan.elapsed_ms || 0) + 'ms · 相同 ' + (s.same || 0) + ' · 不同 ' + (s.different || 0) + ' · 左新 ' + (s.left_newer || 0) + ' · 右新 ' + (s.right_newer || 0) + ' · 仅左 ' + (s.left_only || 0) + ' · 仅右 ' + (s.right_only || 0);
+      const diffCount = (s.different || 0) + (s.left_newer || 0) + (s.right_newer || 0);
+      progress.textContent = (integrity.unsafe ? '结果未完全验证' : '完成') + ' · ' + (state.scan.elapsed_ms || 0) + 'ms · 相同 ' + (s.same || 0) + ' · 不同 ' + diffCount + ' · 仅左 ' + (s.left_only || 0) + ' · 仅右 ' + (s.right_only || 0);
       resultCount.textContent = '显示 ' + rows.length + ' 项 · 总计 ' + ((state.scan.items || []).length) + ' 项';
       if (integrity.unsafe) selectionCount.title = '结果不完整，批量覆盖已禁用';
       updateSelectedStatus();
@@ -3305,7 +3450,7 @@
         if (row.dir) {
           node.title = row.open ? '双击折叠文件夹' : '双击展开并比较内容（或点左侧箭头）';
         } else if (item.left && item.right) {
-          node.title = '双击比对文件差异（或点“比对”按钮）';
+          node.title = '双击比对文件差异';
         } else {
           node.title = item.rel_path;
         }
@@ -3313,17 +3458,6 @@
         const status = isTypeConflict(item) ? '类型冲突' : folderStatusText(item.status, row.loading, item);
         node.setAttribute('aria-label', item.rel_path + '，' + status + (row.dir ? '，目录' : '，文件'));
         const ops = el('span', { class: 'cmp-folder-ops', role: 'gridcell', 'aria-label': '操作' });
-
-        if (!row.dir && item.left && item.right && !isTypeConflict(item) && !item.pending && item.status !== 'pending' && item.status !== 'error' && item.status !== 'errors') {
-          ops.appendChild(el('button', {
-            class: 'cmp-row-compare-btn',
-            type: 'button',
-            title: '比对两侧文件差异',
-            'aria-label': '比对 ' + item.rel_path + ' 两侧文件差异',
-            onclick: function (e) { e.stopPropagation(); onCompare(item); },
-            unsafeHtml: icon('compare') + '<span>比对</span>'
-          }));
-        }
         if (item.left && !item.left.is_dir && !isTypeConflict(item) && !item.pending && item.status !== 'pending' && item.status !== 'error' && item.status !== 'errors') {
           ops.appendChild(el('button', {
             class: 'cmp-row-copy-btn',
@@ -3467,7 +3601,7 @@
       if (item && !item.hashed && ((item.left && !item.left.is_dir) || (item.right && !item.right.is_dir))) return '元数据相同（未核验内容）';
       return '相同';
     }
-    return { same: '相同', different: '不同', suspect: '待校验', pending: '待验证', left_newer: '左侧较新', right_newer: '右侧较新', left_only: '仅左', right_only: '仅右', error: '错误', errors: '错误', type_conflict: '类型冲突', 'type-conflict': '类型冲突' }[status] || status || '';
+    return { same: '相同', different: '不同', suspect: '待校验', pending: '待验证', left_newer: '不同', right_newer: '不同', left_only: '仅左', right_only: '仅右', error: '错误', errors: '错误', type_conflict: '类型冲突', 'type-conflict': '类型冲突' }[status] || status || '';
   }
   function scanStatusVisible(status, filter, item) {
     if (!filter || filter === 'all') return true;

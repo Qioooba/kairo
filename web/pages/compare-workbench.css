@@ -746,7 +746,9 @@
 }
 
 .cmp2-workbench .cmp-vrow {
-  grid-template-columns: 24px minmax(380px, 1fr) 54px minmax(380px, 1fr);
+  grid-template-columns: 24px minmax(0, 1fr) 54px minmax(0, 1fr);
+  width: 100%;
+  min-width: 0;
 }
 .cmp-vdiff-wrapper {
   display: flex;
@@ -760,14 +762,61 @@
 }
 
 .cmp2-workbench .cmp-vdiff {
-  overflow-x: auto;
+  overflow-x: hidden;
   overflow-y: auto;
   contain: layout paint;
+  width: 100%;
 }
 
 .cmp2-workbench .cmp-vdiff-canvas {
-  width: max-content;
-  min-width: 100%;
+  width: 100%;
+  min-width: 0;
+}
+
+.cmp-diff-bottom-bar {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) 54px minmax(0, 1fr);
+  width: 100%;
+  background: var(--bg-2);
+  border-top: 1px solid var(--line);
+  box-sizing: border-box;
+  z-index: 10;
+}
+
+.cmp-hscroll-track {
+  overflow-x: auto;
+  overflow-y: hidden;
+  height: 12px;
+  background: var(--bg-2);
+}
+
+.cmp-hscroll-track::-webkit-scrollbar {
+  height: 8px;
+}
+
+.cmp-hscroll-track::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--primary) 35%, var(--line));
+  border-radius: 4px;
+}
+
+.cmp-hscroll-track::-webkit-scrollbar-thumb:hover {
+  background: var(--primary);
+}
+
+.cmp-hscroll-spacer {
+  height: 12px;
+  background: var(--bg-2);
+}
+
+.cmp-diff-search-side {
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg-1);
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
 }
 
 .cmp-code {

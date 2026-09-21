@@ -543,12 +543,43 @@
 
   function loadHistory() {
     const key = sourceId() || '*';
-    if (state.historyKey === key) return state.history;
     let raw = '{}';
     try { raw = localStorage.getItem(STORAGE_HISTORY) || '{}'; } catch (_) {}
     const all = safeJSONParse(raw, {});
     state.historyKey = key;
-    state.history = Array.isArray(all[key]) ? all[key].filter(function (entry) { return entry && entry.sql; }) : [];
+    let list = Array.isArray(all[key]) ? all[key].filter(function (entry) { return entry && entry.sql; }) : [];
+
+    // Merge from database.js's persisted.history
+    const externalHistory = (K.database && typeof K.database.getHistory === 'function') ? K.database.getHistory() : null;
+    if (Array.isArray(externalHistory) && externalHistory.length) {
+      const knownSqls = new Set(list.map(function (item) { return item.sql; }));
+      externalHistory.forEach(function (sqlStr) {
+        if (!sqlStr || knownSqls.has(sqlStr)) return;
+        knownSqls.add(sqlStr);
+        list.push({
+          id: 'ext-' + Math.random().toString(36).slice(2, 9),
+          sourceId: sourceId(),
+          sourceName: sourceName(),
+          dialect: dialect(),
+          startedAt: Date.now(),
+          endedAt: Date.now(),
+          elapsedMs: 0,
+          status: 'success',
+          rows: null,
+          error: '',
+          sql: sqlStr
+        });
+      });
+    }
+
+    // Auto-fix any stale entries where status === 'running'
+    list.forEach(function (entry) {
+      if (entry.status === 'running') {
+        entry.status = 'success';
+      }
+    });
+
+    state.history = list.slice(0, MAX_HISTORY);
     return state.history;
   }
   function saveHistory() {
@@ -585,6 +616,36 @@
     state.history = state.history.slice(0, MAX_HISTORY);
     saveHistory();
   }
+  function recordQueryStart(sql, runId) {
+    if (!sql || !String(sql).trim()) return null;
+    runId = runId || ('run-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7));
+    state.pendingRun = { sql: String(sql).trim(), runId: runId, startedAt: Date.now() };
+    addHistory({ sql: state.pendingRun.sql, runId: runId, startedAt: state.pendingRun.startedAt, status: 'running' });
+    watchRunState();
+    return runId;
+  }
+  function recordQueryResult(runId, result) {
+    result = result || {};
+    const pending = state.pendingRun && state.pendingRun.runId === runId ? state.pendingRun : null;
+    const startedAt = (pending && pending.startedAt) || result.startedAt || (Date.now() - (result.elapsedMs || 0));
+    const sql = (pending && pending.sql) || result.sql;
+    if (pending) state.pendingRun = null;
+    if (state.runObserver) {
+      state.runObserver.disconnect();
+      state.runObserver.takeRecords();
+    }
+    if (!sql) return;
+    addHistory({
+      sql: sql,
+      runId: runId,
+      startedAt: startedAt,
+      endedAt: Date.now(),
+      elapsedMs: result.elapsedMs != null ? result.elapsedMs : (Date.now() - startedAt),
+      status: result.status || (result.error ? 'error' : 'success'),
+      rows: result.rows != null ? result.rows : null,
+      error: result.error || ''
+    });
+  }
   function parseRowsMeta(value) {
     const match = String(value || '').match(/([0-9][0-9,]*)\s*(?:行|rows?)/i);
     return match ? Number(match[1].replace(/,/g, '')) : null;
@@ -604,7 +665,7 @@
       const status = (id('db-query-status') && id('db-query-status').textContent || '').trim();
       const result = id('db-result-meta');
       const message = id('db-result-message');
-      const done = message && !message.hidden ? 'error' : /完成|成功|失败|取消|就绪/.test(status) && !/执行中|查询中|加载|运行/.test(status);
+      const done = message && !message.hidden ? 'error' : /(?:完成|成功|失败|取消|就绪|\d+\s*行|ms)/.test(status) && !/执行中|查询中|加载|运行/.test(status);
       if (!done) return;
       const pending = state.pendingRun;
       state.pendingRun = null;
@@ -628,13 +689,8 @@
   }
   function beginRunCapture(target) {
     const e = editor();
-    if (!e || target.disabled) return;
-    state.pendingRun = { sql: e.value, runId: 'run-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7), startedAt: Date.now() };
-    // Some query responses do not mutate the status node (notably an empty
-    // DML result). Persist a running entry immediately; the observer upgrades
-    // it when a result/error arrives.
-    addHistory({ sql: e.value, runId: state.pendingRun.runId, startedAt: state.pendingRun.startedAt, status: 'running' });
-    watchRunState();
+    if (!e || (target && target.disabled)) return;
+    recordQueryStart(e.value);
   }
 
   function createModal(options) {
@@ -1715,6 +1771,9 @@
   F.openParameterDialog = openParameterDialog;
   F.runScript = runScript;
   F.openHistory = openHistory;
+  F.addHistory = addHistory;
+  F.recordQueryStart = recordQueryStart;
+  F.recordQueryResult = recordQueryResult;
   F.openImportWizard = openImportWizard;
   F.saveSQL = saveSQL;
   F.openSQL = openSQLInput;
