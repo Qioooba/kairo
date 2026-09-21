@@ -1177,7 +1177,9 @@
   }
   async function loadFields(table) {
     if (!table) return [];
-    const source = sourceId(), schemaInput = id('db-schema'), schema = schemaInput && schemaInput.value ? schemaInput.value : '';
+    const source = sourceId(), schemaInput = id('db-schema');
+    let schema = schemaInput && schemaInput.value ? schemaInput.value.trim() : '';
+    if (schema === '加载中…' || schema === '加载失败') schema = '';
     const key = source + '|' + schema + '|' + table;
     if (state.fieldCache[key]) return state.fieldCache[key];
     const parts = table.replace(/["`]/g, '').split('.');
@@ -1253,6 +1255,7 @@
   // Grid writes are allowed only for an unambiguous single-table projection.
   // Resolve from executed SQL, never from subsequently edited editor text.
   function resolveGridTarget(text, defaultSchema, sourceKind) {
+    if (defaultSchema === '加载中…' || defaultSchema === '加载失败') defaultSchema = '';
     const tokens = tokenizeSQL(text).filter(function (t) { return t.type !== 'space' && t.type !== 'comment'; });
     const word = function (i) { return tokens[i] ? tokens[i].value.toUpperCase() : ''; };
     const ident = function (t) { return t && (t.type === 'ident' || t.type === 'quoted-ident'); };
@@ -1275,6 +1278,7 @@
     if (!ident(tokens[i])) return null;
     let schema = defaultSchema || '', table = name(tokens[i++]);
     if (word(i) === '.') { i++; if (!ident(tokens[i])) return null; schema = table; table = name(tokens[i++]); }
+    if (schema === '加载中…' || schema === '加载失败') schema = '';
     if (word(i) === 'AS') i++;
     if (ident(tokens[i])) i++;
     if (i < tokens.length && !/^(WHERE|ORDER|FETCH|LIMIT|OFFSET|FOR|;)$/.test(word(i))) return null;
@@ -1307,10 +1311,12 @@
   async function gridPrimaryKeys(target) {
     const source = target && target.sourceId || sourceId();
     if (!target || !target.table || !source) return [];
-    const key = source + '|' + target.schema + '|' + target.table + '|meta';
+    let schema = target.schema || '';
+    if (schema === '加载中…' || schema === '加载失败') schema = '';
+    const key = source + '|' + schema + '|' + target.table + '|meta';
     if (state.fieldCache[key]) return state.fieldCache[key];
     try {
-      const data = await api('GET', '/api/database/metadata/fields?source_id=' + encodeURIComponent(source) + '&schema=' + encodeURIComponent(target.schema || '') + '&object=' + encodeURIComponent(target.table));
+      const data = await api('GET', '/api/database/metadata/fields?source_id=' + encodeURIComponent(source) + '&schema=' + encodeURIComponent(schema) + '&object=' + encodeURIComponent(target.table));
       const fields = (data.fields || data.items || []).map(function (field) { return typeof field === 'string' ? { name: field } : field; });
       const keys = fields.filter(function (field) { return field.primary_key || field.primaryKey; }).map(function (field) { return field.name; }).filter(Boolean);
       state.fieldCache[key] = keys;
@@ -1353,7 +1359,9 @@
     const production = context.production;
     const confirm = production ? window.confirm('当前数据源标记为生产环境，确认应用网格变更？') : false;
     if (production && !confirm) return;
-    const detail = { sourceId: context.sourceId, schema: target.schema, table: target.table, sessionId: session.sessionId, mutations: mutations, commit: !!commit, confirm: !!confirm, dialect: dialect() };
+    let targetSchema = target.schema || '';
+    if (targetSchema === '加载中…' || targetSchema === '加载失败') targetSchema = '';
+    const detail = { sourceId: context.sourceId, schema: targetSchema, table: target.table, sessionId: session.sessionId, mutations: mutations, commit: !!commit, confirm: !!confirm, dialect: dialect() };
     emit('kairo:database-grid-commit', detail);
     try {
       const adapter = state.adapters.grid;

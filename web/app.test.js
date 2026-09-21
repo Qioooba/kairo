@@ -1631,7 +1631,29 @@ function testDatabaseWorkbenchLazy() {
   assert.ok(writesIdx > qSrcIdx && isDDLIdx > writesIdx, 'writes 与 isDDL 必须在最外层作用域声明并位于守卫判断前');
   assert.ok(runQueryBody.indexOf('const effSrc = effectiveSource()') < 0, '不应存在多余延迟声明的 effSrc');
 
-  console.log('  database workbench lazy-load / suggest / shortcuts / LOB tokens / runQuery scoping ✓');
+  // 8. Schema 占位符防污染与目标解析断言
+  assert.ok(dbSrc.indexOf('function currentSchema()') >= 0, 'database.js 应包含 currentSchema 统一兜底');
+  assert.ok(dbSrc.indexOf('s.resultSchema = currentSchema()') >= 0, 'runQuery 应通过 currentSchema 获取生效 schema');
+  assert.ok(dbSrc.indexOf('<option value="">加载中…</option>') >= 0, '加载中选项必须包含空 value 防误传中文');
+
+  const featSrc = fs.readFileSync(path.join(__dirname, 'workbench/database-features.js'), 'utf8');
+  const mockWindow = {
+    Kairo: {},
+    addEventListener: function () {},
+    document: { readyState: 'loading', addEventListener: function () {} }
+  };
+  new Function('window', 'document', featSrc)(mockWindow, mockWindow.document);
+  const resolveGridTargetFn = mockWindow.Kairo.databaseFeatures.resolveGridTarget;
+  const targetLoading = resolveGridTargetFn('SELECT * FROM BUSINESS_APPLY', '加载中…', 'oracle');
+  assert.deepStrictEqual(targetLoading, { schema: '', table: 'BUSINESS_APPLY' }, '加载中占位符不应污染网格目标 schema');
+  const targetFailed = resolveGridTargetFn('SELECT * FROM BUSINESS_APPLY', '加载失败', 'oracle');
+  assert.deepStrictEqual(targetFailed, { schema: '', table: 'BUSINESS_APPLY' }, '加载失败占位符不应污染网格目标 schema');
+  const targetNormal = resolveGridTargetFn('SELECT * FROM BUSINESS_APPLY', 'SCOTT', 'oracle');
+  assert.deepStrictEqual(targetNormal, { schema: 'SCOTT', table: 'BUSINESS_APPLY' }, '正常默认 schema 应保留');
+  const targetExplicit = resolveGridTargetFn('SELECT * FROM "HR"."BUSINESS_APPLY"', '加载中…', 'oracle');
+  assert.deepStrictEqual(targetExplicit, { schema: 'HR', table: 'BUSINESS_APPLY' }, '显式 schema 应优先解析');
+
+  console.log('  database workbench lazy-load / suggest / shortcuts / LOB tokens / runQuery scoping / schema placeholder guard ✓');
 }
 
 function loadCompareHelpers() {

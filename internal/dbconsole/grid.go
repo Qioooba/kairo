@@ -83,7 +83,8 @@ func gridQualifiedTable(kind, schema, table string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if strings.TrimSpace(schema) == "" {
+	schema = strings.TrimSpace(schema)
+	if schema == "" || schema == "加载中…" || schema == "加载失败" {
 		return tableSQL, nil
 	}
 	schemaSQL, err := quoteGridIdentifier(kind, schema, "schema")
@@ -313,6 +314,7 @@ func (m *Manager) ApplyGridMutations(ctx context.Context, source Source, req Gri
 	if !validGridSessionID(req.SessionID) {
 		return GridMutationSummary{}, errors.New("session_id 无效")
 	}
+	req.Schema = ResolveSchema(source, req.Schema)
 	queryCtx, cancel := context.WithTimeout(ctx, source.Timeout())
 	defer cancel()
 	if err := m.acquire(queryCtx); err != nil {

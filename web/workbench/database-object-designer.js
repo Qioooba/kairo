@@ -23,7 +23,11 @@
   function id(name) { return document.getElementById(name); }
   function toast(value, type) { if (K.core && K.core.toast) K.core.toast(String(value), type || 'info'); }
   function sourceId() { const select = id('db-source'); return select && select.value ? String(select.value) : ''; }
-  function schemaName() { const select = id('db-schema'); return select && select.value ? String(select.value) : ''; }
+  function schemaName() {
+    const select = id('db-schema');
+    const val = select && select.value ? String(select.value).trim() : '';
+    return (val === '加载中…' || val === '加载失败') ? '' : val;
+  }
   function api(method, path, body) {
     if (K.api && K.api.api) return K.api.api(method, path, body);
     return fetch(path, { method: method, credentials: 'same-origin', headers: body === undefined ? {} : { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) }).then(function (response) { return response.json().catch(function () { return {}; }).then(function (data) { if (!response.ok) { const error = new Error(data.error || 'HTTP ' + response.status); error.status = response.status; error.data = data; throw error; } return data; }); });

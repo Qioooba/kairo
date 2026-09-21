@@ -108,6 +108,19 @@
     if (s && s.sourceId) return state.sources.find(function (x) { return x.id === s.sourceId; }) || null;
     return state.source || null;
   }
+  function currentSchema() {
+    const select = q('db-schema');
+    const val = select && select.value ? select.value.trim() : '';
+    if (val && val !== '加载中…' && val !== '加载失败') {
+      return val;
+    }
+    const source = effectiveSource();
+    if (source) {
+      if (source.kind === 'oracle' && source.username) return source.username.toUpperCase();
+      if (source.kind === 'mysql' && source.database) return source.database;
+    }
+    return '';
+  }
   function sessionSourceState(s) {
     s = s || sess();
     if (!s || !s.sourceId) return { status: state.source ? 'ready' : 'removed', source: state.source || null };
@@ -295,7 +308,7 @@
     if (resultsSec) resultsSec.hidden = false;
   }
   function openObjectTab(schema, object, type) {
-    schema = schema || (q('db-schema') && q('db-schema').value) || '';
+    schema = schema || currentSchema();
     let existing = state.sessions.find(function (s) {
       return s.type === 'object' && s.schema === schema && s.objectName === object;
     });
@@ -1131,7 +1144,7 @@
             source_id: effSrc.id,
             session_id: activeS.transactionId || '',
             transaction_pending: !!activeS.transactionPending,
-            owner: (targetVal.owner || (q('db-schema') && q('db-schema').value) || '').toUpperCase(),
+            owner: (targetVal.owner || currentSchema() || '').toUpperCase(),
             table: (tName || '').toUpperCase(),
             column: (colName || '').toUpperCase(),
             column_type: (targetVal.database_type || (isClob ? 'CLOB' : 'BLOB')).toUpperCase(),
@@ -1320,8 +1333,15 @@
   function getGridContext() {
     const current = sess(), source = effectiveSource(), features = Kairo.databaseFeatures;
     if (!current || current.type === 'object' || !source || !features || !features.resolveGridTarget) return null;
-    const target = features.resolveGridTarget(current.lastSQL, current.resultSchema || '', source.kind);
+    let schemaHint = current.resultSchema;
+    if (!schemaHint || schemaHint === '加载中…' || schemaHint === '加载失败') {
+      schemaHint = currentSchema();
+    }
+    const target = features.resolveGridTarget(current.lastSQL, schemaHint || '', source.kind);
     if (!target) return null;
+    if (!target.schema || target.schema === '加载中…' || target.schema === '加载失败') {
+      target.schema = currentSchema();
+    }
     const isOrdered = !(current.summary && current.summary.ordered === false);
     return {
       sourceId: source.id, sessionId: current.transactionId, schema: target.schema, table: target.table,
@@ -1349,7 +1369,8 @@
     try {
       let affected = 0;
       if (dirtyKeys.length && !current.gridEditsStaged) {
-        const metadata = await api('GET', '/api/database/metadata/fields?source_id=' + encodeURIComponent(source.id) + '&schema=' + encodeURIComponent(context.schema) + '&object=' + encodeURIComponent(context.table));
+        const schemaToUse = (context.schema && context.schema !== '加载中…' && context.schema !== '加载失败') ? context.schema : currentSchema();
+        const metadata = await api('GET', '/api/database/metadata/fields?source_id=' + encodeURIComponent(source.id) + '&schema=' + encodeURIComponent(schemaToUse) + '&object=' + encodeURIComponent(context.table));
         const primaryKey = (metadata.fields || []).filter(function (f) { return f.primary_key; }).map(function (f) { return f.name; });
         const rows = new Map();
         dirtyKeys.forEach(function (key) {
@@ -1364,7 +1385,7 @@
           }
           rows.get(edit.rowIdx).values[column.name] = edit.newVal;
         });
-        const response = await api('POST', '/api/database/grid', { source_id: source.id, session_id: current.transactionId, schema: context.schema, table: context.table, mutations: Array.from(rows.values()), confirm: confirmWrite });
+        const response = await api('POST', '/api/database/grid', { source_id: source.id, session_id: current.transactionId, schema: schemaToUse, table: context.table, mutations: Array.from(rows.values()), confirm: confirmWrite });
         current.transactionPending = true;
         current.gridEditsStaged = true;
         affected = Number(response && response.result && response.result.rows_affected) || 0;
@@ -2182,11 +2203,14 @@
     const history = loadHistory();
     const savedRows = Math.max(1, Math.min(state.source.max_rows, Number(persisted.row_limits[state.source.id]) || Math.min(1000, state.source.max_rows)));
     const gridRows = Math.max(6, Math.min(100, Number(state.prefs.gridRows) || 25));
+    const defaultSchema = state.source ? (state.source.kind === 'oracle' ? (state.source.username || '').toUpperCase() : (state.source.database || '')) : '';
     host.innerHTML = '<div class="db-sql-layout">'
       + '<aside class="card db-meta" id="db-meta-pane">'
       + '<div class="db-pane-title"><span>数据库对象</span><div class="db-pane-actions"><button class="btn btn-xs" id="db-meta-refresh" title="刷新对象树">刷新</button><button class="btn btn-xs db-meta-toggle-btn" id="db-meta-toggle" title="收起对象栏 (' + h(state.prefs.shortcuts.objects || 'Alt+O') + ')" aria-label="收起数据库对象栏">' + actionIcon('panel') + '</button></div></div>'
       + '<button type="button" class="db-meta-collapsed-bar" id="db-meta-collapsed-bar" title="展开数据库对象 (' + h(state.prefs.shortcuts.objects || 'Alt+O') + ')" aria-label="展开数据库对象栏"><span class="db-meta-collapsed-icon">' + actionIcon('database') + '</span><span class="db-meta-collapsed-text">对象</span></button>'
-      + '<label class="db-compact-label">Schema<select id="db-schema"><option>加载中…</option></select></label>'
+      + '<label class="db-compact-label">Schema<select id="db-schema">'
+      + (defaultSchema ? '<option value="' + h(defaultSchema) + '">' + h(defaultSchema) + '</option>' : '<option value="">加载中…</option>')
+      + '</select></label>'
       + '<label class="sr-only" for="db-object-search">搜索数据库对象</label><input id="db-object-search" type="search" aria-label="搜索数据库对象" placeholder="搜索表、视图、函数、过程">'
       + '<div id="db-objects" class="db-object-list"><div class="db-tree-loading">正在读取元数据…</div></div>'
       + '</aside>'
@@ -2414,9 +2438,7 @@
         toast('查询历史已清空', 'ok');
       }
     };
-    if (!persisted.meta_collapsed) {
-      loadSchemas();
-    }
+    loadSchemas();
   }
 
   async function loadSchemas(refresh) {
@@ -2426,7 +2448,7 @@
       const data = await api('GET', '/api/database/metadata/schemas?source_id=' + encodeURIComponent(source.id) + (refresh === true ? '&refresh=1' : ''));
       const schema = q('db-schema');
       if (token !== state.workspaceToken || !schema) return;
-      schema.innerHTML = (data.schemas || []).map(x => '<option>' + h(x.name) + '</option>').join('');
+      schema.innerHTML = (data.schemas || []).map(x => '<option value="' + h(x.name) + '">' + h(x.name) + '</option>').join('');
       if (source.kind === 'mysql' && source.database && Array.from(schema.options).some(x => x.value === source.database)) schema.value = source.database;
       if (source.kind === 'oracle') {
         const preferred = (source.username || '').toUpperCase();
@@ -2527,7 +2549,7 @@
   }
 
   async function loadCategoryObjects(groupEl, category) {
-    const token = state.workspaceToken, source = state.source, schema = q('db-schema') && q('db-schema').value;
+    const token = state.workspaceToken, source = state.source, schema = currentSchema();
     if (!schema || !source || !groupEl) return;
     const content = groupEl.querySelector('.db-cat-content');
     if (content) content.innerHTML = '<div class="db-tree-loading">正在查询 ' + h(category) + '…</div>';
@@ -2538,8 +2560,8 @@
       if (!items) {
         // 真·按需懒加载：仅针对该类别发起轻量查询，各自缓存。
         const data = await api('GET', '/api/database/metadata/objects?source_id=' + encodeURIComponent(source.id) + '&schema=' + encodeURIComponent(schema) + '&category=' + encodeURIComponent(category));
-        const currentSchema = q('db-schema') && q('db-schema').value;
-        if (token !== state.workspaceToken || currentSchema !== schema || (state.source && state.source.id !== source.id)) return;
+        const curSchema = currentSchema();
+        if (token !== state.workspaceToken || curSchema !== schema || (state.source && state.source.id !== source.id)) return;
         items = data.objects || [];
         state.schemaCategoryCache[cacheKey] = items;
         if (category === 'tables') {
@@ -2550,28 +2572,28 @@
           state.metadataCache[schema] = Array.from(new Set([].concat(state.metadataCache[schema] || [], names)));
         }
       }
-      const currentSchema = q('db-schema') && q('db-schema').value;
-      if (token !== state.workspaceToken || currentSchema !== schema || (state.source && state.source.id !== source.id)) return;
+      const curSchema = currentSchema();
+      if (token !== state.workspaceToken || curSchema !== schema || (state.source && state.source.id !== source.id)) return;
       renderCategoryItems(groupEl, schema, category, items);
     } catch (e) {
       groupEl._loaded = false;
-      const currentSchema = q('db-schema') && q('db-schema').value;
-      if (token === state.workspaceToken && currentSchema === schema && content) content.innerHTML = inlineError('查询失败', e.message);
+      const curSchema = currentSchema();
+      if (token === state.workspaceToken && curSchema === schema && content) content.innerHTML = inlineError('查询失败', e.message);
     }
   }
 
   async function loadObjects() {
     state.metaSeq = (state.metaSeq || 0) + 1;
     const seq = state.metaSeq;
-    const token = state.workspaceToken, source = state.source, schema = q('db-schema') && q('db-schema').value, objects = q('db-objects');
+    const token = state.workspaceToken, source = state.source, schema = currentSchema(), objects = q('db-objects');
     if (!schema || !source) return;
     if (objects) objects.innerHTML = '<div class="db-tree-loading">正在读取对象…</div>';
     try {
       const search = q('db-object-search');
       const hasSearch = !!(search && search.value.trim());
       const data = await api('GET', '/api/database/metadata/objects?source_id=' + encodeURIComponent(source.id) + '&schema=' + encodeURIComponent(schema) + '&search=' + encodeURIComponent(hasSearch ? search.value : ''));
-      const currentSchema = q('db-schema') && q('db-schema').value;
-      if (seq !== state.metaSeq || token !== state.workspaceToken || !objects || currentSchema !== schema || (state.source && state.source.id !== source.id)) return;
+      const curSchema = currentSchema();
+      if (seq !== state.metaSeq || token !== state.workspaceToken || !objects || curSchema !== schema || (state.source && state.source.id !== source.id)) return;
       const groups = [['tables', '表'], ['views', '视图'], ['functions', '函数'], ['procedures', '存储过程 / 包'], ['triggers', '触发器'], ['other', '其他对象']];
       const by = {};
       (data.objects || []).forEach(x => (by[x.category || 'other'] = by[x.category || 'other'] || []).push(x));
@@ -2580,8 +2602,8 @@
         bindObjectButton(btn, schema);
       });
     } catch (e) {
-      const currentSchema = q('db-schema') && q('db-schema').value;
-      if (seq === state.metaSeq && token === state.workspaceToken && objects && currentSchema === schema) objects.innerHTML = inlineError('对象加载失败', e.message);
+      const curSchema = currentSchema();
+      if (seq === state.metaSeq && token === state.workspaceToken && objects && curSchema === schema) objects.innerHTML = inlineError('对象加载失败', e.message);
     }
   }
 
@@ -2992,7 +3014,7 @@
     if (!match) return false;
     const snippet = state.prefs.snippets.find(x => x.enabled !== false && x.key === match[1]);
     if (!snippet) return false;
-    const schema = q('db-schema') ? q('db-schema').value : '', start = pos - match[1].length;
+    const schema = currentSchema(), start = pos - match[1].length;
     let replacement = String(snippet.text).split('${schema}').join(schema || '').split('${table}').join('table_name');
     const cursor = replacement.indexOf('${cursor}');
     replacement = replacement.split('${cursor}').join('');
@@ -3273,7 +3295,7 @@
     const objSet = new Set();
     // 表名联想与 DOM 完全解耦：优先从后台预热的 schemaTableCache 取数，
     // 无论左侧对象栏折叠与否、是否展开过表文件夹，始终就绪。
-    const schema = q('db-schema') && q('db-schema').value;
+    const schema = currentSchema();
     if (schema && state.schemaTableCache && state.schemaTableCache[schema]) {
       state.schemaTableCache[schema].forEach(function (name) { if (name) objSet.add(name); });
     }
@@ -3608,7 +3630,7 @@
     const prevSQL = s.lastSQL;
     s.sql = q('db-sql') ? q('db-sql').value : sql;
     s.lastSQL = sql;
-    s.resultSchema = (q('db-schema') && q('db-schema').value) || '';
+    s.resultSchema = currentSchema();
     s.lastMaxRows = maxRows;
     s.pageSize = maxRows;
     if (!keepPage || prevSQL !== sql) { s.page = 1; }
@@ -4967,6 +4989,7 @@
     discardPendingWork: discardPendingWork,
     markTransactionPending: markTransactionPending,
     refreshTransactionState: function () { updateTransactionControls(); return !!(sess() && sess().transactionPending); },
+    currentSchema: currentSchema,
     getGridContext: getGridContext,
     getActiveSession: function () {
       const active = sess();

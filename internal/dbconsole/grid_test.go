@@ -56,3 +56,18 @@ func TestBuildGridMutationSQLOracleRowID(t *testing.T) {
 		t.Fatal("MySQL ROWID must be rejected")
 	}
 }
+
+func TestBuildGridMutationSQLPlaceholderSchema(t *testing.T) {
+	for _, schema := range []string{"加载中…", "加载失败", "", "   "} {
+		sqlText, _, err := BuildGridMutationSQL(KindOracle, schema, "BUSINESS_APPLY", GridMutation{
+			Action: "update", Values: map[string]any{"RELATIVESERIALNO": "123"},
+			Key: map[string]any{"SERIALNO": "BA1"}, PrimaryKey: []string{"SERIALNO"},
+		})
+		if err != nil {
+			t.Fatalf("schema %q should be normalized instead of failing: %v", schema, err)
+		}
+		if !strings.Contains(sqlText, `"BUSINESS_APPLY"`) || strings.Contains(sqlText, "加载") {
+			t.Fatalf("unexpected SQL for schema %q: %s", schema, sqlText)
+		}
+	}
+}

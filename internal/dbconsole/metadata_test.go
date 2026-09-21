@@ -91,3 +91,22 @@ func TestObjectsCategoryCacheIsolation(t *testing.T) {
 		t.Fatalf("all category compat failed: %+v %v", gotAllWord, err)
 	}
 }
+
+func TestResolveSchema(t *testing.T) {
+	oracleSource := Source{Kind: KindOracle, Username: "kairo_admin"}
+	mysqlSource := Source{Kind: KindMySQL, Database: "kairo_db"}
+
+	// Explicit schema preserved
+	if got := ResolveSchema(oracleSource, "CUSTOM_SCHEMA"); got != "CUSTOM_SCHEMA" {
+		t.Fatalf("expected CUSTOM_SCHEMA, got %q", got)
+	}
+	// Placeholders and blanks fallback to source defaults
+	for _, placeholder := range []string{"", "  ", "加载中…", "加载失败"} {
+		if got := ResolveSchema(oracleSource, placeholder); got != "KAIRO_ADMIN" {
+			t.Fatalf("oracle placeholder %q fallback expected KAIRO_ADMIN, got %q", placeholder, got)
+		}
+		if got := ResolveSchema(mysqlSource, placeholder); got != "kairo_db" {
+			t.Fatalf("mysql placeholder %q fallback expected kairo_db, got %q", placeholder, got)
+		}
+	}
+}

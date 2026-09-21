@@ -165,10 +165,27 @@ func (m *Manager) Schemas(ctx context.Context, source Source) ([]Schema, error) 
 	return out, nil
 }
 
+// ResolveSchema normalizes and falls back empty or placeholder schema strings
+// to the source's natural schema (Oracle: Username, MySQL: Database).
+func ResolveSchema(source Source, schema string) string {
+	schema = strings.TrimSpace(schema)
+	if schema != "" && schema != "加载中…" && schema != "加载失败" {
+		return schema
+	}
+	if source.Kind == KindOracle && source.Username != "" {
+		return strings.ToUpper(source.Username)
+	}
+	if source.Kind == KindMySQL && source.Database != "" {
+		return source.Database
+	}
+	return ""
+}
+
 func (m *Manager) Objects(ctx context.Context, source Source, schema, search, category string) ([]Object, error) {
 	if source.Kind == KindRedis {
 		return nil, errors.New("Redis 没有表对象")
 	}
+	schema = ResolveSchema(source, schema)
 	if schema == "" || len(schema) > 256 || len(search) > 256 {
 		return nil, errors.New("schema 不能为空，且 schema/search 不能超过 256 字节")
 	}
@@ -309,6 +326,7 @@ func (m *Manager) Fields(ctx context.Context, source Source, schema, object stri
 	if source.Kind == KindRedis {
 		return nil, errors.New("Redis 没有字段")
 	}
+	schema = ResolveSchema(source, schema)
 	if schema == "" || object == "" || len(schema) > 256 || len(object) > 256 {
 		return nil, errors.New("schema/object 不能为空且不能超过 256 字节")
 	}
