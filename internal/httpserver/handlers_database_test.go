@@ -150,6 +150,26 @@ func TestDatabaseSessionBackupFloatEditorHeight(t *testing.T) {
 		t.Fatalf("expected 200 for backup with float editorHeight, got %d: %s", w.Code, w.Body.String())
 	}
 
+	// 相同内容仅更新时间戳，验证服务端去重，避免重复写盘与审计日志开销
+	payloadDuplicate := map[string]any{
+		"activeId":     1,
+		"tabSeq":       1,
+		"sourceId":     "",
+		"editorHeight": 169.18753051757812,
+		"sessions": []map[string]any{
+			{"id": 1, "sql": "SELECT 1"},
+		},
+		"updatedAt": 1700000015000,
+	}
+	wDup := doRequestWithToken(srv, http.MethodPost, "/api/database/sessions/backup", rbacUserToken, payloadDuplicate)
+	if wDup.Code != http.StatusOK {
+		t.Fatalf("expected 200 for duplicate backup, got %d: %s", wDup.Code, wDup.Body.String())
+	}
+	var dupResp map[string]any
+	if err := json.Unmarshal(wDup.Body.Bytes(), &dupResp); err != nil || dupResp["changed"] != false {
+		t.Fatalf("expected changed=false for identical session backup, got %s", wDup.Body.String())
+	}
+
 	wRestore := doRequestWithToken(srv, http.MethodGet, "/api/database/sessions/restore", rbacUserToken, nil)
 	if wRestore.Code != http.StatusOK {
 		t.Fatalf("expected 200 for restore, got %d: %s", wRestore.Code, wRestore.Body.String())

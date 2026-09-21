@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 
@@ -1445,6 +1446,20 @@ func (s *Server) handleDatabaseSessionBackup(w http.ResponseWriter, r *http.Requ
 		payload.EditorHeight = 0
 	}
 	filePath := filepath.Join(s.cur().DataDir(), databaseSessionFileName(r))
+	if existingData, err := os.ReadFile(filePath); err == nil {
+		var existing databaseSessionBackupPayload
+		if json.Unmarshal(existingData, &existing) == nil {
+			if fmt.Sprint(existing.ActiveID) == fmt.Sprint(payload.ActiveID) &&
+				existing.TabSeq == payload.TabSeq &&
+				existing.SourceID == payload.SourceID &&
+				existing.EditorHeight == payload.EditorHeight &&
+				boolPtrEqual(existing.MetaCollapsed, payload.MetaCollapsed) &&
+				reflect.DeepEqual(existing.Sessions, payload.Sessions) {
+				writeJSON(w, 200, map[string]any{"ok": true, "changed": false})
+				return
+			}
+		}
+	}
 	if err := os.WriteFile(filePath, body, 0o600); err != nil {
 		writeErrSanitized(w, 500, err)
 		return
@@ -1455,7 +1470,17 @@ func (s *Server) handleDatabaseSessionBackup(w http.ResponseWriter, r *http.Requ
 		userName = user.Name
 	}
 	s.audit.Write("database.session.backup", "user", userName, "file", filepath.Base(filePath), "sessions", len(payload.Sessions), "result", "ok")
-	writeJSON(w, 200, map[string]any{"ok": true})
+	writeJSON(w, 200, map[string]any{"ok": true, "changed": true})
+}
+
+func boolPtrEqual(a, b *bool) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return *a == *b
 }
 
 func (s *Server) handleDatabaseSessionRestore(w http.ResponseWriter, r *http.Request) {

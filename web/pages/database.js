@@ -380,6 +380,7 @@
     const s = createSession('');
     state.sessions.push(s);
     switchSession(s.id);
+    backupDBSessions({ delay: 1000 });
   }
   function switchSession(id) {
     if (id === state.activeId) return;
@@ -405,6 +406,7 @@
       return;
     }
     restoreSessionChrome(s);
+    backupDBSessions({ delay: 2000 });
   }
   async function closeSession(id) {
     if (state.sessions.length <= 1) return;
@@ -431,6 +433,7 @@
     state.sessions.splice(index, 1);
     const next = state.sessions[Math.min(index, state.sessions.length - 1)];
     state.activeId = next.id;
+    backupDBSessions({ delay: 1000 });
     if (next.type === 'object') {
       renderTabs();
       renderObjectViewer(next);
@@ -1691,40 +1694,94 @@
 
   /* 会话定时自动备份与防丢（Tab 保活：后台 Tab 也要继续备份，
      只在 Tab 关闭时停。旧的一次性 hashchange 会在首次切走后永久停掉备份。） */
+  let lastLocalBackupFingerprint = '';
+  let lastRemoteBackupFingerprint = '';
+  let remoteBackupTimer = null;
+
   window.addEventListener('kairo:tab-close', function (ev) {
     if (!ev || !ev.detail || ev.detail.route !== 'database') return;
-    try { backupDBSessions(); } catch (_) {} // 关闭前最后刷一次，防丢
+    try { backupDBSessions({ immediate: true, forceLocal: true }); } catch (_) {} // 关闭前最后刷一次，防丢
     if (window._dbBackupTimer) { clearInterval(window._dbBackupTimer); window._dbBackupTimer = null; }
+    if (remoteBackupTimer) { clearTimeout(remoteBackupTimer); remoteBackupTimer = null; }
   });
-  function backupDBSessions() {
+
+  window.addEventListener('beforeunload', function () {
+    try { backupDBSessions({ immediate: true, forceLocal: true }); } catch (_) {}
+  });
+
+  function serializeDBSessions() {
     saveEditorSQL();
-    const backup = {
+    return {
       activeId: state.activeId,
       tabSeq: tabSeq,
       sourceId: state.source ? state.source.id : '',
       editorHeight: Math.round(Number(persisted.editor_height) || 0),
-      metaCollapsed: persisted.meta_collapsed,
+      metaCollapsed: !!persisted.meta_collapsed,
       sessions: (state.sessions || []).map(x => ({
         id: x.id,
-        sql: x.sql,
-        sourceId: x.sourceId,
-        transactionId: x.transactionId,
+        sql: x.sql || '',
+        sourceId: x.sourceId || '',
+        transactionId: x.transactionId || '',
         transactionPending: !!x.transactionPending,
         gridEditsStaged: !!x.gridEditsStaged,
         page: x.page || 1,
         pageSize: x.pageSize || 20
-      })),
-      updatedAt: Date.now()
+      }))
     };
-    try {
-      localStorage.setItem('kairo_db_sessions_backup', JSON.stringify(backup));
-    } catch (_) {}
+  }
+
+  function backupDBSessions(options) {
+    const opts = options || {};
+    const data = serializeDBSessions();
+    const fingerprint = JSON.stringify(data);
+
+    // 1. 本地 localStorage 保存：当数据变更或强制保存时，快速写入本地，防断电/崩盘
+    if (opts.forceLocal || fingerprint !== lastLocalBackupFingerprint) {
+      lastLocalBackupFingerprint = fingerprint;
+      try {
+        const full = Object.assign({}, data, { updatedAt: Date.now() });
+        localStorage.setItem('kairo_db_sessions_backup', JSON.stringify(full));
+      } catch (_) {}
+    }
+
+    // 2. 远端服务器备份：
+    // 若会话内容相对上次远程同步未发生任何改变，直接跳过网络请求，彻底消除定时重复发包！
+    if (fingerprint === lastRemoteBackupFingerprint) {
+      return;
+    }
+
+    // 立即同步（如页面关闭前、切出前）
+    if (opts.immediate) {
+      flushRemoteDBSessionsBackup(data, fingerprint);
+      return;
+    }
+
+    // 延迟防抖同步（默认 3 秒防抖），打字输入不频繁冲击后端接口
+    if (remoteBackupTimer) clearTimeout(remoteBackupTimer);
+    const delay = typeof opts.delay === 'number' ? opts.delay : 3000;
+    remoteBackupTimer = setTimeout(() => {
+      remoteBackupTimer = null;
+      flushRemoteDBSessionsBackup(data, fingerprint);
+    }, delay);
+  }
+
+  function flushRemoteDBSessionsBackup(data, fingerprint) {
+    if (remoteBackupTimer) {
+      clearTimeout(remoteBackupTimer);
+      remoteBackupTimer = null;
+    }
+    data = data || serializeDBSessions();
+    fingerprint = fingerprint || JSON.stringify(data);
+    if (fingerprint === lastRemoteBackupFingerprint) return;
+
+    lastRemoteBackupFingerprint = fingerprint;
+    const payload = Object.assign({}, data, { updatedAt: Date.now() });
     try {
       fetch('/api/database/sessions/backup', {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(backup)
+        body: JSON.stringify(payload)
       }).catch(() => {});
     } catch (_) {}
   }
@@ -1749,6 +1806,11 @@
     state.activeId = data.activeId || state.sessions[0].id;
     if (data.editorHeight) persisted.editor_height = data.editorHeight;
     if (data.metaCollapsed !== undefined) persisted.meta_collapsed = data.metaCollapsed;
+
+    // 恢复成功后将当前快照记录为已同步，防止初次加载页面时立刻向服务器发出无意义备份请求
+    const currentFp = JSON.stringify(serializeDBSessions());
+    lastLocalBackupFingerprint = currentFp;
+    lastRemoteBackupFingerprint = currentFp;
     return true;
   }
 
@@ -1771,6 +1833,11 @@
               bindSession(sess());
               restoreSessionChrome(sess());
             }
+          } else {
+            // 服务端无历史，标记当前状态为已同步，避免刚打开就发空备份
+            const initialFp = JSON.stringify(serializeDBSessions());
+            lastLocalBackupFingerprint = initialFp;
+            lastRemoteBackupFingerprint = initialFp;
           }
         })
         .catch(() => {});
@@ -2571,8 +2638,15 @@
     q('db-sql').onkeydown = handleEditorKeydown;
     q('db-sql').addEventListener('compositionstart', function () { editorComposing = true; });
     q('db-sql').addEventListener('compositionend', function () { editorComposing = false; });
-    q('db-sql').addEventListener('input', debounce(backupDBSessions, 800));
-    if (!window._dbBackupTimer) window._dbBackupTimer = setInterval(backupDBSessions, 15000);
+    q('db-sql').addEventListener('input', debounce(function () {
+      backupDBSessions({ delay: 3000 });
+    }, 800));
+    if (!window._dbBackupTimer) {
+      window._dbBackupTimer = setInterval(function () {
+        if (typeof document !== 'undefined' && document.hidden) return;
+        backupDBSessions({ delay: 0 });
+      }, 30000);
+    }
     bindSQLEditor();
     if (!state.sessions || state.sessions.length <= 1) restoreDBSessions();
     const active = sess();
