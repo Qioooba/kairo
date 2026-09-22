@@ -16,7 +16,7 @@
   const META_WIDTH_MAX = 720;
   const DEFAULT_PREFS = {
     expandKey: 'Space',
-    shortcuts: { run: 'Ctrl+Enter', cancel: 'Escape', grid: 'Alt+1', record: 'Alt+2', explain: 'Ctrl+Alt+P', objects: 'Alt+O' },
+    shortcuts: { run: 'Ctrl+Enter', cancel: 'Escape', grid: 'Alt+1', record: 'Alt+2', explain: 'Ctrl+Alt+P', objects: 'Alt+O', format: 'Ctrl+Shift+F' },
     gridRows: 25,
     snippets: [
       { key: 'sf', text: 'SELECT * FROM ', enabled: true },
@@ -2751,7 +2751,7 @@
       + '<div class="db-bar-group db-bar-tools-group">'
       + '<button class="btn" id="db-btn-export-sql" title="导出当前页签 SQL 脚本">' + actionIcon('download') + '<span>导出 SQL</span></button>'
       + '<button class="btn" id="db-explain" title="查看执行计划">' + actionIcon('plan') + '<span>执行计划</span></button>'
-      + '<button class="btn" id="db-format" title="格式化 SQL">' + actionIcon('format') + '<span>格式化</span></button>'
+      + '<button class="btn" id="db-format" title="格式化 SQL（选区优先/当前语句，Shift+点击格式化全文，Ctrl+Shift+F）">' + actionIcon('format') + '<span>格式化</span></button>'
       + '</div>'
       + '<div class="db-bar-divider"></div>'
       + '<div class="db-bar-group db-bar-limits-group">'
@@ -2762,6 +2762,12 @@
       + '<details id="db-toolbar-more" class="db-toolbar-more">'
       + '<summary class="db-toolbar-more-summary" title="扩展工具、收藏与历史">' + actionIcon('more') + '<span>更多</span><span class="db-more-chevron" aria-hidden="true">▾</span></summary>'
       + '<div class="db-toolbar-more-panel">'
+      + '<div class="db-more-section">'
+      + '<div class="db-more-title">SQL 美化</div>'
+      + '<div class="db-more-row">'
+      + '<button class="btn btn-xs" id="db-format-all" type="button" title="格式化整个编辑器的全部 SQL">' + actionIcon('format') + '<span>格式化全文</span></button>'
+      + '</div>'
+      + '</div>'
       + '<div class="db-more-section">'
       + '<div class="db-more-title">结果导出</div>'
       + '<div class="db-more-row">'
@@ -2833,7 +2839,8 @@
     q('db-explain').onclick = runExplain;
     q('db-cancel').onclick = cancelQuery;
     q('db-export').onclick = exportResult;
-    q('db-format').onclick = formatCurrentSQL;
+    q('db-format').onclick = (e) => formatCurrentSQL({ full: !!(e && e.shiftKey) });
+    if (q('db-format-all')) q('db-format-all').onclick = () => formatCurrentSQL({ full: true });
     if (q('db-toggle-edit')) q('db-toggle-edit').onclick = function () {
       if (!canWriteDatabase()) { toast('当前账号只有查询权限', 'warn'); return; }
       const current = sess();
