@@ -13,6 +13,7 @@ type SQLStatementInfo struct {
 	Type             string `json:"type"`                        // "SELECT", "FOR_UPDATE", "DML", "DDL", "TRANSACTION", "COMMAND", "STATEMENT"
 	Action           string `json:"action"`                      // "SELECT", "UPDATE", "INSERT", "DELETE", "CREATE", "ALTER", "DROP", "TRUNCATE", ...
 	IsQuery          bool   `json:"is_query"`                    // true if statement produces a result set (SELECT, FOR UPDATE, SHOW, DESC, EXPLAIN)
+	IsSelect         bool   `json:"is_select"`                   // true if statement is plain SELECT or read-only WITH without FOR UPDATE
 	HasForUpdate     bool   `json:"has_for_update"`              // true if query contains FOR UPDATE
 	RequiresMutation bool   `json:"requires_mutation,omitempty"` // true if statement can mutate state (e.g. EXPLAIN ANALYZE write) or requires write permissions
 }
@@ -73,7 +74,7 @@ func ClassifySQL(kind, query string) (SQLStatementInfo, error) {
 		if hasForUpdate {
 			return SQLStatementInfo{Type: "FOR_UPDATE", Action: "FOR UPDATE", IsQuery: true, HasForUpdate: true}, nil
 		}
-		return SQLStatementInfo{Type: "SELECT", Action: first, IsQuery: true, HasForUpdate: false}, nil
+		return SQLStatementInfo{Type: "SELECT", Action: first, IsQuery: true, IsSelect: true, HasForUpdate: false}, nil
 	case "SHOW", "DESC", "DESCRIBE":
 		return SQLStatementInfo{Type: "COMMAND", Action: first, IsQuery: true, HasForUpdate: false}, nil
 	case "EXPLAIN":

@@ -17,6 +17,7 @@ loadModule('web/workbench/resource-session.js');
 loadModule('web/workbench/syntax-editor.js');
 loadModule('web/workbench/notice-bus.js');
 loadModule('web/workbench/request-recovery.js');
+loadModule('web/workbench/sql-format-service.js');
 
 const W = window.Kairo.workbench;
 
@@ -452,5 +453,16 @@ console.log('=== 10. Testing SQL template batch parsing & formatting (PL/SQL mod
   assert.strictEqual(r10.items.length, 1);
   console.log('  ✓ formatSnippetsText 过滤空 key');
 }
+
+console.log('=== 11. Testing sql-format-service.js integration ===');
+assert.ok(W.sqlFormatService, 'W.sqlFormatService must be present');
+const testSql = "SELECT :serialno, :1, 'a  \nb' AS val, NVL(x, 0) FROM orders WHERE 客户名称 = '测试' AND amount > 0;";
+const formattedTestSql = W.sqlFormatService.formatSQL(testSql);
+assert.ok(formattedTestSql.includes(':serialno'), 'Preserve :serialno');
+assert.ok(formattedTestSql.includes(':1'), 'Preserve :1');
+assert.ok(formattedTestSql.includes("'a  \nb'"), 'Preserve verbatim string literal');
+assert.ok(formattedTestSql.includes('客户名称'), 'Preserve Chinese identifier');
+assert.ok(formattedTestSql.includes('NVL(x, 0)'), 'Preserve function single line');
+console.log('  ✓ sqlFormatService integration and fidelity verified');
 
 console.log('\n✅ ALL WORKBENCH FRONTEND UNIT TESTS PASSED!');

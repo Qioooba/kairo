@@ -274,8 +274,8 @@
         push(quote === "'" ? 'string' : 'quoted-ident', start, i);
         continue;
       }
-      if (c === ':' && n === ':') { i += 2; push('operator', start, i); continue; }
-      if (c === ':' && SQL_WORD.test(text[i + 1] || '')) {
+      if (c === ':' && (n === ':' || n === '=')) { i += 2; push('operator', start, i); continue; }
+      if (c === ':' && SQL_WORD_CONT.test(text[i + 1] || '')) {
         i += 1;
         while (i < text.length && SQL_WORD_CONT.test(text[i])) i++;
         push('param', start, i, { name: text.slice(start + 1, i) });
@@ -375,7 +375,10 @@
     const last = line.slice(-1);
     return /\s/.test(last) || last === '(' || last === '[' || last === '.' ? line : line + ' ';
   }
-  function formatSQL(source) {
+  function formatSQL(source, options) {
+    if (W.sqlFormatService && typeof W.sqlFormatService.formatSQL === 'function') {
+      return W.sqlFormatService.formatSQL(source, options);
+    }
     const text = String(source == null ? '' : source).replace(/\r\n?/g, '\n');
     if (!text.trim()) return '';
     const tokens = tokenizeSQL(text);

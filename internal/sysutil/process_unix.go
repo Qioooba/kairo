@@ -36,3 +36,21 @@ func (p *unixManagedCommand) KillTree() error {
 }
 
 func (p *unixManagedCommand) Close() error { return nil }
+
+// IsProcessAlive checks whether the process with the given pid is running.
+func IsProcessAlive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	err := syscall.Kill(pid, 0)
+	if err == nil {
+		return true
+	}
+	if errors.Is(err, syscall.ESRCH) {
+		return false
+	}
+	if errors.Is(err, syscall.EPERM) {
+		return true
+	}
+	return false
+}

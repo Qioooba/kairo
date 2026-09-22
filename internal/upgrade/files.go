@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"kairo/internal/sysutil"
 )
 
 func compareProductVersions(current, previous string) int {
@@ -122,6 +124,17 @@ func replaceFile(src, dst string) error {
 	return nil
 }
 
+func parseLockPID(content string) int {
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "pid=") {
+			pid, _ := strconv.Atoi(strings.TrimPrefix(line, "pid="))
+			return pid
+		}
+	}
+	return 0
+}
+
 func acquireLock(path string, now time.Time) (func(), error) {
 	nonce := make([]byte, 16)
 	if _, err := rand.Read(nonce); err != nil {
@@ -134,7 +147,17 @@ func acquireLock(path string, now time.Time) (func(), error) {
 		return os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	}
 	file, err := create()
-	// Age is not proof that the owner exited; never steal an upgrade lock.
+	if err != nil {
+		// 若锁文件存在，检查持有该锁的进程是否仍然存活。
+		// 若拥有者进程已异常终止（hard kill/崩溃），可安全回收陈旧锁，使恢复流程能够自动进行。
+		if raw, readErr := os.ReadFile(path); readErr == nil {
+			pid := parseLockPID(string(raw))
+			if pid > 0 && !sysutil.IsProcessAlive(pid) {
+				_ = os.Remove(path)
+				file, err = create()
+			}
+		}
+	}
 	if err != nil {
 		return nil, fmt.Errorf("upgrade: another upgrade may be running (%s): %w", path, err)
 	}

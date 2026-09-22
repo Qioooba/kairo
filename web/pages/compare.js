@@ -603,7 +603,7 @@
       const label = el('span', { class: 'cmp-source-label', text: sourceLabel(state[side].source), title: sourceLabel(state[side].source) });
       const meta = el('span', { class: 'cmp-source-meta', text: '' });
       const dirty = el('span', { class: 'cmp-dirty', text: '' });
-      const language = el('select', { class: 'cmp-language', title: '语法高亮' }, [el('option', { value: 'text', text: '文本' }), el('option', { value: 'java', text: 'Java' }), el('option', { value: 'sql', text: 'SQL' }), el('option', { value: 'xml', text: 'XML' }), el('option', { value: 'json', text: 'JSON' })]);
+      const language = el('select', { class: 'cmp-language', title: '语法高亮' }, [el('option', { value: 'text', text: '文本' }), el('option', { value: 'java', text: 'Java' }), el('option', { value: 'jsp', text: 'JSP' }), el('option', { value: 'sql', text: 'SQL' }), el('option', { value: 'xml', text: 'XML' }), el('option', { value: 'json', text: 'JSON' })]);
       language.onchange = function () { editors[side].setLanguage(language.value); if (state.diff) renderResult(); };
       const undoBtn = makeButton('撤销', 'undo', () => editors[side].undo(), 'btn btn-sm');
       const redoBtn = makeButton('重做', 'redo', () => editors[side].redo(), 'btn btn-sm');

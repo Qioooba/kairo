@@ -632,12 +632,13 @@
         '</tbody></table></div>';
     } else if (activeTab === 'ddl') {
       const rawDDL = info.ddl || info.source_text || info.ddl_error || '-- 无 DDL';
+      viewer._rawDDL = rawDDL;
       const formatted = formatSQL(rawDDL);
       const highlighted = highlightSQL(formatted);
       bodyHTML = '<div class="db-obj-ddl-tools">' +
         '<button class="btn btn-xs" id="db-obj-ddl-copy">复制 DDL</button>' +
         '</div>' +
-        '<pre class="db-obj-ddl-code mono">' + highlighted + '</pre>';
+        '<pre class="db-obj-ddl-code mono" data-raw-ddl="' + h(rawDDL) + '">' + highlighted + '</pre>';
     }
 
     viewer.innerHTML = '<div class="db-obj-header">' +

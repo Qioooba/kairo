@@ -106,6 +106,7 @@ func (s *Server) handleDatabaseScript(w http.ResponseWriter, r *http.Request) {
 }
 
 type databaseGridRequest struct {
+	ResultID  string                   `json:"result_id,omitempty"`
 	SourceID  string                   `json:"source_id"`
 	Schema    string                   `json:"schema"`
 	Table     string                   `json:"table"`
@@ -137,9 +138,15 @@ func (s *Server) handleDatabaseGrid(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	result, err := s.database.ApplyGridMutations(r.Context(), source, dbconsole.GridMutationRequest{
-		Schema: req.Schema, Table: req.Table, Mutations: req.Mutations, SessionID: scopedDatabaseSessionID(r, req.SessionID), Commit: req.Commit, Confirm: req.Confirm,
+		ResultID: req.ResultID, Schema: req.Schema, Table: req.Table, Mutations: req.Mutations, SessionID: scopedDatabaseSessionID(r, req.SessionID), Commit: req.Commit, Confirm: req.Confirm,
 	})
 	if err != nil {
+		var uncertainErr *dbconsole.CommitUncertainError
+		if errors.As(err, &uncertainErr) {
+			s.audit.Write("database.grid", "source_id", source.ID, "session_id", req.SessionID, "result", "outcome_unknown", "error", uncertainErr.Error())
+			writeStructuredErr(w, http.StatusBadGateway, err, "OUTCOME_UNKNOWN", false, "unknown")
+			return
+		}
 		s.audit.Write("database.grid", "source_id", source.ID, "result", "fail", "error", trim(s.databaseSafeError(source, err).Error(), 300))
 		if len(result.Results) > 0 {
 			writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "result": result, "error": trim(s.databaseSafeError(source, err).Error(), 1000)})

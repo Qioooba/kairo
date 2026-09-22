@@ -98,5 +98,10 @@ func RestoreSnapshot(dataDir, backupDir string, assets []Asset) (*RestoreResult,
 		}
 		return nil, fmt.Errorf("upgrade: restore failed and current state was recovered: %w", err)
 	}
+	if j, exists, err := readJournal(dataDir); err == nil && exists {
+		j.Phase = PhaseComplete
+		j.Error = ""
+		_ = writeJournal(dataDir, j, time.Now())
+	}
 	return &RestoreResult{SafetyBackupDir: safety.dir}, nil
 }

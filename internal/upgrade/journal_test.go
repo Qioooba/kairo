@@ -600,8 +600,8 @@ func TestSubprocessCrashAndRecovery(t *testing.T) {
 		t.Fatalf("expected torn disk state: fileA=%s fileB=%s", curA, curB)
 	}
 
-	// Remove the lock held by the abruptly killed process before restarting
-	_ = os.Remove(filepath.Join(dataDir, lockFileName))
+	// Verify UPG-01: Do not manually remove lock; the dead subprocess lock is automatically reclaimed
+	// by acquireLock inspecting PID liveness.
 
 	// Now run parent process Run: should recover to v1 first, then complete upgrade to v2!
 	assetsV2 := []Asset{
@@ -631,5 +631,54 @@ func TestSubprocessCrashAndRecovery(t *testing.T) {
 	recB, _ := os.ReadFile(fileB)
 	if !strings.Contains(string(recA), `"version":2`) || !strings.Contains(string(recB), `"version":2`) {
 		t.Fatalf("expected both files to be cleanly upgraded to v2: fileA=%s fileB=%s", recA, recB)
+	}
+}
+
+// TestRestoreSnapshotClearsFailedJournal verifies UPG-02:
+// After an upgrade fails and lands in PhaseRecoveryFailed, running RestoreSnapshot
+// marks the journal complete, allowing subsequent normal Run to succeed.
+func TestRestoreSnapshotClearsFailedJournal(t *testing.T) {
+	dataDir := t.TempDir()
+	fileA := filepath.Join(dataDir, "asset_a.json")
+	_ = os.WriteFile(fileA, []byte(`{"version":1,"name":"fileA"}`), 0o600)
+
+	assetsV1 := []Asset{
+		{Name: "asset_a", Path: fileA, CurrentVersion: 1, Critical: true, Validate: ValidateJSON, DetectVersion: testDetectVersion},
+	}
+	res, err := Run(Options{DataDir: dataDir, ProductVersion: "v0.17", Now: fixedNow, Assets: assetsV1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshotDir := res.BackupDir
+	if snapshotDir == "" {
+		t.Fatal("expected BackupDir from initial run")
+	}
+
+	// Artificially simulate recovery failure state in journal
+	failedJournal := &Journal{
+		UpgradeID:         "tx-failed-123",
+		OldProductVersion: "v0.17",
+		NewProductVersion: "v0.18",
+		Phase:             PhaseRecoveryFailed,
+		SnapshotDir:       snapshotDir,
+		Error:             "external modification detected",
+	}
+	if err := writeJournal(dataDir, failedJournal, fixedNow()); err != nil {
+		t.Fatal(err)
+	}
+
+	// Normal Run must be blocked by PhaseRecoveryFailed
+	if _, err := Run(Options{DataDir: dataDir, ProductVersion: "v0.17", Now: fixedNow, Assets: assetsV1}); err == nil {
+		t.Fatal("expected Run to fail when journal is in PhaseRecoveryFailed")
+	}
+
+	// Execute RestoreSnapshot
+	if _, err := RestoreSnapshot(dataDir, snapshotDir, assetsV1); err != nil {
+		t.Fatalf("RestoreSnapshot failed: %v", err)
+	}
+
+	// Subsequent Run must succeed without manual intervention
+	if _, err := Run(Options{DataDir: dataDir, ProductVersion: "v0.17", Now: fixedNow, Assets: assetsV1}); err != nil {
+		t.Fatalf("Run after RestoreSnapshot failed: %v", err)
 	}
 }

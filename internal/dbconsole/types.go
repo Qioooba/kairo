@@ -495,6 +495,8 @@ type QuerySummary struct {
 	Ordered            bool   `json:"ordered"`
 	RowsAffected       int64  `json:"rows_affected,omitempty"`
 	StatementType      string `json:"statement_type,omitempty"`
-	Message            string `json:"message,omitempty"`
-	TransactionPending bool   `json:"transaction_pending,omitempty"`
+	Message            string               `json:"message,omitempty"`
+	TransactionPending bool                 `json:"transaction_pending,omitempty"`
+	ResultID           string               `json:"result_id,omitempty"`
+	EditPlan           *GridEditPlanSummary `json:"edit_plan,omitempty"`
 }

@@ -21,14 +21,16 @@ const (
 )
 
 type StreamEvent struct {
-	Type          string        `json:"type"`
-	Columns       []Column      `json:"columns,omitempty"`
-	Rows          [][]any       `json:"rows,omitempty"`
-	Summary       *QuerySummary `json:"summary,omitempty"`
-	Error         string        `json:"error,omitempty"`
-	Message       string        `json:"message,omitempty"`
-	StatementType string        `json:"statement_type,omitempty"`
-	RowsAffected  int64         `json:"rows_affected,omitempty"`
+	Type          string               `json:"type"`
+	ResultID      string               `json:"result_id,omitempty"`
+	EditPlan      *GridEditPlanSummary `json:"edit_plan,omitempty"`
+	Columns       []Column             `json:"columns,omitempty"`
+	Rows          [][]any              `json:"rows,omitempty"`
+	Summary       *QuerySummary        `json:"summary,omitempty"`
+	Error         string               `json:"error,omitempty"`
+	Message       string               `json:"message,omitempty"`
+	StatementType string               `json:"statement_type,omitempty"`
+	RowsAffected  int64                `json:"rows_affected,omitempty"`
 }
 
 type EmitFunc func(StreamEvent) error
@@ -471,9 +473,25 @@ func (m *Manager) streamQueryAttempt(ctx context.Context, source Source, query s
 		}
 	}
 
-	// 此时连接与首包已就绪，立即向调用方流式发射元数据
+	// 此时连接与首包已就绪，分析可编辑性并流式发射元数据
+	var editPlan *ResultEditContext
+	if sessionID != "" && info.IsSelect {
+		plan, pErr := m.AnalyzeGridQuery(queryCtx, source, sessionID, query, columns)
+		if pErr == nil && plan != nil {
+			editPlan = plan
+			m.RegisterResultContext(plan)
+		}
+	}
+
+	var planSummary *GridEditPlanSummary
+	resultID := ""
+	if editPlan != nil {
+		planSummary = editPlan.ToSummary()
+		resultID = editPlan.ResultID
+	}
+
 	if emit != nil {
-		if err := emit(StreamEvent{Type: "meta", Columns: columns}); err != nil {
+		if err := emit(StreamEvent{Type: "meta", Columns: columns, ResultID: resultID, EditPlan: planSummary}); err != nil {
 			return QuerySummary{}, err
 		}
 	}
@@ -483,6 +501,8 @@ func (m *Manager) streamQueryAttempt(ctx context.Context, source Source, query s
 		TransactionPending: sessionTx != nil,
 		Offset:             page.Offset(), HasPrev: page.Page > 1, PaginationMode: "page",
 		Ordered:            QueryHasTopLevelOrderBy(source.Kind, actualQuery),
+		ResultID:           resultID,
+		EditPlan:           planSummary,
 	}
 
 	firstBatchCutoff := 5
@@ -939,8 +959,12 @@ func normalizeColumnValue(value any, dbType string) any {
 
 func normalizeValue(value any) any {
 	switch v := value.(type) {
-	case nil, bool, int64, float64:
+	case nil, bool, float64:
 		return v
+	case int64:
+		return EncodeLosslessCell(v)
+	case uint64:
+		return EncodeLosslessCell(v)
 	case time.Time:
 		return v.Format(time.RFC3339Nano)
 	case string:

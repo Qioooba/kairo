@@ -63,6 +63,8 @@ type Manager struct {
 	transactionDone     chan struct{}
 	transactionStopOnce sync.Once
 	dpiFailedSources    sync.Map
+	resultContextMu     sync.RWMutex
+	resultContexts      map[string]*ResultEditContext
 }
 
 func NewManager(dataDir string) (*Manager, error) {
@@ -76,6 +78,7 @@ func NewManager(dataDir string) (*Manager, error) {
 		metadataCache:   make(map[string]metadataCacheEntry),
 		transactions:    make(map[string]*transactionEntry),
 		terminalRecords: make(map[string]TransactionTerminalRecord),
+		resultContexts:  make(map[string]*ResultEditContext),
 		global:          make(chan struct{}, 8),
 		transactionTTL:  defaultTransactionIdleTTL,
 		transactionMax:  defaultTransactionMax,
@@ -332,6 +335,7 @@ func (m *Manager) buildSQLDB(source Source, password string, tunnel *sshclient.C
 		cfg.Addr = net.JoinHostPort(targetHost, strconv.Itoa(targetPort))
 		cfg.DBName = source.Database
 		cfg.ParseTime = true
+		cfg.ClientFoundRows = true
 		cfg.Timeout = 10 * time.Second
 		cfg.ReadTimeout = source.Timeout()
 		cfg.WriteTimeout = source.Timeout()

@@ -19,6 +19,7 @@ const maxGridMutations = 200
 // native Oracle ROWID is supplied.
 type GridMutation struct {
 	Action     string         `json:"action"` // insert/update/delete
+	RowRef     string         `json:"row_ref,omitempty"`
 	Values     map[string]any `json:"values,omitempty"`
 	Original   map[string]any `json:"original,omitempty"`
 	Key        map[string]any `json:"key,omitempty"`
@@ -29,6 +30,7 @@ type GridMutation struct {
 }
 
 type GridMutationRequest struct {
+	ResultID  string         `json:"result_id,omitempty"`
 	Schema    string         `json:"schema"`
 	Table     string         `json:"table"`
 	Mutations []GridMutation `json:"mutations"`
@@ -40,7 +42,7 @@ type GridMutationRequest struct {
 type GridMutationResult struct {
 	Index        int    `json:"index"`
 	Action       string `json:"action"`
-	Status       string `json:"status"` // succeeded/conflict/failed/skipped
+	Status       string `json:"status"` // succeeded/conflict/failed/skipped/rolled_back
 	RowsAffected int64  `json:"rows_affected"`
 	Conflict     bool   `json:"conflict,omitempty"`
 	Error        string `json:"error,omitempty"`
@@ -52,6 +54,7 @@ type GridMutationSummary struct {
 	ElapsedMS          int64                `json:"elapsed_ms"`
 	Committed          bool                 `json:"committed"`
 	RolledBack         bool                 `json:"rolled_back"`
+	RollbackScope      string               `json:"rollback_scope,omitempty"`
 	TransactionPending bool                 `json:"transaction_pending"`
 }
 
@@ -314,7 +317,30 @@ func (m *Manager) ApplyGridMutations(ctx context.Context, source Source, req Gri
 	if !validGridSessionID(req.SessionID) {
 		return GridMutationSummary{}, errors.New("session_id 无效")
 	}
-	req.Schema = ResolveSchema(source, req.Schema)
+	var plan *ResultEditContext
+	if req.ResultID != "" {
+		p, ok := m.GetResultContext(req.ResultID)
+		if !ok {
+			return GridMutationSummary{}, errors.New("编辑上下文已失效或不存在，请重新执行查询后再编辑")
+		}
+		if p.SourceID != source.ID {
+			return GridMutationSummary{}, errors.New("编辑上下文与目标数据源不匹配")
+		}
+		if p.SourceFingerprint != sourceFingerprint(source) {
+			return GridMutationSummary{}, errors.New("数据源连接配置已变更，原查询编辑上下文已失效，请重新执行查询")
+		}
+		if p.SessionID != req.SessionID {
+			return GridMutationSummary{}, errors.New("编辑上下文与当前会话不匹配")
+		}
+		if req.Table != "" && p.Table != "" && !strings.EqualFold(req.Table, p.Table) {
+			return GridMutationSummary{}, fmt.Errorf("提交目标表 %s 与执行查询的基表 %s 不一致", req.Table, p.Table)
+		}
+		req.Schema = p.Schema
+		req.Table = p.Table
+		plan = p
+	} else {
+		req.Schema = ResolveSchema(source, req.Schema)
+	}
 	queryCtx, cancel := context.WithTimeout(ctx, source.Timeout())
 	defer cancel()
 	if err := m.acquire(queryCtx); err != nil {
@@ -331,34 +357,69 @@ func (m *Manager) ApplyGridMutations(ctx context.Context, source Source, req Gri
 	summary := GridMutationSummary{Results: make([]GridMutationResult, len(req.Mutations))}
 	for i, mutation := range req.Mutations {
 		summary.Results[i] = GridMutationResult{Index: i, Action: strings.ToLower(strings.TrimSpace(mutation.Action)), RowsAffected: -1, Status: "failed"}
-		sqlText, args, buildErr := BuildGridMutationSQL(source.Kind, req.Schema, req.Table, mutation)
+		var sqlText string
+		var args []any
+		var buildErr error
+		if plan != nil {
+			sqlText, args, buildErr = BuildGridMutationSQLWithPlan(source.Kind, plan, mutation)
+		} else {
+			sqlText, args, buildErr = BuildGridMutationSQL(source.Kind, req.Schema, req.Table, mutation)
+		}
 		if buildErr != nil {
 			summary.Results[i].Error = buildErr.Error()
+			for prev := 0; prev < i; prev++ {
+				summary.Results[prev].Status = "rolled_back"
+			}
+			for next := i + 1; next < len(req.Mutations); next++ {
+				summary.Results[next] = GridMutationResult{Index: next, Action: strings.ToLower(strings.TrimSpace(req.Mutations[next].Action)), RowsAffected: -1, Status: "skipped"}
+			}
 			m.rollbackEntryLocked(source.ID, req.SessionID, entry)
 			summary.RolledBack = true
+			summary.RollbackScope = "session"
 			return summary, buildErr
 		}
 		res, execErr := entry.tx.ExecContext(queryCtx, sqlText, args...)
 		if execErr != nil {
 			summary.Results[i].Error = execErr.Error()
+			for prev := 0; prev < i; prev++ {
+				summary.Results[prev].Status = "rolled_back"
+			}
+			for next := i + 1; next < len(req.Mutations); next++ {
+				summary.Results[next] = GridMutationResult{Index: next, Action: strings.ToLower(strings.TrimSpace(req.Mutations[next].Action)), RowsAffected: -1, Status: "skipped"}
+			}
 			m.rollbackEntryLocked(source.ID, req.SessionID, entry)
 			summary.RolledBack = true
+			summary.RollbackScope = "session"
 			return summary, execErr
 		}
 		affected, affectedErr := res.RowsAffected()
 		if affectedErr != nil {
 			summary.Results[i].Error = affectedErr.Error()
+			for prev := 0; prev < i; prev++ {
+				summary.Results[prev].Status = "rolled_back"
+			}
+			for next := i + 1; next < len(req.Mutations); next++ {
+				summary.Results[next] = GridMutationResult{Index: next, Action: strings.ToLower(strings.TrimSpace(req.Mutations[next].Action)), RowsAffected: -1, Status: "skipped"}
+			}
 			m.rollbackEntryLocked(source.ID, req.SessionID, entry)
 			summary.RolledBack = true
+			summary.RollbackScope = "session"
 			return summary, affectedErr
 		}
 		summary.Results[i].RowsAffected = affected
 		if affected != 1 {
 			summary.Results[i].Status = "conflict"
 			summary.Results[i].Conflict = true
-			summary.Results[i].Error = fmt.Sprintf("并发冲突：期望影响 1 行，实际影响 %d 行", affected)
+			summary.Results[i].Error = fmt.Sprintf("并发冲突：期望影响 1 行，实际影响 %d 行（已回滚当前页签全部未提交事务）", affected)
+			for prev := 0; prev < i; prev++ {
+				summary.Results[prev].Status = "rolled_back"
+			}
+			for next := i + 1; next < len(req.Mutations); next++ {
+				summary.Results[next] = GridMutationResult{Index: next, Action: strings.ToLower(strings.TrimSpace(req.Mutations[next].Action)), RowsAffected: -1, Status: "skipped"}
+			}
 			m.rollbackEntryLocked(source.ID, req.SessionID, entry)
 			summary.RolledBack = true
+			summary.RollbackScope = "session"
 			return summary, errors.New(summary.Results[i].Error)
 		}
 		summary.Results[i].Status = "succeeded"

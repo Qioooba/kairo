@@ -327,7 +327,13 @@
     const list = Array.isArray(data) ? data : Array.isArray(result && (result.errors || result.compile_errors || result.error_list)) ? (result.errors || result.compile_errors || result.error_list) : Array.isArray(fn && fn.errors) ? fn.errors : result && result.error ? [{ message: result.error }] : data && data.error ? [{ message: data.error }] : [];
     return list.map(function (item) { item = item || {}; const message = typeof item === 'string' ? item : item.message || item.text || item.error || JSON.stringify(item); const parsed = F.parseErrorLocation ? F.parseErrorLocation(message) : null; const position = Number(item.position || 0); return { message: message, line: Number(item.line || (parsed && parsed.line) || 0), column: Number(item.column || (parsed && parsed.column) || 1), position: position, offset: position > 0 ? position - 1 : undefined, severity: item.severity || item.level || item.attribute || 'error' }; });
   }
-  function functionSourceFromViewer(viewer) { const code = viewer.querySelector('.db-obj-ddl-code'); return code ? code.textContent : ''; }
+  function functionSourceFromViewer(viewer) {
+    if (!viewer) return '';
+    if (viewer._rawDDL) return viewer._rawDDL;
+    const code = viewer.querySelector('.db-obj-ddl-code');
+    if (code && code.dataset && code.dataset.rawDdl) return code.dataset.rawDdl;
+    return code ? code.textContent : '';
+  }
   async function loadFunctionSource(context, initial) {
     const key = sourceId() + '|' + context.schema + '|' + context.object;
     if (state.sourceCache[key]) return state.sourceCache[key];
@@ -345,9 +351,29 @@
       { text: '关闭', className: 'btn', close: true }
     ] });
     const source = body.querySelector('#db-pro-function-source'), errors = body.querySelector('#db-pro-function-errors'), status = body.querySelector('#db-pro-function-status');
-    source.value = functionSourceFromViewer(viewer);
-    loadFunctionSource(context, source.value).then(function (text) { if (text && !source.value.trim()) source.value = text; });
-    body.querySelector('#db-pro-function-format').onclick = function () { if (F.formatSQL) source.value = F.formatSQL(source.value); source.dispatchEvent(new Event('input')); };
+    let userEdited = false;
+    source.addEventListener('input', function () { userEdited = true; });
+    const initialRaw = functionSourceFromViewer(viewer);
+    source.value = initialRaw;
+    loadFunctionSource(context, initialRaw).then(function (text) {
+      if (text && !userEdited) source.value = text;
+    });
+    body.querySelector('#db-pro-function-format').onclick = function () {
+      if (W.sqlFormatService && W.sqlFormatService.formatInEditor) {
+        const res = W.sqlFormatService.formatInEditor(source);
+        if (res.status === 'unchanged') toast('源码无需格式化', 'info');
+        else if (res.status === 'ok') toast('Function 源码已格式化', 'ok');
+      } else if (F.formatSQL) {
+        const next = F.formatSQL(source.value);
+        if (next !== source.value) {
+          source.value = next;
+          source.dispatchEvent(new Event('input'));
+          toast('Function 源码已格式化', 'ok');
+        } else {
+          toast('源码无需格式化', 'info');
+        }
+      }
+    };
     function renderErrors(items) {
       errors.innerHTML = items.length ? '<div class="db-pro-function-error-summary">编译发现 ' + items.length + ' 个问题</div>' + items.map(function (item, index) { return '<button type="button" class="db-pro-function-error-row" data-error="' + index + '"><span>' + esc(item.severity) + '</span><strong>第 ' + (item.line || '?') + ' 行，第 ' + (item.column || '?') + ' 列</strong><em>' + esc(item.message) + '</em></button>'; }).join('') : '<div class="db-pro-function-success">编译成功，未发现错误。</div>';
       errors.querySelectorAll('[data-error]').forEach(function (button) { button.onclick = function () { const item = items[Number(button.dataset.error)], offset = F.locationOffset ? F.locationOffset(source.value, item) : 0; source.focus(); source.setSelectionRange(offset, Math.min(source.value.length, offset + 1)); const lineHeight = parseFloat(getComputedStyle(source).lineHeight) || 20; source.scrollTop = Math.max(0, (item.line - 3) * lineHeight); }; });
