@@ -179,7 +179,6 @@
 .db-low-spec .db-pro-history-list,
 .db-low-spec .db-pro-import-table-wrap,
 .db-low-spec .db-pro-designer-list { contain: strict; }
-.db-low-spec .db-sql-highlight { content-visibility: auto; }
 .db-low-spec .db-pro-button,
 .db-low-spec .db-pro-ac-item,
 .db-low-spec .db-pro-designer-tabs button { transition: none !important; }

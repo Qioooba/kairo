@@ -30,7 +30,8 @@ const UNIT_TESTS = [
   'tests/tab-lifecycle-review-regression.test.js',
   'tests/database-update-multi-col-scroll.test.js',
   'tests/sql-format-service.test.js',
-  'tests/grid-orderby-phase0-regression.test.js'
+  'tests/grid-orderby-phase0-regression.test.js',
+  'tests/database-sql-editor-performance.test.js'
 ];
 
 function checkService(url) {

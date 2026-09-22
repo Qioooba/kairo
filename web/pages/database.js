@@ -14,6 +14,24 @@
   const TAB_LIMIT = 6;
   const META_WIDTH_MIN = 220;
   const META_WIDTH_MAX = 720;
+  const MAX_SQL_HIGHLIGHT_CHARS = 120000;
+  const MAX_SQL_HIGHLIGHT_LINES = 2000;
+
+  function isLargeSQL(text) {
+    if (!text) return false;
+    const maxChars = typeof MAX_SQL_HIGHLIGHT_CHARS === 'number' ? MAX_SQL_HIGHLIGHT_CHARS : 120000;
+    const maxLines = typeof MAX_SQL_HIGHLIGHT_LINES === 'number' ? MAX_SQL_HIGHLIGHT_LINES : 2000;
+    if (text.length > maxChars) return true;
+    let lineCount = 0;
+    for (let i = 0; i < text.length; i++) {
+      if (text[i] === '\n') {
+        lineCount++;
+        if (lineCount > maxLines) return true;
+      }
+    }
+    return false;
+  }
+
   const DEFAULT_PREFS = {
     expandKey: 'Space',
     shortcuts: { run: 'Ctrl+Enter', cancel: 'Escape', grid: 'Alt+1', record: 'Alt+2', explain: 'Ctrl+Alt+P', objects: 'Alt+O', format: 'Ctrl+Shift+F' },
@@ -760,6 +778,9 @@
   Kairo.database.getHistory = function () {
     return Array.isArray(persisted.history) ? persisted.history.slice() : [];
   };
+  Kairo.database.isLargeSQL = isLargeSQL;
+  Kairo.database.MAX_SQL_HIGHLIGHT_CHARS = MAX_SQL_HIGHLIGHT_CHARS;
+  Kairo.database.MAX_SQL_HIGHLIGHT_LINES = MAX_SQL_HIGHLIGHT_LINES;
   function pushHistory(sql) {
     const text = String(sql || '').trim();
     if (!text || text.length > HISTORY_ENTRY_MAX) return;
@@ -3712,16 +3733,15 @@
         continue;
       }
       if (c === '\'' || c === '"' || c === '`') {
-        let j = i + 1, out = c;
+        let j = i + 1;
         while (j < text.length) {
-          out += text[j];
           if (text[j] === c) {
-            if (text[j + 1] === c) { out += text[j + 1]; j += 2; continue; }
+            if (text[j + 1] === c) { j += 2; continue; }
             j++; break;
           }
           j++;
         }
-        tokens.push({ type: 'string', value: out, start: i });
+        tokens.push({ type: 'string', value: text.slice(i, j), start: i });
         i = j;
         continue;
       }
@@ -3781,19 +3801,25 @@
     }
     return tokens;
   }
+
   function highlightSQL(src, match) {
-    return tokenizeSQL(src).map(function (tok) {
-      const body = h(tok.value);
-      let cls = '';
-      if (tok.type === 'kw') cls = 'db-sql-kw';
-      else if (tok.type === 'string') cls = 'db-sql-str';
-      else if (tok.type === 'comment') cls = 'db-sql-cmt';
-      else if (tok.type === 'number') cls = 'db-sql-num';
-      if (tok.type === 'punct' && match && (tok.start === match.open || tok.start === match.close)) {
-        cls = (match.open < 0 || match.close < 0) ? 'db-sql-br-bad' : 'db-sql-br';
-      }
-      return cls ? '<span class="' + cls + '">' + body + '</span>' : body;
-    }).join('') || ' ';
+    if (typeof isLargeSQL === 'function' && isLargeSQL(src)) return h(src);
+    try {
+      return tokenizeSQL(src).map(function (tok) {
+        const body = h(tok.value);
+        let cls = '';
+        if (tok.type === 'kw') cls = 'db-sql-kw';
+        else if (tok.type === 'string') cls = 'db-sql-str';
+        else if (tok.type === 'comment') cls = 'db-sql-cmt';
+        else if (tok.type === 'number') cls = 'db-sql-num';
+        if (tok.type === 'punct' && match && (tok.start === match.open || tok.start === match.close)) {
+          cls = (match.open < 0 || match.close < 0) ? 'db-sql-br-bad' : 'db-sql-br';
+        }
+        return cls ? '<span class="' + cls + '">' + body + '</span>' : body;
+      }).join('') || ' ';
+    } catch (_) {
+      return h(src);
+    }
   }
   function completionPrefix(text, cursor) {
     const tokens = tokenizeSQL(text);
@@ -3858,6 +3884,10 @@
     return { items: items.slice(0, 12), start: ctx.start, end: ctx.end };
   }
   function matchBrackets(text, cursor) {
+    if (!text || cursor < 0) return null;
+    const cBefore = text[cursor - 1] || '';
+    const cAt = text[cursor] || '';
+    if ('()[]{}'.indexOf(cBefore) < 0 && '()[]{}'.indexOf(cAt) < 0) return null;
     const tokens = tokenizeSQL(text);
     const brackets = [];
     tokens.forEach(function (tok) {
@@ -3931,12 +3961,62 @@
   function bindSQLEditor() {
     const ta = q('db-sql'), hl = q('db-sql-highlight');
     if (!ta || !hl) return;
-    const sync = function () {
-      const match = matchBrackets(ta.value, ta.selectionStart);
-      hl.innerHTML = highlightSQL(ta.value, match) + '\n';
-      hl.scrollTop = ta.scrollTop;
-      hl.scrollLeft = ta.scrollLeft;
+    const shell = ta.closest('.db-sql-shell') || q('db-sql-shell');
+
+    const setPlainMode = function (isPlain) {
+      if (isPlain) {
+        ta.classList.add('is-plain-editor');
+        if (shell) shell.classList.add('is-plain-editor');
+        hl.style.display = 'none';
+        hl.innerHTML = '';
+      } else {
+        ta.classList.remove('is-plain-editor');
+        if (shell) shell.classList.remove('is-plain-editor');
+        hl.style.display = '';
+      }
     };
+
+    let syncTimer = 0;
+    const doSync = function () {
+      syncTimer = 0;
+      try {
+        const val = ta.value || '';
+        if (isLargeSQL(val)) {
+          setPlainMode(true);
+          return;
+        }
+        setPlainMode(false);
+        const match = matchBrackets(val, ta.selectionStart);
+        hl.innerHTML = highlightSQL(val, match) + '\n';
+        hl.scrollTop = ta.scrollTop;
+        hl.scrollLeft = ta.scrollLeft;
+      } catch (_) {
+        // Fallback to plain mode so text is NEVER transparent / invisible
+        setPlainMode(true);
+      }
+    };
+
+    const sync = function () {
+      if (syncTimer) cancelAnimationFrame(syncTimer);
+      syncTimer = requestAnimationFrame(doSync);
+    };
+
+    // ResizeObserver: ensures shell and hl heights always stay 100% synchronized with ta
+    if (typeof ResizeObserver !== 'undefined' && !ta._resizeObserver) {
+      const ro = new ResizeObserver(function (entries) {
+        for (const entry of entries) {
+          const h = Math.round(ta.offsetHeight || (entry.borderBoxSize && entry.borderBoxSize[0] ? entry.borderBoxSize[0].blockSize : ta.clientHeight));
+          if (h > 0) {
+            if (shell && shell.style.height !== h + 'px') shell.style.height = h + 'px';
+            if (hl.style.height !== h + 'px') hl.style.height = h + 'px';
+            persisted.editor_height = h;
+          }
+        }
+      });
+      ro.observe(ta);
+      ta._resizeObserver = ro;
+    }
+
     ta.addEventListener('input', function () {
       sync();
       updateComplete(ta);
@@ -3945,13 +4025,18 @@
       clearTimeout(tabTitleTimer);
       tabTitleTimer = setTimeout(renderTabs, 160);
     });
-    ta.addEventListener('scroll', function () { hl.scrollTop = ta.scrollTop; hl.scrollLeft = ta.scrollLeft; });
+    ta.addEventListener('scroll', function () {
+      if (hl.style.display !== 'none') {
+        hl.scrollTop = ta.scrollTop;
+        hl.scrollLeft = ta.scrollLeft;
+      }
+    });
     ta.addEventListener('keyup', sync);
     ta.addEventListener('click', sync);
     ta.addEventListener('select', sync);
     ta.addEventListener('blur', function () { setTimeout(hideComplete, 120); });
-    ta._syncHighlight = sync;
-    sync();
+    ta._syncHighlight = function () { doSync(); };
+    doSync();
   }
   function completionExtras() {
     const objSet = new Set();
@@ -3996,15 +4081,25 @@
     if (s) s.sql = ta.value;
   }
   function updateComplete(ta) {
-    const found = suggestSQL(ta.value, ta.selectionStart, completionExtras());
+    if (!ta || !ta.value) { hideComplete(); return; }
+    const val = ta.value;
+    const pos = ta.selectionStart;
+    const windowStart = Math.max(0, pos - 2048);
+    const windowEnd = Math.min(val.length, pos + 256);
+    const isBig = val.length > 30000;
+    const sliceText = isBig ? val.slice(windowStart, windowEnd) : val;
+    const slicePos = isBig ? (pos - windowStart) : pos;
+    const found = suggestSQL(sliceText, slicePos, completionExtras());
     if (!found.items.length) { hideComplete(); return; }
+    const actualStart = isBig ? (found.start + windowStart) : found.start;
+    const actualEnd = isBig ? (found.end + windowStart) : found.end;
     acState.open = true;
     acState.items = found.items;
-    acState.start = found.start;
-    acState.end = found.end;
+    acState.start = actualStart;
+    acState.end = actualEnd;
     acState.index = 0;
     renderComplete();
-    positionComplete(ta, found.start);
+    positionComplete(ta, actualStart);
   }
   function renderComplete() {
     const box = q('db-sql-ac');

@@ -7588,15 +7588,19 @@ body.has-open-overlay { overflow: hidden; }
 .db-tab-menu-item:disabled { color: var(--text-mute); cursor: not-allowed; opacity: 0.5; }
 .db-sql-panel { display: flex; flex-direction: column; min-height: 0; }
 .db-sql-panel[hidden] { display: none !important; }
-.db-sql-editor { display: block; width: 100%; min-height: 190px; resize: vertical; border: 0; border-radius: 0; padding: 13px 15px; background: transparent; color: transparent; -webkit-text-fill-color: transparent; caret-color: var(--tail-out-fg); font: 13px/1.6 var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace); tab-size: 2; box-shadow: none; position: relative; z-index: 1; white-space: pre; overflow: auto; }
+.db-sql-editor { display: block; width: 100%; min-height: 190px; resize: vertical; border: 0; border-radius: 0; padding: 13px 15px; box-sizing: border-box; background: transparent; color: transparent; -webkit-text-fill-color: transparent; caret-color: var(--tail-out-fg); font: 13px/1.6 var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace); tab-size: 2; box-shadow: none; position: relative; z-index: 1; white-space: pre; overflow: auto; }
 .db-sql-editor:hover, .db-sql-editor:focus { background: transparent; border-color: transparent; box-shadow: none; }
 .db-sql-editor::placeholder { color: var(--textarea-placeholder, var(--field-placeholder)); -webkit-text-fill-color: var(--textarea-placeholder, var(--field-placeholder)); }
+/* 大文本极速模式 / 语法高亮降级模式：直接使用原生可见文字渲染，零 DOM 爆炸与零卡顿 */
+.db-sql-editor.is-plain-editor { color: var(--tail-out-fg) !important; -webkit-text-fill-color: var(--tail-out-fg) !important; }
+:root[data-theme="xianxia"] .db-sql-editor.is-plain-editor { color: #1a2320 !important; -webkit-text-fill-color: #1a2320 !important; }
+.db-sql-shell.is-plain-editor .db-sql-highlight { display: none !important; }
 /* v0.18（问题10）：Chrome 70 不支持 color-mix/inset，选中底色会整个失效
    （只剩 color:transparent → 选中完全看不见）。改用主题变量 --sql-sel-bg
    （各主题均已定义）+ 四向展开定位。 */
 .db-sql-editor::selection { background: var(--sql-sel-bg, rgba(79,140,255,.32)); color: transparent; }
-.db-sql-shell { position: relative; min-height: 190px; background: var(--tail-out-bg); }
-.db-sql-highlight { position: absolute; top: 0; left: 0; right: 0; bottom: 0; margin: 0; padding: 13px 15px; overflow: hidden; white-space: pre; word-wrap: normal; pointer-events: none; font: 13px/1.6 var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace); tab-size: 2; color: var(--tail-out-fg); }
+.db-sql-shell { position: relative; min-height: 190px; background: var(--tail-out-bg); box-sizing: border-box; }
+.db-sql-highlight { position: absolute; top: 0; left: 0; right: 0; bottom: 0; margin: 0; padding: 13px 15px; box-sizing: border-box; overflow: hidden; white-space: pre; word-wrap: normal; pointer-events: none; font: 13px/1.6 var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace); tab-size: 2; color: var(--tail-out-fg); }
 .db-sql-kw { color: var(--primary); font-weight: 650; }
 .db-sql-str { color: var(--success); }
 .db-sql-cmt { color: var(--text-mute); font-style: italic; }

@@ -477,15 +477,19 @@
     return result;
   }
   function findParameters(source) {
+    const text = String(source || '');
+    if (text.length > MAX_SQL_HIGHLIGHT) return [];
     const seen = new Set(), result = [];
-    tokenizeSQL(source).forEach(function (token) {
-      if (token.type !== 'param' || !token.name || token.name === '?') return;
+    let qCount = 0;
+    tokenizeSQL(text).forEach(function (token) {
+      if (token.type !== 'param') return;
+      if (token.name === '?') { qCount++; return; }
+      if (!token.name) return;
       const key = token.name.toLowerCase();
       if (seen.has(key)) return;
       seen.add(key);
       result.push({ name: token.name, token: token.value });
     });
-    const qCount = tokenizeSQL(source).filter(function (token) { return token.type === 'param' && token.name === '?'; }).length;
     // The API contract uses the parameter name as the bind key.  Positional
     // placeholders therefore use the same pure numeric keys as Oracle's :1,
     // :2 binds; the question mark remains only the source token/label.

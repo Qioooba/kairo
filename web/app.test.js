@@ -1398,6 +1398,7 @@ function loadDatabaseHelpers(navigatorMock) {
     + extractDb('isMacPlatform') + '\n'
     + extractDb('sqlTableContext') + '\n'
     + extractDb('suggestSQL') + '\n'
+    + extractDb('isLargeSQL') + '\n'
     + extractDb('highlightSQL') + '\n'
     + extractDb('formatSQL') + '\n'
     + extractDb('matchBrackets') + '\n'
@@ -1408,7 +1409,7 @@ function loadDatabaseHelpers(navigatorMock) {
     + extractDb('fmtCell') + '\n'
     + extractDb('parseSnippetsText') + '\n'
     + extractDb('formatSnippetsText') + '\n'
-    + 'return { tokenizeSQL: tokenizeSQL, highlightSQL: highlightSQL, formatSQL: formatSQL, suggestSQL: suggestSQL, sqlTableContext: sqlTableContext, matchesShortcut: matchesShortcut, matchBrackets: matchBrackets, completionPrefix: completionPrefix, isSnippetExpandKey: isSnippetExpandKey, parseSnippetsText: parseSnippetsText, formatSnippetsText: formatSnippetsText, formatBytes: formatBytes, cellText: cellText, fmtCell: fmtCell };'
+    + 'return { tokenizeSQL: tokenizeSQL, isLargeSQL: isLargeSQL, highlightSQL: highlightSQL, formatSQL: formatSQL, suggestSQL: suggestSQL, sqlTableContext: sqlTableContext, matchesShortcut: matchesShortcut, matchBrackets: matchBrackets, completionPrefix: completionPrefix, isSnippetExpandKey: isSnippetExpandKey, parseSnippetsText: parseSnippetsText, formatSnippetsText: formatSnippetsText, formatBytes: formatBytes, cellText: cellText, fmtCell: fmtCell };'
   )(navigatorMock || {});
 }
 
