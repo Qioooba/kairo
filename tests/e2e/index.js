@@ -143,10 +143,13 @@ async function main() {
     './tests/37-wscodegen-deep',
     './tests/38-notes-deep',
     './tests/39-ui-workbench',
-	'./tests/40-database-write-regression',
+    './tests/40-database-write-regression',
+    './tests/41-database-backup-real',
+    './tests/42-database-deep',
   ];
 
   console.log('📦 注册测试模块...');
+  let registerErrors = 0;
   for (const mod of testModules) {
     try {
       const m = require(mod);
@@ -163,12 +166,19 @@ async function main() {
           m[regFn](runner, ctx);
           console.log('  ✓ ' + mod);
         } else {
-          console.log('  ⚠ ' + mod + ' (no register function)');
+          registerErrors++;
+          console.log('  ✗ ' + mod + ' (no register function)');
         }
       }
     } catch (e) {
+      registerErrors++;
       console.error('  ✗ ' + mod + ': ' + e.message);
     }
+  }
+
+  if (registerErrors > 0) {
+    console.error(`\n❌ 测试套件初始化失败：有 ${registerErrors} 个模块加载或注册失败！`);
+    process.exit(1);
   }
 
   console.log('');

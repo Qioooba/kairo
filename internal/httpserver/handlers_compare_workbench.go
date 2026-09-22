@@ -80,15 +80,18 @@ type compareCopyReq struct {
 	Backup   bool               `json:"backup"`
 }
 type compareSyncItem struct {
-	RelPath  string             `json:"rel_path"`
-	Expected *comparefs.Version `json:"expected,omitempty"`
+	RelPath         string             `json:"rel_path"`
+	Expected        *comparefs.Version `json:"expected,omitempty"`
+	ExpectedMissing bool               `json:"expected_missing,omitempty"`
 }
 type compareSyncReq struct {
-	Left      compareSourceSpec `json:"left"`
-	Right     compareSourceSpec `json:"right"`
-	Direction string            `json:"direction"`
-	Items     []compareSyncItem `json:"items"`
-	Backup    bool              `json:"backup"`
+	Left       compareSourceSpec `json:"left"`
+	Right      compareSourceSpec `json:"right"`
+	Direction  string            `json:"direction"`
+	Items      []compareSyncItem `json:"items"`
+	Backup     bool              `json:"backup"`
+	IgnoreExts []string          `json:"ignore_exts,omitempty"`
+	IgnoreDirs []string          `json:"ignore_dirs,omitempty"`
 }
 type compareSyncFailure struct {
 	RelPath string `json:"rel_path"`
@@ -575,7 +578,11 @@ func (s *Server) performCompareSync(ctx context.Context, req compareSyncReq, pro
 				continue
 			}
 			syncedDirs = append(syncedDirs, rel)
-			files, truncated, _, walkErr := walkCompareFSWithMeta(ctx, source, sourcePath, compareScanReq{}, nil)
+			scanReq := compareScanReq{
+				IgnoreExts: req.IgnoreExts,
+				IgnoreDirs: req.IgnoreDirs,
+			}
+			files, truncated, _, walkErr := walkCompareFSWithMeta(ctx, source, sourcePath, scanReq, nil)
 			if walkErr != nil {
 				result.Failures = append(result.Failures, compareSyncFailure{RelPath: item.RelPath, Error: compareSyncErrorMessage(walkErr, "展开目录失败")})
 				continue
@@ -617,7 +624,10 @@ func (s *Server) performCompareSync(ctx context.Context, req compareSyncReq, pro
 		}
 		// A client-provided expected version still wins for an existing target;
 		// for an absent target, retain ExpectedMissing to protect the create race.
-		if item.Expected != nil {
+		if item.ExpectedMissing {
+			expectedMissing = true
+			expected = nil
+		} else if item.Expected != nil {
 			expected = item.Expected
 			expectedMissing = false
 		}
@@ -1095,7 +1105,15 @@ func (s *Server) performCompareScan(ctx context.Context, req compareScanReq, pro
 		for k, v := range right {
 			rKey, rEntry = k, v
 		}
-		if !lEntry.IsDir && !rEntry.IsDir && lKey != rKey {
+		isLeftRootFile := false
+		if st, err := leftFS.Stat(ctx, leftRoot); err == nil && !st.IsDir {
+			isLeftRootFile = true
+		}
+		isRightRootFile := false
+		if st, err := rightFS.Stat(ctx, rightRoot); err == nil && !st.IsDir {
+			isRightRootFile = true
+		}
+		if isLeftRootFile && isRightRootFile && !lEntry.IsDir && !rEntry.IsDir && lKey != rKey {
 			commonKey := lKey
 			left = map[string]comparefs.Entry{commonKey: lEntry}
 			right = map[string]comparefs.Entry{commonKey: rEntry}
@@ -1495,8 +1513,12 @@ func cleanCompareEntryName(name string) (string, error) {
 func ignoreCompareEntry(rel string, isDir bool, exts, dirs []string) bool {
 	base := filepath.Base(rel)
 	if isDir {
-		defaults := []string{".git", "node_modules", "__pycache__", "target", "dist", "build", ".idea", ".vscode", ".svn", "vendor", ".next", ".nuxt"}
-		for _, name := range append(defaults, dirs...) {
+		defaultDirs := []string{".git", ".svn"}
+		checkDirs := defaultDirs
+		if len(dirs) > 0 {
+			checkDirs = append(checkDirs, dirs...)
+		}
+		for _, name := range checkDirs {
 			if strings.EqualFold(strings.TrimSpace(name), base) {
 				return true
 			}

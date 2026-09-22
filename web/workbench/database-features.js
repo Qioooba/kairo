@@ -1377,7 +1377,7 @@
     return context ? { schema: context.schema, table: context.table } : { schema: '', table: '' };
   }
   function gridContextKey(context) {
-    return context ? JSON.stringify([context.sourceId, context.sessionId, context.schema, context.table, context.sql]) : '';
+    return context ? JSON.stringify([context.sourceId, context.sessionId, context.schema, context.table, context.resultId || context.sql]) : '';
   }
   function pendingGridMutations(context) {
     const key = gridContextKey(context || gridContext());
@@ -1454,6 +1454,7 @@
     try {
       const adapter = state.adapters.grid;
       const result = adapter ? await adapter(detail) : await apiFallback('POST', ['/api/database/grid', '/api/database/grid/mutate'], {
+        result_id: context.resultId || '',
         source_id: detail.sourceId, schema: detail.schema, table: detail.table, session_id: detail.sessionId,
         mutations: detail.mutations, commit: detail.commit, confirm: detail.confirm
       });

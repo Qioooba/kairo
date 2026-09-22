@@ -42,24 +42,68 @@ fi
 
 # 4. 提取模型名称并去除两端空白
 MODEL_VAL=$(echo "$MODEL_LINE" | sed -E 's/^([a-zA-Z-]+)?[Mm]odel:[[:space:]]*//' | tr -d '\r\n')
+LOWER_VAL=$(echo "$MODEL_VAL" | tr '[:upper:]' '[:lower:]')
 
-# 5. 拦截模糊、不包含版本的宽泛名称
-case "$(echo "$MODEL_VAL" | tr '[:upper:]' '[:lower:]')" in
-    "ai"|"llm"|"bot"|"assistant"|"gemini"|"claude"|"gpt"|"deepseek"|"qwen"|"openai"|"anthropic"|"google")
+# 5. 人类开发者手动提交特例放行
+if [ "$LOWER_VAL" = "human" ]; then
+    exit 0
+fi
+
+# 6. 拦截模糊、不包含版本的宽泛名称
+case "$LOWER_VAL" in
+    "ai"|"llm"|"bot"|"assistant"|"gemini"|"claude"|"gpt"|"deepseek"|"qwen"|"openai"|"anthropic"|"google"|"gemini flash"|"gemini pro"|"claude sonnet"|"claude opus"|"claude haiku"|"chatgpt")
         echo ""
         echo "================================================================================"
         echo "[ERROR] Git Commit 校验失败：模型名称过于模糊，未精确到具体版本！"
         echo "--------------------------------------------------------------------------------"
         echo "当前填写: $MODEL_VAL"
-        echo "必须指明版本号，例如："
+        echo "必须指明具体版本号，例如："
         echo "    Model: Gemini 3.8 Flash"
         echo "    Model: Claude 3.7 Sonnet"
         echo "    Model: GPT-4o"
         echo "    Model: DeepSeek-V3"
+        echo "如果是人类开发者手动提交，请标注: Model: Human"
         echo "================================================================================"
         echo ""
         exit 1
         ;;
 esac
+
+# 7. 拦截泛称前缀 (如 AI-1, LLM 2 等)
+case "$LOWER_VAL" in
+    ai*|llm*|bot*|assistant*)
+        if echo "$LOWER_VAL" | grep -Eq '^(ai|llm|bot|assistant)[^a-z0-9]*[0-9]*$'; then
+            echo ""
+            echo "================================================================================"
+            echo "[ERROR] Git Commit 校验失败：禁止使用泛称 '$MODEL_VAL' 作为模型名称！"
+            echo "--------------------------------------------------------------------------------"
+            echo "必须指明具体模型全称与版本，例如："
+            echo "    Model: Gemini 3.8 Flash"
+            echo "    Model: Claude 3.7 Sonnet"
+            echo "    Model: GPT-4o"
+            echo "================================================================================"
+            echo ""
+            exit 1
+        fi
+        ;;
+esac
+
+# 8. 强制要求包含精确版本号（必须含有数字版本号，如 3.8 / 4o / V3）
+if ! echo "$MODEL_VAL" | grep -Eq '[0-9]'; then
+    echo ""
+    echo "================================================================================"
+    echo "[ERROR] Git Commit 校验失败：AI 模型必须注明精确版本号（需包含数字版本，如 3.8 / 4o / V3）！"
+    echo "--------------------------------------------------------------------------------"
+    echo "当前填写: $MODEL_VAL"
+    echo "必须指明版本号，例如："
+    echo "    Model: Gemini 3.8 Flash"
+    echo "    Model: Claude 3.7 Sonnet"
+    echo "    Model: GPT-4o"
+    echo "    Model: DeepSeek-V3"
+    echo "如果是人类开发者手动提交，请标注: Model: Human"
+    echo "================================================================================"
+    echo ""
+    exit 1
+fi
 
 exit 0

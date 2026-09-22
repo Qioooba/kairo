@@ -1628,7 +1628,8 @@
   }
 
   function startCellEdit(rowIdx, colIdx, td, setNull) {
-    if (sess() && (sess().transactionBusy || sess().gridEditsStaged)) return;
+    const s = sess();
+    if (s && (s.transactionBusy || s.gridEditsStaged || s.controller || s.outcomeUnknown)) return false;
     if (!canWriteDatabase()) {
       toast('当前账号只有查询权限，不能编辑结果', 'warn');
       return false;
@@ -1637,12 +1638,17 @@
       toast('网格编辑未开启；双击将打开单行记录，按工具栏按钮可开启编辑', 'warn');
       return false;
     }
-    if (!state.rows || !state.rows[rowIdx] || !state.columns || !state.columns[colIdx]) return;
+    const context = getGridContext();
+    if (!context || context.editable === false) {
+      toast((context && context.editPlan && context.editPlan.reason) || '当前结果不支持网格编辑', 'warn');
+      return false;
+    }
+    if (!state.rows || !state.rows[rowIdx] || !state.columns || !state.columns[colIdx]) return false;
     if (!td) {
       const grid = q('db-result-grid');
       td = grid && grid.querySelector('td[data-row="' + rowIdx + '"][data-col="' + colIdx + '"]');
     }
-    if (!td || td.querySelector('input.db-cell-input')) return;
+    if (!td || td.querySelector('input.db-cell-input')) return false;
     const dirtyKey = rowIdx + '_' + colIdx;
     const currentVal = (state.dirtyCells && state.dirtyCells[dirtyKey]) ? state.dirtyCells[dirtyKey].newVal : state.rows[rowIdx][colIdx];
     if (currentVal && typeof currentVal === 'object') return toast('复杂字段请使用专用查看器，不能直接编辑预览值', 'warn');
@@ -1719,21 +1725,41 @@
 
   function getGridContext() {
     const current = sess(), source = effectiveSource(), features = Kairo.databaseFeatures;
-    if (!current || current.type === 'object' || !source || !features || !features.resolveGridTarget) return null;
-    let schemaHint = current.resultSchema;
-    if (!schemaHint || schemaHint === '加载中…' || schemaHint === '加载失败' || isPlaceholderSchema(schemaHint)) {
-      schemaHint = currentSchema();
+    if (!current || current.type === 'object' || !source) return null;
+    // 检查结果绑定的来源是否已失效（切源或配置变更）
+    if (current.sourceId && current.sourceId !== source.id) return null;
+    if (current.sourceFingerprint && source.fingerprint && current.sourceFingerprint !== source.fingerprint) return null;
+
+    const plan = current.editPlan;
+    let targetSchema = plan ? plan.schema : '';
+    let targetTable = plan ? plan.table : '';
+    if (!targetTable && features && features.resolveGridTarget) {
+      let schemaHint = current.resultSchema;
+      if (!schemaHint || isPlaceholderSchema(schemaHint)) schemaHint = currentSchema();
+      const target = features.resolveGridTarget(current.lastSQL, schemaHint || '', source.kind);
+      if (target) {
+        targetSchema = target.schema;
+        targetTable = target.table;
+      }
     }
-    const target = features.resolveGridTarget(current.lastSQL, schemaHint || '', source.kind);
-    if (!target) return null;
-    if (!target.schema || target.schema === '加载中…' || target.schema === '加载失败' || isPlaceholderSchema(target.schema)) {
-      target.schema = currentSchema();
-    }
-    const isOrdered = !(current.summary && current.summary.ordered === false);
+    if (!targetTable) return null;
+
+    const planAllows = plan ? (plan.canUpdate || plan.canInsert) : true;
+    const canEdit = planAllows && canWriteDatabase() && !source.read_only && !!current.isEditMode && !current.controller && !current.transactionBusy && !current.outcomeUnknown;
+
     return {
-      sourceId: source.id, sessionId: current.transactionId, schema: target.schema, table: target.table,
-      sql: current.lastSQL, columns: current.columns.slice(), values: (current.rows[state.selectedRow] || []).slice(), rowIndex: state.selectedRow,
-      editable: isOrdered && canWriteDatabase() && !source.read_only && !!current.isEditMode && !current.controller && !current.transactionBusy,
+      resultId: (plan && plan.result_id) || (current.summary && current.summary.result_id) || current.resultId || '',
+      sourceId: source.id,
+      sourceFingerprint: source.fingerprint || '',
+      sessionId: current.transactionId,
+      schema: targetSchema,
+      table: targetTable,
+      sql: current.executedSQL || current.lastSQL,
+      columns: current.columns.slice(),
+      values: (current.rows[state.selectedRow] || []).slice(),
+      rowIndex: state.selectedRow,
+      editable: canEdit,
+      editPlan: plan,
       production: String(source.environment || '').toLowerCase() === 'production'
     };
   }
@@ -1749,7 +1775,7 @@
     const source = effectiveSource(), context = getGridContext();
     if (!source) return toast('未绑定有效数据源', 'warn');
     if (!canWriteDatabase() || source.read_only) return toast('当前账号或数据源只有查询权限', 'warn');
-    if (dirtyKeys.length && !context) return toast('仅支持直接查询单表列的网格修改，请重新查询目标表', 'warn');
+    if (dirtyKeys.length && (!context || context.editable === false)) return toast((context && context.editPlan && context.editPlan.reason) || '仅支持直接查询单表列的网格修改，请重新查询目标表', 'warn');
     const confirmWrite = String(source.environment || '').toLowerCase() === 'production';
     if (dirtyKeys.length && confirmWrite && !confirm('当前为生产数据源，确认提交网格修改？')) return;
     current.transactionBusy = true;
@@ -1757,8 +1783,7 @@
       let affected = 0;
       if (dirtyKeys.length && !current.gridEditsStaged) {
         const schemaToUse = (context.schema && context.schema !== '加载中…' && context.schema !== '加载失败') ? context.schema : currentSchema();
-        const metadata = await api('GET', '/api/database/metadata/fields?source_id=' + encodeURIComponent(source.id) + '&schema=' + encodeURIComponent(schemaToUse) + '&object=' + encodeURIComponent(context.table));
-        const primaryKey = (metadata.fields || []).filter(function (f) { return f.primary_key; }).map(function (f) { return f.name; });
+        const primaryKey = (context.editPlan && context.editPlan.primary_keys) ? context.editPlan.primary_keys : [];
         const rows = new Map();
         dirtyKeys.forEach(function (key) {
           const edit = edits[key], row = current.rows[edit.rowIdx], column = current.columns[edit.colIdx];
@@ -1772,7 +1797,7 @@
           }
           rows.get(edit.rowIdx).values[column.name] = edit.newVal;
         });
-        const response = await api('POST', '/api/database/grid', { source_id: source.id, session_id: current.transactionId, schema: schemaToUse, table: context.table, mutations: Array.from(rows.values()), confirm: confirmWrite });
+        const response = await api('POST', '/api/database/grid', { result_id: context.resultId || '', source_id: source.id, session_id: current.transactionId, schema: schemaToUse, table: context.table, mutations: Array.from(rows.values()), confirm: confirmWrite });
         current.transactionPending = true;
         current.gridEditsStaged = true;
         affected = Number(response && response.result && response.result.rows_affected) || 0;
@@ -2844,9 +2869,15 @@
     if (q('db-toggle-edit')) q('db-toggle-edit').onclick = function () {
       if (!canWriteDatabase()) { toast('当前账号只有查询权限', 'warn'); return; }
       const current = sess();
-      if (!state.isEditMode && current && current.summary && current.summary.ordered === false) {
-        toast('无序分页结果不稳定（多页可能重复或漏行），网格编辑要求 SQL 包含显式 ORDER BY 排序', 'warn');
-        return;
+      if (!state.isEditMode && current) {
+        if (current.sourceId && state.source && current.sourceId !== state.source.id) {
+          toast('当前结果属于其他数据源，请在当前数据源重新查询后编辑', 'warn');
+          return;
+        }
+        if (current.editPlan && !current.editPlan.canUpdate && !current.editPlan.canInsert) {
+          toast(current.editPlan.reason || '当前查询结果不支持网格编辑', 'warn');
+          return;
+        }
       }
       state.isEditMode = !state.isEditMode;
       if (current) current.isEditMode = state.isEditMode;
@@ -3849,7 +3880,10 @@
     }
     return null;
   }
-  function formatSQL(src) {
+  function formatSQL(src, options) {
+    if (typeof Kairo !== 'undefined' && Kairo.workbench && Kairo.workbench.sqlFormatService && typeof Kairo.workbench.sqlFormatService.formatSQL === 'function') {
+      return Kairo.workbench.sqlFormatService.formatSQL(src, options);
+    }
     const tokens = tokenizeSQL(src);
     let out = '', newline = true;
     tokens.forEach(function (tok) {
@@ -3869,8 +3903,6 @@
         newline = true;
         return;
       }
-      // 修复 #9：* 与运算符前后空格。原先只有 = 等四个算子会加空格，导致 "SELECT*" 粘连；
-      // 扩大到所有常见算子，且 * 需空格，括号/逗号等仍不加前空格，且 '(' 后不加空格
       const spacedOp = tok.type === 'punct' && /^[=<>!+\-*\/%]+$/.test(tok.value);
       const noSpaceBefore = tok.type === 'punct' && /^[),.;]$/.test(tok.value);
       if (!newline && !noSpaceBefore && !out.endsWith('(') && !out.endsWith('[') && !out.endsWith('.') && (tok.type !== 'punct' || spacedOp)) out += ' ';
@@ -3878,7 +3910,7 @@
       newline = tok.value === ';';
       if (tok.value === ';') { out += '\n'; newline = true; }
     });
-    return out.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+    return out.trim();
   }
   function bindSQLEditor() {
     const ta = q('db-sql'), hl = q('db-sql-highlight');
@@ -3997,11 +4029,26 @@
       tabTitleTimer = setTimeout(renderTabs, 160);
     }
   }
-  function formatCurrentSQL() {
+  function formatCurrentSQL(options) {
     const ta = q('db-sql');
     if (!ta) return;
-    const next = formatSQL(ta.value);
+    if (!ta.value.trim()) return toast('编辑器为空', 'warn');
+    options = options || {};
+    if (typeof Kairo !== 'undefined' && Kairo.workbench && Kairo.workbench.sqlFormatService && typeof Kairo.workbench.sqlFormatService.formatInEditor === 'function') {
+      const eff = effectiveSource() || {};
+      const res = Kairo.workbench.sqlFormatService.formatInEditor(ta, {
+        dialect: eff.kind || 'oracle',
+        full: options.full
+      });
+      syncSQLEditor();
+      if (res.status === 'empty') return toast('编辑器为空', 'warn');
+      if (res.status === 'unchanged') return toast('SQL 无需格式化', 'info');
+      toast(options.full ? '全文 SQL 已格式化' : (ta.selectionEnd > ta.selectionStart ? '选区 SQL 已格式化' : '当前语句已格式化'), 'ok');
+      return;
+    }
+    const next = formatSQL(ta.value, options);
     if (!next) return toast('编辑器为空', 'warn');
+    if (next === ta.value) return toast('SQL 无需格式化', 'info');
     ta.value = next;
     syncSQLEditor();
     toast('SQL 已格式化', 'ok');
@@ -4407,10 +4454,23 @@
 
     function go(page) {
       const s = sess(); if (!s || s.controller) return;
-      s.page = Math.max(1, Number(page) || 1);
+      const targetPage = Math.max(1, Number(page) || 1);
+      const dirtyCount = Object.keys(state.dirtyCells || {}).length;
+      if (dirtyCount && !confirm('翻页将放弃当前页签的 ' + dirtyCount + ' 处未提交网格修改，确定继续吗？')) {
+        updateDatabasePager();
+        return;
+      }
+      if (dirtyCount) {
+        replaceDirtyCells({});
+        updateTransactionControls();
+      }
+      s.page = targetPage;
       s.pageSize = Math.max(1, Number(s.pageSize) || 20);
       s.lastMaxRows = s.pageSize;
       const max = q('db-max-rows'); if (max) max.value = s.pageSize;
+      if (s.summary && s.summary.ordered === false && targetPage > 1) {
+        toast('当前查询未指定 ORDER BY，跨页浏览可能出现重复或遗漏；已加载记录按原始身份提交。', 'info');
+      }
       runQuery(true);
     }
 
@@ -4473,6 +4533,8 @@
     if (!s || s.runSeq !== seq) return;
     if (e.type === 'meta') {
       s.columns = e.columns || [];
+      s.resultId = e.result_id || '';
+      s.editPlan = e.edit_plan || null;
       s.gridReady = false;
       if (s.id === state.activeId) { bindSession(s); renderResult(); }
     } else if (e.type === 'rows') {
@@ -4519,6 +4581,8 @@
       }
     } else if (e.type === 'summary') {
       s.summary = e.summary;
+      if (e.summary && e.summary.result_id) s.resultId = e.summary.result_id;
+      if (e.summary && e.summary.edit_plan) s.editPlan = e.summary.edit_plan;
       if (e.summary && e.summary.page) { s.page = e.summary.page; s.pageSize = e.summary.page_size || s.pageSize; }
       const totalTime = s.startTime ? Math.round(performance.now() - s.startTime) : null;
       const firstPacketTime = (s.firstRowsTime && s.startTime) ? Math.round(s.firstRowsTime - s.startTime) : null;
@@ -5709,13 +5773,17 @@
   function hasPendingWork() {
     let hasTx = false;
     let dirtyCount = 0;
+    let mutationCount = 0;
     for (let i = 0; i < state.sessions.length; i++) {
       const s = state.sessions[i];
       if (s && s.transactionPending) hasTx = true;
       const d = Object.keys((s && s.dirtyCells) || {}).length;
       if (d > 0) dirtyCount += d;
     }
-    return { hasTransaction: hasTx, dirtyCount: dirtyCount, pending: hasTx || dirtyCount > 0 };
+    if (Kairo.databaseFeatures && typeof Kairo.databaseFeatures.pendingGridMutations === 'function') {
+      mutationCount = Kairo.databaseFeatures.pendingGridMutations().length;
+    }
+    return { hasTransaction: hasTx, dirtyCount: dirtyCount, mutationCount: mutationCount, pending: hasTx || dirtyCount > 0 || mutationCount > 0 };
   }
   function discardPendingWork() {
     for (let i = 0; i < state.sessions.length; i++) {
@@ -5726,6 +5794,9 @@
         s.gridEditsStaged = false;
       }
       if (s) s.dirtyCells = {};
+    }
+    if (Kairo.databaseFeatures && typeof Kairo.databaseFeatures.clearGridMutations === 'function') {
+      Kairo.databaseFeatures.clearGridMutations();
     }
     state.dirtyCells = {};
     updateTransactionControls();

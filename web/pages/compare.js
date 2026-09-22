@@ -789,10 +789,53 @@
     const blank = makeCheck('忽略空行', options.ignore_blank, value => { options.ignore_blank = value; comparisonOptionChanged(); });
     const ignoreCase = makeCheck('忽略大小写', options.ignore_case, value => { options.ignore_case = value; comparisonOptionChanged(); });
     const backup = makeCheck('替换前备份', options.backup, value => { options.backup = value; saveOptions(options); });
+    function applyViewSizing() {
+      const fs = Number(options.font_size) || 12;
+      const lh = Number(options.line_height) || 25;
+      panel.style.setProperty('--cmp-code-font-size', fs + 'px');
+      panel.style.setProperty('--cmp-row-h', lh + 'px');
+    }
+    applyViewSizing();
+
+    const fontSizeSelect = el('select', { 'aria-label': '代码字号', title: '设置比对与代码文本字号' }, [
+      el('option', { value: '10', text: '10px (极小)' }),
+      el('option', { value: '11', text: '11px (紧凑)' }),
+      el('option', { value: '12', text: '12px (标准)' }),
+      el('option', { value: '13', text: '13px (适中)' }),
+      el('option', { value: '14', text: '14px (较大)' })
+    ]);
+    fontSizeSelect.value = String(options.font_size || '12');
+
+    const lineHeightSelect = el('select', { 'aria-label': '行间距', title: '设置比对行高度与间距' }, [
+      el('option', { value: '20', text: '20px (超紧凑)' }),
+      el('option', { value: '22', text: '22px (紧凑)' }),
+      el('option', { value: '25', text: '25px (标准)' }),
+      el('option', { value: '28', text: '28px (宽松)' })
+    ]);
+    lineHeightSelect.value = String(options.line_height || '25');
+
+    fontSizeSelect.onchange = function () {
+      options.font_size = fontSizeSelect.value;
+      saveOptions(options);
+      applyViewSizing();
+      if (state.diff) renderResult(true);
+    };
+    lineHeightSelect.onchange = function () {
+      options.line_height = lineHeightSelect.value;
+      saveOptions(options);
+      applyViewSizing();
+      if (state.diff) renderResult(true);
+    };
+
+    const viewOptionsGrid = el('div', { class: 'cmp2-view-options-grid' }, [
+      el('label', {}, [el('span', { text: '代码字号' }), fontSizeSelect]),
+      el('label', {}, [el('span', { text: '行距高度' }), lineHeightSelect])
+    ]);
+
     const navGroup = el('div', { class: 'cmp2-segment cmp2-nav', 'aria-label': '差异导航' }, [prevBtn, diffCountBadge, nextBtn]);
     const optionDetails = el('details', { class: 'cmp2-popover' }, [
       el('summary', { text: '比较选项' }),
-      el('div', { class: 'cmp2-popover-panel' }, [trim, blank, ignoreCase, backup])
+      el('div', { class: 'cmp2-popover-panel' }, [trim, blank, ignoreCase, backup, viewOptionsGrid])
     ]);
     const moreDetails = el('details', { class: 'cmp2-popover cmp2-more' }, [
       el('summary', { text: '更多操作' }),
@@ -1227,6 +1270,8 @@
         batch: (indices, dir) => applyBatch(filtered, indices, dir),
         edit: commitLineEdit,
         language: { left: sourceHeaders.left.language.value, right: sourceHeaders.right.language.value },
+        rowHeight: Number(options.line_height) || 25,
+        fontSize: Number(options.font_size) || 12,
         onHunkChange: function(idx, total) {
           diffCountBadge.textContent = total > 0 ? ('差异 ' + (idx + 1) + ' / ' + total) : '无差异';
         },
@@ -1504,7 +1549,7 @@
     const onBatch = actions && actions.batch;
     const onEdit = actions && actions.edit;
     const onSearchChange = actions && actions.onSearchChange;
-    const rowHeight = 25;
+    const rowHeight = Math.max(18, Math.min(40, Number((actions && actions.rowHeight) || (state && state.options && state.options.line_height) || 25)));
 
     // Search state
     let searchQuery = '';
@@ -1937,7 +1982,7 @@
           role: 'listitem',
           'data-hunk': row.hunk >= 0 ? String(row.hunk) : '',
           'data-row': String(i),
-          style: 'transform:translateY(' + (i * rowHeight) + 'px); width:100%; grid-template-columns:' + rowGridColumns + ';'
+          style: 'transform:translateY(' + (i * rowHeight) + 'px); height:' + rowHeight + 'px; width:100%; grid-template-columns:' + rowGridColumns + ';'
         });
         node.addEventListener('click', function(e) {
           activeRowIndex = i;

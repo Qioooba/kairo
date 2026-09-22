@@ -224,6 +224,9 @@ async function run() {
     console.log('剪贴板获取的 UPDATE 语句:\n' + updateSQL);
 
     // 校验 UPDATE:
+    if (!updateSQL || !updateSQL.trim().startsWith('UPDATE ')) {
+      throw new Error('未在剪贴板中获取到有效的 UPDATE 语句，剪贴板内容为空或非 UPDATE: ' + JSON.stringify(updateSQL));
+    }
     // 1. 表名无库名前缀、无双引号
     // 2. SET 与 WHERE 中的字段名无双引号
     const updateTarget = updateSQL.split(/SET/i)[0];
@@ -236,23 +239,27 @@ async function run() {
     // 检查字段名是否有双引号
     const setPart = updateSQL.replace(/^UPDATE\s+\w+\s+SET\s+/i, '').split(/\s+WHERE\s+/i)[0];
     const assignments = setPart.split(/,(?=(?:[^']*'[^']*')*[^']*$)/); // 按逗号分割，忽略字符串内部的逗号
+    if (assignments.length === 0 || !assignments[0].trim()) {
+      throw new Error('UPDATE 语句 SET 赋值列表为空: ' + updateSQL);
+    }
     for (const assign of assignments) {
       const col = assign.split('=')[0].trim();
-      if (col.indexOf('"') >= 0) {
+      if (!col || col.indexOf('"') >= 0) {
         throw new Error(`UPDATE 语句字段名 [${col}] 包含双引号: ${assign}`);
       }
     }
     const wherePart = updateSQL.split(/\s+WHERE\s+/i)[1];
-    if (wherePart) {
-      const whereConditions = wherePart.replace(/;$/, '').split(/\s+AND\s+/i);
-      for (const cond of whereConditions) {
-        const col = cond.split('=')[0].trim();
-        if (col.indexOf('"') >= 0) {
-          throw new Error(`UPDATE 语句 WHERE 字段名 [${col}] 包含双引号: ${cond}`);
-        }
+    if (!wherePart || !wherePart.trim()) {
+      throw new Error('UPDATE 语句缺少 WHERE 主键条件: ' + updateSQL);
+    }
+    const whereConditions = wherePart.replace(/;$/, '').split(/\s+AND\s+/i);
+    for (const cond of whereConditions) {
+      const col = cond.split('=')[0].trim();
+      if (!col || col.indexOf('"') >= 0) {
+        throw new Error(`UPDATE 语句 WHERE 字段名 [${col}] 包含双引号: ${cond}`);
       }
     }
-    console.log('UPDATE 语句校验通过: 表名无库名前缀，表名及字段名均无双引号！');
+    console.log('UPDATE 语句校验通过: 表名无库名前缀，表名及字段名均无双引号，包含完整 WHERE 条件！');
 
     console.log('\n========================================');
     console.log('所有深度真实浏览器与真实数据库测试项全部通过！');
@@ -262,7 +269,13 @@ async function run() {
   }
 }
 
-run().catch(err => {
-  console.error('\n❌ 深度测试失败:', err);
-  process.exit(1);
-});
+const { register } = require('./tests/42-database-deep');
+
+if (require.main === module) {
+  run().catch(err => {
+    console.error('\n❌ 深度测试失败:', err);
+    process.exit(1);
+  });
+}
+
+module.exports = { run, register };

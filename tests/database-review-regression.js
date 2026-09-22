@@ -51,6 +51,7 @@ const cellState = { rows: [['hello']], columns: [{name:'NAME'}], dirtyCells: {},
 const td = { querySelector() { return null; }, replaceChildren(input) { this.input=input; }, classList: { add() {}, remove() {} } };
 const editCode = page.slice(page.indexOf('  function startCellEdit('), page.indexOf('  function updateTransactionControls('));
 const editContext = { window, state:cellState, sess:()=>({}), canWriteDatabase:()=>true, toast:()=>{},
+  getGridContext: () => ({ editable: true }),
   document:{createElement:()=>({focus(){},select(){}})}, cellText:String, fmtCell:String, updateTransactionControls(){} };
 vm.runInNewContext(editCode+'\nwindow.edit=startCellEdit;',editContext);
 window.edit(0,0,td,true); assert.strictEqual(cellState.dirtyCells['0_0'].newVal,null);
@@ -79,7 +80,7 @@ console.log('Database review regressions passed');
     sess: () => txSession,
     effectiveSource: () => ({ id: 'src', read_only: false }),
     canWriteDatabase: () => true,
-    getGridContext: () => ({ schema: 'test', table: 'users' }),
+    getGridContext: () => ({ schema: 'test', table: 'users', editable: true }),
     api: async (method, path, body) => {
       if (body && body.action === 'COMMIT') {
         const err = new Error('提交确认丢失或连接中断，事务最终状态未知');
