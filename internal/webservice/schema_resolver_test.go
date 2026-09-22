@@ -470,4 +470,22 @@ func TestSchemaResolver_T051_RemoteRedirectAuthAndIntranet(t *testing.T) {
 	if secondTargetReceivedAuth != "Bearer secret-token-456" {
 		t.Errorf("同源重定向未保留 Authorization 头，got %q", secondTargetReceivedAuth)
 	}
+
+	// 3. WSDL-01 跨源直接 import（无 302 重定向）：直接引用 Server B 的 schema，Authorization 必须剥离
+	targetReceivedAuth = ""
+	cfgDirectCross := SchemaResolverConfig{
+		BaseURI:     serverA.URL + "/service.wsdl",
+		AuthHeaders: map[string]string{"Authorization": "Bearer secret-token-direct-789"},
+	}
+	resDirectCross := NewSchemaResolver(cfgDirectCross)
+	depsDirectCross, warnsDirectCross := resDirectCross.ResolveGraph([]xsdImport{
+		{SchemaLocation: serverB.URL + "/direct-schema.xsd"},
+	}, idx)
+
+	if len(depsDirectCross) == 0 || depsDirectCross[0].Status != "loaded" {
+		t.Fatalf("跨源直接引用加载失败: deps=%+v, warns=%v", depsDirectCross, warnsDirectCross)
+	}
+	if targetReceivedAuth != "" {
+		t.Errorf("跨源直接引用泄露了 Authorization 头: %q", targetReceivedAuth)
+	}
 }

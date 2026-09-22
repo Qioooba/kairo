@@ -3394,6 +3394,11 @@
       if (control) control.click();
       return;
     }
+    if (matchesShortcut(e, (state.prefs.shortcuts && state.prefs.shortcuts.format) || 'Ctrl+Shift+F')) {
+      e.preventDefault();
+      formatCurrentSQL({ full: e.altKey });
+      return;
+    }
   }
 
   function isSnippetExpandKey(e, trigger) {
