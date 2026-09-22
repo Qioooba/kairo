@@ -3594,7 +3594,7 @@
     let i = 0;
     const text = String(src || '');
     while (i < text.length) {
-      const c = text[i], next = text[i + 1];
+      const c = text[i], next = text[i + 1] || '';
       if (c === '-' && next === '-') {
         const end = text.indexOf('\n', i);
         const take = end < 0 ? text.length : end;
@@ -3607,6 +3607,49 @@
         const take = end < 0 ? text.length : end + 2;
         tokens.push({ type: 'comment', value: text.slice(i, take), start: i });
         i = take;
+        continue;
+      }
+      // Oracle standalone / script delimiter
+      if (c === '/') {
+        let lineStart = text.lastIndexOf('\n', i - 1);
+        lineStart = lineStart < 0 ? 0 : lineStart + 1;
+        const before = text.slice(lineStart, i).trim();
+        let lineEnd = text.indexOf('\n', i + 1);
+        if (lineEnd < 0) lineEnd = text.length;
+        const after = text.slice(i + 1, lineEnd).trim();
+        if (before === '' && (after === '' || after.startsWith('--'))) {
+          tokens.push({ type: 'punct', value: '/', start: i });
+          i++;
+          continue;
+        }
+      }
+      // Oracle Q-quotes: q'[...]', Q'!...!', nq'[...]'
+      let isQ = false, qLen = 0;
+      if ((c === 'q' || c === 'Q') && next === "'") { isQ = true; qLen = 2; }
+      else if ((c === 'n' || c === 'N') && (next === 'q' || next === 'Q') && text[i + 2] === "'") { isQ = true; qLen = 3; }
+      if (isQ && i + qLen < text.length) {
+        const op = text[i + qLen];
+        const cl = ({ '[': ']', '{': '}', '(': ')', '<': '>' })[op] || op;
+        const marker = cl + "'";
+        const end = text.indexOf(marker, i + qLen + 1);
+        if (end >= 0) {
+          tokens.push({ type: 'string', value: text.slice(i, end + marker.length), start: i });
+          i = end + marker.length;
+          continue;
+        }
+      }
+      // National character string: N'...' or n'...'
+      if ((c === 'n' || c === 'N') && next === "'") {
+        let j = i + 2;
+        while (j < text.length) {
+          if (text[j] === "'") {
+            if (text[j + 1] === "'") { j += 2; continue; }
+            j++; break;
+          }
+          j++;
+        }
+        tokens.push({ type: 'string', value: text.slice(i, j), start: i });
+        i = j;
         continue;
       }
       if (c === '\'' || c === '"' || c === '`') {
@@ -3637,9 +3680,30 @@
         i = j;
         continue;
       }
+      // Composite operators: :=, =>, **, <<, >>, ||, .., <=, >=, !=, <>
+      if (c === ':' && next === '=') { tokens.push({ type: 'punct', value: ':=', start: i }); i += 2; continue; }
+      if (c === '=' && next === '>') { tokens.push({ type: 'punct', value: '=>', start: i }); i += 2; continue; }
+      if (c === '*' && next === '*') { tokens.push({ type: 'punct', value: '**', start: i }); i += 2; continue; }
+      if (c === '<' && next === '<') { tokens.push({ type: 'punct', value: '<<', start: i }); i += 2; continue; }
+      if (c === '>' && next === '>') { tokens.push({ type: 'punct', value: '>>', start: i }); i += 2; continue; }
+      if (c === '|' && next === '|') { tokens.push({ type: 'punct', value: '||', start: i }); i += 2; continue; }
+      if (c === '.' && next === '.') { tokens.push({ type: 'punct', value: '..', start: i }); i += 2; continue; }
+      if (c === '<' && next === '=') { tokens.push({ type: 'punct', value: '<=', start: i }); i += 2; continue; }
+      if (c === '>' && next === '=') { tokens.push({ type: 'punct', value: '>=', start: i }); i += 2; continue; }
+      if (c === '!' && next === '=') { tokens.push({ type: 'punct', value: '!=', start: i }); i += 2; continue; }
+      if (c === '<' && next === '>') { tokens.push({ type: 'punct', value: '<>', start: i }); i += 2; continue; }
+      // Oracle Bind Variables: :serialno, :1
+      if (c === ':' && (/[A-Za-z0-9_$#]/.test(next) || (next && next.charCodeAt(0) > 127))) {
+        let j = i + 1;
+        while (j < text.length && (/[A-Za-z0-9_$#]/.test(text[j]) || text.charCodeAt(j) > 127)) j++;
+        tokens.push({ type: 'ident', value: text.slice(i, j), start: i });
+        i = j;
+        continue;
+      }
+      // Identifiers / Keywords with Unicode / Chinese support throughout
       if (/[A-Za-z_$#]/.test(c) || c.charCodeAt(0) > 127) {
         let j = i + 1;
-        while (j < text.length && /[A-Za-z0-9_$#]/.test(text[j])) j++;
+        while (j < text.length && (/[A-Za-z0-9_$#]/.test(text[j]) || text.charCodeAt(j) > 127)) j++;
         const value = text.slice(i, j);
         tokens.push({ type: SQL_KEYWORDS.has(value.toLowerCase()) ? 'kw' : 'ident', value: value, start: i });
         i = j;

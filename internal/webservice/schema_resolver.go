@@ -227,6 +227,35 @@ func makeSafeHTTPClient(authHeaders map[string]string) *http.Client {
 	}
 }
 
+// isSameOrigin 检查两个 URL 是否具有相同源（协议、主机、端口相同）
+func isSameOrigin(urlA, urlB string) bool {
+	uA, errA := url.Parse(urlA)
+	uB, errB := url.Parse(urlB)
+	if errA != nil || errB != nil {
+		return false
+	}
+	if !strings.EqualFold(uA.Scheme, uB.Scheme) {
+		return false
+	}
+	portA := uA.Port()
+	if portA == "" {
+		if strings.EqualFold(uA.Scheme, "https") {
+			portA = "443"
+		} else if strings.EqualFold(uA.Scheme, "http") {
+			portA = "80"
+		}
+	}
+	portB := uB.Port()
+	if portB == "" {
+		if strings.EqualFold(uB.Scheme, "https") {
+			portB = "443"
+		} else if strings.EqualFold(uB.Scheme, "http") {
+			portB = "80"
+		}
+	}
+	return strings.EqualFold(uA.Hostname(), uB.Hostname()) && portA == portB
+}
+
 type schemaQueueItem struct {
 	imp       xsdImport
 	parentURI string
@@ -500,8 +529,11 @@ func (r *SchemaResolver) fetchContent(canonicalURI, parentURI, rawRef string) (c
 			return "", 0, "http", fmt.Errorf("构造请求失败: %w", reqErr)
 		}
 		httpReq.Header.Set("User-Agent", "kairo-wsdl/0.1")
-		for k, v := range r.cfg.AuthHeaders {
-			httpReq.Header.Set(k, v)
+		// 跨源保护（WSDL-01）：AuthHeaders 仅发送给与 BaseURI 同源的目标，跨源直接 import 禁止泄露凭据
+		if isSameOrigin(canonicalURI, r.cfg.BaseURI) {
+			for k, v := range r.cfg.AuthHeaders {
+				httpReq.Header.Set(k, v)
+			}
 		}
 
 		resp, doErr := r.httpClient.Do(httpReq)
