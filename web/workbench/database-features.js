@@ -1441,8 +1441,8 @@
         confirm: false
       };
     });
-    if (mutations.some(function (item) { return item.action === 'delete' && !item.primary_key.length && !item.use_rowid; })) {
-      toast('目标表没有检测到主键；删除需后端提供主键或 Oracle ROWID', 'warn'); return;
+    if (mutations.some(function (item) { return item.action === 'delete' && !item.primary_key.length && !item.use_rowid && !(context.editPlan && context.editPlan.identity_policy === 'unique'); })) {
+      toast('目标表没有检测到有效主键、唯一键或 Oracle ROWID，无法删除', 'warn'); return;
     }
     const production = context.production;
     const confirm = production ? window.confirm('当前数据源标记为生产环境，确认应用网格变更？') : false;
@@ -1497,7 +1497,22 @@
       actions: [
         { text: isInsert ? '加入待提交' : '加入删除队列', className: isInsert ? 'btn btn-primary' : 'btn btn-danger', close: false, onClick: function () {
           const next = Array.from(body.querySelectorAll('.db-pro-row-value')).map(function (input) { return input.type === 'checkbox' ? input.checked : input.value; });
-          queueGridMutation({ kind: isInsert ? 'insert' : 'delete', rowIndex: info.rowIndex, values: next, expectedValues: isInsert ? null : info.values, columns: info.columns.map(function (c) { return c.name; }), revision: gridRevision(info) }, info.context);
+          const mutationItem = { kind: isInsert ? 'insert' : 'delete', rowIndex: info.rowIndex, values: next, expectedValues: isInsert ? null : info.values, columns: info.columns.map(function (c) { return c.name; }), revision: gridRevision(info) };
+          if (!isInsert && info.context && info.context.editPlan && info.context.editPlan.identity_policy === 'oracle_rowid') {
+            const plan = info.context.editPlan;
+            let rid = '';
+            if (plan.hidden_rowid_index != null && plan.hidden_rowid_index >= 0 && info.values[plan.hidden_rowid_index] != null) {
+              rid = String(info.values[plan.hidden_rowid_index]);
+            } else if (info.values.length > info.columns.length && info.values[info.columns.length] != null) {
+              rid = String(info.values[info.columns.length]);
+            }
+            if (rid) {
+              mutationItem.rowid = rid;
+              mutationItem.use_rowid = true;
+              mutationItem.useRowID = true;
+            }
+          }
+          queueGridMutation(mutationItem, info.context);
           closeModal(); toast(isInsert ? '新增行已加入待提交队列' : '删除行已加入待提交队列', 'ok');
         } },
         { text: '关闭', className: 'btn', close: true }

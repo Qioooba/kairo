@@ -3,6 +3,7 @@ package dbconsole
 import (
 	"context"
 	"crypto/rand"
+	"database/sql"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -58,6 +59,8 @@ type GridEditPlanSummary struct {
 	CanDelete        bool     `json:"can_delete"`
 	Reason           string   `json:"reason,omitempty"`
 	PrimaryKeys      []string `json:"primary_keys,omitempty"`
+	UniqueKeys       []string `json:"unique_keys,omitempty"`
+	HiddenRowIDIndex int      `json:"hidden_rowid_index,omitempty"`
 	HasTopLevelOrder bool     `json:"has_top_level_order"`
 }
 
@@ -75,6 +78,8 @@ func (ctx *ResultEditContext) ToSummary() *GridEditPlanSummary {
 		CanDelete:        ctx.CanDelete,
 		Reason:           ctx.Reason,
 		PrimaryKeys:      append([]string(nil), ctx.PrimaryKeys...),
+		UniqueKeys:       append([]string(nil), ctx.UniqueKeys...),
+		HiddenRowIDIndex: ctx.HiddenRowIDIndex,
 		HasTopLevelOrder: ctx.HasTopLevelOrder,
 	}
 }
@@ -205,8 +210,144 @@ func parseGridFromClause(kind, noComments string) (schema, table, alias string, 
 	return schema, table, alias, nil
 }
 
+// findTopLevelFromKeyword 扫描 SELECT 与外层 FROM 之间的投影分界点
+func findTopLevelFromKeyword(clean string) int {
+	inSingle := false
+	inDouble := false
+	depth := 0
+	n := len(clean)
+
+	for i := 6; i < n; i++ {
+		c := clean[i]
+		if inSingle {
+			if c == '\'' {
+				if i+1 < n && clean[i+1] == '\'' {
+					i++
+				} else {
+					inSingle = false
+				}
+			}
+			continue
+		}
+		if inDouble {
+			if c == '"' {
+				if i+1 < n && clean[i+1] == '"' {
+					i++
+				} else {
+					inDouble = false
+				}
+			}
+			continue
+		}
+		if c == '\'' {
+			inSingle = true
+			continue
+		}
+		if c == '"' {
+			inDouble = true
+			continue
+		}
+		if c == '(' {
+			depth++
+			continue
+		}
+		if c == ')' {
+			depth--
+			continue
+		}
+		if depth == 0 {
+			if i+4 <= n && strings.EqualFold(clean[i:i+4], "FROM") {
+				prev := clean[i-1]
+				var next byte = ' '
+				if i+4 < n {
+					next = clean[i+4]
+				}
+				if isSpaceOrPunct(prev) && isSpaceOrPunct(next) {
+					return i
+				}
+			}
+		}
+	}
+	return -1
+}
+
+// RewriteOracleQueryForHiddenRowID 为 Oracle 单表受限查询重写投影，增加 ROWIDTOCHAR 隐藏定位列
+func RewriteOracleQueryForHiddenRowID(sqlText string) (string, error) {
+	trimmed := strings.TrimSpace(strings.TrimRight(strings.TrimSpace(sqlText), "; \t\r\n"))
+	if trimmed == "" {
+		return "", errors.New("SQL 不能为空")
+	}
+	if strings.Contains(trimmed, "__KAIRO_EDIT_RID__") {
+		return trimmed, nil
+	}
+	clean := stripSQLComments(trimmed)
+	parsed, err := parseGridQuerySyntax(KindOracle, clean)
+	if err != nil {
+		return sqlText, err
+	}
+
+	fromIdx := findTopLevelFromKeyword(clean)
+	if fromIdx < 0 {
+		return sqlText, errors.New("无法定位 FROM 关键字")
+	}
+
+	projStr := strings.TrimSpace(clean[6:fromIdx])
+	targetQualifier := parsed.Table
+	if parsed.TableAlias != "" {
+		targetQualifier = parsed.TableAlias
+	}
+	quotedQualifier, qErr := quoteGridIdentifier(KindOracle, targetQualifier, "表别名")
+	if qErr != nil {
+		return sqlText, qErr
+	}
+
+	var newProj string
+	if parsed.IsWildcard {
+		if strings.HasSuffix(projStr, ".*") {
+			newProj = projStr + `, ROWIDTOCHAR(` + quotedQualifier + `.ROWID) AS "__KAIRO_EDIT_RID__"`
+		} else {
+			newProj = quotedQualifier + `.*, ROWIDTOCHAR(` + quotedQualifier + `.ROWID) AS "__KAIRO_EDIT_RID__"`
+		}
+	} else {
+		newProj = projStr + `, ROWIDTOCHAR(` + quotedQualifier + `.ROWID) AS "__KAIRO_EDIT_RID__"`
+	}
+
+	return "SELECT " + newProj + " " + strings.TrimSpace(clean[fromIdx:]), nil
+}
+
+// SetCachedHeapTable 设置 Oracle 普通堆表缓存（用于测试或快速判定）
+func (m *Manager) SetCachedHeapTable(sourceID, schema, table string, isHeap bool) {
+	cacheKey := fmt.Sprintf("%s\x00heap_table\x00%s\x00%s", sourceID, strings.ToUpper(schema), strings.ToUpper(table))
+	metadataCacheSet(m, cacheKey, isHeap)
+}
+
+func (m *Manager) isOracleHeapTable(ctx context.Context, source Source, schema, table string) bool {
+	if source.Kind != KindOracle {
+		return false
+	}
+	cacheKey := fmt.Sprintf("%s\x00heap_table\x00%s\x00%s", source.ID, strings.ToUpper(schema), strings.ToUpper(table))
+	if cached, ok := metadataCacheGet[bool](m, cacheKey); ok {
+		return cached
+	}
+	isHeap := true
+	_ = m.withSQL(ctx, source, func(ctx context.Context, db *sql.DB) error {
+		var count int
+		err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM all_tables WHERE (owner = :1 OR UPPER(owner) = UPPER(:1)) AND (table_name = :2 OR UPPER(table_name) = UPPER(:2)) AND temporary = 'N' AND iot_type IS NULL`, schema, table).Scan(&count)
+		if err == nil {
+			isHeap = (count > 0)
+		}
+		return nil
+	})
+	metadataCacheSet(m, cacheKey, isHeap)
+	return isHeap
+}
+
 // AnalyzeGridQuery 分析查询并建立完整的 ResultEditContext
-func (m *Manager) AnalyzeGridQuery(ctx context.Context, source Source, sessionID, executedSQL string, resultColumns []Column) (*ResultEditContext, error) {
+func (m *Manager) AnalyzeGridQuery(ctx context.Context, source Source, sessionID, executedSQL string, resultColumns []Column, hiddenRowID ...int) (*ResultEditContext, error) {
+	hiddenRowIDIdx := -1
+	if len(hiddenRowID) > 0 {
+		hiddenRowIDIdx = hiddenRowID[0]
+	}
 	resultID := generateResultID()
 	plan := &ResultEditContext{
 		ResultID:          resultID,
@@ -216,7 +357,7 @@ func (m *Manager) AnalyzeGridQuery(ctx context.Context, source Source, sessionID
 		Dialect:           source.Kind,
 		ExecutedSQL:       executedSQL,
 		IdentityPolicy:    "none",
-		HiddenRowIDIndex:  -1,
+		HiddenRowIDIndex:  hiddenRowIDIdx,
 		CreatedAt:         time.Now(),
 	}
 
@@ -389,6 +530,19 @@ func (m *Manager) AnalyzeGridQuery(ctx context.Context, source Source, sessionID
 		plan.CanUpdate = false
 		plan.CanDelete = false
 		plan.Reason = "目标表未定义主键或受支持的唯一行标识"
+	}
+
+	// Phase 1: 若未满足完整 PK/Unique 键，但为受支持的 Oracle 普通堆表且已取得隐藏 ROWID
+	if plan.IdentityPolicy == "none" && source.Kind == KindOracle && hiddenRowIDIdx >= 0 {
+		if m.isOracleHeapTable(ctx, source, schema, parsed.Table) {
+			plan.IdentityPolicy = "oracle_rowid"
+			plan.HiddenRowIDIndex = hiddenRowIDIdx
+			plan.CanUpdate = true
+			plan.CanDelete = true
+			plan.Reason = ""
+		} else {
+			plan.Reason = "目标表非受支持 Oracle 普通堆表（如 IOT/临时表/视图），无主键时不支持 ROWID 编辑"
+		}
 	}
 
 	// 只要单表物理来源明确，插入无需依赖已有行身份

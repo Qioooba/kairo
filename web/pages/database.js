@@ -1784,6 +1784,7 @@
       if (dirtyKeys.length && !current.gridEditsStaged) {
         const schemaToUse = (context.schema && context.schema !== '加载中…' && context.schema !== '加载失败') ? context.schema : currentSchema();
         const primaryKey = (context.editPlan && context.editPlan.primary_keys) ? context.editPlan.primary_keys : [];
+        const isOracleRowID = context.editPlan && context.editPlan.identity_policy === 'oracle_rowid';
         const rows = new Map();
         dirtyKeys.forEach(function (key) {
           const edit = edits[key], row = current.rows[edit.rowIdx], column = current.columns[edit.colIdx];
@@ -1793,7 +1794,22 @@
               if (row[i] != null && (typeof row[i] === 'object' || /CLOB|BLOB|LONG|XML|JSON|GEOMETRY/i.test(c.database_type || c.database || c.type || ''))) return;
               original[c.name] = row[i];
             });
-            rows.set(edit.rowIdx, { action: 'update', values: {}, original: original, key: original, primary_key: primaryKey });
+            let rowidVal = '';
+            if (isOracleRowID) {
+              const ridIdx = context.editPlan.hidden_rowid_index;
+              if (ridIdx != null && ridIdx >= 0 && row[ridIdx] != null) {
+                rowidVal = String(row[ridIdx]);
+              } else if (row.length > current.columns.length && row[current.columns.length] != null) {
+                rowidVal = String(row[current.columns.length]);
+              }
+            }
+            const mutationItem = { action: 'update', values: {}, original: original, key: original, primary_key: primaryKey };
+            if (rowidVal) {
+              mutationItem.rowid = rowidVal;
+              mutationItem.use_rowid = true;
+              original['__KAIRO_EDIT_RID__'] = rowidVal;
+            }
+            rows.set(edit.rowIdx, mutationItem);
           }
           rows.get(edit.rowIdx).values[column.name] = edit.newVal;
         });

@@ -415,6 +415,11 @@ func (m *Manager) streamQueryAttempt(ctx context.Context, source Source, query s
 			}
 		}
 	}
+	if source.Kind == KindOracle && !info.HasForUpdate && info.IsSelect && lobRewrite == nil {
+		if rewritten, rerr := RewriteOracleQueryForHiddenRowID(actualQuery); rerr == nil && rewritten != actualQuery {
+			actualQuery = rewritten
+		}
+	}
 
 	pagedPlan, err := serverPagedPlan(source.Kind, actualQuery, page)
 	if err != nil {
@@ -438,6 +443,7 @@ func (m *Manager) streamQueryAttempt(ctx context.Context, source Source, query s
 
 	var columns []Column
 	aliasIdx := -1
+	hiddenRowIDIdx := -1
 
 	if lobRewrite != nil {
 		// 对外暴露的元数据列是原表的真实业务列（名称与数据类型正确），
@@ -454,29 +460,38 @@ func (m *Manager) streamQueryAttempt(ctx context.Context, source Source, query s
 				}
 			}
 		}
+		hiddenRowIDIdx = len(columns)
 	} else {
 		columns, err = resultColumns(rows)
 		if err != nil {
 			return QuerySummary{}, err
 		}
-		if pagedPlan.HasHelperColumn {
+		rawCols, _ := rows.Columns()
+		for i, c := range rawCols {
+			colName := strings.Trim(strings.ToUpper(c), "\"`[] \t")
+			if pagedPlan.HasHelperColumn && strings.EqualFold(colName, pagedPlan.HelperColumnName) {
+				aliasIdx = i
+			}
+			if strings.EqualFold(colName, "__KAIRO_EDIT_RID__") {
+				hiddenRowIDIdx = i
+			}
+		}
+		if aliasIdx >= 0 || hiddenRowIDIdx >= 0 {
+			filtered := make([]Column, 0, len(columns))
 			for i, c := range columns {
-				colName := strings.Trim(strings.ToUpper(c.Name), "\"`[] \t")
-				if strings.EqualFold(colName, pagedPlan.HelperColumnName) {
-					aliasIdx = i
-					break
+				if i == aliasIdx || i == hiddenRowIDIdx {
+					continue
 				}
+				filtered = append(filtered, c)
 			}
-			if aliasIdx >= 0 {
-				columns = append(columns[:aliasIdx], columns[aliasIdx+1:]...)
-			}
+			columns = filtered
 		}
 	}
 
 	// 此时连接与首包已就绪，分析可编辑性并流式发射元数据
 	var editPlan *ResultEditContext
 	if sessionID != "" && info.IsSelect {
-		plan, pErr := m.AnalyzeGridQuery(queryCtx, source, sessionID, query, columns)
+		plan, pErr := m.AnalyzeGridQuery(queryCtx, source, sessionID, query, columns, hiddenRowIDIdx)
 		if pErr == nil && plan != nil {
 			editPlan = plan
 			m.RegisterResultContext(plan)
@@ -536,7 +551,7 @@ func (m *Manager) streamQueryAttempt(ctx context.Context, source Source, query s
 			schema = ResolveSchema(source, lobSingleInfo.Schema)
 			table = lobSingleInfo.Table
 		}
-		scanner = newRowScanner(columns, aliasIdx, isFast, schema, table)
+		scanner = newRowScanner(columns, aliasIdx, hiddenRowIDIdx, isFast, schema, table)
 	}
 
 	// Commands and locking queries cannot use the derived-table wrapper.
@@ -742,29 +757,33 @@ func (s *boundedCellScanner) Scan(src any) error {
 }
 
 type rowScanner struct {
-	scanners []boundedCellScanner
-	dest     []any
-	columns  []Column
-	aliasIdx int
+	scanners       []boundedCellScanner
+	dest           []any
+	columns        []Column
+	aliasIdx       int
+	hiddenRowIDIdx int
 }
 
-func newRowScanner(columns []Column, aliasIdx int, fast bool, schema, table string) *rowScanner {
+func newRowScanner(columns []Column, aliasIdx, hiddenRowIDIdx int, fast bool, schema, table string) *rowScanner {
 	count := len(columns)
 	if aliasIdx >= 0 {
-		count = len(columns) + 1
+		count++
+	}
+	if hiddenRowIDIdx >= 0 {
+		count++
 	}
 	scanners := make([]boundedCellScanner, count)
 	dest := make([]any, count)
+	colIdx := 0
 	for i := range scanners {
 		dbType := ""
-		if aliasIdx >= 0 {
-			if i < aliasIdx && i < len(columns) {
-				dbType = strings.ToUpper(strings.TrimSpace(columns[i].Database))
-			} else if i > aliasIdx && i-1 < len(columns) {
-				dbType = strings.ToUpper(strings.TrimSpace(columns[i-1].Database))
-			}
-		} else if i < len(columns) {
-			dbType = strings.ToUpper(strings.TrimSpace(columns[i].Database))
+		if i == aliasIdx {
+			dbType = "NUMBER"
+		} else if i == hiddenRowIDIdx {
+			dbType = "VARCHAR2"
+		} else if colIdx < len(columns) {
+			dbType = strings.ToUpper(strings.TrimSpace(columns[colIdx].Database))
+			colIdx++
 		}
 		scanners[i].dbType = dbType
 		scanners[i].fast = fast
@@ -773,10 +792,11 @@ func newRowScanner(columns []Column, aliasIdx int, fast bool, schema, table stri
 		dest[i] = &scanners[i]
 	}
 	return &rowScanner{
-		scanners: scanners,
-		dest:     dest,
-		columns:  columns,
-		aliasIdx: aliasIdx,
+		scanners:       scanners,
+		dest:           dest,
+		columns:        columns,
+		aliasIdx:       aliasIdx,
+		hiddenRowIDIdx: hiddenRowIDIdx,
 	}
 }
 
@@ -784,21 +804,29 @@ func (rs *rowScanner) Scan(rows *sql.Rows) ([]any, int64, error) {
 	if err := rows.Scan(rs.dest...); err != nil {
 		return nil, 0, err
 	}
-	values := make([]any, len(rs.columns))
+	targetLen := len(rs.columns)
+	if rs.hiddenRowIDIdx >= 0 {
+		targetLen++
+	}
+	values := make([]any, targetLen)
 	valIdx := 0
 	for i := range rs.scanners {
-		if i == rs.aliasIdx {
+		if i == rs.aliasIdx || i == rs.hiddenRowIDIdx {
 			continue
 		}
 		values[valIdx] = rs.scanners[i].value
 		rs.scanners[i].value = nil // 立即解除对单格对象的引用，辅助 GC 回收
 		valIdx++
 	}
+	if rs.hiddenRowIDIdx >= 0 {
+		values[valIdx] = rs.scanners[rs.hiddenRowIDIdx].value
+		rs.scanners[rs.hiddenRowIDIdx].value = nil
+	}
 	return values, fastRowBytes(values), nil
 }
 
 func scanRow(rows *sql.Rows, count int, columns []Column, aliasIdx int) ([]any, int64, error) {
-	scanner := newRowScanner(columns, aliasIdx, false, "", "")
+	scanner := newRowScanner(columns, aliasIdx, -1, false, "", "")
 	return scanner.Scan(rows)
 }
 

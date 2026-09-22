@@ -164,4 +164,94 @@ const read = file => fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
   assert.strictEqual(s.page, 2, 's.page advances only after confirmation');
 }
 
-console.log('grid-orderby-phase0-regression passed cleanly');
+// 4. Test Phase 1 Oracle hidden ROWID in commitPendingEdits
+(async function testPhase1OracleRowIDCommit() {
+  const page = read('web/pages/database.js');
+  let sentBody = null;
+  const state = {
+    isEditMode: true,
+    selectedRow: 0,
+    dirtyCells: { '0_1': { rowIdx: 0, colIdx: 1, newVal: 'Bob' } },
+    source: { id: 'src-ora', fingerprint: 'fp-ora', read_only: false, environment: 'dev', kind: 'oracle' }
+  };
+
+  const oraSession = {
+    type: 'query',
+    sourceId: 'src-ora',
+    sourceFingerprint: 'fp-ora',
+    transactionId: 'tab-ora-1',
+    executedSQL: 'SELECT ID, NAME FROM LOG_TABLE',
+    lastSQL: 'SELECT ID, NAME FROM LOG_TABLE',
+    isEditMode: true,
+    columns: [{ name: 'ID' }, { name: 'NAME' }],
+    rows: [[1, 'Alice', 'AAASDMAABAAAL9DAAA']], // Hidden ROWID at index 2
+    dirtyCells: { '0_1': { rowIdx: 0, colIdx: 1, newVal: 'Bob' } },
+    summary: { ordered: false, result_id: 'res-ora-1' },
+    editPlan: {
+      result_id: 'res-ora-1',
+      schema: 'SCOTT',
+      table: 'LOG_TABLE',
+      identity_policy: 'oracle_rowid',
+      hidden_rowid_index: 2,
+      can_update: true,
+      canUpdate: true,
+      primary_keys: []
+    }
+  };
+
+  const dbContext = {
+    window: { Kairo: {} },
+    state,
+    sess: () => oraSession,
+    effectiveSource: () => state.source,
+    canWriteDatabase: () => true,
+    toast: () => {},
+    currentSchema: () => 'SCOTT',
+    isPlaceholderSchema: () => false,
+    updateTransactionControls: () => {},
+    cellText: String,
+    fmtCell: String,
+    q: () => null,
+    api: async (method, path, body) => {
+      if (path === '/api/database/grid') {
+        sentBody = body;
+        return { ok: true, result: { rows_affected: 1 } };
+      }
+      return { ok: true };
+    },
+    bindSession: () => {},
+    refreshVisibleResult: () => {},
+    showQueryMessage: () => {},
+    Kairo: { databaseFeatures: null },
+    document: { createElement: () => ({ focus() {}, select() {} }) }
+  };
+
+  const getGridContextCode = page.slice(page.indexOf('  function getGridContext('), page.indexOf('  async function commitPendingEdits('));
+  const commitPendingEditsCode = page.slice(page.indexOf('  async function commitPendingEdits('), page.indexOf('  // Public bridge for feature modules'));
+
+  vm.runInNewContext(
+    getGridContextCode + '\n' +
+    commitPendingEditsCode + '\n' +
+    'window.getGridContext = getGridContext;\n' +
+    'window.commitPendingEdits = commitPendingEdits;',
+    dbContext
+  );
+
+  await dbContext.window.commitPendingEdits();
+  assert.ok(sentBody, 'mutation body must be sent');
+  assert.strictEqual(sentBody.result_id, 'res-ora-1');
+  assert.strictEqual(sentBody.table, 'LOG_TABLE');
+  assert.strictEqual(sentBody.mutations.length, 1);
+  const mut = sentBody.mutations[0];
+  assert.strictEqual(mut.action, 'update');
+  assert.strictEqual(mut.rowid, 'AAASDMAABAAAL9DAAA', 'must extract hidden ROWID');
+  assert.strictEqual(mut.use_rowid, true, 'must flag use_rowid');
+  assert.strictEqual(mut.original['__KAIRO_EDIT_RID__'], 'AAASDMAABAAAL9DAAA');
+  assert.strictEqual(mut.values['NAME'], 'Bob');
+  console.log('Phase 1 Oracle ROWID commit test passed');
+})().catch(e => {
+  console.error(e);
+  process.exit(1);
+});
+
+console.log('grid-orderby-phase0-and-phase1-regression passed cleanly');

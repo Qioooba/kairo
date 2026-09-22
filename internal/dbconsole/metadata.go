@@ -322,6 +322,12 @@ func (m *Manager) SetCachedFields(sourceID, schema, object string, fields []Fiel
 	metadataCacheSet(m, cacheKey, append([]Field(nil), fields...))
 }
 
+// SetCachedIndexes stores indexes in the metadata cache (useful for mocking and fast lookups).
+func (m *Manager) SetCachedIndexes(sourceID, schema, object string, indexes []IndexInfo) {
+	cacheKey := fmt.Sprintf("%s\x00indexes\x00%s\x00%s", sourceID, strings.ToUpper(schema), strings.ToUpper(object))
+	metadataCacheSet(m, cacheKey, append([]IndexInfo(nil), indexes...))
+}
+
 func (m *Manager) Fields(ctx context.Context, source Source, schema, object string) ([]Field, error) {
 	if source.Kind == KindRedis {
 		return nil, errors.New("Redis 没有字段")
