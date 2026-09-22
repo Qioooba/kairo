@@ -2164,7 +2164,8 @@
         scrollTop: viewport.scrollTop,
         scrollLeft: hScrollLeft,
         activeRowIndex: activeRowIndex,
-        hunkIndex: state.hunkIndex
+        hunkIndex: state.hunkIndex,
+        rowHeight: rowHeight
       };
     }
     function restoreViewState(vs) {
@@ -2183,7 +2184,11 @@
       }
       const restoreScroll = () => {
         if (typeof vs.scrollTop === 'number' && vs.scrollTop > 0) {
-          viewport.scrollTop = vs.scrollTop;
+          if (vs.rowHeight && vs.rowHeight !== rowHeight) {
+            viewport.scrollTop = Math.round(vs.scrollTop * (rowHeight / vs.rowHeight));
+          } else {
+            viewport.scrollTop = vs.scrollTop;
+          }
         } else if (activeRowIndex >= 0) {
           const targetScroll = (activeRowIndex * rowHeight) - Math.floor((viewport.clientHeight || 500) / 2) + Math.floor(rowHeight / 2);
           viewport.scrollTop = Math.max(0, targetScroll);

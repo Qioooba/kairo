@@ -1835,7 +1835,9 @@
   F.setAdapter = function (name, adapter) { if (Object.prototype.hasOwnProperty.call(state.adapters, name)) state.adapters[name] = typeof adapter === 'function' ? adapter : null; };
   F.getAdapter = function (name) { return state.adapters[name] || null; };
   F.getPendingGridMutations = function () { return pendingGridMutations().slice(); };
+  F.pendingGridMutations = F.getPendingGridMutations;
   F.clearPendingGridMutations = clearGridMutations;
+  F.clearGridMutations = clearGridMutations;
   F.resolveGridTarget = resolveGridTarget;
   F.start = start;
 

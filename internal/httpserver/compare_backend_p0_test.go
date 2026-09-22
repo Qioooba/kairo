@@ -474,8 +474,13 @@ func TestT060_DirectoryTruncationAndTargetConflict(t *testing.T) {
 			{RelPath: "subfolder"},
 		},
 	}, nil)
-	// Even if synthetic is used or truncated, result is safely reported
-	_ = truncatedRes
+	// Verify that unsupported source kinds or failed scans report error and do not touch target
+	if err == nil && (truncatedRes == nil || len(truncatedRes.Failures) == 0) {
+		t.Fatalf("expected error for unsupported synthetic source kind, got none")
+	}
+	if _, statErr := os.Stat(filepath.Join(right, "subfolder")); !os.IsNotExist(statErr) {
+		t.Fatalf("target folder should not be modified on failed sync: %v", statErr)
+	}
 }
 
 func TestT061_MultiItemSyncPartialCancellation(t *testing.T) {

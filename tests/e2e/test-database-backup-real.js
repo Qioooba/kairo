@@ -27,10 +27,17 @@ async function run() {
   page.setDefaultTimeout(40000);
 
   const backupRequests = [];
+  const backupResponses = [];
   page.on('request', req => {
     if (req.url().indexOf('/api/database/sessions/backup') !== -1) {
       console.log('[Network Request]', req.method(), req.url(), new Date().toLocaleTimeString());
       backupRequests.push({ time: Date.now(), method: req.method() });
+    }
+  });
+  page.on('response', res => {
+    if (res.url().indexOf('/api/database/sessions/backup') !== -1) {
+      console.log('[Network Response]', res.status(), res.url());
+      backupResponses.push({ time: Date.now(), status: res.status(), ok: res.ok() });
     }
   });
 
@@ -68,11 +75,30 @@ async function run() {
     if (afterInputCount !== 1) {
       throw new Error(`输入后预期触发 1 次防抖备份，实际增量为: ${afterInputCount}`);
     }
-    console.log('✓ 编辑 SQL 触发单次防抖远程同步验证通过！');
+    const lastResp = backupResponses[backupResponses.length - 1];
+    if (!lastResp || !lastResp.ok || lastResp.status !== 200) {
+      throw new Error(`远端备份请求失败或状态非 200: ${JSON.stringify(lastResp)}`);
+    }
+    console.log('✓ 编辑 SQL 触发单次防抖远程同步且返回 HTTP 200 OK 验证通过！');
     await page.screenshot({ path: path.join(SHOT_DIR, '03-sql-edited-synced.png') });
 
-    // 4. 点击增加新页签
-    console.log('4. 点击添加新页签按钮 #db-tab-add...');
+    // 4. 服务端 GET 回读校验
+    console.log('4. 发送 GET /api/database/sessions/restore 回读服务端备份数据...');
+    const restoreData = await page.evaluate(async () => {
+      const res = await fetch('/api/database/sessions/restore', { credentials: 'same-origin' });
+      return res.ok ? await res.json() : null;
+    });
+    if (!restoreData || !restoreData.session) {
+      throw new Error('服务端 GET 回读失败或返回空会话数据');
+    }
+    const hasSql = (restoreData.session.sessions || []).some(s => (s.sql || '').includes('TEST_NUM'));
+    if (!hasSql) {
+      throw new Error('服务端持久化的会话内容缺少刚才编辑的 SQL: ' + JSON.stringify(restoreData));
+    }
+    console.log('✓ 服务端 GET 回读持久化内容断言一致！');
+
+    // 5. 点击增加新页签
+    console.log('5. 点击添加新页签按钮 #db-tab-add...');
     await page.click('#db-tab-add');
     await page.waitForTimeout(2500);
 
@@ -81,11 +107,15 @@ async function run() {
     if (afterAddTabCount < 2) {
       throw new Error(`添加页签后预期触发新备份同步，实际总增量为: ${afterAddTabCount}`);
     }
+    const tabResp = backupResponses[backupResponses.length - 1];
+    if (!tabResp || !tabResp.ok) {
+      throw new Error(`添加页签后备份请求失败: ${JSON.stringify(tabResp)}`);
+    }
     console.log('✓ 添加页签同步验证通过！');
     await page.screenshot({ path: path.join(SHOT_DIR, '04-tab-added-synced.png') });
 
-    // 5. 再次空闲等待 32 秒，确认再次无变更时依然不发任何无意义请求
-    console.log('5. 再次等待 32 秒，确认新会话状态下定时器再次静默...');
+    // 6. 再次空闲等待 32 秒，确认再次无变更时依然不发任何无意义请求
+    console.log('6. 再次等待 32 秒，确认新会话状态下定时器再次静默...');
     await page.waitForTimeout(32000);
     const finalIdleReqCount = backupRequests.length - initialReqCount;
     if (finalIdleReqCount !== afterAddTabCount) {
@@ -95,14 +125,20 @@ async function run() {
     await page.screenshot({ path: path.join(SHOT_DIR, '05-second-idle-verified.png') });
 
     console.log('\n=============================================');
-    console.log('🎉 所有真实浏览器备份频率优化 E2E 测试全部通过！');
+    console.log('🎉 所有真实浏览器备份频率与回读校验 E2E 全部通过！');
     console.log('=============================================\n');
   } finally {
     await browser.close();
   }
 }
 
-run().catch(err => {
-  console.error('测试失败:', err);
-  process.exit(1);
-});
+const { register } = require('./tests/41-database-backup-real');
+
+if (require.main === module) {
+  run().catch(err => {
+    console.error('测试失败:', err);
+    process.exit(1);
+  });
+}
+
+module.exports = { run, register };

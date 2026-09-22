@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"strings"
 	"testing"
@@ -297,6 +298,19 @@ func TestWriteXLSXIsZipWithSheet(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("missing worksheet")
+	}
+}
+
+type errorWriter struct{}
+
+func (errorWriter) Write(p []byte) (n int, err error) {
+	return 0, errors.New("simulated disk write failure")
+}
+
+func TestWriteXLSX_WriteErrorHandled(t *testing.T) {
+	err := WriteXLSX(errorWriter{}, testExportTable(), "Query/Data")
+	if err == nil {
+		t.Fatal("expected error when underlying writer fails, got nil")
 	}
 }
 
