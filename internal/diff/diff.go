@@ -316,61 +316,101 @@ func renderUnified(lines []Line, leftLabel, rightLabel string, truncated bool) s
 	// 每个 hunk 输出 @@ -lstart,lcount +rstart,rcount @@ + 行。
 	const ctxLines = 3 // 上下文行数（标准是 3）
 
+	type diffGroup struct {
+		start int
+		end   int
+	}
+	var groups []diffGroup
+	for i, ln := range lines {
+		if ln.Op == OpEqual {
+			continue
+		}
+		if len(groups) == 0 {
+			groups = append(groups, diffGroup{start: i, end: i})
+			continue
+		}
+		last := &groups[len(groups)-1]
+		if i-last.end-1 <= 2*ctxLines {
+			last.end = i
+		} else {
+			groups = append(groups, diffGroup{start: i, end: i})
+		}
+	}
+
 	var hunks []hunk
-	cur := hunk{}
-	curOpen := false
-	closeHunk := func() {
-		if curOpen {
-			hunks = append(hunks, cur)
-			cur = hunk{}
-			curOpen = false
+	lastHunkEnd := 0
+	for _, g := range groups {
+		hunkStart := g.start - ctxLines
+		if hunkStart < lastHunkEnd {
+			hunkStart = lastHunkEnd
 		}
-	}
-
-	leftLineNo := 0
-	rightLineNo := 0
-	// 上一次 hunk 结束的位置：用于决定下一个差异行是否要起新 hunk（看上下文间隔）。
-	lastDiffIdx := -1
-
-	for idx, ln := range lines {
-		switch ln.Op {
-		case OpEqual:
-			leftLineNo++
-			rightLineNo++
-			if !curOpen {
-				continue
-			}
-			// 在 hunk 内：作为上下文。如果当前 hunk 已经累计了变更，且距离上次差异行
-			// 超过 2*ctxLines，就先关 hunk，等下一个差异行再开新的（带前导上下文）。
-			if lastDiffIdx >= 0 && idx-lastDiffIdx > 2*ctxLines {
-				closeHunk()
-				continue
-			}
-			cur.lCount++
-			cur.rCount++
-			cur.body = append(cur.body, " "+ln.Text)
-		case OpDelete:
-			leftLineNo++
-			if !curOpen {
-				// 起新 hunk，带前导 ctxLines 上下文。
-				openWithContext(lines, idx, ctxLines, &cur)
-				curOpen = true
-			}
-			cur.lCount++
-			cur.body = append(cur.body, "-"+ln.Text)
-			lastDiffIdx = idx
-		case OpInsert:
-			rightLineNo++
-			if !curOpen {
-				openWithContext(lines, idx, ctxLines, &cur)
-				curOpen = true
-			}
-			cur.rCount++
-			cur.body = append(cur.body, "+"+ln.Text)
-			lastDiffIdx = idx
+		hunkEnd := g.end + 1 + ctxLines
+		if hunkEnd > len(lines) {
+			hunkEnd = len(lines)
 		}
+		lastHunkEnd = hunkEnd
+
+		h := hunk{}
+		for i := hunkStart; i < hunkEnd; i++ {
+			ln := lines[i]
+			switch ln.Op {
+			case OpEqual:
+				h.lCount++
+				h.rCount++
+				h.body = append(h.body, " "+ln.Text)
+				if h.lStart == 0 && ln.LeftNo > 0 {
+					h.lStart = ln.LeftNo
+				}
+				if h.rStart == 0 && ln.RightNo > 0 {
+					h.rStart = ln.RightNo
+				}
+			case OpDelete:
+				h.lCount++
+				h.body = append(h.body, "-"+ln.Text)
+				if h.lStart == 0 && ln.LeftNo > 0 {
+					h.lStart = ln.LeftNo
+				}
+			case OpInsert:
+				h.rCount++
+				h.body = append(h.body, "+"+ln.Text)
+				if h.rStart == 0 && ln.RightNo > 0 {
+					h.rStart = ln.RightNo
+				}
+			}
+		}
+
+		if h.lStart == 0 {
+			for i := hunkStart - 1; i >= 0; i-- {
+				if lines[i].LeftNo > 0 {
+					h.lStart = lines[i].LeftNo
+					break
+				}
+			}
+			if h.lStart == 0 {
+				if h.lCount > 0 {
+					h.lStart = 1
+				} else {
+					h.lStart = 0
+				}
+			}
+		}
+		if h.rStart == 0 {
+			for i := hunkStart - 1; i >= 0; i-- {
+				if lines[i].RightNo > 0 {
+					h.rStart = lines[i].RightNo
+					break
+				}
+			}
+			if h.rStart == 0 {
+				if h.rCount > 0 {
+					h.rStart = 1
+				} else {
+					h.rStart = 0
+				}
+			}
+		}
+		hunks = append(hunks, h)
 	}
-	closeHunk()
 
 	for _, h := range hunks {
 		// lStart/rStart 已经在 openWithContext 中设置为 hunk 第一行（含上下文）的行号。
@@ -394,59 +434,4 @@ func renderUnified(lines []Line, leftLabel, rightLabel string, truncated bool) s
 		b.WriteString("# 前端仍在 lines 字段里给出了完整 left+right 行供 side-by-side 渲染。\n")
 	}
 	return b.String()
-}
-
-// openWithContext 在位置 changeIdx 之前寻找最多 ctxLines 个 OpEqual 行作为上下文，
-// 把它们以及后续内容塞进 hunk（局部类型，定义在 renderUnified 里）。
-//
-// hunk 的 lStart/rStart 设为第一个上下文 equal 的左/右行号（如果存在）；
-// 否则设为第一个差异行的左/右行号。
-func openWithContext(lines []Line, changeIdx, ctxLines int, h *hunk) {
-	start := changeIdx - ctxLines
-	if start < 0 {
-		start = 0
-	}
-	// 从 start 向 changeIdx 走，把 equal 行作为上下文；遇到第一个非 equal 就停，
-	// 因为 openWithContext 只在遇到第一个差异行时被调用，所以这里第一行就是 equal 或差异。
-	for i := start; i < changeIdx; i++ {
-		if lines[i].Op != OpEqual {
-			start = i
-			break
-		}
-	}
-	for i := start; i < changeIdx; i++ {
-		ln := lines[i]
-		// 一定是 OpEqual（第一个非 equal 被跳过了）
-		h.lCount++
-		h.rCount++
-		h.body = append(h.body, " "+ln.Text)
-		if h.lStart == 0 && ln.LeftNo > 0 {
-			h.lStart = ln.LeftNo
-		}
-		if h.rStart == 0 && ln.RightNo > 0 {
-			h.rStart = ln.RightNo
-		}
-	}
-	// lStart/rStart 兜底：万一没有上下文（changeIdx==0 或前面全是差异），设成 change 行本身的行号
-	if h.lStart == 0 {
-		// 找下一个 Delete 或 Insert 的行号
-		for i := changeIdx; i < len(lines); i++ {
-			if lines[i].Op == OpDelete && lines[i].LeftNo > 0 {
-				h.lStart = lines[i].LeftNo
-				break
-			}
-			if lines[i].Op == OpInsert && lines[i].RightNo > 0 {
-				h.rStart = lines[i].RightNo
-				break
-			}
-		}
-	}
-	if h.rStart == 0 {
-		for i := changeIdx; i < len(lines); i++ {
-			if lines[i].Op == OpInsert && lines[i].RightNo > 0 {
-				h.rStart = lines[i].RightNo
-				break
-			}
-		}
-	}
 }

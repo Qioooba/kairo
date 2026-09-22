@@ -228,7 +228,11 @@ func (l *Local) WriteAtomic(ctx context.Context, name string, src io.Reader, opt
 	}
 	mode := os.FileMode(opts.Mode)
 	if mode == 0 {
-		mode = 0o644
+		if st, err := os.Stat(cleaned); err == nil {
+			mode = st.Mode().Perm()
+		} else {
+			mode = 0o644
+		}
 	}
 	if err := os.Chmod(tmpName, mode.Perm()); err != nil {
 		return err

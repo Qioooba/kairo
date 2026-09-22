@@ -500,9 +500,11 @@
     if (view.dataset.renderToken !== renderToken) return;
     view.innerHTML = '';
     const options = preference.options, saved = preference.sources;
+    const leftSavedSource = Object.assign(defaultSource('left'), saved.left || {});
+    const rightSavedSource = Object.assign(defaultSource('right'), saved.right || {});
     const state = {
-      left: { source: Object.assign(defaultSource('left'), saved.left || {}), version: null, codec: { encoding: 'utf-8', eol: 'lf', bom: false }, dirty: false, baseline: '', loadState: 'ready', loadError: null, loadSeq: 0, editSeq: 0, saving: false },
-      right: { source: Object.assign(defaultSource('right'), saved.right || {}), version: null, codec: { encoding: 'utf-8', eol: 'lf', bom: false }, dirty: false, baseline: '', loadState: 'ready', loadError: null, loadSeq: 0, editSeq: 0, saving: false },
+      left: { source: leftSavedSource, version: null, codec: { encoding: 'utf-8', eol: 'lf', bom: false }, dirty: false, baseline: '', loadState: (leftSavedSource.kind !== 'text' && leftSavedSource.path) ? 'unloaded' : 'ready', loadError: null, loadSeq: 0, editSeq: 0, saving: false },
+      right: { source: rightSavedSource, version: null, codec: { encoding: 'utf-8', eol: 'lf', bom: false }, dirty: false, baseline: '', loadState: (rightSavedSource.kind !== 'text' && rightSavedSource.path) ? 'unloaded' : 'ready', loadError: null, loadSeq: 0, editSeq: 0, saving: false },
       diff: null, hunks: [], hunkIndex: -1, mode: 'text', scan: null,
     };
     activeWorkbenchState = state;
@@ -607,7 +609,13 @@
       language.onchange = function () { editors[side].setLanguage(language.value); if (state.diff) renderResult(); };
       const undoBtn = makeButton('撤销', 'undo', () => editors[side].undo(), 'btn btn-sm');
       const redoBtn = makeButton('重做', 'redo', () => editors[side].redo(), 'btn btn-sm');
-      const openBtn = makeButton('打开', 'open', () => openSourceDialog(state[side].source, false, async source => { state[side].source = source; saveSources(state); await loadSide(side); }), 'btn btn-sm');
+      const openBtn = makeButton('打开', 'open', () => openSourceDialog(state[side].source, false, async source => {
+        if (state[side].dirty) {
+          const ok = await (Kairo.core && Kairo.core.confirmDialog ? Kairo.core.confirmDialog((side === 'left' ? '左侧' : '右侧') + '内容有未保存的修改，更换来源将丢失当前修改。是否继续？') : Promise.resolve(typeof window !== 'undefined' && window.confirm ? window.confirm((side === 'left' ? '左侧' : '右侧') + '内容有未保存的修改，更换来源将丢失当前修改。是否继续？') : true));
+          if (!ok) return;
+        }
+        state[side].source = source; saveSources(state); await loadSide(side);
+      }), 'btn btn-sm');
       const saveBtn = makeButton('保存', 'save', () => saveSide(side), 'btn btn-sm'); saveBtn.disabled = true;
       const revertBtn = makeButton('退回', 'undo', () => revertSide(side), 'btn btn-sm'); revertBtn.disabled = true;
       revertBtn.title = '放弃' + (side === 'left' ? '左侧' : '右侧') + '未保存修改，恢复到打开时的内容';
@@ -680,8 +688,13 @@
     }
 
     const undoStack = [];
+    function sourcePairKey() {
+      return (state.left && state.left.source ? JSON.stringify(sourceIdentity(state.left.source)) : '') + '||' +
+             (state.right && state.right.source ? JSON.stringify(sourceIdentity(state.right.source)) : '');
+    }
     function pushUndoSnapshot(name) {
       undoStack.push({
+        pairKey: sourcePairKey(),
         leftText: editorLeft.getValue(),
         rightText: editorRight.getValue(),
         leftSource: JSON.parse(JSON.stringify((state.left && state.left.source) || {})),
@@ -699,6 +712,11 @@
         return;
       }
       const snap = undoStack.pop();
+      if (snap.pairKey && snap.pairKey !== sourcePairKey()) {
+        toast('撤回快照与当前比较文件不匹配，已阻止', 'warn');
+        if (undoBtn) undoBtn.disabled = undoStack.length === 0;
+        return;
+      }
       editorLeft.setValue(snap.leftText != null ? snap.leftText : snap.left);
       editorRight.setValue(snap.rightText != null ? snap.rightText : snap.right);
       if (snap.leftSource && snap.rightSource && (snap.leftSource.kind || snap.leftSource.path)) {
@@ -722,7 +740,7 @@
     undoBtn.disabled = true;
 
     const handleWorkbenchKeyDown = function (e) {
-      if (disposed) return;
+      if (disposed || e.defaultPrevented) return;
       if (typeof Kairo !== 'undefined' && Kairo.tabs && typeof Kairo.tabs.activeRoute === 'function') {
         if (Kairo.tabs.activeRoute() !== 'compare') return;
       }
@@ -872,11 +890,23 @@
         toast('请至少输入一侧文件路径', 'warn');
         return;
       }
+      if ((lPath && state.left.dirty) || (rPath && state.right.dirty)) {
+        const ok = await (Kairo.core && Kairo.core.confirmDialog ? Kairo.core.confirmDialog('文件比对存在未保存的修改，重新载入将丢失当前修改。是否继续？') : Promise.resolve(typeof window !== 'undefined' && window.confirm ? window.confirm('文件比对存在未保存的修改，重新载入将丢失当前修改。是否继续？') : true));
+        if (!ok) return;
+      }
       if (lPath) {
-        state.left.source = { kind: 'local', path: lPath, encoding: 'auto' };
+        if (!state.left.source || state.left.source.kind === 'text') {
+          state.left.source = { kind: 'local', path: lPath, encoding: 'auto' };
+        } else {
+          state.left.source.path = lPath;
+        }
       }
       if (rPath) {
-        state.right.source = { kind: 'local', path: rPath, encoding: 'auto' };
+        if (!state.right.source || state.right.source.kind === 'text') {
+          state.right.source = { kind: 'local', path: rPath, encoding: 'auto' };
+        } else {
+          state.right.source.path = rPath;
+        }
       }
       saveSources(state);
       status.textContent = '正在载入文件…';
@@ -945,8 +975,30 @@
     });
 
     function refreshSaveButtons() {
-      saveLeftBtn.disabled = !canSaveComparedFile(state.left);
-      saveRightBtn.disabled = !canSaveComparedFile(state.right);
+      const canSaveLeft = canSaveComparedFile(state.left) || !!(state.left.source && state.left.source.kind === 'text' && state.left.dirty && !state.left.saving);
+      const canSaveRight = canSaveComparedFile(state.right) || !!(state.right.source && state.right.source.kind === 'text' && state.right.dirty && !state.right.saving);
+      saveLeftBtn.disabled = !canSaveLeft;
+      saveRightBtn.disabled = !canSaveRight;
+      const leftIsText = state.left.source && state.left.source.kind === 'text';
+      const rightIsText = state.right.source && state.right.source.kind === 'text';
+      const leftText = leftIsText ? '另存左侧' : '保存左侧';
+      const rightText = rightIsText ? '另存右侧' : '保存右侧';
+      if (saveLeftBtn.querySelector('span')) saveLeftBtn.querySelector('span').textContent = leftText;
+      else saveLeftBtn.textContent = leftText;
+      if (saveRightBtn.querySelector('span')) saveRightBtn.querySelector('span').textContent = rightText;
+      else saveRightBtn.textContent = rightText;
+      if (sourceHeaders.left && sourceHeaders.left.saveBtn) {
+        const btn = sourceHeaders.left.saveBtn;
+        btn.disabled = !canSaveLeft;
+        if (btn.querySelector('span')) btn.querySelector('span').textContent = leftIsText ? '另存为' : '保存';
+        else btn.textContent = leftIsText ? '另存为' : '保存';
+      }
+      if (sourceHeaders.right && sourceHeaders.right.saveBtn) {
+        const btn = sourceHeaders.right.saveBtn;
+        btn.disabled = !canSaveRight;
+        if (btn.querySelector('span')) btn.querySelector('span').textContent = rightIsText ? '另存为' : '保存';
+        else btn.textContent = rightIsText ? '另存为' : '保存';
+      }
       revertLeftBtn.disabled = !state.left.dirty;
       revertRightBtn.disabled = !state.right.dirty;
       if (sourceHeaders.left && sourceHeaders.left.revertBtn) sourceHeaders.left.revertBtn.disabled = !state.left.dirty;
@@ -976,6 +1028,7 @@
       refreshSaveButtons();
     }
     function markDirty(side) {
+      compareSeq++;
       const item = state[side];
       item.editSeq = (item.editSeq || 0) + 1;
       // 最小改：按内容判定脏，而非一输入就脏；undo 回原样可自动消脏，避免误保存。
@@ -1155,7 +1208,7 @@
       toast('已退回' + sideName + '的修改，恢复到打开时的内容', 'ok');
     }
     function comparisonBlocked() {
-      const failed = ['left', 'right'].filter(side => state[side].loadState !== 'ready');
+      const failed = ['left', 'right'].filter(side => state[side].loadState !== 'ready' && state[side].loadState !== 'unloaded');
       if (!failed.length) return '';
       return failed.map(side => state[side].loadState === 'error' ? (side === 'left' ? '左侧读取失败' : '右侧读取失败') : (side === 'left' ? '左侧正在读取' : '右侧正在读取')).join('、');
     }
@@ -1167,6 +1220,14 @@
     async function compareNow(isAuto, force) {
       const auto = !!isAuto;
       if (disposed) return false;
+      if (state.left.loadState === 'unloaded') {
+        const ok = await loadSide('left');
+        if (!ok) return false;
+      }
+      if (state.right.loadState === 'unloaded') {
+        const ok = await loadSide('right');
+        if (!ok) return false;
+      }
       const blocked = comparisonBlocked();
       if (blocked) {
         status.textContent = blocked + '，请先完成加载后再比较';
@@ -1179,6 +1240,8 @@
         status.textContent = large + '，已暂停自动比较；请点击“重新比较”';
         return false;
       }
+      const requestLeftSeq = state.left.editSeq || 0;
+      const requestRightSeq = state.right.editSeq || 0;
       const leftText = editorLeft.getValue();
       const rightText = editorRight.getValue();
       const leftLabel = sourceLabel(state.left.source);
@@ -1195,8 +1258,15 @@
         try {
           const response = await api('POST', '/api/diff/compare', payload);
           if (disposed || requestNo !== compareSeq) return false;
+          if ((state.left.editSeq || 0) !== requestLeftSeq || (state.right.editSeq || 0) !== requestRightSeq) {
+            state.diffStale = true;
+            scheduleRecompare(300, true);
+            return false;
+          }
           const result = response || {};
           state.diff = result;
+          state.diff.leftEditSeq = requestLeftSeq;
+          state.diff.rightEditSeq = requestRightSeq;
           state.diffSourceKey = key;
           state.diffStale = false;
           state.hunks = buildHunks(result.lines || []);
@@ -1318,7 +1388,10 @@
     }
     function applyHunk(index, direction) {
       const hunk = state.hunks[index]; if (!hunk) return;
-      if (state.diffStale) { toast('差异正在更新中，请稍候…', 'warn'); return; }
+      if (state.diffStale || (state.diff && (state.diff.leftEditSeq !== (state.left.editSeq || 0) || state.diff.rightEditSeq !== (state.right.editSeq || 0)))) {
+        toast('内容已修改，请重新比较后再合并', 'warn');
+        return;
+      }
       pushUndoSnapshot('applyHunk');
       const targetSide = direction === 'right' ? 'right' : 'left';
       const allRows = state.alignedRows;
@@ -1338,7 +1411,10 @@
     }
     function applyLine(row, direction) {
       if (!row || row.status === 'equal') return;
-      if (state.diffStale) { toast('差异正在更新中，请稍候…', 'warn'); return; }
+      if (state.diffStale || (state.diff && (state.diff.leftEditSeq !== (state.left.editSeq || 0) || state.diff.rightEditSeq !== (state.right.editSeq || 0)))) {
+        toast('内容已修改，请重新比较后再合并', 'warn');
+        return;
+      }
       pushUndoSnapshot('applyLine');
       const targetSide = direction === 'right' ? 'right' : 'left';
       const allRows = state.alignedRows || [row];
@@ -1351,7 +1427,10 @@
     }
     function applyBatch(diffRows, selectedIndices, direction) {
       if (!selectedIndices || !selectedIndices.length) return;
-      if (state.diffStale) { toast('差异正在更新中，请稍候…', 'warn'); return; }
+      if (state.diffStale || (state.diff && (state.diff.leftEditSeq !== (state.left.editSeq || 0) || state.diff.rightEditSeq !== (state.right.editSeq || 0)))) {
+        toast('内容已修改，请重新比较后再合并', 'warn');
+        return;
+      }
       const targetSide = direction === 'right' ? 'right' : 'left';
       const selRows = selectedIndices
         .map(idx => diffRows[idx])
@@ -1407,9 +1486,25 @@
       if (!state.diff) return; const blob = new Blob([state.diff.unified_diff || ''], { type: 'text/plain;charset=utf-8' });
       const url = URL.createObjectURL(blob), a = el('a', { href: url, download: 'compare_' + Date.now() + '.diff' }); document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 0);
     }
+    function onBeforeUnload(e) {
+      if (activeWorkbenchState) {
+        const leftDirty = !!(activeWorkbenchState.left && activeWorkbenchState.left.dirty);
+        const rightDirty = !!(activeWorkbenchState.right && activeWorkbenchState.right.dirty);
+        if (leftDirty || rightDirty) {
+          e.preventDefault();
+          e.returnValue = '';
+        }
+      }
+    }
+    if (typeof window !== 'undefined') window.addEventListener('beforeunload', onBeforeUnload);
+
     state.textWorkbench = {
       loadPair: async (left, right) => {
         if (disposed) return false;
+        if (state.left.dirty || state.right.dirty) {
+          const ok = await (Kairo.core && Kairo.core.confirmDialog ? Kairo.core.confirmDialog('当前文件比对有未保存的修改，打开新文件将丢失当前修改。是否继续？') : Promise.resolve(typeof window !== 'undefined' && window.confirm ? window.confirm('当前文件比对有未保存的修改，打开新文件将丢失当前修改。是否继续？') : true));
+          if (!ok) return false;
+        }
         state.left.source = Object.assign(defaultSource('left'), left || {});
         state.right.source = Object.assign(defaultSource('right'), right || {});
         updateHeader('left');
@@ -1424,6 +1519,7 @@
     return function cleanupTextWorkbench() {
       if (disposed) return;
       disposed = true;
+      if (typeof window !== 'undefined') window.removeEventListener('beforeunload', onBeforeUnload);
       clearTimeout(recompareTimer);
       recompareTimer = 0;
       compareSeq++;
@@ -3307,7 +3403,7 @@
         return !!sourceEntry;
       }).map(item => {
         const sourceEntry = fromLeft ? item.left : item.right, targetEntry = fromLeft ? item.right : item.left;
-        return { item, sourceEntry, targetEntry, enabled: true, request: { rel_path: item.rel_path, expected: targetEntry ? { size: targetEntry.size, mtime: targetEntry.mtime } : null } };
+        return { item, sourceEntry, targetEntry, enabled: true, request: { rel_path: item.rel_path, expected: targetEntry ? { size: targetEntry.size, mtime: targetEntry.mtime } : null, expected_missing: !targetEntry } };
       });
       if (!plan.length) {
         toast('所选项目在' + (fromLeft ? '左侧' : '右侧') + '没有可复制的源文件', 'warn');
@@ -3386,7 +3482,15 @@
         body.innerHTML = '';
         body.append(summary, track, message);
         try {
-          const response = await api('POST', '/api/compare/sync/start', { left: spec(sources.left), right: spec(sources.right), direction, items, backup: !!options.backup });
+          const response = await api('POST', '/api/compare/sync/start', {
+            left: spec(sources.left),
+            right: spec(sources.right),
+            direction,
+            items,
+            backup: !!options.backup,
+            ignore_exts: (typeof ignoreExt !== 'undefined' && ignoreExt && ignoreExt.value ? ignoreExt.value.split(/[,，\s]+/).filter(Boolean) : (options.ignore_exts || [])),
+            ignore_dirs: (options && options.ignore_dirs ? options.ignore_dirs : [])
+          });
           jobID = response.job_id;
           poll();
         } catch (error) {
@@ -3484,7 +3588,7 @@
           sourceEntry: sourceEntry,
           targetEntry: targetEntry,
           enabled: true,
-          request: { rel_path: item.rel_path, expected: targetEntry ? { size: targetEntry.size, mtime: targetEntry.mtime } : null }
+          request: { rel_path: item.rel_path, expected: targetEntry ? { size: targetEntry.size, mtime: targetEntry.mtime } : null, expected_missing: !targetEntry }
         }]);
         return;
       }
@@ -3495,6 +3599,7 @@
         await api('POST', '/api/compare/copy', {
           source: spec(source), target: spec(target),
           expected: targetEntry ? { size: targetEntry.size, mtime: targetEntry.mtime } : null,
+          expected_missing: !targetEntry,
           backup: !!options.backup
         });
         toast('已复制：' + item.rel_path, 'ok');

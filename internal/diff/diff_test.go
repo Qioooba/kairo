@@ -160,14 +160,32 @@ func TestCompare_UnifiedDiff_Format(t *testing.T) {
 }
 
 func TestCompare_UnifiedDiff_MultipleHunks(t *testing.T) {
-	// 构造两份文本：变更点在第 1 行和第 10 行，应该产出 2 个 hunk
-	left := []string{"a1", "x", "x", "x", "x", "x", "x", "x", "x", "a10", "x", "x", "x", "x", "x", "x", "x", "x", "x", "a20"}
-	right := []string{"b1", "x", "x", "x", "x", "x", "x", "x", "x", "a10", "x", "x", "x", "x", "x", "x", "x", "x", "x", "a20"}
+	// 场景 1：变更点在第 1 行和第 10 行（中间 8 个 equal 行），ctxLines=3，8 > 2*3=6，应拆为 2 个 hunk
+	left := []string{"a1", "x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "a10", "x", "x", "x"}
+	right := []string{"b1", "x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "b10", "x", "x", "x"}
 	r := Compare(left, right, "l", "r")
 	hunkCount := strings.Count(r.UnifiedDiff, "@@ -")
-	if hunkCount != 1 {
-		// 间隔 8 个 equal + 1 差异，总共 ctxLines=3，距离 = 9，> 2*3=6，应该拆成 2 hunk
-		t.Fatalf("expected 2 hunks (split by 9 equal lines between diffs), got %d. unified diff:\n%s", hunkCount, r.UnifiedDiff)
+	if hunkCount != 2 {
+		t.Fatalf("expected 2 hunks (separated by 8 equal lines), got %d. unified diff:\n%s", hunkCount, r.UnifiedDiff)
+	}
+	// 确保两个 hunk 间无重叠上下文行
+	lines := strings.Split(r.UnifiedDiff, "\n")
+	hunk1End := false
+	for _, line := range lines {
+		if strings.HasPrefix(line, "@@ -") {
+			if !hunk1End {
+				hunk1End = true
+			}
+		}
+	}
+
+	// 场景 2：中间只有 5 个 equal 行（<= 2*3=6），应合并为一个 hunk
+	leftClose := []string{"a1", "x1", "x2", "x3", "x4", "x5", "a7", "x", "x", "x"}
+	rightClose := []string{"b1", "x1", "x2", "x3", "x4", "x5", "b7", "x", "x", "x"}
+	rClose := Compare(leftClose, rightClose, "l", "r")
+	hunkCountClose := strings.Count(rClose.UnifiedDiff, "@@ -")
+	if hunkCountClose != 1 {
+		t.Fatalf("expected 1 merged hunk (separated by 5 equal lines), got %d. unified diff:\n%s", hunkCountClose, rClose.UnifiedDiff)
 	}
 }
 

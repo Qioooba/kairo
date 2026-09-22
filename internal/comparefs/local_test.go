@@ -101,3 +101,26 @@ func TestLocalPathsAreAbsolute(t *testing.T) {
 		t.Fatalf("joined path=%q", got)
 	}
 }
+
+func TestLocalWriteAtomicPreservesPermissions(t *testing.T) {
+	root := t.TempDir()
+	name := filepath.Join(root, "script.sh")
+	if err := os.WriteFile(name, []byte("#!/bin/sh\necho hi\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	infoBefore, err := os.Stat(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fsys := NewLocal()
+	if err := fsys.WriteAtomic(context.Background(), name, strings.NewReader("#!/bin/sh\necho updated\n"), WriteOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	infoAfter, err := os.Stat(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if infoAfter.Mode().Perm() != infoBefore.Mode().Perm() {
+		t.Fatalf("permissions modified: before=%v after=%v", infoBefore.Mode().Perm(), infoAfter.Mode().Perm())
+	}
+}

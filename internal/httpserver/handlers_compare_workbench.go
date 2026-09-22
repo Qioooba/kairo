@@ -1679,17 +1679,17 @@ func compareStreaming(ctx context.Context, lr, rr io.Reader) (bool, error) {
 		}
 		nL, eL := readCompareChunk(lr, bufL)
 		nR, eR := readCompareChunk(rr, bufR)
-		if nL != nR || !bytes.Equal(bufL[:nL], bufR[:nR]) {
-			return false, nil
-		}
-		if eL == io.EOF && eR == io.EOF {
-			return true, nil
-		}
 		if eL != nil && eL != io.EOF {
 			return false, eL
 		}
 		if eR != nil && eR != io.EOF {
 			return false, eR
+		}
+		if nL != nR || !bytes.Equal(bufL[:nL], bufR[:nR]) {
+			return false, nil
+		}
+		if eL == io.EOF && eR == io.EOF {
+			return true, nil
 		}
 	}
 }
