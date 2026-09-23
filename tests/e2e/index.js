@@ -15,6 +15,7 @@ const RESULTS_DIR = path.join(PROJECT_ROOT, 'test-results');
 const SCREENSHOTS_DIR = path.join(RESULTS_DIR, 'screenshots');
 const NETWORK_DIR = path.join(RESULTS_DIR, 'network');
 const CONSOLE_DIR = path.join(RESULTS_DIR, 'console');
+const TRACES_DIR = path.join(RESULTS_DIR, 'traces');
 const REPORT_PATH = path.join(RESULTS_DIR, 'report.md');
 
 const BASE_URL = process.env.BASE_URL || 'http://127.0.0.1:18092';
@@ -136,12 +137,15 @@ async function main() {
   ensureDir(SCREENSHOTS_DIR);
   ensureDir(NETWORK_DIR);
   ensureDir(CONSOLE_DIR);
+  ensureDir(TRACES_DIR);
 
   const runner = new TestRunner({
     baseUrl: BASE_URL,
     headless: headless,
     viewport: VIEWPORT,
     screenshotsDir: SCREENSHOTS_DIR,
+    // 失败用例的 Playwright trace 落盘位置 (文件名含 SHA + viewport + 时间)
+    traceDir: TRACES_DIR,
     grep: args.grep,
     runMeta: runMeta,
   });
@@ -346,6 +350,8 @@ async function main() {
   console.log('✅ 运行元数据已生成:', runMetadataPath);
   console.log('   SHA=' + runMeta.shortSha + ' viewport=' + runMeta.viewport +
     ' grep=' + (runMeta.grep || '-'));
+  console.log('   失败 trace: ' + runner.traceFiles.length + ' 个' +
+    (runner.traceFiles.length ? ' → ' + TRACES_DIR : ''));
 
   const reportContent = generateReport({
     ...results,

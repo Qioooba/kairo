@@ -14,6 +14,12 @@ class TestRunner {
     this.headless = options.headless !== undefined ? options.headless : true;
     this.viewport = options.viewport || { width: 1366, height: 900 };
     this.screenshotsDir = options.screenshotsDir || null;
+    // traceDir 设置后, 每个用例都会被 Playwright trace 记录, 失败时落盘。
+    // 文件名绑定 SHA + 用例名 + viewport + 运行时间, 与失败截图一致 (QA-02 要求
+    // "截图与 trace 绑定 SHA、测试名、运行时间和 viewport")。
+    this.traceDir = options.traceDir || null;
+    // traceFiles 记录本次运行实际落盘的 trace 路径 (仅失败用例)。
+    this.traceFiles = [];
     this.grep = options.grep || null;
     // runMeta 绑定本次运行的 SHA / viewport / browser, 用于失败截图命名与报告。
     this.runMeta = options.runMeta || {};
@@ -278,6 +284,7 @@ class TestRunner {
 
         let timeoutHandle = null;
         let rejectTimeout = null;
+        await this._startTrace();
         try {
           const timeoutMs = Number(test.timeout || suite.timeout || process.env.TEST_TIMEOUT) || 180000;
           // 超时定时器必须在用例结束后清理: 曾经它从不 clearTimeout, 于是每个用例都留下
@@ -331,6 +338,8 @@ class TestRunner {
             timeoutHandle = null;
           }
           rejectTimeout = null;
+          // trace 只在失败时落盘; 成功用例直接丢弃, 避免占满磁盘。
+          await this._stopTrace(testResult.status === 'failed' ? (suite.name + '-' + test.name) : null);
           for (const hook of allAfterEach) {
             try { await hook.call(this, ctx); } catch (e) { /* ignore */ }
           }
@@ -372,6 +381,52 @@ class TestRunner {
     }
 
     return suiteResults;
+  }
+
+  /**
+   * _startTrace 在 traceDir 与浏览器 context 都就绪时开始记录 Playwright trace。
+   *
+   * 任何一步失败都只是"没有 trace", 绝不影响用例本身 —— trace 是排障附加物。
+   */
+  async _startTrace() {
+    if (!this.traceDir || !this.context || !this.context.tracing) return false;
+    try {
+      await this.context.tracing.start({ snapshots: true, screenshots: true, sources: false });
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /**
+   * _stopTrace 结束 trace。label 为 null 表示用例通过, 直接丢弃不落盘。
+   *
+   * 失败时的文件名与失败截图同口径: 用例名 + SHA + viewport + 运行时间,
+   * 满足审查文档"截图与 trace 绑定 SHA、测试名、运行时间和 viewport"的要求。
+   */
+  async _stopTrace(label) {
+    if (!this.traceDir || !this.context || !this.context.tracing) return null;
+    let outPath = null;
+    if (label) {
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const base = helpers.sanitizeFileName(
+        `${label}-${this.shortSha}-${this.viewportLabel}-${stamp}`
+      );
+      outPath = path.join(this.traceDir, `${base}.zip`);
+      try {
+        if (!fs.existsSync(this.traceDir)) fs.mkdirSync(this.traceDir, { recursive: true });
+      } catch (e) {
+        // 目录建不出来就退化为不落盘
+        outPath = null;
+      }
+    }
+    try {
+      await this.context.tracing.stop(outPath ? { path: outPath } : undefined);
+    } catch (e) {
+      return null;
+    }
+    if (outPath) this.traceFiles.push(outPath);
+    return outPath;
   }
 
   async run(ctx) {

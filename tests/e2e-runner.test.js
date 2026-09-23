@@ -219,7 +219,57 @@ async function main() {
     }
   }
 
-  console.log('e2e-runner passed: discovered/executed/skip 统计、noMatch 判定、SHA+viewport 截图命名均符合预期');
+  // ---- 8: trace 只在失败时落盘, 且文件名绑定 SHA + viewport + 用例名 ----
+  {
+    const tracesDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kairo-e2e-traces-'));
+    const runner = makeRunner({ traceDir: tracesDir });
+
+    // 假 context: 记录 tracing.start/stop 的调用与落盘路径
+    const stopped = [];
+    runner.context = {
+      tracing: {
+        start: async () => { runner._traceStarted = (runner._traceStarted || 0) + 1; },
+        stop: async (opts) => {
+          stopped.push(opts && opts.path ? opts.path : null);
+          if (opts && opts.path) fs.writeFileSync(opts.path, 'fake-trace');
+        },
+      },
+    };
+
+    runner.describe('trace-suite', function () {
+      runner.it('passes-here', async function () {});
+      runner.it('fails-here', async function () { throw new Error('故意失败'); });
+    });
+
+    await runner.run({ page: makeFakePage() });
+
+    assert.strictEqual(stopped.length, 2, `每个用例都应结束 trace, got=${stopped.length}`);
+    assert.strictEqual(stopped[0], null, '通过的用例不得把 trace 落盘');
+    const failPath = stopped[1];
+    assert.ok(failPath, '失败的用例必须落盘 trace');
+    const traceBase = path.basename(failPath);
+    assert.ok(traceBase.includes('abc1234'), `trace 名必须含 SHA, got=${traceBase}`);
+    assert.ok(traceBase.includes('1366x900') || traceBase.includes('1366_900'),
+      `trace 名必须含 viewport, got=${traceBase}`);
+    assert.ok(traceBase.includes('fails-here') || traceBase.includes('fails_here'),
+      `trace 名必须含用例名, got=${traceBase}`);
+    assert.ok(fs.existsSync(failPath), 'trace 文件应真实写出');
+    assert.deepStrictEqual(runner.traceFiles, [failPath], 'runner.traceFiles 应记录落盘的 trace');
+    fs.rmSync(tracesDir, { recursive: true, force: true });
+  }
+
+  // ---- 8b: 没有 traceDir / 没有 context 时必须是惰性的 ----
+  {
+    const noTrace = makeRunner();
+    noTrace.describe('no-trace-suite', function () {
+      noTrace.it('case', async function () {});
+    });
+    const res = await noTrace.run({ page: makeFakePage() });
+    assert.strictEqual(res.summary.passed, 1, '无 traceDir 时用例仍应正常通过');
+    assert.deepStrictEqual(noTrace.traceFiles, [], '无 traceDir 时不得记录任何 trace');
+  }
+
+  console.log('e2e-runner passed: discovered/executed/skip 统计、noMatch 判定、SHA+viewport 截图与 trace 命名均符合预期');
 }
 
 main().catch(function (e) {
