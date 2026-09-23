@@ -4761,26 +4761,37 @@
   }
   // SQL 上下文感知：FROM / JOIN / INTO / UPDATE / TABLE 后表名提权至最高，
   // 解决 SELECT * FROM ord 时 ORDER 压制 orders 的问题。
+  // P2（审核第 12 项）：要能跨过 `ident ( . ident )*` 链再往前找关键字，
+  // 否则 `FROM APP.US` / `JOIN APP.` 会被判成"不是表名位置"。
   function sqlTableContext(text, cursor) {
     const tokens = tokenizeSQL(String(text || '').slice(0, cursor));
-    for (let i = tokens.length - 1; i >= 0; i--) {
-      const tok = tokens[i];
-      if (tok.type === 'space' || tok.type === 'comment') continue;
-      // 当前前缀本身是一个 ident，往前再找一个有效 token。
-      if (tok.type === 'ident' && tok.start + tok.value.length >= cursor - 64) {
-        for (let j = i - 1; j >= 0; j--) {
-          const prev = tokens[j];
-          if (prev.type === 'space' || prev.type === 'comment') continue;
-          const w = String(prev.value || '').toLowerCase();
-          if (w === 'from' || w === 'join' || w === 'into' || w === 'update' || w === 'table') return true;
-          return false;
-        }
-        return false;
+    const prevSignificant = function (from) {
+      for (let j = from; j >= 0; j--) {
+        if (tokens[j].type !== 'space' && tokens[j].type !== 'comment') return j;
       }
-      const w = String(tok.value || '').toLowerCase();
+      return -1;
+    };
+    const isTableKeyword = function (value) {
+      const w = String(value || '').toLowerCase();
       return w === 'from' || w === 'join' || w === 'into' || w === 'update' || w === 'table';
+    };
+    let i = prevSignificant(tokens.length - 1);
+    if (i < 0) return false;
+    const tok = tokens[i];
+    const inCurrentPrefix = tok.type !== 'ident' || tok.start + tok.value.length >= cursor - 64;
+    if (inCurrentPrefix && (tok.type === 'ident' || (tok.type === 'punct' && tok.value === '.'))) {
+      // 回退整条限定名链：schema.表 / 别名. / 别名.字段 都从这里往前走。
+      let j = i;
+      while (j >= 0) {
+        const t = tokens[j];
+        if (t.type === 'ident' || (t.type === 'punct' && t.value === '.')) { j--; continue; }
+        break;
+      }
+      j = prevSignificant(j);
+      if (j < 0) return false;
+      return isTableKeyword(tokens[j].value);
     }
-    return false;
+    return isTableKeyword(tok.value);
   }
   // 空表名槽位：光标前最后一个有效 token 恰好是 FROM/JOIN/INTO/UPDATE/TABLE 或逗号。
   // 只有这种位置才在"还没有输入任何字符"时弹出完整表名列表；否则 `FROM T_ORDER ` 之后
@@ -4815,16 +4826,21 @@
     extras = extras || {};
     options = options || {};
     const force = options.force === true;
-    // 列名位置（`t.` / `t.id`）优先：只给该表的字段，不混入表名与关键字。
-    const qual = qualifierCompletion(text, cursor);
-    if (qual) {
-      if (!extras.fields || !extras.fields.length) return { items: [], start: qual.start, end: qual.end };
-      if (force || options.allowEmpty || qual.prefix.length >= 1) {
-        return buildSuggestions(qual.start, qual.end, qual.prefix, extras, false, true);
-      }
-      return { items: [], start: qual.start, end: qual.end };
-    }
+    // P2（审核第 12 项）：先判断"表引用位置"（FROM / JOIN / INTO / UPDATE / TABLE 之后，
+    // 支持 `schema.` 前缀），再判断"别名.字段"。否则 `SELECT * FROM APP.US` 会被当成
+    // 别名 APP 的字段联想（该别名没有字段缓存）→ 候选为空，连强制补全也救不回来。
     const tableCtx = sqlTableContext(text, cursor);
+    // 列名位置（`t.` / `t.id`）优先：只给该表的字段，不混入表名与关键字。
+    if (!tableCtx) {
+      const qual = qualifierCompletion(text, cursor);
+      if (qual) {
+        if (!extras.fields || !extras.fields.length) return { items: [], start: qual.start, end: qual.end };
+        if (force || options.allowEmpty || qual.prefix.length >= 1) {
+          return buildSuggestions(qual.start, qual.end, qual.prefix, extras, false, true);
+        }
+        return { items: [], start: qual.start, end: qual.end };
+      }
+    }
     const ctx = completionPrefix(text, cursor);
     // 表名位置放宽触发条件（本轮修复"SELECT 里表名不联想"）：
     //   - 普通位置仍要求 2 个字符，避免关键字噪音；
