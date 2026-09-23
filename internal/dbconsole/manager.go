@@ -65,6 +65,7 @@ type Manager struct {
 	dpiFailedSources    sync.Map
 	resultContextMu     sync.RWMutex
 	resultContexts      map[string]*ResultEditContext
+	gridFetchFlights    map[string]chan struct{}
 }
 
 func NewManager(dataDir string) (*Manager, error) {
@@ -540,15 +541,44 @@ func (m *Manager) withSQL(ctx context.Context, source Source, fn func(context.Co
 }
 
 func (m *Manager) withSQLAttempt(ctx context.Context, source Source, fn func(context.Context, *sql.DB) error) error {
-	if err := m.acquire(ctx); err != nil {
-		return err
+	// 已经持有全局并发令牌的请求（例如流式查询的元数据预规划）共享同一令牌，
+	// 不在元数据链路里重复申请（DB-03）。
+	if !gridConcurrencyTokenHeld(ctx) {
+		if err := m.acquire(ctx); err != nil {
+			return err
+		}
+		defer m.release()
 	}
-	defer m.release()
 	db, err := m.sqlDB(source)
 	if err != nil {
 		return err
 	}
 	return fn(ctx, db)
+}
+
+// beginGridFetch 合并同一元数据 key 的并发刷新：只有 leader 会真正访问数据库。
+func (m *Manager) beginGridFetch(key string) (chan struct{}, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.gridFetchFlights == nil {
+		m.gridFetchFlights = make(map[string]chan struct{})
+	}
+	if flight, ok := m.gridFetchFlights[key]; ok {
+		return flight, false
+	}
+	flight := make(chan struct{})
+	m.gridFetchFlights[key] = flight
+	return flight, true
+}
+
+// endGridFetch 结束一次元数据刷新并唤醒等待者。
+func (m *Manager) endGridFetch(key string, flight chan struct{}) {
+	m.mu.Lock()
+	if current, ok := m.gridFetchFlights[key]; ok && current == flight {
+		delete(m.gridFetchFlights, key)
+	}
+	m.mu.Unlock()
+	close(flight)
 }
 
 func (m *Manager) Test(ctx context.Context, source Source) (TestResult, error) {

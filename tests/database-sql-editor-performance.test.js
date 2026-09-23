@@ -2,10 +2,48 @@ const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
+const vm = require('vm');
 
 // Extract database.js logic for unit testing
 const dbJs = fs.readFileSync(path.join(__dirname, '../web/pages/database.js'), 'utf8');
 const featJs = fs.readFileSync(path.join(__dirname, '../web/workbench/database-features.js'), 'utf8');
+
+// 把真实的 database-features.js 载入沙箱（观察者保持 loading，不会执行 start()），
+// 让绑定参数断言打在真实实现上，而不是正则抽取出来的源码片段上。
+function loadDatabaseFeatures() {
+  const editor = {
+    value: '',
+    selectionStart: 0,
+    selectionEnd: 0,
+    dataset: {},
+    addEventListener() {},
+    removeEventListener() {},
+    focus() {},
+    setSelectionRange(start, end) { this.selectionStart = start; this.selectionEnd = end; }
+  };
+  const document = {
+    readyState: 'loading',
+    addEventListener() {},
+    getElementById(id) { return id === 'db-sql' ? editor : null; },
+    querySelectorAll() { return []; },
+    body: {}
+  };
+  const window = {
+    Kairo: { core: { escapeHtml(value) { return String(value); } } },
+    addEventListener() {}
+  };
+  vm.runInNewContext(codeOf('web/workbench/statement-model.js'),
+    { window, document, console, Set, URLSearchParams, MutationObserver: function () {}, navigator: {}, location: { hash: '' }, setTimeout, clearTimeout });
+  vm.runInNewContext(codeOf('web/workbench/database-features.js'),
+    { window, document, console, Set, URLSearchParams, MutationObserver: function () {}, navigator: {}, location: { hash: '' }, setTimeout, clearTimeout });
+  const features = window.Kairo.databaseFeatures;
+  features.__editor = editor;
+  return features;
+}
+
+function codeOf(relPath) {
+  return fs.readFileSync(path.join(__dirname, '..', relPath), 'utf8');
+}
 
 test('SQL Editor Performance & Safeguards', async (t) => {
   await t.test('isLargeSQL correctly flags large character length and line count', () => {
@@ -80,28 +118,70 @@ test('SQL Editor Performance & Safeguards', async (t) => {
     assert.ok(largeHl.includes('SELECT col_0 FROM table_0;'), 'Content must be preserved');
   });
 
-  await t.test('findParameters in database-features has length cutoff and single-pass optimization', () => {
-    const mTok = featJs.match(/function tokenizeSQL\(source\) \{[\s\S]*?\n  \}/);
-    const mFind = featJs.match(/function findParameters\(source\) \{[\s\S]*?\n  \}/);
-    const SQL_WORD = /[A-Za-z_$#\u0080-\uffff]/;
-    const SQL_WORD_CONT = /[A-Za-z0-9_$#\u0080-\uffff]/;
-    const KEYWORDS = new Set(['select', 'from', 'where']);
-    const MAX_SQL_HIGHLIGHT = 220000;
+  // NOTE: 这个用例原来断言“超长 SQL 返回空参数”是正确行为，实际上它固化了 DBUI-04
+  // 的功能回退（高亮降级把执行所需的绑定参数扫描一起关掉）。现已按正确行为重新锚定：
+  // 高亮可以降级，绑定参数扫描不可以。
+  await t.test('bind parameters must survive the large-text highlight threshold (DBUI-04)', () => {
+    const features = loadDatabaseFeatures();
+    const editor = features.__editor;
 
-    const tokenizeSQL = eval('(' + mTok[0] + ')');
-    const findParameters = eval('(' + mFind[0] + ')');
-
-    // Normal parameterized query
+    // 普通参数化查询
     const sql = 'SELECT * FROM orders WHERE id = :order_id AND user_id = :user_id AND status = ?';
-    const params = findParameters(sql);
+    const params = features.findParameters(sql);
     assert.strictEqual(params.length, 3);
     assert.strictEqual(params[0].name, 'order_id');
     assert.strictEqual(params[1].name, 'user_id');
     assert.strictEqual(params[2].name, '1');
 
-    // Oversized SQL returns empty array immediately
-    const hugeSql = 'SELECT * FROM t WHERE id = :id ' + 'x'.repeat(230000);
-    const hugeParams = findParameters(hugeSql);
-    assert.strictEqual(hugeParams.length, 0, 'Oversized SQL should bypass parameter scanning');
+    // 短查询 + 220KB 尾部注释：参数扫描不得被高亮阈值禁用
+    const shortQuery = 'SELECT :id FROM dual;';
+    const hugeSql = shortQuery + '\n/*' + 'x'.repeat(220000) + '*/';
+    assert.ok(hugeSql.length > 220000, '样本必须超过高亮阈值');
+
+    const hugeParams = features.findParameters(hugeSql);
+    // 注意：vm 沙箱里的数组原型与测试 realm 不同，deepStrictEqual 会因原型不一致而失败。
+    assert.strictEqual(hugeParams.map(p => p.name).join(','), 'id',
+      'DBUI-04: 超过高亮阈值的文本仍必须扫描出绑定参数，实际 ' + JSON.stringify(hugeParams));
+
+    // 执行路径：光标位于首条短语句时，绑定必须保留并随请求发送
+    editor.value = hugeSql;
+    editor.selectionStart = 6;
+    editor.selectionEnd = 6;
+    features.setBindings({ id: '123' });
+    const bound = features.getBoundParameters();
+    assert.strictEqual(bound.map(p => p.name).join(','), 'id',
+      'DBUI-04: 执行路径必须保留首条语句的绑定参数，实际 ' + JSON.stringify(bound));
+    assert.strictEqual(bound[0].value, '123');
+    assert.strictEqual(features.getBindings().id, '123',
+      'DBUI-04: 扫描可用时也不得删除仍然存在的绑定；扫描未完成时更不得破坏性删除');
+
+    // 高亮降级与参数扫描互相独立：统一入口仍返回状态与参数
+    const scan = features.scanParameters(hugeSql);
+    assert.strictEqual(scan.status, 'ready');
+    assert.strictEqual(scan.parameters.map(p => p.name).join(','), 'id');
+  });
+
+  await t.test('parameter scanning keeps the binding cache while a scan is not ready (DBUI-04)', () => {
+    const features = loadDatabaseFeatures();
+    const editor = features.__editor;
+
+    editor.value = 'SELECT :a FROM dual;';
+    editor.selectionStart = 7;
+    editor.selectionEnd = 7;
+    features.setBindings({ a: '1', b: '2' });
+
+    // 未完成的扫描结果不得触发破坏性裁剪
+    features.pruneBindingsAgainst({ status: 'pending', parameters: [], complete: false });
+    assert.strictEqual(Object.keys(features.getBindings()).sort().join(','), 'a,b',
+      '扫描未完成时必须保留全部绑定');
+
+    features.pruneBindingsAgainst({ status: 'error', parameters: [], complete: false });
+    assert.strictEqual(Object.keys(features.getBindings()).sort().join(','), 'a,b',
+      '扫描失败时必须保留全部绑定');
+
+    // 完成的扫描结果才允许删除确实不存在的参数
+    features.pruneBindingsAgainst({ status: 'ready', parameters: [{ name: 'a' }], complete: true });
+    assert.strictEqual(Object.keys(features.getBindings()).sort().join(','), 'a',
+      '完成的扫描结果允许裁剪已删除的参数');
   });
 });

@@ -364,6 +364,17 @@ func (m *Manager) streamQueryAttempt(ctx context.Context, source Source, query s
 		return QuerySummary{}, err
 	}
 	started := time.Now()
+
+	// DB-03: 必须在占用流式查询连接（会话事务或请求级事务）之前完成受限元数据规划，
+	// 否则元数据链路会等待同一个连接直到超时。元数据链路共享本请求已持有的全局并发令牌，
+	// 并使用独立短预算；拿不到元数据只降级为只读，不阻塞查询首包。
+	planCtx := withGridConcurrencyToken(queryCtx)
+	needEditable := sessionID != "" && info.IsSelect
+	var prep *gridQueryPreparation
+	if needEditable || (source.Kind == KindOracle && !info.HasForUpdate && info.IsSelect) {
+		prep = m.prepareGridQuery(planCtx, source, query, needEditable)
+	}
+
 	var queryTx *sql.Tx
 	var sessionTx *transactionEntry
 	if sessionID != "" {
@@ -415,10 +426,10 @@ func (m *Manager) streamQueryAttempt(ctx context.Context, source Source, query s
 			}
 		}
 	}
-	if source.Kind == KindOracle && !info.HasForUpdate && info.IsSelect && lobRewrite == nil {
-		if rewritten, rerr := RewriteOracleQueryForHiddenRowID(actualQuery); rerr == nil && rewritten != actualQuery {
-			actualQuery = rewritten
-		}
+	// DB-03: 在占用流式查询连接之前完成受限元数据规划与 ROWID 改写决策。
+	// DB-01/DB-02: 只有语法允许且已确认是普通堆表时才追加 ROWID 定位列。
+	if lobRewrite == nil && prep != nil && prep.RowIDSQL != "" {
+		actualQuery = prep.RowIDSQL
 	}
 
 	pagedPlan, err := serverPagedPlan(source.Kind, actualQuery, page)
@@ -488,11 +499,11 @@ func (m *Manager) streamQueryAttempt(ctx context.Context, source Source, query s
 		}
 	}
 
-	// 此时连接与首包已就绪，分析可编辑性并流式发射元数据
+	// 此时连接与首包已就绪；DB-03: 编辑能力分析是纯函数，不再通过池请求元数据。
 	var editPlan *ResultEditContext
 	if sessionID != "" && info.IsSelect {
-		plan, pErr := m.AnalyzeGridQuery(queryCtx, source, sessionID, query, columns, hiddenRowIDIdx)
-		if pErr == nil && plan != nil {
+		plan := AnalyzeGridQueryWithMetadata(source, sessionID, query, columns, prep, hiddenRowIDIdx)
+		if plan != nil {
 			editPlan = plan
 			m.RegisterResultContext(plan)
 		}

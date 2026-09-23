@@ -223,4 +223,245 @@ console.log('Test 12: Editor simulation & undo support...');
 }
 console.log('  ✓ Editor simulation verified');
 
+// ---------------------------------------------------------------------------
+// Test 13-16: DBUI-02 —— 格式化不得改变可执行语义
+// ---------------------------------------------------------------------------
+
+// 独立的参考扫描器：只提取字符串 / 引用标识符 / 参数 / 注释，按出现顺序比较。
+// 这里故意不复用被测 lexer，避免“有缺陷的词法分析器证明自身正确”。
+function referenceLiterals(text, options) {
+  const opts = options || {};
+  const mysql = String(opts.dialect || 'oracle').toLowerCase() === 'mysql';
+  const mysqlBackslash = mysql && !/NO_BACKSLASH_ESCAPES/i.test(String(opts.sqlMode || ''));
+  const out = [];
+  const n = text.length;
+  let i = 0;
+  while (i < n) {
+    const c = text[i];
+    const d = text[i + 1] || '';
+    if (c === '-' && d === '-') {
+      let e = text.indexOf('\n', i);
+      if (e < 0) e = n;
+      out.push('comment:' + text.slice(i, e));
+      i = e;
+      continue;
+    }
+    if (mysql && c === '#' && (i === 0 || /\s/.test(text[i - 1]))) {
+      let e = text.indexOf('\n', i);
+      if (e < 0) e = n;
+      out.push('comment:' + text.slice(i, e));
+      i = e;
+      continue;
+    }
+    if (c === '/' && d === '*') {
+      const e = text.indexOf('*/', i + 2);
+      const take = e < 0 ? n : e + 2;
+      out.push('comment:' + text.slice(i, take));
+      i = take;
+      continue;
+    }
+    let qPrefix = 0;
+    if ((c === 'q' || c === 'Q') && d === "'") qPrefix = 2;
+    else if ((c === 'n' || c === 'N') && (d === 'q' || d === 'Q') && text[i + 2] === "'") qPrefix = 3;
+    if (qPrefix) {
+      const opener = text[i + qPrefix];
+      const closer = ({ '[': ']', '{': '}', '(': ')', '<': '>' }[opener] || opener) + "'";
+      const e = text.indexOf(closer, i + qPrefix + 1);
+      const take = e < 0 ? n : e + closer.length;
+      out.push('string:' + text.slice(i, take));
+      i = take;
+      continue;
+    }
+    const isNString = (c === 'n' || c === 'N') && d === "'";
+    if (c === "'" || c === '"' || c === '`' || isNString) {
+      const q = (c === '"' || c === '`') ? c : "'";
+      let j = isNString ? i + 2 : i + 1;
+      while (j < n) {
+        if (text[j] === q) {
+          if (text[j + 1] === q) { j += 2; continue; }
+          j++;
+          break;
+        }
+        if (mysqlBackslash && q !== '`' && text[j] === '\\') { j += 2; continue; }
+        j++;
+      }
+      out.push((q === "'" ? 'string:' : 'quoted-ident:') + text.slice(i, j));
+      i = j;
+      continue;
+    }
+    if (c === ':' && /[A-Za-z0-9_$#\u0080-\uffff]/.test(d)) {
+      let j = i + 1;
+      while (j < n && /[A-Za-z0-9_$#\u0080-\uffff]/.test(text[j])) j++;
+      out.push('param:' + text.slice(i, j));
+      i = j;
+      continue;
+    }
+    if (c === '?') { out.push('param:?'); i++; continue; }
+    if (c === '{' && d === '{') {
+      const e = text.indexOf('}}', i + 2);
+      if (e >= 0) { out.push('param:' + text.slice(i, e + 2)); i = e + 2; continue; }
+    }
+    i++;
+  }
+  return out;
+}
+
+// SQLite 交叉核验：格式化的核心承诺是“执行结果不变”。
+let sqliteModule = null;
+let sqliteSkipReason = '';
+try {
+  sqliteModule = require('node:sqlite');
+} catch (err) {
+  sqliteSkipReason = err && err.message ? err.message : String(err);
+}
+function sqliteScalar(sql) {
+  const db = new sqliteModule.DatabaseSync(':memory:');
+  try {
+    const row = db.prepare(sql).get();
+    return row ? Object.values(row)[0] : undefined;
+  } finally {
+    db.close();
+  }
+}
+// SQLite 没有 DUAL 伪表，去掉它不改变表达式语义。
+function sqliteRunnable(sql) {
+  return String(sql).replace(/\bfrom\s+dual\b/gi, '').replace(/;\s*$/, '');
+}
+
+console.log('Test 13: DBUI-02 executable semantics fidelity (counterexamples)...');
+{
+  const counterexamples = [
+    {
+      name: 'A: number adjacent to a line comment',
+      sql: 'select 1--comment\n+2 from dual;',
+      // 注释必须在行尾结束，`+ 2` 必须留在可执行位置（缩进属于格式偏好，语义不变）。
+      expected: 'SELECT\n  1 --comment\n  + 2\nFROM DUAL;',
+      sqlite: 3
+    },
+    {
+      name: 'B: Oracle ordinary string containing a backslash',
+      sql: "select '\\' || 'select' as txt from dual;",
+      expected: "SELECT\n  '\\' || 'select' AS txt\nFROM DUAL;",
+      sqlite: '\\select'
+    }
+  ];
+
+  for (const item of counterexamples) {
+    const formatted = service.formatSQL(item.sql, { dialect: 'oracle' });
+    // 1) 必须真的发生了格式化（防止保真校验退化成“原样返回”而假绿）
+    assert.strictEqual(formatted, item.expected,
+      item.name + ': 期望的格式化输出\nactual:   ' + JSON.stringify(formatted) + '\nexpected: ' + JSON.stringify(item.expected));
+    // 2) 字符串 / 引用标识符 / 参数 / 注释 token 必须逐字节一致且顺序一致
+    assert.deepStrictEqual(
+      referenceLiterals(formatted, { dialect: 'oracle' }),
+      referenceLiterals(item.sql, { dialect: 'oracle' }),
+      item.name + ': 字面量与注释必须在格式化前后逐字节一致');
+    // 3) 执行结果必须一致
+    if (sqliteModule) {
+      const before = sqliteScalar(sqliteRunnable(item.sql));
+      const after = sqliteScalar(sqliteRunnable(formatted));
+      assert.deepStrictEqual(after, before,
+        item.name + ': SQLite 执行结果必须不变 (before=' + JSON.stringify(before) + ', after=' + JSON.stringify(after) + ')');
+      assert.deepStrictEqual(after, item.sqlite, item.name + ': SQLite 基准结果');
+    }
+  }
+  if (!sqliteModule) {
+    console.log('  [SKIPPED] SQLite 交叉核验不可用 (' + sqliteSkipReason + ')，仅使用独立 token 流校验');
+  }
+}
+console.log('  ✓ DBUI-02 counterexamples verified');
+
+console.log('Test 14: DBUI-02 number scanning state machine...');
+{
+  const tokenize = (sql, options) => service.tokenizeSQL(sql, options).filter(t => t.type !== 'space').map(t => t.type + ':' + t.value);
+
+  assert.deepStrictEqual(tokenize('SELECT 1e-2 FROM dual'),
+    ['keyword:SELECT', 'number:1e-2', 'keyword:FROM', 'keyword:dual'],
+    '1e-2 必须是一个合法的带符号指数数字 token');
+
+  assert.deepStrictEqual(tokenize('SELECT 1..10 FROM dual'),
+    ['keyword:SELECT', 'number:1', 'operator:..', 'number:10', 'keyword:FROM', 'keyword:dual'],
+    '“..” 必须终止数字 token');
+
+  assert.deepStrictEqual(tokenize('SELECT 1+column FROM dual'),
+    ['keyword:SELECT', 'number:1', 'operator:+', 'ident:column', 'keyword:FROM', 'keyword:dual'],
+    '“+” 必须终止数字 token，且不能吞掉后续标识符');
+
+  assert.deepStrictEqual(tokenize('SELECT 1/*c*/+2 FROM dual'),
+    ['keyword:SELECT', 'number:1', 'comment:/*c*/', 'operator:+', 'number:2', 'keyword:FROM', 'keyword:dual'],
+    '块注释必须终止数字 token');
+
+  assert.deepStrictEqual(tokenize('SELECT 1--c\r\n+2 FROM dual'),
+    ['keyword:SELECT', 'number:1', 'comment:--c\r', 'operator:+', 'number:2', 'keyword:FROM', 'keyword:dual'],
+    'CRLF 行注释必须终止数字 token');
+
+  // 显式状态机：正负号只能紧邻指数标记，十六进制按方言单独处理
+  assert.deepStrictEqual(tokenize('SELECT 1e+2 FROM dual'),
+    ['keyword:SELECT', 'number:1e+2', 'keyword:FROM', 'keyword:dual']);
+  assert.deepStrictEqual(tokenize('SELECT 1.5e-2 FROM dual'),
+    ['keyword:SELECT', 'number:1.5e-2', 'keyword:FROM', 'keyword:dual']);
+  assert.deepStrictEqual(tokenize('SELECT .5 FROM dual'),
+    ['keyword:SELECT', 'number:.5', 'keyword:FROM', 'keyword:dual']);
+  assert.deepStrictEqual(tokenize('SELECT 1e FROM dual'),
+    ['keyword:SELECT', 'number:1', 'ident:e', 'keyword:FROM', 'keyword:dual'],
+    '指数标记后缺少数字时不能吞并标识符');
+}
+console.log('  ✓ number scanning verified');
+
+console.log('Test 15: DBUI-02 Oracle path literal & MySQL backslash modes...');
+{
+  // Oracle 普通字符串只处理成对单引号，路径中的反斜杠不是转义符
+  const pathSql = "select 'C:\\dir\\' as p from dual;";
+  const pathLiterals = referenceLiterals(pathSql, { dialect: 'oracle' });
+  assert.deepStrictEqual(pathLiterals, ["string:'C:\\dir\\'"], '参考扫描器必须把路径字面量视为一个整体');
+  const formattedPath = service.formatSQL(pathSql, { dialect: 'oracle' });
+  assert.deepStrictEqual(referenceLiterals(formattedPath, { dialect: 'oracle' }), pathLiterals,
+    'Oracle 路径字面量必须在格式化前后逐字节一致: ' + JSON.stringify(formattedPath));
+  if (sqliteModule) {
+    assert.deepStrictEqual(sqliteScalar(sqliteRunnable(formattedPath)), 'C:\\dir\\',
+      'Oracle 路径字面量执行结果必须不变');
+  }
+
+  const backslashSql = "SELECT 'a\\'b' FROM t";
+  const mysqlDefault = service.tokenizeSQL(backslashSql, { dialect: 'mysql' })
+    .filter(t => t.type === 'string').map(t => t.value);
+  assert.deepStrictEqual(mysqlDefault, ["'a\\'b'"],
+    'MySQL 默认模式下反斜杠转义引号，整段是一个字符串');
+
+  const mysqlNoEscape = service.tokenizeSQL(backslashSql, { dialect: 'mysql', sqlMode: 'STRICT_TRANS_TABLES,NO_BACKSLASH_ESCAPES' })
+    .filter(t => t.type === 'string').map(t => t.value);
+  assert.deepStrictEqual(mysqlNoEscape, ["'a\\'", "' FROM t"],
+    'NO_BACKSLASH_ESCAPES 下反斜杠不是转义符，字符串在第二个引号处结束: ' + JSON.stringify(mysqlNoEscape));
+
+  const oracleMode = service.tokenizeSQL(backslashSql, { dialect: 'oracle' })
+    .filter(t => t.type === 'string').map(t => t.value);
+  assert.deepStrictEqual(oracleMode, ["'a\\'", "' FROM t"],
+    'Oracle 普通字符串不处理反斜杠转义: ' + JSON.stringify(oracleMode));
+}
+console.log('  ✓ Oracle path literal & MySQL backslash modes verified');
+
+console.log('Test 16: DBUI-02 dialect options are threaded through the whole chain...');
+{
+  // formatSQL / formatRange 必须把 dialect 传给词法分析
+  const oracleSql = "select '\\' || 'select' as txt from dual;";
+  assert.deepStrictEqual(
+    referenceLiterals(service.formatSQL(oracleSql, { dialect: 'oracle' }), { dialect: 'oracle' }),
+    referenceLiterals(oracleSql, { dialect: 'oracle' }),
+    'formatSQL 必须透传 dialect');
+
+  const range = service.formatRange(oracleSql, 0, oracleSql.length, { dialect: 'oracle' });
+  assert.deepStrictEqual(
+    referenceLiterals(range.text, { dialect: 'oracle' }),
+    referenceLiterals(oracleSql, { dialect: 'oracle' }),
+    'formatRange 必须透传 dialect');
+
+  // MySQL 默认模式与 Oracle 模式对同一文本必须给出不同词法结果，
+  // 证明 dialect 真的到达了词法分析而不是被忽略。
+  assert.notDeepStrictEqual(
+    service.tokenizeSQL(oracleSql, { dialect: 'mysql' }).map(t => t.type + ':' + t.value),
+    service.tokenizeSQL(oracleSql, { dialect: 'oracle' }).map(t => t.type + ':' + t.value),
+    'dialect 必须影响词法分析结果');
+}
+console.log('  ✓ dialect threading verified');
+
 console.log('\nAll sql-format-service tests passed successfully! ✓');

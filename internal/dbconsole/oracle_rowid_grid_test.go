@@ -19,9 +19,16 @@ func TestRewriteOracleQueryForHiddenRowID(t *testing.T) {
 			wantMatch: `SELECT "EMP".*, ROWIDTOCHAR("EMP".ROWID) AS "__KAIRO_EDIT_RID__" FROM EMP`,
 		},
 		{
+			// DB-01: 未加引号的小写别名在 Oracle 中是大写 T，注入引用必须先按同一规则规范化。
 			name:      "Wildcard with alias",
 			sql:       "SELECT t.* FROM SCOTT.EMP t WHERE DEPTNO = 10",
-			wantMatch: `SELECT t.*, ROWIDTOCHAR("t".ROWID) AS "__KAIRO_EDIT_RID__" FROM SCOTT.EMP t WHERE DEPTNO = 10`,
+			wantMatch: `SELECT t.*, ROWIDTOCHAR("T".ROWID) AS "__KAIRO_EDIT_RID__" FROM SCOTT.EMP t WHERE DEPTNO = 10`,
+		},
+		{
+			// DB-01: 显式加双引号的别名保持精确大小写，不能改成大写。
+			name:      "Wildcard with quoted lowercase alias",
+			sql:       `SELECT "t".* FROM SCOTT.EMP "t" WHERE DEPTNO = 10`,
+			wantMatch: `SELECT "t".*, ROWIDTOCHAR("t".ROWID) AS "__KAIRO_EDIT_RID__" FROM SCOTT.EMP "t" WHERE DEPTNO = 10`,
 		},
 		{
 			name:      "Explicit columns without alias",
@@ -31,7 +38,7 @@ func TestRewriteOracleQueryForHiddenRowID(t *testing.T) {
 		{
 			name:      "Explicit columns with alias and order by",
 			sql:       "SELECT t.EMPNO, t.ENAME FROM EMP t ORDER BY t.EMPNO ASC",
-			wantMatch: `SELECT t.EMPNO, t.ENAME, ROWIDTOCHAR("t".ROWID) AS "__KAIRO_EDIT_RID__" FROM EMP t ORDER BY t.EMPNO ASC`,
+			wantMatch: `SELECT t.EMPNO, t.ENAME, ROWIDTOCHAR("T".ROWID) AS "__KAIRO_EDIT_RID__" FROM EMP t ORDER BY t.EMPNO ASC`,
 		},
 		{
 			name:      "Already rewritten",

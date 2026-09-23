@@ -50,9 +50,89 @@
   ]);
 
   /**
-   * Tokenize SQL source text into an array of tokens with exact value preservation.
+   * Normalize lexical options.  Oracle ordinary strings only honour paired single
+   * quotes; MySQL additionally honours backslash escapes unless NO_BACKSLASH_ESCAPES
+   * is active.
    */
-  function tokenizeSQL(source) {
+  function normalizeLexOptions(options) {
+    const opts = options || {};
+    const dialect = String(opts.dialect || opts.kind || 'oracle').toLowerCase();
+    const sqlMode = String(opts.sqlMode || '').toUpperCase();
+    const mysql = dialect.indexOf('mysql') >= 0 || dialect.indexOf('mariadb') >= 0;
+    return {
+      dialect: dialect,
+      mysql: mysql,
+      backslashEscapes: mysql && !/NO_BACKSLASH_ESCAPES/.test(sqlMode),
+      sqlMode: sqlMode
+    };
+  }
+
+  /**
+   * Scan a quoted literal ('' doubling, and MySQL-style backslash escapes).
+   * Returns the exclusive end offset.
+   */
+  function scanQuotedLiteral(text, start, opts) {
+    const quote = text[start];
+    let j = start + 1;
+    while (j < text.length) {
+      const c = text[j];
+      if (c === quote) {
+        if (text[j + 1] === quote) { j += 2; continue; }
+        j++;
+        break;
+      }
+      if (opts.backslashEscapes && quote !== '`' && c === '\\') { j += 2; continue; }
+      j++;
+    }
+    return j;
+  }
+
+  /**
+   * Scan a numeric token with an explicit state machine: integer digits, an
+   * optional fractional part, and an optional exponent whose sign may only
+   * follow the exponent marker.
+   * `--`, `/*`, `..` and any other character terminate the token immediately, so a
+   * line comment can never be swallowed into a number (DBUI-02).
+   * Returns the exclusive end offset (always > start).
+   */
+  function scanNumberToken(text, start) {
+    const n = text.length;
+    const isDigit = function (ch) { return ch >= '0' && ch <= '9'; };
+    let j = start;
+
+    // 十六进制字面量单独成支：0x1A / 0X1a。MySQL 之外不是合法字面量，
+    // 但格式化器仍按一个 token 原样保留，避免把字节序列拆开。
+    if (text[j] === '0' && (text[j + 1] === 'x' || text[j + 1] === 'X')) {
+      let k = j + 2;
+      while (k < n && /[0-9A-Fa-f]/.test(text[k])) k++;
+      if (k > j + 2) return k;
+    }
+
+    while (j < n && isDigit(text[j])) j++;
+    // 小数部分：点后必须紧跟数字，且不能是 ".."（那是独立的运算符）
+    if (text[j] === '.' && text[j + 1] !== '.' && isDigit(text[j + 1] || '')) {
+      j++;
+      while (j < n && isDigit(text[j])) j++;
+    }
+    // 指数部分：e/E 之后允许一个紧邻的正负号，但必须再有数字
+    if (text[j] === 'e' || text[j] === 'E') {
+      let k = j + 1;
+      if (text[k] === '+' || text[k] === '-') k++;
+      if (isDigit(text[k] || '')) {
+        k++;
+        while (k < n && isDigit(text[k])) k++;
+        j = k;
+      }
+    }
+    return j > start ? j : start + 1;
+  }
+
+  /**
+   * Tokenize SQL source text into an array of tokens with exact value preservation.
+   * options: { dialect, sqlMode } —— dialect 决定普通字符串的反斜杠语义与注释前缀。
+   */
+  function tokenizeSQL(source, options) {
+    const opts = normalizeLexOptions(options);
     const text = String(source == null ? '' : source);
     const tokens = [];
     let i = 0;
@@ -88,8 +168,8 @@
         continue;
       }
 
-      // 3. Comments: Single line # (MySQL style)
-      if (c === '#' && (i === 0 || /\s/.test(text[i - 1]))) {
+      // 3. Comments: Single line # (MySQL style only)
+      if (opts.mysql && c === '#' && (i === 0 || /\s/.test(text[i - 1]))) {
         let end = text.indexOf('\n', i + 1);
         if (end < 0) end = text.length;
         push('comment', start, end);
@@ -133,13 +213,13 @@
         }
       }
 
-      // 7. Oracle Q-quotes: q'[...]', Q'!...!', nq'[...]', etc.
+      // 7. Oracle Q-quotes: q'[...]', Q'!...!', nq'[...]', etc.（MySQL 方言下不是 q-quote）
       let isQQuote = false;
       let qPrefixLen = 0;
-      if ((c === 'q' || c === 'Q') && next === "'") {
+      if (!opts.mysql && (c === 'q' || c === 'Q') && next === "'") {
         isQQuote = true;
         qPrefixLen = 2; // q'
-      } else if ((c === 'n' || c === 'N') && (next === 'q' || next === 'Q') && text[i + 2] === "'") {
+      } else if (!opts.mysql && (c === 'n' || c === 'N') && (next === 'q' || next === 'Q') && text[i + 2] === "'") {
         isQQuote = true;
         qPrefixLen = 3; // nq'
       }
@@ -158,19 +238,11 @@
         }
       }
 
-      // 8. National string literal N'...' or n'...'
+      // 8. National string literal N'...' / n'...'（按方言处理引号与反斜杠）
       if ((c === 'n' || c === 'N') && next === "'") {
-        let j = i + 2;
-        while (j < text.length) {
-          if (text[j] === "'") {
-            if (text[j + 1] === "'") { j += 2; continue; }
-            j++;
-            break;
-          }
-          j++;
-        }
-        push('string', start, j);
-        i = j;
+        const end = scanQuotedLiteral(text, i + 1, opts);
+        push('string', start, end);
+        i = end;
         continue;
       }
 
@@ -190,19 +262,9 @@
 
       // 10. Standard Strings & Quoted Identifiers: '...', "...", `...`
       if (c === "'" || c === '"' || c === '`') {
-        const quote = c;
-        let j = i + 1;
-        while (j < text.length) {
-          if (text[j] === quote) {
-            if (text[j + 1] === quote) { j += 2; continue; }
-            j++;
-            break;
-          }
-          if (text[j] === '\\' && quote !== '`') j += 2;
-          else j++;
-        }
-        push(quote === "'" ? 'string' : 'quoted-ident', start, j);
-        i = j;
+        const end = scanQuotedLiteral(text, i, opts);
+        push(c === "'" ? 'string' : 'quoted-ident', start, end);
+        i = end;
         continue;
       }
 
@@ -252,12 +314,11 @@
         continue;
       }
 
-      // 15. Numbers: 123, 12.34, .5, 1e-4, 0x1A
+      // 15. Numbers: 显式状态机（整数 / 小数 / 指数 / 十六进制）
       if ((c >= '0' && c <= '9') || (c === '.' && next >= '0' && next <= '9')) {
-        let j = i + 1;
-        while (j < text.length && /[0-9A-Fa-f_xX.eE+-]/.test(text[j])) j++;
-        push('number', start, j);
-        i = j;
+        const end = scanNumberToken(text, i);
+        push('number', start, end);
+        i = end;
         continue;
       }
 
@@ -299,6 +360,104 @@
 
     return tokens;
   }
+
+  /**
+   * Independent fidelity scanner (deliberately NOT the main lexer): it only walks
+   * character states to collect string / quoted-identifier / parameter / comment
+   * values in order.  It never reuses tokenizeSQL so a defective lexer cannot
+   * certify its own output (DBUI-02).
+   */
+  function scanFidelityTokens(text, opts) {
+    const out = [];
+    const n = text.length;
+    let i = 0;
+    while (i < n) {
+      const c = text[i];
+      const d = text[i + 1] || '';
+      if (c === '-' && d === '-') {
+        let e = text.indexOf('\n', i);
+        if (e < 0) e = n;
+        out.push('c:' + text.slice(i, e));
+        i = e;
+        continue;
+      }
+      if (opts.mysql && c === '#' && (i === 0 || /\s/.test(text[i - 1]))) {
+        let e = text.indexOf('\n', i);
+        if (e < 0) e = n;
+        out.push('c:' + text.slice(i, e));
+        i = e;
+        continue;
+      }
+      if (c === '/' && d === '*') {
+        const e = text.indexOf('*/', i + 2);
+        const take = e < 0 ? n : e + 2;
+        out.push('c:' + text.slice(i, take));
+        i = take;
+        continue;
+      }
+      let qPrefix = 0;
+      if (!opts.mysql && (c === 'q' || c === 'Q') && d === "'") qPrefix = 2;
+      else if (!opts.mysql && (c === 'n' || c === 'N') && (d === 'q' || d === 'Q') && text[i + 2] === "'") qPrefix = 3;
+      if (qPrefix) {
+        const opener = text[i + qPrefix];
+        const closer = ({ '[': ']', '{': '}', '(': ')', '<': '>' }[opener] || opener) + "'";
+        const e = text.indexOf(closer, i + qPrefix + 1);
+        const take = e < 0 ? n : e + closer.length;
+        out.push('s:' + text.slice(i, take));
+        i = take;
+        continue;
+      }
+      const isNString = (c === 'n' || c === 'N') && d === "'";
+      if (c === "'" || c === '"' || c === '`' || isNString) {
+        const quoted = c === "'" || isNString;
+        const quote = (c === '"' || c === '`') ? c : "'";
+        // 独立实现的引号扫描（刻意不与主 lexer 共用函数，避免同源缺陷互相背书）。
+        let j = isNString ? i + 2 : i + 1;
+        while (j < n) {
+          if (text[j] === quote) {
+            if (text[j + 1] === quote) { j += 2; continue; }
+            j++;
+            break;
+          }
+          if (opts.backslashEscapes && quote !== '`' && text[j] === '\\') { j += 2; continue; }
+          j++;
+        }
+        out.push((quoted ? 's:' : 'q:') + text.slice(i, j));
+        i = j;
+        continue;
+      }
+      if (c === ':' && /[A-Za-z0-9_$#\u0080-\uffff]/.test(d)) {
+        let j = i + 1;
+        while (j < n && /[A-Za-z0-9_$#\u0080-\uffff]/.test(text[j])) j++;
+        out.push('p:' + text.slice(i, j));
+        i = j;
+        continue;
+      }
+      if (c === '?') { out.push('p:?'); i++; continue; }
+      if (c === '{' && d === '{') {
+        const e = text.indexOf('}}', i + 2);
+        if (e >= 0) { out.push('p:' + text.slice(i, e + 2)); i = e + 2; continue; }
+      }
+      i++;
+    }
+    return out;
+  }
+
+  /**
+   * Formatting must preserve every string, quoted identifier, parameter and
+   * comment verbatim and in order.  When that cannot be proven the caller returns
+   * the original SQL unchanged instead of corrupted-but-plausible SQL (DBUI-02).
+   */
+  function fidelityPreserved(before, after, opts) {
+    const a = scanFidelityTokens(before, opts);
+    const b = scanFidelityTokens(after, opts);
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) {
+      if (a[i] !== b[i]) return false;
+    }
+    return true;
+  }
+
 
   /**
    * Format SQL tokens into beautifully indented, structured SQL code.
@@ -661,18 +820,41 @@
   }
 
   /**
+   * Last fidelity/exception diagnostic produced by formatSQL, or null when the
+   * previous format call was proven faithful (DBUI-02).
+   */
+  let lastFormatDiagnostic = null;
+
+  /**
    * Main format function.
-   * Safe, lossless and idempotent.
+   * Safe, lossless and idempotent: the dialect/sqlMode decide how strings and
+   * comments are lexed, and the result is only returned when an independent
+   * fidelity scan proves that literals, identifiers, parameters and comments are
+   * byte-identical and in the same order (DBUI-02).
    */
   function formatSQL(source, options) {
     if (source == null) return '';
     const text = String(source);
     if (!text.trim()) return '';
 
+    const lexOptions = normalizeLexOptions(options);
     try {
-      const tokens = tokenizeSQL(text);
-      return formatTokens(tokens, options);
+      const tokens = tokenizeSQL(text, lexOptions);
+      const formatted = formatTokens(tokens, options);
+      if (!fidelityPreserved(text, formatted, lexOptions)) {
+        // 保真校验失败：原样返回并记录原因，绝不返回可能改变语义的格式化结果。
+        lastFormatDiagnostic = {
+          reason: '格式化会改变字符串/引用标识符/参数/注释的内容或顺序，已返回原 SQL',
+          dialect: lexOptions.dialect,
+          sqlMode: lexOptions.sqlMode
+        };
+        console.warn('sqlFormatService: ' + lastFormatDiagnostic.reason);
+        return text;
+      }
+      lastFormatDiagnostic = null;
+      return formatted;
     } catch (err) {
+      lastFormatDiagnostic = { reason: '格式化异常，已返回原 SQL: ' + (err && err.message ? err.message : err), dialect: lexOptions.dialect };
       console.warn('sqlFormatService: format error, returning original', err);
       return text;
     }
@@ -790,7 +972,8 @@
     format: formatSQL,
     formatTokens: formatTokens,
     formatRange: formatRange,
-    formatInEditor: formatInEditor
+    formatInEditor: formatInEditor,
+    lastFormatDiagnostic: function () { return lastFormatDiagnostic; }
   };
 
   W.sqlFormatService = service;

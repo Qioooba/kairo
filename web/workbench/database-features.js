@@ -69,6 +69,8 @@
     history: [],
     historyKey: '',
     bindings: Object.create(null),
+    parameterScanPending: '',
+    parameterScanText: '',
     gridMutations: [],
     fieldCache: Object.create(null),
     sourceCatalog: Object.create(null),
@@ -476,25 +478,198 @@
     if (text.slice(start).trim() || !result.length) result.push({ start: start, end: text.length, text: text.slice(start), index: result.length });
     return result;
   }
-  function findParameters(source) {
-    const text = String(source || '');
-    if (text.length > MAX_SQL_HIGHLIGHT) return [];
+  // ---- 绑定参数扫描（DBUI-04）----
+  // 高亮可以按 MAX_SQL_HIGHLIGHT 降级；执行所需的参数语义扫描不能降级成“没有参数”。
+  const PARAM_SCAN_CHUNK = 64 * 1024;
+  const PARAM_SCAN_SYNC_BUDGET_MS = 24;
+  const PARAM_NAME = /[A-Za-z0-9_$#\u0080-\uffff]/;
+
+  function nowMs() {
+    if (typeof performance !== 'undefined' && performance && typeof performance.now === 'function') return performance.now();
+    return Date.now();
+  }
+  function lexicalOptions() {
+    return { dialect: dialect() };
+  }
+  // 增量参数扫描器：只识别字符串/注释边界与 :name、:1、?、{{name}}，
+  // 状态可跨块续扫，因此分块扫描与整段扫描结果完全一致。
+  function createParameterScanner() {
+    const lex = lexicalOptions();
+    const mysql = lex.dialect === 'mysql';
+    return {
+      mysql: mysql,
+      mode: 'normal', // normal | line | block | single | double | backtick | qquote
+      quote: '',
+      qCloseChar: '',
+      qClosePending: false,
+      bracePending: false
+    };
+  }
+  function scanParameterChunk(chunk, scanner, onParameter) {
+    for (let i = 0; i < chunk.length; i++) {
+      const c = chunk[i], n = chunk[i + 1] || '';
+      if (scanner.mode === 'line') {
+        if (c === '\n') scanner.mode = 'normal';
+        continue;
+      }
+      if (scanner.mode === 'block') {
+        if (c === '*' && n === '/') { scanner.mode = 'normal'; i++; }
+        continue;
+      }
+      if (scanner.mode === 'qquote') {
+        // q-quote 的结束符是两个字符（例如 ]'），跨块时用 pending 标记衔接。
+        if (scanner.qClosePending) {
+          scanner.qClosePending = false;
+          if (c === "'") { scanner.mode = 'normal'; continue; }
+        }
+        if (c === scanner.qCloseChar) {
+          if (n === "'") { scanner.mode = 'normal'; i++; continue; }
+          if (n === '') { scanner.qClosePending = true; continue; }
+        }
+        continue;
+      }
+      if (scanner.mode === 'single' || scanner.mode === 'double' || scanner.mode === 'backtick') {
+        const quote = scanner.quote;
+        if (c === quote) {
+          if (n === quote) { i++; continue; }
+          scanner.mode = 'normal';
+          continue;
+        }
+        if (scanner.mysql && quote !== '`' && c === '\\') { i++; continue; }
+        continue;
+      }
+      // normal
+      if (c === '-' && n === '-') { scanner.mode = 'line'; i++; continue; }
+      if (scanner.mysql && c === '#' && (i === 0 || /\s/.test(chunk[i - 1]))) { scanner.mode = 'line'; continue; }
+      if (c === '/' && n === '*') { scanner.mode = 'block'; i++; continue; }
+      if ((c === 'q' || c === 'Q') && n === "'" && !scanner.mysql && i + 2 < chunk.length) {
+        const opener = chunk[i + 2];
+        scanner.mode = 'qquote';
+        scanner.qCloseChar = ({ '[': ']', '{': '}', '(': ')', '<': '>' }[opener] || opener);
+        i += 2;
+        continue;
+      }
+      if ((c === 'n' || c === 'N') && (n === 'q' || n === 'Q') && chunk[i + 2] === "'" && !scanner.mysql && i + 3 < chunk.length) {
+        const opener = chunk[i + 3];
+        scanner.mode = 'qquote';
+        scanner.qCloseChar = ({ '[': ']', '{': '}', '(': ')', '<': '>' }[opener] || opener);
+        i += 3;
+        continue;
+      }
+      if ((c === 'n' || c === 'N') && n === "'") {
+        scanner.mode = 'single';
+        scanner.quote = "'";
+        i++;
+        continue;
+      }
+      if (c === "'" || c === '"' || c === '`') {
+        scanner.mode = c === "'" ? 'single' : c === '"' ? 'double' : 'backtick';
+        scanner.quote = c;
+        continue;
+      }
+      if (scanner.bracePending) {
+        scanner.bracePending = false;
+        if (c === '{') {
+          const end = chunk.indexOf('}}', i + 1);
+          if (end >= 0) {
+            const name = chunk.slice(i + 1, end).trim();
+            if (name) onParameter({ name: name, token: '{{' + name + '}}' });
+            i = end + 1;
+            continue;
+          }
+        }
+      }
+      if (c === '{' && n === '{') {
+        const end = chunk.indexOf('}}', i + 2);
+        if (end >= 0) {
+          const name = chunk.slice(i + 2, end).trim();
+          if (name) onParameter({ name: name, token: chunk.slice(i, end + 2) });
+          i = end + 1;
+          continue;
+        }
+        continue;
+      }
+      if (c === '{' && n === '') { scanner.bracePending = true; continue; }
+      if (c === ':' && PARAM_NAME.test(n)) {
+        let j = i + 1;
+        while (j < chunk.length && PARAM_NAME.test(chunk[j])) j++;
+        onParameter({ name: chunk.slice(i + 1, j), token: chunk.slice(i, j) });
+        i = j - 1;
+        continue;
+      }
+      if (c === '?') {
+        onParameter({ name: '?', token: '?' });
+        continue;
+      }
+    }
+  }
+
+  // 扫描绑定参数。返回至少 {status:'ready'|'pending'|'error', parameters}。
+  // 选项：cursor/selectionStart/selectionEnd 决定只扫描将要执行的那条语句；
+  //      chunkBudgetMs 控制单次同步预算（0 表示不限时，用于后台续扫）。
+  function scanParameters(source, options) {
+    const opts = options || {};
+    const text = String(source == null ? '' : source);
+    const scanner = createParameterScanner();
     const seen = new Set(), result = [];
     let qCount = 0;
-    tokenizeSQL(text).forEach(function (token) {
-      if (token.type !== 'param') return;
-      if (token.name === '?') { qCount++; return; }
-      if (!token.name) return;
-      const key = token.name.toLowerCase();
+    let failed = null;
+    const collect = function (param) {
+      if (!param || !param.name) return;
+      if (param.name === '?') { qCount++; return; }
+      const key = String(param.name).toLowerCase();
       if (seen.has(key)) return;
       seen.add(key);
-      result.push({ name: token.name, token: token.value });
-    });
-    // The API contract uses the parameter name as the bind key.  Positional
-    // placeholders therefore use the same pure numeric keys as Oracle's :1,
-    // :2 binds; the question mark remains only the source token/label.
+      result.push({ name: param.name, token: param.token });
+    };
+
+    const budget = typeof opts.chunkBudgetMs === 'number' ? opts.chunkBudgetMs : PARAM_SCAN_SYNC_BUDGET_MS;
+    const started = nowMs();
+    let offset = 0;
+    let status = 'ready';
+    try {
+      while (offset < text.length) {
+        const end = Math.min(text.length, offset + PARAM_SCAN_CHUNK);
+        scanParameterChunk(text.slice(offset, end), scanner, collect);
+        offset = end;
+        if (offset < text.length && budget > 0 && nowMs() - started > budget) {
+          status = 'pending';
+          break;
+        }
+      }
+    } catch (error) {
+      failed = error;
+      status = 'error';
+    }
+    if (failed) {
+      return { status: 'error', parameters: [], complete: false, scanned: offset, total: text.length, error: String(failed && failed.message ? failed.message : failed) };
+    }
+    // 位置参数 ? 与 Oracle 的 :1、:2 使用同一套纯数字键；? 只保留来源 token。
     for (let i = 0; i < qCount; i++) result.push({ name: String(i + 1), token: '?' });
-    return result;
+    return { status: status, parameters: result, complete: status === 'ready', scanned: offset, total: text.length };
+  }
+
+  // 真正要执行的那条语句（与 database.js 的 editorSQL() 使用同一套 statementModel 语义）。
+  function executionText() {
+    const text = sqlText();
+    const model = W.statementModel;
+    const target = editor();
+    if (!text || !model || (typeof model.normalize !== 'function' && typeof model.current !== 'function')) return text;
+    const cursor = target && Number.isFinite(target.selectionStart) ? target.selectionStart : 0;
+    const selectionEnd = target && Number.isFinite(target.selectionEnd) ? target.selectionEnd : cursor;
+    try {
+      if (typeof model.normalize === 'function') {
+        const picked = model.normalize(text, cursor, cursor, selectionEnd, { dialect: dialect() });
+        if (picked && typeof picked.text === 'string') return picked.text;
+      }
+      const current = model.current(text, cursor, cursor, selectionEnd, { dialect: dialect() });
+      if (current && typeof current.text === 'string') return current.text;
+    } catch (_) {}
+    return text;
+  }
+
+  function findParameters(source, options) {
+    return scanParameters(source, options).parameters;
   }
   function typedParameters(values) {
     values = values || {};
@@ -508,12 +683,61 @@
       };
     });
   }
-  function pruneBindings() {
-    const params = findParameters(sqlText()), allowed = Object.create(null), current = state.bindings || {};
-    params.forEach(function (param) { allowed[String(param.name).toLowerCase()] = param.name; });
+  function allowedParameterNames(params) {
+    const allowed = Object.create(null);
+    (params || []).forEach(function (param) { allowed[String(param.name).toLowerCase()] = param.name; });
+    return allowed;
+  }
+  // 只有“已完成且对应当前 SQL”的扫描结果才允许删除绑定（DBUI-04）。
+  function applyParameterPrune(params) {
+    const allowed = allowedParameterNames(params), current = state.bindings || {};
     const next = Object.create(null);
-    Object.keys(current).forEach(function (name) { const canonical = allowed[String(name).toLowerCase()]; if (canonical) next[canonical] = current[name]; });
+    Object.keys(current).forEach(function (name) {
+      const canonical = allowed[String(name).toLowerCase()];
+      if (canonical) next[canonical] = current[name];
+    });
     state.bindings = next;
+  }
+  function pruneBindingsAgainst(scan) {
+    if (!scan || scan.status !== 'ready') return false;
+    applyParameterPrune(Array.isArray(scan.parameters) ? scan.parameters : []);
+    return true;
+  }
+  function scheduleParameterScanContinuation(text) {
+    if (state.parameterScanPending === text) return;
+    state.parameterScanPending = text;
+    schedule(function () {
+      if (state.parameterScanPending !== text) return;
+      state.parameterScanPending = '';
+      // 修订号或编辑器内容已经变化：旧文本的扫描结果不得用于裁剪绑定。
+      if (state.parameterScanText !== text || sqlText() !== text) return;
+      const scan = scanParameters(text, { chunkBudgetMs: 0 });
+      pruneBindingsAgainst(scan);
+    });
+  }
+  function pruneBindings() {
+    const text = sqlText();
+    state.parameterScanText = text;
+    const scan = scanParameters(text);
+    if (scan.status !== 'ready') {
+      // 扫描未完成：保留原绑定，后台分块续扫后再裁剪。
+      scheduleParameterScanContinuation(text);
+      return;
+    }
+    applyParameterPrune(scan.parameters);
+  }
+  // 执行路径：只按“将要执行的语句”取参数；扫描不可用时保留已有绑定，绝不静默清空。
+  function getBoundParametersForExecution() {
+    const scan = scanParameters(executionText());
+    const bindings = state.bindings || {};
+    if (scan.status !== 'ready') return typedParameters(bindings);
+    const allowed = allowedParameterNames(scan.parameters);
+    const selected = Object.create(null);
+    Object.keys(bindings).forEach(function (name) {
+      const canonical = allowed[String(name).toLowerCase()];
+      if (canonical) selected[canonical] = bindings[name];
+    });
+    return typedParameters(selected);
   }
   function parseErrorLocation(message) {
     const text = String(message || '');
@@ -895,7 +1119,13 @@
   }
 
   function openParameterDialog() {
-    const params = findParameters(sqlText());
+    const scan = scanParameters(executionText());
+    if (scan.status === 'pending' || scan.status === 'error') {
+      // 扫描未完成时不能把“还没扫完”说成“没有参数”，更不能清空已有绑定。
+      toast(scan.status === 'pending' ? 'SQL 较长，绑定参数仍在扫描，请稍后重试' : '绑定参数扫描失败：' + (scan.error || '未知错误'), 'warn');
+      return;
+    }
+    const params = scan.parameters;
     if (!params.length) { toast('当前 SQL 没有发现绑定参数（支持 :name、{{name}} 和 ?）', 'info'); return; }
     const body = document.createElement('div');
     body.innerHTML = '<p class="db-pro-modal-note">绑定值会发送到 <code>kairo:database-bindings</code> 事件。后端接入绑定变量后可直接执行；默认不把值拼回 SQL。</p><div class="db-pro-bind-grid">' + params.map(function (param, index) { return '<label>' + esc(param.name) + '<input class="editor-input db-pro-bind-value" data-name="' + esc(param.name) + '" data-index="' + index + '" type="text" autocomplete="off"></label>'; }).join('') + '</div><label class="db-pro-check"><input id="db-pro-bind-apply" type="checkbox"> 仅本地预览：将值安全转义后替换到编辑器</label>';
@@ -1813,7 +2043,13 @@
   F.formatSQL = formatSQL;
   F.splitStatements = splitStatements;
   F.findParameters = findParameters;
-  F.getBoundParameters = function () { pruneBindings(); return typedParameters(state.bindings); };
+  F.scanParameters = scanParameters;
+  F.getBoundParameters = getBoundParametersForExecution;
+  // 绑定缓存接口：页面层与测试可以读取/写入当前页签的绑定值。
+  // 扫描未完成时不会破坏性裁剪，只有确认完成的扫描结果才能删除参数（DBUI-04）。
+  F.setBindings = function (values) { state.bindings = Object.assign(Object.create(null), values || {}); };
+  F.getBindings = function () { return Object.assign({}, state.bindings || {}); };
+  F.pruneBindingsAgainst = pruneBindingsAgainst;
   F.parseErrorLocation = parseErrorLocation;
   F.locationOffset = locationOffset;
   F.jumpToLocation = jumpToLocation;
