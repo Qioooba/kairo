@@ -1223,7 +1223,17 @@
           return cachedMatched.join(' AND ');
         }
       }
-      // 依据当前行已知字段动态回查基表对应主键
+      // 1.3 P1（审核第 3 项）：结果里已经携带的 Oracle ROWID 优先于任何"回查猜测"。
+      // 旧顺序把回查放在前面，于是 `SELECT ROWID, NAME FROM APP.T`（ROWID 列被隐藏）时，
+      // 明明结果里已经有精确的 ROWID，却先按可见列回查主键并命中任意一条同名记录。
+      const earlyRowidIdx = state.columns.findIndex(c => cleanIdent(c.name).toUpperCase() === 'ROWID');
+      if (earlyRowidIdx >= 0 && row[earlyRowidIdx]) {
+        return 'ROWID = ' + sqlValueLiteral(row[earlyRowidIdx], state.columns[earlyRowidIdx].database_type);
+      }
+      // 1.4 依据当前行已知字段动态回查基表对应主键。
+      // P1（审核第 3 项）：**禁止**用非唯一字段 + ROWNUM<=1 / LIMIT 1 猜行身份——
+      // 那只会拿到任意第一条匹配记录（两行 NAME 相同时，用户选中的第二行会被定位成第一行）。
+      // 这里最多取两行，只有唯一命中才认账；0 行或 ≥2 行都必须放弃定位，由调用方拒绝生成。
       const source = effectiveSource();
       if (source && tableName && tableName !== 'TARGET_TABLE') {
         const target = detectTableTarget();
@@ -1237,14 +1247,10 @@
 
         let pkQuery = 'SELECT ' + pks.map(cleanIdent).join(', ') + ' FROM ' + fullTable;
         if (rowConditions) pkQuery += ' WHERE ' + rowConditions;
-        if (source.kind === 'oracle') {
-          pkQuery += (rowConditions ? ' AND ' : ' WHERE ') + 'ROWNUM <= 1';
-        } else {
-          pkQuery += ' LIMIT 1';
-        }
+        pkQuery += (rowConditions ? ' AND ' : ' WHERE ') + (source.kind === 'oracle' ? 'ROWNUM <= 2' : 'LIMIT 2');
 
         const res = await executeQuickQuery(source.id, pkQuery);
-        if (res && res.rows && res.rows.length > 0) {
+        if (res && res.rows && res.rows.length === 1) {
           const fetchedRow = res.rows[0];
           row._pks = row._pks || {};
           const dbMatched = [];
@@ -1277,14 +1283,21 @@
       return cleanIdent(state.columns[idIdx].name) + ' = ' + sqlValueLiteral(row[idIdx], state.columns[idIdx].database_type);
     }
 
-    // 4. 兜底匹配行原值
-    const conditions = visibleColumns().map(i => {
-      const colName = cleanIdent(state.columns[i].name);
-      const v = row[i];
-      if (v === null || v === undefined) return colName + ' IS NULL';
-      return colName + ' = ' + sqlValueLiteral(v, state.columns[i].database_type);
-    });
-    return conditions.join(' AND ');
+    // 4. P1（审核第 3 项）：无法证明唯一行身份时**停止生成行级 UPDATE**。
+    // 旧实现在这里退回"用所有可见列拼 WHERE"的兜底，两行在这些列上取值相同时
+    // 生成的 UPDATE 会一次改掉多行；调用方拿到空串会拒绝生成并提示用户。
+    return '';
+  }
+
+  // 生成行级 UPDATE 前的统一定位闸门（审核第 3 项）：拿不到可证明唯一的 WHERE 条件就拒绝，
+  // 绝不退回空条件或"非唯一字段 + ROWNUM<=1"的猜测。
+  async function rowWhereClauseOrRefuse(row, pks, table, rowIdx) {
+    const whereClause = await buildWhereClause(row, pks, table, rowIdx);
+    if (!whereClause) {
+      toast('无法唯一确定这一行的身份（结果里没有主键 / ROWID，也无法唯一定位），已取消生成 UPDATE 语句', 'err');
+      return null;
+    }
+    return whereClause;
   }
 
   async function copyCellAsUpdate(rowIdx, colIdx) {
@@ -1296,7 +1309,8 @@
     const val = dirty ? dirty.newVal : row[colIdx];
     const valLit = sqlValueLiteral(val, state.columns[colIdx].database_type);
     const pks = await getTablePrimaryKeys(table);
-    const whereClause = await buildWhereClause(row, pks, table, rowIdx);
+    const whereClause = await rowWhereClauseOrRefuse(row, pks, table, rowIdx);
+    if (!whereClause) return;
     const updateSQL = 'UPDATE ' + table + ' SET ' + colName + ' = ' + valLit + ' WHERE ' + whereClause + ';';
     copyDBText(updateSQL, '已复制 UPDATE 语句到剪贴板');
   }
@@ -1311,7 +1325,8 @@
       const val = dirty ? dirty.newVal : row[i];
       return cleanIdent(state.columns[i].name) + ' = ' + sqlValueLiteral(val, state.columns[i].database_type);
     }).join(', ');
-    const whereClause = await buildWhereClause(row, pks, table, rowIdx);
+    const whereClause = await rowWhereClauseOrRefuse(row, pks, table, rowIdx);
+    if (!whereClause) return;
     const updateSQL = 'UPDATE ' + table + ' SET ' + setClauses + ' WHERE ' + whereClause + ';';
     copyDBText(updateSQL, '已复制 ' + colIndices.length + ' 列 UPDATE 语句到剪贴板');
   }
@@ -1329,7 +1344,8 @@
       const val = dirty ? dirty.newVal : row[i];
       return cleanIdent(state.columns[i].name) + ' = ' + sqlValueLiteral(val, state.columns[i].database_type);
     }).join(', ');
-    const whereClause = await buildWhereClause(row, pks, table, rowIdx);
+    const whereClause = await rowWhereClauseOrRefuse(row, pks, table, rowIdx);
+    if (!whereClause) return;
     const updateSQL = 'UPDATE ' + table + ' SET ' + setClauses + ' WHERE ' + whereClause + ';';
     copyDBText(updateSQL, '已复制整行 UPDATE 语句到剪贴板');
   }
@@ -1347,7 +1363,8 @@
       const val = dirty ? dirty.newVal : row[i];
       return cleanIdent(state.columns[i].name) + ' = ' + sqlValueLiteral(val, state.columns[i].database_type);
     }).join(', ');
-    const whereClause = await buildWhereClause(row, pks, table, rowIdx);
+    const whereClause = await rowWhereClauseOrRefuse(row, pks, table, rowIdx);
+    if (!whereClause) return;
     const content = '-- Exported from Kairo Database Workbench\nUPDATE ' + table + ' SET ' + setClauses + ' WHERE ' + whereClause + ';\nCOMMIT;\n';
     downloadBlob(new Blob([content], { type: 'text/sql;charset=utf-8' }), table + '_row_' + (rowIdx + 1) + '_update.sql');
   }

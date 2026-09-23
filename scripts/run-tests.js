@@ -35,6 +35,7 @@ const UNIT_TESTS = [
   'tests/tab-lifecycle-review-regression.test.js',
   'tests/database-session-source-binding.test.js',
   'tests/database-update-multi-col-scroll.test.js',
+  'tests/database-row-identity-update.test.js',
   'tests/sql-format-service.test.js',
   'tests/grid-edit-plan-contract.test.js',
   'tests/grid-edit-plan-wire.test.js',
