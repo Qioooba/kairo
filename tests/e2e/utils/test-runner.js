@@ -276,11 +276,21 @@ class TestRunner {
           try { await hook.call(this, ctx); } catch (e) { /* ignore */ }
         }
 
+        let timeoutHandle = null;
+        let rejectTimeout = null;
         try {
           const timeoutMs = Number(test.timeout || suite.timeout || process.env.TEST_TIMEOUT) || 180000;
+          // 超时定时器必须在用例结束后清理: 曾经它从不 clearTimeout, 于是每个用例都留下
+          // 一个存活到 timeoutMs 的定时器, 整个 run() 结束后事件循环仍被占住 ——
+          // index.js 因为末尾 process.exit() 才掩盖了这一点, 而任何按常规方式退出的
+          // 消费者(包括本仓库的 runner 单测)都会白等 180 秒, 且定时器数量随用例数线性增长。
+          timeoutHandle = setTimeout(
+            () => rejectTimeout(new Error('测试超时 (' + Math.round(timeoutMs / 1000) + 's)')),
+            timeoutMs
+          );
           await Promise.race([
             test._fn.call(this, ctx),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('测试超时 (' + Math.round(timeoutMs / 1000) + 's)')), timeoutMs))
+            new Promise((_, reject) => { rejectTimeout = reject; })
           ]);
           if (test._skipped) {
             testResult.status = 'skipped';
@@ -315,6 +325,12 @@ class TestRunner {
             // ignore screenshot errors
           }
         } finally {
+          // 见上方说明: 超时定时器必须随用例结束释放, 否则进程无法正常退出。
+          if (timeoutHandle !== null) {
+            clearTimeout(timeoutHandle);
+            timeoutHandle = null;
+          }
+          rejectTimeout = null;
           for (const hook of allAfterEach) {
             try { await hook.call(this, ctx); } catch (e) { /* ignore */ }
           }

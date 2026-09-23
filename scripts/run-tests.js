@@ -32,6 +32,7 @@ const UNIT_TESTS = [
   'tests/sql-format-service.test.js',
   'tests/grid-edit-plan-contract.test.js',
   'tests/e2e-registration.test.js',
+  'tests/e2e-runner.test.js',
   'tests/grid-orderby-phase0-regression.test.js',
   'tests/database-sql-editor-performance.test.js'
 ];
