@@ -203,7 +203,7 @@ DOM 不重建（只切 `.db-main` / `.db-sql-layout` 的 class 与 CSS 变量）
 
 | 文件 | 增 | 删 |
 | --- | --- | --- |
-| `web/pages/database.js` | 384 | 9 |
+| `web/pages/database.js` | 385 | 9 |
 | `web/style.css` | 167 | 0 |
 | `web/app.test.js` | 12 | 0 |
 | `tests/e2e/tests/14-database-workbench.js` | 147 | 0 |

@@ -111,7 +111,7 @@
 | `tests/e2e-registration.test.js` | 只扫描 `tests/e2e/tests/*.js`，`run-real-*-clicks.js` 等仍写死 `D:\kairo-test-runtime\...` 绝对路径 |
 | `docs/Kairo_Review_Implementation_20260922.md:1071-1073` | §10 复跑方法引用了仓库里不存在的脚本（`compare-tabs-repros.js` 等），需注明依赖外部证据包 |
 | `docs/REVIEW-FIX-20260922-A-H.md:396` | `npm test` 写成 20/20（正确为 21/21） |
-| `docs/DATABASE-WORKBENCH-SPLIT-LAYOUT-DESIGN.md:206` | 记 `database.js +384/-9`，实际 `+385/-9`（总数 722 正确） |
+| `docs/DATABASE-WORKBENCH-SPLIT-LAYOUT-DESIGN.md:206` | 记 `database.js +384/-9`，实际 `+385/-9`（总数 722 正确）——**已修正** |
 
 ### 已确认但明确不改（记录以免误判）
 - `internal/dbconsole/grid_plan.go:595/609` 前导注释被替换成空格后 `clean[6:fromIdx]` 会切错（`/* c */ SELECT a FROM t`）；与改动前**逐字相同**，非本轮引入。
