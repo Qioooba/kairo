@@ -1398,6 +1398,7 @@ function loadDatabaseHelpers(navigatorMock) {
     + extractDb('isMacPlatform') + '\n'
     + extractDb('sqlTableContext') + '\n'
     + extractDb('sqlEmptyTableSlot') + '\n'
+    + extractDb('qualifierCompletion') + '\n'
     + extractDb('suggestSQL') + '\n'
     + extractDb('buildSuggestions') + '\n'
     + extractDb('isLargeSQL') + '\n'
@@ -1583,6 +1584,24 @@ function testDatabaseWorkbenchLazy() {
   assert.ok(dbSrc.indexOf("name: 'db.complete'") >= 0, '页面层应注册 db.complete（Ctrl+Space）命令');
   assert.ok(dbSrc.indexOf('retryTableWarmup') >= 0, '对象池为空时应能自动补拉表名');
   assert.ok(dbSrc.indexOf('sqlEmptyTableSlot') >= 0, '应存在空表名槽位判定 sqlEmptyTableSlot');
+
+  // 9. 列名联想（`别名.` / `别名.前缀`）：只给字段、1 个字符即触发、点后为空给全量字段。
+  const fields = ['ID', 'ORDER_NO', 'AMOUNT'];
+  const dotEmpty = db.suggestSQL('SELECT * FROM t_order t WHERE t.', 30, { fields: fields, objects: ['t_order'], snippets: [] }, { allowEmpty: true });
+  assert.deepStrictEqual(dotEmpty.items.map(function (x) { return x.kind; }), ['field', 'field', 'field'],
+    '别名点号后应只给字段（不混入表名/关键字）: ' + JSON.stringify(dotEmpty.items));
+  assert.strictEqual(dotEmpty.start, 30, '插入起点应在点号之后（不含限定符）');
+  const dotOne = db.suggestSQL('SELECT * FROM t_order t WHERE t.o', 31, { fields: fields, snippets: [] });
+  assert.deepStrictEqual(dotOne.items.map(function (x) { return x.label; }), ['ORDER_NO'], '别名 + 1 个字符应能筛选字段');
+  const tableQualified = db.suggestSQL('SELECT * FROM t_order WHERE t_order.', 35, { fields: fields, snippets: [] }, { allowEmpty: true });
+  assert.ok(tableQualified.items.some(function (x) { return x.label === 'ID'; }), '直接用表名限定也应给字段');
+  const notQualifier = db.suggestSQL('SELECT 1.5 FROM dual', 16, { fields: fields, snippets: [] }, { allowEmpty: true });
+  assert.ok(!notQualifier.items.some(function (x) { return x.kind === 'field'; }), '数字字面量 1.5 不得被当成限定符');
+  const inString = db.suggestSQL("SELECT 'x.y", 11, { fields: fields, snippets: [] }, { allowEmpty: true });
+  assert.strictEqual(inString.items.length, 0, '字符串内的点号不得触发列名联想');
+  assert.ok(dbSrc.indexOf('resolveQualifierTable') >= 0, '应存在别名→表名解析 resolveQualifierTable');
+  assert.ok(dbSrc.indexOf('qualifierFieldCache') >= 0, '应存在按表字段缓存 qualifierFieldCache');
+  assert.ok(dbSrc.indexOf('inspectedFieldsFor') >= 0, '正在查看的对象字段应可零延迟复用');
 
   console.log('  database SQL tabs helpers: format / suggest / brackets / snippetExpandKey / parseSnippetsText / formatSnippetsText ✓');
 }

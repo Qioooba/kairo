@@ -66,6 +66,7 @@
     sessions: [], activeId: 0, redisKeyBase64: '', redisType: '', redisCursor: '0', redisNextCursor: '0', redisCursorHistory: [], redisOffset: 0, redisPageSize: 100, redisMembersHasNext: false,
     dirtyCells: {}, isEditMode: false,
     schemaTableCache: {}, schemaCategoryCache: {}, metadataCache: {},
+    qualifierFieldCache: {}, qualifierFieldPending: {},
     tableWarmupRetryAt: 0, tableWarmupError: ''
   };
   let tabSeq = 0;
@@ -4657,10 +4658,34 @@
     }
     return false;
   }
+  // `别名.` / `别名.前缀`（也支持 `schema.表.`）解析：返回限定符与点号后的前缀（可为空）。
+  // 只在非字符串/注释位置生效；数字字面量（1.5）不匹配，因为限定符必须以字母/下划线/`$`/`#` 开头。
+  function qualifierCompletion(text, cursor) {
+    const tokens = tokenizeSQL(text);
+    for (let i = 0; i < tokens.length; i++) {
+      const tok = tokens[i], end = tok.start + tok.value.length;
+      if (cursor > tok.start && cursor <= end && (tok.type === 'string' || tok.type === 'comment')) return null;
+    }
+    const before = String(text || '').slice(0, cursor);
+    const m = before.match(/([A-Za-z_$#][A-Za-z0-9_$#]*(?:\.[A-Za-z_$#][A-Za-z0-9_$#]*)*)[ \t]*\.[ \t]*([A-Za-z0-9_$#]*)$/);
+    if (!m) return null;
+    const parts = m[1].split('.');
+    const prefix = m[2] || '';
+    return { qualifier: parts[parts.length - 1], prefix: prefix, start: cursor - prefix.length, end: cursor };
+  }
   function suggestSQL(text, cursor, extras, options) {
     extras = extras || {};
     options = options || {};
     const force = options.force === true;
+    // 列名位置（`t.` / `t.id`）优先：只给该表的字段，不混入表名与关键字。
+    const qual = qualifierCompletion(text, cursor);
+    if (qual) {
+      if (!extras.fields || !extras.fields.length) return { items: [], start: qual.start, end: qual.end };
+      if (force || options.allowEmpty || qual.prefix.length >= 1) {
+        return buildSuggestions(qual.start, qual.end, qual.prefix, extras, false, true);
+      }
+      return { items: [], start: qual.start, end: qual.end };
+    }
     const tableCtx = sqlTableContext(text, cursor);
     const ctx = completionPrefix(text, cursor);
     // 表名位置放宽触发条件（本轮修复"SELECT 里表名不联想"）：
@@ -4676,7 +4701,8 @@
     return buildSuggestions(ctx.start, ctx.end, ctx.prefix, extras, tableCtx);
   }
   // buildSuggestions 是 suggestSQL 的候选构造部分（触发条件与候选构造分离，便于上面放宽规则）。
-  function buildSuggestions(start, end, prefix, extras, tableCtx) {
+  // fieldsOnly=true 时只给字段（用于 `别名.` 列名位置，不混入表名/关键字）。
+  function buildSuggestions(start, end, prefix, extras, tableCtx, fieldsOnly) {
     const needle = String(prefix || '').toLowerCase();
     const seen = new Set();
     const items = [];
@@ -4686,11 +4712,13 @@
       seen.add(key);
       items.push({ label: label, kind: kind, insert: insert || label });
     };
-    (extras.snippets || []).forEach(function (s) {
-      if (s && s.enabled !== false && s.key && String(s.key).toLowerCase() === needle) add(s.key, 'snippet', s.text);
-    });
-    SQL_KEYWORDS.forEach(function (k) { add(k.toUpperCase(), 'keyword'); });
-    (extras.objects || []).forEach(function (n) { add(n, 'object'); });
+    if (!fieldsOnly) {
+      (extras.snippets || []).forEach(function (s) {
+        if (s && s.enabled !== false && s.key && String(s.key).toLowerCase() === needle) add(s.key, 'snippet', s.text);
+      });
+      SQL_KEYWORDS.forEach(function (k) { add(k.toUpperCase(), 'keyword'); });
+      (extras.objects || []).forEach(function (n) { add(n, 'object'); });
+    }
     (extras.fields || []).forEach(function (n) { add(n, 'field'); });
     items.sort(function (a, b) {
       const rank = tableCtx
@@ -4899,6 +4927,67 @@
     const s = sess();
     if (s) s.sql = ta.value;
   }
+  // 限定符 → 真实表名（`FROM t_order t WHERE t.` 的 `t` → `t_order`；`t_order.` 也直接命中）。
+  // 解析不到就返回空串：宁可不出候选，也不要拿一个不存在的表名去查元数据。
+  function resolveQualifierTable(text, qualifier) {
+    const q = String(qualifier || '').toLowerCase();
+    if (!q) return '';
+    const re = /\b(?:from|join|update|into)\s+((?:[A-Za-z_$#][\w$#]*\.)?[A-Za-z_$#][\w$#]*)(?:\s+(?:as\s+)?([A-Za-z_$#][\w$#]*))?/gi;
+    let m;
+    while ((m = re.exec(String(text || '')))) {
+      const table = m[1], alias = m[2];
+      if (alias && alias.toLowerCase() === q) return table;
+      if (table.split('.').pop().toLowerCase() === q) return table;
+    }
+    return '';
+  }
+  // 把用户手输的表名规范化成元数据里的真实拼写（Oracle 常全大写，用户常小写输入）。
+  function canonicalTableTarget(schema, table) {
+    const parts = String(table || '').replace(/["`]/g, '').split('.');
+    const rawObject = parts.pop() || '';
+    const rawSchema = parts.join('.') || schema || '';
+    const pool = [].concat((rawSchema && state.schemaTableCache[rawSchema]) || [], (rawSchema && state.metadataCache[rawSchema]) || []);
+    let object = rawObject;
+    for (let i = 0; i < pool.length; i++) {
+      if (String(pool[i]).toLowerCase() === rawObject.toLowerCase()) { object = pool[i]; break; }
+    }
+    return { schema: rawSchema, object: object };
+  }
+  function qualifierFieldKey(schema, object) {
+    return [(state.source && state.source.id) || '', schema || '', object || ''].join('|');
+  }
+  // 正在查看的对象（左侧对象树/详情）字段可直接复用，`t.` 零延迟出候选。
+  function inspectedFieldsFor(schema, object) {
+    const info = state.inspect;
+    if (!info || !info.fields || !info.fields.length) return [];
+    if (String(info.object || '').toLowerCase() !== String(object || '').toLowerCase()) return [];
+    if (info.schema && schema && String(info.schema).toUpperCase() !== String(schema).toUpperCase()) return [];
+    return info.fields.map(function (f) { return f && f.name; }).filter(Boolean);
+  }
+  function cachedQualifierFields(schema, object) {
+    const hit = state.qualifierFieldCache[qualifierFieldKey(schema, object)];
+    if (!hit) return null;
+    if (Date.now() - hit.at > 5 * 60 * 1000) return null;
+    return hit.fields;
+  }
+  function loadQualifierFields(schema, object) {
+    const key = qualifierFieldKey(schema, object);
+    if (state.qualifierFieldPending[key]) return state.qualifierFieldPending[key];
+    const source = state.source;
+    if (!source || !object) return Promise.resolve([]);
+    const token = state.workspaceToken;
+    const pending = api('GET', '/api/database/metadata/fields?source_id=' + encodeURIComponent(source.id) + '&schema=' + encodeURIComponent(schema || '') + '&object=' + encodeURIComponent(object))
+      .then(function (data) {
+        if (token !== state.workspaceToken) return [];
+        const fields = (data.fields || []).map(function (f) { return f && f.name; }).filter(Boolean);
+        state.qualifierFieldCache[key] = { fields: fields, at: Date.now() };
+        return fields;
+      })
+      .catch(function () { return []; })
+      .then(function (fields) { delete state.qualifierFieldPending[key]; return fields; });
+    state.qualifierFieldPending[key] = pending;
+    return pending;
+  }
   function updateComplete(ta, force) {
     if (!ta || !ta.value) { hideComplete(); return; }
     const val = ta.value;
@@ -4908,7 +4997,22 @@
     const isBig = val.length > 30000;
     const sliceText = isBig ? val.slice(windowStart, windowEnd) : val;
     const slicePos = isBig ? (pos - windowStart) : pos;
-    const extras = completionExtras();
+    let extras = completionExtras();
+    // 列名位置：解析别名→表，取该表字段池（正在查看的对象可零延迟命中；
+    // 否则异步拉一次，取回后重算候选，用户不必再敲一个字符）。
+    const qual = qualifierCompletion(sliceText, slicePos);
+    if (qual) {
+      const target = canonicalTableTarget(currentSchema(), resolveQualifierTable(sliceText, qual.qualifier));
+      let fields = target.object ? inspectedFieldsFor(target.schema, target.object) : [];
+      if (!fields.length && target.object) fields = cachedQualifierFields(target.schema, target.object) || [];
+      if (!fields.length && target.object) {
+        loadQualifierFields(target.schema, target.object).then(function (loaded) {
+          if (loaded.length && q('db-sql') === ta) updateComplete(ta, force);
+        });
+        fields = [];
+      }
+      extras = Object.assign({}, extras, { fields: fields });
+    }
     const found = suggestSQL(sliceText, slicePos, extras, { force: force === true, allowEmpty: true });
     // 表名位置但对象池为空：多半是预热请求失败或响应被丢弃，而旧实现把预热失败静默吞掉，
     // 用户只能看到关键字（例如 FROM us 只提示 USING），完全看不到表名且毫无解释。

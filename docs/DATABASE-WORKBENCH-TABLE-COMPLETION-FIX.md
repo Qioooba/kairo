@@ -1,8 +1,9 @@
-# 数据库工作台：表名联想不可用问题定位与修复（2026-09-23）
+# 数据库工作台：表名 / 列名联想修复与优化（2026-09-23）
 
 - 现象：在 SQL 编辑器里写 `SELECT ... FROM ...` 时看不到表名联想（只有关键字偶有提示）
 - 结论：**不是今天（2026-09-23）30 个提交引入的回归**，而是 2026-09-02 / 09-09 就存在的三处历史缺陷叠加
-- 状态：已修复并通过真实浏览器验收（含"元数据预热失败仍可自愈"用例）
+- 本次同时补齐了原先偏弱的 `别名.列名` 联想（第 3.6 节）
+- 状态：已修复并通过真实浏览器验收（含"元数据预热失败仍可自愈"与"列名联想"用例）
 
 ---
 
@@ -68,6 +69,13 @@ false：命令永不触发，`maybeContextCompletion` 还会顺手把已有的�
    并把失败原因记到 `state.tableWarmupError` 便于诊断。
 5. **预热键与查询键对齐**：`loadSchemas` / `db-schema.onchange` 改用 `currentSchema()`（含占位值回退）
    作为预热键，修掉"预热了 A、查询查 B"的错位。
+6. **`别名.列名` 联想（本轮追加优化）**：新增 `qualifierCompletion()` 识别 `别名.` / `别名.前缀`
+   （也支持 `schema.表.`），并新增 `resolveQualifierTable()` 把别名解析成真实表名
+   （`FROM t_order t ... WHERE t.` → `t_order`；直接写表名限定也命中）。
+   字段池按 `source|schema|object` 缓存（5 分钟），正在查看的对象（`state.inspect`）零延迟复用；
+   首次遇到某张表时异步取一次 `/api/database/metadata/fields` 并在返回后重算候选。
+   小写表名会按 `schemaTableCache` 规范化为元数据里的真实拼写（Oracle 常全大写）。
+   列名位置**只给字段**，不混入表名与关键字；数字字面量（`1.5`）与字符串内的点号不会误触发。
 
 ## 4. 验收（修复后实测）
 
@@ -82,17 +90,27 @@ false：命令永不触发，`maybeContextCompletion` 还会顺手把已有的�
 | `Ctrl+Space`（弹层已收起） | 不出现 | **出现 12 条**；再按一次收起 |
 | `SELECT ` + `Ctrl+Space`（非表名位置） | 不出现 | **强制出现全量候选** |
 | 预热首次失败（HTTP 500） | 永远无表名 | 输入表名首字母时**自动补拉成功**并弹出表名，无需刷新 |
+| `WHERE t.`（别名 + 点号） | 无候选 | **5 个字段**（`AMOUNT / CREATED_AT / ID / ORDER_NO / STATUS`，只给字段不混关键字） |
+| `WHERE t.o` | 无候选（列名要 2 字符） | **只筛出 ORDER_NO** |
+| `WHERE t_order.`（表名限定） | 无候选 | **5 个字段** |
+| 小写 `from t_order o` + `o.` | 无候选 | 按元数据真实拼写（大写）取到字段 |
+| 同一张表再次 `t.` | — | 命中按表缓存，**不再请求** fields 接口 |
+| 对象树里查看过该表后再 `t.` | — | 复用 `state.inspect` 字段，**零延迟零请求** |
 
-自动化回归：`web/app.test.js` 新增 8 条断言（空前缀/1 字符/表名后空格不误弹/逗号后/非表名位置仍 2 字符/
-Ctrl+Space 强制/`db.complete` 注册/自愈函数存在），`web/app.test.js` 29/29 通过；
-`npm test` 21/21；左右分栏 48/48；Redis 6/6；5 主题 5/5；e2e 1/1。
+自动化回归：`web/app.test.js` 新增 16 条断言（表名 8 条 + 列名 8 条：空前缀/1 字符/表名后空格不误弹/逗号后/非表名位置仍 2 字符/
+Ctrl+Space 强制/`db.complete` 注册/自愈函数/别名点号只给字段/插入起点不含限定符/表名限定/数字字面量不误触发/字符串内不触发/缓存与解析函数存在），
+`web/app.test.js` 29/29 通过；`npm test` 21/21；左右分栏 48/48；Redis 6/6；5 主题 5/5；e2e 1/1；
+浏览器列名联想验收 8/8（`tmp/db-column-completion-check.js`），截图
+`tmp/split-layout-e2e/shots/11-popup-tables.png`、`12-popup-columns.png`。
 
-## 5. 仍然存在的限制（本次未做，需要时另开一轮）
+## 5. 仍然存在的限制（本次未做）
 
-1. **`别名.列名` 联想仍弱**：`t.` 之后不给候选，且列名需要 ≥2 字符；字段池来自"当前正在查看的对象"
-   （`state.inspect`），不是按表实时取。真正的按表取字段要走 features 层的 `loadFields(table)`，
-   而那条路在 SQL 工作区被"所有权让位"关掉了——要做得把字段缓存按 `schema.table` 建起来。
-2. **表名联想依赖元数据接口**：`/api/database/metadata/objects?category=tables` 失败时会自愈补拉一次，
-   但连续失败仍是空的；没有把"元数据没加载出来"直接显示给用户。
-3. **Redis 工作区不适用**（无 SQL 编辑器）；MySQL 的库名/schema 语义与 Oracle 的 owner 语义不同，
+1. **字段候选只显示列名，不显示数据类型**：`t.` 弹层里的 `small` 仍是"字段"，
+   数据源已经能拿到 `data_type`/`primary_key`（对象详情页在展示），要显示类型提示需要把
+   `buildSuggestions` 的 item 结构扩成带 `detail` 并同步 `renderComplete`。
+2. **表名/字段联想都依赖元数据接口**：失败时会自愈补拉一次并缓存 5 分钟，但连续失败仍是空的，
+   没有把"元数据没加载出来"直接显示给用户（目前只有对象树会显示加载失败）。
+3. **多处同名/子查询别名不做语义校验**：`resolveQualifierTable` 取 `FROM/JOIN/UPDATE/INTO` 后的
+   第一个匹配（别名优先、表名次之），CTE 与子查询别名不解析；解析不到就不出候选。
+4. **Redis 工作区不适用**（无 SQL 编辑器）；MySQL 的库名/schema 语义与 Oracle 的 owner 语义不同，
    预热键取 `currentSchema()`（MySQL 取 `database`），如需跨库联想需另做。
