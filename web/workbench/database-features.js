@@ -1241,9 +1241,26 @@
         { text: '执行脚本', className: 'btn btn-primary', close: false, onClick: async function (button) {
           button.disabled = true; button.textContent = '执行中…';
           const session = activeSession();
+          // P1（审核第 1 项）：脚本执行的数据源必须来自**活动页签**的绑定信息，
+          // 并与顶部下拉框交叉校验。页签事务 ID 与数据源必须属于同一条绑定，
+          // 否则（例如批量关闭页签后状态没同步）会把 A 的会话拼上 B 的数据源，
+          // 让这条 SQL 落到 B 上执行。
+          const sessionSourceId = session && session.sourceId ? String(session.sourceId) : '';
+          const dropdownSourceId = sourceId();
+          if (sessionSourceId && dropdownSourceId && sessionSourceId !== dropdownSourceId) {
+            button.disabled = false; button.textContent = '执行脚本';
+            toast('当前页签的数据源与顶部选择的数据源不一致，请重新点击该页签后再执行脚本', 'err');
+            return;
+          }
+          const effectiveSourceId = sessionSourceId || dropdownSourceId;
+          if (!effectiveSourceId) {
+            button.disabled = false; button.textContent = '执行脚本';
+            toast('没有可用的数据源，请先选择数据源页签', 'warn');
+            return;
+          }
           const boundValues = state.bindings || {};
           const boundParameters = typedParameters(boundValues);
-          const detail = { sourceId: sourceId(), sourceName: sourceName(), sessionId: session.sessionId || '', statements: statements, script: text, dialect: dialect(), options: { failure_policy: 'rollback', transaction_mode: session.sessionId ? 'session' : 'auto', commit: false }, parameters: boundParameters };
+          const detail = { sourceId: effectiveSourceId, sourceName: sourceName(), sessionId: session.sessionId || '', statements: statements, script: text, dialect: dialect(), options: { failure_policy: 'rollback', transaction_mode: session.sessionId ? 'session' : 'auto', commit: false }, parameters: boundParameters };
           if (sourceIsProduction()) { const productionConfirm = window.confirm('当前数据源标记为生产环境，确认执行脚本？'); if (!productionConfirm) { button.disabled = false; button.textContent = '执行脚本'; return; } detail.confirm = true; }
           emit('kairo:database-script', detail);
           if (state.adapters.script) {

@@ -393,7 +393,7 @@
       state.sessions.push(fresh);
       state.activeId = fresh.id;
       renderTabs();
-      restoreSessionChrome(fresh);
+      activateSessionTab(fresh);
       backupDBSessions({ delay: 500 });
       return;
     }
@@ -402,19 +402,10 @@
       nextActive = state.sessions.find(function (s) { return s.id === state.activeId; }) || state.sessions[0];
     }
     state.activeId = nextActive.id;
-    if (nextActive.type === 'object') {
-      renderTabs();
-      renderObjectViewer(nextActive);
-    } else if (sessionSourceClass(nextActive) === 'orphaned') {
-      // DBUI-03：批量关闭后切到的页签若来源已删除，同样只显示孤儿视图
-      markSessionOrphan(nextActive);
-      bindSession(nextActive);
-      renderOrphanWorkspace(q('db-workspace'), nextActive);
-    } else {
-      hideObjectSession();
-      renderTabs();
-      restoreSessionChrome(nextActive);
-    }
+    renderTabs();
+    // P1（审核第 1 项）：批量关闭后必须复用完整激活流程（含页签数据源 → 顶部数据源同步），
+    // 否则活动页签与页面数据源/下拉框不一致，脚本执行会打到错误的数据源上。
+    activateSessionTab(nextActive);
     backupDBSessions({ delay: 500 });
   }
   function closeSessionsLeft(tabId) {
@@ -499,6 +490,17 @@
     cancelGridPaint();
     state.activeId = id;
     renderTabs();
+    activateSessionTab(s);
+    backupDBSessions({ delay: 1000 });
+  }
+  // 活动页签的统一激活流程：同步顶部数据源 + 需要时重建工作区 + 恢复页签内容。
+  //
+  // P1（审核第 1 项）：批量关闭页签（关闭其他 / 左侧 / 右侧 / 全部）以前直接设 activeId
+  // 再调 restoreSessionChrome，绕过了下面"页签数据源 → 顶部数据源 + 工作区"的同步步骤。
+  // 结果活动页签已经变成 A，页面保存的数据源与 #db-source 下拉框仍停在 B；
+  // 此时"运行脚本"会拿 A 的事务 session_id 拼上 B 的 source_id，把 SQL 发到 B 上执行。
+  function activateSessionTab(s) {
+    if (!s) return;
     if (s.type === 'object') {
       renderObjectViewer(s);
       return;
@@ -509,7 +511,6 @@
       markSessionOrphan(s);
       bindSession(s);
       renderOrphanWorkspace(q('db-workspace'), s);
-      backupDBSessions({ delay: 1000 });
       return;
     }
     // #13：页签保存自己的数据源；切换到不同类型时必须重建可见工作区
@@ -530,7 +531,6 @@
       return;
     }
     restoreSessionChrome(s);
-    backupDBSessions({ delay: 1000 });
   }
   async function closeSession(id) {
     if (state.sessions.length <= 1) return;

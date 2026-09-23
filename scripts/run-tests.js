@@ -33,6 +33,7 @@ const UNIT_TESTS = [
   'tests/files-path-identity.test.js',
   'tests/security-review-followup.test.js',
   'tests/tab-lifecycle-review-regression.test.js',
+  'tests/database-session-source-binding.test.js',
   'tests/database-update-multi-col-scroll.test.js',
   'tests/sql-format-service.test.js',
   'tests/grid-edit-plan-contract.test.js',
