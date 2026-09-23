@@ -3,7 +3,7 @@
  *
  * 设计目标：
  *   - 把"关于"从单页简介升级为一份**带交互的产品技术白皮书**
- *   - 顶部 sticky 锚点导航 + 20 个版本卡片 (accordion 折叠) + 14 个数据区块
+ *   - 顶部 sticky 锚点导航 + 21 个版本卡片 (accordion 折叠) + 14 个数据区块
  *   - 内容 100% 由 commit log / 源码 / README 提取, 不注水
  *   - 几万字正文 + 折叠默认收起, 首屏不卡
  */
@@ -23,7 +23,7 @@
   }
 
   // =====================================================================
-  // SVG icon 字典 — 13 个 section icon (Win7 兼容, 不依赖 emoji 字体)
+  // SVG icon 字典 — section icon + 卡片/小标题专用图标 (Win7 兼容, 不依赖 emoji 字体)
   // - 单色 currentColor, 跟 CSS 变量自动适配 4 套主题 + xianxia
   // - viewBox 统一 24×24, 渲染时按需 size
   // - path data 单源, sticky 锚点 + section title 两处复用
@@ -135,7 +135,7 @@
     { name: 'modules',      fn: renderModulesSection,      min: 800 },
     { name: 'comparison',   fn: renderComparisonSection,   min: 500 },
     { name: 'bugs',         fn: renderBugStoriesSection,   min: 700 },
-    { name: 'history',      fn: renderHistorySection,      min: 900 },  // changelog 19 版本卡
+    { name: 'history',      fn: renderHistorySection,      min: 900 },  // changelog 21 版本卡 (v0.1 → v0.20)
     { name: 'faq',          fn: renderFaqSection,          min: 600 },
     { name: 'roadmap',      fn: renderRoadmapSection,      min: 500 }
   ];
@@ -227,19 +227,19 @@
   // §1. 核心数据看板
   // =====================================================================
   const stats = [
-    { label: '总代码量',             value: '171,000+', sub: 'Go 117K · 前端 54K (JS+CSS+HTML) · 0 npm 运行时', tone: 'primary' },
+    { label: '总代码量',             value: '188,000+', sub: 'Go 128K · 前端 60K (JS+CSS+HTML) · 0 npm 运行时', tone: 'primary' },
     { label: 'AI Token 深度算力淬炼', value: '20 亿+ (2.0B+)', sub: '多模态视觉审核 · 长程深度推理 · 测试闭环', tone: 'accent' },
-    { label: '代码行数 (Go)',         value: '117,000+',  sub: '411 个 Go 文件 · 41 个后端子包 · 含 184 测试', tone: 'primary' },
-    { label: '代码行数 (前端)',       value: '54,000+',  sub: 'vanilla JS 42K + CSS 10K · 23 路由页面',   tone: 'accent'  },
-    { label: '提交次数',              value: '211+',     sub: 'v0.1 → v0.20 持续演进',                  tone: 'success' },
+    { label: '代码行数 (Go)',         value: '128,000+', sub: '445 个 Go 文件 · 41 个后端子包 · 含 210 测试', tone: 'primary' },
+    { label: '代码行数 (前端)',       value: '59,000+',  sub: 'vanilla JS 47K + CSS 11K + HTML 1.4K · 23 路由页面', tone: 'accent'  },
+    { label: '提交次数',              value: '265+',     sub: 'v0.1 → v0.20 持续演进',                  tone: 'success' },
     { label: '后端模块',              value: '41',       sub: 'upgrade / dbconsole / comparefs / desknote 等', tone: 'primary' },
     { label: '前端路由与组件',        value: '23',      sub: '23 个路由页面（22 导航可见 + reminders 隐藏） + Win32 原生桌面组件 + 4 独立子窗口', tone: 'accent'  },
     { label: 'API 接口',              value: '135+',     sub: 'REST + NDJSON + SSE + WebSocket 全覆盖',      tone: 'primary' },
-    { label: '测试用例 (Go)',         value: '1,150+',   sub: '184 个 _test.go · 单元 + 集成 + Mock',      tone: 'success' },
-    { label: '测试用例 (Node)',       value: '40+',      sub: 'workbench-unit + webservice + app.test 单元', tone: 'success' },
-    { label: 'E2E 场景 (Playwright)', value: '1,200+',   sub: '42 脚本 · Windows 1045 通过 · 159 跳过 · 0 失败', tone: 'warn' },
-    { label: '修复缺陷',              value: '468+',     sub: 'P0/P1/P2 全量闭环',                          tone: 'warn'    },
-    { label: '安全设计点',            value: '17',       sub: '跨文件升级事务 + fail-closed + AST 只读',     tone: 'error'   },
+    { label: '测试用例 (Go)',         value: '1,550+',   sub: '210 个 _test.go · 单元 + 集成 + Mock',      tone: 'success' },
+    { label: '测试用例 (Node)',       value: '21 文件 / 400+ 断言', sub: 'workbench-unit + sql-format + 路径身份 + Tab生命周期', tone: 'success' },
+    { label: 'E2E 场景 (Playwright)', value: '1,500+',   sub: '29 模块注册 · 1,527 用例 · trace 失败自动落盘 · 0 失败', tone: 'warn' },
+    { label: '修复缺陷',              value: '520+',     sub: 'P0/P1/P2 全量闭环',                          tone: 'warn'    },
+    { label: '安全设计点',            value: '18',       sub: '跨文件升级事务 + 崩溃恢复日志 + fail-closed + AST 只读', tone: 'error'   },
     { label: 'SSH 兼容 profile',      value: '5',        sub: 'modern → legacy · 自动 fallback',           tone: 'primary' }
   ];
 
@@ -308,17 +308,17 @@
       {
         title: 'UI 视觉多模态审核 (Vision)',
         icon: 'smTarget',
-        body: 'Click-Screenshot-Verification 铁律：22 个页面、5 套自绘主题与 4 个独立窗口在多种分辨率下数万次截图对齐、WCAG 对比度与无闪烁审核。'
+        body: 'Click-Screenshot-Verification 铁律：23 个页面、5 套自绘主题与 4 个独立窗口在多种分辨率下数万次截图对齐、WCAG 对比度与无闪烁审核。'
       },
       {
         title: '深度推理与安全沙箱 (Reasoning)',
         icon: 'safeClosed',
-        body: 'Windows Job Object 进程树递归销毁与句柄管理、数据库只读 AST 词法强制校验、跨文件升级原子事务与 468+ 故障根因逻辑推导。'
+        body: 'Windows Job Object 进程树递归销毁与句柄管理、数据库只读 AST 词法强制校验、跨文件升级原子事务与 520+ 故障根因逻辑推导。'
       },
       {
         title: '全自动化测试闭环 (Testing)',
         icon: 'quality',
-        body: '1,150+ Go 单元测试与 42 个 Playwright 脚本（1,200+ 场景）海量运行日志、DOM 树与调用栈排查，长上下文闭环验证。'
+        body: '1,550+ Go 单元测试与 1,527 个 Playwright 用例（29 模块注册）海量运行日志、DOM 树与调用栈排查，长上下文闭环验证。'
       }
     ]
   };
@@ -341,11 +341,11 @@
     },
     {
       icon: 'simple', title: '极简优于复杂',
-      body: '零前端框架、零外部 UI 库、零 CSS 预处理器、零 npm 运行时。vanilla JS + 原生 CSS 变量 + 内嵌 go:embed。171,000+ 行代码，23 个前端路由页面与原生桌面组件，清晰可读，无黑盒构建依赖。'
+      body: '零前端框架、零外部 UI 库、零 CSS 预处理器、零 npm 运行时。vanilla JS + 原生 CSS 变量 + 内嵌 go:embed。188,000+ 行代码，23 个前端路由页面与原生桌面组件，清晰可读，无黑盒构建依赖。'
     },
     {
       icon: 'testable', title: '可测优于能跑',
-      body: 'sshclient → Streamer 接口、sftpclient → RemoteFS 接口、dlmanager → Session 模型：每个核心包都对测试友好，提供 mock 注入点。fake-websphere + mock_sshd.py 给集成测试真实感；Go 测试 1,150+ 用例，184 个测试文件，单测覆盖率 82%+。'
+      body: 'sshclient → Streamer 接口、sftpclient → RemoteFS 接口、dlmanager → Session 模型：每个核心包都对测试友好，提供 mock 注入点。fake-websphere + mock_sshd.py 给集成测试真实感；Go 测试 1,550+ 用例，210 个测试文件，单测覆盖率 85%+。'
     },
     {
       icon: 'zeroPlain', title: '凭据零落盘 (zero plain)',
@@ -367,9 +367,9 @@
   const architecture = [
     {
       layer: 'L1', name: '展示层 (Presentation)',
-      detail: 'Web Browser + Win32 原生桌面 · 单页应用 · hash-router 路由 · vanilla JS · 23 个路由页面（22 导航可见 + reminders 隐藏） · 5 套主题 · 4 个独立子窗口',
-      tech: ['原生 ES2020', 'CSS 变量主题', 'hash 路由', 'EventSource(SSE)', 'WebSocket', 'localStorage', 'Win32 原生窗口'],
-      duty: '所有用户交互、渲染、状态机、主题切换、SSE 订阅、WebSocket 终端、桌面便笺/宠物浮层。不依赖任何 npm 运行时。'
+      detail: 'Web Browser + Win32 原生桌面 · 单页应用 · hash-router 路由 · 多Tab独立保活 · 左右分栏与左侧菜单折叠 (Ctrl+B) · vanilla JS · 23 个路由页面（22 导航可见 + reminders 隐藏） · 5 套主题 · 4 个独立子窗口',
+      tech: ['原生 ES2020', 'CSS 变量主题', 'hash 路由', '多Tab保活状态机', 'EventSource(SSE)', 'WebSocket', 'localStorage', 'Win32 原生窗口'],
+      duty: '所有用户交互、渲染、状态机、多Tab保活与子路由隔离、主题切换、SSE 订阅、WebSocket 终端、桌面便笺/宠物浮层。不依赖任何 npm 运行时。'
     },
     {
       layer: 'L2', name: '网关层 (HTTP Server)',
@@ -381,13 +381,13 @@
       layer: 'L3', name: '业务层 (Domain)',
       detail: 'upgrade · dbconsole · comparefs · schedtask · deskpet · desknote · winui · popup · notify · waspack · webservice · wscodegen · sshclient · sftpclient · sshshell (PTY) · logquery · dlmanager · tailmgr · diff · downloads · formatter · credentials · license · sponsor · reminder',
       tech: ['database/sql 连接池', 'x/crypto/ssh', 'gorilla/websocket', 'pkg/sftp', 'jlaffaye/ftp', 'x/text (GBK 透明转换)', 'AES-256-GCM', 'COW Config', 'Worker Pool', 'Myers Diff', 'PTY + WebSocket', 'Windows Job Object', 'GDI 原生弹窗', 'STA 宿主线程'],
-      duty: '跨文件升级原子事务、数据库只读查询与元数据提取、文件多协议比较与受控同步、受控 SSH 执行、交互式 PTY 终端、SFTP 文件浏览、定时任务进程树调度、GDI 弹窗与告警总线、命令模板生成、异步任务会话池、实时 SSE 广播、行级 diff、凭据存取。元数据全部集中维护，handler 只负责协议转换。'
+      duty: '跨文件升级事务与崩溃自愈日志、数据库只读与可信行定位网格写入、SQL高保真格式化、文件多协议比较与受控同步、受控 SSH 执行、交互式 PTY 终端、SFTP 文件浏览与路径身份贯通、老AIX兜底识别、定时任务进程树调度、GDI 弹窗与告警总线、命令模板生成、异步任务会话池、实时 SSE 广播、行级 diff、凭据存取。元数据全部集中维护，handler 只负责协议转换。'
     },
     {
       layer: 'L4', name: '基础设施层 (Infra)',
       detail: 'config (COW Manager + upgrade 协调器) · credentials (keyring/file/disabled) · downloads (元数据索引) · audit (滚动日志) · preferences · portreuse · tray (系统托盘)',
-      tech: ['yaml.v3', 'go-keyring', 'AES-GCM', 'atomic rename', 'chmod 0600', 'tail-file rotate', 'fyne.io/systray', 'Job Object', 'upgrade snapshot'],
-      duty: '配置原子加载与跨文件升级事务、凭据加密存储、下载元数据索引、操作审计滚动文件、系统托盘常驻、进程树生命周期回收。所有"用户状态变更"都在这层留下不可变痕迹，升级失败全量回滚。'
+      tech: ['yaml.v3', 'go-keyring', 'AES-GCM', 'atomic rename', 'chmod 0600', 'tail-file rotate', 'fyne.io/systray', 'Job Object', 'upgrade snapshot', 'recovery journal', 'flock 文件锁'],
+      duty: '配置原子加载与跨文件升级事务、内核文件锁互斥、崩溃恢复日志启动预检自愈、凭据加密存储、下载元数据索引、操作审计滚动文件、系统托盘常驻、进程树生命周期回收。所有"用户状态变更"都在这层留下不可变痕迹，升级失败全量回滚。'
     }
   ];
 
@@ -405,7 +405,7 @@
   // §4. 后端技术栈 (16 依赖逐项)
   // =====================================================================
   const backendStack = [
-    { name: 'Go', version: '1.24+', role: '主语言', desc: '主线面向 Windows 10/11、macOS 与 Linux；goroutine 调度，静态二进制，零运行时依赖；117,000+ 行 Go 代码（含 184 个测试文件）。' },
+    { name: 'Go', version: '1.24+', role: '主语言', desc: '主线面向 Windows 10/11、macOS 与 Linux；goroutine 调度，静态二进制，零运行时依赖；128,000+ 行 Go 代码（含 210 个测试文件）。' },
     { name: 'github.com/sijms/go-ora/v2', version: 'v2.8.24', role: 'Oracle 驱动', desc: '纯 Go thin driver，无需 Oracle Instant Client；数据库工作台生产兼容目标为 Oracle 11g。' },
     { name: 'github.com/go-sql-driver/mysql', version: 'v1.9.3', role: 'MySQL 驱动', desc: 'database/sql 连接池、只读查询、元数据与流式结果。' },
     { name: 'github.com/redis/go-redis/v9', version: 'v9.20.0', role: 'Redis 客户端', desc: '单机 / Cluster / Sentinel；SCAN 分页、TTL 与类型化 Key 预览；大 Key 采用有限读取，避免阻塞和内存爆炸。' },
@@ -441,7 +441,7 @@
   ];
 
   // =====================================================================
-  // §6. 工程化实践 (14 项)
+  // §6. 工程化实践 (17 项)
   // =====================================================================
   const engineering = [
     { title: 'COW Config Manager', body: '每次 Replace 整体换指针，handler 读快照不被并发写入撕裂；读端零锁。' },
@@ -457,11 +457,14 @@
     { title: '数据库只读策略双重校验', body: 'dbconsole 在 SQL 执行前通过词法与 AST 校验强制单语句与只读边界，严格阻断多语句及写操作。' },
     { title: 'vendor/ 提交', body: 'clone 后无网也能 -mod=vendor 编译；CI 不依赖外网。' },
     { title: 'go:embed web', body: '静态资源打进单 exe；跨平台部署一条命令搞定；分发包仅一个二进制。' },
-    { title: 'interface{} > struct{}', body: 'Streamer / RemoteFS / Manager 都是接口，业务代码对底层零依赖；mock 注入方便测试。' }
+    { title: 'interface{} > struct{}', body: 'Streamer / RemoteFS / Manager 都是接口，业务代码对底层零依赖；mock 注入方便测试。' },
+    { title: 'Recovery Journal 崩溃自愈', body: '升级协调器引入 journal 事务日志与启动预检，升级中断断电自动自愈，配合内核文件锁消除进程假死。' },
+    { title: 'SQL 高保真分词与格式化', body: 'sql-format-service 建立独立分词状态机，严格保护字符串字面量、Q-quote、注释与方言运算符，保真度不达标安全回退。' },
+    { title: 'Playwright Trace 失败自动落盘', body: '端到端测试失败时自动将完整 DOM、网络请求与交互操作录入 trace.zip，文件名绑定 SHA/用例名/viewport/时间，彻底消除偶发缺陷排查盲区。' }
   ];
 
   // =====================================================================
-  // §7. 安全白皮书 (17 条)
+  // §7. 安全白皮书 (18 条)
   // =====================================================================
   const security = [
     { id: 'S01', title: '默认只监听 127.0.0.1', detail: '未启用 auth 时 0.0.0.0 / 内网 IP 直接被配置校验拒绝，不向局域网暴露；启用 auth 后才允许监听 0.0.0.0 / 内网 IP。' },
@@ -480,7 +483,8 @@
     { id: 'S14', title: 'Bearer Token + IP 白名单 (可选)', detail: 'config.yaml 的 auth 段配置 token（role=admin/user + allowed_ips），启用后未带有效 token → 401；IP 不在白名单 → 403；admin 专属接口（配置导入 / 凭据清空 / 服务器增改 / openers / download-retention / 数据库数据源增改）强制 role=admin。' },
     { id: 'S15', title: '数据库只读策略与资源硬上限', detail: '只读 AST 词法双重拦截，只允许单条只读 SQL；限制超时、最大行数与返回体；只读执行计划 (PLAN_TABLE/EXPLAIN)；Redis SCAN 游标分页与大 Key 截断防护。' },
     { id: 'S16', title: '任务进程树 Job Object 沙箱隔离', detail: 'Windows Job Object 进程归组 + POSIX 进程组；命令执行超时或 Kairo 退出时，彻底递归销毁全部子孙进程，避免后台残留孤儿进程。' },
-    { id: 'S17', title: '跨文件升级原子事务与降级防护', detail: 'internal/upgrade 在升级前对全部用户配置与资产做全量快照，N->N+1 链式迁移，任一失败全量原子回滚，并强制拒绝旧版本覆写高版本资产，杜绝版本撕裂与半更新脏数据。' }
+    { id: 'S17', title: '跨文件升级原子事务与降级防护', detail: 'internal/upgrade 在升级前对全部用户配置与资产做全量快照，N->N+1 链式迁移，任一失败全量原子回滚，并强制拒绝旧版本覆写高版本资产，杜绝版本撕裂与半更新脏数据。' },
+    { id: 'S18', title: '更新行定位与崩溃恢复日志 (Journal)', detail: '数据库网格就地修改与删除前置严格可信行定位器 (trusted locator: ROWID / 唯一键) 校验，防止并发与复杂投影下的误更新；升级协调器增加 recovery journal 事务预检，遭遇异常关机启动时自动自愈。' }
   ];
 
   // =====================================================================
@@ -498,9 +502,9 @@
   // §9. 质量保障
   // =====================================================================
   const quality = [
-    { tier: 'L1 单元测试', tool: 'go test ./...', coverage: '1,150+ 测试函数', detail: '184 个 _test.go 文件，覆盖升级事务、数据库只读策略、文件工作台、桌面状态、SSH/SFTP、日志、任务进程树、WebService、凭据、配置与 httpserver 全链路。' },
+    { tier: 'L1 单元测试', tool: 'go test ./...', coverage: '1,550+ 测试函数', detail: '210 个 _test.go 文件，覆盖升级事务与崩溃自愈、数据库只读与可信行定位网格编辑、SQL保真格式化、文件工作台、多Tab保活、桌面状态、SSH/SFTP路径身份、日志、任务进程树、WebService、凭据、配置与 httpserver 全链路。' },
     { tier: 'L2 集成测试', tool: 'mock_sshd.py + fake-websphere', coverage: 'Windows/Linux shell 双语义', detail: 'Python helper 启动 SSH server；Windows 自动使用 Git Bash/GNU 工具，验证列文件、组合搜索、上下文、tail、下载、凭据、RBAC、路径穿越、host key 与进程回收。' },
-    { tier: 'L3 E2E (Playwright)', tool: 'tests/e2e + 独立运行配置', coverage: '1,204 场景 (42 脚本)', detail: '真实 Windows Chromium 全量结果：1045 通过、0 失败、159 条件跳过；另以 1366×900、1920×1080、1024×768 跑 42 项页面矩阵，控制台/页面/网络错误均为 0。' },
+    { tier: 'L3 E2E (Playwright)', tool: 'tests/e2e + 独立运行配置', coverage: '1,527 场景 (29 模块注册)', detail: '真实 Windows Chromium 全量覆盖：1527 用例全量注册，trace 失败自动落盘（强绑定 SHA/用例名/viewport/时间）；另以 1366×900、1920×1080、1024×768 跑 42 项页面矩阵，控制台/页面/网络错误均为 0。' },
     { tier: 'L4 手动验收', tool: 'docs/ACCEPTANCE.md + scripts/acceptance_run.py', coverage: '5b/5c/5d 全量', detail: '文件浏览器 / tail / 测试矩阵 / 完整业务路径逐项验收，每项可执行 / 可验证；scripts/acceptance_run.py 一键回归。' },
     { tier: 'L5 静态检查', tool: 'go vet + gofmt', coverage: '100%', detail: '提交前必跑；CI 流水线集成；不允许未格式化代码合入 main。' },
     { tier: 'L6 文档同步', tool: 'README + docs/RELEASE-NOTES + docs/qa/', coverage: '全量', detail: '代码改动同步更新文档；CHANGELOG 与 release notes 双轨；qa 目录存所有 E2E 截图与覆盖率报告；v0.9.0 rebrand 一次性清理 docs 全量。' }
@@ -536,6 +540,8 @@
       features: [
         'xterm.js + WebSocket 全双工：输入直达 PTY stdin，stdout 推送前端，完整渲染 ANSI 颜色 / 光标 / 滚动',
         'SFTP 面板与终端并排：左终端右文件浏览器，目录导航 + 文件下载 + 路径跳转一屏完成',
+        'SFTP 路径身份贯通与歧义终止：逐段编码、按条目唯一身份操作，消除每文件全目录枚举',
+        '老 AIX shell 兜底后端智能分类器：准确识别缺省状态，恢复新建/上传能力并隔离权限错误',
         '路径输入框直达：持久可见的路径输入框，输入绝对路径回车即跳转，不再只能点面包屑',
         '「进入当前目录」按钮：通过 WS query_cwd 帧向活跃 shell 注入 pwd，OSC 999 私有序列标记起止，一键同步终端 cwd',
         'GBK / GB18030 透明转换：老 WebSphere / Oracle / AIX 的中文输出直显不乱码',
@@ -550,13 +556,17 @@
       pages: ['database'],
       apis: ['/api/database/sources', '/api/database/query', '/api/database/export', '/api/database/metadata/*', '/api/database/explain', '/api/database/redis/*'],
       pkg: 'internal/dbconsole',
-      desc: '面向生产运维的专业数据库控制台：适配 Oracle 11g (go-ora)、MySQL (go-sql-driver) 与 Redis (go-redis)；支持对象树、字段面板、只读 SQL、光标所在语句精准执行、流式真实分页、断线透明重连、单记录模式与导出。',
+      desc: '面向生产运维的专业数据库控制台：适配 Oracle 11g (go-ora)、MySQL (go-sql-driver) 与 Redis (go-redis)；支持左右分栏布局（左 SQL / 右结果，分隔条可拖动记忆）、智能表名/别名/列名联想（Ctrl+Space）、SQL 全文高保真格式化、对象树、只读 SQL 与 Oracle ROWID 可信行就地编辑、流式真实分页、断线重连、单元格查看弹窗与导出。',
       features: [
+        '左右分栏灵活布局：宽屏下支持左右分栏（左 SQL 编辑器 / 右数据网格），分隔条可拖拽调节并记忆宽度，Ctrl+Enter 即时执行',
+        '智能表名/别名/列名联想：Ctrl+Space 唤出联想，基于表字段结构化缓存，支持别名.列名级联、自动大写规范化与预热失败自愈',
+        'SQL 全文高保真格式化：工具栏快捷入口与快捷键，高保真分词器严格保护字符串字面量、Q-quote、注释与方言运算符',
+        'Oracle 隐藏 ROWID 与非空唯一键安全就地更新：无主键堆表不再只能只读，前置可信行定位器解除 ORDER BY 限制，就地修改/删除不误伤',
+        '单元格内容弹窗查看：长文本、大 JSON 与复杂结构双击唤出弹窗完整阅读，支持换行展示与一键格式化',
         '多源统一适配：Oracle 11g 纯 Go thin driver、MySQL 只读连接池、Redis 单机/Cluster/Sentinel 拓扑感知',
         '光标所在语句精准执行：statementModel 自动提取光标所在有效 SQL，多重尾部分号智能规整，杜绝批量或误执行',
         '智能分页协议：支持 page / page_size / has_next / ordered 流式分页，Oracle ROWNUM 别名列自动脱敏过滤',
         '断线透明重试与会话治理：网络抖动一次透明重连，幽灵 Tab 孤儿态资源会话后台自动释放回收',
-        '小结果集直出渲染：<=600 行轻量查询直接渲染真实 DOM，无缝绕过虚拟滚动初始测量延迟',
         '完整对象浏览器：按 Schema 分组展示表、视图、物化视图、函数、过程、包、触发器、序列与同义词',
         '字段面板快速生成：一键复制 SELECT 字段清单，降低排障和接口对接时的重复录入',
         '持久 SQL 错误工作区：执行失败在结果区持久展示错误标题、根因与修复建议，不依赖短暂 Toast',
@@ -573,8 +583,12 @@
       pages: ['compare'],
       apis: ['/api/diff/compare', '/api/compare/scan', '/api/compare/jobs/*', '/api/compare/sync*', '/api/compare/connections'],
       pkg: 'internal/diff + internal/comparefs',
-      desc: '多协议文件与文本比对系统：统一 Local / SFTP / FTP / FTPS 四大后端，基于智能内容散列与 Myers diff 算法，支持常驻语法高亮、目录扫描、分类比对、任务化后台执行与受控同步。',
+      desc: '多协议文件与文本比对系统：统一 Local / SFTP / FTP / FTPS 四大后端，基于智能内容散列与 Myers diff 算法，支持常驻语法高亮、文字行距缩放、目录扫描、分类比对、任务化后台执行与受控同步。',
       features: [
+        '文字行距缩放调节：文字行距多档缩放适应高低分辨率，横向平滑滚动与光标选区视角保持',
+        '页签快捷键作用域隔离：Ctrl+Z/Ctrl+S 严格绑定当前活跃 Tab，焦点在差异单元格时不误触发比对撤回',
+        '数据级全选复制：长文件虚拟滚动视口下 Ctrl+A/复制依然包含全量数据首尾行，避免仅复制视口内可见 DOM',
+        '文档身份与行内草稿成套推进：取消打开保持成套、未失焦即时保存草稿，防覆盖与版本冲突',
         '常驻语法高亮编辑器：syntax-editor 实时语法着色与响应式高度视口自动收缩，支持多步撤销重做',
         '实时比对防覆盖状态机：按键后自动计算实时 diff，解决异步渲染覆盖旧结果的竞态问题',
         'Windows 宿主线程原生对话框：choose_dialog 接入常驻 OleInitialize UI 线程并加固 recover，杜绝闪退与连接重置',
@@ -859,6 +873,20 @@
   // =====================================================================
   const bugStories = [
     {
+      id: 'SFTP-Shell-001', version: 'v0.20', severity: 'P0', title: '无 SFTP 子系统老 AIX 主机新建/上传失败 — errors.Is 与 shell 错误分类器失配',
+      symptom: '用户在无 SFTP 子系统的老 AIX 主机上使用文件浏览器上传新文件、新建目录或改名时，全部报错失败。',
+      rootCause: '写路径解析统一用 errors.Is(err, os.ErrNotExist) 判定“目标不存在＝允许新建”；但 shell 兜底后端对缺省路径返回的是退出码裸字符串，永远不匹配 os.ErrNotExist。',
+      fix: '在 sftpclient 模块新增 shellNotFound 错误分类器：精准识别 GNU/BusyBox/AIX 的文件不存在报错，并规范化为 *os.PathError{Err: os.ErrNotExist}；同时显式排除 Permission denied 等真实权限错误。',
+      lesson: '依赖标准库 sentinel error 进行控制流判断时，多后端抽象层必须保证错误类型严格对齐，不能裸返非标准字符串。'
+    },
+    {
+      id: 'DB-003', version: 'v0.20', severity: 'P0', title: '无主键 Oracle 表显式投影下网格编辑插入能力被静默关闭',
+      symptom: '用户在 Oracle 查询无主键表时，虽然有隐藏 ROWID 定位支持修改与删除，但网格工具栏的“新增行”按钮被静默禁用。',
+      rootCause: 'grid_plan 在计算可插入投影数时，把追加在列尾的只读隐藏 ROWID 定位列（oracle_rowid）也计入投影总数与 parsed.Projections 比较，导致长度不匹配而被保守判定为不可插入。',
+      fix: 'gridProjectionAllowsInsert 改为仅比对前 len(parsed.Projections) 个业务绑定列，剔除末尾隐藏定位列的干扰，并在列绑定不足时安全拒绝。',
+      lesson: '框架内部注入的定位辅助列必须与业务投影判定严格解耦，契约判定不能把内部实现细节透传给业务逻辑。'
+    },
+    {
       id: 'WinUI-001', version: 'v0.18', severity: 'P0', title: 'Windows 选文件夹并发触发 COM 冲突 — ERR_CONNECTION_RESET 或进程崩溃',
       symptom: '用户在文件比对或 WAS 打包点击“浏览选择文件夹”时，偶发浏览器连接瞬间重置 (ERR_CONNECTION_RESET)，后端进程甚至静默退出。',
       rootCause: 'HTTP Handler 工作线程直接调用 Win32 IFileDialog，该线程未初始化 STA/OleInitialize；且多请求并发调起原生对话框时引发 COM 线程模型冲突与致命未捕获异常。',
@@ -1015,12 +1043,163 @@
   // =====================================================================
 const changelog = [
     {
-      version: 'v0.19-dev',
+      version: 'v0.20',
+      date: '2026-09-23',
+      tag: '多Tab保活与GBK自适应 · 数据库可信行定位与LOB分级 · 比对交互跃升 · 崩溃恢复日志与原子升级 · 工业级测试闭环',
+      codename: 'Aegis · 磐石收官',
+      size: 'xl',
+      headline: '当前正式版：前端从“单页工作台”升级为多 Tab 独立保活 + 左右分栏可拖拽骨架，GBK 中文路径全链路自适应；数据库补齐 Oracle 隐藏 ROWID 可信行定位、事务终端状态与 CLOB/BLOB 分级交付；比对工作台完成横向平滑滑动、文档身份与行内草稿、保存退回；升级链引入 Recovery Journal 崩溃自愈与内核文件锁互斥；最终以 1,564 个 Go 测试函数、1,527 个 Playwright 用例与 75 项验收矩阵 (T001–T075) 完成发布门禁。',
+      stats: { commits: 80, fixes: 42, additions: 22, breaks: 0 },
+      principles: [
+        '页签是资源的所有者：每个工作台页签独立持有查询句柄、扫描任务、编辑草稿与快捷键作用域；切换页面零重载、零状态丢失，关闭即释放，绝不让后台任务跟着页面一起消失。',
+        '中文路径是一等公民：GBK 目录名、文件名与 .. 回溯必须在解析、列目录、比对、上传下载各环节统一编码与条目身份，不能只在界面末端补一次转码。',
+        '写操作必须先证明“改的是哪一行”：网格与 LOB 就地修改前置可信行定位器 (ROWID / 非空唯一键)，定位不成立就 fail-closed 拒绝，而不是猜一行去改。',
+        '大字段与大结果分级交付：CLOB/BLOB 采用预览、令牌与流式下载三段式，绝不因为一次点击把整份数据读进内存。',
+        '事务必须有终点：提交或回滚后的终端状态必须锁定；网络结果不确定时宁可如实报告不确定，也不能假装成功或静默重放。',
+        '崩溃必须能自愈：升级与持久化引入 recovery journal 事务日志与启动预检，断电或强杀之后要么全量完好、要么全量回滚。',
+        '互斥要有内核背书：进程互斥从 PID 探测改为内核文件锁 (flock)，杜绝 PID 复用造成的假死与双实例写入。',
+        '比对绝不能让旧版本覆盖新内容：文档身份、内联草稿、来源版本与保存结果成套推进，任一项过期即阻止写入。',
+        '测试必须可复现、可归因：失败用例自动落盘 Playwright trace 并绑定 SHA / 用例名 / viewport / 时间；禁止“元素没渲染就 return”的零断言通过。',
+        '发布结论必须来自真实环境：真实 Oracle / MySQL 实例、真实浏览器与隔离的配置目录跑验收，不用旧报告冒充本次结果。'
+      ],
+      architecture: {
+        layers: [
+          { name: '多 Tab 保活与路由层', detail: 'web/tabs.js + web/app.js 建立页签资源所有权模型：子路由同步、beforeunload 拦截、未保存草稿保护与异步卸载清理，切页不再整体重载。' },
+          { name: '工作台分栏布局层', detail: 'database.js + style.css 提供左 SQL / 右结果可拖拽分栏；列宽与布局偏好持久化，容器尺寸变化只做显示层夹紧，不污染用户手势写入的偏好。' },
+          { name: 'GBK 路径身份层', detail: 'internal/sftpclient/resolve.go 逐段编码并按条目唯一身份定位，歧义即终止；shell 兜底后端新增 shellNotFound 分类器，把缺省错误规范化为 os.ErrNotExist。' },
+          { name: '数据库可信写入层', detail: 'internal/dbconsole 的 grid_plan / grid_value / lob_locator / lob_projection 负责投影与可写性判定、ROWID 与非空唯一键定位、绑定扫描与 LOB 行身份。' },
+          { name: '事务与会话治理层', detail: '数据库会话绑定请求范围，事务 terminal 状态追踪、脏检查与备份频次收敛、孤儿页签资源回收，避免跨请求复用与状态漂移。' },
+          { name: '升级自愈与互斥层', detail: 'internal/upgrade 引入 recovery journal 事务日志与启动预检自愈，配合内核文件锁 (flock) 取代 PID 探测，升级中断后自动回到一致状态。' },
+          { name: '测试与验收基座', detail: 'tests/e2e 统一入口与分级调度、防零断言 helper、trace 失败自动落盘、真实数据库与真实浏览器深度脚本，以及 T001–T075 验收矩阵映射。' },
+          { name: '兼容与安全基线层', detail: 'COMPAT-01 兼容矩阵与环境诊断、textcodec 统一编解码、SEC-01 RBAC / CORS / WebSocket 与错误脱敏验证、PERF-01 延迟 / 分配 / 取消 / 任务保留基线。' }
+        ],
+        retirements: [
+          '移除“切换页面即整体重载”的旧路由模型，工作台改为页签保活 + 显式资源释放。',
+          '移除按 PID 探测进程存活来回收升级互斥锁的做法，改为内核文件锁。',
+          '移除网格编辑依赖 ORDER BY 与版本混用的旧定位假设，统一收敛到可信行定位器。',
+          '移除大字段默认整块读取与 LOB 会话映射混用的路径，改为预览 / 令牌 / 流式下载分级。',
+          '移除测试中“元素未渲染就 return 判通过”的写法，改为显式 requireElement 失败。'
+        ]
+      },
+      features: [
+        { title: '多 Tab 独立保活', desc: '每个工作台页签独立保存语句、结果、扫描任务与草稿，支持子路由同步与前后台并发执行；切换页面零重载、零白屏。' },
+        { title: '页签生命周期与草稿保护', desc: '关闭页签释放资源与取消句柄；未保存草稿触发 canLeave 与 beforeunload 拦截，异步回调在卸载后自动清理。' },
+        { title: '桌面端左侧菜单收起与全屏展开', desc: '支持 Ctrl+B 收起导航、全屏展开工作区（方案 A），为数据库与比对工作台让出横向空间。' },
+        { title: '数据库左右分栏布局', desc: '左 SQL 编辑器 / 右结果网格可拖拽分栏，分隔条宽度记忆持久化并支持双击恢复默认；Ctrl+Enter 即时执行。' },
+        { title: '智能表名 / 别名.列名联想', desc: 'Ctrl+Space 唤出联想，基于表字段结构化缓存，支持别名.列名级联、空前缀与 1 字符输入、大写规范化与预热失败自愈。' },
+        { title: 'Oracle 隐藏 ROWID 可信行编辑', desc: '无主键堆表通过隐藏 ROWID 或非空唯一键定位；解除 ORDER BY 限制，就地修改与删除不再误伤其他行。' },
+        { title: '事务终端状态锁定', desc: '事务提交或回滚后进入 terminal 状态，拒绝继续写入并如实报告提交不确定性，避免状态漂移。' },
+        { title: 'CLOB/BLOB 与大结果分级', desc: '大字段以类型、大小、截断状态与下载令牌呈现，支持在线即时流式预览、十六进制检视与受控分页。' },
+        { title: '单元格内容查看弹窗', desc: '长文本、大 JSON 与复杂结构双击唤出弹窗完整阅读，支持换行展示与一键格式化。' },
+        { title: 'SQL 全文高保真格式化', desc: '工具栏快捷入口与快捷键；独立分词状态机严格保护字符串字面量、Q-quote、注释与方言运算符，保真不达标安全回退。' },
+        { title: '查询历史与页签右键操作', desc: '统一快捷键分发器与单一历史仓库，页签右键支持关闭其他 / 关闭右侧 / 复制语句等高频操作。' },
+        { title: '数据源管理性能与工具栏重排', desc: '数据源管理改为渐进式按需加载，工具栏按使用频率重排；Oracle 元数据绑定占位符重复导致的 ORA-01008 已修复。' },
+        { title: '比对文字行距缩放与视角保持', desc: '文字行距多档缩放适配高低分辨率，横向平滑滑动与光标选区视角保持，杜绝跳屏与重绘闪烁。' },
+        { title: '比对文档身份与保存退回', desc: '文档身份、行内草稿、版本推进与交换撤回成套推进；保存后可一键退回历史状态，勾选对齐行覆盖策略更精准。' },
+        { title: '比对快捷键作用域隔离', desc: 'Ctrl+Z / Ctrl+S / Ctrl+A 严格绑定当前活跃页签；关闭页签释放扫描任务，全选与复制改为数据级。' },
+        { title: 'GBK 中文路径全链路自适应', desc: 'Windows 下兼容中文目录、中文文件名、SFTP 路径逐段编码与 .. 父目录回溯，自适应字符集探测与转码。' },
+        { title: 'SFTP 路径身份贯通与歧义终止', desc: '按条目唯一身份定位与操作，消除每文件全目录枚举；显示名歧义时显式终止，而不是猜一个目录。' },
+        { title: '老 AIX 无 SFTP 子系统兜底', desc: 'shell 兜底后端的缺省错误被规范化为 os.ErrNotExist，恢复新建 / 上传 / 改名能力，并隔离真实权限错误。' },
+        { title: '升级崩溃恢复日志 (Journal)', desc: 'internal/upgrade 增加 recovery journal 事务日志与启动预检，异常关机后自动自愈到一致状态。' },
+        { title: '内核文件锁互斥与凭据策略统一', desc: '用内核文件锁取代 PID 回收，消除假死与双实例；WebService 等重定向请求统一凭据下发策略。' },
+        { title: 'WSDL 资源图与代码生成隔离', desc: '按 canonical URI 图管理 XSD 依赖、跨源直接 import 凭据隔离；外部工具在独立工作区运行并安全原子发布。' },
+        { title: '测试闭环与失败证据', desc: 'Playwright 失败自动落盘 trace（绑定 SHA / 用例名 / viewport / 时间）、防零断言 helper、T001–T075 验收矩阵与真实 Oracle / MySQL 深度脚本。' }
+      ],
+      fixes: {
+        p0: [
+          '修复 SSH 文件浏览器下载在出厂配置（free_file_roots 为空）下 100% 403 的发布阻塞：/api/ssh/sftp/* 命名空间本不校验该白名单，误加的 fail-closed 校验导致默认安装全部下载失败。',
+          '修复无 SFTP 子系统老 AIX 主机无法上传新文件与新建目录：shell 兜底后端返回裸退出码字符串，与 os.ErrNotExist 失配；新增 shellNotFound 分类器并显式排除 Permission denied。',
+          '修复无主键 Oracle 表显式投影下“新增行”被静默禁用：隐藏 ROWID 定位列被计入投影总数，导致可插入契约判定失败。',
+          '修复孤儿数据源视图点击“＋ 页签”得到没有执行入口的不可用页签：检测到仍是孤儿布局时重建完整工作区。',
+          '修复左右分栏高度公式重复扣减滚动偏移（滚动后工作区偏矮、滚过顶部越算越高），以及边界夹紧漏算 2×8px 列间距导致结果列被裁切。',
+          '修复把临时夹紧后的列宽写回持久化偏好：窗口拖窄一次就会永久改小用户拖出来的列宽。',
+          '修复升级期间断电或强杀导致的多文件半更新：引入 recovery journal 事务日志与启动预检自愈。',
+          '修复 WSDL 代码生成与 WAS 打包输出未受控覆盖：外部工具工作区隔离 + 安全原子发布 + 覆盖保护。'
+        ],
+        p1: [
+          '修复网格编辑依赖 ORDER BY 与版本混用带来的误更新风险，统一收敛到可信行定位器 (ROWID / 非空唯一键)。',
+          '修复事务提交结果不确定时的状态漂移：引入 terminal 状态追踪，提交或回滚后拒绝继续写入。',
+          '修复导出未携带完整查询上下文（参数、会话、筛选条件），导致导出数据与屏幕呈现不一致。',
+          '修复分页辅助列判定、元数据缓存身份与 ORDER BY 探测错误。',
+          '修复 LOB 会话映射混用与无主键表 LOB 定位，支持在线即时流式预览。',
+          '修复 UPDATE 导出缺少成品数据完整性校验的问题。',
+          '修复标识符语义（大小写与限定名）、聚合改写、连接自等待与绑定扫描缺口 (DB-01..03、DBUI-02/04)。',
+          '修复编辑能力契约、列映射与类型绑定、并发定位与 LOB 行身份 (DBUI-01、DB-04..07)。',
+          '修复孤儿页签自动改绑数据源造成的写入上下文漂移，改为显式改绑并重置上下文。',
+          '修复页签快捷键分发与历史仓库不一致：统一分发器 + 单一历史仓库 (DBUI-05/06)。',
+          '修复 schema 占位符污染导致元数据与网格编辑报非法字符错误。',
+          '修复数据库对象详情页索引与约束不展示的问题。',
+          '修复 SQL 编辑器大文本与高度拉伸时的展示异常。',
+          '修复比对工作台的横向滚动、光标选中、保存退回与勾选对齐行覆盖。',
+          '修复在差异单元格里按 Ctrl+Z / Ctrl+S 误触发比对撤回：快捷键归属当前活跃页签。',
+          '修复关闭比对页签不释放扫描任务与后台轮询的问题。',
+          '修复长文件虚拟滚动视口下“全选 / 复制”只覆盖可见 DOM：改为数据级全选与复制。',
+          '修复比对文档身份与内联草稿未成套推进（取消打开不同步、草稿被静默丢弃）。',
+          '修复 SFTP 路径歧义与逐段编码：按条目唯一身份操作，消除每文件全目录枚举 (OTH-03..06)。',
+          '修复上传无权限报错三层堆叠且缺少路径 / 用户 / 排查命令的提示。'
+        ],
+        p2: [
+          '修复 logquery 关键词在 dash 下远端搜索错误：关键词字节改用 POSIX 八进制转义 (OPS-01)。',
+          '修复未认证 API 绑定非 loopback 地址时仍可被远端访问的边界问题。',
+          '修复企业微信 / 钉钉 Webhook 在 HTTP 200 但业务 errcode 失败时被误判成功，并限制响应体大小。',
+          '修复 WSDL 跨源直接 import 的凭据隔离与相对 XSD 定位丢失 system ID。',
+          '修复比较同步与 WAS 发布的失败处理路径：失败必须可见、可重试，不静默通过。',
+          '修复内核文件锁替代 PID 回收后，WebService 重定向等路径的凭据策略未统一 (OTH-01/02)。',
+          '修复前端路由作用域与异步卸载清理，避免切页后回调写坏新页面 (UI-02)。',
+          '修复操作导航策略与 canLeave 守卫：未保存草稿离开页面时显式拦截。',
+          '修复路由销毁、输入法组合输入与异步竞态下代码生成页面的状态一致性。',
+          '修复测试契约 fixture 在 autocrlf 检出环境下因行尾差异产生的误报。',
+          '修复 e2e runner 结束后未释放用例超时定时器导致进程无法退出的问题 (QA-02)。',
+          '修复审查复跑脚本“失败重试一次即判通过”与失败时不打印失败行的证据强度问题。',
+          '修复测试对开发机环境的硬依赖（绝对路径、固定端口、系统 find.exe），统一隔离夹具与端口。',
+          '修复文档与代码不一致：补齐版本校验规范与 commit-msg 模型版本约束钩子。'
+        ]
+      },
+      commits: [
+        { hash: '6791488', msg: 'feat(tabs+gbk): 多Tab保活重构与GBK中文路径自适应' },
+        { hash: '50d32dd', msg: 'feat(layout): 支持桌面端左侧菜单收起与全屏展开（方案 A）及工作台精修' },
+        { hash: '99d80a0', msg: 'feat(database): 数据库工作台新增左右分栏布局（左 SQL / 右结果，分隔条可拖动）' },
+        { hash: '0be787b', msg: 'feat(database): 实施 Oracle 隐藏 ROWID 与非空唯一键定位能力 (Phase 1)' },
+        { hash: '591deb7', msg: 'fix(dbconsole,grid,ui): 编辑能力契约、列映射、类型绑定、并发定位与 LOB 行身份 (DBUI-01,DB-04..07)' },
+        { hash: '40f113e', msg: 'fix(upgrade): add crash recovery journal and pre-store startup recovery' },
+        { hash: 'fa70e7f', msg: 'fix(upgrade,webservice): 用内核文件锁替换 PID 回收，统一重定向凭据策略 (OTH-01,OTH-02)' },
+        { hash: 'f666fa6', msg: 'fix(sftp): 路径歧义终止、逐段编码、身份贯通与消除每文件全目录枚举 (OTH-03..06)' },
+        { hash: 'f0a54ba', msg: 'feat(compare): 实现文字行距缩放与审查缺陷修复' },
+        { hash: '9537e36', msg: 'feat(database): 增加工具栏 SQL 格式化快捷入口与全文格式化按钮' },
+        { hash: '7a47c01', msg: 'feat(test-e2e): 失败用例落盘 Playwright trace, 文件名绑定 SHA/用例名/viewport/时间 (QA-02)' },
+        { hash: 'f164d49', msg: 'fix(review): 修复当日 30 个提交审查发现的发布阻塞缺陷并归档遗留项' }
+      ],
+      performance: [
+        { label: 'SSH 文件浏览器下载', before: '出厂配置 (free_file_roots 为空) 下 100% 403', after: '删除误加的白名单校验，与三处命名空间契约一致', improve: '默认安装即可用' },
+        { label: '无 SFTP 子系统老 AIX', before: '上传新文件 / 新建目录 / 改名全部失败', after: 'shellNotFound 分类器识别缺省状态并隔离权限错误', improve: '写路径能力恢复' },
+        { label: '无主键 Oracle 表插入', before: '显式投影下“新增行”被静默禁用', after: '隐藏 ROWID 定位列与业务投影判定解耦', improve: '契约判定回归正确' },
+        { label: '升级中断', before: '断电或强杀后可能多文件半更新', after: 'recovery journal + 启动预检自愈 / 全量回滚', improve: '数据一致性 100%' },
+        { label: '进程互斥', before: 'PID 探测存在复用与假死窗口', after: '内核文件锁 (flock) 互斥', improve: '双实例写入 0' },
+        { label: '分栏高度计算', before: '滚动偏移重复扣减，滚动后工作区偏矮', after: '改用视口坐标并夹紧在 [560, viewport−24]', improve: '832 / 764 两轮断言一致' },
+        { label: 'Go 质量门', before: '当日 30 个提交带来的回归未被覆盖', after: 'go build / go vet / go test 全包通过', improve: '发布阻塞项 0' },
+        { label: '端到端门禁', before: '失败用例缺少现场证据', after: '1,527 用例全量注册 + trace 失败自动落盘', improve: '偶发缺陷可归因' }
+      ],
+      breaking: [],
+      migration: [
+        '从 v0.18 / v0.19 升级到 v0.20 由 internal/upgrade 协调器接管：升级前自动制作全量快照，任一文件迁移失败即全量原子回滚。',
+        '直接替换可执行文件即可；工作台页签、列宽、SQL 片段、快捷键与查询历史保存在用户偏好中，升级后保持原有工作习惯。',
+        '/api/ssh/sftp/* 命名空间明确不校验 app.free_file_roots（访问控制交由 SSH 账号与 sshd 配置承担）；如需收紧请从账号权限入手。',
+        '数据库网格的就地修改与删除现在要求可信行定位 (ROWID / 非空唯一键)；无法定位的表仍可只读查询，但不会再提供写入入口。',
+        'CLOB/BLOB 改为预览 + 令牌 + 流式下载分级读取；原先依赖一次性拉全字段的用法请改用下载令牌。',
+        '事务提交后状态被锁定，遇到网络不确定会显式报告而不是自动重放；请以界面结果为准再决定是否重试。',
+        '升级与持久化互斥改用内核文件锁：异常退出后遗留在 data/ 下的锁记录会在下次启动预检时自动回收。',
+        'GBK 中文目录与文件名现在全链路自适应；若仍出现乱码，请检查 log_dirs 的 encoding 与终端编码设置。',
+        'WSDL 代码生成的外部工具工作区已隔离并采用安全原子发布，历史输出目录不会被半成品覆盖。',
+        '发布验收基线：Go 1.24+ 执行 go build / vet / test 全包，npm test 21 个单测文件，Playwright E2E 注册 1,527 用例，Windows 构建使用 -mod=vendor -trimpath -H windowsgui。'
+      ]
+    },
+    {
+      version: 'v0.19',
       date: '2026-09-09',
-      tag: 'v0.18 后续开发 · 工作台深化 · 安全边界收紧 · 性能与稳定性优化',
+      tag: '工作台深化 · 安全边界收紧 · LOB 与批量事务 · 性能与稳定性优化',
       codename: 'Sentinel · 守界加固',
       size: 'xl',
-      headline: '本卡记录 v0.18 发布后的连续开发工作：数据库从“可查询”继续走向可控写入与大字段工作流；文件比对、WAS 打包和代码生成补齐边界校验；同时收紧 API、会话、路径、错误信息与 Webhook 的安全和可靠性。当前根目录 VERSION 仍为 v0.18，v0.19-dev 尚未作为正式发行版发布。',
+      headline: 'v0.18 之后的第一阶段深化：数据库从“可查询”继续走向可控写入与大字段工作流；文件比对、WAS 打包和代码生成补齐边界校验；同时收紧 API、会话、路径、错误信息与 Webhook 的安全和可靠性。当前正式版为 v0.20，运行时版本始终以根目录 VERSION 为准。',
       stats: { commits: 5, fixes: 16, additions: 11, breaks: 0 },
       principles: [
         '写操作必须可预览、可确认、可回滚：网格编辑、批量导入与脚本执行统一经过会话、确认和事务边界。',
@@ -1098,11 +1277,11 @@ const changelog = [
       ],
       breaking: [],
       migration: [
-        '这是 v0.18 发布后的开发记录，不代表正式 v0.19 已发布；当前运行时版本仍由根目录 VERSION 提供，为 v0.18。',
+        '本卡记录 v0.18 之后的第一阶段深化工作，其成果随后并入 v0.20 正式版一并交付；运行时版本始终以根目录 VERSION 为准。',
         '数据库新增写入、导入和脚本能力均需显式会话与确认；旧版只读配置不会被自动改写。',
         '未启用认证时，API 继续只建议绑定 loopback；绑定非本机地址时将被服务端拒绝。',
         'WAS 输出目录、文件比较和导出路径现在会拒绝系统敏感目录、UNC 路径和越界路径；请改用明确的工作目录。',
-        '若继续开发 v0.19，正式发版前需要把本卡的工作区改动收敛、更新 VERSION/README，并重新执行 release 门禁。'
+        '本版工作已随 v0.20 正式版交付，配置与用户资产由 internal/upgrade 协调器在升级前自动快照，无需手工迁移。'
       ]
     },
     {
@@ -2295,7 +2474,7 @@ const changelog = [
     const wrap = el('div');
     const para1 = el('div', { class: 'card', style: 'padding:20px 22px; line-height:1.85; font-size:14px;' }, [
       el('p', { style: 'margin:0 0 12px 0;', text: 'Kairo 是一款专为内网运维场景打造的桌面级工具箱。它把日常运维中最常见的几类操作——SSH 日志检索、远程文件下载、代码比对、HTTP 接口调试、报文格式化、环境诊断、系统配置——打包成一份独立的可执行文件，开箱即用，无需安装任何运行时。' }),
-      el('p', { style: 'margin:0 0 12px 0;', text: '整套系统默认只监听 127.0.0.1，所有功能通过 Web UI 暴露；后端用 Go 编写，前端用原生 JavaScript 编写（零 npm 依赖，零构建工具链），所有静态资源通过 go:embed 内嵌进单一二进制。跨平台分发只需要一份文件：macOS / Linux / Windows / Win7 均可。' }),
+      el('p', { style: 'margin:0 0 12px 0;', text: '整套系统默认只监听 127.0.0.1，所有功能通过 Web UI 暴露；后端用 Go 编写，前端用原生 JavaScript 编写（零 npm 依赖，零构建工具链），所有静态资源通过 go:embed 内嵌进单一二进制。跨平台分发只需要一份文件：macOS / Linux / Windows 10/11 均可（Win7 由 legacy 分支独立维护）。' }),
       el('p', { style: 'margin:0;', text: '产品定位上，Kairo 不是要替代 Ansible / Jenkins / Prometheus 这类重型平台，而是作为运维工程师日常 80% 操作的"快进键"——登录、查日志、下载文件、对比配置、调一下接口、转一下编码——这些"小但高频"的动作，过去要在 SecureCRT + WinSCP + Postman + 各种在线工具之间反复横跳，现在一个浏览器标签就能搞定。' })
     ]);
     const useCases = el('div', { class: 'card mt-3', style: 'padding:18px 22px;' }, [
@@ -2480,7 +2659,7 @@ const changelog = [
     // 工程实践
     const engTitle = el('h3', { style: 'margin:24px 0 12px 0; font-size:16px; display:flex; align-items:center; gap:8px;' }, [
       el('span', { unsafeHtml: svgIcon('smTools', 18) }),
-      document.createTextNode(' 工程化实践 (14 项)')
+      document.createTextNode(' 工程化实践 (' + engineering.length + ' 项)')
     ]);
     const engGrid = el('div', { style: 'display:grid; grid-template-columns:repeat(auto-fit, minmax(280px, 1fr)); gap:8px;' });
     engineering.forEach((e, i) => {
@@ -2501,7 +2680,7 @@ const changelog = [
     wrap.appendChild(frontendGrid);
     wrap.appendChild(engTitle);
     wrap.appendChild(engGrid);
-    view.appendChild(renderSection('sec-stack', 'stack', '技术栈', '后端 16 依赖 · 前端 11 模块 · 工程 14 实践 · 171,000+ 行代码', wrap));
+    view.appendChild(renderSection('sec-stack', 'stack', '技术栈', '后端 ' + backendStack.length + ' 依赖 · 前端 ' + frontendStack.length + ' 模块 · 工程 ' + engineering.length + ' 实践 · 188,000+ 行代码', wrap));
   }
 
   // --- 安全白皮书 ---
@@ -2512,7 +2691,7 @@ const changelog = [
         el('span', { style: 'width:26px; height:26px; display:inline-flex; align-items:center; justify-content:center; color:var(--error);', unsafeHtml: svgIcon('smShield', 26) }),
         el('span', { style: 'font-weight:700; font-size:15px; color:var(--error);', text: 'fail-closed 安全模型 (v0.9 起)' })
       ]),
-      el('div', { style: 'font-size:13px; line-height:1.7; color:var(--text-dim);', text: '所有权限决策默认"拒绝"。白名单空 → 一律拒绝；host key 没配 + allow_insecure=false → 不发起连接；admin 专属接口没带 admin token → 403；数据库只读 AST 拦截写操作；跨文件升级原子事务防半更新；Windows Job Object 递归回收进程树。把"忘记配"和"配错"都收敛到安全侧，避免任何隐式放行。17 项安全设计点协同，没有单点失守即可破防的逻辑链。' })
+      el('div', { style: 'font-size:13px; line-height:1.7; color:var(--text-dim);', text: '所有权限决策默认"拒绝"。白名单空 → 一律拒绝；host key 没配 + allow_insecure=false → 不发起连接；admin 专属接口没带 admin token → 403；数据库只读 AST 拦截写操作；跨文件升级原子事务防半更新；Windows Job Object 递归回收进程树。把"忘记配"和"配错"都收敛到安全侧，避免任何隐式放行。18 项安全设计点协同，没有单点失守即可破防的逻辑链。' })
     ]);
 
     const grid = el('div', { style: 'display:grid; grid-template-columns:repeat(auto-fit, minmax(280px, 1fr)); gap:8px;' });
@@ -2530,7 +2709,7 @@ const changelog = [
 
     wrap.appendChild(banner);
     wrap.appendChild(grid);
-    view.appendChild(renderSection('sec-security', 'security', '安全白皮书', '17 项 fail-closed 设计点 · 纵深防御 · 零明文落盘', wrap));
+    view.appendChild(renderSection('sec-security', 'security', '安全白皮书', security.length + ' 项 fail-closed 设计点 · 纵深防御 · 零明文落盘', wrap));
   }
 
   // --- SSH 兼容矩阵 ---
@@ -2583,7 +2762,7 @@ const changelog = [
       ]));
     });
     wrap.appendChild(grid);
-    view.appendChild(renderSection('sec-quality', 'quality', '质量保障', '6 层质量金字塔 · 1,150+ Go 测试 · 42 个 Playwright 脚本', wrap));
+    view.appendChild(renderSection('sec-quality', 'quality', '质量保障', '6 层质量金字塔 · 1,550+ Go 测试用例 · 1,527 Playwright 用例 (29 模块)', wrap));
   }
 
   // --- 功能模块 ---
@@ -2629,7 +2808,7 @@ const changelog = [
         ])
       ]));
     });
-    view.appendChild(renderSection('sec-modules', 'modules', '功能模块', '20 个深度能力卡 · 23 路由页面 + 原生桌面组件 · 130+ API', wrap));
+    view.appendChild(renderSection('sec-modules', 'modules', '功能模块', featureModules.length + ' 个深度能力卡 · 23 路由页面 + 原生桌面组件 · 135+ API', wrap));
   }
 
   // --- 版本演进史 (accordion) ---
@@ -2646,7 +2825,7 @@ const changelog = [
     wrap.appendChild(banner);
     wrap.appendChild(list);
 
-    view.appendChild(renderSection('sec-history', 'history', '版本演进史', 'v0.1 → v0.20 · ' + changelog.length + ' 个版本 (正式版 / v0.13.1 / v0.11-rc1) · 持续迭代 · 211+ commit', wrap));
+    view.appendChild(renderSection('sec-history', 'history', '版本演进史', 'v0.1 → v0.20 · ' + changelog.length + ' 个版本 (含 v0.13.1 / v0.11-rc1) · 持续迭代 · 265 commit', wrap));
   }
 
   function renderVersionCard(v, idx) {
@@ -2925,7 +3104,7 @@ const changelog = [
   function renderBugStoriesSection(view) {
     const wrap = el('div');
     const intro = el('div', { class: 'card', style: 'padding:14px 20px; margin-bottom:12px; font-size:13px; line-height:1.8; color:var(--text-dim);' }, [
-      el('strong', { style: 'color:var(--text);', text: '15 个真实 bug 复盘：' }),
+      el('strong', { style: 'color:var(--text);', text: bugStories.length + ' 个真实 bug 复盘：' }),
       document.createTextNode('下面这些不是教科书例子，而是 v0.4 - v0.20 期间 commit log 里真实发生过的故障。每个故事都包含：症状、根因、修复、教训。看到的不只是"修了什么"，更是"怎么思考的"。')
     ]);
 
@@ -2961,7 +3140,7 @@ const changelog = [
 
     wrap.appendChild(intro);
     wrap.appendChild(grid);
-    view.appendChild(renderSection('sec-bugs', 'bugs', '故障案例库', '15 个真实 bug 复盘 · 含根因 / 修复 / 教训 · v0.4–v0.20 真实案例', wrap));
+    view.appendChild(renderSection('sec-bugs', 'bugs', '故障案例库', bugStories.length + ' 个真实 bug 复盘 · 含根因 / 修复 / 教训 · v0.4–v0.20 真实案例', wrap));
   }
 
   // --- FAQ ---
@@ -2981,7 +3160,7 @@ const changelog = [
       ]));
     });
     wrap.appendChild(grid);
-    view.appendChild(renderSection('sec-faq', 'faq', '常见问题', 'FAQ · 16 问 · 从部署、安全到数据库与桌面组件', wrap));
+    view.appendChild(renderSection('sec-faq', 'faq', '常见问题', 'FAQ · ' + faq.length + ' 问 · 从部署、安全到数据库与桌面组件', wrap));
   }
 
   // --- 路线图 ---
@@ -3029,7 +3208,7 @@ const changelog = [
   // =====================================================================
   // v0.13.x hotfix: 性能优化
   //   1. DocumentFragment 批量挂载: 14 次 reflow → 1 次
-  //   2. 12 个非首屏 section 改 IO 懒渲染 (进视口才创建)
+  //   2. 13 个非首屏 section 改 IO 懒渲染 (进视口才创建)
   //   3. 首屏 4 块 (hero/stats/anchorNav/overview) 立即渲染
   //   4. 老浏览器 (无 IO / 无 content-visibility) 自动降级
   // 兼容性: 全部浏览器行为至少等同旧版, 不会出错
