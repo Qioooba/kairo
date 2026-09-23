@@ -9,11 +9,11 @@
 
 | 批次 | 问题编号 | 条数 | 状态 |
 |---|---|---|---|
-| A 测试隔离 | QA-01 QA-02 | 2 | ✅ 已提交并验证（含 3 个后续修复提交） |
+| A 测试隔离 | QA-01 QA-02 | 2 | ✅ 已提交并验证（含 4 个后续修复提交） |
 | B 查询及格式化 | DB-01 DB-02 DB-03 DBUI-02 DBUI-04 | 5 | ✅ 已提交并验证 |
-| C 网格及 LOB | DBUI-01 DB-04 DB-05 DB-06 DB-07 | 5 | 待 DBUI-03 释放 database.js（DBUI-01 须与列映射同批） |
-| D 比较保存 | CT01 CT06 CT02 CT04 | 4 | ✅ 已提交并验证 |
-| E 路由及历史 | DBUI-03 DBUI-05 DBUI-06 CT03 CT05 CT07 | 6 | DBUI-03 与 CT03/05/07 进行中；DBUI-05/06 待 DBUI-03 |
+| C 网格及 LOB | DBUI-01 DB-04 DB-05 DB-06 DB-07 | 5 | 进行中（DBUI-01 与列映射同批，须整批落地） |
+| D 比较保存 | CT01 CT06 CT02 CT04 | 4 | ✅ 已提交并验证（含 handler 级补测） |
+| E 路由及历史 | DBUI-03 DBUI-05 DBUI-06 CT03 CT05 CT07 | 6 | DBUI-03 ✅；CT03/05/07 进行中；DBUI-05/06 待 C 释放 database.js |
 | F SFTP | OTH-03 OTH-04 OTH-05 OTH-06 | 4 | ✅ 已提交并验证 |
 | G 升级与请求 | OTH-01 OTH-02 | 2 | ✅ 已提交并验证 |
 | H 远端 shell | OPS-01 | 1 | ✅ 已提交并验证 |
@@ -31,7 +31,7 @@
 
 ### 2.1 批次 A — 测试隔离与真实契约 fixture（QA-01、QA-02）
 
-提交：`d70eb31`（主体）、`f8bfe2c`（fixture 行尾修复）、`56bf539`（runner 定时器泄漏）、`b489ad1`（统计/判定纯函数）
+提交：`d70eb31`（主体）、`f8bfe2c`（fixture 行尾修复）、`56bf539`（runner 定时器泄漏）、`b489ad1`（统计/判定纯函数）、`7a47c01`（失败用例落盘 trace）
 
 **QA-01：默认单测不得读取用户配置、连业务库或外发**
 
@@ -79,7 +79,8 @@
 - `tests/e2e/utils/run-accounting.js`（新增）：按模块汇总
   discovered/executed/passed/failed/skipped 与"什么才算通过"的判定抽成纯函数。
 - `tests/e2e/index.js` / `test-runner.js`：模块 43 注册、运行元数据（SHA/viewport/时间）落盘、
-  失败截图绑定 SHA+viewport、`--grep` 零匹配直接判失败。
+  失败截图绑定 SHA+viewport、`--grep` 零匹配直接判失败；失败用例额外落盘 Playwright trace
+  （`<用例名>-<SHA>-<viewport>-<ISO时间>.zip`），通过用例不落盘，未配置 traceDir 时完全惰性。
 
 **实施中发现并修复的两个自身缺陷（均由验证方法发现，非猜测）**
 
@@ -211,6 +212,14 @@ CT04 `撤回交换后左侧来源必须回到 A`。
 **验证**：`node tests/compare-save-lifecycle.test.js` → 14/14 exit 0；`npm test` → 15/15（注册后 16/16）；
 `go test ./...` → 全部 ok。
 
+**handler 级补测（提交 `de88d5f`）**：新增 `internal/httpserver/handlers_compare_workbench_cmpd_test.go`，
+用真实 HTTP（`newTestServer` + `doRequest`）把后端纵深防御的证据从 helper 级提升到 handler 级：
+（1）A/B 同 size 同 mtime（审查真机复现场景）时用 A 的 version 写 B → 409，B 字节不变且不产生备份文件；
+（2）合法写入返回的 version 携带目标规范路径，size/digest 描述真正写入的正文，且"用返回的新版本再写"成功、
+"用写前旧版本再写"409；（3）同路径真正过期令牌 → 409，磁盘保留外部内容。
+**变异验证**：在临时 detached worktree 中删掉那 4 行路径身份校验后，错配负载被接受且返回 200、B 确实被改写，
+而另外两例仍通过 —— 证明失败可归因于该检查本身，测试确实能发现它守护的缺陷。
+
 ### 2.6 批次 F — SFTP 路径歧义、逐段编码、身份贯通与枚举消除（OTH-03、OTH-04、OTH-05、OTH-06）
 
 提交：`f666fa6`（14 个文件）
@@ -241,6 +250,37 @@ OTH-06 `1000 次 ASCII Stat 造成了 1000 次完整目录读、1000000 条返�
 
 **验证**：`go test ./internal/sftpclient/ ./internal/comparefs/` ok；`go vet ./...` 干净；
 `go test ./...` 全部 ok；`npm test` 16/16；`node --check` 两个页面通过。
+
+### 2.7 批次 E 第一片 — 孤儿页签不再自动改绑（DBUI-03）
+
+提交：`003bfee`（`web/pages/database.js` +295/−52，新增 12 场景回归）
+
+DBUI-03 不依赖任何在制批次，且当时 `database.js` 无其它写入者，因此作为批次 E 的第一片单独先行提交；
+E 的其余五项仍按依赖顺序执行（CT03/05/07 依赖 `compare.js`，DBUI-05/06 依赖 C 释放 `database.js`）。
+
+- **缺陷**：`reconcileSessionsWithSources` 把"从未绑定的新空页签"与"原绑定数据源已被删除"当成同一类，
+  一律自动绑定当前/剩余数据源；`deletedId` 被调用方传入却从未被使用；全部源被删除的分支还把 `sourceId`
+  清空、`orphan` 置 false，连"原属哪个数据源"都丢失；`renderOrphanWorkspace()` 早已存在却无任何调用点。
+- **修复**：显式状态机 `sessionSourceClass` → `unbound` / `bound` / `orphaned`（非空 `sourceId` 无法解析
+  即为 orphaned，优先级最高）。只有 `unbound` 才自动绑定；`orphaned` 保留原 `sourceId` 与来源名称快照、
+  绝不被改绑。删除源、本地/远端备份恢复、对象页签恢复、源列表刷新、工作区渲染、页签切换、批量关闭、
+  顶部数据源下拉框全部遵循同一规则；`renderOrphanWorkspace` 接入实使用（SQL 可复制 + 显式重新绑定入口）。
+  显式改绑先 `releaseOrphanSourceContext()`（事务进行中则拒绝；中止在途请求并记录失败；旧源 ROLLBACK 失败
+  则记录 lastError 并提示），再 `resetSessionQueryContext()`（清空 rows/columns/summary(result_id)/editPlan/
+  元数据与 schema 缓存/dirtyCells/gridEditsStaged/outcomeUnknown，`clearGridMutations()`，重新生成
+  `transactionId`，保留 SQL），最后才绑定新源。
+- **失败优先证据**（修复前 10 个场景失败，逐字）：
+  `A 页签的 sourceId 必须仍是失效的 A（当前实现会改成 B） :: 'B' !== 'A'`、
+  `全部数据源删除后仍须记住原 sourceId，不能清空 :: '' !== 'A'`、
+  `renderWorkspace 不得把孤儿页签改绑到当前数据源 :: 'B' !== 'A'`、
+  `不得为失效来源请求元数据 :: 1 !== 0`
+- **修复后实测快照**：`{"sourceId":"A","sql":"UPDATE APP.JOBS SET STATUS=1 WHERE ID=42",
+  "retainedResultRows":[[42,"testA"]],"sourceRef":{"id":"A","name":"Production A",...},
+  "orphan":true,"sourceState":"orphaned","effectiveSource":null}`
+- **验证**：`node tests/database-orphan-source.test.js` → 12/12 exit 0；`node --check` 通过；`npm test` 17/17
+- **未验证**：无真实浏览器（未起服务、未用用户真实配置），孤儿卡片布局/真实点击/Ctrl+Enter 仅由 DOM 双覆盖；
+  无真实 Oracle/MySQL 集成。"在途请求未结束即拒绝改绑"是有意的 UX 取舍。
+- **遗留（范围外）**：已绑定页签手动切换顶部数据源时仍保留旧结果行，属既有行为，未在本次处理。
 
 ## 3. 验证证据
 ### 3.1 逐提交隔离验证（证明每个批次提交可独立复现）
