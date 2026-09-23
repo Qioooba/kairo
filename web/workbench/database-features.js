@@ -1541,9 +1541,21 @@
     loadSourceCatalog();
   }
 
-  function createQuickButton(idValue, label, title, handler) {
+  // 工具按钮统一构造：传 iconName 时只显示彩色图标（中文进 title 悬浮提示），
+  // 未传图标名时退回中文按钮（例如「更多」面板内的按钮按要求保留中文）。
+  function createQuickButton(idValue, label, title, handler, iconName) {
     const button = document.createElement('button');
-    button.type = 'button'; button.id = idValue; button.className = 'btn btn-xs db-pro-button'; button.textContent = label; button.title = title || label; button.setAttribute('aria-label', title || label); button.addEventListener('click', handler); return button;
+    button.type = 'button';
+    button.id = idValue;
+    const iconFn = K.database && K.database.actionIcon;
+    const useIcon = !!iconName && typeof iconFn === 'function';
+    button.className = 'btn btn-xs db-pro-button' + (useIcon ? ' db-ic-btn' : '');
+    if (useIcon) button.innerHTML = iconFn(iconName) + '<span>' + label + '</span>';
+    else button.textContent = label;
+    button.title = title || label;
+    button.setAttribute('aria-label', title || label);
+    button.addEventListener('click', handler);
+    return button;
   }
   function ensureToolbar(root) {
     const bar = root.querySelector('.db-editor-bar');
@@ -1553,8 +1565,9 @@
     // 注意“更多”面板在 database.js 的模板里就有，这里只往里追加按钮（保持既有 id 与处理器不变）。
     const panel = root.querySelector('.db-toolbar-more-panel');
     const trans = root.querySelector('.db-bar-trans-group') || bar;
-    const saveButton = createQuickButton('db-pro-save-button', '保存', '保存 SQL（Ctrl+S）', function () { saveSQL(false); });
-    saveButton.className = 'btn db-pro-button';
+    // 第一行只保留图标：保存（其余脚本文件操作都在「更多」里，保持中文按钮）。
+    const saveButton = createQuickButton('db-pro-save-button', '保存', '保存 SQL（Ctrl+S）', function () { saveSQL(false); }, 'save');
+    saveButton.className = 'btn db-ic-btn db-pro-button';
     trans.appendChild(saveButton);
     if (panel) {
       const quickSection = document.createElement('div');
@@ -1581,6 +1594,8 @@
     }
     ensureEditor(root);
     ensureGridToolbar(root);
+    // 注入完成后把 title 同步为"按钮正上方"的悬浮中文提示
+    if (K.database && typeof K.database.syncIconTips === 'function') K.database.syncIconTips(root);
     watchRunState();
     applyDeepLink();
   }
@@ -1892,10 +1907,11 @@
     const actions = root.querySelector('.db-result-actions'); if (!actions || actions.dataset.dbGridFeatures === '1') return;
     actions.dataset.dbGridFeatures = '1';
     const group = document.createElement('span'); group.className = 'db-pro-grid-actions';
-    group.appendChild(createQuickButton('db-pro-grid-add', '新增行', '新增待提交数据行', function () { openGridRowModal('insert'); }));
-    group.appendChild(createQuickButton('db-pro-grid-delete', '删除行', '删除选中待提交数据行', function () { openGridRowModal('delete'); }));
-    group.appendChild(createQuickButton('db-pro-grid-apply', '应用变更', '应用待提交网格变更到当前页签事务', function () { applyGridMutations(false); }));
-    group.appendChild(createQuickButton('db-pro-grid-clear', '清空变更', '清空尚未提交的网格变更', function () { if (!pendingGridMutations().length || window.confirm('清空尚未提交的网格变更？')) clearGridMutations(); }));
+    // 结果网格上方的按钮同样只用图标（中文进悬浮提示），避免占掉列宽。
+    group.appendChild(createQuickButton('db-pro-grid-add', '新增行', '新增行', function () { openGridRowModal('insert'); }, 'add'));
+    group.appendChild(createQuickButton('db-pro-grid-delete', '删除行', '删除行', function () { openGridRowModal('delete'); }, 'trash'));
+    group.appendChild(createQuickButton('db-pro-grid-apply', '应用变更', '应用变更', function () { applyGridMutations(false); }, 'check'));
+    group.appendChild(createQuickButton('db-pro-grid-clear', '清空变更', '清空变更', function () { if (!pendingGridMutations().length || window.confirm('清空尚未提交的网格变更？')) clearGridMutations(); }, 'eraser'));
     const badge = document.createElement('span'); badge.id = 'db-pro-grid-pending'; badge.className = 'db-pro-grid-pending'; badge.hidden = true; badge.setAttribute('role', 'status'); group.appendChild(badge);
     actions.appendChild(group);
     updateGridPendingBadge();

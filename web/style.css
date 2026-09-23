@@ -9725,3 +9725,255 @@ body.db-resizing * { cursor: col-resize !important; user-select: none !important
   .db-main.is-columns .db-copy-hint { display: inline; }
 }
 
+/* ===================================================================
+   数据库工作台：紧凑单排工具条 + 彩色图标（UI 改造）
+   -------------------------------------------------------------------
+   目标：
+     1) 编辑器工具条与结果工具条各只占**一排**（原来编辑器条是 3 列 × 2 行网格，
+        对象栏展开时甚至 4 行 / 138px 高）；
+     2) 除「更多」面板内部以外，不再出现中文文字按钮，一律彩色小图标，
+        中文说明放 title 悬浮提示，把横向空间让给 SQL 输入框与结果网格；
+     3) SQL 页签更小。
+   实现方式：全部为**后置覆盖**，不修改上面的既有规则，避免影响其它主题与布局分支。
+   注意：工具条**不能**设 overflow（否则「更多」下拉面板会被滚动容器裁掉），
+   改为靠紧凑尺寸 + 窄屏隐藏次要信息来保证单排。
+   =================================================================== */
+
+/* --- 彩色图标：浅色圆角底 + 主色线条（Navicat / PL/SQL Developer 观感） --- */
+.db-ic {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  flex: 0 0 auto;
+  color: var(--ic, currentColor);
+  background: rgba(128, 128, 128, 0.16);
+  background: color-mix(in srgb, var(--ic, #808080) 16%, transparent);
+  transition: filter .12s ease, background-color .12s ease;
+}
+.db-ic .db-action-icon { width: 13px; height: 13px; }
+.db-ic-btn { padding: 0 !important; gap: 0 !important; }
+/* 图标按钮里的中文标签只服务读屏与 title，不占布局 */
+.db-ic-btn > span:not(.db-ic) { display: none; }
+.db-ic-btn:hover:not(:disabled) .db-ic,
+.db-toolbar-more-summary:hover .db-ic { filter: saturate(1.3) brightness(1.1); }
+
+/* --- 编辑器工具条：固定单排 --- */
+.db-editor-bar {
+  display: flex !important;
+  flex-wrap: nowrap !important;
+  align-items: center;
+  gap: 5px;
+  min-height: 40px;
+  padding: 5px 10px;
+}
+.db-editor-bar .db-bar-group { display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto; }
+.db-editor-bar .db-bar-divider { display: block; flex: 0 0 auto; width: 1px; height: 18px; background: var(--line); margin: 0 3px; }
+.db-editor-bar .db-bar-spacer { display: block; flex: 1 1 auto; min-width: 6px; }
+.db-editor-bar .db-query-status { flex: 0 1 auto; min-width: 0; margin-left: 0; overflow: hidden; text-overflow: ellipsis; }
+/* 对象栏展开时不再切成 4 行（旧规则 grid-template-rows: repeat(4) + min-height:138px） */
+.db-meta:not(.is-collapsed) ~ .db-main .db-editor-bar { min-height: 40px; }
+/* 左右分栏且左列偏窄时同样保持一排（旧规则 .is-narrow-editor 也是 4 行 / 138px） */
+.db-main.is-columns.is-narrow-editor .db-editor-bar { min-height: 40px; grid-template-rows: none; }
+/* 组内也不再换行，避免"组内两行"把工具条撑高 */
+.db-editor-bar .db-bar-trans-group,
+.db-editor-bar .db-bar-tools-group,
+.db-editor-bar .db-bar-limits-group { flex-wrap: nowrap !important; row-gap: 0 !important; }
+
+/* --- 图标按钮统一尺寸（编辑器条 / 结果条 / 对象详情 / 对象栏标题 / 特性模块注入的按钮） --- */
+.db-ic-btn {
+  width: 28px;
+  min-width: 28px;
+  height: 26px;
+  min-height: 26px;
+  padding: 0 !important;
+  gap: 0 !important;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg-2);
+  box-shadow: none !important;
+  line-height: 1;
+}
+.db-toolbar-more-summary {
+  width: 28px;
+  min-width: 28px;
+  height: 26px;
+  min-height: 26px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg-2);
+  box-shadow: none !important;
+}
+#db-tab-add {
+  width: 28px;
+  min-width: 28px;
+  height: 26px;
+  min-height: 26px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.db-ic-btn:hover:not(:disabled),
+.db-toolbar-more-summary:hover,
+#db-tab-add:hover:not(:disabled) {
+  border-color: var(--primary);
+  background: rgba(128, 128, 128, 0.14);
+  background: color-mix(in srgb, var(--primary) 12%, var(--bg-2));
+}
+.db-ic-btn:disabled { opacity: .45; cursor: not-allowed; }
+
+/* 执行按钮：主色描边强调（不再是绿色中文按钮） */
+.db-editor-bar .db-btn-run { background: var(--bg-2) !important; border-color: rgba(34, 160, 107, .55) !important; border-color: color-mix(in srgb, #22a06b 55%, var(--line)) !important; }
+.db-editor-bar .db-btn-run:hover:not(:disabled) { border-color: #22a06b !important; }
+.db-btn-run .db-action-icon,
+.db-btn-mode .db-action-icon,
+.db-btn-commit .db-action-icon,
+.db-btn-rollback .db-action-icon { color: inherit; }
+/* 网格编辑开启：按钮本体给出彩色状态（原来靠中文"网格编辑开启"） */
+.db-editor-bar .db-btn-mode.is-editing {
+  border-color: var(--warn) !important;
+  background: rgba(217, 154, 30, .14) !important;
+  background: color-mix(in srgb, var(--warn) 14%, var(--bg-2)) !important;
+}
+.db-editor-bar .db-btn-commit:not(:disabled) { border-color: rgba(31, 157, 85, .55) !important; border-color: color-mix(in srgb, var(--success) 55%, var(--line)) !important; }
+.db-editor-bar .db-btn-rollback:not(:disabled) { border-color: rgba(224, 112, 61, .55) !important; border-color: color-mix(in srgb, var(--error) 45%, var(--line)) !important; }
+
+/* --- 行数限制：只剩数字 + 单位（中文在 title 里） --- */
+.db-editor-bar .db-bar-label { gap: 3px; font-size: 11px; color: var(--text-mute); }
+.db-editor-bar .db-bar-label input[type="number"] {
+  width: 46px;
+  min-width: 46px;
+  height: 24px;
+  min-height: 24px;
+  padding: 0 3px;
+  font-size: 11.5px;
+  text-align: center;
+  border-radius: 5px;
+}
+.db-editor-bar .db-bar-unit { font-size: 10.5px; color: var(--text-mute); white-space: nowrap; }
+
+/* --- 「更多」：触发按钮只显示图标，面板内仍是中文按钮 --- */
+.db-toolbar-more-summary > span:not(.db-ic) { display: none; }
+.db-toolbar-more-summary { color: var(--text-dim); }
+.db-toolbar-more-panel { top: calc(100% + 5px); }
+.db-toolbar-more-panel .btn { height: 28px; min-height: 28px; }
+
+/* --- 结果工具条：同样单排 + 图标 --- */
+.db-result-toolbar {
+  flex-wrap: nowrap !important;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 4px 10px;
+  /* 结果列可能被拖得很窄：宁可横向滚动也不换行（这里没有下拉面板，滚动不会裁掉任何浮层） */
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+}
+/* 网格操作按钮组（特性模块注入）自身也不许换行，否则会被窄列压成一列 */
+.db-result-actions,
+.db-pro-grid-actions { flex: 0 0 auto; flex-wrap: nowrap !important; }
+.db-result-actions { display: inline-flex; align-items: center; }
+.db-result-toolbar > span { width: auto; }
+.db-result-toolbar .btn,
+.db-result-toolbar .db-view-btn,
+.db-result-toolbar input,
+.db-result-toolbar select { min-height: 26px; }
+.db-result-tabs { flex: 0 0 auto; }
+.db-view-btn {
+  width: 28px;
+  height: 26px;
+  line-height: 24px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.db-view-btn.active .db-action-icon { stroke: #fff; }
+.db-result-filter-wrap { flex: 1 1 160px; min-width: 100px; }
+.db-result-filter-wrap input { width: 100%; min-width: 0; height: 26px; min-height: 26px; font-size: 12px; }
+/* 原来的一长串操作提示收成一个 "?" 图标，中文进 title */
+.db-copy-hint { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; cursor: help; }
+.db-main.is-columns .db-copy-hint { display: inline-flex; }
+.db-copy-hint .db-ic { width: 18px; height: 18px; border-radius: 50%; }
+.db-copy-hint .db-ic .db-action-icon { width: 12px; height: 12px; }
+.db-result-meta { font-size: 11px; flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.db-page-nav { gap: 4px; margin-left: 0; flex: 0 0 auto; }
+.db-page-nav .btn.db-ic-btn { width: 24px; min-width: 24px; height: 24px; min-height: 24px; }
+.db-page-num-wrap { gap: 3px; font-size: 11px; }
+.db-page-input { width: 40px; min-width: 40px; height: 24px; min-height: 24px; padding: 0 3px; font-size: 11.5px; }
+.db-page-label { font-size: 10.5px; color: var(--text-mute); }
+.db-page-size { width: 74px; min-width: 74px; height: 24px; min-height: 24px; padding: 0 4px; font-size: 11px; }
+#db-page-hint { font-size: 10.5px; }
+
+/* --- SQL 页签：更小更紧凑 --- */
+.db-editor-tabs { min-height: 26px; padding: 2px 8px; gap: 3px 5px; }
+.db-sql-tabs { min-height: 24px; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: thin; gap: 2px; }
+.db-editor-tab { height: 24px; min-height: 24px; padding: 0 8px; font-size: 11px; gap: 4px; }
+.db-tab-name { max-width: 104px; }
+.db-tab-close { width: 14px; height: 14px; font-size: 11px; }
+.db-dialect { font-size: 10px; }
+
+/* --- 悬浮在按钮**正上方**的中文提示 ---
+   用固定定位的提示层（#db-tip，由 database.js 的 installIconTipLayer 驱动）而不是 ::after：
+   结果工具条为了保持单排是横向滚动容器，绝对定位的伪元素气泡会被 overflow 裁掉。 */
+.db-tip {
+  position: fixed;
+  z-index: 9999;
+  max-width: min(320px, calc(100vw - 24px));
+  padding: 4px 9px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg-1);
+  color: var(--text);
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 1.5;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, .38);
+  pointer-events: none;
+  white-space: nowrap;
+}
+.db-tip[hidden] { display: none; }
+/* 结果视图分段控件不能让气泡被裁掉（原规则 overflow: hidden 用于圆角） */
+.db-result-tabs { overflow: visible; }
+.db-view-btn:first-child { border-radius: 5px 0 0 5px; }
+.db-view-btn:last-child { border-radius: 0 5px 5px 0; }
+
+/* --- 窄屏：优先保住"一排"，隐藏次要信息而不是换行 --- */
+/* 左右分栏时"列宽"才是真正的约束（视口可能很宽而结果列很窄），
+   所以优先用容器查询；不支持 @container 的旧内核自动跳过，靠上面的视口媒体查询兜底。 */
+.db-results,
+.db-editor-card { container-type: inline-size; }
+@container (max-width: 640px) {
+  .db-result-toolbar #db-page-hint,
+  .db-result-toolbar .db-copy-hint,
+  .db-result-toolbar #db-result-meta { display: none; }
+}
+@container (max-width: 640px) {
+  .db-editor-bar .db-bar-limits-group,
+  .db-editor-bar .db-query-status { display: none; }
+}
+
+@media (max-width: 1000px) {
+  .db-editor-bar .db-bar-unit { display: none; }
+  .db-result-toolbar .db-copy-hint { display: none; }
+}
+@media (max-width: 820px) {
+  .db-editor-bar .db-query-status { display: none; }
+  .db-result-toolbar .db-result-meta { display: none; }
+}
+@media (max-width: 640px) {
+  .db-editor-bar .db-bar-limits-group { display: none; }
+  .db-result-toolbar #db-page-hint { display: none; }
+}
+

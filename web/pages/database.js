@@ -119,10 +119,107 @@
     layoutRows: '<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 10h16"/>',
     layoutCols: '<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M11 4v16"/>',
     external: '<path d="M14 4h6v6M20 4l-9 9"/><path d="M18 13v6H5V6h6"/>',
-    close: '<path d="M6 6l12 12M18 6L6 18"/>'
+    close: '<path d="M6 6l12 12M18 6L6 18"/>',
+    // 工具栏紧凑化（本轮 UI 改造）新增：单行工具条所需的动作图标。
+    add: '<path d="M12 5v14M5 12h14"/>',
+    prev: '<path d="M14.5 6.5L9 12l5.5 5.5"/>',
+    next: '<path d="M9.5 6.5L15 12l-5.5 5.5"/>',
+    record: '<rect x="4" y="5" width="16" height="14" rx="2"/><path d="M4 10h16M9 14h7"/>',
+    columns: '<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9.5 4v16M15 4v16"/>',
+    info: '<circle cx="12" cy="12" r="8"/><path d="M12 11v5M12 8.2v.2"/>',
+    // 特性模块（database-features.js）注入的按钮用图标
+    save: '<path d="M5 4h11l3 3v13H5z"/><path d="M8 4v5h7V4M8 20v-6h8v6"/>',
+    saveAs: '<path d="M4 4h9l3 3v9H4z"/><path d="M7 4v4h5V4M13 18h6M16 15v6"/>',
+    script: '<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v5h5"/><path d="M10 12l4 2.5-4 2.5z" fill="currentColor" stroke="none"/>',
+    replace: '<path d="M4 8h12l-3-3M20 16H8l3 3"/>',
+    tag: '<path d="M4 12l8-8h8v8l-8 8z"/><circle cx="16" cy="8" r="1.3" fill="currentColor" stroke="none"/>',
+    history: '<path d="M12 7v5l3 2"/><path d="M4 12a8 8 0 1114 5.3"/><path d="M4 12H2m2 0V9"/>',
+    link: '<path d="M10 14a4 4 0 005.7 0l3-3a4 4 0 10-5.7-5.7L11 7"/><path d="M14 10a4 4 0 00-5.7 0l-3 3A4 4 0 1011 19l2-2"/>',
+    upload: '<path d="M12 20V8M7 13l5-5 5 5"/><path d="M5 4h14"/>',
+    check: '<path d="M5 12.5l4.5 4.5L19 7"/>',
+    eraser: '<path d="M7 19h10M5 15l6-6 6 6-3 3H8z"/><path d="M11 9l3-3 5 5-3 3"/>'
   };
-  function actionIcon(name) {
-    return '<svg class="db-action-icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' + (DB_ACTION_ICONS[name] || '') + '</svg>';
+  // 每个动作的主色（PL/SQL Developer / Navicat 风格：彩色小图标比灰描边更好认，
+  // 也不用占用中文按钮的横向宽度）。未列出的动作退回 currentColor。
+  const DB_ACTION_COLORS = {
+    play: '#22a06b', stop: '#e0533d', lock: '#d99a1e', unlock: '#22a06b',
+    commit: '#1f9d55', rollback: '#e0703d', format: '#3f7ad6', more: '#6b7280',
+    download: '#2f80ed', plan: '#e08a1e', grid: '#8b5cf6', star: '#e3a008',
+    trash: '#dc2f2f', copy: '#54617a', columns: '#4f46e5', layoutCols: '#3f7ad6',
+    layoutRows: '#3f7ad6', prev: '#54617a', next: '#54617a', add: '#22a06b',
+    search: '#3f7ad6', insert: '#0f9b8e', refresh: '#54617a', panel: '#54617a',
+    database: '#3f7ad6', folder: '#e3a008', external: '#54617a', close: '#6b7280',
+    record: '#0f9b8e', info: '#54617a',
+    save: '#1f9d55', saveAs: '#2f80ed', script: '#22a06b', replace: '#8b5cf6',
+    tag: '#d99a1e', history: '#2f80ed', link: '#3f7ad6', upload: '#2f80ed',
+    check: '#1f9d55', eraser: '#e0703d'
+  };
+  // 渲染工具图标：默认带"浅色圆角底 + 彩色线条"的小色块（真实工具栏观感）。
+  // opts.plain 只出裸图标（用于需要紧贴文字的场合）。
+  function actionIcon(name, opts) {
+    opts = opts || {};
+    const color = opts.color || DB_ACTION_COLORS[name] || 'currentColor';
+    const size = opts.size || 14;
+    const svg = '<svg class="db-action-icon" viewBox="0 0 24 24" width="' + size + '" height="' + size + '" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">' + (DB_ACTION_ICONS[name] || '') + '</svg>';
+    if (opts.plain) return svg;
+    return '<span class="db-ic" style="--ic:' + color + '" aria-hidden="true">' + svg + '</span>';
+  }
+  // 图标按钮的悬浮中文提示：原生 title 的气泡位置/样式不可控（不能稳定显示在按钮上方），
+  // 这里把 title 作为唯一数据源同步到 data-tip，由 CSS 画在按钮正上方；
+  // 同步后移除 title，避免原生提示与自绘气泡同时出现。
+  function syncIconTip(el) {
+    if (!el || typeof el.getAttribute !== 'function') return;
+    const text = el.getAttribute('title');
+    if (!text) return;
+    el.setAttribute('data-tip', text);
+    el.removeAttribute('title');
+  }
+  const ICON_TIP_SELECTOR = '.db-ic-btn, .db-view-btn, .db-toolbar-more-summary';
+  function syncIconTips(root) {
+    const scope = root && typeof root.querySelectorAll === 'function' ? root : document;
+    if (!scope || typeof scope.querySelectorAll !== 'function') return;
+    Array.prototype.forEach.call(scope.querySelectorAll(ICON_TIP_SELECTOR), syncIconTip);
+  }
+  // 图标提示层：固定定位、贴着按钮正上方显示，横向自动收进视口内。
+  // 不用 CSS ::after 是因为结果工具条为了保持单排是横向滚动容器，会把伪元素气泡裁掉。
+  function installIconTipLayer() {
+    if (typeof document === 'undefined' || !document.body) return;
+    if (document.getElementById('db-tip')) return;
+    const tip = document.createElement('div');
+    tip.id = 'db-tip';
+    tip.className = 'db-tip';
+    tip.hidden = true;
+    tip.setAttribute('role', 'tooltip');
+    document.body.appendChild(tip);
+    const show = function (el) {
+      const text = el.getAttribute('data-tip');
+      if (!text) return;
+      tip.textContent = text;
+      tip.hidden = false;
+      const r = el.getBoundingClientRect(), t = tip.getBoundingClientRect();
+      const vw = window.innerWidth || 1200;
+      let x = r.left + r.width / 2 - t.width / 2;
+      x = Math.max(8, Math.min(x, vw - t.width - 8));
+      let y = r.top - t.height - 7;
+      if (y < 8) y = r.bottom + 7; // 顶部空间不足（贴着窗口上沿）时改放按钮下方
+      tip.style.left = Math.round(x) + 'px';
+      tip.style.top = Math.round(y) + 'px';
+    };
+    const hide = function () { tip.hidden = true; };
+    document.addEventListener('mouseover', function (e) {
+      const el = e.target && e.target.closest ? e.target.closest('[data-tip]') : null;
+      if (el) show(el); else hide();
+    }, true);
+    document.addEventListener('mouseout', function (e) {
+      if (e.target && e.target.closest && e.target.closest('[data-tip]')) hide();
+    }, true);
+    document.addEventListener('focusin', function (e) {
+      const el = e.target && e.target.closest ? e.target.closest('[data-tip]') : null;
+      if (el) show(el); else hide();
+    });
+    document.addEventListener('focusout', hide);
+    window.addEventListener('scroll', hide, true);
+    document.addEventListener('click', hide, true);
   }
   function newTransactionID() {
     const random = Math.random().toString(36).slice(2, 10);
@@ -712,17 +809,17 @@
     }).join('') + '</div>';
 
     let headerActions = '<div class="db-obj-actions">' +
-      (isRoutine ? '' : '<button class="btn btn-xs btn-primary" id="db-obj-action-query">' + actionIcon('search') + '<span>查询数据</span></button>') +
-      (isRoutine ? '' : '<button class="btn btn-xs" id="db-obj-action-insert">' + actionIcon('insert') + '<span>INSERT 模板</span></button>') +
-      '<button class="btn btn-xs" id="db-obj-action-copy-ddl">' + actionIcon('copy') + '<span>复制 DDL</span></button>' +
-      '<button class="btn btn-xs" id="db-obj-action-refresh">' + actionIcon('refresh') + '<span>刷新</span></button>' +
+      (isRoutine ? '' : '<button class="btn btn-xs db-ic-btn" id="db-obj-action-query" aria-label="查询数据" title="查询该对象的数据（生成 SELECT）">' + actionIcon('search') + '<span>查询数据</span></button>') +
+      (isRoutine ? '' : '<button class="btn btn-xs db-ic-btn" id="db-obj-action-insert" aria-label="INSERT 模板" title="生成 INSERT 模板">' + actionIcon('insert') + '<span>INSERT 模板</span></button>') +
+      '<button class="btn btn-xs db-ic-btn" id="db-obj-action-copy-ddl" aria-label="复制 DDL" title="复制该对象的 DDL">' + actionIcon('copy') + '<span>复制 DDL</span></button>' +
+      '<button class="btn btn-xs db-ic-btn" id="db-obj-action-refresh" aria-label="刷新" title="刷新该对象详情">' + actionIcon('refresh') + '<span>刷新</span></button>' +
       '</div>';
 
     let bodyHTML = '';
     if (activeTab === 'fields') {
       bodyHTML = '<div class="db-obj-field-tools">' +
         '<input type="search" id="db-obj-field-filter" placeholder="搜索字段名、类型或注释..." class="editor-input" value="' + h(s.fieldFilter || '') + '">' +
-        '<button class="btn btn-xs" id="db-obj-copy-cols">复制所有列名</button>' +
+        '<button class="btn btn-xs db-ic-btn" id="db-obj-copy-cols" aria-label="复制所有列名" title="复制所有列名">' + actionIcon('copy') + '<span>复制所有列名</span></button>' +
         '</div>' +
         '<div class="db-obj-table-wrap"><table class="table db-obj-table" style="width:1078px"><colgroup><col style="width:44px"><col style="width:180px"><col style="width:170px"><col style="width:84px"><col style="width:100px"><col style="width:180px"><col style="width:320px"></colgroup>' +
         '<thead><tr><th style="width:40px">#</th><th>字段名</th><th>数据类型</th><th>主键</th><th>允许为空</th><th>默认值</th><th>注释 (Comment)</th></tr></thead>' +
@@ -779,6 +876,7 @@
       '</div>' +
       subTabNav +
       '<div class="db-obj-body">' + bodyHTML + '</div>';
+    syncIconTips(viewer);
 
     viewer.querySelectorAll('[data-otab]').forEach(b => {
       b.onclick = () => {
@@ -1904,14 +2002,27 @@
     const modeBtn = q('db-toggle-edit');
     if (commitBtn) {
       commitBtn.disabled = isUnknown || !hasPending || !!(sess() && sess().transactionBusy);
-      commitBtn.innerHTML = actionIcon('commit') + '<span>' + (isUnknown ? '提交（结果未知待核对）' : '提交' + (dirtyCount ? '（网格 ' + dirtyCount + '）' : transactionPending ? '（有事务）' : '')) + '</span>';
+      // 单排工具条：按钮只显示图标，中文（含网格修改条数/结果未知）放 title 悬浮提示。
+      const commitLabel = isUnknown ? '提交（结果未知待核对）' : '提交' + (dirtyCount ? '（网格 ' + dirtyCount + '）' : transactionPending ? '（有事务）' : '');
+      commitBtn.innerHTML = actionIcon('commit') + '<span>' + commitLabel + '</span>';
+      commitBtn.title = commitLabel;
+      commitBtn.setAttribute('aria-label', commitLabel);
+      syncIconTip(commitBtn);
     }
     if (rollbackBtn) {
       rollbackBtn.disabled = (!hasPending && !isUnknown) || !!(sess() && sess().transactionBusy);
-      rollbackBtn.innerHTML = actionIcon('rollback') + '<span>' + (isUnknown ? '清除未知状态' : '回滚') + '</span>';
+      const rollbackLabel = isUnknown ? '清除未知状态' : '回滚';
+      rollbackBtn.innerHTML = actionIcon('rollback') + '<span>' + rollbackLabel + '</span>';
+      rollbackBtn.title = rollbackLabel;
+      rollbackBtn.setAttribute('aria-label', rollbackLabel);
+      syncIconTip(rollbackBtn);
     }
     if (modeBtn) {
-      modeBtn.innerHTML = actionIcon(state.isEditMode ? 'unlock' : 'lock') + '<span>' + (state.isEditMode ? '网格编辑开启' : '网格编辑关闭') + '</span>';
+      const modeLabel = state.isEditMode ? '网格编辑开启' : '网格编辑关闭';
+      modeBtn.innerHTML = actionIcon(state.isEditMode ? 'unlock' : 'lock') + '<span>' + modeLabel + '</span>';
+      modeBtn.title = modeLabel;
+      modeBtn.setAttribute('aria-label', modeLabel);
+      syncIconTip(modeBtn);
       modeBtn.classList.toggle('is-editing', !!state.isEditMode);
       modeBtn.disabled = !canWriteDatabase();
       modeBtn.setAttribute('aria-pressed', state.isEditMode ? 'true' : 'false');
@@ -3168,8 +3279,10 @@
     const ref = session.sourceRef || {};
     const label = ref.name || ref.id || session.sourceId || '';
     host.innerHTML = '<div class="db-editor-tabs"><div id="db-sql-tabs" class="db-sql-tabs"></div>'
-      + '<button type="button" class="btn btn-xs" id="db-tab-add" title="新建查询页签">＋ 页签</button></div>'
-      + '<section class="card db-orphan-workspace"><div class="empty-icon">⚠</div><h3>原数据源已删除</h3><p>页签“' + h(label) + '”仍保留 SQL 和历史结果，但为避免误发到其他环境，当前已禁用执行、导出和元数据操作。</p><div class="db-orphan-actions"><label>重新绑定数据源<select id="db-orphan-source"><option value="">请选择数据源</option>' + sourceOptions() + '</select></label><button class="btn btn-primary" id="db-orphan-bind">绑定并继续</button></div><div class="db-orphan-sql"><label>当前 SQL</label><textarea id="db-sql" class="db-sql-editor mono" spellcheck="false"></textarea><button type="button" class="btn btn-xs" id="db-orphan-copy">复制 SQL</button></div></section>';
+      + '<button type="button" class="btn btn-xs db-ic-btn" id="db-tab-add" title="新建查询页签" aria-label="新建查询页签">' + actionIcon('add') + '</button></div>'
+      + '<section class="card db-orphan-workspace"><div class="empty-icon">⚠</div><h3>原数据源已删除</h3><p>页签“' + h(label) + '”仍保留 SQL 和历史结果，但为避免误发到其他环境，当前已禁用执行、导出和元数据操作。</p><div class="db-orphan-actions"><label>重新绑定数据源<select id="db-orphan-source"><option value="">请选择数据源</option>' + sourceOptions() + '</select></label><button class="btn btn-primary" id="db-orphan-bind">绑定并继续</button></div><div class="db-orphan-sql"><label>当前 SQL</label><textarea id="db-sql" class="db-sql-editor mono" spellcheck="false"></textarea><button type="button" class="btn btn-xs db-ic-btn" id="db-orphan-copy" title="复制 SQL" aria-label="复制 SQL">' + actionIcon('copy') + '<span>复制 SQL</span></button></div></section>';
+    syncIconTips(host);
+    installIconTipLayer();
     const ta = q('db-sql'); if (ta) { ta.value = session.sql || ''; ta.addEventListener('input', function () { session.sql = ta.value; }); }
     const copy = q('db-orphan-copy');
     if (copy) copy.onclick = () => copyDBText(session.sql || '', '已复制 SQL');
@@ -3208,7 +3321,7 @@
     const defaultSchema = state.source ? (state.source.kind === 'oracle' ? (state.source.username || '').toUpperCase() : (state.source.database || '')) : '';
     host.innerHTML = '<div class="' + layoutCls + '" id="db-sql-layout">'
       + '<aside class="card db-meta" id="db-meta-pane">'
-      + '<div class="db-pane-title"><span>数据库对象</span><div class="db-pane-actions"><button class="btn btn-xs" id="db-meta-refresh" title="刷新对象树">刷新</button><button class="btn btn-xs db-meta-toggle-btn" id="db-meta-toggle" title="收起对象栏 (' + h(state.prefs.shortcuts.objects || 'Alt+O') + ')" aria-label="收起数据库对象栏">' + actionIcon('panel') + '</button></div></div>'
+      + '<div class="db-pane-title"><span>数据库对象</span><div class="db-pane-actions"><button class="btn btn-xs db-ic-btn" id="db-meta-refresh" title="刷新对象树" aria-label="刷新对象树">' + actionIcon('refresh') + '<span>刷新</span></button><button class="btn btn-xs db-ic-btn db-meta-toggle-btn" id="db-meta-toggle" title="收起对象栏 (' + h(state.prefs.shortcuts.objects || 'Alt+O') + ')" aria-label="收起数据库对象栏">' + actionIcon('panel') + '</button></div></div>'
       + '<button type="button" class="db-meta-collapsed-bar" id="db-meta-collapsed-bar" title="展开数据库对象 (' + h(state.prefs.shortcuts.objects || 'Alt+O') + ')" aria-label="展开数据库对象栏"><span class="db-meta-collapsed-icon">' + actionIcon('database') + '</span><span class="db-meta-collapsed-text">对象</span></button>'
       + '<label class="db-compact-label">Schema<select id="db-schema">'
       + (defaultSchema ? '<option value="' + h(defaultSchema) + '">' + h(defaultSchema) + '</option>' : '<option value="">加载中…</option>')
@@ -3221,33 +3334,37 @@
       + '<section class="card db-editor-card">'
       + '<div class="db-editor-tabs">'
       + '<div id="db-sql-tabs" class="db-sql-tabs"></div>'
-      + '<button type="button" class="btn btn-xs" id="db-tab-add" title="新建查询页签">＋ 页签</button>'
+      + '<button type="button" class="btn btn-xs db-ic-btn" id="db-tab-add" title="新建查询页签" aria-label="新建查询页签">' + actionIcon('add') + '</button>'
       + '<span class="db-dialect">' + kindLabel(state.source.kind) + '</span>'
       + '</div>'
       + '<div id="db-sql-panel" class="db-sql-panel">'
+      // 工具条固定单排：执行/取消 · 网格编辑/提交/回滚 · 格式化 · 每页/显示行数 · 状态 · 更多。
+      // 除「更多」面板内部外，一律只显示彩色小图标，中文说明放在 title 悬浮提示里，把宽度让给输入框与结果区。
       + '<div class="db-editor-bar">'
       + '<div class="db-bar-group db-bar-run-group">'
-      + '<button class="btn db-btn-run" id="db-run" title="执行当前查询或选中 SQL (' + h(state.prefs.shortcuts.run || 'Ctrl+Enter') + ')">' + actionIcon('play') + '<span>执行</span><kbd class="db-run-kbd">' + h(state.prefs.shortcuts.run || 'Ctrl+Enter') + '</kbd></button>'
-      + '<button class="btn" id="db-cancel" disabled title="取消查询 (Esc)">' + actionIcon('stop') + '<span>取消</span></button>'
+      + '<button class="btn db-ic-btn db-btn-run" id="db-run" aria-label="执行" title="执行 (' + h(state.prefs.shortcuts.run || 'Ctrl+Enter') + ')">' + actionIcon('play') + '<span>执行</span></button>'
+      + '<button class="btn db-ic-btn" id="db-cancel" disabled aria-label="取消查询" title="取消查询 (Esc)">' + actionIcon('stop') + '<span>取消</span></button>'
       + '</div>'
-      + '<div class="db-bar-divider"></div>'
+      + '<span class="db-bar-divider" aria-hidden="true"></span>'
       + '<div class="db-bar-group db-bar-trans-group">'
-      + '<button class="btn db-btn-mode" id="db-toggle-edit" aria-pressed="false" title="开启或关闭结果网格编辑；不影响 SQL 编辑器的执行权限">' + actionIcon('lock') + '<span>网格编辑关闭</span></button>'
-      + '<button class="btn db-btn-commit" id="db-btn-commit" disabled title="提交当前页签的 DML 事务和网格修改">' + actionIcon('commit') + '<span>提交</span></button>'
-      + '<button class="btn db-btn-rollback" id="db-btn-rollback" disabled title="回滚当前页签的 DML 事务并放弃网格修改">' + actionIcon('rollback') + '<span>回滚</span></button>'
+      + '<button class="btn db-ic-btn db-btn-mode" id="db-toggle-edit" aria-pressed="false" aria-label="网格编辑" title="网格编辑">' + actionIcon('lock') + '<span>网格编辑关闭</span></button>'
+      + '<button class="btn db-ic-btn db-btn-commit" id="db-btn-commit" disabled aria-label="提交" title="提交">' + actionIcon('commit') + '<span>提交</span></button>'
+      + '<button class="btn db-ic-btn db-btn-rollback" id="db-btn-rollback" disabled aria-label="回滚" title="回滚">' + actionIcon('rollback') + '<span>回滚</span></button>'
       + '</div>'
-      + '<div class="db-bar-divider"></div>'
+      + '<span class="db-bar-divider" aria-hidden="true"></span>'
       + '<div class="db-bar-group db-bar-tools-group">'
-      + '<button class="btn" id="db-format" title="格式化 SQL（选区优先/当前语句，Shift+点击格式化全文，Ctrl+Shift+F）">' + actionIcon('format') + '<span>格式化</span></button>'
+      + '<button class="btn db-ic-btn" id="db-format" aria-label="格式化 SQL" title="格式化 SQL (Ctrl+Shift+F)">' + actionIcon('format') + '<span>格式化</span></button>'
       + '</div>'
-      + '<div class="db-bar-divider"></div>'
+      + '<span class="db-bar-divider" aria-hidden="true"></span>'
       + '<div class="db-bar-group db-bar-limits-group">'
-      + '<label class="db-bar-label">每页返回 <input id="db-max-rows" type="number" min="1" max="' + state.source.max_rows + '" value="' + savedRows + '" aria-label="当前查询每页返回行数"> 行</label>'
-      + '<label class="db-bar-label">显示 <input id="db-grid-rows" type="number" min="6" max="100" value="' + gridRows + '"> 行</label>'
+      + '<label class="db-bar-label" title="当前查询每页返回行数（数据源上限 ' + state.source.max_rows + '）"><input id="db-max-rows" type="number" min="1" max="' + state.source.max_rows + '" value="' + savedRows + '" aria-label="当前查询每页返回行数"><span class="db-bar-unit">行/页</span></label>'
+      + '<label class="db-bar-label" title="结果网格一次显示多少行（可自定义）"><input id="db-grid-rows" type="number" min="6" max="100" value="' + gridRows + '" aria-label="结果网格显示行数"><span class="db-bar-unit">行</span></label>'
       + '</div>'
+      + '<span class="db-bar-spacer" aria-hidden="true"></span>'
+      + '<span id="db-query-status" class="db-query-status">就绪</span>'
       + '<div class="db-bar-group db-bar-more-group">'
       + '<details id="db-toolbar-more" class="db-toolbar-more">'
-      + '<summary class="db-toolbar-more-summary" title="扩展工具、收藏与历史">' + actionIcon('more') + '<span>更多</span><span class="db-more-chevron" aria-hidden="true">▾</span></summary>'
+      + '<summary class="db-toolbar-more-summary db-ic-btn" title="更多" aria-label="更多">' + actionIcon('more') + '<span>更多</span></summary>'
       + '<div class="db-toolbar-more-panel">'
       + '<div class="db-more-section">'
       + '<div class="db-more-title">脚本与执行</div>'
@@ -3288,8 +3405,6 @@
       + '</div>'
       + '</details>'
       + '</div>'
-      + '<div class="db-bar-spacer"></div>'
-      + '<span id="db-query-status" class="db-query-status">就绪</span>'
       + '</div>'
       + '<div class="db-sql-shell" id="db-sql-shell">'
       + '<pre id="db-sql-highlight" class="db-sql-highlight" aria-hidden="true"></pre>'
@@ -3304,16 +3419,18 @@
       + '<div class="db-split-panes" id="db-split-panes" role="separator" aria-orientation="vertical" tabindex="0" aria-label="调整 SQL 编辑器与结果区宽度" title="左右拖动调整 SQL 编辑器与结果区宽度（双击恢复默认）"><span class="db-split-panes-hint" id="db-split-panes-hint" hidden></span></div>'
       + '<section class="card db-results" id="db-results-section">'
       + '<div class="db-result-toolbar">'
-      + '<div class="db-result-tabs" role="tablist" aria-label="结果视图"><button id="db-view-grid" class="db-view-btn active" role="tab" aria-selected="true">网格</button><button id="db-view-record" class="db-view-btn" role="tab" aria-selected="false">单行记录</button><button id="db-view-plan" class="db-view-btn" role="tab" aria-selected="false">执行计划</button></div>'
-      + '<button type="button" class="btn btn-xs db-layout-btn" id="db-layout-toggle" aria-pressed="false" title="切换到左右布局 (' + h(state.prefs.shortcuts.layout || 'Alt+L') + ')">' + actionIcon('layoutCols') + '<span id="db-layout-label">左右布局</span></button>'
+      + '<div class="db-result-tabs" role="tablist" aria-label="结果视图"><button id="db-view-grid" class="db-view-btn active" role="tab" aria-selected="true" aria-label="网格" title="网格视图">' + actionIcon('grid') + '</button><button id="db-view-record" class="db-view-btn" role="tab" aria-selected="false" aria-label="单行记录" title="单行记录">' + actionIcon('record') + '</button><button id="db-view-plan" class="db-view-btn" role="tab" aria-selected="false" aria-label="执行计划" title="执行计划">' + actionIcon('plan') + '</button></div>'
+      + '<button type="button" class="btn btn-xs db-ic-btn db-layout-btn" id="db-layout-toggle" aria-pressed="false" aria-label="切换布局" title="左右/上下布局 (' + h(state.prefs.shortcuts.layout || 'Alt+L') + ')">' + actionIcon('layoutCols') + '<span>左右布局</span></button>'
+      + '<button class="btn btn-xs db-ic-btn" id="db-copy-columns" disabled aria-label="复制字段名" title="复制字段名">' + actionIcon('copy') + '<span>复制字段名</span></button>'
+      + '<button class="btn btn-xs db-ic-btn" id="db-column-manager" disabled aria-label="显示列" title="显示列">' + actionIcon('columns') + '<span>显示列</span></button>'
+      + '<div class="db-result-actions"></div>'
       + '<div class="db-result-filter-wrap"><label class="sr-only" for="db-result-filter">过滤当前结果</label><input id="db-result-filter" type="search" aria-label="过滤当前结果" placeholder="在当前结果中过滤…"></div>'
-      + '<div class="db-result-actions"><button class="btn btn-xs" id="db-copy-columns" disabled>复制字段名</button><button class="btn btn-xs" id="db-column-manager" disabled>显示列</button></div>'
-      + '<span class="db-copy-hint">单击选行 · 网格编辑关闭时双击进单行 · 开启后双击改单元格</span>'
+      + '<span class="db-copy-hint" title="单击选行 · 网格编辑关闭时双击进单行 · 开启后双击改单元格" aria-hidden="true">' + actionIcon('info') + '</span>'
       + '<span id="db-result-meta" class="db-result-meta">等待执行查询</span>'
       + '<div id="db-page-nav" class="db-page-nav" role="navigation" aria-label="查询结果分页">'
-      + '<button class="btn btn-xs" id="db-page-prev" title="上一页" disabled>上一页</button>'
-      + '<span class="db-page-num-wrap">第 <input id="db-page-input" class="db-page-input" type="number" min="1" value="1" aria-label="页码"> 页</span>'
-      + '<button class="btn btn-xs" id="db-page-next" title="下一页" disabled>下一页</button>'
+      + '<button class="btn btn-xs db-ic-btn" id="db-page-prev" title="上一页" aria-label="上一页" disabled>' + actionIcon('prev') + '</button>'
+      + '<span class="db-page-num-wrap"><input id="db-page-input" class="db-page-input" type="number" min="1" value="1" aria-label="页码" title="跳转到指定页"><span class="db-page-label">页</span></span>'
+      + '<button class="btn btn-xs db-ic-btn" id="db-page-next" title="下一页" aria-label="下一页" disabled>' + actionIcon('next') + '</button>'
       + '<select id="db-page-size" class="db-page-size" title="每页行数" aria-label="每页行数"><option value="20">20 行/页</option><option value="50">50 行/页</option><option value="100">100 行/页</option><option value="200">200 行/页</option><option value="500">500 行/页</option><option value="1000">1000 行/页</option></select>'
       + '<span id="db-page-hint" class="muted"></span>'
       + '</div>'
@@ -3324,6 +3441,8 @@
       + '</section>'
       + '</main>'
       + '</div>';
+    syncIconTips(host);
+    installIconTipLayer();
     q('db-sql').placeholder = initial;
     q('db-max-rows').value = savedRows;
     q('db-max-rows').title = '当前查询每页返回行数（数据源上限 ' + state.source.max_rows + '）';
@@ -3732,7 +3851,7 @@
     const info = state.inspect;
     if (!info) { body.innerHTML = '<div class="hint">单击对象查看字段、索引、约束和 DDL；双击生成查询。</div>'; return; }
     const tab = state.inspectTab;
-    let html = '<div class="db-selected-object"><span>' + h(info.object) + '</span><div class="db-selected-actions"><button class="btn btn-xs" id="db-open-object-tab" title="在右侧打开大窗口">' + actionIcon('external') + '<span>大窗口</span></button><button class="btn btn-xs" id="db-copy-field-list">复制字段</button></div></div>';
+    let html = '<div class="db-selected-object"><span>' + h(info.object) + '</span><div class="db-selected-actions"><button class="btn btn-xs db-ic-btn" id="db-open-object-tab" title="在右侧打开大窗口" aria-label="在右侧打开大窗口">' + actionIcon('external') + '<span>大窗口</span></button><button class="btn btn-xs db-ic-btn" id="db-copy-field-list" title="复制字段列表" aria-label="复制字段列表">' + actionIcon('copy') + '<span>复制字段</span></button></div></div>';
     if (tab === 'indexes') {
       html += (info.indexes || []).length ? info.indexes.map(x => '<div class="db-field-row"><span>' + h(x.name) + (x.uniqueness === 'UNIQUE' ? ' <b>U</b>' : '') + '</span><small>' + h((x.columns || []).join(', ')) + '</small></div>').join('') : '<div class="hint">没有索引</div>';
     } else if (tab === 'constraints') {
@@ -3968,7 +4087,9 @@
     const key = (state.prefs.shortcuts && state.prefs.shortcuts.layout) || 'Alt+L';
     const columns = wanted === LAYOUT_COLUMNS;
     btn.setAttribute('aria-pressed', columns ? 'true' : 'false');
-    btn.innerHTML = actionIcon(columns ? 'layoutRows' : 'layoutCols') + '<span id="db-layout-label">' + (columns ? '上下布局' : '左右布局') + '</span>';
+    // 单排工具条：只出图标，中文说明（含当前布局状态）放 title。
+    btn.innerHTML = actionIcon(columns ? 'layoutRows' : 'layoutCols') + '<span>' + (columns ? '上下布局' : '左右布局') + '</span>';
+    btn.setAttribute('aria-label', columns ? '切换为上下布局' : '切换为左右布局');
     if (columns && !allowed) {
       btn.disabled = true;
       btn.title = '当前窗口过窄，无法左右分栏（至少需要约 ' + SPLIT_MIN_WORKSPACE + 'px 可用宽度）';
@@ -3976,6 +4097,7 @@
       btn.disabled = false;
       btn.title = (columns ? '切换到上下布局' : '切换到左右布局') + ' (' + key + ')';
     }
+    syncIconTip(btn);
   }
 
   // 对象详情页签激活时结果区被隐藏：左右布局下必须让编辑器独占整行，不能留下空轨道。
@@ -5935,7 +6057,10 @@
       if (state.resultMode === 'plan') meta.textContent = (state.plan || []).length + ' 步执行计划';
       else meta.textContent = state.columns.length ? visible.length + '/' + state.columns.length + ' 列 · ' + indexes.length + '/' + state.rows.length + ' 行' : '等待执行查询';
     }
-    if (q('db-column-manager')) q('db-column-manager').disabled = !state.columns.length;
+    // 结果列存在时才可用（db-copy-columns 之前一直是 disabled 状态，从未被打开）
+    const hasColumns = !!state.columns.length;
+    if (q('db-column-manager')) q('db-column-manager').disabled = !hasColumns;
+    if (q('db-copy-columns')) q('db-copy-columns').disabled = !hasColumns;
   }
   function refreshVisibleResult(force) {
     updateResultMeta();
@@ -6891,7 +7016,7 @@
   function renderRedis(host) {
     state.cursor = '0'; state.redisKeyBase64 = ''; state.redisType = ''; state.redisCursor = '0'; state.redisNextCursor = '0'; state.redisCursorHistory = []; state.redisOffset = 0; state.redisMembersHasNext = false;
     const mode = state.source.redis_mode || 'standalone';
-    host.innerHTML = '<div class="db-redis-workspace"><div class="db-editor-tabs"><div id="db-sql-tabs" class="db-sql-tabs"></div><button type="button" class="btn btn-xs" id="db-tab-add" title="新建查询页签">＋ 页签</button><span class="db-dialect">Redis · 只读命令</span></div><div class="db-redis-layout"><div class="card db-redis-keys"><div class="db-editor-bar"><span class="db-redis-topo">拓扑 ' + h(mode) + (mode === 'cluster' ? ' · 跨主节点 SCAN' : mode === 'sentinel' ? ' · ' + h(state.source.redis_master_name || '') : ' · 单机') + '</span><input id="db-redis-pattern" value="*" placeholder="Key pattern，例如 order:*"><button class="btn btn-primary" id="db-redis-scan">SCAN</button><button class="btn" id="db-redis-next">下一批</button></div><div id="db-redis-list" class="db-redis-list"></div></div><div class="db-redis-center"><div class="card db-redis-detail"><div class="db-pane-title"><span>Key 详情</span><span id="db-redis-type" class="tag"></span></div><div id="db-redis-controls" class="db-redis-controls"></div><pre id="db-redis-value">选择左侧 Key 查看类型、TTL 和内容</pre></div><div class="card db-redis-members"><div class="db-pane-title"><span>成员</span><div><button class="btn btn-xs" id="db-redis-members-prev" disabled>上一页</button><button class="btn btn-xs" id="db-redis-members-next" disabled>下一页</button></div></div><div id="db-redis-members-list" class="db-redis-members-list"><span class="hint">Hash / List / Set / ZSet 选择 Key 后在这里分页查看</span></div></div></div><div class="card db-redis-side"><div class="db-pane-title"><span>运行指标</span><button class="btn btn-xs" id="db-redis-info-refresh">刷新</button></div><div id="db-redis-info" class="db-redis-info"><span class="hint">点击刷新读取 INFO memory / clients / stats / keyspace</span></div><div class="db-pane-title db-redis-command-title">只读命令行</div><div class="db-redis-command-form"><input id="db-redis-command-line" class="db-redis-command-line" placeholder="例如 HSCAN user:1001 0 COUNT 100"><select id="db-redis-command"><option>TYPE</option><option>TTL</option><option>PTTL</option><option>GET</option><option>HGET</option><option>HSCAN</option><option>LLEN</option><option>LRANGE</option><option>SCARD</option><option>SSCAN</option><option>ZCARD</option><option>ZRANGE</option><option>INFO</option><option>DBSIZE</option><option>PING</option></select><input id="db-redis-command-args" placeholder="参数：field 或其他只读参数"><button class="btn btn-primary" id="db-redis-command-run">执行</button></div><div class="hint">命令行仅执行只读白名单，参数按 Redis CLI 习惯拆分；危险命令会被后端拒绝。</div><pre id="db-redis-command-result" class="db-redis-command-result"></pre></div></div></div>';
+    host.innerHTML = '<div class="db-redis-workspace"><div class="db-editor-tabs"><div id="db-sql-tabs" class="db-sql-tabs"></div><button type="button" class="btn btn-xs db-ic-btn" id="db-tab-add" title="新建查询页签" aria-label="新建查询页签">' + actionIcon('add') + '</button><span class="db-dialect">Redis · 只读命令</span></div><div class="db-redis-layout"><div class="card db-redis-keys"><div class="db-editor-bar"><span class="db-redis-topo">拓扑 ' + h(mode) + (mode === 'cluster' ? ' · 跨主节点 SCAN' : mode === 'sentinel' ? ' · ' + h(state.source.redis_master_name || '') : ' · 单机') + '</span><input id="db-redis-pattern" value="*" placeholder="Key pattern，例如 order:*"><button class="btn db-ic-btn" id="db-redis-scan" title="SCAN 扫描" aria-label="SCAN 扫描">' + actionIcon('search') + '<span>SCAN</span></button><button class="btn db-ic-btn" id="db-redis-next" title="下一批" aria-label="下一批">' + actionIcon('next') + '<span>下一批</span></button></div><div id="db-redis-list" class="db-redis-list"></div></div><div class="db-redis-center"><div class="card db-redis-detail"><div class="db-pane-title"><span>Key 详情</span><span id="db-redis-type" class="tag"></span></div><div id="db-redis-controls" class="db-redis-controls"></div><pre id="db-redis-value">选择左侧 Key 查看类型、TTL 和内容</pre></div><div class="card db-redis-members"><div class="db-pane-title"><span>成员</span><div><button class="btn btn-xs db-ic-btn" id="db-redis-members-prev" disabled title="上一页" aria-label="上一页">' + actionIcon('prev') + '<span>上一页</span></button><button class="btn btn-xs db-ic-btn" id="db-redis-members-next" disabled title="下一页" aria-label="下一页">' + actionIcon('next') + '<span>下一页</span></button></div></div><div id="db-redis-members-list" class="db-redis-members-list"><span class="hint">Hash / List / Set / ZSet 选择 Key 后在这里分页查看</span></div></div></div><div class="card db-redis-side"><div class="db-pane-title"><span>运行指标</span><button class="btn btn-xs db-ic-btn" id="db-redis-info-refresh" title="刷新指标" aria-label="刷新指标">' + actionIcon('refresh') + '<span>刷新</span></button></div><div id="db-redis-info" class="db-redis-info"><span class="hint">点击刷新读取 INFO memory / clients / stats / keyspace</span></div><div class="db-pane-title db-redis-command-title">只读命令行</div><div class="db-redis-command-form"><input id="db-redis-command-line" class="db-redis-command-line" placeholder="例如 HSCAN user:1001 0 COUNT 100"><select id="db-redis-command"><option>TYPE</option><option>TTL</option><option>PTTL</option><option>GET</option><option>HGET</option><option>HSCAN</option><option>LLEN</option><option>LRANGE</option><option>SCARD</option><option>SSCAN</option><option>ZCARD</option><option>ZRANGE</option><option>INFO</option><option>DBSIZE</option><option>PING</option></select><input id="db-redis-command-args" placeholder="参数：field 或其他只读参数"><button class="btn db-ic-btn" id="db-redis-command-run" title="执行只读命令" aria-label="执行只读命令">' + actionIcon('play') + '<span>执行</span></button></div><div class="hint">命令行仅执行只读白名单，参数按 Redis CLI 习惯拆分；危险命令会被后端拒绝。</div><pre id="db-redis-command-result" class="db-redis-command-result"></pre></div></div></div>';
     renderTabs();
     q('db-tab-add').onclick = addSession;
     q('db-redis-scan').onclick = () => { state.cursor = '0'; scanRedis(true); };
@@ -7118,6 +7243,9 @@
     completionPrefix: completionPrefix,
     isSnippetExpandKey: isSnippetExpandKey,
     parseSnippetsText: parseSnippetsText,
-    formatSnippetsText: formatSnippetsText
+    formatSnippetsText: formatSnippetsText,
+    // 特性模块（database-features.js）注入按钮时复用同一套彩色图标与悬浮提示
+    actionIcon: actionIcon,
+    syncIconTips: syncIconTips
   });
 })();
