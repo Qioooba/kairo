@@ -3,6 +3,8 @@ package httpserver
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -72,6 +74,23 @@ type compareWriteReq struct {
 	Encoding string             `json:"encoding,omitempty"`
 	EOL      string             `json:"eol,omitempty"`
 	BOM      bool               `json:"bom,omitempty"`
+	// DocumentID / EditSeq are the client's document identity and edit counter.
+	// They are audit/defence-in-depth metadata: the authoritative check below is
+	// the path identity carried by Expected.
+	DocumentID string `json:"document_id,omitempty"`
+	EditSeq    int64  `json:"edit_seq,omitempty"`
+}
+
+// compareWriteResp returns the state created by this exact write so the client
+// can advance its baseline/version without reloading the editor (which would
+// discard edits typed while the request was in flight).
+type compareWriteResp struct {
+	OK         bool              `json:"ok"`
+	Version    comparefs.Version `json:"version"`
+	Path       string            `json:"path"`
+	Size       int64             `json:"size"`
+	Digest     string            `json:"digest"`
+	DocumentID string            `json:"document_id,omitempty"`
 }
 type compareCopyReq struct {
 	Source   compareSourceSpec  `json:"source"`
@@ -356,6 +375,13 @@ func (s *Server) handleCompareWrite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer fsys.Close()
+	// 版本 token 与读取来源绑定：即使目标文件的大小与 mtime 完全一致，
+	// 也不能拿 A 的版本去写 B。仅比较 size/mtime 无法区分复制出来的文件，
+	// 或同一秒写入的两个文件，因此这里先按路径身份拦一次。
+	if req.Expected != nil && req.Expected.Path != "" && !comparefs.SamePathIdentity(req.Expected.Path, req.Target.Path) {
+		writeErr(w, 409, errors.New("目标文件已变化，请重新比较后再保存"))
+		return
+	}
 	encoded, err := textcodec.Encode(req.Content, textcodec.Info{Encoding: req.Encoding, EOL: req.EOL, BOM: req.BOM})
 	if err != nil {
 		writeErr(w, 400, fmt.Errorf("文本编码失败: %w", err))
@@ -378,7 +404,21 @@ func (s *Server) handleCompareWrite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit.Write("compare.write", "kind", req.Target.Kind, "path", req.Target.Path, "bytes", len(encoded), "encoding", req.Encoding, "backup", req.Backup)
-	writeJSON(w, 200, map[string]any{"ok": true})
+	// 返回这次写入真正产生的版本、规范路径与正文摘要，前端据此推进 baseline/version。
+	updated, statErr := fsys.Stat(r.Context(), req.Target.Path)
+	if statErr != nil {
+		writeErrSanitized(w, http.StatusBadGateway, fmt.Errorf("写入已完成但无法确认新版本: %w", statErr))
+		return
+	}
+	sum := sha256.Sum256(encoded)
+	writeJSON(w, 200, compareWriteResp{
+		OK:         true,
+		Version:    updated.Version(),
+		Path:       updated.Path,
+		Size:       updated.Size,
+		Digest:     "sha256:" + hex.EncodeToString(sum[:]),
+		DocumentID: req.DocumentID,
+	})
 }
 
 func (s *Server) handleCompareCopy(w http.ResponseWriter, r *http.Request) {

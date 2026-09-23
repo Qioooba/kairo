@@ -26,6 +26,7 @@ const UNIT_TESTS = [
   'tests/database-features-unit.js',
   'tests/database-review-regression.js',
   'tests/compare-folder-regression.js',
+  'tests/compare-save-lifecycle.test.js',
   'tests/security-review-followup.test.js',
   'tests/tab-lifecycle-review-regression.test.js',
   'tests/database-update-multi-col-scroll.test.js',

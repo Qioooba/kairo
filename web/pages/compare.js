@@ -164,6 +164,26 @@
     };
   }
 
+  // 文档身份：用于把读取响应、保存快照和撤回命令绑定到同一个“文档”。
+  // 只由协议 + 端点 + 规范路径组成；临时文本没有路径，退化为 label。
+  // 取消切换文档时这个身份不得被改动，否则会出现“新路径配旧版本”的错配写入。
+  function canonicalDocumentPath(value) {
+    let text = String(value == null ? '' : value).trim();
+    if (!text) return '';
+    const windowsLike = /^[A-Za-z]:/.test(text) || text.indexOf('\\') >= 0;
+    text = text.replace(/\\/g, '/').replace(/\/{2,}/g, '/');
+    if (text.length > 1) text = text.replace(/\/+$/, '');
+    return windowsLike ? text.toLowerCase() : text;
+  }
+  function documentIdOf(source) {
+    source = source || {};
+    if (source.kind === 'text' || !source.path) return 'text:' + String(source.label || '');
+    const path = canonicalDocumentPath(source.path);
+    if (source.kind === 'sftp') return 'sftp|' + String(source.system || '') + '|' + String(source.server || '') + '|' + path;
+    if (source.kind === 'ftp' || source.kind === 'ftps') return String(source.kind) + '|' + String(source.host || '') + '|' + String(Number(source.port) || 0) + '|' + path;
+    return String(source.kind || 'local') + '|' + path;
+  }
+
   function normalizeFolderHistoryEntry(entry) {
     if (typeof entry === 'string') return sourceIdentity({ kind: 'local', path: entry });
     if (!entry || typeof entry !== 'object') return null;
@@ -502,9 +522,11 @@
     const options = preference.options, saved = preference.sources;
     const leftSavedSource = Object.assign(defaultSource('left'), saved.left || {});
     const rightSavedSource = Object.assign(defaultSource('right'), saved.right || {});
+    // 每侧维护 {documentId, source, content, baseline, version, editSeq, loadSeq, draft}：
+    // documentId 只有在“切换文档确认通过”后才提交，读取/保存/撤回都以它为准。
     const state = {
-      left: { source: leftSavedSource, version: null, codec: { encoding: 'utf-8', eol: 'lf', bom: false }, dirty: false, baseline: '', loadState: (leftSavedSource.kind !== 'text' && leftSavedSource.path) ? 'unloaded' : 'ready', loadError: null, loadSeq: 0, editSeq: 0, saving: false },
-      right: { source: rightSavedSource, version: null, codec: { encoding: 'utf-8', eol: 'lf', bom: false }, dirty: false, baseline: '', loadState: (rightSavedSource.kind !== 'text' && rightSavedSource.path) ? 'unloaded' : 'ready', loadError: null, loadSeq: 0, editSeq: 0, saving: false },
+      left: { documentId: documentIdOf(leftSavedSource), source: leftSavedSource, content: '', version: null, codec: { encoding: 'utf-8', eol: 'lf', bom: false }, dirty: false, baseline: '', loadState: (leftSavedSource.kind !== 'text' && leftSavedSource.path) ? 'unloaded' : 'ready', loadError: null, loadSeq: 0, editSeq: 0, saving: false, draft: null },
+      right: { documentId: documentIdOf(rightSavedSource), source: rightSavedSource, content: '', version: null, codec: { encoding: 'utf-8', eol: 'lf', bom: false }, dirty: false, baseline: '', loadState: (rightSavedSource.kind !== 'text' && rightSavedSource.path) ? 'unloaded' : 'ready', loadError: null, loadSeq: 0, editSeq: 0, saving: false, draft: null },
       diff: null, hunks: [], hunkIndex: -1, mode: 'text', scan: null,
     };
     activeWorkbenchState = state;
@@ -614,7 +636,11 @@
           const ok = await (Kairo.core && Kairo.core.confirmDialog ? Kairo.core.confirmDialog((side === 'left' ? '左侧' : '右侧') + '内容有未保存的修改，更换来源将丢失当前修改。是否继续？') : Promise.resolve(typeof window !== 'undefined' && window.confirm ? window.confirm((side === 'left' ? '左侧' : '右侧') + '内容有未保存的修改，更换来源将丢失当前修改。是否继续？') : true));
           if (!ok) return;
         }
-        state[side].source = source; saveSources(state); await loadSide(side);
+        // 单侧打开也要走同一个“提交文档身份”落点，否则保存会拿着旧身份写新路径。
+        commitDocument(side, source);
+        saveSources(state);
+        updateHeader(side);
+        await loadSide(side);
       }), 'btn btn-sm');
       const saveBtn = makeButton('保存', 'save', () => saveSide(side), 'btn btn-sm'); saveBtn.disabled = true;
       const revertBtn = makeButton('退回', 'undo', () => revertSide(side), 'btn btn-sm'); revertBtn.disabled = true;
@@ -688,46 +714,94 @@
     }
 
     const undoStack = [];
-    function sourcePairKey() {
-      return (state.left && state.left.source ? JSON.stringify(sourceIdentity(state.left.source)) : '') + '||' +
-             (state.right && state.right.source ? JSON.stringify(sourceIdentity(state.right.source)) : '');
+    // 撤回记录是命令，区分 edit/merge 与 swap：
+    // - edit/merge（内容修改）要求当前“文档 pair”与记录一致；
+    // - swap 记录交换之后的左右身份作为前置条件，撤回时原子恢复两侧完整文档状态。
+    // 检查通过之后才 pop；真正不匹配时给出提示并保留记录，便于检查。
+    function sideDocumentKey(side) { return state[side].documentId || documentIdOf(state[side].source); }
+    function sourcePairKey() { return sideDocumentKey('left') + '||' + sideDocumentKey('right'); }
+    function captureDocumentState(side) {
+      const item = state[side];
+      return {
+        source: JSON.parse(JSON.stringify(item.source || {})),
+        documentId: item.documentId || documentIdOf(item.source),
+        version: item.version ? JSON.parse(JSON.stringify(item.version)) : null,
+        codec: JSON.parse(JSON.stringify(item.codec || {})),
+        baseline: item.baseline != null ? item.baseline : '',
+        loadState: item.loadState,
+        loadError: item.loadError,
+        loadSeq: item.loadSeq || 0,
+        dirty: !!item.dirty,
+        text: editors[side].getValue()
+      };
     }
-    function pushUndoSnapshot(name) {
+    function pushUndoSnapshot(name, opts) {
+      const kind = (opts && opts.kind) || 'edit';
+      const leftSnap = captureDocumentState('left');
+      const rightSnap = captureDocumentState('right');
       undoStack.push({
-        pairKey: sourcePairKey(),
-        leftText: editorLeft.getValue(),
-        rightText: editorRight.getValue(),
-        leftSource: JSON.parse(JSON.stringify((state.left && state.left.source) || {})),
-        rightSource: JSON.parse(JSON.stringify((state.right && state.right.source) || {})),
-        leftCodec: JSON.parse(JSON.stringify((state.left && state.left.codec) || {})),
-        rightCodec: JSON.parse(JSON.stringify((state.right && state.right.codec) || {})),
-        name: name || 'edit'
+        kind: kind,
+        name: name || kind,
+        pairKey: leftSnap.documentId + '||' + rightSnap.documentId,
+        // swap 之后左右身份必然对调，这就是撤回 swap 的前置条件。
+        swappedKey: kind === 'swap' ? (rightSnap.documentId + '||' + leftSnap.documentId) : '',
+        left: leftSnap,
+        right: rightSnap
       });
       if (undoStack.length > 50) undoStack.shift();
       if (undoBtn) undoBtn.disabled = undoStack.length === 0;
+    }
+    function restoreDocumentState(side, snap) {
+      const item = state[side];
+      item.source = JSON.parse(JSON.stringify(snap.source || {}));
+      item.documentId = snap.documentId || documentIdOf(item.source);
+      item.version = snap.version ? JSON.parse(JSON.stringify(snap.version)) : null;
+      item.codec = JSON.parse(JSON.stringify(snap.codec || {}));
+      item.baseline = snap.baseline != null ? snap.baseline : '';
+      item.loadState = snap.loadState || 'ready';
+      item.loadError = snap.loadError || null;
+      // 恢复身份后必须让任何在途读取失效，因此 loadSeq 只前进不回退。
+      item.loadSeq = Math.max(item.loadSeq || 0, snap.loadSeq || 0) + 1;
+      item.draft = null;
+      editors[side].setValue(snap.text != null ? snap.text : '', { resetHistory: true });
     }
     function performUndo() {
       if (!undoStack.length) {
         toast('没有可撤回的操作', 'info');
         return;
       }
-      const snap = undoStack.pop();
-      if (snap.pairKey && snap.pairKey !== sourcePairKey()) {
-        toast('撤回快照与当前比较文件不匹配，已阻止', 'warn');
+      const command = undoStack[undoStack.length - 1];
+      const currentPair = sourcePairKey();
+      if (command.kind === 'swap') {
+        if (command.swappedKey && command.swappedKey !== currentPair) {
+          toast('撤回快照与当前比较文件不匹配，已阻止（记录保留，可切回原文件后重试）', 'warn');
+          if (undoBtn) undoBtn.disabled = undoStack.length === 0;
+          return;
+        }
+      } else if (command.pairKey && command.pairKey !== currentPair) {
+        toast('撤回快照与当前比较文件不匹配，已阻止（记录保留，可切回原文件后重试）', 'warn');
         if (undoBtn) undoBtn.disabled = undoStack.length === 0;
         return;
       }
-      editorLeft.setValue(snap.leftText != null ? snap.leftText : snap.left);
-      editorRight.setValue(snap.rightText != null ? snap.rightText : snap.right);
-      if (snap.leftSource && snap.rightSource && (snap.leftSource.kind || snap.leftSource.path)) {
-        state.left.source = snap.leftSource;
-        state.right.source = snap.rightSource;
-        if (snap.leftCodec) state.left.codec = snap.leftCodec;
-        if (snap.rightCodec) state.right.codec = snap.rightCodec;
-        updateHeader('left');
-        updateHeader('right');
-        saveSources(state);
+      // 只有前置条件成立才 pop，避免检查失败时把可检查的记录丢掉。
+      undoStack.pop();
+      if (command.kind === 'swap') {
+        // 交换撤回：原子恢复两侧完整文档状态（来源/版本/编码/baseline/加载状态/正文）。
+        restoreDocumentState('left', command.left);
+        restoreDocumentState('right', command.right);
+      } else {
+        editorLeft.setValue(command.left.text != null ? command.left.text : '', { resetHistory: true });
+        editorRight.setValue(command.right.text != null ? command.right.text : '', { resetHistory: true });
+        state.left.source = JSON.parse(JSON.stringify(command.left.source || {}));
+        state.right.source = JSON.parse(JSON.stringify(command.right.source || {}));
+        if (command.left.documentId) state.left.documentId = command.left.documentId;
+        if (command.right.documentId) state.right.documentId = command.right.documentId;
+        if (command.left.codec) state.left.codec = JSON.parse(JSON.stringify(command.left.codec));
+        if (command.right.codec) state.right.codec = JSON.parse(JSON.stringify(command.right.codec));
       }
+      updateHeader('left');
+      updateHeader('right');
+      saveSources(state);
       markDirty('left');
       markDirty('right');
       if (undoBtn) undoBtn.disabled = undoStack.length === 0;
@@ -883,6 +957,12 @@
     const leftBrowse = browseButton({ input: leftPathInp, directory: false, compact: true, label: '浏览', title: '浏览选择左侧文件' });
     const rightBrowse = browseButton({ input: rightPathInp, directory: false, compact: true, label: '浏览', title: '浏览选择右侧文件' });
     const loadFilesBtn = el('button', { class: 'btn btn-sm btn-primary cmp2-file-load-btn', type: 'button', text: '载入并比对', title: '读取两侧指定文件并直接比对' });
+    function pathCandidate(side, path) {
+      const current = state[side].source;
+      // 保持原语义：临时文本或无来源换成给定路径的本地文件，其它协议只换路径。
+      if (!current || current.kind === 'text') return Object.assign({}, defaultSource(side), { kind: 'local', path: path, encoding: 'auto' });
+      return Object.assign({}, current, { path: path });
+    }
     async function loadInputsAndCompare() {
       const lPath = leftPathInp.value.trim();
       const rPath = rightPathInp.value.trim();
@@ -890,33 +970,14 @@
         toast('请至少输入一侧文件路径', 'warn');
         return;
       }
-      if ((lPath && state.left.dirty) || (rPath && state.right.dirty)) {
-        const ok = await (Kairo.core && Kairo.core.confirmDialog ? Kairo.core.confirmDialog('文件比对存在未保存的修改，重新载入将丢失当前修改。是否继续？') : Promise.resolve(typeof window !== 'undefined' && window.confirm ? window.confirm('文件比对存在未保存的修改，重新载入将丢失当前修改。是否继续？') : true));
-        if (!ok) return;
-      }
-      if (lPath) {
-        if (!state.left.source || state.left.source.kind === 'text') {
-          state.left.source = { kind: 'local', path: lPath, encoding: 'auto' };
-        } else {
-          state.left.source.path = lPath;
-        }
-      }
-      if (rPath) {
-        if (!state.right.source || state.right.source.kind === 'text') {
-          state.right.source = { kind: 'local', path: rPath, encoding: 'auto' };
-        } else {
-          state.right.source.path = rPath;
-        }
-      }
-      saveSources(state);
+      if (!state.textWorkbench || typeof state.textWorkbench.loadPair !== 'function') return;
       status.textContent = '正在载入文件…';
-      const tasks = [];
-      if (lPath) tasks.push(loadSide('left'));
-      if (rPath) tasks.push(loadSide('right'));
-      const results = await Promise.all(tasks);
-      if (results.every(Boolean)) {
-        compareNow(false, true);
-      }
+      // 与文件夹双击共用同一个切换文档入口，来源与文档身份只在确认后被提交。
+      await state.textWorkbench.loadPair(
+        lPath ? pathCandidate('left', lPath) : state.left.source,
+        rPath ? pathCandidate('right', rPath) : state.right.source,
+        { confirmMessage: '文件比对存在未保存的修改，重新载入将丢失当前修改。是否继续？' }
+      );
     }
     loadFilesBtn.onclick = loadInputsAndCompare;
     leftPathInp.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); loadInputsAndCompare(); } });
@@ -945,9 +1006,12 @@
           if (state.right.dirty && !state.left.dirty) side = 'right';
           else if (state.left.dirty && !state.right.dirty) side = 'left';
           else if (state.right.dirty && state.left.dirty) {
-            saveSide('left');
-            saveSide('right');
+            // 双侧保存也走同一个命令，逐侧串行，避免重复写。
+            saveBothSides();
             return;
+          } else if (hasPendingDraft('left') || hasPendingDraft('right')) {
+            // 还没有提交的草稿：按草稿归属决定保存哪一侧。
+            side = hasPendingDraft('left') ? 'left' : 'right';
           }
         }
         if (side) saveSide(side);
@@ -975,8 +1039,8 @@
     });
 
     function refreshSaveButtons() {
-      const canSaveLeft = canSaveComparedFile(state.left) || !!(state.left.source && state.left.source.kind === 'text' && state.left.dirty && !state.left.saving);
-      const canSaveRight = canSaveComparedFile(state.right) || !!(state.right.source && state.right.source.kind === 'text' && state.right.dirty && !state.right.saving);
+      const canSaveLeft = canSaveComparedFile(state.left, hasPendingDraft('left')) || !!(state.left.source && state.left.source.kind === 'text' && (state.left.dirty || hasPendingDraft('left')) && !state.left.saving);
+      const canSaveRight = canSaveComparedFile(state.right, hasPendingDraft('right')) || !!(state.right.source && state.right.source.kind === 'text' && (state.right.dirty || hasPendingDraft('right')) && !state.right.saving);
       saveLeftBtn.disabled = !canSaveLeft;
       saveRightBtn.disabled = !canSaveRight;
       const leftIsText = state.left.source && state.left.source.kind === 'text';
@@ -1009,6 +1073,9 @@
       dirtyBanner.textContent = bits.join(' · ');
     }
     function invalidateComparison(message) {
+      // 结果区要被清空：删除正在编辑的节点之前先作废其草稿，避免把旧文档的
+      // 行内输入写进刚提交的新文档。
+      cancelDocumentDraft();
       state.diff = null;
       state.diffStale = false;
       state.diffSourceKey = '';
@@ -1027,6 +1094,22 @@
       [prevBtn, nextBtn, prevLineBtn, nextLineBtn, copyBtn, downloadBtn].forEach(btn => btn.disabled = true);
       refreshSaveButtons();
     }
+    function hasPendingDraft(side) { return !!(state[side] && state[side].draft); }
+    // 行内草稿的当前文本来自真实单元格；提交后由 onEdit 写回主编辑器。
+    function flushDocumentDraft() {
+      if (!currentVirtualDiff || typeof currentVirtualDiff.flushActiveEdit !== 'function') return false;
+      return currentVirtualDiff.flushActiveEdit({ recompare: false });
+    }
+    function cancelDocumentDraft() {
+      if (!currentVirtualDiff || typeof currentVirtualDiff.cancelActiveEdit !== 'function') return false;
+      return currentVirtualDiff.cancelActiveEdit();
+    }
+    function readModelContent(side) {
+      let value = '';
+      try { value = editors[side].getValue(); } catch (_) { value = state[side].content || ''; }
+      state[side].content = value;
+      return value;
+    }
     function markDirty(side) {
       compareSeq++;
       const item = state[side];
@@ -1034,6 +1117,7 @@
       // 最小改：按内容判定脏，而非一输入就脏；undo 回原样可自动消脏，避免误保存。
       try {
         const current = editors[side] ? editors[side].getValue() : '';
+        item.content = current;
         const base = item.baseline != null ? item.baseline : '';
         item.dirty = current !== base;
       } catch (_) {
@@ -1044,22 +1128,43 @@
       if (item.loadState === 'error') { item.loadState = 'ready'; item.loadError = null; }
       if (state.diff) state.diffStale = true;
       sourceHeaders[side].dirty.textContent = item.dirty ? '● 已修改' : '';
-      sourceHeaders[side].saveBtn.disabled = !canSaveComparedFile(item);
+      sourceHeaders[side].saveBtn.disabled = !canSaveComparedFile(item, hasPendingDraft(side));
       refreshSaveButtons();
     }
     function updateHeader(side) {
       const source = state[side].source; sourceHeaders[side].badge.textContent = source.kind === 'text' ? '文本' : source.kind.toUpperCase();
       sourceHeaders[side].label.textContent = sourceLabel(source); sourceHeaders[side].label.title = sourceLabel(source);
       const codec = state[side].codec; sourceHeaders[side].meta.textContent = source.kind === 'text' ? '' : String(codec.encoding || 'utf-8').toUpperCase() + ' · ' + String(codec.eol || 'lf').toUpperCase() + (codec.bom ? ' · BOM' : '');
-      sourceHeaders[side].dirty.textContent = state[side].dirty ? '● 已修改' : ''; sourceHeaders[side].saveBtn.disabled = !canSaveComparedFile(state[side]);
+      sourceHeaders[side].dirty.textContent = state[side].dirty ? '● 已修改' : ''; sourceHeaders[side].saveBtn.disabled = !canSaveComparedFile(state[side], hasPendingDraft(side));
       if (side === 'left' && state.left.source && state.left.source.path && leftPathInp) leftPathInp.value = state.left.source.path;
       if (side === 'right' && state.right.source && state.right.source.path && rightPathInp) rightPathInp.value = state.right.source.path;
       refreshSaveButtons();
     }
+    // 「切换文档」的唯一落点：确认通过之后才提交来源与文档身份，然后再读取。
+    // 确认之前不得改动 source/version/codec/baseline/正文/历史/当前视图。
+    function commitDocument(side, source) {
+      const item = state[side];
+      const next = Object.assign(defaultSource(side), source || {});
+      item.source = next;
+      item.documentId = documentIdOf(next);
+      item.version = null;
+      item.codec = { encoding: 'utf-8', eol: 'lf', bom: false };
+      item.dirty = false;
+      item.baseline = '';
+      item.content = '';
+      item.draft = null;
+      item.loadError = null;
+      item.loadState = 'unloaded';
+      return item;
+    }
     async function loadSide(side) {
       const item = state[side];
       const source = Object.assign({}, item.source);
+      if (!item.documentId) item.documentId = documentIdOf(item.source);
+      // 读取响应必须属于同一个文档身份 + 同一次加载，否则丢弃。
+      const documentKey = sideDocumentKey(side);
       const loadNo = ++item.loadSeq;
+      item.draft = null;
       const inferredLanguage = Kairo.workbench && Kairo.workbench.syntaxEditor ? Kairo.workbench.syntaxEditor.languageFromPath(source.path || source.label, 'text') : 'text';
       sourceHeaders[side].language.value = inferredLanguage;
       editors[side].setLanguage(inferredLanguage);
@@ -1073,6 +1178,7 @@
         item.codec = { encoding: 'utf-8', eol: 'lf', bom: false };
         item.dirty = false;
         item.baseline = '';
+        item.content = '';
         invalidateComparison('正在读取 ' + sourceLabel(source) + '…');
       } else {
         editors[side].setValue('', { resetHistory: true });
@@ -1080,37 +1186,41 @@
         item.codec = { encoding: 'utf-8', eol: 'lf', bom: false };
         item.dirty = false;
         item.baseline = '';
+        item.content = '';
         invalidateComparison('已切换为手动文本');
       }
       updateHeader(side); if (source.kind === 'text') return true;
       status.textContent = '正在读取 ' + sourceLabel(source) + '…';
       try {
         const response = await api('POST', '/api/compare/read', { source: spec(source) });
-        if (disposed || item.loadSeq !== loadNo) return false;
+        if (disposed || item.loadSeq !== loadNo || sideDocumentKey(side) !== documentKey) return false;
         if (response.binary) throw new Error('检测到二进制文件，文本工作台不支持直接编辑');
         if (response.truncated) throw new Error('文件超过 8MB 文本编辑上限，请使用文件夹比较进行流式复制');
         // 服务端返回的 entry.path 是已解析的完整路径；以它为准，让比对视图始终显示绝对路径。
         if (response.entry && response.entry.path) source.path = response.entry.path;
         editors[side].setLanguage(inferredLanguage); editors[side].setValue(response.text, { resetHistory: true });
         item.source = Object.assign(item.source, source);
+        item.documentId = documentIdOf(item.source);
         item.version = response.version;
         item.codec = { encoding: response.encoding || 'utf-8', eol: response.eol || 'lf', bom: !!response.bom };
         item.dirty = false;
         undoStack.length = 0;
         if (undoBtn) undoBtn.disabled = true;
         try { item.baseline = editors[side].getValue(); } catch (_) { item.baseline = String(response.text || ''); }
+        item.content = item.baseline;
         item.loadState = 'ready';
         editors[side].textarea.disabled = false;
         updateHeader(side);
         status.textContent = '已读取 ' + sourceLabel(source) + ' · ' + formatBytes(response.entry && response.entry.size);
         return true;
       } catch (error) {
-        if (disposed || item.loadSeq !== loadNo) return false;
+        if (disposed || item.loadSeq !== loadNo || sideDocumentKey(side) !== documentKey) return false;
         item.loadState = 'error';
         item.loadError = error && error.message ? error.message : String(error);
         item.version = null;
         item.dirty = false;
         item.baseline = '';
+        item.content = '';
         editors[side].setValue('', { resetHistory: true });
         editors[side].textarea.disabled = false;
         updateHeader(side);
@@ -1119,21 +1229,28 @@
         return false;
       }
     }
+    // 统一保存命令：所有保存入口（按钮 / Ctrl+S / 双侧）都走这里。
+    // 顺序固定为：提交行内草稿 → 捕获不可变快照 → 串行条件写入 → 用返回值推进版本。
     async function saveSide(side) {
       if (disposed) return false;
       const item = state[side];
       const sideName = side === 'left' ? '左侧' : '右侧';
+      // 1) 先把尚未 blur 的行内草稿提交到文档模型；不触发重比，避免删掉正在编辑的节点。
+      flushDocumentDraft();
       if (item.source && item.source.kind === 'text') {
         toast(sideName + '当前为临时文本，请先指定保存文件路径', 'warn');
         const wasShowingTemp = showingResult && !!state.diff;
         openSourceDialog(item.source, false, async source => {
-          state[side].source = source;
+          commitDocument(side, source);
           saveSources(state);
-          const content = editors[side].getValue();
+          updateHeader(side);
+          const content = readModelContent(side);
           try {
             await api('POST', '/api/compare/write', {
-              target: spec(source),
+              target: spec(item.source),
               content,
+              document_id: sideDocumentKey(side),
+              edit_seq: item.editSeq || 0,
               backup: !!options.backup,
               encoding: item.codec.encoding,
               eol: item.codec.eol,
@@ -1141,7 +1258,7 @@
             });
             item.dirty = false;
             await loadSide(side);
-            toast('已成功保存至 ' + sourceLabel(source) + (options.backup ? '（原文件已备份）' : ''), 'ok');
+            toast('已成功保存至 ' + sourceLabel(item.source) + (options.backup ? '（原文件已备份）' : ''), 'ok');
             if (!disposed && wasShowingTemp) {
               try { await compareNow(false, true); } catch (_) {}
             }
@@ -1151,11 +1268,21 @@
         });
         return false;
       }
-      if (!item.dirty) {
+      // 2) 同一文档串行保存：保存中的重复请求（含 Ctrl+S 绕过 disabled 按钮）不得再发一次写。
+      if (item.saving) {
+        toast(sideName + '正在保存，请稍候…', 'idle');
+        return false;
+      }
+      if (!item.dirty && !hasPendingDraft(side)) {
         toast(sideName + '文件内容未修改，无需保存', 'idle');
         return false;
       }
       if (!item.version) {
+        if (item.dirty) {
+          // 没有版本就不能做条件写入；此时重新读取会覆盖用户草稿，因此直接拒绝。
+          toast(sideName + '缺少可用的文件版本，请重新打开该文件后再保存', 'err');
+          return false;
+        }
         toast(sideName + '正在重新校验版本…', 'idle');
         const reloaded = await loadSide(side);
         if (!reloaded || !item.version) {
@@ -1163,33 +1290,82 @@
           return false;
         }
       }
-      const sourceAtSave = spec(item.source);
-      const loadNo = item.loadSeq;
-      const editNo = item.editSeq;
-      const content = editors[side].getValue();
+      // 3) 捕获不可变快照：documentId + 正文 + 版本 + 编辑/加载序号。
+      const snapshot = {
+        documentId: sideDocumentKey(side),
+        target: spec(item.source),
+        expectedVersion: item.version ? JSON.parse(JSON.stringify(item.version)) : null,
+        content: readModelContent(side),
+        editSeq: item.editSeq || 0,
+        loadSeq: item.loadSeq || 0
+      };
+      const pairKeyAtSave = sourcePairKey();
       // 最小改：记住保存前的视图，保存后自动重比，避免差异视图被清空后需手动点。
       const wasShowing = showingResult && !!state.diff;
       item.saving = true;
       updateHeader(side);
+      refreshSaveButtons();
       toast('正在保存' + sideName + '…', 'idle');
       try {
-        await api('POST', '/api/compare/write', { target: sourceAtSave, content, expected: item.version, backup: !!options.backup, encoding: item.codec.encoding, eol: item.codec.eol, bom: !!item.codec.bom });
-        if (disposed || item.loadSeq !== loadNo || item.editSeq !== editNo || JSON.stringify(spec(item.source)) !== JSON.stringify(sourceAtSave)) return false;
-        item.dirty = false;
+        const response = await api('POST', '/api/compare/write', {
+          target: snapshot.target,
+          content: snapshot.content,
+          expected: snapshot.expectedVersion,
+          document_id: snapshot.documentId,
+          edit_seq: snapshot.editSeq,
+          backup: !!options.backup,
+          encoding: (item.codec && item.codec.encoding) || 'utf-8',
+          eol: (item.codec && item.codec.eol) || 'lf',
+          bom: !!(item.codec && item.codec.bom)
+        });
+        // 只有文档仍然没被更换/关闭时才把响应写回 UI；编辑继续进行不算过期。
+        const sameDocument = !disposed && state[side] === item &&
+          sideDocumentKey(side) === snapshot.documentId && sourcePairKey() === pairKeyAtSave;
+        if (!sameDocument) return false;
+        if (item.loadSeq === snapshot.loadSeq) {
+          if (response && response.version) item.version = response.version;
+          // baseline 推进到本次真正写入的正文；当前正文保持用户最新输入。
+          item.baseline = snapshot.content;
+          const current = readModelContent(side);
+          item.dirty = current !== item.baseline;
+        } else {
+          // 写入期间该文档又被重新读取过：以重读结果为准，不要用更旧的响应覆盖版本。
+          const current = readModelContent(side);
+          item.dirty = current !== (item.baseline != null ? item.baseline : '');
+        }
+        // 本次已提交的草稿在 flush 阶段就清掉了；保存期间新开的行内编辑必须保留。
+        item.externalConflict = null;
         updateHeader(side);
-        await loadSide(side);
-        if (!disposed) toast(sideName + '保存成功' + (options.backup ? '（原文件已备份）' : ''), 'ok');
-        if (!disposed && wasShowing) {
+        refreshSaveButtons();
+        toast(sideName + '保存成功' + (options.backup ? '（原文件已备份）' : ''), 'ok');
+        if (wasShowing) {
           try { await compareNow(false, true); } catch (_) {}
         }
         return true;
       } catch (error) {
-        if (!disposed) toast('保存失败：' + (error.message || error), 'err');
+        if (!disposed) {
+          const isConflict = !!(error && (error.status === 409 || /已变化|冲突/.test(String(error.message || ''))));
+          if (isConflict) {
+            // 真正的外部冲突：保留本地草稿，绝不自动重读覆盖。
+            item.externalConflict = { at: Date.now(), documentId: snapshot.documentId, message: String(error.message || '') };
+            toast(sideName + '磁盘文件已被外部修改，保存被拒绝：本地草稿与版本均已保留，请对照后决定是否覆盖', 'warn');
+            refreshSaveButtons();
+          } else {
+            toast('保存失败：' + (error.message || error), 'err');
+          }
+        }
         return false;
       } finally {
         item.saving = false;
-        if (!disposed) updateHeader(side);
+        if (!disposed) { updateHeader(side); refreshSaveButtons(); }
+        // 提交草稿时把差异标成过期；保存失败后必须重新算一次，避免结果区长期停在旧内容。
+        if (!disposed && state.diffStale && !hasPendingDraft(side)) scheduleRecompare(150, true);
       }
+    }
+    async function saveBothSides() {
+      const results = [];
+      for (const side of ['left', 'right']) results.push(await saveSide(side));
+      return results;
     }
     function revertSide(side) {
       if (disposed) return;
@@ -1220,6 +1396,8 @@
     async function compareNow(isAuto, force) {
       const auto = !!isAuto;
       if (disposed) return false;
+      // 先把尚未 blur 的行内草稿提交进模型，否则这次比较用的是旧正文。
+      flushDocumentDraft();
       if (state.left.loadState === 'unloaded') {
         const ok = await loadSide('left');
         if (!ok) return false;
@@ -1321,6 +1499,9 @@
     function showEditors() { showingResult = false; panel.classList.remove('cmp-panel-has-result'); editorGrid.style.display = ''; resultHost.style.display = 'none'; editBtn.style.display = 'none'; compareBtn.style.display = ''; refreshSaveButtons(); }
     let currentVirtualDiff = null;
     function renderResult(preserveView) {
+      // 重建结果区（字号/行距/搜索/重比）会删除现有单元格：先提交尚未 blur 的行内草稿，
+      // 但不立即重比，避免在保存捕获快照之前又触发一次重建。
+      flushDocumentDraft();
       const viewToRestore = (preserveView && typeof preserveView === 'object')
         ? preserveView
         : (preserveView && currentVirtualDiff && typeof currentVirtualDiff.getViewState === 'function'
@@ -1339,6 +1520,12 @@
         line: applyLine,
         batch: (indices, dir) => applyBatch(filtered, indices, dir),
         edit: commitLineEdit,
+        // 行内草稿一输入就登记到文档状态，关闭保护/保存按钮/模式切换据此判断。
+        onDraft: function (side, draft) {
+          if (!state[side]) return;
+          state[side].draft = draft;
+          if (!disposed) refreshSaveButtons();
+        },
         language: { left: sourceHeaders.left.language.value, right: sourceHeaders.right.language.value },
         rowHeight: Number(options.line_height) || 25,
         fontSize: Number(options.font_size) || 12,
@@ -1448,7 +1635,7 @@
       compareNow(false, true);
       toast('已批量覆盖 ' + selRows.length + ' 行到' + (direction === 'right' ? '右侧' : '左侧'), 'ok');
     }
-    function commitLineEdit(side, lineNo, newText, row) {
+    function commitLineEdit(side, lineNo, newText, row, opts) {
       const current = editors[side].getValue();
       const otherNo = side === 'left' ? row.rightNo : row.leftNo;
       const next = replaceEditorLine(current, lineNo, newText, otherNo);
@@ -1456,10 +1643,14 @@
       pushUndoSnapshot('editLine');
       editors[side].setValue(next);
       markDirty(side);
-      compareNow(false, true);
+      // 保存前提交草稿时必须延后重比：立即重比会删掉用户正在编辑的单元格。
+      // flushActiveEdit({recompare:false}) 与内部 deferRecompare 都表示延后。
+      if (opts && (opts.deferRecompare || opts.recompare === false)) state.diffStale = true;
+      else compareNow(false, true);
     }
     function swapSides() {
-      pushUndoSnapshot('swapSides');
+      // swap 命令记录交换后的身份作为撤回前置条件，并快照两侧完整文档状态。
+      pushUndoSnapshot('swapSides', { kind: 'swap' });
       const leftText = editorLeft.getValue(); editorLeft.setValue(editorRight.getValue()); editorRight.setValue(leftText);
       const old = state.left; state.left = state.right; state.right = old; markDirty('left'); markDirty('right'); updateHeader('left'); updateHeader('right'); saveSources(state); if (state.diff) compareNow(false, true);
     }
@@ -1488,9 +1679,10 @@
     }
     function onBeforeUnload(e) {
       if (activeWorkbenchState) {
-        const leftDirty = !!(activeWorkbenchState.left && activeWorkbenchState.left.dirty);
-        const rightDirty = !!(activeWorkbenchState.right && activeWorkbenchState.right.dirty);
-        if (leftDirty || rightDirty) {
+        // 尚未 blur 的行内草稿也算未保存工作，否则关闭页面会静默丢失输入。
+        const leftPending = !!(activeWorkbenchState.left && (activeWorkbenchState.left.dirty || activeWorkbenchState.left.draft));
+        const rightPending = !!(activeWorkbenchState.right && (activeWorkbenchState.right.dirty || activeWorkbenchState.right.draft));
+        if (leftPending || rightPending) {
           e.preventDefault();
           e.returnValue = '';
         }
@@ -1499,22 +1691,39 @@
     if (typeof window !== 'undefined') window.addEventListener('beforeunload', onBeforeUnload);
 
     state.textWorkbench = {
-      loadPair: async (left, right) => {
+      // 唯一的“切换文档”入口：先构造候选来源，确认之后才提交，再开始读取。
+      // 取消时不得改动 source/version/codec/baseline/正文/历史/当前视图。
+      loadPair: async (left, right, opts) => {
         if (disposed) return false;
+        const candidates = {
+          left: Object.assign(defaultSource('left'), left || {}),
+          right: Object.assign(defaultSource('right'), right || {})
+        };
         if (state.left.dirty || state.right.dirty) {
-          const ok = await (Kairo.core && Kairo.core.confirmDialog ? Kairo.core.confirmDialog('当前文件比对有未保存的修改，打开新文件将丢失当前修改。是否继续？') : Promise.resolve(typeof window !== 'undefined' && window.confirm ? window.confirm('当前文件比对有未保存的修改，打开新文件将丢失当前修改。是否继续？') : true));
+          const message = (opts && opts.confirmMessage) || '当前文件比对有未保存的修改，打开新文件将丢失当前修改。是否继续？';
+          const ok = await (Kairo.core && Kairo.core.confirmDialog ? Kairo.core.confirmDialog(message) : Promise.resolve(typeof window !== 'undefined' && window.confirm ? window.confirm(message) : true));
           if (!ok) return false;
         }
-        state.left.source = Object.assign(defaultSource('left'), left || {});
-        state.right.source = Object.assign(defaultSource('right'), right || {});
+        // 确认通过：一次性提交两侧文档身份，然后读取。
+        commitDocument('left', candidates.left);
+        commitDocument('right', candidates.right);
         updateHeader('left');
         updateHeader('right');
+        saveSources(state);
         undoStack.length = 0;
         if (undoBtn) undoBtn.disabled = true;
         const loaded = await Promise.all([loadSide('left'), loadSide('right')]);
         if (disposed || !loaded.every(Boolean)) return false;
         return compareNow(false, true);
-      }
+      },
+      // 保存命令：所有保存入口（按钮 / Ctrl+S / 双侧）统一走 saveSide。
+      saveSide: side => saveSide(side),
+      saveBothSides: () => saveBothSides(),
+      // 行内草稿状态：关闭保护、虚拟列表重建与模式切换都用它。
+      flushInlineDraft: opts => (currentVirtualDiff && typeof currentVirtualDiff.flushActiveEdit === 'function' ? currentVirtualDiff.flushActiveEdit(opts || { recompare: false }) : false),
+      cancelInlineDraft: () => (currentVirtualDiff && typeof currentVirtualDiff.cancelActiveEdit === 'function' ? currentVirtualDiff.cancelActiveEdit() : false),
+      hasInlineDraft: side => hasPendingDraft(side),
+      documentState: side => ({ documentId: sideDocumentKey(side), source: state[side].source, version: state[side].version, editSeq: state[side].editSeq, loadSeq: state[side].loadSeq })
     };
     return function cleanupTextWorkbench() {
       if (disposed) return;
@@ -1694,6 +1903,16 @@
 
     let activeRowIndex = -1;
     let hScrollLeft = 0;
+    // 当前正在行内编辑的单元格：保存、关闭保护与虚拟列表重建都要先问它。
+    let activeEditCell = null;
+    const editHooks = {
+      onEditStart: function (cell) { activeEditCell = cell; },
+      onEditEnd: function (cell) { if (activeEditCell === cell) activeEditCell = null; },
+      onDraftChange: function (side, draft) {
+        if (state && state[side]) state[side].draft = draft;
+        if (actions && actions.onDraft) actions.onDraft(side, draft);
+      }
+    };
     const viewport = el('div', { class: 'cmp-vdiff', tabindex: '0', role: 'region', 'aria-label': '文本差异结果' });
     const canvas = el('div', { class: 'cmp-vdiff-canvas', role: 'list' });
     canvas.style.height = Math.max(1, rows.length * rowHeight) + 'px';
@@ -2063,6 +2282,8 @@
       const start = Math.max(0, Math.floor(viewport.scrollTop / rowHeight) - 15);
       const end = Math.min(rows.length, start + Math.ceil((viewport.clientHeight || 600) / rowHeight) + 30);
       if (start === renderedStart && end === renderedEnd) return;
+      // 重建虚拟行会删掉现有 DOM：先提交尚未 blur 的行内草稿，但不要立即重比。
+      flushActiveEdit({ recompare: false });
       renderedStart = start;
       renderedEnd = end;
       canvas.innerHTML = '';
@@ -2122,9 +2343,9 @@
         }
         node.append(
           selectCell,
-          makeDiffCell(row, 'left', onEdit, actions && actions.language && actions.language.left, searchQuery, searchCaseSensitive, isCurrentSearch, navigateLine, searchSide, hScrollLeft),
+          makeDiffCell(row, 'left', onEdit, actions && actions.language && actions.language.left, searchQuery, searchCaseSensitive, isCurrentSearch, navigateLine, searchSide, hScrollLeft, editHooks),
           middle,
-          makeDiffCell(row, 'right', onEdit, actions && actions.language && actions.language.right, searchQuery, searchCaseSensitive, isCurrentSearch, navigateLine, searchSide, hScrollLeft)
+          makeDiffCell(row, 'right', onEdit, actions && actions.language && actions.language.right, searchQuery, searchCaseSensitive, isCurrentSearch, navigateLine, searchSide, hScrollLeft, editHooks)
         );
         canvas.appendChild(node);
       }
@@ -2309,10 +2530,30 @@
       });
     }
 
-    return { element: wrapper, jumpToHunk, navigateHunk, navigateLine, openSearch, closeSearch, clearSelection, restoreSearch, getViewState, restoreViewState };
+    // 提交当前行内草稿到文档模型；recompare:false 时不触发重比，避免删掉正在编辑的节点。
+    function flushActiveEdit(opts) {
+      const cell = activeEditCell;
+      if (!cell || typeof cell.isEditing !== 'function' || !cell.isEditing()) return false;
+      activeEditCell = null;
+      cell.finishEdit(opts || { recompare: false });
+      return true;
+    }
+    function cancelActiveEdit() {
+      const cell = activeEditCell;
+      if (!cell) return false;
+      activeEditCell = null;
+      if (typeof cell.cancelEdit === 'function') cell.cancelEdit();
+      return true;
+    }
+    function hasDraft() {
+      if (!activeEditCell || typeof activeEditCell.getDraft !== 'function') return false;
+      return activeEditCell.getDraft() != null;
+    }
+
+    return { element: wrapper, jumpToHunk, navigateHunk, navigateLine, openSearch, closeSearch, clearSelection, restoreSearch, getViewState, restoreViewState, flushActiveEdit, cancelActiveEdit, hasDraft };
   }
 
-  function makeDiffCell(row, side, onEdit, language, searchQuery, searchCaseSensitive, isCurrentSearchMatch, onNavigateLine, searchSide, hScroll) {
+  function makeDiffCell(row, side, onEdit, language, searchQuery, searchCaseSensitive, isCurrentSearchMatch, onNavigateLine, searchSide, hScroll, hooks) {
     const lineNo = side === 'left' ? row.leftNo : row.rightNo;
     const text = side === 'left' ? row.leftText : row.rightText;
     const other = side === 'left' ? row.rightText : row.leftText;
@@ -2348,8 +2589,16 @@
     code.dataset.side = side;
     code.dataset.line = String(lineNo || 0);
     let original = text || '';
-    let skip = false, editing = false;
+    let editing = false;
 
+    // contenteditable 的可见文本：finishEdit/草稿登记都以它为准，不再只看主编辑器。
+    function readCellText() {
+      const raw = typeof code.innerText === 'string' ? code.innerText : code.textContent;
+      return String(raw == null ? '' : raw).replace(/\r\n?/g, '\n');
+    }
+    function reportDraft(draft) {
+      if (hooks && hooks.onDraftChange) hooks.onDraftChange(side, draft);
+    }
     function enableEdit(opts) {
       if (editing) return;
       editing = true;
@@ -2358,6 +2607,7 @@
       try { code.contentEditable = 'plaintext-only'; } catch (_) { code.contentEditable = 'true'; }
       code.setAttribute('aria-readonly', 'false');
       code.focus();
+      if (hooks && hooks.onEditStart) hooks.onEditStart(code);
       const sel = window.getSelection();
       if (sel) {
         if (opts && opts.selectAll) {
@@ -2371,23 +2621,45 @@
         }
       }
     }
-    function finishEdit() {
+    // 行内输入立刻登记草稿：关闭保护、虚拟窗口重建、字体/搜索重渲染都能看到尚未 blur 的编辑。
+    code.addEventListener('input', function () {
       if (!editing) return;
+      reportDraft({ lineNo: lineNo, text: readCellText(), side: side });
+    });
+    function finishEdit(opts) {
+      if (!editing) return false; // 幂等：blur / Ctrl+Enter / 保存 flush 重复调用都安全
       editing = false;
       code.contentEditable = 'false';
       code.setAttribute('aria-readonly', 'true');
-      const raw = typeof code.innerText === 'string' ? code.innerText : code.textContent;
-      const next = String(raw || '').replace(/\r\n?/g, '\n');
-      if (!skip && onEdit && next !== original) {
+      const next = readCellText();
+      const changed = !!onEdit && next !== original;
+      reportDraft(null);
+      if (hooks && hooks.onEditEnd) hooks.onEditEnd(code);
+      if (changed) {
         original = next;
-        onEdit(side, lineNo, next, row);
+        onEdit(side, lineNo, next, row, opts);
       } else {
         refreshCodeDisplay(original);
       }
-      skip = false;
+      return changed;
+    }
+    function cancelEdit() {
+      if (!editing) return false;
+      editing = false;
+      code.contentEditable = 'false';
+      code.setAttribute('aria-readonly', 'true');
+      code.textContent = original;
+      refreshCodeDisplay(original);
+      reportDraft(null);
+      if (hooks && hooks.onEditEnd) hooks.onEditEnd(code);
+      return true;
     }
 
     code.enableEdit = enableEdit;
+    code.finishEdit = finishEdit;
+    code.cancelEdit = cancelEdit;
+    code.isEditing = function () { return editing; };
+    code.getDraft = function () { return editing ? readCellText() : null; };
 
     code.addEventListener('mousedown', function (e) {
       if (!editing) {
@@ -2426,12 +2698,7 @@
       }
       if (e.key === 'Escape') {
         e.preventDefault();
-        skip = true;
-        code.textContent = original;
-        editing = false;
-        code.contentEditable = 'false';
-        code.setAttribute('aria-readonly', 'true');
-        refreshCodeDisplay(original);
+        cancelEdit();
         code.blur();
       }
     });
@@ -2589,10 +2856,12 @@
     });
   }
 
-  function canSaveComparedFile(item) {
+  function canSaveComparedFile(item, draftPending) {
     // Only a successful full read supplies the version needed for safe writes.
     // Typing after a failed/binary/truncated read must not enable replacement.
-    return !!(item && item.source && item.source.kind !== 'text' && item.version && item.loadState === 'ready' && item.dirty && !item.saving);
+    // 尚未 blur 的行内草稿也算待保存内容（draftPending），否则按钮会先被禁用，
+    // 用户没有机会让保存命令去提交草稿。
+    return !!(item && item.source && item.source.kind !== 'text' && item.version && item.loadState === 'ready' && (item.dirty || !!draftPending) && !item.saving);
   }
 
   function rollupAllFolders(items, loadedDirs) {
@@ -3567,9 +3836,9 @@
       if (!item.left || !item.right || item.left.is_dir || item.right.is_dir) return;
       const left = Object.assign({}, sources.left, { path: item.left.path, label: item.rel_path });
       const right = Object.assign({}, sources.right, { path: item.right.path, label: item.rel_path });
-      state.left.source = left;
-      state.right.source = right;
       switchTab('text');
+      // 不在切换文档之前改动 state：候选来源交给 loadPair，由它在确认通过后才提交。
+      // 否则取消打开后 saveSide 会拿 B 的路径配 A 的版本与正文。
       if (state.textWorkbench && state.textWorkbench.loadPair) {
         await state.textWorkbench.loadPair(left, right);
       }
@@ -3931,15 +4200,16 @@
   Kairo.compare = {
     hasPendingWork: function () {
       if (activeWorkbenchState) {
-        const leftDirty = !!(activeWorkbenchState.left && activeWorkbenchState.left.dirty);
-        const rightDirty = !!(activeWorkbenchState.right && activeWorkbenchState.right.dirty);
-        return leftDirty || rightDirty;
+        const pending = side => !!(activeWorkbenchState[side] && (activeWorkbenchState[side].dirty || activeWorkbenchState[side].draft));
+        return pending('left') || pending('right');
       }
       return false;
     }
   };
   Kairo.compareTest = {
     canSaveComparedFile,
+    documentIdOf,
+    canonicalDocumentPath,
     rollupAllFolders,
     parentRel,
     baseName,

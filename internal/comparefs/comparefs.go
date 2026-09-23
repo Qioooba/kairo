@@ -45,6 +45,12 @@ var ErrNotFound = errors.New("path does not exist")
 type Version struct {
 	Size    int64     `json:"size"`
 	ModTime time.Time `json:"mtime"`
+	// Path binds the version token to the file identity it was read from.
+	// Size and mtime alone cannot tell two distinct files apart (copied files,
+	// same-second writes, FTP second precision), so a token issued for A must
+	// never authorize a conditional write to B.  Empty means "legacy token
+	// without identity" and is only accepted where a caller has no path.
+	Path string `json:"path,omitempty"`
 }
 
 type Entry struct {
@@ -56,7 +62,7 @@ type Entry struct {
 	IsDir   bool      `json:"is_dir"`
 }
 
-func (e Entry) Version() Version { return Version{Size: e.Size, ModTime: e.ModTime} }
+func (e Entry) Version() Version { return Version{Size: e.Size, ModTime: e.ModTime, Path: e.Path} }
 
 type WriteOptions struct {
 	Expected *Version
@@ -104,4 +110,28 @@ func SameVersion(a Entry, expected Version) bool {
 	// Some FTP servers only expose second/minute precision. A zero expected time
 	// means the caller intentionally disabled the mtime part of conflict checking.
 	return expected.ModTime.IsZero() || a.ModTime.Equal(expected.ModTime)
+}
+
+// SamePathIdentity reports whether two path strings address the same file
+// identity.  Separators are unified, redundant segments are removed and
+// Windows-style paths are compared case-insensitively, so alternative spellings
+// of the same file are not mistaken for a conflict.
+func SamePathIdentity(a, b string) bool {
+	left := normalizePathIdentity(a)
+	right := normalizePathIdentity(b)
+	return left != "" && left == right
+}
+
+func normalizePathIdentity(value string) string {
+	text := strings.TrimSpace(value)
+	if text == "" {
+		return ""
+	}
+	windowsLike := (len(text) > 1 && text[1] == ':') || strings.Contains(text, `\`)
+	text = strings.ReplaceAll(text, `\`, "/")
+	text = path.Clean(text)
+	if windowsLike {
+		text = strings.ToLower(text)
+	}
+	return text
 }
