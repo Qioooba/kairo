@@ -270,30 +270,23 @@ func parseGridQuerySyntax(kind, sql string) (*ParsedGridQuery, error) {
 	}, nil
 }
 
-// parseGridFromClause 提取 FROM 子句中的单一基表，排除逗号隐式连接
+// parseGridFromClause 提取**最外层** FROM 子句中的单一基表，排除逗号隐式连接。
+//
+// P1 修复：`SELECT ID, (SELECT COUNT(*) FROM ARCHIVE) AS N FROM LIVE` 这类投影里带标量子查询的
+// 查询，旧实现用整条 SQL 的第一个 `FROM` 正则匹配，会把 ARCHIVE 当成编辑目标表，
+// 于是用户在 LIVE 结果网格里的修改会被构造成对 ARCHIVE 的 UPDATE。这里改为从
+// 最外层 FROM 关键字（跳过括号、字符串与三种引号标识符）之后开始解析。
 func parseGridFromClause(kind, noComments string) (schemaIdent, tableIdent, aliasIdent gridIdentifier, err error) {
-	match := fromTableRe.FindStringSubmatch(noComments)
-	if len(match) < 2 || strings.TrimSpace(match[1]) == "" {
+	fromIdx := findTopLevelFromKeyword(noComments)
+	if fromIdx < 0 {
 		return schemaIdent, tableIdent, aliasIdent, errors.New("无法定位查询的 FROM 基表")
 	}
+	rest := noComments[fromIdx+len("FROM"):]
 
-	fullTarget := strings.TrimSpace(match[1])
-	afterFromIdx := strings.Index(noComments, match[0]) + len(match[0])
-	rest := noComments[afterFromIdx:]
-
-	// 截取到下一个子句之前
-	beforeNextClause := rest
-	for _, clause := range []string{"WHERE", "ORDER", "GROUP", "LIMIT", "OFFSET", "FETCH", "FOR", ";"} {
-		idx := strings.Index(strings.ToUpper(beforeNextClause), clause)
-		if idx >= 0 {
-			// 必须是独立单词边界
-			if idx == 0 || isSpaceOrPunct(beforeNextClause[idx-1]) {
-				end := idx + len(clause)
-				if end >= len(beforeNextClause) || isSpaceOrPunct(beforeNextClause[end]) {
-					beforeNextClause = beforeNextClause[:idx]
-				}
-			}
-		}
+	// 截取到下一个顶层子句之前（括号/引号内的关键字不算边界）
+	beforeNextClause := gridFromHeadBeforeNextClause(rest)
+	if strings.TrimSpace(beforeNextClause) == "" {
+		return schemaIdent, tableIdent, aliasIdent, errors.New("无法定位查询的 FROM 基表")
 	}
 
 	// 检查是否有逗号分隔多表
@@ -301,8 +294,15 @@ func parseGridFromClause(kind, noComments string) (schemaIdent, tableIdent, alia
 		return schemaIdent, tableIdent, aliasIdent, errors.New("多表笛卡尔积或隐式连接不支持网格编辑")
 	}
 
+	// 读取限定表名 token（schema.table），尾部用于解析别名
+	fullTarget, aliasTail := splitGridLeadingQualifiedToken(beforeNextClause)
+	fullTarget = strings.TrimSpace(fullTarget)
+	if fullTarget == "" {
+		return schemaIdent, tableIdent, aliasIdent, errors.New("无法定位查询的 FROM 基表")
+	}
+
 	// 提取表别名（如果有），保留原始 token 与 quoted 标记
-	aliasWords := strings.Fields(strings.TrimSpace(beforeNextClause))
+	aliasWords := strings.Fields(strings.TrimSpace(aliasTail))
 	if len(aliasWords) > 0 {
 		if strings.EqualFold(aliasWords[0], "AS") {
 			if len(aliasWords) > 1 {
@@ -324,15 +324,166 @@ func parseGridFromClause(kind, noComments string) (schemaIdent, tableIdent, alia
 	return schemaIdent, tableIdent, aliasIdent, nil
 }
 
-// findTopLevelFromKeyword 扫描 SELECT 与外层 FROM 之间的投影分界点
+// gridFromClauseKeywords 是 FROM 之后、表引用结束处的顶层子句关键字。
+var gridFromClauseKeywords = []string{"WHERE", "ORDER", "GROUP", "LIMIT", "OFFSET", "FETCH", "FOR"}
+
+// gridFromHeadBeforeNextClause 返回 FROM 之后到下一个顶层子句关键字（或 ';'）之间的文本。
+// 括号、单引号字符串与双引号/反引号标识符内部的关键字不算边界。
+func gridFromHeadBeforeNextClause(rest string) string {
+	inSingle, inDouble, inBacktick := false, false, false
+	depth := 0
+	n := len(rest)
+
+	for i := 0; i < n; i++ {
+		c := rest[i]
+		if inSingle {
+			if c == '\'' {
+				if i+1 < n && rest[i+1] == '\'' {
+					i++
+				} else {
+					inSingle = false
+				}
+			}
+			continue
+		}
+		if inDouble {
+			if c == '"' {
+				if i+1 < n && rest[i+1] == '"' {
+					i++
+				} else {
+					inDouble = false
+				}
+			}
+			continue
+		}
+		if inBacktick {
+			if c == '`' {
+				inBacktick = false
+			}
+			continue
+		}
+		switch c {
+		case '\'':
+			inSingle = true
+			continue
+		case '"':
+			inDouble = true
+			continue
+		case '`':
+			inBacktick = true
+			continue
+		case '(':
+			depth++
+			continue
+		case ')':
+			if depth > 0 {
+				depth--
+			}
+			continue
+		case ';':
+			if depth == 0 {
+				return rest[:i]
+			}
+			continue
+		}
+		if depth != 0 {
+			continue
+		}
+		for _, kw := range gridFromClauseKeywords {
+			if i+len(kw) > n || !strings.EqualFold(rest[i:i+len(kw)], kw) {
+				continue
+			}
+			prevOK := i == 0 || isSpaceOrPunct(rest[i-1])
+			next := i + len(kw)
+			nextOK := next >= n || isSpaceOrPunct(rest[next])
+			if prevOK && nextOK {
+				return rest[:i]
+			}
+		}
+	}
+	return rest
+}
+
+// splitGridLeadingQualifiedToken 从 FROM 头部读取首个（可带 schema 前缀的）标识符 token，
+// 返回原始 token 与剩余文本。引号内的点/空格不会被当作分隔符。
+func splitGridLeadingQualifiedToken(s string) (token, tail string) {
+	s = strings.TrimLeft(s, " \t\r\n")
+	if s == "" {
+		return "", ""
+	}
+	first, n1 := gridReadIdentSegment(s)
+	if n1 == 0 {
+		return "", s
+	}
+	// 可选 . 第二段（允许点两侧空白）
+	j := n1
+	for j < len(s) && (s[j] == ' ' || s[j] == '\t' || s[j] == '\r' || s[j] == '\n') {
+		j++
+	}
+	if j < len(s) && s[j] == '.' {
+		k := j + 1
+		for k < len(s) && (s[k] == ' ' || s[k] == '\t' || s[k] == '\r' || s[k] == '\n') {
+			k++
+		}
+		if second, n2 := gridReadIdentSegment(s[k:]); n2 > 0 {
+			return s[:n1] + s[j:k] + second, s[k+n2:]
+		}
+	}
+	return first, s[n1:]
+}
+
+// gridReadIdentSegment 读取一个标识符片段（带引号或裸标识符），返回片段与消耗字节数。
+func gridReadIdentSegment(s string) (string, int) {
+	if s == "" {
+		return "", 0
+	}
+	if s[0] == '"' || s[0] == '`' {
+		q := s[0]
+		for i := 1; i < len(s); i++ {
+			if s[i] != q {
+				continue
+			}
+			if i+1 < len(s) && s[i+1] == q {
+				i++
+				continue
+			}
+			return s[:i+1], i + 1
+		}
+		return "", 0
+	}
+	i := 0
+	for i < len(s) {
+		c := s[i]
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+			c == '_' || c == '$' || c == '#' {
+			i++
+			continue
+		}
+		break
+	}
+	if i == 0 {
+		return "", 0
+	}
+	return s[:i], i
+}
+
+// findTopLevelFromKeyword 扫描 SELECT 与外层 FROM 之间的投影分界点。
+// 字符串常量、双引号/反引号标识符内部以及括号（含标量子查询）内部的 FROM 都不算最外层。
 func findTopLevelFromKeyword(clean string) int {
 	inSingle := false
 	inDouble := false
+	inBacktick := false
 	depth := 0
 	n := len(clean)
 
 	for i := 6; i < n; i++ {
 		c := clean[i]
+		if inBacktick {
+			if c == '`' {
+				inBacktick = false
+			}
+			continue
+		}
 		if inSingle {
 			if c == '\'' {
 				if i+1 < n && clean[i+1] == '\'' {
@@ -359,6 +510,10 @@ func findTopLevelFromKeyword(clean string) int {
 		}
 		if c == '"' {
 			inDouble = true
+			continue
+		}
+		if c == '`' {
+			inBacktick = true
 			continue
 		}
 		if c == '(' {
