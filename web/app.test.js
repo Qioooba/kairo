@@ -1397,7 +1397,9 @@ function loadDatabaseHelpers(navigatorMock) {
     + extractDb('completionPrefix') + '\n'
     + extractDb('isMacPlatform') + '\n'
     + extractDb('sqlTableContext') + '\n'
+    + extractDb('sqlEmptyTableSlot') + '\n'
     + extractDb('suggestSQL') + '\n'
+    + extractDb('buildSuggestions') + '\n'
     + extractDb('isLargeSQL') + '\n'
     + extractDb('highlightSQL') + '\n'
     + extractDb('formatSQL') + '\n'
@@ -1409,7 +1411,7 @@ function loadDatabaseHelpers(navigatorMock) {
     + extractDb('fmtCell') + '\n'
     + extractDb('parseSnippetsText') + '\n'
     + extractDb('formatSnippetsText') + '\n'
-    + 'return { tokenizeSQL: tokenizeSQL, isLargeSQL: isLargeSQL, highlightSQL: highlightSQL, formatSQL: formatSQL, suggestSQL: suggestSQL, sqlTableContext: sqlTableContext, matchesShortcut: matchesShortcut, matchBrackets: matchBrackets, completionPrefix: completionPrefix, isSnippetExpandKey: isSnippetExpandKey, parseSnippetsText: parseSnippetsText, formatSnippetsText: formatSnippetsText, formatBytes: formatBytes, cellText: cellText, fmtCell: fmtCell };'
+    + 'return { tokenizeSQL: tokenizeSQL, isLargeSQL: isLargeSQL, highlightSQL: highlightSQL, formatSQL: formatSQL, suggestSQL: suggestSQL, sqlTableContext: sqlTableContext, sqlEmptyTableSlot: sqlEmptyTableSlot, matchesShortcut: matchesShortcut, matchBrackets: matchBrackets, completionPrefix: completionPrefix, isSnippetExpandKey: isSnippetExpandKey, parseSnippetsText: parseSnippetsText, formatSnippetsText: formatSnippetsText, formatBytes: formatBytes, cellText: cellText, fmtCell: fmtCell };'
   )(navigatorMock || {});
 }
 
@@ -1560,6 +1562,27 @@ function testDatabaseWorkbenchLazy() {
   const roBlock = dbSrc.indexOf('ResizeObserver: ensures shell and hl heights');
   const roGuard = roBlock >= 0 ? dbSrc.indexOf('if (isColumnsLayout()) return;', roBlock) : -1;
   assert.ok(roGuard > roBlock, 'ResizeObserver 应带左右布局守卫');
+
+  // 8. 表名联想契约：FROM 后 1 个字符即可触发、空表名槽位给全量列表、Ctrl+Space 可用。
+  //    背景：旧实现要求前缀 >= 2 字符且空前缀直接返回空，用户在 "FROM " 或 "FROM T" 时
+  //    看不到任何表名；Ctrl+Space 又被 features 层 when 恒 false 的命令挡住。
+  const tableSlot = db.suggestSQL('SELECT * FROM ', 14, { objects: ['t_order', 't_order_item', 'users'], snippets: [] }, { allowEmpty: true });
+  assert.ok(tableSlot.items.some(function (x) { return x.label === 't_order' && x.kind === 'object'; }),
+    'FROM 后空前缀应给出完整表名列表: ' + JSON.stringify(tableSlot.items));
+  assert.strictEqual(tableSlot.items[0].kind, 'object', '表名位置对象应排在关键字之前: ' + JSON.stringify(tableSlot.items.slice(0, 3)));
+  const oneChar = db.suggestSQL('SELECT * FROM u', 15, { objects: ['users', 'user_logs'], snippets: [] });
+  assert.ok(oneChar.items.some(function (x) { return x.label === 'users'; }), 'FROM + 1 个字符应能联想表名');
+  const afterTable = db.suggestSQL('SELECT * FROM t_order ', 22, { objects: ['t_order'], snippets: [] }, { allowEmpty: true });
+  assert.ok(!afterTable.items.some(function (x) { return x.kind === 'object'; }), '表名已输入完成后不应再弹全量列表');
+  const commaSlot = db.suggestSQL('SELECT * FROM a, ', 17, { objects: ['t_order'], snippets: [] }, { allowEmpty: true });
+  assert.ok(commaSlot.items.some(function (x) { return x.label === 't_order'; }), 'FROM 列表逗号后应能联想表名');
+  const nonTableOne = db.suggestSQL('SELECT u', 8, { objects: ['users'], snippets: [] });
+  assert.ok(!nonTableOne.items.some(function (x) { return x.kind === 'object'; }), '非表名位置仍要求 2 个字符，避免噪音');
+  const forced = db.suggestSQL('SELECT ', 7, { objects: ['users'], snippets: [] }, { force: true });
+  assert.ok(forced.items.some(function (x) { return x.kind === 'object'; }), 'Ctrl+Space 强制补全应无视触发前缀');
+  assert.ok(dbSrc.indexOf("name: 'db.complete'") >= 0, '页面层应注册 db.complete（Ctrl+Space）命令');
+  assert.ok(dbSrc.indexOf('retryTableWarmup') >= 0, '对象池为空时应能自动补拉表名');
+  assert.ok(dbSrc.indexOf('sqlEmptyTableSlot') >= 0, '应存在空表名槽位判定 sqlEmptyTableSlot');
 
   console.log('  database SQL tabs helpers: format / suggest / brackets / snippetExpandKey / parseSnippetsText / formatSnippetsText ✓');
 }

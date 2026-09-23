@@ -65,7 +65,8 @@
     prefs: normalizePrefs({}), lastError: null, inspectTab: 'fields', inspect: null, plan: [], gridReady: false,
     sessions: [], activeId: 0, redisKeyBase64: '', redisType: '', redisCursor: '0', redisNextCursor: '0', redisCursorHistory: [], redisOffset: 0, redisPageSize: 100, redisMembersHasNext: false,
     dirtyCells: {}, isEditMode: false,
-    schemaTableCache: {}, schemaCategoryCache: {}, metadataCache: {}
+    schemaTableCache: {}, schemaCategoryCache: {}, metadataCache: {},
+    tableWarmupRetryAt: 0, tableWarmupError: ''
   };
   let tabSeq = 0;
   let editorComposing = false;
@@ -3326,7 +3327,8 @@
     q('db-schema').onchange = () => {
       state.schemaObjectsCache = {};
       renderCategoryList();
-      const cur = q('db-schema') && q('db-schema').value;
+      // 与 completionExtras 用同一个解析函数，保证"预热的键 = 联想查询的键"。
+      const cur = currentSchema();
       if (cur) warmupSchemaTables(cur);
     };
     q('db-object-search').oninput = debounce(function () {
@@ -3415,7 +3417,11 @@
       }
       renderCategoryList();
       // 选库后静默轻量预热表名（仅 category=tables 单列索引），与左侧 DOM 解耦。
-      if (schema.value) warmupSchemaTables(schema.value);
+      // 用 currentSchema() 而不是 select.value：schema 列表加载失败时 select 是占位值，
+      // 但 currentSchema() 会回退到数据源用户名/库名——预热键必须与联想查询键一致，
+      // 否则 completionExtras 查的是一个从未预热过的键（表名永远为空）。
+      const warmSchema = currentSchema();
+      if (warmSchema) warmupSchemaTables(warmSchema);
     } catch (e) {
       const o = q('db-objects'), schema = q('db-schema');
       if (token === state.workspaceToken && schema) schema.innerHTML = '<option value="">加载失败</option>';
@@ -3469,11 +3475,13 @@
 
   // 表名联想与左侧 DOM 完全解耦：选库后静默轻量预热 category=tables，
   // 存入全局内存 state.schemaTableCache[schema]，编辑器打字即时可用。
-  async function warmupSchemaTables(schema) {
+  // force=true 时忽略缓存（含"缓存里是空数组"这种失败残留）重新拉取。
+  async function warmupSchemaTables(schema, force) {
     const source = state.source;
     if (!source || !schema) return;
     state.schemaTableCache = state.schemaTableCache || {};
-    if (state.schemaTableCache[schema]) return;
+    const cached = state.schemaTableCache[schema];
+    if (cached && cached.length && !force) return;
     const token = state.workspaceToken;
     try {
       const data = await api('GET', '/api/database/metadata/objects?source_id=' + encodeURIComponent(source.id) + '&schema=' + encodeURIComponent(schema) + '&category=tables');
@@ -3485,8 +3493,11 @@
       // 同步预填分类缓存，展开表文件夹时可零请求秒开。
       state.schemaCategoryCache = state.schemaCategoryCache || {};
       state.schemaCategoryCache[schema + ':tables'] = data.objects || [];
+      state.tableWarmupError = '';
     } catch (e) {
-      // 静默预热失败不打扰用户：联想降级为空，展开文件夹时再按需重试。
+      // 静默预热失败不打扰用户：展开文件夹时再按需重试；但把原因记下来，
+      // 便于 retryTableWarmup / 诊断时区分"确实没有表"与"请求失败"。
+      state.tableWarmupError = (e && e.message) || String(e);
     }
   }
 
@@ -4193,6 +4204,12 @@
       toggleLayout();
       return;
     }
+    // 兜底：features 分发器尚未就绪时 Ctrl+Space 也要能打开补全。
+    if (matchesShortcut(e, 'Ctrl+Space')) {
+      e.preventDefault();
+      openCompletion();
+      return;
+    }
   }
   // DBUI-05：数据库命令注册到 databaseFeatures 的统一分发器（修饰键精确匹配、
   // 统一平台 Ctrl/Cmd、IME 感知、按焦点作用域过滤、一个事件只执行一条命令）。
@@ -4215,6 +4232,9 @@
         if (control) control.click();
       } },
       { name: 'db.format', spec: spec('format', 'Ctrl+Shift+F'), scope: ['editor', 'workspace'], priority: 40, when: ready, run: function (event) { formatCurrentSQL({ full: !!(event && event.altKey) }); } },
+      // Ctrl+Space 补全：修复 features 层 db.complete 的 when 恒为 false（`!id('db-sql-ac')`
+      // 在 SQL 工作区永远不成立）导致该快捷键完全失效；这里由页面层自己接管。
+      { name: 'db.complete', spec: 'Ctrl+Space', scope: ['editor', 'workspace'], priority: 45, when: ready, run: function () { openCompletion(); } },
       { name: 'db.layout.toggle', spec: spec('layout', 'Alt+L'), scope: ['editor', 'workspace', 'outside'], priority: 25, when: function () { return !!q('db-main'); }, run: function () { toggleLayout(); } },
       { name: 'db.grid.edit-cell', spec: 'F2', scope: ['editor', 'workspace'], priority: 20, when: function (event) {
         return ready() && state.resultMode === 'grid' && !(event.target && event.target.closest && event.target.closest('input, textarea, select'));
@@ -4623,11 +4643,41 @@
     }
     return false;
   }
-  function suggestSQL(text, cursor, extras) {
+  // 空表名槽位：光标前最后一个有效 token 恰好是 FROM/JOIN/INTO/UPDATE/TABLE 或逗号。
+  // 只有这种位置才在"还没有输入任何字符"时弹出完整表名列表；否则 `FROM T_ORDER ` 之后
+  // 也会再弹一次全表列表，反而干扰连续输入。
+  function sqlEmptyTableSlot(text, cursor) {
+    const tokens = tokenizeSQL(String(text || '').slice(0, cursor));
+    for (let i = tokens.length - 1; i >= 0; i--) {
+      const tok = tokens[i];
+      if (tok.type === 'space' || tok.type === 'comment') continue;
+      const w = String(tok.value || '').toLowerCase();
+      if (w === 'from' || w === 'join' || w === 'into' || w === 'update' || w === 'table') return true;
+      return tok.value === ',';
+    }
+    return false;
+  }
+  function suggestSQL(text, cursor, extras, options) {
     extras = extras || {};
+    options = options || {};
+    const force = options.force === true;
+    const tableCtx = sqlTableContext(text, cursor);
     const ctx = completionPrefix(text, cursor);
-    if (!ctx || ctx.prefix.length < 2) return { items: [], start: cursor, end: cursor };
-    const needle = ctx.prefix.toLowerCase();
+    // 表名位置放宽触发条件（本轮修复"SELECT 里表名不联想"）：
+    //   - 普通位置仍要求 2 个字符，避免关键字噪音；
+    //   - FROM / JOIN / INTO / UPDATE / TABLE 之后 1 个字符即触发（表名首字母常常就有用）；
+    //   - 空前缀（刚敲完 "FROM " 或按 Ctrl+Space）时给出完整候选列表，
+    //     这是 Navicat / PL/SQL Developer 的既定手感，也是"看不到表名"的最大来源。
+    if (!ctx) {
+      if (!force && !(options.allowEmpty && sqlEmptyTableSlot(text, cursor))) return { items: [], start: cursor, end: cursor };
+      return buildSuggestions(cursor, cursor, '', extras, tableCtx);
+    }
+    if (!force && ctx.prefix.length < (tableCtx ? 1 : 2)) return { items: [], start: cursor, end: cursor };
+    return buildSuggestions(ctx.start, ctx.end, ctx.prefix, extras, tableCtx);
+  }
+  // buildSuggestions 是 suggestSQL 的候选构造部分（触发条件与候选构造分离，便于上面放宽规则）。
+  function buildSuggestions(start, end, prefix, extras, tableCtx) {
+    const needle = String(prefix || '').toLowerCase();
     const seen = new Set();
     const items = [];
     const add = function (label, kind, insert) {
@@ -4642,14 +4692,13 @@
     SQL_KEYWORDS.forEach(function (k) { add(k.toUpperCase(), 'keyword'); });
     (extras.objects || []).forEach(function (n) { add(n, 'object'); });
     (extras.fields || []).forEach(function (n) { add(n, 'field'); });
-    const tableCtx = sqlTableContext(text, cursor);
     items.sort(function (a, b) {
       const rank = tableCtx
         ? { snippet: 1, object: 0, field: 2, keyword: 3 }
         : { snippet: 0, keyword: 1, object: 2, field: 3 };
       return (rank[a.kind] - rank[b.kind]) || a.label.localeCompare(b.label);
     });
-    return { items: items.slice(0, 12), start: ctx.start, end: ctx.end };
+    return { items: items.slice(0, 12), start: start, end: end };
   }
   function matchBrackets(text, cursor) {
     if (!text || cursor < 0) return null;
@@ -4850,7 +4899,7 @@
     const s = sess();
     if (s) s.sql = ta.value;
   }
-  function updateComplete(ta) {
+  function updateComplete(ta, force) {
     if (!ta || !ta.value) { hideComplete(); return; }
     const val = ta.value;
     const pos = ta.selectionStart;
@@ -4859,7 +4908,12 @@
     const isBig = val.length > 30000;
     const sliceText = isBig ? val.slice(windowStart, windowEnd) : val;
     const slicePos = isBig ? (pos - windowStart) : pos;
-    const found = suggestSQL(sliceText, slicePos, completionExtras());
+    const extras = completionExtras();
+    const found = suggestSQL(sliceText, slicePos, extras, { force: force === true, allowEmpty: true });
+    // 表名位置但对象池为空：多半是预热请求失败或响应被丢弃，而旧实现把预热失败静默吞掉，
+    // 用户只能看到关键字（例如 FROM us 只提示 USING），完全看不到表名且毫无解释。
+    // 这里按冷却时间自动补拉一次，拉回后重算候选，用户不必刷新页面。
+    if (!extras.objects.length && sqlTableContext(sliceText, slicePos)) retryTableWarmup(ta, force === true);
     if (!found.items.length) { hideComplete(); return; }
     const actualStart = isBig ? (found.start + windowStart) : found.start;
     const actualEnd = isBig ? (found.end + windowStart) : found.end;
@@ -4870,6 +4924,24 @@
     acState.index = 0;
     renderComplete();
     positionComplete(ta, actualStart);
+  }
+  // 表名池补拉：15s 冷却，避免连续打字打爆元数据接口。
+  function retryTableWarmup(ta, force) {
+    const now = Date.now();
+    if (now - (state.tableWarmupRetryAt || 0) < 15000) return;
+    const schema = currentSchema();
+    if (!schema) return;
+    state.tableWarmupRetryAt = now;
+    Promise.resolve(warmupSchemaTables(schema, true)).then(function () {
+      if (q('db-sql') === ta) updateComplete(ta, force);
+    }).catch(function () {});
+  }
+  // Ctrl+Space：强制打开候选（空前缀也给全量列表）；已打开时再按一次收起。
+  function openCompletion() {
+    const ta = q('db-sql');
+    if (!ta) return;
+    if (acState.open) { hideComplete(); return; }
+    updateComplete(ta, true);
   }
   function renderComplete() {
     const box = q('db-sql-ac');
