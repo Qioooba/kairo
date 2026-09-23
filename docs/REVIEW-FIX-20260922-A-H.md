@@ -9,12 +9,12 @@
 
 | 批次 | 问题编号 | 条数 | 状态 |
 |---|---|---|---|
-| A 测试隔离 | QA-01 QA-02 | 2 | ✅ 已提交并验证 |
-| B 查询及格式化 | DB-01 DB-02 DB-03 DBUI-02 DBUI-04 | 5 | 进行中 |
-| C 网格及 LOB | DBUI-01 DB-04 DB-05 DB-06 DB-07 | 5 | 待 B（同文件依赖） |
-| D 比较保存 | CT01 CT06 CT02 CT04 | 4 | 进行中 |
-| E 路由及历史 | DBUI-03 DBUI-05 DBUI-06 CT03 CT05 CT07 | 6 | DBUI-03 进行中，其余待 B/D |
-| F SFTP | OTH-03 OTH-04 OTH-05 OTH-06 | 4 | 进行中 |
+| A 测试隔离 | QA-01 QA-02 | 2 | ✅ 已提交并验证（含 3 个后续修复提交） |
+| B 查询及格式化 | DB-01 DB-02 DB-03 DBUI-02 DBUI-04 | 5 | ✅ 已提交并验证 |
+| C 网格及 LOB | DBUI-01 DB-04 DB-05 DB-06 DB-07 | 5 | 待 DBUI-03 释放 database.js（DBUI-01 须与列映射同批） |
+| D 比较保存 | CT01 CT06 CT02 CT04 | 4 | ✅ 已提交并验证 |
+| E 路由及历史 | DBUI-03 DBUI-05 DBUI-06 CT03 CT05 CT07 | 6 | DBUI-03 与 CT03/05/07 进行中；DBUI-05/06 待 DBUI-03 |
+| F SFTP | OTH-03 OTH-04 OTH-05 OTH-06 | 4 | ✅ 已提交并验证 |
 | G 升级与请求 | OTH-01 OTH-02 | 2 | ✅ 已提交并验证 |
 | H 远端 shell | OPS-01 | 1 | ✅ 已提交并验证 |
 | **合计** | | **29** | |
@@ -139,8 +139,110 @@
   因此复现的是同一缺陷类别而非同一计数。
 - 临时把实现改回 `\xHH` 后新增用例确实变红（5 处），证明回归有效，随后已还原。
 
-## 3. 验证证据
+### 2.4 批次 B — 查询执行、行定位与格式化（DB-01、DB-02、DB-03、DBUI-02、DBUI-04）
 
+提交：`8971f9f`（10 个文件）
+
+- **DB-01**：旧解析丢弃"是否显式加引号"，再用 `quoteGridIdentifier` 无条件包双引号，于是
+  `select * from emp` 被改成 `SELECT "emp".*, ROWIDTOCHAR("emp".ROWID) ...`，而 Oracle 把未加引号的
+  `emp` 解释为 `EMP`，`"emp"` 是另一个区分大小写的名字 —— 连只读查询都报非法标识符。
+  修复：`gridIdentifier{Raw,Name,Quoted}` + 规范化；Oracle 未加引号转大写、显式加引号保留原样；
+  `plan.Schema/Table` 复用同一规范化，写入不再落到 `"emp"`。如实记录：既有测试
+  `oracle_rowid_grid_test.go` 的期望本身就是错的（`ROWIDTOCHAR("t".ROWID)`），已改为 `"T"` 并补带引号别名用例。
+- **DB-02**：`SELECT COUNT(*) FROM EMP` 被追加逐行 ROWID 导致 ORA-00937。修复为严格**允许清单**
+  `gridRowIDProjectionAllowed`（单一真实表 + 直接物理列投影或可确认的 `alias.*`），聚合/函数/表达式/
+  常量/伪列/限定符不匹配/层次查询/集合运算/DISTINCT/CTE/派生全部拒绝 → 保留原 SQL，只关闭编辑能力；
+  未采用 COUNT/MAX 黑名单。`isOracleHeapTable` 改为三态 `(isHeap, known)` 且不再吞错，判定前移到改写决策之前。
+- **DB-03**：单连接池 + 冷缓存时元数据链路等待同一连接直到超时
+  （实测 `context deadline exceeded (elapsed=1.0006497s)`）。修复：受限元数据规划在事务/游标占用连接
+  **之前**完成，独立短预算（timeout/4，钳制 200–1500ms）且拿不到只降级只读；已持有的全局并发令牌
+  经 context 标记共享（`withSQLAttempt` 不再重复申请）；`AnalyzeGridQuery` 拆为纯
+  `AnalyzeGridQueryWithMetadata` + 外层获取；元数据缓存按 sourceID+fingerprint+schema+table 并做刷新合并。
+  显式说明：未以"提高连接数/加大超时"掩盖依赖环。
+- **DBUI-02**：数字扫描的宽字符集把 `1--c` 吞成一个 token，注释分支看不到 `--`，`select 1--comment\n+2 from dual`
+  被格式化后 SQLite 结果由 3 变 1；普通引号无条件套用 MySQL 反斜杠规则，`'\'` 后字符串被当关键字并插入换行。
+  修复：`tokenizeSQL(text,{dialect,sqlMode})` 全链路传递；Oracle 普通字符串只认成对单引号；MySQL 反斜杠由
+  SQL mode 驱动（尊重 `NO_BACKSLASH_ESCAPES`）；数字扫描重写为显式状态机；新增**独立**（不复用词法器）
+  的格式化后保真校验，不一致时原样返回并通过 `service.lastFormatDiagnostic()` 暴露原因。
+- **DBUI-04**：超过高亮阈值时 `findParameters` 直接返回 `[]`，`pruneBindings` 把空扫描当成"参数已删除"，
+  短查询 + 220KB 注释即丢失 `:id`。修复：阈值只作用于高亮；参数解析改为独立可续扫描（64KB 分块、
+  24ms 同步预算 + 后台续扫）返回 `{status, parameters}`；执行路径只扫实际执行的语句；
+  仅"当前修订已完成扫描"才做破坏性 prune。
+
+**明确改锚的既有测试**：`tests/database-sql-editor-performance.test.js` 旧子测试把"超长 SQL 立即返回空参数"
+断言为正确 —— 该期望固化的正是 DBUI-04 的功能回退，现改为断言 `:id` 在 220KB 注释下存活。
+
+**验证**：`go test ./internal/dbconsole/` ok；`go vet` 干净；`go test ./...` 全部 ok；
+`npm test` 15/15；`tests/sql-format-service.test.js` 16 段全过（含真实 SQLite 执行结果对比，
+本机 `node:sqlite` 可用：反例 A 3→3、反例 B `\select`→`\select`）；
+`tests/database-sql-editor-performance.test.js` 6 pass / 0 fail。
+
+### 2.5 批次 D — 比较工作台保存与页签状态（CT01、CT06、CT02、CT04）
+
+提交：`f7057e9`（6 个文件）
+
+- **CT01**：`compareFile` 先改 `state.left/right.source` 再调 `loadPair`，取消确认时不回滚，`saveSide`
+  于是用"已污染的来源 + 旧版本 + 旧正文"组请求，A 的编辑稿会写进 B；后端版本只由 size+mtime 组成，
+  同尺寸同 mtime 形同虚设。修复：新增 `documentIdOf`（协议+端点+规范路径）与唯一身份提交点
+  `commitDocument`；`compareFile` 不再赋值来源；`loadPair` 确认后才提交两侧身份再读，取消时状态全不变；
+  `loadSide` 以 `loadSeq+documentId` 双重校验响应。后端纵深防御：`Version` 绑定来源路径 +
+  `SamePathIdentity`，写接口在 `expected.path` 与 `target.path` 身份不符时返回 409（`SameVersion` 语义未改，
+  copy/sync 条件写入不受影响）。
+- **CT06**：行内 `contenteditable` 草稿只在 `finishEdit` 提交，而 Ctrl+S 不触发它 → 保存的是旧正文。
+  修复：`input` 即登记 `state[side].draft`；`finishEdit` 幂等并支持 `cancelEdit`；`createVirtualDiff`
+  导出 `flushActiveEdit({recompare:false})/cancelActiveEdit()/hasDraft()`；保存命令第一步统一 flush
+  （只置 diffStale，不立即重比以免删除编辑节点）。
+- **CT02**：写接口只返回 `{ok:true}`，而清 dirty 与推进版本都依赖随后的 `loadSide`，`editSeq` 变化会提前
+  return 跳过它 → 版本停滞、后续保存反复 409。修复：写接口返回新版本/规范路径/正文 sha256 摘要/`document_id`；
+  前端快照含 `{documentId, source, expectedVersion, content, editSeq, loadSeq}`；成功后仅同一文档同一 pair
+  才回写，`baseline` 推进为本次成功写入的正文、`version` 推进为服务端新版本、`dirty` 按当前正文重算；
+  `item.saving` 串行化；外部 409 显式冲突并保留草稿，不自动重读覆盖。
+- **CT04**：undo 只接受"当前 pairKey == 快照 pairKey"，而交换必然改变配对顺序 → 最普通的交换→撤回被自己
+  的身份检查拒绝，且快照已被 pop。修复：undo 改为命令（`kind=edit/merge/swap`）；swap 以交换后身份作前置
+  条件，通过后原子恢复两侧完整文档状态（`loadSeq` 只前进），检查通过才 pop。
+
+**失败优先证据**（本报告作者独立复现）：把同一回归脚本放进仍为基线 `compare.js` 的 detached worktree →
+`exit=1`，CT01/CT02/CT04/CT06 用例失败；当前树 14/14。修复前键值逐字：
+CT01 `取消打开 B 之后，左侧来源必须仍是 A  + '/left/B.txt'  - '/left/A.txt'`；
+CT06 `保存正文必须包含尚未 blur 的行内草稿，实际 = "A edited\nA two\n"`；
+CT02 `写成功后版本必须前进到服务端返回的新版本`、连按 Ctrl+S `3 !== 1`；
+CT04 `撤回交换后左侧来源必须回到 A`。
+
+**验证**：`node tests/compare-save-lifecycle.test.js` → 14/14 exit 0；`npm test` → 15/15（注册后 16/16）；
+`go test ./...` → 全部 ok。
+
+### 2.6 批次 F — SFTP 路径歧义、逐段编码、身份贯通与枚举消除（OTH-03、OTH-04、OTH-05、OTH-06）
+
+提交：`f666fa6`（14 个文件）
+
+- **OTH-03**：`resolveWritePath` 丢弃 `ErrAmbiguousPath` 并顺序取首个候选 → 同显示名的 UTF-8/GBK 双目录下，
+  上传返回 nil 且覆盖 UTF-8 那份。修复：解析结果四分类（唯一 / 确定不存在 / 歧义 / 权限·超时·协议错误），
+  全部以 `errors.Is` 判定；**写路径没有候选兜底**，父目录无法唯一确定即在任何写入前终止。
+- **OTH-04**：`MkdirAll` 复用单目标文件解析，新建层级时回退到未解析展示路径 → 后端收到 UTF-8
+  `/tmp/中文/new/deep` 而非 GBK 原始字节。修复：`resolveDirectoryForCreate` 逐段解析已存在前缀，
+  对第一个确定不存在的段起按**已解析原始父路径**的编码编码新段（ASCII 直通；仅当已解析前缀非 UTF-8 才用
+  GB18030），绝不整体转码混合路径、不丢弃已解析前缀。
+- **OTH-05**：三层断点全部修复 —— (1) 列目录条目携带已解析原始绝对路径身份（`RawPath`/`RawPathOf`），
+  `PathIDOf` 改为载体优先，消除"UTF-8 父目录 + GBK 文件名"的混合 id；(2) HTTP 身份解码集中到**一个**入口，
+  先解身份再按原始绝对路径做既有合法性校验（不放宽），新增 `display_path`/`path_id`/`parent_path_id`/
+  `old_path_id`/并行 `path_ids`；token 的 display 由原始字节派生，故白名单 display 无法夹带越根身份；
+  (3) 前端 `files.js`/`ssh.js` 的选中键与各操作改用身份，展示仍是人类可读路径，下载把"实际访问"与
+  "展示/命名"拆开。`comparefs` 保留展示相对路径用于对齐，另登记展示名→源身份，同一展示路径两条目显式报歧义。
+- **OTH-06**：每次 `Stat` 都完整 `ReadDir` 父目录。修复：父目录唯一解析 + 纯 ASCII basename 直接 Stat，
+  零枚举；非 ASCII 才用按连接隔离的有界索引（TTL 5s / 64 目录 / 20000 条目，带歧义标记），
+  写操作一律重新枚举并失效索引（缓存绝不授权写入）。
+
+**失败优先证据（逐字节）**：OTH-03 `父目录同显示名不同编码，UploadFile 竟然返回 nil；后端收到写入路径
+["/tmp/中文/protected.txt"]`；OTH-04 `后端收到的创建目录参数 = ["/tmp/中文/new/deep"]
+(hex 2f746d702fe4b8ade696872f6e65772f64656570)，期望 hex 2f746d702fd6d0cec42f6e65772f64656570`；
+OTH-05 `用 PathIDOf 生成的 path_id 无法打开条目` / `只用 path_id 的预览请求被拒: 400`；
+OTH-06 `1000 次 ASCII Stat 造成了 1000 次完整目录读、1000000 条返回条目` —— 与审查文档基线数字一致。
+修复后实测：1000 次 ASCII Stat → **0 次完整目录读、0 条返回条目**；200 次中文 Stat → 1 次完整目录读。
+
+**验证**：`go test ./internal/sftpclient/ ./internal/comparefs/` ok；`go vet ./...` 干净；
+`go test ./...` 全部 ok；`npm test` 16/16；`node --check` 两个页面通过。
+
+## 3. 验证证据
 ### 3.1 逐提交隔离验证（证明每个批次提交可独立复现）
 
 方法：`git worktree add --detach D:\kairo-verify <sha>`，在该干净 checkout 内跑测试。
@@ -173,7 +275,20 @@
 - `GOOS=linux go build ./...` → exit 0
 - 限制：本机无 Linux 运行时（WSL 无发行版），Linux 侧仅为**编译验证**，未实际运行测试。
 
-### 3.4 缺陷类别的跨仓库审计（确认没有别处漏改）
+### 3.4 已提交状态的干净检出验证（证明提交自洽，不依赖任何未提交文件）
+
+前述各批次的"绿"都是在含多个并行 agent 在制改动的工作树里测得的。为排除"某个提交偷偷依赖
+别人未提交的文件"这一类问题，在 detached worktree 中干净检出 `f666fa6`（批次 A/B/D/F/G/H 全部提交后）：
+
+| 检查 | 结果 |
+|---|---|
+| `git status --porcelain` | **0 条**（无任何未提交内容） |
+| `go test ./... -count=1` | **无失败，36 个包 ok，exit 0** |
+| `npm test` | **16/16 通过，exit 0** |
+
+即：已提交内容本身可独立构建并通过全部测试。
+
+### 3.5 缺陷类别的跨仓库审计（确认没有别处漏改）
 
 - DBUI-01 / CT03 类（web/ 内 camelCase 读 snake_case 字段、失效的 `activeRoute` 守卫）：
   全 web/ 仅 4 处 —— `compare.js`（activeRoute 死守卫，批次 E）与 `database.js`（`plan.canUpdate`/
@@ -182,13 +297,13 @@
 - OTH-01 类：其余 `O_CREATE|os.O_EXCL` 均为目标文件原子创建，与锁无关；
   锁引用只在 `internal/upgrade` + 新增 `internal/sysutil`。
 
-### 3.5 与在制改动共存时的回归
+### 3.6 与在制改动共存时的回归
 
 多个批次并行改动工作树期间，
 `go test ./internal/logquery/ ./internal/upgrade/ ./internal/webservice/ ./internal/sysutil/ ./internal/endpointclient/ ./internal/pet/`
 全部 ok：已提交批次未被在制改动破坏。
 
-### 3.6 批次 C 的失败优先回归（已提前产出）
+### 3.7 批次 C 的失败优先回归（已提前产出）
 
 `tests/grid-edit-plan-wire.test.js` 用真实 Go 序列化 fixture 驱动 `database.js` 的
 `getGridContext()`，实测：
