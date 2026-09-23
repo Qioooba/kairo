@@ -601,7 +601,7 @@ func TestSubprocessCrashAndRecovery(t *testing.T) {
 	}
 
 	// Verify UPG-01: Do not manually remove lock; the dead subprocess lock is automatically reclaimed
-	// by acquireLock inspecting PID liveness.
+	// because the kernel releases its flock/LockFileEx when the holder process dies.
 
 	// Now run parent process Run: should recover to v1 first, then complete upgrade to v2!
 	assetsV2 := []Asset{

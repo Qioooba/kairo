@@ -2,7 +2,6 @@ package webservice
 
 import (
 	"context"
-	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -12,7 +11,6 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
-	"time"
 )
 
 // SchemaResolverConfig 配置外部 XSD 依赖图解析器。
@@ -186,7 +184,14 @@ func NewSchemaResolver(cfg SchemaResolverConfig) *SchemaResolver {
 
 	client := cfg.HTTPClient
 	if client == nil {
-		client = makeSafeHTTPClient(cfg.AuthHeaders)
+		// 凭据只会发给与 BaseURI 同源的目标（见 fetchContent 的跨源直接 import 保护），
+		// 因此"首次携带凭据的可信源"就是 BaseURI 的源；BaseURI 不是 http(s)
+		// （本地文件/内存模式）时为空，任何出站跳转都不携带凭据。
+		trustedOrigin := ""
+		if len(cfg.AuthHeaders) > 0 {
+			trustedOrigin = OriginOf(cfg.BaseURI)
+		}
+		client = NewCredentialSafeHTTPClient(trustedOrigin, cfg.AuthHeaders)
 	}
 
 	return &SchemaResolver{
@@ -195,35 +200,6 @@ func NewSchemaResolver(cfg SchemaResolverConfig) *SchemaResolver {
 		byNormAtts: byNorm,
 		byBaseAtts: byBase,
 		httpClient: client,
-	}
-}
-
-func makeSafeHTTPClient(authHeaders map[string]string) *http.Client {
-	return &http.Client{
-		Timeout: 30 * time.Second,
-		Transport: &http.Transport{
-			TLSClientConfig:       &tls.Config{InsecureSkipVerify: true},
-			ResponseHeaderTimeout: 25 * time.Second,
-			DialContext:           SafeDialContext,
-		},
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 10 {
-				return errors.New("重定向次数过多（最多允许 10 次）")
-			}
-			if err := ValidateEndpointURL(req.URL.String()); err != nil {
-				return fmt.Errorf("重定向目标 URL 不受信任: %w", err)
-			}
-			prev := via[len(via)-1]
-			prevOrigin := prev.URL.Scheme + "://" + prev.URL.Host
-			newOrigin := req.URL.Scheme + "://" + req.URL.Host
-			if !strings.EqualFold(prevOrigin, newOrigin) {
-				// 跨源重定向：剥离 Authorization/Cookie 等敏感凭据
-				req.Header.Del("Authorization")
-				req.Header.Del("Proxy-Authorization")
-				req.Header.Del("Cookie")
-			}
-			return nil
-		},
 	}
 }
 

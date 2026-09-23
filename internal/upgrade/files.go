@@ -124,54 +124,30 @@ func replaceFile(src, dst string) error {
 	return nil
 }
 
-func parseLockPID(content string) int {
-	for _, line := range strings.Split(content, "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "pid=") {
-			pid, _ := strconv.Atoi(strings.TrimPrefix(line, "pid="))
-			return pid
-		}
-	}
-	return 0
-}
-
+// acquireLock 获取升级/恢复事务的跨进程互斥锁。
+//
+// 互斥只由内核锁保证（sysutil.AcquireFileLock：Unix flock / Windows LockFileEx），
+// 因此：
+//   - 崩溃遗留的锁文件不再是死锁：内核在进程终止时自动释放锁，下一个进程
+//     直接获取即可，无需删文件，也不会出现"两个进程各自删锁再建锁"的竞争；
+//   - 锁文件路径保持稳定，release 只解锁并关闭句柄、绝不 unlink，
+//     避免新 inode 绕过旧 inode 上仍未释放的锁；
+//   - PID/token/时间戳只写进锁文件作诊断，不参与任何互斥判定，
+//     所以 PID 复用或元数据不完整都不会影响正确性。
 func acquireLock(path string, now time.Time) (func(), error) {
 	nonce := make([]byte, 16)
 	if _, err := rand.Read(nonce); err != nil {
 		return nil, fmt.Errorf("upgrade: initialize lock: %w", err)
 	}
-	content := "pid=" + strconv.Itoa(os.Getpid()) +
+	content := []byte("pid=" + strconv.Itoa(os.Getpid()) +
 		"\ntoken=" + hex.EncodeToString(nonce) +
-		"\nstarted_at=" + now.UTC().Format(time.RFC3339Nano) + "\n"
-	create := func() (*os.File, error) {
-		return os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-	}
-	file, err := create()
+		"\nstarted_at=" + now.UTC().Format(time.RFC3339Nano) + "\n")
+	release, err := sysutil.AcquireFileLockWithDiagnostics(path, content)
 	if err != nil {
-		// 若锁文件存在，检查持有该锁的进程是否仍然存活。
-		// 若拥有者进程已异常终止（hard kill/崩溃），可安全回收陈旧锁，使恢复流程能够自动进行。
-		if raw, readErr := os.ReadFile(path); readErr == nil {
-			pid := parseLockPID(string(raw))
-			if pid > 0 && !sysutil.IsProcessAlive(pid) {
-				_ = os.Remove(path)
-				file, err = create()
-			}
+		if errors.Is(err, sysutil.ErrFileLockHeld) {
+			return nil, fmt.Errorf("upgrade: another upgrade may be running (%s): %w", path, err)
 		}
+		return nil, fmt.Errorf("upgrade: acquire lock (%s): %w", path, err)
 	}
-	if err != nil {
-		return nil, fmt.Errorf("upgrade: another upgrade may be running (%s): %w", path, err)
-	}
-	_, writeErr := file.WriteString(content)
-	closeErr := file.Close()
-	if writeErr != nil || closeErr != nil {
-		_ = os.Remove(path)
-		return nil, fmt.Errorf("upgrade: initialize lock: %w", errors.Join(writeErr, closeErr))
-	}
-	return func() {
-		// 锁可能已被陈旧接管而属于别的事务；只清理仍然属于自己的锁，
-		// 绝不能删掉接管者的锁（否则第三个事务就能与当前事务并发）。
-		if raw, readErr := os.ReadFile(path); readErr == nil && string(raw) == content {
-			_ = os.Remove(path)
-		}
-	}, nil
+	return release, nil
 }

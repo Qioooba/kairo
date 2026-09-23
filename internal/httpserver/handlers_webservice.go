@@ -139,32 +139,12 @@ func (s *Server) handleWSDLImportURL(w http.ResponseWriter, r *http.Request) {
 	}
 	// WSDL URL 拉取：拒绝 link-local（含云元数据 169.254.169.254）/ unspecified / 组播，
 	// 私有网段放行（内网 WebService 是核心场景）。DialContext 做拨号时二次校验
-	// （防 DNS rebinding），CheckRedirect 对重定向逐跳校验，且跨源重定向剥离凭据。
-	client := &http.Client{
-		Timeout: 30 * time.Second,
-		Transport: &http.Transport{
-			TLSClientConfig:       sharedWsTLSConfig,
-			ResponseHeaderTimeout: 25 * time.Second,
-			DialContext:           webservice.SafeDialContext,
-		},
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 10 {
-				return errors.New("重定向次数过多")
-			}
-			if err := webservice.ValidateEndpointURL(req.URL.String()); err != nil {
-				return err
-			}
-			prev := via[len(via)-1]
-			prevOrigin := prev.URL.Scheme + "://" + prev.URL.Host
-			newOrigin := req.URL.Scheme + "://" + req.URL.Host
-			if !strings.EqualFold(prevOrigin, newOrigin) {
-				req.Header.Del("Authorization")
-				req.Header.Del("Proxy-Authorization")
-				req.Header.Del("Cookie")
-			}
-			return nil
-		},
-	}
+	// （防 DNS rebinding），重定向逐跳校验且跨源剥离凭据。
+	//
+	// 这里与外部 XSD 拉取共用 internal/webservice 的同一份重定向策略：可信基准是
+	// 用户显式填写的根 URL 的源（凭据本来就该发给它），而不是上一跳；跨源时剥离
+	// 全部用户传入头名加固定敏感头，程序设置的 User-Agent 等非敏感头保留。
+	client := webservice.NewCredentialSafeHTTPClient(webservice.OriginOf(url), req.Headers)
 	resp, err := client.Do(httpReq)
 	if err != nil {
 		writeErr(w, 502, fmt.Errorf("拉取 WSDL 失败: %w", err))

@@ -463,26 +463,38 @@ func TestRunCriticalCorruptionBlocksButOptionalCorruptionWarns(t *testing.T) {
 	}
 }
 
-func TestRunRejectsStaleAndActiveLocks(t *testing.T) {
-	for _, stale := range []bool{false, true} {
-		t.Run(map[bool]string{false: "active", true: "stale"}[stale], func(t *testing.T) {
-			dataDir := t.TempDir()
-			lock := filepath.Join(dataDir, lockFileName)
-			_ = os.WriteFile(lock, []byte("busy"), 0o600)
-			_ = os.Chtimes(lock, fixedNow(), fixedNow())
-			if stale {
-				old := fixedNow().Add(-20 * time.Minute)
-				_ = os.Chtimes(lock, old, old)
-			}
-			_, err := Run(Options{DataDir: dataDir, ProductVersion: "v1", Now: fixedNow})
-			if stale && err == nil {
-				t.Fatal("old lock must not be stolen")
-			}
-			if !stale && err == nil {
-				t.Fatal("active lock should block")
-			}
-		})
-	}
+// TestRunRejectsActiveLockAndReclaimsStaleLockFile 固化 OTH-01 之后的内核锁契约：
+//   - 已经存在真实内核锁持有者时，Run 必须被挡住（正在运行的进程不被抢锁）；
+//   - 只剩一个没有任何内核锁持有者的遗留锁文件时，Run 必须能直接接管
+//     （崩溃/强杀后不留永久死锁，也不需要人工删文件）。
+//
+// 旧实现按锁文件的 mtime/PID 元数据判定，恰好把这两条语义判反了：
+// 元数据"很旧"就删文件重建（可被抢锁），元数据存在就一律阻塞（遗留文件死锁）。
+func TestRunRejectsActiveLockAndReclaimsStaleLockFile(t *testing.T) {
+	t.Run("active kernel lock blocks", func(t *testing.T) {
+		dataDir := t.TempDir()
+		lock := filepath.Join(dataDir, lockFileName)
+		release, err := acquireLock(lock, fixedNow())
+		if err != nil {
+			t.Fatalf("acquire lock: %v", err)
+		}
+		defer release()
+		if _, err := Run(Options{DataDir: dataDir, ProductVersion: "v1", Now: fixedNow}); err == nil {
+			t.Fatal("active lock should block")
+		}
+	})
+
+	t.Run("leftover file without kernel lock is reclaimed", func(t *testing.T) {
+		dataDir := t.TempDir()
+		lock := filepath.Join(dataDir, lockFileName)
+		// 模拟崩溃遗留：锁文件还在，但持有它的进程已经消失，内核锁也已被释放。
+		_ = os.WriteFile(lock, []byte("pid=2147483644\ntoken=dead\nstarted_at=2026-09-02T10:00:00Z\n"), 0o600)
+		old := fixedNow().Add(-20 * time.Minute)
+		_ = os.Chtimes(lock, old, old)
+		if _, err := Run(Options{DataDir: dataDir, ProductVersion: "v1", Now: fixedNow}); err != nil {
+			t.Fatalf("遗留锁文件必须可被直接接管（无需手删文件），得到: %v", err)
+		}
+	})
 }
 
 func TestRunRebuildsCorruptInternalManifestAfterSnapshot(t *testing.T) {
@@ -697,38 +709,56 @@ func TestRunNonCriticalVersionDetectionFailureOnlyWarns(t *testing.T) {
 	}
 }
 
-// 陈旧锁被接管后，原持有者的 release 绝不能删掉接管者的锁，
-// 否则第三个事务就能与当前事务并发执行。
+// TestLockReleaseNeverDeletesForeignLock 固化 OTH-01 的互斥语义：
+//
+//  1. 正在持有内核锁的 owner 不会被抢锁；
+//  2. 旧 owner 的 release（包括重复调用）绝不能删掉或解开新 owner 的锁；
+//  3. 锁文件路径保持稳定：release 只解锁并关闭句柄，绝不 unlink 锁文件。
+//
+// 第 3 条是审计明确要求的改动：一旦 unlink 掉仍被当作内核锁对象的文件，
+// 新进程会在新 inode 上拿到一把不受旧 inode 锁约束的"同名锁"。
+// 相应地，本用例不再用"外部删除锁文件再重建"来模拟接管——在内核锁下
+// 持有者存活时该文件根本无法被删除，而且代码路径里也不存在这种删除。
 func TestLockReleaseNeverDeletesForeignLock(t *testing.T) {
 	dataDir := t.TempDir()
 	lock := filepath.Join(dataDir, lockFileName)
-	stale := fixedNow().Add(-20 * time.Minute)
-	releaseA, err := acquireLock(lock, stale)
+
+	releaseA, err := acquireLock(lock, fixedNow())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chtimes(lock, stale, stale); err != nil {
-		t.Fatal(err)
-	}
+	// 1. 正在运行的 owner 不被抢锁。
 	if _, err := acquireLock(lock, fixedNow()); err == nil {
+		releaseA()
 		t.Fatal("live old lock was stolen")
 	}
-	// Simulate external replacement to verify the release ownership check.
-	if err := os.Remove(lock); err != nil {
-		t.Fatal(err)
-	}
+	releaseA()
+
 	releaseB, err := acquireLock(lock, fixedNow())
 	if err != nil {
 		t.Fatal(err)
 	}
-	releaseA() // A 恢复运行并结束
+	// 2. 旧 owner 的（重复）release 不得影响新 owner。
+	releaseA()
+	if _, err := acquireLock(lock, fixedNow()); err == nil {
+		releaseB()
+		t.Fatal("stale holder's release released or deleted the new owner's lock")
+	}
 	if _, statErr := os.Stat(lock); statErr != nil {
+		releaseB()
 		t.Fatalf("stale holder's release deleted the new owner's lock: %v", statErr)
 	}
+
 	releaseB()
-	if _, statErr := os.Stat(lock); !errors.Is(statErr, fs.ErrNotExist) {
-		t.Fatal("owner release must remove its own lock")
+	// 3. owner release 后路径仍然稳定存在，且锁确实已可被下一个持有者取得。
+	if _, statErr := os.Stat(lock); statErr != nil {
+		t.Fatalf("release must keep the lock file path stable (never unlink the kernel lock object): %v", statErr)
 	}
+	releaseC, err := acquireLock(lock, fixedNow())
+	if err != nil {
+		t.Fatalf("lock must be acquirable after owner release: %v", err)
+	}
+	releaseC()
 }
 
 // 无任何变化的重复启动不得重写 upgrade-state.json（updated_at 不应抖动）；
