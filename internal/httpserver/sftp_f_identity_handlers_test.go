@@ -46,6 +46,7 @@ func sftpFNewBasic() *sftpFClient {
 func (f *sftpFClient) Close() error { return nil }
 
 func (f *sftpFClient) ReadDir(p string) ([]os.FileInfo, error) {
+	p = sftpTestResolveIdentity(p)
 	entries, ok := f.dirs[p]
 	if !ok {
 		return nil, &os.PathError{Op: "readdir", Path: p, Err: os.ErrNotExist}
@@ -69,6 +70,7 @@ func (f *sftpFClient) ListLimited(p string, max int) ([]os.FileInfo, bool, error
 }
 
 func (f *sftpFClient) Stat(p string) (os.FileInfo, error) {
+	p = sftpTestResolveIdentity(p)
 	f.stattedPaths = append(f.stattedPaths, p)
 	if _, ok := f.dirs[p]; ok {
 		return fakeFileInfo{name: filepath.Base(p), isDir: true, mode: os.ModeDir | 0o755}, nil
@@ -80,6 +82,7 @@ func (f *sftpFClient) Stat(p string) (os.FileInfo, error) {
 }
 
 func (f *sftpFClient) Open(p string) (sftpclient.SftpFile, error) {
+	p = sftpTestResolveIdentity(p)
 	f.openedPaths = append(f.openedPaths, p)
 	content, ok := f.files[p]
 	if !ok {
@@ -97,6 +100,7 @@ func (f *sftpFClient) DownloadFileWithProgress(remote, local string, progress fu
 }
 
 func (f *sftpFClient) downloadWith(remote, local string, progress func(int64, int64)) (int64, error) {
+	remote = sftpTestResolveIdentity(remote)
 	f.downloadedRemotes = append(f.downloadedRemotes, remote)
 	content, ok := f.files[remote]
 	if !ok {

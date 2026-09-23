@@ -31,6 +31,7 @@ type sftpFRawClient struct {
 }
 
 func (c *sftpFRawClient) ReadDir(p string) ([]os.FileInfo, error) {
+	p = sftpTestResolveIdentity(p)
 	entries, ok := c.dirs[p]
 	if !ok {
 		return nil, &os.PathError{Op: "readdir", Path: p, Err: os.ErrNotExist}
@@ -203,8 +204,14 @@ func TestSFTPF_CreateTargetCombinesParentIdentityAndName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sftpCreateTarget 失败: %v", err)
 	}
-	if want := parentRaw + "/新文件.txt"; target != want {
-		t.Fatalf("target = %q (hex %x)，期望 %q (hex %x)", target, []byte(target), want, []byte(want))
+	// 审核第 10 项：组合结果以身份 token 下发（客户端直接解出精确原始字节路径，
+	// 不再把原始字节当成展示路径重新解析）。
+	rawTarget, ok := sftpclient.DecodePathIdentity(target)
+	if !ok {
+		t.Fatalf("target 必须是身份 token，得到 %q (hex %x)", target, []byte(target))
+	}
+	if want := parentRaw + "/新文件.txt"; rawTarget != want {
+		t.Fatalf("target 解码后 = %q (hex %x)，期望 %q (hex %x)", rawTarget, []byte(rawTarget), want, []byte(want))
 	}
 	if want := "/tmp/" + sftpFUTF8ZhongWen + "/新文件.txt"; display != want {
 		t.Fatalf("display = %q，期望 %q", display, want)

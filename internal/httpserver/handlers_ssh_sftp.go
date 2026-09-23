@@ -167,8 +167,15 @@ func sftpRequestPath(pathID, displayPath, legacyPath string) (string, string, er
 			if err := sftpValidateRawPath(raw, "path_id"); err != nil {
 				return "", "", err
 			}
-			// 原始字节 → 人类可读（GBK 段会解成中文，地址栏不显示 token）。
-			return raw, sftpclient.DecodeServerName(raw), nil
+			// P2（审核第 10 项）：这里必须把**身份 token** 原样交给 sftpclient，
+			// 展示名单独算（原始字节 → 人类可读，地址栏不显示 token）。
+			//
+			// 旧实现返回解码后的原始路径，sftpclient 收到"看起来像展示路径"的原始字节后
+			// 会重新展开 [UTF-8, GBK] 编码候选：同目录下存在同显示名、不同字节编码的两个
+			// 条目时就是 ErrAmbiguousPath —— 用户明明已经在列表里选中了精确条目，
+			// 预览/下载却报"路径歧义"；GBK 条目的原始字节还会被当成展示名带进本地命名链路。
+			// token 会被客户端直接解码回同一份原始字节（零远端解析、无歧义）。
+			return sftpclient.EncodePathIdentity(raw), sftpclient.DecodeServerName(raw), nil
 		}
 		// 不是合法身份 token：宽容地按"展示绝对路径"处理（与旧契约同一套校验）。
 		// 这样老前端把展示路径填进 path_id 也能工作，且校验强度不变
@@ -251,7 +258,10 @@ func sftpCreateTarget(parentPathID, name, pathID, legacyPath string) (string, st
 		if err != nil {
 			return "", "", err
 		}
-		return path.Join(parentRaw, child), path.Join(parentDisplay, child), nil
+		// 组合结果同样以身份 token 下发：父目录是按原始字节解析出来的，
+		// 若把原始字节路径交回客户端，写入前还会再解析一次父目录（可能歧义）。
+		// token 会让客户端直接拿到这份精确的原始字节路径。
+		return sftpclient.EncodePathIdentity(path.Join(parentRaw, child)), path.Join(parentDisplay, child), nil
 	}
 	return sftpRequestPath(pathID, "", legacyPath)
 }

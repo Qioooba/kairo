@@ -16,6 +16,20 @@ import (
 	"kairo/internal/sshclient"
 )
 
+// sftpTestResolveIdentity 让测试替身与真实 *sftpclient.Client 保持同一语义：
+// 客户端入口先解身份 token，自定义 backend 永远只看到**原始字节路径**
+// （见 internal/sftpclient/resolve.go 的 resolveExistingPathCtx / resolveWritePathCtx /
+// resolveDir / resolveDirectoryForCreate —— 它们都是 "先 DecodePathIdentity，命中即返回"）。
+//
+// 审核第 10 项之后 HTTP 层把身份 token 原样下发给客户端，替身必须同样解析，
+// 否则测的就不是生产链路了。
+func sftpTestResolveIdentity(p string) string {
+	if raw, ok := sftpclient.DecodePathIdentity(p); ok {
+		return raw
+	}
+	return p
+}
+
 // fakeSftpClient 实现 sftpClientLike 接口，给测试用。
 //
 // 行为：
@@ -38,6 +52,7 @@ type fakeDirEntry struct {
 func (f *fakeSftpClient) Close() error { return nil }
 
 func (f *fakeSftpClient) Open(path string) (sftpclient.SftpFile, error) {
+	path = sftpTestResolveIdentity(path)
 	content, ok := f.files[path]
 	if !ok {
 		return nil, &os.PathError{Op: "open", Path: path, Err: os.ErrNotExist}
@@ -63,6 +78,7 @@ func (ff *fakeSftpFile) Stat() (os.FileInfo, error) {
 }
 
 func (f *fakeSftpClient) ReadDir(path string) ([]os.FileInfo, error) {
+	path = sftpTestResolveIdentity(path)
 	entries, ok := f.dirs[path]
 	if !ok {
 		return nil, &os.PathError{Op: "readdir", Path: path, Err: os.ErrNotExist}
@@ -91,6 +107,7 @@ func (f *fakeSftpClient) ListLimited(path string, max int) ([]os.FileInfo, bool,
 }
 
 func (f *fakeSftpClient) Stat(path string) (os.FileInfo, error) {
+	path = sftpTestResolveIdentity(path)
 	if entries, ok := f.dirs[path]; ok {
 		if len(entries) == 0 {
 			return fakeFileInfo{name: filepath.Base(path), isDir: true, mode: os.ModeDir | 0o755}, nil
@@ -112,6 +129,7 @@ func (f *fakeSftpClient) DownloadFileWithProgress(remote, local string, progress
 }
 
 func (f *fakeSftpClient) downloadWith(remote, local string, progress func(int64, int64)) (int64, error) {
+	remote = sftpTestResolveIdentity(remote)
 	content, ok := f.files[remote]
 	if !ok {
 		return 0, &os.PathError{Op: "open", Path: remote, Err: os.ErrNotExist}
