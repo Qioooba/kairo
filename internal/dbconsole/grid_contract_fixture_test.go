@@ -137,11 +137,18 @@ func TestGridEditPlanSummaryContractFixture(t *testing.T) {
 		t.Fatalf("读取 %s 失败: %v\n用 UPDATE_FIXTURES=1 go test ./internal/dbconsole/ -run TestGridEditPlanSummaryContractFixture 重新生成",
 			gridContractFixtureRelPath, err)
 	}
-	if string(got) != string(want) {
+	// 按规范化后的内容比较: golden 文件在 autocrlf/eol 配置不同的 checkout 里可能被
+	// 检出为 CRLF, 而生成端总是 LF。行尾不是契约的一部分, 不应导致误报。
+	if normalizeFixtureNewlines(string(got)) != normalizeFixtureNewlines(string(want)) {
 		t.Fatalf("%s 与 Go 真实序列化不一致 —— 说明 Go 侧 json tag/字段变了, 前端契约必须同步。\n"+
 			"重新生成: UPDATE_FIXTURES=1 go test ./internal/dbconsole/ -run TestGridEditPlanSummaryContractFixture",
 			gridContractFixtureRelPath)
 	}
+}
+
+// normalizeFixtureNewlines 把 CRLF 归一成 LF, 让 golden 比较与 git 的行尾策略无关。
+func normalizeFixtureNewlines(s string) string {
+	return strings.ReplaceAll(s, "\r\n", "\n")
 }
 
 // TestGridEditPlanSummaryWireShape 直接对真实序列化结果做线上形状断言。

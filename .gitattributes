@@ -25,3 +25,6 @@ docs/qa/package.json          -export-ignore
 
 # --- Git Hooks 保持 LF 换行 ---
 .githooks/*                   text eol=lf
+
+# --- 真实契约 fixture 固定 LF: Go 生成端恒为 LF, 字节级 golden 比较不应被 autocrlf 改写 ---
+tests/fixtures/**             text eol=lf
