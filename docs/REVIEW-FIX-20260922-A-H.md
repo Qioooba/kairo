@@ -13,7 +13,7 @@
 | B 查询及格式化 | DB-01 DB-02 DB-03 DBUI-02 DBUI-04 | 5 | ✅ 已提交并验证 |
 | C 网格及 LOB | DBUI-01 DB-04 DB-05 DB-06 DB-07 | 5 | 进行中（DBUI-01 与列映射同批，须整批落地） |
 | D 比较保存 | CT01 CT06 CT02 CT04 | 4 | ✅ 已提交并验证（含 handler 级补测） |
-| E 路由及历史 | DBUI-03 DBUI-05 DBUI-06 CT03 CT05 CT07 | 6 | DBUI-03 ✅；CT03/05/07 进行中；DBUI-05/06 待 C 释放 database.js |
+| E 路由及历史 | DBUI-03 DBUI-05 DBUI-06 CT03 CT05 CT07 | 6 | DBUI-03 ✅、CT03/05/07 ✅；DBUI-05/06 待 C 释放 database.js |
 | F SFTP | OTH-03 OTH-04 OTH-05 OTH-06 | 4 | ✅ 已提交并验证 |
 | G 升级与请求 | OTH-01 OTH-02 | 2 | ✅ 已提交并验证 |
 | H 远端 shell | OPS-01 | 1 | ✅ 已提交并验证 |
@@ -281,6 +281,54 @@ E 的其余五项仍按依赖顺序执行（CT03/05/07 依赖 `compare.js`，DBU
 - **未验证**：无真实浏览器（未起服务、未用用户真实配置），孤儿卡片布局/真实点击/Ctrl+Enter 仅由 DOM 双覆盖；
   无真实 Oracle/MySQL 集成。"在途请求未结束即拒绝改绑"是有意的 UX 取舍。
 - **遗留（范围外）**：已绑定页签手动切换顶部数据源时仍保留旧结果行，属既有行为，未在本次处理。
+
+### 2.8 批次 E 第二片 — 快捷键归属、关闭释放与数据级全选（CT03、CT05、CT07）
+
+提交：`b35461b`（`web/pages/compare.js` +182/−46，新增 16 用例回归，另 1 行契约改锚）
+
+- **CT03**：守卫写成探测 `Kairo.tabs.activeRoute`，而 `web/tabs.js` 只公开
+  `getActiveId`/`getActive`/`isActive` —— 该函数永不存在，保护分支被整体略过，后台比较页仍执行
+  撤回并可能 `preventDefault` 阻断前台快捷键。修复：新增 `compareTabIsActive()`
+  （优先 `isActive('compare')`，退化 `getActiveId()`），document 级 keydown 在
+  `defaultPrevented`/`disposed` 之后先做判定；保留输入控件、contenteditable 与 IME 保护；
+  注销仍走既有 `cleanupTextWorkbench`（由 Tab scope dispose 调用），重开不累积监听。
+  附带用例实测 20 次真实开关后 document 上恰好剩 1 个 keydown 监听。
+- **CT05**：`activeScanJob`/`scanPollTimer` 是模块级变量，`renderCompare` 的 cleanup 只跑
+  `textCleanup`，`pollScan` 只检查私有 `scanSequence` 就继续 `setTimeout(350)`，
+  `folderWorkbench` 只返回 `startScan`。修复：模块级变量删除，改为
+  `buildFolderWorkbench` 实例内持有 `disposed`/`scanGeneration`/`scanJobId`/`scanPollTimer`，
+  返回 `{startScan, dispose}`；cleanup 同时释放两个工作台（仅切换页签是隐藏，扫描继续）；
+  `dispose` 幂等、递增代次、清定时器、捕获并清空 jobID、对该任务**恰好发一次** DELETE
+  （失败不恢复轮询）；`pollScan(seq, jobId)` 使用本任务固定 jobID，每个 await 后重校验
+  disposed/代次/seq/jobID；`startScan` 的 POST await 后同样校验，过期则 DELETE 已创建任务且不轮询。
+- **CT07**：旧实现用 Range 选中 `.cmp-vdiff-canvas` 已有 DOM 并宣称已全选，而虚拟化只渲染
+  当前窗口+overscan（实测 1000 行时 DOM 仅 46 行），复制被截断。**选型：保留入口，改为数据级
+  选择**（文档方案 A）—— "复制左侧/右侧全部/复制 Diff" 已是独立入口，删除按钮会丢掉
+  "复制对齐后双栏结果"这一独有能力。实现：`serializeFullSelection()`（相同行一行、差异行
+  `左<TAB>右`、单侧行只输出存在侧；`mode==='changes'` 只输出差异行）、`selectAll()`、
+  `ownsSelection()`；canvas mousedown 清除数据级标志，普通鼠标选区仍按原生复制；复制由工作台在
+  document 上统一分发一次（真实浏览器 copy 目标是焦点元素，"全选内容"按钮不在 wrapper 内）。
+  **边界**：`copySideAll` 与原文 textarea 原生全选未改动，且有用例守护。
+
+**明确改锚 1 行**：`web/app.test.js` 原断言源码字符串 `return { startScan: startScan }` ——
+正是 CT05 要求变更的旧契约；改为断言 `{ startScan, dispose }`（覆盖面更强，非放水）。
+
+**失败优先证据**：在 `f666fa6` 的 `compare.js` 上跑最终版测试 → `5 / 16 cases passed`，
+exit 1。逐字节选：CT03 `后台比较 Tab 不得阻止前台 Ctrl+Z / true !== false`；
+CT05 `关闭必须恰好取消一次后端任务，实际 0`、`关闭后不得开始轮询，实际 2`、
+`buildFolderWorkbench 必须返回 dispose`；CT07 `数据级全选必须接管复制事件`（4 例）。
+
+**独立复核（父 agent 执行）**：把该回归拷进仍为 pre-E 代码的 detached worktree
+（其中 `compare.js` 仍含 2 处 `activeRoute`）运行 → `exit=1` 且 CT05/CT07 用例失败，
+证明该回归确实能发现它守护的缺陷，而非照着实现写出来的。
+
+**验证**：`node tests/compare-tabs-lifecycle.test.js` → 16/16 exit 0；`npm test` → 17/17（注册后 18/18）；
+`web/tabs.js` 未改动（现有 `isActive` 已足够）。
+
+**未验证**：无浏览器、未启动服务 —— 真实键盘焦点与 blur、真实虚拟化几何（双里 `clientHeight` 为手工设定）、
+真实剪贴板落盘（只断言 `clipboardData.setData` 与 `preventDefault`）、真实服务端任务取消语义均未验证；
+`ownsSelection()` 的真实 `anchorNode` 分支在 DOM 双中不可达（最坏退化为原生截断复制，已如实记录）；
+CT07 序列化格式属产品决定；"20 次重开"用例用的是直接 `buildTextWorkbench`+cleanup 而非真实 `destroyTab`。
 
 ## 3. 验证证据
 ### 3.1 逐提交隔离验证（证明每个批次提交可独立复现）
