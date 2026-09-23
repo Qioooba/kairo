@@ -19,8 +19,8 @@
   const WASPACK_HANDOFF_MAX_AGE = 10 * 60 * 1000;
   const PATH_HISTORY_LIMIT = 12;
   let connections = [];
-  let activeScanJob = '';
-  let scanPollTimer = 0;
+  // CT05：扫描的 jobID / 轮询定时器不再是模块级状态，它们属于各自的
+  // buildFolderWorkbench 实例，随 Tab 关闭一起释放。
   let activeWorkbenchState = null;
   let persisted = { options: {}, sources: {}, folder_history: { left: [], right: [] } };
   const persistPreference = preferenceSaver('compare', 400);
@@ -507,10 +507,18 @@
     };
   }
 
+  // CT03/CT07 共用：当前激活页签是否是比较。web/tabs.js 只公开
+  // isActive/getActiveId/getActive；探测不存在的 activeRoute 只会让保护失效。
+  function compareTabIsActive() {
+    if (typeof Kairo === 'undefined' || !Kairo.tabs) return true;
+    const tabsApi = Kairo.tabs;
+    if (typeof tabsApi.isActive === 'function') return !!tabsApi.isActive('compare');
+    if (typeof tabsApi.getActiveId === 'function') return tabsApi.getActiveId() === 'compare';
+    return true;
+  }
+
   async function renderCompare(view) {
     const renderToken = view.dataset.renderToken;
-    if (scanPollTimer) clearTimeout(scanPollTimer);
-    activeScanJob = '';
     view.innerHTML = '<div class="card muted">正在恢复比较工作台偏好…</div>';
     // Consume the one-time WASPACK handoff before preference restoration can
     // yield. The storage entry is removed even when invalid, preventing replay.
@@ -599,6 +607,8 @@
     return function () {
       if (activeWorkbenchState === state) activeWorkbenchState = null;
       if (typeof textCleanup === 'function') textCleanup();
+      // CT05：真实关闭 Tab 才释放文件夹扫描（切换页签只隐藏，不会走这里）。
+      if (folderWorkbench && typeof folderWorkbench.dispose === 'function') folderWorkbench.dispose();
     };
   }
 
@@ -702,15 +712,11 @@
     }
 
     function selectAllDiff() {
-      const vdiff = resultHost.querySelector('.cmp-vdiff');
-      if (!vdiff) return;
-      const sel = window.getSelection();
-      if (!sel) return;
-      sel.removeAllRanges();
-      const range = document.createRange();
-      range.selectNodeContents(vdiff.querySelector('.cmp-vdiff-canvas') || vdiff);
-      sel.addRange(range);
-      toast('已全选比对内容，可直接 Ctrl+C 复制', 'ok');
+      if (!currentVirtualDiff || typeof currentVirtualDiff.selectAll !== 'function') return;
+      // CT07：原生 Range 只覆盖当前虚拟窗口（1000 行时 DOM 里可能只有几十行），
+      // 因此“全选内容”必须建模成数据级选择，复制时从完整 alignedRows 序列化。
+      const info = currentVirtualDiff.selectAll();
+      toast('已全选全部比对内容（共 ' + info.rows + ' 行，含未在窗口中渲染的行），Ctrl+C 可复制完整内容', 'ok');
     }
 
     const undoStack = [];
@@ -815,9 +821,9 @@
 
     const handleWorkbenchKeyDown = function (e) {
       if (disposed || e.defaultPrevented) return;
-      if (typeof Kairo !== 'undefined' && Kairo.tabs && typeof Kairo.tabs.activeRoute === 'function') {
-        if (Kairo.tabs.activeRoute() !== 'compare') return;
-      }
+      // CT03：只有当前激活页签是比较时才处理全局快捷键，否则隐藏的比较 Tab 仍会
+      // 撤回后台文本并阻断前台页签的 Ctrl+Z。
+      if (!compareTabIsActive()) return;
       if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'z') {
         const active = document.activeElement;
         if (active && (active.tagName === 'TEXTAREA' || (active.tagName === 'INPUT' && active.type === 'text') || active.isContentEditable)) return;
@@ -826,6 +832,7 @@
         performUndo();
       }
     };
+    // 关闭时由 cleanupTextWorkbench 注销（Tab scope 负责调用），重开不会累积监听。
     document.addEventListener('keydown', handleWorkbenchKeyDown);
 
     function copySelectionToSide(toSide) {
@@ -1498,6 +1505,29 @@
     function showResult() { showingResult = true; panel.classList.add('cmp-panel-has-result'); editorGrid.style.display = 'none'; const label = toggleEditorsBtn.querySelector('span'); if (label) label.textContent = '展开原文件编辑'; else toggleEditorsBtn.textContent = '展开原文件编辑'; const svg = toggleEditorsBtn.querySelector('svg'); if (svg) svg.innerHTML = '<path d="M9 18l6-6-6-6"/>'; resultHost.style.display = ''; editBtn.style.display = 'none'; compareBtn.style.display = ''; refreshSaveButtons(); }
     function showEditors() { showingResult = false; panel.classList.remove('cmp-panel-has-result'); editorGrid.style.display = ''; resultHost.style.display = 'none'; editBtn.style.display = 'none'; compareBtn.style.display = ''; refreshSaveButtons(); }
     let currentVirtualDiff = null;
+    // CT07：复制事件可能落在结果区，也可能落在仍持有焦点的“全选内容”按钮上，
+    // 因此由本工作台在 document 上统一分发一次（cleanupTextWorkbench 注销），
+    // 只在本实例处于数据级全选、页签仍激活、且不是输入控件内复制时接管。
+    const handleFullSelectionCopy = function (e) {
+      const vdiff = currentVirtualDiff;
+      if (!vdiff || typeof vdiff.isFullSelectionActive !== 'function' || !vdiff.isFullSelectionActive()) return;
+      if (!compareTabIsActive()) return;
+      const target = e.target;
+      if (target && (target.tagName === 'TEXTAREA' || target.tagName === 'INPUT' || target.isContentEditable)) return;
+      if (typeof vdiff.ownsSelection === 'function' && !vdiff.ownsSelection()) return;
+      const text = typeof vdiff.serializeFullSelection === 'function' ? vdiff.serializeFullSelection() : '';
+      if (!text) return;
+      if (e.clipboardData && typeof e.clipboardData.setData === 'function') {
+        e.preventDefault();
+        e.clipboardData.setData('text/plain', text);
+        return;
+      }
+      if (typeof copyToClipboard === 'function') {
+        e.preventDefault();
+        copyToClipboard(text).catch(function () {});
+      }
+    };
+    document.addEventListener('copy', handleFullSelectionCopy);
     function renderResult(preserveView) {
       // 重建结果区（字号/行距/搜索/重比）会删除现有单元格：先提交尚未 blur 的行内草稿，
       // 但不立即重比，避免在保存捕获快照之前又触发一次重建。
@@ -1733,6 +1763,7 @@
       recompareTimer = 0;
       compareSeq++;
       document.removeEventListener('keydown', handleWorkbenchKeyDown);
+      document.removeEventListener('copy', handleFullSelectionCopy);
       editorLeft.dispose();
       editorRight.dispose();
       if (state.textWorkbench && state.textWorkbench.loadPair) delete state.textWorkbench.loadPair;
@@ -2476,6 +2507,60 @@
     container.append(viewportCol, minimap);
     const wrapper = el('div', { class: 'cmp-vdiff-wrapper' }, [searchBar, container, batchBar]);
 
+    // CT07：数据级“全选”。虚拟化只会创建当前窗口（含 overscan）的行，原生 Range
+    // 选不到窗口外的行，因此复制必须从完整 rows 序列化，而不是读 DOM。
+    let fullSelectionActive = false;
+
+    // 行级序列化：相同行输出一份正文；差异行把左右正文用制表符分开；单侧行只输出
+    // 存在的一侧。只差异模式下 rows 本身就是过滤后的差异行。
+    function serializeFullSelection() {
+      const lines = [];
+      for (let i = 0; i < rows.length; i++) {
+        const row = rows[i];
+        if (mode === 'changes' && row.status === 'equal') continue;
+        const left = row.leftText != null ? String(row.leftText) : '';
+        const right = row.rightText != null ? String(row.rightText) : '';
+        if (left === right || !left || !right) lines.push(left || right);
+        else lines.push(left + '\t' + right);
+      }
+      return lines.join('\n');
+    }
+
+    // “全选内容”保留原生可见选区（用户看得到高亮），但复制数据来自完整行模型。
+    function selectAll() {
+      fullSelectionActive = true;
+      const sel = window.getSelection && window.getSelection();
+      if (sel) {
+        sel.removeAllRanges();
+        const range = document.createRange();
+        range.selectNodeContents(canvas);
+        sel.addRange(range);
+      }
+      return { rows: rows.length, characters: serializeFullSelection().length };
+    }
+
+    // 现场选区是否仍落在本结果区内：避免数据级全选抢走页面其它区域的复制。
+    // 浏览器不提供选区信息时以数据级状态为准（DOM 双即属此列）。
+    function ownsSelection() {
+      const sel = window.getSelection && window.getSelection();
+      if (!sel) return true;
+      const anchor = sel.anchorNode;
+      if (anchor) {
+        const anchorEl = anchor.nodeType === 1 ? anchor : anchor.parentElement;
+        if (anchorEl && !canvas.contains(anchorEl)) return false;
+      }
+      if (typeof sel.rangeCount === 'number' && sel.rangeCount > 0 && typeof sel.getRangeAt === 'function') {
+        const range = sel.getRangeAt(0);
+        const start = range && range.startContainer;
+        const startEl = start ? (start.nodeType === 1 ? start : start.parentElement) : null;
+        if (startEl && !canvas.contains(startEl)) return false;
+      }
+      return true;
+    }
+
+    // 真实鼠标选区优先：用户一在结果区按下鼠标，数据级全选即失效。
+    canvas.addEventListener('mousedown', function () { fullSelectionActive = false; });
+
     function getViewState() {
       return {
         scrollTop: viewport.scrollTop,
@@ -2550,7 +2635,7 @@
       return activeEditCell.getDraft() != null;
     }
 
-    return { element: wrapper, jumpToHunk, navigateHunk, navigateLine, openSearch, closeSearch, clearSelection, restoreSearch, getViewState, restoreViewState, flushActiveEdit, cancelActiveEdit, hasDraft };
+    return { element: wrapper, jumpToHunk, navigateHunk, navigateLine, openSearch, closeSearch, clearSelection, restoreSearch, getViewState, restoreViewState, flushActiveEdit, cancelActiveEdit, hasDraft, selectAll, serializeFullSelection, ownsSelection, isFullSelectionActive: function () { return fullSelectionActive; } };
   }
 
   function makeDiffCell(row, side, onEdit, language, searchQuery, searchCaseSensitive, isCurrentSearchMatch, onNavigateLine, searchSide, hScroll, hooks) {
@@ -2952,6 +3037,11 @@
     let scanSequence = 0;
     let folderIndex = null;
     let filterRenderTimer = 0;
+    // CT05：扫描任务的全部可变状态都归本实例所有，不再与其它 Tab 共享。
+    let disposed = false;
+    let scanGeneration = 0;
+    let scanJobId = '';
+    let scanPollTimer = 0;
 
     const resultHost = el('div', { class: 'cmp-folder-results' });
     const scanAlert = el('div', { class: 'cmp-scan-alert', role: 'status', 'aria-live': 'polite', hidden: true });
@@ -3166,6 +3256,19 @@
 
     function invalidateFolderIndex() { folderIndex = null; }
 
+    // CT05：只清理本实例的轮询定时器，不触碰后端任务。
+    function clearScanPollTimer() {
+      if (scanPollTimer) { clearTimeout(scanPollTimer); scanPollTimer = 0; }
+    }
+    // 向后端取消一个任务；取消失败只记录为失败，绝不因此恢复前端轮询。
+    function deleteScanJob(jobId) {
+      if (!jobId) return;
+      try {
+        const pending = api('DELETE', '/api/compare/jobs/' + jobId);
+        if (pending && typeof pending.catch === 'function') pending.catch(function () {});
+      } catch (_) { /* 网络层同步抛错同样不恢复轮询 */ }
+    }
+
     function getFolderIndex() {
       const items = state.scan && state.scan.items || [];
       if (folderIndex && folderIndex.items === items) return folderIndex;
@@ -3225,11 +3328,12 @@
     }
 
     function invalidateSourceScan() {
+      if (disposed) return;
       scanSequence++;
-      if (scanPollTimer) { clearTimeout(scanPollTimer); scanPollTimer = 0; }
-      const staleJob = activeScanJob;
-      activeScanJob = '';
-      if (staleJob) api('DELETE', '/api/compare/jobs/' + staleJob).catch(function () {});
+      clearScanPollTimer();
+      const staleJob = scanJobId;
+      scanJobId = '';
+      if (staleJob) deleteScanJob(staleJob);
       state.scan = null;
       selected.clear(); expanded.clear(); loadingDirs.clear();
       loadedDirs.clear(); loadedDirs.add('');
@@ -3258,6 +3362,7 @@
       testStatus.className = 'cmp2-test-status';
       try {
         const response = await api('POST', '/api/compare/test', { left: spec(sources.left), right: spec(sources.right) });
+        if (disposed) return; // 关闭后不得再改写已卸载的 DOM
         const leftOK = response.left && response.left.ok && response.left.is_dir;
         const rightOK = response.right && response.right.ok && response.right.is_dir;
         if (leftOK && rightOK) {
@@ -3273,6 +3378,7 @@
           toast(failures.join('；'), 'err');
         }
       } catch (error) {
+        if (disposed) return;
         testStatus.textContent = '测试失败';
         testStatus.className = 'cmp2-test-status is-error';
         toast('来源测试失败：' + formatCompareError(error.message || error), 'err');
@@ -3282,6 +3388,8 @@
     }
 
     async function startScan(scanOptions) {
+      // 关闭后仍可能被延迟回调调用（例如 handoff 的 setTimeout），必须直接放弃。
+      if (disposed) return;
       const persistScan = !scanOptions || scanOptions.persist !== false;
       scanSettings.open = false;
       sources.left.path = (pathInputs.left.value || '').trim();
@@ -3299,12 +3407,16 @@
         persistPreference(persisted);
       }
 
-      if (scanPollTimer) { clearTimeout(scanPollTimer); scanPollTimer = 0; }
-      if (activeScanJob) {
-        try { api('DELETE', '/api/compare/jobs/' + activeScanJob); } catch (_) {}
-        activeScanJob = '';
+      clearScanPollTimer();
+      if (scanJobId) {
+        // 同一实例重新扫描：取消上一轮尚未结束的任务（失败也不影响本轮）。
+        const previousJob = scanJobId;
+        scanJobId = '';
+        deleteScanJob(previousJob);
       }
       const currentSeq = ++scanSequence;
+      // 本次任务捕获的实例代次：dispose 会递增代次，使所有在途响应作废。
+      const currentGen = scanGeneration;
 
       selected.clear();
       expanded.clear();
@@ -3339,14 +3451,17 @@
           time_tolerance_seconds: Number(tolerance.value) || 2,
           ignore_exts: ignoreExt.value.split(/[,，\s]+/).filter(Boolean)
         });
-        if (currentSeq !== scanSequence) {
-          if (response.job_id) api('DELETE', '/api/compare/jobs/' + response.job_id).catch(function () {});
+        // await 之后必须重新验证：实例已关闭、来源已换、或本轮已被新扫描取代时，
+        // 不能把这个任务记为当前任务，也不能让它开始轮询。
+        if (disposed || currentGen !== scanGeneration || currentSeq !== scanSequence) {
+          if (response && response.job_id) deleteScanJob(response.job_id);
           return;
         }
-        activeScanJob = response.job_id;
-        pollScan(currentSeq);
+        scanJobId = response.job_id;
+        // jobID 作为本次任务参数传入，轮询不再读取任何可变全局。
+        pollScan(currentSeq, response.job_id);
       } catch (error) {
-        if (currentSeq !== scanSequence) return;
+        if (disposed || currentGen !== scanGeneration || currentSeq !== scanSequence) return;
         startBtn.disabled = false;
         cancelBtn.disabled = true;
         cancelBtn.hidden = true;
@@ -3355,11 +3470,14 @@
       }
     }
 
-    async function pollScan(seq) {
-      if (seq !== scanSequence || !activeScanJob) return;
+    // CT05：seq 标识“本次扫描”，jobId 是本次任务固定的后端任务号。
+    // 每个 await 之后都要重新验证实例代次、任务序号与 jobID 归属。
+    async function pollScan(seq, jobId) {
+      if (disposed || seq !== scanSequence || !jobId || jobId !== scanJobId) return;
+      const gen = scanGeneration;
       try {
-        const job = await api('GET', '/api/compare/jobs/' + activeScanJob);
-        if (seq !== scanSequence) return;
+        const job = await api('GET', '/api/compare/jobs/' + jobId);
+        if (disposed || gen !== scanGeneration || seq !== scanSequence || jobId !== scanJobId) return;
         const percent = job.total ? Math.min(100, Math.round(job.current / job.total * 100)) : 16;
         progressBar.firstChild.style.width = percent + '%';
         progressBar.setAttribute('aria-valuenow', String(percent));
@@ -3367,7 +3485,7 @@
 
         if (job.status === 'completed') {
           state.scan = job.result || { items: [], summary: {}, incomplete: true, error: '服务端未返回比较结果' };
-          activeScanJob = '';
+          scanJobId = '';
           startBtn.disabled = false;
           cancelBtn.disabled = true;
           cancelBtn.hidden = true;
@@ -3388,10 +3506,10 @@
         if (job.status === 'failed' || job.status === 'cancelled') {
           throw new Error(job.error || '任务已取消');
         }
-        scanPollTimer = setTimeout(() => pollScan(seq), 350);
+        scanPollTimer = setTimeout(function () { scanPollTimer = 0; pollScan(seq, jobId); }, 350);
       } catch (error) {
-        if (seq !== scanSequence) return;
-        activeScanJob = '';
+        if (disposed || gen !== scanGeneration || seq !== scanSequence || jobId !== scanJobId) return;
+        scanJobId = '';
         startBtn.disabled = false;
         cancelBtn.disabled = true;
         cancelBtn.hidden = true;
@@ -3406,17 +3524,35 @@
     }
 
     async function cancelScan() {
+      if (disposed) return;
       scanSequence++;
-      if (scanPollTimer) { clearTimeout(scanPollTimer); scanPollTimer = 0; }
-      if (activeScanJob) {
-        try { await api('DELETE', '/api/compare/jobs/' + activeScanJob); } catch (_) {}
-        activeScanJob = '';
+      clearScanPollTimer();
+      const job = scanJobId;
+      scanJobId = '';
+      if (job) {
+        try { await api('DELETE', '/api/compare/jobs/' + job); } catch (_) {}
       }
+      if (disposed) return;
       cancelBtn.disabled = true;
       cancelBtn.hidden = true;
       startBtn.disabled = false;
       progress.textContent = '已取消';
       progressBar.firstChild.style.width = '0%';
+    }
+
+    // CT05：真实关闭 Tab 时释放扫描资源。设置 disposed、递增代次（作废所有在途
+    // POST/GET）、清空定时器、捕获并清空 jobID，并向后端取消该任务；取消失败不会
+    // 恢复轮询。切换页签只是隐藏，不会调用这里，扫描继续运行。
+    function dispose() {
+      if (disposed) return;
+      disposed = true;
+      scanGeneration++;
+      scanSequence++;
+      clearScanPollTimer();
+      if (filterRenderTimer) { clearTimeout(filterRenderTimer); filterRenderTimer = 0; }
+      const job = scanJobId;
+      scanJobId = '';
+      deleteScanJob(job);
     }
 
     function mergeScanItems(newItems) {
@@ -3462,7 +3598,7 @@
             deep: deep.value === 'deep', time_tolerance_seconds: Number(tolerance.value) || 2,
             ignore_exts: ignoreExt.value.split(/[,，\s]+/).filter(Boolean)
           });
-          if (sourceSequence !== scanSequence) return;
+          if (disposed || sourceSequence !== scanSequence) return;
           mergeScanItems(result.items || []);
           if (result.truncated || result.error) {
             state.scan.truncated = state.scan.truncated || result.truncated;
@@ -3473,11 +3609,11 @@
           state.scan.incomplete = !!state.scan.truncated || (state.scan.items || []).some(function (it) { return it.incomplete || it.pending; });
           recalculateSummary();
         } catch (error) {
-          if (sourceSequence !== scanSequence) return;
+          if (disposed || sourceSequence !== scanSequence) return;
           expanded.delete(rel);
           toast('展开失败：' + (error.message || error), 'err');
         } finally {
-          if (sourceSequence === scanSequence) {
+          if (!disposed && sourceSequence === scanSequence) {
             loadingDirs.delete(rel);
             renderScan();
           }
@@ -3877,7 +4013,7 @@
         toast('复制失败：' + (error.message || error), 'err');
       }
     }
-    return { startScan: startScan };
+    return { startScan: startScan, dispose: dispose };
   }
 
   function folderRowHeight() { return 28; }

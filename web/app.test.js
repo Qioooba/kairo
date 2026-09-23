@@ -1836,7 +1836,8 @@ function testCompareHelpers() {
   assert.ok(compareSource.includes("table.addEventListener('keydown'"), '键盘事件应绑定 treegrid');
   assert.ok(compareSource.includes("table.setAttribute('aria-activedescendant'"), '活动后代应绑定 treegrid');
   assert.ok(!compareSource.includes("class: 'cmp-folder-viewport', tabindex: '0'"), 'rowgroup 不应承载 composite tabindex');
-  assert.ok(compareSource.includes('return { startScan: startScan }'), '文件夹工作台应暴露延迟扫描句柄');
+  // CT05：句柄除 startScan 外必须提供 dispose（关闭 Tab 时释放扫描任务与轮询定时器）。
+  assert.ok(compareSource.includes('return { startScan: startScan, dispose: dispose }'), '文件夹工作台应暴露延迟扫描句柄与关闭释放入口');
 
   // 6. 远程来源历史只保存身份，不保存凭据，并能识别类型冲突
   const ftp = cmp.sourceIdentity({ kind: 'ftp', host: 'example.test', port: 2121, tls_mode: 'explicit', path: '/drop', password: 'secret' });
