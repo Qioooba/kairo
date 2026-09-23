@@ -109,10 +109,19 @@
     }
 
     while (j < n && isDigit(text[j])) j++;
-    // 小数部分：点后必须紧跟数字，且不能是 ".."（那是独立的运算符）
-    if (text[j] === '.' && text[j + 1] !== '.' && isDigit(text[j + 1] || '')) {
-      j++;
-      while (j < n && isDigit(text[j])) j++;
+    // 小数部分：点后可以没有数字，但只在以下两种情况算数字的一部分：
+    //   - 点后紧跟数字（1.5 / 1.5e3）；
+    //   - 点后直接跟合法指数（1.e+2、1.E-3 —— Oracle/MySQL 都接受这种写法，
+    //     审核第 13 项：旧实现把它拆成 `1.e + 2`，改变了字面量语义）。
+    // 其它情况（1..2、1.、col.other）仍把点号当独立运算符/标识符分隔符。
+    if (text[j] === '.' && text[j + 1] !== '.') {
+      const afterDot = text[j + 1] || '';
+      if (isDigit(afterDot)) {
+        j++;
+        while (j < n && isDigit(text[j])) j++;
+      } else if ((afterDot === 'e' || afterDot === 'E') && hasExponentDigits(text, j + 1)) {
+        j++; // 只消费点号，指数部分交给下面的统一逻辑
+      }
     }
     // 指数部分：e/E 之后允许一个紧邻的正负号，但必须再有数字
     if (text[j] === 'e' || text[j] === 'E') {
@@ -125,6 +134,14 @@
       }
     }
     return j > start ? j : start + 1;
+  }
+
+  /** hasExponentDigits 判断 at（指向 e/E）之后是否存在合法的指数数字。 */
+  function hasExponentDigits(text, at) {
+    let k = at + 1;
+    if (text[k] === '+' || text[k] === '-') k++;
+    const ch = text[k];
+    return ch >= '0' && ch <= '9';
   }
 
   /**
@@ -861,6 +878,22 @@
   }
 
   /**
+   * Format one slice, keeping the slice's own leading/trailing whitespace byte-identical.
+   *
+   * P1（审核第 4 项）：formatSQL 会 trim 首尾空白。用户若把行尾换行一起选进格式化范围
+   * （`set status = 'X' -- change requested\n`），丢掉这个换行就会让下一行的 `where ...`
+   * 变成 `--` 行注释的一部分：格式化看着成功，SQL 的作用范围却被悄悄扩大。
+   * 这里把选区原有的首尾空白原样贴回，`--` 行注释始终有换行终止。
+   */
+  function formatSlicePreservingBoundaries(target, options) {
+    const core = formatSQL(target, options);
+    if (!core.trim()) return target;
+    const leading = (target.match(/^\s*/) || [''])[0];
+    const trailing = (target.match(/\s*$/) || [''])[0];
+    return leading + core.trim() + trailing;
+  }
+
+  /**
    * Format a specific range or selection in a SQL string.
    * Unselected text outside [start, end] is guaranteed to be 100% byte-unchanged.
    */
@@ -877,12 +910,21 @@
     const target = text.slice(s, e);
     const after = text.slice(e);
 
-    const formattedTarget = formatSQL(target, options);
+    const formattedTarget = formatSlicePreservingBoundaries(target, options);
     if (formattedTarget === target) {
       return { text: text, formattedRange: [s, e], changed: false };
     }
 
     const nextText = before + formattedTarget + after;
+    // 局部替换后对**完整 SQL** 再做一次保真检查：字符串/引号标识符/参数/注释序列必须
+    // 逐字节一致（跨选区的边界效应只有整段比较才看得见）。
+    if (!fidelityPreserved(text, nextText, normalizeLexOptions(options))) {
+      lastFormatDiagnostic = {
+        reason: '局部格式化会改变整段 SQL 的字符串/引用标识符/参数/注释，已放弃本次替换',
+        dialect: normalizeLexOptions(options).dialect
+      };
+      return { text: text, formattedRange: [s, e], changed: false };
+    }
     return {
       text: nextText,
       formattedRange: [s, s + formattedTarget.length],
@@ -923,10 +965,20 @@
     }
 
     const targetSlice = fullText.slice(targetStart, targetEnd);
-    const formatted = formatSQL(targetSlice, options);
+    // P1（审核第 4 项）：保留选区边界的分隔空白（尤其终止 `--` 行注释的换行），
+    // 并对替换后的**完整 SQL** 做保真检查，避免格式化改变注释/字符串边界。
+    const formatted = formatSlicePreservingBoundaries(targetSlice, options);
 
     if (formatted === targetSlice) {
       return { status: 'unchanged', changed: false, range: [targetStart, targetEnd] };
+    }
+    if (!fidelityPreserved(fullText, fullText.slice(0, targetStart) + formatted + fullText.slice(targetEnd), normalizeLexOptions(options))) {
+      lastFormatDiagnostic = {
+        reason: '局部格式化会改变整段 SQL 的字符串/引用标识符/参数/注释，已放弃本次替换',
+        dialect: normalizeLexOptions(options).dialect
+      };
+      console.warn('sqlFormatService: ' + lastFormatDiagnostic.reason);
+      return { status: 'unchanged', changed: false, range: [targetStart, targetEnd], reason: lastFormatDiagnostic.reason };
     }
 
     // Perform replacement while preserving undo stack
