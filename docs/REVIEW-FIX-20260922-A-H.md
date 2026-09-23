@@ -492,26 +492,40 @@ got=undefined (undefined)
 
 ## 4. 需要知悉的工程事实与披露
 
-### 4.0 诊断到但**未**修改的范围外缺陷：`internal/tailmgr.TestManager_Start_HappyPath` 不稳定
+### 4.0 诊断到但**未**修改的范围外缺陷：两处不稳定的既有测试
 
-**这不是 29 项之一，属于既有问题，且我刻意没有改动它。** 但它会让 `go test ./...` 间歇性变红
-（我第一次跑"干净检出验证"时就是这样失败的），因此必须记录。
+**这两个都不是 29 项之一，且我刻意没有改动它们。** 但它们会让 `go test ./...` 间歇性变红
+（我的"干净检出验证"与"最终验收彩排"各命中一次），因此必须记录，避免维护者把偶发红当成真实回归。
+
+**(1) `internal/tailmgr.TestManager_Start_HappyPath` —— 可在隔离下复现**
 
 - 现象：`go test ./internal/tailmgr/ -count=25 -failfast` 可复现失败（`-count=5` 亦偶发），
-  失败信息为 `应包含 "kind":"info"，实际: {"kind":"line","line":"hello"}\n{"kind":"line","line":"world"}`
-  —— 订阅者收到了两行 line，但**从未收到 `info`**。
-- 根因（已定位到行）：`internal/tailmgr/tailmgr.go:457` 由 streamer 协程 `pushImmediate` 推送
-  `info`，而 `Session.broadcast`（同文件 157-163 行）在 `len(s.subscribers) == 0` 时**直接丢弃**
-  消息、不缓存。测试在 `Manager.Start` 返回后才 `Subscribe()`，两者存在竞态：抢在 `info` 之后订阅
-  就永久丢失该消息。测试里 `delayBeforeEmit: 30ms` 的注释"给 Subscribe 时间"正说明这是靠时间窗口
-  掩盖的竞态。
-- 产品影响：任何在 tail 启动**之后**才订阅的客户端（SSE handler 与 Start 之间存在同一竞态）
-  都可能收不到"开始跟踪 xxx"这条 info。是否可接受取决于产品语义，故未擅自改动。
-- 两个候选修法（供维护者选择）：(a) 让 `info` 对"首个订阅者"可重放（与会话内其它可重放状态一致）；
-  (b) 若"订阅晚于启动即不再补发"是有意语义，则应把测试改为断言真实契约，并注明 `info` 可能缺失。
-- 我尝试过一个"订阅门闩"式的测试侧确定性修法（让 streamer 等测试订阅后再发），**实测无效**并已
-  `git checkout` 还原 —— 因为它只延迟了 line，而丢的是先于 line 发出的 `info`。保留还原后的原状，
-  不留下无效且注释失实的改动。
+  失败信息 `应包含 "kind":"info"，实际: {"kind":"line","line":"hello"}\n{"kind":"line","line":"world"}`
+  —— 订阅者收到两行 line，但**从未收到 `info`**。
+- 根因（已定位到行）：`internal/tailmgr/tailmgr.go:457` 由 streamer 协程 `pushImmediate` 推送 `info`，
+  而 `Session.broadcast`（同文件 157-163 行）在 `len(s.subscribers) == 0` 时**直接丢弃**消息、不缓存。
+  测试在 `Manager.Start` 返回后才 `Subscribe()`，两者存在竞态：抢在 `info` 之后订阅就永久丢失该消息。
+  测试里 `delayBeforeEmit: 30ms` 的注释"给 Subscribe 时间"正说明这是靠时间窗口掩盖的竞态。
+- 产品影响：任何在 tail 启动**之后**才订阅的客户端（SSE handler 与 Start 之间存在同一竞态）都可能
+  收不到"开始跟踪 xxx"这条 info。是否可接受取决于产品语义，故未擅自改动。
+- 两个候选修法：(a) 让 `info` 对"首个订阅者"可重放；(b) 若"订阅晚于启动即不补发"是有意语义，
+  则应把测试改为断言真实契约并注明 `info` 可能缺失。
+- 我尝试过一个"订阅门闩"式的测试侧确定化修法，**实测无效**（它只延迟 line，丢的是先于 line 的 `info`），
+  已 `git checkout` 还原，未留下无效且注释失实的改动。
+
+**(2) `internal/httpserver.TestTasksAdd_Valid` —— 仅在整包/全套负载下偶发**
+
+- 现象：最终验收彩排中 `worktree: go test ./...` 曾以 `--- FAIL: TestTasksAdd_Valid` 失败，
+  而**同一份代码**在同一时刻的工作树 `go test ./...` 通过（工作树当时是干净的，两者内容一致）。
+- 复现性：隔离运行 `-run TestTasksAdd_Valid -count=20` 与 `-count=30` 均通过；
+  另跑两次 `go test ./internal/httpserver/ ./internal/tailmgr/ -count=1` 亦通过 → **偶发、非确定性**。
+- 相关代码归属：`internal/schedtask` 在本提交区间内**完全没有改动**，`handlers_tasks.go` /
+  `handlers_tasks_test.go` 也不在改动清单里；该测试通过 `longTaskCommand()` 启动真实子进程
+  （Windows `ping.exe -n 11`，非 Windows `sleep 10`）并依赖调度时序，因此对负载/时序敏感。
+- 诚实补充：本任务确实**向同一包新增了多个测试文件**（sftp 身份、compare handler、dbui 等）。
+  新增用例可能改变包内调度时序，从而**暴露**既有的时序脆弱性，而不宜简单断言"纯属既有"。
+  结论按证据表述：该用例的 SUT 未被本任务改动，但其偶发失败可能由新增用例导致的时序变化所暴露。
+
 
 
 1. **提交门禁**：仓库 `commit-msg` hook 要求 `Model:` 行含数字版本号。本次实际运行的模型标识为
