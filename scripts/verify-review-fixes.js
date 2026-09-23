@@ -35,12 +35,22 @@ const NO_WORKTREE = args.includes('--no-worktree');
 
 const results = [];
 
-/** record 记录一层结果并在控制台即时反馈。失败时打印捕获输出的尾部, 便于定位。 */
+/** record 记录一层结果并在控制台即时反馈。失败时打印失败行与捕获输出的尾部, 便于定位。 */
 function record(layer, ok, detail, out) {
   results.push({ layer, ok, detail: detail || '' });
   console.log(`  ${ok ? '[PASS]' : '[FAIL]'} ${layer}${detail ? '  — ' + detail : ''}`);
   if (!ok && out) {
     const lines = String(out).trim().split('\n');
+    // 先打印失败行 (含 "FAIL <pkg>" / "--- FAIL: <test>")。
+    // 只打印尾部会隐藏失败包名 —— go test ./... 里失败包可能远在最后 15 行之外,
+    // 曾因此无法直接判断是哪个包/用例失败。
+    const failLines = lines.filter(function (l) {
+      return /^(FAIL|--- FAIL|\s+--- FAIL)/.test(l);
+    });
+    if (failLines.length) {
+      console.log('  ---- 失败行 ----');
+      for (const l of failLines.slice(0, 20)) console.log('  ! ' + l.trim());
+    }
     const tail = lines.slice(-15);
     console.log('  ---- 输出尾部 ----');
     for (const l of tail) console.log('  | ' + l);
