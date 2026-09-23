@@ -324,6 +324,31 @@ func parseGridFromClause(kind, noComments string) (schemaIdent, tableIdent, alia
 	return schemaIdent, tableIdent, aliasIdent, nil
 }
 
+// gridHasWildcardProjection 判断投影列表里是否存在 `*` / `alias.*`。
+// 只有单一通配符投影时 parsed.IsWildcard 为真，这里命中即代表通配符与显式列混用。
+func gridHasWildcardProjection(items []string) bool {
+	for _, item := range items {
+		trimmed := strings.TrimSpace(item)
+		if trimmed == "*" || strings.HasSuffix(trimmed, ".*") {
+			return true
+		}
+	}
+	return false
+}
+
+// gridDisableEditing 整体关闭网格编辑能力，并把原因写到每一列上。
+func gridDisableEditing(plan *ResultEditContext, reason string) {
+	if plan == nil {
+		return
+	}
+	plan.Reason = reason
+	plan.CanInsert, plan.CanUpdate, plan.CanDelete = false, false, false
+	for i := range plan.Columns {
+		plan.Columns[i].Writable = false
+		plan.Columns[i].ReadOnlyReason = reason
+	}
+}
+
 // gridFromClauseKeywords 是 FROM 之后、表引用结束处的顶层子句关键字。
 var gridFromClauseKeywords = []string{"WHERE", "ORDER", "GROUP", "LIMIT", "OFFSET", "FETCH", "FOR"}
 
@@ -1165,11 +1190,24 @@ func AnalyzeGridQueryWithMetadata(source Source, sessionID, executedSQL string, 
 			bindings[i] = binding
 		}
 	} else {
+		// P2（审核第 9 项）：`SELECT t.*, t.ID AS EXTRA_ID FROM LIVE t` 这类通配符与显式列
+		// 混合投影，通配符会展开成若干结果列，投影项与结果列的下标不再一一对应：
+		// 旧实现按投影下标硬绑，会把结果里的 AMOUNT 绑成物理列 ID（可写），
+		// 提交时又会因为索引对不上而报错。无法可靠展开时直接关闭编辑。
+		if gridHasWildcardProjection(parsed.Projections) {
+			plan.Columns = bindings
+			gridDisableEditing(plan, "通配符与显式列混合投影无法确定结果列与物理列的对应关系，已关闭网格编辑")
+			return plan
+		}
+		if len(parsed.Projections) != len(resultColumns) {
+			plan.Columns = bindings
+			gridDisableEditing(plan, fmt.Sprintf(
+				"查询投影列数(%d)与结果集列数(%d)不一致，无法确定物理列对应关系，已关闭网格编辑",
+				len(parsed.Projections), len(resultColumns)))
+			return plan
+		}
 		// 显式投影列匹配
 		for i, item := range parsed.Projections {
-			if i >= len(resultColumns) {
-				break
-			}
 			resCol := resultColumns[i]
 			physName, _, _, parseErr := parseProjectionItem(source.Kind, item)
 			binding := GridColumnBinding{
@@ -1211,12 +1249,7 @@ func AnalyzeGridQueryWithMetadata(source Source, sessionID, executedSQL string, 
 	// DBUI-01：名称协议下的重复别名/交叉别名无法安全定位目标列，必须整体只读。
 	// 例如 `SELECT SALARY AS ID, ID AS SALARY` 会让值与定位键被解释成别的列。
 	if ambiguity := gridColumnNameAmbiguity(bindings); ambiguity != "" {
-		plan.Reason = ambiguity
-		plan.CanInsert, plan.CanUpdate, plan.CanDelete = false, false, false
-		for i := range plan.Columns {
-			plan.Columns[i].Writable = false
-			plan.Columns[i].ReadOnlyReason = ambiguity
-		}
+		gridDisableEditing(plan, ambiguity)
 		return plan
 	}
 
