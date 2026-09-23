@@ -51,7 +51,7 @@ Kairo 全栈自绘 5 套主题，深色 / 浅色 / 护眼绿 / 高对比 / 仙�
 | 想追溯谁什么时候拉了哪个文件 | `logs/audit.log` 全操作流水 + `downloads/.kairo-meta.json` 索引 + SSH 凭据零明文 |
 | 密码写在 yaml 里很危险 | OS 钥匙串（Keychain / DPAPI / Secret Service）按 `(system,server,user)` 三元组存储；`file` 模式走 AES-256-GCM + AAD |
 | 老 Java / WebSphere / XFire 的 SOAP 接口要调试，SoapUI 太重 | WebService 调试中心：WSDL 导入（URL/文件）→ 自动生成 Envelope → 一键发送 + 模板 + 历史 + Mock |
-| 生产 Oracle 11g、MySQL、Redis 排查要在多个客户端间切换 | 数据库工作台：三段式工作流，集中管理数据源，Oracle/MySQL 流式只读 SQL、对象元数据、字段清单、执行计划与 CSV 导出，Redis 用 SCAN 分页查看 Key |
+| 生产 Oracle 11g、MySQL、Redis 排查要在多个客户端间切换 | 数据库工作台：三段式工作流，集中管理数据源，Oracle/MySQL 流式只读 SQL、对象元数据、字段清单、执行计划与 CSV 导出，Redis 用 SCAN 分页查看 Key；宽屏下可切换左右分栏（左 SQL / 右结果，分隔条可拖动并记忆） |
 | 跨服务器 / 本地与远端多协议文件目录比对复杂 | 文件与文本比较工作台：支持 Local/SFTP/FTP/FTPS 四类后端，智能内容散列判定差异，一键同步与代码 Diff 预览 |
 | WAS 生产补丁打包手工挑 class/jar 容易漏文件 | WAS 投产打包：一键解析 `credit` 增量清单，自动按 WAS 目录规范打包并校验，避免漏传误传 |
 | 对接老 SOAP 接口手写 Java 客户端繁琐且易出错 | WS Java 代码生成：一键生成 Portable / CXF / Axis 风格客户端与调用骨架，即拷即用 |
@@ -184,7 +184,7 @@ Kairo 按功能拆分前端页面与后端子包，全功能零框架依赖、�
 | 子功能 | 说明 |
 | --- | --- |
 | **多数据源支持** | 纯 Go Oracle 驱动（`go-ora/v2`，支持 Oracle 11g+）、MySQL（`go-sql-driver`）、Redis（`go-redis/v9`） |
-| **三段式工作台** | 参考 PL/SQL Developer / DBeaver 工作流，左侧对象树、中间 SQL 编辑器、下方结果与持久报错区 |
+| **三段式工作台** | 参考 PL/SQL Developer / DBeaver 工作流，左侧对象树、中间 SQL 编辑器、下方结果与持久报错区；结果工具栏一键切换**左右分栏**（左编辑器 / 右结果），中间分隔条可拖动并记忆宽度，窄窗口自动回落上下布局 |
 | **光标语句精准执行** | statementModel 自动识别光标所在 SQL 语句，多重尾部分号智能规整，杜绝批量或误执行 |
 | **流式真实分页** | 支持 `page/page_size/has_next/ordered` 分页协议，Oracle ROWNUM 别名列自动过滤脱敏 |
 | **透明重试与会话治理** | 网络抖动自动单次透明重连，幽灵 Tab 孤儿会话后台自动回收释放 |

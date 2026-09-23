@@ -30,6 +30,16 @@ function register(runner, ctx) {
     await helpers.requireElement(page, HL_SELECTOR, '高亮层 (#db-sql-highlight) 必须存在');
     await helpers.requireElement(page, SHELL_SELECTOR, '编辑器外壳 (.db-sql-shell) 必须存在');
     await page.waitForTimeout(500);
+    // 本用例断言的是上下布局下的编辑器高度契约；若工作台偏好残留为左右分栏
+    // （列宽决定高度、内联 px 被 CSS 覆盖），先复位为上下布局。
+    const columns = await page.evaluate(function () {
+      const main = document.getElementById('db-main');
+      return !!(main && main.classList.contains('is-columns'));
+    });
+    if (columns && (await page.$('#db-layout-toggle'))) {
+      await page.click('#db-layout-toggle');
+      await page.waitForTimeout(400);
+    }
   }
 
   async function readEditorState() {

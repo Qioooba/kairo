@@ -16,6 +16,16 @@
   const META_WIDTH_MAX = 720;
   const MAX_SQL_HIGHLIGHT_CHARS = 120000;
   const MAX_SQL_HIGHLIGHT_LINES = 2000;
+  // 工作区布局：stacked = 上编辑器/下结果（默认）；columns = 左编辑器/右结果，中间可横向拖动。
+  const LAYOUT_STACKED = 'stacked';
+  const LAYOUT_COLUMNS = 'columns';
+  const EDITOR_COL_MIN = 420;      // 左列（SQL 编辑器）最小宽度（保证工具栏与 SQL 可读性）
+  const RESULT_COL_MIN = 420;      // 右列（结果面板）最小宽度
+  const EDITOR_COL_MAX = 1400;
+  const EDITOR_COL_DEFAULT_RATIO = 0.46;
+  // 左列窄于此值时编辑器工具栏切换为三行紧凑排布（复用 ≤1100px 视口的既有排布）。
+  const NARROW_EDITOR_W = 1000;
+  const SPLIT_MIN_WORKSPACE = 1000; // 可用工作区宽度低于此值时左右分栏不可用，自动按上下布局显示
 
   function isLargeSQL(text) {
     if (!text) return false;
@@ -34,15 +44,16 @@
 
   const DEFAULT_PREFS = {
     expandKey: 'Space',
-    shortcuts: { run: 'Ctrl+Enter', cancel: 'Escape', grid: 'Alt+1', record: 'Alt+2', explain: 'Ctrl+Alt+P', objects: 'Alt+O', format: 'Ctrl+Shift+F' },
+    shortcuts: { run: 'Ctrl+Enter', cancel: 'Escape', grid: 'Alt+1', record: 'Alt+2', explain: 'Ctrl+Alt+P', objects: 'Alt+O', format: 'Ctrl+Shift+F', layout: 'Alt+L' },
     gridRows: 25,
+    layout: LAYOUT_STACKED,
     snippets: [
       { key: 'sf', text: 'SELECT * FROM ', enabled: true },
       { key: 'sel', text: 'SELECT *\nFROM ${table}', enabled: true },
       { key: 'cnt', text: 'SELECT COUNT(*)\nFROM ${table}', enabled: true }
     ]
   };
-  let persisted = { prefs: null, history: [], last_source: '', column_widths: {}, row_limits: {}, meta_collapsed: true };
+  let persisted = { prefs: null, history: [], last_source: '', column_widths: {}, row_limits: {}, meta_collapsed: true, layout: LAYOUT_STACKED, editor_col_width: 0 };
   const persistPreference = preferenceSaver('database', 400);
   const state = {
     sources: [], source: null, rows: [], columns: [], controller: null, summary: null, cursor: 0,
@@ -96,6 +107,8 @@
     copy: '<rect x="8" y="8" width="11" height="12" rx="2"/><path d="M16 8V6a2 2 0 00-2-2H6a2 2 0 00-2 2v9a2 2 0 002 2h2"/>',
     refresh: '<path d="M20 6v5h-5M4 18v-5h5"/><path d="M6.1 9a7 7 0 0111.8-2.2L20 11M4 13l2.1 4.2A7 7 0 0017.9 15"/>',
     panel: '<path d="M4 5h16v14H4zM9 5v14"/><path d="M7 10l-2 2 2 2"/>',
+    layoutRows: '<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 10h16"/>',
+    layoutCols: '<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M11 4v16"/>',
     external: '<path d="M14 4h6v6M20 4l-9 9"/><path d="M18 13v6H5V6h6"/>',
     close: '<path d="M6 6l12 12M18 6L6 18"/>'
   };
@@ -557,6 +570,7 @@
     const resultsSec = q('db-results-section');
     if (sqlPanel) sqlPanel.hidden = false;
     if (resultsSec) resultsSec.hidden = false;
+    syncObjectLayoutState();
   }
   function openObjectTab(schema, object, type) {
     if (!schema || schema === '加载中…' || schema === '加载失败') {
@@ -634,6 +648,7 @@
     const resultsSec = q('db-results-section');
     if (sqlPanel) sqlPanel.hidden = true;
     if (resultsSec) resultsSec.hidden = true;
+    syncObjectLayoutState();
 
     if (s.inspectLoading) {
       viewer.innerHTML = '<div class="db-obj-loading"><span class="spinner"></span><span>正在读取 ' + h(s.objectName) + ' 详情…</span></div>';
@@ -818,6 +833,7 @@
       expandKey: ['Space', 'Tab', 'Enter'].includes(x.expandKey) ? x.expandKey : 'Space',
       shortcuts: shortcuts,
       gridRows: Math.max(6, Math.min(100, gridRows)),
+      layout: x.layout === LAYOUT_COLUMNS ? LAYOUT_COLUMNS : LAYOUT_STACKED,
       snippets: Array.isArray(x.snippets) ? x.snippets : DEFAULT_PREFS.snippets.map(v => Object.assign({}, v))
     };
   }
@@ -902,6 +918,8 @@
     persisted.meta_width = Math.max(META_WIDTH_MIN, Math.min(META_WIDTH_MAX, Number(persisted.meta_width) || 300));
     persisted.inspect_height = Math.max(140, Math.min(480, Number(persisted.inspect_height) || 220));
     persisted.meta_collapsed = persisted.meta_collapsed !== undefined ? Boolean(persisted.meta_collapsed) : true;
+    persisted.layout = persisted.layout === LAYOUT_COLUMNS ? LAYOUT_COLUMNS : LAYOUT_STACKED;
+    persisted.editor_col_width = Math.max(0, Math.min(EDITOR_COL_MAX, Number(persisted.editor_col_width) || 0));
     state.prefs = persisted.prefs;
   }
   function cellText(v) {
@@ -3086,7 +3104,7 @@
     const savedRows = Math.max(1, Math.min(state.source.max_rows, Number(persisted.row_limits[state.source.id]) || Math.min(1000, state.source.max_rows)));
     const gridRows = Math.max(6, Math.min(100, Number(state.prefs.gridRows) || 25));
     const defaultSchema = state.source ? (state.source.kind === 'oracle' ? (state.source.username || '').toUpperCase() : (state.source.database || '')) : '';
-    host.innerHTML = '<div class="db-sql-layout">'
+    host.innerHTML = '<div class="db-sql-layout" id="db-sql-layout">'
       + '<aside class="card db-meta" id="db-meta-pane">'
       + '<div class="db-pane-title"><span>数据库对象</span><div class="db-pane-actions"><button class="btn btn-xs" id="db-meta-refresh" title="刷新对象树">刷新</button><button class="btn btn-xs db-meta-toggle-btn" id="db-meta-toggle" title="收起对象栏 (' + h(state.prefs.shortcuts.objects || 'Alt+O') + ')" aria-label="收起数据库对象栏">' + actionIcon('panel') + '</button></div></div>'
       + '<button type="button" class="db-meta-collapsed-bar" id="db-meta-collapsed-bar" title="展开数据库对象 (' + h(state.prefs.shortcuts.objects || 'Alt+O') + ')" aria-label="展开数据库对象栏"><span class="db-meta-collapsed-icon">' + actionIcon('database') + '</span><span class="db-meta-collapsed-text">对象</span></button>'
@@ -3097,7 +3115,7 @@
       + '<div id="db-objects" class="db-object-list"><div class="db-tree-loading">正在读取元数据…</div></div>'
       + '</aside>'
       + '<div class="db-split-x" id="db-split-x" role="separator" title="左右拖动调整对象栏宽度"></div>'
-      + '<main class="db-main">'
+      + '<main class="db-main" id="db-main">'
       + '<section class="card db-editor-card">'
       + '<div class="db-editor-tabs">'
       + '<div id="db-sql-tabs" class="db-sql-tabs"></div>'
@@ -3166,7 +3184,7 @@
       + '<div class="db-bar-spacer"></div>'
       + '<span id="db-query-status" class="db-query-status">就绪</span>'
       + '</div>'
-      + '<div class="db-sql-shell">'
+      + '<div class="db-sql-shell" id="db-sql-shell">'
       + '<pre id="db-sql-highlight" class="db-sql-highlight" aria-hidden="true"></pre>'
       + '<label class="sr-only" for="db-sql">SQL 编辑器</label><textarea id="db-sql" class="db-sql-editor" aria-label="SQL 编辑器" spellcheck="false"></textarea>'
       + '<div id="db-sql-ac" class="db-sql-ac" hidden role="listbox" aria-label="SQL 补全"></div>'
@@ -3176,9 +3194,11 @@
       + '</div>'
       + '<div id="db-object-viewer" class="db-object-viewer" hidden></div>'
       + '</section>'
+      + '<div class="db-split-panes" id="db-split-panes" role="separator" aria-orientation="vertical" tabindex="0" aria-label="调整 SQL 编辑器与结果区宽度" title="左右拖动调整 SQL 编辑器与结果区宽度（双击恢复默认）"><span class="db-split-panes-hint" id="db-split-panes-hint" hidden></span></div>'
       + '<section class="card db-results" id="db-results-section">'
       + '<div class="db-result-toolbar">'
       + '<div class="db-result-tabs" role="tablist" aria-label="结果视图"><button id="db-view-grid" class="db-view-btn active" role="tab" aria-selected="true">网格</button><button id="db-view-record" class="db-view-btn" role="tab" aria-selected="false">单行记录</button><button id="db-view-plan" class="db-view-btn" role="tab" aria-selected="false">执行计划</button></div>'
+      + '<button type="button" class="btn btn-xs db-layout-btn" id="db-layout-toggle" aria-pressed="false" title="切换到左右布局 (' + h(state.prefs.shortcuts.layout || 'Alt+L') + ')">' + actionIcon('layoutCols') + '<span id="db-layout-label">左右布局</span></button>'
       + '<div class="db-result-filter-wrap"><label class="sr-only" for="db-result-filter">过滤当前结果</label><input id="db-result-filter" type="search" aria-label="过滤当前结果" placeholder="在当前结果中过滤…"></div>'
       + '<div class="db-result-actions"><button class="btn btn-xs" id="db-copy-columns" disabled>复制字段名</button><button class="btn btn-xs" id="db-column-manager" disabled>显示列</button></div>'
       + '<span class="db-copy-hint">单击选行 · 网格编辑关闭时双击进单行 · 开启后双击改单元格</span>'
@@ -3209,6 +3229,7 @@
     q('db-cancel').onclick = cancelQuery;
     q('db-export').onclick = exportResult;
     q('db-format').onclick = (e) => formatCurrentSQL({ full: !!(e && e.shiftKey) });
+    if (q('db-layout-toggle')) q('db-layout-toggle').onclick = toggleLayout;
     if (q('db-format-all')) q('db-format-all').onclick = () => formatCurrentSQL({ full: true });
     if (q('db-toggle-edit')) q('db-toggle-edit').onclick = function () {
       if (!canWriteDatabase()) { toast('当前账号只有查询权限', 'warn'); return; }
@@ -3696,6 +3717,7 @@
     const gridResizer = q('db-grid-resizer');
     if (gridResizer) {
       gridResizer.onpointerdown = function (e) {
+        if (isColumnsLayout()) return;
         e.preventDefault();
         gridResizer.classList.add('dragging');
         const startY = e.clientY;
@@ -3720,15 +3742,360 @@
         document.addEventListener('pointerup', up);
       };
     }
-    applyGridHeight();
+    bindPaneSplitter();
+    ensureLayoutResizeWatch();
+    applyLayoutMode();
   }
+
+  /* ---------- 左右分栏布局（左 SQL 编辑器 / 右结果面板） ---------- */
+
+  let layoutObserver = null, layoutObserverTarget = null, layoutReflowRaf = 0, lastLayoutWidth = -1;
+  let resultsObserver = null, resultsObserverTarget = null, gridReflowRaf = 0;
+  let layoutWindowBound = false, pendingGridAnchor = null;
+
+  function raf(fn) {
+    if (typeof requestAnimationFrame === 'function') return requestAnimationFrame(fn);
+    return setTimeout(fn, 16);
+  }
+
+  function isColumnsLayout() {
+    const main = q('db-main');
+    return !!(main && main.classList && main.classList.contains('is-columns'));
+  }
+
+  // 读写 CSS 变量：测试用的轻量 DOM stub 只有普通 style 对象，没有 setProperty/removeProperty。
+  function setCssVar(node, name, value) {
+    if (!node || !node.style) return;
+    const style = node.style;
+    const empty = value === null || value === undefined || value === '';
+    if (empty) {
+      if (typeof style.removeProperty === 'function') { style.removeProperty(name); return; }
+      try { delete style[name]; } catch (_) { style[name] = ''; }
+      return;
+    }
+    if (typeof style.setProperty === 'function') { style.setProperty(name, value); return; }
+    style[name] = value;
+  }
+
+  // 可用工作区宽度 = .db-main 实际宽度（= 工作区宽度 − 对象栏，对象栏收起时为零）。
+  function workspaceWidth() {
+    const main = q('db-main');
+    if (!main) return 0;
+    const rect = main.getBoundingClientRect ? main.getBoundingClientRect() : null;
+    return Math.max(0, Math.round((rect && rect.width) || main.clientWidth || 0));
+  }
+
+  function canSplitColumns() {
+    return workspaceWidth() >= SPLIT_MIN_WORKSPACE;
+  }
+
+  function editorColEdges(total) {
+    const min = EDITOR_COL_MIN;
+    const max = Math.max(min, Math.min(EDITOR_COL_MAX, total - 6 - RESULT_COL_MIN));
+    return { min: min, max: max };
+  }
+
+  function currentEditorColWidth() {
+    const card = q('db-sql-layout') && q('db-sql-layout').querySelector && q('db-sql-layout').querySelector('.db-editor-card');
+    if (card && card.getBoundingClientRect) {
+      const w = Math.round(card.getBoundingClientRect().width || 0);
+      if (w > 0) return w;
+    }
+    const main = q('db-main');
+    const style = main && main.style;
+    const raw = style && typeof style.getPropertyValue === 'function' ? style.getPropertyValue('--db-editor-col-w') : '';
+    const parsed = parseFloat(raw);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+    const total = workspaceWidth();
+    return Math.max(EDITOR_COL_MIN, Math.round(total * EDITOR_COL_DEFAULT_RATIO));
+  }
+
+  function updateLayoutToggle(wanted, allowed) {
+    const btn = q('db-layout-toggle');
+    if (!btn) return;
+    const key = (state.prefs.shortcuts && state.prefs.shortcuts.layout) || 'Alt+L';
+    const columns = wanted === LAYOUT_COLUMNS;
+    btn.setAttribute('aria-pressed', columns ? 'true' : 'false');
+    btn.innerHTML = actionIcon(columns ? 'layoutRows' : 'layoutCols') + '<span id="db-layout-label">' + (columns ? '上下布局' : '左右布局') + '</span>';
+    if (columns && !allowed) {
+      btn.disabled = true;
+      btn.title = '当前窗口过窄，无法左右分栏（至少需要约 ' + SPLIT_MIN_WORKSPACE + 'px 可用宽度）';
+    } else {
+      btn.disabled = false;
+      btn.title = (columns ? '切换到上下布局' : '切换到左右布局') + ' (' + key + ')';
+    }
+  }
+
+  // 对象详情页签激活时结果区被隐藏：左右布局下必须让编辑器独占整行，不能留下空轨道。
+  function syncObjectLayoutState() {
+    const main = q('db-main');
+    if (!main) return;
+    const viewer = q('db-object-viewer');
+    const active = !!(viewer && viewer.hidden === false);
+    main.classList.toggle('is-object', active);
+  }
+
+  // 左列偏窄时编辑器工具栏改为四行紧凑排布（与对象树展开时同一套），避免按钮互相挤压/裁切。
+  function updateEditorNarrowState(columns, width) {
+    const main = q('db-main');
+    if (!main) return;
+    main.classList.toggle('is-narrow-editor', !!columns && width < NARROW_EDITOR_W);
+  }
+
+  function applyLayoutMode() {
+    const layout = q('db-sql-layout'), main = q('db-main');
+    if (!main) return;
+    const wanted = persisted.layout === LAYOUT_COLUMNS ? LAYOUT_COLUMNS : LAYOUT_STACKED;
+    const total = workspaceWidth();
+    const allowed = wanted === LAYOUT_COLUMNS && total >= SPLIT_MIN_WORKSPACE;
+    const effective = allowed ? LAYOUT_COLUMNS : LAYOUT_STACKED;
+    const columns = effective === LAYOUT_COLUMNS;
+
+    main.classList.toggle('is-columns', columns);
+    if (layout) layout.classList.toggle('is-columns', columns);
+
+    if (columns) {
+      const edges = editorColEdges(total);
+      let width = Number(persisted.editor_col_width) || 0;
+      if (!width) width = Math.round(total * EDITOR_COL_DEFAULT_RATIO);
+      width = Math.round(Math.max(edges.min, Math.min(edges.max, width)));
+      persisted.editor_col_width = width;
+      setCssVar(main, '--db-editor-col-w', width + 'px');
+      updateEditorNarrowState(true, width);
+    } else {
+      setCssVar(main, '--db-editor-col-w', null);
+      updateEditorNarrowState(false, total);
+    }
+
+    updateLayoutToggle(wanted, allowed);
+    syncObjectLayoutState();
+    applyColumnsHeight();
+    applyEditorHeightForMode(effective);
+    // 左右布局下"显示 N 行"与表格高度拖拽条无意义，禁用并解释原因，不留死控件。
+    const rowsInput = q('db-grid-rows');
+    if (rowsInput) {
+      rowsInput.disabled = columns;
+      rowsInput.title = columns ? '左右布局下结果表格自动填满高度' : '结果网格一次显示多少行，可自定义';
+    }
+    applyGridHeight();
+    restoreGridAnchor();
+  }
+
+  // 左右布局下让工作区正好占满视口：页面不滚动，编辑器与结果各自内部滚动。
+  // 依据工作区在文档中的真实位置计算，避免写死 topbar/内边距高度在不同主题下失准。
+  function applyColumnsHeight() {
+    const layout = q('db-sql-layout');
+    if (!layout) return;
+    if (!isColumnsLayout()) {
+      layout.style.height = '';
+      return;
+    }
+    const rect = layout.getBoundingClientRect ? layout.getBoundingClientRect() : null;
+    const scrollY = typeof window.scrollY === 'number' ? window.scrollY : 0;
+    const viewport = (typeof window.innerHeight === 'number' && window.innerHeight) || 900;
+    const topDoc = (rect ? rect.top : 0) + scrollY;
+    const height = Math.max(560, Math.round(viewport - topDoc - 24));
+    layout.style.height = height + 'px';
+  }
+
+  function applyEditorHeightForMode(mode) {
+    const shell = q('db-sql-shell'), ta = q('db-sql'), hl = q('db-sql-highlight');
+    if (!shell) return;
+    const clear = function () {
+      shell.style.height = '';
+      if (ta) ta.style.height = '';
+      if (hl) hl.style.height = '';
+    };
+    if (mode === LAYOUT_COLUMNS) {
+      // 高度由列高决定：清掉上下布局遗留的 px 内联值，交给 CSS 的 flex 高度。
+      clear();
+      return;
+    }
+    if (persisted.editor_height) {
+      const h = Math.round(persisted.editor_height);
+      shell.style.height = h + 'px';
+      if (ta) ta.style.height = h + 'px';
+      if (hl) hl.style.height = h + 'px';
+    } else {
+      clear();
+    }
+  }
+
+  function rememberGridAnchor() {
+    const scroll = q('db-result-grid') && q('db-result-grid').querySelector('.db-table-scroll');
+    pendingGridAnchor = scroll ? Math.max(0, Math.floor((scroll.scrollTop || 0) / GRID_ROW_H)) : null;
+  }
+
+  function restoreGridAnchor() {
+    if (pendingGridAnchor == null) return;
+    const row = pendingGridAnchor;
+    pendingGridAnchor = null;
+    const scroll = q('db-result-grid') && q('db-result-grid').querySelector('.db-table-scroll');
+    if (!scroll) return;
+    scroll.scrollTop = row * GRID_ROW_H;
+    if (state.gridReady && state.resultMode === 'grid') paintGridRows(scroll, false);
+  }
+
+  function toggleLayout() {
+    if (!q('db-main')) return;
+    const next = persisted.layout === LAYOUT_COLUMNS ? LAYOUT_STACKED : LAYOUT_COLUMNS;
+    if (next === LAYOUT_COLUMNS && !canSplitColumns()) {
+      toast('当前窗口过窄，左右分栏至少需要约 ' + SPLIT_MIN_WORKSPACE + 'px 可用宽度', 'warn');
+      return;
+    }
+    rememberGridAnchor();
+    persisted.layout = next;
+    savePersisted();
+    applyLayoutMode();
+    toast(next === LAYOUT_COLUMNS
+      ? '已切换为左右布局：左编辑器 / 右结果，可拖动中间分隔条 (双击恢复默认)'
+      : '已切换为上下布局', 'ok');
+  }
+
+  function setEditorColumnWidth(width, persist) {
+    const main = q('db-main');
+    if (!main || !isColumnsLayout()) return 0;
+    const edges = editorColEdges(workspaceWidth());
+    const next = Math.round(Math.max(edges.min, Math.min(edges.max, width)));
+    setCssVar(main, '--db-editor-col-w', next + 'px');
+    persisted.editor_col_width = next;
+    updateEditorNarrowState(true, next);
+    if (persist) savePersisted();
+    return next;
+  }
+
+  function bindPaneSplitter() {
+    const splitter = q('db-split-panes');
+    if (!splitter) return;
+    const hint = q('db-split-panes-hint');
+    const showHint = function (text) {
+      if (!hint) return;
+      hint.textContent = text;
+      hint.hidden = false;
+    };
+    const hideHint = function () { if (hint) hint.hidden = true; };
+
+    splitter.onpointerdown = function (e) {
+      if (!isColumnsLayout()) return;
+      e.preventDefault();
+      splitter.classList.add('dragging');
+      if (document.body && document.body.classList) document.body.classList.add('db-resizing');
+      const startX = e.clientX;
+      const startW = currentEditorColWidth();
+      const edges = editorColEdges(workspaceWidth());
+      showHint(startW + ' px');
+      const move = function (ev) {
+        const next = setEditorColumnWidth(startW + (ev.clientX - startX), false);
+        showHint(next + ' px');
+      };
+      const finish = function (persist) {
+        splitter.classList.remove('dragging');
+        if (document.body && document.body.classList) document.body.classList.remove('db-resizing');
+        hideHint();
+        document.removeEventListener('pointermove', move);
+        document.removeEventListener('pointerup', up);
+        document.removeEventListener('pointercancel', up);
+        if (persist) savePersisted();
+      };
+      const up = function () { finish(true); };
+      document.addEventListener('pointermove', move);
+      document.addEventListener('pointerup', up);
+      document.addEventListener('pointercancel', up);
+    };
+
+    // 双击恢复默认比例；键盘可达（←/→ 16px，Shift 64px，Home/End 到边界）。
+    splitter.ondblclick = function () {
+      if (!isColumnsLayout()) return;
+      const total = workspaceWidth();
+      const edges = editorColEdges(total);
+      const next = setEditorColumnWidth(Math.round(total * EDITOR_COL_DEFAULT_RATIO), true);
+      showHint(next + ' px');
+      setTimeout(hideHint, 700);
+      if (edges.max < next) toast('已按最小结果宽度夹紧左列宽度', 'warn');
+    };
+    splitter.onkeydown = function (e) {
+      if (!isColumnsLayout()) return;
+      const edges = editorColEdges(workspaceWidth());
+      const step = e.shiftKey ? 64 : 16;
+      let target = null;
+      if (e.key === 'ArrowLeft') target = currentEditorColWidth() - step;
+      else if (e.key === 'ArrowRight') target = currentEditorColWidth() + step;
+      else if (e.key === 'Home') target = edges.min;
+      else if (e.key === 'End') target = edges.max;
+      if (target == null) return;
+      e.preventDefault();
+      const next = setEditorColumnWidth(target, true);
+      showHint(next + ' px');
+      setTimeout(hideHint, 700);
+    };
+  }
+
+  function ensureLayoutResizeWatch() {
+    const target = q('db-main');
+    if (target && typeof ResizeObserver !== 'undefined') {
+      if (!layoutObserver || layoutObserverTarget !== target) {
+        if (layoutObserver) layoutObserver.disconnect();
+        lastLayoutWidth = -1;
+        layoutObserver = new ResizeObserver(function (entries) {
+          const entry = entries && entries.length ? entries[entries.length - 1] : null;
+          const width = Math.round((entry && entry.contentRect ? entry.contentRect.width : 0) || workspaceWidth());
+          // 只对宽度变化做出反应：高度变化（结果行数/计划文本）不应触发布局重算。
+          if (width === lastLayoutWidth) return;
+          lastLayoutWidth = width;
+          scheduleLayoutReflow();
+        });
+        layoutObserver.observe(target);
+        layoutObserverTarget = target;
+      }
+    }
+    if (!layoutWindowBound && typeof window.addEventListener === 'function') {
+      layoutWindowBound = true;
+      window.addEventListener('resize', function () {
+        lastLayoutWidth = -1;
+        scheduleLayoutReflow();
+      }, { passive: true });
+    }
+    const grid = q('db-result-grid');
+    if (grid && typeof ResizeObserver !== 'undefined' && (!resultsObserver || resultsObserverTarget !== grid)) {
+      if (resultsObserver) resultsObserver.disconnect();
+      resultsObserver = new ResizeObserver(function () { scheduleGridReflow(); });
+      resultsObserver.observe(grid);
+      resultsObserverTarget = grid;
+    }
+  }
+
+  function scheduleLayoutReflow() {
+    if (layoutReflowRaf) return;
+    layoutReflowRaf = raf(function () {
+      layoutReflowRaf = 0;
+      if (!q('db-main')) return;
+      applyLayoutMode();
+    });
+  }
+
+  // 结果容器尺寸变化后按新的可视区重绘虚拟滚动窗口（左右布局下容器由列高决定）。
+  function scheduleGridReflow() {
+    if (!isColumnsLayout()) return;
+    if (gridReflowRaf) return;
+    gridReflowRaf = raf(function () {
+      gridReflowRaf = 0;
+      if (isColumnsLayout()) applyGridHeight();
+    });
+  }
+
   function applyGridHeight() {
-    const rows = Math.max(6, Math.min(100, Number(q('db-grid-rows') && q('db-grid-rows').value) || state.prefs.gridRows || 25));
     const scroll = q('db-result-grid') && q('db-result-grid').querySelector('.db-table-scroll');
     const plan = q('db-result-grid') && q('db-result-grid').querySelector('.db-plan-text, .db-plan-table-wrap');
-    const height = (rows * GRID_ROW_H + GRID_HEAD_H) + 'px';
-    if (scroll) scroll.style.height = height;
-    if (plan) plan.style.maxHeight = height;
+    if (isColumnsLayout()) {
+      // 左右布局：结果容器由 CSS flex 填满列高，清掉 px 内联高度避免与 flex 争高。
+      if (scroll) { scroll.style.height = ''; scroll.style.minHeight = ''; }
+      if (plan) { plan.style.height = ''; plan.style.maxHeight = ''; }
+    } else {
+      const rows = Math.max(6, Math.min(100, Number(q('db-grid-rows') && q('db-grid-rows').value) || state.prefs.gridRows || 25));
+      const height = (rows * GRID_ROW_H + GRID_HEAD_H) + 'px';
+      if (scroll) scroll.style.height = height;
+      if (plan) plan.style.maxHeight = height;
+    }
     const topScroll = q('db-result-grid') && q('db-result-grid').querySelector('.db-table-top-scroll');
     if (topScroll && scroll) {
       const needs = scroll.scrollWidth > scroll.clientWidth;
@@ -3795,6 +4162,11 @@
       formatCurrentSQL({ full: e.altKey });
       return;
     }
+    if (matchesShortcut(e, (state.prefs.shortcuts && state.prefs.shortcuts.layout) || 'Alt+L')) {
+      e.preventDefault();
+      toggleLayout();
+      return;
+    }
   }
   // DBUI-05：数据库命令注册到 databaseFeatures 的统一分发器（修饰键精确匹配、
   // 统一平台 Ctrl/Cmd、IME 感知、按焦点作用域过滤、一个事件只执行一条命令）。
@@ -3817,6 +4189,7 @@
         if (control) control.click();
       } },
       { name: 'db.format', spec: spec('format', 'Ctrl+Shift+F'), scope: ['editor', 'workspace'], priority: 40, when: ready, run: function (event) { formatCurrentSQL({ full: !!(event && event.altKey) }); } },
+      { name: 'db.layout.toggle', spec: spec('layout', 'Alt+L'), scope: ['editor', 'workspace', 'outside'], priority: 25, when: function () { return !!q('db-main'); }, run: function () { toggleLayout(); } },
       { name: 'db.grid.edit-cell', spec: 'F2', scope: ['editor', 'workspace'], priority: 20, when: function (event) {
         return ready() && state.resultMode === 'grid' && !(event.target && event.target.closest && event.target.closest('input, textarea, select'));
       }, run: function () {
@@ -4373,6 +4746,8 @@
     // ResizeObserver: ensures shell and hl heights always stay 100% synchronized with ta
     if (typeof ResizeObserver !== 'undefined' && !ta._resizeObserver) {
       const ro = new ResizeObserver(function (entries) {
+        // 左右布局下编辑器高度由列高决定，写回 px 高度会把"整列高度"污染成用户设定的编辑器高度。
+        if (isColumnsLayout()) return;
         for (const entry of entries) {
           const h = Math.round(ta.offsetHeight || (entry.borderBoxSize && entry.borderBoxSize[0] ? entry.borderBoxSize[0].blockSize : ta.clientHeight));
           if (h > 0) {
@@ -5771,6 +6146,7 @@
     body.innerHTML = '<section><h4>快捷键</h4><p class="muted">点输入框后按下组合键即可，保存后立即生效；输入法正在组合文字时不会触发工作台快捷键。</p><div class="db-shortcut-grid">'
       + shortcutField('执行查询', 'run') + shortcutField('取消查询', 'cancel') + shortcutField('网格视图', 'grid')
       + shortcutField('单行记录', 'record') + shortcutField('执行计划', 'explain') + shortcutField('对象栏', 'objects')
+      + shortcutField('布局切换', 'layout')
       + '</div></section><section>'
       + '<div class="db-setting-line">'
       + '  <div class="db-snippet-heading">'

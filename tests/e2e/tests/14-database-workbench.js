@@ -509,6 +509,153 @@ function register(runner, ctx) {
       }
       await runner.screenshot(page, '14-database-07-v2-semantics');
     });
+
+    runner.it('左右分栏布局：切换、拖动、刷新记忆与窄屏自动降级', async function () {
+      if (!(await page.$('#db-sql'))) return;
+      if (!(await page.$('#db-layout-toggle'))) throw new Error('缺少布局切换按钮 #db-layout-toggle');
+      if (!(await page.$('#db-split-panes'))) throw new Error('缺少左右分栏分隔条 #db-split-panes');
+
+      const readState = function () {
+        return page.evaluate(function () {
+          const main = document.getElementById('db-main');
+          const card = document.querySelector('.db-editor-card').getBoundingClientRect();
+          const res = document.getElementById('db-results-section').getBoundingClientRect();
+          const split = document.getElementById('db-split-panes');
+          const btn = document.getElementById('db-layout-toggle');
+          const rows = document.getElementById('db-grid-rows');
+          return {
+            columns: main.classList.contains('is-columns'),
+            narrow: main.classList.contains('is-narrow-editor'),
+            splitDisplay: getComputedStyle(split).display,
+            cardW: Math.round(card.width),
+            resultsW: Math.round(res.width),
+            sideBySide: card.right <= res.left + 1,
+            stacked: card.bottom <= res.top + 1,
+            rowsDisabled: !!(rows && rows.disabled),
+            label: (document.getElementById('db-layout-label') || {}).textContent || '',
+            pressed: btn.getAttribute('aria-pressed'),
+            btnDisabled: !!btn.disabled,
+            btnTitle: btn.title,
+            pageScroll: document.documentElement.scrollHeight <= window.innerHeight + 8
+          };
+        });
+      };
+
+      try {
+        // 对象树收起，保证左右分栏有足够可用宽度（可重复执行）
+        await page.setViewportSize({ width: 1600, height: 1000 });
+        await page.waitForTimeout(200);
+        const metaCollapsed = await page.evaluate(function () {
+          const m = document.getElementById('db-meta-pane');
+          return !!(m && m.classList.contains('is-collapsed'));
+        });
+        if (!metaCollapsed) {
+          const metaToggle = await page.$('#db-meta-toggle');
+          if (metaToggle) { await metaToggle.click(); await page.waitForTimeout(350); }
+        }
+
+        let st = await readState();
+        if (st.columns) { await page.click('#db-layout-toggle'); await page.waitForTimeout(450); st = await readState(); }
+        if (st.columns || st.splitDisplay !== 'none' || !st.stacked) {
+          throw new Error('上下布局基线异常: ' + JSON.stringify(st));
+        }
+        if (st.label !== '左右布局' || st.pressed !== 'false' || st.btnDisabled) {
+          throw new Error('上下布局下按钮语义错误: ' + JSON.stringify(st));
+        }
+        if (st.rowsDisabled) throw new Error('上下布局下“显示行数”不应被禁用');
+
+        // 切到左右布局
+        await page.click('#db-layout-toggle');
+        await page.waitForTimeout(500);
+        st = await readState();
+        if (!st.columns || st.splitDisplay === 'none' || !st.sideBySide) {
+          throw new Error('未进入左右分栏: ' + JSON.stringify(st));
+        }
+        if (st.label !== '上下布局' || st.pressed !== 'true') {
+          throw new Error('左右布局下按钮语义错误（文案应指向目标布局）: ' + JSON.stringify(st));
+        }
+        if (!st.rowsDisabled) throw new Error('左右布局下“显示行数”应禁用，避免死控件');
+        if (!st.pageScroll) throw new Error('左右布局应让工作区占满视口，页面不滚动');
+        if (!st.narrow) throw new Error('窄左列应切换编辑器工具栏紧凑排布');
+
+        const noSpill = await page.evaluate(function () {
+          const bar = document.querySelector('.db-editor-bar');
+          const box = bar.getBoundingClientRect();
+          return Array.prototype.every.call(bar.querySelectorAll('button, input, select, summary'), function (el) {
+            const b = el.getBoundingClientRect();
+            return !(b.width > 0 && b.height > 0 && (b.right > box.right + 1 || b.left < box.left - 1));
+          });
+        });
+        if (!noSpill) throw new Error('左右布局下编辑器工具栏存在溢出控件');
+
+        // 双击复位默认比例后再拖动，避免上次遗留的极限宽度影响断言
+        await page.locator('#db-split-panes').dblclick();
+        await page.waitForTimeout(350);
+        st = await readState();
+        const before = st.cardW;
+
+        const box = await page.locator('#db-split-panes').boundingBox();
+        if (!box) throw new Error('分隔条不可见，无法拖拽');
+        await page.mouse.move(box.x + box.width / 2, box.y + 200);
+        await page.mouse.down();
+        await page.mouse.move(box.x + box.width / 2 + 120, box.y + 200, { steps: 8 });
+        const dragging = await page.evaluate(function () {
+          return {
+            resizing: document.body.classList.contains('db-resizing'),
+            hintVisible: document.getElementById('db-split-panes-hint').hidden === false
+          };
+        });
+        await page.mouse.up();
+        await page.waitForTimeout(450);
+        if (!dragging.resizing || !dragging.hintVisible) {
+          throw new Error('拖动期间应进入 resizing 状态并显示宽度提示: ' + JSON.stringify(dragging));
+        }
+        st = await readState();
+        if (st.cardW - before < 100) throw new Error('拖动分隔条未改变左列宽度: ' + before + ' -> ' + st.cardW);
+        if (!st.sideBySide || st.resultsW < 419) throw new Error('拖动后左右列关系/最小宽度异常: ' + JSON.stringify(st));
+        const draggedWidth = st.cardW;
+        await runner.screenshot(page, '14-database-08-split-columns');
+
+        // 刷新后记忆布局与列宽
+        await page.reload({ waitUntil: 'domcontentloaded' });
+        await page.waitForSelector('#db-sql', { timeout: 8000 });
+        await page.waitForTimeout(600);
+        st = await readState();
+        if (!st.columns || Math.abs(st.cardW - draggedWidth) > 8) {
+          throw new Error('刷新后未记住布局/列宽: 期望宽 ' + draggedWidth + '，实际 ' + JSON.stringify(st));
+        }
+
+        // 窄屏自动降级为上下布局，且按钮置灰说明原因
+        await page.setViewportSize({ width: 1024, height: 900 });
+        await page.waitForTimeout(700);
+        st = await readState();
+        if (st.columns || st.splitDisplay !== 'none' || !st.stacked) {
+          throw new Error('窄屏应自动降级为上下布局: ' + JSON.stringify(st));
+        }
+        if (!st.btnDisabled || st.btnTitle.indexOf('过窄') < 0) {
+          throw new Error('窄屏下布局按钮应置灰并说明原因: ' + JSON.stringify(st));
+        }
+        if (st.rowsDisabled) throw new Error('窄屏降级后“显示行数”应恢复可用');
+
+        // 恢复宽屏后回到用户选择的左右布局
+        await page.setViewportSize({ width: 1600, height: 1000 });
+        await page.waitForTimeout(800);
+        st = await readState();
+        if (!st.columns || !st.sideBySide) throw new Error('恢复宽屏后应回到左右布局: ' + JSON.stringify(st));
+      } finally {
+        // 清理：把布局偏好复位为上下布局，避免影响其他用例（例如 43 号编辑器高度同步）。
+        try {
+          const stillColumns = await page.evaluate(function () {
+            const m = document.getElementById('db-main');
+            return !!(m && m.classList.contains('is-columns'));
+          });
+          if (stillColumns && (await page.$('#db-layout-toggle'))) {
+            await page.click('#db-layout-toggle');
+            await page.waitForTimeout(400);
+          }
+        } catch (_) { /* 清理失败不影响断言结果 */ }
+      }
+    });
   });
 }
 

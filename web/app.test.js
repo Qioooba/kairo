@@ -1549,6 +1549,18 @@ function testDatabaseWorkbenchLazy() {
   assert.ok(dbSrc.indexOf('db-lob-token') >= 0, '应包含 db-lob-token 样式支持');
   assert.ok(dbSrc.indexOf('resolveLobPayload') >= 0, '应包含 resolveLobPayload 统一解析逻辑');
 
+  // 7. 左右分栏布局契约：切换按钮 / 可拖分隔条 / 布局持久化 / 窄屏降级阈值。
+  assert.ok(dbSrc.indexOf('db-layout-toggle') >= 0, '应包含布局切换按钮 db-layout-toggle');
+  assert.ok(dbSrc.indexOf('db-split-panes') >= 0, '应包含左右分栏可拖分隔条 db-split-panes');
+  assert.ok(dbSrc.indexOf('db.layout.toggle') >= 0, '应注册布局切换命令 db.layout.toggle');
+  assert.ok(dbSrc.indexOf('editor_col_width') >= 0, '应持久化左右分栏左列宽度 editor_col_width');
+  assert.ok(dbSrc.indexOf('SPLIT_MIN_WORKSPACE') >= 0, '应存在左右分栏最小可用宽度阈值');
+  assert.ok(dbSrc.indexOf('isColumnsLayout()') >= 0, '应存在左右布局判定 isColumnsLayout');
+  // 左右布局下 ResizeObserver 不得把整列高度写成编辑器高度（默认上下布局记忆值必须保住）。
+  const roBlock = dbSrc.indexOf('ResizeObserver: ensures shell and hl heights');
+  const roGuard = roBlock >= 0 ? dbSrc.indexOf('if (isColumnsLayout()) return;', roBlock) : -1;
+  assert.ok(roGuard > roBlock, 'ResizeObserver 应带左右布局守卫');
+
   console.log('  database SQL tabs helpers: format / suggest / brackets / snippetExpandKey / parseSnippetsText / formatSnippetsText ✓');
 }
 

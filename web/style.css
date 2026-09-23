@@ -9533,3 +9533,170 @@ body.has-open-overlay { overflow: hidden; }
   .db-meta { transition: none; }
 }
 
+/* ===================================================================
+   数据库工作台：左右分栏布局（左 SQL 编辑器 / 右结果面板）
+   仅作用于 .db-main.is-columns；默认上下布局完全不受影响。
+   由 database.js 的 applyLayoutMode() 依据 persisted.layout 与可用宽度切换。
+   =================================================================== */
+.db-result-toolbar .db-layout-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+}
+.db-result-toolbar .db-layout-btn .db-action-icon { width: 13px; height: 13px; }
+.db-result-toolbar .db-layout-btn:disabled { opacity: .55; cursor: not-allowed; }
+
+/* 工作区高度：JS 会写入精确 px；此处为 JS 未执行时的兜底（页面不滚动，面板内部滚动） */
+.db-sql-layout.is-columns {
+  min-height: 560px;
+  height: calc(100vh - 168px);
+}
+.db-main.is-columns {
+  grid-template-columns: var(--db-editor-col-w, 46%) 6px minmax(420px, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+/* 对象详情页签激活时结果区被隐藏：编辑器独占整行，不留空轨道与幽灵分隔条 */
+.db-main.is-columns.is-object { grid-template-columns: minmax(0, 1fr); }
+.db-main.is-columns.is-object > .db-split-panes { display: none; }
+/* 左右布局给 .db-results 加了 display:flex，必须显式压过 [hidden] 的 UA display:none */
+#db-results-section[hidden] { display: none !important; }
+
+/* ---- 面板分隔条（仅左右布局出现；上下布局下必须是 display:none，否则会占掉一个网格行） ---- */
+.db-split-panes {
+  position: relative;
+  display: none;
+  align-self: stretch;
+  align-items: center;
+  justify-content: center;
+  cursor: col-resize;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  background: transparent;
+}
+.db-main.is-columns > .db-split-panes { display: flex; }
+.db-split-panes::after {
+  content: '';
+  position: absolute;
+  top: 8px;
+  bottom: 8px;
+  left: 2px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--line);
+  transition: background-color .15s, width .15s;
+}
+.db-split-panes:hover::after,
+.db-split-panes.dragging::after,
+.db-split-panes:focus-visible::after { background: var(--primary); width: 3px; }
+.db-split-panes:focus { outline: none; }
+.db-split-panes:focus-visible { outline: none; box-shadow: inset 0 0 0 1px var(--primary); }
+.db-split-panes-hint {
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 6;
+  padding: 2px 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--bg-1);
+  color: var(--text-dim);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.db-split-panes-hint[hidden] { display: none; }
+/* 拖动期间全局禁用文本选中，避免把 SQL/结果文字选蓝 */
+body.db-resizing,
+body.db-resizing * { cursor: col-resize !important; user-select: none !important; -webkit-user-select: none !important; }
+
+/* ---- 左列：SQL 编辑器填满列高 ---- */
+.db-main.is-columns > .db-editor-card {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+}
+.db-main.is-columns > .db-editor-card > .db-sql-panel { flex: 1 1 auto; min-height: 0; }
+.db-main.is-columns .db-sql-shell {
+  flex: 1 1 auto;
+  min-height: 140px;
+  height: auto !important;
+}
+.db-main.is-columns #db-sql,
+.db-main.is-columns #db-sql-highlight { height: 100% !important; }
+.db-main.is-columns .db-sql-resizer { display: none !important; }
+.db-main.is-columns .db-object-viewer {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+}
+
+/* ---- 右列：结果面板填满列高 ---- */
+.db-main.is-columns > .db-results {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+}
+.db-main.is-columns #db-result-grid {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+}
+.db-main.is-columns .db-table-top-scroll { flex: 0 0 auto; }
+.db-main.is-columns .db-table-scroll {
+  flex: 1 1 0px;
+  height: auto !important;
+  min-height: 160px;
+}
+.db-main.is-columns .db-plan-wrap { flex: 1 1 auto; min-height: 0; }
+.db-main.is-columns .db-plan-text,
+.db-main.is-columns .db-plan-table-wrap { flex: 1 1 auto; min-height: 160px; max-height: none; }
+.db-main.is-columns .db-record-nav,
+.db-main.is-columns .db-record-table { flex: 0 0 auto; }
+.db-main.is-columns .db-result-empty { min-height: 100%; }
+.db-main.is-columns .db-grid-resizer { display: none !important; }
+.db-main.is-columns .db-copy-hint { display: none; }
+.db-main.is-columns .db-result-filter-wrap { flex: 1 1 160px; min-width: 120px; }
+.db-main.is-columns .db-result-filter-wrap input { min-width: 0; }
+.db-main.is-columns #db-page-hint { white-space: normal; }
+
+/* 左列偏窄（拖动或默认比例导致）时：编辑器工具栏切成四行稳定排布（与对象树展开时同一套
+   经过验证的紧凑布局），按钮组允许换行，避免 420–1000px 列宽下文字重叠或被裁切。 */
+.db-main.is-columns.is-narrow-editor .db-editor-bar {
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: repeat(4, minmax(30px, auto));
+  gap: 6px;
+  min-height: 138px;
+}
+.db-main.is-columns.is-narrow-editor .db-bar-run-group { grid-column: 1; grid-row: 1; }
+.db-main.is-columns.is-narrow-editor .db-editor-bar .db-query-status { grid-column: 2; grid-row: 1; justify-self: end; margin-left: 0; }
+.db-main.is-columns.is-narrow-editor .db-bar-trans-group { grid-column: 1 / 3; grid-row: 2; flex-wrap: wrap; row-gap: 5px; }
+.db-main.is-columns.is-narrow-editor .db-bar-tools-group { grid-column: 1; grid-row: 3; flex-wrap: wrap; row-gap: 5px; }
+.db-main.is-columns.is-narrow-editor .db-bar-more-group { grid-column: 2; grid-row: 3; }
+.db-main.is-columns.is-narrow-editor .db-bar-limits-group { grid-column: 1 / 3; grid-row: 4; justify-self: start; flex-wrap: wrap; row-gap: 5px; }
+.db-main.is-columns.is-narrow-editor .db-toolbar-more-panel { width: min(390px, calc(100vw - 48px)); }
+
+/* 安全网：极小视口下左右分栏永远不成立，JS 未生效也不出现半吊子分栏 */
+@media (max-width: 980px) {
+  .db-sql-layout.is-columns { height: auto; min-height: 860px; }
+  .db-main.is-columns { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(560px, 1fr); }
+  .db-main.is-columns > .db-split-panes { display: none !important; }
+  .db-main.is-columns > .db-editor-card,
+  .db-main.is-columns > .db-results { height: auto; }
+  .db-main.is-columns .db-sql-shell { flex: 0 0 auto; min-height: 190px; }
+  .db-main.is-columns #db-sql,
+  .db-main.is-columns #db-sql-highlight { height: auto !important; }
+  .db-main.is-columns .db-sql-resizer { display: flex !important; }
+  .db-main.is-columns #db-result-grid { display: block; overflow: visible; }
+  .db-main.is-columns .db-table-scroll { flex: none; height: min(810px, calc(100vh - 320px)) !important; }
+  .db-main.is-columns .db-grid-resizer { display: flex !important; }
+  .db-main.is-columns .db-copy-hint { display: inline; }
+}
+
