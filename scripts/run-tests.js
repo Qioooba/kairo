@@ -25,6 +25,7 @@ const UNIT_TESTS = [
   'tests/workbench-unit-tests.js',
   'tests/database-features-unit.js',
   'tests/database-review-regression.js',
+  'tests/database-orphan-source.test.js',
   'tests/compare-folder-regression.js',
   'tests/compare-save-lifecycle.test.js',
   'tests/security-review-followup.test.js',

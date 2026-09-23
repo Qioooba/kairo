@@ -144,16 +144,51 @@
     }
     return '';
   }
+  // DBUI-03：页签来源状态机。
+  // unbound  = 从未绑定过数据源（新建空页签），可以跟随当前数据源；
+  // bound    = sourceId 仍能在数据源列表中找到；
+  // orphaned = 曾经绑定过的 sourceId 已失效（数据源被删除），必须保留原 ID 与名称快照，
+  //            并在用户明确改绑之前禁止执行/导出/元数据，绝不自动改绑其他数据源。
+  function sessionSourceClass(s) {
+    if (!s) return 'unbound';
+    const id = s.sourceId ? String(s.sourceId) : '';
+    if (!id) return s.sourceState === 'orphaned' ? 'orphaned' : 'unbound';
+    return (state.sources || []).some(function (x) { return String(x.id) === id; }) ? 'bound' : 'orphaned';
+  }
+  function sessionSourceRefSnapshot(ref) {
+    const src = ref || {};
+    return { id: String(src.id || ''), name: String(src.name || ''), kind: String(src.kind || ''), version: String(src.version || '') };
+  }
+  // 失效页签：保留原 sourceId 与名称快照；deletedRef 用于删除源时补全快照（页面刷新后的备份没有名称）。
+  function markSessionOrphan(s, deletedRef) {
+    if (!s) return;
+    const previous = s.sourceRef || {};
+    const id = String(s.sourceId || previous.id || '');
+    const deleted = deletedRef && String(deletedRef.id) === id ? deletedRef : null;
+    s.sourceRef = sessionSourceRefSnapshot({
+      id: id,
+      name: previous.name || (deleted ? deleted.name : ''),
+      kind: previous.kind || (deleted ? deleted.kind : ''),
+      version: previous.version || ''
+    });
+    s.sourceState = 'orphaned';
+    s.orphan = true;
+  }
   function sessionSourceState(s) {
     s = s || sess();
-    if (!s || !s.sourceId) return { status: state.source ? 'ready' : 'removed', source: state.source || null };
-    const found = state.sources.find(function (x) { return x.id === s.sourceId; }) || null;
-    return found ? { status: 'ready', source: found } : { status: 'removed', source: null };
+    const kind = sessionSourceClass(s);
+    if (kind === 'bound') {
+      return { status: 'ready', state: 'bound', source: (state.sources || []).find(function (x) { return String(x.id) === String(s.sourceId); }) || null };
+    }
+    if (kind === 'orphaned') return { status: 'removed', state: 'orphaned', source: null };
+    return { status: state.source ? 'ready' : 'removed', state: 'unbound', source: state.source || null };
   }
   function bindSessionSource(s, source) {
     if (!s || !source) return;
     s.sourceId = source.id;
     s.sourceRef = Kairo.workbench && Kairo.workbench.resourceSession ? Kairo.workbench.resourceSession.snapshot(source) : { id: source.id, name: source.name, kind: source.kind };
+    s.sourceState = 'bound';
+    s.orphan = false;
   }
   function createSession(sql) {
     const defaultPageSize = (persisted.row_limits && state.source && Number(persisted.row_limits[state.source.id])) || (q('db-max-rows') && Number(q('db-max-rows').value)) || 20;
@@ -163,7 +198,7 @@
       hiddenColumns: new Set(), sort: null, plan: [], gridReady: false, controller: null,
       dirtyCells: {}, isEditMode: false, gridEditsStaged: false,
       transactionId: newTransactionID(), transactionPending: false,
-      runSeq: 0, status: '就绪', sourceId: state.source ? state.source.id : '', sourceRef: state.source && Kairo.workbench && Kairo.workbench.resourceSession ? Kairo.workbench.resourceSession.snapshot(state.source) : null
+      runSeq: 0, status: '就绪', sourceId: state.source ? state.source.id : '', sourceState: state.source ? 'bound' : 'unbound', orphan: false, sourceRef: state.source && Kairo.workbench && Kairo.workbench.resourceSession ? Kairo.workbench.resourceSession.snapshot(state.source) : null
     };
   }
   function bindSession(s) {
@@ -348,6 +383,11 @@
     if (nextActive.type === 'object') {
       renderTabs();
       renderObjectViewer(nextActive);
+    } else if (sessionSourceClass(nextActive) === 'orphaned') {
+      // DBUI-03：批量关闭后切到的页签若来源已删除，同样只显示孤儿视图
+      markSessionOrphan(nextActive);
+      bindSession(nextActive);
+      renderOrphanWorkspace(q('db-workspace'), nextActive);
     } else {
       hideObjectSession();
       renderTabs();
@@ -442,6 +482,14 @@
       return;
     }
     hideObjectSession();
+    if (sessionSourceClass(s) === 'orphaned') {
+      // DBUI-03：失效页签只显示孤儿视图，绝不改绑到当前数据源
+      markSessionOrphan(s);
+      bindSession(s);
+      renderOrphanWorkspace(q('db-workspace'), s);
+      backupDBSessions({ delay: 1000 });
+      return;
+    }
     // #13：页签保存自己的数据源；切换到不同类型时必须重建可见工作区
     const found = s.sourceId ? state.sources.find(function (x) { return x.id === s.sourceId; }) : null;
     if (found && (!state.source || state.source.id !== found.id)) {
@@ -484,8 +532,13 @@
       renderObjectViewer(next);
     } else {
       hideObjectSession();
-      const nextSource = next.sourceId ? state.sources.find(function (x) { return x.id === next.sourceId; }) : null;
-      if (nextSource && (!state.source || state.source.id !== nextSource.id)) {
+      const nextSource = next.sourceId ? state.sources.find(function (x) { return String(x.id) === String(next.sourceId); }) : null;
+      if (sessionSourceClass(next) === 'orphaned') {
+        // DBUI-03：切到失效页签时进入孤儿视图，不把当前数据源当成它的归属
+        markSessionOrphan(next);
+        bindSession(next);
+        renderOrphanWorkspace(q('db-workspace'), next);
+      } else if (nextSource && (!state.source || state.source.id !== nextSource.id)) {
         state.source = nextSource;
         const select = q('db-source');
         if (select) select.value = nextSource.id;
@@ -550,8 +603,11 @@
     renderTabs();
     if (state.activeId === s.id) renderObjectViewer(s);
     try {
-      const source = s.sourceId ? (state.sources.find(x => x.id === s.sourceId) || state.source) : state.source;
-      if (!source) throw new Error('未选择数据源');
+      // DBUI-03：sourceId 失效时不得回落到当前数据源，否则会把 A 的对象元数据请求发到 B
+      const source = s.sourceId
+        ? (state.sources.find(x => String(x.id) === String(s.sourceId)) || null)
+        : state.source;
+      if (!source) throw new Error(s.sourceId ? '原数据源已删除，已阻止元数据请求；请重新绑定数据源' : '未选择数据源');
       if (!s.schema || s.schema === '加载中…' || s.schema === '加载失败') {
         s.schema = currentSchema();
       }
@@ -1965,6 +2021,7 @@
             objectName: x.objectName || '',
             objectType: x.objectType || 'TABLE',
             sourceId: x.sourceId || '',
+            sourceRef: sessionSourceRefSnapshot(x.sourceRef),
             page: 1,
             pageSize: 20
           };
@@ -1974,6 +2031,7 @@
           type: 'query',
           sql: x.sql || '',
           sourceId: x.sourceId || '',
+          sourceRef: sessionSourceRefSnapshot(x.sourceRef),
           transactionId: x.transactionId || '',
           transactionPending: !!x.transactionPending,
           gridEditsStaged: !!x.gridEditsStaged,
@@ -2065,7 +2123,18 @@
 
   function restoreLocalDBSessions(data) {
     if (!data || !data.sessions || !data.sessions.length) return false;
+    // DBUI-03：恢复备份时同样遵守页签来源状态机——曾经绑定的数据源若已删除，
+    // 保留原 ID 与名称快照进入 orphaned，绝不自动改绑到当前数据源。
+    const savedRefOf = function (saved) {
+      const ref = saved && saved.sourceRef;
+      if (ref && (ref.id || ref.name)) return sessionSourceRefSnapshot(ref);
+      if (saved && saved.sourceId) return { id: String(saved.sourceId), name: '', kind: '', version: '' };
+      return null;
+    };
     state.sessions = data.sessions.slice(0, 50).map(saved => {
+      const savedRef = savedRefOf(saved);
+      const savedId = saved.sourceId ? String(saved.sourceId) : '';
+      const srcObj = savedId ? (state.sources.find(s => String(s.id) === savedId) || null) : null;
       if (saved.type === 'object') {
         const objSession = {
           id: saved.id,
@@ -2078,24 +2147,28 @@
           inspectLoading: false,
           inspectError: null,
           fieldFilter: '',
-          sourceId: saved.sourceId || '',
-          sourceRef: null
+          sourceId: savedId,
+          sourceRef: savedRef,
+          sourceState: 'unbound',
+          orphan: false
         };
-        const sourceExists = saved.sourceId && state.sources.some(s => s.id === saved.sourceId);
-        objSession.sourceId = sourceExists ? saved.sourceId : (state.source ? state.source.id : '');
-        const srcObj = state.sources.find(s => s.id === objSession.sourceId);
         if (srcObj) bindSessionSource(objSession, srcObj);
+        else if (savedId) markSessionOrphan(objSession);
+        else if (state.source) bindSessionSource(objSession, state.source);
         return objSession;
       }
       const session = createSession(saved.sql);
       session.id = saved.id;
-      const sourceExists = saved.sourceId && state.sources.some(s => s.id === saved.sourceId);
-      session.sourceId = sourceExists ? saved.sourceId : (state.source ? state.source.id : '');
+      session.sourceId = savedId;
+      session.sourceRef = savedRef;
+      session.sourceState = 'unbound';
+      session.orphan = false;
+      if (srcObj) bindSessionSource(session, srcObj);
+      else if (savedId) markSessionOrphan(session);
+      else if (state.source) bindSessionSource(session, state.source);
       session.transactionId = newTransactionID();
       session.transactionPending = false;
       session.gridEditsStaged = false;
-      const srcObj = state.sources.find(s => s.id === session.sourceId);
-      if (srcObj) bindSessionSource(session, srcObj);
       session.page = saved.page || 1;
       session.pageSize = saved.pageSize || 20;
       return session;
@@ -2129,8 +2202,15 @@
             if (restoreLocalDBSessions(sessData)) {
               const currentFp = JSON.stringify(serializeDBSessions());
               acknowledgedRemoteFingerprint = currentFp;
-              bindSession(sess());
-              restoreSessionChrome(sess());
+              const restoredRemote = sess();
+              bindSession(restoredRemote);
+              if (restoredRemote && restoredRemote.type !== 'object' && sessionSourceClass(restoredRemote) === 'orphaned') {
+                // DBUI-03：远端备份恢复出的失效页签同样进入孤儿视图，不得自动改绑
+                markSessionOrphan(restoredRemote);
+                renderOrphanWorkspace(q('db-workspace'), restoredRemote);
+              } else {
+                restoreSessionChrome(restoredRemote);
+              }
             }
           } else {
             // 服务端无历史，标记当前状态为已同步，避免刚打开就发空备份
@@ -2147,6 +2227,11 @@
   function reconcileSessionsWithSources(options) {
     options = options || {};
     const hasSources = state.sources && state.sources.length > 0;
+    // 删除源时调用方带着被删数据源的身份，用来给没有名称快照的页签补全提示信息。
+    // 注意：改绑保护不依赖它——只要 sourceId 非空且已失效，页签就一律进入 orphaned。
+    const deletedRef = options.deletedId
+      ? { id: String(options.deletedId), name: options.deletedName || '', kind: options.deletedKind || '' }
+      : null;
 
     // 1. 确定系统当前优先数据源 state.source
     if (options.savedSource) {
@@ -2172,40 +2257,38 @@
       state.activeId = first.id;
     }
 
-    // 2. 遍历所有会话页签，对齐其数据源绑定状态
+    // 2. 遍历所有会话页签，按显式状态机对齐绑定。
+    //    bound 刷新快照；orphaned 保留原绑定；只有 unbound（从未绑定）才允许跟随当前源。
     state.sessions.forEach(function (s) {
-      if (s.type === 'object') return;
-
-      const isBoundValid = s.sourceId && state.sources.some(x => x.id === s.sourceId);
-
-      if (isBoundValid) {
+      if (sessionSourceClass(s) === 'bound') {
         // 当前绑定的数据源依然存在且有效，同步刷新快照信息
-        const found = state.sources.find(x => x.id === s.sourceId);
-        s.sourceRef = Kairo.workbench && Kairo.workbench.resourceSession
-          ? Kairo.workbench.resourceSession.snapshot(found)
-          : { id: found.id, name: found.name, kind: found.kind };
-        s.orphan = false;
+        const found = state.sources.find(x => String(x.id) === String(s.sourceId));
+        bindSessionSource(s, found);
         return;
       }
 
-      // 到这里说明 s.sourceId 已经失效或不存在（被删除 / 之前未绑定）
+      if (s.sourceId) {
+        // 曾经绑定过的数据源已被删除：保留原 ID 与名称快照，绝不自动改绑到其他数据源。
+        markSessionOrphan(s, deletedRef);
+        return;
+      }
+
+      // 到这里说明该页签从未绑定过数据源（unbound）
+      s.sourceState = 'unbound';
+      s.orphan = false;
+      if (s.type === 'object') return;
+
       if (hasSources) {
-        // 系统中有可用数据源（刚新建了数据源，或有剩余可用数据源）
+        // 系统中有可用数据源：全新的空页签仍可自动使用当前源，保持“新建即用”的便利
         const target = (options.savedSource && state.source) || state.source || state.sources[0];
         if (target) {
           bindSessionSource(s, target);
-          s.orphan = false;
           // 如果 SQL 为空或默认方言模板，按目标数据库方言更新
           const isDefaultOrEmpty = !s.sql || s.sql.trim() === 'SELECT SYSDATE AS SERVER_TIME FROM DUAL' || s.sql.trim() === 'SELECT NOW() AS server_time';
           if (isDefaultOrEmpty && target.kind !== 'redis') {
             s.sql = target.kind === 'oracle' ? 'SELECT SYSDATE AS SERVER_TIME FROM DUAL' : 'SELECT NOW() AS server_time';
           }
         }
-      } else {
-        // 系统中已无任何可用数据源（全部被删除）
-        s.sourceId = '';
-        s.sourceRef = null;
-        s.orphan = false;
       }
     });
 
@@ -2240,6 +2323,22 @@
       saveEditorSQL();
       const current = sess();
       if (current && current.transactionBusy) { this.value = current.sourceId; return; }
+      // DBUI-03：失效页签不能在顶部下拉框里被静默迁移到其他数据源，
+      // 必须走与孤儿页签一致的显式改绑（终结旧事务 + 重置结果/写入上下文）。
+      if (current && current.type !== 'object' && sessionSourceClass(current) === 'orphaned') {
+        const target = state.sources.find(s => String(s.id) === String(this.value)) || null;
+        if (!target) { this.value = (state.source && state.source.id) || ''; return; }
+        if (await rebindOrphanedSession(current, target)) {
+          state.source = target;
+          persisted.last_source = target.id;
+          savePersisted();
+          renderWorkspace(true);
+          toast('已重新绑定：' + target.name, 'ok');
+        } else {
+          this.value = (state.source && state.source.id) || '';
+        }
+        return;
+      }
       const dirtyCount = Object.keys((current && current.dirtyCells) || {}).length;
       const hasTransaction = !!(current && current.transactionPending);
       if ((dirtyCount || hasTransaction) && !confirm('切换数据源将回滚当前页签未提交事务' + (dirtyCount ? '并放弃 ' + dirtyCount + ' 处网格修改' : '') + '，确定继续吗？')) {
@@ -2470,7 +2569,11 @@
     try {
       await api('DELETE', '/api/database/sources/' + encodeURIComponent(source.id));
       await loadSources();
-      reconcileSessionsWithSources({ deletedId: source.id });
+      reconcileSessionsWithSources({
+        deletedId: source.id,
+        deletedName: source.name || '',
+        deletedKind: source.kind || ''
+      });
       refreshSourceSelect();
       if (Kairo.databaseFeatures && typeof Kairo.databaseFeatures.removeSource === 'function') Kairo.databaseFeatures.removeSource(source.id);
       closeManager();
@@ -2712,12 +2815,19 @@
     }
     state.workspaceToken++;
 
-    // 1. 无任何数据源时的干净空状态
+    // 1. 无任何数据源时的干净空状态；失效页签仍要能读到自己的 SQL
     if (!state.sources || !state.sources.length) {
       state.source = null;
       q('db-source-badge').textContent = '未配置';
       const sourceSelect = q('db-source'); if (sourceSelect) sourceSelect.value = '';
       const testButton = q('db-test'); if (testButton) { testButton.disabled = true; testButton.title = '尚未配置数据源'; }
+      const orphanActive = sess();
+      if (orphanActive && orphanActive.type !== 'object' && sessionSourceClass(orphanActive) === 'orphaned') {
+        markSessionOrphan(orphanActive);
+        bindSession(orphanActive);
+        renderOrphanWorkspace(host, orphanActive);
+        return;
+      }
       host.innerHTML = '<div class="card empty-state"><div class="empty-title">尚无数据源</div><div class="empty-desc">打开“数据源管理”创建 Oracle、MySQL 或 Redis 连接。</div></div>';
       return;
     }
@@ -2729,17 +2839,24 @@
     }
 
     const active = sess();
-    if (active) {
-      const activeBound = active.sourceId ? state.sources.find(x => x.id === active.sourceId) : null;
-      if (!activeBound) {
-        // 如果当前会话没有绑定有效数据源，但系统中有数据源可用：自动平滑绑定到当前有效数据源
+    const activeClass = active ? sessionSourceClass(active) : null;
+    if (active && active.type !== 'object') {
+      if (activeClass === 'bound') {
+        state.source = state.sources.find(x => String(x.id) === String(active.sourceId)) || state.source;
+      } else if (activeClass === 'unbound') {
+        // 只有从未绑定过的页签才自动使用当前数据源（新建即用的便利路径）
         const fallback = state.source || state.sources[0];
-        bindSessionSource(active, fallback);
-        state.source = fallback;
+        if (fallback) {
+          bindSessionSource(active, fallback);
+          state.source = fallback;
+        }
       } else {
-        state.source = activeBound;
+        // orphaned：绝不自动改绑；顶部下拉框只代表系统当前源，不改变页签归属
+        if (!state.source) state.source = state.sources[0] || null;
       }
     }
+    // 对象页签或无活动页签时，顶部数据源下拉框仍需一个有效的当前源
+    if (!state.source) state.source = state.sources[0] || null;
 
     // 确保顶部数据源下拉框、Badge 和测试连接按钮状态同步
     const sourceSelect = q('db-source');
@@ -2747,6 +2864,14 @@
     const testButton = q('db-test');
     if (testButton) { testButton.disabled = !state.source; testButton.title = state.source ? '测试连接' : '尚未配置数据源'; }
     q('db-source-badge').textContent = state.source ? kindLabel(state.source.kind) : '未配置';
+
+    if (active && active.type !== 'object' && activeClass === 'orphaned') {
+      // 失效页签：复用孤儿视图，禁用执行/导出/元数据，等用户明确改绑
+      markSessionOrphan(active);
+      bindSession(active);
+      renderOrphanWorkspace(host, active);
+      return;
+    }
 
     if (keepSessions) {
       bindSession(active);
@@ -2762,14 +2887,123 @@
     restoreSessionChrome(active);
   }
 
+  // DBUI-03：用户明确改绑新数据源后，旧数据源的查询结果与写入上下文一律作废。
+  // SQL 文本保留（用户通常只想换个库继续编辑），结果行/计划/result_id/元数据缓存/
+  // 未提交网格队列全部清空，并生成新的 transactionId。
+  function resetSessionQueryContext(session) {
+    if (!session) return;
+    session.rows = [];
+    session.columns = [];
+    session.summary = null;
+    session.resultId = '';
+    session.editPlan = null;
+    session.resultSchema = '';
+    session.plan = [];
+    session.lastSQL = '';
+    session.lastMaxRows = 0;
+    session.lastError = null;
+    session.sourceFingerprint = '';
+    session.page = 1;
+    session.sort = null;
+    session.localFilter = '';
+    session.hiddenColumns = new Set();
+    session.selectedRow = 0; session.selectedCol = 0;
+    session.colSelected = -1; session.lastColSelected = -1; session.selectedCols = new Set();
+    session.gridReady = false;
+    session.isEditMode = false;
+    session.dirtyCells = {};
+    session.gridEditsStaged = false;
+    session.outcomeUnknown = false;
+    session.transactionPending = false;
+    session.transactionBusy = false;
+    session.status = '就绪';
+    session.runSeq = (Number(session.runSeq) || 0) + 1;
+    session.transactionId = newTransactionID();
+    // 元数据缓存与未提交网格变更队列都属于旧数据源，必须一并作废
+    state.metadataCache = {};
+    state.schemaObjectsCache = {};
+    state.schemaCategoryCache = {};
+    state.schemaTableCache = {};
+    state.schemasLoaded = false;
+    if (Kairo.databaseFeatures && typeof Kairo.databaseFeatures.clearGridMutations === 'function') {
+      Kairo.databaseFeatures.clearGridMutations();
+    }
+    if (sess() === session) {
+      state.dirtyCells = {};
+      updateTransactionControls();
+    }
+  }
+
+  // 改绑前先终结旧数据源上的事务与执行中请求；取消/回滚结果未确认前绝不迁移事务上下文。
+  async function releaseOrphanSourceContext(session) {
+    if (!session) return { ok: true };
+    if (session.transactionBusy) {
+      return { ok: false, message: '事务操作进行中，请稍后再重新绑定' };
+    }
+    if (session.controller) {
+      // 有执行中的请求：先请求取消，等它结束（页签状态会落回就绪）后用户可再次绑定
+      try { session.controller.abort(); } catch (_) {}
+      const message = '原数据源仍有执行中的请求，已请求取消；请等待查询结束后再重新绑定';
+      session.lastError = { title: '原数据源请求仍在取消中', message: message, sql: session.sql || '' };
+      return { ok: false, message: message };
+    }
+    if (session.transactionPending && session.sourceId) {
+      session.transactionBusy = true;
+      try {
+        await api('POST', '/api/database/transaction', { source_id: session.sourceId, session_id: session.transactionId, action: 'ROLLBACK' });
+        session.transactionPending = false;
+        session.gridEditsStaged = false;
+        session.dirtyCells = {};
+        session.outcomeUnknown = false;
+      } catch (e) {
+        // 旧事务最终状态未知：保留孤儿状态并把失败交给用户，不做静默迁移
+        const message = '原数据源事务回滚失败，已保留原绑定：' + ((e && e.message) || '回滚失败');
+        session.lastError = { title: '原数据源事务回滚失败', message: message, sql: session.sql || '' };
+        session.orphanRollbackFailed = true;
+        return { ok: false, message: message };
+      } finally {
+        session.transactionBusy = false;
+      }
+    }
+    return { ok: true };
+  }
+
+  // 孤儿页签的显式改绑：终结旧源上下文 -> 重置查询上下文 -> 绑定新源。
+  async function rebindOrphanedSession(session, source) {
+    if (!session || !source) return false;
+    const release = await releaseOrphanSourceContext(session);
+    if (!release.ok) {
+      toast(release.message, 'err');
+      return false;
+    }
+    resetSessionQueryContext(session);
+    bindSessionSource(session, source);
+    return true;
+  }
+
   function renderOrphanWorkspace(host, session) {
-    host.innerHTML = '<section class="card db-orphan-workspace"><div class="empty-icon">⚠</div><h3>数据源已删除</h3><p>页签“' + h((session.sourceRef && session.sourceRef.name) || session.sourceId) + '”仍保留 SQL 和历史结果，但为避免误发到其他环境，当前已禁用执行、导出和元数据操作。</p><div class="db-orphan-actions"><label>重新绑定数据源<select id="db-orphan-source"><option value="">请选择数据源</option>' + sourceOptions() + '</select></label><button class="btn btn-primary" id="db-orphan-bind">绑定并继续</button></div><div class="db-orphan-sql"><label>当前 SQL</label><textarea id="db-sql" class="db-sql-editor mono" spellcheck="false"></textarea></div></section>';
+    if (!host || !session) return;
+    const ref = session.sourceRef || {};
+    const label = ref.name || ref.id || session.sourceId || '';
+    host.innerHTML = '<div class="db-editor-tabs"><div id="db-sql-tabs" class="db-sql-tabs"></div>'
+      + '<button type="button" class="btn btn-xs" id="db-tab-add" title="新建查询页签">＋ 页签</button></div>'
+      + '<section class="card db-orphan-workspace"><div class="empty-icon">⚠</div><h3>原数据源已删除</h3><p>页签“' + h(label) + '”仍保留 SQL 和历史结果，但为避免误发到其他环境，当前已禁用执行、导出和元数据操作。</p><div class="db-orphan-actions"><label>重新绑定数据源<select id="db-orphan-source"><option value="">请选择数据源</option>' + sourceOptions() + '</select></label><button class="btn btn-primary" id="db-orphan-bind">绑定并继续</button></div><div class="db-orphan-sql"><label>当前 SQL</label><textarea id="db-sql" class="db-sql-editor mono" spellcheck="false"></textarea><button type="button" class="btn btn-xs" id="db-orphan-copy">复制 SQL</button></div></section>';
     const ta = q('db-sql'); if (ta) { ta.value = session.sql || ''; ta.addEventListener('input', function () { session.sql = ta.value; }); }
+    const copy = q('db-orphan-copy');
+    if (copy) copy.onclick = () => copyDBText(session.sql || '', '已复制 SQL');
+    const addBtn = q('db-tab-add');
+    if (addBtn) addBtn.onclick = addSession;
+    renderTabs();
     const select = q('db-orphan-source'); const button = q('db-orphan-bind');
-    if (select && button) button.onclick = function () {
-      const source = state.sources.find(function (x) { return x.id === select.value; });
-      if (!source) return toast('请选择要绑定的数据源', 'warn');
-      bindSessionSource(session, source); state.source = source; renderWorkspace(true); toast('已重新绑定：' + source.name, 'ok');
+    if (select && button) button.onclick = async function () {
+      const source = state.sources.find(function (x) { return String(x.id) === String(select.value); });
+      if (!source) { toast('请选择要绑定的数据源', 'warn'); return; }
+      if (!(await rebindOrphanedSession(session, source))) return;
+      state.source = source;
+      persisted.last_source = source.id;
+      savePersisted();
+      renderWorkspace(true);
+      toast('已重新绑定：' + source.name, 'ok');
     };
   }
 
@@ -2961,6 +3195,15 @@
     }
     bindSQLEditor();
     if (!state.sessions || state.sessions.length <= 1) restoreDBSessions();
+    // DBUI-03：备份恢复（本地/远端）后若当前页签的原数据源已删除，必须显示孤儿视图：
+    // 继续渲染 SQL 工作区会让用户以为保留的 SQL 属于顶部当前数据源。
+    const restoredActive = sess();
+    if (restoredActive && restoredActive.type !== 'object' && sessionSourceClass(restoredActive) === 'orphaned') {
+      markSessionOrphan(restoredActive);
+      bindSession(restoredActive);
+      renderOrphanWorkspace(host, restoredActive);
+      return;
+    }
     const active = sess();
     bindSession(active);
     renderTabs();
