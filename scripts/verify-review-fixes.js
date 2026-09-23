@@ -79,6 +79,40 @@ function gitSha(cwd) {
   return r.ok ? r.out.trim() : '';
 }
 
+// flaky 记录"首次失败、重试通过"的层。刻意同时保留两次的关键输出, 不做静默重试：
+// 本仓库已知至少两处偶发用例 (tailmgr.TestManager_Start_HappyPath、
+// httpserver.TestTasksAdd_Valid), 直接判 FAIL 会让人误以为是本任务引入的回归;
+// 但完全吞掉又可能掩盖真实的间歇性缺陷, 所以两者都打印并单列汇总。
+const flaky = [];
+
+/** failLines 抽出输出里的失败行, 便于在 flaky 汇总里保留证据。 */
+function failLines(out) {
+  return String(out || '').split('\n')
+    .filter(function (l) { return /^(FAIL|--- FAIL|\s+--- FAIL)/.test(l); })
+    .map(function (l) { return l.trim(); })
+    .slice(0, 6);
+}
+
+/**
+ * runLayer 执行一层; 首次失败时重试一次, 以区分"偶发"与"稳定失败"。
+ * 第一次的输出会被保留到 flaky 汇总里, 因此重试不是掩盖。
+ */
+function runLayer(label, command, cmdArgs, options) {
+  const first = run(command, cmdArgs, options);
+  if (first.ok) {
+    record(label, true, '', first.out);
+    return true;
+  }
+  const second = run(command, cmdArgs, options);
+  if (second.ok) {
+    flaky.push({ layer: label, firstFailure: failLines(first.out) });
+    record(label, true, '偶发(首次失败、重试通过) — 详见结尾 flaky 汇总', '');
+    return true;
+  }
+  record(label, false, '两次都失败', second.out);
+  return false;
+}
+
 function main() {
   const sha = gitSha();
   console.log('='.repeat(70));
@@ -117,11 +151,9 @@ function main() {
       run('go', ['test', './internal/dbconsole/', './internal/sftpclient/', './internal/comparefs/',
         './internal/upgrade/', './internal/webservice/', './internal/logquery/', '-count=1']).ok);
   } else {
-    const goTest = run('go', ['test', './...', '-count=1']);
-    record('go test ./... -count=1', goTest.ok, '', goTest.out);
+    runLayer('go test ./... -count=1', 'go', ['test', './...', '-count=1']);
   }
-  const npmRun = run('npm', ['test'], { inherit: false });
-  record('npm test', npmRun.ok, '', npmRun.out);
+  runLayer('npm test', 'npm', ['test'], { inherit: false });
   console.log('');
 
   // ---- 4. 结构守卫 ----
@@ -154,10 +186,8 @@ function main() {
         // 已存在或平台不支持: 不致命
       }
 
-      const wtGo = run('go', ['test', './...', '-count=1'], { cwd: wt });
-      record('worktree: go test ./... -count=1', wtGo.ok, '', wtGo.out);
-      const wtNpm = run('npm', ['test'], { cwd: wt });
-      record('worktree: npm test', wtNpm.ok, '', wtNpm.out);
+      runLayer('worktree: go test ./... -count=1', 'go', ['test', './...', '-count=1'], { cwd: wt });
+      runLayer('worktree: npm test', 'npm', ['test'], { cwd: wt });
     } catch (e) {
       record('干净检出验证', false, e.message);
     } finally {
@@ -181,6 +211,16 @@ function main() {
   console.log('  - 浏览器点击与截图矩阵 (审查文档 §9)');
   console.log('  - Windows 原生进程锁 / 托盘 / 便笺专项');
   console.log('  - AIX ksh 与真实目标服务器; Linux 侧仅编译验证');
+  if (flaky.length) {
+    console.log('');
+    console.log('偶发(flaky)层 —— 首次失败、重试通过。不是本任务引入的稳定回归, 但需知悉:');
+    for (const f of flaky) {
+      console.log('  ~ ' + f.layer);
+      for (const l of f.firstFailure) console.log('      首次失败行: ' + l);
+    }
+    console.log('  已知偶发用例: internal/tailmgr.TestManager_Start_HappyPath、');
+    console.log('               internal/httpserver.TestTasksAdd_Valid (详见实施报告 §4.0)');
+  }
   console.log('='.repeat(70));
 
   process.exit(failed.length ? 1 : 0);

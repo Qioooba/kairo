@@ -75,9 +75,16 @@ func TestTasksList_NoManager(t *testing.T) {
 // TestTasksAdd_Valid 新增合法任务 → 200 + id + enabled 默认 true + next_run_at。
 func TestTasksAdd_Valid(t *testing.T) {
 	srv, _ := newTestServerWithTasks(t)
+	// work_dir 必须是**真实且确定存在**的目录: handler 会对它做真实的 os.Stat。
+	// 此前固定写 "/tmp" —— 在 Windows 上 "/tmp" 会解析到"当前盘符:\tmp",
+	// 于是该用例是否通过取决于开发机哪个盘上恰好存在 \tmp:
+	// D:\kairo 下 D:\tmp 存在 → 通过; 而检出到 E: 盘(例如 %TEMP% 在 E:)时
+	// E:\tmp 不存在 → handler 返回 400 "工作目录不可访问：/tmp" → 失败。
+	// 这属于"测试依赖开发机环境"的缺陷(与 QA-01/QA-02 同类), 改用 t.TempDir()。
+	workDir := t.TempDir()
 	w := addTask(t, srv, map[string]any{
 		"name": "定时同步", "cron": "*/5 * * * *", "command": "git pull",
-		"work_dir": "/tmp", "timeout_sec": 60,
+		"work_dir": workDir, "timeout_sec": 60,
 	})
 	if w.Code != 200 {
 		t.Fatalf("code=%d body=%s", w.Code, w.Body.String())
