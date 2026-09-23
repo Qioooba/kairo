@@ -543,9 +543,32 @@ got=undefined (undefined)
 真实响应 `can_update=true`，前端却得到 `undefined` —— 因为读的是线上不存在的 camelCase `canUpdate`。
 该断言同时满足 QA-02 验收"真实契约 fixture 必须让旧命名缺陷变红"。批次 C 修复后转绿并随 C 提交。
 
+### 3.8 最终验收（冻结工作树，全部 11 层通过）
+
+在 29 组全部提交、工作树干净（`git status` 无改动）后运行 `node scripts/verify-review-fixes.js`：
+
+| 层级 | 结果 |
+|---|---|
+| 1. 测试隔离门禁（默认不含真实库测试 / 加 tag 才出现） | ✅ 2 个测试均不存在 → 出现 2/2 |
+| 2. `go vet ./...` | ✅ |
+| 3. `go test ./... -count=1` | ✅ |
+| 3. `npm test` | ✅ 21/21 |
+| 4. 结构守卫（E2E 注册一致性 / runner / 真实契约 fixture） | ✅ 三项 |
+| 5. 干净检出：无未提交改动 | ✅ 0 条 |
+| 5. 干净检出：`go test ./... -count=1` | ✅ |
+| 5. 干净检出：`npm test` | ✅ |
+| **复跑汇总** | **11/11 通过，exit=0** |
+
+本轮**没有**出现偶发层。此前出现的 `TestTasksAdd_Valid` 失败已查明为真实的环境依赖缺陷并修复
+（见 §4.0(2)），并非需要靠重试掩盖的偶发。
+
+仍需独立环境、本脚本明确不复跑的验收项：真实 Oracle 11g、真实 SFTP 服务器与磁盘级 GBK fixture、
+浏览器点击与截图矩阵（§9）、Windows 原生进程锁/托盘/便笺、AIX ksh 与真实目标服务器
+（Linux 侧仅编译验证）。
+
 ## 4. 需要知悉的工程事实与披露
 
-### 4.0 诊断到但**未**修改的范围外缺陷：两处不稳定的既有测试
+### 4.0 范围外测试问题的诊断与处置：一处已修复、一处仅诊断
 
 **这两个都不是 29 项之一，且我刻意没有改动它们。** 但它们会让 `go test ./...` 间歇性变红
 （我的"干净检出验证"与"最终验收彩排"各命中一次），因此必须记录，避免维护者把偶发红当成真实回归。
@@ -566,18 +589,20 @@ got=undefined (undefined)
 - 我尝试过一个"订阅门闩"式的测试侧确定化修法，**实测无效**（它只延迟 line，丢的是先于 line 的 `info`），
   已 `git checkout` 还原，未留下无效且注释失实的改动。
 
-**(2) `internal/httpserver.TestTasksAdd_Valid` —— 仅在整包/全套负载下偶发**
+**(2) `internal/httpserver.TestTasksAdd_Valid` —— 实为"依赖开发机文件系统"，已修复（原诊断有误，此处更正）**
 
-- 现象：最终验收彩排中 `worktree: go test ./...` 曾以 `--- FAIL: TestTasksAdd_Valid` 失败，
-  而**同一份代码**在同一时刻的工作树 `go test ./...` 通过（工作树当时是干净的，两者内容一致）。
-- 复现性：隔离运行 `-run TestTasksAdd_Valid -count=20` 与 `-count=30` 均通过；
-  另跑两次 `go test ./internal/httpserver/ ./internal/tailmgr/ -count=1` 亦通过 → **偶发、非确定性**。
-- 相关代码归属：`internal/schedtask` 在本提交区间内**完全没有改动**，`handlers_tasks.go` /
-  `handlers_tasks_test.go` 也不在改动清单里；该测试通过 `longTaskCommand()` 启动真实子进程
-  （Windows `ping.exe -n 11`，非 Windows `sleep 10`）并依赖调度时序，因此对负载/时序敏感。
-- 诚实补充：本任务确实**向同一包新增了多个测试文件**（sftp 身份、compare handler、dbui 等）。
-  新增用例可能改变包内调度时序，从而**暴露**既有的时序脆弱性，而不宜简单断言"纯属既有"。
-  结论按证据表述：该用例的 SUT 未被本任务改动，但其偶发失败可能由新增用例导致的时序变化所暴露。
+- 初诊（**错误**）：因它只在整包/全套负载下偶发、隔离 50 次不复现，我最初把它记为"负载下偶发"。
+- 真因（后续定位）：该用例把 `work_dir` 固定写成 `"/tmp"`，而 handler 会对它做**真实** `os.Stat`。
+  在 Windows 上 `"/tmp"` 解析为"**当前盘符**:\tmp"，于是通过与否取决于开发机哪个盘上恰好存在 `\tmp`：
+  实测 `C:\tmp` 存在、`D:\tmp` 存在、**`E:\tmp` 不存在**。工作树在 `D:\kairo` → `D:\tmp` 存在 → 通过；
+  而本脚本的干净检出放在 `%TEMP%`（本机为 `E:\AI\Temp`）→ `E:\tmp` 不存在 → handler 返回
+  `400 {"error":"工作目录不可访问：/tmp"}` → **稳定失败**（这也解释了为何它"两次都失败"，
+  而工作树同一份代码始终通过）。这与审查 QA-01/QA-02 要消除的"测试依赖开发机环境"完全同类。
+- 修复（提交 `bb787ae`）：`work_dir` 改用 `t.TempDir()`；原断言（id/name/enabled/next_run_at）一条未动。
+- 验证：D: 盘工作树通过；把修复放入 E: 盘 worktree（修复前此处必失败）→ **PASS**。
+- 结论更正：这是**真实的测试隔离缺陷**，不是偶发。此前把它归为"flaky"是错的，已在此更正。
+  **这个方法上的收获值得记录**：若非做了"干净检出验证"，该缺陷会一直隐藏在"开发机恰好有 D:\tmp"里。
+
 
 
 
