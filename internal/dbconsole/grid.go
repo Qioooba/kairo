@@ -13,20 +13,44 @@ import (
 
 const maxGridMutations = 200
 
+// GridRowValue 以结果列索引表达一个单元格原值（DBUI-01 索引协议）。
+// HasValue 用来区分“该列没有快照”（例如 LOB/复杂单元格）与“快照就是 SQL NULL”。
+type GridRowValue struct {
+	ColumnIndex int  `json:"column_index"`
+	HasValue    bool `json:"has_value,omitempty"`
+	Value       any  `json:"value,omitempty"`
+}
+
+// GridMutationChange 以结果列索引表达一次列变更（DBUI-01 推荐协议）。
+// 服务器凭 result_id 对应的不可变 ResultEditContext.Columns 解析物理列，
+// 页面显示名不参与物理目标推断；Original 可选，用于与整行快照交叉校验。
+type GridMutationChange struct {
+	ColumnIndex int  `json:"column_index"`
+	HasValue    bool `json:"has_value,omitempty"`
+	Value       any  `json:"value,omitempty"`
+	HasOriginal bool `json:"has_original,omitempty"`
+	Original    any  `json:"original,omitempty"`
+}
+
 // GridMutation is the typed request used by the result-grid editor.  Values
 // are new values; Original is the snapshot read by the grid and is used for
 // optimistic concurrency checks.  Key must contain every PK column unless a
 // native Oracle ROWID is supplied.
+//
+// DBUI-01: 新客户端优先使用 Changes + RowColumns（结果列索引协议）；
+// Values/Original/Key 保留为名称协议，供旧客户端使用，三者一起按结果列名映射。
 type GridMutation struct {
-	Action     string         `json:"action"` // insert/update/delete
-	RowRef     string         `json:"row_ref,omitempty"`
-	Values     map[string]any `json:"values,omitempty"`
-	Original   map[string]any `json:"original,omitempty"`
-	Key        map[string]any `json:"key,omitempty"`
-	PrimaryKey []string       `json:"primary_key,omitempty"`
-	RowID      string         `json:"rowid,omitempty"`
-	UseRowID   bool           `json:"use_rowid,omitempty"`
-	Confirm    bool           `json:"confirm,omitempty"`
+	Action     string               `json:"action"` // insert/update/delete
+	RowRef     string               `json:"row_ref,omitempty"`
+	Values     map[string]any       `json:"values,omitempty"`
+	Original   map[string]any       `json:"original,omitempty"`
+	Key        map[string]any       `json:"key,omitempty"`
+	PrimaryKey []string             `json:"primary_key,omitempty"`
+	RowID      string               `json:"rowid,omitempty"`
+	UseRowID   bool                 `json:"use_rowid,omitempty"`
+	Confirm    bool                 `json:"confirm,omitempty"`
+	RowColumns []GridRowValue       `json:"row_columns,omitempty"`
+	Changes    []GridMutationChange `json:"changes,omitempty"`
 }
 
 type GridMutationRequest struct {

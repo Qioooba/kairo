@@ -1720,6 +1720,19 @@
       toast((context && context.editPlan && context.editPlan.reason) || '当前结果不支持网格编辑', 'warn');
       return false;
     }
+    // DBUI-01: 按服务端签发的列绑定决定这一格能否编辑，并当场说明原因，
+    // 而不是让用户改完才在提交阶段发现计算列/LOB/表达式列写不进去。
+    if (context.editColumns) {
+      const binding = context.editColumns[colIdx];
+      if (!binding) {
+        toast('该结果列没有服务端列绑定，无法确定物理目标列', 'warn');
+        return false;
+      }
+      if (binding.writable !== true) {
+        toast(binding.read_only_reason || '该列不允许网格修改', 'warn');
+        return false;
+      }
+    }
     if (!state.rows || !state.rows[rowIdx] || !state.columns || !state.columns[colIdx]) return false;
     if (!td) {
       const grid = q('db-result-grid');
@@ -1807,7 +1820,7 @@
     if (current.sourceId && current.sourceId !== source.id) return null;
     if (current.sourceFingerprint && source.fingerprint && current.sourceFingerprint !== source.fingerprint) return null;
 
-    const plan = current.editPlan;
+    const plan = normalizeEditPlan(current.editPlan);
     let targetSchema = plan ? plan.schema : '';
     let targetTable = plan ? plan.table : '';
     if (!targetTable && features && features.resolveGridTarget) {
@@ -1821,7 +1834,9 @@
     }
     if (!targetTable) return null;
 
-    const planAllows = plan ? (plan.canUpdate || plan.canInsert) : true;
+    // DBUI-01: 是否允许“改单元格”只由 can_update 决定；“允许插入”绝不推导出“允许更新”。
+    // 没有编辑计划（旧服务端/对象页签）时保持原有的宽松回退。
+    const planAllows = plan ? plan.can_update === true : true;
     const canEdit = planAllows && canWriteDatabase() && !source.read_only && !!current.isEditMode && !current.controller && !current.transactionBusy && !current.outcomeUnknown;
 
     return {
@@ -1835,9 +1850,50 @@
       columns: current.columns.slice(),
       values: (current.rows[state.selectedRow] || []).slice(),
       rowIndex: state.selectedRow,
-      editable: canEdit,
+      // 严格布尔：任何响应下 editable 都不能是 undefined。
+      editable: canEdit === true,
+      canInsert: !!(plan && plan.can_insert),
+      canUpdate: !!(plan && plan.can_update),
+      canDelete: !!(plan && plan.can_delete),
+      editColumns: (plan && plan.columns) || null,
       editPlan: plan,
       production: String(source.environment || '').toLowerCase() === 'production'
+    };
+  }
+
+  // DBUI-01: 编辑计划只在这一处归一化。
+  //  - 服务端只发 snake_case；能力字段必须是真正的布尔 true 才开放，undefined 归为 false；
+  //  - 插入/更新/删除彼此独立判定，绝不由相邻能力推导；
+  //  - columns 是服务端签发的按结果索引列绑定，用于判断某格能否编辑并显示原因。
+  function normalizeEditPlan(raw) {
+    if (!raw || typeof raw !== 'object') return null;
+    const columns = Array.isArray(raw.columns) ? raw.columns.map(function (col, idx) {
+      const item = (col && typeof col === 'object') ? col : {};
+      const writable = item.writable === true;
+      return {
+        index: (typeof item.index === 'number' && isFinite(item.index)) ? item.index : idx,
+        result_name: typeof item.result_name === 'string' ? item.result_name : '',
+        physical_name: typeof item.physical_name === 'string' ? item.physical_name : '',
+        writable: writable,
+        read_only_reason: typeof item.read_only_reason === 'string' && item.read_only_reason
+          ? item.read_only_reason
+          : (writable ? '' : '该列不允许网格修改')
+      };
+    }) : null;
+    return {
+      result_id: typeof raw.result_id === 'string' ? raw.result_id : '',
+      schema: typeof raw.schema === 'string' ? raw.schema : '',
+      table: typeof raw.table === 'string' ? raw.table : '',
+      identity_policy: typeof raw.identity_policy === 'string' ? raw.identity_policy : 'none',
+      reason: typeof raw.reason === 'string' ? raw.reason : '',
+      can_insert: raw.can_insert === true,
+      can_update: raw.can_update === true,
+      can_delete: raw.can_delete === true,
+      primary_keys: Array.isArray(raw.primary_keys) ? raw.primary_keys.slice() : [],
+      unique_keys: Array.isArray(raw.unique_keys) ? raw.unique_keys.slice() : [],
+      hidden_rowid_index: (typeof raw.hidden_rowid_index === 'number' && isFinite(raw.hidden_rowid_index)) ? raw.hidden_rowid_index : -1,
+      has_top_level_order: raw.has_top_level_order === true,
+      columns: columns
     };
   }
   async function commitPendingEdits() {
@@ -1886,9 +1942,26 @@
               mutationItem.use_rowid = true;
               original['__KAIRO_EDIT_RID__'] = rowidVal;
             }
+            // DBUI-01: 同时提交结果列索引协议。服务端凭 result_id 的不可变
+            // ResultEditContext.Columns 解析物理列，页面显示名不参与物理目标推断；
+            // 名称字段保留给旧服务端/旧客户端回退。
+            if (context.editColumns) {
+              const rowColumns = [];
+              current.columns.forEach(function (c, i) {
+                const cellVal = row[i];
+                if (cellVal === undefined || (cellVal !== null && typeof cellVal === 'object')) return;
+                rowColumns.push({ column_index: i, has_value: true, value: cellVal === null ? null : cellVal });
+              });
+              if (rowColumns.length) mutationItem.row_columns = rowColumns;
+            }
             rows.set(edit.rowIdx, mutationItem);
           }
-          rows.get(edit.rowIdx).values[column.name] = edit.newVal;
+          const target = rows.get(edit.rowIdx);
+          target.values[column.name] = edit.newVal;
+          if (context.editColumns) {
+            if (!target.changes) target.changes = [];
+            target.changes.push({ column_index: edit.colIdx, has_value: true, value: edit.newVal === undefined ? null : edit.newVal });
+          }
         });
         const response = await api('POST', '/api/database/grid', { result_id: context.resultId || '', source_id: source.id, session_id: current.transactionId, schema: schemaToUse, table: context.table, mutations: Array.from(rows.values()), confirm: confirmWrite });
         current.transactionPending = true;
@@ -3145,8 +3218,10 @@
           toast('当前结果属于其他数据源，请在当前数据源重新查询后编辑', 'warn');
           return;
         }
-        if (current.editPlan && !current.editPlan.canUpdate && !current.editPlan.canInsert) {
-          toast(current.editPlan.reason || '当前查询结果不支持网格编辑', 'warn');
+        // DBUI-01: 插入/更新/删除分别判定；只有 can_update 能开启单元格编辑。
+        const plan = normalizeEditPlan(current.editPlan);
+        if (plan && plan.can_update !== true && plan.can_insert !== true) {
+          toast(plan.reason || '当前查询结果不支持网格编辑', 'warn');
           return;
         }
       }
@@ -4888,7 +4963,8 @@
     if (e.type === 'meta') {
       s.columns = e.columns || [];
       s.resultId = e.result_id || '';
-      s.editPlan = e.edit_plan || null;
+      // DBUI-01: 唯一的归一化点，前端不再直接读服务端原始字段。
+      s.editPlan = normalizeEditPlan(e.edit_plan);
       s.gridReady = false;
       if (s.id === state.activeId) { bindSession(s); renderResult(); }
     } else if (e.type === 'rows') {
@@ -4936,7 +5012,7 @@
     } else if (e.type === 'summary') {
       s.summary = e.summary;
       if (e.summary && e.summary.result_id) s.resultId = e.summary.result_id;
-      if (e.summary && e.summary.edit_plan) s.editPlan = e.summary.edit_plan;
+      if (e.summary && e.summary.edit_plan) s.editPlan = normalizeEditPlan(e.summary.edit_plan);
       if (e.summary && e.summary.page) { s.page = e.summary.page; s.pageSize = e.summary.page_size || s.pageSize; }
       const totalTime = s.startTime ? Math.round(performance.now() - s.startTime) : null;
       const firstPacketTime = (s.firstRowsTime && s.startTime) ? Math.round(s.firstRowsTime - s.startTime) : null;

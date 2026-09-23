@@ -46,27 +46,51 @@ type ResultEditContext struct {
 	Reason            string              `json:"reason,omitempty"`
 	HasTopLevelOrder  bool                `json:"has_top_level_order"`
 	CreatedAt         time.Time           `json:"created_at"`
+	// TableFields 服务端元数据确认的目标基表字段（含未投影列的声明类型）。
+	// INSERT 的参数类型绑定依据，不下发给前端（DB-04）。
+	TableFields []Field `json:"table_fields,omitempty"`
+}
+
+// GridEditPlanColumnSummary 是按结果索引关联的只读列绑定摘要（DBUI-01）。
+// 前端据此决定某一格能否编辑并显示原因；是否可写与物理列映射仍由服务器最终校验。
+type GridEditPlanColumnSummary struct {
+	Index          int    `json:"index"`
+	ResultName     string `json:"result_name"`
+	PhysicalName   string `json:"physical_name,omitempty"`
+	Writable       bool   `json:"writable"`
+	ReadOnlyReason string `json:"read_only_reason,omitempty"`
 }
 
 // GridEditPlanSummary 序列化返回给前端的只读能力摘要
 type GridEditPlanSummary struct {
-	ResultID         string   `json:"result_id"`
-	Schema           string   `json:"schema"`
-	Table            string   `json:"table"`
-	IdentityPolicy   string   `json:"identity_policy"` // "pk", "oracle_rowid", "unique", "none"
-	CanInsert        bool     `json:"can_insert"`
-	CanUpdate        bool     `json:"can_update"`
-	CanDelete        bool     `json:"can_delete"`
-	Reason           string   `json:"reason,omitempty"`
-	PrimaryKeys      []string `json:"primary_keys,omitempty"`
-	UniqueKeys       []string `json:"unique_keys,omitempty"`
-	HiddenRowIDIndex int      `json:"hidden_rowid_index,omitempty"`
-	HasTopLevelOrder bool     `json:"has_top_level_order"`
+	ResultID         string                      `json:"result_id"`
+	Schema           string                      `json:"schema"`
+	Table            string                      `json:"table"`
+	IdentityPolicy   string                      `json:"identity_policy"` // "pk", "oracle_rowid", "unique", "none"
+	CanInsert        bool                        `json:"can_insert"`
+	CanUpdate        bool                        `json:"can_update"`
+	CanDelete        bool                        `json:"can_delete"`
+	Reason           string                      `json:"reason,omitempty"`
+	PrimaryKeys      []string                    `json:"primary_keys,omitempty"`
+	UniqueKeys       []string                    `json:"unique_keys,omitempty"`
+	HiddenRowIDIndex int                         `json:"hidden_rowid_index,omitempty"`
+	HasTopLevelOrder bool                        `json:"has_top_level_order"`
+	Columns          []GridEditPlanColumnSummary `json:"columns"`
 }
 
 func (ctx *ResultEditContext) ToSummary() *GridEditPlanSummary {
 	if ctx == nil {
 		return nil
+	}
+	columns := make([]GridEditPlanColumnSummary, 0, len(ctx.Columns))
+	for _, col := range ctx.Columns {
+		columns = append(columns, GridEditPlanColumnSummary{
+			Index:          col.Index,
+			ResultName:     col.ResultName,
+			PhysicalName:   col.PhysicalName,
+			Writable:       col.Writable,
+			ReadOnlyReason: col.ReadOnlyReason,
+		})
 	}
 	return &GridEditPlanSummary{
 		ResultID:         ctx.ResultID,
@@ -81,6 +105,7 @@ func (ctx *ResultEditContext) ToSummary() *GridEditPlanSummary {
 		UniqueKeys:       append([]string(nil), ctx.UniqueKeys...),
 		HiddenRowIDIndex: ctx.HiddenRowIDIndex,
 		HasTopLevelOrder: ctx.HasTopLevelOrder,
+		Columns:          columns,
 	}
 }
 
@@ -925,6 +950,8 @@ func AnalyzeGridQueryWithMetadata(source Source, sessionID, executedSQL string, 
 		}
 	}
 	plan.PrimaryKeys = pkCols
+	// DB-04: 记录目标基表字段元数据（含未投影列），供 INSERT 按声明类型绑定。
+	plan.TableFields = append([]Field(nil), fields...)
 
 	// 读取唯一键约束（Phase 1 备用）
 	var uniqueCols []string
@@ -963,6 +990,10 @@ func AnalyzeGridQueryWithMetadata(source Source, sessionID, executedSQL string, 
 			}
 			if exists {
 				binding.PhysicalName = phys.Name
+				// 声明类型以元数据为准，驱动上报的类型只作兜底（DB-04）。
+				if strings.TrimSpace(phys.DataType) != "" {
+					binding.DataType = phys.DataType
+				}
 				binding.IsPrimaryKey = phys.PrimaryKey
 				binding.IsNullable = phys.Nullable
 				if isUnsupportedLOBType(phys.DataType) {
@@ -999,6 +1030,10 @@ func AnalyzeGridQueryWithMetadata(source Source, sessionID, executedSQL string, 
 				phys, exists := fieldMap[strings.ToUpper(physName)]
 				if exists {
 					binding.PhysicalName = phys.Name
+					// 声明类型以元数据为准，驱动上报的类型只作兜底（DB-04）。
+					if strings.TrimSpace(phys.DataType) != "" {
+						binding.DataType = phys.DataType
+					}
 					binding.IsPrimaryKey = phys.PrimaryKey
 					binding.IsNullable = phys.Nullable
 					if isUnsupportedLOBType(phys.DataType) {
@@ -1017,6 +1052,18 @@ func AnalyzeGridQueryWithMetadata(source Source, sessionID, executedSQL string, 
 		}
 	}
 	plan.Columns = bindings
+
+	// DBUI-01：名称协议下的重复别名/交叉别名无法安全定位目标列，必须整体只读。
+	// 例如 `SELECT SALARY AS ID, ID AS SALARY` 会让值与定位键被解释成别的列。
+	if ambiguity := gridColumnNameAmbiguity(bindings); ambiguity != "" {
+		plan.Reason = ambiguity
+		plan.CanInsert, plan.CanUpdate, plan.CanDelete = false, false, false
+		for i := range plan.Columns {
+			plan.Columns[i].Writable = false
+			plan.Columns[i].ReadOnlyReason = ambiguity
+		}
+		return plan
+	}
 
 	// 判断身份策略 (Identity Policy)
 	if len(pkCols) > 0 {
@@ -1080,12 +1127,98 @@ func AnalyzeGridQueryWithMetadata(source Source, sessionID, executedSQL string, 
 		}
 	}
 
-	// 只要单表物理来源明确，插入无需依赖已有行身份
-	if source.MutationAllowed() && plan.Table != "" {
+	// DBUI-01/DB-06: 行尾隐藏定位列也纳入列绑定摘要，摘要下标与最终行数组下标严格对齐，
+	// 且前端可据此确认“身份载荷确实已经交付”。
+	if plan.IdentityPolicy == "oracle_rowid" && hiddenRowIDIdx >= 0 && hiddenRowIDIdx >= len(plan.Columns) {
+		for len(plan.Columns) < hiddenRowIDIdx {
+			plan.Columns = append(plan.Columns, GridColumnBinding{
+				Index:          len(plan.Columns),
+				Writable:       false,
+				ReadOnlyReason: "结果列缺少服务端绑定",
+			})
+		}
+		plan.Columns = append(plan.Columns, GridColumnBinding{
+			Index:          hiddenRowIDIdx,
+			ResultName:     "__KAIRO_EDIT_RID__",
+			PhysicalName:   "ROWID",
+			DataType:       "VARCHAR2",
+			Writable:       false,
+			ReadOnlyReason: "行尾隐藏定位列（服务端行身份），不参与网格写入",
+		})
+	}
+
+	// 计划级能力必须反映到列级可写性：不能定位单行（不可更新）时，任何列都不可写，
+	// 用户双击时就能看到原因。插入能力独立判定，不参与这里的推导。
+	if !plan.CanUpdate {
+		for i := range plan.Columns {
+			plan.Columns[i].Writable = false
+			if plan.Columns[i].ReadOnlyReason == "" {
+				plan.Columns[i].ReadOnlyReason = plan.Reason
+			}
+		}
+	}
+
+	// DBUI-01: 插入能力必须独立判定，且不能由“单表可解析”推导 ——
+	// 聚合/表达式投影不是可以直接新增行的表格视图，不得放开插入。
+	if source.MutationAllowed() && plan.Table != "" && gridProjectionAllowsInsert(parsed, plan.Columns) {
 		plan.CanInsert = true
 	}
 
 	return plan
+}
+
+// gridColumnNameAmbiguity 检测名称协议的歧义（DBUI-01）：
+//   - 两个结果列名指向不同物理列 → 无法区分目标列；
+//   - 某个结果列名恰好等于“另一个物理列名” → 交叉别名
+//     （如 `SELECT SALARY AS ID, ID AS SALARY`），名称协议会把值与定位键解释成别的列。
+//
+// 返回非空原因表示整个结果集必须只读。
+func gridColumnNameAmbiguity(bindings []GridColumnBinding) string {
+	physNames := make(map[string]bool, len(bindings))
+	for _, binding := range bindings {
+		if name := strings.TrimSpace(binding.PhysicalName); name != "" {
+			physNames[strings.ToUpper(name)] = true
+		}
+	}
+	seen := make(map[string]string, len(bindings))
+	for _, binding := range bindings {
+		resultName := strings.TrimSpace(binding.ResultName)
+		physicalName := strings.TrimSpace(binding.PhysicalName)
+		if resultName == "" || physicalName == "" {
+			continue
+		}
+		key := strings.ToUpper(resultName)
+		if prev, ok := seen[key]; ok && !strings.EqualFold(prev, physicalName) {
+			return fmt.Sprintf("结果列名 %s 同时指向物理列 %s 与 %s，名称协议无法安全定位目标列", resultName, prev, physicalName)
+		}
+		seen[key] = physicalName
+		if !strings.EqualFold(key, strings.ToUpper(physicalName)) && physNames[key] {
+			return fmt.Sprintf("结果列名 %s 是交叉别名（真实来源 %s，同时另有同名列 %s），名称协议会把值与定位键解释成别的列", resultName, physicalName, resultName)
+		}
+	}
+	return ""
+}
+
+// gridProjectionAllowsInsert 判定投影是否只由目标基表的直接物理列组成（DBUI-01）。
+// 通配符查询天然成立；显式投影里只要出现聚合/表达式/常量列，就不开放插入。
+func gridProjectionAllowsInsert(parsed *ParsedGridQuery, bindings []GridColumnBinding) bool {
+	if parsed == nil {
+		return false
+	}
+	if parsed.IsWildcard {
+		return true
+	}
+	if len(parsed.Projections) == 0 {
+		return false
+	}
+	writableProjections := 0
+	for _, binding := range bindings {
+		if strings.TrimSpace(binding.PhysicalName) == "" {
+			return false
+		}
+		writableProjections++
+	}
+	return writableProjections == len(parsed.Projections)
 }
 
 func isUnsupportedLOBType(dataType string) bool {

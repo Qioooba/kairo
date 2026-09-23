@@ -135,74 +135,86 @@ ORDER BY i.index_name, ic.column_position`
 	return foundCols
 }
 
+// ErrRowLocatorNotUnique 表示行特征回查匹配到多行，无法唯一定位。
+// 调用方必须把它当作“请重新查询”而不是“取第一行”。
+var ErrRowLocatorNotUnique = errors.New("匹配到多行，无法唯一定位该行，请重新查询后重试")
+
+// gridLocatorComparable 判断某列是否可以作为受控的可比较快照参与定位比较（DB-07）。
+// LOB / LONG / XMLTYPE 等无法用 = 比较的类型必须排除。
+func gridLocatorComparable(field Field) bool {
+	dataType := strings.ToUpper(strings.TrimSpace(field.DataType))
+	if isLOBType(dataType) || dataType == "LONG" || dataType == "LONG RAW" || dataType == "XMLTYPE" {
+		return false
+	}
+	return true
+}
+
 // ResolveRowIDByKeys 当表无显式主键且客户端未传 ROWID 时，通过行特征键动态回查 Oracle ROWID。
-func (m *Manager) ResolveRowIDByKeys(ctx context.Context, source Source, owner, table string, keys map[string]any, fields []Field) (string, error) {
+//
+// DB-07 的硬性约束：
+//   - 不把“前六个非 NULL 列”当成唯一键：必须使用元数据确认的完整可比较快照，
+//     缺少任何可比较列都拒绝（否则两行可能只在未比较的列上不同）；
+//   - NULL 以 IS NULL 参与比较；
+//   - 最多取 2 行并显式区分 0 / 1 / 多行；多行返回“无法唯一定位”，绝不静默取第一行；
+//   - 若查询属于未提交事务（sessionID 非空），定位必须走同一事务快照。
+func (m *Manager) ResolveRowIDByKeys(ctx context.Context, source Source, owner, table string, keys map[string]any, fields []Field, sessionID string) (string, error) {
 	if source.Kind != KindOracle || len(keys) == 0 || strings.TrimSpace(table) == "" {
 		return "", errors.New("仅支持 Oracle 且需要有效 keys")
 	}
 	owner = strings.ToUpper(strings.TrimSpace(owner))
 	table = strings.ToUpper(strings.TrimSpace(table))
-
-	type candidate struct {
-		name     string
-		priority int
-		val      any
+	if len(fields) == 0 {
+		return "", fmt.Errorf("缺少目标表 %s 的字段元数据，无法确认完整可比较快照，请重新查询", table)
 	}
 
-	fieldMap := make(map[string]Field)
+	fieldMap := make(map[string]Field, len(fields))
+	comparable := make([]string, 0, len(fields))
 	for _, f := range fields {
 		fieldMap[strings.ToUpper(f.Name)] = f
+		if gridLocatorComparable(f) {
+			comparable = append(comparable, f.Name)
+		}
+	}
+	if len(comparable) == 0 {
+		return "", fmt.Errorf("目标表 %s 没有可用于定位的可比较列，请重新查询", table)
 	}
 
-	var candidates []candidate
-	for k, v := range keys {
-		if v == nil || v == "" {
-			continue
-		}
-		kUpper := strings.ToUpper(k)
-		f, hasField := fieldMap[kUpper]
-		if hasField {
-			if isLOBType(f.DataType) || f.DataType == "LONG" || f.DataType == "XMLTYPE" {
-				continue
-			}
-		}
-
-		prio := 10
-		// 优先识别常见 ID、编号、编码列
-		if strings.EqualFold(kUpper, "SEQNO") || strings.EqualFold(kUpper, "ID") || strings.HasSuffix(kUpper, "_ID") || strings.HasSuffix(kUpper, "ID") {
-			prio = 1
-		} else if strings.HasSuffix(kUpper, "_NO") || strings.HasSuffix(kUpper, "NO") || strings.HasSuffix(kUpper, "_SEQ") {
-			prio = 2
-		} else if strings.HasSuffix(kUpper, "_CODE") || strings.HasSuffix(kUpper, "CODE") {
-			prio = 3
-		} else if hasField && (strings.Contains(f.DataType, "VARCHAR") || strings.Contains(f.DataType, "CHAR") || strings.Contains(f.DataType, "NUMBER")) {
-			prio = 4
-		} else if hasField && (strings.Contains(f.DataType, "DATE") || strings.Contains(f.DataType, "TIME")) {
-			prio = 8 // 日期列可能受 NLS 格式影响，降权
-		}
-
-		// 忽略超长文本作为定位条件
-		if s, ok := v.(string); ok && len(s) > 512 {
-			continue
-		}
-
-		candidates = append(candidates, candidate{name: kUpper, priority: prio, val: v})
+	// 只接受服务器已知的物理列；未知键直接拒绝，避免把客户端自由文本拼进 WHERE。
+	whereParts := make([]string, 0, len(comparable))
+	args := make([]any, 0, len(comparable))
+	matched := make(map[string]bool, len(comparable))
+	names := make([]string, 0, len(comparable))
+	for _, col := range comparable {
+		names = append(names, col)
 	}
-
-	if len(candidates) == 0 {
+	sort.Strings(names)
+	for _, col := range names {
+		value, found := findMapValueInsensitive(keys, col)
+		if !found {
+			continue
+		}
+		quoted, qErr := quoteGridIdentifier(KindOracle, col, "列名")
+		if qErr != nil {
+			return "", qErr
+		}
+		if value == nil {
+			whereParts = append(whereParts, quoted+" IS NULL")
+			matched[strings.ToUpper(col)] = true
+			continue
+		}
+		paramName := "kairo_rid" + strconv.Itoa(len(args)+1)
+		whereParts = append(whereParts, quoted+" = :"+paramName)
+		field := fieldMap[strings.ToUpper(col)]
+		args = append(args, sql.Named(paramName, normalizeTypedParam(KindOracle, field.DataType, value)))
+		matched[strings.ToUpper(col)] = true
+	}
+	for _, col := range comparable {
+		if !matched[strings.ToUpper(col)] {
+			return "", fmt.Errorf("行快照不完整（缺少可比较列 %s），无法唯一定位该行，请重新查询", col)
+		}
+	}
+	if len(whereParts) == 0 {
 		return "", errors.New("缺少可用于定位 ROWID 的有效键值")
-	}
-
-	sort.Slice(candidates, func(i, j int) bool {
-		if candidates[i].priority != candidates[j].priority {
-			return candidates[i].priority < candidates[j].priority
-		}
-		return candidates[i].name < candidates[j].name
-	})
-
-	// 选取前 6 个最高优先级的特征键，防止构造过于冗长的 SQL
-	if len(candidates) > 6 {
-		candidates = candidates[:6]
 	}
 
 	tableSQL, err := quoteGridIdentifier(KindOracle, table, "表名")
@@ -218,29 +230,65 @@ func (m *Manager) ResolveRowIDByKeys(ctx context.Context, source Source, owner, 
 		ownerSQL = oq + "."
 	}
 
-	whereParts := make([]string, 0, len(candidates))
-	args := make([]any, 0, len(candidates))
-	for i, c := range candidates {
-		colQ, cerr := quoteGridIdentifier(KindOracle, c.name, "列名")
-		if cerr != nil {
-			return "", cerr
-		}
-		paramName := "kairo_rid" + strconv.Itoa(i+1)
-		whereParts = append(whereParts, colQ+" = :"+paramName)
-		args = append(args, sql.Named(paramName, c.val))
-	}
-
-	querySQL := fmt.Sprintf("SELECT ROWIDTOCHAR(ROWID) FROM %s%s WHERE %s AND ROWNUM <= 1", ownerSQL, tableSQL, strings.Join(whereParts, " AND "))
+	// 最多取 2 行：0 行 -> 未找到；2 行 -> 无法唯一定位（DB-07）。
+	querySQL := fmt.Sprintf("SELECT ROWIDTOCHAR(ROWID) FROM %s%s WHERE %s AND ROWNUM <= 2", ownerSQL, tableSQL, strings.Join(whereParts, " AND "))
 
 	queryCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 
-	var rowID string
-	qerr := m.withSQL(queryCtx, source, func(ctx context.Context, db *sql.DB) error {
-		return db.QueryRowContext(ctx, querySQL, args...).Scan(&rowID)
-	})
-	if qerr != nil || strings.TrimSpace(rowID) == "" {
-		return "", qerr
+	var resolved string
+	runQuery := func(ctx context.Context, q lobQueryer) error {
+		rows, qerr := q.QueryContext(ctx, querySQL, args...)
+		if qerr != nil {
+			return qerr
+		}
+		defer rows.Close()
+		found := make([]string, 0, 2)
+		for rows.Next() {
+			var rowID string
+			if scanErr := rows.Scan(&rowID); scanErr != nil {
+				return scanErr
+			}
+			if strings.TrimSpace(rowID) != "" {
+				found = append(found, strings.TrimSpace(rowID))
+			}
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		switch len(found) {
+		case 0:
+			return errors.New("未找到匹配行，请重新查询后再操作")
+		case 1:
+			resolved = found[0]
+			return nil
+		default:
+			return ErrRowLocatorNotUnique
+		}
 	}
-	return strings.TrimSpace(rowID), nil
+
+	// 有未提交事务时必须在同一事务快照里定位，否则看不到本会话新增/修改的日志（DB-07 第 4 条）。
+	if strings.TrimSpace(sessionID) != "" {
+		entry, entryErr := m.transactionForContext(queryCtx, source, sessionID, false)
+		if entryErr != nil {
+			return "", entryErr
+		}
+		if entry == nil {
+			return "", errors.New("原查询事务已结束，请重新查询后再加载 LOB")
+		}
+		entry.mu.Lock()
+		defer entry.mu.Unlock()
+		if err := runQuery(queryCtx, entry.tx); err != nil {
+			return "", err
+		}
+		return resolved, nil
+	}
+
+	err = m.withSQL(queryCtx, source, func(ctx context.Context, db *sql.DB) error {
+		return runQuery(ctx, db)
+	})
+	if err != nil {
+		return "", err
+	}
+	return resolved, nil
 }

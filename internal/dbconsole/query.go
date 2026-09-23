@@ -832,8 +832,34 @@ func (rs *rowScanner) Scan(rows *sql.Rows) ([]any, int64, error) {
 	if rs.hiddenRowIDIdx >= 0 {
 		values[valIdx] = rs.scanners[rs.hiddenRowIDIdx].value
 		rs.scanners[rs.hiddenRowIDIdx].value = nil
+		// DB-07: 懒加载 LOB 单元格必须携带本次查询的真实行身份，
+		// 否则按需 LOB 只能退回会“猜行”的特征回查。
+		if rowID := gridCellRowIDText(values[valIdx]); rowID != "" {
+			for _, cell := range values[:valIdx] {
+				lob, ok := cell.(map[string]any)
+				if !ok {
+					continue
+				}
+				lazy, _ := lob["lazy"].(bool)
+				if lazy && lob["rowid"] == nil {
+					lob["rowid"] = rowID
+				}
+			}
+		}
 	}
 	return values, fastRowBytes(values), nil
+}
+
+// gridCellRowIDText 把隐藏 ROWID 单元格转成文本（不同驱动可能给 string 或 []byte）。
+func gridCellRowIDText(value any) string {
+	switch v := value.(type) {
+	case string:
+		return strings.TrimSpace(v)
+	case []byte:
+		return strings.TrimSpace(string(v))
+	default:
+		return ""
+	}
 }
 
 func scanRow(rows *sql.Rows, count int, columns []Column, aliasIdx int) ([]any, int64, error) {

@@ -268,10 +268,16 @@ func (s *Server) handleDatabaseLobToken(w http.ResponseWriter, r *http.Request) 
 		if uks := s.database.FindUniqueKeyColumns(r.Context(), source, req.Owner, req.Table, req.Keys); len(uks) > 0 {
 			pkCols = uks
 		} else if len(req.Keys) > 0 {
-			// 若无任何唯一约束（如常规高并发日志表），通过行标量特征键动态向 Oracle 回查物理 ROWID
-			if rowID, rerr := s.database.ResolveRowIDByKeys(r.Context(), source, req.Owner, req.Table, req.Keys, fields); rerr == nil && rowID != "" {
+			// 无任何唯一约束（如常规高并发日志表）时，用完整可比较快照向 Oracle 回查物理 ROWID。
+			// DB-07: 必须在原查询的事务快照里定位（tokenSessionID），多行必须明确报错，
+			// 绝不能静默取第一行。
+			rowID, rerr := s.database.ResolveRowIDByKeys(r.Context(), source, req.Owner, req.Table, req.Keys, fields, tokenSessionID)
+			if rerr == nil && rowID != "" {
 				req.RowID = rowID
 				req.UseRowID = true
+			} else if errors.Is(rerr, dbconsole.ErrRowLocatorNotUnique) {
+				writeErr(w, http.StatusConflict, rerr)
+				return
 			}
 		}
 	}

@@ -67,21 +67,31 @@ func parseSafeSingleTableQuery(query string) (*SingleTableQueryInfo, bool) {
 	if len(tokens) < 4 || !strings.EqualFold(tokens[0], "SELECT") {
 		return nil, false
 	}
-	ident := func(s string) (string, bool) {
-		if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
-			return strings.ReplaceAll(s[1:len(s)-1], "\"\"", "\""), true
+	ident := func(s string) (gridIdentifier, bool) {
+		parsed := parseGridIdentifierToken(KindOracle, s)
+		if !parsed.known() {
+			return gridIdentifier{}, false
 		}
-		if len(s) == 0 || !((s[0] >= 'a' && s[0] <= 'z') || (s[0] >= 'A' && s[0] <= 'Z')) {
-			return "", false
-		}
-		switch strings.ToUpper(s) {
+		switch parsed.Name {
 		case "FROM", "WHERE", "ORDER", "AS", "JOIN", "SELECT", "FOR", "UNION", "GROUP":
-			return "", false
+			return gridIdentifier{}, false
 		}
-		return strings.ToUpper(s), true
+		if !parsed.Quoted {
+			// 未加引号的标识符必须符合 Oracle 标识符词法（显式加引号的才允许任意字符）。
+			for i, r := range parsed.Name {
+				legal := (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '$' || r == '#'
+				if !legal {
+					return gridIdentifier{}, false
+				}
+				if i == 0 && r >= '0' && r <= '9' {
+					return gridIdentifier{}, false
+				}
+			}
+		}
+		return parsed, true
 	}
 	i := 1
-	target := ""
+	target := gridIdentifier{}
 	if tokens[i] == "*" {
 		i++
 	} else {
@@ -102,29 +112,32 @@ func parseSafeSingleTableQuery(query string) (*SingleTableQueryInfo, bool) {
 	if i >= len(tokens) {
 		return nil, false
 	}
-	first, ok := ident(tokens[i])
+	tableIdent, ok := ident(tokens[i])
 	if !ok {
 		return nil, false
 	}
 	i++
-	info := &SingleTableQueryInfo{Table: first}
+	info := &SingleTableQueryInfo{Table: tableIdent.normalized(KindOracle)}
 	if i < len(tokens) && tokens[i] == "." {
 		i++
 		if i >= len(tokens) {
 			return nil, false
 		}
-		info.Schema = first
-		info.Table, ok = ident(tokens[i])
+		info.Schema = tableIdent.normalized(KindOracle)
+		tableIdent, ok = ident(tokens[i])
 		if !ok {
 			return nil, false
 		}
+		info.Table = tableIdent.normalized(KindOracle)
 		i++
 	}
+	var aliasIdent gridIdentifier
 	if i < len(tokens) {
-		info.Alias, ok = ident(tokens[i])
+		aliasIdent, ok = ident(tokens[i])
 		if !ok {
 			return nil, false
 		}
+		info.Alias = aliasIdent.Name
 		i++
 	}
 	if i != len(tokens) {
@@ -133,14 +146,23 @@ func parseSafeSingleTableQuery(query string) (*SingleTableQueryInfo, bool) {
 	if info.Schema == "加载中…" || info.Schema == "加载中..." || info.Schema == "加载失败" || strings.Contains(info.Schema, "加载中") {
 		info.Schema = ""
 	}
-	alias := info.Alias
-	if alias == "" {
-		alias = info.Table
+	// 投影前缀必须与目标表或别名指向同一个对象（DB-01/DB-06：emp 与 "EMP" 相同，
+	// 但 "emp" 是另一个区分大小写的对象，显式引号语义不能丢）。
+	if target.known() {
+		matches := gridIdentifierEqual(KindOracle, target, tableIdent)
+		if !matches && aliasIdent.known() {
+			matches = gridIdentifierEqual(KindOracle, target, aliasIdent)
+		}
+		if !matches {
+			return nil, false
+		}
 	}
-	if target != "" && target != alias {
-		return nil, false
+	// TableAlias 用于拼接物理列前缀，必须按方言规范化（未加引号的别名在 Oracle 中是大写）。
+	qualifier := tableIdent
+	if aliasIdent.known() {
+		qualifier = aliasIdent
 	}
-	info.TableAlias, _ = quoteGridIdentifier(KindOracle, alias, "别名")
+	info.TableAlias, _ = quoteGridIdentifier(KindOracle, qualifier.normalized(KindOracle), "别名")
 	if info.TableAlias == "" {
 		return nil, false
 	}
@@ -372,9 +394,9 @@ func compileLOBProjectedQuery(info *SingleTableQueryInfo, fields []Field) (*LOBR
 
 // lobRowScanner 负责扫描重写后的投影并为 LOB 列构建虚拟单元格与签名 Token
 type lobRowScanner struct {
-	plan        *LOBRewrittenQuery
-	rawScanners []any
-	rawDests    []any
+	plan              *LOBRewrittenQuery
+	rawScanners       []any
+	rawDests          []any
 	sourceID          string
 	sourceFingerprint string
 	dbUser            string
@@ -536,6 +558,13 @@ func (s *lobRowScanner) Scan(rows *sql.Rows) ([]any, int64, error) {
 			"token":         token,
 			"truncated":     false,
 		}
+	}
+
+	// DB-06: 与普通 scanner 返回完全相同的协议 —— 在行尾追加真实 ROWID，
+	// 使编辑计划广告的 hidden_rowid_index 等于最终序列化后的下标。
+	// 只有确实交付了行身份载荷，后端才允许声明可编辑。
+	if s.plan.RowIDColIdx >= 0 {
+		outRow = append(outRow, rowID)
 	}
 
 	return outRow, fastRowBytes(outRow), nil

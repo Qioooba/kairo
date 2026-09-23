@@ -39,6 +39,10 @@ const read = file => fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
 // 2. Test database.js getGridContext and edit behaviors under Phase 0 rules
 {
   const page = read('web/pages/database.js');
+  // DBUI-01 item 5: 不再手写“新旧字段都填上”的 mock。
+  // 这里直接消费 Go 从 ResultEditContext.ToSummary() 真实序列化出的契约 fixture，
+  // 因此 canUpdate 这类真实响应里不存在的 camelCase 字段不可能再掩盖主路径失效。
+  const fixture = JSON.parse(read('tests/fixtures/grid-edit-plan-summary.json'));
   let toasts = [];
   const state = {
     isEditMode: true,
@@ -55,17 +59,10 @@ const read = file => fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
     executedSQL: 'SELECT ID, NAME FROM USERS',
     lastSQL: 'SELECT ID, NAME FROM USERS',
     isEditMode: true,
-    columns: [{ name: 'ID' }, { name: 'NAME' }],
-    rows: [[1, 'Alice']],
-    summary: { ordered: false, result_id: 'res-abc' },
-    editPlan: {
-      result_id: 'res-abc',
-      schema: 'PUBLIC',
-      table: 'USERS',
-      can_update: true,
-      canUpdate: true,
-      primary_keys: ['ID']
-    }
+    columns: [{ name: 'ID' }, { name: 'NAME' }, { name: 'EMAIL' }],
+    rows: [[1, 'Alice', 'a@example.test']],
+    summary: { ordered: false, result_id: fixture.cases.primary_key.result_id },
+    editPlan: JSON.parse(JSON.stringify(fixture.cases.primary_key))
   };
 
   const dbContext = {
@@ -100,7 +97,7 @@ const read = file => fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
   const ctx1 = dbContext.window.getGridContext();
   assert.ok(ctx1, 'context should be non-null');
   assert.strictEqual(ctx1.editable, true, 'single table query without ORDER BY must be editable when PK plan allows');
-  assert.strictEqual(ctx1.resultId, 'res-abc', 'resultId must match query execution');
+  assert.strictEqual(ctx1.resultId, fixture.cases.primary_key.result_id, 'resultId must match query execution');
   assert.strictEqual(ctx1.table, 'USERS');
 
   // Case 2: Source mismatch (current.sourceId !== source.id) -> null
@@ -125,10 +122,8 @@ const read = file => fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
   assert.strictEqual(ctxUnknown.editable, false, 'must be non-editable when previous outcome was unknown');
   mockSession.outcomeUnknown = false;
 
-  // Case 6: Edit plan prohibits update
-  mockSession.editPlan.canUpdate = false;
-  mockSession.editPlan.canInsert = false;
-  mockSession.editPlan.reason = '缺少主键或存在 JOIN';
+  // Case 6: Edit plan prohibits update —— 用真实只读契约样例，不再手改 camelCase 字段
+  mockSession.editPlan = JSON.parse(JSON.stringify(fixture.cases.read_only));
   const ctxNoPlan = dbContext.window.getGridContext();
   assert.strictEqual(ctxNoPlan.editable, false, 'must be non-editable when editPlan disallows');
 
@@ -167,6 +162,8 @@ const read = file => fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
 // 4. Test Phase 1 Oracle hidden ROWID in commitPendingEdits
 (async function testPhase1OracleRowIDCommit() {
   const page = read('web/pages/database.js');
+  // 同样使用真实契约 fixture（oracle_rowid 样例），不再手写 camelCase 别名字段。
+  const fixture = JSON.parse(read('tests/fixtures/grid-edit-plan-summary.json'));
   let sentBody = null;
   const state = {
     isEditMode: true,
@@ -186,17 +183,8 @@ const read = file => fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
     columns: [{ name: 'ID' }, { name: 'NAME' }],
     rows: [[1, 'Alice', 'AAASDMAABAAAL9DAAA']], // Hidden ROWID at index 2
     dirtyCells: { '0_1': { rowIdx: 0, colIdx: 1, newVal: 'Bob' } },
-    summary: { ordered: false, result_id: 'res-ora-1' },
-    editPlan: {
-      result_id: 'res-ora-1',
-      schema: 'SCOTT',
-      table: 'LOG_TABLE',
-      identity_policy: 'oracle_rowid',
-      hidden_rowid_index: 2,
-      can_update: true,
-      canUpdate: true,
-      primary_keys: []
-    }
+    summary: { ordered: false, result_id: fixture.cases.oracle_rowid.result_id },
+    editPlan: JSON.parse(JSON.stringify(fixture.cases.oracle_rowid))
   };
 
   const dbContext = {
@@ -239,7 +227,7 @@ const read = file => fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
 
   await dbContext.window.commitPendingEdits();
   assert.ok(sentBody, 'mutation body must be sent');
-  assert.strictEqual(sentBody.result_id, 'res-ora-1');
+  assert.strictEqual(sentBody.result_id, fixture.cases.oracle_rowid.result_id);
   assert.strictEqual(sentBody.table, 'LOG_TABLE');
   assert.strictEqual(sentBody.mutations.length, 1);
   const mut = sentBody.mutations[0];
@@ -248,6 +236,16 @@ const read = file => fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
   assert.strictEqual(mut.use_rowid, true, 'must flag use_rowid');
   assert.strictEqual(mut.original['__KAIRO_EDIT_RID__'], 'AAASDMAABAAAL9DAAA');
   assert.strictEqual(mut.values['NAME'], 'Bob');
+  // DBUI-01: 同时提交结果列索引协议，服务端据此解析物理列。
+  // 注意 vm 里创建的对象与宿主 realm 原型不同，逐字段断言而不是 deepStrictEqual。
+  assert.ok(Array.isArray(mut.changes), 'must submit result-column index changes');
+  assert.strictEqual(mut.changes[0].column_index, 1);
+  assert.strictEqual(mut.changes[0].has_value, true);
+  assert.strictEqual(mut.changes[0].value, 'Bob');
+  assert.ok(Array.isArray(mut.row_columns), 'must submit row snapshot by result-column index');
+  assert.strictEqual(mut.row_columns[1].column_index, 1);
+  assert.strictEqual(mut.row_columns[1].has_value, true);
+  assert.strictEqual(mut.row_columns[1].value, 'Alice');
   console.log('Phase 1 Oracle ROWID commit test passed');
 })().catch(e => {
   console.error(e);

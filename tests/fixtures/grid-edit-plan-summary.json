@@ -12,7 +12,27 @@
       "can_update": true,
       "can_delete": true,
       "hidden_rowid_index": 2,
-      "has_top_level_order": false
+      "has_top_level_order": false,
+      "columns": [
+        {
+          "index": 0,
+          "result_name": "ID",
+          "physical_name": "ID",
+          "writable": true
+        },
+        {
+          "index": 1,
+          "result_name": "NAME",
+          "physical_name": "NAME",
+          "writable": true
+        },
+        {
+          "index": 2,
+          "result_name": "__KAIRO_EDIT_RID__",
+          "writable": false,
+          "read_only_reason": "隐藏定位列"
+        }
+      ]
     },
     "primary_key": {
       "result_id": "res-contract-pk",
@@ -28,7 +48,27 @@
       "unique_keys": [
         "EMAIL"
       ],
-      "has_top_level_order": false
+      "has_top_level_order": false,
+      "columns": [
+        {
+          "index": 0,
+          "result_name": "ID",
+          "physical_name": "ID",
+          "writable": true
+        },
+        {
+          "index": 1,
+          "result_name": "NAME",
+          "physical_name": "NAME",
+          "writable": true
+        },
+        {
+          "index": 2,
+          "result_name": "EMAIL",
+          "physical_name": "EMAIL",
+          "writable": true
+        }
+      ]
     },
     "read_only": {
       "result_id": "res-contract-ro",
@@ -39,7 +79,15 @@
       "can_update": false,
       "can_delete": false,
       "reason": "缺少主键或存在 JOIN",
-      "has_top_level_order": false
+      "has_top_level_order": false,
+      "columns": [
+        {
+          "index": 0,
+          "result_name": "CNT",
+          "writable": false,
+          "read_only_reason": "聚合表达式列"
+        }
+      ]
     }
   }
 }
