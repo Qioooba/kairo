@@ -1201,6 +1201,11 @@ func gridColumnNameAmbiguity(bindings []GridColumnBinding) string {
 
 // gridProjectionAllowsInsert 判定投影是否只由目标基表的直接物理列组成（DBUI-01）。
 // 通配符查询天然成立；显式投影里只要出现聚合/表达式/常量列，就不开放插入。
+//
+// 只比较前 len(parsed.Projections) 个绑定：plan.Columns 末尾可能被追加"行尾隐藏定位列"
+// （oracle_rowid 的 ROWID，Writable=false，见本文件 DBUI-01/DB-06 段）。把定位列也算进
+// 投影会让 writableProjections 恒比 Projections 多 1，导致无主键表的显式投影列表
+// 永远 CanInsert=false（回归：DB-01/DB-02 的旗舰场景被静默关掉插入能力）。
 func gridProjectionAllowsInsert(parsed *ParsedGridQuery, bindings []GridColumnBinding) bool {
 	if parsed == nil {
 		return false
@@ -1208,17 +1213,16 @@ func gridProjectionAllowsInsert(parsed *ParsedGridQuery, bindings []GridColumnBi
 	if parsed.IsWildcard {
 		return true
 	}
-	if len(parsed.Projections) == 0 {
+	limit := len(parsed.Projections)
+	if limit == 0 || len(bindings) < limit {
 		return false
 	}
-	writableProjections := 0
-	for _, binding := range bindings {
-		if strings.TrimSpace(binding.PhysicalName) == "" {
+	for i := 0; i < limit; i++ {
+		if strings.TrimSpace(bindings[i].PhysicalName) == "" {
 			return false
 		}
-		writableProjections++
 	}
-	return writableProjections == len(parsed.Projections)
+	return true
 }
 
 func isUnsupportedLOBType(dataType string) bool {

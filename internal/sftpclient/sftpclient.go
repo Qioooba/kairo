@@ -1168,6 +1168,33 @@ func parseLsTime(month, day, timeOrYear string) (time.Time, bool) {
 	return time.Time{}, false
 }
 
+// shellNotFound 判定 shell ls 的失败输出是否表示"目标不存在"。
+//
+// 为什么必须分类：写路径与目录创建统一用 errors.Is(err, os.ErrNotExist) 区分
+// "确定不存在（＝允许新建）"与"权限/超时/协议错误（＝必须终止）"（resolve.go 的
+// resolveDir/resolveWritePathCtx/resolveDirectoryForCreate 都依赖这一分类）。
+// shell 后端只能拿到退出码与 stderr，没有 os 级错误码；若原样透传裸错误，
+// 不带 SFTP 子系统、只能走 shell 兜底的老 AIX 主机上，"新建文件/新建目录/改名为新名"
+// 会全部被误判成致命错误而失败（旧实现靠 ReadDir 列表判定不存在，因此没暴露）。
+//
+// 明确排除 Permission denied：把权限错误当成"不存在"会重新引入 OTH-03 的
+// 静默写到另一个物理文件的风险。退出码 126/127（不可执行 / 命令不存在）同样不算。
+func shellNotFound(code int, raw ...string) bool {
+	if code == 126 || code == 127 {
+		return false
+	}
+	joined := strings.ToLower(strings.Join(raw, " "))
+	if strings.TrimSpace(joined) == "" {
+		return false
+	}
+	if strings.Contains(joined, "permission denied") || strings.Contains(joined, "not permitted") {
+		return false
+	}
+	return strings.Contains(joined, "no such file") ||
+		strings.Contains(joined, "does not exist") ||
+		strings.Contains(joined, "cannot access")
+}
+
 // Stat 跑 ls -ld <path> 拿单条目的元信息。
 func (s *shellBackend) Stat(path string) (os.FileInfo, error) {
 	cmd := "ls -ld " + shellQuoteArg(path)
@@ -1176,6 +1203,9 @@ func (s *shellBackend) Stat(path string) (os.FileInfo, error) {
 		return nil, fmt.Errorf("ls -ld 失败: %w", err)
 	}
 	if code != 0 {
+		if shellNotFound(code, stderr) {
+			return nil, &os.PathError{Op: "stat", Path: path, Err: os.ErrNotExist}
+		}
 		return nil, fmt.Errorf("ls -ld 退出码 %d: %s", code, strings.TrimSpace(stderr))
 	}
 	// 输出可能含 "ls: cannot access ..." 之类错误信息（即使 code=0 的边缘情况）
@@ -1183,6 +1213,9 @@ func (s *shellBackend) Stat(path string) (os.FileInfo, error) {
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if strings.HasPrefix(line, "ls:") || strings.HasPrefix(line, "cannot access") {
+			if shellNotFound(0, line) {
+				return nil, &os.PathError{Op: "stat", Path: path, Err: os.ErrNotExist}
+			}
 			return nil, fmt.Errorf("stat %s 失败: %s", path, line)
 		}
 		mode, size, mtime, name, ok := parseLsLine(line)
@@ -1208,6 +1241,9 @@ func (s *shellBackend) ReadDir(path string) ([]os.FileInfo, error) {
 		return nil, fmt.Errorf("ls -la 失败: %w", err)
 	}
 	if code != 0 {
+		if shellNotFound(code, stderr) {
+			return nil, &os.PathError{Op: "readdir", Path: path, Err: os.ErrNotExist}
+		}
 		return nil, fmt.Errorf("ls -la 退出码 %d: %s", code, strings.TrimSpace(stderr))
 	}
 	infos, _, err := s.parseLsLa(stdout)

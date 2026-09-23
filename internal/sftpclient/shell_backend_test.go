@@ -2,6 +2,7 @@ package sftpclient
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os"
 	"strings"
@@ -210,18 +211,83 @@ func TestShellBackend_Stat_Parses(t *testing.T) {
 	}
 }
 
-// TestShellBackend_Stat_ErrorMessage 验证 stderr 信息出现在错误里。
+// TestShellBackend_Stat_MissingTargetIsNotExist 验证"目标不存在"被归类为
+// os.ErrNotExist（各家 ls 的缺省文案）。
+//
+// 这是 shell 兜底主机（无 SFTP 子系统的老 AIX）能新建文件/目录的前提：
+// resolve.go 的 resolveDir/resolveWritePathCtx/resolveDirectoryForCreate
+// 全部用 errors.Is(err, os.ErrNotExist) 区分"确定不存在＝允许新建"与
+// "权限/协议错误＝必须终止"。裸错误会让新建操作全部失败。
+func TestShellBackend_Stat_MissingTargetIsNotExist(t *testing.T) {
+	cases := []struct {
+		name   string
+		stderr string
+		code   int
+	}{
+		{name: "GNU ls", stderr: "ls: cannot access '/nope': No such file or directory", code: 2},
+		{name: "BusyBox ls", stderr: "ls: /nope: No such file or directory", code: 1},
+		{name: "AIX ls", stderr: "ls: 0653-341 The file /nope does not exist.", code: 2},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fakeRun := func(ctx context.Context, cmd string, timeout time.Duration, encoding string) (string, string, int, error) {
+				return "", tc.stderr, tc.code, nil
+			}
+			sb := &shellBackend{run: fakeRun}
+			_, err := sb.Stat("/nope")
+			if err == nil {
+				t.Fatal("应报错")
+			}
+			if !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("缺省路径必须归类为 os.ErrNotExist，得到: %v", err)
+			}
+			var perr *os.PathError
+			if !errors.As(err, &perr) || perr.Path != "/nope" {
+				t.Fatalf("应带路径信息的 *os.PathError，得到: %#v", err)
+			}
+		})
+	}
+}
+
+// TestShellBackend_Stat_ErrorMessage 验证非缺省错误（权限/协议）仍原样保留 stderr 诊断，
+// 且**不得**被误判成 os.ErrNotExist —— 否则权限错误会被当成"可以新建"，
+// 重演 OTH-03 的静默写到另一个物理文件。
 func TestShellBackend_Stat_ErrorMessage(t *testing.T) {
 	fakeRun := func(ctx context.Context, cmd string, timeout time.Duration, encoding string) (string, string, int, error) {
-		return "", "ls: cannot access '/nope': No such file", 1, nil
+		return "", "ls: cannot access '/nope': Permission denied", 2, nil
 	}
 	sb := &shellBackend{run: fakeRun}
 	_, err := sb.Stat("/nope")
 	if err == nil {
 		t.Fatal("应报错")
 	}
-	if !strings.Contains(err.Error(), "cannot access") {
+	if errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("权限错误不得归类为 os.ErrNotExist: %v", err)
+	}
+	if !strings.Contains(err.Error(), "Permission denied") {
 		t.Errorf("错误信息应包含 stderr: %v", err)
+	}
+}
+
+// TestShellBackend_ReadDir_MissingTargetIsNotExist 验证 ReadDir 同样分类，
+// 且命令不存在（127）不算"目录不存在"。
+func TestShellBackend_ReadDir_MissingTargetIsNotExist(t *testing.T) {
+	sb := &shellBackend{run: func(ctx context.Context, cmd string, timeout time.Duration, encoding string) (string, string, int, error) {
+		return "", "ls: /nope: No such file or directory", 2, nil
+	}}
+	if _, err := sb.ReadDir("/nope"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("缺失目录必须归类为 os.ErrNotExist，得到: %v", err)
+	}
+
+	noLs := &shellBackend{run: func(ctx context.Context, cmd string, timeout time.Duration, encoding string) (string, string, int, error) {
+		return "", "sh: ls: not found", 127, nil
+	}}
+	_, err := noLs.Stat("/nope")
+	if err == nil {
+		t.Fatal("应报错")
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("ls 命令本身缺失（127）不得被当成路径不存在: %v", err)
 	}
 }
 

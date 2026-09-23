@@ -26,6 +26,9 @@
   // 左列窄于此值时编辑器工具栏切换为三行紧凑排布（复用 ≤1100px 视口的既有排布）。
   const NARROW_EDITOR_W = 1000;
   const SPLIT_MIN_WORKSPACE = 1000; // 可用工作区宽度低于此值时左右分栏不可用，自动按上下布局显示
+  // 左右布局下 .db-main 的两条 8px 列间距 + 6px 分隔条轨道，都必须从可用宽度里扣掉，
+  // 否则夹紧边界处三列总宽会超出容器约 16px（结果列被裁切）。
+  const LAYOUT_TRACKS_EXTRA = 6 + 16;
 
   function isLargeSQL(text) {
     if (!text) return false;
@@ -509,6 +512,14 @@
       state.source = found;
       const sel = q('db-source');
       if (sel) sel.value = found.id;
+      renderWorkspace(true);
+      return;
+    }
+    // 孤儿视图里点“＋ 页签”/切到同源页签时，当前 DOM 仍是孤儿面板（只有 #db-sql，
+    // 没有 #db-main/#db-run/#db-results-section）：restoreSessionChrome 只会把 SQL
+    // 写进孤儿 textarea，新页签表面“已激活”却无法执行任何查询，面板也仍写着
+    // “原数据源已删除”。必须先重建完整工作区（无数据源时会正确落到空状态页）。
+    if (!q('db-main') && q('db-workspace')) {
       renderWorkspace(true);
       return;
     }
@@ -3791,7 +3802,7 @@
 
   function editorColEdges(total) {
     const min = EDITOR_COL_MIN;
-    const max = Math.max(min, Math.min(EDITOR_COL_MAX, total - 6 - RESULT_COL_MIN));
+    const max = Math.max(min, Math.min(EDITOR_COL_MAX, total - LAYOUT_TRACKS_EXTRA - RESULT_COL_MIN));
     return { min: min, max: max };
   }
 
@@ -3855,11 +3866,12 @@
     if (layout) layout.classList.toggle('is-columns', columns);
 
     if (columns) {
+      // 容器宽度变化只做"显示层夹紧"：persisted.editor_col_width 保留用户拖出来的宽度，
+      // 否则临时把窗口拖窄就会把用户设定永久改成窄边界的值，窗口拉回来也回不去。
+      // （用户主动拖动/双击/键盘调整走 setEditorColumnWidth，那里才写 persisted。）
       const edges = editorColEdges(total);
-      let width = Number(persisted.editor_col_width) || 0;
-      if (!width) width = Math.round(total * EDITOR_COL_DEFAULT_RATIO);
-      width = Math.round(Math.max(edges.min, Math.min(edges.max, width)));
-      persisted.editor_col_width = width;
+      const desired = Number(persisted.editor_col_width) || Math.round(total * EDITOR_COL_DEFAULT_RATIO);
+      const width = Math.round(Math.max(edges.min, Math.min(edges.max, desired)));
       setCssVar(main, '--db-editor-col-w', width + 'px');
       updateEditorNarrowState(true, width);
     } else {
@@ -3882,7 +3894,9 @@
   }
 
   // 左右布局下让工作区正好占满视口：页面不滚动，编辑器与结果各自内部滚动。
-  // 依据工作区在文档中的真实位置计算，避免写死 topbar/内边距高度在不同主题下失准。
+  // 用元素在**视口**中的真实位置计算（rect.top 已经是视口坐标，再加 window.scrollY
+  // 会把滚动偏移多扣一次，工作区会短掉 scrollY）；top 负数（已滚过元素顶部）时按 0 处理，
+  // 高度上限压在视口内，避免越滚越高。
   function applyColumnsHeight() {
     const layout = q('db-sql-layout');
     if (!layout) return;
@@ -3891,10 +3905,9 @@
       return;
     }
     const rect = layout.getBoundingClientRect ? layout.getBoundingClientRect() : null;
-    const scrollY = typeof window.scrollY === 'number' ? window.scrollY : 0;
     const viewport = (typeof window.innerHeight === 'number' && window.innerHeight) || 900;
-    const topDoc = (rect ? rect.top : 0) + scrollY;
-    const height = Math.max(560, Math.round(viewport - topDoc - 24));
+    const top = Math.max(0, Math.round(rect ? rect.top : 0));
+    const height = Math.max(560, Math.min(viewport - 24, viewport - top - 24));
     layout.style.height = height + 'px';
   }
 
@@ -3968,12 +3981,25 @@
     const splitter = q('db-split-panes');
     if (!splitter) return;
     const hint = q('db-split-panes-hint');
+    // 提示的自动隐藏计时器只允许存在一个：双击/键盘调整后遗留的 700ms 计时器
+    // 若在新一轮拖动期间触发，会让宽度提示在拖动中途消失（虽然下一次 move 会重新
+    // 显示，但用户会看到闪断）。showHint 必须取消未决计时器。
+    let hintTimer = 0;
+    const hideHint = function () {
+      if (hintTimer) { clearTimeout(hintTimer); hintTimer = 0; }
+      if (hint) hint.hidden = true;
+    };
     const showHint = function (text) {
       if (!hint) return;
+      if (hintTimer) { clearTimeout(hintTimer); hintTimer = 0; }
       hint.textContent = text;
       hint.hidden = false;
     };
-    const hideHint = function () { if (hint) hint.hidden = true; };
+    const autoHideHint = function () {
+      if (!hint) return;
+      if (hintTimer) clearTimeout(hintTimer);
+      hintTimer = setTimeout(function () { hintTimer = 0; hideHint(); }, 700);
+    };
 
     splitter.onpointerdown = function (e) {
       if (!isColumnsLayout()) return;
@@ -4010,7 +4036,7 @@
       const edges = editorColEdges(total);
       const next = setEditorColumnWidth(Math.round(total * EDITOR_COL_DEFAULT_RATIO), true);
       showHint(next + ' px');
-      setTimeout(hideHint, 700);
+      autoHideHint();
       if (edges.max < next) toast('已按最小结果宽度夹紧左列宽度', 'warn');
     };
     splitter.onkeydown = function (e) {
@@ -4026,7 +4052,7 @@
       e.preventDefault();
       const next = setEditorColumnWidth(target, true);
       showHint(next + ' px');
-      setTimeout(hideHint, 700);
+      autoHideHint();
     };
   }
 

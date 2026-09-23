@@ -747,13 +747,14 @@ func (s *Server) handleSshSftpDownload(w http.ResponseWriter, r *http.Request) {
 		if len(req.PathIDs) > 0 {
 			pathID = req.PathIDs[i]
 		}
-		identity, display, perr := sftpRequestPath(pathID, p, p)
+		// 注意：/api/ssh/sftp/* 命名空间**不校验** app.free_file_roots（本文件头、
+		// httpserver.go 路由注释与 handlers_ssh_sftp_upload.go 都明确了这一契约：
+		// 用户在 SSH 终端本就能 cd 到任意路径，访问控制由 SSH 账号权限承担）。
+		// 这里曾一度加上白名单校验，结果是默认配置 free_file_roots: [] 时
+		// 整个 SSH 文件浏览器下载 100% 403，且与同命名空间的 list/preview 行为不一致。
+		identity, _, perr := sftpRequestPath(pathID, p, p)
 		if perr != nil {
 			writeErr(w, 400, perr)
-			return
-		}
-		if !cur.App.FreeFileRootsEnabled(display) {
-			writeErr(w, 403, fmt.Errorf("path %q 不在 app.free_file_roots 白名单中", display))
 			return
 		}
 		if identity != p {

@@ -510,10 +510,21 @@ function register(runner, ctx) {
       await runner.screenshot(page, '14-database-07-v2-semantics');
     });
 
-    runner.it('左右分栏布局：切换、拖动、刷新记忆与窄屏自动降级', async function () {
-      if (!(await page.$('#db-sql'))) return;
+    runner.it('左右分栏布局：切换、拖动、刷新记忆与窄屏自动降级', async function (testCtx) {
+      // 前置条件必须显式失败：早期写法用 `if (!(await page.$('#db-sql'))) return;`，
+      // 结果是"工作台没渲染"时整条用例被判为 PASS（runner 里 return 等于通过），
+      // 恰好把本用例要证明的东西全跳过。helpers.requireElement 就是为此提供的。
+      const helpers = (testCtx && testCtx.helpers) || (ctx && ctx.helpers);
+      if (helpers && typeof helpers.requireElement === 'function') {
+        await helpers.requireElement(page, '#db-sql', '左右分栏用例需要已配置数据源的数据库工作台（#db-sql 未渲染）');
+      } else if (!(await page.$('#db-sql'))) {
+        throw new Error('左右分栏用例需要已配置数据源的数据库工作台（#db-sql 未渲染）');
+      }
       if (!(await page.$('#db-layout-toggle'))) throw new Error('缺少布局切换按钮 #db-layout-toggle');
       if (!(await page.$('#db-split-panes'))) throw new Error('缺少左右分栏分隔条 #db-split-panes');
+      // 本用例会改视口，必须还原：runner 用同一个 page 跑全部用例，且截图/trace/
+      // run-metadata 都按启动视口（1366x900）命名，不还原会让后续用例的产物标签失真。
+      const originalViewport = page.viewportSize();
 
       const readState = function () {
         return page.evaluate(function () {
@@ -643,7 +654,7 @@ function register(runner, ctx) {
         st = await readState();
         if (!st.columns || !st.sideBySide) throw new Error('恢复宽屏后应回到左右布局: ' + JSON.stringify(st));
       } finally {
-        // 清理：把布局偏好复位为上下布局，避免影响其他用例（例如 43 号编辑器高度同步）。
+        // 清理 1：把布局偏好复位为上下布局，避免影响其他用例（例如 43 号编辑器高度同步）。
         try {
           const stillColumns = await page.evaluate(function () {
             const m = document.getElementById('db-main');
@@ -654,6 +665,10 @@ function register(runner, ctx) {
             await page.waitForTimeout(400);
           }
         } catch (_) { /* 清理失败不影响断言结果 */ }
+        // 清理 2：还原启动视口，避免后续用例与产物标签（截图/trace/run-metadata）失真。
+        try {
+          if (originalViewport) await page.setViewportSize(originalViewport);
+        } catch (_) { /* 同上 */ }
       }
     });
   });
