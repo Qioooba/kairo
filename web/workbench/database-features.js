@@ -1509,13 +1509,22 @@
     const bar = root.querySelector('.db-editor-bar');
     if (!bar || bar.dataset.dbFeaturesBound === '1') return;
     bar.dataset.dbFeaturesBound = '1';
-    const tools = root.querySelector('.db-bar-tools-group') || bar;
-    const quick = document.createElement('span'); quick.className = 'db-pro-quick-actions';
-    quick.appendChild(createQuickButton('db-pro-find-button', '查找', '查找 SQL（Ctrl+F）', function () { openFindReplace(false); }));
-    quick.appendChild(createQuickButton('db-pro-open-button', '打开', '打开 SQL 文件（Ctrl+O）', openSQLInput));
-    quick.appendChild(createQuickButton('db-pro-save-button', '保存', '保存 SQL（Ctrl+S）', function () { saveSQL(false); }));
-    tools.appendChild(quick);
+    // 按用户要求重排：查找/打开收进“更多”面板，保存放在第一行回滚按钮右侧。
+    // 注意“更多”面板在 database.js 的模板里就有，这里只往里追加按钮（保持既有 id 与处理器不变）。
     const panel = root.querySelector('.db-toolbar-more-panel');
+    const trans = root.querySelector('.db-bar-trans-group') || bar;
+    const saveButton = createQuickButton('db-pro-save-button', '保存', '保存 SQL（Ctrl+S）', function () { saveSQL(false); });
+    saveButton.className = 'btn db-pro-button';
+    trans.appendChild(saveButton);
+    if (panel) {
+      const quickSection = document.createElement('div');
+      quickSection.className = 'db-more-section db-pro-quick-section';
+      quickSection.innerHTML = '<div class="db-more-title">脚本文件</div><div class="db-more-row"></div>';
+      const quickRow = quickSection.querySelector('.db-more-row');
+      quickRow.appendChild(createQuickButton('db-pro-find-button', '查找', '查找 SQL（Ctrl+F）', function () { openFindReplace(false); }));
+      quickRow.appendChild(createQuickButton('db-pro-open-button', '打开', '打开 SQL 文件（Ctrl+O）', openSQLInput));
+      panel.appendChild(quickSection);
+    }
     if (panel) {
       const section = document.createElement('div'); section.className = 'db-more-section db-pro-tools-section';
       section.innerHTML = '<div class="db-more-title">脚本、参数与工作台</div><div class="db-pro-action-grid"></div>';

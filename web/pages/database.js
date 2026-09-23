@@ -607,6 +607,8 @@
     });
     if (existing) {
       switchSession(existing.id);
+      // 恢复出来的对象页签可能只有壳：补一次元数据请求（见 renderObjectViewer 的同款守卫）。
+      if (!existing.inspectData && !existing.inspectLoading && !existing.inspectError) loadObjectTabInspect(existing);
       return;
     }
     saveEditorSQL();
@@ -675,6 +677,14 @@
       viewer.innerHTML = '<div class="db-obj-error">' + inlineError('读取失败', s.inspectError) + '<button class="btn btn-xs" id="db-obj-retry">重试</button></div>';
       const retry = q('db-obj-retry');
       if (retry) retry.onclick = () => loadObjectTabInspect(s, true);
+      return;
+    }
+    // 只带壳的对象页签（例如从会话备份恢复出来的 object 页签：inspectData 为空且不在加载中）
+    // 之前会直接渲染成"字段(0)/索引(0)/约束(0)"的空面板且从不发请求，用户必须手点刷新。
+    // 这里补一次自动加载；失败会落到 inspectError 分支，不会反复重试。
+    if (!s.inspectData && !s.inspectLoading && !s.inspectRequested) {
+      s.inspectRequested = true;
+      loadObjectTabInspect(s);
       return;
     }
     const info = s.inspectData || {};
@@ -2541,6 +2551,10 @@
     const host = q('db-manager');
     if (!host) return;
     if (!state.managing) { host.innerHTML = ''; return; }
+    // 管理面板是 position:fixed;inset:0 的整屏遮罩：它会吞掉全屏 pointer events，
+    // 导致面板打开时顶栏的“测试连接/数据源管理/工作台设置”都点不动（旧实现只能靠 Esc 关）。
+    // 点遮罩空白处即关闭（与 Kairo.overlays 的模态一致），点卡片内部不受影响。
+    host.onclick = function (e) { if (e.target === host) closeManager(); };
     const s = edit || { kind: 'oracle', port: 1521, oracle_connect_by: 'service_name', query_timeout_seconds: 30, max_rows: 1000, max_result_bytes: 16777216, max_open_connections: 4, max_idle_connections: 1, connection_max_minutes: 10, tls_mode: 'disabled' };
     host.innerHTML = '<section class="card db-manager" role="dialog" aria-modal="true" aria-labelledby="db-manager-title"><div class="db-manager-head"><div><h3 id="db-manager-title">' + (s.id ? '编辑数据源' : '新建数据源') + '</h3><div class="muted">连接信息保存在系统凭据库；保存后自动关闭。</div></div><div class="db-manager-head-actions"><label class="sr-only" for="db-edit-existing">选择已有数据源</label><select id="db-edit-existing" aria-label="选择已有数据源"><option value="">新建数据源</option>' + state.sources.map(x => '<option value="' + h(x.id) + '"' + (x.id === s.id ? ' selected' : '') + '>' + h(x.name) + '</option>').join('') + '</select><button class="btn btn-xs db-manager-close" id="dbf-close-x" title="关闭" aria-label="关闭数据源管理">' + actionIcon('close') + '</button></div></div><div class="db-form-grid">' + field('名称', 'dbf-name', s.name || '') + selectField('类型', 'dbf-kind', [['oracle', 'Oracle 11g+'], ['mysql', 'MySQL'], ['redis', 'Redis']], s.kind) + field('主机', 'dbf-host', s.host || '') + field('端口', 'dbf-port', s.port || '', 'number') + field('用户名', 'dbf-user', s.username || '') + field(s.has_password ? '密码（留空不改）' : '密码', 'dbf-pass', '', 'password') + '</div><div id="dbf-specific" class="db-form-specific"></div><div class="db-form-grid db-form-limits">' + selectField('TLS', 'dbf-tls', [['disabled', '关闭'], ['preferred', '优先（仅 MySQL）'], ['required', '必须且校验证书'], ['skip-verify', '必须但跳过校验']], s.tls_mode || 'disabled') + field('超时（秒）', 'dbf-timeout', s.query_timeout_seconds || 30, 'number') + field('最大行数', 'dbf-rows', s.max_rows || 1000, 'number') + field('最大连接', 'dbf-open', s.max_open_connections || 4, 'number') + field('空闲连接', 'dbf-idle', s.max_idle_connections == null ? 1 : s.max_idle_connections, 'number') + field('授权用户（逗号；*=全员）', 'dbf-users', (s.allowed_users || []).join(', ')) + '</div><div class="db-form-grid db-security-grid"><label class="db-field db-pro-inline-check"><span><input id="dbf-read-only" type="checkbox"' + (s.read_only ? ' checked' : '') + '> 服务端只读</span><small>禁止 DML、网格写入与脚本修改</small></label><label class="db-field db-pro-inline-check"><span><input id="dbf-allow-ddl" type="checkbox"' + (s.allow_ddl ? ' checked' : '') + '> 支持 DDL</span><small>允许执行 CREATE / ALTER / DROP / TRUNCATE / COMMENT 及对象设计器</small></label></div><div class="db-form-actions"><button class="btn btn-primary" id="dbf-save">保存并关闭</button><button class="btn" id="dbf-test-draft">测试连接</button>' + (s.id ? '<button class="btn btn-danger" id="dbf-delete">删除</button>' : '') + '<button class="btn" id="dbf-close">取消</button><span class="hint">密码不会写入配置文件或返回页面。</span></div><div id="dbf-test-result" class="dbf-test-result" style="display:none;"></div></section>';
     q('db-edit-existing').onchange = function () { renderManager(state.sources.find(x => x.id === this.value)); };
@@ -3207,8 +3221,6 @@
       + '</div>'
       + '<div class="db-bar-divider"></div>'
       + '<div class="db-bar-group db-bar-tools-group">'
-      + '<button class="btn" id="db-btn-export-sql" title="导出当前页签 SQL 脚本">' + actionIcon('download') + '<span>导出 SQL</span></button>'
-      + '<button class="btn" id="db-explain" title="查看执行计划">' + actionIcon('plan') + '<span>执行计划</span></button>'
       + '<button class="btn" id="db-format" title="格式化 SQL（选区优先/当前语句，Shift+点击格式化全文，Ctrl+Shift+F）">' + actionIcon('format') + '<span>格式化</span></button>'
       + '</div>'
       + '<div class="db-bar-divider"></div>'
@@ -3220,6 +3232,13 @@
       + '<details id="db-toolbar-more" class="db-toolbar-more">'
       + '<summary class="db-toolbar-more-summary" title="扩展工具、收藏与历史">' + actionIcon('more') + '<span>更多</span><span class="db-more-chevron" aria-hidden="true">▾</span></summary>'
       + '<div class="db-toolbar-more-panel">'
+      + '<div class="db-more-section">'
+      + '<div class="db-more-title">脚本与执行</div>'
+      + '<div class="db-more-row">'
+      + '<button class="btn btn-xs" id="db-btn-export-sql" type="button" title="导出当前页签 SQL 脚本">' + actionIcon('download') + '<span>导出 SQL</span></button>'
+      + '<button class="btn btn-xs" id="db-explain" type="button" title="查看执行计划">' + actionIcon('plan') + '<span>执行计划</span></button>'
+      + '</div>'
+      + '</div>'
       + '<div class="db-more-section">'
       + '<div class="db-more-title">SQL 美化</div>'
       + '<div class="db-more-row">'
@@ -5004,7 +5023,12 @@
     // 函数名（`select getCustomerId(...) from dual` 场景）：与表名同池、同权重渲染。
     const routines = (schema && state.schemaRoutineCache && state.schemaRoutineCache[schema]) || [];
     // DOM 仅作兜底补充（例如搜索模式下全量渲染的对象名）。
-    document.querySelectorAll('#db-objects .db-object-name').forEach(function (el) { if (el.textContent) objSet.add(el.textContent); });
+    // 但对象树里展开“函数”文件夹后会把这些名字也渲染进来：若此处再按"对象"加入，
+    // add() 按小写名去重会先占位，函数名就被标成“对象”了 —— 因此跳过已知函数名。
+    const routineNames = new Set(routines.map(function (n) { return String(n).toLowerCase(); }));
+    document.querySelectorAll('#db-objects .db-object-name').forEach(function (el) {
+      if (el.textContent && !routineNames.has(String(el.textContent).toLowerCase())) objSet.add(el.textContent);
+    });
     const fields = ((state.inspect && state.inspect.fields) || []).map(function (f) { return f.name; });
     return { objects: Array.from(objSet), functions: routines, fields: fields, snippets: state.prefs.snippets || [] };
   }
@@ -6332,6 +6356,46 @@
   function copyRow(row, columns) {
     copyDBText(columns.map(i => cellText(state.rows[row][i])).join('\t'), '已复制整行');
   }
+  // 查看内容：可缩放的只读多行弹窗。用于长文本 / JSON / LOB 预览，
+  // 只读取当前网格里的值（不触发查询、不写数据），区块本身支持浏览器原生 resize。
+  function openCellContent(row, column) {
+    const col = state.columns[column];
+    const raw = state.rows[row] ? state.rows[row][column] : null;
+    const text = cellText(raw);
+    const colName = col ? col.name : '列';
+    const type = col ? (col.database_type || col.definition || '') : '';
+    const body = el('div', { class: 'db-cell-viewer' });
+    const meta = el('div', { class: 'db-cell-viewer-meta' },
+      el('span', { text: '第 ' + (row + 1) + ' 行 · ' + colName + (type ? ' · ' + type : '') }),
+      el('span', { class: 'muted', text: (text === '' ? '（NULL / 空值）' : text.length.toLocaleString() + ' 字符') })
+    );
+    const area = el('textarea', {
+      class: 'db-cell-viewer-text mono',
+      spellcheck: 'false',
+      readonly: 'readonly',
+      'aria-label': colName + ' 的完整内容'
+    });
+    area.value = text;
+    body.appendChild(meta);
+    body.appendChild(area);
+    const copyBtn = el('button', { class: 'btn', type: 'button', text: '复制内容' });
+    copyBtn.onclick = () => copyDBText(text, colName + ' 内容已复制');
+    const wrapBtn = el('button', { class: 'btn', type: 'button', text: '自动换行：开' });
+    wrapBtn.onclick = () => {
+      const on = area.classList.toggle('is-wrapped');
+      wrapBtn.textContent = '自动换行：' + (on ? '开' : '关');
+    };
+    const closeBtn = el('button', { class: 'btn btn-primary', type: 'button', text: '关闭' });
+    const footer = el('div', { class: 'editor-footer db-cell-viewer-actions' }, [wrapBtn, copyBtn, closeBtn]);
+    const dlg = Kairo.overlays && Kairo.overlays.modal
+      ? Kairo.overlays.modal({ title: '查看内容 · ' + colName, width: 860, body: body, footer: footer })
+      : null;
+    if (dlg && dlg.el) dlg.el.classList.add('db-cell-viewer-card');
+    closeBtn.onclick = () => { if (dlg && dlg.close) dlg.close(); };
+    setTimeout(function () { area.focus(); }, 30);
+    return false;
+  }
+
   function closeMenus(e) { document.querySelectorAll('.db-popup-menu').forEach(m => { if (!e || !m.contains(e.target)) m.remove(); }); }
   // “更多”是 <details>：点面板外部时应自动收起（原生 details 不会）。
   let toolbarMoreAutoCloseBound = false;
@@ -6373,6 +6437,8 @@
     }
 
     if (row != null) {
+      // 查看内容：长文本/JSON/LOB 预览专用——弹出可缩放的只读多行框（不复制、不改数据）。
+      add('查看内容…', () => openCellContent(row, column == null ? activeCols[0] : column));
       if (isMultiCol) {
         add('复制单元格（TSV）', () => copyDBText(activeCols.map(i => cellText(state.rows[row][i])).join('\t'), '单元格已复制'));
         add('复制为 UPDATE 语句（已选 ' + activeCols.length + ' 列）', () => copyColsAsUpdate(row, activeCols));
