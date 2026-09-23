@@ -139,30 +139,18 @@
     check: '<path d="M5 12.5l4.5 4.5L19 7"/>',
     eraser: '<path d="M7 19h10M5 15l6-6 6 6-3 3H8z"/><path d="M11 9l3-3 5 5-3 3"/>'
   };
-  // 每个动作的主色（PL/SQL Developer / Navicat 风格：彩色小图标比灰描边更好认，
-  // 也不用占用中文按钮的横向宽度）。未列出的动作退回 currentColor。
-  const DB_ACTION_COLORS = {
-    play: '#22a06b', stop: '#e0533d', lock: '#d99a1e', unlock: '#22a06b',
-    commit: '#1f9d55', rollback: '#e0703d', format: '#3f7ad6', more: '#6b7280',
-    download: '#2f80ed', plan: '#e08a1e', grid: '#8b5cf6', star: '#e3a008',
-    trash: '#dc2f2f', copy: '#54617a', columns: '#4f46e5', layoutCols: '#3f7ad6',
-    layoutRows: '#3f7ad6', prev: '#54617a', next: '#54617a', add: '#22a06b',
-    search: '#3f7ad6', insert: '#0f9b8e', refresh: '#54617a', panel: '#54617a',
-    database: '#3f7ad6', folder: '#e3a008', external: '#54617a', close: '#6b7280',
-    record: '#0f9b8e', info: '#54617a',
-    save: '#1f9d55', saveAs: '#2f80ed', script: '#22a06b', replace: '#8b5cf6',
-    tag: '#d99a1e', history: '#2f80ed', link: '#3f7ad6', upload: '#2f80ed',
-    check: '#1f9d55', eraser: '#e0703d'
-  };
-  // 渲染工具图标：默认带"浅色圆角底 + 彩色线条"的小色块（真实工具栏观感）。
-  // opts.plain 只出裸图标（用于需要紧贴文字的场合）。
+  // 工具条图标统一取自 Kairo.icons 的「彩色实心」图标库（icons.js 的 db-* 组），
+  // 与首页工具卡片同一套风格 —— 主形实心 + 深色描边 + 白色高光，颜色写死不随主题变化，
+  // 因此 dark / light / green / hc / xianxia 5 套主题下表现一致（PL/SQL Developer 那种小彩色图片）。
+  // 下面的 DB_ACTION_ICONS 描边图标只作为图标库缺失时的兜底。
   function actionIcon(name, opts) {
     opts = opts || {};
-    const color = opts.color || DB_ACTION_COLORS[name] || 'currentColor';
-    const size = opts.size || 14;
-    const svg = '<svg class="db-action-icon" viewBox="0 0 24 24" width="' + size + '" height="' + size + '" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">' + (DB_ACTION_ICONS[name] || '') + '</svg>';
-    if (opts.plain) return svg;
-    return '<span class="db-ic" style="--ic:' + color + '" aria-hidden="true">' + svg + '</span>';
+    const size = opts.size || 16;
+    const lib = (typeof Kairo !== 'undefined' && Kairo && Kairo.icons) || null;
+    const html = lib && typeof lib.innerHTML === 'function' ? lib.innerHTML('db-' + name, size) : '';
+    if (html) return '<span class="db-ic" aria-hidden="true">' + html + '</span>';
+    const svg = '<svg class="db-action-icon" viewBox="0 0 24 24" width="' + size + '" height="' + size + '" aria-hidden="true" focusable="false" fill="none" stroke="' + (opts.color || 'currentColor') + '" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">' + (DB_ACTION_ICONS[name] || '') + '</svg>';
+    return '<span class="db-ic" aria-hidden="true">' + svg + '</span>';
   }
   // 图标按钮的悬浮中文提示：原生 title 的气泡位置/样式不可控（不能稳定显示在按钮上方），
   // 这里把 title 作为唯一数据源同步到 data-tip，由 CSS 画在按钮正上方；

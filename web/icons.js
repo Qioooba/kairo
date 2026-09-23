@@ -164,7 +164,96 @@
     'section-foldertree': `<path d="M2 4 a1 1 0 0 1 1 -1 h4 l2 2 h6 a1 1 0 0 1 1 1 v3 H2 z" fill="#92400e"/><path d="M2 4 a1 1 0 0 1 1 -1 h4 l2 2 h6 a1 1 0 0 1 1 1 v8 a1 1 0 0 1 -1 1 H3 a1 1 0 0 1 -1 -1 z" fill="#d97706"/><rect x="6" y="11" width="5" height="3.5" rx="0.7" fill="#f59e0b"/><rect x="14" y="11" width="5" height="3.5" rx="0.7" fill="#f59e0b"/><rect x="10" y="16" width="5" height="3.5" rx="0.7" fill="#fbbf24"/><path d="M8.5 11 v1 h3 v1.5" fill="none" stroke="#92400e" stroke-width="0.9"/><path d="M16.5 11 v1 h-3 v1.5" fill="none" stroke="#92400e" stroke-width="0.9"/>`,
   };
 
-  const PATHS = Object.assign({}, TOOLS, THEMES, SECTIONS);
+  // 数据库工作台工具条图标（彩色实心，与工具卡片同一套"B · 彩色实心"风格）
+  //
+  // 设计动机：工具条只显示图标、中文靠悬浮提示，因此图标必须"一眼认得出做什么"。
+  // 描边+浅色底块的版本用户反馈"颜色不好看"，这里回到 PL/SQL Developer / Navicat 那种
+  // 小彩色图片：主形实心填充 + 深色描边 + 白/浅色高光，颜色写死（不随主题变），
+  // 因此 5 套主题（dark / light / green / hc / xianxia）下都保持一致且可读。
+  // 渲染尺寸 16~18px，形状控制在 2~3 块，避免小尺寸糊成一团。
+  const DBACT = {
+    // 执行：绿色播放三角
+    'db-play': `<path d="M6.5 4.2 19.4 12 6.5 19.8z" fill="#22c55e" stroke="#15803d" stroke-width="1.3" stroke-linejoin="round"/><path d="M9.6 8.6v6.8L15.6 12z" fill="#dcfce7" opacity=".65"/>`,
+    // 取消：红色停止方块
+    'db-stop': `<rect x="5.5" y="5.5" width="13" height="13" rx="2.6" fill="#ef4444" stroke="#b91c1c" stroke-width="1.3"/><rect x="8.4" y="8.4" width="4.6" height="4.6" rx="1.2" fill="#fee2e2" opacity=".7"/>`,
+    // 网格编辑关闭：琥珀锁
+    'db-lock': `<path d="M8.6 10.4V7.6a3.4 3.4 0 0 1 6.8 0v2.8" fill="none" stroke="#b45309" stroke-width="2.3" stroke-linecap="round"/><rect x="4.8" y="10.2" width="14.4" height="10" rx="2.4" fill="#f59e0b" stroke="#b45309" stroke-width="1.3"/><circle cx="12" cy="14.4" r="1.6" fill="#78350f"/><rect x="11.3" y="15.2" width="1.4" height="3.2" rx=".7" fill="#78350f"/>`,
+    // 网格编辑开启：绿色开锁
+    'db-unlock': `<path d="M8.6 10.4V7.6a3.4 3.4 0 0 1 6.3-1.7" fill="none" stroke="#15803d" stroke-width="2.3" stroke-linecap="round"/><rect x="4.8" y="10.2" width="14.4" height="10" rx="2.4" fill="#22c55e" stroke="#15803d" stroke-width="1.3"/><circle cx="12" cy="14.4" r="1.6" fill="#14532d"/><rect x="11.3" y="15.2" width="1.4" height="3.2" rx=".7" fill="#14532d"/>`,
+    // 提交：绿色对勾圆
+    'db-commit': `<circle cx="12" cy="12" r="9" fill="#10b981" stroke="#047857" stroke-width="1.3"/><path d="M7.2 12.4l3.3 3.3 6.3-6.9" fill="none" stroke="#ffffff" stroke-width="2.7" stroke-linecap="round" stroke-linejoin="round"/>`,
+    // 回滚：橙色回转箭头（经典 undo 造型）
+    'db-rollback': `<path d="M5 10.2h8.6a5.2 5.2 0 0 1 0 10.4H8.6" fill="none" stroke="#fb923c" stroke-width="3.2" stroke-linecap="round"/><path d="M9.6 4 3.4 9.9l6.2 5.9z" fill="#ea580c" stroke="#9a3412" stroke-width="1.1" stroke-linejoin="round"/>`,
+    // 保存：蓝色软盘
+    'db-save': `<path d="M4.6 3.6h11.9l3.9 3.9v12.9H4.6z" fill="#3b82f6" stroke="#1e40af" stroke-width="1.3" stroke-linejoin="round"/><path d="M4.6 3.6h11.9l3.9 3.9h-15.8z" fill="#1e40af"/><rect x="8" y="3.6" width="5.4" height="5.6" rx=".7" fill="#dbeafe"/><rect x="7.4" y="13" width="9.2" height="7.4" rx=".9" fill="#eff6ff"/>`,
+    // 另存为：蓝色软盘 + 绿色箭头
+    'db-saveAs': `<path d="M3.6 3.6h9.9l3.4 3.4v9.4H3.6z" fill="#3b82f6" stroke="#1e40af" stroke-width="1.3" stroke-linejoin="round"/><rect x="6.4" y="3.6" width="4.4" height="4.6" rx=".6" fill="#dbeafe"/><path d="M17.6 13.4v6.4M14.4 17l3.2 3.2L20.8 17" fill="none" stroke="#22c55e" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>`,
+    // 格式化：靛蓝文本行 + 金色火花
+    'db-format': `<rect x="2.8" y="5" width="12.4" height="2.5" rx="1.25" fill="#6366f1"/><rect x="2.8" y="10.7" width="8.4" height="2.5" rx="1.25" fill="#a5b4fc"/><rect x="2.8" y="16.4" width="12.4" height="2.5" rx="1.25" fill="#6366f1"/><path d="M18.4 3.4l1.3 3.4 3.4 1.3-3.4 1.3-1.3 3.4-1.3-3.4-3.4-1.3 3.4-1.3z" fill="#fbbf24" stroke="#d97706" stroke-width=".8" stroke-linejoin="round"/>`,
+    // 更多：三点
+    'db-more': `<circle cx="5.4" cy="12" r="2" fill="#94a3b8"/><circle cx="12" cy="12" r="2" fill="#94a3b8"/><circle cx="18.6" cy="12" r="2" fill="#94a3b8"/>`,
+    // 网格视图：紫色表格
+    'db-grid': `<rect x="2.8" y="4.4" width="18.4" height="15.2" rx="1.8" fill="#c4b5fd" stroke="#7c3aed" stroke-width="1.4"/><rect x="2.8" y="4.4" width="18.4" height="4" rx="1.8" fill="#7c3aed"/><path d="M11 8.4v11.2M15.9 8.4v11.2M2.8 13.9h18.4" stroke="#7c3aed" stroke-width="1.1" opacity=".75"/>`,
+    // 单行记录：青色卡片 + 白条
+    'db-record': `<rect x="3" y="4.4" width="18" height="15.2" rx="2.2" fill="#22d3ee" stroke="#0e7490" stroke-width="1.4"/><rect x="5.8" y="7.6" width="6" height="8.8" rx="1.1" fill="#ffffff" opacity=".9"/><path d="M13.6 8.2h4.6M13.6 11.5h4.6M13.6 14.8h3.2" stroke="#0e7490" stroke-width="1.5" stroke-linecap="round"/>`,
+    // 执行计划：琥珀色树
+    'db-plan': `<rect x="2.6" y="3.4" width="8.6" height="5.2" rx="1.3" fill="#f59e0b" stroke="#b45309" stroke-width="1.2"/><rect x="13" y="9.4" width="8.4" height="5.2" rx="1.3" fill="#fbbf24" stroke="#b45309" stroke-width="1.2"/><rect x="13" y="15.4" width="8.4" height="5.2" rx="1.3" fill="#fcd34d" stroke="#b45309" stroke-width="1.2"/><path d="M7 8.6v9.4h6M7 13.3h6" fill="none" stroke="#b45309" stroke-width="1.7" stroke-linecap="round"/>`,
+    // 布局：蓝色左右分栏（layoutCols）
+    'db-layoutCols': `<rect x="2.8" y="4.2" width="18.4" height="15.6" rx="2" fill="#bfdbfe" stroke="#2563eb" stroke-width="1.4"/><rect x="2.8" y="4.2" width="7.8" height="15.6" rx="2" fill="#3b82f6"/>`,
+    // 布局：蓝色上下分栏（layoutRows）
+    'db-layoutRows': `<rect x="2.8" y="4.2" width="18.4" height="15.6" rx="2" fill="#bfdbfe" stroke="#2563eb" stroke-width="1.4"/><rect x="2.8" y="4.2" width="18.4" height="7.4" rx="2" fill="#3b82f6"/>`,
+    // 复制：两张纸
+    'db-copy': `<rect x="8.6" y="3.2" width="12" height="14" rx="1.9" fill="#cbd5e1" stroke="#64748b" stroke-width="1.3"/><rect x="3.4" y="6.6" width="12" height="14" rx="1.9" fill="#ffffff" stroke="#475569" stroke-width="1.3"/><path d="M6.2 10.4h7.4M6.2 13.4h7.4M6.2 16.4h4.8" stroke="#94a3b8" stroke-width="1.5" stroke-linecap="round"/>`,
+    // 显示列：靛蓝表格竖列
+    'db-columns': `<rect x="2.8" y="4.4" width="18.4" height="15.2" rx="1.9" fill="#e0e7ff" stroke="#4f46e5" stroke-width="1.4"/><rect x="2.8" y="4.4" width="18.4" height="3.8" rx="1.9" fill="#4f46e5"/><path d="M9.6 8.2v11.4M15.2 8.2v11.4" stroke="#4f46e5" stroke-width="1.5"/>`,
+    // 新增行：绿色加号
+    'db-add': `<circle cx="12" cy="12" r="9" fill="#22c55e" stroke="#15803d" stroke-width="1.3"/><path d="M12 7v10M7 12h10" stroke="#ffffff" stroke-width="2.6" stroke-linecap="round"/>`,
+    // 删除行：红色垃圾桶
+    'db-trash': `<path d="M6.2 7.4h11.6l-1.1 12.4a1.6 1.6 0 0 1-1.6 1.4H8.9a1.6 1.6 0 0 1-1.6-1.4z" fill="#ef4444" stroke="#b91c1c" stroke-width="1.2" stroke-linejoin="round"/><rect x="3.6" y="4" width="16.8" height="2.8" rx="1.4" fill="#b91c1c"/><path d="M9.6 4V2.6h4.8V4" fill="none" stroke="#b91c1c" stroke-width="1.6"/><path d="M10.4 10.6v7M13.6 10.6v7" stroke="#fee2e2" stroke-width="1.5" stroke-linecap="round"/>`,
+    // 应用变更：绿色粗对勾
+    'db-check': `<path d="M3.8 12.6l5.2 5.2L20.4 6.4" fill="none" stroke="#22c55e" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round"/>`,
+    // 清空变更：橙色橡皮
+    'db-eraser': `<path d="M4.4 15 12 7.4a2.1 2.1 0 0 1 3 0l3.6 3.6a2.1 2.1 0 0 1 0 3L13.9 18.6H8z" fill="#fb923c" stroke="#c2410c" stroke-width="1.3" stroke-linejoin="round"/><path d="M13.2 8.4l5.2 5.2" stroke="#c2410c" stroke-width="1.3"/><rect x="3.4" y="19.4" width="17.2" height="2.2" rx="1.1" fill="#9a3412"/>`,
+    // 上一页 / 下一页：钢青箭头
+    'db-prev': `<path d="M15.2 4.6 7 12l8.2 7.4z" fill="#94a3b8" stroke="#475569" stroke-width="1.3" stroke-linejoin="round"/>`,
+    'db-next': `<path d="M8.8 4.6 17 12l-8.2 7.4z" fill="#94a3b8" stroke="#475569" stroke-width="1.3" stroke-linejoin="round"/>`,
+    // 刷新：青绿双弧箭头
+    'db-refresh': `<path d="M19.8 11.6A7.8 7.8 0 0 0 6.2 6.6" fill="none" stroke="#2dd4bf" stroke-width="3" stroke-linecap="round"/><path d="M5.8 2.4v5h5z" fill="#0f766e"/><path d="M4.2 12.4a7.8 7.8 0 0 0 13.6 5" fill="none" stroke="#14b8a6" stroke-width="3" stroke-linecap="round"/><path d="M18.2 21.6v-5h-5z" fill="#0f766e"/>`,
+    // 查找：蓝色放大镜
+    'db-search': `<circle cx="10.4" cy="10.4" r="6.4" fill="#bfdbfe" stroke="#2563eb" stroke-width="2.4"/><path d="M15.4 15.4 20.8 20.8" stroke="#2563eb" stroke-width="3.2" stroke-linecap="round"/>`,
+    // 打开：琥珀文件夹
+    'db-folder': `<path d="M2.8 6.6a2 2 0 0 1 2-2h4l2 2h8.4a2 2 0 0 1 2 2v9.8a2 2 0 0 1-2 2H4.8a2 2 0 0 1-2-2z" fill="#f59e0b" stroke="#b45309" stroke-width="1.3" stroke-linejoin="round"/><path d="M2.8 6.6a2 2 0 0 1 2-2h4l2 2h8.4a2 2 0 0 1 2 2v1.6H2.8z" fill="#d97706"/>`,
+    // 导出：绿色下箭头 + 托盘
+    'db-download': `<path d="M12 3v9.6" stroke="#10b981" stroke-width="3.2" stroke-linecap="round"/><path d="M6.8 9.4 12 14.8l5.2-5.4z" fill="#10b981" stroke="#047857" stroke-width="1.1" stroke-linejoin="round"/><rect x="4.4" y="17.2" width="15.2" height="3.4" rx="1.3" fill="#047857"/>`,
+    // 导入：蓝色上箭头 + 托盘
+    'db-upload': `<path d="M12 20.4V10.8" stroke="#3b82f6" stroke-width="3.2" stroke-linecap="round"/><path d="M6.8 14 12 8.6l5.2 5.4z" fill="#3b82f6" stroke="#1e40af" stroke-width="1.1" stroke-linejoin="round"/><rect x="4.4" y="3.4" width="15.2" height="3.4" rx="1.3" fill="#1e40af"/>`,
+    // 数据库：青色圆柱
+    'db-database': `<ellipse cx="12" cy="5.6" rx="7.6" ry="3.2" fill="#67e8f9" stroke="#0e7490" stroke-width="1.3"/><path d="M4.4 5.6v6.4c0 1.8 3.4 3.2 7.6 3.2s7.6-1.4 7.6-3.2V5.6" fill="#22d3ee" stroke="#0e7490" stroke-width="1.3"/><path d="M4.4 12v6.4c0 1.8 3.4 3.2 7.6 3.2s7.6-1.4 7.6-3.2V12" fill="#06b6d4" stroke="#0e7490" stroke-width="1.3"/>`,
+    // 收藏：金色星
+    'db-star': `<path d="M12 3.2l2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-3-5.6 3 1.1-6.2L3 9.8l6.2-.9z" fill="#fbbf24" stroke="#d97706" stroke-width="1.3" stroke-linejoin="round"/>`,
+    // 历史：紫色文件夹 + 白底时钟（与首页 icons 的 history 同款）
+    'db-history': `<path d="M2.6 7a2 2 0 0 1 2-2h4l2 2h8.4a2 2 0 0 1 2 2v9.6a2 2 0 0 1-2 2H4.6a2 2 0 0 1-2-2z" fill="#8b5cf6" stroke="#6d28d9" stroke-width="1.2" stroke-linejoin="round"/><path d="M2.6 7a2 2 0 0 1 2-2h4l2 2h8.4a2 2 0 0 1 2 2v1.4H2.6z" fill="#7c3aed"/><circle cx="16.8" cy="15.8" r="4.6" fill="#ffffff" stroke="#6d28d9" stroke-width="1.1"/><path d="M16.8 13.2v2.8l2.2 1.4" fill="none" stroke="#7c3aed" stroke-width="1.6" stroke-linecap="round"/>`,
+    // 运行脚本：绿色文件 + 播放三角
+    'db-script': `<path d="M13 2.6H6.6a2 2 0 0 0-2 2v14.8a2 2 0 0 0 2 2h10.8a2 2 0 0 0 2-2V8.8z" fill="#10b981" stroke="#047857" stroke-width="1.3" stroke-linejoin="round"/><path d="M13 2.6v6.2h6.4" fill="#a7f3d0" stroke="#047857" stroke-width="1.1" stroke-linejoin="round"/><path d="M10 12.6l5 3-5 3z" fill="#ffffff"/>`,
+    // 查找替换：紫色双向箭头
+    'db-replace': `<path d="M3.6 8.4h13.2" stroke="#a855f7" stroke-width="3" stroke-linecap="round"/><path d="M13.6 4.6 18 8.4l-4.4 3.8z" fill="#a855f7" stroke="#7e22ce" stroke-width="1"/><path d="M20.4 15.6H7.2" stroke="#c084fc" stroke-width="3" stroke-linecap="round"/><path d="M10.4 11.8 6 15.6l4.4 3.8z" fill="#c084fc" stroke="#7e22ce" stroke-width="1"/>`,
+    // 绑定参数：琥珀标签
+    'db-tag': `<path d="M3.2 12 12 3.2h6.6a2.2 2.2 0 0 1 2.2 2.2V12L12 20.8z" fill="#f59e0b" stroke="#b45309" stroke-width="1.3" stroke-linejoin="round"/><circle cx="16.4" cy="7.6" r="1.7" fill="#fffbeb"/>`,
+    // 大窗口：钢青方框 + 外跳箭头
+    'db-external': `<rect x="3.2" y="3.2" width="12.4" height="12.4" rx="2" fill="#cbd5e1" stroke="#475569" stroke-width="1.3"/><path d="M13 19.4h7.8V11.6" fill="none" stroke="#475569" stroke-width="2.6" stroke-linecap="round"/><path d="M20.8 3.2l-8.6 8.6" stroke="#475569" stroke-width="2.6" stroke-linecap="round"/>`,
+    // 复制链接：青色链环
+    'db-link': `<path d="M10 14.2a4.2 4.2 0 0 0 5.9 0l3-3a4.2 4.2 0 0 0-5.9-5.9l-1.6 1.6" fill="none" stroke="#0ea5e9" stroke-width="2.6" stroke-linecap="round"/><path d="M14 9.8a4.2 4.2 0 0 0-5.9 0l-3 3a4.2 4.2 0 0 0 5.9 5.9l1.6-1.6" fill="none" stroke="#0284c7" stroke-width="2.6" stroke-linecap="round"/>`,
+    // 关闭：红色叉
+    'db-close': `<circle cx="12" cy="12" r="9" fill="#ef4444" stroke="#b91c1c" stroke-width="1.3"/><path d="M8.4 8.4l7.2 7.2M15.6 8.4l-7.2 7.2" stroke="#ffffff" stroke-width="2.4" stroke-linecap="round"/>`,
+    // 说明：蓝色信息圆
+    'db-info': `<circle cx="12" cy="12" r="9" fill="#3b82f6" stroke="#1e40af" stroke-width="1.3"/><circle cx="12" cy="7.8" r="1.4" fill="#ffffff"/><rect x="10.9" y="10.4" width="2.2" height="6.6" rx="1.1" fill="#ffffff"/>`,
+    // 对象栏收起：钢青侧栏
+    'db-panel': `<rect x="3" y="4.2" width="18" height="15.6" rx="2" fill="#e2e8f0" stroke="#475569" stroke-width="1.4"/><rect x="3" y="4.2" width="7" height="15.6" rx="2" fill="#94a3b8"/><path d="M14 9.6 11.4 12l2.6 2.4" fill="none" stroke="#475569" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>`,
+    // INSERT 模板：绿色文件 + 加号
+    'db-insert': `<path d="M12.2 2.6H6.4a2 2 0 0 0-2 2v14.8a2 2 0 0 0 2 2h11.2a2 2 0 0 0 2-2V9z" fill="#10b981" stroke="#047857" stroke-width="1.3" stroke-linejoin="round"/><path d="M12.2 2.6V9h6.6" fill="#a7f3d0" stroke="#047857" stroke-width="1.1" stroke-linejoin="round"/><path d="M9 15.6h6.4M12.2 12.4v6.4" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round"/>`
+  };
+
+  const PATHS = Object.assign({}, TOOLS, THEMES, SECTIONS, DBACT);
 
   function svg(name, size) {
     const inner = PATHS[name];

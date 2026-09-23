@@ -9739,26 +9739,22 @@ body.db-resizing * { cursor: col-resize !important; user-select: none !important
    改为靠紧凑尺寸 + 窄屏隐藏次要信息来保证单排。
    =================================================================== */
 
-/* --- 彩色图标：浅色圆角底 + 主色线条（Navicat / PL/SQL Developer 观感） --- */
+/* --- 彩色实心图标（Navicat / PL/SQL Developer 那种"小彩色图片"） ---
+   图标由 icons.js 的 db-* 组提供：主形实心 + 深色描边 + 白色高光，颜色写死，
+   不随主题变化 —— 因此 5 套主题（dark/light/green/hc/xianxia）下都是同一张"图片"。
+   按钮本体才用主题变量，负责与背景协调。 */
 .db-ic {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 20px;
-  height: 20px;
-  border-radius: 5px;
+  width: 18px;
+  height: 18px;
   flex: 0 0 auto;
-  color: var(--ic, currentColor);
-  background: rgba(128, 128, 128, 0.16);
-  background: color-mix(in srgb, var(--ic, #808080) 16%, transparent);
-  transition: filter .12s ease, background-color .12s ease;
 }
-.db-ic .db-action-icon { width: 13px; height: 13px; }
+.db-ic svg { display: block; width: 16px; height: 16px; }
 .db-ic-btn { padding: 0 !important; gap: 0 !important; }
 /* 图标按钮里的中文标签只服务读屏与 title，不占布局 */
 .db-ic-btn > span:not(.db-ic) { display: none; }
-.db-ic-btn:hover:not(:disabled) .db-ic,
-.db-toolbar-more-summary:hover .db-ic { filter: saturate(1.3) brightness(1.1); }
 
 /* --- 编辑器工具条：固定单排 --- */
 .db-editor-bar {
@@ -9826,11 +9822,25 @@ body.db-resizing * { cursor: col-resize !important; user-select: none !important
 .db-ic-btn:hover:not(:disabled),
 .db-toolbar-more-summary:hover,
 #db-tab-add:hover:not(:disabled) {
-  border-color: var(--primary);
-  background: rgba(128, 128, 128, 0.14);
-  background: color-mix(in srgb, var(--primary) 12%, var(--bg-2));
+  border-color: var(--line-2, var(--line));
+  background: var(--bg-3);
 }
-.db-ic-btn:disabled { opacity: .45; cursor: not-allowed; }
+/* 选中/按下：经典工具条的"凹陷"观感 */
+.db-ic-btn:active:not(:disabled),
+.db-toolbar-more-summary:active,
+#db-tab-add:active:not(:disabled) {
+  background: var(--bg-2);
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, .35) !important;
+}
+/* 禁用：整个图标去色（Windows 工具条的灰化），按钮框仍然可见 */
+.db-ic-btn:disabled { cursor: not-allowed; }
+.db-ic-btn:disabled .db-ic { filter: grayscale(1); opacity: .45; }
+/* 高对比主题：图标本身是彩色图片，这里只把按钮框压成强对比 */
+:root[data-theme="hc"] .db-ic-btn,
+:root[data-theme="hc"] .db-toolbar-more-summary,
+:root[data-theme="hc"] #db-tab-add { border-color: var(--line-2); }
+:root[data-theme="hc"] .db-ic-btn:hover:not(:disabled),
+:root[data-theme="hc"] .db-toolbar-more-summary:hover { background: #003333; }
 
 /* 执行按钮：主色描边强调（不再是绿色中文按钮） */
 .db-editor-bar .db-btn-run { background: var(--bg-2) !important; border-color: rgba(34, 160, 107, .55) !important; border-color: color-mix(in srgb, #22a06b 55%, var(--line)) !important; }
@@ -9899,7 +9909,12 @@ body.db-resizing * { cursor: col-resize !important; user-select: none !important
   align-items: center;
   justify-content: center;
 }
-.db-view-btn.active .db-action-icon { stroke: #fff; }
+.db-view-btn.active {
+  color: var(--text);
+  background: var(--bg-3);
+  box-shadow: inset 0 -2px 0 var(--primary);
+  font-weight: 600;
+}
 .db-result-filter-wrap { flex: 1 1 160px; min-width: 100px; }
 .db-result-filter-wrap input { width: 100%; min-width: 0; height: 26px; min-height: 26px; font-size: 12px; }
 /* 原来的一长串操作提示收成一个 "?" 图标，中文进 title */
