@@ -172,8 +172,8 @@ func FilterHitsByTimeWindow(hits []SearchHit, files []FileEntry, window SearchTi
 }
 
 // illegalKeyKey 只拒绝不能稳定穿过 HTTP / SSH / 文本扫描器的控制字符。
-// 搜索词不再拼进 grep 或 shell 语法，而是统一编码为 \xHH 字节后放入 awk
-// 环境变量；因此引号、斜杠、反引号、$、分号、正则元字符和以 '-' 开头的
+// 搜索词不再拼进 grep 或 shell 语法，而是统一编码为 \0ooo 八进制字节后放入
+// awk 环境变量；因此引号、斜杠、反引号、$、分号、正则元字符和以 '-' 开头的
 // 内容都可以安全地按字面搜索。
 var illegalKeyKey = regexp.MustCompile(`[\x00\n\r\t]`)
 
@@ -183,10 +183,15 @@ var illegalKeyKey = regexp.MustCompile(`[\x00\n\r\t]`)
 //   - 只转"关键词 token"自己，不转 shell 结构、文件路径、&& || ! 等操作符。
 //   - 远端 shell 仍按 UTF-8 解析；只有经过 $(printf %b '...') 展开后的字节流
 //     才会以目标编码出现在 awk 的字面匹配关键词中。
-//   - 输出的全部是 \xHH 形式的 ASCII 字符，注入不到 shell。
+//   - 输出的全部是 \0ooo（POSIX printf %b 的八进制形式）ASCII 字符，注入不到 shell，
+//     也不依赖任何 shell 扩展。
+//   - 不能用 Bash 的 \xHH：POSIX 的 printf %b 只规定 \0ddd 八进制，dash 一类
+//     /bin/sh 要么原样输出字面量 "\xHH"，要么把它当成字符码重新按当前 locale
+//     编码，于是 >= 0x80 的目标编码字节（GBK / UTF-8 中文）会被改写成别的字节，
+//     关键词静默搜不到或搜错。见 OPS-01。
 //
 // 用法：KP_1_1=$(printf %b '<escaped>') awk '...' file1 file2 file3
-// 其中 <escaped> 是本函数返回值，例："\xd0\xc5\xb4\xfb\xcf\xb5\xcd\xb3"（信贷系统 GBK）。
+// 其中 <escaped> 是本函数返回值，例："\0320\0305\0264\0373\0317\0265\0315\0263"（信贷系统 GBK）。
 func ToEncodingEscaped(s string, encoding string) (string, error) {
 	enc, err := pickEncoder(encoding)
 	if err != nil {
@@ -200,11 +205,35 @@ func ToEncodingEscaped(s string, encoding string) (string, error) {
 	if err := w.Close(); err != nil {
 		return "", fmt.Errorf("按 %q 编码失败: %w", encoding, err)
 	}
+	return escapeBytesOctal(buf.Bytes()), nil
+}
+
+// escapeBytesOctal 把字节序列编码成 POSIX printf %b 能还原的纯 ASCII 转义串。
+//
+// 规则：`\0` 前缀 + 固定三位八进制（%03o），每个原始字节一个转义。
+//
+// 为什么必须是八进制而不是 Bash 的 \xHH：
+//   - POSIX 只为 %b 规定了 \0ddd（零到三位八进制）与少量单字符转义，没有 \xHH。
+//   - 实测 dash（MSYS2/Git for Windows 构建）会把 \xd0 当成字符码 U+00D0 再按
+//     当前 locale 编码，输出 c3 90 两个字节；Bash 输出单个 d0。GBK / UTF-8 中文
+//     关键词因此在 dash 下必然搜不到。
+//   - \0ddd 在 dash 与 Bash 下都还原成完全相同的原始字节，所以关键词正确性不再
+//     依赖用户的默认 shell。
+//
+// 只有字节 0 需要特殊处理：%03o 会长出四位数字（\0000）。POSIX 的 %b 最多读三位
+// 八进制数字，严格的实现会把多出来的 "0" 当字面量输出；\000 才是零字节的无歧义写法。
+// （关键词里的 NUL 本来就被 illegalKeyKey 拒收，这里只是保证函数自身可被安全复用。）
+func escapeBytesOctal(b []byte) string {
 	var sb strings.Builder
-	for _, b := range buf.Bytes() {
-		fmt.Fprintf(&sb, `\x%02x`, b)
+	sb.Grow(len(b) * 4)
+	for _, v := range b {
+		if v == 0 {
+			sb.WriteString(`\000`)
+			continue
+		}
+		fmt.Fprintf(&sb, `\0%03o`, v)
 	}
-	return sb.String(), nil
+	return sb.String()
 }
 
 // pickEncoder 根据配置名返回编码器。"utf-8" 等价于"啥也不做"，返回 nop 编码器。
@@ -681,8 +710,9 @@ func buildSearchCommand(dir string, files []string, kw []SearchKeyword, max, tim
 		ig = 1
 	}
 
-	// 构造环境变量前缀：KP_<g>_<t>=$(printf %b '\xHH..')（正 term）/ KN_<g>_<t>（负 term）。
-	// 值先按目标编码转字节再 hex 转义，shell 展开后是原始字节，awk ENVIRON 原样拿到。
+	// 构造环境变量前缀：KP_<g>_<t>=$(printf %b '\0ooo..')（正 term）/ KN_<g>_<t>（负 term）。
+	// 值先按目标编码转字节再八进制转义，shell 展开后是原始字节，awk ENVIRON 原样拿到。
+	// 转义只用 POSIX printf %b 的 \0ddd，不依赖 Bash 的 \xHH 扩展，dash/Bash 结果一致。
 	var envParts []string
 	var nposList, nnegList []string
 	for gi, g := range groups {

@@ -97,7 +97,7 @@ func TestSearchAndNot(t *testing.T) {
 	}
 }
 
-// 关键词全部先编码为 \xHH 字节再放进 awk 环境变量，可打印字符不会参与
+// 关键词全部先编码为 \0ooo 八进制字节再放进 awk 环境变量，可打印字符不会参与
 // shell/awk 语法。只拒绝文本协议不能稳定承载的控制字符。
 func TestSearchInjection(t *testing.T) {
 	rejectedCases := []string{
@@ -211,10 +211,10 @@ func TestSearchGBK(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(esc, "\\xd0\\xc5") {
-		t.Fatalf("GBK 编码 信贷 应以 d0 c5 开头，得到: %s", esc)
+	if !strings.HasPrefix(esc, "\\0320\\0305") {
+		t.Fatalf("GBK 编码 信贷 应以 d0 c5（八进制 \\0320\\0305）开头，得到: %s", esc)
 	}
-	// 把中文 term 编进 search 命令，结构里不应出现 \\xd0 这种转义之外的 raw GBK 字节
+	// 把中文 term 编进 search 命令，结构里不应出现 \\0320 这种转义之外的 raw GBK 字节
 	kw, err := ParseQuery("信贷系统")
 	if err != nil {
 		t.Fatal(err)
@@ -252,7 +252,7 @@ func TestSearchCommand_TermsAreRegexEscapedLiterals(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(c, `\x63\x6f\x6d\x2e`) || strings.Contains(c, "com.example+svc^") {
+	if !strings.Contains(c, `\0143\0157\0155\0056`) || strings.Contains(c, "com.example+svc^") {
 		t.Fatalf("关键词应按字节编码并由 index() 字面匹配: %s", c)
 	}
 }
@@ -283,7 +283,7 @@ func TestSearchCommand_GBKPrintfQuotedInsideShC(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(c, `$(printf %b '\''\x`) {
+	if !strings.Contains(c, `$(printf %b '\''\0`) {
 		t.Fatalf("GBK printf 字节串必须在外层 sh -c 中正确转义: %s", c)
 	}
 }
@@ -672,7 +672,7 @@ func TestUserReport_AngleBracketsInKeyword(t *testing.T) {
 	if err != nil {
 		t.Fatalf("构造 SearchCommand 失败：%v", err)
 	}
-	if !strings.Contains(c, `\x31\x32\x33\x3e`) || strings.Contains(c, "123>") {
+	if !strings.Contains(c, `\0061\0062\0063\0076`) || strings.Contains(c, "123>") {
 		t.Fatalf("尖括号关键词应只以安全字节编码出现：\n%s", c)
 	}
 }
@@ -691,7 +691,7 @@ func TestUserReport_SQLNotEqual(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SearchCommand 失败：%v", err)
 	}
-	if !strings.Contains(c, `\x61\x3c\x3e\x62`) || strings.Contains(c, "a<>b") {
+	if !strings.Contains(c, `\0141\0074\0076\0142`) || strings.Contains(c, "a<>b") {
 		t.Fatalf("'<>' 应只以安全字节编码出现：\n%s", c)
 	}
 }
@@ -711,7 +711,7 @@ func TestUserReport_JavaStackTrace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SearchCommand 失败：%v", err)
 	}
-	if !strings.Contains(c, `\x28\x46\x6f\x6f\x2e`) || strings.Contains(c, "(Foo.java:123)") {
+	if !strings.Contains(c, `\0050\0106\0157\0157\0056`) || strings.Contains(c, "(Foo.java:123)") {
 		t.Fatalf("堆栈关键词应只以安全字节编码出现：\n%s", c)
 	}
 }

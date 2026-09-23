@@ -289,8 +289,8 @@ func TestWindowSearch_GBKCommandStructure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(c, "KP_1_1=$(printf %b") || !strings.Contains(c, `\xd0`) {
-		t.Fatalf("GBK 关键词应转成 \\xHH 字节转义:\n%s", c)
+	if !strings.Contains(c, "KP_1_1=$(printf %b") || !strings.Contains(c, `\0320`) {
+		t.Fatalf("GBK 关键词应转成 \\0ooo 八进制字节转义（POSIX printf %%b）:\n%s", c)
 	}
 	if strings.Contains(c, "信贷系统") {
 		t.Fatalf("GBK 模式下命令不应直接出现 UTF-8 原文:\n%s", c)
