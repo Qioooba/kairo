@@ -603,12 +603,11 @@ func BuildExportTargetPlan(kind, tableName, querySQL string, columns []Column, p
 			return plan, err
 		}
 		if len(items) == 1 && (items[0] == "*" || strings.HasSuffix(items[0], ".*")) {
+			// P2（审核第 8 项）：SELECT * 的结果列名来自结果集元数据，它就是物理列名
+			// （Oracle 对双引号创建的 "note" 也原样返回小写），不能再按"未加引号标识符
+			// 折叠成大写"的规则改写，否则导出脚本会写 SET "NOTE" = ... 并报 ORA-00904。
 			for i, col := range columns {
-				c := strings.Trim(col.Name, `"`+"`")
-				if kind == KindOracle && !isQuotedIdent(col.Name) {
-					c = strings.ToUpper(c)
-				}
-				physicalNames[i] = c
+				physicalNames[i] = strings.Trim(col.Name, `"`+"`")
 			}
 		} else {
 			if len(items) != len(columns) {
@@ -630,12 +629,10 @@ func BuildExportTargetPlan(kind, tableName, querySQL string, columns []Column, p
 			}
 		}
 	} else {
+		// P2（审核第 8 项）：没有查询文本时，列名同样直接来自结果集元数据（真实物理列名），
+		// 不做大小写折叠，避免把 "note" 写成 "NOTE"。
 		for i, col := range columns {
-			c := strings.Trim(col.Name, `"`+"`")
-			if kind == KindOracle && !isQuotedIdent(col.Name) {
-				c = strings.ToUpper(c)
-			}
-			physicalNames[i] = c
+			physicalNames[i] = strings.Trim(col.Name, `"`+"`")
 		}
 	}
 
