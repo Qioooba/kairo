@@ -32,10 +32,10 @@ package endpointclient
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
 	"time"
 )
 
@@ -55,8 +55,14 @@ type Config struct {
 // DefaultTimeout 没填 Timeout 时的默认值
 const DefaultTimeout = 5 * time.Second
 
-// sharedClient 复用连接池, 避免每次 Call 新建 http.Client
-var sharedClient = &http.Client{}
+// sharedClient 复用连接池, 避免每次 Call 新建 http.Client。
+//
+// Transport 额外套一层 guardTransport (见 guard.go): 生产二进制是空操作,
+// 测试二进制里拒绝非回环目标, 防止单元测试静默打到源码硬编码的真实网关。
+// base 用 http.DefaultTransport, 保留代理环境变量等默认行为。
+var sharedClient = &http.Client{
+	Transport: &guardTransport{base: http.DefaultTransport},
+}
 
 // Call POST JSON body 到 cfg 配置的 endpoint, 主备自动切换。
 //
@@ -83,16 +89,19 @@ func Call(cfg Config, body []byte) (*http.Response, error) {
 		timeout = DefaultTimeout
 	}
 
-	// 聚合所有失败信息, 方便一次看到所有问题
-	var errs []string
+	// 聚合所有失败信息, 方便一次看到所有问题。
+	//
+	// 用 errors.Join 而不是字符串拼接: 调用方/测试仍能 errors.Is/As 检查每一跳的
+	// 具体原因 (例如测试护栏的 ErrExternalBlocked、context 超时、URL 解析错)。
+	var errs []error
 	for i, u := range urls {
 		resp, err := doOne(u, cfg.Auth, body, timeout)
 		if err == nil {
 			return resp, nil
 		}
-		errs = append(errs, fmt.Sprintf("[%d/%d] %v", i+1, len(urls), err))
+		errs = append(errs, fmt.Errorf("[%d/%d] %w", i+1, len(urls), err))
 	}
-	return nil, fmt.Errorf("endpointclient: 所有地址都失败: %s", strings.Join(errs, "; "))
+	return nil, fmt.Errorf("endpointclient: 所有地址都失败: %w", errors.Join(errs...))
 }
 
 // buildURLs 返回按 [primary, secondary] 顺序的非空 URL 列表

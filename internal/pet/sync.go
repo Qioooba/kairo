@@ -78,6 +78,45 @@ func InitFromConfig(primary, secondary, auth string, timeout time.Duration) {
 	}
 }
 
+// Endpoints 端点池的一次完整快照 (诊断 / 测试还原用)。
+//
+// 与 InitFromConfig 的"空值不覆盖"不同, SetEndpoints 是**完整覆盖**:
+// 空字符串和零值同样写入, 因此可以用来显式关闭备用端点, 也可以让测试
+// 在注入本地 mock 之后把整池状态完整还原回去。
+//
+// 背景 (QA-01): 源码里 primary / secondary 都硬编码了真实 Java 网关地址,
+// InitFromConfig 无法清空 secondary, 于是"primary 指向本地 mock、secondary
+// 留空"的单元测试在 mock 返 5xx 时仍会切到真实备用上游发请求。测试必须
+// 用 SetEndpoints 同时把两个端点都钉住。
+type Endpoints struct {
+	Primary   string
+	Secondary string
+	Auth      string
+	Timeout   time.Duration
+}
+
+// SetEndpoints 完整覆盖端点池 (空值也生效), 见 Endpoints 说明。
+func SetEndpoints(e Endpoints) {
+	syncMu.Lock()
+	defer syncMu.Unlock()
+	syncPrimary = e.Primary
+	syncSecondary = e.Secondary
+	syncAuth = e.Auth
+	syncTimeout = e.Timeout
+}
+
+// CurrentEndpoints 返回端点池快照, 配合 SetEndpoints 做还原。
+func CurrentEndpoints() Endpoints {
+	syncMu.RLock()
+	defer syncMu.RUnlock()
+	return Endpoints{
+		Primary:   syncPrimary,
+		Secondary: syncSecondary,
+		Auth:      syncAuth,
+		Timeout:   syncTimeout,
+	}
+}
+
 // LeaderboardEntry 服务器榜单条目 (响应里 /api/pet 返回给前端)。
 //
 // 跟 sponsor.Entry 的差别:

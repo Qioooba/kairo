@@ -10,9 +10,9 @@
 
 function register(runner, ctx) {
   const { page, baseUrl } = ctx;
-  const compareRoot = process.env.COMPARE_LAB_ROOT || 'D:\\kairo-test-runtime';
-  const leftFixture = compareRoot + '/compare-左 源';
-  const rightFixture = compareRoot + '/compare-右 源';
+  // QA-02: 与 make-compare-lab.js 共用同一夹具路径解析 (默认 os.tmpdir(), 可用
+  // COMPARE_LAB_ROOT 覆盖), 不再各自写死 D:\kairo-test-runtime。
+  const { left: leftFixture, right: rightFixture } = require('../utils/compare-lab').compareLabPaths();
 
   runner.describe('代码比对', function () {
     runner.beforeAll(function () {
@@ -219,8 +219,8 @@ function register(runner, ctx) {
 
     runner.it('中文路径夹具：测试、比对、覆盖→ 与 ←覆盖', async function () {
       const fs = require('fs');
-      const left = process.env.COMPARE_LAB_ROOT ? leftFixture : 'D:\\kairo-test-runtime\\compare-左 源';
-      const right = process.env.COMPARE_LAB_ROOT ? rightFixture : 'D:\\kairo-test-runtime\\compare-右 源';
+      const left = leftFixture;
+      const right = rightFixture;
       if (!fs.existsSync(left) || !fs.existsSync(right)) {
         throw new Error('缺少比较夹具目录 ' + left);
       }

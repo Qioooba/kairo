@@ -18,6 +18,52 @@ const REPORT_PATH = path.join(RESULTS_DIR, 'report.md');
 
 const BASE_URL = process.env.BASE_URL || 'http://127.0.0.1:18092';
 const HEADLESS = process.env.HEADLESS !== 'false';
+const VIEWPORT = { width: 1366, height: 900 };
+
+/**
+ * readGitMetadata 直接读 .git, 不 spawn git 子进程。
+ *
+ * QA-02 要求截图/报告绑定本次运行的 SHA。用子进程读 git 会在受限沙箱或缺少
+ * git 可执行文件的环境里失败, 所以这里只读文件系统, 读不到就退化为 nosha。
+ */
+function readGitMetadata() {
+  const meta = { sha: '', shortSha: 'nosha', branch: '' };
+  try {
+    const gitDir = path.join(PROJECT_ROOT, '.git');
+    const head = fs.readFileSync(path.join(gitDir, 'HEAD'), 'utf8').trim();
+    let sha = '';
+    if (head.startsWith('ref:')) {
+      const ref = head.slice(4).trim();
+      meta.branch = ref.replace(/^refs\/heads\//, '');
+      const refPath = path.join(gitDir, ref);
+      if (fs.existsSync(refPath)) {
+        sha = fs.readFileSync(refPath, 'utf8').trim();
+      } else {
+        const packedPath = path.join(gitDir, 'packed-refs');
+        if (fs.existsSync(packedPath)) {
+          const line = fs.readFileSync(packedPath, 'utf8')
+            .split('\n')
+            .find((l) => l.endsWith(' ' + ref));
+          if (line) sha = line.split(' ')[0].trim();
+        }
+      }
+    } else {
+      sha = head; // detached HEAD
+    }
+    meta.sha = sha;
+    meta.shortSha = sha ? sha.slice(0, 7) : 'nosha';
+  } catch (e) {
+    // 读不到就保持 nosha, 不影响测试执行
+  }
+  return meta;
+}
+
+/** countTests 递归统计一批 suite 里注册的用例数。 */
+function countTests(suites) {
+  return suites.reduce(function (n, s) {
+    return n + s.tests.length + countTests(s.suites || []);
+  }, 0);
+}
 
 function parseArgs() {
   const args = process.argv.slice(2);
@@ -50,12 +96,31 @@ function ensureDir(dir) {
 async function main() {
   const args = parseArgs();
   const headless = args.headed ? false : HEADLESS;
+  const git = readGitMetadata();
+  const startedAt = new Date().toISOString();
+  const viewportLabel = `${VIEWPORT.width}x${VIEWPORT.height}`;
+
+  const runMeta = {
+    sha: git.sha,
+    shortSha: git.shortSha,
+    branch: git.branch,
+    startedAt: startedAt,
+    baseUrl: BASE_URL,
+    viewport: viewportLabel,
+    browserName: 'chromium',
+    headless: headless,
+    node: process.version,
+    platform: process.platform,
+    grep: args.grep || null,
+  };
 
   console.log('='.repeat(60));
   console.log('Kairo E2E 测试');
   console.log('='.repeat(60));
   console.log('服务地址:', BASE_URL);
   console.log('模式:', headless ? 'headless' : 'headed');
+  console.log('SHA:', runMeta.shortSha, runMeta.branch ? '(' + runMeta.branch + ')' : '');
+  console.log('Viewport:', viewportLabel);
   console.log('');
 
   const svc = await checkService(BASE_URL + '/');
@@ -74,9 +139,10 @@ async function main() {
   const runner = new TestRunner({
     baseUrl: BASE_URL,
     headless: headless,
-    viewport: { width: 1366, height: 900 },
+    viewport: VIEWPORT,
     screenshotsDir: SCREENSHOTS_DIR,
     grep: args.grep,
+    runMeta: runMeta,
   });
 
   console.log('🚀 启动浏览器...');
@@ -146,11 +212,16 @@ async function main() {
     './tests/40-database-write-regression',
     './tests/41-database-backup-real',
     './tests/42-database-deep',
+    './tests/43-sql-editor-large-text',
   ];
 
   console.log('📦 注册测试模块...');
   let registerErrors = 0;
+  // moduleReports 记录每个模块的"发现/注册"情况, 用于报告里区分
+  // "没跑" 和 "跑了且通过" (QA-02)。
+  const moduleReports = [];
   for (const mod of testModules) {
+    const suiteStart = runner.suites.length;
     try {
       const m = require(mod);
       if (typeof m.register === 'function') {
@@ -174,6 +245,15 @@ async function main() {
       registerErrors++;
       console.error('  ✗ ' + mod + ': ' + e.message);
     }
+    const addedSuites = runner.suites.slice(suiteStart);
+    moduleReports.push({
+      module: mod,
+      ok: addedSuites.length > 0,
+      suitesRegistered: addedSuites.length,
+      testsRegistered: countTests(addedSuites),
+      suiteIndexStart: suiteStart,
+      suiteIndexEnd: runner.suites.length,
+    });
   }
 
   if (registerErrors > 0) {
@@ -191,11 +271,42 @@ async function main() {
   console.log('='.repeat(60));
   console.log('测试结果');
   console.log('='.repeat(60));
-  console.log('总用例:', results.summary.total);
+  console.log('总用例(发现):', results.summary.total);
+  console.log('实际执行:', results.summary.executed);
   console.log('通过:', results.summary.passed);
   console.log('失败:', results.summary.failed);
   console.log('跳过:', results.summary.skipped);
   console.log('耗时:', helpers.formatDuration(results.summary.duration));
+  console.log('');
+
+  // 按模块汇总 发现/执行/通过/失败/跳过, 明确区分"没跑"与"跑了且通过"。
+  const resultsByIndex = new Map();
+  for (const suite of results.suites) {
+    resultsByIndex.set(suite.index, suite);
+  }
+  const moduleSummary = moduleReports.map(function (mr) {
+    const agg = { discovered: 0, executed: 0, passed: 0, failed: 0, skipped: 0 };
+    for (let i = mr.suiteIndexStart; i < mr.suiteIndexEnd; i++) {
+      const suite = resultsByIndex.get(i);
+      if (!suite) continue;
+      agg.discovered += suite.summary.total;
+      agg.executed += suite.summary.executed;
+      agg.passed += suite.summary.passed;
+      agg.failed += suite.summary.failed;
+      agg.skipped += suite.summary.skipped;
+    }
+    return Object.assign({}, mr, agg);
+  });
+
+  console.log('按模块统计 (发现/执行/通过/失败/跳过):');
+  for (const m of moduleSummary) {
+    const flag = !m.ok ? '✗ 注册失败' : (m.failed > 0 ? '❌' : (m.executed > 0 ? '✅' : '⏭ 未执行'));
+    console.log(
+      `  ${flag} ${m.module}  ` +
+      `${m.discovered}/${m.executed}/${m.passed}/${m.failed}/${m.skipped}` +
+      `  (注册用例=${m.testsRegistered})`
+    );
+  }
   console.log('');
 
   for (const suite of results.suites) {
@@ -234,6 +345,22 @@ async function main() {
   fs.writeFileSync(consolePath, JSON.stringify(consoleLogs, null, 2));
   fs.writeFileSync(buttonCovPath, JSON.stringify(buttonCoverage, null, 2));
 
+  // QA-02: 运行元数据落盘, 与截图/报告一起构成可复核证据 (SHA+viewport+时间)。
+  const runMetadataPath = path.join(RESULTS_DIR, 'run-metadata.json');
+  fs.writeFileSync(runMetadataPath, JSON.stringify({
+    run: Object.assign({}, runMeta, {
+      finishedAt: new Date().toISOString(),
+      durationMs: results.summary.duration,
+    }),
+    summary: results.summary,
+    noMatch: !!results.noMatch,
+    registerErrors: registerErrors,
+    modules: moduleSummary,
+  }, null, 2));
+  console.log('✅ 运行元数据已生成:', runMetadataPath);
+  console.log('   SHA=' + runMeta.shortSha + ' viewport=' + runMeta.viewport +
+    ' grep=' + (runMeta.grep || '-'));
+
   const reportContent = generateReport({
     ...results,
     buttonCoverage: buttonCoverage,
@@ -257,11 +384,19 @@ async function main() {
   await runner.close();
 
   console.log('');
+  if (results.noMatch) {
+    console.log('❌ --grep "' + runMeta.grep + '" 没有匹配到任何用例 —— 不得视为通过');
+    process.exit(1);
+  }
   if (results.summary.failed > 0) {
     console.log('❌ 有 ' + results.summary.failed + ' 个测试失败');
     process.exit(1);
+  } else if (results.summary.executed === 0) {
+    console.log('❌ 没有任何用例被实际执行 (发现=' + results.summary.total +
+      ', 执行=0) —— 不得视为通过');
+    process.exit(1);
   } else {
-    console.log('🎉 所有测试通过!');
+    console.log('🎉 所有测试通过! (发现 ' + results.summary.total + ', 执行 ' + results.summary.executed + ')');
     process.exit(0);
   }
 }

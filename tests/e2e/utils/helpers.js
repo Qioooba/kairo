@@ -45,6 +45,23 @@ async function takeScreenshot(page, name, dir) {
   return filePath;
 }
 
+/**
+ * requireElement 必须存在的元素 —— 选择器没匹配到就抛错。
+ *
+ * QA-02: 旧用例大量使用 `const el = await page.$(sel); if (!el) return;`,
+ * 页面结构一旦变化, 用例会"零断言通过", 报告里看不出任何异常。
+ * 新增/改造用例一律用本函数: 拿不到元素就是失败, 不允许伪成功。
+ */
+async function requireElement(page, selector, description) {
+  const el = await page.$(selector);
+  if (!el) {
+    throw new Error(
+      `选择器未匹配到元素, 用例不得视为通过: ${description ? description + ' ' : ''}selector=${selector}`
+    );
+  }
+  return el;
+}
+
 async function setTheme(page, theme) {
   await page.evaluate((t) => {
     document.documentElement.setAttribute('data-theme', t);
@@ -742,6 +759,7 @@ async function getPageDomSummary(page) {
 
 module.exports = {
   takeScreenshot,
+  requireElement,
   sanitizeFileName,
   setTheme,
   waitForPageReady,

@@ -1,0 +1,45 @@
+{
+  "_comment": "真实 Go 序列化契约: 由 ResultEditContext.ToSummary() + encoding/json 生成, 请勿手工修改。",
+  "generated_by": "internal/dbconsole/grid_contract_fixture_test.go",
+  "_note": "重新生成: UPDATE_FIXTURES=1 go test ./internal/dbconsole/ -run TestGridEditPlanSummaryContractFixture",
+  "cases": {
+    "oracle_rowid": {
+      "result_id": "res-contract-rid",
+      "schema": "SCOTT",
+      "table": "LOG_TABLE",
+      "identity_policy": "oracle_rowid",
+      "can_insert": true,
+      "can_update": true,
+      "can_delete": true,
+      "hidden_rowid_index": 2,
+      "has_top_level_order": false
+    },
+    "primary_key": {
+      "result_id": "res-contract-pk",
+      "schema": "APP",
+      "table": "USERS",
+      "identity_policy": "pk",
+      "can_insert": true,
+      "can_update": true,
+      "can_delete": true,
+      "primary_keys": [
+        "ID"
+      ],
+      "unique_keys": [
+        "EMAIL"
+      ],
+      "has_top_level_order": false
+    },
+    "read_only": {
+      "result_id": "res-contract-ro",
+      "schema": "APP",
+      "table": "ORDERS",
+      "identity_policy": "none",
+      "can_insert": false,
+      "can_update": false,
+      "can_delete": false,
+      "reason": "缺少主键或存在 JOIN",
+      "has_top_level_order": false
+    }
+  }
+}

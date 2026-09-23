@@ -15,6 +15,11 @@ class TestRunner {
     this.viewport = options.viewport || { width: 1366, height: 900 };
     this.screenshotsDir = options.screenshotsDir || null;
     this.grep = options.grep || null;
+    // runMeta 绑定本次运行的 SHA / viewport / browser, 用于失败截图命名与报告。
+    this.runMeta = options.runMeta || {};
+    this.shortSha = this.runMeta.shortSha || 'nosha';
+    this.viewportLabel = this.runMeta.viewportLabel ||
+      `${this.viewport.width}x${this.viewport.height}`;
 
     this.timeouts = {
       action: options.actionTimeout || 10000,
@@ -214,7 +219,9 @@ class TestRunner {
       name: suite.name,
       tests: [],
       suites: [],
-      summary: { total: 0, passed: 0, failed: 0, skipped: 0 },
+      // discovered=注册后被本次过滤保留的用例数; registered=模块原始注册数;
+      // executed=真正跑过的用例数 (passed+failed, 不含 skip)
+      summary: { total: 0, passed: 0, failed: 0, skipped: 0, executed: 0, registered: suite.tests.length },
     };
 
     if (this.grep && !ancestorMatched) {
@@ -296,7 +303,10 @@ class TestRunner {
 
           try {
             if (ctx.page && this.screenshotsDir) {
-              const safeName = helpers.sanitizeFileName(`${suite.name}-${test.name}`);
+              // 失败截图绑定 SHA + viewport, 避免不同提交/不同分辨率的截图互相覆盖。
+              const safeName = helpers.sanitizeFileName(
+                `${suite.name}-${test.name}-${this.shortSha}-${this.viewportLabel}`
+              );
               const screenshotPath = await helpers.takeScreenshot(ctx.page, safeName, this.screenshotsDir);
               testResult.screenshots.push(screenshotPath);
               this.addScreenshot(screenshotPath);
@@ -317,6 +327,9 @@ class TestRunner {
         this.currentTest = null;
       }
 
+      if (testResult.status === 'passed' || testResult.status === 'failed') {
+        suiteResults.summary.executed++;
+      }
       suiteResults.tests.push(testResult);
     }
 
@@ -330,6 +343,8 @@ class TestRunner {
       suiteResults.summary.passed += subResult.summary.passed;
       suiteResults.summary.failed += subResult.summary.failed;
       suiteResults.summary.skipped += subResult.summary.skipped;
+      suiteResults.summary.executed += subResult.summary.executed;
+      suiteResults.summary.registered += subResult.summary.registered;
     }
 
     for (const hook of suite._afterAll) {
@@ -348,7 +363,8 @@ class TestRunner {
     const page = ctx.page || this.page;
     const results = {
       suites: [],
-      summary: { total: 0, passed: 0, failed: 0, skipped: 0, duration: 0 },
+      noMatch: false,
+      summary: { total: 0, passed: 0, failed: 0, skipped: 0, executed: 0, duration: 0 },
     };
 
     const startTime = Date.now();
@@ -360,14 +376,24 @@ class TestRunner {
       baseUrl: this.baseUrl,
     };
 
-    for (const suite of this.suites) {
+    for (let suiteIndex = 0; suiteIndex < this.suites.length; suiteIndex++) {
+      const suite = this.suites[suiteIndex];
       const suiteResult = await this._runSuite(suite, runCtx);
       if (this.grep && suiteResult.summary.total === 0) continue;
+      // index 保留顶层 suite 的注册序号, 便于把执行结果按模块归属统计 (QA-02)。
+      suiteResult.index = suiteIndex;
       results.suites.push(suiteResult);
       results.summary.total += suiteResult.summary.total;
       results.summary.passed += suiteResult.summary.passed;
       results.summary.failed += suiteResult.summary.failed;
       results.summary.skipped += suiteResult.summary.skipped;
+      results.summary.executed += suiteResult.summary.executed;
+    }
+
+    // QA-02: --grep 一个用例都没匹配上时必须显式标记, 不能输出"全绿"。
+    // 否则选择器/用例改名后, 过滤跑空会被误读成通过。
+    if (this.grep && results.summary.total === 0) {
+      results.noMatch = true;
     }
 
     results.summary.duration = Date.now() - startTime;

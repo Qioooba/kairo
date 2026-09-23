@@ -2,9 +2,10 @@
 const fs = require('fs');
 const path = require('path');
 
-const ROOT = process.env.COMPARE_LAB_ROOT || 'D:\\kairo-test-runtime';
-const LEFT = path.join(ROOT, 'compare-左 源');
-const RIGHT = path.join(ROOT, 'compare-右 源');
+const { compareLabPaths } = require('./utils/compare-lab');
+
+// QA-02: 夹具根目录不再写死 Windows 盘符路径, 与 11-compare-deep.js 共用同一解析入口。
+const { left: LEFT, right: RIGHT } = compareLabPaths();
 
 function writeFile(file, content, mtime) {
   fs.mkdirSync(path.dirname(file), { recursive: true });

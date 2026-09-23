@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"kairo/internal/pet"
 )
@@ -41,6 +42,23 @@ func newTestServerWithPetSkins(t *testing.T, skinsJSON []byte) (*Server, *pet.En
 	t.Cleanup(func() { _ = eng.Close() })
 	srv, _, _, _ := newTestServerWithDependencies(t, Dependencies{Pet: eng})
 	return srv, eng
+}
+
+// pinPetEndpoints 把 pet 端点池完整钉到两个本地 mock, 并在测试结束还原。
+//
+// QA-01: 源码里 primary/secondary 都硬编码了真实 Java 网关, 只覆盖 primary 而让
+// secondary 留空时, mock 返 5xx 会触发主备切换打到真实备用地址。必须两个都钉住,
+// 再用 SetEndpoints 的完整覆盖语义还原整池状态, 避免污染后续测试。
+func pinPetEndpoints(t *testing.T, primary, secondary string) {
+	t.Helper()
+	prev := pet.CurrentEndpoints()
+	t.Cleanup(func() { pet.SetEndpoints(prev) })
+	pet.SetEndpoints(pet.Endpoints{
+		Primary:   primary,
+		Secondary: secondary,
+		Auth:      "dGVzdA==",
+		Timeout:   2 * time.Second,
+	})
 }
 
 // decodeJSON 把响应体解到 map, 失败直接 t.Fatal。
@@ -296,18 +314,25 @@ func TestPetSkin_Locked(t *testing.T) {
 // ---------- /api/pet/sync ----------
 
 // TestPetSync_UpstreamDown 上游不可用 (mock 返 500) → 502 优雅降级 (不 crash, 不泄露 panic)。
-// 端点默认值已硬编码在 pet 包 (跟 sponsor 同款), 这里用 pet.InitFromConfig 指向 mock 覆盖。
+//
+// QA-01: primary 和 secondary 都必须指向本地 mock。端点默认值硬编码在 pet 包
+// (真实 Java 网关), 只设置 primary 时 endpointclient 会在 500 后自动切到真实备用
+// 地址发请求 —— 这正是审查中发生过的意外外发。pinPetEndpoints 负责完整钉住+还原。
 func TestPetSync_UpstreamDown(t *testing.T) {
 	srv, _ := newTestServerWithPet(t)
 	if w := doRequest(srv, "POST", "/api/pet/enable", nil); w.Code != 200 {
 		t.Fatalf("enable: %d", w.Code)
 	}
 
-	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
-	defer up.Close()
-	pet.InitFromConfig(up.URL+"/credit/httpInterface", "", "", 0)
+	defer primary.Close()
+	secondary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer secondary.Close()
+	pinPetEndpoints(t, primary.URL+"/credit/httpInterface", secondary.URL+"/credit/httpInterface")
 
 	w := doRequest(srv, "POST", "/api/pet/sync", nil)
 	if w.Code != 502 {

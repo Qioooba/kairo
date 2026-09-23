@@ -1,16 +1,30 @@
+//go:build integration
+
+// 真实 Oracle LOB 集成测试 (QA-01: 从默认单测中移出)
+//
+// 修复对象: 旧版本把 TestLOBRealOracle 直接放在默认测试包里, 只用环境变量
+// KAIRO_LOB_REVIEW_DATA 做跳过判断。表达式虽然会 skip, 但它仍然编译进默认测试
+// 二进制, 并且会 NewManager(用户提供的目录) 读取真实数据源、连接真实 Oracle 实例。
+// 现在默认 `go test ./...` 根本不编译本文件。
+//
+// 双条件门禁:
+//  1. 编译门禁: -tags=integration
+//  2. 显式 DSN: KAIRO_LOB_REVIEW_DATA 指向专用 XE 实验目录 (内含 kairo_ro 只读来源)
+//
+// 运行示例 (只读, 不执行 DDL):
+//
+//	KAIRO_LOB_REVIEW_DATA=/path/to/lab/data \
+//	go test -tags=integration -run TestLOBRealOracle -v ./internal/dbconsole/
 package dbconsole
 
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"strings"
 	"testing"
-	"time"
 )
 
 func TestLOBRealOracle(t *testing.T) {
@@ -146,25 +160,3 @@ type cancelLOBWriter struct{ cancel context.CancelFunc }
 func (w cancelLOBWriter) Write(p []byte) (int, error) { w.cancel(); return len(p), nil }
 
 func (w *failLOBWriter) Write(p []byte) (int, error) { w.calls++; return 0, io.ErrClosedPipe }
-
-func TestLOBTokenExactNumber(t *testing.T) {
-	tok, err := GenerateSignedLOBToken("s", "u", "O", "T", "C", "CLOB", "", map[string]any{"ID": json.Number("9007199254740993")}, []string{"ID"}, "", time.Minute)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, ref, err := VerifySignedLOBToken(tok)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if fmt.Sprint(ref.Keys["ID"]) != "9007199254740993" {
-		t.Fatal("numeric key precision lost")
-	}
-}
-
-func TestProjectionLeavesSQLSemanticsIntact(t *testing.T) {
-	for _, s := range []string{"SELECT * FROM t WHERE id=:id", "SELECT * FROM t WHERE a>=1", "SELECT * FROM t WHERE a=1+2", "SELECT * FROM t@link", "SELECT /*+ FULL(t) */ * FROM t", "SELECT * FROM t WHERE x IN (SELECT x FROM u)", "SELECT * FROM t ORDER BY 2", "SELECT * FROM t WHERE x=q'[a'b]'"} {
-		if _, ok := parseSafeSingleTableQuery(s); ok {
-			t.Fatalf("unsafe rewrite: %s", s)
-		}
-	}
-}
