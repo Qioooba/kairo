@@ -11,9 +11,9 @@
 |---|---|---|---|
 | A 测试隔离 | QA-01 QA-02 | 2 | ✅ 已提交并验证（含 4 个后续修复提交） |
 | B 查询及格式化 | DB-01 DB-02 DB-03 DBUI-02 DBUI-04 | 5 | ✅ 已提交并验证 |
-| C 网格及 LOB | DBUI-01 DB-04 DB-05 DB-06 DB-07 | 5 | 进行中（DBUI-01 与列映射同批，须整批落地） |
+| C 网格及 LOB | DBUI-01 DB-04 DB-05 DB-06 DB-07 | 5 | ✅ 已提交并验证 |
 | D 比较保存 | CT01 CT06 CT02 CT04 | 4 | ✅ 已提交并验证（含 handler 级补测） |
-| E 路由及历史 | DBUI-03 DBUI-05 DBUI-06 CT03 CT05 CT07 | 6 | DBUI-03 ✅、CT03/05/07 ✅；DBUI-05/06 待 C 释放 database.js |
+| E 路由及历史 | DBUI-03 DBUI-05 DBUI-06 CT03 CT05 CT07 | 6 | DBUI-03 ✅、CT03/05/07 ✅；DBUI-05/06 进行中 |
 | F SFTP | OTH-03 OTH-04 OTH-05 OTH-06 | 4 | ✅ 已提交并验证 |
 | G 升级与请求 | OTH-01 OTH-02 | 2 | ✅ 已提交并验证 |
 | H 远端 shell | OPS-01 | 1 | ✅ 已提交并验证 |
@@ -330,6 +330,94 @@ CT05 `关闭必须恰好取消一次后端任务，实际 0`、`关闭后不得�
 `ownsSelection()` 的真实 `anchorNode` 分支在 DOM 双中不可达（最坏退化为原生截断复制，已如实记录）；
 CT07 序列化格式属产品决定；"20 次重开"用例用的是直接 `buildTextWorkbench`+cleanup 而非真实 `destroyTab`。
 
+### 2.9 批次 C — 编辑能力契约、列映射、类型绑定、并发定位与 LOB 行身份（DBUI-01、DB-04、DB-05、DB-06、DB-07）
+
+提交：`591deb7`（18 个文件，+2742/−323；新增 5 个 `grid_batchc_*_test.go`）
+
+- **DBUI-01**：服务端 summary 用 snake_case，前端却读 camelCase `canUpdate`/`canInsert`，字段不存在，
+  于是服务端允许更新时点"网格编辑"仍提示"当前查询结果不支持网格编辑"；旧前端测试还手写
+  `can_update`+`canUpdate` 双字段 mock，把主路径失效掩盖掉。更危险的是列映射：结果列名与物理列名
+  不区分，`SELECT SALARY AS ID, ID AS SALARY FROM ACCOUNTS` 会生成指向**另一行**的 UPDATE
+  （审查给出 `SET salary=? WHERE id=? AND salary=?` / args `[2,100,1]`）。修复：
+  * summary 新增只读列绑定 `Columns[{index,result_name,physical_name,writable,read_only_reason}]`；
+    行尾隐藏身份列也作为不可写绑定出现（`index == hidden_rowid_index`），使"声明可编辑"与
+    "身份载荷已下发"可结构化校验（与 DB-06 契约一致）
+  * 重复别名与交叉别名 → 计划整体只读（能力全 false、每列 `writable=false`+原因），写入构造器再独立
+    拒绝一次（纵深防御）
+  * 干净别名（`SELECT ID AS K, NAME AS LABEL`）保持可编辑，名称协议的 `values`/`original`/`key`
+    现在一起按"结果名→物理名"映射（旧实现只按物理名查，故 `LABEL` 报"不是目标基表列"）
+  * 新增**索引协议**：`row_columns` + `changes[{column_index,has_value,value[,has_original,original]}]`，
+    服务端凭 `result_id` 的不可变 `ResultEditContext.Columns` 解析物理列；同一物理列出现两个不同原值
+    快照即拒绝；改 LOB/隐藏 ROWID/未投影列即使被手工构造也拒（服务端仍是最终权威）
+  * 能力独立判定：只有投影为通配或 100% 直接物理列才置 `CanInsert` —— 修掉上一批遗留的
+    `SELECT COUNT(*) AS CNT FROM T` 仍 `can_insert=true`（批次 B 报告的残留缺陷 a）
+  * 前端唯一归一化点 `normalizeEditPlan()`；只有字面 `true` 开能力，`undefined`→`false`；
+    `editable` 严格 boolean 且只看 `can_update`（绝不由 insert 推导）；`startCellEdit()` 依列绑定
+    即时提示不可写原因，不再拖到提交阶段
+- **DB-04**：`normalizeTypedParam` 只看字符串外形、不接收声明类型，`2026-09-22 12:34:56` 写入 VARCHAR2
+  变成 `time.Time`。修复为 `normalizeTypedParam(kind, declaredType, val)`：仅 DATE/TIMESTAMP* 解析
+  （无时区字面量用 `time.ParseInLocation(..., UTC)` 固定，不被机器时区平移；带 offset 保留瞬时值；
+  `/`→`-` 仅限日期列）；文本原样保留；NUMBER/DECIMAL 保持 `json.Number`（绝不经 float64）；
+  RAW/BLOB 不动；未知类型不推断；INSERT 也按服务端元数据绑定（新增仅服务端使用的 `TableFields`）。
+- **DB-05**：旧实现无条件跳过 `PrimaryKeys`/`UniqueKeys` 中的列，实际 WHERE 只用其中一部分 →
+  两会话并发改同一列时后提交者可覆盖前者且 `affected=1` 无法识别。修复：`locatorColumns` 只记录
+  **真正写进 WHERE** 的物理定位列，只有这些可跳过重复原值比较 → 未使用的唯一键现在会比较
+  （`AND EMAIL = ?`），ROWID 定位时所有被改业务列（含主键列）都比较；`locatorValue()` 交叉校验
+  `key` 与 `original` 快照，拒绝一个请求携带两套不一致快照；`gridNormalizeAction()` 在入口统一
+  规范化 action，带空格/大写的 action 不再绕过原值检查。
+- **DB-06**：LOB rewrite 分支声明 `hiddenRowIDIdx=len(columns)` 却只创建业务列长度的行 → 后端称可编辑
+  但前端取不到定位值。修复选**选项 1**（文档认可，且无需跨分页/前端/导出的原子改造）：LOB scanner 在
+  行尾追加真实 `ROWIDTOCHAR` 值，使宣称的下标等于最终序列化下标；导出本就以 `len(columns)` 为界，
+  多余元素不会泄露。同时把 `lob_projection.go` 私有别名解析改为共用 `gridIdentifier` 语义
+  （批次 B 报告的残留缺陷 b）。
+- **DB-07**：旧实现只取"前 6 个非 NULL 列"、强制 `ROWNUM<=1`、`QueryRow` 且不检查唯一性 → 静默取首行，
+  可能展示/下载另一行内容。修复：要求元数据确认的**完整**可比较快照（LOB/LONG/XMLTYPE 排除，缺列即
+  拒绝），NULL 用 `IS NULL` 比较，值按声明类型绑定；`ROWNUM<=2` 显式区分 0/多行（多行 →
+  `ErrRowLocatorNotUnique` → HTTP 409），绝不静默取首行；`sessionID` 非空时在同一会话事务内定位
+  （事务已结束明确拒绝，不再静默改用池连接）；并实现优选路径 —— Fast 模式 `rowScanner` 把查询真实
+  ROWID 挂到每个 lazy LOB cell，token 由服务端绑定源指纹+用户+owner/table/column+会话+5 分钟有效期的
+  HMAC，于是 LOB 读走 `WHERE ROWID` 而非特征回查。
+
+**失败优先证据（逐字节选）**：DBUI-01 `交叉别名必须整体只读，实际 identity_policy=pk can_update=true
+can_delete=true`、`干净别名提交失败: 列 LABEL 不是目标基表列`、`摘要必须携带 columns 列绑定`、
+JS `editable 必须是真正的 boolean (响应中 can_update=true); got=undefined`；
+DB-04 `VARCHAR2 文本列 "2026-09-22 12:34:56" 被改成了 time.Time`；
+DB-05 `未被用作定位的唯一列必须继续比较原值，实际 SQL=UPDATE accounts SET EMAIL = ? WHERE ID = ?`；
+DB-06 `business_columns=2; advertised_hidden_index=2; actual_row_length=2`；
+DB-07 `匹配到多行必须返回"无法唯一定位"，实际静默返回 rowID="AAA-FIRST"`。
+
+**明确改锚**：删除 `tests/grid-orderby-phase0-regression.test.js` 中 `can_update`+`canUpdate` 双字段
+fixture，改为直接消费 Go 真实序列化 fixture（用例 1/6 与 Phase-1 ROWID 用例）；全部有意义的断言保留，
+并扩展到 `changes[0]`/`row_columns[1]`。
+
+**验证**：`go test ./internal/dbconsole/` ok；`go vet ./...` 干净；`go test ./...` **36 个包全部 ok、
+零失败**；`node tests/grid-edit-plan-wire.test.js` **由失败转通过**（批次 A 预置的失败优先回归终于转绿，
+即该回归确实锚定了本批要修的缺陷）；`grid-edit-plan-contract` 通过；`grid-orderby-phase0-regression` 通过；
+`npm test` **20/20**。
+
+**未验证**：无真实 Oracle 11g/MySQL、无浏览器 —— DB-06/DB-07 全部来自进程内 fake driver
+（真实 `ROWIDTOCHAR` 格式、`DBMS_LOB`/`ROWNUM` 语义、会话事务读一致性、NLS 类型强转均未验证）；
+前端证据为 vm 切片单测（无点击、无 LOB 弹层、无 toast 渲染）；DB-07 用的是查询派生的客户端 ROWID
+（经 HMAC 绑定）而非完全服务端签发的 `row_ref`；其完整性规则对窄投影会明确拒绝（"请重新查询"），
+真实 UX 影响未验证；DB-05 只修了基于计划的构造器，遗留 `BuildGridMutationSQL`（`result_id` 缺失时使用）
+行为未变；前端绑定门控仅在服务端下发 `columns` 时生效。
+
+### 2.10 批次 F 的补充 — 前端身份贯通的可执行回归
+
+提交：`192d22d`（新增 `tests/files-path-identity.test.js`，1210 行 / 11 用例 / 140 处断言）
+
+批次 F 的前端改动此前**只有 `node --check`**（`npm test` 根本不加载 `files.js`/`ssh.js`），
+语法检查无法发现 payload 形状错误、token 被字符串拼接、展示名被当唯一键。该回归在
+vm + 专用 DOM 替身与记录型 api 替身中执行真实函数（含真实菜单项点击、真实 checkbox `change` 监听、
+真实目录行链接点击），请求体按 JSON 序列化后断言，覆盖：`paths`/`path_ids` 等长且顺序一致；
+身份绝不被拼接 `/name`、`.partial` 或子段；同显示名 UTF-8/GBK 两条目可独立选中（用真实字节构造 token）；
+地址栏/面包屑/表格文本/`data-path` 绝不出现 `kairo-raw` 而 `data-id` 有；子项访问目标使用各条目自身
+身份（修复前"下载到另一个物理条目"的回归）；无 `path_id` 的旧条目回退展示路径且绝不伪造 token。
+
+**有效性验证（变异）**：对冻结页面做 7 处变异（在 `%TEMP%` 副本上运行，真实页面未被触碰），
+每处都让预期用例变红，例如 `path_ids` 用 `paths` → 3 例失败、复选框键用 `entry.name` → 2 例失败、
+`[identity]` → `[identity + '/child']` → 2 例失败、`data-id` 用 `entry.name` → 2 例失败。
+
 ## 3. 验证证据
 ### 3.1 逐提交隔离验证（证明每个批次提交可独立复现）
 
@@ -403,6 +491,28 @@ got=undefined (undefined)
 该断言同时满足 QA-02 验收"真实契约 fixture 必须让旧命名缺陷变红"。批次 C 修复后转绿并随 C 提交。
 
 ## 4. 需要知悉的工程事实与披露
+
+### 4.0 诊断到但**未**修改的范围外缺陷：`internal/tailmgr.TestManager_Start_HappyPath` 不稳定
+
+**这不是 29 项之一，属于既有问题，且我刻意没有改动它。** 但它会让 `go test ./...` 间歇性变红
+（我第一次跑"干净检出验证"时就是这样失败的），因此必须记录。
+
+- 现象：`go test ./internal/tailmgr/ -count=25 -failfast` 可复现失败（`-count=5` 亦偶发），
+  失败信息为 `应包含 "kind":"info"，实际: {"kind":"line","line":"hello"}\n{"kind":"line","line":"world"}`
+  —— 订阅者收到了两行 line，但**从未收到 `info`**。
+- 根因（已定位到行）：`internal/tailmgr/tailmgr.go:457` 由 streamer 协程 `pushImmediate` 推送
+  `info`，而 `Session.broadcast`（同文件 157-163 行）在 `len(s.subscribers) == 0` 时**直接丢弃**
+  消息、不缓存。测试在 `Manager.Start` 返回后才 `Subscribe()`，两者存在竞态：抢在 `info` 之后订阅
+  就永久丢失该消息。测试里 `delayBeforeEmit: 30ms` 的注释"给 Subscribe 时间"正说明这是靠时间窗口
+  掩盖的竞态。
+- 产品影响：任何在 tail 启动**之后**才订阅的客户端（SSE handler 与 Start 之间存在同一竞态）
+  都可能收不到"开始跟踪 xxx"这条 info。是否可接受取决于产品语义，故未擅自改动。
+- 两个候选修法（供维护者选择）：(a) 让 `info` 对"首个订阅者"可重放（与会话内其它可重放状态一致）；
+  (b) 若"订阅晚于启动即不再补发"是有意语义，则应把测试改为断言真实契约，并注明 `info` 可能缺失。
+- 我尝试过一个"订阅门闩"式的测试侧确定性修法（让 streamer 等测试订阅后再发），**实测无效**并已
+  `git checkout` 还原 —— 因为它只延迟了 line，而丢的是先于 line 发出的 `info`。保留还原后的原状，
+  不留下无效且注释失实的改动。
+
 
 1. **提交门禁**：仓库 `commit-msg` hook 要求 `Model:` 行含数字版本号。本次实际运行的模型标识为
    `deepseek-flash`（`~/.dsh/settings.yaml`：`provider: deepseek-official`），不存在可填写的版本号。
