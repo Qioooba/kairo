@@ -7670,6 +7670,10 @@ body.has-open-overlay { overflow: hidden; }
 .db-table { margin: 0; table-layout: fixed; }
 .db-table th { position: sticky; top: 0; z-index: 2; padding: 0 !important; background: var(--bg-2); white-space: nowrap; }
 .db-table th, .db-table td { height: 31px; max-width: 420px; padding: 5px 9px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono, ui-monospace, monospace); font-size: 11.5px; }
+/* 列之间的浅色竖线：与横向分隔线呼应，便于长行里对齐读数（最后一列不画，避免贴边双线） */
+.db-table th, .db-table td { border-right: 1px solid var(--line); border-right: 1px solid color-mix(in srgb, var(--line) 55%, transparent); }
+.db-table th:last-child, .db-table td:last-child { border-right: 0; }
+.db-table .db-spacer > td { border-right: 0; }
 .db-table .num { position: sticky; left: 0; z-index: 1; min-width: 54px; color: var(--text-mute); background: var(--bg-2); text-align: right; }
 .db-table th.num { z-index: 4; padding: 5px 9px !important; cursor: pointer; }
 .db-table tr.selected td { background: rgba(79,140,255,.13); background: color-mix(in srgb, var(--primary) 13%, var(--bg-1)); }
@@ -9552,6 +9556,9 @@ body.has-open-overlay { overflow: hidden; }
   min-height: 560px;
   height: calc(100vh - 168px);
 }
+/* 权威布局偏好尚未到手时先不显示工作区，避免"先画上下布局再切左右布局"的闪动；
+   偏好到手（或 1.5s 兜底超时）后由 applyLayoutMode 摘掉该类。 */
+.db-sql-layout.is-pending-layout { visibility: hidden; }
 .db-main.is-columns {
   grid-template-columns: var(--db-editor-col-w, 46%) 6px minmax(420px, 1fr);
   grid-template-rows: minmax(0, 1fr);

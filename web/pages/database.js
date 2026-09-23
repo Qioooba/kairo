@@ -6,6 +6,8 @@
   const { api, getPreference, putPreference, preferenceSaver } = Kairo.api;
   const LAST_SOURCE = 'kairo:database:last-source';
   const PREFS_KEY = 'kairo:database:workbench-prefs:v2';
+  // 布局首帧提示（同步可读，避免"回到工作台先画上下布局再切左右布局"的闪动）
+  const LAYOUT_HINT_KEY = 'kairo:database:layout-hint';
   const HISTORY_KEY = 'kairo:database:sql-history:v1';
   const HISTORY_LIMIT = 20;
   const HISTORY_ENTRY_MAX = 2000;
@@ -56,16 +58,18 @@
       { key: 'cnt', text: 'SELECT COUNT(*)\nFROM ${table}', enabled: true }
     ]
   };
-  let persisted = { prefs: null, history: [], last_source: '', column_widths: {}, row_limits: {}, meta_collapsed: true, layout: LAYOUT_STACKED, editor_col_width: 0 };
+  let persisted = { prefs: null, history: [], last_source: '', column_widths: {}, row_limits: {}, meta_collapsed: true, layout: readLayoutHint(), editor_col_width: 0 };
   const persistPreference = preferenceSaver('database', 400);
   const state = {
     sources: [], source: null, rows: [], columns: [], controller: null, summary: null, cursor: 0,
+    prefsLoaded: false, paintedOnce: false,
     managing: false, workspaceToken: 0, lastSQL: '', lastMaxRows: 0, resultMode: 'grid',
     selectedRow: 0, selectedCol: 0, colSelected: -1, selectedCols: new Set(), lastColSelected: -1, localFilter: '', hiddenColumns: new Set(), columnWidths: {}, sort: null,
     prefs: normalizePrefs({}), lastError: null, inspectTab: 'fields', inspect: null, plan: [], gridReady: false,
     sessions: [], activeId: 0, redisKeyBase64: '', redisType: '', redisCursor: '0', redisNextCursor: '0', redisCursorHistory: [], redisOffset: 0, redisPageSize: 100, redisMembersHasNext: false,
     dirtyCells: {}, isEditMode: false,
-    schemaTableCache: {}, schemaCategoryCache: {}, metadataCache: {},
+    schemaTableCache: {}, schemaCategoryCache: {}, metadataCache: {}, schemaRoutineCache: {},
+    cacheSourceId: '',
     qualifierFieldCache: {}, qualifierFieldPending: {},
     tableWarmupRetryAt: 0, tableWarmupError: ''
   };
@@ -677,18 +681,29 @@
     const fields = info.fields || [];
     const indexes = info.indexes || [];
     const constraints = info.constraints || [];
-    const activeTab = s.inspectTab || 'fields';
+    // 按对象类型决定页签：函数/过程/包/触发器/序列/同义词没有"字段/索引/约束"的语义，
+    // 后端对这些类型也只是按名字匹配表元数据（甚至可能撞到同名表），展示出来是误导。
+    //   TABLE                      → 字段 / 索引 / 约束 / DDL
+    //   VIEW / MATERIALIZED VIEW   → 字段 / DDL
+    //   其它（FUNCTION/PROCEDURE/PACKAGE/TRIGGER/SEQUENCE/SYNONYM/...）→ 仅 DDL（源码）
+    const objType = String(s.objectType || 'TABLE').toUpperCase();
+    const tabPlan = objType === 'TABLE' ? ['fields', 'indexes', 'constraints', 'ddl']
+      : (objType === 'VIEW' || objType === 'MATERIALIZED VIEW') ? ['fields', 'ddl']
+        : ['ddl'];
+    const isRoutine = tabPlan.length === 1;
+    const activeTab = tabPlan.indexOf(s.inspectTab) >= 0 ? s.inspectTab : tabPlan[0];
 
-    let subTabNav = '<div class="db-obj-tabs">' +
-      '<button class="db-obj-tab' + (activeTab === 'fields' ? ' active' : '') + '" data-otab="fields">字段 (' + fields.length + ')</button>' +
-      '<button class="db-obj-tab' + (activeTab === 'indexes' ? ' active' : '') + '" data-otab="indexes">索引 (' + indexes.length + ')</button>' +
-      '<button class="db-obj-tab' + (activeTab === 'constraints' ? ' active' : '') + '" data-otab="constraints">约束 (' + constraints.length + ')</button>' +
-      '<button class="db-obj-tab' + (activeTab === 'ddl' ? ' active' : '') + '" data-otab="ddl">DDL 定义</button>' +
-      '</div>';
+    let subTabNav = '<div class="db-obj-tabs">' + tabPlan.map(function (tab) {
+      const label = tab === 'fields' ? '字段 (' + fields.length + ')'
+        : tab === 'indexes' ? '索引 (' + indexes.length + ')'
+          : tab === 'constraints' ? '约束 (' + constraints.length + ')'
+            : (isRoutine ? '源码 / DDL' : 'DDL 定义');
+      return '<button class="db-obj-tab' + (activeTab === tab ? ' active' : '') + '" data-otab="' + tab + '">' + label + '</button>';
+    }).join('') + '</div>';
 
     let headerActions = '<div class="db-obj-actions">' +
-      '<button class="btn btn-xs btn-primary" id="db-obj-action-query">' + actionIcon('search') + '<span>查询数据</span></button>' +
-      '<button class="btn btn-xs" id="db-obj-action-insert">' + actionIcon('insert') + '<span>INSERT 模板</span></button>' +
+      (isRoutine ? '' : '<button class="btn btn-xs btn-primary" id="db-obj-action-query">' + actionIcon('search') + '<span>查询数据</span></button>') +
+      (isRoutine ? '' : '<button class="btn btn-xs" id="db-obj-action-insert">' + actionIcon('insert') + '<span>INSERT 模板</span></button>') +
       '<button class="btn btn-xs" id="db-obj-action-copy-ddl">' + actionIcon('copy') + '<span>复制 DDL</span></button>' +
       '<button class="btn btn-xs" id="db-obj-action-refresh">' + actionIcon('refresh') + '<span>刷新</span></button>' +
       '</div>';
@@ -733,7 +748,9 @@
         (constraints.length ? constraints.map((c, i) => '<tr><td class="num">' + (i + 1) + '</td><td><strong>' + h(c.name) + '</strong></td><td><span class="tag">' + h(c.type) + '</span></td><td class="mono">' + h(c.columns || '-') + (c.detail ? '<div class="hint mono" style="font-size:11px;margin-top:2px">' + h(c.detail) + '</div>' : '') + '</td></tr>').join('') : '<tr><td colspan="4" class="hint db-empty-td">无约束信息</td></tr>') +
         '</tbody></table></div>';
     } else if (activeTab === 'ddl') {
-      const rawDDL = info.ddl || info.source_text || info.ddl_error || '-- 无 DDL';
+      // 函数/过程/包这类对象后端只把源码放在 source_text，而兜底 DDL 会是
+      // "-- 无字段信息…" 之类的占位文本：优先展示源码，避免把占位当 DDL。
+      const rawDDL = (isRoutine ? (info.source_text || info.ddl || info.ddl_error) : (info.ddl || info.source_text || info.ddl_error)) || '-- 无 DDL';
       viewer._rawDDL = rawDDL;
       const formatted = formatSQL(rawDDL);
       const highlighted = highlightSQL(formatted);
@@ -755,6 +772,8 @@
 
     viewer.querySelectorAll('[data-otab]').forEach(b => {
       b.onclick = () => {
+        // 只在合法页签集合内切换：陈旧页签值（例如从表切到函数后残留的 fields）直接忽略。
+        if (tabPlan.indexOf(b.dataset.otab) < 0) return;
         s.inspectTab = b.dataset.otab;
         renderObjectViewer(s);
       };
@@ -854,7 +873,16 @@
     try { return normalizePrefs(JSON.parse(localStorage.getItem(PREFS_KEY) || '{}')); }
     catch (_) { return normalizePrefs({}); }
   }
-  function savePersisted() { persistPreference(persisted); }
+  function savePersisted() {
+    // 同步把布局写一份到 localStorage 作为"首帧提示"：偏好走异步 API，回到工作台时
+    // 第一次渲染拿不到 persisted.layout，于是先按上下布局画一帧、随后 applyLayoutMode
+    // 才切成左右布局 —— 用户看到的就是"闪一下"。首帧读这个提示即可消除闪动。
+    try { localStorage.setItem(LAYOUT_HINT_KEY, persisted.layout === LAYOUT_COLUMNS ? LAYOUT_COLUMNS : LAYOUT_STACKED); } catch (_) {}
+    persistPreference(persisted);
+  }
+  function readLayoutHint() {
+    try { return localStorage.getItem(LAYOUT_HINT_KEY) === LAYOUT_COLUMNS ? LAYOUT_COLUMNS : LAYOUT_STACKED; } catch (_) { return LAYOUT_STACKED; }
+  }
   function savePrefs() { persisted.prefs = state.prefs; savePersisted(); }
   function loadHistory() {
     // DBUI-06：历史只有一个结构化仓库（databaseFeatures）。页面上的旧版下拉
@@ -898,6 +926,10 @@
   }
 
   async function loadDatabasePreference() {
+    // 每次进入工作台都会重新拉权威偏好；这期间 persisted.layout 还可能是上一次的值或默认值，
+    // 因此标记为"未就绪"，让 applyLayoutMode 先按同步提示（localStorage）维持布局，
+    // 避免它在偏好返回前把 is-columns 摘掉造成一帧上下布局。
+    state.prefsLoaded = false;
     let legacyHistory = [];
     try { legacyHistory = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]'); } catch (_) {}
     const legacy = {
@@ -934,9 +966,23 @@
     persisted.layout = persisted.layout === LAYOUT_COLUMNS ? LAYOUT_COLUMNS : LAYOUT_STACKED;
     persisted.editor_col_width = Math.max(0, Math.min(EDITOR_COL_MAX, Number(persisted.editor_col_width) || 0));
     state.prefs = persisted.prefs;
+    state.prefsLoaded = true;
+    // 服务端权威值到手后同步刷新首帧提示：这样以后每次回到工作台都能在首帧直接画对布局，
+    // 不需要等异步偏好（否则会先画上下布局再切左右布局，即用户看到的"闪一下"）。
+    try { localStorage.setItem(LAYOUT_HINT_KEY, persisted.layout === LAYOUT_COLUMNS ? LAYOUT_COLUMNS : LAYOUT_STACKED); } catch (_) {}
+    // 摘掉首帧遮罩并按权威布局重算一次（工作区可能已经渲染出来了）。
+    applyLayoutMode();
+    // 兜底：偏好接口异常时也不能让工作区一直不可见。
+    setTimeout(function () {
+      const layout = q('db-sql-layout');
+      if (state.prefsLoaded === false) state.prefsLoaded = true;
+      if (layout) { layout.classList.remove('is-pending-layout'); state.paintedOnce = true; }
+    }, 1500);
   }
   function cellText(v) {
-    if (v == null) return 'NULL';
+    // NULL 统一按空字符串呈现（网格 / 单行记录 / 复制行）：Oracle 里 '' 与 NULL 同义，
+    // MySQL 用户也更习惯"空即无值"。SQL 导出/INSERT 生成走 sqlValueLiteral，仍然输出 NULL 字面量。
+    if (v == null) return '';
     if (typeof v === 'object') {
       if (v.kind === 'clob') return v.text !== undefined && v.text !== null ? String(v.text) : (v.display ? v.display : '(CLOB ' + formatBytes(v.bytes || 0) + ')');
       if (v.kind === 'blob') return v.display ? v.display : '(BLOB ' + formatBytes(v.bytes || 0) + ')';
@@ -955,7 +1001,8 @@
   }
 
   function fmtCell(v, rowIdx, colIdx) {
-    if (v == null) return '<span class="db-null">NULL</span>';
+    // NULL 直接留空单元格（见 cellText 的同款说明）：不再渲染 "NULL" 文案。
+    if (v == null) return '';
     if (typeof v === 'object') {
       if (v.kind === 'clob') {
         const sz = v.token ? (v.length != null ? (Number(v.length).toLocaleString() + ' 字符') : formatBytes(v.bytes || 0)) : (v.lazy ? '待加载' : formatBytes(v.bytes || 0));
@@ -2984,7 +3031,7 @@
       state.hiddenColumns = new Set(); state.sort = null; state.inspect = null; state.gridReady = false;
     }
     loadColumnWidths();
-    if (state.source.kind !== 'redis') state.schemasLoaded = false;
+    if (state.source && state.source.kind !== 'redis') { state.schemasLoaded = false; clearMetadataCachesForSource(state.source.id); }
     state.source.kind === 'redis' ? renderRedis(host) : renderSQL(host);
     // 数据源切换或页签切换会重建工作区 DOM；把当前页签的编辑器、筛选器、
     // 结果视图和执行状态恢复回来，否则页签标题还在但 SQL 文本会变空。
@@ -3116,8 +3163,19 @@
     const history = loadHistory();
     const savedRows = Math.max(1, Math.min(state.source.max_rows, Number(persisted.row_limits[state.source.id]) || Math.min(1000, state.source.max_rows)));
     const gridRows = Math.max(6, Math.min(100, Number(state.prefs.gridRows) || 25));
+    // 首帧就按"内存里的布局或同步提示"带上 is-columns（真实宽度是否允许由紧随其后的
+    // applyLayoutMode 校准，同一任务内完成、不产生中间帧），避免从别的页签回到工作台时
+    // 先画上下布局再切左右布局的闪动。两个来源都看：同一文档内路由切换时 persisted 已在内存，
+    // 整页刷新时则依赖 localStorage 提示。
+    const hintColumns = persisted.layout === LAYOUT_COLUMNS || readLayoutHint() === LAYOUT_COLUMNS;
+    // 权威偏好还没到手时先不显示工作区（is-pending-layout → visibility:hidden）：否则会先画出
+    // 一帧上下布局、拿到偏好后再切成左右布局，用户看到的就是"闪一下"。
+    // 偏好到手（或兜底超时）后由 applyLayoutMode 摘掉这个类，一次性显示最终布局。
+    const pendingLayout = state.prefsLoaded === false;
+    const layoutCls = 'db-sql-layout' + (hintColumns ? ' is-columns' : '') + (pendingLayout ? ' is-pending-layout' : '');
+    const mainCls = 'db-main' + (hintColumns ? ' is-columns' : '');
     const defaultSchema = state.source ? (state.source.kind === 'oracle' ? (state.source.username || '').toUpperCase() : (state.source.database || '')) : '';
-    host.innerHTML = '<div class="db-sql-layout" id="db-sql-layout">'
+    host.innerHTML = '<div class="' + layoutCls + '" id="db-sql-layout">'
       + '<aside class="card db-meta" id="db-meta-pane">'
       + '<div class="db-pane-title"><span>数据库对象</span><div class="db-pane-actions"><button class="btn btn-xs" id="db-meta-refresh" title="刷新对象树">刷新</button><button class="btn btn-xs db-meta-toggle-btn" id="db-meta-toggle" title="收起对象栏 (' + h(state.prefs.shortcuts.objects || 'Alt+O') + ')" aria-label="收起数据库对象栏">' + actionIcon('panel') + '</button></div></div>'
       + '<button type="button" class="db-meta-collapsed-bar" id="db-meta-collapsed-bar" title="展开数据库对象 (' + h(state.prefs.shortcuts.objects || 'Alt+O') + ')" aria-label="展开数据库对象栏"><span class="db-meta-collapsed-icon">' + actionIcon('database') + '</span><span class="db-meta-collapsed-text">对象</span></button>'
@@ -3128,7 +3186,7 @@
       + '<div id="db-objects" class="db-object-list"><div class="db-tree-loading">正在读取元数据…</div></div>'
       + '</aside>'
       + '<div class="db-split-x" id="db-split-x" role="separator" title="左右拖动调整对象栏宽度"></div>'
-      + '<main class="db-main" id="db-main">'
+      + '<main class="' + mainCls + '" id="db-main">'
       + '<section class="card db-editor-card">'
       + '<div class="db-editor-tabs">'
       + '<div id="db-sql-tabs" class="db-sql-tabs"></div>'
@@ -3236,6 +3294,7 @@
     q('db-grid-rows').title = '结果网格一次显示多少行，可自定义';
     installDatabasePagination();
     bindPaneSplitters(host);
+    bindToolbarMoreAutoClose();
     ensureWorkbenchKeys();
     q('db-run').onclick = runQuery;
     q('db-explain').onclick = runExplain;
@@ -3330,7 +3389,7 @@
       renderCategoryList();
       // 与 completionExtras 用同一个解析函数，保证"预热的键 = 联想查询的键"。
       const cur = currentSchema();
-      if (cur) warmupSchemaTables(cur);
+      if (cur) { warmupSchemaTables(cur); warmupSchemaRoutines(cur); }
     };
     q('db-object-search').oninput = debounce(function () {
       if (this.value.trim()) {
@@ -3342,16 +3401,21 @@
     q('db-view-grid').onclick = () => setResultMode('grid');
     q('db-view-record').onclick = () => setResultMode('record');
     q('db-view-plan').onclick = () => setResultMode('plan');
-    const resultGrid = q('db-result-grid');
-    if (resultGrid) {
-      resultGrid.addEventListener('wheel', function (e) {
-        if (e.ctrlKey && Math.abs(e.deltaY) > 0) {
-          const sc = resultGrid.querySelector('.db-table-scroll') || resultGrid.querySelector('.db-plan-table-wrap');
-          if (sc && sc.scrollWidth > sc.clientWidth) {
-            e.preventDefault();
-            sc.scrollLeft += e.deltaY;
-          }
-        }
+    // Ctrl+滚轮 = 结果区横向滚动。挂在整块结果区（含工具栏/分页条）上，并且**显式阻止纵向默认行为**：
+    //   - 旧实现挂在 #db-result-grid 上且只在"有横向溢出"时才 preventDefault，鼠标停在工具栏上时
+    //     纵向会跟着滚（用户反馈的问题）；
+    //   - 旧实现与 .db-table-scroll 自身的 handler 叠加，一次滚动会走两倍距离（实测 5 格 = 1200px）。
+    // 这里统一成"结果区只横滚"，表格内部仍由 .db-table-scroll 的 handler 负责，避免重复累加。
+    const resultsSection = q('db-results-section');
+    if (resultsSection) {
+      resultsSection.addEventListener('wheel', function (e) {
+        if (!e.ctrlKey || Math.abs(e.deltaY) === 0) return;
+        e.preventDefault();
+        const target = e.target;
+        if (target && target.closest && target.closest('.db-table-scroll, .db-table-top-scroll')) return;
+        const grid = q('db-result-grid');
+        const sc = grid && (grid.querySelector('.db-table-scroll') || grid.querySelector('.db-plan-table-wrap'));
+        if (sc && sc.scrollWidth > sc.clientWidth) sc.scrollLeft += e.deltaY;
       }, { passive: false });
     }
     q('db-result-filter').oninput = debounce(function () {
@@ -3422,7 +3486,7 @@
       // 但 currentSchema() 会回退到数据源用户名/库名——预热键必须与联想查询键一致，
       // 否则 completionExtras 查的是一个从未预热过的键（表名永远为空）。
       const warmSchema = currentSchema();
-      if (warmSchema) warmupSchemaTables(warmSchema);
+      if (warmSchema) { warmupSchemaTables(warmSchema); warmupSchemaRoutines(warmSchema); }
     } catch (e) {
       const o = q('db-objects'), schema = q('db-schema');
       if (token === state.workspaceToken && schema) schema.innerHTML = '<option value="">加载失败</option>';
@@ -3500,6 +3564,35 @@
       // 便于 retryTableWarmup / 诊断时区分"确实没有表"与"请求失败"。
       state.tableWarmupError = (e && e.message) || String(e);
     }
+  }
+  // 函数名预热：`select getCustomerId('111') from dual` 这类写法需要函数名参与联想。
+  // 与表名预热同款：一次轻量 category=functions 查询、按 schema 缓存、绝不按键盘请求。
+  async function warmupSchemaRoutines(schema, force) {
+    const source = state.source;
+    if (!source || !schema) return;
+    state.schemaRoutineCache = state.schemaRoutineCache || {};
+    const cached = state.schemaRoutineCache[schema];
+    if (cached && cached.length && !force) return;
+    const token = state.workspaceToken;
+    try {
+      const data = await api('GET', '/api/database/metadata/objects?source_id=' + encodeURIComponent(source.id) + '&schema=' + encodeURIComponent(schema) + '&category=functions');
+      if (token !== state.workspaceToken) return;
+      const names = (data.objects || []).map(x => x.name).filter(Boolean);
+      state.schemaRoutineCache[schema] = names;
+      state.schemaCategoryCache = state.schemaCategoryCache || {};
+      state.schemaCategoryCache[schema + ':functions'] = data.objects || [];
+    } catch (_) { /* 与表名预热一致：失败静默，展开文件夹时按需重试 */ }
+  }
+  // 数据源切换时必须清掉按 schema 缓存的元数据：两个数据源可能有同名 schema（例如都用 APP），
+  // 否则会把 A 源的表名/函数名联想给 B 源。
+  function clearMetadataCachesForSource(sourceId) {
+    if (state.cacheSourceId === sourceId) return;
+    state.cacheSourceId = sourceId || '';
+    state.schemaTableCache = {};
+    state.schemaRoutineCache = {};
+    state.schemaCategoryCache = {};
+    state.metadataCache = {};
+    state.schemaObjectsCache = {};
   }
 
   function renderCategoryItems(groupEl, schema, category, items) {
@@ -3868,7 +3961,9 @@
   function applyLayoutMode() {
     const layout = q('db-sql-layout'), main = q('db-main');
     if (!main) return;
-    const wanted = persisted.layout === LAYOUT_COLUMNS ? LAYOUT_COLUMNS : LAYOUT_STACKED;
+    const wanted = (state.prefsLoaded === false && readLayoutHint() === LAYOUT_COLUMNS)
+      ? LAYOUT_COLUMNS
+      : (persisted.layout === LAYOUT_COLUMNS ? LAYOUT_COLUMNS : LAYOUT_STACKED);
     const total = workspaceWidth();
     const allowed = wanted === LAYOUT_COLUMNS && total >= SPLIT_MIN_WORKSPACE;
     const effective = allowed ? LAYOUT_COLUMNS : LAYOUT_STACKED;
@@ -3893,6 +3988,13 @@
 
     updateLayoutToggle(wanted, allowed);
     syncObjectLayoutState();
+    // 权威偏好已到手（或本次页面生命周期已经画过一次）→ 摘掉"待定"遮罩。
+    // 页面首次绘制必须等权威值，避免"先上下布局再左右布局"的闪动；之后的页签切换
+    // 因 persisted/hint 已在内存而不需要重新遮罩，避免每次进来都空白一小段时间。
+    if (layout && (state.prefsLoaded !== false || state.paintedOnce)) {
+      layout.classList.remove('is-pending-layout');
+      state.paintedOnce = true;
+    }
     applyColumnsHeight();
     applyEditorHeightForMode(effective);
     // 左右布局下"显示 N 行"与表格高度拖拽条无意义，禁用并解释原因，不留死控件。
@@ -4718,12 +4820,15 @@
       });
       SQL_KEYWORDS.forEach(function (k) { add(k.toUpperCase(), 'keyword'); });
       (extras.objects || []).forEach(function (n) { add(n, 'object'); });
+      // 函数名与表名同级（都排在关键字之前），前缀过滤天然把 getC… 这类输入收敛到函数；
+      // 不提升到比关键字更高权重，避免破坏"非 FROM 上下文关键字优先"的既有契约。
+      (extras.functions || []).forEach(function (n) { add(n, 'function'); });
     }
     (extras.fields || []).forEach(function (n) { add(n, 'field'); });
     items.sort(function (a, b) {
       const rank = tableCtx
-        ? { snippet: 1, object: 0, field: 2, keyword: 3 }
-        : { snippet: 0, keyword: 1, object: 2, field: 3 };
+        ? { snippet: 1, object: 0, function: 0, field: 2, keyword: 3 }
+        : { snippet: 0, keyword: 1, object: 2, function: 2, field: 3 };
       return (rank[a.kind] - rank[b.kind]) || a.label.localeCompare(b.label);
     });
     return { items: items.slice(0, 12), start: start, end: end };
@@ -4896,10 +5001,12 @@
     if (schema && state.metadataCache && state.metadataCache[schema]) {
       state.metadataCache[schema].forEach(function (name) { if (name) objSet.add(name); });
     }
+    // 函数名（`select getCustomerId(...) from dual` 场景）：与表名同池、同权重渲染。
+    const routines = (schema && state.schemaRoutineCache && state.schemaRoutineCache[schema]) || [];
     // DOM 仅作兜底补充（例如搜索模式下全量渲染的对象名）。
     document.querySelectorAll('#db-objects .db-object-name').forEach(function (el) { if (el.textContent) objSet.add(el.textContent); });
     const fields = ((state.inspect && state.inspect.fields) || []).map(function (f) { return f.name; });
-    return { objects: Array.from(objSet), fields: fields, snippets: state.prefs.snippets || [] };
+    return { objects: Array.from(objSet), functions: routines, fields: fields, snippets: state.prefs.snippets || [] };
   }
   function hideComplete() {
     acState.open = false; acState.items = []; acState.index = 0;
@@ -5052,7 +5159,7 @@
     if (!box) return;
     box.hidden = false;
     box.innerHTML = acState.items.map(function (item, i) {
-      return '<button type="button" class="db-sql-ac-item' + (i === acState.index ? ' active' : '') + '" data-ac="' + i + '" role="option"><span>' + h(item.label) + '</span><small>' + h({ keyword: '关键字', snippet: '模板', object: '对象', field: '字段' }[item.kind] || item.kind) + '</small></button>';
+      return '<button type="button" class="db-sql-ac-item' + (i === acState.index ? ' active' : '') + '" data-ac="' + i + '" role="option"><span>' + h(item.label) + '</span><small>' + h({ keyword: '关键字', snippet: '模板', object: '对象', function: '函数', field: '字段' }[item.kind] || item.kind) + '</small></button>';
     }).join('');
     box.querySelectorAll('[data-ac]').forEach(function (btn) {
       btn.onmousedown = function (e) { e.preventDefault(); acState.index = Number(btn.dataset.ac); acceptComplete(); };
@@ -6226,6 +6333,18 @@
     copyDBText(columns.map(i => cellText(state.rows[row][i])).join('\t'), '已复制整行');
   }
   function closeMenus(e) { document.querySelectorAll('.db-popup-menu').forEach(m => { if (!e || !m.contains(e.target)) m.remove(); }); }
+  // “更多”是 <details>：点面板外部时应自动收起（原生 details 不会）。
+  let toolbarMoreAutoCloseBound = false;
+  function bindToolbarMoreAutoClose() {
+    if (toolbarMoreAutoCloseBound) return;
+    toolbarMoreAutoCloseBound = true;
+    document.addEventListener('click', function (e) {
+      const more = q('db-toolbar-more');
+      if (!more || !more.open) return;
+      if (e.target && more.contains(e.target)) return;
+      more.open = false;
+    }, true);
+  }
   function keepMenu(menu) {
     requestAnimationFrame(() => {
       const r = menu.getBoundingClientRect();

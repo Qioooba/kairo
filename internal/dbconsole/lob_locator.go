@@ -24,12 +24,12 @@ func (m *Manager) FindTableOwner(ctx context.Context, source Source, table strin
 	var owner string
 	err := m.withSQL(queryCtx, source, func(ctx context.Context, db *sql.DB) error {
 		query := `SELECT owner FROM (
-			SELECT owner, 1 AS prio FROM all_tables WHERE (table_name = :1 OR UPPER(table_name) = :1)
+			SELECT owner, 1 AS prio FROM all_tables WHERE (table_name = :1 OR UPPER(table_name) = :2)
 			UNION ALL
-			SELECT owner, 2 AS prio FROM all_views WHERE (view_name = :1 OR UPPER(view_name) = :1)
+			SELECT owner, 2 AS prio FROM all_views WHERE (view_name = :3 OR UPPER(view_name) = :4)
 		)
-		ORDER BY CASE WHEN owner = :2 THEN 0 ELSE prio END, owner`
-		rows, qerr := db.QueryContext(ctx, query, tUpper, uUpper)
+		ORDER BY CASE WHEN owner = :5 THEN 0 ELSE prio END, owner`
+		rows, qerr := db.QueryContext(ctx, query, tUpper, tUpper, tUpper, tUpper, uUpper)
 		if qerr != nil {
 			return qerr
 		}
@@ -71,10 +71,10 @@ func (m *Manager) FindUniqueKeyColumns(ctx context.Context, source Source, owner
 		query := `SELECT c.constraint_name, cc.column_name
 FROM all_constraints c
 JOIN all_cons_columns cc ON c.owner = cc.owner AND c.constraint_name = cc.constraint_name AND c.table_name = cc.table_name
-WHERE (c.owner = :1 OR :1 = '') AND (c.table_name = :2 OR UPPER(c.table_name) = :2)
+WHERE (c.owner = :1 OR :2 = '') AND (c.table_name = :3 OR UPPER(c.table_name) = :4)
   AND c.constraint_type = 'U' AND c.status = 'ENABLED'
 ORDER BY c.constraint_name, cc.position`
-		rows, err := db.QueryContext(ctx, query, owner, table)
+		rows, err := db.QueryContext(ctx, query, owner, owner, table, table)
 		if err == nil {
 			defer rows.Close()
 			byConstraint := make(map[string][]string)
@@ -103,10 +103,10 @@ ORDER BY c.constraint_name, cc.position`
 		idxQuery := `SELECT ic.index_name, ic.column_name
 FROM all_indexes i
 JOIN all_ind_columns ic ON i.owner = ic.index_owner AND i.index_name = ic.index_name AND i.table_name = ic.table_name
-WHERE (i.table_owner = :1 OR :1 = '') AND (i.table_name = :2 OR UPPER(i.table_name) = :2)
+WHERE (i.table_owner = :1 OR :2 = '') AND (i.table_name = :3 OR UPPER(i.table_name) = :4)
   AND i.uniqueness = 'UNIQUE'
 ORDER BY i.index_name, ic.column_position`
-		idxRows, err := db.QueryContext(ctx, idxQuery, owner, table)
+		idxRows, err := db.QueryContext(ctx, idxQuery, owner, owner, table, table)
 		if err == nil {
 			defer idxRows.Close()
 			byIndex := make(map[string][]string)

@@ -684,7 +684,7 @@ func (m *Manager) isOracleHeapTable(ctx context.Context, source Source, schema, 
 	isHeap, known := false, false
 	err := m.withSQL(ctx, source, func(ctx context.Context, db *sql.DB) error {
 		var count int
-		if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM all_tables WHERE (owner = :1 OR UPPER(owner) = UPPER(:1)) AND (table_name = :2 OR UPPER(table_name) = UPPER(:2)) AND temporary = 'N' AND iot_type IS NULL`, schema, table).Scan(&count); err != nil {
+		if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM all_tables WHERE (owner = :1 OR UPPER(owner) = UPPER(:2)) AND (table_name = :3 OR UPPER(table_name) = UPPER(:4)) AND temporary = 'N' AND iot_type IS NULL`, schema, strings.ToUpper(schema), table, strings.ToUpper(table)).Scan(&count); err != nil {
 			return err
 		}
 		isHeap = count > 0

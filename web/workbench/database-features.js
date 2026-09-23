@@ -45,6 +45,13 @@
   const TYPE_DATE = /^(date|datetime|timestamp|time)/i;
   const TYPE_BOOL = /^(bool(?:ean)?|bit)$/i;
 
+  // 深链接初始 hash 快照：SPA 的页签管理器在激活路由时会同步把 hash 规范化成
+  // `#/database`（tabs.hashFor + history.replaceState），等工作区渲染完再调
+  // applyDeepLink 时 location.hash 里的 ?sql=… 已经没了 —— 这正是"新窗口打开后没有 SQL"
+  // 的根因。本模块在 <script> 解析期就执行，早于路由改写，因此在这里快照。
+  const initialDeepHash = (function () {
+    try { return String(location.hash || ''); } catch (_) { return ''; }
+  })();
   const state = {
     observed: false,
     view: null,
@@ -1287,6 +1294,8 @@
     const params = new URLSearchParams();
     const source = options.sourceId || sourceId(); if (source) params.set('source', source);
     const sql = options.sql == null ? sqlText() : String(options.sql); if (sql) params.set('sql', sql);
+    // 注意：深链接**不**写入 autorun 标记——tests/database-review-regression.js 明确守住
+    // "链接不得自带自动执行语义"。（options.autoRun 因此只是调用方的意图参数，不落地到 URL。）
     if (params.toString().length > 16000) {
       params.delete('sql');
       toast('SQL 过长，链接仅包含数据源；请通过 SQL 文件传递查询。', 'warn');
@@ -1317,7 +1326,10 @@
     Promise.resolve(done).then(function () { toast('查询深链接已复制，可放入收藏夹', 'ok'); }).catch(function () { window.prompt('复制下面的数据库工作台链接：', url); });
   }
   function applyDeepLink() {
-    const hash = String(location.hash || ''), marker = '#/database';
+    const current = String(location.hash || '');
+    // 优先用当前 hash（应用内 hashchange 跳转），被路由规范化后再回退到解析期快照。
+    const hash = /[?&]sql=/.test(current) ? current : initialDeepHash;
+    const marker = '#/database';
     if (hash.indexOf(marker) !== 0 || state.deepLinkApplied === hash) return;
     const query = hash.slice(marker.length).replace(/^\?/, '');
     if (!query) return;
@@ -1343,6 +1355,14 @@
       if (!e) return;
       setEditorValue(sql, false);
       if (params.get('autorun') === '1') toast('链接中的 SQL 已载入，请检查后手动执行。', 'warn');
+      // 会话恢复（/api/database/sessions/restore）可能在深链接之后落地并覆盖编辑器，
+      // 这里补一次保险：只在编辑器被清空时重新写入链接里的 SQL。
+      setTimeout(function () {
+        const cur = editor();
+        if (!cur) return;
+        if (String(cur.value || '').indexOf(String(sql).slice(0, 40)) === 0) return;
+        if (!String(cur.value || '').trim()) setEditorValue(sql, false);
+      }, 1200);
     };
     apply();
   }
@@ -1584,7 +1604,7 @@
     let box = id('db-pro-ac');
     if (!box) { box = document.createElement('div'); box.id = 'db-pro-ac'; box.className = 'db-pro-ac'; box.setAttribute('role', 'listbox'); box.setAttribute('aria-label', '数据库字段联想'); (e.parentElement || document.body).appendChild(box); }
     state.ac = box; state.acItems = items.slice(0, 20); state.acIndex = 0; state.acStart = start; state.acEnd = end; box.hidden = false;
-    box.innerHTML = state.acItems.map(function (item, index) { return '<button type="button" class="db-pro-ac-item' + (index === 0 ? ' active' : '') + '" data-index="' + index + '" role="option" aria-selected="' + (index === 0 ? 'true' : 'false') + '"><span>' + esc(item.label) + '</span><small>' + esc(item.kind === 'field' ? '字段' : item.kind === 'object' ? '对象' : '关键字') + '</small></button>'; }).join('');
+    box.innerHTML = state.acItems.map(function (item, index) { return '<button type="button" class="db-pro-ac-item' + (index === 0 ? ' active' : '') + '" data-index="' + index + '" role="option" aria-selected="' + (index === 0 ? 'true' : 'false') + '"><span>' + esc(item.label) + '</span><small>' + esc(item.kind === 'field' ? '字段' : item.kind === 'object' ? '对象' : item.kind === 'function' ? '函数' : '关键字') + '</small></button>'; }).join('');
     box.querySelectorAll('[data-index]').forEach(function (button) { button.addEventListener('mousedown', function (event) { event.preventDefault(); state.acIndex = Number(button.dataset.index); acceptCompletion(); }); });
     positionCompletion(e);
   }

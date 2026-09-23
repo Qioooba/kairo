@@ -71,9 +71,9 @@ func (m *Manager) Indexes(ctx context.Context, source Source, schema, object str
 			rows, queryErr = db.QueryContext(ctx, `SELECT i.index_name, NVL(i.index_type, ''), NVL(i.uniqueness, 'NONUNIQUE'), NVL(c.column_name, '')
 FROM all_indexes i
 LEFT JOIN all_ind_columns c ON i.owner = c.index_owner AND i.index_name = c.index_name AND i.table_owner = c.table_owner AND i.table_name = c.table_name
-WHERE (i.table_owner = :1 OR i.table_owner = UPPER(:1))
-  AND (i.table_name = :2 OR UPPER(i.table_name) = UPPER(:2))
-ORDER BY i.index_name, c.column_position`, schema, object)
+WHERE (i.table_owner = :1 OR i.table_owner = UPPER(:2))
+  AND (i.table_name = :3 OR UPPER(i.table_name) = UPPER(:4))
+ORDER BY i.index_name, c.column_position`, schema, strings.ToUpper(schema), object, strings.ToUpper(object))
 		} else {
 			rows, queryErr = db.QueryContext(ctx, `SELECT index_name, index_type, non_unique, column_name
 FROM information_schema.statistics
@@ -161,9 +161,9 @@ func (m *Manager) Constraints(ctx context.Context, source Source, schema, object
        NVL(NVL2(c.r_constraint_name, c.r_owner || '.' || c.r_constraint_name, ''), '')
 FROM all_constraints c
 LEFT JOIN all_cons_columns cc ON c.owner = cc.owner AND c.constraint_name = cc.constraint_name AND c.table_name = cc.table_name
-WHERE (c.owner = :1 OR c.owner = UPPER(:1))
-  AND (c.table_name = :2 OR UPPER(c.table_name) = UPPER(:2))
-ORDER BY DECODE(c.constraint_type,'P',1,'U',2,'R',3,'C',4,5), c.constraint_name, cc.position`, schema, object)
+WHERE (c.owner = :1 OR c.owner = UPPER(:2))
+  AND (c.table_name = :3 OR UPPER(c.table_name) = UPPER(:4))
+ORDER BY DECODE(c.constraint_type,'P',1,'U',2,'R',3,'C',4,5), c.constraint_name, cc.position`, schema, strings.ToUpper(schema), object, strings.ToUpper(object))
 		} else {
 			rows, queryErr = db.QueryContext(ctx, `SELECT tc.constraint_name, tc.constraint_type,
        GROUP_CONCAT(kcu.column_name ORDER BY kcu.ordinal_position SEPARATOR ', '),
@@ -273,8 +273,8 @@ func (m *Manager) markPrimaryKeys(ctx context.Context, db *sql.DB, source Source
 FROM all_constraints c
 JOIN all_cons_columns cc ON c.owner = cc.owner AND c.constraint_name = cc.constraint_name AND c.table_name = cc.table_name
 WHERE c.constraint_type = 'P'
-  AND (c.owner = :1 OR c.owner = UPPER(:1))
-  AND (c.table_name = :2 OR UPPER(c.table_name) = UPPER(:2))`, schema, object)
+  AND (c.owner = :1 OR c.owner = UPPER(:2))
+  AND (c.table_name = :3 OR UPPER(c.table_name) = UPPER(:4))`, schema, strings.ToUpper(schema), object, strings.ToUpper(object))
 	} else {
 		rows, err = db.QueryContext(ctx, `SELECT column_name
 FROM information_schema.key_column_usage
