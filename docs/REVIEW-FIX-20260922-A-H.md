@@ -13,11 +13,11 @@
 | B 查询及格式化 | DB-01 DB-02 DB-03 DBUI-02 DBUI-04 | 5 | ✅ 已提交并验证 |
 | C 网格及 LOB | DBUI-01 DB-04 DB-05 DB-06 DB-07 | 5 | ✅ 已提交并验证 |
 | D 比较保存 | CT01 CT06 CT02 CT04 | 4 | ✅ 已提交并验证（含 handler 级补测） |
-| E 路由及历史 | DBUI-03 DBUI-05 DBUI-06 CT03 CT05 CT07 | 6 | DBUI-03 ✅、CT03/05/07 ✅；DBUI-05/06 进行中 |
-| F SFTP | OTH-03 OTH-04 OTH-05 OTH-06 | 4 | ✅ 已提交并验证 |
+| E 路由及历史 | DBUI-03 DBUI-05 DBUI-06 CT03 CT05 CT07 | 6 | ✅ 已提交并验证（分三片落地） |
+| F SFTP | OTH-03 OTH-04 OTH-05 OTH-06 | 4 | ✅ 已提交并验证（含前端身份回归） |
 | G 升级与请求 | OTH-01 OTH-02 | 2 | ✅ 已提交并验证 |
 | H 远端 shell | OPS-01 | 1 | ✅ 已提交并验证 |
-| **合计** | | **29** | |
+| **合计** | | **29** | **29/29 全部完成** |
 
 方法（遵循文档"交给 AI 的执行约束"）：
 
@@ -417,6 +417,59 @@ vm + 专用 DOM 替身与记录型 api 替身中执行真实函数（含真实�
 **有效性验证（变异）**：对冻结页面做 7 处变异（在 `%TEMP%` 副本上运行，真实页面未被触碰），
 每处都让预期用例变红，例如 `path_ids` 用 `paths` → 3 例失败、复选框键用 `entry.name` → 2 例失败、
 `[identity]` → `[identity + '/child']` → 2 例失败、`data-id` 用 `entry.name` → 2 例失败。
+
+### 2.11 批次 E 第三片 — 统一快捷键分发器与单一历史仓库（DBUI-05、DBUI-06）
+
+提交：`ea10630`（3 个文件 + 新增 15 场景回归；本提交完成 29 组问题的最后两组）
+
+- **DBUI-05**：`database-features.js` 的 capture 监听只检查 ctrl/alt/meta 与 `key='f'`（含 H/S/O）而
+  不排除 shift，随即 `stopImmediatePropagation()`；`database.js` 另有一套 capture 监听处理格式化，
+  两者互不协调 → Ctrl+Shift+F 被当成"查找"吞掉、格式化永不执行；注册顺序相反时**两者同时执行**。
+  实测（修复前逐字）：`{"ctrlShiftFInterceptedByFeatureCapture":true,"prevented":true,
+  "stoppedBeforeWorkbenchFormatter":true,"formatted":false}`。
+  修复采用比"补 `!shiftKey`"**更强**的统一分发器：`Kairo.databaseCommands`
+  （registerCommand/dispatchCommand/shortcutMatches），document 上唯一的 capture keydown 监听只调
+  dispatchCommand；修饰键精确匹配、macOS 上写作 Ctrl 的组合接受 Cmd/meta、IME（`isComposing`/229）
+  与 `defaultPrevented` 直接返回、按焦点作用域过滤（editor/workspace/outside/modal/settings）、
+  **首个命中命令执行后立即 return**；`database.js` 不再注册自己的 capture 监听，而是把命令注册进
+  同一分发器（features 未加载时挂自撤兜底监听并在 `kairo:database-commands-ready` 上迁移后移除），
+  三种挂载顺序下最终都只剩 1 个 capture 监听。Escape 归属改由命令优先级保证（关补全 95 > 取消 30）。
+- **DBUI-06**：`loadHistory` 每次加载都把全局字符串历史合入**当前**数据源（非一次性迁移），并为这些
+  本无来源/时间/结果的记录伪填当前源名、当前时间、`elapsedMs:0` 与 `status:'success'`；结构化删除/清空
+  只持久化 v2 历史，而 `database.js` 继续更新旧字符串列表 → 两个可互相复活的存储。实测（修复前逐字）：
+  B 的弹窗出现 `{"sourceId":"B","sourceName":"Source B","status":"success","elapsedMs":0,
+  "startedAt":<现造>,"sql":"SELECT A_ONLY FROM TEST_A"}`，且用真实"清空"后再调用同一真实 `loadHistory`
+  该 SQL 立刻以新的 `startedAt` 复活（`1 !== 0`）。修复：单一结构化分桶仓库
+  `kairo:database:history:v2 = {version:2, migration, buckets}`（读取时兼容并升级旧扁平结构），
+  所有入口统一经 `historyStore()`，桶键即真实 `sourceId`；旧字符串历史**只读一次**迁移进 `__legacy__`
+  桶（`sourceId:''`、`sourceName:'旧版历史／来源未知'`、`status:'unknown'`、时间与耗时均为 `null`，
+  绝不编造），迁移标记写在仓库内且 delete/clear 都不清除 → 刷新/切源/清空后都不会重新导入；页面旧版
+  下拉改为结构化历史的**单向派生**视图；`pushHistory` 不再写字符串列表、不再伪造 success；
+  `recordQueryResult` 不再用 `Date.now()-elapsedMs` 编造起点与耗时；重放只在原 `sourceId` 仍存在时
+  生成深链接，否则要求用户在可选数据源中**显式选择**，取消则不生成任何链接。
+
+**失败优先证据**：修复前基线共 **14 个场景失败**；S1 覆盖 features-first / page-first / page-render-first
+三种挂载顺序，S2 覆盖 Win32/Linux Ctrl、macOS Cmd、Windows 拒绝 Meta、Ctrl+Alt+Shift+F 不匹配，
+S3 覆盖 IME，S4 覆盖参数弹窗打开时 format/run/find 均不触发（先用正向对照证明 Ctrl+Enter 确实会写历史），
+S5 覆盖选区只格式化选区且 `db-format-all` 真实 onclick 仍全文格式化。该测试支持 `KAIRO_REGRESSION_ROOT`
+指向修复前基线目录以复用同一份断言复现。
+
+**独立复核（父 agent 执行）**：把该回归拷进仍为修复前代码的 detached worktree 运行 → `exit=1`
+（报错显示 `'SELECT OLD FROM DUAL'` 被错误导入），证明该回归确实能发现它守护的缺陷。
+
+**验证**：`node tests/database-shortcut-history.test.js` → 15/15 exit 0；`npm test` → **21/21**；
+四个受保护回归（`database-sql-editor-performance` / `grid-edit-plan-wire` /
+`grid-orderby-phase0-regression` / `database-orphan-source`）全部 exit 0；`web/app.test.js` 29 pass。
+
+**未验证**：无浏览器、未启动任何服务（未使用 127.0.0.1:18092 的真实配置）—— 真实 IME keydown 序列、
+真实菜单/弹窗焦点与 `activeElement`、真实 `localStorage` 跨一次真正页面刷新、真实鼠标点击
+（测试用 DOM 替身 dispatch click 驱动真实 handler）、E2E/截图均未执行。
+
+**残余风险**：(1) 分发器把 `state.modal || body.has-open-overlay` 视为 modal 作用域，若其它模块残留
+`has-open-overlay` 会静默抑制数据库快捷键；(2) `Kairo.database.getHistory()` 仍返回**冻结的**旧字符串
+列表，仓库内除一次性迁移外已无调用方，若有仓库外调用方期望它随查询增长会看到旧数据；
+(3) 旧版条目只在结构化弹窗的"旧版历史／来源未知"范围可见，紧凑下拉刻意不展示；
+(4) `database-features.js` 完全不加载时下拉回退到冻结列表（有意降级，未在真实浏览器验证）。
 
 ## 3. 验证证据
 ### 3.1 逐提交隔离验证（证明每个批次提交可独立复现）
