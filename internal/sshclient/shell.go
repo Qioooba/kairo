@@ -21,8 +21,10 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"golang.org/x/crypto/ssh"
+	"golang.org/x/text/encoding"
 	"golang.org/x/text/encoding/simplifiedchinese"
 	"golang.org/x/text/transform"
 )
@@ -82,22 +84,28 @@ func (d *gbkDecoder) Read(p []byte) (int, error) { return d.r.Read(p) }
 //     导致 GBK 模式下 `ls` 看着正常，但 `cd 中文目录` 发的是 UTF-8 字节，远端报
 //     "No such file or directory"，用户观感就是"乱码文件夹进不去"。
 //
-// 实现：transform.NewWriter 内部维护不完整 UTF-8 序列缓冲，跨 Write 边界不会截断汉字。
+// 实现：按字符转换，跨 Write 边界不会截断汉字（未完成的 UTF-8 序列留在 pending 里续接）。
 // Write 返回消费的源字节数和底层写错误。并发安全：wsReader 与 cwd 重试注入会并发
 // Write，用 mutex 串行化（底层 ssh stdin pipe 本身也不保证并发写安全）。
+//
+// P2（审核第 11 项）：不可编码字符（emoji、𠮷 等 GBK 表示不了的码位）不再返回编码错误。
+// 上层 wsReader 把 Stdin.Write 的任何 error 都当成"stdin 管道断开"并关闭整个终端会话，
+// 于是粘贴一个 emoji 就会掉线。这里把不可表示的字符替换成 '?'，只把**真正的底层写错误**
+// 往上传递，终端会话保持存活（与 encodeUTF8ToGBK 的"终端场景不断流优先"一致）。
 type gbkStdinEncoder struct {
-	mu  sync.Mutex
-	tw  *transform.Writer
-	raw io.WriteCloser
+	mu      sync.Mutex
+	enc     encoding.Encoding
+	pending []byte // 上一次 Write 末尾未完成的 UTF-8 序列
+	raw     io.WriteCloser
 }
 
 func newGBKStdinEncoder(dst io.WriteCloser, enc ...string) *gbkStdinEncoder {
-	encoding := simplifiedchinese.GBK
+	encodingName := simplifiedchinese.GBK
 	if len(enc) > 0 && strings.EqualFold(strings.TrimSpace(enc[0]), "gb18030") {
-		encoding = simplifiedchinese.GB18030
+		encodingName = simplifiedchinese.GB18030
 	}
 	return &gbkStdinEncoder{
-		tw:  transform.NewWriter(dst, encoding.NewEncoder()),
+		enc: encodingName,
 		raw: dst,
 	}
 }
@@ -107,13 +115,73 @@ func newGBKStdinEncoder(dst io.WriteCloser, enc ...string) *gbkStdinEncoder {
 func (e *gbkStdinEncoder) Write(p []byte) (int, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return e.tw.Write(p)
+	if len(p) == 0 {
+		return 0, nil
+	}
+
+	buf := p
+	if len(e.pending) > 0 {
+		buf = append(append([]byte(nil), e.pending...), p...)
+		e.pending = nil
+	}
+	complete, tail := splitCompleteUTF8(buf)
+	if len(tail) > 0 {
+		e.pending = append([]byte(nil), tail...)
+	}
+	if len(complete) == 0 {
+		// 整段都是半个字符，等下一次 Write 续上。
+		return len(p), nil
+	}
+
+	out := encodeUTF8ToGBKReplacing(e.enc, complete)
+	if len(out) > 0 {
+		if _, err := e.raw.Write(out); err != nil {
+			return 0, err // 真正的管道/连接错误，交给上层关闭会话
+		}
+	}
+	return len(p), nil
 }
 
-// Close 关闭底层 stdin（让远端 shell 收到 EOF），不额外 flush ——
-// transform.Writer 无缓冲残留（不完整序列只留在内存，下次 Write 会续上），
-// 关会话时残留半个汉字直接丢弃是正确行为。
+// Close 关闭底层 stdin（让远端 shell 收到 EOF）；残留的不完整序列直接丢弃。
 func (e *gbkStdinEncoder) Close() error { return e.raw.Close() }
+
+// splitCompleteUTF8 把 buf 拆成"完整 UTF-8 序列"与"末尾可能被截断的序列"。
+// 末尾不是合法起始字节（例如裸 0xFF）时按完整输入处理，由替换逻辑兜底。
+func splitCompleteUTF8(buf []byte) (complete, tail []byte) {
+	for back := 1; back <= 3 && back <= len(buf); back++ {
+		start := len(buf) - back
+		if !utf8.RuneStart(buf[start]) {
+			continue
+		}
+		if utf8.FullRune(buf[start:]) {
+			return buf, nil
+		}
+		return buf[:start], buf[start:]
+	}
+	return buf, nil
+}
+
+// encodeUTF8ToGBKReplacing 把 UTF-8 转成目标编码；无法表示的码位替换成 '?'，
+// 绝不因为个别字符丢掉整段输入（终端输入不允许因此断流）。
+func encodeUTF8ToGBKReplacing(enc encoding.Encoding, b []byte) []byte {
+	if out, _, err := transform.Bytes(enc.NewEncoder(), b); err == nil {
+		return out
+	}
+	out := make([]byte, 0, len(b))
+	for i := 0; i < len(b); {
+		_, size := utf8.DecodeRune(b[i:])
+		if size <= 0 {
+			size = 1
+		}
+		if encoded, _, err := transform.Bytes(enc.NewEncoder(), b[i:i+size]); err == nil && len(encoded) > 0 {
+			out = append(out, encoded...)
+		} else {
+			out = append(out, '?')
+		}
+		i += size
+	}
+	return out
+}
 
 // isGBKEncoding 判断是否为 GBK 系编码（大小写/空格不敏感，gbk/gb18030 等价）。
 func isGBKEncoding(enc string) bool {
