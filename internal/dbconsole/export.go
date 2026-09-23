@@ -87,16 +87,25 @@ func ExportContentType(format string) string {
 
 var fromTableRe = regexp.MustCompile(`(?is)\bFROM\s+((?:"[^"]+"|` + "`[^`]+`" + `|[A-Za-z0-9_$#]+)(?:\s*\.\s*(?:"[^"]+"|` + "`[^`]+`" + `|[A-Za-z0-9_$#]+))?)`)
 
-func InferExportTable(sql string) string {
-	noComments := stripSQLComments(sql)
+// InferExportTable 从查询里推断导出目标表。按方言去注释（`#` 只在 MySQL 是注释），
+// 并且只认**最外层** FROM：投影/WHERE 里的标量子查询不能改变导出目标，否则导出的
+// UPDATE 会写到另一张同构表上。
+func InferExportTable(kind, sql string) string {
+	noComments := stripSQLComments(kind, sql)
 	if regexp.MustCompile(`(?is)^\s*WITH\b|\bFROM\s*\(`).MatchString(noComments) {
 		return "exported_rows"
 	}
-	match := fromTableRe.FindStringSubmatch(noComments)
-	if len(match) < 2 {
+	fromIdx := findTopLevelFromKeyword(noComments)
+	if fromIdx < 0 {
 		return "exported_rows"
 	}
-	name := strings.Join(strings.Fields(match[1]), "")
+	head := gridFromHeadBeforeNextClause(noComments[fromIdx+len("FROM"):])
+	if strings.Contains(head, ",") {
+		// 多表来源无法确定唯一目标表，回退到通用表名。
+		return "exported_rows"
+	}
+	match, _ := splitGridLeadingQualifiedToken(head)
+	name := strings.Join(strings.Fields(match), "")
 	if name == "" {
 		return "exported_rows"
 	}

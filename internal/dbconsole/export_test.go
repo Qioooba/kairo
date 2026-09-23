@@ -22,16 +22,16 @@ func testExportTable() ExportTable {
 }
 
 func TestInferExportTable(t *testing.T) {
-	if got := InferExportTable("SELECT * FROM credit.T_USER WHERE 1=1"); got != "credit.T_USER" {
+	if got := InferExportTable(KindOracle, "SELECT * FROM credit.T_USER WHERE 1=1"); got != "credit.T_USER" {
 		t.Fatalf("schema.table: %q", got)
 	}
-	if got := InferExportTable(`SELECT a FROM "OWNER"."TABLE_A"`); !strings.Contains(got, "TABLE_A") {
+	if got := InferExportTable(KindOracle, `SELECT a FROM "OWNER"."TABLE_A"`); !strings.Contains(got, "TABLE_A") {
 		t.Fatalf("quoted: %q", got)
 	}
-	if got := InferExportTable("SELECT 1 AS n FROM DUAL"); got != "DUAL" {
+	if got := InferExportTable(KindOracle, "SELECT 1 AS n FROM DUAL"); got != "DUAL" {
 		t.Fatalf("dual: %q", got)
 	}
-	if got := InferExportTable("SELECT 1"); got != "exported_rows" {
+	if got := InferExportTable(KindOracle, "SELECT 1"); got != "exported_rows" {
 		t.Fatalf("fallback: %q", got)
 	}
 }
@@ -370,16 +370,16 @@ func TestQuoteIdentWithQuotedDots(t *testing.T) {
 
 func TestValidateSingleTableQuery_RejectsDerivedSubqueryAndCTE(t *testing.T) {
 	derivedSQL := "SELECT * FROM (SELECT ID + 1 AS ID, BALANCE FROM T WHERE ID = 1)"
-	if err := ValidateSingleTableQuery(derivedSQL); err == nil {
+	if err := ValidateSingleTableQuery(KindOracle, derivedSQL); err == nil {
 		t.Fatalf("expected ValidateSingleTableQuery to reject derived table %q, but got nil", derivedSQL)
 	}
 
 	cteSQL := "WITH sub AS (SELECT ID, BALANCE FROM T) SELECT * FROM sub"
-	if err := ValidateSingleTableQuery(cteSQL); err == nil {
+	if err := ValidateSingleTableQuery(KindOracle, cteSQL); err == nil {
 		t.Fatalf("expected ValidateSingleTableQuery to reject CTE %q, but got nil", cteSQL)
 	}
 
-	if table := InferExportTable(derivedSQL); table != "exported_rows" {
+	if table := InferExportTable(KindOracle, derivedSQL); table != "exported_rows" {
 		t.Fatalf("expected InferExportTable to return 'exported_rows' for derived table, got: %s", table)
 	}
 }

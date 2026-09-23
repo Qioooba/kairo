@@ -733,13 +733,13 @@ func (s *Server) handleDatabaseExport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if format == "update" {
-		if err := dbconsole.ValidateSingleTableQuery(req.SQL); err != nil {
+		if err := dbconsole.ValidateSingleTableQuery(source.Kind, req.SQL); err != nil {
 			writeStructuredErr(w, http.StatusUnprocessableEntity, err, "AMBIGUOUS_ROW_LOCATOR", false, "not_applied")
 			return
 		}
 		tableName := strings.TrimSpace(req.Table)
 		if tableName == "" {
-			tableName = dbconsole.InferExportTable(req.SQL)
+			tableName = dbconsole.InferExportTable(source.Kind, req.SQL)
 		}
 		schema, obj := dbconsole.SplitSchemaObject(tableName)
 		if schema == "" {
@@ -815,13 +815,13 @@ func (s *Server) handleDatabaseExport(w http.ResponseWriter, r *http.Request) {
 		case "insert":
 			tableName := strings.TrimSpace(req.Table)
 			if tableName == "" {
-				tableName = dbconsole.InferExportTable(req.SQL)
+				tableName = dbconsole.InferExportTable(source.Kind, req.SQL)
 			}
 			err = dbconsole.WriteINSERT(&buf, table, source.Kind, tableName)
 		case "update":
 			tableName := strings.TrimSpace(req.Table)
 			if tableName == "" {
-				tableName = dbconsole.InferExportTable(req.SQL)
+				tableName = dbconsole.InferExportTable(source.Kind, req.SQL)
 			}
 			schema, obj := dbconsole.SplitSchemaObject(tableName)
 			if schema == "" {

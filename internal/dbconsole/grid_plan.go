@@ -219,7 +219,7 @@ func parseGridQuerySyntax(kind, sql string) (*ParsedGridQuery, error) {
 	if trimmed == "" {
 		return nil, errors.New("查询 SQL 不能为空")
 	}
-	clean := stripSQLComments(trimmed)
+	clean := stripSQLComments(kind, trimmed)
 	upper := strings.ToUpper(clean)
 
 	if !strings.HasPrefix(upper, "SELECT") {
@@ -239,7 +239,7 @@ func parseGridQuerySyntax(kind, sql string) (*ParsedGridQuery, error) {
 	}
 
 	// 提取列投影
-	items, err := extractSelectProjections(clean)
+	items, err := extractSelectProjections(kind, clean)
 	if err != nil {
 		return nil, err
 	}
@@ -772,7 +772,7 @@ func planOracleRowIDRewrite(kind, sqlText string) (*oracleRowIDRewritePlan, erro
 	if trimmed == "" {
 		return nil, errors.New("SQL 不能为空")
 	}
-	clean := stripSQLComments(trimmed)
+	clean := stripSQLComments(kind, trimmed)
 	parsed, err := parseGridQuerySyntax(kind, clean)
 	if err != nil {
 		return nil, err

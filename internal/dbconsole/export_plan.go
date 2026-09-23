@@ -29,12 +29,12 @@ var (
 )
 
 // ValidateSingleTableQuery 验证查询是否为适合生成 UPDATE 语句的安全单表查询
-func ValidateSingleTableQuery(sql string) error {
+func ValidateSingleTableQuery(kind, sql string) error {
 	trimmed := strings.TrimSpace(strings.TrimRight(strings.TrimSpace(sql), "; \t\r\n"))
 	if trimmed == "" {
 		return errors.New("查询 SQL 不能为空")
 	}
-	noComments := stripSQLComments(trimmed)
+	noComments := stripSQLComments(kind, trimmed)
 	if regexp.MustCompile(`(?is)^\s*WITH\b`).MatchString(noComments) {
 		return errors.New("CTE 查询无法确定 UPDATE 目标基表，请选用 INSERT 或 CSV/JSON 格式")
 	}
@@ -102,8 +102,13 @@ var reservedSQLKeywords = map[string]bool{
 	"LEVEL":             true,
 }
 
-// stripSQLComments removes /* ... */ and -- / # comments while preserving quoted strings.
-func stripSQLComments(sql string) string {
+// stripSQLComments removes /* ... */ and -- comments while preserving quoted strings.
+//
+// P1（审核第 6 项）：`#` 只是 MySQL 的行注释起始符。Oracle 的未加引号标识符允许包含 `#`
+// （Oracle 11g SQL 语言参考的命名规则，例如 ORDERS#ARCHIVE），无条件把 `#` 当注释会把
+// 表名截断成 ORDERS，导出 UPDATE 时就会写到另一张表。因此按方言区分。
+func stripSQLComments(kind, sql string) string {
+	hashStartsComment := kind == KindMySQL
 	var b strings.Builder
 	b.Grow(len(sql))
 	n := len(sql)
@@ -166,8 +171,8 @@ func stripSQLComments(sql string) string {
 			b.WriteByte(' ')
 			continue
 		}
-		// Line comments: -- or #
-		if (c == '-' && i+1 < n && sql[i+1] == '-') || c == '#' {
+		// Line comments: -- everywhere, # 仅 MySQL
+		if (c == '-' && i+1 < n && sql[i+1] == '-') || (hashStartsComment && c == '#') {
 			for i < n && sql[i] != '\n' && sql[i] != '\r' {
 				i++
 			}
@@ -181,8 +186,8 @@ func stripSQLComments(sql string) string {
 }
 
 // extractSelectProjections extracts the raw projection items between SELECT and FROM.
-func extractSelectProjections(sql string) ([]string, error) {
-	clean := strings.TrimSpace(stripSQLComments(sql))
+func extractSelectProjections(kind, sql string) ([]string, error) {
+	clean := strings.TrimSpace(stripSQLComments(kind, sql))
 	clean = strings.TrimRight(clean, "; \t\r\n")
 	upper := strings.ToUpper(clean)
 	if !strings.HasPrefix(upper, "SELECT") {
@@ -569,14 +574,14 @@ func BuildExportTargetPlan(kind, tableName, querySQL string, columns []Column, p
 
 	tableName = strings.TrimSpace(tableName)
 	if tableName == "" && querySQL != "" {
-		tableName = InferExportTable(querySQL)
+		tableName = InferExportTable(kind, querySQL)
 	}
 	if tableName == "" || strings.EqualFold(tableName, "exported_rows") || strings.EqualFold(tableName, "DUAL") {
 		return plan, errors.New("无法解析目标基表，请指定目标表名称或选用 INSERT/CSV 格式")
 	}
 
 	if querySQL != "" {
-		if err := ValidateSingleTableQuery(querySQL); err != nil {
+		if err := ValidateSingleTableQuery(kind, querySQL); err != nil {
 			return plan, err
 		}
 	}
@@ -593,7 +598,7 @@ func BuildExportTargetPlan(kind, tableName, querySQL string, columns []Column, p
 	// 解析并验证 SQL 投影列，获取基表物理列映射
 	physicalNames := make([]string, len(columns))
 	if querySQL != "" {
-		items, err := extractSelectProjections(querySQL)
+		items, err := extractSelectProjections(kind, querySQL)
 		if err != nil {
 			return plan, err
 		}
