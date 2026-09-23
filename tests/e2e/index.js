@@ -7,6 +7,7 @@ const path = require('path');
 const TestRunner = require('./utils/test-runner');
 const data = require('./utils/page-data');
 const helpers = require('./utils/helpers');
+const { buildModuleSummary, evaluateRunVerdict } = require('./utils/run-accounting');
 const { generateReport } = require('./utils/report-generator');
 
 const PROJECT_ROOT = path.resolve(__dirname, '../..');
@@ -280,23 +281,8 @@ async function main() {
   console.log('');
 
   // 按模块汇总 发现/执行/通过/失败/跳过, 明确区分"没跑"与"跑了且通过"。
-  const resultsByIndex = new Map();
-  for (const suite of results.suites) {
-    resultsByIndex.set(suite.index, suite);
-  }
-  const moduleSummary = moduleReports.map(function (mr) {
-    const agg = { discovered: 0, executed: 0, passed: 0, failed: 0, skipped: 0 };
-    for (let i = mr.suiteIndexStart; i < mr.suiteIndexEnd; i++) {
-      const suite = resultsByIndex.get(i);
-      if (!suite) continue;
-      agg.discovered += suite.summary.total;
-      agg.executed += suite.summary.executed;
-      agg.passed += suite.summary.passed;
-      agg.failed += suite.summary.failed;
-      agg.skipped += suite.summary.skipped;
-    }
-    return Object.assign({}, mr, agg);
-  });
+  // 统计与判定都放在 tests/e2e/utils/run-accounting.js 里做成纯函数, 便于离线回归。
+  const moduleSummary = buildModuleSummary(moduleReports, results.suites);
 
   console.log('按模块统计 (发现/执行/通过/失败/跳过):');
   for (const m of moduleSummary) {
@@ -384,21 +370,16 @@ async function main() {
   await runner.close();
 
   console.log('');
-  if (results.noMatch) {
-    console.log('❌ --grep "' + runMeta.grep + '" 没有匹配到任何用例 —— 不得视为通过');
-    process.exit(1);
-  }
-  if (results.summary.failed > 0) {
-    console.log('❌ 有 ' + results.summary.failed + ' 个测试失败');
-    process.exit(1);
-  } else if (results.summary.executed === 0) {
-    console.log('❌ 没有任何用例被实际执行 (发现=' + results.summary.total +
-      ', 执行=0) —— 不得视为通过');
-    process.exit(1);
-  } else {
-    console.log('🎉 所有测试通过! (发现 ' + results.summary.total + ', 执行 ' + results.summary.executed + ')');
-    process.exit(0);
-  }
+  const verdict = evaluateRunVerdict({
+    noMatch: results.noMatch,
+    grep: runMeta.grep,
+    discovered: results.summary.total,
+    executed: results.summary.executed,
+    failed: results.summary.failed,
+    registerErrors: registerErrors,
+  });
+  console.log((verdict.ok ? '🎉 ' : '❌ ') + verdict.reason);
+  process.exit(verdict.exitCode);
 }
 
 main().catch((e) => {

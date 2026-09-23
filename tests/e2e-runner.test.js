@@ -176,6 +176,49 @@ async function main() {
     }
   }
 
+  // ---- 7: 按模块统计与"什么才算通过"的纯函数 ----
+  {
+    const { buildModuleSummary, evaluateRunVerdict } = require('./e2e/utils/run-accounting');
+
+    // 两个模块: 模块A 的 suite 索引 0-1, 模块B 的 suite 索引 2-3
+    const moduleReports = [
+      { module: './tests/a', ok: true, suiteIndexStart: 0, suiteIndexEnd: 2, testsRegistered: 3 },
+      { module: './tests/b', ok: true, suiteIndexStart: 2, suiteIndexEnd: 3, testsRegistered: 2 },
+    ];
+    // 模块B 的 suite 被 --grep 过滤掉 → 结果里没有 index=2
+    const suites = [
+      { index: 0, summary: { total: 2, executed: 2, passed: 2, failed: 0, skipped: 0 } },
+      { index: 1, summary: { total: 1, executed: 1, passed: 0, failed: 1, skipped: 0 } },
+    ];
+    const summary = buildModuleSummary(moduleReports, suites);
+    assert.strictEqual(summary.length, 2, '应为每个模块产出一条统计');
+    assert.deepStrictEqual(
+      [summary[0].discovered, summary[0].executed, summary[0].passed, summary[0].failed, summary[0].skipped],
+      [3, 3, 2, 1, 0],
+      '模块A 的 发现/执行/通过/失败/跳过 应为 3/3/2/1/0'
+    );
+    assert.deepStrictEqual(
+      [summary[1].discovered, summary[1].executed],
+      [0, 0],
+      '被过滤的模块必须显示 发现=0 执行=0, 从而与"跑了且通过"区分开'
+    );
+
+    // 判定: 否定情况一律不得算通过
+    const verdicts = [
+      [{ noMatch: true, grep: 'zzz', discovered: 0, executed: 0, failed: 0 }, 1, '零匹配'],
+      [{ noMatch: false, discovered: 5, executed: 5, failed: 1 }, 1, '有用例失败'],
+      [{ noMatch: false, discovered: 5, executed: 0, failed: 0 }, 1, '发现但零执行'],
+      [{ noMatch: false, discovered: 0, executed: 0, failed: 0, registerErrors: 2 }, 1, '模块注册失败'],
+      [{ noMatch: false, discovered: 5, executed: 5, failed: 0 }, 0, '全部通过'],
+    ];
+    for (const v of verdicts) {
+      const got = evaluateRunVerdict(v[0]);
+      assert.strictEqual(got.exitCode, v[1], `${v[2]}: exitCode 应为 ${v[1]}, got=${got.exitCode} (${got.reason})`);
+      assert.strictEqual(got.ok, v[1] === 0, `${v[2]}: ok 应与 exitCode 一致`);
+      assert.ok(got.reason && got.reason.length > 0, `${v[2]}: 必须给出原因文案`);
+    }
+  }
+
   console.log('e2e-runner passed: discovered/executed/skip 统计、noMatch 判定、SHA+viewport 截图命名均符合预期');
 }
 
