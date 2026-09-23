@@ -1137,6 +1137,96 @@ check('CT04 交换→编辑→撤回编辑→撤回交换的完整链', async ()
 });
 
 // ---------------------------------------------------------------------------
+// 审核第 5 项（P1）：临时文本"另存为"失败不得清空未保存草稿
+// ---------------------------------------------------------------------------
+
+// 驱动来源对话框：选定本地文件路径并提交（与真实入口 openSourceDialog 同一套 DOM）。
+function submitSaveAsDialog(env, targetPath) {
+  assert.ok(env.modalBody, '来源对话框必须已经弹出');
+  const kind = env.modalBody.querySelectorAll('[aria-label="数据源类型"]')[0];
+  const pathInput = env.modalBody.querySelectorAll('[aria-label="文件路径"]')[0];
+  assert.ok(kind && pathInput, '来源对话框必须包含数据源类型与文件路径控件');
+  kind.value = 'local';
+  pathInput.value = targetPath;
+  fireEvent(env.modalBody, 'submit');
+}
+
+check('P1-5 另存为失败：临时文本草稿、dirty 与来源必须完整保留', async () => {
+  const env = loadCompareModule();
+  const backend = makeBackend({
+    '/left/A.txt': { content: 'old\n', mtime: '2026-09-22T00:00:00Z' },
+    '/right/B.txt': { content: 'B one\n', mtime: '2026-09-22T00:00:00Z' }
+  });
+  const backendHandler = backend.handler();
+  env.apiHandler = async (method, url, body) => {
+    if (url === '/api/compare/write') {
+      // 模拟目标路径没有写权限（EACCES）
+      const err = new Error('open /left/A.txt: permission denied');
+      err.status = 500;
+      throw err;
+    }
+    return backendHandler(method, url, body);
+  };
+  const state = makeState();
+  const text = buildTextWorkbench(env, state);
+  await state.textWorkbench.loadPair({ kind: 'text', label: '左侧临时文本' }, { kind: 'local', path: '/right/B.txt', encoding: 'auto' });
+  typeInto(leftTextarea(text.panel), 'left draft without save\n');
+  assert.strictEqual(state.left.dirty, true, '临时文本输入后必须是脏状态');
+  assert.strictEqual(state.left.loadState, 'ready');
+
+  fireEvent(text.panel.querySelector('[data-action="save-left"]'), 'click');
+  await env.waitFor(() => !!env.modalBody, '来源对话框弹出');
+  submitSaveAsDialog(env, '/left/A.txt');
+  await env.waitFor(() => env.writes().length > 0, '写请求已发出');
+  await env.settle(30);
+
+  assert.ok(env.toasts.some(t => t.type === 'err' && /保存失败/.test(t.message)), '必须提示保存失败：' + JSON.stringify(env.toasts));
+  assert.strictEqual(leftTextarea(text.panel).value, 'left draft without save\n', '失败后编辑器内容必须原样保留');
+  assert.strictEqual(state.left.dirty, true, '失败后必须仍然是脏状态（关闭保护据此生效）');
+  assert.strictEqual(state.left.source.kind, 'text', '失败后来源必须仍是临时文本');
+  assert.notStrictEqual(state.left.loadState, 'unloaded', '失败后不得把文档置为待加载');
+  assert.strictEqual(state.left.content, 'left draft without save\n', '失败后文档模型内容必须保留');
+
+  // 再次比较（Ctrl+Enter）不得把草稿清空
+  env.fire(text.panel, 'keydown', { key: 'Enter', ctrlKey: true });
+  await env.settle(30);
+  assert.strictEqual(leftTextarea(text.panel).value, 'left draft without save\n', '再次比较后草稿必须仍在');
+
+  // 仍然可以重试：改成可写路径后必须保存成功
+  env.apiHandler = backendHandler;
+  fireEvent(text.panel.querySelector('[data-action="save-left"]'), 'click');
+  await env.waitFor(() => !!env.modalBody, '来源对话框再次弹出');
+  submitSaveAsDialog(env, '/left/A.txt');
+  await env.waitFor(() => backend.files['/left/A.txt'] && backend.files['/left/A.txt'].content === 'left draft without save\n', '重试写入成功');
+  await env.settle(30);
+  assert.strictEqual(backend.files['/left/A.txt'].content, 'left draft without save\n', '重试必须写入临时文本内容');
+  assert.strictEqual(state.left.source.kind, 'local', '成功后才切换为本地文件来源');
+  assert.strictEqual(state.left.dirty, false, '成功保存后不再是脏状态');
+});
+
+check('P1-5 另存为成功：文档身份与内容按预期切换', async () => {
+  const env = loadCompareModule();
+  const backend = makeBackend({ '/left/A.txt': { content: 'old\n', mtime: '2026-09-22T00:00:00Z' }, '/right/B.txt': { content: 'B one\n', mtime: '2026-09-22T00:00:00Z' } });
+  env.apiHandler = backend.handler();
+  const state = makeState();
+  const text = buildTextWorkbench(env, state);
+  await state.textWorkbench.loadPair({ kind: 'text', label: '左侧临时文本' }, { kind: 'local', path: '/right/B.txt', encoding: 'auto' });
+  typeInto(leftTextarea(text.panel), 'left saved text\n');
+  fireEvent(text.panel.querySelector('[data-action="save-left"]'), 'click');
+  await env.waitFor(() => !!env.modalBody, '来源对话框弹出');
+  submitSaveAsDialog(env, '/left/A.txt');
+  await env.waitFor(() => env.writes().length > 0, '写请求已发出');
+  await env.settle(30);
+
+  assert.strictEqual(backend.files['/left/A.txt'].content, 'left saved text\n', '磁盘内容必须是临时文本');
+  assert.strictEqual(state.left.source.kind, 'local', '成功后来源切换为本地文件');
+  assert.strictEqual(state.left.source.path, '/left/A.txt');
+  assert.strictEqual(state.left.dirty, false);
+  assert.strictEqual(state.left.loadState, 'ready');
+  assert.strictEqual(leftTextarea(text.panel).value, 'left saved text\n', '保存后编辑器内容必须仍可见');
+});
+
+// ---------------------------------------------------------------------------
 // 串行执行
 // ---------------------------------------------------------------------------
 

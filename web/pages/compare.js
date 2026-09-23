@@ -1248,29 +1248,37 @@
         toast(sideName + '当前为临时文本，请先指定保存文件路径', 'warn');
         const wasShowingTemp = showingResult && !!state.diff;
         openSourceDialog(item.source, false, async source => {
-          commitDocument(side, source);
-          saveSources(state);
-          updateHeader(side);
+          // P1（审核第 5 项）：先写盘，**成功之后**才切换文档身份。
+          // 旧实现先 commitDocument（清 dirty、置 loadState='unloaded'、丢弃 baseline/draft），
+          // 再写盘；写失败（EACCES 等）只弹一个错误提示，草稿已经失去"脏"标记与关闭保护，
+          // 下一次比较会重新加载目标文件并把编辑器清空 —— 临时文本彻底丢失。
+          const nextSource = Object.assign(defaultSource(side), source || {});
           const content = readModelContent(side);
           try {
             await api('POST', '/api/compare/write', {
-              target: spec(item.source),
+              target: spec(nextSource),
               content,
-              document_id: sideDocumentKey(side),
+              document_id: documentIdOf(nextSource),
               edit_seq: item.editSeq || 0,
               backup: !!options.backup,
               encoding: item.codec.encoding,
               eol: item.codec.eol,
               bom: !!item.codec.bom
             });
-            item.dirty = false;
+            // 写盘成功：此刻才切换文档身份并推进保存基线。
+            commitDocument(side, nextSource);
+            saveSources(state);
+            updateHeader(side);
             await loadSide(side);
             toast('已成功保存至 ' + sourceLabel(item.source) + (options.backup ? '（原文件已备份）' : ''), 'ok');
             if (!disposed && wasShowingTemp) {
               try { await compareNow(false, true); } catch (_) {}
             }
           } catch (e) {
-            toast('保存失败：' + (e.message || e), 'err');
+            // 保存失败：完整保留临时文本、来源、dirty 状态与重试能力（审核第 5 项）。
+            toast('保存失败：' + (e.message || e) + '；临时文本与未保存内容已保留，可重新选择路径再保存', 'err');
+            updateHeader(side);
+            refreshSaveButtons();
           }
         });
         return false;
