@@ -509,11 +509,27 @@
       quote: '',
       qCloseChar: '',
       qClosePending: false,
-      bracePending: false
+      bracePending: false,
+      // P2（审核第 7 项）：被块边界截断、尚未结束的 `:name` 参数。
+      pendingParam: null
     };
   }
-  function scanParameterChunk(chunk, scanner, onParameter) {
-    for (let i = 0; i < chunk.length; i++) {
+  function scanParameterChunk(chunk, scanner, onParameter, isLastChunk) {
+    let startIndex = 0;
+    // P2（审核第 7 项）：上一块末尾未结束的参数名在本块续接，确认结束后再提交结果。
+    // 否则 `:serialno` 的冒号落在块边界附近时会得到被截断的 ":s"，
+    // 而扫描状态仍被标记为完成，用户已填好的 serialno 绑定会被当成失效参数删掉。
+    if (scanner.pendingParam) {
+      const pending = scanner.pendingParam;
+      scanner.pendingParam = null;
+      let j = 0;
+      while (j < chunk.length && PARAM_NAME.test(chunk[j])) j++;
+      pending.name += chunk.slice(0, j);
+      pending.token += chunk.slice(0, j);
+      onParameter({ name: pending.name, token: pending.token });
+      startIndex = j;
+    }
+    for (let i = startIndex; i < chunk.length; i++) {
       const c = chunk[i], n = chunk[i + 1] || '';
       if (scanner.mode === 'line') {
         if (c === '\n') scanner.mode = 'normal';
@@ -600,6 +616,13 @@
       if (c === ':' && PARAM_NAME.test(n)) {
         let j = i + 1;
         while (j < chunk.length && PARAM_NAME.test(chunk[j])) j++;
+        if (j >= chunk.length && !isLastChunk) {
+          // 名字一直延伸到块末尾且后面还有内容：无法确认参数名是否结束，
+          // 留到下一块续扫（审核第 7 项）。
+          scanner.pendingParam = { name: chunk.slice(i + 1, j), token: chunk.slice(i, j) };
+          i = j - 1;
+          continue;
+        }
         onParameter({ name: chunk.slice(i + 1, j), token: chunk.slice(i, j) });
         i = j - 1;
         continue;
@@ -637,7 +660,7 @@
     try {
       while (offset < text.length) {
         const end = Math.min(text.length, offset + PARAM_SCAN_CHUNK);
-        scanParameterChunk(text.slice(offset, end), scanner, collect);
+        scanParameterChunk(text.slice(offset, end), scanner, collect, end >= text.length);
         offset = end;
         if (offset < text.length && budget > 0 && nowMs() - started > budget) {
           status = 'pending';

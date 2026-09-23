@@ -24,6 +24,7 @@ const UNIT_TESTS = [
   'web/pages/webservice.test.js',
   'tests/workbench-unit-tests.js',
   'tests/database-features-unit.js',
+  'tests/database-parameter-chunk-scan.test.js',
   'tests/database-review-regression.js',
   'tests/database-orphan-source.test.js',
   'tests/database-shortcut-history.test.js',
