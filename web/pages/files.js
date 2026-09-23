@@ -53,10 +53,13 @@
           server: state.currentSrv,
           username: c.username,
           password: c.password,
-          path: targetPath
+          path: targetPath,
+          // OTH-05：display path 只给人看；真实落点用父目录的不透明身份 token
+          parent_path_id: state.currentPathId || undefined,
+          name: fileName
         });
         toast('文件已创建：' + fileName, 'ok');
-        doListDir(state.currentPath, c);
+        doListDir(state.currentPath, c, state.currentPathId);
       } catch (err) {
         toast('创建文件失败：' + (err.message || err), 'err');
       }
@@ -77,16 +80,23 @@
           server: state.currentSrv,
           username: c.username,
           password: c.password,
-          path: targetPath
+          path: targetPath,
+          // OTH-05：同 doNewFile，父目录身份 + 新名字
+          parent_path_id: state.currentPathId || undefined,
+          name: folderName
         });
         toast('文件夹已创建：' + folderName, 'ok');
-        doListDir(state.currentPath, c);
+        doListDir(state.currentPath, c, state.currentPathId);
       } catch (err) {
         toast('创建文件夹失败：' + (err.message || err), 'err');
       }
     }
 
-    async function doRename(oldName, fullPath, isDir) {
+    // doRename 重命名：同时发 display 形式（legacy）和身份形式（OTH-05）。
+    //   pathId       = 被重命名项的不透明身份 token（kairo-raw:<hex>）
+    //   parentPathId = 其所在目录的身份 token
+    // parent 仍取展示路径（state.currentPath），后端 display 字段只用于审计/展示。
+    async function doRename(oldName, fullPath, isDir, pathId, parentPathId) {
       if (!state.currentSys || !state.currentSrv) {
         toast('请先选系统和服务器并连接', 'warn'); return;
       }
@@ -103,10 +113,13 @@
           username: c.username,
           password: c.password,
           old_path: fullPath,
-          new_path: newPath
+          new_path: newPath,
+          old_path_id: pathId || undefined,
+          new_parent_path_id: parentPathId || undefined,
+          new_name: newName
         });
         toast('重命名成功', 'ok');
-        doListDir(state.currentPath, c);
+        doListDir(state.currentPath, c, state.currentPathId);
       } catch (err) {
         toast('重命名失败：' + (err.message || err), 'err');
       }
@@ -117,15 +130,25 @@
       currentSys: '',
       currentSrv: '',
       currentPath: '/',
+      // OTH-05：当前目录 / 其父目录的不透明身份 token（kairo-raw:<hex>）。
+      // 同目录下 UTF-8 与 GBK 同名条目会让 display path 失去唯一性，
+      // 因此所有"对远端做操作"的请求都以 path_id 为准，display path 只用于展示/审计。
+      currentPathId: '',
+      currentParentPathId: '',
       parent: '',
       entries: [],
       filteredEntries: [], // 项 17：模糊过滤后的视图（前端 filter）
       selected: new Set(),
+      // OTH-05：identity token → 展示路径 / 条目对象（勾选集合里存的是 identity）
+      displayById: new Map(),
+      entryById: new Map(),
       sortKey: 'name',
       sortDesc: false,
       dlId: null,
       dlEvtSrc: null,
       fileStates: {},
+      // OTH-05：basename → identity 的临时映射（SSE 进度事件只给远端路径，用它换回身份键）
+      dlNameIndex: {},
       // 项 17：文件名模糊过滤（用户输入）
       filter: '',
       // 项 2：常用目录（每个 server 独立一组；存 localStorage）
@@ -145,6 +168,15 @@
       uploadQueue: [],
       uploadInflight: false, // 是否正在传一个文件（串行队列控制）
     };
+
+    // ---- OTH-05：身份 token 取值小工具 ----
+    // 后端给每个目录项都带 path_id（kairo-raw:<hex>，raw 字节绝对路径的十六进制）。
+    // 老后端 / 兜底场景没有 path_id 时退化成展示路径（行为同改造前）。
+    // 两者都只用于"资源键"，绝不直接渲染到界面上。
+    function entryPathId(entry, displayPath) { return (entry && entry.path_id) ? entry.path_id : displayPath; }
+    function entryDisplayPath(entry, displayPath) { return (entry && entry.display_path) ? entry.display_path : displayPath; }
+    // joinCurrentPath 用展示路径拼当前目录下的完整展示路径（只用于展示 / 兜底键）
+    function joinCurrentPath(name) { return (state.currentPath === '/' ? '' : state.currentPath) + '/' + name; }
 
     // ---- 连接区 ----
     const sysSel = el('select', { id: 'files-sys' });
@@ -558,6 +590,7 @@
         } catch (e) { /* ignore */ }
       }
       const startPath = pickDefaultPath();
+      // 连接是全新会话，没有可复用的身份 token → 只给 display path
       await doListDir(startPath, c);
     });
 
@@ -576,18 +609,20 @@
     btnParent.addEventListener('click', () => {
       if (state.parent && state.parent !== state.currentPath) {
         const c = creds();
-        doListDir(state.parent, c);
+        // 上级目录用"刚列出的那个目录"的父身份 token（后端给的是权威值）
+        doListDir(state.parent, c, state.currentParentPathId);
       }
     });
     btnRefresh.addEventListener('click', () => {
       const c = creds();
-      doListDir(state.currentPath, c);
+      doListDir(state.currentPath, c, state.currentPathId);
     });
     pathInp.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') {
         const p = pathInp.value.trim();
         if (p && p.startsWith('/')) {
           const c = creds();
+          // 手输路径：只有 display path，身份交给后端回填
           doListDir(p, c);
         } else {
           toast('路径必须是绝对路径（以 / 开头）', 'warn');
@@ -595,21 +630,32 @@
       }
     });
 
-    async function doListDir(path, c) {
+    // doListDir 列目录。path 始终是展示路径（响应里回填 display 字段）；
+    // pathId 存在时它才是后端的实际操作对象（OTH-05）。
+    async function doListDir(path, c, pathId) {
       try {
         const r = await api('POST', '/api/files/list', {
           system: state.currentSys, server: state.currentSrv,
-          username: c.username, password: c.password, path: path
+          username: c.username, password: c.password,
+          path: path,
+          path_id: pathId || undefined
         });
-        state.currentPath = r.path;
+        state.currentPath = r.path || path;
         state.parent = r.parent || '';
+        state.currentPathId = r.path_id || state.currentPath;
+        state.currentParentPathId = r.parent_path_id || '';
         state.entries = r.entries || [];
         state.selected.clear();
+        state.displayById.clear();
+        state.entryById.clear();
+        // pathInp 由 renderCrumbs 回填展示路径，绝不显示 kairo-raw: token
         renderCrumbs();
         renderTable();
       } catch (e) {
         state.entries = [];
         state.selected.clear();
+        state.displayById.clear();
+        state.entryById.clear();
         renderCrumbs();
         renderTable();
         // P1-BUG-10 修复：后端 handlers_files.go 已经返回场景化错误信息（如
@@ -623,7 +669,9 @@
     // ---- 文件预览（v0.5 项 1）----
     // 普通点击文件名 → 弹窗显示（modal 快速看）
     // Shift+点击 / 或显式调用 → 新窗口预览（独立页 preview.html）
-    async function openPreview(filePath, fileName) {
+    // openPreview(filePath, fileName, pathId)
+    //   pathId = 该文件的不透明身份 token（可选；老调用方不传则退回按 display path 取）
+    async function openPreview(filePath, fileName, pathId) {
       const c = creds();
       if (!c.username) { toast('请在系统配置中设置 SSH 用户名', 'warn'); return; }
       // 拿这个 server 的目录默认 encoding
@@ -638,8 +686,9 @@
         const r = await api('POST', '/api/files/preview', {
           system: state.currentSys, server: state.currentSrv,
           username: c.username, password: c.password,
-          path: filePath, encoding: encoding, max_bytes: 1048576
+          path: filePath, path_id: pathId || undefined, encoding: encoding, max_bytes: 1048576
         });
+        // 展示永远用 filePath / fileName（人类可读），绝不用 path_id
         showPreviewModal(r, fileName, filePath, encoding);
       } catch (e) {
         toast('预览失败：' + e.message, 'err');
@@ -647,7 +696,8 @@
     }
 
     // editFile 编辑远程文件：下载到临时目录 → 用外部编辑器打开 → 监控保存 → 自动上传
-    async function editFile(filePath, fileName, openerName) {
+    // pathId 为可选的身份 token（OTH-05），只有展示 path 时后端仍按 path 兜底。
+    async function editFile(filePath, fileName, openerName, pathId) {
       const c = creds();
       if (!c.username) { toast('请在系统配置中设置 SSH 用户名', 'warn'); return; }
       try {
@@ -657,6 +707,7 @@
           username: c.username,
           password: c.password,
           path: filePath,
+          path_id: pathId || undefined,
           opener: openerName
         });
         toast('已用 ' + openerName + ' 打开文件，保存后自动上传', 'success');
@@ -715,7 +766,9 @@
     }
 
     // openPreviewInNewWindow 开新窗口（preview.html），凭证走 Kairo._previewCred 跨窗口传递
-    function openPreviewInNewWindow(filePath, fileName) {
+    // 注：preview.html 是独立页面，URL 只能带展示 path（不带 path_id）；
+    //     弹窗失败回落到 modal 预览时会把 pathId 一起传过去。
+    function openPreviewInNewWindow(filePath, fileName, pathId) {
       const c = creds();
       if (!c.username) { toast('请在系统配置中设置 SSH 用户名或在上方填写', 'warn'); return; }
       let encoding = 'utf-8';
@@ -741,7 +794,7 @@
       if (!w) {
         toast('浏览器拦截了新窗口（请允许弹窗）', 'warn');
         // fallback 到 modal
-        openPreview(filePath, fileName);
+        openPreview(filePath, fileName, pathId);
       }
     }
 
@@ -788,6 +841,8 @@
       document.body.appendChild(overlay);
     }
 
+    // renderCrumbs 只渲染展示路径；面包屑跳转只能给 display path
+    // （祖先段的身份 token 后端未返回，交给后端按 path 解析；当前目录一律带 currentPathId）。
     function renderCrumbs() {
       crumbsEl.innerHTML = '';
       const parts = state.currentPath.split('/').filter(Boolean);
@@ -1057,19 +1112,25 @@
 
       const tbody = el('tbody');
       sortedEntries().forEach(entry => {
-        const fullPath = (state.currentPath === '/' ? '' : state.currentPath) + '/' + entry.name;
-        const tr = el('tr', { 'data-path': fullPath, 'data-name': entry.name, 'data-isdir': entry.isDir ? '1' : '0' });
+        // OTH-05：展示路径只给人看；identity 才是操作/勾选的资源键。
+        const fullPath = entryDisplayPath(entry, joinCurrentPath(entry.name));
+        const identity = entryPathId(entry, fullPath);
+        state.displayById.set(identity, fullPath);
+        state.entryById.set(identity, entry);
+        // data-name / data-id 都保留：data-name 供"按展示名回填状态"的兜底查找，
+        // data-id（= identity）供勾选 / 状态单元格按身份查找。
+        const tr = el('tr', { 'data-path': fullPath, 'data-name': entry.name, 'data-id': identity, 'data-isdir': entry.isDir ? '1' : '0' });
         tr.addEventListener('contextmenu', (e) => {
           e.preventDefault();
           showContextMenu(e, entry, fullPath);
         });
         const cb = el('input', { type: 'checkbox' });
-        cb.checked = state.selected.has(entry.name);
+        cb.checked = state.selected.has(identity);
         // v1.4：目录允许勾选（后端递归下载 + 强制 zip，见 doDownload zip 计算）
         cb.disabled = false;
         cb.addEventListener('change', () => {
-          if (cb.checked) state.selected.add(entry.name);
-          else state.selected.delete(entry.name);
+          if (cb.checked) state.selected.add(identity);
+          else state.selected.delete(identity);
           updateSelCount();
         });
         tr.appendChild(el('td', { class: 'col-check' }, [cb]));
@@ -1081,7 +1142,7 @@
         inner.appendChild(iconSpan);
         if (entry.isDir) {
           inner.appendChild(el('a', { href: '#', text: entry.name, onclick: (e) => {
-            e.preventDefault(); doListDir(fullPath, creds());
+            e.preventDefault(); doListDir(fullPath, creds(), identity);
           }}));
         } else {
           const link = el('a', {
@@ -1091,9 +1152,9 @@
             onclick: (e) => {
               e.preventDefault();
               if (e.shiftKey || e.ctrlKey || e.metaKey) {
-                openPreview(fullPath, entry.name);
+                openPreview(fullPath, entry.name, identity);
               } else {
-                openPreviewInNewWindow(fullPath, entry.name);
+                openPreviewInNewWindow(fullPath, entry.name, identity);
               }
             }
           });
@@ -1108,7 +1169,8 @@
         // 与 SSH 终端 / macOS Finder 一致，不需要再简化成 octal 数字。
         // 文件类型图标已经在「名称」列里有，这里不再重复。
         tr.appendChild(el('td', { class: 'mode-cell', text: entry.mode || '-' }));
-        tr.appendChild(el('td', { class: 'col-status status-cell', 'data-name': entry.name }, [document.createTextNode('')]));
+        // 状态单元格：data-id 存 identity（进度事件回填按它查），data-name 仅兜底
+        tr.appendChild(el('td', { class: 'col-status status-cell', 'data-name': entry.name, 'data-id': identity }, [document.createTextNode('')]));
 
         const actionsCell = el('td', { class: 'col-actions' });
         if (!entry.isDir) {
@@ -1120,7 +1182,7 @@
               title: '预览文件内容',
               onclick: (e) => {
                 e.stopPropagation();
-                openPreview(fullPath, entry.name);
+                openPreview(fullPath, entry.name, identity);
               }
             });
             actionsCell.appendChild(previewBtn);
@@ -1147,7 +1209,7 @@
                   style: 'display:inline-flex; align-items:center; gap:4px;',
                   onclick: (e) => {
                     e.stopPropagation();
-                    editFile(fullPath, entry.name, op.name);
+                    editFile(fullPath, entry.name, op.name, identity);
                   },
                   // op.name 来自 /api/admin/openers（用户配置），未做服务端长度/字符限制。
                   // 必须 escapeHtml，否则 `<img src=x onerror=alert(1)>` 会执行。
@@ -1164,7 +1226,7 @@
           title: '重命名此项',
           onclick: (e) => {
             e.stopPropagation();
-            doRename(entry.name, fullPath, entry.isDir);
+            doRename(entry.name, fullPath, entry.isDir, identity, state.currentPathId);
           }
         });
         actionsCell.appendChild(renameBtn);
@@ -1176,10 +1238,12 @@
       tbl.appendChild(tbody);
       tableWrap.appendChild(tbl);
       updateSelCount();
-      Object.keys(state.fileStates).forEach(bn => {
-        const st = state.fileStates[bn];
+      // 下载状态回填：state.fileStates 以 identity 为键（新增），
+      // 同时兼容旧键（basename，见 setRowStatusByName 的兜底）。
+      Object.keys(state.fileStates).forEach(key => {
+        const st = state.fileStates[key];
         if (!st) return;
-        setRowStatusByName(bn, st);
+        setRowStatusByName(key, st);
       });
     }
 
@@ -1193,7 +1257,10 @@
     function toggleAllFiles(on) {
       state.selected.clear();
       if (on) {
-        state.entries.forEach(e => { if (!e.isDir) state.selected.add(e.name); });
+        // OTH-05：全选把每一项（含目录）的 identity 加入勾选集
+        state.entries.forEach(e => {
+          state.selected.add(entryPathId(e, entryDisplayPath(e, joinCurrentPath(e.name))));
+        });
       }
       renderTable();
     }
@@ -1201,8 +1268,12 @@
     // 已删除：旧版把 ls -l 字符串简化成 octal 数字 + 图标的 formatShortMode。
     // 现在权限列直接显示后端给的 10 字符串（如 "drwxr-xr-x"），与 SSH 终端一致。
 
+    // setRowStatusByName 按 identity（data-id）定位状态单元格；name 作为旧键 / 兜底。
+    // 传进来的 key 可能是 identity（kairo-raw:<hex>）也可能只是 basename（SSE 进度事件只给路径）。
     function setRowStatusByName(name, st) {
-      const cell = tableWrap.querySelector('tr[data-name="' + cssEscape(name) + '"] .status-cell')
+      const cell = tableWrap.querySelector('tr[data-id="' + cssEscape(name) + '"] .status-cell')
+                || tableWrap.querySelector('tr .status-cell[data-id="' + cssEscape(name) + '"]')
+                || tableWrap.querySelector('tr[data-name="' + cssEscape(name) + '"] .status-cell')
                 || tableWrap.querySelector('tr .status-cell[data-name="' + cssEscape(name) + '"]');
       if (!cell) return;
       while (cell.firstChild) cell.removeChild(cell.firstChild);
@@ -1250,13 +1321,15 @@
       if (state.dlId) { toast('已有下载任务在进行中', 'warn'); return; }
       const c = creds();
       if (!c.username) { toast('请在系统配置中设置 SSH 用户名', 'warn'); return; }
-      const names = Array.from(state.selected);
-      if (!names.length) { toast('请先勾选文件', 'warn'); return; }
-      const paths = names.map(n => (state.currentPath === '/' ? '' : state.currentPath) + '/' + n);
+      // OTH-05：勾选集里存的是 identity token；paths 并行数组仍是展示路径。
+      const ids = Array.from(state.selected);
+      if (!ids.length) { toast('请先勾选文件', 'warn'); return; }
+      const paths = ids.map(id => state.displayById.get(id) || id);
       const wantZip = dlZipChk.checked;
       // v1.4：选中目录时后端会递归下载并强制打 zip（保留目录结构）
-      const selectedHasDir = names.some(n => {
-        const e = state.entries.find(en => en.name === n);
+      // 目录判定走 entryById（按 identity 取条目），不再按文件名匹配。
+      const selectedHasDir = ids.some(id => {
+        const e = state.entryById.get(id);
         return !!(e && e.isDir);
       });
       const zip = (wantZip && paths.length >= 2) || selectedHasDir;
@@ -1266,11 +1339,15 @@
       if (selectedHasDir && !wantZip) {
         toast('包含目录，将递归下载并打包 zip', 'idle');
       }
+      // basename → identity：SSE 进度事件只带远端路径，这里做一次映射以便按身份回填行状态。
+      state.dlNameIndex = {};
       state.fileStates = {};
-      paths.forEach(p => {
+      ids.forEach((id, i) => {
+        const p = paths[i];
         const bn = p.split('/').pop();
-        state.fileStates[bn] = { status: 'pending' };
-        setRowStatusByName(bn, state.fileStates[bn]);
+        if (bn) state.dlNameIndex[bn] = id;
+        state.fileStates[id] = { status: 'pending' };
+        setRowStatusByName(id, state.fileStates[id]);
       });
       btnDownload.disabled = true;
       btnCancel.disabled = false;
@@ -1283,7 +1360,7 @@
         const r = await api('POST', '/api/files/download', {
           system: state.currentSys, server: state.currentSrv,
           username: c.username, password: c.password,
-          paths: paths, zip: zip,
+          paths: paths, path_ids: ids, zip: zip,
           target_dir: (dlTargetDirInp.value || '').trim()
         });
         state.dlId = r.id;
@@ -1327,10 +1404,10 @@
         };
       } catch (e) {
         toast('启动下载失败：' + e.message, 'err');
-        paths.forEach(p => {
-          const bn = p.split('/').pop();
-          state.fileStates[bn] = { status: 'fail', error: e.message };
-          setRowStatusByName(bn, state.fileStates[bn]);
+        // 启动失败：把每个 identity 对应的行标成失败
+        ids.forEach(id => {
+          state.fileStates[id] = { status: 'fail', error: e.message };
+          setRowStatusByName(id, state.fileStates[id]);
         });
         btnDownload.disabled = false;
         btnCancel.disabled = true;
@@ -1339,21 +1416,28 @@
       }
     }
 
+    // dlKeyOf 把 SSE 进度事件里的远端路径（只有 display path）映射回 identity 键。
+    function dlKeyOf(file) {
+      const bn = String(file || '').split('/').pop();
+      if (!bn) return '';
+      return (state.dlNameIndex && state.dlNameIndex[bn]) || bn;
+    }
+
     function handleDownloadEvent(o) {
       if (o.kind === 'file_start') {
-        const bn = (o.file || '').split('/').pop();
-        state.fileStates[bn] = { status: 'downloading', written: 0, total: o.total || -1 };
-        setRowStatusByName(bn, state.fileStates[bn]);
+        const key = dlKeyOf(o.file);
+        state.fileStates[key] = { status: 'downloading', written: 0, total: o.total || -1 };
+        setRowStatusByName(key, state.fileStates[key]);
       } else if (o.kind === 'progress') {
-        const bn = (o.file || '').split('/').pop();
-        const st = state.fileStates[bn] || {};
+        const key = dlKeyOf(o.file);
+        const st = state.fileStates[key] || {};
         st.status = 'downloading'; st.written = o.written; st.total = o.total;
-        state.fileStates[bn] = st;
-        setRowStatusByName(bn, st);
+        state.fileStates[key] = st;
+        setRowStatusByName(key, st);
       } else if (o.kind === 'file_done') {
-        const bn = (o.file || '').split('/').pop();
-        state.fileStates[bn] = { status: 'done', bytes: o.bytes };
-        setRowStatusByName(bn, state.fileStates[bn]);
+        const key = dlKeyOf(o.file);
+        state.fileStates[key] = { status: 'done', bytes: o.bytes };
+        setRowStatusByName(key, state.fileStates[key]);
       } else if (o.kind === 'done') {
         btnDownload.disabled = state.selected.size === 0;
         btnCancel.disabled = true;
@@ -1370,25 +1454,26 @@
           });
           // v1.4：目录行（递归下载）不会有 file_start/file_done 事件落到行上，
           // done 时把仍 pending 的行标为完成，避免"等待…"卡死。
-          Object.keys(state.fileStates).forEach(bn => {
-            const st = state.fileStates[bn];
+          Object.keys(state.fileStates).forEach(key => {
+            const st = state.fileStates[key];
             if (st && st.status === 'pending') {
               st.status = 'done';
               st.bytes = 0;
-              setRowStatusByName(bn, st);
+              setRowStatusByName(key, st);
             }
           });
           showDownloadDoneNotify(o);
         } else {
           toast('下载失败：' + (o.error || '未知错误'), 'err');
-          Object.keys(state.fileStates).forEach(bn => {
-            const st = state.fileStates[bn];
+          Object.keys(state.fileStates).forEach(key => {
+            const st = state.fileStates[key];
             if (st.status === 'pending' || st.status === 'downloading') {
               st.status = 'fail'; st.error = o.error || '';
-              setRowStatusByName(bn, st);
+              setRowStatusByName(key, st);
             }
           });
         }
+        state.dlNameIndex = {};
         setStatus('idle');
         state.dlEvtSrc = null;
       }
@@ -1521,7 +1606,7 @@
         // 全部完成后按需刷新目录
         if (uploadRefreshChk.checked && state.currentPath) {
           const c = creds();
-          if (c.username) doListDir(state.currentPath, c);
+          if (c.username) doListDir(state.currentPath, c, state.currentPathId);
         }
         return;
       }
@@ -1862,12 +1947,12 @@
       });
 
       addItem('smClipboard', '重命名', () => {
-        doRename(entry.name, fullPath, entry.isDir);
+        doRename(entry.name, fullPath, entry.isDir, entryPathId(entry, fullPath), state.currentPathId);
       });
 
       if (!entry.isDir) {
         addItem('smEye', '预览', () => {
-          openPreviewInNewWindow(fullPath, entry.name);
+          openPreviewInNewWindow(fullPath, entry.name, entryPathId(entry, fullPath));
         });
       }
 
@@ -1876,7 +1961,7 @@
       addItem('smFolder', '新建文件夹', doNewFolder);
 
       addItem('smDownload', '下载', () => {
-        doDownloadSingle(fullPath, entry.name);
+        doDownloadSingle(fullPath, entry.name, entryPathId(entry, fullPath));
       });
 
       const localName = state.downloadedFiles[fullPath];
@@ -1942,14 +2027,20 @@
       }
     }
 
-    async function doDownloadSingle(fullPath, fileName) {
+    // doDownloadSingle 单文件/单目录下载。路径给展示用（本地命名 + 进度事件），
+    // pathId 给后端定位真实条目（缺省时退回 display path）。
+    async function doDownloadSingle(fullPath, fileName, pathId) {
       if (state.dlId) { toast('已有下载任务在进行中', 'warn'); return; }
       const c = creds();
       if (!c.username) { toast('请在系统配置中设置 SSH 用户名', 'warn'); return; }
+      // 统一用 identity 作为行状态键；没有 path_id 时退化成 display path
+      const identity = pathId || fullPath;
+      state.dlNameIndex = {};
+      state.dlNameIndex[fileName] = identity;
 
       state.fileStates = {};
-      state.fileStates[fileName] = { status: 'pending' };
-      setRowStatusByName(fileName, state.fileStates[fileName]);
+      state.fileStates[identity] = { status: 'pending' };
+      setRowStatusByName(identity, state.fileStates[identity]);
       btnDownload.disabled = true;
       btnCancel.disabled = false;
       setStatus('busy', '下载中…');
@@ -1959,7 +2050,7 @@
         const r = await api('POST', '/api/files/download', {
           system: state.currentSys, server: state.currentSrv,
           username: c.username, password: c.password,
-          paths: [fullPath], zip: false,
+          paths: [fullPath], path_ids: [identity], zip: false,
           target_dir: (dlTargetDirInp.value || '').trim()
         });
         state.dlId = r.id;
@@ -2002,8 +2093,8 @@
         };
       } catch (e) {
         toast('启动下载失败：' + e.message, 'err');
-        state.fileStates[fileName] = { status: 'fail', error: e.message };
-        setRowStatusByName(fileName, state.fileStates[fileName]);
+        state.fileStates[identity] = { status: 'fail', error: e.message };
+        setRowStatusByName(identity, state.fileStates[identity]);
         btnDownload.disabled = false;
         btnCancel.disabled = true;
         setStatus('err', '失败');

@@ -674,8 +674,15 @@ btnSearch.appendChild(el('span', { text: '搜索' }));
         _pwdOverlay: null,
         // v0.11+ SFTP 面板状态（每 tab 独立）
         filesPanelVisible: false,   // 是否显示 SFTP 面板
-        sftpCwd: '/',                // 当前 SFTP 路径
-        sftpSelected: new Set(),    // 选中文件名（多选）
+        sftpCwd: '/',                // 当前 SFTP 展示路径（人类可读绝对路径）
+        // Batch F（OTH-05）：远端条目身份。同一目录下 UTF-8 / GBK 两条记录可能显示成
+        // 同名，显示名不能做资源主键；后端为每条记录下发不透明身份 path_id（kairo-raw:<hex>）。
+        // 选中 / 进入目录 / 预览 / 编辑 / 下载一律按身份，展示路径只用于界面文案。
+        sftpCurrentPathId: '',       // 当前目录身份（新建/重命名的 parent_path_id 来源）
+        sftpParentPathId: '',        // 当前目录父级身份（返回上级用）
+        sftpDisplayById: new Map(),  // 身份 -> 展示路径（本地命名 / 进度 / 文案）
+        sftpEntryById: new Map(),    // 身份 -> 条目对象（isDir 等判断）
+        sftpSelected: new Set(),     // 选中条目身份（多选，值为 path_id）
         sftpBackend: '',            // 'sftp' | 'shell'（兜底），用于显示徽章
         sftpLoading: false,         // 列表加载中
         sftpDlEvtSrc: null,         // 当前下载 SSE EventSource
@@ -877,6 +884,7 @@ btnSearch.appendChild(el('span', { text: '搜索' }));
           }
           tab.sftpCwdQueryId = null;
           if (msg.path && typeof msg.path === 'string') {
+            // Batch F：终端 pwd 只给展示路径，条目身份由本次列目录响应下发
             sftpList(tab, msg.path);
           } else {
             toast('获取终端目录失败：返回路径为空', 'warn');
@@ -1076,7 +1084,7 @@ btnSearch.appendChild(el('span', { text: '搜索' }));
         }, 16);
         // 首次显示且未加载过文件列表时，先列当前目录（/ 或上次记忆路径）
         if ((!tab.sftpEntries || tab.sftpEntries.length === 0) && !tab.sftpLoading && !tab.sftpCwdQueryId) {
-          setTimeout(function () { sftpList(tab, tab.sftpCwd || '/'); }, 50);
+          setTimeout(function () { sftpList(tab, tab.sftpCwd || '/', tab.sftpCurrentPathId || undefined); }, 50);
         }
       } else {
         filesPanelEl.style.display = 'none';
@@ -1490,7 +1498,7 @@ function updateTabStatus(tab) {
       });
       btnSyncCwd.innerHTML = '<span style="display:inline-flex;align-items:center;gap:3px;">📂 进入当前目录</span>';
       const btnUp = el('button', { class: 'btn btn-sm', text: '↕ 上级', title: '跳到上一级目录', onclick: function () { sftpGoUp(tab); } });
-      const btnRefresh = el('button', { class: 'btn btn-sm', text: '🔄 刷新', title: '刷新当前目录', onclick: function () { sftpList(tab, tab.sftpCwd); } });
+      const btnRefresh = el('button', { class: 'btn btn-sm', text: '🔄 刷新', title: '刷新当前目录', onclick: function () { sftpList(tab, tab.sftpCwd, tab.sftpCurrentPathId); } });
 
       const navSep = el('span', { class: 'sftp-actions-sep' });
       const btnDownload = el('button', { class: 'btn btn-sm btn-primary', text: '下载', title: '下载选中文件（多选）', onclick: function () { sftpDownloadSelected(tab); }, disabled: true });
@@ -1510,7 +1518,10 @@ function updateTabStatus(tab) {
           if (allSelected) {
             tab.sftpSelected = new Set();
           } else {
-            tab.sftpSelected = new Set(tab.sftpEntries.map(function (e) { return e.name; }));
+            // Batch F：选中键是条目身份（path_id），不是显示名
+            tab.sftpSelected = new Set(tab.sftpEntries.map(function (e) {
+              return sftpEntryPathId(e, sftpEntryFullDisplayPath(tab, e));
+            }));
           }
           btnDownload.disabled = tab.sftpSelected.size === 0;
           renderSftpPanelContent(tab);
@@ -1589,9 +1600,11 @@ function updateTabStatus(tab) {
           const isDir = !!entry.isDir;
           const icon = isDir ? '📁' : '📄';
           const sizeText = isDir ? '-' : fmtBytes(entry.size);
-          const fullPath = joinPath(tab.sftpCwd, entry.name);
+          // Batch F（OTH-05）：fullPath 只用于界面文案，identity 是选中/操作键。
+          const fullPath = sftpEntryFullDisplayPath(tab, entry);
+          const identity = sftpEntryPathId(entry, fullPath);
           const row = el('tr', {
-            class: 'sftp-row' + (tab.sftpSelected.has(entry.name) ? ' sftp-row-selected' : ''),
+            class: 'sftp-row' + (tab.sftpSelected.has(identity) ? ' sftp-row-selected' : ''),
             'data-name': entry.name
           }, [
             el('td', { class: 'sftp-col-name' }, [
@@ -1602,23 +1615,23 @@ function updateTabStatus(tab) {
             el('td', { class: 'sftp-col-mtime text-dim', text: fmtMTime(entry.mtime) }),
             el('td', { class: 'sftp-col-mode text-dim', text: entry.mode || '-' }),
             el('td', { class: 'sftp-col-actions' }, isDir ? [
-              el('button', { class: 'btn btn-sm', text: '打包下载', disabled: dlInProgress, title: dlInProgress ? '当前已有下载任务进行中' : '递归下载目录并打包 zip', onclick: function (e) { e.stopPropagation(); sftpDownloadPaths(tab, [fullPath]); } }),
-              el('button', { class: 'btn btn-sm', text: '打开', onclick: function (e) { e.stopPropagation(); sftpList(tab, fullPath); } })
+              el('button', { class: 'btn btn-sm', text: '打包下载', disabled: dlInProgress, title: dlInProgress ? '当前已有下载任务进行中' : '递归下载目录并打包 zip', onclick: function (e) { e.stopPropagation(); sftpDownloadPaths(tab, [fullPath], [identity]); } }),
+              el('button', { class: 'btn btn-sm', text: '打开', onclick: function (e) { e.stopPropagation(); sftpList(tab, fullPath, identity); } })
             ] : (isText(entry.name) ? [
-              el('button', { class: 'btn btn-sm', text: '预览', onclick: function (e) { e.stopPropagation(); sftpPreview(tab, fullPath); } }),
-              el('button', { class: 'btn btn-sm', text: '下载', disabled: dlInProgress, title: dlInProgress ? '当前已有下载任务进行中' : '下载此文件', onclick: function (e) { e.stopPropagation(); sftpDownloadOne(tab, fullPath); } }),
-              ...buildEditButtons(entry.name, fullPath, tab)
+              el('button', { class: 'btn btn-sm', text: '预览', onclick: function (e) { e.stopPropagation(); sftpPreview(tab, fullPath, identity); } }),
+              el('button', { class: 'btn btn-sm', text: '下载', disabled: dlInProgress, title: dlInProgress ? '当前已有下载任务进行中' : '下载此文件', onclick: function (e) { e.stopPropagation(); sftpDownloadOne(tab, fullPath, identity); } }),
+              ...buildEditButtons(entry.name, fullPath, identity, tab)
             ] : [
-              el('button', { class: 'btn btn-sm', text: '下载', disabled: dlInProgress, title: dlInProgress ? '当前已有下载任务进行中' : '下载此文件', onclick: function (e) { e.stopPropagation(); sftpDownloadOne(tab, fullPath); } })
+              el('button', { class: 'btn btn-sm', text: '下载', disabled: dlInProgress, title: dlInProgress ? '当前已有下载任务进行中' : '下载此文件', onclick: function (e) { e.stopPropagation(); sftpDownloadOne(tab, fullPath, identity); } })
             ]))
           ]);
           row.addEventListener('click', function (e) {
             if (e.target.tagName === 'BUTTON' || e.target.tagName === 'INPUT') return;
-            if (tab.sftpSelected.has(entry.name)) {
-              tab.sftpSelected.delete(entry.name);
+            if (tab.sftpSelected.has(identity)) {
+              tab.sftpSelected.delete(identity);
               row.classList.remove('sftp-row-selected');
             } else {
-              tab.sftpSelected.add(entry.name);
+              tab.sftpSelected.add(identity);
               row.classList.add('sftp-row-selected');
             }
             btnDownload.disabled = tab.sftpSelected.size === 0;
@@ -1627,11 +1640,11 @@ function updateTabStatus(tab) {
           row.addEventListener('dblclick', function (e) {
             if (e.target.tagName === 'BUTTON') return;
             if (isDir) {
-              sftpList(tab, fullPath);
+              sftpList(tab, fullPath, identity);
             } else if (isText(entry.name)) {
-              sftpPreview(tab, fullPath);
+              sftpPreview(tab, fullPath, identity);
             } else {
-              sftpDownloadOne(tab, fullPath);
+              sftpDownloadOne(tab, fullPath, identity);
             }
           });
           tbody.appendChild(row);
@@ -1863,7 +1876,8 @@ function updateTabStatus(tab) {
       if (!next) {
         updateUploadQueueUI(tab);
         if (tab.sftpUploadRefresh && tab.sftpCwd) {
-          sftpList(tab, tab.sftpCwd);
+          // Batch F：带上当前目录身份，中文/GBK 目录刷新不会退化成按展示路径重新定位
+          sftpList(tab, tab.sftpCwd, tab.sftpCurrentPathId || undefined);
         }
         return;
       }
@@ -2073,27 +2087,87 @@ function updateTabStatus(tab) {
       return dir + '/' + name;
     }
 
-    // sftpList 调后端列目录接口，刷新 tab.sftpEntries
-    function sftpList(tab, path) {
+    // ============================================================================
+    // Batch F（OTH-05）：SFTP 远端条目身份
+    // 同一目录下一条 UTF-8、一条 GBK 记录可能显示成同一个名字，显示名不能当资源主键。
+    // 后端为每条记录下发不透明身份 path_id（kairo-raw:<hex>），目录身份走响应里的
+    // path_id / parent_path_id；选中 / 进入目录 / 预览 / 编辑 / 下载一律用身份，
+    // 展示路径只用于界面文案。拿不到身份时才退回展示路径（旧后端 / 自定义 backend）。
+    // 严禁把身份当普通路径拼接，也严禁把 kairo-raw: 显示给用户。
+    // ============================================================================
+
+    // sftpEntryPathId 返回条目身份（选中/操作键）。旧后端不发 path_id 时退回展示路径。
+    function sftpEntryPathId(entry, displayPath) {
+      return (entry && entry.path_id) ? entry.path_id : displayPath;
+    }
+
+    // sftpEntryDisplayPath 返回后端下发的展示路径，缺失时退回调用方拼好的展示路径。
+    function sftpEntryDisplayPath(entry, displayPath) {
+      return (entry && entry.display_path) ? entry.display_path : displayPath;
+    }
+
+    // sftpJoinCurrentPath 拼当前目录下的展示路径（仅用于文案 / 本地命名），
+    // 等价于 (cwd === '/' ? '' : cwd) + '/' + name，复用 joinPath 保持单点实现。
+    function sftpJoinCurrentPath(tab, name) {
+      const cwd = (tab && tab.sftpCwd) ? tab.sftpCwd : '/';
+      return joinPath(cwd, name);
+    }
+
+    // sftpEntryFullDisplayPath 条目的展示绝对路径（优先用后端 display_path）。
+    function sftpEntryFullDisplayPath(tab, entry) {
+      return sftpEntryDisplayPath(entry, sftpJoinCurrentPath(tab, entry && entry.name));
+    }
+
+    // sftpResetEntryIndex 清空身份索引（每次重新列目录时调用，避免复用上一目录身份）。
+    function sftpResetEntryIndex(tab) {
+      tab.sftpDisplayById = new Map();
+      tab.sftpEntryById = new Map();
+    }
+
+    // sftpPathIdToken 取出"可下发的身份"：只有 kairo-raw:<hex> 形态的 token 才能进
+    // path_id / path_ids 字段。后端对非 token 的非空 path_id 一律 400
+    // （见 handlers_ssh_sftp.go sftpRequestPath），拿不到身份时必须回退旧 path 契约。
+    function sftpPathIdToken(v) {
+      return (typeof v === 'string' && v.indexOf('kairo-raw:') === 0) ? v : '';
+    }
+
+    // sftpList 调后端列目录接口，刷新 tab.sftpEntries。
+    // Batch F（OTH-05）：path 是展示路径（审计 / 地址栏 / 文案），pathId 是物理条目身份，
+    // 后端有 pathId 时优先用它定位远端目录；只拿到展示路径的调用方传 undefined 即可。
+    function sftpList(tab, path, pathId) {
       if (tab.closed) { toast('tab 已关闭', 'warn'); return; }
       if (tab.sftpLoading) return;
       tab.sftpLoading = true;
       tab.sftpSelected = new Set();
+      sftpResetEntryIndex(tab);
       tab.sftpLastError = null;
       // 优化 UX：先渲染一次显示「加载中…」
       if (tab.id === pageState.activeTabId) renderSftpPanelContent(tab);
+      const idToken = sftpPathIdToken(pathId);
       api('POST', '/api/ssh/sftp/list', {
         system: tab.system, server: tab.server,
-        path: path
+        path: path,
+        // 有身份时后端只用它定位；display_path 只喂地址栏/审计，绝不参与物理定位
+        path_id: idToken || undefined,
+        display_path: idToken ? path : undefined
       }).then(function (resp) {
         tab.sftpLoading = false;
         tab.sftpCwd = resp.path || path;
+        tab.sftpCurrentPathId = resp.path_id || tab.sftpCwd;
+        tab.sftpParentPathId = resp.parent_path_id || '';
         tab.sftpEntries = resp.entries || [];
         tab.sftpBackend = resp.backend || '';
         // 排序：目录在前，文件在后；同类按名称
         tab.sftpEntries.sort(function (a, b) {
           if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
           return a.name.localeCompare(b.name);
+        });
+        // Batch F：建立「身份 -> 展示路径 / 条目」索引，供选中、下载、编辑按身份取用
+        tab.sftpEntries.forEach(function (entry) {
+          const displayPath = sftpEntryFullDisplayPath(tab, entry);
+          const identity = sftpEntryPathId(entry, displayPath);
+          tab.sftpDisplayById.set(identity, displayPath);
+          tab.sftpEntryById.set(identity, entry);
         });
         if (tab.id === pageState.activeTabId) renderSftpPanelContent(tab);
       }).catch(function (e) {
@@ -2117,7 +2191,8 @@ function updateTabStatus(tab) {
       const parts = tab.sftpCwd.split('/').filter(Boolean);
       parts.pop();
       const parent = '/' + parts.join('/');
-      sftpList(tab, parent || '/');
+      // Batch F：上一级身份用上次列目录响应的 parent_path_id（展示路径可能指不到物理条目）
+      sftpList(tab, parent || '/', tab.sftpParentPathId || undefined);
     }
 
     // gotoCurrentDir 通过 WS 向活跃 shell 查询真实 cwd（不再用独立连接的 /api/ssh/sftp/pwd，
@@ -2150,12 +2225,19 @@ function updateTabStatus(tab) {
     }
 
     // sftpPreview 在新 tab 打开预览（文本文件）
-    function sftpPreview(tab, fullPath) {
-      const url = '/preview.html?system=' + encodeURIComponent(tab.system) +
+    // Batch F（OTH-05）：URL 里额外带 path_id（条目身份）。preview.html 目前只解析
+    // path/encoding，需要它把 path_id 转发进 /api/ssh/sftp/preview 请求体才真正生效
+    // （该页不在本次改动范围）；带上是前向兼容的，旧后端/旧预览页会忽略该参数。
+    function sftpPreview(tab, fullPath, pathId) {
+      let url = '/preview.html?system=' + encodeURIComponent(tab.system) +
         '&server=' + encodeURIComponent(tab.server) +
         '&path=' + encodeURIComponent(fullPath) +
         '&encoding=' + (tab.encoding || 'utf-8') +
         '&source=ssh-sftp';
+      const idToken = sftpPathIdToken(pathId);
+      if (idToken) {
+        url += '&path_id=' + encodeURIComponent(idToken);
+      }
       const SftpCommon = (window.Kairo && window.Kairo.SftpCommon) || {};
       if (SftpCommon.openPreviewWindow) {
         SftpCommon.openPreviewWindow(url);
@@ -2166,7 +2248,8 @@ function updateTabStatus(tab) {
 
     // buildEditButtons 构建编辑按钮（使用用户配置的外部打开器）
     // v0.14：opener 图标统一走 Kairo.icons.openerIconHTML（emoji / exe 真实图标 / SVG fallback）。
-    function buildEditButtons(fileName, fullPath, tab) {
+    // Batch F：pathId 是条目身份，随编辑请求下发；fileName/fullPath 仍只用于展示。
+    function buildEditButtons(fileName, fullPath, pathId, tab) {
       const openers = Kairo.state.downloadsOpeners || [];
       if (!openers || openers.length === 0) {
         return [
@@ -2189,7 +2272,7 @@ function updateTabStatus(tab) {
           style: 'display:inline-flex; align-items:center; gap:4px;',
           onclick: function (e) {
             e.stopPropagation();
-            sftpEdit(tab, fullPath, op.name);
+            sftpEdit(tab, fullPath, pathId, op.name);
           },
           // op.name 来自 /api/admin/openers（用户配置），未做服务端长度/字符限制。
           // 必须 escapeHtml，否则 `<img src=x onerror=alert(1)>` 会执行。
@@ -2199,7 +2282,9 @@ function updateTabStatus(tab) {
     }
 
     // sftpEdit 编辑远程文件：下载到临时目录 → 用外部编辑器打开 → 监控保存 → 自动上传
-    function sftpEdit(tab, fullPath, openerName) {
+    // Batch F（OTH-05）：path 保留展示路径（后端用于命名 / 审计），path_id（身份 token）
+    // 用来定位物理条目；拿不到身份时省略该字段，后端回退旧 path 契约。
+    function sftpEdit(tab, fullPath, pathId, openerName) {
       const creds = getCreds(tab.system, tab.server);
       api('POST', '/api/ssh/sftp/edit', {
         system: tab.system,
@@ -2207,6 +2292,7 @@ function updateTabStatus(tab) {
         username: creds.username || '',
         password: creds.password || '',
         path: fullPath,
+        path_id: sftpPathIdToken(pathId) || undefined,
         opener: openerName
       }).then(function (r) {
         toast('已用 ' + openerName + ' 打开文件，保存后自动上传', 'success');
@@ -2265,26 +2351,31 @@ function updateTabStatus(tab) {
       };
     }
 
-    // sftpDownloadOne 下载单个文件
-    function sftpDownloadOne(tab, fullPath) {
-      sftpDownloadPaths(tab, [fullPath]);
+    // sftpDownloadOne 下载单个文件。
+    // Batch F：fullPath 是展示路径（后端用于本地命名 / 进度事件），pathId 定位物理条目。
+    function sftpDownloadOne(tab, fullPath, pathId) {
+      sftpDownloadPaths(tab, [fullPath], [pathId]);
     }
 
-    // sftpDownloadSelected 下载所有选中文件
+    // sftpDownloadSelected 下载所有选中文件。
+    // Batch F（OTH-05）：选中集合里存的是身份，展示路径从 sftpDisplayById 反查；
+    // paths 与 path_ids 必须同长同序（后端用 paths 命名、用 path_ids 选物理条目）。
     function sftpDownloadSelected(tab) {
       if (tab.sftpSelected.size === 0) {
         toast('请先选中文件（单击文件行）', 'warn');
         return;
       }
-      const paths = [];
-      tab.sftpSelected.forEach(function (name) {
-        paths.push(joinPath(tab.sftpCwd, name));
+      const ids = Array.from(tab.sftpSelected);
+      const paths = ids.map(function (id) {
+        return (tab.sftpDisplayById && tab.sftpDisplayById.get(id)) || id;
       });
-      sftpDownloadPaths(tab, paths);
+      sftpDownloadPaths(tab, paths, ids);
     }
 
-    // sftpDownloadPaths 启动下载任务 + 订阅 SSE 进度
-    function sftpDownloadPaths(tab, paths) {
+    // sftpDownloadPaths 启动下载任务 + 订阅 SSE 进度。
+    // pathIds 是身份数组，与 paths 同长同序；没有身份的条目留空串，由后端按该位置的
+    // 展示路径（paths[i]）回退——非 token 的非空 path_id 会被后端 400 拒绝。
+    function sftpDownloadPaths(tab, paths, pathIds) {
       // 防双击：用 starting flag + sftpDlId 双重保护，
       // 避免 POST 还没返回时快速点击发两次请求。
       if (tab.sftpDlId || tab.sftpDlStarting) {
@@ -2296,9 +2387,11 @@ function updateTabStatus(tab) {
       const btnDownload = filesPanelEl.querySelector('.sftp-actions .btn-primary');
       if (btnDownload) btnDownload.disabled = true;
       const SftpCommon = (window.Kairo && window.Kairo.SftpCommon) || {};
+      const rawIds = (pathIds && pathIds.length === paths.length) ? pathIds : paths;
+      const ids = rawIds.map(function (v) { return sftpPathIdToken(v); });
       const payload = {
         system: tab.system, server: tab.server,
-        paths: paths, zip: paths.length >= 2
+        paths: paths, path_ids: ids, zip: paths.length >= 2
       };
       SftpCommon.apiDownloadSshSftp(payload).then(function (r) {
         tab.sftpDlStarting = false;

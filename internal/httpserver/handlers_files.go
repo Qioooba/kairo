@@ -72,46 +72,56 @@ type sftpClientLike interface {
 // v1.0 起加 MaxEntries：单 server 列目录条目上限（防 10w 文件目录爆内存）。
 // 0 = 走默认值 filesListDefaultMax；硬上限 filesListHardMax。
 type filesListReq struct {
-	System     string            `json:"system"`
-	Server     string            `json:"server"`
-	Servers    []string          `json:"servers"` // v0.5 新增：多 server 共享 path
-	Targets    []filesListTarget `json:"targets"` // v0.5 新增：多 server 多 path
-	Username   string            `json:"username"`
-	Password   string            `json:"password"`
-	Path       string            `json:"path"`        // 必须以 "/" 开头的绝对路径
-	MaxEntries int               `json:"max_entries"` // v1.0：单 server 列目录条目上限（0 = 默认）
+	System      string            `json:"system"`
+	Server      string            `json:"server"`
+	Servers     []string          `json:"servers"` // v0.5 新增：多 server 共享 path
+	Targets     []filesListTarget `json:"targets"` // v0.5 新增：多 server 多 path
+	Username    string            `json:"username"`
+	Password    string            `json:"password"`
+	Path        string            `json:"path"` // 旧契约：展示绝对路径
+	DisplayPath string            `json:"display_path,omitempty"`
+	PathID      string            `json:"path_id,omitempty"` // OTH-05：身份，优先于 path
+	MaxEntries  int               `json:"max_entries"`       // v1.0：单 server 列目录条目上限（0 = 默认）
 }
 
 // filesListTarget 一个 (server, path) 列表目标
 type filesListTarget struct {
-	Server string `json:"server"`
-	Path   string `json:"path"`
+	Server      string `json:"server"`
+	Path        string `json:"path"`
+	DisplayPath string `json:"display_path,omitempty"`
+	PathID      string `json:"path_id,omitempty"`
 }
 
 // filesEntry 目录条目（用于前端表格）
+//
+// OTH-05：path_id 对所有条目下发（含 ASCII/UTF-8/GBK），display_path 供地址栏/面包屑。
 type filesEntry struct {
-	Name     string `json:"name"`
-	RawName  string `json:"raw_name,omitempty"`
-	Encoding string `json:"encoding,omitempty"`
-	PathID   string `json:"path_id,omitempty"`
-	Size     int64  `json:"size"`
-	IsDir    bool   `json:"isDir"`
-	Mode     string `json:"mode"`  // 例如 "drwxr-xr-x"，便于 UI 显示
-	MTime    string `json:"mtime"` // RFC3339
+	Name        string `json:"name"`
+	DisplayPath string `json:"display_path,omitempty"`
+	RawName     string `json:"raw_name,omitempty"`
+	Encoding    string `json:"encoding,omitempty"`
+	PathID      string `json:"path_id,omitempty"`
+	Size        int64  `json:"size"`
+	IsDir       bool   `json:"isDir"`
+	Mode        string `json:"mode"`  // 例如 "drwxr-xr-x"，便于 UI 显示
+	MTime       string `json:"mtime"` // RFC3339
 }
 
 // filesListServerResult 多服务器列目录时单台结果
 type filesListServerResult struct {
-	Server    string       `json:"server"`
-	Host      string       `json:"host,omitempty"`
-	Path      string       `json:"path,omitempty"`
-	Parent    string       `json:"parent,omitempty"`
-	OK        bool         `json:"ok"`
-	Error     string       `json:"error,omitempty"`
-	Entries   []filesEntry `json:"entries,omitempty"`
-	Count     int          `json:"count"`
-	Truncated bool         `json:"truncated,omitempty"` // v1.0：true 表示远端条目 > max，实际只返回 max 条
-	Ms        int64        `json:"elapsed_ms"`
+	Server       string       `json:"server"`
+	Host         string       `json:"host,omitempty"`
+	Path         string       `json:"path,omitempty"`
+	DisplayPath  string       `json:"display_path,omitempty"`
+	Parent       string       `json:"parent,omitempty"`
+	PathID       string       `json:"path_id,omitempty"`
+	ParentPathID string       `json:"parent_path_id,omitempty"`
+	OK           bool         `json:"ok"`
+	Error        string       `json:"error,omitempty"`
+	Entries      []filesEntry `json:"entries,omitempty"`
+	Count        int          `json:"count"`
+	Truncated    bool         `json:"truncated,omitempty"` // v1.0：true 表示远端条目 > max，实际只返回 max 条
+	Ms           int64        `json:"elapsed_ms"`
 }
 
 // handleFilesList 列远端目录（任意路径）。
@@ -158,9 +168,13 @@ func (s *Server) handleFilesList(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 决定模式：targets > servers > server（向后兼容）
+	//
+	// OTH-05：每个 plan 区分"访问目标"（身份 token 或展示路径，用于远端访问）与
+	// "展示路径"（白名单 / 响应 / 审计）。身份字段先解码，再按原始绝对路径校验合法性。
 	type plan struct {
-		server string
-		path   string
+		server  string
+		target  string
+		display string
 	}
 	var plans []plan
 	switch {
@@ -169,30 +183,31 @@ func (s *Server) handleFilesList(w http.ResponseWriter, r *http.Request) {
 		seen := make(map[string]bool, len(req.Targets))
 		for _, tg := range req.Targets {
 			sn := strings.TrimSpace(tg.Server)
-			pp := strings.TrimSpace(tg.Path)
-			if sn == "" || pp == "" {
+			if sn == "" {
 				writeErr(w, 400, errors.New("targets 每项必须有 server + path"))
 				return
 			}
-			if !strings.HasPrefix(pp, "/") {
-				writeErr(w, 400, fmt.Errorf("path 必须是绝对路径: %q", pp))
+			target, display, perr := sftpRequestPath(tg.PathID, tg.DisplayPath, tg.Path)
+			if perr != nil {
+				writeErr(w, 400, perr)
 				return
 			}
-			key := sn + "\x00" + pp
+			key := sn + "\x00" + target
 			if seen[key] {
 				continue
 			}
 			seen[key] = true
-			plans = append(plans, plan{server: sn, path: pp})
+			plans = append(plans, plan{server: sn, target: target, display: display})
 		}
 	case len(req.Servers) > 0:
 		// 多服务器共享 path（项 7 主推荐用法）
-		if req.Path == "" {
+		if req.Path == "" && req.PathID == "" && req.DisplayPath == "" {
 			writeErr(w, 400, errors.New("path 不能为空"))
 			return
 		}
-		if !strings.HasPrefix(req.Path, "/") {
-			writeErr(w, 400, errors.New("path 必须是绝对路径（以 / 开头）"))
+		target, display, perr := sftpRequestPath(req.PathID, req.DisplayPath, req.Path)
+		if perr != nil {
+			writeErr(w, 400, perr)
 			return
 		}
 		seen := make(map[string]bool, len(req.Servers))
@@ -205,7 +220,7 @@ func (s *Server) handleFilesList(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			seen[sn] = true
-			plans = append(plans, plan{server: sn, path: req.Path})
+			plans = append(plans, plan{server: sn, target: target, display: display})
 		}
 		if len(plans) == 0 {
 			writeErr(w, 400, errors.New("servers 不能全为空"))
@@ -218,33 +233,40 @@ func (s *Server) handleFilesList(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, 400, errors.New("server 不能为空（多服务器请填 servers 或 targets）"))
 			return
 		}
-		if req.Path == "" {
+		if req.Path == "" && req.PathID == "" && req.DisplayPath == "" {
 			writeErr(w, 400, errors.New("path 不能为空"))
 			return
 		}
-		if !strings.HasPrefix(req.Path, "/") {
-			writeErr(w, 400, errors.New("path 必须是绝对路径（以 / 开头）"))
+		target, display, perr := sftpRequestPath(req.PathID, req.DisplayPath, req.Path)
+		if perr != nil {
+			writeErr(w, 400, perr)
 			return
 		}
-		plans = append(plans, plan{server: sn, path: req.Path})
+		plans = append(plans, plan{server: sn, target: target, display: display})
 	}
 
 	// 项 14：free_file_roots 白名单检查（仅 list 时校验；download 也复用同一逻辑）。
 	// 多服务器模式：每个 path 都要在白名单里（任意一个不通过就 403 整个请求）
+	//
+	// 白名单按**展示路径**匹配：白名单配置写的是人类可读路径，而 GBK 条目的
+	// 身份 token 解码后是非法 UTF-8 字节，直接拿去匹配会把合法目录判成越权。
+	// 身份 token 本身只能由我们自己的列表结果签发（列表已通过白名单），
+	// 且解码后的原始路径仍要过 sftpRequestPath 的绝对路径/非法字符校验。
 	// BE-020：复用入口取的 cur，不再重复 s.cur()。
 	for _, p := range plans {
-		if !cur.App.FreeFileRootsEnabled(p.path) {
-			writeErr(w, 403, fmt.Errorf("path %q 不在 app.free_file_roots 白名单中", p.path))
+		if !cur.App.FreeFileRootsEnabled(p.display) {
+			writeErr(w, 403, fmt.Errorf("path %q 不在 app.free_file_roots 白名单中", p.display))
 			return
 		}
 	}
 
 	// 解析 server 配置（找不到的 server → 错误结果，不让整请求 400）
 	type job struct {
-		idx    int
-		server string
-		path   string
-		srv    *config.ServerConfig
+		idx     int
+		server  string
+		target  string
+		display string
+		srv     *config.ServerConfig
 	}
 	results := make([]filesListServerResult, len(plans))
 	jobs := make([]job, 0, len(plans))
@@ -252,23 +274,25 @@ func (s *Server) handleFilesList(w http.ResponseWriter, r *http.Request) {
 		_, sc, ok := cur.FindServer(req.System, p.server)
 		if !ok {
 			results[i] = filesListServerResult{
-				Server: p.server,
-				Path:   filepath.ToSlash(filepath.Clean(p.path)),
-				OK:     false,
-				Error:  "系统或服务器不存在",
-				Count:  0,
-				Ms:     0,
+				Server:      p.server,
+				Path:        filepath.ToSlash(filepath.Clean(p.display)),
+				DisplayPath: filepath.ToSlash(filepath.Clean(p.display)),
+				OK:          false,
+				Error:       "系统或服务器不存在",
+				Count:       0,
+				Ms:          0,
 			}
 			continue
 		}
-		results[i] = filesListServerResult{Server: p.server, Host: sc.Host, Path: filepath.ToSlash(filepath.Clean(p.path)), OK: true}
-		jobs = append(jobs, job{idx: i, server: p.server, path: p.path, srv: sc})
+		cleaned := filepath.ToSlash(filepath.Clean(p.display))
+		results[i] = filesListServerResult{Server: p.server, Host: sc.Host, Path: cleaned, DisplayPath: cleaned, OK: true}
+		jobs = append(jobs, job{idx: i, server: p.server, target: p.target, display: p.display, srv: sc})
 	}
 
 	// 单服务器模式（向后兼容）：保持原响应结构（{path, parent, entries}）
 	if len(plans) == 1 && len(req.Targets) == 0 && len(req.Servers) == 0 {
 		if !results[0].OK {
-			s.audit.Write("files.list", "system", req.System, "server", req.Server, "path", req.Path, "result", "fail", "err", results[0].Error)
+			s.audit.Write("files.list", "system", req.System, "server", req.Server, "path", results[0].DisplayPath, "result", "fail", "err", results[0].Error)
 			writeErr(w, 400, errors.New(results[0].Error))
 			return
 		}
@@ -283,24 +307,27 @@ func (s *Server) handleFilesList(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, 400, errors.New("缺少密码（输入或勾选「记住密码」）"))
 			return
 		}
-		es, truncated, err := s.listOneServer(r.Context(), req.System, sn, entry, creds.Username, creds.Password, req.Path, maxEntries)
+		res, err := s.listOneServer(r.Context(), req.System, sn, entry, creds.Username, creds.Password, jobs[0].target, jobs[0].display, maxEntries)
 		if err != nil {
-			s.audit.Write("files.list", "system", req.System, "server", sn, "path", req.Path, "result", "fail", "err", err.Error())
+			s.audit.Write("files.list", "system", req.System, "server", sn, "path", jobs[0].display, "result", "fail", "err", err.Error())
 			writeErrSanitized(w, 502, err)
 			return
 		}
-		cleaned := filepath.ToSlash(filepath.Clean(req.Path))
+		cleaned := filepath.ToSlash(filepath.Clean(jobs[0].display))
 		parent := ""
 		if cleaned != "/" && cleaned != "." {
 			parent = filepath.ToSlash(filepath.Dir(cleaned))
 		}
-		s.audit.Write("files.list", "system", req.System, "server", sn, "path", req.Path, "result", "ok", "count", len(es), "truncated", truncated)
+		s.audit.Write("files.list", "system", req.System, "server", sn, "path", cleaned, "result", "ok", "count", len(res.Entries), "truncated", res.Truncated)
 		writeJSON(w, 200, map[string]any{
-			"path":      cleaned,
-			"parent":    parent,
-			"entries":   es,
-			"truncated": truncated,
-			"max":       maxEntries,
+			"path":           cleaned,
+			"display_path":   cleaned,
+			"parent":         parent,
+			"path_id":        res.DirPathID,
+			"parent_path_id": res.ParentPathID,
+			"entries":        res.Entries,
+			"truncated":      res.Truncated,
+			"max":            maxEntries,
 		})
 		return
 	}
@@ -324,32 +351,32 @@ func (s *Server) handleFilesList(w http.ResponseWriter, r *http.Request) {
 			for j := range jobCh {
 				sn := j.server
 				entry := j.srv
-				pp := j.path
+				display := j.display
 				// 每台独立 resolve creds：username/password 可走默认（不填时用 server.Username）
 				creds, err := s.resolveCreds(req.Username, req.Password, req.System, sn, entry.Username, entry.Password)
-				if err != nil {
-					results[j.idx] = filesListServerResult{Server: sn, Host: entry.Host, Path: filepath.ToSlash(filepath.Clean(pp)), OK: false, Error: err.Error(), Count: 0}
-					continue
-				}
-				if creds.Password == "" {
-					results[j.idx] = filesListServerResult{Server: sn, Host: entry.Host, Path: filepath.ToSlash(filepath.Clean(pp)), OK: false, Error: "缺少密码（输入或勾选「记住密码」）", Count: 0}
-					continue
-				}
-				start := time.Now()
-				es, truncated, err := s.listOneServer(r.Context(), req.System, sn, entry, creds.Username, creds.Password, pp, maxEntries)
-				ms := time.Since(start).Milliseconds()
-				cleaned := filepath.ToSlash(filepath.Clean(pp))
+				cleaned := filepath.ToSlash(filepath.Clean(display))
 				parent := ""
 				if cleaned != "/" && cleaned != "." {
 					parent = filepath.ToSlash(filepath.Dir(cleaned))
 				}
 				if err != nil {
-					results[j.idx] = filesListServerResult{Server: sn, Host: entry.Host, Path: cleaned, Parent: parent, OK: false, Error: err.Error(), Count: 0, Ms: ms}
-					s.audit.Write("files.list", "system", req.System, "server", sn, "path", pp, "result", "fail", "err", err.Error())
+					results[j.idx] = filesListServerResult{Server: sn, Host: entry.Host, Path: cleaned, DisplayPath: cleaned, Parent: parent, OK: false, Error: err.Error(), Count: 0}
 					continue
 				}
-				results[j.idx] = filesListServerResult{Server: sn, Host: entry.Host, Path: cleaned, Parent: parent, OK: true, Entries: es, Count: len(es), Truncated: truncated, Ms: ms}
-				s.audit.Write("files.list", "system", req.System, "server", sn, "path", pp, "result", "ok", "count", len(es), "truncated", truncated)
+				if creds.Password == "" {
+					results[j.idx] = filesListServerResult{Server: sn, Host: entry.Host, Path: cleaned, DisplayPath: cleaned, Parent: parent, OK: false, Error: "缺少密码（输入或勾选「记住密码」）", Count: 0}
+					continue
+				}
+				start := time.Now()
+				res, err := s.listOneServer(r.Context(), req.System, sn, entry, creds.Username, creds.Password, j.target, display, maxEntries)
+				ms := time.Since(start).Milliseconds()
+				if err != nil {
+					results[j.idx] = filesListServerResult{Server: sn, Host: entry.Host, Path: cleaned, DisplayPath: cleaned, Parent: parent, OK: false, Error: err.Error(), Count: 0, Ms: ms}
+					s.audit.Write("files.list", "system", req.System, "server", sn, "path", cleaned, "result", "fail", "err", err.Error())
+					continue
+				}
+				results[j.idx] = filesListServerResult{Server: sn, Host: entry.Host, Path: cleaned, DisplayPath: cleaned, Parent: parent, PathID: res.DirPathID, ParentPathID: res.ParentPathID, OK: true, Entries: res.Entries, Count: len(res.Entries), Truncated: res.Truncated, Ms: ms}
+				s.audit.Write("files.list", "system", req.System, "server", sn, "path", cleaned, "result", "ok", "count", len(res.Entries), "truncated", res.Truncated)
 			}
 		}()
 	}
@@ -374,13 +401,40 @@ func (s *Server) handleFilesList(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// filesListOneResult 是 listOneServer 的结果：条目 + 截断标记 + 目录身份。
+type filesListOneResult struct {
+	Entries      []filesEntry
+	Truncated    bool
+	DirPathID    string
+	ParentPathID string
+}
+
+// filesEntries 把列目录结果转成响应条目。
+//
+// OTH-05：每条条目都带 path_id（由**已解析的原始父路径**生成，覆盖 ASCII/UTF-8/GBK）；
+// display_parent 是给地址栏/面包屑用的人类可读路径。
+func filesEntries(displayParent string, infos []os.FileInfo) []filesEntry {
+	entries := make([]filesEntry, 0, len(infos))
+	for _, info := range infos {
+		entries = append(entries, filesEntry{
+			Name:        info.Name(),
+			DisplayPath: path.Join(displayParent, info.Name()),
+			RawName:     sftpclient.RawNameOf(info),
+			Encoding:    sftpclient.EncodingOf(info),
+			PathID:      sftpclient.PathIDOf(displayParent, info),
+			Size:        info.Size(),
+			IsDir:       info.IsDir(),
+			Mode:        sftpclient.FormatMode(info.Mode()),
+			MTime:       info.ModTime().UTC().Format(time.RFC3339),
+		})
+	}
+	return entries
+}
+
 // listOneServer 实际 SSH→SFTP→ReadDir 一台 server 的目录。
 //
 // 把 list 的核心逻辑抽出来，单服务器 / 多服务器 handler 都共用。
-// 返回 (entries, truncated, err)：
-//   - entries: 目录条目（最多 maxEntries 条）；
-//   - truncated: true 表示远端实际条目数 > maxEntries；
-//   - err: 协议 / 网络 / 权限错误。
+// remotePath 是"访问目标"（身份 token 或展示路径），displayPath 用于展示与身份文案。
 //
 // v1.0 起改用 sftpCli.ListLimited（sftpclient 内部委托 backend，
 // SFTP 治标本地 cap / shell 治本远端 head）防止 10w 文件目录爆内存。
@@ -388,9 +442,9 @@ func (s *Server) listOneServer(
 	parentCtx context.Context,
 	system, serverName string,
 	srv *config.ServerConfig,
-	username, password, path string,
+	username, password, remotePath, displayPath string,
 	maxEntries int,
-) ([]filesEntry, bool, error) {
+) (filesListOneResult, error) {
 	ctx, cancel := context.WithTimeout(parentCtx, sshDialOuterTimeout)
 	defer cancel()
 
@@ -399,53 +453,47 @@ func (s *Server) listOneServer(
 	cli, _, err := s.dialSSHWithFallback(ctx, username, password, system, serverName, srv,
 		s.cur().App.AllowInsecureHostKeyEnabled(), sshAttemptTimeout)
 	if err != nil {
-		return nil, false, fmt.Errorf("SSH 连接失败: %w", err)
+		return filesListOneResult{}, fmt.Errorf("SSH 连接失败: %w", err)
 	}
 	defer cli.Close()
 
 	sftpCli, err := sftpDialer(cli)
 	if err != nil {
-		return nil, false, fmt.Errorf("SFTP 打开失败: %w", err)
+		return filesListOneResult{}, fmt.Errorf("SFTP 打开失败: %w", err)
 	}
 	defer sftpCli.Close()
 
-	infos, truncated, err := sftpCli.ListLimited(path, maxEntries)
+	infos, truncated, err := sftpCtxListLimited(ctx, sftpCli, remotePath, maxEntries)
 	if err != nil {
 		// 注意：sftpclient.ListLimited 已经 wrap 过 "列出目录失败:"，
 		// 这里不要再 wrap，避免前端 toast 出现 "列出目录失败：列出目录失败: ..."
 		// 这种 3 层嵌套的难看错误信息。
-		return nil, false, err
+		return filesListOneResult{}, err
 	}
 
-	entries := make([]filesEntry, 0, len(infos))
-	for _, info := range infos {
-		rawName := sftpclient.RawNameOf(info)
-		enc := sftpclient.EncodingOf(info)
-		var pathID string
-		if rawName != info.Name() || enc != "utf-8" {
-			pathID = sftpclient.PathIDOf(path, info)
-		}
-		entries = append(entries, filesEntry{
-			Name:     info.Name(),
-			RawName:  rawName,
-			Encoding: enc,
-			PathID:   pathID,
-			Size:     info.Size(),
-			IsDir:    info.IsDir(),
-			Mode:     sftpclient.FormatMode(info.Mode()),
-			MTime:    info.ModTime().UTC().Format(time.RFC3339),
-		})
+	dirID, parentID := sftpDirIdentities(ctx, sftpCli, remotePath)
+	if displayPath == "" {
+		displayPath = sftpDisplayNameOf(remotePath)
 	}
-	return entries, truncated, nil
+	return filesListOneResult{
+		Entries:      filesEntries(displayPath, infos),
+		Truncated:    truncated,
+		DirPathID:    dirID,
+		ParentPathID: parentID,
+	}, nil
 }
 
 // filesDownloadReq 下载请求体（任意路径）
+//
+// PathIDs 与 Paths 平行（同长度同序）：Paths 用于本地命名/进度事件（人类可读），
+// PathIDs 决定真正访问哪个物理条目（同显示名不同编码时唯一区分）。
 type filesDownloadReq struct {
 	System    string   `json:"system"`
 	Server    string   `json:"server"`
 	Username  string   `json:"username"`
 	Password  string   `json:"password"`
-	Paths     []string `json:"paths"`                // 完整远端路径（绝对路径）
+	Paths     []string `json:"paths"`                // 完整远端路径（绝对路径，展示用）
+	PathIDs   []string `json:"path_ids,omitempty"`   // OTH-05：身份数组
 	Zip       bool     `json:"zip"`                  // 多文件时是否额外打 zip
 	TargetDir string   `json:"target_dir,omitempty"` // v0.5 项 18：自定义本地落点（绝对路径），空 = 用 cfg.DownloadDir()
 }
@@ -477,13 +525,15 @@ type filesDownloadReq struct {
 
 // filesPreviewReq 预览请求体
 type filesPreviewReq struct {
-	System   string `json:"system"`
-	Server   string `json:"server"`
-	Username string `json:"username"`
-	Password string `json:"password"`
-	Path     string `json:"path"`                // 必须以 "/" 开头的绝对路径
-	Encoding string `json:"encoding,omitempty"`  // utf-8（默认）/ gbk / gb18030
-	MaxBytes int64  `json:"max_bytes,omitempty"` // 默认 1MB（1048576），最大 10MB
+	System      string `json:"system"`
+	Server      string `json:"server"`
+	Username    string `json:"username"`
+	Password    string `json:"password"`
+	Path        string `json:"path"` // 旧契约：展示绝对路径
+	DisplayPath string `json:"display_path,omitempty"`
+	PathID      string `json:"path_id,omitempty"` // OTH-05：身份，优先于 path
+	Encoding    string `json:"encoding,omitempty"`  // utf-8（默认）/ gbk / gb18030
+	MaxBytes    int64  `json:"max_bytes,omitempty"` // 默认 1MB（1048576），最大 10MB
 }
 
 // filesPreviewLimits 预览的硬约束
@@ -563,15 +613,15 @@ func (s *Server) previewOneServer(
 	}
 	defer sftpCli.Close()
 
-	info, err := sftpCli.Stat(path)
+	info, err := sftpCtxStat(ctx, sftpCli, path)
 	if err != nil {
 		return nil, 0, fmt.Errorf("stat 失败: %w", err)
 	}
 	if info.IsDir() {
-		return nil, 0, fmt.Errorf("不支持预览目录: %s", path)
+		return nil, 0, fmt.Errorf("不支持预览目录: %s", sftpDisplayNameOf(path))
 	}
 
-	f, err := sftpCli.Open(path)
+	f, err := sftpCtxOpen(ctx, sftpCli, path)
 	if err != nil {
 		return nil, 0, fmt.Errorf("打开文件失败: %w", err)
 	}
@@ -610,21 +660,19 @@ func (s *Server) handleFilesPreview(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err)
 		return
 	}
-	if strings.TrimSpace(req.Path) == "" {
+	if strings.TrimSpace(req.Path) == "" && strings.TrimSpace(req.PathID) == "" && strings.TrimSpace(req.DisplayPath) == "" {
 		writeErr(w, 400, errors.New("path 不能为空"))
 		return
 	}
-	if !strings.HasPrefix(req.Path, "/") {
-		writeErr(w, 400, fmt.Errorf("path 必须是绝对路径: %q", req.Path))
+	// OTH-05：身份优先；解码后按原始绝对路径校验（不放宽既有非法路径校验）。
+	previewTarget, previewDisplay, perr := sftpRequestPath(req.PathID, req.DisplayPath, req.Path)
+	if perr != nil {
+		writeErr(w, 400, perr)
 		return
 	}
-	if strings.ContainsAny(req.Path, "\x00\n\r") {
-		writeErr(w, 400, fmt.Errorf("path 含非法字符: %q", req.Path))
-		return
-	}
-	// FreeFileRoots 白名单（跟 list/download 一致）
-	if !cur.App.FreeFileRootsEnabled(req.Path) {
-		writeErr(w, 403, fmt.Errorf("path %q 不在 app.free_file_roots 白名单中", req.Path))
+	// FreeFileRoots 白名单（跟 list/download 一致，按展示路径匹配）
+	if !cur.App.FreeFileRootsEnabled(previewDisplay) {
+		writeErr(w, 403, fmt.Errorf("path %q 不在 app.free_file_roots 白名单中", previewDisplay))
 		return
 	}
 
@@ -653,9 +701,9 @@ func (s *Server) handleFilesPreview(w http.ResponseWriter, r *http.Request) {
 	}
 	encoding := normalizePreviewEncoding(req.Encoding)
 
-	raw, fileSize, err := s.previewOneServer(r.Context(), srv, creds.Username, creds.Password, req.Path, maxBytes)
+	raw, fileSize, err := s.previewOneServer(r.Context(), srv, creds.Username, creds.Password, previewTarget, maxBytes)
 	if err != nil {
-		s.audit.Write("files.preview", "system", req.System, "server", req.Server, "path", req.Path, "result", "fail", "err", err.Error())
+		s.audit.Write("files.preview", "system", req.System, "server", req.Server, "path", previewDisplay, "result", "fail", "err", err.Error())
 		// 目录预览 → 400；其他 → 502
 		if strings.Contains(err.Error(), "不支持预览目录") {
 			writeErr(w, 400, err)
@@ -676,7 +724,7 @@ func (s *Server) handleFilesPreview(w http.ResponseWriter, r *http.Request) {
 		decoded, derr := simplifiedchinese.GBK.NewDecoder().Bytes(raw)
 		if derr != nil {
 			// 解码失败：仍返回字节长度 + 错误信息，让前端知道是编码问题
-			s.audit.Write("files.preview", "system", req.System, "server", req.Server, "path", req.Path, "result", "fail", "stage", "decode", "err", derr.Error())
+			s.audit.Write("files.preview", "system", req.System, "server", req.Server, "path", previewDisplay, "result", "fail", "stage", "decode", "err", derr.Error())
 			writeErr(w, 400, fmt.Errorf("GBK 解码失败（文件可能不是 GBK 编码）: %w", derr))
 			return
 		}
@@ -686,8 +734,8 @@ func (s *Server) handleFilesPreview(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := filesPreviewResp{
-		Name:      filepath.Base(req.Path),
-		Path:      filepath.ToSlash(filepath.Clean(req.Path)),
+		Name:      filepath.Base(previewDisplay),
+		Path:      filepath.ToSlash(filepath.Clean(previewDisplay)),
 		Encoding:  encoding,
 		Size:      fileSize,
 		BytesRead: len(raw),
@@ -695,7 +743,7 @@ func (s *Server) handleFilesPreview(w http.ResponseWriter, r *http.Request) {
 		IsBinary:  binary,
 		Content:   text,
 	}
-	s.audit.Write("files.preview", "system", req.System, "server", req.Server, "path", req.Path, "result", "ok", "bytes", len(raw), "encoding", encoding)
+	s.audit.Write("files.preview", "system", req.System, "server", req.Server, "path", previewDisplay, "result", "ok", "bytes", len(raw), "encoding", encoding)
 	writeJSON(w, 200, resp)
 }
 
@@ -801,24 +849,30 @@ func (s *Server) handleFilesDownload(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, fmt.Errorf("单次最多下载 %d 个文件", filesMaxFilesPerTask))
 		return
 	}
-	for _, p := range req.Paths {
-		if p == "" {
-			writeErr(w, 400, errors.New("path 不能为空"))
+	if len(req.PathIDs) > 0 && len(req.PathIDs) != len(req.Paths) {
+		writeErr(w, 400, errors.New("path_ids 必须与 paths 等长且同序"))
+		return
+	}
+	// OTH-05：paths[i] 是展示路径（本地命名/进度事件），path_ids[i] 是身份
+	// （决定真正访问哪个物理条目）。sess.Paths 保存**访问目标**：有身份就存 token，
+	// 否则存展示路径（旧契约）。展示路径在下载任务里由 sftpDisplayNameOf 还原。
+	targets := make([]string, 0, len(req.Paths))
+	for i, p := range req.Paths {
+		var pathID string
+		if len(req.PathIDs) > 0 {
+			pathID = req.PathIDs[i]
+		}
+		identity, display, perr := sftpRequestPath(pathID, p, p)
+		if perr != nil {
+			writeErr(w, 400, perr)
 			return
 		}
-		if !strings.HasPrefix(p, "/") {
-			writeErr(w, 400, fmt.Errorf("path 必须是绝对路径: %q", p))
+		// 项 14：free_file_roots 白名单检查（按展示路径）
+		if !cur.App.FreeFileRootsEnabled(display) {
+			writeErr(w, 403, fmt.Errorf("path %q 不在 app.free_file_roots 白名单中", display))
 			return
 		}
-		if strings.ContainsAny(p, "\x00\n\r") {
-			writeErr(w, 400, fmt.Errorf("path 含非法字符: %q", p))
-			return
-		}
-		// 项 14：free_file_roots 白名单检查
-		if !cur.App.FreeFileRootsEnabled(p) {
-			writeErr(w, 403, fmt.Errorf("path %q 不在 app.free_file_roots 白名单中", p))
-			return
-		}
+		targets = append(targets, identity)
 	}
 	_, srv, ok := cur.FindServer(req.System, req.Server)
 	if !ok {
@@ -863,7 +917,7 @@ func (s *Server) handleFilesDownload(w http.ResponseWriter, r *http.Request) {
 		Kind:      "files",
 		System:    req.System,
 		Server:    req.Server,
-		Paths:     append([]string(nil), req.Paths...),
+		Paths:     targets,
 		Zip:       req.Zip,
 		Folder:    downloadRoot, // ← 项 18：可被 target_dir 覆盖；SSE done 行暴露
 		CreatedAt: time.Now(),
@@ -1027,25 +1081,28 @@ func (s *Server) downloadSeriesFree(
 	hadDir := false
 	emittedPaths := make(map[string]bool, len(paths))
 
-	for _, remote := range paths {
+	// target 是"访问目标"（身份 token 或展示路径）；display 是展示路径，
+	// 只用于本地命名 / 进度事件 / 审计，绝不参与物理定位（OTH-05）。
+	for _, target := range paths {
 		if err := ctx.Err(); err != nil {
 			return nil, hadDir, err
 		}
-		if emittedPaths[remote] {
+		if emittedPaths[target] {
 			continue
 		}
-		emittedPaths[remote] = true
+		emittedPaths[target] = true
+		display := sftpDisplayNameOf(target)
 
-		info, statErr := sftpCli.Stat(remote)
+		info, statErr := sftpCtxStat(ctx, sftpCli, target)
 		if statErr != nil {
-			return nil, hadDir, fmt.Errorf("stat %s 失败: %w", remote, statErr)
+			return nil, hadDir, fmt.Errorf("stat %s 失败: %w", display, statErr)
 		}
 		if info.IsDir() {
 			// 目录：递归展开。顶层本地目录名用 uniqueLocalName 防冲突，
 			// zip 内保留远端原始目录名。
 			hadDir = true
-			topLocalName := uniqueLocalName(targetDir, sanitize(remoteBase(remote)), sanitize(srv.Name))
-			entries, err := expandRemoteDir(sftpCli, remote, remoteBase(remote),
+			topLocalName := uniqueLocalName(targetDir, sanitize(remoteBase(display)), sanitize(srv.Name))
+			entries, err := expandRemoteDir(ctx, sftpCli, target, display, remoteBase(display),
 				filepath.Join(targetDir, topLocalName), 0)
 			if err != nil {
 				return nil, hadDir, err
@@ -1055,13 +1112,14 @@ func (s *Server) downloadSeriesFree(
 		}
 
 		// 普通文件：沿用原逻辑
-		base := remoteBase(remote)
+		base := remoteBase(display)
 		localName := uniqueLocalName(targetDir, sanitize(base), sanitize(srv.Name))
 		localPath := filepath.Join(targetDir, localName)
 		plan = append(plan, dirPlanEntry{
-			remote:    remote,
+			rawRemote: target,
+			remote:    display,
 			localPath: localPath,
-			zipName:   remoteBase(remote),
+			zipName:   remoteBase(display),
 		})
 	}
 
@@ -1098,7 +1156,7 @@ func (s *Server) downloadSeriesFree(
 			})
 		}
 
-		bytes, err := sftpCli.DownloadFileWithProgress(pe.remote, pe.localPath, progress)
+		bytes, err := sftpCli.DownloadFileWithProgress(pe.rawRemote, pe.localPath, progress)
 		if err != nil {
 			_ = os.Remove(pe.localPath)
 			return results, hadDir, fmt.Errorf("下载 %s 失败: %w", pe.remote, err)
@@ -1144,48 +1202,80 @@ const (
 )
 
 // dirPlanEntry 目录展开后的单个下载计划条目。
+//
+// OTH-05：rawRemote 是"访问目标"（身份 token 或展示路径，用于远端访问），
+// remote 是展示路径（本地命名 / 进度事件 / zip 内名称 / 审计）。
 type dirPlanEntry struct {
-	remote    string // 远端完整路径
+	rawRemote string // 远端访问目标（身份 token 或展示路径）
+	remote    string // 远端展示路径
 	localPath string // 本地落点（完整路径）
 	zipName   string // zip 内路径（含目录层级，"/" 分隔）
 }
 
+// sftpChildAccessTarget 组合"父目录访问目标 + 子条目"的访问目标。
+//
+//   - 优先用列表结果携带的已解析原始绝对路径（最精确，零重新解析）；
+//   - 否则退回"父目标的原始形式 + 展示子名"：父目标是身份 token 时先解码，
+//     绝不把 "/name" 直接拼到 token 字符串上。
+func sftpChildAccessTarget(parentTarget string, info os.FileInfo, name string) string {
+	if raw := sftpclient.RawPathOf(info); raw != "" {
+		return sftpclient.EncodePathIdentity(raw)
+	}
+	base := parentTarget
+	if raw, ok := sftpclient.DecodePathIdentity(parentTarget); ok {
+		base = raw
+	}
+	return path.Join(base, name)
+}
+
 // expandRemoteDir 递归展开远端目录为下载 plan。
 //
-//   - remoteDir：远端目录完整路径
+//   - remoteRaw：远端目录的访问目标（身份 token 或展示路径）
+//   - remoteDisplay：对应的人类可读路径
 //   - remoteRel：该目录相对用户所选根目录的路径（用于 zip 内层级）
 //   - localDir：对应本地目录完整路径
 //   - depth：当前深度（从 0 起）
+//
+// 递归时子条目用"已解析的展示名"拼展示路径，用同一展示名拼访问路径——
+// sftpclient 的逐段解析会把"原始父目录 + 展示子段"解析回正确的物理条目。
 //
 // 安全：
 //   - 深度上限 dirDownloadMaxDepth；
 //   - 条目名含 "/"、"\\"、NUL 或为 "."、".." 时跳过（ReadDir 正常不会返回，防御远端异常实现）；
 //   - 本地文件名逐个 sanitize，防止 Windows 非法字符导致写盘失败。
 func expandRemoteDir(
+	ctx context.Context,
 	sftpCli sftpClientLike,
-	remoteDir, remoteRel, localDir string,
+	remoteRaw, remoteDisplay, remoteRel, localDir string,
 	depth int,
 ) ([]dirPlanEntry, error) {
 	if depth > dirDownloadMaxDepth {
-		return nil, fmt.Errorf("目录嵌套过深（>%d 层）: %s", dirDownloadMaxDepth, remoteDir)
+		return nil, fmt.Errorf("目录嵌套过深（>%d 层）: %s", dirDownloadMaxDepth, remoteDisplay)
 	}
-	infos, err := sftpCli.ReadDir(remoteDir)
+	infos, err := sftpCtxReadDir(ctx, sftpCli, remoteRaw)
 	if err != nil {
-		return nil, fmt.Errorf("列目录 %s 失败: %w", remoteDir, err)
+		return nil, fmt.Errorf("列目录 %s 失败: %w", remoteDisplay, err)
 	}
 	var out []dirPlanEntry
 	for _, info := range infos {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		name := info.Name()
 		if name == "" || name == "." || name == ".." ||
 			strings.ContainsAny(name, "/\\\x00") {
 			continue
 		}
-		fullRemote := path.Join(remoteDir, name)
+		// OTH-05：子条目的访问目标优先用列表结果携带的"已解析原始绝对路径"，
+		// 这样父目录是身份 token 时不会拼出 "kairo-raw:<hex>/name" 这种非法 token，
+		// 也避免对每个文件重新解析一次。
+		fullRaw := sftpChildAccessTarget(remoteRaw, info, name)
+		fullDisplay := path.Join(remoteDisplay, name)
 		relRemote := path.Join(remoteRel, name)
 		localName := sanitize(name)
 		localPath := filepath.Join(localDir, localName)
 		if info.IsDir() {
-			sub, err := expandRemoteDir(sftpCli, fullRemote, relRemote, localPath, depth+1)
+			sub, err := expandRemoteDir(ctx, sftpCli, fullRaw, fullDisplay, relRemote, localPath, depth+1)
 			if err != nil {
 				return nil, err
 			}
@@ -1193,7 +1283,8 @@ func expandRemoteDir(
 			continue
 		}
 		out = append(out, dirPlanEntry{
-			remote:    fullRemote,
+			rawRemote: fullRaw,
+			remote:    fullDisplay,
 			localPath: localPath,
 			zipName:   relRemote,
 		})

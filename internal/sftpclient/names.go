@@ -91,13 +91,43 @@ func DecodePathIdentity(p string) (string, bool) {
 }
 
 // PathIDOf 返回指定目录下 FileInfo 的唯一路径标识。
+//
+// OTH-05：列表结果（ReadDir / ListLimited / Stat）已经把"已解析的原始父路径"
+// 记在条目上（RawPath），这里必须优先使用它——否则父目录本身是 GBK 字节时，
+// 用展示父路径拼出来的 id 会变成"UTF-8 父目录 + GBK 文件名"的错误混合路径。
+// parentDir 参数只在条目没有携带原始路径时（例如外部自定义 backend）作为兜底。
 func PathIDOf(parentDir string, fi os.FileInfo) string {
 	if fi == nil {
 		return ""
 	}
-	rawName := RawNameOf(fi)
-	rawPath := path.Join(parentDir, rawName)
-	return EncodePathIdentity(rawPath)
+	if raw := RawPathOf(fi); raw != "" {
+		return EncodePathIdentity(raw)
+	}
+	return EncodePathIdentity(path.Join(parentDir, RawNameOf(fi)))
+}
+
+// RawPathOf 返回条目携带的"已解析原始绝对路径"（没有则返回空串）。
+//
+// 由 Client 的列目录 / Stat 实现写入，见 wrapDecoded / wrapDecodedOne。
+func RawPathOf(fi os.FileInfo) string {
+	if fi == nil {
+		return ""
+	}
+	if r, ok := fi.(interface{ RawPath() string }); ok {
+		return r.RawPath()
+	}
+	return ""
+}
+
+// WithRawPath 给一个 FileInfo 补上已解析的原始绝对路径，供自定义 backend /
+// 跨包测试构造与 Client 列目录结果等价的条目（生产路径不需要显式调用）。
+func WithRawPath(fi os.FileInfo, rawPath string) os.FileInfo {
+	if fi == nil {
+		return nil
+	}
+	raw := fi.Name()
+	dec, enc := DecodeServerNameWithEncoding(raw)
+	return decodedFileInfo{inner: fi, name: dec, rawName: raw, encoding: enc, rawPath: rawPath}
 }
 
 // RawNameOf 返回 FileInfo 在服务端的原始物理名。
@@ -149,25 +179,29 @@ func EncodePathCandidates(display string) []string {
 	return []string{display, string(gbk)}
 }
 
-// decodedFileInfo 包装 os.FileInfo，Name() 为展示名，同时保留 RawName() 和 Encoding()
+// decodedFileInfo 包装 os.FileInfo，Name() 为展示名，同时保留 RawName()、Encoding()
+// 以及该条目"已解析的原始绝对路径"（OTH-05：身份必须基于它生成）。
 type decodedFileInfo struct {
 	inner    os.FileInfo
 	name     string
 	rawName  string
 	encoding string
+	rawPath  string
 }
 
 func (d decodedFileInfo) Name() string       { return d.name }
 func (d decodedFileInfo) RawName() string    { return d.rawName }
 func (d decodedFileInfo) Encoding() string   { return d.encoding }
+func (d decodedFileInfo) RawPath() string    { return d.rawPath }
 func (d decodedFileInfo) Size() int64        { return d.inner.Size() }
 func (d decodedFileInfo) Mode() os.FileMode  { return d.inner.Mode() }
 func (d decodedFileInfo) ModTime() time.Time { return d.inner.ModTime() }
 func (d decodedFileInfo) IsDir() bool        { return d.inner.IsDir() }
 func (d decodedFileInfo) Sys() interface{}   { return d.inner.Sys() }
 
-// wrapDecoded 批量包装 FileInfo，暴露展示名并保留原始名与编码。
-func wrapDecoded(infos []os.FileInfo) []os.FileInfo {
+// wrapDecoded 批量包装 FileInfo，暴露展示名并保留原始名、编码与原始绝对路径。
+// rawParent 必须是**已解析的原始父目录**（不是用户请求的展示路径）。
+func wrapDecoded(infos []os.FileInfo, rawParent string) []os.FileInfo {
 	out := make([]os.FileInfo, len(infos))
 	for i, fi := range infos {
 		if fi == nil {
@@ -181,13 +215,14 @@ func wrapDecoded(infos []os.FileInfo) []os.FileInfo {
 			name:     dec,
 			rawName:  raw,
 			encoding: enc,
+			rawPath:  path.Join(rawParent, raw),
 		}
 	}
 	return out
 }
 
-// wrapDecodedOne 单条目版本（Stat 用）。
-func wrapDecodedOne(fi os.FileInfo) os.FileInfo {
+// wrapDecodedOne 单条目版本（Stat 用）。rawPath 为已解析的原始绝对路径。
+func wrapDecodedOne(fi os.FileInfo, rawPath string) os.FileInfo {
 	if fi == nil {
 		return nil
 	}
@@ -198,5 +233,6 @@ func wrapDecodedOne(fi os.FileInfo) os.FileInfo {
 		name:     dec,
 		rawName:  raw,
 		encoding: enc,
+		rawPath:  rawPath,
 	}
 }

@@ -617,7 +617,13 @@ func TestStat_NilClient(t *testing.T) {
 // ============================================================================
 
 func TestUploadStream_Happy(t *testing.T) {
-	backend := &mockBackend{files: map[string][]byte{}}
+	// 夹具补上父目录：旧 mock 只放了 files，没有 /tmp 这个目录条目。
+	// OTH-03 之后写路径要求父目录能被唯一解析（现实里 /tmp 必然存在），
+	// 所以这里把 mock 建得更贴近真实远端；断言本身没有放宽。
+	backend := &mockBackend{
+		files: map[string][]byte{},
+		dirs:  map[string][]os.FileInfo{"/tmp": {}},
+	}
 	c := newWithBackend(backend)
 	defer c.Close()
 

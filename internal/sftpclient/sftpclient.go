@@ -29,12 +29,9 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
-	"golang.org/x/text/encoding/simplifiedchinese"
-	"golang.org/x/text/transform"
 )
 
 // SftpFile 是对 *sftp.File 的最小抽象（io.Reader + io.Closer + Stat），
@@ -104,6 +101,11 @@ type sftpBackend interface {
 // Client 包装一个远端文件系统客户端（SFTP 或 ShellBackend）
 type Client struct {
 	b RemoteFS
+
+	// OTH-06：按"原始目录"缓存的有界索引（性能辅助，见 resolve.go）。
+	// 缓存在 Client 上 → 天然按连接隔离；写操作后失效受影响目录。
+	idxMu sync.Mutex
+	idx   map[string]*dirIndexEntry
 }
 
 // New 在已有 SSH 连接上创建 SFTP 客户端。
@@ -243,14 +245,21 @@ func (c *Client) CreateExclusive(ctx context.Context, remotePath string) error {
 	if !ok {
 		return fmt.Errorf("当前后端不支持安全新建文件")
 	}
-	if existing, err := c.resolveExistingPath(remotePath); err == nil && existing != "" {
+	// OTH-03：存在性检查遇到歧义必须终止，不能"先当不存在再挑一个候选写入"。
+	if existing, err := c.resolveExistingPathCtx(ctx, remotePath); err == nil && existing != "" {
 		return fmt.Errorf("无法新建文件（目标可能已存在）: %s", remotePath)
+	} else if err != nil && errors.Is(err, ErrAmbiguousPath) {
+		return fmt.Errorf("新建文件 %q 失败: %w", remotePath, err)
 	}
-	resolvedPath, err := c.resolveWritePath(remotePath)
+	resolvedPath, err := c.resolveWritePathCtx(ctx, remotePath)
 	if err != nil {
 		return err
 	}
-	return creator.CreateExclusive(ctx, resolvedPath)
+	if err := creator.CreateExclusive(ctx, resolvedPath); err != nil {
+		return err
+	}
+	c.invalidateDirIndex(path.Dir(resolvedPath))
+	return nil
 }
 
 func (r *realSftpBackend) CreateExclusive(ctx context.Context, remotePath string) error {
@@ -477,7 +486,7 @@ func (c *Client) DownloadFileContext(ctx context.Context, remotePath, localPath 
 		ctx = context.Background()
 	}
 
-	resolved, err := c.resolveExistingPath(remotePath)
+	resolved, err := c.resolveExistingPathCtx(ctx, remotePath)
 	if err != nil {
 		return 0, fmt.Errorf("stat 远程文件失败: %w", err)
 	}
@@ -539,20 +548,10 @@ func (c *Client) DownloadFileContext(ctx context.Context, remotePath, localPath 
 // 注意：path 不做白名单校验，调用方决定传什么路径；
 // 真实访问控制由远端 SSH 服务器的账号权限承担。
 //
-// GBK 自适应（names.go）：展示路径通过 resolveExistingPath 定位确切服务端文件。
+// GBK 自适应（names.go / resolve.go）：展示路径通过身份解析定位确切服务端文件；
+// 父目录歧义（同显示名不同编码）直接报 ErrAmbiguousPath，不猜候选。
 func (c *Client) Open(path string) (SftpFile, error) {
-	if c == nil || c.b == nil {
-		return nil, fmt.Errorf("sftp 客户端未连接")
-	}
-	resolved, err := c.resolveExistingPath(path)
-	if err != nil {
-		return nil, fmt.Errorf("打开远端文件失败: %w", err)
-	}
-	f, err := c.b.Open(resolved)
-	if err != nil {
-		return nil, fmt.Errorf("打开远端文件失败: %w", err)
-	}
-	return f, nil
+	return c.OpenCtx(context.Background(), path)
 }
 
 // ReadDir 列出 path 下的所有条目（文件和目录）。
@@ -564,21 +563,10 @@ func (c *Client) Open(path string) (SftpFile, error) {
 // v1.0 起：10w 文件目录会爆内存，调用方应该改用 ListLimited(path, max)。
 // ReadDir 保留仅为向后兼容（v0.x 老代码）。
 //
-// GBK 自适应（names.go）：返回前把条目名解成 UTF-8 展示名（JSON 不再丢字节），
-// 入参解析父级与目标目录。
+// GBK 自适应（names.go / resolve.go）：返回前把条目名解成 UTF-8 展示名（JSON 不再丢字节），
+// 入参解析父级与目标目录；每条条目都携带"已解析原始绝对路径"用于生成身份（OTH-05）。
 func (c *Client) ReadDir(path string) ([]os.FileInfo, error) {
-	if c == nil || c.b == nil {
-		return nil, fmt.Errorf("sftp 客户端未连接")
-	}
-	resolved, err := c.resolveExistingPath(path)
-	if err != nil {
-		return nil, fmt.Errorf("列出目录失败: %w", err)
-	}
-	infos, err := c.b.ReadDir(resolved)
-	if err != nil {
-		return nil, fmt.Errorf("列出目录失败: %w", err)
-	}
-	return wrapDecoded(infos), nil
+	return c.ReadDirCtx(context.Background(), path)
 }
 
 // ListLimited 列出 path 下最多 max 个条目（v1.0 新增）。
@@ -595,37 +583,17 @@ func (c *Client) ReadDir(path string) ([]os.FileInfo, error) {
 // max <= 0 时不截断（行为同 ReadDir，truncated=false）。
 // GBK 自适应同 ReadDir。
 func (c *Client) ListLimited(path string, max int) ([]os.FileInfo, bool, error) {
-	if c == nil || c.b == nil {
-		return nil, false, fmt.Errorf("sftp 客户端未连接")
-	}
-	resolved, err := c.resolveExistingPath(path)
-	if err != nil {
-		return nil, false, fmt.Errorf("列出目录失败: %w", err)
-	}
-	entries, truncated, err := c.b.ListLimited(resolved, max)
-	if err != nil {
-		return nil, false, fmt.Errorf("列出目录失败: %w", err)
-	}
-	return wrapDecoded(entries), truncated, nil
+	return c.ListLimitedCtx(context.Background(), path, max)
 }
 
 // Stat 拿到 path 对应的文件信息（大小、修改时间、是否为目录、权限位）。
 //
 // 用于"文件浏览器"页：先 Stat 判断是文件还是目录，再决定是进子目录还是直接下载。
-// GBK 自适应同 ReadDir；返回的 Name() 已是展示名，保留原始名与编码。
+// GBK 自适应同 ReadDir；返回的 Name() 已是展示名，保留原始名、编码与原始绝对路径。
+//
+// OTH-06：父目录唯一解析且 basename 纯 ASCII 时只做一次 Stat，不再枚举父目录。
 func (c *Client) Stat(path string) (os.FileInfo, error) {
-	if c == nil || c.b == nil {
-		return nil, fmt.Errorf("sftp 客户端未连接")
-	}
-	resolved, err := c.resolveExistingPath(path)
-	if err != nil {
-		return nil, fmt.Errorf("stat 失败: %w", err)
-	}
-	info, err := c.b.Stat(resolved)
-	if err != nil {
-		return nil, fmt.Errorf("stat 失败: %w", err)
-	}
-	return wrapDecodedOne(info), nil
+	return c.StatCtx(context.Background(), path)
 }
 
 // Chtimes best-effort preserves timestamps for compare synchronization. The
@@ -640,11 +608,17 @@ func (c *Client) Chtimes(path string, atime, mtime time.Time) error {
 	if !ok {
 		return fmt.Errorf("当前 SFTP 后端不支持保留修改时间")
 	}
-	resolved, err := c.resolveExistingPath(path)
+	// 保留时间戳是 best-effort：解析失败时退回调用方给的展示路径，
+	// 由后端自己决定成败（这里不做写入，不存在 OTH-03 的覆盖风险）。
+	resolved, err := c.resolveExistingPathCtx(context.Background(), path)
 	if err != nil {
 		resolved = path
 	}
-	return setter.Chtimes(resolved, atime, mtime)
+	err = setter.Chtimes(resolved, atime, mtime)
+	if err == nil {
+		c.invalidateDirIndex(parentDir(resolved))
+	}
+	return err
 }
 
 // UploadFile 把本地文件上传到远端路径。
@@ -662,7 +636,7 @@ func (c *Client) UploadFile(localPath, remotePath string, perm os.FileMode) erro
 	if perm == 0 {
 		perm = 0o644
 	}
-	resolvedPath, err := c.resolveWritePath(remotePath)
+	resolvedPath, err := c.resolveWritePathCtx(context.Background(), remotePath)
 	if err != nil {
 		return err
 	}
@@ -674,6 +648,7 @@ func (c *Client) UploadFile(localPath, remotePath string, perm os.FileMode) erro
 		}
 		return fmt.Errorf("上传 %q 失败: %w", remotePath, err)
 	}
+	c.invalidateDirIndex(path.Dir(resolvedPath))
 	return nil
 }
 
@@ -697,8 +672,12 @@ func (c *Client) UploadStream(ctx context.Context, reader io.Reader, remotePath 
 	if perm == 0 {
 		perm = 0o644
 	}
-	resolvedPath, err := c.resolveWritePath(remotePath)
+	resolvedPath, err := c.resolveWritePathCtx(ctx, remotePath)
 	if err != nil {
+		// 解析阶段就被取消：保持既有用户可见文案（"上传被取消"）。
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return fmt.Errorf("上传被取消: %w", err)
+		}
 		return err
 	}
 	if err := c.b.UploadStream(ctx, reader, resolvedPath, perm, progress); err != nil {
@@ -708,36 +687,30 @@ func (c *Client) UploadStream(ctx context.Context, reader io.Reader, remotePath 
 		}
 		return fmt.Errorf("上传 %q 失败: %w", remotePath, err)
 	}
+	c.invalidateDirIndex(path.Dir(resolvedPath))
 	return nil
 }
 
 // MkdirAll creates a remote directory tree for folder synchronization.
+//
+// OTH-04：目录创建走专用解析（resolveDirectoryForCreate）——逐段解析已存在前缀，
+// 新建段相对已解析原始父路径编码；解析失败不再吞错/回退未解析展示路径。
 func (c *Client) MkdirAll(path string) error {
-	if c == nil || c.b == nil {
-		return fmt.Errorf("SFTP 客户端未初始化")
-	}
-	maker, ok := c.b.(interface{ MkdirAll(string) error })
-	if !ok {
-		return fmt.Errorf("当前 SFTP 后端不支持创建目录")
-	}
-	resolvedPath, err := c.resolveWritePath(path)
-	if err != nil {
-		resolvedPath = path
-	}
-	return maker.MkdirAll(resolvedPath)
+	return c.MkdirAllCtx(context.Background(), path)
 }
 
 // Rename 远端原子重命名。优先 PosixRename（可覆盖已存在目标），失败回退到标准 Rename。
 // GBK 自适应：源路径精确解析，目的父路径解析，避免因盲目尝试导致非目标文件损坏。
+// OTH-03：源/目的任何一侧出现歧义或无法唯一解析时，在调用后端前终止。
 func (c *Client) Rename(oldPath, newPath string) error {
 	if c == nil || c.b == nil {
 		return fmt.Errorf("sftp 客户端未连接")
 	}
-	resolvedOld, err := c.resolveExistingPath(oldPath)
+	resolvedOld, err := c.resolveExistingPathCtx(context.Background(), oldPath)
 	if err != nil {
 		return fmt.Errorf("重命名 %q -> %q 失败: %w", oldPath, newPath, err)
 	}
-	resolvedNew, err := c.resolveWritePath(newPath)
+	resolvedNew, err := c.resolveWritePathCtx(context.Background(), newPath)
 	if err != nil {
 		return fmt.Errorf("重命名 %q -> %q 失败: %w", oldPath, newPath, err)
 	}
@@ -747,6 +720,7 @@ func (c *Client) Rename(oldPath, newPath string) error {
 		}
 		return fmt.Errorf("重命名 %q -> %q 失败: %w", oldPath, newPath, err)
 	}
+	c.invalidateDirIndex(path.Dir(resolvedOld), path.Dir(resolvedNew))
 	return nil
 }
 
@@ -755,13 +729,14 @@ func (c *Client) Remove(path string) error {
 	if c == nil || c.b == nil {
 		return fmt.Errorf("sftp 客户端未连接")
 	}
-	resolved, err := c.resolveExistingPath(path)
+	resolved, err := c.resolveExistingPathCtx(context.Background(), path)
 	if err != nil {
 		if errors.Is(err, ErrAmbiguousPath) {
 			return fmt.Errorf("删除 %q 失败: %w", path, err)
 		}
 		// 目标未在列表中解析到时单次调用 backend.Remove（例如 shell rm -f 或 mock 允许不存在），不轮流试候选
 		if berr := c.b.Remove(path); berr == nil {
+			c.invalidateDirIndex(parentDir(path))
 			return nil
 		}
 		return fmt.Errorf("删除 %q 失败: %w", path, err)
@@ -769,252 +744,11 @@ func (c *Client) Remove(path string) error {
 	if err := c.b.Remove(resolved); err != nil {
 		return fmt.Errorf("删除 %q 失败: %w", path, err)
 	}
+	c.invalidateDirIndex(parentDir(resolved))
 	return nil
 }
 
-// ----------------------------------------------------------------------------
-// 路径身份与服务端路径解析
-// ----------------------------------------------------------------------------
-
-func (c *Client) resolveExistingPath(p string) (string, error) {
-	if p == "" {
-		return "", fmt.Errorf("路径不能为空")
-	}
-	if raw, ok := DecodePathIdentity(p); ok {
-		return raw, nil
-	}
-	if !utf8.ValidString(p) {
-		return p, nil
-	}
-	p = path.Clean(p)
-	if p == "/" || p == "." {
-		return p, nil
-	}
-
-	parent := path.Dir(p)
-	base := path.Base(p)
-
-	// 1. 优先尝试解析父目录并在其下精确查找
-	resolvedParent, pErr := c.resolveExistingDir(parent)
-	if pErr == nil {
-		entries, err := c.b.ReadDir(resolvedParent)
-		if err == nil {
-			var matches []string
-			for _, e := range entries {
-				if e == nil {
-					continue
-				}
-				raw := e.Name()
-				dec := DecodeServerName(raw)
-				if raw == base || dec == base {
-					matches = append(matches, raw)
-				}
-			}
-			if len(matches) > 1 {
-				return "", fmt.Errorf("%w: %q (存在 %d 个同名不同编码条目)", ErrAmbiguousPath, p, len(matches))
-			}
-			if len(matches) == 1 {
-				return path.Join(resolvedParent, matches[0]), nil
-			}
-			// 若 ReadDir 未返回匹配（例如模拟器或受限只读目录），尝试在 resolvedParent 下 Stat 候选
-			targetCand := path.Join(resolvedParent, base)
-			for _, cand := range EncodePathCandidates(targetCand) {
-				if _, serr := c.b.Stat(cand); serr == nil {
-					matches = append(matches, cand)
-				}
-			}
-			if len(matches) > 1 {
-				return "", fmt.Errorf("%w: %q (多个候选路径均存在)", ErrAmbiguousPath, p)
-			}
-			if len(matches) == 1 {
-				return matches[0], nil
-			}
-			return "", &os.PathError{Op: "stat", Path: p, Err: os.ErrNotExist}
-		}
-	}
-
-	// 2. 如果父目录无法 ReadDir（例如未挂载根目录或 mock 环境），通过 Stat 检查候选
-	cands := EncodePathCandidates(p)
-	if len(cands) <= 1 {
-		if _, err := c.b.Stat(p); err == nil {
-			return p, nil
-		}
-		return "", &os.PathError{Op: "stat", Path: p, Err: os.ErrNotExist}
-	}
-
-	var existing []string
-	var lastErr error
-	for _, cand := range cands {
-		if _, err := c.b.Stat(cand); err == nil {
-			existing = append(existing, cand)
-		} else {
-			lastErr = err
-		}
-	}
-	if len(existing) > 1 {
-		return "", fmt.Errorf("%w: %q (多个候选路径均存在)", ErrAmbiguousPath, p)
-	}
-	if len(existing) == 1 {
-		return existing[0], nil
-	}
-	if lastErr != nil {
-		return "", lastErr
-	}
-	return "", &os.PathError{Op: "stat", Path: p, Err: os.ErrNotExist}
-}
-
-func (c *Client) resolveExistingDir(dir string) (string, error) {
-	if dir == "" || dir == "/" || dir == "." {
-		return dir, nil
-	}
-	if raw, ok := DecodePathIdentity(dir); ok {
-		return raw, nil
-	}
-	if !utf8.ValidString(dir) {
-		return dir, nil
-	}
-	dir = path.Clean(dir)
-	if dir == "/" || dir == "." {
-		return dir, nil
-	}
-
-	// 先试整段候选（浅层 mock 或快速命中）
-	cands := EncodePathCandidates(dir)
-	var dirMatches []string
-	for _, cand := range cands {
-		if fi, err := c.b.Stat(cand); err == nil && fi.IsDir() {
-			dirMatches = append(dirMatches, cand)
-		}
-	}
-	if len(dirMatches) == 1 {
-		return dirMatches[0], nil
-	}
-	if len(dirMatches) > 1 {
-		return "", fmt.Errorf("%w: 目录 %q (多个候选均存在)", ErrAmbiguousPath, dir)
-	}
-
-	// 逐级解析目录段
-	parts := strings.Split(strings.TrimPrefix(dir, "/"), "/")
-	cur := "/"
-	for _, seg := range parts {
-		if seg == "" || seg == "." {
-			continue
-		}
-		entries, err := c.b.ReadDir(cur)
-		if err != nil {
-			candPath := path.Join(cur, seg)
-			found := false
-			for _, cand := range EncodePathCandidates(candPath) {
-				if fi, serr := c.b.Stat(cand); serr == nil && fi.IsDir() {
-					cur = cand
-					found = true
-					break
-				}
-			}
-			if !found {
-				return "", err
-			}
-			continue
-		}
-
-		var matches []string
-		for _, e := range entries {
-			if e == nil {
-				continue
-			}
-			raw := e.Name()
-			dec := DecodeServerName(raw)
-			if raw == seg || dec == seg {
-				matches = append(matches, raw)
-			}
-		}
-		if len(matches) > 1 {
-			return "", fmt.Errorf("%w: 目录 %q", ErrAmbiguousPath, path.Join(cur, seg))
-		}
-		if len(matches) == 1 {
-			cur = path.Join(cur, matches[0])
-		} else {
-			return "", &os.PathError{Op: "stat", Path: path.Join(cur, seg), Err: os.ErrNotExist}
-		}
-	}
-	return cur, nil
-}
-
-func (c *Client) resolveWritePath(p string) (string, error) {
-	if p == "" {
-		return "", fmt.Errorf("路径不能为空")
-	}
-	if raw, ok := DecodePathIdentity(p); ok {
-		return raw, nil
-	}
-	if !utf8.ValidString(p) {
-		return p, nil
-	}
-	p = path.Clean(p)
-	if p == "/" || p == "." {
-		return p, nil
-	}
-
-	parent := path.Dir(p)
-	base := path.Base(p)
-
-	// 解析父目录
-	resolvedParent, err := c.resolveExistingDir(parent)
-	if err != nil {
-		resolvedParent = parent
-		for _, cand := range EncodePathCandidates(parent) {
-			if fi, serr := c.b.Stat(cand); serr == nil && fi.IsDir() {
-				resolvedParent = cand
-				break
-			}
-		}
-	}
-
-	// 检查目标文件在 resolvedParent 下是否已存在
-	entries, rerr := c.b.ReadDir(resolvedParent)
-	if rerr == nil {
-		var matches []string
-		for _, e := range entries {
-			if e == nil {
-				continue
-			}
-			raw := e.Name()
-			dec := DecodeServerName(raw)
-			if raw == base || dec == base {
-				matches = append(matches, raw)
-			}
-		}
-		if len(matches) > 1 {
-			return "", fmt.Errorf("%w: %q (目标存在多个同名但不同编码的文件)", ErrAmbiguousPath, p)
-		}
-		if len(matches) == 1 {
-			// 目标已存在，覆盖更新原文件，防止创建重复编码副本
-			return path.Join(resolvedParent, matches[0]), nil
-		}
-		targetCand := path.Join(resolvedParent, base)
-		for _, cand := range EncodePathCandidates(targetCand) {
-			if _, serr := c.b.Stat(cand); serr == nil {
-				matches = append(matches, cand)
-			}
-		}
-		if len(matches) > 1 {
-			return "", fmt.Errorf("%w: %q (目标存在多个同名但不同编码的文件)", ErrAmbiguousPath, p)
-		}
-		if len(matches) == 1 {
-			return matches[0], nil
-		}
-	}
-
-	// 目标尚不存在：新文件名根据父目录编码继承
-	encodedBase := base
-	if !utf8.ValidString(resolvedParent) {
-		gbk, _, gerr := transform.Bytes(simplifiedchinese.GB18030.NewEncoder(), []byte(base))
-		if gerr == nil && len(gbk) > 0 {
-			encodedBase = string(gbk)
-		}
-	}
-	return path.Join(resolvedParent, encodedBase), nil
-}
+// 路径身份与服务端路径解析：见 resolve.go（OTH-03/04/06）。
 
 // progressInterval 进度回调最小间隔（字节）。64KB 对内网 SFTP
 // 来说粒度足够细，1GB 文件约 16384 次回调。配合下面的
