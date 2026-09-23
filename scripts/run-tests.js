@@ -26,6 +26,7 @@ const UNIT_TESTS = [
   'tests/database-features-unit.js',
   'tests/database-review-regression.js',
   'tests/database-orphan-source.test.js',
+  'tests/database-shortcut-history.test.js',
   'tests/compare-folder-regression.js',
   'tests/compare-save-lifecycle.test.js',
   'tests/compare-tabs-lifecycle.test.js',

@@ -772,84 +772,149 @@
     return true;
   }
 
-  function loadHistory(targetSourceId) {
-    const key = targetSourceId || sourceId() || '*';
+  // ---- 查询历史单一仓库（DBUI-06） ----
+  // 新增、删除、清空、旧版下拉、结构化弹窗全部读写同一份结构化历史。
+  // 无来源的旧版字符串历史只在首次迁移时读取一次，落到显式的
+  // “旧版历史／来源未知” 桶并记 unknown；不得编造来源、时间或成功结果。
+  const LEGACY_HISTORY_BUCKET = '__legacy__';
+  const LEGACY_HISTORY_LABEL = '旧版历史／来源未知';
+  const HISTORY_STORE_VERSION = 2;
+
+  function emptyHistoryStore() {
+    return { version: HISTORY_STORE_VERSION, migration: {}, buckets: {} };
+  }
+  function readHistoryStore() {
     let raw = '{}';
     try { raw = localStorage.getItem(STORAGE_HISTORY) || '{}'; } catch (_) {}
-    const all = safeJSONParse(raw, {});
-    state.historyKey = key;
-    let list = Array.isArray(all[key]) ? all[key].filter(function (entry) { return entry && entry.sql; }) : [];
-
-    // Merge from database.js's persisted.history
-    const externalHistory = (K.database && typeof K.database.getHistory === 'function') ? K.database.getHistory() : null;
-    if (Array.isArray(externalHistory) && externalHistory.length) {
-      const knownSqls = new Set(list.map(function (item) { return item.sql; }));
-      externalHistory.forEach(function (sqlStr) {
-        if (!sqlStr || knownSqls.has(sqlStr)) return;
-        knownSqls.add(sqlStr);
-        list.push({
-          id: 'ext-' + Math.random().toString(36).slice(2, 9),
-          sourceId: key !== '*' ? key : sourceId(),
-          sourceName: sourceName(),
-          dialect: dialect(),
-          startedAt: Date.now(),
-          endedAt: Date.now(),
-          elapsedMs: 0,
-          status: 'success',
-          rows: null,
-          error: '',
-          sql: sqlStr
-        });
-      });
+    const parsed = safeJSONParse(raw, {});
+    const store = emptyHistoryStore();
+    if (parsed && typeof parsed === 'object' && parsed.buckets && typeof parsed.buckets === 'object') {
+      store.version = Number(parsed.version) || HISTORY_STORE_VERSION;
+      store.migration = parsed.migration && typeof parsed.migration === 'object' ? parsed.migration : {};
+      store.buckets = parsed.buckets;
+    } else if (parsed && typeof parsed === 'object') {
+      // 兼容早期 v2 的扁平结构 { [sourceKey]: entries[] }，读取时升级为桶结构。
+      Object.keys(parsed).forEach(function (key) { if (Array.isArray(parsed[key])) store.buckets[key] = parsed[key]; });
     }
-
-    // Auto-fix any stale entries where status === 'running' (mark as interrupted, not success)
-    list.forEach(function (entry) {
-      if (entry.status === 'running') {
-        const isPending = state.pendingRuns && state.pendingRuns.has(entry.runId);
-        if (!isPending) {
-          entry.status = 'interrupted';
-        }
-      }
+    return store;
+  }
+  function writeHistoryStore(store) {
+    try { localStorage.setItem(STORAGE_HISTORY, JSON.stringify(store)); } catch (_) { /* storage may be disabled */ }
+    return store;
+  }
+  function normalizeHistoryEntry(entry, bucket) {
+    const legacy = bucket === LEGACY_HISTORY_BUCKET;
+    return {
+      id: (entry && entry.id) || ('q-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7)),
+      bucket: bucket,
+      sourceId: legacy ? '' : String((entry && entry.sourceId) || bucket || ''),
+      sourceName: (entry && entry.sourceName) || (legacy ? LEGACY_HISTORY_LABEL : ''),
+      dialect: (entry && entry.dialect) || '',
+      startedAt: entry && entry.startedAt != null ? entry.startedAt : null,
+      endedAt: entry && entry.endedAt != null ? entry.endedAt : null,
+      elapsedMs: entry && entry.elapsedMs != null ? entry.elapsedMs : null,
+      status: (entry && entry.status) || 'unknown',
+      rows: entry && entry.rows != null ? entry.rows : null,
+      error: (entry && entry.error) || '',
+      runId: (entry && entry.runId) || '',
+      sql: String((entry && entry.sql) || '')
+    };
+  }
+  // 迁移只能发生一次：完成后写入版本标记。清空/删除历史不得清除该标记，
+  // 否则旧字符串会在下次加载时被重新导入，形成“清空后自动恢复”。
+  function migrateLegacyHistory(store) {
+    let strings = [];
+    const getter = K.database && typeof K.database.getHistory === 'function' ? K.database.getHistory : null;
+    if (getter) { try { strings = getter(); } catch (_) { strings = []; } }
+    if (!Array.isArray(strings)) strings = [];
+    const bucket = Array.isArray(store.buckets[LEGACY_HISTORY_BUCKET]) ? store.buckets[LEGACY_HISTORY_BUCKET] : [];
+    const known = new Set(bucket.map(function (item) { return String((item && item.sql) || ''); }));
+    strings.forEach(function (value) {
+      const text = String(value == null ? '' : value).trim();
+      if (!text || known.has(text)) return;
+      known.add(text);
+      bucket.push(normalizeHistoryEntry({
+        id: 'legacy-' + Math.random().toString(36).slice(2, 9),
+        sourceName: LEGACY_HISTORY_LABEL, status: 'unknown',
+        startedAt: null, endedAt: null, elapsedMs: null, rows: null, error: '', sql: text
+      }, LEGACY_HISTORY_BUCKET));
     });
-
-    state.history = list.slice(0, MAX_HISTORY);
+    store.buckets[LEGACY_HISTORY_BUCKET] = bucket.slice(0, MAX_HISTORY);
+    store.migration = Object.assign({}, store.migration, { legacyStrings: 1, legacyMigratedAt: Date.now() });
+    return store;
+  }
+  function historyStore() {
+    const store = readHistoryStore();
+    if (store.migration && store.migration.legacyStrings) return store;
+    migrateLegacyHistory(store);
+    return writeHistoryStore(store);
+  }
+  function historyKeyFor(targetSourceId) { return String(targetSourceId || sourceId() || '*'); }
+  function listStoredHistory(targetSourceId) {
+    const key = historyKeyFor(targetSourceId);
+    const list = historyStore().buckets[key];
+    return (Array.isArray(list) ? list : []).filter(function (entry) { return entry && entry.sql; })
+      .slice(0, MAX_HISTORY).map(function (entry) { return normalizeHistoryEntry(entry, key); });
+  }
+  function writeStoredHistory(key, list) {
+    const store = historyStore();
+    store.buckets[key] = (Array.isArray(list) ? list : []).slice(0, MAX_HISTORY)
+      .map(function (entry) { return normalizeHistoryEntry(entry, key); });
+    return writeHistoryStore(store);
+  }
+  function loadHistory(targetSourceId) {
+    const key = historyKeyFor(targetSourceId);
+    state.historyKey = key;
+    const list = listStoredHistory(key);
+    // 刷新后遗留的 running 记录只能标记为 interrupted，绝不算成功。
+    list.forEach(function (entry) {
+      if (entry.status !== 'running') return;
+      const isPending = state.pendingRuns && state.pendingRuns.has(entry.runId);
+      if (!isPending) entry.status = 'interrupted';
+    });
+    state.history = list;
     return state.history;
   }
   function saveHistory() {
-    let raw = '{}';
-    try { raw = localStorage.getItem(STORAGE_HISTORY) || '{}'; } catch (_) {}
-    const all = safeJSONParse(raw, {});
-    all[state.historyKey || sourceId() || '*'] = state.history.slice(0, MAX_HISTORY);
-    try { localStorage.setItem(STORAGE_HISTORY, JSON.stringify(all)); } catch (_) { /* storage may be disabled */ }
+    return writeStoredHistory(state.historyKey || historyKeyFor(), state.history);
+  }
+  function deleteHistoryEntry(id, targetSourceId) {
+    const key = historyKeyFor(targetSourceId || state.historyKey);
+    writeStoredHistory(key, listStoredHistory(key).filter(function (entry) { return entry.id !== id; }));
+    return loadHistory(key);
+  }
+  function clearHistory(targetSourceId) {
+    const key = historyKeyFor(targetSourceId || state.historyKey);
+    writeStoredHistory(key, []);
+    return loadHistory(key);
   }
   function addHistory(entry) {
     if (!entry || !String(entry.sql || '').trim()) return;
-    const targetSourceId = entry.sourceId || sourceId() || '*';
-    loadHistory(targetSourceId);
+    const targetSourceId = String(entry.sourceId || sourceId() || '*');
+    // 旧版桶只读：不允许把新记录写进去，也不允许借它伪造成当前数据源的历史。
+    if (targetSourceId === LEGACY_HISTORY_BUCKET) return;
     let sql = String(entry.sql).trim();
     if (sql.length > MAX_HISTORY_SQL_LEN) {
       sql = sql.slice(0, MAX_HISTORY_SQL_LEN) + '\n/* -- [kairo: 历史记录超长截断] -- */';
     }
+    const list = listStoredHistory(targetSourceId);
     const runId = entry.runId || '';
-    const existingIndex = runId ? state.history.findIndex(function (item) { return item && item.runId === runId; }) : -1;
+    const existingIndex = runId ? list.findIndex(function (item) { return item && item.runId === runId; }) : -1;
     const defaults = Object.assign({
-      id: 'q-' + Date.now().toString(36),
+      id: 'q-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7),
       sourceId: targetSourceId, sourceName: sourceName(), dialect: dialect(),
-      startedAt: Date.now(), endedAt: Date.now(), elapsedMs: 0, status: 'unknown', rows: null, error: ''
-    }, entry, { sql: sql });
+      startedAt: null, endedAt: null, elapsedMs: null, status: 'unknown', rows: null, error: ''
+    }, entry, { sql: sql, sourceId: targetSourceId });
     if (existingIndex >= 0) {
-      // A run is first stored as "running" so a page refresh does not lose
-      // the audit trail.  Upgrade that same entry when the result arrives;
-      // do not create a duplicate row with the same SQL.
-      state.history[existingIndex] = Object.assign({}, state.history[existingIndex], defaults, { id: state.history[existingIndex].id });
-      saveHistory();
-      return;
+      // 一次执行先记 running，结果到达后升级同一条，不新增重复行。
+      list[existingIndex] = Object.assign({}, list[existingIndex], defaults, { id: list[existingIndex].id });
+      writeStoredHistory(targetSourceId, list);
+    } else {
+      const next = list.filter(function (item) { return item.sql !== sql; });
+      next.unshift(defaults);
+      writeStoredHistory(targetSourceId, next);
     }
-    state.history = state.history.filter(function (item) { return item.sql !== sql; });
-    state.history.unshift(defaults);
-    state.history = state.history.slice(0, MAX_HISTORY);
-    saveHistory();
+    return loadHistory(targetSourceId);
   }
   function recordQueryStart(sql, runId, sourceInfo) {
     if (!sql || !String(sql).trim()) return null;
@@ -891,7 +956,8 @@
     }
     const sql = result.sql || (pending && pending.sql);
     if (!sql) return;
-    const startedAt = (pending && pending.startedAt) || result.startedAt || (Date.now() - (result.elapsedMs || 0));
+    // 没有可靠起点时保持 null，不编造执行时间（DBUI-06）。
+    const startedAt = (pending && pending.startedAt) || result.startedAt || null;
     addHistory({
       sql: sql,
       runId: runId,
@@ -899,8 +965,8 @@
       sourceName: (pending && pending.sourceName) || sourceName(),
       dialect: (pending && pending.dialect) || dialect(),
       startedAt: startedAt,
-      endedAt: Date.now(),
-      elapsedMs: result.elapsedMs != null ? result.elapsedMs : (Date.now() - startedAt),
+      endedAt: startedAt != null ? Date.now() : null,
+      elapsedMs: result.elapsedMs != null ? result.elapsedMs : (startedAt != null ? Date.now() - startedAt : null),
       status: result.status || (result.error ? 'error' : 'success'),
       rows: result.rows != null ? result.rows : null,
       error: result.error || ''
@@ -1912,27 +1978,89 @@
     host.innerHTML = '<div class="db-pro-import-summary">影响行数：' + esc(result.rows_affected == null ? '-' : result.rows_affected) + ' · 成功处理：' + esc(result.processed == null ? rows.length : result.processed) + '</div><table class="db-pro-import-table"><thead><tr><th>行</th><th>状态</th><th>错误</th></tr></thead><tbody>' + rows.map(function (row) { return '<tr><td>' + esc(row.row == null ? row.index : row.row) + '</td><td>' + esc(row.status || '') + '</td><td>' + esc(row.error || '') + '</td></tr>'; }).join('') + '</tbody></table>';
   }
 
+  // 历史重放的来源解析：原始 sourceId 必须保留；来源未知或已删除时要求用户
+  // 显式选择，绝不生成带错误 sourceId 的执行链接（新窗口深链接依赖它）。
+  function historySourceChoices() {
+    const select = id('db-source');
+    const list = [];
+    if (select && select.options) {
+      Array.prototype.forEach.call(select.options, function (option) {
+        if (!option || !option.value) return;
+        list.push({ id: String(option.value), name: String(option.textContent || '').trim() || String(option.value) });
+      });
+    }
+    if (!list.length) {
+      Object.keys(state.sourceCatalog || {}).forEach(function (key) {
+        const item = state.sourceCatalog[key];
+        list.push({ id: String(key), name: (item && item.name) || String(key) });
+      });
+    }
+    return list;
+  }
+  function askHistorySource() {
+    const choices = historySourceChoices();
+    if (!choices.length) {
+      toast('没有可用的数据源，无法为这条历史生成执行链接', 'warn');
+      return Promise.resolve('');
+    }
+    const label = '这条历史记录的原数据源未知或已删除，请明确选择要执行的数据源：\n'
+      + choices.map(function (item, index) { return (index + 1) + ') ' + item.id + ' — ' + item.name; }).join('\n');
+    const parse = function (answer) {
+      const text = String(answer == null ? '' : answer).trim();
+      if (!text) return '';                       // 用户取消：不生成任何执行链接
+      const byIndex = choices[Number(text) - 1];
+      const picked = byIndex || choices.filter(function (item) { return item.id === text; })[0];
+      if (!picked) { toast('未识别选择的数据源，已取消生成链接', 'warn'); return ''; }
+      return picked.id;
+    };
+    if (K.overlays && typeof K.overlays.prompt === 'function') {
+      return Promise.resolve(K.overlays.prompt({ title: '选择历史查询的数据源', label: label, defaultValue: '' }))
+        .then(parse, function () { return ''; });
+    }
+    return Promise.resolve(parse(window.prompt(label, '')));
+  }
+  function replayHistoryEntry(entry) {
+    if (!entry || !entry.sql) return Promise.resolve('');
+    const known = historySourceChoices().map(function (item) { return item.id; });
+    const original = String(entry.sourceId || '');
+    const copyLink = function (sourceIdValue) {
+      const url = buildDeepLink({ sourceId: sourceIdValue, sql: entry.sql, autoRun: true });
+      const copy = K.core && K.core.copyToClipboard;
+      Promise.resolve(copy ? copy(url) : null).then(function () { toast('历史查询深链接已复制', 'ok'); });
+      return url;
+    };
+    if (original && known.indexOf(original) >= 0) return Promise.resolve(copyLink(original));
+    return askHistorySource().then(function (picked) { return picked ? copyLink(picked) : ''; });
+  }
+
   function openHistory() {
-    loadHistory();
+    const scopeKey = historyKeyFor();
+    loadHistory(scopeKey);
     const body = document.createElement('div');
-    body.innerHTML = '<div class="db-pro-history-toolbar"><input id="db-pro-history-search" class="editor-input" type="search" placeholder="搜索 SQL、数据源、状态…" autofocus><select id="db-pro-history-status" class="editor-input"><option value="">全部状态</option><option value="success">成功</option><option value="error">失败</option><option value="running">执行中</option></select></div><div id="db-pro-history-list" class="db-pro-history-list"></div>';
+    body.innerHTML = '<div class="db-pro-history-toolbar"><input id="db-pro-history-search" class="editor-input" type="search" placeholder="搜索 SQL、数据源、状态…" autofocus><select id="db-pro-history-scope" class="editor-input" title="历史范围"><option value="' + esc(scopeKey) + '">当前数据源</option><option value="' + LEGACY_HISTORY_BUCKET + '">' + esc(LEGACY_HISTORY_LABEL) + '</option></select><select id="db-pro-history-status" class="editor-input"><option value="">全部状态</option><option value="success">成功</option><option value="error">失败</option><option value="running">执行中</option><option value="interrupted">已中断</option><option value="canceled">已取消</option><option value="unknown">未知</option></select></div><div id="db-pro-history-list" class="db-pro-history-list"></div>';
     const modal = createModal({
       title: '查询历史', body: body,
       actions: [
-        { text: '清空当前数据源', className: 'btn btn-danger', close: false, onClick: function () { if (!state.history.length || window.confirm('清空当前数据源的查询历史？')) { state.history = []; saveHistory(); draw(); toast('查询历史已清空', 'ok'); } } },
+        { text: '清空当前范围', className: 'btn btn-danger', close: false, onClick: function () { if (!state.history.length || window.confirm('清空当前范围的查询历史？')) { clearHistory(currentScope()); draw(); toast('查询历史已清空', 'ok'); } } },
         { text: '关闭', className: 'btn', close: true }
       ]
     });
-    const search = body.querySelector('#db-pro-history-search'), status = body.querySelector('#db-pro-history-status'), list = body.querySelector('#db-pro-history-list');
+    const search = body.querySelector('#db-pro-history-search'), status = body.querySelector('#db-pro-history-status'), scope = body.querySelector('#db-pro-history-scope'), list = body.querySelector('#db-pro-history-list');
+    function currentScope() { return scope && scope.value ? scope.value : scopeKey; }
     function draw() {
+      // 单一仓库：切换范围只重新读取同一份结构化历史，不做任何旧字符串合并。
+      loadHistory(currentScope());
       const needle = search.value.trim().toLowerCase(), wanted = status.value;
       const items = state.history.filter(function (entry) { const hay = [entry.sql, entry.sourceName, entry.status, entry.error].join(' ').toLowerCase(); return (!needle || hay.indexOf(needle) >= 0) && (!wanted || entry.status === wanted); });
-      list.innerHTML = items.slice(0, 100).map(function (entry, index) { const date = entry.startedAt ? new Date(entry.startedAt).toLocaleString() : '-'; return '<article class="db-pro-history-card"><header><strong>' + esc(date) + '</strong><span>' + esc(entry.sourceName || entry.sourceId || '未绑定') + '</span><span class="db-pro-history-status ' + esc(entry.status || 'unknown') + '">' + esc(entry.status === 'success' ? '成功' : entry.status === 'error' ? '失败' : entry.status === 'running' ? '执行中' : '未知') + '</span><span>' + esc(entry.elapsedMs == null ? '-' : entry.elapsedMs + ' ms') + '</span></header><pre>' + esc(entry.sql) + '</pre><footer><button type="button" class="btn btn-xs" data-history-insert="' + index + '">插入</button><button type="button" class="btn btn-xs" data-history-link="' + index + '">新窗口链接</button><button type="button" class="btn btn-xs btn-danger" data-history-delete="' + index + '">删除</button></footer></article>'; }).join('') || '<div class="db-pro-history-empty">没有匹配的查询历史</div>';
+      list.innerHTML = items.slice(0, 100).map(function (entry, index) { const date = entry.startedAt ? new Date(entry.startedAt).toLocaleString() : '-'; return '<article class="db-pro-history-card"><header><strong>' + esc(date) + '</strong><span>' + esc(entry.sourceName || entry.sourceId || '未绑定') + '</span><span class="db-pro-history-status ' + esc(entry.status || 'unknown') + '">' + esc(entry.status === 'success' ? '成功' : entry.status === 'error' ? '失败' : entry.status === 'running' ? '执行中' : entry.status === 'canceled' ? '已取消' : entry.status === 'interrupted' ? '已中断' : '未知') + '</span><span>' + esc(entry.elapsedMs == null ? '-' : entry.elapsedMs + ' ms') + '</span></header><pre>' + esc(entry.sql) + '</pre><footer><button type="button" class="btn btn-xs" data-history-insert="' + index + '">插入</button><button type="button" class="btn btn-xs" data-history-link="' + index + '">新窗口链接</button><button type="button" class="btn btn-xs btn-danger" data-history-delete="' + index + '">删除</button></footer></article>'; }).join('') || '<div class="db-pro-history-empty">没有匹配的查询历史</div>';
       list.querySelectorAll('[data-history-insert]').forEach(function (button) { button.onclick = function () { const item = items[Number(button.dataset.historyInsert)]; if (item) { setEditorValue(item.sql, true); closeModal(); } }; });
-      list.querySelectorAll('[data-history-link]').forEach(function (button) { button.onclick = function () { const item = items[Number(button.dataset.historyLink)]; if (!item) return; const url = buildDeepLink({ sourceId: item.sourceId, sql: item.sql, autoRun: true }); const copy = K.core && K.core.copyToClipboard; Promise.resolve(copy ? copy(url) : null).then(function () { toast('历史查询深链接已复制', 'ok'); }); }; });
-      list.querySelectorAll('[data-history-delete]').forEach(function (button) { button.onclick = function () { const item = items[Number(button.dataset.historyDelete)]; if (!item) return; state.history = state.history.filter(function (x) { return x.id !== item.id; }); saveHistory(); draw(); }; });
+      list.querySelectorAll('[data-history-link]').forEach(function (button) { button.onclick = function () { const item = items[Number(button.dataset.historyLink)]; if (!item) return; Promise.resolve(replayHistoryEntry(item)).catch(function (error) { toast('生成历史链接失败：' + (error && error.message ? error.message : error), 'err'); }); }; });
+      list.querySelectorAll('[data-history-delete]').forEach(function (button) { button.onclick = function () { const item = items[Number(button.dataset.historyDelete)]; if (!item) return; deleteHistoryEntry(item.id, currentScope()); draw(); }; });
     }
-    search.addEventListener('input', draw); status.addEventListener('change', draw); draw();
+    search.addEventListener('input', draw);
+    status.addEventListener('change', draw);
+    if (scope) { scope.addEventListener('change', function () { loadHistory(currentScope()); draw(); }); scope.value = scopeKey; }
+    draw();
   }
 
   function annotateErrorMessage(root) {
@@ -1957,26 +2085,156 @@
       if (name) name.title = '点击新窗口打开收藏：' + name.textContent;
     });
   }
+  // ---- 数据库快捷键统一分发器（DBUI-05） ----
+  // database.js 与本模块不再各自抢占 capture 监听，而是把命令注册到同一个分发器：
+  // 修饰键精确匹配（Ctrl+F 不再吞掉 Ctrl+Shift+F）、统一平台 Ctrl/Cmd、
+  // 忽略 IME 组合输入、按焦点作用域（编辑器/工作区/弹窗）过滤，并且一个命令执行后
+  // 同一事件不再执行后续命令。已处理事件（defaultPrevented）一律不再重复处理。
+  const COMMAND_REGISTRY_VERSION = 1;
+  function isMacPlatform() {
+    let probe = '';
+    try { probe = String((navigator && navigator.platform) || '') + ' ' + String((navigator && navigator.userAgent) || ''); } catch (_) { probe = ''; }
+    return /mac|iphone|ipad|darwin/i.test(probe);
+  }
+  function parseShortcutSpec(spec) {
+    const combo = { ctrl: false, alt: false, shift: false, meta: false, key: '' };
+    String(spec || '').toLowerCase().replace(/\s+/g, '').split('+').filter(Boolean).forEach(function (part) {
+      if (part === 'ctrl' || part === 'control') combo.ctrl = true;
+      else if (part === 'alt' || part === 'option') combo.alt = true;
+      else if (part === 'shift') combo.shift = true;
+      else if (part === 'meta' || part === 'cmd' || part === 'command') combo.meta = true;
+      else combo.key = part;
+    });
+    return combo;
+  }
+  function shortcutMatches(event, spec) {
+    if (!event || !spec) return false;
+    const combo = parseShortcutSpec(spec);
+    if (!combo.key) return false;
+    const actual = String(event.key || '').toLowerCase(), code = String(event.code || '').toLowerCase();
+    const keyOk = actual === combo.key || code === combo.key
+      || (combo.key === 'space' && (actual === ' ' || code === 'space'))
+      || (combo.key === 'esc' && actual === 'escape')
+      || (combo.key === 'enter' && code === 'numpadenter');
+    if (!keyOk) return false;
+    const altOk = !!event.altKey === combo.alt;
+    const shiftOk = !!event.shiftKey === combo.shift;
+    // macOS 兼容：写法为 Ctrl 的组合在 Mac 上接受 Cmd（meta）或 Ctrl。
+    if (combo.ctrl && !combo.meta && isMacPlatform()) return !!(event.ctrlKey || event.metaKey) && altOk && shiftOk;
+    return !!event.ctrlKey === combo.ctrl && altOk && shiftOk && !!event.metaKey === combo.meta;
+  }
+  function hasOpenOverlay() {
+    try { return !!(document.body && document.body.classList && document.body.classList.contains('has-open-overlay')); } catch (_) { return false; }
+  }
+  function commandScope(event) {
+    const target = event && event.target;
+    if (state.modal || hasOpenOverlay()) return 'modal';
+    if (target && target.id && String(target.id).indexOf('db-shortcut-') === 0) return 'settings';
+    const e = editor();
+    if (e && target === e) return 'editor';
+    if (!target || target === document.body || target === document.documentElement) return 'workspace';
+    const tag = String(target.tagName || '').toUpperCase();
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable) return 'outside';
+    if (typeof target.closest === 'function' && target.closest('#db-workspace, .db-sql-layout, #view')) return 'workspace';
+    return 'outside';
+  }
+  function createCommandRegistry() {
+    const registry = {
+      version: COMMAND_REGISTRY_VERSION,
+      commands: []
+    };
+    registry.register = function (command) {
+      if (!command || !command.name || typeof command.run !== 'function') return null;
+      if (!command.spec && typeof command.specFn !== 'function') return null;
+      const entry = {
+        name: String(command.name),
+        spec: command.spec || '',
+        specFn: typeof command.spec === 'function' ? command.spec : null,
+        scope: Array.isArray(command.scope) ? command.scope.slice() : ['editor', 'workspace'],
+        priority: Number(command.priority) || 0,
+        when: typeof command.when === 'function' ? command.when : null,
+        run: command.run,
+        stopPropagation: command.stopPropagation === true,
+        owner: command.owner || ''
+      };
+      registry.commands = registry.commands.filter(function (item) { return item.name !== entry.name; });
+      registry.commands.push(entry);
+      registry.commands.sort(function (a, b) { return (b.priority - a.priority) || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0); });
+      return entry;
+    };
+    registry.unregister = function (name) {
+      registry.commands = registry.commands.filter(function (item) { return item.name !== name; });
+    };
+    registry.names = function () { return registry.commands.map(function (item) { return item.name; }); };
+    registry.list = function () { return registry.commands.slice(); };
+    registry.dispatch = function (event) { return dispatchCommand(registry, event); };
+    return registry;
+  }
+  function commandShortcut(entry) { return entry.specFn ? entry.specFn() : entry.spec; }
+  function dispatchCommand(registry, event) {
+    if (!event || !registry) return '';
+    if (String(location.hash || '').indexOf('#/database') !== 0) return '';
+    // IME 组合输入期间任何数据库命令都不得触发。
+    if (event.isComposing || event.keyCode === 229) return '';
+    // 其他模块（或本模块的兜底监听）已经处理过的事件不再重复处理。
+    if (event.defaultPrevented) return '';
+    const scope = commandScope(event);
+    const context = { scope: scope, event: event, editor: editor(), registry: registry };
+    for (let i = 0; i < registry.commands.length; i++) {
+      const entry = registry.commands[i];
+      if (entry.scope.indexOf(scope) < 0) continue;
+      if (!shortcutMatches(event, commandShortcut(entry))) continue;
+      if (entry.when && !entry.when(event, context)) continue;
+      event.preventDefault();
+      if (entry.stopPropagation && event.stopImmediatePropagation) event.stopImmediatePropagation();
+      context.command = entry.name;
+      entry.run(event, context);
+      return entry.name;
+    }
+    return '';
+  }
+  function commandRegistry() {
+    if (K.databaseCommands && typeof K.databaseCommands.register === 'function' && K.databaseCommands.version === COMMAND_REGISTRY_VERSION) return K.databaseCommands;
+    const registry = createCommandRegistry();
+    K.databaseCommands = registry;
+    // database.js 可能先于本模块加载并挂过兜底 capture 监听；注册表就绪后通知它
+    // 把命令迁移进来并撤掉兜底监听，最终只保留一个 capture 分发。
+    if (typeof window.dispatchEvent === 'function') emit('kairo:database-commands-ready', { version: COMMAND_REGISTRY_VERSION });
+    return registry;
+  }
+  const commands = commandRegistry();
+  function completionOpen() { return !!(state.ac && state.ac.hidden !== true && state.acItems && state.acItems.length); }
+  function moveCompletion(step) {
+    if (!state.ac || !state.acItems || !state.acItems.length) return;
+    state.acIndex = (state.acIndex + step + state.acItems.length) % state.acItems.length;
+    state.ac.querySelectorAll('.db-pro-ac-item').forEach(function (item, index) {
+      item.classList.toggle('active', index === state.acIndex);
+      item.setAttribute('aria-selected', index === state.acIndex ? 'true' : 'false');
+    });
+  }
+  function registerFeatureCommands() {
+    const editorOnly = ['editor'];
+    commands.register({ name: 'db.find', owner: 'features', spec: 'Ctrl+F', scope: editorOnly, priority: 60, stopPropagation: true, run: function () { openFindReplace(false); } });
+    commands.register({ name: 'db.replace', owner: 'features', spec: 'Ctrl+H', scope: editorOnly, priority: 60, stopPropagation: true, run: function () { openFindReplace(true); } });
+    commands.register({ name: 'db.save', owner: 'features', spec: 'Ctrl+S', scope: editorOnly, priority: 50, stopPropagation: true, run: function () { saveSQL(false); } });
+    commands.register({ name: 'db.open', owner: 'features', spec: 'Ctrl+O', scope: editorOnly, priority: 50, stopPropagation: true, run: function () { openSQLInput(); } });
+    commands.register({ name: 'db.complete', owner: 'features', spec: 'Ctrl+Space', scope: editorOnly, priority: 50, stopPropagation: true, when: function () { return !id('db-sql-ac'); }, run: function () { maybeContextCompletion(true); } });
+    commands.register({ name: 'db.completion.close', owner: 'features', spec: 'Escape', scope: editorOnly, priority: 95, stopPropagation: true, when: function () { return !!state.ac; }, run: function () { hideCompletion(); } });
+    commands.register({ name: 'db.completion.next', owner: 'features', spec: 'ArrowDown', scope: editorOnly, priority: 90, stopPropagation: true, when: completionOpen, run: function () { moveCompletion(1); } });
+    commands.register({ name: 'db.completion.previous', owner: 'features', spec: 'ArrowUp', scope: editorOnly, priority: 90, stopPropagation: true, when: completionOpen, run: function () { moveCompletion(-1); } });
+    commands.register({ name: 'db.completion.accept', owner: 'features', spec: 'Enter', scope: editorOnly, priority: 90, stopPropagation: true, when: completionOpen, run: function () { acceptCompletion(); } });
+    commands.register({ name: 'db.completion.accept-tab', owner: 'features', spec: 'Tab', scope: editorOnly, priority: 90, stopPropagation: true, when: completionOpen, run: function () { acceptCompletion(); } });
+  }
   function bindGlobalKeys() {
     if (bindGlobalKeys.bound) return; bindGlobalKeys.bound = true;
+    registerFeatureCommands();
     document.addEventListener('click', function (event) {
       if (String(location.hash || '').indexOf('#/database') !== 0) return;
       const target = event.target && event.target.closest ? event.target.closest('#db-run') : null;
       if (target) beginRunCapture(target);
     }, true);
-    document.addEventListener('keydown', function (event) {
-      if (String(location.hash || '').indexOf('#/database') !== 0) return;
-      const e = editor(); if (!e || event.target !== e) return;
-      if (event.key === 'Escape' && state.ac) { event.preventDefault(); event.stopImmediatePropagation(); hideCompletion(); return; }
-      if (event.ctrlKey && !event.altKey && !event.metaKey && event.key.toLowerCase() === 'f') { event.preventDefault(); event.stopImmediatePropagation(); openFindReplace(false); return; }
-      if (event.ctrlKey && !event.altKey && !event.metaKey && event.key.toLowerCase() === 'h') { event.preventDefault(); event.stopImmediatePropagation(); openFindReplace(true); return; }
-      if (event.ctrlKey && !event.altKey && !event.metaKey && event.key.toLowerCase() === 's') { event.preventDefault(); event.stopImmediatePropagation(); saveSQL(false); return; }
-      if (event.ctrlKey && !event.altKey && !event.metaKey && event.key.toLowerCase() === 'o') { event.preventDefault(); event.stopImmediatePropagation(); openSQLInput(); return; }
-      if (event.ctrlKey && event.code === 'Space' && !id('db-sql-ac')) { event.preventDefault(); event.stopImmediatePropagation(); maybeContextCompletion(true); return; }
-      if (!state.ac || state.ac.hidden) return;
-      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); event.stopImmediatePropagation(); state.acIndex = (state.acIndex + (event.key === 'ArrowDown' ? 1 : -1) + state.acItems.length) % state.acItems.length; state.ac.querySelectorAll('.db-pro-ac-item').forEach(function (item, index) { item.classList.toggle('active', index === state.acIndex); item.setAttribute('aria-selected', index === state.acIndex ? 'true' : 'false'); }); return; }
-      if (event.key === 'Enter' || event.key === 'Tab') { event.preventDefault(); event.stopImmediatePropagation(); acceptCompletion(); }
-    }, true);
+    // 唯一的数据库键盘捕获监听：所有命令都经分发器精确匹配后执行。
+    document.addEventListener('keydown', function (event) { dispatchCommand(commands, event); }, true);
   }
 
   function install(root) {
@@ -2060,6 +2318,20 @@
   F.runScript = runScript;
   F.openHistory = openHistory;
   F.addHistory = addHistory;
+  // 查询历史单一仓库接口（DBUI-06）：页面层下拉、结构化弹窗与测试都走这里。
+  F.loadHistory = loadHistory;
+  F.listHistory = listStoredHistory;
+  F.deleteHistory = deleteHistoryEntry;
+  F.clearHistory = clearHistory;
+  F.replayHistoryEntry = replayHistoryEntry;
+  F.historyStore = historyStore;
+  F.LEGACY_HISTORY_BUCKET = LEGACY_HISTORY_BUCKET;
+  F.LEGACY_HISTORY_LABEL = LEGACY_HISTORY_LABEL;
+  // 统一快捷键分发器（DBUI-05）：database.js 通过它注册命令，不再各自抢占 capture。
+  F.commands = commands;
+  F.dispatchCommand = function (event) { return dispatchCommand(commands, event); };
+  F.registerCommand = function (command) { return commands.register(command); };
+  F.shortcutMatches = shortcutMatches;
   F.recordQueryStart = recordQueryStart;
   F.recordQueryResult = recordQueryResult;
   F.openImportWizard = openImportWizard;

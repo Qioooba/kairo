@@ -828,26 +828,26 @@
   function savePersisted() { persistPreference(persisted); }
   function savePrefs() { persisted.prefs = state.prefs; savePersisted(); }
   function loadHistory() {
+    // DBUI-06：历史只有一个结构化仓库（databaseFeatures）。页面上的旧版下拉
+    // 只是派生显示，读取当前数据源的记录；绝不把旧字符串列表合并回来。
+    const store = Kairo.databaseFeatures;
+    if (store && typeof store.listHistory === 'function') {
+      return store.listHistory((state.source && state.source.id) || '').map(function (entry) { return entry.sql; });
+    }
     return Array.isArray(persisted.history) ? persisted.history : [];
   }
   Kairo.database = Kairo.database || {};
+  // 兼容旧调用方：旧版字符串历史只供一次性迁移读取，不再作为可写仓库。
   Kairo.database.getHistory = function () {
     return Array.isArray(persisted.history) ? persisted.history.slice() : [];
   };
   Kairo.database.isLargeSQL = isLargeSQL;
   Kairo.database.MAX_SQL_HIGHLIGHT_CHARS = MAX_SQL_HIGHLIGHT_CHARS;
   Kairo.database.MAX_SQL_HIGHLIGHT_LINES = MAX_SQL_HIGHLIGHT_LINES;
-  function pushHistory(sql) {
-    const text = String(sql || '').trim();
-    if (!text || text.length > HISTORY_ENTRY_MAX) return;
-    const items = loadHistory().filter(x => x !== text);
-    items.unshift(text);
-    persisted.history = items.slice(0, HISTORY_LIMIT);
-    savePersisted();
+  function pushHistory() {
+    // 历史记录本身由 databaseFeatures 在 recordQueryStart/recordQueryResult 中按真实
+    // 数据源与真实结果写入；这里只刷新由同一仓库派生的下拉，不伪造成功记录（DBUI-06）。
     refreshHistorySelect();
-    if (Kairo.databaseFeatures && typeof Kairo.databaseFeatures.addHistory === 'function') {
-      Kairo.databaseFeatures.addHistory({ sql: text, status: 'success' });
-    }
   }
   function refreshHistorySelect() {
     const select = q('db-history');
@@ -3157,7 +3157,7 @@
       + '<div class="db-more-title">查询历史</div>'
       + '<div class="db-more-row">'
       + '<select id="db-history" title="查询历史" aria-label="查询历史"><option value="">选择历史…</option>' + history.map(function (sql, i) { return '<option value="' + i + '">' + h(sql.replace(/\s+/g, ' ').slice(0, 80)) + '</option>'; }).join('') + '</select>'
-      + '<button class="btn btn-xs" id="db-history-clear" title="清空当前用户保存的全部查询历史">' + actionIcon('trash') + '<span>清空</span></button>'
+      + '<button class="btn btn-xs" id="db-history-clear" title="清空当前数据源的查询历史">' + actionIcon('trash') + '<span>清空</span></button>'
       + '</div>'
       + '</div>'
       + '</div>'
@@ -3356,12 +3356,14 @@
       this.value = '';
     };
     q('db-history-clear').onclick = function () {
-      if (!persisted.history.length || confirm('清空当前用户保存的全部 SQL 查询历史？')) {
-        persisted.history = [];
-        savePersisted();
-        refreshHistorySelect();
-        toast('查询历史已清空', 'ok');
-      }
+      const store = Kairo.databaseFeatures;
+      if (!store || typeof store.clearHistory !== 'function') return toast('查询历史仓库不可用', 'warn');
+      const current = loadHistory();
+      if (current.length && !confirm('清空当前数据源的 SQL 查询历史？')) return;
+      // 与结构化弹窗共用同一仓库：清空后旧字符串列表不会再合并回来（DBUI-06）。
+      store.clearHistory((state.source && state.source.id) || '');
+      refreshHistorySelect();
+      toast('当前数据源的查询历史已清空', 'ok');
     };
     loadSchemas();
   }
@@ -3741,9 +3743,17 @@
   function ensureWorkbenchKeys() {
     if (workbenchKeysBound) return;
     workbenchKeysBound = true;
+    if (useCommandDispatcher()) return;
+    // 兜底：database-features.js 尚未加载时先自己挂 capture 监听；它的分发器
+    // 就绪后立即迁移命令并撤掉本监听，保证最终只有一个 capture 分发。
     document.addEventListener('keydown', onWorkbenchKey, true);
+    window.addEventListener('kairo:database-commands-ready', function () {
+      if (!useCommandDispatcher()) return;
+      document.removeEventListener('keydown', onWorkbenchKey, true);
+    });
   }
   function onWorkbenchKey(e) {
+    if (e.defaultPrevented) return;
     if ((location.hash || '').indexOf('database') < 0) return;
     if (!q('db-sql') && !q('db-workspace')) return;
     if (e.isComposing || editorComposing || e.keyCode === 229) return;
@@ -3762,7 +3772,7 @@
       hideComplete();
       return;
     }
-    if (e.key === 'F2' && state.resultMode === 'grid' && !e.target.closest('input, textarea, select')) {
+    if (e.key === 'F2' && state.resultMode === 'grid' && !(e.target && e.target.closest && e.target.closest('input, textarea, select'))) {
       e.preventDefault();
       if (state.isEditMode) startCellEdit(state.selectedRow, state.selectedCol || 0);
       else toast('请先开启“网格编辑”再按 F2 修改单元格', 'warn');
@@ -3785,6 +3795,47 @@
       formatCurrentSQL({ full: e.altKey });
       return;
     }
+  }
+  // DBUI-05：数据库命令注册到 databaseFeatures 的统一分发器（修饰键精确匹配、
+  // 统一平台 Ctrl/Cmd、IME 感知、按焦点作用域过滤、一个事件只执行一条命令）。
+  // 关闭补全的优先级高于取消查询，取代此前靠源码顺序保证的 Escape 归属。
+  function workbenchCommands() {
+    const shortcuts = () => (state && state.prefs && state.prefs.shortcuts) || {};
+    const spec = function (name, fallback) { return function () { return shortcuts()[name] || fallback; }; };
+    const ready = function () { return !!(q('db-sql') || q('db-workspace')); };
+    const clearCompletion = function () { if (acState.open) hideComplete(); };
+    return [
+      { name: 'db.manager.close', spec: 'Escape', scope: ['editor', 'workspace', 'outside', 'modal'], priority: 100, when: function () { return !!state.managing; }, run: function () { closeManager(); } },
+      { name: 'db.run', spec: spec('run', 'Ctrl+Enter'), scope: ['editor', 'workspace'], priority: 40, when: ready, run: function () { clearCompletion(); runQuery(); } },
+      { name: 'db.explain', spec: spec('explain', 'Ctrl+Alt+P'), scope: ['editor', 'workspace'], priority: 40, when: ready, run: function () { clearCompletion(); runExplain(); } },
+      { name: 'db.cancel', spec: spec('cancel', 'Escape'), scope: ['editor', 'workspace'], priority: 30, when: function () { return ready() && sess() && sess().controller; }, run: function () { clearCompletion(); cancelQuery(); } },
+      { name: 'db.result.grid', spec: spec('grid', 'Alt+1'), scope: ['editor', 'workspace'], priority: 30, when: ready, run: function () { setResultMode('grid'); } },
+      { name: 'db.result.record', spec: spec('record', 'Alt+2'), scope: ['editor', 'workspace'], priority: 30, when: ready, run: function () { setResultMode('record'); } },
+      { name: 'db.meta.toggle', spec: spec('objects', 'Alt+O'), scope: ['editor', 'workspace'], priority: 30, when: ready, run: function () {
+        const meta = q('db-meta-pane');
+        const control = meta && meta.classList.contains('is-collapsed') ? q('db-meta-collapsed-bar') : q('db-meta-toggle');
+        if (control) control.click();
+      } },
+      { name: 'db.format', spec: spec('format', 'Ctrl+Shift+F'), scope: ['editor', 'workspace'], priority: 40, when: ready, run: function (event) { formatCurrentSQL({ full: !!(event && event.altKey) }); } },
+      { name: 'db.grid.edit-cell', spec: 'F2', scope: ['editor', 'workspace'], priority: 20, when: function (event) {
+        return ready() && state.resultMode === 'grid' && !(event.target && event.target.closest && event.target.closest('input, textarea, select'));
+      }, run: function () {
+        if (state.isEditMode) startCellEdit(state.selectedRow, state.selectedCol || 0);
+        else toast('请先开启“网格编辑”再按 F2 修改单元格', 'warn');
+      } }
+    ];
+  }
+  function registerWorkbenchCommands(registry) {
+    workbenchCommands().forEach(function (command) {
+      registry.register(Object.assign({ owner: 'database', stopPropagation: false }, command));
+    });
+    return true;
+  }
+  function useCommandDispatcher() {
+    const registry = window.Kairo && window.Kairo.databaseCommands;
+    if (!registry || typeof registry.register !== 'function') return false;
+    registerWorkbenchCommands(registry);
+    return true;
   }
 
   function isSnippetExpandKey(e, trigger) {
@@ -4749,11 +4800,12 @@
     });
     hideQueryMessage();
     renderResult();
-    pushHistory(sql);
     s.runId = 'run-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
     if (Kairo.databaseFeatures && typeof Kairo.databaseFeatures.recordQueryStart === 'function') {
       Kairo.databaseFeatures.recordQueryStart(sql, s.runId, { sourceId: querySource.id, sourceName: querySource.name, dialect: querySource.kind });
     }
+    // 历史先按真实数据源与 running 状态写入，再刷新派生下拉（DBUI-06）。
+    pushHistory();
     // 内核兼容：IE/极老核无 AbortController/fetch 时给明确提示而非首行抛错
     if (typeof fetch !== 'function') {
       return showQueryError('浏览器过旧', '当前内核不支持 fetch，请用 360极速模式 / Chrome 打开。');
