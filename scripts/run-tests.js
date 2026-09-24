@@ -39,6 +39,7 @@ const UNIT_TESTS = [
   'tests/database-row-identity-update.test.js',
   'tests/database-table-context-completion.test.js',
   'tests/sql-format-service.test.js',
+  'tests/sql-format-ddl.test.js',
   'tests/sql-format-selection-boundary.test.js',
   'tests/grid-edit-plan-contract.test.js',
   'tests/grid-edit-plan-wire.test.js',

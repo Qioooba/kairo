@@ -843,6 +843,144 @@
   let lastFormatDiagnostic = null;
 
   /**
+   * DDL 专用排版：CREATE / ALTER TABLE・CREATE INDEX 的外层括号清单逐行缩进，
+   * 闭合括号后的存储子句各自成行。
+   *
+   * 背景（用户反馈"有的表 DDL 语句没格式化"）：formatTokens 是"子句式"格式化器
+   * （SELECT/INSERT/UPDATE 那套），对
+   *   CREATE TABLE T ("A" NUMBER, "B" VARCHAR2(10), CONSTRAINT ...) SEGMENT ... PCTFREE 10 ...
+   * 只会把整条语句拼成一行 —— 点开 DDL 看到的还是"一大坨"，等于没格式化；
+   * CREATE UNIQUE INDEX ... 更是原样返回。
+   *
+   * 只调整空白与关键字大小写，字符串/注释/绑定参数原样保留；调用方仍会跑独立保真校验。
+   * 含注释或结构异常（括号不配对）时返回 null，由调用方回退到原格式化器。
+   */
+  const DDL_STATEMENT_RE = /^\s*(?:CREATE\s+(?:GLOBAL\s+TEMPORARY\s+|UNIQUE\s+|BITMAP\s+)?(?:TABLE|INDEX)|ALTER\s+TABLE)\b/i;
+  const DDL_TAIL_BREAK = new Set([
+    'SEGMENT', 'TABLESPACE', 'STORAGE', 'PCTFREE', 'PCTUSED', 'INITRANS', 'MAXTRANS',
+    'NOCOMPRESS', 'COMPRESS', 'LOGGING', 'NOLOGGING',
+    'PARALLEL', 'NOPARALLEL', 'ORGANIZATION', 'PARTITION', 'SUBPARTITION', 'USING',
+    'ONLINE', 'OFFLINE', 'REBUILD', 'RENAME', 'MOVE', 'LOB', 'READ', 'WRITE'
+  ]);
+  const DDL_TIGHT_BEFORE_PAREN = new Set([
+    'KEY', 'PRIMARY', 'UNIQUE', 'FOREIGN', 'CHECK', 'REFERENCES', 'IN', 'VALUES',
+    'ON', 'USING', 'TABLE', 'INDEX', 'VIEW', 'DEFAULT', 'AS', 'RETURN', 'SET'
+  ]);
+  function ddlTokenText(tok, options) {
+    if (tok.type !== 'keyword') return tok.value;
+    const kc = (options || {}).keywordCase;
+    return kc === 'lower' ? tok.value.toLowerCase() : kc === 'keep' ? tok.value : tok.value.toUpperCase();
+  }
+  function ddlJoin(list, options) {
+    let out = '';
+    for (let i = 0; i < list.length; i++) {
+      const tok = list[i];
+      const prev = i > 0 ? list[i - 1] : null;
+      const val = ddlTokenText(tok, options);
+      let tight = !prev;
+      if (prev) {
+        if (tok.type === 'punct' && (tok.value === ',' || tok.value === '.')) tight = true;
+        else if (prev.type === 'punct' && prev.value === '.') tight = true;
+        else if (tok.type === 'bracket' && tok.value === ')') tight = true;
+        else if (prev.type === 'bracket' && prev.value === '(') tight = true;
+        else if (tok.type === 'bracket' && tok.value === '(') {
+          const isTypeParen = /[A-Za-z0-9_$#\u0080-\uffff]/.test(prev.value) && !DDL_TIGHT_BEFORE_PAREN.has(String(prev.value).toUpperCase());
+          tight = isTypeParen;
+        }
+      }
+      out += (tight ? '' : ' ') + val;
+    }
+    return out.trim();
+  }
+  function ddlSplitTail(tail, options) {
+    const segs = [];
+    let cur = [];
+    let depth = 0;
+    tail.forEach(function (tok) {
+      if (tok.type === 'bracket' && tok.value === '(') depth++;
+      if (tok.type === 'bracket' && tok.value === ')') depth--;
+      if (tok.type === 'punct' && tok.value === ';') return; // 分号不参与排版
+      // 断行判据只看"值是否在子句集合里"：PCTFREE / TABLESPACE / STORAGE 这类词
+  // 不在分词器的关键字表里（是 ident），不能按 tok.type === 'keyword' 判断。
+  const isBreak = depth === 0 && DDL_TAIL_BREAK.has(String(tok.value).toUpperCase());
+      if (isBreak && cur.length) { segs.push(cur); cur = []; }
+      cur.push(tok);
+    });
+    if (cur.length) segs.push(cur);
+    return segs.map(function (seg) { return ddlJoin(seg, options); }).filter(Boolean);
+  }
+  function formatDDLTokens(tokens, options) {
+    const code = tokens.filter(function (t) { return t.type !== 'space'; });
+    if (!code.length) return null;
+    // 注释位置在 DDL 里很难稳定重排，交给原格式化器（宁可保持原样也不打乱注释）
+    if (code.some(function (t) { return t.type === 'comment'; })) return null;
+
+    let open = -1, close = -1, depth = 0;
+    for (let i = 0; i < code.length; i++) {
+      const t = code[i];
+      if (t.type === 'bracket' && t.value === '(') {
+        if (depth === 0 && open < 0) open = i;
+        depth++;
+        continue;
+      }
+      if (t.type === 'bracket' && t.value === ')') {
+        depth--;
+        if (depth < 0) return null;
+        if (depth === 0 && open >= 0 && close < 0) close = i;
+        continue;
+      }
+    }
+    if (depth !== 0) return null;
+
+    const head = code.slice(0, open >= 0 ? open : code.length);
+    const group = open >= 0 && close > open ? code.slice(open + 1, close) : [];
+    const tail = close > 0 ? code.slice(close + 1) : [];
+    const lines = [];
+    const headText = ddlJoin(head, options);
+    const tailSegs = ddlSplitTail(tail, options);
+
+    if (!group.length) {
+      // 没有括号清单（CREATE INDEX 无列？ALTER TABLE T RENAME ...）：只按尾子句断行
+      if (!tailSegs.length) return headText || null;
+      lines.push(headText);
+      tailSegs.forEach(function (seg) { lines.push(seg); });
+      return lines.join('\n');
+    }
+
+    const items = [];
+    let cur = [], d = 0;
+    group.forEach(function (t) {
+      if (t.type === 'bracket' && t.value === '(') d++;
+      if (t.type === 'bracket' && t.value === ')') d--;
+      if (t.type === 'punct' && t.value === ',' && d === 0) { items.push(cur); cur = []; return; }
+      cur.push(t);
+    });
+    if (cur.length) items.push(cur);
+
+    lines.push(headText + ' (');
+    items.forEach(function (item, idx) {
+      const comma = idx < items.length - 1 ? ',' : '';
+      const sub = ddlSplitTail(item, options);
+      if (sub.length <= 1) {
+        lines.push('  ' + ddlJoin(item, options) + comma);
+        return;
+      }
+      // 约束项内部也有子句（USING INDEX / TABLESPACE / STORAGE…）：首段跟着缩进，
+      // 后续子句再缩进一级，逗号落在该项最后一行。
+      lines.push('  ' + sub[0]);
+      for (let i = 1; i < sub.length; i++) lines.push('    ' + sub[i]);
+      lines[lines.length - 1] += comma;
+    });
+    if (tailSegs.length) {
+      lines.push(') ' + tailSegs[0]);
+      for (let i = 1; i < tailSegs.length; i++) lines.push(tailSegs[i]);
+    } else {
+      lines.push(')');
+    }
+    return lines.join('\n');
+  }
+
+  /**
    * Main format function.
    * Safe, lossless and idempotent: the dialect/sqlMode decide how strings and
    * comments are lexed, and the result is only returned when an independent
@@ -857,7 +995,11 @@
     const lexOptions = normalizeLexOptions(options);
     try {
       const tokens = tokenizeSQL(text, lexOptions);
-      const formatted = formatTokens(tokens, options);
+      // DDL（CREATE/ALTER TABLE・CREATE INDEX）走专用排版：外层列清单逐行缩进、
+      // 存储子句各自成行。返回 null（含注释/结构异常）时回退原格式化器。
+      let formatted = null;
+      if (DDL_STATEMENT_RE.test(text)) formatted = formatDDLTokens(tokens, options);
+      if (formatted === null) formatted = formatTokens(tokens, options);
       if (!fidelityPreserved(text, formatted, lexOptions)) {
         // 保真校验失败：原样返回并记录原因，绝不返回可能改变语义的格式化结果。
         lastFormatDiagnostic = {
