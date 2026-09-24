@@ -423,6 +423,72 @@ func TestD08IndexesFailureFallsBackToRowIDInsteadOfReadOnly(t *testing.T) {
 	}
 }
 
+// TestD08BoundPlanMutationStillSucceeds 钉住"收紧写入入口没有把合法写入一起关掉"。
+//
+// 强制要求 result_id 之后，真正的风险是合法写入被误伤。这里用真实源码路径
+// （ApplyGridMutations → BuildGridMutationSQLWithPlan）跑一次成功的 UPDATE：
+// 走前端实际使用的索引协议（Changes + RowColumns），断言 WHERE 用的是服务端计划里的
+// 物理主键与原值，并且只影响 1 行。
+func TestD08BoundPlanMutationStillSucceeds(t *testing.T) {
+	m, source, d := mutationManager(t)
+	plan := &ResultEditContext{
+		ResultID:          "res-d08-write-ok",
+		SessionID:         "tab",
+		SourceID:          source.ID,
+		SourceFingerprint: sourceFingerprint(source),
+		Dialect:           source.Kind,
+		Schema:            "testdb",
+		Table:             "t",
+		IdentityPolicy:    "pk",
+		PrimaryKeys:       []string{"ID"},
+		CanUpdate:         true,
+		CanDelete:         true,
+		Columns: []GridColumnBinding{
+			{Index: 0, ResultName: "ID", PhysicalName: "ID", DataType: "int", Writable: true},
+			{Index: 1, ResultName: "NAME", PhysicalName: "NAME", DataType: "varchar(50)", Writable: true},
+		},
+		CreatedAt: time.Now(),
+	}
+	m.RegisterResultContext(plan)
+
+	sum, err := m.ApplyGridMutations(context.Background(), source, GridMutationRequest{
+		ResultID:  plan.ResultID,
+		SessionID: "tab",
+		Mutations: []GridMutation{{
+			Action:  "update",
+			Changes: []GridMutationChange{{ColumnIndex: 1, HasValue: true, Value: "新名字"}},
+			RowColumns: []GridRowValue{
+				{ColumnIndex: 0, HasValue: true, Value: 7},
+				{ColumnIndex: 1, HasValue: true, Value: "旧名字"},
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("合法网格写入被误伤: %v", err)
+	}
+	if len(sum.Results) != 1 || sum.Results[0].RowsAffected != 1 || sum.Results[0].Status != "succeeded" {
+		t.Fatalf("期望 1 行成功，实际 %+v", sum.Results)
+	}
+	if sum.RowsAffected != 1 {
+		t.Fatalf("汇总行数应为 1，实际 %d", sum.RowsAffected)
+	}
+
+	queries := d.queries
+	if len(queries) == 0 {
+		t.Fatal("没有发出任何 SQL")
+	}
+	// 去掉方言引号后再比对，避免把 MySQL 反引号/大写折叠当成失败。
+	sqlText := strings.ToUpper(strings.NewReplacer("`", "", `"`, "").Replace(queries[len(queries)-1]))
+	if !strings.Contains(sqlText, "UPDATE") || !strings.Contains(sqlText, "SET NAME") {
+		t.Fatalf("生成的 UPDATE 不正确: %s", queries[len(queries)-1])
+	}
+	// 定位条件必须同时包含物理主键与原值快照（乐观锁），而不是客户端自报的表名。
+	whereAt := strings.Index(sqlText, "WHERE")
+	if whereAt < 0 || !strings.Contains(sqlText[whereAt:], "ID") {
+		t.Fatalf("WHERE 子句必须按服务端计划里的物理主键定位: %s", queries[len(queries)-1])
+	}
+}
+
 // TestD08GridMutationRequiresBoundResultPlan 钉住写入路径必须绑定服务端编辑计划。
 //
 // 旧实现允许不带 result_id 的请求，此时 schema/table 完全来自客户端，
