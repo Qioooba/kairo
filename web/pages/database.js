@@ -3559,23 +3559,9 @@
     q('db-view-grid').onclick = () => setResultMode('grid');
     q('db-view-record').onclick = () => setResultMode('record');
     q('db-view-plan').onclick = () => setResultMode('plan');
-    // Ctrl+滚轮 = 结果区横向滚动。挂在整块结果区（含工具栏/分页条）上，并且**显式阻止纵向默认行为**：
-    //   - 旧实现挂在 #db-result-grid 上且只在"有横向溢出"时才 preventDefault，鼠标停在工具栏上时
-    //     纵向会跟着滚（用户反馈的问题）；
-    //   - 旧实现与 .db-table-scroll 自身的 handler 叠加，一次滚动会走两倍距离（实测 5 格 = 1200px）。
-    // 这里统一成"结果区只横滚"，表格内部仍由 .db-table-scroll 的 handler 负责，避免重复累加。
-    const resultsSection = q('db-results-section');
-    if (resultsSection) {
-      resultsSection.addEventListener('wheel', function (e) {
-        if (!e.ctrlKey || Math.abs(e.deltaY) === 0) return;
-        e.preventDefault();
-        const target = e.target;
-        if (target && target.closest && target.closest('.db-table-scroll, .db-table-top-scroll')) return;
-        const grid = q('db-result-grid');
-        const sc = grid && (grid.querySelector('.db-table-scroll') || grid.querySelector('.db-plan-table-wrap'));
-        if (sc && sc.scrollWidth > sc.clientWidth) sc.scrollLeft += e.deltaY;
-      }, { passive: false });
-    }
+    // Ctrl+滚轮 = 结果区横向滚动：统一由 installCtrlWheelHandler() 在捕获阶段处理
+    // （单一实现：deltaMode 归一化 + 纵向锁定 + 不重复累加），这里只负责安装一次。
+    installCtrlWheelHandler();
     q('db-result-filter').oninput = debounce(function () {
       state.localFilter = this.value;
       const s = sess();
@@ -6195,14 +6181,12 @@
     const scroll = grid.querySelector('.db-table-scroll');
     if (!topScroll || !scroll) return;
 
-    function onTableCtrlWheel(e) {
-      if (e.ctrlKey && Math.abs(e.deltaY) > 0) {
-        e.preventDefault();
-        scroll.scrollLeft += e.deltaY;
-      }
-    }
-    scroll.addEventListener('wheel', onTableCtrlWheel, { passive: false });
-    topScroll.addEventListener('wheel', onTableCtrlWheel, { passive: false });
+    // Ctrl/⌘ + 滚轮 = 只左右滚。这里只做"锁定纵向位置"的兜底：某些浏览器在
+    // Ctrl+wheel 手势里，即使主线程 handler 调了 preventDefault，合成器线程仍可能
+    // 已经把纵向滚动做了（用户看到"上下也跟着滚"）。锁定期内把纵向位置回正即可。
+    scroll.addEventListener('scroll', function () {
+      if (ctrlWheelLockTop != null && scroll.scrollTop !== ctrlWheelLockTop) scroll.scrollTop = ctrlWheelLockTop;
+    }, { passive: true });
 
     function syncVisibility() {
       const needs = scroll.scrollWidth > scroll.clientWidth;
@@ -6228,6 +6212,54 @@
         isSyncingScroll = false;
       }
     }, { passive: true });
+  }
+  // ---- Ctrl/⌘ + 滚轮：全局唯一实现（结果区任意位置都只左右滚） ----
+  // 旧的实现分散在 .db-table-scroll / .db-table-top-scroll / #db-results-section 三处，
+  // 既可能重复累加，也可能因为事件目标不同而漏拦。这里统一成捕获阶段一个 handler：
+  //   - 按住 Ctrl（或 ⌘/Shift）时一律 preventDefault + stopPropagation，纵向绝不滚动；
+  //   - deltaMode 归一化：真实鼠标在部分浏览器给的是"行"（DOM_DELTA_LINE）而不是像素，
+  //     旧实现直接 scrollLeft += deltaY 会出现"按一下几乎不动"的观感；
+  //   - 有 deltaX（触控板横扫）时优先用 deltaX。
+  let ctrlWheelLockTop = null;
+  function normalizeWheelDelta(e, unit) {
+    const raw = (Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY);
+    if (e.deltaMode === 1) return raw * unit;      // 行
+    if (e.deltaMode === 2) return raw * unit * 12; // 页
+    return raw;
+  }
+  function resultsHorizontalScroller(from) {
+    const grid = q('db-result-grid');
+    const inTable = from && from.closest ? from.closest('.db-table-scroll, .db-table-top-scroll') : null;
+    if (inTable && inTable.scrollWidth > inTable.clientWidth) return inTable;
+    if (grid) {
+      const sc = grid.querySelector('.db-table-scroll') || grid.querySelector('.db-plan-table-wrap');
+      if (sc && sc.scrollWidth > sc.clientWidth) return sc;
+    }
+    if (q('db-page-nav') && q('db-page-nav').scrollWidth > q('db-page-nav').clientWidth) return q('db-page-nav');
+    return null;
+  }
+  function onResultsCtrlWheel(e) {
+    if (!(e.ctrlKey || e.metaKey || e.shiftKey)) return;
+    const sc = resultsHorizontalScroller(e.target);
+    // 没有可横滚的目标也要拦下来：Ctrl+滚轮在结果区不该有任何纵向滚动或页面缩放。
+    e.preventDefault();
+    if (e.stopPropagation) e.stopPropagation();
+    if (ctrlWheelLockTop == null && sc) ctrlWheelLockTop = sc.scrollTop;
+    if (!sc) return;
+    const unit = Math.max(16, Math.round((sc.clientHeight || 400) / 3));
+    sc.scrollLeft += normalizeWheelDelta(e, unit);
+  }
+  let ctrlWheelInstalled = false;
+  function installCtrlWheelHandler() {
+    if (ctrlWheelInstalled) return;
+    ctrlWheelInstalled = true;
+    const section = q('db-results-section');
+    if (section) section.addEventListener('wheel', onResultsCtrlWheel, { passive: false, capture: true });
+    const endLock = function () { ctrlWheelLockTop = null; };
+    const trackKey = function (e) { if (e.key === 'Control' || e.key === 'Meta' || e.key === 'Shift') endLock(); };
+    document.addEventListener('keyup', trackKey, true);
+    window.addEventListener('blur', endLock);
+    document.addEventListener('visibilitychange', endLock);
   }
   function renderGridView(grid, indexes, visible) {
     cancelGridPaint();

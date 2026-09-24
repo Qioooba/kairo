@@ -212,21 +212,43 @@ async function runTests() {
     console.log('  ✓ compare.js diff viewport handles Ctrl+wheel horizontal scroll');
 
     // 4.2 测试数据库工作台 database.js
-    assert.ok(dbPageSrc.includes('onTableCtrlWheel'), 'database.js must have onTableCtrlWheel handler');
-    const mockScroll = { scrollLeft: 50 };
-    let dbPrevented = false;
-    const dbWheelEvt = {
-      ctrlKey: true,
-      deltaY: -30,
-      preventDefault: () => { dbPrevented = true; }
+    // 统一实现：捕获阶段单一 wheel handler（onResultsCtrlWheel）+ deltaMode 归一化 + 纵向锁定。
+    assert.ok(dbPageSrc.includes('function onResultsCtrlWheel'), 'database.js must have the unified onResultsCtrlWheel handler');
+    assert.ok(dbPageSrc.includes('installCtrlWheelHandler'), 'database.js must install the Ctrl+wheel handler');
+    assert.ok(dbPageSrc.includes('function normalizeWheelDelta'), 'database.js must normalize wheel deltaMode (line/page -> px)');
+    assert.ok(dbPageSrc.includes('ctrlWheelLockTop'), 'database.js must lock the vertical offset while Ctrl is held');
+    assert.ok(dbPageSrc.includes('resultsHorizontalScroller'), 'database.js must resolve the horizontal scroller for the results area');
+    assert.ok(!dbPageSrc.includes('onTableCtrlWheel'),
+      '数据库工作台不应再保留按容器分散的 Ctrl+wheel handler（会重复累加/漏拦）');
+
+    // 执行真实的 handler 逻辑（从源码里切出来跑）：Ctrl+滚轮必须只改 scrollLeft
+    const wheelCode = dbPageSrc.slice(dbPageSrc.indexOf('  let ctrlWheelLockTop = null;'), dbPageSrc.indexOf('  let ctrlWheelInstalled = false;'));
+    const mockScroll = { scrollLeft: 50, scrollTop: 120, scrollWidth: 900, clientWidth: 300, clientHeight: 600 };
+    const wheelSandbox = {
+      q: (id) => (id === 'db-result-grid' ? { querySelector: (sel) => (sel === '.db-table-scroll' ? mockScroll : null) } : null),
+      Math,
+      window: {}
     };
-    if (dbWheelEvt.ctrlKey && Math.abs(dbWheelEvt.deltaY) > 0) {
-      dbWheelEvt.preventDefault();
-      mockScroll.scrollLeft += dbWheelEvt.deltaY;
-    }
-    assert.strictEqual(dbPrevented, true);
-    assert.strictEqual(mockScroll.scrollLeft, 20);
-    console.log('  ✓ database.js bottom table handles Ctrl+wheel horizontal scroll');
+    vm.runInNewContext(wheelCode + '\nwindow.ctrlWheel = onResultsCtrlWheel;', wheelSandbox);
+    let dbPrevented = false, dbStopped = false;
+    wheelSandbox.window.ctrlWheel({
+      ctrlKey: true, deltaY: -30, deltaX: 0, deltaMode: 0,
+      target: { closest: () => null },
+      preventDefault: () => { dbPrevented = true; },
+      stopPropagation: () => { dbStopped = true; }
+    });
+    assert.strictEqual(dbPrevented, true, 'Ctrl+滚轮必须 preventDefault（否则纵向/缩放会跟着动）');
+    assert.strictEqual(dbStopped, true, 'Ctrl+滚轮必须 stopPropagation，避免其它 handler 再滚一次');
+    assert.strictEqual(mockScroll.scrollLeft, 20, 'Ctrl+滚轮只应改变横向位置');
+    assert.strictEqual(mockScroll.scrollTop, 120, 'Ctrl+滚轮不得改变纵向位置');
+    // deltaMode=1（行）也要有合理位移，不能"按一下几乎不动"
+    wheelSandbox.window.ctrlWheel({
+      ctrlKey: true, deltaY: 3, deltaX: 0, deltaMode: 1,
+      target: { closest: () => null },
+      preventDefault: () => {}, stopPropagation: () => {}
+    });
+    assert.ok(mockScroll.scrollLeft > 20, 'deltaMode=1（行）必须归一化成正像素位移，实际: ' + mockScroll.scrollLeft);
+    console.log('  ✓ database.js bottom table handles Ctrl+wheel horizontal scroll only');
   }
 
   console.log('✅ ALL DATABASE UPDATE, MULTI-COL & SCROLL TESTS PASSED!\n');
