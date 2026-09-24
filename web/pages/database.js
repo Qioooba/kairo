@@ -1983,7 +1983,10 @@
     const dirtyCount = Object.keys(state.dirtyCells || {}).length;
     const current = sess();
     const transactionPending = !!(current && current.transactionPending);
-    const hasPending = dirtyCount > 0 || transactionPending;
+    // 待提交队列（新增行/删除行）也算待提交内容：提交按钮会先写入它们再提交事务。
+    const features = (typeof Kairo !== 'undefined' && Kairo && Kairo.databaseFeatures) || null;
+    const queuedCount = (features && typeof features.pendingGridMutations === 'function') ? features.pendingGridMutations().length : 0;
+    const hasPending = dirtyCount > 0 || transactionPending || queuedCount > 0;
     const isUnknown = !!(current && current.outcomeUnknown);
     const commitBtn = q('db-btn-commit');
     const rollbackBtn = q('db-btn-rollback');
@@ -1991,7 +1994,11 @@
     if (commitBtn) {
       commitBtn.disabled = isUnknown || !hasPending || !!(sess() && sess().transactionBusy);
       // 单排工具条：按钮只显示图标，中文（含网格修改条数/结果未知）放 title 悬浮提示。
-      const commitLabel = isUnknown ? '提交（结果未知待核对）' : '提交' + (dirtyCount ? '（网格 ' + dirtyCount + '）' : transactionPending ? '（有事务）' : '');
+      const parts = [];
+      if (dirtyCount) parts.push('网格 ' + dirtyCount);
+      if (queuedCount) parts.push('待提交 ' + queuedCount);
+      if (!parts.length && transactionPending) parts.push('有事务');
+      const commitLabel = isUnknown ? '提交（结果未知待核对）' : '提交' + (parts.length ? '（' + parts.join(' · ') + '）' : '');
       commitBtn.innerHTML = actionIcon('commit') + '<span>' + commitLabel + '</span>';
       commitBtn.title = commitLabel;
       commitBtn.setAttribute('aria-label', commitLabel);
@@ -2108,15 +2115,23 @@
       return;
     }
     const edits = Object.assign({}, current.dirtyCells), dirtyKeys = Object.keys(edits);
-    if (!dirtyKeys.length && !current.transactionPending) return toast('当前页签没有待提交事务', 'warn');
+    // 与应用变更合并后的唯一写库入口：待提交队列（新增行/删除行）也由「提交」一起写入。
+    const features = (typeof Kairo !== 'undefined' && Kairo && Kairo.databaseFeatures) || null;
+    const queuedCount = (features && typeof features.pendingGridMutations === 'function') ? features.pendingGridMutations().length : 0;
+    if (!dirtyKeys.length && !current.transactionPending && !queuedCount) return toast('当前页签没有待提交事务', 'warn');
     const source = effectiveSource(), context = getGridContext();
     if (!source) return toast('未绑定有效数据源', 'warn');
     if (!canWriteDatabase() || source.read_only) return toast('当前账号或数据源只有查询权限', 'warn');
     if (dirtyKeys.length && (!context || context.editable === false)) return toast((context && context.editPlan && context.editPlan.reason) || '仅支持直接查询单表列的网格修改，请重新查询目标表', 'warn');
     const confirmWrite = String(source.environment || '').toLowerCase() === 'production';
-    if (dirtyKeys.length && confirmWrite && !confirm('当前为生产数据源，确认提交网格修改？')) return;
+    if ((dirtyKeys.length || queuedCount) && confirmWrite && !confirm('当前为生产数据源，确认提交网格修改？')) return;
     current.transactionBusy = true;
     try {
+      // 1) 先写"待提交队列"（新增行/删除行）：silent 由提交流程统一提示，避免两次确认与重复 toast。
+      if (queuedCount && features && typeof features.applyGridMutations === 'function') {
+        const applied = await features.applyGridMutations(false, { silent: true, confirm: confirmWrite });
+        if (!applied) return;
+      }
       let affected = 0;
       if (dirtyKeys.length && !current.gridEditsStaged) {
         const schemaToUse = (context.schema && context.schema !== '加载中…' && context.schema !== '加载失败') ? context.schema : currentSchema();

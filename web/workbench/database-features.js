@@ -1795,15 +1795,20 @@
       return keys;
     } catch (_) { return []; }
   }
-  async function applyGridMutations(commit) {
+  // 把"待提交队列"（新增行 / 删除行）写进当前页签事务。
+  //
+  // 返回值：true=已成功写入（队列已清空），false=未写入（内部已 toast 原因）。
+  // opts.silent：由「提交」按钮合并调用时不再单独提示/确认，避免两次弹窗与重复 toast。
+  async function applyGridMutations(commit, opts) {
+    opts = opts || {};
     const context = gridContext(), queued = pendingGridMutations(context);
-    if (!queued.length) { toast('没有待应用的网格变更', 'info'); return; }
-    if (!context || !context.editable || context.applying) { toast('请先开启网格编辑并等待当前操作完成', 'warn'); return; }
-    if (sourceIsReadOnly()) { toast('当前数据源为只读，不能应用网格变更', 'warn'); return; }
+    if (!queued.length) { if (!opts.silent) toast('没有待应用的网格变更', 'info'); return false; }
+    if (!context || !context.editable || context.applying) { toast('请先开启网格编辑并等待当前操作完成', 'warn'); return false; }
+    if (sourceIsReadOnly()) { toast('当前数据源为只读，不能应用网格变更', 'warn'); return false; }
     const target = context, session = context;
-    if (!target.table) { toast('无法从当前 SQL 推断目标表，请使用 FROM/UPDATE/INSERT INTO 语句', 'warn'); return; }
-    if (!session.sessionId) { toast('网格变更需要当前页签 session_id，请先选择可执行查询页签', 'warn'); return; }
-    if (state.gridApplying) return;
+    if (!target.table) { toast('无法从当前 SQL 推断目标表，请使用 FROM/UPDATE/INSERT INTO 语句', 'warn'); return false; }
+    if (!session.sessionId) { toast('网格变更需要当前页签 session_id，请先选择可执行查询页签', 'warn'); return false; }
+    if (state.gridApplying) return false;
     state.gridApplying = true;
     try {
     const primaryKey = await gridPrimaryKeys(target);
@@ -1826,11 +1831,11 @@
       };
     });
     if (mutations.some(function (item) { return item.action === 'delete' && !item.primary_key.length && !item.use_rowid && !(context.editPlan && context.editPlan.identity_policy === 'unique'); })) {
-      toast('目标表没有检测到有效主键、唯一键或 Oracle ROWID，无法删除', 'warn'); return;
+      toast('目标表没有检测到有效主键、唯一键或 Oracle ROWID，无法删除', 'warn'); return false;
     }
     const production = context.production;
-    const confirm = production ? window.confirm('当前数据源标记为生产环境，确认应用网格变更？') : false;
-    if (production && !confirm) return;
+    const confirm = production && !opts.silent ? window.confirm('当前数据源标记为生产环境，确认应用网格变更？') : !!opts.confirm;
+    if (production && !confirm && !opts.silent) return false;
     let targetSchema = target.schema || '';
     if (targetSchema === '加载中…' || targetSchema === '加载失败') targetSchema = '';
     const detail = { sourceId: context.sourceId, schema: targetSchema, table: target.table, sessionId: session.sessionId, mutations: mutations, commit: !!commit, confirm: !!confirm, dialect: dialect() };
@@ -1845,12 +1850,14 @@
       clearGridMutations(queued);
       syncMutationTransaction(detail, result, true);
       emit('kairo:database-grid-applied', { request: detail, result: result });
-      toast('网格变更已应用' + (commit ? '并提交' : '，仍在当前事务中'), 'ok');
+      if (!opts.silent) toast('网格变更已应用' + (commit ? '并提交' : '，仍在当前事务中'), 'ok');
+      return true;
     } catch (error) {
       syncMutationTransaction(detail, error && error.data, false);
       emit('kairo:database-grid-applied', { request: detail, result: null, error: error });
       if (error && Number(error.status) === 404) toast('网格写入接口尚未部署，请先使用 SQL 修改', 'info');
       else toast('网格变更失败：' + (error.message || error), 'err');
+      return false;
     }
     } finally { state.gridApplying = false; }
   }
@@ -1908,9 +1915,10 @@
     actions.dataset.dbGridFeatures = '1';
     const group = document.createElement('span'); group.className = 'db-pro-grid-actions';
     // 结果网格上方的按钮同样只用图标（中文进悬浮提示），避免占掉列宽。
+    // 「应用变更」已与编辑器工具条的「提交」合并（提交 = 先写入待提交队列，再提交事务），
+    // 这里只保留 新增行 / 删除行 / 清空变更，避免两个按钮做同一件事。
     group.appendChild(createQuickButton('db-pro-grid-add', '新增行', '新增行', function () { openGridRowModal('insert'); }, 'add'));
     group.appendChild(createQuickButton('db-pro-grid-delete', '删除行', '删除行', function () { openGridRowModal('delete'); }, 'trash'));
-    group.appendChild(createQuickButton('db-pro-grid-apply', '应用变更', '应用变更', function () { applyGridMutations(false); }, 'check'));
     group.appendChild(createQuickButton('db-pro-grid-clear', '清空变更', '清空变更', function () { if (!pendingGridMutations().length || window.confirm('清空尚未提交的网格变更？')) clearGridMutations(); }, 'eraser'));
     const badge = document.createElement('span'); badge.id = 'db-pro-grid-pending'; badge.className = 'db-pro-grid-pending'; badge.hidden = true; badge.setAttribute('role', 'status'); group.appendChild(badge);
     actions.appendChild(group);

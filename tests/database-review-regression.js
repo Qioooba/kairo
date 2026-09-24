@@ -120,4 +120,60 @@ console.log('Database review regressions passed');
 
   console.log('Bounded export regression passed');
   console.log('DB-09 outcome_unknown regression passed');
+
+  // -------------------------------------------------------------------------
+  // 提交 = 唯一的写库入口：先写入"待提交队列"（新增行/删除行），再提交事务
+  // -------------------------------------------------------------------------
+  assert.ok(!read('web/workbench/database-features.js').includes("'db-pro-grid-apply'"),
+    '结果工具条不应再有独立的「应用变更」按钮（已与「提交」合并）');
+  {
+    const calls = [];
+    const mergeSession = { id: 9, sourceId: 'src', transactionId: 'tab-merge', transactionPending: false, dirtyCells: {} };
+    const mergeContext = {
+      sess: () => mergeSession,
+      effectiveSource: () => ({ id: 'src', read_only: false, environment: 'test' }),
+      canWriteDatabase: () => true,
+      getGridContext: () => ({ schema: 'test', table: 'users', editable: true }),
+      api: async (method, path, body) => { calls.push(body && body.action === 'COMMIT' ? 'commit' : 'other'); return { ok: true, committed: true }; },
+      toast: () => {},
+      showQueryMessage: () => {},
+      bindSession: () => {},
+      refreshVisibleResult: () => {},
+      updateTransactionControls: () => {},
+      state: { dirtyCells: {} },
+      window: {},
+      Kairo: {
+        databaseFeatures: {
+          pendingGridMutations: () => [{ kind: 'insert' }],
+          applyGridMutations: async () => { calls.push('apply'); return true; }
+        }
+      }
+    };
+    const mergeCode = page.slice(page.indexOf('  async function commitPendingEdits('), page.indexOf('  // Public bridge for feature modules'));
+    vm.runInNewContext(mergeCode + '\nwindow.commitMerge = commitPendingEdits;', mergeContext);
+    await mergeContext.window.commitMerge();
+    assert.ok(calls.includes('apply'), '有待提交队列时必须先写入队列');
+    assert.ok(calls.includes('commit'), '写入队列之后仍要提交事务');
+    assert.strictEqual(calls[0], 'apply', '顺序必须是 先应用队列 → 再提交，实际: ' + JSON.stringify(calls));
+  }
+  // 队列写失败时不得继续提交
+  {
+    const calls = [];
+    const failSession = { id: 10, sourceId: 'src', transactionId: 'tab-fail', transactionPending: false, dirtyCells: {} };
+    const failContext = {
+      sess: () => failSession,
+      effectiveSource: () => ({ id: 'src', read_only: false, environment: 'test' }),
+      canWriteDatabase: () => true,
+      getGridContext: () => ({ schema: 'test', table: 'users', editable: true }),
+      api: async () => { calls.push('commit'); return { ok: true }; },
+      toast: () => {}, showQueryMessage: () => {}, bindSession: () => {}, refreshVisibleResult: () => {}, updateTransactionControls: () => {},
+      state: { dirtyCells: {} }, window: {},
+      Kairo: { databaseFeatures: { pendingGridMutations: () => [{ kind: 'delete' }], applyGridMutations: async () => false } }
+    };
+    const failCode = page.slice(page.indexOf('  async function commitPendingEdits('), page.indexOf('  // Public bridge for feature modules'));
+    vm.runInNewContext(failCode + '\nwindow.commitFail = commitPendingEdits;', failContext);
+    await failContext.window.commitFail();
+    assert.strictEqual(calls.length, 0, '队列写入失败时不得继续提交事务');
+  }
+  console.log('提交/应用变更合并回归通过');
 })().catch(error=>{console.error(error);process.exitCode=1;});
