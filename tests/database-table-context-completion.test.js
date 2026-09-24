@@ -49,6 +49,38 @@ const labels = result => JSON.stringify((result.items || []).map(item => item.la
     '候选替换范围必须只覆盖点号后的前缀');
 }
 
+// 1b. 联想必须"持续且完整"：输入 B → 所有 B* 表（不再被 12 条上限截断）；输入 BU → 仍有表名
+{
+  const bigPool = [];
+  for (let i = 0; i < 30; i++) bigPool.push('BUSINESS_APPLY_' + String(i).padStart(2, '0'));
+  bigPool.push('BUSINESS_APPLY', 'BATCH_LOG', 'B_ORDER');
+  const extras = { objects: bigPool, functions: ['GETCUSTOMERID', 'GETBILLID'], fields: [], snippets: [] };
+
+  const one = F.suggestSQL('SELECT * FROM B', 'SELECT * FROM B'.length, extras, {});
+  const oneObjects = one.items.filter(i => i.kind === 'object');
+  assert.ok(oneObjects.length > 12,
+    '输入 1 个字符时表名候选不能被 12 条上限截断（用户反馈"不是联想出来所有的表"），实际 ' + oneObjects.length);
+  assert.ok(oneObjects.every(i => i.label.indexOf('B') === 0), '表名必须按前缀过滤');
+
+  const two = F.suggestSQL('SELECT * FROM BU', 'SELECT * FROM BU'.length, extras, {});
+  assert.ok(labels(two).includes('"BUSINESS_APPLY"'),
+    '输入第二个字符后必须继续给出表名（用户反馈"输入 BU 就没有联想了"），实际: ' + labels(two));
+
+  const four = F.suggestSQL('SELECT * FROM BUSI', 'SELECT * FROM BUSI'.length, extras, {});
+  assert.ok(labels(four).includes('"BUSINESS_APPLY"'), '前缀越长越要持续收敛，实际: ' + labels(four));
+}
+
+// 1c. 函数联想：表达式位置 1 个字符即出函数（且不夹杂关键字噪音）
+{
+  const extras = { objects: ['USERS'], functions: ['GETCUSTOMERID', 'GETBILLID'], fields: [], snippets: [] };
+  const one = F.suggestSQL('SELECT g', 'SELECT g'.length, extras, {});
+  assert.ok(labels(one).includes('"GETCUSTOMERID"'),
+    '`select g` 应给出函数候选（PL/SQL Developer 手感），实际: ' + labels(one));
+  assert.ok(one.items.every(i => i.kind !== 'keyword'), '1 个字符时不应夹杂关键字噪音');
+  const four = F.suggestSQL("SELECT getC", "SELECT getC".length, extras, {});
+  assert.ok(labels(four).includes('"GETCUSTOMERID"'), '`select getC` 必须持续联想函数，实际: ' + labels(four));
+}
+
 // 2. `FROM APP.` + 强制补全（Ctrl+Space）同样给出表名
 {
   const text = 'SELECT * FROM APP.';

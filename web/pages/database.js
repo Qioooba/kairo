@@ -71,7 +71,9 @@
     schemaTableCache: {}, schemaCategoryCache: {}, metadataCache: {}, schemaRoutineCache: {},
     cacheSourceId: '',
     qualifierFieldCache: {}, qualifierFieldPending: {},
-    tableWarmupRetryAt: 0, tableWarmupError: ''
+    tableWarmupRetryAt: 0, tableWarmupError: '',
+    // 前缀补全兜底：按 schema+前缀缓存已查过的结果，pending 防止同前缀并发请求
+    objectSearchCache: {}, objectSearchPending: {}, objectSearchTimer: 0, objectSearchError: ''
   };
   let tabSeq = 0;
   let editorComposing = false;
@@ -4953,21 +4955,29 @@
       }
     }
     const ctx = completionPrefix(text, cursor);
-    // 表名位置放宽触发条件（本轮修复"SELECT 里表名不联想"）：
-    //   - 普通位置仍要求 2 个字符，避免关键字噪音；
-    //   - FROM / JOIN / INTO / UPDATE / TABLE 之后 1 个字符即触发（表名首字母常常就有用）；
-    //   - 空前缀（刚敲完 "FROM " 或按 Ctrl+Space）时给出完整候选列表，
-    //     这是 Navicat / PL/SQL Developer 的既定手感，也是"看不到表名"的最大来源。
+    // 触发时机（对齐 PL/SQL Developer / Navicat 的手感）：
+    //   - FROM / JOIN / INTO / UPDATE / TABLE 之后（含 schema. 前缀）：1 个字符即触发，表名优先；
+    //   - 其它位置（SELECT 列表、WHERE、函数参数里…）：1 个字符也开始给"已知名字"候选
+    //     （表/视图、函数、字段），但**不给关键字**，避免 1 个字符时满屏关键字噪音；
+    //     2 个字符起恢复关键字候选。这样 `select g`、`select getC` 都能持续联想。
+    //   - 空前缀（刚敲完 "FROM " 或按 Ctrl+Space）时给出完整候选列表。
     if (!ctx) {
       if (!force && !(options.allowEmpty && sqlEmptyTableSlot(text, cursor))) return { items: [], start: cursor, end: cursor };
       return buildSuggestions(cursor, cursor, '', extras, tableCtx);
     }
-    if (!force && ctx.prefix.length < (tableCtx ? 1 : 2)) return { items: [], start: cursor, end: cursor };
-    return buildSuggestions(ctx.start, ctx.end, ctx.prefix, extras, tableCtx);
+    if (!force && ctx.prefix.length < 1) return { items: [], start: cursor, end: cursor };
+    const shortPrefix = !force && ctx.prefix.length < 2 && !tableCtx;
+    return buildSuggestions(ctx.start, ctx.end, ctx.prefix, extras, tableCtx, false, shortPrefix ? { skipKeywords: true } : null);
   }
   // buildSuggestions 是 suggestSQL 的候选构造部分（触发条件与候选构造分离，便于上面放宽规则）。
   // fieldsOnly=true 时只给字段（用于 `别名.` 列名位置，不混入表名/关键字）。
-  function buildSuggestions(start, end, prefix, extras, tableCtx, fieldsOnly) {
+  // opts.skipKeywords：短前缀时不出关键字（只给对象/函数/字段/片段）。
+  //
+  // 候选上限从 12 提到 50：旧上限会让"输入 B 只看到 12 张表"看起来像联想不全；
+  // 下拉本身可滚动（.db-sql-ac max-height + overflow:auto），键盘上下键也支持翻看。
+  const COMPLETION_MAX_ITEMS = 50;
+  function buildSuggestions(start, end, prefix, extras, tableCtx, fieldsOnly, opts) {
+    opts = opts || {};
     const needle = String(prefix || '').toLowerCase();
     const seen = new Set();
     const items = [];
@@ -4981,7 +4991,7 @@
       (extras.snippets || []).forEach(function (s) {
         if (s && s.enabled !== false && s.key && String(s.key).toLowerCase() === needle) add(s.key, 'snippet', s.text);
       });
-      SQL_KEYWORDS.forEach(function (k) { add(k.toUpperCase(), 'keyword'); });
+      if (!opts.skipKeywords) SQL_KEYWORDS.forEach(function (k) { add(k.toUpperCase(), 'keyword'); });
       (extras.objects || []).forEach(function (n) { add(n, 'object'); });
       // 函数名与表名同级（都排在关键字之前），前缀过滤天然把 getC… 这类输入收敛到函数；
       // 不提升到比关键字更高权重，避免破坏"非 FROM 上下文关键字优先"的既有契约。
@@ -4994,7 +5004,7 @@
         : { snippet: 0, keyword: 1, object: 2, function: 2, field: 3 };
       return (rank[a.kind] - rank[b.kind]) || a.label.localeCompare(b.label);
     });
-    return { items: items.slice(0, 12), start: start, end: end };
+    return { items: items.slice(0, COMPLETION_MAX_ITEMS), start: start, end: end };
   }
   function matchBrackets(text, cursor) {
     if (!text || cursor < 0) return null;
@@ -5158,14 +5168,20 @@
     // 表名联想与 DOM 完全解耦：优先从后台预热的 schemaTableCache 取数，
     // 无论左侧对象栏折叠与否、是否展开过表文件夹，始终就绪。
     const schema = currentSchema();
-    if (schema && state.schemaTableCache && state.schemaTableCache[schema]) {
-      state.schemaTableCache[schema].forEach(function (name) { if (name) objSet.add(name); });
-    }
-    if (schema && state.metadataCache && state.metadataCache[schema]) {
-      state.metadataCache[schema].forEach(function (name) { if (name) objSet.add(name); });
-    }
+    // schema 键大小写容错：预热用的键与 currentSchema() 的大小写可能不一致（Oracle 常见），
+    // 旧实现直接 state.schemaTableCache[schema] 命中不了就等于"一张表都没有"。
+    const poolFor = function (store) {
+      if (!schema || !store) return null;
+      if (store[schema]) return store[schema];
+      const hit = Object.keys(store).find(function (k) { return String(k).toUpperCase() === String(schema).toUpperCase(); });
+      return hit ? store[hit] : null;
+    };
+    const tablePool = poolFor(state.schemaTableCache);
+    if (tablePool) tablePool.forEach(function (name) { if (name) objSet.add(name); });
+    const metaPool = poolFor(state.metadataCache);
+    if (metaPool) metaPool.forEach(function (name) { if (name) objSet.add(name); });
     // 函数名（`select getCustomerId(...) from dual` 场景）：与表名同池、同权重渲染。
-    const routines = (schema && state.schemaRoutineCache && state.schemaRoutineCache[schema]) || [];
+    const routines = poolFor(state.schemaRoutineCache) || [];
     // DOM 仅作兜底补充（例如搜索模式下全量渲染的对象名）。
     // 但对象树里展开“函数”文件夹后会把这些名字也渲染进来：若此处再按"对象"加入，
     // add() 按小写名去重会先占位，函数名就被标成“对象”了 —— 因此跳过已知函数名。
@@ -5293,6 +5309,9 @@
     // 用户只能看到关键字（例如 FROM us 只提示 USING），完全看不到表名且毫无解释。
     // 这里按冷却时间自动补拉一次，拉回后重算候选，用户不必刷新页面。
     if (!extras.objects.length && sqlTableContext(sliceText, slicePos)) retryTableWarmup(ta, force === true);
+    // 本地池命不中时按前缀向服务端补一次：预热池有 1000 条上限、也可能整批失败，
+    // 表名/函数名必须"输入什么都能持续补全"（PL/SQL Developer 手感）。
+    maybeSearchObjectsByPrefix(ta, sliceText, slicePos, extras, found, force === true);
     if (!found.items.length) { hideComplete(); return; }
     const actualStart = isBig ? (found.start + windowStart) : found.start;
     const actualEnd = isBig ? (found.end + windowStart) : found.end;
@@ -5314,6 +5333,61 @@
     Promise.resolve(warmupSchemaTables(schema, true)).then(function () {
       if (q('db-sql') === ta) updateComplete(ta, force);
     }).catch(function () {});
+  }
+  // ---------------------------------------------------------------------------
+  // 前缀补全兜底：本地池命不中就去服务端按前缀查一次
+  //
+  // 为什么需要：预热池有三个不确定点 —— ①后端按 1000 条上限截断（表多的大 schema 会缺表）；
+  // ②预热请求失败但被静默吞掉；③schema 键大小写不一致。任何一条发生，用户就会遇到
+  // "输入 B 有表、输入 BU 反而没候选"这种"联想不全/联想断掉"的观感。
+  // 这里在"本地没有任何对象/函数命中该前缀"时，去抖 220ms 向 metadata/objects 发一次
+  // `search=<前缀>`（结果按 schema+前缀缓存 5 分钟、同一前缀不并发），拉回后并入本地池并重算候选。
+  function maybeSearchObjectsByPrefix(ta, text, cursor, extras, found, force) {
+    if (force) return;                       // Ctrl+Space 已强制给全量，无需再查
+    const ctx = completionPrefix(text, cursor);
+    if (!ctx || !ctx.prefix) return;
+    const prefix = String(ctx.prefix);
+    const tableCtx = sqlTableContext(text, cursor);
+    // 表名位置 1 个字符就值得查；其它位置至少 2 个字符，避免逐键触发。
+    if (!tableCtx && prefix.length < 2) return;
+    const lower = prefix.toLowerCase();
+    const hasObjectHit = (extras.objects || []).some(function (n) { return String(n).toLowerCase().indexOf(lower) === 0; });
+    const hasFunctionHit = (extras.functions || []).some(function (n) { return String(n).toLowerCase().indexOf(lower) === 0; });
+    // 已经有命中（或已有任何候选说明本地池够用）就不再请求；
+    // 但表名位置上"只命中了关键字"仍要补查 —— 这正是用户看到"输入 BU 没有表名"的场景。
+    if (hasObjectHit || hasFunctionHit) return;
+    if (!tableCtx && found && found.items && found.items.length) return;
+    const schema = currentSchema();
+    const source = state.source;
+    if (!schema || !source) return;
+    const key = schema.toUpperCase() + '\x00' + lower;
+    const cached = state.objectSearchCache[key];
+    if (cached && Date.now() - cached.at < 5 * 60 * 1000) return;
+    if (state.objectSearchPending[key]) return;
+    clearTimeout(state.objectSearchTimer);
+    state.objectSearchTimer = setTimeout(function () {
+      state.objectSearchPending[key] = true;
+      const token = state.workspaceToken;
+      api('GET', '/api/database/metadata/objects?source_id=' + encodeURIComponent(source.id) + '&schema=' + encodeURIComponent(schema) + '&search=' + encodeURIComponent(prefix))
+        .then(function (data) {
+          if (token !== state.workspaceToken) return;
+          const list = (data && data.objects) || [];
+          const tables = list.filter(function (o) { return o && o.name && !/FUNCTION|PROCEDURE|PACKAGE|TRIGGER/.test(String(o.type || '')); }).map(function (o) { return o.name; });
+          const routines = list.filter(function (o) { return o && o.name && /FUNCTION|PROCEDURE|PACKAGE/.test(String(o.type || '')); }).map(function (o) { return o.name; });
+          // 并入本地池：后续输入直接命中，不必再请求前缀。
+          state.schemaTableCache = state.schemaTableCache || {};
+          state.schemaTableCache[schema] = Array.from(new Set([].concat(state.schemaTableCache[schema] || [], tables)));
+          state.schemaRoutineCache = state.schemaRoutineCache || {};
+          state.schemaRoutineCache[schema] = Array.from(new Set([].concat(state.schemaRoutineCache[schema] || [], routines)));
+          state.objectSearchCache[key] = { at: Date.now(), count: list.length };
+          state.objectSearchError = '';
+        })
+        .catch(function (e) { state.objectSearchError = (e && e.message) || String(e); })
+        .then(function () {
+          delete state.objectSearchPending[key];
+          if (q('db-sql') === ta) updateComplete(ta, false);
+        });
+    }, 220);
   }
   // Ctrl+Space：强制打开候选（空前缀也给全量列表）；已打开时再按一次收起。
   function openCompletion() {
