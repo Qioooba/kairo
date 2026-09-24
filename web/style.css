@@ -9939,6 +9939,27 @@ body.db-resizing * { cursor: col-resize !important; user-select: none !important
 .db-tab-close { width: 14px; height: 14px; font-size: 11px; }
 .db-dialect { font-size: 10px; }
 
+/* --- 左右布局：SQL 编辑器必须"绝对铺满"，不留点击不动的死区 ---
+   历史 bug（用户反馈）：.db-sql-shell 被列高撑高，但 #db-sql 依赖百分比高度解析，
+   在部分内核/时序下解析失败 → textarea 只有内容高度，shell 下方一块区域点不动。
+   这里改成 shell 相对定位 + textarea/highlight 绝对四边贴合，绕开百分比高度解析。
+   只在真正的左右布局（视口 >980px，即列布局不被安全网接管）生效，上下布局不受影响。 */
+@media (min-width: 981px) {
+  .db-main.is-columns .db-sql-shell { position: relative; }
+  .db-main.is-columns #db-sql,
+  .db-main.is-columns #db-sql-highlight {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    height: auto !important;
+    min-height: 0 !important;
+    resize: none;
+  }
+}
+
 /* --- 悬浮在按钮**正上方**的中文提示 ---
    用固定定位的提示层（#db-tip，由 database.js 的 installIconTipLayer 驱动）而不是 ::after：
    结果工具条为了保持单排是横向滚动容器，绝对定位的伪元素气泡会被 overflow 裁掉。 */

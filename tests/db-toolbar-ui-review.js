@@ -69,7 +69,22 @@ async function measure(page) {
       resultBarOverflowPx: rb ? rb.scrollWidth - rb.clientWidth : null,
       tabs: rect('.db-editor-tabs'),
       visible: { pageHint: visible('#db-page-hint'), resultMeta: visible('#db-result-meta'), limits: visible('.db-bar-limits-group') },
-      iconButtons: document.querySelectorAll('.db-editor-bar .db-ic-btn, .db-result-toolbar .db-ic-btn, .db-view-btn').length
+      iconButtons: document.querySelectorAll('.db-editor-bar .db-ic-btn, .db-result-toolbar .db-ic-btn, .db-view-btn').length,
+      // 左右布局下编辑器必须铺满 shell：否则 shell 下方会出现"点不动"的死区
+      editorFill: (() => {
+        const shell = document.getElementById('db-sql-shell');
+        const ta = document.getElementById('db-sql');
+        if (!shell || !ta) return null;
+        const sb = shell.getBoundingClientRect(), tb = ta.getBoundingClientRect();
+        const x = Math.round(sb.x + sb.width / 2), y = Math.round(sb.bottom - 8);
+        const hit = document.elementFromPoint(x, y);
+        return {
+          shellH: Math.round(sb.height),
+          taH: Math.round(tb.height),
+          fills: Math.abs(sb.height - tb.height) <= 2,
+          bottomHitId: (hit && hit.id) || ''
+        };
+      })()
     };
   });
 }
@@ -118,6 +133,11 @@ async function measure(page) {
       stacked: singleBar(stacked.resultBar, stacked.resultBarWrap)
     },
     editorBarNoOverflow: { columns: columns.editorBarOverflowPx === 0, stacked: stacked.editorBarOverflowPx === 0 },
+    // 左右布局：编辑器必须铺满 shell，且 shell 底部点击命中的就是编辑器（不允许死区）
+    editorFillsShell: {
+      columns: !!(columns.editorFill && columns.editorFill.fills),
+      bottomHit: !!(columns.editorFill && columns.editorFill.bottomHitId === 'db-sql')
+    },
     noPageErrors: errors.length === 0,
     layoutRestored: (await isColumns(page)) === startColumns
   };
