@@ -4975,7 +4975,8 @@
   //
   // 候选上限从 12 提到 50：旧上限会让"输入 B 只看到 12 张表"看起来像联想不全；
   // 下拉本身可滚动（.db-sql-ac max-height + overflow:auto），键盘上下键也支持翻看。
-  const COMPLETION_MAX_ITEMS = 50;
+  // 注意：这里必须是字面量，不能抽成模块级常量 —— web/app.test.js 按函数逐个切片执行本文件，
+  // 切片外的常量在测试沙箱里不存在（历史上踩过）。
   function buildSuggestions(start, end, prefix, extras, tableCtx, fieldsOnly, opts) {
     opts = opts || {};
     const needle = String(prefix || '').toLowerCase();
@@ -5004,7 +5005,7 @@
         : { snippet: 0, keyword: 1, object: 2, function: 2, field: 3 };
       return (rank[a.kind] - rank[b.kind]) || a.label.localeCompare(b.label);
     });
-    return { items: items.slice(0, COMPLETION_MAX_ITEMS), start: start, end: end };
+    return { items: items.slice(0, 50), start: start, end: end };
   }
   function matchBrackets(text, cursor) {
     if (!text || cursor < 0) return null;
