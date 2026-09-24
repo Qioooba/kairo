@@ -478,24 +478,27 @@ type Column struct {
 }
 
 type QuerySummary struct {
-	Rows               int    `json:"rows"`
-	ElapsedMS          int64  `json:"elapsed_ms"`
-	Truncated          bool   `json:"truncated"`
-	Bytes              int64  `json:"bytes"`
-	QueryLimit         int    `json:"query_limit"`
-	Page               int    `json:"page,omitempty"`
-	PageSize           int    `json:"page_size,omitempty"`
-	Offset             int64  `json:"offset,omitempty"`
-	HasNext            bool   `json:"has_next,omitempty"`
-	HasPrev            bool   `json:"has_prev,omitempty"`
-	TotalRows          *int64 `json:"total_rows,omitempty"`
-	TotalKnown         bool   `json:"total_known,omitempty"`
-	PaginationMode     string `json:"pagination_mode,omitempty"`
-	RetryCount         int    `json:"retry_count,omitempty"`
-	Ordered            bool   `json:"ordered"`
-	RowsAffected       int64  `json:"rows_affected,omitempty"`
-	StatementType      string `json:"statement_type,omitempty"`
-	Message            string               `json:"message,omitempty"`
+	Rows           int    `json:"rows"`
+	ElapsedMS      int64  `json:"elapsed_ms"`
+	Truncated      bool   `json:"truncated"`
+	Bytes          int64  `json:"bytes"`
+	QueryLimit     int    `json:"query_limit"`
+	Page           int    `json:"page,omitempty"`
+	PageSize       int    `json:"page_size,omitempty"`
+	Offset         int64  `json:"offset,omitempty"`
+	HasNext        bool   `json:"has_next,omitempty"`
+	HasPrev        bool   `json:"has_prev,omitempty"`
+	TotalRows      *int64 `json:"total_rows,omitempty"`
+	TotalKnown     bool   `json:"total_known,omitempty"`
+	PaginationMode string `json:"pagination_mode,omitempty"`
+	RetryCount     int    `json:"retry_count,omitempty"`
+	Ordered        bool   `json:"ordered"`
+	RowsAffected   int64  `json:"rows_affected,omitempty"`
+	StatementType  string `json:"statement_type,omitempty"`
+	Message        string `json:"message,omitempty"`
+	// PrepMS 是首批结果之前花在元数据规划（字段/索引/普通堆表确认）上的毫秒数。
+	// 单独暴露是为了让"查询慢"能区分成元数据准备与真正的 SQL 执行（DB-08）。
+	PrepMS             int64                `json:"prep_ms,omitempty"`
 	TransactionPending bool                 `json:"transaction_pending,omitempty"`
 	ResultID           string               `json:"result_id,omitempty"`
 	EditPlan           *GridEditPlanSummary `json:"edit_plan,omitempty"`

@@ -83,7 +83,7 @@
   const GRID_HEAD_H = 36;
   const GRID_BUFFER = 12;
   let gridIndexCache = { rows: null, len: -1, filter: '', sort: null, indexes: null };
-  const gridView = { indexes: [], visible: [], start: -1, end: -1, length: -1, head: null, tail: null, mid: null, raf: 0 };
+  const gridView = { indexes: [], visible: [], start: -1, end: -1, length: -1, head: null, tail: null, mid: null, raf: 0, virtualized: false };
 
   function h(v) { return escapeHtml(String(v == null ? '' : v)); }
   function q(id) { return document.getElementById(id); }
@@ -310,7 +310,11 @@
       runSeq: 0, status: '就绪', sourceId: state.source ? state.source.id : '', sourceState: state.source ? 'bound' : 'unbound', orphan: false, sourceRef: state.source && Kairo.workbench && Kairo.workbench.resourceSession ? Kairo.workbench.resourceSession.snapshot(state.source) : null
     };
   }
-  function bindSession(s) {
+  // DBUI-05: bindSession 只负责「把页签数据搬进 state」，「网格 DOM 是否失效」由调用方显式声明。
+  // 只有结构性变化（页签切换、新查询/meta 新列、列显隐、排序、过滤器、编辑模式）才允许
+  // 传 invalidateGrid: true；纯数据追加（rows 分包、summary 收尾）必须传 false，
+  // 否则每个分包都会把 gridReady 打回 false，renderResult() 全量重建网格 DOM。
+  function bindSession(s, opts) {
     if (!s) return;
     state.rows = s.rows; state.columns = s.columns; state.controller = s.controller;
     state.summary = s.summary; state.lastSQL = s.lastSQL; state.lastMaxRows = s.lastMaxRows;
@@ -319,7 +323,8 @@
     state.selectedCols = s.selectedCols || new Set();
     state.lastColSelected = s.lastColSelected == null ? -1 : s.lastColSelected;
     state.hiddenColumns = s.hiddenColumns; state.sort = s.sort; state.lastError = s.lastError;
-    state.plan = s.plan; state.gridReady = false;
+    state.plan = s.plan;
+    if (opts && opts.invalidateGrid === true) state.gridReady = false;
     state.dirtyCells = s.dirtyCells || {};
     state.isEditMode = !!s.isEditMode;
   }
@@ -596,7 +601,8 @@
     if (sessionSourceClass(s) === 'orphaned') {
       // DBUI-03：失效页签只显示孤儿视图，绝不改绑到当前数据源
       markSessionOrphan(s);
-      bindSession(s);
+      // 页签切换是结构性变化：工作区 DOM 整体换掉，旧网格必须失效（DBUI-05）
+      bindSession(s, { invalidateGrid: true });
       renderOrphanWorkspace(q('db-workspace'), s);
       return;
     }
@@ -653,7 +659,7 @@
       if (sessionSourceClass(next) === 'orphaned') {
         // DBUI-03：切到失效页签时进入孤儿视图，不把当前数据源当成它的归属
         markSessionOrphan(next);
-        bindSession(next);
+        bindSession(next, { invalidateGrid: true });
         renderOrphanWorkspace(q('db-workspace'), next);
       } else if (nextSource && (!state.source || state.source.id !== nextSource.id)) {
         state.source = nextSource;
@@ -2048,8 +2054,10 @@
     if (!targetTable) return null;
 
     // DBUI-01: 是否允许“改单元格”只由 can_update 决定；“允许插入”绝不推导出“允许更新”。
-    // 没有编辑计划（旧服务端/对象页签）时保持原有的宽松回退。
-    const planAllows = plan ? plan.can_update === true : true;
+    // DB-03: 默认拒绝 —— 没有已解析计划（null）时一律只读。旧实现是 plan ? ... : true，
+    // 于是服务端没发计划（JOIN/聚合/派生表/视图）时反而允许编辑；
+    // resolveGridTarget 只是显示/schema 提示，绝不能成为开放编辑的依据。
+    const planAllows = !!(plan && plan.can_update === true);
     const canEdit = planAllows && canWriteDatabase() && !source.read_only && !!current.isEditMode && !current.controller && !current.transactionBusy && !current.outcomeUnknown;
 
     return {
@@ -2106,8 +2114,28 @@
       unique_keys: Array.isArray(raw.unique_keys) ? raw.unique_keys.slice() : [],
       hidden_rowid_index: (typeof raw.hidden_rowid_index === 'number' && isFinite(raw.hidden_rowid_index)) ? raw.hidden_rowid_index : -1,
       has_top_level_order: raw.has_top_level_order === true,
+      // 服务端元数据准备耗时（含编辑计划/列绑定）；旧服务端不发 → null，不参与判定。
+      prep_ms: (typeof raw.prep_ms === 'number' && isFinite(raw.prep_ms)) ? raw.prep_ms : null,
       columns: columns
     };
+  }
+
+  // DBUI-05: 比较两份编辑计划在「网格是否因此要重画」这件事上是否等价。
+  // summary 事件里的 edit_plan 通常与 meta 的完全相同（服务端同步解析），此时不需要任何重建；
+  // 只有编辑能力真的翻转（或已具备写能力时列可写性变了）才让网格失效一次。
+  function editPlanCapabilityChanged(a, b) {
+    const insertA = !!(a && a.can_insert), insertB = !!(b && b.can_insert);
+    const updateA = !!(a && a.can_update), updateB = !!(b && b.can_update);
+    const deleteA = !!(a && a.can_delete), deleteB = !!(b && b.can_delete);
+    if (insertA !== insertB || updateA !== updateB || deleteA !== deleteB) return true;
+    // 双方都只读时，列绑定如何变化都不影响网格的呈现与交互，没必要重建。
+    if (!updateA && !insertA) return false;
+    const ca = (a && a.columns) || [], cb = (b && b.columns) || [];
+    if (ca.length !== cb.length) return true;
+    for (let i = 0; i < ca.length; i++) {
+      if ((ca[i] && ca[i].writable === true) !== (cb[i] && cb[i].writable === true)) return true;
+    }
+    return false;
   }
   async function commitPendingEdits() {
     const current = sess();
@@ -3122,7 +3150,7 @@
       const orphanActive = sess();
       if (orphanActive && orphanActive.type !== 'object' && sessionSourceClass(orphanActive) === 'orphaned') {
         markSessionOrphan(orphanActive);
-        bindSession(orphanActive);
+        bindSession(orphanActive, { invalidateGrid: true });
         renderOrphanWorkspace(host, orphanActive);
         return;
       }
@@ -3166,13 +3194,14 @@
     if (active && active.type !== 'object' && activeClass === 'orphaned') {
       // 失效页签：复用孤儿视图，禁用执行/导出/元数据，等用户明确改绑
       markSessionOrphan(active);
-      bindSession(active);
+      bindSession(active, { invalidateGrid: true });
       renderOrphanWorkspace(host, active);
       return;
     }
 
     if (keepSessions) {
-      bindSession(active);
+      // 页签切换（工作区重建前）属于结构性变化，旧网格 DOM 必须失效（DBUI-05）
+      bindSession(active, { invalidateGrid: true });
     } else {
       state.rows = []; state.columns = []; state.summary = null; state.lastError = null; state.plan = [];
       state.hiddenColumns = new Set(); state.sort = null; state.inspect = null; state.gridReady = false;
@@ -3472,9 +3501,11 @@
           return;
         }
         // DBUI-01: 插入/更新/删除分别判定；只有 can_update 能开启单元格编辑。
+        // DB-03: 默认拒绝 —— plan 为 null（服务端没发计划）时旧写法会放行编辑模式，
+        // 现在必须要求服务端明确签发 can_update/can_insert 之一。
         const plan = normalizeEditPlan(current.editPlan);
-        if (plan && plan.can_update !== true && plan.can_insert !== true) {
-          toast(plan.reason || '当前查询结果不支持网格编辑', 'warn');
+        if (!plan || (plan.can_update !== true && plan.can_insert !== true)) {
+          toast((plan && plan.reason) || '当前查询结果不支持网格编辑', 'warn');
           return;
         }
       }
@@ -3528,12 +3559,12 @@
     const restoredActive = sess();
     if (restoredActive && restoredActive.type !== 'object' && sessionSourceClass(restoredActive) === 'orphaned') {
       markSessionOrphan(restoredActive);
-      bindSession(restoredActive);
+      bindSession(restoredActive, { invalidateGrid: true });
       renderOrphanWorkspace(host, restoredActive);
       return;
     }
     const active = sess();
-    bindSession(active);
+    bindSession(active, { invalidateGrid: true });
     renderTabs();
     updateTransactionControls();
     q('db-tab-add').onclick = addSession;
@@ -5760,6 +5791,9 @@
     try {
       s.startTime = performance.now();
       s.firstRowsTime = 0;
+      // DBUI-05: 首帧上屏的采样点必须和 firstRowsTime 一起按查询重置，
+      // 否则同一个页签跑第二条查询时会沿用上一次的时间戳，悬浮提示里的"首帧上屏"永远是旧值。
+      s.firstPaintTime = 0;
       const queryBody = { source_id: querySource.id, session_id: s.transactionId, sql: sql, max_rows: maxRows, page: s.page, page_size: s.pageSize, count_mode: 'none', fast: true };
       // Bound values are optional so older servers remain compatible for
       // ordinary queries. New query handlers consume this typed array for
@@ -5945,7 +5979,7 @@
       // DBUI-01: 唯一的归一化点，前端不再直接读服务端原始字段。
       s.editPlan = normalizeEditPlan(e.edit_plan);
       s.gridReady = false;
-      if (s.id === state.activeId) { bindSession(s); renderResult(); }
+      if (s.id === state.activeId) { bindSession(s, { invalidateGrid: true }); renderResult(); }
     } else if (e.type === 'rows') {
       if (!s.firstRowsTime) {
         s.firstRowsTime = performance.now();
@@ -5954,9 +5988,14 @@
       const firstPacketTime = Math.round(s.firstRowsTime - (s.startTime || s.firstRowsTime));
       s.status = '已返回 ' + s.rows.length + ' 行（首包 ' + firstPacketTime + ' ms）…';
       if (s.id === state.activeId) {
-        bindSession(s);
+        // DBUI-05: rows 分包只是往 state.rows 追加数据，不改变结果结构，
+        // 因此绝不能让 bindSession 失效网格；首个 meta 已建好 DOM，后续分包只重绘可见窗口。
+        bindSession(s, { invalidateGrid: false });
         if (state.resultMode === 'grid' && state.gridReady) refreshVisibleResult();
         else renderResult();
+        // DBUI-05: “首帧上屏”必须量在渲染之后：firstRowsTime 记的是收到首包（渲染前），
+        // 两个数一样就说明渲染耗时被藏起来了。
+        if (!s.firstPaintTime && state.resultMode === 'grid' && state.gridReady) s.firstPaintTime = performance.now();
         const st = q('db-query-status');
         if (st) st.textContent = s.status;
       }
@@ -5976,7 +6015,8 @@
         });
       }
       if (s.id === state.activeId) {
-        bindSession(s);
+        // DBUI-05: 写语句清空了 rows/columns，结果结构已经不存在，网格必须整体失效
+        bindSession(s, { invalidateGrid: true });
         const ddlAutoCommit = e.summary && (e.summary.statement_type === 'DDL_AUTOCOMMIT' || e.summary.statement_type === 'DDL');
         showQueryMessage('ok', ddlAutoCommit ? 'DDL 已执行（已自动提交）' : (s.transactionPending ? '执行成功（等待提交）' : '执行成功'), e.message || '语句执行完成');
         updateTransactionControls();
@@ -5989,20 +6029,34 @@
         showQueryMessage('warn', '行锁提示', e.message || 'FOR UPDATE 行锁由当前页签事务管理，提交或回滚后释放。');
       }
     } else if (e.type === 'summary') {
+      // DBUI-05: summary 上的 edit_plan 与 meta 那份通常完全一致（服务端同步解析）。
+      // 先留一份旧计划，只有编辑能力/列可写性真的变了才让网格失效重建一次 ——
+      // 否则每个查询收尾都会白搭一次整表重建。
+      const prevPlan = s.editPlan;
       s.summary = e.summary;
       if (e.summary && e.summary.result_id) s.resultId = e.summary.result_id;
       if (e.summary && e.summary.edit_plan) s.editPlan = normalizeEditPlan(e.summary.edit_plan);
+      const planChanged = !!(e.summary && e.summary.edit_plan) && editPlanCapabilityChanged(prevPlan, s.editPlan);
       if (e.summary && e.summary.page) { s.page = e.summary.page; s.pageSize = e.summary.page_size || s.pageSize; }
       const totalTime = s.startTime ? Math.round(performance.now() - s.startTime) : null;
       const firstPacketTime = (s.firstRowsTime && s.startTime) ? Math.round(s.firstRowsTime - s.startTime) : null;
+      const firstPaintTime = (s.firstPaintTime && s.startTime) ? Math.round(s.firstPaintTime - s.startTime) : null;
+      const prepMs = (e.summary && typeof e.summary.prep_ms === 'number' && isFinite(e.summary.prep_ms)) ? e.summary.prep_ms : null;
       // 状态行只展示一个数字：服务端 SQL 执行耗时（elapsed_ms），与历史观感一致。
-      // 端到端首包/总耗时属于诊断信息，放进悬浮提示（title），避免同一行里出现两个口径的数字，
-      // 让人误以为"查询变慢了"。
+      // 元数据准备/端到端首包/首帧上屏/总耗时属于诊断信息，放进悬浮提示（title），
+      // 避免同一行里出现两个口径的数字，让人误以为"查询变慢了"。
       let timingStr = e.summary.elapsed_ms + ' ms';
       let timingTitle = '服务端 SQL 执行 ' + e.summary.elapsed_ms + ' ms';
+      // prep_ms（元数据准备，含编辑计划/列绑定）与 elapsed_ms 是两段独立的服务端时间。
+      if (prepMs !== null) timingTitle += ' · 元数据准备 ' + prepMs + ' ms';
       if (firstPacketTime !== null && totalTime !== null) {
-        timingTitle += ' · 端到端首包 ' + firstPacketTime + ' ms / 总 ' + totalTime + ' ms';
+        timingTitle += ' · 端到端首包 ' + firstPacketTime + ' ms';
       }
+      // 首帧上屏量在 rows 分包渲染之后采样，与"收到首包"（渲染前）不是同一个数。
+      if (firstPaintTime !== null && totalTime !== null) {
+        timingTitle += ' · 首帧上屏 ' + firstPaintTime + ' ms';
+      }
+      if (totalTime !== null) timingTitle += ' · 总 ' + totalTime + ' ms';
       s.status = e.summary.rows + ' 行 · ' + timingStr + (e.summary.retry_count ? ' · 已自动重连' : '') + (e.summary.ordered === false ? ' · 未指定 ORDER BY' : '') + (e.summary.truncated ? ' · 已截断' : '');
       s.statusTitle = timingTitle;
       if (Kairo.databaseFeatures && typeof Kairo.databaseFeatures.recordQueryResult === 'function') {
@@ -6015,7 +6069,8 @@
         });
       }
       if (s.id === state.activeId) {
-        bindSession(s);
+        // 没有任何结构变化时保持 gridReady，让收尾只做增量重绘（DBUI-05）。
+        bindSession(s, { invalidateGrid: planChanged });
         refreshVisibleResult();
         updateDatabasePager();
         const st = q('db-query-status');
@@ -6131,9 +6186,17 @@
     if (q('db-column-manager')) q('db-column-manager').disabled = !hasColumns;
     if (q('db-copy-columns')) q('db-copy-columns').disabled = !hasColumns;
   }
+  // DBUI-05: 小结果集直出（行数<=25 且单元格总数<=500）不绑定虚拟滚动监听；
+  // 宽表 / 大行集必须走虚拟化。renderGridView 与增量重绘（refreshVisibleResult）
+  // 共用这同一条阈值判定，避免两处阈值漂移后出现"滚到底一片空白"。
+  function gridResultNeedsVirtual(rowCount, colCount) {
+    return !(rowCount <= 25 && rowCount * colCount <= 500);
+  }
   function refreshVisibleResult(force) {
     updateResultMeta();
     if (state.resultMode !== 'grid' || !state.gridReady) { renderResult(); return; }
+    // 已经直出的小结果后来长过阈值：增量重绘无法补绑虚拟滚动监听，必须整体重建一次。
+    if (gridResultNeedsVirtual(filteredRows().length, visibleColumns().length) && !gridView.virtualized) { renderResult(); return; }
     const scroll = q('db-result-grid') && q('db-result-grid').querySelector('.db-table-scroll');
     if (!scroll) return;
     setGridSlice(filteredRows(), visibleColumns());
@@ -6368,8 +6431,9 @@
     const scroll = grid.querySelector('.db-table-scroll');
     const body = q('db-result-body');
     // 小结果集（行数<=25 且单元格总数<=500）直接渲染全部行；
-    // 宽表（列数多）或较大行集强制进入虚拟化，避免几百列造成浏览器卡死
-    if (indexes.length <= 25 && indexes.length * visible.length <= 500) {
+    // 宽表（列数多）或较大行集强制进入虚拟化，避免几百列造成浏览器卡死。
+    // 阈值判定与 refreshVisibleResult 共用 gridResultNeedsVirtual()（DBUI-05）。
+    if (!gridResultNeedsVirtual(indexes.length, visible.length)) {
       let html = '';
       for (let pos = 0; pos < indexes.length; pos++) {
         const ri = indexes[pos], row = state.rows[ri] || [];
@@ -6387,6 +6451,7 @@
       bindGridBody(body);
       bindGridHeaders(grid);
       bindScrollSync(grid);
+      gridView.virtualized = false;
       state.gridReady = true;
       applyGridHeight();
       return;
@@ -6395,6 +6460,7 @@
     bindGridBody(body);
     bindGridHeaders(grid);
     bindScrollSync(grid);
+    gridView.virtualized = true;
     state.gridReady = true;
     applyGridHeight();
     paintGridRows(scroll, false);

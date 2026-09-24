@@ -21,6 +21,8 @@ const fs = require('fs');
 const path = require('path');
 
 const FIXTURE_PATH = path.join(__dirname, 'fixtures', 'grid-edit-plan-summary.json');
+const DB_SOURCE_PATH = path.join(__dirname, '../web/pages/database.js');
+const dbJs = fs.readFileSync(DB_SOURCE_PATH, 'utf8');
 
 // SNAKE_CASE 只允许小写字母/数字/下划线
 const SNAKE_CASE = /^[a-z0-9_]+$/;
@@ -40,6 +42,125 @@ function loadFixture() {
     );
   }
   return JSON.parse(raw);
+}
+
+// 从真实源文件里按大括号配平切出一个函数定义（跳过字符串/模板/注释里的括号）。
+function extractFunction(src, name) {
+  const at = src.indexOf('\n  function ' + name + '(');
+  assert.ok(at >= 0, '未在真实源码里找到函数 ' + name);
+  let depth = 0, quote = null, escaped = false, line = false, block = false;
+  for (let i = src.indexOf('{', at); i < src.length; i++) {
+    const ch = src[i], next = src[i + 1];
+    if (line) { if (ch === '\n') line = false; continue; }
+    if (block) { if (ch === '*' && next === '/') { block = false; i++; } continue; }
+    if (quote) {
+      if (escaped) { escaped = false; continue; }
+      if (ch === '\\') { escaped = true; continue; }
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === '`') { quote = ch; continue; }
+    if (ch === '/' && next === '/') { line = true; i++; continue; }
+    if (ch === '/' && next === '*') { block = true; i++; continue; }
+    if (ch === '{') depth++;
+    else if (ch === '}') { depth--; if (!depth) return src.slice(at + 1, i + 1); }
+  }
+  throw new Error('无法解析函数 ' + name);
+}
+
+/**
+ * DB-03: 编辑能力默认拒绝 —— 直接跑真实的 normalizeEditPlan / getGridContext /
+ * 编辑模式开关判定式，断言「没有已解析计划时一律只读」。
+ *
+ * 为什么要有这个文件:
+ *   旧实现有两处宽松回退：getGridContext 里 `plan ? plan.can_update === true : true`、
+ *   编辑模式开关里 `plan && ...`。服务端对 JOIN / 聚合 / 派生表 / 视图不下发编辑计划时，
+ *   这两处会一起把只读结果变成“可编辑”，用户改完才在提交阶段失败。
+ */
+function checkEditDenyByDefault() {
+  // 1. 宽松回退必须从真实源码里消失
+  assert.ok(!/plan \? plan\.can_update === true : true/.test(dbJs),
+    'DB-03: planAllows 不得保留 plan 为 null 时的宽松回退');
+  assert.ok(!/if \(plan && plan\.can_update !== true && plan\.can_insert !== true\)/.test(dbJs),
+    'DB-03: 编辑模式开关不得保留 plan 为 null 时的宽松回退');
+
+  // 2. normalizeEditPlan：prep_ms 透传；plan_pending 契约已取消，前端不得依赖
+  const normalizeEditPlan = eval('(' + extractFunction(dbJs, 'normalizeEditPlan') + ')');
+  assert.strictEqual(normalizeEditPlan({ can_update: true, prep_ms: 12 }).prep_ms, 12,
+    'DB-08: prep_ms 必须原样透传');
+  assert.strictEqual(normalizeEditPlan({ can_update: true }).prep_ms, null, '缺少 prep_ms 时归一为 null');
+  assert.strictEqual(normalizeEditPlan({ prep_ms: 'x' }).prep_ms, null, '非数字 prep_ms 归一为 null');
+  assert.ok(!('plan_pending' in normalizeEditPlan({ can_update: true, plan_pending: true })),
+    'plan_pending 契约已取消：前端不得再引入或依赖该字段');
+  assert.ok(!('plan_pending' in normalizeEditPlan({ can_update: false })));
+
+  // 3. getGridContext：resolveGridTarget 只能做显示/schema 提示，不得成为开放编辑的依据
+  function contextWith(planRaw, options) {
+    const cfg = options || {};
+    const state = { selectedRow: 0 };
+    const source = { id: 'src-1', fingerprint: 'fp-1', read_only: !!cfg.readOnly, kind: 'oracle', environment: 'dev' };
+    const current = {
+      id: 1, type: 'sql', editPlan: planRaw, sourceId: 'src-1', sourceFingerprint: 'fp-1',
+      resultSchema: 'S', lastSQL: 'SELECT a FROM t', executedSQL: 'SELECT a FROM t',
+      columns: [{ name: 'a' }], rows: [['1']], summary: null, resultId: '', transactionId: 'tx-1',
+      controller: null, transactionBusy: false, outcomeUnknown: false, isEditMode: cfg.isEditMode !== false
+    };
+    function sess() { return current; }
+    function effectiveSource() { return source; }
+    function canWriteDatabase() { return cfg.canWrite !== false; }
+    function isPlaceholderSchema() { return false; }
+    function currentSchema() { return 'S'; }
+    // 与真实 features.resolveGridTarget 同形状：能从 SQL 文本里“猜出”单表目标
+    const Kairo = { databaseFeatures: { resolveGridTarget() { return { schema: 'S', table: 'T' }; } } };
+    const getGridContext = eval('(' + extractFunction(dbJs, 'getGridContext') + ')');
+    return getGridContext();
+  }
+
+  // 3a. 没有计划：猜出目标表也不能编辑
+  const noPlan = contextWith(null);
+  assert.ok(noPlan, 'resolveGridTarget 仍应给出显示用的目标表');
+  assert.strictEqual(noPlan.table, 'T', 'resolveGridTarget 只作为显示/schema 提示保留');
+  assert.strictEqual(noPlan.editable, false, 'DB-03: 无编辑计划时必须只读');
+  assert.strictEqual(noPlan.canUpdate, false);
+  assert.strictEqual(noPlan.canInsert, false);
+  assert.strictEqual(noPlan.canDelete, false);
+
+  // 3b. 明确 can_update:false（JOIN / 聚合 / 派生表 / 视图）
+  assert.strictEqual(contextWith({ can_update: false, can_insert: false, table: 'T' }).editable, false,
+    'DB-03: can_update:false 必须只读');
+  // 3c. can_insert 不推导 can_update
+  assert.strictEqual(contextWith({ can_insert: true, can_update: false, table: 'T' }).editable, false,
+    'DBUI-01: 允许插入绝不推导出允许改单元格');
+  // 3d. can_update 缺失（undefined）同样只读
+  assert.strictEqual(contextWith({ table: 'T' }).editable, false, 'DB-03: 缺失 can_update 必须只读');
+  // 3e. 只读数据源 / 无写权限 / 未开启编辑模式
+  assert.strictEqual(contextWith({ can_update: true, table: 'T' }, { readOnly: true }).editable, false,
+    '只读数据源不得编辑');
+  assert.strictEqual(contextWith({ can_update: true, table: 'T' }, { canWrite: false }).editable, false,
+    '无可写权限不得编辑');
+  assert.strictEqual(contextWith({ can_update: true, table: 'T' }, { isEditMode: false }).editable, false,
+    '未开启编辑模式不得编辑');
+  // 3f. 已解析计划明确 can_update:true 才允许
+  const allowed = contextWith({
+    can_update: true, table: 'T', result_id: 'rid-1',
+    columns: [{ index: 0, result_name: 'a', writable: true }]
+  });
+  assert.strictEqual(allowed.editable, true, 'DB-03: can_update:true 必须允许改单元格');
+  assert.strictEqual(allowed.canUpdate, true);
+  assert.strictEqual(allowed.resultId, 'rid-1');
+  assert.strictEqual(allowed.editColumns.length, 1);
+
+  // 4. 编辑模式开关：从真实源码里切出判定式再验证行为
+  const gateMatch = dbJs.match(/const plan = normalizeEditPlan\(current\.editPlan\);\s*\n\s*if \((.*)\) \{/);
+  assert.ok(gateMatch, 'DB-03: 必须能从真实源码里切出编辑模式开关的判定式');
+  const denyGate = eval('(function (plan) { return ' + gateMatch[1] + '; })');
+  assert.strictEqual(denyGate(null), true, 'DB-03: 没有计划时必须拒绝进入编辑模式');
+  assert.strictEqual(denyGate({ can_update: false, can_insert: false }), true,
+    'DB-03: 明确只读时必须拒绝进入编辑模式');
+  assert.strictEqual(denyGate({ can_update: true, can_insert: false }), false);
+  assert.strictEqual(denyGate({ can_insert: true, can_update: false }), false, '允许插入时可进入编辑模式');
+
+  console.log('grid-edit-plan deny-by-default passed: getGridContext / 编辑模式开关 / normalizeEditPlan 默认拒绝');
 }
 
 function main() {
@@ -184,6 +305,7 @@ function main() {
 
 try {
   main();
+  checkEditDenyByDefault();
 } catch (e) {
   console.error('grid-edit-plan-contract FAILED:', e && e.message ? e.message : e);
   process.exit(1);

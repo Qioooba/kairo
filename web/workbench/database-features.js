@@ -880,30 +880,41 @@
     return writeHistoryStore(store);
   }
   function historyKeyFor(targetSourceId) { return String(targetSourceId || sourceId() || '*'); }
-  function listStoredHistory(targetSourceId) {
-    const key = historyKeyFor(targetSourceId);
-    const list = historyStore().buckets[key];
-    return (Array.isArray(list) ? list : []).filter(function (entry) { return entry && entry.sql; })
+  // 桶 → 列表的唯一归一化点（过滤空语句 + 截断 + 逐条归一化）。
+  // 同时供 listStoredHistory（整库读之后）和 addHistory（已持有 store 时）复用，
+  // 避免为了同一份数据反复 readHistoryStore()。
+  function normalizeHistoryBucket(rawList, key) {
+    return (Array.isArray(rawList) ? rawList : []).filter(function (entry) { return entry && entry.sql; })
       .slice(0, MAX_HISTORY).map(function (entry) { return normalizeHistoryEntry(entry, key); });
   }
-  function writeStoredHistory(key, list) {
-    const store = historyStore();
+  function listStoredHistory(targetSourceId) {
+    const key = historyKeyFor(targetSourceId);
+    return normalizeHistoryBucket(historyStore().buckets[key], key);
+  }
+  // targetStore：调用方已经读过整库时可以直接复用，避免 writeStoredHistory 内部再读一遍。
+  function writeStoredHistory(key, list, targetStore) {
+    const store = targetStore || historyStore();
     store.buckets[key] = (Array.isArray(list) ? list : []).slice(0, MAX_HISTORY)
       .map(function (entry) { return normalizeHistoryEntry(entry, key); });
     return writeHistoryStore(store);
   }
-  function loadHistory(targetSourceId) {
-    const key = historyKeyFor(targetSourceId);
-    state.historyKey = key;
-    const list = listStoredHistory(key);
-    // 刷新后遗留的 running 记录只能标记为 interrupted，绝不算成功。
+  // DBUI-06: 「标记 running 遗留 + 发布到内存」只保留这一份实现。
+  // 刷新后遗留的 running 记录只能标记为 interrupted，绝不算成功。
+  // loadHistory 从盘上读完后用它发布；addHistory 已经持有写盘用的列表，直接复用即可，
+  // 不必再把整库 JSON 读回来解析第二遍。
+  function adoptHistoryList(list, key) {
     list.forEach(function (entry) {
       if (entry.status !== 'running') return;
       const isPending = state.pendingRuns && state.pendingRuns.has(entry.runId);
       if (!isPending) entry.status = 'interrupted';
     });
+    state.historyKey = key;
     state.history = list;
     return state.history;
+  }
+  function loadHistory(targetSourceId) {
+    const key = historyKeyFor(targetSourceId);
+    return adoptHistoryList(listStoredHistory(key), key);
   }
   function saveHistory() {
     return writeStoredHistory(state.historyKey || historyKeyFor(), state.history);
@@ -927,7 +938,13 @@
     if (sql.length > MAX_HISTORY_SQL_LEN) {
       sql = sql.slice(0, MAX_HISTORY_SQL_LEN) + '\n/* -- [kairo: 历史记录超长截断] -- */';
     }
-    const list = listStoredHistory(targetSourceId);
+    // DBUI-06: 一次 addHistory 只允许一次整库读 + 一次写。
+    // 旧实现 listStoredHistory() 读一遍（localStorage.getItem + JSON.parse），
+    // writeStoredHistory() 内部的 historyStore() 又读一遍，最后 loadHistory() 还要读第三遍；
+    // 配 recordQueryStart + recordQueryResult 的两次调用，每次查询要整库解析 6 次。
+    const key = historyKeyFor(targetSourceId);
+    const store = historyStore();
+    const list = normalizeHistoryBucket(store.buckets[key], key);
     const runId = entry.runId || '';
     const existingIndex = runId ? list.findIndex(function (item) { return item && item.runId === runId; }) : -1;
     const defaults = Object.assign({
@@ -938,13 +955,14 @@
     if (existingIndex >= 0) {
       // 一次执行先记 running，结果到达后升级同一条，不新增重复行。
       list[existingIndex] = Object.assign({}, list[existingIndex], defaults, { id: list[existingIndex].id });
-      writeStoredHistory(targetSourceId, list);
+      writeStoredHistory(key, list, store);
     } else {
       const next = list.filter(function (item) { return item.sql !== sql; });
       next.unshift(defaults);
-      writeStoredHistory(targetSourceId, next);
+      writeStoredHistory(key, next, store);
     }
-    return loadHistory(targetSourceId);
+    // 复用刚写盘的那份列表刷新内存历史，语义与 loadHistory 完全一致（含 running→interrupted 标记）。
+    return adoptHistoryList(normalizeHistoryBucket(store.buckets[key], key), key);
   }
   function recordQueryStart(sql, runId, sourceInfo) {
     if (!sql || !String(sql).trim()) return null;

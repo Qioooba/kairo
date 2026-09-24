@@ -371,8 +371,12 @@ func (m *Manager) streamQueryAttempt(ctx context.Context, source Source, query s
 	planCtx := withGridConcurrencyToken(queryCtx)
 	needEditable := sessionID != "" && info.IsSelect
 	var prep *gridQueryPreparation
+	var prepMS int64
 	if needEditable || (source.Kind == KindOracle && !info.HasForUpdate && info.IsSelect) {
+		// DB-08: 元数据准备耗时单独计量，便于把"查询慢"拆成元数据准备与 SQL 执行。
+		prepStarted := time.Now()
 		prep = m.prepareGridQuery(planCtx, source, query, needEditable)
+		prepMS = time.Since(prepStarted).Milliseconds()
 	}
 
 	var queryTx *sql.Tx
@@ -526,9 +530,9 @@ func (m *Manager) streamQueryAttempt(ctx context.Context, source Source, query s
 		QueryLimit: page.PageSize, Page: page.Page, PageSize: page.PageSize,
 		TransactionPending: sessionTx != nil,
 		Offset:             page.Offset(), HasPrev: page.Page > 1, PaginationMode: "page",
-		Ordered:            QueryHasTopLevelOrderBy(source.Kind, actualQuery),
-		ResultID:           resultID,
-		EditPlan:           planSummary,
+		Ordered:  QueryHasTopLevelOrderBy(source.Kind, actualQuery),
+		ResultID: resultID,
+		EditPlan: planSummary,
 	}
 
 	firstBatchCutoff := 5
@@ -628,6 +632,7 @@ func (m *Manager) streamQueryAttempt(ctx context.Context, source Source, query s
 		batch = nil
 	}
 	summary.ElapsedMS = time.Since(started).Milliseconds()
+	summary.PrepMS = prepMS
 	summary.StatementType = info.Type
 	if info.HasForUpdate {
 		if sessionTx != nil {

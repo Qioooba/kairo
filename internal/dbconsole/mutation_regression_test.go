@@ -117,7 +117,7 @@ func mutationManager(t *testing.T) (*Manager, Source, *mutationDriver) {
 	db := sql.OpenDB(d)
 	db.SetMaxOpenConns(2)
 	source := Source{ID: "test", Kind: KindMySQL, QueryTimeoutSeconds: 1}
-	m := &Manager{pools: map[string]*poolEntry{source.ID: {sql: db, fingerprint: sourceFingerprint(source)}}, transactions: map[string]*transactionEntry{}, global: make(chan struct{}, 8)}
+	m := &Manager{pools: map[string]*poolEntry{source.ID: {sql: db, fingerprint: sourceFingerprint(source)}}, transactions: map[string]*transactionEntry{}, resultContexts: map[string]*ResultEditContext{}, global: make(chan struct{}, 8)}
 	t.Cleanup(func() { _ = m.Close() })
 	return m, source, d
 }
@@ -182,7 +182,26 @@ func TestMutationFailureReleasesContextAndRegistry(t *testing.T) {
 				cancel := entry.cancel
 				entry.cancel = func() { cancelled = true; cancel() }
 				if operation == "grid" {
-					result, applyErr := m.ApplyGridMutations(context.Background(), source, GridMutationRequest{Table: "t", SessionID: "tab", Commit: commitFailure, Mutations: []GridMutation{{Action: "insert", Values: map[string]any{"v": 1}}}})
+					// DB-08: 网格写入现在必须绑定服务端编辑计划，不能再靠客户端自报表名。
+					// 本用例验证的是"写入失败后释放上下文与事务注册表"，因此先注册一份
+					// 合法的计划，让请求真正走到执行阶段并在那里失败。
+					plan := &ResultEditContext{
+						ResultID:          "res-grid-failure",
+						SessionID:         "tab",
+						SourceID:          source.ID,
+						SourceFingerprint: sourceFingerprint(source),
+						Dialect:           source.Kind,
+						Table:             "t",
+						IdentityPolicy:    "none",
+						CanInsert:         true,
+						CanUpdate:         true,
+						Columns: []GridColumnBinding{
+							{Index: 0, ResultName: "v", PhysicalName: "v", Writable: true},
+						},
+						CreatedAt: time.Now(),
+					}
+					m.RegisterResultContext(plan)
+					result, applyErr := m.ApplyGridMutations(context.Background(), source, GridMutationRequest{ResultID: plan.ResultID, Table: "t", SessionID: "tab", Commit: commitFailure, Mutations: []GridMutation{{Action: "insert", Values: map[string]any{"v": 1}}}})
 					err = applyErr
 					if result.TransactionPending {
 						t.Fatal("completed transaction reported pending")

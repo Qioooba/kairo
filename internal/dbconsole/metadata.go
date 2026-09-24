@@ -33,6 +33,13 @@ func metadataCacheGet[T any](m *Manager, key string) (T, bool) {
 }
 
 func metadataCacheSet(m *Manager, key string, value any) {
+	metadataCacheSetTTL(m, key, value, metadataCacheTTL)
+}
+
+// metadataCacheSetTTL 与 metadataCacheSet 相同，但允许指定较短的存活时间。
+// 用于元数据"短期不可用"的负缓存：只压制重复的无效等待，不把一次偶发失败
+// 变成长期的只读（DB-08）。
+func metadataCacheSetTTL(m *Manager, key string, value any, ttl time.Duration) {
 	m.mu.Lock()
 	if len(m.metadataCache) >= metadataCacheMaxEntries {
 		now := time.Now()
@@ -51,7 +58,7 @@ func metadataCacheSet(m *Manager, key string, value any) {
 			delete(m.metadataCache, oldestKey)
 		}
 	}
-	m.metadataCache[key] = metadataCacheEntry{expires: time.Now().Add(metadataCacheTTL), value: value}
+	m.metadataCache[key] = metadataCacheEntry{expires: time.Now().Add(ttl), value: value}
 	m.mu.Unlock()
 }
 

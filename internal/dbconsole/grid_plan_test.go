@@ -16,6 +16,8 @@ func TestAnalyzeGridQuery_SingleTableNoOrderBy(t *testing.T) {
 		{Name: "name", DataType: "varchar(50)"},
 		{Name: "age", DataType: "int"},
 	})
+	// DB-08: 插入能力还要求目标是真实基表，这里给出已确认的基表事实。
+	m.SetCachedBaseTable(source, "testdb", "users", true)
 
 	cols := []Column{
 		{Name: "id", Database: "int"},
@@ -118,16 +120,16 @@ func TestAnalyzeGridQuery_MissingOrComputedPK(t *testing.T) {
 
 func TestBuildGridMutationSQLWithPlan_OptimisticLockingAndNull(t *testing.T) {
 	plan := &ResultEditContext{
-		ResultID:          "res-123",
-		SourceID:          "src-1",
-		Dialect:           KindMySQL,
-		Schema:            "app",
-		Table:             "users",
-		PrimaryKeys:       []string{"id"},
-		IdentityPolicy:    "pk",
-		CanUpdate:         true,
-		CanDelete:         true,
-		CanInsert:         true,
+		ResultID:       "res-123",
+		SourceID:       "src-1",
+		Dialect:        KindMySQL,
+		Schema:         "app",
+		Table:          "users",
+		PrimaryKeys:    []string{"id"},
+		IdentityPolicy: "pk",
+		CanUpdate:      true,
+		CanDelete:      true,
+		CanInsert:      true,
 		Columns: []GridColumnBinding{
 			{Index: 0, PhysicalName: "id", IsPrimaryKey: true, Writable: true},
 			{Index: 1, PhysicalName: "name", Writable: true},

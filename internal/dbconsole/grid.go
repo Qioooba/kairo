@@ -341,30 +341,34 @@ func (m *Manager) ApplyGridMutations(ctx context.Context, source Source, req Gri
 	if !validGridSessionID(req.SessionID) {
 		return GridMutationSummary{}, errors.New("session_id 无效")
 	}
-	var plan *ResultEditContext
-	if req.ResultID != "" {
-		p, ok := m.GetResultContext(req.ResultID)
-		if !ok {
-			return GridMutationSummary{}, errors.New("编辑上下文已失效或不存在，请重新执行查询后再编辑")
-		}
-		if p.SourceID != source.ID {
-			return GridMutationSummary{}, errors.New("编辑上下文与目标数据源不匹配")
-		}
-		if p.SourceFingerprint != sourceFingerprint(source) {
-			return GridMutationSummary{}, errors.New("数据源连接配置已变更，原查询编辑上下文已失效，请重新执行查询")
-		}
-		if p.SessionID != req.SessionID {
-			return GridMutationSummary{}, errors.New("编辑上下文与当前会话不匹配")
-		}
-		if req.Table != "" && p.Table != "" && !strings.EqualFold(req.Table, p.Table) {
-			return GridMutationSummary{}, fmt.Errorf("提交目标表 %s 与执行查询的基表 %s 不一致", req.Table, p.Table)
-		}
-		req.Schema = p.Schema
-		req.Table = p.Table
-		plan = p
-	} else {
-		req.Schema = ResolveSchema(source, req.Schema)
+	// DB-08: 网格写入必须绑定服务端签发的编辑计划。
+	//
+	// 旧实现允许不带 result_id 的请求，此时 schema/table 完全来自客户端，
+	// 并且绕过 BuildGridMutationSQLWithPlan 的能力校验 —— 关联查询、视图、
+	// 聚合结果都能被"客户端自报表名"直接写库。现在 fail-closed：
+	// 没有可解析的编辑计划就拒绝写入。
+	if strings.TrimSpace(req.ResultID) == "" {
+		return GridMutationSummary{}, errors.New("网格写入必须绑定查询结果（result_id），请重新执行查询后再编辑")
 	}
+	p, ok := m.GetResultContext(req.ResultID)
+	if !ok {
+		return GridMutationSummary{}, errors.New("编辑上下文已失效或不存在，请重新执行查询后再编辑")
+	}
+	if p.SourceID != source.ID {
+		return GridMutationSummary{}, errors.New("编辑上下文与目标数据源不匹配")
+	}
+	if p.SourceFingerprint != sourceFingerprint(source) {
+		return GridMutationSummary{}, errors.New("数据源连接配置已变更，原查询编辑上下文已失效，请重新执行查询")
+	}
+	if p.SessionID != req.SessionID {
+		return GridMutationSummary{}, errors.New("编辑上下文与当前会话不匹配")
+	}
+	if req.Table != "" && p.Table != "" && !strings.EqualFold(req.Table, p.Table) {
+		return GridMutationSummary{}, fmt.Errorf("提交目标表 %s 与执行查询的基表 %s 不一致", req.Table, p.Table)
+	}
+	// 目标 schema/table 一律以服务端编辑计划为准，绝不采信客户端自报值。
+	req.Schema, req.Table = p.Schema, p.Table
+	plan := p
 	queryCtx, cancel := context.WithTimeout(ctx, source.Timeout())
 	defer cancel()
 	if err := m.acquire(queryCtx); err != nil {

@@ -151,7 +151,9 @@ func gridCNewLOBPool(t *testing.T, rowsFunc func(string) gridCLOBCase) (*Manager
 		{Name: "BODY", DataType: "CLOB", Nullable: true},
 	}
 	m.SetCachedHeapTable(source.ID, "SCOTT", "HTTP_REQ_LOG", true)
-	metadataCacheSet(m, gridMetadataCacheKey(source.ID, sourceFingerprint(source), "SCOTT", "HTTP_REQ_LOG"), gridMetadataSnapshot{Fields: fields})
+	// DB-08: 字段与索引分成两个缓存键；这里把两者都预置，保证假 driver 只看到数据查询。
+	metadataCacheSet(m, gridFieldsCacheKey(source.ID, sourceFingerprint(source), "SCOTT", "HTTP_REQ_LOG"), fields)
+	metadataCacheSet(m, gridIndexesCacheKey(source.ID, sourceFingerprint(source), "SCOTT", "HTTP_REQ_LOG"), []IndexInfo{})
 	metadataCacheSet(m, fmt.Sprintf("%s\x00lob_proj_fields\x00%s\x00%s", source.ID, "SCOTT", "HTTP_REQ_LOG"), fields)
 	t.Cleanup(func() { _ = m.Close() })
 	return m, source, driverImpl

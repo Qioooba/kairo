@@ -116,10 +116,15 @@ func generateResultID() string {
 }
 
 var (
-	complexQueryRe = regexp.MustCompile(`(?is)\b(JOIN|UNION|INTERSECT|MINUS|EXCEPT|GROUP\s+BY|HAVING|CONNECT\s+BY|START\s+WITH)\b`)
+	// STRAIGHT_JOIN 是 MySQL 特有的连接写法，字面不含 JOIN，必须单独列出（DB-08）。
+	complexQueryRe = regexp.MustCompile(`(?is)\b(JOIN|STRAIGHT_JOIN|UNION|INTERSECT|MINUS|EXCEPT|GROUP\s+BY|HAVING|CONNECT\s+BY|START\s+WITH)\b`)
 	distinctRe     = regexp.MustCompile(`(?is)^\s*SELECT\s+(DISTINCT|UNIQUE)\b`)
 	cteRe          = regexp.MustCompile(`(?is)^\s*WITH\b`)
 	derivedFromRe  = regexp.MustCompile(`(?is)\bFROM\s*\(`)
+	// gridFromHeadJoinRe 兜住"FROM 头部里出现了连接关键字"的所有写法。
+	// 只要 FROM 与下一个顶层子句之间出现这些 token，就说明它不是单一基表；
+	// 拿不准时一律拒绝编辑（fail-closed），绝不把多表结果当成单表来写。
+	gridFromHeadJoinRe = regexp.MustCompile(`(?is)\b(NATURAL|INNER|OUTER|CROSS|LEFT|RIGHT|FULL|JOIN|STRAIGHT_JOIN|USING|ON|APPLY|LATERAL|PIVOT|UNPIVOT)\b`)
 )
 
 // gridIdentifier 保留标识符的原始 token、解码后的名字以及是否显式加引号（DB-01）。
@@ -292,6 +297,11 @@ func parseGridFromClause(kind, noComments string) (schemaIdent, tableIdent, alia
 	// 检查是否有逗号分隔多表
 	if strings.Contains(beforeNextClause, ",") {
 		return schemaIdent, tableIdent, aliasIdent, errors.New("多表笛卡尔积或隐式连接不支持网格编辑")
+	}
+	// DB-08: 兜住不含 JOIN 字样的连接写法（MySQL STRAIGHT_JOIN、以及任何落在 FROM 头部
+	// 的 ON/USING/LEFT/CROSS/PIVOT 等）。这些 token 在单基表 FROM 里不可能出现。
+	if gridFromHeadJoinRe.MatchString(beforeNextClause) {
+		return schemaIdent, tableIdent, aliasIdent, errors.New("多表连接查询不支持网格编辑")
 	}
 
 	// 读取限定表名 token（schema.table），尾部用于解析别名
@@ -847,6 +857,12 @@ func (m *Manager) SetCachedHeapTable(sourceID, schema, table string, isHeap bool
 	metadataCacheSet(m, gridHeapTableCacheKey(sourceID, schema, table), gridHeapFact{IsHeap: isHeap})
 }
 
+// SetCachedBaseTable 设置“目标对象是否为真实基表”的缓存（用于测试或快速判定）。
+// 视图/同义词为 false：它们没有可以直接 INSERT 的物理行（DB-08）。
+func (m *Manager) SetCachedBaseTable(source Source, schema, table string, isBase bool) {
+	metadataCacheSet(m, gridBaseTableCacheKey(source.ID, sourceFingerprint(source), schema, table), gridBaseTableFact{IsBaseTable: isBase})
+}
+
 // isOracleHeapTable 返回 (是否普通堆表, 是否已确认)。
 // 查询失败、被取消或未取回结果时返回未确认，调用方必须按“不可编辑”处理；
 // 旧实现默认 isHeap=true 并吞掉查询错误，会把 IOT/视图/未知表当成可 ROWID 编辑（DB-02）。
@@ -861,6 +877,13 @@ func (m *Manager) isOracleHeapTable(ctx context.Context, source Source, schema, 
 	if cached, ok := metadataCacheGet[gridHeapFact](m, cacheKey); ok {
 		return cached.IsHeap, true
 	}
+	// DB-08: 失败/超时写短 TTL 负缓存，避免同一张表的字典查询在每次查询上重复等满预算。
+	// 注意这是与 gridHeapFact 不同的类型：它只表示"这一小段时间内不要再试"，
+	// 不会把"未知"固化成"不是堆表"，因此 DB-02 的语义（未知必须按只读处理、
+	// 且随后仍可被 SetCachedHeapTable/成功查询纠正）保持不变。
+	if _, bad := metadataCacheGet[gridMetadataUnavailable](m, cacheKey); bad {
+		return false, false
+	}
 	isHeap, known := false, false
 	err := m.withSQL(ctx, source, func(ctx context.Context, db *sql.DB) error {
 		var count int
@@ -872,6 +895,7 @@ func (m *Manager) isOracleHeapTable(ctx context.Context, source Source, schema, 
 		return nil
 	})
 	if err != nil || !known {
+		metadataCacheSetTTL(m, cacheKey, gridMetadataUnavailable{Reason: "普通堆表事实确认失败"}, gridMetadataUnavailableTTL)
 		return false, false
 	}
 	metadataCacheSet(m, cacheKey, gridHeapFact{IsHeap: isHeap})
@@ -879,9 +903,19 @@ func (m *Manager) isOracleHeapTable(ctx context.Context, source Source, schema, 
 }
 
 const (
-	// gridMetadataPlanBudget 元数据规划自身的预算上限；实际取查询超时的 1/4 并夹在本区间内（DB-03）。
-	gridMetadataPlanBudget = 1500 * time.Millisecond
-	gridMetadataMinBudget  = 200 * time.Millisecond
+	// gridMetadataPlanBudget 元数据规划的总预算上限；实际取查询超时的 1/4 并夹在本区间内。
+	//
+	// DB-08: 实测（真实 Oracle 21c XE, KAIRO_LAB）单个字典查询的冷启动开销可达 ~1.9s
+	// （`Indexes` 首次执行时的硬解析 + 数据字典填充），稳态则只有 ~10ms。
+	// 旧的单段 1500ms 上限会把这类"本来能成功"的读取判成超时，然后静默把网格降级为只读
+	// （实测视图场景：耗时 2.37s 且返回只读）。因此单段上限必须高于真实冷启动开销。
+	// 取 3000ms 是刻意与旧实现的"两段各 1500ms"最坏值对齐：改成单预算后，
+	// 最坏等待不会比过去更久，但一次成功的冷读取不会再被丢掉。
+	gridMetadataPlanBudget = 3000 * time.Millisecond
+	gridMetadataMinBudget  = 800 * time.Millisecond
+	// gridMetadataUnavailableTTL 是元数据"短期不可用"负缓存的存活时间。
+	// 只用于压制同一个对象的重复无效等待，不做长期记忆。
+	gridMetadataUnavailableTTL = 15 * time.Second
 )
 
 // gridConcurrencyTokenKey 标记该 context 已经持有 Manager 的全局并发令牌。
@@ -897,8 +931,12 @@ func gridConcurrencyTokenHeld(ctx context.Context) bool {
 	return held
 }
 
-// gridMetadataBudgetContext 给辅助元数据规划一个独立短预算，
-// 拿不到就降级为只读，而不是把辅助分析耗时算成查询首包的前置条件（DB-03）。
+// gridMetadataBudgetContext 给一次查询里的**全部**元数据规划工作开一个总预算。
+//
+// DB-08: 旧实现给"普通堆表确认"和"字段/索引"各开一个串行独立预算，最坏叠加到 ~3s，
+// 每个查询各自重新计时也无法被缓存吸收。现在改成一次性总预算：
+// 一次查询最多为元数据等待一个上限，拿不到就降级为只读，而不是把辅助分析的耗时
+// 反复算进查询首包。
 func gridMetadataBudgetContext(parent context.Context, source Source) (context.Context, context.CancelFunc) {
 	budget := gridMetadataPlanBudget
 	if timeout := source.Timeout(); timeout > 0 {
@@ -912,16 +950,22 @@ func gridMetadataBudgetContext(parent context.Context, source Source) (context.C
 	return context.WithTimeout(parent, budget)
 }
 
-// gridMetadataSnapshot 是编辑能力分析所需的、与结果列无关的元数据快照。
-// 注意：这里不缓存“是否普通堆表”，因为该事实可能在确认前不可用，
-// 一旦把未知结果写进缓存就无法再用 SetCachedHeapTable/后续查询纠正（DB-02）。
-type gridMetadataSnapshot struct {
-	Fields  []Field
-	Indexes []IndexInfo
+// gridMetadataUnavailable 是"元数据短期不可用"的负缓存标记（DB-08）。
+//
+// 只压制重复的无效等待：某张表的字典查询一旦超时，旧实现会在后续每次查询上
+// 重新等满一次预算（实测表现为"连续执行也一直慢"）。写入短 TTL 后，同一个对象
+// 在窗口内直接按只读处理，不再重复付出等待。注意它绝不代表"确认不可编辑"：
+// 命中负缓存与读取失败的下场一致，都是保持只读。
+type gridMetadataUnavailable struct {
+	Reason string
 }
 
-func gridMetadataCacheKey(sourceID, fingerprint, schema, table string) string {
-	return fmt.Sprintf("%s\x00gridmeta\x00%s\x00%s\x00%s", sourceID, fingerprint, strings.ToUpper(schema), strings.ToUpper(table))
+func gridFieldsCacheKey(sourceID, fingerprint, schema, table string) string {
+	return fmt.Sprintf("%s\x00gridfields\x00%s\x00%s\x00%s", sourceID, fingerprint, strings.ToUpper(schema), strings.ToUpper(table))
+}
+
+func gridIndexesCacheKey(sourceID, fingerprint, schema, table string) string {
+	return fmt.Sprintf("%s\x00gridindexes\x00%s\x00%s\x00%s", sourceID, fingerprint, strings.ToUpper(schema), strings.ToUpper(table))
 }
 
 // gridQueryPreparation 是在打开流式查询游标之前完成的受限规划结果（DB-01/DB-02/DB-03）。
@@ -934,12 +978,18 @@ type gridQueryPreparation struct {
 	Indexes   []IndexInfo
 	HeapKnown bool
 	HeapTable bool
+	// BaseKnown/BaseTable 记录目标对象是否为真实基表（DB-08）。
+	// 视图/同义词没有行身份也没有可插入的物理目标；插入能力必须据此关闭。
+	BaseKnown bool
+	BaseTable bool
 	RowIDSQL  string // 非空表示已确认可安全追加 ROWID 定位列的改写结果
 	Reason    string // 非空表示编辑能力规划降级为只读的原因
 }
 
 // gridCachedFetch 先读元数据缓存，未命中时合并同一 key 的并发刷新（DB-03）。
 // 等待刷新期间若预算耗尽则返回未命中，由调用方降级为只读。
+//
+// DB-08: 失败会写入短 TTL 负缓存，避免同一个慢/坏对象让每次查询都重新等满预算。
 func gridCachedFetch[T any](m *Manager, ctx context.Context, key string, load func(context.Context) (T, error)) (T, bool) {
 	var zero T
 	if m == nil {
@@ -947,6 +997,10 @@ func gridCachedFetch[T any](m *Manager, ctx context.Context, key string, load fu
 	}
 	if cached, ok := metadataCacheGet[T](m, key); ok {
 		return cached, true
+	}
+	if bad, ok := metadataCacheGet[gridMetadataUnavailable](m, key); ok {
+		_ = bad
+		return zero, false
 	}
 	for attempt := 0; attempt < 2; attempt++ {
 		flight, leader := m.beginGridFetch(key)
@@ -964,6 +1018,7 @@ func gridCachedFetch[T any](m *Manager, ctx context.Context, key string, load fu
 		value, err := load(ctx)
 		m.endGridFetch(key, flight)
 		if err != nil {
+			metadataCacheSetTTL(m, key, gridMetadataUnavailable{Reason: err.Error()}, gridMetadataUnavailableTTL)
 			return zero, false
 		}
 		metadataCacheSet(m, key, value)
@@ -972,25 +1027,149 @@ func gridCachedFetch[T any](m *Manager, ctx context.Context, key string, load fu
 	return zero, false
 }
 
-// gridMetadataFor 取得（或刷新）某个 source fingerprint/schema/table 的元数据快照。
-func (m *Manager) gridMetadataFor(ctx context.Context, source Source, schema, table string) (gridMetadataSnapshot, bool) {
-	key := gridMetadataCacheKey(source.ID, sourceFingerprint(source), schema, table)
-	return gridCachedFetch(m, ctx, key, func(ctx context.Context) (gridMetadataSnapshot, error) {
-		fields, err := m.Fields(ctx, source, schema, table)
-		if err != nil {
-			return gridMetadataSnapshot{}, err
-		}
-		snapshot := gridMetadataSnapshot{Fields: fields}
-		if indexes, idxErr := m.Indexes(ctx, source, schema, table); idxErr == nil {
-			snapshot.Indexes = indexes
-		}
-		return snapshot, nil
+// gridFieldsFor 取得（或刷新）目标对象的字段元数据。
+// 字段查询很便宜（实测冷 ~10ms、稳态 ~0ms），因此总是先取：它是"是否需要 ROWID"的前提。
+func (m *Manager) gridFieldsFor(ctx context.Context, source Source, schema, table string) ([]Field, bool) {
+	key := gridFieldsCacheKey(source.ID, sourceFingerprint(source), schema, table)
+	return gridCachedFetch(m, ctx, key, func(ctx context.Context) ([]Field, error) {
+		return m.Fields(ctx, source, schema, table)
 	})
 }
 
+// gridIndexesFor 取得（或刷新）目标对象的索引元数据。
+//
+// DB-08: 索引是整段元数据里最贵的一次字典查询（实测冷启动 ~1.9s），
+// 而它只服务于"主键缺失时的唯一键定位"判定，因此只在主键不完整时才取。
+func (m *Manager) gridIndexesFor(ctx context.Context, source Source, schema, table string) ([]IndexInfo, bool) {
+	key := gridIndexesCacheKey(source.ID, sourceFingerprint(source), schema, table)
+	return gridCachedFetch(m, ctx, key, func(ctx context.Context) ([]IndexInfo, error) {
+		return m.Indexes(ctx, source, schema, table)
+	})
+}
+
+// gridBareProjectionColumn 从单个投影项里取出"裸列名"；不是裸列（表达式、函数、
+// 带别名、通配符）时返回空串。
+//
+// 只服务于执行前的保守判断，因此宁可不认：拿不准就当作"没有投影该列"，
+// 于是回落到原有的 ROWID 路径，不会因为误判而少一条定位手段。
+func gridBareProjectionColumn(kind, item string) string {
+	trimmed := strings.TrimSpace(item)
+	if trimmed == "" || trimmed == "*" || strings.HasSuffix(trimmed, ".*") {
+		return ""
+	}
+	// 表达式 / 函数调用
+	if strings.ContainsAny(trimmed, "()") {
+		return ""
+	}
+	// 带别名或多余 token（`id AS x` / `id x`）一律不认，避免把别名当物理列
+	if strings.ContainsAny(trimmed, " \t\r\n") {
+		return ""
+	}
+	_, object := splitGridQualifiedToken(trimmed)
+	return parseGridIdentifierToken(kind, strings.TrimSpace(object)).Name
+}
+
+// gridBaseTableFact 记录某个对象是否为真实基表（视图/同义词为 false）。
+type gridBaseTableFact struct {
+	IsBaseTable bool
+}
+
+func gridBaseTableCacheKey(sourceID, fingerprint, schema, table string) string {
+	return fmt.Sprintf("%s\x00basetable\x00%s\x00%s\x00%s", sourceID, fingerprint, strings.ToUpper(schema), strings.ToUpper(table))
+}
+
+// isBaseTable 返回 (是否真实基表, 是否已确认)。
+//
+// DB-08: 插入能力与"目标是不是真实表"直接相关。关联视图、同义词、派生来源都不存在
+// 可以直接 INSERT 的物理行 —— 真实 Oracle 实测暴露过：`SELECT * FROM
+// KAIRO_LAB.EMPLOYEE_DIRECTORY`（一个 JOIN 视图）在没有主键/唯一键时会被判为"不可更新"
+// 却仍然开放 can_insert，用户点新增行只会在提交时撞上 ORA-01733。
+//
+// 对 Oracle 用 all_tables 判定（视图不在其中；IOT/临时表仍然算表），
+// 对 MySQL 用 information_schema.tables 的 table_type。
+func (m *Manager) isBaseTable(ctx context.Context, source Source, schema, table string) (bool, bool) {
+	if source.Kind != KindOracle && source.Kind != KindMySQL {
+		return false, false
+	}
+	if strings.TrimSpace(table) == "" {
+		return false, false
+	}
+	cacheKey := gridBaseTableCacheKey(source.ID, sourceFingerprint(source), schema, table)
+	if cached, ok := metadataCacheGet[gridBaseTableFact](m, cacheKey); ok {
+		return cached.IsBaseTable, true
+	}
+	if _, bad := metadataCacheGet[gridMetadataUnavailable](m, cacheKey); bad {
+		return false, false
+	}
+	isBase, known := false, false
+	err := m.withSQL(ctx, source, func(ctx context.Context, db *sql.DB) error {
+		var count int
+		var queryErr error
+		if source.Kind == KindOracle {
+			queryErr = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM all_tables WHERE (owner = :1 OR UPPER(owner) = UPPER(:2)) AND (table_name = :3 OR UPPER(table_name) = UPPER(:4))`, schema, strings.ToUpper(schema), table, strings.ToUpper(table)).Scan(&count)
+		} else {
+			queryErr = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM information_schema.tables WHERE (table_schema = ? OR LOWER(table_schema) = LOWER(?)) AND (table_name = ? OR LOWER(table_name) = LOWER(?)) AND table_type = 'BASE TABLE'`, schema, schema, table, table).Scan(&count)
+		}
+		if queryErr != nil {
+			return queryErr
+		}
+		isBase = count > 0
+		known = true
+		return nil
+	})
+	if err != nil || !known {
+		metadataCacheSetTTL(m, cacheKey, gridMetadataUnavailable{Reason: "基表事实确认失败"}, gridMetadataUnavailableTTL)
+		return false, false
+	}
+	metadataCacheSet(m, cacheKey, gridBaseTableFact{IsBaseTable: isBase})
+	return isBase, true
+}
+
+// gridProjectionCoversPrimaryKey 判断投影是否**确定**已经覆盖目标表的全部主键列。
+//
+// 该判断只用于一个前置决策：是否还需要为这次查询追加 ROWID 定位列。
+// 因为没有主键结果就退化为 ROWID 编辑，所以这里的判断必须保守：
+//   - 投影是 * / alias.* 时，结果就是整表所有列，主键必然在内；
+//   - 否则要求每个主键列都以裸标识符（id / e.id / "ID"）出现，不带别名、不是表达式。
+//
+// 执行后 AnalyzeGridQueryWithMetadata 仍会基于真实结果列做权威判定；
+// 这里判错的最坏后果是"本可用 ROWID 编辑变成只读"（fail-closed），不会产生错误的写入。
+func gridProjectionCoversPrimaryKey(kind string, parsed *ParsedGridQuery, fields []Field) bool {
+	if parsed == nil || len(fields) == 0 {
+		return false
+	}
+	pkCols := make([]string, 0, 4)
+	for _, f := range fields {
+		if f.PrimaryKey {
+			pkCols = append(pkCols, strings.ToUpper(f.Name))
+		}
+	}
+	if len(pkCols) == 0 {
+		return false
+	}
+	if parsed.IsWildcard {
+		return true
+	}
+	projected := make(map[string]bool, len(parsed.Projections))
+	for _, item := range parsed.Projections {
+		if name := gridBareProjectionColumn(kind, item); name != "" {
+			projected[strings.ToUpper(name)] = true
+		}
+	}
+	for _, col := range pkCols {
+		if !projected[col] {
+			return false
+		}
+	}
+	return true
+}
+
 // prepareGridQuery 在占用流式查询连接之前完成与结果列无关的受限规划：
-// 语法允许清单、ROWID 改写前置的普通堆表确认，以及编辑能力所需的元数据快照。
+// 语法允许清单、ROWID 改写前置的普通堆表确认，以及编辑能力所需的元数据。
 // 任何一步拿不到结果都只降级为只读，不影响原始查询的执行与读取能力（DB-02/DB-03）。
+//
+// DB-08: 投影已完整覆盖主键时不再需要 ROWID 定位列，因此跳过索引查询与堆表确认，
+// 把最高频的"单表浏览"前置开销压到一次字段查询。
 func (m *Manager) prepareGridQuery(ctx context.Context, source Source, sqlText string, needEditable bool) *gridQueryPreparation {
 	if m == nil || source.Kind == KindRedis || source.Kind == "" {
 		return nil
@@ -1022,34 +1201,57 @@ func (m *Manager) prepareGridQuery(ctx context.Context, source Source, sqlText s
 	if rowIDPlan == nil && !needEditable {
 		return prep
 	}
+
+	// DB-08: 整段元数据规划共用**一个**总预算。旧实现给堆表确认与字段/索引各开一个
+	// 串行预算（最坏叠加 ~3s），而实测单次字典查询冷启动就有 ~1.9s，
+	// 分预算会把本来能成功的读取判成超时并静默降级为只读。
+	budgetCtx, cancelBudget := gridMetadataBudgetContext(ctx, source)
+	defer cancelBudget()
+
+	// 字段元数据便宜（实测冷 ~10ms、稳态 ~0ms），且是"是否需要 ROWID"的前提，先取。
+	fields, fieldsOK := m.gridFieldsFor(budgetCtx, source, schema, parsed.Table)
+	if fieldsOK {
+		prep.Fields = fields
+	}
+	// 投影已完整覆盖主键 → 行身份可以直接用主键，不需要 ROWID 定位列。
+	pkCovered := gridProjectionCoversPrimaryKey(source.Kind, parsed, fields)
+
 	// 普通堆表事实是 ROWID 改写的前提，也是 oracle_rowid 编辑能力的前提（DB-02）。
 	// 查询失败或预算不足时保持未知，调用方按只读处理。
-	if source.Kind == KindOracle {
-		heapCtx, cancelHeap := gridMetadataBudgetContext(ctx, source)
-		isHeap, known := m.isOracleHeapTable(heapCtx, source, schema, parsed.Table)
-		cancelHeap()
+	// 主键已覆盖时 ROWID 定位列没有任何意义，因此跳过这次查询。
+	if source.Kind == KindOracle && rowIDPlan != nil && !pkCovered {
+		isHeap, known := m.isOracleHeapTable(budgetCtx, source, schema, parsed.Table)
 		if known {
 			prep.HeapKnown, prep.HeapTable = true, isHeap
-		}
-		if rowIDPlan != nil && known && isHeap {
-			prep.RowIDSQL = rowIDPlan.SQL
+			if isHeap {
+				prep.RowIDSQL = rowIDPlan.SQL
+			}
 		}
 	}
 	if !needEditable {
 		return prep
 	}
 
-	metaCtx, cancelMeta := gridMetadataBudgetContext(ctx, source)
-	snapshot, ok := m.gridMetadataFor(metaCtx, source, schema, parsed.Table)
-	cancelMeta()
-	if !ok {
+	// DB-08: 目标必须是真实基表才可能有可插入的物理行。
+	// 这次查询很便宜（实测冷 ~1ms、稳态 ~0ms），但它是"能不能新增行"的唯一依据，
+	// 因此即使主键已覆盖也照常确认。
+	if isBase, known := m.isBaseTable(budgetCtx, source, schema, parsed.Table); known {
+		prep.BaseKnown, prep.BaseTable = true, isBase
+	}
+
+	// 索引只服务于"主键缺失时的唯一键定位"，主键已覆盖时不需要它（DB-08）。
+	// 这是整段元数据里最贵的一次字典查询，跳过它对单表浏览的首批延迟影响最大。
+	if !pkCovered {
+		if indexes, ok := m.gridIndexesFor(budgetCtx, source, schema, parsed.Table); ok {
+			prep.Indexes = indexes
+		}
+	}
+	if !fieldsOK {
 		if prep.Reason == "" {
 			prep.Reason = fmt.Sprintf("无法在受限预算内读取目标基表 %s.%s 的元数据，已降级为只读", schema, parsed.Table)
 		}
 		return prep
 	}
-	prep.Fields = snapshot.Fields
-	prep.Indexes = snapshot.Indexes
 	if len(prep.Fields) == 0 && prep.Reason == "" {
 		prep.Reason = fmt.Sprintf("无法读取目标基表 %s.%s 的元数据", schema, parsed.Table)
 	}
@@ -1348,8 +1550,24 @@ func AnalyzeGridQueryWithMetadata(source Source, sessionID, executedSQL string, 
 
 	// DBUI-01: 插入能力必须独立判定，且不能由“单表可解析”推导 ——
 	// 聚合/表达式投影不是可以直接新增行的表格视图，不得放开插入。
+	//
+	// DB-08: 还必须确认目标是**真实基表**。关联视图没有可插入的物理行：
+	// 真实 Oracle 实测中 `SELECT * FROM KAIRO_LAB.EMPLOYEE_DIRECTORY`（JOIN 视图）
+	// 在不可更新时仍然开放了 can_insert，用户新增行后只会撞上 ORA-01733。
+	// 拿不到基表事实时同样不开放插入（fail-closed）。
 	if source.MutationAllowed() && plan.Table != "" && gridProjectionAllowsInsert(parsed, plan.Columns) {
-		plan.CanInsert = true
+		switch {
+		case !prep.BaseKnown:
+			if plan.Reason == "" {
+				plan.Reason = fmt.Sprintf("无法确认目标对象 %s.%s 是否为真实基表，已关闭插入能力", plan.Schema, plan.Table)
+			}
+		case !prep.BaseTable:
+			if plan.Reason == "" {
+				plan.Reason = fmt.Sprintf("目标对象 %s.%s 不是真实基表（视图/同义词等），不支持网格插入", plan.Schema, plan.Table)
+			}
+		default:
+			plan.CanInsert = true
+		}
 	}
 
 	return plan
