@@ -5995,11 +5995,16 @@
       if (e.summary && e.summary.page) { s.page = e.summary.page; s.pageSize = e.summary.page_size || s.pageSize; }
       const totalTime = s.startTime ? Math.round(performance.now() - s.startTime) : null;
       const firstPacketTime = (s.firstRowsTime && s.startTime) ? Math.round(s.firstRowsTime - s.startTime) : null;
+      // 状态行只展示一个数字：服务端 SQL 执行耗时（elapsed_ms），与历史观感一致。
+      // 端到端首包/总耗时属于诊断信息，放进悬浮提示（title），避免同一行里出现两个口径的数字，
+      // 让人误以为"查询变慢了"。
       let timingStr = e.summary.elapsed_ms + ' ms';
+      let timingTitle = '服务端 SQL 执行 ' + e.summary.elapsed_ms + ' ms';
       if (firstPacketTime !== null && totalTime !== null) {
-        timingStr = e.summary.elapsed_ms + ' ms（首包 ' + firstPacketTime + ' ms / 总 ' + totalTime + ' ms）';
+        timingTitle += ' · 端到端首包 ' + firstPacketTime + ' ms / 总 ' + totalTime + ' ms';
       }
       s.status = e.summary.rows + ' 行 · ' + timingStr + (e.summary.retry_count ? ' · 已自动重连' : '') + (e.summary.ordered === false ? ' · 未指定 ORDER BY' : '') + (e.summary.truncated ? ' · 已截断' : '');
+      s.statusTitle = timingTitle;
       if (Kairo.databaseFeatures && typeof Kairo.databaseFeatures.recordQueryResult === 'function') {
         Kairo.databaseFeatures.recordQueryResult(s.runId, {
           sql: s.executedSQL || s.lastSQL || s.sql,
@@ -6014,7 +6019,7 @@
         refreshVisibleResult();
         updateDatabasePager();
         const st = q('db-query-status');
-        if (st) st.textContent = s.status;
+        if (st) { st.textContent = s.status; st.title = s.statusTitle || ''; }
         if (e.summary && e.summary.message && e.summary.message.indexOf('FOR UPDATE') >= 0) {
           showQueryMessage('warn', '行锁提示', e.summary.message);
         }

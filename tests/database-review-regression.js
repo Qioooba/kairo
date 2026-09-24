@@ -176,4 +176,18 @@ console.log('Database review regressions passed');
     assert.strictEqual(calls.length, 0, '队列写入失败时不得继续提交事务');
   }
   console.log('提交/应用变更合并回归通过');
+
+  // -------------------------------------------------------------------------
+  // 查询耗时展示：状态行只允许一个数字（服务端 SQL 执行），端到端口径进 title
+  // -------------------------------------------------------------------------
+  {
+    const src = read('web/pages/database.js');
+    assert.ok(!/ms（首包/.test(src),
+      '状态行不得再出现"（首包 … / 总 …）"这种双口径数字（用户会以为查询变慢了）');
+    assert.ok(src.includes('s.statusTitle'),
+      '端到端首包/总耗时必须写进 statusTitle（悬浮提示）');
+    assert.ok(/st\.title = s\.statusTitle/.test(src),
+      '状态元素必须把 statusTitle 挂到 title 上');
+  }
+  console.log('查询耗时展示口径回归通过');
 })().catch(error=>{console.error(error);process.exitCode=1;});
