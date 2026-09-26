@@ -60,13 +60,15 @@ function register(runner, ctx) {
               throw new Error('页面内容区域文本为空');
             }
 
+            // v1.x 去顶栏：面包屑 #crumbs 已随 topbar 一并移除，
+            // 当前页名改由 Tab 条的活动 Tab 承载，这里断言它非空即可。
             const crumbText = await page.evaluate(function () {
-              const crumbs = document.getElementById('crumbs');
-              return crumbs ? crumbs.textContent.trim() : null;
+              const label = document.querySelector('.app-tab.active .app-tab-label');
+              return label ? label.textContent.trim() : null;
             });
 
             if (!crumbText) {
-              throw new Error('面包屑 #crumbs 不存在或为空');
+              throw new Error('活动 Tab 文案不存在或为空（当前页名标识缺失）');
             }
 
             const bodyHasContent = await page.evaluate(function () {

@@ -74,10 +74,10 @@ async function step(name, fn) {
     await page.goto(`${BASE}/#/config`, { waitUntil: 'networkidle' });
     await page.waitForTimeout(800);
     await page.screenshot({ path: path.join(OUT_DIR, '01-initial.png'), fullPage: true });
-    // 检查页面标题
-    const crumbs = await page.textContent('#crumbs');
-    if (!crumbs || !crumbs.includes('系统配置')) throw new Error('面包屑不正确: ' + crumbs);
-    return '面包屑: ' + crumbs;
+    // v1.x 去顶栏后不再有面包屑 #crumbs，当前页名看 Tab 条的活动 Tab
+    const crumbs = await page.textContent('.app-tab.active .app-tab-label');
+    if (!crumbs || !crumbs.includes('系统配置')) throw new Error('当前页名不正确: ' + crumbs);
+    return '当前页(Tab): ' + crumbs;
   });
 
   // ===== 2. 检查首屏各卡片 =====

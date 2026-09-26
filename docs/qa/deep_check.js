@@ -45,8 +45,9 @@ const BASE = 'http://127.0.0.1:18092';
     const currentHash = await page.evaluate(() => location.hash);
     console.log('当前hash:', currentHash);
 
-    const crumb = await page.$eval('#crumbs', el => el.textContent.trim());
-    console.log('面包屑:', crumb);
+    // v1.x 去顶栏后不再有面包屑 #crumbs，改为读 Tab 条的活动 Tab 文案
+    const crumb = await page.$eval('.app-tab.active .app-tab-label', el => el.textContent.trim());
+    console.log('当前页(Tab):', crumb);
 
     const navActive = await page.$$eval('#nav .nav-item.active', els => els.map(el => el.textContent.trim()));
     console.log('导航栏active项:', navActive);
@@ -81,7 +82,7 @@ const BASE = 'http://127.0.0.1:18092';
     await page.evaluate((rt) => { location.hash = '#/' + rt; }, r);
     await page.waitForTimeout(400);
     const hash = await page.evaluate(() => location.hash);
-    const crumb = await page.$eval('#crumbs', el => el.textContent.trim()).catch(() => null);
+    const crumb = await page.$eval('.app-tab.active .app-tab-label', el => el.textContent.trim()).catch(() => null);
     const viewHasChildren = await page.$eval('#view', el => el.children.length > 0).catch(() => false);
     const navActive = await page.$eval('#nav .nav-item.active', el => el.getAttribute('data-route')).catch(() => null);
     console.log(`#/${r}: hash=${hash}, crumb="${crumb}", hasContent=${viewHasChildren}, navActive=${navActive}`);

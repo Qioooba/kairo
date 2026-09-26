@@ -302,12 +302,14 @@ body {
   border-right: 1px solid var(--line);
   display: flex; flex-direction: column;
   padding: 20px 14px;
-  overflow-y: auto;
+  /* v1.x：侧栏恢复“随整页一起滚”的原始行为。
+     之前这里是 max-height:100vh + overflow-y:auto，配合下面 .nav 的 overflow-y，
+     会把左侧菜单切出一个独立滚动条（用户反馈「左边菜单都变为上下滑动的了」）。
+     去掉高度上限后侧栏随内容自然伸展，既没有内部滚动条，菜单也和页面一起走。 */
   overflow-x: hidden;
   position: sticky;
   top: 0;
   align-self: start;
-  max-height: 100vh;
   width: var(--sidebar-width);
   min-width: 0;
   box-sizing: border-box;
@@ -337,11 +339,32 @@ body {
     opacity: 0 !important;
   }
 }
-.brand {
-  display: flex; align-items: center; gap: 10px;
-  padding: 4px 6px 8px;
+/* 侧栏顶部一行：左边 Kairo 品牌，右边便笺 / 主题切换（v1.x 从顶栏迁来）。
+   收进同一行后不额外占高度，且永远在首屏可见（放底部时矮窗口要往下滚才点得到）。 */
+.sidebar-top {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 4px 8px 6px;
   border-bottom: 1px solid var(--line);
   margin-bottom: 14px;
+}
+.sidebar-top .brand {
+  padding: 0;
+  border-bottom: none;
+  margin-bottom: 0;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+/* 品牌文字与右侧工具按钮抢宽度时：品牌文字先省略，工具按钮保持完整
+   （侧栏只有 240px，"Kairo / 天命契机" 被压窄会自动换行并撑高顶栏行）。 */
+.sidebar-top .brand-text { min-width: 0; overflow: hidden; }
+.sidebar-top .brand-text .title,
+.sidebar-top .brand-text .subtitle {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.brand {
+  display: flex; align-items: center; gap: 10px;
 }
 .logo {
   width: 38px; height: 38px;
@@ -410,7 +433,9 @@ body {
   .kairo-shimmer-text { animation: none; background-position: 0% 50%; }
 }
 
-.nav { display: flex; flex-direction: column; gap: 2px; flex: 1; overflow-y: auto; }
+/* flex:1 只用来把工具区/页脚顶到底部；不再给 .nav 自身开滚动条
+   （v1.x：侧栏已随整页滚动，菜单项再多也直接撑高页面，不切内部滚动条）。 */
+.nav { display: flex; flex-direction: column; gap: 2px; flex: 1 0 auto; min-height: 0; }
 .nav-item {
   display: block;
   padding: 7px 12px;
@@ -474,20 +499,62 @@ body {
   color: var(--text-dim);
 }
 
-.footer { border-top: 1px solid var(--line); padding-top: 10px; font-size: 11.5px; }
+/* 侧栏顶部工具区：便笺 / 主题切换（原顶栏右端功能迁到这里）
+ * 设计：不做成"按钮"，而是像编辑器侧栏那样的一排淡链接 ——
+ *   无边框、无底色，hover 才浮出浅底+描边；高度 24px、字号 11.5px，
+ *   与左侧菜单（13.5px / 图标 14px）同一视觉重量，不抢眼。 */
+.sidebar-tools { flex: 0 0 auto; max-width: 100%; }
+.sidebar-tools-row { display: flex; align-items: center; gap: 2px; flex-wrap: wrap; justify-content: flex-end; }
+.sidebar-tools .theme-toggle,
+.sidebar-tools .notes-toggle {
+  height: 24px;
+  padding: 0 6px 0 4px;
+  gap: 4px;
+  border-color: transparent;
+  background: transparent;
+  font-size: 11.5px;
+  color: var(--text-mute);
+}
+.sidebar-tools .theme-toggle:hover,
+.sidebar-tools .notes-toggle:hover {
+  background: var(--bg-2);
+  color: var(--text);
+  border-color: var(--line);
+}
+.sidebar-tools .theme-toggle:focus-visible,
+.sidebar-tools .notes-toggle:focus-visible { outline-offset: 1px; }
+.sidebar-tools .theme-toggle-icon svg,
+.sidebar-tools .notes-toggle .icon svg { width: 14px; height: 14px; }
+.sidebar-tools .theme-toggle-label { font-weight: 500; }
+/* 主题按钮收成纯图标：侧栏固定 240px，图标 + "深色/护眼绿" 文字要占掉 111px，
+   会把 "Kairo / 天命契机" 压成 "Kai…" —— 两个次要按钮不值得换掉产品名。
+   图标本身随主题变化（月亮/太阳/叶子/对比/剑），hover 的 title 里有完整说明。 */
+.sidebar-tools .theme-toggle-label { display: none; }
+.sidebar-tools .theme-toggle,
+.sidebar-tools .notes-toggle { padding: 0 5px; }
+/* 启用访问令牌认证时，auth.js 会把「用户名 + 登出」插到该工具区最前面
+   （index.html 里的 .auth-overlay 作用域样式管不到这里，单列一份）；矮窗口直接换行，不挤成竖条。 */
+.sidebar-tools .auth-user-area { display: flex; align-items: center; gap: 6px; min-width: 0; flex: 0 1 auto; margin-bottom: 4px; }
+.sidebar-tools .auth-user-label { font-size: 11.5px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sidebar-tools .auth-logout-btn { background: transparent; border: 1px solid var(--line); color: var(--text-dim); border-radius: 6px; padding: 3px 8px; font-size: 11.5px; cursor: pointer; flex: 0 0 auto; transition: all .15s; }
+.sidebar-tools .auth-logout-btn:hover { border-color: var(--error); color: var(--error); }
+
+/* flex:0 0 auto：让 .nav（flex:1）吃掉剩余高度，页脚稳定贴在侧栏底部 */
+.footer { border-top: 1px solid var(--line); padding-top: 10px; font-size: 11.5px; flex: 0 0 auto; }
 .muted { color: var(--text-mute); }
 
 /* main */
-.main { display: flex; flex-direction: column; overflow: hidden; overflow-y: auto; min-height: 0; }
-.topbar {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 14px 22px;
-  border-bottom: 1px solid var(--line);
-  background: var(--topbar-bg);
-  -webkit-backdrop-filter: blur(6px);
-  backdrop-filter: blur(6px);
+/* v1.x 去顶栏后的布局：**保持原有的自然文档流**（body 根滚动），不要锁死成 100vh 应用壳。
+ * 锁死高度会带来两个回归（用户实测反馈）：
+ *   1) 整个页面高度被固定，页面不再随内容/窗口伸展；
+ *   2) 侧栏被钉成固定高，.nav 内部出现上下滚动条（原来左侧菜单是随页面一起走的）。
+ * 因此这里只保留 flex 纵向排列 + min-height 撑满首屏；滚动交回 body。
+ * Tab 条仍 sticky top:0 —— 无滚动祖先时它相对视口吸附，长页面照样能切 Tab。 */
+.main {
+  display: flex; flex-direction: column;
+  min-height: 100vh;
+  min-width: 0;
 }
-.topbar-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
 .theme-toggle,
 .notes-toggle {
   display: inline-flex; align-items: center; gap: 6px;
@@ -522,7 +589,8 @@ body {
    形成"日=黄 / 月=黄"的对称美感；浅灰虽然对比度达标，但跟旁边文字同色
    反而失去"按钮"色彩辨识度 */
 :root[data-theme="dark"] .theme-toggle-icon svg { color: #fbbf24; }
-.crumbs { font-size: 14px; font-weight: 600; }
+/* 主界面已去顶栏（.topbar 不再存在），但独立窗口 ssh.html / tail.html / preview.html
+   仍自带 <header class="topbar"> + .topbar-right，这两条规则保留给它们复用。 */
 .topbar-right { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
 .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
 .dot-idle { background: var(--text-mute); }
@@ -533,24 +601,160 @@ body {
 
 .view { flex: 1; overflow: auto; padding: 24px; }
 
-/* ===== 顶部 Tab 条（多页面保活） =====
- * 跟随主题变量，不写死颜色；横向滚动容纳多 Tab。
- * Tab 条在 topbar 下方、view 上方（见 index.html #tab-bar）。 */
-.tab-bar {
-  display: flex; align-items: stretch; gap: 6px;
-  padding: 8px 16px 0;
-  border-bottom: 1px solid var(--line);
+/* ===== 顶部 Tab 栏外层容器（集成收起按钮 + Tab 条 + 右上角便笺/主题工具） =====
+ * 固定在内容区顶部，左侧收起侧边栏按钮、中间可滚动 Tab 列表、右侧快捷工具在同一行。
+ * 横向滚动 Tab 时，左右两端固定按钮始终保持原位，不会遮挡 Tab 标题。 */
+.tab-header {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  box-sizing: border-box;
+  height: 46px;
+  display: flex;
+  align-items: stretch;
   background: var(--topbar-bg);
-  overflow-x: auto; overflow-y: hidden;
+  border-bottom: 1px solid var(--line);
+  padding: 0 10px 0 8px;
+  gap: 8px;
   flex-shrink: 0;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.tab-header-sep {
+  width: 1px;
+  height: 20px;
+  background: var(--line);
+  align-self: center;
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+
+.tab-bar {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  box-sizing: border-box;
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+  padding: 7px 4px 0 2px;
+  overflow-x: auto;
+  overflow-y: hidden;
   scrollbar-width: thin;
   scrollbar-color: var(--scrollbar-thumb) transparent;
 }
 .tab-bar:empty { display: none; }
-.tab-bar::-webkit-scrollbar { height: 6px; }
+.tab-bar::-webkit-scrollbar { height: 5px; }
 .tab-bar::-webkit-scrollbar-thumb {
   background: var(--scrollbar-thumb);
   border-radius: 3px;
+}
+
+/* 顶部 Tab 栏右侧工具区：便笺与主题切换固定在右上角，与收起侧边栏同一水平行 */
+.tab-header-tools {
+  align-self: center;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+.tab-header-tools .theme-toggle,
+.tab-header-tools .notes-toggle {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+  color: var(--text-dim);
+  cursor: pointer;
+  flex: 0 0 auto;
+  transition: background .15s, color .15s, border-color .15s, transform .1s, box-shadow .15s;
+}
+
+.tab-header-tools .theme-toggle:hover,
+.tab-header-tools .notes-toggle:hover {
+  background: var(--bg-2);
+  color: var(--text);
+  border-color: var(--text-dim);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+}
+
+.tab-header-tools .theme-toggle:active,
+.tab-header-tools .notes-toggle:active {
+  transform: scale(0.94);
+}
+
+.tab-header-tools .theme-toggle:focus-visible,
+.tab-header-tools .notes-toggle:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.tab-header-tools .theme-toggle-icon,
+.tab-header-tools .notes-toggle .icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 0;
+}
+
+.tab-header-tools .theme-toggle-icon svg,
+.tab-header-tools .notes-toggle .icon svg {
+  width: 16px;
+  height: 16px;
+  display: block;
+}
+
+.tab-header-tools .notes-toggle .icon svg {
+  color: #f59e0b;
+}
+
+.tab-header-tools .notes-toggle:hover .icon svg {
+  color: #fbbf24;
+}
+
+.tab-header-tools .theme-toggle-label {
+  display: none !important;
+}
+
+.tab-header-tools .auth-user-area {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 0 0 auto;
+  margin-right: 4px;
+}
+.tab-header-tools .auth-user-label {
+  font-size: 12px;
+  color: var(--text-dim);
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tab-header-tools .auth-logout-btn {
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  color: var(--text-dim);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 11.5px;
+  cursor: pointer;
+  flex: 0 0 auto;
+  transition: all .15s;
+}
+.tab-header-tools .auth-logout-btn:hover {
+  border-color: var(--error);
+  color: var(--error);
 }
 .app-tab {
   display: inline-flex; align-items: center; gap: 6px;
@@ -6192,12 +6396,18 @@ input.sftp-autofollow-cb {
 :root[data-theme="xianxia"] .sidebar {
   background: linear-gradient(180deg, rgba(90,138,122,0.08) 0%, rgba(74,122,106,0.04) 50%, rgba(90,138,122,0.06) 100%) !important;
 }
-:root[data-theme="xianxia"] .sidebar > .brand,
+/* v1.x：.sidebar-top（品牌行 + 便笺/主题按钮）原本没有 position+z-index，
+   会被下面这条 .sidebar::before 水墨背景遮罩（position:absolute; z-index:0）
+   整个盖住 —— 现象就是「武侠风主题下最下方两个按钮加载不出来」。
+   工具区现在是 .sidebar-top 的子元素，直接把这一行抬到 z-index:1 的内容层。 */
+:root[data-theme="xianxia"] .sidebar > .sidebar-top,
 :root[data-theme="xianxia"] .sidebar > .nav,
 :root[data-theme="xianxia"] .sidebar > .footer {
   position: relative;
   z-index: 1;
 }
+/* 兜底：万一以后 .sidebar-tools 又被挪成 .sidebar 的直接子元素 */
+:root[data-theme="xianxia"] .sidebar > .sidebar-tools { position: relative; z-index: 1; }
 /* 确保导航菜单项有正确的z-index */
 :root[data-theme="xianxia"] .nav-item {
   position: relative;
@@ -7479,16 +7689,152 @@ body.has-open-overlay { overflow: hidden; }
 }
 
 /* ===== 数据库工作台（Oracle / MySQL / Redis） ===== */
-.db-page { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
-.db-topbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 12px 14px; }
-.db-source-select { display: flex; align-items: center; gap: 8px; min-width: 200px; flex: 1 1 220px; }
+/* 数据库工作台专用外层容器紧凑内边距：
+   去顶栏后工作区紧凑置顶，消除原 .tab-pane 的 24px 上留白与 #db-manager 空占位 12px 间隙 */
+.view .tab-pane.tab-pane-database,
+.view .tab-pane[data-route="database"],
+.view .tab-pane:has(.db-page) {
+  padding: 8px 14px 12px;
+}
+#db-manager:empty {
+  display: none !important;
+}
+.db-page { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.db-topbar { display: none; }
+.db-source-select { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; }
 .db-source-select label { margin: 0; }
 .db-source-select label, .db-field > span { color: var(--text-dim); font-size: 12px; }
-.db-source-select select { height: 34px; min-height: 34px; min-width: 0; flex: 1; box-sizing: border-box; }
+.db-source-select select { height: 28px; min-height: 28px; min-width: 0; flex: 1; box-sizing: border-box; }
 .db-topbar-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .db-topbar-actions .btn { height: 34px; min-height: 34px; line-height: 32px; padding: 0 12px; box-sizing: border-box; }
-.db-kind { align-self: center; padding: 5px 9px; border-radius: 999px; background: var(--tag-enc-bg); color: var(--tag-enc-fg); font-size: 12px; white-space: nowrap; }
+.db-kind { align-self: center; padding: 2px 7px; border-radius: 999px; background: var(--tag-enc-bg); color: var(--tag-enc-fg); font-size: 11px; white-space: nowrap; }
 .db-safe { margin-left: auto; align-self: center; color: var(--success); font-size: 12px; white-space: nowrap; }
+
+/* 方案 A：左侧对象栏首部数据源栏 */
+.db-meta-source-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 2px;
+}
+.db-meta-source-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+}
+.db-meta-source-row .db-source-select {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+}
+.db-meta-source-row .db-source-select select {
+  width: 100%;
+  height: 28px;
+  min-height: 28px;
+  padding: 0 8px;
+  font-size: 12px;
+  line-height: 26px;
+  border-radius: var(--radius-sm, 6px);
+}
+.db-meta-source-actions {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex: 0 0 auto;
+}
+.db-meta-source-actions .btn {
+  height: 28px;
+  min-height: 28px;
+  padding: 0 6px;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11.5px;
+}
+.db-meta-source-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.db-meta-source-status .db-kind {
+  padding: 2px 7px;
+  font-size: 11px;
+  line-height: 1.3;
+}
+.db-meta-source-status .db-client-badge {
+  padding: 2px 7px;
+  font-size: 11px;
+}
+
+/* 左侧对象树折叠时的备用数据源工具槽（停靠在页签栏右侧） */
+.db-tabs-source-slot {
+  display: flex;
+  align-items: center;
+  margin-left: auto;
+  margin-right: 8px;
+}
+.db-tabs-source-slot .db-meta-source-bar {
+  padding-bottom: 0;
+  border-bottom: none;
+  margin-bottom: 0;
+}
+.db-tabs-source-slot .db-meta-source-status {
+  display: none;
+}
+.db-tabs-source-slot .db-source-select select {
+  max-width: 180px;
+}
+
+/* 页签栏右侧控制区（环境、安全状态与设置按钮） */
+.db-editor-tabs-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.db-editor-tabs-right .db-dialect {
+  margin-left: 0;
+  color: var(--text-mute);
+  font-size: 11px;
+  font-weight: 600;
+  align-self: center;
+}
+.db-editor-tabs-right .db-safe {
+  margin-left: 0;
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.4;
+  white-space: nowrap;
+  cursor: help;
+}
+.db-editor-tabs-right .db-safe.is-write {
+  color: var(--success, #10b981);
+  background: rgba(16, 185, 129, 0.12);
+  border: 1px solid rgba(16, 185, 129, 0.25);
+}
+.db-editor-tabs-right .db-safe.is-readonly {
+  color: var(--text-dim);
+  background: var(--bg-1, rgba(255, 255, 255, 0.05));
+  border: 1px solid var(--line);
+}
+.db-editor-tabs-right .btn {
+  height: 26px;
+  min-height: 26px;
+  padding: 0 6px;
+  font-size: 11px;
+}
 
 .db-manager { padding: 16px; }
 .db-manager-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
@@ -7571,9 +7917,9 @@ body.has-open-overlay { overflow: hidden; }
 
 .db-main { min-width: 0; flex: 1; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(560px, 1fr); gap: 8px; }
 .db-editor-card { width: 100%; max-width: 100%; min-width: 0; padding: 0; overflow: visible; box-sizing: border-box; }
-.db-editor-tabs { display: flex; flex-wrap: wrap; align-items: center; min-height: 34px; height: auto; padding: 2px 9px; border-bottom: 1px solid var(--line); background: var(--bg-2); gap: 4px 6px; }
+.db-editor-tabs { display: flex; flex-wrap: wrap; align-items: center; min-height: 32px; height: auto; padding: 1px 8px; border-bottom: 1px solid var(--line); background: var(--bg-2); gap: 4px 6px; }
 .db-sql-tabs { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 2px; min-width: 0; flex: 1; overflow-x: visible; height: auto; min-height: 32px; }
-.db-editor-tab { align-self: stretch; display: inline-flex; align-items: center; gap: 6px; padding: 0 10px; border: 0; border-bottom: 2px solid transparent; color: var(--text-dim); background: transparent; font-size: 11.5px; cursor: pointer; white-space: nowrap; height: 32px; min-height: 32px; box-sizing: border-box; border-radius: 4px 4px 0 0; }
+.db-editor-tab { align-self: stretch; display: inline-flex; align-items: center; gap: 6px; padding: 0 10px; border: 0; border-bottom: 2px solid transparent; color: var(--text-dim); background: transparent; font-size: 11.5px; cursor: pointer; white-space: nowrap; height: 30px; min-height: 30px; box-sizing: border-box; border-radius: 4px 4px 0 0; }
 .db-editor-tab.active { border-bottom-color: var(--primary); color: var(--text); background: rgba(79,140,255,.08); background: color-mix(in srgb, var(--primary) 8%, transparent); }
 .db-editor-tab.running .db-tab-dot { background: var(--success); box-shadow: 0 0 0 3px rgba(34,197,94,.25); box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 25%, transparent); }
 .db-tab-dot { width: 7px; height: 7px; border-radius: 50%; background: transparent; }
@@ -7588,7 +7934,7 @@ body.has-open-overlay { overflow: hidden; }
 .db-tab-menu-item:disabled { color: var(--text-mute); cursor: not-allowed; opacity: 0.5; }
 .db-sql-panel { display: flex; flex-direction: column; min-height: 0; }
 .db-sql-panel[hidden] { display: none !important; }
-.db-sql-editor { display: block; width: 100%; min-height: 190px; resize: vertical; border: 0; border-radius: 0; padding: 13px 15px; box-sizing: border-box; background: transparent; color: transparent; -webkit-text-fill-color: transparent; caret-color: var(--tail-out-fg); font: 13px/1.6 var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace); tab-size: 2; box-shadow: none; position: relative; z-index: 1; white-space: pre; overflow: auto; }
+.db-sql-editor { display: block; width: 100%; min-height: 190px; resize: vertical; border: 0; border-radius: 0; padding: 10px 14px; box-sizing: border-box; background: transparent; color: transparent; -webkit-text-fill-color: transparent; caret-color: var(--tail-out-fg); font: 13px/1.6 var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace); tab-size: 2; box-shadow: none; position: relative; z-index: 1; white-space: pre; overflow: auto; }
 .db-sql-editor:hover, .db-sql-editor:focus { background: transparent; border-color: transparent; box-shadow: none; }
 .db-sql-editor::placeholder { color: var(--textarea-placeholder, var(--field-placeholder)); -webkit-text-fill-color: var(--textarea-placeholder, var(--field-placeholder)); }
 /* 大文本极速模式 / 语法高亮降级模式：直接使用原生可见文字渲染，零 DOM 爆炸与零卡顿 */
@@ -8076,17 +8422,19 @@ body.has-open-overlay { overflow: hidden; }
 .db-bookmark-modal-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px; border-bottom: 1px solid var(--line); font-weight: 600; }
 .db-bookmark-modal-body { flex: 1; overflow: auto; padding: 12px; }
 
-/* 顶栏侧边栏切换按钮 (支持桌面端全折叠与移动端抽屉) */
+/* 侧边栏收起/展开按钮：固定在 tab 页左上角，与 tab 条处于同一水平行 */
 .sidebar-toggle {
+  position: static;
+  align-self: center;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 32px;
   height: 32px;
-  margin-right: 10px;
-  background: transparent;
+  background: var(--bg-1);
   border: 1px solid var(--line);
   border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
   color: var(--text-dim);
   cursor: pointer;
   flex: 0 0 auto;
@@ -8096,7 +8444,7 @@ body.has-open-overlay { overflow: hidden; }
   background: var(--bg-2);
   color: var(--text);
   border-color: var(--text-dim);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
 }
 .sidebar-toggle:active {
   transform: scale(0.94);
@@ -8115,6 +8463,7 @@ body.has-open-overlay { overflow: hidden; }
   background: rgba(79, 140, 255, 0.16);
   color: var(--primary-2);
 }
+/* 侧栏已收起、图标里的“侧栏面板”填充块没有意义，隐藏掉只留外框 */
 :root[data-sidebar="collapsed"] .sidebar-toggle .sidebar-icon-fill {
   opacity: 0;
 }
@@ -8126,9 +8475,9 @@ body.has-open-overlay { overflow: hidden; }
   body {
     grid-template-columns: 1fr !important;
   }
-  .sidebar-toggle {
-    display: inline-flex;
-  }
+  /* 独立窗口（ssh.html / tail.html / preview.html）：body.standalone-window 且 .sidebar
+     被 display:none 隐藏，没有侧栏可收，按钮必须隐藏 */
+  body.standalone-window #sidebar-toggle { display: none; }
   .sidebar {
     position: fixed !important;
     top: 0;
@@ -8551,11 +8900,11 @@ body.has-open-overlay { overflow: hidden; }
 
 /* Result Toolbar & Pager */
 .db-result-toolbar {
-  min-height: 42px;
+  min-height: 34px;
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 12px;
+  padding: 3px 8px;
   color: var(--text-dim);
   font-size: 12px;
   border-bottom: 1px solid var(--line);
@@ -9572,7 +9921,7 @@ body.has-open-overlay { overflow: hidden; }
 /* 工作区高度：JS 会写入精确 px；此处为 JS 未执行时的兜底（页面不滚动，面板内部滚动） */
 .db-sql-layout.is-columns {
   min-height: 560px;
-  height: calc(100vh - 168px);
+  height: calc(100vh - 72px);
 }
 /* 权威布局偏好尚未到手时先不显示工作区，避免"先画上下布局再切左右布局"的闪动；
    偏好到手（或 1.5s 兜底超时）后由 applyLayoutMode 摘掉该类。 */
@@ -9762,17 +10111,17 @@ body.db-resizing * { cursor: col-resize !important; user-select: none !important
   flex-wrap: nowrap !important;
   align-items: center;
   gap: 5px;
-  min-height: 40px;
-  padding: 5px 10px;
+  min-height: 34px !important;
+  padding: 3px 8px !important;
 }
 .db-editor-bar .db-bar-group { display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto; }
 .db-editor-bar .db-bar-divider { display: block; flex: 0 0 auto; width: 1px; height: 18px; background: var(--line); margin: 0 3px; }
 .db-editor-bar .db-bar-spacer { display: block; flex: 1 1 auto; min-width: 6px; }
 .db-editor-bar .db-query-status { flex: 0 1 auto; min-width: 0; margin-left: 0; overflow: hidden; text-overflow: ellipsis; }
 /* 对象栏展开时不再切成 4 行（旧规则 grid-template-rows: repeat(4) + min-height:138px） */
-.db-meta:not(.is-collapsed) ~ .db-main .db-editor-bar { min-height: 40px; }
+.db-meta:not(.is-collapsed) ~ .db-main .db-editor-bar { min-height: 34px; }
 /* 左右分栏且左列偏窄时同样保持一排（旧规则 .is-narrow-editor 也是 4 行 / 138px） */
-.db-main.is-columns.is-narrow-editor .db-editor-bar { min-height: 40px; grid-template-rows: none; }
+.db-main.is-columns.is-narrow-editor .db-editor-bar { min-height: 34px; grid-template-rows: none; }
 /* 组内也不再换行，避免"组内两行"把工具条撑高 */
 .db-editor-bar .db-bar-trans-group,
 .db-editor-bar .db-bar-tools-group,

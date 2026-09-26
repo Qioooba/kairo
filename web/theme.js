@@ -41,7 +41,8 @@
   };
 
   // 按钮里的 SVG 尺寸（px）
-  const ICON_SIZE = 16;
+  // 15px = 侧栏菜单 .nav-ico 的 14px 与常规按钮 16px 之间，放进侧栏底部工具区不显突兀
+  const ICON_SIZE = 15;
 
   function paintBtn(btn, name) {
     if (!btn) return;
@@ -80,7 +81,10 @@
     const btn = document.getElementById('theme-toggle');
     if (btn) {
       paintBtn(btn, name);
-      if (!btn.onclick) {
+      // data-bound 幂等标记：init 被重复调用（或按钮被重挂）时不会叠加 click 监听，
+      // 否则每调一次 init 就多切一个主题。
+      if (btn.dataset.themeBound !== '1') {
+        btn.dataset.themeBound = '1';
         btn.addEventListener('click', () => Kairo.theme.toggle());
       }
     }

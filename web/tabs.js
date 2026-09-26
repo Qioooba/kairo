@@ -161,8 +161,9 @@
     const routes = getRoutes();
     const render = routes[tab.route];
     const pane = document.createElement('section');
-    pane.className = 'view tab-pane';
+    pane.className = 'view tab-pane' + (tab.route ? ' tab-pane-' + tab.route : '');
     pane.setAttribute('data-tab', tab.id);
+    if (tab.route) pane.setAttribute('data-route', tab.route);
     if (tab.route === 'config') pane.classList.add('has-sticky-footer');
     tab.pane = pane;
     tab.renderToken = (state.routeRenderToken || 0) + 1;
@@ -292,11 +293,10 @@
   }
 
   function syncChrome(tab) {
-    // 面包屑 + 左侧高亮 + hash + 兼容镜像（state.current* 供旧代码读取）
+    // 左侧高亮 + hash + 兼容镜像（state.current* 供旧代码读取）
+    // 注：v1.x 去顶栏后已无面包屑 #crumbs，页名统一由 Tab 条的 .app-tab-label 承载，
+    // 此处不再写标题 DOM。
     try {
-      const names = getNames();
-      const crumbs = document.getElementById('crumbs');
-      if (crumbs) crumbs.textContent = names[tab.route] || '未知';
       Array.from(document.querySelectorAll('.nav-item')).forEach(function (a) {
         a.classList.toggle('active', a.getAttribute('data-route') === tab.route);
       });
@@ -456,6 +456,14 @@
     viewRoot = opts.viewRoot || document.getElementById('view');
     barEl = opts.barEl || document.getElementById('tab-bar');
     if (viewRoot) viewRoot.classList.add('has-tabs');
+    if (barEl && barEl.dataset && barEl.dataset.wheelBound !== '1') {
+      barEl.dataset.wheelBound = '1';
+      barEl.addEventListener('wheel', function (e) {
+        if (e.deltaY && !e.deltaX) {
+          barEl.scrollLeft += e.deltaY;
+        }
+      }, { passive: true });
+    }
     // 恢复上次打开的 Tabs（只恢复记录；pane 懒渲染，首屏只渲染活动 Tab）
     const saved = restore();
     const routes = getRoutes();

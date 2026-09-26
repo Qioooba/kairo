@@ -135,12 +135,13 @@ function isProjectError(msg) {
         }
       }
 
-      const crumb = await page.$eval('#crumbs', el => el.textContent.trim()).catch(() => null);
+      // v1.x 去顶栏后不再有面包屑 #crumbs，当前页名统一从 Tab 条的活动 Tab 读取
+      const crumb = await page.$eval('.app-tab.active .app-tab-label', el => el.textContent.trim()).catch(() => null);
       pageResult.crumbText = crumb;
       if (!crumb) {
-        pageResult.issues.push('面包屑 #crumbs 不存在或为空');
+        pageResult.issues.push('活动 Tab 文案不存在或为空（原面包屑 #crumbs 已随顶栏移除）');
       } else if (pg.expectedCrumb && !crumb.includes(pg.expectedCrumb) && pg.expectedCrumb !== '操作历史') {
-        pageResult.issues.push(`面包屑文本不匹配，期望包含 "${pg.expectedCrumb}"，实际 "${crumb}"`);
+        pageResult.issues.push(`当前页名不匹配，期望包含 "${pg.expectedCrumb}"，实际 "${crumb}"`);
       }
 
       const rememberCheckbox = await page.$('input[type="checkbox"]#ws-remember, input[type="checkbox"][id*="remember"], label:has-text("记住密码")');

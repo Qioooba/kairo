@@ -128,7 +128,8 @@
 
   function buildUserArea() {
     if (_userLabel) return;
-    const right = document.querySelector('.topbar-right');
+    // v1.x 顶部 Tab 栏：改挂到右上角工具区 #header-tools，与便笺 / 主题按钮同一行前面
+    const right = document.querySelector('#header-tools') || document.querySelector('#sidebar-tools') || document.querySelector('.topbar-right');
     if (!right) return;
     const area = document.createElement('div');
     area.className = 'auth-user-area';
