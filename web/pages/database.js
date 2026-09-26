@@ -58,7 +58,7 @@
       { key: 'cnt', text: 'SELECT COUNT(*)\nFROM ${table}', enabled: true }
     ]
   };
-  let persisted = { prefs: null, history: [], last_source: '', column_widths: {}, row_limits: {}, meta_collapsed: true, layout: readLayoutHint(), editor_col_width: 0 };
+  let persisted = { prefs: null, history: [], last_source: '', column_widths: {}, row_limits: {}, meta_collapsed: false, layout: readLayoutHint(), editor_col_width: 0 };
   const persistPreference = preferenceSaver('database', 400);
   const state = {
     sources: [], source: null, rows: [], columns: [], controller: null, summary: null, cursor: 0,
@@ -92,6 +92,14 @@
     const user = Kairo.auth && Kairo.auth.getUser ? Kairo.auth.getUser() : '';
     const role = Kairo.auth && Kairo.auth.getRole ? Kairo.auth.getRole() : '';
     return !user || role === 'admin';
+  }
+  function canManageDatabase() {
+    const user = Kairo.auth && Kairo.auth.getUser ? Kairo.auth.getUser() : '';
+    const role = Kairo.auth && Kairo.auth.getRole ? Kairo.auth.getRole() : '';
+    return !user || role === 'admin';
+  }
+  function databaseAccessText() {
+    return canWriteDatabase() ? '可写权限 · DML 页签事务 · 手动提交' : '只读权限 · 行数 / 时长 / 并发保护';
   }
   function objectTypeLabel(type) {
     const upper = String(type || '').toUpperCase();
@@ -139,7 +147,10 @@
     link: '<path d="M10 14a4 4 0 005.7 0l3-3a4 4 0 10-5.7-5.7L11 7"/><path d="M14 10a4 4 0 00-5.7 0l-3 3A4 4 0 1011 19l2-2"/>',
     upload: '<path d="M12 20V8M7 13l5-5 5 5"/><path d="M5 4h14"/>',
     check: '<path d="M5 12.5l4.5 4.5L19 7"/>',
-    eraser: '<path d="M7 19h10M5 15l6-6 6 6-3 3H8z"/><path d="M11 9l3-3 5 5-3 3"/>'
+    eraser: '<path d="M7 19h10M5 15l6-6 6 6-3 3H8z"/><path d="M11 9l3-3 5 5-3 3"/>',
+    lightning: '<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" fill="currentColor" stroke="none"/>',
+    gear: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z"/>',
+    tune: '<path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/>'
   };
   // 工具条图标统一取自 Kairo.icons 的「彩色实心」图标库（icons.js 的 db-* 组），
   // 与首页工具卡片同一套风格 —— 主形实心 + 深色描边 + 白色高光，颜色写死不随主题变化，
@@ -1066,11 +1077,24 @@
     persisted.bookmarks = normalizeBookmarks(persisted.bookmarks);
     persisted.meta_width = Math.max(META_WIDTH_MIN, Math.min(META_WIDTH_MAX, Number(persisted.meta_width) || 300));
     persisted.inspect_height = Math.max(140, Math.min(480, Number(persisted.inspect_height) || 220));
-    persisted.meta_collapsed = persisted.meta_collapsed !== undefined ? Boolean(persisted.meta_collapsed) : true;
+    if (!persisted.meta_redesign_v2) {
+      persisted.meta_redesign_v2 = true;
+      persisted.meta_collapsed = false;
+      savePersisted();
+    }
+    persisted.meta_collapsed = persisted.meta_collapsed !== undefined ? Boolean(persisted.meta_collapsed) : false;
     persisted.layout = persisted.layout === LAYOUT_COLUMNS ? LAYOUT_COLUMNS : LAYOUT_STACKED;
     persisted.editor_col_width = Math.max(0, Math.min(EDITOR_COL_MAX, Number(persisted.editor_col_width) || 0));
     state.prefs = persisted.prefs;
     state.prefsLoaded = true;
+    const metaPane = q('db-meta-pane');
+    if (metaPane) {
+      if (persisted.meta_collapsed) metaPane.classList.add('is-collapsed');
+      else metaPane.classList.remove('is-collapsed');
+      const splitX = q('db-split-x');
+      if (splitX) splitX.style.display = persisted.meta_collapsed ? 'none' : '';
+    }
+    syncMetaSourceBar(persisted.meta_collapsed);
     // 服务端权威值到手后同步刷新首帧提示：这样以后每次回到工作台都能在首帧直接画对布局，
     // 不需要等异步偏好（否则会先画上下布局再切左右布局，即用户看到的"闪一下"）。
     try { localStorage.setItem(LAYOUT_HINT_KEY, persisted.layout === LAYOUT_COLUMNS ? LAYOUT_COLUMNS : LAYOUT_STACKED); } catch (_) {}
@@ -2631,69 +2655,102 @@
     }
     return state.sources.map(s => '<option value="' + h(s.id) + '"' + (state.source && s.id === state.source.id ? ' selected' : '') + '>' + h(s.name) + ' · ' + kindLabel(s.kind) + '</option>').join('');
   }
+  function bindSourceControls() {
+    const sel = q('db-source');
+    if (sel) {
+      if (state.source) sel.value = state.source.id;
+      sel.onchange = async function () {
+        saveEditorSQL();
+        const current = sess();
+        if (current && current.transactionBusy) { this.value = current.sourceId; return; }
+        // DBUI-03：失效页签不能在下拉框里被静默迁移到其他数据源，
+        // 必须走与孤儿页签一致的显式改绑（终结旧事务 + 重置结果/写入上下文）。
+        if (current && current.type !== 'object' && sessionSourceClass(current) === 'orphaned') {
+          const target = state.sources.find(s => String(s.id) === String(this.value)) || null;
+          if (!target) { this.value = (state.source && state.source.id) || ''; return; }
+          if (await rebindOrphanedSession(current, target)) {
+            state.source = target;
+            persisted.last_source = target.id;
+            savePersisted();
+            renderWorkspace(true);
+            toast('已重新绑定：' + target.name, 'ok');
+          } else {
+            this.value = (state.source && state.source.id) || '';
+          }
+          return;
+        }
+        const dirtyCount = Object.keys((current && current.dirtyCells) || {}).length;
+        const hasTransaction = !!(current && current.transactionPending);
+        if ((dirtyCount || hasTransaction) && !confirm('切换数据源将回滚当前页签未提交事务' + (dirtyCount ? '并放弃 ' + dirtyCount + ' 处网格修改' : '') + '，确定继续吗？')) {
+          this.value = (state.source && state.source.id) || (current && current.sourceId) || '';
+          return;
+        }
+        if (hasTransaction) {
+          try {
+            await api('POST', '/api/database/transaction', { source_id: current.sourceId, session_id: current.transactionId, action: 'ROLLBACK' });
+            current.transactionPending = false;
+          } catch (e) {
+            this.value = (state.source && state.source.id) || current.sourceId || '';
+            toast('切换前回滚失败：' + e.message, 'err');
+            return;
+          }
+        }
+        if (dirtyCount) replaceDirtyCells({});
+        const next = state.sources.find(s => s.id === this.value) || null;
+        if (current && next) bindSessionSource(current, next);
+        state.source = next;
+        if (next) { persisted.last_source = next.id; savePersisted(); }
+        // #13：数据源属于当前页签。重建可见工作区但保留其它页签及其
+        // 查询结果/运行状态，切换 Oracle/MySQL/Redis 时不会再复用错误 DOM。
+        renderWorkspace(true);
+      };
+    }
+    const testBtn = q('db-test');
+    if (testBtn) {
+      testBtn.disabled = !state.source;
+      testBtn.title = state.source ? '测试连接' : '尚未配置数据源';
+      testBtn.onclick = testConnection;
+    }
+    const settingsBtn = q('db-settings');
+    if (settingsBtn) {
+      settingsBtn.onclick = openSettings;
+    }
+    const manageBtn = q('db-manage');
+    if (manageBtn) {
+      manageBtn.onclick = function () {
+        if (state.managing) { closeManager(); return; }
+        state.managing = true;
+        this.setAttribute('aria-expanded', 'true');
+        renderManager();
+      };
+    }
+    const badge = q('db-source-badge');
+    if (badge) {
+      badge.textContent = state.source ? kindLabel(state.source.kind) : '未配置';
+    }
+  }
+
+  function syncMetaSourceBar(collapsed) {
+    const bar = q('db-source-bar');
+    const metaSlot = q('db-meta-source-slot');
+    const tabsSlot = q('db-tabs-source-slot');
+    if (!bar || !metaSlot || !tabsSlot) return;
+    const isCollapsed = collapsed !== undefined ? Boolean(collapsed) : (persisted && persisted.meta_collapsed);
+    if (isCollapsed) {
+      tabsSlot.style.display = '';
+      if (bar.parentElement !== tabsSlot) tabsSlot.appendChild(bar);
+    } else {
+      tabsSlot.style.display = 'none';
+      if (bar.parentElement !== metaSlot) metaSlot.appendChild(bar);
+    }
+  }
+
   function render(view) {
     cancelGridPaint();
     state.managing = false;
     state.resultMode = 'grid';
     state.gridReady = false;
-    const user = Kairo.auth && Kairo.auth.getUser ? Kairo.auth.getUser() : '';
-    const role = Kairo.auth && Kairo.auth.getRole ? Kairo.auth.getRole() : '';
-    const canManage = !user || role === 'admin';
-    const accessText = canWriteDatabase() ? '可写权限 · DML 页签事务 · 手动提交' : '只读权限 · 行数 / 时长 / 并发保护';
-    view.innerHTML = '<div class="db-page"><header class="db-topbar card"><div class="db-source-select"><label for="db-source">数据源</label><select id="db-source" aria-label="当前数据源">' + sourceOptions() + '</select></div><span id="db-source-badge" class="db-kind"></span><span id="db-oracle-client" class="db-client-badge" title="企业版 OCI 客户端自检"></span><div class="db-topbar-actions"><button class="btn btn-sm" id="db-test">测试连接</button>' + (canManage ? '<button class="btn btn-sm" id="db-manage" aria-expanded="false" aria-controls="db-manager">数据源管理</button>' : '') + '<button class="btn btn-sm" id="db-settings">工作台设置</button></div><span class="db-safe' + (canWriteDatabase() ? ' is-write' : ' is-readonly') + '" role="status">' + accessText + '</span></header><div id="db-manager"></div><div id="db-workspace"></div></div>';
-    q('db-source').onchange = async function () {
-      saveEditorSQL();
-      const current = sess();
-      if (current && current.transactionBusy) { this.value = current.sourceId; return; }
-      // DBUI-03：失效页签不能在顶部下拉框里被静默迁移到其他数据源，
-      // 必须走与孤儿页签一致的显式改绑（终结旧事务 + 重置结果/写入上下文）。
-      if (current && current.type !== 'object' && sessionSourceClass(current) === 'orphaned') {
-        const target = state.sources.find(s => String(s.id) === String(this.value)) || null;
-        if (!target) { this.value = (state.source && state.source.id) || ''; return; }
-        if (await rebindOrphanedSession(current, target)) {
-          state.source = target;
-          persisted.last_source = target.id;
-          savePersisted();
-          renderWorkspace(true);
-          toast('已重新绑定：' + target.name, 'ok');
-        } else {
-          this.value = (state.source && state.source.id) || '';
-        }
-        return;
-      }
-      const dirtyCount = Object.keys((current && current.dirtyCells) || {}).length;
-      const hasTransaction = !!(current && current.transactionPending);
-      if ((dirtyCount || hasTransaction) && !confirm('切换数据源将回滚当前页签未提交事务' + (dirtyCount ? '并放弃 ' + dirtyCount + ' 处网格修改' : '') + '，确定继续吗？')) {
-        this.value = (state.source && state.source.id) || (current && current.sourceId) || '';
-        return;
-      }
-      if (hasTransaction) {
-        try {
-          await api('POST', '/api/database/transaction', { source_id: current.sourceId, session_id: current.transactionId, action: 'ROLLBACK' });
-          current.transactionPending = false;
-        } catch (e) {
-          this.value = (state.source && state.source.id) || current.sourceId || '';
-          toast('切换前回滚失败：' + e.message, 'err');
-          return;
-        }
-      }
-      if (dirtyCount) replaceDirtyCells({});
-      const next = state.sources.find(s => s.id === this.value) || null;
-      if (current && next) bindSessionSource(current, next);
-      state.source = next;
-      if (next) { persisted.last_source = next.id; savePersisted(); }
-      // #13：数据源属于当前页签。重建可见工作区但保留其它页签及其
-      // 查询结果/运行状态，切换 Oracle/MySQL/Redis 时不会再复用错误 DOM。
-      renderWorkspace(true);
-    };
-    q('db-test').onclick = testConnection;
-    q('db-settings').onclick = openSettings;
-    if (q('db-manage')) q('db-manage').onclick = function () {
-      if (state.managing) { closeManager(); return; }
-      state.managing = true;
-      this.setAttribute('aria-expanded', 'true');
-      renderManager();
-    };
+    view.innerHTML = '<div class="db-page"><div id="db-manager"></div><div id="db-workspace"></div></div>';
     renderWorkspace();
   }
   function field(label, id, value, type, placeholder) {
@@ -2917,7 +2974,13 @@
   }
   async function testConnection() {
     if (!state.source) return toast('请先创建数据源', 'warn');
-    const b = q('db-test'); b.disabled = true; b.textContent = '连接中…';
+    const b = q('db-test');
+    if (b) {
+      b.disabled = true;
+      const sp = b.querySelector('span:not(.db-ic)');
+      if (sp) sp.textContent = '连接中…';
+      else b.textContent = '连接中…';
+    }
     hideQueryMessage();
     try {
       const r = await api('POST', '/api/database/sources/' + encodeURIComponent(state.source.id) + '/test', {});
@@ -2930,6 +2993,7 @@
           if (c) {
             const badge = q('db-oracle-client');
             if (badge) {
+              badge.style.display = '';
               badge.textContent = (c.backend || 'oracle') + ' · ' + (c.available ? '可用' : '不可用') + ' · ' + (c.bitness || '') + (c.client_version ? ' · ' + c.client_version : '');
               badge.className = 'db-client-badge ' + (c.available ? 'ok' : 'warn');
               badge.title = (c.detail || '') + (info.hint ? '\n' + info.hint : '') + '\nlibDir=' + (c.lib_dir || '-') + '\nconfigDir=' + (c.config_dir || '-');
@@ -2941,7 +3005,14 @@
     } catch (e) {
       showConnectionError(state.source, e.message);
     }
-    finally { b.disabled = false; b.textContent = '测试连接'; }
+    finally {
+      if (b) {
+        b.disabled = false;
+        const sp = b.querySelector('span:not(.db-ic)');
+        if (sp) sp.textContent = '测试连接';
+        else b.textContent = '测试连接';
+      }
+    }
   }
 
   function diagnoseConnectionError(message, source) {
@@ -3144,7 +3215,7 @@
     // 1. 无任何数据源时的干净空状态；失效页签仍要能读到自己的 SQL
     if (!state.sources || !state.sources.length) {
       state.source = null;
-      q('db-source-badge').textContent = '未配置';
+      if (q('db-source-badge')) q('db-source-badge').textContent = '未配置';
       const sourceSelect = q('db-source'); if (sourceSelect) sourceSelect.value = '';
       const testButton = q('db-test'); if (testButton) { testButton.disabled = true; testButton.title = '尚未配置数据源'; }
       const orphanActive = sess();
@@ -3154,7 +3225,15 @@
         renderOrphanWorkspace(host, orphanActive);
         return;
       }
-      host.innerHTML = '<div class="card empty-state"><div class="empty-title">尚无数据源</div><div class="empty-desc">打开“数据源管理”创建 Oracle、MySQL 或 Redis 连接。</div></div>';
+      host.innerHTML = '<div class="card empty-state"><div class="empty-title">尚无数据源</div><div class="empty-desc">打开“数据源管理”创建 Oracle、MySQL 或 Redis 连接。</div>' + (canManageDatabase() ? '<div class="empty-actions" style="margin-top:12px;"><button class="btn btn-primary btn-sm" id="db-manage">数据源管理</button></div>' : '') + '</div>';
+      if (q('db-manage')) {
+        q('db-manage').onclick = function () {
+          if (state.managing) { closeManager(); return; }
+          state.managing = true;
+          this.setAttribute('aria-expanded', 'true');
+          renderManager();
+        };
+      }
       return;
     }
 
@@ -3184,13 +3263,6 @@
     // 对象页签或无活动页签时，顶部数据源下拉框仍需一个有效的当前源
     if (!state.source) state.source = state.sources[0] || null;
 
-    // 确保顶部数据源下拉框、Badge 和测试连接按钮状态同步
-    const sourceSelect = q('db-source');
-    if (sourceSelect && state.source) sourceSelect.value = state.source.id;
-    const testButton = q('db-test');
-    if (testButton) { testButton.disabled = !state.source; testButton.title = state.source ? '测试连接' : '尚未配置数据源'; }
-    q('db-source-badge').textContent = state.source ? kindLabel(state.source.kind) : '未配置';
-
     if (active && active.type !== 'object' && activeClass === 'orphaned') {
       // 失效页签：复用孤儿视图，禁用执行/导出/元数据，等用户明确改绑
       markSessionOrphan(active);
@@ -3209,6 +3281,8 @@
     loadColumnWidths();
     if (state.source && state.source.kind !== 'redis') { state.schemasLoaded = false; clearMetadataCachesForSource(state.source.id); }
     state.source.kind === 'redis' ? renderRedis(host) : renderSQL(host);
+    bindSourceControls();
+    syncMetaSourceBar(persisted.meta_collapsed);
     // 数据源切换或页签切换会重建工作区 DOM；把当前页签的编辑器、筛选器、
     // 结果视图和执行状态恢复回来，否则页签标题还在但 SQL 文本会变空。
     restoreSessionChrome(active);
@@ -3355,6 +3429,21 @@
     const defaultSchema = state.source ? (state.source.kind === 'oracle' ? (state.source.username || '').toUpperCase() : (state.source.database || '')) : '';
     host.innerHTML = '<div class="' + layoutCls + '" id="db-sql-layout">'
       + '<aside class="card db-meta" id="db-meta-pane">'
+      + '<div id="db-meta-source-slot">'
+      + '<div class="db-meta-source-bar" id="db-source-bar">'
+      + '<div class="db-meta-source-row">'
+      + '<div class="db-source-select"><label class="sr-only" for="db-source">数据源</label><select id="db-source" aria-label="当前数据源">' + sourceOptions() + '</select></div>'
+      + '<div class="db-meta-source-actions">'
+      + '<button class="btn btn-xs db-ic-btn" id="db-test" title="测试连接" aria-label="测试连接">' + actionIcon('lightning') + '<span>测试连接</span></button>'
+      + (canManageDatabase() ? '<button class="btn btn-xs db-ic-btn" id="db-manage" aria-expanded="false" aria-controls="db-manager" title="数据源管理" aria-label="数据源管理">' + actionIcon('gear') + '<span>管理</span></button>' : '')
+      + '</div>'
+      + '</div>'
+      + '<div class="db-meta-source-status">'
+      + '<span id="db-source-badge" class="db-kind"></span>'
+      + '<span id="db-oracle-client" class="db-client-badge" title="企业版 OCI 客户端自检" style="display:none;"></span>'
+      + '</div>'
+      + '</div>'
+      + '</div>'
       + '<div class="db-pane-title"><span>数据库对象</span><div class="db-pane-actions"><button class="btn btn-xs db-ic-btn" id="db-meta-refresh" title="刷新对象树" aria-label="刷新对象树">' + actionIcon('refresh') + '<span>刷新</span></button><button class="btn btn-xs db-ic-btn db-meta-toggle-btn" id="db-meta-toggle" title="收起对象栏 (' + h(state.prefs.shortcuts.objects || 'Alt+O') + ')" aria-label="收起数据库对象栏">' + actionIcon('panel') + '</button></div></div>'
       + '<button type="button" class="db-meta-collapsed-bar" id="db-meta-collapsed-bar" title="展开数据库对象 (' + h(state.prefs.shortcuts.objects || 'Alt+O') + ')" aria-label="展开数据库对象栏"><span class="db-meta-collapsed-icon">' + actionIcon('database') + '</span><span class="db-meta-collapsed-text">对象</span></button>'
       + '<label class="db-compact-label">Schema<select id="db-schema">'
@@ -3369,7 +3458,12 @@
       + '<div class="db-editor-tabs">'
       + '<div id="db-sql-tabs" class="db-sql-tabs"></div>'
       + '<button type="button" class="btn btn-xs db-ic-btn" id="db-tab-add" title="新建查询页签" aria-label="新建查询页签">' + actionIcon('add') + '</button>'
+      + '<div id="db-tabs-source-slot" class="db-tabs-source-slot" style="display:none;"></div>'
+      + '<div class="db-editor-tabs-right">'
       + '<span class="db-dialect">' + kindLabel(state.source.kind) + '</span>'
+      + '<span class="db-safe' + (canWriteDatabase() ? ' is-write' : ' is-readonly') + '" role="status" title="' + h(databaseAccessText()) + '">' + (canWriteDatabase() ? '可写·事务' : '只读保护') + '</span>'
+      + '<button type="button" class="btn btn-xs db-ic-btn" id="db-settings" title="工作台设置" aria-label="工作台设置">' + actionIcon('tune') + '<span>设置</span></button>'
+      + '</div>'
       + '</div>'
       + '<div id="db-sql-panel" class="db-sql-panel">'
       // 工具条固定单排：执行/取消 · 网格编辑/提交/回滚 · 格式化 · 每页/显示行数 · 状态 · 更多。
@@ -3938,6 +4032,7 @@
       meta.classList.toggle('is-collapsed', collapsed);
       if (splitX) splitX.style.display = collapsed ? 'none' : '';
       persisted.meta_collapsed = collapsed;
+      syncMetaSourceBar(collapsed);
       savePersisted();
       if (!collapsed && !state.schemasLoaded) {
         loadSchemas();
@@ -3946,6 +4041,7 @@
     if (toggleBtn) toggleBtn.onclick = () => toggleMeta();
     if (collapsedBar) collapsedBar.onclick = () => toggleMeta(false);
     if (persisted.meta_collapsed) toggleMeta(true);
+    else syncMetaSourceBar(false);
 
     // SQL Editor vertical resizer
     const resizer = q('db-sql-resizer');
@@ -4201,7 +4297,8 @@
     const rect = layout.getBoundingClientRect ? layout.getBoundingClientRect() : null;
     const viewport = (typeof window.innerHeight === 'number' && window.innerHeight) || 900;
     const top = Math.max(0, Math.round(rect ? rect.top : 0));
-    const height = Math.max(560, Math.min(viewport - 24, viewport - top - 24));
+    const bottomPad = 14;
+    const height = Math.max(560, Math.min(viewport - bottomPad, viewport - top - bottomPad));
     layout.style.height = height + 'px';
   }
 
@@ -7197,7 +7294,30 @@
   function renderRedis(host) {
     state.cursor = '0'; state.redisKeyBase64 = ''; state.redisType = ''; state.redisCursor = '0'; state.redisNextCursor = '0'; state.redisCursorHistory = []; state.redisOffset = 0; state.redisMembersHasNext = false;
     const mode = state.source.redis_mode || 'standalone';
-    host.innerHTML = '<div class="db-redis-workspace"><div class="db-editor-tabs"><div id="db-sql-tabs" class="db-sql-tabs"></div><button type="button" class="btn btn-xs db-ic-btn" id="db-tab-add" title="新建查询页签" aria-label="新建查询页签">' + actionIcon('add') + '</button><span class="db-dialect">Redis · 只读命令</span></div><div class="db-redis-layout"><div class="card db-redis-keys"><div class="db-editor-bar"><span class="db-redis-topo">拓扑 ' + h(mode) + (mode === 'cluster' ? ' · 跨主节点 SCAN' : mode === 'sentinel' ? ' · ' + h(state.source.redis_master_name || '') : ' · 单机') + '</span><input id="db-redis-pattern" value="*" placeholder="Key pattern，例如 order:*"><button class="btn db-ic-btn" id="db-redis-scan" title="SCAN 扫描" aria-label="SCAN 扫描">' + actionIcon('search') + '<span>SCAN</span></button><button class="btn db-ic-btn" id="db-redis-next" title="下一批" aria-label="下一批">' + actionIcon('next') + '<span>下一批</span></button></div><div id="db-redis-list" class="db-redis-list"></div></div><div class="db-redis-center"><div class="card db-redis-detail"><div class="db-pane-title"><span>Key 详情</span><span id="db-redis-type" class="tag"></span></div><div id="db-redis-controls" class="db-redis-controls"></div><pre id="db-redis-value">选择左侧 Key 查看类型、TTL 和内容</pre></div><div class="card db-redis-members"><div class="db-pane-title"><span>成员</span><div><button class="btn btn-xs db-ic-btn" id="db-redis-members-prev" disabled title="上一页" aria-label="上一页">' + actionIcon('prev') + '<span>上一页</span></button><button class="btn btn-xs db-ic-btn" id="db-redis-members-next" disabled title="下一页" aria-label="下一页">' + actionIcon('next') + '<span>下一页</span></button></div></div><div id="db-redis-members-list" class="db-redis-members-list"><span class="hint">Hash / List / Set / ZSet 选择 Key 后在这里分页查看</span></div></div></div><div class="card db-redis-side"><div class="db-pane-title"><span>运行指标</span><button class="btn btn-xs db-ic-btn" id="db-redis-info-refresh" title="刷新指标" aria-label="刷新指标">' + actionIcon('refresh') + '<span>刷新</span></button></div><div id="db-redis-info" class="db-redis-info"><span class="hint">点击刷新读取 INFO memory / clients / stats / keyspace</span></div><div class="db-pane-title db-redis-command-title">只读命令行</div><div class="db-redis-command-form"><input id="db-redis-command-line" class="db-redis-command-line" placeholder="例如 HSCAN user:1001 0 COUNT 100"><select id="db-redis-command"><option>TYPE</option><option>TTL</option><option>PTTL</option><option>GET</option><option>HGET</option><option>HSCAN</option><option>LLEN</option><option>LRANGE</option><option>SCARD</option><option>SSCAN</option><option>ZCARD</option><option>ZRANGE</option><option>INFO</option><option>DBSIZE</option><option>PING</option></select><input id="db-redis-command-args" placeholder="参数：field 或其他只读参数"><button class="btn db-ic-btn" id="db-redis-command-run" title="执行只读命令" aria-label="执行只读命令">' + actionIcon('play') + '<span>执行</span></button></div><div class="hint">命令行仅执行只读白名单，参数按 Redis CLI 习惯拆分；危险命令会被后端拒绝。</div><pre id="db-redis-command-result" class="db-redis-command-result"></pre></div></div></div>';
+    host.innerHTML = '<div class="db-redis-workspace">'
+      + '<div class="db-editor-tabs">'
+      + '<div id="db-sql-tabs" class="db-sql-tabs"></div>'
+      + '<button type="button" class="btn btn-xs db-ic-btn" id="db-tab-add" title="新建查询页签" aria-label="新建查询页签">' + actionIcon('add') + '</button>'
+      + '<div class="db-editor-tabs-right">'
+      + '<span class="db-dialect">Redis · 只读命令</span>'
+      + '<span class="db-safe is-readonly" role="status" title="只读白名单命令">只读保护</span>'
+      + '<button type="button" class="btn btn-xs db-ic-btn" id="db-settings" title="工作台设置" aria-label="工作台设置">' + actionIcon('tune') + '<span>设置</span></button>'
+      + '</div>'
+      + '</div>'
+      + '<div class="db-redis-layout"><div class="card db-redis-keys">'
+      + '<div class="db-meta-source-bar">'
+      + '<div class="db-meta-source-row">'
+      + '<div class="db-source-select"><label class="sr-only" for="db-source">数据源</label><select id="db-source" aria-label="当前数据源">' + sourceOptions() + '</select></div>'
+      + '<div class="db-meta-source-actions">'
+      + '<button class="btn btn-xs db-ic-btn" id="db-test" title="测试连接" aria-label="测试连接">' + actionIcon('lightning') + '<span>测试连接</span></button>'
+      + (canManageDatabase() ? '<button class="btn btn-xs db-ic-btn" id="db-manage" aria-expanded="false" aria-controls="db-manager" title="数据源管理" aria-label="数据源管理">' + actionIcon('gear') + '<span>管理</span></button>' : '')
+      + '</div>'
+      + '</div>'
+      + '<div class="db-meta-source-status">'
+      + '<span id="db-source-badge" class="db-kind"></span>'
+      + '</div>'
+      + '</div>'
+      + '<div class="db-editor-bar"><span class="db-redis-topo">拓扑 ' + h(mode) + (mode === 'cluster' ? ' · 跨主节点 SCAN' : mode === 'sentinel' ? ' · ' + h(state.source.redis_master_name || '') : ' · 单机') + '</span><input id="db-redis-pattern" value="*" placeholder="Key pattern，例如 order:*"><button class="btn db-ic-btn" id="db-redis-scan" title="SCAN 扫描" aria-label="SCAN 扫描">' + actionIcon('search') + '<span>SCAN</span></button><button class="btn db-ic-btn" id="db-redis-next" title="下一批" aria-label="下一批">' + actionIcon('next') + '<span>下一批</span></button></div><div id="db-redis-list" class="db-redis-list"></div></div><div class="db-redis-center"><div class="card db-redis-detail"><div class="db-pane-title"><span>Key 详情</span><span id="db-redis-type" class="tag"></span></div><div id="db-redis-controls" class="db-redis-controls"></div><pre id="db-redis-value">选择左侧 Key 查看类型、TTL 和内容</pre></div><div class="card db-redis-members"><div class="db-pane-title"><span>成员</span><div><button class="btn btn-xs db-ic-btn" id="db-redis-members-prev" disabled title="上一页" aria-label="上一页">' + actionIcon('prev') + '<span>上一页</span></button><button class="btn btn-xs db-ic-btn" id="db-redis-members-next" disabled title="下一页" aria-label="下一页">' + actionIcon('next') + '<span>下一页</span></button></div></div><div id="db-redis-members-list" class="db-redis-members-list"><span class="hint">Hash / List / Set / ZSet 选择 Key 后在这里分页查看</span></div></div></div><div class="card db-redis-side"><div class="db-pane-title"><span>运行指标</span><button class="btn btn-xs db-ic-btn" id="db-redis-info-refresh" title="刷新指标" aria-label="刷新指标">' + actionIcon('refresh') + '<span>刷新</span></button></div><div id="db-redis-info" class="db-redis-info"><span class="hint">点击刷新读取 INFO memory / clients / stats / keyspace</span></div><div class="db-pane-title db-redis-command-title">只读命令行</div><div class="db-redis-command-form"><input id="db-redis-command-line" class="db-redis-command-line" placeholder="例如 HSCAN user:1001 0 COUNT 100"><select id="db-redis-command"><option>TYPE</option><option>TTL</option><option>PTTL</option><option>GET</option><option>HGET</option><option>HSCAN</option><option>LLEN</option><option>LRANGE</option><option>SCARD</option><option>SSCAN</option><option>ZCARD</option><option>ZRANGE</option><option>INFO</option><option>DBSIZE</option><option>PING</option></select><input id="db-redis-command-args" placeholder="参数：field 或其他只读参数"><button class="btn db-ic-btn" id="db-redis-command-run" title="执行只读命令" aria-label="执行只读命令">' + actionIcon('play') + '<span>执行</span></button></div><div class="hint">命令行仅执行只读白名单，参数按 Redis CLI 习惯拆分；危险命令会被后端拒绝。</div><pre id="db-redis-command-result" class="db-redis-command-result"></pre></div></div></div>';
     renderTabs();
     q('db-tab-add').onclick = addSession;
     q('db-redis-scan').onclick = () => { state.cursor = '0'; scanRedis(true); };

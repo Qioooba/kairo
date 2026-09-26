@@ -250,7 +250,13 @@
     // 对象栏收起：钢青侧栏
     'db-panel': `<rect x="3" y="4.2" width="18" height="15.6" rx="2" fill="#e2e8f0" stroke="#475569" stroke-width="1.4"/><rect x="3" y="4.2" width="7" height="15.6" rx="2" fill="#94a3b8"/><path d="M14 9.6 11.4 12l2.6 2.4" fill="none" stroke="#475569" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>`,
     // INSERT 模板：绿色文件 + 加号
-    'db-insert': `<path d="M12.2 2.6H6.4a2 2 0 0 0-2 2v14.8a2 2 0 0 0 2 2h11.2a2 2 0 0 0 2-2V9z" fill="#10b981" stroke="#047857" stroke-width="1.3" stroke-linejoin="round"/><path d="M12.2 2.6V9h6.6" fill="#a7f3d0" stroke="#047857" stroke-width="1.1" stroke-linejoin="round"/><path d="M9 15.6h6.4M12.2 12.4v6.4" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round"/>`
+    'db-insert': `<path d="M12.2 2.6H6.4a2 2 0 0 0-2 2v14.8a2 2 0 0 0 2 2h11.2a2 2 0 0 0 2-2V9z" fill="#10b981" stroke="#047857" stroke-width="1.3" stroke-linejoin="round"/><path d="M12.2 2.6V9h6.6" fill="#a7f3d0" stroke="#047857" stroke-width="1.1" stroke-linejoin="round"/><path d="M9 15.6h6.4M12.2 12.4v6.4" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round"/>`,
+    // 测试连接：金色闪电
+    'db-lightning': `<path d="M13 2 4.5 13.5h6L9.5 22 19.5 10.5h-6z" fill="#f59e0b" stroke="#b45309" stroke-width="1.3" stroke-linejoin="round"/><path d="M12 5.5 7.5 13.5h4L10.5 18 16.5 11.5h-4z" fill="#fef08a" opacity=".8"/>`,
+    // 数据源管理：钢青齿轮
+    'db-gear': `<circle cx="12" cy="12" r="8.5" fill="#94a3b8" stroke="#475569" stroke-width="1.3"/><circle cx="12" cy="12" r="3.2" fill="#ffffff" stroke="#475569" stroke-width="1.2"/><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M4.9 19.1l1.8-1.8M17.3 6.7l1.8-1.8" stroke="#475569" stroke-width="2.2" stroke-linecap="round"/>`,
+    // 工作台设置：靛蓝滑块控制台
+    'db-tune': `<rect x="3" y="4" width="18" height="16" rx="2" fill="#6366f1" stroke="#4338ca" stroke-width="1.3"/><circle cx="8" cy="9" r="2.2" fill="#ffffff"/><circle cx="16" cy="15" r="2.2" fill="#ffffff"/><path d="M8 5v1.8M8 11.2v7.8M16 5v7.8M16 17.2v1.8" stroke="#c7d2fe" stroke-width="1.8" stroke-linecap="round"/>`
   };
 
   const PATHS = Object.assign({}, TOOLS, THEMES, SECTIONS, DBACT);
